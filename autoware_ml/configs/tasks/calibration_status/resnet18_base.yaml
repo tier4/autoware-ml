@@ -1,0 +1,147 @@
+# @package _global_
+defaults:
+  - /defaults/default_runtime
+  - _self_
+
+datamodule:
+  stack_keys: [fused_img, gt_calibration_status]
+  train_dataloader_cfg:
+    batch_size: 8
+    num_workers: 4
+    shuffle: true
+  val_dataloader_cfg:
+    batch_size: 8
+    num_workers: 4
+  test_dataloader_cfg:
+    batch_size: 8
+    num_workers: 4
+  predict_dataloader_cfg:
+    batch_size: 1
+    num_workers: 4
+  train_transforms:
+    pipeline:
+      - _target_: autoware_ml.transforms.camera.UndistortImage
+        alpha: 0.0
+      - _target_: autoware_ml.transforms.camera_lidar.CalibrationMisalignment
+        p: 0.5
+        min_angle: 1.0
+        max_angle: 5.0
+        min_radius: 0.05
+        max_radius: 0.1
+        enable_random_sign: true
+      # - _target_: autoware_ml.transforms.camera.RandomCropAndScale
+      #   p: 0.5
+      #   crop_ratio: 0.8
+      # - _target_: autoware_ml.transforms.camera_lidar.RandomAffine
+      #   p: 0.5
+      #   max_distortion: 0.1
+      - _target_: autoware_ml.transforms.camera_lidar.LidarCameraFusion
+        max_depth: 128.0
+        dilation_size: 1
+      # - _target_: autoware_ml.transforms.camera_lidar.SaveFusionPreview
+      #   out_dir: ${hydra:run.dir}/previews
+      #   max_depth: 128.0
+      #   alpha: 1.0
+      #   depth_colormap: jet
+      #   intensity_colormap: turbo
+      - _target_: autoware_ml.transforms.common.PermuteAxes
+        input_keys: [fused_img]
+        axes: [2, 0, 1]
+  val_transforms:
+    pipeline:
+      - _target_: autoware_ml.transforms.camera.UndistortImage
+        alpha: 0.0
+      - _target_: autoware_ml.transforms.camera_lidar.CalibrationMisalignment
+        p: 0.5
+        min_angle: 1.0
+        max_angle: 5.0
+        min_radius: 0.05
+        max_radius: 0.1
+        enable_random_sign: true
+      - _target_: autoware_ml.transforms.camera_lidar.LidarCameraFusion
+        max_depth: 128.0
+        dilation_size: 1
+      - _target_: autoware_ml.transforms.common.PermuteAxes
+        input_keys: [fused_img]
+        axes: [2, 0, 1]
+  test_transforms:
+    pipeline:
+      - _target_: autoware_ml.transforms.camera.UndistortImage
+        alpha: 0.0
+      - _target_: autoware_ml.transforms.camera_lidar.CalibrationMisalignment
+        p: 0.5
+        min_angle: 1.0
+        max_angle: 5.0
+        min_radius: 0.05
+        max_radius: 0.1
+        enable_random_sign: true
+      - _target_: autoware_ml.transforms.camera_lidar.LidarCameraFusion
+        max_depth: 128.0
+        dilation_size: 1
+      - _target_: autoware_ml.transforms.common.PermuteAxes
+        input_keys: [fused_img]
+        axes: [2, 0, 1]
+  predict_transforms:
+    pipeline:
+      - _target_: autoware_ml.transforms.camera.UndistortImage
+        alpha: 0.0
+      - _target_: autoware_ml.transforms.camera_lidar.CalibrationMisalignment
+        p: 0.5
+        min_angle: 1.0
+        max_angle: 5.0
+        min_radius: 0.05
+        max_radius: 0.1
+        enable_random_sign: true
+      - _target_: autoware_ml.transforms.camera_lidar.LidarCameraFusion
+        max_depth: 128.0
+        dilation_size: 1
+      - _target_: autoware_ml.transforms.common.PermuteAxes
+        input_keys: [fused_img]
+        axes: [2, 0, 1]
+  data_preprocessing:
+    pipeline:
+
+model:
+  _target_: autoware_ml.models.calibration_status.CalibrationStatusClassifier
+  backbone:
+    _target_: autoware_ml.models.common.backbones.resnet.ResNet18
+    in_channels: 5
+  neck:
+    _target_: autoware_ml.models.common.necks.global_average_pooling.GlobalAveragePooling
+  head:
+    _target_: autoware_ml.models.common.heads.linear_cls_head.LinearClsHead
+    num_classes: 2
+    in_channels: 512
+    loss:
+      _target_: torch.nn.CrossEntropyLoss
+    topk: [1]
+    cal_acc: true
+  optimizer:
+    _target_: torch.optim.AdamW
+    lr: 0.001
+    weight_decay: 0.01
+    betas: [0.9, 0.999]
+    eps: 1e-8
+  scheduler:
+    _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+    T_max: 20
+    eta_min: 1e-8
+    last_epoch: -1
+
+trainer:
+  max_epochs: 30
+  gradient_clip_val: 10.0
+  gradient_clip_algorithm: norm
+
+deploy:
+  onnx:
+    dynamic_shapes:
+      fused_img: { 2: height, 3: width }
+    input_names: [input]
+    output_names: [output]
+  tensorrt:
+    input_shapes:
+      input:
+        min_shape: [1, 5, 1080, 1920]
+        opt_shape: [1, 5, 1860, 2880]
+        max_shape: [1, 5, 2160, 3840]

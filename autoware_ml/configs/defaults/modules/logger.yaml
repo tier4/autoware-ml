@@ -1,0 +1,5 @@
+# @package _global_
+
+logger:
+  _target_: lightning.pytorch.loggers.MLFlowLogger
+  tracking_uri: sqlite:///mlruns/mlflow.db

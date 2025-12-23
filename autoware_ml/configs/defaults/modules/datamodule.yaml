@@ -1,0 +1,33 @@
+# @package _global_
+
+datamodule:
+  train_dataloader_cfg:
+    pin_memory: false
+    persistent_workers: false
+    drop_last: false
+    shuffle: false
+  val_dataloader_cfg:
+    pin_memory: false
+    persistent_workers: false
+    drop_last: false
+    shuffle: false
+  test_dataloader_cfg:
+    pin_memory: false
+    persistent_workers: false
+    drop_last: false
+    shuffle: false
+  predict_dataloader_cfg:
+    pin_memory: false
+    persistent_workers: false
+    drop_last: false
+    shuffle: false
+  train_transforms:
+    _target_: autoware_ml.transforms.TransformsCompose
+  val_transforms:
+    _target_: autoware_ml.transforms.TransformsCompose
+  test_transforms:
+    _target_: autoware_ml.transforms.TransformsCompose
+  predict_transforms:
+    _target_: autoware_ml.transforms.TransformsCompose
+  data_preprocessing:
+    _target_: autoware_ml.preprocessing.DataPreprocessing

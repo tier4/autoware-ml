@@ -1,0 +1,3 @@
+nvidia_min_driver_version: 570
+nvidia_driver_version: 580
+nvidia_driver_ubuntu_repository: ppa:graphics-drivers/ppa
