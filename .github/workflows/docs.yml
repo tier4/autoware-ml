@@ -1,4 +1,4 @@
-name: Documentation
+name: docs
 
 on:
   push:
@@ -17,7 +17,7 @@ permissions:
 jobs:
   deploy:
     environment:
-      name: github-pagess
+      name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
