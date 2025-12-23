@@ -43,7 +43,7 @@ icon: lucide/house
 
     How to contribute
 
-    [:octicons-arrow-right-24: Contributing](contributing/index.md)
+    [:octicons-arrow-right-24: Contributing](contributing/contribution-overview.md)
 
 </div>
 
