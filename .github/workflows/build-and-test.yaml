@@ -38,7 +38,7 @@ jobs:
           outputs: type=docker,dest=/tmp/image.tar
 
       - name: Save image artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: docker-image
           path: /tmp/image.tar
