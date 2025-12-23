@@ -1,0 +1,15 @@
+{
+  "configurations": [
+    {
+      "name": "Linux",
+      "intelliSenseMode": "linux-gcc-x64",
+      "compilerPath": "/usr/bin/gcc",
+      "cppStandard": "c++17",
+      "compileCommands": [
+        "${workspaceFolder}/autoware_ml/ops/compile_commands.json"
+      ],
+      "includePath": ["/usr/include/**"]
+    }
+  ],
+  "version": 4
+}

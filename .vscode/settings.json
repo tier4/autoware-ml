@@ -1,0 +1,56 @@
+{
+  "C_Cpp.autocomplete": "disabled",
+  "C_Cpp.intelliSenseEngine": "disabled",
+  "[c]": {
+    "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
+  },
+  "[cpp]": {
+    "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
+  },
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff"
+  },
+  "[yaml]": {
+    "editor.defaultFormatter": "redhat.vscode-yaml"
+  },
+  "cSpell.import": [
+    "${workspaceFolder}/.cspell.json",
+    "${workspaceFolder}/.cspell-shared.json"
+  ],
+  "cSpell.languageSettings": [
+    {
+      "languageId": "c,cpp,python",
+      "allowCompoundWords": false
+    }
+  ],
+  "clangd.arguments": [
+    "--clang-tidy",
+    "--background-index",
+    "--query-driver=/usr/bin/g++,/usr/bin/clang++,/usr/bin/c++"
+  ],
+  "clangd.enableCodeCompletion": true,
+  "clangd.path": "/usr/local/bin/clangd",
+  "editor.codeActionsOnSave": {
+    "source.organizeImports": "explicit"
+  },
+  "editor.detectIndentation": false,
+  "editor.formatOnSave": false,
+  "editor.insertSpaces": true,
+  "editor.rulers": [100],
+  "editor.tabSize": 2,
+  "files.watcherExclude": {
+    "**/.git": true,
+    "**/data": true,
+    "**/node_modules": true,
+    "**/mlruns": true
+  },
+  "python.defaultInterpreterPath": "/opt/conda/bin/python",
+  "remote.autoForwardPorts": false,
+  "ruff.lineLength": 100,
+  "search.exclude": {
+    "**/.git": true,
+    "**/data": true,
+    "**/node_modules": true,
+    "**/mlruns": true
+  }
+}

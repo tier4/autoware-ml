@@ -1,0 +1,13 @@
+# @package _global_
+defaults:
+  - /tasks/calibration_status/resnet18_base
+  - _self_
+
+data_root: ${oc.env:AUTOWARE_ML_DATA_PATH}/t4dataset
+
+datamodule:
+  _target_: autoware_ml.datamodule.t4dataset.calibration_status.T4CalibrationDataModule
+  data_root: ${data_root}
+  train_ann_file: ${data_root}/calibration_info/t4dataset_gen2_base_infos_train.pkl
+  val_ann_file: ${data_root}/calibration_info/t4dataset_gen2_base_infos_val.pkl
+  test_ann_file: ${data_root}/calibration_info/t4dataset_gen2_base_infos_test.pkl

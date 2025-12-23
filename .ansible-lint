@@ -1,0 +1,8 @@
+exclude_paths:
+  - .*/
+  - autoware_ml/
+  - docs/
+  - docker/
+
+skip_list:
+  - galaxy[no-changelog]
