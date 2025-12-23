@@ -55,7 +55,7 @@ WORKDIR /workspace
 # Install pyproject dependencies
 # hadolint ignore=DL3013
 RUN pip install --no-cache-dir hatchling read_version uv wheel_stub \
-  && uv pip install --system --no-cache .[dev] --extra-index-url https://download.pytorch.org/whl/cu128 --no-build-isolation
+  && uv pip install --system --no-cache .[dev] --no-build-isolation
 
 # Set user
 USER $USERNAME

@@ -210,12 +210,8 @@ If all three commands succeed, skip to [Project Setup](#project-setup).
         ```bash
         cd ~/autoware-ml
 
-        # Create a virtual environment (Python 3.11+ required)
-        python -m venv .venv
-        source .venv/bin/activate
-
-        # Install
-        uv pip install --no-cache .[dev] --extra-index-url https://download.pytorch.org/whl/cu128 --no-build-isolation
+        # Install (creates virtual environment automatically)
+        uv sync --extra dev
         ```
 
     === "With pip"
@@ -223,7 +219,7 @@ If all three commands succeed, skip to [Project Setup](#project-setup).
         ```bash
         cd ~/autoware-ml
 
-        # Create a virtual environment (Python 3.11+ required)
+        # Create a virtual environment
         python -m venv .venv
         source .venv/bin/activate
 

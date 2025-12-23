@@ -57,3 +57,17 @@ include = ["autoware_ml*"]
 
 [tool.uv]
 package = true
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch" }
+torchvision = { index = "pytorch" }
+
+[tool.uv.extra-build-dependencies]
+hydra-optuna-sweeper = ["read_version"]
+tensorrt-cu12-libs = ["wheel_stub"]
+t4-devkit = ["hatchling"]
