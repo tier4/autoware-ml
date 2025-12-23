@@ -269,4 +269,4 @@ Configuration is done through the `deploy` section in task configs.
 | New transform   | Subclass `BaseTransform`, implement `transform()`                   |
 | New task        | Create config in `configs/tasks/`                                   |
 
-See [Adding Models](../extending/adding-models.md) for a detailed guide.
+See [Adding Models](../contributing/adding-models.md) for a detailed guide.

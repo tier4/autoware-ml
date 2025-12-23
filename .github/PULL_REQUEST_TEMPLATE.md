@@ -8,8 +8,8 @@
 
 ## Checklist
 
-- [ ] You've checked our [contribution overview](https://tier4.github.io/autoware-ml/main/contributing/contribution-overview/).
-- [ ] Your PR follows our [pull request guidelines](https://tier4.github.io/autoware-ml/main/contributing/pull-request-guidelines/).
+- [ ] You've checked our [contribution overview](https://tier4.github.io/autoware-ml/contributing/contribution-overview/).
+- [ ] Your PR follows our [pull request guidelines](https://tier4.github.io/autoware-ml/contributing/pull-request-guidelines/).
 
 ## Additional Notes
 
