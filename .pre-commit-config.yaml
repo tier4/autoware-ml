@@ -89,10 +89,3 @@ repos:
     hooks:
       - id: hadolint
         exclude: .svg$
-
-  - repo: https://github.com/ansible/ansible-lint.git
-    rev: v25.9.0
-    hooks:
-      - id: ansible-lint
-        additional_dependencies:
-          - ansible

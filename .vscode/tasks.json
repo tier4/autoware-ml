@@ -75,6 +75,10 @@
           "value": "${workspaceFolder}/.pre-commit-config.yaml"
         },
         {
+          "label": "pre-commit-config-ansible.yaml",
+          "value": "${workspaceFolder}/.pre-commit-config-ansible.yaml"
+        },
+        {
           "label": "pre-commit-config-optional.yaml",
           "value": "${workspaceFolder}/.pre-commit-config-optional.yaml"
         }
