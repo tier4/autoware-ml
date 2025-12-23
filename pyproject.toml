@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools", "torch", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autoware-ml"
+version = "0.0.0"
+description = "Autoware-ML - Machine learning framework for Autoware."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "Amadeusz Szymko", email = "amadeusz.szymko.2@tier4.jp"}]
+keywords = ["autoware", "machine-learning", "autonomous-vehicle", "self-driving", "sensors"]
+dependencies = [
+    "cuda-python~=12.8.0",
+    "hydra-core>=1.3.0",
+    # TODO: Use official release after https://github.com/facebookresearch/hydra/pull/3046 is merged
+    "hydra-optuna-sweeper @ git+https://github.com/dahlem/hydra.git@feature/upgrade-optuna-4.2.1#subdirectory=plugins/hydra_optuna_sweeper",
+    "lightning>=2.6.0",
+    "matplotlib>=3.10.0",
+    "mlflow>=3.6.0",
+    "numpy~=1.26.0",
+    "nuscenes-devkit>=1.2.0",
+    "optuna>=4.6.0",
+    "onnx>=1.19.0",
+    "onnx_graphsurgeon>=0.5.0",
+    "onnxruntime-gpu>=1.23.0",
+    "onnxscript>=0.5.0",
+    "opencv-python-headless>=4.11.0",
+    "optuna-dashboard>=0.20.0",
+    "pytest>=9.0",
+    "rerun-sdk==0.23.1",
+    "scipy>=1.16.0",
+    "t4-devkit @ git+https://github.com/tier4/t4-devkit.git@v0.5.2",
+    "tensorrt-cu12~=10.13.0",
+    "torch==2.9.1+cu128",
+    "torchvision==0.24.1+cu128",
+    "transforms3d>=0.4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pre-commit",
+    "zensical",
+]
+
+[project.urls]
+Homepage = "https://tier4.github.io/autoware-ml"
+Source = "https://github.com/tier4/autoware-ml"
+
+[project.scripts]
+autoware-ml = "autoware_ml.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["autoware_ml*"]
+
+[tool.uv]
+package = true

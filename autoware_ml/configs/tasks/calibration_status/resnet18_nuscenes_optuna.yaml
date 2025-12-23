@@ -1,0 +1,22 @@
+# @package _global_
+defaults:
+  - /tasks/calibration_status/resnet18_nuscenes
+  - override /hydra/sweeper: optuna
+  - _self_
+
+hydra:
+  sweeper:
+    study_name: calibration_status_resnet18_nuscenes
+    direction: minimize
+    n_trials: 50
+    sampler:
+      _target_: optuna.samplers.TPESampler
+      seed: 42
+    params:
+      model.optimizer.lr: interval(1e-5, 1e-2)
+      model.optimizer.weight_decay: interval(1e-4, 1e-1)
+      datamodule.train_dataloader_cfg.batch_size: choice(4, 8, 16)
+      trainer.max_epochs: range(10, 30, step=5)
+
+trainer:
+  max_epochs: 20

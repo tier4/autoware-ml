@@ -1,0 +1,5 @@
+{
+  "devDependencies": {
+    "@cspell/dict-en-gb": "^5.0.20"
+  }
+}

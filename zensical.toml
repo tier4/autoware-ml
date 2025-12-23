@@ -1,0 +1,79 @@
+[project]
+site_name = "Autoware-ML"
+site_description = "Autoware-ML - Machine learning framework for Autoware."
+site_author = "Amadeusz Szymko"
+site_url = "https://tier4.github.io/autoware-ml"
+copyright = """
+Copyright &copy; 2025 TIER IV, Inc.
+"""
+
+nav = [
+  { "Home" = "index.md" },
+  { "Getting Started" = [
+    { "Installation" = "getting-started/installation.md" },
+    { "Dev Containers" = "getting-started/devcontainer.md" },
+    { "Quick Start" = "getting-started/quickstart.md" },
+  ]},
+  { "Framework" = [
+    { "Design" = "framework/design.md" },
+    { "Identity" = "framework/identity.md" },
+  ]},
+  { "User Guide" = [
+    { "CLI Reference" = "user-guide/cli.md" },
+    { "Configuration" = "user-guide/configuration.md" },
+    { "Training" = "user-guide/training.md" },
+    { "MLflow" = "user-guide/mlflow.md" },
+    { "Optuna" = "user-guide/optuna.md" },
+    { "Deployment" = "user-guide/deployment.md" },
+  ]},
+  { "Models" = [
+    { "Calibration Status" = "models/calibration-status.md" },
+  ]},
+  { "Contributing" = [
+    { "Contribution Overview" = "contributing/contribution-overview.md" },
+    { "Adding Models" = "contributing/adding-models.md" },
+    { "Pull Requests" = "contributing/pull-request-guidelines.md" },
+  ]},
+]
+
+[project.theme]
+
+language = "en"
+
+features = [
+    "announce.dismiss",
+    "content.code.annotate",
+    "content.code.copy",
+    "content.code.select",
+    "content.footnote.tooltips",
+    "content.tabs.link",
+    "content.tooltips",
+    "navigation.footer",
+    "navigation.indexes",
+    "navigation.instant",
+    "navigation.instant.prefetch",
+    "navigation.path",
+    "navigation.sections",
+    "navigation.top",
+    "navigation.tracking",
+    "search.highlight",
+]
+
+[[project.theme.palette]]
+scheme = "default"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+scheme = "slate"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to light mode"
+
+[[project.extra.social]]
+icon = "fontawesome/brands/github"
+link = "https://github.com/tier4/autoware-ml"
+
+# Repository configuration
+[project.repo]
+url = "https://github.com/tier4/autoware-ml"
+name = "GitHub"

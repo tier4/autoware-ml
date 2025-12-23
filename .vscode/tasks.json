@@ -1,0 +1,84 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Debug: Prelaunch",
+      "detail": "Source workspace and update environment for debugging.",
+      "type": "shell",
+      "command": "bash",
+      "args": ["-c", "printenv > ${workspaceFolder}/.vscode/.debug.env"],
+      "presentation": {
+        "reveal": "silent",
+        "revealProblems": "onProblem",
+        "close": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Pre-commit: Run",
+      "detail": "Run pre-commit hooks.",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "-c",
+        "cd ${workspaceFolder} && pre-commit run -a --config ${input:pre-commit-config}"
+      ],
+      "presentation": {
+        "reveal": "silent",
+        "revealProblems": "onProblem",
+        "close": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "CSpell: Pull dicts",
+      "detail": "Pull the latest version of the AWF CSpell configuration.",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "-c",
+        "wget -O .cspell-shared.json https://raw.githubusercontent.com/autowarefoundation/autoware-spell-check-dict/main/.cspell.json && yarn global add https://github.com/tier4/cspell-dicts && npm install"
+      ],
+      "runOptions": {
+        "runOn": "folderOpen"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "CSpell: Check",
+      "detail": "Check for spelling errors.",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "-c",
+        "cspell lint --config .cspell-hook.json ${workspaceFolder}"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Python: Test",
+      "detail": "Run Python tests.",
+      "type": "shell",
+      "command": "bash",
+      "args": ["-c", "pytest autoware_ml/tests -v"],
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "pre-commit-config",
+      "type": "pickString",
+      "description": "Select the pre-commit config to use.",
+      "options": [
+        {
+          "label": "pre-commit-config.yaml",
+          "value": "${workspaceFolder}/.pre-commit-config.yaml"
+        },
+        {
+          "label": "pre-commit-config-optional.yaml",
+          "value": "${workspaceFolder}/.pre-commit-config-optional.yaml"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+# Required
+namespace: autoware_ml
+name: dev_env
+version: 0.0.0
+readme: README.md
+authors:
+  - Amadeusz Szymko <amadeusz.szymko.2@tier4.jp>
+
+# Optional
+description: Set up development Dev Containers environment for Autoware-ML project.
+license:
+  - Apache-2.0
+tags:
+  - autoware
+  - machine_learning
+  - tools
+dependencies: {}
+repository: https://github.com/tier4/autoware-ml
+documentation: https://tier4.github.io/autoware-ml/main
+homepage: https://tier4.jp/en/
+issues: https://github.com/tier4/autoware-ml/issues
+build_ignore: []

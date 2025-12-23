@@ -1,0 +1,94 @@
+- name: Check if NVIDIA driver is installed
+  ansible.builtin.command: nvidia-smi
+  register: nvidia_smi_result
+  changed_when: false
+  failed_when: false
+  ignore_errors: true
+
+- name: Get installed NVIDIA driver version
+  ansible.builtin.shell: nvidia-smi --query-gpu=driver_version --format=csv,noheader | cut -d'.' -f1
+  register: nvidia_installed_version
+  changed_when: false
+  failed_when: false
+  ignore_errors: true
+  when: nvidia_smi_result.rc == 0
+
+- name: Display installed NVIDIA driver version
+  ansible.builtin.debug:
+    msg: "Current NVIDIA driver version: {{ nvidia_installed_version.stdout }}"
+  when: nvidia_smi_result.rc == 0
+
+- name: Check if installed driver version meets minimum requirements
+  ansible.builtin.fail:
+    msg: Current NVIDIA driver version {{ nvidia_installed_version.stdout }} is less than minimum required version {{ nvidia_min_driver_version }}. Please update your driver.
+  when:
+    - nvidia_smi_result.rc == 0
+    - nvidia_installed_version.stdout | int < nvidia_min_driver_version | int
+
+- name: Notify that installed driver meets minimum requirements
+  ansible.builtin.debug:
+    msg: Current NVIDIA driver version {{ nvidia_installed_version.stdout }} meets minimum requirements ({{ nvidia_min_driver_version }}).
+  when:
+    - nvidia_smi_result.rc == 0
+    - nvidia_installed_version.stdout | int >= nvidia_min_driver_version | int
+
+- name: Set driver installation flag based on defaults
+  ansible.builtin.set_fact:
+    nvidia_proceed_with_driver_install: true
+  when: nvidia_smi_result.rc != 0
+
+- name: Ask to proceed with NVIDIA driver installation (only if interactive mode)
+  ansible.builtin.pause:
+    prompt: No NVIDIA driver detected. Do you want to install NVIDIA driver version {{ nvidia_driver_version }}? (y/n)
+  register: nvidia_driver_install_response
+  when:
+    - nvidia_smi_result.rc != 0
+    - ansible_connection != 'local' or lookup('env', 'CI') != 'true'
+
+- name: Override driver installation flag based on user input
+  ansible.builtin.set_fact:
+    nvidia_proceed_with_driver_install: "{{ nvidia_driver_install_response.user_input | default('y') | lower == 'y' }}"
+  when:
+    - nvidia_smi_result.rc != 0
+    - driver_install_response is defined and driver_install_response.user_input is defined
+
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: true
+  become: true
+  when: nvidia_smi_result.rc != 0 and nvidia_proceed_with_driver_install
+
+- name: Install prerequisites
+  ansible.builtin.apt:
+    name:
+      - software-properties-common
+      - build-essential
+      - dkms
+    state: present
+  become: true
+  when: nvidia_smi_result.rc != 0 and nvidia_proceed_with_driver_install
+
+- name: Add NVIDIA driver repository
+  ansible.builtin.apt_repository:
+    repo: "{{ nvidia_driver_ubuntu_repository }}"
+    state: present
+  become: true
+  when: nvidia_smi_result.rc != 0 and nvidia_proceed_with_driver_install
+
+- name: Update apt cache after adding repository
+  ansible.builtin.apt:
+    update_cache: true
+  become: true
+  when: nvidia_smi_result.rc != 0 and nvidia_proceed_with_driver_install
+
+- name: Install NVIDIA driver
+  ansible.builtin.apt:
+    name: nvidia-driver-{{ nvidia_driver_version }}
+    state: present
+  become: true
+  when: nvidia_smi_result.rc != 0 and nvidia_proceed_with_driver_install
+
+- name: Display installation completion message
+  ansible.builtin.debug:
+    msg: NVIDIA driver installation completed. A system reboot is recommended.
+  when: nvidia_smi_result.rc != 0 and nvidia_proceed_with_driver_install

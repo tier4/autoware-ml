@@ -1,0 +1,8 @@
+# @package _global_
+
+deploy:
+  onnx:
+    opset_version: 21
+    modify_graph: null
+  tensorrt:
+    workspace_size: 1073741824

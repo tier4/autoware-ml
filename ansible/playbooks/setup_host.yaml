@@ -1,0 +1,52 @@
+- name: Setup Autoware Development Environment
+  hosts: localhost
+  become: false
+
+  tasks:
+    - name: Introduction
+      ansible.builtin.debug:
+        msg: This playbook will set up the Autoware development environment. You will be prompted before each step.
+
+    - name: Ask to install Docker Engine
+      ansible.builtin.pause:
+        prompt: Do you want to install Docker Engine? (y/n)
+      register: docker_response
+
+    - name: Include docker_engine role
+      ansible.builtin.include_role:
+        name: autoware_ml.dev_env.docker_engine
+      when: docker_response.user_input | default('n') | lower == 'y'
+
+    - name: Ask to install NVIDIA drivers
+      ansible.builtin.pause:
+        prompt: Do you want to check and install NVIDIA drivers? (y/n)
+      register: nvidia_response
+
+    - name: Include nvidia role
+      ansible.builtin.include_role:
+        name: autoware_ml.dev_env.nvidia
+      when: nvidia_response.user_input | default('n') | lower == 'y'
+
+    - name: Ask to install NVIDIA Container Toolkit
+      ansible.builtin.pause:
+        prompt: Do you want to install NVIDIA Container Toolkit? (y/n)
+      register: toolkit_response
+
+    - name: Include nvidia_container_toolkit role
+      ansible.builtin.include_role:
+        name: autoware_ml.dev_env.nvidia_container_toolkit
+      when: toolkit_response.user_input | default('n') | lower == 'y'
+
+    - name: Ask to install VS Code
+      ansible.builtin.pause:
+        prompt: Do you want to install VS Code and extensions? (y/n)
+      register: vscode_response
+
+    - name: Include vscode role
+      ansible.builtin.include_role:
+        name: autoware_ml.dev_env.vscode
+      when: vscode_response.user_input | default('n') | lower == 'y'
+
+    - name: Setup completed
+      ansible.builtin.debug:
+        msg: Autoware-ML development environment setup completed. You may need to reboot your system for NVIDIA driver changes to take effect.

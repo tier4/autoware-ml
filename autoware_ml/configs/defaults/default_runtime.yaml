@@ -1,0 +1,10 @@
+# @package _global_
+
+defaults:
+  - modules/callbacks
+  - modules/datamodule
+  - modules/deploy
+  - modules/logger
+  - modules/model
+  - modules/run
+  - modules/trainer

@@ -1,0 +1,73 @@
+- name: Ask to proceed with VS Code installation
+  ansible.builtin.pause:
+    prompt: Do you want to install Visual Studio Code? (y/n)
+  register: vscode_install_response
+
+- name: Set VS Code installation flag
+  ansible.builtin.set_fact:
+    vscode_install_vscode: "{{ vscode_install_response.user_input | default('n') | lower == 'y' }}"
+
+- name: Ask to proceed with VS Code extensions installation
+  ansible.builtin.pause:
+    prompt: Do you want to install extensions for Visual Studio Code? (y/n)
+  register: vscode_extensions_response
+
+- name: Set VS Code extensions installation flag
+  ansible.builtin.set_fact:
+    vscode_install_vscode_extensions: "{{ vscode_extensions_response.user_input | default('n') | lower == 'y' }}"
+
+- name: Install prerequisites
+  ansible.builtin.apt:
+    name:
+      - apt-transport-https
+      - wget
+      - gpg
+    state: present
+  become: true
+  when: vscode_install_vscode
+
+- name: Add Microsoft GPG key
+  ansible.builtin.apt_key:
+    url: https://packages.microsoft.com/keys/microsoft.asc
+    state: present
+  become: true
+  when: vscode_install_vscode
+
+- name: Add VS Code repository
+  ansible.builtin.apt_repository:
+    repo: deb [arch=amd64] https://packages.microsoft.com/repos/vscode stable main
+    state: present
+    filename: vscode
+  become: true
+  when: vscode_install_vscode
+
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: true
+  become: true
+  when: vscode_install_vscode
+
+- name: Install Visual Studio Code
+  ansible.builtin.apt:
+    name: code
+    state: present
+  become: true
+  when: vscode_install_vscode
+
+- name: Check if 'code' command is available
+  ansible.builtin.command: which code
+  register: vscode_code_command
+  changed_when: false
+  failed_when: vscode_code_command.rc != 0
+  when: vscode_install_vscode_extensions
+
+- name: Install VS Code extensions
+  ansible.builtin.command: code --install-extension {{ item }} --force
+  with_items: "{{ vscode_extensions }}"
+  register: vscode_result
+  changed_when: "'already installed' not in vscode_result.stdout"
+  failed_when:
+    - vscode_result.rc != 0
+    - "'already installed' not in vscode_result.stdout"
+  ignore_errors: true
+  when: vscode_code_command is defined and vscode_install_vscode_extensions

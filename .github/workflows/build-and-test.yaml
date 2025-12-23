@@ -1,0 +1,76 @@
+name: Build and Test
+
+on:
+  pull_request:
+    types: [labeled]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: ${{ github.event.label.name == 'run:build-and-test' }}
+    runs-on: ubuntu-22.04-m
+    timeout-minutes: 240
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker/Dockerfile
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: ghcr.io/tier4/autoware-ml:pr-${{ github.event.pull_request.number }}
+          outputs: type=docker,dest=/tmp/image.tar
+
+      - name: Save image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: /tmp/image.tar
+          retention-days: 1
+
+  test:
+    if: ${{ github.event.label.name == 'run:build-and-test' }}
+    needs: build
+    runs-on: ubuntu-22.04-m
+    timeout-minutes: 60
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - name: Load image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+
+      - name: Load Docker image
+        run: |
+          docker load -i image.tar
+
+      - name: Run unit tests
+        run: |
+          docker run --rm \
+            --gpus all \
+            ghcr.io/tier4/autoware-ml:pr-${{ github.event.pull_request.number }} \
+            pytest autoware_ml/tests/ -v

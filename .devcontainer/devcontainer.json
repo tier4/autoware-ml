@@ -1,0 +1,77 @@
+{
+  "name": "autoware-ml",
+  "build": {
+    "context": "..",
+    "dockerfile": "Dockerfile",
+    "args": {
+      "BASE_IMAGE": "ghcr.io/tier4/autoware-ml:latest"
+    },
+    "options": ["--network=host"]
+  },
+  "remoteUser": "autoware-ml",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+  "workspaceFolder": "/workspace",
+  "hostRequirements": {
+    "gpu": true
+  },
+  "runArgs": [
+    "-it",
+    "--rm",
+    "--name=autoware-ml-${localEnv:USER}",
+    "--privileged",
+    "--env",
+    "DISPLAY=${env:DISPLAY}",
+    "--env",
+    "XAUTHORITY=${env:XAUTHORITY}",
+    "--env",
+    "NVIDIA_DRIVER_CAPABILITIES=all",
+    "--net=host",
+    "--pid=host",
+    "--ipc=host",
+    "--ulimit",
+    "memlock=-1",
+    "--ulimit",
+    "stack=67108864",
+    "--volume=/tmp/.X11-unix/:/tmp/.X11-unix",
+    "--volume=/etc/localtime:/etc/localtime:ro",
+    "--volume=/dev/dri:/dev/dri:ro",
+    "--volume=${localEnv:AUTOWARE_ML_DATA_PATH}:/workspace/data",
+    "--volume=${env:HOME}/.ssh:/home/autoware-ml/.ssh",
+    "--gpus",
+    "all"
+  ],
+  "customizations": {
+    "vscode": {
+      "settings.json": {
+        "terminal.integrated.profiles.linux": {
+          "bash": {
+            "path": "/bin/bash"
+          }
+        }
+      },
+      "extensions": [
+        "charliermarsh.ruff",
+        "cschlosser.doxdocgen",
+        "eamodio.gitlens",
+        "foxundermoon.shell-format",
+        "github.vscode-pull-request-github",
+        "llvm-vs-code-extensions.vscode-clangd",
+        "ms-azuretools.vscode-docker",
+        "ms-python.debugpy",
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-vscode.cpptools-extension-pack",
+        "ms-vscode.remote-explorer",
+        "ms-vscode-remote.vscode-remote-extensionpack",
+        "nvidia.nsight-vscode-edition",
+        "redhat.vscode-xml",
+        "redhat.vscode-yaml",
+        "streetsidesoftware.code-spell-checker",
+        "tamasfe.even-better-toml",
+        "timonwong.shellcheck",
+        "twxs.cmake",
+        "yzhang.markdown-all-in-one"
+      ]
+    }
+  }
+}

@@ -1,0 +1,97 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Python",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/autoware_ml/cli/cli.py",
+      "args": [
+        "${input:command}",
+        "--config-name",
+        "${input:config}",
+        "${input:arguments}"
+      ],
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "C++",
+      "type": "cppdbg",
+      "request": "launch",
+      "envFile": "${workspaceFolder}/.vscode/.debug.env",
+      "program": "${input:program}",
+      "args": [],
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}",
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "setupCommands": [
+        {
+          "description": "Enable pretty-printing for C++ vectors etc.",
+          "text": "python import sys; sys.path.append('/usr/share/gcc/python');from libstdcxx.v6.printers import register_libstdcxx_printers;register_libstdcxx_printers(None)",
+          "ignoreFailures": false
+        },
+        {
+          "description": "Enable pretty-printing for gdb",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        },
+        {
+          "description": "Set Disassembly Flavor to Intel",
+          "text": "-gdb-set disassembly-flavor intel",
+          "ignoreFailures": true
+        }
+      ],
+      "preLaunchTask": "Debug: Prelaunch"
+    },
+    {
+      "name": "CUDA",
+      "type": "cuda-gdb",
+      "request": "launch",
+      "envFile": "${workspaceFolder}/.vscode/.debug.env",
+      "program": "${input:program}",
+      "args": [],
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}",
+      "initCommands": [
+        "python import sys; sys.path.append('/usr/share/gcc/python');from libstdcxx.v6.printers import register_libstdcxx_printers;register_libstdcxx_printers(None)",
+        "-enable-pretty-printing",
+        "-gdb-set disassembly-flavor intel"
+      ],
+      "preLaunchTask": "Debug: Prelaunch"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "command",
+      "type": "pickString",
+      "description": "Command to run.",
+      "options": [
+        {
+          "value": "train"
+        },
+        {
+          "value": "deploy"
+        }
+      ]
+    },
+    {
+      "id": "config",
+      "type": "promptString",
+      "description": "Config name."
+    },
+    {
+      "id": "arguments",
+      "type": "promptString",
+      "description": "Arguments to pass to the command.",
+      "default": ""
+    },
+    {
+      "id": "program",
+      "type": "promptString",
+      "description": "Path to executable.",
+      "default": "${workspaceFolder}/autoware_ml/ops/build/"
+    }
+  ]
+}
