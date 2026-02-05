@@ -32,12 +32,14 @@ option_headless=false
 option_detached=false
 option_pull_latest_image=false
 option_exec=false
+option_stop=false
 DATA_PATH=""
 WORKSPACE=""
 MEMORY_CONFIG=""
 MODE=""
 CONTAINER=""
 CONTAINER_NAME=""
+USER_ENV=""
 
 # Function to print help message
 print_help() {
@@ -45,11 +47,12 @@ print_help() {
     echo -e "${RED}Usage:${NC} run.sh [OPTIONS]"
     echo -e "Options:"
     echo -e "  ${GREEN}--help/-h${NC}            Display this help message"
-    echo -e "  ${GREEN}--data-path${NC}          Specify the path to mount data files into /workspace/data (overrides AUTOWARE_ML_DATA_PATH if set)"
+    echo -e "  ${GREEN}--data-path${NC}          Specify the path to mount data files into /autoware-ml-data (overrides AUTOWARE_ML_DATA_PATH if set)"
     echo -e "  ${GREEN}--headless${NC}           Run Autoware-ML in headless mode (default: false)"
     echo -e "  ${GREEN}--detached${NC}           Run Autoware-ML in detached mode (default: false)"
     echo -e "  ${GREEN}--pull-latest-image${NC}  Pull the latest image before starting the container"
     echo -e "  ${GREEN}--exec${NC}               Enter an existing running container instead of creating a new one"
+    echo -e "  ${GREEN}--stop${NC}               Stop a running container"
     echo ""
 }
 
@@ -72,6 +75,9 @@ parse_arguments() {
             ;;
         --exec)
             option_exec=true
+            ;;
+        --stop)
+            option_stop=true
             ;;
         --data-path)
             DATA_PATH="$2"
@@ -96,9 +102,9 @@ parse_arguments() {
 set_variables() {
     # Set data path
     if [ "$DATA_PATH" != "" ]; then
-        DATA="-v ${DATA_PATH}:/workspace/data:rw"
+        DATA="-v ${DATA_PATH}:/autoware-ml-data:rw"
     elif [ -n "$AUTOWARE_ML_DATA_PATH" ]; then
-        DATA="-v ${AUTOWARE_ML_DATA_PATH}:/workspace/data:rw"
+        DATA="-v ${AUTOWARE_ML_DATA_PATH}:/autoware-ml-data:rw"
     else
         echo -e "${ORANGE}Neither --data-path nor AUTOWARE_ML_DATA_PATH is set. Not mounting any data directory.${NC}"
     fi
@@ -131,8 +137,15 @@ set_detached_mode() {
     fi
 }
 
+# Set user configuration to match host user
+set_user_config() {
+    HOST_UID=$(id -u)
+    HOST_GID=$(id -g)
+    USER_ENV="-e HOST_UID=${HOST_UID} -e HOST_GID=${HOST_GID} -e XDG_RUNTIME_DIR=/tmp/xdg"
+}
+
 # Execute into an existing running container
-exec() {
+exec_container() {
     # Check if container exists and is running
     if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
         echo -e "${RED}Error: Container '${CONTAINER_NAME}' is not running.${NC}"
@@ -146,13 +159,32 @@ exec() {
     echo -e "${GREEN}CONTAINER:${NC} ${CONTAINER_NAME}"
     echo -e "${GREEN}-----------------------------------------------------------------${NC}"
 
-    docker exec -it ${CONTAINER_NAME} /bin/bash
+    # Use entrypoint to switch to correct user and start bash
+    docker exec -it -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" "${CONTAINER_NAME}" /entrypoint.sh bash
+}
+
+# Stop a running container
+stop_container() {
+    # Check if container exists and is running
+    if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+        echo -e "${RED}Error: Container '${CONTAINER_NAME}' is not running.${NC}"
+        exit 1
+    fi
+
+    echo -e "${GREEN}-----------------------------------------------------------------${NC}"
+    echo -e "${GREEN}Stopping Autoware-ML container${NC}"
+    echo -e "${GREEN}CONTAINER:${NC} ${CONTAINER_NAME}"
+    echo -e "${GREEN}-----------------------------------------------------------------${NC}"
+
+    docker stop "${CONTAINER_NAME}"
+    echo -e "${GREEN}Container stopped successfully.${NC}"
 }
 
 # Run a new container
 run() {
     set_x_display
     set_detached_mode
+    set_user_config
 
     echo -e "${GREEN}-----------------------------------------------------------------${NC}"
     echo -e "${GREEN}Launching Autoware-ML${NC}"
@@ -160,7 +192,7 @@ run() {
     echo -e "${GREEN}-----------------------------------------------------------------${NC}"
 
     if [ "$option_pull_latest_image" = "true" ]; then
-        docker pull ${IMAGE}
+        docker pull "${IMAGE}"
     fi
 
     # Launch the container
@@ -168,8 +200,8 @@ run() {
     docker run -it --rm --net=host --gpus all ${MODE} ${MEMORY_CONFIG} ${MOUNT_X} \
         -e XAUTHORITY=${XAUTHORITY} -e NVIDIA_DRIVER_CAPABILITIES=all \
         -e TZ="$(cat /etc/timezone)" \
-        ${WORKSPACE} ${DATA} ${CONTAINER} ${IMAGE} \
-        /bin/bash
+        ${USER_ENV} \
+        ${WORKSPACE} ${DATA} ${CONTAINER} ${IMAGE}
 }
 
 # Main script execution
@@ -177,8 +209,10 @@ main() {
     parse_arguments "$@"
     set_variables
 
-    if [ "$option_exec" = "true" ]; then
-        exec
+    if [ "$option_stop" = "true" ]; then
+        stop_container
+    elif [ "$option_exec" = "true" ]; then
+        exec_container
     else
         run
     fi

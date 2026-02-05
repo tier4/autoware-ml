@@ -4,9 +4,21 @@ FROM $BASE_IMAGE
 
 # Set shell to bash with pipefail for safer pipe handling
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-USER root
 
-# Update ROS key and repository configuration, then install packages via apt-get
+# Create autoware-ml user
+ARG USERNAME=autoware-ml
+ARG USER_UID=1000
+ARG USER_GID=${USER_UID}
+RUN groupadd --gid ${USER_GID} ${USERNAME} \
+    && useradd --uid ${USER_UID} --gid ${USER_GID} -m ${USERNAME} -s /bin/bash \
+    && echo "${USERNAME} ALL=(root) NOPASSWD:ALL" > /etc/sudoers.d/${USERNAME} \
+    && chmod 0440 /etc/sudoers.d/${USERNAME} \
+    && mkdir -p /tmp/xdg \
+    && chown ${USER_UID}:${USER_GID} /tmp/xdg \
+    && chmod 700 /tmp/xdg \
+    && gosu ${USERNAME} env HOME=/home/${USERNAME} _TYPER_COMPLETE_TEST_DISABLE_SHELL_DETECTION=1 ${USERNAME} --install-completion bash
+
+# Install development tools via apt-get
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   bash-completion \
   bear \
@@ -39,10 +51,3 @@ RUN CLANGD_VERSION=$(curl -fsSL "https://api.github.com/repos/clangd/clangd/rele
   && ln -s "/opt/clangd_${CLANGD_VERSION}/bin/clangd" /usr/local/bin/clangd \
   && rm -rf /tmp/clangd-linux.zip \
   && apt-get autoremove -y && apt-get clean -y && rm -rf /var/lib/apt/lists/* "$HOME"/.cache
-
-# Switch back user
-USER autoware-ml
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD echo "Container is healthy"
