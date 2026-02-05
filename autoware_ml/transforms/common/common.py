@@ -26,6 +26,16 @@ class PermuteAxes(BaseTransform):
     Reorders dimensions according to the specified axes order.
     For example, axes=(2, 0, 1) converts (H, W, C) to (C, H, W).
 
+    Required keys:
+        - All keys specified in input_keys parameter. Each must be a numpy array
+          or torch tensor with number of dimensions matching len(axes).
+
+    Optional keys:
+        - None
+
+    Generated keys:
+        - All keys in input_keys are modified in-place with permuted dimensions.
+
     Args:
         input_keys: List of keys to permute from the input dictionary.
         axes: Tuple specifying the new order of axes.
@@ -35,6 +45,8 @@ class PermuteAxes(BaseTransform):
         super().__init__()
         self.input_keys = input_keys
         self.axes = axes
+        # Dynamic required keys based on input_keys parameter
+        self._required_keys = list(input_keys)
 
     def transform(self, input_dict: Dict[str, Any]) -> Dict[str, Any]:
         """Permute axes of specified keys.
@@ -46,11 +58,12 @@ class PermuteAxes(BaseTransform):
             Dictionary with permuted arrays/tensors.
         """
         for key in self.input_keys:
-            assert key in input_dict, f"Missing required key: '{key}'"
             data = input_dict[key]
-            assert len(data.shape) == len(self.axes), (
-                f"Number of dimensions {data.shape} does not match number of axes {self.axes}"
-            )
+            if len(data.shape) != len(self.axes):
+                raise ValueError(
+                    f"PermuteAxes: Number of dimensions {data.shape} does not match "
+                    f"number of axes {self.axes} for key '{key}'"
+                )
             if isinstance(data, torch.Tensor):
                 input_dict[key] = data.permute(*self.axes)
             elif isinstance(data, np.ndarray):

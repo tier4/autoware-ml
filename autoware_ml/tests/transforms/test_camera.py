@@ -20,7 +20,7 @@ import pytest
 from autoware_ml.datamodule.t4dataset.calibration_status import (
     CalibrationData,
 )
-from autoware_ml.transforms.camera import RandomCropAndScale, UndistortImage
+from autoware_ml.transforms.camera import CropAndScale, UndistortImage
 
 
 class TestUndistortImage:
@@ -35,19 +35,19 @@ class TestUndistortImage:
         assert transform.alpha == 0.5
 
     def test_missing_img_key(self, sample_calibration_data: CalibrationData) -> None:
-        """Test that missing 'img' key raises assertion error."""
+        """Test that missing 'img' key raises KeyError."""
         transform = UndistortImage()
         input_dict = {"calibration_data": sample_calibration_data}
 
-        with pytest.raises(AssertionError, match="Missing required key: 'img'"):
+        with pytest.raises(KeyError, match="Missing required key 'img'"):
             transform(input_dict)
 
     def test_missing_calibration_data_key(self, sample_image: np.ndarray) -> None:
-        """Test that missing 'calibration_data' key raises assertion error."""
+        """Test that missing 'calibration_data' key raises KeyError."""
         transform = UndistortImage()
         input_dict = {"img": sample_image}
 
-        with pytest.raises(AssertionError, match="Missing required key: 'calibration_data'"):
+        with pytest.raises(KeyError, match="Missing required key 'calibration_data'"):
             transform(input_dict)
 
     def test_passthrough_zero_distortion(
@@ -118,38 +118,38 @@ class TestUndistortImage:
         assert isinstance(output_dict["calibration_data"], CalibrationData)
 
 
-class TestRandomCropAndScale:
-    """Tests for RandomCropAndScale transform."""
+class TestCropAndScale:
+    """Tests for CropAndScale transform."""
 
     def test_instantiation(self) -> None:
         """Test instantiation with default and custom parameters."""
-        transform = RandomCropAndScale()
+        transform = CropAndScale()
         assert transform.p == 0.5
         assert transform.crop_ratio == 0.8
 
-        transform = RandomCropAndScale(p=0.9, crop_ratio=0.7)
+        transform = CropAndScale(p=0.9, crop_ratio=0.7)
         assert transform.p == 0.9
         assert transform.crop_ratio == 0.7
 
     def test_missing_keys(
         self, sample_image: np.ndarray, sample_calibration_data: CalibrationData
     ) -> None:
-        """Test that missing required keys raise assertion error."""
-        transform = RandomCropAndScale()
+        """Test that missing required keys raise KeyError."""
+        transform = CropAndScale()
 
         # Missing img
-        with pytest.raises(AssertionError, match="Missing required key: 'img'"):
+        with pytest.raises(KeyError, match="Missing required key 'img'"):
             transform({"calibration_data": sample_calibration_data})
 
         # Missing calibration_data
-        with pytest.raises(AssertionError, match="Missing required key: 'calibration_data'"):
+        with pytest.raises(KeyError, match="Missing required key 'calibration_data'"):
             transform({"img": sample_image})
 
     def test_never_apply(
         self, sample_image: np.ndarray, sample_calibration_data: CalibrationData
     ) -> None:
         """Test with p=0.0 returns input unchanged."""
-        transform = RandomCropAndScale(p=0.0)
+        transform = CropAndScale(p=0.0)
         input_dict = {
             "img": sample_image.copy(),
             "calibration_data": sample_calibration_data,
@@ -164,7 +164,7 @@ class TestRandomCropAndScale:
         self, sample_image: np.ndarray, sample_calibration_data: CalibrationData
     ) -> None:
         """Test with p=1.0 preserves output shape."""
-        transform = RandomCropAndScale(p=1.0, crop_ratio=0.8)
+        transform = CropAndScale(p=1.0, crop_ratio=0.8)
         input_dict = {
             "img": sample_image.copy(),
             "calibration_data": sample_calibration_data,
@@ -179,7 +179,7 @@ class TestRandomCropAndScale:
         self, sample_image: np.ndarray, sample_calibration_data: CalibrationData
     ) -> None:
         """Test that camera matrix is updated when transform is applied."""
-        transform = RandomCropAndScale(p=1.0, crop_ratio=0.8)
+        transform = CropAndScale(p=1.0, crop_ratio=0.8)
         original_camera_matrix = sample_calibration_data.new_camera_matrix.copy()
 
         input_dict = {

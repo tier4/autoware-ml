@@ -33,9 +33,9 @@ class TestPermuteAxes:
         assert permute.axes == (2, 0, 1)
 
     def test_missing_key(self, sample_input_dict: Dict[str, Any]) -> None:
-        """Test that missing required key raises assertion error."""
+        """Test that missing required key raises KeyError."""
         permute = PermuteAxes(input_keys=["missing_key"], axes=(0, 1))
-        with pytest.raises(AssertionError, match="Missing required key: 'missing_key'"):
+        with pytest.raises(KeyError, match="Missing required key 'missing_key'"):
             permute(sample_input_dict)
 
     def test_permute_numpy_hwc_to_chw(self, sample_input_dict: Dict[str, Any]) -> None:

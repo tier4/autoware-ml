@@ -29,11 +29,26 @@ class UndistortImage(BaseTransform):
     Applies lens distortion correction using OpenCV's undistort function
     and updates the calibration data with the new camera matrix.
 
+    Required keys:
+        - img: (H, W, 3) uint8 image.
+        - calibration_data: CalibrationData object with camera_matrix and
+          distortion_coefficients.
+
+    Optional keys:
+        - None
+
+    Generated keys:
+        - img: Modified in-place with undistorted image (when distortion exists).
+        - calibration_data.new_camera_matrix: Updated with optimal camera matrix.
+        - calibration_data.distortion_coefficients: Set to zeros after undistortion.
+
     Args:
         alpha: Free scaling parameter between 0 and 1.
             0: Crops all invalid pixels (no black borders).
             1: Retains all pixels (may have black borders).
     """
+
+    _required_keys = ["img", "calibration_data"]
 
     def __init__(self, alpha: float = 0.0) -> None:
         """Initialize UndistortImage transform.
@@ -53,9 +68,6 @@ class UndistortImage(BaseTransform):
         Returns:
             Dictionary with undistorted image and updated calibration data.
         """
-        assert "img" in input_dict, "Missing required key: 'img'"
-        assert "calibration_data" in input_dict, "Missing required key: 'calibration_data'"
-
         image: np.ndarray = input_dict["img"]
         calibration_data: CalibrationData = input_dict["calibration_data"]
 
@@ -84,19 +96,32 @@ class UndistortImage(BaseTransform):
         return input_dict
 
 
-class RandomCropAndScale(BaseTransform):
-    """Random crop and scale augmentation for images.
+class CropAndScale(BaseTransform):
+    """Crop and scale augmentation for images.
 
     Crops a random region from the image and resizes back to original dimensions.
     Updates camera matrix to account for the transformation.
+
+    Required keys:
+        - img: (H, W, 3) uint8 image.
+        - calibration_data: CalibrationData object with new_camera_matrix.
+
+    Optional keys:
+        - None
+
+    Generated keys:
+        - img: Modified in-place with cropped and scaled image (when applied).
+        - calibration_data.new_camera_matrix: Updated to account for crop/scale.
 
     Args:
         p: Probability of applying augmentation (0.0 to 1.0).
         crop_ratio: Minimum crop ratio controlling crop size range (0.0 to 1.0).
     """
 
+    _required_keys = ["img", "calibration_data"]
+
     def __init__(self, p: float = 0.5, crop_ratio: float = 0.8) -> None:
-        """Initialize RandomCropAndScale transform.
+        """Initialize CropAndScale transform.
 
         Args:
             p: Probability of applying augmentation.
@@ -115,12 +140,6 @@ class RandomCropAndScale(BaseTransform):
         Returns:
             Dictionary with cropped/scaled image and updated calibration data.
         """
-        assert "img" in input_dict, "Missing required key: 'img'"
-        assert "calibration_data" in input_dict, "Missing required key: 'calibration_data'"
-
-        if np.random.rand() >= self.p:
-            return input_dict
-
         image: np.ndarray = input_dict["img"]
         calibration_data: CalibrationData = input_dict["calibration_data"]
 
