@@ -18,7 +18,7 @@ fi
 
 if ! getent passwd "${HOST_UID}" >/dev/null 2>&1; then
     useradd -u "${HOST_UID}" -g "${HOST_GID}" -m -s /bin/bash "autoware-ml"
-    echo "autoware-ml ALL=(root) NOPASSWD:ALL" > /etc/sudoers.d/autoware-ml
+    echo "autoware-ml ALL=(root) NOPASSWD:ALL" >/etc/sudoers.d/autoware-ml
     chmod 0440 /etc/sudoers.d/autoware-ml
     gosu "${HOST_UID}" autoware-ml --install-completion bash
     echo "User 'autoware-ml' was created with UID: ${HOST_UID} and GID: ${HOST_GID}."
