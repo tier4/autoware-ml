@@ -257,7 +257,7 @@ defaults:
   - /my_task/my_model_base
   - _self_
 
-data_root: /workspace/data/my_dataset
+data_root: /autoware-ml-data/my_dataset
 
 datamodule:
   data_root: ${data_root}

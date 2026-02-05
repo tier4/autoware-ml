@@ -19,6 +19,7 @@ set -e
 VAR_NAME="AUTOWARE_ML_DATA_PATH"
 NEW_PATH="$1"
 BASHRC_FILE="$HOME/.bashrc"
+PROFILE_FILE="$HOME/.profile"
 
 show_help() {
     cat <<EOF
@@ -35,7 +36,7 @@ Examples:
   Incorrect: $0 /data/datasets/nuscenes
 
 The script will:
-  - Add or update ${VAR_NAME} in ${BASHRC_FILE}
+  - Add or update ${VAR_NAME} in ${BASHRC_FILE} and ${PROFILE_FILE}
   - Skip execution if running inside a Docker container
 
 EOF
@@ -62,10 +63,12 @@ fi
 NEW_PATH="${NEW_PATH%/}"
 
 sed -i "/^export ${VAR_NAME}=.*/d" "$BASHRC_FILE"
+sed -i "/^export ${VAR_NAME}=.*/d" "$PROFILE_FILE"
 
 echo "export ${VAR_NAME}=\"$NEW_PATH\"" >>"$BASHRC_FILE"
+echo "export ${VAR_NAME}=\"$NEW_PATH\"" >>"$PROFILE_FILE"
 
-echo "Successfully set ${VAR_NAME}=\"$NEW_PATH\" in ${BASHRC_FILE}"
+echo "Successfully set ${VAR_NAME}=\"$NEW_PATH\" in ${BASHRC_FILE} and ${PROFILE_FILE}"
 echo ""
 echo "Note: This path should be the root directory for datasets (e.g., /data/datasets),"
 echo "      not a path to a specific dataset. Dataset-specific directories are"

@@ -9,36 +9,35 @@
     "options": ["--network=host"]
   },
   "remoteUser": "autoware-ml",
+  "containerUser": "autoware-ml",
+  "updateRemoteUserUID": true,
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
   "workspaceFolder": "/workspace",
   "hostRequirements": {
     "gpu": true
   },
+  "privileged": true,
+  "containerEnv": {
+    "XDG_RUNTIME_DIR": "/tmp/xdg",
+    "DISPLAY": "${localEnv:DISPLAY}",
+    "XAUTHORITY": "${localEnv:XAUTHORITY}",
+    "NVIDIA_DRIVER_CAPABILITIES": "all"
+  },
+  "mounts": [
+    "source=/tmp/.X11-unix,target=/tmp/.X11-unix,type=bind",
+    "source=/etc/localtime,target=/etc/localtime,type=bind,readonly",
+    "source=/dev/dri,target=/dev/dri,type=bind,readonly",
+    "source=${localEnv:AUTOWARE_ML_DATA_PATH},target=/autoware-ml-data,type=bind",
+    "source=${localEnv:HOME}/.ssh,target=/home/autoware-ml/.ssh,type=bind"
+  ],
   "runArgs": [
-    "-it",
-    "--rm",
-    "--name=autoware-ml-${localEnv:USER}",
-    "--privileged",
-    "--env",
-    "DISPLAY=${env:DISPLAY}",
-    "--env",
-    "XAUTHORITY=${env:XAUTHORITY}",
-    "--env",
-    "NVIDIA_DRIVER_CAPABILITIES=all",
+    "--name=autoware-ml-${localEnv:USER}-dev",
     "--net=host",
     "--pid=host",
     "--ipc=host",
-    "--ulimit",
-    "memlock=-1",
-    "--ulimit",
-    "stack=67108864",
-    "--volume=/tmp/.X11-unix/:/tmp/.X11-unix",
-    "--volume=/etc/localtime:/etc/localtime:ro",
-    "--volume=/dev/dri:/dev/dri:ro",
-    "--volume=${localEnv:AUTOWARE_ML_DATA_PATH}:/workspace/data",
-    "--volume=${env:HOME}/.ssh:/home/autoware-ml/.ssh",
-    "--gpus",
-    "all"
+    "--ulimit=memlock=-1",
+    "--ulimit=stack=67108864",
+    "--gpus=all"
   ],
   "customizations": {
     "vscode": {

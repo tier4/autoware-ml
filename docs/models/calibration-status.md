@@ -80,8 +80,8 @@ train_transforms:
 autoware-ml create-dataset \
     --dataset nuscenes \
     --task calibration_status \
-    --root-path /workspace/data/nuscenes \
-    --out-dir /workspace/data/nuscenes/info
+    --root-path /autoware-ml-data/nuscenes \
+    --out-dir /autoware-ml-data/nuscenes/info
 
 # Train
 autoware-ml train --config-name tasks/calibration_status/resnet18_nuscenes
@@ -94,7 +94,7 @@ defaults:
   - /tasks/calibration_status/resnet18_base
   - _self_
 
-data_root: /workspace/data/nuscenes
+data_root: /autoware-ml-data/nuscenes
 
 datamodule:
   _target_: autoware_ml.datamodule.nuscenes.calibration_status.NuscenesCalibrationDataModule
