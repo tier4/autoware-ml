@@ -27,7 +27,7 @@
     "source=/tmp/.X11-unix,target=/tmp/.X11-unix,type=bind",
     "source=/etc/localtime,target=/etc/localtime,type=bind,readonly",
     "source=/dev/dri,target=/dev/dri,type=bind,readonly",
-    "source=${localEnv:AUTOWARE_ML_DATA_PATH},target=/autoware-ml-data,type=bind",
+    "source=${localEnv:AUTOWARE_ML_DATA_PATH},target=/workspace/data,type=bind,bind-propagation=rshared",
     "source=${localEnv:HOME}/.ssh,target=/home/autoware-ml/.ssh,type=bind"
   ],
   "runArgs": [
