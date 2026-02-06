@@ -3,7 +3,7 @@ FROM pytorch/pytorch:2.9.1-cuda12.8-cudnn9-devel
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # Core environment variables
-ENV AUTOWARE_ML_DATA_PATH="/autoware-ml-data" \
+ENV AUTOWARE_ML_DATA_PATH="/workspace/data" \
   CUDA_HOME="/usr/local/cuda" \
   FORCE_CUDA="1" \
   LC_ALL=C.UTF-8 \
