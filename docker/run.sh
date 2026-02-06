@@ -40,6 +40,7 @@ MODE=""
 CONTAINER=""
 CONTAINER_NAME=""
 USER_ENV=""
+LOCALTIME_MOUNT=""
 
 # Function to print help message
 print_help() {
@@ -47,7 +48,7 @@ print_help() {
     echo -e "${RED}Usage:${NC} run.sh [OPTIONS]"
     echo -e "Options:"
     echo -e "  ${GREEN}--help/-h${NC}            Display this help message"
-    echo -e "  ${GREEN}--data-path${NC}          Specify the path to mount data files into /autoware-ml-data (overrides AUTOWARE_ML_DATA_PATH if set)"
+    echo -e "  ${GREEN}--data-path${NC}          Specify the path to mount data files into /workspace/data (overrides AUTOWARE_ML_DATA_PATH if set)"
     echo -e "  ${GREEN}--headless${NC}           Run Autoware-ML in headless mode (default: false)"
     echo -e "  ${GREEN}--detached${NC}           Run Autoware-ML in detached mode (default: false)"
     echo -e "  ${GREEN}--pull-latest-image${NC}  Pull the latest image before starting the container"
@@ -102,15 +103,19 @@ parse_arguments() {
 set_variables() {
     # Set data path
     if [ "$DATA_PATH" != "" ]; then
-        DATA="-v ${DATA_PATH}:/autoware-ml-data:rw"
+        DATA="--mount type=bind,source=${DATA_PATH},target=/workspace/data,bind-propagation=rshared"
     elif [ -n "$AUTOWARE_ML_DATA_PATH" ]; then
-        DATA="-v ${AUTOWARE_ML_DATA_PATH}:/autoware-ml-data:rw"
+        DATA="--mount type=bind,source=${AUTOWARE_ML_DATA_PATH},target=/workspace/data,bind-propagation=rshared"
     else
         echo -e "${ORANGE}Neither --data-path nor AUTOWARE_ML_DATA_PATH is set. Not mounting any data directory.${NC}"
     fi
 
+    if [ -f /etc/localtime ]; then
+        LOCALTIME_MOUNT="--mount type=bind,source=/etc/localtime,target=/etc/localtime,readonly"
+    fi
+
     IMAGE="ghcr.io/tier4/autoware-ml:latest"
-    WORKSPACE="-v ${WORKSPACE_ROOT}:/workspace -e PYTHONPATH=/workspace"
+    WORKSPACE="--mount type=bind,source=${WORKSPACE_ROOT},target=/workspace"
     MEMORY_CONFIG="--ipc=host --ulimit memlock=-1 --ulimit stack=67108864" # 64MB
 
     # Set container name based on USER environment variable
@@ -126,7 +131,10 @@ set_variables() {
 set_x_display() {
     MOUNT_X=""
     if [ "$option_headless" = "false" ]; then
-        MOUNT_X="-e DISPLAY=$DISPLAY -v /tmp/.X11-unix/:/tmp/.X11-unix"
+        MOUNT_X="-e DISPLAY=$DISPLAY --mount type=bind,source=/tmp/.X11-unix,target=/tmp/.X11-unix"
+        if [ -d /dev/dri ]; then
+            MOUNT_X="${MOUNT_X} --mount type=bind,source=/dev/dri,target=/dev/dri,readonly"
+        fi
         xhost + >/dev/null
     fi
 }
@@ -201,7 +209,7 @@ run() {
         -e XAUTHORITY=${XAUTHORITY} -e NVIDIA_DRIVER_CAPABILITIES=all \
         -e TZ="$(cat /etc/timezone)" \
         ${USER_ENV} \
-        ${WORKSPACE} ${DATA} ${CONTAINER} ${IMAGE}
+        ${LOCALTIME_MOUNT} ${WORKSPACE} ${DATA} ${CONTAINER} ${IMAGE}
 }
 
 # Main script execution
