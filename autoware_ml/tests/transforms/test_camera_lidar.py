@@ -24,38 +24,130 @@ from autoware_ml.datamodule.t4dataset.calibration_status import (
     CalibrationStatus,
 )
 from autoware_ml.transforms.camera_lidar import (
+    Affine,
     CalibrationMisalignment,
     LidarCameraFusion,
-    RandomAffine,
 )
 
 
 class TestCalibrationMisalignment:
     """Tests for CalibrationMisalignment transform."""
 
-    def test_instantiation(self) -> None:
-        """Test instantiation with default and custom parameters."""
-        transform = CalibrationMisalignment()
-        assert transform.p == 0.5
-        assert transform.min_angle == 1.0
-        assert transform.max_angle == 10.0
+    def test_instantiation_defaults(self) -> None:
+        """Test instantiation with only required parameter (p)."""
+        transform = CalibrationMisalignment(p=0.5)
 
-        transform = CalibrationMisalignment(p=0.8, min_angle=2.0, max_angle=5.0)
+        # Check probability
+        assert transform.p == 0.5
+
+        # All axes should be inactive by default
+        assert transform.activate_roll is False
+        assert transform.activate_pitch is False
+        assert transform.activate_yaw is False
+        assert transform.activate_x is False
+        assert transform.activate_y is False
+        assert transform.activate_z is False
+
+        # All min/max values should be 0.0 by default
+        assert transform.min_roll_neg == 0.0
+        assert transform.max_roll_neg == 0.0
+        assert transform.min_roll_pos == 0.0
+        assert transform.max_roll_pos == 0.0
+
+    def test_instantiation_single_axis(self) -> None:
+        """Test instantiation with only one axis active."""
+        transform = CalibrationMisalignment(
+            p=0.5,
+            activate_roll=True,
+            min_roll_neg=1.0,
+            max_roll_neg=5.0,
+            min_roll_pos=1.0,
+            max_roll_pos=5.0,
+        )
+
+        assert transform.p == 0.5
+        assert transform.activate_roll is True
+        assert transform.activate_pitch is False  # Still default
+        assert transform.min_roll_neg == 1.0
+        assert transform.max_roll_neg == 5.0
+        # Other axes should remain at defaults
+        assert transform.min_pitch_neg == 0.0
+
+    def test_instantiation_all_axes(self) -> None:
+        """Test instantiation with all axes active."""
+        transform = CalibrationMisalignment(
+            p=0.8,
+            activate_roll=True,
+            activate_pitch=True,
+            activate_yaw=True,
+            activate_x=True,
+            activate_y=True,
+            activate_z=True,
+            min_roll_neg=1.0,
+            max_roll_neg=5.0,
+            min_roll_pos=1.0,
+            max_roll_pos=5.0,
+            min_pitch_neg=0.5,
+            max_pitch_neg=2.0,
+            min_pitch_pos=0.5,
+            max_pitch_pos=2.0,
+            min_yaw_neg=0.5,
+            max_yaw_neg=2.0,
+            min_yaw_pos=0.5,
+            max_yaw_pos=2.0,
+            min_x_neg=0.1,
+            max_x_neg=0.5,
+            min_x_pos=0.1,
+            max_x_pos=0.5,
+            min_y_neg=0.1,
+            max_y_neg=0.3,
+            min_y_pos=0.1,
+            max_y_pos=0.3,
+            min_z_neg=0.05,
+            max_z_neg=0.2,
+            min_z_pos=0.05,
+            max_z_pos=0.2,
+        )
+
         assert transform.p == 0.8
-        assert transform.min_angle == 2.0
-        assert transform.max_angle == 5.0
+        assert transform.activate_roll is True
+        assert transform.activate_pitch is True
+        assert transform.activate_yaw is True
+        assert transform.activate_x is True
+        assert transform.activate_y is True
+        assert transform.activate_z is True
+
+    def test_validation_negative_values(self) -> None:
+        """Test that negative magnitude values raise ValueError."""
+        with pytest.raises(ValueError, match="must be >= 0"):
+            CalibrationMisalignment(
+                p=0.5,
+                activate_roll=True,
+                min_roll_neg=-1.0,  # Invalid: negative magnitude
+                max_roll_neg=5.0,
+            )
+
+    def test_validation_min_greater_than_max(self) -> None:
+        """Test that min > max raises ValueError."""
+        with pytest.raises(ValueError, match="must be <="):
+            CalibrationMisalignment(
+                p=0.5,
+                activate_roll=True,
+                min_roll_neg=5.0,  # Invalid: min > max
+                max_roll_neg=1.0,
+            )
 
     def test_missing_calibration_data_key(self) -> None:
-        """Test that missing 'calibration_data' key raises assertion error."""
-        transform = CalibrationMisalignment()
+        """Test that missing 'calibration_data' key raises KeyError."""
+        transform = CalibrationMisalignment(p=0.5)
         input_dict = {}
 
-        with pytest.raises(AssertionError, match="Missing required key: 'calibration_data'"):
+        with pytest.raises(KeyError, match="Missing required key 'calibration_data'"):
             transform(input_dict)
 
     def test_p_zero_no_augmentation(self, sample_calibration_data: CalibrationData) -> None:
         """Test that p=0.0 applies no augmentation."""
-        transform = CalibrationMisalignment(p=0.0)
+        transform = CalibrationMisalignment(p=0.0, activate_roll=True)
         original_transform = sample_calibration_data.lidar_to_camera_transformation.copy()
 
         input_dict = {"calibration_data": sample_calibration_data}
@@ -71,8 +163,15 @@ class TestCalibrationMisalignment:
         assert output_dict["gt_calibration_status"] == CalibrationStatus.CALIBRATED.value
 
     def test_p_one_always_augment(self, sample_calibration_data: CalibrationData) -> None:
-        """Test that p=1.0 always applies augmentation."""
-        transform = CalibrationMisalignment(p=1.0)
+        """Test that p=1.0 always applies augmentation when axis is active."""
+        transform = CalibrationMisalignment(
+            p=1.0,
+            activate_roll=True,
+            min_roll_neg=5.0,
+            max_roll_neg=10.0,
+            min_roll_pos=5.0,
+            max_roll_pos=10.0,
+        )
         original_transform = sample_calibration_data.lidar_to_camera_transformation.copy()
 
         input_dict = {"calibration_data": sample_calibration_data}
@@ -87,9 +186,48 @@ class TestCalibrationMisalignment:
         assert "gt_calibration_status" in output_dict
         assert output_dict["gt_calibration_status"] == CalibrationStatus.MISCALIBRATED.value
 
+    def test_p_one_no_active_axes_still_miscalibrated(
+        self, sample_calibration_data: CalibrationData
+    ) -> None:
+        """Test that p=1.0 with no active axes still marks as miscalibrated but transform unchanged."""
+        transform = CalibrationMisalignment(p=1.0)  # All axes inactive by default
+        original_transform = sample_calibration_data.lidar_to_camera_transformation.copy()
+
+        input_dict = {"calibration_data": sample_calibration_data}
+
+        output_dict = transform(input_dict)
+
+        # Transform should be unchanged (identity noise)
+        assert np.allclose(
+            output_dict["calibration_data"].lidar_to_camera_transformation,
+            original_transform,
+        )
+        # But still marked as miscalibrated (augmentation was "applied")
+        assert output_dict["gt_calibration_status"] == CalibrationStatus.MISCALIBRATED.value
+
+    def test_noise_stored_in_calibration_data(
+        self, sample_calibration_data: CalibrationData
+    ) -> None:
+        """Test that noise transform is stored when augmentation is applied."""
+        transform = CalibrationMisalignment(
+            p=1.0,
+            activate_roll=True,
+            min_roll_neg=5.0,
+            max_roll_neg=10.0,
+            min_roll_pos=5.0,
+            max_roll_pos=10.0,
+        )
+
+        input_dict = {"calibration_data": sample_calibration_data}
+        output_dict = transform(input_dict)
+
+        # Noise should be stored
+        assert output_dict["calibration_data"].noise is not None
+        assert output_dict["calibration_data"].noise.shape == (4, 4)
+
     def test_preserves_other_keys(self, sample_calibration_data: CalibrationData) -> None:
         """Test that all keys in input_dict are preserved."""
-        transform = CalibrationMisalignment()
+        transform = CalibrationMisalignment(p=0.5)
         input_dict = {
             "calibration_data": sample_calibration_data,
             "other_key": "preserved_value",
@@ -102,13 +240,64 @@ class TestCalibrationMisalignment:
 
     def test_calibration_data_returned(self, sample_calibration_data: CalibrationData) -> None:
         """Test that calibration_data is returned in output."""
-        transform = CalibrationMisalignment()
+        transform = CalibrationMisalignment(p=0.5)
         input_dict = {"calibration_data": sample_calibration_data}
 
         output_dict = transform(input_dict)
 
         assert "calibration_data" in output_dict
         assert isinstance(output_dict["calibration_data"], CalibrationData)
+
+    def test_alter_calibration_shape(self, sample_calibration_data: CalibrationData) -> None:
+        """Test that alter_calibration returns correct shape."""
+        transform = CalibrationMisalignment(
+            p=1.0,
+            activate_roll=True,
+            min_roll_neg=1.0,
+            max_roll_neg=5.0,
+            min_roll_pos=1.0,
+            max_roll_pos=5.0,
+        )
+
+        original_transform = sample_calibration_data.lidar_to_camera_transformation
+        noisy_transform, noise = transform.alter_calibration(original_transform)
+
+        assert noisy_transform.shape == (4, 4)
+        assert noise.shape == (4, 4)
+
+    def test_alter_calibration_invalid_shape(self) -> None:
+        """Test that alter_calibration raises error for invalid input shape."""
+        transform = CalibrationMisalignment(p=1.0, activate_roll=True)
+
+        with pytest.raises(ValueError, match="Transform must be 4x4 matrix"):
+            transform.alter_calibration(np.eye(3))
+
+    def test_bounded_gaussian_values_in_range(self) -> None:
+        """Test that bounded_gaussian produces values within specified range."""
+        transform = CalibrationMisalignment(p=0.5)
+
+        min_val, max_val = 1.0, 5.0
+        center = 2.0
+        scale = 1.0
+
+        # Generate many samples
+        samples = [transform.bounded_gaussian(center, min_val, max_val, scale) for _ in range(100)]
+
+        assert all(min_val <= s <= max_val for s in samples)
+
+    def test_bounded_gaussian_invalid_range(self) -> None:
+        """Test that bounded_gaussian raises error for invalid range."""
+        transform = CalibrationMisalignment(p=0.5)
+
+        with pytest.raises(ValueError, match="min_value .* must be less than max_value"):
+            transform.bounded_gaussian(center=1.0, min_value=5.0, max_value=1.0, scale=1.0)
+
+    def test_bounded_gaussian_invalid_scale(self) -> None:
+        """Test that bounded_gaussian raises error for non-positive scale."""
+        transform = CalibrationMisalignment(p=0.5)
+
+        with pytest.raises(ValueError, match="scale .* must be positive"):
+            transform.bounded_gaussian(center=1.0, min_value=0.0, max_value=5.0, scale=0.0)
 
 
 class TestLidarCameraFusion:
@@ -127,40 +316,40 @@ class TestLidarCameraFusion:
     def test_missing_img_key(
         self, sample_points: np.ndarray, sample_calibration_data: CalibrationData
     ) -> None:
-        """Test that missing 'img' key raises assertion error."""
+        """Test that missing 'img' key raises KeyError."""
         fusion = LidarCameraFusion()
         input_dict = {
             "points": sample_points,
             "calibration_data": sample_calibration_data,
         }
 
-        with pytest.raises(AssertionError, match="Missing required key: 'img'"):
+        with pytest.raises(KeyError, match="Missing required key 'img'"):
             fusion(input_dict)
 
     def test_missing_points_key(
         self, sample_image: np.ndarray, sample_calibration_data: CalibrationData
     ) -> None:
-        """Test that missing 'points' key raises assertion error."""
+        """Test that missing 'points' key raises KeyError."""
         fusion = LidarCameraFusion()
         input_dict = {
             "img": sample_image,
             "calibration_data": sample_calibration_data,
         }
 
-        with pytest.raises(AssertionError, match="Missing required key: 'points'"):
+        with pytest.raises(KeyError, match="Missing required key 'points'"):
             fusion(input_dict)
 
     def test_missing_calibration_data_key(
         self, sample_image: np.ndarray, sample_points: np.ndarray
     ) -> None:
-        """Test that missing 'calibration_data' key raises assertion error."""
+        """Test that missing 'calibration_data' key raises KeyError."""
         fusion = LidarCameraFusion()
         input_dict = {
             "img": sample_image,
             "points": sample_points,
         }
 
-        with pytest.raises(AssertionError, match="Missing required key: 'calibration_data'"):
+        with pytest.raises(KeyError, match="Missing required key 'calibration_data'"):
             fusion(input_dict)
 
     def test_output_fused_img_key(self, sample_input_dict: Dict[str, Any]) -> None:
@@ -228,30 +417,30 @@ class TestLidarCameraFusion:
         assert "fused_img" in output_dict
 
 
-class TestRandomAffine:
-    """Tests for RandomAffine transform."""
+class TestAffine:
+    """Tests for Affine transform."""
 
     def test_instantiation(self) -> None:
         """Test instantiation with default and custom parameters."""
-        transform = RandomAffine()
+        transform = Affine()
         assert transform.p == 0.5
         assert transform.max_distortion == 0.1
 
-        transform = RandomAffine(p=0.8, max_distortion=0.2)
+        transform = Affine(p=0.8, max_distortion=0.2)
         assert transform.p == 0.8
         assert transform.max_distortion == 0.2
 
     def test_missing_img_key(self) -> None:
-        """Test that missing 'img' key raises assertion error."""
-        transform = RandomAffine()
+        """Test that missing 'img' key raises KeyError."""
+        transform = Affine()
         input_dict = {}
 
-        with pytest.raises(AssertionError, match="Missing required key: 'img'"):
+        with pytest.raises(KeyError, match="Missing required key 'img'"):
             transform(input_dict)
 
     def test_p_zero_no_augmentation(self, sample_image: np.ndarray) -> None:
         """Test that p=0.0 applies no augmentation."""
-        transform = RandomAffine(p=0.0)
+        transform = Affine(p=0.0)
         original_image = sample_image.copy()
 
         input_dict = {"img": original_image}
@@ -262,9 +451,13 @@ class TestRandomAffine:
         assert "img" in output_dict
         assert output_dict["img"] is original_image
 
+        # Check that affine_transform is present and is identity
+        assert "affine_transform" in output_dict
+        assert np.allclose(output_dict["affine_transform"], np.eye(3))
+
     def test_p_one_always_augment(self, sample_image: np.ndarray) -> None:
         """Test that p=1.0 always applies augmentation."""
-        transform = RandomAffine(p=1.0)
+        transform = Affine(p=1.0)
         original_image = sample_image.copy()
 
         input_dict = {"img": original_image}
@@ -278,7 +471,7 @@ class TestRandomAffine:
 
     def test_preserves_other_keys(self, sample_image: np.ndarray) -> None:
         """Test that all keys in input_dict are preserved."""
-        transform = RandomAffine()
+        transform = Affine()
         input_dict = {"img": sample_image.copy(), "other_key": "preserved_value"}
 
         output_dict = transform(input_dict)
@@ -288,7 +481,7 @@ class TestRandomAffine:
 
     def test_output_shape_preserved(self, sample_image: np.ndarray) -> None:
         """Test that output image shape matches input shape."""
-        transform = RandomAffine()
+        transform = Affine()
         input_dict = {"img": sample_image.copy()}
 
         output_dict = transform(input_dict)
@@ -298,7 +491,7 @@ class TestRandomAffine:
 
     def test_affine_matrix_valid(self, sample_image: np.ndarray) -> None:
         """Test that affine matrix has valid structure."""
-        transform = RandomAffine(p=1.0, max_distortion=0.1)
+        transform = Affine(p=1.0, max_distortion=0.1)
         input_dict = {"img": sample_image.copy()}
 
         output_dict = transform(input_dict)

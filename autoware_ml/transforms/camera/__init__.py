@@ -14,6 +14,6 @@
 
 """Transforms for camera data, where image and calibration data are present."""
 
-from .camera import RandomCropAndScale, UndistortImage
+from .camera import CropAndScale, UndistortImage
 
-__all__ = ["UndistortImage", "RandomCropAndScale"]
+__all__ = ["UndistortImage", "CropAndScale"]

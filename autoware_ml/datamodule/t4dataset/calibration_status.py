@@ -43,6 +43,7 @@ class CalibrationData:
     camera_matrix: npt.NDArray[np.float32]  # Original camera intrinsic matrix (3x3)
     distortion_coefficients: npt.NDArray[np.float32]  # Camera distortion coefficients
     lidar_to_camera_transformation: npt.NDArray[np.float32]
+    noise: Optional[npt.NDArray[np.float32]] = None
     # Updated camera matrix after image processing (undistortion, cropping, scaling)
     # This matrix should be used for 3D->2D projection after any image transformations
     # to ensure geometric consistency between the processed image and 3D point projections
@@ -81,6 +82,8 @@ class T4CalibrationStatusDataset(Dataset):
 
         with open(ann_file, "rb") as f:
             self.data_infos = pickle.load(f)
+
+        self.data_infos["data_list"] = self.data_infos["data_list"]
 
     def __len__(self) -> int:
         """Get dataset length.
