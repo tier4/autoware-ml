@@ -1,5 +1,5 @@
 _target_: autoware_ml.databases.t4datasets.T4Database
-_convert_: "all"
+_convert_: 'all'
 
 database_version: "T4Detection3d-v1.0.0"
 # Root path of actual annotation files
