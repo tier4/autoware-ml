@@ -1,13 +1,18 @@
 hydra:
   run:
-    dir: ${output_dir}
-  output_subdir: ${output_dir}/code/hydra # Store hydra's config breakdown here for debugging
+    dir: ${log_output_dir}
+  output_subdir: code/hydra # Store hydra's config breakdown here for debugging
   searchpath: # Only <exp_dir> in these paths are discoverable
-    - pkg://autoware_ml.configs.annotations
-    - pkg://autoware_ml.configs.datasets
+    # - pkg://autoware_ml.configs.annotations
+    - pkg://autoware_ml.configs
 
 defaults:
-  - default_t4databasets
-  - generator: default_generator_common
-  - override hydra/job_logging: none # Disable hydra's logging
+  - /databases: t4datasets/t4database_detection3d_base
+  # - generator: default_generator_common
   - override hydra/hydra_logging: none # Disable hydra's logging
+  - _self_
+
+# Directory structure
+date_format: "%Y.%m.%d.%H.%M.%S"
+experiment_uid: ${now:${date_format}} # Unique Id of the experiment, default to timestamp
+log_output_dir: outputs/annotations/${experiment_uid}
