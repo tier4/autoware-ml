@@ -8,7 +8,7 @@ import autoware_ml.configs
 
 logger = logging.getLogger(__name__)
 
-_CONFIG_PATH = str(Path(autoware_ml.configs.__file__).parent.resolve() / "annotations")
+_CONFIG_PATH = str(Path(autoware_ml.configs.__file__).parent.resolve() / "datasets")
 
 
 @hydra.main(version_base=None, config_path=_CONFIG_PATH)

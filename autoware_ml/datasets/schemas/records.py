@@ -5,7 +5,7 @@ import numpy.typing as npt
 from pydantic import BaseModel, ConfigDict
 
 
-class AnnotationTableRecord(BaseModel):
+class DatasetTableRecord(BaseModel):
     """
     Data class to save a record for each column in the annotation table.
     :param scenario_id: Scenario id.

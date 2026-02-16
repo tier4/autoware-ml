@@ -10,16 +10,14 @@ from typing import Iterable
 import polars as pl
 
 from autoware_ml.common.enums import TaskType
-from autoware_ml.annotations.schemas.schemas import AnnotationTableSchema
-from autoware_ml.annotations.schemas.records import AnnotationTableRecord
+from autoware_ml.datasets.schemas.schemas import DatasetTableSchema
+from autoware_ml.datasets.schemas.records import DatasetTableRecord
 
 logger = logging.getLogger(__name__)
 
 
-class DatasetAnnotationGenerator:
-    """
-    Dataset annotation generator basic interface.
-    """
+class DatasetGenerator:
+    """Dataset generator basic interface."""
 
     def __init__(
         self,
@@ -32,9 +30,9 @@ class DatasetAnnotationGenerator:
     ) -> None:
         """
         :param root_path: Root path of the dataset.
-        :param out_dir: Output directory for annotations.
+        :param out_dir: Output directory for dataset records.
         :param database_version: Version of the database.
-        :param task_types: List of task types to generate annotations for.
+        :param task_types: List of task types to generate dataset records.
         :param output_file_postfix: Postfix for the output file name.
         :param max_sweeps: Max number of lidar sweeps to include, only for 3D.
         :return: None
@@ -54,6 +52,7 @@ class DatasetAnnotationGenerator:
 
     @property
     def dataset_type(self) -> str:
+        """Dataset type."""
         raise NotImplementedError("Subclasses must define dataset_type!")
 
     @property
@@ -61,35 +60,31 @@ class DatasetAnnotationGenerator:
         """Output annotation file name."""
         return f"{self.dataset_type}_annotations_{self.database_version}_{self.output_file_postfix}.parquet"
 
-    def generate_annotation_records(self) -> Iterable[AnnotationTableRecord]:
-        """
-        Generate annotation table data records.
-        """
+    def generate_dataset_records(self) -> Iterable[DatasetTableRecord]:
+        """Generate dataset table data records."""
         raise NotImplementedError("Subclasses must implement generate_annotation_records method!")
 
     def run(self) -> None:
-        """
-        Run annotation generator.
-        """
+        """Run dataset generator."""
         logger.info(f"Running {self.dataset_type} dataset annotation generator with {self}")
-        # Generate annotations
-        annotation_records = self.generate_annotation_records()
+        # Generate dataset records
+        dataset_records = self.generate_dataset_records()
 
-        # Save annotation records
-        self.save_annotations(annotation_records)
+        # Save dataset records
+        self.save_dataset_records(dataset_records)
 
         logger.info(
-            f"{self.dataset_type} dataset annotation generator completed successfully with {len(annotation_records)} annotation frames/records, and saved to {self.out_dir / self.annotation_file_name}"
+            f"{self.dataset_type} dataset generator completed successfully with {len(dataset_records)} dataset frames/records, and saved to {self.out_dir / self.dataset_file_name}"
         )
 
-    def save_annotation_records(self, annotation_records: Iterable[AnnotationTableRecord]) -> None:
+    def save_dataset_records(self, dataset_records: Iterable[DatasetTableRecord]) -> None:
         """
-        Save annotations to a polars .parquet file.
-        :param annotation_records: List(row) of annotation table data records.
+        Save dataset records to a polars .parquet file.
+        :param dataset_records: List(row) of dataset table data records.
         :return: None
         """
         # Convert annotations to a polars DataFrame
-        df = pl.DataFrame(annotation_records, schema=AnnotationTableSchema.to_polars_schema())
+        df = pl.DataFrame(dataset_records, schema=DatasetTableSchema.to_polars_schema())
 
         # Save to a .parquet file
-        df.write_parquet(self.out_dir / self.annotation_file_name)
+        df.write_parquet(self.out_dir / self.dataset_file_name)
