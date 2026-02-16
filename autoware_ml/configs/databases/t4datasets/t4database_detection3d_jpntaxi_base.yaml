@@ -11,9 +11,10 @@ task_types:
     _args_: [detection3d]
 
 # Read each database into their corresponding group, it will run evaluation/visualization on each group
-scenarios:
-  db_jpntaxi_base: detection3d/db_jpntaxi_base_v1.0
-  db_jpntaxi_gen2: detection3d/db_jpntaxi_gen2_v1.0
+defaults:
+  scenarios:
+    db_jpntaxi_base: detection3d/db_jpntaxi_base_v1.0
+    db_jpntaxi_gen2: detection3d/db_jpntaxi_gen2_v1.0
 
 # The main database is the database that will be used to train the model or generate annotationsby default
 main_database: db_jpntaxi_base
