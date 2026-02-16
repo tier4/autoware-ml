@@ -1,0 +1,13 @@
+hydra:
+  run:
+    dir: ${output_dir}
+  output_subdir: ${output_dir}/code/hydra           # Store hydra's config breakdown here for debugging
+  searchpath:                                       # Only <exp_dir> in these paths are discoverable
+    - pkg://autoware_ml.configs.annotations
+    - pkg://autoware_ml.configs.datasets
+
+defaults:
+  - default_t4databasets
+  - generator: default_generator_common
+  - override hydra/job_logging: none                            # Disable hydra's logging
+  - override hydra/hydra_logging: none                          # Disable hydra's logging

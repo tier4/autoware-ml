@@ -1,0 +1,19 @@
+_target_: autoware_ml.databases.t4datasets.T4Database
+_convert_: 'all'
+
+database_version: "T4Detection3d-v1.0.0"
+# Root path of actual annotation files
+database_root_path: "data/t4datasets"
+# Root path where the scenario yaml files are stored
+scenario_root_path: "perception-devops/dataset_annotation/t4datasets/detection3d/"
+task_types: 
+  - _target_: autoware_ml.common.enums.TaskType
+    _args_: ['detection3d']
+  
+# Read each database into their corresponding group, it will run evaluation/visualization on each group
+scenarios:
+  db_j6gen2: detection3d/db_j6gen2_v1.0
+  db_j6gen2_base: detection3d/db_j6gen2_base_v1.0
+  db_largebus: detection3d/db_largebus_v1.0
+# The main database is the database that will be used to train the model or generate annotationsby default
+main_database: db_j6gen2_base

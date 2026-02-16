@@ -1,0 +1,25 @@
+version: "base-v1.0.0"
+# List of database versions and each yaml file consists of train/val/test splits
+db_versions:
+  - db_jpntaxigen2_v1
+  - db_jpntaxigen2_v2
+  - db_j6gen2_v1
+  - db_j6gen2_v2
+  - db_j6gen2_v3
+  - db_j6gen2_v4
+  - db_j6gen2_v5
+  - db_j6gen2_v6
+  - db_j6gen2_v7
+  - db_j6gen2_v8
+  - db_j6gen2_v9
+  - db_largebus_v1
+  - db_largebus_v2
+  - db_largebus_v3
+  - db_jpntaxi_v1
+  - db_jpntaxi_v2
+  - db_jpntaxi_v4
+  - db_gsm8_v1
+  - db_j6_v1
+  - db_j6_v2
+  - db_j6_v3
+  - db_j6_v5

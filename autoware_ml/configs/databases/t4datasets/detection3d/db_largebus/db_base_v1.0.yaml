@@ -1,0 +1,6 @@
+version: "largebus-v1.0.0"
+# List of database versions and each yaml file consists of train/val/test splits
+db_versions:
+  - db_largebus_v1
+  - db_largebus_v2
+  - db_largebus_v3
