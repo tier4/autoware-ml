@@ -2,17 +2,15 @@ import logging
 
 from typing import Iterable
 
-from autoware_ml.annotations.enums.enums import TaskType
-from autoware_ml.annotations.generators.generator import DatasetAnnotationGenerator
-from autoware_ml.annotations.schemas.records import AnnotationTableRecord
+from autoware_ml.common.enums.enums import TaskType
+from autoware_ml.datasets.generators.dataset_generator import DatasetGenerator
+from autoware_ml.datasets.schemas.records import DatasetTableRecord
 
 logger = logging.getLogger(__name__)
 
 
-class NuScenesAnnotationGenerator(DatasetAnnotationGenerator):
-    """
-    Dataset annotation generator basic interface.
-    """
+class NuScenesAnnotationGenerator(DatasetGenerator):
+    """NuScenes dataset generator."""
 
     def __init__(
         self,
@@ -21,9 +19,9 @@ class NuScenesAnnotationGenerator(DatasetAnnotationGenerator):
         database_version: str,
         task_types: Iterable[TaskType],
         output_file_postfix: str,
+        max_sweeps: int = 0,
     ):
-        max_sweeps: int = (0,)
-        """"""
+        """Initialize NuScenes dataset generator."""
         super().__init__(
             root_path=root_path,
             out_dir=out_dir,
@@ -35,11 +33,10 @@ class NuScenesAnnotationGenerator(DatasetAnnotationGenerator):
 
     @property
     def dataset_type(self) -> str:
+        """Dataset type."""
         return "nuscenes"
 
-    def generate_annotation_records(self) -> Iterable[AnnotationTableRecord]:
-        """
-        Generate annotation table data records.
-        """
+    def generate_dataset_records(self) -> Iterable[DatasetTableRecord]:
+        """Generate dataset table data records."""
         # TODO: Implement NuScenes dataset annotation table data records generation
         raise NotImplementedError

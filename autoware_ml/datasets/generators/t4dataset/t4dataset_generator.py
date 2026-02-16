@@ -21,6 +21,7 @@ class T4DatasetGenerator(DatasetGenerator):
         output_file_postfix: str,
         max_sweeps: int = 0,
     ):
+        """Initialize T4 dataset generator."""
         super().__init__(
             root_path=root_path,
             out_dir=out_dir,
@@ -32,6 +33,7 @@ class T4DatasetGenerator(DatasetGenerator):
 
     @property
     def dataset_type(self) -> str:
+        """Dataset type."""
         return "t4dataset"
 
     def generate_dataset_records(self) -> Iterable[DatasetTableRecord]:
