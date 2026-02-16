@@ -1,13 +1,14 @@
 from dataclasses import dataclass
-from typing import NamedTuple 
+from typing import NamedTuple
 
-import polars as pl 
+import polars as pl
 
 
 class AnnotationTableColumn(NamedTuple):
     """
     Annotation table column.
     """
+
     name: str
     dtype: pl.DataType
 
@@ -17,6 +18,7 @@ class AnnotationTableSchema:
     """
     Annotation table schema.
     """
+
     SCENARIO_ID = AnnotationTableColumn("scenario_id", pl.String)
     SAMPLE_ID = AnnotationTableColumn("sample_id", pl.String)
     LOCATION = AnnotationTableColumn("location", pl.String)
@@ -31,4 +33,10 @@ class AnnotationTableSchema:
         """
         Convert the annotation table schema to a Polars schema.
         """
-        return pl.Schema({v.name: v.dtype for k, v in cls.__dict__.items() if not k.startswith("__") and isinstance(v, AnnotationTableColumn)})
+        return pl.Schema(
+            {
+                v.name: v.dtype
+                for k, v in cls.__dict__.items()
+                if not k.startswith("__") and isinstance(v, AnnotationTableColumn)
+            }
+        )

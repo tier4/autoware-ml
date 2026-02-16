@@ -1,31 +1,35 @@
 """
 Dataset generator basic interface.
 """
-import logging 
+
+import logging
 
 from pathlib import Path
 from typing import Iterable
 
-import polars as pl 
+import polars as pl
 
 from autoware_ml.common.enums import TaskType
 from autoware_ml.annotations.schemas.schemas import AnnotationTableSchema
 from autoware_ml.annotations.schemas.records import AnnotationTableRecord
 
 logger = logging.getLogger(__name__)
-				
+
+
 class DatasetAnnotationGenerator:
     """
     Dataset annotation generator basic interface.
     """
-    
-    def __init__(self, 
-        root_path: str, 
+
+    def __init__(
+        self,
+        root_path: str,
         out_dir: str,
-        database_version: str, 
+        database_version: str,
         task_types: Iterable[TaskType],
-        output_file_postfix: str, 
-        max_sweeps: int = 0) -> None:
+        output_file_postfix: str,
+        max_sweeps: int = 0,
+    ) -> None:
         """
         :param root_path: Root path of the dataset.
         :param out_dir: Output directory for annotations.
@@ -44,7 +48,7 @@ class DatasetAnnotationGenerator:
 
         # Create out directory if it doesn't exist
         self.out_dir.mkdir(parents=True, exist_ok=True)
-    
+
     def __str__(self) -> str:
         return f"Root path: {self.root_path}, out dir: {self.out_dir}, database version: {self.database_version}, task types: {self.task_types}, output file postfix: {self.output_file_postfix}, max sweeps: {self.max_sweeps}"
 
@@ -54,7 +58,7 @@ class DatasetAnnotationGenerator:
 
     @property
     def annotation_file_name(self) -> str:
-        """ Output annotation file name. """
+        """Output annotation file name."""
         return f"{self.dataset_type}_annotations_{self.database_version}_{self.output_file_postfix}.parquet"
 
     def generate_annotation_records(self) -> Iterable[AnnotationTableRecord]:
@@ -73,9 +77,11 @@ class DatasetAnnotationGenerator:
 
         # Save annotation records
         self.save_annotations(annotation_records)
-        
-        logger.info(f"{self.dataset_type} dataset annotation generator completed successfully with {len(annotation_records)} annotation frames/records, and saved to {self.out_dir / self.annotation_file_name}")
-    
+
+        logger.info(
+            f"{self.dataset_type} dataset annotation generator completed successfully with {len(annotation_records)} annotation frames/records, and saved to {self.out_dir / self.annotation_file_name}"
+        )
+
     def save_annotation_records(self, annotation_records: Iterable[AnnotationTableRecord]) -> None:
         """
         Save annotations to a polars .parquet file.

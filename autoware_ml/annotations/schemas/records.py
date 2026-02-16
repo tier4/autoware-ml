@@ -15,7 +15,7 @@ class AnnotationTableRecord(BaseModel):
     :param bbox_3d: List of 3D bounding boxes with center_x, center_y, center_z, length, width, height, yaw, velocity_x, velocity_y.
     :param bbox_2d: List of 2D bounding boxes with center_x, center_y, width, height.
     """
-    
+
     # Set model config to frozen
     model_config = ConfigDict(frozen=True, strict=True)
 

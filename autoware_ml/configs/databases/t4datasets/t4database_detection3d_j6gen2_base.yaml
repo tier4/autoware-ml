@@ -1,15 +1,15 @@
 _target_: autoware_ml.databases.t4datasets.T4Database
-_convert_: 'all'
+_convert_: "all"
 
 database_version: "T4Detection3d-v1.0.0"
 # Root path of actual annotation files
 database_root_path: "data/t4datasets"
 # Root path where the scenario yaml files are stored
 scenario_root_path: "perception-devops/dataset_annotation/t4datasets/detection3d/"
-task_types: 
+task_types:
   - _target_: autoware_ml.common.enums.TaskType
-    _args_: ['detection3d']
-  
+    _args_: ["detection3d"]
+
 # Read each database into their corresponding group, it will run evaluation/visualization on each group
 scenarios:
   db_j6gen2: detection3d/db_j6gen2_v1.0
