@@ -1,0 +1,16 @@
+# @package _global_
+defaults:
+  - /defaults/default_runtime
+  - _self_
+
+data_root: ${oc.env:AUTOWARE_ML_DATA_PATH}/t4dataset
+
+datamodule:
+  _target_: autoware_ml.datamodule.t4dataset.calibration_status.T4LidarCalibrationDataModule
+  data_root: ${data_root}
+  train_ann_file: ${data_root}/calibration_info_lidarseg/t4dataset_gen2_base_infos_train.pkl
+  val_ann_file: ${data_root}/calibration_info_lidarseg/t4dataset_gen2_base_infos_val.pkl
+  test_ann_file: ${data_root}/calibration_info_lidarseg/t4dataset_gen2_base_infos_test.pkl
+  lidar_source1: LIDAR_FRONT_UPPER
+  lidar_source2: LIDAR_FRONT_LOWER
+
