@@ -12,11 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
 import pickle
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -41,6 +42,7 @@ class CalibrationData:
     """
 
     lidar1_to_lidar2_transform: npt.NDArray[np.float32]
+    noise: Optional[npt.NDArray[np.float32]] = None
 
 
 class T4LidarCalibrationStatusDataset(Dataset):
@@ -94,29 +96,59 @@ class T4LidarCalibrationStatusDataset(Dataset):
         """
         input_dict = dict()
 
-        lidar_path: str = self.data_infos["data_list"][index]["lidar_points"]["lidar_path"]
-        lidar_info_path = lidar_path # TODO: change the path from ".../LIDAR_CONCAT/{ID}.pcd.bin" to ".../LIDAR_CONCAT_INFO/{ID}.json" 
+        sample = self.data_infos["data_list"][index]
+        lidar_path: str = sample["lidar_points"]["lidar_path"]
+        lidar_info_path = lidar_path.replace("LIDAR_CONCAT", "LIDAR_CONCAT_INFO").replace(
+            ".pcd.bin", ".json"
+        )
 
         num_pts_feats = 5
 
-        lidar_points = np.fromfile(os.path.join(self.data_root, lidar_path), dtype=np.float32).reshape(
-            -1, num_pts_feats
+        lidar_points = np.fromfile(
+            os.path.join(self.data_root, lidar_path), dtype=np.float32
+        ).reshape(-1, num_pts_feats)
+
+        token1 = sample["lidar_sources"][self.lidar_source1]["sensor_token"]
+        token2 = sample["lidar_sources"][self.lidar_source2]["sensor_token"]
+
+        lidar1_points, lidar2_points = self._split_points(
+            lidar_points, lidar_info_path, token1, token2
         )
-        lidar1_points, lidar2_points = _split_points(self, lidar_points, lidar_info_path)
-        calibration_data = self._load_calibration_data(self.data_infos["data_list"][index])
+        calibration_data = self._load_calibration_data(sample)
 
         input_dict["lidar1_points"] = lidar1_points
         input_dict["lidar2_points"] = lidar2_points
         input_dict["calibration_data"] = calibration_data
         input_dict["gt_calibration_status"] = CalibrationStatus.CALIBRATED.value
-        input_dict["metadata"] = self.data_infos["data_list"][index]
+        input_dict["metadata"] = sample
 
         return input_dict
 
-    def _split_points(self, lidar_points, info_path : str):
-        # TODO read the json file located in lidar_info_path to retrieve the points index for lidar1 and lidar2
-        # TODO split the lidar_points into lidar1_points and lidar2_points based on the indexes from the json file
-        None
+    def _split_points(
+        self, lidar_points: npt.NDArray[np.float32], info_path: str, token1: str, token2: str
+    ) -> Tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
+        with open(os.path.join(self.data_root, info_path), "r") as f:
+            info = json.load(f)
+
+        points1 = None
+        points2 = None
+        for source in info["sources"]:
+            if source["sensor_token"] == token1:
+                idx_begin = source["idx_begin"]
+                length = source["length"]
+                points1 = lidar_points[idx_begin : idx_begin + length]
+            if source["sensor_token"] == token2:
+                idx_begin = source["idx_begin"]
+                length = source["length"]
+                points2 = lidar_points[idx_begin : idx_begin + length]
+
+        if points1 is None or points2 is None:
+            raise ValueError(
+                f"Could not find all sensor tokens in {info_path}. "
+                f"Found points1: {points1 is not None}, points2: {points2 is not None}"
+            )
+
+        return points1, points2
 
     def _load_calibration_data(self, sample: dict) -> CalibrationData:
         if "lidar_points" not in sample:
@@ -124,21 +156,30 @@ class T4LidarCalibrationStatusDataset(Dataset):
         if "lidar_sources" not in sample:
             raise KeyError("Sample does not contain 'lidar_sources' key")
 
-        origin_to_lidar1 = sample["lidar_sources"][self.lidar_source1]
-        origin_to_lidar2 = sample["lidar_sources"][self.lidar_source2]
+        def get_transform(source_dict):
+            rotation = np.array(source_dict["rotation"])
+            translation = np.array(source_dict["translation"])
+            if rotation.shape != (3, 3):
+                raise ValueError(f"Rotation matrix must be 3x3, got {rotation.shape}")
+            if translation.shape != (3,):
+                raise ValueError(f"Translation vector must be (3,), got {translation.shape}")
+
+            transform = np.eye(4, dtype=np.float32)
+            transform[:3, :3] = rotation
+            transform[:3, 3] = translation
+            return transform
+
+        origin_to_lidar1 = get_transform(sample["lidar_sources"][self.lidar_source1])
+        origin_to_lidar2 = get_transform(sample["lidar_sources"][self.lidar_source2])
 
         # Validate Lidar
         points_origin = sample["lidar_points"].get("lidar_pose", None)
         if points_origin is None:
             raise ValueError("concatenated pointcloud origin is missing")
-        # TODO validate the transforms are in the correct format
 
-        # TODO calculate the transform lidar1 to lidar2
-        transform = []
+        lidar1_to_lidar2_transform = np.linalg.inv(origin_to_lidar2) @ origin_to_lidar1
 
-        return CalibrationData(
-          lidar1_to_lidar2_transform=transform
-        )
+        return CalibrationData(lidar1_to_lidar2_transform=lidar1_to_lidar2_transform)
 
 
 class T4LidarCalibrationDataModule(DataModule):
@@ -198,7 +239,8 @@ class T4LidarCalibrationDataModule(DataModule):
             data_root=self.data_root,
             ann_file=ann_file,
             lidar_source1=self.lidar_source1,
-            lidar_source2=self.lidar_source2
+            lidar_source2=self.lidar_source2,
+            dataset_transforms=transforms
         )
 
         return dataset
