@@ -293,6 +293,11 @@ class CalibrationMisalignment(BaseTransform):
     def alter_calibration(self, transform: np.ndarray) -> np.ndarray:
         """Apply random noise to a 4x4 transformation matrix.
 
+        The noise is applied in the camera frame so that, e.g., an x-translation
+        shifts projected points along the camera's x-axis (horizontal in image).
+        Mathematically: T_noisy = T_noise @ T_l2c, producing the pipeline
+        lidar -> camera -> miscalibration.
+
         Uses separate RPY angles and xyz translations for more precise control.
         Each component randomly selects between its negative and positive range.
         Only activated components are applied.
@@ -351,7 +356,7 @@ class CalibrationMisalignment(BaseTransform):
         noise_transform[0:3, 0:3] = rotation_matrix
         noise_transform[0:3, 3] = [tx, ty, tz]
 
-        return transform @ noise_transform, noise_transform
+        return noise_transform @ transform, noise_transform
 
 
 class LidarCameraFusion(BaseTransform):
@@ -483,10 +488,10 @@ class LidarCameraFusion(BaseTransform):
         lidar2cam = calibration_data.lidar_to_camera_transformation
         if calibration_data.noise is not None:
             # Undo the noise to get the true camera position
-            # noisy_transform = original_transform @ noise_transform
-            # Therefore: original_transform = noisy_transform @ inv(noise_transform)
+            # noisy_transform = noise_transform @ original_transform
+            # Therefore: original_transform = inv(noise_transform) @ noisy_transform
             noise_inv = np.linalg.inv(calibration_data.noise)
-            lidar2cam_true = lidar2cam @ noise_inv
+            lidar2cam_true = noise_inv @ lidar2cam
             R = lidar2cam_true[:3, :3]
             t = lidar2cam_true[:3, 3]
         else:
