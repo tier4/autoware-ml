@@ -1,0 +1,24 @@
+{
+    "pointcloud_path": "/mnt/qnapdata/t4dataset/db_j6gen2_semaseg_v1/1b297bdb-224c-48b9-9377-9de7427c67c1/1/data/LIDAR_CONCAT/00000.pcd.bin",
+    "pointcloud_info": "/mnt/qnapdata/t4dataset/db_j6gen2_semaseg_v1/1b297bdb-224c-48b9-9377-9de7427c67c1/1/data/LIDAR_CONCAT_INFO/00000.json",
+    "lidar_sources" : {
+      
+    },
+    "method": "depth_map",
+    "extrinsics": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": -5.0,
+        "roll": 0.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+    },
+    "intrinsics": {
+        "fx": 600.0,
+        "fy": 600.0,
+        "cx": 640.0,
+        "cy": 360.0,
+        "width": 1280,
+        "height": 720
+    }
+}

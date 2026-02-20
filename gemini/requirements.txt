@@ -1,0 +1,5 @@
+# GUI Dependencies
+PyQt6
+pyvista
+pyvistaqt
+pyqtgraph
