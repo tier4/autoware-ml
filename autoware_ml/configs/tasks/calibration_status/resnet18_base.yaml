@@ -36,30 +36,30 @@ datamodule:
         activate_x: true
         activate_y: true
         activate_z: true
-        min_roll_neg: 4.2
-        max_roll_neg: 8.4
-        min_roll_pos: 4.2
-        max_roll_pos: 8.4
+        min_roll_neg: 0.2
+        max_roll_neg: 0.4
+        min_roll_pos: 0.2
+        max_roll_pos: 0.4
         min_pitch_neg: 0.2
         max_pitch_neg: 0.4
         min_pitch_pos: 0.2
         max_pitch_pos: 0.4
-        min_yaw_neg: 0.2
-        max_yaw_neg: 0.4
-        min_yaw_pos: 0.2
-        max_yaw_pos: 0.4
-        min_x_neg: 0.54
-        max_x_neg: 1.08
-        min_x_pos: 0.24
-        max_x_pos: 0.48
-        min_y_neg: 0.22
-        max_y_neg: 0.44
-        min_y_pos: 0.22
-        max_y_pos: 0.44
-        min_z_neg: 0.12
-        max_z_neg: 0.24
-        min_z_pos: 0.06
-        max_z_pos: 0.12
+        min_yaw_neg: 4.2
+        max_yaw_neg: 8.4
+        min_yaw_pos: 4.2
+        max_yaw_pos: 8.4
+        min_x_neg: 0.22
+        max_x_neg: 0.44
+        min_x_pos: 0.22
+        max_x_pos: 0.44
+        min_y_neg: 0.12
+        max_y_neg: 0.24
+        min_y_pos: 0.06
+        max_y_pos: 0.12
+        min_z_neg: 0.24
+        max_z_neg: 0.48
+        min_z_pos: 0.54
+        max_z_pos: 1.08
       - _target_: autoware_ml.transforms.camera.CropAndScale
         p: 0.2
         crop_ratio: 0.8
@@ -100,30 +100,30 @@ datamodule:
         activate_x: true
         activate_y: true
         activate_z: true
-        min_roll_neg: 4.2
-        max_roll_neg: 8.4
-        min_roll_pos: 4.2
-        max_roll_pos: 8.4
+        min_roll_neg: 0.2
+        max_roll_neg: 0.4
+        min_roll_pos: 0.2
+        max_roll_pos: 0.4
         min_pitch_neg: 0.2
         max_pitch_neg: 0.4
         min_pitch_pos: 0.2
         max_pitch_pos: 0.4
-        min_yaw_neg: 0.2
-        max_yaw_neg: 0.4
-        min_yaw_pos: 0.2
-        max_yaw_pos: 0.4
-        min_x_neg: 0.54
-        max_x_neg: 1.08
-        min_x_pos: 0.24
-        max_x_pos: 0.48
-        min_y_neg: 0.22
-        max_y_neg: 0.44
-        min_y_pos: 0.22
-        max_y_pos: 0.44
-        min_z_neg: 0.12
-        max_z_neg: 0.24
-        min_z_pos: 0.06
-        max_z_pos: 0.12
+        min_yaw_neg: 4.2
+        max_yaw_neg: 8.4
+        min_yaw_pos: 4.2
+        max_yaw_pos: 8.4
+        min_x_neg: 0.22
+        max_x_neg: 0.44
+        min_x_pos: 0.22
+        max_x_pos: 0.44
+        min_y_neg: 0.12
+        max_y_neg: 0.24
+        min_y_pos: 0.06
+        max_y_pos: 0.12
+        min_z_neg: 0.24
+        max_z_neg: 0.48
+        min_z_pos: 0.54
+        max_z_pos: 1.08
       - _target_: autoware_ml.transforms.camera_lidar.LidarCameraFusion
         max_depth: 128.0
         dilation_size: 1
@@ -145,30 +145,30 @@ datamodule:
         activate_x: true
         activate_y: true
         activate_z: true
-        min_roll_neg: 4.2
-        max_roll_neg: 8.4
-        min_roll_pos: 4.2
-        max_roll_pos: 8.4
+        min_roll_neg: 0.2
+        max_roll_neg: 0.4
+        min_roll_pos: 0.2
+        max_roll_pos: 0.4
         min_pitch_neg: 0.2
         max_pitch_neg: 0.4
         min_pitch_pos: 0.2
         max_pitch_pos: 0.4
-        min_yaw_neg: 0.2
-        max_yaw_neg: 0.4
-        min_yaw_pos: 0.2
-        max_yaw_pos: 0.4
-        min_x_neg: 0.54
-        max_x_neg: 1.08
-        min_x_pos: 0.24
-        max_x_pos: 0.48
-        min_y_neg: 0.22
-        max_y_neg: 0.44
-        min_y_pos: 0.22
-        max_y_pos: 0.44
-        min_z_neg: 0.12
-        max_z_neg: 0.24
-        min_z_pos: 0.06
-        max_z_pos: 0.12
+        min_yaw_neg: 4.2
+        max_yaw_neg: 8.4
+        min_yaw_pos: 4.2
+        max_yaw_pos: 8.4
+        min_x_neg: 0.22
+        max_x_neg: 0.44
+        min_x_pos: 0.22
+        max_x_pos: 0.44
+        min_y_neg: 0.12
+        max_y_neg: 0.24
+        min_y_pos: 0.06
+        max_y_pos: 0.12
+        min_z_neg: 0.24
+        max_z_neg: 0.48
+        min_z_pos: 0.54
+        max_z_pos: 1.08
       - _target_: autoware_ml.transforms.camera_lidar.LidarCameraFusion
         max_depth: 128.0
         dilation_size: 1
@@ -190,30 +190,30 @@ datamodule:
         activate_x: true
         activate_y: true
         activate_z: true
-        min_roll_neg: 4.2
-        max_roll_neg: 8.4
-        min_roll_pos: 4.2
-        max_roll_pos: 8.4
+        min_roll_neg: 0.2
+        max_roll_neg: 0.4
+        min_roll_pos: 0.2
+        max_roll_pos: 0.4
         min_pitch_neg: 0.2
         max_pitch_neg: 0.4
         min_pitch_pos: 0.2
         max_pitch_pos: 0.4
-        min_yaw_neg: 0.2
-        max_yaw_neg: 0.4
-        min_yaw_pos: 0.2
-        max_yaw_pos: 0.4
-        min_x_neg: 0.54
-        max_x_neg: 1.08
-        min_x_pos: 0.24
-        max_x_pos: 0.48
-        min_y_neg: 0.22
-        max_y_neg: 0.44
-        min_y_pos: 0.22
-        max_y_pos: 0.44
-        min_z_neg: 0.12
-        max_z_neg: 0.24
-        min_z_pos: 0.06
-        max_z_pos: 0.12
+        min_yaw_neg: 4.2
+        max_yaw_neg: 8.4
+        min_yaw_pos: 4.2
+        max_yaw_pos: 8.4
+        min_x_neg: 0.22
+        max_x_neg: 0.44
+        min_x_pos: 0.22
+        max_x_pos: 0.44
+        min_y_neg: 0.12
+        max_y_neg: 0.24
+        min_y_pos: 0.06
+        max_y_pos: 0.12
+        min_z_neg: 0.24
+        max_z_neg: 0.48
+        min_z_pos: 0.54
+        max_z_pos: 1.08
       - _target_: autoware_ml.transforms.camera_lidar.LidarCameraFusion
         max_depth: 128.0
         dilation_size: 1
