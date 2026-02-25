@@ -31,7 +31,8 @@ def parse_args():
     parser.add_argument("--dataset_root", type=str, required=True, help="Root directory where binary data is stored.")
     parser.add_argument("--source_lidar", type=str, required=True, help="Name of the source LiDAR (e.g. LIDAR_TOP).")
     parser.add_argument("--target_lidar", type=str, required=True, help="Name of the target LiDAR (e.g. LIDAR_FRONT).")
-    parser.add_argument("--frame_idx", type=int, default=0, help="Index of the frame to use from the pickle list.")
+    parser.add_argument("--frame_idx", type=int, default=None, help="Index of the frame to use. If omitted, all frames are used.")
+    parser.add_argument("--max_frames", type=int, default=100, help="Maximum number of frames to process when frame_idx is None.")
     parser.add_argument("--apply_transforms", action="store_true", default=False, help="Apply LiDAR-to-Ego transforms before alignment.")
     parser.add_argument("--output_csv", type=str, default="results.csv", help="Path to save the results CSV.")
     return parser.parse_args()
@@ -93,29 +94,13 @@ def main():
         print("Error: No 'data_list' found in pickle.")
         return
     
-    if args.frame_idx >= len(data_list):
-        print(f"Error: frame_idx {args.frame_idx} out of range (max {len(data_list)-1}).")
-        return
-
-    selected_frame = data_list[args.frame_idx]
-
-    try:
-        # Extract raw points
-        raw_source_pts, raw_target_pts, ext_source, ext_target = extract_points(
-            selected_frame, args.dataset_root, args.source_lidar, args.target_lidar
-        )
-    except Exception as e:
-        print(f"Error during point extraction: {e}")
-        return
-
-    # Prepare Baseline (Common Frame)
-    if args.apply_transforms:
-        # Transform both to Ego frame for baseline alignment
-        source_pts = apply_transformation(raw_source_pts, ext_source['R'], ext_source['T'])
-        target_pts = apply_transformation(raw_target_pts, ext_target['R'], ext_target['T'])
+    if args.frame_idx is not None:
+        if args.frame_idx >= len(data_list):
+            print(f"Error: frame_idx {args.frame_idx} out of range (max {len(data_list)-1}).")
+            return
+        frame_indices = [args.frame_idx]
     else:
-        source_pts = raw_source_pts.copy()
-        target_pts = raw_target_pts.copy()
+        frame_indices = list(range(min(len(data_list), args.max_frames)))
 
     results = []
 
@@ -129,76 +114,98 @@ def main():
         ('Yaw', np.arange(-2.0, 2.1, 0.1), 'rot')
     ]
 
-    total_iterations = sum(len(c[1]) for c in sweep_configs)
-    current_iter = 0
+    iters_per_frame = sum(len(c[1]) for c in sweep_configs)
+    total_iterations = len(frame_indices) * iters_per_frame
+    current_total_iter = 0
 
-    print(f"Starting evaluation of small_gicp robustness ({total_iterations} iterations)...")
+    print(f"Starting evaluation of small_gicp robustness on {len(frame_indices)} frame(s) ({total_iterations} total iterations)...")
 
-    for axis, values, noise_type in sweep_configs:
-        for val in values:
-            current_iter += 1
-            noise_trans = [0.0, 0.0, 0.0]
-            noise_rot_deg = [0.0, 0.0, 0.0]
-            
-            if noise_type == 'trans':
-                noise_trans[['X', 'Y', 'Z'].index(axis)] = val
-            else:
-                noise_rot_deg[['Roll', 'Pitch', 'Yaw'].index(axis)] = val
+    for f_idx in frame_indices:
+        selected_frame = data_list[f_idx]
+        try:
+            # Extract raw points
+            raw_source_pts, raw_target_pts, ext_source, ext_target = extract_points(
+                selected_frame, args.dataset_root, args.source_lidar, args.target_lidar
+            )
+        except Exception as e:
+            print(f"Error during point extraction for frame {f_idx}: {e}")
+            continue
 
-            # 3. Transformation Application (Injected Noise)
-            T_noise = get_4x4_matrix(noise_trans, noise_rot_deg)
-            # Apply T_noise to source_pts (already in Ego frame if apply_transforms is True)
-            noisy_source_pts = (source_pts @ T_noise[:3, :3].T) + T_noise[:3, 3]
+        # Prepare Baseline (Common Frame)
+        if args.apply_transforms:
+            # Transform both to Ego frame for baseline alignment
+            source_pts = apply_transformation(raw_source_pts, ext_source['R'], ext_source['T'])
+            target_pts = apply_transformation(raw_target_pts, ext_target['R'], ext_target['T'])
+        else:
+            source_pts = raw_source_pts.copy()
+            target_pts = raw_target_pts.copy()
 
-            # 4. GICP Execution
-            start_time = time.perf_counter()
-            result = small_gicp.align(target_pts, noisy_source_pts)
-            runtime = time.perf_counter() - start_time
+        for axis, values, noise_type in sweep_configs:
+            for val in values:
+                current_total_iter += 1
+                noise_trans = [0.0, 0.0, 0.0]
+                noise_rot_deg = [0.0, 0.0, 0.0]
+                
+                if noise_type == 'trans':
+                    noise_trans[['X', 'Y', 'Z'].index(axis)] = val
+                else:
+                    noise_rot_deg[['Roll', 'Pitch', 'Yaw'].index(axis)] = val
 
-            # 5. Metrics Calculation
-            T_est = result.T_target_source
-            t_est = T_est[:3, 3]
-            r_est_deg = Rotation.from_matrix(T_est[:3, :3]).as_euler('xyz', degrees=True)
-            
-            # Mahalanobis Distance calculation
-            r_est_vec = Rotation.from_matrix(T_est[:3, :3]).as_rotvec()
-            drift_vector = np.concatenate([t_est, r_est_vec])
-            H = result.H
-            H_stable = H + np.eye(6) * 1e-6
-            mahalanobis_dist = drift_vector.T @ H @ drift_vector
-            
-            eigenvalues = np.linalg.eigvalsh(H_stable)
-            min_eigenvalue = np.min(eigenvalues)
+                # 3. Transformation Application (Injected Noise)
+                T_noise = get_4x4_matrix(noise_trans, noise_rot_deg)
+                # Apply T_noise to source_pts (already in Ego frame if apply_transforms is True)
+                noisy_source_pts = (source_pts @ T_noise[:3, :3].T) + T_noise[:3, 3]
 
-            # Identification Error
-            # We expect T_est to be T_noise^-1
-            T_identified = np.linalg.inv(T_est)
-            t_id = T_identified[:3, 3]
-            r_id_deg = Rotation.from_matrix(T_identified[:3, :3]).as_euler('xyz', degrees=True)
+                # 4. GICP Execution
+                start_time = time.perf_counter()
+                result = small_gicp.align(target_pts, noisy_source_pts)
+                runtime = time.perf_counter() - start_time
 
-            res_dict = {
-                'noise_axis': axis,
-                'noise_value': val,
-                'runtime_sec': runtime,
-                'gicp_x': t_est[0],
-                'gicp_y': t_est[1],
-                'gicp_z': t_est[2],
-                'gicp_roll_deg': r_est_deg[0],
-                'gicp_pitch_deg': r_est_deg[1],
-                'gicp_yaw_deg': r_est_deg[2],
-                'error_x': t_id[0],
-                'error_y': t_id[1],
-                'error_z': t_id[2],
-                'error_roll': r_id_deg[0],
-                'error_pitch': r_id_deg[1],
-                'error_yaw': r_id_deg[2],
-                'mahalanobis_distance': mahalanobis_dist,
-                'min_eigenvalue': min_eigenvalue
-            }
-            results.append(res_dict)
+                # 5. Metrics Calculation
+                T_est = result.T_target_source
+                t_est = T_est[:3, 3]
+                r_est_deg = Rotation.from_matrix(T_est[:3, :3]).as_euler('xyz', degrees=True)
+                
+                # Mahalanobis Distance calculation
+                r_est_vec = Rotation.from_matrix(T_est[:3, :3]).as_rotvec()
+                drift_vector = np.concatenate([t_est, r_est_vec])
+                H = result.H
+                H_stable = H + np.eye(6) * 1e-6
+                mahalanobis_dist = drift_vector.T @ H @ drift_vector
+                
+                eigenvalues = np.linalg.eigvalsh(H_stable)
+                min_eigenvalue = np.min(eigenvalues)
 
-            if current_iter % 20 == 0 or current_iter == total_iterations:
-                print(f"Progress: {current_iter}/{total_iterations} iterations complete.")
+                # Identification Error
+                # We expect T_est to be T_noise^-1
+                T_identified = np.linalg.inv(T_est)
+                t_id = T_identified[:3, 3]
+                r_id_deg = Rotation.from_matrix(T_identified[:3, :3]).as_euler('xyz', degrees=True)
+
+                res_dict = {
+                    'frame_idx': f_idx,
+                    'noise_axis': axis,
+                    'noise_value': val,
+                    'runtime_sec': runtime,
+                    'gicp_x': t_est[0],
+                    'gicp_y': t_est[1],
+                    'gicp_z': t_est[2],
+                    'gicp_roll_deg': r_est_deg[0],
+                    'gicp_pitch_deg': r_est_deg[1],
+                    'gicp_yaw_deg': r_est_deg[2],
+                    'error_x': t_id[0],
+                    'error_y': t_id[1],
+                    'error_z': t_id[2],
+                    'error_roll': r_id_deg[0],
+                    'error_pitch': r_id_deg[1],
+                    'error_yaw': r_id_deg[2],
+                    'mahalanobis_distance': mahalanobis_dist,
+                    'min_eigenvalue': min_eigenvalue
+                }
+                results.append(res_dict)
+
+                if current_total_iter % 50 == 0 or current_total_iter == total_iterations:
+                    print(f"Progress: {current_total_iter}/{total_iterations} iterations complete.")
 
     # 6. Output to CSV
     df = pd.DataFrame(results)
