@@ -39,6 +39,7 @@ RUN curl -sL https://deb.nodesource.com/setup_22.x -o /tmp/nodesource_setup.sh \
   && DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends nodejs -y \
   && npm install -g cspell \
   && npm install -g yarn \
+  && npm install -g @google/gemini-cli \
   && rm -rf /tmp/nodesource_setup.sh \
   && apt-get autoremove -y && apt-get clean -y && rm -rf /var/lib/apt/lists/* "$HOME"/.cache
 
@@ -51,3 +52,6 @@ RUN CLANGD_VERSION=$(curl -fsSL "https://api.github.com/repos/clangd/clangd/rele
   && ln -s "/opt/clangd_${CLANGD_VERSION}/bin/clangd" /usr/local/bin/clangd \
   && rm -rf /tmp/clangd-linux.zip \
   && apt-get autoremove -y && apt-get clean -y && rm -rf /var/lib/apt/lists/* "$HOME"/.cache
+
+### Custom (Maxime)
+RUN pip install --no-cache-dir small_gicp
