@@ -3,6 +3,8 @@ import json
 import pickle
 import numpy as np
 import rerun as rr
+import small_gicp
+from scipy.spatial.transform import Rotation
 
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -97,6 +99,8 @@ class LidarFusionApp:
 
         # 4. Cascade to camera and projection logic
         self.update_camera_and_projections()
+
+        self.gicp_align()
 
     def update_camera_and_projections(self):
         """Calculates camera pose and projects existing 3D points to 2D image frames."""
@@ -233,6 +237,54 @@ class LidarFusionApp:
     def apply_transformation(self, points, R, T):
         """Applies rotation and translation to Nx3 points."""
         return points @ R.T + T
+
+    def gicp_align(self):
+        if self.lidar1_pts is None or self.lidar2_pts is None:
+            messagebox.showerror("Error", "LiDAR points not loaded.")
+            return
+        # Align lidar2 to lidar1
+        result = small_gicp.align(self.lidar1_pts, self.lidar2_pts)
+        
+        # Log the error to Rerun for the plot
+        if hasattr(result, "error"):
+            rr.log("metrics/gicp_error", rr.Scalars(result.error))
+        
+        print("GICP Result Transformation Matrix:")
+        # Compute stats from the Hessian
+        # 1. Extract the 4x4 transformation matrix
+        T = result.T_target_source
+
+        # 2. Isolate the translation vector (x, y, z)
+        # This takes the first 3 rows of the 4th column
+        t = T[0:3, 3] 
+
+        # 3. Isolate the 3x3 rotation matrix
+        rot_mat = T[0:3, 0:3]
+        print("translation: ", t)
+        rpy = Rotation.from_matrix(rot_mat).as_euler('xyz', degrees=True)
+        print(f"rotation (Roll, Pitch, Yaw) [deg]: {rpy}")
+
+        # 4. Convert the rotation matrix to a rotation vector (rx, ry, rz)
+        # This represents the rotation axis multiplied by the rotation angle
+        r = Rotation.from_matrix(rot_mat).as_rotvec()
+
+        # 5. Concatenate them to form the 6D drift vector
+        # Order is typically [tx, ty, tz, rx, ry, rz] to match the Hessian blocks
+        drift_vector = np.concatenate([t, r])
+        # Add a small epsilon to the diagonal for numerical stability before inverting
+        hessian_matrix = result.H
+        covariance_matrix = np.linalg.inv(hessian_matrix + np.eye(6) * 1e-6) 
+    
+        # Mahalanobis Distance: D^2 = x^T * H * x
+        mahalanobis_dist = drift_vector.T @ hessian_matrix @ drift_vector
+    
+        # Eigenvalues for degeneracy check
+        eigenvalues = np.linalg.eigvalsh(hessian_matrix)
+        min_eigenvalue = np.min(eigenvalues)
+
+        # 4. Log Timeseries Metrics
+        rr.log("metrics/mahalanobis_distance", rr.Scalars(mahalanobis_dist))
+        rr.log("metrics/minimum_eigenvalue", rr.Scalars(min_eigenvalue))
 
     # ==========================================
     # STEP 1: READ INPUTS & SETUP UI
