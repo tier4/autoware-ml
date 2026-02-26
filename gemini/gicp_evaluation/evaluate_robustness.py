@@ -105,13 +105,20 @@ def main():
     results = []
 
     # 2. Noise Generation (Axis Sweeping)
+    step_m = 0.1
+    from_m = -0.3
+    to_m = 0.3 + step_m
+    step_deg = 0.1
+    from_deg = -0.8
+    to_deg = 0.8 + step_deg
+
     sweep_configs = [
-        ('X', np.arange(-0.5, 0.55, 0.05), 'trans'),
-        ('Y', np.arange(-0.5, 0.55, 0.05), 'trans'),
-        ('Z', np.arange(-0.5, 0.55, 0.05), 'trans'),
-        ('Roll', np.arange(-2.0, 2.1, 0.1), 'rot'),
-        ('Pitch', np.arange(-2.0, 2.1, 0.1), 'rot'),
-        ('Yaw', np.arange(-2.0, 2.1, 0.1), 'rot')
+        ('X', np.arange(from_m, to_m, step_m), 'trans'),
+        ('Y', np.arange(from_m, to_m, step_m), 'trans'),
+        ('Z', np.arange(from_m, to_m, step_m), 'trans'),
+        ('Roll', np.arange(from_deg, to_deg, step_deg), 'rot'),
+        ('Pitch', np.arange(from_deg, to_deg, step_deg), 'rot'),
+        ('Yaw', np.arange(from_deg, to_deg, step_deg), 'rot')
     ]
 
     iters_per_frame = sum(len(c[1]) for c in sweep_configs)
