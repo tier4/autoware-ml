@@ -29,7 +29,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Evaluate small_gicp robustness against LiDAR miscalibration noise.")
     parser.add_argument("--pkl_file", type=str, required=True, help="Path to pickle file containing metadata.")
     parser.add_argument("--dataset_root", type=str, required=True, help="Root directory where binary data is stored.")
-    parser.add_argument("--source_lidar", type=str, required=True, help="Name of the source LiDAR (e.g. LIDAR_TOP).")
+    parser.add_argument("--source_lidar", type=str, default=None, help="Name of the source LiDAR (e.g. LIDAR_TOP). If omitted, all other points are used.")
     parser.add_argument("--target_lidar", type=str, required=True, help="Name of the target LiDAR (e.g. LIDAR_FRONT).")
     parser.add_argument("--frame_idx", type=int, default=None, help="Index of the frame to use. If omitted, all frames are used.")
     parser.add_argument("--max_frames", type=int, default=100, help="Maximum number of frames to process when frame_idx is None.")
@@ -51,29 +51,44 @@ def extract_points(selected_frame_data, dataset_root, src1_name, src2_name):
     sources_dict = selected_frame_data['lidar_sources']
     
     # Metadata for Ego-frame transforms
-    ext1 = {'R': np.array(sources_dict[src1_name]['rotation']), 'T': np.array(sources_dict[src1_name]['translation'])}
+    if src1_name is not None:
+        ext1 = {'R': np.array(sources_dict[src1_name]['rotation']), 'T': np.array(sources_dict[src1_name]['translation'])}
+        token1 = sources_dict[src1_name]['sensor_token']
+    else:
+        ext1 = {'R': np.eye(3), 'T': np.zeros(3)}
+        token1 = None
+
     ext2 = {'R': np.array(sources_dict[src2_name]['rotation']), 'T': np.array(sources_dict[src2_name]['translation'])}
+    token2 = sources_dict[src2_name]['sensor_token']
 
     with open(abs_json_path, 'r') as f:
         info = json.load(f)
 
-    token1 = sources_dict[src1_name]['sensor_token']
-    token2 = sources_dict[src2_name]['sensor_token']
-    
     idx_len_1 = idx_len_2 = None
     for s in info['sources']:
-        if s['sensor_token'] == token1: idx_len_1 = (s['idx_begin'], s['length'])
-        if s['sensor_token'] == token2: idx_len_2 = (s['idx_begin'], s['length'])
+        if token1 is not None and s['sensor_token'] == token1: 
+            idx_len_1 = (s['idx_begin'], s['length'])
+        if s['sensor_token'] == token2: 
+            idx_len_2 = (s['idx_begin'], s['length'])
 
-    if idx_len_1 is None or idx_len_2 is None:
-        raise ValueError("Could not find source or target sensor tokens in JSON info.")
+    if idx_len_2 is None:
+        raise ValueError(f"Could not find target sensor token for {src2_name} in JSON info.")
+    if src1_name is not None and idx_len_1 is None:
+        raise ValueError(f"Could not find source sensor token for {src1_name} in JSON info.")
 
     raw_data = np.fromfile(abs_bin_path, dtype=np.float32)
     total_pts = sum(s['length'] for s in info['sources'])
     num_features = len(raw_data) // total_pts
     points_nx3 = raw_data.reshape(-1, num_features)[:, :3]
 
-    pts1 = points_nx3[idx_len_1[0] : idx_len_1[0] + idx_len_1[1]]
+    if src1_name is not None:
+        pts1 = points_nx3[idx_len_1[0] : idx_len_1[0] + idx_len_1[1]]
+    else:
+        # Source is everything EXCEPT target
+        mask = np.ones(len(points_nx3), dtype=bool)
+        mask[idx_len_2[0] : idx_len_2[0] + idx_len_2[1]] = False
+        pts1 = points_nx3[mask]
+
     pts2 = points_nx3[idx_len_2[0] : idx_len_2[0] + idx_len_2[1]]
     
     return pts1, pts2, ext1, ext2
