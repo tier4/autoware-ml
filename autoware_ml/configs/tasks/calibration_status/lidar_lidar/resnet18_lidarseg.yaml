@@ -31,47 +31,24 @@ datamodule:
     pipeline:
       - _target_: autoware_ml.transforms.lidar.LidarLidarCalibrationMisalignment
         p: 0.5
-        activate_roll: true
-        activate_pitch: true
+        activate_roll: false
+        activate_pitch: false
         activate_yaw: true
-        activate_x: true
-        activate_y: true
-        activate_z: true
-        min_roll_neg: 4.2
-        max_roll_neg: 8.4
-        min_roll_pos: 4.2
-        max_roll_pos: 8.4
-        min_pitch_neg: 0.2
-        max_pitch_neg: 0.4
-        min_pitch_pos: 0.2
-        max_pitch_pos: 0.4
-        min_yaw_neg: 0.2
-        max_yaw_neg: 0.4
-        min_yaw_pos: 0.2
-        max_yaw_pos: 0.4
-        min_x_neg: 0.54
-        max_x_neg: 1.08
-        min_x_pos: 0.24
-        max_x_pos: 0.48
-        min_y_neg: 0.22
-        max_y_neg: 0.44
-        min_y_pos: 0.22
-        max_y_pos: 0.44
-        min_z_neg: 0.12
-        max_z_neg: 0.24
-        min_z_pos: 0.06
-        max_z_pos: 0.12
+        activate_x: false
+        activate_y: false
+        activate_z: false
+        min_yaw_neg: 2.0
+        max_yaw_neg: 4.0
+        min_yaw_pos: 2.0
+        max_yaw_pos: 4.0
       - _target_: autoware_ml.transforms.lidar.LidarLidarFusion
         width: 1024
         height: 512
+        projection: pinhole
         max_depth: 80.0
-      - _target_: autoware_ml.transforms.camera_lidar.SaveFusionPreview
-        p: 0.00001
+      - _target_: autoware_ml.transforms.lidar.SaveFusionPreview
+        p: 0.1
         out_dir: ${hydra:run.dir}/previews
-        max_depth: 128.0
-        alpha: 1.0
-        depth_colormap: jet
-        intensity_colormap: turbo
       - _target_: autoware_ml.transforms.common.PermuteAxes
         input_keys: [fused_img]
         axes: [2, 0, 1]
@@ -79,39 +56,20 @@ datamodule:
     pipeline:
       - _target_: autoware_ml.transforms.lidar.LidarLidarCalibrationMisalignment
         p: 0.5
-        activate_roll: true
-        activate_pitch: true
+        activate_roll: false
+        activate_pitch: false
         activate_yaw: true
-        activate_x: true
-        activate_y: true
-        activate_z: true
-        min_roll_neg: 4.2
-        max_roll_neg: 8.4
-        min_roll_pos: 4.2
-        max_roll_pos: 8.4
-        min_pitch_neg: 0.2
-        max_pitch_neg: 0.4
-        min_pitch_pos: 0.2
-        max_pitch_pos: 0.4
-        min_yaw_neg: 0.2
-        max_yaw_neg: 0.4
-        min_yaw_pos: 0.2
-        max_yaw_pos: 0.4
-        min_x_neg: 0.54
-        max_x_neg: 1.08
-        min_x_pos: 0.24
-        max_x_pos: 0.48
-        min_y_neg: 0.22
-        max_y_neg: 0.44
-        min_y_pos: 0.22
-        max_y_pos: 0.44
-        min_z_neg: 0.12
-        max_z_neg: 0.24
-        min_z_pos: 0.06
-        max_z_pos: 0.12
+        activate_x: false
+        activate_y: false
+        activate_z: false
+        min_yaw_neg: 2.0
+        max_yaw_neg: 4.0
+        min_yaw_pos: 2.0
+        max_yaw_pos: 4.0
       - _target_: autoware_ml.transforms.lidar.LidarLidarFusion
         width: 1024
         height: 512
+        projection: pinhole
         max_depth: 80.0
       - _target_: autoware_ml.transforms.common.PermuteAxes
         input_keys: [fused_img]
@@ -120,39 +78,20 @@ datamodule:
     pipeline:
       - _target_: autoware_ml.transforms.lidar.LidarLidarCalibrationMisalignment
         p: 0.5
-        activate_roll: true
-        activate_pitch: true
+        activate_roll: false
+        activate_pitch: false
         activate_yaw: true
-        activate_x: true
-        activate_y: true
-        activate_z: true
-        min_roll_neg: 4.2
-        max_roll_neg: 8.4
-        min_roll_pos: 4.2
-        max_roll_pos: 8.4
-        min_pitch_neg: 0.2
-        max_pitch_neg: 0.4
-        min_pitch_pos: 0.2
-        max_pitch_pos: 0.4
-        min_yaw_neg: 0.2
-        max_yaw_neg: 0.4
-        min_yaw_pos: 0.2
-        max_yaw_pos: 0.4
-        min_x_neg: 0.54
-        max_x_neg: 1.08
-        min_x_pos: 0.24
-        max_x_pos: 0.48
-        min_y_neg: 0.22
-        max_y_neg: 0.44
-        min_y_pos: 0.22
-        max_y_pos: 0.44
-        min_z_neg: 0.12
-        max_z_neg: 0.24
-        min_z_pos: 0.06
-        max_z_pos: 0.12
+        activate_x: false
+        activate_y: false
+        activate_z: false
+        min_yaw_neg: 2.0
+        max_yaw_neg: 4.0
+        min_yaw_pos: 2.0
+        max_yaw_pos: 4.0
       - _target_: autoware_ml.transforms.lidar.LidarLidarFusion
         width: 1024
         height: 512
+        projection: pinhole
         max_depth: 80.0
       - _target_: autoware_ml.transforms.common.PermuteAxes
         input_keys: [fused_img]
@@ -161,39 +100,20 @@ datamodule:
     pipeline:
       - _target_: autoware_ml.transforms.lidar.LidarLidarCalibrationMisalignment
         p: 0.5
-        activate_roll: true
-        activate_pitch: true
+        activate_roll: false
+        activate_pitch: false
         activate_yaw: true
-        activate_x: true
-        activate_y: true
-        activate_z: true
-        min_roll_neg: 4.2
-        max_roll_neg: 8.4
-        min_roll_pos: 4.2
-        max_roll_pos: 8.4
-        min_pitch_neg: 0.2
-        max_pitch_neg: 0.4
-        min_pitch_pos: 0.2
-        max_pitch_pos: 0.4
-        min_yaw_neg: 0.2
-        max_yaw_neg: 0.4
-        min_yaw_pos: 0.2
-        max_yaw_pos: 0.4
-        min_x_neg: 0.54
-        max_x_neg: 1.08
-        min_x_pos: 0.24
-        max_x_pos: 0.48
-        min_y_neg: 0.22
-        max_y_neg: 0.44
-        min_y_pos: 0.22
-        max_y_pos: 0.44
-        min_z_neg: 0.12
-        max_z_neg: 0.24
-        min_z_pos: 0.06
-        max_z_pos: 0.12
+        activate_x: false
+        activate_y: false
+        activate_z: false
+        min_yaw_neg: 2.0
+        max_yaw_neg: 4.0
+        min_yaw_pos: 2.0
+        max_yaw_pos: 4.0
       - _target_: autoware_ml.transforms.lidar.LidarLidarFusion
         width: 1024
         height: 512
+        projection: pinhole
         max_depth: 80.0
       - _target_: autoware_ml.transforms.common.PermuteAxes
         input_keys: [fused_img]
@@ -203,7 +123,7 @@ model:
   _target_: autoware_ml.models.calibration_status.CalibrationStatusClassifier
   backbone:
     _target_: autoware_ml.models.common.backbones.resnet.ResNet18
-    in_channels: 5
+    in_channels: 4
   neck:
     _target_: autoware_ml.models.common.necks.global_average_pooling.GlobalAveragePooling
   head:

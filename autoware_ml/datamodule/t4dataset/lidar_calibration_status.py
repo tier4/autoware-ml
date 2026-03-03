@@ -42,6 +42,8 @@ class CalibrationData:
     """
 
     lidar1_to_lidar2_transform: npt.NDArray[np.float32]
+    baselink_to_lidar1_transform: npt.NDArray[np.float32]
+    baselink_to_lidar2_transform: npt.NDArray[np.float32]
     noise: Optional[npt.NDArray[np.float32]] = None
 
 
@@ -179,7 +181,7 @@ class T4LidarCalibrationStatusDataset(Dataset):
 
         lidar1_to_lidar2_transform = np.linalg.inv(origin_to_lidar2) @ origin_to_lidar1
 
-        return CalibrationData(lidar1_to_lidar2_transform=lidar1_to_lidar2_transform)
+        return CalibrationData(lidar1_to_lidar2_transform=lidar1_to_lidar2_transform, baselink_to_lidar1_transform=origin_to_lidar1, baselink_to_lidar2_transform=origin_to_lidar2)
 
 
 class T4LidarCalibrationDataModule(DataModule):

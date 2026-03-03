@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 import cv2
@@ -19,12 +20,14 @@ import numpy as np
 import numpy.typing as npt
 import transforms3d
 from scipy.stats import truncnorm
+import matplotlib.pyplot as plt
 
 from autoware_ml.datamodule.t4dataset.lidar_calibration_status import (
     CalibrationData,
     CalibrationStatus,
 )
 from autoware_ml.transforms.base import BaseTransform
+from autoware_ml.transforms.lidar.utils.projections import project_spherical, create_lidar_image
 
 
 class CropBoxOuter(BaseTransform):
@@ -321,10 +324,13 @@ class LidarLidarCalibrationMisalignment(BaseTransform):
         """
         calibration_data: CalibrationData = input_dict["calibration_data"]
         original_transform = calibration_data.lidar1_to_lidar2_transform
-        noisy_transform, noise = self.alter_calibration(original_transform)
+        noisy_transform, noise, translation_noise, rotation_noise = self.alter_calibration(original_transform)
         calibration_data.lidar1_to_lidar2_transform = noisy_transform
         calibration_data.noise = noise
         input_dict["calibration_data"] = calibration_data
+        # ROTATION_NOISE_THRESHOLD = 0.1
+        # TRANSLATION_NOISE_THRESHOLD = 0.3
+        # if(abs(translation_noise) >= TRANSLATION_NOISE_THRESHOLD or abs(rotation_noise) >= ROTATION_NOISE_THRESHOLD) :
         input_dict["gt_calibration_status"] = CalibrationStatus.MISCALIBRATED.value
 
         return input_dict
@@ -371,7 +377,7 @@ class LidarLidarCalibrationMisalignment(BaseTransform):
             )
             return value
 
-    def alter_calibration(self, transform: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def alter_calibration(self, transform: np.ndarray) -> Tuple[np.ndarray, np.ndarray, float, float]:
         """Apply random noise to a 4x4 transformation matrix."""
         if transform.shape != (4, 4):
             raise ValueError(f"Transform must be 4x4 matrix, got shape {transform.shape}")
@@ -424,7 +430,15 @@ class LidarLidarCalibrationMisalignment(BaseTransform):
         noise_transform[0:3, 0:3] = rotation_matrix
         noise_transform[0:3, 3] = [tx, ty, tz]
 
-        return transform @ noise_transform, noise_transform
+        # Calculate translation/rotation noise magnitude
+        translation_magnitude = float(np.linalg.norm([tx, ty, tz]))
+        # trace of a 3x3 rotation matrix is R[0,0] + R[1,1] + R[2,2]
+        trace = np.trace(rotation_matrix)
+        # Clip to [-1, 1] to avoid floating point errors with arccos
+        angular_deviation_rad = np.arccos(np.clip((trace - 1.0) / 2.0, -1.0, 1.0))
+        rotation_magnitude_deg = np.rad2deg(angular_deviation_rad)
+
+        return transform @ noise_transform, noise_transform, translation_magnitude, rotation_magnitude_deg
 
 
 class LidarLidarFusion(BaseTransform):
@@ -445,12 +459,7 @@ class LidarLidarFusion(BaseTransform):
     Args:
         width: Width of the 2D representation.
         height: Height of the 2D representation.
-        fx: Focal length in x.
-        fy: Focal length in y.
-        cx: Principal point x.
-        cy: Principal point y.
         max_depth: Maximum depth for projected LiDAR points in meters.
-        dilation_size: Size of dilation kernel for point cloud rendering.
     """
 
     _required_keys = ["lidar1_points", "lidar2_points", "calibration_data"]
@@ -459,25 +468,25 @@ class LidarLidarFusion(BaseTransform):
         self,
         width: int = 1024,
         height: int = 512,
-        fx: float = 500.0,
-        fy: float = 500.0,
-        cx: float = 512.0,
-        cy: float = 256.0,
+        fx: float = 600.0,
+        fy: float = 600.0,
+        cx: float = 640.0,
+        cy: float = 360.0,
         max_depth: float = 80.0,
         dilation_size: int = 1,
+        projection: str = "spherical",
+
     ):
         super().__init__()
         self.width = width
         self.height = height
-        self.fx = fx
-        self.fy = fy
-        self.cx = cx
-        self.cy = cy
         self.max_depth = max_depth
         self.dilation_size = dilation_size
         self.camera_matrix = np.array(
             [[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float32
         )
+        self.projection = projection
+
 
     def transform(self, input_dict: Dict[str, Any]) -> Dict[str, Any]:
         """Create fused image from two LiDAR point clouds.
@@ -489,122 +498,171 @@ class LidarLidarFusion(BaseTransform):
                 - calibration_data: CalibrationData object
 
         Returns:
-            Dictionary with added 'fused_img': (H, W, 5) float32 [0, 1].
+            Dictionary with added 'fused_img': (H, W, 3) float32 [0, 1].
         """
         l1_points = input_dict["lidar1_points"]
         l2_points = input_dict["lidar2_points"]
         calib = input_dict["calibration_data"]
+        if calib.noise is not None:
+            # Misalign l1 points using the provided calibration transform
+            # l1_points and l2_points are in ground-truth baselink frame.
+            T_base_l1 = calib.baselink_to_lidar1_transform
+            T_base_l2 = calib.baselink_to_lidar2_transform
+            T_l2_l1 = calib.lidar1_to_lidar2_transform
+            # This represents l1 points in lidar2 frame using current (noisy) calibration,
+            # then back to baselink using ground-truth T_base_l2
+            T_misalign = T_base_l2 @ T_l2_l1 @ np.linalg.inv(T_base_l1)
+            l1_xyz = l1_points[:, :3]
+            l1_xyz_h = np.column_stack([l1_xyz, np.ones(l1_xyz.shape[0], dtype=np.float32)])
+            l1_points[:, :3] = (T_misalign @ l1_xyz_h.T).T[:, :3]
 
-        # L1 points are assumed to be in L1 coordinate system
-        l1_xyz = l1_points[:, :3]
-        l1_int = l1_points[:, 3]
 
-        # Transform L2 points to L1 frame (virtual camera frame)
-        # T_L1_to_L2 = calib.lidar1_to_lidar2_transform
-        # P_L1 = T_L1_to_L2^-1 * P_L2
-        l2_to_l1 = np.linalg.inv(calib.lidar1_to_lidar2_transform)
-        l2_xyz = l2_points[:, :3]
-        l2_hom = np.concatenate([l2_xyz, np.ones((l2_xyz.shape[0], 1), dtype=np.float32)], axis=1)
-        l2_xyz_in_l1 = (l2_to_l1 @ l2_hom.T).T[:, :3]
-        l2_int = l2_points[:, 3]
+        # All points are assumed to be in "base_link" frame
+        if self.projection == "spherical":
+          avg_lidar_height = np.mean([calib.baselink_to_lidar1_transform[:, 3][2], calib.baselink_to_lidar2_transform[:, 3][2]])
+          l1_points[:, 1] += avg_lidar_height
+          l2_points[:, 1] += avg_lidar_height
+          l1_img = project_spherical(l1_points, self.width, self.height, self.dilation_size)
+          l2_img = project_spherical(l2_points, self.width, self.height, self.dilation_size)
 
-        # Project both to 2D
-        l1_img = self._create_lidar_image(l1_xyz, l1_int)
-        l2_img = self._create_lidar_image(l2_xyz_in_l1, l2_int)
+          # Combine into multiple channels
+          fused = np.zeros((self.height, self.width, 4), dtype=np.float32)
+          fused[:, :, 0] = l1_img[:, :, 0]
+          fused[:, :, 1] = l1_img[:, :, 1]
+          fused[:, :, 2] = l2_img[:, :, 0]
+          fused[:, :, 3] = l2_img[:, :, 1]
+          # fused[:, :, 2] = np.abs(l1_img - l2_img)
 
-        # Combine into 5 channels
-        # [L1_depth, L1_intensity, L2_depth, L2_intensity, Depth_diff]
-        fused = np.zeros((self.height, self.width, 5), dtype=np.float32)
-        fused[..., 0] = l1_img[..., 0]
-        fused[..., 1] = l1_img[..., 1]
-        fused[..., 2] = l2_img[..., 0]
-        fused[..., 3] = l2_img[..., 1]
+          # Normalize between 0 and 1
+          fused = fused.astype(np.float32) / 255.0
+          input_dict["fused_img"] = fused
+        elif self.projection == "pinhole":
+          # virtual camera is defined in baselink frame
+          virtual_camera_xyz = [5.0, 0.0, 0.75]
+          virtual_camera_roll_pitch_yaw_deg = [-90.0, 0.0, -107]
 
-        # Channel 4: Depth difference
-        mask = (l1_img[..., 0] > 0) & (l2_img[..., 0] > 0)
-        fused[mask, 4] = np.abs(l1_img[mask, 0] - l2_img[mask, 0])
+          # Transformation from base_link to virtual camera
+          roll, pitch, yaw = np.radians(virtual_camera_roll_pitch_yaw_deg)
+          cam_rot = transforms3d.euler.euler2mat(roll, pitch, yaw, axes="sxyz")
+          T_base_cam = np.eye(4, dtype=np.float32)
+          T_base_cam[:3, :3] = cam_rot
+          T_base_cam[:3, 3] = virtual_camera_xyz
+          T_cam_base = np.linalg.inv(T_base_cam)
 
-        input_dict["fused_img"] = fused
+          l1_xyz = l1_points[:, :3]
+          l1_int = l1_points[:, 3]
+          l1_xyz_h = np.column_stack([l1_xyz, np.ones(l1_xyz.shape[0], dtype=np.float32)])
+
+          l2_xyz = l2_points[:, :3]
+          l2_int = l2_points[:, 3]
+          l2_xyz_h = np.column_stack([l2_xyz, np.ones(l2_xyz.shape[0], dtype=np.float32)])
+
+          # Transform points to virtual camera frame
+          # l1_xyz_cam = (T_cam_base @ T_misalign @ l1_xyz_h.T).T[:, :3]
+          l1_xyz_cam = (T_cam_base @ l1_xyz_h.T).T[:, :3]
+          l2_xyz_cam = (T_cam_base @ l2_xyz_h.T).T[:, :3]
+
+          # Project both to 2D
+          l1_img = create_lidar_image(self.height, self.width, self.camera_matrix, self.max_depth, self.dilation_size, l1_xyz_cam, l1_int)
+          l2_img = create_lidar_image(self.height, self.width, self.camera_matrix, self.max_depth, self.dilation_size, l2_xyz_cam, l2_int)
+
+          # Combine into 5 channels
+          # [L1_depth, L1_intensity, L2_depth, L2_intensity, Depth_diff]
+          channels = 4
+          fused = np.zeros((self.height, self.width, channels), dtype=np.float32)
+          fused[..., 0] = l1_img[..., 0]
+          fused[..., 1] = l1_img[..., 1]
+          fused[..., 2] = l2_img[..., 0]
+          fused[..., 3] = l2_img[..., 1]
+
+          # Channel 4: Depth difference
+          # mask = (l1_img[..., 0] > 0) & (l2_img[..., 0] > 0)
+          # fused[mask, 4] = np.abs(l1_img[mask, 0] - l2_img[mask, 0])
+          input_dict["fused_img"] = fused
         return input_dict
 
-    def _create_lidar_image(
-        self, points_xyz: npt.NDArray[np.float32], intensities: npt.NDArray[np.float32]
-    ) -> npt.NDArray[np.float32]:
-        """Project 3D points to 2D image with depth and intensity channels."""
-        h, w = self.height, self.width
-        depth_img = np.zeros((h, w), dtype=np.float32)
-        intensity_img = np.zeros((h, w), dtype=np.float32)
+class SaveFusionPreview(BaseTransform):
+    """Save preview images of fused LiDAR-LiDAR data for visualization.
 
-        if points_xyz.size == 0:
-            return np.stack([depth_img, intensity_img], axis=-1)
+    For each sample, generate an image for each channel
 
-        # Ensure points are float32/float64 and contiguous for OpenCV
-        if points_xyz.dtype not in [np.float32, np.float64]:
-            points_xyz = points_xyz.astype(np.float32)
-        if not points_xyz.flags.c_contiguous:
-            points_xyz = np.ascontiguousarray(points_xyz)
+    Required keys:
+        - fused_img: (H, W, N) float32 [0, 1] (from LidarLidarFusion).
 
-        # Project to image coordinates
-        pointcloud_ics, _ = cv2.projectPoints(
-            points_xyz,
-            np.zeros(3, dtype=np.float32),
-            np.zeros(3, dtype=np.float32),
-            self.camera_matrix,
-            np.zeros(5, dtype=np.float32),
-        )
-        pointcloud_ics = pointcloud_ics.reshape(-1, 2)
+    Optional keys:
+        - gt_calibration_status: int (0=calibrated, 1=miscalibrated). If not present,
+          uses "unknown" as the status suffix in output filenames.
 
-        valid_mask = (
-            (pointcloud_ics[:, 0] >= 0)
-            & (pointcloud_ics[:, 0] <= w - 1)
-            & (pointcloud_ics[:, 1] >= 0)
-            & (pointcloud_ics[:, 1] <= h - 1)
-            & (points_xyz[:, 2] > 0.0)  # Z > 0
-            & (points_xyz[:, 2] < self.max_depth)
-        )
+    Generated keys:
+        - None (pass-through transform, only saves files to disk).
 
-        valid_ics = pointcloud_ics[valid_mask]
-        valid_xyz = points_xyz[valid_mask]
-        valid_intensities = intensities[valid_mask]
+    Args:
+        p: Probability of saving preview images (default: 1.0, always save).
+        out_dir: Output directory for saving preview images.
+    """
 
-        if valid_ics.size > 0:
-            y_offsets, x_offsets = np.mgrid[
-                -self.dilation_size : self.dilation_size + 1,
-                -self.dilation_size : self.dilation_size + 1,
-            ]
-            y_offsets = y_offsets.flatten()
-            x_offsets = x_offsets.flatten()
+    _required_keys = ["fused_img"]
+    _optional_keys = ["gt_calibration_status"]
 
-            center_rows = valid_ics[:, 1].astype(np.int32)
-            center_cols = valid_ics[:, 0].astype(np.int32)
+    def __init__(
+        self,
+        p: float = 1.0,
+        out_dir: str = "",
+        colormap: str = "turbo",
+    ):
+        super().__init__()
+        self.p = p
+        self.out_dir = Path(out_dir)
+        self.cmap = plt.get_cmap(colormap) # pyright: ignore[reportAttributeAccessIssue]
+        self._counter = 0
 
-            patch_rows = center_rows[:, np.newaxis] + y_offsets[np.newaxis, :]
-            patch_cols = center_cols[:, np.newaxis] + x_offsets[np.newaxis, :]
+        self.out_dir.mkdir(parents=True, exist_ok=True)
 
-            in_bounds_mask = (
-                (patch_rows >= 0) & (patch_rows < h) & (patch_cols >= 0) & (patch_cols < w)
-            )
+    def transform(self, input_dict: Dict[str, Any]) -> Dict[str, Any]:
+        """Save preview images for each sample in the batch.
 
-            center_depths = valid_xyz[:, 2] / self.max_depth
+        Args:
+            input_dict: Dictionary containing:
+                - fused_img: Fused image (H, W, N) float32 [0, 1]
+                - gt_calibration_status: Calibration status label
+                  (0=calibrated, 1=miscalibrated, or None).
 
-            broadcasted_depths = np.broadcast_to(center_depths[:, np.newaxis], patch_rows.shape)
-            broadcasted_intensities = np.broadcast_to(
-                valid_intensities[:, np.newaxis], patch_rows.shape
-            )
+        Returns:
+            Unmodified input_dict (pass-through).
+        """
+        fused_img = input_dict["fused_img"]
+        calibration_status = input_dict.get("gt_calibration_status")
+        self._save_preview(fused_img, calibration_status)
 
-            final_rows = patch_rows[in_bounds_mask]
-            final_cols = patch_cols[in_bounds_mask]
-            final_depths = broadcasted_depths[in_bounds_mask]
-            final_intensities = broadcasted_intensities[in_bounds_mask]
+        return input_dict
 
-            # Use inverse depth for z-buffering (painter's algorithm)
-            sort_indices = np.argsort(final_depths)[::-1]
-            sorted_rows = final_rows[sort_indices]
-            sorted_cols = final_cols[sort_indices]
-            sorted_depths = final_depths[sort_indices]
-            sorted_intensities = final_intensities[sort_indices]
+    def _save_preview(
+        self,
+        fused_img: npt.NDArray[np.float32],
+        calibration_status: int | None,
+    ) -> None:
+        """Save preview images for a single sample."""
+        if self.p is not None and np.random.rand() > self.p:
+            return
 
-            depth_img[sorted_rows, sorted_cols] = sorted_depths
-            intensity_img[sorted_rows, sorted_cols] = sorted_intensities / 255.0
+        if calibration_status is None:
+            status_suffix = ""
+        elif calibration_status == CalibrationStatus.CALIBRATED.value:
+            status_suffix = "_calibrated"
+        else:
+            status_suffix = "_miscalibrated"
 
-        return np.stack([depth_img, intensity_img], axis=2)
+        idx = self._counter
+        self._counter += 1
+
+        for channel in range(fused_img.shape[2]):
+          # Normalize for visualization
+          img = np.clip(fused_img[:, :, channel], 0, 1)
+          # Apply colormaps (matplotlib returns RGBA float [0, 1])
+          img_colored = (self.cmap(img)[:, :, :3] * 255).astype(np.uint8)
+
+          # Save images (OpenCV expects BGR)
+          cv2.imwrite(
+              str(self.out_dir / f"{idx:06d}_channel{channel:06d}_{status_suffix}.png"),
+              cv2.cvtColor(img_colored, cv2.COLOR_RGB2BGR),
+          )
