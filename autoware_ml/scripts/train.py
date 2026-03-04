@@ -117,6 +117,8 @@ def main(cfg: DictConfig):
     logger.info("Training completed!")
     logger.info(f"Checkpoints saved to: {work_dir / 'checkpoints'}")
 
+    trainer.test(model, datamodule=datamodule)
+
 
 if __name__ == "__main__":
     main()
