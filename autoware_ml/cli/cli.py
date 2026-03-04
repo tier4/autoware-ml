@@ -89,13 +89,16 @@ def deploy(
 
 @app.command(name="mlflow-ui")
 def mlflow_ui(
+    host: Annotated[str, typer.Option("--host", "-h", help="Host to listen on")] = "0.0.0.0",
     port: Annotated[int, typer.Option("--port", "-p", help="Port to listen on")] = 5000,
     db_path: Annotated[
-        str | None, typer.Option("--db-path", help="Path to SQLite backend store file")
-    ] = None,
+        str, typer.Option("--db-path", help="Path to SQLite backend store file")
+    ] = "mlruns/mlflow.db",
 ) -> None:
     """Launch MLflow UI."""
-    run_lazy_script("autoware_ml.scripts.mlflow_ui", "run_mlflow_ui", port=port, db_path=db_path)
+    run_lazy_script(
+        "autoware_ml.scripts.mlflow_ui", "run_mlflow_ui", host=host, port=port, db_path=db_path
+    )
 
 
 @app.command(
