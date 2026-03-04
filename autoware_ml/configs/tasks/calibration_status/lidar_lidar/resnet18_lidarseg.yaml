@@ -5,6 +5,57 @@ defaults:
 
 data_root: ${oc.env:AUTOWARE_ML_DATA_PATH}/t4dataset
 
+# Shared configurations
+_misalignment: &misalignment
+  _target_: autoware_ml.transforms.lidar.LidarLidarCalibrationMisalignment
+  p: 0.5
+  activate_roll: true
+  activate_pitch: true
+  activate_yaw: true
+  activate_x: true
+  activate_y: true
+  activate_z: true
+  min_roll_neg: 0.5
+  max_roll_neg: 1.0
+  min_roll_pos: 0.5
+  max_roll_pos: 1.0
+  min_pitch_neg: 0.5
+  max_pitch_neg: 1.0
+  min_pitch_pos: 0.5
+  max_pitch_pos: 1.0
+  min_yaw_neg: 0.5
+  max_yaw_neg: 1.0
+  min_yaw_pos: 0.5
+  max_yaw_pos: 1.0
+  min_x_neg: 0.2
+  max_x_neg: 0.5
+  min_x_pos: 0.2
+  max_x_pos: 0.5
+  min_y_neg: 0.2
+  max_y_neg: 0.5
+  min_y_pos: 0.2
+  max_y_pos: 0.5
+  min_z_neg: 0.2
+  max_z_neg: 0.5
+  min_z_pos: 0.2
+  max_z_pos: 0.5
+
+_fusion: &fusion
+  _target_: autoware_ml.transforms.lidar.LidarLidarFusion
+  width: 1024
+  height: 512
+  projection: spherical
+  max_depth: 80.0
+
+_permute: &permute
+  _target_: autoware_ml.transforms.common.PermuteAxes
+  input_keys: [fused_img]
+  axes: [2, 0, 1]
+
+_dataloader: &dataloader
+  batch_size: 8
+  num_workers: 4
+
 datamodule:
   _target_: autoware_ml.datamodule.t4dataset.lidar_calibration_status.T4LidarCalibrationDataModule
   data_root: ${data_root}
@@ -15,109 +66,30 @@ datamodule:
   lidar_source2: LIDAR_FRONT_LOWER
   stack_keys: [fused_img, gt_calibration_status]
   train_dataloader_cfg:
-    batch_size: 8
-    num_workers: 4
+    <<: *dataloader
     shuffle: true
-  val_dataloader_cfg:
-    batch_size: 8
-    num_workers: 4
-  test_dataloader_cfg:
-    batch_size: 8
-    num_workers: 4
+  val_dataloader_cfg: *dataloader
+  test_dataloader_cfg: *dataloader
   predict_dataloader_cfg:
     batch_size: 1
     num_workers: 1
   train_transforms:
     pipeline:
-      - _target_: autoware_ml.transforms.lidar.LidarLidarCalibrationMisalignment
-        p: 0.5
-        activate_roll: false
-        activate_pitch: false
-        activate_yaw: true
-        activate_x: false
-        activate_y: false
-        activate_z: false
-        min_yaw_neg: 2.0
-        max_yaw_neg: 4.0
-        min_yaw_pos: 2.0
-        max_yaw_pos: 4.0
-      - _target_: autoware_ml.transforms.lidar.LidarLidarFusion
-        width: 1024
-        height: 512
-        projection: pinhole
-        max_depth: 80.0
+      - *misalignment
+      - *fusion
       - _target_: autoware_ml.transforms.lidar.SaveFusionPreview
-        p: 0.1
+        p: 0.01
         out_dir: ${hydra:run.dir}/previews
-      - _target_: autoware_ml.transforms.common.PermuteAxes
-        input_keys: [fused_img]
-        axes: [2, 0, 1]
+      - *permute
   val_transforms:
-    pipeline:
-      - _target_: autoware_ml.transforms.lidar.LidarLidarCalibrationMisalignment
-        p: 0.5
-        activate_roll: false
-        activate_pitch: false
-        activate_yaw: true
-        activate_x: false
-        activate_y: false
-        activate_z: false
-        min_yaw_neg: 2.0
-        max_yaw_neg: 4.0
-        min_yaw_pos: 2.0
-        max_yaw_pos: 4.0
-      - _target_: autoware_ml.transforms.lidar.LidarLidarFusion
-        width: 1024
-        height: 512
-        projection: pinhole
-        max_depth: 80.0
-      - _target_: autoware_ml.transforms.common.PermuteAxes
-        input_keys: [fused_img]
-        axes: [2, 0, 1]
+    pipeline: &common_pipeline
+      - *misalignment
+      - *fusion
+      - *permute
   test_transforms:
-    pipeline:
-      - _target_: autoware_ml.transforms.lidar.LidarLidarCalibrationMisalignment
-        p: 0.5
-        activate_roll: false
-        activate_pitch: false
-        activate_yaw: true
-        activate_x: false
-        activate_y: false
-        activate_z: false
-        min_yaw_neg: 2.0
-        max_yaw_neg: 4.0
-        min_yaw_pos: 2.0
-        max_yaw_pos: 4.0
-      - _target_: autoware_ml.transforms.lidar.LidarLidarFusion
-        width: 1024
-        height: 512
-        projection: pinhole
-        max_depth: 80.0
-      - _target_: autoware_ml.transforms.common.PermuteAxes
-        input_keys: [fused_img]
-        axes: [2, 0, 1]
+    pipeline: *common_pipeline
   predict_transforms:
-    pipeline:
-      - _target_: autoware_ml.transforms.lidar.LidarLidarCalibrationMisalignment
-        p: 0.5
-        activate_roll: false
-        activate_pitch: false
-        activate_yaw: true
-        activate_x: false
-        activate_y: false
-        activate_z: false
-        min_yaw_neg: 2.0
-        max_yaw_neg: 4.0
-        min_yaw_pos: 2.0
-        max_yaw_pos: 4.0
-      - _target_: autoware_ml.transforms.lidar.LidarLidarFusion
-        width: 1024
-        height: 512
-        projection: pinhole
-        max_depth: 80.0
-      - _target_: autoware_ml.transforms.common.PermuteAxes
-        input_keys: [fused_img]
-        axes: [2, 0, 1]
+    pipeline: *common_pipeline
 
 model:
   _target_: autoware_ml.models.calibration_status.CalibrationStatusClassifier
@@ -142,11 +114,12 @@ model:
     eps: 1e-8
   scheduler:
     _target_: torch.optim.lr_scheduler.CosineAnnealingLR
-    T_max: 20
+    T_max: 1
     eta_min: 1e-8
     last_epoch: -1
 
 trainer:
-  max_epochs: 30
+  # fast_dev_run: true  # runs 1 batch of train/eval/test to confirm no crash
+  max_epochs: 1
   gradient_clip_val: 10.0
   gradient_clip_algorithm: norm
