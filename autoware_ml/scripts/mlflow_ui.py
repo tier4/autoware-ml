@@ -21,10 +21,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-DEFAULT_BACKEND_PATH = Path("mlruns/mlflow.db")
-DEFAULT_PORT = 5000
-HOST = "127.0.0.1"
-
 logger = logging.getLogger(__name__)
 
 
@@ -33,24 +29,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--db-path",
         type=str,
-        help=f"Path to the SQLite backend store file. Defaults to {DEFAULT_BACKEND_PATH}.",
+        help="Path to the SQLite backend store file.",
+    )
+    parser.add_argument(
+        "--host",
+        type=str,
+        help="Host for MLflow UI.",
     )
     parser.add_argument(
         "--port",
         type=int,
-        help=f"Port for MLflow UI. Defaults to {DEFAULT_PORT}.",
+        help="Port for MLflow UI.",
     )
     return parser.parse_args()
 
 
-def build_backend_uri(db_path_arg: str | None) -> str:
-    db_path = Path(db_path_arg) if db_path_arg else DEFAULT_BACKEND_PATH
+def build_backend_uri(db_path: str) -> str:
+    db_path = Path(db_path)
     resolved = db_path if db_path.is_absolute() else (Path.cwd() / db_path)
     resolved.parent.mkdir(parents=True, exist_ok=True)
     return f"sqlite:///{resolved}"
 
 
-def is_port_free(port: int, host: str = HOST) -> bool:
+def is_port_free(host: str, port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
@@ -60,26 +61,23 @@ def is_port_free(port: int, host: str = HOST) -> bool:
     return True
 
 
-def resolve_port(port_arg: int | None) -> int:
-    if port_arg is not None:
-        if not is_port_free(port_arg):
-            logger.error(f"Port {port_arg} is occupied. Try a different port with --port option.")
-            sys.exit(1)
-        return port_arg
-
-    port = DEFAULT_PORT
+def resolve_port(host: str, port: int) -> int:
+    if not is_port_free(host, port):
+        logger.error(f"Port {port} is occupied. Try a different port with --port option.")
+        sys.exit(1)
     return port
 
 
-def run_mlflow_ui(port: int | None = None, db_path: str | None = None) -> None:
+def run_mlflow_ui(host: str, port: int, db_path: str) -> None:
     """Run MLflow UI with the specified port and database path.
 
     Args:
-        port: Port for MLflow UI. If None, uses default port.
-        db_path: Path to SQLite backend store file. If None, uses default.
+        host: Host for MLflow UI.
+        port: Port for MLflow UI.
+        db_path: Path to SQLite backend store file.
     """
     backend_uri = build_backend_uri(db_path)
-    resolved_port = resolve_port(port)
+    resolved_port = resolve_port(host, port)
 
     logger.info(f"Backend store: {backend_uri}")
     logger.info(f"Starting MLflow UI on port {resolved_port} ...")
@@ -89,6 +87,8 @@ def run_mlflow_ui(port: int | None = None, db_path: str | None = None) -> None:
         "ui",
         "--backend-store-uri",
         backend_uri,
+        "--host",
+        host,
         "--port",
         str(resolved_port),
     ]
@@ -99,7 +99,7 @@ def run_mlflow_ui(port: int | None = None, db_path: str | None = None) -> None:
 def main() -> None:
     """Main entry point for command-line usage."""
     args = parse_args()
-    run_mlflow_ui(port=args.port, db_path=args.db_path)
+    run_mlflow_ui(host=args.host, port=args.port, db_path=args.db_path)
 
 
 if __name__ == "__main__":
