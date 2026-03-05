@@ -41,10 +41,8 @@ class CalibrationData:
     coordinate transformations
     """
 
-    lidar1_to_lidar2_transform: npt.NDArray[np.float32]
-    baselink_to_lidar1_transform: npt.NDArray[np.float32]
-    baselink_to_lidar2_transform: npt.NDArray[np.float32]
-    noise: Optional[npt.NDArray[np.float32]] = None
+    ground_truth_baselink_to_lidar: Dict[str, npt.NDArray[np.float32]]
+    noise_baselink_to_lidar: Dict[str, npt.NDArray[np.float32]]
 
 
 class T4LidarCalibrationStatusDataset(Dataset):
@@ -59,8 +57,7 @@ class T4LidarCalibrationStatusDataset(Dataset):
         self,
         data_root: str,
         ann_file: str,
-        lidar_source1: str,
-        lidar_source2: str,
+        lidar_sources: list[str],
         **kwargs: Any,
     ) -> None:
         """Initialize the T4 Calibration Status Dataset.
@@ -77,8 +74,7 @@ class T4LidarCalibrationStatusDataset(Dataset):
             self.data_infos = pickle.load(f)
 
         self.data_infos["data_list"] = self.data_infos["data_list"]
-        self.lidar_source1 = lidar_source1
-        self.lidar_source2 = lidar_source2
+        self.lidar_sources = lidar_sources
 
     def __len__(self) -> int:
         """Get dataset length.
@@ -110,47 +106,34 @@ class T4LidarCalibrationStatusDataset(Dataset):
             os.path.join(self.data_root, lidar_path), dtype=np.float32
         ).reshape(-1, num_pts_feats)
 
-        token1 = sample["lidar_sources"][self.lidar_source1]["sensor_token"]
-        token2 = sample["lidar_sources"][self.lidar_source2]["sensor_token"]
-
-        lidar1_points, lidar2_points = self._split_points(
-            lidar_points, lidar_info_path, token1, token2
-        )
+        points_per_lidar = {lidar_source : self._extract_lidar_points(lidar_points, lidar_info_path, sample["lidar_sources"][lidar_source]["sensor_token"]) for lidar_source in self.lidar_sources}
         calibration_data = self._load_calibration_data(sample)
 
-        input_dict["lidar1_points"] = lidar1_points
-        input_dict["lidar2_points"] = lidar2_points
+        input_dict["points_per_lidar"] = points_per_lidar
         input_dict["calibration_data"] = calibration_data
         input_dict["gt_calibration_status"] = CalibrationStatus.CALIBRATED.value
-        input_dict["metadata"] = sample
 
         return input_dict
 
-    def _split_points(
-        self, lidar_points: npt.NDArray[np.float32], info_path: str, token1: str, token2: str
-    ) -> Tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
+    def _extract_lidar_points(
+        self, lidar_points: npt.NDArray[np.float32], info_path: str, token: str
+    ) -> npt.NDArray[np.float32]:
         with open(os.path.join(self.data_root, info_path), "r") as f:
             info = json.load(f)
 
-        points1 = None
-        points2 = None
+        points = None
         for source in info["sources"]:
-            if source["sensor_token"] == token1:
+            if source["sensor_token"] == token:
                 idx_begin = source["idx_begin"]
                 length = source["length"]
-                points1 = lidar_points[idx_begin : idx_begin + length]
-            if source["sensor_token"] == token2:
-                idx_begin = source["idx_begin"]
-                length = source["length"]
-                points2 = lidar_points[idx_begin : idx_begin + length]
+                points = lidar_points[idx_begin : idx_begin + length]
 
-        if points1 is None or points2 is None:
+        if points is None:
             raise ValueError(
-                f"Could not find all sensor tokens in {info_path}. "
-                f"Found points1: {points1 is not None}, points2: {points2 is not None}"
+                f"Could not find sensor {token} in {info_path}."
             )
 
-        return points1, points2
+        return points
 
     def _load_calibration_data(self, sample: dict) -> CalibrationData:
         if "lidar_points" not in sample:
@@ -158,7 +141,7 @@ class T4LidarCalibrationStatusDataset(Dataset):
         if "lidar_sources" not in sample:
             raise KeyError("Sample does not contain 'lidar_sources' key")
 
-        def get_transform(source_dict):
+        def get_transform(source_dict: dict):
             rotation = np.array(source_dict["rotation"])
             translation = np.array(source_dict["translation"])
             if rotation.shape != (3, 3):
@@ -171,17 +154,9 @@ class T4LidarCalibrationStatusDataset(Dataset):
             transform[:3, 3] = translation
             return transform
 
-        origin_to_lidar1 = get_transform(sample["lidar_sources"][self.lidar_source1])
-        origin_to_lidar2 = get_transform(sample["lidar_sources"][self.lidar_source2])
-
-        # Validate Lidar
-        points_origin = sample["lidar_points"].get("lidar_pose", None)
-        if points_origin is None:
-            raise ValueError("concatenated pointcloud origin is missing")
-
-        lidar1_to_lidar2_transform = np.linalg.inv(origin_to_lidar2) @ origin_to_lidar1
-
-        return CalibrationData(lidar1_to_lidar2_transform=lidar1_to_lidar2_transform, baselink_to_lidar1_transform=origin_to_lidar1, baselink_to_lidar2_transform=origin_to_lidar2)
+        ground_truth_baselink_to_lidar = {lidar_source : get_transform(sample["lidar_sources"][lidar_source]) for lidar_source in self.lidar_sources}
+        empty_noise = {lidar_source : np.eye(4, dtype=np.float32) for lidar_source in self.lidar_sources}
+        return CalibrationData(ground_truth_baselink_to_lidar=ground_truth_baselink_to_lidar, noise_baselink_to_lidar=empty_noise)
 
 
 class T4LidarCalibrationDataModule(DataModule):
@@ -197,8 +172,7 @@ class T4LidarCalibrationDataModule(DataModule):
         train_ann_file: str,
         val_ann_file: str,
         test_ann_file: str,
-        lidar_source1: str,
-        lidar_source2: str,
+        lidar_sources: list[str],
         **kwargs: Any,
     ):
         """Initialize T4 Calibration DataModule.
@@ -217,8 +191,7 @@ class T4LidarCalibrationDataModule(DataModule):
             "test": os.path.join(data_root, test_ann_file),
             "predict": os.path.join(data_root, test_ann_file),
         }
-        self.lidar_source1 = lidar_source1
-        self.lidar_source2 = lidar_source2
+        self.lidar_sources = lidar_sources
 
     def _create_dataset(
         self, split: str, transforms: Optional[TransformsCompose] = None
@@ -240,8 +213,7 @@ class T4LidarCalibrationDataModule(DataModule):
         dataset = T4LidarCalibrationStatusDataset(
             data_root=self.data_root,
             ann_file=ann_file,
-            lidar_source1=self.lidar_source1,
-            lidar_source2=self.lidar_source2,
+            lidar_sources=self.lidar_sources,
             dataset_transforms=transforms
         )
 

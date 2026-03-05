@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
 import cv2
 import numpy as np
@@ -21,6 +21,7 @@ import numpy.typing as npt
 import transforms3d
 from scipy.stats import truncnorm
 import matplotlib.pyplot as plt
+import random
 
 from autoware_ml.datamodule.t4dataset.lidar_calibration_status import (
     CalibrationData,
@@ -323,14 +324,18 @@ class LidarLidarCalibrationMisalignment(BaseTransform):
             Dictionary with modified calibration data and gt_calibration_status flag.
         """
         calibration_data: CalibrationData = input_dict["calibration_data"]
-        original_transform = calibration_data.lidar1_to_lidar2_transform
-        noisy_transform, noise, translation_noise, rotation_noise = self.alter_calibration(original_transform)
-        calibration_data.lidar1_to_lidar2_transform = noisy_transform
-        calibration_data.noise = noise
-        input_dict["calibration_data"] = calibration_data
-        # ROTATION_NOISE_THRESHOLD = 0.1
-        # TRANSLATION_NOISE_THRESHOLD = 0.3
-        # if(abs(translation_noise) >= TRANSLATION_NOISE_THRESHOLD or abs(rotation_noise) >= ROTATION_NOISE_THRESHOLD) :
+        
+        lidar = random.choice(list(calibration_data.ground_truth_baselink_to_lidar.keys()))
+        input_dict["calibration_data"].noise_baselink_to_lidar[lidar] = self.generate_calibration_noise()
+
+        points = input_dict["points_per_lidar"][lidar]
+        T_noise = input_dict["calibration_data"].noise_baselink_to_lidar[lidar]
+        xyz = points[:, :3]
+        xyz_h = np.column_stack([xyz, np.ones(xyz.shape[0], dtype=np.float32)])
+        xyz_transformed = (xyz_h @ T_noise.T)[:, :3]
+        points[:, :3] = xyz_transformed
+        input_dict["points_per_lidar"][lidar] = points
+
         input_dict["gt_calibration_status"] = CalibrationStatus.MISCALIBRATED.value
 
         return input_dict
@@ -377,10 +382,8 @@ class LidarLidarCalibrationMisalignment(BaseTransform):
             )
             return value
 
-    def alter_calibration(self, transform: np.ndarray) -> Tuple[np.ndarray, np.ndarray, float, float]:
-        """Apply random noise to a 4x4 transformation matrix."""
-        if transform.shape != (4, 4):
-            raise ValueError(f"Transform must be 4x4 matrix, got shape {transform.shape}")
+    def generate_calibration_noise(self) -> np.ndarray:
+        """Generate random noise for a 4x4 transformation matrix."""
 
         roll = (
             self._sample_component(
@@ -430,39 +433,30 @@ class LidarLidarCalibrationMisalignment(BaseTransform):
         noise_transform[0:3, 0:3] = rotation_matrix
         noise_transform[0:3, 3] = [tx, ty, tz]
 
-        # Calculate translation/rotation noise magnitude
-        translation_magnitude = float(np.linalg.norm([tx, ty, tz]))
-        # trace of a 3x3 rotation matrix is R[0,0] + R[1,1] + R[2,2]
-        trace = np.trace(rotation_matrix)
-        # Clip to [-1, 1] to avoid floating point errors with arccos
-        angular_deviation_rad = np.arccos(np.clip((trace - 1.0) / 2.0, -1.0, 1.0))
-        rotation_magnitude_deg = np.rad2deg(angular_deviation_rad)
-
-        return transform @ noise_transform, noise_transform, translation_magnitude, rotation_magnitude_deg
+        return noise_transform
 
 
 class LidarLidarFusion(BaseTransform):
-    """Fuse two LiDAR point clouds into a 2D multi-channel representation.
+    """Fuse LiDAR point clouds into a 2D multi-channel representation.
 
-    Projects both LiDAR point clouds onto a common virtual perspective camera
+    Projects LiDAR point clouds onto a common virtual perspective camera
     view and creates 5-channel fused images.
 
     Required keys:
-        - lidar1_points: (N, 4+) float32 point cloud [x, y, z, intensity, ...].
-        - lidar2_points: (M, 4+) float32 point cloud [x, y, z, intensity, ...].
-        - calibration_data: CalibrationData object with lidar1_to_lidar2_transform.
+        - points_per_lidar: for each lidar, a (N, 4+) float32 point cloud [x, y, z, intensity, ...].
+        - calibration_data: CalibrationData object with transforms for each lidar
 
     Generated keys:
-        - fused_img: (H, W, 5) float32 [0, 1] in format:
-          [L1_depth, L1_intensity, L2_depth, L2_intensity, Depth_diff].
+        - fused_img: (H, W, C) float32 [0, 1]
 
     Args:
         width: Width of the 2D representation.
         height: Height of the 2D representation.
         max_depth: Maximum depth for projected LiDAR points in meters.
+        TODO explain args
     """
 
-    _required_keys = ["lidar1_points", "lidar2_points", "calibration_data"]
+    _required_keys = ["points_per_lidar", "calibration_data"]
 
     def __init__(
         self,
@@ -493,92 +487,59 @@ class LidarLidarFusion(BaseTransform):
 
         Args:
             input_dict: Dictionary with:
-                - lidar1_points: Point cloud 1
-                - lidar2_points: Point cloud 2
+                - points_per_lidar: points for each lidar
                 - calibration_data: CalibrationData object
 
         Returns:
             Dictionary with added 'fused_img': (H, W, 3) float32 [0, 1].
         """
-        l1_points = input_dict["lidar1_points"]
-        l2_points = input_dict["lidar2_points"]
-        calib = input_dict["calibration_data"]
-        if calib.noise is not None:
-            # Misalign l1 points using the provided calibration transform
-            # l1_points and l2_points are in ground-truth baselink frame.
-            T_base_l1 = calib.baselink_to_lidar1_transform
-            T_base_l2 = calib.baselink_to_lidar2_transform
-            T_l2_l1 = calib.lidar1_to_lidar2_transform
-            # This represents l1 points in lidar2 frame using current (noisy) calibration,
-            # then back to baselink using ground-truth T_base_l2
-            T_misalign = T_base_l2 @ T_l2_l1 @ np.linalg.inv(T_base_l1)
-            l1_xyz = l1_points[:, :3]
-            l1_xyz_h = np.column_stack([l1_xyz, np.ones(l1_xyz.shape[0], dtype=np.float32)])
-            l1_points[:, :3] = (T_misalign @ l1_xyz_h.T).T[:, :3]
-
-
+        points_per_lidar = input_dict["points_per_lidar"]
+        calibration : CalibrationData = input_dict["calibration_data"]
+        # Combine into multiple channels
+        channel_per_image = 1
+        current_channel = 0
+        fused = np.zeros((self.height, self.width, channel_per_image * len(points_per_lidar)), dtype=np.float32)
+        avg_lidar_height = np.mean([tf[:,3][2] for tf in calibration.ground_truth_baselink_to_lidar.values()])
         # All points are assumed to be in "base_link" frame
         if self.projection == "spherical":
-          avg_lidar_height = np.mean([calib.baselink_to_lidar1_transform[:, 3][2], calib.baselink_to_lidar2_transform[:, 3][2]])
-          l1_points[:, 1] += avg_lidar_height
-          l2_points[:, 1] += avg_lidar_height
-          l1_img = project_spherical(l1_points, self.width, self.height, self.dilation_size)
-          l2_img = project_spherical(l2_points, self.width, self.height, self.dilation_size)
-
-          # Combine into multiple channels
-          fused = np.zeros((self.height, self.width, 4), dtype=np.float32)
-          fused[:, :, 0] = l1_img[:, :, 0]
-          fused[:, :, 1] = l1_img[:, :, 1]
-          fused[:, :, 2] = l2_img[:, :, 0]
-          fused[:, :, 3] = l2_img[:, :, 1]
-          # fused[:, :, 2] = np.abs(l1_img - l2_img)
+          for lidar, points in points_per_lidar.items():
+            points[:, 1] += avg_lidar_height
+            projection = project_spherical(points, self.width, self.height, self.dilation_size)
+            fused[:, :, current_channel] = projection[:, :, 0]
+            # fused[:, :, current_channel+1] = projection[:, :, 1]
+            current_channel += channel_per_image
 
           # Normalize between 0 and 1
           fused = fused.astype(np.float32) / 255.0
           input_dict["fused_img"] = fused
+
         elif self.projection == "pinhole":
-          # virtual camera is defined in baselink frame
-          virtual_camera_xyz = [5.0, 0.0, 0.75]
-          virtual_camera_roll_pitch_yaw_deg = [-90.0, 0.0, -107]
+          for lidar, points in points_per_lidar:
+            # virtual camera is defined in baselink frame
+            # this is only for the front lower/upper, needs to be adjusted for each pair
+            virtual_camera_xyz = [5.0, 0.0, 0.75]
+            virtual_camera_roll_pitch_yaw_deg = [-90.0, 0.0, -107]
 
-          # Transformation from base_link to virtual camera
-          roll, pitch, yaw = np.radians(virtual_camera_roll_pitch_yaw_deg)
-          cam_rot = transforms3d.euler.euler2mat(roll, pitch, yaw, axes="sxyz")
-          T_base_cam = np.eye(4, dtype=np.float32)
-          T_base_cam[:3, :3] = cam_rot
-          T_base_cam[:3, 3] = virtual_camera_xyz
-          T_cam_base = np.linalg.inv(T_base_cam)
+            # Transformation from base_link to virtual camera
+            roll, pitch, yaw = np.radians(virtual_camera_roll_pitch_yaw_deg)
+            cam_rot = transforms3d.euler.euler2mat(roll, pitch, yaw, axes="sxyz")
+            T_base_cam = np.eye(4, dtype=np.float32)
+            T_base_cam[:3, :3] = cam_rot
+            T_base_cam[:3, 3] = virtual_camera_xyz
+            T_cam_base = np.linalg.inv(T_base_cam)
 
-          l1_xyz = l1_points[:, :3]
-          l1_int = l1_points[:, 3]
-          l1_xyz_h = np.column_stack([l1_xyz, np.ones(l1_xyz.shape[0], dtype=np.float32)])
+            points_xyz = points[:, :3]
+            points_int = points[:, 3]
+            points_xyz_h = np.column_stack([points_xyz, np.ones(points_xyz.shape[0], dtype=np.float32)])
+            # Transform points to virtual camera frame
+            points_xyz_cam = (T_cam_base @ points_xyz_h.T).T[:, :3]
 
-          l2_xyz = l2_points[:, :3]
-          l2_int = l2_points[:, 3]
-          l2_xyz_h = np.column_stack([l2_xyz, np.ones(l2_xyz.shape[0], dtype=np.float32)])
-
-          # Transform points to virtual camera frame
-          # l1_xyz_cam = (T_cam_base @ T_misalign @ l1_xyz_h.T).T[:, :3]
-          l1_xyz_cam = (T_cam_base @ l1_xyz_h.T).T[:, :3]
-          l2_xyz_cam = (T_cam_base @ l2_xyz_h.T).T[:, :3]
-
-          # Project both to 2D
-          l1_img = create_lidar_image(self.height, self.width, self.camera_matrix, self.max_depth, self.dilation_size, l1_xyz_cam, l1_int)
-          l2_img = create_lidar_image(self.height, self.width, self.camera_matrix, self.max_depth, self.dilation_size, l2_xyz_cam, l2_int)
-
-          # Combine into 5 channels
-          # [L1_depth, L1_intensity, L2_depth, L2_intensity, Depth_diff]
-          channels = 4
-          fused = np.zeros((self.height, self.width, channels), dtype=np.float32)
-          fused[..., 0] = l1_img[..., 0]
-          fused[..., 1] = l1_img[..., 1]
-          fused[..., 2] = l2_img[..., 0]
-          fused[..., 3] = l2_img[..., 1]
-
-          # Channel 4: Depth difference
-          # mask = (l1_img[..., 0] > 0) & (l2_img[..., 0] > 0)
-          # fused[mask, 4] = np.abs(l1_img[mask, 0] - l2_img[mask, 0])
+            img = create_lidar_image(self.height, self.width, self.camera_matrix, self.max_depth, self.dilation_size, points_xyz_cam, points_int)
+            fused[..., current_channel] = img[..., 0]
+            # fused[..., current_channel+1] = img[..., 1]
+            current_channel += channel_per_image
           input_dict["fused_img"] = fused
+
         return input_dict
 
 class SaveFusionPreview(BaseTransform):

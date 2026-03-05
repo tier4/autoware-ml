@@ -62,8 +62,7 @@ datamodule:
   train_ann_file: ${data_root}/calibration_info_lidarseg/t4dataset_gen2_lidarseg_infos_train.pkl
   val_ann_file: ${data_root}/calibration_info_lidarseg/t4dataset_gen2_lidarseg_infos_val.pkl
   test_ann_file: ${data_root}/calibration_info_lidarseg/t4dataset_gen2_lidarseg_infos_test.pkl
-  lidar_source1: LIDAR_FRONT_UPPER
-  lidar_source2: LIDAR_FRONT_LOWER
+  lidar_sources: [LIDAR_FRONT_UPPER, LIDAR_FRONT_LOWER, LIDAR_REAR_UPPER, LIDAR_REAR_LOWER, LIDAR_LEFT_UPPER, LIDAR_LEFT_LOWER, LIDAR_RIGHT_UPPER, LIDAR_RIGHT_LOWER]
   stack_keys: [fused_img, gt_calibration_status]
   train_dataloader_cfg:
     <<: *dataloader
@@ -95,7 +94,7 @@ model:
   _target_: autoware_ml.models.calibration_status.CalibrationStatusClassifier
   backbone:
     _target_: autoware_ml.models.common.backbones.resnet.ResNet18
-    in_channels: 4
+    in_channels: 8
   neck:
     _target_: autoware_ml.models.common.necks.global_average_pooling.GlobalAveragePooling
   head:
@@ -120,6 +119,7 @@ model:
 
 trainer:
   # fast_dev_run: true  # runs 1 batch of train/eval/test to confirm no crash
+  profiler: "simple"  # print some profiling data at the end of the run
   max_epochs: 1
   gradient_clip_val: 10.0
   gradient_clip_algorithm: norm
