@@ -496,7 +496,7 @@ class LidarLidarFusion(BaseTransform):
         points_per_lidar = input_dict["points_per_lidar"]
         calibration : CalibrationData = input_dict["calibration_data"]
         # Combine into multiple channels
-        channel_per_image = 1
+        channel_per_image = 2
         current_channel = 0
         fused = np.zeros((self.height, self.width, channel_per_image * len(points_per_lidar)), dtype=np.float32)
         avg_lidar_height = np.mean([tf[:,3][2] for tf in calibration.ground_truth_baselink_to_lidar.values()])
@@ -506,7 +506,7 @@ class LidarLidarFusion(BaseTransform):
             points[:, 1] += avg_lidar_height
             projection = project_spherical(points, self.width, self.height, self.dilation_size)
             fused[:, :, current_channel] = projection[:, :, 0]
-            # fused[:, :, current_channel+1] = projection[:, :, 1]
+            fused[:, :, current_channel+1] = projection[:, :, 1]
             current_channel += channel_per_image
 
           # Normalize between 0 and 1
@@ -536,7 +536,7 @@ class LidarLidarFusion(BaseTransform):
 
             img = create_lidar_image(self.height, self.width, self.camera_matrix, self.max_depth, self.dilation_size, points_xyz_cam, points_int)
             fused[..., current_channel] = img[..., 0]
-            # fused[..., current_channel+1] = img[..., 1]
+            fused[..., current_channel+1] = img[..., 1]
             current_channel += channel_per_image
           input_dict["fused_img"] = fused
 
@@ -616,14 +616,41 @@ class SaveFusionPreview(BaseTransform):
         idx = self._counter
         self._counter += 1
 
-        for channel in range(fused_img.shape[2]):
-          # Normalize for visualization
-          img = np.clip(fused_img[:, :, channel], 0, 1)
-          # Apply colormaps (matplotlib returns RGBA float [0, 1])
-          img_colored = (self.cmap(img)[:, :, :3] * 255).astype(np.uint8)
+        # Superposed image setup
+        H, W, C = fused_img.shape
+        superposed = np.zeros((H, W, 3), dtype=np.float32)
+        # Distinct colors (RGB)
+        colors = [
+            [1.0, 0.0, 0.0],  # Red
+            [0.0, 1.0, 0.0],  # Green
+            [0.0, 0.0, 1.0],  # Blue
+            [1.0, 1.0, 0.0],  # Yellow
+            [1.0, 0.0, 1.0],  # Magenta
+            [0.0, 1.0, 1.0],  # Cyan
+            [1.0, 0.5, 0.0],  # Orange
+            [0.5, 0.0, 1.0],  # Purple
+        ]
 
-          # Save images (OpenCV expects BGR)
-          cv2.imwrite(
-              str(self.out_dir / f"{idx:06d}_channel{channel:06d}_{status_suffix}.png"),
-              cv2.cvtColor(img_colored, cv2.COLOR_RGB2BGR),
-          )
+        for channel in range(C):
+            # Normalize for visualization
+            img = np.clip(fused_img[:, :, channel], 0, 1)
+
+            # Update superposed image: each channel with alpha 0.5
+            color = np.array(colors[channel % len(colors)])
+            superposed += 0.5 * img[:, :, None] * color
+
+            # Apply colormaps (matplotlib returns RGBA float [0, 1])
+            img_colored = (self.cmap(img)[:, :, :3] * 255).astype(np.uint8)
+
+            # Save images (OpenCV expects BGR)
+            cv2.imwrite(
+                str(self.out_dir / f"{idx:06d}_channel{channel:06d}_{status_suffix}.png"),
+                cv2.cvtColor(img_colored, cv2.COLOR_RGB2BGR),
+            )
+
+        # Save superposed image
+        superposed_img = (np.clip(superposed, 0, 1) * 255).astype(np.uint8)
+        cv2.imwrite(
+            str(self.out_dir / f"{idx:06d}_superposed_{status_suffix}.png"),
+            cv2.cvtColor(superposed_img, cv2.COLOR_RGB2BGR),
+        )

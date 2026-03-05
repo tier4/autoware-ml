@@ -43,7 +43,7 @@ _misalignment: &misalignment
 _fusion: &fusion
   _target_: autoware_ml.transforms.lidar.LidarLidarFusion
   width: 1024
-  height: 512
+  height: 256
   projection: spherical
   max_depth: 80.0
 
@@ -94,7 +94,7 @@ model:
   _target_: autoware_ml.models.calibration_status.CalibrationStatusClassifier
   backbone:
     _target_: autoware_ml.models.common.backbones.resnet.ResNet18
-    in_channels: 8
+    in_channels: 16
   neck:
     _target_: autoware_ml.models.common.necks.global_average_pooling.GlobalAveragePooling
   head:
@@ -113,13 +113,19 @@ model:
     eps: 1e-8
   scheduler:
     _target_: torch.optim.lr_scheduler.CosineAnnealingLR
-    T_max: 1
+    T_max: 20
     eta_min: 1e-8
     last_epoch: -1
 
 trainer:
   # fast_dev_run: true  # runs 1 batch of train/eval/test to confirm no crash
-  profiler: "simple"  # print some profiling data at the end of the run
-  max_epochs: 1
+  # profiler: "simple"  # print some profiling data at the end of the run
+  max_epochs: 30
   gradient_clip_val: 10.0
   gradient_clip_algorithm: norm
+  callbacks:
+    - _target_: pytorch_lightning.callbacks.EarlyStopping
+      monitor: "val/loss"   # The exact name of the metric logged in your validation step
+      mode: "min"           # We want the loss to go down (use "max" if monitoring accuracy)
+      patience: 3           # How many epochs to wait before stopping
+      min_delta: 0.001      # The minimum change required to count as an "improvement"
