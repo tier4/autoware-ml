@@ -4,6 +4,7 @@ defaults:
   - _self_
 
 data_root: ${oc.env:AUTOWARE_ML_DATA_PATH}/t4dataset
+# checkpoint: mlruns/2026-03-06/01-38-50/checkpoints/last.ckpt  # to resume a past run
 
 # Shared configurations
 _misalignment: &misalignment
@@ -46,6 +47,7 @@ _fusion: &fusion
   height: 256
   projection: spherical
   max_depth: 80.0
+  spherical_projection_center_z: 10.0
 
 _permute: &permute
   _target_: autoware_ml.transforms.common.PermuteAxes
@@ -82,13 +84,20 @@ datamodule:
       - *permute
   val_transforms:
     pipeline: &common_pipeline
-      - *misalignment
+      - <<: *misalignment
+        random_seed: 42
       - *fusion
       - *permute
   test_transforms:
-    pipeline: *common_pipeline
+    pipeline: 
+      - <<: *misalignment
+        random_seed: 314
+      - *fusion
+      - *permute
   predict_transforms:
-    pipeline: *common_pipeline
+    pipeline:
+      - *fusion
+      - *permute
 
 model:
   _target_: autoware_ml.models.calibration_status.CalibrationStatusClassifier

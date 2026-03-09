@@ -21,7 +21,6 @@ import numpy.typing as npt
 import transforms3d
 from scipy.stats import truncnorm
 import matplotlib.pyplot as plt
-import random
 
 from autoware_ml.datamodule.t4dataset.lidar_calibration_status import (
     CalibrationData,
@@ -190,6 +189,7 @@ class LidarLidarCalibrationMisalignment(BaseTransform):
     def __init__(
         self,
         p: float,
+        random_seed: int | None = None,
         activate_roll: bool = False,
         activate_pitch: bool = False,
         activate_yaw: bool = False,
@@ -223,6 +223,8 @@ class LidarLidarCalibrationMisalignment(BaseTransform):
     ):
         super().__init__()
 
+        if random_seed is None: random_seed = np.random.randint(0, 1000)
+        self.rng = np.random.RandomState(random_seed)
         self.activate_roll = activate_roll
         self.activate_pitch = activate_pitch
         self.activate_yaw = activate_yaw
@@ -325,7 +327,7 @@ class LidarLidarCalibrationMisalignment(BaseTransform):
         """
         calibration_data: CalibrationData = input_dict["calibration_data"]
         
-        lidar = random.choice(list(calibration_data.ground_truth_baselink_to_lidar.keys()))
+        lidar = self.rng.choice(list(calibration_data.ground_truth_baselink_to_lidar.keys()))
         input_dict["calibration_data"].noise_baselink_to_lidar[lidar] = self.generate_calibration_noise()
 
         points = input_dict["points_per_lidar"][lidar]
@@ -351,13 +353,13 @@ class LidarLidarCalibrationMisalignment(BaseTransform):
 
         a = (min_value - center) / scale
         b = (max_value - center) / scale
-        return truncnorm.rvs(a, b, loc=center, scale=scale)
+        return truncnorm.rvs(a, b, loc=center, scale=scale, random_state=self.rng)
 
     def _sample_component(
         self, min_neg: float, max_neg: float, min_pos: float, max_pos: float
     ) -> float:
         """Sample a component value from either negative or positive range."""
-        use_negative = np.random.rand() > 0.5
+        use_negative = self.rng.rand() > 0.5
 
         if use_negative:
             min_val, max_val = min_neg, max_neg
@@ -469,6 +471,7 @@ class LidarLidarFusion(BaseTransform):
         max_depth: float = 80.0,
         dilation_size: int = 1,
         projection: str = "spherical",
+        spherical_projection_center_z: float = 10.0
 
     ):
         super().__init__()
@@ -479,6 +482,7 @@ class LidarLidarFusion(BaseTransform):
         self.camera_matrix = np.array(
             [[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float32
         )
+        self.spherical_projection_center_z = spherical_projection_center_z
         self.projection = projection
 
 
@@ -499,11 +503,10 @@ class LidarLidarFusion(BaseTransform):
         channel_per_image = 2
         current_channel = 0
         fused = np.zeros((self.height, self.width, channel_per_image * len(points_per_lidar)), dtype=np.float32)
-        avg_lidar_height = np.mean([tf[:,3][2] for tf in calibration.ground_truth_baselink_to_lidar.values()])
         # All points are assumed to be in "base_link" frame
         if self.projection == "spherical":
           for lidar, points in points_per_lidar.items():
-            points[:, 1] += avg_lidar_height
+            points[:, 1] += self.spherical_projection_center_z
             projection = project_spherical(points, self.width, self.height, self.dilation_size)
             fused[:, :, current_channel] = projection[:, :, 0]
             fused[:, :, current_channel+1] = projection[:, :, 1]
