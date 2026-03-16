@@ -74,7 +74,8 @@ def resolve_hydra_argv(config_value: str, config_prefix: str) -> list[str]:
             resolved_config_path,
         ]
 
-    hydra_argv.extend(extra_overrides)
+    if not any(arg.startswith("hydra.searchpath=") for arg in hydra_argv):
+        hydra_argv.extend(extra_overrides)
 
     return hydra_argv
 
