@@ -1,6 +1,6 @@
 # @package _global_
 defaults:
-  - /tasks/calibration_status/resnet18_base
+  - /tasks/calibration_status/calibration_status_classifier/resnet18_base
   - _self_
 
 data_root: ${oc.env:AUTOWARE_ML_DATA_PATH}/nuscenes

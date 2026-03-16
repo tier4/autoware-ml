@@ -61,7 +61,7 @@ logger:
 Or via CLI:
 
 ```bash
-autoware-ml train --config-name my_task/my_model \
+autoware-ml train --config-name my_task/my_model/my_config \
     +logger.tags.experiment=ablation_study
 ```
 
