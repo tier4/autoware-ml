@@ -29,10 +29,10 @@ All arguments after `--config-name` are passed to Hydra as overrides. See [Confi
 
 ```bash
 # Basic training
-autoware-ml train --config-name my_task/my_model
+autoware-ml train --config-name my_task/my_model/my_config
 
 # With overrides
-autoware-ml train --config-name my_task/my_model \
+autoware-ml train --config-name my_task/my_model/my_config \
     trainer.max_epochs=100 \
     model.optimizer.lr=0.0001
 ```
@@ -59,7 +59,7 @@ autoware-ml deploy --config-name <config_path> +checkpoint=<path> [options...]
 
 ```bash
 autoware-ml deploy \
-    --config-name my_task/my_model \
+    --config-name my_task/my_model/my_config \
     +checkpoint=path/to/checkpoint.ckpt
 ```
 

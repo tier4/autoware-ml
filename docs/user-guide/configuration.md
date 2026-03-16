@@ -197,7 +197,7 @@ Configs inherit using the `defaults` key:
 ```yaml
 # @package _global_
 defaults:
-  - /my_task/my_model_base  # Inherit base config
+  - /tasks/my_task/my_model/base  # Inherit base config
   - _self_                        # Apply this file's overrides
 
 # Override specific values
@@ -232,15 +232,15 @@ Override any value from the command line:
 
 ```bash
 # Override existing parameter (no + prefix)
-autoware-ml train --config-name my_task/my_model \
+autoware-ml train --config-name my_task/my_model/my_config \
     trainer.max_epochs=100
 
 # Nested override
-autoware-ml train --config-name my_task/my_model \
+autoware-ml train --config-name my_task/my_model/my_config \
     model.optimizer.lr=0.0005
 
 # Add new parameter (use + prefix)
-autoware-ml train --config-name my_task/my_model \
+autoware-ml train --config-name my_task/my_model/my_config \
     +callbacks.my_callback._target_=lightning.pytorch.callbacks.MyCallback
 ```
 
@@ -251,10 +251,10 @@ autoware-ml train --config-name my_task/my_model \
 
 Create a new YAML file inheriting from a base config:
 
-```yaml title="configs/my_task/my_experiment.yaml"
+```yaml title="configs/tasks/my_task/my_model/my_experiment.yaml"
 # @package _global_
 defaults:
-  - /my_task/my_model_base
+  - /tasks/my_task/my_model/base
   - _self_
 
 trainer:
@@ -268,7 +268,7 @@ model:
 Run with your config:
 
 ```bash
-autoware-ml train --config-name my_task/my_experiment
+autoware-ml train --config-name my_task/my_model/my_experiment
 ```
 
 ## Debugging Configs
@@ -276,13 +276,13 @@ autoware-ml train --config-name my_task/my_experiment
 Print the resolved config without running:
 
 ```bash
-autoware-ml train --config-name my_task/my_model --cfg job
+autoware-ml train --config-name my_task/my_model/my_config --cfg job
 ```
 
 Print a specific section:
 
 ```bash
-autoware-ml train --config-name my_task/my_model \
+autoware-ml train --config-name my_task/my_model/my_config \
     --cfg job --package model
 ```
 
@@ -291,7 +291,7 @@ autoware-ml train --config-name my_task/my_model \
 Run parameter sweeps with `--multirun`:
 
 ```bash
-autoware-ml train --config-name my_task/my_model \
+autoware-ml train --config-name my_task/my_model/my_config \
     --multirun \
     model.optimizer.lr=0.001,0.0005,0.0001
 ```
