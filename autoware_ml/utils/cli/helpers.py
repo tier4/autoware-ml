@@ -123,7 +123,7 @@ def resolve_config_reference(config_value: str, prefix: str) -> tuple[str | None
         relative_to_configs = None
 
     if relative_to_configs is not None:
-        return None, str(relative_to_configs.with_suffix("")), []
+        return None, relative_to_configs.with_suffix("").as_posix(), []
 
     hydra_searchpath_override = "hydra.searchpath=[pkg://autoware_ml.configs]"
     return str(resolved_path.parent), resolved_path.stem, [hydra_searchpath_override]
@@ -133,7 +133,7 @@ def list_config_names(prefix: str) -> list[str]:
     """List bundled config names without YAML suffixes for shell completion."""
     config_root = CONFIGS_ROOT / prefix
     return sorted(
-        str(config_file.relative_to(config_root).with_suffix(""))
+        config_file.relative_to(config_root).with_suffix("").as_posix()
         for config_file in config_root.rglob("*.yaml")
     )
 
@@ -161,7 +161,7 @@ def complete_config_value(incomplete: str, prefix: str) -> list[str]:
 
 
 def _looks_like_path(value: str) -> bool:
-    return not value or value.startswith(("/", "./", "../", "~/"))
+    return value.startswith(("/", "./", "../", "~/"))
 
 
 def _complete_filesystem_path(incomplete: str) -> list[str]:
