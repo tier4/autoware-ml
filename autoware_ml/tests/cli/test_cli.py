@@ -206,6 +206,22 @@ class TestCompleteConfigValue:
 
         assert completions == ["./configs/custom_a.yaml", "./configs/custom_b.yml"]
 
+    def test_no_filesystem_completion_without_path_prefix(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Empty completion input should not enumerate the current directory."""
+        config_root = tmp_path / "tasks" / "calibration_status" / "calibration_status_classifier"
+        config_root.mkdir(parents=True)
+        (config_root / "resnet18_nuscenes.yaml").write_text("", encoding="utf-8")
+        (tmp_path / "local.yaml").write_text("", encoding="utf-8")
+        monkeypatch.setattr(helpers, "CONFIGS_ROOT", tmp_path)
+        monkeypatch.chdir(tmp_path)
+
+        completions = complete_config_value("", "tasks")
+
+        assert "calibration_status/calibration_status_classifier/resnet18_nuscenes" in completions
+        assert "./local.yaml" not in completions
+
 
 class TestAdjustArgv:
     """Tests for adjust_argv."""
