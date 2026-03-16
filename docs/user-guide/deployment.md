@@ -16,7 +16,7 @@ Checkpoint (.ckpt) → ONNX (.onnx) → TensorRT (.engine)
 
 ```bash
 autoware-ml deploy \
-    --config-name my_task/my_model \
+    --config-name my_task/my_model/my_config \
     +checkpoint=path/to/checkpoint.ckpt
 ```
 
@@ -26,7 +26,7 @@ This generates ONNX (`.onnx`) and TensorRT (`.engine`) files.
 
 ```bash
 autoware-ml deploy \
-    --config-name my_task/my_model \
+    --config-name my_task/my_model/my_config \
     +checkpoint=path/to/checkpoint.ckpt \
     output_dir=./deployed \
     output_name=model_v1
@@ -84,7 +84,7 @@ Override deployment settings from CLI:
 
 ```bash
 autoware-ml deploy \
-    --config-name my_task/my_model \
+    --config-name my_task/my_model/my_config \
     +checkpoint=path/to/checkpoint.ckpt \
     deploy.tensorrt.input_shapes.input.opt_shape=[1,3,256,256] \
     deploy.tensorrt.workspace_size=2147483648

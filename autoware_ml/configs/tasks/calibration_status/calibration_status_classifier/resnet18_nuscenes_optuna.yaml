@@ -1,12 +1,12 @@
 # @package _global_
 defaults:
-  - /tasks/calibration_status/resnet18_nuscenes
+  - /tasks/calibration_status/calibration_status_classifier/resnet18_nuscenes
   - override /hydra/sweeper: optuna
   - _self_
 
 hydra:
   sweeper:
-    study_name: calibration_status_resnet18_nuscenes
+    study_name: calibration_status_calibration_status_classifier_resnet18_nuscenes
     direction: minimize
     n_trials: 50
     sampler:

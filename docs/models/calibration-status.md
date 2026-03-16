@@ -84,14 +84,14 @@ autoware-ml create-dataset \
     --out-dir /workspace/data/nuscenes/info
 
 # Train
-autoware-ml train --config-name tasks/calibration_status/resnet18_nuscenes
+autoware-ml train --config-name tasks/calibration_status/calibration_status_classifier/resnet18_nuscenes
 ```
 
 ### Configuration
 
-```yaml title="configs/tasks/calibration_status/resnet18_nuscenes.yaml"
+```yaml title="configs/tasks/calibration_status/calibration_status_classifier/resnet18_nuscenes.yaml"
 defaults:
-  - /tasks/calibration_status/resnet18_base
+  - /tasks/calibration_status/calibration_status_classifier/resnet18_base
   - _self_
 
 data_root: /workspace/data/nuscenes
@@ -107,7 +107,7 @@ datamodule:
 
 ```bash
 autoware-ml deploy \
-    --config-name calibration_status/resnet18_nuscenes \
+    --config-name calibration_status/calibration_status_classifier/resnet18_nuscenes \
     +checkpoint=mlruns/<date>/<time>/checkpoints/last.ckpt
 ```
 
@@ -130,9 +130,9 @@ deploy:
 
 ## Files
 
-| File                                                     | Purpose              |
-| -------------------------------------------------------- | -------------------- |
-| `autoware_ml/models/calibration_status/`                 | Model implementation |
-| `autoware_ml/datamodule/nuscenes/calibration_status.py`  | NuScenes DataModule  |
-| `autoware_ml/datamodule/t4dataset/calibration_status.py` | T4Dataset DataModule |
-| `configs/tasks/calibration_status/`                      | Task configurations  |
+| File                                                              | Purpose              |
+| ----------------------------------------------------------------- | -------------------- |
+| `autoware_ml/models/calibration_status/`                          | Model implementation |
+| `autoware_ml/datamodule/nuscenes/calibration_status.py`           | NuScenes DataModule  |
+| `autoware_ml/datamodule/t4dataset/calibration_status.py`          | T4Dataset DataModule |
+| `configs/tasks/calibration_status/calibration_status_classifier/` | Model configurations |

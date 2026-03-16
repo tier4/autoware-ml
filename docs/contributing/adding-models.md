@@ -197,7 +197,7 @@ __all__ = ["MyDataModule", "MyDataset"]
 
 Create a task config:
 
-```yaml title="configs/my_task/my_model_base.yaml"
+```yaml title="configs/tasks/my_task/my_model/base.yaml"
 # @package _global_
 defaults:
   - /defaults/default_runtime
@@ -251,10 +251,10 @@ trainer:
 
 Create a dataset-specific config:
 
-```yaml title="configs/my_task/my_model_my_dataset.yaml"
+```yaml title="configs/tasks/my_task/my_model/my_config.yaml"
 # @package _global_
 defaults:
-  - /my_task/my_model_base
+  - /tasks/my_task/my_model/base
   - _self_
 
 data_root: /workspace/data/my_dataset
@@ -349,11 +349,11 @@ datamodule:
 
 ```bash
 # Train
-autoware-ml train --config-name my_task/my_model_my_dataset
+autoware-ml train --config-name my_task/my_model/my_config
 
 # Deploy
 autoware-ml deploy \
-    --config-name my_task/my_model_my_dataset \
+    --config-name my_task/my_model/my_config \
     +checkpoint=mlruns/<date>/<time>/checkpoints/last.ckpt
 ```
 

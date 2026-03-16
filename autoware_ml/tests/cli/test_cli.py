@@ -14,7 +14,16 @@
 
 """Unit tests for CLI utilities."""
 
-from autoware_ml.utils.cli import adjust_argv, expand_config_path, parse_extra_args
+from pathlib import Path
+
+from autoware_ml.utils.cli import (
+    adjust_argv,
+    complete_config_value,
+    expand_config_path,
+    parse_extra_args,
+    resolve_config_reference,
+)
+from autoware_ml.utils.cli import helpers
 
 
 class TestParseExtraArgs:
@@ -80,13 +89,122 @@ class TestExpandConfigPath:
 
     def test_expand_short_path(self) -> None:
         """Test that short config path is expanded with prefix."""
-        result = expand_config_path("calibration_status/resnet18_nuscenes", "tasks")
-        assert result == "tasks/calibration_status/resnet18_nuscenes"
+        result = expand_config_path(
+            "calibration_status/calibration_status_classifier/resnet18_nuscenes", "tasks"
+        )
+        assert result == "tasks/calibration_status/calibration_status_classifier/resnet18_nuscenes"
 
     def test_keep_existing_prefix(self) -> None:
         """Test that paths with existing prefix are returned unchanged."""
-        result = expand_config_path("tasks/calibration_status/resnet18_nuscenes", "tasks")
-        assert result == "tasks/calibration_status/resnet18_nuscenes"
+        result = expand_config_path(
+            "tasks/calibration_status/calibration_status_classifier/resnet18_nuscenes", "tasks"
+        )
+        assert result == "tasks/calibration_status/calibration_status_classifier/resnet18_nuscenes"
+
+
+class TestResolveConfigReference:
+    """Tests for resolve_config_reference."""
+
+    def test_resolve_bundled_config_name(self) -> None:
+        """Task shorthands should be expanded under the bundled config prefix."""
+        config_path, config_name, hydra_overrides = resolve_config_reference(
+            "calibration_status/calibration_status_classifier/resnet18_nuscenes", "tasks"
+        )
+        assert config_path is None
+        assert (
+            config_name
+            == "tasks/calibration_status/calibration_status_classifier/resnet18_nuscenes"
+        )
+        assert hydra_overrides == []
+
+    def test_resolve_packaged_yaml_path(self) -> None:
+        """Packaged config paths should resolve back to the bundled Hydra namespace."""
+        config_path, config_name, hydra_overrides = resolve_config_reference(
+            "autoware_ml/configs/tasks/calibration_status/calibration_status_classifier/resnet18_t4dataset.yaml",
+            "tasks",
+        )
+
+        assert config_path is None
+        assert (
+            config_name
+            == "tasks/calibration_status/calibration_status_classifier/resnet18_t4dataset"
+        )
+        assert hydra_overrides == []
+
+    def test_resolve_relative_yaml_path(self, tmp_path: Path, monkeypatch) -> None:
+        """Relative YAML paths should be converted into Hydra config-path/config-name."""
+        config_file = tmp_path / "custom_train.yaml"
+        config_file.write_text("trainer:\n  max_epochs: 1\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        config_path, config_name, hydra_overrides = resolve_config_reference(
+            "./custom_train.yaml", "tasks"
+        )
+
+        assert config_path == str(tmp_path)
+        assert config_name == "custom_train"
+        assert hydra_overrides == ["hydra.searchpath=[pkg://autoware_ml.configs]"]
+
+    def test_resolve_absolute_yaml_path(self, tmp_path: Path) -> None:
+        """Absolute YAML paths should be converted into Hydra config-path/config-name."""
+        config_file = tmp_path / "custom_train.yaml"
+        config_file.write_text("trainer:\n  max_epochs: 1\n", encoding="utf-8")
+
+        config_path, config_name, hydra_overrides = resolve_config_reference(
+            str(config_file), "tasks"
+        )
+
+        assert config_path == str(tmp_path)
+        assert config_name == "custom_train"
+        assert hydra_overrides == ["hydra.searchpath=[pkg://autoware_ml.configs]"]
+
+
+class TestCompleteConfigValue:
+    """Tests for config completion helpers."""
+
+    def test_complete_bundled_configs(self, tmp_path: Path, monkeypatch) -> None:
+        """Bundled task config names should be suggested without YAML suffixes."""
+        config_root = tmp_path / "tasks" / "calibration_status" / "calibration_status_classifier"
+        config_root.mkdir(parents=True)
+        (config_root / "resnet18_nuscenes.yaml").write_text("", encoding="utf-8")
+        (config_root / "resnet18_t4dataset.yaml").write_text("", encoding="utf-8")
+        monkeypatch.setattr(helpers, "CONFIGS_ROOT", tmp_path)
+
+        completions = complete_config_value(
+            "calibration_status/calibration_status_classifier/resnet18_n", "tasks"
+        )
+
+        assert completions == [
+            "calibration_status/calibration_status_classifier/resnet18_nuscenes",
+        ]
+
+    def test_complete_prefixed_bundled_configs(self, tmp_path: Path, monkeypatch) -> None:
+        """Bundled configs should also complete when the tasks/ prefix is included."""
+        config_root = tmp_path / "tasks" / "calibration_status" / "calibration_status_classifier"
+        config_root.mkdir(parents=True)
+        (config_root / "resnet18_nuscenes.yaml").write_text("", encoding="utf-8")
+        monkeypatch.setattr(helpers, "CONFIGS_ROOT", tmp_path)
+
+        completions = complete_config_value(
+            "tasks/calibration_status/calibration_status_classifier/resnet18_n", "tasks"
+        )
+
+        assert completions == [
+            "tasks/calibration_status/calibration_status_classifier/resnet18_nuscenes"
+        ]
+
+    def test_complete_filesystem_yaml_paths(self, tmp_path: Path, monkeypatch) -> None:
+        """Filesystem completion should suggest YAML files for path-like input."""
+        config_dir = tmp_path / "configs"
+        config_dir.mkdir()
+        (config_dir / "custom_a.yaml").write_text("", encoding="utf-8")
+        (config_dir / "custom_b.yml").write_text("", encoding="utf-8")
+        (config_dir / "notes.txt").write_text("", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        completions = complete_config_value("./configs/cus", "tasks")
+
+        assert completions == ["./configs/custom_a.yaml", "./configs/custom_b.yml"]
 
 
 class TestAdjustArgv:
@@ -94,11 +212,16 @@ class TestAdjustArgv:
 
     def test_clean_argv_input(self) -> None:
         """Test that clean argv input is returned unchanged."""
-        argv = ["--config-name", "calibration_status/resnet18_nuscenes", "--batch-size", "32"]
+        argv = [
+            "--config-name",
+            "calibration_status/calibration_status_classifier/resnet18_nuscenes",
+            "--batch-size",
+            "32",
+        ]
         result = adjust_argv(argv)
         assert result == [
             "--config-name",
-            "calibration_status/resnet18_nuscenes",
+            "calibration_status/calibration_status_classifier/resnet18_nuscenes",
             "--batch-size",
             "32",
         ]

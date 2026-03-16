@@ -49,7 +49,7 @@ On the first run, you may wait for a while to install the dependencies.
 4. Press `F5`
 5. Fill in the input fields:
     - Command: Pick available commands from the dropdown
-    - Config: Type the config name e.g. `calibration_status/resnet18_nuscenes`
+    - Config: Type the config name e.g. `calibration_status/calibration_status_classifier/resnet18_nuscenes`
     - Arguments: Type the extra arguments you want to pass to the command e.g. `datamodule.train_dataloader_cfg.batch_size=2 datamodule.val_dataloader_cfg.batch_size=2`
 
 For custom commands, you can add a new launch configuration to `.vscode/launch.json`.
