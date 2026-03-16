@@ -18,7 +18,7 @@ After the download, confirm that the dataset is located at `$AUTOWARE_ML_DATA_PA
 
 ```bash
 cd ~/autoware-ml
-./docker/run.sh
+./docker/container.sh --run
 ```
 
 ## 3. Generate Dataset Info Files
