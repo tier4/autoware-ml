@@ -118,6 +118,7 @@
     "pytestmark",
     "pyproject",
     "randn",
+    "rshared",
     "REUSEADDR",
     "RGBDI",
     "SHOWCOLORHINTS",

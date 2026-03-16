@@ -196,7 +196,7 @@ If all three commands succeed, skip to [Project Setup](#project-setup).
     Then run with:
 
     ```bash
-    ./docker/run.sh --data-path /path/to/your/datasets
+    ./docker/container.sh --run --data-path /path/to/your/datasets
     ```
 
 === "Without Docker"
@@ -250,7 +250,7 @@ source ~/.bashrc
 
 The following files will use this variable to locate your datasets:
 
-- `./docker/run.sh`
+- `./docker/container.sh --run`
 - `.devcontainer/devcontainer.json`
 - Model config files
 
