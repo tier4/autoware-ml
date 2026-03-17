@@ -25,14 +25,12 @@ class LidarFusionApp:
         self.pickle_data = []
         self.selected_frame_data = None
         
-        # 3D Point State (Ego Frame)
-        self.lidar1_raw_pts = None
-        self.lidar2_raw_pts = None
-        self.lidar1_pts = None
-        self.lidar2_pts = None
+        # 3D Point State (Ego Frame) - Dictionaries keyed by source name
+        self.lidar_raw_pts_dict = {}
+        self.lidar_pts_dict = {}
+        self.lidar_ext_dict = {}
         self.combined_pts = None
-        self.lidar1_ext = None
-        self.lidar2_ext = None
+        self.combined_colors = None
         self.current_frame_id = ""
         
         # Default Parameters
@@ -46,7 +44,23 @@ class LidarFusionApp:
         self.noise_vars = {}
         self.method_var = tk.StringVar(value="global")
         self.apply_transforms_var = tk.BooleanVar(value=False)
+        self.lidar_enabled_vars = {} # dict of BooleanVars
+        self.ref_lidar_var = tk.StringVar()
+        self.src_lidar_var = tk.StringVar()
         
+        # Color Palette
+        self.palette = [
+            [255, 50, 50],   # Red
+            [50, 150, 255],  # Blue
+            [50, 255, 50],   # Green
+            [255, 255, 50],  # Yellow
+            [255, 50, 255],  # Magenta
+            [50, 255, 255],  # Cyan
+            [255, 128, 0],   # Orange
+            [128, 0, 255],   # Purple
+        ]
+        self.lidar_colors = {} # dict of colors
+
         # Debouncing state
         self.debounce_id = None
 
@@ -74,28 +88,53 @@ class LidarFusionApp:
     def update_3d_scene(self):
         """Applies 3D transforms to LiDAR points and logs them. Cascades to camera update."""
         self.debounce_id = None
-        if self.lidar1_raw_pts is None or self.lidar2_raw_pts is None:
+        if not self.lidar_raw_pts_dict:
             return
 
-        # 1. Base Alignment (Optional)
         apply_tx = self.apply_transforms_var.get()
-        if apply_tx:
-            self.lidar1_pts = self.apply_transformation(self.lidar1_raw_pts, self.lidar1_ext['R'], self.lidar1_ext['T'])
-            self.lidar2_pts = self.apply_transformation(self.lidar2_raw_pts, self.lidar2_ext['R'], self.lidar2_ext['T'])
-        else:
-            self.lidar1_pts = self.lidar1_raw_pts.copy()
-            self.lidar2_pts = self.lidar2_raw_pts.copy()
+        src_to_noise = self.src_lidar_var.get()
         
-        # 2. Apply Noise to LiDAR 2 (Applied in Ego Frame)
+        # 1. Noise Matrix
         noise_vals = [self.noise_vars[d].get() for d in ['X', 'Y', 'Z', 'Roll', 'Pitch', 'Yaw']]
         M_noise = self.get_4x4_matrix(noise_vals[:3], noise_vals[3:])
-        self.lidar2_pts = self.apply_transformation(self.lidar2_pts, M_noise[:3, :3], M_noise[:3, 3])
-        
-        self.combined_pts = np.vstack([self.lidar1_pts, self.lidar2_pts])
 
-        # 3. Log 3D to Rerun
-        rr.log("world/lidar1", rr.Points3D(self.lidar1_pts, colors=[255, 50, 50]), static=True)
-        rr.log("world/lidar2", rr.Points3D(self.lidar2_pts, colors=[50, 150, 255]), static=True)
+        all_enabled_pts = []
+        all_enabled_colors = []
+
+        rr.log("world", rr.Clear(recursive=True), static=True)
+
+        for name, raw_pts in self.lidar_raw_pts_dict.items():
+            if not self.lidar_enabled_vars[name].get():
+                continue
+
+            # 1. Base Alignment (Optional)
+            if apply_tx:
+                ext = self.lidar_ext_dict[name]
+                pts = self.apply_transformation(raw_pts, ext['R'], ext['T'])
+            else:
+                pts = raw_pts.copy()
+            
+            # 2. Apply Noise to selected Source LiDAR (Applied in Ego Frame)
+            if name == src_to_noise:
+                pts = self.apply_transformation(pts, M_noise[:3, :3], M_noise[:3, 3])
+            
+            self.lidar_pts_dict[name] = pts
+            color = self.lidar_colors[name]
+            
+            # 3. Log to Rerun
+            rr.log(f"world/{name}", rr.Points3D(pts, colors=color), static=True)
+            
+            all_enabled_pts.append(pts)
+            # Create color array for these points
+            pts_colors = np.tile(np.array(color, dtype=np.uint8), (len(pts), 1))
+            all_enabled_colors.append(pts_colors)
+
+        if all_enabled_pts:
+            self.combined_pts = np.vstack(all_enabled_pts)
+            self.combined_colors = np.vstack(all_enabled_colors)
+        else:
+            self.combined_pts = None
+            self.combined_colors = None
 
         # 4. Cascade to camera and projection logic
         self.update_camera_and_projections()
@@ -159,17 +198,8 @@ class LidarFusionApp:
                 valid_uv = (u >= 0) & (u < w) & (v >= 0) & (v < h)
                 if np.any(valid_uv):
                     u, v = u[valid_uv], v[valid_uv]
-                    
-                    # Distinguish lidar1 and lidar2 for coloring
-                    n1 = len(self.lidar1_pts)
-                    orig_indices = np.where(valid)[0][valid_uv]
-                    is_lidar1 = orig_indices < n1
-                    
+                    colors = self.combined_colors[valid][valid_uv]
                     points_2d = np.column_stack([u, v])
-                    colors = np.zeros((len(points_2d), 3), dtype=np.uint8)
-                    colors[is_lidar1] = [255, 50, 50]
-                    colors[~is_lidar1] = [50, 150, 255]
-                    
                     rr.log("world/camera/image/projections/perspective", rr.Points2D(points_2d, colors=colors), static=True)
 
     # ==========================================
@@ -239,42 +269,35 @@ class LidarFusionApp:
         return points @ R.T + T
 
     def gicp_align(self):
-        if self.lidar1_pts is None or self.lidar2_pts is None:
-            messagebox.showerror("Error", "LiDAR points not loaded.")
+        ref_name = self.ref_lidar_var.get()
+        src_name = self.src_lidar_var.get()
+        
+        if ref_name not in self.lidar_pts_dict or src_name not in self.lidar_pts_dict:
             return
-        # Align lidar2 to lidar1
-        result = small_gicp.align(self.lidar1_pts, self.lidar2_pts)
+            
+        ref_pts = self.lidar_pts_dict[ref_name]
+        src_pts = self.lidar_pts_dict[src_name]
+        
+        # Align src to ref
+        result = small_gicp.align(ref_pts, src_pts)
         
         # Log the error to Rerun for the plot
         if hasattr(result, "error"):
             rr.log("metrics/gicp_error", rr.Scalars(result.error))
         
-        print("GICP Result Transformation Matrix:")
+        print(f"GICP Result Alignment: {src_name} -> {ref_name}")
         # Compute stats from the Hessian
-        # 1. Extract the 4x4 transformation matrix
         T = result.T_target_source
-
-        # 2. Isolate the translation vector (x, y, z)
-        # This takes the first 3 rows of the 4th column
         t = T[0:3, 3] 
-
-        # 3. Isolate the 3x3 rotation matrix
         rot_mat = T[0:3, 0:3]
         print("translation: ", t)
         rpy = Rotation.from_matrix(rot_mat).as_euler('xyz', degrees=True)
         print(f"rotation (Roll, Pitch, Yaw) [deg]: {rpy}")
 
-        # 4. Convert the rotation matrix to a rotation vector (rx, ry, rz)
-        # This represents the rotation axis multiplied by the rotation angle
         r = Rotation.from_matrix(rot_mat).as_rotvec()
-
-        # 5. Concatenate them to form the 6D drift vector
-        # Order is typically [tx, ty, tz, rx, ry, rz] to match the Hessian blocks
         drift_vector = np.concatenate([t, r])
-        # Add a small epsilon to the diagonal for numerical stability before inverting
         hessian_matrix = result.H
-        covariance_matrix = np.linalg.inv(hessian_matrix + np.eye(6) * 1e-6) 
-    
+        
         # Mahalanobis Distance: D^2 = x^T * H * x
         mahalanobis_dist = drift_vector.T @ hessian_matrix @ drift_vector
     
@@ -307,7 +330,7 @@ class LidarFusionApp:
         self.frame_combo.bind("<<ComboboxSelected>>", self.on_frame_selected)
         self.frame_combo.pack(fill=tk.X, pady=5)
 
-        ttk.Label(self.setup_frame, text="4. Select Exactly 2 LiDAR Sources").pack(anchor="w", pady=(10, 0))
+        ttk.Label(self.setup_frame, text="4. Select LiDAR Sources").pack(anchor="w", pady=(10, 0))
         self.lidar_listbox = tk.Listbox(self.setup_frame, selectmode=tk.MULTIPLE, height=8)
         self.lidar_listbox.pack(fill=tk.BOTH, expand=True, pady=5)
 
@@ -357,15 +380,14 @@ class LidarFusionApp:
 
     def process_and_launch(self):
         selections = self.lidar_listbox.curselection()
-        if len(selections) != 2:
-            messagebox.showerror("Error", "Please select exactly 2 LiDAR sources.")
+        if not selections:
+            messagebox.showerror("Error", "Please select at least 1 LiDAR source.")
             return
 
-        src1 = self.lidar_listbox.get(selections[0])
-        src2 = self.lidar_listbox.get(selections[1])
+        selected_sources = [self.lidar_listbox.get(i) for i in selections]
 
         try:
-            self.extract_and_transform_points(src1, src2)
+            self.extract_and_transform_points(selected_sources)
             self.setup_frame.destroy()
             rr.init("LiDAR_Miscalibration", spawn=True)
             setup_rerun_layout()
@@ -374,8 +396,8 @@ class LidarFusionApp:
         except Exception as e:
             messagebox.showerror("Processing Error", str(e))
 
-    def extract_and_transform_points(self, src1, src2):
-        """Extracts points from BIN using JSON indices and stores them with their extrinsics."""
+    def extract_and_transform_points(self, selected_sources):
+        """Extracts points from BIN using JSON indices and stores them in dictionaries."""
         lidar_path = self.selected_frame_data['lidar_points']['lidar_path']
         abs_bin_path = os.path.join(self.dataset_root, lidar_path)
         abs_json_path = abs_bin_path.replace("LIDAR_CONCAT", "LIDAR_CONCAT_INFO").replace(".pcd.bin", ".json")
@@ -384,26 +406,43 @@ class LidarFusionApp:
             raise FileNotFoundError(f"Missing BIN or JSON file.\nLooked for:\n{abs_bin_path}\n{abs_json_path}")
 
         sources_dict = self.selected_frame_data['lidar_sources']
-        self.lidar1_ext = {'R': np.array(sources_dict[src1]['rotation']), 'T': np.array(sources_dict[src1]['translation'])}
-        self.lidar2_ext = {'R': np.array(sources_dict[src2]['rotation']), 'T': np.array(sources_dict[src2]['translation'])}
-
+        
         with open(abs_json_path, 'r') as f:
             info = json.load(f)
-
-        token1, token2 = sources_dict[src1]['sensor_token'], sources_dict[src2]['sensor_token']
-        idx_len_1 = idx_len_2 = None
-        for s in info['sources']:
-            if s['sensor_token'] == token1: idx_len_1 = (s['idx_begin'], s['length'])
-            if s['sensor_token'] == token2: idx_len_2 = (s['idx_begin'], s['length'])
 
         raw_data = np.fromfile(abs_bin_path, dtype=np.float32)
         total_pts = sum(s['length'] for s in info['sources'])
         num_features = len(raw_data) // total_pts
         points_nx3 = raw_data.reshape(-1, num_features)[:, :3]
 
-        self.lidar1_raw_pts = points_nx3[idx_len_1[0] : idx_len_1[0] + idx_len_1[1]]
-        self.lidar2_raw_pts = points_nx3[idx_len_2[0] : idx_len_2[0] + idx_len_2[1]]
-        self.current_frame_id = f"{lidar_path}_{src1}_{src2}"
+        self.lidar_raw_pts_dict = {}
+        self.lidar_ext_dict = {}
+        self.lidar_enabled_vars = {}
+        self.lidar_colors = {}
+
+        for i, src in enumerate(selected_sources):
+            token = sources_dict[src]['sensor_token']
+            idx_len = None
+            for s in info['sources']:
+                if s['sensor_token'] == token:
+                    idx_len = (s['idx_begin'], s['length'])
+                    break
+            
+            if idx_len:
+                self.lidar_raw_pts_dict[src] = points_nx3[idx_len[0] : idx_len[0] + idx_len[1]]
+                self.lidar_ext_dict[src] = {
+                    'R': np.array(sources_dict[src]['rotation']),
+                    'T': np.array(sources_dict[src]['translation'])
+                }
+                self.lidar_enabled_vars[src] = tk.BooleanVar(value=True)
+                self.lidar_colors[src] = self.palette[i % len(self.palette)]
+
+        # Set default Ref/Src for GICP
+        if len(selected_sources) >= 1:
+            self.ref_lidar_var.set(selected_sources[0])
+            self.src_lidar_var.set(selected_sources[1] if len(selected_sources) > 1 else selected_sources[0])
+            
+        self.current_frame_id = lidar_path
 
     # ==========================================
     # STEP 2: TKINTER CONTROL PANEL (MAIN UI)
@@ -412,6 +451,27 @@ class LidarFusionApp:
         """Builds the parameter control panel after data is loaded."""
         self.control_frame = ttk.Frame(self.root, padding=10)
         self.control_frame.pack(fill=tk.BOTH, expand=True)
+
+        # 0. LiDAR Visibility & Selection
+        visibility_lf = ttk.LabelFrame(self.control_frame, text="LiDAR Sources (Toggles & Calibration Pairs)", padding=10)
+        visibility_lf.pack(fill=tk.X, pady=5)
+        
+        toggles_f = ttk.Frame(visibility_lf)
+        toggles_f.pack(fill=tk.X)
+        for name, var in self.lidar_enabled_vars.items():
+            ttk.Checkbutton(toggles_f, text=name, variable=var, command=self.trigger_3d_update).pack(side=tk.LEFT, padx=5)
+
+        pairs_f = ttk.Frame(visibility_lf)
+        pairs_f.pack(fill=tk.X, pady=(5, 0))
+        ttk.Label(pairs_f, text="Ref (Target):").pack(side=tk.LEFT)
+        ref_cb = ttk.Combobox(pairs_f, textvariable=self.ref_lidar_var, values=list(self.lidar_raw_pts_dict.keys()), state="readonly", width=15)
+        ref_cb.pack(side=tk.LEFT, padx=5)
+        ref_cb.bind("<<ComboboxSelected>>", self.trigger_3d_update)
+        
+        ttk.Label(pairs_f, text="Src (Calib):").pack(side=tk.LEFT)
+        src_cb = ttk.Combobox(pairs_f, textvariable=self.src_lidar_var, values=list(self.lidar_raw_pts_dict.keys()), state="readonly", width=15)
+        src_cb.pack(side=tk.LEFT, padx=5)
+        src_cb.bind("<<ComboboxSelected>>", self.trigger_3d_update)
 
         # 1. Extrinsics (Trigger Camera Update)
         ext_lf = ttk.LabelFrame(self.control_frame, text="Virtual Camera Extrinsics (Ego Frame)", padding=10)
@@ -427,7 +487,7 @@ class LidarFusionApp:
             self.ext_vars[dim] = var
 
         # 2. Noise Transform (Trigger 3D Update)
-        noise_lf = ttk.LabelFrame(self.control_frame, text="LiDAR 2 Noise Transform (Ego Frame)", padding=10)
+        noise_lf = ttk.LabelFrame(self.control_frame, text="Noise Transform (Applied to 'Src' LiDAR)", padding=10)
         noise_lf.pack(fill=tk.X, pady=5)
         for i, dim in enumerate(['X', 'Y', 'Z', 'Roll', 'Pitch', 'Yaw']):
             ttk.Label(noise_lf, text=dim).grid(row=i//2, column=(i%2)*2, sticky="e", padx=5)
@@ -510,22 +570,24 @@ class LidarFusionApp:
             messagebox.showinfo("Saved", "Configuration saved successfully!")
 
     def set_front_view(self):
-        """Places camera between lidars looking at the normal of the connecting line."""
-        if self.lidar1_ext is None or self.lidar2_ext is None:
-            messagebox.showerror("Error", "Please load data first.")
+        """Places camera between ref and src lidars."""
+        ref_name = self.ref_lidar_var.get()
+        src_name = self.src_lidar_var.get()
+        
+        if ref_name not in self.lidar_ext_dict or src_name not in self.lidar_ext_dict:
+            messagebox.showerror("Error", "Please select valid Ref/Src LiDARs.")
             return
         
-        p1 = self.lidar1_ext['T']
-        p2 = self.lidar2_ext['T']
+        p1 = self.lidar_ext_dict[ref_name]['T']
+        p2 = self.lidar_ext_dict[src_name]['T']
         
         # Midpoint position
         t_cam = (p1 + p2) / 2.0
         
-        # Vector from lidar1 to lidar2
+        # Vector from p1 to p2
         v = p2 - p1
         
         # Normal to the line in XY plane: (dx, dy) -> (-dy, dx)
-        # Angle of the normal vector
         yaw = np.arctan2(v[0], -v[1]) 
         
         self.ext_vars['X'].set(round(t_cam[0], 2))
@@ -538,9 +600,6 @@ class LidarFusionApp:
 
     def set_top_view(self):
         """Bird's eye view covering lateral [-10, 10] and longitudinal [-10, 100]."""
-        # Center of x [-10, 10] and y [-10, 100] in nuScenes Ego
-        # Center: x=45 (longitudinal), y=0 (lateral). Height=100.
-        # Orientation: Looking Down, Forward is Up in image.
         self.ext_vars['X'].set(45.0)
         self.ext_vars['Y'].set(0.0)
         self.ext_vars['Z'].set(100.0)
@@ -550,9 +609,7 @@ class LidarFusionApp:
         
         w = self.int_vars['width'].get()
         h = self.int_vars['height'].get()
-        # fx fits 20m lateral (nuScenes Y) -> width w
         fx = (w / 2.0) / (10.0 / 100.0)
-        # fy fits 110m longitudinal (nuScenes X) -> height h
         fy = (h / 2.0) / (55.0 / 100.0)
         
         f = min(fx, fy)
