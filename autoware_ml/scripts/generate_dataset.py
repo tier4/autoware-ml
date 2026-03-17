@@ -2,7 +2,7 @@ import logging
 
 from pathlib import Path
 import hydra
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 import autoware_ml.configs
 
@@ -22,9 +22,9 @@ def main(cfg: DictConfig):
     logger.info("=" * 80)
     logger.info("Configuration:")
     logger.info("=" * 80)
-    # logger.info(OmegaConf.to_yaml(cfg))
+    logger.info(OmegaConf.to_yaml(cfg))
     logger.info("=" * 80)
-    logger.info(cfg)
+    # logger.info(cfg)
 
 
 if __name__ == "__main__":
