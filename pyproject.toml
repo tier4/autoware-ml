@@ -36,6 +36,8 @@ dependencies = [
     "torch==2.9.1+cu128",
     "torchvision==0.24.1+cu128",
     "transforms3d>=0.4.0",
+    "polars==1.38.1",
+    "pydantic==2.12.5"
 ]
 
 [project.optional-dependencies]
