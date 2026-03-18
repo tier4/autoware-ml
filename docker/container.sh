@@ -31,8 +31,10 @@ WORKSPACE_ROOT="$SCRIPT_DIR/.."
 option_headless=false
 option_detached=false
 option_pull_latest_image=false
+option_run=false
 option_exec=false
 option_stop=false
+GPU_SPEC="all"
 DATA_PATH=""
 WORKSPACE=""
 MEMORY_CONFIG=""
@@ -45,14 +47,16 @@ LOCALTIME_MOUNT=""
 # Function to print help message
 print_help() {
     echo -e "\n------------------------------------------------------------"
-    echo -e "${RED}Usage:${NC} run.sh [OPTIONS]"
+    echo -e "${RED}Usage:${NC} container.sh (--run | --exec | --stop) [OPTIONS]"
     echo -e "Options:"
     echo -e "  ${GREEN}--help/-h${NC}            Display this help message"
     echo -e "  ${GREEN}--data-path${NC}          Specify the path to mount data files into /workspace/data (overrides AUTOWARE_ML_DATA_PATH if set)"
     echo -e "  ${GREEN}--headless${NC}           Run Autoware-ML in headless mode (default: false)"
-    echo -e "  ${GREEN}--detached${NC}           Run Autoware-ML in detached mode (default: false)"
+    echo -e "  ${GREEN}--detached${NC}           Start the container in detached mode, then enter it automatically"
+    echo -e "  ${GREEN}--gpus${NC}               Specify GPU devices for Docker (default: all, e.g. all or device=0,1)"
     echo -e "  ${GREEN}--pull-latest-image${NC}  Pull the latest image before starting the container"
-    echo -e "  ${GREEN}--exec${NC}               Enter an existing running container instead of creating a new one"
+    echo -e "  ${GREEN}--run${NC}                Create and start a new container"
+    echo -e "  ${GREEN}--exec${NC}               Enter an existing running container"
     echo -e "  ${GREEN}--stop${NC}               Stop a running container"
     echo ""
 }
@@ -63,7 +67,7 @@ parse_arguments() {
         case "$1" in
         --help | -h)
             print_help
-            exit 1
+            exit 0
             ;;
         --headless)
             option_headless=true
@@ -71,8 +75,16 @@ parse_arguments() {
         --detached)
             option_detached=true
             ;;
+        --gpus)
+            validate_option_value "--gpus" "$2"
+            GPU_SPEC="$2"
+            shift
+            ;;
         --pull-latest-image)
             option_pull_latest_image=true
+            ;;
+        --run)
+            option_run=true
             ;;
         --exec)
             option_exec=true
@@ -81,6 +93,7 @@ parse_arguments() {
             option_stop=true
             ;;
         --data-path)
+            validate_option_value "--data-path" "$2"
             DATA_PATH="$2"
             shift
             ;;
@@ -97,6 +110,41 @@ parse_arguments() {
         esac
         shift
     done
+}
+
+validate_option_value() {
+    local option_name="$1"
+    local option_value="$2"
+
+    if [ -z "$option_value" ] || [[ $option_value == -* ]]; then
+        echo -e "${RED}Error: ${option_name} requires a value.${NC}"
+        print_help
+        exit 1
+    fi
+}
+
+validate_actions() {
+    local action_count=0
+
+    [ "$option_run" = "true" ] && action_count=$((action_count + 1))
+    [ "$option_exec" = "true" ] && action_count=$((action_count + 1))
+    [ "$option_stop" = "true" ] && action_count=$((action_count + 1))
+
+    if [ "$action_count" -eq 0 ]; then
+        echo -e "${RED}Error: One action is required: --run, --exec, or --stop.${NC}"
+        print_help
+        exit 1
+    fi
+
+    if [ "$action_count" -gt 1 ]; then
+        echo -e "${RED}Error: Specify only one action: --run, --exec, or --stop.${NC}"
+        print_help
+        exit 1
+    fi
+}
+
+container_is_running() {
+    docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"
 }
 
 # Set the docker image and workspace variables
@@ -155,10 +203,10 @@ set_user_config() {
 # Execute into an existing running container
 exec_container() {
     # Check if container exists and is running
-    if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+    if ! container_is_running; then
         echo -e "${RED}Error: Container '${CONTAINER_NAME}' is not running.${NC}"
         echo -e "${ORANGE}For usage instructions, run:${NC}"
-        echo -e "  ${ORANGE}./docker/run.sh --help${NC}"
+        echo -e "  ${ORANGE}./docker/container.sh --help${NC}"
         exit 1
     fi
 
@@ -171,10 +219,25 @@ exec_container() {
     docker exec -it -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" "${CONTAINER_NAME}" /entrypoint.sh bash
 }
 
+wait_for_container() {
+    local retries=10
+
+    while [ "$retries" -gt 0 ]; do
+        if container_is_running; then
+            return 0
+        fi
+        sleep 1
+        retries=$((retries - 1))
+    done
+
+    echo -e "${RED}Error: Container '${CONTAINER_NAME}' did not become ready in time.${NC}"
+    exit 1
+}
+
 # Stop a running container
 stop_container() {
     # Check if container exists and is running
-    if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+    if ! container_is_running; then
         echo -e "${RED}Error: Container '${CONTAINER_NAME}' is not running.${NC}"
         exit 1
     fi
@@ -186,6 +249,14 @@ stop_container() {
 
     docker stop "${CONTAINER_NAME}"
     echo -e "${GREEN}Container stopped successfully.${NC}"
+}
+
+print_run_command() {
+    echo docker run -it --rm --net=host --gpus "${GPU_SPEC}" ${MODE} ${MEMORY_CONFIG} ${MOUNT_X} \
+        -e XAUTHORITY="${XAUTHORITY}" -e NVIDIA_DRIVER_CAPABILITIES=all \
+        -e TZ="$(cat /etc/timezone)" \
+        ${USER_ENV} \
+        ${LOCALTIME_MOUNT} ${WORKSPACE} ${DATA} ${CONTAINER} ${IMAGE}
 }
 
 # Run a new container
@@ -204,24 +275,30 @@ run() {
     fi
 
     # Launch the container
-    set -x
-    docker run -it --rm --net=host --gpus all ${MODE} ${MEMORY_CONFIG} ${MOUNT_X} \
+    print_run_command
+    docker run -it --rm --net=host --gpus "${GPU_SPEC}" ${MODE} ${MEMORY_CONFIG} ${MOUNT_X} \
         -e XAUTHORITY=${XAUTHORITY} -e NVIDIA_DRIVER_CAPABILITIES=all \
         -e TZ="$(cat /etc/timezone)" \
         ${USER_ENV} \
         ${LOCALTIME_MOUNT} ${WORKSPACE} ${DATA} ${CONTAINER} ${IMAGE}
+
+    if [ "$option_detached" = "true" ]; then
+        wait_for_container
+        exec_container
+    fi
 }
 
 # Main script execution
 main() {
     parse_arguments "$@"
+    validate_actions
     set_variables
 
     if [ "$option_stop" = "true" ]; then
         stop_container
     elif [ "$option_exec" = "true" ]; then
         exec_container
-    else
+    elif [ "$option_run" = "true" ]; then
         run
     fi
 }

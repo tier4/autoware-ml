@@ -18,7 +18,7 @@ After the download, confirm that the dataset is located at `$AUTOWARE_ML_DATA_PA
 
 ```bash
 cd ~/autoware-ml
-./docker/run.sh
+./docker/container.sh --run
 ```
 
 ## 3. Generate Dataset Info Files
@@ -39,7 +39,7 @@ This creates pickle files for train/val splits.
 ## 4. Train the Model
 
 ```bash
-autoware-ml train --config-name calibration_status/resnet18_nuscenes
+autoware-ml train --config-name calibration_status/calibration_status_classifier/resnet18_nuscenes
 ```
 
 Training progress appears in your terminal. Checkpoints are saved automatically.
@@ -56,7 +56,7 @@ Open [http://localhost:5000](http://localhost:5000) to view loss curves, metrics
 
 ```bash
 autoware-ml deploy \
-    --config-name calibration_status/resnet18_nuscenes \
+    --config-name calibration_status/calibration_status_classifier/resnet18_nuscenes \
     +checkpoint=mlruns/<date>/<time>/checkpoints/best.ckpt
 ```
 

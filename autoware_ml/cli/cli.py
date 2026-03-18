@@ -16,11 +16,18 @@
 
 import sys
 from importlib.metadata import version
+from typing import Any
 
 import typer
 from typing_extensions import Annotated
 
-from autoware_ml.utils.cli import adjust_argv, expand_config_path, parse_extra_args, run_lazy_script
+from autoware_ml.utils.cli import (
+    adjust_argv,
+    complete_config_value,
+    parse_extra_args,
+    resolve_config_reference,
+    run_lazy_script,
+)
 
 app = typer.Typer(
     name="autoware-ml",
@@ -47,21 +54,52 @@ def main_callback(
         raise typer.Exit()
 
 
+def complete_task_config(_ctx: Any, _param: Any, incomplete: str) -> list[str]:
+    """Shell completion for bundled task configs and filesystem config paths."""
+    return complete_config_value(incomplete, "tasks")
+
+
+def resolve_hydra_argv(config_value: str, config_prefix: str) -> list[str]:
+    """Rewrite CLI argv for Hydra config handling."""
+    hydra_argv = adjust_argv(sys.argv[2:])
+    resolved_config_path, resolved_config_name, extra_overrides = resolve_config_reference(
+        config_value, config_prefix
+    )
+    config_name_index = hydra_argv.index("--config-name")
+    hydra_argv[config_name_index + 1] = resolved_config_name
+
+    if resolved_config_path is not None:
+        hydra_argv[config_name_index + 2 : config_name_index + 2] = [
+            "--config-path",
+            resolved_config_path,
+        ]
+
+    if not any(arg.startswith("hydra.searchpath=") for arg in hydra_argv):
+        hydra_argv.extend(extra_overrides)
+
+    return hydra_argv
+
+
 @app.command(
     name="train",
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )
 def train(
-    config_name: Annotated[str, typer.Option("--config-name", help="Config name")],
+    config_name: Annotated[
+        str,
+        typer.Option(
+            "--config-name",
+            help="Config name or YAML config path",
+            shell_complete=complete_task_config,
+        ),
+    ],
 ) -> None:
     """Train models using PyTorch Lightning.
 
     Requires config name, all other arguments are passed to Hydra.
     """
     assert config_name is not None, "Config name is required"
-    expanded_config_name = expand_config_path(config_name, "tasks")
-    sys.argv = [sys.argv[0]] + adjust_argv(sys.argv[2:])
-    sys.argv[sys.argv.index("--config-name") + 1] = expanded_config_name
+    sys.argv = [sys.argv[0]] + resolve_hydra_argv(config_name, "tasks")
 
     run_lazy_script("autoware_ml.scripts.train", "main")
 
@@ -71,7 +109,14 @@ def train(
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )
 def deploy(
-    config_name: Annotated[str, typer.Option("--config-name", help="Config name")],
+    config_name: Annotated[
+        str,
+        typer.Option(
+            "--config-name",
+            help="Config name or YAML config path",
+            shell_complete=complete_task_config,
+        ),
+    ],
     checkpoint: Annotated[str, typer.Option("+checkpoint", help="Checkpoint path")],
 ) -> None:
     """Export models to ONNX and TensorRT.
@@ -80,22 +125,23 @@ def deploy(
     """
     assert config_name is not None, "Config name is required"
     assert checkpoint is not None, "Checkpoint path is required"
-    expanded_config_name = expand_config_path(config_name, "tasks")
-    sys.argv = [sys.argv[0]] + adjust_argv(sys.argv[2:])
-    sys.argv[sys.argv.index("--config-name") + 1] = expanded_config_name
+    sys.argv = [sys.argv[0]] + resolve_hydra_argv(config_name, "tasks")
 
     run_lazy_script("autoware_ml.scripts.deploy", "main")
 
 
 @app.command(name="mlflow-ui")
 def mlflow_ui(
+    host: Annotated[str, typer.Option("--host", "-h", help="Host to listen on")] = "0.0.0.0",
     port: Annotated[int, typer.Option("--port", "-p", help="Port to listen on")] = 5000,
     db_path: Annotated[
-        str | None, typer.Option("--db-path", help="Path to SQLite backend store file")
-    ] = None,
+        str, typer.Option("--db-path", help="Path to SQLite backend store file")
+    ] = "mlruns/mlflow.db",
 ) -> None:
     """Launch MLflow UI."""
-    run_lazy_script("autoware_ml.scripts.mlflow_ui", "run_mlflow_ui", port=port, db_path=db_path)
+    run_lazy_script(
+        "autoware_ml.scripts.mlflow_ui", "run_mlflow_ui", host=host, port=port, db_path=db_path
+    )
 
 
 @app.command(

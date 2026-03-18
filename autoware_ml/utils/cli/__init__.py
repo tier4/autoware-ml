@@ -16,9 +16,20 @@
 
 from autoware_ml.utils.cli.helpers import (
     adjust_argv,
+    complete_config_value,
     expand_config_path,
+    list_config_names,
     parse_extra_args,
+    resolve_config_reference,
     run_lazy_script,
 )
 
-__all__ = ["adjust_argv", "expand_config_path", "parse_extra_args", "run_lazy_script"]
+__all__ = [
+    "adjust_argv",
+    "complete_config_value",
+    "expand_config_path",
+    "list_config_names",
+    "parse_extra_args",
+    "resolve_config_reference",
+    "run_lazy_script",
+]
