@@ -1,0 +1,150 @@
+# @package _global_
+defaults:
+  - /defaults/default_runtime
+  - _self_
+
+data_root: ${oc.env:AUTOWARE_ML_DATA_PATH}/t4dataset
+# checkpoint: mlruns/2026-03-06/01-38-50/checkpoints/last.ckpt  # to resume a past run
+
+# Shared configurations
+_misalignment: &misalignment
+  _target_: autoware_ml.transforms.lidar.LidarLidarCalibrationMisalignment
+  p: 0.5
+  activate_roll: true
+  activate_pitch: true
+  activate_yaw: true
+  activate_x: true
+  activate_y: true
+  activate_z: true
+  min_roll_neg: 0.5
+  max_roll_neg: 1.0
+  min_roll_pos: 0.5
+  max_roll_pos: 1.0
+  min_pitch_neg: 0.5
+  max_pitch_neg: 1.0
+  min_pitch_pos: 0.5
+  max_pitch_pos: 1.0
+  min_yaw_neg: 0.5
+  max_yaw_neg: 1.0
+  min_yaw_pos: 0.5
+  max_yaw_pos: 1.0
+  min_x_neg: 0.2
+  max_x_neg: 0.5
+  min_x_pos: 0.2
+  max_x_pos: 0.5
+  min_y_neg: 0.2
+  max_y_neg: 0.5
+  min_y_pos: 0.2
+  max_y_pos: 0.5
+  min_z_neg: 0.2
+  max_z_neg: 0.5
+  min_z_pos: 0.2
+  max_z_pos: 0.5
+
+_fusion: &fusion
+  _target_: autoware_ml.transforms.lidar.LidarLidarFusion
+  width: 1024
+  height: 256
+  projection: spherical
+  max_depth: 80.0
+  spherical_projection_center_z: 10.0
+
+_permute: &permute
+  _target_: autoware_ml.transforms.common.PermuteAxes
+  input_keys: [fused_img]
+  axes: [2, 0, 1]
+
+_dataloader: &dataloader
+  batch_size: 8
+  num_workers: 4
+
+datamodule:
+  _target_: autoware_ml.datamodule.t4dataset.lidar_calibration_status.T4LidarCalibrationDataModule
+  data_root: ${data_root}
+  train_ann_file: ${data_root}/calibration_info_lidarseg/t4dataset_gen2_lidarseg_infos_train.pkl
+  val_ann_file: ${data_root}/calibration_info_lidarseg/t4dataset_gen2_lidarseg_infos_val.pkl
+  test_ann_file: ${data_root}/calibration_info_lidarseg/t4dataset_gen2_lidarseg_infos_test.pkl
+  lidar_sources:
+    [
+      LIDAR_FRONT_UPPER,
+      LIDAR_FRONT_LOWER,
+      LIDAR_REAR_UPPER,
+      LIDAR_REAR_LOWER,
+      LIDAR_LEFT_UPPER,
+      LIDAR_LEFT_LOWER,
+      LIDAR_RIGHT_UPPER,
+      LIDAR_RIGHT_LOWER,
+    ]
+  stack_keys: [fused_img, gt_calibration_status]
+  train_dataloader_cfg:
+    <<: *dataloader
+    shuffle: true
+  val_dataloader_cfg: *dataloader
+  test_dataloader_cfg: *dataloader
+  predict_dataloader_cfg:
+    batch_size: 1
+    num_workers: 1
+  train_transforms:
+    pipeline:
+      - *misalignment
+      - *fusion
+      - _target_: autoware_ml.transforms.lidar.SaveFusionPreview
+        p: 0.01
+        out_dir: ${hydra:run.dir}/previews
+      - *permute
+  val_transforms:
+    pipeline: &common_pipeline
+      - <<: *misalignment
+        random_seed: 42
+      - *fusion
+      - *permute
+  test_transforms:
+    pipeline:
+      - <<: *misalignment
+        random_seed: 314
+      - *fusion
+      - *permute
+  predict_transforms:
+    pipeline:
+      - *fusion
+      - *permute
+
+model:
+  _target_: autoware_ml.models.calibration_status.CalibrationStatusClassifier
+  backbone:
+    _target_: autoware_ml.models.common.backbones.resnet.ResNet18
+    in_channels: 16
+  neck:
+    _target_: autoware_ml.models.common.necks.global_average_pooling.GlobalAveragePooling
+  head:
+    _target_: autoware_ml.models.common.heads.linear_cls_head.LinearClsHead
+    num_classes: 2
+    in_channels: 512
+    loss:
+      _target_: torch.nn.CrossEntropyLoss
+    topk: [1]
+    cal_acc: true
+  optimizer:
+    _target_: torch.optim.AdamW
+    lr: 0.001
+    weight_decay: 0.01
+    betas: [0.9, 0.999]
+    eps: 1e-8
+  scheduler:
+    _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+    T_max: 20
+    eta_min: 1e-8
+    last_epoch: -1
+
+trainer:
+  # fast_dev_run: true  # runs 1 batch of train/eval/test to confirm no crash
+  # profiler: "simple"  # print some profiling data at the end of the run
+  max_epochs: 30
+  gradient_clip_val: 10.0
+  gradient_clip_algorithm: norm
+  callbacks:
+    - _target_: pytorch_lightning.callbacks.EarlyStopping
+      monitor: "val/loss" # The exact name of the metric logged in your validation step
+      mode: "min" # We want the loss to go down (use "max" if monitoring accuracy)
+      patience: 3 # How many epochs to wait before stopping
+      min_delta: 0.001 # The minimum change required to count as an "improvement"
