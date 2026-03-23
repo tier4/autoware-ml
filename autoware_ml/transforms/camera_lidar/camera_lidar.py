@@ -610,22 +610,13 @@ class LidarCameraFusion(BaseTransform):
         calibration_data: CalibrationData,
     ) -> npt.NDArray[np.float32]:
         """Project 3D points to 2D image coordinates."""
-        if pointcloud_ccs.size == 0:
-            return np.zeros((0, 2), dtype=np.float32)
-
-        # Ensure points are float32/float64 and contiguous for OpenCV
-        if pointcloud_ccs.dtype not in [np.float32, np.float64]:
-            pointcloud_ccs = pointcloud_ccs.astype(np.float32)
-        if not pointcloud_ccs.flags.c_contiguous:
-            pointcloud_ccs = np.ascontiguousarray(pointcloud_ccs)
-
         camera_matrix = calibration_data.new_camera_matrix
         distortion_coefficients = calibration_data.distortion_coefficients
 
         pointcloud_ics, _ = cv2.projectPoints(
             pointcloud_ccs,
-            np.zeros(3, dtype=np.float32),
-            np.zeros(3, dtype=np.float32),
+            np.zeros(3),
+            np.zeros(3),
             camera_matrix,
             distortion_coefficients,
         )
