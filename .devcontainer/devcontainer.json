@@ -22,7 +22,6 @@
     "DISPLAY": "${localEnv:DISPLAY}",
     "XAUTHORITY": "${localEnv:XAUTHORITY}",
     "NVIDIA_DRIVER_CAPABILITIES": "all"
-    
   },
   "mounts": [
     "source=/tmp/.X11-unix,target=/tmp/.X11-unix,type=bind",
