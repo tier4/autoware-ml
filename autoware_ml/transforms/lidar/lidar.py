@@ -223,7 +223,8 @@ class LidarLidarCalibrationMisalignment(BaseTransform):
     ):
         super().__init__()
 
-        if random_seed is None: random_seed = np.random.randint(0, 1000)
+        if random_seed is None:
+            random_seed = np.random.randint(0, 1000)
         self.rng = np.random.RandomState(random_seed)
         self.activate_roll = activate_roll
         self.activate_pitch = activate_pitch
@@ -326,9 +327,11 @@ class LidarLidarCalibrationMisalignment(BaseTransform):
             Dictionary with modified calibration data and gt_calibration_status flag.
         """
         calibration_data: CalibrationData = input_dict["calibration_data"]
-        
+
         lidar = self.rng.choice(list(calibration_data.ground_truth_baselink_to_lidar.keys()))
-        input_dict["calibration_data"].noise_baselink_to_lidar[lidar] = self.generate_calibration_noise()
+        input_dict["calibration_data"].noise_baselink_to_lidar[lidar] = (
+            self.generate_calibration_noise()
+        )
 
         points = input_dict["points_per_lidar"][lidar]
         T_noise = input_dict["calibration_data"].noise_baselink_to_lidar[lidar]
@@ -471,20 +474,16 @@ class LidarLidarFusion(BaseTransform):
         max_depth: float = 80.0,
         dilation_size: int = 1,
         projection: str = "spherical",
-        spherical_projection_center_z: float = 10.0
-
+        spherical_projection_center_z: float = 10.0,
     ):
         super().__init__()
         self.width = width
         self.height = height
         self.max_depth = max_depth
         self.dilation_size = dilation_size
-        self.camera_matrix = np.array(
-            [[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float32
-        )
+        self.camera_matrix = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float32)
         self.spherical_projection_center_z = spherical_projection_center_z
         self.projection = projection
-
 
     def transform(self, input_dict: Dict[str, Any]) -> Dict[str, Any]:
         """Create fused image from two LiDAR point clouds.
@@ -498,52 +497,65 @@ class LidarLidarFusion(BaseTransform):
             Dictionary with added 'fused_img': (H, W, 3) float32 [0, 1].
         """
         points_per_lidar = input_dict["points_per_lidar"]
-        calibration : CalibrationData = input_dict["calibration_data"]
+        calibration: CalibrationData = input_dict["calibration_data"]
         # Combine into multiple channels
         channel_per_image = 2
         current_channel = 0
-        fused = np.zeros((self.height, self.width, channel_per_image * len(points_per_lidar)), dtype=np.float32)
+        fused = np.zeros(
+            (self.height, self.width, channel_per_image * len(points_per_lidar)), dtype=np.float32
+        )
         # All points are assumed to be in "base_link" frame
         if self.projection == "spherical":
-          for lidar, points in points_per_lidar.items():
-            points[:, 1] += self.spherical_projection_center_z
-            projection = project_spherical(points, self.width, self.height, self.dilation_size)
-            fused[:, :, current_channel] = projection[:, :, 0]
-            fused[:, :, current_channel+1] = projection[:, :, 1]
-            current_channel += channel_per_image
+            for lidar, points in points_per_lidar.items():
+                points[:, 1] += self.spherical_projection_center_z
+                projection = project_spherical(points, self.width, self.height, self.dilation_size)
+                fused[:, :, current_channel] = projection[:, :, 0]
+                fused[:, :, current_channel + 1] = projection[:, :, 1]
+                current_channel += channel_per_image
 
-          # Normalize between 0 and 1
-          fused = fused.astype(np.float32) / 255.0
-          input_dict["fused_img"] = fused
+            # Normalize between 0 and 1
+            fused = fused.astype(np.float32) / 255.0
+            input_dict["fused_img"] = fused
 
         elif self.projection == "pinhole":
-          for lidar, points in points_per_lidar:
-            # virtual camera is defined in baselink frame
-            # this is only for the front lower/upper, needs to be adjusted for each pair
-            virtual_camera_xyz = [5.0, 0.0, 0.75]
-            virtual_camera_roll_pitch_yaw_deg = [-90.0, 0.0, -107]
+            for lidar, points in points_per_lidar:
+                # virtual camera is defined in baselink frame
+                # this is only for the front lower/upper, needs to be adjusted for each pair
+                virtual_camera_xyz = [5.0, 0.0, 0.75]
+                virtual_camera_roll_pitch_yaw_deg = [-90.0, 0.0, -107]
 
-            # Transformation from base_link to virtual camera
-            roll, pitch, yaw = np.radians(virtual_camera_roll_pitch_yaw_deg)
-            cam_rot = transforms3d.euler.euler2mat(roll, pitch, yaw, axes="sxyz")
-            T_base_cam = np.eye(4, dtype=np.float32)
-            T_base_cam[:3, :3] = cam_rot
-            T_base_cam[:3, 3] = virtual_camera_xyz
-            T_cam_base = np.linalg.inv(T_base_cam)
+                # Transformation from base_link to virtual camera
+                roll, pitch, yaw = np.radians(virtual_camera_roll_pitch_yaw_deg)
+                cam_rot = transforms3d.euler.euler2mat(roll, pitch, yaw, axes="sxyz")
+                T_base_cam = np.eye(4, dtype=np.float32)
+                T_base_cam[:3, :3] = cam_rot
+                T_base_cam[:3, 3] = virtual_camera_xyz
+                T_cam_base = np.linalg.inv(T_base_cam)
 
-            points_xyz = points[:, :3]
-            points_int = points[:, 3]
-            points_xyz_h = np.column_stack([points_xyz, np.ones(points_xyz.shape[0], dtype=np.float32)])
-            # Transform points to virtual camera frame
-            points_xyz_cam = (T_cam_base @ points_xyz_h.T).T[:, :3]
+                points_xyz = points[:, :3]
+                points_int = points[:, 3]
+                points_xyz_h = np.column_stack(
+                    [points_xyz, np.ones(points_xyz.shape[0], dtype=np.float32)]
+                )
+                # Transform points to virtual camera frame
+                points_xyz_cam = (T_cam_base @ points_xyz_h.T).T[:, :3]
 
-            img = create_lidar_image(self.height, self.width, self.camera_matrix, self.max_depth, self.dilation_size, points_xyz_cam, points_int)
-            fused[..., current_channel] = img[..., 0]
-            fused[..., current_channel+1] = img[..., 1]
-            current_channel += channel_per_image
-          input_dict["fused_img"] = fused
+                img = create_lidar_image(
+                    self.height,
+                    self.width,
+                    self.camera_matrix,
+                    self.max_depth,
+                    self.dilation_size,
+                    points_xyz_cam,
+                    points_int,
+                )
+                fused[..., current_channel] = img[..., 0]
+                fused[..., current_channel + 1] = img[..., 1]
+                current_channel += channel_per_image
+            input_dict["fused_img"] = fused
 
         return input_dict
+
 
 class SaveFusionPreview(BaseTransform):
     """Save preview images of fused LiDAR-LiDAR data for visualization.
@@ -577,7 +589,7 @@ class SaveFusionPreview(BaseTransform):
         super().__init__()
         self.p = p
         self.out_dir = Path(out_dir)
-        self.cmap = plt.get_cmap(colormap) # pyright: ignore[reportAttributeAccessIssue]
+        self.cmap = plt.get_cmap(colormap)  # pyright: ignore[reportAttributeAccessIssue]
         self._counter = 0
 
         self.out_dir.mkdir(parents=True, exist_ok=True)

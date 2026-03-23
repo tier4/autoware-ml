@@ -64,7 +64,17 @@ datamodule:
   train_ann_file: ${data_root}/calibration_info_lidarseg/t4dataset_gen2_lidarseg_infos_train.pkl
   val_ann_file: ${data_root}/calibration_info_lidarseg/t4dataset_gen2_lidarseg_infos_val.pkl
   test_ann_file: ${data_root}/calibration_info_lidarseg/t4dataset_gen2_lidarseg_infos_test.pkl
-  lidar_sources: [LIDAR_FRONT_UPPER, LIDAR_FRONT_LOWER, LIDAR_REAR_UPPER, LIDAR_REAR_LOWER, LIDAR_LEFT_UPPER, LIDAR_LEFT_LOWER, LIDAR_RIGHT_UPPER, LIDAR_RIGHT_LOWER]
+  lidar_sources:
+    [
+      LIDAR_FRONT_UPPER,
+      LIDAR_FRONT_LOWER,
+      LIDAR_REAR_UPPER,
+      LIDAR_REAR_LOWER,
+      LIDAR_LEFT_UPPER,
+      LIDAR_LEFT_LOWER,
+      LIDAR_RIGHT_UPPER,
+      LIDAR_RIGHT_LOWER,
+    ]
   stack_keys: [fused_img, gt_calibration_status]
   train_dataloader_cfg:
     <<: *dataloader
@@ -89,7 +99,7 @@ datamodule:
       - *fusion
       - *permute
   test_transforms:
-    pipeline: 
+    pipeline:
       - <<: *misalignment
         random_seed: 314
       - *fusion
@@ -134,7 +144,7 @@ trainer:
   gradient_clip_algorithm: norm
   callbacks:
     - _target_: pytorch_lightning.callbacks.EarlyStopping
-      monitor: "val/loss"   # The exact name of the metric logged in your validation step
-      mode: "min"           # We want the loss to go down (use "max" if monitoring accuracy)
-      patience: 3           # How many epochs to wait before stopping
-      min_delta: 0.001      # The minimum change required to count as an "improvement"
+      monitor: "val/loss" # The exact name of the metric logged in your validation step
+      mode: "min" # We want the loss to go down (use "max" if monitoring accuracy)
+      patience: 3 # How many epochs to wait before stopping
+      min_delta: 0.001 # The minimum change required to count as an "improvement"

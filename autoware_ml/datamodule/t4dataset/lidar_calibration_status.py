@@ -17,9 +17,8 @@ import os
 import pickle
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
-import cv2
 import numpy as np
 import numpy.typing as npt
 
@@ -106,7 +105,12 @@ class T4LidarCalibrationStatusDataset(Dataset):
             os.path.join(self.data_root, lidar_path), dtype=np.float32
         ).reshape(-1, num_pts_feats)
 
-        points_per_lidar = {lidar_source : self._extract_lidar_points(lidar_points, lidar_info_path, sample["lidar_sources"][lidar_source]["sensor_token"]) for lidar_source in self.lidar_sources}
+        points_per_lidar = {
+            lidar_source: self._extract_lidar_points(
+                lidar_points, lidar_info_path, sample["lidar_sources"][lidar_source]["sensor_token"]
+            )
+            for lidar_source in self.lidar_sources
+        }
         calibration_data = self._load_calibration_data(sample)
 
         input_dict["points_per_lidar"] = points_per_lidar
@@ -129,9 +133,7 @@ class T4LidarCalibrationStatusDataset(Dataset):
                 points = lidar_points[idx_begin : idx_begin + length]
 
         if points is None:
-            raise ValueError(
-                f"Could not find sensor {token} in {info_path}."
-            )
+            raise ValueError(f"Could not find sensor {token} in {info_path}.")
 
         return points
 
@@ -154,9 +156,17 @@ class T4LidarCalibrationStatusDataset(Dataset):
             transform[:3, 3] = translation
             return transform
 
-        ground_truth_baselink_to_lidar = {lidar_source : get_transform(sample["lidar_sources"][lidar_source]) for lidar_source in self.lidar_sources}
-        empty_noise = {lidar_source : np.eye(4, dtype=np.float32) for lidar_source in self.lidar_sources}
-        return CalibrationData(ground_truth_baselink_to_lidar=ground_truth_baselink_to_lidar, noise_baselink_to_lidar=empty_noise)
+        ground_truth_baselink_to_lidar = {
+            lidar_source: get_transform(sample["lidar_sources"][lidar_source])
+            for lidar_source in self.lidar_sources
+        }
+        empty_noise = {
+            lidar_source: np.eye(4, dtype=np.float32) for lidar_source in self.lidar_sources
+        }
+        return CalibrationData(
+            ground_truth_baselink_to_lidar=ground_truth_baselink_to_lidar,
+            noise_baselink_to_lidar=empty_noise,
+        )
 
 
 class T4LidarCalibrationDataModule(DataModule):
@@ -214,7 +224,7 @@ class T4LidarCalibrationDataModule(DataModule):
             data_root=self.data_root,
             ann_file=ann_file,
             lidar_sources=self.lidar_sources,
-            dataset_transforms=transforms
+            dataset_transforms=transforms,
         )
 
         return dataset
