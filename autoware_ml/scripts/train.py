@@ -21,27 +21,11 @@ import hydra
 import lightning as L
 import torch
 from hydra.core.hydra_config import HydraConfig
-import omegaconf
 from omegaconf import DictConfig, OmegaConf, open_dict
-import typing
-import collections
 
 import autoware_ml.configs
 
 logger = logging.getLogger(__name__)
-# Tell PyTorch 2.6 that Hydra/OmegaConf config objects are safe to load from checkpoints
-torch.serialization.add_safe_globals([
-    omegaconf.listconfig.ListConfig,
-    omegaconf.dictconfig.DictConfig, # Adding DictConfig too, as Hydra uses both heavily!
-    omegaconf.nodes.AnyNode,
-    omegaconf.base.Metadata,
-    omegaconf.base.ContainerMetadata,
-    typing.Any,
-    list,
-    collections.defaultdict,
-    dict,
-    int,
-])
 
 
 def generate_experiment_name() -> str:
@@ -132,8 +116,6 @@ def main(cfg: DictConfig):
 
     logger.info("Training completed!")
     logger.info(f"Checkpoints saved to: {work_dir / 'checkpoints'}")
-
-    trainer.test(model, datamodule=datamodule)
 
 
 if __name__ == "__main__":
