@@ -11,8 +11,8 @@ cache_path: ${cache_root_path}/detection3d/
 
 # Read each database into their corresponding scenarios, it will run evaluation/visualization on each scenario
 defaults:
-  - t4datasets/scenarios@scenarios.db_base: detection3d/db_base_v1.0
-  - t4datasets/scenarios@scenarios.db_j6gen2: detection3d/db_j6gen2_v1.0
+  - t4datasets/scenarios@scenarios.db_base: detection3d/db_base
+  - t4datasets/scenarios@scenarios.db_j6gen2: detection3d/db_j6gen2
 #     db_j6gen2: detection3d/db_j6gen2_v1.0
 #     db_j6gen2_base: detection3d/db_j6gen2_base_v1.0
 #     db_jpntaxi_base: detection3d/db_jpntaxi_base_v1.0

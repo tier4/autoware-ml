@@ -1,3 +1,6 @@
+_target_: autoware_ml.databases.t4datasets.t4scenarios.T4Scenarios
+_convert_: all
+
 version: j6gen2_base-v1.0.0
 # List of database versions and each yaml file consists of train/val/test splits
 db_versions:
