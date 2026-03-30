@@ -4,8 +4,6 @@ from dataclasses import dataclass
 from typing import Iterable
 from types import MappingProxyType
 
-from hydra.utils import instantiate
-from omegaconf import DictConfig
 import polars as pl
 
 from autoware_ml.databases.base_database import BaseDatabase
@@ -47,7 +45,8 @@ class T4Database(BaseDatabase):
         database_version: str,
         database_root_path: str,
         scenario_root_path: str,
-        scenario_configs: MappingProxyType[str, DictConfig],
+        # scenario_configs: MappingProxyType[str, DictConfig],
+        scenarios: MappingProxyType[str, T4Scenarios],
         cache_path: str,
         main_database: str,
         num_workers: int = 16,
@@ -58,17 +57,17 @@ class T4Database(BaseDatabase):
             database_version=database_version,
             database_root_path=database_root_path,
             scenario_root_path=scenario_root_path,
-            scenario_configs=scenario_configs,
+            scenarios=scenarios,
             cache_path=cache_path,
             main_database=main_database,
         )
         self.num_workers = num_workers
-        self.scenarios: MappingProxyType[str, T4Scenarios] = {
-            scenario_group_name: instantiate(
-                scenario_config, scenario_root_path=self.scenario_root_path
-            )
-            for scenario_group_name, scenario_config in scenario_configs.items()
-        }
+        # self.scenarios: MappingProxyType[str, T4Scenarios] = {
+        #     scenario_group_name: instantiate(
+        #         scenario_config, scenario_root_path=self.scenario_root_path
+        #     )
+        #     for scenario_group_name, scenario_config in scenario_configs.items()
+        # }
 
     def process_scenario_records(self) -> Iterable[DatasetRecord]:
         """Load scenario records from the database."""

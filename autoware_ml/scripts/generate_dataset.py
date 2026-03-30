@@ -23,16 +23,20 @@ def build_database(cfg: DictConfig) -> DatabaseInterface:
     OmegaConf.set_struct(cfg, False)
     # Then, extract the scenario configs from the database config
     # Must instantiate separately to reuse the same parameters, for example, scenario_root_path
-    scenario_configs = cfg.database.pop("scenarios", None)
-    if scenario_configs is None:
-        raise ValueError("Scenario configs must be provided in the database config.")
+    for scenario_group, scenario_configs in cfg.database.scenarios.items():
+        scenario_configs.scenario_root_path = cfg.database.scenario_root_path
+    # cfg.database.scenarios.scenario_root_path = cfg.database.scenario_root_path
+    # scenario_configs = cfg.database.pop("scenarios", None)
+    # if scenario_configs is None:
+    #     raise ValueError("Scenario configs must be provided in the database config.")
 
     # Set the configuration to be immutable again
     OmegaConf.set_struct(cfg, True)
     logger.info("After:")
-    logger.info(OmegaConf.to_yaml(cfg))
+    logger.info(OmegaConf.to_yaml(cfg.database))
     # Instantiate the database
-    return instantiate(cfg.database, scenario_configs=scenario_configs, _recursive_=False)
+    # return instantiate(cfg.database, scenario_configs=scenario_configs)
+    return instantiate(cfg.database)
 
 
 @hydra.main(version_base=None, config_path=_CONFIG_PATH)
