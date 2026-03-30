@@ -1,11 +1,21 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Iterable, Mapping, Annotated
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, BeforeValidator, model_validator
 
 from autoware_ml.common.enums.enums import SplitType
+
+
+def path_adapter(path: str | Path) -> Path:
+    """Adapter for pathlib."""
+    if isinstance(path, str):
+        return Path(path)
+    return path
+
+
+PathAdapter = Annotated[Path, BeforeValidator(path_adapter)]
 
 
 class DatabaseVersion(BaseModel):
@@ -80,7 +90,7 @@ class Scenarios(BaseModel):
     model_config = ConfigDict(frozen=True, strict=True)
 
     version: str
-    scenario_root_path: Path  # Root path where the scenario yaml files are stored
+    scenario_root_path: PathAdapter  # Root path where the scenario yaml files are stored
     db_versions: Iterable[DatabaseVersion]
     scenario_data: Mapping[SplitType, Iterable[ScenarioData]] | None = None
 
@@ -99,6 +109,7 @@ class Scenarios(BaseModel):
             self.version,
             self.scenario_root_path,
         )
+
         hash_attributes += tuple(
             self.db_versions,
         )

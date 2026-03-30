@@ -3,8 +3,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import Iterable, Mapping
+from types import MappingProxyType
 
-from omegaconf import DictConfig
 import polars as pl
 
 from autoware_ml.databases.scenarios import Scenarios, ScenarioData
@@ -23,7 +23,8 @@ class BaseDatabase:
         database_version: str,
         database_root_path: str,
         scenario_root_path: str,
-        scenario_configs: Mapping[str, DictConfig],
+        # scenario_configs: Mapping[str, DictConfig],
+        scenarios: MappingProxyType[str, Scenarios],
         cache_path: str,
         main_database: str,
     ) -> None:
@@ -42,8 +43,8 @@ class BaseDatabase:
         self._scenario_root_path = Path(scenario_root_path)
         self._cache_path = Path(cache_path)
         self._main_database = main_database
-        self._scenario_configs = scenario_configs
-        self._scenarios: Mapping[str, Scenarios] = {}
+        # self._scenario_configs = scenario_configs
+        self._scenarios: MappingProxyType[str, Scenarios] = scenarios
 
         # Create cache output path if it doesn't exist
         self._cache_path.mkdir(parents=True, exist_ok=True)

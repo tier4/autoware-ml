@@ -1,5 +1,4 @@
 _target_: autoware_ml.databases.t4datasets.t4database.T4Database
-# autoware_ml.databases.t4datasets.t4database.T4Database
 _convert_: all
 
 database_version: T4Detection3d-v1.0.0
