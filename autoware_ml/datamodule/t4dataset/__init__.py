@@ -12,9 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .calibration_status import (
-    CalibrationData,
-    CalibrationStatus,
+"""T4Dataset datamodule exports used by Autoware-ML entrypoints.
+
+This package re-exports dataset and datamodule implementations for T4Dataset
+training, evaluation, and deployment workflows.
+"""
+
+from autoware_ml.datamodule.t4dataset.calibration_status import (
     T4CalibrationDataModule,
     T4CalibrationStatusDataset,
 )
@@ -22,6 +26,4 @@ from .calibration_status import (
 __all__ = [
     "T4CalibrationStatusDataset",
     "T4CalibrationDataModule",
-    "CalibrationData",
-    "CalibrationStatus",
 ]

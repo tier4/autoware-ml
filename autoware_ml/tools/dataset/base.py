@@ -12,10 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Base dataset generator interface."""
+"""Base interfaces for dataset-generation tooling.
+
+This module defines the shared generator protocol used by dataset creation
+scripts.
+"""
 
 from abc import ABC, abstractmethod
-from typing import Any, List
+from collections.abc import Sequence
+from typing import Any
 
 
 class DatasetGenerator(ABC):
@@ -30,7 +35,7 @@ class DatasetGenerator(ABC):
         self,
         root_path: str,
         out_dir: str,
-        tasks: List[str],
+        tasks: Sequence[str],
         **kwargs: Any,
     ) -> None:
         """Generate dataset info files.

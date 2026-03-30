@@ -44,6 +44,15 @@
     "**/node_modules": true,
     "**/mlruns": true
   },
+  "python.analysis.exclude": [
+    "**/__pycache__",
+    "**/.*",
+    "autoware_ml.egg-info",
+    "data",
+    "mlruns",
+    "node_modules",
+    "site"
+  ],
   "python.defaultInterpreterPath": "/opt/conda/bin/python",
   "remote.autoForwardPorts": false,
   "ruff.lineLength": 100,

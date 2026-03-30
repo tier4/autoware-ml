@@ -12,24 +12,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Segmentation3D task annotation generator for NuScenes."""
+"""Segmentation3D task annotation generator for NuScenes.
+
+This module defines segmentation-specific NuScenes dataset generation steps used
+by the dataset creation tooling.
+"""
 
 from os import path as osp
-from typing import Any, Dict
+from collections.abc import Mapping
+from typing import Any
 
 from autoware_ml.tools.dataset.nuscenes.tasks.base import TaskAnnotationGenerator
 
 
 class Segmentation3DTask(TaskAnnotationGenerator):
-    """Task generator for 3D semantic segmentation annotations."""
+    """Generate 3D semantic-segmentation annotations for NuScenes info files.
+
+    The task injects lidarseg label paths and related segmentation metadata into
+    generated sample dictionaries.
+    """
 
     def process_sample(
         self,
-        info_dict: Dict[str, Any],
+        info_dict: dict[str, Any],
         nusc: Any,
-        sample: Dict[str, Any],
+        sample: Mapping[str, Any],
         cam_name: Any = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Add segmentation3d annotations to the info dict.
 
         Args:
@@ -43,8 +52,8 @@ class Segmentation3DTask(TaskAnnotationGenerator):
         """
         if "lidarseg" in nusc.table_names:
             lidar_token = sample["data"]["LIDAR_TOP"]
-            info_dict["pts_semantic_mask_path"] = osp.join(
-                nusc.dataroot, nusc.get("lidarseg", lidar_token)["filename"]
+            info_dict["pts_semantic_mask_path"] = osp.basename(
+                nusc.get("lidarseg", lidar_token)["filename"]
             )
 
         return info_dict

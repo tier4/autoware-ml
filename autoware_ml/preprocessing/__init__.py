@@ -12,8 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""DataPreprocessing modules for data transformations."""
+"""Batch preprocessing exports used by Autoware-ML datamodules and models.
 
-from .base import DataPreprocessing
+This package re-exports preprocessing modules that transform collated batches
+into model-ready tensors.
+"""
+
+from autoware_ml.preprocessing.base import DataPreprocessing
 
 __all__ = ["DataPreprocessing"]

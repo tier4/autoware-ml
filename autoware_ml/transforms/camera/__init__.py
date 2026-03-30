@@ -12,8 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Transforms for camera data, where image and calibration data are present."""
+"""Camera-transform exports for image and calibration-aware pipelines."""
 
-from .camera import CropAndScale, UndistortImage
+from autoware_ml.transforms.camera.distortion import UndistortImage
+from autoware_ml.transforms.camera.loading import LoadImageFromFile
+from autoware_ml.transforms.camera.resize import CropAndScale
 
-__all__ = ["UndistortImage", "CropAndScale"]
+__all__ = [
+    "CropAndScale",
+    "LoadImageFromFile",
+    "UndistortImage",
+]

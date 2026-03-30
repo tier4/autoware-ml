@@ -128,14 +128,17 @@ The `Dataset` base class handles transforms application:
 ```python
 class Dataset(TorchDataset, ABC):
     def __getitem__(self, index: int) -> Dict[str, Any]:
-        input_dict = self._get_input_dict(index)
-        input_dict = self._transform(input_dict)
-        return input_dict
+        input_dict = self.get_data_info(index)
+        context = PipelineContext(dataset=self, index=index)
+        return self.apply_transforms(input_dict, self.dataset_transforms, context)
 
     @abstractmethod
-    def _get_input_dict(self, index: int) -> Dict[str, Any]:
+    def get_data_info(self, index: int) -> Dict[str, Any]:
         ...
 ```
+
+Datasets are expected to return metadata records. File loading and sample
+materialization should happen in transforms.
 
 ### Transforms
 
@@ -143,7 +146,12 @@ Transforms are composable data augmentations applied per-sample on CPU. They fol
 
 ```python
 class BaseTransform(ABC):
-    def __call__(self, input_dict: Dict[str, Any]) -> Dict[str, Any]:
+    def __call__(
+        self,
+        input_dict: Dict[str, Any],
+        context: PipelineContext | None = None,
+    ) -> Dict[str, Any]:
+        self.context = context
         return self.transform(input_dict)
 
     @abstractmethod
@@ -154,9 +162,13 @@ class TransformsCompose:
     def __init__(self, pipeline: Optional[List[BaseTransform]] = None):
         self.pipeline = pipeline or []
 
-    def __call__(self, input_dict: Dict[str, Any]) -> Dict[str, Any]:
+    def __call__(
+        self,
+        input_dict: Dict[str, Any],
+        context: PipelineContext | None = None,
+    ) -> Dict[str, Any]:
         for transform in self.pipeline:
-            input_dict |= transform(input_dict)
+            input_dict |= transform(input_dict, context=context)
         return input_dict
 ```
 

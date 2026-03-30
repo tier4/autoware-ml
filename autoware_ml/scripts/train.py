@@ -12,30 +12,43 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Training script for Autoware-ML models."""
+"""Training entrypoint for Autoware-ML models.
+
+This script wires Hydra configuration, Lightning runtime setup, MLflow
+integration, and trainer execution for model training.
+"""
 
 import logging
-from pathlib import Path
 
 import hydra
 import lightning as L
-import torch
-from hydra.core.hydra_config import HydraConfig
-from omegaconf import DictConfig, OmegaConf, open_dict
+from lightning.pytorch.loggers import MLFlowLogger
+from omegaconf import DictConfig
 
-import autoware_ml.configs
+from autoware_ml.utils.runtime import (
+    configure_torch_runtime,
+    get_config_path,
+    instantiate_callbacks,
+    instantiate_trainer,
+    log_configuration,
+    log_hyperparameters,
+    resolve_work_dir,
+    set_seed,
+)
+from autoware_ml.utils.mlflow import (
+    build_run_tags,
+    build_training_metadata,
+    configure_logger,
+    generate_experiment_name,
+    generate_run_name,
+    get_user_config_name,
+    log_path_as_artifact,
+    should_enable_logger,
+    write_run_metadata,
+)
 
 logger = logging.getLogger(__name__)
-
-
-def generate_experiment_name() -> str:
-    """Generate experiment name from config path."""
-    config_name = HydraConfig.get().job.config_name
-    experiment_name = config_name.replace("tasks/", "").replace("/", "_")
-    return experiment_name
-
-
-_CONFIG_PATH = str(Path(autoware_ml.configs.__file__).parent.resolve())
+_CONFIG_PATH = get_config_path()
 
 
 @hydra.main(version_base=None, config_path=_CONFIG_PATH)
@@ -45,33 +58,14 @@ def main(cfg: DictConfig):
     Args:
         cfg: Hydra configuration
     """
-    # Print configuration
-    logger.info("=" * 80)
-    logger.info("Configuration:")
-    logger.info("=" * 80)
-    logger.info(OmegaConf.to_yaml(cfg))
-    logger.info("=" * 80)
-
-    # Get Hydra's output directory
-    hydra_cfg = HydraConfig.get()
-    work_dir = Path(hydra_cfg.runtime.output_dir)
+    log_configuration(cfg)
+    work_dir = resolve_work_dir()
     logger.info(f"Working directory: {work_dir}")
+    config_name = get_user_config_name()
+    logger_enabled = should_enable_logger(cfg)
 
-    if torch.cuda.is_available():
-        # Set TF32 precision for performance on Ampere+ GPUs
-        # Use legacy API for compatibility with PyTorch Lightning
-        # Refactor after https://github.com/Lightning-AI/pytorch-lightning/pull/21306 is merged
-        torch.set_float32_matmul_precision("medium")  # TF32 for matmul
-        torch.backends.cudnn.fp32_precision = "tf32"
-        torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = True
-
-        logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
-        logger.info("TF32 precision enabled for improved performance")
-
-    # Set random seed
-    if "seed" in cfg:
-        L.seed_everything(cfg.seed, workers=True)
-        logger.info(f"Random seed: {cfg.seed}")
+    configure_torch_runtime()
+    set_seed(cfg)
 
     logger.info("Instantiating datamodule...")
     datamodule: L.LightningDataModule = hydra.utils.instantiate(cfg.datamodule)
@@ -80,31 +74,21 @@ def main(cfg: DictConfig):
     model: L.LightningModule = hydra.utils.instantiate(cfg.model)
 
     logger.info("Instantiating callbacks...")
-    callbacks = []
-    if "callbacks" in cfg:
-        for callback_cfg in cfg.callbacks.values():
-            callbacks.append(hydra.utils.instantiate(callback_cfg))
+    callbacks = instantiate_callbacks(cfg, logger_enabled=logger_enabled)
 
     logger.info("Instantiating loggers...")
     trainer_logger = None
-    exp_name = generate_experiment_name()
-    if "logger" in cfg:
-        with open_dict(cfg.logger):
-            cfg.logger.experiment_name = exp_name
+    experiment_name = generate_experiment_name(config_name)
+    run_name = generate_run_name(config_name, work_dir, "train")
+    run_tags = build_run_tags(config_name, work_dir, "train")
+    if logger_enabled:
+        configure_logger(cfg.logger, experiment_name, run_name, run_tags)
         trainer_logger = hydra.utils.instantiate(cfg.logger)
 
     logger.info("Instantiating trainer...")
-    trainer: L.Trainer = hydra.utils.instantiate(
-        cfg.trainer,
-        callbacks=callbacks,
-        logger=trainer_logger,
-        default_root_dir=str(work_dir),
-    )
+    trainer: L.Trainer = instantiate_trainer(cfg, callbacks, trainer_logger, work_dir)
 
-    # Log hyperparameters
-    if trainer_logger:
-        hparams = OmegaConf.to_container(cfg, resolve=True)
-        trainer.logger.log_hyperparams(hparams)
+    log_hyperparameters(cfg, trainer_logger, trainer)
 
     # Start training
     logger.info("Starting training...")
@@ -113,6 +97,16 @@ def main(cfg: DictConfig):
     logger.info(f"Devices: {cfg.trainer.get('devices', 'auto')}")
 
     trainer.fit(model, datamodule=datamodule, ckpt_path=cfg.get("checkpoint", None))
+
+    if isinstance(trainer_logger, MLFlowLogger):
+        metadata_path = write_run_metadata(
+            work_dir,
+            build_training_metadata(trainer_logger, experiment_name, config_name, work_dir),
+        )
+        client = trainer_logger.experiment
+        log_path_as_artifact(client, trainer_logger.run_id, work_dir / ".hydra", "hydra")
+        log_path_as_artifact(client, trainer_logger.run_id, metadata_path, "metadata")
+        log_path_as_artifact(client, trainer_logger.run_id, work_dir / "checkpoints", "checkpoints")
 
     logger.info("Training completed!")
     logger.info(f"Checkpoints saved to: {work_dir / 'checkpoints'}")

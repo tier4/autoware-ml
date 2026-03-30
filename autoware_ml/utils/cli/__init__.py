@@ -12,13 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""CLI utilities."""
+"""CLI utility exports.
+
+This package exposes reusable command-line parsing and shell completion helpers
+used by the top-level Autoware-ML CLI.
+"""
 
 from autoware_ml.utils.cli.helpers import (
     adjust_argv,
     complete_config_value,
+    complete_path_value,
+    complete_session_command_value,
+    complete_session_name_value,
     expand_config_path,
     list_config_names,
+    list_tmux_session_names,
     parse_extra_args,
     resolve_config_reference,
     run_lazy_script,
@@ -27,8 +35,12 @@ from autoware_ml.utils.cli.helpers import (
 __all__ = [
     "adjust_argv",
     "complete_config_value",
+    "complete_path_value",
+    "complete_session_command_value",
+    "complete_session_name_value",
     "expand_config_path",
     "list_config_names",
+    "list_tmux_session_names",
     "parse_extra_args",
     "resolve_config_reference",
     "run_lazy_script",

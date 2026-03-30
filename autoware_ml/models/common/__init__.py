@@ -12,4 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Common model components for Autoware-ML framework."""
+"""Shared model components reused across multiple Autoware-ML tasks.
+
+This package contains reusable backbones, necks, and heads that are not tied
+to one specific perception task.
+"""

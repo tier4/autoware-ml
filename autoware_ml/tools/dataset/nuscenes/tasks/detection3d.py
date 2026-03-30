@@ -12,9 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Detection3D task annotation generator for NuScenes."""
+"""Detection3D task annotation generator for NuScenes.
 
-from typing import Any, Dict
+This module defines detection-specific NuScenes dataset generation steps used by
+the dataset creation tooling.
+"""
+
+from collections.abc import Mapping
+from typing import Any
 
 import numpy as np
 from pyquaternion import Quaternion
@@ -24,15 +29,19 @@ from autoware_ml.tools.dataset.nuscenes.utils import NUSCENES_NAME_MAPPING
 
 
 class Detection3DTask(TaskAnnotationGenerator):
-    """Task generator for 3D object detection annotations."""
+    """Generate 3D object-detection annotations for NuScenes info files.
+
+    The task injects detection-specific fields such as boxes, labels, and
+    velocities into generated sample dictionaries.
+    """
 
     def process_sample(
         self,
-        info_dict: Dict[str, Any],
+        info_dict: dict[str, Any],
         nusc: Any,
-        sample: Dict[str, Any],
+        sample: Mapping[str, Any],
         cam_name: Any = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Add detection3d annotations to the info dict.
 
         Args:

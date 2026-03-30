@@ -14,8 +14,8 @@
 
 """Shared fixtures for CUDA operations tests."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import List, Tuple
 
 import pytest
 import torch
@@ -62,7 +62,7 @@ def create_single_point_input(
     b_idx: int,
     feature_value: float,
     device: torch.device,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Create input with a single point at specified grid location.
 
     Args:
@@ -85,10 +85,10 @@ def create_single_point_input(
 
 def create_multi_point_input(
     config: BEVGridConfig,
-    coords_list: List[Tuple[int, int, int, int]],
-    feature_values: List[float],
+    coords_list: Sequence[tuple[int, int, int, int]],
+    feature_values: Sequence[float],
     device: torch.device,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Create input with multiple points at specified locations.
 
     Points with the same coordinates should be adjacent and have the same rank
@@ -133,7 +133,7 @@ def create_uniform_grid_input(
     config: BEVGridConfig,
     feature_value: float,
     device: torch.device,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Create input with one point per grid cell, all with same feature value.
 
     Args:

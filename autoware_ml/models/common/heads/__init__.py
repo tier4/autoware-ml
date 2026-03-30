@@ -12,8 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Head modules for task-specific outputs."""
+"""Common head exports for task-specific prediction modules.
 
-from .linear_cls_head import ClsHead, LinearClsHead
+This package re-exports reusable prediction heads shared across multiple
+Autoware-ML tasks.
+"""
+
+from autoware_ml.models.common.heads.linear_cls_head import ClsHead, LinearClsHead
 
 __all__ = ["ClsHead", "LinearClsHead"]

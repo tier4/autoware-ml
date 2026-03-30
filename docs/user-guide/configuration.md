@@ -4,7 +4,7 @@ icon: lucide/settings
 
 # Configuration
 
-Autoware-ML uses [Hydra](https://hydra.cc/) for configuration management. This gives you hierarchical YAML configs with powerful runtime overrides-no code changes needed to experiment with different settings.
+Autoware-ML uses [Hydra](https://hydra.cc/) for configuration management. This gives you hierarchical YAML configs with powerful runtime overrides without code changes.
 
 ## Config Structure
 
@@ -69,7 +69,7 @@ Controls data loading and preprocessing:
 
 ```yaml
 datamodule:
-  _target_: autoware_ml.datamodule.my_dataset.my_task.MyDataModule
+  _target_: autoware_ml.datamodule.my_dataset.MyDataModule
   data_root: ${data_root}
   train_ann_file: ${data_root}/info/train.pkl
   val_ann_file: ${data_root}/info/val.pkl
@@ -89,9 +89,15 @@ datamodule:
   data_preprocessing:
     _target_: autoware_ml.preprocessing.DataPreprocessing
     pipeline:
-      - _target_: autoware_ml.preprocessing.my_preprocessing.MyPreprocessing
+      - _target_: autoware_ml.preprocessing.my_preprocessing.MyPreprocessingLayer
         param: value
 ```
+
+For custom components, prefer package-level targets such as
+`autoware_ml.transforms.my_transforms.MyTransform` or
+`autoware_ml.models.common.backbones.MyBackbone`. Implementation modules should
+define the code once, and the package `__init__.py` should expose the public
+API used by configs.
 
 ### `model`
 
@@ -102,7 +108,7 @@ model:
   _target_: autoware_ml.models.my_task.MyModel
 
   backbone:
-    _target_: autoware_ml.models.common.backbones.my_backbone.MyBackbone
+    _target_: autoware_ml.models.common.backbones.MyBackbone
     in_channels: 3
 
   optimizer:
@@ -166,6 +172,8 @@ logger:
   _target_: lightning.pytorch.loggers.MLFlowLogger
   tracking_uri: sqlite:///mlruns/mlflow.db
 ```
+
+Autoware-ML populates `experiment_name`, `run_name`, `run_id`, and default tags automatically at runtime.
 
 ### `deploy`
 
@@ -232,15 +240,15 @@ Override any value from the command line:
 
 ```bash
 # Override existing parameter (no + prefix)
-autoware-ml train --config-name my_task/my_model/my_config \
+autoware-ml train --config-name <task>/<model>/<config> \
     trainer.max_epochs=100
 
 # Nested override
-autoware-ml train --config-name my_task/my_model/my_config \
+autoware-ml train --config-name <task>/<model>/<config> \
     model.optimizer.lr=0.0005
 
 # Add new parameter (use + prefix)
-autoware-ml train --config-name my_task/my_model/my_config \
+autoware-ml train --config-name <task>/<model>/<config> \
     +callbacks.my_callback._target_=lightning.pytorch.callbacks.MyCallback
 ```
 
@@ -276,13 +284,13 @@ autoware-ml train --config-name my_task/my_model/my_experiment
 Print the resolved config without running:
 
 ```bash
-autoware-ml train --config-name my_task/my_model/my_config --cfg job
+autoware-ml train --config-name <task>/<model>/<config> --cfg job
 ```
 
 Print a specific section:
 
 ```bash
-autoware-ml train --config-name my_task/my_model/my_config \
+autoware-ml train --config-name <task>/<model>/<config> \
     --cfg job --package model
 ```
 
@@ -291,7 +299,7 @@ autoware-ml train --config-name my_task/my_model/my_config \
 Run parameter sweeps with `--multirun`:
 
 ```bash
-autoware-ml train --config-name my_task/my_model/my_config \
+autoware-ml train --config-name <task>/<model>/<config> \
     --multirun \
     model.optimizer.lr=0.001,0.0005,0.0001
 ```
