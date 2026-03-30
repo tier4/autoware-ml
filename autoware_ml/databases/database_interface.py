@@ -1,9 +1,10 @@
 from abc import abstractmethod
 from pathlib import Path
-from typing import Protocol, ImmutableMapping, Iterable
+from typing import Iterable, Protocol
+from types import MappingProxyType
 
-from autoware_ml.common.enums import TaskType
-from autoware_ml.databases.scenarios import Scenarios
+from autoware_ml.databases.scenarios import Scenarios, ScenarioData
+from autoware_ml.databases.schemas import DatasetRecord
 
 
 class DatabaseInterface(Protocol):
@@ -11,7 +12,7 @@ class DatabaseInterface(Protocol):
 
     @property
     @abstractmethod
-    def datatabase_version(self) -> str:
+    def database_version(self) -> str:
         """Get the version of the database."""
         raise NotImplementedError("Database must define database_version!")
 
@@ -35,12 +36,27 @@ class DatabaseInterface(Protocol):
 
     @property
     @abstractmethod
-    def scenarios(self) -> ImmutableMapping[str, Scenarios]:
+    def scenarios(self) -> MappingProxyType[str, Scenarios]:
         """Get the scenarios for each scenario group."""
         raise NotImplementedError("Database must define scenarios!")
 
     @property
     @abstractmethod
-    def task_types(self) -> Iterable[TaskType]:
-        """Get the task types supported by the database."""
-        raise NotImplementedError("Database must define task_types!")
+    def cache_path(self) -> Path:
+        """Get the cache path of the database."""
+        raise NotImplementedError("Database must define cache_path!")
+
+    @abstractmethod
+    def get_main_database_scenario_data(self) -> Scenarios:
+        """Get the scenario data for the main database."""
+        raise NotImplementedError("Database must define get_main_database_scenario_data!")
+
+    @abstractmethod
+    def get_unique_scenario_data(self) -> MappingProxyType[str, ScenarioData]:
+        """Get all scenario data from all scenario groups and keep their order the same."""
+        raise NotImplementedError("Database must define get_unique_scenario_data!")
+
+    @abstractmethod
+    def load_scenario_records(self) -> Iterable[DatasetRecord]:
+        """Load scenario records from the database."""
+        raise NotImplementedError("Database must define load_scenario_records!")

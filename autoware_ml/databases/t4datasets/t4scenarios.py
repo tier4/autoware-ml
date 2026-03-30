@@ -1,11 +1,12 @@
 from collections import defaultdict
 import yaml
-from typing import Iterable, ImmutableMapping
+from typing import Iterable
+from types import MappingProxyType
 
 from pydantic import model_validator
 
-from autoware_ml.common.enums import SplitType
-from autoware_ml.databases.scenarios import ScenarioData, Scenarios
+from autoware_ml.common.enums.enums import SplitType
+from autoware_ml.databases.scenarios import ScenarioData, Scenarios, DatabaseVersion
 
 
 class T4Scenarios(Scenarios):
@@ -16,9 +17,9 @@ class T4Scenarios(Scenarios):
         """Build scenarios from database scenarios, and overwrite the scenario_data attribute."""
         scenario_data = defaultdict(list)
         for db_version in self.db_versions:
-            db_yaml_path = self.scenario_root_path / db_version / ".yaml"
+            db_yaml_path = self.scenario_root_path / db_version.db_version / ".yaml"
             with open(db_yaml_path, "r") as f:
-                db_scenarios: ImmutableMapping[str, Iterable[str]] = yaml.safe_load(f)
+                db_scenarios: MappingProxyType[str, Iterable[str]] = yaml.safe_load(f)
 
             scenario_splits = self._build_scenario_splits(db_scenarios, db_version)
             for split, scenarios in scenario_splits.items():
@@ -27,7 +28,7 @@ class T4Scenarios(Scenarios):
         object.__setattr__(self, "scenario_data", scenario_data)
 
     @staticmethod
-    def _build_scenario_data(scenario_id: str, db_version: str) -> ScenarioData:
+    def _build_scenario_data(scenario_id: str, db_version: DatabaseVersion) -> ScenarioData:
         """
         Build scenario data from a scenario ID and a database version.
         :param scenario_id: Scenario ID.
@@ -46,14 +47,16 @@ class T4Scenarios(Scenarios):
         return ScenarioData(
             db_version=db_version,
             scenario_id=scenario_id,
-            version=version,
+            scenario_version=version,
             vehicle_type=vehicle_type,
             location=city,
+            max_sweeps=db_version.max_sweeps,
+            sample_steps=db_version.sample_steps,
         )
 
     def _build_scenario_splits(
-        self, db_scenarios: ImmutableMapping[str, Iterable[str]], db_version: str
-    ) -> ImmutableMapping[SplitType, Iterable[ScenarioData]]:
+        self, db_scenarios: MappingProxyType[str, Iterable[str]], db_version: DatabaseVersion
+    ) -> MappingProxyType[SplitType, Iterable[ScenarioData]]:
         """
         Build splits from a database scenarios.
         :param db_scenarios: Database scenarios.

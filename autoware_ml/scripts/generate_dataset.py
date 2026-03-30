@@ -2,13 +2,37 @@ import logging
 
 from pathlib import Path
 import hydra
+from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 
 import autoware_ml.configs
+from autoware_ml.databases.database_interface import DatabaseInterface
 
 logger = logging.getLogger(__name__)
 
-_CONFIG_PATH = str(Path(autoware_ml.configs.__file__).parent.resolve() / "datasets")
+_CONFIG_PATH = str(Path(autoware_ml.configs.__file__).parent.resolve() / "generators")
+
+
+def build_database(cfg: DictConfig) -> DatabaseInterface:
+    """Build database interface.
+
+    Args:
+        cfg: Hydra configuration
+    """
+    # First, set the configuration to be mutable
+    OmegaConf.set_struct(cfg, False)
+    # Then, extract the scenario configs from the database config
+    # Must instantiate separately to reuse the same parameters, for example, scenario_root_path
+    scenario_configs = cfg.database.pop("scenarios", None)
+    if scenario_configs is None:
+        raise ValueError("Scenario configs must be provided in the database config.")
+
+    # Set the configuration to be immutable again
+    OmegaConf.set_struct(cfg, True)
+    logger.info("After:")
+    logger.info(OmegaConf.to_yaml(cfg))
+    # Instantiate the database
+    return instantiate(cfg.database, scenario_configs=scenario_configs, _recursive_=False)
 
 
 @hydra.main(version_base=None, config_path=_CONFIG_PATH)
@@ -24,6 +48,9 @@ def main(cfg: DictConfig):
     logger.info("=" * 80)
     logger.info(OmegaConf.to_yaml(cfg))
     logger.info("=" * 80)
+
+    # Instantiate DatabaseInterface
+    _: DatabaseInterface = build_database(cfg)
     # logger.info(cfg)
 
 
