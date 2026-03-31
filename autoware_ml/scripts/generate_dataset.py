@@ -55,7 +55,7 @@ def main(cfg: DictConfig):
 
     # Instantiate DatabaseInterface
     database: DatabaseInterface = build_database(cfg)
-    
+
     # Process scenario records and save them to a parquet file
     database.process_scenario_records()
 

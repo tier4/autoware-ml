@@ -14,6 +14,7 @@ from autoware_ml.databases.scenarios import ScenarioData
 
 logger = logging.getLogger(__name__)
 
+
 class T4SampleRecord(BaseModel):
     """Temporary T4 sample record."""
 
@@ -67,30 +68,27 @@ class T4RecordsGenerator:
 
     def _construct_t4_devkit_dataset(self) -> Tier4:
         """Construct T4 dataset."""
-        scene_root_dir_path = (self.database_root_path /
-                               self.scenario_data.db_version /
-                               self.scenario_data.scenario_id /
-                               self.scenario_data.scenario_version)
+        scene_root_dir_path = (
+            self.database_root_path
+            / self.scenario_data.db_version
+            / self.scenario_data.scenario_id
+            / self.scenario_data.scenario_version
+        )
         logger.info(f"Scene root directory path: {scene_root_dir_path}")
         if not scene_root_dir_path.exists():
-            raise ValueError(
-                f"Scene root directory {scene_root_dir_path} does not exist.")
+            raise ValueError(f"Scene root directory {scene_root_dir_path} does not exist.")
         return Tier4(data_root=scene_root_dir_path, verbose=False)
 
     def generate_dataset_records(self) -> Iterable[DatasetRecord]:
         """Generate dataset records."""
         records = []
-        logger.info(
-            f"Generating dataset records for scenario: {self.scenario_data.scenario_id}"
-        )
-        for sample_index in range(0, len(self.t4_devkit_dataset.sample),
-                                  self.sample_steps):
+        logger.info(f"Generating dataset records for scenario: {self.scenario_data.scenario_id}")
+        for sample_index in range(0, len(self.t4_devkit_dataset.sample), self.sample_steps):
             sample = self.t4_devkit_dataset.sample[sample_index]
             records.append(self.extract_t4_sample_record(sample, sample_index))
         return records
 
-    def extract_t4_sample_record(self, sample: Sample,
-                                 sample_index: int) -> T4SampleRecord:
+    def extract_t4_sample_record(self, sample: Sample, sample_index: int) -> T4SampleRecord:
         """Extract T4 sample record from a T4Dataset."""
         # First, read lidar token from the sample data
         if LidarChannel.LIDAR_TOP in sample.data:
@@ -103,10 +101,10 @@ class T4RecordsGenerator:
             )
         logger.info(f"Lidar token: {lidar_token}")
         # Second, read sample data and calibrated sensor from the T4Dataset
-        sd_record: SampleData = self.t4_devkit_dataset.get(
-            "sample_data", lidar_token)
+        sd_record: SampleData = self.t4_devkit_dataset.get("sample_data", lidar_token)
         cs_record: CalibratedSensor = self.t4_devkit_dataset.get(
-            "calibrated_sensor", sd_record.calibrated_sensor_token)
+            "calibrated_sensor", sd_record.calibrated_sensor_token
+        )
         lidar_path, _, _ = self.t4_devkit_dataset.get_sample_data(lidar_token)
         logger.info(f"Lidar path: {lidar_path}")
         # TODO (KokSeang): Extract more information, for example, boxes, from the T4Dataset.
