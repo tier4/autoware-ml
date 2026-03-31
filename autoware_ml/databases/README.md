@@ -20,22 +20,10 @@ To add a new dataset family, extend `Scenarios` with format-specific YAML parsin
 classDiagram
     direction TB
 
-    class polars {
-        <<external>>
-        DataFrame
-        Schema
-    }
-
-    class schemas {
-        DatasetRecord
-        DatasetTableSchema
-        DatasetTableColumn
-    }
-
-    class scenarios {
-        DatabaseVersion
-        ScenarioData
-        Scenarios
+    class generate_dataset {
+        <<Hydra entrypoint>>
+        build_database()
+        main()
     }
 
     class DatabaseInterface {
@@ -55,20 +43,27 @@ classDiagram
         process_scenario_records()
     }
 
+    class scenarios {
+        DatabaseVersion
+        ScenarioData
+        Scenarios
+    }
+
+    class schemas {
+        DatasetRecord
+        DatasetTableSchema
+        DatasetTableColumn
+    }
+
+    class polars {
+        <<external>>
+        DataFrame
+        Schema
+    }
+
     class ConcreteDatabase {
         <<dataset-specific>>
         process_scenario_records()
-    }
-
-    class ConcreteScenarios {
-        <<dataset-specific>>
-        build_scenarios()
-    }
-
-    class generate_dataset {
-        <<Hydra entrypoint>>
-        build_database()
-        main()
     }
 
     class Output {
@@ -76,7 +71,7 @@ classDiagram
         Iterable~DatasetRecord~
     }
 
-    schemas ..> polars : uses pl.DataType, pl.Schema
+    generate_dataset --> DatabaseInterface : instantiates via Hydra
 
     DatabaseInterface ..> scenarios : uses Scenarios, ScenarioData
     DatabaseInterface ..> schemas : uses DatasetRecord
@@ -86,12 +81,10 @@ classDiagram
     BaseDatabase --> schemas : uses DatasetRecord, DatasetTableSchema
     BaseDatabase --> polars : DataFrame, Schema
 
-    ConcreteScenarios --|> scenarios : extends Scenarios
     ConcreteDatabase --|> BaseDatabase : extends
-    ConcreteDatabase --> ConcreteScenarios : scenario groups
     ConcreteDatabase --> Output : process_scenario_records()
 
     Output --> schemas : list of DatasetRecord
 
-    generate_dataset --> DatabaseInterface : instantiates via Hydra
+    schemas ..> polars : uses pl.DataType, pl.Schema
 ```
