@@ -12,8 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Camera-LiDAR fusion transforms.
+
+This module contains calibration-status augmentations and preview utilities
+for camera-LiDAR fusion inputs.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 import cv2
 import matplotlib.pyplot as plt
@@ -22,11 +31,8 @@ import numpy.typing as npt
 import transforms3d
 from scipy.stats import truncnorm
 
-from autoware_ml.datamodule.t4dataset.calibration_status import (
-    CalibrationData,
-    CalibrationStatus,
-)
-from autoware_ml.transforms import BaseTransform
+from autoware_ml.transforms.base import BaseTransform
+from autoware_ml.utils.calibration import CalibrationData, CalibrationStatus
 
 
 class CalibrationMisalignment(BaseTransform):
@@ -122,6 +128,41 @@ class CalibrationMisalignment(BaseTransform):
         min_z_pos: float = 0.0,
         max_z_pos: float = 0.0,
     ):
+        """Initialize the calibration misalignment augmentation.
+
+        Args:
+            p: Probability of applying augmentation.
+            activate_roll: Whether to perturb roll.
+            activate_pitch: Whether to perturb pitch.
+            activate_yaw: Whether to perturb yaw.
+            activate_x: Whether to perturb x translation.
+            activate_y: Whether to perturb y translation.
+            activate_z: Whether to perturb z translation.
+            min_roll_neg: Minimum negative roll magnitude in degrees.
+            max_roll_neg: Maximum negative roll magnitude in degrees.
+            min_roll_pos: Minimum positive roll magnitude in degrees.
+            max_roll_pos: Maximum positive roll magnitude in degrees.
+            min_pitch_neg: Minimum negative pitch magnitude in degrees.
+            max_pitch_neg: Maximum negative pitch magnitude in degrees.
+            min_pitch_pos: Minimum positive pitch magnitude in degrees.
+            max_pitch_pos: Maximum positive pitch magnitude in degrees.
+            min_yaw_neg: Minimum negative yaw magnitude in degrees.
+            max_yaw_neg: Maximum negative yaw magnitude in degrees.
+            min_yaw_pos: Minimum positive yaw magnitude in degrees.
+            max_yaw_pos: Maximum positive yaw magnitude in degrees.
+            min_x_neg: Minimum negative x translation magnitude in meters.
+            max_x_neg: Maximum negative x translation magnitude in meters.
+            min_x_pos: Minimum positive x translation magnitude in meters.
+            max_x_pos: Maximum positive x translation magnitude in meters.
+            min_y_neg: Minimum negative y translation magnitude in meters.
+            max_y_neg: Maximum negative y translation magnitude in meters.
+            min_y_pos: Minimum positive y translation magnitude in meters.
+            max_y_pos: Maximum positive y translation magnitude in meters.
+            min_z_neg: Minimum negative z translation magnitude in meters.
+            max_z_neg: Maximum negative z translation magnitude in meters.
+            min_z_pos: Minimum positive z translation magnitude in meters.
+            max_z_pos: Maximum positive z translation magnitude in meters.
+        """
         super().__init__()
 
         self.activate_roll = activate_roll
@@ -201,21 +242,45 @@ class CalibrationMisalignment(BaseTransform):
         self.p = p
 
     def _validate_non_negative(self, name: str, value: float) -> None:
-        """Validate that a parameter is >= 0 (magnitude)."""
+        """Validate that a parameter is non-negative.
+
+        Args:
+            name: Parameter name.
+            value: Parameter value.
+
+        Raises:
+            ValueError: If the value is negative.
+        """
         if value < 0:
             raise ValueError(f"{name} must be >= 0 (specify as magnitude), got {value}")
 
     def _validate_range(self, name: str, min_val: float, max_val: float) -> None:
-        """Validate that min <= max for a range."""
+        """Validate that a configured range is well ordered.
+
+        Args:
+            name: Range name.
+            min_val: Lower bound.
+            max_val: Upper bound.
+
+        Raises:
+            ValueError: If the lower bound exceeds the upper bound.
+        """
         if min_val > max_val:
             raise ValueError(f"min_{name} ({min_val}) must be <= max_{name} ({max_val})")
 
-    def on_skip(self, input_dict: Dict[str, Any]) -> Dict[str, Any]:
-        """Set calibration status to CALIBRATED when transform is skipped."""
+    def on_skip(self, input_dict: dict[str, Any]) -> dict[str, Any]:
+        """Set calibration status to calibrated when the transform is skipped.
+
+        Args:
+            input_dict: Sample dictionary updated in place.
+
+        Returns:
+            Updated sample dictionary.
+        """
         input_dict["gt_calibration_status"] = CalibrationStatus.CALIBRATED.value
         return input_dict
 
-    def transform(self, input_dict: Dict[str, Any]) -> Dict[str, Any]:
+    def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
         """Apply calibration misalignment augmentation.
 
         Args:
@@ -237,7 +302,20 @@ class CalibrationMisalignment(BaseTransform):
     def bounded_gaussian(
         self, center: float, min_value: float, max_value: float, scale: float
     ) -> float:
-        """Generate a value from a truncated normal distribution."""
+        """Generate a value from a truncated normal distribution.
+
+        Args:
+            center: Distribution center before truncation.
+            min_value: Lower truncation bound.
+            max_value: Upper truncation bound.
+            scale: Distribution scale parameter.
+
+        Returns:
+            Sampled scalar value.
+
+        Raises:
+            ValueError: If the bounds are invalid or the scale is non-positive.
+        """
         if min_value >= max_value:
             raise ValueError(f"min_value ({min_value}) must be less than max_value ({max_value})")
         if scale <= 0:
@@ -290,7 +368,7 @@ class CalibrationMisalignment(BaseTransform):
             )
             return value
 
-    def alter_calibration(self, transform: np.ndarray) -> np.ndarray:
+    def alter_calibration(self, transform: npt.NDArray) -> npt.NDArray:
         """Apply random noise to a 4x4 transformation matrix.
 
         The noise is applied in the camera frame so that, e.g., an x-translation
@@ -391,21 +469,33 @@ class LidarCameraFusion(BaseTransform):
         self,
         max_depth: float = 128.0,
         dilation_size: int = 1,
-        ego_box: List[float] | None = None,
+        ego_box: Sequence[float] | None = None,
         occlusion_adjust_margin: float = 0.01,
     ):
+        """Initialize the LiDAR-camera fusion transform.
+
+        Args:
+            max_depth: Maximum rendered depth in meters.
+            dilation_size: Dilation size applied to projected points.
+            ego_box: Optional ego-vehicle box used for occlusion filtering.
+            occlusion_adjust_margin: Margin used when adjusting the ego box.
+        """
         super().__init__()
         self.max_depth = max_depth
         self.dilation_size = dilation_size
         self.ego_box = ego_box
         self.occlusion_adjust_margin = occlusion_adjust_margin
 
-    def apply_defaults(self, input_dict: Dict[str, Any]) -> None:
-        """Set default affine_transform to None."""
+    def apply_defaults(self, input_dict: dict[str, Any]) -> None:
+        """Set the default affine transform to ``None``.
+
+        Args:
+            input_dict: Sample dictionary updated in place.
+        """
         if "affine_transform" not in input_dict:
             input_dict["affine_transform"] = None
 
-    def transform(self, input_dict: Dict[str, Any]) -> Dict[str, Any]:
+    def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
         """Create fused image from camera and LiDAR data.
 
         Args:
@@ -435,7 +525,17 @@ class LidarCameraFusion(BaseTransform):
         calibration_data: CalibrationData,
         affine_transform: npt.NDArray[np.float64] = None,
     ) -> npt.NDArray[np.float32]:
-        """Create fused image with RGB, depth, and intensity channels."""
+        """Create a fused image with RGB, depth, and intensity channels.
+
+        Args:
+            image: Input image in BGR format.
+            points: Point cloud with intensity values.
+            calibration_data: Camera-LiDAR calibration data.
+            affine_transform: Optional image affine transform.
+
+        Returns:
+            Fused five-channel image in BGRDI layout.
+        """
         if self.ego_box is not None:
             points = self._filter_occluded_points(
                 points, calibration_data, affine_transform, image.shape[:2]
@@ -444,25 +544,25 @@ class LidarCameraFusion(BaseTransform):
         xyz = points[:, :3]
         intensities = points[:, 3]
 
-        pointcloud_ccs = self._transform_points_to_camera(xyz, calibration_data)
+        point_cloud_ccs = self._transform_points_to_camera(xyz, calibration_data)
 
-        valid_mask = pointcloud_ccs[:, 2] > 0.0
-        pointcloud_ccs = pointcloud_ccs[valid_mask]
+        valid_mask = point_cloud_ccs[:, 2] > 0.0
+        point_cloud_ccs = point_cloud_ccs[valid_mask]
         intensities = intensities[valid_mask]
 
-        pointcloud_ics = self._project_points_to_image(pointcloud_ccs, calibration_data)
+        point_cloud_ics = self._project_points_to_image(point_cloud_ccs, calibration_data)
 
         if affine_transform is not None:
-            pointcloud_ics = self._apply_affine_to_points(pointcloud_ics, affine_transform)
+            point_cloud_ics = self._apply_affine_to_points(point_cloud_ics, affine_transform)
 
-        return self._create_lidar_images(image, pointcloud_ics, pointcloud_ccs, intensities)
+        return self._create_lidar_images(image, point_cloud_ics, point_cloud_ccs, intensities)
 
     def _filter_occluded_points(
         self,
         points: npt.NDArray[np.float32],
         calibration_data: CalibrationData,
         affine_transform: npt.NDArray[np.float64] = None,
-        image_shape: Tuple[int, int] = None,
+        image_shape: tuple[int, int] | None = None,
     ) -> npt.NDArray[np.float32]:
         """Filter out points occluded by the ego vehicle chassis using ray casting.
 
@@ -550,31 +650,31 @@ class LidarCameraFusion(BaseTransform):
         if affine_transform is not None and image_shape is not None:
             # Project points to camera coordinates using the current (possibly noisy) transform
             xyz = points[:, :3]
-            pointcloud_ccs = self._transform_points_to_camera(xyz, calibration_data)
+            point_cloud_ccs = self._transform_points_to_camera(xyz, calibration_data)
 
             # Filter points behind camera
-            valid_mask_3d = pointcloud_ccs[:, 2] > 0.0
+            valid_mask_3d = point_cloud_ccs[:, 2] > 0.0
             if not np.any(valid_mask_3d):
                 return points[~occluded]
 
-            pointcloud_ccs_valid = pointcloud_ccs[valid_mask_3d]
+            point_cloud_ccs_valid = point_cloud_ccs[valid_mask_3d]
             occluded_valid = occluded[valid_mask_3d]
 
             # Project to image coordinates
-            pointcloud_ics = self._project_points_to_image(pointcloud_ccs_valid, calibration_data)
+            point_cloud_ics = self._project_points_to_image(point_cloud_ccs_valid, calibration_data)
 
             # Apply affine transform to see where points would actually appear
-            pointcloud_ics_transformed = self._apply_affine_to_points(
-                pointcloud_ics, affine_transform
+            point_cloud_ics_transformed = self._apply_affine_to_points(
+                point_cloud_ics, affine_transform
             )
 
             # Check if transformed points are within image bounds
             h, w = image_shape
             in_bounds = (
-                (pointcloud_ics_transformed[:, 0] >= 0)
-                & (pointcloud_ics_transformed[:, 0] < w)
-                & (pointcloud_ics_transformed[:, 1] >= 0)
-                & (pointcloud_ics_transformed[:, 1] < h)
+                (point_cloud_ics_transformed[:, 0] >= 0)
+                & (point_cloud_ics_transformed[:, 0] < w)
+                & (point_cloud_ics_transformed[:, 1] >= 0)
+                & (point_cloud_ics_transformed[:, 1] < h)
             )
 
             # Combine occlusion filtering with visibility in transformed image space
@@ -595,7 +695,15 @@ class LidarCameraFusion(BaseTransform):
         points: npt.NDArray[np.float32],
         calibration_data: CalibrationData,
     ) -> npt.NDArray[np.float32]:
-        """Transform LiDAR points to camera coordinate system."""
+        """Transform LiDAR points to the camera coordinate system.
+
+        Args:
+            points: Point coordinates in the LiDAR frame.
+            calibration_data: Camera-LiDAR calibration data.
+
+        Returns:
+            Point coordinates in the camera frame.
+        """
         num_points = points.shape[0]
         points_hom = np.concatenate([points, np.ones((num_points, 1), dtype=points.dtype)], axis=1)
 
@@ -606,24 +714,32 @@ class LidarCameraFusion(BaseTransform):
 
     def _project_points_to_image(
         self,
-        pointcloud_ccs: npt.NDArray[np.float32],
+        point_cloud_ccs: npt.NDArray[np.float32],
         calibration_data: CalibrationData,
     ) -> npt.NDArray[np.float32]:
-        """Project 3D points to 2D image coordinates."""
+        """Project 3D points to 2D image coordinates.
+
+        Args:
+            point_cloud_ccs: Point coordinates in the camera frame.
+            calibration_data: Camera-LiDAR calibration data.
+
+        Returns:
+            Projected image coordinates.
+        """
         camera_matrix = calibration_data.new_camera_matrix
         distortion_coefficients = calibration_data.distortion_coefficients
 
-        pointcloud_ics, _ = cv2.projectPoints(
-            pointcloud_ccs,
+        point_cloud_ics, _ = cv2.projectPoints(
+            point_cloud_ccs,
             np.zeros(3),
             np.zeros(3),
             camera_matrix,
             distortion_coefficients,
         )
-        if pointcloud_ics is None:
+        if point_cloud_ics is None:
             return np.zeros((0, 2), dtype=np.float32)
 
-        return pointcloud_ics.reshape(-1, 2)
+        return point_cloud_ics.reshape(-1, 2)
 
     def _apply_affine_to_points(
         self,
@@ -647,8 +763,8 @@ class LidarCameraFusion(BaseTransform):
     def _create_lidar_images(
         self,
         image: npt.NDArray[np.uint8],
-        pointcloud_ics: npt.NDArray[np.float32],
-        pointcloud_ccs: npt.NDArray[np.float32],
+        point_cloud_ics: npt.NDArray[np.float32],
+        point_cloud_ccs: npt.NDArray[np.float32],
         intensities: npt.NDArray[np.float32],
     ) -> npt.NDArray[np.float32]:
         """Create fused image with depth and intensity channels.
@@ -661,16 +777,16 @@ class LidarCameraFusion(BaseTransform):
         intensity_image = np.zeros((h, w), dtype=np.float32)
 
         valid_mask = (
-            (pointcloud_ics[:, 0] >= 0)
-            & (pointcloud_ics[:, 0] <= w - 1)
-            & (pointcloud_ics[:, 1] >= 0)
-            & (pointcloud_ics[:, 1] <= h - 1)
-            & (pointcloud_ccs[:, 2] > 0.0)
-            & (pointcloud_ccs[:, 2] < self.max_depth)
+            (point_cloud_ics[:, 0] >= 0)
+            & (point_cloud_ics[:, 0] <= w - 1)
+            & (point_cloud_ics[:, 1] >= 0)
+            & (point_cloud_ics[:, 1] <= h - 1)
+            & (point_cloud_ccs[:, 2] > 0.0)
+            & (point_cloud_ccs[:, 2] < self.max_depth)
         )
 
-        valid_ics = pointcloud_ics[valid_mask]
-        valid_ccs = pointcloud_ccs[valid_mask]
+        valid_ics = point_cloud_ics[valid_mask]
+        valid_ccs = point_cloud_ccs[valid_mask]
         valid_intensities = intensities[valid_mask]
 
         if valid_ics.size > 0:
@@ -746,16 +862,29 @@ class Affine(BaseTransform):
     _required_keys = ["img"]
 
     def __init__(self, p: float = 0.5, max_distortion: float = 0.1):
+        """Initialize the affine image augmentation.
+
+        Args:
+            p: Probability of applying the augmentation.
+            max_distortion: Maximum corner displacement as a fraction of image size.
+        """
         super().__init__()
         self.p = p
         self.max_distortion = max_distortion
 
-    def on_skip(self, input_dict: Dict[str, Any]) -> Dict[str, Any]:
-        """Set identity matrix when transform is skipped."""
+    def on_skip(self, input_dict: dict[str, Any]) -> dict[str, Any]:
+        """Set the identity matrix when the transform is skipped.
+
+        Args:
+            input_dict: Sample dictionary updated in place.
+
+        Returns:
+            Updated sample dictionary.
+        """
         input_dict["affine_transform"] = np.eye(3, dtype=np.float64)
         return input_dict
 
-    def transform(self, input_dict: Dict[str, Any]) -> Dict[str, Any]:
+    def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
         """Apply random affine transformation to the image.
 
         Args:
@@ -764,7 +893,7 @@ class Affine(BaseTransform):
         Returns:
             Dictionary with transformed image and 'affine_transform' matrix.
         """
-        image: np.ndarray = input_dict["img"]
+        image: npt.NDArray = input_dict["img"]
 
         h, w = image.shape[:2]
 
@@ -850,6 +979,16 @@ class SaveFusionPreview(BaseTransform):
         depth_colormap: str = "turbo",
         intensity_colormap: str = "jet",
     ):
+        """Initialize the fusion preview writer.
+
+        Args:
+            p: Probability of saving a preview.
+            out_dir: Output directory for generated preview images.
+            max_depth: Maximum depth used when decoding the fused image.
+            alpha: Overlay blending factor.
+            depth_colormap: Colormap used for depth visualization.
+            intensity_colormap: Colormap used for intensity visualization.
+        """
         super().__init__()
         self.p = p
         self.out_dir = Path(out_dir)
@@ -860,12 +999,16 @@ class SaveFusionPreview(BaseTransform):
 
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
-    def apply_defaults(self, input_dict: Dict[str, Any]) -> None:
-        """Set default calibration status to None (unknown)."""
+    def apply_defaults(self, input_dict: dict[str, Any]) -> None:
+        """Set the default calibration status to ``None``.
+
+        Args:
+            input_dict: Sample dictionary updated in place.
+        """
         if "gt_calibration_status" not in input_dict:
             input_dict["gt_calibration_status"] = None
 
-    def transform(self, input_dict: Dict[str, Any]) -> Dict[str, Any]:
+    def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
         """Save preview images for each sample in the batch.
 
         Args:
@@ -888,19 +1031,27 @@ class SaveFusionPreview(BaseTransform):
     def _save_preview(
         self,
         fused_img: npt.NDArray[np.float32],
-        metadata: Dict[str, Any],
+        metadata: Mapping[str, Any],
         calibration_status: int | None,
     ) -> None:
-        """Save depth and intensity preview images for a single sample."""
+        """Save depth and intensity preview images for a single sample.
+
+        Args:
+            fused_img: Fused image in BGRDI layout.
+            metadata: Sample metadata used to derive the output filename.
+            calibration_status: Optional calibration status label.
+        """
         bgr, depth, intensity = self._recover_channels(fused_img)
 
         base_name = self._get_base_filename(metadata)
         if calibration_status is None:
             status_suffix = ""
-        elif calibration_status == CalibrationStatus.CALIBRATED.value:
-            status_suffix = "_calibrated"
         else:
-            status_suffix = "_miscalibrated"
+            status_suffix = (
+                "_calibrated"
+                if calibration_status == CalibrationStatus.CALIBRATED.value
+                else "_miscalibrated"
+            )
 
         # Convert BGR to RGB for matplotlib colormap processing
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
@@ -917,7 +1068,7 @@ class SaveFusionPreview(BaseTransform):
 
     def _recover_channels(
         self, fused_img: npt.NDArray[np.float32]
-    ) -> Tuple[npt.NDArray[np.uint8], npt.NDArray[np.float32], npt.NDArray[np.float32]]:
+    ) -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.float32], npt.NDArray[np.float32]]:
         """Recover original BGR, depth, and intensity values from fused image.
 
         Args:
@@ -967,7 +1118,7 @@ class SaveFusionPreview(BaseTransform):
 
         return result
 
-    def _get_base_filename(self, metadata: Dict[str, Any]) -> str:
+    def _get_base_filename(self, metadata: Mapping[str, Any]) -> str:
         """Extract base filename from metadata.
 
         Args:

@@ -17,7 +17,7 @@
 import pytest
 import torch
 
-from autoware_ml.models.common.backbones.resnet import ResNet18
+from autoware_ml.models.common.backbones import ResNet18
 
 
 class TestResNet18:

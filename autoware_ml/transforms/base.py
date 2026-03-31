@@ -12,10 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Augmentation module for data transformations."""
+"""Base classes and composition utilities for data transforms.
+
+This module defines the core transform protocol used across Autoware-ML data
+pipelines and provides sequential composition helpers.
+"""
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
 
@@ -36,10 +41,11 @@ class BaseTransform(ABC):
     """
 
     p: float | None = None  # None means always run (no probability)
-    _required_keys: List[str] = []
-    _optional_keys: List[str] = []
+    _required_keys: Sequence[str] = ()
+    _optional_keys: Sequence[str] = ()
+    pre_transform: Any = None
 
-    def __call__(self, input_dict: Dict[str, Any]) -> Dict[str, Any]:
+    def __call__(self, input_dict: dict[str, Any], context: Any = None) -> dict[str, Any]:
         """Execute transform with probability and key validation.
 
         Order of operations:
@@ -48,6 +54,8 @@ class BaseTransform(ABC):
             3. Check probability (skip if not triggered)
             4. Execute the actual transform
         """
+        self._context = context
+
         # 1. Validate required keys (raises error if any missing)
         self._validate_required_keys(input_dict)
 
@@ -61,14 +69,35 @@ class BaseTransform(ABC):
         # 4. Execute the actual transform
         return self.transform(input_dict)
 
-    def _validate_required_keys(self, input_dict: Dict[str, Any]) -> None:
-        """Raise KeyError if any required key is missing."""
+    @property
+    def context(self) -> Any:
+        """Return the active execution context for the current transform call.
+
+        Returns:
+            Pipeline context associated with the current sample, or ``None``
+            when the transform is executed outside a dataset pipeline.
+        """
+        return getattr(self, "_context", None)
+
+    def _validate_required_keys(self, input_dict: dict[str, Any]) -> None:
+        """Raise ``KeyError`` when any required key is missing.
+
+        Args:
+            input_dict: Input mapping validated before transform execution.
+
+        Raises:
+            KeyError: If a required key defined by the transform is absent.
+        """
         for key in self._required_keys:
             if key not in input_dict:
                 raise KeyError(f"{self.__class__.__name__}: Missing required key '{key}'")
 
-    def _handle_optional_keys(self, input_dict: Dict[str, Any]) -> None:
-        """Check optional keys, call apply_defaults if any missing."""
+    def _handle_optional_keys(self, input_dict: dict[str, Any]) -> None:
+        """Populate missing optional keys before executing the transform.
+
+        Args:
+            input_dict: Input mapping validated before transform execution.
+        """
         missing = [key for key in self._optional_keys if key not in input_dict]
         if missing:
             self.apply_defaults(input_dict)
@@ -80,14 +109,14 @@ class BaseTransform(ABC):
             True if transform should be applied, False to skip.
         """
         if self.p is None:
-            return True  # Always apply
+            return True
         if self.p <= 0.0:
-            return False  # Never apply
+            return False
         if self.p >= 1.0:
-            return True  # Always apply
+            return True
         return np.random.rand() < self.p
 
-    def apply_defaults(self, input_dict: Dict[str, Any]) -> None:
+    def apply_defaults(self, input_dict: dict[str, Any]) -> None:
         """Set default values for missing optional keys. Override in subclasses.
 
         Base implementation raises error - subclasses with optional keys MUST override.
@@ -100,7 +129,7 @@ class BaseTransform(ABC):
             f"{self.__class__.__name__}: Missing optional keys but apply_defaults() not implemented"
         )
 
-    def on_skip(self, input_dict: Dict[str, Any]) -> Dict[str, Any]:
+    def on_skip(self, input_dict: dict[str, Any]) -> dict[str, Any]:
         """Called when transform is skipped due to probability.
 
         Override for custom behavior when transform is skipped.
@@ -115,7 +144,7 @@ class BaseTransform(ABC):
         return input_dict
 
     @abstractmethod
-    def transform(self, input_dict: Dict[str, Any]) -> Dict[str, Any]:
+    def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
         """Process input dictionary and return updated mapping.
 
         Args:
@@ -129,21 +158,41 @@ class BaseTransform(ABC):
 
 
 class TransformsCompose:
-    """Apply a sequence of transforms in order."""
+    """Apply a sequence of transforms in order.
 
-    def __init__(self, pipeline: Optional[List["BaseTransform"]] = None):
-        """Initialize the transform pipeline."""
+    The composed transform forwards one sample dictionary through every
+    configured transform and returns the final result.
+    """
+
+    def __init__(self, pipeline: Sequence["BaseTransform"] | None = None):
+        """Initialize the transform pipeline.
+
+        Args:
+            pipeline: Ordered transforms applied to each input dictionary.
+        """
         self.pipeline = pipeline or []
 
-    def __call__(self, input_dict: Dict[str, Any]) -> Dict[str, Any]:
-        """Apply each transform sequentially, merging updates."""
+    def __call__(self, input_dict: dict[str, Any], context: Any = None) -> dict[str, Any]:
+        """Apply each transform sequentially, merging updates.
+
+        Args:
+            input_dict: Input mapping passed through the configured transforms.
+            context: Optional pipeline context forwarded to each transform.
+
+        Returns:
+            Transformed mapping after all pipeline stages have been applied.
+        """
         for transform in self.pipeline:
-            input_dict |= transform(input_dict)
+            input_dict |= transform(input_dict, context=context)
 
         return input_dict
 
     def __repr__(self) -> str:
-        """Returns a formatted string representation of the composition."""
+        """Return a formatted string representation of the composition.
+
+        Returns:
+            Multi-line string showing the ordered transform pipeline.
+        """
         if not self.pipeline:
             return f"{self.__class__.__name__}(pipeline=[])"
 

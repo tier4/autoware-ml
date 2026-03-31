@@ -4,103 +4,57 @@ icon: lucide/camera
 
 # Calibration Status Classifier
 
-The Calibration Status Classifier detects whether camera-LiDAR calibration has drifted. It's a binary classification model that analyzes fused camera and LiDAR data to determine if recalibration is needed.
+The Calibration Status Classifier is a camera-LiDAR binary classification model for calibration health monitoring. It predicts whether the current sensor calibration is valid or whether recalibration is required.
 
-## Overview
+## Summary
 
-| Property     | Value                                                    |
-| ------------ | -------------------------------------------------------- |
-| Task         | Binary Classification                                    |
-| Input        | Fused RGB + Depth + Intensity image (5 channels)         |
-| Output       | Calibration status (0: OK, 1: Needs recalibration)       |
-| Architecture | ResNet18 backbone + Global Average Pooling + Linear Head |
-| Datasets     | NuScenes, T4Dataset                                      |
+| Property     | Value                                                  |
+| ------------ | ------------------------------------------------------ |
+| Task         | Calibration status classification                      |
+| Modality     | Camera and LiDAR                                       |
+| Input        | Fused five-channel BGRDI image                         |
+| Output       | Binary calibration status                              |
+| Architecture | ResNet18 backbone with global average pooling and head |
+| Datasets     | NuScenes, T4Dataset                                    |
 
-## Architecture
+## Available Configurations
 
-```mermaid
-flowchart LR
-    subgraph Input [Input Processing]
-        Camera[Camera Image]
-        LiDAR[LiDAR Points]
-        Camera --> Fusion[LidarCameraFusion]
-        LiDAR --> Fusion
-        Fusion --> FusedImg["Fused Image (5ch)"]
-    end
+| Config Name                                                                  | Dataset   | Purpose                         |
+| ---------------------------------------------------------------------------- | --------- | ------------------------------- |
+| `calibration_status/calibration_status_classifier/resnet18_nuscenes`         | NuScenes  | Standard training configuration |
+| `calibration_status/calibration_status_classifier/resnet18_t4dataset_j6gen2` | T4Dataset | Standard training configuration |
 
-    subgraph Model [CalibrationStatusClassifier]
-        FusedImg --> Backbone[ResNet18]
-        Backbone --> Neck[GlobalAveragePooling]
-        Neck --> Head[LinearClsHead]
-        Head --> Output[Logits]
-    end
-```
+## Input Representation
 
-### Input Channels
+The model consumes a fused image with five channels.
 
-| Channel | Content                         |
-| ------- | ------------------------------- |
-| 0-2     | RGB from camera                 |
-| 3       | Depth from LiDAR projection     |
-| 4       | Intensity from LiDAR projection |
-
-## Data Pipeline
-
-### Transforms
-
-```yaml
-train_transforms:
-  pipeline:
-    - _target_: autoware_ml.transforms.camera.UndistortImage
-      alpha: 0.0
-
-    - _target_: autoware_ml.transforms.camera_lidar.CalibrationMisalignment
-      p: 0.5
-      min_angle: 1.0
-      max_angle: 5.0
-
-    - _target_: autoware_ml.transforms.camera_lidar.LidarCameraFusion
-      max_depth: 128.0
-
-    - _target_: autoware_ml.transforms.common.PermuteAxes
-      input_keys: [fused_img]
-      axes: [2, 0, 1]
-```
-
-**CalibrationMisalignment**: Artificially introduces calibration errors by rotating and translating LiDAR points before projection. This is how the model learns what miscalibration looks like.
-
-**LidarCameraFusion**: Projects LiDAR points onto the camera image, creating depth and intensity channels.
+| Channel | Content                    |
+| ------- | -------------------------- |
+| `0-2`   | BGR image                  |
+| `3`     | LiDAR depth projection     |
+| `4`     | LiDAR intensity projection |
 
 ## Training
 
-### Quick Start
-
 ```bash
-# Generate dataset info
-autoware-ml create-dataset \
-    --dataset nuscenes \
-    --task calibration_status \
-    --root-path /workspace/data/nuscenes \
-    --out-dir /workspace/data/nuscenes/info
-
-# Train
-autoware-ml train --config-name tasks/calibration_status/calibration_status_classifier/resnet18_nuscenes
+autoware-ml train --config-name calibration_status/calibration_status_classifier/resnet18_nuscenes
+autoware-ml train --config-name calibration_status/calibration_status_classifier/resnet18_t4dataset_j6gen2
 ```
 
-### Configuration
+For a pipeline validation run:
 
-```yaml title="configs/tasks/calibration_status/calibration_status_classifier/resnet18_nuscenes.yaml"
-defaults:
-  - /tasks/calibration_status/calibration_status_classifier/resnet18_base
-  - _self_
+```bash
+autoware-ml train \
+    --config-name calibration_status/calibration_status_classifier/resnet18_nuscenes \
+    +trainer.fast_dev_run=true
+```
 
-data_root: /workspace/data/nuscenes
+## Evaluation
 
-datamodule:
-  _target_: autoware_ml.datamodule.nuscenes.calibration_status.NuscenesCalibrationDataModule
-  data_root: ${data_root}
-  train_ann_file: ${data_root}/info/nuscenes_infos_train.pkl
-  val_ann_file: ${data_root}/info/nuscenes_infos_val.pkl
+```bash
+autoware-ml test \
+    --config-name calibration_status/calibration_status_classifier/resnet18_nuscenes \
+    +checkpoint=mlruns/calibration_status/calibration_status_classifier/resnet18_nuscenes/<date>/<time>/checkpoints/best.ckpt
 ```
 
 ## Deployment
@@ -108,31 +62,18 @@ datamodule:
 ```bash
 autoware-ml deploy \
     --config-name calibration_status/calibration_status_classifier/resnet18_nuscenes \
-    +checkpoint=mlruns/<date>/<time>/checkpoints/last.ckpt
+    +checkpoint=mlruns/calibration_status/calibration_status_classifier/resnet18_nuscenes/<date>/<time>/checkpoints/best.ckpt
 ```
 
-### Dynamic Shapes
+## Data Pipeline
 
-The model accepts variable input resolutions:
+The training pipeline includes image undistortion, synthetic calibration perturbation, LiDAR-camera fusion, and channel-first tensor conversion. Calibration perturbation is used to generate positive training samples representing miscalibrated sensor pairs.
 
-```yaml
-deploy:
-  onnx:
-    dynamic_shapes:
-      fused_img: { 2: height, 3: width }
-  tensorrt:
-    input_shapes:
-      input:
-        min_shape: [1, 5, 1080, 1920]
-        opt_shape: [1, 5, 1440, 2560]
-        max_shape: [1, 5, 2160, 3840]
-```
+## Implementation
 
-## Files
-
-| File                                                              | Purpose              |
-| ----------------------------------------------------------------- | -------------------- |
-| `autoware_ml/models/calibration_status/`                          | Model implementation |
-| `autoware_ml/datamodule/nuscenes/calibration_status.py`           | NuScenes DataModule  |
-| `autoware_ml/datamodule/t4dataset/calibration_status.py`          | T4Dataset DataModule |
-| `configs/tasks/calibration_status/calibration_status_classifier/` | Model configurations |
+| Path                                                                          | Description          |
+| ----------------------------------------------------------------------------- | -------------------- |
+| `autoware_ml/models/calibration_status/`                                      | Model implementation |
+| `autoware_ml/datamodule/nuscenes/calibration_status.py`                       | NuScenes datamodule  |
+| `autoware_ml/datamodule/t4dataset/calibration_status.py`                      | T4Dataset datamodule |
+| `autoware_ml/configs/tasks/calibration_status/calibration_status_classifier/` | Task configurations  |

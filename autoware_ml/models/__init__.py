@@ -12,7 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Model modules for Autoware-ML framework."""
+"""Top-level model namespace for the Autoware-ML framework.
+
+The package exposes only framework-level base classes. Task-specific models are
+exported from their respective subpackages such as
+``autoware_ml.models.calibration_status`` or
+``autoware_ml.models.detection3d``.
+"""
 
 from autoware_ml.models.base import BaseModel
 

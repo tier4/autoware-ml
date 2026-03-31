@@ -12,7 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Autoware-ML CLI module."""
+"""Public entrypoints for the Autoware-ML command-line interface.
+
+The package exposes the Typer application object and the executable ``main``
+function used by the installed console script.
+"""
 
 from autoware_ml.cli.cli import app, main
 

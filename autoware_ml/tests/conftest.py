@@ -14,20 +14,18 @@
 
 """Global fixtures for Autoware-ML test suite."""
 
-from typing import Any, Dict, List
+from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 import pytest
 import torch
 
-from autoware_ml.datamodule.t4dataset.calibration_status import (
-    CalibrationData,
-    CalibrationStatus,
-)
+from autoware_ml.utils.calibration import CalibrationData, CalibrationStatus
 
 
 @pytest.fixture
-def sample_camera_matrix() -> np.ndarray:
+def sample_camera_matrix() -> npt.NDArray[np.float32]:
     """Create a realistic camera intrinsic matrix (3x3)."""
     fx, fy = 1000.0, 1000.0
     cx, cy = 320.0, 240.0
@@ -35,13 +33,13 @@ def sample_camera_matrix() -> np.ndarray:
 
 
 @pytest.fixture
-def sample_distortion_coefficients() -> np.ndarray:
+def sample_distortion_coefficients() -> npt.NDArray[np.float32]:
     """Create sample distortion coefficients (5,)."""
     return np.array([0.1, -0.2, 0.001, 0.001, 0.05], dtype=np.float32)
 
 
 @pytest.fixture
-def sample_lidar_to_camera() -> np.ndarray:
+def sample_lidar_to_camera() -> npt.NDArray[np.float32]:
     """Create a realistic LiDAR to camera transformation matrix (4x4)."""
     return np.array(
         [[0, -1, 0, 0], [0, 0, -1, -0.1], [1, 0, 0, -0.3], [0, 0, 0, 1]],
@@ -51,9 +49,9 @@ def sample_lidar_to_camera() -> np.ndarray:
 
 @pytest.fixture
 def sample_calibration_data(
-    sample_camera_matrix: np.ndarray,
-    sample_distortion_coefficients: np.ndarray,
-    sample_lidar_to_camera: np.ndarray,
+    sample_camera_matrix: npt.NDArray[np.float32],
+    sample_distortion_coefficients: npt.NDArray[np.float32],
+    sample_lidar_to_camera: npt.NDArray[np.float32],
 ) -> CalibrationData:
     """Create valid CalibrationData for testing."""
     return CalibrationData(
@@ -65,8 +63,8 @@ def sample_calibration_data(
 
 @pytest.fixture
 def sample_calibration_data_no_distortion(
-    sample_camera_matrix: np.ndarray,
-    sample_lidar_to_camera: np.ndarray,
+    sample_camera_matrix: npt.NDArray[np.float32],
+    sample_lidar_to_camera: npt.NDArray[np.float32],
 ) -> CalibrationData:
     """Create CalibrationData with zero distortion for testing."""
     return CalibrationData(
@@ -77,21 +75,21 @@ def sample_calibration_data_no_distortion(
 
 
 @pytest.fixture
-def sample_image() -> np.ndarray:
+def sample_image() -> npt.NDArray[np.uint8]:
     """Create dummy BGR image (H, W, 3)."""
     h, w = 480, 640
     return np.random.randint(0, 255, (h, w, 3), dtype=np.uint8)
 
 
 @pytest.fixture
-def sample_image_small() -> np.ndarray:
+def sample_image_small() -> npt.NDArray[np.uint8]:
     """Create smaller dummy BGR image for faster tests (H, W, 3)."""
     h, w = 64, 64
     return np.random.randint(0, 255, (h, w, 3), dtype=np.uint8)
 
 
 @pytest.fixture
-def sample_points() -> np.ndarray:
+def sample_points() -> npt.NDArray[np.float32]:
     """Create dummy point cloud (N, 5) with [x, y, z, intensity, timestamp]."""
     n_points = 1000
     xyz = np.random.rand(n_points, 3).astype(np.float32) * 50.0 - 25.0
@@ -103,10 +101,10 @@ def sample_points() -> np.ndarray:
 
 @pytest.fixture
 def sample_input_dict(
-    sample_image: np.ndarray,
-    sample_points: np.ndarray,
+    sample_image: npt.NDArray[np.uint8],
+    sample_points: npt.NDArray[np.float32],
     sample_calibration_data: CalibrationData,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Complete input_dict for transform testing."""
     return {
         "img": sample_image,
@@ -119,10 +117,10 @@ def sample_input_dict(
 
 @pytest.fixture
 def sample_batch_dict(
-    sample_image: np.ndarray,
-    sample_points: np.ndarray,
+    sample_image: npt.NDArray[np.uint8],
+    sample_points: npt.NDArray[np.float32],
     sample_calibration_data: CalibrationData,
-) -> Dict[str, List[Any]]:
+) -> dict[str, list[Any]]:
     """Complete batch_dict for preprocessing testing (batch_size=2)."""
     batch_size = 2
     return {

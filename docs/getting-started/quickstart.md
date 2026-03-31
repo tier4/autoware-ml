@@ -47,7 +47,7 @@ Training progress appears in your terminal. Checkpoints are saved automatically.
 ## 5. Monitor with MLflow
 
 ```bash
-autoware-ml mlflow-ui --port 5000
+autoware-ml mlflow ui --port 5000
 ```
 
 Open [http://localhost:5000](http://localhost:5000) to view loss curves, metrics, and hyperparameters.
@@ -57,7 +57,15 @@ Open [http://localhost:5000](http://localhost:5000) to view loss curves, metrics
 ```bash
 autoware-ml deploy \
     --config-name calibration_status/calibration_status_classifier/resnet18_nuscenes \
-    +checkpoint=mlruns/<date>/<time>/checkpoints/best.ckpt
+    +checkpoint=mlruns/calibration_status/calibration_status_classifier/resnet18_nuscenes/<date>/<time>/checkpoints/best.ckpt
 ```
 
 This generates ONNX and TensorRT files.
+
+To evaluate a trained checkpoint before deployment:
+
+```bash
+autoware-ml test \
+    --config-name calibration_status/calibration_status_classifier/resnet18_nuscenes \
+    +checkpoint=mlruns/calibration_status/calibration_status_classifier/resnet18_nuscenes/<date>/<time>/checkpoints/best.ckpt
+```

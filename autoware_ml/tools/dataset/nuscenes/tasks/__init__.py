@@ -12,9 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Task registry for NuScenes dataset generation."""
+"""Task registry exports for NuScenes dataset generation.
 
-from typing import Dict, Type
+This package re-exports task annotation generators used when creating NuScenes
+info files for different perception tasks.
+"""
 
 from autoware_ml.tools.dataset.nuscenes.tasks.base import TaskAnnotationGenerator
 from autoware_ml.tools.dataset.nuscenes.tasks.calibration_status import (
@@ -23,10 +25,10 @@ from autoware_ml.tools.dataset.nuscenes.tasks.calibration_status import (
 from autoware_ml.tools.dataset.nuscenes.tasks.detection3d import Detection3DTask
 from autoware_ml.tools.dataset.nuscenes.tasks.segmentation3d import Segmentation3DTask
 
-_TASK_REGISTRY: Dict[str, Type[TaskAnnotationGenerator]] = {}
+_TASK_REGISTRY: dict[str, type[TaskAnnotationGenerator]] = {}
 
 
-def register_task(task_name: str, task_class: Type[TaskAnnotationGenerator]) -> None:
+def register_task(task_name: str, task_class: type[TaskAnnotationGenerator]) -> None:
     """Register a task annotation generator.
 
     Args:
@@ -36,7 +38,7 @@ def register_task(task_name: str, task_class: Type[TaskAnnotationGenerator]) -> 
     _TASK_REGISTRY[task_name] = task_class
 
 
-def get_task(task_name: str) -> Type[TaskAnnotationGenerator]:
+def get_task(task_name: str) -> type[TaskAnnotationGenerator]:
     """Get a task annotation generator class by name.
 
     Args:

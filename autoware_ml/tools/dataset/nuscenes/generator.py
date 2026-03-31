@@ -12,15 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""NuScenes dataset generator."""
+"""NuScenes dataset generator.
+
+This module contains reusable logic for generating NuScenes metadata files used
+by Autoware-ML dataset preparation commands.
+"""
 
 import logging
 import os
 import pickle
+from collections.abc import Sequence
 from os import path as osp
-from typing import Any, Dict, List, Set
+from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 from pyquaternion import Quaternion
 
 from autoware_ml.tools.dataset.base import DatasetGenerator
@@ -31,7 +37,7 @@ from nuscenes.utils import splits
 logger = logging.getLogger(__name__)
 
 
-def get_available_scenes(nusc: NuScenes) -> List[Dict[str, Any]]:
+def get_available_scenes(nusc: NuScenes) -> list[dict[str, Any]]:
     """Get available scenes from the input nuscenes class.
 
     Args:
@@ -100,12 +106,12 @@ def _normalize_path(path: str, root_path: str) -> str:
 def obtain_sensor2top(
     nusc: NuScenes,
     sensor_token: str,
-    l2e_t: np.ndarray,
-    l2e_r_mat: np.ndarray,
-    e2g_t: np.ndarray,
-    e2g_r_mat: np.ndarray,
+    l2e_t: npt.NDArray[np.float64],
+    l2e_r_mat: npt.NDArray[np.float64],
+    e2g_t: npt.NDArray[np.float64],
+    e2g_r_mat: npt.NDArray[np.float64],
     sensor_type: str = "lidar",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Obtain the info with RT matrix from general sensor to Top LiDAR.
 
     Args:
@@ -156,10 +162,18 @@ def obtain_sensor2top(
 
 
 class NuScenesDatasetGenerator(DatasetGenerator):
-    """NuScenes dataset generator with task-based annotation injection."""
+    """Generate NuScenes info files with task-specific annotation payloads.
+
+    The generator reads raw NuScenes samples and injects task-dependent fields
+    such as detection or segmentation annotations into exported info files.
+    """
 
     def __init__(self) -> None:
-        """Initialize NuScenes dataset generator."""
+        """Initialize the NuScenes dataset generator.
+
+        The generator keeps the canonical NuScenes camera ordering used when
+        image metadata is injected into generated info files.
+        """
         self.camera_types = [
             "CAM_FRONT",
             "CAM_FRONT_RIGHT",
@@ -173,7 +187,7 @@ class NuScenesDatasetGenerator(DatasetGenerator):
         self,
         root_path: str,
         out_dir: str,
-        tasks: List[str],
+        tasks: Sequence[str],
         **kwargs: Any,
     ) -> None:
         """Generate NuScenes dataset info files.
@@ -260,13 +274,13 @@ class NuScenesDatasetGenerator(DatasetGenerator):
     def _fill_trainval_infos(
         self,
         nusc: NuScenes,
-        train_scenes: Set[str],
-        val_scenes: Set[str],
+        train_scenes: set[str],
+        val_scenes: set[str],
         test: bool,
         max_sweeps: int,
-        task_generators: List[Any],
+        task_generators: Sequence[Any],
         root_path: str,
-    ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Generate the train/val infos from the raw data.
 
         Args:

@@ -30,7 +30,7 @@ Each trial:
 ## Running a Hyperparameter Search
 
 ```bash
-autoware-ml train --config-name my_task/my_model/my_config \
+autoware-ml train --config-name <task>/<model>/<config> \
     --multirun \
     hydra/sweeper=optuna \
     hydra.sweeper.n_trials=50 \
@@ -43,7 +43,7 @@ This launches 50 trials, minimizing the objective metric (default: validation lo
 
 Define hyperparameter ranges in your config:
 
-```yaml title="configs/tasks/my_task/my_model/optuna.yaml"
+```yaml title="configs/tasks/my_task/my_model/my_optuna.yaml"
 # @package _global_
 defaults:
   - /tasks/my_task/my_model/base
@@ -112,7 +112,7 @@ hydra:
 Run multiple trials in parallel:
 
 ```bash
-autoware-ml train --config-name my_task/my_model/optuna \
+autoware-ml train --config-name <task>/<model>/<optuna-config> \
     --multirun \
     hydra.sweeper.n_jobs=4
 ```
@@ -136,7 +136,7 @@ All trials are logged to MLflow. Use the MLflow UI to compare trials as regular 
 
 ## Example: Full Optimization Config
 
-```yaml title="configs/tasks/my_task/my_model/optuna.yaml"
+```yaml title="configs/tasks/my_task/my_model/my_optuna.yaml"
 # @package _global_
 defaults:
   - /tasks/my_task/my_model/base
@@ -166,7 +166,7 @@ trainer:
 Run it:
 
 ```bash
-autoware-ml train --config-name my_task/my_model/optuna --multirun
+autoware-ml train --config-name <task>/<model>/<optuna-config> --multirun
 ```
 
 ## Learn More

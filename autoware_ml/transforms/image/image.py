@@ -12,7 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Dict
+"""Image-specific transforms.
+
+This module contains reusable image-domain augmentations and preprocessing
+transforms used by detection and fusion models.
+"""
+
+from typing import Any
 
 import cv2
 import numpy as np
@@ -52,6 +58,15 @@ class PhotometricDistortion(BaseTransform):
         saturation: float = 0.0,
         hue: float = 0.0,
     ):
+        """Initialize the photometric distortion transform.
+
+        Args:
+            p: Probability of applying the transform.
+            brightness: Maximum multiplicative brightness deviation.
+            contrast: Maximum multiplicative contrast deviation.
+            saturation: Maximum multiplicative saturation deviation.
+            hue: Maximum hue deviation in normalized HSV units.
+        """
         super().__init__()
         self.p = p
         self.brightness = brightness
@@ -59,8 +74,15 @@ class PhotometricDistortion(BaseTransform):
         self.saturation = saturation
         self.hue = hue
 
-    def transform(self, input_dict: Dict[str, Any]) -> Dict[str, Any]:
-        """Apply photometric distortion to RGB channels of image."""
+    def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
+        """Apply photometric distortion to RGB channels of an image.
+
+        Args:
+            input_dict: Sample dictionary containing an ``img`` entry.
+
+        Returns:
+            Updated sample dictionary with distorted image values.
+        """
         # img is (H, W, 3) uint8
         img = input_dict["img"]
 

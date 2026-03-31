@@ -19,7 +19,7 @@ This page covers how to create effective pull requests for Autoware-ML.
 Use descriptive branch names:
 
 ```text
-feat/add-bevfusion-model
+feat/add-my-model
 fix/lidar-projection-crash
 docs/improve-quickstart
 refactor/simplify-transforms
@@ -30,7 +30,7 @@ refactor/simplify-transforms
 Write a clear, concise title and commit message:
 
 ```text
-feat: add BEVFusion model implementation
+feat: add my model implementation
 fix: handle empty point clouds in projection
 docs: add GPU troubleshooting to installation guide
 ```

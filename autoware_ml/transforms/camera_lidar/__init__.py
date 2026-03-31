@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Calibration status transforms."""
+"""Camera-lidar transform exports used by multimodal pipelines."""
 
-from .camera_lidar import (
+from autoware_ml.transforms.camera_lidar.camera_lidar import (
     Affine,
     CalibrationMisalignment,
     LidarCameraFusion,
@@ -22,8 +22,8 @@ from .camera_lidar import (
 )
 
 __all__ = [
+    "Affine",
     "CalibrationMisalignment",
     "LidarCameraFusion",
-    "Affine",
     "SaveFusionPreview",
 ]

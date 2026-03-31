@@ -12,10 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Base task annotation generator interface for NuScenes."""
+"""Base task-annotation generator interfaces for NuScenes.
+
+This module defines the shared protocol implemented by NuScenes task adapters
+used during info-file generation.
+"""
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from collections.abc import Mapping
+from typing import Any
 
 
 class TaskAnnotationGenerator(ABC):
@@ -28,11 +33,11 @@ class TaskAnnotationGenerator(ABC):
     @abstractmethod
     def process_sample(
         self,
-        info_dict: Dict[str, Any],
+        info_dict: dict[str, Any],
         nusc: Any,
-        sample: Dict[str, Any],
-        cam_name: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        sample: Mapping[str, Any],
+        cam_name: str | None = None,
+    ) -> dict[str, Any]:
         """Process a sample and add task-specific annotations.
 
         Args:

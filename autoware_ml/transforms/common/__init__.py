@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Common transforms."""
+"""Common transform exports shared across multiple modalities."""
 
-from .common import PermuteAxes
+from autoware_ml.transforms.common.tensor import PermuteAxes
 
 __all__ = ["PermuteAxes"]
