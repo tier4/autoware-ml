@@ -140,6 +140,10 @@
     "xytext",
     "yscale",
     "yzhang",
-    "zensical"
+    "zensical",
+    "largebus",
+    "jpntaxigen",
+    "dataclass",
+    "Pydantic"
   ]
 }
