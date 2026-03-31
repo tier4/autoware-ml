@@ -60,9 +60,9 @@ class T4RecordsGenerator:
         self.scenario_data = scenario_data
         self.max_sweeps = max_sweeps
         self.sample_steps = sample_steps
-        self.tier4_dataset = self._construct_tier4_dataset()
+        self.t4_devkit_dataset = self._construct_t4_devkit_dataset()
 
-    def _construct_tier4_dataset(self) -> Tier4:
+    def _construct_t4_devkit_dataset(self) -> Tier4:
         """Construct T4 dataset."""
         scene_root_dir_path = (
             self.database_root_path
@@ -77,8 +77,8 @@ class T4RecordsGenerator:
     def generate_dataset_records(self) -> Iterable[DatasetRecord]:
         """Generate dataset records."""
         records = []
-        for sample_index in range(0, len(self.tier4_dataset.sample), self.sample_steps):
-            sample = self.tier4_dataset.sample[sample_index]
+        for sample_index in range(0, len(self.t4_devkit_dataset.sample), self.sample_steps):
+            sample = self.t4_devkit_dataset.sample[sample_index]
             records.append(
                 self.extract_t4_sample_record(sample, sample_index),
             )
@@ -97,11 +97,11 @@ class T4RecordsGenerator:
             )
 
         # Second, read sample data and calibrated sensor from the T4Dataset
-        sd_record: SampleData = self.tier4_dataset.get("sample_data", lidar_token)
-        cs_record: CalibratedSensor = self.tier4_dataset.get(
+        sd_record: SampleData = self.t4_devkit_dataset.get("sample_data", lidar_token)
+        cs_record: CalibratedSensor = self.t4_devkit_dataset.get(
             "calibrated_sensor", sd_record.calibrated_sensor_token
         )
-        lidar_path, _, _ = self.tier4_dataset.get_sample_data(lidar_token)
+        lidar_path, _, _ = self.t4_devkit_dataset.get_sample_data(lidar_token)
 
         # TODO (KokSeang): Extract more information, for example, boxes, from the T4Dataset.
         # Last, return the T4 sample record
