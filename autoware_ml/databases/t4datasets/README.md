@@ -75,5 +75,5 @@ classDiagram
     T4RecordsGenerator --> schemas : emits Iterable[DatasetRecord]
     T4RecordsGenerator --> t4_devkit : reads T4 annotations
 
-    schemas --> polars: Iterable[DatasetRecord] to parquet DataFrame
+    schemas --> polars: Iterable[DatasetRecord] to Parquet
 ```
