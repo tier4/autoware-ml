@@ -67,16 +67,17 @@ classDiagram
         process_scenario_records()
     }
 
-    class Output {
-        <<result>>
-        Iterable~DatasetRecord~
+    class TrainingInference {
+        <<downstream>>
+        train()
+        evaluate()
+        predict()
     }
 
     generate_dataset --> DatabaseInterface : instantiates via Hydra
 
     DatabaseInterface ..> scenarios : uses Scenarios, ScenarioData
-    DatabaseInterface ..> schemas : uses DatasetRecord
-    DatabaseInterface --> Output : process_scenario_records()
+    DatabaseInterface --> schemas : process_scenario_records() returns Iterable~DatasetRecord~
 
     BaseDatabase ..|> DatabaseInterface : satisfies
     BaseDatabase --> scenarios : uses Scenarios, ScenarioData
@@ -85,7 +86,7 @@ classDiagram
 
     ConcreteDatabase --|> BaseDatabase : extends
 
-    Output --> schemas : list of DatasetRecord
+    schemas --> TrainingInference : consumed by
 
     schemas ..> polars : uses pl.DataType, pl.Schema
 ```
