@@ -12,4 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Utility modules for Autoware-ML framework."""
+"""Utility package exports for Autoware-ML.
+
+This package groups common framework helpers that are shared across CLI,
+training, deployment, and experiment-management workflows.
+"""

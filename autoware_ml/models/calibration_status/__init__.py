@@ -12,8 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Calibration status models."""
+"""Calibration-status model exports for Autoware-ML.
 
-from .calibration_status import CalibrationStatusClassifier
+This package re-exports model components used by calibration-status training
+and inference entrypoints.
+"""
+
+from autoware_ml.models.calibration_status.calibration_status import CalibrationStatusClassifier
 
 __all__ = ["CalibrationStatusClassifier"]

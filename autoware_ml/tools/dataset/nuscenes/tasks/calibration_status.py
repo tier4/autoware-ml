@@ -12,10 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Calibration status task annotation generator for NuScenes."""
+"""Calibration-status annotation generator for NuScenes info creation.
+
+This module injects calibration-status labels and related metadata into
+generated NuScenes sample dictionaries.
+"""
 
 import os
-from typing import Any, Dict
+from collections.abc import Mapping
+from typing import Any
 
 import numpy as np
 
@@ -31,11 +36,11 @@ class CalibrationStatusTask(TaskAnnotationGenerator):
 
     def process_sample(
         self,
-        info_dict: Dict[str, Any],
+        info_dict: dict[str, Any],
         nusc: Any,
-        sample: Dict[str, Any],
+        sample: Mapping[str, Any],
         cam_name: Any = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Add calibration_status annotations to the info dict.
 
         For calibration_status, we create separate samples for each camera.

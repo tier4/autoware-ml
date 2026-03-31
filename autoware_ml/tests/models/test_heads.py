@@ -18,7 +18,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from autoware_ml.models.common.heads.linear_cls_head import ClsHead, LinearClsHead
+from autoware_ml.models.common.heads import ClsHead, LinearClsHead
 
 
 @pytest.fixture
@@ -35,7 +35,7 @@ class TestClsHead:
         head = ClsHead(loss=default_loss, topk=[1], num_classes=10)
         assert head is not None
         assert isinstance(head.loss_module, nn.CrossEntropyLoss)
-        assert head.topk == [1]
+        assert tuple(head.topk) == (1,)
         assert head.cal_acc is False
 
     def test_pre_logits_tensor(self, default_loss: nn.Module) -> None:

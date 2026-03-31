@@ -16,18 +16,28 @@ Checkpoint (.ckpt) → ONNX (.onnx) → TensorRT (.engine)
 
 ```bash
 autoware-ml deploy \
-    --config-name my_task/my_model/my_config \
-    +checkpoint=path/to/checkpoint.ckpt
+    --config-name <task>/<model>/<config> \
+    +checkpoint=mlruns/<task>/<model>/<config>/<date>/<time>/checkpoints/best.ckpt
 ```
 
 This generates ONNX (`.onnx`) and TensorRT (`.engine`) files.
+The deploy command also creates a dedicated MLflow run linked to the source training run and logs exported artifacts there.
+
+You can disable either stage during iteration:
+
+```bash
+autoware-ml deploy \
+    --config-name <task>/<model>/<config> \
+    +checkpoint=mlruns/<task>/<model>/<config>/<date>/<time>/checkpoints/best.ckpt \
+    deploy.tensorrt.enabled=false
+```
 
 **Custom output:**
 
 ```bash
 autoware-ml deploy \
-    --config-name my_task/my_model/my_config \
-    +checkpoint=path/to/checkpoint.ckpt \
+    --config-name <task>/<model>/<config> \
+    +checkpoint=mlruns/<task>/<model>/<config>/<date>/<time>/checkpoints/best.ckpt \
     output_dir=./deployed \
     output_name=model_v1
 ```
@@ -39,6 +49,8 @@ autoware-ml deploy \
 ```yaml
 deploy:
   onnx:
+    enabled: true
+    dynamo: true
     opset_version: 21
     input_names: [input]
     output_names: [output]
@@ -47,12 +59,24 @@ deploy:
 ```
 
 **dynamic_shapes**: Keys are parameter names from `forward()`, values map dimension indices to symbolic names.
+You can also provide symbolic bounds when export needs them:
+
+```yaml
+deploy:
+  onnx:
+    dynamic_shapes:
+      points:
+        0: { name: num_points, min: 2 }
+```
+
+Set `dynamo: false` for models that rely on legacy ONNX symbolic functions instead of `torch.export`.
 
 ### TensorRT Settings
 
 ```yaml
 deploy:
   tensorrt:
+    enabled: true
     workspace_size: 1073741824  # 1GB
     input_shapes:
       input:
@@ -84,8 +108,8 @@ Override deployment settings from CLI:
 
 ```bash
 autoware-ml deploy \
-    --config-name my_task/my_model/my_config \
-    +checkpoint=path/to/checkpoint.ckpt \
+    --config-name <task>/<model>/<config> \
+    +checkpoint=mlruns/<task>/<model>/<config>/<date>/<time>/checkpoints/best.ckpt \
     deploy.tensorrt.input_shapes.input.opt_shape=[1,3,256,256] \
     deploy.tensorrt.workspace_size=2147483648
 ```

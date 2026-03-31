@@ -14,8 +14,8 @@
 
 """Shared fixtures for scheduler tests."""
 
+from collections.abc import Sequence
 from pathlib import Path
-from typing import List, Tuple
 
 import matplotlib.pyplot as plt
 import pytest
@@ -56,8 +56,8 @@ def adamw_optimizer(simple_model: nn.Module, base_lr: float) -> torch.optim.Opti
 
 
 def save_lr_plot(
-    epochs: List[int],
-    lr_values: List[float],
+    epochs: Sequence[int],
+    lr_values: Sequence[float],
     title: str,
     output_path: Path,
     ylabel: str = "Learning Rate",
@@ -105,7 +105,7 @@ def collect_lr_values(
     scheduler,
     num_epochs: int,
     optimizer: torch.optim.Optimizer,
-) -> Tuple[List[int], List[float]]:
+) -> tuple[list[int], list[float]]:
     """Run scheduler for given epochs and collect LR values.
 
     Args:
@@ -132,7 +132,7 @@ def collect_momentum_values(
     scheduler,
     num_epochs: int,
     optimizer: torch.optim.Optimizer,
-) -> Tuple[List[int], List[float]]:
+) -> tuple[list[int], list[float]]:
     """Run momentum scheduler for given epochs and collect momentum values.
 
     Args:

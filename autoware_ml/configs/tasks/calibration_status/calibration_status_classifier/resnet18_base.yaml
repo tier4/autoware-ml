@@ -24,7 +24,10 @@ datamodule:
     num_workers: 1
   train_transforms:
     pipeline:
-      - _target_: autoware_ml.transforms.lidar.CropBoxInner
+      - _target_: autoware_ml.transforms.camera.LoadImageFromFile
+      - _target_: autoware_ml.transforms.point_cloud.LoadPointsFromFile
+        use_dim: [0, 1, 2, 3, 4]
+      - _target_: autoware_ml.transforms.point_cloud.CropBoxInner
         crop_box: [-1.53, -1.15, -0.1, 5.72, 1.15, 3.1]
       - _target_: autoware_ml.transforms.camera.UndistortImage
         alpha: 0.0
@@ -88,7 +91,10 @@ datamodule:
         axes: [2, 0, 1]
   val_transforms:
     pipeline:
-      - _target_: autoware_ml.transforms.lidar.CropBoxInner
+      - _target_: autoware_ml.transforms.camera.LoadImageFromFile
+      - _target_: autoware_ml.transforms.point_cloud.LoadPointsFromFile
+        use_dim: [0, 1, 2, 3, 4]
+      - _target_: autoware_ml.transforms.point_cloud.CropBoxInner
         crop_box: [-1.53, -1.15, -0.1, 5.72, 1.15, 3.1]
       - _target_: autoware_ml.transforms.camera.UndistortImage
         alpha: 0.0
@@ -133,7 +139,10 @@ datamodule:
         axes: [2, 0, 1]
   test_transforms:
     pipeline:
-      - _target_: autoware_ml.transforms.lidar.CropBoxInner
+      - _target_: autoware_ml.transforms.camera.LoadImageFromFile
+      - _target_: autoware_ml.transforms.point_cloud.LoadPointsFromFile
+        use_dim: [0, 1, 2, 3, 4]
+      - _target_: autoware_ml.transforms.point_cloud.CropBoxInner
         crop_box: [-1.53, -1.15, -0.1, 5.72, 1.15, 3.1]
       - _target_: autoware_ml.transforms.camera.UndistortImage
         alpha: 0.0
@@ -178,7 +187,10 @@ datamodule:
         axes: [2, 0, 1]
   predict_transforms:
     pipeline:
-      - _target_: autoware_ml.transforms.lidar.CropBoxInner
+      - _target_: autoware_ml.transforms.camera.LoadImageFromFile
+      - _target_: autoware_ml.transforms.point_cloud.LoadPointsFromFile
+        use_dim: [0, 1, 2, 3, 4]
+      - _target_: autoware_ml.transforms.point_cloud.CropBoxInner
         crop_box: [-1.53, -1.15, -0.1, 5.72, 1.15, 3.1]
       - _target_: autoware_ml.transforms.camera.UndistortImage
         alpha: 0.0

@@ -14,7 +14,7 @@
 
 """Unit tests for PermuteAxes transforms."""
 
-from typing import Any, Dict
+from typing import Any
 
 import numpy as np
 import pytest
@@ -32,13 +32,13 @@ class TestPermuteAxes:
         assert permute.input_keys == ["data"]
         assert permute.axes == (2, 0, 1)
 
-    def test_missing_key(self, sample_input_dict: Dict[str, Any]) -> None:
+    def test_missing_key(self, sample_input_dict: dict[str, Any]) -> None:
         """Test that missing required key raises KeyError."""
         permute = PermuteAxes(input_keys=["missing_key"], axes=(0, 1))
         with pytest.raises(KeyError, match="Missing required key 'missing_key'"):
             permute(sample_input_dict)
 
-    def test_permute_numpy_hwc_to_chw(self, sample_input_dict: Dict[str, Any]) -> None:
+    def test_permute_numpy_hwc_to_chw(self, sample_input_dict: dict[str, Any]) -> None:
         """Test permuting numpy array from (H, W, C) to (C, H, W)."""
         sample_input_dict["test_array"] = np.random.rand(32, 64, 5).astype(np.float32)
 
@@ -47,7 +47,7 @@ class TestPermuteAxes:
 
         assert output_dict["test_array"].shape == (5, 32, 64)
 
-    def test_permute_tensor_hwc_to_chw(self, sample_input_dict: Dict[str, Any]) -> None:
+    def test_permute_tensor_hwc_to_chw(self, sample_input_dict: dict[str, Any]) -> None:
         """Test permuting tensor from (H, W, C) to (C, H, W)."""
         sample_input_dict["test_tensor"] = torch.randn(32, 64, 5)
 
@@ -56,7 +56,7 @@ class TestPermuteAxes:
 
         assert output_dict["test_tensor"].shape == (5, 32, 64)
 
-    def test_multiple_keys(self, sample_input_dict: Dict[str, Any]) -> None:
+    def test_multiple_keys(self, sample_input_dict: dict[str, Any]) -> None:
         """Test permuting multiple keys."""
         sample_input_dict["img1"] = np.random.rand(32, 64, 3).astype(np.float32)
         sample_input_dict["img2"] = np.random.rand(16, 32, 5).astype(np.float32)
@@ -67,7 +67,7 @@ class TestPermuteAxes:
         assert output_dict["img1"].shape == (3, 32, 64)
         assert output_dict["img2"].shape == (5, 16, 32)
 
-    def test_preserves_other_keys(self, sample_input_dict: Dict[str, Any]) -> None:
+    def test_preserves_other_keys(self, sample_input_dict: dict[str, Any]) -> None:
         """Test that other keys are preserved."""
         sample_input_dict["test_array"] = np.random.rand(32, 64, 5).astype(np.float32)
         sample_input_dict["other_data"] = "preserved"
@@ -78,7 +78,7 @@ class TestPermuteAxes:
         assert output_dict["test_array"].shape == (5, 32, 64)
         assert output_dict["other_data"] == "preserved"
 
-    def test_identity_permutation(self, sample_input_dict: Dict[str, Any]) -> None:
+    def test_identity_permutation(self, sample_input_dict: dict[str, Any]) -> None:
         """Test identity permutation."""
         array = np.random.rand(32, 64, 5).astype(np.float32)
         sample_input_dict["test_array"] = array.copy()
@@ -89,7 +89,7 @@ class TestPermuteAxes:
         assert np.array_equal(output_dict["test_array"], array)
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
-    def test_cuda_tensor_permute(self, sample_input_dict: Dict[str, Any]) -> None:
+    def test_cuda_tensor_permute(self, sample_input_dict: dict[str, Any]) -> None:
         """Test permuting CUDA tensor."""
         sample_input_dict["test_tensor"] = torch.randn(32, 64, 5).cuda()
 

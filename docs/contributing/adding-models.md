@@ -11,15 +11,15 @@ This guide walks you through adding a new model to Autoware-ML. You'll implement
 All models inherit from `BaseModel` and implement two abstract methods:
 
 ```python
-from autoware_ml.models.base import BaseModel
+from autoware_ml.models import BaseModel
 
 class MyModel(BaseModel):
-    def forward(self, **kwargs: Any) -> Union[torch.Tensor, Sequence[torch.Tensor]]:
+    def forward(self, **kwargs: Any) -> torch.Tensor | Sequence[torch.Tensor]:
         ...
 
     def compute_metrics(
-        self, outputs: Union[torch.Tensor, Sequence[torch.Tensor]], **kwargs: Any
-    ) -> Dict[str, torch.Tensor]:
+        self, outputs: torch.Tensor | Sequence[torch.Tensor], **kwargs: Any
+    ) -> dict[str, torch.Tensor]:
         ...
 ```
 
@@ -30,12 +30,13 @@ The base class handles training/validation/test steps, optimizer configuration, 
 Create a new file in `autoware_ml/models/`:
 
 ```python title="autoware_ml/models/my_task/my_model.py"
-from typing import Any, Dict, Optional, Sequence, Union
+from collections.abc import Sequence
+from typing import Any
 
 import torch
 import torch.nn as nn
 
-from autoware_ml.models.base import BaseModel
+from autoware_ml.models import BaseModel
 
 
 class MyModel(BaseModel):
@@ -59,9 +60,9 @@ class MyModel(BaseModel):
 
     def compute_metrics(
         self,
-        outputs: Union[torch.Tensor, Sequence[torch.Tensor]],
+        outputs: torch.Tensor | Sequence[torch.Tensor],
         gt_labels: torch.Tensor,
-    ) -> Dict[str, torch.Tensor]:
+    ) -> dict[str, torch.Tensor]:
         logits = outputs[0] if isinstance(outputs, (list, tuple)) else outputs
         loss = self.loss_fn(logits, gt_labels)
 
@@ -79,7 +80,7 @@ class MyModel(BaseModel):
 
 1. **`forward()` signature matters** - Parameter names must match keys in your batch dictionary. The base class automatically extracts matching keys using signature inspection.
 
-2. **`compute_metrics()` receives outputs** - The first argument is always `outputs` from `forward()` (as a `Union[torch.Tensor, Sequence[torch.Tensor]]`). Additional parameters are matched from the batch.
+2. **`compute_metrics()` receives outputs** - The first argument is always `outputs` from `forward()` (as a `torch.Tensor | Sequence[torch.Tensor]`). Additional parameters are matched from the batch.
 
 3. **Return `'loss'`** - The metrics dict must include a `'loss'` key for backpropagation.
 
@@ -90,8 +91,9 @@ class MyModel(BaseModel):
 Create a DataModule that provides data for your model:
 
 ```python title="autoware_ml/datamodule/my_dataset/my_task.py"
-from typing import Any, Dict, Optional
+import os
 import pickle
+from typing import Any
 
 from autoware_ml.datamodule.base import DataModule, Dataset
 from autoware_ml.transforms import TransformsCompose
@@ -102,7 +104,7 @@ class MyDataset(Dataset):
         self,
         ann_file: str,
         data_root: str,
-        dataset_transforms: Optional[TransformsCompose] = None,
+        dataset_transforms: TransformsCompose | None = None,
     ):
         super().__init__(dataset_transforms=dataset_transforms)
         self.data_root = data_root
@@ -114,21 +116,13 @@ class MyDataset(Dataset):
     def __len__(self) -> int:
         return len(self.annotations)
 
-    def _get_input_dict(self, index: int) -> Dict[str, Any]:
+    def get_data_info(self, index: int) -> dict[str, Any]:
         ann = self.annotations[index]
 
-        # Load your data
-        input_tensor = self._load_input(ann)
-        gt_labels = ann["label"]
-
         return {
-            "input_tensor": input_tensor,
-            "gt_labels": gt_labels,
+            "input_path": os.path.join(self.data_root, ann["input_path"]),
+            "label": ann["label"],
         }
-
-    def _load_input(self, ann):
-        # Your data loading logic
-        ...
 
 
 class MyDataModule(DataModule):
@@ -137,7 +131,7 @@ class MyDataModule(DataModule):
         data_root: str,
         train_ann_file: str,
         val_ann_file: str,
-        test_ann_file: Optional[str] = None,
+        test_ann_file: str | None = None,
         **kwargs: Any,
     ):
         super().__init__(**kwargs)
@@ -149,7 +143,7 @@ class MyDataModule(DataModule):
     def _create_dataset(
         self,
         split: str,
-        transforms: Optional[TransformsCompose] = None,
+        transforms: TransformsCompose | None = None,
     ) -> Dataset:
         ann_file = {
             "train": self.train_ann_file,
@@ -168,11 +162,11 @@ class MyDataModule(DataModule):
 ### Data Flow
 
 ```text
-_get_input_dict() → transforms → collate_fn() → on_after_batch_transfer() → model
+get_data_info() → transforms → collate_fn() → on_after_batch_transfer() → model
 ```
 
-1. `_get_input_dict()`: Load raw sample as dict
-2. `transforms`: Apply per-sample augmentations (in Dataset)
+1. `get_data_info()`: Return raw sample metadata as dict
+2. `transforms`: Load files and apply per-sample augmentations (in Dataset)
 3. `collate_fn()`: Batch samples, convert to tensors
 4. `on_after_batch_transfer()`: GPU preprocessing (optional)
 5. Model receives the batch dict
@@ -204,7 +198,7 @@ defaults:
   - _self_
 
 datamodule:
-  _target_: autoware_ml.datamodule.my_dataset.my_task.MyDataModule
+  _target_: autoware_ml.datamodule.my_dataset.MyDataModule
   stack_keys: [input_tensor, gt_labels]  # Keys to stack into tensors
 
   train_dataloader_cfg:
@@ -218,7 +212,7 @@ datamodule:
 
   # GPU preprocessing (optional)
   data_preprocessing:
-    _target_: autoware_ml.preprocessing.base.DataPreprocessing
+    _target_: autoware_ml.preprocessing.DataPreprocessing
     pipeline: []
 
 model:
@@ -226,7 +220,7 @@ model:
   num_classes: 10
 
   encoder:
-    _target_: autoware_ml.models.common.backbones.resnet.ResNet18
+    _target_: autoware_ml.models.common.backbones.ResNet18
     in_channels: 3
 
   decoder:
@@ -266,14 +260,14 @@ datamodule:
 ```
 
 !!! note
-    Some of parameters are inherited from the default runtime config. Take a look on `configs/defaults/default_runtime.yaml` for more details.
+    Some parameters are inherited from the default runtime config. Take a look at `configs/defaults/default_runtime.yaml` for more details.
 
 ## Step 5: Add Transforms (Optional)
 
 If your task needs custom transforms:
 
 ```python title="autoware_ml/transforms/my_transforms/my_transform.py"
-from typing import Any, Dict
+from typing import Any
 import numpy as np
 
 from autoware_ml.transforms.base import BaseTransform
@@ -284,7 +278,7 @@ class MyAugmentation(BaseTransform):
         self.p = p
         self.intensity = intensity
 
-    def transform(self, input_dict: Dict[str, Any]) -> Dict[str, Any]:
+    def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
         if np.random.random() > self.p:
             return {}  # No changes
 
@@ -293,6 +287,15 @@ class MyAugmentation(BaseTransform):
         augmented = input_tensor + np.random.randn(*input_tensor.shape) * self.intensity
 
         return {"input_tensor": augmented}
+```
+
+Expose the transform through the package `__init__.py` so configs can use the
+package path instead of the implementation filename:
+
+```python title="autoware_ml/transforms/my_transforms/__init__.py"
+from autoware_ml.transforms.my_transforms.my_transform import MyAugmentation
+
+__all__ = ["MyAugmentation"]
 ```
 
 Add to config:
@@ -306,6 +309,10 @@ datamodule:
         intensity: 0.1
 ```
 
+This package-level import convention is the preferred public API throughout the
+repository. Implementation files should define the transform once, and only the
+subpackage `__init__.py` should re-export it.
+
 ## Step 6: Add Preprocessing (Optional)
 
 Preprocessing runs on GPU after batch transfer, enabling hardware-accelerated operations. Unlike transforms (CPU-side, per-sample), preprocessing operates on entire batches already on the target device.
@@ -313,7 +320,7 @@ Preprocessing runs on GPU after batch transfer, enabling hardware-accelerated op
 If your task needs custom preprocessing:
 
 ```python title="autoware_ml/preprocessing/my_preprocessing/my_preprocessing.py"
-from typing import Any, Dict
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -325,9 +332,18 @@ class MyPreprocessingLayer(nn.Module):
         self.input_key = input_key
         self.scale = scale
 
-    def forward(self, batch_inputs_dict: Dict[str, Any]) -> Dict[str, Any]:
+    def forward(self, batch_inputs_dict: dict[str, Any]) -> dict[str, Any]:
         processed = batch_inputs_dict[self.input_key] * self.scale
         return {self.input_key: processed}
+```
+
+Expose the preprocessing layer through the package `__init__.py` as the public
+entrypoint:
+
+```python title="autoware_ml/preprocessing/my_preprocessing/__init__.py"
+from autoware_ml.preprocessing.my_preprocessing.my_preprocessing import MyPreprocessingLayer
+
+__all__ = ["MyPreprocessingLayer"]
 ```
 
 Add to config:
@@ -335,7 +351,7 @@ Add to config:
 ```yaml
 datamodule:
   data_preprocessing:
-    _target_: autoware_ml.preprocessing.base.DataPreprocessing
+    _target_: autoware_ml.preprocessing.DataPreprocessing
     pipeline:
       - _target_: autoware_ml.preprocessing.my_preprocessing.MyPreprocessingLayer
         input_key: input_tensor
@@ -343,9 +359,33 @@ datamodule:
 ```
 
 !!! warning
-    Preprocessing layers must be `nn.Module` subclasses that accept `Dict[str, Any]` and return `Dict[str, Any]`.
+    Preprocessing layers must be `nn.Module` subclasses that accept `dict[str, Any]` and return `dict[str, Any]`.
 
 ## Step 7: Train and Deploy
+
+### Config Naming Convention
+
+Task configs should follow:
+
+```text
+<task>/<model>/<variant>_<dataset>
+```
+
+Use these rules when creating `<variant>`:
+
+- include only future-distinguishing choices such as backbone, modality, voxel size, or range
+- do not encode properties that are inherent to the model family
+- normalize voxel sizes as `voxel020`, `voxel005`, `voxel030`
+- encode ranges as human-readable suffixes such as `50m`, `90m`, `102m`, `121m`
+- keep dataset names explicit and stable, for example `nuscenes` and `t4dataset_j6gen2`
+
+Examples:
+
+```text
+calibration_status/calibration_status_classifier/resnet18_nuscenes
+calibration_status/calibration_status_classifier/resnet18_t4dataset_j6gen2
+my_task/my_model/my_variant_my_dataset
+```
 
 ```bash
 # Train
@@ -354,7 +394,7 @@ autoware-ml train --config-name my_task/my_model/my_config
 # Deploy
 autoware-ml deploy \
     --config-name my_task/my_model/my_config \
-    +checkpoint=mlruns/<date>/<time>/checkpoints/last.ckpt
+    +checkpoint=mlruns/my_task/my_model/my_config/<date>/<time>/checkpoints/last.ckpt
 ```
 
 ## Common Patterns
@@ -374,13 +414,18 @@ Batch dict must have `image` and `lidar` keys.
 ### Multiple Outputs
 
 ```python
-def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     features = self.backbone(x)
     boxes = self.box_head(features)
     scores = self.score_head(features)
     return boxes, scores
 
-def compute_metrics(self, outputs: Tuple[torch.Tensor, torch.Tensor], gt_boxes: torch.Tensor, gt_scores: torch.Tensor):
+def compute_metrics(
+    self,
+    outputs: tuple[torch.Tensor, torch.Tensor],
+    gt_boxes: torch.Tensor,
+    gt_scores: torch.Tensor,
+):
     boxes, scores = outputs
     box_loss = self.box_loss(boxes, gt_boxes)
     score_loss = self.score_loss(scores, gt_scores)

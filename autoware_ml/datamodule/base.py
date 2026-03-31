@@ -12,11 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Base DataModule class for Autoware-ML framework."""
+"""Base datamodule abstractions for Autoware-ML.
+
+This module defines shared configuration containers and abstract datamodule
+interfaces used by training, evaluation, and deployment entrypoints.
+"""
 
 from abc import ABC, abstractmethod
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 import lightning as L
 import numpy as np
@@ -24,13 +29,23 @@ import torch
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset as TorchDataset
 
+from autoware_ml.datamodule.pipeline_context import PipelineContext
 from autoware_ml.preprocessing.base import DataPreprocessing
-from autoware_ml.transforms import TransformsCompose
+from autoware_ml.transforms.base import TransformsCompose
 
 
 @dataclass
 class DataLoaderConfig:
-    """Configuration options for a single dataloader."""
+    """Store configuration values for one dataloader.
+
+    Attributes:
+        batch_size: Number of samples per batch.
+        num_workers: Number of worker processes used by the dataloader.
+        pin_memory: Whether to pin host memory before device transfer.
+        persistent_workers: Whether worker processes stay alive across epochs.
+        shuffle: Whether the dataloader shuffles samples.
+        drop_last: Whether to drop the final incomplete batch.
+    """
 
     batch_size: int = 1
     num_workers: int = 1
@@ -39,52 +54,104 @@ class DataLoaderConfig:
     shuffle: bool = False
     drop_last: bool = False
 
+    def to_dataloader_kwargs(self) -> dict[str, Any]:
+        """Convert to keyword arguments accepted by ``DataLoader``.
+
+        Returns:
+            Dictionary of DataLoader constructor keyword arguments.
+        """
+        return {
+            "batch_size": self.batch_size,
+            "shuffle": self.shuffle,
+            "num_workers": self.num_workers,
+            "pin_memory": self.pin_memory,
+            "persistent_workers": self.persistent_workers and self.num_workers > 0,
+            "drop_last": self.drop_last,
+        }
+
 
 class Dataset(TorchDataset, ABC):
-    """Base dataset class for Autoware-ML framework."""
+    """Define the base dataset interface for Autoware-ML.
 
-    def __init__(self, dataset_transforms: Optional[TransformsCompose] = None, **kwargs: Any):
+    Subclasses implement :meth:`get_data_info` and may rely on the shared
+    transform handling implemented by this class.
+    """
+
+    def __init__(self, dataset_transforms: TransformsCompose | None = None, **kwargs: Any):
+        """Initialize the dataset base class.
+
+        Args:
+            dataset_transforms: Optional transform pipeline applied per sample.
+            **kwargs: Additional arguments forwarded to ``TorchDataset``.
+        """
         super().__init__(**kwargs)
         self.dataset_transforms = dataset_transforms
 
-    def __getitem__(self, index: int) -> Dict[str, Any]:
-        input_dict = self._get_input_dict(index)
-        input_dict = self._transform(input_dict)
-        return input_dict
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        """Load and transform one dataset sample.
+
+        Args:
+            index: Sample index.
+
+        Returns:
+            Transformed dataset sample.
+        """
+        input_dict = self.get_data_info(index)
+        context = PipelineContext(dataset=self, index=index)
+        return self.apply_transforms(input_dict, self.dataset_transforms, context)
 
     @abstractmethod
-    def _get_input_dict(self, index: int) -> Dict[str, Any]:
-        """Get batch inputs for a given index.
+    def get_data_info(self, index: int) -> dict[str, Any]:
+        """Return raw metadata for a given dataset index.
 
         Args:
             index: Index of the sample.
 
         Returns:
-            Input dictionary.
+            Metadata dictionary consumed by the transform pipeline.
         """
-        raise NotImplementedError("Dataset must implement _get_input_dict")
+        raise NotImplementedError("Dataset must implement get_data_info")
 
-    def _transform(self, input_dict: Dict[str, Any]) -> Dict[str, Any]:
-        if self.dataset_transforms is None:
+    def apply_transforms(
+        self,
+        input_dict: dict[str, Any],
+        dataset_transforms: TransformsCompose | None,
+        context: PipelineContext,
+    ) -> dict[str, Any]:
+        """Apply a specific transform pipeline to a metadata sample.
+
+        Args:
+            input_dict: Metadata sample dictionary.
+            dataset_transforms: Transform pipeline applied to the sample.
+            context: Pipeline context associated with the sample.
+
+        Returns:
+            Transformed dataset sample.
+        """
+        if dataset_transforms is None:
             return input_dict
-        return self.dataset_transforms(input_dict)
+        return dataset_transforms(input_dict, context=context)
 
 
 class DataModule(L.LightningDataModule, ABC):
-    """Top-level DataModule for data loading."""
+    """Define the shared Lightning DataModule behavior for Autoware-ML.
+
+    Subclasses create split-specific datasets while this base class provides
+    common setup logic, dataloader construction, and batch collation helpers.
+    """
 
     def __init__(
         self,
-        stack_keys: Optional[List[str]] = None,
-        train_transforms: Optional[TransformsCompose] = None,
-        val_transforms: Optional[TransformsCompose] = None,
-        test_transforms: Optional[TransformsCompose] = None,
-        predict_transforms: Optional[TransformsCompose] = None,
-        data_preprocessing: Optional[DataPreprocessing] = None,
-        train_dataloader_cfg: Optional[DataLoaderConfig] = DataLoaderConfig(),
-        val_dataloader_cfg: Optional[DataLoaderConfig] = DataLoaderConfig(),
-        test_dataloader_cfg: Optional[DataLoaderConfig] = DataLoaderConfig(),
-        predict_dataloader_cfg: Optional[DataLoaderConfig] = DataLoaderConfig(),
+        stack_keys: Sequence[str] | None = None,
+        train_transforms: TransformsCompose | None = None,
+        val_transforms: TransformsCompose | None = None,
+        test_transforms: TransformsCompose | None = None,
+        predict_transforms: TransformsCompose | None = None,
+        data_preprocessing: DataPreprocessing | None = None,
+        train_dataloader_cfg: DataLoaderConfig | Mapping[str, Any] | None = None,
+        val_dataloader_cfg: DataLoaderConfig | Mapping[str, Any] | None = None,
+        test_dataloader_cfg: DataLoaderConfig | Mapping[str, Any] | None = None,
+        predict_dataloader_cfg: DataLoaderConfig | Mapping[str, Any] | None = None,
     ):
         """Initialize DataModule.
 
@@ -102,7 +169,7 @@ class DataModule(L.LightningDataModule, ABC):
         """
         super().__init__()
 
-        self.stack_keys: Optional[List[str]] = stack_keys or []
+        self.stack_keys: list[str] = list(stack_keys or [])
         # TransformsCompose for each dataset split
         self.train_transforms: TransformsCompose = train_transforms
         self.val_transforms: TransformsCompose = val_transforms
@@ -110,21 +177,49 @@ class DataModule(L.LightningDataModule, ABC):
         self.predict_transforms: TransformsCompose = predict_transforms
         self.data_preprocessing: DataPreprocessing = data_preprocessing
         # Configuration for each dataset split
-        self.train_dataloader_cfg: DataLoaderConfig = train_dataloader_cfg
-        self.val_dataloader_cfg: DataLoaderConfig = val_dataloader_cfg
-        self.test_dataloader_cfg: DataLoaderConfig = test_dataloader_cfg
-        self.predict_dataloader_cfg: DataLoaderConfig = predict_dataloader_cfg
+        self.train_dataloader_cfg = self._coerce_dataloader_cfg(train_dataloader_cfg)
+        self.val_dataloader_cfg = self._coerce_dataloader_cfg(val_dataloader_cfg)
+        self.test_dataloader_cfg = self._coerce_dataloader_cfg(test_dataloader_cfg)
+        self.predict_dataloader_cfg = self._coerce_dataloader_cfg(predict_dataloader_cfg)
 
         # Dataset splits (to be created in setup)
-        self.train_dataset: Optional[Dataset] = None
-        self.val_dataset: Optional[Dataset] = None
-        self.test_dataset: Optional[Dataset] = None
-        self.predict_dataset: Optional[Dataset] = None
+        self.train_dataset: Dataset | None = None
+        self.val_dataset: Dataset | None = None
+        self.test_dataset: Dataset | None = None
+        self.predict_dataset: Dataset | None = None
+
+    @staticmethod
+    def _coerce_dataloader_cfg(
+        cfg: DataLoaderConfig | Mapping[str, Any] | None,
+    ) -> DataLoaderConfig:
+        """Normalize dataloader config values to ``DataLoaderConfig``.
+
+        Hydra composition can pass split dataloader settings as a plain
+        ``dict`` or ``DictConfig``. Normalize those mapping inputs at the
+        datamodule boundary so downstream code can rely on the dataclass API.
+
+        Args:
+            cfg: Optional dataloader config object or mapping.
+
+        Returns:
+            Normalized ``DataLoaderConfig`` instance.
+
+        Raises:
+            TypeError: If the provided value cannot be converted.
+        """
+        if cfg is None:
+            return DataLoaderConfig()
+        if isinstance(cfg, DataLoaderConfig):
+            return cfg
+        if isinstance(cfg, Mapping):
+            return DataLoaderConfig(**dict(cfg))
+        raise TypeError(
+            "Expected dataloader config to be a DataLoaderConfig, mapping, or None, "
+            f"got {type(cfg)!r}."
+        )
 
     @abstractmethod
-    def _create_dataset(
-        self, split: str, transforms: Optional[TransformsCompose] = None
-    ) -> Dataset:
+    def _create_dataset(self, split: str, transforms: TransformsCompose | None = None) -> Dataset:
         """Create dataset for a specific split.
 
         Subclasses must implement this method to create dataset instances
@@ -138,7 +233,7 @@ class DataModule(L.LightningDataModule, ABC):
         """
         raise NotImplementedError("Dataset must implement _create_dataset")
 
-    def setup(self, stage: str) -> None:
+    def setup(self, stage: str | None = None) -> None:
         """Setup datasets for each stage.
 
         This unified implementation handles all stages and eliminates
@@ -146,7 +241,8 @@ class DataModule(L.LightningDataModule, ABC):
         and creates datasets using _create_dataset().
 
         Args:
-            stage: Current stage ('fit', 'validate', 'test', 'predict').
+            stage: Current stage ('fit', 'validate', 'test', 'predict') or
+                ``None`` to prepare all splits.
         """
         # Define stage to splits mapping
         stage_splits = {
@@ -157,7 +253,9 @@ class DataModule(L.LightningDataModule, ABC):
         }
 
         # Get splits for this stage
-        splits = stage_splits.get(stage, [])
+        splits = (
+            ["train", "val", "test", "predict"] if stage is None else stage_splits.get(stage, [])
+        )
 
         # Create datasets for required splits
         for split in splits:
@@ -167,79 +265,36 @@ class DataModule(L.LightningDataModule, ABC):
             dataset = self._create_dataset(split, transforms)
             setattr(self, f"{split}_dataset", dataset)
 
-    def train_dataloader(self) -> DataLoader:
-        """Create training dataloader.
+    def _create_dataloader(self, split: str) -> DataLoader:
+        """Create a dataloader for the given split.
+
+        Args:
+            split: Dataset split name (``train``, ``val``, ``test``, ``predict``).
 
         Returns:
-            Training DataLoader.
+            Configured DataLoader for the split.
         """
-        return DataLoader(
-            dataset=self.train_dataset,
-            batch_size=self.train_dataloader_cfg.batch_size,
-            shuffle=self.train_dataloader_cfg.shuffle,
-            num_workers=self.train_dataloader_cfg.num_workers,
-            pin_memory=self.train_dataloader_cfg.pin_memory,
-            persistent_workers=self.train_dataloader_cfg.persistent_workers
-            and self.train_dataloader_cfg.num_workers > 0,
-            drop_last=self.train_dataloader_cfg.drop_last,
-            collate_fn=self.collate_fn,
-        )
+        dataset = getattr(self, f"{split}_dataset")
+        cfg: DataLoaderConfig = getattr(self, f"{split}_dataloader_cfg")
+        return DataLoader(dataset=dataset, collate_fn=self.collate_fn, **cfg.to_dataloader_kwargs())
+
+    def train_dataloader(self) -> DataLoader:
+        """Create training dataloader."""
+        return self._create_dataloader("train")
 
     def val_dataloader(self) -> DataLoader:
-        """Create validation dataloader.
-
-        Returns:
-            Validation DataLoader.
-        """
-        return DataLoader(
-            dataset=self.val_dataset,
-            batch_size=self.val_dataloader_cfg.batch_size,
-            shuffle=self.val_dataloader_cfg.shuffle,
-            num_workers=self.val_dataloader_cfg.num_workers,
-            pin_memory=self.val_dataloader_cfg.pin_memory,
-            persistent_workers=self.val_dataloader_cfg.persistent_workers
-            and self.val_dataloader_cfg.num_workers > 0,
-            drop_last=self.val_dataloader_cfg.drop_last,
-            collate_fn=self.collate_fn,
-        )
+        """Create validation dataloader."""
+        return self._create_dataloader("val")
 
     def test_dataloader(self) -> DataLoader:
-        """Create test dataloader.
-
-        Returns:
-            Test DataLoader.
-        """
-        return DataLoader(
-            dataset=self.test_dataset,
-            batch_size=self.test_dataloader_cfg.batch_size,
-            shuffle=self.test_dataloader_cfg.shuffle,
-            num_workers=self.test_dataloader_cfg.num_workers,
-            pin_memory=self.test_dataloader_cfg.pin_memory,
-            persistent_workers=self.test_dataloader_cfg.persistent_workers
-            and self.test_dataloader_cfg.num_workers > 0,
-            drop_last=self.test_dataloader_cfg.drop_last,
-            collate_fn=self.collate_fn,
-        )
+        """Create test dataloader."""
+        return self._create_dataloader("test")
 
     def predict_dataloader(self) -> DataLoader:
-        """Create prediction dataloader.
+        """Create prediction dataloader."""
+        return self._create_dataloader("predict")
 
-        Returns:
-            Prediction DataLoader.
-        """
-        return DataLoader(
-            dataset=self.predict_dataset,
-            batch_size=self.predict_dataloader_cfg.batch_size,
-            shuffle=self.predict_dataloader_cfg.shuffle,
-            num_workers=self.predict_dataloader_cfg.num_workers,
-            pin_memory=self.predict_dataloader_cfg.pin_memory,
-            persistent_workers=self.predict_dataloader_cfg.persistent_workers
-            and self.predict_dataloader_cfg.num_workers > 0,
-            drop_last=self.predict_dataloader_cfg.drop_last,
-            collate_fn=self.collate_fn,
-        )
-
-    def collate_fn(self, batch_inputs_dicts: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def collate_fn(self, batch_inputs_dicts: Sequence[dict[str, Any]]) -> dict[str, Any]:
         """Collates batch elements into a dictionary of Tensors or Lists.
 
         1. Converts NumPy arrays, lists, tuples and scalars to PyTorch Tensors.
@@ -252,13 +307,14 @@ class DataModule(L.LightningDataModule, ABC):
         Returns:
             Dictionary mapping keys to Tensors or lists of data.
         """
-        assert len(batch_inputs_dicts) > 0, "Batch inputs dictionary is empty."
+        if not batch_inputs_dicts:
+            raise ValueError("Batch inputs dictionary is empty.")
 
-        all_keys: Set[str] = set()
+        all_keys: set[str] = set()
         for input_dict in batch_inputs_dicts:
             all_keys.update(input_dict.keys())
 
-        batch_inputs_dict: Dict[str, List[Any]] = {key: [] for key in all_keys}
+        batch_inputs_dict: dict[str, list[Any]] = {key: [] for key in all_keys}
 
         for input_dict in batch_inputs_dicts:
             for key in all_keys:
@@ -285,15 +341,24 @@ class DataModule(L.LightningDataModule, ABC):
                 batch_inputs_dict[key].append(item)
 
         for key in self.stack_keys:
-            assert key in batch_inputs_dict, f"Key '{key}' not found in batch_inputs_dict."
-            assert len(batch_inputs_dict[key]) > 0, f"List for key '{key}' is empty."
+            if key not in batch_inputs_dict:
+                raise KeyError(f"Stack key '{key}' not found in batch_inputs_dict.")
             batch_inputs_dict[key] = torch.stack(batch_inputs_dict[key], dim=0)
 
         return batch_inputs_dict
 
     def on_after_batch_transfer(
-        self, batch_inputs_dict: Dict[str, Any], dataloader_idx: int
-    ) -> Dict[str, Any]:
+        self, batch_inputs_dict: dict[str, Any], dataloader_idx: int
+    ) -> dict[str, Any]:
+        """Apply optional preprocessing after dataloader device transfer.
+
+        Args:
+            batch_inputs_dict: Batch dictionary returned by the dataloader.
+            dataloader_idx: Index of the dataloader that produced the batch.
+
+        Returns:
+            Batch dictionary after optional preprocessing.
+        """
         if self.data_preprocessing is not None:
             batch_inputs_dict = self.data_preprocessing(batch_inputs_dict)
         return batch_inputs_dict

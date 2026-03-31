@@ -12,12 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Learning rate schedulers for Autoware-ML framework."""
+"""Learning-rate scheduler exports for Autoware-ML.
 
-from .cosine_annealing import CosineAnnealingLR
-from .cyclic_cosine_annealing import CyclicCosineAnnealingLR
-from .cyclic_momentum import CyclicMomentumScheduler
-from .linear_warmup_cosine_annealing import LinearWarmupCosineAnnealingLR
+This package exposes reusable scheduler utilities and learning-rate policies
+used by model configuration files.
+"""
+
+from autoware_ml.utils.schedulers.cosine_annealing import CosineAnnealingLR
+from autoware_ml.utils.schedulers.cyclic_cosine_annealing import CyclicCosineAnnealingLR
+from autoware_ml.utils.schedulers.cyclic_momentum import CyclicMomentumScheduler
+from autoware_ml.utils.schedulers.linear_warmup_cosine_annealing import (
+    LinearWarmupCosineAnnealingLR,
+)
 
 __all__ = [
     "CosineAnnealingLR",

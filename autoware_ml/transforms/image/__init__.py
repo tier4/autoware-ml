@@ -12,8 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Calibration status transforms."""
+"""Image-transform exports used by image-based pipelines.
 
-from .image import PhotometricDistortion
+This package re-exports transforms that operate purely on image tensors or
+arrays.
+"""
+
+from autoware_ml.transforms.image.image import PhotometricDistortion
 
 __all__ = ["PhotometricDistortion"]

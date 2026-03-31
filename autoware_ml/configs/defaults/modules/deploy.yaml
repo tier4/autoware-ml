@@ -2,7 +2,10 @@
 
 deploy:
   onnx:
+    enabled: true
+    dynamo: true
     opset_version: 21
     modify_graph: null
   tensorrt:
+    enabled: true
     workspace_size: 1073741824

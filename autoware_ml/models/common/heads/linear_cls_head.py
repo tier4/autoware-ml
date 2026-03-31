@@ -12,7 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Dict, List
+"""Classification heads for image-based models.
+
+This module provides reusable classification heads built on top of image backbone features.
+"""
+
+from collections.abc import Sequence
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -21,12 +27,16 @@ from torchmetrics.functional import accuracy
 
 
 class ClsHead(nn.Module):
-    """Base class for classification heads."""
+    """Provide common loss and prediction utilities for classification heads.
+
+    Subclasses define the concrete feature-to-logit mapping while inheriting
+    shared loss, accuracy, and prediction behavior.
+    """
 
     def __init__(
         self,
         loss: nn.Module,
-        topk: List[int],
+        topk: Sequence[int],
         num_classes: int,
         cal_acc: bool = False,
     ):
@@ -39,15 +49,13 @@ class ClsHead(nn.Module):
             cal_acc: Whether to compute accuracy metrics.
         """
         super().__init__()
-        self.topk = topk
+        self.topk = tuple(topk)
         self.cal_acc = cal_acc
         self.num_classes = num_classes
         self.loss_module = loss
 
     def pre_logits(self, feats: torch.Tensor) -> torch.Tensor:
-        """
-        The process before the final classification head.
-        Handles both single Tensor inputs and Tuple/List inputs (from backbones/necks).
+        """Normalize backbone outputs before the final classification layer.
 
         Args:
             feats: Feature maps from backbone/neck. Can be a single tensor or tuple/list.
@@ -55,7 +63,7 @@ class ClsHead(nn.Module):
                   Expected to be already flattened to (B, C) by neck if needed.
 
         Returns:
-            torch.Tensor: Features ready for classification head.
+            Features ready for the final classification layer.
         """
         if isinstance(feats, (tuple, list)):
             assert len(feats) > 0, "Tuple/list input must not be empty"
@@ -63,7 +71,14 @@ class ClsHead(nn.Module):
         return feats
 
     def forward(self, feats: torch.Tensor) -> torch.Tensor:
-        """The forward process."""
+        """Return pre-logit features consumed by downstream classifier layers.
+
+        Args:
+            feats: Feature maps from the backbone or neck.
+
+        Returns:
+            Normalized feature tensor.
+        """
         return self.pre_logits(feats)
 
     def loss(
@@ -71,9 +86,8 @@ class ClsHead(nn.Module):
         logits: torch.Tensor,
         target: torch.Tensor,
         **kwargs: Any,
-    ) -> Dict[str, torch.Tensor]:
-        """
-        Calculate losses from model logits.
+    ) -> dict[str, torch.Tensor]:
+        """Calculate losses from model logits.
 
         Args:
             logits: Model outputs (already passed through the head).
@@ -81,9 +95,9 @@ class ClsHead(nn.Module):
             **kwargs: Extra arguments for the loss module.
 
         Returns:
-            Dict containing the loss and optionally accuracy.
+            Dictionary containing the classification loss and optional accuracy metrics.
         """
-        losses: Dict[str, torch.Tensor] = {}
+        losses: dict[str, torch.Tensor] = {}
         losses["loss"] = self.loss_module(logits, target, **kwargs)
 
         if self.cal_acc:
@@ -100,28 +114,22 @@ class ClsHead(nn.Module):
         return losses
 
     def predict(self, logits: torch.Tensor) -> torch.Tensor:
-        """
-        Inference method.
+        """Convert logits to class probabilities.
 
         Args:
             logits: Model outputs (already passed through the head).
 
         Returns:
-            torch.Tensor: Softmax probabilities.
+            Softmax probabilities.
         """
         return F.softmax(logits, dim=1)
 
 
 class LinearClsHead(ClsHead):
-    """
-    Linear classifier head.
+    """Implement a linear classifier head on top of flattened features.
 
-    Args:
-        num_classes (int): Number of categories.
-        in_channels (int): Number of channels in the input feature map.
-        loss (nn.Module): Loss module.
-        topk (list): Top-k accuracy.
-        cal_acc (bool): Calculate accuracy during training.
+    The head applies one fully connected layer after the shared
+    :class:`ClsHead` preprocessing step.
     """
 
     def __init__(
@@ -129,9 +137,18 @@ class LinearClsHead(ClsHead):
         num_classes: int,
         in_channels: int,
         loss: nn.Module,
-        topk: List[int],
+        topk: Sequence[int],
         cal_acc: bool = False,
     ):
+        """Initialize the linear classification head.
+
+        Args:
+            num_classes: Number of target classes.
+            in_channels: Input feature dimension.
+            loss: Loss module used for supervision.
+            topk: Top-k values used for accuracy computation.
+            cal_acc: Whether to compute accuracy metrics during training.
+        """
         super().__init__(loss=loss, topk=topk, num_classes=num_classes, cal_acc=cal_acc)
 
         self.in_channels = in_channels
@@ -143,7 +160,14 @@ class LinearClsHead(ClsHead):
         self.fc = nn.Linear(self.in_channels, self.num_classes)
 
     def forward(self, feats: torch.Tensor) -> torch.Tensor:
-        """The forward process."""
+        """Map backbone features to classification logits.
+
+        Args:
+            feats: Feature maps from the backbone or neck.
+
+        Returns:
+            Classification logits.
+        """
         pre_logits = self.pre_logits(feats)
         # The final classification head.
         cls_score = self.fc(pre_logits)

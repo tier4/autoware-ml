@@ -215,8 +215,9 @@ exec_container() {
     echo -e "${GREEN}CONTAINER:${NC} ${CONTAINER_NAME}"
     echo -e "${GREEN}-----------------------------------------------------------------${NC}"
 
-    # Use entrypoint to switch to correct user and start bash
-    docker exec -it -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" "${CONTAINER_NAME}" /entrypoint.sh bash
+    # Use the mounted workspace entrypoint so container execution stays in sync
+    # with the checked-out repository without requiring an image rebuild.
+    docker exec -it -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" "${CONTAINER_NAME}" /workspace/docker/entrypoint.sh bash
 }
 
 wait_for_container() {

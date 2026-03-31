@@ -12,10 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Cyclic momentum scheduler for optimizer momentum adjustment."""
+"""Cyclic momentum scheduler utilities.
+
+This module implements cyclic momentum scheduling helpers for optimizers that
+benefit from coordinated learning-rate and momentum updates.
+"""
 
 import math
-from typing import List, Optional
 
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
@@ -73,7 +76,7 @@ class CyclicMomentumScheduler(LRScheduler):
         self.max_momentum_factor = max_momentum_factor
 
         # Store base momentum values
-        self.base_momentums: List[float] = []
+        self.base_momentums: list[float] = []
         for group in optimizer.param_groups:
             if "betas" in group:
                 self.base_momentums.append(group["betas"][0])
@@ -84,11 +87,15 @@ class CyclicMomentumScheduler(LRScheduler):
 
         super().__init__(optimizer, last_epoch)
 
-    def get_lr(self) -> List[float]:
-        """Dummy method required by LRScheduler - returns current LR unchanged."""
+    def get_lr(self) -> list[float]:
+        """Return the current learning rates unchanged.
+
+        Returns:
+            Learning rates currently stored in the optimizer parameter groups.
+        """
         return [group["lr"] for group in self.optimizer.param_groups]
 
-    def get_momentum(self) -> List[float]:
+    def get_momentum(self) -> list[float]:
         """Calculate momentum values using two-phase cosine annealing.
 
         Uses standard cosine formula: val = end + 0.5 * (start - end) * (1 + cos(π * t/T))
@@ -118,7 +125,7 @@ class CyclicMomentumScheduler(LRScheduler):
 
         return [base_momentum * momentum_factor for base_momentum in self.base_momentums]
 
-    def step(self, epoch: Optional[int] = None) -> None:
+    def step(self, epoch: int | None = None) -> None:
         """Update momentum values in optimizer.
 
         Args:

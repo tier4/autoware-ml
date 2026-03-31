@@ -12,7 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""NuScenes dataset generation tools."""
+"""NuScenes dataset-generation utilities used by Autoware-ML tooling.
+
+This package groups generators, task adapters, and helpers for creating
+NuScenes info files.
+"""
 
 from autoware_ml.tools.dataset.nuscenes.generator import NuScenesDatasetGenerator
 

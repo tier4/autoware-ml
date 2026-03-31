@@ -12,30 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""NuScenes calibration status dataset and datamodule."""
+"""NuScenes calibration-status dataset and datamodule."""
 
 import os
 import pickle
-from typing import Any, Dict, Optional
+from typing import Any
 
-import cv2
 import numpy as np
 
 from autoware_ml.datamodule.base import DataModule, Dataset
-from autoware_ml.datamodule.t4dataset.calibration_status import (
-    CalibrationData,
-    CalibrationStatus,
-)
-from autoware_ml.transforms import TransformsCompose
+from autoware_ml.transforms.base import TransformsCompose
+from autoware_ml.utils.calibration import CalibrationData, CalibrationStatus
 
 
 class NuscenesCalibrationStatusDataset(Dataset):
-    """Dataset for NuScenes Calibration Status using the info.pkl structure.
-
-    This dataset loads calibration status data from NuScenes dataset format.
-    Each sample contains comprehensive sensor and calibration information including
-    camera images, lidar point clouds, and geometric transformations.
-    """
+    """Dataset for NuScenes calibration-status metadata samples."""
 
     def __init__(
         self,
@@ -76,59 +67,24 @@ class NuscenesCalibrationStatusDataset(Dataset):
         """
         return len(self.data_infos)
 
-    def _get_input_dict(self, idx: int) -> Dict[str, Any]:
-        """Get input dictionary for a given index.
+    def get_data_info(self, idx: int) -> dict[str, Any]:
+        """Get sample metadata for a given index.
 
         Args:
             idx: Sample index.
 
         Returns:
-            Input dictionary.
+            Metadata dictionary consumed by transform loaders.
         """
-        input_dict = dict()
-
         sample = self.data_infos[idx]
 
-        if "image" in sample and "lidar_points" in sample:
-            image_path: str = sample["image"]["img_path"]
-            lidar_path: str = sample["lidar_points"]["lidar_path"]
-        else:
-            raise ValueError("Sample does not contain 'image' and 'lidar_points' keys")
-
-        num_pts_feats = 5
-
-        image = cv2.imread(os.path.join(self.data_root, image_path))
-        if image is None:
-            raise FileNotFoundError(f"Image not found: {os.path.join(self.data_root, image_path)}")
-
-        points = np.fromfile(os.path.join(self.data_root, lidar_path), dtype=np.float32).reshape(
-            -1, num_pts_feats
-        )
-        calibration_data = self._load_calibration_data(sample)
-
-        input_dict["img"] = image
-        input_dict["points"] = points
-        input_dict["calibration_data"] = calibration_data
-        input_dict["gt_calibration_status"] = CalibrationStatus.CALIBRATED.value
-        input_dict["metadata"] = sample
-
-        return input_dict
-
-    def _load_calibration_data(self, sample: dict) -> CalibrationData:
-        """Load calibration data from sample.
-
-        Args:
-            sample: Sample dictionary.
-
-        Returns:
-            CalibrationData instance.
-
-        Raises:
-            KeyError: If required keys are missing.
-            ValueError: If calibration data format is invalid.
-        """
         if "image" not in sample:
             raise KeyError("Sample does not contain 'image' key")
+        if "lidar_points" not in sample:
+            raise KeyError("Sample does not contain 'lidar_points' key")
+
+        image_path: str = sample["image"]["img_path"]
+        lidar_path: str = sample["lidar_points"]["lidar_path"]
 
         cam_info = sample["image"]
 
@@ -159,11 +115,20 @@ class NuscenesCalibrationStatusDataset(Dataset):
                 f"distortion_coefficients must be 5, got shape {distortion_coefficients.shape}"
             )
 
-        return CalibrationData(
+        calibration_data = CalibrationData(
             camera_matrix=camera_matrix,
             distortion_coefficients=distortion_coefficients,
             lidar_to_camera_transformation=lidar_to_camera_transformation,
         )
+
+        return {
+            "img_path": os.path.join(self.data_root, image_path),
+            "lidar_path": os.path.join(self.data_root, lidar_path),
+            "num_pts_feats": 5,
+            "calibration_data": calibration_data,
+            "gt_calibration_status": CalibrationStatus.CALIBRATED.value,
+            "metadata": sample,
+        }
 
 
 class NuscenesCalibrationDataModule(DataModule):
@@ -205,7 +170,7 @@ class NuscenesCalibrationDataModule(DataModule):
         }
 
     def _create_dataset(
-        self, split: str, dataset_transforms: Optional[TransformsCompose] = None
+        self, split: str, dataset_transforms: TransformsCompose | None = None
     ) -> Dataset:
         """Create dataset for a specific split.
 

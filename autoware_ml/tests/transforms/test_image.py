@@ -17,7 +17,7 @@
 import numpy as np
 import pytest
 
-from autoware_ml.transforms.image.image import PhotometricDistortion
+from autoware_ml.transforms.image import PhotometricDistortion
 
 
 class TestPhotometricDistortion:

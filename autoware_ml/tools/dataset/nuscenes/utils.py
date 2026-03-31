@@ -12,7 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Utility functions and constants for NuScenes dataset generation."""
+"""Utility functions and constants for NuScenes dataset generation.
+
+This module provides shared constants and helper functions used by NuScenes
+dataset generators and task adapters.
+"""
 
 NUSCENES_NAME_MAPPING = {
     "movable_object.barrier": "barrier",
