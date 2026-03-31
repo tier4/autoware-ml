@@ -82,7 +82,7 @@ classDiagram
     BaseDatabase ..|> DatabaseInterface : satisfies
     ConcreteDatabase --|> BaseDatabase : extends
 
-    schemas --> TrainingInference : consumed by
+    schemas --> TrainingInference :  Iterable[DatasetRecord] consumed by
 
     schemas ..> polars : uses pl.DataType, pl.Schema
 ```
