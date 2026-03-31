@@ -62,4 +62,4 @@ class DatasetRecord(BaseModel):
     location: str
     vehicle_type: str
     # TODO (KokSeang): Add more annotation fields here
-    # bbox_3d: Iterable[npt.NDArray[np.float64]]
+    # bbox_3d: Sequence[npt.NDArray[np.float64]]
