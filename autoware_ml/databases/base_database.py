@@ -119,7 +119,7 @@ class BaseDatabase:
             raise ValueError(f"Main database {self.main_database} not found!")
         return main_database_scenario_data
 
-    def get_unique_scenario_data(self) -> Mapping[str, ScenarioData]:
+    def get_unique_scenario_data(self) -> MappingProxyType[str, ScenarioData]:
         """Get all scenario data from all scenario groups and keep their order the same."""
         unique_scenarios = {}
         for _, scenarios in self.scenarios.items():

@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+import logging
 from collections import defaultdict
 import yaml
 from typing import Iterable
@@ -8,27 +11,40 @@ from pydantic import model_validator
 from autoware_ml.common.enums.enums import SplitType
 from autoware_ml.databases.scenarios import ScenarioData, Scenarios, DatabaseVersion
 
+logger = logging.getLogger(__name__)
+
 
 class T4Scenarios(Scenarios):
     """T4 scenario datasets class."""
 
     @model_validator(mode="after")
-    def build_scenarios(self) -> None:
+    def build_scenarios(self) -> T4Scenarios:
         """Build scenarios from database scenarios, and overwrite the scenario_data attribute."""
         scenario_data = defaultdict(list)
+        logger.info(f"==== Loading database scenarios for database: {self.version} ====")
         for db_version in self.db_versions:
-            db_yaml_path = self.scenario_root_path / db_version.db_version / ".yaml"
+            db_yaml_path = self.scenario_root_path / (db_version.db_version +
+                                                      ".yaml")
+            logger.info(f"Loading database scenarios from {db_yaml_path}")
             with open(db_yaml_path, "r") as f:
-                db_scenarios: MappingProxyType[str, Iterable[str]] = yaml.safe_load(f)
+                db_scenarios: MappingProxyType[
+                    str, Iterable[str]] = yaml.safe_load(f)
 
-            scenario_splits = self._build_scenario_splits(db_scenarios, db_version)
+            scenario_splits = self._build_scenario_splits(
+                db_scenarios, db_version)
             for split, scenarios in scenario_splits.items():
                 scenario_data[split] += scenarios
 
         object.__setattr__(self, "scenario_data", scenario_data)
+        for split, scenarios in scenario_data.items():
+            logger.info(
+                f"Loaded total of {len(scenarios)} scenarios for split {split} in database: {self.version}"
+            )
+        return self
 
     @staticmethod
-    def _build_scenario_data(scenario_id: str, db_version: DatabaseVersion) -> ScenarioData:
+    def _build_scenario_data(scenario_id: str,
+                             db_version: DatabaseVersion) -> ScenarioData:
         """
         Build scenario data from a scenario ID and a database version.
         :param scenario_id: Scenario ID.
@@ -45,7 +61,7 @@ class T4Scenarios(Scenarios):
             raise ValueError(f"Invalid scenario ID: {scenario_id}")
 
         return ScenarioData(
-            db_version=db_version,
+            db_version=db_version.db_version,
             scenario_id=scenario_id,
             scenario_version=version,
             vehicle_type=vehicle_type,
@@ -55,7 +71,8 @@ class T4Scenarios(Scenarios):
         )
 
     def _build_scenario_splits(
-        self, db_scenarios: MappingProxyType[str, Iterable[str]], db_version: DatabaseVersion
+        self, db_scenarios: MappingProxyType[str, Iterable[str]],
+        db_version: DatabaseVersion
     ) -> MappingProxyType[SplitType, Iterable[ScenarioData]]:
         """
         Build splits from a database scenarios.
