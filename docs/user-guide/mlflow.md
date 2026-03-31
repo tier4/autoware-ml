@@ -107,7 +107,7 @@ autoware-ml train --config-name <task>/<model>/<config> \
 import mlflow
 
 mlflow.set_tracking_uri("sqlite:///mlruns/mlflow.db")
-experiment = mlflow.get_experiment_by_name("<task>/<model>/<config>")
+experiment = mlflow.get_experiment_by_name("<task>_<model>_<config>")
 
 runs = mlflow.search_runs(
     experiment_ids=[experiment.experiment_id],
