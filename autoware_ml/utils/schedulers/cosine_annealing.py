@@ -12,10 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Cosine annealing learning rate scheduler."""
+"""Cosine annealing learning-rate scheduler utilities.
+
+This module implements cosine annealing scheduler helpers used by framework
+training configurations.
+"""
 
 import math
-from typing import List
 
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
@@ -79,7 +82,7 @@ class CosineAnnealingLR(LRScheduler):
         self.eta_min = eta_min
         super().__init__(optimizer, last_epoch)
 
-    def get_lr(self) -> List[float]:
+    def get_lr(self) -> list[float]:
         """Calculate learning rate using recursive cosine annealing formula.
 
         At epoch 0 (called during __init__), we return the current LR without modification.

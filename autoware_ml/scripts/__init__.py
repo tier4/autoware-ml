@@ -12,4 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Autoware-ML script modules for training, deployment, and utilities."""
+"""Executable runtime entrypoints used by Autoware-ML.
+
+This package is intentionally small and contains only stage entrypoints such as
+training, evaluation, and deployment. Reusable framework helpers live under
+``autoware_ml.utils`` or domain-specific packages.
+"""

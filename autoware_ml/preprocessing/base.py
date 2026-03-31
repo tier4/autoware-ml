@@ -12,9 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Data preprocessing module for GPU-accelerated batch transformations."""
+"""Base classes for GPU-oriented batch preprocessing modules.
 
-from typing import Any, Dict, List, Optional
+This module defines the shared preprocessing interface used between dataloaders
+and model forward passes.
+"""
+
+from collections.abc import Sequence
+from typing import Any
 
 import torch.nn as nn
 
@@ -30,7 +35,7 @@ class DataPreprocessing(nn.Module):
 
     Args:
         pipeline: List of nn.Module layers to apply sequentially.
-            Each layer should accept Dict[str, Any] and return Dict[str, Any].
+            Each layer should accept ``dict[str, Any]`` and return ``dict[str, Any]``.
 
     Example:
         ```python
@@ -44,7 +49,7 @@ class DataPreprocessing(nn.Module):
         ```
     """
 
-    def __init__(self, pipeline: Optional[List[nn.Module]] = None) -> None:
+    def __init__(self, pipeline: Sequence[nn.Module] | None = None) -> None:
         """Initialize preprocessing with optional layers.
 
         Args:
@@ -53,7 +58,7 @@ class DataPreprocessing(nn.Module):
         super().__init__()
         self.pipeline = nn.ModuleList(pipeline or [])
 
-    def __call__(self, batch_inputs_dict: Dict[str, Any]) -> Dict[str, Any]:
+    def __call__(self, batch_inputs_dict: dict[str, Any]) -> dict[str, Any]:
         """Apply preprocessing layers after the batch is already on device.
 
         Args:

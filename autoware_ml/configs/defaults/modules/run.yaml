@@ -2,6 +2,6 @@
 
 hydra:
   run:
-    dir: mlruns/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    dir: mlruns/${user_config_name:${hydra:job.config_name}}/${now:%Y-%m-%d}/${now:%H-%M-%S}
   sweep:
-    dir: mlruns/optuna/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    dir: mlruns/optuna/${user_config_name:${hydra:job.config_name}}/${now:%Y-%m-%d}/${now:%H-%M-%S}

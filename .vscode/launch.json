@@ -72,6 +72,9 @@
           "value": "train"
         },
         {
+          "value": "test"
+        },
+        {
           "value": "deploy"
         }
       ]

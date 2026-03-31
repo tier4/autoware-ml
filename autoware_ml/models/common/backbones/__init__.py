@@ -12,8 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Backbone networks for feature extraction."""
+"""Common backbone exports for shared feature extraction modules.
 
-from .resnet import ResNet18
+This package re-exports reusable backbone networks shared across multiple
+Autoware-ML tasks.
+"""
+
+from autoware_ml.models.common.backbones.resnet import (
+    ResNet18,
+)
 
 __all__ = ["ResNet18"]

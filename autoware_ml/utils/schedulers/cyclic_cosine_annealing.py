@@ -12,10 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Cyclic cosine annealing learning rate scheduler."""
+"""Cyclic cosine annealing learning-rate scheduler utilities.
+
+This module provides cyclic cosine annealing learning-rate schedules used by
+selected training configurations.
+"""
 
 import math
-from typing import List
 
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
@@ -31,7 +34,7 @@ class CyclicCosineAnnealingLR(LRScheduler):
     Phase 1 (warmup): LR increases from base_lr to max_lr using cosine
     Phase 2 (decay): LR decreases from max_lr to min_lr using cosine
 
-    Example configuration for CenterPoint (cyclic-20e):
+    Example cyclic-20e-style configuration:
     - Warmup (epochs 0-8): 1e-4 -> 1e-3
     - Decay (epochs 8-20): 1e-3 -> 1e-8
 
@@ -81,7 +84,7 @@ class CyclicCosineAnnealingLR(LRScheduler):
         self.min_lr_factor = min_lr_factor
         super().__init__(optimizer, last_epoch)
 
-    def get_lr(self) -> List[float]:
+    def get_lr(self) -> list[float]:
         """Calculate learning rate using two-phase cosine annealing.
 
         Uses standard cosine formula: lr = end + 0.5 * (start - end) * (1 + cos(π * t/T))

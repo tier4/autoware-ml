@@ -31,6 +31,7 @@ RUN apt-get update && \
   gosu \
   ninja-build \
   sudo \
+  tmux \
   vim \
   && rm -rf /var/lib/apt/lists/* \
   && gosu nobody true

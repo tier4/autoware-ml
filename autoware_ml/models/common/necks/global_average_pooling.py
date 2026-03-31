@@ -12,7 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Optional, Tuple, Union
+"""Global pooling necks for classification models.
+
+This module provides reusable global pooling necks used to aggregate spatial
+features before classification.
+"""
 
 import torch
 import torch.nn as nn
@@ -31,8 +35,8 @@ class GlobalAveragePooling(nn.Module):
 
     def __init__(
         self,
-        kernel_size: Optional[Union[int, Tuple[int, int]]] = None,
-        stride: Optional[Union[int, Tuple[int, int]]] = None,
+        kernel_size: int | tuple[int, int] | None = None,
+        stride: int | tuple[int, int] | None = None,
     ) -> None:
         """Initialize GlobalAveragePooling.
 

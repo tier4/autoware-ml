@@ -14,20 +14,18 @@
 
 """Unit tests for camera-lidar transforms."""
 
-from typing import Any, Dict
+from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 import pytest
 
-from autoware_ml.datamodule.t4dataset.calibration_status import (
-    CalibrationData,
-    CalibrationStatus,
-)
 from autoware_ml.transforms.camera_lidar import (
     Affine,
     CalibrationMisalignment,
     LidarCameraFusion,
 )
+from autoware_ml.utils.calibration import CalibrationData, CalibrationStatus
 
 
 class TestCalibrationMisalignment:
@@ -314,7 +312,7 @@ class TestLidarCameraFusion:
         assert fusion.dilation_size == 2
 
     def test_missing_img_key(
-        self, sample_points: np.ndarray, sample_calibration_data: CalibrationData
+        self, sample_points: npt.NDArray[np.float32], sample_calibration_data: CalibrationData
     ) -> None:
         """Test that missing 'img' key raises KeyError."""
         fusion = LidarCameraFusion()
@@ -327,7 +325,7 @@ class TestLidarCameraFusion:
             fusion(input_dict)
 
     def test_missing_points_key(
-        self, sample_image: np.ndarray, sample_calibration_data: CalibrationData
+        self, sample_image: npt.NDArray[np.uint8], sample_calibration_data: CalibrationData
     ) -> None:
         """Test that missing 'points' key raises KeyError."""
         fusion = LidarCameraFusion()
@@ -340,7 +338,7 @@ class TestLidarCameraFusion:
             fusion(input_dict)
 
     def test_missing_calibration_data_key(
-        self, sample_image: np.ndarray, sample_points: np.ndarray
+        self, sample_image: npt.NDArray[np.uint8], sample_points: npt.NDArray[np.float32]
     ) -> None:
         """Test that missing 'calibration_data' key raises KeyError."""
         fusion = LidarCameraFusion()
@@ -352,7 +350,7 @@ class TestLidarCameraFusion:
         with pytest.raises(KeyError, match="Missing required key 'calibration_data'"):
             fusion(input_dict)
 
-    def test_output_fused_img_key(self, sample_input_dict: Dict[str, Any]) -> None:
+    def test_output_fused_img_key(self, sample_input_dict: dict[str, Any]) -> None:
         """Test that 'fused_img' key is added to output."""
         fusion = LidarCameraFusion()
 
@@ -361,7 +359,7 @@ class TestLidarCameraFusion:
         assert "fused_img" in output_dict
         assert isinstance(output_dict["fused_img"], np.ndarray)
 
-    def test_output_shape(self, sample_input_dict: Dict[str, Any]) -> None:
+    def test_output_shape(self, sample_input_dict: dict[str, Any]) -> None:
         """Test that fused images have correct shape (H, W, 5)."""
         fusion = LidarCameraFusion()
 
@@ -375,7 +373,7 @@ class TestLidarCameraFusion:
             5,
         ), f"Expected ({h}, {w}, 5), got {output_dict['fused_img'].shape}"
 
-    def test_output_dtype(self, sample_input_dict: Dict[str, Any]) -> None:
+    def test_output_dtype(self, sample_input_dict: dict[str, Any]) -> None:
         """Test that fused images are float32."""
         fusion = LidarCameraFusion()
 
@@ -383,7 +381,7 @@ class TestLidarCameraFusion:
 
         assert output_dict["fused_img"].dtype == np.float32
 
-    def test_output_normalized(self, sample_input_dict: Dict[str, Any]) -> None:
+    def test_output_normalized(self, sample_input_dict: dict[str, Any]) -> None:
         """Test that fused images are normalized to [0, 1]."""
         fusion = LidarCameraFusion()
 
@@ -393,7 +391,7 @@ class TestLidarCameraFusion:
         assert fused_img.min() >= 0.0, f"Min value {fused_img.min()} < 0"
         assert fused_img.max() <= 1.0, f"Max value {fused_img.max()} > 1"
 
-    def test_preserves_other_keys(self, sample_input_dict: Dict[str, Any]) -> None:
+    def test_preserves_other_keys(self, sample_input_dict: dict[str, Any]) -> None:
         """Test that all keys in input_dict are preserved."""
         fusion = LidarCameraFusion()
 
@@ -404,7 +402,7 @@ class TestLidarCameraFusion:
         assert "calibration_data" in output_dict
         assert "gt_calibration_status" in output_dict
 
-    def test_handles_affine_transform(self, sample_input_dict: Dict[str, Any]) -> None:
+    def test_handles_affine_transform(self, sample_input_dict: dict[str, Any]) -> None:
         """Test that affine_transform is applied when present."""
         fusion = LidarCameraFusion()
 
@@ -438,7 +436,7 @@ class TestAffine:
         with pytest.raises(KeyError, match="Missing required key 'img'"):
             transform(input_dict)
 
-    def test_p_zero_no_augmentation(self, sample_image: np.ndarray) -> None:
+    def test_p_zero_no_augmentation(self, sample_image: npt.NDArray[np.uint8]) -> None:
         """Test that p=0.0 applies no augmentation."""
         transform = Affine(p=0.0)
         original_image = sample_image.copy()
@@ -455,7 +453,7 @@ class TestAffine:
         assert "affine_transform" in output_dict
         assert np.allclose(output_dict["affine_transform"], np.eye(3))
 
-    def test_p_one_always_augment(self, sample_image: np.ndarray) -> None:
+    def test_p_one_always_augment(self, sample_image: npt.NDArray[np.uint8]) -> None:
         """Test that p=1.0 always applies augmentation."""
         transform = Affine(p=1.0)
         original_image = sample_image.copy()
@@ -469,7 +467,7 @@ class TestAffine:
         assert "affine_transform" in output_dict
         assert output_dict["affine_transform"].shape == (3, 3)
 
-    def test_preserves_other_keys(self, sample_image: np.ndarray) -> None:
+    def test_preserves_other_keys(self, sample_image: npt.NDArray[np.uint8]) -> None:
         """Test that all keys in input_dict are preserved."""
         transform = Affine()
         input_dict = {"img": sample_image.copy(), "other_key": "preserved_value"}
@@ -479,7 +477,7 @@ class TestAffine:
         assert "other_key" in output_dict
         assert output_dict["other_key"] == "preserved_value"
 
-    def test_output_shape_preserved(self, sample_image: np.ndarray) -> None:
+    def test_output_shape_preserved(self, sample_image: npt.NDArray[np.uint8]) -> None:
         """Test that output image shape matches input shape."""
         transform = Affine()
         input_dict = {"img": sample_image.copy()}
@@ -489,7 +487,7 @@ class TestAffine:
         assert output_dict["img"].shape == sample_image.shape
         assert output_dict["img"].dtype == sample_image.dtype
 
-    def test_affine_matrix_valid(self, sample_image: np.ndarray) -> None:
+    def test_affine_matrix_valid(self, sample_image: npt.NDArray[np.uint8]) -> None:
         """Test that affine matrix has valid structure."""
         transform = Affine(p=1.0, max_distortion=0.1)
         input_dict = {"img": sample_image.copy()}

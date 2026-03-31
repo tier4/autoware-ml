@@ -96,28 +96,28 @@ The `DataModule` class (extending `LightningDataModule`) manages:
 class DataModule(L.LightningDataModule, ABC):
     def __init__(
         self,
-        stack_keys: Optional[List[str]] = None,
-        train_transforms: Optional[TransformsCompose] = None,
-        val_transforms: Optional[TransformsCompose] = None,
-        test_transforms: Optional[TransformsCompose] = None,
-        predict_transforms: Optional[TransformsCompose] = None,
-        data_preprocessing: Optional[DataPreprocessing] = None,
-        train_dataloader_cfg: Optional[DataLoaderConfig] = None,
+        stack_keys: Sequence[str] | None = None,
+        train_transforms: TransformsCompose | None = None,
+        val_transforms: TransformsCompose | None = None,
+        test_transforms: TransformsCompose | None = None,
+        predict_transforms: TransformsCompose | None = None,
+        data_preprocessing: DataPreprocessing | None = None,
+        train_dataloader_cfg: DataLoaderConfig | None = None,
     ):
         ...
 
     @abstractmethod
     def _create_dataset(
-        self, split: str, transforms: Optional[TransformsCompose] = None
+        self, split: str, transforms: TransformsCompose | None = None
     ) -> Dataset:
         ...
 
-    def collate_fn(self, batch_inputs_dicts: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def collate_fn(self, batch_inputs_dicts: Sequence[dict[str, Any]]) -> dict[str, Any]:
         ...
 
     def on_after_batch_transfer(
-        self, batch_inputs_dict: Dict[str, Any], dataloader_idx: int
-    ) -> Dict[str, Any]:
+        self, batch_inputs_dict: dict[str, Any], dataloader_idx: int
+    ) -> dict[str, Any]:
         if self.data_preprocessing is not None:
             batch_inputs_dict = self.data_preprocessing(batch_inputs_dict)
         return batch_inputs_dict
@@ -127,15 +127,18 @@ The `Dataset` base class handles transforms application:
 
 ```python
 class Dataset(TorchDataset, ABC):
-    def __getitem__(self, index: int) -> Dict[str, Any]:
-        input_dict = self._get_input_dict(index)
-        input_dict = self._transform(input_dict)
-        return input_dict
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        input_dict = self.get_data_info(index)
+        context = PipelineContext(dataset=self, index=index)
+        return self.apply_transforms(input_dict, self.dataset_transforms, context)
 
     @abstractmethod
-    def _get_input_dict(self, index: int) -> Dict[str, Any]:
+    def get_data_info(self, index: int) -> dict[str, Any]:
         ...
 ```
+
+Datasets are expected to return metadata records. File loading and sample
+materialization should happen in transforms.
 
 ### Transforms
 
@@ -143,24 +146,43 @@ Transforms are composable data augmentations applied per-sample on CPU. They fol
 
 ```python
 class BaseTransform(ABC):
-    def __call__(self, input_dict: Dict[str, Any]) -> Dict[str, Any]:
+    def __call__(
+        self,
+        input_dict: dict[str, Any],
+        context: PipelineContext | None = None,
+    ) -> dict[str, Any]:
+        self._context = context           # accessible via self.context property
+        self._validate_required_keys(input_dict)
+        self._handle_optional_keys(input_dict)
+        if not self._should_apply():
+            return self.on_skip(input_dict)
         return self.transform(input_dict)
 
     @abstractmethod
-    def transform(self, input_dict: Dict[str, Any]) -> Dict[str, Any]:
+    def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
         ...
 
 class TransformsCompose:
-    def __init__(self, pipeline: Optional[List[BaseTransform]] = None):
+    def __init__(self, pipeline: Sequence[BaseTransform] | None = None):
         self.pipeline = pipeline or []
 
-    def __call__(self, input_dict: Dict[str, Any]) -> Dict[str, Any]:
+    def __call__(
+        self,
+        input_dict: dict[str, Any],
+        context: PipelineContext | None = None,
+    ) -> dict[str, Any]:
         for transform in self.pipeline:
-            input_dict |= transform(input_dict)
+            input_dict |= transform(input_dict, context=context)
         return input_dict
 ```
 
 Transforms are configured per split (train/val/test/predict) in the `DataModule` and applied during `Dataset.__getitem__()`.
+
+Public transform targets should be referenced through their subpackage API, for
+example `autoware_ml.transforms.point_cloud.LoadPointsFromFile` or
+`autoware_ml.transforms.boxes3d.RandomFlip3D`. Implementation modules should
+define the transform once, and the subpackage `__init__.py` acts as the single
+public re-export layer.
 
 ### Preprocessing
 
@@ -168,11 +190,11 @@ Preprocessing runs on GPU after batch transfer, enabling hardware-accelerated op
 
 ```python
 class DataPreprocessing(nn.Module):
-    def __init__(self, pipeline: Optional[List[nn.Module]] = None):
+    def __init__(self, pipeline: Sequence[nn.Module] | None = None):
         super().__init__()
         self.pipeline = nn.ModuleList(pipeline or [])
 
-    def __call__(self, batch_inputs_dict: Dict[str, Any]) -> Dict[str, Any]:
+    def __call__(self, batch_inputs_dict: dict[str, Any]) -> dict[str, Any]:
         for layer in self.pipeline:
             batch_inputs_dict |= layer(batch_inputs_dict)
         return batch_inputs_dict
@@ -188,8 +210,8 @@ All models inherit from `BaseModel` (extending `LightningModule`), which provide
 class BaseModel(L.LightningModule, ABC):
     def __init__(
         self,
-        optimizer: Optional[Callable[..., Optimizer]] = None,
-        scheduler: Optional[Callable[[Optimizer], LRScheduler]] = None,
+        optimizer: Callable[..., Optimizer] | None = None,
+        scheduler: Callable[[Optimizer], LRScheduler] | None = None,
     ):
         super().__init__()
         self.forward_signature = inspect.signature(self.forward)
@@ -197,16 +219,16 @@ class BaseModel(L.LightningModule, ABC):
         ...
 
     @abstractmethod
-    def forward(self, **kwargs: Any) -> Union[torch.Tensor, Sequence[torch.Tensor]]:
+    def forward(self, **kwargs: Any) -> torch.Tensor | Sequence[torch.Tensor]:
         ...
 
     @abstractmethod
     def compute_metrics(
-        self, outputs: Union[torch.Tensor, Sequence[torch.Tensor]], **kwargs: Any
-    ) -> Dict[str, torch.Tensor]:
+        self, outputs: torch.Tensor | Sequence[torch.Tensor], **kwargs: Any
+    ) -> dict[str, torch.Tensor]:
         ...
 
-    def configure_optimizers(self) -> Union[Optimizer, Dict[str, Any]]:
+    def configure_optimizers(self) -> Optimizer | dict[str, Any]:
         ...
 ```
 

@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Augmentation modules for data transformations."""
+"""Base transform utilities used across Autoware-ML data pipelines."""
 
-from .base import BaseTransform, TransformsCompose
+from autoware_ml.transforms.base import BaseTransform, TransformsCompose
 
 __all__ = ["BaseTransform", "TransformsCompose"]

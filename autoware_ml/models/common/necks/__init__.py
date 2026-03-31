@@ -12,8 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Neck modules for feature aggregation."""
+"""Common neck exports for feature aggregation modules.
 
-from .global_average_pooling import GlobalAveragePooling
+This package re-exports reusable neck components shared across multiple
+Autoware-ML tasks.
+"""
+
+from autoware_ml.models.common.necks.global_average_pooling import GlobalAveragePooling
 
 __all__ = ["GlobalAveragePooling"]

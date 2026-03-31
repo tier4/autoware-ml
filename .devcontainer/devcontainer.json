@@ -41,7 +41,7 @@
   ],
   "customizations": {
     "vscode": {
-      "settings.json": {
+      "settings": {
         "terminal.integrated.profiles.linux": {
           "bash": {
             "path": "/bin/bash"
@@ -59,9 +59,6 @@
         "ms-python.debugpy",
         "ms-python.python",
         "ms-python.vscode-pylance",
-        "ms-vscode.cpptools-extension-pack",
-        "ms-vscode.remote-explorer",
-        "ms-vscode-remote.vscode-remote-extensionpack",
         "nvidia.nsight-vscode-edition",
         "redhat.vscode-xml",
         "redhat.vscode-yaml",
