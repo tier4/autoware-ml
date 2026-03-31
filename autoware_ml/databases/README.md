@@ -71,6 +71,11 @@ classDiagram
         main()
     }
 
+    class Output {
+        <<result>>
+        Iterable~DatasetRecord~
+    }
+
     schemas ..> polars : uses pl.DataType, pl.Schema
 
     DatabaseInterface ..> scenarios : uses Scenarios, ScenarioData
@@ -84,6 +89,9 @@ classDiagram
     ConcreteScenarios --|> scenarios : extends Scenarios
     ConcreteDatabase --|> BaseDatabase : extends
     ConcreteDatabase --> ConcreteScenarios : scenario groups
+    ConcreteDatabase --> Output : process_scenario_records()
+
+    Output --> schemas : list of DatasetRecord
 
     generate_dataset --> DatabaseInterface : instantiates via Hydra
 ```
