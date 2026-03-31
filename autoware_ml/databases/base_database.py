@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Mapping, Sequence
 from types import MappingProxyType
 
 import polars as pl
@@ -23,7 +23,6 @@ class BaseDatabase:
         database_version: str,
         database_root_path: str,
         scenario_root_path: str,
-        # scenario_configs: Mapping[str, DictConfig],
         scenarios: MappingProxyType[str, Scenarios],
         cache_path: str,
         main_database: str,
@@ -52,6 +51,15 @@ class BaseDatabase:
             f"Database initialized with version: {self.database_version}, root path: {self.database_root_path}, scenario root path: {self.scenario_root_path}, main database: {self.main_database}, cache path: {self.cache_path}"
         )
 
+    def __str__(self) -> str:
+        """String representation of the database."""
+        string = f"BaseDatabase(database_version={self.database_version}, database_root_path={str(self.database_root_path)}, scenario_root_path={str(self.scenario_root_path)}, main database={self.main_database}, cache path={str(self.cache_path)}"
+        string += ", scenarios=("
+        for scenario_group, scenarios in self.scenarios.items():
+            string += f"{scenario_group}: {scenarios}, "
+        string += "))"
+        return string
+
     def __eq__(self, other: BaseDatabase) -> bool:
         """Compare two databases by their version and scenario IDs."""
         return (
@@ -66,15 +74,15 @@ class BaseDatabase:
         """Hash the database by its version and scenario IDs."""
         hash_attributes = (
             self.database_version,
-            self.database_root_path,
-            self.scenario_root_path,
+            str(self.database_root_path),
+            str(self.scenario_root_path),
             self.main_database,
         )
         # Dictionary is not hashable, so we need to hash the dictionary keys and values
         for scenario_group, scenario_data in self.scenarios.items():
             hash_attributes += (
                 scenario_group,
-                scenario_data,
+                str(scenario_data),
             )
         return hash(hash_attributes)
 
@@ -128,6 +136,6 @@ class BaseDatabase:
                     unique_scenarios[scenario.scenario_id] = scenario
         return unique_scenarios
 
-    def process_scenario_records(self) -> Iterable[DatasetRecord]:
+    def process_scenario_records(self) -> Sequence[DatasetRecord]:
         """Process scenario records from the database."""
         raise NotImplementedError("Subclasses must implement process_scenario_records method!")

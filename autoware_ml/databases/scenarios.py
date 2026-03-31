@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterable, Mapping, Annotated
+from typing import Sequence, Mapping, Annotated
 
 from pydantic import BaseModel, ConfigDict, BeforeValidator, model_validator
 
@@ -21,9 +21,15 @@ PathAdapter = Annotated[Path, BeforeValidator(path_adapter)]
 class DatabaseVersion(BaseModel):
     """Database version and its settings."""
 
+    model_config = ConfigDict(frozen=True, strict=True)
+
     db_version: str
     max_sweeps: int
     sample_steps: int
+
+    def __str__(self) -> str:
+        """String representation of the database version."""
+        return f"DatabaseVersion(db_version={self.db_version}, max_sweeps={self.max_sweeps}, sample_steps={self.sample_steps})"
 
     def __eq__(self, other: DatabaseVersion) -> bool:
         """Compare two database versions by their version and settings."""
@@ -53,6 +59,10 @@ class ScenarioData(BaseModel):
     sample_steps: int
     vehicle_type: str | None = None
     location: str | None = None
+
+    def __str__(self) -> str:
+        """String representation of the scenario data."""
+        return f"ScenarioData(db_version={self.db_version}, scenario_id={self.scenario_id}, scenario_version={self.scenario_version}, max_sweeps={self.max_sweeps}, sample_steps={self.sample_steps}, vehicle_type={self.vehicle_type}, location={self.location})"
 
     def __eq__(self, other: ScenarioData) -> bool:
         """Compare two scenario data by their version and scenario IDs."""
@@ -91,8 +101,23 @@ class Scenarios(BaseModel):
 
     version: str
     scenario_root_path: PathAdapter  # Root path where the scenario yaml files are stored
-    db_versions: Iterable[DatabaseVersion]
-    scenario_data: Mapping[SplitType, Iterable[ScenarioData]] | None = None
+    db_versions: Sequence[DatabaseVersion]
+    scenario_data: Mapping[SplitType, Sequence[ScenarioData]] | None = None
+
+    def __str__(self) -> str:
+        """String representation of the scenarios."""
+        string = (
+            f"Scenarios(version={self.version}, scenario_root_path={str(self.scenario_root_path)}, "
+        )
+        string += "db_versions=("
+        for db_version in self.db_versions:
+            string += f"{db_version}, "
+        string += "), "
+        string += "scenario_data=("
+        for split, scenario_data in self.scenario_data.items():
+            string += f"{split}: {scenario_data}, "
+        string += "))"
+        return string
 
     def __eq__(self, other: Scenarios) -> bool:
         """Compare two scenarios by their version and scenario IDs."""
@@ -117,7 +142,7 @@ class Scenarios(BaseModel):
         for split, scenario_data in self.scenario_data.items():
             hash_attributes += (
                 split,
-                tuple(scenario_data),
+                tuple(str(scenario) for scenario in scenario_data),
             )
         return hash(hash_attributes)
 
@@ -128,6 +153,6 @@ class Scenarios(BaseModel):
         """
         raise NotImplementedError("Subclasses must implement build_scenario_data()!")
 
-    def get_all_scenario_data(self) -> Iterable[ScenarioData]:
+    def get_all_scenario_data(self) -> Sequence[ScenarioData]:
         """Get all scenario data."""
         return [scenario_data for split in self.scenario_data.values() for scenario_data in split]

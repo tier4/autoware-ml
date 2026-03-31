@@ -1,7 +1,7 @@
 import logging
 
 from pathlib import Path
-from typing import Iterable
+from typing import Sequence
 
 from pydantic import BaseModel, ConfigDict
 from t4_devkit import Tier4
@@ -79,7 +79,7 @@ class T4RecordsGenerator:
             raise ValueError(f"Scene root directory {scene_root_dir_path} does not exist.")
         return Tier4(data_root=scene_root_dir_path, verbose=False)
 
-    def generate_dataset_records(self) -> Iterable[DatasetRecord]:
+    def generate_dataset_records(self) -> Sequence[DatasetRecord]:
         """Generate dataset records."""
         records = []
         logger.info(f"Generating dataset records for scenario: {self.scenario_data.scenario_id}")

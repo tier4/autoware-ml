@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 import yaml
-from typing import Iterable
+from typing import Sequence
 from types import MappingProxyType
 
 from pydantic import model_validator
@@ -26,7 +26,7 @@ class T4Scenarios(Scenarios):
             db_yaml_path = self.scenario_root_path / (db_version.db_version + ".yaml")
             logger.info(f"Loading database scenarios from {db_yaml_path}")
             with open(db_yaml_path, "r") as f:
-                db_scenarios: MappingProxyType[str, Iterable[str]] = yaml.safe_load(f)
+                db_scenarios: MappingProxyType[str, Sequence[str]] = yaml.safe_load(f)
 
             scenario_splits = self._build_scenario_splits(db_scenarios, db_version)
             for split, scenarios in scenario_splits.items():
@@ -67,8 +67,8 @@ class T4Scenarios(Scenarios):
         )
 
     def _build_scenario_splits(
-        self, db_scenarios: MappingProxyType[str, Iterable[str]], db_version: DatabaseVersion
-    ) -> MappingProxyType[SplitType, Iterable[ScenarioData]]:
+        self, db_scenarios: MappingProxyType[str, Sequence[str]], db_version: DatabaseVersion
+    ) -> MappingProxyType[SplitType, Sequence[ScenarioData]]:
         """
         Build splits from a database scenarios.
         :param db_scenarios: Database scenarios.

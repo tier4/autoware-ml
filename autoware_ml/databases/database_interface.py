@@ -1,6 +1,6 @@
 from abc import abstractmethod
 from pathlib import Path
-from typing import Iterable, Protocol
+from typing import Sequence, Protocol
 from types import MappingProxyType
 
 from autoware_ml.databases.scenarios import Scenarios, ScenarioData
@@ -9,6 +9,11 @@ from autoware_ml.databases.schemas import DatasetRecord
 
 class DatabaseInterface(Protocol):
     """Interface for database classes."""
+
+    @abstractmethod
+    def __str__(self) -> str:
+        """String representation of the database."""
+        raise NotImplementedError("Database must define __str__!")
 
     @property
     @abstractmethod
@@ -57,11 +62,11 @@ class DatabaseInterface(Protocol):
         raise NotImplementedError("Database must define get_unique_scenario_data!")
 
     @abstractmethod
-    def load_scenario_records(self) -> Iterable[DatasetRecord]:
+    def load_scenario_records(self) -> Sequence[DatasetRecord]:
         """Load scenario records from the database."""
         raise NotImplementedError("Database must define load_scenario_records!")
 
     @abstractmethod
-    def process_scenario_records(self) -> Iterable[DatasetRecord]:
+    def process_scenario_records(self) -> Sequence[DatasetRecord]:
         """Process scenario records from the database."""
         raise NotImplementedError("Subclasses must define process_scenario_records method!")

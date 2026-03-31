@@ -1,11 +1,11 @@
 import logging
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
+import hashlib
 import time
-from typing import Iterable
+from typing import Sequence
 from types import MappingProxyType
 
-import polars as pl
 from tqdm import tqdm
 
 from autoware_ml.databases.base_database import BaseDatabase
@@ -25,7 +25,7 @@ class T4RecordsGeneratorWorkerParams:
 
 def _apply_t4_records_generator(
     t4_records_generator_worker_params: T4RecordsGeneratorWorkerParams,
-) -> Iterable[DatasetRecord]:
+) -> Sequence[DatasetRecord]:
     """Submit T4 records generator to the worker pool for a worker to process."""
 
     # Construct T4 records generator
@@ -65,7 +65,7 @@ class T4Database(BaseDatabase):
         )
         self.num_workers = num_workers
 
-    def process_scenario_records(self) -> Iterable[DatasetRecord]:
+    def process_scenario_records(self) -> Sequence[DatasetRecord]:
         """Load scenario records from the database."""
 
         # Start the timer
@@ -79,23 +79,26 @@ class T4Database(BaseDatabase):
             f"Processing a total of {len(unique_scenario_data)} unique scenarios in T4Database"
         )
 
-        # Second, send the list to the multiprocessing pool to process the scenario
+        # Second, send the list to the multiprocessing or single processing the scenario
         # samples/frames
-        # scenario_sample_records = self._multi_process_scenario_records(
-        # unique_scenario_data)
-        scenario_sample_records = self._single_process_scenario_records(unique_scenario_data)
-        logger.info(f"Processed {len(scenario_sample_records)} scenario sample records")
+        # if self.num_workers > 1:
+        #     scenario_sample_records = self._multi_process_scenario_records(
+        #         unique_scenario_data
+        #     )
+        # else:
+        #     scenario_sample_records = self._single_process_scenario_records(unique_scenario_data)
+        # logger.info(f"Processed {len(scenario_sample_records)} scenario sample records")
 
         # Third, get the polar schema
         polars_schema = self.get_polars_schema()
         logger.info(f"Parquet schema: {polars_schema}")
 
         # Fourth, save the scenario sample records to a polars .parquet file
-        df = pl.DataFrame(scenario_sample_records, schema=polars_schema)
-        df_hash = hash(self)
-        df_cache_path = self._cache_path / f"scenario_{df_hash}.parquet"
+        # df = pl.DataFrame(scenario_sample_records, schema=polars_schema)
+        df_hash = hashlib.sha256(str(self).encode("utf-8")).hexdigest()
+        df_cache_path = self._cache_path / f"database_{df_hash}.parquet"
 
-        df.write_parquet(df_cache_path)
+        # df.write_parquet(df_cache_path)
         logger.info(f"Saved the database cache to {df_cache_path} with the hash: {df_hash}")
 
         # End the timer
@@ -104,11 +107,12 @@ class T4Database(BaseDatabase):
         logger.info(
             f"Elapsed time to process scenario records: {elapsed:.4f} seconds for the database: {self.database_version}"
         )
-        return scenario_sample_records
+        # return scenario_sample_records
+        return []
 
     def _multi_process_scenario_records(
         self, scenario_data: MappingProxyType[str, ScenarioData]
-    ) -> Iterable[DatasetRecord]:
+    ) -> Sequence[DatasetRecord]:
         """Multi-process scenario records from the database."""
         # Group params for each worker
         worker_params = [
@@ -138,7 +142,7 @@ class T4Database(BaseDatabase):
 
     def _single_process_scenario_records(
         self, scenario_data: MappingProxyType[str, ScenarioData]
-    ) -> Iterable[DatasetRecord]:
+    ) -> Sequence[DatasetRecord]:
         """Single-process scenario records from the database."""
         flatten_records = []
         for scenario in scenario_data.values():
@@ -151,7 +155,7 @@ class T4Database(BaseDatabase):
             flatten_records.extend(t4_records_generator.generate_dataset_records())
             # yield from t4_records_generator.generate_dataset_records()
 
-    def load_scenario_records(self) -> Iterable[DatasetRecord]:
+    def load_scenario_records(self) -> Sequence[DatasetRecord]:
         """Load scenario records from the database."""
         # TODO (KokSeang): Read the cache if it exists, and return the records
         raise NotImplementedError("Subclasses must implement load_scenario_records method!")
