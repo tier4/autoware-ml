@@ -99,6 +99,10 @@ def build_optimizer_param_groups(
         named_groups = {"default": [p for p in model.parameters() if p.requires_grad]}
     overrides = materialize_partial_kwargs(dict(group_overrides or {}))
 
+    unknown_overrides = set(overrides) - set(named_groups)
+    if unknown_overrides:
+        raise ValueError(f"Unknown optimizer group override(s): {sorted(unknown_overrides)}")
+
     if set(named_groups) == {"default"} and not overrides.get("default"):
         return list(named_groups["default"])
 
