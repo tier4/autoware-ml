@@ -54,8 +54,10 @@ def main(cfg: DictConfig):
     logger.info("=" * 80)
 
     # Instantiate DatabaseInterface
-    _: DatabaseInterface = build_database(cfg)
-    # logger.info(cfg)
+    database: DatabaseInterface = build_database(cfg)
+    
+    # Process scenario records and save them to a parquet file
+    database.process_scenario_records()
 
 
 if __name__ == "__main__":

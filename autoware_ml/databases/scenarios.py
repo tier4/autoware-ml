@@ -122,7 +122,7 @@ class Scenarios(BaseModel):
         return hash(hash_attributes)
 
     @model_validator(mode="after")
-    def build_scenarios(self) -> None:
+    def build_scenarios(self) -> Scenarios:
         """
         Build scenario data.
         """

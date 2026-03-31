@@ -1,10 +1,12 @@
 import logging
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
+import time
 from typing import Iterable
 from types import MappingProxyType
 
 import polars as pl
+from tqdm import tqdm
 
 from autoware_ml.databases.base_database import BaseDatabase
 from autoware_ml.databases.t4datasets.t4scenarios import T4Scenarios
@@ -66,16 +68,26 @@ class T4Database(BaseDatabase):
     def process_scenario_records(self) -> Iterable[DatasetRecord]:
         """Load scenario records from the database."""
 
+        # Start the timer
+        start_time = time.perf_counter()
+
         # TODO (KokSeang): Read the cache if it exists, and return the records
 
         # First, read all unique scenario data
         unique_scenario_data = self.get_unique_scenario_data()
-        logger.info(f"Processing {len(unique_scenario_data)} scenarios")
+        logger.info(
+            f"Processing a total of {len(unique_scenario_data)} unique scenarios in T4Database"
+        )
 
         # Second, send the list to the multiprocessing pool to process the scenario
         # samples/frames
-        scenario_sample_records = self._multi_process_scenario_records(unique_scenario_data)
-        logger.info(f"Processed {len(scenario_sample_records)} scenario sample records")
+        # scenario_sample_records = self._multi_process_scenario_records(
+        # unique_scenario_data)
+        scenario_sample_records = self._single_process_scenario_records(
+            unique_scenario_data)
+        logger.info(
+            f"Processed {len(scenario_sample_records)} scenario sample records"
+        )
 
         # Third, get the polar schema
         polars_schema = self.get_polars_schema()
@@ -87,11 +99,20 @@ class T4Database(BaseDatabase):
         df_cache_path = self._cache_path / f"scenario_{df_hash}.parquet"
 
         df.write_parquet(df_cache_path)
-        logger.info(f"Saved the database cache to {df_cache_path} with the hash: {df_hash}")
+        logger.info(
+            f"Saved the database cache to {df_cache_path} with the hash: {df_hash}"
+        )
+
+        # End the timer
+        end_time = time.perf_counter()
+        elapsed = end_time - start_time
+        logger.info(
+            f"Elapsed time to process scenario records: {elapsed:.4f} seconds for the database: {self.database_version}"
+        )
         return scenario_sample_records
 
     def _multi_process_scenario_records(
-        self, scenario_data: Iterable[ScenarioData]
+        self, scenario_data: MappingProxyType[str, ScenarioData]
     ) -> Iterable[DatasetRecord]:
         """Multi-process scenario records from the database."""
         # Group params for each worker
@@ -99,18 +120,45 @@ class T4Database(BaseDatabase):
             T4RecordsGeneratorWorkerParams(
                 database_root_path=self.database_root_path,
                 scenario_data=scenario,
-            )
-            for scenario in scenario_data
+            ) for scenario in scenario_data.values()
         ]
 
         with ProcessPoolExecutor(max_workers=self.num_workers) as executor:
-            futures = [
-                executor.submit(_apply_t4_records_generator, worker_param)
-                for worker_param in worker_params
-            ]
-            return [record for future in futures for record in future.result()]
+
+            futures = executor.map(_apply_t4_records_generator, worker_params)
+            # futures = [
+            #     executor.submit(_apply_t4_records_generator, worker_param)
+            #     for worker_param in worker_params
+            # ]
+            flatten_records = []
+            for result in tqdm(futures, total=len(worker_params)):
+                flatten_records.extend(result)
+
+            return flatten_records
+            # 2. Use as_completed to update the progress bar as tasks finish
+            # for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc="Processing"):
+            # future.result() is a generator/list based on your snippet
+            # results.extend(future.result())
+            # return [record for future in futures for record in future.result()]
+
+    def _single_process_scenario_records(
+        self, scenario_data: MappingProxyType[str, ScenarioData]
+    ) -> Iterable[DatasetRecord]:
+        """Single-process scenario records from the database."""
+        flatten_records = []
+        for scenario in scenario_data.values():
+            t4_records_generator = T4RecordsGenerator(
+                database_root_path=self.database_root_path,
+                scenario_data=scenario,
+                sample_steps=scenario.sample_steps,
+                max_sweeps=scenario.max_sweeps,
+            )
+            flatten_records.extend(
+                t4_records_generator.generate_dataset_records())
+            # yield from t4_records_generator.generate_dataset_records()
 
     def load_scenario_records(self) -> Iterable[DatasetRecord]:
         """Load scenario records from the database."""
         # TODO (KokSeang): Read the cache if it exists, and return the records
-        raise NotImplementedError("Subclasses must implement load_scenario_records method!")
+        raise NotImplementedError(
+            "Subclasses must implement load_scenario_records method!")
