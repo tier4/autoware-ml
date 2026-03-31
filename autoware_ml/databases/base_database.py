@@ -72,19 +72,7 @@ class BaseDatabase:
 
     def __hash__(self) -> int:
         """Hash the database by its version and scenario IDs."""
-        hash_attributes = (
-            self.database_version,
-            str(self.database_root_path),
-            str(self.scenario_root_path),
-            self.main_database,
-        )
-        # Dictionary is not hashable, so we need to hash the dictionary keys and values
-        for scenario_group, scenario_data in self.scenarios.items():
-            hash_attributes += (
-                scenario_group,
-                str(scenario_data),
-            )
-        return hash(hash_attributes)
+        return hash(str(self))
 
     @property
     def database_version(self) -> str:
