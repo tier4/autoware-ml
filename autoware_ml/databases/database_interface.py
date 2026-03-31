@@ -60,3 +60,8 @@ class DatabaseInterface(Protocol):
     def load_scenario_records(self) -> Iterable[DatasetRecord]:
         """Load scenario records from the database."""
         raise NotImplementedError("Database must define load_scenario_records!")
+
+    @abstractmethod
+    def process_scenario_records(self) -> Iterable[DatasetRecord]:
+        """Process scenario records from the database."""
+        raise NotImplementedError("Subclasses must define process_scenario_records method!")
