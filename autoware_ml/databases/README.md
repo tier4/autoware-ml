@@ -34,6 +34,7 @@ classDiagram
         scenarios
         cache_path
         load_scenario_records()
+        process_scenario_records()
     }
 
     class BaseDatabase {
@@ -75,6 +76,7 @@ classDiagram
 
     DatabaseInterface ..> scenarios : uses Scenarios, ScenarioData
     DatabaseInterface ..> schemas : uses DatasetRecord
+    DatabaseInterface --> Output : process_scenario_records()
 
     BaseDatabase ..|> DatabaseInterface : satisfies
     BaseDatabase --> scenarios : uses Scenarios, ScenarioData
@@ -82,7 +84,6 @@ classDiagram
     BaseDatabase --> polars : DataFrame, Schema
 
     ConcreteDatabase --|> BaseDatabase : extends
-    ConcreteDatabase --> Output : process_scenario_records()
 
     Output --> schemas : list of DatasetRecord
 
