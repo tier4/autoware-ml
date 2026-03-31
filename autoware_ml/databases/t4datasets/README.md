@@ -71,7 +71,7 @@ classDiagram
     T4Database --> T4RecordsGenerator : creates per scenario
     T4Database --> polars : writes Parquet via DataFrame
 
-    T4RecordsGenerator --> scenarios : reads ScenarioData
+    T4RecordsGenerator --> T4Scenarios : reads ScenarioData
     T4RecordsGenerator --> schemas : emits DatasetRecord
     T4RecordsGenerator --> t4_devkit : reads T4 annotations
 ```
