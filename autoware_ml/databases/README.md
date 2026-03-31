@@ -1,21 +1,20 @@
 # Database Module
 
-The database module defines how Autoware-ML describes annotation databases and generates dataset records from them. It provides a layered architecture: a shared protocol and base class at the top, with dataset-family-specific implementations (currently T4) underneath. Scenario metadata (splits, versions, sampling parameters) is modelled as immutable Pydantic objects so that every database instance is fully hashable and cacheable.
+The database module defines how Autoware-ML describes annotation databases and generates dataset records from them. It provides a layered architecture: a shared protocol and base class at the top, with dataset-family-specific implementations underneath. Scenario metadata (splits, versions, sampling parameters) is modelled as immutable Pydantic objects so that every database instance is fully hashable and cacheable.
 
 The Hydra-based entrypoint in `scripts/generate_dataset.py` composes a YAML config that selects the concrete database class and its scenario groups, instantiates the database, and triggers parallel record generation. The output is a stream of `DatasetRecord` rows that can be persisted as Parquet for downstream training or evaluation pipelines.
 
 ## Module relationships
 
-| Module                              | Role                                                                          | Depends on                                                                              |
-| ----------------------------------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `schemas.py`                        | Defines `DatasetRecord` and `DatasetTableSchema` (output row shape)           | `polars`                                                                                |
-| `scenarios.py`                      | Defines `ScenarioData`, `DatabaseVersion`, and abstract `Scenarios` base      | _(none)_                                                                                |
-| `database_interface.py`             | `DatabaseInterface` protocol all databases must satisfy                       | `scenarios`, `schemas`                                                                  |
-| `base_database.py`                  | `BaseDatabase` shared implementation of `DatabaseInterface`                   | `scenarios`, `schemas`, `polars`                                                        |
-| `t4datasets/t4scenarios.py`         | `T4Scenarios` extends `Scenarios` — reads scenario YAML and builds split data | `scenarios`                                                                             |
-| `t4datasets/t4records_generator.py` | `T4RecordsGenerator` reads T4 annotations and emits `DatasetRecord`           | `scenarios`, `schemas`, `t4-devkit`                                                     |
-| `t4datasets/t4database.py`          | `T4Database` extends `BaseDatabase` — orchestrates parallel record generation | `base_database`, `t4scenarios`, `t4records_generator`, `scenarios`, `schemas`, `polars` |
-| `scripts/generate_dataset.py`       | Hydra entrypoint that instantiates a `DatabaseInterface` from config          | `database_interface`                                                                    |
+| Module                        | Role                                                                     | Depends on                       |
+| ----------------------------- | ------------------------------------------------------------------------ | -------------------------------- |
+| `schemas.py`                  | Defines `DatasetRecord` and `DatasetTableSchema` (output row shape)      | `polars`                         |
+| `scenarios.py`                | Defines `ScenarioData`, `DatabaseVersion`, and abstract `Scenarios` base | _(none)_                         |
+| `database_interface.py`       | `DatabaseInterface` protocol all databases must satisfy                  | `scenarios`, `schemas`           |
+| `base_database.py`            | `BaseDatabase` shared implementation of `DatabaseInterface`              | `scenarios`, `schemas`, `polars` |
+| `scripts/generate_dataset.py` | Hydra entrypoint that instantiates a `DatabaseInterface` from config     | `database_interface`             |
+
+To add a new dataset family, extend `Scenarios` with format-specific YAML parsing, extend `BaseDatabase` with record generation logic, and register the new class in a Hydra config. See `t4datasets/` for a concrete example.
 
 ```mermaid
 classDiagram
@@ -25,14 +24,6 @@ classDiagram
         <<external>>
         DataFrame
         Schema
-    }
-
-    class t4_devkit {
-        <<external>>
-        Tier4
-        Sample
-        SampleData
-        CalibratedSensor
     }
 
     class schemas {
@@ -64,20 +55,14 @@ classDiagram
         process_scenario_records()
     }
 
-    class T4Scenarios {
-        build_scenarios()
-        _build_scenario_data()
-        _build_scenario_splits()
-    }
-
-    class T4RecordsGenerator {
-        generate_dataset_records()
-        extract_t4_sample_record()
-    }
-
-    class T4Database {
+    class ConcreteDatabase {
+        <<dataset-specific>>
         process_scenario_records()
-        _multi_process_scenario_records()
+    }
+
+    class ConcreteScenarios {
+        <<dataset-specific>>
+        build_scenarios()
     }
 
     class generate_dataset {
@@ -96,16 +81,9 @@ classDiagram
     BaseDatabase --> schemas : uses DatasetRecord, DatasetTableSchema
     BaseDatabase --> polars : DataFrame, Schema
 
-    T4Scenarios --|> scenarios : extends Scenarios
-
-    T4Database --|> BaseDatabase : extends
-    T4Database --> T4Scenarios : scenario groups
-    T4Database --> T4RecordsGenerator : creates per scenario
-    T4Database --> polars : writes Parquet via DataFrame
-
-    T4RecordsGenerator --> scenarios : reads ScenarioData
-    T4RecordsGenerator --> schemas : emits DatasetRecord
-    T4RecordsGenerator --> t4_devkit : reads T4 annotations
+    ConcreteScenarios --|> scenarios : extends Scenarios
+    ConcreteDatabase --|> BaseDatabase : extends
+    ConcreteDatabase --> ConcreteScenarios : scenario groups
 
     generate_dataset --> DatabaseInterface : instantiates via Hydra
 ```
