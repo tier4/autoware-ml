@@ -86,3 +86,20 @@ classDiagram
 
     schemas ..> polars : uses pl.DataType, pl.Schema
 ```
+
+## Schema
+
+The output schema is defined in `schemas.py` and consists of two parts:
+
+- **`DatasetTableSchema`** — a frozen dataclass whose class-level attributes are `DatasetTableColumn` named tuples, each pairing a column name with a Polars data type. Call `DatasetTableSchema.to_polars_schema()` to get a `pl.Schema` for constructing or validating a Polars `DataFrame`.
+- **`DatasetRecord`** — a frozen Pydantic model representing a single row. One record is emitted per sample/frame by `process_scenario_records()`.
+
+| Column         | Python type | Polars type | Description                                        |
+| -------------- | ----------- | ----------- | -------------------------------------------------- |
+| `scenario_id`  | `str`       | `String`    | Unique identifier of the driving scenario          |
+| `sample_id`    | `str`       | `String`    | Unique identifier of the individual sample/frame   |
+| `sample_index` | `int`       | `Int32`     | Zero-based index of the sample within the scenario |
+| `location`     | `str`       | `String`    | Geographic location where the data was captured    |
+| `vehicle_type` | `str`       | `String`    | Type of vehicle used for data collection           |
+
+Both classes are kept in sync: every field in `DatasetRecord` has a corresponding column in `DatasetTableSchema`. When adding new annotation fields (e.g. 3D bounding boxes), add entries to both.
