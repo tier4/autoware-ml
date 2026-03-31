@@ -17,5 +17,5 @@ defaults:
     db_j6gen2_base: detection3d/db_j6gen2_base_v1.0
     db_largebus: detection3d/db_largebus_v1.0
 
-# The main database is the database that will be used to train the model or generate annotationsby default
+# The main database is the database that will be used to train the model or generate annotations by default
 main_database: db_j6gen2_base
