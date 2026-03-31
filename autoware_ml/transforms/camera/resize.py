@@ -27,14 +27,15 @@ class CropAndScale(BaseTransform):
         calibration_data: CalibrationData = input_dict["calibration_data"]
 
         height, width = image.shape[:2]
-        crop_center_noise_h = self._signed_random(0, self.crop_ratio / 2)
-        crop_center_noise_w = self._signed_random(0, self.crop_ratio / 2)
+        max_center_noise = (1.0 - self.crop_ratio) / 2.0
+        crop_center_noise_h = self._signed_random(0, max_center_noise)
+        crop_center_noise_w = self._signed_random(0, max_center_noise)
         crop_center = np.array(
             [height * (1 + crop_center_noise_h) / 2, width * (1 + crop_center_noise_w) / 2]
         )
 
         max_noise = max(abs(crop_center_noise_h), abs(crop_center_noise_w))
-        scale_noise = np.random.uniform(self.crop_ratio, 1 - max_noise)
+        scale_noise = np.random.uniform(self.crop_ratio, 1.0 - max_noise)
         scaled_h, scaled_w = height * scale_noise, width * scale_noise
 
         start_h = int(crop_center[0] - scaled_h / 2)
