@@ -1,4 +1,5 @@
 """Setup entrypoint for Autoware-ML with compiled extensions."""
+
 import sys
 import os
 from setuptools import setup
