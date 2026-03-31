@@ -41,7 +41,7 @@ class DatabaseVersion(BaseModel):
 
     def __hash__(self) -> int:
         """Hash the database version by its version and settings."""
-        return hash((self.db_version, self.max_sweeps, self.sample_steps))
+        return hash(str(self))
 
 
 class ScenarioData(BaseModel):
@@ -78,17 +78,7 @@ class ScenarioData(BaseModel):
 
     def __hash__(self) -> int:
         """Hash the scenario data by its version and scenario IDs."""
-        return hash(
-            (
-                self.db_version,
-                self.scenario_id,
-                self.scenario_version,
-                self.max_sweeps,
-                self.sample_steps,
-                self.vehicle_type,
-                self.location,
-            )
-        )
+        return hash(str(self))
 
 
 class Scenarios(BaseModel):
@@ -130,21 +120,7 @@ class Scenarios(BaseModel):
 
     def __hash__(self) -> int:
         """Hash the scenarios by their version and scenario IDs."""
-        hash_attributes = (
-            self.version,
-            self.scenario_root_path,
-        )
-
-        hash_attributes += tuple(
-            self.db_versions,
-        )
-        # For dictionary, we need to hash the dictionary keys and values
-        for split, scenario_data in self.scenario_data.items():
-            hash_attributes += (
-                split,
-                tuple(str(scenario) for scenario in scenario_data),
-            )
-        return hash(hash_attributes)
+        return hash(str(self))
 
     @model_validator(mode="after")
     def build_scenarios(self) -> Scenarios:

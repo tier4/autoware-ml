@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from abc import abstractmethod
 from pathlib import Path
 from typing import Sequence, Protocol
@@ -14,6 +16,16 @@ class DatabaseInterface(Protocol):
     def __str__(self) -> str:
         """String representation of the database."""
         raise NotImplementedError("Database must define __str__!")
+
+    @abstractmethod
+    def __hash__(self) -> int:
+        """Hash the database by its version and scenario IDs."""
+        raise NotImplementedError("Database must define __hash__!")
+
+    @abstractmethod
+    def __eq__(self, other: DatabaseInterface) -> bool:
+        """Compare two databases by their version and scenario IDs."""
+        raise NotImplementedError("Database must define __eq__!")
 
     @property
     @abstractmethod
