@@ -77,13 +77,9 @@ classDiagram
     generate_dataset --> DatabaseInterface : instantiates via Hydra
 
     DatabaseInterface ..> scenarios : uses Scenarios, ScenarioData
-    DatabaseInterface --> schemas : process_scenario_records() returns Iterable~DatasetRecord~
+    DatabaseInterface --> schemas : process_scenario_records()
 
     BaseDatabase ..|> DatabaseInterface : satisfies
-    BaseDatabase --> scenarios : uses Scenarios, ScenarioData
-    BaseDatabase --> schemas : uses DatasetRecord, DatasetTableSchema
-    BaseDatabase --> polars : DataFrame, Schema
-
     ConcreteDatabase --|> BaseDatabase : extends
 
     schemas --> TrainingInference : consumed by
