@@ -128,3 +128,28 @@ class TestFrustumRangePreprocessor:
         assert outputs["semantic_seg"].shape == (1, 2, 4)
         assert (outputs["semantic_seg"] == 2).any()
         assert (outputs["semantic_seg"] == -1).any()
+
+    def test_forward_keeps_ignore_only_cells_at_ignore_index(self) -> None:
+        """Cells containing only ignored labels should remain ignored."""
+        preprocessor = FrustumRangePreprocessor(
+            height=2,
+            width=4,
+            fov_up=10.0,
+            fov_down=-10.0,
+            ignore_index=255,
+            num_classes=3,
+        )
+        batch_inputs = {
+            "points": [
+                torch.tensor(
+                    [[1.0, 0.0, 0.0, 0.1], [2.0, 0.0, 0.0, 0.2], [1.0, 1.0, 0.0, 0.3]],
+                    dtype=torch.float32,
+                )
+            ],
+            "pts_semantic_mask": [torch.tensor([255, 255, 1], dtype=torch.long)],
+        }
+
+        outputs = preprocessor(batch_inputs)
+
+        assert outputs["semantic_seg"][0, 1, 2].item() == 255
+        assert outputs["semantic_seg"][0, 1, 1].item() == 1

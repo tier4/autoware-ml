@@ -83,6 +83,43 @@ def test_nuscenes_segmentation_dataset_returns_name_key(tmp_path: Path) -> None:
     assert info["name"] == "tok-123"
 
 
+def test_nuscenes_segmentation_dataset_accepts_preprefixed_lidar_path(tmp_path: Path) -> None:
+    data_root = tmp_path / "nuscenes"
+    lidar_dir = data_root / "samples" / "LIDAR_TOP"
+    lidarseg_dir = data_root / "lidarseg" / "v1.0-trainval"
+    lidar_dir.mkdir(parents=True)
+    lidarseg_dir.mkdir(parents=True)
+
+    lidar_path = lidar_dir / "sample.bin"
+    torch.tensor([[1.0, 2.0, 3.0, 0.5, 0.0]], dtype=torch.float32).numpy().tofile(lidar_path)
+    mask_path = lidarseg_dir / "sample_lidarseg.bin"
+    torch.tensor([1], dtype=torch.uint8).numpy().tofile(mask_path)
+
+    ann_file = tmp_path / "infos.pkl"
+    ann_file.write_bytes(
+        pickle.dumps(
+            {
+                "data_list": [
+                    {
+                        "token": "sample-token",
+                        "lidar_points": {"lidar_path": "samples/LIDAR_TOP/sample.bin"},
+                        "pts_semantic_mask_path": "sample_lidarseg.bin",
+                    }
+                ]
+            }
+        )
+    )
+
+    dataset = NuscenesSegmentation3DDataset(
+        data_root=str(data_root),
+        ann_file=str(ann_file),
+        lidarseg_dir=str(lidarseg_dir),
+    )
+
+    info = dataset.get_data_info(0)
+    assert info["lidar_path"] == str(lidar_path)
+
+
 def test_t4_segmentation_dataset_warns_for_empty_source(caplog, tmp_path: Path) -> None:
     data_root = tmp_path / "t4dataset"
     data_root.mkdir(parents=True)

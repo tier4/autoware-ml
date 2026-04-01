@@ -153,6 +153,7 @@ class FrustumRangePreprocessor(nn.Module):
             index=inverse[valid].unsqueeze(1).expand(-1, self.num_classes),
             src=F.one_hot(labels[valid], num_classes=self.num_classes).float(),
         )
-        majority = counts.argmax(dim=1)
-        seg_label[unique_coors[:, 0], unique_coors[:, 1]] = majority
+        valid_cells = counts.sum(dim=1) > 0
+        majority = counts[valid_cells].argmax(dim=1)
+        seg_label[unique_coors[valid_cells, 0], unique_coors[valid_cells, 1]] = majority
         return seg_label

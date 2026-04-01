@@ -25,6 +25,7 @@ import pickle
 from typing import Any
 
 from autoware_ml.datamodule.base import DataModule, Dataset
+from autoware_ml.datamodule.nuscenes.common import resolve_lidar_path
 from autoware_ml.transforms.base import TransformsCompose
 
 
@@ -82,12 +83,7 @@ class NuscenesSegmentation3DDataset(Dataset):
             Metadata dictionary consumed by segmentation transform pipelines.
         """
         sample = self.data_infos[index]
-        lidar_path = os.path.join(
-            self.data_root,
-            "samples",
-            "LIDAR_TOP",
-            sample["lidar_points"]["lidar_path"],
-        )
+        lidar_path = resolve_lidar_path(self.data_root, sample["lidar_points"]["lidar_path"])
 
         return {
             "lidar_path": lidar_path,
