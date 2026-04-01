@@ -14,11 +14,11 @@ cache_file_prefix_name: database
 defaults:
   - t4datasets/scenarios@scenarios.db_base: detection3d/db_base
   - t4datasets/scenarios@scenarios.db_j6gen2: detection3d/db_j6gen2
-#     db_j6gen2: detection3d/db_j6gen2_v1.0
-#     db_j6gen2_base: detection3d/db_j6gen2_base_v1.0
-#     db_jpntaxi_base: detection3d/db_jpntaxi_base_v1.0
-#     db_jpntaxi_gen2: detection3d/db_jpntaxi_gen2_v1.0
-#     db_largebus: detection3d/db_largebus_v1.0
+    db_j6gen2: detection3d/db_j6gen2_v1.0
+    db_j6gen2_base: detection3d/db_j6gen2_base_v1.0
+    db_jpntaxi_base: detection3d/db_jpntaxi_base_v1.0
+    db_jpntaxi_gen2: detection3d/db_jpntaxi_gen2_v1.0
+    db_largebus: detection3d/db_largebus_v1.0
 
 # The main database is the database that will be used to train the model
 main_database: db_base
