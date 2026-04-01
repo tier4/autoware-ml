@@ -37,10 +37,9 @@ class _Unique(Function):
         outputs = g.op("autoware::CustomUnique", x, outputs=4)
         x_shape = _get_tensor_sizes(x)
         if x_shape is not None:
-            output_shape = [x_shape[0]]
-            _set_output_shape(outputs[0], output_shape)
-            _set_output_shape(outputs[1], output_shape)
-            _set_output_shape(outputs[2], output_shape)
+            _set_output_shape(outputs[0], [None])
+            _set_output_shape(outputs[1], [None])
+            _set_output_shape(outputs[2], [None])
             _set_output_shape(outputs[3], [1])
         return outputs
 

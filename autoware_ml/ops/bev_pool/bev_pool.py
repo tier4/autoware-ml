@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import torch
 
-from autoware_ml.ops.bev_pool import bev_pool_ext
+from . import bev_pool_ext
 
 
 def _compute_intervals(ranks: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -262,8 +262,13 @@ def bev_pool(
         Pooled BEV features of shape (B, C, D, H, W).
 
     Raises:
-        AssertionError: If feats and coords have mismatched first dimensions.
+        ValueError: If feats and coords have mismatched first dimensions.
     """
+    if feats.shape[0] != coords.shape[0]:
+        raise ValueError(
+            f"Feature and coordinate count mismatch: {feats.shape[0]} vs {coords.shape[0]}"
+        )
+
     if is_training:
         x = QuickCumsumTrainingCuda.apply(feats, coords, ranks, B, D, H, W)
     else:

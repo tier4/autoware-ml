@@ -30,7 +30,8 @@ class _SegmentCSR(Function):
         output = g.op("autoware::SegmentCSR", src, indptr, reduce_s=reduce, outputs=1)
         src_shape = _get_tensor_sizes(src)
         if src_shape is not None and hasattr(output.type(), "with_sizes"):
-            output.setType(src.type().with_sizes([src_shape[0], src_shape[1]]))
+            trailing_shape = list(src_shape[1:]) if len(src_shape) > 1 else []
+            output.setType(src.type().with_sizes([None, *trailing_shape]))
         return output
 
     @staticmethod
