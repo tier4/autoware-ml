@@ -33,6 +33,7 @@ from autoware_ml.utils.deploy import (
     resolve_output_paths,
     should_export_stage,
     should_modify_graph,
+    supports_export_stage,
     validate_cuda_available,
 )
 from autoware_ml.utils.mlflow import (
@@ -152,27 +153,41 @@ def main(cfg: DictConfig) -> None:
 
         logger.info("Preparing export inputs...")
         export_spec = resolve_export_spec(datamodule, model, device)
+        onnx_exported = False
+        tensorrt_exported = False
 
         if should_export_stage(deploy_cfg.onnx):
-            export_to_onnx(
-                export_spec.module,
-                export_spec.args,
-                deploy_cfg,
-                export_spec.input_param_names,
-                export_spec.output_names,
-                onnx_path,
-            )
+            if not supports_export_stage(export_spec, "onnx"):
+                logger.warning(
+                    "Skipping ONNX export: model does not support the ONNX deploy stage."
+                )
+            else:
+                export_to_onnx(
+                    export_spec.module,
+                    export_spec.args,
+                    deploy_cfg,
+                    export_spec.input_param_names,
+                    export_spec.output_names,
+                    onnx_path,
+                )
+                onnx_exported = True
 
-            modify_graph_cfg = deploy_cfg.onnx.get("modify_graph", None)
-            if should_modify_graph(modify_graph_cfg):
-                onnx_path = modify_onnx_graph(onnx_path, modify_graph_cfg)
+                modify_graph_cfg = deploy_cfg.onnx.get("modify_graph", None)
+                if should_modify_graph(modify_graph_cfg):
+                    onnx_path = modify_onnx_graph(onnx_path, modify_graph_cfg)
 
         if should_export_stage(deploy_cfg.tensorrt):
-            if not onnx_path.exists():
-                raise FileNotFoundError(
-                    f"ONNX file not found: {onnx_path}. TensorRT export requires a valid ONNX model."
+            if not supports_export_stage(export_spec, "tensorrt"):
+                logger.warning(
+                    "Skipping TensorRT export: model export path does not support TensorRT."
                 )
-            build_tensorrt_engine(onnx_path, deploy_cfg, engine_path)
+            else:
+                if not onnx_path.exists():
+                    raise FileNotFoundError(
+                        f"ONNX file not found: {onnx_path}. TensorRT export requires a valid ONNX model."
+                    )
+                build_tensorrt_engine(onnx_path, deploy_cfg, engine_path)
+                tensorrt_exported = True
 
         metadata_path = write_run_metadata(
             work_dir,
@@ -191,17 +206,19 @@ def main(cfg: DictConfig) -> None:
         if mlflow_client is not None and deploy_run_id is not None:
             log_path_as_artifact(mlflow_client, deploy_run_id, work_dir / ".hydra", "hydra")
             log_path_as_artifact(mlflow_client, deploy_run_id, metadata_path, "metadata")
-            log_path_as_artifact(mlflow_client, deploy_run_id, onnx_path, "exports")
-            log_path_as_artifact(mlflow_client, deploy_run_id, engine_path, "exports")
+            if onnx_exported:
+                log_path_as_artifact(mlflow_client, deploy_run_id, onnx_path, "exports")
+            if tensorrt_exported:
+                log_path_as_artifact(mlflow_client, deploy_run_id, engine_path, "exports")
             mlflow_client.set_terminated(
                 deploy_run_id,
                 status=RunStatus.to_string(RunStatus.FINISHED),
             )
 
         logger.info("Deployment completed successfully.")
-        if onnx_path.exists():
+        if onnx_exported and onnx_path.exists():
             logger.info("ONNX model: %s", onnx_path)
-        if engine_path.exists():
+        if tensorrt_exported and engine_path.exists():
             logger.info("TensorRT engine: %s", engine_path)
     except Exception:
         if mlflow_client is not None and deploy_run_id is not None:

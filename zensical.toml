@@ -28,6 +28,8 @@ nav = [
   ]},
   { "Models" = [
     { "Calibration Status" = "models/calibration-status.md" },
+    { "FRNet" = "models/frnet.md" },
+    { "PointTransformerV3" = "models/ptv3.md" },
   ]},
   { "Contributing" = [
     { "Contribution Overview" = "contributing/contribution-overview.md" },

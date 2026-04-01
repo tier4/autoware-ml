@@ -1,0 +1,125 @@
+# @package _global_
+defaults:
+  - /defaults/default_runtime
+  - _self_
+
+datamodule:
+  stack_keys: []
+  train_dataloader_cfg:
+    batch_size: 4
+    num_workers: 8
+    pin_memory: true
+    persistent_workers: true
+    shuffle: true
+    drop_last: true
+  val_dataloader_cfg:
+    batch_size: 1
+    num_workers: 8
+    pin_memory: true
+    persistent_workers: true
+  test_dataloader_cfg:
+    batch_size: 1
+    num_workers: 8
+    pin_memory: true
+    persistent_workers: true
+  predict_dataloader_cfg:
+    batch_size: 1
+    num_workers: 1
+    pin_memory: true
+    persistent_workers: true
+  train_transforms:
+    _target_: autoware_ml.transforms.TransformsCompose
+    pipeline: []
+  val_transforms:
+    _target_: autoware_ml.transforms.TransformsCompose
+    pipeline: []
+  test_transforms:
+    _target_: autoware_ml.transforms.TransformsCompose
+    pipeline: []
+  predict_transforms:
+    _target_: autoware_ml.transforms.TransformsCompose
+    pipeline: []
+
+model:
+  _target_: autoware_ml.models.segmentation3d.ptv3.PTv3SegmentationModel
+  backbone:
+    _target_: autoware_ml.models.segmentation3d.backbones.ptv3.PointTransformerV3Backbone
+    in_channels: 4
+    order: [z, z-trans, hilbert, hilbert-trans]
+    stride: [2, 2, 2, 2]
+    enc_depths: [2, 2, 2, 6, 2]
+    enc_channels: [32, 64, 128, 256, 512]
+    enc_num_head: [2, 4, 8, 16, 32]
+    enc_patch_size: [1024, 1024, 1024, 1024, 1024]
+    dec_depths: [2, 2, 2, 2]
+    dec_channels: [64, 64, 128, 256]
+    dec_num_head: [4, 4, 8, 16]
+    dec_patch_size: [1024, 1024, 1024, 1024]
+    mlp_ratio: 4
+    qkv_bias: true
+    qk_scale: null
+    attn_drop: 0.0
+    proj_drop: 0.0
+    drop_path: 0.3
+    pre_norm: true
+    shuffle_orders: true
+    enable_rpe: false
+    enable_flash: true
+    upcast_attention: false
+    upcast_softmax: false
+    cls_mode: false
+    pdnorm_bn: false
+    pdnorm_ln: false
+    pdnorm_decouple: true
+    pdnorm_adaptive: false
+    pdnorm_affine: true
+    pdnorm_conditions: [nuScenes, SemanticKITTI, Waymo]
+  num_classes: ${num_classes}
+  backbone_out_channels: 64
+  ignore_index: ${ignore_index}
+  export_grid_size: ${grid_size}
+  export_point_cloud_range: ${point_cloud_range}
+  optimizer:
+    _target_: torch.optim.AdamW
+    _partial_: true
+    lr: 0.002
+    weight_decay: 0.005
+  optimizer_group_overrides:
+    block:
+      lr: 0.0002
+  scheduler:
+    _target_: torch.optim.lr_scheduler.OneCycleLR
+    _partial_: true
+    max_lr: [0.002, 0.0002]
+    pct_start: 0.04
+    anneal_strategy: cos
+    div_factor: 10.0
+    final_div_factor: 100.0
+  scheduler_config:
+    interval: step
+  lovasz_weight: 1.0
+
+trainer:
+  max_epochs: 50
+  gradient_clip_val: 10.0
+
+callbacks:
+  model_checkpoint:
+    monitor: val/loss
+    mode: min
+  early_stopping:
+    monitor: val/loss
+    patience: 20
+    mode: min
+
+deploy:
+  onnx:
+    opset_version: 17
+    input_names: [grid_coord, feat, serialized_depth, serialized_code]
+    output_names: [pred_labels, pred_probs]
+    dynamic_axes:
+      grid_coord: { 0: voxels_num }
+      feat: { 0: voxels_num }
+      serialized_code: { 1: voxels_num }
+    dynamo: false
+    do_constant_folding: false

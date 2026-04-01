@@ -1,0 +1,128 @@
+# @package _global_
+defaults:
+  - /tasks/segmentation3d/ptv3/base
+  - _self_
+
+ignore_index: -1
+num_classes: 26
+mix_prob: 0.8
+grid_size: 0.05
+point_cloud_range: [-102.4, -102.4, -2.8, 102.4, 102.4, 10.0]
+
+class_mapping:
+  drivable_surface: 0
+  other_flat_surface: 1
+  sidewalk: 2
+  manmade: 3
+  vegetation: 4
+  car: 5
+  bus: 6
+  emergency_vehicle: 7
+  train: 8
+  truck: 9
+  tractor_unit: 10
+  semi_trailer: 11
+  construction_vehicle: 12
+  forklift: 13
+  kart: 14
+  motorcycle: 15
+  bicycle: 16
+  pedestrian: 17
+  personal_mobility: 18
+  animal: 19
+  pushable_pullable: 20
+  traffic_cone: 21
+  stroller: 22
+  debris: 23
+  other_stuff: 24
+  noise: 25
+  ghost_point: 25
+  out_of_sync: ${ignore_index}
+  unpainted: ${ignore_index}
+
+datamodule:
+  _target_: autoware_ml.datamodule.t4dataset.T4Segmentation3DDataModule
+  data_root: ${oc.env:AUTOWARE_ML_DATA_PATH}/t4dataset
+  train_ann_file: ${datamodule.data_root}/lidarseg/t4dataset_j6gen2_lidarseg_infos_train.pkl
+  val_ann_file: ${datamodule.data_root}/lidarseg/t4dataset_j6gen2_lidarseg_infos_val.pkl
+  test_ann_file: ${datamodule.data_root}/lidarseg/t4dataset_j6gen2_lidarseg_infos_test.pkl
+  mix_prob: ${mix_prob}
+  train_transforms:
+    _target_: autoware_ml.transforms.TransformsCompose
+    pipeline:
+      - _target_: autoware_ml.transforms.point_cloud.LoadPointsFromFile
+        load_dim: 5
+        use_dim: [0, 1, 2, 3]
+      - _target_: autoware_ml.transforms.segmentation3d.LoadSegAnnotations3D
+        class_mapping: ${class_mapping}
+        ignore_index: ${ignore_index}
+      - _target_: autoware_ml.transforms.segmentation3d.PreparePointSegInput
+      - _target_: autoware_ml.transforms.point_cloud.RandomRotate
+        angle: [-1.0, 1.0]
+        axis: z
+        center: [0.0, 0.0, 0.0]
+        p: 0.5
+      - _target_: autoware_ml.transforms.point_cloud.RandomScale
+        scale: [0.9, 1.1]
+      - _target_: autoware_ml.transforms.point_cloud.PointClip
+        point_cloud_range: ${point_cloud_range}
+      - _target_: autoware_ml.transforms.point_cloud.RandomFlip
+        p: 0.5
+      - _target_: autoware_ml.transforms.point_cloud.RandomJitter
+        sigma: 0.005
+        clip: 0.02
+      - _target_: autoware_ml.transforms.point_cloud.GridSample
+        grid_size: ${grid_size}
+        mode: train
+        keys: [coord, strength, segment]
+        return_grid_coord: true
+      - _target_: autoware_ml.transforms.point_cloud.SphereCrop
+        point_max: 128000
+        mode: random
+      - _target_: autoware_ml.transforms.common.ToTensor
+      - _target_: autoware_ml.transforms.common.Collect
+        keys: [coord, grid_coord, segment]
+        feat_keys: [coord, strength]
+  val_transforms:
+    _target_: autoware_ml.transforms.TransformsCompose
+    pipeline:
+      - _target_: autoware_ml.transforms.point_cloud.LoadPointsFromFile
+        load_dim: 5
+        use_dim: [0, 1, 2, 3]
+      - _target_: autoware_ml.transforms.segmentation3d.LoadSegAnnotations3D
+        class_mapping: ${class_mapping}
+        ignore_index: ${ignore_index}
+      - _target_: autoware_ml.transforms.segmentation3d.PreparePointSegInput
+      - _target_: autoware_ml.transforms.point_cloud.PointClip
+        point_cloud_range: ${point_cloud_range}
+      - _target_: autoware_ml.transforms.point_cloud.GridSample
+        grid_size: ${grid_size}
+        mode: train
+        keys: [coord, strength, segment]
+        return_grid_coord: true
+      - _target_: autoware_ml.transforms.common.ToTensor
+      - _target_: autoware_ml.transforms.common.Collect
+        keys: [coord, grid_coord, segment]
+        feat_keys: [coord, strength]
+  test_transforms: ${datamodule.val_transforms}
+  predict_transforms:
+    _target_: autoware_ml.transforms.TransformsCompose
+    pipeline:
+      - _target_: autoware_ml.transforms.point_cloud.LoadPointsFromFile
+        load_dim: 5
+        use_dim: [0, 1, 2, 3]
+      - _target_: autoware_ml.transforms.segmentation3d.PreparePointSegInput
+      - _target_: autoware_ml.transforms.point_cloud.PointClip
+        point_cloud_range: ${point_cloud_range}
+      - _target_: autoware_ml.transforms.point_cloud.GridSample
+        grid_size: ${grid_size}
+        mode: train
+        keys: [coord, strength, segment]
+        return_grid_coord: true
+      - _target_: autoware_ml.transforms.point_cloud.SphereCrop
+        point_max: 4096
+        mode: center
+      - _target_: autoware_ml.transforms.common.ToTensor
+      - _target_: autoware_ml.transforms.common.Collect
+        keys: [coord, grid_coord, segment]
+        feat_keys: [coord, strength]

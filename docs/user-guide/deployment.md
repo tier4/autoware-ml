@@ -20,8 +20,10 @@ autoware-ml deploy \
     +checkpoint=mlruns/<task>/<model>/<config>/<date>/<time>/checkpoints/best.ckpt
 ```
 
-This generates ONNX (`.onnx`) and TensorRT (`.engine`) files.
-The deploy command also creates a dedicated MLflow run linked to the source training run and logs exported artifacts there.
+This generates ONNX (`.onnx`) and TensorRT (`.engine`) files when both stages
+are enabled and supported by the model. The deploy command also creates a
+dedicated MLflow run linked to the source training run and logs exported
+artifacts there.
 
 You can disable either stage during iteration:
 
@@ -58,7 +60,10 @@ deploy:
       input_tensor: { 2: height, 3: width }
 ```
 
-**dynamic_shapes**: Keys are parameter names from `forward()`, values map dimension indices to symbolic names.
+**dynamic_shapes**: Keys are exported input names, values map dimension indices
+to symbolic names. For the default export path these names come from
+`forward()`. Models with explicit export wrappers define their own exported
+input names through `build_export_spec()`.
 You can also provide symbolic bounds when export needs them:
 
 ```yaml
@@ -69,7 +74,10 @@ deploy:
         0: { name: num_points, min: 2 }
 ```
 
-Set `dynamo: false` for models that rely on legacy ONNX symbolic functions instead of `torch.export`.
+Set `dynamo: false` for models that rely on legacy ONNX symbolic functions
+instead of `torch.export`. In that mode, `dynamic_axes` is passed to the legacy
+exporter directly, and `dynamic_shapes` can still be used as a shorthand to
+derive equivalent symbolic axes.
 
 ### TensorRT Settings
 
@@ -88,9 +96,18 @@ deploy:
 !!! tip
     TensorRT optimizes most aggressively for `opt_shape`. Set this to your typical inference resolution.
 
-## Graph Modification
+## Model-Owned Export Wrappers
 
-Some models require post-export ONNX graph modifications for TensorRT compatibility:
+The preferred deployment path is to keep export logic inside the model. Models
+with deployment-specific requirements should override `build_export_spec()` and
+return an explicit export module plus example tensor inputs.
+
+This keeps export-time behavior close to the model implementation and avoids
+ad hoc post-processing for most cases.
+
+## Optional Graph Modification
+
+Post-export ONNX graph modification is still available as a fallback:
 
 ```yaml
 deploy:

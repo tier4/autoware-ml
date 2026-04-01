@@ -180,7 +180,7 @@ Transforms are configured per split (train/val/test/predict) in the `DataModule`
 
 Public transform targets should be referenced through their subpackage API, for
 example `autoware_ml.transforms.point_cloud.LoadPointsFromFile` or
-`autoware_ml.transforms.boxes3d.RandomFlip3D`. Implementation modules should
+`autoware_ml.transforms.point_cloud.RandomFlip3D`. Implementation modules should
 define the transform once, and the subpackage `__init__.py` acts as the single
 public re-export layer.
 
@@ -204,7 +204,9 @@ The `DataModule.on_after_batch_transfer()` method automatically applies preproce
 
 ### Model
 
-All models inherit from `BaseModel` (extending `LightningModule`), which provides a standard interface:
+All supported models inherit from `BaseModel` (extending `LightningModule`),
+which provides a standard interface and a set of override hooks for
+task-specific behavior:
 
 ```python
 class BaseModel(L.LightningModule, ABC):
@@ -228,6 +230,15 @@ class BaseModel(L.LightningModule, ABC):
     ) -> dict[str, torch.Tensor]:
         ...
 
+    def run_model(self, batch_inputs_dict: Mapping[str, Any]) -> Any:
+        ...
+
+    def predict_outputs(self, outputs: Any) -> Any:
+        ...
+
+    def build_export_spec(self, batch_inputs_dict: Mapping[str, Any]) -> ExportSpec:
+        ...
+
     def configure_optimizers(self) -> Optimizer | dict[str, Any]:
         ...
 ```
@@ -238,11 +249,19 @@ The base class handles:
 - **Automatic signature inspection** - Only passes relevant kwargs to `forward()` and `compute_metrics()` based on method signatures captured at initialization
 - **Metric logging** - Logs metrics to Lightning's logger with proper prefixes
 - **Predict step** - Handles prediction without computing metrics
+- **Export contract** - Supports a generic forward-signature-based export path and model-owned explicit export wrappers
 
-Models can have **any internal architecture**. The framework only requires implementing the abstract interface. The base class automatically filters batch inputs to match each method's signature using `inspect.signature()`.
+Models can have **any internal architecture**. The default path filters batch
+inputs to match method signatures using `inspect.signature()`, while more
+specialized models can override hooks such as `run_model()`,
+`prepare_metric_inputs()`, `get_log_batch_size()`, or `build_export_spec()`
+without leaving the shared framework contract.
 
-!!! warning
-    `forward()` and `compute_metrics()` argument names must match the keys in the batch dictionary.
+!!! note
+    When a model relies on the default signature-based path, `forward()` and
+    `compute_metrics()` argument names must match keys in the batch dictionary.
+    Models with more specialized batching or export requirements should
+    override the relevant hooks instead of bypassing `BaseModel`.
 
 ### Deployment Pipeline
 
@@ -276,19 +295,20 @@ flowchart LR
 The deployment process:
 
 1. **Load checkpoint** - Instantiates model from config and loads weights from checkpoint
-2. **Get input sample** - Uses the predict dataloader to obtain a sample matching the model's forward signature
-3. **Export to ONNX** - Traces the model with the input sample, supporting dynamic shapes for variable input sizes
-4. **Build TensorRT engine** - Optimizes the ONNX model for inference on NVIDIA GPUs with configurable optimization profile
+2. **Get input sample** - Uses the predict dataloader to obtain a preprocessed sample for deployment
+3. **Resolve export spec** - Builds the effective export module and example inputs through the model's `build_export_spec()` contract
+4. **Export to ONNX** - Traces the resolved export module, supporting dynamic shapes for variable input sizes
+5. **Build TensorRT engine** - Optimizes the ONNX model for inference on NVIDIA GPUs with configurable optimization profile
 
 Configuration is done through the `deploy` section in task configs.
 
 ## Extending the Framework
 
-| Extension Point | How                                                                 |
-| --------------- | ------------------------------------------------------------------- |
-| New model       | Subclass `BaseModel`, implement `forward()` and `compute_metrics()` |
-| New dataset     | Subclass `DataModule` and `Dataset`                                 |
-| New transform   | Subclass `BaseTransform`, implement `transform()`                   |
-| New task        | Create config in `configs/tasks/`                                   |
+| Extension Point | How                                                                                           |
+| --------------- | --------------------------------------------------------------------------------------------- |
+| New model       | Subclass `BaseModel`, implement `forward()` and `compute_metrics()`, override hooks as needed |
+| New dataset     | Subclass `DataModule` and `Dataset`                                                           |
+| New transform   | Subclass `BaseTransform`, implement `transform()`                                             |
+| New task        | Create config in `configs/tasks/`                                                             |
 
 See [Adding Models](../contributing/adding-models.md) for a detailed guide.

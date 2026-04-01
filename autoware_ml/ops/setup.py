@@ -12,7 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Setup script for Autoware-ML custom operations (dev-only shortcut)."""
+"""Setup script helpers for Autoware-ML custom operations.
+
+This module collects reusable setuptools configuration used when building
+Autoware-ML native operator packages.
+"""
 
 from setuptools import setup
 
@@ -20,7 +24,11 @@ from autoware_ml.ops.build import get_cmdclass, get_ext_modules
 
 
 def get_packages():
-    """Derive packages from extension modules."""
+    """Derive Python packages from configured extension modules.
+
+    Returns:
+        Sorted package names inferred from extension module definitions.
+    """
     ext_modules = get_ext_modules()
     return list({".".join(ext.name.split(".")[:-1]) for ext in ext_modules})
 

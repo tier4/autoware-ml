@@ -12,17 +12,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Autoware-ML operations module.
-
-Custom CUDA/C++ operations for 3D object detection.
-"""
+"""Custom operator packages used by models and deployment code."""
 
 from importlib import import_module
 
-__all__ = ["bev_pool"]
+__all__ = ["bev_pool", "indexing", "segment", "spconv"]
 
 
 def __getattr__(name):
+    """Lazily import optional operation submodules.
+
+    Args:
+        name: Exported attribute name requested from the package namespace.
+
+    Returns:
+        Imported operator module or callable associated with ``name``.
+
+    Raises:
+        AttributeError: Raised when ``name`` is not a supported export.
+    """
     if name == "bev_pool":
         return import_module("autoware_ml.ops.bev_pool").bev_pool
+    if name == "indexing":
+        return import_module("autoware_ml.ops.indexing")
+    if name == "segment":
+        return import_module("autoware_ml.ops.segment")
+    if name == "spconv":
+        return import_module("autoware_ml.ops.spconv")
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

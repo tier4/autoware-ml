@@ -118,3 +118,18 @@ def test_build_lightning_optimizer_config_materializes_partial_omegaconf_kwargs(
 
     assert [group["max_lr"] for group in optimizer.param_groups] == [1e-3, 1e-4]
     assert scheduler.total_steps == 10
+
+
+def test_build_lightning_optimizer_config_keeps_scheduler_metadata() -> None:
+    model = _ToyModule()
+
+    optimizers = build_lightning_optimizer_config(
+        model,
+        optimizer_factory=lambda params: torch.optim.AdamW(params, lr=1e-3),
+        scheduler_factory=lambda optimizer: OneCycleLR(optimizer, max_lr=1e-3, total_steps=10),
+        scheduler_config={"interval": "step", "frequency": 2, "monitor": "val/loss"},
+    )
+
+    assert optimizers["lr_scheduler"]["interval"] == "step"
+    assert optimizers["lr_scheduler"]["frequency"] == 2
+    assert optimizers["lr_scheduler"]["monitor"] == "val/loss"

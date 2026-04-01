@@ -8,7 +8,8 @@ This guide walks you through adding a new model to Autoware-ML. You'll implement
 
 ## The BaseModel Interface
 
-All models inherit from `BaseModel` and implement two abstract methods:
+New models should inherit from `BaseModel`. The minimal contract is still the
+same two abstract methods:
 
 ```python
 from autoware_ml.models import BaseModel
@@ -23,7 +24,18 @@ class MyModel(BaseModel):
         ...
 ```
 
-The base class handles training/validation/test steps, optimizer configuration, and metric logging automatically. The `forward()` method can have any signature - the base class automatically filters batch inputs to match the method signature.
+The base class handles training/validation/test steps, optimizer configuration,
+metric logging, prediction output conversion, and deployment export
+integration. The `forward()` method can have any signature as long as the
+default batch-to-argument mapping matches, or the model overrides the relevant
+hooks.
+
+!!! note "Extending `BaseModel`"
+    Specialized models should still use `BaseModel`. When the default
+    signature-based path is not enough, prefer overriding hooks such as
+    `run_model()`, `prepare_metric_inputs()`, `get_log_batch_size()`,
+    `predict_outputs()`, or `build_export_spec()` instead of introducing a
+    standalone `LightningModule`.
 
 ## Step 1: Implement the Model
 
@@ -85,6 +97,11 @@ class MyModel(BaseModel):
 3. **Return `'loss'`** - The metrics dict must include a `'loss'` key for backpropagation.
 
 4. **Optimizer and scheduler** - Passed as callables to `BaseModel.__init__()`. Need to be marked as `_partial_: true` in YAML configs.
+
+5. **Use hooks when needed** - If your model needs custom batch unpacking,
+   prediction formatting, or an explicit deployment wrapper, override the
+   appropriate `BaseModel` hook instead of bypassing the shared training and
+   deployment flow.
 
 ## Step 2: Create a DataModule
 
