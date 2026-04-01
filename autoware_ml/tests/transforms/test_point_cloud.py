@@ -13,6 +13,7 @@ from autoware_ml.transforms.point_cloud import (
     PointShuffle,
     PointsRangeFilter,
     RandomDropout,
+    RandomFlip,
     RandomFlip3D,
     RandomRotateTargetAngle,
     RandomShift,
@@ -214,6 +215,19 @@ class TestPointCloudTransforms:
         assert np.allclose(
             output["coord"], np.array([[0.0, 1.0, 0.0]], dtype=np.float32), atol=1e-5
         )
+
+    def test_random_flip_uses_configured_probability_per_axis(self, monkeypatch):
+        sample = {
+            "coord": np.array([[1.0, 2.0, 0.0]], dtype=np.float32),
+            "normal": np.array([[0.5, 0.25, 1.0]], dtype=np.float32),
+        }
+        calls = iter([0.2, 0.8])
+        monkeypatch.setattr(np.random, "rand", lambda: next(calls))
+
+        output = RandomFlip(p=0.5)(sample)
+
+        assert np.allclose(output["coord"], np.array([[-1.0, 2.0, 0.0]], dtype=np.float32))
+        assert np.allclose(output["normal"], np.array([[-0.5, 0.25, 1.0]], dtype=np.float32))
 
     def test_random_shift_translates_all_points(self):
         sample = {"coord": np.zeros((2, 3), dtype=np.float32)}

@@ -39,7 +39,7 @@ class RandomRotate(BaseTransform):
         """Initialize the random rotation transform.
 
         Args:
-            angle: Minimum and maximum rotation angles in turns.
+            angle: Minimum and maximum rotation angles in multiples of ``pi`` radians.
             axis: Rotation axis. Only ``z`` is supported.
             center: Optional rotation center.
             p: Probability of applying the transform.
@@ -86,7 +86,7 @@ class RandomRotateTargetAngle(BaseTransform):
         """Initialize the target-angle rotation transform.
 
         Args:
-            angle: Candidate rotation angles in turns.
+            angle: Candidate rotation angles in multiples of ``pi`` radians.
             axis: Rotation axis. Only ``z`` is supported.
             center: Optional rotation center.
             p: Probability of applying the transform.
@@ -149,14 +149,15 @@ class RandomFlip(BaseTransform):
     """Randomly flip point coordinates across BEV axes."""
 
     _required_keys = ["coord"]
+    p = None
 
     def __init__(self, p: float = 0.5) -> None:
         """Initialize the random flip transform.
 
         Args:
-            p: Probability of applying each axis flip.
+            p: Probability of flipping each axis independently.
         """
-        self.p = p
+        self.flip_prob = p
 
     def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
         """Flip point coordinates across x and y axes.
@@ -167,8 +168,12 @@ class RandomFlip(BaseTransform):
         Returns:
             Updated sample dictionary.
         """
-        if np.random.rand() < self.p:
+        if np.random.rand() < self.flip_prob:
             input_dict["coord"][:, 0] = -input_dict["coord"][:, 0]
-        if np.random.rand() < self.p:
+            if "normal" in input_dict:
+                input_dict["normal"][:, 0] = -input_dict["normal"][:, 0]
+        if np.random.rand() < self.flip_prob:
             input_dict["coord"][:, 1] = -input_dict["coord"][:, 1]
+            if "normal" in input_dict:
+                input_dict["normal"][:, 1] = -input_dict["normal"][:, 1]
         return input_dict

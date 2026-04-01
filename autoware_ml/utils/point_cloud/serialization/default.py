@@ -13,7 +13,8 @@ from autoware_ml.utils.point_cloud.serialization.z_order import xyz2key as z_ord
 @torch.inference_mode()
 def encode(grid_coord, batch=None, depth=16, order="z"):
     """Encode voxel coordinates into serialized integer codes."""
-    assert order in {"z", "z-trans", "hilbert", "hilbert-trans"}
+    if order not in {"z", "z-trans", "hilbert", "hilbert-trans"}:
+        raise ValueError(f"Unsupported serialization order: {order}")
     if order == "z":
         code = z_order_encode(grid_coord, depth=depth)
     elif order == "z-trans":
@@ -33,7 +34,8 @@ def encode(grid_coord, batch=None, depth=16, order="z"):
 @torch.inference_mode()
 def decode(code, depth=16, order="z"):
     """Decode serialized integer codes into voxel coordinates and batch ids."""
-    assert order in {"z", "hilbert"}
+    if order not in {"z", "hilbert"}:
+        raise ValueError(f"Unsupported serialization order: {order}")
     batch = code >> depth * 3
     code = code & ((1 << depth * 3) - 1)
     if order == "z":

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-import spconv.pytorch as spconv
 import torch
 
 from autoware_ml.ops.indexing import argsort
+from autoware_ml.ops.spconv import IS_SPCONV_AVAILABLE
 from autoware_ml.utils.point_cloud.batching import offset_to_batch
 from autoware_ml.utils.point_cloud.serialization import encode
 
@@ -82,6 +82,13 @@ class Point(dict[str, torch.Tensor]):
         Args:
             pad: Spatial padding added to the sparse tensor shape.
         """
+        if not IS_SPCONV_AVAILABLE:
+            raise ModuleNotFoundError(
+                "spconv is required for Point.sparsify() but is not installed."
+            )
+
+        import spconv.pytorch as spconv
+
         if "batch" not in self:
             self["batch"] = offset_to_batch(self["offset"], self["coord"])
         sparse_shape = torch.max(self["grid_coord"], dim=0).values + pad

@@ -16,6 +16,8 @@ from autoware_ml.models.segmentation3d.backbones.ptv3 import (
     SerializedAttention,
 )
 from autoware_ml.models.segmentation3d.ptv3 import PTv3SegmentationModel
+from autoware_ml.utils.point_cloud.serialization import decode, encode
+import autoware_ml.utils.point_cloud.structures as point_structures
 
 
 def test_serialized_attention_requires_supported_flash_configuration() -> None:
@@ -180,3 +182,28 @@ def test_get_log_batch_size_uses_offset_length() -> None:
     batch = {"offset": torch.tensor([128, 256, 320], dtype=torch.int32)}
 
     assert model.get_log_batch_size(batch) == 3
+
+
+def test_serialization_helpers_reject_unsupported_orders() -> None:
+    grid_coord = torch.tensor([[0, 0, 0]], dtype=torch.int64)
+
+    with pytest.raises(ValueError, match="Unsupported serialization order"):
+        encode(grid_coord, depth=4, order="invalid")
+
+    with pytest.raises(ValueError, match="Unsupported serialization order"):
+        decode(torch.tensor([0], dtype=torch.int64), depth=4, order="invalid")
+
+
+def test_point_sparsify_requires_spconv_at_runtime(monkeypatch) -> None:
+    monkeypatch.setattr(point_structures, "IS_SPCONV_AVAILABLE", False)
+    point = Point(
+        {
+            "coord": torch.randn(2, 3),
+            "grid_coord": torch.randint(0, 4, (2, 3), dtype=torch.int32),
+            "feat": torch.randn(2, 4),
+            "offset": torch.tensor([2], dtype=torch.long),
+        }
+    )
+
+    with pytest.raises(ModuleNotFoundError, match="spconv is required"):
+        point.sparsify()
