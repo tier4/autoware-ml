@@ -16,7 +16,7 @@ defaults:
   - t4datasets/scenarios@scenarios.db_jpntaxi_gen2: detection3d/db_jpntaxi_gen2
 
 # The main database is the database that will be used to train the model
-main_database: db_base
+main_database: db_jpntaxi_base
 
 # Processor settings
 num_workers: 16
