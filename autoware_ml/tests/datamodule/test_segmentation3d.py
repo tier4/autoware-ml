@@ -83,7 +83,7 @@ def test_nuscenes_segmentation_dataset_returns_name_key(tmp_path: Path) -> None:
     assert info["name"] == "tok-123"
 
 
-def test_nuscenes_segmentation_dataset_accepts_preprefixed_lidar_path(tmp_path: Path) -> None:
+def test_nuscenes_segmentation_dataset_accepts_pre_prefixed_lidar_path(tmp_path: Path) -> None:
     data_root = tmp_path / "nuscenes"
     lidar_dir = data_root / "samples" / "LIDAR_TOP"
     lidarseg_dir = data_root / "lidarseg" / "v1.0-trainval"
