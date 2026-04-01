@@ -91,7 +91,6 @@ def _make_frnet(num_classes: int = 3) -> FRNet:
     )
 
 
-
 def test_calibration_status_export_spec_keeps_single_probability_output() -> None:
     model = _make_calibration_model()
     batch = {"fused_img": torch.tensor([[2.0, 0.1], [0.2, 1.5]], dtype=torch.float32)}
