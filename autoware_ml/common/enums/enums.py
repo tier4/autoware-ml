@@ -1,5 +1,6 @@
 from enum import Enum
 
+
 class SplitType(str, Enum):
     """
     Split type.
