@@ -26,7 +26,7 @@ class DatabaseInterface(Protocol):
     def __eq__(self, other: DatabaseInterface) -> bool:
         """Compare two databases by their version and scenario IDs."""
         raise NotImplementedError("Database must define __eq__!")
-    
+
     @property
     @abstractmethod
     def cache_file_prefix_name(self) -> str:

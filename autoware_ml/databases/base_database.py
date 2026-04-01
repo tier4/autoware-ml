@@ -65,11 +65,13 @@ class BaseDatabase:
 
     def __eq__(self, other: BaseDatabase) -> bool:
         """Compare two databases by their version and scenario IDs."""
-        return (self.database_version == other.database_version
-                and self.database_root_path == other.database_root_path
-                and self.scenario_root_path == other.scenario_root_path
-                and self.main_database == other.main_database
-                and self.scenarios == other.scenarios)
+        return (
+            self.database_version == other.database_version
+            and self.database_root_path == other.database_root_path
+            and self.scenario_root_path == other.scenario_root_path
+            and self.main_database == other.main_database
+            and self.scenarios == other.scenarios
+        )
 
     def __hash__(self) -> int:
         """Hash the database by its version and scenario IDs."""
@@ -116,8 +118,7 @@ class BaseDatabase:
 
     def get_main_database_scenario_data(self) -> Scenarios:
         """Get the scenario data for the main database."""
-        main_database_scenario_data = self.scenarios.get(
-            self.main_database, None)
+        main_database_scenario_data = self.scenarios.get(self.main_database, None)
         if main_database_scenario_data is None:
             raise ValueError(f"Main database {self.main_database} not found!")
         return main_database_scenario_data
@@ -133,5 +134,4 @@ class BaseDatabase:
 
     def process_scenario_records(self) -> Sequence[DatasetRecord]:
         """Process scenario records from the database."""
-        raise NotImplementedError(
-            "Subclasses must implement process_scenario_records method!")
+        raise NotImplementedError("Subclasses must implement process_scenario_records method!")
