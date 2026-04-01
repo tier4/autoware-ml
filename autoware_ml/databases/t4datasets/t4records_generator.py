@@ -74,7 +74,6 @@ class T4RecordsGenerator:
             / self.scenario_data.scenario_id
             / self.scenario_data.scenario_version
         )
-        logger.info(f"Scene root directory path: {scene_root_dir_path}")
         if not scene_root_dir_path.exists():
             raise ValueError(f"Scene root directory {scene_root_dir_path} does not exist.")
         return Tier4(data_root=scene_root_dir_path, verbose=False)
@@ -82,7 +81,7 @@ class T4RecordsGenerator:
     def generate_dataset_records(self) -> Sequence[DatasetRecord]:
         """Generate dataset records."""
         records = []
-        logger.info(f"Generating dataset records for scenario: {self.scenario_data.scenario_id}")
+        logger.info(f"Generating dataset records for scenario: {self.scenario_data.scenario_id} with sample steps: {self.sample_steps} and max sweeps: {self.max_sweeps}")
         for sample_index in range(0, len(self.t4_devkit_dataset.sample), self.sample_steps):
             sample = self.t4_devkit_dataset.sample[sample_index]
             records.append(self.extract_t4_sample_record(sample, sample_index))
@@ -99,14 +98,13 @@ class T4RecordsGenerator:
             raise ValueError(
                 f"Lidar channel {LidarChannel.LIDAR_TOP} or {LidarChannel.LIDAR_CONCAT} not found in sample data."
             )
-        logger.info(f"Lidar token: {lidar_token}")
+        
         # Second, read sample data and calibrated sensor from the T4Dataset
         sd_record: SampleData = self.t4_devkit_dataset.get("sample_data", lidar_token)
         cs_record: CalibratedSensor = self.t4_devkit_dataset.get(
             "calibrated_sensor", sd_record.calibrated_sensor_token
         )
         lidar_path, _, _ = self.t4_devkit_dataset.get_sample_data(lidar_token)
-        logger.info(f"Lidar path: {lidar_path}")
         # TODO (KokSeang): Extract more information, for example, boxes, from the T4Dataset.
         # Last, return the T4 sample record
         return T4SampleRecord(
