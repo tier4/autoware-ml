@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for PermuteAxes transforms."""
+"""Tests for common transforms."""
 
 from typing import Any
 
@@ -20,7 +20,7 @@ import numpy as np
 import pytest
 import torch
 
-from autoware_ml.transforms.common import PermuteAxes
+from autoware_ml.transforms.common import PermuteAxes, ToTensor
 
 
 class TestPermuteAxes:
@@ -98,3 +98,10 @@ class TestPermuteAxes:
 
         assert output_dict["test_tensor"].device.type == "cuda"
         assert output_dict["test_tensor"].shape == (5, 32, 64)
+
+
+def test_to_tensor_preserves_none_values() -> None:
+    output = ToTensor()({"coord": np.zeros((1, 3), dtype=np.float32), "optional_metadata": None})
+
+    assert output["coord"].dtype == torch.float32
+    assert output["optional_metadata"] is None

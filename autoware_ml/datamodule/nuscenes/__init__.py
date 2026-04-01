@@ -12,11 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""NuScenes datamodule."""
+"""NuScenes datamodule exports used by Autoware-ML entrypoints.
+
+This package re-exports dataset and datamodule implementations for NuScenes
+training, evaluation, and deployment workflows.
+"""
 
 from autoware_ml.datamodule.nuscenes.calibration_status import (
     NuscenesCalibrationDataModule,
     NuscenesCalibrationStatusDataset,
 )
+from autoware_ml.datamodule.nuscenes.segmentation3d import (
+    NuscenesSegmentation3DDataModule,
+    NuscenesSegmentation3DDataset,
+)
 
-__all__ = ["NuscenesCalibrationStatusDataset", "NuscenesCalibrationDataModule"]
+__all__ = [
+    "NuscenesCalibrationStatusDataset",
+    "NuscenesCalibrationDataModule",
+    "NuscenesSegmentation3DDataModule",
+    "NuscenesSegmentation3DDataset",
+]

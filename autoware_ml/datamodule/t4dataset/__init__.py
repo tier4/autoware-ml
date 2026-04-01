@@ -22,8 +22,14 @@ from autoware_ml.datamodule.t4dataset.calibration_status import (
     T4CalibrationDataModule,
     T4CalibrationStatusDataset,
 )
+from autoware_ml.datamodule.t4dataset.segmentation3d import (
+    T4Segmentation3DDataModule,
+    T4Segmentation3DDataset,
+)
 
 __all__ = [
     "T4CalibrationStatusDataset",
     "T4CalibrationDataModule",
+    "T4Segmentation3DDataset",
+    "T4Segmentation3DDataModule",
 ]

@@ -18,13 +18,17 @@ This module defines shared Lightning model interfaces and helper abstractions
 used by task-specific model wrappers throughout the framework.
 """
 
+from __future__ import annotations
+
 import inspect
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 import lightning as L
+from lightning.pytorch.utilities.data import extract_batch_size
 import torch
+import torch.nn as nn
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
@@ -67,6 +71,70 @@ class BaseModel(L.LightningModule, ABC):
         )
         self.scheduler_config = dict(scheduler_config) if scheduler_config else {}
 
+    def predict_outputs(self, outputs: Any) -> Any:
+        """Convert raw model outputs into task-level predictions.
+
+        The default implementation returns the model outputs unchanged. Task
+        wrappers should override this when prediction-time outputs differ from
+        training-time outputs, for example to convert logits into probabilities
+        and labels.
+
+        Args:
+            outputs: Raw outputs returned by :meth:`run_model`.
+
+        Returns:
+            Task-level predictions.
+        """
+        return outputs
+
+    @torch.no_grad()
+    def predict(self, *args: Any, **kwargs: Any) -> Any:
+        """Run inference and return task-level predictions.
+
+        Args:
+            *args: Positional arguments forwarded to :meth:`forward`.
+            **kwargs: Keyword arguments forwarded to :meth:`forward`.
+
+        Returns:
+            Task-level predictions produced by :meth:`predict_outputs`.
+        """
+        return self.predict_outputs(self(*args, **kwargs))
+
+    def get_export_output_names(self) -> list[str] | None:
+        """Return output names used by the generic export wrapper.
+
+        Models that export structured prediction dictionaries should override
+        this hook and return the tensor names in the exported output order.
+
+        Returns:
+            Export output names or ``None`` when the generic wrapper should keep
+            the model outputs unnamed.
+        """
+        return None
+
+    def prepare_export_outputs(self, predictions: Any) -> Any:
+        """Convert prediction outputs into an ONNX-exportable structure.
+
+        Args:
+            predictions: Task-level predictions produced by
+                :meth:`predict_outputs`.
+
+        Returns:
+            Tensor, tuple of tensors, or another ONNX-exportable structure.
+
+        Raises:
+            ValueError: Raised when prediction outputs are a mapping but the
+                model does not define explicit export output names.
+        """
+        if isinstance(predictions, Mapping):
+            output_names = self.get_export_output_names()
+            if output_names is None:
+                raise ValueError(
+                    "Structured prediction outputs require explicit export output names."
+                )
+            return tuple(predictions[name] for name in output_names)
+        return predictions
+
     def build_optimizer_groups(self) -> Mapping[str, Sequence[torch.nn.Parameter]]:
         """Return structural optimizer groups for the model.
 
@@ -78,7 +146,7 @@ class BaseModel(L.LightningModule, ABC):
         }
 
     @abstractmethod
-    def forward(self, **kwargs: Any) -> torch.Tensor | Sequence[torch.Tensor]:
+    def forward(self, **kwargs: Any) -> Any:
         """Forward pass of the model.
 
         Subclasses can define this method with any signature. The base class
@@ -94,9 +162,7 @@ class BaseModel(L.LightningModule, ABC):
         pass
 
     @abstractmethod
-    def compute_metrics(
-        self, outputs: torch.Tensor | Sequence[torch.Tensor], **kwargs: Any
-    ) -> dict[str, torch.Tensor]:
+    def compute_metrics(self, outputs: Any, **kwargs: Any) -> dict[str, torch.Tensor]:
         """Compute metrics.
 
         Args:
@@ -123,6 +189,80 @@ class BaseModel(L.LightningModule, ABC):
         """
         return {k: batch_inputs_dict[k] for k in signature.parameters if k in batch_inputs_dict}
 
+    def prepare_forward_inputs(self, batch_inputs_dict: Mapping[str, Any]) -> dict[str, Any]:
+        """Build the keyword arguments passed to ``forward``.
+
+        Args:
+            batch_inputs_dict: Full batch dictionary from the dataloader.
+
+        Returns:
+            Keyword arguments forwarded to :meth:`forward`.
+        """
+        return self._filter_batch_keys(batch_inputs_dict, self.forward_signature)
+
+    def run_model(self, batch_inputs_dict: Mapping[str, Any]) -> Any:
+        """Run the model on one batch.
+
+        Models with standard tensor-only forwards can rely on the default
+        implementation. Models that need custom batch unpacking can override
+        this hook without changing the public ``forward`` signature.
+
+        Args:
+            batch_inputs_dict: Full batch dictionary from the dataloader.
+
+        Returns:
+            Model outputs.
+        """
+        return self(**self.prepare_forward_inputs(batch_inputs_dict))
+
+    def prepare_metric_inputs(self, batch_inputs_dict: Mapping[str, Any]) -> dict[str, Any]:
+        """Build the keyword arguments passed to ``compute_metrics``.
+
+        Args:
+            batch_inputs_dict: Full batch dictionary from the dataloader.
+
+        Returns:
+            Keyword arguments forwarded to :meth:`compute_metrics`.
+        """
+        return self._filter_batch_keys(batch_inputs_dict, self.compute_metrics_signature)
+
+    def compute_step_metrics(
+        self,
+        batch_inputs_dict: Mapping[str, Any],
+        outputs: Any,
+    ) -> dict[str, torch.Tensor]:
+        """Compute step metrics from model outputs and batch data.
+
+        Args:
+            batch_inputs_dict: Full batch dictionary from the dataloader.
+            outputs: Outputs returned from :meth:`run_model`.
+
+        Returns:
+            Metric dictionary produced by :meth:`compute_metrics`.
+        """
+        return self.compute_metrics(
+            outputs=outputs,
+            **self.prepare_metric_inputs(batch_inputs_dict),
+        )
+
+    def get_log_batch_size(self, batch_inputs_dict: Mapping[str, Any]) -> int | None:
+        """Infer the effective sample batch size for logging.
+
+        The default implementation tries Lightning's recursive batch-size
+        inference on the actual model inputs. Models with ragged point-cloud
+        batches should override this hook to provide an explicit sample count.
+
+        Args:
+            batch_inputs_dict: Full batch dictionary from the dataloader.
+
+        Returns:
+            Sample batch size when it can be inferred, otherwise ``None``.
+        """
+        try:
+            return extract_batch_size(self.prepare_forward_inputs(batch_inputs_dict))
+        except Exception:
+            return None
+
     def _shared_step(
         self, batch_inputs_dict: Mapping[str, Any], step_prefix: str, **kwargs: Any
     ) -> dict[str, Any]:
@@ -136,14 +276,11 @@ class BaseModel(L.LightningModule, ABC):
         Returns:
             Dictionary with metrics.
         """
-        outputs = self(**self._filter_batch_keys(batch_inputs_dict, self.forward_signature))
-        metrics = self.compute_metrics(
-            outputs=outputs,
-            **self._filter_batch_keys(batch_inputs_dict, self.compute_metrics_signature),
-        )
+        outputs = self.run_model(batch_inputs_dict)
+        metrics = self.compute_step_metrics(batch_inputs_dict, outputs)
         if "loss" not in metrics:
             raise ValueError("compute_metrics() must return a dict containing a 'loss' key.")
-        batch_size = len(next(iter(batch_inputs_dict.values())))
+        batch_size = self.get_log_batch_size(batch_inputs_dict)
         self.log_dict(
             {f"{step_prefix}/{k}": v for k, v in metrics.items()},
             batch_size=batch_size,
@@ -182,7 +319,7 @@ class BaseModel(L.LightningModule, ABC):
             batch_idx: Batch index.
 
         Returns:
-            Dictionary with outputs and batch for optional aggregation.
+            Metric dictionary logged for the validation step.
         """
         return self._shared_step(
             batch_inputs_dict,
@@ -201,7 +338,7 @@ class BaseModel(L.LightningModule, ABC):
             batch_idx: Batch index.
 
         Returns:
-            Test outputs.
+            Metric dictionary logged for the test step.
         """
         return self._shared_step(
             batch_inputs_dict,
@@ -222,7 +359,8 @@ class BaseModel(L.LightningModule, ABC):
         Returns:
             Predictions.
         """
-        return self(**self._filter_batch_keys(batch_inputs_dict, self.forward_signature))
+        del batch_idx
+        return self.predict_outputs(self.run_model(batch_inputs_dict))
 
     def build_export_spec(self, batch_inputs_dict: Mapping[str, Any]) -> ExportSpec:
         """Build the default deployment export specification for the model.
@@ -237,7 +375,14 @@ class BaseModel(L.LightningModule, ABC):
         Returns:
             Export specification for deployment.
         """
-        return infer_export_spec(self, batch_inputs_dict)
+        raw_spec = infer_export_spec(self, batch_inputs_dict)
+        return ExportSpec(
+            module=_PredictionExportWrapper(self),
+            args=raw_spec.args,
+            input_param_names=raw_spec.input_param_names,
+            output_names=self.get_export_output_names(),
+            supported_stages=raw_spec.supported_stages,
+        )
 
     def configure_optimizers(self) -> Optimizer | dict[str, Any]:
         """Configure optimizers and schedulers.
@@ -262,3 +407,23 @@ class BaseModel(L.LightningModule, ABC):
             if self._trainer is not None
             else None,
         )
+
+
+class _PredictionExportWrapper(nn.Module):
+    """Wrap a model so generic export emits task-level predictions."""
+
+    def __init__(self, model: BaseModel) -> None:
+        """Initialize the generic export wrapper.
+
+        Args:
+            model: Model instance whose forward and prediction hooks are used
+                during export.
+        """
+        super().__init__()
+        self.model = model
+
+    def forward(self, *args: Any) -> Any:
+        """Run the wrapped model and convert raw outputs into export outputs."""
+        outputs = self.model(*args)
+        predictions = self.model.predict_outputs(outputs)
+        return self.model.prepare_export_outputs(predictions)

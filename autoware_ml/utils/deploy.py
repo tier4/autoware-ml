@@ -34,6 +34,8 @@ from omegaconf import DictConfig, OmegaConf
 import torch
 from torch.export import Dim
 
+from autoware_ml.ops.segment import register_scatter_reduce_onnx_symbolic
+
 logger = logging.getLogger(__name__)
 
 
@@ -46,12 +48,14 @@ class ExportSpec:
         args: Example positional inputs supplied during export.
         input_param_names: Names associated with the positional input tensors.
         output_names: Optional names associated with exported output tensors.
+        supported_stages: Export stages supported by this specification.
     """
 
     module: torch.nn.Module
     args: tuple[Any, ...]
     input_param_names: list[str]
     output_names: list[str] | None = None
+    supported_stages: frozenset[str] = frozenset({"onnx", "tensorrt"})
 
 
 def validate_cuda_available() -> None:
@@ -180,19 +184,27 @@ def log_export_inputs(input_args: tuple[Any, ...], input_names: list[str]) -> No
 def build_dynamic_shapes(
     onnx_cfg: DictConfig,
     forward_params: list[str],
-) -> dict[str, dict[int, Dim]] | None:
+) -> tuple[dict[int, Dim] | None, ...] | None:
     """Build the ONNX dynamic-shape mapping from config."""
     if "dynamic_shapes" not in onnx_cfg or onnx_cfg.dynamic_shapes is None:
         return None
 
-    dynamic_shapes: dict[str, dict[int, Dim]] = {}
-    for param_name, dim_mapping in onnx_cfg.dynamic_shapes.items():
-        if param_name not in forward_params:
-            logger.warning(
-                "Dynamic shape parameter '%s' not found in forward signature. Available parameters: %s. Skipping.",
-                param_name,
-                forward_params,
-            )
+    raw_dynamic_shapes = onnx_cfg.dynamic_shapes
+    unknown_params = [
+        param_name for param_name in raw_dynamic_shapes if param_name not in forward_params
+    ]
+    for param_name in unknown_params:
+        logger.warning(
+            "Dynamic shape parameter '%s' not found in export inputs. Available inputs: %s. Skipping.",
+            param_name,
+            forward_params,
+        )
+
+    dynamic_shapes: list[dict[int, Dim] | None] = []
+    for param_name in forward_params:
+        dim_mapping = raw_dynamic_shapes.get(param_name)
+        if dim_mapping is None:
+            dynamic_shapes.append(None)
             continue
 
         param_dynamic_shapes: dict[int, Dim] = {}
@@ -209,10 +221,86 @@ def build_dynamic_shapes(
             dim_kwargs = {key: dim_spec[key] for key in ("min", "max") if key in dim_spec}
             param_dynamic_shapes[int(dim_idx)] = Dim(dim_name, **dim_kwargs)
 
-        if param_dynamic_shapes:
-            dynamic_shapes[param_name] = param_dynamic_shapes
+        dynamic_shapes.append(param_dynamic_shapes or None)
 
-    return dynamic_shapes or None
+    if all(param_dynamic_shapes is None for param_dynamic_shapes in dynamic_shapes):
+        return None
+    return tuple(dynamic_shapes)
+
+
+def normalize_dynamic_shapes_for_model(
+    model: torch.nn.Module,
+    dynamic_shapes: tuple[dict[int, Dim] | None, ...] | None,
+) -> tuple[Any, ...] | None:
+    """Adapt dynamic-shape structure to the model forward signature.
+
+    ``torch.export`` requires ``dynamic_shapes`` to mirror the positional input
+    pytree passed to the model. Wrappers that expose ``forward(*args)`` receive
+    one tuple-valued positional argument, so their dynamic-shape structure must
+    be wrapped one level deeper.
+    """
+    if dynamic_shapes is None:
+        return None
+
+    signature = inspect.signature(model.forward)
+    parameters = [parameter for parameter in signature.parameters.values()]
+    if len(parameters) == 1 and parameters[0].kind == inspect.Parameter.VAR_POSITIONAL:
+        return (dynamic_shapes,)
+    return dynamic_shapes
+
+
+def build_dynamic_axes(onnx_cfg: DictConfig) -> dict[str, dict[int, str]] | None:
+    """Build legacy ONNX dynamic-axes mapping from config.
+
+    This path is used with ``torch.onnx.export(..., dynamo=False)`` to support
+    exports that still rely on the legacy exporter behavior.
+    """
+    dynamic_axes_cfg = onnx_cfg.get("dynamic_axes")
+    if dynamic_axes_cfg is None:
+        dynamic_shapes_cfg = onnx_cfg.get("dynamic_shapes")
+        if dynamic_shapes_cfg is None:
+            return None
+
+        dynamic_axes_cfg = {}
+        for tensor_name, dim_mapping in dynamic_shapes_cfg.items():
+            tensor_dynamic_axes: dict[int, str] = {}
+            for dim_idx, dim_spec in dim_mapping.items():
+                if isinstance(dim_spec, str):
+                    tensor_dynamic_axes[int(dim_idx)] = dim_spec
+                    continue
+
+                dim_name = dim_spec.get("name")
+                if dim_name is None:
+                    raise ValueError(
+                        f"Dynamic shape spec for '{tensor_name}[{dim_idx}]' must define 'name'."
+                    )
+                tensor_dynamic_axes[int(dim_idx)] = dim_name
+
+            if tensor_dynamic_axes:
+                dynamic_axes_cfg[tensor_name] = tensor_dynamic_axes
+
+    if dynamic_axes_cfg is None:
+        return None
+
+    dynamic_axes: dict[str, dict[int, str]] = {}
+    for tensor_name, dim_mapping in dynamic_axes_cfg.items():
+        tensor_dynamic_axes: dict[int, str] = {}
+        for dim_idx, dim_spec in dim_mapping.items():
+            if isinstance(dim_spec, str):
+                tensor_dynamic_axes[int(dim_idx)] = dim_spec
+                continue
+
+            dim_name = dim_spec.get("name")
+            if dim_name is None:
+                raise ValueError(
+                    f"Dynamic axis spec for '{tensor_name}[{dim_idx}]' must define 'name'."
+                )
+            tensor_dynamic_axes[int(dim_idx)] = dim_name
+
+        if tensor_dynamic_axes:
+            dynamic_axes[tensor_name] = tensor_dynamic_axes
+
+    return dynamic_axes or None
 
 
 def merge_onnx_external_data(onnx_path: Path) -> None:
@@ -240,27 +328,39 @@ def export_to_onnx(
     if not input_param_names:
         raise ValueError("Model forward signature has no parameters.")
 
-    dynamic_shapes = build_dynamic_shapes(onnx_cfg, input_param_names)
+    dynamo = onnx_cfg.get("dynamo", True)
+    dynamic_shapes = build_dynamic_shapes(onnx_cfg, input_param_names) if dynamo else None
+    dynamic_shapes = normalize_dynamic_shapes_for_model(model, dynamic_shapes) if dynamo else None
+    dynamic_axes = build_dynamic_axes(onnx_cfg) if not dynamo else None
     input_names = list(onnx_cfg.get("input_names", input_param_names))
     output_names = list(output_names_override or onnx_cfg.get("output_names", ["output"]))
 
     logger.info("Dynamic shapes: %s", dynamic_shapes)
+    logger.info("Dynamic axes: %s", dynamic_axes)
     logger.info("ONNX opset version: %s", onnx_cfg.opset_version)
     logger.info("Input names: %s", input_names)
     logger.info("Output names: %s", output_names)
     log_export_inputs(input_sample, input_param_names)
 
-    torch.onnx.export(
-        model=model,
-        args=input_sample,
-        f=str(output_path),
-        dynamic_shapes=dynamic_shapes,
-        input_names=input_names,
-        output_names=output_names,
-        opset_version=onnx_cfg.opset_version,
-        dynamo=onnx_cfg.get("dynamo", True),
-        do_constant_folding=onnx_cfg.get("do_constant_folding", True),
-    )
+    # Register shared ONNX symbolics needed by export-aware ops packages.
+    register_scatter_reduce_onnx_symbolic(opset_version=int(onnx_cfg.opset_version))
+
+    export_kwargs = {
+        "model": model,
+        "args": input_sample,
+        "f": str(output_path),
+        "input_names": input_names,
+        "output_names": output_names,
+        "opset_version": onnx_cfg.opset_version,
+        "dynamo": dynamo,
+        "do_constant_folding": onnx_cfg.get("do_constant_folding", True),
+    }
+    if dynamo:
+        export_kwargs["dynamic_shapes"] = dynamic_shapes
+    else:
+        export_kwargs["dynamic_axes"] = dynamic_axes
+
+    torch.onnx.export(**export_kwargs)
 
     logger.info("Successfully exported ONNX model to %s", output_path)
 
@@ -395,3 +495,8 @@ def should_export_stage(stage_cfg: DictConfig | None) -> bool:
     if stage_cfg is None:
         return False
     return bool(stage_cfg.get("enabled", True))
+
+
+def supports_export_stage(export_spec: ExportSpec, stage_name: str) -> bool:
+    """Return whether an export specification supports a stage."""
+    return stage_name in export_spec.supported_stages

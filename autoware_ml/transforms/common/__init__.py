@@ -14,6 +14,7 @@
 
 """Common transform exports shared across multiple modalities."""
 
-from autoware_ml.transforms.common.tensor import PermuteAxes
+from autoware_ml.transforms.common.packing import Collect
+from autoware_ml.transforms.common.tensor import PermuteAxes, ToTensor
 
-__all__ = ["PermuteAxes"]
+__all__ = ["Collect", "PermuteAxes", "ToTensor"]

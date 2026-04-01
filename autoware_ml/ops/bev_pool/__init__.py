@@ -12,8 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""BEV pooling operations."""
+"""BEV pooling operator exports used by camera-to-BEV projection models.
 
-from .bev_pool import bev_pool
+This package re-exports the custom BEV pooling kernels and wrappers used by
+camera-to-BEV projection architectures.
+"""
+
+from autoware_ml.ops.bev_pool.bev_pool import bev_pool
 
 __all__ = ["bev_pool"]
