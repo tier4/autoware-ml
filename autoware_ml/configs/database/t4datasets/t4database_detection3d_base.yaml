@@ -7,6 +7,8 @@ database_root_path: ${data_root_path}/t4datasets/
 # Root path where the scenario yaml files are stored
 scenario_root_path: ${working_dir}/perception-devops/dataset_annotation/t4datasets/detection3d/
 cache_path: ${cache_root_path}/detection3d/
+# Prefix name of the cache file, it will be <cache_file_prefix_name>_<database_hash>.parquet
+cache_file_prefix_name: database
 
 # Read each database into their corresponding scenarios, it will run evaluation/visualization on each scenario
 defaults:
