@@ -17,8 +17,8 @@
 from __future__ import annotations
 
 import torch
-from autoware_ml.datamodule.common.point_cloud import point_collate_fn
 
+from autoware_ml.datamodule.common.point_cloud import point_collate_fn
 from autoware_ml.datamodule.nuscenes.segmentation3d import NuscenesSegmentation3DDataModule
 from autoware_ml.datamodule.t4dataset.segmentation3d import T4Segmentation3DDataModule
 
