@@ -152,6 +152,7 @@ class DataModule(L.LightningDataModule, ABC):
         val_dataloader_cfg: DataLoaderConfig | Mapping[str, Any] | None = None,
         test_dataloader_cfg: DataLoaderConfig | Mapping[str, Any] | None = None,
         predict_dataloader_cfg: DataLoaderConfig | Mapping[str, Any] | None = None,
+        mix_prob: float = 0.0,
     ):
         """Initialize DataModule.
 
@@ -166,10 +167,15 @@ class DataModule(L.LightningDataModule, ABC):
             val_dataloader_cfg: Configuration for validation data loader.
             test_dataloader_cfg: Configuration for test data loader.
             predict_dataloader_cfg: Configuration for predict data loader.
+            mix_prob: Point-cloud mix probability applied during training
+                collation.  When greater than zero the datamodule uses the
+                concatenated-offset collation strategy with optional sample
+                mixing instead of the default per-key collation.
         """
         super().__init__()
 
         self.stack_keys: list[str] = list(stack_keys or [])
+        self.mix_prob = mix_prob
         # TransformsCompose for each dataset split
         self.train_transforms: TransformsCompose = train_transforms
         self.val_transforms: TransformsCompose = val_transforms
@@ -294,8 +300,17 @@ class DataModule(L.LightningDataModule, ABC):
         """Create prediction dataloader."""
         return self._create_dataloader("predict")
 
+    def _collate_mix_prob(self) -> float:
+        """Return mix probability (non-zero only during training)."""
+        trainer = getattr(self, "trainer", None)
+        return self.mix_prob if trainer is not None and trainer.training else 0.0
+
     def collate_fn(self, batch_inputs_dicts: Sequence[dict[str, Any]]) -> dict[str, Any]:
         """Collates batch elements into a dictionary of Tensors or Lists.
+
+        When ``mix_prob`` is greater than zero the datamodule delegates to the
+        concatenated-offset collation strategy with optional sample mixing.
+        Otherwise the default per-key collation is used:
 
         1. Converts NumPy arrays, lists, tuples and scalars to PyTorch Tensors.
         2. Collates lists of dictionaries to dictionaries of lists.
@@ -307,6 +322,10 @@ class DataModule(L.LightningDataModule, ABC):
         Returns:
             Dictionary mapping keys to Tensors or lists of data.
         """
+        if self.mix_prob > 0.0:
+            from autoware_ml.datamodule.common.point_cloud import point_collate_fn
+
+            return point_collate_fn(list(batch_inputs_dicts), mix_prob=self._collate_mix_prob())
         if not batch_inputs_dicts:
             raise ValueError("Batch inputs dictionary is empty.")
 

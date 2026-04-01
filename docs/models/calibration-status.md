@@ -65,6 +65,10 @@ autoware-ml deploy \
     +checkpoint=mlruns/calibration_status/calibration_status_classifier/resnet18_nuscenes/<date>/<time>/checkpoints/best.ckpt
 ```
 
+The exported model keeps the original calibration-status behavior and emits a
+single probability tensor. Class labels can be derived downstream with
+`argmax` when needed.
+
 ## Data Pipeline
 
 The training pipeline includes image undistortion, synthetic calibration perturbation, LiDAR-camera fusion, and channel-first tensor conversion. Calibration perturbation is used to generate positive training samples representing miscalibrated sensor pairs.

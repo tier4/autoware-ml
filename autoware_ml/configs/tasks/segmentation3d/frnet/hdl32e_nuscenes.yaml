@@ -1,0 +1,151 @@
+# @package _global_
+defaults:
+  - /tasks/segmentation3d/frnet/base
+  - _self_
+
+fov_up: 10.0
+fov_down: -30.0
+range_height: 32
+range_width: 1920
+frustum_height: 32
+frustum_width: 480
+ignore_index: -1
+max_label: 31
+num_classes: 16
+
+seg_label_mapping:
+  0: -1
+  1: -1
+  2: 6
+  3: 6
+  4: 6
+  5: -1
+  6: 6
+  7: -1
+  8: -1
+  9: 0
+  10: -1
+  11: -1
+  12: 7
+  13: -1
+  14: 1
+  15: 2
+  16: 2
+  17: 3
+  18: 4
+  19: -1
+  20: -1
+  21: 5
+  22: 8
+  23: 9
+  24: 10
+  25: 11
+  26: 12
+  27: 13
+  28: 14
+  29: -1
+  30: 15
+  31: -1
+
+datamodule:
+  _target_: autoware_ml.datamodule.nuscenes.segmentation3d.NuscenesSegmentation3DDataModule
+  data_root: ${oc.env:AUTOWARE_ML_DATA_PATH}/nuscenes
+  train_ann_file: ${datamodule.data_root}/nuscenes_infos_train.pkl
+  val_ann_file: ${datamodule.data_root}/nuscenes_infos_val.pkl
+  test_ann_file: ${datamodule.data_root}/nuscenes_infos_val.pkl
+  train_transforms:
+    _target_: autoware_ml.transforms.TransformsCompose
+    pipeline:
+      - _target_: autoware_ml.transforms.point_cloud.LoadPointsFromFile
+        load_dim: 5
+        use_dim: [0, 1, 2, 3]
+      - _target_: autoware_ml.transforms.segmentation3d.LoadSegAnnotations3D
+        label_mapping: ${seg_label_mapping}
+        max_label: ${max_label}
+        ignore_index: ${ignore_index}
+      - _target_: autoware_ml.transforms.point_cloud.RandomFlip3D
+        flip_ratio_bev_horizontal: 0.5
+        flip_ratio_bev_vertical: 0.5
+      - _target_: autoware_ml.transforms.point_cloud.GlobalRotScaleTrans
+        rot_range: [-3.1415926, 3.1415926]
+        scale_ratio_range: [0.95, 1.05]
+        translation_std: [0.1, 0.1, 0.1]
+      - _target_: autoware_ml.transforms.segmentation3d.FrustumMix
+        height: ${frustum_height}
+        width: ${frustum_width}
+        fov_up: ${fov_up}
+        fov_down: ${fov_down}
+        num_areas: [3, 4, 5, 6]
+        pre_transform:
+          _target_: autoware_ml.transforms.TransformsCompose
+          pipeline:
+            - _target_: autoware_ml.transforms.point_cloud.LoadPointsFromFile
+              load_dim: 5
+              use_dim: [0, 1, 2, 3]
+            - _target_: autoware_ml.transforms.segmentation3d.LoadSegAnnotations3D
+              label_mapping: ${seg_label_mapping}
+              max_label: ${max_label}
+              ignore_index: ${ignore_index}
+            - _target_: autoware_ml.transforms.point_cloud.RandomFlip3D
+              flip_ratio_bev_horizontal: 0.5
+              flip_ratio_bev_vertical: 0.5
+            - _target_: autoware_ml.transforms.point_cloud.GlobalRotScaleTrans
+              rot_range: [-3.1415926, 3.1415926]
+              scale_ratio_range: [0.95, 1.05]
+              translation_std: [0.1, 0.1, 0.1]
+        prob: 1.0
+      - _target_: autoware_ml.transforms.segmentation3d.InstanceCopy
+        instance_classes: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+        pre_transform:
+          _target_: autoware_ml.transforms.TransformsCompose
+          pipeline:
+            - _target_: autoware_ml.transforms.point_cloud.LoadPointsFromFile
+              load_dim: 5
+              use_dim: [0, 1, 2, 3]
+            - _target_: autoware_ml.transforms.segmentation3d.LoadSegAnnotations3D
+              label_mapping: ${seg_label_mapping}
+              max_label: ${max_label}
+              ignore_index: ${ignore_index}
+            - _target_: autoware_ml.transforms.point_cloud.RandomFlip3D
+              flip_ratio_bev_horizontal: 0.5
+              flip_ratio_bev_vertical: 0.5
+            - _target_: autoware_ml.transforms.point_cloud.GlobalRotScaleTrans
+              rot_range: [-3.1415926, 3.1415926]
+              scale_ratio_range: [0.95, 1.05]
+              translation_std: [0.1, 0.1, 0.1]
+        prob: 1.0
+      - _target_: autoware_ml.transforms.segmentation3d.RangeInterpolation
+        height: ${range_height}
+        width: ${range_width}
+        fov_up: ${fov_up}
+        fov_down: ${fov_down}
+        ignore_index: ${ignore_index}
+  val_transforms:
+    _target_: autoware_ml.transforms.TransformsCompose
+    pipeline:
+      - _target_: autoware_ml.transforms.point_cloud.LoadPointsFromFile
+        load_dim: 5
+        use_dim: [0, 1, 2, 3]
+      - _target_: autoware_ml.transforms.segmentation3d.LoadSegAnnotations3D
+        label_mapping: ${seg_label_mapping}
+        max_label: ${max_label}
+        ignore_index: ${ignore_index}
+      - _target_: autoware_ml.transforms.segmentation3d.RangeInterpolation
+        height: ${range_height}
+        width: ${range_width}
+        fov_up: ${fov_up}
+        fov_down: ${fov_down}
+        ignore_index: ${ignore_index}
+  test_transforms: ${datamodule.val_transforms}
+  predict_transforms:
+    _target_: autoware_ml.transforms.TransformsCompose
+    pipeline:
+      - _target_: autoware_ml.transforms.point_cloud.LoadPointsFromFile
+        load_dim: 5
+        use_dim: [0, 1, 2, 3]
+      - _target_: autoware_ml.transforms.segmentation3d.RangeInterpolation
+        height: ${range_height}
+        width: ${range_width}
+        fov_up: ${fov_up}
+        fov_down: ${fov_down}
+        ignore_index: ${ignore_index}

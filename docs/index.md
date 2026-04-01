@@ -63,11 +63,11 @@ icon: lucide/house
 | Detection 3D       | LiDAR         | CenterPoint        | :lucide-hourglass: | :lucide-hourglass: | :lucide-hourglass: | :lucide-hourglass: | :lucide-hourglass: |
 | Detection 3D       | LiDAR         | TransFusion        | :lucide-hourglass: | :lucide-hourglass: | :lucide-hourglass: | :lucide-hourglass: | :lucide-hourglass: |
 | Detection 3D       | Camera, LiDAR | BEVFusion          | :lucide-hourglass: | :lucide-hourglass: | :lucide-hourglass: | :lucide-hourglass: | :lucide-hourglass: |
-| Detection 3D       | Camera, LiDAR | StreamPETR         | :lucide-hourglass: | :lucide-hourglass: | :lucide-hourglass: | :lucide-hourglass: | :lucide-hourglass: |
-| Segmentation 3D    | LiDAR         | FRNet              | :lucide-hourglass: | :lucide-hourglass: | :lucide-hourglass: | :lucide-hourglass: | :lucide-hourglass: |
-| Segmentation 3D    | LiDAR         | PointTransformerV3 | :lucide-hourglass: | :lucide-hourglass: | :lucide-hourglass: | :lucide-hourglass: | :lucide-hourglass: |
+| Detection 3D       | Camera        | StreamPETR         | :lucide-hourglass: | :lucide-hourglass: | :lucide-hourglass: | :lucide-hourglass: | :lucide-hourglass: |
+| Segmentation 3D    | LiDAR         | FRNet              | :lucide-check:     | :lucide-check:     | :lucide-check:     | :lucide-check:     | :lucide-check:     |
+| Segmentation 3D    | LiDAR         | PointTransformerV3 | :lucide-check:     | :lucide-check:     | :lucide-check:     | :lucide-check:     | :lucide-hourglass: |
 
-:lucide-check: Available | :lucide-hourglass: Coming Soon
+:lucide-check: Available | :lucide-hourglass: In Progress
 
 ## License
 

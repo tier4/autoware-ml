@@ -30,6 +30,14 @@ from autoware_ml.tests.ops.conftest import (
 class TestBEVPoolForward:
     """Tests for BEV pool forward pass."""
 
+    def test_raises_for_mismatched_feature_and_coordinate_counts(self) -> None:
+        feats = torch.ones(2, 4, dtype=torch.float32)
+        coords = torch.zeros(1, 4, dtype=torch.int32)
+        ranks = torch.zeros(1, dtype=torch.int64)
+
+        with pytest.raises(ValueError, match="Feature and coordinate count mismatch"):
+            bev_pool(feats, coords, ranks, B=1, D=1, H=1, W=1, is_training=False)
+
     def test_single_point_single_cell(
         self, bev_config: BEVGridConfig, cuda_device: torch.device
     ) -> None:

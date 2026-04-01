@@ -12,10 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Build helpers for Autoware-ML custom operations."""
+"""Build helpers for Autoware-ML custom operations.
+
+This module contains small helpers used by native extension build scripts for
+custom CUDA and C++ operators.
+"""
 
 import logging
 import os
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import torch
@@ -27,18 +32,28 @@ logger = logging.getLogger(__name__)
 def make_cuda_ext(
     name: str,
     module: str,
-    sources: list[str],
-    sources_cuda: list[str] | None = None,
-    extra_args: list[str] | None = None,
-    extra_include_path: list[str] | None = None,
+    sources: Sequence[str],
+    sources_cuda: Sequence[str] | None = None,
+    extra_args: Sequence[str] | None = None,
+    extra_include_path: Sequence[str] | None = None,
 ):
-    """Create a CUDA/CPP extension for the given module."""
-    if sources_cuda is None:
-        sources_cuda = []
-    if extra_args is None:
-        extra_args = []
-    if extra_include_path is None:
-        extra_include_path = []
+    """Create a C++ or CUDA extension for a module.
+
+    Args:
+        name: Extension module name.
+        module: Python package that owns the extension.
+        sources: C++ source files relative to ``module``.
+        sources_cuda: Optional CUDA source files relative to ``module``.
+        extra_args: Additional compiler arguments.
+        extra_include_path: Additional include directories.
+
+    Returns:
+        Configured PyTorch extension object.
+    """
+    sources = list(sources)
+    sources_cuda = list(sources_cuda or [])
+    extra_args = list(extra_args or [])
+    extra_include_path = list(extra_include_path or [])
 
     define_macros = []
     extra_compile_args = {"cxx": [] + extra_args}
@@ -70,8 +85,12 @@ def make_cuda_ext(
     )
 
 
-def get_ext_modules():
-    """Return extension modules shipped with Autoware-ML ops."""
+def get_ext_modules() -> list[CppExtension | CUDAExtension]:
+    """Return extension modules shipped with Autoware-ML ops.
+
+    Returns:
+        List of PyTorch extension module definitions.
+    """
     return [
         make_cuda_ext(
             name="bev_pool_ext",
@@ -84,6 +103,10 @@ def get_ext_modules():
     ]
 
 
-def get_cmdclass():
-    """Return setuptools cmdclass for Torch extensions."""
+def get_cmdclass() -> Mapping[str, type[BuildExtension]]:
+    """Return ``setuptools`` command classes for Torch extensions.
+
+    Returns:
+        Mapping of custom setuptools command classes.
+    """
     return {"build_ext": BuildExtension}
