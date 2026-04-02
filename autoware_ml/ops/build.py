@@ -23,6 +23,7 @@ import os
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+from setuptools import Extension
 import torch
 from torch.utils.cpp_extension import BuildExtension, CppExtension, CUDAExtension
 
@@ -36,7 +37,7 @@ def make_cuda_ext(
     sources_cuda: Sequence[str] | None = None,
     extra_args: Sequence[str] | None = None,
     extra_include_path: Sequence[str] | None = None,
-):
+) -> Extension:
     """Create a C++ or CUDA extension for a module.
 
     Args:
@@ -85,7 +86,7 @@ def make_cuda_ext(
     )
 
 
-def get_ext_modules() -> list[CppExtension | CUDAExtension]:
+def get_ext_modules() -> list[Extension]:
     """Return extension modules shipped with Autoware-ML ops.
 
     Returns:
