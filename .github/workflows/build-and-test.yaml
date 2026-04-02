@@ -81,7 +81,6 @@ jobs:
       - name: Run unit tests
         run: |
           docker run --rm \
-            --gpus all \
             ${{ env.IMAGE_TAG }} \
             pytest autoware_ml/tests/ -v
 
