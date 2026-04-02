@@ -1,0 +1,66 @@
+- name: Validate supported distribution
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.os_family == "Debian"
+      - ansible_facts.distribution == "Ubuntu"
+      - ansible_facts.distribution_major_version | int in nvidia_cuda_toolkit_supported_ubuntu_major_versions
+    fail_msg: >-
+      The nvidia_cuda_toolkit role currently supports Ubuntu 22.04 and 24.04 only.
+
+- name: Validate supported architecture
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.architecture in nvidia_cuda_toolkit_arch_map
+    fail_msg: >-
+      The nvidia_cuda_toolkit role currently supports x86_64 only.
+
+- name: Set CUDA repository parameters
+  ansible.builtin.set_fact:
+    nvidia_cuda_toolkit_repo_distro: ubuntu{{ ansible_facts.distribution_major_version }}04
+    nvidia_cuda_toolkit_repo_arch: "{{ nvidia_cuda_toolkit_arch_map[ansible_facts.architecture] }}"
+    nvidia_cuda_toolkit_keyring_deb: >-
+      cuda-keyring_{{ nvidia_cuda_toolkit_keyring_version }}-1_all.deb
+
+- name: Install CUDA toolkit prerequisites
+  become: true
+  ansible.builtin.apt:
+    name:
+      - wget
+    state: present
+    update_cache: true
+
+- name: Download NVIDIA CUDA keyring package
+  become: true
+  ansible.builtin.get_url:
+    url: >-
+      https://developer.download.nvidia.com/compute/cuda/repos/{{ nvidia_cuda_toolkit_repo_distro }}/{{ nvidia_cuda_toolkit_repo_arch }}/{{ nvidia_cuda_toolkit_keyring_deb }}
+    dest: /tmp/{{ nvidia_cuda_toolkit_keyring_deb }}
+    mode: "0644"
+
+- name: Install NVIDIA CUDA keyring package
+  become: true
+  ansible.builtin.apt:
+    deb: /tmp/{{ nvidia_cuda_toolkit_keyring_deb }}
+
+- name: Install NVIDIA CUDA Toolkit
+  become: true
+  ansible.builtin.apt:
+    name: "{{ nvidia_cuda_toolkit_package }}"
+    state: present
+    update_cache: true
+
+- name: Configure CUDA toolkit environment variables
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/profile.d/cuda-toolkit.sh
+    mode: "0644"
+    content: |
+      export CUDA_HOME=/usr/local/cuda
+      export PATH=/usr/local/cuda/bin${PATH:+:${PATH}}
+
+- name: Display CUDA toolkit completion message
+  ansible.builtin.debug:
+    msg: >-
+      NVIDIA CUDA Toolkit installation completed. Reboot is recommended by the
+      NVIDIA package-manager installation guide. After reboot, open a new shell
+      session before using nvcc.

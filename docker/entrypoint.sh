@@ -7,10 +7,17 @@ HOST_GID=${HOST_GID:-1000}
 COMPLETION_DIR_NAME=".bash_completions"
 COMPLETION_FILE_NAME="autoware-ml.sh"
 
-# If not running as root, just exec the command
-if [ "$(id -u)" != "0" ]; then
+run_in_pixi_env() {
     cd /workspace
+    # Keep the existing prompt customization instead of letting pixi rewrite PS1.
+    # Docker shells use the contributor environment by default.
+    eval "$(pixi shell-hook --manifest-path /workspace --environment dev --change-ps1 false)"
     exec "$@"
+}
+
+# If not running as root, activate the contributor pixi environment and execute the command.
+if [ "$(id -u)" != "0" ]; then
+    run_in_pixi_env "$@"
 fi
 
 # Create group and user if they don't exist
@@ -40,7 +47,7 @@ ensure_completion_installed() {
 
     if [ ! -f "${completion_path}" ]; then
         install -d -o "${HOST_UID}" -g "${HOST_GID}" "${completion_dir}"
-        gosu "${username}" bash -lc "autoware-ml --show-completion bash > '${completion_path}'"
+        gosu "${username}" bash -lc "cd /workspace && pixi run --manifest-path /workspace --environment dev autoware-ml --show-completion bash > '${completion_path}'"
     fi
 
     if ! grep -Fqx "source '${completion_path}'" "${bashrc_path}"; then
@@ -59,6 +66,9 @@ export USER="${USERNAME}"
 
 ensure_completion_installed "${USERNAME}" "${COMPLETION_DIR}" "${COMPLETION_PATH}" "${BASHRC_PATH}"
 
-# Switch to user and exec command
-cd /workspace
-exec gosu "${USERNAME}" "$@"
+# Switch to user and execute commands inside the contributor pixi environment.
+# $(...) and $@ must be expanded by the inner bash, not the outer shell — single quotes are intentional.
+# shellcheck disable=SC2016
+exec gosu "${USERNAME}" bash -lc \
+    'cd /workspace && eval "$(pixi shell-hook --manifest-path /workspace --environment dev --change-ps1 false)" && exec "$@"' \
+    bash "$@"

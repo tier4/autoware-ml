@@ -1,0 +1,9 @@
+nvidia_cuda_toolkit_keyring_version: 1.1
+# NVIDIA recommends the generic `cuda-toolkit` package. We intentionally pin the
+# toolkit series to match the repository's current CUDA 12.8 stack.
+nvidia_cuda_toolkit_package: cuda-toolkit-12-8
+nvidia_cuda_toolkit_supported_ubuntu_major_versions:
+  - 22
+  - 24
+nvidia_cuda_toolkit_arch_map:
+  x86_64: x86_64
