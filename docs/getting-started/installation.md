@@ -10,7 +10,7 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
 
 ## Prerequisites
 
-1. **Autoware-ML**
+- **Autoware-ML**
 
   ```bash
   cd
@@ -18,25 +18,16 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
   cd autoware-ml
   ```
 
-1. **NVIDIA GPU** with CUDA support (Compute Capability 8.0+)
-2. **NVIDIA Driver** version 570 or higher
-3. **Docker Engine**
-4. **NVIDIA Container Toolkit**
+- **NVIDIA GPU** with CUDA support (Compute Capability 8.0+)
 
-### Checking Your Setup
+- **NVIDIA Driver** version 570 or higher
 
-```bash
-# Check NVIDIA driver
-nvidia-smi
+    === "With Docker"
+        - **Docker Engine** version 20.10 or higher
+        - **NVIDIA Container Toolkit** for GPU support in Docker
 
-# Check Docker
-docker --version
-
-# Test GPU in Docker
-docker run --rm --gpus all nvidia/cuda:12.8.1-base-ubuntu22.04 nvidia-smi
-```
-
-If all three commands succeed, skip to [Project Setup](#project-setup).
+    === "Without Docker"
+        - **NVIDIA CUDA Toolkit** for local development and building CUDA-backed native dependencies and ops
 
 ---
 
@@ -44,7 +35,8 @@ If all three commands succeed, skip to [Project Setup](#project-setup).
 
 === "Automated Setup with Ansible"
 
-    We provide Ansible playbooks to install all prerequisites automatically:
+    We provide separate Ansible playbooks for Docker-based and local
+    development:
 
     ```bash
 
@@ -62,18 +54,24 @@ If all three commands succeed, skip to [Project Setup](#project-setup).
     cd ~/autoware-ml
     ansible-galaxy collection install -f -r ansible-galaxy-requirements.yaml
 
-    # Run the setup playbook (it will ask for sudo password)
-    ansible-playbook ansible/playbooks/setup_host.yaml -K
+    # Docker-based development host
+    ansible-playbook ansible/playbooks/setup_docker_host.yaml -K
+
+    # Local pixi development host
+    ansible-playbook ansible/playbooks/setup_local_host.yaml -K
     ```
 
-    This installs Docker, NVIDIA drivers, NVIDIA Container Toolkit and VS Code with extensions in one command.
-    System reboot is required for NVIDIA driver changes and Docker post-installation steps to take effect.
+    The Docker playbook installs Docker Engine, NVIDIA drivers, NVIDIA Container Toolkit, and
+    optionally VS Code with extensions. The local playbook installs NVIDIA drivers, the NVIDIA CUDA
+    Toolkit, and optionally VS Code with extensions. System reboot is required for NVIDIA driver
+    changes and Docker post-installation steps to take effect.
 
 === "Manual Setup"
 
     If you prefer to install components individually, see the tabs below.
 
     === "NVIDIA Drivers"
+        Check if you have a compatible NVIDIA driver installed:
         ```bash
         nvidia-smi
         ```
@@ -174,6 +172,38 @@ If all three commands succeed, skip to [Project Setup](#project-setup).
 
         You should see your GPU information printed.
 
+    === "NVIDIA CUDA Toolkit"
+        This gives you `nvcc` and CUDA libraries for local development and building CUDA-backed packages from source:
+
+        ```bash
+        UBUNTU_MAJOR_VERSION="$(. /etc/os-release && echo "${VERSION_ID%%.*}")"
+
+        if [ "$(uname -m)" != "x86_64" ]; then
+          echo "Unsupported architecture: $(uname -m)" >&2
+          exit 1
+        fi
+
+        sudo apt-get update
+        sudo apt-get install -y wget
+        wget "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_MAJOR_VERSION}04/x86_64/cuda-keyring_1.1-1_all.deb"
+        sudo dpkg -i cuda-keyring_1.1-1_all.deb
+        sudo apt-get update
+
+        # NVIDIA's guide uses `cuda-toolkit`; Autoware-ML pins the 12.8 series
+        # to match the repository's current CUDA stack.
+        sudo apt-get install -y cuda-toolkit-12-8
+
+        cat <<'EOF' | sudo tee /etc/profile.d/cuda-toolkit.sh >/dev/null
+        export CUDA_HOME=/usr/local/cuda
+        export PATH=/usr/local/cuda/bin${PATH:+:${PATH}}
+        EOF
+
+        sudo reboot
+
+        # After reboot, open a new shell
+        nvcc --version
+        ```
+
 ---
 
 ## Project Setup
@@ -199,33 +229,65 @@ If all three commands succeed, skip to [Project Setup](#project-setup).
     ./docker/container.sh --run --data-path /path/to/your/datasets
     ```
 
+    The container image resolves and installs the locked contributor
+    `pixi` environment (`dev`) while keeping the CUDA base image as the system
+    layer.
+
 === "Without Docker"
 
     !!! warning "Not Recommended for Alpha"
         Local installation requires careful dependency management. We recommend Docker for the smoothest experience during Early Alpha.
 
-    If you still want to install locally:
+    Local installation uses the same locked `pixi` environments as Docker.
+    Before running `pixi`, make sure the machine-level GPU prerequisites are
+    already installed:
 
-    === "With uv"
+    - NVIDIA driver compatible with CUDA 12.8
+    - CUDA toolkit with `nvcc` available on `PATH`
+
+    The local `dev` environment can still build CUDA-backed native
+    dependencies and Autoware-ML ops, so the CUDA toolkit is a required local
+    prerequisite even though Docker keeps that system layer inside the image.
+
+    Then install `pixi` and choose the environment that matches your workflow:
+
+    ```bash
+    PIXI_VERSION="0.66.0"
+
+    mkdir -p "$HOME/.pixi/bin"
+    curl -fsSL -o pixi-x86_64-unknown-linux-musl.tar.gz "https://github.com/prefix-dev/pixi/releases/download/v${PIXI_VERSION}/pixi-x86_64-unknown-linux-musl.tar.gz"
+    curl -fsSL -o pixi-x86_64-unknown-linux-musl.tar.gz.sha256 "https://github.com/prefix-dev/pixi/releases/download/v${PIXI_VERSION}/pixi-x86_64-unknown-linux-musl.tar.gz.sha256"
+    sha256sum -c pixi-x86_64-unknown-linux-musl.tar.gz.sha256
+    tar -xzf pixi-x86_64-unknown-linux-musl.tar.gz -C "$HOME/.pixi/bin"
+    rm -f pixi-x86_64-unknown-linux-musl.tar.gz pixi-x86_64-unknown-linux-musl.tar.gz.sha256
+    export PATH="$HOME/.pixi/bin:$PATH"
+
+    cd ~/autoware-ml
+    ```
+
+    Then choose **one** of the two environments below:
+
+    === "Runtime / use only"
+
         ```bash
-        cd ~/autoware-ml
-
-        # Install (creates virtual environment automatically)
-        uv sync --extra dev
+        pixi install --locked --environment default
+        pixi run --environment default install-project
+        pixi shell --environment default
         ```
 
-    === "With pip"
+    === "Contributor (recommended)"
+
+        Includes the full runtime stack plus tmux, compilers, docs tooling, and
+        build utilities.
 
         ```bash
-        cd ~/autoware-ml
-
-        # Create a virtual environment
-        python -m venv .venv
-        source .venv/bin/activate
-
-        # Install
-        pip install --no-cache-dir .[dev] --extra-index-url https://download.pytorch.org/whl/cu128 --no-build-isolation
+        pixi install --locked --environment dev
+        pixi run --environment dev install-project
+        pixi shell --environment dev
         ```
+
+    The separate `docs` environment is reserved for documentation-only
+    workflows and CI — you do not need to install it manually.
 
 ---
 
