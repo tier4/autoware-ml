@@ -38,6 +38,7 @@ USER_HOME=$(getent passwd "${HOST_UID}" | cut -d: -f6)
 COMPLETION_DIR="${USER_HOME}/${COMPLETION_DIR_NAME}"
 COMPLETION_PATH="${COMPLETION_DIR}/${COMPLETION_FILE_NAME}"
 BASHRC_PATH="${USER_HOME}/.bashrc"
+PIXI_ENV_DIR="${PIXI_HOME:-/opt/pixi}/envs"
 
 ensure_completion_installed() {
     local username="$1"
@@ -55,6 +56,10 @@ ensure_completion_installed() {
     fi
 }
 
+ensure_pixi_env_dir_writable() {
+    install -d -o "${HOST_UID}" -g "${HOST_GID}" "${PIXI_ENV_DIR}"
+}
+
 # Create XDG runtime directory (passed via XDG_RUNTIME_DIR env var)
 mkdir -p /tmp/xdg
 chown "${HOST_UID}:${HOST_GID}" /tmp/xdg
@@ -64,6 +69,7 @@ chmod 700 /tmp/xdg
 export HOME="${USER_HOME}"
 export USER="${USERNAME}"
 
+ensure_pixi_env_dir_writable
 ensure_completion_installed "${USERNAME}" "${COMPLETION_DIR}" "${COMPLETION_PATH}" "${BASHRC_PATH}"
 
 # Switch to user and execute commands inside the contributor pixi environment.
