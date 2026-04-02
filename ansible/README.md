@@ -27,10 +27,15 @@ cd ~/autoware-ml # The root directory of the cloned repository
 ansible-galaxy collection install -f -r ansible-galaxy-requirements.yaml
 ```
 
-Run the setup playbook (may require sudo):
+Run the setup playbook for your workflow (may require sudo):
 
 ```bash
-ansible-playbook ansible/playbooks/setup_host.yaml -K
+ansible-playbook ansible/playbooks/setup_docker_host.yaml -K
+
+# or, for local pixi development without Docker
+ansible-playbook ansible/playbooks/setup_local_host.yaml -K
 ```
 
-System reboot is required for NVIDIA driver changes and Docker post-installation steps to take effect.
+System reboot is required for NVIDIA driver changes and Docker post-installation
+steps to take effect. For local development, start a new shell session after
+installing the NVIDIA CUDA Toolkit so `nvcc` and `CUDA_HOME` are available.

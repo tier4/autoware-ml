@@ -16,12 +16,12 @@ RUN groupadd --gid ${USER_GID} ${USERNAME} \
     && mkdir -p /tmp/xdg \
     && chown ${USER_UID}:${USER_GID} /tmp/xdg \
     && chmod 700 /tmp/xdg \
-    && gosu ${USERNAME} env HOME=/home/${USERNAME} _TYPER_COMPLETE_TEST_DISABLE_SHELL_DETECTION=1 ${USERNAME} --install-completion bash
+    && gosu ${USERNAME} env HOME=/home/${USERNAME} _TYPER_COMPLETE_TEST_DISABLE_SHELL_DETECTION=1 \
+      pixi run --manifest-path /workspace --environment dev autoware-ml --install-completion bash
 
 # Install development tools via apt-get
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   bash-completion \
-  bear \
   curl \
   gdb \
   gdbserver \

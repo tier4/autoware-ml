@@ -1,11 +1,13 @@
-- name: Setup Autoware Development Environment
+- name: Setup Autoware-ML Docker Development Environment
   hosts: localhost
   become: false
 
   tasks:
     - name: Introduction
       ansible.builtin.debug:
-        msg: This playbook will set up the Autoware development environment. You will be prompted before each step.
+        msg: >-
+          This playbook sets up the Docker-based Autoware-ML development
+          environment. You will be prompted before each optional step.
 
     - name: Ask to install Docker Engine
       ansible.builtin.pause:
@@ -49,4 +51,7 @@
 
     - name: Setup completed
       ansible.builtin.debug:
-        msg: Autoware-ML development environment setup completed. You may need to reboot your system for NVIDIA driver changes to take effect.
+        msg: >-
+          Docker development environment setup completed. You may need to
+          reboot your system for NVIDIA driver changes and Docker post-install
+          steps to take effect.

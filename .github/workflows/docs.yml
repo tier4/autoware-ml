@@ -24,11 +24,21 @@ jobs:
     steps:
       - uses: actions/configure-pages@v6
       - uses: actions/checkout@v6
-      - uses: actions/setup-python@v5
-        with:
-          python-version: 3.x
-      - run: pip install zensical
-      - run: zensical build --clean
+      - name: Install pixi
+        env:
+          PIXI_VERSION: 0.66.0
+        run: |
+          mkdir -p "$HOME/.pixi/bin"
+          curl -fsSL -o pixi-x86_64-unknown-linux-musl.tar.gz "https://github.com/prefix-dev/pixi/releases/download/v${PIXI_VERSION}/pixi-x86_64-unknown-linux-musl.tar.gz"
+          curl -fsSL -o pixi-x86_64-unknown-linux-musl.tar.gz.sha256 "https://github.com/prefix-dev/pixi/releases/download/v${PIXI_VERSION}/pixi-x86_64-unknown-linux-musl.tar.gz.sha256"
+          sha256sum -c pixi-x86_64-unknown-linux-musl.tar.gz.sha256
+          tar -xzf pixi-x86_64-unknown-linux-musl.tar.gz -C "$HOME/.pixi/bin"
+          rm -f pixi-x86_64-unknown-linux-musl.tar.gz pixi-x86_64-unknown-linux-musl.tar.gz.sha256
+          echo "$HOME/.pixi/bin" >> "$GITHUB_PATH"
+      - name: Install locked docs-only environment
+        run: pixi install --locked --environment docs
+      - name: Build docs
+        run: pixi run --environment docs docs
       - uses: actions/upload-pages-artifact@v4
         with:
           path: site
