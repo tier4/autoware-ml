@@ -176,7 +176,7 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
         This gives you `nvcc` and CUDA libraries for local development and building CUDA-backed packages from source:
 
         ```bash
-        UBUNTU_VERSION="$(. /etc/os-release && echo "${VERSION_ID//./}")"
+        UBUNTU_MAJOR_VERSION="$(. /etc/os-release && echo "${VERSION_ID%%.*}")"
 
         if [ "$(uname -m)" != "x86_64" ]; then
           echo "Unsupported architecture: $(uname -m)" >&2
@@ -185,7 +185,7 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
 
         sudo apt-get update
         sudo apt-get install -y wget
-        wget "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_VERSION}04/x86_64/cuda-keyring_1.1-1_all.deb"
+        wget "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_MAJOR_VERSION}04/x86_64/cuda-keyring_1.1-1_all.deb"
         sudo dpkg -i cuda-keyring_1.1-1_all.deb
         sudo apt-get update
 
@@ -252,7 +252,14 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
     Then install `pixi` and choose the environment that matches your workflow:
 
     ```bash
-    curl -fsSL https://pixi.sh/install.sh | bash
+    PIXI_VERSION="0.66.0"
+
+    mkdir -p "$HOME/.pixi/bin"
+    curl -fsSL -o pixi-x86_64-unknown-linux-musl.tar.gz "https://github.com/prefix-dev/pixi/releases/download/v${PIXI_VERSION}/pixi-x86_64-unknown-linux-musl.tar.gz"
+    curl -fsSL -o pixi-x86_64-unknown-linux-musl.tar.gz.sha256 "https://github.com/prefix-dev/pixi/releases/download/v${PIXI_VERSION}/pixi-x86_64-unknown-linux-musl.tar.gz.sha256"
+    sha256sum -c pixi-x86_64-unknown-linux-musl.tar.gz.sha256
+    tar -xzf pixi-x86_64-unknown-linux-musl.tar.gz -C "$HOME/.pixi/bin"
+    rm -f pixi-x86_64-unknown-linux-musl.tar.gz pixi-x86_64-unknown-linux-musl.tar.gz.sha256
     export PATH="$HOME/.pixi/bin:$PATH"
 
     cd ~/autoware-ml

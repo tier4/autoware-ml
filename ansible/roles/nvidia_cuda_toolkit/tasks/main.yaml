@@ -36,6 +36,7 @@
       https://developer.download.nvidia.com/compute/cuda/repos/{{ nvidia_cuda_toolkit_repo_distro }}/{{ nvidia_cuda_toolkit_repo_arch }}/{{ nvidia_cuda_toolkit_keyring_deb }}
     dest: /tmp/{{ nvidia_cuda_toolkit_keyring_deb }}
     mode: "0644"
+    checksum: "{{ nvidia_cuda_toolkit_keyring_checksum }}"
 
 - name: Install NVIDIA CUDA keyring package
   become: true
