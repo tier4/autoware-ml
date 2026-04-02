@@ -2,6 +2,8 @@ FROM pytorch/pytorch:2.9.1-cuda12.8-cudnn9-devel
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
+ARG PIXI_VERSION=0.66.0
+
 # Core environment variables
 ENV AUTOWARE_ML_DATA_PATH="/workspace/data" \
   CUDA_HOME="/usr/local/cuda" \
@@ -38,10 +40,15 @@ RUN apt-get update && \
   && gosu nobody true
 
 # Create workspace and cache directories (ownership will be set by entrypoint)
-RUN mkdir -p /workspace /ccache /etc/pixi "${PIXI_HOME}/envs"
+RUN mkdir -p /workspace /ccache /etc/pixi "${PIXI_HOME}/bin" "${PIXI_HOME}/envs"
 
-# Install pixi and configure project environments outside the bind-mounted workspace
-RUN curl -fsSL https://pixi.sh/install.sh | PIXI_HOME="${PIXI_HOME}" PIXI_NO_PATH_UPDATE=1 bash \
+# Install a pinned pixi release and configure project environments outside the bind-mounted workspace
+# hadolint ignore=DL3003
+RUN curl -fsSL -o /tmp/pixi-x86_64-unknown-linux-musl.tar.gz "https://github.com/prefix-dev/pixi/releases/download/v${PIXI_VERSION}/pixi-x86_64-unknown-linux-musl.tar.gz" \
+  && curl -fsSL -o /tmp/pixi-x86_64-unknown-linux-musl.tar.gz.sha256 "https://github.com/prefix-dev/pixi/releases/download/v${PIXI_VERSION}/pixi-x86_64-unknown-linux-musl.tar.gz.sha256" \
+  && (cd /tmp && sha256sum -c pixi-x86_64-unknown-linux-musl.tar.gz.sha256) \
+  && tar -xzf /tmp/pixi-x86_64-unknown-linux-musl.tar.gz -C "${PIXI_HOME}/bin" \
+  && rm -f /tmp/pixi-x86_64-unknown-linux-musl.tar.gz /tmp/pixi-x86_64-unknown-linux-musl.tar.gz.sha256 \
   && printf 'detached-environments = "%s/envs"\n[shell]\nchange-ps1 = false\n' "${PIXI_HOME}" > /etc/pixi/config.toml
 
 # Resolve and install the locked contributor pixi environment first for better layer reuse. Docker
