@@ -37,5 +37,7 @@ ansible-playbook ansible/playbooks/setup_local_host.yaml -K
 ```
 
 System reboot is required for NVIDIA driver changes and Docker post-installation
-steps to take effect. For local development, start a new shell session after
-installing the NVIDIA CUDA Toolkit so `nvcc` and `CUDA_HOME` are available.
+steps to take effect. The local playbook also installs `bash-completion`.
+For local development, start a new shell session after installing the NVIDIA
+CUDA Toolkit or Autoware-ML so `nvcc`, `CUDA_HOME`, and CLI completion are
+available.

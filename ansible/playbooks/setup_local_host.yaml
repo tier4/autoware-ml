@@ -9,6 +9,13 @@
           This playbook sets up the local Autoware-ML development environment.
           You will be prompted before each optional step.
 
+    - name: Install bash-completion
+      become: true
+      ansible.builtin.apt:
+        name: bash-completion
+        state: present
+        update_cache: true
+
     - name: Ask to install NVIDIA drivers
       ansible.builtin.pause:
         prompt: Do you want to check and install NVIDIA drivers? (y/n)
@@ -44,4 +51,5 @@
         msg: >-
           Local development environment setup completed. You may need to reboot
           your system for NVIDIA driver changes to take effect and start a new
-          shell session after installing the CUDA toolkit.
+          shell session after installing the CUDA toolkit or Autoware-ML bash
+          completion.

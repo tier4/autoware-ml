@@ -7,6 +7,8 @@ icon: lucide/terminal
 Autoware-ML provides a unified command-line interface for all major workflows.
 Run the commands below either inside the Docker container or from a local
 `pixi shell --environment default` / `pixi shell --environment dev`.
+Bash completion is installed automatically by the Docker image build and by
+`pixi run --environment <default|dev> setup-project` for local installs.
 
 ## Commands
 

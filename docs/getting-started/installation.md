@@ -229,9 +229,10 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
     ./docker/container.sh --run --data-path /path/to/your/datasets
     ```
 
-    The container image resolves and installs the locked contributor
-    `pixi` environment (`dev`) while keeping the CUDA base image as the system
-    layer.
+    The container image builds the full locked contributor `pixi`
+    environment (`dev`) on top of an Ubuntu 24.04 CUDA/cuDNN development
+    base. PyTorch and the rest of the ML stack come from the lockfile rather
+    than from a preloaded PyTorch image.
 
 === "Without Docker"
 
@@ -249,18 +250,17 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
     dependencies and Autoware-ML ops, so the CUDA toolkit is a required local
     prerequisite even though Docker keeps that system layer inside the image.
 
+    Install Bash completion support once on the host:
+
+    ```bash
+    sudo apt-get update
+    sudo apt-get install -y bash-completion
+    ```
+
     Then install `pixi` and choose the environment that matches your workflow:
 
     ```bash
-    PIXI_VERSION="0.66.0"
-
-    mkdir -p "$HOME/.pixi/bin"
-    curl -fsSL -o pixi-x86_64-unknown-linux-musl.tar.gz "https://github.com/prefix-dev/pixi/releases/download/v${PIXI_VERSION}/pixi-x86_64-unknown-linux-musl.tar.gz"
-    curl -fsSL -o pixi-x86_64-unknown-linux-musl.tar.gz.sha256 "https://github.com/prefix-dev/pixi/releases/download/v${PIXI_VERSION}/pixi-x86_64-unknown-linux-musl.tar.gz.sha256"
-    sha256sum -c pixi-x86_64-unknown-linux-musl.tar.gz.sha256
-    tar -xzf pixi-x86_64-unknown-linux-musl.tar.gz -C "$HOME/.pixi/bin"
-    rm -f pixi-x86_64-unknown-linux-musl.tar.gz pixi-x86_64-unknown-linux-musl.tar.gz.sha256
-    export PATH="$HOME/.pixi/bin:$PATH"
+    curl -fsSL https://pixi.sh/install.sh | sh
 
     cd ~/autoware-ml
     ```
@@ -271,7 +271,7 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
 
         ```bash
         pixi install --locked --environment default
-        pixi run --environment default install-project
+        pixi run --environment default setup-project
         pixi shell --environment default
         ```
 
@@ -282,12 +282,15 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
 
         ```bash
         pixi install --locked --environment dev
-        pixi run --environment dev install-project
+        pixi run --environment dev setup-project
         pixi shell --environment dev
         ```
 
     The separate `docs` environment is reserved for documentation-only
     workflows and CI — you do not need to install it manually.
+
+    The `setup-project` task installs Bash completion automatically. Open a
+    new shell after it finishes so the completion file is loaded.
 
 ---
 
