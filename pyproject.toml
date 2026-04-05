@@ -7,12 +7,15 @@ name = "autoware-ml"
 version = "0.0.0"
 description = "Autoware-ML - Machine learning framework for Autoware."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.12"
 license = { file = "LICENSE" }
 authors = [{ name = "Amadeusz Szymko", email = "amadeusz.szymko.2@tier4.jp"}]
 keywords = ["autoware", "machine-learning", "autonomous-vehicle", "self-driving", "sensors"]
 dependencies = [
     "cuda-python~=12.8.0",
+    # No official cp311 wheel exists for flash-attn 2.8.3+cu12+torch2.9 at Dao-AILab/flash-attention.
+    # TODO: switch to https://github.com/Dao-AILab/flash-attention/releases once a matching official wheel is available.
+    "flash-attn @ https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.9.0/flash_attn-2.8.3+cu128torch2.9-cp311-cp311-linux_x86_64.whl#sha256=d4c842693349ef3e8b3b1396056003ecb9d21e94493dd1ea9ad6a2b3c6ce5c73",
     "hydra-core>=1.3.0",
     # TODO: Use official release after https://github.com/facebookresearch/hydra/pull/3046 is merged
     "hydra-optuna-sweeper @ git+https://github.com/dahlem/hydra.git@feature/upgrade-optuna-4.2.1#subdirectory=plugins/hydra_optuna_sweeper",
@@ -31,6 +34,7 @@ dependencies = [
     "pytest>=9.0",
     "rerun-sdk==0.23.1",
     "scipy>=1.16.0",
+    "spconv-cu120==2.3.6",
     "t4-devkit @ git+https://github.com/tier4/t4-devkit.git@v0.6.0",
     "tensorrt-cu12~=10.16.0",
     "torch==2.9.1+cu128",
@@ -51,25 +55,71 @@ Homepage = "https://tier4.github.io/autoware-ml"
 Source = "https://github.com/tier4/autoware-ml"
 
 [project.scripts]
-autoware-ml = "autoware_ml.cli:app"
+autoware-ml = "autoware_ml.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["autoware_ml*"]
 
-[tool.uv]
-package = true
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+requires-pixi = ">=0.48"
 
-[[tool.uv.index]]
-name = "pytorch"
-url = "https://download.pytorch.org/whl/cu128"
-explicit = true
+[tool.pixi.system-requirements]
+cuda = "12.8"
 
-[tool.uv.sources]
-torch = { index = "pytorch" }
-torchvision = { index = "pytorch" }
+[tool.pixi.pypi-options]
+extra-index-urls = ["https://download.pytorch.org/whl/cu128", "https://pypi.nvidia.com"]
+# Required because some packages are split across the PyTorch and NVIDIA indexes.
+# For example, `cuda-python` appears on the PyTorch index without the pinned 12.8 build,
+# so `first-index` would stop before considering the NVIDIA index.
+index-strategy = "unsafe-best-match"
 
-[tool.uv.extra-build-dependencies]
-hydra-optuna-sweeper = ["read_version"]
-tensorrt-cu12-libs = ["wheel_stub"]
-t4-devkit = ["hatchling"]
+[tool.pixi.dependencies]
+git = "*"
+# Pinned via conda for optimised BLAS/LAPACK linkage; pin matches [project.dependencies]
+numpy = ">=1.26.0,<1.27"
+pip = "*"
+python = ">=3.11,<3.12"
+# Pinned via conda for native re_sdk shared libraries; pin matches [project.dependencies]
+rerun-sdk = "==0.23.1"
+setuptools = "*"
+wheel = "*"
+
+[tool.pixi.tasks]
+install-project = "python -m pip install --no-cache-dir --no-build-isolation --no-deps -e ."
+test = "pytest autoware_ml/tests/ -v"
+
+# Full contributor environment on top of the default runtime/use stack.
+[tool.pixi.feature.dev.dependencies]
+bear = "*"
+compilers = "*"
+ninja = "*"
+pkg-config = "*"
+tmux = "*"
+
+[tool.pixi.feature.dev.pypi-dependencies]
+pre-commit = "*"
+zensical = "*"
+
+[tool.pixi.feature.dev.tasks]
+docs = "zensical build --clean"
+
+# Lightweight environment used by CI to build documentation only.
+[tool.pixi.feature.docs.dependencies]
+python = ">=3.11,<3.12"
+
+[tool.pixi.feature.docs.pypi-dependencies]
+zensical = "*"
+
+[tool.pixi.feature.docs.tasks]
+docs = "zensical build --clean"
+
+[tool.pixi.environments]
+# Default env is the non-dev "use" environment.
+default = { solve-group = "default" }
+# Dev env extends the default stack with contributor and docs tooling.
+dev = { features = ["dev"], solve-group = "default" }
+# Docs env is intentionally isolated from the default CUDA/ML stack.
+docs = { features = ["docs"], solve-group = "docs", no-default-feature = true }

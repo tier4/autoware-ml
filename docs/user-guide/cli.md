@@ -5,6 +5,8 @@ icon: lucide/terminal
 # CLI Reference
 
 Autoware-ML provides a unified command-line interface for all major workflows.
+Run the commands below either inside the Docker container or from a local
+`pixi shell --environment default` / `pixi shell --environment dev`.
 
 ## Commands
 

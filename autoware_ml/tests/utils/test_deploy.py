@@ -21,7 +21,15 @@ from pathlib import Path
 from omegaconf import OmegaConf
 import torch
 
-from autoware_ml.utils.deploy import export_to_onnx, get_export_parameter_names
+from autoware_ml.utils.deploy import (
+    ExportSpec,
+    build_dynamic_shapes,
+    build_dynamic_axes,
+    export_to_onnx,
+    get_export_parameter_names,
+    normalize_dynamic_shapes_for_model,
+    supports_export_stage,
+)
 
 
 class _DummyModel(torch.nn.Module):
@@ -65,3 +73,81 @@ def test_export_to_onnx_prefers_export_spec_output_names(tmp_path: Path) -> None
     )
 
     assert output_path.exists()
+
+
+def test_supports_export_stage_uses_export_spec_capabilities() -> None:
+    spec = ExportSpec(
+        module=_DummyModel(),
+        args=(torch.ones(1, 1), torch.ones(1)),
+        input_param_names=["voxels", "num_points"],
+        supported_stages=frozenset({"onnx"}),
+    )
+
+    assert supports_export_stage(spec, "onnx") is True
+    assert supports_export_stage(spec, "tensorrt") is False
+
+
+def test_build_dynamic_axes_supports_legacy_export_config() -> None:
+    deploy_cfg = OmegaConf.create(
+        {
+            "dynamic_axes": {
+                "feat": {0: "voxels_num"},
+                "pred_probs": {0: "voxels_num"},
+            }
+        }
+    )
+
+    assert build_dynamic_axes(deploy_cfg) == {
+        "feat": {0: "voxels_num"},
+        "pred_probs": {0: "voxels_num"},
+    }
+
+
+def test_build_dynamic_axes_falls_back_to_dynamic_shapes() -> None:
+    deploy_cfg = OmegaConf.create(
+        {
+            "dynamic_shapes": {
+                "points": {0: {"name": "num_points", "min": 2}},
+                "inverse_map": {0: {"name": "num_points", "min": 2}},
+            }
+        }
+    )
+
+    assert build_dynamic_axes(deploy_cfg) == {
+        "points": {0: "num_points"},
+        "inverse_map": {0: "num_points"},
+    }
+
+
+def test_build_dynamic_shapes_matches_positional_export_inputs() -> None:
+    deploy_cfg = OmegaConf.create(
+        {
+            "dynamic_shapes": {
+                "points": {0: {"name": "num_points", "min": 2}},
+                "coors": {0: {"name": "num_points", "min": 2}},
+                "inverse_map": {0: {"name": "num_points", "min": 2}},
+            }
+        }
+    )
+
+    dynamic_shapes = build_dynamic_shapes(
+        deploy_cfg,
+        ["points", "coors", "voxel_coors", "inverse_map"],
+    )
+
+    assert dynamic_shapes is not None
+    assert len(dynamic_shapes) == 4
+    assert dynamic_shapes[0] is not None
+    assert dynamic_shapes[1] is not None
+    assert dynamic_shapes[2] is None
+    assert dynamic_shapes[3] is not None
+
+
+def test_normalize_dynamic_shapes_wraps_varargs_forward() -> None:
+    class _VarArgsModel(torch.nn.Module):
+        def forward(self, *args: torch.Tensor) -> torch.Tensor:
+            return args[0]
+
+    dynamic_shapes = ({0: "dim0"}, {0: "dim1"})
+
+    assert normalize_dynamic_shapes_for_model(_VarArgsModel(), dynamic_shapes) == (dynamic_shapes,)

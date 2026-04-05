@@ -46,6 +46,7 @@ MANIFEST
 
 # Extra tooling
 .ansible/
+.pixi/
 .*cache/
 .cspell-shared.json
 .debug.env

@@ -26,6 +26,26 @@ import torch
 from . import bev_pool_ext
 
 
+def _compute_intervals(ranks: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute interval starts and lengths for sorted rank values.
+
+    Args:
+        ranks: Sorted rank tensor used by BEV pooling.
+
+    Returns:
+        Tuple of interval starts and interval lengths.
+    """
+    if ranks.numel() == 0:
+        raise ValueError("BEV pooling requires at least one projected feature.")
+    kept = torch.ones(ranks.shape[0], device=ranks.device, dtype=torch.bool)
+    kept[1:] = ranks[1:] != ranks[:-1]
+    interval_starts = torch.where(kept)[0].int()
+    interval_lengths = torch.zeros_like(interval_starts)
+    interval_lengths[:-1] = interval_starts[1:] - interval_starts[:-1]
+    interval_lengths[-1] = ranks.shape[0] - interval_starts[-1]
+    return interval_starts, interval_lengths
+
+
 class QuickCumsumTrainingCuda(torch.autograd.Function):
     """CUDA-accelerated cumulative sum for BEV pooling during training.
 
@@ -59,12 +79,7 @@ class QuickCumsumTrainingCuda(torch.autograd.Function):
         Returns:
             Pooled BEV features of shape (B, D, H, W, C).
         """
-        kept = torch.ones(x.shape[0], device=x.device, dtype=torch.bool)
-        kept[1:] = ranks[1:] != ranks[:-1]
-        interval_starts = torch.where(kept)[0].int()
-        interval_lengths = torch.zeros_like(interval_starts)
-        interval_lengths[:-1] = interval_starts[1:] - interval_starts[:-1]
-        interval_lengths[-1] = x.shape[0] - interval_starts[-1]
+        interval_starts, interval_lengths = _compute_intervals(ranks)
         geom_feats = geom_feats.int()
 
         out = bev_pool_ext.bev_pool_forward(
@@ -247,22 +262,18 @@ def bev_pool(
         Pooled BEV features of shape (B, C, D, H, W).
 
     Raises:
-        AssertionError: If feats and coords have mismatched first dimensions.
+        ValueError: If feats and coords have mismatched first dimensions.
     """
-    assert feats.shape[0] == coords.shape[0], (
-        f"Feature and coordinate count mismatch: {feats.shape[0]} vs {coords.shape[0]}"
-    )
+    if feats.shape[0] != coords.shape[0]:
+        raise ValueError(
+            f"Feature and coordinate count mismatch: {feats.shape[0]} vs {coords.shape[0]}"
+        )
 
     if is_training:
         x = QuickCumsumTrainingCuda.apply(feats, coords, ranks, B, D, H, W)
     else:
         # Compute intervals outside the autograd function for ONNX tracing
-        kept = torch.ones(feats.shape[0], device=feats.device, dtype=torch.bool)
-        kept[1:] = ranks[1:] != ranks[:-1]
-        interval_starts = torch.where(kept)[0].int()
-        interval_lengths = torch.zeros_like(interval_starts)
-        interval_lengths[:-1] = interval_starts[1:] - interval_starts[:-1]
-        interval_lengths[-1] = feats.shape[0] - interval_starts[-1]
+        interval_starts, interval_lengths = _compute_intervals(ranks)
 
         if coords.dtype != torch.int32:
             coords = coords.int()
@@ -273,9 +284,9 @@ def bev_pool(
             interval_lengths,
             interval_starts,
             int(B),
-            D.item(),
-            H.item(),
-            W.item(),
+            int(D),
+            int(H),
+            int(W),
         )
 
     # Permute from (B, D, H, W, C) to (B, C, D, H, W)

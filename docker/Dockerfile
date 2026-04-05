@@ -2,15 +2,19 @@ FROM pytorch/pytorch:2.9.1-cuda12.8-cudnn9-devel
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
+ARG PIXI_VERSION=0.66.0
+
 # Core environment variables
 ENV AUTOWARE_ML_DATA_PATH="/workspace/data" \
   CUDA_HOME="/usr/local/cuda" \
   FORCE_CUDA="1" \
   LC_ALL=C.UTF-8 \
+  PIXI_HOME="/opt/pixi" \
   PYTHONPATH=/workspace \
   SHELL=/bin/bash \
   TORCH_CUDA_ARCH_LIST="8.0 8.6 8.9 9.0 12.0+PTX" \
-  TORCH_NVCC_FLAGS="-Xfatbin -compress-all"
+  TORCH_NVCC_FLAGS="-Xfatbin -compress-all" \
+  PATH="/opt/pixi/bin:${PATH}"
 
 # Prompt customization
 ENV GIT_PS1_DESCRIBE_STYLE=contains \
@@ -27,26 +31,36 @@ RUN apt-get update && \
   apt-get install -y --no-install-recommends \
   bash-completion \
   build-essential \
+  curl \
   git \
   gosu \
-  ninja-build \
   sudo \
-  tmux \
   vim \
   && rm -rf /var/lib/apt/lists/* \
   && gosu nobody true
 
 # Create workspace and cache directories (ownership will be set by entrypoint)
-RUN mkdir -p /workspace /ccache
+RUN mkdir -p /workspace /ccache /etc/pixi "${PIXI_HOME}/bin" "${PIXI_HOME}/envs"
 
-# Set workspace
-COPY . /workspace/
+# Install a pinned pixi release and configure project environments outside the bind-mounted workspace
+# hadolint ignore=DL3003
+RUN curl -fsSL -o /tmp/pixi-x86_64-unknown-linux-musl.tar.gz "https://github.com/prefix-dev/pixi/releases/download/v${PIXI_VERSION}/pixi-x86_64-unknown-linux-musl.tar.gz" \
+  && curl -fsSL -o /tmp/pixi-x86_64-unknown-linux-musl.tar.gz.sha256 "https://github.com/prefix-dev/pixi/releases/download/v${PIXI_VERSION}/pixi-x86_64-unknown-linux-musl.tar.gz.sha256" \
+  && (cd /tmp && sha256sum -c pixi-x86_64-unknown-linux-musl.tar.gz.sha256) \
+  && tar -xzf /tmp/pixi-x86_64-unknown-linux-musl.tar.gz -C "${PIXI_HOME}/bin" \
+  && rm -f /tmp/pixi-x86_64-unknown-linux-musl.tar.gz /tmp/pixi-x86_64-unknown-linux-musl.tar.gz.sha256 \
+  && printf 'detached-environments = "%s/envs"\n[shell]\nchange-ps1 = false\n' "${PIXI_HOME}" > /etc/pixi/config.toml
+
+# Resolve and install the locked contributor pixi environment first for better layer reuse. Docker
+# build stages do not expose the host NVIDIA driver, so pixi cannot detect the `__cuda` virtual
+# package there. Override it to match the repository's pinned CUDA stack during image build.
+COPY LICENSE README.md pyproject.toml setup.py pixi.lock /workspace/
 WORKDIR /workspace
+RUN CONDA_OVERRIDE_CUDA=12.8 pixi install --locked --environment dev
 
-# Install pyproject dependencies
-# hadolint ignore=DL3013
-RUN pip install --no-cache-dir hatchling read_version uv wheel_stub \
-  && uv pip install --system --no-cache .[dev] --no-build-isolation
+# Install the project itself in editable mode inside the contributor environment
+COPY . /workspace/
+RUN pixi run --environment dev install-project
 
 # Copy and set up entrypoint
 COPY docker/entrypoint.sh /entrypoint.sh

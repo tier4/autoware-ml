@@ -19,5 +19,6 @@ into model-ready tensors.
 """
 
 from autoware_ml.preprocessing.base import DataPreprocessing
+from autoware_ml.preprocessing.segmentation3d import FrustumRangePreprocessor
 
-__all__ = ["DataPreprocessing"]
+__all__ = ["DataPreprocessing", "FrustumRangePreprocessor"]
