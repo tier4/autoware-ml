@@ -31,6 +31,7 @@ dependencies = [
     "onnxscript>=0.5.0",
     "opencv-python-headless>=4.11.0",
     "optuna-dashboard>=0.20.0",
+    "pycocotools>=2.0.8",
     "pytest>=9.0",
     "rerun-sdk==0.23.1",
     "scipy>=1.16.0",
