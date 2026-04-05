@@ -131,9 +131,7 @@ jobs:
       - name: Tag Docker image
         run: |
           docker tag "${IMAGE_TAG}" ghcr.io/tier4/autoware-ml:latest
-          docker tag "${IMAGE_TAG}" ghcr.io/tier4/autoware-ml:${GITHUB_SHA}
 
       - name: Push Docker image
         run: |
           docker push ghcr.io/tier4/autoware-ml:latest
-          docker push ghcr.io/tier4/autoware-ml:${GITHUB_SHA}
