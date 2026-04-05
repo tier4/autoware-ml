@@ -1,21 +1,16 @@
-_target_: autoware_ml.databases.t4datasets.t4scenarios.T4Scenarios
+_target_: autoware_ml.databases.t4dataset.t4scenarios.T4Scenarios
 _convert_: all
 
-version: largebus-v1.0.0
+version: jpntaxi_gen2-v1.0.0
 # List of database versions and each yaml file consists of train/val/test splits
 db_versions:
   - _target_: autoware_ml.databases.scenarios.DatabaseVersion
     _convert_: all
-    db_version: db_largebus_v1
+    db_version: db_jpntaxigen2_v1
     max_sweeps: 2
     sample_steps: 1
   - _target_: autoware_ml.databases.scenarios.DatabaseVersion
     _convert_: all
-    db_version: db_largebus_v2
-    max_sweeps: 2
-    sample_steps: 1
-  - _target_: autoware_ml.databases.scenarios.DatabaseVersion
-    _convert_: all
-    db_version: db_largebus_v3
+    db_version: db_jpntaxigen2_v2
     max_sweeps: 2
     sample_steps: 1

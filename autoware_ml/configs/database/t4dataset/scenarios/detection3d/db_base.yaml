@@ -1,4 +1,4 @@
-_target_: autoware_ml.databases.t4datasets.t4scenarios.T4Scenarios
+_target_: autoware_ml.databases.t4dataset.t4scenarios.T4Scenarios
 _convert_: all
 
 version: base-v1.0.0

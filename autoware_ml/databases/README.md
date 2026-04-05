@@ -14,7 +14,7 @@ The Hydra-based entrypoint in `scripts/generate_dataset.py` composes a YAML conf
 | `base_database.py`            | `BaseDatabase` shared implementation of `DatabaseInterface`              | `scenarios`, `schemas`, `polars` |
 | `scripts/generate_dataset.py` | Hydra entrypoint that instantiates a `DatabaseInterface` from config     | `database_interface`             |
 
-To add a new dataset family, extend `Scenarios` with format-specific YAML parsing, extend `BaseDatabase` with record generation logic, and register the new class in a Hydra config. See `t4datasets/` for a concrete example.
+To add a new dataset family, extend `Scenarios` with format-specific YAML parsing, extend `BaseDatabase` with record generation logic, and register the new class in a Hydra config. See `t4dataset/` for a concrete example.
 
 ```mermaid
 classDiagram

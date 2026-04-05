@@ -10,10 +10,10 @@ import polars as pl
 from tqdm import tqdm
 
 from autoware_ml.databases.base_database import BaseDatabase
-from autoware_ml.databases.t4datasets.t4scenarios import T4Scenarios
+from autoware_ml.databases.t4dataset.t4scenarios import T4Scenarios
 from autoware_ml.databases.scenarios import ScenarioData
 from autoware_ml.databases.schemas import DatasetRecord
-from autoware_ml.databases.t4datasets.t4records_generator import T4RecordsGenerator
+from autoware_ml.databases.t4dataset.t4records_generator import T4RecordsGenerator
 
 logger = logging.getLogger(__name__)
 
