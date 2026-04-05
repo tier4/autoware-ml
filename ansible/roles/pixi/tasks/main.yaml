@@ -1,0 +1,112 @@
+- name: Check whether pixi is already installed on PATH
+  ansible.builtin.command: bash -lc 'command -v pixi'
+  register: pixi_command
+  changed_when: false
+  failed_when: false
+
+- name: Check whether pixi exists in the default local install directory
+  ansible.builtin.stat:
+    path: "{{ pixi_install_dir }}/pixi"
+  register: pixi_local_binary
+
+- name: Validate supported architecture for pixi install
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.architecture in pixi_archive_map
+    fail_msg: >-
+      Unsupported architecture for pixi installation: {{ ansible_facts.architecture }}
+  when:
+    - pixi_command.rc != 0
+    - not pixi_local_binary.stat.exists
+
+- name: Set pixi download parameters
+  ansible.builtin.set_fact:
+    pixi_archive: "{{ pixi_archive_map[ansible_facts.architecture] }}"
+    pixi_base_url: https://github.com/prefix-dev/pixi/releases/download/v{{ pixi_version }}
+  when:
+    - pixi_command.rc != 0
+    - not pixi_local_binary.stat.exists
+
+- name: Ensure pixi install directory exists
+  ansible.builtin.file:
+    path: "{{ pixi_install_dir }}"
+    state: directory
+    mode: "0755"
+  when:
+    - pixi_command.rc != 0
+    - not pixi_local_binary.stat.exists
+
+- name: Download pixi release artifact
+  ansible.builtin.get_url:
+    url: "{{ pixi_base_url }}/{{ pixi_archive }}"
+    dest: /tmp/{{ pixi_archive }}
+    mode: "0644"
+  when:
+    - pixi_command.rc != 0
+    - not pixi_local_binary.stat.exists
+
+- name: Download pixi release checksum
+  ansible.builtin.get_url:
+    url: "{{ pixi_base_url }}/{{ pixi_archive }}.sha256"
+    dest: /tmp/{{ pixi_archive }}.sha256
+    mode: "0644"
+  when:
+    - pixi_command.rc != 0
+    - not pixi_local_binary.stat.exists
+
+- name: Read pixi release checksum
+  ansible.builtin.slurp:
+    src: /tmp/{{ pixi_archive }}.sha256
+  register: pixi_checksum_file
+  when:
+    - pixi_command.rc != 0
+    - not pixi_local_binary.stat.exists
+
+- name: Unpack pixi release artifact
+  ansible.builtin.unarchive:
+    src: /tmp/{{ pixi_archive }}
+    dest: "{{ pixi_install_dir }}"
+    remote_src: true
+    include:
+      - pixi
+  when:
+    - pixi_command.rc != 0
+    - not pixi_local_binary.stat.exists
+
+- name: Verify installed pixi checksum
+  ansible.builtin.stat:
+    path: "{{ pixi_install_dir }}/pixi"
+    checksum_algorithm: sha256
+  register: pixi_installed_binary
+  when:
+    - pixi_command.rc != 0
+    - not pixi_local_binary.stat.exists
+
+- name: Assert installed pixi checksum matches release checksum
+  ansible.builtin.assert:
+    that:
+      - pixi_installed_binary.stat.checksum == expected_pixi_checksum
+    fail_msg: pixi checksum verification failed after installation.
+  vars:
+    expected_pixi_checksum: >-
+      {{ (pixi_checksum_file.content | b64decode).split()[0] }}
+  when:
+    - pixi_command.rc != 0
+    - not pixi_local_binary.stat.exists
+
+- name: Remove pixi installer artifacts
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/{{ pixi_archive }}
+    - /tmp/{{ pixi_archive }}.sha256
+  when:
+    - pixi_command.rc != 0
+    - not pixi_local_binary.stat.exists
+
+- name: Display pixi installation status
+  ansible.builtin.debug:
+    msg: >-
+      pixi is available. Start a new shell session so PATH updates from the
+      installer are applied if this was a fresh installation.

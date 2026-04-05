@@ -1,8 +1,10 @@
 #!/bin/bash
-# Entrypoint script to create a user matching the host UID/GID and switch to it
-# using gosu.
+# Entrypoint script to remap the fixed autoware-ml user to the host UID/GID
+# and switch to it using gosu.
 set -euo pipefail
 
+USERNAME=autoware-ml
+USER_HOME="/home/${USERNAME}"
 HOST_UID=${HOST_UID:-1000}
 HOST_GID=${HOST_GID:-1000}
 
@@ -17,23 +19,25 @@ if [ "$(id -u)" != "0" ]; then
     run_in_autoware_ml_env "$@"
 fi
 
-if ! getent group "${HOST_GID}" >/dev/null 2>&1; then
-    groupadd -g "${HOST_GID}" "autoware-ml"
+CURRENT_UID=$(id -u "${USERNAME}")
+CURRENT_GID=$(id -g "${USERNAME}")
+
+if [ "${CURRENT_GID}" != "${HOST_GID}" ]; then
+    groupmod -o -g "${HOST_GID}" "${USERNAME}"
+    usermod -g "${HOST_GID}" "${USERNAME}"
 fi
 
-if ! getent passwd "${HOST_UID}" >/dev/null 2>&1; then
-    useradd -u "${HOST_UID}" -g "${HOST_GID}" -m -s /bin/bash "autoware-ml"
-    echo "autoware-ml ALL=(root) NOPASSWD:ALL" >/etc/sudoers.d/autoware-ml
-    chmod 0440 /etc/sudoers.d/autoware-ml
-    echo "User 'autoware-ml' was created with UID: ${HOST_UID} and GID: ${HOST_GID}."
+if [ "${CURRENT_UID}" != "${HOST_UID}" ]; then
+    usermod -o -u "${HOST_UID}" "${USERNAME}"
 fi
 
-USERNAME=$(getent passwd "${HOST_UID}" | cut -d: -f1)
-USER_HOME=$(getent passwd "${HOST_UID}" | cut -d: -f6)
-
-mkdir -p /tmp/xdg
-chown "${HOST_UID}:${HOST_GID}" /tmp/xdg
+mkdir -p /tmp/xdg /ccache
+chown -R "${HOST_UID}:${HOST_GID}" "${USER_HOME}" /ccache /tmp/xdg
 chmod 700 /tmp/xdg
+
+if ! mountpoint -q /workspace; then
+    chown -R "${HOST_UID}:${HOST_GID}" /workspace
+fi
 
 export HOME="${USER_HOME}"
 export USER="${USERNAME}"
