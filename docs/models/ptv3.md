@@ -1,5 +1,5 @@
 ---
-icon: lucide/network
+icon: lucide/dice-5
 ---
 
 # PointTransformerV3
@@ -89,3 +89,13 @@ serialization settings are applied.
 | `autoware_ml/datamodule/t4dataset/segmentation3d.py`  | T4Dataset datamodule                       |
 | `autoware_ml/transforms/point_cloud/`                 | Shared point-cloud transforms used by PTv3 |
 | `autoware_ml/configs/tasks/segmentation3d/ptv3/`      | Task configurations                        |
+
+## Acknowledgment
+
+The Autoware-ML PointTransformerV3 implementation was ported from the official PointTransformerV3
+project by Pointcept.
+
+<!-- cspell:ignore Xiaoyang -->
+- Repository: <https://github.com/Pointcept/PointTransformerV3>
+- License: MIT
+- Paper: Wu, Xiaoyang, et al. "Point Transformer V3: Simpler, Faster, Stronger." CVPR, 2024.

@@ -1,5 +1,5 @@
 ---
-icon: lucide/mountain
+icon: lucide/dice-5
 ---
 
 # FRNet
@@ -99,3 +99,12 @@ The standard FRNet training configs follow the AWML experiment contract:
 | `autoware_ml/transforms/segmentation3d/`                    | Segmentation task transforms used by FRNet |
 | `autoware_ml/preprocessing/segmentation3d/frustum_range.py` | Frustum and range preprocessing            |
 | `autoware_ml/configs/tasks/segmentation3d/frnet/`           | Task configurations                        |
+
+## Acknowledgment
+
+The Autoware-ML FRNet implementation was ported from the official FRNet project.
+
+<!-- cspell:ignore Xiang -->
+- Repository: <https://github.com/Xiangxu-0103/FRNet>
+- License: Apache 2.0
+- Paper: Xu, Xiang, et al. "FRNet: Frustum-Range Networks for Scalable LiDAR Segmentation." IEEE Transactions on Image Processing, vol. 34, pp. 2173-2186, 2025.
