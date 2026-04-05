@@ -1,0 +1,3 @@
+pixi_version: 0.66.0
+pixi_install_dir: "{{ ansible_env.HOME }}/.pixi/bin"
+pixi_archive: pixi-x86_64-unknown-linux-musl.tar.gz

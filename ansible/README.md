@@ -15,7 +15,7 @@ sudo apt -y update
 sudo apt -y install python3-pip
 
 # Install ansible
-python3 -m pip install ansible==9.13.0
+python3 -m pip install ansible==10.7.0
 ```
 
 ### Install ansible collections
@@ -37,5 +37,5 @@ ansible-playbook ansible/playbooks/setup_local_host.yaml -K
 ```
 
 System reboot is required for NVIDIA driver changes and Docker post-installation
-steps to take effect. For local development, start a new shell session after
-installing the NVIDIA CUDA Toolkit so `nvcc` and `CUDA_HOME` are available.
+steps to take effect. The local playbook can install `pixi` if it is missing,
+but it asks before doing so.

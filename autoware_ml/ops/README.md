@@ -41,7 +41,7 @@ editable mode to compile the local ops extensions:
 
 ```shell
 cd /workspace
-pixi run --environment dev install-project
+pixi run --environment dev setup-project
 ```
 
 ## Generating Compilation Database
