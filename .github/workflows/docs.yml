@@ -30,8 +30,19 @@ jobs:
         run: |
           export PIXI_HOME="$HOME/.pixi"
           export PIXI_BIN_DIR="$HOME/.pixi/bin"
-          export PIXI_NO_PATH_UPDATE=1
-          curl -fsSL https://pixi.sh/install.sh | sh
+          mkdir -p "$PIXI_BIN_DIR"
+          case "$(uname -m)" in
+            x86_64) PIXI_ARCHIVE="pixi-x86_64-unknown-linux-musl.tar.gz" ;;
+            aarch64|arm64) PIXI_ARCHIVE="pixi-aarch64-unknown-linux-musl.tar.gz" ;;
+            *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+          PIXI_BASE_URL="https://github.com/prefix-dev/pixi/releases/download/v${PIXI_VERSION}"
+          curl -fsSLo "/tmp/${PIXI_ARCHIVE}" "${PIXI_BASE_URL}/${PIXI_ARCHIVE}"
+          curl -fsSLo "/tmp/${PIXI_ARCHIVE}.sha256" "${PIXI_BASE_URL}/${PIXI_ARCHIVE}.sha256"
+          (cd /tmp && sha256sum -c "${PIXI_ARCHIVE}.sha256")
+          tar -xzf "/tmp/${PIXI_ARCHIVE}" -C "$PIXI_BIN_DIR" pixi
+          chmod +x "$PIXI_BIN_DIR/pixi"
+          rm -f "/tmp/${PIXI_ARCHIVE}" "/tmp/${PIXI_ARCHIVE}.sha256"
           echo "$HOME/.pixi/bin" >> "$GITHUB_PATH"
       - name: Install locked docs-only environment
         run: pixi install --locked --environment docs
