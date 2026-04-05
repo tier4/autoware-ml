@@ -28,6 +28,8 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
 
     === "Without Docker"
         - **NVIDIA CUDA Toolkit** for local development and building CUDA-backed native dependencies and ops
+        - **Pixi** for managing locked development environments and dependencies
+        - **Bash Completion** for autoware-ml CLI command completion on the host
 
 ---
 
@@ -54,6 +56,7 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
     cd ~/autoware-ml
     ansible-galaxy collection install -f -r ansible-galaxy-requirements.yaml
 
+    # Pick one of the two playbooks below depending on your workflow:
     # Docker-based development host
     ansible-playbook ansible/playbooks/setup_docker_host.yaml -K
 
@@ -61,17 +64,14 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
     ansible-playbook ansible/playbooks/setup_local_host.yaml -K
     ```
 
-    The Docker playbook installs Docker Engine, NVIDIA drivers, NVIDIA Container Toolkit, and
-    optionally VS Code with extensions. The local playbook installs Bash completion support,
-    offers to install `pixi` if it is missing, and can install NVIDIA drivers, the NVIDIA CUDA
-    Toolkit, and optionally VS Code with extensions. System reboot is required for NVIDIA driver
-    changes and Docker post-installation steps to take effect.
-
 === "Manual Setup"
 
     If you prefer to install components individually, see the tabs below.
+    Follow only the tabs that match your workflow.
 
     === "NVIDIA Drivers"
+        **Scope:** `Docker` and `Local`
+
         Check if you have a compatible NVIDIA driver installed:
         ```bash
         nvidia-smi
@@ -97,6 +97,8 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
         After rebooting, verify with `nvidia-smi`.
 
     === "Docker Engine"
+        **Scope:** `Docker`
+
         Remove any old Docker installations:
 
         ```bash
@@ -144,6 +146,8 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
         ```
 
     === "NVIDIA Container Toolkit"
+        **Scope:** `Docker`
+
         This enables Docker to access your GPU:
 
         ```bash
@@ -174,6 +178,8 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
         You should see your GPU information printed.
 
     === "NVIDIA CUDA Toolkit"
+        **Scope:** `Local`
+
         This gives you `nvcc` and CUDA libraries for local development and building CUDA-backed packages from source:
 
         ```bash
@@ -206,6 +212,8 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
         ```
 
     === "Bash Completion"
+        **Scope:** `Local`
+
         Install Bash completion support on the host:
 
         ```bash
@@ -214,6 +222,8 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
         ```
 
     === "Pixi"
+        **Scope:** `Local`
+
         Install `pixi` for local development:
 
         ```bash
@@ -233,6 +243,11 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
         chmod +x "$HOME/.pixi/bin/pixi"
         rm -f "/tmp/${PIXI_ARCHIVE}" "/tmp/${PIXI_ARCHIVE}.sha256"
         export PATH="$HOME/.pixi/bin:$PATH"
+        ```
+
+        Or if you want to use latest `pixi` version, just run:
+        ```bash
+        curl -fsSL https://pixi.sh/install.sh | sh
         ```
 
         If you prefer, you can start a new shell instead of exporting `PATH`
