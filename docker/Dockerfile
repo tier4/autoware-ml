@@ -61,11 +61,8 @@ RUN if id -u ubuntu >/dev/null 2>&1; then userdel -r ubuntu; fi \
 # release artifact with checksum verification. Project environments live
 # outside the bind-mounted workspace.
 RUN mkdir -p /workspace /ccache /etc/pixi /opt/pixi/bin /opt/pixi/envs \
-  && case "$(dpkg --print-architecture)" in \
-       amd64) PIXI_ARCHIVE="pixi-x86_64-unknown-linux-musl.tar.gz" ;; \
-       arm64) PIXI_ARCHIVE="pixi-aarch64-unknown-linux-musl.tar.gz" ;; \
-       *) echo "Unsupported architecture: $(dpkg --print-architecture)" >&2; exit 1 ;; \
-     esac \
+  && if [ "$(dpkg --print-architecture)" != "amd64" ]; then echo "Unsupported architecture: $(dpkg --print-architecture)" >&2; exit 1; fi \
+  && PIXI_ARCHIVE="pixi-x86_64-unknown-linux-musl.tar.gz" \
   && PIXI_BASE_URL="https://github.com/prefix-dev/pixi/releases/download/v${PIXI_VERSION}" \
   && curl -fsSLo "/tmp/${PIXI_ARCHIVE}" "${PIXI_BASE_URL}/${PIXI_ARCHIVE}" \
   && curl -fsSLo "/tmp/${PIXI_ARCHIVE}.sha256" "${PIXI_BASE_URL}/${PIXI_ARCHIVE}.sha256" \

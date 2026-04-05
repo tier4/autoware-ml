@@ -227,12 +227,13 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
         Install `pixi` for local development:
 
         ```bash
+        if [ "$(uname -m)" != "x86_64" ]; then
+          echo "Unsupported architecture: $(uname -m)" >&2
+          exit 1
+        fi
+
         PIXI_VERSION="0.66.0"
-        case "$(uname -m)" in
-          x86_64) PIXI_ARCHIVE="pixi-x86_64-unknown-linux-musl.tar.gz" ;;
-          aarch64|arm64) PIXI_ARCHIVE="pixi-aarch64-unknown-linux-musl.tar.gz" ;;
-          *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
-        esac
+        PIXI_ARCHIVE="pixi-x86_64-unknown-linux-musl.tar.gz"
         PIXI_BASE_URL="https://github.com/prefix-dev/pixi/releases/download/v${PIXI_VERSION}"
 
         mkdir -p "$HOME/.pixi/bin"
