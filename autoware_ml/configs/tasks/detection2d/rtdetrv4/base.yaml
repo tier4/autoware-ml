@@ -1,0 +1,293 @@
+# @package _global_
+defaults:
+  - /defaults/default_runtime
+  - _self_
+
+data_root: ${oc.env:AUTOWARE_ML_DATA_PATH}
+dataset_root: ${data_root}/coco
+cache_root: ${oc.env:AUTOWARE_ML_CACHE_DIR,.cache}
+train_ann_file: annotations/instances_train2017.json
+val_ann_file: annotations/instances_val2017.json
+test_ann_file: ${val_ann_file}
+train_img_root: train2017
+val_img_root: val2017
+test_img_root: ${val_img_root}
+
+num_classes: 80
+input_size: 640
+eval_spatial_size:
+  - ${input_size}
+  - ${input_size}
+use_focal_loss: true
+num_top_queries: 300
+
+mosaic_prob: 0.5
+photometric_distort_prob: 0.5
+random_zoom_out_prob: 1.0
+random_iou_crop_prob: 0.8
+horizontal_flip_prob: 0.5
+mixup_prob: 0.5
+mixup_epochs: [4, 64]
+strong_aug_stop_epoch: 120
+multiscale_stop_epoch: 120
+multiscale_base_size: ${input_size}
+multiscale_base_size_repeat: 20
+
+flat_epoch: 64
+no_aug_epoch: 12
+warmup_steps: 2000
+lr_gamma: 0.5
+
+visualization:
+  split: predict
+  out_dir: ${hydra:run.dir}/predictions
+  score_threshold: 0.25
+  max_images: 32
+  draw_ground_truth: true
+  line_thickness: 2
+  save_json: true
+
+datamodule:
+  _target_: autoware_ml.datamodule.coco.COCODetectionDataModule
+  data_root: ${dataset_root}
+  train_ann_file: ${train_ann_file}
+  val_ann_file: ${val_ann_file}
+  test_ann_file: ${test_ann_file}
+  train_img_root: ${train_img_root}
+  val_img_root: ${val_img_root}
+  test_img_root: ${test_img_root}
+  train_sample_ids: null
+  val_sample_ids: null
+  test_sample_ids: null
+  predict_sample_ids: null
+  max_train_samples: null
+  max_val_samples: null
+  max_test_samples: null
+  max_predict_samples: null
+  filter_empty_gt: true
+  multiscale_base_size: ${multiscale_base_size}
+  multiscale_base_size_repeat: ${multiscale_base_size_repeat}
+  multiscale_stop_epoch: ${multiscale_stop_epoch}
+  mixup_prob: ${mixup_prob}
+  mixup_epochs: ${mixup_epochs}
+  train_dataloader_cfg:
+    batch_size: 2
+    num_workers: 4
+    pin_memory: true
+    persistent_workers: true
+    shuffle: true
+    drop_last: true
+  val_dataloader_cfg:
+    batch_size: 1
+    num_workers: 4
+    pin_memory: true
+    persistent_workers: true
+  test_dataloader_cfg:
+    batch_size: 1
+    num_workers: 4
+    pin_memory: true
+    persistent_workers: true
+  predict_dataloader_cfg:
+    batch_size: 1
+    num_workers: 2
+    pin_memory: true
+    persistent_workers: true
+  train_transforms:
+    _target_: autoware_ml.transforms.TransformsCompose
+    pipeline:
+      - _target_: autoware_ml.transforms.detection2d.LoadDetectionImageFromFile
+      - _target_: autoware_ml.transforms.detection2d.ToTorchVisionTensors
+      - _target_: autoware_ml.transforms.detection2d.Mosaic
+        probability: ${mosaic_prob}
+        output_size: 320
+        rotation_range: 10
+        translation_range: [0.1, 0.1]
+        scaling_range: [0.5, 1.5]
+        fill_value: 0
+        max_cached_images: 50
+        random_pop: true
+        stop_epoch: ${strong_aug_stop_epoch}
+      - _target_: autoware_ml.transforms.detection2d.RandomPhotometricDistort
+        p: ${photometric_distort_prob}
+        stop_epoch: ${strong_aug_stop_epoch}
+      - _target_: autoware_ml.transforms.detection2d.RandomZoomOut
+        p: ${random_zoom_out_prob}
+        fill: 0
+        stop_epoch: ${strong_aug_stop_epoch}
+      - _target_: autoware_ml.transforms.detection2d.RandomIoUCrop
+        p: ${random_iou_crop_prob}
+        stop_epoch: ${strong_aug_stop_epoch}
+      - _target_: autoware_ml.transforms.detection2d.SanitizeBoundingBoxes
+        min_size: 1
+      - _target_: autoware_ml.transforms.detection2d.RandomHorizontalFlip
+        p: ${horizontal_flip_prob}
+      - _target_: autoware_ml.transforms.detection2d.Resize
+        size:
+          - ${input_size}
+          - ${input_size}
+      - _target_: autoware_ml.transforms.detection2d.SanitizeBoundingBoxes
+        min_size: 1
+      - _target_: autoware_ml.transforms.detection2d.ConvertPILImage
+        dtype: float32
+        scale: true
+      - _target_: autoware_ml.transforms.detection2d.ConvertBoxes
+        fmt: cxcywh
+        normalize: true
+  val_transforms:
+    _target_: autoware_ml.transforms.TransformsCompose
+    pipeline:
+      - _target_: autoware_ml.transforms.detection2d.LoadDetectionImageFromFile
+      - _target_: autoware_ml.transforms.detection2d.ToTorchVisionTensors
+      - _target_: autoware_ml.transforms.detection2d.Resize
+        size:
+          - ${input_size}
+          - ${input_size}
+      - _target_: autoware_ml.transforms.detection2d.SanitizeBoundingBoxes
+        min_size: 1
+      - _target_: autoware_ml.transforms.detection2d.ConvertPILImage
+        dtype: float32
+        scale: true
+      - _target_: autoware_ml.transforms.detection2d.ConvertBoxes
+        fmt: cxcywh
+        normalize: true
+  test_transforms: ${datamodule.val_transforms}
+  predict_transforms: ${datamodule.val_transforms}
+
+model:
+  _target_: autoware_ml.models.detection2d.rtdetrv4.RTDETRv4DetectionModel
+  _convert_: all
+  backbone:
+    _target_: autoware_ml.models.detection2d.rtdetrv4.HGNetv2
+    _convert_: all
+    name: B0
+    use_lab: true
+    return_idx: [1, 2, 3]
+    freeze_stem_only: false
+    freeze_at: -1
+    freeze_norm: false
+    pretrained: false
+    local_model_dir: ${cache_root}/hgnetv2
+  encoder:
+    _target_: autoware_ml.models.detection2d.rtdetrv4.HybridEncoder
+    _convert_: all
+    in_channels: [256, 512, 1024]
+    feat_strides: [8, 16, 32]
+    hidden_dim: 256
+    use_encoder_idx: [2]
+    num_encoder_layers: 1
+    nhead: 8
+    dim_feedforward: 1024
+    dropout: 0.0
+    enc_act: gelu
+    expansion: 0.5
+    depth_mult: 0.34
+    act: silu
+    eval_spatial_size: ${eval_spatial_size}
+  decoder:
+    _target_: autoware_ml.models.detection2d.rtdetrv4.DFINETransformer
+    _convert_: all
+    num_classes: ${num_classes}
+    hidden_dim: 256
+    num_queries: ${num_top_queries}
+    feat_channels: [256, 256, 256]
+    feat_strides: [8, 16, 32]
+    num_levels: 3
+    num_points: [3, 6, 3]
+    nhead: 8
+    num_layers: 6
+    dim_feedforward: 1024
+    dropout: 0.0
+    activation: silu
+    num_denoising: 100
+    label_noise_ratio: 0.5
+    box_noise_scale: 1.0
+    learn_query_content: false
+    eval_spatial_size: ${eval_spatial_size}
+    eval_idx: -1
+    aux_loss: true
+    cross_attn_method: default
+    query_select_method: default
+    reg_max: 32
+    reg_scale: 4.0
+    layer_scale: 1
+    mlp_act: silu
+  criterion:
+    _target_: autoware_ml.models.detection2d.rtdetrv4.RTv4Criterion
+    _convert_: all
+    matcher:
+      _target_: autoware_ml.models.detection2d.rtdetrv4.HungarianMatcher
+      _convert_: all
+      weight_dict:
+        cost_class: 2
+        cost_bbox: 5
+        cost_giou: 2
+      use_focal_loss: ${use_focal_loss}
+      alpha: 0.25
+      gamma: 2.0
+    weight_dict:
+      loss_mal: 1.0
+      loss_bbox: 5.0
+      loss_giou: 2.0
+      loss_fgl: 0.15
+      loss_ddf: 1.5
+    losses: [mal, boxes, local]
+    alpha: 0.75
+    gamma: 2.0
+    num_classes: ${num_classes}
+    reg_max: 32
+    use_uni_set: true
+  postprocessor:
+    _target_: autoware_ml.models.detection2d.rtdetrv4.PostProcessor
+    _convert_: all
+    num_classes: ${num_classes}
+    use_focal_loss: ${use_focal_loss}
+    num_top_queries: ${num_top_queries}
+    remap_mscoco_category: false
+  optimizer:
+    _target_: torch.optim.AdamW
+    _partial_: true
+    lr: 0.0004
+    betas: [0.9, 0.999]
+    weight_decay: 0.0001
+  optimizer_group_overrides:
+    backbone:
+      lr: 0.0002
+    backbone_norm:
+      lr: 0.0002
+      weight_decay: 0.0
+    encoder_decoder_norm_bias:
+      weight_decay: 0.0
+  init_checkpoint_path: null
+  init_checkpoint_state_key: null
+  init_checkpoint_filter_mismatched_shapes: false
+  init_checkpoint_strict: false
+  compute_coco_metrics_on_val: true
+  compute_localization_metrics_on_val: false
+  compute_coco_metrics_on_test: true
+  compute_localization_metrics_on_test: true
+  scheduler:
+    _target_: autoware_ml.models.detection2d.FlatCosineAnnealingLR
+    _partial_: true
+    max_epochs: ${trainer.max_epochs}
+    warmup_steps: ${warmup_steps}
+    flat_epochs: ${flat_epoch}
+    no_aug_epochs: ${no_aug_epoch}
+    lr_gamma: ${lr_gamma}
+  scheduler_config:
+    interval: step
+
+trainer:
+  max_epochs: 132
+  accelerator: gpu
+  devices: 1
+  precision: 16-mixed
+  log_every_n_steps: 20
+  check_val_every_n_epoch: 1
+  val_check_interval: 1.0
+  accumulate_grad_batches: 1
+
+callbacks:
+  model_checkpoint:
+    monitor: val/loss
+    mode: min
+  early_stopping: null

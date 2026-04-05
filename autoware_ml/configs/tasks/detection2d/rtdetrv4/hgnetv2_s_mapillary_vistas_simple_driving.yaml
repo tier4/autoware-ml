@@ -1,0 +1,27 @@
+# @package _global_
+defaults:
+  - /tasks/detection2d/rtdetrv4/hgnetv2_s
+  - _self_
+
+data_root: ${oc.env:AUTOWARE_ML_DATA_PATH}
+dataset_root: ${data_root}
+train_ann_file: mapillary_vistas/coco/mapillary_vistas_training_simple_driving.json
+val_ann_file: mapillary_vistas/coco/mapillary_vistas_validation_simple_driving.json
+train_img_root: mapillary_vistas/training/images
+val_img_root: mapillary_vistas/validation/images
+
+num_classes: 10
+
+datamodule:
+  train_dataloader_cfg:
+    batch_size: 64
+    num_workers: 8
+    persistent_workers: true
+  val_dataloader_cfg:
+    batch_size: 8
+    num_workers: 8
+    persistent_workers: true
+  test_dataloader_cfg:
+    batch_size: 8
+    num_workers: 8
+    persistent_workers: true
