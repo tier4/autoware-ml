@@ -195,6 +195,11 @@
     "xytext",
     "yscale",
     "yzhang",
-    "zensical"
+    "zensical",
+    "largebus",
+    "jpntaxi",
+    "jpntaxigen2",
+    "dataclass",
+    "Pydantic"
   ]
 }
