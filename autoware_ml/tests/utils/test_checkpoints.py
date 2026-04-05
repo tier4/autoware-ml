@@ -22,7 +22,10 @@ from unittest.mock import patch
 import lightning as L
 import torch
 
-from autoware_ml.utils.checkpoints import load_model_from_checkpoint
+from autoware_ml.utils.checkpoints import (
+    load_model_from_checkpoint,
+    load_model_from_raw_checkpoint,
+)
 
 
 class _TinyModel(L.LightningModule):
@@ -43,3 +46,39 @@ def test_load_model_from_checkpoint_uses_full_checkpoint_loading(tmp_path: Path)
         load_model_from_checkpoint(model, checkpoint_path, map_location="cpu")
 
     load_mock.assert_called_once_with(str(checkpoint_path), map_location="cpu", weights_only=False)
+
+
+def test_load_model_from_raw_checkpoint_uses_explicit_state_key(tmp_path: Path) -> None:
+    model = _TinyModel()
+    checkpoint_path = tmp_path / "model.pth"
+    checkpoint = {"ema": {"module": model.state_dict()}}
+    torch.save(checkpoint, checkpoint_path)
+
+    target = _TinyModel()
+    incompatible = load_model_from_raw_checkpoint(
+        target,
+        checkpoint_path,
+        state_key="ema.module",
+    )
+
+    assert incompatible.missing_keys == []
+    assert incompatible.unexpected_keys == []
+    for key, value in model.state_dict().items():
+        assert torch.equal(target.state_dict()[key], value)
+
+
+def test_load_model_from_raw_checkpoint_can_filter_mismatched_shapes(tmp_path: Path) -> None:
+    source = _TinyModel()
+    checkpoint_path = tmp_path / "model.pth"
+    checkpoint = {"model": source.state_dict()}
+    torch.save(checkpoint, checkpoint_path)
+
+    target = torch.nn.Linear(2, 2)
+    incompatible = load_model_from_raw_checkpoint(
+        target,
+        checkpoint_path,
+        filter_mismatched_shapes=True,
+    )
+
+    assert set(incompatible.missing_keys) == {"weight", "bias"}
+    assert incompatible.unexpected_keys == []
