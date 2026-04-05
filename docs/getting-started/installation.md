@@ -28,6 +28,8 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
 
     === "Without Docker"
         - **NVIDIA CUDA Toolkit** for local development and building CUDA-backed native dependencies and ops
+        - **Pixi** for managing locked development environments and dependencies
+        - **Bash Completion** for autoware-ml CLI command completion on the host
 
 ---
 
@@ -48,12 +50,13 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
     sudo apt -y install python3-pip
 
     # Install Ansible (if not already installed)
-    sudo python3 -m pip install ansible==9.13.0
+    sudo python3 -m pip install ansible==10.7.0
 
     # Install required Ansible collections
     cd ~/autoware-ml
     ansible-galaxy collection install -f -r ansible-galaxy-requirements.yaml
 
+    # Pick one of the two playbooks below depending on your workflow:
     # Docker-based development host
     ansible-playbook ansible/playbooks/setup_docker_host.yaml -K
 
@@ -61,16 +64,14 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
     ansible-playbook ansible/playbooks/setup_local_host.yaml -K
     ```
 
-    The Docker playbook installs Docker Engine, NVIDIA drivers, NVIDIA Container Toolkit, and
-    optionally VS Code with extensions. The local playbook installs NVIDIA drivers, the NVIDIA CUDA
-    Toolkit, and optionally VS Code with extensions. System reboot is required for NVIDIA driver
-    changes and Docker post-installation steps to take effect.
-
 === "Manual Setup"
 
     If you prefer to install components individually, see the tabs below.
+    Follow only the tabs that match your workflow.
 
     === "NVIDIA Drivers"
+        **Scope:** `Docker` and `Local`
+
         Check if you have a compatible NVIDIA driver installed:
         ```bash
         nvidia-smi
@@ -96,6 +97,8 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
         After rebooting, verify with `nvidia-smi`.
 
     === "Docker Engine"
+        **Scope:** `Docker`
+
         Remove any old Docker installations:
 
         ```bash
@@ -143,6 +146,8 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
         ```
 
     === "NVIDIA Container Toolkit"
+        **Scope:** `Docker`
+
         This enables Docker to access your GPU:
 
         ```bash
@@ -173,6 +178,8 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
         You should see your GPU information printed.
 
     === "NVIDIA CUDA Toolkit"
+        **Scope:** `Local`
+
         This gives you `nvcc` and CUDA libraries for local development and building CUDA-backed packages from source:
 
         ```bash
@@ -204,6 +211,49 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
         nvcc --version
         ```
 
+    === "Bash Completion"
+        **Scope:** `Local`
+
+        Install Bash completion support on the host:
+
+        ```bash
+        sudo apt-get update
+        sudo apt-get install -y bash-completion
+        ```
+
+    === "Pixi"
+        **Scope:** `Local`
+
+        Install `pixi` for local development:
+
+        ```bash
+        if [ "$(uname -m)" != "x86_64" ]; then
+          echo "Unsupported architecture: $(uname -m)" >&2
+          exit 1
+        fi
+
+        PIXI_VERSION="0.66.0"
+        PIXI_ARCHIVE="pixi-x86_64-unknown-linux-musl.tar.gz"
+        PIXI_BASE_URL="https://github.com/prefix-dev/pixi/releases/download/v${PIXI_VERSION}"
+
+        mkdir -p "$HOME/.pixi/bin"
+        curl -fsSLo "/tmp/${PIXI_ARCHIVE}" "${PIXI_BASE_URL}/${PIXI_ARCHIVE}"
+        curl -fsSLo "/tmp/${PIXI_ARCHIVE}.sha256" "${PIXI_BASE_URL}/${PIXI_ARCHIVE}.sha256"
+        (cd /tmp && sha256sum -c "${PIXI_ARCHIVE}.sha256")
+        tar -xzf "/tmp/${PIXI_ARCHIVE}" -C "$HOME/.pixi/bin" pixi
+        chmod +x "$HOME/.pixi/bin/pixi"
+        rm -f "/tmp/${PIXI_ARCHIVE}" "/tmp/${PIXI_ARCHIVE}.sha256"
+        export PATH="$HOME/.pixi/bin:$PATH"
+        ```
+
+        Or if you want to use latest `pixi` version, just run:
+        ```bash
+        curl -fsSL https://pixi.sh/install.sh | sh
+        ```
+
+        If you prefer, you can start a new shell instead of exporting `PATH`
+        manually in the current session.
+
 ---
 
 ## Project Setup
@@ -229,14 +279,15 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
     ./docker/container.sh --run --data-path /path/to/your/datasets
     ```
 
-    The container image resolves and installs the locked contributor
-    `pixi` environment (`dev`) while keeping the CUDA base image as the system
-    layer.
+    The container image builds the full locked contributor `pixi`
+    environment (`dev`) on top of an Ubuntu 24.04 CUDA/cuDNN development
+    base. PyTorch and the rest of the ML stack come from the lockfile rather
+    than from a preloaded PyTorch image.
 
 === "Without Docker"
 
     !!! warning "Not Recommended for Alpha"
-        Local installation requires careful dependency management. We recommend Docker for the smoothest experience during Early Alpha.
+        We recommend Docker for the smoothest experience during Early Alpha.
 
     Local installation uses the same locked `pixi` environments as Docker.
     Before running `pixi`, make sure the machine-level GPU prerequisites are
@@ -249,19 +300,9 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
     dependencies and Autoware-ML ops, so the CUDA toolkit is a required local
     prerequisite even though Docker keeps that system layer inside the image.
 
-    Then install `pixi` and choose the environment that matches your workflow:
+    Then choose the environment that matches your workflow:
 
     ```bash
-    PIXI_VERSION="0.66.0"
-
-    mkdir -p "$HOME/.pixi/bin"
-    curl -fsSL -o pixi-x86_64-unknown-linux-musl.tar.gz "https://github.com/prefix-dev/pixi/releases/download/v${PIXI_VERSION}/pixi-x86_64-unknown-linux-musl.tar.gz"
-    curl -fsSL -o pixi-x86_64-unknown-linux-musl.tar.gz.sha256 "https://github.com/prefix-dev/pixi/releases/download/v${PIXI_VERSION}/pixi-x86_64-unknown-linux-musl.tar.gz.sha256"
-    sha256sum -c pixi-x86_64-unknown-linux-musl.tar.gz.sha256
-    tar -xzf pixi-x86_64-unknown-linux-musl.tar.gz -C "$HOME/.pixi/bin"
-    rm -f pixi-x86_64-unknown-linux-musl.tar.gz pixi-x86_64-unknown-linux-musl.tar.gz.sha256
-    export PATH="$HOME/.pixi/bin:$PATH"
-
     cd ~/autoware-ml
     ```
 
@@ -271,7 +312,7 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
 
         ```bash
         pixi install --locked --environment default
-        pixi run --environment default install-project
+        pixi run --environment default setup-project
         pixi shell --environment default
         ```
 
@@ -282,12 +323,15 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
 
         ```bash
         pixi install --locked --environment dev
-        pixi run --environment dev install-project
+        pixi run --environment dev setup-project
         pixi shell --environment dev
         ```
 
     The separate `docs` environment is reserved for documentation-only
     workflows and CI — you do not need to install it manually.
+
+    The `setup-project` task installs Bash completion automatically. Open a
+    new shell after it finishes so the completion file is loaded.
 
 ---
 

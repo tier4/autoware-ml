@@ -99,6 +99,7 @@
     "fwrapv",
     "gdbserver",
     "GELU",
+    "getent",
     "gethostname",
     "getitem",
     "graphsurgeon",

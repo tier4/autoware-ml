@@ -5,23 +5,8 @@ FROM $BASE_IMAGE
 # Set shell to bash with pipefail for safer pipe handling
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# Create autoware-ml user
-ARG USERNAME=autoware-ml
-ARG USER_UID=1000
-ARG USER_GID=${USER_UID}
-RUN groupadd --gid ${USER_GID} ${USERNAME} \
-    && useradd --uid ${USER_UID} --gid ${USER_GID} -m ${USERNAME} -s /bin/bash \
-    && echo "${USERNAME} ALL=(root) NOPASSWD:ALL" > /etc/sudoers.d/${USERNAME} \
-    && chmod 0440 /etc/sudoers.d/${USERNAME} \
-    && mkdir -p /tmp/xdg \
-    && chown ${USER_UID}:${USER_GID} /tmp/xdg \
-    && chmod 700 /tmp/xdg \
-    && gosu ${USERNAME} env HOME=/home/${USERNAME} _TYPER_COMPLETE_TEST_DISABLE_SHELL_DETECTION=1 \
-      pixi run --manifest-path /workspace --environment dev autoware-ml --install-completion bash
-
 # Install development tools via apt-get
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-  bash-completion \
   curl \
   gdb \
   gdbserver \
@@ -34,7 +19,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
   && apt-get autoremove -y && apt-get clean -y && rm -rf /var/lib/apt/lists/* "$HOME"/.cache
 
 # Install CSpell
-RUN curl -sL https://deb.nodesource.com/setup_22.x -o /tmp/nodesource_setup.sh \
+RUN curl -sL https://deb.nodesource.com/setup_24.x -o /tmp/nodesource_setup.sh \
   && bash /tmp/nodesource_setup.sh \
   && DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends nodejs -y \
   && npm install -g cspell \

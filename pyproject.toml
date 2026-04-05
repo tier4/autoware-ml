@@ -12,34 +12,34 @@ license = { file = "LICENSE" }
 authors = [{ name = "Amadeusz Szymko", email = "amadeusz.szymko.2@tier4.jp"}]
 keywords = ["autoware", "machine-learning", "autonomous-vehicle", "self-driving", "sensors"]
 dependencies = [
-    "cuda-python~=12.8.0",
+    "cuda-python==12.8.0",
     # No official cp311 wheel exists for flash-attn 2.8.3+cu12+torch2.9 at Dao-AILab/flash-attention.
     # TODO: switch to https://github.com/Dao-AILab/flash-attention/releases once a matching official wheel is available.
     "flash-attn @ https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.9.0/flash_attn-2.8.3+cu128torch2.9-cp311-cp311-linux_x86_64.whl#sha256=d4c842693349ef3e8b3b1396056003ecb9d21e94493dd1ea9ad6a2b3c6ce5c73",
-    "hydra-core>=1.3.0",
+    "hydra-core==1.3.2",
     # TODO: Use official release after https://github.com/facebookresearch/hydra/pull/3046 is merged
     "hydra-optuna-sweeper @ git+https://github.com/dahlem/hydra.git@feature/upgrade-optuna-4.2.1#subdirectory=plugins/hydra_optuna_sweeper",
-    "lightning>=2.6.0",
-    "matplotlib>=3.10.0",
-    "mlflow>=3.6.0",
-    "numpy~=1.26.0",
-    "nuscenes-devkit>=1.2.0",
-    "optuna>=4.6.0",
-    "onnx>=1.19.0",
-    "onnx_graphsurgeon>=0.5.0",
-    "onnxruntime-gpu>=1.24.0",
-    "onnxscript>=0.5.0",
-    "opencv-python-headless>=4.11.0",
-    "optuna-dashboard>=0.20.0",
-    "pytest>=9.0",
+    "lightning==2.6.1",
+    "matplotlib==3.10.8",
+    "mlflow==3.10.1",
+    "numpy==1.26.4",
+    "nuscenes-devkit==1.2.0",
+    "optuna==4.8.0",
+    "onnx==1.21.0",
+    "onnx_graphsurgeon==0.5.8",
+    "onnxruntime-gpu==1.24.4",
+    "onnxscript==0.6.2",
+    "opencv-python-headless==4.11.0.86",
+    "optuna-dashboard==0.20.0",
+    "pytest==9.0.2",
     "rerun-sdk==0.23.1",
-    "scipy>=1.16.0",
+    "scipy==1.17.1",
     "spconv-cu120==2.3.6",
     "t4-devkit @ git+https://github.com/tier4/t4-devkit.git@v0.6.0",
-    "tensorrt-cu12~=10.16.0",
+    "tensorrt-cu12==10.16.0.72",
     "torch==2.9.1+cu128",
     "torchvision==0.24.1+cu128",
-    "transforms3d>=0.4.0",
+    "transforms3d==0.4.2",
 ]
 
 [project.optional-dependencies]
@@ -62,9 +62,10 @@ include = ["autoware_ml*"]
 [tool.pixi.workspace]
 channels = ["conda-forge"]
 platforms = ["linux-64"]
-requires-pixi = ">=0.48"
+requires-pixi = ">=0.66"
 
 [tool.pixi.system-requirements]
+libc = { family = "glibc", version = "2.31" }
 cuda = "12.8"
 
 [tool.pixi.pypi-options]
@@ -75,18 +76,18 @@ extra-index-urls = ["https://download.pytorch.org/whl/cu128", "https://pypi.nvid
 index-strategy = "unsafe-best-match"
 
 [tool.pixi.dependencies]
+# Pixi keeps a small conda-forge base for Python and installer tooling. The
+# runtime stack comes from [project.dependencies] via PyPI.
 git = "*"
-# Pinned via conda for optimised BLAS/LAPACK linkage; pin matches [project.dependencies]
-numpy = ">=1.26.0,<1.27"
 pip = "*"
-python = ">=3.11,<3.12"
-# Pinned via conda for native re_sdk shared libraries; pin matches [project.dependencies]
-rerun-sdk = "==0.23.1"
+python = "3.11.*"
 setuptools = "*"
 wheel = "*"
 
 [tool.pixi.tasks]
 install-project = "python -m pip install --no-cache-dir --no-build-isolation --no-deps -e ."
+install-bash-completion = "bash -lc 'mkdir -p \"${HOME}/.local/share/bash-completion/completions\" && autoware-ml --show-completion bash > \"${HOME}/.local/share/bash-completion/completions/autoware-ml\"'"
+setup-project = { depends-on = ["install-project", "install-bash-completion"] }
 test = "pytest autoware_ml/tests/ -v"
 
 # Full contributor environment on top of the default runtime/use stack.
@@ -106,7 +107,7 @@ docs = "zensical build --clean"
 
 # Lightweight environment used by CI to build documentation only.
 [tool.pixi.feature.docs.dependencies]
-python = ">=3.11,<3.12"
+python = "3.11.*"
 
 [tool.pixi.feature.docs.pypi-dependencies]
 zensical = "*"

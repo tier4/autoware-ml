@@ -16,7 +16,7 @@
 
     - name: Include docker_engine role
       ansible.builtin.include_role:
-        name: autoware_ml.dev_env.docker_engine
+        name: docker_engine
       when: docker_response.user_input | default('n') | lower == 'y'
 
     - name: Ask to install NVIDIA drivers
@@ -26,7 +26,7 @@
 
     - name: Include nvidia role
       ansible.builtin.include_role:
-        name: autoware_ml.dev_env.nvidia
+        name: nvidia
       when: nvidia_response.user_input | default('n') | lower == 'y'
 
     - name: Ask to install NVIDIA Container Toolkit
@@ -36,7 +36,7 @@
 
     - name: Include nvidia_container_toolkit role
       ansible.builtin.include_role:
-        name: autoware_ml.dev_env.nvidia_container_toolkit
+        name: nvidia_container_toolkit
       when: toolkit_response.user_input | default('n') | lower == 'y'
 
     - name: Ask to install VS Code
@@ -46,7 +46,7 @@
 
     - name: Include vscode role
       ansible.builtin.include_role:
-        name: autoware_ml.dev_env.vscode
+        name: vscode
       when: vscode_response.user_input | default('n') | lower == 'y'
 
     - name: Setup completed

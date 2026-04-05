@@ -28,12 +28,21 @@ jobs:
         env:
           PIXI_VERSION: 0.66.0
         run: |
-          mkdir -p "$HOME/.pixi/bin"
-          curl -fsSL -o pixi-x86_64-unknown-linux-musl.tar.gz "https://github.com/prefix-dev/pixi/releases/download/v${PIXI_VERSION}/pixi-x86_64-unknown-linux-musl.tar.gz"
-          curl -fsSL -o pixi-x86_64-unknown-linux-musl.tar.gz.sha256 "https://github.com/prefix-dev/pixi/releases/download/v${PIXI_VERSION}/pixi-x86_64-unknown-linux-musl.tar.gz.sha256"
-          sha256sum -c pixi-x86_64-unknown-linux-musl.tar.gz.sha256
-          tar -xzf pixi-x86_64-unknown-linux-musl.tar.gz -C "$HOME/.pixi/bin"
-          rm -f pixi-x86_64-unknown-linux-musl.tar.gz pixi-x86_64-unknown-linux-musl.tar.gz.sha256
+          export PIXI_HOME="$HOME/.pixi"
+          export PIXI_BIN_DIR="$HOME/.pixi/bin"
+          mkdir -p "$PIXI_BIN_DIR"
+          if [ "$(uname -m)" != "x86_64" ]; then
+            echo "Unsupported architecture: $(uname -m)" >&2
+            exit 1
+          fi
+          PIXI_ARCHIVE="pixi-x86_64-unknown-linux-musl.tar.gz"
+          PIXI_BASE_URL="https://github.com/prefix-dev/pixi/releases/download/v${PIXI_VERSION}"
+          curl -fsSLo "/tmp/${PIXI_ARCHIVE}" "${PIXI_BASE_URL}/${PIXI_ARCHIVE}"
+          curl -fsSLo "/tmp/${PIXI_ARCHIVE}.sha256" "${PIXI_BASE_URL}/${PIXI_ARCHIVE}.sha256"
+          (cd /tmp && sha256sum -c "${PIXI_ARCHIVE}.sha256")
+          tar -xzf "/tmp/${PIXI_ARCHIVE}" -C "$PIXI_BIN_DIR" pixi
+          chmod +x "$PIXI_BIN_DIR/pixi"
+          rm -f "/tmp/${PIXI_ARCHIVE}" "/tmp/${PIXI_ARCHIVE}.sha256"
           echo "$HOME/.pixi/bin" >> "$GITHUB_PATH"
       - name: Install locked docs-only environment
         run: pixi install --locked --environment docs
