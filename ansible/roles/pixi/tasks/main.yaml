@@ -62,6 +62,27 @@
     - pixi_command.rc != 0
     - not pixi_local_binary.stat.exists
 
+- name: Verify downloaded pixi release checksum
+  ansible.builtin.stat:
+    path: /tmp/{{ pixi_archive }}
+    checksum_algorithm: sha256
+  register: pixi_downloaded_archive
+  when:
+    - pixi_command.rc != 0
+    - not pixi_local_binary.stat.exists
+
+- name: Assert downloaded pixi archive matches release checksum
+  ansible.builtin.assert:
+    that:
+      - pixi_downloaded_archive.stat.checksum == expected_pixi_checksum
+    fail_msg: pixi archive checksum verification failed after download.
+  vars:
+    expected_pixi_checksum: >-
+      {{ (pixi_checksum_file.content | b64decode).split()[0] }}
+  when:
+    - pixi_command.rc != 0
+    - not pixi_local_binary.stat.exists
+
 - name: Unpack pixi release artifact
   ansible.builtin.unarchive:
     src: /tmp/{{ pixi_archive }}
@@ -69,27 +90,6 @@
     remote_src: true
     include:
       - pixi
-  when:
-    - pixi_command.rc != 0
-    - not pixi_local_binary.stat.exists
-
-- name: Verify installed pixi checksum
-  ansible.builtin.stat:
-    path: "{{ pixi_install_dir }}/pixi"
-    checksum_algorithm: sha256
-  register: pixi_installed_binary
-  when:
-    - pixi_command.rc != 0
-    - not pixi_local_binary.stat.exists
-
-- name: Assert installed pixi checksum matches release checksum
-  ansible.builtin.assert:
-    that:
-      - pixi_installed_binary.stat.checksum == expected_pixi_checksum
-    fail_msg: pixi checksum verification failed after installation.
-  vars:
-    expected_pixi_checksum: >-
-      {{ (pixi_checksum_file.content | b64decode).split()[0] }}
   when:
     - pixi_command.rc != 0
     - not pixi_local_binary.stat.exists
@@ -105,8 +105,20 @@
     - pixi_command.rc != 0
     - not pixi_local_binary.stat.exists
 
+- name: Ensure pixi binary directory is added to Bash PATH
+  ansible.builtin.blockinfile:
+    path: "{{ ansible_env.HOME }}/.bashrc"
+    create: true
+    mode: "0644"
+    marker: "# {mark} AUTOWARE-ML PIXI PATH"
+    block: |
+      export PATH="$HOME/.pixi/bin:$PATH"
+  when:
+    - pixi_command.rc != 0
+    - not pixi_local_binary.stat.exists
+
 - name: Display pixi installation status
   ansible.builtin.debug:
     msg: >-
-      pixi is available. Start a new shell session so PATH updates from the
-      installer are applied if this was a fresh installation.
+      pixi is available. Start a new shell session so the ~/.bashrc PATH
+      update is applied if this was a fresh installation.
