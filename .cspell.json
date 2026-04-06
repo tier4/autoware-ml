@@ -149,6 +149,7 @@
     "outids",
     "pairnum",
     "pdnorm",
+    "pointcept",
     "pullable",
     "pypi",
     "pytestmark",

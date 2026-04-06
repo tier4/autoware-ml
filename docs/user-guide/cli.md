@@ -19,11 +19,11 @@ Bash completion is installed automatically by the Docker image build and by
 | `deploy`         | Export models to ONNX and TensorRT                   |
 | `mlflow ui`      | Launch the MLflow tracking UI                        |
 | `mlflow export`  | Export one experiment into its own MLflow store      |
-| `session start`  | Start a tmux-backed background session               |
-| `session attach` | Attach to a tmux-backed background session           |
-| `session detach` | Detach clients from a tmux-backed background session |
-| `session ls`     | List tmux-backed background sessions                 |
-| `session stop`   | Stop a tmux-backed background session                |
+| `session start`  | Start a managed background task                      |
+| `session attach` | View live terminal output from a background task     |
+| `session detach` | Disconnect raw tmux clients from a managed session   |
+| `session ls`     | List managed background tasks                        |
+| `session stop`   | Stop a managed background task                       |
 | `create-dataset` | Generate dataset info files                          |
 
 ## train
@@ -125,11 +125,15 @@ autoware-ml mlflow export [--db-path PATH] [--experiment-name NAME | --config-na
 
 ## session start
 
-Start a detached tmux session running an `autoware-ml` command.
+Start a detached managed session running an `autoware-ml` command.
 
 ```bash
 autoware-ml session start --name <session_name> [--cwd PATH] [--attach] -- <autoware-ml command...>
 ```
+
+Managed sessions use a private tmux server internally, but the public workflow
+is intentionally narrow: start a background task, view its live output, list
+running sessions, and stop the task.
 
 **Example:**
 
@@ -144,27 +148,36 @@ Use `--raw` to run a non-`autoware-ml` command in the managed session:
 autoware-ml session start --name docs --raw --cwd /workspace -- zensical serve
 ```
 
-When attached to a managed session, `Ctrl+C` detaches the client without stopping the training job. To stop the job, use `autoware-ml session stop`.
+Use `--attach` with `session start` to open the live viewer immediately after
+startup. Use `session attach` later to view an already running task. In the
+viewer, `Ctrl+C` returns to your shell without stopping the task. To terminate
+the task, use `autoware-ml session stop`.
 
 ## session attach
 
-Attach to an existing tmux session.
+Render a live terminal view of an existing managed session.
 
 ```bash
 autoware-ml session attach --name <session_name>
 ```
 
+This is a read-only viewer, not a tmux client. Press `Ctrl+C` to exit the
+viewer while keeping the task running.
+
 ## session detach
 
-Detach clients from an existing tmux session.
+Disconnect raw tmux clients from an existing managed session.
 
 ```bash
 autoware-ml session detach --name <session_name>
 ```
 
+Most users do not need this command because `autoware-ml session attach` does
+not create a tmux client.
+
 ## session ls
 
-List tmux sessions.
+List managed background sessions.
 
 ```bash
 autoware-ml session ls
@@ -172,7 +185,7 @@ autoware-ml session ls
 
 ## session stop
 
-Stop a tmux session.
+Stop the tracked task and close its managed session.
 
 ```bash
 autoware-ml session stop --name <session_name>

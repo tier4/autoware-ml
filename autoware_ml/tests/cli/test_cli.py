@@ -363,7 +363,7 @@ class TestCliCommands:
         )
 
     def test_session_start_runs_script(self) -> None:
-        """Session start should dispatch to the tmux-backed session helper."""
+        """Session start should dispatch to the managed-session helper."""
         with patch("autoware_ml.cli.cli.run_lazy_script") as run_lazy_script_mock:
             result = self.runner.invoke(
                 app,
@@ -383,15 +383,12 @@ class TestCliCommands:
 
         assert result.exit_code == 0
         assert (
-            f"Attach with: autoware-ml session attach --name {SAMPLE_SESSION_NAME}" in result.output
-        )
-        assert (
-            f"Detach from another shell with: autoware-ml session detach --name {SAMPLE_SESSION_NAME}"
+            f"View live output with: autoware-ml session attach --name {SAMPLE_SESSION_NAME}"
             in result.output
         )
-        assert "Ctrl+C detaches without stopping training" in result.output
+        assert "Press Ctrl+C in the viewer to return without stopping the task." in result.output
         assert (
-            f"Stop training with: autoware-ml session stop --name {SAMPLE_SESSION_NAME}"
+            f"Stop the task with: autoware-ml session stop --name {SAMPLE_SESSION_NAME}"
             in result.output
         )
         run_lazy_script_mock.assert_called_once_with(
@@ -721,7 +718,7 @@ class TestPathCompletion:
 
 
 class TestSessionNameCompletion:
-    def test_completes_tmux_session_names(self) -> None:
+    def test_completes_managed_session_names(self) -> None:
         with patch(
             "autoware_ml.utils.cli.helpers.list_tmux_session_names",
             return_value=["default", SAMPLE_SESSION_NAME],
@@ -743,6 +740,10 @@ class TestSessionNameCompletion:
                 return_value=CompletedProcess(
                     args=[
                         "tmux",
+                        "-L",
+                        "autoware-ml",
+                        "-f",
+                        "/dev/null",
                         "list-sessions",
                         "-F",
                         "#{session_name}\t#{@autoware_ml_managed}",
@@ -756,13 +757,17 @@ class TestSessionNameCompletion:
 
         assert suggestions == []
 
-    def test_filters_unmanaged_tmux_session_names(self) -> None:
+    def test_filters_unmanaged_session_names(self) -> None:
         with patch("autoware_ml.utils.cli.helpers.shutil.which", return_value="/usr/bin/tmux"):
             with patch(
                 "autoware_ml.utils.cli.helpers.subprocess.run",
                 return_value=CompletedProcess(
                     args=[
                         "tmux",
+                        "-L",
+                        "autoware-ml",
+                        "-f",
+                        "/dev/null",
                         "list-sessions",
                         "-F",
                         "#{session_name}\t#{@autoware_ml_managed}",

@@ -51,7 +51,7 @@ mlflow_app = typer.Typer(
 )
 session_app = typer.Typer(
     name="session",
-    help="tmux-backed session management",
+    help="Managed background task sessions",
     no_args_is_help=True,
 )
 
@@ -153,13 +153,13 @@ def complete_session_command(ctx: click.Context, incomplete: str) -> list[str]:
 
 
 def complete_session_name(incomplete: str) -> list[str]:
-    """Complete tmux-backed session names.
+    """Complete managed session names.
 
     Args:
         incomplete: Current completion prefix entered by the user.
 
     Returns:
-        Completion candidates for managed tmux session names.
+        Completion candidates for managed session names.
     """
     return complete_session_name_value(incomplete)
 
@@ -454,7 +454,7 @@ def session_start(
         ),
     ] = None,
     attach: Annotated[
-        bool, typer.Option("--attach", help="Attach immediately after starting")
+        bool, typer.Option("--attach", help="Open the live viewer immediately after starting")
     ] = False,
     raw: Annotated[
         bool,
@@ -466,19 +466,20 @@ def session_start(
     command_args: Annotated[
         list[str] | None,
         typer.Argument(
-            help="Command to run in the tmux session. Pass it after '--', e.g. -- train --config-name ...",
+            help="Command to run in the managed background session. Pass it after '--', e.g. -- train --config-name ...",
             autocompletion=complete_session_command,
         ),
     ] = None,
 ) -> None:
-    """Start a detached tmux session for a managed or raw command.
+    """Start a detached managed session for a background task.
 
     Args:
-        name: Session name passed to tmux.
+        name: Managed session name.
         cwd: Working directory used when launching the session command.
+        attach: Whether to open the live viewer immediately after startup.
         raw: Whether to execute the forwarded command directly instead of
             prefixing it with ``autoware-ml``.
-        command_args: Command tokens forwarded to the tmux-managed shell.
+        command_args: Command tokens forwarded to the managed shell.
     """
     try:
         run_lazy_script(
@@ -492,10 +493,9 @@ def session_start(
         )
         if not attach:
             typer.echo(f"Started session '{name}'.")
-            typer.echo(f"Attach with: autoware-ml session attach --name {name}")
-            typer.echo(f"Detach from another shell with: autoware-ml session detach --name {name}")
-            typer.echo("Inside the attached session, Ctrl+C detaches without stopping training.")
-            typer.echo(f"Stop training with: autoware-ml session stop --name {name}")
+            typer.echo(f"View live output with: autoware-ml session attach --name {name}")
+            typer.echo("Press Ctrl+C in the viewer to return without stopping the task.")
+            typer.echo(f"Stop the task with: autoware-ml session stop --name {name}")
     except Exception as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
@@ -508,10 +508,10 @@ def session_attach(
         typer.Option("--name", "-n", help="Session name", autocompletion=complete_session_name),
     ],
 ) -> None:
-    """Attach the current terminal to a managed tmux session.
+    """Render a live terminal view of a managed session.
 
     Args:
-        name: Name of the session to attach to.
+        name: Name of the session to view.
     """
     try:
         run_lazy_script("autoware_ml.scripts.session", "attach_session", name=name)
@@ -527,10 +527,10 @@ def session_detach(
         typer.Option("--name", "-n", help="Session name", autocompletion=complete_session_name),
     ],
 ) -> None:
-    """Detach clients currently attached to a managed tmux session.
+    """Disconnect raw tmux clients from a managed session.
 
     Args:
-        name: Name of the session whose clients should be detached.
+        name: Name of the session whose tmux clients should be detached.
     """
     try:
         run_lazy_script("autoware_ml.scripts.session", "detach_session", name=name)
@@ -541,10 +541,10 @@ def session_detach(
 
 @session_app.command(name="ls")
 def session_ls() -> None:
-    """List tmux sessions managed by ``autoware-ml``.
+    """List background sessions managed by ``autoware-ml``.
 
     The command prints formatted session information and exits quietly when no
-    managed tmux sessions are currently running.
+    managed sessions are currently running.
     """
     try:
         output = run_lazy_script("autoware_ml.scripts.session", "list_sessions")
@@ -562,7 +562,7 @@ def session_stop(
         typer.Option("--name", "-n", help="Session name", autocompletion=complete_session_name),
     ],
 ) -> None:
-    """Stop a managed tmux session.
+    """Stop a managed background task and close its session.
 
     Args:
         name: Name of the session to stop.

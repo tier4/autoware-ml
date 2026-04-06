@@ -26,10 +26,10 @@ from pathlib import Path
 from typing import Any
 
 import autoware_ml.configs
+from autoware_ml.utils.session import AUTOWARE_ML_SESSION_OPTION, TMUX_BASE_COMMAND
 
 
 CONFIGS_ROOT = Path(autoware_ml.configs.__file__).parent.resolve()
-AUTOWARE_ML_SESSION_OPTION = "@autoware_ml_managed"
 
 
 def parse_extra_args(extra_args: Sequence[str]) -> dict[str, Any]:
@@ -221,17 +221,17 @@ def complete_path_value(
 
 
 def list_tmux_session_names() -> list[str]:
-    """List tmux session names for shell completion.
+    """List managed session names for shell completion.
 
     Returns:
-        Managed tmux session names, or an empty list when tmux is unavailable.
+        Managed session names, or an empty list when tmux is unavailable.
     """
     if shutil.which("tmux") is None:
         return []
 
     result = subprocess.run(
         [
-            "tmux",
+            *TMUX_BASE_COMMAND,
             "list-sessions",
             "-F",
             "#{session_name}\t#{" + AUTOWARE_ML_SESSION_OPTION + "}",
@@ -253,13 +253,13 @@ def list_tmux_session_names() -> list[str]:
 
 
 def complete_session_name_value(incomplete: str) -> list[str]:
-    """Complete tmux session names.
+    """Complete managed session names.
 
     Args:
         incomplete: Current completion prefix entered by the user.
 
     Returns:
-        Matching tmux session names.
+        Matching managed session names.
     """
     return [name for name in list_tmux_session_names() if name.startswith(incomplete)]
 

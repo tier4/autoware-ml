@@ -12,29 +12,56 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""tmux-backed session management for long-running Autoware-ML commands.
+"""Managed background sessions backed by a private tmux server.
 
-This module implements the session lifecycle used by the CLI for starting,
-attaching, detaching, and stopping managed tmux sessions.
+The public feature scope is intentionally narrow:
+
+- start a long-running task in the background
+- view live terminal output
+- list running sessions
+- stop the tracked task
+
+The implementation uses tmux internally, but the CLI is not intended to expose
+general-purpose tmux session management.
 """
 
 from __future__ import annotations
 
+import os
 import shlex
 import shutil
+import signal
 import subprocess
+import sys
+import time
 from collections.abc import Sequence
 from pathlib import Path
 
 AUTOWARE_ML_SESSION_OPTION = "@autoware_ml_managed"
+AUTOWARE_ML_CHILD_PGID_OPTION = "@autoware_ml_child_pgid"
+TMUX_BASE_COMMAND = ["tmux", "-L", "autoware-ml", "-f", "/dev/null"]
+_VIEWER_CLEAR_SCREEN = "\033[H\033[2J"
+_VIEWER_HIDE_CURSOR = "\033[?25l"
+_VIEWER_SHOW_CURSOR = "\033[?25h"
 
 
 class SessionCommandError(RuntimeError):
-    """Signal that a tmux-backed session command could not be completed.
+    """Signal that a managed session command could not be completed.
 
     The CLI converts this error into concise user-facing messages instead of
     exposing raw subprocess tracebacks.
     """
+
+
+def _matches_tmux_error(error: str | SessionCommandError, *prefixes: str) -> bool:
+    """Return whether a tmux error message starts with one of the given prefixes."""
+    message = str(error)
+    return any(message.startswith(prefix) for prefix in prefixes)
+
+
+def _is_missing_session_error(error: str | SessionCommandError) -> bool:
+    """Return whether tmux reported a missing managed session."""
+    return _matches_tmux_error(error, "can't find session:", "no server running on ")
 
 
 def _require_tmux() -> None:
@@ -61,25 +88,27 @@ def _run_tmux(args: list[str]) -> subprocess.CompletedProcess[str]:
     """
     _require_tmux()
     try:
-        return subprocess.run(["tmux", *args], check=True, text=True, capture_output=True)
+        return subprocess.run(
+            [*TMUX_BASE_COMMAND, *args], check=True, text=True, capture_output=True
+        )
     except subprocess.CalledProcessError as exc:
         message = exc.stderr.strip() or exc.stdout.strip() or "tmux command failed."
         raise SessionCommandError(message) from exc
 
 
 def _build_session_command(work_dir: Path, session_name: str, command_args: Sequence[str]) -> str:
-    """Build the shell command executed inside the tmux session.
+    """Build the shell command executed inside a managed background session.
 
     The managed shell runs the forwarded command in a separate process group so
-    ``Ctrl+C`` can detach the tmux client without interrupting training.
+    the live viewer can exit without interrupting the task.
 
     Args:
         work_dir: Working directory for the managed shell.
-        session_name: tmux session name.
+        session_name: Managed session name.
         command_args: ``autoware-ml`` subcommand arguments.
 
     Returns:
-        Shell command string executed inside the tmux session.
+        Shell command string executed inside the private tmux server.
     """
     quoted_command = " ".join(shlex.quote(arg) for arg in ["autoware-ml", *command_args])
     return _build_managed_shell_command(work_dir, session_name, quoted_command)
@@ -88,42 +117,53 @@ def _build_session_command(work_dir: Path, session_name: str, command_args: Sequ
 def _build_raw_session_command(
     work_dir: Path, session_name: str, command_args: Sequence[str]
 ) -> str:
-    """Build the shell command for an arbitrary process executed inside the tmux session.
+    """Build the shell command for an arbitrary process executed in a managed session.
 
     Args:
         work_dir: Working directory for the managed shell.
-        session_name: tmux session name.
+        session_name: Managed session name.
         command_args: Raw command arguments executed without the ``autoware-ml`` prefix.
 
     Returns:
-        Shell command string executed inside the tmux session.
+        Shell command string executed inside the private tmux server.
     """
     quoted_command = " ".join(shlex.quote(arg) for arg in command_args)
     return _build_managed_shell_command(work_dir, session_name, quoted_command)
 
 
 def _build_managed_shell_command(work_dir: Path, session_name: str, quoted_command: str) -> str:
-    """Build the managed shell wrapper used by tmux-backed sessions.
+    """Build the shell wrapper used by managed background sessions.
 
     Args:
         work_dir: Working directory for the managed shell.
-        session_name: tmux session name.
+        session_name: Managed session name.
         quoted_command: Fully quoted command executed by the managed shell.
 
     Returns:
-        Shell wrapper string passed to ``tmux send-keys``.
+        Shell wrapper string passed to ``tmux new-session``.
     """
     child_command = shlex.quote(f"exec {quoted_command}")
 
+    tmux_shell_command = " ".join(shlex.quote(token) for token in TMUX_BASE_COMMAND)
     shell_lines = [
         f"cd {shlex.quote(str(work_dir))} || exit 1",
         f"AUTOWARE_ML_SESSION_NAME={shlex.quote(session_name)}",
         f"setsid bash -lc {child_command} &",
         "child_pid=$!",
-        'detach_client() { tmux detach-client -s "$AUTOWARE_ML_SESSION_NAME" >/dev/null 2>&1 || true; }',
-        'stop_child() { if kill -0 "$child_pid" 2>/dev/null; then kill -- -"$child_pid" 2>/dev/null || true; wait "$child_pid" 2>/dev/null || true; fi; }',
+        tmux_shell_command
+        + ' set-option -t "$AUTOWARE_ML_SESSION_NAME" -q '
+        + AUTOWARE_ML_CHILD_PGID_OPTION
+        + ' "$child_pid" >/dev/null 2>&1 || true',
+        "detach_client() { "
+        + tmux_shell_command
+        + ' detach-client -s "$AUTOWARE_ML_SESSION_NAME" >/dev/null 2>&1 || true; }',
         "trap detach_client INT",
-        "trap stop_child TERM HUP EXIT",
+        "cleanup_session() { "
+        + tmux_shell_command
+        + ' set-option -t "$AUTOWARE_ML_SESSION_NAME" -qu '
+        + AUTOWARE_ML_CHILD_PGID_OPTION
+        + " >/dev/null 2>&1 || true; }",
+        "trap cleanup_session EXIT",
         "while true; do",
         '  wait "$child_pid"',
         "  exit_code=$?",
@@ -131,11 +171,71 @@ def _build_managed_shell_command(work_dir: Path, session_name: str, quoted_comma
         "    break",
         "  fi",
         "done",
-        "trap - TERM HUP EXIT",
+        "trap - EXIT",
         'exit "$exit_code"',
     ]
     shell_script = "\n".join(shell_lines)
     return f"bash -lc {shlex.quote(shell_script)}"
+
+
+def _read_session_option(name: str, option: str) -> str:
+    """Return the value of a managed-session tmux option.
+
+    Args:
+        name: Session name.
+        option: tmux session option name.
+
+    Returns:
+        Option value, or an empty string when the option is unset.
+
+    Raises:
+        SessionCommandError: If the session does not exist or tmux fails.
+    """
+    result = _run_tmux(["show-options", "-t", name, "-q", "-v", option])
+    return result.stdout.strip()
+
+
+def _stop_child_process_group(process_group_id: int, timeout_seconds: float = 10.0) -> None:
+    """Stop a managed child process group gracefully, then forcefully if needed.
+
+    Args:
+        process_group_id: Process group ID recorded for the managed child.
+        timeout_seconds: Grace period before escalating from ``SIGTERM`` to ``SIGKILL``.
+    """
+    try:
+        os.killpg(process_group_id, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        try:
+            os.killpg(process_group_id, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.2)
+
+    try:
+        os.killpg(process_group_id, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+
+
+def _kill_session_if_present(name: str) -> None:
+    """Kill a managed session unless it has already disappeared.
+
+    Args:
+        name: Session name.
+
+    Raises:
+        SessionCommandError: If tmux reports an unexpected failure.
+    """
+    try:
+        _run_tmux(["kill-session", "-t", name])
+    except SessionCommandError as exc:
+        if _is_missing_session_error(exc):
+            return
+        raise
 
 
 def start_session(
@@ -145,13 +245,13 @@ def start_session(
     attach: bool = False,
     raw: bool = False,
 ) -> None:
-    """Start a detached tmux session running a managed command.
+    """Start a detached managed session running a background task.
 
     Args:
-        name: Session name.
+        name: Managed session name.
         command_args: Command arguments forwarded into the managed shell.
         cwd: Working directory for the managed shell.
-        attach: Whether to attach immediately after session creation.
+        attach: Whether to open the live viewer immediately after startup.
         raw: Whether to run the forwarded command without the ``autoware-ml`` prefix.
 
     Raises:
@@ -169,37 +269,58 @@ def start_session(
         else _build_session_command(work_dir, name, command_args)
     )
 
-    _run_tmux(["new-session", "-d", "-s", name])
+    _run_tmux(["new-session", "-d", "-s", name, session_command])
+    _run_tmux(["set-option", "-t", name, "-q", "status", "off"])
     _run_tmux(["set-option", "-t", name, "-q", AUTOWARE_ML_SESSION_OPTION, "1"])
-    _run_tmux(["send-keys", "-t", name, session_command, "C-m"])
     if attach:
         attach_session(name)
 
 
 def attach_session(name: str) -> None:
-    """Attach to an existing tmux session.
+    """Render a live terminal view of an existing managed session.
 
     Args:
         name: Session name.
 
     Raises:
-        SessionCommandError: If the session cannot be attached.
+        SessionCommandError: If the session cannot be viewed.
     """
-    _run_tmux(["has-session", "-t", name])
+    stdout = sys.stdout
+    last_frame: str | None = None
     try:
-        subprocess.run(["tmux", "attach-session", "-t", name], check=True)
-    except subprocess.CalledProcessError as exc:
-        message = exc.stderr.strip() if exc.stderr is not None else ""
-        if not message:
-            message = f"Failed to attach to session '{name}'."
-        raise SessionCommandError(message) from exc
+        _run_tmux(["has-session", "-t", name])
+        stdout.write(_VIEWER_HIDE_CURSOR)
+        stdout.flush()
+        while True:
+            _run_tmux(["has-session", "-t", name])
+            columns, rows = shutil.get_terminal_size(fallback=(80, 24))
+            _run_tmux(["resize-window", "-t", name, "-x", str(columns), "-y", str(rows)])
+            frame = _run_tmux(["capture-pane", "-p", "-e", "-J", "-t", name]).stdout
+            if frame != last_frame:
+                stdout.write(_VIEWER_CLEAR_SCREEN)
+                stdout.write(frame)
+                if not frame.endswith("\n"):
+                    stdout.write("\n")
+                stdout.flush()
+                last_frame = frame
+            time.sleep(0.1)
+    except KeyboardInterrupt:
+        return
+    except SessionCommandError as exc:
+        if _is_missing_session_error(exc):
+            return
+        raise
+    finally:
+        stdout.write(_VIEWER_SHOW_CURSOR)
+        stdout.flush()
 
 
 def list_sessions() -> str:
-    """Return formatted tmux session information.
+    """Return formatted information about managed background sessions.
 
     Returns:
-        Tabular session information. Returns an empty string when no tmux server is running.
+        Tabular session information. Returns an empty string when no managed
+        sessions are running.
     """
     try:
         result = _run_tmux(
@@ -212,7 +333,7 @@ def list_sessions() -> str:
             ]
         )
     except SessionCommandError as exc:
-        if str(exc).startswith("no server running on "):
+        if _matches_tmux_error(exc, "no server running on "):
             return ""
         raise
     rows = [line.split("\t", maxsplit=4) for line in result.stdout.splitlines() if line.strip()]
@@ -232,7 +353,10 @@ def list_sessions() -> str:
 
 
 def detach_session(name: str) -> None:
-    """Detach clients attached to a tmux session.
+    """Disconnect raw tmux clients attached to a managed session.
+
+    Most users do not need this command because ``autoware-ml session attach``
+    uses a read-only live viewer instead of a tmux client.
 
     Args:
         name: Session name.
@@ -245,7 +369,7 @@ def detach_session(name: str) -> None:
 
 
 def stop_session(name: str) -> None:
-    """Stop a tmux session.
+    """Stop the tracked task and close the managed session.
 
     Args:
         name: Session name.
@@ -253,4 +377,8 @@ def stop_session(name: str) -> None:
     Raises:
         SessionCommandError: If the session does not exist or tmux fails.
     """
-    _run_tmux(["kill-session", "-t", name])
+    _run_tmux(["has-session", "-t", name])
+    child_process_group = _read_session_option(name, AUTOWARE_ML_CHILD_PGID_OPTION)
+    if child_process_group:
+        _stop_child_process_group(int(child_process_group))
+    _kill_session_if_present(name)
