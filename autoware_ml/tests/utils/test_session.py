@@ -174,6 +174,18 @@ class TestDetachSession:
 
 
 class TestAttachSession:
+    def test_raises_when_session_is_missing_before_viewer_starts(self) -> None:
+        with (
+            patch("autoware_ml.utils.session._run_tmux") as run_tmux_mock,
+            patch("autoware_ml.utils.session.sys.stdout", new_callable=StringIO) as stdout_mock,
+            pytest.raises(SessionCommandError, match="can't find session: default"),
+        ):
+            run_tmux_mock.side_effect = [SessionCommandError("can't find session: default")]
+            attach_session("default")
+
+        run_tmux_mock.assert_called_once_with(["has-session", "-t", "default"])
+        assert stdout_mock.getvalue() == "\033[?25h"
+
     def test_renders_live_session_frame_until_interrupted(self) -> None:
         with (
             patch("autoware_ml.utils.session._run_tmux") as run_tmux_mock,
@@ -187,14 +199,12 @@ class TestAttachSession:
             run_tmux_mock.side_effect = [
                 CompletedProcess(args=["tmux"], returncode=0, stdout="", stderr=""),
                 CompletedProcess(args=["tmux"], returncode=0, stdout="", stderr=""),
-                CompletedProcess(args=["tmux"], returncode=0, stdout="", stderr=""),
                 CompletedProcess(args=["tmux"], returncode=0, stdout="progress 42%\n", stderr=""),
             ]
             attach_session("default")
 
         run_tmux_mock.assert_has_calls(
             [
-                call(["has-session", "-t", "default"]),
                 call(["has-session", "-t", "default"]),
                 call(["resize-window", "-t", "default", "-x", "120", "-y", "40"]),
                 call(["capture-pane", "-p", "-e", "-J", "-t", "default"]),
@@ -217,6 +227,9 @@ class TestAttachSession:
         ):
             run_tmux_mock.side_effect = [
                 CompletedProcess(args=["tmux"], returncode=0, stdout="", stderr=""),
+                CompletedProcess(args=["tmux"], returncode=0, stdout="", stderr=""),
+                CompletedProcess(args=["tmux"], returncode=0, stdout="", stderr=""),
+                CompletedProcess(args=["tmux"], returncode=0, stdout="progress 42%\n", stderr=""),
                 SessionCommandError("can't find session: default"),
             ]
             attach_session("default")
@@ -224,11 +237,43 @@ class TestAttachSession:
         run_tmux_mock.assert_has_calls(
             [
                 call(["has-session", "-t", "default"]),
-                call(["has-session", "-t", "default"]),
+                call(["resize-window", "-t", "default", "-x", "80", "-y", "24"]),
+                call(["capture-pane", "-p", "-e", "-J", "-t", "default"]),
             ]
         )
         assert stdout_mock.getvalue().startswith("\033[?25l")
+        assert "progress 42%" in stdout_mock.getvalue()
         assert stdout_mock.getvalue().endswith("\033[?25h")
+
+    def test_resizes_only_when_terminal_size_changes(self) -> None:
+        with (
+            patch("autoware_ml.utils.session._run_tmux") as run_tmux_mock,
+            patch(
+                "autoware_ml.utils.session.shutil.get_terminal_size",
+                side_effect=[
+                    os.terminal_size((80, 24)),
+                    os.terminal_size((80, 24)),
+                ],
+            ),
+            patch("autoware_ml.utils.session.time.sleep", side_effect=[None, KeyboardInterrupt]),
+            patch("autoware_ml.utils.session.sys.stdout", new_callable=StringIO),
+        ):
+            run_tmux_mock.side_effect = [
+                CompletedProcess(args=["tmux"], returncode=0, stdout="", stderr=""),
+                CompletedProcess(args=["tmux"], returncode=0, stdout="", stderr=""),
+                CompletedProcess(args=["tmux"], returncode=0, stdout="frame 1\n", stderr=""),
+                CompletedProcess(args=["tmux"], returncode=0, stdout="frame 2\n", stderr=""),
+            ]
+            attach_session("default")
+
+        run_tmux_mock.assert_has_calls(
+            [
+                call(["has-session", "-t", "default"]),
+                call(["resize-window", "-t", "default", "-x", "80", "-y", "24"]),
+                call(["capture-pane", "-p", "-e", "-J", "-t", "default"]),
+                call(["capture-pane", "-p", "-e", "-J", "-t", "default"]),
+            ]
+        )
 
 
 class TestStopSession:

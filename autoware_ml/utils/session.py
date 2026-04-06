@@ -287,14 +287,18 @@ def attach_session(name: str) -> None:
     """
     stdout = sys.stdout
     last_frame: str | None = None
+    has_rendered_frame = False
+    viewer_size: tuple[int, int] | None = None
     try:
         _run_tmux(["has-session", "-t", name])
         stdout.write(_VIEWER_HIDE_CURSOR)
         stdout.flush()
         while True:
-            _run_tmux(["has-session", "-t", name])
             columns, rows = shutil.get_terminal_size(fallback=(80, 24))
-            _run_tmux(["resize-window", "-t", name, "-x", str(columns), "-y", str(rows)])
+            current_size = (columns, rows)
+            if current_size != viewer_size:
+                _run_tmux(["resize-window", "-t", name, "-x", str(columns), "-y", str(rows)])
+                viewer_size = current_size
             frame = _run_tmux(["capture-pane", "-p", "-e", "-J", "-t", name]).stdout
             if frame != last_frame:
                 stdout.write(_VIEWER_CLEAR_SCREEN)
@@ -303,11 +307,12 @@ def attach_session(name: str) -> None:
                     stdout.write("\n")
                 stdout.flush()
                 last_frame = frame
+                has_rendered_frame = True
             time.sleep(0.1)
     except KeyboardInterrupt:
         return
     except SessionCommandError as exc:
-        if _is_missing_session_error(exc):
+        if _is_missing_session_error(exc) and has_rendered_frame:
             return
         raise
     finally:
