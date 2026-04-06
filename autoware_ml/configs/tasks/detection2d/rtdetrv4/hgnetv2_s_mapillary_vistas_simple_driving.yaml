@@ -5,12 +5,12 @@ defaults:
 
 data_root: ${oc.env:AUTOWARE_ML_DATA_PATH}
 dataset_root: ${data_root}
-train_ann_file: mapillary_vistas/coco/mapillary_vistas_training_simple_driving.json
-val_ann_file: mapillary_vistas/coco/mapillary_vistas_validation_simple_driving.json
+train_ann_file: mapillary_vistas/coco/mapillary_vistas_training_simple_driving_refined.json
+val_ann_file: mapillary_vistas/coco/mapillary_vistas_validation_simple_driving_refined.json
 train_img_root: mapillary_vistas/training/images
 val_img_root: mapillary_vistas/validation/images
 
-num_classes: 10
+num_classes: 13
 
 datamodule:
   train_dataloader_cfg:

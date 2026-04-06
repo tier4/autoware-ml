@@ -7,8 +7,8 @@ icon: lucide/camera
 RT-DETRv4 is a camera-based 2D object detector built around an HGNetv2
 backbone, a hybrid encoder, and a D-FINE-style transformer decoder. It is
 integrated under the `detection2d` task namespace for COCO-style datasets,
-with ready-made configs for MS COCO and the Mapillary Vistas simple-driving
-subset.
+with ready-made configs for MS COCO and the Mapillary Vistas `simple-driving`
+subset with a corrected signal-aware class mapping.
 
 ## Summary
 
@@ -29,7 +29,7 @@ subset.
 | `detection2d/rtdetrv4/hgnetv2_m`                                  | MS COCO             | Medium HGNetv2 RT-DETRv4 baseline          |
 | `detection2d/rtdetrv4/hgnetv2_l`                                  | MS COCO             | Large HGNetv2 RT-DETRv4 baseline           |
 | `detection2d/rtdetrv4/hgnetv2_x`                                  | MS COCO             | Extra-large HGNetv2 RT-DETRv4 baseline     |
-| `detection2d/rtdetrv4/hgnetv2_s_mapillary_vistas_simple_driving`  | Mapillary Vistas    | Ten-class simple-driving training preset   |
+| `detection2d/rtdetrv4/hgnetv2_s_mapillary_vistas_simple_driving`  | Mapillary Vistas    | Thirteen-class simple-driving training preset   |
 | `detection2d/rtdetrv4/hgnetv2_s_mapillary_vistas_coco_transfer`   | Mapillary Vistas    | COCO checkpoint fine-tuning preset         |
 
 ## Training
@@ -39,8 +39,7 @@ autoware-ml train --config-name detection2d/rtdetrv4/hgnetv2_s
 autoware-ml train --config-name detection2d/rtdetrv4/hgnetv2_s_mapillary_vistas_simple_driving
 ```
 
-To fine-tune the Mapillary preset from an upstream RT-DETRv4-S COCO
-checkpoint:
+To fine-tune the Mapillary preset from an upstream RT-DETRv4-S COCO checkpoint:
 
 ```bash
 autoware-ml train \
@@ -52,6 +51,11 @@ The transfer preset is configured for raw upstream checkpoints that store model
 weights under `ema.module`. It also filters mismatched shapes so the detector
 head can be reinitialized safely when the dataset class count changes.
 
+The current Mapillary `simple-driving` preset uses 13 classes:
+`car`, `truck`, `bus`, `trailer`, `motorcycle`, `bicycle`, `pedestrian`,
+`animal`, `traffic light`, `pedestrian traffic light`, `other traffic light`,
+`traffic sign`, and `traffic sign back`.
+
 For a pipeline validation run:
 
 ```bash
@@ -62,16 +66,73 @@ autoware-ml train \
 
 ## Evaluation
 
+For the default Mapillary transfer preset, `autoware-ml test` evaluates on the
+validation split because `test_ann_file` and `test_img_root` inherit the
+validation annotation and image paths.
+
 ```bash
 autoware-ml test \
     --config-name detection2d/rtdetrv4/hgnetv2_s_mapillary_vistas_coco_transfer \
     +checkpoint=mlruns/detection2d/rtdetrv4/hgnetv2_s_mapillary_vistas_coco_transfer/<date>/<time>/checkpoints/best.ckpt
 ```
 
+If you have a separate Mapillary test annotation file and image root, override
+them explicitly:
+
+```bash
+autoware-ml test \
+    --config-name <config_name> \
+    +checkpoint=<ckpt_path>.ckpt \
+    test_ann_file=<annotation-json> \
+    test_img_root=<image-root>
+```
+
 Validation and test runs log standard COCO bbox metrics such as `mAP`, `AP50`,
 and `AP75`. COCO evaluation uses `pycocotools` and is executed in a spawned
 subprocess so repeated evaluation does not destabilize the long-running trainer
 process.
+
+For offline visualization on the Mapillary validation split, use the detection
+preview script directly:
+
+```bash
+python3 -m autoware_ml.scripts.visualize_detection2d \
+    --config-name tasks/detection2d/rtdetrv4/hgnetv2_s_mapillary_vistas_coco_transfer \
+    +checkpoint=mlruns/detection2d/rtdetrv4/hgnetv2_s_mapillary_vistas_coco_transfer/<date>/<time>/checkpoints/best.ckpt \
+    visualization.split=val \
+    visualization.max_images=32 \
+    visualization.out_dir=mlruns/detection2d/rtdetrv4/mapillary_val_visualizations
+```
+
+To visualize predictions for a dedicated test split instead:
+
+```bash
+python3 -m autoware_ml.scripts.visualize_detection2d \
+    --config-name tasks/detection2d/rtdetrv4/hgnetv2_s_mapillary_vistas_coco_transfer \
+    +checkpoint=mlruns/detection2d/rtdetrv4/hgnetv2_s_mapillary_vistas_coco_transfer/<date>/<time>/checkpoints/best.ckpt \
+    visualization.split=test \
+    test_ann_file=<mapillary-test-annotation-json> \
+    test_img_root=<mapillary-test-image-root> \
+    visualization.max_images=32 \
+    visualization.out_dir=mlruns/detection2d/rtdetrv4/mapillary_test_visualizations
+```
+
+The visualization script saves rendered images and a `predictions.json` summary
+to `visualization.out_dir`.
+
+Checkpoint retention is controlled by the shared `callbacks.model_checkpoint`
+config, not by RT-DETRv4 specifically. The current default keeps `best.ckpt`
+and `last.ckpt`. To retain the best five checkpoints as well, override the
+checkpoint filename template and `save_top_k`:
+
+```bash
+autoware-ml train \
+    --config-name detection2d/rtdetrv4/hgnetv2_s_mapillary_vistas_coco_transfer \
+    model.init_checkpoint_path=/workspace/weights/rtv4_hgnetv2_s_coco.pth \
+    callbacks.model_checkpoint.filename='epoch={epoch:03d}-step={step}' \
+    callbacks.model_checkpoint.save_top_k=5 \
+    callbacks.model_checkpoint.save_last=true
+```
 
 ## Deployment
 
