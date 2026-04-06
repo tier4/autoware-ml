@@ -12,7 +12,9 @@ This guide covers training models with Autoware-ML.
 autoware-ml train --config-name <task>/<model>/<config>
 ```
 
-Checkpoints and logs are saved automatically under `mlruns/<task>/<model>/<config>/<date>/<time>/`. The corresponding MLflow run also stores the resolved Hydra config, run metadata, and checkpoints as artifacts.
+Checkpoints and logs are saved automatically under `mlruns/<task>/<model>/<config>/<date>/<time>/`.
+The corresponding MLflow run also stores the resolved Hydra config, run metadata, and checkpoints as
+artifacts.
 
 Example:
 
@@ -22,26 +24,22 @@ autoware-ml train --config-name calibration_status/calibration_status_classifier
 
 ## Long-Running Training
 
-For long jobs inside Docker or remote environments, prefer tmux-backed sessions over `nohup`:
+For long jobs inside Docker or remote environments, prefer managed background sessions over `nohup`:
 
 ```bash
 autoware-ml session start --name calibration-status-train --cwd /workspace -- \
     train --config-name calibration_status/calibration_status_classifier/resnet18_t4dataset_j6gen2
 ```
 
-Later you can reattach:
+Later you can open the live viewer with `session attach`:
 
 ```bash
 autoware-ml session attach --name calibration-status-train
 ```
 
-To detach from another shell without stopping the job:
-
-```bash
-autoware-ml session detach --name calibration-status-train
-```
-
-When attached to a managed session, `Ctrl+C` detaches the client and keeps the training process running. To terminate the training job, use:
+If you want to open the viewer immediately at startup, add `--attach` to `session start`. The viewer
+is read-only. Press `Ctrl+C` to return to your shell while keeping the training process running.
+To terminate the training job, use:
 
 ```bash
 autoware-ml session stop --name calibration-status-train
