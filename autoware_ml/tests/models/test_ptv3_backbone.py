@@ -40,11 +40,9 @@ def test_serialized_attention_requires_supported_flash_configuration() -> None:
 
 def test_serialized_attention_uses_flash_module_when_enabled() -> None:
     flash_module = SimpleNamespace(
-        flash_attn_varlen_qkvpacked_func=lambda qkv,
-        cu_seqlens,
-        max_seqlen,
-        dropout_p,
-        softmax_scale: (qkv[:, 2])
+        flash_attn_varlen_qkvpacked_func=lambda qkv, cu_seqlens, max_seqlen, dropout_p, softmax_scale: (
+            qkv[:, 2]
+        )
     )
     point = Point(
         {
@@ -83,11 +81,9 @@ def test_serialized_attention_uses_flash_module_when_enabled() -> None:
 
 def test_build_export_module_disables_flash_attention_without_mutating_live_backbone() -> None:
     flash_module = SimpleNamespace(
-        flash_attn_varlen_qkvpacked_func=lambda qkv,
-        cu_seqlens,
-        max_seqlen,
-        dropout_p,
-        softmax_scale: (qkv[:, 2])
+        flash_attn_varlen_qkvpacked_func=lambda qkv, cu_seqlens, max_seqlen, dropout_p, softmax_scale: (
+            qkv[:, 2]
+        )
     )
     with patch(
         "autoware_ml.models.segmentation3d.backbones.ptv3.load_flash_attn_module",
