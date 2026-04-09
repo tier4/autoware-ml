@@ -1,4 +1,4 @@
-# T4 Datasets
+# T4Dataset
 
 This sub-module implements the database layer for the **T4** annotation format, built on top of the abstract base classes in `databases/`.
 
