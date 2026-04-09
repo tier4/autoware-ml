@@ -83,11 +83,10 @@ class T4Database(BaseDatabase):
 
         # Second, send the list to the multiprocessing or single processing the scenario
         # samples/frames
-        if self.num_workers > 1:
-            scenario_sample_records = self._multi_process_scenario_records(unique_scenario_data)
-        else:
-            scenario_sample_records = self._single_process_scenario_records(unique_scenario_data)
-        logger.info(f"Processed {len(scenario_sample_records)} scenario sample records")
+        scenario_sample_records = self._run_t4records_generator(unique_scenario_data)
+        logger.info(
+            f"Processed {len(scenario_sample_records)} scenario sample records"
+        )
 
         # Third, get the polar schema
         polars_schema = self.get_polars_schema()
@@ -125,14 +124,24 @@ class T4Database(BaseDatabase):
         if self.num_workers > 1:
             # Run T4 records generator in multi processors
             with ProcessPoolExecutor(max_workers=self.num_workers) as executor:
+<<<<<<< HEAD
                 futures = executor.map(_apply_t4_records_generator, worker_params)
+=======
+                futures = executor.map(_apply_t4_records_generator,
+                                       worker_params)
+>>>>>>> 3b04ce9 (Merge _single_process_scenario_records and _multi_process_scenario_records)
                 for result in tqdm(futures, total=len(worker_params)):
                     flatten_records.extend(result)
                 return flatten_records
         else:
             # Run T4 records generator in a single processor
             for worker_param in worker_params:
+<<<<<<< HEAD
                 flatten_records.extend(_apply_t4_records_generator(worker_param))
+=======
+                flatten_records.extend(
+                    _apply_t4_records_generator(worker_param))
+>>>>>>> 3b04ce9 (Merge _single_process_scenario_records and _multi_process_scenario_records)
             return flatten_records
 
     def load_scenario_records(self) -> Sequence[DatasetRecord]:
