@@ -15,7 +15,7 @@ _CONFIG_PATH = str(Path(autoware_ml.configs.__file__).parent.resolve() / "genera
 
 @hydra.main(version_base=None, config_path=_CONFIG_PATH)
 def main(cfg: DictConfig):
-    """Main training function.
+    """Script to generate records, and it will be removed in the future.
 
     Args:
         cfg: Hydra configuration
