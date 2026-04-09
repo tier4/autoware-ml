@@ -56,14 +56,16 @@ class T4Database(BaseDatabase):
     ) -> None:
         """Initialize T4 database. Please refer to the BaseDatabase class for more details."""
         logger.info("Initializing T4 database...")
-        super().__init__(database_version=database_version,
-                         database_root_path=database_root_path,
-                         scenario_root_path=scenario_root_path,
-                         scenarios=scenarios,
-                         cache_path=cache_path,
-                         cache_file_prefix_name=cache_file_prefix_name,
-                         main_database=main_database,
-                         num_workers=num_workers)
+        super().__init__(
+            database_version=database_version,
+            database_root_path=database_root_path,
+            scenario_root_path=scenario_root_path,
+            scenarios=scenarios,
+            cache_path=cache_path,
+            cache_file_prefix_name=cache_file_prefix_name,
+            main_database=main_database,
+            num_workers=num_workers,
+        )
 
     def process_scenario_records(self) -> Sequence[DatasetRecord]:
         """Load scenario records from the database."""
@@ -82,14 +84,10 @@ class T4Database(BaseDatabase):
         # Second, send the list to the multiprocessing or single processing the scenario
         # samples/frames
         if self.num_workers > 1:
-            scenario_sample_records = self._multi_process_scenario_records(
-                unique_scenario_data)
+            scenario_sample_records = self._multi_process_scenario_records(unique_scenario_data)
         else:
-            scenario_sample_records = self._single_process_scenario_records(
-                unique_scenario_data)
-        logger.info(
-            f"Processed {len(scenario_sample_records)} scenario sample records"
-        )
+            scenario_sample_records = self._single_process_scenario_records(unique_scenario_data)
+        logger.info(f"Processed {len(scenario_sample_records)} scenario sample records")
 
         # Third, get the polar schema
         polars_schema = self.get_polars_schema()
@@ -100,9 +98,7 @@ class T4Database(BaseDatabase):
         df_hash = hashlib.sha256(str(self).encode("utf-8")).hexdigest()
         df_cache_path = self._cache_path / f"{self.cache_file_prefix_name}_{df_hash}.parquet"
         df.write_parquet(df_cache_path)
-        logger.info(
-            f"Saved the database cache to {df_cache_path} with the hash: {df_hash}"
-        )
+        logger.info(f"Saved the database cache to {df_cache_path} with the hash: {df_hash}")
 
         # End the timer
         end_time = time.perf_counter()
@@ -121,26 +117,25 @@ class T4Database(BaseDatabase):
             T4RecordsGeneratorWorkerParams(
                 database_root_path=self.database_root_path,
                 scenario_data=scenario,
-            ) for scenario in scenario_data.values()
+            )
+            for scenario in scenario_data.values()
         ]
 
         flatten_records = []
         if self.num_workers > 1:
-          # Run T4 records generator in multi processors
-          with ProcessPoolExecutor(max_workers=self.num_workers) as executor:
-              futures = executor.map(_apply_t4_records_generator, worker_params)
-              for result in tqdm(futures, total=len(worker_params)):
-                  flatten_records.extend(result)
-              return flatten_records
+            # Run T4 records generator in multi processors
+            with ProcessPoolExecutor(max_workers=self.num_workers) as executor:
+                futures = executor.map(_apply_t4_records_generator, worker_params)
+                for result in tqdm(futures, total=len(worker_params)):
+                    flatten_records.extend(result)
+                return flatten_records
         else:
-          # Run T4 records generator in a single processor
-          for worker_param in worker_params:
-            flatten_records.extend(
-                _apply_t4_records_generator(worker_param))
-          return flatten_records
+            # Run T4 records generator in a single processor
+            for worker_param in worker_params:
+                flatten_records.extend(_apply_t4_records_generator(worker_param))
+            return flatten_records
 
     def load_scenario_records(self) -> Sequence[DatasetRecord]:
         """Load scenario records from the database."""
         # TODO (KokSeang): Read the cache if it exists, and return the records
-        raise NotImplementedError(
-            "Subclasses must implement load_scenario_records method!")
+        raise NotImplementedError("Subclasses must implement load_scenario_records method!")
