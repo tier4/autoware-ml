@@ -31,8 +31,7 @@ class DatabaseInterface(Protocol):
     @abstractmethod
     def cache_file_prefix_name(self) -> str:
         """Get the prefix name of the cache file."""
-        raise NotImplementedError(
-            "Database must define cache_file_prefix_name!")
+        raise NotImplementedError("Database must define cache_file_prefix_name!")
 
     @property
     @abstractmethod
@@ -79,23 +78,19 @@ class DatabaseInterface(Protocol):
     @abstractmethod
     def get_main_database_scenario_data(self) -> Scenarios:
         """Get the scenario data for the main database."""
-        raise NotImplementedError(
-            "Database must define get_main_database_scenario_data!")
+        raise NotImplementedError("Database must define get_main_database_scenario_data!")
 
     @abstractmethod
     def get_unique_scenario_data(self) -> MappingProxyType[str, ScenarioData]:
         """Get all scenario data from all scenario groups and keep their order the same."""
-        raise NotImplementedError(
-            "Database must define get_unique_scenario_data!")
+        raise NotImplementedError("Database must define get_unique_scenario_data!")
 
     @abstractmethod
     def load_scenario_records(self) -> Sequence[DatasetRecord]:
         """Load scenario records from the database."""
-        raise NotImplementedError(
-            "Database must define load_scenario_records!")
+        raise NotImplementedError("Database must define load_scenario_records!")
 
     @abstractmethod
     def process_scenario_records(self) -> Sequence[DatasetRecord]:
         """Process scenario records from the database."""
-        raise NotImplementedError(
-            "Subclasses must define process_scenario_records method!")
+        raise NotImplementedError("Subclasses must define process_scenario_records method!")

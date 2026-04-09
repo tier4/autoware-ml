@@ -65,7 +65,7 @@ class T4Database(BaseDatabase):
             cache_path=cache_path,
             cache_file_prefix_name=cache_file_prefix_name,
             main_database=main_database,
-            num_workers=num_workers
+            num_workers=num_workers,
         )
 
     def process_scenario_records(self) -> Sequence[DatasetRecord]:
