@@ -18,23 +18,23 @@ def path_adapter(path: str | Path) -> Path:
 PathAdapter = Annotated[Path, BeforeValidator(path_adapter)]
 
 
-class DatabaseVersion(BaseModel):
-    """Database version and its settings."""
+class DatasetParams(BaseModel):
+    """Parameters for a dataset, for example, version, max_sweeps, and sampling steps."""
 
     model_config = ConfigDict(frozen=True, strict=True)
 
-    db_version: str
+    dataset_name: str
     max_sweeps: int
     sample_steps: int
 
     def __str__(self) -> str:
         """String representation of the database version."""
-        return f"DatabaseVersion(db_version={self.db_version}, max_sweeps={self.max_sweeps}, sample_steps={self.sample_steps})"
+        return f"DatasetParams(dataset_name={self.dataset_name}, max_sweeps={self.max_sweeps}, sample_steps={self.sample_steps})"
 
-    def __eq__(self, other: DatabaseVersion) -> bool:
+    def __eq__(self, other: DatasetParams) -> bool:
         """Compare two database versions by their version and settings."""
         return (
-            self.db_version == other.db_version
+            self.dataset_name == other.dataset_name
             and self.max_sweeps == other.max_sweeps
             and self.sample_steps == other.sample_steps
         )
@@ -91,7 +91,7 @@ class Scenarios(BaseModel):
 
     version: str
     scenario_root_path: PathAdapter  # Root path where the scenario yaml files are stored
-    db_versions: Sequence[DatabaseVersion]
+    db_versions: Sequence[DatasetParams]
     scenario_data: Mapping[SplitType, Sequence[ScenarioData]] | None = None
 
     def __str__(self) -> str:

@@ -9,7 +9,7 @@ The Hydra-based entrypoint in `scripts/generate_dataset.py` composes a YAML conf
 | Module                        | Role                                                                     | Depends on                       |
 | ----------------------------- | ------------------------------------------------------------------------ | -------------------------------- |
 | `schemas.py`                  | Defines `DatasetRecord` and `DatasetTableSchema` (output row shape)      | `polars`                         |
-| `scenarios.py`                | Defines `ScenarioData`, `DatabaseVersion`, and abstract `Scenarios` base | _(none)_                         |
+| `scenarios.py`                | Defines `ScenarioData`, `DatasetParams`, and abstract `Scenarios` base | _(none)_                         |
 | `database_interface.py`       | `DatabaseInterface` protocol all databases must satisfy                  | `scenarios`, `schemas`           |
 | `base_database.py`            | `BaseDatabase` shared implementation of `DatabaseInterface`              | `scenarios`, `schemas`, `polars` |
 | `scripts/generate_dataset.py` | Hydra entrypoint that instantiates a `DatabaseInterface` from config     | `database_interface`             |
@@ -45,7 +45,7 @@ classDiagram
     }
 
     class scenarios {
-        DatabaseVersion
+        DatasetParams
         ScenarioData
         Scenarios
     }

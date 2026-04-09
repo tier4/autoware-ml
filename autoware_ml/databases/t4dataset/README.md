@@ -32,7 +32,7 @@ classDiagram
         <<databases>>
         Scenarios
         ScenarioData
-        DatabaseVersion
+        DatasetParams
     }
 
     class schemas {

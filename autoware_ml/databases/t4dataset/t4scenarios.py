@@ -9,7 +9,7 @@ from types import MappingProxyType
 from pydantic import model_validator
 
 from autoware_ml.common.enums.enums import SplitType
-from autoware_ml.databases.scenarios import ScenarioData, Scenarios, DatabaseVersion
+from autoware_ml.databases.scenarios import ScenarioData, Scenarios, DatasetParams
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ class T4Scenarios(Scenarios):
         scenario_data = defaultdict(list)
         logger.info(f"==== Loading database scenarios for database: {self.version} ====")
         for db_version in self.db_versions:
-            db_yaml_path = self.scenario_root_path / (db_version.db_version + ".yaml")
+            db_yaml_path = self.scenario_root_path / (db_version.dataset_name + ".yaml")
             logger.info(f"Loading database scenarios from {db_yaml_path}")
             with open(db_yaml_path, "r") as f:
                 db_scenarios: MappingProxyType[str, Sequence[str]] = yaml.safe_load(f)
@@ -40,7 +40,7 @@ class T4Scenarios(Scenarios):
         return self
 
     @staticmethod
-    def _build_scenario_data(scenario_id: str, db_version: DatabaseVersion) -> ScenarioData:
+    def _build_scenario_data(scenario_id: str, db_version: DatasetParams) -> ScenarioData:
         """
         Build scenario data from a scenario ID and a database version.
         :param scenario_id: Scenario ID.
@@ -57,7 +57,7 @@ class T4Scenarios(Scenarios):
             raise ValueError(f"Invalid scenario ID: {scenario_id}")
 
         return ScenarioData(
-            db_version=db_version.db_version,
+            db_version=db_version.dataset_name,
             scenario_id=scenario_id,
             scenario_version=version,
             vehicle_type=vehicle_type,
@@ -67,7 +67,7 @@ class T4Scenarios(Scenarios):
         )
 
     def _build_scenario_splits(
-        self, db_scenarios: MappingProxyType[str, Sequence[str]], db_version: DatabaseVersion
+        self, db_scenarios: MappingProxyType[str, Sequence[str]], db_version: DatasetParams
     ) -> MappingProxyType[SplitType, Sequence[ScenarioData]]:
         """
         Build splits from a database scenarios.

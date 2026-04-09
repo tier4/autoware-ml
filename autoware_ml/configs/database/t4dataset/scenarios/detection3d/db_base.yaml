@@ -3,115 +3,116 @@ _convert_: all
 
 version: base-v1.0.0
 
-# List of database versions and each yaml file consists of train/val/test splits
-db_versions:
-  - _target_: autoware_ml.databases.scenarios.DatabaseVersion
+# List of dataset parameters, and dataset_name is the yaml file name in T4Dataset, 
+# which consists of train/val/test splits
+dataset_params:
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
     _convert_: all
-    db_version: db_jpntaxigen2_v1
+    dataset_name: db_jpntaxigen2_v1
     max_sweeps: 2
     sample_steps: 5
-  - _target_: autoware_ml.databases.scenarios.DatabaseVersion
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
     _convert_: all
-    db_version: db_jpntaxigen2_v2
+    dataset_name: db_jpntaxigen2_v2
     max_sweeps: 2
     sample_steps: 1
-  - _target_: autoware_ml.databases.scenarios.DatabaseVersion
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
     _convert_: all
-    db_version: db_j6gen2_v1
+    dataset_name: db_j6gen2_v1
     max_sweeps: 2
     sample_steps: 1
-  - _target_: autoware_ml.databases.scenarios.DatabaseVersion
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
     _convert_: all
-    db_version: db_j6gen2_v2
+    dataset_name: db_j6gen2_v2
     max_sweeps: 2
     sample_steps: 1
-  - _target_: autoware_ml.databases.scenarios.DatabaseVersion
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
     _convert_: all
-    db_version: db_j6gen2_v3
+    dataset_name: db_j6gen2_v3
     max_sweeps: 2
     sample_steps: 1
-  - _target_: autoware_ml.databases.scenarios.DatabaseVersion
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
     _convert_: all
-    db_version: db_j6gen2_v4
+    dataset_name: db_j6gen2_v4
     max_sweeps: 2
     sample_steps: 1
-  - _target_: autoware_ml.databases.scenarios.DatabaseVersion
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
     _convert_: all
-    db_version: db_j6gen2_v5
+    dataset_name: db_j6gen2_v5
     max_sweeps: 2
     sample_steps: 1
-  - _target_: autoware_ml.databases.scenarios.DatabaseVersion
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
     _convert_: all
-    db_version: db_j6gen2_v6
+    dataset_name: db_j6gen2_v6
     max_sweeps: 2
     sample_steps: 1
-  - _target_: autoware_ml.databases.scenarios.DatabaseVersion
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
     _convert_: all
-    db_version: db_j6gen2_v7
+    dataset_name: db_j6gen2_v7
     max_sweeps: 2
     sample_steps: 1
-  - _target_: autoware_ml.databases.scenarios.DatabaseVersion
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
     _convert_: all
-    db_version: db_j6gen2_v8
+    dataset_name: db_j6gen2_v8
     max_sweeps: 2
     sample_steps: 1
-  - _target_: autoware_ml.databases.scenarios.DatabaseVersion
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
     _convert_: all
-    db_version: db_j6gen2_v9
+    dataset_name: db_j6gen2_v9
     max_sweeps: 2
     sample_steps: 1
-  - _target_: autoware_ml.databases.scenarios.DatabaseVersion
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
     _convert_: all
-    db_version: db_largebus_v1
+    dataset_name: db_largebus_v1
     max_sweeps: 2
     sample_steps: 1
-  - _target_: autoware_ml.databases.scenarios.DatabaseVersion
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
     _convert_: all
-    db_version: db_largebus_v2
+    dataset_name: db_largebus_v2
     max_sweeps: 2
     sample_steps: 1
-  - _target_: autoware_ml.databases.scenarios.DatabaseVersion
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
     _convert_: all
-    db_version: db_largebus_v3
+    dataset_name: db_largebus_v3
     max_sweeps: 2
     sample_steps: 1
-  - _target_: autoware_ml.databases.scenarios.DatabaseVersion
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
     _convert_: all
-    db_version: db_jpntaxi_v1
+    dataset_name: db_jpntaxi_v1
     max_sweeps: 2
     sample_steps: 1
-  - _target_: autoware_ml.databases.scenarios.DatabaseVersion
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
     _convert_: all
-    db_version: db_jpntaxi_v2
+    dataset_name: db_jpntaxi_v2
     max_sweeps: 2
     sample_steps: 1
-  - _target_: autoware_ml.databases.scenarios.DatabaseVersion
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
     _convert_: all
-    db_version: db_jpntaxi_v4
+    dataset_name: db_jpntaxi_v4
     max_sweeps: 2
     sample_steps: 1
-  - _target_: autoware_ml.databases.scenarios.DatabaseVersion
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
     _convert_: all
-    db_version: db_gsm8_v1
+    dataset_name: db_gsm8_v1
     max_sweeps: 2
     sample_steps: 1
-  - _target_: autoware_ml.databases.scenarios.DatabaseVersion
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
     _convert_: all
-    db_version: db_j6_v1
+    dataset_name: db_j6_v1
     max_sweeps: 2
     sample_steps: 1
-  - _target_: autoware_ml.databases.scenarios.DatabaseVersion
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
     _convert_: all
-    db_version: db_j6_v2
+    dataset_name: db_j6_v2
     max_sweeps: 2
     sample_steps: 1
-  - _target_: autoware_ml.databases.scenarios.DatabaseVersion
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
     _convert_: all
-    db_version: db_j6_v3
+    dataset_name: db_j6_v3
     max_sweeps: 2
     sample_steps: 1
-  - _target_: autoware_ml.databases.scenarios.DatabaseVersion
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
     _convert_: all
-    db_version: db_j6_v5
+    dataset_name: db_j6_v5
     max_sweeps: 2
     sample_steps: 1
