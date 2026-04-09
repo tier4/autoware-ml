@@ -90,6 +90,8 @@ class T4Database(BaseDatabase):
 
     def __eq__(self, other: T4Database) -> bool:
         """Compare two databases by their version and scenario IDs."""
+        if not isinstance(other, T4Database):
+            return False
         return str(self) == str(other)
 
     def process_scenario_records(self) -> Sequence[DatasetRecord]:
