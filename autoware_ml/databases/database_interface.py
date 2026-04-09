@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from pathlib import Path
 from typing import Sequence, Protocol
 from types import MappingProxyType
 
@@ -29,39 +28,15 @@ class DatabaseInterface(Protocol):
 
     @property
     @abstractmethod
-    def cache_file_prefix_name(self) -> str:
-        """Get the prefix name of the cache file."""
-        raise NotImplementedError("Database must define cache_file_prefix_name!")
-
-    @property
-    @abstractmethod
     def database_version(self) -> str:
         """Get the version of the database."""
         raise NotImplementedError("Database must define database_version!")
 
     @property
     @abstractmethod
-    def database_root_path(self) -> Path:
-        """Get the root path of the database."""
-        raise NotImplementedError("Database must define database_root_path!")
-
-    @property
-    @abstractmethod
     def scenarios(self) -> MappingProxyType[str, Scenarios]:
         """Get the scenarios for each scenario group."""
         raise NotImplementedError("Database must define scenarios!")
-
-    @property
-    @abstractmethod
-    def scenarios_string_repr(self) -> str:
-        """Get string representation of the scenarios."""
-        raise NotImplementedError("Database must define scenarios_string_repr!")
-
-    @property
-    @abstractmethod
-    def num_workers(self) -> int:
-        """Get the number of workers to use for processing the database."""
-        raise NotImplementedError("Database must define num_workers!")
 
     @abstractmethod
     def get_unique_scenario_data(self) -> MappingProxyType[str, ScenarioData]:

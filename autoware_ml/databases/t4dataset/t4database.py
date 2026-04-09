@@ -79,10 +79,10 @@ class T4Database(BaseDatabase):
     def __str__(self) -> str:
         """String representation of the database."""
         string = (
-            f"T4Database(database_version={self.database_version}, "
-            f"database_root_path={str(self.database_root_path)}, "
-            f"cache path={str(self.cache_path)}, "
-            f"cache file prefix name={self.cache_file_prefix_name}, "
+            f"T4Database(database_version={self._database_version}, "
+            f"database_root_path={str(self._database_root_path)}, "
+            f"cache path={str(self._cache_path)}, "
+            f"cache file prefix name={self._cache_file_prefix_name}, "
             f"{self.scenarios_string_repr}"
             f")"
         )
@@ -90,14 +90,7 @@ class T4Database(BaseDatabase):
 
     def __eq__(self, other: T4Database) -> bool:
         """Compare two databases by their version and scenario IDs."""
-        return (
-            self.database_version == other.database_version
-            and self.database_root_path == other.database_root_path
-            and self.cache_path == other.cache_path
-            and self.cache_file_prefix_name == other.cache_file_prefix_name
-            and self.scenarios == other.scenarios
-            and self.num_workers == other.num_workers
-        )
+        return str(self) == str(other)
 
     def process_scenario_records(self) -> Sequence[DatasetRecord]:
         """Load scenario records from the database."""

@@ -44,10 +44,10 @@ class BaseDatabase:
         # Create cache output path if it doesn't exist
         self._cache_path.mkdir(parents=True, exist_ok=True)
         logger.info(
-            f"Database initialized with version: {self.database_version}, "
-            f"root path: {self.database_root_path}, "
-            f"cache path: {self.cache_path}, "
-            f"cache file prefix name: {self.cache_file_prefix_name}"
+            f"Database initialized with version: {self._database_version}, "
+            f"root path: {self._database_root_path}, "
+            f"cache path: {self._cache_path}, "
+            f"cache file prefix name: {self._cache_file_prefix_name}"
         )
 
         self._scenarios: MappingProxyType[str, Scenarios] = {}
@@ -79,29 +79,9 @@ class BaseDatabase:
         return self._database_version
 
     @property
-    def database_root_path(self) -> Path:
-        """Get the root path of the database."""
-        return self._database_root_path
-
-    @property
     def scenarios(self) -> Mapping[str, Scenarios]:
         """Get the scenarios for each scenario group."""
         return self._scenarios
-
-    @property
-    def cache_path(self) -> Path:
-        """Get the cache path of the database."""
-        return self._cache_path
-
-    @property
-    def cache_file_prefix_name(self) -> str:
-        """Get the prefix name of the cache file."""
-        return self._cache_file_prefix_name
-
-    @property
-    def num_workers(self) -> int:
-        """Get the number of workers to use for processing the database."""
-        return self._num_workers
 
     def get_polars_schema(self) -> pl.Schema:
         """Get the polars schema for the database."""
