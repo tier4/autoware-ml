@@ -59,7 +59,7 @@ class DatasetRecord(BaseModel):
     scenario_id: str
     sample_id: str
     sample_index: int
-    location: str
-    vehicle_type: str
+    location: str | None
+    vehicle_type: str | None
     # TODO (KokSeang): Add more annotation fields here
     # bbox_3d: Sequence[npt.NDArray[np.float64]]
