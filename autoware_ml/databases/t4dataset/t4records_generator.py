@@ -56,14 +56,19 @@ class T4RecordsGenerator:
         Initialize T4 dataset generator.
         :param database_root_path: Root path of the T4 database.
         :param scenario_data: Scenario data.
-        :param max_sweeps: Max number of lidar sweeps to include, only for 3D.
-        :param sample_steps: Number of frames/samples to skip between each sample.
+        :param max_sweeps: Max number of lidar sweeps to include, only for 3D, set to 0
+          if skipping lidar sweep concatenation.
+        :param sample_steps: Number of frames/samples to skip between each sample, set to 1
+          if not skipping any samples/frames.
         """
         self.database_root_path = Path(database_root_path)
         self.scenario_data = scenario_data
         self.max_sweeps = max_sweeps
         self.sample_steps = sample_steps
         self.t4_devkit_dataset = self._construct_t4_devkit_dataset()
+
+        assert sample_steps > 0, "Sample steps must be greater than 0."
+        assert max_sweeps >= 0, "Max sweeps must be greater than 0."
 
     def _construct_t4_devkit_dataset(self) -> Tier4:
         """Construct T4 dataset."""
