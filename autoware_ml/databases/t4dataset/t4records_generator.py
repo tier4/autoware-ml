@@ -68,7 +68,7 @@ class T4RecordsGenerator:
         self.t4_devkit_dataset = self._construct_t4_devkit_dataset()
 
         assert sample_steps > 0, "Sample steps must be greater than 0."
-        assert max_sweeps >= 0, "Max sweeps must be greater than 0."
+        assert max_sweeps >= 0, "Max sweeps must be greater than or equal to 0."
 
     def _construct_t4_devkit_dataset(self) -> Tier4:
         """Construct T4 dataset."""
