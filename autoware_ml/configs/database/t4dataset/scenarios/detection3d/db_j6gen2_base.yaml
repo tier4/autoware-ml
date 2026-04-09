@@ -3,7 +3,7 @@ _convert_: all
 
 version: j6gen2_base-v1.0.0
 
-# List of dataset parameters, and dataset_name is the yaml file name in T4Dataset, 
+# List of dataset parameters, and dataset_name is the yaml file name in T4Dataset,
 # which consists of train/val/test splits
 dataset_params:
   - _target_: autoware_ml.databases.scenarios.DatasetParams

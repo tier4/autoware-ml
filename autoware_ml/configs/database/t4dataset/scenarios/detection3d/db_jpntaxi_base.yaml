@@ -3,7 +3,7 @@ _convert_: all
 
 version: jpntaxi_base-v1.0.0
 
-# List of dataset parameters, and dataset_name is the yaml file name in T4Dataset, 
+# List of dataset parameters, and dataset_name is the yaml file name in T4Dataset,
 # which consists of train/val/test splits
 dataset_params:
   - _target_: autoware_ml.databases.scenarios.DatasetParams
@@ -31,4 +31,3 @@ dataset_params:
     dataset_name: db_jpntaxi_v4
     max_sweeps: 2
     sample_steps: 1
-  

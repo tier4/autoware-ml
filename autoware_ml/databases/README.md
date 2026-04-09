@@ -6,13 +6,13 @@ The Hydra-based entrypoint in `scripts/generate_dataset.py` composes a YAML conf
 
 ## Module relationships
 
-| Module                        | Role                                                                     | Depends on                       |
-| ----------------------------- | ------------------------------------------------------------------------ | -------------------------------- |
-| `schemas.py`                  | Defines `DatasetRecord` and `DatasetTableSchema` (output row shape)      | `polars`                         |
+| Module                        | Role                                                                   | Depends on                       |
+| ----------------------------- | ---------------------------------------------------------------------- | -------------------------------- |
+| `schemas.py`                  | Defines `DatasetRecord` and `DatasetTableSchema` (output row shape)    | `polars`                         |
 | `scenarios.py`                | Defines `ScenarioData`, `DatasetParams`, and abstract `Scenarios` base | _(none)_                         |
-| `database_interface.py`       | `DatabaseInterface` protocol all databases must satisfy                  | `scenarios`, `schemas`           |
-| `base_database.py`            | `BaseDatabase` shared implementation of `DatabaseInterface`              | `scenarios`, `schemas`, `polars` |
-| `scripts/generate_dataset.py` | Hydra entrypoint that instantiates a `DatabaseInterface` from config     | `database_interface`             |
+| `database_interface.py`       | `DatabaseInterface` protocol all databases must satisfy                | `scenarios`, `schemas`           |
+| `base_database.py`            | `BaseDatabase` shared implementation of `DatabaseInterface`            | `scenarios`, `schemas`, `polars` |
+| `scripts/generate_dataset.py` | Hydra entrypoint that instantiates a `DatabaseInterface` from config   | `database_interface`             |
 
 To add a new dataset family, extend `Scenarios` with format-specific YAML parsing, extend `BaseDatabase` with record generation logic, and register the new class in a Hydra config. See `t4dataset/` for a concrete example.
 
