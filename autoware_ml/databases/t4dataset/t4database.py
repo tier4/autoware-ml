@@ -118,7 +118,7 @@ class T4Database(BaseDatabase):
         # Fourth, save the scenario sample records to a polars .parquet file
         df = pl.DataFrame(scenario_sample_records, schema=polars_schema)
         df_hash = hashlib.sha256(str(self).encode("utf-8")).hexdigest()
-        df_cache_path = self._cache_path / f"{self.cache_file_prefix_name}_{df_hash}.parquet"
+        df_cache_path = self._cache_path / f"{self._cache_file_prefix_name}_{df_hash}.parquet"
         df.write_parquet(df_cache_path)
         logger.info(f"Saved the database cache to {df_cache_path} with the hash: {df_hash}")
 
@@ -137,16 +137,16 @@ class T4Database(BaseDatabase):
         # Group params for each worker
         worker_params = [
             T4RecordsGeneratorWorkerParams(
-                database_root_path=self.database_root_path,
+                database_root_path=self._database_root_path,
                 scenario_data=scenario,
             )
             for scenario in scenario_data.values()
         ]
 
         flatten_records = []
-        if self.num_workers > 1:
+        if self._num_workers > 1:
             # Run T4 records generator in multi processors
-            with ProcessPoolExecutor(max_workers=self.num_workers) as executor:
+            with ProcessPoolExecutor(max_workers=self._num_workers) as executor:
                 futures = executor.map(_apply_t4_records_generator, worker_params)
                 for result in tqdm(futures, total=len(worker_params)):
                     flatten_records.extend(result)
