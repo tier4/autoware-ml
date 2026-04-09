@@ -22,13 +22,13 @@ class T4Scenarios(Scenarios):
         """Build scenarios from database scenarios, and overwrite the scenario_data attribute."""
         scenario_data = defaultdict(list)
         logger.info(f"==== Loading database scenarios for database: {self.version} ====")
-        for db_version in self.db_versions:
-            db_yaml_path = self.scenario_root_path / (db_version.dataset_name + ".yaml")
+        for dataset_param in self.dataset_params:
+            db_yaml_path = self.scenario_root_path / (dataset_param.dataset_name + ".yaml")
             logger.info(f"Loading database scenarios from {db_yaml_path}")
             with open(db_yaml_path, "r") as f:
                 db_scenarios: MappingProxyType[str, Sequence[str]] = yaml.safe_load(f)
 
-            scenario_splits = self._build_scenario_splits(db_scenarios, db_version)
+            scenario_splits = self._build_scenario_splits(db_scenarios, dataset_param)
             for split, scenarios in scenario_splits.items():
                 scenario_data[split] += scenarios
 
@@ -67,19 +67,19 @@ class T4Scenarios(Scenarios):
         )
 
     def _build_scenario_splits(
-        self, db_scenarios: MappingProxyType[str, Sequence[str]], db_version: DatasetParams
+        self, db_scenarios: MappingProxyType[str, Sequence[str]], dataset_param: DatasetParams
     ) -> MappingProxyType[SplitType, Sequence[ScenarioData]]:
         """
         Build splits from a database scenarios.
         :param db_scenarios: Database scenarios.
-        :param db_version: Database version.
+        :param dataset_param: Dataset parameters.
         :return: List of ScenarioData for each split in {SplitType: List[ScenarioData]}.
         """
         scenario_splits = {}
         for split in [SplitType.TRAIN, SplitType.VAL, SplitType.TEST]:
             selected_scenarios = db_scenarios.get(split, [])
             scenario_splits[split] = [
-                self._build_scenario_data(scenario_id, db_version)
+                self._build_scenario_data(scenario_id, dataset_param)
                 for scenario_id in selected_scenarios
             ]
         return scenario_splits

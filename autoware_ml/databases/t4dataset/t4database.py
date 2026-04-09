@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
@@ -47,24 +49,46 @@ class T4Database(BaseDatabase):
         self,
         database_version: str,
         database_root_path: str,
-        scenario_root_path: str,
         scenarios: MappingProxyType[str, T4Scenarios],
         cache_path: str,
         cache_file_prefix_name: str,
-        main_database: str,
         num_workers: int,
     ) -> None:
-        """Initialize T4 database. Please refer to the BaseDatabase class for more details."""
+        """
+        Initialize T4 database. Please refer to the BaseDatabase class for more details.
+        Args:
+          database_version: Version of the database.
+          database_root_path: Root path where the actual annotation files are stored.
+          scenario_root_path: Root path where the scenario yaml files are stored.
+          scenarios: Scenario configurations for each scenario in {'scenario_group_name': scenario_config}.
+          cache_path: Path to cache the database records.
+          cache_file_prefix_name: Prefix name of the cache file, it will be <cache_file_prefix_name>_<database_hash>.parquet
+          main_database: Main database/scenario group name.
+          num_workers: Number of workers to use for processing the database.
+        """
         logger.info("Initializing T4 database...")
         super().__init__(
             database_version=database_version,
             database_root_path=database_root_path,
-            scenario_root_path=scenario_root_path,
-            scenarios=scenarios,
             cache_path=cache_path,
             cache_file_prefix_name=cache_file_prefix_name,
-            main_database=main_database,
             num_workers=num_workers,
+        )
+        self._scenarios = scenarios
+
+    def __str__(self) -> str:
+        """String representation of the database."""
+        string = f"T4Database(database_version={self.database_version}, database_root_path={str(self.database_root_path)}, cache path={str(self.cache_path)}, cache file prefix name={self.cache_file_prefix_name}"
+        string += f", {self.scenarios_string_repr}"
+        string += ")"
+        return string
+
+    def __eq__(self, other: T4Database) -> bool:
+        """Compare two databases by their version and scenario IDs."""
+        return (
+            self.database_version == other.database_version
+            and self.database_root_path == other.database_root_path
+            and self._scenarios == other._scenarios
         )
 
     def process_scenario_records(self) -> Sequence[DatasetRecord]:
@@ -84,9 +108,7 @@ class T4Database(BaseDatabase):
         # Second, send the list to the multiprocessing or single processing the scenario
         # samples/frames
         scenario_sample_records = self._run_t4records_generator(unique_scenario_data)
-        logger.info(
-            f"Processed {len(scenario_sample_records)} scenario sample records"
-        )
+        logger.info(f"Processed {len(scenario_sample_records)} scenario sample records")
 
         # Third, get the polar schema
         polars_schema = self.get_polars_schema()
@@ -124,24 +146,14 @@ class T4Database(BaseDatabase):
         if self.num_workers > 1:
             # Run T4 records generator in multi processors
             with ProcessPoolExecutor(max_workers=self.num_workers) as executor:
-<<<<<<< HEAD
                 futures = executor.map(_apply_t4_records_generator, worker_params)
-=======
-                futures = executor.map(_apply_t4_records_generator,
-                                       worker_params)
->>>>>>> 3b04ce9 (Merge _single_process_scenario_records and _multi_process_scenario_records)
                 for result in tqdm(futures, total=len(worker_params)):
                     flatten_records.extend(result)
                 return flatten_records
         else:
             # Run T4 records generator in a single processor
-            for worker_param in worker_params:
-<<<<<<< HEAD
+            for worker_param in tqdm(worker_params, total=len(worker_params)):
                 flatten_records.extend(_apply_t4_records_generator(worker_param))
-=======
-                flatten_records.extend(
-                    _apply_t4_records_generator(worker_param))
->>>>>>> 3b04ce9 (Merge _single_process_scenario_records and _multi_process_scenario_records)
             return flatten_records
 
     def load_scenario_records(self) -> Sequence[DatasetRecord]:

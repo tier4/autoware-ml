@@ -1,7 +1,7 @@
 _target_: autoware_ml.databases.t4dataset.t4scenarios.T4Scenarios
 _convert_: all
 
-version: jpntaxi_base-v1.0.0
+version: largebus-v1.0.0
 # Root path where the scenario yaml files are stored
 scenario_root_path: ${working_dir}/perception-devops/dataset_annotation/t4dataset/detection3d/
 
@@ -10,26 +10,16 @@ scenario_root_path: ${working_dir}/perception-devops/dataset_annotation/t4datase
 dataset_params:
   - _target_: autoware_ml.databases.scenarios.DatasetParams
     _convert_: all
-    dataset_name: db_jpntaxigen2_v1
-    max_sweeps: 2
-    sample_steps: 5
-  - _target_: autoware_ml.databases.scenarios.DatasetParams
-    _convert_: all
-    dataset_name: db_jpntaxigen2_v2
+    dataset_name: db_largebus_v1
     max_sweeps: 2
     sample_steps: 1
   - _target_: autoware_ml.databases.scenarios.DatasetParams
     _convert_: all
-    dataset_name: db_jpntaxi_v1
+    dataset_name: db_largebus_v2
     max_sweeps: 2
     sample_steps: 1
   - _target_: autoware_ml.databases.scenarios.DatasetParams
     _convert_: all
-    dataset_name: db_jpntaxi_v2
-    max_sweeps: 2
-    sample_steps: 1
-  - _target_: autoware_ml.databases.scenarios.DatasetParams
-    _convert_: all
-    dataset_name: db_jpntaxi_v4
+    dataset_name: db_largebus_v3
     max_sweeps: 2
     sample_steps: 1

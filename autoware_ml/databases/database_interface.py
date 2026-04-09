@@ -47,38 +47,21 @@ class DatabaseInterface(Protocol):
 
     @property
     @abstractmethod
-    def scenario_root_path(self) -> Path:
-        """Get the root path of the scenario files."""
-        raise NotImplementedError("Database must define scenario_root_path!")
-
-    @property
-    @abstractmethod
-    def main_database(self) -> str:
-        """Get the main database/scenario group name."""
-        raise NotImplementedError("Database must define main_database!")
-
-    @property
-    @abstractmethod
     def scenarios(self) -> MappingProxyType[str, Scenarios]:
         """Get the scenarios for each scenario group."""
         raise NotImplementedError("Database must define scenarios!")
 
     @property
     @abstractmethod
-    def cache_path(self) -> Path:
-        """Get the cache path of the database."""
-        raise NotImplementedError("Database must define cache_path!")
+    def scenarios_string_repr(self) -> str:
+        """Get string representation of the scenarios."""
+        raise NotImplementedError("Database must define scenarios_string_repr!")
 
     @property
     @abstractmethod
     def num_workers(self) -> int:
         """Get the number of workers to use for processing the database."""
         raise NotImplementedError("Database must define num_workers!")
-
-    @abstractmethod
-    def get_main_database_scenario_data(self) -> Scenarios:
-        """Get the scenario data for the main database."""
-        raise NotImplementedError("Database must define get_main_database_scenario_data!")
 
     @abstractmethod
     def get_unique_scenario_data(self) -> MappingProxyType[str, ScenarioData]:

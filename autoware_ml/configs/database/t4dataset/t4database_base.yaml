@@ -3,9 +3,9 @@ _convert_: all
 
 database_version: T4Database-base-v1.0.0
 # Root path of actual annotation files
-database_root_path: ${data_root_path}/t4dataset/
-# Root path where the scenario yaml files are stored
-scenario_root_path: ${working_dir}/perception-devops/dataset_annotation/t4dataset/detection3d/
+database_root_path: ${data_root_path}/t4datasets/
+
+# Caches
 cache_path: ${cache_root_path}/detection3d/
 # Prefix name of the cache file, it will be <cache_file_prefix_name>_<database_hash>.parquet
 cache_file_prefix_name: database
@@ -16,7 +16,6 @@ defaults:
   - t4dataset/scenarios@scenarios.db_j6gen2_base: detection3d/db_j6gen2_base
   - t4dataset/scenarios@scenarios.db_j6gen2: detection3d/db_j6gen2
   - t4dataset/scenarios@scenarios.db_jpntaxi_base: detection3d/db_jpntaxi_base
-  - t4dataset/scenarios@scenarios.db_jpntaxi_gen2: detection3d/db_jpntaxi_gen2
   - t4dataset/scenarios@scenarios.db_largebus: detection3d/db_largebus
 
 # Processor settings

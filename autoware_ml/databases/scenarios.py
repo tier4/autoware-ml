@@ -91,7 +91,7 @@ class Scenarios(BaseModel):
 
     version: str
     scenario_root_path: PathAdapter  # Root path where the scenario yaml files are stored
-    db_versions: Sequence[DatasetParams]
+    dataset_params: Sequence[DatasetParams]
     scenario_data: Mapping[SplitType, Sequence[ScenarioData]] | None = None
 
     def __str__(self) -> str:
@@ -99,9 +99,9 @@ class Scenarios(BaseModel):
         string = (
             f"Scenarios(version={self.version}, scenario_root_path={str(self.scenario_root_path)}, "
         )
-        string += "db_versions=("
-        for db_version in self.db_versions:
-            string += f"{db_version}, "
+        string += "dataset_params=("
+        for dataset_param in self.dataset_params:
+            string += f"{dataset_param}, "
         string += "), "
         string += "scenario_data=("
         for split, scenario_data in self.scenario_data.items():
@@ -114,7 +114,7 @@ class Scenarios(BaseModel):
         return (
             self.version == other.version
             and self.scenario_root_path == other.scenario_root_path
-            and self.db_versions == other.db_versions
+            and self.dataset_params == other.dataset_params
             and self.scenario_data == other.scenario_data
         )
 

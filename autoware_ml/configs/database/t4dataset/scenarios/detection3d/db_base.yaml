@@ -2,6 +2,8 @@ _target_: autoware_ml.databases.t4dataset.t4scenarios.T4Scenarios
 _convert_: all
 
 version: base-v1.0.0
+# Root path where the scenario yaml files are stored
+scenario_root_path: ${working_dir}/perception-devops/dataset_annotation/t4dataset/detection3d/
 
 # List of dataset parameters, and dataset_name is the yaml file name in T4Dataset,
 # which consists of train/val/test splits
