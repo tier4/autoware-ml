@@ -160,6 +160,8 @@ environments:
         - pypi: https://files.pythonhosted.org/packages/8a/53/39e6cd6b19e1be302c22bc6db8683968fd52f1df5ed6e38921a16d013406/pccm-0.4.16-py3-none-any.whl
         - pypi: https://files.pythonhosted.org/packages/e9/bd/e51a61b1054f09437acfbc2ff9106c30d1eb76bc1453d428399946781253/pillow-12.2.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
         - pypi: https://files.pythonhosted.org/packages/54/20/4d324d65cc6d9205fabedc306948156824eb9f0ee1633355a8f7ec5c66bf/pluggy-1.6.0-py3-none-any.whl
+        - pypi: https://files.pythonhosted.org/packages/b4/db/08f4ca10c5018813e7e0b59e4472302328b3d2ab1512f5a2157a814540e0/polars-1.39.3-py3-none-any.whl
+        - pypi: https://files.pythonhosted.org/packages/b0/15/fc3e43f3fdf3f20b7dfb5abe871ab6162cf8fb4aeabf4cfad822d5dc4c79/polars_runtime_32-1.39.3-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
         - pypi: https://files.pythonhosted.org/packages/4b/a6/38c8e2f318bf67d338f4d629e93b0b4b9af331f455f0390ea8ce4a099b26/portalocker-3.2.0-py3-none-any.whl
         - pypi: https://files.pythonhosted.org/packages/ee/8c/83087ebc47ab0396ce092363001fa37c17153119ee282700c0713a195853/prettytable-3.17.0-py3-none-any.whl
         - pypi: https://files.pythonhosted.org/packages/52/6a/57f43e054fb3d3a56ac9fc532bc684fc6169a26c75c353e65425b3e56eef/propcache-0.4.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
@@ -204,7 +206,7 @@ environments:
         - pypi: https://pypi.nvidia.com/tensorrt-cu12-libs/tensorrt_cu12_libs-10.16.0.72-py3-none-manylinux_2_28_x86_64.whl
         - pypi: https://files.pythonhosted.org/packages/33/d1/8bb87d21e9aeb323cc03034f5eaf2c8f69841e40e4853c2627edf8111ed3/termcolor-3.3.0-py3-none-any.whl
         - pypi: https://files.pythonhosted.org/packages/32/d5/f9a850d79b0851d1d4ef6456097579a9005b31fea68726a4ae5f2d82ddd9/threadpoolctl-3.6.0-py3-none-any.whl
-        - pypi: https://download.pytorch.org/whl/cu128/torch-2.9.1%2Bcu128-cp311-cp311-manylinux_2_28_x86_64.whl
+        - pypi: https://download-r2.pytorch.org/whl/cu128/torch-2.9.1%2Bcu128-cp311-cp311-manylinux_2_28_x86_64.whl
         - pypi: https://files.pythonhosted.org/packages/c3/a2/c7f6ebf546f8f644edf0f999aa98ece106986a77a7b922316bf6414ff825/torchmetrics-1.9.0-py3-none-any.whl
         - pypi: https://download-r2.pytorch.org/whl/cu128/torchvision-0.24.1%2Bcu128-cp311-cp311-manylinux_2_28_x86_64.whl
         - pypi: https://files.pythonhosted.org/packages/16/e1/3079a9ff9b8e11b846c6ac5c8b5bfb7ff225eee721825310c91b3b50304f/tqdm-4.67.3-py3-none-any.whl
@@ -247,14 +249,14 @@ environments:
         - conda: https://conda.anaconda.org/conda-forge/linux-64/fortran-compiler-1.11.0-h9bea470_0.conda
         - conda: https://conda.anaconda.org/conda-forge/linux-64/gcc-14.3.0-h0dff253_18.conda
         - conda: https://conda.anaconda.org/conda-forge/linux-64/gcc_impl_linux-64-14.3.0-hbdf3cc3_18.conda
-        - conda: https://conda.anaconda.org/conda-forge/linux-64/gcc_linux-64-14.3.0-h298d278_22.conda
+        - conda: https://conda.anaconda.org/conda-forge/linux-64/gcc_linux-64-14.3.0-h298d278_23.conda
         - conda: https://conda.anaconda.org/conda-forge/linux-64/gfortran-14.3.0-h76987e4_18.conda
         - conda: https://conda.anaconda.org/conda-forge/linux-64/gfortran_impl_linux-64-14.3.0-h1a219da_18.conda
-        - conda: https://conda.anaconda.org/conda-forge/linux-64/gfortran_linux-64-14.3.0-h31f076a_22.conda
+        - conda: https://conda.anaconda.org/conda-forge/linux-64/gfortran_linux-64-14.3.0-h7499c90_23.conda
         - conda: https://conda.anaconda.org/conda-forge/linux-64/git-2.53.0-pl5321h6d3cee1_0.conda
         - conda: https://conda.anaconda.org/conda-forge/linux-64/gxx-14.3.0-h76987e4_18.conda
         - conda: https://conda.anaconda.org/conda-forge/linux-64/gxx_impl_linux-64-14.3.0-h2185e75_18.conda
-        - conda: https://conda.anaconda.org/conda-forge/linux-64/gxx_linux-64-14.3.0-h7ab9642_22.conda
+        - conda: https://conda.anaconda.org/conda-forge/linux-64/gxx_linux-64-14.3.0-h91b0f8e_23.conda
         - conda: https://conda.anaconda.org/conda-forge/linux-64/icu-78.3-h33c6efd_0.conda
         - conda: https://conda.anaconda.org/conda-forge/noarch/kernel-headers_linux-64-4.18.0-he073ed8_9.conda
         - conda: https://conda.anaconda.org/conda-forge/linux-64/keyutils-1.6.3-hb9d3cd8_0.conda
@@ -422,6 +424,8 @@ environments:
         - pypi: https://files.pythonhosted.org/packages/e9/bd/e51a61b1054f09437acfbc2ff9106c30d1eb76bc1453d428399946781253/pillow-12.2.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
         - pypi: https://files.pythonhosted.org/packages/63/d7/97f7e3a6abb67d8080dd406fd4df842c2be0efaf712d1c899c32a075027c/platformdirs-4.9.4-py3-none-any.whl
         - pypi: https://files.pythonhosted.org/packages/54/20/4d324d65cc6d9205fabedc306948156824eb9f0ee1633355a8f7ec5c66bf/pluggy-1.6.0-py3-none-any.whl
+        - pypi: https://files.pythonhosted.org/packages/b4/db/08f4ca10c5018813e7e0b59e4472302328b3d2ab1512f5a2157a814540e0/polars-1.39.3-py3-none-any.whl
+        - pypi: https://files.pythonhosted.org/packages/b0/15/fc3e43f3fdf3f20b7dfb5abe871ab6162cf8fb4aeabf4cfad822d5dc4c79/polars_runtime_32-1.39.3-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
         - pypi: https://files.pythonhosted.org/packages/4b/a6/38c8e2f318bf67d338f4d629e93b0b4b9af331f455f0390ea8ce4a099b26/portalocker-3.2.0-py3-none-any.whl
         - pypi: https://files.pythonhosted.org/packages/5d/19/fd3ef348460c80af7bb4669ea7926651d1f95c23ff2df18b9d24bab4f3fa/pre_commit-4.5.1-py2.py3-none-any.whl
         - pypi: https://files.pythonhosted.org/packages/ee/8c/83087ebc47ab0396ce092363001fa37c17153119ee282700c0713a195853/prettytable-3.17.0-py3-none-any.whl
@@ -469,7 +473,7 @@ environments:
         - pypi: https://pypi.nvidia.com/tensorrt-cu12-libs/tensorrt_cu12_libs-10.16.0.72-py3-none-manylinux_2_28_x86_64.whl
         - pypi: https://files.pythonhosted.org/packages/33/d1/8bb87d21e9aeb323cc03034f5eaf2c8f69841e40e4853c2627edf8111ed3/termcolor-3.3.0-py3-none-any.whl
         - pypi: https://files.pythonhosted.org/packages/32/d5/f9a850d79b0851d1d4ef6456097579a9005b31fea68726a4ae5f2d82ddd9/threadpoolctl-3.6.0-py3-none-any.whl
-        - pypi: https://download.pytorch.org/whl/cu128/torch-2.9.1%2Bcu128-cp311-cp311-manylinux_2_28_x86_64.whl
+        - pypi: https://download-r2.pytorch.org/whl/cu128/torch-2.9.1%2Bcu128-cp311-cp311-manylinux_2_28_x86_64.whl
         - pypi: https://files.pythonhosted.org/packages/c3/a2/c7f6ebf546f8f644edf0f999aa98ece106986a77a7b922316bf6414ff825/torchmetrics-1.9.0-py3-none-any.whl
         - pypi: https://download-r2.pytorch.org/whl/cu128/torchvision-0.24.1%2Bcu128-cp311-cp311-manylinux_2_28_x86_64.whl
         - pypi: https://files.pythonhosted.org/packages/16/e1/3079a9ff9b8e11b846c6ac5c8b5bfb7ff225eee721825310c91b3b50304f/tqdm-4.67.3-py3-none-any.whl
@@ -1279,18 +1283,17 @@ packages:
     purls: []
     size: 76302378
     timestamp: 1771378056505
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/gcc_linux-64-14.3.0-h298d278_22.conda
-    sha256: 676444fd28bde495e27d32999c6f2e4cb7f96cf05c2ce5e8bf4b37ef0b428dfb
-    md5: 0b6cd616dab5e509c5c368d58a01982d
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/gcc_linux-64-14.3.0-h298d278_23.conda
+    sha256: b535da55f53ed0e44a366295dad325b242958fb3d91ba84b0173bfae28b39793
+    md5: b6090b005c6e1947e897c926caac1286
     depends:
       - gcc_impl_linux-64 14.3.0.*
       - binutils_linux-64
       - sysroot_linux-64
     license: BSD-3-Clause
-    license_family: BSD
     purls: []
-    size: 28918
-    timestamp: 1774728910114
+    size: 28912
+    timestamp: 1775508892545
   - conda: https://conda.anaconda.org/conda-forge/linux-64/gfortran-14.3.0-h76987e4_18.conda
     sha256: c216b97f00973fc6c37af16d1d974635e81cfc93462123b1d0ffc93fe509ea01
     md5: 958a6ecb4188cce9edbd9bbd2831a61d
@@ -1317,19 +1320,18 @@ packages:
     purls: []
     size: 18544424
     timestamp: 1771378230570
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/gfortran_linux-64-14.3.0-h31f076a_22.conda
-    sha256: a7545c830f6b3767c8302217cbd05a57da7c0716749194e9cbcc5e3688ffd53e
-    md5: 5e6d687088defd7740e973f604e0a8e2
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/gfortran_linux-64-14.3.0-h7499c90_23.conda
+    sha256: c81b57a355b9215c696d11831b3cefd4d2b3aefc9d74620915769ed2206476b7
+    md5: 3a937700705778ab8f5a6ce4f38eccca
     depends:
       - gfortran_impl_linux-64 14.3.0.*
-      - gcc_linux-64 ==14.3.0 h298d278_22
+      - gcc_linux-64 ==14.3.0 h298d278_23
       - binutils_linux-64
       - sysroot_linux-64
     license: BSD-3-Clause
-    license_family: BSD
     purls: []
     size: 27198
-    timestamp: 1774728910114
+    timestamp: 1775508892545
   - conda: https://conda.anaconda.org/conda-forge/linux-64/git-2.53.0-pl5321h6d3cee1_0.conda
     sha256: 33b20cf09ff1c6ca960e6c5f7fad1f08ffd3112a87d79e42ed56f4e1b4cdefe3
     md5: ad8d4260a6dae5f55960b26b237d576b
@@ -1509,19 +1511,18 @@ packages:
     purls: []
     size: 14566100
     timestamp: 1771378271421
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/gxx_linux-64-14.3.0-h7ab9642_22.conda
-    sha256: 0331f697ddd97f4d0ddbf66badf6f94bb397b39c534bcf604967d362dea428b1
-    md5: ac8519fa5fe0e5d779b5f6d658c10ed5
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/gxx_linux-64-14.3.0-h91b0f8e_23.conda
+    sha256: 8a6a78d354fd259906b2f01f5c29c4f9e42878fa870eadc20f7251d4554a4445
+    md5: 12d093c7df954a01b396a748442bd5cb
     depends:
       - gxx_impl_linux-64 14.3.0.*
-      - gcc_linux-64 ==14.3.0 h298d278_22
+      - gcc_linux-64 ==14.3.0 h298d278_23
       - binutils_linux-64
       - sysroot_linux-64
     license: BSD-3-Clause
-    license_family: BSD
     purls: []
-    size: 27468
-    timestamp: 1774728910114
+    size: 27479
+    timestamp: 1775508892545
   - pypi: https://files.pythonhosted.org/packages/04/4b/29cac41a4d98d144bf5f6d33995617b185d14b22401f75ca86f384e87ff1/h11-0.16.0-py3-none-any.whl
     name: h11
     version: 0.16.0
@@ -3149,6 +3150,48 @@ packages:
       - pytest-benchmark ; extra == 'testing'
       - coverage ; extra == 'testing'
     requires_python: ">=3.9"
+  - pypi: https://files.pythonhosted.org/packages/b4/db/08f4ca10c5018813e7e0b59e4472302328b3d2ab1512f5a2157a814540e0/polars-1.39.3-py3-none-any.whl
+    name: polars
+    version: 1.39.3
+    sha256: c2b955ccc0a08a2bc9259785decf3d5c007b489b523bf2390cf21cec2bb82a56
+    requires_dist:
+      - polars-runtime-32==1.39.3
+      - polars-runtime-64==1.39.3 ; extra == 'rt64'
+      - polars-runtime-compat==1.39.3 ; extra == 'rtcompat'
+      - polars-cloud>=0.4.0 ; extra == 'polars-cloud'
+      - numpy>=1.16.0 ; extra == 'numpy'
+      - pandas ; extra == 'pandas'
+      - polars[pyarrow] ; extra == 'pandas'
+      - pyarrow>=7.0.0 ; extra == 'pyarrow'
+      - pydantic ; extra == 'pydantic'
+      - fastexcel>=0.9 ; extra == 'calamine'
+      - openpyxl>=3.0.0 ; extra == 'openpyxl'
+      - xlsx2csv>=0.8.0 ; extra == 'xlsx2csv'
+      - xlsxwriter ; extra == 'xlsxwriter'
+      - polars[calamine,openpyxl,xlsx2csv,xlsxwriter] ; extra == 'excel'
+      - adbc-driver-manager[dbapi] ; extra == 'adbc'
+      - adbc-driver-sqlite[dbapi] ; extra == 'adbc'
+      - connectorx>=0.3.2 ; extra == 'connectorx'
+      - sqlalchemy ; extra == 'sqlalchemy'
+      - polars[pandas] ; extra == 'sqlalchemy'
+      - polars[adbc,connectorx,sqlalchemy] ; extra == 'database'
+      - fsspec ; extra == 'fsspec'
+      - deltalake>=1.0.0 ; extra == 'deltalake'
+      - pyiceberg>=0.7.1 ; extra == 'iceberg'
+      - gevent ; extra == 'async'
+      - cloudpickle ; extra == 'cloudpickle'
+      - matplotlib ; extra == 'graph'
+      - altair>=5.4.0 ; extra == 'plot'
+      - great-tables>=0.8.0 ; extra == 'style'
+      - tzdata ; sys_platform == 'win32' and extra == 'timezone'
+      - cudf-polars-cu12 ; extra == 'gpu'
+      - polars[async,cloudpickle,database,deltalake,excel,fsspec,graph,iceberg,numpy,pandas,plot,pyarrow,pydantic,style,timezone] ; extra == 'all'
+    requires_python: ">=3.10"
+  - pypi: https://files.pythonhosted.org/packages/b0/15/fc3e43f3fdf3f20b7dfb5abe871ab6162cf8fb4aeabf4cfad822d5dc4c79/polars_runtime_32-1.39.3-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+    name: polars-runtime-32
+    version: 1.39.3
+    sha256: 8bc9e13dc1d2e828331f2fe8ccbc9757554dc4933a8d3e85e906b988178f95ed
+    requires_python: ">=3.10"
   - pypi: https://files.pythonhosted.org/packages/4b/a6/38c8e2f318bf67d338f4d629e93b0b4b9af331f455f0390ea8ce4a099b26/portalocker-3.2.0-py3-none-any.whl
     name: portalocker
     version: 3.2.0
@@ -3876,7 +3919,7 @@ packages:
     purls: []
     size: 498644
     timestamp: 1764159802962
-  - pypi: https://download.pytorch.org/whl/cu128/torch-2.9.1%2Bcu128-cp311-cp311-manylinux_2_28_x86_64.whl
+  - pypi: https://download-r2.pytorch.org/whl/cu128/torch-2.9.1%2Bcu128-cp311-cp311-manylinux_2_28_x86_64.whl
     name: torch
     version: 2.9.1+cu128
     sha256: 2a1da940f0757621d098c9755f7504d791a72a40920ec85a4fd98b20253fca4e
