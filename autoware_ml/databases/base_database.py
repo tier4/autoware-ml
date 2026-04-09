@@ -26,40 +26,36 @@ class BaseDatabase:
         scenarios: MappingProxyType[str, Scenarios],
         cache_path: str,
         cache_file_prefix_name: str,
-        main_database: str,
         num_workers: int,
     ) -> None:
         """
         Initialize database interface.
-        :param database_version: Version of the database.
-        :param database_root_path: Root path where the actual annotation files are stored.
-        :param scenario_root_path: Root path where the scenario yaml files are stored.
-        :param scenario_configs: Scenario configurations for each
-          scenario in {'scenario_group_name': scenario_config}.
-        :param cache_path: Path to cache the database records.
-        :param cache_file_prefix_name: Prefix name of the cache file, it will be <cache_file_prefix_name>_<database_hash>.parquet
-        :param main_database: Main database/scenario group name.
-        :param num_workers: Number of workers to use for processing the database.
+        Args:
+          database_version: Version of the database.
+          database_root_path: Root path where the actual annotation files are stored.
+          scenario_root_path: Root path where the scenario yaml files are stored.
+          scenarios: Scenario configurations for each scenario in {'scenario_group_name': scenario_config}.
+          cache_path: Path to cache the database records.
+          cache_file_prefix_name: Prefix name of the cache file, it will be <cache_file_prefix_name>_<database_hash>.parquet
+          num_workers: Number of workers to use for processing the database.
         """
         self._database_version = database_version
         self._database_root_path = Path(database_root_path)
         self._scenario_root_path = Path(scenario_root_path)
         self._cache_path = Path(cache_path)
         self._cache_file_prefix_name = cache_file_prefix_name
-        self._main_database = main_database
-        # self._scenario_configs = scenario_configs
         self._scenarios: MappingProxyType[str, Scenarios] = scenarios
         self._num_workers = num_workers
 
         # Create cache output path if it doesn't exist
         self._cache_path.mkdir(parents=True, exist_ok=True)
         logger.info(
-            f"Database initialized with version: {self.database_version}, root path: {self.database_root_path}, scenario root path: {self.scenario_root_path}, main database: {self.main_database}, cache path: {self.cache_path}, cache file prefix name: {self.cache_file_prefix_name}"
+            f"Database initialized with version: {self.database_version}, root path: {self.database_root_path}, scenario root path: {self.scenario_root_path}, cache path: {self.cache_path}, cache file prefix name: {self.cache_file_prefix_name}"
         )
 
     def __str__(self) -> str:
         """String representation of the database."""
-        string = f"BaseDatabase(database_version={self.database_version}, database_root_path={str(self.database_root_path)}, scenario_root_path={str(self.scenario_root_path)}, main database={self.main_database}, cache path={str(self.cache_path)}, cache file prefix name={self.cache_file_prefix_name}"
+        string = f"BaseDatabase(database_version={self.database_version}, database_root_path={str(self.database_root_path)}, scenario_root_path={str(self.scenario_root_path)}, cache path={str(self.cache_path)}, cache file prefix name={self.cache_file_prefix_name}"
         string += ", scenarios=("
         for scenario_group, scenarios in self.scenarios.items():
             string += f"{scenario_group}: {scenarios}, "

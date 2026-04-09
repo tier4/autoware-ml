@@ -16,8 +16,5 @@ defaults:
   - t4dataset/scenarios@scenarios.db_j6gen2: detection3d/db_j6gen2
   - t4dataset/scenarios@scenarios.db_largebus: detection3d/db_largebus
 
-# The main database is the database that will be used to train the model
-main_database: db_j6gen2_base
-
 # Processor settings
 num_workers: 16
