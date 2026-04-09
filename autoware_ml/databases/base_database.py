@@ -44,7 +44,9 @@ class BaseDatabase:
         # Create cache output path if it doesn't exist
         self._cache_path.mkdir(parents=True, exist_ok=True)
         logger.info(
-            f"Database initialized with version: {self.database_version}, root path: {self.database_root_path}, cache path: {self.cache_path}, "
+            f"Database initialized with version: {self.database_version}, "
+            f"root path: {self.database_root_path}, "
+            f"cache path: {self.cache_path}, "
             f"cache file prefix name: {self.cache_file_prefix_name}"
         )
 
