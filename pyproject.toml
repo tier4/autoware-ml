@@ -31,6 +31,8 @@ dependencies = [
     "onnxscript==0.6.2",
     "opencv-python-headless==4.11.0.86",
     "optuna-dashboard==0.20.0",
+    "polars>=1.38.1,<2.0.0",
+    "pydantic>=2.12.5,<2.13.0",
     "pytest==9.0.2",
     "rerun-sdk==0.23.1",
     "scipy==1.17.1",
@@ -39,9 +41,7 @@ dependencies = [
     "tensorrt-cu12==10.16.0.72",
     "torch==2.9.1+cu128",
     "torchvision==0.24.1+cu128",
-    "transforms3d==0.4.2",
-    "polars>=1.38.1,<2.0.0",
-    "pydantic>=2.12.5,<2.13.0"
+    "transforms3d==0.4.2"
 ]
 
 [project.optional-dependencies]
