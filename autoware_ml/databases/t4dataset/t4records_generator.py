@@ -50,7 +50,7 @@ class T4RecordsGenerator:
         database_root_path: str,
         scenario_data: ScenarioData,
         max_sweeps: int,
-        sample_steps: int = 1,
+        sample_steps: int,
     ) -> None:
         """
         Initialize T4 dataset generator.
