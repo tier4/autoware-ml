@@ -29,7 +29,11 @@ class DatasetParams(BaseModel):
 
     def __str__(self) -> str:
         """String representation of the database version."""
-        return f"DatasetParams(dataset_name={self.dataset_name}, max_sweeps={self.max_sweeps}, sample_steps={self.sample_steps})"
+        return (
+            f"DatasetParams(dataset_name={self.dataset_name}, "
+            f"max_sweeps={self.max_sweeps}, "
+            f"sample_steps={self.sample_steps})"
+        )
 
     def __eq__(self, other: DatasetParams) -> bool:
         """Compare two database versions by their version and settings."""
@@ -62,7 +66,15 @@ class ScenarioData(BaseModel):
 
     def __str__(self) -> str:
         """String representation of the scenario data."""
-        return f"ScenarioData(db_version={self.db_version}, scenario_id={self.scenario_id}, scenario_version={self.scenario_version}, max_sweeps={self.max_sweeps}, sample_steps={self.sample_steps}, vehicle_type={self.vehicle_type}, location={self.location})"
+        return (
+            f"ScenarioData(db_version={self.db_version}, "
+            f"scenario_id={self.scenario_id}, "
+            f"scenario_version={self.scenario_version}, "
+            f"max_sweeps={self.max_sweeps}, "
+            f"sample_steps={self.sample_steps}, "
+            f"vehicle_type={self.vehicle_type}, "
+            f"location={self.location})"
+        )
 
     def __eq__(self, other: ScenarioData) -> bool:
         """Compare two scenario data by their version and scenario IDs."""
@@ -97,7 +109,7 @@ class Scenarios(BaseModel):
     def __str__(self) -> str:
         """String representation of the scenarios."""
         string = (
-            f"Scenarios(version={self.version}, scenario_root_path={str(self.scenario_root_path)}, "
+            f"Scenarios(version={self.version}, scenario_root_path={str(self.scenario_root_path)}"
         )
         string += "dataset_params=("
         for dataset_param in self.dataset_params:
