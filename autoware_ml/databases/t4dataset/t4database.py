@@ -53,7 +53,7 @@ class T4Database(BaseDatabase):
         cache_path: str,
         cache_file_prefix_name: str,
         main_database: str,
-        num_workers: int = 16,
+        num_workers: int,
     ) -> None:
         """Initialize T4 database. Please refer to the BaseDatabase class for more details."""
         logger.info("Initializing T4 database...")
@@ -65,8 +65,8 @@ class T4Database(BaseDatabase):
             cache_path=cache_path,
             cache_file_prefix_name=cache_file_prefix_name,
             main_database=main_database,
+            num_workers=num_workers
         )
-        self.num_workers = num_workers
 
     def process_scenario_records(self) -> Sequence[DatasetRecord]:
         """Load scenario records from the database."""

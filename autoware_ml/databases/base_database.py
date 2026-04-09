@@ -27,6 +27,7 @@ class BaseDatabase:
         cache_path: str,
         cache_file_prefix_name: str,
         main_database: str,
+        num_workers: int,
     ) -> None:
         """
         Initialize database interface.
@@ -38,6 +39,7 @@ class BaseDatabase:
         :param cache_path: Path to cache the database records.
         :param cache_file_prefix_name: Prefix name of the cache file, it will be <cache_file_prefix_name>_<database_hash>.parquet
         :param main_database: Main database/scenario group name.
+        :param num_workers: Number of workers to use for processing the database.
         """
         self._database_version = database_version
         self._database_root_path = Path(database_root_path)
@@ -47,6 +49,7 @@ class BaseDatabase:
         self._main_database = main_database
         # self._scenario_configs = scenario_configs
         self._scenarios: MappingProxyType[str, Scenarios] = scenarios
+        self._num_workers = num_workers
 
         # Create cache output path if it doesn't exist
         self._cache_path.mkdir(parents=True, exist_ok=True)
@@ -65,13 +68,11 @@ class BaseDatabase:
 
     def __eq__(self, other: BaseDatabase) -> bool:
         """Compare two databases by their version and scenario IDs."""
-        return (
-            self.database_version == other.database_version
-            and self.database_root_path == other.database_root_path
-            and self.scenario_root_path == other.scenario_root_path
-            and self.main_database == other.main_database
-            and self.scenarios == other.scenarios
-        )
+        return (self.database_version == other.database_version
+                and self.database_root_path == other.database_root_path
+                and self.scenario_root_path == other.scenario_root_path
+                and self.main_database == other.main_database
+                and self.scenarios == other.scenarios)
 
     def __hash__(self) -> int:
         """Hash the database by its version and scenario IDs."""
@@ -112,13 +113,19 @@ class BaseDatabase:
         """Get the prefix name of the cache file."""
         return self._cache_file_prefix_name
 
+    @property
+    def num_workers(self) -> int:
+        """Get the number of workers to use for processing the database."""
+        return self._num_workers
+
     def get_polars_schema(self) -> pl.Schema:
         """Get the polars schema for the database."""
         return DatasetTableSchema.to_polars_schema()
 
     def get_main_database_scenario_data(self) -> Scenarios:
         """Get the scenario data for the main database."""
-        main_database_scenario_data = self.scenarios.get(self.main_database, None)
+        main_database_scenario_data = self.scenarios.get(
+            self.main_database, None)
         if main_database_scenario_data is None:
             raise ValueError(f"Main database {self.main_database} not found!")
         return main_database_scenario_data
@@ -134,4 +141,5 @@ class BaseDatabase:
 
     def process_scenario_records(self) -> Sequence[DatasetRecord]:
         """Process scenario records from the database."""
-        raise NotImplementedError("Subclasses must implement process_scenario_records method!")
+        raise NotImplementedError(
+            "Subclasses must implement process_scenario_records method!")
