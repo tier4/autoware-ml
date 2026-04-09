@@ -113,8 +113,9 @@ class T4RecordsGenerator:
             "calibrated_sensor", sd_record.calibrated_sensor_token
         )
         lidar_path, _, _ = self.t4_devkit_dataset.get_sample_data(lidar_token)
-        # TODO (KokSeang): Extract more information, for example, boxes, from the T4Dataset.
+        # TODO (KokSeang): Extract more information, for example, boxes and lidar sweeps, from the T4Dataset.
         # Last, return the T4 sample record
+
         return T4SampleRecord(
             scenario_id=self.scenario_data.scenario_id,
             sample_id=sample.token,
