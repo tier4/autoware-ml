@@ -153,6 +153,7 @@
     "pgid",
     "pointcept",
     "pullable",
+    "pydantic",
     "pypi",
     "pytestmark",
     "pyproject",
