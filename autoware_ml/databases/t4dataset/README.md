@@ -61,7 +61,7 @@ classDiagram
 
     class T4Database {
         process_scenario_records()
-        _multi_process_scenario_records()
+        _run_t4records_generator()
     }
 
     T4Scenarios --|> scenarios : extends Scenarios
