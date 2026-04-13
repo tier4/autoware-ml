@@ -52,7 +52,10 @@
         "authors = .*?$",
         "site_author = .*?$",
         "maintainers = .*?$"
-      ],
+      ]
+    },
+    {
+      "filename": "**/*.py",
       "flagWords": []
     }
   ],
