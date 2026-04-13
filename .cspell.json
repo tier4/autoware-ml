@@ -1,4 +1,5 @@
 {
+  "ignoreWords": ["Tier4"],
   "ignorePaths": [
     "**/*.caffemodel",
     "**/*.clang-tidy",
