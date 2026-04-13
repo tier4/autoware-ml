@@ -1,0 +1,85 @@
+from __future__ import annotations
+
+import logging
+from collections import defaultdict
+import yaml
+from typing import Sequence
+from types import MappingProxyType
+
+from pydantic import model_validator
+
+from autoware_ml.common.enums.enums import SplitType
+from autoware_ml.databases.scenarios import ScenarioData, Scenarios, DatasetParams
+
+logger = logging.getLogger(__name__)
+
+
+class T4Scenarios(Scenarios):
+    """T4 scenario datasets class."""
+
+    @model_validator(mode="after")
+    def build_scenarios(self) -> T4Scenarios:
+        """Build scenarios from database scenarios, and overwrite the scenario_data attribute."""
+        scenario_data = defaultdict(list)
+        logger.info(f"==== Loading database scenarios for database: {self.version} ====")
+        for dataset_param in self.dataset_params:
+            db_yaml_path = self.scenario_root_path / (dataset_param.dataset_name + ".yaml")
+            logger.info(f"Loading database scenarios from {db_yaml_path}")
+            with open(db_yaml_path, "r") as f:
+                db_scenarios: MappingProxyType[str, Sequence[str]] = yaml.safe_load(f)
+
+            scenario_splits = self._build_scenario_splits(db_scenarios, dataset_param)
+            for split, scenarios in scenario_splits.items():
+                scenario_data[split] += scenarios
+
+        object.__setattr__(self, "scenario_data", scenario_data)
+        for split, scenarios in scenario_data.items():
+            logger.info(
+                f"Loaded total of {len(scenarios)} scenarios for split {split} in database: {self.version}"
+            )
+        return self
+
+    @staticmethod
+    def _build_scenario_data(scenario_id: str, db_version: DatasetParams) -> ScenarioData:
+        """
+        Build scenario data from a scenario ID and a database version.
+        :param scenario_id: Scenario ID.
+        :param db_version: Database version.
+        :return: Scenario data.
+        """
+        dataset_scene_info = scenario_id.split("/")
+        if len(dataset_scene_info) == 4:
+            scenario_id, version, city, vehicle_type = dataset_scene_info
+        elif len(dataset_scene_info) == 2:
+            scenario_id, version = dataset_scene_info
+            city = vehicle_type = None
+        else:
+            raise ValueError(f"Invalid scenario ID: {scenario_id}")
+
+        return ScenarioData(
+            db_version=db_version.dataset_name,
+            scenario_id=scenario_id,
+            scenario_version=version,
+            vehicle_type=vehicle_type,
+            location=city,
+            max_sweeps=db_version.max_sweeps,
+            sample_steps=db_version.sample_steps,
+        )
+
+    def _build_scenario_splits(
+        self, db_scenarios: MappingProxyType[str, Sequence[str]], dataset_param: DatasetParams
+    ) -> MappingProxyType[SplitType, Sequence[ScenarioData]]:
+        """
+        Build splits from a database scenarios.
+        :param db_scenarios: Database scenarios.
+        :param dataset_param: Dataset parameters.
+        :return: List of ScenarioData for each split in {SplitType: List[ScenarioData]}.
+        """
+        scenario_splits = {}
+        for split in [SplitType.TRAIN, SplitType.VAL, SplitType.TEST]:
+            selected_scenarios = db_scenarios.get(split, [])
+            scenario_splits[split] = [
+                self._build_scenario_data(scenario_id, dataset_param)
+                for scenario_id in selected_scenarios
+            ]
+        return scenario_splits
