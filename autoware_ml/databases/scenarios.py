@@ -165,9 +165,7 @@ class Scenarios(BaseModel):
           str: String representation of the scenarios.
         """
 
-        string = (
-            f"Scenarios(version={self.version}, scenario_root_path={str(self.scenario_root_path)}"
-        )
+        string = f"Scenarios(scenario_root_path={str(self.scenario_root_path)}"
         string += "dataset_params=("
         for dataset_param in self.dataset_params:
             string += f"{dataset_param}, "
