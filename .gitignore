@@ -48,7 +48,6 @@ MANIFEST
 .ansible/
 .pixi/
 .*cache/
-.cspell-shared.json
 .debug.env
 package-lock.json
 node_modules/
