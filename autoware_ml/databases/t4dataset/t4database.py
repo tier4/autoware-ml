@@ -11,6 +11,7 @@ from types import MappingProxyType
 import polars as pl
 from tqdm import tqdm
 
+from autoware_ml.databases.database_interface import DatabaseInterface
 from autoware_ml.databases.base_database import BaseDatabase
 from autoware_ml.databases.t4dataset.t4scenarios import T4Scenarios
 from autoware_ml.databases.scenarios import ScenarioData
@@ -22,6 +23,15 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class T4RecordsGeneratorWorkerParams:
+    """
+    Parameters for each scenario in T4Dataset to be
+    processed by T4RecordsGenerator.
+
+    Attributes:
+      database_root_path: Root path of the T4 database.
+      scenario_data: Scenario data.
+    """
+
     database_root_path: str
     scenario_data: ScenarioData
 
@@ -29,7 +39,14 @@ class T4RecordsGeneratorWorkerParams:
 def _apply_t4_records_generator(
     t4_records_generator_worker_params: T4RecordsGeneratorWorkerParams,
 ) -> Sequence[DatasetRecord]:
-    """Submit T4 records generator to the worker pool for a worker to process."""
+    """
+    Submit T4 records generator to the worker pool for a worker to process.
+
+    Args:
+      t4_records_generator_worker_params: T4 records generator worker parameters.
+    Returns:
+      Sequence[DatasetRecord]: Sequence of dataset records.
+    """
 
     # Construct T4 records generator
     t4_records_generator = T4RecordsGenerator(
@@ -43,7 +60,7 @@ def _apply_t4_records_generator(
 
 
 class T4Database(BaseDatabase):
-    """T4 database class."""
+    """T4Database class."""
 
     def __init__(
         self,
@@ -56,16 +73,16 @@ class T4Database(BaseDatabase):
     ) -> None:
         """
         Initialize T4 database. Please refer to the BaseDatabase class for more details.
+
         Args:
           database_version: Version of the database.
           database_root_path: Root path where the actual annotation files are stored.
-          scenario_root_path: Root path where the scenario yaml files are stored.
           scenarios: Scenario configurations for each scenario in {'scenario_group_name': scenario_config}.
           cache_path: Path to cache the database records.
           cache_file_prefix_name: Prefix name of the cache file, it will be <cache_file_prefix_name>_<database_hash>.parquet
-          main_database: Main database/scenario group name.
           num_workers: Number of workers to use for processing the database.
         """
+
         logger.info("Initializing T4 database...")
         super().__init__(
             database_version=database_version,
@@ -77,7 +94,13 @@ class T4Database(BaseDatabase):
         self._scenarios = scenarios
 
     def __str__(self) -> str:
-        """String representation of the database."""
+        """
+        String representation of the database.
+
+        Returns:
+          str: String representation of the database.
+        """
+
         string = (
             f"T4Database(database_version={self._database_version}, "
             f"database_root_path={str(self._database_root_path)}, "
@@ -88,14 +111,25 @@ class T4Database(BaseDatabase):
         )
         return string
 
-    def __eq__(self, other: T4Database) -> bool:
-        """Compare two databases by their version and scenario IDs."""
+    def __eq__(self, other: DatabaseInterface) -> bool:
+        """
+        Compare two databases by their version and scenario IDs.
+
+        Returns:
+          bool: True if the databases are equal, False otherwise.
+        """
+
         if not isinstance(other, T4Database):
             return False
         return str(self) == str(other)
 
     def process_scenario_records(self) -> Sequence[DatasetRecord]:
-        """Load scenario records from the database."""
+        """
+        Process scenario records from the database.
+
+        Returns:
+          Sequence[DatasetRecord]: Sequence of dataset records.
+        """
 
         # Start the timer
         start_time = time.perf_counter()
@@ -135,7 +169,16 @@ class T4Database(BaseDatabase):
     def _run_t4records_generator(
         self, scenario_data: MappingProxyType[str, ScenarioData]
     ) -> Sequence[DatasetRecord]:
-        """Multi-process scenario records from the database."""
+        """
+        Multi-process scenario records from the database.
+
+        Args:
+          scenario_data: Mapping of scenario data.
+
+        Returns:
+          Sequence[DatasetRecord]: Sequence of dataset records.
+        """
+
         # Group params for each worker
         worker_params = [
             T4RecordsGeneratorWorkerParams(
@@ -160,6 +203,12 @@ class T4Database(BaseDatabase):
             return flatten_records
 
     def load_scenario_records(self) -> Sequence[DatasetRecord]:
-        """Load scenario records from the database."""
+        """
+        Load scenario records from the database.
+
+        Returns:
+          Sequence[DatasetRecord]: Sequence of dataset records.
+        """
+
         # TODO (KokSeang): Read the cache if it exists, and return the records
         raise NotImplementedError("Subclasses must implement load_scenario_records method!")

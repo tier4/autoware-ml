@@ -16,7 +16,17 @@ logger = logging.getLogger(__name__)
 
 
 class T4SampleRecord(BaseModel):
-    """Temporary T4 sample record."""
+    """
+    Temporary T4 sample record.
+
+    Attributes:
+      scenario_id: Scenario ID.
+      sample_id: Sample ID.
+      sample_index: Sample index.
+      lidar_path: Lidar path.
+      location: Location.
+      vehicle_type: Vehicle type.
+    """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -32,7 +42,12 @@ class T4SampleRecord(BaseModel):
     lidar2ego_rotation: Quaternion
 
     def to_dataset_record(self) -> DatasetRecord:
-        """Convert T4 sample record to dataset record."""
+        """
+        Convert T4 sample record to dataset record.
+
+        Returns:
+          DatasetRecord: Dataset record.
+        """
         return DatasetRecord(
             scenario_id=self.scenario_id,
             sample_id=self.sample_id,
@@ -43,7 +58,7 @@ class T4SampleRecord(BaseModel):
 
 
 class T4RecordsGenerator:
-    """T4 dataset records generator."""
+    """RecordsGenerator for T4Dataset."""
 
     def __init__(
         self,
@@ -53,14 +68,17 @@ class T4RecordsGenerator:
         sample_steps: int,
     ) -> None:
         """
-        Initialize T4 dataset generator.
-        :param database_root_path: Root path of the T4 database.
-        :param scenario_data: Scenario data.
-        :param max_sweeps: Max number of lidar sweeps to include, only for 3D, set to 0
-          if skipping lidar sweep concatenation.
-        :param sample_steps: Number of frames/samples to skip between each sample, set to 1
-          if not skipping any samples/frames.
+        Initialize T4RecordsGenerator.
+
+        Args:
+          database_root_path: Root path of the T4 database.
+          scenario_data: Scenario data.
+          max_sweeps: Max number of lidar sweeps to include, only for 3D, set to 0
+            if skipping lidar sweep concatenation.
+          sample_steps: Number of frames/samples to skip between each sample, set to 1
+            if not skipping any samples/frames.
         """
+
         self.database_root_path = Path(database_root_path)
         self.scenario_data = scenario_data
         self.max_sweeps = max_sweeps
@@ -71,7 +89,13 @@ class T4RecordsGenerator:
         assert max_sweeps >= 0, "Max sweeps must be greater than or equal to 0."
 
     def _construct_t4_devkit_dataset(self) -> Tier4:
-        """Construct T4 dataset."""
+        """
+        Construct T4Devkit class instance.
+
+        Returns:
+          Tier4: T4 dataset.
+        """
+
         scene_root_dir_path = (
             self.database_root_path
             / self.scenario_data.db_version
@@ -83,7 +107,13 @@ class T4RecordsGenerator:
         return Tier4(data_root=scene_root_dir_path, verbose=False)
 
     def generate_dataset_records(self) -> Sequence[DatasetRecord]:
-        """Generate dataset records."""
+        """
+        Generate dataset records.
+
+        Returns:
+          Sequence[DatasetRecord]: Sequence of dataset records.
+        """
+
         records = []
         logger.info(
             f"Generating dataset records for scenario: {self.scenario_data.scenario_id} with sample steps: {self.sample_steps} and max sweeps: {self.max_sweeps}"
@@ -96,7 +126,16 @@ class T4RecordsGenerator:
         return records
 
     def extract_t4_sample_record(self, sample: Sample, sample_index: int) -> T4SampleRecord:
-        """Extract T4 sample record from a T4Dataset."""
+        """
+        Extract T4 sample record from a T4Dataset.
+
+        Args:
+          sample: Sample.
+          sample_index: Sample index.
+        Returns:
+          T4SampleRecord: T4 sample record.
+        """
+
         # First, read lidar token from the sample data
         if LidarChannel.LIDAR_TOP in sample.data:
             lidar_token = sample.data[LidarChannel.LIDAR_TOP]

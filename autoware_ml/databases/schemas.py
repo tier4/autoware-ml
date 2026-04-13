@@ -8,6 +8,10 @@ from pydantic import BaseModel, ConfigDict
 class DatasetTableColumn(NamedTuple):
     """
     Annotation table column.
+
+    Attributes:
+      name: Name of the column.
+      dtype: Data type of the column.
     """
 
     name: str
@@ -18,6 +22,13 @@ class DatasetTableColumn(NamedTuple):
 class DatasetTableSchema:
     """
     Annotation table schema.
+
+    Attributes:
+      SCENARIO_ID: Scenario ID column.
+      SAMPLE_ID: Sample ID column.
+      SAMPLE_INDEX: Sample index column.
+      LOCATION: Location column.
+      VEHICLE_TYPE: Vehicle type column.
     """
 
     SCENARIO_ID = DatasetTableColumn("scenario_id", pl.String)
@@ -32,7 +43,11 @@ class DatasetTableSchema:
     def to_polars_schema(cls) -> pl.Schema:
         """
         Convert the dataset table schema to a Polars schema.
+
+        Returns:
+          pl.Schema: Polars schema.
         """
+
         return pl.Schema(
             {
                 v.name: v.dtype
@@ -45,12 +60,14 @@ class DatasetTableSchema:
 class DatasetRecord(BaseModel):
     """
     Data class to save a record for each column in the annotation table.
-    :param scenario_id: Scenario id.
-    :param sample_id: Sample id.
-    :param location: Location of the vehicle.
-    :param vehicle_type: Type of the vehicle.
-    :param bbox_3d: List of 3D bounding boxes with center_x, center_y, center_z, length, width, height, yaw, velocity_x, velocity_y.
-    :param bbox_2d: List of 2D bounding boxes with center_x, center_y, width, height.
+
+    Attributes:
+      scenario_id: Scenario ID.
+      sample_id: Sample ID.
+      sample_index: Sample index.
+      location: Location of the vehicle.
+      vehicle_type: Type of the vehicle.
+      bbox_3d: List of 3D bounding boxes with center_x, center_y, center_z, length, width, height, yaw, velocity_x, velocity_y.
     """
 
     # Set model config to frozen
