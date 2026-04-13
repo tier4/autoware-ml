@@ -153,6 +153,8 @@ class T4Database(BaseDatabase):
         logger.info(f"Parquet schema: {polars_schema}")
 
         # Fourth, save the scenario sample records to a polars .parquet file
+        # Dump to a list of dictionaries to make it safer since it's using Pydantic.BaseModel
+        scenario_sample_records = [record.model_dump() for record in scenario_sample_records]
         df = pl.DataFrame(scenario_sample_records, schema=polars_schema)
         df_hash = hashlib.sha256(str(self).encode("utf-8")).hexdigest()
         df_cache_path = self._cache_path / f"{self._cache_file_prefix_name}_{df_hash}.parquet"

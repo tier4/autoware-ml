@@ -209,7 +209,7 @@ class Scenarios(BaseModel):
           Scenarios: Scenarios class instance.
         """
 
-        raise NotImplementedError("Subclasses must implement build_scenario_data()!")
+        raise NotImplementedError("Subclasses must implement build_scenarios()!")
 
     def get_all_scenario_data(self) -> Sequence[ScenarioData]:
         """

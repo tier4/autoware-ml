@@ -29,8 +29,6 @@ classDiagram
     class DatabaseInterface {
         <<Protocol>>
         database_version
-        database_root_path
-        scenario_root_path
         scenarios
         cache_path
         load_scenario_records()
