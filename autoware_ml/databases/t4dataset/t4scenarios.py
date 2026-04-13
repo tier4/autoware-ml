@@ -90,7 +90,7 @@ class T4Scenarios(Scenarios):
           dataset_param: Dataset parameters.
 
         Returns:
-          MappingProxyType[SplitType, Sequence[ScenarioData]]: Dictinary of SplitType to
+          MappingProxyType[SplitType, Sequence[ScenarioData]]: Dictionary of SplitType to
           a list of ScenarioData for the corresponding split.
         """
 
