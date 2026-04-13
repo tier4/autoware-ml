@@ -54,13 +54,8 @@
         "site_author = .*?$",
         "maintainers = .*?$"
       ]
-    },
-    {
-      "filename": "**/*.py",
-      "flagWords": []
     }
   ],
-  "flagWords": [],
   "words": [
     "accum",
     "adamw",
