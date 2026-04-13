@@ -98,7 +98,7 @@ class T4RecordsGenerator:
 
         scene_root_dir_path = (
             self.database_root_path
-            / self.scenario_data.db_version
+            / self.scenario_data.dataset_name
             / self.scenario_data.scenario_id
             / self.scenario_data.scenario_version
         )

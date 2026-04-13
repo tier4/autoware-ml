@@ -29,6 +29,7 @@ class T4RecordsGeneratorWorkerParams:
 
     Attributes:
       database_root_path: Root path of the T4 database.
+      dataset_version: Version of the dataset.
       scenario_data: Scenario data.
     """
 
@@ -173,7 +174,7 @@ class T4Database(BaseDatabase):
         Multi-process scenario records from the database.
 
         Args:
-          scenario_data: Mapping of scenario data.
+          scenario_data: Dict of Scenario ID to ScenarioData.
 
         Returns:
           Sequence[DatasetRecord]: Sequence of dataset records.

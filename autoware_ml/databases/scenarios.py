@@ -73,7 +73,7 @@ class ScenarioData(BaseModel):
     in the scenario.
 
     Attributes:
-      db_version: Version of the database.
+      dataset_name: Name of the dataset.
       scenario_id: ID of the scenario.
       scenario_version: Version of the scenario.
       max_sweeps: Maximum number of sweeps to include.
@@ -85,6 +85,7 @@ class ScenarioData(BaseModel):
     # Set model config to frozen and strict
     model_config = ConfigDict(frozen=True, strict=True)
 
+    dataset_name: str
     scenario_id: str
     scenario_version: str
     max_sweeps: int
@@ -101,7 +102,7 @@ class ScenarioData(BaseModel):
         """
 
         return (
-            f"ScenarioData(scenario_id={self.scenario_id}, "
+            f"ScenarioData(dataset_name={self.dataset_name}, "
             f"scenario_id={self.scenario_id}, "
             f"scenario_version={self.scenario_version}, "
             f"max_sweeps={self.max_sweeps}, "
@@ -119,7 +120,8 @@ class ScenarioData(BaseModel):
         """
 
         return (
-            self.scenario_id == other.scenario_id
+            self.dataset_name == other.dataset_name
+            and self.scenario_id == other.scenario_id
             and self.scenario_version == other.scenario_version
             and self.max_sweeps == other.max_sweeps
             and self.sample_steps == other.sample_steps
@@ -143,7 +145,6 @@ class Scenarios(BaseModel):
     Scenario datasets class. This class is used to store the scenario data for a dataset.
 
     Attributes:
-      version: Version of the dataset.
       scenario_root_path: Root path where the scenario yaml files are stored.
       dataset_params: Parameters for the dataset.
       scenario_data: Dictionary of split type to a list of ScenarioData.
@@ -152,7 +153,6 @@ class Scenarios(BaseModel):
     # Set model config to frozen and strict
     model_config = ConfigDict(frozen=True, strict=True)
 
-    version: str
     scenario_root_path: PathAdapter  # Root path where the scenario yaml files are stored
     dataset_params: Sequence[DatasetParams]
     scenario_data: Mapping[SplitType, Sequence[ScenarioData]] | None = None
@@ -187,8 +187,7 @@ class Scenarios(BaseModel):
         """
 
         return (
-            self.version == other.version
-            and self.scenario_root_path == other.scenario_root_path
+            self.scenario_root_path == other.scenario_root_path
             and self.dataset_params == other.dataset_params
             and self.scenario_data == other.scenario_data
         )

@@ -31,7 +31,6 @@ class T4Scenarios(Scenarios):
         """
 
         scenario_data = defaultdict(list)
-        logger.info(f"==== Loading database scenarios for database: {self.version} ====")
         for dataset_param in self.dataset_params:
             db_yaml_path = self.scenario_root_path / (dataset_param.dataset_name + ".yaml")
             logger.info(f"Loading database scenarios from {db_yaml_path}")
@@ -44,9 +43,7 @@ class T4Scenarios(Scenarios):
 
         object.__setattr__(self, "scenario_data", scenario_data)
         for split, scenarios in scenario_data.items():
-            logger.info(
-                f"Loaded total of {len(scenarios)} scenarios for split {split} in database: {self.version}"
-            )
+            logger.info(f"Loaded total of {len(scenarios)} scenarios for split {split}")
         return self
 
     @staticmethod
@@ -73,7 +70,7 @@ class T4Scenarios(Scenarios):
             raise ValueError(f"Invalid scenario ID: {scenario_id}")
 
         return ScenarioData(
-            dataset_params=dataset_params,
+            dataset_name=dataset_params.dataset_name,
             scenario_id=scenario_id,
             scenario_version=version,
             vehicle_type=vehicle_type,
