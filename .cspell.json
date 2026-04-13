@@ -82,6 +82,7 @@
     "cppcore",
     "cschlosser",
     "cval",
+    "dataclass",
     "datamodule",
     "datamodules",
     "dataroot",
