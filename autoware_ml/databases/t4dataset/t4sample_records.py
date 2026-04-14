@@ -23,6 +23,7 @@ class BasicMetaData(BaseModel):
       timestamp_seconds: Timestamp in seconds.
       scenario_name: Scenario name.
       location: Location.
+      vehicle_type: Vehicle type.
     """
 
     model_config = ConfigDict(frozen=True, strict=True)
@@ -32,8 +33,8 @@ class BasicMetaData(BaseModel):
     sample_index: int
     timestamp_seconds: float
     scenario_name: str
-    location: str | None = None
-    vehicle_type: str | None = None
+    location: str | None
+    vehicle_type: str | None
 
 
 class LidarMetaData(BaseModel):
@@ -53,23 +54,37 @@ class LidarMetaData(BaseModel):
     lidar_sensor_id: str
     lidar_sensor_channel_name: str
     lidar_pointcloud_path: str
+    lidar_pointcloud_source_path: str | None
     lidar_pointcloud_num_features: int
     lidar_sensor_to_ego_pose_matrix: npt.NDArray[np.float64]  # (4, 4)
     lidar_frame_ego_pose_to_global_matrix: npt.NDArray[np.float64]  # (4, 4)
     boxes_3d: Sequence[Box3D]
 
-    def parse_lidar_pointcloud_path(self: str) -> str:
+    @property
+    def lidar_pointcloud_relative_path(self: str) -> str:
         """
         Parse lidar pointcloud path to {database_version}/{scene_id}/
         {dataset_version}/data/{lidar_token}/{frame}.bin from path.
 
-        Args:
-          lidar_pointcloud_path: Lidar pointcloud path.
         Returns:
-          str: Parsed lidar pointcloud path.
+          str: Lidar pointcloud relative path.
         """
 
         return "/".join(self.lidar_pointcloud_path.split("/")[-6:])
+
+    @property
+    def lidar_pointcloud_source_relative_path(self: str) -> str | None:
+        """
+        Parse lidar pointcloud source path to {database_version}/{scene_id}/
+        {dataset_version}/data/{lidar_token}/{frame}.bin from path.
+
+        Returns:
+          str | None: Lidar pointcloud source relative path.
+        """
+        if self.lidar_pointcloud_source_path is None:
+            return None
+
+        return "/".join(self.lidar_pointcloud_source_path.split("/")[-6:])
 
     @property
     def lidar_sensor_to_ego_pose_matrix_fp32(self) -> npt.NDArray[np.float32]:
@@ -125,13 +140,14 @@ class LidarSweepMetaData(BaseModel):
             == len(self.lidar_sensor_to_lidar_sweep_matrices)
         ), "All attributes must be of the same length"
 
-    def parse_lidar_sweep_pointclouds_paths(self: str) -> Sequence[str]:
+    @property
+    def lidar_sweep_pointclouds_relative_paths(self: str) -> Sequence[str]:
         """
         Parse lidar sweep pointclouds paths to {database_version}/{scene_id}/
         {dataset_version}/data/{lidar_token}/{frame}.bin from path.
 
         Returns:
-          Sequence[str]: Parsed lidar sweep pointclouds paths.
+          Sequence[str]: List of lidar sweep pointclouds relative paths.
         """
 
         return [
@@ -218,6 +234,47 @@ class LidarSourceMetaData(BaseModel):
         return [rotation.astype(np.float32) for rotation in self.lidar_source_rotations]
 
 
+class CategoryMetaData(BaseModel):
+    """
+    Category metadata of a T4 sample record.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
+
+    category_names: Sequence[str]
+    category_indices: Sequence[int]
+
+    def model_post_init(self, __context: Any) -> None:
+        """Validate that all attributes are of the same length."""
+
+        assert len(self.category_names) == len(self.category_indices), (
+            "All attributes must be of the same length"
+        )
+
+
+class LidarSegMetaData(BaseModel):
+    """
+    Lidarseg metadata of a T4 sample record.
+
+    Attributes:
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
+
+    lidarseg_pts_semantic_mask_path: str | None
+
+    @property
+    def lidarseg_pts_semantic_mask_relative_path(self: str) -> str | None:
+        """
+        Parse lidarseg pts semantic mask path to {database_version}/{scene_id}/
+        {dataset_version}/data/{lidar_token}/{frame}.bin from path.
+        """
+        if self.lidarseg_pts_semantic_mask_path is None:
+            return None
+
+        return "/".join(self.lidarseg_pts_semantic_mask_path.split("/")[-6:])
+
+
 class T4SampleRecord(BaseModel):
     """Temporary T4 sample record."""
 
@@ -227,6 +284,8 @@ class T4SampleRecord(BaseModel):
     lidar_metadata: LidarMetaData
     lidar_sweep_metadata: LidarSweepMetaData
     lidar_source_metadata: LidarSourceMetaData
+    lidarseg_metadata: LidarSegMetaData
+    category_metadata: CategoryMetaData
 
     def to_dataset_record(self) -> DatasetRecord:
         """
@@ -249,14 +308,15 @@ class T4SampleRecord(BaseModel):
             lidar_frame_id=self.lidar_metadata.lidar_frame_id,
             lidar_sensor_id=self.lidar_metadata.lidar_sensor_id,
             lidar_sensor_channel_name=self.lidar_metadata.lidar_sensor_channel_name,
-            lidar_pointcloud_path=self.lidar_metadata.lidar_pointcloud_path,
+            lidar_pointcloud_path=self.lidar_metadata.lidar_pointcloud_relative_path,
+            lidar_pointcloud_source_path=self.lidar_metadata.lidar_pointcloud_source_relative_path,
             lidar_pointcloud_num_features=self.lidar_metadata.lidar_pointcloud_num_features,
             lidar_sensor_to_ego_pose_matrix=self.lidar_metadata.lidar_sensor_to_ego_pose_matrix_fp32,
             lidar_frame_ego_pose_to_global_matrix=self.lidar_metadata.lidar_frame_ego_pose_to_global_matrix_fp32,
             # Multisweep LiDAR Metadata
             lidar_sweep_frame_ids=self.lidar_sweep_metadata.lidar_sweep_frame_ids,
             lidar_sweep_timestamps_seconds=self.lidar_sweep_metadata.lidar_sweep_timestamps_seconds,
-            lidar_sweep_pointclouds_paths=self.lidar_sweep_metadata.parse_lidar_sweep_pointclouds_paths(),
+            lidar_sweep_pointclouds_paths=self.lidar_sweep_metadata.lidar_sweep_pointclouds_relative_paths,
             lidar_sweep_frame_ego_pose_to_global_matrices=self.lidar_sweep_metadata.lidar_sweep_frame_ego_pose_to_global_matrices_fp32,
             lidar_sensor_to_lidar_sweep_matrices=self.lidar_sweep_metadata.lidar_sensor_to_lidar_sweep_matrices_fp32,
             # Lidar sources Metadata
@@ -264,4 +324,9 @@ class T4SampleRecord(BaseModel):
             lidar_source_sensor_tokens=self.lidar_source_metadata.lidar_source_sensor_tokens,
             lidar_source_translations=self.lidar_source_metadata.lidar_source_translations_fp32,
             lidar_source_rotations=self.lidar_source_metadata.lidar_source_rotations_fp32,
+            # Lidarseg Metadata
+            lidarseg_pts_semantic_mask_path=self.lidarseg_metadata.lidarseg_pts_semantic_mask_relative_path,
+            # Category Metadata
+            category_names=self.category_metadata.category_names,
+            category_indices=self.category_metadata.category_indices,
         )

@@ -9,6 +9,7 @@ from t4_devkit import Tier4
 from t4_devkit.schema import (
     CalibratedSensor,
     EgoPose,
+    LidarSeg,
     Sample,
     SampleData,
     Scene,
@@ -23,7 +24,9 @@ from autoware_ml.databases.scenarios import ScenarioData
 from autoware_ml.databases.t4dataset.t4sample_records import (
     T4SampleRecord,
     BasicMetaData,
+    CategoryMetaData,
     LidarMetaData,
+    LidarSegMetaData,
     LidarSweepMetaData,
     LidarSourceMetaData,
 )
@@ -184,6 +187,7 @@ class T4RecordsGenerator:
             lidar_sensor_id=cs_record.token,
             lidar_sensor_channel_name=lidar_channel_name,
             lidar_pointcloud_path=lidar_path,
+            lidar_pointcloud_source_path=sd_record.info_filename,
             lidar_pointcloud_num_features=self.lidar_pointcloud_num_features,
             lidar_sensor_to_ego_pose_matrix=lidar_sensor_to_ego_matrix,
             lidar_frame_ego_pose_to_global_matrix=lidar_frame_ego_pose_to_global_matrix,
@@ -371,6 +375,71 @@ class T4RecordsGenerator:
             lidar_source_rotations=lidar_source_rotations,
         )
 
+    def _extract_lidarseg_metadata(
+        self, sample_index: int, calibrated_lidar_sample_data_token: str
+    ) -> LidarSegMetaData:
+        """
+        Extract lidarseg metadata from a T4 Sample.
+
+        Args:
+          sample_index: Sample index.
+          calibrated_lidar_sample_data_token: Calibrated lidar sample data token.
+
+        Returns:
+          LidarSegMetaData: Lidarseg metadata of the T4 sample.
+        """
+        lidarseg_records: Sequence[LidarSeg] = getattr(
+            self.t4_devkit_dataset, SchemaName.LIDARSEG, []
+        )
+        if not len(lidarseg_records):
+            return LidarSegMetaData(
+                lidarseg_pts_semantic_mask_path=None,
+                lidarseg_pts_semantic_mask_category_names=[],
+                lidarseg_pts_semantic_mask_category_indices=[],
+            )
+
+        assert sample_index < len(lidarseg_records), (
+            "Sample index is out of range of lidarseg records."
+        )
+
+        current_lidarseg_record = lidarseg_records[sample_index]
+        assert current_lidarseg_record.sample_data_token == calibrated_lidar_sample_data_token, (
+            "Lidarseg record sample data token does not match the calibrated lidar sample data token."
+        )
+
+        return LidarSegMetaData(
+            lidarseg_pts_semantic_mask_path=current_lidarseg_record.filename,
+        )
+
+    def _extract_category_metadata(self) -> CategoryMetaData:
+        """
+        Extract category metadata from a T4 Sample.
+
+        Args:
+          sample_index: Sample index.
+
+        Returns:
+          CategoryMetaData: Category metadata of the T4 sample.
+        """
+
+        category_records = self.t4_devkit_dataset.get_table(SchemaName.CATEGORY)
+        if not len(category_records):
+            return CategoryMetaData(
+                category_names=[],
+                category_indices=[],
+            )
+
+        category_names = []
+        category_indices = []
+        for category_record in category_records:
+            category_names.append(category_record.name)
+            category_indices.append(category_record.index)
+
+        return CategoryMetaData(
+            category_names=category_names,
+            category_indices=category_indices,
+        )
+
     def extract_t4_sample_record(self, sample: Sample, sample_index: int) -> T4SampleRecord:
         """
         Extract T4 sample record from a T4Dataset.
@@ -382,24 +451,34 @@ class T4RecordsGenerator:
           T4SampleRecord: T4 sample record.
         """
 
-        # First, extract basic information from the T4Dataset
+        # 1) Extract basic information from the T4Dataset
         basic_metadata = self._extract_basic_metadata(sample=sample, sample_index=sample_index)
 
-        # Second, extract lidar information from the T4Dataset
+        # 2) Extract lidar information from the T4Dataset
         lidar_metadata = self._extract_lidar_metadata(sample=sample)
 
-        # Third, extract multisweep lidar information from the T4Dataset
+        # 3) Extract multisweep lidar information from the T4Dataset
         lidar_sweep_metadata = self._extract_lidar_sweep_metadata(
             t4_sample_record_lidar_info=lidar_metadata
         )
-        # Fourth, extract lidar sources information from the T4Dataset
+
+        # 4) Extract lidar sources information from the T4Dataset
         lidar_source_metadata = self._extract_lidar_source_metadata()
 
-        # TODO (KokSeang): Extract more information, for example, boxes, from the T4Dataset.
-        # Last, return the T4 sample record
+        # 5) Extract lidarseg information from the T4Dataset
+        lidarseg_metadata = self._extract_lidarseg_metadata(
+            sample_index=sample_index,
+            calibrated_lidar_sample_data_token=lidar_metadata.lidar_frame_id,
+        )
+
+        # 6) Extract category information from the T4Dataset
+        category_metadata = self._extract_category_metadata()
+
         return T4SampleRecord(
             basic_metadata=basic_metadata,
             lidar_metadata=lidar_metadata,
             lidar_sweep_metadata=lidar_sweep_metadata,
             lidar_source_metadata=lidar_source_metadata,
+            lidarseg_metadata=lidarseg_metadata,
+            category_metadata=category_metadata,
         )

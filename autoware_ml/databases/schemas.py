@@ -47,6 +47,7 @@ class DatasetTableSchema:
     LIDAR_SENSOR_ID = DatasetTableColumn("lidar_sensor_id", pl.String)
     LIDAR_SENSOR_CHANNEL_NAME = DatasetTableColumn("lidar_sensor_channel_name", pl.String)
     LIDAR_POINTCLOUD_PATH = DatasetTableColumn("lidar_pointcloud_path", pl.String)
+    LIDAR_POINTCLOUD_SOURCE_PATH = DatasetTableColumn("lidar_pointcloud_source_path", pl.String)
     LIDAR_POINTCLOUD_NUM_FEATURES = DatasetTableColumn("lidar_pointcloud_num_features", pl.Int32)
     LIDAR_SENSOR_TO_EGO_POSE_MATRIX = DatasetTableColumn(
         "lidar_sensor_to_ego_pose_matrix", pl.Array(pl.Float32, shape=(4, 4))
@@ -83,6 +84,15 @@ class DatasetTableSchema:
     LIDAR_SOURCE_ROTATIONS = DatasetTableColumn(
         "lidar_source_rotations", pl.List(pl.Array(pl.Float32, shape=(3, 3)))
     )
+
+    # Lidarseg Schema, and it can be nullable by default
+    lidarset_pts_semantic_mask_path = DatasetTableColumn(
+        "lidarset_pts_semantic_mask_path", pl.String
+    )
+
+    # {class_name: class index}, and it's now two columns
+    category_names = DatasetTableColumn("category_names", pl.List(pl.String))
+    category_indices = DatasetTableColumn("category_indices", pl.List(pl.Int32))
 
     @classmethod
     def to_polars_schema(cls) -> pl.Schema:
@@ -132,6 +142,7 @@ class DatasetRecord(BaseModel):
     lidar_sensor_id: str
     lidar_sensor_channel_name: str
     lidar_pointcloud_path: str
+    lidar_pointcloud_source_path: str | None
     lidar_pointcloud_num_features: int
     lidar_sensor_to_ego_pose_matrix: npt.NDArray[np.float32]  # (4, 4)
     lidar_frame_ego_pose_to_global_matrix: npt.NDArray[
@@ -150,4 +161,10 @@ class DatasetRecord(BaseModel):
     lidar_source_sensor_tokens: Sequence[str]
     lidar_source_translations: Sequence[npt.NDArray[np.float32]]
     lidar_source_rotations: Sequence[npt.NDArray[np.float32]]
-    # lidarseg Metadata
+
+    # Lidarseg Metadata
+    lidarseg_pts_semantic_mask_path: str | None
+
+    # Category names and indices
+    category_names: Sequence[str]
+    category_indices: Sequence[int]
