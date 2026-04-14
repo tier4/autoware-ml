@@ -31,10 +31,12 @@ class T4RecordsGeneratorWorkerParams:
       database_root_path: Root path of the T4 database.
       dataset_version: Version of the dataset.
       scenario_data: Scenario data.
+      lidar_pointcloud_num_features: Number of features in the lidar pointcloud.
     """
 
     database_root_path: str
     scenario_data: ScenarioData
+    lidar_pointcloud_num_features: int
 
 
 def _apply_t4_records_generator(
@@ -55,6 +57,7 @@ def _apply_t4_records_generator(
         scenario_data=t4_records_generator_worker_params.scenario_data,
         sample_steps=t4_records_generator_worker_params.scenario_data.sample_steps,
         max_sweeps=t4_records_generator_worker_params.scenario_data.max_sweeps,
+        lidar_pointcloud_num_features=t4_records_generator_worker_params.lidar_pointcloud_num_features,
     )
     # Generate DatasetRecords
     return t4_records_generator.generate_dataset_records()
@@ -71,6 +74,7 @@ class T4Database(BaseDatabase):
         cache_path: str,
         cache_file_prefix_name: str,
         num_workers: int,
+        lidar_pointcloud_num_features: int,
     ) -> None:
         """
         Initialize T4 database. Please refer to the BaseDatabase class for more details.
@@ -82,6 +86,7 @@ class T4Database(BaseDatabase):
           cache_path: Path to cache the database records.
           cache_file_prefix_name: Prefix name of the cache file, it will be <cache_file_prefix_name>_<database_hash>.parquet
           num_workers: Number of workers to use for processing the database.
+          lidar_pointcloud_num_features: Number of features in the lidar pointcloud.
         """
 
         logger.info("Initializing T4 database...")
@@ -93,6 +98,7 @@ class T4Database(BaseDatabase):
             num_workers=num_workers,
         )
         self._scenarios = scenarios
+        self._lidar_pointcloud_num_features = lidar_pointcloud_num_features
 
     def __str__(self) -> str:
         """
@@ -187,6 +193,7 @@ class T4Database(BaseDatabase):
             T4RecordsGeneratorWorkerParams(
                 database_root_path=self._database_root_path,
                 scenario_data=scenario,
+                lidar_pointcloud_num_features=self._lidar_pointcloud_num_features,
             )
             for scenario in scenario_data.values()
         ]

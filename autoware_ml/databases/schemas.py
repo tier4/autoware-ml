@@ -63,11 +63,25 @@ class DatasetTableSchema:
     LIDAR_SWEEP_POINTCLOUDS_PATHS = DatasetTableColumn(
         "lidar_sweep_pointclouds_paths", pl.List(pl.String)
     )
-    LIDAR_SWEEP_FRAME_EGO_TO_GLOBAL_MATRICES = DatasetTableColumn(
-        "lidar_sweep_frame_ego_to_global_matrices", pl.List(pl.Array(pl.Float32, shape=(4, 4)))
+    LIDAR_SWEEP_FRAME_EGO_POSE_TO_GLOBAL_MATRICES = DatasetTableColumn(
+        "lidar_sweep_frame_ego_pose_to_global_matrices", pl.List(pl.Array(pl.Float32, shape=(4, 4)))
     )
     LIDAR_SENSOR_TO_LIDAR_SWEEP_MATRICES = DatasetTableColumn(
         "lidar_sensor_to_lidar_sweep_matrices", pl.List(pl.Array(pl.Float32, shape=(4, 4)))
+    )
+
+    # Lidar Sources Schema
+    LIDAR_SOURCE_CHANNEL_NAMES = DatasetTableColumn(
+        "lidar_source_channel_names", pl.List(pl.String)
+    )
+    LIDAR_SOURCE_SENSOR_TOKENS = DatasetTableColumn(
+        "lidar_source_sensor_tokens", pl.List(pl.String)
+    )
+    LIDAR_SOURCE_TRANSLATIONS = DatasetTableColumn(
+        "lidar_source_translations", pl.List(pl.Array(pl.Float32, shape=(3,)))
+    )
+    LIDAR_SOURCE_ROTATIONS = DatasetTableColumn(
+        "lidar_source_rotations", pl.List(pl.Array(pl.Float32, shape=(3, 3)))
     )
 
     @classmethod
@@ -102,7 +116,7 @@ class DatasetRecord(BaseModel):
     """
 
     # Set model config to frozen
-    model_config = ConfigDict(frozen=True, strict=True)
+    model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
 
     # Basic Metadata
     scenario_id: str
@@ -128,5 +142,12 @@ class DatasetRecord(BaseModel):
     lidar_sweep_frame_ids: Sequence[str]
     lidar_sweep_timestamps_seconds: Sequence[float]
     lidar_sweep_pointclouds_paths: Sequence[str]
-    lidar_sweep_frame_ego_to_global_matrices: Sequence[npt.NDArray[np.float32]]  # (4, 4)
+    lidar_sweep_frame_ego_pose_to_global_matrices: Sequence[npt.NDArray[np.float32]]  # (4, 4)
     lidar_sensor_to_lidar_sweep_matrices: Sequence[npt.NDArray[np.float32]]  # (4, 4)
+
+    # Lidar Sources Metadata
+    lidar_source_channel_names: Sequence[str]
+    lidar_source_sensor_tokens: Sequence[str]
+    lidar_source_translations: Sequence[npt.NDArray[np.float32]]
+    lidar_source_rotations: Sequence[npt.NDArray[np.float32]]
+    # lidarseg Metadata

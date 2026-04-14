@@ -6,17 +6,26 @@ from typing import Sequence, Tuple
 import numpy as np
 import numpy.typing as npt
 from t4_devkit import Tier4
-from t4_devkit.schema import CalibratedSensor, EgoPose, Sample, SampleData, Scene, SchemaName
+from t4_devkit.schema import (
+    CalibratedSensor,
+    EgoPose,
+    Sample,
+    SampleData,
+    Scene,
+    Sensor,
+    SchemaName,
+)
 from t4_devkit.common.timestamp import microseconds2seconds
 
-from autoware_ml.common.enums.enums import LidarChannel
+from autoware_ml.common.enums.enums import LidarChannel, Modality
 from autoware_ml.databases.schemas import DatasetRecord
 from autoware_ml.databases.scenarios import ScenarioData
 from autoware_ml.databases.t4dataset.t4sample_records import (
     T4SampleRecord,
-    T4SampleRecordBasicInfo,
-    T4SampleRecordLidarInfo,
-    T4SampleRecordLidarSweepInfo,
+    BasicMetaData,
+    LidarMetaData,
+    LidarSweepMetaData,
+    LidarSourceMetaData,
 )
 from autoware_ml.utils.dataset import convert_quaternion_to_matrix
 
@@ -25,6 +34,9 @@ logger = logging.getLogger(__name__)
 
 class T4RecordsGenerator:
     """RecordsGenerator for T4Dataset."""
+
+    __MODALITY_STRING = "modality"
+    __VALUE_STRING = "value"
 
     def __init__(
         self,
@@ -94,20 +106,20 @@ class T4RecordsGenerator:
 
         return records
 
-    def _extract_basic_info(self, sample: Sample, sample_index: int) -> T4SampleRecordBasicInfo:
+    def _extract_basic_metadata(self, sample: Sample, sample_index: int) -> BasicMetaData:
         """
-        Extract basic information from a T4 sample.
+        Extract basic metadata from a T4 sample.
 
         Args:
           sample: T4 Sample.
           sample_index: Sample index.
 
         Returns:
-          T4SampleRecordBasicInfo: Basic information of the T4 sample.
+          BasicMetaData: Basic metadata of the T4 sample.
         """
 
         scene_record: Scene = self.t4_devkit_dataset.get(SchemaName.SCENE, sample.scene_token)
-        return T4SampleRecordBasicInfo(
+        return BasicMetaData(
             scenario_id=self.scenario_data.scenario_id,
             sample_id=sample.token,
             sample_index=sample_index,
@@ -117,15 +129,15 @@ class T4RecordsGenerator:
             scenario_name=scene_record.name,
         )
 
-    def _extract_lidar_info(self, sample: Sample) -> T4SampleRecordLidarInfo:
+    def _extract_lidar_metadata(self, sample: Sample) -> LidarMetaData:
         """
-        Extract lidar information from a T4 sample.
+        Extract lidar metadata from a T4 sample.
 
         Args:
           sample: T4 Sample.
 
         Returns:
-          T4SampleRecordLidarInfo: Lidar information of the T4 sample.
+          LidarMetaData: Lidar metadata of the T4 sample.
         """
 
         # Read lidar channel name
@@ -167,7 +179,7 @@ class T4RecordsGenerator:
             convert_to_float32=False,
         )
 
-        return T4SampleRecordLidarInfo(
+        return LidarMetaData(
             lidar_frame_id=calibrated_lidar_sample_data_token,
             lidar_sensor_id=cs_record.token,
             lidar_sensor_channel_name=lidar_channel_name,
@@ -237,17 +249,17 @@ class T4RecordsGenerator:
         )
         return sensor_frame_ego_pose_to_global_matrix, sensor_to_selected_sensor_matrix
 
-    def _extract_lidar_sweep_info(
-        self, t4_sample_record_lidar_info: T4SampleRecordLidarInfo
-    ) -> T4SampleRecordLidarSweepInfo:
+    def _extract_lidar_sweep_metadata(
+        self, t4_sample_record_lidar_info: LidarMetaData
+    ) -> LidarSweepMetaData:
         """
-        Extract multisweep lidar information from a T4 Sample.
+        Extract multisweep lidar metadata from a T4 Sample.
 
         Args:
-            t4_sample_record_lidar_info: T4 Sample lidar information.
+            t4_sample_record_lidar_info: T4 Sample lidar metadata.
 
         Returns:
-            T4SampleRecordLidarInfo: T4 sample lidar sweep information
+            LidarSweepsMetaData: T4 sample lidar sweep metadata
             corresponding to the current T4 sample.
         """
 
@@ -298,12 +310,65 @@ class T4RecordsGenerator:
             )
             lidar_sensor_to_lidar_sweep_matrices.append(lidar_sensor_to_lidar_sweep_matrix)
 
-        return T4SampleRecordLidarSweepInfo(
+        return LidarSweepMetaData(
             lidar_sweep_frame_ids=lidar_sweep_frame_ids,
             lidar_sweep_timestamps_seconds=lidar_sweep_timestamps_seconds,
             lidar_sweep_pointclouds_paths=lidar_sweep_pointclouds_paths,
-            lidar_sweep_frame_ego_to_global_matrices=lidar_sweep_frame_ego_pose_to_global_matrices,
+            lidar_sweep_frame_ego_pose_to_global_matrices=lidar_sweep_frame_ego_pose_to_global_matrices,
             lidar_sensor_to_lidar_sweep_matrices=lidar_sensor_to_lidar_sweep_matrices,
+        )
+
+    def _extract_lidar_source_metadata(self) -> LidarSourceMetaData:
+        """
+        Extract lidar sources metadata from a T4 Sample.
+
+        Args:
+          sample: T4 Sample.
+
+        Returns:
+          LidarSourcesMetaData: Lidar sources metadata of the T4 sample.
+        """
+
+        # First, read lidar source sensor tokens from the sample data
+        calibrated_sensor_records: Sequence[CalibratedSensor] = getattr(
+            self.t4_devkit_dataset, SchemaName.CALIBRATED_SENSOR, []
+        )
+
+        if not len(calibrated_sensor_records):
+            return LidarSourceMetaData(
+                lidar_source_sensor_tokens=[],
+                lidar_source_translations=[],
+                lidar_source_rotations=[],
+            )
+
+        lidar_source_channel_names = []
+        lidar_source_sensor_tokens = []
+        lidar_source_translations = []
+        lidar_source_rotations = []
+        for calibrated_sensor_record in calibrated_sensor_records:
+            try:
+                sensor_record: Sensor = self.t4_devkit_dataset.get(
+                    SchemaName.SENSOR, calibrated_sensor_record.sensor_token
+                )
+            except ValueError:
+                continue
+
+            modality = getattr(sensor_record, self.__MODALITY_STRING, None)
+            modality_value = getattr(modality, self.__VALUE_STRING, None)
+            if modality_value != Modality.LIDAR:
+                continue
+
+            if sensor_record.channel not in lidar_source_channel_names:
+                lidar_source_channel_names.append(sensor_record.channel)
+                lidar_source_sensor_tokens.append(sensor_record.token)
+                lidar_source_translations.append(calibrated_sensor_record.translation)
+                lidar_source_rotations.append(calibrated_sensor_record.rotation.rotation_matrix)
+
+        return LidarSourceMetaData(
+            lidar_source_channel_names=lidar_source_channel_names,
+            lidar_source_sensor_tokens=lidar_source_sensor_tokens,
+            lidar_source_translations=lidar_source_translations,
+            lidar_source_rotations=lidar_source_rotations,
         )
 
     def extract_t4_sample_record(self, sample: Sample, sample_index: int) -> T4SampleRecord:
@@ -317,32 +382,24 @@ class T4RecordsGenerator:
           T4SampleRecord: T4 sample record.
         """
 
-        # First, read lidar token from the sample data
-        if LidarChannel.LIDAR_TOP in sample.data:
-            lidar_token = sample.data[LidarChannel.LIDAR_TOP]
-        elif LidarChannel.LIDAR_CONCAT in sample.data:
-            lidar_token = sample.data[LidarChannel.LIDAR_CONCAT]
-        else:
-            raise ValueError(
-                f"Lidar channel {LidarChannel.LIDAR_TOP} or {LidarChannel.LIDAR_CONCAT} not found in sample data."
-            )
+        # First, extract basic information from the T4Dataset
+        basic_metadata = self._extract_basic_metadata(sample=sample, sample_index=sample_index)
 
-        # Second, read sample data and calibrated sensor from the T4Dataset
-        sd_record: SampleData = self.t4_devkit_dataset.get("sample_data", lidar_token)
-        cs_record: CalibratedSensor = self.t4_devkit_dataset.get(
-            "calibrated_sensor", sd_record.calibrated_sensor_token
+        # Second, extract lidar information from the T4Dataset
+        lidar_metadata = self._extract_lidar_metadata(sample=sample)
+
+        # Third, extract multisweep lidar information from the T4Dataset
+        lidar_sweep_metadata = self._extract_lidar_sweep_metadata(
+            t4_sample_record_lidar_info=lidar_metadata
         )
-        lidar_path, _, _ = self.t4_devkit_dataset.get_sample_data(lidar_token)
-        # TODO (KokSeang): Extract more information, for example, boxes and lidar sweeps, from the T4Dataset.
-        # Last, return the T4 sample record
+        # Fourth, extract lidar sources information from the T4Dataset
+        lidar_source_metadata = self._extract_lidar_source_metadata()
 
+        # TODO (KokSeang): Extract more information, for example, boxes, from the T4Dataset.
+        # Last, return the T4 sample record
         return T4SampleRecord(
-            scenario_id=self.scenario_data.scenario_id,
-            sample_id=sample.token,
-            sample_index=sample_index,
-            location=self.scenario_data.location,
-            vehicle_type=self.scenario_data.vehicle_type,
-            lidar_path=lidar_path,
-            lidar2ego_translation=cs_record.translation,
-            lidar2ego_rotation=cs_record.rotation,
+            basic_metadata=basic_metadata,
+            lidar_metadata=lidar_metadata,
+            lidar_sweep_metadata=lidar_sweep_metadata,
+            lidar_source_metadata=lidar_source_metadata,
         )

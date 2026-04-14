@@ -12,9 +12,9 @@ from autoware_ml.databases.schemas import DatasetRecord
 logger = logging.getLogger(__name__)
 
 
-class T4SampleRecordBasicInfo(BaseModel):
+class BasicMetaData(BaseModel):
     """
-    Basic information of a T4 sample record.
+    Basic metadata of a T4 sample record.
 
     Attributes:
       scenario_id: Scenario ID.
@@ -36,9 +36,9 @@ class T4SampleRecordBasicInfo(BaseModel):
     vehicle_type: str | None = None
 
 
-class T4SampleRecordLidarInfo(BaseModel):
+class LidarMetaData(BaseModel):
     """
-    Lidar information of a T4 sample record.
+    Lidar metadata of a T4 sample record.
 
     Attributes:
       lidar_frame_id: Lidar frame ID.
@@ -58,10 +58,45 @@ class T4SampleRecordLidarInfo(BaseModel):
     lidar_frame_ego_pose_to_global_matrix: npt.NDArray[np.float64]  # (4, 4)
     boxes_3d: Sequence[Box3D]
 
+    def parse_lidar_pointcloud_path(self: str) -> str:
+        """
+        Parse lidar pointcloud path to {database_version}/{scene_id}/
+        {dataset_version}/data/{lidar_token}/{frame}.bin from path.
 
-class T4SampleRecordLidarSweepInfo(BaseModel):
+        Args:
+          lidar_pointcloud_path: Lidar pointcloud path.
+        Returns:
+          str: Parsed lidar pointcloud path.
+        """
+
+        return "/".join(self.lidar_pointcloud_path.split("/")[-6:])
+
+    @property
+    def lidar_sensor_to_ego_pose_matrix_fp32(self) -> npt.NDArray[np.float32]:
+        """
+        Convert the lidar sensor to ego pose matrix to float32.
+
+        Returns:
+          npt.NDArray[np.float32]: Lidar sensor to ego pose matrix.
+        """
+
+        return self.lidar_sensor_to_ego_pose_matrix.astype(np.float32)
+
+    @property
+    def lidar_frame_ego_pose_to_global_matrix_fp32(self) -> npt.NDArray[np.float32]:
+        """
+        Convert the lidar frame ego pose to global matrix to float32.
+
+        Returns:
+          npt.NDArray[np.float32]: Lidar frame ego pose to global matrix.
+        """
+
+        return self.lidar_frame_ego_pose_to_global_matrix.astype(np.float32)
+
+
+class LidarSweepMetaData(BaseModel):
     """
-    Multisweep lidar information of a T4 sample record, where all attributes
+    Multisweep lidar metadata of a T4 sample record, where all attributes
     must be of the same length.
 
     Attributes:
@@ -76,7 +111,7 @@ class T4SampleRecordLidarSweepInfo(BaseModel):
     lidar_sweep_frame_ids: Sequence[str]
     lidar_sweep_timestamps_seconds: Sequence[float]
     lidar_sweep_pointclouds_paths: Sequence[str]
-    lidar_sweep_frame_ego_to_global_matrices: Sequence[npt.NDArray[np.float64]]  # (4, 4)
+    lidar_sweep_frame_ego_pose_to_global_matrices: Sequence[npt.NDArray[np.float64]]  # (4, 4)
     lidar_sensor_to_lidar_sweep_matrices: Sequence[npt.NDArray[np.float64]]  # (4, 4)
 
     def model_post_init(self, __context: Any) -> None:
@@ -86,9 +121,101 @@ class T4SampleRecordLidarSweepInfo(BaseModel):
             len(self.lidar_sweep_frame_ids)
             == len(self.lidar_sweep_timestamps_seconds)
             == len(self.lidar_sweep_pointclouds_paths)
-            == len(self.lidar_sweep_frame_ego_to_global_matrices)
+            == len(self.lidar_sweep_frame_ego_pose_to_global_matrices)
             == len(self.lidar_sensor_to_lidar_sweep_matrices)
         ), "All attributes must be of the same length"
+
+    def parse_lidar_sweep_pointclouds_paths(self: str) -> Sequence[str]:
+        """
+        Parse lidar sweep pointclouds paths to {database_version}/{scene_id}/
+        {dataset_version}/data/{lidar_token}/{frame}.bin from path.
+
+        Returns:
+          Sequence[str]: Parsed lidar sweep pointclouds paths.
+        """
+
+        return [
+            "/".join(sweep_pointclouds_path.split("/")[-6:])
+            for sweep_pointclouds_path in self.lidar_sweep_pointclouds_paths
+        ]
+
+    @property
+    def lidar_sweep_frame_ego_pose_to_global_matrices_fp32(
+        self,
+    ) -> Sequence[npt.NDArray[np.float32]]:
+        """
+        Convert the lidar sweep frame ego pose to global matrices to float32.
+
+        Returns:
+          Sequence[npt.NDArray[np.float32]]: Lidar sweep frame ego pose to global matrices.
+        """
+
+        return [
+            matrix.astype(np.float32)
+            for matrix in self.lidar_sweep_frame_ego_pose_to_global_matrices
+        ]
+
+    @property
+    def lidar_sensor_to_lidar_sweep_matrices_fp32(self) -> Sequence[npt.NDArray[np.float32]]:
+        """
+        Convert the lidar sensor to lidar sweep matrices to float32.
+
+        Returns:
+          Sequence[npt.NDArray[np.float32]]: Lidar sensor to lidar sweep matrices.
+        """
+
+        return [matrix.astype(np.float32) for matrix in self.lidar_sensor_to_lidar_sweep_matrices]
+
+
+class LidarSourceMetaData(BaseModel):
+    """
+    Lidar source metadata of a T4 sample record.
+
+    Attributes:
+      lidar_source_channel_names: List of Lidar source channel names.
+      lidar_source_sensor_tokens: List of Lidar source sensor tokens.
+      lidar_source_translations: List of Lidar source translations.
+      lidar_source_rotations: List of Lidar source rotations.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
+
+    lidar_source_channel_names: Sequence[str]
+    lidar_source_sensor_tokens: Sequence[str]
+    lidar_source_translations: Sequence[npt.NDArray[np.float64]]
+    lidar_source_rotations: Sequence[npt.NDArray[np.float64]]
+
+    def model_post_init(self, __context: Any) -> None:
+        """Validate that all attributes are of the same length."""
+
+        assert (
+            len(self.lidar_source_channel_names)
+            == len(self.lidar_source_sensor_tokens)
+            == len(self.lidar_source_translations)
+            == len(self.lidar_source_rotations)
+        ), "All attributes must be of the same length"
+
+    @property
+    def lidar_source_translations_fp32(self) -> Sequence[npt.NDArray[np.float32]]:
+        """
+        Convert the lidar source translations to float32.
+
+        Returns:
+          Sequence[npt.NDArray[np.float32]]: Lidar source translations.
+        """
+
+        return [translation.astype(np.float32) for translation in self.lidar_source_translations]
+
+    @property
+    def lidar_source_rotations_fp32(self) -> Sequence[npt.NDArray[np.float32]]:
+        """
+        Convert the lidar source rotations to float32.
+
+        Returns:
+          Sequence[npt.NDArray[np.float32]]: Lidar source rotations.
+        """
+
+        return [rotation.astype(np.float32) for rotation in self.lidar_source_rotations]
 
 
 class T4SampleRecord(BaseModel):
@@ -96,72 +223,45 @@ class T4SampleRecord(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    basic_info: T4SampleRecordBasicInfo
-    lidar_info: T4SampleRecordLidarInfo
-    lidar_sweep_info: T4SampleRecordLidarSweepInfo
-
-    @staticmethod
-    def parse_lidar_pointcloud_path(lidar_pointcloud_path: str) -> str:
-        """
-        Parse lidar pointcloud path to {database_version}/{scene_id}/
-        {dataset_version}/data/{lidar_token}/{frame}.bin from path.
-
-        Args:
-          lidar_pointcloud_path: Lidar pointcloud path.
-        Returns:
-          str: Parsed lidar pointcloud path.
-        """
-
-        return "/".join(lidar_pointcloud_path.split("/")[-6:])
+    basic_metadata: BasicMetaData
+    lidar_metadata: LidarMetaData
+    lidar_sweep_metadata: LidarSweepMetaData
+    lidar_source_metadata: LidarSourceMetaData
 
     def to_dataset_record(self) -> DatasetRecord:
         """
-        Convert T4 sample record to dataset record.
+        Convert this T4SampleRecord to DatasetRecord.
 
         Returns:
           DatasetRecord: Dataset record.
         """
 
-        # Parse the lidar sweep information
-        lidar_sweep_pointclouds_paths = [
-            self.parse_lidar_pointcloud_path(path)
-            for path in self.lidar_sweep_info.lidar_sweep_pointclouds_paths
-        ]
-        lidar_sweep_ego_to_global_matrices = [
-            matrix.astype(np.float32)
-            for matrix in self.lidar_sweep_info.lidar_sweep_ego_to_global_matrices
-        ]
-        lidar_sweep_frame_ego_pose_to_global_matrices = [
-            matrix.astype(np.float32)
-            for matrix in self.lidar_sweep_info.lidar_sweep_frame_ego_pose_to_global_matrices
-        ]
         return DatasetRecord(
             # Basic Metadata
-            scenario_id=self.basic_info.scenario_id,
-            sample_id=self.basic_info.sample_id,
-            sample_index=self.basic_info.sample_index,
-            timestamp_seconds=self.basic_info.timestamp_seconds,
-            scenario_name=self.basic_info.scenario_name,
-            location=self.basic_info.location,
-            vehicle_type=self.basic_info.vehicle_type,
+            scenario_id=self.basic_metadata.scenario_id,
+            sample_id=self.basic_metadata.sample_id,
+            sample_index=self.basic_metadata.sample_index,
+            timestamp_seconds=self.basic_metadata.timestamp_seconds,
+            scenario_name=self.basic_metadata.scenario_name,
+            location=self.basic_metadata.location,
+            vehicle_type=self.basic_metadata.vehicle_type,
             # LiDAR Metadata
-            lidar_frame_id=self.lidar_info.lidar_frame_id,
-            lidar_sensor_id=self.lidar_info.lidar_sensor_id,
-            lidar_sensor_channel_name=self.lidar_info.lidar_sensor_channel_name,
-            lidar_pointcloud_path=self.parse_lidar_pointcloud_path(
-                self.lidar_info.lidar_pointcloud_path
-            ),
-            lidar_pointcloud_num_features=self.lidar_info.lidar_pointcloud_num_features,
-            lidar_sensor_to_ego_pose_matrix=self.lidar_info.lidar_sensor_to_ego_pose_matrix.astype(
-                np.float32
-            ),
-            lidar_frame_ego_pose_to_global_matrix=self.lidar_info.lidar_frame_ego_pose_to_global_matrix.astype(
-                np.float32
-            ),
+            lidar_frame_id=self.lidar_metadata.lidar_frame_id,
+            lidar_sensor_id=self.lidar_metadata.lidar_sensor_id,
+            lidar_sensor_channel_name=self.lidar_metadata.lidar_sensor_channel_name,
+            lidar_pointcloud_path=self.lidar_metadata.lidar_pointcloud_path,
+            lidar_pointcloud_num_features=self.lidar_metadata.lidar_pointcloud_num_features,
+            lidar_sensor_to_ego_pose_matrix=self.lidar_metadata.lidar_sensor_to_ego_pose_matrix_fp32,
+            lidar_frame_ego_pose_to_global_matrix=self.lidar_metadata.lidar_frame_ego_pose_to_global_matrix_fp32,
             # Multisweep LiDAR Metadata
-            lidar_sweep_frame_ids=self.lidar_sweep_info.lidar_sweep_frame_ids,
-            lidar_sweep_timestamps_seconds=self.lidar_sweep_info.lidar_sweep_timestamps_seconds,
-            lidar_sweep_pointclouds_paths=lidar_sweep_pointclouds_paths,
-            lidar_sweep_ego_to_global_matrices=lidar_sweep_ego_to_global_matrices,
-            lidar_sweep_frame_ego_pose_to_global_matrices=lidar_sweep_frame_ego_pose_to_global_matrices,
+            lidar_sweep_frame_ids=self.lidar_sweep_metadata.lidar_sweep_frame_ids,
+            lidar_sweep_timestamps_seconds=self.lidar_sweep_metadata.lidar_sweep_timestamps_seconds,
+            lidar_sweep_pointclouds_paths=self.lidar_sweep_metadata.parse_lidar_sweep_pointclouds_paths(),
+            lidar_sweep_frame_ego_pose_to_global_matrices=self.lidar_sweep_metadata.lidar_sweep_frame_ego_pose_to_global_matrices_fp32,
+            lidar_sensor_to_lidar_sweep_matrices=self.lidar_sweep_metadata.lidar_sensor_to_lidar_sweep_matrices_fp32,
+            # Lidar sources Metadata
+            lidar_source_channel_names=self.lidar_source_metadata.lidar_source_channel_names,
+            lidar_source_sensor_tokens=self.lidar_source_metadata.lidar_source_sensor_tokens,
+            lidar_source_translations=self.lidar_source_metadata.lidar_source_translations_fp32,
+            lidar_source_rotations=self.lidar_source_metadata.lidar_source_rotations_fp32,
         )
