@@ -8,7 +8,7 @@ This sub-module implements the database layer for the **T4** annotation format, 
 | ------------------------ | ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
 | `t4scenarios.py`         | `T4Scenarios` extends `Scenarios`: reads scenario YAML files and builds per-split scenario data | `scenarios`                                                                             |
 | `t4records_generator.py` | `T4RecordsGenerator` reads T4 annotations via `t4-devkit` and emits `DatasetRecord`             | `scenarios`, `schemas`, `t4-devkit`                                                     |
-| `t4database.py`          | `T4Database` extends `BaseDatabase`: orchestrates parallel record generation across scenarios   | `base_database`, `t4scenarios`, `t4records_generator`, `scenarios`, `schemas`, `polars` |
+| `t4dataset.py`           | `T4Dataset` extends `BaseDatabase`: orchestrates parallel record generation across scenarios    | `base_database`, `t4scenarios`, `t4records_generator`, `scenarios`, `schemas`, `polars` |
 
 ```mermaid
 classDiagram
@@ -59,17 +59,17 @@ classDiagram
         extract_t4_sample_record()
     }
 
-    class T4Database {
+    class T4Dataset {
         process_scenario_records()
         _run_t4records_generator()
     }
 
     T4Scenarios --|> scenarios : extends Scenarios
 
-    T4Database --|> BaseDatabase : extends
-    T4Database --> T4Scenarios : scenario groups
-    T4Database --> T4RecordsGenerator : creates per scenario
-    T4Database --> polars : writes Parquet via DataFrame
+    T4Dataset --|> BaseDatabase : extends
+    T4Dataset --> T4Scenarios : scenario groups
+    T4Dataset --> T4RecordsGenerator : creates per scenario
+    T4Dataset --> polars : writes Parquet via DataFrame
 
     T4RecordsGenerator --> T4Scenarios : reads ScenarioData
     T4RecordsGenerator --> schemas : emits Sequence[DatasetRecord]
