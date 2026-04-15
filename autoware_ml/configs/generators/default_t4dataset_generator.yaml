@@ -6,7 +6,7 @@ hydra:
     - pkg://autoware_ml.configs
 
 defaults:
-  - database: t4dataset/t4database_base
+  - database: t4dataset/t4dataset_base
   - override hydra/hydra_logging: none # Disable hydra's logging
   - _self_
 

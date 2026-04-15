@@ -1,7 +1,7 @@
-_target_: autoware_ml.databases.t4dataset.t4database.T4Database
+_target_: autoware_ml.databases.t4dataset.t4dataset.T4Dataset
 _convert_: all
 
-database_version: T4Detection3d-j6gen2_base-v1.0.0
+database_version: T4Dataset-j6gen2_base-v1.0.0
 # Root path of actual annotation files
 database_root_path: ${data_root_path}/t4dataset/
 

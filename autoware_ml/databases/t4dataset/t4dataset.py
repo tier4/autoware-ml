@@ -60,8 +60,8 @@ def _apply_t4_records_generator(
     return t4_records_generator.generate_dataset_records()
 
 
-class T4Database(BaseDatabase):
-    """T4Database class."""
+class T4Dataset(BaseDatabase):
+    """T4Dataset class."""
 
     def __init__(
         self,
@@ -73,18 +73,18 @@ class T4Database(BaseDatabase):
         num_workers: int,
     ) -> None:
         """
-        Initialize T4 database. Please refer to the BaseDatabase class for more details.
+        Initialize T4 dataset. Please refer to the BaseDatabase class for more details.
 
         Args:
-          database_version: Version of the database.
+          database_version: Version of the dataset.
           database_root_path: Root path where the actual annotation files are stored.
           scenarios: Scenario configurations for each scenario in {'scenario_group_name': scenario_config}.
-          cache_path: Path to cache the database records.
-          cache_file_prefix_name: Prefix name of the cache file, it will be <cache_file_prefix_name>_<database_hash>.parquet
-          num_workers: Number of workers to use for processing the database.
+          cache_path: Path to cache the dataset records.
+          cache_file_prefix_name: Prefix name of the cache file, it will be <cache_file_prefix_name>_<dataset_hash>.parquet
+          num_workers: Number of workers to use for processing the dataset.
         """
 
-        logger.info("Initializing T4 database...")
+        logger.info("Initializing T4 dataset...")
         super().__init__(
             database_version=database_version,
             database_root_path=database_root_path,
@@ -103,7 +103,7 @@ class T4Database(BaseDatabase):
         """
 
         string = (
-            f"T4Database(database_version={self._database_version}, "
+            f"T4Dataset(database_version={self._database_version}, "
             f"database_root_path={str(self._database_root_path)}, "
             f"cache path={str(self._cache_path)}, "
             f"cache file prefix name={self._cache_file_prefix_name}, "
@@ -120,7 +120,7 @@ class T4Database(BaseDatabase):
           bool: True if the databases are equal, False otherwise.
         """
 
-        if not isinstance(other, T4Database):
+        if not isinstance(other, T4Dataset):
             return False
         return str(self) == str(other)
 
@@ -140,7 +140,7 @@ class T4Database(BaseDatabase):
         # First, read all unique scenario data
         unique_scenario_data = self.get_unique_scenario_data()
         logger.info(
-            f"Processing a total of {len(unique_scenario_data)} unique scenarios in T4Database"
+            f"Processing a total of {len(unique_scenario_data)} unique scenarios in T4Dataset"
         )
 
         # Second, send the list to the multiprocessing or single processing the scenario

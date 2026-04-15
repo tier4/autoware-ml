@@ -1,7 +1,7 @@
-_target_: autoware_ml.databases.t4dataset.t4database.T4Database
+_target_: autoware_ml.databases.t4dataset.t4dataset.T4Dataset
 _convert_: all
 
-database_version: T4Database-base-v1.0.0
+database_version: T4Dataset-jpntaxi_base-v1.0.0
 # Root path of actual annotation files
 database_root_path: ${data_root_path}/t4dataset/
 
@@ -12,11 +12,7 @@ cache_file_prefix_name: database
 
 # Read each database into their corresponding scenarios, it will run evaluation/visualization on each scenario
 defaults:
-  - t4dataset/scenarios@scenarios.db_base: detection3d/db_base
-  - t4dataset/scenarios@scenarios.db_j6gen2_base: detection3d/db_j6gen2_base
-  - t4dataset/scenarios@scenarios.db_j6gen2: detection3d/db_j6gen2
   - t4dataset/scenarios@scenarios.db_jpntaxi_base: detection3d/db_jpntaxi_base
-  - t4dataset/scenarios@scenarios.db_largebus: detection3d/db_largebus
 
 # Processor settings
 num_workers: 16
