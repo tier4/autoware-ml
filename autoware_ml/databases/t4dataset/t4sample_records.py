@@ -252,6 +252,49 @@ class CategoryMetaData(BaseModel):
         )
 
 
+class Boxes3DMetadata(BaseModel):
+    """
+    Metadata of 3D bounding boxes.
+
+    Attributes:
+      boxes_3d_arrays: Sequence of 3D bounding boxes arrays.
+      boxes_3d_instance_ids: Sequence of instance IDs for each 3D bounding box.
+      boxes_3d_dataset_label_names: Sequence of dataset label names for each 3D bounding box.
+      boxes_3d_label_names: Sequence of label names for each 3D bounding box.
+      boxes_3d_label_indices: Sequence of label indices for each 3D bounding box.
+      boxes_3d_num_lidar_pointclouds: Sequence of number of lidar pointclouds for each 3D bounding box.
+      boxes_3d_num_radar_pointclouds: Sequence of number of radar pointclouds for each 3D bounding box.
+      boxes_3d_valid: Sequence of valid flags for each 3D bounding box.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
+
+    boxes_3d_arrays: Sequence[npt.NDArray[np.float32]]
+    boxes_3d_instance_ids: Sequence[str]
+    boxes_3d_dataset_label_names: Sequence[str]
+    boxes_3d_label_names: Sequence[str]
+    boxes_3d_label_indices: Sequence[int]
+    boxes_3d_num_lidar_pointclouds: Sequence[int]
+    boxes_3d_num_radar_pointclouds: Sequence[int]
+    boxes_3d_valid: Sequence[bool]
+    boxes_3d_attributes: Sequence[set[str]]
+
+    def __model_post_init__(self, __context: Any) -> None:
+        """Validate that all attributes are of the same length."""
+        assert (
+            len(self.indices)
+            == len(self.boxes_3d)
+            == len(self.boxes_3d_instance_ids)
+            == len(self.boxes_3d_dataset_names)
+            == len(self.boxes_3d_label_names)
+            == len(self.boxes_3d_label_indices)
+            == len(self.boxes_3d_num_lidar_pointclouds)
+            == len(self.boxes_3d_num_radar_pointclouds)
+            == len(self.boxes_3d_valid)
+            == len(self.boxes_3d_attributes)
+        ), "All attributes must be of the same length"
+
+
 class LidarSegMetaData(BaseModel):
     """
     Lidarseg metadata of a T4 sample record.
@@ -286,6 +329,7 @@ class T4SampleRecord(BaseModel):
     lidar_source_metadata: LidarSourceMetaData
     lidarseg_metadata: LidarSegMetaData
     category_metadata: CategoryMetaData
+    boxes_3d_metadata: Boxes3DMetadata
 
     def to_dataset_record(self) -> DatasetRecord:
         """
@@ -329,4 +373,14 @@ class T4SampleRecord(BaseModel):
             # Category Metadata
             category_names=self.category_metadata.category_names,
             category_indices=self.category_metadata.category_indices,
+            # Boxes 3D Metadata
+            boxes_3d_arrays=self.boxes_3d_metadata.boxes_3d_arrays,
+            boxes_3d_dataset_label_names=self.boxes_3d_metadata.boxes_3d_dataset_label_names,
+            boxes_3d_label_names=self.boxes_3d_metadata.boxes_3d_label_names,
+            boxes_3d_label_indices=self.boxes_3d_metadata.boxes_3d_label_indices,
+            boxes_3d_instance_ids=self.boxes_3d_metadata.boxes_3d_instance_ids,
+            boxes_3d_num_lidar_pointclouds=self.boxes_3d_metadata.boxes_3d_num_lidar_pointclouds,
+            boxed_3d_num_radar_pointclouds=self.boxes_3d_metadata.boxes_3d_num_radar_pointclouds,
+            boxes_3d_valid=self.boxes_3d_metadata.boxes_3d_valid,
+            boxes_3d_attributes=self.boxes_3d_metadata.boxes_3d_attributes,
         )
