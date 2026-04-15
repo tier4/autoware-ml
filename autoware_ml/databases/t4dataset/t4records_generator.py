@@ -102,9 +102,20 @@ class T4RecordsGenerator:
         logger.info(
             f"Generating dataset records for scenario: {self.scenario_data.scenario_id} with sample steps: {self.sample_steps} and max sweeps: {self.max_sweeps}"
         )
+
         for sample_index in range(0, len(self.t4_devkit_dataset.sample), self.sample_steps):
             sample = self.t4_devkit_dataset.sample[sample_index]
             t4_sample_record = self.extract_t4_sample_record(sample, sample_index)
+
+            if t4_sample_record is None:
+                logger.info(
+                    f"dataset_name: {self.scenario_data.dataset_name}, "
+                    f"scenario_id: {self.scenario_data.scenario_id}, "
+                    f"sample_index: {sample_index}, "
+                    f"No lidar channel found in sample data"
+                )
+                continue
+
             records.append(t4_sample_record.to_dataset_record())
 
         return records
@@ -132,26 +143,17 @@ class T4RecordsGenerator:
             scenario_name=scene_record.name,
         )
 
-    def _extract_lidar_metadata(self, sample: Sample) -> LidarMetaData:
+    def _extract_lidar_metadata(self, sample: Sample, lidar_channel_name: str) -> LidarMetaData:
         """
         Extract lidar metadata from a T4 sample.
 
         Args:
           sample: T4 Sample.
+          lidar_channel_name: Lidar channel name.
 
         Returns:
           LidarMetaData: Lidar metadata of the T4 sample.
         """
-
-        # Read lidar channel name
-        if LidarChannel.LIDAR_TOP in sample.data:
-            lidar_channel_name = LidarChannel.LIDAR_TOP
-        elif LidarChannel.LIDAR_CONCAT in sample.data:
-            lidar_channel_name = LidarChannel.LIDAR_CONCAT
-        else:
-            raise ValueError(
-                f"Lidar channel {LidarChannel.LIDAR_TOP} or {LidarChannel.LIDAR_CONCAT} not found in sample data."
-            )
 
         calibrated_lidar_sample_data_token = sample.data[lidar_channel_name]
         sd_record: SampleData = self.t4_devkit_dataset.get(
@@ -376,7 +378,10 @@ class T4RecordsGenerator:
         )
 
     def _extract_lidarseg_metadata(
-        self, sample_index: int, calibrated_lidar_sample_data_token: str
+        self,
+        sample_index: int,
+        calibrated_lidar_sample_data_token: str,
+        lidar_pointcloud_source_path: str | None,
     ) -> LidarSegMetaData:
         """
         Extract lidarseg metadata from a T4 Sample.
@@ -384,6 +389,7 @@ class T4RecordsGenerator:
         Args:
           sample_index: Sample index.
           calibrated_lidar_sample_data_token: Calibrated lidar sample data token.
+          lidar_pointcloud_source_path: Lidar pointcloud source path.
 
         Returns:
           LidarSegMetaData: Lidarseg metadata of the T4 sample.
@@ -391,12 +397,10 @@ class T4RecordsGenerator:
         lidarseg_records: Sequence[LidarSeg] = getattr(
             self.t4_devkit_dataset, SchemaName.LIDARSEG, []
         )
-        if not len(lidarseg_records):
-            return LidarSegMetaData(
-                lidarseg_pts_semantic_mask_path=None,
-                lidarseg_pts_semantic_mask_category_names=[],
-                lidarseg_pts_semantic_mask_category_indices=[],
-            )
+        # If there are no lidarseg records or the lidar pointcloud source path is not available,
+        # return None
+        if not len(lidarseg_records) or not lidar_pointcloud_source_path:
+            return LidarSegMetaData(lidarseg_pts_semantic_mask_path=None)
 
         assert sample_index < len(lidarseg_records), (
             "Sample index is out of range of lidarseg records."
@@ -406,10 +410,7 @@ class T4RecordsGenerator:
         assert current_lidarseg_record.sample_data_token == calibrated_lidar_sample_data_token, (
             "Lidarseg record sample data token does not match the calibrated lidar sample data token."
         )
-
-        return LidarSegMetaData(
-            lidarseg_pts_semantic_mask_path=current_lidarseg_record.filename,
-        )
+        return LidarSegMetaData(lidarseg_pts_semantic_mask_path=current_lidarseg_record.filename)
 
     def _extract_category_metadata(self) -> CategoryMetaData:
         """
@@ -440,7 +441,7 @@ class T4RecordsGenerator:
             category_indices=category_indices,
         )
 
-    def extract_t4_sample_record(self, sample: Sample, sample_index: int) -> T4SampleRecord:
+    def extract_t4_sample_record(self, sample: Sample, sample_index: int) -> T4SampleRecord | None:
         """
         Extract T4 sample record from a T4Dataset.
 
@@ -451,11 +452,21 @@ class T4RecordsGenerator:
           T4SampleRecord: T4 sample record.
         """
 
+        # Read lidar channel name
+        if LidarChannel.LIDAR_TOP in sample.data:
+            lidar_channel_name = LidarChannel.LIDAR_TOP
+        elif LidarChannel.LIDAR_CONCAT in sample.data:
+            lidar_channel_name = LidarChannel.LIDAR_CONCAT
+        else:
+            return None
+
         # 1) Extract basic information from the T4Dataset
         basic_metadata = self._extract_basic_metadata(sample=sample, sample_index=sample_index)
 
         # 2) Extract lidar information from the T4Dataset
-        lidar_metadata = self._extract_lidar_metadata(sample=sample)
+        lidar_metadata = self._extract_lidar_metadata(
+            sample=sample, lidar_channel_name=lidar_channel_name
+        )
 
         # 3) Extract multisweep lidar information from the T4Dataset
         lidar_sweep_metadata = self._extract_lidar_sweep_metadata(
@@ -469,6 +480,7 @@ class T4RecordsGenerator:
         lidarseg_metadata = self._extract_lidarseg_metadata(
             sample_index=sample_index,
             calibrated_lidar_sample_data_token=lidar_metadata.lidar_frame_id,
+            lidar_pointcloud_source_path=lidar_metadata.lidar_pointcloud_source_path,
         )
 
         # 6) Extract category information from the T4Dataset
