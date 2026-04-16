@@ -8,17 +8,14 @@ This module implements the database layer for the **T4** annotation format, buil
 
 ## Summary
 
-| Property     | Value                                                     |
-| ------------ | --------------------------------------------------------- |
-| Format       | JSON (nuScenes-compatible)                                |
-| Annotations  | 3D bounding boxes                                         |
-| Modality     | Multi-LiDAR, multi-camera                                 |
-| Dependencies | [`t4-devkit`][t4-devkit], [`polars`][polars]              |
-| Input        | Scenario YAML files + T4 annotation directories           |
-| Output       | `Sequence[DatasetRecord]` persisted as Parquet via Polars |
-
-[t4-devkit]: https://github.com/tier4/t4-devkit
-[polars]: https://docs.pola.rs/
+| Property     | Value                                                        |
+| ------------ | ------------------------------------------------------------ |
+| Format       | Json                                                         |
+| Annotations  | 3D Bounding boxes                                            |
+| Modality     | Multiple LiDAR + multiple cameras                            |
+| Dependencies | `t4-devkit`, `polars`                                        |
+| Input        | Scenario YAML files and T4 annotation directories            |
+| Output       | `Sequence[DatasetRecord]` saved as Parquet via Polars        |
 
 ## Module relationships
 
@@ -126,7 +123,7 @@ Each row corresponds to one `DatasetRecord` (a frozen Pydantic model). The Parqu
 
 T4Dataset is based on the nuScenes dataset schema.
 
-<!-- cspell:ignore Bankiti Liong Krishnan Baldan Beijbom -->
+<!-- cspell:ignore Bankiti Liong Krishnan Baldan Beijbom Vora-->
 - Repository: <https://github.com/nutonomy/nuscenes-devkit>
 - License: Apache 2.0
 - Paper: Caesar, H., Bankiti, V., Lang, A. H., Vora, S., Liong, V. E., Xu, Q., Krishnan, A., Pan, Y., Baldan, G., and Beijbom, O. "nuScenes: A Multimodal Dataset for Autonomous Driving." CVPR, 2020.
