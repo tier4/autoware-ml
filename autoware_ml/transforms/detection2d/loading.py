@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from PIL import Image
+from PIL import Image, ImageFile
 import torch
 from torchvision.ops import box_convert
 from torchvision.transforms.v2 import functional as F
@@ -26,10 +26,11 @@ from torchvision.transforms.v2 import functional as F
 from autoware_ml.transforms.base import BaseTransform
 from autoware_ml.transforms.detection2d.utils import convert_boxes_to_tv_tensor, clone_target
 
-# Detection datasets such as Mapillary Vistas legitimately contain very large
-# images, and torchvision's PIL-backed crop/zoom ops can otherwise trip
-# DecompressionBomb warnings/errors on trusted local training data.
+# Avoid DecompressionBomb warnings/errors on trusted local training data.
 Image.MAX_IMAGE_PIXELS = None
+
+# Allow JPEG files that PIL reports as truncated even though they can be decoded and used for training.
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
 class LoadDetectionImageFromFile(BaseTransform):
