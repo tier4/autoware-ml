@@ -8,12 +8,17 @@ This module implements the database layer for the **T4** annotation format, buil
 
 ## Summary
 
-| Property     | Value                                                        |
-| ------------ | ------------------------------------------------------------ |
-| Format       | T4 (TIER IV) annotation format                               |
-| Dependencies | `t4-devkit`, `polars`                                        |
-| Input        | Scenario YAML files and T4 annotation directories            |
-| Output       | `Sequence[DatasetRecord]` persisted as Parquet via Polars    |
+| Property     | Value                                                     |
+| ------------ | --------------------------------------------------------- |
+| Format       | JSON (nuScenes-compatible)                                |
+| Annotations  | 3D bounding boxes                                         |
+| Modality     | Multi-LiDAR, multi-camera                                 |
+| Dependencies | [`t4-devkit`][t4-devkit], [`polars`][polars]              |
+| Input        | Scenario YAML files + T4 annotation directories           |
+| Output       | `Sequence[DatasetRecord]` persisted as Parquet via Polars |
+
+[t4-devkit]: https://github.com/tier4/t4-devkit
+[polars]: https://docs.pola.rs/
 
 ## Module relationships
 
