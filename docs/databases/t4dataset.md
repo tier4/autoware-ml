@@ -123,7 +123,7 @@ Each row corresponds to one `DatasetRecord` (a frozen Pydantic model). The Parqu
 
 T4Dataset is based on the nuScenes dataset schema.
 
-<!-- cspell:ignore Bankiti Liong Krishnan Baldan Beijbom Vora-->
+<!-- cspell:ignore Bankiti Liong Krishnan Baldan Beijbom Vora -->
 - Repository: <https://github.com/nutonomy/nuscenes-devkit>
 - License: Apache 2.0
 - Paper: Caesar, H., Bankiti, V., Lang, A. H., Vora, S., Liong, V. E., Xu, Q., Krishnan, A., Pan, Y., Baldan, G., and Beijbom, O. "nuScenes: A Multimodal Dataset for Autonomous Driving." CVPR, 2020.
