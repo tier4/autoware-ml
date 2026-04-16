@@ -1,0 +1,94 @@
+_target_: autoware_ml.databases.t4dataset.t4scenarios.T4Scenarios
+_convert_: all
+
+# Root path where the scenario yaml files are stored
+scenario_root_path: ${working_dir}/perception-devops/dataset_annotation/t4dataset/detection3d/
+
+# List of dataset parameters, and dataset_name is the yaml file name in T4Dataset,
+# which consists of train/val/test splits
+dataset_params:
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
+    _convert_: all
+    dataset_name: db_j6gen2_v1
+    max_sweeps: 2
+    sample_steps: 1
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
+    _convert_: all
+    dataset_name: db_j6gen2_v2
+    max_sweeps: 2
+    sample_steps: 1
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
+    _convert_: all
+    dataset_name: db_j6gen2_v3
+    max_sweeps: 2
+    sample_steps: 1
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
+    _convert_: all
+    dataset_name: db_j6gen2_v4
+    max_sweeps: 2
+    sample_steps: 1
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
+    _convert_: all
+    dataset_name: db_j6gen2_v5
+    max_sweeps: 2
+    sample_steps: 1
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
+    _convert_: all
+    dataset_name: db_j6gen2_v6
+    max_sweeps: 2
+    sample_steps: 1
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
+    _convert_: all
+    dataset_name: db_j6gen2_v7
+    max_sweeps: 2
+    sample_steps: 1
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
+    _convert_: all
+    dataset_name: db_j6gen2_v8
+    max_sweeps: 2
+    sample_steps: 1
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
+    _convert_: all
+    dataset_name: db_j6gen2_v9
+    max_sweeps: 2
+    sample_steps: 1
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
+    _convert_: all
+    dataset_name: db_largebus_v1
+    max_sweeps: 2
+    sample_steps: 1
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
+    _convert_: all
+    dataset_name: db_largebus_v2
+    max_sweeps: 2
+    sample_steps: 1
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
+    _convert_: all
+    dataset_name: db_largebus_v3
+    max_sweeps: 2
+    sample_steps: 1
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
+    _convert_: all
+    dataset_name: db_gsm8_v1
+    max_sweeps: 2
+    sample_steps: 1
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
+    _convert_: all
+    dataset_name: db_j6_v1
+    max_sweeps: 2
+    sample_steps: 1
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
+    _convert_: all
+    dataset_name: db_j6_v2
+    max_sweeps: 2
+    sample_steps: 1
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
+    _convert_: all
+    dataset_name: db_j6_v3
+    max_sweeps: 2
+    sample_steps: 1
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
+    _convert_: all
+    dataset_name: db_j6_v5
+    max_sweeps: 2
+    sample_steps: 1
