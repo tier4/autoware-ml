@@ -12,10 +12,37 @@ from autoware_ml.metrics.detection2d import (
 )
 
 
-pytest.importorskip("pycocotools")
+
+def test_evaluate_coco_predictions_includes_classwise_map_when_requested() -> None:
+    coco_gt = type("CocoStub", (), {"dataset": {"categories": []}})()
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(
+            "autoware_ml.metrics.detection2d._evaluate_coco_results_in_subprocess",
+            lambda **kwargs: {
+                "stats": [0.1, 0.2, 0.3, 0.0, 0.0, 0.0, 0.4, 0.5, 0.6],
+                "per_class_ap": [
+                    {"category_id": 1, "metric_name": "traffic_light", "ap": 0.7},
+                    {"category_id": 2, "metric_name": "traffic_light", "ap": 0.8},
+                ],
+            },
+        )
+
+        metrics = evaluate_coco_predictions(
+            coco_gt=coco_gt,
+            predictions=[],
+            label_to_category_id={},
+            include_per_class_metrics=True,
+        )
+
+    assert metrics["mAP"] == pytest.approx(0.1)
+    assert metrics["class_mAP/traffic_light"] == pytest.approx(0.7)
+    assert metrics["class_mAP/traffic_light_2"] == pytest.approx(0.8)
 
 
 def test_coco_metrics_report_perfect_match_for_identical_box() -> None:
+    pytest.importorskip("pycocotools")
+
     coco_gt = build_coco_api_from_dataset_dict(
         {
             "images": [{"id": 1, "width": 40, "height": 20, "file_name": "sample.jpg"}],
@@ -43,6 +70,8 @@ def test_coco_metrics_report_perfect_match_for_identical_box() -> None:
 
 
 def test_class_agnostic_localization_reports_recall_for_overlapping_box() -> None:
+    pytest.importorskip("pycocotools")
+
     coco_gt = build_coco_api_from_dataset_dict(
         {
             "images": [{"id": 1, "width": 40, "height": 20, "file_name": "sample.jpg"}],

@@ -51,15 +51,19 @@ class BaseDetectionModel(BaseModel):
         self,
         *args: Any,
         compute_coco_metrics_on_val: bool = True,
+        compute_classwise_coco_metrics_on_val: bool = False,
         compute_localization_metrics_on_val: bool = True,
         compute_coco_metrics_on_test: bool = True,
+        compute_classwise_coco_metrics_on_test: bool = False,
         compute_localization_metrics_on_test: bool = True,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
         self.compute_coco_metrics_on_val = compute_coco_metrics_on_val
+        self.compute_classwise_coco_metrics_on_val = compute_classwise_coco_metrics_on_val
         self.compute_localization_metrics_on_val = compute_localization_metrics_on_val
         self.compute_coco_metrics_on_test = compute_coco_metrics_on_test
+        self.compute_classwise_coco_metrics_on_test = compute_classwise_coco_metrics_on_test
         self.compute_localization_metrics_on_test = compute_localization_metrics_on_test
         self._val_predictions: list[dict[str, Any]] = []
         self._test_predictions: list[dict[str, Any]] = []
@@ -145,15 +149,18 @@ class BaseDetectionModel(BaseModel):
 
         if stage == "val":
             compute_coco_metrics = self.compute_coco_metrics_on_val
+            compute_classwise_coco_metrics = self.compute_classwise_coco_metrics_on_val
             compute_localization_metrics = self.compute_localization_metrics_on_val
         elif stage == "test":
             compute_coco_metrics = self.compute_coco_metrics_on_test
+            compute_classwise_coco_metrics = self.compute_classwise_coco_metrics_on_test
             compute_localization_metrics = self.compute_localization_metrics_on_test
         else:
             compute_coco_metrics = True
+            compute_classwise_coco_metrics = True
             compute_localization_metrics = True
 
-        if not compute_coco_metrics and not compute_localization_metrics:
+        if not compute_coco_metrics and not compute_classwise_coco_metrics and not compute_localization_metrics:
             return
 
         datamodule = self.trainer.datamodule
@@ -169,14 +176,18 @@ class BaseDetectionModel(BaseModel):
 
         coco_gt = dataset.get_coco_api()
         metrics: dict[str, float] = {}
-        if compute_coco_metrics:
-            metrics.update(
-                evaluate_coco_predictions(
-                    coco_gt=coco_gt,
-                    predictions=predictions,
-                    label_to_category_id=dataset.label_to_category_id,
-                )
+        if compute_coco_metrics or compute_classwise_coco_metrics:
+            coco_metrics = evaluate_coco_predictions(
+                coco_gt=coco_gt,
+                predictions=predictions,
+                label_to_category_id=dataset.label_to_category_id,
+                include_per_class_metrics=compute_classwise_coco_metrics,
             )
+            if not compute_coco_metrics:
+                coco_metrics = {
+                    key: value for key, value in coco_metrics.items() if key.startswith("class_mAP/")
+                }
+            metrics.update(coco_metrics)
         if compute_localization_metrics:
             metrics.update(
                 evaluate_class_agnostic_localization(

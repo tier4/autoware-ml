@@ -182,6 +182,57 @@ def test_rtdetr_wrapper_skips_dataset_metrics_on_validation_when_disabled() -> N
     log_mock.assert_not_called()
 
 
+def test_rtdetr_wrapper_logs_classwise_coco_metrics_on_validation_when_enabled() -> None:
+    model = RTDETRv4DetectionModel(
+        backbone=_DummyBackbone(),
+        encoder=_DummyEncoder(),
+        decoder=_DummyDecoder(),
+        criterion=_DummyCriterion(),
+        postprocessor=_DummyPostprocessor(),
+        optimizer=lambda params: torch.optim.Adam(params, lr=1e-3),
+        compute_classwise_coco_metrics_on_val=True,
+        compute_localization_metrics_on_val=False,
+    )
+    coco_api = object()
+    dataset = SimpleNamespace(
+        label_to_category_id={0: 1},
+        get_coco_api=lambda: coco_api,
+    )
+    model._trainer = SimpleNamespace(
+        datamodule=SimpleNamespace(val_dataset=dataset),
+        global_rank=0,
+    )
+    model._val_predictions = [
+        {
+            "image_id": 1,
+            "boxes": torch.tensor([[0.0, 0.0, 10.0, 10.0]]),
+            "scores": torch.tensor([0.9]),
+            "labels": torch.tensor([0]),
+        }
+    ]
+
+    with (
+        patch(
+            "autoware_ml.models.detection2d.base.evaluate_coco_predictions",
+            return_value={"mAP": 0.5, "class_mAP/car": 0.75},
+        ) as coco_mock,
+        patch.object(model, "log_dict") as log_mock,
+    ):
+        model.on_validation_epoch_end()
+
+    coco_mock.assert_called_once_with(
+        coco_gt=coco_api,
+        predictions=model._val_predictions,
+        label_to_category_id=dataset.label_to_category_id,
+        include_per_class_metrics=True,
+    )
+    log_mock.assert_called_once_with(
+        {"val/mAP": 0.5, "val/class_mAP/car": 0.75},
+        sync_dist=False,
+        rank_zero_only=True,
+    )
+
+
 def test_rtdetr_wrapper_keeps_dataset_metrics_on_test_by_default() -> None:
     model = RTDETRv4DetectionModel(
         backbone=_DummyBackbone(),

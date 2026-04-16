@@ -262,8 +262,10 @@ model:
   init_checkpoint_filter_mismatched_shapes: false
   init_checkpoint_strict: false
   compute_coco_metrics_on_val: true
+  compute_classwise_coco_metrics_on_val: true
   compute_localization_metrics_on_val: false
   compute_coco_metrics_on_test: true
+  compute_classwise_coco_metrics_on_test: true
   compute_localization_metrics_on_test: true
   scheduler:
     _target_: autoware_ml.models.detection2d.FlatCosineAnnealingLR

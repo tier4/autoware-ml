@@ -60,8 +60,10 @@ class RTDETRv4DetectionModel(BaseDetectionModel):
         init_checkpoint_filter_mismatched_shapes: bool = False,
         init_checkpoint_strict: bool = False,
         compute_coco_metrics_on_val: bool = True,
+        compute_classwise_coco_metrics_on_val: bool = False,
         compute_localization_metrics_on_val: bool = True,
         compute_coco_metrics_on_test: bool = True,
+        compute_classwise_coco_metrics_on_test: bool = False,
         compute_localization_metrics_on_test: bool = True,
     ) -> None:
         super().__init__(
@@ -70,8 +72,10 @@ class RTDETRv4DetectionModel(BaseDetectionModel):
             optimizer_group_overrides=optimizer_group_overrides,
             scheduler_config=scheduler_config,
             compute_coco_metrics_on_val=compute_coco_metrics_on_val,
+            compute_classwise_coco_metrics_on_val=compute_classwise_coco_metrics_on_val,
             compute_localization_metrics_on_val=compute_localization_metrics_on_val,
             compute_coco_metrics_on_test=compute_coco_metrics_on_test,
+            compute_classwise_coco_metrics_on_test=compute_classwise_coco_metrics_on_test,
             compute_localization_metrics_on_test=compute_localization_metrics_on_test,
         )
         self.backbone = backbone

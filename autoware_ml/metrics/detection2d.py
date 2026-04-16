@@ -21,6 +21,7 @@ import copy
 import json
 import multiprocessing as mp
 import os
+import re
 from typing import Any
 
 import numpy as np
@@ -61,11 +62,50 @@ def build_empty_coco_results(coco_gt: Any) -> Any:
     return coco_dt
 
 
+def _sanitize_metric_name(value: str) -> str:
+    """Convert free-form category names into stable metric key components."""
+    sanitized = re.sub(r"[^0-9A-Za-z]+", "_", value.strip().lower())
+    sanitized = re.sub(r"_+", "_", sanitized).strip("_")
+    return sanitized or "category"
+
+
+def _extract_per_class_ap(evaluator: Any, categories: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Extract per-category AP over COCO's default IoU sweep."""
+    precision = evaluator.eval.get("precision")
+    if precision is None or precision.size == 0:
+        return []
+
+    area_labels = list(getattr(evaluator.params, "areaRngLbl", []))
+    max_dets = list(getattr(evaluator.params, "maxDets", []))
+    area_index = area_labels.index("all") if "all" in area_labels else 0
+    max_det_index = max_dets.index(100) if 100 in max_dets else len(max_dets) - 1
+    category_names = {
+        int(category["id"]): str(category.get("name", category["id"])) for category in categories
+    }
+
+    per_class_metrics: list[dict[str, Any]] = []
+    for category_index, category_id in enumerate(getattr(evaluator.params, "catIds", [])):
+        category_precision = precision[:, :, category_index, area_index, max_det_index]
+        valid_precision = category_precision[category_precision > -1]
+        ap = float(valid_precision.mean()) if valid_precision.size else 0.0
+        category_name = category_names.get(int(category_id), str(category_id))
+        per_class_metrics.append(
+            {
+                "category_id": int(category_id),
+                "category_name": category_name,
+                "metric_name": _sanitize_metric_name(category_name),
+                "ap": ap,
+            }
+        )
+    return per_class_metrics
+
+
 def _evaluate_coco_results_worker(
     output_path: str,
     dataset_dict: Mapping[str, Any],
     results: Sequence[Mapping[str, Any]],
     iou_type: str,
+    include_per_class_metrics: bool,
 ) -> None:
     """Run COCO evaluation in a fresh subprocess.
 
@@ -83,6 +123,11 @@ def _evaluate_coco_results_worker(
         evaluator.accumulate()
         evaluator.summarize()
         payload = {"stats": [float(value) for value in evaluator.stats]}
+        if include_per_class_metrics:
+            payload["per_class_ap"] = _extract_per_class_ap(
+                evaluator,
+                categories=dataset_dict.get("categories", []),
+            )
     except Exception as exc:
         payload = {"error": f"{type(exc).__name__}: {exc}"}
     with open(output_path, "w", encoding="utf-8") as file:
@@ -98,8 +143,9 @@ def _evaluate_coco_results_in_subprocess(
     dataset_dict: Mapping[str, Any],
     results: Sequence[Mapping[str, Any]],
     iou_type: str,
-) -> list[float]:
-    """Evaluate COCO results in a spawned subprocess and return raw stats."""
+    include_per_class_metrics: bool = False,
+) -> dict[str, Any]:
+    """Evaluate COCO results in a spawned subprocess and return raw payload data."""
     import tempfile
 
     ctx = mp.get_context("spawn")
@@ -107,7 +153,13 @@ def _evaluate_coco_results_in_subprocess(
         output_path = file.name
     process = ctx.Process(
         target=_evaluate_coco_results_worker,
-        args=(output_path, copy.deepcopy(dict(dataset_dict)), list(results), iou_type),
+        args=(
+            output_path,
+            copy.deepcopy(dict(dataset_dict)),
+            list(results),
+            iou_type,
+            include_per_class_metrics,
+        ),
     )
     process.start()
     process.join()
@@ -127,7 +179,7 @@ def _evaluate_coco_results_in_subprocess(
         raise RuntimeError(f"COCO evaluation subprocess exited with code {exit_code}.")
     if "error" in payload:
         raise RuntimeError(f"COCO evaluation subprocess failed: {payload['error']}")
-    return payload["stats"]
+    return payload
 
 
 def export_coco_predictions(
@@ -171,15 +223,18 @@ def evaluate_coco_predictions(
     predictions: Sequence[Mapping[str, Any]],
     label_to_category_id: Mapping[int, int],
     iou_type: str = "bbox",
+    include_per_class_metrics: bool = False,
 ) -> dict[str, float]:
     """Evaluate predictions against a COCO-style ground-truth API."""
     results = export_coco_predictions(predictions, label_to_category_id)
-    stats = _evaluate_coco_results_in_subprocess(
+    payload = _evaluate_coco_results_in_subprocess(
         dataset_dict=coco_gt.dataset,
         results=results,
         iou_type=iou_type,
+        include_per_class_metrics=include_per_class_metrics,
     )
-    return {
+    stats = payload["stats"]
+    metrics = {
         "mAP": float(stats[0]),
         "AP50": float(stats[1]),
         "AP75": float(stats[2]),
@@ -190,6 +245,15 @@ def evaluate_coco_predictions(
         "AR@10": float(stats[7]),
         "AR@100": float(stats[8]),
     }
+    if include_per_class_metrics:
+        used_metric_names: set[str] = set()
+        for class_metric in payload.get("per_class_ap", []):
+            metric_name = str(class_metric["metric_name"])
+            if metric_name in used_metric_names:
+                metric_name = f"{metric_name}_{int(class_metric['category_id'])}"
+            used_metric_names.add(metric_name)
+            metrics[f"class_mAP/{metric_name}"] = float(class_metric["ap"])
+    return metrics
 
 
 def evaluate_class_agnostic_localization(
