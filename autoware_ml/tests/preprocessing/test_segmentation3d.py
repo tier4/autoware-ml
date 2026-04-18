@@ -16,7 +16,7 @@
 
 import torch
 
-from autoware_ml.preprocessing.segmentation3d import FrustumRangePreprocessor
+from autoware_ml.preprocessing.segmentation3d.frustum_range import FrustumRangePreprocessor
 
 
 class TestFrustumRangePreprocessor:

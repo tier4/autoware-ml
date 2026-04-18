@@ -55,7 +55,7 @@ Homepage = "https://tier4.github.io/autoware-ml"
 Source = "https://github.com/tier4/autoware-ml"
 
 [project.scripts]
-autoware-ml = "autoware_ml.cli:main"
+autoware-ml = "autoware_ml.cli.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

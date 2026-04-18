@@ -28,16 +28,16 @@ datamodule:
     pin_memory: true
     persistent_workers: true
   train_transforms:
-    _target_: autoware_ml.transforms.TransformsCompose
+    _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline: []
   val_transforms:
-    _target_: autoware_ml.transforms.TransformsCompose
+    _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline: []
   test_transforms:
-    _target_: autoware_ml.transforms.TransformsCompose
+    _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline: []
   predict_transforms:
-    _target_: autoware_ml.transforms.TransformsCompose
+    _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline: []
 
 model:

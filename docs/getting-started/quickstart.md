@@ -57,7 +57,7 @@ Open [http://localhost:5000](http://localhost:5000) to view loss curves, metrics
 ```bash
 autoware-ml deploy \
     --config-name calibration_status/calibration_status_classifier/resnet18_nuscenes \
-    +checkpoint=mlruns/calibration_status/calibration_status_classifier/resnet18_nuscenes/<date>/<time>/checkpoints/best.ckpt
+    +checkpoint=mlruns/calibration_status/calibration_status_classifier/resnet18_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 This generates ONNX and TensorRT files.
@@ -67,5 +67,5 @@ To evaluate a trained checkpoint before deployment:
 ```bash
 autoware-ml test \
     --config-name calibration_status/calibration_status_classifier/resnet18_nuscenes \
-    +checkpoint=mlruns/calibration_status/calibration_status_classifier/resnet18_nuscenes/<date>/<time>/checkpoints/best.ckpt
+    +checkpoint=mlruns/calibration_status/calibration_status_classifier/resnet18_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt
 ```

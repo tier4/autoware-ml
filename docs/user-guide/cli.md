@@ -71,7 +71,7 @@ autoware-ml deploy --config-name <config_path> +checkpoint=<path> [options...]
 ```bash
 autoware-ml deploy \
     --config-name <task>/<model>/<config> \
-    +checkpoint=mlruns/<task>/<model>/<config>/<date>/<time>/checkpoints/best.ckpt
+    +checkpoint=mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 ## test
@@ -92,7 +92,7 @@ autoware-ml test --config-name <config_path> +checkpoint=<path> [hydra_overrides
 ```bash
 autoware-ml test \
     --config-name <task>/<model>/<config> \
-    +checkpoint=mlruns/<task>/<model>/<config>/<date>/<time>/checkpoints/best.ckpt
+    +checkpoint=mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 ## mlflow ui

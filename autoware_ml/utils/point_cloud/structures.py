@@ -6,10 +6,10 @@ from collections.abc import Sequence
 
 import torch
 
-from autoware_ml.ops.indexing import argsort
-from autoware_ml.ops.spconv import IS_SPCONV_AVAILABLE
+from autoware_ml.ops.indexing.operators import argsort
+from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
 from autoware_ml.utils.point_cloud.batching import offset_to_batch
-from autoware_ml.utils.point_cloud.serialization import encode
+from autoware_ml.utils.point_cloud.serialization.default import encode
 
 
 class Point(dict[str, torch.Tensor]):

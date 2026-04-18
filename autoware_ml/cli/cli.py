@@ -19,22 +19,21 @@ completion helpers used by the ``autoware-ml`` executable.
 """
 
 import logging
-import sys
-from collections.abc import Sequence
 from importlib.metadata import version
 
 import click
 import typer
+from click.core import ParameterSource
+from click.shell_completion import CompletionItem
+from typer.core import TyperCommand
 from typing_extensions import Annotated
 
-from autoware_ml.utils.cli import (
-    adjust_argv,
+from autoware_ml.utils.cli.helpers import (
     complete_config_value,
     complete_path_value,
     complete_session_command_value,
     complete_session_name_value,
     parse_extra_args,
-    resolve_config_reference,
     run_lazy_script,
 )
 
@@ -55,6 +54,39 @@ session_app = typer.Typer(
     no_args_is_help=True,
 )
 
+TASK_CONFIG_PREFIX = "tasks"
+TRAIN_ENTRYPOINT_MODULE = "autoware_ml.scripts.train"
+DEPLOY_ENTRYPOINT_MODULE = "autoware_ml.scripts.deploy"
+TEST_ENTRYPOINT_MODULE = "autoware_ml.scripts.test"
+CLI_RUNTIME_MODULE = "autoware_ml.cli.runtime"
+
+
+class OptionFirstTyperCommand(TyperCommand):
+    """Suggest command options even when completion starts on an empty token."""
+
+    def shell_complete(self, ctx: click.Context, incomplete: str) -> list[CompletionItem]:
+        results = super().shell_complete(ctx, incomplete)
+        if incomplete:
+            return results
+
+        seen = {item.value for item in results}
+        for param in self.get_params(ctx):
+            if (
+                not isinstance(param, click.Option)
+                or param.hidden
+                or (
+                    not param.multiple
+                    and ctx.get_parameter_source(param.name) is ParameterSource.COMMANDLINE
+                )
+            ):
+                continue
+            for option_name in [*param.opts, *param.secondary_opts]:
+                if option_name in seen:
+                    continue
+                results.append(CompletionItem(option_name, help=param.help))
+                seen.add(option_name)
+        return results
+
 
 def setup_logging(level: str = "INFO") -> None:
     """Configure process-wide logging for CLI execution.
@@ -63,7 +95,7 @@ def setup_logging(level: str = "INFO") -> None:
         level: Root logging level name.
     """
     logging.basicConfig(
-        level=getattr(logging, level.upper(), logging.INFO),
+        level=level.upper(),
         format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
     )
 
@@ -82,11 +114,7 @@ def main_callback(
     """
     setup_logging()
     if version_flag:
-        try:
-            package_version = version("autoware-ml")
-            typer.echo(f"autoware-ml {package_version}")
-        except Exception:
-            typer.echo("autoware-ml (version not available)")
+        typer.echo(f"autoware-ml {version('autoware-ml')}")
         raise typer.Exit()
 
 
@@ -99,7 +127,7 @@ def complete_task_config(incomplete: str) -> list[str]:
     Returns:
         Completion candidates for bundled task configs and YAML config paths.
     """
-    return complete_config_value(incomplete, "tasks")
+    return complete_config_value(incomplete, TASK_CONFIG_PREFIX)
 
 
 def complete_checkpoint_path(incomplete: str) -> list[str]:
@@ -164,51 +192,9 @@ def complete_session_name(incomplete: str) -> list[str]:
     return complete_session_name_value(incomplete)
 
 
-def resolve_hydra_argv(
-    config_value: str,
-    config_prefix: str,
-    extra_args: Sequence[str] | None = None,
-    hydra_overrides: Sequence[str] | None = None,
-) -> list[str]:
-    """Rewrite CLI arguments into the Hydra invocation expected by scripts.
-
-    Args:
-        config_value: User-provided config name or config file path.
-        config_prefix: Config namespace prefix such as ``tasks``.
-        extra_args: Additional CLI arguments that should be forwarded to Hydra.
-        hydra_overrides: Extra override strings appended after config resolution.
-
-    Returns:
-        Normalized argv list that can be assigned to ``sys.argv`` before
-        calling a Hydra-backed entrypoint.
-    """
-    hydra_argv = ["--config-name", config_value]
-    if extra_args:
-        hydra_argv.extend(adjust_argv(extra_args))
-
-    resolved_config_path, resolved_config_name, extra_config_overrides = resolve_config_reference(
-        config_value, config_prefix
-    )
-    config_name_index = hydra_argv.index("--config-name")
-    hydra_argv[config_name_index + 1] = resolved_config_name
-
-    if resolved_config_path is not None:
-        hydra_argv[config_name_index + 2 : config_name_index + 2] = [
-            "--config-path",
-            resolved_config_path,
-        ]
-
-    if not any(arg.startswith("hydra.searchpath=") for arg in hydra_argv):
-        hydra_argv.extend(extra_config_overrides)
-
-    if hydra_overrides:
-        hydra_argv.extend(hydra_overrides)
-
-    return hydra_argv
-
-
 @app.command(
     name="train",
+    cls=OptionFirstTyperCommand,
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )
 def train(
@@ -228,13 +214,20 @@ def train(
         ctx: Typer context containing additional Hydra overrides.
         config_name: Config name or config file path to train.
     """
-    sys.argv = [sys.argv[0]] + resolve_hydra_argv(config_name, "tasks", extra_args=ctx.args)
-
-    run_lazy_script("autoware_ml.scripts.train", "main")
+    run_lazy_script(
+        CLI_RUNTIME_MODULE,
+        "run_hydra_entrypoint",
+        entrypoint_module=TRAIN_ENTRYPOINT_MODULE,
+        config_name=config_name,
+        stage="train",
+        extra_args=ctx.args,
+        config_prefix=TASK_CONFIG_PREFIX,
+    )
 
 
 @app.command(
     name="deploy",
+    cls=OptionFirstTyperCommand,
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )
 def deploy(
@@ -263,18 +256,23 @@ def deploy(
         config_name: Config name or config file path to deploy.
         checkpoint: Path to the checkpoint used for export.
     """
-    sys.argv = [sys.argv[0]] + resolve_hydra_argv(
-        config_name,
-        "tasks",
+    hydra_overrides = [f"+checkpoint={checkpoint}"]
+    run_lazy_script(
+        CLI_RUNTIME_MODULE,
+        "run_hydra_entrypoint",
+        entrypoint_module=DEPLOY_ENTRYPOINT_MODULE,
+        config_name=config_name,
+        stage="deploy",
         extra_args=ctx.args,
-        hydra_overrides=[f"+checkpoint={checkpoint}"],
+        hydra_overrides=hydra_overrides,
+        checkpoint=checkpoint,
+        config_prefix=TASK_CONFIG_PREFIX,
     )
-
-    run_lazy_script("autoware_ml.scripts.deploy", "main")
 
 
 @app.command(
     name="test",
+    cls=OptionFirstTyperCommand,
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )
 def test(
@@ -303,17 +301,21 @@ def test(
         config_name: Config name or config file path to evaluate.
         checkpoint: Path to the checkpoint used for evaluation.
     """
-    sys.argv = [sys.argv[0]] + resolve_hydra_argv(
-        config_name,
-        "tasks",
+    hydra_overrides = [f"+checkpoint={checkpoint}"]
+    run_lazy_script(
+        CLI_RUNTIME_MODULE,
+        "run_hydra_entrypoint",
+        entrypoint_module=TEST_ENTRYPOINT_MODULE,
+        config_name=config_name,
+        stage="test",
         extra_args=ctx.args,
-        hydra_overrides=[f"+checkpoint={checkpoint}"],
+        hydra_overrides=hydra_overrides,
+        checkpoint=checkpoint,
+        config_prefix=TASK_CONFIG_PREFIX,
     )
 
-    run_lazy_script("autoware_ml.scripts.test", "main")
 
-
-@mlflow_app.command(name="ui")
+@mlflow_app.command(name="ui", cls=OptionFirstTyperCommand)
 def mlflow_ui(
     host: Annotated[str, typer.Option("--host", "-h", help="Host to listen on")] = "0.0.0.0",
     port: Annotated[int, typer.Option("--port", "-p", help="Port to listen on")] = 5000,
@@ -334,7 +336,7 @@ def mlflow_ui(
         db_path: Path to the SQLite backend store file.
     """
     run_lazy_script(
-        "autoware_ml.scripts.mlflow",
+        "autoware_ml.scripts.mlflow_wrapper",
         "run_mlflow_ui",
         host=host,
         port=port,
@@ -342,7 +344,7 @@ def mlflow_ui(
     )
 
 
-@mlflow_app.command(name="export")
+@mlflow_app.command(name="export", cls=OptionFirstTyperCommand)
 def mlflow_export(
     db_path: Annotated[
         str,
@@ -386,7 +388,7 @@ def mlflow_export(
         override: Whether to overwrite an existing export directory.
     """
     run_lazy_script(
-        "autoware_ml.scripts.mlflow",
+        "autoware_ml.scripts.mlflow_wrapper",
         "export_experiment_from_db",
         db_path=db_path,
         experiment_name=experiment_name,
@@ -398,6 +400,7 @@ def mlflow_export(
 
 @app.command(
     name="create-dataset",
+    cls=OptionFirstTyperCommand,
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )
 def create_dataset(
@@ -442,6 +445,7 @@ def create_dataset(
 
 @session_app.command(
     name="start",
+    cls=OptionFirstTyperCommand,
 )
 def session_start(
     name: Annotated[str, typer.Option("--name", "-n", help="Session name")],
@@ -481,27 +485,23 @@ def session_start(
             prefixing it with ``autoware-ml``.
         command_args: Command tokens forwarded to the managed shell.
     """
-    try:
-        run_lazy_script(
-            "autoware_ml.scripts.session",
-            "start_session",
-            name=name,
-            command_args=command_args or [],
-            cwd=cwd,
-            attach=attach,
-            raw=raw,
-        )
-        if not attach:
-            typer.echo(f"Started session '{name}'.")
-            typer.echo(f"View live output with: autoware-ml session attach --name {name}")
-            typer.echo("Press Ctrl+C in the viewer to return without stopping the task.")
-            typer.echo(f"Stop the task with: autoware-ml session stop --name {name}")
-    except Exception as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1) from exc
+    run_lazy_script(
+        "autoware_ml.scripts.session",
+        "start_session",
+        name=name,
+        command_args=command_args or [],
+        cwd=cwd,
+        attach=attach,
+        raw=raw,
+    )
+    if not attach:
+        typer.echo(f"Started session '{name}'.")
+        typer.echo(f"View live output with: autoware-ml session attach --name {name}")
+        typer.echo("Press Ctrl+C in the viewer to return without stopping the task.")
+        typer.echo(f"Stop the task with: autoware-ml session stop --name {name}")
 
 
-@session_app.command(name="attach")
+@session_app.command(name="attach", cls=OptionFirstTyperCommand)
 def session_attach(
     name: Annotated[
         str,
@@ -513,14 +513,10 @@ def session_attach(
     Args:
         name: Name of the session to view.
     """
-    try:
-        run_lazy_script("autoware_ml.scripts.session", "attach_session", name=name)
-    except Exception as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1) from exc
+    run_lazy_script("autoware_ml.scripts.session", "attach_session", name=name)
 
 
-@session_app.command(name="detach")
+@session_app.command(name="detach", cls=OptionFirstTyperCommand)
 def session_detach(
     name: Annotated[
         str,
@@ -532,30 +528,22 @@ def session_detach(
     Args:
         name: Name of the session whose tmux clients should be detached.
     """
-    try:
-        run_lazy_script("autoware_ml.scripts.session", "detach_session", name=name)
-    except Exception as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1) from exc
+    run_lazy_script("autoware_ml.scripts.session", "detach_session", name=name)
 
 
-@session_app.command(name="ls")
+@session_app.command(name="ls", cls=OptionFirstTyperCommand)
 def session_ls() -> None:
     """List background sessions managed by ``autoware-ml``.
 
     The command prints formatted session information and exits quietly when no
     managed sessions are currently running.
     """
-    try:
-        output = run_lazy_script("autoware_ml.scripts.session", "list_sessions")
-    except Exception as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1) from exc
+    output = run_lazy_script("autoware_ml.scripts.session", "list_sessions")
     if output:
         typer.echo(output)
 
 
-@session_app.command(name="stop")
+@session_app.command(name="stop", cls=OptionFirstTyperCommand)
 def session_stop(
     name: Annotated[
         str,
@@ -567,11 +555,7 @@ def session_stop(
     Args:
         name: Name of the session to stop.
     """
-    try:
-        run_lazy_script("autoware_ml.scripts.session", "stop_session", name=name)
-    except Exception as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1) from exc
+    run_lazy_script("autoware_ml.scripts.session", "stop_session", name=name)
 
 
 def main() -> None:

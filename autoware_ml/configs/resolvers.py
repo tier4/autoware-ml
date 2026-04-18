@@ -12,26 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""CLI-facing dataset-generation command functions."""
+"""Hydra and OmegaConf resolver registration for bundled Autoware-ML configs."""
 
-from collections.abc import Sequence
-from typing import Any
-
-from autoware_ml.tools.dataset.runner import generate_dataset
+from omegaconf import OmegaConf
 
 
-def main(
-    dataset: str,
-    tasks: Sequence[str],
-    root_path: str,
-    out_dir: str,
-    **kwargs: Any,
-) -> None:
-    """Dispatch dataset generation from the CLI entrypoint."""
-    generate_dataset(
-        dataset=dataset,
-        tasks=tasks,
-        root_path=root_path,
-        out_dir=out_dir,
-        **kwargs,
-    )
+def strip_tasks_prefix(config_name: str) -> str:
+    """Return the user-facing config name without the bundled ``tasks/`` prefix."""
+    return str(config_name).removeprefix("tasks/")
+
+
+def register_config_resolvers() -> None:
+    """Register all custom OmegaConf resolvers required by bundled configs."""
+    OmegaConf.register_new_resolver("user_config_name", strip_tasks_prefix, replace=True)

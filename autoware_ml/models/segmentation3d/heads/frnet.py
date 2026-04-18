@@ -24,7 +24,8 @@ from collections.abc import Sequence
 import torch
 import torch.nn as nn
 
-from autoware_ml.losses.segmentation3d import BoundaryLoss, LovaszSoftmaxLoss
+from autoware_ml.losses.segmentation3d.boundary import BoundaryLoss
+from autoware_ml.losses.segmentation3d.lovasz import LovaszSoftmaxLoss
 from autoware_ml.models.segmentation3d.norm import build_norm_1d
 from autoware_ml.models.segmentation3d.structures import FRNetDecodedOutputs, FRNetFeatureDict
 
