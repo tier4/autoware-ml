@@ -137,10 +137,14 @@ class TestRunTags:
 class TestArtifactLayout:
     """Tests for semantic MLflow artifact layout helpers."""
 
-    def test_resolve_tracking_uri_expands_relative_sqlite_path(self) -> None:
+    def test_resolve_tracking_uri_expands_relative_sqlite_path_from_cwd(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        work_dir = tmp_path / "workspace"
+        work_dir.mkdir()
+        monkeypatch.chdir(work_dir)
         resolved = resolve_tracking_uri("sqlite:///mlruns/mlflow.db")
-        assert resolved.startswith("sqlite:///")
-        assert resolved.endswith("/mlruns/mlflow.db")
+        assert resolved == f"sqlite:///{(work_dir / 'mlruns' / 'mlflow.db').resolve()}"
 
     def test_generate_artifact_location_uses_semantic_config_path(self, tmp_path: Path) -> None:
         tracking_uri = f"sqlite:///{tmp_path / 'mlruns' / 'mlflow.db'}"

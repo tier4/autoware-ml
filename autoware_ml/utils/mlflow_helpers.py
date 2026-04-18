@@ -302,7 +302,7 @@ def resolve_lineage_context(
 
 
 def resolve_tracking_uri(tracking_uri: str) -> str:
-    """Resolve relative SQLite tracking URIs against the repository root."""
+    """Resolve relative SQLite tracking URIs against the current working directory."""
     sqlite_prefix = "sqlite:///"
     if not tracking_uri.startswith(sqlite_prefix):
         return tracking_uri
@@ -310,7 +310,7 @@ def resolve_tracking_uri(tracking_uri: str) -> str:
     raw_path = tracking_uri.removeprefix(sqlite_prefix)
     db_path = Path(raw_path)
     if not db_path.is_absolute():
-        db_path = REPO_ROOT / db_path
+        db_path = Path.cwd() / db_path
     return f"{sqlite_prefix}{db_path.resolve()}"
 
 
