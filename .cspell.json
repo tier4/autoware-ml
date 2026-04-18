@@ -73,6 +73,7 @@
     "BGRDI",
     "bitpack",
     "BLAS",
+    "cgroupfs",
     "charliermarsh",
     "clangd",
     "cmdclass",
