@@ -21,7 +21,7 @@ dependencies = [
     "hydra-optuna-sweeper @ git+https://github.com/dahlem/hydra.git@feature/upgrade-optuna-4.2.1#subdirectory=plugins/hydra_optuna_sweeper",
     "lightning==2.6.1",
     "matplotlib==3.10.8",
-    "mlflow==3.10.1",
+    "mlflow==3.11.0rc1",
     "numpy==1.26.4",
     "nuscenes-devkit==1.2.0",
     "optuna==4.8.0",
