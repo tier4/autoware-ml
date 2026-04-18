@@ -224,7 +224,8 @@ def run_hydra_entrypoint(
         hydra_overrides=hydra_overrides,
     )
 
-    with temporary_main_module(resolve_module_spec(entrypoint_module)), temporary_environment(
-        env_updates
+    with (
+        temporary_main_module(resolve_module_spec(entrypoint_module)),
+        temporary_environment(env_updates),
     ):
         run_lazy_script(entrypoint_module, "main")
