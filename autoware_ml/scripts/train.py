@@ -65,9 +65,9 @@ def main(cfg: DictConfig):
     logger_enabled = should_enable_logger(cfg)
     run_context = None
     if logger_enabled:
-        precreated_run_id = os.environ.get(AUTOWARE_ML_RUN_ID_ENV)
-        if precreated_run_id is not None:
-            run_context = load_run_context(cfg.logger.tracking_uri, precreated_run_id)
+        pre_created_run_id = os.environ.get(AUTOWARE_ML_RUN_ID_ENV)
+        if pre_created_run_id is not None:
+            run_context = load_run_context(cfg.logger.tracking_uri, pre_created_run_id)
             if work_dir != run_context.hydra_dir:
                 raise RuntimeError(
                     f"Hydra work directory '{work_dir}' does not match the pre-created MLflow "
