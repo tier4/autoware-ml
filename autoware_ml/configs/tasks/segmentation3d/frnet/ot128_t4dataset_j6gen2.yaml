@@ -57,11 +57,11 @@ datamodule:
   test_ann_file: ${datamodule.data_root}/lidarseg/t4dataset_j6gen2_lidarseg_infos_test.pkl
   lidar_sources: ${lidar_sources}
   train_dataloader_cfg:
-    batch_size: 4
+    batch_size: 8
   val_dataloader_cfg:
-    batch_size: 4
+    batch_size: 8
   test_dataloader_cfg:
-    batch_size: 4
+    batch_size: 8
   train_transforms:
     _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
