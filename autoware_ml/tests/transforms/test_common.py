@@ -20,7 +20,7 @@ import numpy as np
 import pytest
 import torch
 
-from autoware_ml.transforms.common import PermuteAxes, ToTensor
+from autoware_ml.transforms.common.tensor import PermuteAxes, ToTensor
 
 
 class TestPermuteAxes:

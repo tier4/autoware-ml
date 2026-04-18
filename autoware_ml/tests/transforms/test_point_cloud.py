@@ -1,24 +1,24 @@
 import numpy as np
 import pytest
 
-from autoware_ml.transforms.common import ToTensor
-from autoware_ml.transforms.point_cloud import (
+from autoware_ml.transforms.common.tensor import ToTensor
+from autoware_ml.transforms.point_cloud.crop import (
     CenterShift,
     CropBoxInner,
     CropBoxOuter,
-    ElasticDistortion,
-    GlobalRotScaleTrans,
-    GridSample,
-    LoadPointsFromFile,
-    PointShuffle,
     PointsRangeFilter,
-    RandomDropout,
-    RandomFlip,
-    RandomFlip3D,
-    RandomRotateTargetAngle,
-    RandomShift,
     SphereCrop,
 )
+from autoware_ml.transforms.point_cloud.geometry import RandomFlip, RandomRotateTargetAngle
+from autoware_ml.transforms.point_cloud.loading import LoadPointsFromFile
+from autoware_ml.transforms.point_cloud.perturbation import RandomShift
+from autoware_ml.transforms.point_cloud.sampling import (
+    ElasticDistortion,
+    GridSample,
+    PointShuffle,
+    RandomDropout,
+)
+from autoware_ml.transforms.point_cloud.scene import GlobalRotScaleTrans, RandomFlip3D
 
 
 class TestPointCloudTransforms:

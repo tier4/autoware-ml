@@ -17,7 +17,7 @@ Checkpoint (.ckpt) → ONNX (.onnx) → TensorRT (.engine)
 ```bash
 autoware-ml deploy \
     --config-name <task>/<model>/<config> \
-    +checkpoint=mlruns/<task>/<model>/<config>/<date>/<time>/checkpoints/best.ckpt
+    +checkpoint=mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 This generates ONNX (`.onnx`) and TensorRT (`.engine`) files when both stages
@@ -30,17 +30,19 @@ You can disable either stage during iteration:
 ```bash
 autoware-ml deploy \
     --config-name <task>/<model>/<config> \
-    +checkpoint=mlruns/<task>/<model>/<config>/<date>/<time>/checkpoints/best.ckpt \
+    +checkpoint=mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt \
     deploy.tensorrt.enabled=false
 ```
 
-**Custom output:**
+By default, deploy writes ONNX and TensorRT outputs into the current MLflow
+run artifact directory under `exports/`.
+
+**Custom output name:**
 
 ```bash
 autoware-ml deploy \
     --config-name <task>/<model>/<config> \
-    +checkpoint=mlruns/<task>/<model>/<config>/<date>/<time>/checkpoints/best.ckpt \
-    output_dir=./deployed \
+    +checkpoint=mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt \
     output_name=model_v1
 ```
 
@@ -126,7 +128,7 @@ Override deployment settings from CLI:
 ```bash
 autoware-ml deploy \
     --config-name <task>/<model>/<config> \
-    +checkpoint=mlruns/<task>/<model>/<config>/<date>/<time>/checkpoints/best.ckpt \
+    +checkpoint=mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt \
     deploy.tensorrt.input_shapes.input.opt_shape=[1,3,256,256] \
     deploy.tensorrt.workspace_size=2147483648
 ```

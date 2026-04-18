@@ -48,7 +48,7 @@ autoware-ml train \
 ```bash
 autoware-ml test \
     --config-name segmentation3d/ptv3/voxel005_102m_nuscenes \
-    +checkpoint=mlruns/segmentation3d/ptv3/voxel005_102m_nuscenes/<date>/<time>/checkpoints/best.ckpt
+    +checkpoint=mlruns/segmentation3d/ptv3/voxel005_102m_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 ## Deployment
@@ -60,7 +60,7 @@ convolution plugins.
 ```bash
 autoware-ml deploy \
     --config-name segmentation3d/ptv3/voxel005_102m_nuscenes \
-    +checkpoint=mlruns/segmentation3d/ptv3/voxel005_102m_nuscenes/<date>/<time>/checkpoints/best.ckpt \
+    +checkpoint=mlruns/segmentation3d/ptv3/voxel005_102m_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt \
     deploy.tensorrt.enabled=false
 ```
 

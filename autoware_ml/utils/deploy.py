@@ -34,7 +34,7 @@ from omegaconf import DictConfig, OmegaConf
 import torch
 from torch.export import Dim
 
-from autoware_ml.ops.segment import register_scatter_reduce_onnx_symbolic
+from autoware_ml.ops.segment.scatter_reduce import register_scatter_reduce_onnx_symbolic
 
 logger = logging.getLogger(__name__)
 

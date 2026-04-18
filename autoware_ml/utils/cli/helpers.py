@@ -25,11 +25,11 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-import autoware_ml.configs
+from autoware_ml.configs.paths import CONFIGS_ROOT
+from autoware_ml.configs.resolvers import register_config_resolvers
 from autoware_ml.utils.session import AUTOWARE_ML_SESSION_OPTION, TMUX_BASE_COMMAND
 
-
-CONFIGS_ROOT = Path(autoware_ml.configs.__file__).parent.resolve()
+register_config_resolvers()
 
 
 def parse_extra_args(extra_args: Sequence[str]) -> dict[str, Any]:

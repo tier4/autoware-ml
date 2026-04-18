@@ -12,9 +12,11 @@ This guide covers training models with Autoware-ML.
 autoware-ml train --config-name <task>/<model>/<config>
 ```
 
-Checkpoints and logs are saved automatically under `mlruns/<task>/<model>/<config>/<date>/<time>/`.
-The corresponding MLflow run also stores the resolved Hydra config, run metadata, and checkpoints as
-artifacts.
+Hydra scratch outputs are saved automatically under
+`mlruns/<task>/<model>/<config>/<run_id>/hydra/`.
+MLflow-owned artifacts are saved under
+`mlruns/<task>/<model>/<config>/<run_id>/artifacts/`, including checkpoints,
+resolved config snapshots, and run metadata.
 
 Example:
 
@@ -51,7 +53,7 @@ Continue from a checkpoint:
 
 ```bash
 autoware-ml train --config-name <task>/<model>/<config> \
-    +checkpoint=mlruns/<task>/<model>/<config>/<date>/<time>/checkpoints/last.ckpt
+    +checkpoint=mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/last.ckpt
 ```
 
 ## Testing
@@ -60,7 +62,7 @@ Evaluate a trained checkpoint with the same task config:
 
 ```bash
 autoware-ml test --config-name <task>/<model>/<config> \
-    +checkpoint=mlruns/<task>/<model>/<config>/<date>/<time>/checkpoints/best.ckpt
+    +checkpoint=mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 The test command creates a dedicated MLflow run linked to the source training run.

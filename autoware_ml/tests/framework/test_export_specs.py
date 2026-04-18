@@ -5,10 +5,11 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from autoware_ml.models.calibration_status import CalibrationStatusClassifier
+from autoware_ml.models.calibration_status.calibration_status import CalibrationStatusClassifier
 from autoware_ml.models.segmentation3d.frnet import FRNet
 from autoware_ml.models.segmentation3d.ptv3 import PointTransformerV3Backbone, PTv3SegmentationModel
-from autoware_ml.ops.spconv import IS_SPCONV_AVAILABLE, SubMConv3d
+from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
+from autoware_ml.ops.spconv.sparse_conv import SubMConv3d
 
 
 class _IdentityModule(nn.Module):

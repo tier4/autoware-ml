@@ -51,20 +51,23 @@ Training runs automatically log:
 
 - **Metrics**: Loss curves, task-specific metrics, learning rate
 - **Hyperparameters**: Complete Hydra configuration
-- **Artifacts**: Hydra configs, run metadata, and saved checkpoints
+- **Artifacts**: Resolved config snapshots, run metadata, saved checkpoints, and deploy exports
 
 Testing and deployment create separate runs in the same experiment and keep lineage to the source training run. Deployment runs also log exported ONNX and TensorRT artifacts.
 
 ## Using the UI
 
-Experiments are named after config paths (e.g., `<task>/<model>/<config>`). Runs are named with stage and timestamp, and tagged with metadata such as:
+Experiments are derived from config paths with `/` replaced by `_`
+(e.g., `<task>_<model>_<config>`). Runs are named with stage and timestamp,
+and tagged with metadata such as:
 
 - `config_name`
 - `task`
 - `model`
 - `config_variant`
 - `stage`
-- `run_dir`
+- `hydra_dir`
+- `artifact_dir`
 - `checkpoint_path` for test/deploy
 - `git_sha`
 
@@ -83,7 +86,7 @@ Select multiple runs and click **Compare** to view:
 
 ## Organizing Experiments
 
-Experiments are named from config paths. Use meaningful config names for clarity.
+Experiments are derived from config paths. Use meaningful config names for clarity.
 
 Add custom tags for organization:
 
@@ -118,10 +121,12 @@ runs = mlflow.search_runs(
 
 ## Storage Location
 
-MLflow data is stored locally in `mlruns/`:
+Autoware-ML now keeps both Hydra scratch outputs and MLflow-owned artifacts
+under the same `mlruns/` root:
 
 - `mlruns/mlflow.db`: Shared SQLite backend store
-- `mlruns/<task>/<model>/<config>/<date>/<time>/`: Run-specific artifacts and Hydra outputs
-- `mlruns/<task>/<model>/<config>/<date>/<time>/run_metadata.json`: Run metadata used to preserve lineage across train, test, and deploy
+- `mlruns/<task>/<model>/<config>/<run_id>/hydra/`: Hydra scratch directory and local command outputs
+- `mlruns/<task>/<model>/<config>/<run_id>/artifacts/`: Run-owned MLflow artifacts
+- `mlruns/<task>/<model>/<config>/<run_id>/artifacts/run_metadata.json`: Run metadata used to preserve lineage across train, test, and deploy
 
-To backup, copy the entire `mlruns/` directory.
+To back up experiments completely, copy `mlruns/`.

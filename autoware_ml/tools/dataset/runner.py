@@ -17,7 +17,7 @@
 import logging
 from typing import Any
 
-from autoware_ml.tools.dataset.nuscenes import NuScenesDatasetGenerator
+from autoware_ml.tools.dataset.nuscenes.generator import NuScenesDatasetGenerator
 
 logger = logging.getLogger(__name__)
 

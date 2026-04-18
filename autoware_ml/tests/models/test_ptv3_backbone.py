@@ -9,14 +9,14 @@ import pytest
 import torch
 import torch.nn as nn
 
-from autoware_ml.losses.segmentation3d import LovaszLoss
+from autoware_ml.losses.segmentation3d.lovasz import LovaszLoss
 from autoware_ml.models.segmentation3d.backbones.ptv3 import (
     Point,
     PointTransformerV3Backbone,
     SerializedAttention,
 )
 from autoware_ml.models.segmentation3d.ptv3 import PTv3SegmentationModel
-from autoware_ml.utils.point_cloud.serialization import decode, encode
+from autoware_ml.utils.point_cloud.serialization.default import decode, encode
 import autoware_ml.utils.point_cloud.structures as point_structures
 
 

@@ -63,79 +63,79 @@ datamodule:
   test_dataloader_cfg:
     batch_size: 8
   train_transforms:
-    _target_: autoware_ml.transforms.TransformsCompose
+    _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
-      - _target_: autoware_ml.transforms.point_cloud.LoadPointsFromFile
+      - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
         load_dim: 5
         use_dim: [0, 1, 2, 3]
-      - _target_: autoware_ml.transforms.segmentation3d.LoadSegAnnotations3D
+      - _target_: autoware_ml.transforms.segmentation3d.loading.LoadSegAnnotations3D
         class_mapping: ${class_mapping}
         ignore_index: ${ignore_index}
-      - _target_: autoware_ml.transforms.point_cloud.RandomFlip3D
+      - _target_: autoware_ml.transforms.point_cloud.scene.RandomFlip3D
         flip_ratio_bev_horizontal: 0.5
         flip_ratio_bev_vertical: 0.5
-      - _target_: autoware_ml.transforms.point_cloud.GlobalRotScaleTrans
+      - _target_: autoware_ml.transforms.point_cloud.scene.GlobalRotScaleTrans
         rot_range: [-3.1415926, 3.1415926]
         scale_ratio_range: [0.95, 1.05]
         translation_std: [0.1, 0.1, 0.1]
-      - _target_: autoware_ml.transforms.segmentation3d.FrustumMix
+      - _target_: autoware_ml.transforms.segmentation3d.mixing.FrustumMix
         height: ${frustum_height}
         width: ${frustum_width}
         fov_up: ${fov_up}
         fov_down: ${fov_down}
         num_areas: [3, 4, 5, 6]
         pre_transform:
-          _target_: autoware_ml.transforms.TransformsCompose
+          _target_: autoware_ml.transforms.base.TransformsCompose
           pipeline:
-            - _target_: autoware_ml.transforms.point_cloud.LoadPointsFromFile
+            - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
               load_dim: 5
               use_dim: [0, 1, 2, 3]
-            - _target_: autoware_ml.transforms.segmentation3d.LoadSegAnnotations3D
+            - _target_: autoware_ml.transforms.segmentation3d.loading.LoadSegAnnotations3D
               class_mapping: ${class_mapping}
               ignore_index: ${ignore_index}
-            - _target_: autoware_ml.transforms.point_cloud.RandomFlip3D
+            - _target_: autoware_ml.transforms.point_cloud.scene.RandomFlip3D
               flip_ratio_bev_horizontal: 0.5
               flip_ratio_bev_vertical: 0.5
-            - _target_: autoware_ml.transforms.point_cloud.GlobalRotScaleTrans
+            - _target_: autoware_ml.transforms.point_cloud.scene.GlobalRotScaleTrans
               rot_range: [-3.1415926, 3.1415926]
               scale_ratio_range: [0.95, 1.05]
               translation_std: [0.1, 0.1, 0.1]
         prob: 1.0
-      - _target_: autoware_ml.transforms.segmentation3d.InstanceCopy
+      - _target_: autoware_ml.transforms.segmentation3d.mixing.InstanceCopy
         instance_classes: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
         pre_transform:
-          _target_: autoware_ml.transforms.TransformsCompose
+          _target_: autoware_ml.transforms.base.TransformsCompose
           pipeline:
-            - _target_: autoware_ml.transforms.point_cloud.LoadPointsFromFile
+            - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
               load_dim: 5
               use_dim: [0, 1, 2, 3]
-            - _target_: autoware_ml.transforms.segmentation3d.LoadSegAnnotations3D
+            - _target_: autoware_ml.transforms.segmentation3d.loading.LoadSegAnnotations3D
               class_mapping: ${class_mapping}
               ignore_index: ${ignore_index}
-            - _target_: autoware_ml.transforms.point_cloud.RandomFlip3D
+            - _target_: autoware_ml.transforms.point_cloud.scene.RandomFlip3D
               flip_ratio_bev_horizontal: 0.5
               flip_ratio_bev_vertical: 0.5
-            - _target_: autoware_ml.transforms.point_cloud.GlobalRotScaleTrans
+            - _target_: autoware_ml.transforms.point_cloud.scene.GlobalRotScaleTrans
               rot_range: [-3.1415926, 3.1415926]
               scale_ratio_range: [0.95, 1.05]
               translation_std: [0.1, 0.1, 0.1]
         prob: 1.0
-      - _target_: autoware_ml.transforms.segmentation3d.RangeInterpolation
+      - _target_: autoware_ml.transforms.segmentation3d.range_view.RangeInterpolation
         height: ${range_height}
         width: ${range_width}
         fov_up: ${fov_up}
         fov_down: ${fov_down}
         ignore_index: ${ignore_index}
   val_transforms:
-    _target_: autoware_ml.transforms.TransformsCompose
+    _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
-      - _target_: autoware_ml.transforms.point_cloud.LoadPointsFromFile
+      - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
         load_dim: 5
         use_dim: [0, 1, 2, 3]
-      - _target_: autoware_ml.transforms.segmentation3d.LoadSegAnnotations3D
+      - _target_: autoware_ml.transforms.segmentation3d.loading.LoadSegAnnotations3D
         class_mapping: ${class_mapping}
         ignore_index: ${ignore_index}
-      - _target_: autoware_ml.transforms.segmentation3d.RangeInterpolation
+      - _target_: autoware_ml.transforms.segmentation3d.range_view.RangeInterpolation
         height: ${range_height}
         width: ${range_width}
         fov_up: ${fov_up}
@@ -143,12 +143,12 @@ datamodule:
         ignore_index: ${ignore_index}
   test_transforms: ${datamodule.val_transforms}
   predict_transforms:
-    _target_: autoware_ml.transforms.TransformsCompose
+    _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
-      - _target_: autoware_ml.transforms.point_cloud.LoadPointsFromFile
+      - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
         load_dim: 5
         use_dim: [0, 1, 2, 3]
-      - _target_: autoware_ml.transforms.segmentation3d.RangeInterpolation
+      - _target_: autoware_ml.transforms.segmentation3d.range_view.RangeInterpolation
         height: ${range_height}
         width: ${range_width}
         fov_up: ${fov_up}

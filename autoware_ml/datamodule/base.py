@@ -29,6 +29,7 @@ import torch
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset as TorchDataset
 
+from autoware_ml.datamodule.common.point_cloud import point_collate_fn
 from autoware_ml.datamodule.pipeline_context import PipelineContext
 from autoware_ml.preprocessing.base import DataPreprocessing
 from autoware_ml.transforms.base import TransformsCompose
@@ -323,8 +324,6 @@ class DataModule(L.LightningDataModule, ABC):
             Dictionary mapping keys to Tensors or lists of data.
         """
         if self.mix_prob > 0.0:
-            from autoware_ml.datamodule.common.point_cloud import point_collate_fn
-
             return point_collate_fn(list(batch_inputs_dicts), mix_prob=self._collate_mix_prob())
         if not batch_inputs_dicts:
             raise ValueError("Batch inputs dictionary is empty.")

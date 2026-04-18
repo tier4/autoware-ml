@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import torch
 
-from autoware_ml.ops.segment import segment_csr
+from autoware_ml.ops.segment.segment_csr import segment_csr
 
 
 def test_segment_csr_supports_backward_outside_onnx_export() -> None:

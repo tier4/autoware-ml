@@ -19,10 +19,10 @@ integration, and trainer execution for model training.
 """
 
 import logging
+import os
 
 import hydra
 import lightning as L
-from lightning.pytorch.loggers import MLFlowLogger
 from omegaconf import DictConfig
 
 from autoware_ml.utils.runtime import (
@@ -35,15 +35,15 @@ from autoware_ml.utils.runtime import (
     resolve_work_dir,
     set_seed,
 )
-from autoware_ml.utils.mlflow import (
-    build_run_tags,
-    build_training_metadata,
+from autoware_ml.utils.mlflow_helpers import (
+    AUTOWARE_ML_RUN_ID_ENV,
+    build_run_metadata,
     configure_logger,
-    generate_experiment_name,
-    generate_run_name,
     get_user_config_name,
-    log_path_as_artifact,
+    load_run_context,
+    prepare_run_context,
     should_enable_logger,
+    write_run_config_artifacts,
     write_run_metadata,
 )
 
@@ -63,6 +63,23 @@ def main(cfg: DictConfig):
     logger.info(f"Working directory: {work_dir}")
     config_name = get_user_config_name()
     logger_enabled = should_enable_logger(cfg)
+    run_context = None
+    if logger_enabled:
+        precreated_run_id = os.environ.get(AUTOWARE_ML_RUN_ID_ENV)
+        if precreated_run_id is not None:
+            run_context = load_run_context(cfg.logger.tracking_uri, precreated_run_id)
+            if work_dir != run_context.hydra_dir:
+                raise RuntimeError(
+                    f"Hydra work directory '{work_dir}' does not match the pre-created MLflow "
+                    f"run directory '{run_context.hydra_dir}'."
+                )
+        else:
+            run_context = prepare_run_context(
+                cfg.logger.tracking_uri,
+                config_name,
+                hydra_dir=work_dir,
+                stage="train",
+            )
 
     configure_torch_runtime()
     set_seed(cfg)
@@ -74,19 +91,36 @@ def main(cfg: DictConfig):
     model: L.LightningModule = hydra.utils.instantiate(cfg.model)
 
     logger.info("Instantiating callbacks...")
-    callbacks = instantiate_callbacks(cfg, logger_enabled=logger_enabled)
+    callbacks = instantiate_callbacks(
+        cfg,
+        logger_enabled=logger_enabled,
+        checkpoint_dir=run_context.checkpoints_dir if run_context is not None else None,
+    )
 
     logger.info("Instantiating loggers...")
     trainer_logger = None
-    experiment_name = generate_experiment_name(config_name)
-    run_name = generate_run_name(config_name, work_dir, "train")
-    run_tags = build_run_tags(config_name, work_dir, "train")
     if logger_enabled:
-        configure_logger(cfg.logger, experiment_name, run_name, run_tags)
+        write_run_config_artifacts(cfg, run_context.artifact_dir)
+        write_run_metadata(
+            run_context.artifact_dir,
+            build_run_metadata(run_context, config_name, run_context.hydra_dir, "train"),
+        )
+        configure_logger(
+            cfg.logger,
+            run_context.experiment_name,
+            run_context.run_name,
+            run_context.tags,
+            run_id=run_context.run_id,
+        )
         trainer_logger = hydra.utils.instantiate(cfg.logger)
 
     logger.info("Instantiating trainer...")
-    trainer: L.Trainer = instantiate_trainer(cfg, callbacks, trainer_logger, work_dir)
+    trainer: L.Trainer = instantiate_trainer(
+        cfg,
+        callbacks,
+        trainer_logger,
+        run_context.artifact_dir if run_context is not None else work_dir,
+    )
 
     log_hyperparameters(cfg, trainer_logger, trainer)
 
@@ -98,18 +132,11 @@ def main(cfg: DictConfig):
 
     trainer.fit(model, datamodule=datamodule, ckpt_path=cfg.get("checkpoint", None))
 
-    if isinstance(trainer_logger, MLFlowLogger):
-        metadata_path = write_run_metadata(
-            work_dir,
-            build_training_metadata(trainer_logger, experiment_name, config_name, work_dir),
-        )
-        client = trainer_logger.experiment
-        log_path_as_artifact(client, trainer_logger.run_id, work_dir / ".hydra", "hydra")
-        log_path_as_artifact(client, trainer_logger.run_id, metadata_path, "metadata")
-        log_path_as_artifact(client, trainer_logger.run_id, work_dir / "checkpoints", "checkpoints")
-
     logger.info("Training completed!")
-    logger.info(f"Checkpoints saved to: {work_dir / 'checkpoints'}")
+    checkpoints_dir = (
+        run_context.checkpoints_dir if run_context is not None else work_dir / "checkpoints"
+    )
+    logger.info(f"Checkpoints saved to: {checkpoints_dir}")
 
 
 if __name__ == "__main__":

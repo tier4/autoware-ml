@@ -27,7 +27,7 @@ from spconv.pytorch.core import ImplicitGemmIndiceData, IndiceData, SparseConvTe
 from spconv.utils import nullcontext
 from torch.nn import functional as F
 
-from autoware_ml.ops.spconv import sparse_functional as Fsp_custom
+import autoware_ml.ops.spconv.sparse_functional as Fsp_custom
 
 _MAX_NUM_VOXELS_DURING_TRAINING = "max_num_voxels_during_training"
 

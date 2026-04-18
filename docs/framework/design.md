@@ -179,8 +179,8 @@ class TransformsCompose:
 Transforms are configured per split (train/val/test/predict) in the `DataModule` and applied during `Dataset.__getitem__()`.
 
 Public transform targets should be referenced through their subpackage API, for
-example `autoware_ml.transforms.point_cloud.LoadPointsFromFile` or
-`autoware_ml.transforms.point_cloud.RandomFlip3D`. Implementation modules should
+example `autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile` or
+`autoware_ml.transforms.point_cloud.scene.RandomFlip3D`. Implementation modules should
 define the transform once, and the subpackage `__init__.py` acts as the single
 public re-export layer.
 

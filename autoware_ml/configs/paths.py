@@ -12,26 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""CLI-facing dataset-generation command functions."""
+"""Concrete filesystem paths for bundled Hydra configuration packages."""
 
-from collections.abc import Sequence
-from typing import Any
+from pathlib import Path
 
-from autoware_ml.tools.dataset.runner import generate_dataset
-
-
-def main(
-    dataset: str,
-    tasks: Sequence[str],
-    root_path: str,
-    out_dir: str,
-    **kwargs: Any,
-) -> None:
-    """Dispatch dataset generation from the CLI entrypoint."""
-    generate_dataset(
-        dataset=dataset,
-        tasks=tasks,
-        root_path=root_path,
-        out_dir=out_dir,
-        **kwargs,
-    )
+CONFIGS_ROOT = Path(__file__).resolve().parent
