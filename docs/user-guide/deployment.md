@@ -37,6 +37,11 @@ autoware-ml deploy \
 By default, deploy writes ONNX and TensorRT outputs into the current MLflow
 run artifact directory under `exports/`.
 
+When MLflow logging is enabled, any custom `output_dir` must stay inside that
+run artifact directory. Leave `output_dir` unset to use the default
+`exports/` location, or disable MLflow logging if you need to export outside
+the run artifact tree.
+
 **Custom output name:**
 
 ```bash
@@ -44,6 +49,15 @@ autoware-ml deploy \
     --config-name <task>/<model>/<config> \
     +checkpoint=mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt \
     output_name=model_v1
+```
+
+**Custom output directory inside MLflow artifacts:**
+
+```bash
+autoware-ml deploy \
+    --config-name <task>/<model>/<config> \
+    +checkpoint=mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt \
+    output_dir=mlruns/<task>/<model>/<config>/<deploy_run_id>/artifacts/custom_exports
 ```
 
 ## Configuration
