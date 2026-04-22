@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import torch
 import torch.nn as nn
 
-from autoware_ml.models.calibration_status import CalibrationStatusClassifier
+from autoware_ml.models.calibration_status.calibration_status import CalibrationStatusClassifier
 from autoware_ml.models.segmentation3d.frnet import FRNet
 from autoware_ml.models.segmentation3d.ptv3 import PTv3SegmentationModel
 

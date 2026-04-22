@@ -14,17 +14,17 @@
 
 import logging
 
-from pathlib import Path
 import hydra
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 
-import autoware_ml.configs
+from autoware_ml.configs.paths import CONFIGS_ROOT
+from autoware_ml.configs.resolvers import register_config_resolvers
 from autoware_ml.databases.database_interface import DatabaseInterface
 
 logger = logging.getLogger(__name__)
-
-_CONFIG_PATH = str(Path(autoware_ml.configs.__file__).parent.resolve() / "generators")
+register_config_resolvers()
+_CONFIG_PATH = str(CONFIGS_ROOT / "generators")
 
 
 @hydra.main(version_base=None, config_path=_CONFIG_PATH)

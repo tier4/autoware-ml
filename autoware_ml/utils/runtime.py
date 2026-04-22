@@ -23,24 +23,28 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-import autoware_ml.configs
 import hydra
 import lightning as L
 import torch
 from hydra.core.hydra_config import HydraConfig
 from lightning.pytorch.loggers import Logger
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf, open_dict
+
+from autoware_ml.configs.paths import CONFIGS_ROOT
+from autoware_ml.configs.resolvers import register_config_resolvers
 
 logger = logging.getLogger(__name__)
+
+register_config_resolvers()
 
 
 def get_config_path() -> str:
     """Return the bundled Hydra config root path.
 
     Returns:
-        Absolute path to the ``autoware_ml.configs`` package directory.
+        Absolute path to the bundled ``autoware_ml/configs`` directory.
     """
-    return str(Path(autoware_ml.configs.__file__).parent.resolve())
+    return str(CONFIGS_ROOT)
 
 
 def log_configuration(cfg: DictConfig) -> None:
@@ -94,12 +98,18 @@ def set_seed(cfg: DictConfig) -> None:
     logger.info(f"Random seed: {cfg.seed}")
 
 
-def instantiate_callbacks(cfg: DictConfig, logger_enabled: bool = True) -> list[L.Callback]:
+def instantiate_callbacks(
+    cfg: DictConfig,
+    logger_enabled: bool = True,
+    checkpoint_dir: Path | None = None,
+) -> list[L.Callback]:
     """Instantiate configured Lightning callbacks.
 
     Args:
         cfg: Fully composed Hydra configuration.
         logger_enabled: Whether the trainer will attach a logger.
+        checkpoint_dir: Optional checkpoint directory override used by training
+            runs when MLflow owns the artifact tree.
 
     Returns:
         Instantiated callback list. Returns an empty list when callbacks are
@@ -115,6 +125,9 @@ def instantiate_callbacks(cfg: DictConfig, logger_enabled: bool = True) -> list[
         target = callback_cfg.get("_target_", "")
         if not logger_enabled and target == "lightning.pytorch.callbacks.LearningRateMonitor":
             continue
+        if target == "lightning.pytorch.callbacks.ModelCheckpoint" and checkpoint_dir is not None:
+            with open_dict(callback_cfg):
+                callback_cfg.dirpath = str(checkpoint_dir)
         callbacks.append(hydra.utils.instantiate(callback_cfg))
     return callbacks
 
@@ -123,7 +136,7 @@ def instantiate_trainer(
     cfg: DictConfig,
     callbacks: list[L.Callback],
     trainer_logger: Logger | None,
-    work_dir: Path,
+    root_dir: Path,
 ) -> L.Trainer:
     """Instantiate the Lightning trainer for the current stage.
 
@@ -131,7 +144,7 @@ def instantiate_trainer(
         cfg: Fully composed Hydra configuration.
         callbacks: Callback instances attached to the trainer.
         trainer_logger: Optional logger instance passed to the trainer.
-        work_dir: Runtime output directory used as the trainer root.
+        root_dir: Runtime output directory used as the trainer root.
 
     Returns:
         Instantiated Lightning trainer.
@@ -140,7 +153,7 @@ def instantiate_trainer(
         cfg.trainer,
         callbacks=callbacks,
         logger=trainer_logger if trainer_logger is not None else False,
-        default_root_dir=str(work_dir),
+        default_root_dir=str(root_dir),
     )
 
 

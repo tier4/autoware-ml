@@ -17,7 +17,7 @@
 from collections.abc import Sequence
 from typing import Any
 
-from autoware_ml.tools.dataset import generate_dataset
+from autoware_ml.tools.dataset.runner import generate_dataset
 
 
 def main(

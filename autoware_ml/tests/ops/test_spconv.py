@@ -22,12 +22,12 @@ from pathlib import Path
 import pytest
 import torch
 
-from autoware_ml.ops.spconv import IS_SPCONV_AVAILABLE
+from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
 
 if IS_SPCONV_AVAILABLE:
     import spconv.pytorch as spconv
 
-    from autoware_ml.ops.spconv import SparseConv3d, SubMConv3d
+    from autoware_ml.ops.spconv.sparse_conv import SparseConv3d, SubMConv3d
 
 
 pytestmark = pytest.mark.skipif(

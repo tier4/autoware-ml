@@ -19,11 +19,11 @@ checkpoints on configured datamodules.
 """
 
 import logging
+import os
 from pathlib import Path
 
 import hydra
 import lightning as L
-from lightning.pytorch.loggers import MLFlowLogger
 from omegaconf import DictConfig
 
 from autoware_ml.utils.checkpoints import load_model_from_checkpoint
@@ -37,15 +37,16 @@ from autoware_ml.utils.runtime import (
     resolve_work_dir,
     set_seed,
 )
-from autoware_ml.utils.mlflow import (
-    build_run_tags,
+from autoware_ml.utils.mlflow_helpers import (
+    AUTOWARE_ML_RUN_ID_ENV,
+    build_run_metadata,
     configure_logger,
-    create_child_run,
-    generate_run_name,
     get_user_config_name,
-    log_path_as_artifact,
+    load_run_context,
+    prepare_run_context,
     resolve_lineage_context,
     should_enable_logger,
+    write_run_config_artifacts,
     write_run_metadata,
 )
 
@@ -83,32 +84,63 @@ def main(cfg: DictConfig):
         raise ValueError("Checkpoint path must be provided for testing.")
     checkpoint_path = Path(checkpoint_path)
     experiment_name, parent_run_id = resolve_lineage_context(config_name, checkpoint_path)
-    run_name = generate_run_name(config_name, work_dir, "test")
-    run_tags = build_run_tags(
-        config_name,
-        work_dir,
-        "test",
-        extra_tags={
-            "checkpoint_path": str(checkpoint_path),
-            "source_run_id": parent_run_id or "",
-        },
-    )
+    run_context = None
+    if logger_enabled:
+        pre_created_run_id = os.environ.get(AUTOWARE_ML_RUN_ID_ENV)
+        if pre_created_run_id is not None:
+            run_context = load_run_context(cfg.logger.tracking_uri, pre_created_run_id)
+            if work_dir != run_context.hydra_dir:
+                raise RuntimeError(
+                    f"Hydra work directory '{work_dir}' does not match the pre-created MLflow "
+                    f"run directory '{run_context.hydra_dir}'."
+                )
+        else:
+            run_context = prepare_run_context(
+                cfg.logger.tracking_uri,
+                config_name,
+                hydra_dir=work_dir,
+                stage="test",
+                parent_run_id=parent_run_id,
+                experiment_name=experiment_name,
+                extra_tags={
+                    "checkpoint_path": str(checkpoint_path),
+                    "source_run_id": parent_run_id or "",
+                },
+            )
 
     logger.info("Instantiating loggers...")
     trainer_logger = None
     if logger_enabled:
-        child_run_id = create_child_run(
-            cfg.logger.tracking_uri,
-            experiment_name,
-            run_name,
-            run_tags,
-            parent_run_id,
+        write_run_config_artifacts(cfg, run_context.artifact_dir)
+        write_run_metadata(
+            run_context.artifact_dir,
+            build_run_metadata(
+                run_context,
+                config_name,
+                run_context.hydra_dir,
+                "test",
+                extra_metadata={
+                    "source_run_id": parent_run_id,
+                    "checkpoint_path": str(checkpoint_path),
+                },
+            ),
         )
-        configure_logger(cfg.logger, experiment_name, run_name, run_tags, run_id=child_run_id)
+        configure_logger(
+            cfg.logger,
+            run_context.experiment_name,
+            run_context.run_name,
+            run_context.tags,
+            run_id=run_context.run_id,
+        )
         trainer_logger = hydra.utils.instantiate(cfg.logger)
 
     logger.info("Instantiating trainer...")
-    trainer: L.Trainer = instantiate_trainer(cfg, callbacks, trainer_logger, work_dir)
+    trainer: L.Trainer = instantiate_trainer(
+        cfg,
+        callbacks,
+        trainer_logger,
+        run_context.artifact_dir if run_context is not None else work_dir,
+    )
 
     log_hyperparameters(cfg, trainer_logger, trainer)
 
@@ -119,23 +151,6 @@ def main(cfg: DictConfig):
 
     load_model_from_checkpoint(model, checkpoint_path, map_location="cpu")
     trainer.test(model, datamodule=datamodule, ckpt_path=None)
-
-    if isinstance(trainer_logger, MLFlowLogger):
-        metadata_path = write_run_metadata(
-            work_dir,
-            {
-                "run_id": trainer_logger.run_id,
-                "experiment_id": trainer_logger.experiment_id,
-                "experiment_name": experiment_name,
-                "config_name": config_name,
-                "work_dir": str(work_dir),
-                "stage": "test",
-                "source_run_id": parent_run_id,
-            },
-        )
-        client = trainer_logger.experiment
-        log_path_as_artifact(client, trainer_logger.run_id, work_dir / ".hydra", "hydra")
-        log_path_as_artifact(client, trainer_logger.run_id, metadata_path, "metadata")
 
     logger.info("Evaluation completed!")
 

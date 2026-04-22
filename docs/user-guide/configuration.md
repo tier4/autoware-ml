@@ -83,21 +83,19 @@ datamodule:
 
   train_transforms:
     pipeline:
-      - _target_: autoware_ml.transforms.my_transforms.MyTransform
+      - _target_: autoware_ml.transforms.my_transforms.my_transform.MyTransform
         param: value
 
   data_preprocessing:
-    _target_: autoware_ml.preprocessing.DataPreprocessing
+    _target_: autoware_ml.preprocessing.base.DataPreprocessing
     pipeline:
-      - _target_: autoware_ml.preprocessing.my_preprocessing.MyPreprocessingLayer
+      - _target_: autoware_ml.preprocessing.my_preprocessing.my_preprocessing.MyPreprocessingLayer
         param: value
 ```
 
-For custom components, prefer package-level targets such as
-`autoware_ml.transforms.my_transforms.MyTransform` or
-`autoware_ml.models.common.backbones.MyBackbone`. Implementation modules should
-define the code once, and the package `__init__.py` should expose the public
-API used by configs.
+For custom components, point `_target_` at the concrete implementation module,
+for example `autoware_ml.transforms.my_transforms.my_transform.MyTransform` or
+`autoware_ml.models.common.backbones.my_backbone.MyBackbone`.
 
 ### `model`
 
@@ -108,7 +106,7 @@ model:
   _target_: autoware_ml.models.my_task.MyModel
 
   backbone:
-    _target_: autoware_ml.models.common.backbones.MyBackbone
+    _target_: autoware_ml.models.common.backbones.my_backbone.MyBackbone
     in_channels: 3
 
   optimizer:

@@ -14,15 +14,19 @@
 
 """Unit tests for CLI utilities."""
 
+import __main__
 from pathlib import Path
+import subprocess
+import sys
 from subprocess import CompletedProcess
 from unittest.mock import patch
 
 from typer.testing import CliRunner
 
 from autoware_ml.cli.cli import app
-from autoware_ml.cli import cli
-from autoware_ml.utils.cli import (
+import autoware_ml.cli.cli as cli
+import autoware_ml.cli.runtime as cli_runtime
+from autoware_ml.utils.cli.helpers import (
     adjust_argv,
     complete_config_value,
     complete_path_value,
@@ -32,7 +36,8 @@ from autoware_ml.utils.cli import (
     parse_extra_args,
     resolve_config_reference,
 )
-from autoware_ml.utils.cli import helpers
+import autoware_ml.utils.cli.helpers as helpers
+from autoware_ml.utils.session import SessionCommandError
 
 SAMPLE_CONFIG_NAME = "calibration_status/calibration_status_classifier/resnet18_t4dataset_j6gen2"
 SAMPLE_CONFIG_PATH = f"tasks/{SAMPLE_CONFIG_NAME}"
@@ -252,6 +257,31 @@ class TestCliCommands:
     def setup_method(self) -> None:
         self.runner = CliRunner()
 
+    def test_train_dispatches_to_runtime_module(self) -> None:
+        """Train should delegate Hydra execution to the runtime module."""
+        with patch("autoware_ml.cli.cli.run_lazy_script") as run_lazy_script_mock:
+            result = self.runner.invoke(
+                app,
+                [
+                    "train",
+                    "--config-name",
+                    SAMPLE_CONFIG_NAME,
+                    "+trainer.strategy=ddp",
+                    "trainer.devices=2",
+                ],
+            )
+
+        assert result.exit_code == 0
+        run_lazy_script_mock.assert_called_once_with(
+            cli.CLI_RUNTIME_MODULE,
+            "run_hydra_entrypoint",
+            entrypoint_module=cli.TRAIN_ENTRYPOINT_MODULE,
+            config_name=SAMPLE_CONFIG_NAME,
+            stage="train",
+            extra_args=["+trainer.strategy=ddp", "trainer.devices=2"],
+            config_prefix=cli.TASK_CONFIG_PREFIX,
+        )
+
     def test_deploy_requires_checkpoint(self) -> None:
         """Deploy should reject invocations without an explicit checkpoint."""
         result = self.runner.invoke(
@@ -294,7 +324,17 @@ class TestCliCommands:
             )
 
         assert result.exit_code == 0
-        run_lazy_script_mock.assert_called_once_with("autoware_ml.scripts.test", "main")
+        run_lazy_script_mock.assert_called_once_with(
+            cli.CLI_RUNTIME_MODULE,
+            "run_hydra_entrypoint",
+            entrypoint_module=cli.TEST_ENTRYPOINT_MODULE,
+            config_name=SAMPLE_CONFIG_NAME,
+            stage="test",
+            extra_args=[],
+            hydra_overrides=["+checkpoint=model.ckpt"],
+            checkpoint="model.ckpt",
+            config_prefix=cli.TASK_CONFIG_PREFIX,
+        )
 
     def test_mlflow_ui_runs_script(self) -> None:
         """MLflow UI should dispatch through the mlflow command group."""
@@ -303,7 +343,7 @@ class TestCliCommands:
 
         assert result.exit_code == 0
         run_lazy_script_mock.assert_called_once_with(
-            "autoware_ml.scripts.mlflow",
+            "autoware_ml.scripts.mlflow_wrapper",
             "run_mlflow_ui",
             host="0.0.0.0",
             port=6000,
@@ -325,7 +365,7 @@ class TestCliCommands:
 
         assert result.exit_code == 0
         run_lazy_script_mock.assert_called_once_with(
-            "autoware_ml.scripts.mlflow",
+            "autoware_ml.scripts.mlflow_wrapper",
             "export_experiment_from_db",
             db_path="mlruns/mlflow.db",
             experiment_name=None,
@@ -491,7 +531,7 @@ class TestCliCommands:
     def test_session_start_reports_clean_error(self) -> None:
         with patch(
             "autoware_ml.cli.cli.run_lazy_script",
-            side_effect=RuntimeError(
+            side_effect=SessionCommandError(
                 "A command is required, e.g. autoware-ml session start --name train -- train --config-name ..."
             ),
         ):
@@ -531,9 +571,44 @@ class TestCliCommands:
         assert result == ["trainer.devices=[0, 1]", "trainer.strategy=ddp"]
 
 
+class TestCliRuntime:
+    def test_run_hydra_entrypoint_uses_runtime_script_argv_for_distributed_launches(self) -> None:
+        """Runtime helper should expose a module-based relaunch context for DDP workers."""
+
+        def assert_runtime_context(*args, **kwargs) -> None:
+            assert cli_runtime.sys.argv[0] == "autoware_ml.scripts.train"
+            assert __main__.__spec__ is not None
+            assert __main__.__spec__.name == "autoware_ml.scripts.train"
+
+        with (
+            patch(
+                "autoware_ml.cli.runtime.prepare_runtime_environment",
+                return_value={
+                    "AUTOWARE_ML_RUN_ID": "run-1",
+                    "AUTOWARE_ML_HYDRA_RUN_DIR": "/tmp/hydra",
+                },
+            ),
+            patch(
+                "autoware_ml.cli.runtime.run_lazy_script",
+                side_effect=assert_runtime_context,
+            ) as run_lazy_script_mock,
+        ):
+            cli_runtime.run_hydra_entrypoint(
+                cli.TRAIN_ENTRYPOINT_MODULE,
+                SAMPLE_CONFIG_NAME,
+                "train",
+                extra_args=["+trainer.strategy=ddp", "trainer.devices=2"],
+            )
+
+        run_lazy_script_mock.assert_called_once_with("autoware_ml.scripts.train", "main")
+        assert cli_runtime.sys.argv[0] == "autoware_ml.scripts.train"
+        assert "+trainer.strategy=ddp" in cli_runtime.sys.argv
+        assert "trainer.devices=2" in cli_runtime.sys.argv
+
+
 class TestResolveHydraArgv:
     def test_does_not_inject_run_config_name_override(self) -> None:
-        hydra_argv = cli.resolve_hydra_argv(
+        hydra_argv = cli_runtime.resolve_hydra_argv(
             SAMPLE_CONFIG_NAME,
             "tasks",
         )
@@ -544,7 +619,7 @@ class TestResolveHydraArgv:
         config_file = tmp_path / "custom_train.yaml"
         config_file.write_text("trainer:\n  max_epochs: 1\n", encoding="utf-8")
 
-        hydra_argv = cli.resolve_hydra_argv(str(config_file), "tasks")
+        hydra_argv = cli_runtime.resolve_hydra_argv(str(config_file), "tasks")
 
         assert hydra_argv[:4] == [
             "--config-name",
@@ -559,7 +634,7 @@ class TestResolveHydraArgv:
         config_file = tmp_path / "custom_train.yaml"
         config_file.write_text("trainer:\n  max_epochs: 1\n", encoding="utf-8")
 
-        hydra_argv = cli.resolve_hydra_argv(
+        hydra_argv = cli_runtime.resolve_hydra_argv(
             str(config_file),
             "tasks",
             extra_args=["hydra.searchpath=[file:///tmp/custom]"],
@@ -567,6 +642,27 @@ class TestResolveHydraArgv:
 
         assert hydra_argv.count("hydra.searchpath=[file:///tmp/custom]") == 1
         assert "hydra.searchpath=[pkg://autoware_ml.configs]" not in hydra_argv
+
+    def test_resolves_runtime_entrypoint_script_path(self) -> None:
+        runtime_argv = cli_runtime.resolve_hydra_entrypoint_argv(
+            "autoware_ml.scripts.train",
+            SAMPLE_CONFIG_NAME,
+            "tasks",
+        )
+
+        assert runtime_argv[0] == "autoware_ml.scripts.train"
+        assert runtime_argv[1:] == cli_runtime.resolve_hydra_argv(SAMPLE_CONFIG_NAME, "tasks")
+
+    def test_temporary_main_module_sets_module_spec(self) -> None:
+        previous_spec = __main__.__spec__
+
+        with cli_runtime.temporary_main_module(
+            cli_runtime.resolve_module_spec("autoware_ml.scripts.train")
+        ):
+            assert __main__.__spec__ is not None
+            assert __main__.__spec__.name == "autoware_ml.scripts.train"
+
+        assert __main__.__spec__ is previous_spec
 
 
 class TestSessionCompletion:
@@ -669,7 +765,7 @@ class TestMlflowCliCommands:
 
         assert result.exit_code == 0
         run_lazy_script_mock.assert_called_once_with(
-            "autoware_ml.scripts.mlflow",
+            "autoware_ml.scripts.mlflow_wrapper",
             "export_experiment_from_db",
             db_path="mlruns/mlflow.db",
             experiment_name="exp",
@@ -693,6 +789,60 @@ class TestCliCallback:
             cli.main_callback()
 
         setup_logging_mock.assert_called_once_with()
+
+    def test_importing_cli_does_not_import_mlflow_or_hydra(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import autoware_ml.cli.cli\n"
+                    "import sys\n"
+                    "print('mlflow' in sys.modules)\n"
+                    "print('hydra' in sys.modules)\n"
+                ),
+            ],
+            capture_output=True,
+            check=True,
+            text=True,
+        )
+
+        assert result.stdout.splitlines() == ["False", "False"]
+
+
+class TestShellCompletion:
+    def test_train_suggests_options_on_empty_token(self) -> None:
+        runner = CliRunner()
+
+        result = runner.invoke(
+            app,
+            [],
+            env={
+                "_AUTOWARE_ML_COMPLETE": "complete_bash",
+                "COMP_WORDS": "autoware-ml train ",
+                "COMP_CWORD": "2",
+            },
+        )
+
+        assert result.exit_code == 0
+        assert "--config-name" in result.stdout.splitlines()
+
+    def test_mlflow_export_suggests_options_on_empty_token(self) -> None:
+        runner = CliRunner()
+
+        result = runner.invoke(
+            app,
+            [],
+            env={
+                "_AUTOWARE_ML_COMPLETE": "complete_bash",
+                "COMP_WORDS": "autoware-ml mlflow export ",
+                "COMP_CWORD": "3",
+            },
+        )
+
+        assert result.exit_code == 0
+        assert "--config-name" in result.stdout.splitlines()
+        assert "--db-path" in result.stdout.splitlines()
 
 
 class TestPathCompletion:

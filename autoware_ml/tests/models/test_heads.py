@@ -18,7 +18,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from autoware_ml.models.common.heads import ClsHead, LinearClsHead
+from autoware_ml.models.common.heads.linear_cls_head import ClsHead, LinearClsHead
 
 
 @pytest.fixture

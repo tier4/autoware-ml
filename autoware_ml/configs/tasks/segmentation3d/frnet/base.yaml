@@ -23,80 +23,80 @@ datamodule:
     num_workers: 1
     persistent_workers: true
   train_transforms:
-    _target_: autoware_ml.transforms.TransformsCompose
+    _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
-      - _target_: autoware_ml.transforms.point_cloud.RandomFlip3D
+      - _target_: autoware_ml.transforms.point_cloud.scene.RandomFlip3D
         flip_ratio_bev_horizontal: 0.5
         flip_ratio_bev_vertical: 0.5
-      - _target_: autoware_ml.transforms.point_cloud.GlobalRotScaleTrans
+      - _target_: autoware_ml.transforms.point_cloud.scene.GlobalRotScaleTrans
         rot_range: [-3.1415926, 3.1415926]
         scale_ratio_range: [0.95, 1.05]
         translation_std: [0.1, 0.1, 0.1]
-      - _target_: autoware_ml.transforms.segmentation3d.FrustumMix
+      - _target_: autoware_ml.transforms.segmentation3d.mixing.FrustumMix
         height: ${frustum_height}
         width: ${frustum_width}
         fov_up: ${fov_up}
         fov_down: ${fov_down}
         num_areas: [3, 4, 5, 6]
         pre_transform:
-          _target_: autoware_ml.transforms.TransformsCompose
+          _target_: autoware_ml.transforms.base.TransformsCompose
           pipeline:
-            - _target_: autoware_ml.transforms.point_cloud.RandomFlip3D
+            - _target_: autoware_ml.transforms.point_cloud.scene.RandomFlip3D
               flip_ratio_bev_horizontal: 0.5
               flip_ratio_bev_vertical: 0.5
-            - _target_: autoware_ml.transforms.point_cloud.GlobalRotScaleTrans
+            - _target_: autoware_ml.transforms.point_cloud.scene.GlobalRotScaleTrans
               rot_range: [-3.1415926, 3.1415926]
               scale_ratio_range: [0.95, 1.05]
               translation_std: [0.1, 0.1, 0.1]
         prob: 1.0
-      - _target_: autoware_ml.transforms.segmentation3d.InstanceCopy
+      - _target_: autoware_ml.transforms.segmentation3d.mixing.InstanceCopy
         instance_classes: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
         pre_transform:
-          _target_: autoware_ml.transforms.TransformsCompose
+          _target_: autoware_ml.transforms.base.TransformsCompose
           pipeline:
-            - _target_: autoware_ml.transforms.point_cloud.RandomFlip3D
+            - _target_: autoware_ml.transforms.point_cloud.scene.RandomFlip3D
               flip_ratio_bev_horizontal: 0.5
               flip_ratio_bev_vertical: 0.5
-            - _target_: autoware_ml.transforms.point_cloud.GlobalRotScaleTrans
+            - _target_: autoware_ml.transforms.point_cloud.scene.GlobalRotScaleTrans
               rot_range: [-3.1415926, 3.1415926]
               scale_ratio_range: [0.95, 1.05]
               translation_std: [0.1, 0.1, 0.1]
         prob: 1.0
-      - _target_: autoware_ml.transforms.segmentation3d.RangeInterpolation
+      - _target_: autoware_ml.transforms.segmentation3d.range_view.RangeInterpolation
         height: ${range_height}
         width: ${range_width}
         fov_up: ${fov_up}
         fov_down: ${fov_down}
         ignore_index: ${ignore_index}
   val_transforms:
-    _target_: autoware_ml.transforms.TransformsCompose
+    _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
-      - _target_: autoware_ml.transforms.segmentation3d.RangeInterpolation
+      - _target_: autoware_ml.transforms.segmentation3d.range_view.RangeInterpolation
         height: ${range_height}
         width: ${range_width}
         fov_up: ${fov_up}
         fov_down: ${fov_down}
         ignore_index: ${ignore_index}
   test_transforms:
-    _target_: autoware_ml.transforms.TransformsCompose
+    _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
-      - _target_: autoware_ml.transforms.segmentation3d.RangeInterpolation
+      - _target_: autoware_ml.transforms.segmentation3d.range_view.RangeInterpolation
         height: ${range_height}
         width: ${range_width}
         fov_up: ${fov_up}
         fov_down: ${fov_down}
         ignore_index: ${ignore_index}
   predict_transforms:
-    _target_: autoware_ml.transforms.TransformsCompose
+    _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
-      - _target_: autoware_ml.transforms.segmentation3d.RangeInterpolation
+      - _target_: autoware_ml.transforms.segmentation3d.range_view.RangeInterpolation
         height: ${range_height}
         width: ${range_width}
         fov_up: ${fov_up}
         fov_down: ${fov_down}
         ignore_index: ${ignore_index}
   data_preprocessing:
-    _target_: autoware_ml.preprocessing.segmentation3d.FrustumRangePreprocessor
+    _target_: autoware_ml.preprocessing.segmentation3d.frustum_range.FrustumRangePreprocessor
     height: ${frustum_height}
     width: ${frustum_width}
     fov_up: ${fov_up}
@@ -105,9 +105,9 @@ datamodule:
     num_classes: ${num_classes}
 
 model:
-  _target_: autoware_ml.models.segmentation3d.FRNet
+  _target_: autoware_ml.models.segmentation3d.frnet.FRNet
   voxel_encoder:
-    _target_: autoware_ml.models.segmentation3d.encoders.FrustumFeatureEncoder
+    _target_: autoware_ml.models.segmentation3d.encoders.frnet.FrustumFeatureEncoder
     in_channels: 4
     feat_channels: [64, 128, 256, 256]
     with_distance: true
@@ -117,7 +117,7 @@ model:
     with_pre_norm: true
     feat_compression: 16
   backbone:
-    _target_: autoware_ml.models.segmentation3d.backbones.FRNetBackbone
+    _target_: autoware_ml.models.segmentation3d.backbones.frnet.FRNetBackbone
     in_channels: 16
     point_in_channels: 384
     output_shape:
@@ -132,7 +132,7 @@ model:
     norm_eps: 0.001
     norm_momentum: 0.01
   decode_head:
-    _target_: autoware_ml.models.segmentation3d.heads.FRHead
+    _target_: autoware_ml.models.segmentation3d.heads.frnet.FRHead
     in_channels: 128
     middle_channels: [128, 256, 128, 64]
     num_classes: ${num_classes}
@@ -141,7 +141,7 @@ model:
     norm_eps: 0.001
     norm_momentum: 0.01
   auxiliary_head:
-    - _target_: autoware_ml.models.segmentation3d.heads.FrustumHead
+    - _target_: autoware_ml.models.segmentation3d.heads.frnet.FrustumHead
       channels: 128
       num_classes: ${num_classes}
       ignore_index: ${ignore_index}
@@ -149,7 +149,7 @@ model:
       loss_ce_weight: 1.0
       loss_lovasz_weight: 1.5
       loss_boundary_weight: 1.0
-    - _target_: autoware_ml.models.segmentation3d.heads.FrustumHead
+    - _target_: autoware_ml.models.segmentation3d.heads.frnet.FrustumHead
       channels: 128
       num_classes: ${num_classes}
       ignore_index: ${ignore_index}
@@ -157,7 +157,7 @@ model:
       loss_ce_weight: 1.0
       loss_lovasz_weight: 1.5
       loss_boundary_weight: 1.0
-    - _target_: autoware_ml.models.segmentation3d.heads.FrustumHead
+    - _target_: autoware_ml.models.segmentation3d.heads.frnet.FrustumHead
       channels: 128
       num_classes: ${num_classes}
       ignore_index: ${ignore_index}
@@ -165,7 +165,7 @@ model:
       loss_ce_weight: 1.0
       loss_lovasz_weight: 1.5
       loss_boundary_weight: 1.0
-    - _target_: autoware_ml.models.segmentation3d.heads.FrustumHead
+    - _target_: autoware_ml.models.segmentation3d.heads.frnet.FrustumHead
       channels: 128
       num_classes: ${num_classes}
       ignore_index: ${ignore_index}

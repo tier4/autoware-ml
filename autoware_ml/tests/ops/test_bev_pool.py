@@ -17,7 +17,7 @@
 import pytest
 import torch
 
-from autoware_ml.ops.bev_pool import bev_pool
+from autoware_ml.ops.bev_pool.bev_pool import bev_pool
 
 from autoware_ml.tests.ops.conftest import (
     BEVGridConfig,

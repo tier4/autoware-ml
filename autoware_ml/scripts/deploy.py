@@ -15,6 +15,7 @@
 """Deployment entrypoint for exporting models to ONNX and TensorRT."""
 
 import logging
+import os
 from pathlib import Path
 
 import hydra
@@ -36,14 +37,16 @@ from autoware_ml.utils.deploy import (
     supports_export_stage,
     validate_cuda_available,
 )
-from autoware_ml.utils.mlflow import (
-    build_run_tags,
-    generate_run_name,
+from autoware_ml.utils.mlflow_helpers import (
+    AUTOWARE_ML_RUN_ID_ENV,
+    build_run_metadata,
     get_user_config_name,
+    load_run_context,
     log_config_params,
-    log_path_as_artifact,
+    prepare_run_context,
     resolve_lineage_context,
     should_enable_logger,
+    write_run_config_artifacts,
     write_run_metadata,
 )
 from autoware_ml.utils.runtime import (
@@ -78,38 +81,51 @@ def main(cfg: DictConfig) -> None:
     logger_enabled = should_enable_logger(cfg)
     mlflow_client: MlflowClient | None = None
     deploy_run_id: str | None = None
-    experiment_id: str | None = None
     experiment_name: str | None = None
     parent_run_id: str | None = None
 
     if logger_enabled:
         experiment_name, parent_run_id = resolve_lineage_context(config_name, checkpoint_path)
-        run_name = generate_run_name(config_name, work_dir, "deploy")
-        run_tags = build_run_tags(
-            config_name,
-            work_dir,
-            "deploy",
-            extra_tags={
-                "checkpoint_path": str(checkpoint_path),
-                "source_run_id": parent_run_id or "",
-            },
+        pre_created_run_id = os.environ.get(AUTOWARE_ML_RUN_ID_ENV)
+        if pre_created_run_id is not None:
+            run_context = load_run_context(cfg.logger.tracking_uri, pre_created_run_id)
+            if work_dir != run_context.hydra_dir:
+                raise RuntimeError(
+                    f"Hydra work directory '{work_dir}' does not match the pre-created MLflow "
+                    f"run directory '{run_context.hydra_dir}'."
+                )
+        else:
+            run_context = prepare_run_context(
+                cfg.logger.tracking_uri,
+                config_name,
+                hydra_dir=work_dir,
+                stage="deploy",
+                parent_run_id=parent_run_id,
+                experiment_name=experiment_name,
+                extra_tags={
+                    "checkpoint_path": str(checkpoint_path),
+                    "source_run_id": parent_run_id or "",
+                },
+            )
+        mlflow_client = MlflowClient(tracking_uri=run_context.tracking_uri)
+        deploy_run_id = run_context.run_id
+        experiment_name = run_context.experiment_name
+        write_run_config_artifacts(cfg, run_context.artifact_dir)
+        write_run_metadata(
+            run_context.artifact_dir,
+            build_run_metadata(
+                run_context,
+                config_name,
+                run_context.hydra_dir,
+                "deploy",
+                extra_metadata={
+                    "source_run_id": parent_run_id,
+                    "checkpoint_path": str(checkpoint_path),
+                },
+            ),
         )
-        mlflow_client = MlflowClient(tracking_uri=cfg.logger.tracking_uri)
-        experiment = mlflow_client.get_experiment_by_name(experiment_name)
-        experiment_id = (
-            mlflow_client.create_experiment(experiment_name)
-            if experiment is None
-            else experiment.experiment_id
-        )
-        if parent_run_id is not None:
-            run_tags["mlflow.parentRunId"] = parent_run_id
-        run_tags["mlflow.runName"] = run_name
-        deploy_run = mlflow_client.create_run(
-            experiment_id=experiment_id,
-            tags=run_tags,
-            run_name=run_name,
-        )
-        deploy_run_id = deploy_run.info.run_id
+    else:
+        run_context = None
 
     validate_cuda_available()
     configure_torch_runtime()
@@ -118,11 +134,22 @@ def main(cfg: DictConfig) -> None:
     logger.info("Using device: %s", device)
     logger.info("CUDA device: %s", torch.cuda.get_device_name(0))
 
+    configured_output_dir = cfg.get("output_dir", None)
+    if run_context is not None and configured_output_dir is None:
+        configured_output_dir = str(run_context.exports_dir)
     output_dir, onnx_path, engine_path = resolve_output_paths(
         checkpoint_path,
         cfg.get("output_name", None),
-        cfg.get("output_dir", None),
+        configured_output_dir,
     )
+    if run_context is not None and not output_dir.resolve().is_relative_to(
+        run_context.artifact_dir
+    ):
+        raise ValueError(
+            "When MLflow logging is enabled, deployment outputs must stay inside the MLflow "
+            f"artifact directory '{run_context.artifact_dir}'. "
+            "Leave output_dir unset to use the default exports directory."
+        )
     logger.info("Output directory: %s", output_dir)
     logger.info("ONNX output: %s", onnx_path)
     logger.info("TensorRT engine output: %s", engine_path)
@@ -189,27 +216,7 @@ def main(cfg: DictConfig) -> None:
                 build_tensorrt_engine(onnx_path, deploy_cfg, engine_path)
                 tensorrt_exported = True
 
-        metadata_path = write_run_metadata(
-            work_dir,
-            {
-                "run_id": deploy_run_id,
-                "experiment_id": experiment_id,
-                "experiment_name": experiment_name,
-                "config_name": config_name,
-                "work_dir": str(work_dir),
-                "stage": "deploy",
-                "source_run_id": parent_run_id,
-                "checkpoint_path": str(checkpoint_path),
-            },
-        )
-
         if mlflow_client is not None and deploy_run_id is not None:
-            log_path_as_artifact(mlflow_client, deploy_run_id, work_dir / ".hydra", "hydra")
-            log_path_as_artifact(mlflow_client, deploy_run_id, metadata_path, "metadata")
-            if onnx_exported:
-                log_path_as_artifact(mlflow_client, deploy_run_id, onnx_path, "exports")
-            if tensorrt_exported:
-                log_path_as_artifact(mlflow_client, deploy_run_id, engine_path, "exports")
             mlflow_client.set_terminated(
                 deploy_run_id,
                 status=RunStatus.to_string(RunStatus.FINISHED),

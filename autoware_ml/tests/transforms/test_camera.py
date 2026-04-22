@@ -18,10 +18,8 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 
-from autoware_ml.transforms.camera import (
-    CropAndScale,
-    UndistortImage,
-)
+from autoware_ml.transforms.camera.distortion import UndistortImage
+from autoware_ml.transforms.camera.resize import CropAndScale
 from autoware_ml.utils.calibration import CalibrationData
 
 

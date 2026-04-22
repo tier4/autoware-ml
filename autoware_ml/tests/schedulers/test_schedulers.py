@@ -17,10 +17,10 @@
 import pytest
 import torch
 
-from autoware_ml.utils.schedulers import (
-    CosineAnnealingLR,
-    CyclicCosineAnnealingLR,
-    CyclicMomentumScheduler,
+from autoware_ml.utils.schedulers.cosine_annealing import CosineAnnealingLR
+from autoware_ml.utils.schedulers.cyclic_cosine_annealing import CyclicCosineAnnealingLR
+from autoware_ml.utils.schedulers.cyclic_momentum import CyclicMomentumScheduler
+from autoware_ml.utils.schedulers.linear_warmup_cosine_annealing import (
     LinearWarmupCosineAnnealingLR,
 )
 

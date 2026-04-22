@@ -20,7 +20,7 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 
-from autoware_ml.transforms.camera_lidar import (
+from autoware_ml.transforms.camera_lidar.camera_lidar import (
     Affine,
     CalibrationMisalignment,
     LidarCameraFusion,

@@ -18,7 +18,7 @@ from pathlib import Path
 
 from mlflow.tracking import MlflowClient
 
-from autoware_ml.utils.mlflow import MLFLOW_PARENT_RUN_ID
+from autoware_ml.utils.mlflow_helpers import MLFLOW_PARENT_RUN_ID
 from autoware_ml.utils.mlflow_store import (
     export_experiment_from_db,
     export_experiment_to_store,
@@ -68,6 +68,11 @@ class TestExportExperiment:
         source_client.log_param(run_id, "batch_size", "2")
         source_client.log_metric(run_id, "mAP", 0.42, step=0, timestamp=1000)
         source_client.log_metric(run_id, "mAP", 0.51, step=1, timestamp=2000)
+        artifact_dir = source_dir / "artifact_source"
+        artifact_dir.mkdir(parents=True)
+        artifact_file = artifact_dir / "summary.txt"
+        artifact_file.write_text("ok", encoding="utf-8")
+        source_client.log_artifact(run_id, str(artifact_file), artifact_path="reports")
         source_client.set_terminated(run_id, status="FINISHED", end_time=3000)
 
         export_dir = tmp_path / "exported"
@@ -91,6 +96,16 @@ class TestExportExperiment:
         metric_history = target_client.get_metric_history(exported_run.info.run_id, "mAP")
         assert [metric.value for metric in metric_history] == [0.42, 0.51]
         assert exported_run.data.tags["stage"] == "train"
+        exported_artifact = (
+            export_dir
+            / "artifacts"
+            / SAMPLE_EXPERIMENT_NAME
+            / exported_run.info.run_id
+            / "artifacts"
+            / "reports"
+            / "summary.txt"
+        )
+        assert exported_artifact.read_text(encoding="utf-8") == "ok"
 
     def test_export_preserves_nested_run_relationships(self, tmp_path: Path) -> None:
         source_dir = tmp_path / "source_nested"
@@ -147,11 +162,15 @@ class TestExportExperiment:
         output_dir.mkdir()
         (output_dir / "mlflow.db").write_text("old-db", encoding="utf-8")
         (output_dir / "mlflow.db-shm").write_text("old-shm", encoding="utf-8")
+        artifacts_dir = output_dir / "artifacts"
+        artifacts_dir.mkdir()
+        (artifacts_dir / "old.txt").write_text("old-artifact", encoding="utf-8")
 
         target_db_path = prepare_export_output_dir(output_dir, override=True)
 
         assert target_db_path == output_dir / "mlflow.db"
         assert not (output_dir / "mlflow.db-shm").exists()
+        assert not artifacts_dir.exists()
 
     def test_export_from_db_raises_when_source_db_is_missing(self, tmp_path: Path) -> None:
         missing_db_path = tmp_path / "missing.db"

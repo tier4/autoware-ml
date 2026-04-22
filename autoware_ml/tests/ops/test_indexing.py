@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import torch
 
-from autoware_ml.ops.indexing import argsort, unique
+from autoware_ml.ops.indexing.operators import argsort, unique
 
 
 def test_unique_matches_torch_unique_contract() -> None:

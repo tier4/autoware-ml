@@ -29,10 +29,11 @@ import numpy as np
 import numpy.typing as npt
 from pyquaternion import Quaternion
 
-from autoware_ml.tools.dataset.base import DatasetGenerator
-from autoware_ml.tools.dataset.nuscenes.tasks import create_task
 from nuscenes.nuscenes import NuScenes
 from nuscenes.utils import splits
+
+from autoware_ml.tools.dataset.base import DatasetGenerator
+from autoware_ml.tools.dataset.nuscenes.tasks.registry import create_task
 
 logger = logging.getLogger(__name__)
 

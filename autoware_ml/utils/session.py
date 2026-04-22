@@ -37,6 +37,8 @@ import time
 from collections.abc import Sequence
 from pathlib import Path
 
+import click
+
 AUTOWARE_ML_SESSION_OPTION = "@autoware_ml_managed"
 AUTOWARE_ML_CHILD_PGID_OPTION = "@autoware_ml_child_pgid"
 TMUX_BASE_COMMAND = ["tmux", "-L", "autoware-ml", "-f", "/dev/null"]
@@ -45,7 +47,7 @@ _VIEWER_HIDE_CURSOR = "\033[?25l"
 _VIEWER_SHOW_CURSOR = "\033[?25h"
 
 
-class SessionCommandError(RuntimeError):
+class SessionCommandError(click.ClickException):
     """Signal that a managed session command could not be completed.
 
     The CLI converts this error into concise user-facing messages instead of

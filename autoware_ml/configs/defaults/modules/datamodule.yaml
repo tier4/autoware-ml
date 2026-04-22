@@ -22,12 +22,12 @@ datamodule:
     drop_last: false
     shuffle: false
   train_transforms:
-    _target_: autoware_ml.transforms.TransformsCompose
+    _target_: autoware_ml.transforms.base.TransformsCompose
   val_transforms:
-    _target_: autoware_ml.transforms.TransformsCompose
+    _target_: autoware_ml.transforms.base.TransformsCompose
   test_transforms:
-    _target_: autoware_ml.transforms.TransformsCompose
+    _target_: autoware_ml.transforms.base.TransformsCompose
   predict_transforms:
-    _target_: autoware_ml.transforms.TransformsCompose
+    _target_: autoware_ml.transforms.base.TransformsCompose
   data_preprocessing:
-    _target_: autoware_ml.preprocessing.DataPreprocessing
+    _target_: autoware_ml.preprocessing.base.DataPreprocessing

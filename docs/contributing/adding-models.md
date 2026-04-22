@@ -12,7 +12,7 @@ New models should inherit from `BaseModel`. The minimal contract is still the
 same two abstract methods:
 
 ```python
-from autoware_ml.models import BaseModel
+from autoware_ml.models.base import BaseModel
 
 class MyModel(BaseModel):
     def forward(self, **kwargs: Any) -> torch.Tensor | Sequence[torch.Tensor]:
@@ -48,7 +48,7 @@ from typing import Any
 import torch
 import torch.nn as nn
 
-from autoware_ml.models import BaseModel
+from autoware_ml.models.base import BaseModel
 
 
 class MyModel(BaseModel):
@@ -113,7 +113,7 @@ import pickle
 from typing import Any
 
 from autoware_ml.datamodule.base import DataModule, Dataset
-from autoware_ml.transforms import TransformsCompose
+from autoware_ml.transforms.base import TransformsCompose
 
 
 class MyDataset(Dataset):
@@ -229,7 +229,7 @@ datamodule:
 
   # GPU preprocessing (optional)
   data_preprocessing:
-    _target_: autoware_ml.preprocessing.DataPreprocessing
+    _target_: autoware_ml.preprocessing.base.DataPreprocessing
     pipeline: []
 
 model:
@@ -237,7 +237,7 @@ model:
   num_classes: 10
 
   encoder:
-    _target_: autoware_ml.models.common.backbones.ResNet18
+    _target_: autoware_ml.models.common.backbones.resnet.ResNet18
     in_channels: 3
 
   decoder:
@@ -306,29 +306,16 @@ class MyAugmentation(BaseTransform):
         return {"input_tensor": augmented}
 ```
 
-Expose the transform through the package `__init__.py` so configs can use the
-package path instead of the implementation filename:
-
-```python title="autoware_ml/transforms/my_transforms/__init__.py"
-from autoware_ml.transforms.my_transforms.my_transform import MyAugmentation
-
-__all__ = ["MyAugmentation"]
-```
-
 Add to config:
 
 ```yaml
 datamodule:
   train_transforms:
     pipeline:
-      - _target_: autoware_ml.transforms.my_transforms.MyAugmentation
+      - _target_: autoware_ml.transforms.my_transforms.my_transform.MyAugmentation
         p: 0.5
         intensity: 0.1
 ```
-
-This package-level import convention is the preferred public API throughout the
-repository. Implementation files should define the transform once, and only the
-subpackage `__init__.py` should re-export it.
 
 ## Step 6: Add Preprocessing (Optional)
 
@@ -354,23 +341,14 @@ class MyPreprocessingLayer(nn.Module):
         return {self.input_key: processed}
 ```
 
-Expose the preprocessing layer through the package `__init__.py` as the public
-entrypoint:
-
-```python title="autoware_ml/preprocessing/my_preprocessing/__init__.py"
-from autoware_ml.preprocessing.my_preprocessing.my_preprocessing import MyPreprocessingLayer
-
-__all__ = ["MyPreprocessingLayer"]
-```
-
 Add to config:
 
 ```yaml
 datamodule:
   data_preprocessing:
-    _target_: autoware_ml.preprocessing.DataPreprocessing
+    _target_: autoware_ml.preprocessing.base.DataPreprocessing
     pipeline:
-      - _target_: autoware_ml.preprocessing.my_preprocessing.MyPreprocessingLayer
+      - _target_: autoware_ml.preprocessing.my_preprocessing.my_preprocessing.MyPreprocessingLayer
         input_key: input_tensor
         scale: 1.0
 ```
@@ -411,7 +389,7 @@ autoware-ml train --config-name my_task/my_model/my_config
 # Deploy
 autoware-ml deploy \
     --config-name my_task/my_model/my_config \
-    +checkpoint=mlruns/my_task/my_model/my_config/<date>/<time>/checkpoints/last.ckpt
+    +checkpoint=mlruns/my_task/my_model/my_config/<run_id>/artifacts/checkpoints/last.ckpt
 ```
 
 ## Common Patterns

@@ -15,6 +15,7 @@
 """MLflow helper functions used by the CLI."""
 
 import logging
+import shutil
 import socket
 import subprocess
 import tempfile
@@ -25,7 +26,7 @@ from mlflow.entities import ViewType
 from mlflow.tracking import MlflowClient
 
 from autoware_ml.utils.cli.helpers import infer_user_config_name
-from autoware_ml.utils.mlflow import MLFLOW_PARENT_RUN_ID
+from autoware_ml.utils.mlflow_helpers import MLFLOW_PARENT_RUN_ID, artifact_uri_to_path
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +114,9 @@ def prepare_export_output_dir(output_dir: Path, override: bool) -> Path:
         )
 
     if override:
+        artifacts_dir = output_dir / "artifacts"
+        if artifacts_dir.exists():
+            shutil.rmtree(artifacts_dir)
         for sqlite_path in output_dir.glob("mlflow.db*"):
             if sqlite_path.is_file():
                 sqlite_path.unlink()
@@ -229,6 +233,14 @@ def populate_exported_run(
         end_time=source_run.info.end_time,
     )
 
+    source_artifact_dir = artifact_uri_to_path(source_run.info.artifact_uri)
+    target_artifact_dir = artifact_uri_to_path(
+        target_client.get_run(target_run_id).info.artifact_uri
+    )
+    if source_artifact_dir.exists():
+        target_artifact_dir.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(source_artifact_dir, target_artifact_dir, dirs_exist_ok=True)
+
 
 def export_experiment_to_store(
     source_tracking_uri: str,
@@ -263,6 +275,7 @@ def export_experiment_to_store(
     target_client = MlflowClient(tracking_uri=target_tracking_uri)
     target_experiment_id = target_client.create_experiment(
         name=source_experiment.name,
+        artifact_location=(output_dir / "artifacts" / source_experiment.name).resolve().as_uri(),
     )
 
     runs = source_client.search_runs(

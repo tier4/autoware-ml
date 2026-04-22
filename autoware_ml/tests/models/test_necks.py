@@ -18,7 +18,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from autoware_ml.models.common.necks import GlobalAveragePooling
+from autoware_ml.models.common.necks.global_average_pooling import GlobalAveragePooling
 
 
 class TestGlobalAveragePooling:

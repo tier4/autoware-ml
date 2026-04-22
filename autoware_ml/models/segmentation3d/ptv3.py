@@ -27,14 +27,12 @@ import torch
 import torch.nn as nn
 from torch.optim.lr_scheduler import LRScheduler
 
-from autoware_ml.losses.segmentation3d import LovaszLoss
-from autoware_ml.models.segmentation3d.backbones import (
-    Point,
-    PointTransformerV3Backbone,
-)
+from autoware_ml.losses.segmentation3d.lovasz import LovaszLoss
+from autoware_ml.models.segmentation3d.backbones.ptv3 import PointTransformerV3Backbone
+from autoware_ml.utils.point_cloud.structures import Point
 from autoware_ml.models.segmentation3d.backbones.ptv3 import Block
 from autoware_ml.models.segmentation3d.base import BaseSegmentationModel
-from autoware_ml.ops.indexing import argsort
+from autoware_ml.ops.indexing.operators import argsort
 from autoware_ml.utils.deploy import ExportSpec
 
 

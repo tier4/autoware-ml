@@ -17,6 +17,11 @@ nav = [
   { "Framework" = [
     { "Design" = "framework/design.md" },
     { "Identity" = "framework/identity.md" },
+    { "Troubleshooting" = "framework/troubleshooting.md" },
+  ]},
+  { "Databases" = [
+    { "Design" = "databases/design.md" },
+    { "T4Dataset" = "databases/t4dataset.md" },
   ]},
   { "User Guide" = [
     { "CLI Reference" = "user-guide/cli.md" },

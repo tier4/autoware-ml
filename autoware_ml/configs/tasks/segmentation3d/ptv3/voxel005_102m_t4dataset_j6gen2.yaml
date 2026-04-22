@@ -41,88 +41,88 @@ class_mapping:
   unpainted: ${ignore_index}
 
 datamodule:
-  _target_: autoware_ml.datamodule.t4dataset.T4Segmentation3DDataModule
+  _target_: autoware_ml.datamodule.t4dataset.segmentation3d.T4Segmentation3DDataModule
   data_root: ${oc.env:AUTOWARE_ML_DATA_PATH}/t4dataset
   train_ann_file: ${datamodule.data_root}/lidarseg/t4dataset_j6gen2_lidarseg_infos_train.pkl
   val_ann_file: ${datamodule.data_root}/lidarseg/t4dataset_j6gen2_lidarseg_infos_val.pkl
   test_ann_file: ${datamodule.data_root}/lidarseg/t4dataset_j6gen2_lidarseg_infos_test.pkl
   mix_prob: ${mix_prob}
   train_transforms:
-    _target_: autoware_ml.transforms.TransformsCompose
+    _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
-      - _target_: autoware_ml.transforms.point_cloud.LoadPointsFromFile
+      - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
         load_dim: 5
         use_dim: [0, 1, 2, 3]
-      - _target_: autoware_ml.transforms.segmentation3d.LoadSegAnnotations3D
+      - _target_: autoware_ml.transforms.segmentation3d.loading.LoadSegAnnotations3D
         class_mapping: ${class_mapping}
         ignore_index: ${ignore_index}
-      - _target_: autoware_ml.transforms.segmentation3d.PreparePointSegInput
-      - _target_: autoware_ml.transforms.point_cloud.RandomRotate
+      - _target_: autoware_ml.transforms.segmentation3d.formatting.PreparePointSegInput
+      - _target_: autoware_ml.transforms.point_cloud.geometry.RandomRotate
         angle: [-1.0, 1.0]
         axis: z
         center: [0.0, 0.0, 0.0]
         p: 0.5
-      - _target_: autoware_ml.transforms.point_cloud.RandomScale
+      - _target_: autoware_ml.transforms.point_cloud.geometry.RandomScale
         scale: [0.9, 1.1]
-      - _target_: autoware_ml.transforms.point_cloud.PointClip
+      - _target_: autoware_ml.transforms.point_cloud.crop.PointClip
         point_cloud_range: ${point_cloud_range}
-      - _target_: autoware_ml.transforms.point_cloud.RandomFlip
+      - _target_: autoware_ml.transforms.point_cloud.geometry.RandomFlip
         p: 0.5
-      - _target_: autoware_ml.transforms.point_cloud.RandomJitter
+      - _target_: autoware_ml.transforms.point_cloud.perturbation.RandomJitter
         sigma: 0.005
         clip: 0.02
-      - _target_: autoware_ml.transforms.point_cloud.GridSample
+      - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
         grid_size: ${grid_size}
         mode: train
         keys: [coord, strength, segment]
         return_grid_coord: true
-      - _target_: autoware_ml.transforms.point_cloud.SphereCrop
+      - _target_: autoware_ml.transforms.point_cloud.crop.SphereCrop
         point_max: 128000
         mode: random
-      - _target_: autoware_ml.transforms.common.ToTensor
-      - _target_: autoware_ml.transforms.common.Collect
+      - _target_: autoware_ml.transforms.common.tensor.ToTensor
+      - _target_: autoware_ml.transforms.common.packing.Collect
         keys: [coord, grid_coord, segment]
         feat_keys: [coord, strength]
   val_transforms:
-    _target_: autoware_ml.transforms.TransformsCompose
+    _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
-      - _target_: autoware_ml.transforms.point_cloud.LoadPointsFromFile
+      - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
         load_dim: 5
         use_dim: [0, 1, 2, 3]
-      - _target_: autoware_ml.transforms.segmentation3d.LoadSegAnnotations3D
+      - _target_: autoware_ml.transforms.segmentation3d.loading.LoadSegAnnotations3D
         class_mapping: ${class_mapping}
         ignore_index: ${ignore_index}
-      - _target_: autoware_ml.transforms.segmentation3d.PreparePointSegInput
-      - _target_: autoware_ml.transforms.point_cloud.PointClip
+      - _target_: autoware_ml.transforms.segmentation3d.formatting.PreparePointSegInput
+      - _target_: autoware_ml.transforms.point_cloud.crop.PointClip
         point_cloud_range: ${point_cloud_range}
-      - _target_: autoware_ml.transforms.point_cloud.GridSample
+      - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
         grid_size: ${grid_size}
         mode: train
         keys: [coord, strength, segment]
         return_grid_coord: true
-      - _target_: autoware_ml.transforms.common.ToTensor
-      - _target_: autoware_ml.transforms.common.Collect
+      - _target_: autoware_ml.transforms.common.tensor.ToTensor
+      - _target_: autoware_ml.transforms.common.packing.Collect
         keys: [coord, grid_coord, segment]
         feat_keys: [coord, strength]
   test_transforms: ${datamodule.val_transforms}
   predict_transforms:
-    _target_: autoware_ml.transforms.TransformsCompose
+    _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
-      - _target_: autoware_ml.transforms.point_cloud.LoadPointsFromFile
+      - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
         load_dim: 5
         use_dim: [0, 1, 2, 3]
-      - _target_: autoware_ml.transforms.segmentation3d.PreparePointSegInput
-      - _target_: autoware_ml.transforms.point_cloud.PointClip
+      - _target_: autoware_ml.transforms.segmentation3d.formatting.PreparePointSegInput
+      - _target_: autoware_ml.transforms.point_cloud.crop.PointClip
         point_cloud_range: ${point_cloud_range}
-      - _target_: autoware_ml.transforms.point_cloud.GridSample
+      - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
         grid_size: ${grid_size}
         mode: train
         keys: [coord, strength, segment]
         return_grid_coord: true
-      - _target_: autoware_ml.transforms.point_cloud.SphereCrop
+      - _target_: autoware_ml.transforms.point_cloud.crop.SphereCrop
         point_max: 4096
         mode: center
-      - _target_: autoware_ml.transforms.common.ToTensor
-      - _target_: autoware_ml.transforms.common.Collect
+      - _target_: autoware_ml.transforms.common.tensor.ToTensor
+      - _target_: autoware_ml.transforms.common.packing.Collect
         keys: [coord, grid_coord, segment]
         feat_keys: [coord, strength]

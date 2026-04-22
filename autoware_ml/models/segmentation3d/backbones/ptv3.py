@@ -29,10 +29,11 @@ import spconv.pytorch as spconv
 import torch
 import torch.nn as nn
 
-from autoware_ml.ops.indexing import argsort, unique
-from autoware_ml.ops.segment import segment_csr
-from autoware_ml.utils.point_cloud import Point, offset_to_bincount
-from autoware_ml.ops.spconv import SubMConv3d as ExportableSubMConv3d
+from autoware_ml.ops.indexing.operators import argsort, unique
+from autoware_ml.ops.segment.segment_csr import segment_csr
+from autoware_ml.utils.point_cloud.batching import offset_to_bincount
+from autoware_ml.utils.point_cloud.structures import Point
+from autoware_ml.ops.spconv.sparse_conv import SubMConv3d as ExportableSubMConv3d
 
 
 def load_flash_attn_module() -> Any:

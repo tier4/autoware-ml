@@ -9,13 +9,10 @@ import numpy.typing as npt
 
 from autoware_ml.datamodule.pipeline_context import PipelineContext
 from autoware_ml.transforms.base import BaseTransform, TransformsCompose
-from autoware_ml.transforms.segmentation3d import (
-    FrustumMix,
-    InstanceCopy,
-    LoadSegAnnotations3D,
-    PreparePointSegInput,
-    RangeInterpolation,
-)
+from autoware_ml.transforms.segmentation3d.formatting import PreparePointSegInput
+from autoware_ml.transforms.segmentation3d.loading import LoadSegAnnotations3D
+from autoware_ml.transforms.segmentation3d.mixing import FrustumMix, InstanceCopy
+from autoware_ml.transforms.segmentation3d.range_view import RangeInterpolation
 
 
 class _MixDataset:
