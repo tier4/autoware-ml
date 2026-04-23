@@ -18,5 +18,8 @@ defaults:
   - t4dataset/scenarios@scenarios.db_jpntaxi_base: detection3d/db_jpntaxi_base
   - t4dataset/scenarios@scenarios.db_largebus: detection3d/db_largebus
 
+# Number of features in the lidar pointcloud
+lidar_pointcloud_num_features: 5
+
 # Processor settings
 num_workers: 16

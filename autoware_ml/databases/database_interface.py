@@ -19,7 +19,7 @@ from typing import Sequence, Protocol
 from types import MappingProxyType
 
 from autoware_ml.databases.scenarios import Scenarios, ScenarioData
-from autoware_ml.databases.schemas import DatasetRecord
+from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord
 
 
 class DatabaseInterface(Protocol):
