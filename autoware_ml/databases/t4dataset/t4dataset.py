@@ -25,12 +25,12 @@ from types import MappingProxyType
 import polars as pl
 from tqdm import tqdm
 
-from autoware_ml.databases.database_interface import DatabaseInterface
 from autoware_ml.databases.base_database import BaseDatabase
-from autoware_ml.databases.t4dataset.t4scenarios import T4Scenarios
+from autoware_ml.databases.database_interface import DatabaseInterface
 from autoware_ml.databases.scenarios import ScenarioData
-from autoware_ml.databases.schemas import DatasetRecord
+from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord
 from autoware_ml.databases.t4dataset.t4records_generator import T4RecordsGenerator
+from autoware_ml.databases.t4dataset.t4scenarios import T4Scenarios
 
 logger = logging.getLogger(__name__)
 
@@ -155,26 +155,26 @@ class T4Dataset(BaseDatabase):
         # Start the timer
         start_time = time.perf_counter()
 
+        # 1) Get the polar schema
+        polars_schema = self.get_polars_schema()
+        logger.info(f"Parquet schema: {polars_schema}")
+
         # TODO (KokSeang): Read the cache if it exists, and return the records
 
-        # First, read all unique scenario data
+        # 2) Read all unique scenario data
         unique_scenario_data = self.get_unique_scenario_data()
         logger.info(
             f"Processing a total of {len(unique_scenario_data)} unique scenarios in T4Dataset"
         )
 
-        # Second, send the list to the multiprocessing or single processing the scenario
+        # 3) Send the list to the multiprocessing or single processing the scenario
         # samples/frames
         scenario_sample_records = self._run_t4records_generator(unique_scenario_data)
         logger.info(f"Processed {len(scenario_sample_records)} scenario sample records")
 
-        # Third, get the polar schema
-        polars_schema = self.get_polars_schema()
-        logger.info(f"Parquet schema: {polars_schema}")
-
-        # Fourth, save the scenario sample records to a polars .parquet file
+        # 4) Save the scenario sample records to a polars .parquet file
         # Dump to a list of dictionaries to make it safer since it's using Pydantic.BaseModel
-        scenario_sample_records = [record.model_dump() for record in scenario_sample_records]
+        scenario_sample_records = [record.to_dictionary() for record in scenario_sample_records]
         df = pl.DataFrame(scenario_sample_records, schema=polars_schema)
         df_hash = hashlib.sha256(str(self).encode("utf-8")).hexdigest()
         df_cache_path = self._cache_path / f"{self._cache_file_prefix_name}_{df_hash}.parquet"

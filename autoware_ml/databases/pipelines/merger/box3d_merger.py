@@ -10,7 +10,7 @@ import numpy.typing as npt
 
 from autoware_ml.common.enums.enums import Box3DFieldIndex
 from autoware_ml.databases.pipelines.box3d_pipeline import Boxes3DPipeline
-from autoware_ml.databases.t4dataset.t4sample_records import Boxes3DMetadata
+from autoware_ml.databases.schemas.box3d_metadata import Boxes3DMetadata
 
 
 class Box3DMerger(Boxes3DPipeline):
@@ -50,21 +50,19 @@ class Box3DMerger(Boxes3DPipeline):
             "Proximity distance threshold must be positive"
         )
 
-    def __call__(self, boxes_3d_metadata: Boxes3DMetadata) -> Boxes3DMetadata:
+    def __call__(self, boxes3d_metadata: Boxes3DMetadata) -> Boxes3DMetadata:
         """
         Process the boxes 3D metadata.
         """
-        merged_boxes_3d, merged_indices = self.merge(
-            boxes_3d=boxes_3d_metadata.boxes_3d_arrays,
-            boxes_3d_instance_ids=boxes_3d_metadata.boxes_3d_instance_ids,
-            boxes_3d_label_names=boxes_3d_metadata.boxes_3d_label_names,
-            boxes_3d_dataset_label_names=boxes_3d_metadata.boxes_3d_dataset_label_names,
-            boxes_3d_num_lidar_pointclouds=boxes_3d_metadata.boxes_3d_num_lidar_pointclouds,
-            boxes_3d_num_radar_pointclouds=boxes_3d_metadata.boxes_3d_num_radar_pointclouds,
-            boxes_3d_valid=boxes_3d_metadata.boxes_3d_valid,
-            boxes_3d_attributes=boxes_3d_metadata.boxes_3d_attributes,
-        )
-        return boxes_3d_metadata
+        merged_boxes_3d, merged_indices = self.merge(boxes3d_metadata=boxes3d_metadata)
+
+        # Remove the merged boxes from the boxes3d_metadata
+        boxes3d_metadata = boxes3d_metadata.remove_boxes(merged_indices)
+
+        # Merge the merged boxes with the boxes3d_metadata
+        merged_boxes3d_metadata = boxes3d_metadata.merge_boxes(merged_boxes_3d)
+
+        return merged_boxes3d_metadata
 
     def _check_boxes_overlap(
         self, first_box3d: npt.NDArray[np.float32], second_box3d: npt.NDArray[np.float32]
