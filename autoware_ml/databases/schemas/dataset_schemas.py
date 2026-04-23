@@ -46,41 +46,16 @@ class DatasetTableSchema:
       SCENARIO_NAME: Scenario name column.
 
       # LiDAR Schema
-      LIDAR_FRAME_ID: Lidar frame ID column.
-      LIDAR_SENSOR_ID: Lidar sensor ID column.
-      LIDAR_SENSOR_CHANNEL_NAME: Lidar sensor channel name column.
-      LIDAR_POINTCLOUD_PATH: Lidar pointcloud path column.
-      LIDAR_POINTCLOUD_SOURCE_PATH: Lidar pointcloud source path column.
-      LIDAR_POINTCLOUD_NUM_FEATURES: Lidar pointcloud num features column.
-      LIDAR_SENSOR_TO_EGO_POSE_MATRIX: Lidar sensor to ego pose matrix column.
-      LIDAR_FRAME_EGO_POSE_TO_GLOBAL_MATRIX: Lidar frame ego pose to global matrix column.
-
-      # Multisweep LiDAR Schema
-      LIDAR_SWEEP_FRAME_IDS: Lidar sweep frame IDs column.
-      LIDAR_SWEEP_TIMESTAMPS_SECONDS: Lidar sweep timestamps in seconds column.
-      LIDAR_SWEEP_POINTCLOUDS_PATHS: Lidar sweep pointclouds paths column.
-      LIDAR_SWEEP_FRAME_EGO_POSE_TO_GLOBAL_MATRICES: Lidar sweep frame ego pose to global matrices column.
-      LIDAR_SENSOR_TO_LIDAR_SWEEP_MATRICES: Lidar sensor to lidar sweep matrices column.
+      LIDAR_FRAMES: Lidar frames colum, which is a list of dictionaries to save metadata of a lidar
+        frame. It also saves lidar sweeps as each item here.
 
       # Lidar Sources Schema
-      LIDAR_SOURCE_CHANNEL_NAMES: Lidar source channel names column.
-      LIDAR_SOURCE_SENSOR_TOKENS: Lidar source sensor tokens column.
-      LIDAR_SOURCE_TRANSLATIONS: Lidar source translations column.
-      LIDAR_SOURCE_ROTATIONS: Lidar source rotations column.
-
-      # Lidarseg Schema
-      LIDARSEG_PTS_SEMANTIC_MASK_PATH: Lidarseg pts semantic mask path column.
+      LIDAR_SOURCES: Lidar sources column, which is a list of dictionaries to save metadata about
+        each lidar sensor.
 
       # Category Schema
-      CATEGORY_NAMES: Category names column.
-      CATEGORY_INDICES: Category indices column.
-
-      # 3D Bounding Boxes Schema
-      BOXES_3D_FIELDS: Boxes 3D fields column.
-      BOXED_3D_DATASET_LABEL_NAMES: Boxed 3d dataset label names column.
-      BOXED_3D_LABEL_NAMES: Boxed 3d label names column.
-      BOXED_3D_LABEL_INDICES: Boxed 3d label indices column.
-      BOXES_3D_INSTANCE_IDS: Boxes 3d instance IDs column.
+      CATEGORY_MAPPING: Category mapping column, which is a dictionary to save the mapping between
+        category names and category indices.
     """
 
     # Basic Schema
