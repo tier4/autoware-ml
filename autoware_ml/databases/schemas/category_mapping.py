@@ -39,11 +39,12 @@ class CategoryMappingDatasetSchema(BaseFieldSchema):
 
 class CategoryMappingDataModel(BaseModel, DataModelInterface):
     """
-    Category mapping data model that can be shared by multiple datasets.
+    Category mapping data model that can be shared by multiple datasets. It saves the mapping
+      between category names and category indices.
 
     Attributes:
-      category_name: Category name.
-      category_index: Category index.
+      category_names: List of category names.
+      category_indices: List of category indices.
     """
 
     model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)

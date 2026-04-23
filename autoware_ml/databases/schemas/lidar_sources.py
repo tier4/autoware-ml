@@ -34,8 +34,8 @@ class LidarSourceDataModel(BaseModel, DataModelInterface):
     Attributes:
       channel_name: Lidar source channel name.
       sensor_token: Lidar source sensor token.
-      translation: Lidar source translation.
-      rotation: Lidar source rotation.
+      translation: Lidar source translation (3, ).
+      rotation: Lidar source rotation (4, ).
     """
 
     model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)

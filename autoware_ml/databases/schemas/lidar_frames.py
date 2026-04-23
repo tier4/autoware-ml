@@ -45,7 +45,8 @@ class LidarFrameDatasetSchema(BaseFieldSchema):
 
 class LidarFrameDataModel(BaseModel, DataModelInterface):
     """
-    Lidar frame data model that can be shared by multiple datasets.
+    Lidar frame data model that can be shared by multiple datasets. It saves the metadata of a lidar
+    frame. Note that lidar sweeps also use this data model.
 
     Attributes:
       lidar_frame_id: Lidar frame ID.
@@ -63,7 +64,9 @@ class LidarFrameDataModel(BaseModel, DataModelInterface):
       lidar_frame_ego_pose_to_global_matrix: Transformation matrix from the ego pose of this lidar
         frame to the global frame.
       lidar_sensor_to_lidar_sweep_matrices: Transformation matrices from the main lidar sensor
-        to other lidar sweeps at this frame. Set to None if it's not available.
+        to other lidar sweeps at this frame.
+      lidar_pointcloud_semantic_mask_path: Lidar pointcloud semantic mask path. Set to None if it's
+        not available.
     """
 
     model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
@@ -71,8 +74,8 @@ class LidarFrameDataModel(BaseModel, DataModelInterface):
     lidar_frame_id: str
     lidar_keyframe: bool
     lidar_sensor_id: str
-    lidar_timestamp_seconds: float
     lidar_sensor_channel_name: str
+    lidar_timestamp_seconds: float
     lidar_pointcloud_path: str
     lidar_pointcloud_source_path: str | None
     lidar_pointcloud_num_features: int
