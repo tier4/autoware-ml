@@ -441,7 +441,7 @@ class T4RecordsGenerator:
 
         return lidar_source_data_models
 
-    def _extract_category_mapping(self) -> CategoryMappingDataModel | None:
+    def _extract_category_mapping(self) -> CategoryMappingDataModel:
         """
         Extract category metadata from a T4 Sample.
 
@@ -454,7 +454,10 @@ class T4RecordsGenerator:
 
         category_records = self.t4_devkit_dataset.get_table(SchemaName.CATEGORY)
         if not len(category_records):
-            return None
+            return CategoryMappingDataModel(
+                category_names=[],
+                category_indices=[],
+            )
 
         category_names = []
         category_indices = []
