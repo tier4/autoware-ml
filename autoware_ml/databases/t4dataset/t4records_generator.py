@@ -297,7 +297,7 @@ class T4RecordsGenerator:
             SchemaName.EGO_POSE, sensor_sample_data_record.ego_pose_token
         )
 
-        sensor_to_ego_pose_tranlation = sensor_calibrated_sensor_record.translation
+        sensor_to_ego_pose_translation = sensor_calibrated_sensor_record.translation
         sensor_to_ego_pose_rotation = sensor_calibrated_sensor_record.rotation
 
         sensor_frame_ego_pose_to_global_translation = sensor_ego_pose_record.translation
@@ -311,7 +311,7 @@ class T4RecordsGenerator:
 
         sensor_to_ego_pose_matrix = convert_quaternion_to_matrix(
             rotation_quaternion=sensor_to_ego_pose_rotation,
-            translation=sensor_to_ego_pose_tranlation,
+            translation=sensor_to_ego_pose_translation,
             convert_to_float32=False,
         )
 
