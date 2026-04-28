@@ -46,7 +46,7 @@ class DatasetTableSchema:
       SCENARIO_NAME: Scenario name column.
 
       # LiDAR Schema
-      LIDAR_FRAMES: Lidar frames colum, which is a list of dictionaries to save metadata of a lidar
+      LIDAR_FRAMES: Lidar frames column, which is a list of dictionaries to save metadata of a lidar
         frame. It also saves lidar sweeps as each item here.
 
       # Lidar Sources Schema

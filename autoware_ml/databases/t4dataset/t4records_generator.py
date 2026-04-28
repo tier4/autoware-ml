@@ -245,7 +245,7 @@ class T4RecordsGenerator:
             convert_to_float32=False,
         )
 
-        # Etxract lidar pointcloud semantic mask path
+        # Extract lidar pointcloud semantic mask path
         lidar_pointcloud_semantic_mask_path = self._extract_lidar_pointcloud_semantic_mask_path(
             sample_index=sample_index,
             calibrated_lidar_sample_data_token=calibrated_lidar_sample_data_token,
