@@ -24,7 +24,7 @@ class LidarSourceDatasetSchema(BaseFieldSchema):
     channel_name = DatasetTableColumn("channel_name", pl.String)
     sensor_token = DatasetTableColumn("sensor_token", pl.String)
     translation = DatasetTableColumn("translation", pl.Array(pl.Float32, shape=(3,)))
-    rotation = DatasetTableColumn("rotation", pl.Array(pl.Float32, shape=(4,)))
+    rotation = DatasetTableColumn("rotation", pl.Array(pl.Float32, shape=(3, 3)))
 
 
 class LidarSourceDataModel(BaseModel, DataModelInterface):
@@ -35,7 +35,7 @@ class LidarSourceDataModel(BaseModel, DataModelInterface):
       channel_name: Lidar source channel name.
       sensor_token: Lidar source sensor token.
       translation: Lidar source translation (3, ).
-      rotation: Lidar source rotation (4, ).
+      rotation: Lidar source rotation (3, 3).
     """
 
     model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
@@ -43,7 +43,7 @@ class LidarSourceDataModel(BaseModel, DataModelInterface):
     channel_name: str
     sensor_token: str
     translation: npt.NDArray[np.float64]
-    rotation: npt.NDArray[np.float64]
+    rotation: npt.NDArray[np.float64]  # (3, 3)
 
     @property
     def translation_fp32(self) -> npt.NDArray[np.float32]:

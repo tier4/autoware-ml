@@ -131,8 +131,8 @@ class DatasetRecord(BaseModel, DataModelInterface):
     sample_id: str
     sample_index: int
     timestamp_seconds: float
-    location: str
-    vehicle_type: str
+    location: str | None
+    vehicle_type: str | None
     scenario_name: str
 
     lidar_frames: Sequence[LidarFrameDataModel]
@@ -164,14 +164,14 @@ class DatasetRecord(BaseModel, DataModelInterface):
                 lidar_source.to_dictionary() for lidar_source in self.lidar_sources
             ]
         else:
-            data_model[DatasetTableSchema.LIDAR_SOURCES.name] = None
+            data_model[DatasetTableSchema.LIDAR_SOURCES.name] = []
 
         if self.category_mapping:
             data_model[DatasetTableSchema.CATEGORY_MAPPING.name] = (
                 self.category_mapping.to_dictionary()
             )
         else:
-            data_model[DatasetTableSchema.CATEGORY_MAPPING.name] = None
+            data_model[DatasetTableSchema.CATEGORY_MAPPING.name] = {}
 
         return data_model
 

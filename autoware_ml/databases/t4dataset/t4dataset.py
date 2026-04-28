@@ -43,7 +43,6 @@ class T4RecordsGeneratorWorkerParams:
 
     Attributes:
       database_root_path: Root path of the T4 database.
-      dataset_version: Version of the dataset.
       scenario_data: Scenario data.
       lidar_pointcloud_num_features: Number of features in the lidar pointcloud.
     """

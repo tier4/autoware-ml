@@ -75,13 +75,6 @@ class T4RecordsGenerator:
           sample_steps: Number of frames/samples to skip between each sample, set to 1
             if not skipping any samples/frames.
           lidar_pointcloud_num_features: Number of features of the lidar pointcloud.
-          label_remapping (MappingProxyType[str, int]): Remapping of the label names to another
-            label name.
-          filter_attributes (MappingProxyType[str, Sequence[str]]): 3D bounding boxes with the
-            class names and selected attributes in the filter_attributes will be filtered out.
-          merge_objects (MappingProxyType[str, Sequence[str, str]]): Mapping of the target labels
-            to the source labels to merge the 3D bounding boxes.
-
         """
 
         self.database_root_path = Path(database_root_path)
@@ -407,9 +400,6 @@ class T4RecordsGenerator:
     def _extract_lidar_sources(self) -> Sequence[LidarSourceDataModel]:
         """
         Extract lidar sources metadata from a T4 Sample.
-
-        Args:
-          sample: T4 Sample.
 
         Returns:
           LidarSourcesMetaData: Lidar sources metadata of the T4 sample.

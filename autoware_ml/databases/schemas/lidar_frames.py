@@ -87,7 +87,7 @@ class LidarFrameDataModel(BaseModel, DataModelInterface):
     lidar_pointcloud_semantic_mask_path: str | None
 
     @property
-    def lidar_pointcloud_relative_path(self: str) -> str:
+    def lidar_pointcloud_relative_path(self) -> str:
         """
         Parse lidar pointcloud path to {database_version}/{scene_id}/
         {dataset_version}/data/{lidar_token}/{frame}.bin from path.
@@ -99,7 +99,7 @@ class LidarFrameDataModel(BaseModel, DataModelInterface):
         return "/".join(self.lidar_pointcloud_path.split("/")[-6:])
 
     @property
-    def lidar_pointcloud_source_relative_path(self: str) -> str | None:
+    def lidar_pointcloud_source_relative_path(self) -> str | None:
         """
         Parse lidar pointcloud source path to {database_version}/{scene_id}/
         {dataset_version}/data/{lidar_token}/{frame}.bin from path.
@@ -113,7 +113,7 @@ class LidarFrameDataModel(BaseModel, DataModelInterface):
         return "/".join(self.lidar_pointcloud_source_path.split("/")[-6:])
 
     @property
-    def lidarseg_pointcloud_semantic_mask_relative_path(self: str) -> str | None:
+    def lidarseg_pointcloud_semantic_mask_relative_path(self) -> str | None:
         """
         Parse lidarseg pts semantic mask path to {database_version}/{scene_id}/
         {dataset_version}/data/{lidar_token}/{frame}.bin from path.
