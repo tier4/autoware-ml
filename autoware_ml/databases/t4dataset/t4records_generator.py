@@ -332,7 +332,7 @@ class T4RecordsGenerator:
         self, lidar_frame_data_model: LidarFrameDataModel
     ) -> Sequence[LidarFrameDataModel]:
         """
-        Extract multisweep lidar metadata from a T4 Sample.
+        Extract multi-sweep lidar metadata from a T4 Sample.
 
         Args:
             t4_sample_record_lidar_info: T4 Sample lidar metadata.
@@ -506,7 +506,7 @@ class T4RecordsGenerator:
             sample=sample, lidar_channel_name=lidar_channel_name, sample_index=sample_index
         )
 
-        # 3) Extract multisweep lidar information from the T4Dataset
+        # 3) Extract multi-sweep lidar information from the T4Dataset
         lidar_sweep_data_models = self._extract_lidar_sweeps(
             lidar_frame_data_model=lidar_frame_data_model
         )

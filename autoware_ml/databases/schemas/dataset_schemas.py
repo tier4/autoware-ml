@@ -114,7 +114,7 @@ class DatasetRecord(BaseModel, DataModelInterface):
       vehicle_type: Type of the vehicle.
 
       # LiDAR frame data
-      lidar_frames: List of lidar frame data models, including multisweep lidar frames.
+      lidar_frames: List of lidar frame data models, including multi-sweep lidar frames.
 
       # Lidar sources data
       lidar_sources: List of lidar source data models.
