@@ -25,12 +25,12 @@ from types import MappingProxyType
 import polars as pl
 from tqdm import tqdm
 
-from autoware_ml.databases.database_interface import DatabaseInterface
 from autoware_ml.databases.base_database import BaseDatabase
-from autoware_ml.databases.t4dataset.t4scenarios import T4Scenarios
+from autoware_ml.databases.database_interface import DatabaseInterface
 from autoware_ml.databases.scenarios import ScenarioData
-from autoware_ml.databases.schemas import DatasetRecord
+from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord
 from autoware_ml.databases.t4dataset.t4records_generator import T4RecordsGenerator
+from autoware_ml.databases.t4dataset.t4scenarios import T4Scenarios
 
 logger = logging.getLogger(__name__)
 
@@ -43,12 +43,13 @@ class T4RecordsGeneratorWorkerParams:
 
     Attributes:
       database_root_path: Root path of the T4 database.
-      dataset_version: Version of the dataset.
       scenario_data: Scenario data.
+      lidar_pointcloud_num_features: Number of features in the lidar pointcloud.
     """
 
     database_root_path: str
     scenario_data: ScenarioData
+    lidar_pointcloud_num_features: int
 
 
 def _apply_t4_records_generator(
@@ -69,6 +70,7 @@ def _apply_t4_records_generator(
         scenario_data=t4_records_generator_worker_params.scenario_data,
         sample_steps=t4_records_generator_worker_params.scenario_data.sample_steps,
         max_sweeps=t4_records_generator_worker_params.scenario_data.max_sweeps,
+        lidar_pointcloud_num_features=t4_records_generator_worker_params.lidar_pointcloud_num_features,
     )
     # Generate DatasetRecords
     return t4_records_generator.generate_dataset_records()
@@ -85,6 +87,7 @@ class T4Dataset(BaseDatabase):
         cache_path: str,
         cache_file_prefix_name: str,
         num_workers: int,
+        lidar_pointcloud_num_features: int,
     ) -> None:
         """
         Initialize T4 dataset. Please refer to the BaseDatabase class for more details.
@@ -96,6 +99,7 @@ class T4Dataset(BaseDatabase):
           cache_path: Path to cache the dataset records.
           cache_file_prefix_name: Prefix name of the cache file, it will be <cache_file_prefix_name>_<dataset_hash>.parquet
           num_workers: Number of workers to use for processing the dataset.
+          lidar_pointcloud_num_features: Number of features in the lidar pointcloud.
         """
 
         logger.info("Initializing T4 dataset...")
@@ -107,6 +111,7 @@ class T4Dataset(BaseDatabase):
             num_workers=num_workers,
         )
         self._scenarios = scenarios
+        self._lidar_pointcloud_num_features = lidar_pointcloud_num_features
 
     def __str__(self) -> str:
         """
@@ -151,24 +156,26 @@ class T4Dataset(BaseDatabase):
 
         # TODO (KokSeang): Read the cache if it exists, and return the records
 
-        # First, read all unique scenario data
+        # 1) Read all unique scenario data
         unique_scenario_data = self.get_unique_scenario_data()
         logger.info(
             f"Processing a total of {len(unique_scenario_data)} unique scenarios in T4Dataset"
         )
 
-        # Second, send the list to the multiprocessing or single processing the scenario
+        # 2) Send the list to the multiprocessing or single processing the scenario
         # samples/frames
         scenario_sample_records = self._run_t4records_generator(unique_scenario_data)
         logger.info(f"Processed {len(scenario_sample_records)} scenario sample records")
 
-        # Third, get the polar schema
+        # 3) Save the scenario sample records to a polars .parquet file
+        # Dump to a list of dictionaries to make it safer since it's using Pydantic.BaseModel
+        scenario_sample_records = [record.to_dictionary() for record in scenario_sample_records]
+
+        # 4) Get the polar schema
         polars_schema = self.get_polars_schema()
         logger.info(f"Parquet schema: {polars_schema}")
 
-        # Fourth, save the scenario sample records to a polars .parquet file
-        # Dump to a list of dictionaries to make it safer since it's using Pydantic.BaseModel
-        scenario_sample_records = [record.model_dump() for record in scenario_sample_records]
+        # 5) Save the scenario sample records to a polars .parquet file
         df = pl.DataFrame(scenario_sample_records, schema=polars_schema)
         df_hash = hashlib.sha256(str(self).encode("utf-8")).hexdigest()
         df_cache_path = self._cache_path / f"{self._cache_file_prefix_name}_{df_hash}.parquet"
@@ -201,6 +208,7 @@ class T4Dataset(BaseDatabase):
             T4RecordsGeneratorWorkerParams(
                 database_root_path=self._database_root_path,
                 scenario_data=scenario,
+                lidar_pointcloud_num_features=self._lidar_pointcloud_num_features,
             )
             for scenario in scenario_data.values()
         ]
