@@ -33,6 +33,7 @@ from autoware_ml.utils.cli import (
     complete_path_value,
     complete_session_command_value,
     complete_session_name_value,
+    find_latest_checkpoint_for_config,
     parse_extra_args,
     resolve_config_reference,
     run_lazy_script,
@@ -221,14 +222,44 @@ def train(
             autocompletion=complete_task_config,
         ),
     ],
+    resume: Annotated[
+        bool,
+        typer.Option(
+            "--resume",
+            help="Resume training from +checkpoint into the same MLflow run. If +checkpoint is omitted, use the most recent local last.ckpt for this config.",
+        ),
+    ] = False,
 ) -> None:
     """Run model training through the Hydra-backed training entrypoint.
 
     Args:
         ctx: Typer context containing additional Hydra overrides.
         config_name: Config name or config file path to train.
+        resume: Whether to resume training into the same MLflow run.
     """
-    sys.argv = [sys.argv[0]] + resolve_hydra_argv(config_name, "tasks", extra_args=ctx.args)
+    extra_args = list(ctx.args)
+    if resume:
+        if any(arg.startswith("model.init_checkpoint_path=") for arg in extra_args):
+            raise typer.BadParameter(
+                "Do not pass model.init_checkpoint_path when using --resume; checkpoint restore supersedes initialization."
+            )
+
+        has_checkpoint_arg = any(
+            arg.startswith("+checkpoint=") or arg.startswith("checkpoint=") for arg in extra_args
+        )
+        hydra_overrides = ["model.init_checkpoint_path=null", "+mlflow_resume_run=true"]
+        if not has_checkpoint_arg:
+            checkpoint_path = find_latest_checkpoint_for_config(config_name, "tasks")
+            hydra_overrides.insert(0, f"+checkpoint={checkpoint_path}")
+    else:
+        hydra_overrides = None
+
+    sys.argv = [sys.argv[0]] + resolve_hydra_argv(
+        config_name,
+        "tasks",
+        extra_args=extra_args,
+        hydra_overrides=hydra_overrides,
+    )
 
     run_lazy_script("autoware_ml.scripts.train", "main")
 

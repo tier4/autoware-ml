@@ -151,6 +151,46 @@ def infer_user_config_name(config_value: str, prefix: str) -> str:
     return resolved_config_name.removeprefix(f"{prefix}/")
 
 
+def find_latest_checkpoint_for_config(
+    config_value: str,
+    prefix: str,
+    *,
+    runs_root: Path | None = None,
+    checkpoint_name: str = "last.ckpt",
+) -> Path:
+    """Return the newest checkpoint for a user-facing config.
+
+    Args:
+        config_value: Config value from CLI, either a bundled config path or a filesystem path.
+        prefix: Bundled config namespace prefix such as ``tasks``.
+        runs_root: Optional root directory containing Hydra run outputs. Defaults to
+            ``Path.cwd() / "mlruns"``.
+        checkpoint_name: Checkpoint filename to locate within each run directory.
+
+    Returns:
+        Absolute path to the newest matching checkpoint.
+
+    Raises:
+        FileNotFoundError: Raised when no matching checkpoint is found.
+    """
+    user_config_name = infer_user_config_name(config_value, prefix)
+    search_root = (runs_root or (Path.cwd() / "mlruns")) / user_config_name
+    candidates = sorted(
+        (
+            path
+            for path in search_root.glob(f"*/*/checkpoints/{checkpoint_name}")
+            if path.is_file()
+        ),
+        key=lambda path: (path.parents[2].name, path.parents[1].name, path.stat().st_mtime),
+        reverse=True,
+    )
+    if not candidates:
+        raise FileNotFoundError(
+            f"No checkpoint named '{checkpoint_name}' found for config '{user_config_name}' under {search_root}."
+        )
+    return candidates[0]
+
+
 def list_config_names(prefix: str) -> list[str]:
     """List bundled config names without YAML suffixes for shell completion.
 

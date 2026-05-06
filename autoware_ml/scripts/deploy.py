@@ -37,7 +37,10 @@ from autoware_ml.utils.deploy import (
     validate_cuda_available,
 )
 from autoware_ml.utils.mlflow import (
+    build_dataset_metadata,
+    build_dataset_tags,
     build_run_tags,
+    build_stage_metadata,
     generate_run_name,
     get_user_config_name,
     log_config_params,
@@ -74,6 +77,7 @@ def main(cfg: DictConfig) -> None:
     checkpoint_path = Path(cfg.checkpoint)
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
+    dataset_metadata = build_dataset_metadata(cfg)
 
     logger_enabled = should_enable_logger(cfg)
     mlflow_client: MlflowClient | None = None
@@ -90,6 +94,7 @@ def main(cfg: DictConfig) -> None:
             work_dir,
             "deploy",
             extra_tags={
+                **build_dataset_tags(cfg),
                 "checkpoint_path": str(checkpoint_path),
                 "source_run_id": parent_run_id or "",
             },
@@ -191,16 +196,17 @@ def main(cfg: DictConfig) -> None:
 
         metadata_path = write_run_metadata(
             work_dir,
-            {
-                "run_id": deploy_run_id,
-                "experiment_id": experiment_id,
-                "experiment_name": experiment_name,
-                "config_name": config_name,
-                "work_dir": str(work_dir),
-                "stage": "deploy",
-                "source_run_id": parent_run_id,
-                "checkpoint_path": str(checkpoint_path),
-            },
+            build_stage_metadata(
+                run_id=deploy_run_id,
+                experiment_id=experiment_id,
+                experiment_name=experiment_name or "",
+                config_name=config_name,
+                work_dir=work_dir,
+                stage="deploy",
+                source_run_id=parent_run_id,
+                checkpoint_path=checkpoint_path,
+                dataset_metadata=dataset_metadata,
+            ),
         )
 
         if mlflow_client is not None and deploy_run_id is not None:

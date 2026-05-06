@@ -14,7 +14,7 @@ num_classes: 13
 
 datamodule:
   train_dataloader_cfg:
-    batch_size: 64
+    batch_size: 16
     num_workers: 8
     persistent_workers: true
   val_dataloader_cfg:

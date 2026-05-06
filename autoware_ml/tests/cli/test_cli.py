@@ -14,6 +14,7 @@
 
 """Unit tests for CLI utilities."""
 
+import sys
 from pathlib import Path
 from subprocess import CompletedProcess
 from unittest.mock import patch
@@ -29,6 +30,7 @@ from autoware_ml.utils.cli import (
     complete_session_command_value,
     complete_session_name_value,
     expand_config_path,
+    find_latest_checkpoint_for_config,
     parse_extra_args,
     resolve_config_reference,
 )
@@ -226,6 +228,39 @@ class TestCompleteConfigValue:
         assert "./local.yaml" not in completions
 
 
+class TestFindLatestCheckpointForConfig:
+    """Tests for latest-checkpoint resolution."""
+
+    def test_find_latest_checkpoint_for_config(self, tmp_path: Path, monkeypatch) -> None:
+        older = (
+            tmp_path
+            / "mlruns"
+            / SAMPLE_CONFIG_NAME
+            / "2026-03-17"
+            / "09-00-00"
+            / "checkpoints"
+            / "last.ckpt"
+        )
+        newer = (
+            tmp_path
+            / "mlruns"
+            / SAMPLE_CONFIG_NAME
+            / "2026-03-18"
+            / "10-00-00"
+            / "checkpoints"
+            / "last.ckpt"
+        )
+        older.parent.mkdir(parents=True)
+        newer.parent.mkdir(parents=True)
+        older.write_text("older", encoding="utf-8")
+        newer.write_text("newer", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        latest = find_latest_checkpoint_for_config(SAMPLE_CONFIG_NAME, "tasks")
+
+        assert latest == newer
+
+
 class TestAdjustArgv:
     """Tests for adjust_argv."""
 
@@ -333,6 +368,55 @@ class TestCliCommands:
             export_dir=None,
             override=False,
         )
+
+    def test_train_resume_resolves_latest_checkpoint(self) -> None:
+        with (
+            patch(
+                "autoware_ml.cli.cli.find_latest_checkpoint_for_config",
+                return_value=Path("/tmp/last.ckpt"),
+            ) as latest_checkpoint_mock,
+            patch("autoware_ml.cli.cli.run_lazy_script") as run_lazy_script_mock,
+        ):
+            result = self.runner.invoke(
+                app,
+                [
+                    "train",
+                    "--config-name",
+                    SAMPLE_CONFIG_NAME,
+                    "--resume",
+                    "trainer.max_epochs=2",
+                ],
+            )
+
+        assert result.exit_code == 0
+        latest_checkpoint_mock.assert_called_once_with(SAMPLE_CONFIG_NAME, "tasks")
+        assert "+checkpoint=/tmp/last.ckpt" in sys.argv
+        assert "model.init_checkpoint_path=null" in sys.argv
+        assert "+mlflow_resume_run=true" in sys.argv
+        run_lazy_script_mock.assert_called_once_with("autoware_ml.scripts.train", "main")
+
+    def test_train_resume_accepts_explicit_checkpoint(self) -> None:
+        with (
+            patch("autoware_ml.cli.cli.find_latest_checkpoint_for_config") as latest_checkpoint_mock,
+            patch("autoware_ml.cli.cli.run_lazy_script") as run_lazy_script_mock,
+        ):
+            result = self.runner.invoke(
+                app,
+                [
+                    "train",
+                    "--config-name",
+                    SAMPLE_CONFIG_NAME,
+                    "--resume",
+                    "+checkpoint=/tmp/manual.ckpt",
+                ],
+            )
+
+        assert result.exit_code == 0
+        latest_checkpoint_mock.assert_not_called()
+        assert "+checkpoint=/tmp/manual.ckpt" in sys.argv
+        assert "model.init_checkpoint_path=null" in sys.argv
+        assert "+mlflow_resume_run=true" in sys.argv
+        run_lazy_script_mock.assert_called_once_with("autoware_ml.scripts.train", "main")
 
     def test_create_dataset_runs_runner(self) -> None:
         """Dataset generation should dispatch through the dataset tooling package."""

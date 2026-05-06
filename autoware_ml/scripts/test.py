@@ -38,11 +38,15 @@ from autoware_ml.utils.runtime import (
     set_seed,
 )
 from autoware_ml.utils.mlflow import (
+    build_dataset_metadata,
+    build_dataset_tags,
     build_run_tags,
+    build_stage_metadata,
     configure_logger,
     create_child_run,
     generate_run_name,
     get_user_config_name,
+    log_coco_dataset_inputs,
     log_path_as_artifact,
     resolve_lineage_context,
     should_enable_logger,
@@ -82,6 +86,7 @@ def main(cfg: DictConfig):
     if checkpoint_path is None:
         raise ValueError("Checkpoint path must be provided for testing.")
     checkpoint_path = Path(checkpoint_path)
+    dataset_metadata = build_dataset_metadata(cfg)
     experiment_name, parent_run_id = resolve_lineage_context(config_name, checkpoint_path)
     run_name = generate_run_name(config_name, work_dir, "test")
     run_tags = build_run_tags(
@@ -89,6 +94,7 @@ def main(cfg: DictConfig):
         work_dir,
         "test",
         extra_tags={
+            **build_dataset_tags(cfg),
             "checkpoint_path": str(checkpoint_path),
             "source_run_id": parent_run_id or "",
         },
@@ -106,6 +112,15 @@ def main(cfg: DictConfig):
         )
         configure_logger(cfg.logger, experiment_name, run_name, run_tags, run_id=child_run_id)
         trainer_logger = hydra.utils.instantiate(cfg.logger)
+        if isinstance(trainer_logger, MLFlowLogger):
+            log_coco_dataset_inputs(
+                trainer_logger.experiment,
+                trainer_logger.run_id,
+                cfg,
+                "test",
+                work_dir,
+                compare_to_run_id=parent_run_id,
+            )
 
     logger.info("Instantiating trainer...")
     trainer: L.Trainer = instantiate_trainer(cfg, callbacks, trainer_logger, work_dir)
@@ -123,15 +138,17 @@ def main(cfg: DictConfig):
     if isinstance(trainer_logger, MLFlowLogger):
         metadata_path = write_run_metadata(
             work_dir,
-            {
-                "run_id": trainer_logger.run_id,
-                "experiment_id": trainer_logger.experiment_id,
-                "experiment_name": experiment_name,
-                "config_name": config_name,
-                "work_dir": str(work_dir),
-                "stage": "test",
-                "source_run_id": parent_run_id,
-            },
+            build_stage_metadata(
+                run_id=trainer_logger.run_id,
+                experiment_id=trainer_logger.experiment_id,
+                experiment_name=experiment_name,
+                config_name=config_name,
+                work_dir=work_dir,
+                stage="test",
+                source_run_id=parent_run_id,
+                checkpoint_path=checkpoint_path,
+                dataset_metadata=dataset_metadata,
+            ),
         )
         client = trainer_logger.experiment
         log_path_as_artifact(client, trainer_logger.run_id, work_dir / ".hydra", "hydra")
