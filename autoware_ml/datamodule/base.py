@@ -168,7 +168,7 @@ class DataModule(L.LightningDataModule, ABC):
 
     def __init__(
         self,
-        collation_map: Mapping[str, CollationStrategy] = {},
+        collation_map: Mapping[str, CollationStrategy] | None = None,
         train_transforms: TransformsCompose | None = None,
         val_transforms: TransformsCompose | None = None,
         test_transforms: TransformsCompose | None = None,
@@ -196,7 +196,7 @@ class DataModule(L.LightningDataModule, ABC):
         """
         super().__init__()
 
-        self.collation_map: dict[str, CollationStrategy] = dict(collation_map)
+        self.collation_map: dict[str, CollationStrategy] = dict(collation_map or {})
         # TransformsCompose for each dataset split
         self.train_transforms: TransformsCompose = train_transforms
         self.val_transforms: TransformsCompose = val_transforms
