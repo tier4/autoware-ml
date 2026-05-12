@@ -153,7 +153,8 @@ class PointSequential(PointModule):
                             input_data.feat
                         )
                 elif isinstance(input_data, spconv.SparseConvTensor):
-                    input_data = input_data.replace_feature(module(input_data.features))
+                    if input_data.indices.shape[0] != 0:
+                        input_data = input_data.replace_feature(module(input_data.features))
                 else:
                     input_data = module(input_data)
         return input_data
@@ -405,7 +406,12 @@ class SerializedAttention(PointModule):
         head_count = self.num_heads
         if not self.enable_flash:
             min_points = int(offset_to_bincount(point.offset).min().item())
-            self.patch_size = max(1, min(self.patch_size_max, min_points))
+            if self.export_mode and min_points < self.patch_size_max:
+                raise ValueError(
+                    "PTv3 export mode requires each sample to have at least "
+                    f"{self.patch_size_max} serialized points, but found {min_points}."
+                )
+            self.patch_size = self.patch_size_max if self.export_mode else min_points
         patch_size = self.patch_size
         channel_count = self.channels
         pad, unpad, cu_seqlens = self._get_padding_and_inverse(point)
@@ -952,9 +958,6 @@ class PointTransformerV3Backbone(PointModule):
     def set_serialization_order(self, order: Sequence[str]) -> None:
         """Update serialization order and reassign block order indices.
 
-        This is mainly used by deployment code, where PTv3 export follows a
-        narrower AWML-compatible serialization contract than training.
-
         Args:
             order: Serialization orders used by the backbone.
         """
@@ -983,7 +986,16 @@ class PointTransformerV3Backbone(PointModule):
         Returns:
             Export-ready PTv3 backbone copy.
         """
-        export_backbone = deepcopy(self).eval()
+        loaded_flash_modules: list[tuple[SerializedAttention, Any]] = []
+        for module in self.modules():
+            if isinstance(module, SerializedAttention) and module.flash_attn is not None:
+                loaded_flash_modules.append((module, module.flash_attn))
+                module.flash_attn = None
+        try:
+            export_backbone = deepcopy(self).eval()
+        finally:
+            for module, flash_attn in loaded_flash_modules:
+                module.flash_attn = flash_attn
         export_backbone.set_serialization_order(order)
         export_backbone.shuffle_orders = False
         replace_submconv3d_for_export(export_backbone)

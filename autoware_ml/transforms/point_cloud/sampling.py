@@ -140,29 +140,55 @@ class GridSample(BaseTransform):
     """Subsample points by selecting representatives per grid cell."""
 
     _required_keys = ["coord"]
+    _HASH_FUNCTIONS = {
+        "fnv": "fnv_hash_vec",
+        "ravel": "ravel_hash_vec",
+    }
 
     def __init__(
         self,
         grid_size: float,
         mode: str,
         keys: Sequence[str],
+        hash_type: str = "fnv",
         return_grid_coord: bool = False,
         return_inverse: bool = False,
+        return_min_coord: bool = False,
+        return_displacement: bool = False,
+        project_displacement: bool = False,
     ) -> None:
         """Initialize the grid sampling transform.
 
         Args:
             grid_size: Grid cell size used for subsampling.
-            mode: Sampling mode, typically ``train`` or ``test``.
+            hash_type: Hash type used to group voxel coordinates.
+            mode: Sampling mode. ``train`` picks a random representative per
+                voxel. ``test`` picks a deterministic representative per voxel.
             keys: Sample keys subsampled together with coordinates.
             return_grid_coord: Whether to expose sampled grid coordinates.
             return_inverse: Whether to expose inverse voxel indices.
+            return_min_coord: Whether to expose the voxelized minimum
+                coordinate in world space.
+            return_displacement: Whether to expose per-point displacement to the
+                voxel center.
+            project_displacement: Whether to project displacement to normals.
         """
-        self.grid_size = grid_size
+        self.grid_size = np.asarray(grid_size, dtype=np.float32)
+        if hash_type not in self._HASH_FUNCTIONS:
+            raise ValueError(
+                f"Unsupported GridSample hash_type: {hash_type}. "
+                f"Expected one of {sorted(self._HASH_FUNCTIONS)}."
+            )
+        self.hash = getattr(self, self._HASH_FUNCTIONS[hash_type])
+        if mode not in {"train", "test"}:
+            raise ValueError(f"Unsupported GridSample mode: {mode}")
         self.mode = mode
         self.keys = tuple(keys)
         self.return_grid_coord = return_grid_coord
         self.return_inverse = return_inverse
+        self.return_min_coord = return_min_coord
+        self.return_displacement = return_displacement
+        self.project_displacement = project_displacement
 
     def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
         """Subsample points by selecting representatives per grid cell.
@@ -173,28 +199,133 @@ class GridSample(BaseTransform):
         Returns:
             Updated sample dictionary.
         """
-        grid_coord = np.floor(input_dict["coord"] / self.grid_size).astype(np.int32)
+        scaled_coord = input_dict["coord"].astype(np.float32) / self.grid_size.astype(np.float32)
+        grid_coord = np.floor(scaled_coord).astype(np.int64)
         min_coord = grid_coord.min(axis=0)
-        grid_coord = grid_coord - min_coord
-        _, inverse, counts = np.unique(grid_coord, axis=0, return_inverse=True, return_counts=True)
-
+        grid_coord -= min_coord
+        scaled_coord -= min_coord
+        min_coord_world = min_coord.astype(np.float32) * self.grid_size.astype(np.float32)
+        key = self.hash(grid_coord)
+        sort_indices = np.argsort(key)
+        sorted_key = key[sort_indices]
+        _, inverse, counts = np.unique(sorted_key, return_inverse=True, return_counts=True)
         if self.mode == "train":
-            voxel_starts = np.cumsum(np.concatenate([[0], counts[:-1]]))
-            order = np.argsort(inverse, kind="stable")
-            pick = voxel_starts + np.random.randint(0, counts)
-            selected = order[pick]
-        else:
-            _, selected = np.unique(inverse, return_index=True)
-            selected = np.sort(selected)
+            return self._transform_train(
+                input_dict,
+                grid_coord,
+                scaled_coord,
+                min_coord_world,
+                sort_indices,
+                inverse,
+                counts,
+            )
+        return self._transform_test(
+            input_dict,
+            grid_coord,
+            scaled_coord,
+            min_coord_world,
+            sort_indices,
+            inverse,
+            counts,
+        )
 
+    def _transform_train(
+        self,
+        input_dict: dict[str, Any],
+        grid_coord: np.ndarray,
+        scaled_coord: np.ndarray,
+        min_coord_world: np.ndarray,
+        sort_indices: np.ndarray,
+        inverse: np.ndarray,
+        counts: np.ndarray,
+    ) -> dict[str, Any]:
+        """Apply train-time voxel subsampling."""
+        selection = np.cumsum(np.insert(counts, 0, 0)[:-1]) + np.floor(
+            np.random.random(counts.size) * counts
+        ).astype(np.int64)
+        unique_indices = sort_indices[selection]
+
+        if "sampled_index" in input_dict:
+            unique_indices = np.unique(np.append(unique_indices, input_dict["sampled_index"]))
+            mask = np.zeros_like(input_dict["segment"]).astype(bool)
+            mask[input_dict["sampled_index"]] = True
+            input_dict["sampled_index"] = np.where(mask[unique_indices])[0]
+
+        if self.return_inverse:
+            input_dict["inverse"] = np.zeros_like(inverse)
+            input_dict["inverse"][sort_indices] = inverse
+        if self.return_grid_coord:
+            input_dict["grid_coord"] = grid_coord[unique_indices].astype(np.int32)
+        if self.return_min_coord:
+            input_dict["min_coord"] = min_coord_world.reshape(1, 3)
+        if self.return_displacement:
+            displacement = scaled_coord - grid_coord - 0.5
+            if self.project_displacement:
+                displacement = np.sum(displacement * input_dict["normal"], axis=-1, keepdims=True)
+            input_dict["displacement"] = displacement[unique_indices]
         for key in self.keys:
             if key in input_dict:
-                input_dict[key] = input_dict[key][selected]
-        if self.return_grid_coord:
-            input_dict["grid_coord"] = grid_coord[selected]
-        if self.return_inverse:
-            input_dict["inverse"] = inverse
+                input_dict[key] = input_dict[key][unique_indices]
         return input_dict
+
+    def _transform_test(
+        self,
+        input_dict: dict[str, Any],
+        grid_coord: np.ndarray,
+        scaled_coord: np.ndarray,
+        min_coord_world: np.ndarray,
+        sort_indices: np.ndarray,
+        inverse: np.ndarray,
+        counts: np.ndarray,
+    ) -> dict[str, Any]:
+        """Apply deterministic voxel subsampling for evaluation and deployment."""
+        selection = np.cumsum(np.insert(counts, 0, 0)[:-1])
+        unique_indices = sort_indices[selection]
+
+        if self.return_inverse:
+            input_dict["inverse"] = np.zeros_like(inverse)
+            input_dict["inverse"][sort_indices] = inverse
+        if self.return_grid_coord:
+            input_dict["grid_coord"] = grid_coord[unique_indices].astype(np.int32)
+        if self.return_min_coord:
+            input_dict["min_coord"] = min_coord_world.reshape(1, 3)
+        if self.return_displacement:
+            displacement = scaled_coord - grid_coord - 0.5
+            if self.project_displacement:
+                displacement = np.sum(displacement * input_dict["normal"], axis=-1, keepdims=True)
+            input_dict["displacement"] = displacement[unique_indices]
+        for key in self.keys:
+            if key in input_dict:
+                input_dict[key] = input_dict[key][unique_indices]
+        return input_dict
+
+    @staticmethod
+    def ravel_hash_vec(arr: np.ndarray) -> np.ndarray:
+        """Hash integer coordinates with a dense raveled indexing scheme."""
+        if arr.ndim != 2:
+            raise ValueError("GridSample hashing expects a 2D coordinate array.")
+        arr = arr.copy()
+        arr -= arr.min(0)
+        arr = arr.astype(np.uint64, copy=False)
+        arr_max = arr.max(0).astype(np.uint64) + 1
+        keys = np.zeros(arr.shape[0], dtype=np.uint64)
+        for axis_index in range(arr.shape[1] - 1):
+            keys += arr[:, axis_index]
+            keys *= arr_max[axis_index + 1]
+        keys += arr[:, -1]
+        return keys
+
+    @staticmethod
+    def fnv_hash_vec(arr: np.ndarray) -> np.ndarray:
+        """Hash integer coordinates with FNV64-1A."""
+        if arr.ndim != 2:
+            raise ValueError("GridSample hashing expects a 2D coordinate array.")
+        arr = arr.copy().astype(np.uint64, copy=False)
+        hashed = np.uint64(14695981039346656037) * np.ones(arr.shape[0], dtype=np.uint64)
+        for axis_index in range(arr.shape[1]):
+            hashed *= np.uint64(1099511628211)
+            hashed = np.bitwise_xor(hashed, arr[:, axis_index])
+        return hashed
 
 
 def _trilinear_interpolate(

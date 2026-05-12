@@ -24,8 +24,7 @@ from mlflow.entities import RunStatus
 from mlflow.tracking import MlflowClient
 from omegaconf import DictConfig, OmegaConf
 import torch
-
-from autoware_ml.utils.checkpoints import load_model_from_checkpoint
+from autoware_ml.utils.checkpoints import apply_matching_weights, load_model_from_checkpoint
 from autoware_ml.utils.deploy import (
     build_tensorrt_engine,
     export_to_onnx,
@@ -64,7 +63,7 @@ _CONFIG_PATH = get_config_path()
 @hydra.main(version_base=None, config_path=_CONFIG_PATH)
 def main(cfg: DictConfig) -> None:
     """Export a configured model checkpoint for deployment."""
-    if "checkpoint" not in cfg:
+    if cfg.get("checkpoint", None) is None:
         raise ValueError(
             "Checkpoint must be specified (e.g., +checkpoint=path/to/checkpoint.ckpt)."
         )
@@ -168,15 +167,28 @@ def main(cfg: DictConfig) -> None:
 
         logger.info("Instantiating model...")
         model: L.LightningModule = hydra.utils.instantiate(cfg.model)
+        model.set_data_preprocessing(hydra.utils.instantiate(cfg.data_preprocessing))
 
-        logger.info("Loading checkpoint: %s", checkpoint_path)
-        load_model_from_checkpoint(
-            model,
-            checkpoint_path,
-            map_location=device,
-            device=device,
-            set_eval=True,
-        )
+        weights_path = cfg.get("weights", None)
+        if weights_path is not None:
+            logger.info("Loading matching weights: %s", weights_path)
+            apply_matching_weights(
+                model,
+                weights_path,
+                map_location=device,
+                device=device,
+                set_eval=True,
+                logger=logger,
+            )
+        else:
+            logger.info("Loading weights from checkpoint: %s", checkpoint_path)
+            load_model_from_checkpoint(
+                model,
+                checkpoint_path,
+                map_location=device,
+                device=device,
+                set_eval=True,
+            )
 
         logger.info("Preparing export inputs...")
         export_spec = resolve_export_spec(datamodule, model, device)

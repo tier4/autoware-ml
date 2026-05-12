@@ -39,11 +39,11 @@ def compute_point_accuracy(
         ignore_index: Label value excluded from the computation.
 
     Returns:
-        Scalar accuracy tensor, or ``None`` when every target is ignored.
+        Scalar accuracy tensor.
     """
     valid_mask = targets != ignore_index
     if not valid_mask.any():
-        return None
+        raise ValueError("Cannot compute point accuracy: every target is ignored.")
     return (predictions[valid_mask] == targets[valid_mask]).float().mean()
 
 
@@ -52,7 +52,7 @@ def compute_segmentation_metrics(
     targets: torch.Tensor,
     num_classes: int,
     ignore_index: int,
-) -> dict[str, torch.Tensor] | None:
+) -> dict[str, torch.Tensor]:
     """Compute step-level segmentation metrics from predictions and targets.
 
     Returns both a micro (per-point) accuracy and a full set of macro
@@ -67,12 +67,11 @@ def compute_segmentation_metrics(
         ignore_index: Label value excluded from the computation.
 
     Returns:
-        Dictionary of named metric tensors, or ``None`` when every target is
-        ignored.
+        Dictionary of named metric tensors.
     """
     valid = targets != ignore_index
     if not valid.any():
-        return None
+        raise ValueError("Cannot compute segmentation metrics: every target is ignored.")
 
     pred = predictions[valid].long()
     tgt = targets[valid].long()

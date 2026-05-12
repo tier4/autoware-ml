@@ -28,6 +28,7 @@ from autoware_ml.utils.deploy import (
     export_to_onnx,
     get_export_parameter_names,
     normalize_dynamic_shapes_for_model,
+    should_modify_graph,
     supports_export_stage,
 )
 
@@ -151,3 +152,8 @@ def test_normalize_dynamic_shapes_wraps_varargs_forward() -> None:
     dynamic_shapes = ({0: "dim0"}, {0: "dim1"})
 
     assert normalize_dynamic_shapes_for_model(_VarArgsModel(), dynamic_shapes) == (dynamic_shapes,)
+
+
+def test_should_modify_graph_handles_none_and_config() -> None:
+    assert should_modify_graph(None) is False
+    assert should_modify_graph(OmegaConf.create({"_target_": "pkg.Modifier"})) is True

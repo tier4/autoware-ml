@@ -4,7 +4,9 @@ defaults:
   - _self_
 
 datamodule:
-  stack_keys: []
+  collation_map:
+    points: concat
+    pts_semantic_mask: concat
   train_dataloader_cfg:
     batch_size: 4
     num_workers: 4
@@ -95,15 +97,6 @@ datamodule:
         fov_up: ${fov_up}
         fov_down: ${fov_down}
         ignore_index: ${ignore_index}
-  data_preprocessing:
-    _target_: autoware_ml.preprocessing.segmentation3d.frustum_range.FrustumRangePreprocessor
-    height: ${frustum_height}
-    width: ${frustum_width}
-    fov_up: ${fov_up}
-    fov_down: ${fov_down}
-    ignore_index: ${ignore_index}
-    num_classes: ${num_classes}
-
 model:
   _target_: autoware_ml.models.segmentation3d.frnet.FRNet
   voxel_encoder:
@@ -241,3 +234,13 @@ deploy:
         min_shape: [5000]
         opt_shape: [60000]
         max_shape: [160000]
+
+data_preprocessing:
+  pipeline:
+    - _target_: autoware_ml.preprocessing.segmentation3d.frustum_range.FrustumRangePreprocessor
+      height: ${frustum_height}
+      width: ${frustum_width}
+      fov_up: ${fov_up}
+      fov_down: ${fov_down}
+      ignore_index: ${ignore_index}
+      num_classes: ${num_classes}

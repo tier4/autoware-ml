@@ -24,18 +24,21 @@ class MyModel(BaseModel):
         ...
 ```
 
-The base class handles training/validation/test steps, optimizer configuration,
-metric logging, prediction output conversion, and deployment export
-integration. The `forward()` method can have any signature as long as the
-default batch-to-argument mapping matches, or the model overrides the relevant
-hooks.
+The base class handles training/validation/test/predict steps, optimizer
+configuration, metric logging, prediction output conversion, runtime
+preprocessing, and deployment export integration. The `forward()` method
+can have any signature as long as the default batch-to-argument mapping
+matches, or the model overrides the relevant hooks.
 
 !!! note "Extending `BaseModel`"
     Specialized models should still use `BaseModel`. When the default
     signature-based path is not enough, prefer overriding hooks such as
-    `run_model()`, `prepare_metric_inputs()`, `get_log_batch_size()`,
-    `predict_outputs()`, or `build_export_spec()` instead of introducing a
-    standalone `LightningModule`.
+    `set_data_preprocessing()`, `predict_outputs()`, `get_log_batch_size()`,
+    or `build_export_spec()` instead of introducing a standalone
+    `LightningModule`. Output decoding (for example, voxel-to-point scatter
+    for segmentation) belongs inside the model, typically in `forward()`,
+    `compute_metrics()`, and `predict_outputs()` - not in a separate
+    framework pipeline.
 
 ## Step 1: Implement the Model
 
@@ -179,14 +182,17 @@ class MyDataModule(DataModule):
 ### Data Flow
 
 ```text
-get_data_info() → transforms → collate_fn() → on_after_batch_transfer() → model
+get_data_info() → transforms → collate_fn() → BaseModel.on_after_batch_transfer() → forward() → compute_metrics()/predict_outputs()
 ```
 
 1. `get_data_info()`: Return raw sample metadata as dict
 2. `transforms`: Load files and apply per-sample augmentations (in Dataset)
 3. `collate_fn()`: Batch samples, convert to tensors
-4. `on_after_batch_transfer()`: GPU preprocessing (optional)
-5. Model receives the batch dict
+4. `BaseModel.on_after_batch_transfer()`: model-owned preprocessing
+5. `forward()`: model inference/training forward pass
+6. `compute_metrics()` / `predict_outputs()`: model owns any output shaping
+   (e.g., voxel-to-point scatter for segmentation) directly inside these
+   methods
 
 ## Step 3: Register Components
 
@@ -227,11 +233,6 @@ datamodule:
     batch_size: 8
     num_workers: 4
 
-  # GPU preprocessing (optional)
-  data_preprocessing:
-    _target_: autoware_ml.preprocessing.base.DataPreprocessing
-    pipeline: []
-
 model:
   _target_: autoware_ml.models.my_task.MyModel
   num_classes: 10
@@ -258,6 +259,10 @@ model:
 
 trainer:
   max_epochs: 50
+
+data_preprocessing:
+  _target_: autoware_ml.preprocessing.base.DataPreprocessing
+  pipeline: []
 ```
 
 Create a dataset-specific config:
@@ -279,6 +284,9 @@ datamodule:
 !!! note
     Some parameters are inherited from the default runtime config. Take a look at `configs/defaults/default_runtime.yaml` for more details.
 
+Runtime preprocessing lives at the top level of the composed config and is
+attached to the model by the entrypoints.
+
 ## Step 5: Add Transforms (Optional)
 
 If your task needs custom transforms:
@@ -292,13 +300,11 @@ from autoware_ml.transforms.base import BaseTransform
 
 class MyAugmentation(BaseTransform):
     def __init__(self, p: float = 0.5, intensity: float = 0.1):
+        # BaseTransform handles the application probability through `p`.
         self.p = p
         self.intensity = intensity
 
     def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
-        if np.random.random() > self.p:
-            return {}  # No changes
-
         # Your augmentation logic
         input_tensor = input_dict["input_tensor"]
         augmented = input_tensor + np.random.randn(*input_tensor.shape) * self.intensity
@@ -317,26 +323,24 @@ datamodule:
         intensity: 0.1
 ```
 
-## Step 6: Add Preprocessing (Optional)
+## Step 6: Add Runtime Data Preprocessing (Optional)
 
-Preprocessing runs on GPU after batch transfer, enabling hardware-accelerated operations. Unlike transforms (CPU-side, per-sample), preprocessing operates on entire batches already on the target device.
+Runtime preprocessing runs on the target device after batch transfer and
+before the forward pass. It is configured at the top level and attached to
+the model by the entrypoint scripts.
 
 If your task needs custom preprocessing:
 
 ```python title="autoware_ml/preprocessing/my_preprocessing/my_preprocessing.py"
 from typing import Any
 
-import torch
-import torch.nn as nn
 
-
-class MyPreprocessingLayer(nn.Module):
+class MyPreprocessingLayer:
     def __init__(self, input_key: str = "input_tensor", scale: float = 1.0):
-        super().__init__()
         self.input_key = input_key
         self.scale = scale
 
-    def forward(self, batch_inputs_dict: dict[str, Any]) -> dict[str, Any]:
+    def __call__(self, batch_inputs_dict: dict[str, Any]) -> dict[str, Any]:
         processed = batch_inputs_dict[self.input_key] * self.scale
         return {self.input_key: processed}
 ```
@@ -344,17 +348,19 @@ class MyPreprocessingLayer(nn.Module):
 Add to config:
 
 ```yaml
-datamodule:
-  data_preprocessing:
-    _target_: autoware_ml.preprocessing.base.DataPreprocessing
-    pipeline:
-      - _target_: autoware_ml.preprocessing.my_preprocessing.my_preprocessing.MyPreprocessingLayer
-        input_key: input_tensor
-        scale: 1.0
+data_preprocessing:
+  _target_: autoware_ml.preprocessing.base.DataPreprocessing
+  pipeline:
+    - _target_: autoware_ml.preprocessing.my_preprocessing.my_preprocessing.MyPreprocessingLayer
+      input_key: input_tensor
+      scale: 1.0
 ```
 
 !!! warning
-    Preprocessing layers must be `nn.Module` subclasses that accept `dict[str, Any]` and return `dict[str, Any]`.
+    Preprocessing layers must be callable objects that accept `dict[str, Any]` and return `dict[str, Any]`.
+
+Output-side shaping (logits → probabilities, decoder scatter, voxel-to-point mapping, etc.) belongs
+**inside the model** - in `forward()`, `compute_metrics()`, or `predict_outputs()`.
 
 ## Step 7: Train and Deploy
 

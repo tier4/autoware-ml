@@ -4,22 +4,29 @@ defaults:
   - _self_
 
 datamodule:
-  stack_keys: []
+  collation_map:
+    coord: concat
+    grid_coord: concat
+    strength: concat
+    segment: concat
+    inverse: index_concat
+    origin_segment: concat
+    feat: concat
   train_dataloader_cfg:
-    batch_size: 4
-    num_workers: 8
+    batch_size: 8
+    num_workers: 16
     pin_memory: true
     persistent_workers: true
     shuffle: true
     drop_last: true
   val_dataloader_cfg:
-    batch_size: 1
-    num_workers: 8
+    batch_size: 8
+    num_workers: 16
     pin_memory: true
     persistent_workers: true
   test_dataloader_cfg:
     batch_size: 1
-    num_workers: 8
+    num_workers: 1
     pin_memory: true
     persistent_workers: true
   predict_dataloader_cfg:
@@ -77,8 +84,8 @@ model:
   num_classes: ${num_classes}
   backbone_out_channels: 64
   ignore_index: ${ignore_index}
-  export_grid_size: ${grid_size}
-  export_point_cloud_range: ${point_cloud_range}
+  grid_size: ${grid_size}
+  point_cloud_range: ${point_cloud_range}
   optimizer:
     _target_: torch.optim.AdamW
     _partial_: true

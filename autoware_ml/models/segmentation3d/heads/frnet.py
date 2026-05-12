@@ -27,7 +27,6 @@ import torch.nn as nn
 from autoware_ml.losses.segmentation3d.boundary import BoundaryLoss
 from autoware_ml.losses.segmentation3d.lovasz import LovaszSoftmaxLoss
 from autoware_ml.models.segmentation3d.norm import build_norm_1d
-from autoware_ml.models.segmentation3d.structures import FRNetDecodedOutputs, FRNetFeatureDict
 
 
 class FRHead(nn.Module):
@@ -77,54 +76,70 @@ class FRHead(nn.Module):
         self.layers = nn.ModuleList(layers)
         self.classifier = nn.Linear(current_channels, num_classes)
 
-    def forward(self, voxel_dict: FRNetFeatureDict) -> FRNetDecodedOutputs:
-        """Populate point-wise logits in the voxel dictionary.
+    def forward(
+        self,
+        point_coors: torch.Tensor,
+        point_feats_encoder: list[torch.Tensor],
+        voxel_feats_backbone: list[torch.Tensor],
+        point_feats_backbone: list[torch.Tensor],
+    ) -> torch.Tensor:
+        """Fuse encoder and backbone features into point-wise logits.
+
+        The head samples per-point voxel features at the projected coordinates
+        and adds skip connections from the backbone point features and the
+        encoder point feature pyramid before the final classifier.
 
         Args:
-            voxel_dict: FRNet feature dictionary.
+            point_coors: Per-point range-view coordinates of shape
+                ``(num_points, 3)``.
+            point_feats_encoder: Encoder point feature pyramid. The first
+                ``len(self.layers) - 1`` levels are added as skip connections
+                in reverse order.
+            voxel_feats_backbone: Backbone voxel feature pyramid. Only the
+                first (unified) level is sampled per point.
+            point_feats_backbone: Backbone point feature pyramid. Only the
+                first (unified) level is added at the first decode layer.
 
         Returns:
-            Updated feature dictionary with point logits.
+            Point-wise logits tensor of shape ``(num_points, num_classes)``.
         """
-        point_feats_backbone = voxel_dict["point_feats_backbone"][0]
-        point_feats_pyramid = voxel_dict["point_feats"][:-1]
-        voxel_feats = voxel_dict["voxel_feats"][0].permute(0, 2, 3, 1).contiguous()
-        point_coors = voxel_dict["coors"]
+        point_feats_backbone_unified = point_feats_backbone[0]
+        point_feats_pyramid = point_feats_encoder[:-1]
+        voxel_feats = voxel_feats_backbone[0].permute(0, 2, 3, 1).contiguous()
         point_features = voxel_feats[point_coors[:, 0], point_coors[:, 1], point_coors[:, 2]]
 
         for layer_index, layer in enumerate(self.layers):
             point_features = layer(point_features)
             if layer_index == 0:
-                point_features = point_features + point_feats_backbone
+                point_features = point_features + point_feats_backbone_unified
             else:
                 point_features = point_features + point_feats_pyramid[-layer_index]
 
-        voxel_dict["point_logits"] = self.classifier(point_features)
-        return voxel_dict
+        return self.classifier(point_features)
 
-    def loss(self, voxel_dict: FRNetFeatureDict, target: torch.Tensor) -> dict[str, torch.Tensor]:
-        """Compute decode-head losses.
-
-        Args:
-            voxel_dict: FRNet feature dictionary with point logits.
-            target: Point-wise semantic labels.
-
-        Returns:
-            Decode-head loss dictionary.
-        """
-        logits = voxel_dict["point_logits"]
-        return {"loss_ce": self.loss_ce_weight * self.loss_ce(logits, target)}
-
-    def predict(self, voxel_dict: FRNetFeatureDict) -> torch.Tensor:
-        """Predict point-wise labels.
+    def loss(self, point_logits: torch.Tensor, target: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Compute the decode-head cross-entropy loss.
 
         Args:
-            voxel_dict: FRNet feature dictionary with point logits.
+            point_logits: Point-wise logits of shape ``(num_points, num_classes)``.
+            target: Point-wise semantic labels of shape ``(num_points,)``.
 
         Returns:
-            Point-wise semantic predictions.
+            Dictionary with key ``"loss_ce"`` mapped to the weighted
+            cross-entropy loss tensor.
         """
-        return voxel_dict["point_logits"].argmax(dim=1)
+        return {"loss_ce": self.loss_ce_weight * self.loss_ce(point_logits, target)}
+
+    def predict(self, point_logits: torch.Tensor) -> torch.Tensor:
+        """Reduce per-point logits to predicted class labels.
+
+        Args:
+            point_logits: Point-wise logits of shape ``(num_points, num_classes)``.
+
+        Returns:
+            Predicted class labels of shape ``(num_points,)``.
+        """
+        return point_logits.argmax(dim=1)
 
 
 class FrustumHead(nn.Module):
@@ -168,28 +183,31 @@ class FrustumHead(nn.Module):
             ignore_index=ignore_index, loss_weight=loss_boundary_weight
         )
 
-    def forward(self, voxel_dict: FRNetFeatureDict) -> torch.Tensor:
-        """Compute auxiliary frustum logits.
+    def forward(self, voxel_feat: torch.Tensor) -> torch.Tensor:
+        """Project one voxel feature pyramid level to auxiliary frustum logits.
 
         Args:
-            voxel_dict: FRNet feature dictionary.
+            voxel_feat: Voxel features for this head's pyramid level. The
+                pyramid level is selected by the FRNet wrapper based on the
+                head's ``feature_index`` attribute.
 
         Returns:
-            Auxiliary frustum logits.
+            Auxiliary range-view logits tensor.
         """
-        return self.classifier(voxel_dict["voxel_feats"][self.feature_index])
+        return self.classifier(voxel_feat)
 
-    def loss(self, voxel_dict: FRNetFeatureDict, target: torch.Tensor) -> dict[str, torch.Tensor]:
-        """Compute auxiliary segmentation losses.
+    def loss(self, voxel_feat: torch.Tensor, target: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Compute auxiliary segmentation losses for one pyramid level.
 
         Args:
-            voxel_dict: FRNet feature dictionary.
-            target: Range-view semantic labels.
+            voxel_feat: Voxel features for this head's pyramid level.
+            target: Dense range-view semantic labels.
 
         Returns:
-            Auxiliary loss dictionary.
+            Dictionary mapping loss names (``"loss_ce"``, ``"loss_lovasz"``,
+            ``"loss_boundary"``) to their respective loss tensors.
         """
-        logits = self.forward(voxel_dict)
+        logits = self.forward(voxel_feat)
         return {
             "loss_ce": self.loss_ce_weight * self.loss_ce(logits, target),
             "loss_lovasz": self.loss_lovasz(logits, target),

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Base classes for GPU-oriented batch preprocessing modules.
+"""Base classes for GPU-oriented batch preprocessing pipelines.
 
 This module defines the shared preprocessing interface used between dataloaders
 and model forward passes.
@@ -21,20 +21,19 @@ and model forward passes.
 from collections.abc import Sequence
 from typing import Any
 
-import torch.nn as nn
 
-
-class DataPreprocessing(nn.Module):
+class DataPreprocessing:
     """Apply a sequence of preprocessing layers to a collated batch.
 
-    This module runs on the GPU after batch transfer, enabling hardware-accelerated
-    preprocessing operations like normalization, augmentation, and format conversion.
+    This runtime pipeline runs after batch transfer, enabling hardware-accelerated
+    preprocessing operations like voxelization, projection, and format conversion
+    without registering the pipeline as part of the neural network.
 
     The pipeline follows a dict-in/dict-out pattern where each layer receives the
     current batch dictionary and returns updates to merge into it.
 
     Args:
-        pipeline: List of nn.Module layers to apply sequentially.
+        pipeline: List of callable layers to apply sequentially.
             Each layer should accept ``dict[str, Any]`` and return ``dict[str, Any]``.
 
     Example:
@@ -49,23 +48,27 @@ class DataPreprocessing(nn.Module):
         ```
     """
 
-    def __init__(self, pipeline: Sequence[nn.Module] | None = None) -> None:
+    def __init__(self, pipeline: Sequence[Any] = ()) -> None:
         """Initialize preprocessing with optional layers.
 
         Args:
-            pipeline: List of nn.Module layers to apply sequentially.
+            pipeline: List of callable layers to apply sequentially.
         """
-        super().__init__()
-        self.pipeline = nn.ModuleList(pipeline or [])
+        self.pipeline = list(pipeline)
 
     def __call__(self, batch_inputs_dict: dict[str, Any]) -> dict[str, Any]:
         """Apply preprocessing layers after the batch is already on device.
 
+        The input dictionary is mutated in place; the same object is also
+        returned for chaining convenience.
+
         Args:
             batch_inputs_dict: Collated batch dictionary on the target device.
+                Mutated in place: each layer's returned mapping is merged into
+                this dict.
 
         Returns:
-            Updated batch dictionary with preprocessing applied.
+            The same ``batch_inputs_dict`` with preprocessing applied.
         """
         for layer in self.pipeline:
             batch_inputs_dict |= layer(batch_inputs_dict)

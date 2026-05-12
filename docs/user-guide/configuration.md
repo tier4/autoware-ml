@@ -65,7 +65,7 @@ A complete task config includes these sections:
 
 ### `datamodule`
 
-Controls data loading and preprocessing:
+Controls data loading and split-specific transforms:
 
 ```yaml
 datamodule:
@@ -85,17 +85,29 @@ datamodule:
     pipeline:
       - _target_: autoware_ml.transforms.my_transforms.my_transform.MyTransform
         param: value
-
-  data_preprocessing:
-    _target_: autoware_ml.preprocessing.base.DataPreprocessing
-    pipeline:
-      - _target_: autoware_ml.preprocessing.my_preprocessing.my_preprocessing.MyPreprocessingLayer
-        param: value
 ```
 
 For custom components, point `_target_` at the concrete implementation module,
 for example `autoware_ml.transforms.my_transforms.my_transform.MyTransform` or
 `autoware_ml.models.common.backbones.my_backbone.MyBackbone`.
+
+### `data_preprocessing`
+
+Defines runtime preprocessing that runs after batch transfer and before
+`forward()`. This section is instantiated by the entrypoint and attached to the
+model through `BaseModel.set_data_preprocessing(...)`:
+
+```yaml
+data_preprocessing:
+  _target_: autoware_ml.preprocessing.base.DataPreprocessing
+  pipeline:
+    - _target_: autoware_ml.preprocessing.my_preprocessing.my_preprocessing.MyPreprocessingLayer
+      param: value
+```
+
+Output-side shaping (logits → probabilities, voxel-to-point scatter, etc.)
+is **not** a configurable framework pipeline - it lives inside the model's
+own `forward()`, `compute_metrics()`, and `predict_outputs()` methods.
 
 ### `model`
 
