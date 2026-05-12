@@ -140,6 +140,10 @@ class GridSample(BaseTransform):
     """Subsample points by selecting representatives per grid cell."""
 
     _required_keys = ["coord"]
+    _HASH_FUNCTIONS = {
+        "fnv": "fnv_hash_vec",
+        "ravel": "ravel_hash_vec",
+    }
 
     def __init__(
         self,
@@ -170,7 +174,12 @@ class GridSample(BaseTransform):
             project_displacement: Whether to project displacement to normals.
         """
         self.grid_size = np.asarray(grid_size, dtype=np.float32)
-        self.hash = self.fnv_hash_vec if hash_type == "fnv" else self.ravel_hash_vec
+        if hash_type not in self._HASH_FUNCTIONS:
+            raise ValueError(
+                f"Unsupported GridSample hash_type: {hash_type}. "
+                f"Expected one of {sorted(self._HASH_FUNCTIONS)}."
+            )
+        self.hash = getattr(self, self._HASH_FUNCTIONS[hash_type])
         if mode not in {"train", "test"}:
             raise ValueError(f"Unsupported GridSample mode: {mode}")
         self.mode = mode
@@ -231,9 +240,9 @@ class GridSample(BaseTransform):
         counts: np.ndarray,
     ) -> dict[str, Any]:
         """Apply train-time voxel subsampling."""
-        selection = np.cumsum(np.insert(counts, 0, 0)[:-1]) + (
-            np.random.randint(0, counts.max(), counts.size) % counts
-        )
+        selection = np.cumsum(np.insert(counts, 0, 0)[:-1]) + np.floor(
+            np.random.random(counts.size) * counts
+        ).astype(np.int64)
         unique_indices = sort_indices[selection]
 
         if "sampled_index" in input_dict:
