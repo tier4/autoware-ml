@@ -206,6 +206,7 @@ def test_serialized_attention_export_mode_requires_fixed_patch_size_capacity() -
         upcast_softmax=False,
     )
     attention.disable_flash()
+    attention.export_mode = True
     point = Point(
         {
             "feat": torch.randn(3, 32),
@@ -218,6 +219,38 @@ def test_serialized_attention_export_mode_requires_fixed_patch_size_capacity() -
 
     with pytest.raises(ValueError, match="at least 4 serialized points"):
         attention(point)
+
+
+def test_serialized_attention_non_export_mode_adapts_patch_size() -> None:
+    attention = SerializedAttention(
+        channels=32,
+        num_heads=4,
+        patch_size=4,
+        qkv_bias=True,
+        qk_scale=None,
+        attn_drop=0.0,
+        proj_drop=0.0,
+        order_index=0,
+        enable_rpe=False,
+        enable_flash=True,
+        upcast_attention=False,
+        upcast_softmax=False,
+    )
+    attention.disable_flash()
+    point = Point(
+        {
+            "feat": torch.randn(3, 32),
+            "grid_coord": torch.randint(0, 8, (3, 3), dtype=torch.int32),
+            "serialized_order": torch.arange(3).reshape(1, 3),
+            "serialized_inverse": torch.arange(3).reshape(1, 3),
+            "offset": torch.tensor([3], dtype=torch.long),
+        }
+    )
+
+    output = attention(point)
+
+    assert output.feat.shape == (3, 32)
+    assert attention.patch_size == 3
 
 
 def test_point_sequential_skips_dense_module_on_empty_sparse_tensor() -> None:

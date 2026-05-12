@@ -406,12 +406,12 @@ class SerializedAttention(PointModule):
         head_count = self.num_heads
         if not self.enable_flash:
             min_points = int(offset_to_bincount(point.offset).min().item())
-            if min_points < self.patch_size_max:
+            if self.export_mode and min_points < self.patch_size_max:
                 raise ValueError(
                     "PTv3 export mode requires each sample to have at least "
                     f"{self.patch_size_max} serialized points, but found {min_points}."
                 )
-            self.patch_size = self.patch_size_max
+            self.patch_size = self.patch_size_max if self.export_mode else min_points
         patch_size = self.patch_size
         channel_count = self.channels
         pad, unpad, cu_seqlens = self._get_padding_and_inverse(point)
