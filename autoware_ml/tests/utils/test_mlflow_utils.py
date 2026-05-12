@@ -30,7 +30,6 @@ from autoware_ml.utils.mlflow_helpers import (
     load_run_context,
     prepare_run_context,
     resolve_tracking_uri,
-    should_enable_logger,
     write_run_metadata,
 )
 
