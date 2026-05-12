@@ -201,7 +201,7 @@ def apply_matching_weights(
     Returns:
         Per-checkpoint matching-weight load reports.
     """
-    weight_paths = (weights,) if isinstance(weights, str | Path) else tuple(weights)
+    weight_paths = (weights,) if isinstance(weights, (str, Path)) else tuple(weights)
     reports = tuple(
         load_matching_weights(
             model,

@@ -121,3 +121,18 @@ def test_apply_matching_weights_loads_ordered_checkpoint_sequence(tmp_path: Path
     assert reports[0].loaded_keys == ("layer.weight",)
     assert reports[1].loaded_keys == ("layer.weight",)
     assert torch.equal(model.layer.weight, torch.full_like(model.layer.weight, 4.0))
+
+
+def test_apply_matching_weights_accepts_single_path_string(tmp_path: Path) -> None:
+    model = _TinyModel()
+    checkpoint_path = tmp_path / "weights.ckpt"
+    torch.save(
+        {"state_dict": {"layer.weight": torch.full_like(model.layer.weight, 5.0)}},
+        checkpoint_path,
+    )
+
+    reports = apply_matching_weights(model, str(checkpoint_path))
+
+    assert len(reports) == 1
+    assert reports[0].loaded_keys == ("layer.weight",)
+    assert torch.equal(model.layer.weight, torch.full_like(model.layer.weight, 5.0))
