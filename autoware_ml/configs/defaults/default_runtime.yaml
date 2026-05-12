@@ -2,9 +2,13 @@
 
 defaults:
   - modules/callbacks
+  - modules/data_preprocessing
   - modules/datamodule
   - modules/deploy
   - modules/logger
   - modules/model
   - modules/run
   - modules/trainer
+
+checkpoint: null
+weights: null

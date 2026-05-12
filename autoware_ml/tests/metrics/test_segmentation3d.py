@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import torch
+import pytest
 
 from autoware_ml.metrics.segmentation3d import (
     compute_point_accuracy,
@@ -20,13 +21,12 @@ def test_point_accuracy_skips_ignored_targets() -> None:
     assert torch.isclose(accuracy, torch.tensor(2.0 / 3.0))
 
 
-def test_point_accuracy_returns_none_when_all_targets_are_ignored() -> None:
+def test_point_accuracy_raises_when_all_targets_are_ignored() -> None:
     predictions = torch.tensor([0, 1, 1])
     targets = torch.tensor([-1, -1, -1])
 
-    accuracy = compute_point_accuracy(predictions, targets, ignore_index=-1)
-
-    assert accuracy is None
+    with pytest.raises(ValueError, match="every target is ignored"):
+        compute_point_accuracy(predictions, targets, ignore_index=-1)
 
 
 def test_segmentation_metrics_returns_all_keys() -> None:
@@ -58,13 +58,12 @@ def test_segmentation_metrics_values_match_hand_computation() -> None:
     assert torch.isclose(m["mean_f1"], torch.tensor(7.0 / 9.0))
 
 
-def test_segmentation_metrics_returns_none_when_all_ignored() -> None:
+def test_segmentation_metrics_raises_when_all_ignored() -> None:
     predictions = torch.tensor([0, 1])
     targets = torch.tensor([-1, -1])
 
-    assert (
-        compute_segmentation_metrics(predictions, targets, num_classes=2, ignore_index=-1) is None
-    )
+    with pytest.raises(ValueError, match="every target is ignored"):
+        compute_segmentation_metrics(predictions, targets, num_classes=2, ignore_index=-1)
 
 
 def test_segmentation_metrics_excludes_classes_without_support() -> None:

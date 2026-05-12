@@ -25,6 +25,7 @@ import hydra
 import lightning as L
 from omegaconf import DictConfig
 
+from autoware_ml.utils.checkpoints import apply_matching_weights
 from autoware_ml.utils.runtime import (
     configure_torch_runtime,
     get_config_path,
@@ -89,6 +90,14 @@ def main(cfg: DictConfig):
 
     logger.info("Instantiating model...")
     model: L.LightningModule = hydra.utils.instantiate(cfg.model)
+    model.set_data_preprocessing(hydra.utils.instantiate(cfg.data_preprocessing))
+
+    checkpoint_path = cfg.get("checkpoint", None)
+    weights_path = cfg.get("weights", None)
+    if checkpoint_path is not None and weights_path is not None:
+        raise ValueError("'checkpoint' and 'weights' are mutually exclusive.")
+    if weights_path is not None:
+        apply_matching_weights(model, weights_path, map_location="cpu", logger=logger)
 
     logger.info("Instantiating callbacks...")
     callbacks = instantiate_callbacks(
@@ -130,7 +139,7 @@ def main(cfg: DictConfig):
     logger.info(f"Accelerator: {cfg.trainer.get('accelerator', 'auto')}")
     logger.info(f"Devices: {cfg.trainer.get('devices', 'auto')}")
 
-    trainer.fit(model, datamodule=datamodule, ckpt_path=cfg.get("checkpoint", None))
+    trainer.fit(model, datamodule=datamodule, ckpt_path=checkpoint_path)
 
     logger.info("Training completed!")
     checkpoints_dir = (

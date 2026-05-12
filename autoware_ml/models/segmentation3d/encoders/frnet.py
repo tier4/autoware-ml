@@ -26,7 +26,6 @@ import torch
 import torch.nn as nn
 
 from autoware_ml.models.segmentation3d.norm import build_norm_1d
-from autoware_ml.models.segmentation3d.structures import FRNetFeatureDict, FRNetInputs
 
 
 class FrustumFeatureEncoder(nn.Module):
@@ -94,19 +93,33 @@ class FrustumFeatureEncoder(nn.Module):
             else None
         )
 
-    def forward(self, voxel_dict: FRNetInputs) -> FRNetFeatureDict:
+    def forward(
+        self,
+        points: torch.Tensor,
+        inverse_map: torch.Tensor,
+        voxel_coors: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, list[torch.Tensor]]:
         """Encode raw points into voxel and point feature pyramids.
 
         Args:
-            voxel_dict: Dictionary containing points, voxel coordinates, and inverse mapping.
+            points: Concatenated point tensor of shape ``(num_points, in_channels)``.
+            inverse_map: Mapping from each point to its voxel index, shape
+                ``(num_points,)``.
+            voxel_coors: Range-view voxel coordinates of shape
+                ``(max_voxels, 3)``. The first ``inverse_map.max() + 1``
+                rows are the active voxels.
 
         Returns:
-            Updated voxel dictionary with point and voxel feature tensors.
+            Tuple of:
+                * ``voxel_coors_truncated``: voxel coordinates trimmed to the
+                  number of active voxels, shape ``(num_voxels, 3)``.
+                * ``voxel_features``: aggregated voxel features of shape
+                  ``(num_voxels, voxel_channels)``.
+                * ``point_features_pyramid``: per-point features at each MLP
+                  layer of the encoder, length equal to ``len(feat_channels)``.
         """
-        points = voxel_dict["points"]
-        inverse_map = voxel_dict["inverse_map"]
         num_voxels = inverse_map.max() + 1
-        voxel_dict["voxel_coors"] = voxel_dict["voxel_coors"][:num_voxels]
+        voxel_coors_truncated = voxel_coors[:num_voxels]
         feature_list = [points]
         features = points
 
@@ -136,10 +149,10 @@ class FrustumFeatureEncoder(nn.Module):
         if self.pre_norm is not None:
             point_features = self.pre_norm(point_features)
 
-        point_feature_pyramid = []
+        point_features_pyramid: list[torch.Tensor] = []
         for layer in self.layers:
             point_features = layer(point_features)
-            point_feature_pyramid.append(point_features)
+            point_features_pyramid.append(point_features)
 
         voxel_features = torch.full(
             (num_voxels, point_features.shape[1]),
@@ -158,6 +171,4 @@ class FrustumFeatureEncoder(nn.Module):
         if self.compression is not None:
             voxel_features = self.compression(voxel_features)
 
-        voxel_dict["voxel_feats"] = voxel_features
-        voxel_dict["point_feats"] = point_feature_pyramid
-        return voxel_dict
+        return voxel_coors_truncated, voxel_features, point_features_pyramid

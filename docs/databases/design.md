@@ -155,8 +155,8 @@ class Scenarios(BaseModel):
 
 The output schema is defined in `schemas.py` and consists of two parts:
 
-- **`DatasetTableSchema`** — a frozen dataclass whose class-level attributes are `DatasetTableColumn` named tuples, each pairing a column name with a Polars data type. Call `DatasetTableSchema.to_polars_schema()` to get a `pl.Schema` for constructing or validating a Polars `DataFrame`.
-- **`DatasetRecord`** — a frozen Pydantic model representing a single row. One record is emitted per sample/frame by `process_scenario_records()`.
+- **`DatasetTableSchema`** - a frozen dataclass whose class-level attributes are `DatasetTableColumn` named tuples, each pairing a column name with a Polars data type. Call `DatasetTableSchema.to_polars_schema()` to get a `pl.Schema` for constructing or validating a Polars `DataFrame`.
+- **`DatasetRecord`** - a frozen Pydantic model representing a single row. One record is emitted per sample/frame by `process_scenario_records()`.
 
 ```python
 class DatasetTableSchema:

@@ -26,7 +26,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from autoware_ml.models.segmentation3d.norm import build_norm_1d, build_norm_2d
-from autoware_ml.models.segmentation3d.structures import FRNetFeatureDict
 
 
 class BasicBlock(nn.Module):
@@ -274,21 +273,43 @@ class FRNetBackbone(nn.Module):
             nn.Sigmoid(),
         )
 
-    def forward(self, voxel_dict: FRNetFeatureDict) -> FRNetFeatureDict:
-        """Apply FRNet backbone and update the voxel dictionary.
+    def forward(
+        self,
+        point_feats_pyramid: list[torch.Tensor],
+        voxel_feats: torch.Tensor,
+        voxel_coors: torch.Tensor,
+        point_coors: torch.Tensor,
+        inverse_map: torch.Tensor,
+        sample_count: int,
+    ) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
+        """Fuse encoder features through the FRNet backbone pyramid.
+
+        The backbone alternates point-side and pixel-side feature fusion at
+        each pyramid level, producing matched lists of voxel and point
+        features suitable for the decode head and auxiliary heads.
 
         Args:
-            voxel_dict: FRNet feature dictionary containing voxel and point tensors.
+            point_feats_pyramid: Encoder point feature pyramid. Only the last
+                level is consumed as the starting tensor.
+            voxel_feats: Aggregated voxel features from the encoder, shape
+                ``(num_voxels, channels)``.
+            voxel_coors: Active voxel coordinates of shape ``(num_voxels, 3)``.
+            point_coors: Per-point range-view coordinates of shape
+                ``(num_points, 3)``.
+            inverse_map: Mapping from points back to voxel indices of shape
+                ``(num_points,)``.
+            sample_count: Number of samples in the batch.
 
         Returns:
-            Updated feature dictionary with fused voxel and point features.
+            Tuple of:
+                * ``voxel_features_pyramid``: list of fused pixel feature
+                  maps. The first entry is the unified output, followed by
+                  per-stride feature maps.
+                * ``point_features_backbone``: list of fused point features
+                  matched to the pyramid. The first entry is the unified
+                  output, followed by per-stride features.
         """
-        point_feats = voxel_dict["point_feats"][-1]
-        voxel_feats = voxel_dict["voxel_feats"]
-        voxel_coors = voxel_dict["voxel_coors"]
-        point_coors = voxel_dict["coors"]
-        inverse_map = voxel_dict["inverse_map"]
-        sample_count = voxel_dict["sample_count"]
+        point_feats = point_feats_pyramid[-1]
 
         x = self._frustum_to_pixel(voxel_feats, voxel_coors, sample_count, stride=1)
         x = self.stem(x)
@@ -348,9 +369,9 @@ class FRNetBackbone(nn.Module):
             fused_pixels = pixel_fuse(fused_pixels)
             fused_points = point_fuse(fused_points)
 
-        voxel_dict["voxel_feats"] = [fused_pixels, *pixel_outputs[1:]]
-        voxel_dict["point_feats_backbone"] = [fused_points, *point_outputs[1:]]
-        return voxel_dict
+        voxel_features_pyramid: list[torch.Tensor] = [fused_pixels, *pixel_outputs[1:]]
+        point_features_backbone: list[torch.Tensor] = [fused_points, *point_outputs[1:]]
+        return voxel_features_pyramid, point_features_backbone
 
     def _frustum_to_pixel(
         self,

@@ -328,7 +328,7 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
         ```
 
     The separate `docs` environment is reserved for documentation-only
-    workflows and CI — you do not need to install it manually.
+    workflows and CI - you do not need to install it manually.
 
     The `setup-project` task installs Bash completion automatically. Open a
     new shell after it finishes so the completion file is loaded.

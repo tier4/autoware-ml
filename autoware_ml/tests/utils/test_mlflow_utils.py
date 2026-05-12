@@ -118,21 +118,6 @@ class TestRunTags:
         assert logger_cfg.tags == {"stage": "train", "owner": "alice"}
         assert logger_cfg.tracking_uri.startswith("sqlite:///")
 
-    def test_should_enable_logger_requires_logger_and_non_fast_dev_run(self) -> None:
-        cfg = OmegaConf.create(
-            {
-                "logger": {"tracking_uri": "sqlite:///mlruns/mlflow.db"},
-                "trainer": {"fast_dev_run": False},
-            }
-        )
-        assert should_enable_logger(cfg) is True
-
-        cfg.trainer.fast_dev_run = True
-        assert should_enable_logger(cfg) is False
-
-        cfg = OmegaConf.create({"logger": None, "trainer": {"fast_dev_run": False}})
-        assert should_enable_logger(cfg) is False
-
 
 class TestArtifactLayout:
     """Tests for semantic MLflow artifact layout helpers."""

@@ -173,7 +173,6 @@ class T4Segmentation3DDataModule(DataModule):
         val_ann_file: str,
         test_ann_file: str,
         lidar_sources: list[str] | None = None,
-        mix_prob: float = 0.0,
         **kwargs: Any,
     ) -> None:
         """Initialize the T4 segmentation datamodule.
@@ -185,11 +184,9 @@ class T4Segmentation3DDataModule(DataModule):
             test_ann_file: Test annotation file path.
             lidar_sources: Ordered lidar sources exposed as separate samples.
                 When ``None`` each annotation record is one sample.
-            mix_prob: Mix probability forwarded to the point-cloud collate
-                function during training.  Set to ``0.0`` to disable.
             **kwargs: Additional base datamodule configuration.
         """
-        super().__init__(mix_prob=mix_prob, **kwargs)
+        super().__init__(**kwargs)
         self.data_root = data_root
         self.lidar_sources = lidar_sources
         self.ann_files = {

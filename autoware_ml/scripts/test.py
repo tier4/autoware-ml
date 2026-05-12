@@ -26,7 +26,7 @@ import hydra
 import lightning as L
 from omegaconf import DictConfig
 
-from autoware_ml.utils.checkpoints import load_model_from_checkpoint
+from autoware_ml.utils.checkpoints import apply_matching_weights, load_model_from_checkpoint
 from autoware_ml.utils.runtime import (
     configure_torch_runtime,
     get_config_path,
@@ -75,6 +75,7 @@ def main(cfg: DictConfig):
 
     logger.info("Instantiating model...")
     model: L.LightningModule = hydra.utils.instantiate(cfg.model)
+    model.set_data_preprocessing(hydra.utils.instantiate(cfg.data_preprocessing))
 
     logger.info("Instantiating callbacks...")
     callbacks = instantiate_callbacks(cfg, logger_enabled=logger_enabled)
@@ -149,7 +150,17 @@ def main(cfg: DictConfig):
     logger.info(f"Accelerator: {cfg.trainer.get('accelerator', 'auto')}")
     logger.info(f"Devices: {cfg.trainer.get('devices', 'auto')}")
 
-    load_model_from_checkpoint(model, checkpoint_path, map_location="cpu")
+    weights_path = cfg.get("weights", None)
+    if weights_path is not None:
+        apply_matching_weights(
+            model,
+            weights_path,
+            map_location="cpu",
+            set_eval=True,
+            logger=logger,
+        )
+    else:
+        load_model_from_checkpoint(model, checkpoint_path, map_location="cpu", set_eval=True)
     trainer.test(model, datamodule=datamodule, ckpt_path=None)
 
     logger.info("Evaluation completed!")

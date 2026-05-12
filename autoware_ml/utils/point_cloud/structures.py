@@ -12,6 +12,13 @@ from autoware_ml.utils.point_cloud.batching import offset_to_batch
 from autoware_ml.utils.point_cloud.serialization.default import encode
 
 
+def bit_length_tensor(x: torch.Tensor | int | float) -> torch.Tensor:
+    """Return the integer bit length of a positive scalar tensor."""
+    value = x if isinstance(x, torch.Tensor) else torch.as_tensor(x)
+    value = torch.clamp(value, min=1)
+    return torch.floor(torch.log2(value)).to(torch.long) + 1
+
+
 class Point(dict[str, torch.Tensor]):
     """Store point-cloud attributes in a dictionary-like container.
 
@@ -31,12 +38,19 @@ class Point(dict[str, torch.Tensor]):
         """Store attributes inside the underlying dictionary."""
         self[key] = value
 
-    def serialization(self, order: Sequence[str], shuffle_orders: bool) -> None:
+    def serialization(
+        self,
+        order: Sequence[str],
+        shuffle_orders: bool,
+        depth: torch.Tensor | int | None = None,
+    ) -> None:
         """Populate serialization fields required by point-cloud backbones.
 
         Args:
             order: Serialization order names applied to the point cloud.
             shuffle_orders: Whether to randomly permute serialization orders.
+            depth: Optional fixed serialization depth. If omitted, derive it
+                adaptively from the sample grid coordinates.
         """
         if "grid_coord" not in self:
             raise ValueError("grid_coord is required before point-cloud serialization.")
@@ -47,8 +61,16 @@ class Point(dict[str, torch.Tensor]):
         if "batch" not in self:
             self["batch"] = offset_to_batch(self["offset"], self["coord"])
 
-        depth = (
-            torch.floor(torch.log2(torch.clamp(self["grid_coord"].max(), min=1))).to(torch.long) + 1
+        if depth is None:
+            depth = bit_length_tensor(self["grid_coord"].max())
+        elif isinstance(depth, torch.Tensor):
+            depth = depth.to(device=self["coord"].device, dtype=torch.long)
+        else:
+            depth = torch.as_tensor(depth, device=self["coord"].device, dtype=torch.long)
+
+        torch._assert(
+            torch.all(depth * 3 + bit_length_tensor(self["offset"]) <= 63),
+            "Point-cloud serialization exceeds supported int64 code range.",
         )
         torch._assert(
             torch.all(depth <= 16), "Point-cloud serialization depth exceeds supported range."

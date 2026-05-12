@@ -109,7 +109,6 @@ class NuscenesSegmentation3DDataModule(DataModule):
         val_ann_file: str,
         test_ann_file: str,
         lidarseg_dir: str = "lidarseg/v1.0-trainval",
-        mix_prob: float = 0.0,
         **kwargs: Any,
     ) -> None:
         """Initialize the NuScenes segmentation datamodule.
@@ -120,11 +119,9 @@ class NuscenesSegmentation3DDataModule(DataModule):
             val_ann_file: Validation annotation file path.
             test_ann_file: Test annotation file path.
             lidarseg_dir: Directory containing lidarseg label files.
-            mix_prob: Mix probability forwarded to the point-cloud collate
-                function during training.  Set to ``0.0`` to disable.
             **kwargs: Additional base datamodule configuration.
         """
-        super().__init__(mix_prob=mix_prob, **kwargs)
+        super().__init__(**kwargs)
         self.data_root = data_root
         self.lidarseg_dir = lidarseg_dir
 

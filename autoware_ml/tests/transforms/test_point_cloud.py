@@ -1,7 +1,6 @@
 import numpy as np
 import pytest
 
-from autoware_ml.transforms.common.tensor import ToTensor
 from autoware_ml.transforms.point_cloud.crop import (
     CenterShift,
     CropBoxInner,
@@ -180,7 +179,6 @@ class TestPointCloudTransforms:
         }
 
         output = SphereCrop(point_max=4)(sample)
-        output = ToTensor()(output)
 
         assert output["coord"].shape[0] == 4
         assert output["strength"].shape[0] == 4

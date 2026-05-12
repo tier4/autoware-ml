@@ -123,16 +123,17 @@ def extract_input_from_batch(batch: dict[str, Any], param_name: str) -> Any:
     return input_value
 
 
-def get_predict_batch(datamodule: L.LightningDataModule, device: torch.device) -> dict[str, Any]:
+def get_predict_batch(
+    datamodule: L.LightningDataModule,
+    model: L.LightningModule,
+    device: torch.device,
+) -> dict[str, Any]:
     """Load one prediction batch and apply transfer-time preprocessing."""
     datamodule.setup("predict")
     predict_dataloader = datamodule.predict_dataloader()
     batch = next(iter(predict_dataloader))
     batch = move_to_device(batch, device)
-
-    if getattr(datamodule, "data_preprocessing", None) is not None:
-        datamodule.data_preprocessing.to(device)
-    return datamodule.on_after_batch_transfer(batch, dataloader_idx=0)
+    return model.on_after_batch_transfer(batch, dataloader_idx=0)
 
 
 def infer_export_spec(model: L.LightningModule, batch: dict[str, Any]) -> ExportSpec:
@@ -163,7 +164,7 @@ def resolve_export_spec(
     on :class:`~autoware_ml.models.base.BaseModel`. The default implementation
     falls back to the generic forward-signature-based export path.
     """
-    batch = get_predict_batch(datamodule, device)
+    batch = get_predict_batch(datamodule, model, device)
     return model.build_export_spec(batch)
 
 
@@ -396,8 +397,8 @@ def should_modify_graph(modify_graph_cfg: DictConfig | None) -> bool:
     """Return whether graph modification is enabled."""
     if modify_graph_cfg is None:
         return False
-    if isinstance(modify_graph_cfg, DictConfig) and OmegaConf.is_none(modify_graph_cfg):
-        return False
+    if isinstance(modify_graph_cfg, DictConfig):
+        return OmegaConf.to_container(modify_graph_cfg, resolve=False) is not None
     return True
 
 

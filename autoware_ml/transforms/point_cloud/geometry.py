@@ -24,6 +24,25 @@ import numpy as np
 from autoware_ml.transforms.base import BaseTransform
 
 
+def _build_rotation_matrix(axis: str, angle: float) -> np.ndarray:
+    """Build a 3D rotation matrix for one axis."""
+    cos, sin = np.cos(angle), np.sin(angle)
+    if axis == "x":
+        return np.array([[1, 0, 0], [0, cos, -sin], [0, sin, cos]], dtype=np.float32)
+    if axis == "y":
+        return np.array([[cos, 0, sin], [0, 1, 0], [-sin, 0, cos]], dtype=np.float32)
+    if axis == "z":
+        return np.array([[cos, -sin, 0], [sin, cos, 0], [0, 0, 1]], dtype=np.float32)
+    raise NotImplementedError(f"Unsupported rotation axis: {axis}")
+
+
+def _resolve_rotation_center(coord: np.ndarray, configured_center: np.ndarray | None) -> np.ndarray:
+    """Resolve the rotation center for a point cloud."""
+    if configured_center is not None:
+        return configured_center
+    return (coord.min(axis=0) + coord.max(axis=0)) / 2.0
+
+
 class RandomRotate(BaseTransform):
     """Randomly rotate point coordinates around the z axis."""
 
@@ -59,12 +78,9 @@ class RandomRotate(BaseTransform):
             Updated sample dictionary.
         """
         angle = np.random.uniform(self.angle[0], self.angle[1]) * np.pi
-        cos, sin = np.cos(angle), np.sin(angle)
-        if self.axis != "z":
-            raise ValueError("Only z-axis rotation is supported in the point-cloud pipeline.")
-        rotation = np.array([[cos, -sin, 0], [sin, cos, 0], [0, 0, 1]], dtype=np.float32)
+        rotation = _build_rotation_matrix(self.axis, angle)
         coord = input_dict["coord"]
-        center = self.center if self.center is not None else coord.mean(axis=0)
+        center = _resolve_rotation_center(coord, self.center)
         input_dict["coord"] = (coord - center) @ rotation.T + center
         if "normal" in input_dict:
             input_dict["normal"] = input_dict["normal"] @ rotation.T
@@ -106,12 +122,9 @@ class RandomRotateTargetAngle(BaseTransform):
             Updated sample dictionary.
         """
         angle = float(np.random.choice(self.angle)) * np.pi
-        if self.axis != "z":
-            raise ValueError("Only z-axis rotation is supported in the point-cloud pipeline.")
-        cos, sin = np.cos(angle), np.sin(angle)
-        rotation = np.array([[cos, -sin, 0], [sin, cos, 0], [0, 0, 1]], dtype=np.float32)
+        rotation = _build_rotation_matrix(self.axis, angle)
         coord = input_dict["coord"]
-        center = self.center if self.center is not None else coord.mean(axis=0)
+        center = _resolve_rotation_center(coord, self.center)
         input_dict["coord"] = (coord - center) @ rotation.T + center
         if "normal" in input_dict:
             input_dict["normal"] = input_dict["normal"] @ rotation.T

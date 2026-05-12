@@ -205,10 +205,9 @@ def should_enable_logger(cfg: DictConfig) -> bool:
         cfg: Fully composed Hydra configuration.
 
     Returns:
-        ``True`` when a logger configuration is present and the run is not a
-        ``fast_dev_run`` smoke test.
+        ``True`` when a logger configuration is present.
     """
-    return cfg.get("logger") is not None and not bool(cfg.trainer.get("fast_dev_run", False))
+    return cfg.get("logger") is not None
 
 
 def _flatten_params(prefix: str, value: Any) -> dict[str, str]:

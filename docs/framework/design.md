@@ -26,7 +26,7 @@ flowchart TB
         LightningDataModule --> Transforms[Transforms]
         Transforms --> Collation[Collation]
         Collation --> BatchTransfer[Batch Transfer]
-        BatchTransfer --> Preprocessing[Preprocessing]
+        BatchTransfer --> Preprocessing[Model Preprocessing]
         Preprocessing --> ForwardPass[Forward Pass]
         ForwardPass --> LossComputation[Loss Computation]
         LossComputation --> BackwardPass[Backward Pass]
@@ -90,7 +90,6 @@ The `DataModule` class (extending `LightningDataModule`) manages:
 - DataLoader configuration (batch size, workers, shuffling, pin_memory, etc.)
 - Transforms (CPU-side augmentations per split)
 - Collation (batching samples together, stacking selected keys)
-- Preprocessing (GPU-side transforms after batch transfer)
 
 ```python
 class DataModule(L.LightningDataModule, ABC):
@@ -101,7 +100,6 @@ class DataModule(L.LightningDataModule, ABC):
         val_transforms: TransformsCompose | None = None,
         test_transforms: TransformsCompose | None = None,
         predict_transforms: TransformsCompose | None = None,
-        data_preprocessing: DataPreprocessing | None = None,
         train_dataloader_cfg: DataLoaderConfig | None = None,
     ):
         ...
@@ -115,12 +113,6 @@ class DataModule(L.LightningDataModule, ABC):
     def collate_fn(self, batch_inputs_dicts: Sequence[dict[str, Any]]) -> dict[str, Any]:
         ...
 
-    def on_after_batch_transfer(
-        self, batch_inputs_dict: dict[str, Any], dataloader_idx: int
-    ) -> dict[str, Any]:
-        if self.data_preprocessing is not None:
-            batch_inputs_dict = self.data_preprocessing(batch_inputs_dict)
-        return batch_inputs_dict
 ```
 
 The `Dataset` base class handles transforms application:
@@ -183,15 +175,16 @@ Public transform targets should reference the concrete implementation module, fo
 `autoware_ml.transforms.point_cloud.scene.RandomFlip3D`. Avoid package-level re-export layers in
 `__init__.py`; imports and Hydra `_target_` paths should point at the implementation module directly.
 
-### Preprocessing
+### Runtime Data Preprocessing
 
-Preprocessing runs on GPU after batch transfer, enabling hardware-accelerated operations. It follows the same dict-in/dict-out pattern as transforms but operates on batched tensors.
+Runtime preprocessing is a model-owned pipeline attached through
+`BaseModel.set_data_preprocessing(...)`. It runs on the target device after
+Lightning moves the batch over, and before the model's `forward()`.
 
 ```python
-class DataPreprocessing(nn.Module):
-    def __init__(self, pipeline: Sequence[nn.Module] | None = None):
-        super().__init__()
-        self.pipeline = nn.ModuleList(pipeline or [])
+class DataPreprocessing:
+    def __init__(self, pipeline: Sequence[Any] = ()):
+        self.pipeline = list(pipeline)
 
     def __call__(self, batch_inputs_dict: dict[str, Any]) -> dict[str, Any]:
         for layer in self.pipeline:
@@ -199,7 +192,12 @@ class DataPreprocessing(nn.Module):
         return batch_inputs_dict
 ```
 
-The `DataModule.on_after_batch_transfer()` method automatically applies preprocessing if configured. Each preprocessing layer is an `nn.Module` that operates on batched tensors already on the target device.
+`BaseModel.on_after_batch_transfer()` applies the pipeline. Output-side
+shaping (e.g., logits → probabilities, voxel-to-point scatter) lives
+**inside the model**, not in a framework pipeline: each model handles it in
+its own `forward()`, `compute_metrics()`, and `predict_outputs()`. Keeping
+this logic in the model class avoids invisible load-bearing dependencies
+between config composition and metric correctness.
 
 ### Model
 
@@ -216,7 +214,6 @@ class BaseModel(L.LightningModule, ABC):
     ):
         super().__init__()
         self.forward_signature = inspect.signature(self.forward)
-        self.compute_metrics_signature = inspect.signature(self.compute_metrics)
         ...
 
     @abstractmethod
@@ -225,14 +222,17 @@ class BaseModel(L.LightningModule, ABC):
 
     @abstractmethod
     def compute_metrics(
-        self, outputs: torch.Tensor | Sequence[torch.Tensor], **kwargs: Any
+        self, batch_inputs_dict: Mapping[str, Any], outputs: Any
     ) -> dict[str, torch.Tensor]:
         ...
 
-    def run_model(self, batch_inputs_dict: Mapping[str, Any]) -> Any:
+    def set_data_preprocessing(self, data_preprocessing: DataPreprocessing) -> None:
         ...
 
-    def predict_outputs(self, outputs: Any) -> Any:
+    def predict_outputs(self, batch_inputs_dict: Mapping[str, Any], outputs: Any) -> Any:
+        ...
+
+    def get_log_batch_size(self, batch_inputs_dict: Mapping[str, Any]) -> int | None:
         ...
 
     def build_export_spec(self, batch_inputs_dict: Mapping[str, Any]) -> ExportSpec:
@@ -244,23 +244,25 @@ class BaseModel(L.LightningModule, ABC):
 
 The base class handles:
 
-- **Unified step logic** - All models share the same step logic for training, validation, test and predict steps
-- **Automatic signature inspection** - Only passes relevant kwargs to `forward()` and `compute_metrics()` based on method signatures captured at initialization
+- **Unified step logic** - All models share the same training, validation, test, and predict execution path
+- **Automatic signature inspection** - Only passes relevant kwargs to `forward()` based on the method signature captured at initialization
+- **Runtime data preprocessing** - Applies the model-owned preprocessing pipeline after batch transfer
 - **Metric logging** - Logs metrics to Lightning's logger with proper prefixes
-- **Predict step** - Handles prediction without computing metrics
+- **Predict step** - Runs forward and formats predictions via `predict_outputs()`
 - **Export contract** - Supports a generic forward-signature-based export path and model-owned explicit export wrappers
 
 Models can have **any internal architecture**. The default path filters batch
-inputs to match method signatures using `inspect.signature()`, while more
-specialized models can override hooks such as `run_model()`,
-`prepare_metric_inputs()`, `get_log_batch_size()`, or `build_export_spec()`
+inputs to match the `forward()` signature using `inspect.signature()`, while
+specialized models can override hooks such as `predict_outputs()`,
+`get_log_batch_size()`, `set_data_preprocessing()`, or `build_export_spec()`
 without leaving the shared framework contract.
 
 !!! note
-    When a model relies on the default signature-based path, `forward()` and
-    `compute_metrics()` argument names must match keys in the batch dictionary.
-    Models with more specialized batching or export requirements should
-    override the relevant hooks instead of bypassing `BaseModel`.
+    When a model relies on the default signature-based path, `forward()`
+    argument names must match keys in the batch dictionary after runtime
+    preprocessing has run. Models with more specialized batching or export
+    requirements should override the relevant hooks instead of bypassing
+    `BaseModel`.
 
 ### Deployment Pipeline
 

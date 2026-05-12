@@ -4,7 +4,9 @@ defaults:
   - _self_
 
 datamodule:
-  stack_keys: [fused_img, gt_calibration_status]
+  collation_map:
+    fused_img: stack
+    gt_calibration_status: stack
   train_dataloader_cfg:
     batch_size: 8
     persistent_workers: true
@@ -233,9 +235,6 @@ datamodule:
       - _target_: autoware_ml.transforms.common.tensor.PermuteAxes
         input_keys: [fused_img]
         axes: [2, 0, 1]
-  data_preprocessing:
-    pipeline:
-
 model:
   _target_: autoware_ml.models.calibration_status.calibration_status.CalibrationStatusClassifier
   backbone:
