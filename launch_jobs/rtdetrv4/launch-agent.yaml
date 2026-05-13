@@ -1,0 +1,5 @@
+max_jobs: 1
+queues:
+  - autoware-ml-local-gpu
+builder:
+  type: noop

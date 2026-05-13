@@ -1,0 +1,43 @@
+# @package _global_
+defaults:
+  - /tasks/detection2d/rtdetrv4/base
+  - _self_
+
+model:
+  backbone:
+    name: B0
+    return_idx: [1, 2, 3]
+    freeze_stem_only: false
+    freeze_at: -1
+    freeze_norm: false
+  encoder:
+    in_channels: [256, 512, 1024]
+    hidden_dim: 256
+    depth_mult: 0.34
+    expansion: 0.5
+  decoder:
+    num_layers: 3
+    hidden_dim: 256
+    feat_channels: [256, 256, 256]
+    reg_scale: 4.0
+  optimizer:
+    lr: 0.0004
+    weight_decay: 0.0001
+  optimizer_group_overrides:
+    backbone:
+      lr: 0.0002
+    backbone_norm:
+      lr: 0.0002
+      weight_decay: 0.0
+    encoder_decoder_norm_bias:
+      weight_decay: 0.0
+
+trainer:
+  max_epochs: 132
+
+flat_epoch: 64
+no_aug_epoch: 12
+mixup_epochs: [4, 64]
+strong_aug_stop_epoch: 120
+multiscale_stop_epoch: 120
+multiscale_base_size_repeat: 20

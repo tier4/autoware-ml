@@ -50,6 +50,10 @@ MANIFEST
 .*cache/
 .cspell-shared.json
 .debug.env
+wandb/
+wandb_runs/
+wandb_env.sh
+wandb_local_env.sh
 package-lock.json
 node_modules/
 site/

@@ -33,10 +33,9 @@ from hydra import compose, initialize_config_dir, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 
 from autoware_ml.utils.cli.helpers import adjust_argv, resolve_config_reference, run_lazy_script
-from autoware_ml.utils.mlflow_helpers import (
+from autoware_ml.utils.tracking_helpers import (
     AUTOWARE_ML_HYDRA_RUN_DIR_ENV,
     AUTOWARE_ML_RUN_ID_ENV,
-    generate_experiment_name,
     generate_hydra_run_dir,
     prepare_run_context,
     resolve_lineage_context,
@@ -163,17 +162,17 @@ def prepare_runtime_environment(
 
     if should_enable_logger(cfg):
         checkpoint_path = Path(checkpoint) if checkpoint is not None else None
-        experiment_name = generate_experiment_name(config_name)
+        experiment_name = None
         parent_run_id = None
         extra_tags = None
         if checkpoint_path is not None:
-            experiment_name, parent_run_id = resolve_lineage_context(config_name, checkpoint_path)
+            experiment_name, parent_run_id = resolve_lineage_context(cfg, config_name, checkpoint_path)
             extra_tags = {
                 "checkpoint_path": str(checkpoint_path),
                 "source_run_id": parent_run_id or "",
             }
         run_context = prepare_run_context(
-            cfg.logger.tracking_uri,
+            cfg,
             config_name,
             hydra_dir=None,
             stage=stage,
@@ -190,7 +189,7 @@ def prepare_runtime_environment(
     return {
         AUTOWARE_ML_RUN_ID_ENV: None,
         AUTOWARE_ML_HYDRA_RUN_DIR_ENV: str(
-            generate_hydra_run_dir(config_name, started_at=started_at)
+            generate_hydra_run_dir(None, config_name, started_at=started_at)
         ),
     }
 

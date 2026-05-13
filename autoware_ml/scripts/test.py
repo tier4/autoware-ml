@@ -37,12 +37,13 @@ from autoware_ml.utils.runtime import (
     resolve_work_dir,
     set_seed,
 )
-from autoware_ml.utils.mlflow_helpers import (
+from autoware_ml.utils.tracking_helpers import (
     AUTOWARE_ML_RUN_ID_ENV,
     build_run_metadata,
     configure_logger,
     get_user_config_name,
     load_run_context,
+    log_stage_artifacts,
     prepare_run_context,
     resolve_lineage_context,
     should_enable_logger,
@@ -83,20 +84,26 @@ def main(cfg: DictConfig):
     if checkpoint_path is None:
         raise ValueError("Checkpoint path must be provided for testing.")
     checkpoint_path = Path(checkpoint_path)
-    experiment_name, parent_run_id = resolve_lineage_context(config_name, checkpoint_path)
+    experiment_name, parent_run_id = resolve_lineage_context(cfg, config_name, checkpoint_path)
     run_context = None
     if logger_enabled:
         pre_created_run_id = os.environ.get(AUTOWARE_ML_RUN_ID_ENV)
         if pre_created_run_id is not None:
-            run_context = load_run_context(cfg.logger.tracking_uri, pre_created_run_id)
+            run_context = load_run_context(
+                cfg,
+                pre_created_run_id,
+                hydra_dir=work_dir,
+                config_name=config_name,
+                stage="test",
+            )
             if work_dir != run_context.hydra_dir:
                 raise RuntimeError(
-                    f"Hydra work directory '{work_dir}' does not match the pre-created MLflow "
+                    f"Hydra work directory '{work_dir}' does not match the pre-created tracking "
                     f"run directory '{run_context.hydra_dir}'."
                 )
         else:
             run_context = prepare_run_context(
-                cfg.logger.tracking_uri,
+                cfg,
                 config_name,
                 hydra_dir=work_dir,
                 stage="test",
@@ -111,10 +118,12 @@ def main(cfg: DictConfig):
     logger.info("Instantiating loggers...")
     trainer_logger = None
     if logger_enabled:
-        write_run_config_artifacts(cfg, run_context.artifact_dir)
+        write_run_config_artifacts(cfg, run_context)
         write_run_metadata(
-            run_context.artifact_dir,
+            cfg,
+            run_context,
             build_run_metadata(
+                cfg,
                 run_context,
                 config_name,
                 run_context.hydra_dir,
@@ -125,13 +134,7 @@ def main(cfg: DictConfig):
                 },
             ),
         )
-        configure_logger(
-            cfg.logger,
-            run_context.experiment_name,
-            run_context.run_name,
-            run_context.tags,
-            run_id=run_context.run_id,
-        )
+        configure_logger(cfg, run_context)
         trainer_logger = hydra.utils.instantiate(cfg.logger)
 
     logger.info("Instantiating trainer...")
@@ -151,6 +154,8 @@ def main(cfg: DictConfig):
 
     load_model_from_checkpoint(model, checkpoint_path, map_location="cpu")
     trainer.test(model, datamodule=datamodule, ckpt_path=None)
+
+    log_stage_artifacts(cfg, trainer_logger, run_context, "test")
 
     logger.info("Evaluation completed!")
 

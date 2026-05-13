@@ -85,6 +85,7 @@ RUN CONDA_OVERRIDE_CUDA=12.8 /opt/pixi/bin/pixi install --locked --environment d
 # Install the project itself in editable mode inside the environment
 COPY . /workspace/
 RUN /opt/pixi/bin/pixi run --environment dev install-project \
+  && /opt/pixi/bin/pixi run --environment dev python -c "import wandb; print(wandb.__version__)" \
   && mkdir -p /usr/share/bash-completion/completions \
   && /opt/pixi/bin/pixi run --environment dev autoware-ml --show-completion bash \
       > /usr/share/bash-completion/completions/autoware-ml \

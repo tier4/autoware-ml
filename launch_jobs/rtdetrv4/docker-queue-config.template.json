@@ -1,0 +1,22 @@
+{
+  "rm": true,
+  "gpus": "all",
+  "ipc": "host",
+  "ulimit": ["memlock=-1", "stack=67108864"],
+  "workdir": "/workspace",
+  "volume": [
+    "<HOST_AUTOWARE_ML_REPO>:/workspace",
+    "<HOST_PUBLIC_DATA>:/workspace/data",
+    "/etc/localtime:/etc/localtime:ro"
+  ],
+  "env": [
+    "AUTOWARE_ML_DATA_PATH=/workspace/data",
+    "WANDB_API_KEY",
+    "WANDB_ENTITY",
+    "WANDB_PROJECT",
+    "WANDB_DIR=/workspace/wandb_runs",
+    "WANDB_CACHE_DIR=/workspace/.wandb-cache",
+    "WANDB_CONFIG_DIR=/workspace/.wandb-config",
+    "WANDB_DATA_DIR=/workspace/.wandb-cache"
+  ]
+}

@@ -163,7 +163,7 @@ callbacks:
 
 ### `logger`
 
-MLflow experiment tracking:
+Experiment tracking. MLflow is the default logger:
 
 ```yaml
 logger:
@@ -171,7 +171,13 @@ logger:
   tracking_uri: sqlite:///mlruns/mlflow.db
 ```
 
-Autoware-ML populates `experiment_name`, `run_name`, `run_id`, and default tags automatically at runtime.
+W&B can be selected with the logger config group:
+
+```bash
+autoware-ml train --config-name <task>/<model>/<config> logger=wandb
+```
+
+Autoware-ML populates run names, run IDs, grouping fields, and default tags automatically at runtime.
 
 ### `deploy`
 

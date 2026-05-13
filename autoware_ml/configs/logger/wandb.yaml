@@ -1,0 +1,10 @@
+# @package _global_
+
+logger:
+  _target_: lightning.pytorch.loggers.WandbLogger
+  project: ${oc.env:WANDB_PROJECT,autoware-ml}
+  entity: ${oc.env:WANDB_ENTITY,null}
+  save_dir: ${oc.env:WANDB_DIR,wandb_runs}
+  offline: false
+  log_model: false
+  tags: []

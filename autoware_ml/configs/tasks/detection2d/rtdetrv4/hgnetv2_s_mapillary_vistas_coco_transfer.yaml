@@ -1,0 +1,32 @@
+# @package _global_
+defaults:
+  - /tasks/detection2d/rtdetrv4/hgnetv2_s_mapillary_vistas_simple_driving
+  - _self_
+
+# Fine-tuning preset that initializes the Mapillary detector from an upstream
+# COCO RT-DETRv4-S checkpoint. The checkpoint path itself remains user-configured.
+model:
+  backbone:
+    pretrained: false
+  init_checkpoint_state_key: ema.module
+  init_checkpoint_filter_mismatched_shapes: true
+  init_checkpoint_strict: false
+  criterion:
+    losses: [vfl, boxes, local]
+    use_uni_set: false
+    weight_dict:
+      loss_mal: 0.0
+      loss_vfl: 1.0
+      loss_bbox: 5.0
+      loss_giou: 2.0
+      loss_fgl: 0.15
+      loss_ddf: 1.5
+  optimizer:
+    lr: 0.0005
+  optimizer_group_overrides:
+    backbone:
+      lr: 0.0005
+    backbone_norm:
+      lr: 0.0005
+      weight_decay: 0.0
+

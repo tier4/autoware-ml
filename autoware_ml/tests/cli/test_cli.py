@@ -605,6 +605,32 @@ class TestCliRuntime:
         assert "+trainer.strategy=ddp" in cli_runtime.sys.argv
         assert "trainer.devices=2" in cli_runtime.sys.argv
 
+    def test_prepare_runtime_environment_supports_wandb_logger_override(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Runtime preparation should route W&B logger configs through the W&B backend."""
+
+        class DummyRunContext:
+            run_id = "wandb-run-1"
+            hydra_dir = tmp_path / "wandb_runs" / SAMPLE_CONFIG_NAME / "wandb-run-1" / "hydra"
+
+        monkeypatch.chdir(tmp_path)
+        with patch(
+            "autoware_ml.cli.runtime.prepare_run_context",
+            return_value=DummyRunContext(),
+        ) as prepare_run_context_mock:
+            env = cli_runtime.prepare_runtime_environment(
+                SAMPLE_CONFIG_NAME,
+                "tasks",
+                "train",
+                extra_args=["logger=wandb"],
+            )
+
+        cfg_arg = prepare_run_context_mock.call_args.args[0]
+        assert cfg_arg.logger._target_ == "lightning.pytorch.loggers.WandbLogger"
+        assert env["AUTOWARE_ML_RUN_ID"] == "wandb-run-1"
+        assert env["AUTOWARE_ML_HYDRA_RUN_DIR"] == str(DummyRunContext.hydra_dir)
+
 
 class TestResolveHydraArgv:
     def test_does_not_inject_run_config_name_override(self) -> None:

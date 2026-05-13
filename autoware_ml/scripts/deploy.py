@@ -37,18 +37,21 @@ from autoware_ml.utils.deploy import (
     supports_export_stage,
     validate_cuda_available,
 )
-from autoware_ml.utils.mlflow_helpers import (
+from autoware_ml.utils.tracking_helpers import (
     AUTOWARE_ML_RUN_ID_ENV,
     build_run_metadata,
+    configure_logger,
+    get_tracking_backend,
     get_user_config_name,
     load_run_context,
-    log_config_params,
     prepare_run_context,
     resolve_lineage_context,
     should_enable_logger,
     write_run_config_artifacts,
     write_run_metadata,
 )
+from autoware_ml.utils.mlflow_helpers import log_config_params
+import autoware_ml.utils.wandb_helpers as wandb_helpers
 from autoware_ml.utils.runtime import (
     configure_torch_runtime,
     get_config_path,
@@ -79,24 +82,32 @@ def main(cfg: DictConfig) -> None:
         raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
 
     logger_enabled = should_enable_logger(cfg)
+    tracking_backend = get_tracking_backend(cfg)
     mlflow_client: MlflowClient | None = None
     deploy_run_id: str | None = None
+    wandb_run = None
     experiment_name: str | None = None
     parent_run_id: str | None = None
 
     if logger_enabled:
-        experiment_name, parent_run_id = resolve_lineage_context(config_name, checkpoint_path)
+        experiment_name, parent_run_id = resolve_lineage_context(cfg, config_name, checkpoint_path)
         pre_created_run_id = os.environ.get(AUTOWARE_ML_RUN_ID_ENV)
         if pre_created_run_id is not None:
-            run_context = load_run_context(cfg.logger.tracking_uri, pre_created_run_id)
+            run_context = load_run_context(
+                cfg,
+                pre_created_run_id,
+                hydra_dir=work_dir,
+                config_name=config_name,
+                stage="deploy",
+            )
             if work_dir != run_context.hydra_dir:
                 raise RuntimeError(
-                    f"Hydra work directory '{work_dir}' does not match the pre-created MLflow "
+                    f"Hydra work directory '{work_dir}' does not match the pre-created tracking "
                     f"run directory '{run_context.hydra_dir}'."
                 )
         else:
             run_context = prepare_run_context(
-                cfg.logger.tracking_uri,
+                cfg,
                 config_name,
                 hydra_dir=work_dir,
                 stage="deploy",
@@ -107,13 +118,19 @@ def main(cfg: DictConfig) -> None:
                     "source_run_id": parent_run_id or "",
                 },
             )
-        mlflow_client = MlflowClient(tracking_uri=run_context.tracking_uri)
+        if tracking_backend == "mlflow":
+            mlflow_client = MlflowClient(tracking_uri=run_context.tracking_uri)
+        elif tracking_backend == "wandb":
+            configure_logger(cfg, run_context)
+            wandb_run = wandb_helpers.init_run(run_context, cfg)
         deploy_run_id = run_context.run_id
         experiment_name = run_context.experiment_name
-        write_run_config_artifacts(cfg, run_context.artifact_dir)
+        write_run_config_artifacts(cfg, run_context)
         write_run_metadata(
-            run_context.artifact_dir,
+            cfg,
+            run_context,
             build_run_metadata(
+                cfg,
                 run_context,
                 config_name,
                 run_context.hydra_dir,
@@ -146,7 +163,7 @@ def main(cfg: DictConfig) -> None:
         run_context.artifact_dir
     ):
         raise ValueError(
-            "When MLflow logging is enabled, deployment outputs must stay inside the MLflow "
+            "When experiment tracking is enabled, deployment outputs must stay inside the tracking "
             f"artifact directory '{run_context.artifact_dir}'. "
             "Leave output_dir unset to use the default exports directory."
         )
@@ -221,6 +238,9 @@ def main(cfg: DictConfig) -> None:
                 deploy_run_id,
                 status=RunStatus.to_string(RunStatus.FINISHED),
             )
+        if wandb_run is not None and run_context is not None:
+            wandb_helpers.log_stage_artifacts(wandb_run, run_context, "deploy")
+            wandb_run.finish()
 
         logger.info("Deployment completed successfully.")
         if onnx_exported and onnx_path.exists():
@@ -233,6 +253,8 @@ def main(cfg: DictConfig) -> None:
                 deploy_run_id,
                 status=RunStatus.to_string(RunStatus.FAILED),
             )
+        if wandb_run is not None:
+            wandb_run.finish(exit_code=1)
         raise
 
 

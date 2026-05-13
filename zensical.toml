@@ -28,6 +28,7 @@ nav = [
     { "Configuration" = "user-guide/configuration.md" },
     { "Training" = "user-guide/training.md" },
     { "MLflow" = "user-guide/mlflow.md" },
+    { "Weights & Biases" = "user-guide/wandb.md" },
     { "Optuna" = "user-guide/optuna.md" },
     { "Deployment" = "user-guide/deployment.md" },
   ]},

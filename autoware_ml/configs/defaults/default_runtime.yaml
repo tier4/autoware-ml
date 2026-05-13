@@ -4,7 +4,7 @@ defaults:
   - modules/callbacks
   - modules/datamodule
   - modules/deploy
-  - modules/logger
+  - /logger: mlflow
   - modules/model
   - modules/run
   - modules/trainer
