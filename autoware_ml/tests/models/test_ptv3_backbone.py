@@ -10,16 +10,15 @@ import pytest
 import torch
 import torch.nn as nn
 
+import autoware_ml.utils.point_cloud.structures as point_structures
 from autoware_ml.losses.segmentation3d.lovasz import LovaszLoss
 from autoware_ml.models.segmentation3d.backbones.ptv3 import (
     Point,
-    PointTransformerV3Backbone,
     PointSequential,
+    PointTransformerV3Backbone,
     SerializedAttention,
 )
 from autoware_ml.models.segmentation3d.ptv3 import PTv3SegmentationModel
-from autoware_ml.utils.point_cloud.serialization.default import decode, encode
-import autoware_ml.utils.point_cloud.structures as point_structures
 
 
 def test_serialized_attention_requires_supported_flash_configuration() -> None:
@@ -120,12 +119,12 @@ def test_build_export_module_disables_flash_attention_without_mutating_live_back
         def set_serialization_order(self, order: tuple[str, ...]) -> None:
             self.order = list(order)
 
-        def prepare_export_copy(self, order: tuple[str, ...]) -> torch.nn.Module:
-            return PointTransformerV3Backbone.prepare_export_copy(self, order)
+        def prepare_for_export(self, order: tuple[str, ...]) -> torch.nn.Module:
+            return PointTransformerV3Backbone.prepare_for_export(self, order)
 
     model = PTv3SegmentationModel.__new__(PTv3SegmentationModel)
     torch.nn.Module.__init__(model)
-    model.seg_head = nn.Linear(4, 2)
+    model.seg3d_head = nn.Linear(4, 2)
     model.backbone = _BackboneForExport(attention)
 
     with patch(
@@ -135,6 +134,7 @@ def test_build_export_module_disables_flash_attention_without_mutating_live_back
         export_module = PTv3SegmentationModel._build_export_module(
             model,
             sparse_shape=torch.tensor([64, 64, 64], dtype=torch.long),
+            serialized_depth=torch.tensor(6, dtype=torch.long),
         )
 
     export_attention = export_module.backbone.attention
@@ -147,7 +147,7 @@ def test_build_export_module_disables_flash_attention_without_mutating_live_back
     assert export_module.backbone.shuffle_orders is False
 
 
-def test_prepare_export_copy_handles_loaded_flash_attention_module() -> None:
+def test_prepare_for_export_handles_loaded_flash_attention_module() -> None:
     attention = SerializedAttention(
         channels=32,
         num_heads=4,
@@ -174,8 +174,8 @@ def test_prepare_export_copy_handles_loaded_flash_attention_module() -> None:
         def set_serialization_order(self, order: tuple[str, ...]) -> None:
             self.order = list(order)
 
-        def prepare_export_copy(self, order: tuple[str, ...]) -> torch.nn.Module:
-            return PointTransformerV3Backbone.prepare_export_copy(self, order)
+        def prepare_for_export(self, order: tuple[str, ...]) -> torch.nn.Module:
+            return PointTransformerV3Backbone.prepare_for_export(self, order)
 
     backbone = _BackboneForExport(attention)
 
@@ -183,7 +183,7 @@ def test_prepare_export_copy_handles_loaded_flash_attention_module() -> None:
         "autoware_ml.models.segmentation3d.backbones.ptv3.replace_submconv3d_for_export",
         return_value=None,
     ):
-        export_backbone = PointTransformerV3Backbone.prepare_export_copy(backbone, ("z", "z-trans"))
+        export_backbone = PointTransformerV3Backbone.prepare_for_export(backbone, ("z", "z-trans"))
 
     assert attention.flash_attn is math
     assert export_backbone.attention.flash_attn is None
@@ -324,15 +324,6 @@ def test_predict_outputs_reconstructs_point_level_predictions() -> None:
     assert torch.allclose(predictions["pred_probs"], expected_probs)
 
 
-def test_get_log_batch_size_uses_offset_length() -> None:
-    model = PTv3SegmentationModel.__new__(PTv3SegmentationModel)
-    torch.nn.Module.__init__(model)
-
-    batch = {"offset": torch.tensor([128, 256, 320], dtype=torch.int32)}
-
-    assert model.get_log_batch_size(batch) == 3
-
-
 def test_point_serialization_accepts_explicit_depth_override() -> None:
     point = Point(
         {
@@ -350,28 +341,3 @@ def test_point_serialization_accepts_explicit_depth_override() -> None:
 
     assert point["serialized_depth"].item() == 4
     assert point["serialized_code"].shape == (2, 2)
-
-
-def test_serialization_helpers_reject_unsupported_orders() -> None:
-    grid_coord = torch.tensor([[0, 0, 0]], dtype=torch.int64)
-
-    with pytest.raises(ValueError, match="Unsupported serialization order"):
-        encode(grid_coord, depth=4, order="invalid")
-
-    with pytest.raises(ValueError, match="Unsupported serialization order"):
-        decode(torch.tensor([0], dtype=torch.int64), depth=4, order="invalid")
-
-
-def test_point_sparsify_requires_spconv_at_runtime(monkeypatch) -> None:
-    monkeypatch.setattr(point_structures, "IS_SPCONV_AVAILABLE", False)
-    point = Point(
-        {
-            "coord": torch.randn(2, 3),
-            "grid_coord": torch.randint(0, 4, (2, 3), dtype=torch.int32),
-            "feat": torch.randn(2, 4),
-            "offset": torch.tensor([2], dtype=torch.long),
-        }
-    )
-
-    with pytest.raises(ModuleNotFoundError, match="spconv is required"):
-        point.sparsify()

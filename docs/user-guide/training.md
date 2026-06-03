@@ -21,7 +21,7 @@ resolved config snapshots, and run metadata.
 Example:
 
 ```bash
-autoware-ml train --config-name calibration_status/calibration_status_classifier/resnet18_t4dataset_j6gen2
+autoware-ml train --config-name segmentation3d/ptv3/voxel005_102m_nuscenes
 ```
 
 ## Long-Running Training
@@ -29,14 +29,14 @@ autoware-ml train --config-name calibration_status/calibration_status_classifier
 For long jobs inside Docker or remote environments, prefer managed background sessions over `nohup`:
 
 ```bash
-autoware-ml session start --name calibration-status-train --cwd /workspace -- \
-    train --config-name calibration_status/calibration_status_classifier/resnet18_t4dataset_j6gen2
+autoware-ml session start --name ptv3-train --cwd /workspace -- \
+    train --config-name segmentation3d/ptv3/voxel005_102m_nuscenes
 ```
 
 Later you can open the live viewer with `session attach`:
 
 ```bash
-autoware-ml session attach --name calibration-status-train
+autoware-ml session attach --name ptv3-train
 ```
 
 If you want to open the viewer immediately at startup, add `--attach` to `session start`. The viewer
@@ -44,7 +44,7 @@ is read-only. Press `Ctrl+C` to return to your shell while keeping the training 
 To terminate the training job, use:
 
 ```bash
-autoware-ml session stop --name calibration-status-train
+autoware-ml session stop --name ptv3-train
 ```
 
 ## Resuming Training
@@ -53,7 +53,7 @@ Continue from a checkpoint:
 
 ```bash
 autoware-ml train --config-name <task>/<model>/<config> \
-    +checkpoint=mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/last.ckpt
+    --resume-checkpoint mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/last.ckpt
 ```
 
 ## Testing
@@ -62,7 +62,7 @@ Evaluate a trained checkpoint with the same task config:
 
 ```bash
 autoware-ml test --config-name <task>/<model>/<config> \
-    +checkpoint=mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt
+    --weights mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 The test command creates a dedicated MLflow run linked to the source training run.
@@ -92,21 +92,15 @@ autoware-ml train --config-name <task>/<model>/<config> \
 
 ## Multi-GPU Training
 
-```bash
-# All available GPUs
-autoware-ml train --config-name <task>/<model>/<config> \
-    trainer.devices=auto +trainer.strategy=ddp
+By default `devices=auto` and `strategy=auto` are set. Lightning uses all available GPUs and selects DDP automatically when more than one GPU is detected. Single-GPU runs stay in the main process (no subprocess overhead).
 
-# Specific GPUs
+```bash
+# Use a subset of GPUs
 autoware-ml train --config-name <task>/<model>/<config> \
-    trainer.devices=[0,1] +trainer.strategy=ddp
+    trainer.devices=[0,1]
 ```
 
-**Strategy options:**
-
-- `ddp`: Default distributed training
-- `ddp_find_unused_parameters_true`: For models with unused parameters
-- `fsdp`: For very large models (parameter sharding)
+To override the strategy, see [Lightning strategy documentation](https://lightning.ai/docs/pytorch/stable/extensions/strategy.html).
 
 ## Debugging
 
@@ -127,7 +121,7 @@ autoware-ml train --config-name <task>/<model>/<config> \
 ## Performance Tips
 
 - Use mixed precision (`trainer.precision=16-mixed`) for speed
-- Enable `pin_memory=true` for faster CPU→GPU transfer
+- Enable `pin_memory=true` for faster CPU->GPU transfer
 - Use `persistent_workers=true` to avoid worker restart overhead
 - Increase `num_workers` if many CPU cores are available
 - Use SSD storage for large datasets

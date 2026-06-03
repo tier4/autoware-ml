@@ -156,6 +156,7 @@ class GridSample(BaseTransform):
         return_min_coord: bool = False,
         return_displacement: bool = False,
         project_displacement: bool = False,
+        point_cloud_range: Sequence[float] | None = None,
     ) -> None:
         """Initialize the grid sampling transform.
 
@@ -172,6 +173,10 @@ class GridSample(BaseTransform):
             return_displacement: Whether to expose per-point displacement to the
                 voxel center.
             project_displacement: Whether to project displacement to normals.
+            point_cloud_range: Optional ``[x_min, y_min, z_min, x_max, y_max,
+                z_max]`` range. When provided, the voxelization origin is fixed
+                to the range minimum instead of being derived from the data.
+                This ensures a stable, range-based grid across all splits.
         """
         self.grid_size = np.asarray(grid_size, dtype=np.float32)
         if hash_type not in self._HASH_FUNCTIONS:
@@ -189,6 +194,13 @@ class GridSample(BaseTransform):
         self.return_min_coord = return_min_coord
         self.return_displacement = return_displacement
         self.project_displacement = project_displacement
+        if point_cloud_range is not None:
+            pcr = np.asarray(point_cloud_range, dtype=np.float32)
+            self._fixed_min_coord: np.ndarray | None = np.floor(pcr[:3] / self.grid_size).astype(
+                np.int64
+            )
+        else:
+            self._fixed_min_coord = None
 
     def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
         """Subsample points by selecting representatives per grid cell.
@@ -201,7 +213,10 @@ class GridSample(BaseTransform):
         """
         scaled_coord = input_dict["coord"].astype(np.float32) / self.grid_size.astype(np.float32)
         grid_coord = np.floor(scaled_coord).astype(np.int64)
-        min_coord = grid_coord.min(axis=0)
+        if self._fixed_min_coord is not None:
+            min_coord = self._fixed_min_coord
+        else:
+            min_coord = grid_coord.min(axis=0)
         grid_coord -= min_coord
         scaled_coord -= min_coord
         min_coord_world = min_coord.astype(np.float32) * self.grid_size.astype(np.float32)

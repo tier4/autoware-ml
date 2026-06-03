@@ -9,20 +9,16 @@ datamodule:
     gt_calibration_status: stack
   train_dataloader_cfg:
     batch_size: 8
-    persistent_workers: true
     num_workers: 4
     shuffle: true
   val_dataloader_cfg:
     batch_size: 8
-    persistent_workers: true
     num_workers: 4
   test_dataloader_cfg:
     batch_size: 8
-    persistent_workers: true
     num_workers: 4
   predict_dataloader_cfg:
     batch_size: 1
-    persistent_workers: true
     num_workers: 1
   train_transforms:
     pipeline:
@@ -269,10 +265,12 @@ trainer:
 
 deploy:
   onnx:
-    dynamic_shapes:
-      fused_img: { 2: height, 3: width }
-    input_names: [input]
-    output_names: [output]
+    modules:
+      end_to_end:
+        input_names: [input]
+        output_names: [output]
+        dynamic_shapes:
+          fused_img: { 2: height, 3: width }
   tensorrt:
     input_shapes:
       input:

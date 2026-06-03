@@ -18,6 +18,7 @@ This module contains shared parsing, completion, and lazy-import helpers for the
 """
 
 import importlib
+import re
 import shlex
 import shutil
 import subprocess
@@ -30,6 +31,27 @@ from autoware_ml.configs.resolvers import register_config_resolvers
 from autoware_ml.utils.session import AUTOWARE_ML_SESSION_OPTION, TMUX_BASE_COMMAND
 
 register_config_resolvers()
+
+_NUMERIC_VALUE_PATTERN = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
+
+
+def _is_cli_value_token(token: str) -> bool:
+    """Return whether a CLI token can be consumed as a value."""
+    return not token.startswith("-") or _NUMERIC_VALUE_PATTERN.fullmatch(token) is not None
+
+
+def _parse_cli_value(value_str: str) -> Any:
+    """Parse one CLI value token into a bool, int, float, or string."""
+    lower_value = value_str.lower()
+    if lower_value == "true":
+        return True
+    if lower_value == "false":
+        return False
+    if _NUMERIC_VALUE_PATTERN.fullmatch(value_str) is None:
+        return value_str
+    if any(marker in value_str for marker in (".", "e", "E")):
+        return float(value_str)
+    return int(value_str)
 
 
 def parse_extra_args(extra_args: Sequence[str]) -> dict[str, Any]:
@@ -50,26 +72,8 @@ def parse_extra_args(extra_args: Sequence[str]) -> dict[str, Any]:
         key = arg.lstrip("-").replace("-", "_")
 
         # Check if the next element is a value or if the current arg is a standalone flag
-        if i + 1 < len(extra_args) and not extra_args[i + 1].startswith("-"):
-            value_str = extra_args[i + 1]
-
-            # Type Conversion Logic
-            if value_str.lower() == "true":
-                value = True
-            elif value_str.lower() == "false":
-                value = False
-            else:
-                try:
-                    # Attempt integer conversion
-                    if "." in value_str:
-                        value = float(value_str)
-                    else:
-                        value = int(value_str)
-                except ValueError:
-                    # Fallback to string
-                    value = value_str
-
-            kwargs[key] = value
+        if i + 1 < len(extra_args) and _is_cli_value_token(extra_args[i + 1]):
+            kwargs[key] = _parse_cli_value(extra_args[i + 1])
             i += 2  # Consumed key and value
         else:
             # It's a boolean flag (e.g., --verbose) or a key without a clear value
@@ -284,7 +288,9 @@ def complete_session_command_value(command_args: list[str], incomplete: str) -> 
 
         if root in {"train", "test", "deploy"} and last == "--config-name":
             return complete_config_value(incomplete, "tasks")
-        if root in {"test", "deploy"} and last == "+checkpoint":
+        if root in {"train", "test", "deploy"} and last == "--weights":
+            return complete_path_value(incomplete, file_suffixes=(".ckpt",))
+        if root == "train" and last == "--resume-checkpoint":
             return complete_path_value(incomplete, file_suffixes=(".ckpt",))
         if root == "create-dataset" and last in {"--root-path", "--out-dir"}:
             return complete_path_value(incomplete, directories_only=True)
@@ -345,9 +351,9 @@ def complete_session_command_value(command_args: list[str], incomplete: str) -> 
             ]
 
     command_options = {
-        "train": ["--config-name"],
-        "test": ["--config-name", "+checkpoint"],
-        "deploy": ["--config-name", "+checkpoint"],
+        "train": ["--config-name", "--weights", "--resume-checkpoint"],
+        "test": ["--config-name", "--weights"],
+        "deploy": ["--config-name", "--weights"],
         "create-dataset": ["--dataset", "--task", "--root-path", "--out-dir"],
         "mlflow": ["ui", "export"],
     }

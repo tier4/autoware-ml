@@ -90,11 +90,17 @@ class CropBoxInner(BaseTransform):
 
 
 class PointsRangeFilter(BaseTransform):
-    """Keep only points within a configured point-cloud range."""
+    """Drop points outside a configured spatial range.
 
-    _required_keys = ["points"]
+    Operates on whichever per-point coordinate key is present in the sample
+    (``coord`` is preferred; ``points`` is supported for legacy pipelines that
+    have not converted to the ``coord``/``strength`` split yet). All aligned
+    per-point arrays in the sample are filtered with the same mask.
+    """
 
-    def __init__(self, point_cloud_range: list[float]) -> None:
+    _required_keys: list[str] = []
+
+    def __init__(self, point_cloud_range: Sequence[float]) -> None:
         """Initialize the points range filter.
 
         Args:
@@ -104,7 +110,13 @@ class PointsRangeFilter(BaseTransform):
 
     def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
         """Filter points to the configured spatial range."""
-        points: npt.NDArray[np.float32] = input_dict["points"]
+        if "coord" in input_dict:
+            coord_key = "coord"
+        elif "points" in input_dict:
+            coord_key = "points"
+        else:
+            raise KeyError("PointsRangeFilter requires either 'coord' or 'points' in the sample.")
+        points: npt.NDArray[np.float32] = input_dict[coord_key]
         lower = self.point_cloud_range[:3]
         upper = self.point_cloud_range[3:]
         mask = ((points[:, :3] >= lower) & (points[:, :3] <= upper)).all(axis=1)
@@ -115,36 +127,6 @@ class PointsRangeFilter(BaseTransform):
                 and value.shape[0] == points.shape[0]
             ):
                 input_dict[key] = value[mask]
-        return input_dict
-
-
-class PointClip(BaseTransform):
-    """Clamp point coordinates to a configured spatial range."""
-
-    _required_keys = ["coord"]
-
-    def __init__(self, point_cloud_range: Sequence[float]) -> None:
-        """Initialize the point clipping transform.
-
-        Args:
-            point_cloud_range: Point cloud bounds used for clipping.
-        """
-        self.point_cloud_range = np.asarray(point_cloud_range, dtype=np.float32)
-
-    def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
-        """Clamp point coordinates to the configured range.
-
-        Args:
-            input_dict: Sample dictionary updated in place.
-
-        Returns:
-            Updated sample dictionary.
-        """
-        input_dict["coord"] = np.clip(
-            input_dict["coord"],
-            a_min=self.point_cloud_range[:3],
-            a_max=self.point_cloud_range[3:],
-        )
         return input_dict
 
 
@@ -196,6 +178,14 @@ class SphereCrop(BaseTransform):
     def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
         """Keep the nearest points around the selected crop center.
 
+        When called after voxelization, the dictionary holds per-voxel arrays
+        (``coord``, ``segment``, ...) plus ``inverse`` mapping the original
+        points to voxel indices, and any ``origin_*`` arrays carrying per-point
+        ground truth. Dropping voxels invalidates that mapping, so the dropped
+        voxels are also removed from the inverse and from any per-point array
+        whose length matches the original inverse length, and the surviving
+        inverse entries are renumbered to the new voxel positions.
+
         Args:
             input_dict: Sample dictionary updated in place.
 
@@ -213,7 +203,24 @@ class SphereCrop(BaseTransform):
         point_count = input_dict["coord"].shape[0]
         distances = np.linalg.norm(input_dict["coord"] - center, axis=1)
         keep = np.sort(np.argsort(distances)[: self.point_max])
+
+        inverse = input_dict.get("inverse")
+        pre_voxel_count: int | None = None
+        kept_input_mask: np.ndarray | None = None
+        if isinstance(inverse, np.ndarray) and inverse.shape[0] != point_count:
+            keep_mask = np.zeros(point_count, dtype=bool)
+            keep_mask[keep] = True
+            new_voxel_index = np.empty(point_count, dtype=np.int64)
+            new_voxel_index[keep] = np.arange(keep.shape[0])
+            pre_voxel_count = inverse.shape[0]
+            kept_input_mask = keep_mask[inverse]
+            input_dict["inverse"] = new_voxel_index[inverse[kept_input_mask]]
+
         for key, value in list(input_dict.items()):
-            if isinstance(value, np.ndarray) and value.shape[0] == point_count:
+            if key == "inverse" or not isinstance(value, np.ndarray):
+                continue
+            if value.shape[0] == point_count:
                 input_dict[key] = value[keep]
+            elif pre_voxel_count is not None and value.shape[0] == pre_voxel_count:
+                input_dict[key] = value[kept_input_mask]
         return input_dict

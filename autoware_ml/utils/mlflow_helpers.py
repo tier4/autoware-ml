@@ -19,8 +19,10 @@ handling shared by training, testing, deployment, and UI tooling.
 """
 
 import json
+import logging
 import socket
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -39,6 +41,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_ARTIFACTS_DIRNAME = "config"
 AUTOWARE_ML_RUN_ID_ENV = "AUTOWARE_ML_RUN_ID"
 AUTOWARE_ML_HYDRA_RUN_DIR_ENV = "AUTOWARE_ML_HYDRA_RUN_DIR"
+
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -167,6 +172,10 @@ def get_git_sha() -> str:
     )
     if result.returncode == 0:
         return result.stdout.strip()
+    _logger.warning(
+        "Could not resolve git SHA: %s. Provenance will be recorded as 'unknown'.",
+        result.stderr.strip(),
+    )
     return "unknown"
 
 
@@ -278,6 +287,40 @@ def load_run_metadata(checkpoint_path: Path) -> dict[str, Any] | None:
     return None
 
 
+def build_source_checkpoint_metadata(
+    checkpoint_paths: Sequence[Path],
+) -> list[dict[str, str | None]]:
+    """Return lineage metadata for all source checkpoint paths."""
+    source_checkpoints = []
+    for checkpoint_path in checkpoint_paths:
+        metadata = load_run_metadata(checkpoint_path)
+        source_checkpoints.append(
+            {
+                "checkpoint_path": str(checkpoint_path),
+                "run_id": metadata.get("run_id") if metadata is not None else None,
+                "experiment_name": metadata.get("experiment_name")
+                if metadata is not None
+                else None,
+                "config_name": metadata.get("config_name") if metadata is not None else None,
+                "stage": metadata.get("stage") if metadata is not None else None,
+            }
+        )
+    return source_checkpoints
+
+
+def resolve_deploy_lineage(
+    config_name: str,
+    checkpoint_paths: Sequence[Path],
+) -> tuple[str, str | None, list[dict[str, str | None]]]:
+    """Resolve deploy experiment ownership and source checkpoint lineage."""
+    source_checkpoints = build_source_checkpoint_metadata(checkpoint_paths)
+    source_run_ids = [
+        source["run_id"] for source in source_checkpoints if source["run_id"] is not None
+    ]
+    parent_run_id = source_run_ids[0] if len(source_run_ids) == 1 else None
+    return generate_experiment_name(config_name), parent_run_id, source_checkpoints
+
+
 def resolve_lineage_context(
     config_name: str,
     checkpoint_path: Path | None,
@@ -364,10 +407,7 @@ def artifact_uri_to_path(artifact_uri: str) -> Path:
 
 def normalize_artifact_location(artifact_location: str) -> Path:
     """Normalize an MLflow artifact location into a local filesystem path."""
-    try:
-        return artifact_uri_to_path(artifact_location)
-    except ValueError:
-        return Path(artifact_location).resolve()
+    return artifact_uri_to_path(artifact_location)
 
 
 def ensure_experiment(

@@ -52,22 +52,20 @@ def test_export_to_onnx_prefers_export_spec_output_names(tmp_path: Path) -> None
             return x + 1
 
     output_path = tmp_path / "model.onnx"
-    deploy_cfg = OmegaConf.create(
+    onnx_cfg = OmegaConf.create(
         {
-            "onnx": {
-                "opset_version": 17,
-                "dynamo": False,
-                "do_constant_folding": True,
-                "input_names": ["input"],
-                "output_names": ["configured_output"],
-            }
+            "opset_version": 17,
+            "dynamo": False,
+            "do_constant_folding": True,
+            "input_names": ["input"],
+            "output_names": ["configured_output"],
         }
     )
 
     export_to_onnx(
         model=_SingleOutput(),
         input_sample=(torch.ones(2, 3),),
-        deploy_cfg=deploy_cfg,
+        onnx_cfg=onnx_cfg,
         input_param_names=["input"],
         output_names_override=["exported_output"],
         output_path=output_path,

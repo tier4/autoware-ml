@@ -26,16 +26,6 @@ import lightning as L
 from omegaconf import DictConfig
 
 from autoware_ml.utils.checkpoints import apply_matching_weights
-from autoware_ml.utils.runtime import (
-    configure_torch_runtime,
-    get_config_path,
-    instantiate_callbacks,
-    instantiate_trainer,
-    log_configuration,
-    log_hyperparameters,
-    resolve_work_dir,
-    set_seed,
-)
 from autoware_ml.utils.mlflow_helpers import (
     AUTOWARE_ML_RUN_ID_ENV,
     build_run_metadata,
@@ -46,6 +36,16 @@ from autoware_ml.utils.mlflow_helpers import (
     should_enable_logger,
     write_run_config_artifacts,
     write_run_metadata,
+)
+from autoware_ml.utils.runtime import (
+    configure_torch_runtime,
+    get_config_path,
+    instantiate_callbacks,
+    instantiate_trainer,
+    log_configuration,
+    log_hyperparameters,
+    resolve_work_dir,
+    set_seed,
 )
 
 logger = logging.getLogger(__name__)
@@ -92,10 +92,10 @@ def main(cfg: DictConfig):
     model: L.LightningModule = hydra.utils.instantiate(cfg.model)
     model.set_data_preprocessing(hydra.utils.instantiate(cfg.data_preprocessing))
 
-    checkpoint_path = cfg.get("checkpoint", None)
+    resume_checkpoint_path = cfg.get("resume_checkpoint", None)
     weights_path = cfg.get("weights", None)
-    if checkpoint_path is not None and weights_path is not None:
-        raise ValueError("'checkpoint' and 'weights' are mutually exclusive.")
+    if resume_checkpoint_path is not None and weights_path is not None:
+        raise ValueError("'--resume-checkpoint' and '--weights' are mutually exclusive.")
     if weights_path is not None:
         apply_matching_weights(model, weights_path, map_location="cpu", logger=logger)
 
@@ -139,13 +139,24 @@ def main(cfg: DictConfig):
     logger.info(f"Accelerator: {cfg.trainer.get('accelerator', 'auto')}")
     logger.info(f"Devices: {cfg.trainer.get('devices', 'auto')}")
 
-    trainer.fit(model, datamodule=datamodule, ckpt_path=checkpoint_path)
+    trainer.fit(model, datamodule=datamodule, ckpt_path=resume_checkpoint_path)
 
     logger.info("Training completed!")
     checkpoints_dir = (
         run_context.checkpoints_dir if run_context is not None else work_dir / "checkpoints"
     )
     logger.info(f"Checkpoints saved to: {checkpoints_dir}")
+
+    # Return optimized metric for hyperparameter tuning, if running
+    optimized_metric = cfg.get("optimized_metric", "val/loss")
+    score = trainer.callback_metrics.get(optimized_metric)
+    if score is None:
+        available_metrics = sorted(str(key) for key in trainer.callback_metrics)
+        raise ValueError(
+            f"Optimized metric '{optimized_metric}' was not logged. "
+            f"Available callback metrics: {available_metrics}"
+        )
+    return float(score)
 
 
 if __name__ == "__main__":
