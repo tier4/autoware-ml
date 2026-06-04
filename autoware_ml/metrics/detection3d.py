@@ -538,7 +538,9 @@ class CenterDistanceMeanAP:
             suffix for suffix in set(range_suffixes) if range_suffixes.count(suffix) > 1
         )
         if duplicate_suffixes:
-            raise ValueError(f"Detection range metric suffixes must be unique: {duplicate_suffixes}")
+            raise ValueError(
+                f"Detection range metric suffixes must be unique: {duplicate_suffixes}"
+            )
 
         if eval_class_range is not None:
             for class_name, max_dist in eval_class_range.items():
