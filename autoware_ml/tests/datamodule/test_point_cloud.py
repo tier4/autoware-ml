@@ -102,24 +102,24 @@ class TestConcatCollation:
 class TestStackCollation:
     def test_stacks_fixed_shape_tensors_along_new_batch_dim(self):
         batch = [
-            {"occ_target": torch.tensor([[1, 2], [3, 4]], dtype=torch.long)},
-            {"occ_target": torch.tensor([[5, 6], [7, 8]], dtype=torch.long)},
+            {"target_grid": torch.tensor([[1, 2], [3, 4]], dtype=torch.long)},
+            {"target_grid": torch.tensor([[5, 6], [7, 8]], dtype=torch.long)},
         ]
-        dm = _make_seg_datamodule(collation_map={"occ_target": "stack"})
+        dm = _make_seg_datamodule(collation_map={"target_grid": "stack"})
         collated = dm.collate_fn(batch)
 
-        assert collated["occ_target"].shape == (2, 2, 2)
-        assert torch.equal(collated["occ_target"][0], batch[0]["occ_target"])
-        assert torch.equal(collated["occ_target"][1], batch[1]["occ_target"])
+        assert collated["target_grid"].shape == (2, 2, 2)
+        assert torch.equal(collated["target_grid"][0], batch[0]["target_grid"])
+        assert torch.equal(collated["target_grid"][1], batch[1]["target_grid"])
 
     def test_raises_on_shape_mismatch_for_stack_key(self):
         batch = [
-            {"occ_target": torch.zeros(2, 2)},
-            {"occ_target": torch.zeros(3, 3)},
+            {"target_grid": torch.zeros(2, 2)},
+            {"target_grid": torch.zeros(3, 3)},
         ]
-        dm = _make_seg_datamodule(collation_map={"occ_target": "stack"})
+        dm = _make_seg_datamodule(collation_map={"target_grid": "stack"})
 
-        with pytest.raises(ValueError, match="occ_target"):
+        with pytest.raises(ValueError, match="target_grid"):
             dm.collate_fn(batch)
 
     def test_mixed_concat_and_stack_keys(self):
@@ -127,21 +127,21 @@ class TestStackCollation:
             {
                 "coord": torch.zeros(2, 3),
                 "feat": torch.zeros(2, 4),
-                "occ_target": torch.zeros(4, 4),
+                "target_grid": torch.zeros(4, 4),
             },
             {
                 "coord": torch.zeros(3, 3),
                 "feat": torch.zeros(3, 4),
-                "occ_target": torch.zeros(4, 4),
+                "target_grid": torch.zeros(4, 4),
             },
         ]
         dm = _make_seg_datamodule(
-            collation_map={"coord": "concat", "feat": "concat", "occ_target": "stack"}
+            collation_map={"coord": "concat", "feat": "concat", "target_grid": "stack"}
         )
         collated = dm.collate_fn(batch)
 
         assert collated["coord"].shape == (5, 3)
-        assert collated["occ_target"].shape == (2, 4, 4)
+        assert collated["target_grid"].shape == (2, 4, 4)
         assert torch.equal(collated["offset"], torch.tensor([2, 5]))
 
 
@@ -260,6 +260,22 @@ class TestDatamoduleCollation:
         dm = _make_seg_datamodule()
         with pytest.raises(ValueError, match="empty"):
             dm.collate_fn([])
+
+    def test_warns_and_skips_when_declared_key_missing_from_sample(
+        self, caplog: pytest.LogCaptureFixture
+    ):
+        batch = [
+            {"coord": torch.zeros(2, 3), "feat": torch.zeros(2, 4)},
+            {"coord": torch.zeros(3, 3), "feat": torch.zeros(3, 4)},
+        ]
+        dm = _make_seg_datamodule(
+            collation_map={"coord": "concat", "feat": "concat", "segment": "concat"}
+        )
+
+        collated = dm.collate_fn(batch)
+
+        assert "segment" not in collated
+        assert "Key 'segment' declared in collation_map but missing" in caplog.text
 
     def test_raises_when_index_concat_has_no_concat_key(self):
         batch = [

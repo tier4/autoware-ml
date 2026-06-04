@@ -23,7 +23,7 @@ from __future__ import annotations
 import inspect
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any
+from typing import Any, final
 
 import lightning as L
 from lightning.pytorch.utilities.data import extract_batch_size
@@ -233,16 +233,17 @@ class BaseModel(L.LightningModule, ABC):
 
     def _shared_step(
         self, batch_inputs_dict: Mapping[str, Any], step_prefix: str, **kwargs: Any
-    ) -> dict[str, torch.Tensor]:
-        """Shared step for training, validation, and test steps.
+    ) -> tuple[dict[str, torch.Tensor], Any]:
+        """Run one forward pass, compute metrics, and log them.
 
         Args:
             batch_inputs_dict: Dictionary with input data.
-            step_prefix: Prefix for the set (train, val, test).
+            step_prefix: Prefix for logging (train, val, test).
             **kwargs: Keyword arguments forwarded to ``self.log_dict``.
 
         Returns:
-            Metric dictionary with at least a ``"loss"`` key.
+            Tuple of the metric dictionary and the raw model outputs.
+            The metric dictionary contains at least a ``"loss"`` key.
         """
         forward_inputs = {
             key: batch_inputs_dict[key]
@@ -259,8 +260,9 @@ class BaseModel(L.LightningModule, ABC):
             batch_size=batch_size,
             **kwargs,
         )
-        return metrics
+        return metrics, outputs
 
+    @final
     def training_step(self, batch_inputs_dict: Mapping[str, Any], batch_idx: int) -> torch.Tensor:
         """Training step.
 
@@ -269,18 +271,19 @@ class BaseModel(L.LightningModule, ABC):
             batch_idx: Batch index.
 
         Returns:
-            Total loss tensor (required by Lightning for back propagation).
+            Total loss tensor required by Lightning for backpropagation.
         """
-        metrics = self._shared_step(
+        metrics, _ = self._shared_step(
             batch_inputs_dict,
             "train",
-            on_step=True,
+            on_step=False,
             on_epoch=True,
             prog_bar=True,
             sync_dist=True,
         )
         return metrics["loss"]
 
+    @final
     def validation_step(
         self, batch_inputs_dict: Mapping[str, Any], batch_idx: int
     ) -> dict[str, Any]:
@@ -291,9 +294,11 @@ class BaseModel(L.LightningModule, ABC):
             batch_idx: Batch index.
 
         Returns:
-            Metric dictionary logged for the validation step.
+            Dictionary with at least a ``"loss"`` key and a ``"model_outputs"``
+            key containing the raw forward outputs. The raw outputs are available
+            to ``on_validation_batch_end`` for epoch-level metric accumulation.
         """
-        return self._shared_step(
+        metrics, outputs = self._shared_step(
             batch_inputs_dict,
             "val",
             on_step=False,
@@ -301,7 +306,9 @@ class BaseModel(L.LightningModule, ABC):
             prog_bar=True,
             sync_dist=True,
         )
+        return {**metrics, "model_outputs": outputs}
 
+    @final
     def test_step(self, batch_inputs_dict: Mapping[str, Any], batch_idx: int) -> dict[str, Any]:
         """Test step.
 
@@ -310,9 +317,10 @@ class BaseModel(L.LightningModule, ABC):
             batch_idx: Batch index.
 
         Returns:
-            Metric dictionary logged for the test step.
+            Dictionary with at least a ``"loss"`` key and a ``"model_outputs"``
+            key containing the raw forward outputs.
         """
-        return self._shared_step(
+        metrics, outputs = self._shared_step(
             batch_inputs_dict,
             "test",
             on_step=False,
@@ -320,7 +328,9 @@ class BaseModel(L.LightningModule, ABC):
             prog_bar=True,
             sync_dist=True,
         )
+        return {**metrics, "model_outputs": outputs}
 
+    @final
     def predict_step(self, batch_inputs_dict: Mapping[str, Any], batch_idx: int) -> Any:
         """Prediction step.
 
@@ -361,6 +371,21 @@ class BaseModel(L.LightningModule, ABC):
             output_names=self.get_export_output_names(),
             supported_stages=raw_spec.supported_stages,
         )
+
+    def build_export_specs(self, batch_inputs_dict: Mapping[str, Any]) -> dict[str, ExportSpec]:
+        """Build per-module deployment export specifications.
+
+        The default implementation wraps :meth:`build_export_spec` as a single
+        ``end_to_end`` module. Models with separate exportable sub-graphs
+        override this to return one spec per architectural component.
+
+        Args:
+            batch_inputs_dict: Example preprocessed batch used for export.
+
+        Returns:
+            Ordered mapping of module name to export specification.
+        """
+        return {"end_to_end": self.build_export_spec(batch_inputs_dict)}
 
     def configure_optimizers(self) -> Optimizer | dict[str, Any]:
         """Configure optimizers and schedulers.

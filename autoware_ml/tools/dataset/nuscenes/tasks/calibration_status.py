@@ -18,11 +18,8 @@ This module injects calibration-status labels and related metadata into
 generated NuScenes sample dictionaries.
 """
 
-import os
 from collections.abc import Mapping
 from typing import Any
-
-import numpy as np
 
 from autoware_ml.tools.dataset.nuscenes.tasks.base import TaskAnnotationGenerator
 
@@ -30,8 +27,8 @@ from autoware_ml.tools.dataset.nuscenes.tasks.base import TaskAnnotationGenerato
 class CalibrationStatusTask(TaskAnnotationGenerator):
     """Task generator for calibration status annotations.
 
-    Creates separate sample entries for each camera, extracting calibration data
-    including camera intrinsics, distortion coefficients, and lidar-to-camera transforms.
+    Creates separate sample entries for each camera by reading pre-computed
+    calibration fields from the info dict's unified ``"images"`` schema.
     """
 
     def process_sample(
@@ -48,90 +45,27 @@ class CalibrationStatusTask(TaskAnnotationGenerator):
         into multiple samples.
 
         Args:
-            info_dict: Base info dictionary.
-            nusc: NuScenes API instance.
+            info_dict: Base info dictionary. Must contain an ``"images"`` key
+                populated by the NuScenes generator with the unified schema.
+            nusc: NuScenes API instance (unused; retained for interface compat).
             sample: NuScenes sample dictionary.
-            cam_name: Not used directly, but we process all cameras.
+            cam_name: Not used.
 
         Returns:
             Updated info dictionary with calibration_status annotations.
         """
-        camera_types = [
-            "CAM_FRONT",
-            "CAM_FRONT_RIGHT",
-            "CAM_FRONT_LEFT",
-            "CAM_BACK",
-            "CAM_BACK_LEFT",
-            "CAM_BACK_RIGHT",
-        ]
-
         calibration_samples = []
-        for cam in camera_types:
-            if cam not in info_dict["cams"]:
-                continue
-
-            cam_info = info_dict["cams"][cam]
-            cam_token = sample["data"][cam]
-            cam_path, _, _ = nusc.get_sample_data(cam_token)
-            cam_path = str(cam_path)
-
-            root_path = nusc.dataroot
-            if os.path.isabs(cam_path):
-                cam_path_abs = os.path.abspath(cam_path)
-                root_path_abs = os.path.abspath(root_path)
-                if cam_path_abs.startswith(root_path_abs):
-                    cam_path = os.path.relpath(cam_path_abs, root_path_abs)
-
-            root_path_normalized = os.path.basename(root_path)
-            if cam_path.startswith(f"data/{root_path_normalized}/"):
-                cam_path = cam_path[len(f"data/{root_path_normalized}/") :]
-            elif cam_path.startswith(f"{root_path_normalized}/"):
-                cam_path = cam_path[len(f"{root_path_normalized}/") :]
-
-            sd_rec = nusc.get("sample_data", cam_token)
-            cs_record = nusc.get("calibrated_sensor", sd_rec["calibrated_sensor_token"])
-
-            cam_intrinsic = cam_info.get("cam_intrinsic")
-            if cam_intrinsic is None:
-                continue
-
-            sensor2lidar_rotation = cam_info.get("sensor2lidar_rotation")
-            sensor2lidar_translation = cam_info.get("sensor2lidar_translation")
-
-            if sensor2lidar_rotation is None or sensor2lidar_translation is None:
-                continue
-
-            R = np.array(sensor2lidar_rotation)
-            T = np.array(sensor2lidar_translation)
-
-            lidar2cam_rotation = R.T
-            lidar2cam_translation = -R.T @ T.reshape(3, 1) if T.ndim == 1 else -R.T @ T
-            if lidar2cam_translation.ndim == 2:
-                lidar2cam_translation = lidar2cam_translation.flatten()
-
-            lidar2cam = np.eye(4, dtype=np.float32)
-            lidar2cam[:3, :3] = lidar2cam_rotation
-            lidar2cam[:3, 3] = lidar2cam_translation
-
-            distortion_coefficients = cs_record.get("camera_distortion", [0.0, 0.0, 0.0, 0.0, 0.0])
-            if len(distortion_coefficients) != 5:
-                distortion_coefficients = [0.0, 0.0, 0.0, 0.0, 0.0]
-
+        for cam, cam_info in info_dict.get("images", {}).items():
             calibration_sample = {
                 "image": {
-                    "img_path": str(cam_path),
-                    "cam2img": (
-                        cam_intrinsic.tolist()
-                        if isinstance(cam_intrinsic, np.ndarray)
-                        else cam_intrinsic
-                    ),
-                    "lidar2cam": lidar2cam.tolist(),
-                    "distortion_coefficients": distortion_coefficients,
-                    "sample_data_token": cam_token,
+                    "img_path": cam_info["img_path"],
+                    "cam2img": cam_info["cam2img"],
+                    "lidar2cam": cam_info["lidar2cam"],
+                    "distortion_model": cam_info.get("distortion_model", ""),
+                    "distortion_coeffs": cam_info.get("distortion_coeffs", []),
                 },
                 "lidar_points": {
                     "lidar_path": info_dict["lidar_path"],
-                    "sample_data_token": sample["data"]["LIDAR_TOP"],
                 },
                 "calibration_status_task": True,
                 "camera_name": cam,

@@ -22,22 +22,33 @@ from autoware_ml.transforms.base import BaseTransform
 
 
 class PreparePointSegInput(BaseTransform):
-    """Convert point-cloud segmentation samples into model-ready point fields."""
+    """Add the ``segment`` field from semantic mask annotations.
 
-    _required_keys = ["points"]
+    Must be preceded by ``PreparePointCloudInput`` which produces ``coord``.
+
+    Required keys:
+        coord: Point coordinates ``(N, 3)``, used only to determine N for the
+               default mask when ``pts_semantic_mask`` is absent.
+
+    Optional keys:
+        pts_semantic_mask: Per-point semantic label array of shape ``(N,)``.
+                           Defaults to all ``-1`` (ignore label) when absent.
+
+    Generated keys:
+        segment: Per-point semantic labels ``(N,)``, int64.
+    """
+
+    _required_keys = ["coord"]
     _optional_keys = ["pts_semantic_mask"]
 
     def apply_defaults(self, input_dict: dict[str, Any]) -> None:
         """Populate missing semantic labels with the ignore label."""
         input_dict.setdefault(
-            "pts_semantic_mask", np.full(input_dict["points"].shape[0], -1, dtype=np.int64)
+            "pts_semantic_mask", np.full(input_dict["coord"].shape[0], -1, dtype=np.int64)
         )
 
     def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
-        """Convert dataset fields into standardized point-segmentation keys."""
-        points = input_dict["points"]
+        """Convert semantic mask into the standardized ``segment`` key."""
         return {
-            "coord": points[:, :3].astype(np.float32),
-            "strength": (points[:, 3:4] / 255.0).astype(np.float32),
             "segment": input_dict["pts_semantic_mask"].astype(np.int64),
         }

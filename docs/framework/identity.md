@@ -8,7 +8,7 @@ icon: lucide/sparkles
 
 Use for infrastructure, URLs, and package registries.
 
-- `github.com/org/autoware-ml`
+- `github.com/tier4/autoware-ml`
 - `pip install autoware-ml`
 - `docker pull autoware-ml`
 

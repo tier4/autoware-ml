@@ -28,6 +28,7 @@ from typing import Any
 import spconv.pytorch as spconv
 import torch
 import torch.nn as nn
+from torch.onnx.operators import shape_as_tensor
 
 from autoware_ml.ops.indexing.operators import argsort, unique
 from autoware_ml.ops.segment.segment_csr import segment_csr
@@ -327,28 +328,23 @@ class SerializedAttention(PointModule):
         if self.export_mode:
             if point.offset.numel() != 1:
                 raise ValueError("PTv3 export mode supports only single-sample export batches.")
-            pad = torch.arange(padded_bincount[0], device=point.offset.device)
-            unpad = torch.arange(point.offset[0], device=point.offset.device)
-            if bincount[0] != padded_bincount[0]:
-                pad[
-                    padded_bincount[0]
-                    - self.patch_size
-                    + (bincount[0] % self.patch_size) : padded_bincount[0]
-                ] = pad[
-                    padded_bincount[0]
-                    - 2 * self.patch_size
-                    + (bincount[0] % self.patch_size) : padded_bincount[0] - self.patch_size
-                ]
+            n = shape_as_tensor(point.feat)[0].to(device=point.offset.device)
+            padded_n = ((n + self.patch_size - 1) // self.patch_size) * self.patch_size
+            unpad = torch.arange(n, device=point.offset.device)
+            # Clamp pad indices to [0, n-1]: dummy slots repeat the last real token.
+            pad = torch.clamp(torch.arange(padded_n, device=point.offset.device), max=n - 1)
             if not self.enable_flash:
                 return pad, unpad, None
+            # arange(0, padded_n+1, patch_size) gives [0, ps, 2*ps, ..., padded_n]
+            # since padded_n is always a multiple of patch_size.
             cu_seqlens = torch.arange(
                 0,
-                padded_bincount[0],
+                padded_n + 1,
                 step=self.patch_size,
                 dtype=torch.int32,
                 device=point.offset.device,
             )
-            return pad, unpad, nn.functional.pad(cu_seqlens, (0, 1), value=padded_bincount[0])
+            return pad, unpad, cu_seqlens
 
         offset = nn.functional.pad(point.offset, (1, 0))
         padded_offset = nn.functional.pad(torch.cumsum(padded_bincount, dim=0), (1, 0))
@@ -651,12 +647,13 @@ class SerializedPooling(PointModule):
             )
         else:
             pooled_order = torch.argsort(pooled_code, dim=1)
+        n_pooled = shape_as_tensor(pooled_code)[1]
         pooled_inverse = torch.zeros_like(pooled_order).scatter_(
             1,
             pooled_order,
-            torch.arange(pooled_code.shape[1], device=pooled_order.device).repeat(
-                pooled_code.shape[0], 1
-            ),
+            torch.arange(n_pooled, device=pooled_order.device, dtype=pooled_order.dtype)
+            .unsqueeze(0)
+            .expand_as(pooled_order),
         )
         if self.shuffle_orders:
             permutation = torch.randperm(pooled_code.shape[0], device=pooled_code.device)
@@ -803,13 +800,6 @@ class PointTransformerV3Backbone(PointModule):
         enable_flash: bool,
         upcast_attention: bool,
         upcast_softmax: bool,
-        cls_mode: bool,
-        pdnorm_bn: bool,
-        pdnorm_ln: bool,
-        pdnorm_decouple: bool,
-        pdnorm_adaptive: bool,
-        pdnorm_affine: bool,
-        pdnorm_conditions: Sequence[str],
     ) -> None:
         """Initialize the PTv3 encoder-decoder backbone.
 
@@ -837,22 +827,8 @@ class PointTransformerV3Backbone(PointModule):
             enable_flash: Whether to use flash attention.
             upcast_attention: Whether to upcast Q/K before attention.
             upcast_softmax: Whether to upcast logits before softmax.
-            cls_mode: Whether to run in classification mode.
-            pdnorm_bn: Whether to enable PDNorm batch normalization.
-            pdnorm_ln: Whether to enable PDNorm layer normalization.
-            pdnorm_decouple: Whether to decouple PDNorm statistics.
-            pdnorm_adaptive: Whether to use adaptive PDNorm.
-            pdnorm_affine: Whether to use affine PDNorm parameters.
-            pdnorm_conditions: PDNorm condition identifiers.
         """
         super().__init__()
-        if any([pdnorm_bn, pdnorm_ln, pdnorm_decouple, pdnorm_adaptive is True]) and (
-            pdnorm_bn or pdnorm_ln
-        ):
-            raise ValueError("PDNorm is not integrated in autoware-ml PTv3 yet.")
-        if cls_mode:
-            raise ValueError("Classification mode is not supported by the PTv3 port.")
-        del pdnorm_affine, pdnorm_conditions
 
         self.order = list(order)
         self.shuffle_orders = shuffle_orders
@@ -948,7 +924,8 @@ class PointTransformerV3Backbone(PointModule):
             Point container with decoded point features.
         """
         point = Point(data_dict)
-        point.serialization(self.order, self.shuffle_orders)
+        depth = data_dict.get("serialization_depth", None)
+        point.serialization(self.order, self.shuffle_orders, depth=depth)
         point.sparsify()
         point = self.embedding(point)
         point = self.enc(point)
@@ -977,7 +954,7 @@ class PointTransformerV3Backbone(PointModule):
                     module.attn.order_index = block_index % len(self.order)
                     block_index += 1
 
-    def prepare_export_copy(self, order: Sequence[str]) -> PointTransformerV3Backbone:
+    def prepare_for_export(self, order: Sequence[str]) -> PointTransformerV3Backbone:
         """Return an isolated backbone copy configured for ONNX export.
 
         Args:

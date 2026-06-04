@@ -4,7 +4,8 @@ trainer:
   _target_: lightning.Trainer
   max_epochs: 10
   accelerator: gpu
-  devices: 1
+  strategy: auto
+  devices: auto
   precision: 32-true
   log_every_n_steps: 50
   val_check_interval: 1.0

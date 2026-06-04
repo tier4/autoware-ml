@@ -37,7 +37,7 @@ class TestNuscenesCalibrationStatusDataset:
                     [0.0, 0.0, 1.0, 0.3],
                     [0.0, 0.0, 0.0, 1.0],
                 ],
-                "distortion_coefficients": [0.1, 0.2, 0.3, 0.4, 0.5],
+                "distortion_coeffs": [0.1, 0.2, 0.3, 0.4, 0.5],
             },
             "lidar_points": {"lidar_path": "samples/LIDAR_TOP/points.bin"},
         }
@@ -54,7 +54,7 @@ class TestNuscenesCalibrationStatusDataset:
         assert output["gt_calibration_status"] == CalibrationStatus.CALIBRATED.value
         assert output["metadata"] == sample
         assert "camera_matrix" not in output
-        assert "distortion_coefficients" not in output
+        assert "distortion_coeffs" not in output
         assert "lidar_to_camera_transformation" not in output
         assert isinstance(output["calibration_data"], CalibrationData)
 
@@ -72,7 +72,7 @@ class TestT4CalibrationStatusDataset:
                     [0.0, 0.0, 1.0, 3.0],
                     [0.0, 0.0, 0.0, 1.0],
                 ],
-                "distortion_coefficients": [0.0, 0.0, 0.0, 0.0, 0.0],
+                "distortion_coeffs": [0.0, 0.0, 0.0, 0.0, 0.0],
             },
             "lidar_points": {"lidar_path": "points.bin"},
         }
@@ -89,6 +89,6 @@ class TestT4CalibrationStatusDataset:
         assert output["gt_calibration_status"] == CalibrationStatus.CALIBRATED.value
         assert output["metadata"] == sample
         assert "camera_matrix" not in output
-        assert "distortion_coefficients" not in output
+        assert "distortion_coeffs" not in output
         assert "lidar_to_camera_transformation" not in output
         assert isinstance(output["calibration_data"], CalibrationData)

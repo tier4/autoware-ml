@@ -19,7 +19,7 @@ class MyModel(BaseModel):
         ...
 
     def compute_metrics(
-        self, outputs: torch.Tensor | Sequence[torch.Tensor], **kwargs: Any
+        self, batch_inputs_dict: Mapping[str, Any], outputs: Any
     ) -> dict[str, torch.Tensor]:
         ...
 ```
@@ -75,13 +75,13 @@ class MyModel(BaseModel):
 
     def compute_metrics(
         self,
+        batch_inputs_dict: Mapping[str, Any],
         outputs: torch.Tensor | Sequence[torch.Tensor],
-        gt_labels: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
+        gt_labels = batch_inputs_dict["gt_labels"]
         logits = outputs[0] if isinstance(outputs, (list, tuple)) else outputs
         loss = self.loss_fn(logits, gt_labels)
 
-        # Optional: compute accuracy
         preds = torch.argmax(logits, dim=1)
         accuracy = (preds == gt_labels).float().mean()
 
@@ -95,7 +95,7 @@ class MyModel(BaseModel):
 
 1. **`forward()` signature matters** - Parameter names must match keys in your batch dictionary. The base class automatically extracts matching keys using signature inspection.
 
-2. **`compute_metrics()` receives outputs** - The first argument is always `outputs` from `forward()` (as a `torch.Tensor | Sequence[torch.Tensor]`). Additional parameters are matched from the batch.
+2. **`compute_metrics()` receives the full batch and outputs** - The first argument is `batch_inputs_dict` (the full batch dictionary after preprocessing), and the second is `outputs` from `forward()`. Extract any needed targets (e.g. `gt_labels`) from `batch_inputs_dict`.
 
 3. **Return `'loss'`** - The metrics dict must include a `'loss'` key for backpropagation.
 
@@ -182,7 +182,7 @@ class MyDataModule(DataModule):
 ### Data Flow
 
 ```text
-get_data_info() → transforms → collate_fn() → BaseModel.on_after_batch_transfer() → forward() → compute_metrics()/predict_outputs()
+get_data_info() -> transforms -> collate_fn() -> BaseModel.on_after_batch_transfer() -> forward() -> compute_metrics()/predict_outputs()
 ```
 
 1. `get_data_info()`: Return raw sample metadata as dict
@@ -222,7 +222,9 @@ defaults:
 
 datamodule:
   _target_: autoware_ml.datamodule.my_dataset.MyDataModule
-  stack_keys: [input_tensor, gt_labels]  # Keys to stack into tensors
+  collation_map:
+    input_tensor: stack
+    gt_labels: stack
 
   train_dataloader_cfg:
     batch_size: 8
@@ -359,7 +361,7 @@ data_preprocessing:
 !!! warning
     Preprocessing layers must be callable objects that accept `dict[str, Any]` and return `dict[str, Any]`.
 
-Output-side shaping (logits → probabilities, decoder scatter, voxel-to-point mapping, etc.) belongs
+Output-side shaping (logits -> probabilities, decoder scatter, voxel-to-point mapping, etc.) belongs
 **inside the model** - in `forward()`, `compute_metrics()`, or `predict_outputs()`.
 
 ## Step 7: Train and Deploy
@@ -383,8 +385,8 @@ Use these rules when creating `<variant>`:
 Examples:
 
 ```text
-calibration_status/calibration_status_classifier/resnet18_nuscenes
-calibration_status/calibration_status_classifier/resnet18_t4dataset_j6gen2
+segmentation3d/ptv3/voxel005_102m_nuscenes
+segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2
 my_task/my_model/my_variant_my_dataset
 ```
 
@@ -395,7 +397,7 @@ autoware-ml train --config-name my_task/my_model/my_config
 # Deploy
 autoware-ml deploy \
     --config-name my_task/my_model/my_config \
-    +checkpoint=mlruns/my_task/my_model/my_config/<run_id>/artifacts/checkpoints/last.ckpt
+    --weights mlruns/my_task/my_model/my_config/<run_id>/artifacts/checkpoints/last.ckpt
 ```
 
 ## Common Patterns
@@ -423,11 +425,12 @@ def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
 
 def compute_metrics(
     self,
+    batch_inputs_dict: Mapping[str, Any],
     outputs: tuple[torch.Tensor, torch.Tensor],
-    gt_boxes: torch.Tensor,
-    gt_scores: torch.Tensor,
 ):
     boxes, scores = outputs
+    gt_boxes = batch_inputs_dict["gt_boxes"]
+    gt_scores = batch_inputs_dict["gt_scores"]
     box_loss = self.box_loss(boxes, gt_boxes)
     score_loss = self.score_loss(scores, gt_scores)
     return {"loss": box_loss + score_loss, "box_loss": box_loss, "score_loss": score_loss}

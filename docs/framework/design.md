@@ -57,6 +57,10 @@ flowchart TB
     Hydra --> Trainer
     Hydra --> ModelWeights
 
+    style InfoFiles fill:#bbdefb,opacity:0.2,stroke:#1976d2
+    style LightningDataModule fill:#bbdefb,opacity:0.2,stroke:#1976d2
+    style Transforms fill:#bbdefb,opacity:0.2,stroke:#1976d2
+    style Collation fill:#bbdefb,opacity:0.2,stroke:#1976d2
     style ModelWeights fill:#a5d6a7,opacity:0.2,stroke:#05bc23
     style ONNXExport fill:#a5d6a7,opacity:0.2,stroke:#05bc23
     style TensorRTEngine fill:#a5d6a7,opacity:0.2,stroke:#05bc23
@@ -89,18 +93,21 @@ The `DataModule` class (extending `LightningDataModule`) manages:
 - Dataset creation for each split (train/val/test/predict)
 - DataLoader configuration (batch size, workers, shuffling, pin_memory, etc.)
 - Transforms (CPU-side augmentations per split)
-- Collation (batching samples together, stacking selected keys)
+- Collation (batching samples together via per-key `collation_map` strategies)
 
 ```python
 class DataModule(L.LightningDataModule, ABC):
     def __init__(
         self,
-        stack_keys: Sequence[str] | None = None,
+        collation_map: Mapping[str, CollationStrategy] | None = None,
         train_transforms: TransformsCompose | None = None,
         val_transforms: TransformsCompose | None = None,
         test_transforms: TransformsCompose | None = None,
         predict_transforms: TransformsCompose | None = None,
         train_dataloader_cfg: DataLoaderConfig | None = None,
+        val_dataloader_cfg: DataLoaderConfig | None = None,
+        test_dataloader_cfg: DataLoaderConfig | None = None,
+        predict_dataloader_cfg: DataLoaderConfig | None = None,
     ):
         ...
 
@@ -193,7 +200,7 @@ class DataPreprocessing:
 ```
 
 `BaseModel.on_after_batch_transfer()` applies the pipeline. Output-side
-shaping (e.g., logits → probabilities, voxel-to-point scatter) lives
+shaping (e.g., logits -> probabilities, voxel-to-point scatter) lives
 **inside the model**, not in a framework pipeline: each model handles it in
 its own `forward()`, `compute_metrics()`, and `predict_outputs()`. Keeping
 this logic in the model class avoids invisible load-bearing dependencies

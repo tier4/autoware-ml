@@ -4,7 +4,9 @@ icon: lucide/dice-5
 
 # PointTransformerV3
 
-PointTransformerV3 is a LiDAR-based 3D semantic segmentation model that combines serialized point attention with sparse convolution blocks. It is integrated under the `segmentation3d` task namespace for NuScenes and T4Dataset.
+PointTransformerV3 is a LiDAR backbone for LiDAR 3D semantic segmentation and
+3D object detection. For detection, PTv3 point features are projected into BEV
+and consumed by either `CenterHead` or `TransFusionHead`.
 
 The training path uses `flash-attn` for serialized attention. The export path
 automatically disables flash attention and falls back to the standard attention
@@ -12,27 +14,35 @@ implementation so ONNX export remains supported.
 
 ## Summary
 
-| Property     | Value                                                               |
-| ------------ | ------------------------------------------------------------------- |
-| Task         | 3D semantic segmentation                                            |
-| Modality     | LiDAR                                                               |
-| Input        | Point cloud                                                         |
-| Output       | Point-wise semantic class labels                                    |
-| Architecture | PointTransformerV3 with sparse convolution stem and flash attention |
-| Datasets     | NuScenes, T4Dataset                                                 |
+| Property     | Value                                                          |
+| ------------ | -------------------------------------------------------------- |
+| Task         | 3D semantic segmentation, 3D object detection                  |
+| Modality     | LiDAR                                                          |
+| Input        | Point cloud                                                    |
+| Output       | Point-wise semantic labels or 3D boxes/scores/classes          |
+| Architecture | PointTransformerV3 with sparse convolution stem and task heads |
+| Datasets     | NuScenes, T4Dataset                                            |
 
 ## Available Configurations
 
-| Config Name                                          | Dataset   | Purpose                          |
-| ---------------------------------------------------- | --------- | -------------------------------- |
-| `segmentation3d/ptv3/voxel005_102m_nuscenes`         | NuScenes  | Standard NuScenes configuration  |
-| `segmentation3d/ptv3/voxel005_102m_t4dataset_j6gen2` | T4Dataset | Standard T4Dataset configuration |
+| Config Name                                                        | Task           | Dataset   | Head        | Range | Purpose                            |
+| ------------------------------------------------------------------ | -------------- | --------- | ----------- | ----- | ---------------------------------- |
+| `segmentation3d/ptv3/voxel005_102m_nuscenes`                       | segmentation3d | NuScenes  | Linear      | 102 m | Standard NuScenes segmentation     |
+| `segmentation3d/ptv3/voxel005_128m_t4dataset_j6gen2`               | segmentation3d | T4Dataset | Linear      | 128 m | Standard T4Dataset segmentation    |
+| `segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2`               | segmentation3d | T4Dataset | Linear      | 122 m | Lightweight T4Dataset segmentation |
+| `detection3d/ptv3/centerhead_voxel005_128m_t4dataset_j6gen2`       | detection3d    | T4Dataset | CenterHead  | 128 m | Dense CenterPoint-style detection  |
+| `detection3d/ptv3/centerhead_voxel012_122m_t4dataset_j6gen2`       | detection3d    | T4Dataset | CenterHead  | 122 m | Tiny-backbone detection            |
+| `detection3d/ptv3/transhead_voxel005_128m_t4dataset_j6gen2`        | detection3d    | T4Dataset | TransFusion | 128 m | Query-based detection              |
+| `detection3d/ptv3/transhead_voxel012_122m_t4dataset_j6gen2`        | detection3d    | T4Dataset | TransFusion | 122 m | Tiny query-based detection         |
+| `detection3d/ptv3/transhead_voxel012_122m_t4dataset_j6gen2_optuna` | detection3d    | T4Dataset | TransFusion | 122 m | TransFusion hyperparameter search  |
 
 ## Training
 
 ```bash
 autoware-ml train --config-name segmentation3d/ptv3/voxel005_102m_nuscenes
-autoware-ml train --config-name segmentation3d/ptv3/voxel005_102m_t4dataset_j6gen2
+autoware-ml train --config-name segmentation3d/ptv3/voxel005_128m_t4dataset_j6gen2
+autoware-ml train --config-name detection3d/ptv3/centerhead_voxel005_128m_t4dataset_j6gen2
+autoware-ml train --config-name detection3d/ptv3/transhead_voxel012_122m_t4dataset_j6gen2
 ```
 
 For a pipeline validation run:
@@ -48,7 +58,11 @@ autoware-ml train \
 ```bash
 autoware-ml test \
     --config-name segmentation3d/ptv3/voxel005_102m_nuscenes \
-    +checkpoint=mlruns/segmentation3d/ptv3/voxel005_102m_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt
+    --weights mlruns/segmentation3d/ptv3/voxel005_102m_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt
+
+autoware-ml test \
+    --config-name detection3d/ptv3/transhead_voxel012_122m_t4dataset_j6gen2 \
+    --weights mlruns/detection3d/ptv3/transhead_voxel012_122m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 ## Deployment
@@ -60,7 +74,12 @@ convolution plugins.
 ```bash
 autoware-ml deploy \
     --config-name segmentation3d/ptv3/voxel005_102m_nuscenes \
-    +checkpoint=mlruns/segmentation3d/ptv3/voxel005_102m_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/segmentation3d/ptv3/voxel005_102m_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt \
+    deploy.tensorrt.enabled=false
+
+autoware-ml deploy \
+    --config-name detection3d/ptv3/centerhead_voxel005_128m_t4dataset_j6gen2 \
+    --weights mlruns/detection3d/ptv3/centerhead_voxel005_128m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt \
     deploy.tensorrt.enabled=false
 ```
 
@@ -77,18 +96,22 @@ serialization settings are applied.
 
 ## Implementation
 
-| Path                                                  | Description                                |
-| ----------------------------------------------------- | ------------------------------------------ |
-| `autoware_ml/models/segmentation3d/ptv3.py`           | PTv3 Lightning model wrapper               |
-| `autoware_ml/models/segmentation3d/backbones/ptv3.py` | Reusable PTv3 backbone components          |
-| `autoware_ml/utils/point_cloud/serialization/`        | Shared point-cloud serialization           |
-| `autoware_ml/utils/point_cloud/`                      | Shared point-cloud utilities               |
-| `autoware_ml/ops/segment/segment_csr.py`              | Segment reduction export operator          |
-| `autoware_ml/losses/segmentation3d/`                  | Segmentation losses used by PTv3           |
-| `autoware_ml/datamodule/nuscenes/segmentation3d.py`   | NuScenes datamodule                        |
-| `autoware_ml/datamodule/t4dataset/segmentation3d.py`  | T4Dataset datamodule                       |
-| `autoware_ml/transforms/point_cloud/`                 | Shared point-cloud transforms used by PTv3 |
-| `autoware_ml/configs/tasks/segmentation3d/ptv3/`      | Task configurations                        |
+| Path                                                  | Description                                    |
+| ----------------------------------------------------- | ---------------------------------------------- |
+| `autoware_ml/models/segmentation3d/ptv3.py`           | PTv3 Lightning model wrapper                   |
+| `autoware_ml/models/detection3d/ptv3.py`              | PTv3 BEV detection model wrapper               |
+| `autoware_ml/models/detection3d/heads/centerpoint.py` | CenterHead detection head                      |
+| `autoware_ml/models/detection3d/heads/transfusion.py` | TransFusion detection head                     |
+| `autoware_ml/models/segmentation3d/backbones/ptv3.py` | Reusable PTv3 backbone components              |
+| `autoware_ml/utils/point_cloud/`                      | Shared point-cloud utilities and serialization |
+| `autoware_ml/ops/segment/segment_csr.py`              | Segment reduction export operator              |
+| `autoware_ml/losses/segmentation3d/`                  | Segmentation losses used by PTv3               |
+| `autoware_ml/datamodule/nuscenes/segmentation3d.py`   | NuScenes datamodule                            |
+| `autoware_ml/datamodule/t4dataset/segmentation3d.py`  | T4Dataset datamodule                           |
+| `autoware_ml/datamodule/t4dataset/detection3d.py`     | T4Dataset 3D detection datamodule              |
+| `autoware_ml/transforms/point_cloud/`                 | Shared point-cloud transforms used by PTv3     |
+| `autoware_ml/configs/tasks/segmentation3d/ptv3/`      | Task configurations                            |
+| `autoware_ml/configs/tasks/detection3d/ptv3/`         | Detection task configurations                  |
 
 ## Acknowledgment
 

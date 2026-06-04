@@ -10,20 +10,16 @@ datamodule:
   train_dataloader_cfg:
     batch_size: 4
     num_workers: 4
-    persistent_workers: true
     shuffle: true
   val_dataloader_cfg:
     batch_size: 4
     num_workers: 4
-    persistent_workers: true
   test_dataloader_cfg:
     batch_size: 4
     num_workers: 4
-    persistent_workers: true
   predict_dataloader_cfg:
     batch_size: 1
     num_workers: 1
-    persistent_workers: true
   train_transforms:
     _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
@@ -202,19 +198,20 @@ deploy:
   onnx:
     dynamo: false
     opset_version: 16
-    input_names: [points, coors, voxel_coors, inverse_map]
-    output_names: [pred_probs]
-    dynamic_axes:
-      points: { 0: num_points }
-      coors: { 0: num_points }
-      voxel_coors: { 0: num_unique_coors }
-      inverse_map: { 0: num_points }
-      pred_probs: { 0: num_points }
-    dynamic_shapes:
-      points: { 0: { name: num_points, min: 2 } }
-      coors: { 0: { name: num_points, min: 2 } }
-      voxel_coors: { 0: { name: num_unique_coors, min: 2 } }
-      inverse_map: { 0: { name: num_points, min: 2 } }
+    modules:
+      end_to_end:
+        output_names: [pred_probs]
+        dynamic_axes:
+          points: { 0: num_points }
+          coors: { 0: num_points }
+          voxel_coors: { 0: num_unique_coors }
+          inverse_map: { 0: num_points }
+          pred_probs: { 0: num_points }
+        dynamic_shapes:
+          points: { 0: { name: num_points, min: 2 } }
+          coors: { 0: { name: num_points, min: 2 } }
+          voxel_coors: { 0: { name: num_unique_coors, min: 2 } }
+          inverse_map: { 0: { name: num_points, min: 2 } }
   tensorrt:
     workspace_size: 4294967296
     input_shapes:

@@ -9,8 +9,8 @@ from autoware_ml.transforms.point_cloud.crop import (
     SphereCrop,
 )
 from autoware_ml.transforms.point_cloud.geometry import (
+    GlobalRotScaleTrans as GeometryGlobalRotScaleTrans,
     RandomFlip,
-    RandomRotate,
     RandomRotateTargetAngle,
 )
 from autoware_ml.transforms.point_cloud.loading import LoadPointsFromFile
@@ -280,14 +280,6 @@ class TestPointCloudTransforms:
             output["coord"], np.array([[0.0, 1.0, 0.0]], dtype=np.float32), atol=1e-5
         )
 
-    def test_random_rotate_respects_probability(self, monkeypatch):
-        sample = {"coord": np.array([[1.0, 0.0, 0.0]], dtype=np.float32)}
-        monkeypatch.setattr(np.random, "rand", lambda: 0.75)
-
-        output = RandomRotate(angle=(-1.0, 1.0), center=[0.0, 0.0, 0.0], p=0.5)(sample)
-
-        assert np.allclose(output["coord"], np.array([[1.0, 0.0, 0.0]], dtype=np.float32))
-
     def test_random_rotate_target_angle_respects_probability(self, monkeypatch):
         sample = {"coord": np.array([[1.0, 0.0, 0.0]], dtype=np.float32)}
         monkeypatch.setattr(np.random, "rand", lambda: 0.75)
@@ -304,10 +296,52 @@ class TestPointCloudTransforms:
         calls = iter([0.2, 0.8])
         monkeypatch.setattr(np.random, "rand", lambda: next(calls))
 
-        output = RandomFlip(p=0.5)(sample)
+        # flip_ratio_bev_horizontal flips y-axis; flip_ratio_bev_vertical flips x-axis.
+        # rand() returns 0.2 < 0.5 so horizontal flip triggers (y flipped),
+        # rand() returns 0.8 >= 0.5 so vertical flip does not trigger.
+        output = RandomFlip(flip_ratio_bev_horizontal=0.5, flip_ratio_bev_vertical=0.5)(sample)
 
-        assert np.allclose(output["coord"], np.array([[-1.0, 2.0, 0.0]], dtype=np.float32))
-        assert np.allclose(output["normal"], np.array([[-0.5, 0.25, 1.0]], dtype=np.float32))
+        assert np.allclose(output["coord"], np.array([[1.0, -2.0, 0.0]], dtype=np.float32))
+        assert np.allclose(output["normal"], np.array([[0.5, -0.25, 1.0]], dtype=np.float32))
+
+    def test_random_flip_updates_boxes_on_coord(self):
+        sample = {
+            "coord": np.array([[1.0, 2.0, 0.0]], dtype=np.float32),
+            "gt_boxes": np.array(
+                [[1.0, 2.0, 0.0, 4.0, 2.0, 1.0, 0.25, 1.5, -0.5]],
+                dtype=np.float32,
+            ),
+        }
+
+        output = RandomFlip(flip_ratio_bev_horizontal=1.0, flip_ratio_bev_vertical=0.0)(sample)
+
+        assert np.allclose(output["coord"][0, :2], np.array([1.0, -2.0], dtype=np.float32))
+        assert np.allclose(
+            output["gt_boxes"][0, [1, 6, 8]],
+            np.array([-2.0, -0.25, 0.5], dtype=np.float32),
+        )
+
+    def test_global_rot_scale_trans_geometry_updates_boxes(self):
+        sample = {
+            "coord": np.array([[1.0, 0.0, 0.0]], dtype=np.float32),
+            "gt_boxes": np.array(
+                [[1.0, 0.0, 0.0, 4.0, 2.0, 1.0, 0.0, 1.0, 0.0]],
+                dtype=np.float32,
+            ),
+        }
+
+        np.random.seed(0)
+        output = GeometryGlobalRotScaleTrans(
+            rot_range=[0.1, 0.1],
+            scale_ratio_range=[2.0, 2.0],
+            translation_std=None,
+        )(sample)
+
+        assert np.allclose(
+            output["gt_boxes"][0, 3:6],
+            np.array([8.0, 4.0, 2.0], dtype=np.float32),
+        )
+        assert np.allclose(output["gt_boxes"][0, 6], 0.1)
 
     def test_random_shift_translates_all_points(self):
         sample = {"coord": np.zeros((2, 3), dtype=np.float32)}

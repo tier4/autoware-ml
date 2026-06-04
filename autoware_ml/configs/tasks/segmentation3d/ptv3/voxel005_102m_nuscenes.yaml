@@ -7,7 +7,7 @@ ignore_index: 16
 max_label: 31
 num_classes: 16
 grid_size: 0.05
-point_cloud_range: [-102.4, -102.4, -2.8, 102.4, 102.4, 10.0]
+point_cloud_range: [-102.4, -102.4, -3.0, 102.4, 102.4, 5.0]
 
 seg_label_mapping:
   0: ${ignore_index}
@@ -59,16 +59,14 @@ datamodule:
         label_mapping: ${seg_label_mapping}
         max_label: ${max_label}
         ignore_index: ${ignore_index}
+      - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
       - _target_: autoware_ml.transforms.segmentation3d.formatting.PreparePointSegInput
-      - _target_: autoware_ml.transforms.point_cloud.geometry.RandomRotate
-        angle: [-1.0, 1.0]
-        axis: z
-        center: [0.0, 0.0, 0.0]
-        p: 0.5
-      - _target_: autoware_ml.transforms.point_cloud.geometry.RandomScale
-        scale: [0.9, 1.1]
+      - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
+        rot_range: [-3.14159, 3.14159]
+        scale_ratio_range: [0.9, 1.1]
       - _target_: autoware_ml.transforms.point_cloud.geometry.RandomFlip
-        p: 0.5
+        flip_ratio_bev_horizontal: 0.5
+        flip_ratio_bev_vertical: 0.5
       - _target_: autoware_ml.transforms.point_cloud.perturbation.RandomJitter
         sigma: 0.005
         clip: 0.02
@@ -76,6 +74,7 @@ datamodule:
         keys_dict: { segment: origin_segment }
       - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
         grid_size: ${grid_size}
+        point_cloud_range: ${point_cloud_range}
         hash_type: fnv
         mode: train
         keys: [coord, strength, segment]
@@ -94,11 +93,13 @@ datamodule:
         label_mapping: ${seg_label_mapping}
         max_label: ${max_label}
         ignore_index: ${ignore_index}
+      - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
       - _target_: autoware_ml.transforms.segmentation3d.formatting.PreparePointSegInput
       - _target_: autoware_ml.transforms.common.copying.Copy
         keys_dict: { segment: origin_segment }
       - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
         grid_size: ${grid_size}
+        point_cloud_range: ${point_cloud_range}
         hash_type: fnv
         mode: test
         keys: [coord, strength, segment]
@@ -117,11 +118,13 @@ datamodule:
         label_mapping: ${seg_label_mapping}
         max_label: ${max_label}
         ignore_index: ${ignore_index}
+      - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
       - _target_: autoware_ml.transforms.segmentation3d.formatting.PreparePointSegInput
       - _target_: autoware_ml.transforms.common.copying.Copy
         keys_dict: { segment: origin_segment }
       - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
         grid_size: ${grid_size}
+        point_cloud_range: ${point_cloud_range}
         hash_type: fnv
         mode: test
         keys: [coord, strength, segment]
@@ -136,9 +139,11 @@ datamodule:
       - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
         load_dim: 5
         use_dim: [0, 1, 2, 3]
+      - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
       - _target_: autoware_ml.transforms.segmentation3d.formatting.PreparePointSegInput
       - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
         grid_size: ${grid_size}
+        point_cloud_range: ${point_cloud_range}
         hash_type: fnv
         mode: test
         keys: [coord, strength]

@@ -121,7 +121,7 @@ def test_frnet_shared_step_returns_scalar_loss_with_grad() -> None:
     model.log_dict = MagicMock()
     batch = _make_batch()
 
-    metrics = model._shared_step(batch, "train")
+    metrics, _ = model._shared_step(batch, "train")
 
     assert "loss" in metrics
     assert metrics["loss"].shape == torch.Size([])
@@ -182,7 +182,7 @@ def test_frnet_with_preprocessing_runs_shared_step_end_to_end() -> None:
     }
 
     preprocessed = model.on_after_batch_transfer(raw_batch, dataloader_idx=0)
-    metrics = model._shared_step(preprocessed, "train")
+    metrics, _ = model._shared_step(preprocessed, "train")
 
     assert "loss" in metrics
     assert metrics["loss"].requires_grad

@@ -2,23 +2,23 @@
 
 datamodule:
   train_dataloader_cfg:
-    pin_memory: false
-    persistent_workers: false
+    pin_memory: true
+    persistent_workers: true
     drop_last: false
     shuffle: false
   val_dataloader_cfg:
-    pin_memory: false
-    persistent_workers: false
+    pin_memory: true
+    persistent_workers: true
     drop_last: false
     shuffle: false
   test_dataloader_cfg:
-    pin_memory: false
-    persistent_workers: false
+    pin_memory: true
+    persistent_workers: true
     drop_last: false
     shuffle: false
   predict_dataloader_cfg:
-    pin_memory: false
-    persistent_workers: false
+    pin_memory: true
+    persistent_workers: true
     drop_last: false
     shuffle: false
   train_transforms:
