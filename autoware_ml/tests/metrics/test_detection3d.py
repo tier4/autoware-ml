@@ -245,7 +245,7 @@ def test_center_distance_ap_reports_imperfect_precision_recall_curve() -> None:
     assert 0.0 < metrics["mAP"] < 1.0
 
 
-def test_noninteger_detection_range_suffixes_do_not_collide() -> None:
+def test_non_integer_detection_range_suffixes_do_not_collide() -> None:
     metric = CenterDistanceMeanAP(
         thresholds=(0.5,),
         ranges=(

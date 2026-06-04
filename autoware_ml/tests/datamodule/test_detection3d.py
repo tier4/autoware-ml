@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import numpy as np
 import pickle
+import pytest
 
+from autoware_ml.datamodule.nuscenes.detection3d import NuscenesDetection3DDataModule
 from autoware_ml.datamodule.samplers import DistributedWeightedRandomSampler
 from autoware_ml.datamodule.t4dataset.detection3d import (
     FrameSamplingConfig,
@@ -200,3 +202,44 @@ class TestT4Detection3DDataset:
         dataloader = datamodule.train_dataloader()
 
         assert isinstance(dataloader.sampler, DistributedWeightedRandomSampler)
+
+
+class TestNuscenesDetection3DDataModule:
+    def test_accepts_ptv3_common_detection_kwargs(self, tmp_path) -> None:
+        ann_file = tmp_path / "nuscenes_infos_train.pkl"
+        sample = {
+            "token": "sample",
+            "lidar_points": {"lidar_path": "sample.bin", "num_pts_feats": 5},
+            "instances": [],
+            "sweeps": [],
+        }
+        with open(ann_file, "wb") as file:
+            pickle.dump({"data_list": [sample], "metainfo": {"categories": {"car": 0}}}, file)
+
+        datamodule = NuscenesDetection3DDataModule(
+            data_root=str(tmp_path),
+            train_ann_file=ann_file.name,
+            val_ann_file=ann_file.name,
+            test_ann_file=ann_file.name,
+            class_names=["car"],
+            name_mapping=None,
+            train_frame_sampling=None,
+        )
+        datamodule.setup("fit")
+
+        train_sample = datamodule.train_dataset.get_data_info(0)
+
+        assert train_sample["class_names"] == ["car"]
+        assert train_sample["name_mapping"] is None
+        assert train_sample["label_to_category"] == {0: "car"}
+
+    def test_rejects_train_frame_sampling(self, tmp_path) -> None:
+        with pytest.raises(ValueError, match="train_frame_sampling"):
+            NuscenesDetection3DDataModule(
+                data_root=str(tmp_path),
+                train_ann_file="train.pkl",
+                val_ann_file="val.pkl",
+                test_ann_file="test.pkl",
+                class_names=["car"],
+                train_frame_sampling={"repeat_sampling_factor": 1.0},
+            )

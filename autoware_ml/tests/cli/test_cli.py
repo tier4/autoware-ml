@@ -168,7 +168,7 @@ class TestAdjustArgv:
         assert adjust_argv(argv) == argv
 
     def test_vscode_syntax(self) -> None:
-        # VSCode passes all args as a single space-delimited string.
+        # VS Code passes all args as a single space-delimited string.
         # Brackets must be preserved as a single token.
         result = adjust_argv(
             [f"--config-name {SAMPLE_CONFIG_NAME} trainer.devices=[0,1] model.lr=0.001"]
