@@ -196,10 +196,6 @@ model:
     _target_: autoware_ml.metrics.detection3d.CenterDistanceMeanAP
     class_names: ${class_names}
     thresholds: [0.5, 1.0, 2.0, 4.0]
-    filter_attributes:
-      - [bicycle, vehicle_state.parked]
-      - [bicycle, cycle_state.without_rider]
-      - [bicycle, motorcycle_state.without_rider]
     min_point_numbers: 0
   bev_projector:
     _target_: autoware_ml.models.detection3d.ptv3.PTv3BEVProjection
