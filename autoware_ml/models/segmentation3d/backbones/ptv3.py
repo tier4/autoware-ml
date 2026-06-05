@@ -739,21 +739,36 @@ class Embedding(PointModule):
     before the hierarchical PTv3 stages are applied.
     """
 
-    def __init__(self, in_channels: int, embed_channels: int, kernel_size: int = 5) -> None:
-        """Initialize the sparse-convolution embedding stem.
+    def __init__(
+        self,
+        in_channels: int,
+        embed_channels: int,
+        kernel_size: int = 5,
+        stem_type: str = "conv",
+    ) -> None:
+        """Initialize the embedding stem.
 
         Args:
             in_channels: Input feature dimension.
             embed_channels: Output embedding dimension.
-            kernel_size: Submanifold-conv stem kernel size. The default of 5
-                preserves the original 5x5x5 stem; 3 rides spconv's implicit-GEMM
-                path like the network's other convs.
+            kernel_size: Submanifold-conv stem kernel size (ignored for the
+                linear stem). The default of 5 preserves the original 5x5x5 stem;
+                3 rides spconv's implicit-GEMM path like the network's other convs.
+            stem_type: Stem variant. ``"conv"`` (default) uses a submanifold conv;
+                ``"linear"`` uses a Utonia-style (PT-v3m3) per-point ``nn.Linear``.
         """
         super().__init__()
-        self.stem = PointSequential(
-            spconv.SubMConv3d(
+        if stem_type == "linear":
+            # Utonia-style stem: drop the submanifold conv for a per-point Linear.
+            stem = nn.Linear(in_channels, embed_channels)
+        elif stem_type == "conv":
+            stem = spconv.SubMConv3d(
                 in_channels, embed_channels, kernel_size=kernel_size, bias=False, indice_key="stem"
-            ),
+            )
+        else:
+            raise ValueError(f"Unknown stem_type: {stem_type!r} (expected 'conv' or 'linear')")
+        self.stem = PointSequential(
+            stem,
             nn.BatchNorm1d(embed_channels, eps=1e-3, momentum=0.01),
             nn.GELU(),
         )
@@ -804,6 +819,7 @@ class PointTransformerV3Backbone(PointModule):
         upcast_attention: bool,
         upcast_softmax: bool,
         stem_kernel_size: int = 5,
+        stem_type: str = "conv",
     ) -> None:
         """Initialize the PTv3 encoder-decoder backbone.
 
@@ -833,13 +849,17 @@ class PointTransformerV3Backbone(PointModule):
             upcast_softmax: Whether to upcast logits before softmax.
             stem_kernel_size: Embedding-stem submanifold-conv kernel size. The
                 default of 5 preserves the original 5x5x5 stem.
+            stem_type: Embedding-stem variant, ``"conv"`` (default) or
+                ``"linear"``. See :class:`Embedding`.
         """
         super().__init__()
 
         self.order = list(order)
         self.shuffle_orders = shuffle_orders
         stage_count = len(enc_depths)
-        self.embedding = Embedding(in_channels, enc_channels[0], kernel_size=stem_kernel_size)
+        self.embedding = Embedding(
+            in_channels, enc_channels[0], kernel_size=stem_kernel_size, stem_type=stem_type
+        )
 
         enc_drop_path = [value.item() for value in torch.linspace(0, drop_path, sum(enc_depths))]
         self.enc = PointSequential()
