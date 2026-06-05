@@ -739,17 +739,20 @@ class Embedding(PointModule):
     before the hierarchical PTv3 stages are applied.
     """
 
-    def __init__(self, in_channels: int, embed_channels: int) -> None:
+    def __init__(self, in_channels: int, embed_channels: int, kernel_size: int = 5) -> None:
         """Initialize the sparse-convolution embedding stem.
 
         Args:
             in_channels: Input feature dimension.
             embed_channels: Output embedding dimension.
+            kernel_size: Submanifold-conv stem kernel size. The default of 5
+                preserves the original 5x5x5 stem; 3 rides spconv's implicit-GEMM
+                path like the network's other convs.
         """
         super().__init__()
         self.stem = PointSequential(
             spconv.SubMConv3d(
-                in_channels, embed_channels, kernel_size=5, padding=1, bias=False, indice_key="stem"
+                in_channels, embed_channels, kernel_size=kernel_size, bias=False, indice_key="stem"
             ),
             nn.BatchNorm1d(embed_channels, eps=1e-3, momentum=0.01),
             nn.GELU(),
@@ -800,6 +803,7 @@ class PointTransformerV3Backbone(PointModule):
         enable_flash: bool,
         upcast_attention: bool,
         upcast_softmax: bool,
+        stem_kernel_size: int = 5,
     ) -> None:
         """Initialize the PTv3 encoder-decoder backbone.
 
@@ -827,13 +831,15 @@ class PointTransformerV3Backbone(PointModule):
             enable_flash: Whether to use flash attention.
             upcast_attention: Whether to upcast Q/K before attention.
             upcast_softmax: Whether to upcast logits before softmax.
+            stem_kernel_size: Embedding-stem submanifold-conv kernel size. The
+                default of 5 preserves the original 5x5x5 stem.
         """
         super().__init__()
 
         self.order = list(order)
         self.shuffle_orders = shuffle_orders
         stage_count = len(enc_depths)
-        self.embedding = Embedding(in_channels, enc_channels[0])
+        self.embedding = Embedding(in_channels, enc_channels[0], kernel_size=stem_kernel_size)
 
         enc_drop_path = [value.item() for value in torch.linspace(0, drop_path, sum(enc_depths))]
         self.enc = PointSequential()
