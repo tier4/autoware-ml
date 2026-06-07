@@ -21,6 +21,7 @@ nav = [
   ]},
   { "Databases" = [
     { "Design" = "databases/design.md" },
+    { "Schemas" = "databases/schemas.md" },
     { "T4Dataset" = "databases/t4dataset.md" },
   ]},
   { "User Guide" = [
