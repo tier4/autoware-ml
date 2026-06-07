@@ -9,7 +9,7 @@ Autoware-ML exports trained models for production use. The pipeline converts PyT
 ## Deployment Pipeline
 
 ```text
-Checkpoint (.ckpt) → ONNX (.onnx) → TensorRT (.engine)
+Checkpoint (.ckpt) -> ONNX (.onnx) -> TensorRT (.engine)
 ```
 
 ## Basic Usage
@@ -17,8 +17,11 @@ Checkpoint (.ckpt) → ONNX (.onnx) → TensorRT (.engine)
 ```bash
 autoware-ml deploy \
     --config-name <task>/<model>/<config> \
-    +checkpoint=mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt
+    --weights mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt
 ```
+
+`--weights` accepts one or more checkpoint paths and is the only way to supply
+parameters to the export model.
 
 This generates ONNX (`.onnx`) and TensorRT (`.engine`) files when both stages
 are enabled and supported by the model. The deploy command also creates a
@@ -30,7 +33,7 @@ You can disable either stage during iteration:
 ```bash
 autoware-ml deploy \
     --config-name <task>/<model>/<config> \
-    +checkpoint=mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt \
     deploy.tensorrt.enabled=false
 ```
 
@@ -47,7 +50,7 @@ the run artifact tree.
 ```bash
 autoware-ml deploy \
     --config-name <task>/<model>/<config> \
-    +checkpoint=mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt \
     output_name=model_v1
 ```
 
@@ -56,7 +59,7 @@ autoware-ml deploy \
 ```bash
 autoware-ml deploy \
     --config-name <task>/<model>/<config> \
-    +checkpoint=mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt \
     output_dir=mlruns/<task>/<model>/<config>/<deploy_run_id>/artifacts/custom_exports
 ```
 
@@ -142,7 +145,7 @@ Override deployment settings from CLI:
 ```bash
 autoware-ml deploy \
     --config-name <task>/<model>/<config> \
-    +checkpoint=mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt \
     deploy.tensorrt.input_shapes.input.opt_shape=[1,3,256,256] \
     deploy.tensorrt.workspace_size=2147483648
 ```

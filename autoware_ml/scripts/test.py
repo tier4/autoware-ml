@@ -26,17 +26,7 @@ import hydra
 import lightning as L
 from omegaconf import DictConfig
 
-from autoware_ml.utils.checkpoints import load_model_from_checkpoint
-from autoware_ml.utils.runtime import (
-    configure_torch_runtime,
-    get_config_path,
-    instantiate_callbacks,
-    instantiate_trainer,
-    log_configuration,
-    log_hyperparameters,
-    resolve_work_dir,
-    set_seed,
-)
+from autoware_ml.utils.checkpoints import apply_matching_weights
 from autoware_ml.utils.mlflow_helpers import (
     AUTOWARE_ML_RUN_ID_ENV,
     build_run_metadata,
@@ -48,6 +38,16 @@ from autoware_ml.utils.mlflow_helpers import (
     should_enable_logger,
     write_run_config_artifacts,
     write_run_metadata,
+)
+from autoware_ml.utils.runtime import (
+    configure_torch_runtime,
+    get_config_path,
+    instantiate_callbacks,
+    instantiate_trainer,
+    log_configuration,
+    log_hyperparameters,
+    resolve_work_dir,
+    set_seed,
 )
 
 logger = logging.getLogger(__name__)
@@ -75,14 +75,16 @@ def main(cfg: DictConfig):
 
     logger.info("Instantiating model...")
     model: L.LightningModule = hydra.utils.instantiate(cfg.model)
+    model.set_data_preprocessing(hydra.utils.instantiate(cfg.data_preprocessing))
 
     logger.info("Instantiating callbacks...")
     callbacks = instantiate_callbacks(cfg, logger_enabled=logger_enabled)
 
-    checkpoint_path = cfg.get("checkpoint", None)
-    if checkpoint_path is None:
-        raise ValueError("Checkpoint path must be provided for testing.")
-    checkpoint_path = Path(checkpoint_path)
+    weights_arg = cfg.get("weights", None)
+    if weights_arg is None:
+        raise ValueError("--weights <path> (repeatable) must be specified.")
+    weight_paths = [weights_arg] if isinstance(weights_arg, str) else list(weights_arg)
+    checkpoint_path = Path(weight_paths[-1])
     experiment_name, parent_run_id = resolve_lineage_context(config_name, checkpoint_path)
     run_context = None
     if logger_enabled:
@@ -145,11 +147,11 @@ def main(cfg: DictConfig):
     log_hyperparameters(cfg, trainer_logger, trainer)
 
     logger.info("Starting evaluation...")
-    logger.info(f"Checkpoint: {checkpoint_path}")
+    logger.info(f"Weights: {weight_paths}")
     logger.info(f"Accelerator: {cfg.trainer.get('accelerator', 'auto')}")
     logger.info(f"Devices: {cfg.trainer.get('devices', 'auto')}")
 
-    load_model_from_checkpoint(model, checkpoint_path, map_location="cpu")
+    apply_matching_weights(model, weight_paths, map_location="cpu", set_eval=True, logger=logger)
     trainer.test(model, datamodule=datamodule, ckpt_path=None)
 
     logger.info("Evaluation completed!")

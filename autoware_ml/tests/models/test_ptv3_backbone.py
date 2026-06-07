@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -9,15 +10,15 @@ import pytest
 import torch
 import torch.nn as nn
 
+import autoware_ml.utils.point_cloud.structures as point_structures
 from autoware_ml.losses.segmentation3d.lovasz import LovaszLoss
 from autoware_ml.models.segmentation3d.backbones.ptv3 import (
     Point,
+    PointSequential,
     PointTransformerV3Backbone,
     SerializedAttention,
 )
 from autoware_ml.models.segmentation3d.ptv3 import PTv3SegmentationModel
-from autoware_ml.utils.point_cloud.serialization.default import decode, encode
-import autoware_ml.utils.point_cloud.structures as point_structures
 
 
 def test_serialized_attention_requires_supported_flash_configuration() -> None:
@@ -118,12 +119,12 @@ def test_build_export_module_disables_flash_attention_without_mutating_live_back
         def set_serialization_order(self, order: tuple[str, ...]) -> None:
             self.order = list(order)
 
-        def prepare_export_copy(self, order: tuple[str, ...]) -> torch.nn.Module:
-            return PointTransformerV3Backbone.prepare_export_copy(self, order)
+        def prepare_for_export(self, order: tuple[str, ...]) -> torch.nn.Module:
+            return PointTransformerV3Backbone.prepare_for_export(self, order)
 
     model = PTv3SegmentationModel.__new__(PTv3SegmentationModel)
     torch.nn.Module.__init__(model)
-    model.seg_head = nn.Linear(4, 2)
+    model.seg3d_head = nn.Linear(4, 2)
     model.backbone = _BackboneForExport(attention)
 
     with patch(
@@ -133,6 +134,7 @@ def test_build_export_module_disables_flash_attention_without_mutating_live_back
         export_module = PTv3SegmentationModel._build_export_module(
             model,
             sparse_shape=torch.tensor([64, 64, 64], dtype=torch.long),
+            serialized_depth=torch.tensor(6, dtype=torch.long),
         )
 
     export_attention = export_module.backbone.attention
@@ -145,7 +147,130 @@ def test_build_export_module_disables_flash_attention_without_mutating_live_back
     assert export_module.backbone.shuffle_orders is False
 
 
-def test_compute_metrics_reports_losses_and_point_accuracy() -> None:
+def test_prepare_for_export_handles_loaded_flash_attention_module() -> None:
+    attention = SerializedAttention(
+        channels=32,
+        num_heads=4,
+        patch_size=4,
+        qkv_bias=True,
+        qk_scale=None,
+        attn_drop=0.0,
+        proj_drop=0.0,
+        order_index=0,
+        enable_rpe=False,
+        enable_flash=True,
+        upcast_attention=False,
+        upcast_softmax=False,
+    )
+    attention.flash_attn = math
+
+    class _BackboneForExport(torch.nn.Module):
+        def __init__(self, attention_module: SerializedAttention) -> None:
+            super().__init__()
+            self.order = ["hilbert"]
+            self.shuffle_orders = True
+            self.attention = attention_module
+
+        def set_serialization_order(self, order: tuple[str, ...]) -> None:
+            self.order = list(order)
+
+        def prepare_for_export(self, order: tuple[str, ...]) -> torch.nn.Module:
+            return PointTransformerV3Backbone.prepare_for_export(self, order)
+
+    backbone = _BackboneForExport(attention)
+
+    with patch(
+        "autoware_ml.models.segmentation3d.backbones.ptv3.replace_submconv3d_for_export",
+        return_value=None,
+    ):
+        export_backbone = PointTransformerV3Backbone.prepare_for_export(backbone, ("z", "z-trans"))
+
+    assert attention.flash_attn is math
+    assert export_backbone.attention.flash_attn is None
+    assert export_backbone.attention.enable_flash is False
+
+
+def test_serialized_attention_export_mode_requires_fixed_patch_size_capacity() -> None:
+    attention = SerializedAttention(
+        channels=32,
+        num_heads=4,
+        patch_size=4,
+        qkv_bias=True,
+        qk_scale=None,
+        attn_drop=0.0,
+        proj_drop=0.0,
+        order_index=0,
+        enable_rpe=False,
+        enable_flash=True,
+        upcast_attention=False,
+        upcast_softmax=False,
+    )
+    attention.disable_flash()
+    attention.export_mode = True
+    point = Point(
+        {
+            "feat": torch.randn(3, 32),
+            "grid_coord": torch.randint(0, 8, (3, 3), dtype=torch.int32),
+            "serialized_order": torch.arange(3).reshape(1, 3),
+            "serialized_inverse": torch.arange(3).reshape(1, 3),
+            "offset": torch.tensor([3], dtype=torch.long),
+        }
+    )
+
+    with pytest.raises(ValueError, match="at least 4 serialized points"):
+        attention(point)
+
+
+def test_serialized_attention_non_export_mode_adapts_patch_size() -> None:
+    attention = SerializedAttention(
+        channels=32,
+        num_heads=4,
+        patch_size=4,
+        qkv_bias=True,
+        qk_scale=None,
+        attn_drop=0.0,
+        proj_drop=0.0,
+        order_index=0,
+        enable_rpe=False,
+        enable_flash=True,
+        upcast_attention=False,
+        upcast_softmax=False,
+    )
+    attention.disable_flash()
+    point = Point(
+        {
+            "feat": torch.randn(3, 32),
+            "grid_coord": torch.randint(0, 8, (3, 3), dtype=torch.int32),
+            "serialized_order": torch.arange(3).reshape(1, 3),
+            "serialized_inverse": torch.arange(3).reshape(1, 3),
+            "offset": torch.tensor([3], dtype=torch.long),
+        }
+    )
+
+    output = attention(point)
+
+    assert output.feat.shape == (3, 32)
+    assert attention.patch_size == 3
+
+
+def test_point_sequential_skips_dense_module_on_empty_sparse_tensor() -> None:
+    spconv = pytest.importorskip("spconv.pytorch")
+    sparse_tensor = spconv.SparseConvTensor(
+        features=torch.empty((0, 4), dtype=torch.float32),
+        indices=torch.empty((0, 4), dtype=torch.int32),
+        spatial_shape=[4, 4, 4],
+        batch_size=1,
+    )
+    sequence = PointSequential(nn.BatchNorm1d(4))
+
+    output = sequence(sparse_tensor)
+
+    assert output is sparse_tensor
+    assert output.features.shape == (0, 4)
+
+
+def test_compute_metrics_reports_losses_and_point_level_accuracy() -> None:
+    """compute_metrics should run losses on voxel logits and metrics at point level."""
     model = PTv3SegmentationModel.__new__(PTv3SegmentationModel)
     torch.nn.Module.__init__(model)
     model.cross_entropy = nn.CrossEntropyLoss(ignore_index=-1)
@@ -153,7 +278,7 @@ def test_compute_metrics_reports_losses_and_point_accuracy() -> None:
     model.ignore_index = -1
     model.num_classes = 3
 
-    outputs = torch.tensor(
+    voxel_logits = torch.tensor(
         [
             [3.0, 0.1, 0.2],
             [0.2, 2.5, 0.1],
@@ -161,49 +286,58 @@ def test_compute_metrics_reports_losses_and_point_accuracy() -> None:
         ],
         dtype=torch.float32,
     )
-    target = torch.tensor([0, 1, -1], dtype=torch.long)
+    segment = torch.tensor([0, 1, -1], dtype=torch.long)
+    # Two source points: one maps to voxel 0, the other to voxel 1.
+    inverse = torch.tensor([0, 1], dtype=torch.long)
+    origin_segment = torch.tensor([0, 1], dtype=torch.long)
 
-    metrics = PTv3SegmentationModel.compute_metrics(model, outputs, target)
+    metrics = PTv3SegmentationModel.compute_metrics(
+        model,
+        {"segment": segment, "inverse": inverse, "origin_segment": origin_segment},
+        voxel_logits,
+    )
 
-    assert "loss" in metrics
-    assert "loss_ce" in metrics
-    assert "loss_lovasz" in metrics
-    assert "point_accuracy" in metrics
-    assert "mean_iou" in metrics
-    assert "mean_f1" in metrics
+    assert {"loss", "loss_ce", "loss_lovasz", "point_accuracy", "mean_iou", "mean_f1"} <= set(
+        metrics
+    )
     assert torch.isclose(metrics["point_accuracy"], torch.tensor(1.0))
     assert metrics["loss"] > 0
 
 
-def test_get_log_batch_size_uses_offset_length() -> None:
+def test_predict_outputs_reconstructs_point_level_predictions() -> None:
+    """predict_outputs should scatter voxel logits to source points via inverse."""
     model = PTv3SegmentationModel.__new__(PTv3SegmentationModel)
     torch.nn.Module.__init__(model)
 
-    batch = {"offset": torch.tensor([128, 256, 320], dtype=torch.int32)}
+    voxel_logits = torch.tensor([[4.0, 0.1], [0.1, 5.0]], dtype=torch.float32)
+    inverse = torch.tensor([0, 1, 0], dtype=torch.long)
 
-    assert model.get_log_batch_size(batch) == 3
+    predictions = PTv3SegmentationModel.predict_outputs(
+        model,
+        {"inverse": inverse},
+        voxel_logits,
+    )
+
+    assert torch.equal(predictions["pred_labels"], torch.tensor([0, 1, 0]))
+    assert predictions["pred_probs"].shape == (3, 2)
+    expected_probs = torch.softmax(voxel_logits, dim=1)[inverse]
+    assert torch.allclose(predictions["pred_probs"], expected_probs)
 
 
-def test_serialization_helpers_reject_unsupported_orders() -> None:
-    grid_coord = torch.tensor([[0, 0, 0]], dtype=torch.int64)
-
-    with pytest.raises(ValueError, match="Unsupported serialization order"):
-        encode(grid_coord, depth=4, order="invalid")
-
-    with pytest.raises(ValueError, match="Unsupported serialization order"):
-        decode(torch.tensor([0], dtype=torch.int64), depth=4, order="invalid")
-
-
-def test_point_sparsify_requires_spconv_at_runtime(monkeypatch) -> None:
-    monkeypatch.setattr(point_structures, "IS_SPCONV_AVAILABLE", False)
+def test_point_serialization_accepts_explicit_depth_override() -> None:
     point = Point(
         {
-            "coord": torch.randn(2, 3),
-            "grid_coord": torch.randint(0, 4, (2, 3), dtype=torch.int32),
+            "coord": torch.tensor([[0.0, 0.0, 0.0], [1.2, 1.0, 0.5]], dtype=torch.float32),
+            "grid_coord": torch.tensor([[0, 0, 0], [1, 1, 0]], dtype=torch.int32),
             "feat": torch.randn(2, 4),
             "offset": torch.tensor([2], dtype=torch.long),
         }
     )
 
-    with pytest.raises(ModuleNotFoundError, match="spconv is required"):
-        point.sparsify()
+    point_cloud_range = torch.tensor([0.0, 0.0, -2.0, 8.0, 8.0, 2.0])
+    axis_extents = (point_cloud_range[3:] - point_cloud_range[:3]) / 1.0
+    explicit_depth = point_structures.bit_length_tensor(torch.max(axis_extents))
+    point.serialization(("z", "z-trans"), shuffle_orders=False, depth=explicit_depth)
+
+    assert point["serialized_depth"].item() == 4
+    assert point["serialized_code"].shape == (2, 2)

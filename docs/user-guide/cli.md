@@ -12,29 +12,35 @@ Bash completion is installed automatically by the Docker image build and by
 
 ## Commands
 
-| Command          | Purpose                                              |
-| ---------------- | ---------------------------------------------------- |
-| `train`          | Train models using PyTorch Lightning                 |
-| `test`           | Evaluate models from a checkpoint                    |
-| `deploy`         | Export models to ONNX and TensorRT                   |
-| `mlflow ui`      | Launch the MLflow tracking UI                        |
-| `mlflow export`  | Export one experiment into its own MLflow store      |
-| `session start`  | Start a managed background task                      |
-| `session attach` | View live terminal output from a background task     |
-| `session detach` | Disconnect raw tmux clients from a managed session   |
-| `session ls`     | List managed background tasks                        |
-| `session stop`   | Stop a managed background task                       |
-| `create-dataset` | Generate dataset info files                          |
+| Command          | Purpose                                             |
+| ---------------- | --------------------------------------------------- |
+| `train`          | Train models using PyTorch Lightning                |
+| `test`           | Evaluate models from a checkpoint                   |
+| `deploy`         | Export models to ONNX and TensorRT                  |
+| `mlflow ui`      | Launch the MLflow tracking UI                       |
+| `mlflow export`  | Export one experiment into its own MLflow store     |
+| `session start`  | Start a managed background task                     |
+| `session attach` | View live terminal output from a background task    |
+| `session detach` | Disconnect raw tmux clients from a managed session  |
+| `session ls`     | List managed background tasks                       |
+| `session stop`   | Stop a managed background task                      |
+| `create-dataset` | Generate dataset info files                         |
 
 ## train
 
 Train a model using the specified Hydra configuration.
 
 ```bash
-autoware-ml train --config-name <config_path> [hydra_overrides...]
+autoware-ml train --config-name <config_path> [--weights <path> ...] [--resume-checkpoint <path>] [hydra_overrides...]
 ```
 
-All arguments after `--config-name` are passed to Hydra as overrides. See [Configuration](configuration.md) for details.
+**Arguments:**
+
+- `--config-name`: Path to config
+- `--weights`: One or more `.ckpt` paths for pretrained weight initialization (repeatable; later checkpoints overwrite earlier ones on overlapping keys). Use this for transfer learning, e.g. initializing a det3d backbone from a seg3d checkpoint. Mutually exclusive with `--resume-checkpoint`.
+- `--resume-checkpoint`: Full Lightning checkpoint path to resume an interrupted training run from (restores model weights, optimizer state, and epoch). Mutually exclusive with `--weights`.
+
+All remaining arguments are passed to Hydra as overrides. See [Configuration](configuration.md) for details.
 
 **Examples:**
 
@@ -42,7 +48,15 @@ All arguments after `--config-name` are passed to Hydra as overrides. See [Confi
 # Basic training
 autoware-ml train --config-name <task>/<model>/<config>
 
-# With overrides
+# Initialize det3d backbone from a seg3d checkpoint
+autoware-ml train --config-name <task>/<model>/<config> \
+    --weights mlruns/segmentation3d/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt
+
+# Resume an interrupted run
+autoware-ml train --config-name <task>/<model>/<config> \
+    --resume-checkpoint mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/last.ckpt
+
+# With Hydra overrides
 autoware-ml train --config-name <task>/<model>/<config> \
     trainer.max_epochs=100 \
     model.optimizer.lr=0.0001
@@ -53,46 +67,59 @@ autoware-ml train --config-name <task>/<model>/<config> \
 Export a trained model to ONNX and TensorRT.
 
 ```bash
-autoware-ml deploy --config-name <config_path> +checkpoint=<path> [options...]
+autoware-ml deploy --config-name <config_path> --weights <path> [--weights <path> ...] [options...]
 ```
 
 **Arguments:**
 
 - `--config-name`: Path to config (same as used for training)
-- `+checkpoint`: Path to `.ckpt` checkpoint file
+- `--weights`: One or more `.ckpt` paths whose parameters are merged into the
+  export model. Pass once per checkpoint. Later checkpoints overwrite earlier
+  ones on overlapping keys. Every parameter in the export model must be
+  covered by at least one `--weights`; missing keys raise a runtime error
+  listing what is uncovered.
 
 **Options:**
 
 - `output_name=<name>`: Base name for output files
 - `output_dir=<path>`: Output directory
 
-**Example:**
+**Single-task example:**
 
 ```bash
 autoware-ml deploy \
     --config-name <task>/<model>/<config> \
-    +checkpoint=mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt
+    --weights mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt
+```
+
+**Multi-head example:**
+
+```bash
+autoware-ml deploy \
+    --config-name detection3d/ptv3/transhead_voxel012_122m_t4dataset_j6gen2 \
+    --weights mlruns/segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/detection3d/ptv3/transhead_voxel012_122m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 ## test
 
-Evaluate a trained model from a checkpoint.
+Evaluate a trained model from one or more checkpoints.
 
 ```bash
-autoware-ml test --config-name <config_path> +checkpoint=<path> [hydra_overrides...]
+autoware-ml test --config-name <config_path> --weights <path> [--weights <path> ...] [hydra_overrides...]
 ```
 
 **Arguments:**
 
 - `--config-name`: Path to config (same as used for training)
-- `+checkpoint`: Path to `.ckpt` checkpoint file
+- `--weights`: One or more `.ckpt` paths whose parameters are merged into the model for evaluation (repeatable; later checkpoints overwrite earlier ones). Every parameter must be covered by at least one checkpoint.
 
-**Example:**
+**Single-task example:**
 
 ```bash
 autoware-ml test \
     --config-name <task>/<model>/<config> \
-    +checkpoint=mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt
+    --weights mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 ## mlflow ui
@@ -138,8 +165,8 @@ running sessions, and stop the task.
 **Example:**
 
 ```bash
-autoware-ml session start --name calibration-status-train --cwd /workspace -- \
-    train --config-name calibration_status/calibration_status_classifier/resnet18_t4dataset_j6gen2
+autoware-ml session start --name ptv3-train --cwd /workspace -- \
+    train --config-name segmentation3d/ptv3/voxel005_102m_nuscenes
 ```
 
 Use `--raw` to run a non-`autoware-ml` command in the managed session:

@@ -83,25 +83,28 @@ class CalibrationStatusClassifier(BaseModel):
         logits = self.head(feats)
         return logits
 
-    def predict_outputs(self, outputs: torch.Tensor) -> torch.Tensor:
+    def predict_outputs(
+        self, batch_inputs_dict: Mapping[str, Any], outputs: torch.Tensor
+    ) -> torch.Tensor:
         """Convert logits into class probabilities."""
+        del batch_inputs_dict
         return self.head.predict(outputs)
 
     def compute_metrics(
         self,
+        batch_inputs_dict: Mapping[str, Any],
         outputs: torch.Tensor | Sequence[torch.Tensor],
-        gt_calibration_status: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
         """Compute training losses and metrics for one batch.
 
         Args:
+            batch_inputs_dict: Full batch dictionary.
             outputs: Model outputs returned by :meth:`forward`.
-            gt_calibration_status: Ground-truth calibration-status labels.
 
         Returns:
             Dictionary of loss terms and logged metrics.
         """
-        return self.head.loss(outputs, gt_calibration_status)
+        return self.head.loss(outputs, batch_inputs_dict["gt_calibration_status"])
 
     def build_export_spec(self, batch_inputs_dict: Mapping[str, Any]) -> ExportSpec:
         """Build a calibration-status-specific export specification.

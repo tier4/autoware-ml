@@ -52,9 +52,9 @@ class_mapping:
 datamodule:
   _target_: autoware_ml.datamodule.t4dataset.segmentation3d.T4Segmentation3DDataModule
   data_root: ${oc.env:AUTOWARE_ML_DATA_PATH}/t4dataset
-  train_ann_file: ${datamodule.data_root}/lidarseg/t4dataset_j6gen2_lidarseg_infos_train.pkl
-  val_ann_file: ${datamodule.data_root}/lidarseg/t4dataset_j6gen2_lidarseg_infos_val.pkl
-  test_ann_file: ${datamodule.data_root}/lidarseg/t4dataset_j6gen2_lidarseg_infos_test.pkl
+  train_ann_file: ${datamodule.data_root}/info/lidarseg/t4dataset_j6gen2_lidarseg_infos_train.pkl
+  val_ann_file: ${datamodule.data_root}/info/lidarseg/t4dataset_j6gen2_lidarseg_infos_val.pkl
+  test_ann_file: ${datamodule.data_root}/info/lidarseg/t4dataset_j6gen2_lidarseg_infos_test.pkl
   lidar_sources: ${lidar_sources}
   train_dataloader_cfg:
     batch_size: 8

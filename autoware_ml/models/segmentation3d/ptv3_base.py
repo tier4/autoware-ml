@@ -1,0 +1,214 @@
+"""Abstract base class and shared export modules for PTv3-based task models."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from typing import Any
+
+import torch
+import torch.nn as nn
+from torch.onnx.operators import shape_as_tensor
+
+from autoware_ml.models.base import BaseModel
+from autoware_ml.models.segmentation3d.backbones.ptv3 import PointTransformerV3Backbone
+from autoware_ml.ops.indexing.operators import argsort
+from autoware_ml.utils.point_cloud.structures import bit_length_tensor, invert_permutation
+
+
+class PTv3BaseModel(BaseModel):
+    """Abstract base class for all PTv3 task models.
+
+    Provides shared backbone management, export geometry computation, and
+    export backbone helpers. Detection and segmentation subclasses inherit
+    from this class (potentially with additional base classes via MRO).
+    """
+
+    EXPORT_ORDER = ("z", "z-trans")
+    EXPORT_SUPPORTED_STAGES = frozenset({"onnx"})
+
+    def __init__(
+        self,
+        backbone: PointTransformerV3Backbone,
+        grid_size: float | None,
+        point_cloud_range: Sequence[float] | None,
+        freeze_backbone: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        """Initialize the PTv3 base model.
+
+        Args:
+            backbone: PTv3 backbone module.
+            grid_size: Voxel grid size used to derive sparse shape and
+                serialization depth for export.
+            point_cloud_range: Six-element sequence ``[x_min, y_min, z_min,
+                x_max, y_max, z_max]`` used to derive sparse shape for export.
+            freeze_backbone: When ``True``, the backbone is permanently kept
+                in eval mode with its parameters frozen.
+            **kwargs: Keyword arguments forwarded to :class:`BaseModel` (and
+                further up the MRO chain).
+        """
+        super().__init__(**kwargs)
+        self.backbone = backbone
+        self.grid_size = grid_size
+        self.point_cloud_range = (
+            tuple(float(v) for v in point_cloud_range) if point_cloud_range is not None else None
+        )
+        self.freeze_backbone = bool(freeze_backbone)
+        if self.freeze_backbone:
+            self.backbone.requires_grad_(False)
+            self.backbone.eval()
+
+    def train(self, mode: bool = True) -> PTv3BaseModel:
+        """Keep the frozen backbone in eval mode during training.
+
+        Args:
+            mode: When ``True``, set the model to training mode; otherwise to
+                evaluation mode.
+
+        Returns:
+            This model instance.
+        """
+        super().train(mode)
+        if self.freeze_backbone:
+            self.backbone.eval()
+        return self
+
+    def on_save_checkpoint(self, checkpoint: dict[str, Any]) -> None:
+        """Record backbone-freeze provenance in saved checkpoints.
+
+        Args:
+            checkpoint: Mutable checkpoint dictionary to annotate.
+        """
+        checkpoint["autoware_ml_checkpoint_recipe"] = {
+            "type": "ptv3",
+            "freeze_backbone": self.freeze_backbone,
+        }
+
+    def get_log_batch_size(self, batch_inputs_dict: Mapping[str, Any]) -> int | None:
+        """Infer the effective sample batch size for logging.
+
+        Args:
+            batch_inputs_dict: Full batch dictionary from the dataloader.
+
+        Returns:
+            Sample batch size when it can be inferred, otherwise ``None``.
+        """
+        if "gt_boxes" in batch_inputs_dict:
+            return len(batch_inputs_dict["gt_boxes"])
+        if "offset" in batch_inputs_dict:
+            return int(batch_inputs_dict["offset"].numel())
+        return super().get_log_batch_size(batch_inputs_dict)
+
+    def _compute_export_geometry(
+        self, batch_inputs_dict: Mapping[str, torch.Tensor]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Compute sparse shape and serialization depth for export.
+
+        Args:
+            batch_inputs_dict: Preprocessed batch containing at least
+                ``coord`` (used for device inference).
+
+        Returns:
+            ``(sparse_shape, serialization_depth)`` as long tensors on the
+            same device as ``batch_inputs_dict["coord"]``.
+        """
+        device = batch_inputs_dict["coord"].device
+        point_cloud_range = torch.tensor(self.point_cloud_range, dtype=torch.float32, device=device)
+        axis_extents = (point_cloud_range[3:] - point_cloud_range[:3]) / self.grid_size
+        serialization_depth = bit_length_tensor(torch.max(axis_extents))
+        sparse_shape = torch.round(axis_extents).to(dtype=torch.long)
+        return sparse_shape, serialization_depth
+
+    def _prepare_backbone_export(self) -> PointTransformerV3Backbone:
+        """Return an export-ready copy of the backbone.
+
+        Returns:
+            Copy of the backbone prepared for ONNX export with the configured
+            export order.
+        """
+        return self.backbone.prepare_for_export(self.EXPORT_ORDER)
+
+
+def _run_ptv3_backbone_export(
+    backbone: PointTransformerV3Backbone,
+    grid_coord: torch.Tensor,
+    feat: torch.Tensor,
+    serialized_depth: torch.Tensor,
+    serialized_code: torch.Tensor,
+    sparse_shape: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Run the shared tensor-only PTv3 backbone export path."""
+    point_count = shape_as_tensor(grid_coord)[:1].to(grid_coord.device)
+    serialized_order = torch.stack([argsort(code) for code in serialized_code], dim=0)
+    serialized_inverse = invert_permutation(serialized_order)
+    point = backbone.export_forward(
+        {
+            "coord": feat[:, :3],
+            "feat": feat,
+            "grid_coord": grid_coord,
+            "offset": point_count,
+            "serialized_depth": serialized_depth,
+            "serialized_code": serialized_code,
+            "serialized_order": serialized_order,
+            "serialized_inverse": serialized_inverse,
+            "sparse_shape": sparse_shape,
+        }
+    )
+    return point.feat, point.grid_coord, point.offset
+
+
+class _PTv3BackboneExportModule(nn.Module):
+    """Export-only PTv3 backbone producing raw point features."""
+
+    def __init__(
+        self,
+        backbone: PointTransformerV3Backbone,
+        sparse_shape: torch.Tensor,
+        serialized_depth: torch.Tensor,
+    ) -> None:
+        """Initialize the backbone export module.
+
+        Args:
+            backbone: Export-prepared PTv3 backbone copy.
+            sparse_shape: Static sparse shape baked at export time.
+            serialized_depth: Serialization depth baked at export time.
+        """
+        super().__init__()
+        self.backbone = backbone
+        self.register_buffer("_sparse_shape", sparse_shape.to(dtype=torch.long), persistent=False)
+        self.register_buffer("_serialized_depth", serialized_depth, persistent=False)
+
+    def forward(
+        self,
+        grid_coord: torch.Tensor,
+        feat: torch.Tensor,
+        serialized_code: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Run backbone and return raw point features with coordinates and batch offsets."""
+        return _run_ptv3_backbone_export(
+            self.backbone,
+            grid_coord,
+            feat,
+            self._serialized_depth,
+            serialized_code,
+            self._sparse_shape,
+        )
+
+
+class _PTv3SegHeadExportModule(nn.Module):
+    """Export-only segmentation head consuming backbone point features."""
+
+    def __init__(self, seg3d_head: nn.Module) -> None:
+        """Initialize the segmentation head export module.
+
+        Args:
+            seg3d_head: Segmentation head copy.
+        """
+        super().__init__()
+        self.seg3d_head = seg3d_head
+
+    def forward(self, point_feat: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Apply segmentation head and return label predictions and class probabilities."""
+        logits = self.seg3d_head(point_feat)
+        probs = torch.softmax(logits, dim=1)
+        return probs.argmax(dim=1), probs

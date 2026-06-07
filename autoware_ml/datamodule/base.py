@@ -19,8 +19,9 @@ interfaces used by training, evaluation, and deployment entrypoints.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
+import logging
 from typing import Any
 
 import lightning as L
@@ -29,10 +30,11 @@ import torch
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset as TorchDataset
 
-from autoware_ml.datamodule.common.point_cloud import point_collate_fn
+from autoware_ml.datamodule.collation import CollationStrategy
 from autoware_ml.datamodule.pipeline_context import PipelineContext
-from autoware_ml.preprocessing.base import DataPreprocessing
 from autoware_ml.transforms.base import TransformsCompose
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -138,51 +140,70 @@ class DataModule(L.LightningDataModule, ABC):
     """Define the shared Lightning DataModule behavior for Autoware-ML.
 
     Subclasses create split-specific datasets while this base class provides
-    common setup logic, dataloader construction, and batch collation helpers.
+    common setup logic, dataloader construction, and batch collation.
+
+    Collation contract:
+        ``collation_map`` is an explicit whitelist of keys that may appear in
+        the collated batch. Every key listed must be present in every sample.
+        Missing keys are skipped with a warning. Each key declares exactly one strategy.
+
+        Strategies:
+            * ``"concat"``: concatenate per-sample tensors along dim 0. The
+              first ``"concat"`` key in the map is the primary point cloud
+              space. Its per-sample lengths produce the cumulative ``offset``
+              tensor that is added to the batch.
+            * ``"stack"``: stack fixed-shape per-sample tensors along a new
+              dim 0. Shape mismatch raises ``ValueError``.
+            * ``"index_concat"``: concatenate integer index tensors along dim
+              0 and shift each sample's values by the exclusive cumulative
+              offset of the primary point cloud space, making indices globally
+              valid across the batch. Requires at least one ``"concat"`` key.
+            * ``"list"``: keep per-sample values as a Python list. Numpy
+              arrays are converted to tensors element-wise.
+
+    Failure modes:
+        Undeclared keys are dropped, declared-but-missing keys are skipped
+        with a warning, and a wrong strategy for a key's content fails loudly.
     """
 
     def __init__(
         self,
-        stack_keys: Sequence[str] | None = None,
+        collation_map: Mapping[str, CollationStrategy] | None = None,
         train_transforms: TransformsCompose | None = None,
         val_transforms: TransformsCompose | None = None,
         test_transforms: TransformsCompose | None = None,
         predict_transforms: TransformsCompose | None = None,
-        data_preprocessing: DataPreprocessing | None = None,
         train_dataloader_cfg: DataLoaderConfig | Mapping[str, Any] | None = None,
         val_dataloader_cfg: DataLoaderConfig | Mapping[str, Any] | None = None,
         test_dataloader_cfg: DataLoaderConfig | Mapping[str, Any] | None = None,
         predict_dataloader_cfg: DataLoaderConfig | Mapping[str, Any] | None = None,
-        mix_prob: float = 0.0,
     ):
         """Initialize DataModule.
 
         Args:
-            stack_keys: List of keys to stack from the input dictionary.
-            train_transforms: TransformsCompose for training dataset.
-            val_transforms: TransformsCompose for validation dataset.
-            test_transforms: TransformsCompose for test dataset.
-            predict_transforms: TransformsCompose for predict dataset.
-            data_preprocessing: Data preprocessing module.
-            train_dataloader_cfg: Configuration for training data loader.
-            val_dataloader_cfg: Configuration for validation data loader.
-            test_dataloader_cfg: Configuration for test data loader.
-            predict_dataloader_cfg: Configuration for predict data loader.
-            mix_prob: Point-cloud mix probability applied during training
-                collation.  When greater than zero the datamodule uses the
-                concatenated-offset collation strategy with optional sample
-                mixing instead of the default per-key collation.
+            collation_map: Per-key collation strategy applied across all
+                splits. Only keys listed here reach the batch. All other
+                keys are dropped. See the class docstring for the
+                per-strategy contract.
+            train_transforms: Transform pipeline applied to training samples.
+            val_transforms: Transform pipeline applied to validation samples.
+            test_transforms: Transform pipeline applied to test samples.
+            predict_transforms: Transform pipeline applied to predict samples.
+            train_dataloader_cfg: Configuration for the training dataloader.
+            val_dataloader_cfg: Configuration for the validation dataloader.
+            test_dataloader_cfg: Configuration for the test dataloader.
+            predict_dataloader_cfg: Configuration for the predict dataloader.
         """
         super().__init__()
 
-        self.stack_keys: list[str] = list(stack_keys or [])
-        self.mix_prob = mix_prob
+        self.collation_map: dict[str, CollationStrategy] = dict(collation_map or {})
+        if "offset" in self.collation_map:
+            raise ValueError("'offset' is a reserved collation key generated by concat inputs.")
         # TransformsCompose for each dataset split
         self.train_transforms: TransformsCompose = train_transforms
         self.val_transforms: TransformsCompose = val_transforms
         self.test_transforms: TransformsCompose = test_transforms
         self.predict_transforms: TransformsCompose = predict_transforms
-        self.data_preprocessing: DataPreprocessing = data_preprocessing
         # Configuration for each dataset split
         self.train_dataloader_cfg = self._coerce_dataloader_cfg(train_dataloader_cfg)
         self.val_dataloader_cfg = self._coerce_dataloader_cfg(val_dataloader_cfg)
@@ -226,7 +247,9 @@ class DataModule(L.LightningDataModule, ABC):
         )
 
     @abstractmethod
-    def _create_dataset(self, split: str, transforms: TransformsCompose | None = None) -> Dataset:
+    def _create_dataset(
+        self, split: str, dataset_transforms: TransformsCompose | None = None
+    ) -> Dataset:
         """Create dataset for a specific split.
 
         Subclasses must implement this method to create dataset instances
@@ -234,6 +257,8 @@ class DataModule(L.LightningDataModule, ABC):
 
         Args:
             split: Dataset split name ("train", "val", "test", "predict").
+            dataset_transforms: Transform pipeline applied per sample inside
+                the dataset.
 
         Returns:
             Dataset instance for the split.
@@ -260,9 +285,7 @@ class DataModule(L.LightningDataModule, ABC):
         }
 
         # Get splits for this stage
-        splits = (
-            ["train", "val", "test", "predict"] if stage is None else stage_splits.get(stage, [])
-        )
+        splits = ["train", "val", "test", "predict"] if stage is None else stage_splits[stage]
 
         # Create datasets for required splits
         for split in splits:
@@ -301,82 +324,168 @@ class DataModule(L.LightningDataModule, ABC):
         """Create prediction dataloader."""
         return self._create_dataloader("predict")
 
-    def _collate_mix_prob(self) -> float:
-        """Return mix probability (non-zero only during training)."""
-        trainer = getattr(self, "trainer", None)
-        return self.mix_prob if trainer is not None and trainer.training else 0.0
+    @staticmethod
+    def _coerce_value(value: Any) -> Any:
+        """Convert a per-sample value to a tensor when possible.
 
-    def collate_fn(self, batch_inputs_dicts: Sequence[dict[str, Any]]) -> dict[str, Any]:
-        """Collates batch elements into a dictionary of Tensors or Lists.
-
-        When ``mix_prob`` is greater than zero the datamodule delegates to the
-        concatenated-offset collation strategy with optional sample mixing.
-        Otherwise the default per-key collation is used:
-
-        1. Converts NumPy arrays, lists, tuples and scalars to PyTorch Tensors.
-        2. Collates lists of dictionaries to dictionaries of lists.
-        3. Stacks selected lists of tensors to a single tensor.
+        Numpy arrays and Python numeric scalars are converted to tensors so
+        downstream strategies can treat all numeric inputs uniformly.
+        Existing tensors pass through unchanged. Any other value passes
+        through unchanged, which keeps ``"list"`` strategy compatible with
+        arbitrary Python objects.
 
         Args:
-            batch_inputs_dicts: List of dictionaries representing the batch inputs.
+            value: A per-sample value drawn from the batch.
 
         Returns:
-            Dictionary mapping keys to Tensors or lists of data.
+            A ``torch.Tensor`` when ``value`` is a numpy array or a Python
+            numeric scalar, the original tensor when already a ``Tensor``,
+            otherwise the original value.
         """
-        if self.mix_prob > 0.0:
-            return point_collate_fn(list(batch_inputs_dicts), mix_prob=self._collate_mix_prob())
-        if not batch_inputs_dicts:
-            raise ValueError("Batch inputs dictionary is empty.")
+        if isinstance(value, torch.Tensor):
+            return value
+        if isinstance(value, np.ndarray):
+            array = value if value.flags.c_contiguous else np.ascontiguousarray(value)
+            return torch.from_numpy(array)
+        # `bool` is a subclass of `int` and is handled by the same branch.
+        if isinstance(value, (int, float)):
+            return torch.tensor(value)
+        return value
 
-        all_keys: set[str] = set()
-        for input_dict in batch_inputs_dicts:
-            all_keys.update(input_dict.keys())
-
-        batch_inputs_dict: dict[str, list[Any]] = {key: [] for key in all_keys}
-
-        for input_dict in batch_inputs_dicts:
-            for key in all_keys:
-                if key not in input_dict:
-                    raise ValueError(f"Key '{key}' not found in input_dict.")
-
-                item = input_dict[key]
-
-                # Convert NumPy arrays to Tensors, enforcing memory contiguity
-                if isinstance(item, np.ndarray):
-                    if not item.flags.c_contiguous:
-                        item = np.ascontiguousarray(item)
-                    item = torch.from_numpy(item)
-
-                # Convert scalars to Tensors
-                elif isinstance(item, (float, int)):
-                    item = torch.tensor(item)
-
-                # Convert lists of numbers to Tensors
-                elif isinstance(item, (list, tuple)):
-                    if item and isinstance(item[0], (int, float)):
-                        item = torch.as_tensor(item)
-
-                batch_inputs_dict[key].append(item)
-
-        for key in self.stack_keys:
-            if key not in batch_inputs_dict:
-                raise KeyError(f"Stack key '{key}' not found in batch_inputs_dict.")
-            batch_inputs_dict[key] = torch.stack(batch_inputs_dict[key], dim=0)
-
-        return batch_inputs_dict
-
-    def on_after_batch_transfer(
-        self, batch_inputs_dict: dict[str, Any], dataloader_idx: int
-    ) -> dict[str, Any]:
-        """Apply optional preprocessing after dataloader device transfer.
+    @staticmethod
+    def _apply_stack(key: str, values: list[torch.Tensor]) -> torch.Tensor:
+        """Stack fixed-shape per-sample tensors along a new batch dim.
 
         Args:
-            batch_inputs_dict: Batch dictionary returned by the dataloader.
-            dataloader_idx: Index of the dataloader that produced the batch.
+            key: Batch key name, used in the error message for diagnostics.
+            values: Per-sample tensors. Every tensor must share the same
+                shape as ``values[0]``.
 
         Returns:
-            Batch dictionary after optional preprocessing.
+            A tensor of shape ``(batch_size, *values[0].shape)``.
+
+        Raises:
+            ValueError: When any sample has a shape different from the first.
         """
-        if self.data_preprocessing is not None:
-            batch_inputs_dict = self.data_preprocessing(batch_inputs_dict)
-        return batch_inputs_dict
+        expected_shape = values[0].shape
+        for sample_idx, value in enumerate(values):
+            if value.shape != expected_shape:
+                raise ValueError(
+                    f"Key '{key}' configured as 'stack' but sample {sample_idx} has shape "
+                    f"{list(value.shape)}, expected {list(expected_shape)}."
+                )
+        return torch.stack(values, dim=0)
+
+    @staticmethod
+    def _apply_concat(values: list[torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
+        """Concatenate variable-length per-sample tensors along dim 0.
+
+        Args:
+            values: Per-sample tensors with matching trailing shape.
+
+        Returns:
+            A tuple of:
+                * concatenated tensor along dim 0,
+                * per-sample lengths as an ``int64`` tensor of shape
+                  ``(batch_size,)``.
+        """
+        lengths = torch.tensor([v.shape[0] for v in values], dtype=torch.long)
+        return torch.cat(values, dim=0), lengths
+
+    @staticmethod
+    def _apply_index_concat(
+        values: list[torch.Tensor], exclusive_offset: torch.Tensor
+    ) -> torch.Tensor:
+        """Concatenate index tensors and shift each sample by the primary offset.
+
+        Each sample's index values reference positions in the primary point
+        cloud space. After concatenation, per-sample chunks are shifted by
+        the corresponding exclusive cumulative count of the primary space so
+        the resulting indices remain valid across the whole batch.
+
+        Args:
+            values: Per-sample integer index tensors.
+            exclusive_offset: Exclusive cumulative offset of the primary
+                point cloud space. Shape ``(batch_size,)``.
+
+        Returns:
+            A 1D integer tensor of globally valid indices.
+        """
+        lengths = torch.tensor([v.shape[0] for v in values], dtype=torch.long)
+        shift = torch.repeat_interleave(exclusive_offset.to(values[0].dtype), lengths)
+        return torch.cat(values, dim=0) + shift
+
+    def collate_fn(self, batch: list[dict[str, Any]]) -> dict[str, Any]:
+        """Collate a batch according to ``self.collation_map``.
+
+        The function dispatches each declared key to its strategy handler,
+        derives a cumulative ``offset`` tensor from the first ``"concat"``
+        key, and applies the offset shift to any ``"index_concat"`` keys.
+        See the class docstring for the full
+        per-strategy contract.
+
+        Args:
+            batch: Non-empty list of per-sample dictionaries.
+
+        Returns:
+            Dictionary of collated values keyed by the names declared in
+            ``self.collation_map``. When any ``"concat"`` key is present, an
+            additional ``"offset"`` key is added with the inclusive
+            cumulative count of the primary point cloud space.
+
+        Raises:
+            ValueError: Empty batch, a ``"stack"`` key with mismatched
+                shapes, ``"index_concat"`` declared without any ``"concat"``
+                key, or an unknown strategy value.
+        """
+        if not batch:
+            raise ValueError("Batch is empty.")
+
+        result: dict[str, Any] = {}
+        primary_lengths: torch.Tensor | None = None
+        deferred_index_concat: list[tuple[str, list[torch.Tensor]]] = []
+
+        for key, strategy in self.collation_map.items():
+            missing = [i for i, sample in enumerate(batch) if key not in sample]
+            if missing:
+                logger.warning(
+                    "Key '%s' declared in collation_map but missing from samples %s. "
+                    "Skipping this key during collation. If this comes from deployment/predict, "
+                    "it is expected for training-only annotation keys.",
+                    key,
+                    missing,
+                )
+                continue
+
+            values = [self._coerce_value(sample[key]) for sample in batch]
+
+            match strategy:
+                case CollationStrategy.STACK:
+                    result[key] = self._apply_stack(key, values)
+                case CollationStrategy.CONCAT:
+                    tensor, lengths = self._apply_concat(values)
+                    result[key] = tensor
+                    if primary_lengths is None:
+                        primary_lengths = lengths
+                        result["offset"] = torch.cumsum(lengths, dim=0)
+                case CollationStrategy.INDEX_CONCAT:
+                    deferred_index_concat.append((key, values))
+                case CollationStrategy.LIST:
+                    result[key] = list(values)
+                case _:
+                    raise ValueError(f"Unknown CollationStrategy {strategy!r} for key '{key}'.")
+
+        if deferred_index_concat:
+            if primary_lengths is None:
+                raise ValueError(
+                    "'index_concat' requires at least one 'concat' key to define "
+                    "the primary point cloud offset. Got: "
+                    f"{[k for k, _ in deferred_index_concat]}."
+                )
+            exclusive_offset = torch.cat(
+                [torch.zeros(1, dtype=torch.long), torch.cumsum(primary_lengths, dim=0)[:-1]]
+            )
+            for key, values in deferred_index_concat:
+                result[key] = self._apply_index_concat(values, exclusive_offset)
+
+        return result

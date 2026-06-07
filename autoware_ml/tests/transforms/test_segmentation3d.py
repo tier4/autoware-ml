@@ -9,6 +9,7 @@ import numpy.typing as npt
 
 from autoware_ml.datamodule.pipeline_context import PipelineContext
 from autoware_ml.transforms.base import BaseTransform, TransformsCompose
+from autoware_ml.transforms.point_cloud.formatting import PreparePointCloudInput
 from autoware_ml.transforms.segmentation3d.formatting import PreparePointSegInput
 from autoware_ml.transforms.segmentation3d.loading import LoadSegAnnotations3D
 from autoware_ml.transforms.segmentation3d.mixing import FrustumMix, InstanceCopy
@@ -41,12 +42,10 @@ class _MixDataset:
         return dataset_transforms(input_dict)
 
 
-def test_prepare_point_seg_input_scales_intensity() -> None:
-    transform = PreparePointSegInput()
-    output = transform(
+def test_prepare_point_cloud_input_splits_points() -> None:
+    output = PreparePointCloudInput()(
         {
             "points": np.array([[1.0, 2.0, 3.0, 255.0], [4.0, 5.0, 6.0, 0.0]], dtype=np.float32),
-            "pts_semantic_mask": np.array([7, 8], dtype=np.int64),
         }
     )
 
@@ -54,6 +53,16 @@ def test_prepare_point_seg_input_scales_intensity() -> None:
         output["coord"], np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float32)
     )
     assert np.allclose(output["strength"], np.array([[1.0], [0.0]], dtype=np.float32))
+
+
+def test_prepare_point_seg_input_produces_segment_key() -> None:
+    sample = {
+        "points": np.array([[1.0, 2.0, 3.0, 255.0], [4.0, 5.0, 6.0, 0.0]], dtype=np.float32),
+        "pts_semantic_mask": np.array([7, 8], dtype=np.int64),
+    }
+    sample |= PreparePointCloudInput()(sample)
+    output = PreparePointSegInput()(sample)
+
     assert np.array_equal(output["segment"], np.array([7, 8], dtype=np.int64))
 
 

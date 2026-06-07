@@ -1,0 +1,71 @@
+# @package _global_
+
+defaults:
+  - /tasks/detection3d/ptv3/tiny
+  - _self_
+
+grid_size: 0.12
+point_cloud_range: [-122.88, -122.88, -3.0, 122.88, 122.88, 5.0]
+point_cloud_bev_range: [-122.88, -122.88, 122.88, 122.88]
+
+bev_stride: 8
+bev_output_shape: [256, 256]
+head_voxel_size: [0.96, 0.96, 8.0]
+
+train_sweeps_num: 1
+val_sweeps_num: 1
+
+datamodule:
+  train_dataloader_cfg:
+    batch_size: 16
+    num_workers: 32
+    shuffle: true
+  val_dataloader_cfg:
+    batch_size: 16
+    num_workers: 32
+  test_dataloader_cfg:
+    batch_size: 16
+    num_workers: 32
+
+model:
+  export_output_names: [heatmap, reg, height, dim, rot, vel]
+  metric:
+    eval_class_range:
+      car: 121.0
+      truck: 121.0
+      bus: 121.0
+      bicycle: 121.0
+      pedestrian: 121.0
+    ranges:
+      - _target_: autoware_ml.metrics.detection3d.DetectionRange
+        name: 0-50m
+        min_distance: 0.0
+        max_distance: 50.0
+      - _target_: autoware_ml.metrics.detection3d.DetectionRange
+        name: 50-90m
+        min_distance: 50.0
+        max_distance: 90.0
+      - _target_: autoware_ml.metrics.detection3d.DetectionRange
+        name: 90-121m
+        min_distance: 90.0
+        max_distance: 121.0
+      - _target_: autoware_ml.metrics.detection3d.DetectionRange
+        name: 0-121m
+        min_distance: 0.0
+        max_distance: 121.0
+  bbox_head:
+    _target_: autoware_ml.models.detection3d.heads.centerpoint.CenterHead
+    in_channels: 128
+    num_classes: ${num_classes}
+    class_names: ${class_names}
+    shared_channels: 64
+    point_cloud_range: ${point_cloud_range}
+    voxel_size: ${head_voxel_size}
+    out_size_factor: ${head_out_size_factor}
+    max_objs: 500
+    min_radius: 2
+    score_threshold: ${score_threshold}
+    post_max_size: ${post_max_size}
+    nms_min_radius: ${nms_min_radius}
+    heatmap_init_bias: -2.19
+    use_velocity: true

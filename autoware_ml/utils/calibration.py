@@ -36,9 +36,14 @@ class CalibrationData:
 
     Args:
         camera_matrix: Original camera intrinsic matrix with shape ``(3, 3)``.
-        distortion_coefficients: Camera distortion coefficients with shape ``(5,)``.
+        distortion_coefficients: Camera distortion coefficients following OpenCV
+            convention ``(k1, k2, p1, p2[, k3[, ...]])``. Length varies by model
+            (4, 5, 8, 12, or 14). Empty array for pre-undistorted images.
         lidar_to_camera_transformation: Homogeneous lidar-to-camera transform
             with shape ``(4, 4)``.
+        distortion_model: Distortion model name following ROS convention
+            (e.g. ``"plumb_bob"``, ``"rational_polynomial"``). Empty string for
+            pre-undistorted images.
         noise: Optional homogeneous perturbation transform applied by calibration
             augmentation.
         new_camera_matrix: Updated intrinsic matrix after image-space transforms.
@@ -48,6 +53,7 @@ class CalibrationData:
     camera_matrix: npt.NDArray[np.float32]
     distortion_coefficients: npt.NDArray[np.float32]
     lidar_to_camera_transformation: npt.NDArray[np.float32]
+    distortion_model: str = ""
     noise: npt.NDArray[np.float32] | None = None
     new_camera_matrix: npt.NDArray[np.float32] | None = None
 

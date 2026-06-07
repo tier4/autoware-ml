@@ -88,7 +88,10 @@ class T4Segmentation3DDataset(Dataset):
         Returns:
             Tuple of sample index and lidar source name.
         """
-        assert self.lidar_sources is not None
+        if self.lidar_sources is None:
+            raise ValueError(
+                "T4Segmentation3DDataset requires lidar_sources to be configured before indexing."
+            )
         source_count = len(self.lidar_sources)
         sample_index = index // source_count
         source_name = self.lidar_sources[index % source_count]
@@ -131,7 +134,7 @@ class T4Segmentation3DDataset(Dataset):
     def _get_sample_info(self, sample: dict[str, Any]) -> dict[str, Any]:
         """Build metadata for a single-sensor sample (no per-sensor flattening)."""
         lidar_path = os.path.join(self.data_root, sample["lidar_points"]["lidar_path"])
-        return {
+        info: dict[str, Any] = {
             "lidar_path": lidar_path,
             "name": sample["token"],
             "num_pts_feats": int(sample["lidar_points"].get("num_pts_feats", 5)),
@@ -140,6 +143,17 @@ class T4Segmentation3DDataset(Dataset):
                 self.data_root, sample["pts_semantic_mask_path"]
             ),
         }
+        if "images" in sample:
+            info["images"] = {
+                cam: {
+                    **cam_info,
+                    "img_path": _resolve_path(self.data_root, cam_info["img_path"])
+                    if "img_path" in cam_info
+                    else cam_info.get("img_path"),
+                }
+                for cam, cam_info in sample["images"].items()
+            }
+        return info
 
     def get_data_info(self, index: int) -> dict[str, Any]:
         """Build one T4 segmentation metadata record.
@@ -173,7 +187,6 @@ class T4Segmentation3DDataModule(DataModule):
         val_ann_file: str,
         test_ann_file: str,
         lidar_sources: list[str] | None = None,
-        mix_prob: float = 0.0,
         **kwargs: Any,
     ) -> None:
         """Initialize the T4 segmentation datamodule.
@@ -185,11 +198,9 @@ class T4Segmentation3DDataModule(DataModule):
             test_ann_file: Test annotation file path.
             lidar_sources: Ordered lidar sources exposed as separate samples.
                 When ``None`` each annotation record is one sample.
-            mix_prob: Mix probability forwarded to the point-cloud collate
-                function during training.  Set to ``0.0`` to disable.
             **kwargs: Additional base datamodule configuration.
         """
-        super().__init__(mix_prob=mix_prob, **kwargs)
+        super().__init__(**kwargs)
         self.data_root = data_root
         self.lidar_sources = lidar_sources
         self.ann_files = {

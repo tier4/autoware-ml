@@ -2,6 +2,7 @@
 
 defaults:
   - modules/callbacks
+  - modules/data_preprocessing
   - modules/datamodule
   - modules/deploy
   - modules/logger

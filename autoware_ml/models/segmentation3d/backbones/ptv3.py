@@ -28,6 +28,7 @@ from typing import Any
 import spconv.pytorch as spconv
 import torch
 import torch.nn as nn
+from torch.onnx.operators import shape_as_tensor
 
 from autoware_ml.ops.indexing.operators import argsort, unique
 from autoware_ml.ops.segment.segment_csr import segment_csr
@@ -153,7 +154,8 @@ class PointSequential(PointModule):
                             input_data.feat
                         )
                 elif isinstance(input_data, spconv.SparseConvTensor):
-                    input_data = input_data.replace_feature(module(input_data.features))
+                    if input_data.indices.shape[0] != 0:
+                        input_data = input_data.replace_feature(module(input_data.features))
                 else:
                     input_data = module(input_data)
         return input_data
@@ -326,28 +328,23 @@ class SerializedAttention(PointModule):
         if self.export_mode:
             if point.offset.numel() != 1:
                 raise ValueError("PTv3 export mode supports only single-sample export batches.")
-            pad = torch.arange(padded_bincount[0], device=point.offset.device)
-            unpad = torch.arange(point.offset[0], device=point.offset.device)
-            if bincount[0] != padded_bincount[0]:
-                pad[
-                    padded_bincount[0]
-                    - self.patch_size
-                    + (bincount[0] % self.patch_size) : padded_bincount[0]
-                ] = pad[
-                    padded_bincount[0]
-                    - 2 * self.patch_size
-                    + (bincount[0] % self.patch_size) : padded_bincount[0] - self.patch_size
-                ]
+            n = shape_as_tensor(point.feat)[0].to(device=point.offset.device)
+            padded_n = ((n + self.patch_size - 1) // self.patch_size) * self.patch_size
+            unpad = torch.arange(n, device=point.offset.device)
+            # Clamp pad indices to [0, n-1]: dummy slots repeat the last real token.
+            pad = torch.clamp(torch.arange(padded_n, device=point.offset.device), max=n - 1)
             if not self.enable_flash:
                 return pad, unpad, None
+            # arange(0, padded_n+1, patch_size) gives [0, ps, 2*ps, ..., padded_n]
+            # since padded_n is always a multiple of patch_size.
             cu_seqlens = torch.arange(
                 0,
-                padded_bincount[0],
+                padded_n + 1,
                 step=self.patch_size,
                 dtype=torch.int32,
                 device=point.offset.device,
             )
-            return pad, unpad, nn.functional.pad(cu_seqlens, (0, 1), value=padded_bincount[0])
+            return pad, unpad, cu_seqlens
 
         offset = nn.functional.pad(point.offset, (1, 0))
         padded_offset = nn.functional.pad(torch.cumsum(padded_bincount, dim=0), (1, 0))
@@ -405,7 +402,12 @@ class SerializedAttention(PointModule):
         head_count = self.num_heads
         if not self.enable_flash:
             min_points = int(offset_to_bincount(point.offset).min().item())
-            self.patch_size = max(1, min(self.patch_size_max, min_points))
+            if self.export_mode and min_points < self.patch_size_max:
+                raise ValueError(
+                    "PTv3 export mode requires each sample to have at least "
+                    f"{self.patch_size_max} serialized points, but found {min_points}."
+                )
+            self.patch_size = self.patch_size_max if self.export_mode else min_points
         patch_size = self.patch_size
         channel_count = self.channels
         pad, unpad, cu_seqlens = self._get_padding_and_inverse(point)
@@ -645,12 +647,13 @@ class SerializedPooling(PointModule):
             )
         else:
             pooled_order = torch.argsort(pooled_code, dim=1)
+        n_pooled = shape_as_tensor(pooled_code)[1]
         pooled_inverse = torch.zeros_like(pooled_order).scatter_(
             1,
             pooled_order,
-            torch.arange(pooled_code.shape[1], device=pooled_order.device).repeat(
-                pooled_code.shape[0], 1
-            ),
+            torch.arange(n_pooled, device=pooled_order.device, dtype=pooled_order.dtype)
+            .unsqueeze(0)
+            .expand_as(pooled_order),
         )
         if self.shuffle_orders:
             permutation = torch.randperm(pooled_code.shape[0], device=pooled_code.device)
@@ -736,18 +739,36 @@ class Embedding(PointModule):
     before the hierarchical PTv3 stages are applied.
     """
 
-    def __init__(self, in_channels: int, embed_channels: int) -> None:
-        """Initialize the sparse-convolution embedding stem.
+    def __init__(
+        self,
+        in_channels: int,
+        embed_channels: int,
+        kernel_size: int = 5,
+        stem_type: str = "conv",
+    ) -> None:
+        """Initialize the embedding stem.
 
         Args:
             in_channels: Input feature dimension.
             embed_channels: Output embedding dimension.
+            kernel_size: Submanifold-conv stem kernel size (ignored for the
+                linear stem). The default of 5 preserves the original 5x5x5 stem;
+                3 rides spconv's implicit-GEMM path like the network's other convs.
+            stem_type: Stem variant. ``"conv"`` (default) uses a submanifold conv;
+                ``"linear"`` uses a Utonia-style (PT-v3m3) per-point ``nn.Linear``.
         """
         super().__init__()
+        if stem_type == "linear":
+            # Utonia-style stem: drop the submanifold conv for a per-point Linear.
+            stem = nn.Linear(in_channels, embed_channels)
+        elif stem_type == "conv":
+            stem = spconv.SubMConv3d(
+                in_channels, embed_channels, kernel_size=kernel_size, bias=False, indice_key="stem"
+            )
+        else:
+            raise ValueError(f"Unknown stem_type: {stem_type!r} (expected 'conv' or 'linear')")
         self.stem = PointSequential(
-            spconv.SubMConv3d(
-                in_channels, embed_channels, kernel_size=5, padding=1, bias=False, indice_key="stem"
-            ),
+            stem,
             nn.BatchNorm1d(embed_channels, eps=1e-3, momentum=0.01),
             nn.GELU(),
         )
@@ -797,13 +818,8 @@ class PointTransformerV3Backbone(PointModule):
         enable_flash: bool,
         upcast_attention: bool,
         upcast_softmax: bool,
-        cls_mode: bool,
-        pdnorm_bn: bool,
-        pdnorm_ln: bool,
-        pdnorm_decouple: bool,
-        pdnorm_adaptive: bool,
-        pdnorm_affine: bool,
-        pdnorm_conditions: Sequence[str],
+        stem_kernel_size: int = 5,
+        stem_type: str = "conv",
     ) -> None:
         """Initialize the PTv3 encoder-decoder backbone.
 
@@ -831,27 +847,19 @@ class PointTransformerV3Backbone(PointModule):
             enable_flash: Whether to use flash attention.
             upcast_attention: Whether to upcast Q/K before attention.
             upcast_softmax: Whether to upcast logits before softmax.
-            cls_mode: Whether to run in classification mode.
-            pdnorm_bn: Whether to enable PDNorm batch normalization.
-            pdnorm_ln: Whether to enable PDNorm layer normalization.
-            pdnorm_decouple: Whether to decouple PDNorm statistics.
-            pdnorm_adaptive: Whether to use adaptive PDNorm.
-            pdnorm_affine: Whether to use affine PDNorm parameters.
-            pdnorm_conditions: PDNorm condition identifiers.
+            stem_kernel_size: Embedding-stem submanifold-conv kernel size. The
+                default of 5 preserves the original 5x5x5 stem.
+            stem_type: Embedding-stem variant, ``"conv"`` (default) or
+                ``"linear"``. See :class:`Embedding`.
         """
         super().__init__()
-        if any([pdnorm_bn, pdnorm_ln, pdnorm_decouple, pdnorm_adaptive is True]) and (
-            pdnorm_bn or pdnorm_ln
-        ):
-            raise ValueError("PDNorm is not integrated in autoware-ml PTv3 yet.")
-        if cls_mode:
-            raise ValueError("Classification mode is not supported by the PTv3 port.")
-        del pdnorm_affine, pdnorm_conditions
 
         self.order = list(order)
         self.shuffle_orders = shuffle_orders
         stage_count = len(enc_depths)
-        self.embedding = Embedding(in_channels, enc_channels[0])
+        self.embedding = Embedding(
+            in_channels, enc_channels[0], kernel_size=stem_kernel_size, stem_type=stem_type
+        )
 
         enc_drop_path = [value.item() for value in torch.linspace(0, drop_path, sum(enc_depths))]
         self.enc = PointSequential()
@@ -942,7 +950,8 @@ class PointTransformerV3Backbone(PointModule):
             Point container with decoded point features.
         """
         point = Point(data_dict)
-        point.serialization(self.order, self.shuffle_orders)
+        depth = data_dict.get("serialization_depth", None)
+        point.serialization(self.order, self.shuffle_orders, depth=depth)
         point.sparsify()
         point = self.embedding(point)
         point = self.enc(point)
@@ -951,9 +960,6 @@ class PointTransformerV3Backbone(PointModule):
 
     def set_serialization_order(self, order: Sequence[str]) -> None:
         """Update serialization order and reassign block order indices.
-
-        This is mainly used by deployment code, where PTv3 export follows a
-        narrower AWML-compatible serialization contract than training.
 
         Args:
             order: Serialization orders used by the backbone.
@@ -974,7 +980,7 @@ class PointTransformerV3Backbone(PointModule):
                     module.attn.order_index = block_index % len(self.order)
                     block_index += 1
 
-    def prepare_export_copy(self, order: Sequence[str]) -> PointTransformerV3Backbone:
+    def prepare_for_export(self, order: Sequence[str]) -> PointTransformerV3Backbone:
         """Return an isolated backbone copy configured for ONNX export.
 
         Args:
@@ -983,7 +989,16 @@ class PointTransformerV3Backbone(PointModule):
         Returns:
             Export-ready PTv3 backbone copy.
         """
-        export_backbone = deepcopy(self).eval()
+        loaded_flash_modules: list[tuple[SerializedAttention, Any]] = []
+        for module in self.modules():
+            if isinstance(module, SerializedAttention) and module.flash_attn is not None:
+                loaded_flash_modules.append((module, module.flash_attn))
+                module.flash_attn = None
+        try:
+            export_backbone = deepcopy(self).eval()
+        finally:
+            for module, flash_attn in loaded_flash_modules:
+                module.flash_attn = flash_attn
         export_backbone.set_serialization_order(order)
         export_backbone.shuffle_orders = False
         replace_submconv3d_for_export(export_backbone)

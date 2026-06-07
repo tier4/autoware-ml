@@ -20,7 +20,10 @@ import numpy as np
 import pytest
 import torch
 
-from autoware_ml.transforms.common.tensor import PermuteAxes, ToTensor
+from autoware_ml.transforms.base import TransformsCompose
+from autoware_ml.transforms.common.copying import Copy
+from autoware_ml.transforms.common.packing import BuildPointFeatures
+from autoware_ml.transforms.common.tensor import PermuteAxes
 
 
 class TestPermuteAxes:
@@ -100,8 +103,41 @@ class TestPermuteAxes:
         assert output_dict["test_tensor"].shape == (5, 32, 64)
 
 
-def test_to_tensor_preserves_none_values() -> None:
-    output = ToTensor()({"coord": np.zeros((1, 3), dtype=np.float32), "optional_metadata": None})
+def test_copy_duplicates_selected_fields() -> None:
+    sample = {"segment": np.array([1, 2, 3], dtype=np.int64)}
 
-    assert output["coord"].dtype == torch.float32
-    assert output["optional_metadata"] is None
+    output = Copy(keys_dict={"segment": "origin_segment"})(sample)
+
+    assert np.array_equal(output["origin_segment"], sample["segment"])
+    assert output["origin_segment"] is not sample["segment"]
+
+
+def test_build_point_features_concatenates_numpy_fields() -> None:
+    sample = {
+        "coord": np.array([[1.0, 2.0, 3.0]], dtype=np.float64),
+        "strength": np.array([[0.5]], dtype=np.float32),
+    }
+
+    output = BuildPointFeatures(keys=["coord", "strength"])(sample)
+
+    assert output["feat"].dtype == np.float32
+    assert np.array_equal(output["feat"], np.array([[1.0, 2.0, 3.0, 0.5]], dtype=np.float32))
+
+
+def test_transforms_compose_rejects_non_dict_input() -> None:
+    pipeline = TransformsCompose()
+
+    with pytest.raises(TypeError, match="input must be a dict"):
+        pipeline([{"coord": np.arange(3, dtype=np.float32)}])
+
+
+def test_transforms_compose_rejects_non_dict_outputs() -> None:
+    class _ReturnList:
+        def __call__(self, input_dict, context=None):
+            del context
+            return [{"coord": input_dict["coord"][:1]}, {"coord": input_dict["coord"][1:]}]
+
+    pipeline = TransformsCompose(pipeline=[_ReturnList()])
+
+    with pytest.raises(TypeError, match="must return a dict"):
+        pipeline({"coord": np.arange(6, dtype=np.float32).reshape(2, 3)})
