@@ -247,7 +247,7 @@ class T4RecordsGenerator:
 
         return LidarFrameDataModel(
             lidar_frame_id=calibrated_lidar_sample_data_token,
-            lidar_keyframe=True,
+            lidar_keyframe=sd_record.is_key_frame,
             lidar_sensor_id=cs_record.token,
             lidar_sensor_channel_name=lidar_channel_name,
             lidar_timestamp_seconds=microseconds2seconds(sd_record.timestamp),
@@ -380,7 +380,7 @@ class T4RecordsGenerator:
             lidar_frame_data_models.append(
                 LidarFrameDataModel(
                     lidar_frame_id=current_sample_data_record.token,
-                    lidar_keyframe=False,
+                    lidar_keyframe=current_sample_data_record.is_key_frame,
                     lidar_sensor_id=current_cs_record.token,
                     lidar_sensor_channel_name=lidar_frame_data_model.lidar_sensor_channel_name,
                     lidar_timestamp_seconds=microseconds2seconds(
