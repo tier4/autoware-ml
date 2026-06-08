@@ -12,14 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from autoware_ml.databases.schemas.box3d_metadata import Boxes3DMetadata
+from autoware_ml.databases.schemas.box3d_datamodel import Boxes3DDataModel
 
 
-class Boxes3DPipeline:
+class Box3DPipeline:
     """Base class for box 3D pipelines."""
 
-    def __call__(self, boxes3d_metadata: Boxes3DMetadata) -> Boxes3DMetadata:
+    def __call__(self, boxes3d_datamodel: Boxes3DDataModel) -> Boxes3DDataModel:
         """
         Process the boxes 3D.
         """
         raise NotImplementedError("Subclass must implement this method")
+
+    def __str__(self) -> str:
+        """
+        String representation of the pipeline, used for logging.
+
+        Returns:
+          str: String representation of the pipeline.
+        """
+        return self.__class__.__name__

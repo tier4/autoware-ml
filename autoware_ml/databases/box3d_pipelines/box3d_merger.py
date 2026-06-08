@@ -9,11 +9,11 @@ import numpy as np
 import numpy.typing as npt
 
 from autoware_ml.common.enums.enums import Box3DFieldIndex
-from autoware_ml.databases.pipelines.box3d_pipeline import Boxes3DPipeline
-from autoware_ml.databases.schemas.box3d_metadata import Boxes3DMetadata
+from autoware_ml.databases.box3d_pipelines.box3d_pipeline import Box3DPipeline
+from autoware_ml.databases.schemas.box3d_datamodel import Boxes3DDataModel
 
 
-class Box3DMerger(Boxes3DPipeline):
+class Box3DMerger(Box3DPipeline):
     """
     Base class for merging 3D bounding boxes.
     """
@@ -22,7 +22,7 @@ class Box3DMerger(Boxes3DPipeline):
         self,
         target_labels: MappingProxyType[str, Sequence[str]],
         proximity_distance_threshold: float,
-        label_indices: MappingProxyType[str, int],
+        class_names: Sequence[str],
     ):
         """
         Initialize Box3DMerger.
@@ -31,12 +31,13 @@ class Box3DMerger(Boxes3DPipeline):
           target_classes: Mapping of the target classes to the list of source classes.
           proximity_distance_threshold: Proximity distance threshold to check if two boxes are
             close to each other.
-          label_indices (MappingProxyType[str, int]): Mapping of the label names to the label indices.
+          class_names: List of class names in the database, used for category mapping.
         """
         super().__init__()
         self.target_labels = target_labels
         self.proximity_distance_threshold = proximity_distance_threshold
-        self.label_indices = label_indices
+        self.class_names = class_names
+        self.label_indices = {label_name: index for index, label_name in enumerate(class_names)}
 
         # Check if target labels are valid, it supports only two source labels for each target label
         for target_label, source_labels in self.target_labels.items():
@@ -50,7 +51,7 @@ class Box3DMerger(Boxes3DPipeline):
             "Proximity distance threshold must be positive"
         )
 
-    def __call__(self, boxes3d_metadata: Boxes3DMetadata) -> Boxes3DMetadata:
+    def __call__(self, boxes3d_metadata: Boxes3DDataModel) -> Boxes3DDataModel:
         """
         Process the boxes 3D metadata.
         """
@@ -209,8 +210,8 @@ class Box3DMerger(Boxes3DPipeline):
 
     def merge(
         self,
-        boxes_3d_metadata: Boxes3DMetadata,
-    ) -> Tuple[Boxes3DMetadata, Set[int]]:
+        boxes_3d_metadata: Boxes3DDataModel,
+    ) -> Tuple[Boxes3DDataModel, Set[int]]:
         """
         Merge 3D bounding boxes based on the target labels and source labels by following the steps:
           1) Match boxes based on the target labels and source labels
@@ -310,7 +311,7 @@ class Box3DMerger(Boxes3DPipeline):
                 merged_indices.add(box3d_idx_1)
                 merged_indices.add(box3d_idx_2)
 
-        merged_boxes_3d = Boxes3DMetadata(
+        merged_boxes_3d = Boxes3DDataModel(
             boxes_3d_arrays=merged_boxes_3d,
             boxes_3d_instance_ids=merged_boxes_3d_instance_ids,
             boxes_3d_dataset_label_names=merged_boxes_3d_dataset_names,
@@ -353,7 +354,7 @@ class Box3DExtendLongerMerger(Box3DMerger):
         self,
         target_labels: MappingProxyType[str, Sequence[str]],
         proximity_distance_threshold: float,
-        label_indices: MappingProxyType[str, int],
+        class_names: Sequence[str],
     ):
         """
         Initialize Box3DExtendLongerMerger.
@@ -362,13 +363,26 @@ class Box3DExtendLongerMerger(Box3DMerger):
           target_labels: Mapping of the target classes to the list of source classes.
           proximity_distance_threshold: Proximity distance threshold to check if two boxes are
             close to each other.
-          label_indices: Mapping of the label names to the label indices.
+          class_names: List of class names in the database, used for category mapping.
         """
 
         super().__init__(
             target_labels=target_labels,
             proximity_distance_threshold=proximity_distance_threshold,
-            label_indices=label_indices,
+            class_names=class_names,
+        )
+
+    def __str__(self) -> str:
+        """
+        String representation of the pipeline, used for logging.
+
+        Returns:
+          str: String representation of the pipeline.
+        """
+        return (
+            f"{self.__class__.__name__}(target_labels={self.target_labels}, "
+            f"proximity_distance_threshold={self.proximity_distance_threshold}, "
+            f"class_names={self.class_names})"
         )
 
     @staticmethod

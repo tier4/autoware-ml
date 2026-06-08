@@ -31,6 +31,7 @@ from autoware_ml.databases.scenarios import ScenarioData
 from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord
 from autoware_ml.databases.t4dataset.t4records_generator import T4RecordsGenerator
 from autoware_ml.databases.t4dataset.t4scenarios import T4Scenarios
+from autoware_ml.databases.box3d_pipelines.box3d_pipeline import Box3DPipeline
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +88,9 @@ class T4Dataset(BaseDatabase):
         cache_path: str,
         cache_file_prefix_name: str,
         num_workers: int,
+        class_names: Sequence[str],
         lidar_pointcloud_num_features: int,
+        box3d_pipelines: Sequence[Box3DPipeline],
     ) -> None:
         """
         Initialize T4 dataset. Please refer to the BaseDatabase class for more details.
@@ -99,7 +102,9 @@ class T4Dataset(BaseDatabase):
           cache_path: Path to cache the dataset records.
           cache_file_prefix_name: Prefix name of the cache file, it will be <cache_file_prefix_name>_<dataset_hash>.parquet
           num_workers: Number of workers to use for processing the dataset.
+          class_names: List of class names in the dataset, used for category mapping.
           lidar_pointcloud_num_features: Number of features in the lidar pointcloud.
+          box3d_pipelines: List of box 3D pipelines to process the box 3D annotations.
         """
 
         logger.info("Initializing T4 dataset...")
@@ -109,6 +114,8 @@ class T4Dataset(BaseDatabase):
             cache_path=cache_path,
             cache_file_prefix_name=cache_file_prefix_name,
             num_workers=num_workers,
+            class_names=class_names,
+            box3d_pipelines=box3d_pipelines,
         )
         self._scenarios = scenarios
         self._lidar_pointcloud_num_features = lidar_pointcloud_num_features
@@ -126,6 +133,8 @@ class T4Dataset(BaseDatabase):
             f"database_root_path={str(self._database_root_path)}, "
             f"cache path={str(self._cache_path)}, "
             f"cache file prefix name={self._cache_file_prefix_name}, "
+            f"class_names={self._class_names}, "
+            f"box3d_pipelines=[{', '.join([str(pipeline) for pipeline in self._box3d_pipelines])}], "
             f"{self.scenarios_string_repr}"
             f")"
         )

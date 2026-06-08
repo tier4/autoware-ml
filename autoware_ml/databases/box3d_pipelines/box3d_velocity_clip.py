@@ -2,11 +2,11 @@ import numpy as np
 
 from autoware_ml.common.enums.enums import Box3DFieldIndex
 
-from autoware_ml.databases.pipelines.box3d_pipeline import Boxes3DPipeline
-from autoware_ml.databases.t4dataset.t4sample_records import Boxes3DMetadata
+from autoware_ml.databases.box3d_pipelines.box3d_pipeline import Box3DPipeline
+from autoware_ml.databases.schemas.box3d_datamodel import Boxes3DDataModel
 
 
-class Box3DVelocityNormClip(Boxes3DPipeline):
+class Box3DVelocityNormClip(Box3DPipeline):
     """
     Pipeline to clip the velocity norm of the 3D bounding boxes.
     """
@@ -15,7 +15,16 @@ class Box3DVelocityNormClip(Boxes3DPipeline):
         super().__init__()
         self.velocity_norm_threshold = velocity_norm_threshold
 
-    def __call__(self, boxes_3d_metadata: Boxes3DMetadata) -> Boxes3DMetadata:
+    def __str__(self) -> str:
+        """
+        String representation of the pipeline, used for logging.
+
+        Returns:
+          str: String representation of the pipeline.
+        """
+        return f"{self.__class__.__name__}(velocity_norm_threshold={self.velocity_norm_threshold})"
+
+    def __call__(self, boxes_3d_metadata: Boxes3DDataModel) -> Boxes3DDataModel:
         """
         Clip the velocity norm of the 3D bounding boxes.
         """
@@ -38,7 +47,7 @@ class Box3DVelocityNormClip(Boxes3DPipeline):
         boxes_3d_arrays[:, Box3DFieldIndex.VELOCITY_X] = velocity_x
         boxes_3d_arrays[:, Box3DFieldIndex.VELOCITY_Y] = velocity_y
 
-        return Boxes3DMetadata(
+        return Boxes3DDataModel(
             boxes_3d_arrays=boxes_3d_arrays,
             boxes_3d_instance_ids=boxes_3d_metadata.boxes_3d_instance_ids,
             boxes_3d_dataset_label_names=boxes_3d_metadata.boxes_3d_dataset_label_names,
