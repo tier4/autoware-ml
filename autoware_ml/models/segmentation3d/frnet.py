@@ -21,20 +21,15 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
-from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 import torch
 import torch.nn as nn
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
-from autoware_ml.models.segmentation3d.base import BaseSegmentationModel
-from autoware_ml.models.segmentation3d.structures import (
-    FRNetDecodedOutputs,
-    FRNetFeatureDict,
-    FRNetInputs,
-)
+from autoware_ml.metrics.segmentation3d import compute_segmentation_metrics
+from autoware_ml.models.base import BaseModel
 from autoware_ml.utils.deploy import ExportSpec
 
 
@@ -60,36 +55,29 @@ class _FRNetExportModule(nn.Module):
         inverse_map: torch.Tensor,
     ) -> torch.Tensor:
         """Run export-time inference and return point-wise probabilities."""
-        voxel_dict: FRNetInputs = {
-            "points": points,
-            "coors": coors,
-            "voxel_coors": voxel_coors,
-            "inverse_map": inverse_map,
-            "sample_count": 1,
-        }
-        voxel_dict = self.voxel_encoder(voxel_dict)
-        voxel_dict = self.backbone(voxel_dict)
-        point_logits = self.decode_head(voxel_dict)["point_logits"]
+        voxel_coors_active, voxel_feats, point_feats_encoder = self.voxel_encoder(
+            points, inverse_map, voxel_coors
+        )
+        voxel_feats_pyramid, point_feats_backbone = self.backbone(
+            point_feats_encoder,
+            voxel_feats,
+            voxel_coors_active,
+            coors,
+            inverse_map,
+            sample_count=1,
+        )
+        point_logits = self.decode_head(
+            coors, point_feats_encoder, voxel_feats_pyramid, point_feats_backbone
+        )
         return torch.softmax(point_logits, dim=1)
 
 
-@dataclass(frozen=True)
-class FRNetStepOutputs:
-    """Internal FRNet step outputs used for training and auxiliary losses."""
-
-    point_logits: torch.Tensor
-    feature_dict: FRNetDecodedOutputs
-
-
-class FRNet(BaseSegmentationModel):
+class FRNet(BaseModel):
     """Implement FRNet for point-wise semantic segmentation.
 
     The wrapper combines frustum encoding, backbone execution, decode heads,
     and Lightning training logic in one model entrypoint.
     """
-
-    # FRNet exports only probabilities (labels are derived client-side).
-    EXPORT_OUTPUT_NAMES = ("pred_probs",)
 
     def __init__(
         self,
@@ -129,24 +117,6 @@ class FRNet(BaseSegmentationModel):
         self.num_classes = int(decode_head.classifier.out_features)
         self.ignore_index = int(decode_head.ignore_index)
 
-    def _build_feature_dict(
-        self,
-        points: torch.Tensor,
-        coors: torch.Tensor,
-        voxel_coors: torch.Tensor,
-        inverse_map: torch.Tensor,
-        sample_count: int,
-    ) -> FRNetInputs:
-        """Assemble the required FRNet input feature dictionary."""
-        feature_dict: FRNetInputs = {
-            "points": points,
-            "coors": coors,
-            "voxel_coors": voxel_coors,
-            "inverse_map": inverse_map,
-            "sample_count": sample_count,
-        }
-        return feature_dict
-
     def extract_feat(
         self,
         points: torch.Tensor,
@@ -154,54 +124,39 @@ class FRNet(BaseSegmentationModel):
         voxel_coors: torch.Tensor,
         inverse_map: torch.Tensor,
         sample_count: int,
-    ) -> FRNetFeatureDict:
+    ) -> tuple[list[torch.Tensor], list[torch.Tensor], list[torch.Tensor]]:
         """Extract multiscale features from preprocessed range-view inputs.
 
         Args:
-            points: Concatenated point tensor.
-            coors: Point-to-range-view coordinates.
-            voxel_coors: Unique range-view voxel coordinates.
-            inverse_map: Mapping from voxels back to points.
+            points: Concatenated point tensor of shape
+                ``(num_points, in_channels)``.
+            coors: Per-point range-view coordinates of shape
+                ``(num_points, 3)``.
+            voxel_coors: Unique range-view voxel coordinates of shape
+                ``(max_voxels, 3)``.
+            inverse_map: Mapping from points to voxel indices of shape
+                ``(num_points,)``.
+            sample_count: Number of samples in the batch.
 
         Returns:
-            Feature dictionary enriched by the encoder and backbone.
+            Tuple of three feature pyramids:
+                * ``point_feats_encoder``: per-point features at each MLP
+                  layer of the encoder.
+                * ``voxel_feats_pyramid``: backbone voxel feature pyramid.
+                * ``point_feats_backbone``: backbone point feature pyramid.
         """
-        voxel_dict = self._build_feature_dict(
-            points=points,
-            coors=coors,
-            voxel_coors=voxel_coors,
-            inverse_map=inverse_map,
-            sample_count=sample_count,
+        voxel_coors_active, voxel_feats, point_feats_encoder = self.voxel_encoder(
+            points, inverse_map, voxel_coors
         )
-        voxel_dict = self.voxel_encoder(voxel_dict)
-        voxel_dict = self.backbone(voxel_dict)
-        return voxel_dict
-
-    def _decode_outputs(self, feature_dict: FRNetFeatureDict) -> FRNetStepOutputs:
-        """Decode backbone features into point-wise logits and step outputs."""
-        decoded_feature_dict = cast(FRNetDecodedOutputs, self.decode_head(dict(feature_dict)))
-        return FRNetStepOutputs(
-            point_logits=decoded_feature_dict["point_logits"],
-            feature_dict=decoded_feature_dict,
+        voxel_feats_pyramid, point_feats_backbone = self.backbone(
+            point_feats_encoder,
+            voxel_feats,
+            voxel_coors_active,
+            coors,
+            inverse_map,
+            sample_count,
         )
-
-    def _forward_impl(
-        self,
-        points: torch.Tensor,
-        coors: torch.Tensor,
-        voxel_coors: torch.Tensor,
-        inverse_map: torch.Tensor,
-        sample_count: int,
-    ) -> FRNetStepOutputs:
-        """Run FRNet and return decoded step outputs."""
-        feature_dict = self.extract_feat(
-            points=points,
-            coors=coors,
-            voxel_coors=voxel_coors,
-            inverse_map=inverse_map,
-            sample_count=sample_count,
-        )
-        return self._decode_outputs(feature_dict)
+        return point_feats_encoder, voxel_feats_pyramid, point_feats_backbone
 
     def forward(
         self,
@@ -209,98 +164,123 @@ class FRNet(BaseSegmentationModel):
         coors: torch.Tensor,
         voxel_coors: torch.Tensor,
         inverse_map: torch.Tensor,
-    ) -> torch.Tensor:
-        """Run the segmentation model and decode head.
+        sample_count: int,
+    ) -> tuple[torch.Tensor, ...]:
+        """Run the segmentation model end-to-end and return decoded outputs.
+
+        The dynamo-traced export path uses :class:`_FRNetExportModule`, which
+        is independent of this method and emits a single probability tensor.
+        Training-time consumers of this method
+        (:meth:`compute_metrics`, :meth:`predict_outputs`) unpack the
+        returned tuple by position.
 
         Args:
             points: Concatenated point tensor.
             coors: Point-to-range-view coordinates.
             voxel_coors: Unique range-view voxel coordinates.
-            inverse_map: Mapping from voxels back to points.
+            inverse_map: Mapping from points to voxel indices.
+            sample_count: Number of samples in the batch.
 
         Returns:
-            Point-wise segmentation logits.
+            Tuple ``(point_logits, *voxel_feats_pyramid)`` of:
+                * ``point_logits``: point-wise logits of shape
+                  ``(num_points, num_classes)``.
+                * ``voxel_feats_pyramid``: backbone voxel feature pyramid,
+                  one tensor per pyramid level. Each entry feeds the
+                  auxiliary head whose ``feature_index`` matches the
+                  pyramid level.
         """
-        return self._forward_impl(
+        point_feats_encoder, voxel_feats_pyramid, point_feats_backbone = self.extract_feat(
             points=points,
             coors=coors,
             voxel_coors=voxel_coors,
             inverse_map=inverse_map,
-            sample_count=self._infer_sample_count_from_coors(coors),
-        ).point_logits
-
-    @staticmethod
-    def _infer_sample_count_from_coors(coors: torch.Tensor) -> int:
-        """Infer the number of samples represented by batched coordinates."""
-        if coors.numel() == 0:
-            return 1
-        return int(coors[:, 0].amax().item()) + 1
-
-    def _resolve_sample_count_from_batch(self, batch_inputs_dict: Mapping[str, Any]) -> int:
-        """Resolve the sample count used by FRNet internal feature transport."""
-        semantic_seg = batch_inputs_dict.get("semantic_seg")
-        if isinstance(semantic_seg, torch.Tensor) and semantic_seg.dim() > 0:
-            return int(semantic_seg.shape[0])
-
-        sample_count = batch_inputs_dict.get("sample_count")
-        if isinstance(sample_count, int):
-            return sample_count
-        if isinstance(sample_count, torch.Tensor) and sample_count.numel() == 1:
-            return int(sample_count.item())
-
-        coors = batch_inputs_dict.get("coors")
-        if isinstance(coors, torch.Tensor):
-            return self._infer_sample_count_from_coors(coors)
-        return 1
-
-    def run_model(self, batch_inputs_dict: Mapping[str, Any]) -> FRNetStepOutputs:
-        """Run FRNet on a preprocessed batch."""
-        return self._forward_impl(
-            points=batch_inputs_dict["points"],
-            coors=batch_inputs_dict["coors"],
-            voxel_coors=batch_inputs_dict["voxel_coors"],
-            inverse_map=batch_inputs_dict["inverse_map"],
-            sample_count=self._resolve_sample_count_from_batch(batch_inputs_dict),
+            sample_count=sample_count,
         )
+        point_logits = self.decode_head(
+            coors, point_feats_encoder, voxel_feats_pyramid, point_feats_backbone
+        )
+        return (point_logits, *voxel_feats_pyramid)
 
     def compute_metrics(
         self,
-        outputs: torch.Tensor | FRNetStepOutputs,
-        pts_semantic_mask: torch.Tensor,
-        semantic_seg: torch.Tensor | None = None,
+        batch_inputs_dict: Mapping[str, Any],
+        outputs: tuple[torch.Tensor, ...],
     ) -> dict[str, torch.Tensor]:
-        """Compute FRNet losses and point-wise accuracy."""
-        if isinstance(outputs, FRNetStepOutputs):
-            point_logits = outputs.point_logits
-            feature_dict = outputs.feature_dict
-        else:
-            point_logits = outputs
-            feature_dict = None
+        """Compute FRNet losses and point-wise accuracy.
 
-        decode_losses = self.decode_head.loss({"point_logits": point_logits}, pts_semantic_mask)
+        Args:
+            batch_inputs_dict: Full batch dictionary after runtime
+                preprocessing. Must contain ``pts_semantic_mask`` and
+                ``semantic_seg``.
+            outputs: Tuple returned by :meth:`forward`. The first element is
+                ``point_logits``; the remainder is the voxel-feature
+                pyramid consumed by auxiliary heads.
+
+        Returns:
+            Dictionary of named loss tensors and segmentation metrics. The
+            total loss is exposed under the ``"loss"`` key.
+        """
+        pts_semantic_mask = batch_inputs_dict["pts_semantic_mask"]
+        semantic_seg = batch_inputs_dict["semantic_seg"]
+        point_logits, *voxel_feats = outputs
+
+        decode_losses = self.decode_head.loss(point_logits, pts_semantic_mask)
         total_loss = decode_losses["loss_ce"]
         metrics: dict[str, torch.Tensor] = {"loss_decode_ce": decode_losses["loss_ce"]}
 
-        if self.auxiliary_head and semantic_seg is not None and feature_dict is not None:
-            for head_index, head in enumerate(self.auxiliary_head):
-                head_losses = head.loss(feature_dict, semantic_seg)
-                for loss_name, loss_value in head_losses.items():
-                    metrics[f"aux_{head_index}_{loss_name}"] = loss_value
-                    total_loss = total_loss + loss_value
+        for head_index, head in enumerate(self.auxiliary_head):
+            head_losses = head.loss(voxel_feats[head.feature_index], semantic_seg)
+            for loss_name, loss_value in head_losses.items():
+                metrics[f"aux_{head_index}_{loss_name}"] = loss_value
+                total_loss = total_loss + loss_value
 
         with torch.no_grad():
-            metrics.update(self._compute_segmentation_metrics(point_logits, pts_semantic_mask))
+            predictions = point_logits.argmax(dim=1)
+            metrics.update(
+                compute_segmentation_metrics(
+                    predictions,
+                    pts_semantic_mask,
+                    self.num_classes,
+                    self.ignore_index,
+                )
+            )
 
         metrics["loss"] = total_loss
         return metrics
 
-    def _get_point_logits(self, outputs: torch.Tensor | FRNetStepOutputs) -> torch.Tensor:
-        """Extract point-wise logits from FRNet outputs."""
-        return outputs.point_logits if isinstance(outputs, FRNetStepOutputs) else outputs
+    def predict_outputs(
+        self,
+        batch_inputs_dict: Mapping[str, Any],
+        outputs: tuple[torch.Tensor, ...],
+    ) -> dict[str, torch.Tensor]:
+        """Format FRNet segmentation predictions at the point level.
+
+        FRNet's decode head produces per-point logits directly through
+        ``inverse_map``, so no voxel-to-point scatter is needed here.
+
+        Args:
+            batch_inputs_dict: Full batch dictionary (unused; FRNet's logits
+                are already at point level).
+            outputs: Tuple returned by :meth:`forward`. Only the first
+                element (``point_logits``) is consumed.
+
+        Returns:
+            Dictionary with ``"pred_labels"`` (predicted class indices) and
+            ``"pred_probs"`` (per-class probabilities).
+        """
+        del batch_inputs_dict
+        point_logits = outputs[0]
+        pred_probs = torch.softmax(point_logits, dim=1)
+        return {"pred_labels": pred_probs.argmax(dim=1), "pred_probs": pred_probs}
+
+    def get_export_output_names(self) -> list[str]:
+        """Return ordered FRNet export output names."""
+        return ["pred_probs"]
 
     def get_log_batch_size(self, batch_inputs_dict: Mapping[str, Any]) -> int:
         """Return the number of samples represented by the FRNet batch."""
-        return self._resolve_sample_count_from_batch(batch_inputs_dict)
+        return int(batch_inputs_dict["sample_count"])
 
     def build_export_spec(self, batch_inputs_dict: Mapping[str, torch.Tensor]) -> ExportSpec:
         """Build the FRNet deployment export specification.

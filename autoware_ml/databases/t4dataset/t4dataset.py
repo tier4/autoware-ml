@@ -43,7 +43,6 @@ class T4RecordsGeneratorWorkerParams:
 
     Attributes:
       database_root_path: Root path of the T4 database.
-      dataset_version: Version of the dataset.
       scenario_data: Scenario data.
       lidar_pointcloud_num_features: Number of features in the lidar pointcloud.
     """
@@ -161,21 +160,27 @@ class T4Dataset(BaseDatabase):
 
         # TODO (KokSeang): Read the cache if it exists, and return the records
 
-        # 2) Read all unique scenario data
+        # 1) Read all unique scenario data
         unique_scenario_data = self.get_unique_scenario_data()
         logger.info(
             f"Processing a total of {len(unique_scenario_data)} unique scenarios in T4Dataset"
         )
 
-        # 3) Send the list to the multiprocessing or single processing the scenario
+        # 2) Send the list to the multiprocessing or single processing the scenario
         # samples/frames
         scenario_sample_records = self._run_t4records_generator(unique_scenario_data)
         logger.info(f"Processed {len(scenario_sample_records)} scenario sample records")
 
-        # 4) Save the scenario sample records to a polars .parquet file
+        # 3) Save the scenario sample records to a polars .parquet file
         # Dump to a list of dictionaries to make it safer since it's using Pydantic.BaseModel
-        scenario_sample_records = [record.to_dictionary() for record in scenario_sample_records]
-        df = pl.DataFrame(scenario_sample_records, schema=polars_schema)
+        scenario_dict_records = [record.to_dictionary() for record in scenario_sample_records]
+
+        # 4) Get the polar schema
+        polars_schema = self.get_polars_schema()
+        logger.info(f"Parquet schema: {polars_schema}")
+
+        # 5) Save the scenario sample records to a polars .parquet file
+        df = pl.DataFrame(scenario_dict_records, schema=polars_schema)
         df_hash = hashlib.sha256(str(self).encode("utf-8")).hexdigest()
         df_cache_path = self._cache_path / f"{self._cache_file_prefix_name}_{df_hash}.parquet"
         df.write_parquet(df_cache_path)

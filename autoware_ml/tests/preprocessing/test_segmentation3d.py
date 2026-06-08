@@ -19,6 +19,20 @@ import torch
 from autoware_ml.preprocessing.segmentation3d.frustum_range import FrustumRangePreprocessor
 
 
+def _make_batch(
+    sample_points: list[torch.Tensor],
+    sample_labels: list[torch.Tensor] | None = None,
+) -> dict[str, torch.Tensor]:
+    """Build a concatenated batch from per-sample tensors."""
+    points = torch.cat(sample_points, dim=0)
+    lengths = torch.tensor([p.shape[0] for p in sample_points], dtype=torch.long)
+    offset = torch.cumsum(lengths, dim=0)
+    batch: dict[str, torch.Tensor] = {"points": points, "offset": offset}
+    if sample_labels is not None:
+        batch["pts_semantic_mask"] = torch.cat(sample_labels, dim=0)
+    return batch
+
+
 class TestFrustumRangePreprocessor:
     """Tests for FRNet frustum/range preprocessing."""
 
@@ -32,8 +46,8 @@ class TestFrustumRangePreprocessor:
             ignore_index=255,
             num_classes=4,
         )
-        batch_inputs = {
-            "points": [
+        batch_inputs = _make_batch(
+            sample_points=[
                 torch.tensor(
                     [
                         [1.0, 0.0, 0.0, 0.1],
@@ -43,8 +57,8 @@ class TestFrustumRangePreprocessor:
                     dtype=torch.float32,
                 )
             ],
-            "pts_semantic_mask": [torch.tensor([3, 3, 1], dtype=torch.long)],
-        }
+            sample_labels=[torch.tensor([3, 3, 1], dtype=torch.long)],
+        )
 
         outputs = preprocessor(batch_inputs)
 
@@ -70,20 +84,20 @@ class TestFrustumRangePreprocessor:
         )
         sample_a = torch.tensor([[1.0, 0.0, 0.0, 0.1], [2.0, 0.0, 0.0, 0.2]], dtype=torch.float32)
         sample_b = torch.tensor([[1.0, 1.0, 0.0, 0.3]], dtype=torch.float32)
-        batch_inputs = {
-            "points": [sample_a, sample_b],
-            "pts_semantic_mask": [
+        batch_inputs = _make_batch(
+            sample_points=[sample_a, sample_b],
+            sample_labels=[
                 torch.tensor([0, 1], dtype=torch.long),
                 torch.tensor([2], dtype=torch.long),
             ],
-        }
+        )
 
         outputs = preprocessor(batch_inputs)
 
         assert outputs["points"].shape == (3, 4)
         assert outputs["pts_semantic_mask"].shape == (3,)
         assert outputs["semantic_seg"].shape == (2, 2, 4)
-        assert outputs["batch_size"] == 2
+        assert outputs["sample_count"] == 2
 
     def test_forward_predict_mode_produces_no_label_keys(self) -> None:
         """When pts_semantic_mask is absent, semantic_seg should not appear in output."""
@@ -95,9 +109,9 @@ class TestFrustumRangePreprocessor:
             ignore_index=255,
             num_classes=4,
         )
-        batch_inputs = {
-            "points": [torch.tensor([[1.0, 0.0, 0.0, 0.1]], dtype=torch.float32)],
-        }
+        batch_inputs = _make_batch(
+            sample_points=[torch.tensor([[1.0, 0.0, 0.0, 0.1]], dtype=torch.float32)]
+        )
 
         outputs = preprocessor(batch_inputs)
 
@@ -116,12 +130,12 @@ class TestFrustumRangePreprocessor:
             ignore_index=-1,
             num_classes=3,
         )
-        batch_inputs = {
-            "points": [
+        batch_inputs = _make_batch(
+            sample_points=[
                 torch.tensor([[1.0, 0.0, 0.0, 0.1], [2.0, 0.0, 0.0, 0.2]], dtype=torch.float32)
             ],
-            "pts_semantic_mask": [torch.tensor([-1, 2], dtype=torch.long)],
-        }
+            sample_labels=[torch.tensor([-1, 2], dtype=torch.long)],
+        )
 
         outputs = preprocessor(batch_inputs)
 
@@ -139,15 +153,15 @@ class TestFrustumRangePreprocessor:
             ignore_index=255,
             num_classes=3,
         )
-        batch_inputs = {
-            "points": [
+        batch_inputs = _make_batch(
+            sample_points=[
                 torch.tensor(
                     [[1.0, 0.0, 0.0, 0.1], [2.0, 0.0, 0.0, 0.2], [1.0, 1.0, 0.0, 0.3]],
                     dtype=torch.float32,
                 )
             ],
-            "pts_semantic_mask": [torch.tensor([255, 255, 1], dtype=torch.long)],
-        }
+            sample_labels=[torch.tensor([255, 255, 1], dtype=torch.long)],
+        )
 
         outputs = preprocessor(batch_inputs)
 

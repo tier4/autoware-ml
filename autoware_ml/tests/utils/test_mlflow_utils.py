@@ -30,7 +30,6 @@ from autoware_ml.utils.mlflow_helpers import (
     load_run_context,
     prepare_run_context,
     resolve_tracking_uri,
-    should_enable_logger,
     write_run_metadata,
 )
 
@@ -117,21 +116,6 @@ class TestRunTags:
         assert logger_cfg.run_name == "train:resnet18_t4dataset_j6gen2:2026-03-17/09-00-00"
         assert logger_cfg.tags == {"stage": "train", "owner": "alice"}
         assert logger_cfg.tracking_uri.startswith("sqlite:///")
-
-    def test_should_enable_logger_requires_logger_and_non_fast_dev_run(self) -> None:
-        cfg = OmegaConf.create(
-            {
-                "logger": {"tracking_uri": "sqlite:///mlruns/mlflow.db"},
-                "trainer": {"fast_dev_run": False},
-            }
-        )
-        assert should_enable_logger(cfg) is True
-
-        cfg.trainer.fast_dev_run = True
-        assert should_enable_logger(cfg) is False
-
-        cfg = OmegaConf.create({"logger": None, "trainer": {"fast_dev_run": False}})
-        assert should_enable_logger(cfg) is False
 
 
 class TestArtifactLayout:

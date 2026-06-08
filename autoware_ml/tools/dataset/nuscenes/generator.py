@@ -162,6 +162,57 @@ def obtain_sensor2top(
     return sweep
 
 
+def _build_camera_info(
+    nusc: NuScenes,
+    cam_token: str,
+    l2e_t: npt.NDArray[np.float64],
+    l2e_r_mat: npt.NDArray[np.float64],
+    root_path: str,
+) -> dict[str, Any]:
+    """Build unified camera info dict for a single camera channel.
+
+    Args:
+        nusc: NuScenes API instance.
+        cam_token: Sample data token for the camera.
+        l2e_t: Lidar-to-ego translation vector.
+        l2e_r_mat: Lidar-to-ego rotation matrix.
+        root_path: Dataset root path used to normalize the image path.
+
+    Returns:
+        Camera info dict with img_path, cam2img [3x3], lidar2cam [4x4],
+        cam2ego [4x4], timestamp, distortion_model, and distortion_coeffs.
+        NuScenes images are pre-undistorted so distortion fields are empty.
+    """
+    sd_rec = nusc.get("sample_data", cam_token)
+    cs_record = nusc.get("calibrated_sensor", sd_rec["calibrated_sensor_token"])
+    _, _, cam_intrinsic = nusc.get_sample_data(cam_token)
+
+    img_path = _normalize_path(str(nusc.get_sample_data_path(sd_rec["token"])), root_path)
+
+    s2e_r_mat = Quaternion(cs_record["rotation"]).rotation_matrix
+    cam2ego = np.eye(4, dtype=np.float64)
+    cam2ego[:3, :3] = s2e_r_mat
+    cam2ego[:3, 3] = np.array(cs_record["translation"])
+
+    lidar2ego = np.eye(4, dtype=np.float64)
+    lidar2ego[:3, :3] = l2e_r_mat
+    lidar2ego[:3, 3] = np.array(l2e_t)
+    cam2lidar = np.linalg.inv(lidar2ego) @ cam2ego
+    lidar2cam = np.linalg.inv(cam2lidar)
+
+    return {
+        "img_path": img_path,
+        "cam2img": cam_intrinsic.tolist()
+        if isinstance(cam_intrinsic, np.ndarray)
+        else list(cam_intrinsic),
+        "lidar2cam": lidar2cam.tolist(),
+        "cam2ego": cam2ego.tolist(),
+        "timestamp": sd_rec["timestamp"],
+        "distortion_model": "",
+        "distortion_coeffs": [],
+    }
+
+
 class NuScenesDatasetGenerator(DatasetGenerator):
     """Generate NuScenes info files with task-specific annotation payloads.
 
@@ -318,7 +369,7 @@ class NuScenesDatasetGenerator(DatasetGenerator):
                 "num_features": 5,
                 "token": sample["token"],
                 "sweeps": [],
-                "cams": dict(),
+                "images": {},
                 "lidar2ego_translation": cs_record["translation"],
                 "lidar2ego_rotation": cs_record["rotation"],
                 "ego2global_translation": pose_record["translation"],
@@ -335,12 +386,9 @@ class NuScenesDatasetGenerator(DatasetGenerator):
 
             for cam in self.camera_types:
                 cam_token = sample["data"][cam]
-                cam_path, _, cam_intrinsic = nusc.get_sample_data(cam_token)
-                cam_info = obtain_sensor2top(
-                    nusc, cam_token, l2e_t, l2e_r_mat, e2g_t, e2g_r_mat, cam
+                info["images"][cam] = _build_camera_info(
+                    nusc, cam_token, l2e_t, l2e_r_mat, root_path
                 )
-                cam_info.update(cam_intrinsic=cam_intrinsic)
-                info["cams"].update({cam: cam_info})
 
             sd_rec = nusc.get("sample_data", sample["data"]["LIDAR_TOP"])
             sweeps = []

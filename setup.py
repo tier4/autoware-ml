@@ -7,9 +7,10 @@ from setuptools import setup
 # Add the project root directory to the Python path, so that the build script can be found
 build_path = Path(__file__).parent / "autoware_ml" / "ops" / "build.py"
 spec = spec_from_file_location("autoware_ml_setup_build", build_path)
-module = module_from_spec(spec)
+if spec is None or spec.loader is None:
+    raise RuntimeError(f"Failed to load build spec from {build_path}")
 
-assert spec is not None and spec.loader is not None
+module = module_from_spec(spec)
 spec.loader.exec_module(module)
 
 setup(

@@ -176,8 +176,10 @@ class SparseConvolution(SparseConvolutionBase):
         """Cache generated indice metadata under the configured indice key."""
         if self.indice_key is None:
             return
-        msg = f"your indice key {self.indice_key} already exists in this sparse tensor."
-        assert self.indice_key not in indice_dict, msg
+        if self.indice_key in indice_dict:
+            raise ValueError(
+                f"Indice key '{self.indice_key}' already exists in this sparse tensor."
+            )
         indice_dict[self.indice_key] = indice_data
 
     def _finalize_output_tensor(
@@ -220,13 +222,18 @@ class SparseConvolution(SparseConvolutionBase):
         """Resolve sparse metadata for the native convolution path."""
         data = input_tensor.find_indice_pair(self.indice_key)
         if data is not None:
-            assert isinstance(data, IndiceData)
+            if not isinstance(data, IndiceData):
+                raise TypeError(
+                    f"Expected IndiceData for key '{self.indice_key}', got {type(data).__name__}."
+                )
 
         if self.inverse:
-            assert data is not None and self.indice_key is not None
-            assert data.is_subm is False, (
-                "inverse conv can only be used with standard conv and pool ops."
-            )
+            if data is None or self.indice_key is None:
+                raise RuntimeError(
+                    "Inverse convolution requires cached indice data and a valid indice key."
+                )
+            if data.is_subm is not False:
+                raise ValueError("Inverse conv can only be used with standard conv and pool ops.")
             self._check_inverse_reuse_valid(input_tensor, spatial_shape, data)
             return _NativeExecutionPlan(
                 outids=data.indices,
@@ -237,7 +244,8 @@ class SparseConvolution(SparseConvolutionBase):
             )
 
         if self.indice_key is not None and data is not None:
-            assert self.subm, "only support reuse subm indices"
+            if not self.subm:
+                raise RuntimeError("Indice reuse is only supported for subm convolutions.")
             self._check_subm_reuse_valid(input_tensor, spatial_shape, data)
             return _NativeExecutionPlan(
                 outids=data.out_indices,
@@ -317,13 +325,18 @@ class SparseConvolution(SparseConvolutionBase):
         """Resolve sparse metadata for the implicit-GEMM execution path."""
         data = input_tensor.find_indice_pair(self.indice_key)
         if data is not None:
-            assert isinstance(data, ImplicitGemmIndiceData)
+            if not isinstance(data, ImplicitGemmIndiceData):
+                raise TypeError(
+                    f"Expected ImplicitGemmIndiceData for key '{self.indice_key}', got {type(data).__name__}."
+                )
 
         if self.inverse:
-            assert data is not None and self.indice_key is not None
-            assert data.is_subm is False, (
-                "inverse conv can only be used with standard conv and pool ops."
-            )
+            if data is None or self.indice_key is None:
+                raise RuntimeError(
+                    "Inverse convolution requires cached indice data and a valid indice key."
+                )
+            if data.is_subm is not False:
+                raise ValueError("Inverse conv can only be used with standard conv and pool ops.")
             self._check_inverse_reuse_valid(input_tensor, spatial_shape, data)
             return _ImplicitGemmExecutionPlan(
                 outids=data.indices,
@@ -336,7 +349,8 @@ class SparseConvolution(SparseConvolutionBase):
             )
 
         if self.indice_key is not None and data is not None:
-            assert self.subm, "only support reuse subm indices"
+            if not self.subm:
+                raise RuntimeError("Indice reuse is only supported for subm convolutions.")
             self._check_subm_reuse_valid(input_tensor, spatial_shape, data)
             return _ImplicitGemmExecutionPlan(
                 outids=data.out_indices,
@@ -433,7 +447,8 @@ class SparseConvolution(SparseConvolutionBase):
         act_type: tv.gemm.Activation,
     ) -> torch.Tensor:
         """Execute the native sparse-convolution branch."""
-        assert not self.inverse, "Native inverse sparse-convolution export is not supported."
+        if self.inverse:
+            raise NotImplementedError("Native inverse sparse-convolution export is not supported.")
         indice_pairs = plan.indice_pairs
         if indice_pairs.device != features.device:
             indice_pairs = indice_pairs.to(features.device)
@@ -661,6 +676,10 @@ class SparseConv3d(SparseConvolution):
             indice_key: Optional spconv indice cache key.
             algo: Sparse convolution algorithm.
             fp32_accum: Whether to accumulate in FP32.
+            record_voxel_count: Whether to record maximum output voxel count
+                during standard sparse convolution execution.
+            large_kernel_fast_algo: Whether to enable spconv's large-kernel
+                fast algorithm path.
             name: Optional debug or profiling name.
         """
         super().__init__(
@@ -719,6 +738,10 @@ class SubMConv3d(SparseConvolution):
             indice_key: Optional spconv indice cache key.
             algo: Sparse convolution algorithm.
             fp32_accum: Whether to accumulate in FP32.
+            large_kernel_fast_algo: Whether to enable spconv's large-kernel
+                fast algorithm path. Submanifold convolutions do not expose
+                ``record_voxel_count`` because their active voxel count is
+                unchanged by construction.
             name: Optional debug or profiling name.
         """
         super().__init__(

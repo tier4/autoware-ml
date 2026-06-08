@@ -106,19 +106,16 @@ class NuscenesCalibrationStatusDataset(Dataset):
                 f"lidar_to_camera_transformation must be 4x4, got shape {lidar_to_camera_transformation.shape}"
             )
 
-        distortion_coefficients = cam_info.get("distortion_coefficients", None)
+        distortion_coefficients = cam_info.get("distortion_coeffs", None)
         if distortion_coefficients is None:
-            raise ValueError("distortion_coefficients is missing")
+            raise ValueError("distortion_coeffs is missing")
         distortion_coefficients = np.array(distortion_coefficients, dtype=np.float32)
-        if distortion_coefficients.shape != (5,):
-            raise ValueError(
-                f"distortion_coefficients must be 5, got shape {distortion_coefficients.shape}"
-            )
 
         calibration_data = CalibrationData(
             camera_matrix=camera_matrix,
             distortion_coefficients=distortion_coefficients,
             lidar_to_camera_transformation=lidar_to_camera_transformation,
+            distortion_model=cam_info.get("distortion_model", ""),
         )
 
         return {

@@ -19,15 +19,20 @@ from __future__ import annotations
 from pathlib import Path
 
 from omegaconf import OmegaConf
+import pytest
 import torch
 
+import autoware_ml.utils.deploy as deploy
 from autoware_ml.utils.deploy import (
     ExportSpec,
     build_dynamic_shapes,
     build_dynamic_axes,
     export_to_onnx,
     get_export_parameter_names,
+    merge_module_onnx_cfg,
     normalize_dynamic_shapes_for_model,
+    resolve_export_specs,
+    should_modify_graph,
     supports_export_stage,
 )
 
@@ -51,22 +56,20 @@ def test_export_to_onnx_prefers_export_spec_output_names(tmp_path: Path) -> None
             return x + 1
 
     output_path = tmp_path / "model.onnx"
-    deploy_cfg = OmegaConf.create(
+    onnx_cfg = OmegaConf.create(
         {
-            "onnx": {
-                "opset_version": 17,
-                "dynamo": False,
-                "do_constant_folding": True,
-                "input_names": ["input"],
-                "output_names": ["configured_output"],
-            }
+            "opset_version": 17,
+            "dynamo": False,
+            "do_constant_folding": True,
+            "input_names": ["input"],
+            "output_names": ["configured_output"],
         }
     )
 
     export_to_onnx(
         model=_SingleOutput(),
         input_sample=(torch.ones(2, 3),),
-        deploy_cfg=deploy_cfg,
+        onnx_cfg=onnx_cfg,
         input_param_names=["input"],
         output_names_override=["exported_output"],
         output_path=output_path,
@@ -151,3 +154,56 @@ def test_normalize_dynamic_shapes_wraps_varargs_forward() -> None:
     dynamic_shapes = ({0: "dim0"}, {0: "dim1"})
 
     assert normalize_dynamic_shapes_for_model(_VarArgsModel(), dynamic_shapes) == (dynamic_shapes,)
+
+
+def test_should_modify_graph_handles_none_and_config() -> None:
+    assert should_modify_graph(None) is False
+    assert should_modify_graph(OmegaConf.create({"_target_": "pkg.Modifier"})) is True
+
+
+def test_merge_module_onnx_cfg_overlays_shared_and_module_settings() -> None:
+    onnx_cfg = OmegaConf.create(
+        {
+            "opset_version": 17,
+            "dynamo": False,
+            "modules": {
+                "backbone": {"input_names": ["grid_coord", "feat"]},
+                "det3d_head": {"dynamo": True, "input_names": ["point_feat"]},
+            },
+        }
+    )
+
+    backbone = merge_module_onnx_cfg(onnx_cfg, "backbone")
+    assert backbone.opset_version == 17  # shared retained
+    assert backbone.dynamo is False  # shared retained
+    assert backbone.input_names == ["grid_coord", "feat"]  # module-specific
+    assert "modules" not in backbone
+
+    head = merge_module_onnx_cfg(onnx_cfg, "det3d_head")
+    assert head.opset_version == 17  # shared retained
+    assert head.dynamo is True  # module override wins over shared
+    assert head.input_names == ["point_feat"]
+    assert "modules" not in head
+
+
+def test_merge_module_onnx_cfg_raises_for_unknown_module() -> None:
+    onnx_cfg = OmegaConf.create({"opset_version": 17, "modules": {"backbone": {}}})
+    with pytest.raises(KeyError):
+        merge_module_onnx_cfg(onnx_cfg, "missing")
+
+
+def test_resolve_export_specs_forwards_batch_and_preserves_order(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _MultiModuleModel(torch.nn.Module):
+        def build_export_specs(self, batch: object) -> dict[str, str]:
+            captured["batch"] = batch
+            return {"backbone": "spec_backbone", "det3d_head": "spec_det3d_head"}
+
+    sentinel_batch = {"feat": torch.zeros(1)}
+    monkeypatch.setattr(deploy, "get_predict_batch", lambda dm, model, device: sentinel_batch)
+
+    specs = resolve_export_specs(object(), _MultiModuleModel(), torch.device("cpu"))
+
+    assert list(specs.keys()) == ["backbone", "det3d_head"]  # stable, ordered
+    assert captured["batch"] is sentinel_batch  # batch forwarded to the model

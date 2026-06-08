@@ -1,7 +1,6 @@
 import numpy as np
 import pytest
 
-from autoware_ml.transforms.common.tensor import ToTensor
 from autoware_ml.transforms.point_cloud.crop import (
     CenterShift,
     CropBoxInner,
@@ -9,7 +8,11 @@ from autoware_ml.transforms.point_cloud.crop import (
     PointsRangeFilter,
     SphereCrop,
 )
-from autoware_ml.transforms.point_cloud.geometry import RandomFlip, RandomRotateTargetAngle
+from autoware_ml.transforms.point_cloud.geometry import (
+    GlobalRotScaleTrans as GeometryGlobalRotScaleTrans,
+    RandomFlip,
+    RandomRotateTargetAngle,
+)
 from autoware_ml.transforms.point_cloud.loading import LoadPointsFromFile
 from autoware_ml.transforms.point_cloud.perturbation import RandomShift
 from autoware_ml.transforms.point_cloud.sampling import (
@@ -151,6 +154,17 @@ class TestPointCloudTransforms:
         assert output["strength"].shape[0] == 2
         assert output["segment"].shape[0] == 2
 
+    def test_random_dropout_respects_application_probability(self):
+        sample = {
+            "coord": np.arange(12, dtype=np.float32).reshape(4, 3),
+            "strength": np.arange(4, dtype=np.float32).reshape(4, 1),
+        }
+
+        output = RandomDropout(dropout_ratio=0.5, dropout_application_ratio=0.0)(sample)
+
+        assert output["coord"].shape[0] == 4
+        assert output["strength"].shape[0] == 4
+
     def test_grid_sample_keeps_arrays_aligned(self):
         sample = {
             "coord": np.array(
@@ -171,6 +185,57 @@ class TestPointCloudTransforms:
         assert output["coord"].shape[0] == output["strength"].shape[0] == output["segment"].shape[0]
         assert output["grid_coord"].shape[0] == output["coord"].shape[0]
 
+    def test_grid_sample_test_mode_returns_voxels_and_inverse(self):
+        sample = {
+            "coord": np.array(
+                [[0.0, 0.0, 0.0], [0.01, 0.01, 0.01], [1.0, 1.0, 1.0]],
+                dtype=np.float32,
+            ),
+            "strength": np.array([[1.0], [2.0], [3.0]], dtype=np.float32),
+            "segment": np.array([10, 11, 12], dtype=np.int64),
+        }
+
+        output = GridSample(
+            grid_size=0.05,
+            hash_type="fnv",
+            mode="test",
+            keys=("coord", "strength"),
+            return_grid_coord=True,
+            return_inverse=True,
+        )(sample)
+
+        assert isinstance(output, dict)
+        assert output["coord"].shape == (2, 3)
+        assert output["strength"].shape == (2, 1)
+        assert output["grid_coord"].shape == (2, 3)
+        assert output["inverse"].shape == (3,)
+        assert output["inverse"].max() < output["coord"].shape[0]
+        assert output["inverse"][0] == output["inverse"][1]
+        assert output["inverse"][0] != output["inverse"][2]
+
+    def test_grid_sample_rejects_unknown_hash_type(self):
+        with pytest.raises(ValueError, match="hash_type"):
+            GridSample(grid_size=0.05, hash_type="typo", mode="test", keys=("coord",))
+
+    def test_grid_sample_train_mode_selects_representatives_per_voxel(self, monkeypatch):
+        sample = {
+            "coord": np.array(
+                [[0.0, 0.0, 0.0], [0.01, 0.01, 0.01], [1.0, 1.0, 1.0]],
+                dtype=np.float32,
+            ),
+            "segment": np.array([10, 11, 12], dtype=np.int64),
+        }
+        monkeypatch.setattr(np.random, "random", lambda size: np.array([0.0, 0.75]))
+
+        output = GridSample(
+            grid_size=0.05,
+            hash_type="fnv",
+            mode="train",
+            keys=("coord", "segment"),
+        )(sample)
+
+        assert sorted(output["segment"].tolist()) == [11, 12]
+
     def test_sphere_crop_crops_all_point_arrays_consistently(self):
         sample = {
             "coord": np.arange(30, dtype=np.float32).reshape(10, 3),
@@ -180,7 +245,6 @@ class TestPointCloudTransforms:
         }
 
         output = SphereCrop(point_max=4)(sample)
-        output = ToTensor()(output)
 
         assert output["coord"].shape[0] == 4
         assert output["strength"].shape[0] == 4
@@ -216,6 +280,14 @@ class TestPointCloudTransforms:
             output["coord"], np.array([[0.0, 1.0, 0.0]], dtype=np.float32), atol=1e-5
         )
 
+    def test_random_rotate_target_angle_respects_probability(self, monkeypatch):
+        sample = {"coord": np.array([[1.0, 0.0, 0.0]], dtype=np.float32)}
+        monkeypatch.setattr(np.random, "rand", lambda: 0.75)
+
+        output = RandomRotateTargetAngle(angle=(0.5,), center=[0.0, 0.0, 0.0], p=0.5)(sample)
+
+        assert np.allclose(output["coord"], np.array([[1.0, 0.0, 0.0]], dtype=np.float32))
+
     def test_random_flip_uses_configured_probability_per_axis(self, monkeypatch):
         sample = {
             "coord": np.array([[1.0, 2.0, 0.0]], dtype=np.float32),
@@ -224,10 +296,52 @@ class TestPointCloudTransforms:
         calls = iter([0.2, 0.8])
         monkeypatch.setattr(np.random, "rand", lambda: next(calls))
 
-        output = RandomFlip(p=0.5)(sample)
+        # flip_ratio_bev_horizontal flips y-axis; flip_ratio_bev_vertical flips x-axis.
+        # rand() returns 0.2 < 0.5 so horizontal flip triggers (y flipped),
+        # rand() returns 0.8 >= 0.5 so vertical flip does not trigger.
+        output = RandomFlip(flip_ratio_bev_horizontal=0.5, flip_ratio_bev_vertical=0.5)(sample)
 
-        assert np.allclose(output["coord"], np.array([[-1.0, 2.0, 0.0]], dtype=np.float32))
-        assert np.allclose(output["normal"], np.array([[-0.5, 0.25, 1.0]], dtype=np.float32))
+        assert np.allclose(output["coord"], np.array([[1.0, -2.0, 0.0]], dtype=np.float32))
+        assert np.allclose(output["normal"], np.array([[0.5, -0.25, 1.0]], dtype=np.float32))
+
+    def test_random_flip_updates_boxes_on_coord(self):
+        sample = {
+            "coord": np.array([[1.0, 2.0, 0.0]], dtype=np.float32),
+            "gt_boxes": np.array(
+                [[1.0, 2.0, 0.0, 4.0, 2.0, 1.0, 0.25, 1.5, -0.5]],
+                dtype=np.float32,
+            ),
+        }
+
+        output = RandomFlip(flip_ratio_bev_horizontal=1.0, flip_ratio_bev_vertical=0.0)(sample)
+
+        assert np.allclose(output["coord"][0, :2], np.array([1.0, -2.0], dtype=np.float32))
+        assert np.allclose(
+            output["gt_boxes"][0, [1, 6, 8]],
+            np.array([-2.0, -0.25, 0.5], dtype=np.float32),
+        )
+
+    def test_global_rot_scale_trans_geometry_updates_boxes(self):
+        sample = {
+            "coord": np.array([[1.0, 0.0, 0.0]], dtype=np.float32),
+            "gt_boxes": np.array(
+                [[1.0, 0.0, 0.0, 4.0, 2.0, 1.0, 0.0, 1.0, 0.0]],
+                dtype=np.float32,
+            ),
+        }
+
+        np.random.seed(0)
+        output = GeometryGlobalRotScaleTrans(
+            rot_range=[0.1, 0.1],
+            scale_ratio_range=[2.0, 2.0],
+            translation_std=None,
+        )(sample)
+
+        assert np.allclose(
+            output["gt_boxes"][0, 3:6],
+            np.array([8.0, 4.0, 2.0], dtype=np.float32),
+        )
+        assert np.allclose(output["gt_boxes"][0, 6], 0.1)
 
     def test_random_shift_translates_all_points(self):
         sample = {"coord": np.zeros((2, 3), dtype=np.float32)}

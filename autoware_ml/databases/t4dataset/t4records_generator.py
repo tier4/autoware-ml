@@ -65,23 +65,26 @@ class T4RecordsGenerator:
         lidar_pointcloud_num_features: int,
     ) -> None:
         """
-        Initialize T4RecordsGenerator.
+                Initialize T4RecordsGenerator.
 
-        Args:
-          database_root_path: Root path of the T4 database.
-          scenario_data: Scenario data.
-          max_sweeps: Max number of lidar sweeps to include, only for 3D, set to 0
-            if skipping lidar sweep concatenation.
-          sample_steps: Number of frames/samples to skip between each sample, set to 1
-            if not skipping any samples/frames.
-          lidar_pointcloud_num_features: Number of features of the lidar pointcloud.
-          label_remapping (MappingProxyType[str, int]): Remapping of the label names to another
-            label name.
-          filter_attributes (MappingProxyType[str, Sequence[str]]): 3D bounding boxes with the
-            class names and selected attributes in the filter_attributes will be filtered out.
-          merge_objects (MappingProxyType[str, Sequence[str, str]]): Mapping of the target labels
-            to the source labels to merge the 3D bounding boxes.
+                Args:
+                  database_root_path: Root path of the T4 database.
+                  scenario_data: Scenario data.
+                  max_sweeps: Max number of lidar sweeps to include, only for 3D, set to 0
+                    if skipping lidar sweep concatenation.
+                  sample_steps: Number of frames/samples to skip between each sample, set to 1
+                    if not skipping any samples/frames.
+                  lidar_pointcloud_num_features: Number of features of the lidar pointcloud.
+        <<<<<<< HEAD
+                  label_remapping (MappingProxyType[str, int]): Remapping of the label names to another
+                    label name.
+                  filter_attributes (MappingProxyType[str, Sequence[str]]): 3D bounding boxes with the
+                    class names and selected attributes in the filter_attributes will be filtered out.
+                  merge_objects (MappingProxyType[str, Sequence[str, str]]): Mapping of the target labels
+                    to the source labels to merge the 3D bounding boxes.
 
+        =======
+        >>>>>>> feat/add_lidar_and_lidarseg_data_to_caches
         """
 
         self.database_root_path = Path(database_root_path)
@@ -350,7 +353,7 @@ class T4RecordsGenerator:
             convert_to_float32=False,
         )
 
-        # Etxract lidar pointcloud semantic mask path
+        # Extract lidar pointcloud semantic mask path
         lidar_pointcloud_semantic_mask_path = self._extract_lidar_pointcloud_semantic_mask_path(
             sample_index=sample_index,
             calibrated_lidar_sample_data_token=calibrated_lidar_sample_data_token,
@@ -359,7 +362,7 @@ class T4RecordsGenerator:
 
         return LidarFrameDataModel(
             lidar_frame_id=calibrated_lidar_sample_data_token,
-            lidar_keyframe=True,
+            lidar_keyframe=sd_record.is_key_frame,
             lidar_sensor_id=cs_record.token,
             lidar_sensor_channel_name=lidar_channel_name,
             lidar_timestamp_seconds=microseconds2seconds(sd_record.timestamp),
@@ -402,7 +405,7 @@ class T4RecordsGenerator:
             SchemaName.EGO_POSE, sensor_sample_data_record.ego_pose_token
         )
 
-        sensor_to_ego_pose_tranlation = sensor_calibrated_sensor_record.translation
+        sensor_to_ego_pose_translation = sensor_calibrated_sensor_record.translation
         sensor_to_ego_pose_rotation = sensor_calibrated_sensor_record.rotation
 
         sensor_frame_ego_pose_to_global_translation = sensor_ego_pose_record.translation
@@ -416,7 +419,7 @@ class T4RecordsGenerator:
 
         sensor_to_ego_pose_matrix = convert_quaternion_to_matrix(
             rotation_quaternion=sensor_to_ego_pose_rotation,
-            translation=sensor_to_ego_pose_tranlation,
+            translation=sensor_to_ego_pose_translation,
             convert_to_float32=False,
         )
 
@@ -437,7 +440,7 @@ class T4RecordsGenerator:
         self, lidar_frame_data_model: LidarFrameDataModel
     ) -> Sequence[LidarFrameDataModel]:
         """
-        Extract multisweep lidar metadata from a T4 Sample.
+        Extract multi-sweep lidar metadata from a T4 Sample.
 
         Args:
             t4_sample_record_lidar_info: T4 Sample lidar metadata.
@@ -492,7 +495,7 @@ class T4RecordsGenerator:
             lidar_frame_data_models.append(
                 LidarFrameDataModel(
                     lidar_frame_id=current_sample_data_record.token,
-                    lidar_keyframe=False,
+                    lidar_keyframe=current_sample_data_record.is_key_frame,
                     lidar_sensor_id=current_cs_record.token,
                     lidar_sensor_channel_name=lidar_frame_data_model.lidar_sensor_channel_name,
                     lidar_timestamp_seconds=microseconds2seconds(
@@ -512,9 +515,6 @@ class T4RecordsGenerator:
     def _extract_lidar_sources(self) -> Sequence[LidarSourceDataModel]:
         """
         Extract lidar sources metadata from a T4 Sample.
-
-        Args:
-          sample: T4 Sample.
 
         Returns:
           LidarSourcesMetaData: Lidar sources metadata of the T4 sample.
@@ -556,7 +556,7 @@ class T4RecordsGenerator:
 
         return lidar_source_data_models
 
-    def _extract_category_mapping(self) -> CategoryMappingDataModel | None:
+    def _extract_category_mapping(self) -> CategoryMappingDataModel:
         """
         Extract category metadata from a T4 Sample.
 
@@ -569,7 +569,10 @@ class T4RecordsGenerator:
 
         category_records = self.t4_devkit_dataset.get_table(SchemaName.CATEGORY)
         if not len(category_records):
-            return None
+            return CategoryMappingDataModel(
+                category_names=[],
+                category_indices=[],
+            )
 
         category_names = []
         category_indices = []
@@ -611,7 +614,7 @@ class T4RecordsGenerator:
             sample=sample, lidar_channel_name=lidar_channel_name, sample_index=sample_index
         )
 
-        # 3) Extract multisweep lidar information from the T4Dataset
+        # 3) Extract multi-sweep lidar information from the T4Dataset
         lidar_sweep_data_models = self._extract_lidar_sweeps(
             lidar_frame_data_model=lidar_frame_data_model
         )

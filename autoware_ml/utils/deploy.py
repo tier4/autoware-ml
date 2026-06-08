@@ -14,11 +14,9 @@
 
 """Deployment utility types and helpers.
 
-This module defines the canonical export contract used by deployment code:
-
-- models with standard tensor-only forwards rely on the generic export path
-- models with special export requirements override ``build_export_spec(batch)``
-  and return :class:`ExportSpec`
+This module defines the canonical per-module export contract used by
+deployment code. Models expose ``build_export_specs(batch)`` and return a
+mapping from module names to :class:`ExportSpec` objects.
 """
 
 from __future__ import annotations
@@ -123,16 +121,17 @@ def extract_input_from_batch(batch: dict[str, Any], param_name: str) -> Any:
     return input_value
 
 
-def get_predict_batch(datamodule: L.LightningDataModule, device: torch.device) -> dict[str, Any]:
+def get_predict_batch(
+    datamodule: L.LightningDataModule,
+    model: L.LightningModule,
+    device: torch.device,
+) -> dict[str, Any]:
     """Load one prediction batch and apply transfer-time preprocessing."""
     datamodule.setup("predict")
     predict_dataloader = datamodule.predict_dataloader()
     batch = next(iter(predict_dataloader))
     batch = move_to_device(batch, device)
-
-    if getattr(datamodule, "data_preprocessing", None) is not None:
-        datamodule.data_preprocessing.to(device)
-    return datamodule.on_after_batch_transfer(batch, dataloader_idx=0)
+    return model.on_after_batch_transfer(batch, dataloader_idx=0)
 
 
 def infer_export_spec(model: L.LightningModule, batch: dict[str, Any]) -> ExportSpec:
@@ -152,19 +151,51 @@ def infer_export_spec(model: L.LightningModule, batch: dict[str, Any]) -> Export
     return ExportSpec(module=model, args=input_args, input_param_names=forward_params)
 
 
-def resolve_export_spec(
+def resolve_export_specs(
     datamodule: L.LightningDataModule,
     model: L.LightningModule,
     device: torch.device,
-) -> ExportSpec:
-    """Resolve the effective export specification for a model.
+) -> dict[str, ExportSpec]:
+    """Resolve per-module export specifications for a model.
 
-    Models with deployment-specific wrappers override ``build_export_spec``
-    on :class:`~autoware_ml.models.base.BaseModel`. The default implementation
-    falls back to the generic forward-signature-based export path.
+    Args:
+        datamodule: Data module used to generate one prediction batch.
+        model: Model instance to export.
+        device: Device for tensor operations during export preparation.
+
+    Returns:
+        Ordered mapping of module name to export specification.
     """
-    batch = get_predict_batch(datamodule, device)
-    return model.build_export_spec(batch)
+    batch = get_predict_batch(datamodule, model, device)
+    return model.build_export_specs(batch)
+
+
+def merge_module_onnx_cfg(onnx_cfg: DictConfig, module_name: str) -> DictConfig:
+    """Merge shared ONNX settings with per-module settings.
+
+    Module-level settings override shared settings. The ``modules`` key itself
+    is excluded from the merged result.
+
+    Args:
+        onnx_cfg: Top-level ONNX deploy config containing a ``modules`` mapping.
+        module_name: Key of the module to resolve within ``modules``.
+
+    Returns:
+        Merged config with shared settings and module-specific overrides.
+
+    Raises:
+        KeyError: If ``module_name`` is not found in ``onnx_cfg.modules``.
+    """
+    if "modules" not in onnx_cfg or module_name not in onnx_cfg.modules:
+        raise KeyError(
+            f"Module '{module_name}' not found in deploy.onnx.modules. "
+            f"Available: {list(onnx_cfg.get('modules', {}).keys())}"
+        )
+    shared = {
+        k: v for k, v in OmegaConf.to_container(onnx_cfg, resolve=True).items() if k != "modules"
+    }
+    module_overrides = OmegaConf.to_container(onnx_cfg.modules[module_name], resolve=True)
+    return OmegaConf.create({**shared, **module_overrides})
 
 
 def log_export_inputs(input_args: tuple[Any, ...], input_names: list[str]) -> None:
@@ -193,11 +224,10 @@ def build_dynamic_shapes(
     unknown_params = [
         param_name for param_name in raw_dynamic_shapes if param_name not in forward_params
     ]
-    for param_name in unknown_params:
-        logger.warning(
-            "Dynamic shape parameter '%s' not found in export inputs. Available inputs: %s. Skipping.",
-            param_name,
-            forward_params,
+    if unknown_params:
+        raise ValueError(
+            f"Dynamic shape parameters {unknown_params} not found in export inputs. "
+            f"Available inputs: {forward_params}."
         )
 
     dynamic_shapes: list[dict[int, Dim] | None] = []
@@ -257,28 +287,7 @@ def build_dynamic_axes(onnx_cfg: DictConfig) -> dict[str, dict[int, str]] | None
     """
     dynamic_axes_cfg = onnx_cfg.get("dynamic_axes")
     if dynamic_axes_cfg is None:
-        dynamic_shapes_cfg = onnx_cfg.get("dynamic_shapes")
-        if dynamic_shapes_cfg is None:
-            return None
-
-        dynamic_axes_cfg = {}
-        for tensor_name, dim_mapping in dynamic_shapes_cfg.items():
-            tensor_dynamic_axes: dict[int, str] = {}
-            for dim_idx, dim_spec in dim_mapping.items():
-                if isinstance(dim_spec, str):
-                    tensor_dynamic_axes[int(dim_idx)] = dim_spec
-                    continue
-
-                dim_name = dim_spec.get("name")
-                if dim_name is None:
-                    raise ValueError(
-                        f"Dynamic shape spec for '{tensor_name}[{dim_idx}]' must define 'name'."
-                    )
-                tensor_dynamic_axes[int(dim_idx)] = dim_name
-
-            if tensor_dynamic_axes:
-                dynamic_axes_cfg[tensor_name] = tensor_dynamic_axes
-
+        dynamic_axes_cfg = onnx_cfg.get("dynamic_shapes")
     if dynamic_axes_cfg is None:
         return None
 
@@ -293,7 +302,7 @@ def build_dynamic_axes(onnx_cfg: DictConfig) -> dict[str, dict[int, str]] | None
             dim_name = dim_spec.get("name")
             if dim_name is None:
                 raise ValueError(
-                    f"Dynamic axis spec for '{tensor_name}[{dim_idx}]' must define 'name'."
+                    f"Dynamic axis/shape spec for '{tensor_name}[{dim_idx}]' must define 'name'."
                 )
             tensor_dynamic_axes[int(dim_idx)] = dim_name
 
@@ -316,7 +325,7 @@ def merge_onnx_external_data(onnx_path: Path) -> None:
 def export_to_onnx(
     model: torch.nn.Module,
     input_sample: tuple[Any, ...],
-    deploy_cfg: DictConfig,
+    onnx_cfg: DictConfig,
     input_param_names: list[str],
     output_names_override: list[str] | None,
     output_path: Path,
@@ -324,7 +333,6 @@ def export_to_onnx(
     """Export a model to ONNX."""
     logger.info("Exporting model to ONNX...")
 
-    onnx_cfg = deploy_cfg.onnx
     if not input_param_names:
         raise ValueError("Model forward signature has no parameters.")
 
@@ -396,8 +404,8 @@ def should_modify_graph(modify_graph_cfg: DictConfig | None) -> bool:
     """Return whether graph modification is enabled."""
     if modify_graph_cfg is None:
         return False
-    if isinstance(modify_graph_cfg, DictConfig) and OmegaConf.is_none(modify_graph_cfg):
-        return False
+    if isinstance(modify_graph_cfg, DictConfig):
+        return OmegaConf.to_container(modify_graph_cfg, resolve=False) is not None
     return True
 
 
@@ -451,7 +459,10 @@ def create_optimization_profile(builder: Any, tensorrt_cfg: DictConfig) -> Any |
         opt_shape = shapes.get("opt_shape")
         max_shape = shapes.get("max_shape")
         if not (min_shape and opt_shape and max_shape):
-            continue
+            raise ValueError(
+                f"TensorRT optimization profile for input '{input_name}' is incomplete. "
+                "All of min_shape, opt_shape, and max_shape must be specified."
+            )
 
         profile.set_shape(input_name, min=min_shape, opt=opt_shape, max=max_shape)
         logger.info(

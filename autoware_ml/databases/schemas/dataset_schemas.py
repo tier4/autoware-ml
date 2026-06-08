@@ -20,7 +20,6 @@ from typing import Sequence, Mapping, Any
 import polars as pl
 from pydantic import BaseModel, ConfigDict
 
-from autoware_ml.common.enums.enums import Box3DFieldIndex
 from autoware_ml.databases.schemas.base_schemas import DatasetTableColumn, DataModelInterface
 from autoware_ml.databases.schemas.lidar_frames import LidarFrameDatasetSchema, LidarFrameDataModel
 from autoware_ml.databases.schemas.category_mapping import (
@@ -31,8 +30,6 @@ from autoware_ml.databases.schemas.lidar_sources import (
     LidarSourceDatasetSchema,
     LidarSourceDataModel,
 )
-
-__BOX_3D_FIELD_LENGTH = len(Box3DFieldIndex)
 
 
 @dataclass(frozen=True)
@@ -49,41 +46,16 @@ class DatasetTableSchema:
       SCENARIO_NAME: Scenario name column.
 
       # LiDAR Schema
-      LIDAR_FRAME_ID: Lidar frame ID column.
-      LIDAR_SENSOR_ID: Lidar sensor ID column.
-      LIDAR_SENSOR_CHANNEL_NAME: Lidar sensor channel name column.
-      LIDAR_POINTCLOUD_PATH: Lidar pointcloud path column.
-      LIDAR_POINTCLOUD_SOURCE_PATH: Lidar pointcloud source path column.
-      LIDAR_POINTCLOUD_NUM_FEATURES: Lidar pointcloud num features column.
-      LIDAR_SENSOR_TO_EGO_POSE_MATRIX: Lidar sensor to ego pose matrix column.
-      LIDAR_FRAME_EGO_POSE_TO_GLOBAL_MATRIX: Lidar frame ego pose to global matrix column.
-
-      # Multisweep LiDAR Schema
-      LIDAR_SWEEP_FRAME_IDS: Lidar sweep frame IDs column.
-      LIDAR_SWEEP_TIMESTAMPS_SECONDS: Lidar sweep timestamps in seconds column.
-      LIDAR_SWEEP_POINTCLOUDS_PATHS: Lidar sweep pointclouds paths column.
-      LIDAR_SWEEP_FRAME_EGO_POSE_TO_GLOBAL_MATRICES: Lidar sweep frame ego pose to global matrices column.
-      LIDAR_SENSOR_TO_LIDAR_SWEEP_MATRICES: Lidar sensor to lidar sweep matrices column.
+      LIDAR_FRAMES: Lidar frames column, which is a list of dictionaries to save metadata of a lidar
+        frame. It also saves lidar sweeps as each item here.
 
       # Lidar Sources Schema
-      LIDAR_SOURCE_CHANNEL_NAMES: Lidar source channel names column.
-      LIDAR_SOURCE_SENSOR_TOKENS: Lidar source sensor tokens column.
-      LIDAR_SOURCE_TRANSLATIONS: Lidar source translations column.
-      LIDAR_SOURCE_ROTATIONS: Lidar source rotations column.
-
-      # Lidarseg Schema
-      LIDARSEG_PTS_SEMANTIC_MASK_PATH: Lidarseg pts semantic mask path column.
+      LIDAR_SOURCES: Lidar sources column, which is a list of dictionaries to save metadata about
+        each lidar sensor.
 
       # Category Schema
-      CATEGORY_NAMES: Category names column.
-      CATEGORY_INDICES: Category indices column.
-
-      # 3D Bounding Boxes Schema
-      BOXES_3D_FIELDS: Boxes 3D fields column.
-      BOXED_3D_DATASET_LABEL_NAMES: Boxed 3d dataset label names column.
-      BOXED_3D_LABEL_NAMES: Boxed 3d label names column.
-      BOXED_3D_LABEL_INDICES: Boxed 3d label indices column.
-      BOXES_3D_INSTANCE_IDS: Boxes 3d instance IDs column.
+      CATEGORY_MAPPING: Category mapping column, which is a dictionary to save the mapping between
+        category names and category indices.
     """
 
     # Basic Schema
@@ -142,7 +114,7 @@ class DatasetRecord(BaseModel, DataModelInterface):
       vehicle_type: Type of the vehicle.
 
       # LiDAR frame data
-      lidar_frames: List of lidar frame data models, including multisweep lidar frames.
+      lidar_frames: List of lidar frame data models, including multi-sweep lidar frames.
 
       # Lidar sources data
       lidar_sources: List of lidar source data models.
@@ -159,8 +131,8 @@ class DatasetRecord(BaseModel, DataModelInterface):
     sample_id: str
     sample_index: int
     timestamp_seconds: float
-    location: str
-    vehicle_type: str
+    location: str | None
+    vehicle_type: str | None
     scenario_name: str
 
     lidar_frames: Sequence[LidarFrameDataModel]
@@ -192,14 +164,14 @@ class DatasetRecord(BaseModel, DataModelInterface):
                 lidar_source.to_dictionary() for lidar_source in self.lidar_sources
             ]
         else:
-            data_model[DatasetTableSchema.LIDAR_SOURCES.name] = None
+            data_model[DatasetTableSchema.LIDAR_SOURCES.name] = []
 
         if self.category_mapping:
             data_model[DatasetTableSchema.CATEGORY_MAPPING.name] = (
                 self.category_mapping.to_dictionary()
             )
         else:
-            data_model[DatasetTableSchema.CATEGORY_MAPPING.name] = None
+            data_model[DatasetTableSchema.CATEGORY_MAPPING.name] = {}
 
         return data_model
 

@@ -4,7 +4,7 @@ icon: lucide/zap
 
 # Quick Start
 
-This guide gets you from zero to a trained model. We'll train a calibration status classifier using the NuScenes dataset.
+This guide gets you from zero to a trained model. We'll train a PTv3 3D semantic segmentation model using the NuScenes dataset.
 
 !!! info "Prerequisites"
     Make sure you finished the [Installation](installation.md) guide.
@@ -28,7 +28,7 @@ Autoware-ML needs preprocessed info files that index the dataset:
 ```bash
 autoware-ml create-dataset \
     --dataset nuscenes \
-    --task calibration_status \
+    --task segmentation3d \
     --root-path data/nuscenes \
     --out-dir data/nuscenes/info \
     --version v1.0-trainval
@@ -39,7 +39,7 @@ This creates pickle files for train/val splits.
 ## 4. Train the Model
 
 ```bash
-autoware-ml train --config-name calibration_status/calibration_status_classifier/resnet18_nuscenes
+autoware-ml train --config-name segmentation3d/ptv3/voxel005_102m_nuscenes
 ```
 
 Training progress appears in your terminal. Checkpoints are saved automatically.
@@ -56,16 +56,17 @@ Open [http://localhost:5000](http://localhost:5000) to view loss curves, metrics
 
 ```bash
 autoware-ml deploy \
-    --config-name calibration_status/calibration_status_classifier/resnet18_nuscenes \
-    +checkpoint=mlruns/calibration_status/calibration_status_classifier/resnet18_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt
+    --config-name segmentation3d/ptv3/voxel005_102m_nuscenes \
+    --weights mlruns/segmentation3d/ptv3/voxel005_102m_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt \
+    deploy.tensorrt.enabled=false
 ```
 
-This generates ONNX and TensorRT files.
+This generates an ONNX file. TensorRT export is disabled because PTv3 requires a runtime with matching sparse convolution plugins.
 
 To evaluate a trained checkpoint before deployment:
 
 ```bash
 autoware-ml test \
-    --config-name calibration_status/calibration_status_classifier/resnet18_nuscenes \
-    +checkpoint=mlruns/calibration_status/calibration_status_classifier/resnet18_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt
+    --config-name segmentation3d/ptv3/voxel005_102m_nuscenes \
+    --weights mlruns/segmentation3d/ptv3/voxel005_102m_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt
 ```

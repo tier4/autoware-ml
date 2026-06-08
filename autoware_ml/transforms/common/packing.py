@@ -1,37 +1,50 @@
-"""Input packing transforms shared across tasks."""
+"""Feature construction transforms shared across tasks."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from typing import Any
 
+import numpy as np
 import torch
 
 from autoware_ml.transforms.base import BaseTransform
 
 
-class Collect(BaseTransform):
-    """Gather selected fields and optionally concatenate feature tensors."""
+class BuildPointFeatures(BaseTransform):
+    """Build one point feature matrix from existing per-point arrays."""
 
     def __init__(
         self,
-        keys: str | Sequence[str],
-        offset_keys_dict: Mapping[str, str] | None = None,
-        **kwargs: Sequence[str],
+        keys: Sequence[str],
+        output_key: str = "feat",
     ) -> None:
-        self.keys = [keys] if isinstance(keys, str) else list(keys)
-        self.offset_keys = dict(offset_keys_dict or {"offset": "coord"})
-        self.kwargs = kwargs
-        self._required_keys = list(self.keys) + list(self.offset_keys.values())
-        for feature_keys in kwargs.values():
-            self._required_keys.extend(list(feature_keys))
+        self.keys = list(keys)
+        self.output_key = output_key
+        self._required_keys = self.keys
 
     def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
-        """Collect and pack selected fields."""
-        data: dict[str, Any] = {key: input_dict[key] for key in self.keys}
-        for output_key, source_key in self.offset_keys.items():
-            data[output_key] = torch.tensor([input_dict[source_key].shape[0]])
-        for name, keys in self.kwargs.items():
-            feature_name = name.replace("_keys", "")
-            data[feature_name] = torch.cat([input_dict[key].float() for key in keys], dim=1)
-        return data
+        """Concatenate configured per-point fields into ``output_key``."""
+        values = [input_dict[key] for key in self.keys]
+        first = values[0]
+        if isinstance(first, np.ndarray):
+            if not all(isinstance(value, np.ndarray) for value in values):
+                raise TypeError(
+                    f"{self.__class__.__name__} requires all feature fields to be numpy arrays."
+                )
+            input_dict[self.output_key] = np.concatenate(
+                [value.astype(np.float32, copy=False) for value in values],
+                axis=1,
+            )
+            return input_dict
+        if isinstance(first, torch.Tensor):
+            if not all(isinstance(value, torch.Tensor) for value in values):
+                raise TypeError(
+                    f"{self.__class__.__name__} requires all feature fields to be tensors."
+                )
+            input_dict[self.output_key] = torch.cat([value.float() for value in values], dim=1)
+            return input_dict
+        raise TypeError(
+            f"{self.__class__.__name__} expects numpy arrays or torch tensors, "
+            f"got {type(first)!r} for key '{self.keys[0]}'."
+        )

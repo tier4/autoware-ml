@@ -39,6 +39,7 @@ from autoware_ml.utils.mlflow_helpers import (
     generate_experiment_name,
     generate_hydra_run_dir,
     prepare_run_context,
+    resolve_deploy_lineage,
     resolve_lineage_context,
     should_enable_logger,
 )
@@ -140,8 +141,12 @@ def prepare_runtime_environment(
     extra_args: Sequence[str] = (),
     hydra_overrides: Sequence[str] = (),
     checkpoint: str | None = None,
+    checkpoints: Sequence[str] = (),
 ) -> dict[str, str | None]:
     """Prepare environment variables used by Hydra-backed runtime commands."""
+    if checkpoint is not None and checkpoints:
+        raise ValueError("Use either checkpoint or checkpoints, not both.")
+
     adjusted_args = adjust_argv(extra_args)
     resolved_config_path, resolved_config_name, extra_config_overrides = resolve_config_reference(
         config_value, config_prefix
@@ -163,10 +168,27 @@ def prepare_runtime_environment(
 
     if should_enable_logger(cfg):
         checkpoint_path = Path(checkpoint) if checkpoint is not None else None
+        checkpoint_paths = [Path(path) for path in checkpoints]
         experiment_name = generate_experiment_name(config_name)
         parent_run_id = None
         extra_tags = None
-        if checkpoint_path is not None:
+        if checkpoint_paths:
+            if stage != "deploy":
+                raise ValueError("Multi-checkpoint runtime lineage is only supported for deploy.")
+            experiment_name, parent_run_id, source_checkpoints = resolve_deploy_lineage(
+                config_name,
+                checkpoint_paths,
+            )
+            source_run_ids = [
+                source["run_id"] for source in source_checkpoints if source["run_id"] is not None
+            ]
+            extra_tags = {
+                "checkpoint_path": str(checkpoint_paths[-1]),
+                "source_run_id": parent_run_id or "",
+                "source_checkpoint_count": str(len(source_checkpoints)),
+                "source_run_ids": ",".join(source_run_ids),
+            }
+        elif checkpoint_path is not None:
             experiment_name, parent_run_id = resolve_lineage_context(config_name, checkpoint_path)
             extra_tags = {
                 "checkpoint_path": str(checkpoint_path),
@@ -202,6 +224,7 @@ def run_hydra_entrypoint(
     extra_args: Sequence[str] = (),
     hydra_overrides: Sequence[str] = (),
     checkpoint: str | None = None,
+    checkpoints: Sequence[str] = (),
     config_prefix: str = TASK_CONFIG_PREFIX,
 ) -> None:
     """Execute one Hydra-backed runtime entrypoint through the CLI wrapper."""
@@ -214,6 +237,7 @@ def run_hydra_entrypoint(
             extra_args=extra_args,
             hydra_overrides=hydra_overrides,
             checkpoint=checkpoint,
+            checkpoints=checkpoints,
         )
 
     sys.argv = resolve_hydra_entrypoint_argv(

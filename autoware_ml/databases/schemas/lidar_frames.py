@@ -45,7 +45,8 @@ class LidarFrameDatasetSchema(BaseFieldSchema):
 
 class LidarFrameDataModel(BaseModel, DataModelInterface):
     """
-    Lidar frame data model that can be shared by multiple datasets.
+    Lidar frame data model that can be shared by multiple datasets. It saves the metadata of a lidar
+    frame. Note that lidar sweeps also use this data model.
 
     Attributes:
       lidar_frame_id: Lidar frame ID.
@@ -63,7 +64,9 @@ class LidarFrameDataModel(BaseModel, DataModelInterface):
       lidar_frame_ego_pose_to_global_matrix: Transformation matrix from the ego pose of this lidar
         frame to the global frame.
       lidar_sensor_to_lidar_sweep_matrices: Transformation matrices from the main lidar sensor
-        to other lidar sweeps at this frame. Set to None if it's not available.
+        to other lidar sweeps at this frame.
+      lidar_pointcloud_semantic_mask_path: Lidar pointcloud semantic mask path. Set to None if it's
+        not available.
     """
 
     model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
@@ -71,8 +74,8 @@ class LidarFrameDataModel(BaseModel, DataModelInterface):
     lidar_frame_id: str
     lidar_keyframe: bool
     lidar_sensor_id: str
-    lidar_timestamp_seconds: float
     lidar_sensor_channel_name: str
+    lidar_timestamp_seconds: float
     lidar_pointcloud_path: str
     lidar_pointcloud_source_path: str | None
     lidar_pointcloud_num_features: int
@@ -84,7 +87,7 @@ class LidarFrameDataModel(BaseModel, DataModelInterface):
     lidar_pointcloud_semantic_mask_path: str | None
 
     @property
-    def lidar_pointcloud_relative_path(self: str) -> str:
+    def lidar_pointcloud_relative_path(self) -> str:
         """
         Parse lidar pointcloud path to {database_version}/{scene_id}/
         {dataset_version}/data/{lidar_token}/{frame}.bin from path.
@@ -96,7 +99,7 @@ class LidarFrameDataModel(BaseModel, DataModelInterface):
         return "/".join(self.lidar_pointcloud_path.split("/")[-6:])
 
     @property
-    def lidar_pointcloud_source_relative_path(self: str) -> str | None:
+    def lidar_pointcloud_source_relative_path(self) -> str | None:
         """
         Parse lidar pointcloud source path to {database_version}/{scene_id}/
         {dataset_version}/data/{lidar_token}/{frame}.bin from path.
@@ -110,7 +113,7 @@ class LidarFrameDataModel(BaseModel, DataModelInterface):
         return "/".join(self.lidar_pointcloud_source_path.split("/")[-6:])
 
     @property
-    def lidarseg_pointcloud_semantic_mask_relative_path(self: str) -> str | None:
+    def lidarseg_pointcloud_semantic_mask_relative_path(self) -> str | None:
         """
         Parse lidarseg pts semantic mask path to {database_version}/{scene_id}/
         {dataset_version}/data/{lidar_token}/{frame}.bin from path.

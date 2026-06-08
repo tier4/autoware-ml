@@ -65,7 +65,7 @@ A complete task config includes these sections:
 
 ### `datamodule`
 
-Controls data loading and preprocessing:
+Controls data loading and split-specific transforms:
 
 ```yaml
 datamodule:
@@ -74,7 +74,21 @@ datamodule:
   train_ann_file: ${data_root}/info/train.pkl
   val_ann_file: ${data_root}/info/val.pkl
 
-  stack_keys: [input_tensor, gt_labels]
+  # collation_map: whitelist of batch keys and how to merge them across samples.
+  # Keys not listed here are dropped before the batch reaches the model.
+  # Strategies:
+  #   stack        - fixed-shape tensors concatenated along a new batch dim (all shapes must match)
+  #   concat       - variable-length tensors concatenated along dim 0. Adds a
+  #                  batch["offset"] key with cumulative per-sample lengths so
+  #                  downstream code can recover per-sample boundaries.
+  #   index_concat - like concat, but values are integer indices into the
+  #                  concatenated concat key (e.g. point indices into the point cloud).
+  #                  Each sample's indices are shifted by the cumulative element
+  #                  count of preceding samples so they remain globally valid after concat.
+  #   list         - variable-shape values kept as a Python list (no tensor conversion)
+  collation_map:
+    input_tensor: stack
+    gt_labels: stack
 
   train_dataloader_cfg:
     batch_size: 8
@@ -85,17 +99,29 @@ datamodule:
     pipeline:
       - _target_: autoware_ml.transforms.my_transforms.my_transform.MyTransform
         param: value
-
-  data_preprocessing:
-    _target_: autoware_ml.preprocessing.base.DataPreprocessing
-    pipeline:
-      - _target_: autoware_ml.preprocessing.my_preprocessing.my_preprocessing.MyPreprocessingLayer
-        param: value
 ```
 
 For custom components, point `_target_` at the concrete implementation module,
 for example `autoware_ml.transforms.my_transforms.my_transform.MyTransform` or
 `autoware_ml.models.common.backbones.my_backbone.MyBackbone`.
+
+### `data_preprocessing`
+
+Defines runtime preprocessing that runs after batch transfer and before
+`forward()`. This section is instantiated by the entrypoint and attached to the
+model through `BaseModel.set_data_preprocessing(...)`:
+
+```yaml
+data_preprocessing:
+  _target_: autoware_ml.preprocessing.base.DataPreprocessing
+  pipeline:
+    - _target_: autoware_ml.preprocessing.my_preprocessing.my_preprocessing.MyPreprocessingLayer
+      param: value
+```
+
+Output-side shaping (logits -> probabilities, voxel-to-point scatter, etc.)
+is **not** a configurable framework pipeline - it lives inside the model's
+own `forward()`, `compute_metrics()`, and `predict_outputs()` methods.
 
 ### `model`
 

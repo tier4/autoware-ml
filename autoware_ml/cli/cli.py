@@ -207,13 +207,50 @@ def train(
             autocompletion=complete_task_config,
         ),
     ],
+    weights: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--weights",
+            help="One or more checkpoint paths for pretrained weight initialization "
+            "(repeatable; later checkpoints overwrite earlier ones). "
+            "Mutually exclusive with --resume-checkpoint.",
+            autocompletion=complete_checkpoint_path,
+        ),
+    ] = None,
+    resume_checkpoint: Annotated[
+        str | None,
+        typer.Option(
+            "--resume-checkpoint",
+            help="Full Lightning checkpoint path to resume training from "
+            "(restores model weights, optimizer state, and epoch). "
+            "Mutually exclusive with --weights.",
+            autocompletion=complete_checkpoint_path,
+        ),
+    ] = None,
 ) -> None:
     """Run model training through the Hydra-backed training entrypoint.
+
+    Pass ``--weights`` to initialize model parameters from one or more pretrained
+    checkpoints before training starts (e.g. transfer learning from a seg3d backbone
+    into a det3d model). Pass ``--resume-checkpoint`` to resume an interrupted training
+    run from its full saved state. The two options are mutually exclusive.
 
     Args:
         ctx: Typer context containing additional Hydra overrides.
         config_name: Config name or config file path to train.
+        weights: One or more checkpoint paths for pretrained weight initialization.
+        resume_checkpoint: Full Lightning checkpoint path to resume training from.
     """
+    if weights and resume_checkpoint:
+        raise typer.BadParameter("--weights and --resume-checkpoint are mutually exclusive.")
+
+    hydra_overrides: list[str] = []
+    if weights:
+        weights_list = "[" + ",".join(weights) + "]"
+        hydra_overrides.append(f"+weights={weights_list}")
+    if resume_checkpoint:
+        hydra_overrides.append(f"+resume_checkpoint={resume_checkpoint}")
+
     run_lazy_script(
         CLI_RUNTIME_MODULE,
         "run_hydra_entrypoint",
@@ -221,6 +258,7 @@ def train(
         config_name=config_name,
         stage="train",
         extra_args=ctx.args,
+        hydra_overrides=hydra_overrides,
         config_prefix=TASK_CONFIG_PREFIX,
     )
 
@@ -240,23 +278,35 @@ def deploy(
             autocompletion=complete_task_config,
         ),
     ],
-    checkpoint: Annotated[
-        str,
+    weights: Annotated[
+        list[str] | None,
         typer.Option(
-            "+checkpoint",
-            help="Checkpoint path",
+            "--weights",
+            help="One or more checkpoint paths to merge into the export model "
+            "(repeatable; later checkpoints overwrite earlier ones)",
             autocompletion=complete_checkpoint_path,
         ),
-    ],
+    ] = None,
 ) -> None:
     """Export a trained model through the deployment entrypoint.
+
+    Pass ``--weights`` once per checkpoint that should contribute parameters to
+    the exported model. Every parameter in the export model must be covered by
+    at least one of the supplied checkpoints. Single-task exports use one
+    ``--weights``; multi-task exports stack multiple ``--weights`` to merge
+    independently trained heads into one model.
 
     Args:
         ctx: Typer context containing additional Hydra overrides.
         config_name: Config name or config file path to deploy.
-        checkpoint: Path to the checkpoint used for export.
+        weights: One or more checkpoint paths to merge into the export model.
     """
-    hydra_overrides = [f"+checkpoint={checkpoint}"]
+    if not weights:
+        raise typer.BadParameter("--weights <path> (repeatable) must be specified.")
+
+    weights_list = "[" + ",".join(weights) + "]"
+    hydra_overrides = [f"+weights={weights_list}"]
+
     run_lazy_script(
         CLI_RUNTIME_MODULE,
         "run_hydra_entrypoint",
@@ -265,7 +315,7 @@ def deploy(
         stage="deploy",
         extra_args=ctx.args,
         hydra_overrides=hydra_overrides,
-        checkpoint=checkpoint,
+        checkpoints=weights,
         config_prefix=TASK_CONFIG_PREFIX,
     )
 
@@ -285,23 +335,35 @@ def test(
             autocompletion=complete_task_config,
         ),
     ],
-    checkpoint: Annotated[
-        str,
+    weights: Annotated[
+        list[str] | None,
         typer.Option(
-            "+checkpoint",
-            help="Checkpoint path",
+            "--weights",
+            help="One or more checkpoint paths to load into the model for evaluation "
+            "(repeatable; later checkpoints overwrite earlier ones)",
             autocompletion=complete_checkpoint_path,
         ),
-    ],
+    ] = None,
 ) -> None:
     """Run model evaluation through the Hydra-backed test entrypoint.
+
+    Pass ``--weights`` once per checkpoint that should contribute parameters to
+    the evaluated model. Every parameter must be covered by at least one checkpoint.
+    Single-task evaluation uses one ``--weights``; multi-task evaluation stacks
+    multiple ``--weights`` to merge independently trained heads.
 
     Args:
         ctx: Typer context containing additional Hydra overrides.
         config_name: Config name or config file path to evaluate.
-        checkpoint: Path to the checkpoint used for evaluation.
+        weights: One or more checkpoint paths to load into the model for evaluation.
     """
-    hydra_overrides = [f"+checkpoint={checkpoint}"]
+    if not weights:
+        raise typer.BadParameter("--weights <path> (repeatable) must be specified.")
+
+    weights_list = "[" + ",".join(weights) + "]"
+    hydra_overrides = [f"+weights={weights_list}"]
+    primary_checkpoint = weights[-1]
+
     run_lazy_script(
         CLI_RUNTIME_MODULE,
         "run_hydra_entrypoint",
@@ -310,7 +372,7 @@ def test(
         stage="test",
         extra_args=ctx.args,
         hydra_overrides=hydra_overrides,
-        checkpoint=checkpoint,
+        checkpoint=primary_checkpoint,
         config_prefix=TASK_CONFIG_PREFIX,
     )
 

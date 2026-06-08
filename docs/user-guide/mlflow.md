@@ -16,17 +16,14 @@ Open [http://localhost:5000](http://localhost:5000) in your browser.
 
 **Options:**
 
-- `--port`: Custom port (default: 5000)
+- `--port`, `-p`: Custom port (default: 5000)
 - `--db-path`: SQLite database path (default: `mlruns/mlflow.db`)
-- `--experiment-name`: Export only the specified experiment into an isolated store before launching the UI
-- `--config-name`: Shorthand for `--experiment-name` using a task config path
-- `--export-dir`: Directory for the extracted experiment store
 
 By default, the UI opens the shared tracking DB directly. To isolate a single experiment for sharing or inspection, export it first:
 
 ```bash
-autoware-ml mlflow export --config-name calibration_status/calibration_status_classifier/resnet18_t4dataset_j6gen2 --export-dir /tmp/calibration_status_mlflow
-autoware-ml mlflow ui --db-path /tmp/calibration_status_mlflow/mlflow.db
+autoware-ml mlflow export --config-name segmentation3d/ptv3/voxel005_102m_nuscenes --export-dir /tmp/ptv3_mlflow
+autoware-ml mlflow ui --db-path /tmp/ptv3_mlflow/mlflow.db
 ```
 
 This creates an extracted MLflow store for that experiment and lets you open the UI against the exported DB.

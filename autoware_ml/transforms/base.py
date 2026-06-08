@@ -53,6 +53,13 @@ class BaseTransform(ABC):
             2. Handle optional keys (call apply_defaults if any missing)
             3. Check probability (skip if not triggered)
             4. Execute the actual transform
+
+        Args:
+            input_dict: Sample dictionary passed to the transform.
+            context: Optional dataset pipeline context.
+
+        Returns:
+            Updated sample dictionary.
         """
         self._context = context
 
@@ -164,13 +171,13 @@ class TransformsCompose:
     configured transform and returns the final result.
     """
 
-    def __init__(self, pipeline: Sequence["BaseTransform"] | None = None):
+    def __init__(self, pipeline: Sequence["BaseTransform"] = ()):
         """Initialize the transform pipeline.
 
         Args:
             pipeline: Ordered transforms applied to each input dictionary.
         """
-        self.pipeline = pipeline or []
+        self.pipeline = list(pipeline)
 
     def __call__(self, input_dict: dict[str, Any], context: Any = None) -> dict[str, Any]:
         """Apply each transform sequentially, merging updates.
@@ -182,8 +189,18 @@ class TransformsCompose:
         Returns:
             Transformed mapping after all pipeline stages have been applied.
         """
+        if not isinstance(input_dict, dict):
+            raise TypeError(
+                f"{self.__class__.__name__} input must be a dict, got {type(input_dict).__name__}."
+            )
         for transform in self.pipeline:
-            input_dict |= transform(input_dict, context=context)
+            output = transform(input_dict, context=context)
+            if not isinstance(output, dict):
+                raise TypeError(
+                    f"{transform.__class__.__name__} must return a dict, "
+                    f"got {type(output).__name__}."
+                )
+            input_dict |= output
 
         return input_dict
 
