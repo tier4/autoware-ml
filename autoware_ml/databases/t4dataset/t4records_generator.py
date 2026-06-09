@@ -65,26 +65,16 @@ class T4RecordsGenerator:
         lidar_pointcloud_num_features: int,
     ) -> None:
         """
-                Initialize T4RecordsGenerator.
+        Initialize T4RecordsGenerator.
 
-                Args:
-                  database_root_path: Root path of the T4 database.
-                  scenario_data: Scenario data.
-                  max_sweeps: Max number of lidar sweeps to include, only for 3D, set to 0
-                    if skipping lidar sweep concatenation.
-                  sample_steps: Number of frames/samples to skip between each sample, set to 1
-                    if not skipping any samples/frames.
-                  lidar_pointcloud_num_features: Number of features of the lidar pointcloud.
-        <<<<<<< HEAD
-                  label_remapping (MappingProxyType[str, int]): Remapping of the label names to another
-                    label name.
-                  filter_attributes (MappingProxyType[str, Sequence[str]]): 3D bounding boxes with the
-                    class names and selected attributes in the filter_attributes will be filtered out.
-                  merge_objects (MappingProxyType[str, Sequence[str, str]]): Mapping of the target labels
-                    to the source labels to merge the 3D bounding boxes.
-
-        =======
-        >>>>>>> feat/add_lidar_and_lidarseg_data_to_caches
+        Args:
+          database_root_path: Root path of the T4 database.
+          scenario_data: Scenario data.
+          max_sweeps: Max number of lidar sweeps to include, only for 3D, set to 0
+            if skipping lidar sweep concatenation.
+          sample_steps: Number of frames/samples to skip between each sample, set to 1
+            if not skipping any samples/frames.
+          lidar_pointcloud_num_features: Number of features of the lidar pointcloud.
         """
 
         self.database_root_path = Path(database_root_path)
