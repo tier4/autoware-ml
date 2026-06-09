@@ -43,7 +43,7 @@ from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord
 from autoware_ml.databases.schemas.lidar_frames import LidarFrameDataModel
 from autoware_ml.databases.schemas.lidar_sources import LidarSourceDataModel
 from autoware_ml.databases.schemas.category_mapping import CategoryMappingDataModel
-from autoware_ml.databases.schemas.box3d_datamodel import Box3DDataModel
+from autoware_ml.databases.schemas.box3d_schema import Box3DDataModel
 from autoware_ml.databases.scenarios import ScenarioData
 from autoware_ml.databases.t4dataset.t4sample_records import (
     T4SampleRecord,

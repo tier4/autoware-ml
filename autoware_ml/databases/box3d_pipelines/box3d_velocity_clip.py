@@ -4,7 +4,7 @@ import numpy as np
 from autoware_ml.common.enums.enums import Box3DFieldIndex
 
 from autoware_ml.databases.box3d_pipelines.box3d_pipeline import Box3DPipeline
-from autoware_ml.databases.schemas.box3d_datamodel import Box3DDataModel
+from autoware_ml.databases.schemas.box3d_schema import Box3DDataModel
 
 
 class Box3DVelocityNormClip(Box3DPipeline):
