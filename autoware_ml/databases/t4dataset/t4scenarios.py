@@ -75,8 +75,9 @@ class T4Scenarios(Scenarios):
         """
 
         dataset_scene_info = scenario_id.split("/")
-        if len(dataset_scene_info) == 4:
-            scenario_id, version, city, vehicle_type = dataset_scene_info
+        if len(dataset_scene_info) == 5:
+            # TODO (KokSeang): Traffic cone and barrier status will be used in another version.
+            scenario_id, version, city, vehicle_type, _ = dataset_scene_info
         elif len(dataset_scene_info) == 2:
             scenario_id, version = dataset_scene_info
             city = vehicle_type = None

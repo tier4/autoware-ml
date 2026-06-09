@@ -41,9 +41,13 @@ classDiagram
     }
 
     class schemas {
+        <<package>>
         DatasetRecord
         DatasetTableSchema
-        DatasetTableColumn
+        DataModelInterface
+        LidarFrameDataModel
+        LidarSourceDataModel
+        CategoryMappingDataModel
     }
 
     class polars {
@@ -153,39 +157,9 @@ class Scenarios(BaseModel):
 
 ### Schema
 
-The output schema is defined in `schemas.py` and consists of two parts:
+`process_scenario_records()` returns `Sequence[DatasetRecord]` — one frozen Pydantic row per sample/frame. `BaseDatabase.get_polars_schema()` delegates to `DatasetTableSchema` so records can be serialized to Parquet via `DatasetRecord.to_dictionary()`.
 
-- **`DatasetTableSchema`** - a frozen dataclass whose class-level attributes are `DatasetTableColumn` named tuples, each pairing a column name with a Polars data type. Call `DatasetTableSchema.to_polars_schema()` to get a `pl.Schema` for constructing or validating a Polars `DataFrame`.
-- **`DatasetRecord`** - a frozen Pydantic model representing a single row. One record is emitted per sample/frame by `process_scenario_records()`.
-
-```python
-class DatasetTableSchema:
-    SCENARIO_ID = DatasetTableColumn("scenario_id", pl.String)
-    SAMPLE_ID = DatasetTableColumn("sample_id", pl.String)
-    SAMPLE_INDEX = DatasetTableColumn("sample_index", pl.Int32)
-    LOCATION = DatasetTableColumn("location", pl.String)
-    VEHICLE_TYPE = DatasetTableColumn("vehicle_type", pl.String)
-
-    @classmethod
-    def to_polars_schema(cls) -> pl.Schema: ...
-
-class DatasetRecord(BaseModel):
-    scenario_id: str
-    sample_id: str
-    sample_index: int
-    location: str | None
-    vehicle_type: str | None
-```
-
-| Column         | Python type    | Polars type | Description                                        |
-| -------------- | -------------- | ----------- | -------------------------------------------------- |
-| `scenario_id`  | `str`          | `String`    | Unique identifier of the driving scenario          |
-| `sample_id`    | `str`          | `String`    | Unique identifier of the individual sample/frame   |
-| `sample_index` | `int`          | `Int32`     | Zero-based index of the sample within the scenario |
-| `location`     | `str \| None`  | `String`    | Geographic location where the data was captured    |
-| `vehicle_type` | `str \| None`  | `String`    | Type of vehicle used for data collection           |
-
-Both classes are kept in sync: every field in `DatasetRecord` has a corresponding column in `DatasetTableSchema`. When adding new annotation fields (e.g. 3D bounding boxes), add entries to both.
+The schema is defined in the `autoware_ml/databases/schemas/` package and covers basic frame metadata, nested LiDAR structs, and annotation fields such as category mapping. See [Dataset Schema](schemas.md) for the full column layout, nested data models, and extension guide.
 
 ### Dataset Generation (Hydra Entrypoint)
 
@@ -216,15 +190,15 @@ Configuration is done through YAML files under `autoware_ml/configs/generators/`
 | -------------------- | ------------------------------------------------------------------------------------------------------------ |
 | New dataset family   | Subclass `BaseDatabase`, implement `process_scenario_records()`, register in a Hydra config                  |
 | New scenario format  | Subclass `Scenarios`, implement `build_scenarios()` to parse format-specific YAML                            |
-| New schema columns   | Add entries to both `DatasetTableSchema` (Polars type) and `DatasetRecord` (Pydantic field)                  |
+| New schema columns   | See [Dataset Schema](schemas.md)                                                                             |
 
 ## Implementation
 
-| Path                                          | Description                                     |
-| --------------------------------------------- | ----------------------------------------------- |
-| `autoware_ml/databases/schemas.py`            | `DatasetRecord` and `DatasetTableSchema`        |
-| `autoware_ml/databases/scenarios.py`          | `ScenarioData`, `DatasetParams`, `Scenarios`    |
-| `autoware_ml/databases/database_interface.py` | `DatabaseInterface` protocol                    |
-| `autoware_ml/databases/base_database.py`      | Shared `BaseDatabase` implementation            |
-| `autoware_ml/scripts/generate_dataset.py`     | Hydra entrypoint for dataset generation         |
-| `autoware_ml/configs/generators/`             | YAML configs for dataset generation             |
+| Path                                          | Description                                           |
+| --------------------------------------------- | ----------------------------------------------------- |
+| `autoware_ml/databases/schemas/`              | Dataset schema package — see [schemas.md](schemas.md) |
+| `autoware_ml/databases/scenarios.py`          | `ScenarioData`, `DatasetParams`, `Scenarios`          |
+| `autoware_ml/databases/database_interface.py` | `DatabaseInterface` protocol                          |
+| `autoware_ml/databases/base_database.py`      | Shared `BaseDatabase` implementation                  |
+| `autoware_ml/scripts/generate_dataset.py`     | Hydra entrypoint for dataset generation               |
+| `autoware_ml/configs/generators/`             | YAML configs for dataset generation                   |

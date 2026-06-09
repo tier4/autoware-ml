@@ -22,7 +22,7 @@ from types import MappingProxyType
 import polars as pl
 
 from autoware_ml.databases.scenarios import Scenarios, ScenarioData
-from autoware_ml.databases.schemas import DatasetRecord, DatasetTableSchema
+from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord, DatasetTableSchema
 
 logger = logging.getLogger(__name__)
 

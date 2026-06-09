@@ -15,6 +15,21 @@
 from enum import Enum
 
 
+class Modality(str, Enum):
+    """
+    Modality.
+
+    Attributes:
+      LIDAR: Lidar modality.
+      CAMERA: Camera modality.
+      RADAR: Radar modality.
+    """
+
+    LIDAR = "lidar"
+    CAMERA = "camera"
+    RADAR = "radar"
+
+
 class SplitType(str, Enum):
     """
     Split type.
