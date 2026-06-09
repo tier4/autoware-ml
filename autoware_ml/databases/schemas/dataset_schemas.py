@@ -185,7 +185,7 @@ class DatasetRecord(BaseModel, DataModelInterface):
                 box3d.to_dictionary() for box3d in self.boxes_3d
             ]
         else:
-            data_model[DatasetTableSchema.BOXES_3D.name] = {}
+            data_model[DatasetTableSchema.BOXES_3D.name] = []
 
         return data_model
 

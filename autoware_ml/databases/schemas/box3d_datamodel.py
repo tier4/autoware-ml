@@ -86,8 +86,18 @@ class Box3DDataModel(BaseModel, DataModelInterface):
         Returns:
           Mapping[str, Any]: Dictionary representation of the category mapping data model.
         """
-
-        return self.model_dump()
+        return {
+            Box3DDatasetSchema.BOX3D_PARAMS.name: self.box3d_params.tolist(),
+            Box3DDatasetSchema.BOX3D_INSTANCE_ID.name: self.box3d_instance_id,
+            Box3DDatasetSchema.BOX3D_DATASET_LABEL_NAME.name: self.box3d_dataset_label_name,
+            Box3DDatasetSchema.BOX3D_LABEL_NAME.name: self.box3d_label_name,
+            Box3DDatasetSchema.BOX3D_LABEL_INDEX.name: self.box3d_label_index,
+            Box3DDatasetSchema.BOX3D_NUM_LIDAR_POINTCLOUDS.name: self.box3d_num_lidar_pointclouds,
+            Box3DDatasetSchema.BOX3D_NUM_RADAR_POINTCLOUDS.name: self.box3d_num_radar_pointclouds,
+            Box3DDatasetSchema.BOX3D_VALID.name: self.box3d_valid,
+            Box3DDatasetSchema.BOX3D_ATTRIBUTES.name: list(self.box3d_attributes),
+            Box3DDatasetSchema.BOX3D_COORDINATE.name: self.box3d_coordinate,
+        }
 
     @classmethod
     def load_from_dictionary(cls, data_model: Mapping[str, Any]) -> Box3DDataModel:
@@ -112,7 +122,7 @@ class Box3DDataModel(BaseModel, DataModelInterface):
                 Box3DDatasetSchema.BOX3D_NUM_RADAR_POINTCLOUDS.name
             ],
             box3d_valid=data_model[Box3DDatasetSchema.BOX3D_VALID.name],
-            box3d_attributes=data_model[Box3DDatasetSchema.BOX3D_ATTRIBUTES.name],
+            box3d_attributes=set(data_model[Box3DDatasetSchema.BOX3D_ATTRIBUTES.name]),
             box3d_coordinate=data_model[Box3DDatasetSchema.BOX3D_COORDINATE.name],
         )
 
