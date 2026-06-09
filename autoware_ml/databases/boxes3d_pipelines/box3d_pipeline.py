@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from autoware_ml.databases.schemas.box3d_schema import Box3DDataModel
+from autoware_ml.databases.schemas.box3d_schemas import Box3DDataModel
 
 
 class Boxes3DPipeline:

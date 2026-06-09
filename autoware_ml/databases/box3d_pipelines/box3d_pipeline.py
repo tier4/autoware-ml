@@ -14,7 +14,7 @@
 
 from typing import Sequence
 
-from autoware_ml.databases.schemas.box3d_schema import Box3DDataModel
+from autoware_ml.databases.schemas.box3d_schemas import Box3DDataModel
 
 
 class Box3DPipeline:

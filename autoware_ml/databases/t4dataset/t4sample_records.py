@@ -16,7 +16,7 @@ from typing import Sequence
 
 from pydantic import BaseModel, ConfigDict
 
-from autoware_ml.databases.schemas.box3d_schema import Box3DDataModel
+from autoware_ml.databases.schemas.box3d_schemas import Box3DDataModel
 from autoware_ml.databases.schemas.frame_basic_metadata import FrameBasicMetadata
 from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord
 from autoware_ml.databases.schemas.lidar_frames import LidarFrameDataModel

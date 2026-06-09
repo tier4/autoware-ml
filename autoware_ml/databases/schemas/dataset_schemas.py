@@ -21,7 +21,7 @@ import polars as pl
 from pydantic import BaseModel, ConfigDict
 
 from autoware_ml.databases.schemas.base_schemas import DatasetTableColumn, DataModelInterface
-from autoware_ml.databases.schemas.box3d_schema import Box3DDataModel, Box3DDatasetSchema
+from autoware_ml.databases.schemas.box3d_schemas import Box3DDataModel, Box3DDatasetSchema
 from autoware_ml.databases.schemas.lidar_frames import LidarFrameDatasetSchema, LidarFrameDataModel
 from autoware_ml.databases.schemas.category_mapping import (
     CategoryMappingDataModel,
