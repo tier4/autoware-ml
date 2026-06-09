@@ -1,0 +1,22 @@
+- _target_: autoware_ml.databases.box3d_pipelines.box3d_label_remapper.Box3DLabelRemapper
+  _convert_: all
+
+  label_remapper: ${database.label_remapper}
+  class_names: ${database.class_names}
+  ignore_label_index: ${database.ignore_label_index}
+
+- _target_: autoware_ml.databases.box3d_pipelines.box3d_merger.Box3DExtendLongerMerger
+  _convert_: all
+
+  target_labels:
+    truck:
+      - truck
+      - trailer
+
+  proximity_distance_threshold: 1.0
+  class_names: ${database.class_names}
+
+- _target_: autoware_ml.databases.box3d_pipelines.box3d_velocity_clip.Box3DVelocityNormClip
+  _convert_: all
+
+  velocity_norm_threshold: 50.0

@@ -1,9 +1,10 @@
+from typing import Sequence
 import numpy as np
 
 from autoware_ml.common.enums.enums import Box3DFieldIndex
 
 from autoware_ml.databases.box3d_pipelines.box3d_pipeline import Box3DPipeline
-from autoware_ml.databases.schemas.box3d_datamodel import Boxes3DDataModel
+from autoware_ml.databases.schemas.box3d_datamodel import Box3DDataModel
 
 
 class Box3DVelocityNormClip(Box3DPipeline):
@@ -24,37 +25,44 @@ class Box3DVelocityNormClip(Box3DPipeline):
         """
         return f"{self.__class__.__name__}(velocity_norm_threshold={self.velocity_norm_threshold})"
 
-    def __call__(self, boxes_3d_metadata: Boxes3DDataModel) -> Boxes3DDataModel:
+    def __call__(self, boxes3d_datamodel: Sequence[Box3DDataModel]) -> Sequence[Box3DDataModel]:
         """
         Clip the velocity norm of the 3D bounding boxes.
         """
-        bev_speeds = boxes_3d_metadata.get_bev_speeds()
+        if not len(boxes3d_datamodel):
+            return boxes3d_datamodel
 
-        # Get the indices of the boxes whose velocity norm is greater than the threshold
-        mask_indices = np.where(bev_speeds > self.velocity_norm_threshold)[0]
-        # Assign the new
-        velocity_x = boxes_3d_metadata.boxes_3d_arrays[:, Box3DFieldIndex.VELOCITY_X]
-        velocity_y = boxes_3d_metadata.boxes_3d_arrays[:, Box3DFieldIndex.VELOCITY_Y]
-
-        velocity_x[mask_indices] = velocity_x[mask_indices] * (
-            self.velocity_norm_threshold / bev_speeds[mask_indices]
-        )
-        velocity_y[mask_indices] = velocity_y[mask_indices] * (
-            self.velocity_norm_threshold / bev_speeds[mask_indices]
+        ground_plane_velocities = np.asarray(
+            [
+                (
+                    box3d.box3d_params[Box3DFieldIndex.VELOCITY_X],
+                    box3d.box3d_params[Box3DFieldIndex.VELOCITY_Y],
+                )
+                for box3d in boxes3d_datamodel
+            ]
         )
 
-        boxes_3d_arrays = boxes_3d_metadata.boxes_3d_arrays
-        boxes_3d_arrays[:, Box3DFieldIndex.VELOCITY_X] = velocity_x
-        boxes_3d_arrays[:, Box3DFieldIndex.VELOCITY_Y] = velocity_y
+        ground_plane_speeds = np.linalg.norm(ground_plane_velocities, axis=1)
 
-        return Boxes3DDataModel(
-            boxes_3d_arrays=boxes_3d_arrays,
-            boxes_3d_instance_ids=boxes_3d_metadata.boxes_3d_instance_ids,
-            boxes_3d_dataset_label_names=boxes_3d_metadata.boxes_3d_dataset_label_names,
-            boxes_3d_label_names=boxes_3d_metadata.boxes_3d_label_names,
-            boxes_3d_label_indices=boxes_3d_metadata.boxes_3d_label_indices,
-            boxes_3d_num_lidar_pointclouds=boxes_3d_metadata.boxes_3d_num_lidar_pointclouds,
-            boxes_3d_num_radar_pointclouds=boxes_3d_metadata.boxes_3d_num_radar_pointclouds,
-            boxes_3d_valid=boxes_3d_metadata.boxes_3d_valid,
-            boxes_3d_attributes=boxes_3d_metadata.boxes_3d_attributes,
+        mask_indices = np.where(ground_plane_speeds > self.velocity_norm_threshold)[0]
+
+        ground_plane_velocities[mask_indices, 0] = ground_plane_velocities[mask_indices, 0] * (
+            self.velocity_norm_threshold / ground_plane_speeds[mask_indices]
         )
+        ground_plane_velocities[mask_indices, 1] = ground_plane_velocities[mask_indices, 1] * (
+            self.velocity_norm_threshold / ground_plane_speeds[mask_indices]
+        )
+
+        # Assign velocity_x and velocity_y back to the boxes3d_datamodel
+        new_boxes3d_datamodel = []
+        for box3d_datamodel, velocity in zip(boxes3d_datamodel, ground_plane_velocities):
+            new_box3d_array = box3d_datamodel.box_3d_array
+            new_box3d_array[Box3DFieldIndex.VELOCITY_X] = velocity[0]
+            new_box3d_array[Box3DFieldIndex.VELOCITY_Y] = velocity[1]
+
+            new_box3d = box3d_datamodel.create_new_datamodel(
+                box3d_params=new_box3d_array,
+            )
+            new_boxes3d_datamodel.append(new_box3d)
+
+        return new_boxes3d_datamodel

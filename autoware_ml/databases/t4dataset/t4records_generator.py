@@ -20,11 +20,14 @@ from typing import Sequence, Tuple
 import numpy as np
 import numpy.typing as npt
 from t4_devkit import Tier4
+from t4_devkit.dataclass.box import Box3D
 from t4_devkit.schema import (
+    Attribute,
     CalibratedSensor,
     EgoPose,
     LidarSeg,
     Sample,
+    SampleAnnotation,
     SampleData,
     Scene,
     Sensor,
@@ -33,12 +36,14 @@ from t4_devkit.schema import (
 from t4_devkit.common.timestamp import microseconds2seconds
 
 
-from autoware_ml.common.enums.enums import LidarChannel, Modality
+from autoware_ml.common.enums.enums import LidarChannel, Modality, CoordinateSystem
+from autoware_ml.databases.box3d_pipelines.box3d_pipeline import Box3DPipeline
 from autoware_ml.databases.schemas.frame_basic_metadata import FrameBasicMetadata
 from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord
 from autoware_ml.databases.schemas.lidar_frames import LidarFrameDataModel
 from autoware_ml.databases.schemas.lidar_sources import LidarSourceDataModel
 from autoware_ml.databases.schemas.category_mapping import CategoryMappingDataModel
+from autoware_ml.databases.schemas.box3d_datamodel import Box3DDataModel
 from autoware_ml.databases.scenarios import ScenarioData
 from autoware_ml.databases.t4dataset.t4sample_records import (
     T4SampleRecord,
@@ -54,7 +59,6 @@ class T4RecordsGenerator:
 
     __MODALITY_STRING = "modality"
     __VALUE_STRING = "value"
-    __IGNORE_LABEL_INDEX = -1
 
     def __init__(
         self,
@@ -63,6 +67,8 @@ class T4RecordsGenerator:
         max_sweeps: int,
         sample_steps: int,
         lidar_pointcloud_num_features: int,
+        ignore_label_index: int,
+        box3d_pipelines: Sequence[Box3DPipeline],
     ) -> None:
         """
         Initialize T4RecordsGenerator.
@@ -75,6 +81,8 @@ class T4RecordsGenerator:
           sample_steps: Number of frames/samples to skip between each sample, set to 1
             if not skipping any samples/frames.
           lidar_pointcloud_num_features: Number of features of the lidar pointcloud.
+          ignore_label_index: Label index to use for ignored labels in the box3d annotations.
+          box3d_pipelines: List of box3d pipelines to process the box3d annotations.
         """
 
         self.database_root_path = Path(database_root_path)
@@ -83,7 +91,8 @@ class T4RecordsGenerator:
         self.sample_steps = sample_steps
         self.lidar_pointcloud_num_features = lidar_pointcloud_num_features
         self.t4_devkit_dataset = self._construct_t4_devkit_dataset()
-
+        self.ignore_label_index = ignore_label_index
+        self.box3d_pipelines = box3d_pipelines
         assert sample_steps > 0, "Sample steps must be greater than 0."
         assert max_sweeps >= 0, "Max sweeps must be greater than or equal to 0."
 
@@ -160,110 +169,81 @@ class T4RecordsGenerator:
             scenario_name=scene_record.name,
         )
 
-    # def _extract_boxes_3d_annotations(
-    #         self, sample: Sample,
-    #         boxes_3d: Sequence[Box3D]) -> Boxes3DMetaData:
-    #     """
-    #     Extract boxes 3D annotations from a T4 sample and process them with the pipeline.
+    def _extract_boxes_3d_annotations(
+        self, sample: Sample, boxes_3d: Sequence[Box3D]
+    ) -> Sequence[Box3DDataModel]:
+        """
+        Extract boxes 3D annotations from a T4 sample and process them with the pipeline.
 
-    #     Args:
-    #       sample: T4 Sample.
-    #       boxes_3d: Sequence of Boxes 3D from the T4 sample. Note that these might be in sensor
-    #       coodinates based on the way it retrieves in _extract_lidar_metadata.
+        Args:
+          sample: T4 Sample.
+          boxes_3d: Sequence of Boxes 3D from the T4 sample. Note that these might be in sensor
+          coodinates based on the way it retrieves in _extract_lidar_metadata.
 
-    #     Returns:
-    #       Boxes3DMetaData: Boxes 3D metadata.
-    #     """
+        Returns:
+          Sequence[Box3DDataModel]: Sequence of Box3DDataModel, which is the data model for the
+            3D bounding boxes.
+        """
+        if not len(boxes_3d):
+            return []
 
-    #     if not len(boxes_3d):
-    #         return Boxes3DMetaData(
-    #             boxes_3d_fields=[],
-    #             boxed_3d_dataset_label_names=[],
-    #             boxed_3d_label_names=[],
-    #             boxed_3d_label_indices=[],
-    #             boxes_3d_instance_ids=[],
-    #             boxes_3d_num_lidar_pointclouds=[],
-    #             boxes_3d_num_radar_pointclouds=[],
-    #             boxes_3d_valid=[],
-    #             boxes_3d_attributes=[],
-    #         )
+        boxes_3d_datamodel = []
+        sample_annotation_tokens = sample.ann_3ds
+        for box_index, box3d in enumerate(boxes_3d):
+            # Convert the box3d to the Box3DFieldIndex format,
+            # where the length and width are swapped since in T4Dataset, the shape is
+            # (width, length, height)
+            box3d_params = np.asarray(
+                [
+                    box3d.position[0],
+                    box3d.position[1],
+                    box3d.position[2],
+                    box3d.size[1],
+                    box3d.size[0],
+                    box3d.size[2],
+                    box3d.rotation.yaw_pitch_roll[0],
+                    box3d.velocity[0],
+                    box3d.velocity[1],
+                    box3d.velocity[2],
+                ]
+            )
 
-    #     boxes_3d_arrays = []
-    #     boxed_3d_dataset_label_names = []
-    #     boxed_3d_label_names = []
-    #     boxed_3d_label_indices = []
-    #     boxes_3d_instance_ids = []
-    #     boxes_3d_num_lidar_pointclouds = []
-    #     boxes_3d_num_radar_pointclouds = []
-    #     boxes_3d_valid = []
-    #     boxes_3d_attributes = []
+            sample_annotation_record: SampleAnnotation = self.t4_devkit_dataset.get(
+                SchemaName.SAMPLE_ANNOTATION, sample_annotation_tokens[box_index]
+            )
+            box3d_valid = sample_annotation_record.num_lidar_pts > 0
 
-    #     sample_annotation_tokens = sample.ann_3ds
-    #     for box_index, box3d in enumerate(boxes_3d):
-    #         # Convert the box3d to the Box3DFieldIndex format,
-    #         # where the length and width are swapped since in T4Dataset, the shape is
-    #         # (width, length, height)
-    #         boxes_3d_arrays.append(
-    #             box3d.position[0],
-    #             box3d.position[1],
-    #             box3d.position[2],
-    #             box3d.size[1],
-    #             box3d.size[0],
-    #             box3d.size[2],
-    #             box3d.rotation.yaw_pitch_roll[0],
-    #             box3d.velocity[0],
-    #             box3d.velocity[1],
-    #             box3d.velocity[2],
-    #         )
+            # Get attributes from the sample annotation record
+            box_3d_attributes = set()
+            for attribute_token in sample_annotation_record.attribute_tokens:
+                attribute_records: Sequence[Attribute] = self.t4_devkit_dataset.get(
+                    SchemaName.ATTRIBUTE, attribute_token
+                )
+                box_3d_attributes = set(
+                    [attribute_record.name for attribute_record in attribute_records]
+                )
 
-    #         boxed_3d_dataset_label_names.append(box3d.semantic_label.name)
-    #         # Initially, set all the same as dataset label name
-    #         boxed_3d_label_names.append(box3d.semantic_label.name)
-    #         # Initially, set all to the ignore label index
-    #         boxed_3d_label_indices.append(self.__IGNORE_LABEL_INDEX)
-    #         boxes_3d_instance_ids.append(box3d.uuid)
-    #         boxes_3d_num_lidar_pointclouds.append(box3d.num_lidar_points)
+            boxes_3d_datamodel.append(
+                Box3DDataModel(
+                    box3d_params=box3d_params,
+                    box3d_instance_id=box3d.uuid,
+                    box3d_dataset_label_name=box3d.semantic_label.name,
+                    box3d_label_name=box3d.semantic_label.name,
+                    # Initially, set all label indices to the ignore label index
+                    box3d_label_index=self.ignore_label_index,
+                    box3d_num_lidar_pointclouds=box3d.num_lidar_points,
+                    box3d_num_radar_pointclouds=sample_annotation_record.num_radar_pts,
+                    box3d_valid=box3d_valid,
+                    box3d_attributes=box_3d_attributes,
+                    box3d_coordinate=CoordinateSystem.LIDAR.name,
+                )
+            )
 
-    #         sample_annotation_record: SampleAnnotation = self.t4_devkit_dataset.get(
-    #             SchemaName.SAMPLE_ANNOTATION,
-    #             sample_annotation_tokens[box_index])
+        # Process 3D boxes with the pipeline
+        for box3d_pipeline in self.box3d_pipelines:
+            boxes_3d_datamodel = box3d_pipeline(boxes_3d_datamodel)
 
-    #         boxes_3d_num_radar_pointclouds.append(
-    #             sample_annotation_record.num_radar_pts)
-    #         boxes_3d_valid.append(sample_annotation_record.num_lidar_pts > 0)
-
-    #         # Get attributes from the sample annotation record
-    #         for attribute_token in sample_annotation_record.attribute_tokens:
-    #             attribute_records: Sequence[
-    #                 Attribute] = self.t4_devkit_dataset.get(
-    #                     SchemaName.ATTRIBUTE, attribute_token)
-    #             boxes_3d_attributes.append(
-    #                 set([
-    #                     attribute_record.name
-    #                     for attribute_record in attribute_records
-    #                 ]))
-
-    #     # Convert boxes 3D to numpy arrays in the Box3DFieldIndex format, and
-    #     # construct the Boxes3DMetaData.
-    #     boxes_3d_arrays = np.array(boxes_3d_arrays)
-    #     boxes_3d_metadata = Boxes3DMetaData(
-    #         boxes_3d_arrays=boxes_3d_arrays,
-    #         boxes_3d_instance_ids=boxes_3d_instance_ids,
-    #         boxes_3d_dataset_label_names=boxed_3d_dataset_label_names,
-    #         boxes_3d_label_names=boxed_3d_label_names,
-    #         boxes_3d_label_indices=boxed_3d_label_indices,
-    #         boxes_3d_num_lidar_pointclouds=boxes_3d_num_lidar_pointclouds,
-    #         boxes_3d_num_radar_pointclouds=boxes_3d_num_radar_pointclouds,
-    #         boxes_3d_valid=boxes_3d_valid,
-    #         boxes_3d_attributes=boxes_3d_attributes,
-    #     )
-
-    #     # Process the 3D boxes with the pipeline
-    #     for box3d_pipeline in self.boxes_3d_pipeline:
-    #         boxes_3d_metadata = box3d_pipeline(
-    #             boxes_3d_metadata=boxes_3d_metadata)
-
-    #     return boxes_3d_metadata
+        return boxes_3d_datamodel
 
     def _extract_lidar_pointcloud_semantic_mask_path(
         self,
@@ -302,7 +282,7 @@ class T4RecordsGenerator:
 
     def _extract_lidar_frame(
         self, sample: Sample, sample_index: int, lidar_channel_name: str
-    ) -> LidarFrameDataModel:
+    ) -> Tuple[LidarFrameDataModel, Sequence[Box3D]]:
         """
         Extract lidar frame records from a T4 sample.
 
@@ -311,7 +291,9 @@ class T4RecordsGenerator:
           lidar_channel_name: Lidar channel name.
 
         Returns:
-          LidarDatasetRecord: Lidar records of the T4 sample.
+          Tuple of:
+            LidarDatasetRecord: Lidar records of the T4 sample.
+            Sequence[Box3D]: Sequence of Box3D annotations in the lidar frame, in the sensor coordinate.
         """
 
         calibrated_lidar_sample_data_token = sample.data[lidar_channel_name]
@@ -327,7 +309,7 @@ class T4RecordsGenerator:
             convert_to_float32=False,
         )
 
-        lidar_path, _, _ = self.t4_devkit_dataset.get_sample_data(
+        lidar_path, box3d, _ = self.t4_devkit_dataset.get_sample_data(
             sample_data_token=calibrated_lidar_sample_data_token,
             as_3d=True,
             as_sensor_coord=True,
@@ -350,7 +332,7 @@ class T4RecordsGenerator:
             lidar_pointcloud_source_path=sd_record.info_filename,
         )
 
-        return LidarFrameDataModel(
+        lidar_frame_datamodel = LidarFrameDataModel(
             lidar_frame_id=calibrated_lidar_sample_data_token,
             lidar_keyframe=sd_record.is_key_frame,
             lidar_sensor_id=cs_record.token,
@@ -366,6 +348,7 @@ class T4RecordsGenerator:
             ),  # Always the identity matrix for the main lidar sensor
             lidar_pointcloud_semantic_mask_path=lidar_pointcloud_semantic_mask_path,
         )
+        return lidar_frame_datamodel, box3d
 
     def _compute_sensor_transformation_matrices(
         self,

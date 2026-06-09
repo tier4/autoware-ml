@@ -89,6 +89,8 @@ class T4Dataset(BaseDatabase):
         cache_file_prefix_name: str,
         num_workers: int,
         class_names: Sequence[str],
+        ignore_label_index: int,
+        label_remapper: MappingProxyType[str, str] | None,
         lidar_pointcloud_num_features: int,
         box3d_pipelines: Sequence[Box3DPipeline],
     ) -> None:
@@ -103,6 +105,8 @@ class T4Dataset(BaseDatabase):
           cache_file_prefix_name: Prefix name of the cache file, it will be <cache_file_prefix_name>_<dataset_hash>.parquet
           num_workers: Number of workers to use for processing the dataset.
           class_names: List of class names in the dataset, used for category mapping.
+          ignore_label_index: Index to use for ignored labels.
+          label_remapper: Mapping to remap label names, if needed.
           lidar_pointcloud_num_features: Number of features in the lidar pointcloud.
           box3d_pipelines: List of box 3D pipelines to process the box 3D annotations.
         """
@@ -115,7 +119,9 @@ class T4Dataset(BaseDatabase):
             cache_file_prefix_name=cache_file_prefix_name,
             num_workers=num_workers,
             class_names=class_names,
+            label_remapper=label_remapper,
             box3d_pipelines=box3d_pipelines,
+            ignore_label_index=ignore_label_index,
         )
         self._scenarios = scenarios
         self._lidar_pointcloud_num_features = lidar_pointcloud_num_features
@@ -134,6 +140,8 @@ class T4Dataset(BaseDatabase):
             f"cache path={str(self._cache_path)}, "
             f"cache file prefix name={self._cache_file_prefix_name}, "
             f"class_names={self._class_names}, "
+            f"label_remapper={self._label_remapper}, "
+            f"ignore_label_index={self._ignore_label_index}, "
             f"box3d_pipelines=[{', '.join([str(pipeline) for pipeline in self._box3d_pipelines])}], "
             f"{self.scenarios_string_repr}"
             f")"

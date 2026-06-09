@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence, Any, Mapping
+from typing import Set, Any, Mapping
 
 from pydantic import BaseModel, ConfigDict
 import numpy as np
@@ -30,72 +30,54 @@ from autoware_ml.common.enums.enums import Box3DFieldIndex
 
 
 @dataclass(frozen=True)
-class Boxes3DDatasetSchema(BaseFieldSchema):
+class Box3DDatasetSchema(BaseFieldSchema):
     """
     Dataclass to define polars schema for columns related to category mapping.
     """
 
-    BOXES_3D_ARRAYS = DatasetTableColumn(
-        "boxes_3d_arrays", pl.List(pl.Array(pl.Float32, shape=(len(Box3DFieldIndex),)))
+    BOX3D_PARAMS = DatasetTableColumn(
+        "box3d_params", pl.Array(pl.Float32, shape=(len(Box3DFieldIndex),))
     )
-    BOXES_3D_INSTANCE_IDS = DatasetTableColumn("boxes_3d_instance_ids", pl.List(pl.String))
-    BOXES_3D_DATASET_LABEL_NAMES = DatasetTableColumn(
-        "boxes_3d_dataset_label_names", pl.List(pl.String)
-    )
-    BOXES_3D_LABEL_NAMES = DatasetTableColumn("boxes_3d_label_names", pl.List(pl.String))
-    BOXES_3D_LABEL_INDICES = DatasetTableColumn("boxes_3d_label_indices", pl.List(pl.Int32))
-    BOXES_3D_NUM_LIDAR_POINTCLOUDS = DatasetTableColumn(
-        "boxes_3d_num_lidar_pointclouds", pl.List(pl.Int32)
-    )
-    BOXES_3D_NUM_RADAR_POINTCLOUDS = DatasetTableColumn(
-        "boxes_3d_num_radar_pointclouds", pl.List(pl.Int32)
-    )
-    BOXES_3D_VALID = DatasetTableColumn("boxes_3d_valid", pl.List(pl.Boolean))
-    BOXES_3D_ATTRIBUTES = DatasetTableColumn("boxes_3d_attributes", pl.List(pl.List(pl.String)))
+    BOX3D_INSTANCE_ID = DatasetTableColumn("box3d_instance_id", pl.String)
+    BOX3D_DATASET_LABEL_NAME = DatasetTableColumn("box3d_dataset_label_name", pl.String)
+    BOX3D_LABEL_NAME = DatasetTableColumn("box3d_label_name", pl.String)
+    BOX3D_LABEL_INDEX = DatasetTableColumn("box3d_label_index", pl.Int32)
+    BOX3D_NUM_LIDAR_POINTCLOUDS = DatasetTableColumn("box3d_num_lidar_pointclouds", pl.Int32)
+    BOX3D_NUM_RADAR_POINTCLOUDS = DatasetTableColumn("box3d_num_radar_pointclouds", pl.Int32)
+    BOX3D_VALID = DatasetTableColumn("box3d_valid", pl.Boolean)
+    BOX3D_ATTRIBUTES = DatasetTableColumn("box3d_attributes", pl.List(pl.String))
+    BOX3D_COORDINATE = DatasetTableColumn("box3d_coordinate", pl.String)
 
 
-class Boxes3DDataModel(BaseModel, DataModelInterface):
+class Box3DDataModel(BaseModel, DataModelInterface):
     """
-    Base metadata of 3D bounding boxes that can be used for any 3D bounding box dataset.
+    Data model to represent annotation data for a 3d bounding box.
 
     Attributes:
-      boxes_3d_arrays: Sequence of 3D bounding boxes arrays. It is in (x, y, z, length, width,
+      box3d_params: 3D bounding box parameters. It is in (x, y, z, length, width,
         height, yaw, velocity_x, velocity_y, velocity_z) format, following the Box3DFieldIndex enumeration.
-      boxes_3d_instance_ids: Sequence of instance IDs for each 3D bounding box.
-      boxes_3d_dataset_label_names: Sequence of dataset label names for each 3D bounding box.
-      boxes_3d_label_names: Sequence of label names for each 3D bounding box.
-      boxes_3d_label_indices: Sequence of label indices for each 3D bounding box.
-      boxes_3d_num_lidar_pointclouds: Sequence of number of lidar pointclouds for each 3D bounding box.
-      boxes_3d_num_radar_pointclouds: Sequence of number of radar pointclouds for each 3D bounding box.
-      boxes_3d_valid: Sequence of valid flags for each 3D bounding box.
+      box3d_instance_id: Instance ID for the 3D bounding box.
+      box3d_dataset_label_name: Dataset label name for the 3D bounding box.
+      box3d_label_name: Label name for the 3D bounding box.
+      box3d_label_index: Label index for the 3D bounding box.
+      box3d_num_lidar_pointclouds: Number of lidar pointclouds for the 3D bounding box.
+      box3d_num_radar_pointclouds: Number of radar pointclouds for the 3D bounding box.
+      box3d_valid: Valid flag for the 3D bounding box.
+      box3d_attributes: Attributes for the 3D bounding box.
     """
 
     model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
 
-    boxes_3d_arrays: Sequence[npt.NDArray[np.float32]]
-    boxes_3d_instance_ids: Sequence[str]
-    boxes_3d_dataset_label_names: Sequence[str]
-    boxes_3d_label_names: Sequence[str]
-    boxes_3d_label_indices: Sequence[int]
-    boxes_3d_num_lidar_pointclouds: Sequence[int]
-    boxes_3d_num_radar_pointclouds: Sequence[int]
-    boxes_3d_valid: Sequence[bool]
-    boxes_3d_attributes: Sequence[set[str]]
-
-    def model_post_init(self, __context: Any) -> None:
-        """Validate that all attributes are of the same length."""
-
-        num_boxes = len(self.boxes_3d_arrays)
-        assert (
-            len(self.boxes_3d_instance_ids) == num_boxes
-            and len(self.boxes_3d_dataset_label_names) == num_boxes
-            and len(self.boxes_3d_label_names) == num_boxes
-            and len(self.boxes_3d_label_indices) == num_boxes
-            and len(self.boxes_3d_num_lidar_pointclouds) == num_boxes
-            and len(self.boxes_3d_num_radar_pointclouds) == num_boxes
-            and len(self.boxes_3d_valid) == num_boxes
-            and len(self.boxes_3d_attributes) == num_boxes
-        ), "All attributes must be of the same length"
+    box3d_params: npt.NDArray[np.float32]
+    box3d_instance_id: str
+    box3d_dataset_label_name: str
+    box3d_label_name: str
+    box3d_label_index: int
+    box3d_num_lidar_pointclouds: int
+    box3d_num_radar_pointclouds: int
+    box3d_valid: bool
+    box3d_attributes: Set[str]
+    box3d_coordinate: str
 
     def to_dictionary(self) -> Mapping[str, Any]:
         """
@@ -108,7 +90,7 @@ class Boxes3DDataModel(BaseModel, DataModelInterface):
         return self.model_dump()
 
     @classmethod
-    def load_from_dictionary(cls, data_model: Mapping[str, Any]) -> Boxes3DDataModel:
+    def load_from_dictionary(cls, data_model: Mapping[str, Any]) -> Box3DDataModel:
         """
         Load the category mapping data model and decode it to the corresponding CategoryMappingDataModel
         from a dictionary, which is deserialized from a Polars dataframe.
@@ -118,108 +100,63 @@ class Boxes3DDataModel(BaseModel, DataModelInterface):
           deserialized from a Polars dataframe.
         """
         return cls(
-            boxes_3d_arrays=data_model[Boxes3DDatasetSchema.BOXES_3D_ARRAYS.name],
-            boxes_3d_instance_ids=data_model[Boxes3DDatasetSchema.BOXES_3D_INSTANCE_IDS.name],
-            boxes_3d_dataset_label_names=data_model[
-                Boxes3DDatasetSchema.BOXES_3D_DATASET_LABEL_NAMES.name
+            box3d_params=data_model[Box3DDatasetSchema.BOX3D_PARAMS.name],
+            box3d_instance_id=data_model[Box3DDatasetSchema.BOX3D_INSTANCE_ID.name],
+            box3d_dataset_label_name=data_model[Box3DDatasetSchema.BOX3D_DATASET_LABEL_NAME.name],
+            box3d_label_name=data_model[Box3DDatasetSchema.BOX3D_LABEL_NAME.name],
+            box3d_label_index=data_model[Box3DDatasetSchema.BOX3D_LABEL_INDEX.name],
+            box3d_num_lidar_pointclouds=data_model[
+                Box3DDatasetSchema.BOX3D_NUM_LIDAR_POINTCLOUDS.name
             ],
-            boxes_3d_label_names=data_model[Boxes3DDatasetSchema.BOXES_3D_LABEL_NAMES.name],
-            boxes_3d_label_indices=data_model[Boxes3DDatasetSchema.BOXES_3D_LABEL_INDICES.name],
-            boxes_3d_num_lidar_pointclouds=data_model[
-                Boxes3DDatasetSchema.BOXES_3D_NUM_LIDAR_POINTCLOUDS.name
+            box3d_num_radar_pointclouds=data_model[
+                Box3DDatasetSchema.BOX3D_NUM_RADAR_POINTCLOUDS.name
             ],
-            boxes_3d_num_radar_pointclouds=data_model[
-                Boxes3DDatasetSchema.BOXES_3D_NUM_RADAR_POINTCLOUDS.name
-            ],
-            boxes_3d_valid=data_model[Boxes3DDatasetSchema.BOXES_3D_VALID.name],
-            boxes_3d_attributes=data_model[Boxes3DDatasetSchema.BOXES_3D_ATTRIBUTES.name],
+            box3d_valid=data_model[Box3DDatasetSchema.BOX3D_VALID.name],
+            box3d_attributes=data_model[Box3DDatasetSchema.BOX3D_ATTRIBUTES.name],
+            box3d_coordinate=data_model[Box3DDatasetSchema.BOX3D_COORDINATE.name],
         )
 
-    def remove_boxes(self, indices: Sequence[int]) -> Boxes3DDataModel:
-        """
-        Remove the boxes at the given indices, and create a new Boxes3DMetadata object.
-        """
-        return Boxes3DDataModel(
-            boxes_3d_arrays=self.boxes_3d_arrays[indices],
-            boxes_3d_instance_ids=self.boxes_3d_instance_ids[indices],
-            boxes_3d_dataset_label_names=self.boxes_3d_dataset_label_names[indices],
-            boxes_3d_label_names=self.boxes_3d_label_names[indices],
-            boxes_3d_label_indices=self.boxes_3d_label_indices[indices],
-            boxes_3d_num_lidar_pointclouds=self.boxes_3d_num_lidar_pointclouds[indices],
-            boxes_3d_num_radar_pointclouds=self.boxes_3d_num_radar_pointclouds[indices],
-            boxes_3d_valid=self.boxes_3d_valid[indices],
-            boxes_3d_attributes=self.boxes_3d_attributes[indices],
-        )
-
-    def merge_boxes(self, boxes3d_metadata: Boxes3DDataModel) -> Boxes3DDataModel:
-        """
-        Merge the boxes with the given boxes3d_metadata by extending the list, and create a new Boxes3DMetadata object.
-        """
-        return Boxes3DDataModel(
-            boxes_3d_arrays=self.boxes_3d_arrays.extend(boxes3d_metadata.boxes_3d_arrays),
-            boxes_3d_instance_ids=self.boxes_3d_instance_ids.extend(
-                boxes3d_metadata.boxes_3d_instance_ids
-            ),
-            boxes_3d_dataset_label_names=self.boxes_3d_dataset_label_names.extend(
-                boxes3d_metadata.boxes_3d_dataset_label_names
-            ),
-            boxes_3d_label_names=self.boxes_3d_label_names.extend(
-                boxes3d_metadata.boxes_3d_label_names
-            ),
-            boxes_3d_label_indices=self.boxes_3d_label_indices.extend(
-                boxes3d_metadata.boxes_3d_label_indices
-            ),
-            boxes_3d_num_lidar_pointclouds=self.boxes_3d_num_lidar_pointclouds.extend(
-                boxes3d_metadata.boxes_3d_num_lidar_pointclouds
-            ),
-            boxes_3d_num_radar_pointclouds=self.boxes_3d_num_radar_pointclouds.extend(
-                boxes3d_metadata.boxes_3d_num_radar_pointclouds
-            ),
-            boxes_3d_valid=self.boxes_3d_valid.extend(boxes3d_metadata.boxes_3d_valid),
-            boxes_3d_attributes=self.boxes_3d_attributes.extend(
-                boxes3d_metadata.boxes_3d_attributes
-            ),
-        )
-
-    def get_ground_plane_speeds(self) -> npt.NDArray[np.float32]:
-        """
-        Get the speeds in x-y plane (ground plane) of the 3D bounding boxes.
-
-        Returns:
-          npt.NDArray[np.float32] (N, ): The speeds in x-y plane (ground plane) of the 3D bounding boxes.
-        """
-        velocity_xy = np.asarray(
-            [
-                self.boxes_3d_arrays[:, Box3DFieldIndex.VELOCITY_X],
-                self.boxes_3d_arrays[:, Box3DFieldIndex.VELOCITY_Y],
-            ]
-        )
-        return np.linalg.norm(velocity_xy, axis=0)
-
-    @classmethod
     def create_new_datamodel(
-        cls,
-        boxes_3d_arrays: npt.NDArray[np.float32],
-        boxes_3d_instance_ids: Sequence[str],
-        boxes_3d_dataset_label_names: Sequence[str],
-        boxes_3d_label_names: Sequence[str],
-        boxes_3d_label_indices: Sequence[int],
-        boxes_3d_num_lidar_pointclouds: Sequence[int],
-        boxes_3d_num_radar_pointclouds: Sequence[int],
-        boxes_3d_valid: Sequence[bool],
-        boxes_3d_attributes: Sequence[set[str]],
-    ) -> Boxes3DDataModel:
+        self,
+        box3d_params: npt.NDArray[np.float32] | None,
+        box3d_instance_id: str | None,
+        box3d_dataset_label_name: str | None,
+        box3d_label_name: str | None,
+        box3d_label_index: int | None,
+        box3d_num_lidar_pointclouds: int | None,
+        box3d_num_radar_pointclouds: int | None,
+        box3d_valid: bool | None,
+        box3d_attributes: Set[str] | None,
+        box3d_coordinate: str | None,
+    ) -> Box3DDataModel:
         """
         Create a new Boxes3DDataModel object with the given attributes.
         """
-        return Boxes3DDataModel(
-            boxes_3d_arrays=boxes_3d_arrays,
-            boxes_3d_instance_ids=boxes_3d_instance_ids,
-            boxes_3d_dataset_label_names=boxes_3d_dataset_label_names,
-            boxes_3d_label_names=boxes_3d_label_names,
-            boxes_3d_label_indices=boxes_3d_label_indices,
-            boxes_3d_num_lidar_pointclouds=boxes_3d_num_lidar_pointclouds,
-            boxes_3d_num_radar_pointclouds=boxes_3d_num_radar_pointclouds,
-            boxes_3d_valid=boxes_3d_valid,
-            boxes_3d_attributes=boxes_3d_attributes,
+        return Box3DDataModel(
+            box3d_params=box3d_params if box3d_params is not None else self.box3d_params,
+            box3d_instance_id=box3d_instance_id
+            if box3d_instance_id is not None
+            else self.box3d_instance_id,
+            box3d_dataset_label_name=box3d_dataset_label_name
+            if box3d_dataset_label_name is not None
+            else self.box3d_dataset_label_name,
+            box3d_label_name=box3d_label_name
+            if box3d_label_name is not None
+            else self.box3d_label_name,
+            box3d_label_index=box3d_label_index
+            if box3d_label_index is not None
+            else self.box3d_label_index,
+            box3d_num_lidar_pointclouds=box3d_num_lidar_pointclouds
+            if box3d_num_lidar_pointclouds is not None
+            else self.box3d_num_lidar_pointclouds,
+            box3d_num_radar_pointclouds=box3d_num_radar_pointclouds
+            if box3d_num_radar_pointclouds is not None
+            else self.box3d_num_radar_pointclouds,
+            box3d_valid=box3d_valid if box3d_valid is not None else self.box3d_valid,
+            box3d_attributes=box3d_attributes
+            if box3d_attributes is not None
+            else self.box3d_attributes,
+            box3d_coordinate=box3d_coordinate
+            if box3d_coordinate is not None
+            else self.box3d_coordinate,
         )

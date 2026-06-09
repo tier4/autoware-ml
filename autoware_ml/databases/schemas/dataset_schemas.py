@@ -21,6 +21,7 @@ import polars as pl
 from pydantic import BaseModel, ConfigDict
 
 from autoware_ml.databases.schemas.base_schemas import DatasetTableColumn, DataModelInterface
+from autoware_ml.databases.schemas.box3d_datamodel import Box3DDatasetSchema
 from autoware_ml.databases.schemas.lidar_frames import LidarFrameDatasetSchema, LidarFrameDataModel
 from autoware_ml.databases.schemas.category_mapping import (
     CategoryMappingDataModel,
@@ -81,6 +82,11 @@ class DatasetTableSchema:
     CATEGORY_MAPPING = DatasetTableColumn(
         "category_mapping",
         pl.Struct(CategoryMappingDatasetSchema.to_polars_field_schema()),
+    )
+
+    # Boxes3D annotation Schema
+    BOXES_3D = DatasetTableColumn(
+        "boxes_3d", pl.List(pl.Struct(Box3DDatasetSchema.to_polars_field_schema()))
     )
 
     @classmethod

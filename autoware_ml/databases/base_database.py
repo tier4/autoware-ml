@@ -39,6 +39,8 @@ class BaseDatabase:
         cache_file_prefix_name: str,
         num_workers: int,
         class_names: Sequence[str],
+        label_remapper: Mapping[str, str] | None,
+        ignore_label_index: int,
         box3d_pipelines: Sequence[Box3DPipeline],
     ) -> None:
         """
@@ -51,6 +53,8 @@ class BaseDatabase:
           cache_file_prefix_name: Prefix name of the cache file, it will be <cache_file_prefix_name>_<database_hash>.parquet
           num_workers: Number of workers to use for processing the database.
           class_names: List of class names in the database, used for category mapping.
+          label_remapper: Mapping to remap label names, if needed.
+          ignore_label_index: Index to use for ignored labels.
           box3d_pipelines: List of box 3D pipelines to process the box 3D annotations.
         """
 
@@ -60,6 +64,8 @@ class BaseDatabase:
         self._cache_file_prefix_name = cache_file_prefix_name
         self._num_workers = num_workers
         self._class_names = class_names
+        self._label_remapper = label_remapper
+        self._ignore_label_index = ignore_label_index
         self._box3d_pipelines = box3d_pipelines
 
         # Create cache output path if it doesn't exist
@@ -70,6 +76,8 @@ class BaseDatabase:
             f"cache path: {self._cache_path}, "
             f"cache file prefix name: {self._cache_file_prefix_name}, "
             f"class names: {self._class_names}, "
+            f"label remapper: {self._label_remapper}, "
+            f"ignore label index: {self._ignore_label_index}, "
             f"box3d pipelines: [{', '.join([str(pipeline) for pipeline in self._box3d_pipelines])}]"
         )
 
@@ -115,6 +123,28 @@ class BaseDatabase:
         """
 
         return self._class_names
+
+    @property
+    def label_remapper(self) -> Mapping[str, str] | None:
+        """
+        Get the label remapper in the database.
+
+        Returns:
+          Mapping[str, str] | None: Label remapper in the database.
+        """
+
+        return self._label_remapper
+
+    @property
+    def ignore_label_index(self) -> int:
+        """
+        Get the ignore label index in the database.
+
+        Returns:
+          int: Ignore label index in the database.
+        """
+
+        return self._ignore_label_index
 
     @property
     def scenarios_string_repr(self) -> str:

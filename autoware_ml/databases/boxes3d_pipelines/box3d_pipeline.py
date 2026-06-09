@@ -12,15 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Sequence
-
 from autoware_ml.databases.schemas.box3d_datamodel import Box3DDataModel
 
 
-class Box3DPipeline:
+class Boxes3DPipeline:
     """Base class for box 3D pipelines."""
 
-    def __call__(self, boxes3d_datamodel: Sequence[Box3DDataModel]) -> Box3DDataModel:
+    def __call__(self, boxes3d_datamodel: Box3DDataModel) -> Box3DDataModel:
         """
         Process the boxes 3D.
         """

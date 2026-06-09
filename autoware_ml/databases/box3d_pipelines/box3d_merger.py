@@ -10,7 +10,7 @@ import numpy.typing as npt
 
 from autoware_ml.common.enums.enums import Box3DFieldIndex
 from autoware_ml.databases.box3d_pipelines.box3d_pipeline import Box3DPipeline
-from autoware_ml.databases.schemas.box3d_datamodel import Boxes3DDataModel
+from autoware_ml.databases.schemas.box3d_datamodel import Box3DDataModel
 
 
 class Box3DMerger(Box3DPipeline):
@@ -51,19 +51,21 @@ class Box3DMerger(Box3DPipeline):
             "Proximity distance threshold must be positive"
         )
 
-    def __call__(self, boxes3d_metadata: Boxes3DDataModel) -> Boxes3DDataModel:
+    def __call__(self, boxes3d_datamodel: Sequence[Box3DDataModel]) -> Sequence[Box3DDataModel]:
         """
         Process the boxes 3D metadata.
         """
-        merged_boxes_3d, merged_indices = self.merge(boxes3d_metadata=boxes3d_metadata)
+        merged_boxes_3d, merged_indices = self.merge(boxes3d_datamodel=boxes3d_datamodel)
 
-        # Remove the merged boxes from the boxes3d_metadata
-        boxes3d_metadata = boxes3d_metadata.remove_boxes(merged_indices)
+        new_boxes3d_datamodel = []
+        for index, box3d_datamodel in enumerate(boxes3d_datamodel):
+            # Remove the merged boxes from the boxes3d_datamodel
+            if index not in merged_indices:
+                new_boxes3d_datamodel.append(box3d_datamodel)
 
-        # Merge the merged boxes with the boxes3d_metadata
-        merged_boxes3d_metadata = boxes3d_metadata.merge_boxes(merged_boxes_3d)
-
-        return merged_boxes3d_metadata
+        # Merge the merged boxes with the boxes3d_datamodel
+        new_boxes3d_datamodel.extend(merged_boxes_3d)
+        return new_boxes3d_datamodel
 
     def _check_boxes_overlap(
         self, first_box3d: npt.NDArray[np.float32], second_box3d: npt.NDArray[np.float32]
@@ -163,14 +165,14 @@ class Box3DMerger(Box3DPipeline):
         return False
 
     def match_boxes_3d(
-        self, boxes_3d_fields: npt.NDArray[np.float32], boxes_3d_label_names: Sequence[str]
+        self, boxes3d_params: npt.NDArray[np.float32], boxes3d_label_names: Sequence[str]
     ) -> MappingProxyType[str, Sequence[Tuple[int, int]]]:
         """
         Match 3D bounding boxes based on the target labels and source labels.
 
         Args:
-          boxes_3d_fields (N, len(Box3DFieldIndex)): 3D bounding boxes, please check Box3DFieldIndex for the field indices.
-          boxes_3d_label_names (N, ): 3D bounding box label names.
+          boxes3d_params (N, len(Box3DFieldIndex)): 3D bounding boxes, please check Box3DFieldIndex for the field indices.
+          boxes3d_label_names (N, ): 3D bounding box label names.
 
         Returns:
           MappingProxyType[str, Sequence[Tuple[int, int]]]: Mapping of target labels to matched pairs of box indices.
@@ -182,17 +184,17 @@ class Box3DMerger(Box3DPipeline):
             pairs = []
             first_box3d_indices = [
                 box_index
-                for box_index, box_label_name in enumerate(boxes_3d_label_names)
+                for box_index, box_label_name in enumerate(boxes3d_label_names)
                 if box_label_name == source_labels[0]
             ]
             second_box3d_indices = [
                 box_index
-                for box_index, box_label_name in enumerate(boxes_3d_label_names)
+                for box_index, box_label_name in enumerate(boxes3d_label_names)
                 if box_label_name == source_labels[1]
             ]
 
-            first_box3d_fields = boxes_3d_fields[first_box3d_indices]
-            second_box3d_fields = boxes_3d_fields[second_box3d_indices]
+            first_box3d_fields = boxes3d_params[first_box3d_indices]
+            second_box3d_fields = boxes3d_params[second_box3d_indices]
 
             for first_box3d_index, first_box3d_field in enumerate(
                 first_box3d_indices, first_box3d_fields
@@ -210,8 +212,8 @@ class Box3DMerger(Box3DPipeline):
 
     def merge(
         self,
-        boxes_3d_metadata: Boxes3DDataModel,
-    ) -> Tuple[Boxes3DDataModel, Set[int]]:
+        boxes3d_datamodel: Sequence[Box3DDataModel],
+    ) -> Tuple[Sequence[Box3DDataModel], Set[int]]:
         """
         Merge 3D bounding boxes based on the target labels and source labels by following the steps:
           1) Match boxes based on the target labels and source labels
@@ -234,30 +236,22 @@ class Box3DMerger(Box3DPipeline):
           - boxes_3d_attributes: union of the two source boxes' attributes for the merged box.
 
         Args:
-          boxes_3d_metadata: Boxes3DMetadata of the 3D bounding boxes.
+          boxes3d_datamodel: Sequence of Box3DDataModel of the 3D bounding boxes.
 
         Returns:
-          Boxes3DMetadata: Merged 3D bounding boxes that saves sequence of merged boxes metadata.
+          Sequence[Box3DDataModel]: Merged 3D bounding boxes that saves sequence of merged boxes metadata.
           merged_indices: Set of indices of the merged boxes.
         """
 
         # 1) Match boxes based on the target labels and source labels
         matched_pairs = self.match_boxes_3d(
-            boxes_3d_metadata=boxes_3d_metadata.boxes_3d_arrays,
-            boxes_3d_label_names=boxes_3d_metadata.boxes_3d_label_names,
+            boxes3d_params=[box3d.box3d_params for box3d in boxes3d_datamodel],
+            boxes3d_label_names=[box3d.box3d_label_name for box3d in boxes3d_datamodel],
         )
 
         # 2) Merge boxes for each target label
+        merged_boxes_3d: Sequence[Box3DDataModel] = []
         merged_indices = set()
-        merged_boxes_3d: Sequence[npt.NDArray[np.float32]] = []
-        merged_boxes_3d_instance_ids: Sequence[str] = []
-        merged_boxes_3d_dataset_names: Sequence[str] = []
-        merged_boxes_3d_label_names: Sequence[str] = []
-        merged_boxes_3d_label_indices: Sequence[int] = []
-        merged_boxes_3d_num_lidar_pointclouds: Sequence[int] = []
-        merged_boxes_3d_num_radar_pointclouds: Sequence[int] = []
-        merged_boxes_3d_valid: Sequence[bool] = []
-        merged_boxes_3d_attributes: Sequence[set[str]] = []
 
         # Merge boxes for each target label
         for target_label, pairs in matched_pairs.items():
@@ -266,62 +260,50 @@ class Box3DMerger(Box3DPipeline):
                 if box3d_idx_1 in merged_indices or box3d_idx_2 in merged_indices:
                     continue
 
-                merged_boxes_3d.append(
-                    self.merge_boxes_3d(
-                        first_box3d=boxes_3d_metadata.boxes_3d_arrays[box3d_idx_1],
-                        second_box3d=boxes_3d_metadata.boxes_3d_arrays[box3d_idx_2],
-                    )
+                merged_box3d_params = self.merge_boxes_3d(
+                    first_box3d=boxes3d_datamodel[box3d_idx_1].box3d_params,
+                    second_box3d=boxes3d_datamodel[box3d_idx_2].box3d_params,
                 )
 
                 # Always pick the first box's instance ID and dataset label name
-                merged_boxes_3d_instance_ids.append(
-                    boxes_3d_metadata.boxes_3d_instance_ids[box3d_idx_1]
+                merged_box3d_instance_id = boxes3d_datamodel[box3d_idx_1].box3d_instance_id
+                merged_box3d_dataset_label_name = boxes3d_datamodel[
+                    box3d_idx_1
+                ].box3d_dataset_label_name
+                merged_box3d_label_name = target_label
+                merged_box3d_label_index = self.label_indices[target_label]
+                merged_box3d_num_lidar_pointclouds = (
+                    boxes3d_datamodel[box3d_idx_1].box3d_num_lidar_pointclouds
+                    + boxes3d_datamodel[box3d_idx_2].box3d_num_lidar_pointclouds
                 )
-                merged_boxes_3d_dataset_names.append(
-                    boxes_3d_metadata.boxes_3d_dataset_label_names[box3d_idx_1]
+                merged_box3d_num_radar_pointclouds = (
+                    boxes3d_datamodel[box3d_idx_1].box3d_num_radar_pointclouds
+                    + boxes3d_datamodel[box3d_idx_2].box3d_num_radar_pointclouds
+                )
+                merged_box3d_valid = (
+                    boxes3d_datamodel[box3d_idx_1].box3d_valid
+                    and boxes3d_datamodel[box3d_idx_2].box3d_valid
+                )
+                merged_box3d_attributes = set(
+                    boxes3d_datamodel[box3d_idx_1].box3d_attributes
+                    + boxes3d_datamodel[box3d_idx_2].box3d_attributes
                 )
 
-                # Map them to the target label
-                merged_boxes_3d_label_names.append(target_label)
-                # Map them to the target label index
-                merged_boxes_3d_label_indices.append(self.label_indices[target_label])
-
-                # Merge their attributes and metadata
-                merged_boxes_3d_num_lidar_pointclouds.append(
-                    boxes_3d_metadata.boxes_3d_num_lidar_pointclouds[box3d_idx_1]
-                    + boxes_3d_metadata.boxes_3d_num_lidar_pointclouds[box3d_idx_2]
-                )
-                merged_boxes_3d_num_radar_pointclouds.append(
-                    boxes_3d_metadata.boxes_3d_num_radar_pointclouds[box3d_idx_1]
-                    + boxes_3d_metadata.boxes_3d_num_radar_pointclouds[box3d_idx_2]
-                )
-
-                # Merge their valid flag and attributes
-                merged_boxes_3d_valid.append(
-                    boxes_3d_metadata.boxes_3d_valid[box3d_idx_1]
-                    and boxes_3d_metadata.boxes_3d_valid[box3d_idx_2]
-                )
-                merged_boxes_3d_attributes.append(
-                    set(
-                        boxes_3d_metadata.boxes_3d_attributes[box3d_idx_1]
-                        + boxes_3d_metadata.boxes_3d_attributes[box3d_idx_2]
+                merged_boxes_3d.append(
+                    Box3DDataModel(
+                        box3d_params=merged_box3d_params,
+                        box3d_instance_id=merged_box3d_instance_id,
+                        box3d_dataset_label_name=merged_box3d_dataset_label_name,
+                        box3d_label_name=merged_box3d_label_name,
+                        box3d_label_index=merged_box3d_label_index,
+                        box3d_num_lidar_pointclouds=merged_box3d_num_lidar_pointclouds,
+                        box3d_num_radar_pointclouds=merged_box3d_num_radar_pointclouds,
+                        box3d_valid=merged_box3d_valid,
+                        box3d_attributes=merged_box3d_attributes,
                     )
                 )
-
                 merged_indices.add(box3d_idx_1)
                 merged_indices.add(box3d_idx_2)
-
-        merged_boxes_3d = Boxes3DDataModel(
-            boxes_3d_arrays=merged_boxes_3d,
-            boxes_3d_instance_ids=merged_boxes_3d_instance_ids,
-            boxes_3d_dataset_label_names=merged_boxes_3d_dataset_names,
-            boxes_3d_label_names=merged_boxes_3d_label_names,
-            boxes_3d_label_indices=merged_boxes_3d_label_indices,
-            boxes_3d_num_lidar_pointclouds=merged_boxes_3d_num_lidar_pointclouds,
-            boxes_3d_num_radar_pointclouds=merged_boxes_3d_num_radar_pointclouds,
-            boxes_3d_valid=merged_boxes_3d_valid,
-            boxes_3d_attributes=merged_boxes_3d_attributes,
-        )
 
         return merged_boxes_3d, merged_indices
 
