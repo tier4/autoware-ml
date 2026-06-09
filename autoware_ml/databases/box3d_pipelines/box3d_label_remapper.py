@@ -55,7 +55,7 @@ class Box3DLabelRemapper(Box3DPipeline):
                 new_box3d_label_name = box3d_datamodel.box3d_label_name
 
             # Map the new label name to the new label index,
-            # if the new label name is not in the target class names, map to ignore label index
+            # if the new label name is not in the target class names, map to the ignore label index
             if new_box3d_label_name in self.label_index_remapper:
                 new_box3d_label_index = self.label_index_remapper[new_box3d_label_name]
             else:
