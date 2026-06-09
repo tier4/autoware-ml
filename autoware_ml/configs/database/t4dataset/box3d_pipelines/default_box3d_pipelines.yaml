@@ -16,6 +16,18 @@
   proximity_distance_threshold: 1.0
   class_names: ${database.class_names}
 
+# Second ramapping, to remap remaining trailers to trucks
+- _target_: autoware_ml.databases.box3d_pipelines.box3d_label_remapper.Box3DLabelRemapper
+  _convert_: all
+
+  label_remapper:
+    trailer: truck
+    vehicle.trailer: truck
+    semi_trailer: truck
+
+  class_names: ${database.class_names}
+  ignore_label_index: ${database.ignore_label_index}
+
 - _target_: autoware_ml.databases.box3d_pipelines.box3d_velocity_clip.Box3DVelocityNormClip
   _convert_: all
 

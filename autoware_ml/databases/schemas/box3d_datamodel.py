@@ -118,16 +118,16 @@ class Box3DDataModel(BaseModel, DataModelInterface):
 
     def create_new_datamodel(
         self,
-        box3d_params: npt.NDArray[np.float32] | None,
-        box3d_instance_id: str | None,
-        box3d_dataset_label_name: str | None,
-        box3d_label_name: str | None,
-        box3d_label_index: int | None,
-        box3d_num_lidar_pointclouds: int | None,
-        box3d_num_radar_pointclouds: int | None,
-        box3d_valid: bool | None,
-        box3d_attributes: Set[str] | None,
-        box3d_coordinate: str | None,
+        box3d_params: npt.NDArray[np.float32] | None = None,
+        box3d_instance_id: str | None = None,
+        box3d_dataset_label_name: str | None = None,
+        box3d_label_name: str | None = None,
+        box3d_label_index: int | None = None,
+        box3d_num_lidar_pointclouds: int | None = None,
+        box3d_num_radar_pointclouds: int | None = None,
+        box3d_valid: bool | None = None,
+        box3d_attributes: Set[str] | None = None,
+        box3d_coordinate: str | None = None,
     ) -> Box3DDataModel:
         """
         Create a new Boxes3DDataModel object with the given attributes.

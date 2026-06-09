@@ -7,6 +7,7 @@ from types import MappingProxyType
 
 import numpy as np
 import numpy.typing as npt
+from shapely.geometry import Polygon
 
 from autoware_ml.common.enums.enums import Box3DFieldIndex
 from autoware_ml.databases.box3d_pipelines.box3d_pipeline import Box3DPipeline
@@ -84,14 +85,13 @@ class Box3DMerger(Box3DPipeline):
         # Compute corners for two boxes
         polygons = []
         for box3d in [first_box3d, second_box3d]:
-            x, y, length, width, yaw = box3d[
-                Box3DFieldIndex.X,
-                Box3DFieldIndex.Y,
-                Box3DFieldIndex.LENGTH,
-                Box3DFieldIndex.WIDTH,
-                Box3DFieldIndex.YAW,
-            ]
-
+            x, y, length, width, yaw = (
+                box3d[Box3DFieldIndex.X],
+                box3d[Box3DFieldIndex.Y],
+                box3d[Box3DFieldIndex.LENGTH],
+                box3d[Box3DFieldIndex.WIDTH],
+                box3d[Box3DFieldIndex.YAW],
+            )
             cos_yaw = np.cos(yaw)
             sin_yaw = np.sin(yaw)
 
@@ -120,7 +120,9 @@ class Box3DMerger(Box3DPipeline):
             )
             polygons.append(corners)
 
-        return polygons[0].intersects(polygons[1])
+        polygon_1 = Polygon(polygons[0])
+        polygon_2 = Polygon(polygons[1])
+        return polygon_1.intersects(polygon_2)
 
     def _check_boxes_proximity(
         self, first_box3d: npt.NDArray[np.float32], second_box3d: npt.NDArray[np.float32]
@@ -139,13 +141,13 @@ class Box3DMerger(Box3DPipeline):
         front_centers = []
         back_centers = []
         for box3d in [first_box3d, second_box3d]:
-            x, y, z, length, yaw = box3d[
-                Box3DFieldIndex.X,
-                Box3DFieldIndex.Y,
-                Box3DFieldIndex.Z,
-                Box3DFieldIndex.LENGTH,
-                Box3DFieldIndex.YAW,
-            ]
+            x, y, z, length, yaw = (
+                box3d[Box3DFieldIndex.X],
+                box3d[Box3DFieldIndex.Y],
+                box3d[Box3DFieldIndex.Z],
+                box3d[Box3DFieldIndex.LENGTH],
+                box3d[Box3DFieldIndex.YAW],
+            )
 
             front_center = np.array([x + length / 2 * np.cos(yaw), y + length / 2 * np.sin(yaw), z])
             back_center = np.array([x - length / 2 * np.cos(yaw), y - length / 2 * np.sin(yaw), z])
@@ -179,7 +181,6 @@ class Box3DMerger(Box3DPipeline):
         """
         # {target_class: [(source_box_index, source_box_index), ...]}
         matched_pairs = {target_label: [] for target_label in self.target_labels.keys()}
-
         for target_label, source_labels in self.target_labels.items():
             pairs = []
             first_box3d_indices = [
@@ -196,10 +197,10 @@ class Box3DMerger(Box3DPipeline):
             first_box3d_fields = boxes3d_params[first_box3d_indices]
             second_box3d_fields = boxes3d_params[second_box3d_indices]
 
-            for first_box3d_index, first_box3d_field in enumerate(
+            for first_box3d_index, first_box3d_field in zip(
                 first_box3d_indices, first_box3d_fields
             ):
-                for second_box3d_index, second_box3d_field in enumerate(
+                for second_box3d_index, second_box3d_field in zip(
                     second_box3d_indices, second_box3d_fields
                 ):
                     if self._check_boxes_overlap(
@@ -245,10 +246,9 @@ class Box3DMerger(Box3DPipeline):
 
         # 1) Match boxes based on the target labels and source labels
         matched_pairs = self.match_boxes_3d(
-            boxes3d_params=[box3d.box3d_params for box3d in boxes3d_datamodel],
+            boxes3d_params=np.asarray([box3d.box3d_params for box3d in boxes3d_datamodel]),
             boxes3d_label_names=[box3d.box3d_label_name for box3d in boxes3d_datamodel],
         )
-
         # 2) Merge boxes for each target label
         merged_boxes_3d: Sequence[Box3DDataModel] = []
         merged_indices = set()
@@ -284,10 +284,10 @@ class Box3DMerger(Box3DPipeline):
                     boxes3d_datamodel[box3d_idx_1].box3d_valid
                     and boxes3d_datamodel[box3d_idx_2].box3d_valid
                 )
-                merged_box3d_attributes = set(
-                    boxes3d_datamodel[box3d_idx_1].box3d_attributes
-                    + boxes3d_datamodel[box3d_idx_2].box3d_attributes
+                merged_box3d_attributes = boxes3d_datamodel[box3d_idx_1].box3d_attributes.union(
+                    boxes3d_datamodel[box3d_idx_2].box3d_attributes
                 )
+                merged_box3d_coordinate = boxes3d_datamodel[box3d_idx_1].box3d_coordinate
 
                 merged_boxes_3d.append(
                     Box3DDataModel(
@@ -300,6 +300,7 @@ class Box3DMerger(Box3DPipeline):
                         box3d_num_radar_pointclouds=merged_box3d_num_radar_pointclouds,
                         box3d_valid=merged_box3d_valid,
                         box3d_attributes=merged_box3d_attributes,
+                        box3d_coordinate=merged_box3d_coordinate,
                     )
                 )
                 merged_indices.add(box3d_idx_1)
@@ -381,13 +382,13 @@ class Box3DExtendLongerMerger(Box3DMerger):
           Tuple[np.ndarray, np.ndarray, np.ndarray, float, float]: Center, face1 center, face2 center, length, width.
         """
 
-        x, y, length, width, yaw = box[
-            Box3DFieldIndex.X,
-            Box3DFieldIndex.Y,
-            Box3DFieldIndex.LENGTH,
-            Box3DFieldIndex.WIDTH,
-            Box3DFieldIndex.YAW,
-        ]
+        x, y, length, width, yaw = (
+            box[Box3DFieldIndex.X],
+            box[Box3DFieldIndex.Y],
+            box[Box3DFieldIndex.LENGTH],
+            box[Box3DFieldIndex.WIDTH],
+            box[Box3DFieldIndex.YAW],
+        )
         center = np.array([x, y])
         if length >= width:
             face1_center = np.array(
@@ -430,7 +431,6 @@ class Box3DExtendLongerMerger(Box3DMerger):
         Returns:
           npt.NDArray[np.float32]: Merged 3D bounding box, please check Box3DFieldIndex for the field indices.
         """
-
         # Identify the centers and faces of both boxes
         box1_center, box1_face1, box1_face2, length_1, width_1 = self._get_box_faces(first_box3d)
         box2_center, box2_face1, box2_face2, length_2, width_2 = self._get_box_faces(second_box3d)

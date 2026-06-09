@@ -56,12 +56,12 @@ class Box3DVelocityNormClip(Box3DPipeline):
         # Assign velocity_x and velocity_y back to the boxes3d_datamodel
         new_boxes3d_datamodel = []
         for box3d_datamodel, velocity in zip(boxes3d_datamodel, ground_plane_velocities):
-            new_box3d_array = box3d_datamodel.box_3d_array
-            new_box3d_array[Box3DFieldIndex.VELOCITY_X] = velocity[0]
-            new_box3d_array[Box3DFieldIndex.VELOCITY_Y] = velocity[1]
+            new_box3d_params = box3d_datamodel.box3d_params
+            new_box3d_params[Box3DFieldIndex.VELOCITY_X] = velocity[0]
+            new_box3d_params[Box3DFieldIndex.VELOCITY_Y] = velocity[1]
 
             new_box3d = box3d_datamodel.create_new_datamodel(
-                box3d_params=new_box3d_array,
+                box3d_params=new_box3d_params,
             )
             new_boxes3d_datamodel.append(new_box3d)
 

@@ -216,12 +216,10 @@ class T4RecordsGenerator:
             # Get attributes from the sample annotation record
             box_3d_attributes = set()
             for attribute_token in sample_annotation_record.attribute_tokens:
-                attribute_records: Sequence[Attribute] = self.t4_devkit_dataset.get(
+                attribute_record: Attribute = self.t4_devkit_dataset.get(
                     SchemaName.ATTRIBUTE, attribute_token
                 )
-                box_3d_attributes = set(
-                    [attribute_record.name for attribute_record in attribute_records]
-                )
+                box_3d_attributes.add(attribute_record.name)
 
             boxes_3d_datamodel.append(
                 Box3DDataModel(
@@ -231,7 +229,7 @@ class T4RecordsGenerator:
                     box3d_label_name=box3d.semantic_label.name,
                     # Initially, set all label indices to the ignore label index
                     box3d_label_index=self.ignore_label_index,
-                    box3d_num_lidar_pointclouds=box3d.num_lidar_points,
+                    box3d_num_lidar_pointclouds=box3d.num_points,
                     box3d_num_radar_pointclouds=sample_annotation_record.num_radar_pts,
                     box3d_valid=box3d_valid,
                     box3d_attributes=box_3d_attributes,
@@ -583,11 +581,14 @@ class T4RecordsGenerator:
         )
 
         # 2) Extract lidar information from the T4Dataset
-        lidar_frame_data_model = self._extract_lidar_frame(
+        lidar_frame_data_model, box3d = self._extract_lidar_frame(
             sample=sample, lidar_channel_name=lidar_channel_name, sample_index=sample_index
         )
 
-        # 3) Extract multi-sweep lidar information from the T4Dataset
+        # 3) Extract boxes 3D annotations and process them with the pipeline
+        boxes_3d_datamodel = self._extract_boxes_3d_annotations(sample=sample, boxes_3d=box3d)
+
+        # 4) Extract multi-sweep lidar information from the T4Dataset
         lidar_sweep_data_models = self._extract_lidar_sweeps(
             lidar_frame_data_model=lidar_frame_data_model
         )
@@ -606,4 +607,5 @@ class T4RecordsGenerator:
             lidar_frame_data_models=lidar_frame_data_models,
             lidar_source_data_models=lidar_source_data_models,
             category_mapping_data_model=category_mapping_data_model,
+            boxes_3d_datamodel=boxes_3d_datamodel,
         )

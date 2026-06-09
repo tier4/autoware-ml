@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from enum import Enum
+from enum import Enum, IntEnum
 
 
 class Modality(str, Enum):
@@ -60,7 +60,7 @@ class LidarChannel(str, Enum):
     LIDAR_CONCAT = "LIDAR_CONCAT"
 
 
-class Box3DFieldIndex(Enum):
+class Box3DFieldIndex(IntEnum):
     """
     Box 3D field index.
 

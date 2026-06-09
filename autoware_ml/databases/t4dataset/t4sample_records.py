@@ -16,6 +16,7 @@ from typing import Sequence
 
 from pydantic import BaseModel, ConfigDict
 
+from autoware_ml.databases.schemas.box3d_datamodel import Box3DDataModel
 from autoware_ml.databases.schemas.frame_basic_metadata import FrameBasicMetadata
 from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord
 from autoware_ml.databases.schemas.lidar_frames import LidarFrameDataModel
@@ -32,6 +33,7 @@ class T4SampleRecord(BaseModel):
     lidar_frame_data_models: Sequence[LidarFrameDataModel]
     lidar_source_data_models: Sequence[LidarSourceDataModel]
     category_mapping_data_model: CategoryMappingDataModel
+    boxes_3d_datamodel: Sequence[Box3DDataModel]
 
     def to_dataset_record(self) -> DatasetRecord:
         """
@@ -52,4 +54,5 @@ class T4SampleRecord(BaseModel):
             lidar_frames=self.lidar_frame_data_models,
             lidar_sources=self.lidar_source_data_models,
             category_mapping=self.category_mapping_data_model,
+            boxes_3d=self.boxes_3d_datamodel,
         )

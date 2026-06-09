@@ -51,6 +51,8 @@ class T4RecordsGeneratorWorkerParams:
     database_root_path: str
     scenario_data: ScenarioData
     lidar_pointcloud_num_features: int
+    ignore_label_index: int
+    box3d_pipelines: Sequence[Box3DPipeline]
 
 
 def _apply_t4_records_generator(
@@ -72,6 +74,8 @@ def _apply_t4_records_generator(
         sample_steps=t4_records_generator_worker_params.scenario_data.sample_steps,
         max_sweeps=t4_records_generator_worker_params.scenario_data.max_sweeps,
         lidar_pointcloud_num_features=t4_records_generator_worker_params.lidar_pointcloud_num_features,
+        ignore_label_index=t4_records_generator_worker_params.ignore_label_index,
+        box3d_pipelines=t4_records_generator_worker_params.box3d_pipelines,
     )
     # Generate DatasetRecords
     return t4_records_generator.generate_dataset_records()
@@ -230,6 +234,8 @@ class T4Dataset(BaseDatabase):
                 database_root_path=self._database_root_path,
                 scenario_data=scenario,
                 lidar_pointcloud_num_features=self._lidar_pointcloud_num_features,
+                ignore_label_index=self._ignore_label_index,
+                box3d_pipelines=self._box3d_pipelines,
             )
             for scenario in scenario_data.values()
         ]
