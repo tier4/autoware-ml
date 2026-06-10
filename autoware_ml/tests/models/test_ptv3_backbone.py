@@ -21,6 +21,7 @@ from autoware_ml.models.segmentation3d.backbones.ptv3 import (
     build_serialized_pooling_meta,
 )
 from autoware_ml.models.segmentation3d.ptv3 import PTv3SegmentationModel
+from autoware_ml.models.segmentation3d.ptv3_base import build_ptv3_backbone_dynamic_axes
 
 
 def test_serialized_attention_requires_supported_flash_configuration() -> None:
@@ -343,6 +344,46 @@ def test_point_serialization_accepts_explicit_depth_override() -> None:
 
     assert point["serialized_depth"].item() == 4
     assert point["serialized_code"].shape == (2, 2)
+
+
+def test_ptv3_backbone_dynamic_axes_follow_generated_pooling_inputs() -> None:
+    input_names = [
+        "grid_coord",
+        "feat",
+        "serialized_code",
+        "serialized_pooling_0_indices",
+        "serialized_pooling_0_indptr",
+        "serialized_pooling_0_cluster",
+        "serialized_pooling_0_head_indices",
+        "serialized_pooling_0_grid_coord",
+        "serialized_pooling_0_serialized_order",
+        "serialized_pooling_0_serialized_inverse",
+        "serialized_pooling_1_grid_coord",
+    ]
+
+    dynamic_axes = build_ptv3_backbone_dynamic_axes(input_names)
+
+    assert dynamic_axes["grid_coord"] == {0: "num_voxels"}
+    assert dynamic_axes["feat"] == {0: "num_voxels"}
+    assert dynamic_axes["serialized_code"] == {1: "num_voxels"}
+    assert dynamic_axes["serialized_pooling_0_indices"] == {0: "serialized_pooling_0_in_voxels"}
+    assert dynamic_axes["serialized_pooling_0_indptr"] == {
+        0: "serialized_pooling_0_out_voxels_plus_one"
+    }
+    assert dynamic_axes["serialized_pooling_0_cluster"] == {0: "serialized_pooling_0_in_voxels"}
+    assert dynamic_axes["serialized_pooling_0_head_indices"] == {
+        0: "serialized_pooling_0_out_voxels"
+    }
+    assert dynamic_axes["serialized_pooling_0_grid_coord"] == {0: "serialized_pooling_0_out_voxels"}
+    assert dynamic_axes["serialized_pooling_0_serialized_order"] == {
+        1: "serialized_pooling_0_out_voxels"
+    }
+    assert dynamic_axes["serialized_pooling_0_serialized_inverse"] == {
+        1: "serialized_pooling_0_out_voxels"
+    }
+    assert dynamic_axes["serialized_pooling_1_grid_coord"] == {0: "serialized_pooling_1_out_voxels"}
+    assert dynamic_axes["point_feat"] == {0: "num_voxels"}
+    assert dynamic_axes["point_grid_coord"] == {0: "num_voxels"}
 
 
 def test_serialized_pooling_export_mode_uses_precomputed_metadata(monkeypatch) -> None:

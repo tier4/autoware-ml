@@ -20,6 +20,9 @@ from autoware_ml.ops.indexing.operators import argsort
 from autoware_ml.utils.point_cloud.structures import bit_length_tensor, invert_permutation
 
 SERIALIZED_POOLING_FIELDS = tuple(field.name for field in fields(SerializedPoolingMeta))
+SERIALIZED_POOLING_INPUT_SIZED_FIELDS = frozenset({"indices", "cluster"})
+SERIALIZED_POOLING_OUTPUT_PLUS_ONE_FIELDS = frozenset({"indptr"})
+SERIALIZED_POOLING_ORDER_FIELDS = frozenset({"serialized_order", "serialized_inverse"})
 
 
 class PTv3BaseModel(BaseModel):
@@ -165,6 +168,43 @@ def flatten_serialized_pooling_inputs(
             inputs.append(getattr(meta, field))
             names.append(f"serialized_pooling_{stage_index}_{field}")
     return tuple(inputs), names
+
+
+def _serialized_pooling_dynamic_axis(input_name: str) -> dict[int, str]:
+    _, _, stage_index, field = input_name.split("_", 3)
+    stage_prefix = f"serialized_pooling_{stage_index}"
+    if field in SERIALIZED_POOLING_INPUT_SIZED_FIELDS:
+        return {0: f"{stage_prefix}_in_voxels"}
+    if field in SERIALIZED_POOLING_OUTPUT_PLUS_ONE_FIELDS:
+        return {0: f"{stage_prefix}_out_voxels_plus_one"}
+    if field in SERIALIZED_POOLING_ORDER_FIELDS:
+        return {1: f"{stage_prefix}_out_voxels"}
+    return {0: f"{stage_prefix}_out_voxels"}
+
+
+def build_point_feature_dynamic_axes(tensor_names: Sequence[str]) -> dict[str, dict[int, str]]:
+    """Build dynamic axes for tensors indexed by the decoded point/voxel count."""
+    return {tensor_name: {0: "num_voxels"} for tensor_name in tensor_names}
+
+
+def build_ptv3_input_dynamic_axes(input_names: Sequence[str]) -> dict[str, dict[int, str]]:
+    """Build dynamic axes for generated PTv3 backbone export inputs."""
+    dynamic_axes: dict[str, dict[int, str]] = {}
+    for input_name in input_names:
+        if input_name in {"grid_coord", "feat"}:
+            dynamic_axes[input_name] = {0: "num_voxels"}
+        elif input_name == "serialized_code":
+            dynamic_axes[input_name] = {1: "num_voxels"}
+        elif input_name.startswith("serialized_pooling_"):
+            dynamic_axes[input_name] = _serialized_pooling_dynamic_axis(input_name)
+    return dynamic_axes
+
+
+def build_ptv3_backbone_dynamic_axes(input_names: Sequence[str]) -> dict[str, dict[int, str]]:
+    """Build dynamic axes for the split PTv3 backbone export graph."""
+    dynamic_axes = build_ptv3_input_dynamic_axes(input_names)
+    dynamic_axes.update(build_point_feature_dynamic_axes(("point_feat", "point_grid_coord")))
+    return dynamic_axes
 
 
 def build_serialized_pooling_export_inputs(

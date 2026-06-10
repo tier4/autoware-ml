@@ -23,6 +23,9 @@ from autoware_ml.models.segmentation3d.ptv3_base import (
     PTv3BaseModel,
     _PTv3BackboneExportModule,
     _run_ptv3_backbone_export,
+    build_point_feature_dynamic_axes,
+    build_ptv3_backbone_dynamic_axes,
+    build_ptv3_input_dynamic_axes,
     build_serialized_pooling_export_inputs,
 )
 from autoware_ml.utils.deploy import ExportSpec
@@ -395,16 +398,18 @@ class PTv3DetectionModel(PTv3BaseModel, Detection3DBaseModel):
             input_args[3],
             *serialized_pooling_inputs,
         )
+        input_param_names = [
+            "grid_coord",
+            "feat",
+            "serialized_code",
+            *serialized_pooling_input_names,
+        ]
         return ExportSpec(
             module=export_module,
             args=export_input_args,
-            input_param_names=[
-                "grid_coord",
-                "feat",
-                "serialized_code",
-                *serialized_pooling_input_names,
-            ],
+            input_param_names=input_param_names,
             output_names=self.get_export_output_names(),
+            dynamic_axes=build_ptv3_input_dynamic_axes(input_param_names),
             supported_stages=self.EXPORT_SUPPORTED_STAGES,
         )
 
@@ -458,6 +463,7 @@ class PTv3DetectionModel(PTv3BaseModel, Detection3DBaseModel):
                 args=backbone_input_args,
                 input_param_names=backbone_input_names,
                 output_names=["point_feat", "point_grid_coord", "point_offset"],
+                dynamic_axes=build_ptv3_backbone_dynamic_axes(backbone_input_names),
                 supported_stages=self.EXPORT_SUPPORTED_STAGES,
             ),
             "det3d_head": ExportSpec(
@@ -465,6 +471,7 @@ class PTv3DetectionModel(PTv3BaseModel, Detection3DBaseModel):
                 args=(point_feat, point_grid_coord, point_offset),
                 input_param_names=["point_feat", "point_grid_coord", "point_offset"],
                 output_names=self.export_output_names,
+                dynamic_axes=build_point_feature_dynamic_axes(("point_feat", "point_grid_coord")),
                 supported_stages=self.EXPORT_SUPPORTED_STAGES,
             ),
         }

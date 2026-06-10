@@ -40,6 +40,10 @@ def test_ptv3_centerhead_build_export_spec_uses_ptv3_inputs() -> None:
     outputs = spec.module(*spec.args)
 
     assert spec.input_param_names == EXPECTED_PTV3_INPUT_NAMES
+    assert spec.dynamic_axes is not None
+    assert spec.dynamic_axes["serialized_pooling_0_indices"] == {
+        0: "serialized_pooling_0_in_voxels"
+    }
     assert spec.output_names == ["heatmap", "reg", "height", "dim", "rot", "vel"]
     assert len(outputs) == 6
     assert outputs[0].shape[:2] == (1, 2)
@@ -58,6 +62,10 @@ def test_ptv3_transhead_build_export_spec_uses_named_detection_outputs() -> None
     outputs = spec.module(*spec.args)
 
     assert spec.input_param_names == EXPECTED_PTV3_INPUT_NAMES
+    assert spec.dynamic_axes is not None
+    assert spec.dynamic_axes["serialized_pooling_0_serialized_order"] == {
+        1: "serialized_pooling_0_out_voxels"
+    }
     assert spec.output_names == [
         "dense_heatmap",
         "query_heatmap_score",
