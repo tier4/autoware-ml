@@ -88,12 +88,71 @@ deploy:
     do_constant_folding: false
     modules:
       backbone:
-        input_names: [grid_coord, feat, serialized_code]
+        input_names:
+          - grid_coord
+          - feat
+          - serialized_code
+          - serialized_pooling_0_indices
+          - serialized_pooling_0_indptr
+          - serialized_pooling_0_cluster
+          - serialized_pooling_0_head_indices
+          - serialized_pooling_0_grid_coord
+          - serialized_pooling_0_serialized_order
+          - serialized_pooling_0_serialized_inverse
+          - serialized_pooling_1_indices
+          - serialized_pooling_1_indptr
+          - serialized_pooling_1_cluster
+          - serialized_pooling_1_head_indices
+          - serialized_pooling_1_grid_coord
+          - serialized_pooling_1_serialized_order
+          - serialized_pooling_1_serialized_inverse
+          - serialized_pooling_2_indices
+          - serialized_pooling_2_indptr
+          - serialized_pooling_2_cluster
+          - serialized_pooling_2_head_indices
+          - serialized_pooling_2_grid_coord
+          - serialized_pooling_2_serialized_order
+          - serialized_pooling_2_serialized_inverse
+          - serialized_pooling_3_indices
+          - serialized_pooling_3_indptr
+          - serialized_pooling_3_cluster
+          - serialized_pooling_3_head_indices
+          - serialized_pooling_3_grid_coord
+          - serialized_pooling_3_serialized_order
+          - serialized_pooling_3_serialized_inverse
         output_names: [point_feat, point_grid_coord, point_offset]
         dynamic_axes:
           grid_coord: {0: num_voxels}
           feat: {0: num_voxels}
           serialized_code: {1: num_voxels}
+          serialized_pooling_0_indices: {0: serialized_pooling_0_in_voxels}
+          serialized_pooling_0_indptr: {0: serialized_pooling_0_out_voxels_plus_one}
+          serialized_pooling_0_cluster: {0: serialized_pooling_0_in_voxels}
+          serialized_pooling_0_head_indices: {0: serialized_pooling_0_out_voxels}
+          serialized_pooling_0_grid_coord: {0: serialized_pooling_0_out_voxels}
+          serialized_pooling_0_serialized_order: {1: serialized_pooling_0_out_voxels}
+          serialized_pooling_0_serialized_inverse: {1: serialized_pooling_0_out_voxels}
+          serialized_pooling_1_indices: {0: serialized_pooling_1_in_voxels}
+          serialized_pooling_1_indptr: {0: serialized_pooling_1_out_voxels_plus_one}
+          serialized_pooling_1_cluster: {0: serialized_pooling_1_in_voxels}
+          serialized_pooling_1_head_indices: {0: serialized_pooling_1_out_voxels}
+          serialized_pooling_1_grid_coord: {0: serialized_pooling_1_out_voxels}
+          serialized_pooling_1_serialized_order: {1: serialized_pooling_1_out_voxels}
+          serialized_pooling_1_serialized_inverse: {1: serialized_pooling_1_out_voxels}
+          serialized_pooling_2_indices: {0: serialized_pooling_2_in_voxels}
+          serialized_pooling_2_indptr: {0: serialized_pooling_2_out_voxels_plus_one}
+          serialized_pooling_2_cluster: {0: serialized_pooling_2_in_voxels}
+          serialized_pooling_2_head_indices: {0: serialized_pooling_2_out_voxels}
+          serialized_pooling_2_grid_coord: {0: serialized_pooling_2_out_voxels}
+          serialized_pooling_2_serialized_order: {1: serialized_pooling_2_out_voxels}
+          serialized_pooling_2_serialized_inverse: {1: serialized_pooling_2_out_voxels}
+          serialized_pooling_3_indices: {0: serialized_pooling_3_in_voxels}
+          serialized_pooling_3_indptr: {0: serialized_pooling_3_out_voxels_plus_one}
+          serialized_pooling_3_cluster: {0: serialized_pooling_3_in_voxels}
+          serialized_pooling_3_head_indices: {0: serialized_pooling_3_out_voxels}
+          serialized_pooling_3_grid_coord: {0: serialized_pooling_3_out_voxels}
+          serialized_pooling_3_serialized_order: {1: serialized_pooling_3_out_voxels}
+          serialized_pooling_3_serialized_inverse: {1: serialized_pooling_3_out_voxels}
           point_feat: {0: num_voxels}
           point_grid_coord: {0: num_voxels}
       seg3d_head:

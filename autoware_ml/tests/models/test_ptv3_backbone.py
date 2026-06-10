@@ -17,6 +17,8 @@ from autoware_ml.models.segmentation3d.backbones.ptv3 import (
     PointSequential,
     PointTransformerV3Backbone,
     SerializedAttention,
+    SerializedPooling,
+    build_serialized_pooling_meta,
 )
 from autoware_ml.models.segmentation3d.ptv3 import PTv3SegmentationModel
 
@@ -341,3 +343,85 @@ def test_point_serialization_accepts_explicit_depth_override() -> None:
 
     assert point["serialized_depth"].item() == 4
     assert point["serialized_code"].shape == (2, 2)
+
+
+def test_serialized_pooling_export_mode_uses_precomputed_metadata(monkeypatch) -> None:
+    """Export-mode pooling should match train-time grouping without in-graph Unique."""
+    monkeypatch.setattr(Point, "sparsify", lambda self, pad=96: None)
+    torch.manual_seed(0)
+
+    grid_coord = torch.tensor(
+        [
+            [0, 0, 0],
+            [1, 0, 0],
+            [0, 1, 0],
+            [1, 1, 0],
+            [2, 2, 1],
+            [3, 2, 1],
+            [2, 3, 1],
+            [3, 3, 1],
+        ],
+        dtype=torch.int32,
+    )
+    feat = torch.randn(grid_coord.shape[0], 6)
+
+    def make_point() -> Point:
+        point = Point(
+            {
+                "coord": grid_coord.to(torch.float32),
+                "grid_coord": grid_coord,
+                "feat": feat,
+                "batch": torch.zeros(grid_coord.shape[0], dtype=torch.long),
+                "offset": torch.tensor([grid_coord.shape[0]], dtype=torch.long),
+                "sparse_shape": torch.tensor([16, 16, 16], dtype=torch.long),
+            }
+        )
+        point.serialization(("z", "z-trans"), shuffle_orders=False, depth=torch.tensor(6))
+        return point
+
+    train_module = SerializedPooling(
+        6,
+        8,
+        stride=2,
+        shuffle_orders=False,
+    )
+    export_module = SerializedPooling(
+        6,
+        8,
+        stride=2,
+        shuffle_orders=False,
+        export_stage_index=0,
+    )
+    train_module.norm = nn.Identity()
+    train_module.act = nn.Identity()
+    export_module.norm = nn.Identity()
+    export_module.act = nn.Identity()
+    export_module.export_mode = True
+    export_module.load_state_dict(train_module.state_dict())
+
+    train_out = train_module(make_point())
+    export_point = make_point()
+    meta, _ = build_serialized_pooling_meta(
+        export_point.grid_coord,
+        export_point.serialized_code,
+        export_point.serialized_order,
+        stride=2,
+    )
+    export_point["serialized_pooling"] = [meta]
+    export_out = export_module(export_point)
+
+    for key in (
+        "feat",
+        "grid_coord",
+        "serialized_order",
+        "serialized_inverse",
+        "batch",
+        "sparse_shape",
+        "pooling_inverse",
+    ):
+        left = train_out[key]
+        right = export_out[key]
+        if left.dtype.is_floating_point:
+            torch.testing.assert_close(left, right, msg=f"Mismatch for {key}")
+        else:
+            assert torch.equal(left, right), f"Mismatch for {key}"

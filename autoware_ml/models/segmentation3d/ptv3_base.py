@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import fields
 from typing import Any
 
 import torch
@@ -10,9 +11,15 @@ import torch.nn as nn
 from torch.onnx.operators import shape_as_tensor
 
 from autoware_ml.models.base import BaseModel
-from autoware_ml.models.segmentation3d.backbones.ptv3 import PointTransformerV3Backbone
+from autoware_ml.models.segmentation3d.backbones.ptv3 import (
+    PointTransformerV3Backbone,
+    SerializedPoolingMeta,
+    build_serialized_pooling_meta,
+)
 from autoware_ml.ops.indexing.operators import argsort
 from autoware_ml.utils.point_cloud.structures import bit_length_tensor, invert_permutation
+
+SERIALIZED_POOLING_FIELDS = tuple(field.name for field in fields(SerializedPoolingMeta))
 
 
 class PTv3BaseModel(BaseModel):
@@ -129,6 +136,62 @@ class PTv3BaseModel(BaseModel):
         return self.backbone.prepare_for_export(self.EXPORT_ORDER)
 
 
+def build_serialized_pooling_metadata(
+    grid_coord: torch.Tensor,
+    serialized_code: torch.Tensor,
+    serialized_order: torch.Tensor,
+    strides: Sequence[int],
+) -> list[SerializedPoolingMeta]:
+    """Build serialized-pooling metadata for every encoder pooling stage."""
+    metadata = []
+    for stride in strides:
+        meta, serialized_code = build_serialized_pooling_meta(
+            grid_coord, serialized_code, serialized_order, stride
+        )
+        metadata.append(meta)
+        grid_coord = meta.grid_coord
+        serialized_order = meta.serialized_order
+    return metadata
+
+
+def flatten_serialized_pooling_inputs(
+    metadata: Sequence[SerializedPoolingMeta],
+) -> tuple[tuple[torch.Tensor, ...], list[str]]:
+    """Flatten per-stage metadata into ONNX args and input names."""
+    inputs: list[torch.Tensor] = []
+    names: list[str] = []
+    for stage_index, meta in enumerate(metadata):
+        for field in SERIALIZED_POOLING_FIELDS:
+            inputs.append(getattr(meta, field))
+            names.append(f"serialized_pooling_{stage_index}_{field}")
+    return tuple(inputs), names
+
+
+def build_serialized_pooling_export_inputs(
+    grid_coord: torch.Tensor,
+    serialized_code: torch.Tensor,
+    serialized_order: torch.Tensor,
+    strides: Sequence[int],
+) -> tuple[tuple[torch.Tensor, ...], list[str]]:
+    """Build flattened serialized-pooling sample tensors and their ONNX input names."""
+    return flatten_serialized_pooling_inputs(
+        build_serialized_pooling_metadata(grid_coord, serialized_code, serialized_order, strides)
+    )
+
+
+def make_serialized_pooling_from_flat_inputs(
+    serialized_pooling_inputs: tuple[torch.Tensor, ...],
+) -> list[SerializedPoolingMeta]:
+    """Reconstruct per-stage metadata objects from flattened ONNX graph inputs."""
+    num_fields = len(SERIALIZED_POOLING_FIELDS)
+    if len(serialized_pooling_inputs) % num_fields != 0:
+        raise ValueError("serialized-pooling inputs are not divisible by metadata field count.")
+    return [
+        SerializedPoolingMeta(*serialized_pooling_inputs[index : index + num_fields])
+        for index in range(0, len(serialized_pooling_inputs), num_fields)
+    ]
+
+
 def _run_ptv3_backbone_export(
     backbone: PointTransformerV3Backbone,
     grid_coord: torch.Tensor,
@@ -136,6 +199,7 @@ def _run_ptv3_backbone_export(
     serialized_depth: torch.Tensor,
     serialized_code: torch.Tensor,
     sparse_shape: torch.Tensor,
+    *serialized_pooling_inputs: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Run the shared tensor-only PTv3 backbone export path."""
     point_count = shape_as_tensor(grid_coord)[:1].to(grid_coord.device)
@@ -151,6 +215,9 @@ def _run_ptv3_backbone_export(
             "serialized_code": serialized_code,
             "serialized_order": serialized_order,
             "serialized_inverse": serialized_inverse,
+            "serialized_pooling": make_serialized_pooling_from_flat_inputs(
+                serialized_pooling_inputs
+            ),
             "sparse_shape": sparse_shape,
         }
     )
@@ -183,6 +250,7 @@ class _PTv3BackboneExportModule(nn.Module):
         grid_coord: torch.Tensor,
         feat: torch.Tensor,
         serialized_code: torch.Tensor,
+        *serialized_pooling_inputs: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Run backbone and return raw point features with coordinates and batch offsets."""
         return _run_ptv3_backbone_export(
@@ -192,6 +260,7 @@ class _PTv3BackboneExportModule(nn.Module):
             self._serialized_depth,
             serialized_code,
             self._sparse_shape,
+            *serialized_pooling_inputs,
         )
 
 

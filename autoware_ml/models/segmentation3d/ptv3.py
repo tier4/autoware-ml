@@ -34,6 +34,7 @@ from autoware_ml.models.segmentation3d.ptv3_base import (
     PTv3BaseModel,
     _PTv3BackboneExportModule,
     _PTv3SegHeadExportModule,
+    build_serialized_pooling_export_inputs,
     _run_ptv3_backbone_export,
 )
 from autoware_ml.utils.deploy import ExportSpec
@@ -69,6 +70,7 @@ class _PTv3ExportModule(nn.Module):
         grid_coord: torch.Tensor,
         feat: torch.Tensor,
         serialized_code: torch.Tensor,
+        *serialized_pooling_inputs: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Run export-time inference on serialized point inputs.
 
@@ -87,6 +89,7 @@ class _PTv3ExportModule(nn.Module):
             self._serialized_depth,
             serialized_code,
             self._sparse_shape,
+            *serialized_pooling_inputs,
         )
         point_logits = self.seg3d_head(point_feat)
         pred_probs = torch.softmax(point_logits, dim=1)
@@ -294,15 +297,29 @@ class PTv3SegmentationModel(PTv3BaseModel):
         """
         sparse_shape, serialization_depth = self._compute_export_geometry(batch)
         point, _ = serialize_point_cloud_batch(batch, self.EXPORT_ORDER, serialization_depth)
+        serialized_pooling_inputs, serialized_pooling_input_names = (
+            build_serialized_pooling_export_inputs(
+                point["grid_coord"],
+                point["serialized_code"],
+                point["serialized_order"],
+                self.backbone.stride,
+            )
+        )
         input_args = (
             batch["grid_coord"],
             batch["feat"],
             point["serialized_code"],
+            *serialized_pooling_inputs,
         )
         return ExportSpec(
             module=self._build_export_module(sparse_shape, serialization_depth),
             args=input_args,
-            input_param_names=["grid_coord", "feat", "serialized_code"],
+            input_param_names=[
+                "grid_coord",
+                "feat",
+                "serialized_code",
+                *serialized_pooling_input_names,
+            ],
             output_names=self.get_export_output_names(),
             supported_stages=self.EXPORT_SUPPORTED_STAGES,
         )
@@ -310,8 +327,29 @@ class PTv3SegmentationModel(PTv3BaseModel):
     def build_export_specs(self, batch: Mapping[str, torch.Tensor]) -> dict[str, ExportSpec]:
         """Build split PTv3 segmentation ONNX export specs for backbone and segmentation head."""
         sparse_shape, serialization_depth = self._compute_export_geometry(batch)
-        _, input_args = serialize_point_cloud_batch(batch, self.EXPORT_ORDER, serialization_depth)
-        input_args_no_depth = (input_args[0], input_args[1], input_args[3])
+        point, input_args = serialize_point_cloud_batch(
+            batch, self.EXPORT_ORDER, serialization_depth
+        )
+        serialized_pooling_inputs, serialized_pooling_input_names = (
+            build_serialized_pooling_export_inputs(
+                point["grid_coord"],
+                point["serialized_code"],
+                point["serialized_order"],
+                self.backbone.stride,
+            )
+        )
+        backbone_input_args = (
+            input_args[0],
+            input_args[1],
+            input_args[3],
+            *serialized_pooling_inputs,
+        )
+        backbone_input_names = [
+            "grid_coord",
+            "feat",
+            "serialized_code",
+            *serialized_pooling_input_names,
+        ]
 
         backbone_module = _PTv3BackboneExportModule(
             backbone=self._prepare_backbone_export(),
@@ -319,15 +357,15 @@ class PTv3SegmentationModel(PTv3BaseModel):
             serialized_depth=serialization_depth,
         ).eval()
         with torch.no_grad():
-            point_feat, point_grid_coord, point_offset = backbone_module(*input_args_no_depth)
+            point_feat, point_grid_coord, point_offset = backbone_module(*backbone_input_args)
 
         seg3d_head_module = _PTv3SegHeadExportModule(deepcopy(self.seg3d_head).eval()).eval()
 
         return {
             "backbone": ExportSpec(
                 module=backbone_module,
-                args=input_args_no_depth,
-                input_param_names=["grid_coord", "feat", "serialized_code"],
+                args=backbone_input_args,
+                input_param_names=backbone_input_names,
                 output_names=["point_feat", "point_grid_coord", "point_offset"],
                 supported_stages=self.EXPORT_SUPPORTED_STAGES,
             ),
