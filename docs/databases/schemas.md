@@ -116,7 +116,7 @@ Each list entry is a `LidarSourceDataModel` describing one LiDAR sensor in the s
 | `lidar_frames.py`         | `LidarFrameDatasetSchema`      | `LidarFrameDataModel`      | Point cloud paths, poses, and sweep transforms          |
 | `lidar_sources.py`        | `LidarSourceDatasetSchema`     | `LidarSourceDataModel`     | LiDAR sensor channel name, token, and extrinsics        |
 | `category_mapping.py`     | `CategoryMappingDatasetSchema` | `CategoryMappingDataModel` | Parallel lists of category names and indices            |
-| `box3d_datamodel.py`      | `Box3DDatasetSchema`           | `Box3DDataModel`           | Per-object 3D box parameters and metadata               |
+| `box3d_schemas.py`        | `Box3DDatasetSchema`           | `Box3DDataModel`           | Per-object 3D box parameters and metadata               |
 | `frame_basic_metadata.py` | —                              | `FrameBasicMetadata`       | Shared per-frame metadata used during record generation |
 
 ### `boxes_3d` struct fields
@@ -158,5 +158,5 @@ See [T4Dataset](t4dataset.md) for a concrete example of how these schemas are po
 | `autoware_ml/databases/schemas/lidar_frames.py`         | LiDAR frame struct schema and data model                      |
 | `autoware_ml/databases/schemas/lidar_sources.py`        | LiDAR source struct schema and data model                     |
 | `autoware_ml/databases/schemas/category_mapping.py`     | Category mapping struct schema and data model                 |
-| `autoware_ml/databases/schemas/box3d_datamodel.py`      | 3D box struct schema and data model                           |
+| `autoware_ml/databases/schemas/box3d_schemas.py`        | 3D box struct schema and data model                           |
 | `autoware_ml/databases/schemas/frame_basic_metadata.py` | Shared per-frame metadata model                               |

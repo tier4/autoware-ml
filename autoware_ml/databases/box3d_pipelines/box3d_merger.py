@@ -59,10 +59,10 @@ class Box3DMerger(Box3DPipeline):
         merged_boxes_3d, merged_indices = self.merge(boxes3d_data_model=boxes3d_data_model)
 
         new_boxes3d_data_model = []
-        for index, box3d_datamodel in enumerate(boxes3d_data_model):
+        for index, box3d_data_model in enumerate(boxes3d_data_model):
             # Remove the merged boxes from the boxes3d_data_model
             if index not in merged_indices:
-                new_boxes3d_data_model.append(box3d_datamodel)
+                new_boxes3d_data_model.append(box3d_data_model)
 
         # Merge the merged boxes with the boxes3d_data_model
         new_boxes3d_data_model.extend(merged_boxes_3d)

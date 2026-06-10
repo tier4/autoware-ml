@@ -126,15 +126,6 @@ Each row corresponds to one `DatasetRecord` (a frozen Pydantic model). The Parqu
 | `autoware_ml/databases/t4dataset/t4records_generator.py` | T4 annotation reading and per-sample extraction                  |
 | `autoware_ml/databases/t4dataset/t4sample_records.py`    | Intermediate `T4SampleRecord` to unified dataset row conversion  |
 | `autoware_ml/databases/t4dataset/t4dataset.py`           | T4 database orchestration with parallel processing               |
-| `autoware_ml/databases/scenarios.py`                     | Base scenario models (`Scenarios`, `ScenarioData`)               |
-| `autoware_ml/databases/schemas/dataset_schemas.py`       | Unified dataset row model and `DatasetTableSchema` definitions   |
-| `autoware_ml/databases/schemas/lidar_frames.py`          | LiDAR frame struct schema and data model                         |
-| `autoware_ml/databases/schemas/lidar_sources.py`         | LiDAR source struct schema and data model                        |
-| `autoware_ml/databases/schemas/category_mapping.py`      | Category mapping struct schema and data model                    |
-| `autoware_ml/databases/schemas/box3d_datamodel.py`       | 3D box struct schema and data model                              |
-| `autoware_ml/databases/schemas/frame_basic_metadata.py`  | Shared per-frame metadata model                                  |
-| `autoware_ml/databases/base_database.py`                 | Shared `BaseDatabase` implementation                             |
-| `autoware_ml/scripts/generate_dataset.py`                | Hydra entrypoint for dataset generation                          |
 
 ## Acknowledgment
 

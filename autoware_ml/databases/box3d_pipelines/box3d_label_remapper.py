@@ -51,11 +51,11 @@ class Box3DLabelRemapper(Box3DPipeline):
         Remap the label names of the 3D bounding boxes to another label name.
         """
         new_boxes3d_data_model = []
-        for box3d_datamodel in boxes3d_data_model:
-            if box3d_datamodel.box3d_dataset_label_name in self.label_remapper:
-                new_box3d_label_name = self.label_remapper[box3d_datamodel.box3d_label_name]
+        for box3d_data_model in boxes3d_data_model:
+            if box3d_data_model.box3d_dataset_label_name in self.label_remapper:
+                new_box3d_label_name = self.label_remapper[box3d_data_model.box3d_label_name]
             else:
-                new_box3d_label_name = box3d_datamodel.box3d_label_name
+                new_box3d_label_name = box3d_data_model.box3d_label_name
 
             # Map the new label name to the new label index,
             # if the new label name is not in the target class names, map to the ignore label index
@@ -64,7 +64,7 @@ class Box3DLabelRemapper(Box3DPipeline):
             else:
                 new_box3d_label_index = self.ignore_label_index
 
-            new_box3d = box3d_datamodel.create_new_datamodel(
+            new_box3d = box3d_data_model.create_new_datamodel(
                 box3d_label_name=new_box3d_label_name,
                 box3d_label_index=new_box3d_label_index,
             )
