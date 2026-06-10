@@ -330,7 +330,7 @@ class T4RecordsGenerator:
             lidar_pointcloud_source_path=sd_record.info_filename,
         )
 
-        lidar_frame_datamodel = LidarFrameDataModel(
+        lidar_frame_data_model = LidarFrameDataModel(
             lidar_frame_id=calibrated_lidar_sample_data_token,
             lidar_keyframe=sd_record.is_key_frame,
             lidar_sensor_id=cs_record.token,
@@ -346,7 +346,7 @@ class T4RecordsGenerator:
             ),  # Always the identity matrix for the main lidar sensor
             lidar_pointcloud_semantic_mask_path=lidar_pointcloud_semantic_mask_path,
         )
-        return lidar_frame_datamodel, box3d
+        return lidar_frame_data_model, box3d
 
     def _compute_sensor_transformation_matrices(
         self,
