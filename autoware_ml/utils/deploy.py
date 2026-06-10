@@ -46,6 +46,8 @@ class ExportSpec:
         args: Example positional inputs supplied during export.
         input_param_names: Names associated with the positional input tensors.
         output_names: Optional names associated with exported output tensors.
+        dynamic_axes: Optional legacy ONNX dynamic-axis mapping generated with
+            the export arguments. Used only when exporting with ``dynamo=False``.
         supported_stages: Export stages supported by this specification.
     """
 
@@ -53,6 +55,7 @@ class ExportSpec:
     args: tuple[Any, ...]
     input_param_names: list[str]
     output_names: list[str] | None = None
+    dynamic_axes: dict[str, dict[int, str]] | None = None
     supported_stages: frozenset[str] = frozenset({"onnx", "tensorrt"})
 
 
@@ -328,6 +331,7 @@ def export_to_onnx(
     onnx_cfg: DictConfig,
     input_param_names: list[str],
     output_names_override: list[str] | None,
+    dynamic_axes_override: dict[str, dict[int, str]] | None,
     output_path: Path,
 ) -> None:
     """Export a model to ONNX."""
@@ -339,7 +343,9 @@ def export_to_onnx(
     dynamo = onnx_cfg.get("dynamo", True)
     dynamic_shapes = build_dynamic_shapes(onnx_cfg, input_param_names) if dynamo else None
     dynamic_shapes = normalize_dynamic_shapes_for_model(model, dynamic_shapes) if dynamo else None
-    dynamic_axes = build_dynamic_axes(onnx_cfg) if not dynamo else None
+    dynamic_axes = None
+    if not dynamo:
+        dynamic_axes = dynamic_axes_override or build_dynamic_axes(onnx_cfg)
     input_names = list(onnx_cfg.get("input_names", input_param_names))
     output_names = list(output_names_override or onnx_cfg.get("output_names", ["output"]))
 

@@ -222,6 +222,7 @@ def main(cfg: DictConfig) -> None:
                         module_onnx_cfg,
                         export_spec.input_param_names,
                         export_spec.output_names,
+                        export_spec.dynamic_axes,
                         module_onnx_path,
                     )
                     onnx_exported_paths.append(module_onnx_path)
