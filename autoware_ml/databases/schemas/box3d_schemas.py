@@ -138,7 +138,7 @@ class Box3DDataModel(BaseModel, DataModelInterface):
             box3d_coordinate=data_model[Box3DDatasetSchema.BOX3D_COORDINATE.name],
         )
 
-    def create_new_datamodel(
+    def create_new_data_model(
         self,
         box3d_params: npt.NDArray[np.float32] | None = None,
         box3d_instance_id: str | None = None,

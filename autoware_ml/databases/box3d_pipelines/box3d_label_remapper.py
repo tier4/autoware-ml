@@ -64,7 +64,7 @@ class Box3DLabelRemapper(Box3DPipeline):
             else:
                 new_box3d_label_index = self.ignore_label_index
 
-            new_box3d = box3d_data_model.create_new_datamodel(
+            new_box3d = box3d_data_model.create_new_data_model(
                 box3d_label_name=new_box3d_label_name,
                 box3d_label_index=new_box3d_label_index,
             )
