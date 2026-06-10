@@ -21,9 +21,7 @@ class Box3DPipeline:
     """Base class for box 3D pipelines."""
 
     def __call__(self, boxes3d_data_model: Sequence[Box3DDataModel]) -> Box3DDataModel:
-        """
-        Process the boxes 3D.
-        """
+        """Process the boxes 3D."""
         raise NotImplementedError("Subclass must implement this method")
 
     def __str__(self) -> str:

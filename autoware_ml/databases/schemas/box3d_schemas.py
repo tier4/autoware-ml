@@ -95,7 +95,7 @@ class Box3DDataModel(BaseModel, DataModelInterface):
             Box3DDatasetSchema.BOX3D_NUM_LIDAR_POINTCLOUDS.name: self.box3d_num_lidar_pointclouds,
             Box3DDatasetSchema.BOX3D_NUM_RADAR_POINTCLOUDS.name: self.box3d_num_radar_pointclouds,
             Box3DDatasetSchema.BOX3D_VALID.name: self.box3d_valid,
-            Box3DDatasetSchema.BOX3D_ATTRIBUTES.name: list(self.box3d_attributes),
+            Box3DDatasetSchema.BOX3D_ATTRIBUTES.name: sorted(list(self.box3d_attributes)),
             Box3DDatasetSchema.BOX3D_COORDINATE.name: self.box3d_coordinate,
         }
 
