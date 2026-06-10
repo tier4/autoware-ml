@@ -178,7 +178,7 @@ class T4RecordsGenerator:
         Args:
           sample: T4 Sample.
           boxes_3d: Sequence of Boxes 3D from the T4 sample. Note that these might be in sensor
-          coodinates based on the way it retrieves in _extract_lidar_metadata.
+          coordinates based on the way it retrieves in _extract_lidar_metadata.
 
         Returns:
           Sequence[Box3DDataModel]: Sequence of Box3DDataModel, which is the data model for the

@@ -18,7 +18,7 @@ from autoware_ml.databases.schemas.box3d_schemas import Box3DDataModel
 class Boxes3DPipeline:
     """Base class for box 3D pipelines."""
 
-    def __call__(self, boxes3d_datamodel: Box3DDataModel) -> Box3DDataModel:
+    def __call__(self, boxes3d_data_model: Box3DDataModel) -> Box3DDataModel:
         """
         Process the boxes 3D.
         """

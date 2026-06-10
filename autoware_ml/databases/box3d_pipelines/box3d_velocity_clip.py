@@ -25,12 +25,12 @@ class Box3DVelocityNormClip(Box3DPipeline):
         """
         return f"{self.__class__.__name__}(velocity_norm_threshold={self.velocity_norm_threshold})"
 
-    def __call__(self, boxes3d_datamodel: Sequence[Box3DDataModel]) -> Sequence[Box3DDataModel]:
+    def __call__(self, boxes3d_data_model: Sequence[Box3DDataModel]) -> Sequence[Box3DDataModel]:
         """
         Clip the velocity norm of the 3D bounding boxes.
         """
-        if not len(boxes3d_datamodel):
-            return boxes3d_datamodel
+        if not len(boxes3d_data_model):
+            return boxes3d_data_model
 
         ground_plane_velocities = np.asarray(
             [
@@ -38,7 +38,7 @@ class Box3DVelocityNormClip(Box3DPipeline):
                     box3d.box3d_params[Box3DFieldIndex.VELOCITY_X],
                     box3d.box3d_params[Box3DFieldIndex.VELOCITY_Y],
                 )
-                for box3d in boxes3d_datamodel
+                for box3d in boxes3d_data_model
             ]
         )
 
@@ -53,9 +53,9 @@ class Box3DVelocityNormClip(Box3DPipeline):
             self.velocity_norm_threshold / ground_plane_speeds[mask_indices]
         )
 
-        # Assign velocity_x and velocity_y back to the boxes3d_datamodel
-        new_boxes3d_datamodel = []
-        for box3d_datamodel, velocity in zip(boxes3d_datamodel, ground_plane_velocities):
+        # Assign velocity_x and velocity_y back to the boxes3d_data_model
+        new_boxes3d_data_model = []
+        for box3d_datamodel, velocity in zip(boxes3d_data_model, ground_plane_velocities):
             new_box3d_params = box3d_datamodel.box3d_params
             new_box3d_params[Box3DFieldIndex.VELOCITY_X] = velocity[0]
             new_box3d_params[Box3DFieldIndex.VELOCITY_Y] = velocity[1]
@@ -63,6 +63,6 @@ class Box3DVelocityNormClip(Box3DPipeline):
             new_box3d = box3d_datamodel.create_new_datamodel(
                 box3d_params=new_box3d_params,
             )
-            new_boxes3d_datamodel.append(new_box3d)
+            new_boxes3d_data_model.append(new_box3d)
 
-        return new_boxes3d_datamodel
+        return new_boxes3d_data_model
