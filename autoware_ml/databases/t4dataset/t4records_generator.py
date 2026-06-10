@@ -187,7 +187,7 @@ class T4RecordsGenerator:
         if not len(boxes_3d):
             return []
 
-        boxes_3d_datamodel = []
+        boxes_3d_data_model = []
         sample_annotation_tokens = sample.ann_3ds
         for box_index, box3d in enumerate(boxes_3d):
             # Convert the box3d to the Box3DFieldIndex format,
@@ -221,7 +221,7 @@ class T4RecordsGenerator:
                 )
                 box_3d_attributes.add(attribute_record.name)
 
-            boxes_3d_datamodel.append(
+            boxes_3d_data_model.append(
                 Box3DDataModel(
                     box3d_params=box3d_params,
                     box3d_instance_id=box3d.uuid,
@@ -239,9 +239,9 @@ class T4RecordsGenerator:
 
         # Process 3D boxes with the pipeline
         for box3d_pipeline in self.box3d_pipelines:
-            boxes_3d_datamodel = box3d_pipeline(boxes_3d_datamodel)
+            boxes_3d_data_model = box3d_pipeline(boxes_3d_data_model)
 
-        return boxes_3d_datamodel
+        return boxes_3d_data_model
 
     def _extract_lidar_pointcloud_semantic_mask_path(
         self,
@@ -586,7 +586,7 @@ class T4RecordsGenerator:
         )
 
         # 3) Extract boxes 3D annotations and process them with the pipeline
-        boxes_3d_datamodel = self._extract_boxes_3d_annotations(sample=sample, boxes_3d=box3d)
+        boxes_3d_data_model = self._extract_boxes_3d_annotations(sample=sample, boxes_3d=box3d)
 
         # 4) Extract multi-sweep lidar information from the T4Dataset
         lidar_sweep_data_models = self._extract_lidar_sweeps(
@@ -607,5 +607,5 @@ class T4RecordsGenerator:
             lidar_frame_data_models=lidar_frame_data_models,
             lidar_source_data_models=lidar_source_data_models,
             category_mapping_data_model=category_mapping_data_model,
-            boxes_3d_datamodel=boxes_3d_datamodel,
+            boxes_3d_data_model=boxes_3d_data_model,
         )

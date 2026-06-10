@@ -33,7 +33,7 @@ class T4SampleRecord(BaseModel):
     lidar_frame_data_models: Sequence[LidarFrameDataModel]
     lidar_source_data_models: Sequence[LidarSourceDataModel]
     category_mapping_data_model: CategoryMappingDataModel
-    boxes_3d_datamodel: Sequence[Box3DDataModel]
+    boxes_3d_data_model: Sequence[Box3DDataModel]
 
     def to_dataset_record(self) -> DatasetRecord:
         """
@@ -54,5 +54,5 @@ class T4SampleRecord(BaseModel):
             lidar_frames=self.lidar_frame_data_models,
             lidar_sources=self.lidar_source_data_models,
             category_mapping=self.category_mapping_data_model,
-            boxes_3d=self.boxes_3d_datamodel,
+            boxes_3d=self.boxes_3d_data_model,
         )
