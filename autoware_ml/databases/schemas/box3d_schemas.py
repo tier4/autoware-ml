@@ -68,7 +68,7 @@ class Box3DDataModel(BaseModel, DataModelInterface):
 
     model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
 
-    box3d_params: npt.NDArray[np.float32]
+    box3d_params: npt.NDArray[np.float64]
     box3d_instance_id: str
     box3d_dataset_label_name: str
     box3d_label_name: str
@@ -87,7 +87,7 @@ class Box3DDataModel(BaseModel, DataModelInterface):
           Mapping[str, Any]: Dictionary representation of the category mapping data model.
         """
         return {
-            Box3DDatasetSchema.BOX3D_PARAMS.name: self.box3d_params.tolist(),
+            Box3DDatasetSchema.BOX3D_PARAMS.name: self.box3d_params_fp32,
             Box3DDatasetSchema.BOX3D_INSTANCE_ID.name: self.box3d_instance_id,
             Box3DDatasetSchema.BOX3D_DATASET_LABEL_NAME.name: self.box3d_dataset_label_name,
             Box3DDatasetSchema.BOX3D_LABEL_NAME.name: self.box3d_label_name,
@@ -98,6 +98,16 @@ class Box3DDataModel(BaseModel, DataModelInterface):
             Box3DDatasetSchema.BOX3D_ATTRIBUTES.name: list(self.box3d_attributes),
             Box3DDatasetSchema.BOX3D_COORDINATE.name: self.box3d_coordinate,
         }
+
+    @property
+    def box3d_params_fp32(self) -> npt.NDArray[np.float32]:
+        """
+        Convert the box3d_params to float32.
+
+        Returns:
+          npt.NDArray[np.float32]: Box3D parameters in float32.
+        """
+        return self.box3d_params.astype(np.float32)
 
     @classmethod
     def load_from_dictionary(cls, data_model: Mapping[str, Any]) -> Box3DDataModel:
@@ -110,7 +120,9 @@ class Box3DDataModel(BaseModel, DataModelInterface):
           deserialized from a Polars dataframe.
         """
         return cls(
-            box3d_params=data_model[Box3DDatasetSchema.BOX3D_PARAMS.name],
+            box3d_params=np.asarray(
+                data_model[Box3DDatasetSchema.BOX3D_PARAMS.name], dtype=np.float64
+            ),
             box3d_instance_id=data_model[Box3DDatasetSchema.BOX3D_INSTANCE_ID.name],
             box3d_dataset_label_name=data_model[Box3DDatasetSchema.BOX3D_DATASET_LABEL_NAME.name],
             box3d_label_name=data_model[Box3DDatasetSchema.BOX3D_LABEL_NAME.name],

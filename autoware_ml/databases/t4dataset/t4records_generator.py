@@ -205,9 +205,9 @@ class T4RecordsGenerator:
                     box3d.velocity[0],
                     box3d.velocity[1],
                     box3d.velocity[2],
-                ]
+                ],
+                dtype=np.float64,
             )
-
             sample_annotation_record: SampleAnnotation = self.t4_devkit_dataset.get(
                 SchemaName.SAMPLE_ANNOTATION, sample_annotation_tokens[box_index]
             )

@@ -221,21 +221,6 @@ class Box3DMerger(Box3DPipeline):
           2) Merge boxes for each target label
           3) Return the merged boxes metadata
 
-        Please check the following notes for the merged boxes metadata:
-          - boxes_3d: Select by the merge_method of the subclass.
-          - boxes_3d_instance_ids: always select the first source box's instance ID and dataset
-            label name for the merged box.
-          - boxes_3d_label_names: always select the target label for the merged box.
-          - boxes_3d_label_indices: always select the target label index for the merged box.
-          - boxes_3d_dataset_label_names: always select the first source box's dataset label name
-            for the merged box.
-          - boxes_3d_num_lidar_pointclouds: sum of the two source boxes' num lidar pointclouds
-            for the merged box.
-          - boxes_3d_num_radar_pointclouds: sum of the two source boxes' num radar pointclouds
-            for the merged box.
-          - boxes_3d_valid: logical AND of the two source boxes' valid flags for the merged box.
-          - boxes_3d_attributes: union of the two source boxes' attributes for the merged box.
-
         Args:
           boxes3d_data_model: Sequence of Box3DDataModel of the 3D bounding boxes.
 
@@ -243,12 +228,12 @@ class Box3DMerger(Box3DPipeline):
           Sequence[Box3DDataModel]: Merged 3D bounding boxes that saves sequence of merged boxes metadata.
           merged_indices: Set of indices of the merged boxes.
         """
-
         # 1) Match boxes based on the target labels and source labels
         matched_pairs = self.match_boxes_3d(
             boxes3d_params=np.asarray([box3d.box3d_params for box3d in boxes3d_data_model]),
             boxes3d_label_names=[box3d.box3d_label_name for box3d in boxes3d_data_model],
         )
+
         # 2) Merge boxes for each target label
         merged_boxes_3d: Sequence[Box3DDataModel] = []
         merged_indices = set()

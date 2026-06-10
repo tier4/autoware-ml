@@ -40,8 +40,11 @@ class Box3DLabelRemapper(Box3DPipeline):
         Returns:
           str: String representation of the pipeline.
         """
-        return f"{self.__class__.__name__}(label_remapper={self.label_remapper},\
-            class_names={self.class_names}, ignore_label_index={self.ignore_label_index})"
+        return (
+            f"{self.__class__.__name__}(label_remapper={self.label_remapper}, "
+            f"class_names={self.class_names}, "
+            f"ignore_label_index={self.ignore_label_index})"
+        )
 
     def __call__(self, boxes3d_data_model: Sequence[Box3DDataModel]) -> Sequence[Box3DDataModel]:
         """

@@ -21,10 +21,10 @@ trailer: trailer
 vehicle.trailer: trailer
 semi_trailer: trailer
 
-motorcycle: bicycle,
+motorcycle: bicycle
 vehicle.motorcycle: bicycle
 vehicle.bicycle: bicycle
-bicycle: bicycle,
+bicycle: bicycle
 
 bus: bus
 vehicle.bus (bendy & rigid): bus
