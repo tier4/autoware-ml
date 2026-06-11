@@ -72,10 +72,44 @@ def test_export_to_onnx_prefers_export_spec_output_names(tmp_path: Path) -> None
         onnx_cfg=onnx_cfg,
         input_param_names=["input"],
         output_names_override=["exported_output"],
+        dynamic_axes_override=None,
         output_path=output_path,
     )
 
     assert output_path.exists()
+
+
+def test_export_to_onnx_prefers_export_spec_dynamic_axes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured_kwargs: dict[str, object] = {}
+    monkeypatch.setattr(
+        torch.onnx,
+        "export",
+        lambda **kwargs: captured_kwargs.update(kwargs),
+    )
+
+    dynamic_axes_override = {"input": {0: "export_spec_batch"}}
+    onnx_cfg = OmegaConf.create(
+        {
+            "opset_version": 17,
+            "dynamo": False,
+            "dynamic_axes": {"input": {0: "configured_batch"}},
+        }
+    )
+
+    export_to_onnx(
+        model=torch.nn.Identity(),
+        input_sample=(torch.ones(2, 3),),
+        onnx_cfg=onnx_cfg,
+        input_param_names=["input"],
+        output_names_override=None,
+        dynamic_axes_override=dynamic_axes_override,
+        output_path=tmp_path / "model.onnx",
+    )
+
+    assert captured_kwargs["dynamic_axes"] == dynamic_axes_override
 
 
 def test_supports_export_stage_uses_export_spec_capabilities() -> None:
