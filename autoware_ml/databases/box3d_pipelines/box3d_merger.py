@@ -267,7 +267,7 @@ class Box3DMerger(Box3DPipeline):
                 )
                 merged_box3d_valid = (
                     boxes3d_data_model[box3d_idx_1].box3d_valid
-                    and boxes3d_data_model[box3d_idx_2].box3d_valid
+                    or boxes3d_data_model[box3d_idx_2].box3d_valid
                 )
                 merged_box3d_attributes = boxes3d_data_model[box3d_idx_1].box3d_attributes.union(
                     boxes3d_data_model[box3d_idx_2].box3d_attributes
