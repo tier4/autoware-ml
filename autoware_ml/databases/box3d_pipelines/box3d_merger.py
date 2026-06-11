@@ -502,14 +502,17 @@ class Box3DExtendLongerMerger(Box3DMerger):
         elongation_shift = elongation_vector / 2
         merged_center = larger_box_center + elongation_shift
 
-        merged_z = min(first_box3d[Box3DFieldIndex.Z], second_box3d[Box3DFieldIndex.Z])
-        merged_dz = (
-            max(
-                first_box3d[Box3DFieldIndex.Z] + first_box3d[Box3DFieldIndex.HEIGHT],
-                second_box3d[Box3DFieldIndex.Z] + second_box3d[Box3DFieldIndex.HEIGHT],
-            )
-            - merged_z
-        )
+        box1_bottom_z = first_box3d[Box3DFieldIndex.Z] - (first_box3d[Box3DFieldIndex.HEIGHT] / 2)
+        box2_bottom_z = second_box3d[Box3DFieldIndex.Z] - (second_box3d[Box3DFieldIndex.HEIGHT] / 2)
+        merged_bottom_z = min(box1_bottom_z, box2_bottom_z)
+
+        box1_top_z = first_box3d[Box3DFieldIndex.Z] + (first_box3d[Box3DFieldIndex.HEIGHT] / 2)
+        box2_top_z = second_box3d[Box3DFieldIndex.Z] + (second_box3d[Box3DFieldIndex.HEIGHT] / 2)
+        merged_top_z = max(box1_top_z, box2_top_z)
+
+        merged_dz = merged_top_z - merged_bottom_z
+        # New merged box center z is the middle point between merged bottom z and merged top z
+        merged_z = merged_bottom_z + (merged_dz / 2)
 
         # Keep the orientation (yaw) of the larger box
         merged_yaw = larger_box[Box3DFieldIndex.YAW]
