@@ -9,12 +9,18 @@ from autoware_ml.databases.schemas.box3d_schemas import Box3DDataModel
 
 class Box3DVelocityNormClip(Box3DPipeline):
     """
-    Pipeline to clip the velocity norm of the 3D bounding boxes.
+    Pipeline to clip the ground plane velocity norm (ground plane speed in m/s)
+    of the 3D bounding boxes.
     """
 
-    def __init__(self, velocity_norm_threshold: float):
+    def __init__(self, max_ground_plane_speed_ms: float):
+        """
+        Initialize Box3DVelocityNormClip.
+        Args:
+          max_ground_plane_speed_ms: Maximum ground plane speed in m/s to clip the velocity norm.
+        """
         super().__init__()
-        self.velocity_norm_threshold = velocity_norm_threshold
+        self.max_ground_plane_speed_ms = max_ground_plane_speed_ms
 
     def __str__(self) -> str:
         """
@@ -23,11 +29,13 @@ class Box3DVelocityNormClip(Box3DPipeline):
         Returns:
           str: String representation of the pipeline.
         """
-        return f"{self.__class__.__name__}(velocity_norm_threshold={self.velocity_norm_threshold})"
+        return (
+            f"{self.__class__.__name__}(max_ground_plane_speed_ms={self.max_ground_plane_speed_ms})"
+        )
 
     def __call__(self, boxes3d_data_model: Sequence[Box3DDataModel]) -> Sequence[Box3DDataModel]:
         """
-        Clip the velocity norm of the 3D bounding boxes.
+        Clip the ground plane velocity norm (ground plane speed in m/s) of the 3D bounding boxes.
         """
         if not len(boxes3d_data_model):
             return boxes3d_data_model
@@ -44,13 +52,15 @@ class Box3DVelocityNormClip(Box3DPipeline):
 
         ground_plane_speeds = np.linalg.norm(ground_plane_velocities, axis=1)
 
-        mask_indices = np.where(ground_plane_speeds > self.velocity_norm_threshold)[0]
+        mask_indices = np.where(ground_plane_speeds > self.max_ground_plane_speed_ms)[0]
 
+        # Clip velocity_x and velocity_y by scaling them down to the max_ground_plane_speed_ms
+        # while keeping the direction the same
         ground_plane_velocities[mask_indices, 0] = ground_plane_velocities[mask_indices, 0] * (
-            self.velocity_norm_threshold / ground_plane_speeds[mask_indices]
+            self.max_ground_plane_speed_ms / ground_plane_speeds[mask_indices]
         )
         ground_plane_velocities[mask_indices, 1] = ground_plane_velocities[mask_indices, 1] * (
-            self.velocity_norm_threshold / ground_plane_speeds[mask_indices]
+            self.max_ground_plane_speed_ms / ground_plane_speeds[mask_indices]
         )
 
         # Assign velocity_x and velocity_y back to the boxes3d_data_model
