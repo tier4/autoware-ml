@@ -213,15 +213,18 @@ class LidarFrameDataModel(BaseModel, DataModelInterface):
             lidar_pointcloud_num_features=data_model[
                 LidarFrameDatasetSchema.lidar_pointcloud_num_features.name
             ],
-            lidar_sensor_to_ego_pose_matrix=data_model[
-                LidarFrameDatasetSchema.lidar_sensor_to_ego_pose_matrix.name
-            ],
-            lidar_frame_ego_pose_to_global_matrix=data_model[
-                LidarFrameDatasetSchema.lidar_frame_ego_pose_to_global_matrix.name
-            ],
-            lidar_sensor_to_lidar_sweep_matrices=data_model[
-                LidarFrameDatasetSchema.lidar_sensor_to_lidar_sweep_matrices.name
-            ],
+            lidar_sensor_to_ego_pose_matrix=np.asarray(
+                data_model[LidarFrameDatasetSchema.lidar_sensor_to_ego_pose_matrix.name],
+                dtype=np.float64,
+            ),
+            lidar_frame_ego_pose_to_global_matrix=np.asarray(
+                data_model[LidarFrameDatasetSchema.lidar_frame_ego_pose_to_global_matrix.name],
+                dtype=np.float64,
+            ),
+            lidar_sensor_to_lidar_sweep_matrices=np.asarray(
+                data_model[LidarFrameDatasetSchema.lidar_sensor_to_lidar_sweep_matrices.name],
+                dtype=np.float64,
+            ),
             lidar_pointcloud_semantic_mask_path=data_model[
                 LidarFrameDatasetSchema.lidar_pointcloud_semantic_mask_path.name
             ],

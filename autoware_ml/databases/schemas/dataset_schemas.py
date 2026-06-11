@@ -21,6 +21,7 @@ import polars as pl
 from pydantic import BaseModel, ConfigDict
 
 from autoware_ml.databases.schemas.base_schemas import DatasetTableColumn, DataModelInterface
+from autoware_ml.databases.schemas.box3d_schemas import Box3DDataModel, Box3DDatasetSchema
 from autoware_ml.databases.schemas.lidar_frames import LidarFrameDatasetSchema, LidarFrameDataModel
 from autoware_ml.databases.schemas.category_mapping import (
     CategoryMappingDataModel,
@@ -83,6 +84,11 @@ class DatasetTableSchema:
         pl.Struct(CategoryMappingDatasetSchema.to_polars_field_schema()),
     )
 
+    # Boxes3D annotation Schema
+    BOXES_3D = DatasetTableColumn(
+        "boxes_3d", pl.List(pl.Struct(Box3DDatasetSchema.to_polars_field_schema()))
+    )
+
     @classmethod
     def to_polars_schema(cls) -> pl.Schema:
         """
@@ -138,6 +144,7 @@ class DatasetRecord(BaseModel, DataModelInterface):
     lidar_frames: Sequence[LidarFrameDataModel]
     lidar_sources: Sequence[LidarSourceDataModel] | None
     category_mapping: CategoryMappingDataModel | None
+    boxes_3d: Sequence[Box3DDataModel] | None
 
     def to_dictionary(self) -> Mapping[str, Any]:
         """
@@ -173,6 +180,13 @@ class DatasetRecord(BaseModel, DataModelInterface):
         else:
             data_model[DatasetTableSchema.CATEGORY_MAPPING.name] = {}
 
+        if self.boxes_3d is not None:
+            data_model[DatasetTableSchema.BOXES_3D.name] = [
+                box3d.to_dictionary() for box3d in self.boxes_3d
+            ]
+        else:
+            data_model[DatasetTableSchema.BOXES_3D.name] = []
+
         return data_model
 
     @classmethod
@@ -207,6 +221,12 @@ class DatasetRecord(BaseModel, DataModelInterface):
         else:
             category_mapping = None
 
+        boxes_3d = data_model[DatasetTableSchema.BOXES_3D.name]
+        if boxes_3d is not None:
+            boxes_3d = [Box3DDataModel.load_from_dictionary(box) for box in boxes_3d]
+        else:
+            boxes_3d = None
+
         return cls(
             scenario_id=data_model[DatasetTableSchema.SCENARIO_ID.name],
             sample_id=data_model[DatasetTableSchema.SAMPLE_ID.name],
@@ -218,4 +238,5 @@ class DatasetRecord(BaseModel, DataModelInterface):
             lidar_frames=lidar_frames,
             lidar_sources=lidar_sources,
             category_mapping=category_mapping,
+            boxes_3d=boxes_3d,
         )

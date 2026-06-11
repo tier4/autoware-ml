@@ -1,0 +1,37 @@
+- _target_: autoware_ml.databases.box3d_pipelines.box3d_label_remapper.Box3DLabelRemapper
+  _convert_: all
+
+  label_remapper: ${database.label_remapper}
+  class_names: ${database.class_names}
+  ignore_label_index: ${database.ignore_label_index}
+
+- _target_: autoware_ml.databases.box3d_pipelines.box3d_merger.Box3DExtendLongerMerger
+  _convert_: all
+
+  target_labels:
+    truck:
+      - truck
+      - trailer
+
+  proximity_distance_threshold: 1.0
+  class_names: ${database.class_names}
+
+# Second remapping, to remap remaining trailers to trucks
+- _target_: autoware_ml.databases.box3d_pipelines.box3d_label_remapper.Box3DLabelRemapper
+  _convert_: all
+
+  label_remapper:
+    trailer: truck
+    vehicle.trailer: truck
+    semi_trailer: truck
+
+  class_names: ${database.class_names}
+  ignore_label_index: ${database.ignore_label_index}
+
+- _target_: autoware_ml.databases.box3d_pipelines.box3d_velocity_clip.Box3DVelocityNormClip
+  _convert_: all
+
+  # Clip the ground plane velocity norm (ground plane (x and y) speed in m/s) of the
+  # 3D bounding boxes to be at most 25 m/s (~ 90 km/h),
+  # This is to prevent outliers in the velocity from affecting the training and evaluation metrics.
+  max_ground_plane_speed: 25.0

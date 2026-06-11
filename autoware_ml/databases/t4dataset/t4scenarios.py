@@ -22,7 +22,7 @@ from types import MappingProxyType
 
 from pydantic import model_validator
 
-from autoware_ml.common.enums.enums import SplitType
+from autoware_ml.types.dataset import SplitType
 from autoware_ml.databases.scenarios import ScenarioData, Scenarios, DatasetParams
 
 logger = logging.getLogger(__name__)

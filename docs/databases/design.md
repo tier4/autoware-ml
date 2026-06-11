@@ -48,6 +48,8 @@ classDiagram
         LidarFrameDataModel
         LidarSourceDataModel
         CategoryMappingDataModel
+        Box3DDataModel
+        Box3DDatasetSchema
     }
 
     class polars {
@@ -159,7 +161,7 @@ class Scenarios(BaseModel):
 
 `process_scenario_records()` returns `Sequence[DatasetRecord]` — one frozen Pydantic row per sample/frame. `BaseDatabase.get_polars_schema()` delegates to `DatasetTableSchema` so records can be serialized to Parquet via `DatasetRecord.to_dictionary()`.
 
-The schema is defined in the `autoware_ml/databases/schemas/` package and covers basic frame metadata, nested LiDAR structs, and annotation fields such as category mapping. See [Dataset Schema](schemas.md) for the full column layout, nested data models, and extension guide.
+The schema is defined in the `autoware_ml/databases/schemas/` package and covers basic frame metadata, nested LiDAR structs, and annotation fields such as category mapping and 3D boxes. The 3D box payload is modeled by `Box3DDataModel` with its struct layout defined in `Box3DDatasetSchema`, and is stored in the top-level `boxes_3d` list column. See [Dataset Schema](schemas.md) for the full column layout, nested data models, and extension guide.
 
 ### Dataset Generation (Hydra Entrypoint)
 
