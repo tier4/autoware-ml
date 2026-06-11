@@ -34,4 +34,4 @@
   # Clip the ground plane velocity norm (ground plane (x and y) speed in m/s) of the
   # 3D bounding boxes to be at most 25 m/s (~ 90 km/h),
   # This is to prevent outliers in the velocity from affecting the training and evaluation metrics.
-  max_ground_plane_speed_ms: 25.0
+  max_ground_plane_speed: 25.0
