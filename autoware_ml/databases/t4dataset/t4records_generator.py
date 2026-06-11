@@ -36,7 +36,8 @@ from t4_devkit.schema import (
 from t4_devkit.common.timestamp import microseconds2seconds
 
 
-from autoware_ml.common.enums.enums import LidarChannel, Modality, CoordinateSystem
+from autoware_ml.types.sensor import LidarChannel, Modality
+from autoware_ml.types.spatial import CoordinateSystem
 from autoware_ml.databases.box3d_pipelines.box3d_pipeline import Box3DPipeline
 from autoware_ml.databases.schemas.frame_basic_metadata import FrameBasicMetadata
 from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord

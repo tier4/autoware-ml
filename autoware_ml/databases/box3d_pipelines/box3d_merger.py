@@ -9,7 +9,7 @@ import numpy as np
 import numpy.typing as npt
 from shapely.geometry import Polygon
 
-from autoware_ml.common.enums.enums import Box3DFieldIndex
+from autoware_ml.types.geometry import Box3DFieldIndex
 from autoware_ml.databases.box3d_pipelines.box3d_pipeline import Box3DPipeline
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDataModel
 

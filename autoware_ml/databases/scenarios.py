@@ -19,7 +19,7 @@ from typing import Sequence, Mapping, Annotated
 
 from pydantic import BaseModel, ConfigDict, BeforeValidator, model_validator
 
-from autoware_ml.common.enums.enums import SplitType
+from autoware_ml.types.dataset import SplitType
 
 
 def path_adapter(path: str | Path) -> Path:

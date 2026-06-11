@@ -26,13 +26,13 @@ from autoware_ml.databases.schemas.base_schemas import (
     DataModelInterface,
     DatasetTableColumn,
 )
-from autoware_ml.common.enums.enums import Box3DFieldIndex
+from autoware_ml.types.geometry import Box3DFieldIndex
 
 
 @dataclass(frozen=True)
 class Box3DDatasetSchema(BaseFieldSchema):
     """
-    Dataclass to define polars schema for columns related to category mapping.
+    Dataclass to define polars schema for columns related to 3D bounding boxes.
     """
 
     BOX3D_PARAMS = DatasetTableColumn(
@@ -51,7 +51,7 @@ class Box3DDatasetSchema(BaseFieldSchema):
 
 class Box3DDataModel(BaseModel, DataModelInterface):
     """
-    Data model to represent annotation data for a 3d bounding box.
+    Data model to represent annotation data for a 3D bounding box.
 
     Attributes:
       box3d_params: 3D bounding box parameters. It is in (x, y, z, length, width,
