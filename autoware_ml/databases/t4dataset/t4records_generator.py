@@ -234,7 +234,7 @@ class T4RecordsGenerator:
                     box3d_num_radar_pointclouds=sample_annotation_record.num_radar_pts,
                     box3d_valid=box3d_valid,
                     box3d_attributes=box_3d_attributes,
-                    box3d_coordinate=CoordinateSystem.LIDAR.name,
+                    box3d_coordinate=CoordinateSystem.LIDAR_COMMON.name,
                 )
             )
 
