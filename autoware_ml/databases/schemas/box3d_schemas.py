@@ -154,31 +154,5 @@ class Box3DDataModel(BaseModel, DataModelInterface):
         """
         Create a new Boxes3DDataModel object with the given attributes.
         """
-        return Box3DDataModel(
-            box3d_params=box3d_params if box3d_params is not None else self.box3d_params,
-            box3d_instance_id=box3d_instance_id
-            if box3d_instance_id is not None
-            else self.box3d_instance_id,
-            box3d_dataset_label_name=box3d_dataset_label_name
-            if box3d_dataset_label_name is not None
-            else self.box3d_dataset_label_name,
-            box3d_label_name=box3d_label_name
-            if box3d_label_name is not None
-            else self.box3d_label_name,
-            box3d_label_index=box3d_label_index
-            if box3d_label_index is not None
-            else self.box3d_label_index,
-            box3d_num_lidar_pointclouds=box3d_num_lidar_pointclouds
-            if box3d_num_lidar_pointclouds is not None
-            else self.box3d_num_lidar_pointclouds,
-            box3d_num_radar_pointclouds=box3d_num_radar_pointclouds
-            if box3d_num_radar_pointclouds is not None
-            else self.box3d_num_radar_pointclouds,
-            box3d_valid=box3d_valid if box3d_valid is not None else self.box3d_valid,
-            box3d_attributes=box3d_attributes
-            if box3d_attributes is not None
-            else self.box3d_attributes,
-            box3d_coordinate=box3d_coordinate
-            if box3d_coordinate is not None
-            else self.box3d_coordinate,
-        )
+        updates = {k: v for k, v in locals().items() if k != "self" and v is not None}
+        return self.model_copy(update=updates)
