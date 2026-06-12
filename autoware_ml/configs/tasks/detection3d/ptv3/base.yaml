@@ -246,19 +246,8 @@ deploy:
     do_constant_folding: false
     modules:
       backbone:
-        input_names: [grid_coord, feat, serialized_code]
         output_names: [point_feat, point_grid_coord, point_offset]
-        dynamic_axes:
-          grid_coord: {0: num_voxels}
-          feat: {0: num_voxels}
-          serialized_code: {1: num_voxels}
-          point_feat: {0: num_voxels}
-          point_grid_coord: {0: num_voxels}
       det3d_head:
-        input_names: [point_feat, point_grid_coord, point_offset]
         output_names: ${model.export_output_names}
-        dynamic_axes:
-          point_feat: {0: num_voxels}
-          point_grid_coord: {0: num_voxels}
   tensorrt:
     enabled: false

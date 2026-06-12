@@ -88,20 +88,8 @@ deploy:
     do_constant_folding: false
     modules:
       backbone:
-        input_names: [grid_coord, feat, serialized_code]
         output_names: [point_feat, point_grid_coord, point_offset]
-        dynamic_axes:
-          grid_coord: {0: num_voxels}
-          feat: {0: num_voxels}
-          serialized_code: {1: num_voxels}
-          point_feat: {0: num_voxels}
-          point_grid_coord: {0: num_voxels}
       seg3d_head:
-        input_names: [point_feat]
         output_names: [pred_labels, pred_probs]
-        dynamic_axes:
-          point_feat: {0: num_voxels}
-          pred_labels: {0: num_voxels}
-          pred_probs: {0: num_voxels}
   tensorrt:
     enabled: false

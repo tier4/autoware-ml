@@ -17,8 +17,14 @@ from autoware_ml.models.segmentation3d.backbones.ptv3 import (
     PointSequential,
     PointTransformerV3Backbone,
     SerializedAttention,
+    SerializedPooling,
+    build_serialized_pooling_meta,
 )
 from autoware_ml.models.segmentation3d.ptv3 import PTv3SegmentationModel
+from autoware_ml.models.segmentation3d.ptv3_base import (
+    build_ptv3_backbone_dynamic_axes,
+    validate_serialization_geometry,
+)
 
 
 def test_serialized_attention_requires_supported_flash_configuration() -> None:
@@ -341,3 +347,141 @@ def test_point_serialization_accepts_explicit_depth_override() -> None:
 
     assert point["serialized_depth"].item() == 4
     assert point["serialized_code"].shape == (2, 2)
+
+
+def test_ptv3_backbone_dynamic_axes_follow_generated_pooling_inputs() -> None:
+    input_names = [
+        "grid_coord",
+        "feat",
+        "serialized_code",
+        "serialized_pooling_0_indices",
+        "serialized_pooling_0_indptr",
+        "serialized_pooling_0_cluster",
+        "serialized_pooling_0_head_indices",
+        "serialized_pooling_0_grid_coord",
+        "serialized_pooling_0_serialized_order",
+        "serialized_pooling_0_serialized_inverse",
+        "serialized_pooling_1_grid_coord",
+    ]
+
+    dynamic_axes = build_ptv3_backbone_dynamic_axes(input_names)
+
+    assert dynamic_axes["grid_coord"] == {0: "num_voxels"}
+    assert dynamic_axes["feat"] == {0: "num_voxels"}
+    assert dynamic_axes["serialized_code"] == {1: "num_voxels"}
+    assert dynamic_axes["serialized_pooling_0_indices"] == {0: "serialized_pooling_0_in_voxels"}
+    assert dynamic_axes["serialized_pooling_0_indptr"] == {
+        0: "serialized_pooling_0_out_voxels_plus_one"
+    }
+    assert dynamic_axes["serialized_pooling_0_cluster"] == {0: "serialized_pooling_0_in_voxels"}
+    assert dynamic_axes["serialized_pooling_0_head_indices"] == {
+        0: "serialized_pooling_0_out_voxels"
+    }
+    assert dynamic_axes["serialized_pooling_0_grid_coord"] == {0: "serialized_pooling_0_out_voxels"}
+    assert dynamic_axes["serialized_pooling_0_serialized_order"] == {
+        1: "serialized_pooling_0_out_voxels"
+    }
+    assert dynamic_axes["serialized_pooling_0_serialized_inverse"] == {
+        1: "serialized_pooling_0_out_voxels"
+    }
+    assert dynamic_axes["serialized_pooling_1_grid_coord"] == {0: "serialized_pooling_1_out_voxels"}
+    assert dynamic_axes["point_feat"] == {0: "num_voxels"}
+    assert dynamic_axes["point_grid_coord"] == {0: "num_voxels"}
+
+
+def test_validate_serialization_geometry_rejects_shallow_configs() -> None:
+    """Configs whose serialization depth cannot cover all pooling stages should fail."""
+    pooling_stages = nn.Sequential(
+        *(SerializedPooling(8, 8, stride=2, shuffle_orders=False) for _ in range(3))
+    )
+    validate_serialization_geometry(pooling_stages, 1.0, (0.0, 0.0, 0.0, 8.0, 8.0, 8.0))
+    with pytest.raises(ValueError, match="pooling depth 3"):
+        validate_serialization_geometry(pooling_stages, 1.0, (0.0, 0.0, 0.0, 2.0, 2.0, 2.0))
+
+
+@pytest.mark.parametrize("stride", [0, 3, 6])
+def test_serialized_pooling_rejects_non_power_of_two_stride(stride: int) -> None:
+    with pytest.raises(ValueError, match="power of two"):
+        SerializedPooling(6, 8, stride=stride, shuffle_orders=False)
+
+
+def test_serialized_pooling_export_mode_uses_precomputed_metadata(monkeypatch) -> None:
+    """Export-mode pooling should match train-time grouping without in-graph Unique."""
+    monkeypatch.setattr(Point, "sparsify", lambda self, pad=96: None)
+    torch.manual_seed(0)
+
+    grid_coord = torch.tensor(
+        [
+            [0, 0, 0],
+            [1, 0, 0],
+            [0, 1, 0],
+            [1, 1, 0],
+            [2, 2, 1],
+            [3, 2, 1],
+            [2, 3, 1],
+            [3, 3, 1],
+        ],
+        dtype=torch.int32,
+    )
+    feat = torch.randn(grid_coord.shape[0], 6)
+
+    def make_point() -> Point:
+        point = Point(
+            {
+                "coord": grid_coord.to(torch.float32),
+                "grid_coord": grid_coord,
+                "feat": feat,
+                "batch": torch.zeros(grid_coord.shape[0], dtype=torch.long),
+                "offset": torch.tensor([grid_coord.shape[0]], dtype=torch.long),
+                "sparse_shape": torch.tensor([16, 16, 16], dtype=torch.long),
+            }
+        )
+        point.serialization(("z", "z-trans"), shuffle_orders=False, depth=torch.tensor(6))
+        return point
+
+    train_module = SerializedPooling(
+        6,
+        8,
+        stride=2,
+        shuffle_orders=False,
+    )
+    export_module = SerializedPooling(
+        6,
+        8,
+        stride=2,
+        shuffle_orders=False,
+        export_stage_index=0,
+    )
+    train_module.norm = nn.Identity()
+    train_module.act = nn.Identity()
+    export_module.norm = nn.Identity()
+    export_module.act = nn.Identity()
+    export_module.export_mode = True
+    export_module.load_state_dict(train_module.state_dict())
+
+    train_out = train_module(make_point())
+    export_point = make_point()
+    meta, _ = build_serialized_pooling_meta(
+        export_point.grid_coord,
+        export_point.serialized_code,
+        export_point.serialized_order,
+        stride=2,
+    )
+    export_point["serialized_pooling"] = [meta]
+    export_out = export_module(export_point)
+
+    for key in (
+        "feat",
+        "grid_coord",
+        "serialized_order",
+        "serialized_inverse",
+        "batch",
+        "sparse_shape",
+        "pooling_inverse",
+    ):
+        left = train_out[key]
+        right = export_out[key]
+        if left.dtype.is_floating_point:
+            torch.testing.assert_close(left, right, msg=f"Mismatch for {key}")
+        else:
+            assert torch.equal(left, right), f"Mismatch for {key}"
