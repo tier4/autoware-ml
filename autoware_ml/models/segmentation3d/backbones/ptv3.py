@@ -117,12 +117,16 @@ class SerializedPoolingMeta:
 
 
 def _pooling_depth(stride: int) -> int:
-    """Return how many serialized-code bit triplets are removed by one pooling stride."""
-    depth = 0
-    value = int(stride)
-    while value > 1:
-        depth += 1
-        value >>= 1
+    """Return how many serialized-code bit triplets are removed by one pooling stride.
+
+    Raises:
+        ValueError: If ``stride`` is not a power of two. Serialized pooling
+            merges voxels by dropping whole bit triplets from the serialized
+            code, which is only meaningful for power-of-two strides.
+    """
+    depth = (math.ceil(stride) - 1).bit_length()
+    if stride != (1 << depth):
+        raise ValueError(f"SerializedPooling stride must be a power of two, got {stride}.")
     return depth
 
 
@@ -690,9 +694,13 @@ class SerializedPooling(PointModule):
             stride: Hierarchical stride factor.
             shuffle_orders: Whether to shuffle serialization orders after pooling.
             export_stage_index: Pooling metadata index consumed in export mode.
+
+        Raises:
+            ValueError: If ``stride`` is not a power of two.
         """
         super().__init__()
         self.stride = stride
+        self.pooling_depth = _pooling_depth(stride)
         self.shuffle_orders = shuffle_orders
         self.export_mode = False
         self.export_stage_index = export_stage_index
@@ -709,7 +717,7 @@ class SerializedPooling(PointModule):
         Returns:
             Coarser point container with pooled features.
         """
-        pooling_depth = (math.ceil(self.stride) - 1).bit_length()
+        pooling_depth = self.pooling_depth
         if not self.export_mode and pooling_depth > int(point.serialized_depth.item()):
             pooling_depth = 0
 
