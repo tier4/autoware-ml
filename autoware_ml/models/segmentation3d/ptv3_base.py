@@ -27,37 +27,17 @@ SERIALIZED_POOLING_ORDER_FIELDS = frozenset({"serialized_order", "serialized_inv
 
 
 def validate_serialization_geometry(
-    backbone: PointTransformerV3Backbone,
-    grid_size: float,
-    point_cloud_range: Sequence[float],
+    backbone: nn.Module, grid_size: float, point_cloud_range: Sequence[float]
 ) -> None:
-    """Validate that the configured geometry supports the full pooling hierarchy.
-
-    Serialized pooling drops one code bit triplet per pooling depth step, so
-    the serialization depth derived from the configured point-cloud range and
-    grid size must cover the cumulative depth of all pooling stages. Otherwise
-    train-time pooling silently falls back to a no-op while export-time
-    metadata pools unconditionally, and the two diverge.
-
-    Raises:
-        ValueError: If the serialization depth derived from ``grid_size`` and
-            ``point_cloud_range`` is smaller than the cumulative pooling depth
-            of the backbone.
-    """
-    total_pooling_depth = sum(
-        module.pooling_depth
-        for module in backbone.modules()
-        if isinstance(module, SerializedPooling)
+    """Raise if the configured geometry cannot cover the backbone's pooling hierarchy."""
+    pooling_depth = sum(
+        m.pooling_depth for m in backbone.modules() if isinstance(m, SerializedPooling)
     )
-    range_tensor = torch.tensor(tuple(point_cloud_range), dtype=torch.float32)
-    axis_extents = (range_tensor[3:] - range_tensor[:3]) / grid_size
-    serialization_depth = int(bit_length_tensor(torch.max(axis_extents)).item())
-    if serialization_depth < total_pooling_depth:
+    extent = max(point_cloud_range[i + 3] - point_cloud_range[i] for i in range(3))
+    if int(bit_length_tensor(extent / grid_size).item()) < pooling_depth:
         raise ValueError(
-            f"point_cloud_range {tuple(point_cloud_range)} with grid_size {grid_size} yields "
-            f"serialization depth {serialization_depth}, but the backbone pooling stages "
-            f"require at least {total_pooling_depth}. Enlarge point_cloud_range, reduce "
-            f"grid_size, or remove pooling stages."
+            f"point_cloud_range {tuple(point_cloud_range)} with grid_size {grid_size} cannot "
+            f"cover the backbone's cumulative pooling depth {pooling_depth}."
         )
 
 
@@ -92,11 +72,6 @@ class PTv3BaseModel(BaseModel):
                 in eval mode with its parameters frozen.
             **kwargs: Keyword arguments forwarded to :class:`BaseModel` (and
                 further up the MRO chain).
-
-        Raises:
-            ValueError: If the serialization depth derived from ``grid_size``
-                and ``point_cloud_range`` cannot cover the backbone's pooling
-                hierarchy.
         """
         super().__init__(**kwargs)
         self.backbone = backbone

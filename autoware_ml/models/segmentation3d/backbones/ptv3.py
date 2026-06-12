@@ -117,13 +117,7 @@ class SerializedPoolingMeta:
 
 
 def _pooling_depth(stride: int) -> int:
-    """Return how many serialized-code bit triplets are removed by one pooling stride.
-
-    Raises:
-        ValueError: If ``stride`` is not a power of two. Serialized pooling
-            merges voxels by dropping whole bit triplets from the serialized
-            code, which is only meaningful for power-of-two strides.
-    """
+    """Return how many serialized-code bit triplets are removed by one pooling stride."""
     depth = (math.ceil(stride) - 1).bit_length()
     if stride != (1 << depth):
         raise ValueError(f"SerializedPooling stride must be a power of two, got {stride}.")
@@ -694,9 +688,6 @@ class SerializedPooling(PointModule):
             stride: Hierarchical stride factor.
             shuffle_orders: Whether to shuffle serialization orders after pooling.
             export_stage_index: Pooling metadata index consumed in export mode.
-
-        Raises:
-            ValueError: If ``stride`` is not a power of two.
         """
         super().__init__()
         self.stride = stride

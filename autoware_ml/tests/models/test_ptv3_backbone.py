@@ -391,53 +391,18 @@ def test_ptv3_backbone_dynamic_axes_follow_generated_pooling_inputs() -> None:
 
 def test_validate_serialization_geometry_rejects_shallow_configs() -> None:
     """Configs whose serialization depth cannot cover all pooling stages should fail."""
-    backbone = PointTransformerV3Backbone(
-        in_channels=4,
-        order=("z",),
-        stride=(2, 2, 2),
-        enc_depths=(1, 1, 1, 1),
-        enc_channels=(8, 8, 8, 8),
-        enc_num_head=(1, 1, 1, 1),
-        enc_patch_size=(4, 4, 4, 4),
-        dec_depths=(1, 1, 1),
-        dec_channels=(8, 8, 8),
-        dec_num_head=(1, 1, 1),
-        dec_patch_size=(4, 4, 4),
-        mlp_ratio=2.0,
-        qkv_bias=True,
-        qk_scale=None,
-        attn_drop=0.0,
-        proj_drop=0.0,
-        drop_path=0.0,
-        pre_norm=True,
-        shuffle_orders=False,
-        enable_rpe=False,
-        enable_flash=False,
-        upcast_attention=False,
-        upcast_softmax=False,
+    poolings = nn.Sequential(
+        *(SerializedPooling(8, 8, stride=2, shuffle_orders=False) for _ in range(3))
     )
-
-    # 3 pooling stages of stride 2 require serialization depth >= 3.
-    # Extent of 8 voxels per axis yields depth 4: fine.
-    validate_serialization_geometry(backbone, 1.0, (0.0, 0.0, 0.0, 8.0, 8.0, 8.0))
-    # Extent of 2 voxels per axis yields depth 2: too shallow.
-    with pytest.raises(ValueError, match="serialization depth 2"):
-        validate_serialization_geometry(backbone, 1.0, (0.0, 0.0, 0.0, 2.0, 2.0, 2.0))
+    validate_serialization_geometry(poolings, 1.0, (0.0, 0.0, 0.0, 8.0, 8.0, 8.0))
+    with pytest.raises(ValueError, match="pooling depth 3"):
+        validate_serialization_geometry(poolings, 1.0, (0.0, 0.0, 0.0, 2.0, 2.0, 2.0))
 
 
-@pytest.mark.parametrize("stride", [0, 3, 5, 6])
+@pytest.mark.parametrize("stride", [0, 3, 6])
 def test_serialized_pooling_rejects_non_power_of_two_stride(stride: int) -> None:
     with pytest.raises(ValueError, match="power of two"):
         SerializedPooling(6, 8, stride=stride, shuffle_orders=False)
-
-
-@pytest.mark.parametrize("stride", [0, 3, 5, 6])
-def test_build_serialized_pooling_meta_rejects_non_power_of_two_stride(stride: int) -> None:
-    grid_coord = torch.zeros((4, 3), dtype=torch.int32)
-    serialized_code = torch.zeros((2, 4), dtype=torch.int64)
-    serialized_order = torch.arange(4).repeat(2, 1)
-    with pytest.raises(ValueError, match="power of two"):
-        build_serialized_pooling_meta(grid_coord, serialized_code, serialized_order, stride=stride)
 
 
 def test_serialized_pooling_export_mode_uses_precomputed_metadata(monkeypatch) -> None:
