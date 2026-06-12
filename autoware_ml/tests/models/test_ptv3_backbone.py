@@ -391,12 +391,12 @@ def test_ptv3_backbone_dynamic_axes_follow_generated_pooling_inputs() -> None:
 
 def test_validate_serialization_geometry_rejects_shallow_configs() -> None:
     """Configs whose serialization depth cannot cover all pooling stages should fail."""
-    poolings = nn.Sequential(
+    pooling_stages = nn.Sequential(
         *(SerializedPooling(8, 8, stride=2, shuffle_orders=False) for _ in range(3))
     )
-    validate_serialization_geometry(poolings, 1.0, (0.0, 0.0, 0.0, 8.0, 8.0, 8.0))
+    validate_serialization_geometry(pooling_stages, 1.0, (0.0, 0.0, 0.0, 8.0, 8.0, 8.0))
     with pytest.raises(ValueError, match="pooling depth 3"):
-        validate_serialization_geometry(poolings, 1.0, (0.0, 0.0, 0.0, 2.0, 2.0, 2.0))
+        validate_serialization_geometry(pooling_stages, 1.0, (0.0, 0.0, 0.0, 2.0, 2.0, 2.0))
 
 
 @pytest.mark.parametrize("stride", [0, 3, 6])
