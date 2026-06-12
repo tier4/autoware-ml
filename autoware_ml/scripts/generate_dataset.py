@@ -49,6 +49,8 @@ def main(cfg: DictConfig):
     # Process scenario records and save them to a parquet file
     database.process_scenario_records()
 
+    database.load_scenario_records()
+
 
 if __name__ == "__main__":
     main()

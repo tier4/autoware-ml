@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -183,6 +184,17 @@ class BaseDatabase:
 
         return self._scenarios
 
+    @property
+    def database_hash(self) -> str:
+        """
+        Get a hash for the database based on its version and scenarios.
+
+        Returns:
+          str: Hash of the database.
+        """
+
+        return hashlib.sha256(str(self).encode("utf-8")).hexdigest()
+
     def get_polars_schema(self) -> pl.Schema:
         """
         Get the polars schema for the database.
@@ -208,12 +220,33 @@ class BaseDatabase:
                     unique_scenarios[scenario.scenario_id] = scenario
         return unique_scenarios
 
-    def process_scenario_records(self) -> Sequence[DatasetRecord]:
+    def process_scenario_records(self) -> None:
+        """Process scenario records from the database."""
+
+        raise NotImplementedError("Subclasses must implement process_scenario_records method!")
+
+    def load_scenario_records(self) -> Sequence[DatasetRecord]:
         """
-        Process scenario records from the database.
+        Load scenario records from the database.
 
         Returns:
           Sequence[DatasetRecord]: Sequence of dataset records.
         """
+        df_cache_path = (
+            self._cache_path / f"{self._cache_file_prefix_name}_{self.database_hash}.parquet"
+        )
+        if not df_cache_path.exists():
+            raise IOError(
+                f"Cache file {df_cache_path} does not exist. "
+                f"Please run process_scenario_records() to generate the cache file "
+                f"before loading the scenario records."
+            )
 
-        raise NotImplementedError("Subclasses must implement process_scenario_records method!")
+        df = pl.read_parquet(df_cache_path, schema=self.get_polars_schema())
+        # Convert the dataframe to a list of dataset records
+        df_records = df.to_dicts()
+        dataset_records = [DatasetRecord.load_from_dictionary(record) for record in df_records]
+        logger.info(
+            f"Loaded {len(dataset_records)} scenario records from cache file {df_cache_path}"
+        )
+        return dataset_records
