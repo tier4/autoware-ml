@@ -192,8 +192,12 @@ class BaseDatabase:
         Returns:
           str: Hash of the database.
         """
-
-        return hashlib.sha256(str(self).encode("utf-8")).hexdigest()
+        hash_str = str(self)
+        polars_schema = self.get_polars_schema()
+        # Convert the polars schema to a string representation
+        schema_str = str(polars_schema)
+        hash_str += schema_str
+        return hashlib.sha256(hash_str.encode("utf-8")).hexdigest()
 
     def get_polars_schema(self) -> pl.Schema:
         """
