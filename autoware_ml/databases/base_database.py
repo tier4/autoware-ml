@@ -229,12 +229,12 @@ class BaseDatabase:
 
         raise NotImplementedError("Subclasses must implement process_scenario_records method!")
 
-    def load_scenario_records(self) -> Sequence[DatasetRecord]:
+    def load_polars_scenario_dataframe(self) -> pl.DataFrame:
         """
-        Load scenario records from the database.
+        Load the scenario records as a Polars dataframe.
 
         Returns:
-          Sequence[DatasetRecord]: Sequence of dataset records.
+          pl.DataFrame: Polars dataframe of the scenario records.
         """
         df_cache_path = (
             self._cache_path / f"{self._cache_file_prefix_name}_{self.database_hash}.parquet"
@@ -247,10 +247,18 @@ class BaseDatabase:
             )
 
         df = pl.read_parquet(df_cache_path, schema=self.get_polars_schema())
+        logger.info(f"Loaded scenario records as Polars dataframe from cache file {df_cache_path}")
+        return df
+
+    def load_scenario_records(self) -> Sequence[DatasetRecord]:
+        """
+        Load scenario records from the database.
+
+        Returns:
+          Sequence[DatasetRecord]: Sequence of dataset records.
+        """
+        df = self.load_polars_scenario_dataframe()
         # Convert the dataframe to a list of dataset records
-        df_records = df.to_dicts()
-        dataset_records = [DatasetRecord.load_from_dictionary(record) for record in df_records]
-        logger.info(
-            f"Loaded {len(dataset_records)} scenario records from cache file {df_cache_path}"
-        )
+        dataset_records = [DatasetRecord.load_from_dictionary(record) for record in df.to_dicts()]
+        logger.info(f"Loaded {len(dataset_records)} scenario records from database")
         return dataset_records

@@ -342,7 +342,7 @@ class T4RecordsGenerator:
             lidar_pointcloud_num_features=self.lidar_pointcloud_num_features,
             lidar_sensor_to_ego_pose_matrix=lidar_sensor_to_ego_matrix,
             lidar_frame_ego_pose_to_global_matrix=lidar_frame_ego_pose_to_global_matrix,
-            lidar_sensor_to_lidar_sweep_matrices=np.eye(
+            lidar_sensor_to_lidar_sweep_matrix=np.eye(
                 4
             ),  # Always the identity matrix for the main lidar sensor
             lidar_pointcloud_semantic_mask_path=lidar_pointcloud_semantic_mask_path,
@@ -478,7 +478,7 @@ class T4RecordsGenerator:
                     lidar_pointcloud_num_features=self.lidar_pointcloud_num_features,
                     lidar_sensor_to_ego_pose_matrix=current_lidar_sensor_to_ego_matrix,
                     lidar_frame_ego_pose_to_global_matrix=lidar_sweep_frame_ego_pose_to_global_matrix,
-                    lidar_sensor_to_lidar_sweep_matrices=lidar_sensor_to_lidar_sweep_matrix,
+                    lidar_sensor_to_lidar_sweep_matrix=lidar_sensor_to_lidar_sweep_matrix,
                     lidar_pointcloud_semantic_mask_path=None,  # Always None for lidar sweeps
                 )
             )

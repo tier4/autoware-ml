@@ -14,11 +14,11 @@
 
 from __future__ import annotations
 
-from abc import abstractmethod
 from collections import defaultdict
 from typing import Sequence
 from types import MappingProxyType
 
+import polars as pl
 
 from autoware_ml.databases.scenarios import Scenarios
 from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord
@@ -40,8 +40,7 @@ class ScenarioSplitter:
         """
         return f"{self.__class__.__name__}()"
 
-    @abstractmethod
-    def __call__(
+    def split_by_dataset_records(
         self,
         dataset_records: Sequence[DatasetRecord],
         scenarios: Scenarios,
@@ -66,4 +65,32 @@ class ScenarioSplitter:
                 for dataset_record in dataset_records
                 if dataset_record.scenario_id in unique_scenario_ids
             ]
-        return splitter_scenarios
+        # Make it immutable by returning a MappingProxyType
+        return MappingProxyType(splitter_scenarios)
+
+    def split_by_polars_dataframe(
+        self,
+        dataset_dataframe: pl.DataFrame,
+        scenarios: Scenarios,
+    ) -> MappingProxyType[SplitType, pl.DataFrame]:
+        """
+        Split the dataset dataframe into different splits (e.g. train, val, test) based on the scenarios.
+
+        Args:
+          dataset_dataframe: Polars DataFrame containing the dataset records to be split.
+          scenarios: Scenarios object containing the scenario data for splitting.
+
+        Returns:
+          MappingProxyType[SplitType, pl.DataFrame]: Mapping from split type to Polars DataFrame of dataset records in that split.
+        """
+        splitter_scenarios = {}
+        scenario_data = scenarios.scenario_data
+        for split, scenario_ids in scenario_data.items():
+            # Convert scenario_ids to set for faster lookup
+            unique_scenario_ids = set(scenario_ids)
+            splitter_scenarios[split] = dataset_dataframe.filter(
+                pl.col("scenario_id").is_in(unique_scenario_ids)
+            )
+
+        # Make it immutable by returning a MappingProxyType
+        return MappingProxyType(splitter_scenarios)

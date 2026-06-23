@@ -18,13 +18,19 @@ from abc import abstractmethod
 from typing import Sequence, Protocol
 from types import MappingProxyType
 
+import polars as pl
+
 from autoware_ml.databases.scenarios import Scenarios
 from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord
 from autoware_ml.types.dataset import SplitType
 
 
 class SplitterInterface(Protocol):
-    """Protocol for splitter classes that defines the common interface for every dataset type."""
+    """
+    Protocol for splitter classes that defines the common interface for every dataset type.
+    Each protocol class must support either
+    split_by_dataset_records or split_by_polars_dataframe or both depending on the dataset type.
+    """
 
     @abstractmethod
     def __str__(self) -> str:
@@ -38,7 +44,7 @@ class SplitterInterface(Protocol):
         raise NotImplementedError("Splitter must define __str__!")
 
     @abstractmethod
-    def __call__(
+    def split_by_dataset_records(
         self,
         dataset_records: Sequence[DatasetRecord],
         scenarios: Scenarios,
@@ -53,4 +59,22 @@ class SplitterInterface(Protocol):
         Returns:
           MappingProxyType[SplitType, Sequence[DatasetRecord]]: Mapping from split type to sequence of dataset records in that split.
         """
-        raise NotImplementedError("Splitter must define __call__!")
+        raise NotImplementedError("Splitter must define split_by_dataset_records()!")
+
+    @abstractmethod
+    def split_by_polars_dataframe(
+        self,
+        dataset_dataframe: pl.DataFrame,
+        scenarios: Scenarios,
+    ) -> MappingProxyType[SplitType, pl.DataFrame]:
+        """
+        Split the dataset dataframe into different splits (e.g. train, val, test) based on the scenarios.
+
+        Args:
+          dataset_dataframe: Polars DataFrame of dataset records to be split.
+          scenarios: Scenarios object containing the scenario data for splitting.
+
+        Returns:
+          MappingProxyType[SplitType, pl.DataFrame]: Mapping from split type to Polars DataFrame of dataset records in that split.
+        """
+        raise NotImplementedError("Splitter must define split_by_polars_dataframe()!")
