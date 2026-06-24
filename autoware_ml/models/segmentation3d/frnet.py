@@ -19,16 +19,13 @@ This module contains the high-level FRNet Lightning wrapper and export logic.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
 
 import torch
 import torch.nn as nn
-from torch.optim import Optimizer
-from torch.optim.lr_scheduler import LRScheduler
 
-from autoware_ml.metrics.segmentation3d import compute_segmentation_metrics
 from autoware_ml.models.base import BaseModel
 from autoware_ml.utils.deploy import ExportSpec
 
@@ -85,10 +82,7 @@ class FRNet(BaseModel):
         backbone: nn.Module,
         decode_head: nn.Module,
         auxiliary_head: Sequence[nn.Module] | None = None,
-        optimizer: Callable[..., Optimizer] | None = None,
-        scheduler: Callable[[Optimizer], LRScheduler] | None = None,
-        optimizer_group_overrides: Mapping[str, Mapping[str, Any]] | None = None,
-        scheduler_config: Mapping[str, Any] | None = None,
+        **kwargs: Any,
     ) -> None:
         """Initialize FRNet.
 
@@ -97,19 +91,9 @@ class FRNet(BaseModel):
             backbone: FRNet backbone.
             decode_head: Main decode head.
             auxiliary_head: Optional auxiliary heads.
-            optimizer: Optimizer factory.
-            scheduler: Scheduler factory.
-            optimizer_group_overrides: Optional optimizer overrides keyed by
-                model-defined optimizer group name.
-            scheduler_config: Optional Lightning scheduler metadata such as
-                ``interval`` or ``monitor``.
+            **kwargs: Keyword arguments forwarded to :class:`BaseModel`.
         """
-        super().__init__(
-            optimizer=optimizer,
-            scheduler=scheduler,
-            optimizer_group_overrides=optimizer_group_overrides,
-            scheduler_config=scheduler_config,
-        )
+        super().__init__(**kwargs)
         self.voxel_encoder = voxel_encoder
         self.backbone = backbone
         self.decode_head = decode_head
@@ -235,19 +219,19 @@ class FRNet(BaseModel):
                 metrics[f"aux_{head_index}_{loss_name}"] = loss_value
                 total_loss = total_loss + loss_value
 
-        with torch.no_grad():
-            predictions = point_logits.argmax(dim=1)
-            metrics.update(
-                compute_segmentation_metrics(
-                    predictions,
-                    pts_semantic_mask,
-                    self.num_classes,
-                    self.ignore_index,
-                )
-            )
-
         metrics["loss"] = total_loss
         return metrics
+
+    def build_eval_output(
+        self, batch: Mapping[str, Any], outputs: tuple[torch.Tensor, ...]
+    ) -> dict[str, torch.Tensor]:
+        """Pair point predictions with targets for the segmentation metric."""
+        point_logits = outputs[0]
+        return {
+            "seg_pred_labels": point_logits.argmax(dim=1),
+            "seg_target_labels": batch["pts_semantic_mask"],
+            "seg_coord": batch["points"][:, :3],
+        }
 
     def predict_outputs(
         self,

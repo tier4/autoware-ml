@@ -39,37 +39,24 @@ datamodule:
   name_mapping: ${name_mapping}
   train_frame_sampling: null
 
+metric_eval_class_range:
+  car: 102.0
+  truck: 102.0
+  construction_vehicle: 102.0
+  bus: 102.0
+  trailer: 102.0
+  barrier: 102.0
+  motorcycle: 102.0
+  bicycle: 102.0
+  pedestrian: 102.0
+  traffic_cone: 102.0
+metric_ranges:
+  - { _target_: autoware_ml.metrics.base.MetricRange, name: 0-50m, min_distance: 0.0, max_distance: 50.0 }
+  - { _target_: autoware_ml.metrics.base.MetricRange, name: 50-90m, min_distance: 50.0, max_distance: 90.0 }
+  - { _target_: autoware_ml.metrics.base.MetricRange, name: 90-102m, min_distance: 90.0, max_distance: 102.0 }
+
 model:
   export_output_names: [heatmap, reg, height, dim, rot, vel]
-  metric:
-    _target_: autoware_ml.metrics.detection3d.CenterDistanceMeanAP
-    class_names: ${class_names}
-    thresholds: [0.5, 1.0, 2.0, 4.0]
-    eval_class_range:
-      car: 102.0
-      truck: 102.0
-      construction_vehicle: 102.0
-      bus: 102.0
-      trailer: 102.0
-      barrier: 102.0
-      motorcycle: 102.0
-      bicycle: 102.0
-      pedestrian: 102.0
-      traffic_cone: 102.0
-    min_point_numbers: 0
-    ranges:
-      - _target_: autoware_ml.metrics.detection3d.DetectionRange
-        name: 0-50m
-        min_distance: 0.0
-        max_distance: 50.0
-      - _target_: autoware_ml.metrics.detection3d.DetectionRange
-        name: 50-90m
-        min_distance: 50.0
-        max_distance: 90.0
-      - _target_: autoware_ml.metrics.detection3d.DetectionRange
-        name: 90-102m
-        min_distance: 90.0
-        max_distance: 102.0
   bbox_head:
     _target_: autoware_ml.models.detection3d.heads.centerpoint.CenterHead
     in_channels: 128

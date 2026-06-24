@@ -7,17 +7,14 @@ them with an explicit BEV encoder.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
 
 import torch
 import torch.nn as nn
-from torch.optim import Optimizer
-from torch.optim.lr_scheduler import LRScheduler
 
-from autoware_ml.metrics.detection3d import CenterDistanceMeanAP
-from autoware_ml.models.detection3d.base import Detection3DBaseModel
+from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
 from autoware_ml.models.segmentation3d.backbones.ptv3 import PointTransformerV3Backbone
 from autoware_ml.models.segmentation3d.ptv3_base import (
     PTv3BaseModel,
@@ -286,7 +283,7 @@ class _PTv3DetHeadExportModule(nn.Module):
         return tuple(outputs[name] for name in self.output_names)
 
 
-class PTv3DetectionModel(PTv3BaseModel, Detection3DBaseModel):
+class PTv3DetectionModel(PTv3BaseModel):
     """Compose PTv3 features with dense BEV detection heads."""
 
     def __init__(
@@ -299,28 +296,36 @@ class PTv3DetectionModel(PTv3BaseModel, Detection3DBaseModel):
         grid_size: float,
         point_cloud_range: Sequence[float],
         freeze_backbone: bool = False,
-        optimizer: Callable[..., Optimizer] | None = None,
-        scheduler: Callable[[Optimizer], LRScheduler] | None = None,
-        optimizer_group_overrides: Mapping[str, Mapping[str, Any]] | None = None,
-        scheduler_config: Mapping[str, Any] | None = None,
-        metric: CenterDistanceMeanAP | None = None,
+        **kwargs: Any,
     ) -> None:
-        """Initialize the PTv3 detection model."""
+        """Initialize the PTv3 detection model.
+
+        Args:
+            backbone: PTv3 backbone module.
+            bev_projector: Projects sparse features into a dense BEV grid.
+            bev_encoder: Dense BEV feature encoder.
+            bbox_head: Detection head producing the decoded predictions.
+            export_output_names: Ordered output names used during export.
+            grid_size: Voxel grid size used to derive sparse shape.
+            point_cloud_range: Point-cloud range used to derive sparse shape.
+            freeze_backbone: When ``True``, keep the backbone frozen in eval mode.
+            **kwargs: Keyword arguments forwarded to :class:`BaseModel`.
+        """
         super().__init__(
             backbone=backbone,
             grid_size=grid_size,
             point_cloud_range=point_cloud_range,
             freeze_backbone=freeze_backbone,
-            optimizer=optimizer,
-            scheduler=scheduler,
-            optimizer_group_overrides=optimizer_group_overrides,
-            scheduler_config=scheduler_config,
-            metric=metric,
+            **kwargs,
         )
         self.bev_projector = bev_projector
         self.bev_encoder = bev_encoder
         self.bbox_head = bbox_head
         self.export_output_names = list(export_output_names)
+
+    def build_eval_output(self, batch: Mapping[str, Any], outputs: Any) -> dict[str, Any]:
+        """Decode detections and pair them with ground truth for metrics."""
+        return detection_eval_output(self.bbox_head.predict(outputs), batch)
 
     def get_export_output_names(self) -> list[str]:
         """Return the ordered export output names."""

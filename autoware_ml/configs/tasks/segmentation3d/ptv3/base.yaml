@@ -12,6 +12,7 @@ datamodule:
     segment: concat
     inverse: index_concat
     origin_segment: concat
+    origin_coord: concat
     feat: concat
   train_dataloader_cfg:
     batch_size: 8
@@ -45,6 +46,32 @@ model:
   num_classes: ${num_classes}
   backbone_out_channels: 64
   ignore_index: ${ignore_index}
+  metrics:
+    - _target_: autoware_ml.metrics.segmentation3d.suite.Segmentation3DMetricSuite
+      num_classes: ${num_classes}
+      ignore_index: ${ignore_index}
+      class_names: ${seg_class_names:${oc.select:class_mapping, null}, ${num_classes}}
+      ranges:
+        - _target_: autoware_ml.metrics.base.MetricRange
+          name: 0-50m
+          min_distance: 0.0
+          max_distance: 50.0
+        - _target_: autoware_ml.metrics.base.MetricRange
+          name: 50-90m
+          min_distance: 50.0
+          max_distance: 90.0
+        - _target_: autoware_ml.metrics.base.MetricRange
+          name: 90-121m
+          min_distance: 90.0
+          max_distance: 121.0
+        - _target_: autoware_ml.metrics.base.MetricRange
+          name: 0-121m
+          min_distance: 0.0
+          max_distance: 121.0
+      components:
+        - { _target_: autoware_ml.metrics.segmentation3d.iou.IoU, stages: [val, test] }
+        - { _target_: autoware_ml.metrics.segmentation3d.accuracy.Accuracy, stages: [val, test] }
+        - { _target_: autoware_ml.metrics.segmentation3d.precision_recall_f1.PrecisionRecallF1, stages: [val, test] }
   grid_size: ${grid_size}
   point_cloud_range: ${point_cloud_range}
   optimizer:

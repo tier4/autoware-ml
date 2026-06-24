@@ -19,26 +19,24 @@ This module contains the high-level PTv3 Lightning wrapper and export logic.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
 
 import torch
 import torch.nn as nn
-from torch.optim.lr_scheduler import LRScheduler
 
 from autoware_ml.losses.segmentation3d.lovasz import LovaszLoss
-from autoware_ml.metrics.segmentation3d import compute_segmentation_metrics
 from autoware_ml.models.segmentation3d.backbones.ptv3 import Block, PointTransformerV3Backbone
 from autoware_ml.models.segmentation3d.ptv3_base import (
     PTv3BaseModel,
     _PTv3BackboneExportModule,
     _PTv3SegHeadExportModule,
+    _run_ptv3_backbone_export,
     build_point_feature_dynamic_axes,
     build_ptv3_backbone_dynamic_axes,
     build_ptv3_input_dynamic_axes,
     build_serialized_pooling_export_inputs,
-    _run_ptv3_backbone_export,
 )
 from autoware_ml.utils.deploy import ExportSpec
 from autoware_ml.utils.point_cloud.structures import serialize_point_cloud_batch
@@ -111,11 +109,8 @@ class PTv3SegmentationModel(PTv3BaseModel):
         ignore_index: int,
         grid_size: float,
         point_cloud_range: Sequence[float],
-        optimizer: Callable[..., torch.optim.Optimizer],
-        scheduler: Callable[[torch.optim.Optimizer], LRScheduler] | None = None,
-        optimizer_group_overrides: Mapping[str, Mapping[str, Any]] | None = None,
-        scheduler_config: Mapping[str, Any] | None = None,
         lovasz_weight: float = 1.0,
+        **kwargs: Any,
     ) -> None:
         """Initialize the PTv3 segmentation model.
 
@@ -128,22 +123,14 @@ class PTv3SegmentationModel(PTv3BaseModel):
                 serialization depth.
             point_cloud_range: Point-cloud range used to derive sparse shape
                 and serialization depth.
-            optimizer: Optimizer factory.
-            scheduler: Scheduler factory.
-            optimizer_group_overrides: Optional optimizer overrides keyed by
-                model-defined optimizer group name.
-            scheduler_config: Optional Lightning scheduler metadata such as
-                ``interval`` or ``monitor``.
             lovasz_weight: Weight applied to the Lovasz loss term.
+            **kwargs: Keyword arguments forwarded to :class:`BaseModel`.
         """
         super().__init__(
             backbone=backbone,
             grid_size=grid_size,
             point_cloud_range=point_cloud_range,
-            optimizer=optimizer,
-            scheduler=scheduler,
-            optimizer_group_overrides=optimizer_group_overrides,
-            scheduler_config=scheduler_config,
+            **kwargs,
         )
         self.seg3d_head = nn.Linear(backbone_out_channels, num_classes)
         self.cross_entropy = nn.CrossEntropyLoss(ignore_index=ignore_index)
@@ -205,47 +192,48 @@ class PTv3SegmentationModel(PTv3BaseModel):
         batch_inputs_dict: Mapping[str, Any],
         outputs: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
-        """Compute segmentation losses and point-wise accuracy.
+        """Compute segmentation losses against voxel-level targets.
 
-        Losses are computed against voxel-level targets for efficiency.
-        Accuracy metrics are computed at the original-point level by
-        scattering voxel predictions back through ``inverse`` and comparing
-        against ``origin_segment``.
+        Quality metrics (mIoU, accuracy) are produced at epoch end by the
+        configured metrics through :meth:`build_eval_output`, not here.
 
         Args:
-            batch_inputs_dict: Full batch dictionary. Must contain
-                ``segment`` (voxel-level targets), ``inverse`` (voxel-to-point
-                mapping), and ``origin_segment`` (original-point targets).
-            outputs: Voxel-level segmentation logits returned by
-                :meth:`forward`.
+            batch_inputs_dict: Full batch dictionary. Must contain ``segment``
+                (voxel-level targets).
+            outputs: Voxel-level segmentation logits returned by :meth:`forward`.
 
         Returns:
-            Dictionary with losses and point-level metrics.
+            Dictionary with the segmentation losses.
         """
         segment = batch_inputs_dict["segment"]
-        inverse = batch_inputs_dict["inverse"]
-        origin_segment = batch_inputs_dict["origin_segment"]
-
         loss_ce = self.cross_entropy(outputs, segment)
         loss_lovasz = self.lovasz(outputs, segment)
-        metrics: dict[str, torch.Tensor] = {
+        return {
             "loss_ce": loss_ce,
             "loss_lovasz": loss_lovasz,
             "loss": loss_ce + loss_lovasz,
         }
 
-        with torch.no_grad():
-            point_predictions = outputs.argmax(dim=1)[inverse.long()]
-            metrics.update(
-                compute_segmentation_metrics(
-                    point_predictions,
-                    origin_segment.long(),
-                    self.num_classes,
-                    self.ignore_index,
-                )
-            )
+    def build_eval_output(
+        self, batch: Mapping[str, Any], outputs: torch.Tensor
+    ) -> dict[str, torch.Tensor]:
+        """Scatter voxel predictions to points for the segmentation metric.
 
-        return metrics
+        Args:
+            batch: Full batch dictionary with ``inverse`` (voxel-to-point map),
+                ``origin_segment`` (original-point targets), and ``origin_coord``
+                (original-point coordinates for range bucketing).
+            outputs: Voxel-level segmentation logits returned by :meth:`forward`.
+
+        Returns:
+            Point-level predictions and targets keyed for the segmentation metric.
+        """
+        point_predictions = outputs.argmax(dim=1)[batch["inverse"].long()]
+        return {
+            "seg_pred_labels": point_predictions,
+            "seg_target_labels": batch["origin_segment"].long(),
+            "seg_coord": batch["origin_coord"],
+        }
 
     def predict_outputs(
         self,
