@@ -80,10 +80,32 @@ class MergeObjects3D(BaseTransform):
         """
         if merge_type not in {"extend_longer", "union"}:
             raise ValueError(f"merge_type must be 'extend_longer' or 'union', got {merge_type!r}.")
-        self.merge_objects = [
-            (str(target), [str(primary), str(secondary)])
-            for target, (primary, secondary) in (merge_objects or [])
-        ]
+        merge_rules = [] if merge_objects is None else merge_objects
+        self.merge_objects = []
+        for index, rule in enumerate(merge_rules):
+            if isinstance(rule, str) or not isinstance(rule, Sequence):
+                raise TypeError(
+                    "merge_objects entries must be two-item sequences, "
+                    f"got {type(rule).__name__} at index {index}."
+                )
+            if len(rule) != 2:
+                raise ValueError(
+                    "merge_objects entries must contain [target, [primary, secondary]], "
+                    f"got {list(rule)!r} at index {index}."
+                )
+            target, sources = rule
+            if isinstance(sources, str) or not isinstance(sources, Sequence):
+                raise TypeError(
+                    "merge_objects sources must be two-item sequences, "
+                    f"got {type(sources).__name__} at index {index}."
+                )
+            if len(sources) != 2:
+                raise ValueError(
+                    "merge_objects sources must contain [primary, secondary], "
+                    f"got {sources!r} at index {index}."
+                )
+            primary, secondary = sources
+            self.merge_objects.append((str(target), [str(primary), str(secondary)]))
         self.name_mapping = dict(name_mapping) if name_mapping is not None else None
         self.distance_threshold = float(distance_threshold)
         self.merge_type = merge_type
@@ -279,8 +301,7 @@ def _merge_boxes_extend_longer(box1: np.ndarray, box2: np.ndarray) -> list[float
     new_dy = larger_dy + elongation_length if larger_dy > larger_dx else larger_dy
     new_center = larger_center + elongation_vector / 2.0
 
-    new_z = min(box1[2], box2[2])
-    new_dz = max(box1[2] + box1[5], box2[2] + box2[5]) - new_z
+    new_z, new_dz = _merge_center_z_and_height(box1, box2)
     new_yaw = larger_box[6]
 
     return [new_center[0], new_center[1], new_z, new_dx, new_dy, new_dz, new_yaw]
@@ -302,10 +323,18 @@ def _merge_boxes_union(box1: np.ndarray, box2: np.ndarray) -> list[float]:
     edge1 = float(np.hypot(coords[0][0] - coords[1][0], coords[0][1] - coords[1][1]))
     edge2 = float(np.hypot(coords[1][0] - coords[2][0], coords[1][1] - coords[2][1]))
     new_dx, new_dy = max(edge1, edge2), min(edge1, edge2)
-    new_z = min(box1[2], box2[2])
-    new_dz = max(box1[2] + box1[5], box2[2] + box2[5]) - new_z
+    new_z, new_dz = _merge_center_z_and_height(box1, box2)
     if edge1 >= edge2:
         new_yaw = float(np.arctan2(coords[1][1] - coords[0][1], coords[1][0] - coords[0][0]))
     else:
         new_yaw = float(np.arctan2(coords[2][1] - coords[1][1], coords[2][0] - coords[1][0]))
     return [new_x, new_y, new_z, new_dx, new_dy, new_dz, new_yaw]
+
+
+def _merge_center_z_and_height(box1: np.ndarray, box2: np.ndarray) -> tuple[float, float]:
+    """Return center z and height spanning two center-based boxes."""
+    bottom = min(box1[2] - box1[5] / 2.0, box2[2] - box2[5] / 2.0)
+    top = max(box1[2] + box1[5] / 2.0, box2[2] + box2[5] / 2.0)
+    height = top - bottom
+    center_z = bottom + height / 2.0
+    return float(center_z), float(height)

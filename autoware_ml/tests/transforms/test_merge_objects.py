@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+from omegaconf import OmegaConf
 import pytest
 
 from autoware_ml.transforms.boxes3d.merge import MergeObjects3D
@@ -106,9 +107,33 @@ def test_noop_without_rules() -> None:
     assert out["instances"] == instances
 
 
+def test_hydra_list_config_rules_do_not_require_truthiness() -> None:
+    transform = MergeObjects3D(
+        merge_objects=OmegaConf.create([["truck", ["truck", "trailer"]]]),
+        name_mapping=_NAME_MAPPING,
+    )
+
+    assert transform.merge_objects == [("truck", ["truck", "trailer"])]
+
+
 def test_invalid_merge_type_raises() -> None:
     with pytest.raises(ValueError, match="merge_type"):
         MergeObjects3D(merge_objects=[("truck", ["truck", "trailer"])], merge_type="bogus")
+
+
+def test_extend_longer_merges_center_z_and_height_from_box_faces() -> None:
+    out = _merge().transform(
+        {
+            "instances": [
+                _instance([0, 0, 1, 4, 2, 2, 0], "truck"),
+                _instance([1, 0, 3, 4, 2, 2, 0], "trailer"),
+            ]
+        }
+    )
+
+    _, _, center_z, _, _, height, _ = out["instances"][0]["bbox_3d"]
+    assert center_z == pytest.approx(2.0, abs=1e-6)
+    assert height == pytest.approx(4.0, abs=1e-6)
 
 
 def test_union_strategy_covers_both_boxes() -> None:
@@ -125,3 +150,18 @@ def test_union_strategy_covers_both_boxes() -> None:
     cx, _, _, dx, _, _, _ = out["instances"][0]["bbox_3d"]
     assert dx == pytest.approx(9.0, abs=1e-6)
     assert cx == pytest.approx(2.5, abs=1e-6)
+
+
+def test_union_strategy_merges_center_z_and_height_from_box_faces() -> None:
+    out = _merge(merge_type="union").transform(
+        {
+            "instances": [
+                _instance([0, 0, 1, 4, 2, 2, 0], "truck"),
+                _instance([1, 0, 3, 4, 2, 2, 0], "trailer"),
+            ]
+        }
+    )
+
+    _, _, center_z, _, _, height, _ = out["instances"][0]["bbox_3d"]
+    assert center_z == pytest.approx(2.0, abs=1e-6)
+    assert height == pytest.approx(4.0, abs=1e-6)
