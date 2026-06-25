@@ -35,8 +35,8 @@ class LidarFrameDatasetSchema(BaseFieldSchema):
     lidar_frame_ego_pose_to_global_matrix = DatasetTableColumn(
         "lidar_frame_ego_pose_to_global_matrix", pl.Array(pl.Float32, shape=(4, 4))
     )
-    lidar_sensor_to_lidar_sweep_matrices = DatasetTableColumn(
-        "lidar_sensor_to_lidar_sweep_matrices", pl.Array(pl.Float32, shape=(4, 4))
+    lidar_sensor_to_lidar_sweep_matrix = DatasetTableColumn(
+        "lidar_sensor_to_lidar_sweep_matrix", pl.Array(pl.Float32, shape=(4, 4))
     )
     lidar_pointcloud_semantic_mask_path = DatasetTableColumn(
         "lidar_pointcloud_semantic_mask_path", pl.String
@@ -63,7 +63,7 @@ class LidarFrameDataModel(BaseModel, DataModelInterface):
         the ego pose of this lidar frame.
       lidar_frame_ego_pose_to_global_matrix: Transformation matrix from the ego pose of this lidar
         frame to the global frame.
-      lidar_sensor_to_lidar_sweep_matrices: Transformation matrices from the main lidar sensor
+      lidar_sensor_to_lidar_sweep_matrix: Transformation matrix from the main lidar sensor
         to other lidar sweeps at this frame.
       lidar_pointcloud_semantic_mask_path: Lidar pointcloud semantic mask path. Set to None if it's
         not available.

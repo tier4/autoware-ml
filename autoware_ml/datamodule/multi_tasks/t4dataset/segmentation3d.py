@@ -41,7 +41,7 @@ class T4Segmentation3DTask(BaseDatasetTask):
         # TODO (Kok Seang): Implement the data retrieval for 3D segmentation in the T4 dataset
         # based on the dataset records dataframe and the given index.
         return MultiTaskGTSample(
-            lidar_point_cloud_data_row=None,
+            lidar_point_samples=None,
             point_cloud_features=None,
             detection3d_data_row=None,
             segmentation3d_data_row=None,

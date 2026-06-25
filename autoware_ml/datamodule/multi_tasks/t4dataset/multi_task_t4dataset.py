@@ -1,10 +1,13 @@
 import logging
-from types import MappingProxyType
+from types import MappingProxyType, Sequence
 
 import polars as pl
+import numpy as np
 
+from autoware_ml.databases.schemas.lidar_frames import LidarFrameDatasetSchema
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.datamodule.multi_tasks.dataclasses.multi_task_samples import (
+    LiDARPointCloudSample,
     MultiTaskGTSample,
 )
 from autoware_ml.datamodule.multi_tasks.multi_task_base_dataset import (
@@ -63,16 +66,22 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
         Returns:
           MultiTaskGTSample: Processed multi-task data row, mapped by task type.
         """
-        data_rows = {}
+        data_samples = {}
         for task_type, dataset_task in self.dataset_tasks.items():
-            data_rows[task_type] = dataset_task.get_data_sample(idx)
+            data_samples[task_type] = dataset_task.get_data_sample(idx)
 
         # Retrieve general data row for the given index from the dataset records dataframe
+        lidar_pointcloud_samples = self.get_lidar_pointcloud_data_samples(idx)
 
-        # Merge the data rows from different tasks into a single multi-task data row
-        return MultiTaskGTSample(**data_rows)
+        # Merge the data samples from different tasks into a single multi-task data row
+        return MultiTaskGTSample(
+            lidar_point_samples=lidar_pointcloud_samples,
+            point_cloud_features=None,  # Add point cloud features if available
+            detection3d_sample=data_samples.get(TaskType.DETECTION3D, None),
+            segmentation3d_sample=data_samples.get(TaskType.SEGMENTATION3D, None),
+        )
 
-    def get_lidar_pointcloud_data_row(self, idx: int) -> MultiTaskGTSample:
+    def get_lidar_pointcloud_data_samples(self, idx: int) -> Sequence[LiDARPointCloudSample]:
         """
         Retrieve the lidar point cloud data row for the given index.
 
@@ -80,12 +89,41 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
           idx: Index of the specific record to be processed.
         """
         # Retrieve the lidar point cloud data row for the given index from the dataset records dataframe
-        lidar_pointcloud_data = self.dataset_records_dataframe.item(
+        lidar_pointcloud_metadata_samples = self.dataset_records_dataframe.item(
             idx, DatasetTableSchema.LIDAR_FRAMES.name
         )
 
-        # lidar_pointcloud_data_row = LiDARPointCloudDataRow(lidar_pointcloud_data)
-        return lidar_pointcloud_data
+        lidar_pointcloud_samples = []
+        for lidar_pointcloud_metadata in lidar_pointcloud_metadata_samples:
+            lidar_pointcloud_samples.append(
+                LiDARPointCloudSample(
+                    point_cloud_path=lidar_pointcloud_metadata[
+                        LidarFrameDatasetSchema.PointCloudPath.name
+                    ],
+                    timestamp_seconds=lidar_pointcloud_metadata[
+                        LidarFrameDatasetSchema.TimestampSeconds.name
+                    ],
+                    sensor_to_ego_pose_matrix=np.asarray(
+                        lidar_pointcloud_metadata[
+                            LidarFrameDatasetSchema.lidar_sensor_to_ego_pose_matrix.name
+                        ],
+                        dtype=np.float32,
+                    ),
+                    lidar_to_ego_pose_to_global_matrix=np.asarray(
+                        lidar_pointcloud_metadata[
+                            LidarFrameDatasetSchema.lidar_frame_ego_pose_to_global_matrix.name
+                        ],
+                        dtype=np.float32,
+                    ),
+                    lidar_sensor_to_lidar_sweep_matrix=np.asarray(
+                        lidar_pointcloud_metadata[
+                            LidarFrameDatasetSchema.lidar_sensor_to_lidar_sweep_matrix.name
+                        ],
+                        dtype=np.float32,
+                    ),
+                )
+            )
+        return lidar_pointcloud_samples
 
     def assign_dataset_records(self, dataset_records_dataframe: pl.DataFrame) -> None:
         """

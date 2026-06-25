@@ -72,15 +72,15 @@ class T4Detection3DTask(BaseDatasetTask):
         gt_bboxes_3d = selected_row[DatasetTableSchema.Box3D.name]
         gt_bboxes_labels = selected_row[Box3DDatasetSchema.Labels.name]
 
-        detection3d_data_row = Detection3DGTSample(
+        detection3d_gt_sample = Detection3DGTSample(
             gt_bboxes_3d=np.asarray(gt_bboxes_3d, dtype=np.float32),
             gt_labels_3d=np.asarray(gt_bboxes_labels, dtype=np.int32),
             # Add other necessary fields for 3D detection as needed
         )
 
         return MultiTaskGTSample(
-            lidar_point_cloud_data_row=None,
+            lidar_point_cloud_samples=None,
             point_cloud_features=None,
-            detection3d_data_row=detection3d_data_row,
-            segmentation3d_data_row=None,
+            detection3d_sample=detection3d_gt_sample,
+            segmentation3d_sample=None,
         )

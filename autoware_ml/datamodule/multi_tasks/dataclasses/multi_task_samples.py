@@ -14,6 +14,7 @@ class LiDARPointCloudSample(NamedTuple):
     """
 
     point_cloud_path: str
+    timestamp_seconds: float
     # Transformation matrix from LiDAR sensor frame to ego pose of this LiDAR sensor frame
     sensor_to_ego_pose_matrix: npt.NDArray[np.float32]  # (4, 4)
     # Transformation matrix from ego pose of this LiDAR sensor frame to global frame
