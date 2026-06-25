@@ -19,6 +19,11 @@ detection_filter_attributes:
   - [motorcycle, vehicle_state.parked]
   - [motorcycle, motorcycle_state.without_rider]
 
+datamodule:
+  filter_attributes: ${detection_filter_attributes}
+  min_num_lidar_points: ${train_min_num_lidar_points}
+  use_valid_flag: ${detection_use_valid_flag}
+
 model:
   export_output_names:
     [

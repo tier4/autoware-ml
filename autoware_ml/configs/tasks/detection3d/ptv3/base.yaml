@@ -78,9 +78,6 @@ datamodule:
   test_ann_file: ${datamodule.data_root}/info/detection3d/t4dataset_j6gen2_base_infos_val.pkl
   class_names: ${class_names}
   name_mapping: ${name_mapping}
-  filter_attributes: ${detection_filter_attributes}
-  min_num_lidar_points: ${train_min_num_lidar_points}
-  use_valid_flag: ${detection_use_valid_flag}
   train_frame_sampling:
     repeat_sampling_factor: 0.30
     object_bev_range: ${point_cloud_bev_range}

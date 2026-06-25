@@ -23,6 +23,9 @@ detection_filter_attributes:
   - [motorcycle, motorcycle_state.without_rider]
 
 datamodule:
+  filter_attributes: ${detection_filter_attributes}
+  min_num_lidar_points: ${train_min_num_lidar_points}
+  use_valid_flag: ${detection_use_valid_flag}
   train_dataloader_cfg:
     batch_size: 16
     num_workers: 32
