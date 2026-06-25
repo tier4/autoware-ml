@@ -67,9 +67,7 @@ def test_transfusion_oriented_heatmap_target_runs_through_get_targets() -> None:
         "rot": torch.zeros((1, 2, 2), dtype=torch.float32),
         "vel": torch.zeros((1, 2, 2), dtype=torch.float32),
     }
-    gt_boxes = [
-        torch.tensor([[8.0, 8.0, 0.0, 12.0, 2.0, 1.5, 0.0, 0.0, 0.0]], dtype=torch.float32)
-    ]
+    gt_boxes = [torch.tensor([[8.0, 8.0, 0.0, 12.0, 2.0, 1.5, 0.0, 0.0, 0.0]], dtype=torch.float32)]
     gt_labels = [torch.tensor([0], dtype=torch.long)]
 
     targets = head.get_targets(gt_boxes, gt_labels, outputs)
