@@ -58,9 +58,7 @@ class TpErrors(Metric[DetectionState]):
             # classes with no GT (or too few for the recall bucket) have no error
             # to measure and must not pull the mean to the worst case.
             kept = [item.errors for item in selected.values() if item.count > 0]
-            mean_errors = (
-                mean_tp_errors(kept) if kept else {name: 1.0 for name in ERROR_NAMES}
-            )
+            mean_errors = mean_tp_errors(kept) if kept else {name: 1.0 for name in ERROR_NAMES}
             for error_name, value in mean_errors.items():
                 report[f"m{error_name}_{variant_name}"] = value
 
