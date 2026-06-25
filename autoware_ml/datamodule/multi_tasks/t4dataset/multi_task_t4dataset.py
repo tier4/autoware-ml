@@ -1,5 +1,6 @@
 import logging
-from types import MappingProxyType, Sequence
+from types import MappingProxyType
+from typing import Sequence
 
 import polars as pl
 import numpy as np
