@@ -10,7 +10,7 @@ from autoware_ml.metrics.detection3d.matching import (
     nds,
     select_recall_tp_errors,
 )
-from autoware_ml.metrics.detection3d.structures import DetectionState
+from autoware_ml.metrics.detection3d.structures import ERROR_NAMES, DetectionState
 
 
 class Nds(Metric[DetectionState]):
@@ -40,13 +40,19 @@ class Nds(Metric[DetectionState]):
                 metrics = curve_metrics(curve)
                 aps.append(metrics.ap)
                 aphs.append(metrics.aph)
-                error_dicts.append(select_recall_tp_errors(curve, self.recall_target).errors)
+                # Only curves with selected true positives contribute their TP
+                # errors. A class absent in this range (or with too few GT for the
+                # recall bucket) has no error to measure, so it must not drag the
+                # mean to the worst case.
+                selected = select_recall_tp_errors(curve, self.recall_target)
+                if selected.count > 0:
+                    error_dicts.append(selected.errors)
             per_class_ap.append(mean_valid(aps))
             per_class_aph.append(mean_valid(aphs))
 
         mean_ap = mean_valid(per_class_ap)
         mean_aph = mean_valid(per_class_aph)
-        errors = mean_tp_errors(error_dicts)
+        errors = mean_tp_errors(error_dicts) if error_dicts else {name: 1.0 for name in ERROR_NAMES}
         return {
             "map_based_nds": nds(mean_ap, errors),
             "mapH_based_nds": nds(mean_aph, errors),

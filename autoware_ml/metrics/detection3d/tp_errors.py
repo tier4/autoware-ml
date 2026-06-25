@@ -10,7 +10,11 @@ from autoware_ml.metrics.detection3d.matching import (
     select_recall_tp_errors,
 )
 from autoware_ml.metrics.detection3d.naming import label_metric_name, threshold_token
-from autoware_ml.metrics.detection3d.structures import DetectionState, SelectedTpErrors
+from autoware_ml.metrics.detection3d.structures import (
+    ERROR_NAMES,
+    DetectionState,
+    SelectedTpErrors,
+)
 
 
 class TpErrors(Metric[DetectionState]):
@@ -50,7 +54,13 @@ class TpErrors(Metric[DetectionState]):
 
         report: dict[str, float] = {}
         for variant_name, selected in variants.items():
-            mean_errors = mean_tp_errors([item.errors for item in selected.values()])
+            # Average only over curves that actually selected true positives;
+            # classes with no GT (or too few for the recall bucket) have no error
+            # to measure and must not pull the mean to the worst case.
+            kept = [item.errors for item in selected.values() if item.count > 0]
+            mean_errors = (
+                mean_tp_errors(kept) if kept else {name: 1.0 for name in ERROR_NAMES}
+            )
             for error_name, value in mean_errors.items():
                 report[f"m{error_name}_{variant_name}"] = value
 

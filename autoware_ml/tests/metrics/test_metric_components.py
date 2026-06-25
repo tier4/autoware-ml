@@ -66,6 +66,27 @@ def test_tp_errors_emits_mean_and_per_class() -> None:
     assert "ATE_car_default_0p5m" in out
 
 
+def test_tp_error_means_ignore_classes_without_true_positives() -> None:
+    # car has 10 perfect matches (selected at the recall target); truck is absent.
+    # The absent class must not drag the mean TP errors / NDS to the worst case.
+    boxes = torch.tensor([[float(i), 0.0, 0.0, 4.0, 2.0, 1.5, 0.0, 0.0, 0.0] for i in range(10)])
+    sample = Detection3DSample(
+        pred_boxes=boxes.clone(),
+        pred_scores=torch.tensor([1.0 - 0.01 * i for i in range(10)]),
+        pred_labels=torch.zeros(10, dtype=torch.long),
+        gt_boxes=boxes.clone(),
+        gt_labels=torch.zeros(10, dtype=torch.long),
+    )
+    state = DetectionState(samples=[sample], class_names=("car", "truck"), thresholds=(0.5,))
+
+    nds_out = Nds().evaluate(state, EvalStage.TEST)
+    assert nds_out["map_based_nds"] == pytest.approx(0.9)  # 0.7 if the absent truck leaked in
+
+    tp_out = TpErrors().evaluate(state, EvalStage.TEST)
+    assert tp_out["mATE_default"] == pytest.approx(0.0)
+    assert tp_out["mAAE_default"] == pytest.approx(1.0)
+
+
 def _conf_state(num_classes: int = 2) -> ConfusionState:
     # Class 0: TP=1, FN=1; class 1: TP=1, FP=1.
     confusion = torch.tensor([[1, 1], [0, 1]], dtype=torch.long)
