@@ -24,12 +24,6 @@ from autoware_ml.metrics.detection3d.structures import (
 )
 
 
-def to_cpu_tensor(tensor: torch.Tensor, dtype: torch.dtype | None = None) -> torch.Tensor:
-    """Move a tensor to CPU and optionally cast its dtype."""
-    output = tensor.detach().to(device="cpu")
-    return output.to(dtype=dtype) if dtype is not None else output
-
-
 def _distance_mask(
     boxes: torch.Tensor,
     min_distance: float,
