@@ -28,9 +28,22 @@ def normalize_filter_attributes(
     """Normalize configured class-attribute exclusions for repeated lookup."""
     if filter_attributes is None:
         return frozenset()
-    return frozenset(
-        (str(class_name), str(attribute)) for class_name, attribute in filter_attributes
-    )
+
+    normalized: list[tuple[str, str]] = []
+    for index, entry in enumerate(filter_attributes):
+        if isinstance(entry, str) or not isinstance(entry, Sequence):
+            raise TypeError(
+                "filter_attributes entries must be two-item sequences, "
+                f"got {type(entry).__name__} at index {index}."
+            )
+        if len(entry) != 2:
+            raise ValueError(
+                "filter_attributes entries must contain [class_name, attribute], "
+                f"got {list(entry)!r} at index {index}."
+            )
+        class_name, attribute = entry
+        normalized.append((str(class_name), str(attribute)))
+    return frozenset(normalized)
 
 
 def resolve_detection_class(

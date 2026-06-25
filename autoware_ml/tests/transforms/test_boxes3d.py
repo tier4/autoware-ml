@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from autoware_ml.transforms.boxes3d.annotations import normalize_filter_attributes
 from autoware_ml.transforms.boxes3d.filters import (
     ObjectMinPointsFilter,
     ObjectNameFilter,
@@ -285,6 +286,14 @@ def test_load_annotations3d_filters_raw_class_attributes() -> None:
 
     assert output["gt_boxes"][:, 0].tolist() == [2.0]
     assert output["gt_names"].tolist() == ["bicycle"]
+
+
+def test_normalize_filter_attributes_rejects_invalid_entries() -> None:
+    with pytest.raises(ValueError, match="filter_attributes entries"):
+        normalize_filter_attributes([["bicycle"]])
+
+    with pytest.raises(TypeError, match="filter_attributes entries"):
+        normalize_filter_attributes(["bicycle"])
 
 
 def test_load_annotations3d_rejects_disagreeing_source_label() -> None:
