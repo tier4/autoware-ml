@@ -4,8 +4,8 @@ import polars as pl
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDatasetSchema
 from autoware_ml.datamodule.multi_tasks.base_dataset_task import BaseDatasetTask
-from autoware_ml.datamodule.multi_tasks.dataclasses.detection3d import Detection3DDataRow
-from autoware_ml.datamodule.multi_tasks.dataclasses.multi_task_data_row import MultiTaskDataRow
+from autoware_ml.datamodule.multi_tasks.dataclasses.detection3d import Detection3DGTSample
+from autoware_ml.datamodule.multi_tasks.dataclasses.multi_task_samples import MultiTaskGTSample
 
 
 class T4Detection3DTask(BaseDatasetTask):
@@ -14,7 +14,7 @@ class T4Detection3DTask(BaseDatasetTask):
     This class defines how to process the dataset records for 3D detection in the T4 dataset and retrieve the necessary information for training and evaluation.
     """
 
-    def __init__(self, dataset_records_dataframe: pl.DataFrame) -> None:
+    def __init__(self, dataset_records_dataframe: pl.DataFrame | None) -> None:
         """
         Initialize the T4Detection3DTask class.
         Args:
@@ -22,7 +22,9 @@ class T4Detection3DTask(BaseDatasetTask):
         """
         super().__init__(dataset_records_dataframe=dataset_records_dataframe)
 
-    def pre_filter_dataset_records(self, dataset_records_dataframe: pl.DataFrame) -> pl.DataFrame:
+    def pre_filter_dataset_records(
+        self, dataset_records_dataframe: pl.DataFrame | None
+    ) -> pl.DataFrame | None:
         """
         Pre-filter the dataset records dataframe for 3D detection in the T4 dataset.
         This method filters the dataset records dataframe to only include columns related to 3D bounding boxes.
@@ -32,6 +34,9 @@ class T4Detection3DTask(BaseDatasetTask):
         Returns:
           Polars DataFrame of filtered dataset records for 3D detection in the T4 dataset
         """
+        if dataset_records_dataframe is None:
+            return None
+
         # Filter the dataset records dataframe to only include columns related to 3D bounding boxes
         filtered_dataset_records_dataframe = dataset_records_dataframe.select(
             [
@@ -50,7 +55,7 @@ class T4Detection3DTask(BaseDatasetTask):
         """
         return "T4Detection3DTask"
 
-    def get_data_row(self, idx: int) -> MultiTaskDataRow:
+    def get_data_sample(self, idx: int) -> MultiTaskGTSample:
         """
         Process the dataset records dataframe for 3D detection in the T4 dataset.
 
@@ -67,13 +72,13 @@ class T4Detection3DTask(BaseDatasetTask):
         gt_bboxes_3d = selected_row[DatasetTableSchema.Box3D.name]
         gt_bboxes_labels = selected_row[Box3DDatasetSchema.Labels.name]
 
-        detection3d_data_row = Detection3DDataRow(
+        detection3d_data_row = Detection3DGTSample(
             gt_bboxes_3d=np.asarray(gt_bboxes_3d, dtype=np.float32),
             gt_labels_3d=np.asarray(gt_bboxes_labels, dtype=np.int32),
             # Add other necessary fields for 3D detection as needed
         )
 
-        return MultiTaskDataRow(
+        return MultiTaskGTSample(
             lidar_point_cloud_data_row=None,
             point_cloud_features=None,
             detection3d_data_row=detection3d_data_row,

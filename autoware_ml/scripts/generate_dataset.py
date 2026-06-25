@@ -46,10 +46,8 @@ def main(cfg: DictConfig):
     # Instantiate DatabaseInterface
     database: DatabaseInterface = instantiate(cfg.database)
 
-    # Process scenario records and save them to a parquet file
-    database.process_scenario_records()
-
-    _ = database.load_scenario_records()
+    # Instantiate the datamodule with the database
+    instantiate(cfg.datamodule, database=database)
 
 
 if __name__ == "__main__":

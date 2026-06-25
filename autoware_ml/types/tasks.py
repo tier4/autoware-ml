@@ -1,7 +1,7 @@
-from enum import Enum
+from enum import StrEnum
 
 
-class TaskType(Enum, str):
+class TaskType(StrEnum):
     """Enum for different types of tasks."""
 
     CLASSIFICATION2D = "Classification2D"

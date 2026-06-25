@@ -1,47 +1,47 @@
-from typing import Sequence
+import logging
 
-import Lightning as L
+import lightning as L
 from torch.utils.data import DataLoader
 
-from autoware_ml.databases.base_database import BaseDatabase
-from autoware_ml.types.tasks import TaskType
+from autoware_ml.databases.database_interface import DatabaseInterface
 from autoware_ml.datamodule.base import DataLoaderConfig
-from autoware_ml.datamodule.multi_tasks.multi_task_dataset_interface import (
-    MultiTaskDatasetInterface,
+from autoware_ml.datamodule.multi_tasks.multi_task_base_dataset import (
+    MultiTaskBaseDataset,
 )
 from autoware_ml.datamodule.splitters.splitter_interface import SplitterInterface
+from autoware_ml.types.dataset import SplitType
+
+logger = logging.getLogger(__name__)
 
 
 class MultiTaskDataModule(L.LightningDataModule):
-    """
-    Base LightningDataModule for multi-task learning that can be shared by multiple datasets.
-    """
+    """Base LightningDataModule for multi-task learning that can be shared by multiple datasets."""
 
     def __init__(
         self,
-        tasks: Sequence[TaskType],
-        database: BaseDatabase,
+        database: DatabaseInterface,
         splitter: SplitterInterface,
-        train_dataset: MultiTaskDatasetInterface | None,
-        validation_dataset: MultiTaskDatasetInterface | None,
-        test_dataset: MultiTaskDatasetInterface | None,
+        train_dataset: MultiTaskBaseDataset | None,
+        validation_dataset: MultiTaskBaseDataset | None,
+        test_dataset: MultiTaskBaseDataset | None,
+        predict_dataset: MultiTaskBaseDataset | None,
         train_dataloader: DataLoaderConfig | None,
         validation_dataloader: DataLoaderConfig | None,
         test_dataloader: DataLoaderConfig | None,
+        predict_dataloader: DataLoaderConfig | None,
     ) -> None:
         super().__init__()
 
-        self.tasks = tasks
         self.database = database
         self.splitter = splitter
         self.train_dataset = train_dataset
         self.validation_dataset = validation_dataset
         self.test_dataset = test_dataset
+        self.predict_dataset = predict_dataset
         self.train_dataloader_config = train_dataloader
         self.validation_dataloader_config = validation_dataloader
         self.test_dataloader_config = test_dataloader
-
-        self.tasks = tasks
+        self.predict_dataloader_config = predict_dataloader
 
     def setup(self, stage: str | None = None) -> None:
         """Setup datasets for each stage.
@@ -54,32 +54,48 @@ class MultiTaskDataModule(L.LightningDataModule):
             stage: Current stage ('fit', 'validate', 'test', 'predict') or
                 ``None`` to prepare all splits.
         """
-        # Define stage to splits mapping
-        stage_splits = {
-            "fit": ["train", "val"],
-            "validate": ["val"],
-            "test": ["test"],
-            "predict": ["predict"],
-        }
+        # 1) Load the dataset records dataframe from the database
+        dataset_records_dataframe = self.database.load_polars_scenario_dataframe()
 
-        # Get splits for this stage
-        splits = ["train", "val", "test", "predict"] if stage is None else stage_splits[stage]
+        # 2) Splitter to split the dataset records into train, validation, and test splits
+        logger.info("Splitting dataset records into train, validation, and test splits...")
+        split_dataset_dataframes = self.splitter.split_by_polars_dataframe(
+            dataset_dataframe=dataset_records_dataframe,
+            scenarios=self.database.scenarios,
+        )
+        logger.info("Finished splitting dataset records into train, validation, and test splits.")
 
-        # Create datasets for required splits
-        for split in splits:
-            if getattr(self, f"{split}_dataset") is not None:
-                continue
-            transforms = getattr(self, f"{split}_transforms")
-            dataset = self._create_dataset(split, transforms)
-            setattr(self, f"{split}_dataset", dataset)
+        # 3) Assign the split dataset records to the corresponding datasets based on the stage
+        logger.info(
+            f"Assigning split dataset records to the corresponding datasets"
+            f" based on the stage: {stage}..."
+        )
+
+        if stage == "fit":
+            self.train_dataset.assign_dataset_records(split_dataset_dataframes[SplitType.TRAIN])
+        elif stage == "validate":
+            self.validation_dataset.assign_dataset_records(
+                split_dataset_dataframes[SplitType.VALIDATION]
+            )
+        elif stage == "test":
+            self.test_dataset.assign_dataset_records(split_dataset_dataframes[SplitType.TEST])
+        elif stage == "predict":
+            self.predict_dataset.assign_dataset_records(split_dataset_dataframes[SplitType.PREDICT])
+
+        logger.info(
+            f"Finished assigning split dataset records to the corresponding datasets"
+            f" based on the stage: {stage}..."
+        )
 
     def prepare_data(self) -> None:
         """
         Prepare the data for the multi-task learning.
-        This method is called only from a single process from a main node.
+        This method is called only in a single process from a main node.
         """
+        logger.info("Preparing data for multi-task learning...")
         # Process the scenario records and create caches for the database if needed.
         self.database.process_scenario_records()
+        logger.info("Finished preparing data for multi-task learning.")
 
     def train_dataloader(self):
         """Create and validate dataloader for training."""
@@ -139,4 +155,24 @@ class MultiTaskDataModule(L.LightningDataModule):
             num_workers=self.test_dataloader_config.num_workers,
             pin_memory=self.test_dataloader_config.pin_memory,
             drop_last=self.test_dataloader_config.drop_last,
+        )
+
+    def predict_dataloader(self):
+        """Create and validate dataloader for prediction."""
+        if self.predict_dataset is None:
+            raise ValueError(
+                "Predict dataset is not set. Please set the predict dataset before calling predict_dataloader()."
+            )
+        if self.predict_dataloader_config is None:
+            raise ValueError(
+                "Predict dataloader config is not set. Please set the predict dataloader config before calling predict_dataloader()."
+            )
+
+        return DataLoader(
+            dataset=self.predict_dataset,
+            batch_size=self.predict_dataloader_config.batch_size,
+            shuffle=self.predict_dataloader_config.shuffle,
+            num_workers=self.predict_dataloader_config.num_workers,
+            pin_memory=self.predict_dataloader_config.pin_memory,
+            drop_last=self.predict_dataloader_config.drop_last,
         )

@@ -1,7 +1,7 @@
 import polars as pl
 
 from autoware_ml.datamodule.multi_tasks.base_dataset_task import BaseDatasetTask
-from autoware_ml.datamodule.multi_tasks.dataclasses.multi_task_data_row import MultiTaskDataRow
+from autoware_ml.datamodule.multi_tasks.dataclasses.multi_task_samples import MultiTaskGTSample
 
 
 class T4Segmentation3DTask(BaseDatasetTask):
@@ -27,7 +27,7 @@ class T4Segmentation3DTask(BaseDatasetTask):
         """
         return "T4Segmentation3DTask"
 
-    def get_data_row(self, idx: int) -> MultiTaskDataRow:
+    def get_data_sample(self, idx: int) -> MultiTaskGTSample:
         """
         Process the dataset records dataframe for 3D segmentation in the T4 dataset.
 
@@ -40,7 +40,7 @@ class T4Segmentation3DTask(BaseDatasetTask):
         """
         # TODO (Kok Seang): Implement the data retrieval for 3D segmentation in the T4 dataset
         # based on the dataset records dataframe and the given index.
-        return MultiTaskDataRow(
+        return MultiTaskGTSample(
             lidar_point_cloud_data_row=None,
             point_cloud_features=None,
             detection3d_data_row=None,

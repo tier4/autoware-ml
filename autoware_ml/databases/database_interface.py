@@ -15,8 +15,10 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import Sequence, Protocol
+from typing import Mapping, Sequence, Protocol
 from types import MappingProxyType
+
+import polars as pl
 
 from autoware_ml.databases.scenarios import Scenarios, ScenarioData
 from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord
@@ -114,3 +116,46 @@ class DatabaseInterface(Protocol):
         """
 
         raise NotImplementedError("Subclasses must define process_scenario_records method!")
+
+    @property
+    def label_remapper(self) -> Mapping[str, str] | None:
+        """
+        Get the label remapper in the database.
+
+        Returns:
+          Mapping[str, str] | None: Label remapper in the database.
+        """
+
+        raise NotImplementedError("Database must define label_remapper!")
+
+    @property
+    def ignore_label_index(self) -> int:
+        """
+        Get the ignore label index in the database.
+
+        Returns:
+          int: Ignore label index in the database.
+        """
+
+        raise NotImplementedError("Database must define ignore_label_index!")
+
+    @property
+    def database_hash(self) -> str:
+        """
+        Get a hash for the database based on its version and scenarios.
+
+        Returns:
+          str: Hash of the database.
+        """
+
+        raise NotImplementedError("Database must define database_hash!")
+
+    def load_polars_scenario_dataframe(self) -> pl.DataFrame:
+        """
+        Load scenario records as a Polars DataFrame from the database.
+
+        Returns:
+          pl.DataFrame: Polars DataFrame of dataset records.
+        """
+
+        raise NotImplementedError("Database must define load_polars_scenario_dataframe!")

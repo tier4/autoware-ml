@@ -2,7 +2,7 @@ from typing import Protocol
 
 import polars as pl
 
-from autoware_ml.datamodule.multi_tasks.dataclasses.multi_task_data_row import MultiTaskDataRow
+from autoware_ml.datamodule.multi_tasks.dataclasses.multi_task_samples import MultiTaskGTSample
 
 
 class BaseDatasetTask(Protocol):
@@ -15,12 +15,11 @@ class BaseDatasetTask(Protocol):
         """
         Initialize the dataset task.
         """
-        self.dataset_records_dataframe = dataset_records_dataframe
-        self.dataset_records_dataframe = self.pre_filter_dataset_records(
-            self.dataset_records_dataframe
-        )
+        self.dataset_records_dataframe = self.pre_filter_dataset_records(dataset_records_dataframe)
 
-    def pre_filter_dataset_records(self, dataset_records_dataframe: pl.DataFrame) -> pl.DataFrame:
+    def pre_filter_dataset_records(
+        self, dataset_records_dataframe: pl.DataFrame
+    ) -> pl.DataFrame | None:
         """
         Pre-filter the dataset records dataframe for the specific task.
           For example, if the task is 3D detection, the dataset records dataframe can be
@@ -29,6 +28,8 @@ class BaseDatasetTask(Protocol):
         Args:
           dataset_records_dataframe: Polars DataFrame of dataset records to be filtered.
         """
+        if dataset_records_dataframe is None:
+            return None
         return dataset_records_dataframe
 
     def __str__(self) -> str:
@@ -40,7 +41,7 @@ class BaseDatasetTask(Protocol):
         """
         raise NotImplementedError("Dataset type must define __str__!")
 
-    def get_data_row(self, idx: int) -> MultiTaskDataRow:
+    def get_data_sample(self, idx: int) -> MultiTaskGTSample:
         """
         Process the dataset records dataframe for the specific task.
 
