@@ -28,30 +28,6 @@ model:
       rot,
       vel,
     ]
-  metric:
-    eval_class_range:
-      car: 121.0
-      truck: 121.0
-      bus: 121.0
-      bicycle: 121.0
-      pedestrian: 121.0
-    ranges:
-      - _target_: autoware_ml.metrics.detection3d.DetectionRange
-        name: 0-50m
-        min_distance: 0.0
-        max_distance: 50.0
-      - _target_: autoware_ml.metrics.detection3d.DetectionRange
-        name: 50-90m
-        min_distance: 50.0
-        max_distance: 90.0
-      - _target_: autoware_ml.metrics.detection3d.DetectionRange
-        name: 90-121m
-        min_distance: 90.0
-        max_distance: 121.0
-      - _target_: autoware_ml.metrics.detection3d.DetectionRange
-        name: 0-121m
-        min_distance: 0.0
-        max_distance: 121.0
   bbox_head:
     _target_: autoware_ml.models.detection3d.heads.transfusion.TransFusionHead
     num_proposals: ${num_proposals}

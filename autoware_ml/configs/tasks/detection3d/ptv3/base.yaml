@@ -186,17 +186,36 @@ datamodule:
         keys: [coord, strength]
         output_key: feat
 
+metric_eval_class_range:
+  car: 121.0
+  truck: 121.0
+  bus: 121.0
+  bicycle: 121.0
+  pedestrian: 121.0
+metric_ranges:
+  - { _target_: autoware_ml.metrics.base.MetricRange, name: 0-50m, min_distance: 0.0, max_distance: 50.0 }
+  - { _target_: autoware_ml.metrics.base.MetricRange, name: 50-90m, min_distance: 50.0, max_distance: 90.0 }
+  - { _target_: autoware_ml.metrics.base.MetricRange, name: 90-121m, min_distance: 90.0, max_distance: 121.0 }
+  - { _target_: autoware_ml.metrics.base.MetricRange, name: 0-121m, min_distance: 0.0, max_distance: 121.0 }
+
 model:
   _target_: autoware_ml.models.detection3d.ptv3.PTv3DetectionModel
   export_output_names: ???
   freeze_backbone: true
   grid_size: ${grid_size}
   point_cloud_range: ${point_cloud_range}
-  metric:
-    _target_: autoware_ml.metrics.detection3d.CenterDistanceMeanAP
-    class_names: ${class_names}
-    thresholds: [0.5, 1.0, 2.0, 4.0]
-    min_point_numbers: 0
+  metrics:
+    - _target_: autoware_ml.metrics.detection3d.suite.Detection3DMetricSuite
+      class_names: ${class_names}
+      thresholds: [0.5, 1.0, 2.0, 4.0]
+      min_point_numbers: 0
+      eval_class_range: ${metric_eval_class_range}
+      ranges: ${metric_ranges}
+      components:
+        - { _target_: autoware_ml.metrics.detection3d.mean_ap.MeanAP, stages: [val, test] }
+        - { _target_: autoware_ml.metrics.detection3d.heading_ap.HeadingAP, stages: [test] }
+        - { _target_: autoware_ml.metrics.detection3d.nds.Nds, stages: [test] }
+        - { _target_: autoware_ml.metrics.detection3d.tp_errors.TpErrors, stages: [test] }
   bev_projector:
     _target_: autoware_ml.models.detection3d.ptv3.PTv3BEVProjection
     in_channels: ${backbone_out_channels}
@@ -231,10 +250,10 @@ trainer:
 
 callbacks:
   model_checkpoint:
-    monitor: val/mAP
+    monitor: val/det3d/mAP
     mode: max
   early_stopping:
-    monitor: val/mAP
+    monitor: val/det3d/mAP
     patience: 20
     mode: max
 

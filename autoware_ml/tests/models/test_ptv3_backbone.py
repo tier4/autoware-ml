@@ -297,17 +297,25 @@ def test_compute_metrics_reports_losses_and_point_level_accuracy() -> None:
     inverse = torch.tensor([0, 1], dtype=torch.long)
     origin_segment = torch.tensor([0, 1], dtype=torch.long)
 
-    metrics = PTv3SegmentationModel.compute_metrics(
-        model,
-        {"segment": segment, "inverse": inverse, "origin_segment": origin_segment},
-        voxel_logits,
-    )
+    origin_coord = torch.tensor([[10.0, 0.0, 0.0], [60.0, 0.0, 0.0]], dtype=torch.float32)
+    batch = {
+        "segment": segment,
+        "inverse": inverse,
+        "origin_segment": origin_segment,
+        "origin_coord": origin_coord,
+    }
 
-    assert {"loss", "loss_ce", "loss_lovasz", "point_accuracy", "mean_iou", "mean_f1"} <= set(
-        metrics
-    )
-    assert torch.isclose(metrics["point_accuracy"], torch.tensor(1.0))
+    metrics = PTv3SegmentationModel.compute_metrics(model, batch, voxel_logits)
+
+    # compute_metrics now returns only losses; quality metrics are produced at
+    # epoch end from build_eval_output via the attached AutowareSegmentation3DMetrics.
+    assert set(metrics) == {"loss", "loss_ce", "loss_lovasz"}
     assert metrics["loss"] > 0
+
+    eval_out = PTv3SegmentationModel.build_eval_output(model, batch, voxel_logits)
+    assert torch.equal(eval_out["seg_pred_labels"], torch.tensor([0, 1]))
+    assert torch.equal(eval_out["seg_target_labels"], origin_segment)
+    assert torch.equal(eval_out["seg_coord"], origin_coord)
 
 
 def test_predict_outputs_reconstructs_point_level_predictions() -> None:

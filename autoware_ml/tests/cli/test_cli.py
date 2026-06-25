@@ -346,10 +346,83 @@ class TestCliCommands:
             config_name=SAMPLE_CONFIG_NAME,
             stage="test",
             extra_args=[],
-            hydra_overrides=["+weights=[seg.ckpt,det.ckpt]"],
+            # Test forces a single device by default.
+            hydra_overrides=["+weights=[seg.ckpt,det.ckpt]", "++trainer.devices=1"],
             checkpoint="det.ckpt",
             config_prefix=cli.TASK_CONFIG_PREFIX,
         )
+
+    def test_test_forces_single_device_over_many_devices(self) -> None:
+        with patch("autoware_ml.cli.cli.run_lazy_script") as run_lazy_script_mock:
+            result = self.runner.invoke(
+                app,
+                [
+                    "test",
+                    "--config-name",
+                    SAMPLE_CONFIG_NAME,
+                    "--weights",
+                    "seg.ckpt",
+                    "trainer.devices=4",
+                ],
+            )
+
+        assert result.exit_code == 0
+        run_lazy_script_mock.assert_called_once_with(
+            cli.CLI_RUNTIME_MODULE,
+            "run_hydra_entrypoint",
+            entrypoint_module=cli.TEST_ENTRYPOINT_MODULE,
+            config_name=SAMPLE_CONFIG_NAME,
+            stage="test",
+            extra_args=["trainer.devices=4"],
+            # The forcing override is appended after extra args, so runtime applies it last
+            # and a single device wins over the user's trainer.devices=4.
+            hydra_overrides=["+weights=[seg.ckpt]", "++trainer.devices=1"],
+            checkpoint="seg.ckpt",
+            config_prefix=cli.TASK_CONFIG_PREFIX,
+        )
+
+    def test_test_use_config_devices_keeps_config(self) -> None:
+        with patch("autoware_ml.cli.cli.run_lazy_script") as run_lazy_script_mock:
+            result = self.runner.invoke(
+                app,
+                [
+                    "test",
+                    "--config-name",
+                    SAMPLE_CONFIG_NAME,
+                    "--weights",
+                    "seg.ckpt",
+                    "--use-config-devices",
+                    "trainer.devices=4",
+                ],
+            )
+
+        assert result.exit_code == 0
+        run_lazy_script_mock.assert_called_once_with(
+            cli.CLI_RUNTIME_MODULE,
+            "run_hydra_entrypoint",
+            entrypoint_module=cli.TEST_ENTRYPOINT_MODULE,
+            config_name=SAMPLE_CONFIG_NAME,
+            stage="test",
+            extra_args=["trainer.devices=4"],
+            # No forcing override: trainer.devices from config / extra args is honored.
+            hydra_overrides=["+weights=[seg.ckpt]"],
+            checkpoint="seg.ckpt",
+            config_prefix=cli.TASK_CONFIG_PREFIX,
+        )
+
+    def test_test_single_device_override_wins_in_composed_config(self) -> None:
+        # End-to-end: the override order the CLI + runtime produce (user devices first,
+        # forcing override last) resolves to a single device in the real config.
+        from hydra import compose, initialize_config_module
+        from hydra.core.global_hydra import GlobalHydra
+
+        GlobalHydra.instance().clear()
+        with initialize_config_module(version_base=None, config_module="autoware_ml.configs"):
+            cfg = compose(
+                config_name=f"tasks/{SAMPLE_CONFIG_NAME}",
+                overrides=["trainer.devices=4", "++trainer.devices=1"],
+            )
+        assert cfg.trainer.devices == 1
 
     def test_mlflow_ui_runs_script(self) -> None:
         with patch("autoware_ml.cli.cli.run_lazy_script") as run_lazy_script_mock:
