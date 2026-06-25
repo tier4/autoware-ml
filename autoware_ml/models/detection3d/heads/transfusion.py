@@ -23,6 +23,7 @@ from autoware_ml.models.detection3d.task_modules.bbox_coders import TransFusionB
 from autoware_ml.models.detection3d.task_modules.heatmap import (
     circle_nms,
     draw_heatmap_gaussian,
+    draw_heatmap_gaussian_oriented,
     gaussian_radius,
 )
 
@@ -298,6 +299,7 @@ class TransFusionHead(nn.Module):
         post_max_size: int,
         nms_min_radius: float,
         class_names: Sequence[str] | None = None,
+        heatmap_target: str = "round",
         dense_heatmap_pooling_classes: Sequence[str | int] | None = None,
         nms_type: str | None = None,
         nms_groups: Sequence[dict[str, Any]] | None = None,
@@ -328,11 +330,18 @@ class TransFusionHead(nn.Module):
             code_weights: Weights applied to each regression channel.
             min_radius: Minimum heatmap Gaussian radius.
             gaussian_overlap: Required overlap for Gaussian radius computation.
+                Only used by the ``"round"`` heatmap target.
             score_threshold: Prediction score threshold used during decoding.
             post_max_size: Maximum number of predictions kept after NMS.
             nms_min_radius: Minimum center distance used by circle NMS.
             class_names: Optional ordered class names used to resolve config-friendly
                 class lists.
+            heatmap_target: Shape of the dense heatmap supervision. ``"round"``
+                (default) draws a circular Gaussian sized by ``gaussian_radius``.
+                ``"oriented"`` draws an elliptical Gaussian stretched along the box
+                length and rotated by the box yaw, so elongated objects such as a
+                tractor and trailer rig get one connected positive region instead of
+                a small blob in the low-density gap at the coupling.
             dense_heatmap_pooling_classes: Optional class names or class indices
                 that should use local max pooling before proposal selection.
             nms_type: Optional NMS type applied during prediction. Supported values
@@ -356,6 +365,9 @@ class TransFusionHead(nn.Module):
         self.code_weights = code_weights
         self.min_radius = min_radius
         self.gaussian_overlap = gaussian_overlap
+        if heatmap_target not in {"round", "oriented"}:
+            raise ValueError(f"Unsupported TransFusion heatmap_target: {heatmap_target!r}")
+        self.heatmap_target = heatmap_target
         self.score_threshold = score_threshold
         self.post_max_size = post_max_size
         self.nms_min_radius = nms_min_radius
@@ -706,15 +718,27 @@ class TransFusionHead(nn.Module):
                     continue
                 length_cells = box[3] / voxel_size[0] / self.out_size_factor
                 width_cells = box[4] / voxel_size[1] / self.out_size_factor
-                radius = max(
-                    self.min_radius,
-                    gaussian_radius(
-                        (width_cells.item(), length_cells.item()), self.gaussian_overlap
-                    ),
-                )
-                draw_heatmap_gaussian(
-                    heatmap[batch_index, int(label.item())], (int(center_x), int(center_y)), radius
-                )
+                if self.heatmap_target == "oriented":
+                    draw_heatmap_gaussian_oriented(
+                        heatmap[batch_index, int(label.item())],
+                        (int(center_x), int(center_y)),
+                        length_cells.item(),
+                        width_cells.item(),
+                        float(box[6].item()),
+                        min_sigma=self.min_radius / 3.0,
+                    )
+                else:
+                    radius = max(
+                        self.min_radius,
+                        gaussian_radius(
+                            (width_cells.item(), length_cells.item()), self.gaussian_overlap
+                        ),
+                    )
+                    draw_heatmap_gaussian(
+                        heatmap[batch_index, int(label.item())],
+                        (int(center_x), int(center_y)),
+                        radius,
+                    )
         return heatmap
 
     def get_targets(

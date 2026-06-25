@@ -14,8 +14,15 @@ head_voxel_size: [0.96, 0.96, 8.0]
 
 train_sweeps_num: 1
 val_sweeps_num: 1
+detection_filter_attributes:
+  - [bicycle, cycle_state.without_rider]
+  - [motorcycle, vehicle_state.parked]
+  - [motorcycle, motorcycle_state.without_rider]
 
 datamodule:
+  filter_attributes: ${detection_filter_attributes}
+  min_num_lidar_points: ${train_min_num_lidar_points}
+  use_valid_flag: ${detection_use_valid_flag}
   train_dataloader_cfg:
     batch_size: 16
     num_workers: 32

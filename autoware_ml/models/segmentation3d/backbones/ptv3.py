@@ -19,11 +19,11 @@ This module contains the reusable encoder-decoder blocks used by PTv3.
 
 from __future__ import annotations
 
-from copy import deepcopy
-from dataclasses import dataclass
 import importlib
 import math
 from collections.abc import Sequence
+from copy import deepcopy
+from dataclasses import dataclass
 from typing import Any
 
 import spconv.pytorch as spconv
@@ -33,9 +33,9 @@ from torch.onnx.operators import shape_as_tensor
 
 from autoware_ml.ops.indexing.operators import argsort
 from autoware_ml.ops.segment.segment_csr import segment_csr
+from autoware_ml.ops.spconv.sparse_conv import SubMConv3d as ExportableSubMConv3d
 from autoware_ml.utils.point_cloud.batching import offset_to_bincount
 from autoware_ml.utils.point_cloud.structures import Point
-from autoware_ml.ops.spconv.sparse_conv import SubMConv3d as ExportableSubMConv3d
 
 
 def load_flash_attn_module() -> Any:

@@ -14,6 +14,15 @@ head_voxel_size: [0.2, 0.2, 8.0]
 post_center_range: [-138.0, -138.0, -5.0, 138.0, 138.0, 12.0]
 code_weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2]
 num_proposals: 200
+detection_filter_attributes:
+  - [bicycle, cycle_state.without_rider]
+  - [motorcycle, vehicle_state.parked]
+  - [motorcycle, motorcycle_state.without_rider]
+
+datamodule:
+  filter_attributes: ${detection_filter_attributes}
+  min_num_lidar_points: ${train_min_num_lidar_points}
+  use_valid_flag: ${detection_use_valid_flag}
 
 model:
   export_output_names:
@@ -36,6 +45,7 @@ model:
     hidden_channel: 128
     num_classes: ${num_classes}
     class_names: ${class_names}
+    dense_heatmap_pooling_classes: [car, truck, bus, bicycle]
     num_decoder_layers: 1
     num_heads: 8
     feedforward_channels: 256
@@ -78,6 +88,7 @@ model:
     loss_cls_weight: 1.0
     loss_bbox_weight: 0.25
     loss_heatmap_weight: 1.0
+    heatmap_target: oriented
     heatmap_init_bias: -2.19
     nms_kernel_size: 3
     use_velocity: true
