@@ -2,7 +2,7 @@
 
 Every detection model decodes its head into per-sample predictions and pairs
 them with the ground-truth boxes and labels. This helper builds the flat
-eval-output dict that :class:`~autoware_ml.metrics.detection3d.suite.AutowareDetection3DMetrics`
+eval-output dict that :class:`~autoware_ml.metrics.detection3d.suite.Detection3DMetricSuite`
 reads, so each model's ``build_eval_output`` is a one-line delegation.
 """
 
