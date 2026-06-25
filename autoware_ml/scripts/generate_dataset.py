@@ -47,7 +47,17 @@ def main(cfg: DictConfig):
     database: DatabaseInterface = instantiate(cfg.database)
 
     # Instantiate the datamodule with the database
-    instantiate(cfg.datamodule, database=database)
+    datamodule = instantiate(cfg.datamodule, database=database)
+
+    datamodule.prepare_data()
+
+    # Split/setup dataframes
+    datamodule.setup(stage="fit")
+
+    train_dataloader = datamodule.train_dataloader()
+    for batch in train_dataloader:
+        logger.info(f"Batch: {batch}")
+        break  # Just log the first batch for demonstration
 
 
 if __name__ == "__main__":

@@ -60,7 +60,7 @@ class MultiTaskDataModule(L.LightningDataModule):
         # 2) Splitter to split the dataset records into train, validation, and test splits
         logger.info("Splitting dataset records into train, validation, and test splits...")
         split_dataset_dataframes = self.splitter.split_by_polars_dataframe(
-            dataset_dataframe=dataset_records_dataframe,
+            dataset_records_dataframe=dataset_records_dataframe,
             scenarios=self.database.scenarios,
         )
         logger.info("Finished splitting dataset records into train, validation, and test splits.")

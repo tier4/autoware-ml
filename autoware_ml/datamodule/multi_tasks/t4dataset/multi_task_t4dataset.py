@@ -76,7 +76,7 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
 
         # Merge the data samples from different tasks into a single multi-task data row
         return MultiTaskGTSample(
-            lidar_point_samples=lidar_pointcloud_samples,
+            lidar_point_cloud_samples=lidar_pointcloud_samples,
             point_cloud_features=None,  # Add point cloud features if available
             detection3d_sample=data_samples.get(TaskType.DETECTION3D, None),
             segmentation3d_sample=data_samples.get(TaskType.SEGMENTATION3D, None),

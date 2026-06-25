@@ -47,7 +47,7 @@ class SplitterInterface(Protocol):
     def split_by_dataset_records(
         self,
         dataset_records: Sequence[DatasetRecord],
-        scenarios: Scenarios,
+        scenarios: MappingProxyType[str, Scenarios],
     ) -> MappingProxyType[SplitType, Sequence[DatasetRecord]]:
         """
         Split the dataset records into different splits (e.g. train, val, test) based on the scenarios.
@@ -64,14 +64,14 @@ class SplitterInterface(Protocol):
     @abstractmethod
     def split_by_polars_dataframe(
         self,
-        dataset_dataframe: pl.DataFrame,
-        scenarios: Scenarios,
+        dataset_records_dataframe: pl.DataFrame,
+        scenarios: MappingProxyType[str, Scenarios],
     ) -> MappingProxyType[SplitType, pl.DataFrame]:
         """
         Split the dataset dataframe into different splits (e.g. train, val, test) based on the scenarios.
 
         Args:
-          dataset_dataframe: Polars DataFrame of dataset records to be split.
+          dataset_records_dataframe: Polars DataFrame of dataset records to be split.
           scenarios: Scenarios object containing the scenario data for splitting.
 
         Returns:

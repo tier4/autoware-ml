@@ -40,7 +40,7 @@ class T4Detection3DTask(BaseDatasetTask):
         # Filter the dataset records dataframe to only include columns related to 3D bounding boxes
         filtered_dataset_records_dataframe = dataset_records_dataframe.select(
             [
-                DatasetTableSchema.Box3D.name,
+                DatasetTableSchema.BOXES_3D.name,
                 # Add other necessary columns for 3D detection as needed
             ]
         )
@@ -68,9 +68,17 @@ class T4Detection3DTask(BaseDatasetTask):
         """
         # Retrieve the specific row from the dataset records dataframe based on the given index
         # and the bbox3d column.
-        selected_row = self.dataset_records_dataframe.row(idx, named=True)
-        gt_bboxes_3d = selected_row[DatasetTableSchema.Box3D.name]
-        gt_bboxes_labels = selected_row[Box3DDatasetSchema.Labels.name]
+        selected_row = self.dataset_records_dataframe.item(idx, DatasetTableSchema.BOXES_3D.name)
+        extracted_df = selected_row.select(
+            pl.nth(0).list.eval(pl.element().struct.field(Box3DDatasetSchema.BOX3D_PARAMS.name)),
+            pl.nth(0).list.eval(
+                pl.element().struct.field(Box3DDatasetSchema.BOX3D_LABEL_INDEX.name)
+            ),
+        )
+        print(extracted_df)
+        print(selected_row[0][Box3DDatasetSchema.BOX3D_PARAMS.name])
+        gt_bboxes_3d = selected_row[Box3DDatasetSchema.BOX3D_PARAMS.name]
+        gt_bboxes_labels = selected_row[Box3DDatasetSchema.BOX3D_LABEL_INDEX.name]
 
         detection3d_gt_sample = Detection3DGTSample(
             gt_bboxes_3d=np.asarray(gt_bboxes_3d, dtype=np.float32),
