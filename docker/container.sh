@@ -103,11 +103,7 @@ parse_arguments() {
             shift
             ;;
         --cmd)
-            if [ -z "$2" ]; then
-                echo -e "${RED}Error: --cmd requires a value.${NC}"
-                print_help
-                exit 1
-            fi
+            validate_option_value "--cmd" "$2"
             CMD="$2"
             shift
             ;;
@@ -216,9 +212,9 @@ set_user_config() {
 
 # Resolve the in-container command and TTY flags from --cmd
 set_command() {
-    # Use an interactive TTY only when stdout is a terminal, so non-interactive
+    # Use an interactive TTY only when stdin is a terminal, so non-interactive
     # invocations (CI, piped runs) work without "the input device is not a TTY".
-    if [ -t 1 ]; then
+    if [ -t 0 ]; then
         DOCKER_TTY="-it"
     else
         DOCKER_TTY="-i"
@@ -231,7 +227,11 @@ set_command() {
     else
         # Run the requested command through a login shell so PATH/env are set up.
         RUN_CMD=("bash" "-lc" "$CMD")
-        RUN_TAIL=("bash" "-lc" "$CMD")
+        if [ "$option_detached" = "true" ]; then
+            RUN_TAIL=()
+        else
+            RUN_TAIL=("bash" "-lc" "$CMD")
+        fi
     fi
 }
 
