@@ -11,14 +11,14 @@ class BaseDatasetTask(Protocol):
     when retrieving data.
     """
 
-    def __init__(self, dataset_records_dataframe: pl.DataFrame) -> None:
+    def __init__(self, dataset_records_dataframe: pl.DataFrame | None) -> None:
         """
         Initialize the dataset task.
         """
         self.dataset_records_dataframe = self.pre_filter_dataset_records(dataset_records_dataframe)
 
     def pre_filter_dataset_records(
-        self, dataset_records_dataframe: pl.DataFrame
+        self, dataset_records_dataframe: pl.DataFrame | None
     ) -> pl.DataFrame | None:
         """
         Pre-filter the dataset records dataframe for the specific task.
