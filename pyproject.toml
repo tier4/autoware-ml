@@ -38,7 +38,7 @@ dependencies = [
     "spconv-cu120==2.3.6",
     "t4-devkit @ git+https://github.com/tier4/t4-devkit.git@v0.6.0",
     "tensorrt-cu12==10.16.0.72",
-    "torch==2.9.1+cu128",
+    "torch==2.12.0",
     "torchvision==0.24.1+cu128",
     "transforms3d==0.4.2"
 ]
