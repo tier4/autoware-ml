@@ -205,3 +205,41 @@ class ObjectMinPointsFilter(BaseTransform):
         mask = counts >= self.min_num_points
         _filter_present_box_keys(input_dict, mask)
         return input_dict
+
+
+class ObjectRangeMinPointsFilter(BaseTransform):
+    """Remove boxes below a point-count threshold within a BEV radial interval."""
+
+    _required_keys = ["gt_names", "coord"]
+    _optional_keys = ["gt_boxes"]
+
+    def __init__(self, range_radius: Sequence[float], min_num_points: int) -> None:
+        if len(range_radius) != 2:
+            raise ValueError(f"range_radius must contain [min, max], got {range_radius}")
+        min_radius, max_radius = (float(value) for value in range_radius)
+        if min_radius < 0.0 or min_radius >= max_radius:
+            raise ValueError(f"Expected 0 <= min radius < max radius, got {range_radius}")
+        if min_num_points <= 0:
+            raise ValueError(f"min_num_points must be positive, got {min_num_points}")
+        self.min_radius = min_radius
+        self.max_radius = max_radius
+        self.min_num_points = min_num_points
+
+    def apply_defaults(self, input_dict: dict[str, Any]) -> None:
+        """No defaults needed because missing boxes make this transform a no-op."""
+        pass
+
+    def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
+        if "gt_boxes" not in input_dict:
+            return input_dict
+
+        boxes = input_dict["gt_boxes"]
+        radii = np.linalg.norm(boxes[:, :2], axis=1)
+        in_range = (radii >= self.min_radius) & (radii < self.max_radius)
+        counts = _count_points_in_rotated_boxes(
+            np.asarray(input_dict["coord"], dtype=np.float32),
+            boxes,
+        )
+        mask = ~in_range | (counts >= self.min_num_points)
+        _filter_present_box_keys(input_dict, mask)
+        return input_dict

@@ -17,6 +17,7 @@ class_names:
   - traffic_cone
 num_classes: 10
 name_mapping: null
+merge_objects: []
 
 grid_size: 0.05
 point_cloud_range: [-102.4, -102.4, -3.0, 102.4, 102.4, 5.0]

@@ -17,6 +17,7 @@ class_names:
   - traffic_cone
 num_classes: 10
 name_mapping: null
+merge_objects: []
 
 grid_size: 0.05
 point_cloud_range: [-102.4, -102.4, -3.0, 102.4, 102.4, 5.0]
@@ -79,6 +80,8 @@ model:
     hidden_channel: 128
     num_classes: ${num_classes}
     class_names: ${class_names}
+    dense_heatmap_pooling_classes:
+      [car, truck, construction_vehicle, bus, trailer, barrier, motorcycle, bicycle]
     num_decoder_layers: 1
     num_heads: 8
     feedforward_channels: 256
@@ -121,6 +124,7 @@ model:
     loss_cls_weight: 1.0
     loss_bbox_weight: 0.25
     loss_heatmap_weight: 1.0
+    heatmap_target: round
     heatmap_init_bias: -2.19
     nms_kernel_size: 3
     use_velocity: true

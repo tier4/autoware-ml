@@ -9,6 +9,7 @@ from autoware_ml.transforms.boxes3d.filters import (
     ObjectMinPointsFilter,
     ObjectNameFilter,
     ObjectRangeFilter,
+    ObjectRangeMinPointsFilter,
 )
 from autoware_ml.transforms.boxes3d.loading import LoadAnnotations3D
 
@@ -81,6 +82,43 @@ def test_object_min_points_filter_counts_points_inside_rotated_boxes() -> None:
     output = ObjectMinPointsFilter(min_num_points=2)(sample)
 
     assert output["gt_boxes"].shape == (1, 7)
+
+
+def test_object_range_min_points_filter_uses_distance_specific_threshold() -> None:
+    sample = {
+        "gt_boxes": np.array(
+            [
+                [10.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0],
+                [70.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0],
+            ],
+            dtype=np.float32,
+        ),
+        "gt_names": np.array(["car", "car"]),
+        "gt_labels": np.array([0, 0], dtype=np.int64),
+        "coord": np.array(
+            [
+                [10.0, 0.0, 0.0],
+                [10.1, 0.0, 0.0],
+                [10.2, 0.0, 0.0],
+                [10.3, 0.0, 0.0],
+                [70.0, 0.0, 0.0],
+                [70.1, 0.0, 0.0],
+                [70.2, 0.0, 0.0],
+            ],
+            dtype=np.float32,
+        ),
+    }
+
+    near_filtered = ObjectRangeMinPointsFilter(
+        range_radius=[0.0, 60.0],
+        min_num_points=5,
+    )(sample)
+    output = ObjectRangeMinPointsFilter(
+        range_radius=[60.0, 130.0],
+        min_num_points=3,
+    )(near_filtered)
+
+    assert output["gt_boxes"][:, 0].tolist() == [70.0]
 
 
 def test_load_annotations3d_builds_detection_targets() -> None:
@@ -180,3 +218,90 @@ def test_load_annotations3d_filters_by_min_lidar_points() -> None:
 def test_load_annotations3d_rejects_negative_min_lidar_points() -> None:
     with pytest.raises(ValueError, match="min_num_lidar_points"):
         LoadAnnotations3D(min_num_lidar_points=-1)
+
+
+def test_load_annotations3d_preserves_ignored_bbox_label() -> None:
+    sample = {
+        "class_names": ["bicycle"],
+        "label_to_category": {5: "bicycle"},
+        "instances": [
+            {
+                "bbox_3d": [1.0, 2.0, 3.0, 2.0, 1.0, 1.5, 0.0],
+                "bbox_label_3d": -1,
+                "gt_nusc_name": "bicycle",
+                "num_lidar_pts": 10,
+            }
+        ],
+    }
+
+    output = LoadAnnotations3D(name_mapping={"bicycle": "bicycle"})(sample)
+
+    assert output["gt_boxes"].shape == (0, 9)
+
+
+def test_load_annotations3d_can_match_awml_validity_policy() -> None:
+    sample = {
+        "class_names": ["car"],
+        "instances": [
+            {
+                "bbox_3d": [1.0, 2.0, 3.0, 2.0, 1.0, 1.5, 0.0],
+                "gt_nusc_name": "car",
+                "num_lidar_pts": 10,
+                "bbox_3d_isvalid": False,
+            }
+        ],
+    }
+
+    default_output = LoadAnnotations3D()(sample.copy())
+    awml_output = LoadAnnotations3D(use_valid_flag=False)(sample.copy())
+
+    assert default_output["gt_boxes"].shape == (0, 9)
+    assert awml_output["gt_boxes"].shape == (1, 9)
+
+
+def test_load_annotations3d_filters_raw_class_attributes() -> None:
+    sample = {
+        "class_names": ["bicycle"],
+        "instances": [
+            {
+                "bbox_3d": [1.0, 2.0, 3.0, 2.0, 1.0, 1.5, 0.0],
+                "gt_nusc_name": "motorcycle",
+                "gt_attrs": ["vehicle_state.parked"],
+                "num_lidar_pts": 10,
+            },
+            {
+                "bbox_3d": [2.0, 2.0, 3.0, 2.0, 1.0, 1.5, 0.0],
+                "gt_nusc_name": "motorcycle",
+                "gt_attrs": ["two_wheel_vehicle_state.without_rider"],
+                "num_lidar_pts": 10,
+            },
+        ],
+    }
+
+    output = LoadAnnotations3D(
+        name_mapping={"motorcycle": "bicycle"},
+        filter_attributes=[["motorcycle", "vehicle_state.parked"]],
+    )(sample)
+
+    assert output["gt_boxes"][:, 0].tolist() == [2.0]
+    assert output["gt_names"].tolist() == ["bicycle"]
+
+
+def test_load_annotations3d_rejects_disagreeing_source_label() -> None:
+    sample = {
+        "class_names": ["car", "pedestrian"],
+        "label_to_category": {0: "car"},
+        "instances": [
+            {
+                "bbox_3d": [1.0, 2.0, 3.0, 2.0, 1.0, 1.5, 0.0],
+                "bbox_label_3d": 0,
+                "gt_nusc_name": "pedestrian",
+                "num_lidar_pts": 10,
+            }
+        ],
+    }
+
+    with pytest.raises(ValueError, match="Annotation label disagreement"):
+        LoadAnnotations3D(
+            name_mapping={"car": "car", "pedestrian": "pedestrian"},
+        )(sample)

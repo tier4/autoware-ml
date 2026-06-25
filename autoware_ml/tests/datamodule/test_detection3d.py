@@ -26,6 +26,7 @@ from autoware_ml.datamodule.t4dataset.detection3d import (
     FrameSamplingConfig,
     T4Detection3DDataModule,
     T4Detection3DDataset,
+    compute_frame_sampling_weights,
 )
 from autoware_ml.transforms.boxes3d.loading import LoadAnnotations3D
 
@@ -116,6 +117,7 @@ class TestT4Detection3DDataset:
                                 "bbox_3d_isvalid": True,
                                 "gt_nusc_name": "car",
                                 "bbox_3d": [0.0, 0.0, 0.0, 4.0, 1.8, 1.5, 0.0],
+                                "num_lidar_pts": 10,
                             }
                         ],
                     }
@@ -130,11 +132,13 @@ class TestT4Detection3DDataset:
                             "bbox_3d_isvalid": True,
                             "gt_nusc_name": "car",
                             "bbox_3d": [0.0, 0.0, 0.0, 4.0, 1.8, 1.5, 0.0],
+                            "num_lidar_pts": 10,
                         },
                         {
                             "bbox_3d_isvalid": True,
                             "gt_nusc_name": "pedestrian",
                             "bbox_3d": [1.0, 1.0, 0.0, 0.6, 0.6, 1.2, 0.0],
+                            "num_lidar_pts": 10,
                         },
                     ],
                 },
@@ -159,6 +163,107 @@ class TestT4Detection3DDataset:
         assert dataset.frame_weights[5] > dataset.frame_weights[0]
         assert np.isclose(dataset.frame_weights[5], 42**0.25)
 
+    def test_frame_sampling_weights_exclude_filtered_attributes(self) -> None:
+        data_infos = [
+            {
+                "instances": [
+                    {
+                        "gt_nusc_name": "car",
+                        "bbox_3d": [0.0, 0.0, 0.0, 4.0, 1.8, 1.5, 0.0],
+                        "num_lidar_pts": 10,
+                    }
+                ]
+            },
+            {
+                "instances": [
+                    {
+                        "gt_nusc_name": "car",
+                        "bbox_3d": [0.0, 0.0, 0.0, 4.0, 1.8, 1.5, 0.0],
+                        "num_lidar_pts": 10,
+                    },
+                    {
+                        "gt_nusc_name": "motorcycle",
+                        "gt_attrs": ["vehicle_state.parked"],
+                        "bbox_3d": [1.0, 1.0, 0.0, 1.8, 0.8, 1.2, 0.0],
+                        "num_lidar_pts": 10,
+                    },
+                ]
+            },
+        ]
+        frame_sampling = FrameSamplingConfig(
+            repeat_sampling_factor=1.0,
+            object_bev_range=[-10.0, -10.0, 10.0, 10.0],
+            low_pedestrian_height_threshold=1.5,
+            low_pedestrian_bev_range=[-5.0, -5.0, 5.0, 5.0],
+        )
+
+        weights = compute_frame_sampling_weights(
+            data_infos,
+            class_names=["car", "bicycle"],
+            name_mapping={"car": "car", "motorcycle": "bicycle"},
+            frame_sampling=frame_sampling,
+            filter_attributes=[["motorcycle", "vehicle_state.parked"]],
+            min_num_lidar_points=1,
+        )
+
+        assert weights == [1.0, 1.0]
+
+    def test_dataset_frame_sampling_uses_annotation_filter_policy(self, tmp_path) -> None:
+        ann_file = tmp_path / "infos.pkl"
+        data = {
+            "data_list": [
+                {
+                    "token": "car_only",
+                    "lidar_path": "a.bin",
+                    "lidar_points": {"num_pts_feats": 5},
+                    "instances": [
+                        {
+                            "gt_nusc_name": "car",
+                            "bbox_3d": [0.0, 0.0, 0.0, 4.0, 1.8, 1.5, 0.0],
+                            "num_lidar_pts": 10,
+                        }
+                    ],
+                },
+                {
+                    "token": "car_and_filtered_bicycle",
+                    "lidar_path": "b.bin",
+                    "lidar_points": {"num_pts_feats": 5},
+                    "instances": [
+                        {
+                            "gt_nusc_name": "car",
+                            "bbox_3d": [0.0, 0.0, 0.0, 4.0, 1.8, 1.5, 0.0],
+                            "num_lidar_pts": 10,
+                        },
+                        {
+                            "gt_nusc_name": "motorcycle",
+                            "gt_attrs": ["vehicle_state.parked"],
+                            "bbox_3d": [1.0, 1.0, 0.0, 1.8, 0.8, 1.2, 0.0],
+                            "num_lidar_pts": 10,
+                        },
+                    ],
+                },
+            ],
+        }
+        with open(ann_file, "wb") as file:
+            pickle.dump(data, file)
+
+        dataset = T4Detection3DDataset(
+            data_root=str(tmp_path),
+            ann_file=str(ann_file),
+            class_names=["car", "bicycle"],
+            name_mapping={"car": "car", "motorcycle": "bicycle"},
+            filter_attributes=[["motorcycle", "vehicle_state.parked"]],
+            min_num_lidar_points=1,
+            frame_sampling=FrameSamplingConfig(
+                repeat_sampling_factor=1.0,
+                object_bev_range=[-10.0, -10.0, 10.0, 10.0],
+                low_pedestrian_height_threshold=1.5,
+                low_pedestrian_bev_range=[-5.0, -5.0, 5.0, 5.0],
+            ),
+        )
+
+        assert dataset.frame_weights == [1.0, 1.0]
+
     def test_train_dataloader_uses_distributed_weighted_sampler(self, tmp_path) -> None:
         data_root = tmp_path / "t4dataset"
         info_root = data_root / "info" / "detection3d"
@@ -175,6 +280,7 @@ class TestT4Detection3DDataset:
                             "bbox_3d_isvalid": True,
                             "gt_nusc_name": "car",
                             "bbox_3d": [0.0, 0.0, 0.0, 4.0, 1.8, 1.5, 0.0],
+                            "num_lidar_pts": 10,
                         }
                     ],
                 }

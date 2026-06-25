@@ -37,6 +37,10 @@ from autoware_ml.datamodule.common.detection3d import (
     resolve_sweep_paths,
 )
 from autoware_ml.transforms.base import TransformsCompose
+from autoware_ml.transforms.boxes3d.annotations import (
+    normalize_filter_attributes,
+    resolve_detection_class,
+)
 
 
 @dataclass(frozen=True)
@@ -71,10 +75,14 @@ def compute_frame_sampling_weights(
     class_names: list[str],
     name_mapping: Mapping[str, str],
     frame_sampling: FrameSamplingConfig | None,
+    filter_attributes: list[list[str]] | None = None,
+    min_num_lidar_points: int = 0,
+    use_valid_flag: bool = True,
 ) -> list[float]:
     """Compute repeat-factor sampling weights for T4 detection samples."""
     if frame_sampling is None:
         return [1.0] * len(data_infos)
+    normalized_filter_attributes = normalize_filter_attributes(filter_attributes)
 
     sampling_categories = [*class_names, frame_sampling.low_pedestrian_category_name]
     category_frame_counts = {category: 0 for category in sampling_categories}
@@ -82,7 +90,15 @@ def compute_frame_sampling_weights(
     frame_categories = []
 
     for sample in data_infos:
-        categories = _sample_sampling_categories(sample, class_names, name_mapping, frame_sampling)
+        categories = _sample_sampling_categories(
+            sample,
+            class_names,
+            name_mapping,
+            frame_sampling,
+            normalized_filter_attributes,
+            min_num_lidar_points,
+            use_valid_flag,
+        )
         frame_categories.append(categories)
         for category, count in categories.items():
             if count <= 0:
@@ -122,16 +138,25 @@ def _sample_sampling_categories(
     class_names: list[str],
     name_mapping: Mapping[str, str],
     frame_sampling: FrameSamplingConfig,
+    filter_attributes: frozenset[tuple[str, str]],
+    min_num_lidar_points: int,
+    use_valid_flag: bool,
 ) -> dict[str, int]:
     """Return sampling category counts for one frame."""
     categories = {*class_names, frame_sampling.low_pedestrian_category_name}
     category_counts = {category: 0 for category in categories}
 
     for instance in sample.get("instances", []):
-        if not instance.get("bbox_3d_isvalid", True):
-            continue
-        mapped_name = _resolve_instance_name(instance, sample, name_mapping)
-        if mapped_name not in class_names:
+        mapped_name = resolve_detection_class(
+            instance,
+            class_names=class_names,
+            name_mapping=name_mapping,
+            label_to_category=sample.get("label_to_category"),
+            filter_attributes=filter_attributes,
+            min_num_lidar_points=min_num_lidar_points,
+            use_valid_flag=use_valid_flag,
+        )
+        if mapped_name is None:
             continue
         box = instance.get("bbox_3d")
         if box is None or not _box_center_in_bev_range(box, frame_sampling.object_bev_range):
@@ -143,19 +168,6 @@ def _sample_sampling_categories(
         category_counts[category] += 1
 
     return category_counts
-
-
-def _resolve_instance_name(
-    instance: Mapping[str, Any],
-    sample: Mapping[str, Any],
-    name_mapping: Mapping[str, str],
-) -> str:
-    """Map one raw instance label to a detector label."""
-    raw_name = instance.get("gt_nusc_name")
-    if raw_name is None:
-        label_to_category = sample.get("label_to_category", {})
-        raw_name = label_to_category.get(int(instance["bbox_label_3d"]), "")
-    return name_mapping.get(str(raw_name), str(raw_name))
 
 
 def _is_low_pedestrian(
@@ -190,6 +202,9 @@ class T4Detection3DDataset(Dataset):
         ann_file: str,
         class_names: list[str],
         name_mapping: Mapping[str, str],
+        filter_attributes: list[list[str]] | None = None,
+        min_num_lidar_points: int = 1,
+        use_valid_flag: bool = True,
         frame_sampling: FrameSamplingConfig | None = None,
         dataset_transforms: TransformsCompose | None = None,
     ) -> None:
@@ -200,6 +215,9 @@ class T4Detection3DDataset(Dataset):
             ann_file: Annotation file path.
             class_names: Ordered detector class names.
             name_mapping: Mapping from dataset labels to detector labels.
+            filter_attributes: Raw class-attribute pairs excluded from detection targets.
+            min_num_lidar_points: Minimum lidar points required for sampled boxes.
+            use_valid_flag: Whether ``bbox_3d_isvalid`` excludes sampled boxes.
             frame_sampling: Optional repeat-factor frame sampling settings.
             dataset_transforms: Optional dataset transform pipeline.
         """
@@ -217,6 +235,9 @@ class T4Detection3DDataset(Dataset):
             self.class_names,
             self.name_mapping,
             self.frame_sampling,
+            filter_attributes=filter_attributes,
+            min_num_lidar_points=min_num_lidar_points,
+            use_valid_flag=use_valid_flag,
         )
 
     def __len__(self) -> int:
@@ -263,6 +284,9 @@ class T4Detection3DDataModule(DataModule):
         test_ann_file: str,
         class_names: list[str],
         name_mapping: Mapping[str, str],
+        filter_attributes: list[list[str]] | None = None,
+        min_num_lidar_points: int = 1,
+        use_valid_flag: bool = True,
         train_frame_sampling: FrameSamplingConfig | Mapping[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
@@ -275,6 +299,9 @@ class T4Detection3DDataModule(DataModule):
             test_ann_file: Test annotation file path.
             class_names: Ordered detector class names.
             name_mapping: Mapping from dataset labels to detector labels.
+            filter_attributes: Raw class-attribute pairs excluded from detection targets.
+            min_num_lidar_points: Minimum lidar points required for sampled train boxes.
+            use_valid_flag: Whether ``bbox_3d_isvalid`` excludes sampled train boxes.
             train_frame_sampling: Optional repeat-factor frame sampling
                 settings applied only to the training split.
             **kwargs: Additional base datamodule configuration.
@@ -283,6 +310,9 @@ class T4Detection3DDataModule(DataModule):
         self.data_root = data_root
         self.class_names = class_names
         self.name_mapping = name_mapping
+        self.filter_attributes = filter_attributes
+        self.min_num_lidar_points = min_num_lidar_points
+        self.use_valid_flag = use_valid_flag
         self.train_frame_sampling = coerce_frame_sampling(train_frame_sampling)
 
         def resolve_ann_file(ann_file: str) -> str:
@@ -312,6 +342,9 @@ class T4Detection3DDataModule(DataModule):
             ann_file=self.ann_files[split],
             class_names=self.class_names,
             name_mapping=self.name_mapping,
+            filter_attributes=self.filter_attributes,
+            min_num_lidar_points=self.min_num_lidar_points,
+            use_valid_flag=self.use_valid_flag,
             frame_sampling=self.train_frame_sampling if split == "train" else None,
             dataset_transforms=dataset_transforms,
         )

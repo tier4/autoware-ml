@@ -11,6 +11,10 @@ point_cloud_bev_range: [-128.0, -128.0, 128.0, 128.0]
 bev_stride: 4
 bev_output_shape: [1280, 1280]
 head_voxel_size: [0.2, 0.2, 8.0]
+detection_filter_attributes:
+  - [bicycle, cycle_state.without_rider]
+  - [motorcycle, vehicle_state.parked]
+  - [motorcycle, motorcycle_state.without_rider]
 
 model:
   export_output_names: [heatmap, reg, height, dim, rot, vel]

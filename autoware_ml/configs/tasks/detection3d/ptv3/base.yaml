@@ -26,6 +26,8 @@ head_voxel_size: ???
 train_min_num_lidar_points: 1
 train_object_min_num_points: 5
 eval_min_num_lidar_points: 1
+detection_filter_attributes: []
+detection_use_valid_flag: true
 
 head_out_size_factor: 1
 score_threshold: 0.1
@@ -35,6 +37,8 @@ nms_min_radius: 1.0
 train_sweeps_num: 1
 val_sweeps_num: 1
 
+merge_objects: [[truck, [truck, trailer]]]
+
 name_mapping:
   car: car
   emergency_vehicle: truck
@@ -42,8 +46,8 @@ name_mapping:
   tractor_unit: truck
   construction_vehicle: truck
   fire_truck: truck
-  semi_trailer: truck
-  trailer: truck
+  semi_trailer: trailer
+  trailer: trailer
   bus: bus
   bicycle: bicycle
   motorcycle: bicycle
@@ -74,6 +78,9 @@ datamodule:
   test_ann_file: ${datamodule.data_root}/info/detection3d/t4dataset_j6gen2_base_infos_val.pkl
   class_names: ${class_names}
   name_mapping: ${name_mapping}
+  filter_attributes: ${detection_filter_attributes}
+  min_num_lidar_points: ${train_min_num_lidar_points}
+  use_valid_flag: ${detection_use_valid_flag}
   train_frame_sampling:
     repeat_sampling_factor: 0.30
     object_bev_range: ${point_cloud_bev_range}
@@ -104,9 +111,14 @@ datamodule:
   train_transforms:
     _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
+      - _target_: autoware_ml.transforms.boxes3d.merge.MergeObjects3D
+        merge_objects: ${merge_objects}
+        name_mapping: ${name_mapping}
       - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
         name_mapping: ${name_mapping}
         min_num_lidar_points: ${train_min_num_lidar_points}
+        filter_attributes: ${detection_filter_attributes}
+        use_valid_flag: ${detection_use_valid_flag}
       - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
         sweeps_num: ${train_sweeps_num}
         load_dim: 5
@@ -140,9 +152,14 @@ datamodule:
   val_transforms:
     _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
+      - _target_: autoware_ml.transforms.boxes3d.merge.MergeObjects3D
+        merge_objects: ${merge_objects}
+        name_mapping: ${name_mapping}
       - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
         name_mapping: ${name_mapping}
         min_num_lidar_points: ${eval_min_num_lidar_points}
+        filter_attributes: ${detection_filter_attributes}
+        use_valid_flag: ${detection_use_valid_flag}
       - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
         sweeps_num: ${val_sweeps_num}
         load_dim: 5
