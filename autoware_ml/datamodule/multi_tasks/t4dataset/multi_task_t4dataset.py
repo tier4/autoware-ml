@@ -78,8 +78,8 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
         return MultiTaskGTSample(
             lidar_point_cloud_samples=lidar_pointcloud_samples,
             point_cloud_features=None,  # Add point cloud features if available
-            detection3d_sample=data_samples.get(TaskType.DETECTION3D, None),
-            segmentation3d_sample=data_samples.get(TaskType.SEGMENTATION3D, None),
+            detection3d_gt_sample=data_samples.get(TaskType.DETECTION3D, None),
+            segmentation3d_gt_sample=data_samples.get(TaskType.SEGMENTATION3D, None),
         )
 
     def get_lidar_pointcloud_data_samples(self, idx: int) -> Sequence[LiDARPointCloudSample]:
@@ -99,10 +99,10 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
             lidar_pointcloud_samples.append(
                 LiDARPointCloudSample(
                     point_cloud_path=lidar_pointcloud_metadata[
-                        LidarFrameDatasetSchema.PointCloudPath.name
+                        LidarFrameDatasetSchema.lidar_pointcloud_path.name
                     ],
                     timestamp_seconds=lidar_pointcloud_metadata[
-                        LidarFrameDatasetSchema.TimestampSeconds.name
+                        LidarFrameDatasetSchema.lidar_timestamp_seconds.name
                     ],
                     sensor_to_ego_pose_matrix=np.asarray(
                         lidar_pointcloud_metadata[

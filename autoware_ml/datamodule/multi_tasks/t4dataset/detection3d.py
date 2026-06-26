@@ -68,17 +68,11 @@ class T4Detection3DTask(BaseDatasetTask):
         """
         # Retrieve the specific row from the dataset records dataframe based on the given index
         # and the bbox3d column.
-        selected_row = self.dataset_records_dataframe.item(idx, DatasetTableSchema.BOXES_3D.name)
-        extracted_df = selected_row.select(
-            pl.nth(0).list.eval(pl.element().struct.field(Box3DDatasetSchema.BOX3D_PARAMS.name)),
-            pl.nth(0).list.eval(
-                pl.element().struct.field(Box3DDatasetSchema.BOX3D_LABEL_INDEX.name)
-            ),
-        )
-        print(extracted_df)
-        print(selected_row[0][Box3DDatasetSchema.BOX3D_PARAMS.name])
-        gt_bboxes_3d = selected_row[Box3DDatasetSchema.BOX3D_PARAMS.name]
-        gt_bboxes_labels = selected_row[Box3DDatasetSchema.BOX3D_LABEL_INDEX.name]
+        selected_row = self.dataset_records_dataframe.item(
+            idx, DatasetTableSchema.BOXES_3D.name
+        ).struct
+        gt_bboxes_3d = selected_row.field(Box3DDatasetSchema.BOX3D_PARAMS.name).to_numpy()
+        gt_bboxes_labels = selected_row.field(Box3DDatasetSchema.BOX3D_LABEL_INDEX.name).to_numpy()
 
         detection3d_gt_sample = Detection3DGTSample(
             gt_bboxes_3d=np.asarray(gt_bboxes_3d, dtype=np.float32),
@@ -89,6 +83,6 @@ class T4Detection3DTask(BaseDatasetTask):
         return MultiTaskGTSample(
             lidar_point_cloud_samples=None,
             point_cloud_features=None,
-            detection3d_sample=detection3d_gt_sample,
-            segmentation3d_sample=None,
+            detection3d_gt_sample=detection3d_gt_sample,
+            segmentation3d_gt_sample=None,
         )

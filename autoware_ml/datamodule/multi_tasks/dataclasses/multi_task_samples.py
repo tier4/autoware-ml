@@ -3,7 +3,10 @@ from typing import Sequence, NamedTuple
 import numpy.typing as npt
 import numpy as np
 
-from autoware_ml.datamodule.multi_tasks.dataclasses.detection3d import Detection3DGTSample
+from autoware_ml.datamodule.multi_tasks.dataclasses.detection3d import (
+    Detection3DGTSample,
+    Detection3DGTBatch,
+)
 from autoware_ml.datamodule.multi_tasks.dataclasses.segmentation3d import Segmentation3DGTSample
 
 
@@ -36,5 +39,22 @@ class MultiTaskGTSample(NamedTuple):
     # if it doesn't need to be loaded
     point_cloud_features: npt.NDArray[np.float32] | None
 
-    detection3d_sample: Detection3DGTSample | None
-    segmentation3d_sample: Segmentation3DGTSample | None
+    detection3d_gt_sample: Detection3DGTSample | None
+    segmentation3d_gt_sample: Segmentation3DGTSample | None
+
+
+class MultiTaskGTBatch(NamedTuple):
+    """
+    Named tuple to represent a batch of multi-task data after collating from sequence of
+    MultiTaskGTSample when inputting to the multi-task model.
+    """
+
+    # 3D branch
+    point_cloud_features: npt.NDArray[np.float32] | None  # (B*P, pointcloud feature dimension)
+    # Batch indices for each point cloud feature, shape (B*P, ), where B is the batch size and
+    # P is the number of points in the point cloud.
+    point_cloud_features_batch_indices: npt.NDArray[np.int32] | None  # (B*P, )
+
+    detection3d_gt_batch: Detection3DGTBatch | None
+
+    # TODO (Kok Seang): 3D segmentation
