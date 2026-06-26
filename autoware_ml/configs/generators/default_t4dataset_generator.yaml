@@ -7,6 +7,7 @@ hydra:
 
 defaults:
   - database: t4dataset/t4dataset_base
+  - datamodule: t4dataset/default_detection3d_datamodule
   - override hydra/hydra_logging: none # Disable hydra's logging
   - _self_
 

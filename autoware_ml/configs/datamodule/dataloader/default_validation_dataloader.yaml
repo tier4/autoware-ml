@@ -1,0 +1,7 @@
+_target_: autoware_ml.datamodule.base.DataLoaderConfig
+_convert_: all
+
+pin_memory: true
+persistent_workers: true
+drop_last: false
+shuffle: false

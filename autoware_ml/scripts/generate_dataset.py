@@ -46,8 +46,18 @@ def main(cfg: DictConfig):
     # Instantiate DatabaseInterface
     database: DatabaseInterface = instantiate(cfg.database)
 
-    # Process scenario records and save them to a parquet file
-    database.process_scenario_records()
+    # Instantiate the datamodule with the database
+    datamodule = instantiate(cfg.datamodule, database=database)
+
+    datamodule.prepare_data()
+
+    # Split/setup dataframes
+    datamodule.setup(stage="fit")
+
+    train_dataloader = datamodule.train_dataloader()
+    for batch in train_dataloader:
+        logger.info(f"Batch: {batch}")
+        break  # Just log the first batch for demonstration
 
 
 if __name__ == "__main__":

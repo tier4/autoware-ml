@@ -1,0 +1,5 @@
+_target_: autoware_ml.datamodule.multi_tasks.t4dataset.detection3d.T4Detection3DTask
+_convert_: all
+
+# Always set to None since we run splitter in the process
+dataset_records_dataframe: null
