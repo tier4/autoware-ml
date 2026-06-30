@@ -115,6 +115,7 @@ class MultiTaskDataModule(L.LightningDataModule):
             num_workers=self.train_dataloader_config.num_workers,
             pin_memory=self.train_dataloader_config.pin_memory,
             drop_last=self.train_dataloader_config.drop_last,
+            collate_fn=self.train_dataset.collate_fn,
         )
 
     def val_dataloader(self):
@@ -135,6 +136,7 @@ class MultiTaskDataModule(L.LightningDataModule):
             num_workers=self.validation_dataloader_config.num_workers,
             pin_memory=self.validation_dataloader_config.pin_memory,
             drop_last=self.validation_dataloader_config.drop_last,
+            collate_fn=self.validation_dataset.collate_fn,
         )
 
     def test_dataloader(self):
@@ -155,6 +157,7 @@ class MultiTaskDataModule(L.LightningDataModule):
             num_workers=self.test_dataloader_config.num_workers,
             pin_memory=self.test_dataloader_config.pin_memory,
             drop_last=self.test_dataloader_config.drop_last,
+            collate_fn=self.test_dataset.collate_fn,
         )
 
     def predict_dataloader(self):
@@ -175,4 +178,5 @@ class MultiTaskDataModule(L.LightningDataModule):
             num_workers=self.predict_dataloader_config.num_workers,
             pin_memory=self.predict_dataloader_config.pin_memory,
             drop_last=self.predict_dataloader_config.drop_last,
+            collate_fn=self.predict_dataset.collate_fn,
         )

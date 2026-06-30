@@ -31,6 +31,7 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
 
     def __init__(
         self,
+        max_num_3d_gt_bboxes: int,
         dataset_records_dataframe: pl.DataFrame | None,
         transforms: TransformsCompose | None,
         dataset_tasks: MappingProxyType[TaskType | str, BaseDatasetTask],
@@ -38,13 +39,21 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
         """
         Initialize the MultiTaskT4Dataset class.
         Args:
+          max_num_3d_gt_bboxes: Maximum number of 3D ground truth bounding boxes in the dataset.
+            This is allowed to be 0 if the dataset does not contain any 3D ground truth
+            bounding boxes or it does not need to run 3D detection tasks.
           dataset_records_dataframe: Polars DataFrame of dataset records to be used in
             the multi-task dataset.
           transforms: Global transforms to be applied to the dataset records.
           dataset_tasks: Every task dataset that is part of the multi-task dataset, mapped by
             task type.
         """
-        super().__init__(dataset_records_dataframe=dataset_records_dataframe, transforms=transforms)
+        super().__init__(
+            max_num_3d_gt_bboxes=max_num_3d_gt_bboxes,
+            dataset_records_dataframe=dataset_records_dataframe,
+            transforms=transforms,
+        )
+
         # Convert the dataset_tasks to TaskType: BaseDatasetTask mapping if the keys are strings
         self.dataset_tasks: MappingProxyType[TaskType, BaseDatasetTask] = MappingProxyType(
             {

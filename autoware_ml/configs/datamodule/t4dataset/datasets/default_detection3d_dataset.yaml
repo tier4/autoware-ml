@@ -7,3 +7,4 @@ defaults:
 # Always None since we run splitter in the process
 dataset_records_dataframe: null
 transforms: null
+max_num_3d_gt_bboxes: 500

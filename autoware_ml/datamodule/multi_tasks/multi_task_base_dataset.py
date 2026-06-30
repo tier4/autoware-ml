@@ -1,11 +1,14 @@
 from abc import abstractmethod
-from typing import Any
+from typing import Any, Sequence
 
 
 import polars as pl
 from torch.utils.data import Dataset
 
-from autoware_ml.datamodule.multi_tasks.dataclasses.multi_task_samples import MultiTaskGTSample
+from autoware_ml.datamodule.multi_tasks.dataclasses.multi_task_samples import (
+    MultiTaskGTSample,
+    MultiTaskGTBatch,
+)
 from autoware_ml.transforms.base import TransformsCompose
 
 
@@ -15,17 +18,24 @@ class MultiTaskBaseDataset(Dataset):
     """
 
     def __init__(
-        self, dataset_records_dataframe: pl.DataFrame | None, transforms: TransformsCompose | None
+        self,
+        max_num_3d_gt_bboxes: int,
+        dataset_records_dataframe: pl.DataFrame | None,
+        transforms: TransformsCompose | None,
     ) -> None:
         """
         Initialize the multi-task dataset interface.
         Args:
+          max_num_3d_gt_bboxes: Maximum number of 3D ground truth bounding boxes in the dataset.
+              This is allowed to be 0 if the dataset does not contain any 3D ground truth
+              bounding boxes or it does not need to run 3D detection tasks.
           dataset_records_dataframe: Polars DataFrame of dataset records to be used in the
               multi-task dataset. Accept None if the dataset records
               are not available at initialization.
           transforms: Global transforms to be applied to the dataset records.
         """
         super().__init__()
+        self.max_num_3d_gt_bboxes = max_num_3d_gt_bboxes
         self.transforms = transforms
         self.dataset_records_dataframe = dataset_records_dataframe
 
@@ -86,3 +96,13 @@ class MultiTaskBaseDataset(Dataset):
         if self.transforms is None:
             return multi_task_gt_sample
         return self.transforms(multi_task_gt_sample)
+
+    def collate_fn(self, batch: Sequence[MultiTaskGTSample]) -> MultiTaskGTBatch:
+        """
+        Collate a batch of MultiTaskGTSample into a MultiTaskGTBatch.
+        Args:
+          batch: List of MultiTaskGTSample instances to be collated.
+        Returns:
+          MultiTaskGTBatch: Collated multi-task GT batch.
+        """
+        return MultiTaskGTBatch.collate_gt_samples(batch)
