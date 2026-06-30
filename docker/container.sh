@@ -43,6 +43,10 @@ CONTAINER=""
 CONTAINER_NAME=""
 USER_ENV=""
 LOCALTIME_MOUNT=""
+CMD="bash"
+DOCKER_TTY="-it"
+RUN_CMD=("bash")
+RUN_TAIL=()
 
 # Function to print help message
 print_help() {
@@ -58,6 +62,7 @@ print_help() {
     echo -e "  ${GREEN}--run${NC}                Create and start a new container"
     echo -e "  ${GREEN}--exec${NC}               Enter an existing running container"
     echo -e "  ${GREEN}--stop${NC}               Stop a running container"
+    echo -e "  ${GREEN}--cmd${NC}                Command to run inside the container (default: bash, an interactive shell). Example: --cmd \"pytest autoware_ml/tests\""
     echo ""
 }
 
@@ -95,6 +100,11 @@ parse_arguments() {
         --data-path)
             validate_option_value "--data-path" "$2"
             DATA_PATH="$2"
+            shift
+            ;;
+        --cmd)
+            validate_option_value "--cmd" "$2"
+            CMD="$2"
             shift
             ;;
         --*)
@@ -200,6 +210,31 @@ set_user_config() {
     USER_ENV="-e HOST_UID=${HOST_UID} -e HOST_GID=${HOST_GID} -e XDG_RUNTIME_DIR=/tmp/xdg"
 }
 
+# Resolve the in-container command and TTY flags from --cmd
+set_command() {
+    # Use an interactive TTY only when stdin is a terminal, so non-interactive
+    # invocations (CI, piped runs) work without "the input device is not a TTY".
+    if [ -t 0 ]; then
+        DOCKER_TTY="-it"
+    else
+        DOCKER_TTY="-i"
+    fi
+
+    if [ "$CMD" = "bash" ]; then
+        # Default: an interactive shell, matching the previous behavior.
+        RUN_CMD=("bash")
+        RUN_TAIL=()
+    else
+        # Run the requested command through a login shell so PATH/env are set up.
+        RUN_CMD=("bash" "-lc" "$CMD")
+        if [ "$option_detached" = "true" ]; then
+            RUN_TAIL=()
+        else
+            RUN_TAIL=("bash" "-lc" "$CMD")
+        fi
+    fi
+}
+
 # Execute into an existing running container
 exec_container() {
     # Check if container exists and is running
@@ -213,11 +248,12 @@ exec_container() {
     echo -e "${GREEN}-----------------------------------------------------------------${NC}"
     echo -e "${GREEN}Entering Autoware-ML container${NC}"
     echo -e "${GREEN}CONTAINER:${NC} ${CONTAINER_NAME}"
+    echo -e "${GREEN}COMMAND:${NC} ${CMD}"
     echo -e "${GREEN}-----------------------------------------------------------------${NC}"
 
     # Use the mounted workspace entrypoint so container execution stays in sync
     # with the checked-out repository without requiring an image rebuild.
-    docker exec -it -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" "${CONTAINER_NAME}" /workspace/docker/entrypoint.sh bash
+    docker exec ${DOCKER_TTY} -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" "${CONTAINER_NAME}" /workspace/docker/entrypoint.sh "${RUN_CMD[@]}"
 }
 
 wait_for_container() {
@@ -253,11 +289,11 @@ stop_container() {
 }
 
 print_run_command() {
-    echo docker run -it --rm --net=host --gpus "${GPU_SPEC}" ${MODE} ${MEMORY_CONFIG} ${MOUNT_X} \
+    echo docker run ${DOCKER_TTY} --rm --net=host --gpus "${GPU_SPEC}" ${MODE} ${MEMORY_CONFIG} ${MOUNT_X} \
         -e XAUTHORITY="${XAUTHORITY}" -e NVIDIA_DRIVER_CAPABILITIES=all \
         -e TZ="$(cat /etc/timezone)" \
         ${USER_ENV} \
-        ${LOCALTIME_MOUNT} ${WORKSPACE} ${DATA} ${CONTAINER} ${IMAGE}
+        ${LOCALTIME_MOUNT} ${WORKSPACE} ${DATA} ${CONTAINER} ${IMAGE} "${RUN_TAIL[@]}"
 }
 
 # Run a new container
@@ -277,11 +313,11 @@ run() {
 
     # Launch the container
     print_run_command
-    docker run -it --rm --net=host --gpus "${GPU_SPEC}" ${MODE} ${MEMORY_CONFIG} ${MOUNT_X} \
+    docker run ${DOCKER_TTY} --rm --net=host --gpus "${GPU_SPEC}" ${MODE} ${MEMORY_CONFIG} ${MOUNT_X} \
         -e XAUTHORITY=${XAUTHORITY} -e NVIDIA_DRIVER_CAPABILITIES=all \
         -e TZ="$(cat /etc/timezone)" \
         ${USER_ENV} \
-        ${LOCALTIME_MOUNT} ${WORKSPACE} ${DATA} ${CONTAINER} ${IMAGE}
+        ${LOCALTIME_MOUNT} ${WORKSPACE} ${DATA} ${CONTAINER} ${IMAGE} "${RUN_TAIL[@]}"
 
     if [ "$option_detached" = "true" ]; then
         wait_for_container
@@ -294,6 +330,7 @@ main() {
     parse_arguments "$@"
     validate_actions
     set_variables
+    set_command
 
     if [ "$option_stop" = "true" ]; then
         stop_container

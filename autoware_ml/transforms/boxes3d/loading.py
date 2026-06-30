@@ -16,12 +16,19 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
 
 from autoware_ml.transforms.base import BaseTransform
+from autoware_ml.transforms.boxes3d.annotations import (
+    normalize_filter_attributes,
+    resolve_detection_class,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class LoadAnnotations3D(BaseTransform):
@@ -56,11 +63,15 @@ class LoadAnnotations3D(BaseTransform):
         self,
         name_mapping: Mapping[str, str | None] | None = None,
         min_num_lidar_points: int = 1,
+        filter_attributes: list[list[str]] | None = None,
+        use_valid_flag: bool = True,
     ) -> None:
         if min_num_lidar_points < 0:
             raise ValueError(f"min_num_lidar_points must be >= 0, got {min_num_lidar_points}")
         self.name_mapping = dict(name_mapping) if name_mapping is not None else None
         self.min_num_lidar_points = min_num_lidar_points
+        self.filter_attributes = normalize_filter_attributes(filter_attributes)
+        self.use_valid_flag = use_valid_flag
         self._validated_class_names: set[tuple[str, ...]] = set()
 
     def apply_defaults(self, input_dict: dict[str, Any]) -> None:
@@ -75,16 +86,19 @@ class LoadAnnotations3D(BaseTransform):
         gt_boxes, gt_names, gt_num_points = [], [], []
 
         for inst in instances:
-            if not inst.get("bbox_3d_isvalid", True):
-                continue
-            num_pts = inst.get("num_lidar_pts", 0)
-            if num_pts < self.min_num_lidar_points:
-                continue
-
-            canonical = self._resolve_canonical_name(inst, input_dict, canonical_list)
+            canonical = resolve_detection_class(
+                inst,
+                class_names=canonical_list,
+                name_mapping=self.name_mapping,
+                label_to_category=input_dict.get("label_to_category"),
+                filter_attributes=self.filter_attributes,
+                min_num_lidar_points=self.min_num_lidar_points,
+                use_valid_flag=self.use_valid_flag,
+            )
             if canonical is None:
                 continue
 
+            num_pts = int(inst.get("num_lidar_pts", 0))
             box = list(inst["bbox_3d"])  # 7 values: cx cy cz dx dy dz yaw
             vel = list(inst.get("velocity", [0.0, 0.0]))
             vel = [0.0 if not np.isfinite(v) else float(v) for v in vel]
@@ -109,51 +123,29 @@ class LoadAnnotations3D(BaseTransform):
         return input_dict
 
     def _validate_name_mapping_targets(self, class_names: list[str]) -> None:
-        """Validate mapping targets once for each distinct class-name set."""
+        """Log mapping targets dropped because they are not detector classes.
+
+        A ``name_mapping`` target absent from ``class_names`` is treated as an
+        intentional drop (the AWML convention, e.g. mapping ``trailer`` to the
+        non-target class ``trailer`` so standalone trailers are excluded). Such
+        boxes are dropped downstream by ``resolve_detection_class``; this only
+        surfaces them once per distinct class-name set.
+        """
         if self.name_mapping is None:
             return
         class_name_key = tuple(str(name) for name in class_names)
         if class_name_key in self._validated_class_names:
             return
+        self._validated_class_names.add(class_name_key)
 
-        unknown_targets = sorted(
+        dropped_targets = sorted(
             {
-                mapped_name
+                str(mapped_name)
                 for mapped_name in self.name_mapping.values()
                 if mapped_name is not None and str(mapped_name) not in class_name_key
             }
         )
-        if unknown_targets:
-            raise ValueError(
-                "name_mapping contains target class names not present in class_names: "
-                f"{unknown_targets}"
+        if dropped_targets:
+            logger.info(
+                "name_mapping targets not in class_names will be dropped: %s", dropped_targets
             )
-        self._validated_class_names.add(class_name_key)
-
-    def _resolve_canonical_name(
-        self,
-        instance: Mapping[str, Any],
-        input_dict: Mapping[str, Any],
-        class_names: list[str],
-    ) -> str | None:
-        """Resolve one raw annotation label to a canonical class name."""
-        raw_name = instance.get("gt_nusc_name")
-        if raw_name is None and "bbox_label_3d" in instance:
-            label_idx = int(instance["bbox_label_3d"])
-            label_to_category = input_dict.get("label_to_category", {})
-            raw_name = label_to_category.get(label_idx)
-            if raw_name is None and self.name_mapping is None:
-                if label_idx < 0 or label_idx >= len(class_names):
-                    return None
-                raw_name = class_names[label_idx]
-
-        if raw_name is None:
-            return None
-
-        raw_name = str(raw_name)
-        if self.name_mapping is not None:
-            canonical = self.name_mapping.get(raw_name)
-            return str(canonical) if canonical is not None else None
-        if raw_name not in class_names:
-            return None
-        return raw_name

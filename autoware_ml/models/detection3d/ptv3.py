@@ -7,22 +7,23 @@ them with an explicit BEV encoder.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
 
 import torch
 import torch.nn as nn
-from torch.optim import Optimizer
-from torch.optim.lr_scheduler import LRScheduler
 
-from autoware_ml.metrics.detection3d import CenterDistanceMeanAP
-from autoware_ml.models.detection3d.base import Detection3DBaseModel
+from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
 from autoware_ml.models.segmentation3d.backbones.ptv3 import PointTransformerV3Backbone
 from autoware_ml.models.segmentation3d.ptv3_base import (
     PTv3BaseModel,
     _PTv3BackboneExportModule,
     _run_ptv3_backbone_export,
+    build_point_feature_dynamic_axes,
+    build_ptv3_backbone_dynamic_axes,
+    build_ptv3_input_dynamic_axes,
+    build_serialized_pooling_export_inputs,
 )
 from autoware_ml.utils.deploy import ExportSpec
 from autoware_ml.utils.point_cloud.batching import offset_to_batch
@@ -227,6 +228,7 @@ class _PTv3DetectionExportModule(nn.Module):
         grid_coord: torch.Tensor,
         feat: torch.Tensor,
         serialized_code: torch.Tensor,
+        *serialized_pooling_inputs: torch.Tensor,
     ) -> tuple[torch.Tensor, ...]:
         """Run export-time inference on serialized point inputs."""
         point_feat, point_grid_coord, point_offset = _run_ptv3_backbone_export(
@@ -236,6 +238,7 @@ class _PTv3DetectionExportModule(nn.Module):
             self._serialized_depth,
             serialized_code,
             self._sparse_shape,
+            *serialized_pooling_inputs,
         )
         bev_features = self.bev_projector(point_feat, point_grid_coord, point_offset)
         bev_features = self.bev_encoder(bev_features)
@@ -280,7 +283,7 @@ class _PTv3DetHeadExportModule(nn.Module):
         return tuple(outputs[name] for name in self.output_names)
 
 
-class PTv3DetectionModel(PTv3BaseModel, Detection3DBaseModel):
+class PTv3DetectionModel(PTv3BaseModel):
     """Compose PTv3 features with dense BEV detection heads."""
 
     def __init__(
@@ -293,28 +296,36 @@ class PTv3DetectionModel(PTv3BaseModel, Detection3DBaseModel):
         grid_size: float,
         point_cloud_range: Sequence[float],
         freeze_backbone: bool = False,
-        optimizer: Callable[..., Optimizer] | None = None,
-        scheduler: Callable[[Optimizer], LRScheduler] | None = None,
-        optimizer_group_overrides: Mapping[str, Mapping[str, Any]] | None = None,
-        scheduler_config: Mapping[str, Any] | None = None,
-        metric: CenterDistanceMeanAP | None = None,
+        **kwargs: Any,
     ) -> None:
-        """Initialize the PTv3 detection model."""
+        """Initialize the PTv3 detection model.
+
+        Args:
+            backbone: PTv3 backbone module.
+            bev_projector: Projects sparse features into a dense BEV grid.
+            bev_encoder: Dense BEV feature encoder.
+            bbox_head: Detection head producing the decoded predictions.
+            export_output_names: Ordered output names used during export.
+            grid_size: Voxel grid size used to derive sparse shape.
+            point_cloud_range: Point-cloud range used to derive sparse shape.
+            freeze_backbone: When ``True``, keep the backbone frozen in eval mode.
+            **kwargs: Keyword arguments forwarded to :class:`BaseModel`.
+        """
         super().__init__(
             backbone=backbone,
             grid_size=grid_size,
             point_cloud_range=point_cloud_range,
             freeze_backbone=freeze_backbone,
-            optimizer=optimizer,
-            scheduler=scheduler,
-            optimizer_group_overrides=optimizer_group_overrides,
-            scheduler_config=scheduler_config,
-            metric=metric,
+            **kwargs,
         )
         self.bev_projector = bev_projector
         self.bev_encoder = bev_encoder
         self.bbox_head = bbox_head
         self.export_output_names = list(export_output_names)
+
+    def build_eval_output(self, batch: Mapping[str, Any], outputs: Any) -> dict[str, Any]:
+        """Decode detections and pair them with ground truth for metrics."""
+        return detection_eval_output(self.bbox_head.predict(outputs), batch)
 
     def get_export_output_names(self) -> list[str]:
         """Return the ordered export output names."""
@@ -365,8 +376,16 @@ class PTv3DetectionModel(PTv3BaseModel, Detection3DBaseModel):
     def build_export_spec(self, batch_inputs_dict: Mapping[str, torch.Tensor]) -> ExportSpec:
         """Build the PTv3 detection ONNX export specification."""
         sparse_shape, serialization_depth = self._compute_export_geometry(batch_inputs_dict)
-        _, input_args = serialize_point_cloud_batch(
+        point, input_args = serialize_point_cloud_batch(
             batch_inputs_dict, self.EXPORT_ORDER, serialization_depth
+        )
+        serialized_pooling_inputs, serialized_pooling_input_names = (
+            build_serialized_pooling_export_inputs(
+                point["grid_coord"],
+                point["serialized_code"],
+                point["serialized_order"],
+                self.backbone.stride,
+            )
         )
         export_module = _PTv3DetectionExportModule(
             backbone=self._prepare_backbone_export(),
@@ -378,12 +397,24 @@ class PTv3DetectionModel(PTv3BaseModel, Detection3DBaseModel):
             output_names=self.export_output_names,
         )
         export_module.eval()
-        input_args_no_depth = (input_args[0], input_args[1], input_args[3])
+        export_input_args = (
+            input_args[0],
+            input_args[1],
+            input_args[3],
+            *serialized_pooling_inputs,
+        )
+        input_param_names = [
+            "grid_coord",
+            "feat",
+            "serialized_code",
+            *serialized_pooling_input_names,
+        ]
         return ExportSpec(
             module=export_module,
-            args=input_args_no_depth,
-            input_param_names=["grid_coord", "feat", "serialized_code"],
+            args=export_input_args,
+            input_param_names=input_param_names,
             output_names=self.get_export_output_names(),
+            dynamic_axes=build_ptv3_input_dynamic_axes(input_param_names),
             supported_stages=self.EXPORT_SUPPORTED_STAGES,
         )
 
@@ -392,10 +423,29 @@ class PTv3DetectionModel(PTv3BaseModel, Detection3DBaseModel):
     ) -> dict[str, ExportSpec]:
         """Build split PTv3 detection ONNX export specs for backbone and detection head."""
         sparse_shape, serialization_depth = self._compute_export_geometry(batch_inputs_dict)
-        _, input_args = serialize_point_cloud_batch(
+        point, input_args = serialize_point_cloud_batch(
             batch_inputs_dict, self.EXPORT_ORDER, serialization_depth
         )
-        input_args_no_depth = (input_args[0], input_args[1], input_args[3])
+        serialized_pooling_inputs, serialized_pooling_input_names = (
+            build_serialized_pooling_export_inputs(
+                point["grid_coord"],
+                point["serialized_code"],
+                point["serialized_order"],
+                self.backbone.stride,
+            )
+        )
+        backbone_input_args = (
+            input_args[0],
+            input_args[1],
+            input_args[3],
+            *serialized_pooling_inputs,
+        )
+        backbone_input_names = [
+            "grid_coord",
+            "feat",
+            "serialized_code",
+            *serialized_pooling_input_names,
+        ]
 
         backbone_module = _PTv3BackboneExportModule(
             backbone=self._prepare_backbone_export(),
@@ -403,7 +453,7 @@ class PTv3DetectionModel(PTv3BaseModel, Detection3DBaseModel):
             serialized_depth=serialization_depth,
         ).eval()
         with torch.no_grad():
-            point_feat, point_grid_coord, point_offset = backbone_module(*input_args_no_depth)
+            point_feat, point_grid_coord, point_offset = backbone_module(*backbone_input_args)
 
         det3d_head_module = _PTv3DetHeadExportModule(
             bev_projector=deepcopy(self.bev_projector).eval(),
@@ -415,9 +465,10 @@ class PTv3DetectionModel(PTv3BaseModel, Detection3DBaseModel):
         return {
             "backbone": ExportSpec(
                 module=backbone_module,
-                args=input_args_no_depth,
-                input_param_names=["grid_coord", "feat", "serialized_code"],
+                args=backbone_input_args,
+                input_param_names=backbone_input_names,
                 output_names=["point_feat", "point_grid_coord", "point_offset"],
+                dynamic_axes=build_ptv3_backbone_dynamic_axes(backbone_input_names),
                 supported_stages=self.EXPORT_SUPPORTED_STAGES,
             ),
             "det3d_head": ExportSpec(
@@ -425,6 +476,7 @@ class PTv3DetectionModel(PTv3BaseModel, Detection3DBaseModel):
                 args=(point_feat, point_grid_coord, point_offset),
                 input_param_names=["point_feat", "point_grid_coord", "point_offset"],
                 output_names=self.export_output_names,
+                dynamic_axes=build_point_feature_dynamic_axes(("point_feat", "point_grid_coord")),
                 supported_stages=self.EXPORT_SUPPORTED_STAGES,
             ),
         }

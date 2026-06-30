@@ -344,6 +344,14 @@ def test(
             autocompletion=complete_checkpoint_path,
         ),
     ] = None,
+    use_config_devices: Annotated[
+        bool,
+        typer.Option(
+            "--use-config-devices",
+            help="Evaluate on the trainer.devices from the config. By default test forces a "
+            "single device for deterministic evaluation that avoids distributed-sampler padding.",
+        ),
+    ] = False,
 ) -> None:
     """Run model evaluation through the Hydra-backed test entrypoint.
 
@@ -352,16 +360,24 @@ def test(
     Single-task evaluation uses one ``--weights``; multi-task evaluation stacks
     multiple ``--weights`` to merge independently trained heads.
 
+    By default evaluation runs on a single device, which is deterministic and free of
+    the distributed-sampler padding that slightly skews multi-GPU metrics. Pass
+    ``--use-config-devices`` to honor ``trainer.devices`` from the config instead.
+
     Args:
         ctx: Typer context containing additional Hydra overrides.
         config_name: Config name or config file path to evaluate.
         weights: One or more checkpoint paths to load into the model for evaluation.
+        use_config_devices: Keep the config's ``trainer.devices`` instead of forcing one device.
     """
     if not weights:
         raise typer.BadParameter("--weights <path> (repeatable) must be specified.")
 
     weights_list = "[" + ",".join(weights) + "]"
     hydra_overrides = [f"+weights={weights_list}"]
+    if not use_config_devices:
+        # Applied after the user's extra args, so it wins: test defaults to one device.
+        hydra_overrides.append("++trainer.devices=1")
     primary_checkpoint = weights[-1]
 
     run_lazy_script(

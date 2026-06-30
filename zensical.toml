@@ -4,7 +4,7 @@ site_description = "Autoware-ML - Machine learning framework for Autoware."
 site_author = "Amadeusz Szymko"
 site_url = "https://tier4.github.io/autoware-ml"
 copyright = """
-Copyright &copy; 2025 TIER IV, Inc.
+Copyright &copy; 2026 TIER IV, Inc.
 """
 
 nav = [
@@ -16,6 +16,7 @@ nav = [
   ]},
   { "Framework" = [
     { "Design" = "framework/design.md" },
+    { "Metrics" = "framework/metrics.md" },
     { "Identity" = "framework/identity.md" },
     { "Troubleshooting" = "framework/troubleshooting.md" },
   ]},

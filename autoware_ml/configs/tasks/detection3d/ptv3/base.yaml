@@ -26,6 +26,8 @@ head_voxel_size: ???
 train_min_num_lidar_points: 1
 train_object_min_num_points: 5
 eval_min_num_lidar_points: 1
+detection_filter_attributes: []
+detection_use_valid_flag: true
 
 head_out_size_factor: 1
 score_threshold: 0.1
@@ -35,6 +37,8 @@ nms_min_radius: 1.0
 train_sweeps_num: 1
 val_sweeps_num: 1
 
+merge_objects: [[truck, [truck, trailer]]]
+
 name_mapping:
   car: car
   emergency_vehicle: truck
@@ -42,8 +46,8 @@ name_mapping:
   tractor_unit: truck
   construction_vehicle: truck
   fire_truck: truck
-  semi_trailer: truck
-  trailer: truck
+  semi_trailer: trailer
+  trailer: trailer
   bus: bus
   bicycle: bicycle
   motorcycle: bicycle
@@ -104,9 +108,14 @@ datamodule:
   train_transforms:
     _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
+      - _target_: autoware_ml.transforms.boxes3d.merge.MergeObjects3D
+        merge_objects: ${merge_objects}
+        name_mapping: ${name_mapping}
       - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
         name_mapping: ${name_mapping}
         min_num_lidar_points: ${train_min_num_lidar_points}
+        filter_attributes: ${detection_filter_attributes}
+        use_valid_flag: ${detection_use_valid_flag}
       - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
         sweeps_num: ${train_sweeps_num}
         load_dim: 5
@@ -140,9 +149,14 @@ datamodule:
   val_transforms:
     _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
+      - _target_: autoware_ml.transforms.boxes3d.merge.MergeObjects3D
+        merge_objects: ${merge_objects}
+        name_mapping: ${name_mapping}
       - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
         name_mapping: ${name_mapping}
         min_num_lidar_points: ${eval_min_num_lidar_points}
+        filter_attributes: ${detection_filter_attributes}
+        use_valid_flag: ${detection_use_valid_flag}
       - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
         sweeps_num: ${val_sweeps_num}
         load_dim: 5
@@ -186,17 +200,36 @@ datamodule:
         keys: [coord, strength]
         output_key: feat
 
+metric_eval_class_range:
+  car: 121.0
+  truck: 121.0
+  bus: 121.0
+  bicycle: 121.0
+  pedestrian: 121.0
+metric_ranges:
+  - { _target_: autoware_ml.metrics.base.MetricRange, name: 0-50m, min_distance: 0.0, max_distance: 50.0 }
+  - { _target_: autoware_ml.metrics.base.MetricRange, name: 50-90m, min_distance: 50.0, max_distance: 90.0 }
+  - { _target_: autoware_ml.metrics.base.MetricRange, name: 90-121m, min_distance: 90.0, max_distance: 121.0 }
+  - { _target_: autoware_ml.metrics.base.MetricRange, name: 0-121m, min_distance: 0.0, max_distance: 121.0 }
+
 model:
   _target_: autoware_ml.models.detection3d.ptv3.PTv3DetectionModel
   export_output_names: ???
   freeze_backbone: true
   grid_size: ${grid_size}
   point_cloud_range: ${point_cloud_range}
-  metric:
-    _target_: autoware_ml.metrics.detection3d.CenterDistanceMeanAP
-    class_names: ${class_names}
-    thresholds: [0.5, 1.0, 2.0, 4.0]
-    min_point_numbers: 0
+  metrics:
+    - _target_: autoware_ml.metrics.detection3d.suite.Detection3DMetricSuite
+      class_names: ${class_names}
+      thresholds: [0.5, 1.0, 2.0, 4.0]
+      min_point_numbers: 0
+      eval_class_range: ${metric_eval_class_range}
+      ranges: ${metric_ranges}
+      components:
+        - { _target_: autoware_ml.metrics.detection3d.mean_ap.MeanAP, stages: [val, test] }
+        - { _target_: autoware_ml.metrics.detection3d.heading_ap.HeadingAP, stages: [test] }
+        - { _target_: autoware_ml.metrics.detection3d.nds.Nds, stages: [test] }
+        - { _target_: autoware_ml.metrics.detection3d.tp_errors.TpErrors, stages: [test] }
   bev_projector:
     _target_: autoware_ml.models.detection3d.ptv3.PTv3BEVProjection
     in_channels: ${backbone_out_channels}
@@ -231,10 +264,10 @@ trainer:
 
 callbacks:
   model_checkpoint:
-    monitor: val/mAP
+    monitor: val/det3d/mAP
     mode: max
   early_stopping:
-    monitor: val/mAP
+    monitor: val/det3d/mAP
     patience: 20
     mode: max
 
@@ -246,19 +279,8 @@ deploy:
     do_constant_folding: false
     modules:
       backbone:
-        input_names: [grid_coord, feat, serialized_code]
         output_names: [point_feat, point_grid_coord, point_offset]
-        dynamic_axes:
-          grid_coord: {0: num_voxels}
-          feat: {0: num_voxels}
-          serialized_code: {1: num_voxels}
-          point_feat: {0: num_voxels}
-          point_grid_coord: {0: num_voxels}
       det3d_head:
-        input_names: [point_feat, point_grid_coord, point_offset]
         output_names: ${model.export_output_names}
-        dynamic_axes:
-          point_feat: {0: num_voxels}
-          point_grid_coord: {0: num_voxels}
   tensorrt:
     enabled: false

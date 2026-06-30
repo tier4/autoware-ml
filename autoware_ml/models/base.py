@@ -32,12 +32,14 @@ import torch.nn as nn
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
+from autoware_ml.metrics.base import MetricSuite
+from autoware_ml.metrics.eval_mixin import MetricEvalMixin
 from autoware_ml.preprocessing.base import DataPreprocessing
 from autoware_ml.utils.deploy import ExportSpec, infer_export_spec
 from autoware_ml.utils.optimizer import build_lightning_optimizer_config
 
 
-class BaseModel(L.LightningModule, ABC):
+class BaseModel(MetricEvalMixin, L.LightningModule, ABC):
     """Base Lightning Module for all Autoware-ML models.
 
     Provides common functionality for training, validation, and testing with
@@ -51,6 +53,7 @@ class BaseModel(L.LightningModule, ABC):
         scheduler: Callable[[Optimizer], LRScheduler] | None = None,
         optimizer_group_overrides: Mapping[str, Mapping[str, Any]] | None = None,
         scheduler_config: Mapping[str, Any] | None = None,
+        metrics: list[MetricSuite] | None = None,
     ):
         """Initialize base model.
 
@@ -61,8 +64,10 @@ class BaseModel(L.LightningModule, ABC):
                 model-defined optimizer group name.
             scheduler_config: Optional Lightning scheduler metadata such as
                 ``interval`` or ``monitor``.
+            metrics: Task metrics accumulated during validation and test. Empty
+                or ``None`` logs only losses.
         """
-        super().__init__()
+        super().__init__(metrics=metrics)
         self.forward_signature = inspect.signature(self.forward)
         self.optimizer_partial = optimizer
         self.scheduler_partial = scheduler

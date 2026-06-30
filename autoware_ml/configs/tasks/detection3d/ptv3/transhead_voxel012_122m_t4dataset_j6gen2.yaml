@@ -13,12 +13,19 @@ bev_output_shape: [256, 256]
 head_voxel_size: [0.96, 0.96, 8.0]
 post_center_range: [-132.88, -132.88, -5.0, 132.88, 132.88, 12.0]
 code_weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2]
-num_proposals: 200
+num_proposals: 500
 
 train_sweeps_num: 1
 val_sweeps_num: 1
+detection_filter_attributes:
+  - [bicycle, cycle_state.without_rider]
+  - [motorcycle, vehicle_state.parked]
+  - [motorcycle, motorcycle_state.without_rider]
 
 datamodule:
+  filter_attributes: ${detection_filter_attributes}
+  min_num_lidar_points: ${train_min_num_lidar_points}
+  use_valid_flag: ${detection_use_valid_flag}
   train_dataloader_cfg:
     batch_size: 16
     num_workers: 32
@@ -43,30 +50,6 @@ model:
       rot,
       vel,
     ]
-  metric:
-    eval_class_range:
-      car: 121.0
-      truck: 121.0
-      bus: 121.0
-      bicycle: 121.0
-      pedestrian: 121.0
-    ranges:
-      - _target_: autoware_ml.metrics.detection3d.DetectionRange
-        name: 0-50m
-        min_distance: 0.0
-        max_distance: 50.0
-      - _target_: autoware_ml.metrics.detection3d.DetectionRange
-        name: 50-90m
-        min_distance: 50.0
-        max_distance: 90.0
-      - _target_: autoware_ml.metrics.detection3d.DetectionRange
-        name: 90-121m
-        min_distance: 90.0
-        max_distance: 121.0
-      - _target_: autoware_ml.metrics.detection3d.DetectionRange
-        name: 0-121m
-        min_distance: 0.0
-        max_distance: 121.0
   bbox_head:
     _target_: autoware_ml.models.detection3d.heads.transfusion.TransFusionHead
     num_proposals: ${num_proposals}
@@ -75,6 +58,7 @@ model:
     hidden_channel: 128
     num_classes: ${num_classes}
     class_names: ${class_names}
+    dense_heatmap_pooling_classes: [car, truck, bus, bicycle]
     num_decoder_layers: 1
     num_heads: 8
     feedforward_channels: 256
@@ -117,6 +101,7 @@ model:
     loss_cls_weight: 1.0
     loss_bbox_weight: 0.25
     loss_heatmap_weight: 1.0
+    heatmap_target: oriented
     heatmap_init_bias: -2.19
     nms_kernel_size: 3
     use_velocity: true

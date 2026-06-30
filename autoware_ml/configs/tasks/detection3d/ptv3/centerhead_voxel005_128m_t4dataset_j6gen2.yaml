@@ -11,33 +11,18 @@ point_cloud_bev_range: [-128.0, -128.0, 128.0, 128.0]
 bev_stride: 4
 bev_output_shape: [1280, 1280]
 head_voxel_size: [0.2, 0.2, 8.0]
+detection_filter_attributes:
+  - [bicycle, cycle_state.without_rider]
+  - [motorcycle, vehicle_state.parked]
+  - [motorcycle, motorcycle_state.without_rider]
+
+datamodule:
+  filter_attributes: ${detection_filter_attributes}
+  min_num_lidar_points: ${train_min_num_lidar_points}
+  use_valid_flag: ${detection_use_valid_flag}
 
 model:
   export_output_names: [heatmap, reg, height, dim, rot, vel]
-  metric:
-    eval_class_range:
-      car: 121.0
-      truck: 121.0
-      bus: 121.0
-      bicycle: 121.0
-      pedestrian: 121.0
-    ranges:
-      - _target_: autoware_ml.metrics.detection3d.DetectionRange
-        name: 0-50m
-        min_distance: 0.0
-        max_distance: 50.0
-      - _target_: autoware_ml.metrics.detection3d.DetectionRange
-        name: 50-90m
-        min_distance: 50.0
-        max_distance: 90.0
-      - _target_: autoware_ml.metrics.detection3d.DetectionRange
-        name: 90-121m
-        min_distance: 90.0
-        max_distance: 121.0
-      - _target_: autoware_ml.metrics.detection3d.DetectionRange
-        name: 0-121m
-        min_distance: 0.0
-        max_distance: 121.0
   bbox_head:
     _target_: autoware_ml.models.detection3d.heads.centerpoint.CenterHead
     in_channels: 128
