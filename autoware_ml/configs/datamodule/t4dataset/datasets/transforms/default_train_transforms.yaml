@@ -1,0 +1,9 @@
+_target_: autoware_ml.transforms.multi_tasks.base.MultiTaskTransformsCompose
+_convert_: all
+
+pipeline:
+  - _target_: autoware_ml.transforms.multi_tasks.point_cloud.loading.LoadPointsFromFile
+    _convert_: all
+
+    load_dim: 5
+    use_dim: [0, 1, 2, 3]

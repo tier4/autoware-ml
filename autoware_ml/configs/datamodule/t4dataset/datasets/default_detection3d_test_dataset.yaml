@@ -3,8 +3,8 @@ _convert_: all
 
 defaults:
   - detection3d@dataset_tasks.Detection3D: default_detection3d
+  - transforms: default_test_transforms
 
 # Always None since we run splitter in the process
 dataset_records_dataframe: null
-transforms: null
 max_num_3d_gt_bboxes: 500

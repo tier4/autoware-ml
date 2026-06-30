@@ -111,11 +111,7 @@ class MultiTaskGTBatch(NamedTuple):
         # Check if pointclouds are available in the samples
         available_pointcloud_samples = gt_samples[0].point_cloud_features is not None
         if available_pointcloud_samples:
-            pointcloud_samples = [
-                sample.point_cloud_features
-                for sample in gt_samples
-                if sample.point_cloud_features is not None
-            ]
+            pointcloud_samples = [sample.point_cloud_features for sample in gt_samples]
             point_cloud_gt_batch = PointCloudGTBatch.collate_gt_samples(pointcloud_samples)
         else:
             point_cloud_gt_batch = None
@@ -131,6 +127,8 @@ class MultiTaskGTBatch(NamedTuple):
 
         Args:
           gt_samples: Sequence of MultiTaskGTSample to be collated.
+          max_num_3d_gt_bboxes: The maximum number of 3D ground truth bounding boxes
+            for each sample in the batch.
 
         Returns:
           Detection3DGTBatch: Collated detection3d GT batch.
@@ -141,11 +139,7 @@ class MultiTaskGTBatch(NamedTuple):
         # Check if detection3d_gt_samples are available in the samples
         available_detection3d_samples = gt_samples[0].detection3d_gt_sample is not None
         if available_detection3d_samples:
-            detection3d_gt_samples = [
-                sample.detection3d_gt_sample
-                for sample in gt_samples
-                if sample.detection3d_gt_sample is not None
-            ]
+            detection3d_gt_samples = [sample.detection3d_gt_sample for sample in gt_samples]
             detection3d_gt_batch = Detection3DGTBatch.collate_gt_samples(
                 detection3d_gt_samples=detection3d_gt_samples,
                 max_num_3d_gt_bboxes=max_num_3d_gt_bboxes,

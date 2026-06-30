@@ -15,7 +15,7 @@ from autoware_ml.datamodule.multi_tasks.multi_task_base_dataset import (
     MultiTaskBaseDataset,
 )
 from autoware_ml.datamodule.multi_tasks.base_dataset_task import BaseDatasetTask
-from autoware_ml.transforms.base import TransformsCompose
+from autoware_ml.transforms.multi_tasks.base import MultiTaskTransformsCompose
 from autoware_ml.types.tasks import TaskType
 
 
@@ -33,7 +33,7 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
         self,
         max_num_3d_gt_bboxes: int,
         dataset_records_dataframe: pl.DataFrame | None,
-        transforms: TransformsCompose | None,
+        transforms: MultiTaskTransformsCompose | None,
         dataset_tasks: MappingProxyType[TaskType | str, BaseDatasetTask],
     ) -> None:
         """
@@ -63,7 +63,8 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
         )
         logger.info(
             f"Initialized MultiTaskT4Dataset with {len(self.dataset_tasks)} "
-            f"task datasets: {list(self.dataset_tasks.keys())}."
+            f"task datasets: {list(self.dataset_tasks.keys())} "
+            f"transforms: {self.transforms} and max_num_3d_gt_bboxes: {self.max_num_3d_gt_bboxes}"
         )
 
     def get_data_sample(self, idx: int) -> MultiTaskGTSample:
@@ -83,12 +84,21 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
         # Retrieve general data row for the given index from the dataset records dataframe
         lidar_pointcloud_samples = self.get_lidar_pointcloud_data_samples(idx)
 
+        # Retrieve the detection3d_gt_sample and segmentation3d_gt_sample from the data_samples dictionary
+        detection3d_gt_sample = data_samples.get(TaskType.DETECTION3D, None)
+        if detection3d_gt_sample is not None:
+            detection3d_gt_sample = detection3d_gt_sample.detection3d_gt_sample
+
+        segmentation3d_gt_sample = data_samples.get(TaskType.SEGMENTATION3D, None)
+        if segmentation3d_gt_sample is not None:
+            segmentation3d_gt_sample = segmentation3d_gt_sample.segmentation3d_gt_sample
+
         # Merge the data samples from different tasks into a single multi-task data row
         return MultiTaskGTSample(
             lidar_point_cloud_samples=lidar_pointcloud_samples,
             point_cloud_features=None,  # Add point cloud features if available
-            detection3d_gt_sample=data_samples.get(TaskType.DETECTION3D, None),
-            segmentation3d_gt_sample=data_samples.get(TaskType.SEGMENTATION3D, None),
+            detection3d_gt_sample=detection3d_gt_sample,
+            segmentation3d_gt_sample=segmentation3d_gt_sample,
         )
 
     def get_lidar_pointcloud_data_samples(self, idx: int) -> Sequence[LiDARPointCloudSample]:

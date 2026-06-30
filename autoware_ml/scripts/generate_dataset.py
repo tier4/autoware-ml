@@ -46,6 +46,7 @@ def main(cfg: DictConfig):
     # Instantiate DatabaseInterface
     database: DatabaseInterface = instantiate(cfg.database)
 
+    # TODO (Kok Seang Tan): Remove this part when we move to a proper training/testing framework.
     # Instantiate the datamodule with the database
     datamodule = instantiate(cfg.datamodule, database=database)
 
@@ -57,6 +58,14 @@ def main(cfg: DictConfig):
     train_dataloader = datamodule.train_dataloader()
     for batch in train_dataloader:
         logger.info(f"Batch: {batch}")
+        logger.info(f"bboxes_array: {batch.detection3d_gt_batch.gt_bboxes_3d.shape}")
+        logger.info(f"labels_array: {batch.detection3d_gt_batch.gt_labels_3d.shape}")
+        logger.info(f"points_array: {batch.point_cloud_gt_batch.points.shape}")
+        logger.info(f"points_batches: {batch.point_cloud_gt_batch.batch_indices.shape}")
+        logger.info(
+            f"points_batches: {batch.point_cloud_gt_batch.batch_indices[:10]}, {batch.point_cloud_gt_batch.batch_indices[-10:]}"
+        )
+
         break  # Just log the first batch for demonstration
 
 

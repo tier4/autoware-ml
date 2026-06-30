@@ -5,3 +5,4 @@ pin_memory: true
 persistent_workers: true
 drop_last: false
 shuffle: true
+batch_size: 2
