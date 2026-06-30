@@ -3,7 +3,7 @@ _convert_: all
 
 database_version: T4Dataset-base-v1.0.0
 # Root path of actual annotation files
-database_root_path: ${data_root_path}/t4datasets/
+database_root_path: ${data_root_path}/t4dataset/
 
 # Caches
 cache_path: ${cache_root_path}/detection3d/
@@ -15,10 +15,10 @@ defaults:
   - t4dataset/labels@class_names: detection3d/default_class_names
   - t4dataset/labels@label_remapper: detection3d/default_label_remapper
   - t4dataset/box3d_pipelines@box3d_pipelines: default_box3d_pipelines
-  # - t4dataset/scenarios@scenarios.db_base: detection3d/db_base
-  # - t4dataset/scenarios@scenarios.db_j6gen2_base: detection3d/db_j6gen2_base
-  # - t4dataset/scenarios@scenarios.db_j6gen2: detection3d/db_j6gen2
-  # - t4dataset/scenarios@scenarios.db_jpntaxi_base: detection3d/db_jpntaxi_base
+  - t4dataset/scenarios@scenarios.db_base: detection3d/db_base
+  - t4dataset/scenarios@scenarios.db_j6gen2_base: detection3d/db_j6gen2_base
+  - t4dataset/scenarios@scenarios.db_j6gen2: detection3d/db_j6gen2
+  - t4dataset/scenarios@scenarios.db_jpntaxi_base: detection3d/db_jpntaxi_base
   - t4dataset/scenarios@scenarios.db_largebus: detection3d/db_largebus
 
 # Number of features in the lidar pointcloud
