@@ -73,6 +73,9 @@ class MultiTaskDataModule(L.LightningDataModule):
 
         if stage == "fit":
             self.train_dataset.assign_dataset_records(split_dataset_dataframes[SplitType.TRAIN])
+            self.validation_dataset.assign_dataset_records(
+                split_dataset_dataframes[SplitType.VALIDATION]
+            )
         elif stage == "validate":
             self.validation_dataset.assign_dataset_records(
                 split_dataset_dataframes[SplitType.VALIDATION]
