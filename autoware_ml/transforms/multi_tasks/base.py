@@ -41,13 +41,12 @@ class MultiTaskBaseTransform(Protocol):
         - Generated keys: Keys added/modified by the transform
     """
 
-    required_keys: Sequence[str]
+    _required_keys: Sequence[str]
 
     def __init__(self, probability: float | None = None) -> None:
         """Initialize the transform with required keys.
 
         Args:
-            required_keys: List of keys that must exist in the input MultiTaskGTSample.
             probability: Probability of applying the transform (0.0=never, 1.0=always).
                          Set to None if the transform should always run.
         """
