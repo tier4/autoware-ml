@@ -71,15 +71,32 @@ class MultiTaskDataModule(L.LightningDataModule):
             f" based on the stage: {stage}..."
         )
 
-        if stage == "fit":
-            self.train_dataset.assign_dataset_records(split_dataset_dataframes[SplitType.TRAIN])
-            self.validation_dataset.assign_dataset_records(split_dataset_dataframes[SplitType.VAL])
-        elif stage == "validate":
-            self.validation_dataset.assign_dataset_records(split_dataset_dataframes[SplitType.VAL])
-        elif stage == "test":
-            self.test_dataset.assign_dataset_records(split_dataset_dataframes[SplitType.TEST])
-        elif stage == "predict":
-            self.predict_dataset.assign_dataset_records(split_dataset_dataframes[SplitType.PREDICT])
+        # Define a mapping from stage to the corresponding datasets and their split types
+        # stage: [{dataset: split_type}]
+        stage_to_datasets = {
+            None: [
+                (self.train_dataset, SplitType.TRAIN),
+                (self.validation_dataset, SplitType.VAL),
+                (self.test_dataset, SplitType.TEST),
+                (self.predict_dataset, SplitType.PREDICT),
+            ],
+            "fit": [
+                (self.train_dataset, SplitType.TRAIN),
+                (self.validation_dataset, SplitType.VAL),
+            ],
+            "validate": [(self.validation_dataset, SplitType.VAL)],
+            "test": [(self.test_dataset, SplitType.TEST)],
+            "predict": [(self.predict_dataset, SplitType.PREDICT)],
+        }
+
+        stage_datasets = stage_to_datasets.get(stage, [])
+        for dataset, split_type in stage_datasets:
+            if dataset is not None:
+                dataset.assign_dataset_records(split_dataset_dataframes[split_type])
+            else:
+                logger.warning(
+                    f"Dataset for split type {split_type} is not set. Skipping assignment of dataset records."
+                )
 
         logger.info(
             f"Finished assigning split dataset records to the corresponding datasets"
