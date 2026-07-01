@@ -54,7 +54,9 @@ class Detection3DGTBatch(NamedTuple):
         Args:
           detection3d_gt_samples: Sequence of Detection3DGTSample to be collated.
           max_num_3d_gt_bboxes: The maximum number of 3D ground truth bounding boxes
-            for each sample in the batch.
+            for each sample in the batch. If a sample has more than this number of bounding boxes,
+            only the first `max_num_3d_gt_bboxes` gt bboxes will be included in the batch,
+            and the rest will be ignored.
 
         Returns:
           Detection3DGTBatch: Collated 3D detection GT batch.
@@ -76,11 +78,6 @@ class Detection3DGTBatch(NamedTuple):
         # Fill the arrays with the data from gt_samples
         for i, sample in enumerate(detection3d_gt_samples):
             num_bboxes = sample.gt_bboxes_3d.shape[0]
-            if num_bboxes > max_num_3d_gt_bboxes:
-                raise ValueError(
-                    f"Sample {i} has {num_bboxes} bboxes, which exceeds the maximum "
-                    f"allowed {max_num_3d_gt_bboxes}."
-                )
             gt_bboxes_3d[i, :num_bboxes, :] = sample.gt_bboxes_3d
             gt_labels_3d[i, :num_bboxes] = sample.gt_labels_3d
 
