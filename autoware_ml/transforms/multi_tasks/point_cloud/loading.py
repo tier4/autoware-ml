@@ -50,9 +50,8 @@ class LoadPointsFromFile(MultiTaskBaseTransform):
             Updated MultiTaskGTSample instance with a loaded ``points`` array.
         """
         # Load the first index of the point cloud file, and reshape it to (N, load_dim)
-        assert len(multi_task_gt_sample.lidar_point_cloud_samples) > 0, (
-            "No lidar point cloud samples found."
-        )
+        if not multi_task_gt_sample.lidar_point_cloud_samples:
+            raise ValueError("No lidar point cloud samples found in the MultiTaskGTSample.")
 
         current_lidar_point_path = multi_task_gt_sample.lidar_point_cloud_samples[
             0
