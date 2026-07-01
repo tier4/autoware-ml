@@ -3,10 +3,10 @@ _convert_: all
 
 defaults:
   - splitter: default_scenario_splitter
-  - dataloader@train_dataloader: default_train_dataloader
-  - dataloader@validation_dataloader: default_validation_dataloader
-  - dataloader@test_dataloader: default_test_dataloader
-  - dataloader@predict_dataloader: default_predict_dataloader
+  - dataloader@train_dataloader: default_dataloader
+  - dataloader@validation_dataloader: default_dataloader
+  - dataloader@test_dataloader: default_dataloader
+  - dataloader@predict_dataloader: default_dataloader
   - t4dataset/datasets@train_dataset: default_detection3d_train_dataset
   - t4dataset/datasets@test_dataset: default_detection3d_test_dataset
   - t4dataset/datasets@validation_dataset: default_detection3d_test_dataset
