@@ -41,7 +41,7 @@ class MultiTaskBaseTransform(Protocol):
         - Generated keys: Keys added/modified by the transform
     """
 
-    _required_keys: Sequence[str]
+    _required_keys: Sequence[str] = ()
 
     def __init__(self, probability: float | None = None) -> None:
         """Initialize the transform with required keys.
