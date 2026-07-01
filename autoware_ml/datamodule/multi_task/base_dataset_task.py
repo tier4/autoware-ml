@@ -50,6 +50,7 @@ class BaseDatasetTask(Protocol):
           idx: Index of the specific record to be processed.
 
         Returns:
-          MultiTaskDataRow: Processed multi-task data row.
+          MultiTaskGTSample: Multi-task data for training/inference with ground truths
+            from a sample.
         """
-        raise NotImplementedError("Dataset type must define get_data_row()!")
+        raise NotImplementedError("Dataset type must define get_data_sample()!")
