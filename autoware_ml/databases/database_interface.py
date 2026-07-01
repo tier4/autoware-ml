@@ -107,7 +107,7 @@ class DatabaseInterface(Protocol):
         raise NotImplementedError("Database must define load_scenario_records!")
 
     @abstractmethod
-    def process_scenario_records(self) -> Sequence[DatasetRecord]:
+    def process_scenario_records(self) -> None:
         """
         Process scenario records from the database.
 
