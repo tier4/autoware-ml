@@ -118,6 +118,7 @@ class DatabaseInterface(Protocol):
         raise NotImplementedError("Subclasses must define process_scenario_records method!")
 
     @property
+    @abstractmethod
     def label_remapper(self) -> Mapping[str, str] | None:
         """
         Get the label remapper in the database.
@@ -129,6 +130,7 @@ class DatabaseInterface(Protocol):
         raise NotImplementedError("Database must define label_remapper!")
 
     @property
+    @abstractmethod
     def ignore_label_index(self) -> int:
         """
         Get the ignore label index in the database.
@@ -140,6 +142,7 @@ class DatabaseInterface(Protocol):
         raise NotImplementedError("Database must define ignore_label_index!")
 
     @property
+    @abstractmethod
     def database_hash(self) -> str:
         """
         Get a hash for the database based on its version and scenarios.
@@ -150,6 +153,7 @@ class DatabaseInterface(Protocol):
 
         raise NotImplementedError("Database must define database_hash!")
 
+    @abstractmethod
     def load_polars_scenario_dataframe(self) -> pl.DataFrame:
         """
         Load scenario records as a Polars DataFrame from the database.
