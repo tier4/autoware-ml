@@ -23,7 +23,7 @@ from typing import Sequence, Protocol
 
 import numpy as np
 
-from autoware_ml.datamodule.multi_tasks.dataclasses.multi_task_samples import MultiTaskGTSample
+from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTSample
 
 
 class MultiTaskBaseTransform(Protocol):

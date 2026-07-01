@@ -1,4 +1,4 @@
-_target_: autoware_ml.datamodule.multi_tasks.t4dataset.segmentation3d.T4Segmentation3DTask
+_target_: autoware_ml.datamodule.multi_task.t4dataset.segmentation3d.T4Segmentation3DTask
 _convert_: all
 
 # Always set to None since we run splitter in the process

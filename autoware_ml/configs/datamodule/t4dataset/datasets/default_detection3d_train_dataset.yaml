@@ -1,4 +1,4 @@
-_target_: autoware_ml.datamodule.multi_tasks.t4dataset.multi_task_t4dataset.MultiTaskT4Dataset
+_target_: autoware_ml.datamodule.multi_task.t4dataset.multi_task_t4dataset.MultiTaskT4Dataset
 _convert_: all
 
 defaults:

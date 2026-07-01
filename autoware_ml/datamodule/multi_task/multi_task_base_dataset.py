@@ -5,11 +5,11 @@ from typing import Sequence
 import polars as pl
 from torch.utils.data import Dataset
 
-from autoware_ml.datamodule.multi_tasks.dataclasses.multi_task_samples import (
+from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import (
     MultiTaskGTSample,
     MultiTaskGTBatch,
 )
-from autoware_ml.transforms.multi_tasks.base import MultiTaskTransformsCompose
+from autoware_ml.transforms.multi_task.base import MultiTaskTransformsCompose
 
 
 class MultiTaskBaseDataset(Dataset):

@@ -5,11 +5,11 @@ from typing import Sequence, NamedTuple
 import numpy.typing as npt
 import numpy as np
 
-from autoware_ml.datamodule.multi_tasks.dataclasses.detection3d import (
+from autoware_ml.datamodule.multi_task.dataclasses.detection3d import (
     Detection3DGTSample,
     Detection3DGTBatch,
 )
-from autoware_ml.datamodule.multi_tasks.dataclasses.segmentation3d import Segmentation3DGTSample
+from autoware_ml.datamodule.multi_task.dataclasses.segmentation3d import Segmentation3DGTSample
 
 
 class PointCloudGTBatch(NamedTuple):

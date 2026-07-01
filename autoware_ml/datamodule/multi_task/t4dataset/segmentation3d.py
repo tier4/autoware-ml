@@ -1,7 +1,7 @@
 import polars as pl
 
-from autoware_ml.datamodule.multi_tasks.base_dataset_task import BaseDatasetTask
-from autoware_ml.datamodule.multi_tasks.dataclasses.multi_task_samples import MultiTaskGTSample
+from autoware_ml.datamodule.multi_task.base_dataset_task import BaseDatasetTask
+from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTSample
 
 
 class T4Segmentation3DTask(BaseDatasetTask):

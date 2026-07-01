@@ -20,8 +20,8 @@ from collections.abc import Sequence
 
 import numpy as np
 
-from autoware_ml.transforms.multi_tasks.base import MultiTaskBaseTransform
-from autoware_ml.datamodule.multi_tasks.dataclasses.multi_task_samples import MultiTaskGTSample
+from autoware_ml.transforms.multi_task.base import MultiTaskBaseTransform
+from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTSample
 
 
 class LoadPointsFromFile(MultiTaskBaseTransform):

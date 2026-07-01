@@ -7,15 +7,15 @@ import numpy as np
 
 from autoware_ml.databases.schemas.lidar_frames import LidarFrameDatasetSchema
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
-from autoware_ml.datamodule.multi_tasks.dataclasses.multi_task_samples import (
+from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import (
     LiDARPointCloudSample,
     MultiTaskGTSample,
 )
-from autoware_ml.datamodule.multi_tasks.multi_task_base_dataset import (
+from autoware_ml.datamodule.multi_task.multi_task_base_dataset import (
     MultiTaskBaseDataset,
 )
-from autoware_ml.datamodule.multi_tasks.base_dataset_task import BaseDatasetTask
-from autoware_ml.transforms.multi_tasks.base import MultiTaskTransformsCompose
+from autoware_ml.datamodule.multi_task.base_dataset_task import BaseDatasetTask
+from autoware_ml.transforms.multi_task.base import MultiTaskTransformsCompose
 from autoware_ml.types.tasks import TaskType
 
 

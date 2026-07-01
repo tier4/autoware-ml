@@ -5,7 +5,7 @@ from torch.utils.data import DataLoader
 
 from autoware_ml.databases.database_interface import DatabaseInterface
 from autoware_ml.datamodule.base import DataLoaderConfig
-from autoware_ml.datamodule.multi_tasks.multi_task_base_dataset import (
+from autoware_ml.datamodule.multi_task.multi_task_base_dataset import (
     MultiTaskBaseDataset,
 )
 from autoware_ml.datamodule.splitters.splitter_interface import SplitterInterface

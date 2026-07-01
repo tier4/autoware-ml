@@ -2,7 +2,7 @@ from typing import Protocol
 
 import polars as pl
 
-from autoware_ml.datamodule.multi_tasks.dataclasses.multi_task_samples import MultiTaskGTSample
+from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTSample
 
 
 class BaseDatasetTask(Protocol):

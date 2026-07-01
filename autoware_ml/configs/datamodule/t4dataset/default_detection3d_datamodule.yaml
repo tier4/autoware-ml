@@ -1,4 +1,4 @@
-_target_: autoware_ml.datamodule.multi_tasks.multi_task_data_module.MultiTaskDataModule
+_target_: autoware_ml.datamodule.multi_task.multi_task_data_module.MultiTaskDataModule
 _convert_: all
 
 defaults:
