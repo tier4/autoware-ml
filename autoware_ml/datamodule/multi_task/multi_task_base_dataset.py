@@ -13,9 +13,7 @@ from autoware_ml.transforms.multi_task.base import MultiTaskTransformsCompose
 
 
 class MultiTaskBaseDataset(Dataset):
-    """ "
-    Multi-task dataset interface that can be shared by multiple databases.
-    """
+    """Multi-task dataset interface that can be shared by multiple databases."""
 
     def __init__(
         self,
