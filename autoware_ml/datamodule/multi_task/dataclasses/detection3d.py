@@ -74,19 +74,17 @@ class Detection3DGTBatch(NamedTuple):
             (len(detection3d_gt_samples), max_num_3d_gt_bboxes, num_bbox_params), dtype=np.float32
         )
         gt_labels_3d = np.zeros((len(detection3d_gt_samples), max_num_3d_gt_bboxes), dtype=np.int32)
+        gt_valid_bboxes = np.zeros(len(detection3d_gt_samples), dtype=np.int32)
 
         # Fill the arrays with the data from gt_samples
         for i, sample in enumerate(detection3d_gt_samples):
-            num_bboxes = sample.gt_bboxes_3d.shape[0]
-            gt_bboxes_3d[i, :num_bboxes, :] = sample.gt_bboxes_3d
-            gt_labels_3d[i, :num_bboxes] = sample.gt_labels_3d
+            num_bboxes = min(sample.gt_bboxes_3d.shape[0], max_num_3d_gt_bboxes)
+            gt_bboxes_3d[i, :num_bboxes, :] = sample.gt_bboxes_3d[:num_bboxes, :]
+            gt_labels_3d[i, :num_bboxes] = sample.gt_labels_3d[:num_bboxes]
 
             # Set to -1 for those gt_labels_3d that are invalid (i.e., beyond the number of valid bboxes)
             gt_labels_3d[i, num_bboxes:] = -1  # Assuming -1 is used to indicate invalid labels
-
-        gt_valid_bboxes = np.asarray(
-            [sample.gt_bboxes_3d.shape[0] for sample in detection3d_gt_samples], dtype=np.int32
-        )
+            gt_valid_bboxes[i] = num_bboxes
 
         return Detection3DGTBatch(
             gt_bboxes_3d=gt_bboxes_3d,
