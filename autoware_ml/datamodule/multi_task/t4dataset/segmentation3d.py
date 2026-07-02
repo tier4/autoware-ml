@@ -40,9 +40,6 @@ class T4Segmentation3DTask(BaseDatasetTask):
         """
         # TODO (Kok Seang): Implement the data retrieval for 3D segmentation in the T4 dataset
         # based on the dataset records dataframe and the given index.
-        return MultiTaskGTSample(
-            lidar_point_cloud_samples=None,
-            point_cloud_features=None,
-            detection3d_gt_sample=None,
-            segmentation3d_gt_sample=None,
+        raise NotImplementedError(
+            "get_data_sample method for T4Segmentation3DTask is not yet implemented."
         )
