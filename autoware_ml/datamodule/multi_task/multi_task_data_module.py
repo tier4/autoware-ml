@@ -93,6 +93,10 @@ class MultiTaskDataModule(L.LightningDataModule):
         for dataset, split_type in stage_datasets:
             if dataset is not None:
                 dataset.assign_dataset_records(split_dataset_dataframes[split_type])
+                logger.info(
+                    f"Assigned {len(split_dataset_dataframes[split_type])} dataset records to "
+                    f"{dataset.__class__.__name__} for split type {split_type}."
+                )
             else:
                 logger.warning(
                     f"Dataset for split type {split_type} is not set. Skipping assignment of dataset records."

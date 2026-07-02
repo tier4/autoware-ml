@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Sequence
+from typing import Sequence, Mapping
 from types import MappingProxyType
 
 import polars as pl
@@ -55,20 +55,23 @@ class ScenarioSplitter:
         Returns:
           MappingProxyType[SplitType, Sequence[DatasetRecord]]: Mapping from split type to sequence of dataset records in that split.
         """
-        splitter_scenarios = defaultdict(list)
-        for scenario in scenarios.values():
-            for split, scenario_data_list in scenario.scenario_data.items():
-                # Convert scenario_ids to set for faster lookup
-                unique_scenario_ids = set(
-                    [scenario_data.scenario_id for scenario_data in scenario_data_list]
-                )
-                splitter_scenarios[split] += [
-                    dataset_record
-                    for dataset_record in dataset_records
-                    if dataset_record.scenario_id in unique_scenario_ids
-                ]
+        scenario_ids_by_split: Mapping[SplitType, set[str]] = defaultdict(set)
+        for scenarios_obj in scenarios.values():
+            for split, scenario_data_list in scenarios_obj.scenario_data.items():
+                scenario_ids_by_split[split].update(sd.scenario_id for sd in scenario_data_list)
 
-        return MappingProxyType(splitter_scenarios)
+        records_by_scenario_id: Mapping[str, list[DatasetRecord]] = defaultdict(list)
+        for record in dataset_records:
+            records_by_scenario_id[record.scenario_id].append(record)
+
+        split_records: Mapping[SplitType, Sequence[DatasetRecord]] = {}
+        for split, scenario_ids in scenario_ids_by_split.items():
+            records: Sequence[DatasetRecord] = []
+            for scenario_id in scenario_ids:
+                records.extend(records_by_scenario_id.get(scenario_id, []))
+            split_records[split] = records
+
+        return MappingProxyType(split_records)
 
     def split_by_polars_dataframe(
         self,
@@ -85,19 +88,15 @@ class ScenarioSplitter:
         Returns:
           MappingProxyType[SplitType, pl.DataFrame]: Mapping from split type to Polars DataFrame of dataset records in that split.
         """
-        splitter_scenarios = defaultdict(list)
-        for scenario in scenarios.values():
-            for split, scenario_data_list in scenario.scenario_data.items():
-                unique_scenario_ids = set(
-                    [scenario_data.scenario_id for scenario_data in scenario_data_list]
-                )
-                # Convert scenario_ids to set for faster lookup
-                splitter_scenarios[split].append(
-                    dataset_records_dataframe.filter(
-                        pl.col(DatasetTableSchema.SCENARIO_ID.name).is_in(unique_scenario_ids)
-                    )
-                )
+        scenario_ids_by_split: Mapping[SplitType, set[str]] = defaultdict(set)
+        for scenarios_obj in scenarios.values():
+            for split, scenario_data_list in scenarios_obj.scenario_data.items():
+                scenario_ids_by_split[split].update(sd.scenario_id for sd in scenario_data_list)
 
-        return MappingProxyType(
-            {split: pl.concat(dfs) for split, dfs in splitter_scenarios.items()}
-        )
+        split_dfs: Mapping[SplitType, pl.DataFrame] = {}
+        for split, scenario_ids in scenario_ids_by_split.items():
+            split_dfs[split] = dataset_records_dataframe.filter(
+                pl.col(DatasetTableSchema.SCENARIO_ID.name).is_in(scenario_ids)
+            )
+
+        return MappingProxyType(split_dfs)
