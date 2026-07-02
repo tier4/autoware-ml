@@ -58,7 +58,7 @@ def merge_lists(*lists: Iterable[Any]) -> ListConfig:
 
 
 def segmentation_class_names(
-    class_mapping: Mapping[str, int], num_classes: int, separator: str = "-"
+    class_mapping: Mapping[str, int] | None, num_classes: int, separator: str = "-"
 ) -> ListConfig:
     """Build an ordered class-name list from a ``name -> index`` mapping.
 
@@ -69,7 +69,10 @@ def segmentation_class_names(
     without a name falls back to ``class_<i>``.
 
     Args:
-        class_mapping: Mapping of raw class name to target class index.
+        class_mapping: Mapping of raw class name to target class index. May be
+            ``None`` or empty - as produced by ``${oc.select:...class_mapping,
+            null}`` when no mapping is defined - in which case every index falls
+            back to ``class_<i>``.
         num_classes: Number of target classes.
         separator: String used to join names that share an index.
 
