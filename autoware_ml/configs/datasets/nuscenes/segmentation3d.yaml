@@ -9,7 +9,7 @@ num_classes: 15
 max_label: 31
 seg_label_mapping:
   0: 14   # noise -> noise
-  1: ${ignore_index}   # animal
+  1: ${nuscenes.segmentation3d.ignore_index}   # animal
   2: 4    # pedestrian.adult -> pedestrian
   3: 4    # pedestrian.child -> pedestrian
   4: 4    # pedestrian.construction_worker -> pedestrian
@@ -21,7 +21,7 @@ seg_label_mapping:
   10: 7   # debris -> debris
   11: 7   # pushable_pullable -> debris
   12: 5   # trafficcone -> traffic_cone
-  13: ${ignore_index}   # bicycle_rack
+  13: ${nuscenes.segmentation3d.ignore_index}   # bicycle_rack
   14: 3   # bicycle -> bicycle
   15: 2   # bus.bendy -> bus
   16: 2   # bus.rigid -> bus
@@ -39,7 +39,7 @@ seg_label_mapping:
   28: 11  # manmade -> manmade
   29: 13  # static.other -> other_stuff
   30: 10  # vegetation -> vegetation
-  31: ${ignore_index}   # ego
+  31: ${nuscenes.segmentation3d.ignore_index}   # ego
 metrics:
   - _target_: autoware_ml.metrics.segmentation3d.suite.Segmentation3DMetricSuite
     components:
@@ -47,7 +47,7 @@ metrics:
       - { _target_: autoware_ml.metrics.segmentation3d.accuracy.Accuracy, stages: [val, test] }
       - { _target_: autoware_ml.metrics.segmentation3d.precision_recall_f1.PrecisionRecallF1, stages: [val, test] }
     num_classes: ${nuscenes.segmentation3d.num_classes}
-    ignore_index: ${ignore_index}
+    ignore_index: ${nuscenes.segmentation3d.ignore_index}
     class_names:
       - car
       - truck
