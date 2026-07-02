@@ -1,0 +1,5 @@
+# @package t4dataset.lidar
+
+defaults:
+  - /datasets/t4dataset/base
+  - _self_

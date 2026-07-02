@@ -1,0 +1,107 @@
+# @package t4dataset.detection3d
+
+defaults:
+  - /datasets/t4dataset/base
+  - _self_
+
+class_names:
+  - car
+  - truck
+  - bus
+  - bicycle
+  - pedestrian
+  - traffic_cone
+  - barrier
+num_classes: 7
+name_mapping:
+  car: car
+  vehicle.car: car
+  "vehicle.emergency (ambulance & police)": car
+  ambulance: car
+  vehicle.ambulance: car
+  police_car: car
+  vehicle.police: car
+  forklift: car
+  kart: car
+  other_vehicle: car
+  truck: truck
+  vehicle.truck: truck
+  fire_truck: truck
+  vehicle.fire: truck
+  trailer: trailer
+  vehicle.trailer: trailer
+  semi_trailer: trailer
+  tractor_unit: truck
+  construction_vehicle: truck
+  vehicle.construction: truck
+  bus: bus
+  vehicle.bus: bus
+  "vehicle.bus (bendy & rigid)": bus
+  motorcycle: bicycle
+  vehicle.motorcycle: bicycle
+  bicycle: bicycle
+  vehicle.bicycle: bicycle
+  pedestrian: pedestrian
+  pedestrian.adult: pedestrian
+  pedestrian.child: pedestrian
+  other_pedestrian: pedestrian
+  police_officer: pedestrian
+  pedestrian.police_officer: pedestrian
+  construction_worker: pedestrian
+  pedestrian.construction_worker: pedestrian
+  personal_mobility: pedestrian
+  pedestrian.personal_mobility: pedestrian
+  wheelchair: pedestrian
+  pedestrian.wheelchair: pedestrian
+  stroller: pedestrian
+  pedestrian.stroller: pedestrian
+  barrier: barrier
+  movable_object.barrier: barrier
+  movable_object.debris: barrier
+  movable_object.pushable_pullable: barrier
+  traffic_cone: traffic_cone
+  trafficcone: traffic_cone
+  movable_object.traffic_cone: traffic_cone
+  movable_object.trafficcone: traffic_cone
+filter_attributes:
+  - [vehicle.bicycle, vehicle_state.parked]
+  - [vehicle.bicycle, cycle_state.without_rider]
+  - [vehicle.bicycle, motorcycle_state.without_rider]
+  - [vehicle.motorcycle, vehicle_state.parked]
+  - [vehicle.motorcycle, cycle_state.without_rider]
+  - [vehicle.motorcycle, motorcycle_state.without_rider]
+  - [bicycle, vehicle_state.parked]
+  - [bicycle, cycle_state.without_rider]
+  - [bicycle, motorcycle_state.without_rider]
+  - [motorcycle, vehicle_state.parked]
+  - [motorcycle, cycle_state.without_rider]
+  - [motorcycle, motorcycle_state.without_rider]
+merge_objects: [[truck, [truck, trailer]]]
+use_valid_flag: true
+train_min_points_near: 2
+train_min_points_far: 1
+eval_class_range:
+  car: 121.0
+  truck: 121.0
+  bus: 121.0
+  bicycle: 121.0
+  pedestrian: 121.0
+  traffic_cone: 121.0
+  barrier: 121.0
+metric_ranges:
+  - { _target_: autoware_ml.metrics.base.MetricRange, name: 0-50m, min_distance: 0.0, max_distance: 50.0 }
+  - { _target_: autoware_ml.metrics.base.MetricRange, name: 50-90m, min_distance: 50.0, max_distance: 90.0 }
+  - { _target_: autoware_ml.metrics.base.MetricRange, name: 90-121m, min_distance: 90.0, max_distance: 121.0 }
+  - { _target_: autoware_ml.metrics.base.MetricRange, name: 0-121m, min_distance: 0.0, max_distance: 121.0 }
+metrics:
+  - _target_: autoware_ml.metrics.detection3d.suite.Detection3DMetricSuite
+    components:
+      - { _target_: autoware_ml.metrics.detection3d.mean_ap.MeanAP, stages: [val, test] }
+      - { _target_: autoware_ml.metrics.detection3d.heading_ap.HeadingAP, stages: [test] }
+      - { _target_: autoware_ml.metrics.detection3d.nds.Nds, stages: [test] }
+      - { _target_: autoware_ml.metrics.detection3d.tp_errors.TpErrors, stages: [test] }
+    class_names: ${t4dataset.detection3d.class_names}
+    thresholds: [0.5, 1.0, 2.0, 4.0]
+    min_num_points: 0
+    eval_class_range: ${t4dataset.detection3d.eval_class_range}
+    ranges: ${t4dataset.detection3d.metric_ranges}
