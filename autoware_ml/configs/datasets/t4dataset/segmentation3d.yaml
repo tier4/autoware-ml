@@ -58,7 +58,7 @@ metrics:
         min_distance: 50.0
         max_distance: 90.0
       - _target_: autoware_ml.metrics.base.MetricRange
-        name: 90-121"
+        name: 90-121m
         min_distance: 90.0
         max_distance: 121.0
       - _target_: autoware_ml.metrics.base.MetricRange
