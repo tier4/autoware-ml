@@ -41,13 +41,13 @@ class LoadPointsFromFile(MultiTaskBaseTransform):
         self.use_dim = use_dim
 
     def transform(self, multi_task_gt_sample: MultiTaskGTSample) -> MultiTaskGTSample:
-        """Load point data from the configured lidar file.
+        """Load point data from the current sample at the current sweep.
 
         Args:
-            multi_task_gt_sample: MultiTaskGTSample instance containing ``lidar_path``.
+            multi_task_gt_sample: MultiTaskGTSample instance containing `lidar_point_cloud_samples`.
 
         Returns:
-            Updated MultiTaskGTSample instance with a loaded ``points`` array.
+            Updated MultiTaskGTSample instance with a loaded `point_cloud_features` array.
         """
         # Load the first index of the point cloud file, and reshape it to (N, load_dim)
         if not multi_task_gt_sample.lidar_point_cloud_samples:
