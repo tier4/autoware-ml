@@ -78,8 +78,8 @@ filter_attributes:
   - [motorcycle, motorcycle_state.without_rider]
 merge_objects: [[truck, [truck, trailer]]]
 use_valid_flag: true
-train_min_num_lidar_points: 1
-eval_min_num_lidar_points: 1
+train_min_points_near: 2
+train_min_points_far: 1
 eval_class_range:
   car: 121.0
   truck: 121.0

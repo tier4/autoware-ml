@@ -4,5 +4,3 @@ defaults:
   - /datasets/t4dataset/base
   - _self_
 
-train_min_points_near: 2   # within 0-60 m
-train_min_points_far: 1    # within 60-130 m

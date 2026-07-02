@@ -27,8 +27,6 @@ name_mapping:
 merge_objects: [[truck, [truck, trailer]]]
 filter_attributes: []
 use_valid_flag: true
-train_min_num_lidar_points: 1
-eval_min_num_lidar_points: 1
 eval_class_range:
   car: 50.0
   truck: 50.0
