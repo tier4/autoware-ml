@@ -1,0 +1,3 @@
+# @package nuscenes
+
+data_root: ${oc.env:AUTOWARE_ML_DATA_PATH}/nuscenes

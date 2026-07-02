@@ -1,0 +1,67 @@
+# @package t4dataset.segmentation3d
+
+defaults:
+  - /datasets/t4dataset/base
+  - _self_
+
+ignore_index: -1
+
+class_mapping:
+  car: 0
+  emergency_vehicle: 0
+  forklift: 0
+  kart: 0
+  truck: 1
+  tractor_unit: 1
+  semi_trailer: 1
+  construction_vehicle: 1
+  bus: 2
+  motorcycle: 3
+  bicycle: 3
+  pedestrian: 4
+  personal_mobility: 4
+  stroller: 4
+  traffic_cone: 5
+  barrier: 6
+  debris: 7
+  pushable_pullable: 7
+  drivable_surface: 8
+  other_flat_surface: 9
+  sidewalk: 9
+  vegetation: 10
+  manmade: 11
+  vertical_thin: 12
+  other_stuff: 13
+  noise: 14
+  animal: ${ignore_index}
+  train: ${ignore_index}
+  ghost_point: ${ignore_index}
+  out_of_sync: ${ignore_index}
+  unpainted: ${ignore_index}
+num_classes: 15
+metrics:
+  - _target_: autoware_ml.metrics.segmentation3d.suite.Segmentation3DMetricSuite
+    components:
+      - { _target_: autoware_ml.metrics.segmentation3d.iou.IoU, stages: [val, test] }
+      - { _target_: autoware_ml.metrics.segmentation3d.accuracy.Accuracy, stages: [val, test] }
+      - { _target_: autoware_ml.metrics.segmentation3d.precision_recall_f1.PrecisionRecallF1, stages: [val, test] }
+    num_classes: ${t4dataset.segmentation3d.num_classes}
+    ignore_index: ${ignore_index}
+    class_names: ${seg_class_names:${t4dataset.segmentation3d.class_mapping}, ${t4dataset.segmentation3d.num_classes}}
+    ranges:
+      - _target_: autoware_ml.metrics.base.MetricRange
+        name: 0-50m
+        min_distance: 0.0
+        max_distance: 50.0
+      - _target_: autoware_ml.metrics.base.MetricRange
+        name: 50-90m
+        min_distance: 50.0
+        max_distance: 90.0
+      - _target_: autoware_ml.metrics.base.MetricRange
+        name: 90-121"
+        min_distance: 90.0
+        max_distance: 121.0
+      - _target_: autoware_ml.metrics.base.MetricRange
+        name: 0-121m
+        min_distance: 0.0
+        max_distance: 121.0

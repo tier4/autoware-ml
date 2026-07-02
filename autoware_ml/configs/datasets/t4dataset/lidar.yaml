@@ -1,0 +1,12 @@
+# @package t4dataset.lidar
+
+defaults:
+  - /datasets/t4dataset/base
+  - _self_
+
+# Minimum LiDAR points required to keep a GT box during training, per radial band
+# (a point-density property of the sensor). Consumed by ObjectRangeMinPointsFilter
+# in every t4 detection/multi training pipeline via ${dataset.lidar.train_min_points_*}.
+# NOTE: this is training-only; the eval metric keeps min_num_points: 0 (counts every GT).
+train_min_points_near: 2   # within 0-60 m
+train_min_points_far: 1    # within 60-130 m

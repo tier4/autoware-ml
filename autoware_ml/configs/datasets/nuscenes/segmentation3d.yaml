@@ -1,0 +1,71 @@
+# @package nuscenes.segmentation3d
+
+defaults:
+  - /datasets/nuscenes/base
+  - _self_
+
+ignore_index: -1
+num_classes: 15
+max_label: 31
+seg_label_mapping:
+  0: 14   # noise -> noise
+  1: ${ignore_index}   # animal
+  2: 4    # pedestrian.adult -> pedestrian
+  3: 4    # pedestrian.child -> pedestrian
+  4: 4    # pedestrian.construction_worker -> pedestrian
+  5: 4    # pedestrian.personal_mobility -> pedestrian
+  6: 4    # pedestrian.police_officer -> pedestrian
+  7: 4    # pedestrian.stroller -> pedestrian
+  8: 4    # pedestrian.wheelchair -> pedestrian
+  9: 6    # barrier -> barrier
+  10: 7   # debris -> debris
+  11: 7   # pushable_pullable -> debris
+  12: 5   # trafficcone -> traffic_cone
+  13: ${ignore_index}   # bicycle_rack
+  14: 3   # bicycle -> bicycle
+  15: 2   # bus.bendy -> bus
+  16: 2   # bus.rigid -> bus
+  17: 0   # car -> car
+  18: 1   # construction_vehicle -> truck
+  19: 0   # ambulance -> car
+  20: 0   # police -> car
+  21: 3   # motorcycle -> bicycle
+  22: 1   # trailer -> truck
+  23: 1   # truck -> truck
+  24: 8   # driveable_surface -> drivable_surface
+  25: 9   # flat.other -> other_flat_surface
+  26: 9   # sidewalk -> other_flat_surface
+  27: 9   # terrain -> other_flat_surface
+  28: 11  # manmade -> manmade
+  29: 13  # static.other -> other_stuff
+  30: 10  # vegetation -> vegetation
+  31: ${ignore_index}   # ego
+metrics:
+  - _target_: autoware_ml.metrics.segmentation3d.suite.Segmentation3DMetricSuite
+    components:
+      - { _target_: autoware_ml.metrics.segmentation3d.iou.IoU, stages: [val, test] }
+      - { _target_: autoware_ml.metrics.segmentation3d.accuracy.Accuracy, stages: [val, test] }
+      - { _target_: autoware_ml.metrics.segmentation3d.precision_recall_f1.PrecisionRecallF1, stages: [val, test] }
+    num_classes: ${nuscenes.segmentation3d.num_classes}
+    ignore_index: ${ignore_index}
+    class_names:
+      - car
+      - truck
+      - bus
+      - bicycle
+      - pedestrian
+      - traffic_cone
+      - barrier
+      - debris
+      - drivable_surface
+      - other_flat_surface
+      - vegetation
+      - manmade
+      - vertical_thin
+      - other_stuff
+      - noise
+    ranges:
+      - { _target_: autoware_ml.metrics.base.MetricRange, name: 0-50m, min_distance: 0.0, max_distance: 50.0 }
+      - { _target_: autoware_ml.metrics.base.MetricRange, name: 50-90m, min_distance: 50.0, max_distance: 90.0 }
+      - { _target_: autoware_ml.metrics.base.MetricRange, name: 90-121m, min_distance: 90.0, max_distance: 121.0 }
+      - { _target_: autoware_ml.metrics.base.MetricRange, name: 0-121m, min_distance: 0.0, max_distance: 121.0 }
