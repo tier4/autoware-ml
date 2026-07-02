@@ -6,6 +6,7 @@ from autoware_ml.databases.schemas.box3d_schemas import Box3DDatasetSchema
 from autoware_ml.datamodule.multi_task.base_dataset_task import BaseDatasetTask
 from autoware_ml.datamodule.multi_task.dataclasses.detection3d import Detection3DGTSample
 from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTSample
+from autoware_ml.types.geometry import Box3DFieldIndex
 
 
 class T4Detection3DTask(BaseDatasetTask):
@@ -71,12 +72,26 @@ class T4Detection3DTask(BaseDatasetTask):
         selected_row = self.dataset_records_dataframe.item(
             idx, DatasetTableSchema.BOXES_3D.name
         ).struct
-        gt_bboxes_3d = selected_row.field(Box3DDatasetSchema.BOX3D_PARAMS.name).to_numpy()
-        gt_bboxes_labels = selected_row.field(Box3DDatasetSchema.BOX3D_LABEL_INDEX.name).to_numpy()
+        gt_bboxes_3d = (
+            selected_row.field(Box3DDatasetSchema.BOX3D_PARAMS.name)
+            .to_numpy()
+            .astype(np.float32, copy=False)
+        )
+        gt_bboxes_labels = (
+            selected_row.field(Box3DDatasetSchema.BOX3D_LABEL_INDEX.name)
+            .to_numpy()
+            .astype(np.int32, copy=False)
+        )
+
+        if not len(gt_bboxes_3d):
+            gt_bboxes_3d = np.zeros(
+                (0, len(Box3DFieldIndex)), dtype=np.float32
+            )  # Zero shape of (0, 10) for empty bboxes
+            gt_bboxes_labels = np.zeros((0,), dtype=np.int32)
 
         detection3d_gt_sample = Detection3DGTSample(
-            gt_bboxes_3d=np.asarray(gt_bboxes_3d, dtype=np.float32),
-            gt_labels_3d=np.asarray(gt_bboxes_labels, dtype=np.int32),
+            gt_bboxes_3d=gt_bboxes_3d,
+            gt_labels_3d=gt_bboxes_labels,
             # Add other necessary fields for 3D detection as needed
         )
 
