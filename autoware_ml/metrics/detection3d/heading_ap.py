@@ -18,6 +18,15 @@ class HeadingAP(Metric[DetectionState]):
         super().__init__(stages)
 
     def evaluate(self, state: DetectionState, stage: EvalStage) -> dict[str, float]:
+        """Compute heading-aware AP metrics for the accumulated detection state.
+
+        Args:
+            state: Detection state with cached match curves.
+            stage: Evaluation stage requesting the metrics.
+
+        Returns:
+            Mapping of metric names to scalar values.
+        """
         labels = state.labels(full=True)
         per_class_aph = {
             label: mean_valid(

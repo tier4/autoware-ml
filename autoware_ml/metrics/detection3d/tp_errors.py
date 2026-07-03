@@ -36,6 +36,15 @@ class TpErrors(Metric[DetectionState]):
         )
 
     def evaluate(self, state: DetectionState, stage: EvalStage) -> dict[str, float]:
+        """Compute true-positive error summaries for detection predictions.
+
+        Args:
+            state: Detection state with cached match curves.
+            stage: Evaluation stage requesting the metrics.
+
+        Returns:
+            Mapping of aggregate and per-class TP error metrics.
+        """
         labels = state.labels(full=True)
         variants: dict[str, dict[tuple[int, float], SelectedTpErrors]] = {
             name: {} for name in self.recall_targets

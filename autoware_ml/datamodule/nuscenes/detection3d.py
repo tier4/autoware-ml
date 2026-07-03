@@ -26,7 +26,10 @@ import pickle
 from typing import Any
 
 from autoware_ml.datamodule.base import DataModule, Dataset
-from autoware_ml.datamodule.common.detection3d import load_detection_data_infos
+from autoware_ml.datamodule.common.detection3d import (
+    build_label_to_category,
+    load_detection_data_infos,
+)
 from autoware_ml.datamodule.nuscenes.common import resolve_lidar_path
 from autoware_ml.transforms.base import TransformsCompose
 
@@ -62,8 +65,7 @@ class NuscenesDetection3DDataset(Dataset):
         with open(ann_file, "rb") as file:
             data = pickle.load(file)
         self.data_infos = load_detection_data_infos(data)
-        self.category_to_index = data.get("metainfo", {}).get("categories", {})
-        self.label_to_category = {index: name for name, index in self.category_to_index.items()}
+        self.label_to_category = build_label_to_category(data.get("metainfo", {}))
 
     def __len__(self) -> int:
         """Return the number of annotated samples.

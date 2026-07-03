@@ -59,23 +59,21 @@ class MergeObjects3D(BaseTransform):
 
     def __init__(
         self,
+        *,
         merge_objects: Sequence[tuple[str, Sequence[str]]] | None = None,
         name_mapping: Mapping[str, str | None] | None = None,
         distance_threshold: float = 2.0,
         merge_type: str = "extend_longer",
     ) -> None:
-        """Initialize the merge transform.
+        """Initialize the MergeObjects3D transform.
 
         Args:
             merge_objects: Rules ``(target, [primary_class, secondary_class])``
-                using canonical class names (post ``name_mapping``). For example
-                ``[("truck", ["truck", "trailer"])]``. ``None`` or empty disables
-                the transform.
-            name_mapping: Raw-to-canonical class-name mapping used to classify
-                instances. When ``None``, raw ``gt_nusc_name`` values are used
-                directly.
+                using canonical class names after ``name_mapping``.
+            name_mapping: Optional raw-to-canonical class-name mapping used to
+                classify instances before matching.
             distance_threshold: Maximum front/back face-center distance in meters
-                for two boxes to be considered adjacent.
+                for boxes to be considered adjacent.
             merge_type: Box merge strategy, ``"extend_longer"`` or ``"union"``.
         """
         if merge_type not in {"extend_longer", "union"}:
@@ -111,6 +109,17 @@ class MergeObjects3D(BaseTransform):
         self.merge_type = merge_type
 
     def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
+        """Merge matched primary/secondary instance pairs within the sample.
+
+        Args:
+            input_dict: Sample dictionary holding the raw ``instances`` list.
+
+        Returns:
+            Updated sample dictionary whose ``instances`` list has each matched
+            pair replaced by a single merged target instance, with unmatched
+            instances left in place. Returned unchanged when there are no merge
+            rules, no instances, or no pairs matched.
+        """
         if not self.merge_objects:
             return input_dict
 
@@ -158,6 +167,15 @@ class MergeObjects3D(BaseTransform):
         return input_dict
 
     def _canonical_name(self, instance: Mapping[str, Any]) -> str | None:
+        """Resolve an instance's canonical class name via ``name_mapping``.
+
+        Args:
+            instance: Raw annotation dict expected to carry ``gt_nusc_name``.
+
+        Returns:
+            The canonical class name (raw name when ``name_mapping`` is ``None``),
+            or ``None`` when the raw name is missing or maps to ``None``.
+        """
         raw_name = instance.get("gt_nusc_name")
         if raw_name is None:
             return None
@@ -220,6 +238,15 @@ def _boxes_proximity(box1: np.ndarray, box2: np.ndarray, distance_threshold: flo
     """Return whether any front/back face centers are within the threshold."""
 
     def face_centers(box: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Return the front and back face-center points along the box heading.
+
+        Args:
+            box: Oriented box ``[x, y, z, dx, dy, dz, yaw]``.
+
+        Returns:
+            Tuple ``(front, back)`` of ``(3,)`` face-center coordinates offset
+            from the center by half the length ``dx`` along the yaw direction.
+        """
         x, y, z, dx, _, _, yaw = box
         front = np.array([x + dx / 2.0 * np.cos(yaw), y + dx / 2.0 * np.sin(yaw), z])
         back = np.array([x - dx / 2.0 * np.cos(yaw), y - dx / 2.0 * np.sin(yaw), z])

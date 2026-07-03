@@ -31,12 +31,22 @@ class RangeInterpolation(BaseTransform):
 
     def __init__(
         self,
+        *,
         height: int,
         width: int,
         fov_up: float,
         fov_down: float,
         ignore_index: int,
     ) -> None:
+        """Initialize the RangeInterpolation transform.
+
+        Args:
+            height: Range-image height in pixels.
+            width: Range-image width in pixels.
+            fov_up: Upper vertical field of view in degrees.
+            fov_down: Lower vertical field of view in degrees.
+            ignore_index: Label used when interpolated neighbors disagree.
+        """
         self.height = height
         self.width = width
         self.fov_up_rad = np.deg2rad(fov_up)
@@ -44,6 +54,14 @@ class RangeInterpolation(BaseTransform):
         self.ignore_index = ignore_index
 
     def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
+        """Append horizontally interpolated range-view points.
+
+        Args:
+            input_dict: Sample dictionary containing ``points`` and optional labels.
+
+        Returns:
+            Updated sample dictionary with ``num_points`` and interpolated points.
+        """
         points = input_dict["points"]
         proj_y, proj_x = project_range(
             points, self.height, self.width, self.fov_up_rad, self.fov_down_rad

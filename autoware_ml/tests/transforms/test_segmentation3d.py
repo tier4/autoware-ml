@@ -78,7 +78,7 @@ def test_frustum_mix_combines_points_from_source_and_mix_sample() -> None:
     }
 
     dataset = _MixDataset(mix_sample)
-    output = FrustumMix(height=8, width=16, fov_up=10.0, fov_down=-30.0, num_areas=[2], prob=1.0)(
+    output = FrustumMix(height=8, width=16, fov_up=10.0, fov_down=-30.0, num_areas=[2], p=1.0)(
         sample,
         context=PipelineContext(dataset=dataset, index=0),
     )
@@ -101,7 +101,7 @@ def test_instance_copy_appends_requested_semantic_classes() -> None:
         }
     )
 
-    output = InstanceCopy(instance_classes=[5], prob=1.0)(
+    output = InstanceCopy(instance_classes=[5], p=1.0)(
         sample,
         context=PipelineContext(dataset=dataset, index=0),
     )
@@ -122,7 +122,7 @@ def test_frustum_mix_respects_zero_probability() -> None:
         fov_up=10.0,
         fov_down=-30.0,
         num_areas=[2],
-        prob=0.0,
+        p=0.0,
     )(sample.copy())
 
     assert np.array_equal(output["points"], sample["points"])
@@ -135,7 +135,7 @@ def test_instance_copy_respects_zero_probability() -> None:
         "pts_semantic_mask": np.array([1], dtype=np.int64),
     }
 
-    output = InstanceCopy(instance_classes=[5], prob=0.0)(sample.copy())
+    output = InstanceCopy(instance_classes=[5], p=0.0)(sample.copy())
 
     assert np.array_equal(output["points"], sample["points"])
     assert np.array_equal(output["pts_semantic_mask"], sample["pts_semantic_mask"])
@@ -161,7 +161,7 @@ def test_mix_transforms_apply_pre_transform_to_secondary_sample() -> None:
     output = InstanceCopy(
         instance_classes=[99],
         pre_transform=TransformsCompose(pipeline=[_AppendClassNinetyNine()]),
-        prob=1.0,
+        p=1.0,
     )(sample, context=PipelineContext(dataset=dataset, index=0))
 
     assert np.array_equal(output["pts_semantic_mask"], np.array([1, 99], dtype=np.int64))

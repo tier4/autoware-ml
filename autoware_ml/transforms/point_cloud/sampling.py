@@ -31,6 +31,14 @@ class PointShuffle(BaseTransform):
 
     _required_keys = ["points"]
 
+    def __init__(self, *, p: float | None = None) -> None:
+        """Initialize the PointShuffle transform.
+
+        Args:
+            p: Probability of applying the transform (``None`` means always apply).
+        """
+        self.p = p
+
     def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
         """Shuffle points and aligned arrays with one shared permutation."""
         points = input_dict["points"]
@@ -50,15 +58,15 @@ class RandomDropout(BaseTransform):
 
     _required_keys = ["coord"]
 
-    def __init__(self, dropout_ratio: float = 0.2, dropout_application_ratio: float = 0.5) -> None:
-        """Initialize the random dropout transform.
+    def __init__(self, *, p: float = 0.5, dropout_ratio: float = 0.2) -> None:
+        """Initialize the RandomDropout transform.
 
         Args:
+            p: Probability of applying the transform.
             dropout_ratio: Fraction of points removed when dropout is applied.
-            dropout_application_ratio: Probability of applying the transform.
         """
+        self.p = p
         self.dropout_ratio = dropout_ratio
-        self.p = dropout_application_ratio
 
     def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
         """Randomly drop a subset of points.
@@ -84,12 +92,16 @@ class ElasticDistortion(BaseTransform):
 
     _required_keys = ["coord"]
 
-    def __init__(self, distortion_params: Sequence[Sequence[float]]) -> None:
-        """Initialize the elastic distortion transform.
+    def __init__(
+        self, *, p: float | None = None, distortion_params: Sequence[Sequence[float]]
+    ) -> None:
+        """Initialize the ElasticDistortion transform.
 
         Args:
+            p: Probability of applying the transform (``None`` means always apply).
             distortion_params: Sequence of ``[granularity, magnitude]`` pairs.
         """
+        self.p = p
         self.distortion_params = [tuple(pair) for pair in distortion_params]
 
     def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
@@ -147,6 +159,7 @@ class GridSample(BaseTransform):
 
     def __init__(
         self,
+        *,
         grid_size: float,
         mode: str,
         keys: Sequence[str],
@@ -158,25 +171,23 @@ class GridSample(BaseTransform):
         project_displacement: bool = False,
         point_cloud_range: Sequence[float] | None = None,
     ) -> None:
-        """Initialize the grid sampling transform.
+        """Initialize the GridSample transform.
 
         Args:
             grid_size: Grid cell size used for subsampling.
-            hash_type: Hash type used to group voxel coordinates.
-            mode: Sampling mode. ``train`` picks a random representative per
-                voxel. ``test`` picks a deterministic representative per voxel.
+            mode: Sampling mode. ``"train"`` picks a random representative per
+                voxel; ``"test"`` picks a deterministic representative per voxel.
             keys: Sample keys subsampled together with coordinates.
+            hash_type: Hash type used to group voxel coordinates.
             return_grid_coord: Whether to expose sampled grid coordinates.
             return_inverse: Whether to expose inverse voxel indices.
-            return_min_coord: Whether to expose the voxelized minimum
-                coordinate in world space.
+            return_min_coord: Whether to expose the voxelized minimum coordinate in
+                world space.
             return_displacement: Whether to expose per-point displacement to the
                 voxel center.
             project_displacement: Whether to project displacement to normals.
-            point_cloud_range: Optional ``[x_min, y_min, z_min, x_max, y_max,
-                z_max]`` range. When provided, the voxelization origin is fixed
-                to the range minimum instead of being derived from the data.
-                This ensures a stable, range-based grid across all splits.
+            point_cloud_range: Optional range whose minimum fixes the voxelization
+                origin.
         """
         self.grid_size = np.asarray(grid_size, dtype=np.float32)
         if hash_type not in self._HASH_FUNCTIONS:

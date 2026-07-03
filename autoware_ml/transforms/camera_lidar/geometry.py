@@ -39,10 +39,11 @@ class RandomFlip3D(BaseTransform):
 
     def __init__(
         self,
+        *,
         flip_ratio_bev_horizontal: float = 0.5,
         flip_ratio_bev_vertical: float = 0.5,
     ) -> None:
-        """Initialize the random flip transform.
+        """Initialize the RandomFlip3D transform.
 
         Args:
             flip_ratio_bev_horizontal: Probability of flipping the lateral (y) axis.
@@ -78,17 +79,17 @@ class GlobalRotScaleTrans(BaseTransform):
 
     def __init__(
         self,
+        *,
         rot_range: Sequence[float],
         scale_ratio_range: Sequence[float],
         translation_std: Sequence[float] | None = None,
     ) -> None:
-        """Initialize the global rotation/scale/translation transform.
+        """Initialize the GlobalRotScaleTrans transform.
 
         Args:
-            rot_range: Min and max rotation angles in radians (around z).
+            rot_range: Min and max rotation angles in radians around z.
             scale_ratio_range: Min and max scale factors.
-            translation_std: Per-axis Gaussian translation std ``[x, y, z]``.
-                When ``None`` no translation is applied.
+            translation_std: Optional per-axis Gaussian translation std ``[x, y, z]``.
         """
         self.rot_range = rot_range
         self.scale_ratio_range = scale_ratio_range

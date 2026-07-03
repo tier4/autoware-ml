@@ -46,7 +46,9 @@ def test_nuscenes_segmentation_dataset_resolves_lidar_top_samples(tmp_path: Path
         data_root=str(data_root),
         ann_file=str(ann_file),
         lidarseg_dir=str(lidarseg_dir),
-        dataset_transforms=TransformsCompose([LoadPointsFromFile(), LoadSegAnnotations3D()]),
+        dataset_transforms=TransformsCompose(
+            [LoadPointsFromFile(), LoadSegAnnotations3D(label_mapping={1: 1}, max_label=1)]
+        ),
     )
     sample = dataset[0]
 

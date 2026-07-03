@@ -18,6 +18,15 @@ class PrecisionRecallF1(Metric[ConfusionState]):
     """
 
     def evaluate(self, state: ConfusionState, stage: EvalStage) -> dict[str, float]:
+        """Compute precision, recall, and F1 metrics from a confusion state.
+
+        Args:
+            state: Segmentation confusion state.
+            stage: Evaluation stage requesting the metrics.
+
+        Returns:
+            Mapping of precision/recall/F1 metric names to scalar values.
+        """
         zeros = torch.zeros_like(state.true_positive)
         recall = torch.where(state.actual > 0, state.true_positive / state.actual, zeros)
 

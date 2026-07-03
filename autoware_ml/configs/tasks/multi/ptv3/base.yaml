@@ -1,0 +1,184 @@
+# @package _global_
+defaults:
+  - /defaults/default_runtime
+  - /tasks/segmentation3d/ptv3/backbone_base
+  - _self_
+
+dataset: ???
+optimized_metric: val/det3d/mAP
+
+num_classes: ${dataset.detection3d.num_classes}
+backbone_out_channels: 64
+
+point_cloud_range: ???
+grid_size: ???
+head_voxel_size: ???
+
+segmentation_num_classes: ${dataset.segmentation3d.num_classes}
+
+num_proposals: ???
+
+datamodule:
+  collation_map:
+    coord: concat
+    feat: concat
+    grid_coord: concat
+    strength: concat
+    segment: concat
+    origin_segment: concat
+    inverse: index_concat
+    gt_boxes: list
+    gt_labels: list
+  data_root: ${dataset.data_root}
+  class_names: ${dataset.detection3d.class_names}
+  name_mapping: ${dataset.detection3d.name_mapping}
+
+model:
+  _target_: autoware_ml.models.multi.ptv3_segdet.PTv3SegDetModel
+  seg3d_head:
+    _target_: torch.nn.Linear
+    in_features: ${backbone_out_channels}
+    out_features: ${segmentation_num_classes}
+  bev_projector:
+    _target_: autoware_ml.models.detection3d.ptv3.PTv3BEVProjection
+    in_channels: ${backbone_out_channels}
+    out_channels: ${backbone_out_channels}
+    output_shape: ???
+    bev_stride: ???
+  bev_encoder:
+    _target_: autoware_ml.models.detection3d.ptv3.PTv3BEVEncoder
+    in_channels: ${backbone_out_channels}
+    hidden_channels: 128
+    out_channels: 128
+    dilations: [1, 2, 5, 2]
+  bbox_head:
+    _target_: autoware_ml.models.detection3d.heads.transfusion.TransFusionHead
+    num_proposals: ${num_proposals}
+    auxiliary: true
+    in_channels: 128
+    hidden_channel: 128
+    num_classes: ${num_classes}
+    class_names: ${dataset.detection3d.class_names}
+    dense_heatmap_pooling_classes: [car, truck, bus, bicycle]
+    num_decoder_layers: 1
+    num_heads: 8
+    feedforward_channels: 256
+    common_heads:
+      center: [2, 2]
+      height: [1, 2]
+      dim: [3, 2]
+      rot: [2, 2]
+      vel: [2, 2]
+    bbox_coder:
+      _target_: autoware_ml.models.detection3d.task_modules.bbox_coders.TransFusionBBoxCoder
+      pc_range: ${point_cloud_range}
+      voxel_size: ${head_voxel_size}
+      out_size_factor: 1
+      post_center_range: ???
+      score_threshold: 0.0
+      code_size: 10
+    assigner:
+      _target_: autoware_ml.models.detection3d.task_modules.assigners.HungarianAssigner3D
+      cls_cost:
+        _target_: autoware_ml.models.detection3d.task_modules.match_costs.ClassificationCost
+        weight: 0.15
+        alpha: 0.25
+        gamma: 2.0
+      reg_cost:
+        _target_: autoware_ml.models.detection3d.task_modules.match_costs.BBoxBEVL1Cost
+        weight: 0.25
+      iou_cost:
+        _target_: autoware_ml.models.detection3d.task_modules.match_costs.IoU3DCost
+        weight: 0.25
+    point_cloud_range: ${point_cloud_range}
+    voxel_size: ${head_voxel_size}
+    out_size_factor: 1
+    code_weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2]
+    min_radius: 2
+    gaussian_overlap: 0.1
+    score_threshold: 0.1
+    post_max_size: 100
+    nms_min_radius: ???
+    loss_cls_weight: 1.0
+    loss_bbox_weight: 0.25
+    loss_heatmap_weight: 1.0
+    heatmap_target: oriented
+    heatmap_init_bias: -2.19
+    nms_kernel_size: 3
+    use_velocity: true
+  segmentation_num_classes: ${segmentation_num_classes}
+  segmentation_ignore_index: ${dataset.segmentation3d.ignore_index}
+  segmentation_loss_weight: 1.0
+  detection_loss_weight: 1.0
+  metrics: ${merge_lists:${dataset.detection3d.metrics},${dataset.segmentation3d.metrics}}
+  export_output_names:
+    [
+      pred_labels,
+      pred_probs,
+      dense_heatmap,
+      query_heatmap_score,
+      query_labels,
+      heatmap,
+      center,
+      height,
+      dim,
+      rot,
+      vel,
+    ]
+  grid_size: ${grid_size}
+  point_cloud_range: ${point_cloud_range}
+  optimizer:
+    _target_: torch.optim.AdamW
+    _partial_: true
+    lr: 0.0001
+    weight_decay: 0.01
+  optimizer_group_overrides:
+    backbone_block:
+      lr: 0.00002
+    backbone_default:
+      lr: 0.00005
+    seg3d_head:
+      lr: 0.00005
+  scheduler:
+    _target_: autoware_ml.utils.schedulers.cyclic_cosine_annealing.CyclicCosineAnnealingLR
+    _partial_: true
+    warmup_epochs: 12
+    decay_epochs: 88
+    max_lr_factor: 10.0
+    min_lr_factor: 0.0001
+
+trainer:
+  max_epochs: 100
+  precision: 32-true
+  gradient_clip_val: 5.0
+  gradient_clip_algorithm: norm
+
+callbacks:
+  model_checkpoint:
+    monitor: val/det3d/mAP
+    mode: max
+  early_stopping:
+    monitor: val/det3d/mAP
+    patience: 30
+    mode: max
+
+deploy:
+  onnx:
+    enabled: true
+    opset_version: 17
+    dynamo: false
+    do_constant_folding: false
+    modules:
+      backbone:
+        output_names: [point_feat, point_grid_coord, point_offset]
+      seg3d_head:
+        output_names: [pred_labels, pred_probs]
+      det3d_head:
+        output_names: [dense_heatmap, query_heatmap_score, query_labels, heatmap, center, height, dim, rot, vel]
+        modify_graph:
+          _target_: autoware_ml.utils.onnx_modifiers.TransHeadTensorRTModifier
+          k: ${num_proposals}
+          topk_node_name_substring: /bbox_head/TopK
+          attention_node_name_substring: /bbox_head/decoder
+  tensorrt:
+    enabled: false

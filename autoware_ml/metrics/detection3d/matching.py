@@ -15,9 +15,9 @@ import torch
 
 from autoware_ml.metrics.base import MetricRange
 from autoware_ml.metrics.detection3d.structures import (
+    ERROR_NAMES,
     CurveMetrics,
     Detection3DSample,
-    ERROR_NAMES,
     MatchCurve,
     PredictionRecord,
     SelectedTpErrors,
@@ -40,30 +40,18 @@ def _distance_mask(
     return mask
 
 
-def normalize_filter_attributes(
-    filter_attributes: list[tuple[str, str]] | None,
-) -> set[tuple[str, str]]:
-    """Normalize configured class-attribute filters from Hydra/Python containers."""
-    if not filter_attributes:
-        return set()
-    return {(str(class_name), str(attribute)) for class_name, attribute in filter_attributes}
-
-
 def gt_keep_mask(
     gt_boxes: torch.Tensor,
     gt_labels: torch.Tensor,
     gt_num_points: torch.Tensor | None,
-    gt_attributes: list[list[str]] | None,
     class_names: tuple[str, ...],
     eval_class_range: dict[str, float] | None,
-    min_point_numbers: int,
-    filter_set: set[tuple[str, str]],
+    min_num_points: int,
 ) -> torch.Tensor:
     """Build the per-frame GT keep mask applied at accumulation time.
 
-    Combines per-class distance caps, the minimum LiDAR point count, and
-    attribute exclusions into one boolean mask, so the suite stores only kept GT
-    and never gathers point counts or string attributes across ranks.
+    Combines per-class distance caps and the minimum LiDAR point count into one
+    boolean mask, so the suite stores only kept GT.
     """
     n = gt_boxes.shape[0]
     keep = torch.ones(n, dtype=torch.bool, device=gt_boxes.device)
@@ -79,19 +67,8 @@ def gt_keep_mask(
                 if max_dist is not None and float(distances[box_idx].item()) > max_dist:
                     keep[box_idx] = False
 
-    if min_point_numbers > 0 and gt_num_points is not None:
-        keep &= gt_num_points >= min_point_numbers
-
-    if filter_set and gt_attributes is not None:
-        for box_idx in range(n):
-            if not keep[box_idx]:
-                continue
-            label = int(gt_labels[box_idx].item())
-            class_name = class_names[label] if 0 <= label < len(class_names) else None
-            if class_name is not None:
-                attrs = gt_attributes[box_idx]
-                if any((str(class_name), str(attr)) in filter_set for attr in attrs):
-                    keep[box_idx] = False
+    if min_num_points > 0 and gt_num_points is not None:
+        keep &= gt_num_points >= min_num_points
 
     return keep
 

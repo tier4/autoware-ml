@@ -100,10 +100,23 @@ class ObjectNameFilter(BaseTransform):
 
     _required_keys = ["gt_names"]
 
-    def __init__(self, classes: Sequence[str]) -> None:
+    def __init__(self, *, classes: Sequence[str]) -> None:
+        """Initialize the ObjectNameFilter transform.
+
+        Args:
+            classes: Allowed class names retained in the sample.
+        """
         self.classes = set(classes)
 
     def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
+        """Filter present box-aligned arrays by allowed class names.
+
+        Args:
+            input_dict: Sample dictionary containing ``gt_names``.
+
+        Returns:
+            Updated sample dictionary with disallowed classes removed.
+        """
         mask = np.array([n in self.classes for n in input_dict["gt_names"]], dtype=bool)
         _filter_present_box_keys(input_dict, mask)
         return input_dict
@@ -129,8 +142,8 @@ class ObjectRangeFilter(BaseTransform):
     _required_keys: list[str] = []
     _optional_keys = ["gt_boxes"]
 
-    def __init__(self, point_cloud_range: Sequence[float]) -> None:
-        """Initialize the object range filter.
+    def __init__(self, *, point_cloud_range: Sequence[float]) -> None:
+        """Initialize the ObjectRangeFilter transform.
 
         Args:
             point_cloud_range: ``[x_min, y_min, z_min, x_max, y_max, z_max]``.
@@ -190,8 +203,8 @@ class ObjectMinPointsFilter(BaseTransform):
     _required_keys = ["gt_names"]
     _optional_keys = ["gt_boxes", "coord", "points"]
 
-    def __init__(self, min_num_points: int) -> None:
-        """Initialize the minimum-points filter.
+    def __init__(self, *, min_num_points: int) -> None:
+        """Initialize the ObjectMinPointsFilter transform.
 
         Args:
             min_num_points: Minimum number of points required inside each box.
@@ -245,7 +258,13 @@ class ObjectRangeMinPointsFilter(BaseTransform):
     _required_keys = ["gt_names"]
     _optional_keys = ["gt_boxes", "coord", "points"]
 
-    def __init__(self, range_radius: Sequence[float], min_num_points: int) -> None:
+    def __init__(self, *, range_radius: Sequence[float], min_num_points: int) -> None:
+        """Initialize the ObjectRangeMinPointsFilter transform.
+
+        Args:
+            range_radius: Radial interval ``[min_radius, max_radius]`` in meters.
+            min_num_points: Minimum points required for boxes inside the interval.
+        """
         if len(range_radius) != 2:
             raise ValueError(f"range_radius must contain [min, max], got {range_radius}")
         min_radius, max_radius = (float(value) for value in range_radius)
@@ -262,6 +281,14 @@ class ObjectRangeMinPointsFilter(BaseTransform):
         pass
 
     def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
+        """Filter boxes in the configured radial band by point count.
+
+        Args:
+            input_dict: Sample dictionary updated in place.
+
+        Returns:
+            Updated sample dictionary with low-support in-range boxes removed.
+        """
         if "gt_boxes" not in input_dict:
             return input_dict
 

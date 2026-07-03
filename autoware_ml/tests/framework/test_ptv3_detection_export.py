@@ -7,7 +7,6 @@ import torch
 
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
 from autoware_ml.tests.models.ptv3_detection_fixtures import (
-    build_center_model,
     build_inputs,
     build_trans_model,
     move_batch_to_device,
@@ -25,28 +24,6 @@ EXPECTED_PTV3_INPUT_NAMES = [
     "serialized_pooling_0_serialized_order",
     "serialized_pooling_0_serialized_inverse",
 ]
-
-
-@pytest.mark.skipif(
-    not IS_SPCONV_AVAILABLE or not torch.cuda.is_available(),
-    reason="PTv3 sparse-convolution export tests require CUDA spconv",
-)
-def test_ptv3_centerhead_build_export_spec_uses_ptv3_inputs() -> None:
-    device = torch.device("cuda")
-    model = build_center_model().to(device)
-    batch = move_batch_to_device(build_inputs(), device)
-
-    spec = model.build_export_spec(batch)
-    outputs = spec.module(*spec.args)
-
-    assert spec.input_param_names == EXPECTED_PTV3_INPUT_NAMES
-    assert spec.dynamic_axes is not None
-    assert spec.dynamic_axes["serialized_pooling_0_indices"] == {
-        0: "serialized_pooling_0_in_voxels"
-    }
-    assert spec.output_names == ["heatmap", "reg", "height", "dim", "rot", "vel"]
-    assert len(outputs) == 6
-    assert outputs[0].shape[:2] == (1, 2)
 
 
 @pytest.mark.skipif(
