@@ -208,7 +208,7 @@ def flip_boxes(input_dict: dict[str, Any], axis: int) -> None:
     if "gt_boxes" not in input_dict:
         return
     if axis not in (0, 1):
-      raise ValueError(f"axis must be 0 (x / longitudinal) or 1 (y / lateral), got {axis}")
+        raise ValueError(f"axis must be 0 (x / longitudinal) or 1 (y / lateral), got {axis}")
     boxes = np.asarray(input_dict["gt_boxes"]).copy()
     if axis == 1:  # lateral flip: negate y, mirror yaw and y-velocity
         boxes[:, 1] *= -1.0
