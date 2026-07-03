@@ -378,7 +378,7 @@ Use these rules when creating `<variant>`:
 
 - include only future-distinguishing choices such as backbone, modality, voxel size, or range
 - do not encode properties that are inherent to the model family
-- normalize voxel sizes as `voxel020`, `voxel005`, `voxel0170`
+- normalize voxel sizes as `voxel020`, `voxel005`
 - encode ranges as human-readable suffixes such as `50m`, `90m`, `102m`, `121m`
 - keep dataset names explicit and stable, for example `nuscenes` and `t4dataset_j6gen2`
 

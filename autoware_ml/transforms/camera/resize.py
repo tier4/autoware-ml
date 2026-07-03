@@ -125,9 +125,8 @@ class ResizeMultiviewImages(BaseTransform):
 
         input_dict["img"] = restore_image_container(input_dict["img"], resized_images, format_info)
         input_dict["camera_intrinsics"] = intrinsics[0] if intrinsics_was_single else intrinsics
-        if "lidar2img" in input_dict:
-            lidar2cam = input_dict["lidar2cam"]
-            input_dict["lidar2img"] = input_dict["camera_intrinsics"] @ lidar2cam
+        if "lidar2img" in input_dict and "lidar2cam" in input_dict:
+            input_dict["lidar2img"] = input_dict["camera_intrinsics"] @ input_dict["lidar2cam"]
         return input_dict
 
 
