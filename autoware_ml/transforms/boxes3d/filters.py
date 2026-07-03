@@ -172,10 +172,12 @@ class ObjectMinPointsFilter(BaseTransform):
 
     Required keys:
         gt_names: Class name per box.
-        coord: Point coordinates (Nx3, float32).
 
     Optional keys:
         gt_boxes: 3D bounding boxes (Nx7 or Nx9). Filtered when present.
+        coord: Point coordinates (Nx3 or wider). Required when gt_boxes is present.
+        points: Raw point array (Nx3 or wider). Required when gt_boxes is present and
+            coord is absent.
         gt_num_points: Per-box lidar point counts. Filtered when present.
 
     Generated keys:
@@ -221,7 +223,24 @@ class ObjectMinPointsFilter(BaseTransform):
 
 
 class ObjectRangeMinPointsFilter(BaseTransform):
-    """Remove boxes below a point-count threshold within a BEV radial interval."""
+    """Remove boxes below a point-count threshold within a BEV radial interval.
+
+    Required keys:
+        gt_names: Class name per box.
+
+    Optional keys:
+        gt_boxes: 3D bounding boxes (Nx7 or Nx9). Filtered when present.
+        coord: Point coordinates (Nx3 or wider). Required when gt_boxes is present.
+        points: Raw point array (Nx3 or wider). Required when gt_boxes is present and
+            coord is absent.
+        gt_num_points: Per-box lidar point counts. Filtered when present.
+
+    Generated keys:
+        gt_boxes: Filtered boxes (when present).
+        gt_names: Filtered class names.
+        gt_labels: Filtered labels (when present).
+        gt_num_points: Filtered lidar point counts (when present).
+    """
 
     _required_keys = ["gt_names"]
     _optional_keys = ["gt_boxes", "coord", "points"]
