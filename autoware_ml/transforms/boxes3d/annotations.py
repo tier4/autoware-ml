@@ -53,17 +53,12 @@ def resolve_detection_class(
     name_mapping: Mapping[str, str | None] | None,
     label_to_category: Mapping[int, str] | None = None,
     filter_attributes: Collection[tuple[str, str]] | None = None,
-    min_num_lidar_points: int = 1,
     use_valid_flag: bool = True,
 ) -> str | None:
     """Resolve one stored instance into a detector class or reject it."""
     if "bbox_label_3d" in instance and int(instance["bbox_label_3d"]) < 0:
         return None
     if use_valid_flag and not bool(instance.get("bbox_3d_isvalid", True)):
-        return None
-
-    num_lidar_points = int(instance.get("num_lidar_pts", 0))
-    if num_lidar_points < min_num_lidar_points:
         return None
 
     raw_name = instance.get("gt_nusc_name")

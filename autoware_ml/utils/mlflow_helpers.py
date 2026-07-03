@@ -20,6 +20,7 @@ handling shared by training, testing, deployment, and UI tooling.
 
 import json
 import logging
+import re
 import socket
 import subprocess
 from collections.abc import Sequence
@@ -41,6 +42,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_ARTIFACTS_DIRNAME = "config"
 AUTOWARE_ML_RUN_ID_ENV = "AUTOWARE_ML_RUN_ID"
 AUTOWARE_ML_HYDRA_RUN_DIR_ENV = "AUTOWARE_ML_HYDRA_RUN_DIR"
+MLFLOW_PARAM_KEY_REPLACEMENTS = (
+    ("&", "and"),
+    ("(", ""),
+    (")", ""),
+)
+MLFLOW_PARAM_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_.\- /:]+$")
 
 
 _logger = logging.getLogger(__name__)
@@ -219,6 +226,47 @@ def should_enable_logger(cfg: DictConfig) -> bool:
     return cfg.get("logger") is not None
 
 
+def sanitize_mlflow_param_key(key: str) -> str:
+    """Return a key accepted by MLflow parameter logging.
+
+    Args:
+        key: Original config key.
+
+    Returns:
+        Sanitized MLflow parameter key.
+    """
+    sanitized_key = key
+    for source, target in MLFLOW_PARAM_KEY_REPLACEMENTS:
+        sanitized_key = sanitized_key.replace(source, target)
+    if MLFLOW_PARAM_KEY_PATTERN.fullmatch(sanitized_key) is None:
+        raise ValueError(f"Invalid MLflow parameter key after sanitization: {key}")
+    return sanitized_key
+
+
+def sanitize_mlflow_param_keys(value: Any) -> Any:
+    """Sanitize mapping keys before sending parameters to MLflow.
+
+    Args:
+        value: Resolved configuration value.
+
+    Returns:
+        Configuration value with MLflow-compatible mapping keys.
+    """
+    if isinstance(value, dict):
+        sanitized: dict[str, Any] = {}
+        for key, nested_value in value.items():
+            sanitized_key = sanitize_mlflow_param_key(str(key))
+            if sanitized_key in sanitized:
+                raise ValueError(
+                    f"MLflow parameter key collision after sanitization: {sanitized_key}"
+                )
+            sanitized[sanitized_key] = sanitize_mlflow_param_keys(nested_value)
+        return sanitized
+    if isinstance(value, list):
+        return [sanitize_mlflow_param_keys(item) for item in value]
+    return value
+
+
 def _flatten_params(prefix: str, value: Any) -> dict[str, str]:
     """Flatten nested config values into MLflow parameter strings.
 
@@ -248,7 +296,7 @@ def log_config_params(client: MlflowClient, run_id: str, cfg: dict[str, Any]) ->
         run_id: Target MLflow run ID.
         cfg: Resolved configuration dictionary.
     """
-    flattened = _flatten_params("", cfg)
+    flattened = _flatten_params("", sanitize_mlflow_param_keys(cfg))
     items = list(flattened.items())
     for start in range(0, len(items), 100):
         batch = [Param(key=key, value=value[:6000]) for key, value in items[start : start + 100]]

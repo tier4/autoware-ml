@@ -32,23 +32,47 @@ class FrustumMix(BaseTransform):
 
     def __init__(
         self,
+        *,
+        p: float = 1.0,
         height: int,
         width: int,
         fov_up: float,
         fov_down: float,
         num_areas: list[int],
         pre_transform: TransformsCompose | None = None,
-        prob: float = 1.0,
     ) -> None:
+        """Initialize the FrustumMix transform.
+
+        Args:
+            p: Probability of applying the transform.
+            height: Range-image height in pixels.
+            width: Range-image width in pixels.
+            fov_up: Upper vertical field of view in degrees.
+            fov_down: Lower vertical field of view in degrees.
+            num_areas: Candidate stripe counts sampled per call.
+            pre_transform: Optional transform applied to the secondary sample.
+        """
         self.height = height
         self.width = width
         self.fov_up_rad = np.deg2rad(fov_up)
         self.fov_down_rad = np.deg2rad(fov_down)
         self.num_areas = num_areas
         self.pre_transform = pre_transform
-        self.p = prob
+        self.p = p
 
     def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
+        """Mix the input sample with a secondary sample along frustum stripes.
+
+        Draws a secondary sample and randomly applies either a vertical or a
+        horizontal frustum mix, replacing the ``points`` and
+        ``pts_semantic_mask`` entries with the mixed result.
+
+        Args:
+            input_dict: Sample dict holding ``points`` and ``pts_semantic_mask``.
+
+        Returns:
+            The updated sample dict with mixed points and semantic labels.
+        """
         mix_sample = self._prepare_mix_sample()
         mix_points = mix_sample["points"]
         mix_labels = mix_sample["pts_semantic_mask"]
@@ -132,15 +156,31 @@ class InstanceCopy(BaseTransform):
 
     def __init__(
         self,
+        *,
+        p: float = 1.0,
         instance_classes: list[int],
         pre_transform: TransformsCompose | None = None,
-        prob: float = 1.0,
     ) -> None:
+        """Initialize the InstanceCopy transform.
+
+        Args:
+            p: Probability of applying the transform.
+            instance_classes: Semantic class ids copied from the secondary sample.
+            pre_transform: Optional transform applied to the secondary sample.
+        """
+        self.p = p
         self.instance_classes = instance_classes
         self.pre_transform = pre_transform
-        self.p = prob
 
     def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
+        """Append selected class instances from a secondary sample.
+
+        Args:
+            input_dict: Sample dictionary containing points and semantic labels.
+
+        Returns:
+            Updated sample dictionary with copied instance points and labels.
+        """
         mix_sample = self._prepare_mix_sample()
         mix_points = mix_sample["points"]
         mix_labels = mix_sample["pts_semantic_mask"]

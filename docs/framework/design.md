@@ -179,7 +179,7 @@ Transforms are configured per split (train/val/test/predict) in the `DataModule`
 
 Public transform targets should reference the concrete implementation module, for example
 `autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile` or
-`autoware_ml.transforms.point_cloud.scene.RandomFlip3D`. Avoid package-level re-export layers in
+`autoware_ml.transforms.point_cloud.geometry.RandomFlip3D`. Avoid package-level re-export layers in
 `__init__.py`; imports and Hydra `_target_` paths should point at the implementation module directly.
 
 ### Runtime Data Preprocessing

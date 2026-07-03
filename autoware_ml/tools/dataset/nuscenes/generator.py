@@ -37,6 +37,124 @@ from autoware_ml.tools.dataset.nuscenes.tasks.registry import create_task
 
 logger = logging.getLogger(__name__)
 
+# Canonical nuScenes 10-class detection taxonomy and its label order. This is the
+# ordering baked into the on-disk v1.1 info files' ``metainfo["categories"]`` and
+# into every ``bbox_label`` / ``bbox_label_3d`` index. Names not in this map are
+# stored with label ``-1`` (kept as ignored instances), matching the reference file.
+NUSCENES_CATEGORIES: dict[str, int] = {
+    "car": 0,
+    "truck": 1,
+    "trailer": 2,
+    "bus": 3,
+    "construction_vehicle": 4,
+    "bicycle": 5,
+    "motorcycle": 6,
+    "pedestrian": 7,
+    "traffic_cone": 8,
+    "barrier": 9,
+}
+
+
+def _build_transform_matrix(
+    translation: Sequence[float], rotation_matrix: npt.NDArray[np.float64]
+) -> list[list[float]]:
+    """Assemble a 4x4 homogeneous transform from a translation and rotation.
+
+    Args:
+        translation: Length-3 translation vector.
+        rotation_matrix: 3x3 rotation matrix.
+
+    Returns:
+        4x4 transform as nested Python lists.
+    """
+    transform = np.eye(4, dtype=np.float64)
+    transform[:3, :3] = rotation_matrix
+    transform[:3, 3] = np.asarray(translation, dtype=np.float64)
+    return transform.tolist()
+
+
+def _build_instances(info_dict: dict[str, Any], categories: dict[str, int]) -> list[dict[str, Any]]:
+    """Convert detection working fields into v1.1 ``instances`` records.
+
+    Reuses the detection task's ``gt_boxes`` (N,7), ``gt_names``, ``gt_velocity``,
+    ``num_lidar_pts``, ``num_radar_pts`` and ``valid_flag``. Names are mapped to
+    label indices through ``categories``; names outside the taxonomy get ``-1``
+    (mirroring the reference file, which keeps them as ignored boxes).
+
+    Args:
+        info_dict: Working info dict after detection-task processing.
+        categories: ``{class_name: label_index}`` mapping.
+
+    Returns:
+        List of per-object instance dicts, or an empty list when no boxes exist.
+    """
+    gt_boxes = info_dict.get("gt_boxes")
+    if gt_boxes is None:
+        return []
+
+    names = info_dict["gt_names"]
+    velocity = info_dict["gt_velocity"]
+    num_lidar_pts = info_dict["num_lidar_pts"]
+    num_radar_pts = info_dict["num_radar_pts"]
+    valid_flag = info_dict["valid_flag"]
+
+    instances = []
+    for i in range(len(gt_boxes)):
+        label = int(categories.get(str(names[i]), -1))
+        instances.append(
+            {
+                "bbox_label": label,
+                "bbox_3d": [float(value) for value in gt_boxes[i]],
+                "bbox_3d_isvalid": bool(valid_flag[i]),
+                "bbox_label_3d": label,
+                "num_lidar_pts": int(num_lidar_pts[i]),
+                "num_radar_pts": int(num_radar_pts[i]),
+                "velocity": [float(velocity[i][0]), float(velocity[i][1])],
+            }
+        )
+    return instances
+
+
+def _to_unified_record(
+    info_dict: dict[str, Any], sample_idx: int, categories: dict[str, int]
+) -> dict[str, Any]:
+    """Reshape a working info dict into a unified v1.1 per-frame record.
+
+    The unified record is consumed by every nuScenes task (detection3d,
+    segmentation3d, multiview/StreamPETR, and calibration_status), which expands
+    per-camera at load time.
+
+    Args:
+        info_dict: Working info dict with pose components, ``images`` and any
+            task fields already injected.
+        sample_idx: Sequential index of this frame within its split.
+        categories: ``{class_name: label_index}`` mapping for instance labels.
+
+    Returns:
+        Unified per-frame record with top-level ``data_list`` schema fields.
+    """
+    l2e_r_mat = Quaternion(info_dict["lidar2ego_rotation"]).rotation_matrix
+    e2g_r_mat = Quaternion(info_dict["ego2global_rotation"]).rotation_matrix
+
+    record: dict[str, Any] = {
+        "sample_idx": sample_idx,
+        "token": info_dict["token"],
+        "timestamp": info_dict["timestamp"] / 1e6,
+        "ego2global": _build_transform_matrix(info_dict["ego2global_translation"], e2g_r_mat),
+        "images": info_dict["images"],
+        "lidar_points": {
+            "num_pts_feats": info_dict["num_features"],
+            "lidar_path": info_dict["lidar_path"],
+            "lidar2ego": _build_transform_matrix(info_dict["lidar2ego_translation"], l2e_r_mat),
+        },
+        "instances": _build_instances(info_dict, categories),
+    }
+    if "pts_semantic_mask_path" in info_dict:
+        record["pts_semantic_mask_path"] = info_dict["pts_semantic_mask_path"]
+    record["prev_exists"] = info_dict["prev_exists"]
+    record["scene_token"] = info_dict["scene_token"]
+    return record
+
 
 def get_available_scenes(nusc: NuScenes) -> list[dict[str, Any]]:
     """Get available scenes from the input nuscenes class.
@@ -104,112 +222,71 @@ def _normalize_path(path: str, root_path: str) -> str:
     return path
 
 
-def obtain_sensor2top(
-    nusc: NuScenes,
-    sensor_token: str,
-    l2e_t: npt.NDArray[np.float64],
-    l2e_r_mat: npt.NDArray[np.float64],
-    e2g_t: npt.NDArray[np.float64],
-    e2g_r_mat: npt.NDArray[np.float64],
-    sensor_type: str = "lidar",
-) -> dict[str, Any]:
-    """Obtain the info with RT matrix from general sensor to Top LiDAR.
-
-    Args:
-        nusc: Dataset class in the nuScenes dataset.
-        sensor_token: Sample data token corresponding to the specific sensor type.
-        l2e_t: Translation from lidar to ego.
-        l2e_r_mat: Rotation matrix from lidar to ego.
-        e2g_t: Translation from ego to global.
-        e2g_r_mat: Rotation matrix from ego to global.
-        sensor_type: Sensor to calibrate.
-
-    Returns:
-        Sweep information after transformation.
-    """
-    sd_rec = nusc.get("sample_data", sensor_token)
-    cs_record = nusc.get("calibrated_sensor", sd_rec["calibrated_sensor_token"])
-    pose_record = nusc.get("ego_pose", sd_rec["ego_pose_token"])
-    data_path = str(nusc.get_sample_data_path(sd_rec["token"]))
-    data_path = _normalize_path(data_path, nusc.dataroot)
-    sweep = {
-        "data_path": data_path,
-        "type": sensor_type,
-        "sample_data_token": sd_rec["token"],
-        "sensor2ego_translation": cs_record["translation"],
-        "sensor2ego_rotation": cs_record["rotation"],
-        "ego2global_translation": pose_record["translation"],
-        "ego2global_rotation": pose_record["rotation"],
-        "timestamp": sd_rec["timestamp"],
-    }
-    l2e_r_s = sweep["sensor2ego_rotation"]
-    l2e_t_s = sweep["sensor2ego_translation"]
-    e2g_r_s = sweep["ego2global_rotation"]
-    e2g_t_s = sweep["ego2global_translation"]
-
-    l2e_r_s_mat = Quaternion(l2e_r_s).rotation_matrix
-    e2g_r_s_mat = Quaternion(e2g_r_s).rotation_matrix
-    R = (l2e_r_s_mat.T @ e2g_r_s_mat.T) @ (np.linalg.inv(e2g_r_mat).T @ np.linalg.inv(l2e_r_mat).T)
-    T = (l2e_t_s @ e2g_r_s_mat.T + e2g_t_s) @ (
-        np.linalg.inv(e2g_r_mat).T @ np.linalg.inv(l2e_r_mat).T
-    )
-    T -= (
-        e2g_t @ (np.linalg.inv(e2g_r_mat).T @ np.linalg.inv(l2e_r_mat).T)
-        + l2e_t @ np.linalg.inv(l2e_r_mat).T
-    )
-    sweep["sensor2lidar_rotation"] = R.T
-    sweep["sensor2lidar_translation"] = T
-    return sweep
-
-
 def _build_camera_info(
     nusc: NuScenes,
     cam_token: str,
-    l2e_t: npt.NDArray[np.float64],
-    l2e_r_mat: npt.NDArray[np.float64],
+    lidar2ego: npt.NDArray[np.float64],
+    ego2global_lidar: npt.NDArray[np.float64],
     root_path: str,
 ) -> dict[str, Any]:
     """Build unified camera info dict for a single camera channel.
 
+    ``lidar2cam`` is composed through BOTH ego poses to account for ego motion
+    between the LiDAR and camera capture timestamps (the mmdet3d convention),
+    rather than assuming a shared ego frame::
+
+        lidar2cam = inv(cam2ego) @ inv(ego2global_cam) @ ego2global_lidar @ lidar2ego
+
+    where ``ego2global_cam`` is the ego pose at the *camera* timestamp and
+    ``ego2global_lidar`` the ego pose at the *LiDAR* timestamp. Ignoring the two
+    distinct poses biases the translation by ~0.2 m, which misprojects LiDAR into
+    the image (matters for camera-lidar fusion and the calibration GT).
+
     Args:
         nusc: NuScenes API instance.
         cam_token: Sample data token for the camera.
-        l2e_t: Lidar-to-ego translation vector.
-        l2e_r_mat: Lidar-to-ego rotation matrix.
+        lidar2ego: 4x4 LiDAR-to-ego transform (from the LiDAR calibrated sensor).
+        ego2global_lidar: 4x4 ego-to-global transform at the LiDAR timestamp.
         root_path: Dataset root path used to normalize the image path.
 
     Returns:
-        Camera info dict with img_path, cam2img [3x3], lidar2cam [4x4],
-        cam2ego [4x4], timestamp, distortion_model, and distortion_coeffs.
-        NuScenes images are pre-undistorted so distortion fields are empty.
+        Camera info dict with img_path, cam2img [3x3], cam2ego [4x4],
+        lidar2cam [4x4], timestamp (seconds), sample_data_token,
+        distortion_coefficients, and distortion_model. NuScenes images are
+        pre-undistorted so the distortion fields are empty (an empty
+        ``distortion_coefficients`` makes ``UndistortImage`` a no-op).
     """
     sd_rec = nusc.get("sample_data", cam_token)
     cs_record = nusc.get("calibrated_sensor", sd_rec["calibrated_sensor_token"])
+    pose_record = nusc.get("ego_pose", sd_rec["ego_pose_token"])
     _, _, cam_intrinsic = nusc.get_sample_data(cam_token)
 
     img_path = _normalize_path(str(nusc.get_sample_data_path(sd_rec["token"])), root_path)
 
-    s2e_r_mat = Quaternion(cs_record["rotation"]).rotation_matrix
     cam2ego = np.eye(4, dtype=np.float64)
-    cam2ego[:3, :3] = s2e_r_mat
+    cam2ego[:3, :3] = Quaternion(cs_record["rotation"]).rotation_matrix
     cam2ego[:3, 3] = np.array(cs_record["translation"])
 
-    lidar2ego = np.eye(4, dtype=np.float64)
-    lidar2ego[:3, :3] = l2e_r_mat
-    lidar2ego[:3, 3] = np.array(l2e_t)
-    cam2lidar = np.linalg.inv(lidar2ego) @ cam2ego
-    lidar2cam = np.linalg.inv(cam2lidar)
+    ego2global_cam = np.eye(4, dtype=np.float64)
+    ego2global_cam[:3, :3] = Quaternion(pose_record["rotation"]).rotation_matrix
+    ego2global_cam[:3, 3] = np.array(pose_record["translation"])
+
+    # LiDAR frame -> ego(lidar t) -> global -> ego(cam t) -> camera frame.
+    lidar2cam = (
+        np.linalg.inv(cam2ego) @ np.linalg.inv(ego2global_cam) @ ego2global_lidar @ lidar2ego
+    )
 
     return {
         "img_path": img_path,
         "cam2img": cam_intrinsic.tolist()
         if isinstance(cam_intrinsic, np.ndarray)
         else list(cam_intrinsic),
-        "lidar2cam": lidar2cam.tolist(),
         "cam2ego": cam2ego.tolist(),
-        "timestamp": sd_rec["timestamp"],
+        "lidar2cam": lidar2cam.tolist(),
+        "timestamp": sd_rec["timestamp"] / 1e6,
+        "sample_data_token": sd_rec["token"],
+        "distortion_coefficients": [],
         "distortion_model": "",
-        "distortion_coeffs": [],
     }
 
 
@@ -256,8 +333,7 @@ class NuScenesDatasetGenerator(DatasetGenerator):
         # assert if kwargs contains version, max_sweeps, info_prefix
         version = kwargs.get("version", "v1.0-trainval")
         max_sweeps = kwargs.get("max_sweeps", 10)
-        tasks_joined = "_".join(sorted(tasks))
-        info_prefix = kwargs.get("info_prefix", f"nuscenes_{tasks_joined}")
+        info_prefix = kwargs.get("info_prefix", "nuscenes")
 
         logger.info(f"version: {version}, max_sweeps: {max_sweeps}, info_prefix: {info_prefix}")
         nusc = NuScenes(version=version, dataroot=root_path, verbose=True)
@@ -296,32 +372,35 @@ class NuScenesDatasetGenerator(DatasetGenerator):
         task_generators = [create_task(task_name) for task_name in tasks]
 
         train_nusc_infos, val_nusc_infos = self._fill_trainval_infos(
-            nusc, train_scenes, val_scenes, test, max_sweeps, task_generators, root_path
+            nusc, train_scenes, val_scenes, test, task_generators, root_path
         )
 
-        metadata = dict(version=version)
+        metainfo = {
+            "categories": dict(NUSCENES_CATEGORIES),
+            "dataset": "nuscenes",
+            "version": version,
+            "info_version": "1.1",
+        }
         os.makedirs(out_dir, exist_ok=True)
+
+        def _write(data_list: list[dict[str, Any]], split: str) -> None:
+            data = {"metainfo": metainfo, "data_list": data_list}
+            info_path = osp.join(out_dir, f"{info_prefix}_infos_{split}.pkl")
+            with open(info_path, "wb") as f:
+                pickle.dump(data, f)
+            logger.info(f"wrote {len(data_list)} samples to {info_path}")
 
         if test:
             logger.info("test sample: {}".format(len(train_nusc_infos)))
-            data = dict(infos=train_nusc_infos, metadata=metadata)
-            info_path = osp.join(out_dir, f"{info_prefix}_infos_test.pkl")
-            with open(info_path, "wb") as f:
-                pickle.dump(data, f)
+            _write(train_nusc_infos, "test")
         else:
             logger.info(
                 "train sample: {}, val sample: {}".format(
                     len(train_nusc_infos), len(val_nusc_infos)
                 )
             )
-            data = dict(infos=train_nusc_infos, metadata=metadata)
-            info_path = osp.join(out_dir, f"{info_prefix}_infos_train.pkl")
-            with open(info_path, "wb") as f:
-                pickle.dump(data, f)
-            data["infos"] = val_nusc_infos
-            info_val_path = osp.join(out_dir, f"{info_prefix}_infos_val.pkl")
-            with open(info_val_path, "wb") as f:
-                pickle.dump(data, f)
+            _write(train_nusc_infos, "train")
+            _write(val_nusc_infos, "val")
 
     def _fill_trainval_infos(
         self,
@@ -329,7 +408,6 @@ class NuScenesDatasetGenerator(DatasetGenerator):
         train_scenes: set[str],
         val_scenes: set[str],
         test: bool,
-        max_sweeps: int,
         task_generators: Sequence[Any],
         root_path: str,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -340,7 +418,6 @@ class NuScenesDatasetGenerator(DatasetGenerator):
             train_scenes: Set of training scene tokens.
             val_scenes: Set of validation scene tokens.
             test: Whether use the test mode.
-            max_sweeps: Max number of sweeps.
             task_generators: List of task annotation generators.
 
         Returns:
@@ -368,7 +445,11 @@ class NuScenesDatasetGenerator(DatasetGenerator):
                 "lidar_path": lidar_path,
                 "num_features": 5,
                 "token": sample["token"],
-                "sweeps": [],
+                # Temporal metadata for sequence models (e.g. StreamPETR): the scene
+                # id groups frames, and prev_exists is False at each scene's first
+                # keyframe so the temporal memory resets at sequence boundaries.
+                "scene_token": sample["scene_token"],
+                "prev_exists": sample["prev"] != "",
                 "images": {},
                 "lidar2ego_translation": cs_record["translation"],
                 "lidar2ego_rotation": cs_record["rotation"],
@@ -377,54 +458,27 @@ class NuScenesDatasetGenerator(DatasetGenerator):
                 "timestamp": sample["timestamp"],
             }
 
-            l2e_r = info["lidar2ego_rotation"]
-            l2e_t = info["lidar2ego_translation"]
-            e2g_r = info["ego2global_rotation"]
-            e2g_t = info["ego2global_translation"]
-            l2e_r_mat = Quaternion(l2e_r).rotation_matrix
-            e2g_r_mat = Quaternion(e2g_r).rotation_matrix
+            lidar2ego = np.eye(4, dtype=np.float64)
+            lidar2ego[:3, :3] = Quaternion(info["lidar2ego_rotation"]).rotation_matrix
+            lidar2ego[:3, 3] = np.array(info["lidar2ego_translation"])
+            ego2global_lidar = np.eye(4, dtype=np.float64)
+            ego2global_lidar[:3, :3] = Quaternion(info["ego2global_rotation"]).rotation_matrix
+            ego2global_lidar[:3, 3] = np.array(info["ego2global_translation"])
 
             for cam in self.camera_types:
                 cam_token = sample["data"][cam]
                 info["images"][cam] = _build_camera_info(
-                    nusc, cam_token, l2e_t, l2e_r_mat, root_path
+                    nusc, cam_token, lidar2ego, ego2global_lidar, root_path
                 )
-
-            sd_rec = nusc.get("sample_data", sample["data"]["LIDAR_TOP"])
-            sweeps = []
-            while len(sweeps) < max_sweeps:
-                if not sd_rec["prev"] == "":
-                    sweep = obtain_sensor2top(
-                        nusc,
-                        sd_rec["prev"],
-                        l2e_t,
-                        l2e_r_mat,
-                        e2g_t,
-                        e2g_r_mat,
-                        "lidar",
-                    )
-                    sweeps.append(sweep)
-                    sd_rec = nusc.get("sample_data", sd_rec["prev"])
-                else:
-                    break
-            info["sweeps"] = sweeps
 
             for task_gen in task_generators:
                 info = task_gen.process_sample(info, nusc, sample)
 
-            if "calibration_status_samples" in info:
-                calibration_samples = info.pop("calibration_status_samples")
-                for calib_sample in calibration_samples:
-                    calib_info = info.copy()
-                    calib_info.update(calib_sample)
-                    if sample["scene_token"] in train_scenes:
-                        train_nusc_infos.append(calib_info)
-                    else:
-                        val_nusc_infos.append(calib_info)
+            if sample["scene_token"] in train_scenes:
+                record = _to_unified_record(info, len(train_nusc_infos), NUSCENES_CATEGORIES)
+                train_nusc_infos.append(record)
             else:
-                if sample["scene_token"] in train_scenes:
-                    train_nusc_infos.append(info)
-                else:
-                    val_nusc_infos.append(info)
+                record = _to_unified_record(info, len(val_nusc_infos), NUSCENES_CATEGORIES)
+                val_nusc_infos.append(record)
 
         return train_nusc_infos, val_nusc_infos

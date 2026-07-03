@@ -30,13 +30,14 @@ class LoadSegAnnotations3D(BaseTransform):
 
     def __init__(
         self,
+        *,
         dtype: str = "uint8",
         label_mapping: dict[int, int] | None = None,
         max_label: int | None = None,
         class_mapping: dict[str, int] | None = None,
         ignore_index: int = -1,
     ) -> None:
-        """Initialize the segmentation annotation loader.
+        """Initialize the LoadSegAnnotations3D transform.
 
         Args:
             dtype: Raw label dtype stored on disk.
@@ -45,6 +46,15 @@ class LoadSegAnnotations3D(BaseTransform):
             class_mapping: Optional category-name to training-label mapping.
             ignore_index: Ignore label used for unknown categories.
         """
+        if (label_mapping is None) == (class_mapping is None):
+            raise ValueError(
+                "LoadSegAnnotations3D requires exactly one of 'label_mapping' "
+                "(raw-int -> train-label, e.g. nuScenes) or 'class_mapping' "
+                "(category-name -> train-label with per-sample "
+                "'pts_semantic_mask_categories', e.g. T4); "
+                f"got label_mapping={label_mapping is not None}, "
+                f"class_mapping={class_mapping is not None}."
+            )
         self.dtype = np.dtype(dtype)
         self.label_mapping = label_mapping
         self.max_label = max_label
@@ -69,7 +79,13 @@ class LoadSegAnnotations3D(BaseTransform):
         if idx_begin is not None and length is not None:
             labels = labels[idx_begin : idx_begin + length]
 
-        if self.class_mapping is not None and "pts_semantic_mask_categories" in input_dict:
+        if self.class_mapping is not None:
+            if "pts_semantic_mask_categories" not in input_dict:
+                raise KeyError(
+                    "LoadSegAnnotations3D was configured with 'class_mapping' but the sample "
+                    "has no 'pts_semantic_mask_categories' to remap from. Provide the per-sample "
+                    "categories, or configure 'label_mapping' for raw-integer masks."
+                )
             categories = input_dict["pts_semantic_mask_categories"]
             lookup_size = max(int(label) for label in categories.values()) + 1 if categories else 0
             lookup = np.full(lookup_size, fill_value=self.ignore_index, dtype=np.int64)
@@ -81,7 +97,7 @@ class LoadSegAnnotations3D(BaseTransform):
             valid = (labels >= 0) & (labels < lookup.shape[0])
             mapped[valid] = lookup[labels[valid]]
             labels = mapped
-        elif self.label_mapping is not None:
+        else:  # label_mapping is set (guaranteed exclusive by __init__)
             lookup_size = (
                 self.max_label + 1 if self.max_label is not None else max(self.label_mapping) + 1
             )

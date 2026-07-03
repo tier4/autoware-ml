@@ -15,6 +15,15 @@ class MeanAP(Metric[DetectionState]):
     """
 
     def evaluate(self, state: DetectionState, stage: EvalStage) -> dict[str, float]:
+        """Compute mean AP metrics for the accumulated detection state.
+
+        Args:
+            state: Detection state with cached match curves.
+            stage: Evaluation stage requesting the metrics.
+
+        Returns:
+            Mapping of metric names to scalar values.
+        """
         full = stage is EvalStage.TEST
         labels = state.labels(full)
         if not labels:

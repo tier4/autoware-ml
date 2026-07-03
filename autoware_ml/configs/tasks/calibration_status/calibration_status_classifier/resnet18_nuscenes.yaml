@@ -8,6 +8,6 @@ data_root: ${oc.env:AUTOWARE_ML_DATA_PATH}/nuscenes
 datamodule:
   _target_: autoware_ml.datamodule.nuscenes.calibration_status.NuscenesCalibrationDataModule
   data_root: ${data_root}
-  train_ann_file: ${data_root}/info/nuscenes_calibration_status_infos_train.pkl
-  val_ann_file: ${data_root}/info/nuscenes_calibration_status_infos_val.pkl
-  test_ann_file: ${data_root}/info/nuscenes_calibration_status_infos_test.pkl
+  train_ann_file: ${data_root}/nuscenes_infos_train.pkl
+  val_ann_file: ${data_root}/nuscenes_infos_val.pkl
+  test_ann_file: ${data_root}/nuscenes_infos_val.pkl

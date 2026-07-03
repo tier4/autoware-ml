@@ -172,7 +172,7 @@ class TransformsCompose:
     """
 
     def __init__(self, pipeline: Sequence["BaseTransform"] = ()):
-        """Initialize the transform pipeline.
+        """Initialize the transform composition.
 
         Args:
             pipeline: Ordered transforms applied to each input dictionary.

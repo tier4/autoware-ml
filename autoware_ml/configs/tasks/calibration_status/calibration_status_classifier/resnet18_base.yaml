@@ -3,23 +3,23 @@ defaults:
   - /defaults/default_runtime
   - _self_
 
+batch_size: 8
+num_workers: 8
+
 datamodule:
+  train_dataloader_cfg:
+    batch_size: ${batch_size}
+    num_workers: ${num_workers}
+    shuffle: true
+  val_dataloader_cfg:
+    batch_size: ${batch_size}
+    num_workers: ${num_workers}
+  test_dataloader_cfg:
+    batch_size: ${batch_size}
+    num_workers: ${num_workers}
   collation_map:
     fused_img: stack
     gt_calibration_status: stack
-  train_dataloader_cfg:
-    batch_size: 8
-    num_workers: 4
-    shuffle: true
-  val_dataloader_cfg:
-    batch_size: 8
-    num_workers: 4
-  test_dataloader_cfg:
-    batch_size: 8
-    num_workers: 4
-  predict_dataloader_cfg:
-    batch_size: 1
-    num_workers: 1
   train_transforms:
     pipeline:
       - _target_: autoware_ml.transforms.camera.loading.LoadImageFromFile
@@ -254,7 +254,7 @@ model:
     eps: 1e-8
   scheduler:
     _target_: torch.optim.lr_scheduler.CosineAnnealingLR
-    T_max: 20
+    T_max: 30
     eta_min: 1e-8
     last_epoch: -1
 

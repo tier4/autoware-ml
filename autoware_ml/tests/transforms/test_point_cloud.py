@@ -147,7 +147,7 @@ class TestPointCloudTransforms:
             "segment": np.arange(4, dtype=np.int64),
         }
 
-        output = RandomDropout(dropout_ratio=0.5, dropout_application_ratio=1.0)(sample)
+        output = RandomDropout(dropout_ratio=0.5, p=1.0)(sample)
 
         assert output["coord"].shape[0] == 2
         assert output["strength"].shape[0] == 2
@@ -159,7 +159,7 @@ class TestPointCloudTransforms:
             "strength": np.arange(4, dtype=np.float32).reshape(4, 1),
         }
 
-        output = RandomDropout(dropout_ratio=0.5, dropout_application_ratio=0.0)(sample)
+        output = RandomDropout(dropout_ratio=0.5, p=0.0)(sample)
 
         assert output["coord"].shape[0] == 4
         assert output["strength"].shape[0] == 4

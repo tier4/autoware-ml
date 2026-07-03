@@ -2,9 +2,8 @@
 
 ``Detection3DMetricSuite`` owns the per-frame prediction and ground-truth tensors
 as list states (so torchmetrics handles cross-GPU sync) and applies the GT
-filters at ``update`` time, so it never gathers point counts or string attributes
-across ranks. It knows nothing about which metrics run: it builds a
-``DetectionState`` (overall and per range) and hands it to the injected metrics.
+filters at ``update`` time. It knows nothing about which metrics run: it builds
+a ``DetectionState`` (overall and per range) and hands it to the injected metrics.
 """
 
 from __future__ import annotations
@@ -18,7 +17,6 @@ from autoware_ml.metrics.base import Metric, MetricRange, MetricSuite
 from autoware_ml.metrics.detection3d.matching import (
     clip_to_range,
     gt_keep_mask,
-    normalize_filter_attributes,
 )
 from autoware_ml.metrics.detection3d.structures import Detection3DSample, DetectionState
 
@@ -46,23 +44,17 @@ class Detection3DMetricSuite(MetricSuite[DetectionState]):
             MetricRange("0-121m", 0.0, 121.0),
         ),
         eval_class_range: dict[str, float] | None = None,
-        filter_attributes: list[tuple[str, str]] | None = None,
-        min_point_numbers: int = 0,
+        min_num_points: int = 0,
         **kwargs: Any,
     ) -> None:
         super().__init__(components=components, ranges=ranges, **kwargs)
         self.class_names = tuple(class_names) if class_names is not None else None
         self.thresholds = tuple(float(threshold) for threshold in thresholds)
         self.eval_class_range = eval_class_range
-        self.filter_attributes = filter_attributes
-        self.filter_set = normalize_filter_attributes(filter_attributes)
-        self.min_point_numbers = int(min_point_numbers)
+        self.min_num_points = int(min_num_points)
 
-        if (eval_class_range or filter_attributes) and not self.class_names:
-            raise ValueError(
-                "class_names must be provided when eval_class_range or filter_attributes are "
-                "configured."
-            )
+        if eval_class_range and not self.class_names:
+            raise ValueError("class_names must be provided when eval_class_range is configured.")
         self._warn_on_range_class_caps()
 
         self.add_state("pred_boxes", default=[], dist_reduce_fx=None)
@@ -93,7 +85,6 @@ class Detection3DMetricSuite(MetricSuite[DetectionState]):
         gt_boxes = eval_out["gt_boxes"]
         gt_labels = eval_out["gt_labels"]
         gt_num_points = eval_out.get("gt_num_points")
-        gt_attributes = eval_out.get("gt_attributes")
         if len(predictions) != len(gt_boxes) or len(predictions) != len(gt_labels):
             raise ValueError(
                 "Detection metric expects equal numbers of predictions, gt_boxes, and gt_labels."
@@ -109,16 +100,13 @@ class Detection3DMetricSuite(MetricSuite[DetectionState]):
                 if gt_num_points is not None
                 else None
             )
-            attributes = gt_attributes[i] if gt_attributes is not None else None
             keep = gt_keep_mask(
                 frame_boxes,
                 frame_labels,
                 num_points,
-                attributes,
                 self.class_names or (),
                 self.eval_class_range,
-                self.min_point_numbers,
-                self.filter_set,
+                self.min_num_points,
             )
 
             self.pred_boxes.append(prediction["bboxes_3d"].detach().to(dtype=torch.float32))
@@ -128,6 +116,15 @@ class Detection3DMetricSuite(MetricSuite[DetectionState]):
             self.gt_labels.append(frame_labels[keep])
 
     def state_for(self, metric_range: MetricRange | None) -> DetectionState:
+        """Build the detection state for the requested metric range.
+
+        Args:
+            metric_range: Optional radial range used to clip predictions and
+                ground truth before metric evaluation.
+
+        Returns:
+            Detection state consumed by the configured metric components.
+        """
         samples = [
             Detection3DSample(
                 pred_boxes=pred_boxes.cpu(),

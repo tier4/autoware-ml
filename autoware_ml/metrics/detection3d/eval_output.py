@@ -30,5 +30,4 @@ def detection_eval_output(
         "gt_boxes": batch["gt_boxes"],
         "gt_labels": batch["gt_labels"],
         "gt_num_points": batch.get("gt_num_points"),
-        "gt_attributes": batch.get("gt_attributes"),
     }

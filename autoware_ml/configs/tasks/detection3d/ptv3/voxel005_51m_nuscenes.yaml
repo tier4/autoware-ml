@@ -11,9 +11,6 @@ num_workers: 8
 
 dataset: ${nuscenes}
 
-# 0.05 m point grid over 51.2 m (2 * 51.2 / 0.05 = 2048), aligned with the
-# nuScenes PTv3 segmentation config. BEV head at stride 8 -> 0.4 m cells,
-# 2 * 51.2 / 0.4 = 256 BEV grid.
 grid_size: 0.05
 point_cloud_range: [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
 num_proposals: 200

@@ -1,54 +1,33 @@
 # @package _global_
 defaults:
   - /tasks/segmentation3d/ptv3/base
+  - /datasets/nuscenes/segmentation3d
+  - /datasets/nuscenes/lidar
   - _self_
 
-ignore_index: 16
-max_label: 31
-num_classes: 16
+batch_size: 16
+num_workers: 8
+
+dataset: ${nuscenes}
 grid_size: 0.05
 point_cloud_range: [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
 
-seg_label_mapping:
-  0: ${ignore_index}
-  1: ${ignore_index}
-  2: 6
-  3: 6
-  4: 6
-  5: ${ignore_index}
-  6: 6
-  7: ${ignore_index}
-  8: ${ignore_index}
-  9: 0
-  10: ${ignore_index}
-  11: ${ignore_index}
-  12: 7
-  13: ${ignore_index}
-  14: 1
-  15: 2
-  16: 2
-  17: 3
-  18: 4
-  19: ${ignore_index}
-  20: ${ignore_index}
-  21: 5
-  22: 8
-  23: 9
-  24: 10
-  25: 11
-  26: 12
-  27: 13
-  28: 14
-  29: ${ignore_index}
-  30: 15
-  31: ${ignore_index}
-
 datamodule:
   _target_: autoware_ml.datamodule.nuscenes.segmentation3d.NuscenesSegmentation3DDataModule
-  data_root: ${oc.env:AUTOWARE_ML_DATA_PATH}/nuscenes
+  data_root: ${dataset.data_root}
   train_ann_file: ${datamodule.data_root}/nuscenes_infos_train.pkl
   val_ann_file: ${datamodule.data_root}/nuscenes_infos_val.pkl
   test_ann_file: ${datamodule.data_root}/nuscenes_infos_val.pkl
+  train_dataloader_cfg:
+    batch_size: ${batch_size}
+    num_workers: ${num_workers}
+    shuffle: true
+  val_dataloader_cfg:
+    batch_size: ${batch_size}
+    num_workers: ${num_workers}
+  test_dataloader_cfg:
+    batch_size: ${batch_size}
+    num_workers: ${num_workers}
   train_transforms:
     _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
@@ -56,9 +35,9 @@ datamodule:
         load_dim: 5
         use_dim: [0, 1, 2, 3]
       - _target_: autoware_ml.transforms.segmentation3d.loading.LoadSegAnnotations3D
-        label_mapping: ${seg_label_mapping}
-        max_label: ${max_label}
-        ignore_index: ${ignore_index}
+        label_mapping: ${dataset.segmentation3d.seg_label_mapping}
+        max_label: ${dataset.segmentation3d.max_label}
+        ignore_index: ${dataset.segmentation3d.ignore_index}
       - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
       - _target_: autoware_ml.transforms.segmentation3d.formatting.PreparePointSegInput
       - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
@@ -90,9 +69,9 @@ datamodule:
         load_dim: 5
         use_dim: [0, 1, 2, 3]
       - _target_: autoware_ml.transforms.segmentation3d.loading.LoadSegAnnotations3D
-        label_mapping: ${seg_label_mapping}
-        max_label: ${max_label}
-        ignore_index: ${ignore_index}
+        label_mapping: ${dataset.segmentation3d.seg_label_mapping}
+        max_label: ${dataset.segmentation3d.max_label}
+        ignore_index: ${dataset.segmentation3d.ignore_index}
       - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
       - _target_: autoware_ml.transforms.segmentation3d.formatting.PreparePointSegInput
       - _target_: autoware_ml.transforms.common.copying.Copy
@@ -115,9 +94,9 @@ datamodule:
         load_dim: 5
         use_dim: [0, 1, 2, 3]
       - _target_: autoware_ml.transforms.segmentation3d.loading.LoadSegAnnotations3D
-        label_mapping: ${seg_label_mapping}
-        max_label: ${max_label}
-        ignore_index: ${ignore_index}
+        label_mapping: ${dataset.segmentation3d.seg_label_mapping}
+        max_label: ${dataset.segmentation3d.max_label}
+        ignore_index: ${dataset.segmentation3d.ignore_index}
       - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
       - _target_: autoware_ml.transforms.segmentation3d.formatting.PreparePointSegInput
       - _target_: autoware_ml.transforms.common.copying.Copy

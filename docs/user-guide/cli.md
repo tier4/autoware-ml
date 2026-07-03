@@ -96,9 +96,9 @@ autoware-ml deploy \
 
 ```bash
 autoware-ml deploy \
-    --config-name detection3d/ptv3/transhead_voxel012_122m_t4dataset_j6gen2 \
+    --config-name detection3d/ptv3/voxel012_122m_t4dataset_j6gen2 \
     --weights mlruns/segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt \
-    --weights mlruns/detection3d/ptv3/transhead_voxel012_122m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt
+    --weights mlruns/detection3d/ptv3/voxel012_122m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 ## test
@@ -120,6 +120,16 @@ autoware-ml test --config-name <config_path> --weights <path> [--weights <path> 
 autoware-ml test \
     --config-name <task>/<model>/<config> \
     --weights mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt
+```
+
+**Multi-head PTv3 detection example** (merge a pretrained PTv3 backbone
+checkpoint with a detection checkpoint):
+
+```bash
+autoware-ml test \
+    --config-name detection3d/ptv3/voxel012_122m_t4dataset_j6gen2 \
+    --weights mlruns/segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/detection3d/ptv3/voxel012_122m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 ## mlflow ui
@@ -166,7 +176,7 @@ running sessions, and stop the task.
 
 ```bash
 autoware-ml session start --name ptv3-train --cwd /workspace -- \
-    train --config-name segmentation3d/ptv3/voxel005_102m_nuscenes
+    train --config-name segmentation3d/ptv3/voxel005_51m_nuscenes
 ```
 
 Use `--raw` to run a non-`autoware-ml` command in the managed session:

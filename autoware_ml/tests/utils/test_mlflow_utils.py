@@ -26,10 +26,13 @@ from autoware_ml.utils.mlflow_helpers import (
     generate_artifact_location,
     generate_hydra_run_dir,
     generate_run_name,
-    load_run_metadata,
     load_run_context,
+    load_run_metadata,
+    log_config_params,
     prepare_run_context,
     resolve_tracking_uri,
+    sanitize_mlflow_param_key,
+    sanitize_mlflow_param_keys,
     write_run_metadata,
 )
 
@@ -116,6 +119,65 @@ class TestRunTags:
         assert logger_cfg.run_name == "train:resnet18_t4dataset_j6gen2:2026-03-17/09-00-00"
         assert logger_cfg.tags == {"stage": "train", "owner": "alice"}
         assert logger_cfg.tracking_uri.startswith("sqlite:///")
+
+
+class TestMlflowParamKeys:
+    """Tests for MLflow parameter key sanitization."""
+
+    def test_sanitize_mlflow_param_key_replaces_unsupported_label_characters(self) -> None:
+        key = "name_mapping/vehicle.emergency (ambulance & police)"
+
+        sanitized_key = sanitize_mlflow_param_key(key)
+
+        assert sanitized_key == "name_mapping/vehicle.emergency ambulance and police"
+
+    def test_sanitize_mlflow_param_keys_sanitizes_nested_mapping_keys(self) -> None:
+        params = {
+            "name_mapping": {
+                "vehicle.emergency (ambulance & police)": "car",
+            },
+        }
+
+        sanitized_params = sanitize_mlflow_param_keys(params)
+
+        assert sanitized_params == {
+            "name_mapping": {
+                "vehicle.emergency ambulance and police": "car",
+            },
+        }
+
+    def test_sanitize_mlflow_param_keys_rejects_key_collisions(self) -> None:
+        params = {"a&b": 1, "aandb": 2}  # cspell:ignore aandb
+
+        try:
+            sanitize_mlflow_param_keys(params)
+        except ValueError as exc:
+            assert "MLflow parameter key collision after sanitization" in str(exc)
+        else:
+            raise AssertionError("Expected ValueError for MLflow parameter key collision.")
+
+    def test_sanitize_mlflow_param_key_rejects_remaining_invalid_characters(self) -> None:
+        try:
+            sanitize_mlflow_param_key("bad@key")
+        except ValueError as exc:
+            assert "Invalid MLflow parameter key after sanitization" in str(exc)
+        else:
+            raise AssertionError("Expected ValueError for invalid MLflow parameter key.")
+
+    def test_log_config_params_logs_sanitized_keys(self, tmp_path: Path) -> None:
+        tracking_uri = f"sqlite:///{tmp_path / 'mlruns' / 'mlflow.db'}"
+        client = MlflowClient(tracking_uri=tracking_uri)
+        experiment_id = client.create_experiment("sanitize_keys")
+        run_id = client.create_run(experiment_id=experiment_id).info.run_id
+
+        log_config_params(
+            client,
+            run_id,
+            {"name_mapping": {"vehicle.emergency (ambulance & police)": "car"}},
+        )
+
+        run = client.get_run(run_id)
+        assert run.data.params["name_mapping.vehicle.emergency ambulance and police"] == "car"
 
 
 class TestArtifactLayout:

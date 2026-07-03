@@ -1,0 +1,163 @@
+# @package _global_
+defaults:
+  - /tasks/multi/ptv3/tiny
+  - /datasets/t4dataset/detection3d
+  - /datasets/t4dataset/segmentation3d
+  - /datasets/t4dataset/lidar
+  - _self_
+
+dataset: ${t4dataset}
+
+point_cloud_range: [-122.88, -122.88, -3.0, 122.88, 122.88, 5.0]
+grid_size: 0.12
+head_voxel_size: [0.96, 0.96, 8.0]
+
+num_proposals: 500
+
+segmentation_class_mapping: ${dataset.segmentation3d.class_mapping}
+
+batch_size: 8
+num_workers: 8
+
+datamodule:
+  _target_: autoware_ml.datamodule.t4dataset.segdet.T4SegmentationDetection3DDataModule
+  filter_attributes: ${dataset.detection3d.filter_attributes}
+  use_valid_flag: false
+  train_frame_sampling:
+    repeat_sampling_factor: 0.30
+    object_bev_range: [-122.88, -122.88, 122.88, 122.88]
+    low_pedestrian_height_threshold: 1.5
+    low_pedestrian_bev_range: [-50.0, -50.0, 50.0, 50.0]
+  train_dataloader_cfg:
+    batch_size: ${batch_size}
+    num_workers: ${num_workers}
+    shuffle: true
+  val_dataloader_cfg:
+    batch_size: ${batch_size}
+    num_workers: ${num_workers}
+  test_dataloader_cfg:
+    batch_size: ${batch_size}
+    num_workers: ${num_workers}
+  train_ann_file: ${datamodule.data_root}/info/segdet3d/t4dataset_j6gen2_segdet3d_infos_train.pkl
+  val_ann_file: ${datamodule.data_root}/info/segdet3d/t4dataset_j6gen2_segdet3d_infos_val.pkl
+  test_ann_file: ${datamodule.data_root}/info/segdet3d/t4dataset_j6gen2_segdet3d_infos_test.pkl
+  train_transforms:
+    _target_: autoware_ml.transforms.base.TransformsCompose
+    pipeline:
+      - _target_: autoware_ml.transforms.boxes3d.merge.MergeObjects3D
+        merge_objects: ${dataset.detection3d.merge_objects}
+        name_mapping: ${dataset.detection3d.name_mapping}
+      - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
+        name_mapping: ${dataset.detection3d.name_mapping}
+        filter_attributes: ${dataset.detection3d.filter_attributes}
+        use_valid_flag: false
+      - _target_: autoware_ml.transforms.segmentation3d.loading.LoadSegAnnotations3D
+        class_mapping: ${segmentation_class_mapping}
+        ignore_index: ${dataset.segmentation3d.ignore_index}
+      - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
+        sweeps_num: 1
+        load_dim: 5
+        use_dim: [0, 1, 2, 3]
+        remove_close: true
+      - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
+      - _target_: autoware_ml.transforms.segmentation3d.formatting.PreparePointSegInput
+      - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
+        rot_range: [-1.571, 1.571]
+        scale_ratio_range: [0.8, 1.2]
+        translation_std: [1.0, 1.0, 0.2]
+      - _target_: autoware_ml.transforms.point_cloud.geometry.RandomFlip3D
+        flip_ratio_bev_horizontal: 0.5
+        flip_ratio_bev_vertical: 0.5
+      - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
+        point_cloud_range: ${point_cloud_range}
+      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeFilter
+        point_cloud_range: ${point_cloud_range}
+      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
+        range_radius: [0.0, 60.0]
+        min_num_points: ${dataset.detection3d.train_min_points_near}
+      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
+        range_radius: [60.0, 130.0]
+        min_num_points: ${dataset.detection3d.train_min_points_far}
+      - _target_: autoware_ml.transforms.common.copying.Copy
+        keys_dict: { segment: origin_segment }
+      - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
+        grid_size: ${grid_size}
+        point_cloud_range: ${point_cloud_range}
+        hash_type: fnv
+        mode: train
+        keys: [coord, strength, segment]
+        return_inverse: true
+        return_grid_coord: true
+      - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
+        keys: [coord, strength]
+        output_key: feat
+  val_transforms: ${datamodule.test_transforms}
+  test_transforms:
+    _target_: autoware_ml.transforms.base.TransformsCompose
+    pipeline:
+      - _target_: autoware_ml.transforms.boxes3d.merge.MergeObjects3D
+        merge_objects: ${dataset.detection3d.merge_objects}
+        name_mapping: ${dataset.detection3d.name_mapping}
+      - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
+        name_mapping: ${dataset.detection3d.name_mapping}
+        filter_attributes: ${dataset.detection3d.filter_attributes}
+        use_valid_flag: false
+      - _target_: autoware_ml.transforms.segmentation3d.loading.LoadSegAnnotations3D
+        class_mapping: ${segmentation_class_mapping}
+        ignore_index: ${dataset.segmentation3d.ignore_index}
+      - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
+        sweeps_num: 1
+        load_dim: 5
+        use_dim: [0, 1, 2, 3]
+        remove_close: true
+      - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
+      - _target_: autoware_ml.transforms.segmentation3d.formatting.PreparePointSegInput
+      - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
+        point_cloud_range: ${point_cloud_range}
+      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
+        range_radius: [0.0, 130.0]
+        min_num_points: 1
+      - _target_: autoware_ml.transforms.common.copying.Copy
+        keys_dict: { segment: origin_segment }
+      - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
+        grid_size: ${grid_size}
+        point_cloud_range: ${point_cloud_range}
+        hash_type: fnv
+        mode: test
+        keys: [coord, strength, segment]
+        return_inverse: true
+        return_grid_coord: true
+      - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
+        keys: [coord, strength]
+        output_key: feat
+  predict_transforms:
+    _target_: autoware_ml.transforms.base.TransformsCompose
+    pipeline:
+      - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
+        sweeps_num: 1
+        load_dim: 5
+        use_dim: [0, 1, 2, 3]
+        remove_close: true
+      - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
+      - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
+        point_cloud_range: ${point_cloud_range}
+      - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
+        grid_size: ${grid_size}
+        point_cloud_range: ${point_cloud_range}
+        hash_type: fnv
+        mode: test
+        keys: [coord, strength]
+        return_inverse: true
+        return_grid_coord: true
+      - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
+        keys: [coord, strength]
+        output_key: feat
+
+model:
+  bev_projector:
+    output_shape: [256, 256]
+    bev_stride: 8
+  bbox_head:
+    nms_min_radius: 1.0
+    bbox_coder:
+      post_center_range: [-132.88, -132.88, -5.0, 132.88, 132.88, 12.0]
