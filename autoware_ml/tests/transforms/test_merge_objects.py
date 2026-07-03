@@ -107,6 +107,14 @@ def test_noop_without_rules() -> None:
     assert out["instances"] == instances
 
 
+def test_missing_raw_name_raises() -> None:
+    instance = _instance([0, 0, 0, 4, 2, 2, 0], "truck")
+    instance.pop("gt_nusc_name")
+
+    with pytest.raises(KeyError, match="gt_nusc_name"):
+        _merge().transform({"instances": [instance]})
+
+
 def test_hydra_list_config_rules_do_not_require_truthiness() -> None:
     transform = MergeObjects3D(
         merge_objects=OmegaConf.create([["truck", ["truck", "trailer"]]]),

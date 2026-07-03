@@ -91,8 +91,7 @@ datamodule:
       - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
         keys: [coord, strength]
         output_key: feat
-  val_transforms: ${datamodule.test_transforms}
-  test_transforms:
+  val_transforms:
     _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
       - _target_: autoware_ml.transforms.boxes3d.merge.MergeObjects3D
@@ -130,6 +129,7 @@ datamodule:
       - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
         keys: [coord, strength]
         output_key: feat
+  test_transforms: ${datamodule.val_transforms}
   predict_transforms:
     _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:

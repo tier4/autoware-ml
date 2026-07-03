@@ -170,4 +170,4 @@ def log_hyperparameters(cfg: DictConfig, trainer_logger: Logger | None, trainer:
         return
 
     params = OmegaConf.to_container(cfg, resolve=True)
-    trainer.logger.log_hyperparams(sanitize_mlflow_param_keys(params))
+    trainer_logger.log_hyperparams(sanitize_mlflow_param_keys(params))

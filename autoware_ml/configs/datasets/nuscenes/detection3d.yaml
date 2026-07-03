@@ -17,14 +17,14 @@ name_mapping:
   car: car
   truck: truck
   construction_vehicle: truck
-  trailer: trailer
+  # trailer: trailer
   bus: bus
   motorcycle: bicycle
   bicycle: bicycle
   pedestrian: pedestrian
   traffic_cone: traffic_cone
   barrier: barrier
-merge_objects: [[truck, [truck, trailer]]]
+# merge_objects: [[truck, [truck, trailer]]]  # TODO: support objects merge for nuscenes
 filter_attributes: []
 use_valid_flag: true
 eval_class_range:

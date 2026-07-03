@@ -19,18 +19,6 @@ datamodule:
     origin_segment: concat
     origin_coord: concat
     feat: concat
-  train_transforms:
-    _target_: autoware_ml.transforms.base.TransformsCompose
-    pipeline: []
-  val_transforms:
-    _target_: autoware_ml.transforms.base.TransformsCompose
-    pipeline: []
-  test_transforms:
-    _target_: autoware_ml.transforms.base.TransformsCompose
-    pipeline: []
-  predict_transforms:
-    _target_: autoware_ml.transforms.base.TransformsCompose
-    pipeline: []
 
 model:
   _target_: autoware_ml.models.segmentation3d.ptv3.PTv3SegmentationModel

@@ -42,9 +42,6 @@ datamodule:
   train_transforms:
     _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
-      - _target_: autoware_ml.transforms.boxes3d.merge.MergeObjects3D
-        merge_objects: ${dataset.detection3d.merge_objects}
-        name_mapping: ${dataset.detection3d.name_mapping}
       - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
         name_mapping: ${dataset.detection3d.name_mapping}
       - _target_: autoware_ml.transforms.segmentation3d.loading.LoadSegAnnotations3D
@@ -82,13 +79,9 @@ datamodule:
       - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
         keys: [coord, strength]
         output_key: feat
-  val_transforms: ${datamodule.test_transforms}
-  test_transforms:
+  val_transforms:
     _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
-      - _target_: autoware_ml.transforms.boxes3d.merge.MergeObjects3D
-        merge_objects: ${dataset.detection3d.merge_objects}
-        name_mapping: ${dataset.detection3d.name_mapping}
       - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
         name_mapping: ${dataset.detection3d.name_mapping}
       - _target_: autoware_ml.transforms.segmentation3d.loading.LoadSegAnnotations3D
@@ -117,6 +110,7 @@ datamodule:
       - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
         keys: [coord, strength]
         output_key: feat
+  test_transforms: ${datamodule.val_transforms}
   predict_transforms:
     _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:

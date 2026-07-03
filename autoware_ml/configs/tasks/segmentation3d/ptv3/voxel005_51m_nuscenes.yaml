@@ -87,31 +87,7 @@ datamodule:
       - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
         keys: [coord, strength]
         output_key: feat
-  test_transforms:
-    _target_: autoware_ml.transforms.base.TransformsCompose
-    pipeline:
-      - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
-        load_dim: 5
-        use_dim: [0, 1, 2, 3]
-      - _target_: autoware_ml.transforms.segmentation3d.loading.LoadSegAnnotations3D
-        label_mapping: ${dataset.segmentation3d.seg_label_mapping}
-        max_label: ${dataset.segmentation3d.max_label}
-        ignore_index: ${dataset.segmentation3d.ignore_index}
-      - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
-      - _target_: autoware_ml.transforms.segmentation3d.formatting.PreparePointSegInput
-      - _target_: autoware_ml.transforms.common.copying.Copy
-        keys_dict: { segment: origin_segment, coord: origin_coord }
-      - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
-        grid_size: ${grid_size}
-        point_cloud_range: ${point_cloud_range}
-        hash_type: fnv
-        mode: test
-        keys: [coord, strength, segment]
-        return_inverse: true
-        return_grid_coord: true
-      - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
-        keys: [coord, strength]
-        output_key: feat
+  test_transforms: ${datamodule.val_transforms}
   predict_transforms:
     _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:

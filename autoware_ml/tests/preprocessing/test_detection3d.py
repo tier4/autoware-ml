@@ -254,6 +254,20 @@ class TestPointPillarPreprocessor:
         assert outputs["voxels"].shape[0] == 2
         assert set(outputs["voxel_coords"][:, 0].tolist()) == {0, 2}
 
+    def test_empty_batch_returns_empty_pillar_tensors(self) -> None:
+        preprocessor = PointPillarPreprocessor(
+            voxel_size=[1.0, 1.0, 4.0],
+            point_cloud_range=[0.0, 0.0, -2.0, 4.0, 4.0, 2.0],
+            max_num_points=5,
+            max_voxels=10,
+        )
+
+        outputs = preprocessor({"points": []})
+
+        assert outputs["voxels"].shape == (0, 5, 0)
+        assert outputs["num_points"].shape == (0,)
+        assert outputs["voxel_coords"].shape == (0, 4)
+
     def test_passthrough_of_existing_keys(self) -> None:
         preprocessor = PointPillarPreprocessor(
             voxel_size=[1.0, 1.0, 4.0],

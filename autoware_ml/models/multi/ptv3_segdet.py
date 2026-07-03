@@ -195,11 +195,11 @@ class PTv3SegDetModel(PTv3BaseModel):
     def build_eval_output(
         self, batch: Mapping[str, Any], outputs: dict[str, Any]
     ) -> dict[str, Any]:
-        """Produce detection and segmentation eval data for both task metrics."""
+        """Produce detection and original-point segmentation eval data."""
         eval_out = detection_eval_output(self.bbox_head.predict(outputs["det_outputs"]), batch)
-        eval_out["seg_pred_labels"] = outputs["seg_logits"].argmax(dim=1)
-        eval_out["seg_target_labels"] = batch["segment"].long()
-        eval_out["seg_coord"] = batch["coord"]
+        eval_out["seg_pred_labels"] = outputs["seg_logits"].argmax(dim=1)[batch["inverse"].long()]
+        eval_out["seg_target_labels"] = batch["origin_segment"].long()
+        eval_out["seg_coord"] = batch["origin_coord"]
         return eval_out
 
     def get_export_output_names(self) -> list[str]:

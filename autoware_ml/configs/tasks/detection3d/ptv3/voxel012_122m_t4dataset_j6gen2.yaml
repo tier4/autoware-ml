@@ -63,6 +63,58 @@ datamodule:
       - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
         keys: [coord, strength]
         output_key: feat
+  val_transforms:
+    _target_: autoware_ml.transforms.base.TransformsCompose
+    pipeline:
+      - _target_: autoware_ml.transforms.boxes3d.merge.MergeObjects3D
+        merge_objects: ${dataset.detection3d.merge_objects}
+        name_mapping: ${dataset.detection3d.name_mapping}
+      - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
+        name_mapping: ${dataset.detection3d.name_mapping}
+        filter_attributes: ${dataset.detection3d.filter_attributes}
+        use_valid_flag: ${dataset.detection3d.use_valid_flag}
+      - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
+        sweeps_num: ${val_sweeps_num}
+        load_dim: 5
+        use_dim: [0, 1, 2, 3]
+        remove_close: true
+      - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
+      - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
+        point_cloud_range: ${point_cloud_range}
+      - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
+        grid_size: ${grid_size}
+        point_cloud_range: ${point_cloud_range}
+        hash_type: fnv
+        mode: test
+        keys: [coord, strength]
+        return_inverse: true
+        return_grid_coord: true
+      - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
+        keys: [coord, strength]
+        output_key: feat
+  test_transforms: ${datamodule.val_transforms}
+  predict_transforms:
+    _target_: autoware_ml.transforms.base.TransformsCompose
+    pipeline:
+      - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
+        sweeps_num: ${val_sweeps_num}
+        load_dim: 5
+        use_dim: [0, 1, 2, 3]
+        remove_close: true
+      - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
+      - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
+        point_cloud_range: ${point_cloud_range}
+      - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
+        grid_size: ${grid_size}
+        point_cloud_range: ${point_cloud_range}
+        hash_type: fnv
+        mode: test
+        keys: [coord, strength]
+        return_inverse: true
+        return_grid_coord: true
+      - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
+        keys: [coord, strength]
+        output_key: feat
   train_frame_sampling:
     object_bev_range: [-122.88, -122.88, 122.88, 122.88]
   train_dataloader_cfg:

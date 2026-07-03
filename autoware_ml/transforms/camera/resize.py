@@ -102,28 +102,32 @@ class ResizeMultiviewImages(BaseTransform):
 
     def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
         """Resize multiview images and scale intrinsics accordingly."""
-        images = input_dict["img"]
+        images, format_info = as_hwc_image_list(input_dict["img"])
         intrinsics = input_dict["camera_intrinsics"].copy()
         target_height, target_width = self.target_size
+        intrinsics_was_single = intrinsics.ndim == 2
+        if intrinsics_was_single:
+            intrinsics = intrinsics[None, ...]
 
         resized_images = []
         for camera_index, image in enumerate(images):
-            _, source_height, source_width = image.shape
+            source_height, source_width = image.shape[:2]
             scale_x = target_width / source_width
             scale_y = target_height / source_height
 
-            resized = cv2.resize(np.transpose(image, (1, 2, 0)), (target_width, target_height))
-            resized_images.append(np.transpose(resized, (2, 0, 1)))
+            resized = cv2.resize(image, (target_width, target_height))
+            resized_images.append(resized)
 
             intrinsics[camera_index, 0, 0] *= scale_x
             intrinsics[camera_index, 1, 1] *= scale_y
             intrinsics[camera_index, 0, 2] *= scale_x
             intrinsics[camera_index, 1, 2] *= scale_y
 
-        input_dict["img"] = np.stack(resized_images, axis=0).astype(np.float32)
-        input_dict["camera_intrinsics"] = intrinsics
+        input_dict["img"] = restore_image_container(input_dict["img"], resized_images, format_info)
+        input_dict["camera_intrinsics"] = intrinsics[0] if intrinsics_was_single else intrinsics
         if "lidar2img" in input_dict:
-            input_dict["lidar2img"] = intrinsics @ input_dict["lidar2cam"]
+            lidar2cam = input_dict["lidar2cam"]
+            input_dict["lidar2img"] = input_dict["camera_intrinsics"] @ lidar2cam
         return input_dict
 
 

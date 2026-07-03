@@ -70,7 +70,19 @@ class PointPillarPreprocessor(nn.Module):
             - ``"voxel_coords"`` - pillar coordinates ``(total_pillars, 4)`` in
               ``[batch, z, y, x]`` order, ``dtype=torch.int32``.
         """
-        device = batch_inputs_dict["points"][0].device
+        points_list = batch_inputs_dict["points"]
+        if not points_list:
+            outputs = dict(batch_inputs_dict)
+            outputs["voxels"] = self.voxel_size.new_zeros((0, self.max_num_points, 0))
+            outputs["num_points"] = torch.zeros(
+                (0,), device=self.voxel_size.device, dtype=torch.int32
+            )
+            outputs["voxel_coords"] = torch.zeros(
+                (0, 4), device=self.voxel_size.device, dtype=torch.int32
+            )
+            return outputs
+
+        device = points_list[0].device
         voxel_size = self.voxel_size.to(device=device)
         point_cloud_range = self.point_cloud_range.to(device=device)
 
@@ -78,7 +90,7 @@ class PointPillarPreprocessor(nn.Module):
         batch_num_points: list[torch.Tensor] = []
         batch_coords: list[torch.Tensor] = []
 
-        for batch_index, points in enumerate(batch_inputs_dict["points"]):
+        for batch_index, points in enumerate(points_list):
             voxels, coords, num_points = hard_voxelize(
                 points, voxel_size, point_cloud_range, self.max_num_points, self.max_voxels
             )

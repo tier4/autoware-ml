@@ -139,7 +139,7 @@ def hard_voxelize(
     num_points = torch.zeros(M, dtype=torch.int32, device=device)
     num_points.scatter_add_(
         0,
-        valid_voxel_ids.to(torch.int32),
+        valid_voxel_ids,
         torch.ones(valid_voxel_ids.shape[0], dtype=torch.int32, device=device),
     )
 

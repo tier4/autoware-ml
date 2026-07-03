@@ -239,7 +239,9 @@ def sanitize_mlflow_param_key(key: str) -> str:
     for source, target in MLFLOW_PARAM_KEY_REPLACEMENTS:
         sanitized_key = sanitized_key.replace(source, target)
     if MLFLOW_PARAM_KEY_PATTERN.fullmatch(sanitized_key) is None:
-        raise ValueError(f"Invalid MLflow parameter key after sanitization: {key}")
+        raise ValueError(
+            f"Invalid MLflow parameter key after sanitization: {sanitized_key} (original: {key})"
+        )
     return sanitized_key
 
 

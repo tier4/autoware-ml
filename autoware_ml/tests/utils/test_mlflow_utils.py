@@ -161,6 +161,8 @@ class TestMlflowParamKeys:
             sanitize_mlflow_param_key("bad@key")
         except ValueError as exc:
             assert "Invalid MLflow parameter key after sanitization" in str(exc)
+            assert "bad@key" in str(exc)
+            assert "original: bad@key" in str(exc)
         else:
             raise AssertionError("Expected ValueError for invalid MLflow parameter key.")
 

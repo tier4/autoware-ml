@@ -151,9 +151,66 @@ def _to_unified_record(
     }
     if "pts_semantic_mask_path" in info_dict:
         record["pts_semantic_mask_path"] = info_dict["pts_semantic_mask_path"]
+    if "sweeps" in info_dict:
+        record["sweeps"] = info_dict["sweeps"]
     record["prev_exists"] = info_dict["prev_exists"]
     record["scene_token"] = info_dict["scene_token"]
     return record
+
+
+def _build_lidar_sweeps(
+    nusc: NuScenes,
+    lidar_sample_data: dict[str, Any],
+    current_lidar2ego: npt.NDArray[np.float64],
+    current_ego2global: npt.NDArray[np.float64],
+    root_path: str,
+    max_sweeps: int,
+) -> list[dict[str, Any]]:
+    """Build historical LiDAR sweep metadata in the current LiDAR frame.
+
+    Args:
+        nusc: NuScenes API instance.
+        lidar_sample_data: Current frame LIDAR_TOP sample_data record.
+        current_lidar2ego: Current LiDAR-to-ego transform.
+        current_ego2global: Current ego-to-global transform.
+        root_path: Dataset root path used to normalize lidar paths.
+        max_sweeps: Maximum number of sweeps including the current frame.
+
+    Returns:
+        Historical sweep records ordered from nearest to oldest.
+    """
+    current_global_from_lidar = current_ego2global @ current_lidar2ego
+    current_lidar_from_global = np.linalg.inv(current_global_from_lidar)
+    sweeps: list[dict[str, Any]] = []
+    sweep_token = lidar_sample_data["prev"]
+    for _ in range(max(0, max_sweeps - 1)):
+        if not sweep_token:
+            break
+        sweep_sd = nusc.get("sample_data", sweep_token)
+        sweep_cs = nusc.get("calibrated_sensor", sweep_sd["calibrated_sensor_token"])
+        sweep_pose = nusc.get("ego_pose", sweep_sd["ego_pose_token"])
+
+        sweep_lidar2ego = np.eye(4, dtype=np.float64)
+        sweep_lidar2ego[:3, :3] = Quaternion(sweep_cs["rotation"]).rotation_matrix
+        sweep_lidar2ego[:3, 3] = np.asarray(sweep_cs["translation"], dtype=np.float64)
+        sweep_ego2global = np.eye(4, dtype=np.float64)
+        sweep_ego2global[:3, :3] = Quaternion(sweep_pose["rotation"]).rotation_matrix
+        sweep_ego2global[:3, 3] = np.asarray(sweep_pose["translation"], dtype=np.float64)
+
+        current_lidar_from_sweep = current_lidar_from_global @ sweep_ego2global @ sweep_lidar2ego
+        sweeps.append(
+            {
+                "lidar_path": _normalize_path(
+                    str(nusc.get_sample_data_path(sweep_token)), root_path
+                ),
+                "sample_data_token": sweep_token,
+                "sensor2lidar_rotation": current_lidar_from_sweep[:3, :3].astype(np.float32),
+                "sensor2lidar_translation": current_lidar_from_sweep[:3, 3].astype(np.float32),
+                "timestamp": sweep_sd["timestamp"],
+            }
+        )
+        sweep_token = sweep_sd["prev"]
+    return sweeps
 
 
 def get_available_scenes(nusc: NuScenes) -> list[dict[str, Any]]:
@@ -372,7 +429,7 @@ class NuScenesDatasetGenerator(DatasetGenerator):
         task_generators = [create_task(task_name) for task_name in tasks]
 
         train_nusc_infos, val_nusc_infos = self._fill_trainval_infos(
-            nusc, train_scenes, val_scenes, test, task_generators, root_path
+            nusc, train_scenes, val_scenes, test, task_generators, root_path, max_sweeps
         )
 
         metainfo = {
@@ -410,6 +467,7 @@ class NuScenesDatasetGenerator(DatasetGenerator):
         test: bool,
         task_generators: Sequence[Any],
         root_path: str,
+        max_sweeps: int,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Generate the train/val infos from the raw data.
 
@@ -464,6 +522,9 @@ class NuScenesDatasetGenerator(DatasetGenerator):
             ego2global_lidar = np.eye(4, dtype=np.float64)
             ego2global_lidar[:3, :3] = Quaternion(info["ego2global_rotation"]).rotation_matrix
             ego2global_lidar[:3, 3] = np.array(info["ego2global_translation"])
+            info["sweeps"] = _build_lidar_sweeps(
+                nusc, sd_rec, lidar2ego, ego2global_lidar, root_path, max_sweeps
+            )
 
             for cam in self.camera_types:
                 cam_token = sample["data"][cam]

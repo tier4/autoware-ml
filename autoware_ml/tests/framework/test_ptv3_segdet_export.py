@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -44,6 +45,17 @@ EXPECTED_PTV3_INPUT_NAMES = [
 ]
 
 
+class _DummyBBoxHead:
+    def predict(self, det_outputs: object) -> list[dict[str, torch.Tensor]]:
+        return [
+            {
+                "bboxes_3d": torch.zeros((0, 9), dtype=torch.float32),
+                "scores_3d": torch.zeros((0,), dtype=torch.float32),
+                "labels_3d": torch.zeros((0,), dtype=torch.long),
+            }
+        ]
+
+
 def _save_segmentation_checkpoint(tmp_path: Path) -> Path:
     segmentation_model = PTv3SegmentationModel(
         backbone=build_ptv3_backbone(),
@@ -57,6 +69,41 @@ def _save_segmentation_checkpoint(tmp_path: Path) -> Path:
     checkpoint_path = tmp_path / "ptv3_segmentation.ckpt"
     torch.save({"state_dict": segmentation_model.state_dict()}, checkpoint_path)
     return checkpoint_path
+
+
+def test_ptv3_segdet_eval_output_scatters_segmentation_to_original_points() -> None:
+    model = SimpleNamespace(bbox_head=_DummyBBoxHead())
+    outputs = {
+        "det_outputs": object(),
+        "seg_logits": torch.tensor(
+            [
+                [3.0, 0.0],
+                [0.0, 3.0],
+            ],
+            dtype=torch.float32,
+        ),
+    }
+    batch = {
+        "gt_boxes": [torch.zeros((0, 9), dtype=torch.float32)],
+        "gt_labels": [torch.zeros((0,), dtype=torch.long)],
+        "inverse": torch.tensor([0, 1, 1, 0], dtype=torch.long),
+        "origin_segment": torch.tensor([0, 1, 1, 0], dtype=torch.long),
+        "origin_coord": torch.tensor(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 1.0, 0.0],
+                [2.0, 2.0, 0.0],
+                [3.0, 3.0, 0.0],
+            ],
+            dtype=torch.float32,
+        ),
+    }
+
+    eval_out = PTv3SegmentationDetectionExportModel.build_eval_output(model, batch, outputs)
+
+    assert eval_out["seg_pred_labels"].tolist() == [0, 1, 1, 0]
+    assert torch.equal(eval_out["seg_target_labels"], batch["origin_segment"])
+    assert torch.equal(eval_out["seg_coord"], batch["origin_coord"])
 
 
 def _save_detection_checkpoint(
