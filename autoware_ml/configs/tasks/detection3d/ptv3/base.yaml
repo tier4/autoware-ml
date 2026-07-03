@@ -126,7 +126,7 @@ datamodule:
         rot_range: [-1.571, 1.571]
         scale_ratio_range: [0.8, 1.2]
         translation_std: [1.0, 1.0, 0.2]
-      - _target_: autoware_ml.transforms.point_cloud.geometry.RandomFlip
+      - _target_: autoware_ml.transforms.point_cloud.geometry.RandomFlip3D
         flip_ratio_bev_horizontal: 0.5
         flip_ratio_bev_vertical: 0.5
       - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter

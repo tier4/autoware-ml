@@ -63,10 +63,10 @@ datamodule:
         label_mapping: ${seg_label_mapping}
         max_label: ${max_label}
         ignore_index: ${ignore_index}
-      - _target_: autoware_ml.transforms.point_cloud.scene.RandomFlip3D
+      - _target_: autoware_ml.transforms.point_cloud.geometry.RandomFlip3D
         flip_ratio_bev_horizontal: 0.5
         flip_ratio_bev_vertical: 0.5
-      - _target_: autoware_ml.transforms.point_cloud.scene.GlobalRotScaleTrans
+      - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
         rot_range: [-3.1415926, 3.1415926]
         scale_ratio_range: [0.95, 1.05]
         translation_std: [0.1, 0.1, 0.1]
@@ -86,10 +86,10 @@ datamodule:
               label_mapping: ${seg_label_mapping}
               max_label: ${max_label}
               ignore_index: ${ignore_index}
-            - _target_: autoware_ml.transforms.point_cloud.scene.RandomFlip3D
+            - _target_: autoware_ml.transforms.point_cloud.geometry.RandomFlip3D
               flip_ratio_bev_horizontal: 0.5
               flip_ratio_bev_vertical: 0.5
-            - _target_: autoware_ml.transforms.point_cloud.scene.GlobalRotScaleTrans
+            - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
               rot_range: [-3.1415926, 3.1415926]
               scale_ratio_range: [0.95, 1.05]
               translation_std: [0.1, 0.1, 0.1]
@@ -106,10 +106,10 @@ datamodule:
               label_mapping: ${seg_label_mapping}
               max_label: ${max_label}
               ignore_index: ${ignore_index}
-            - _target_: autoware_ml.transforms.point_cloud.scene.RandomFlip3D
+            - _target_: autoware_ml.transforms.point_cloud.geometry.RandomFlip3D
               flip_ratio_bev_horizontal: 0.5
               flip_ratio_bev_vertical: 0.5
-            - _target_: autoware_ml.transforms.point_cloud.scene.GlobalRotScaleTrans
+            - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
               rot_range: [-3.1415926, 3.1415926]
               scale_ratio_range: [0.95, 1.05]
               translation_std: [0.1, 0.1, 0.1]

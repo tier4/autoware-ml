@@ -59,7 +59,7 @@ datamodule:
       - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
         rot_range: [-3.14159, 3.14159]
         scale_ratio_range: [0.9, 1.1]
-      - _target_: autoware_ml.transforms.point_cloud.geometry.RandomFlip
+      - _target_: autoware_ml.transforms.point_cloud.geometry.RandomFlip3D
         flip_ratio_bev_horizontal: 0.5
         flip_ratio_bev_vertical: 0.5
       - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
