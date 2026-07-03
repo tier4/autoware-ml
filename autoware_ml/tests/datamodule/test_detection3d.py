@@ -51,7 +51,7 @@ class TestT4Detection3DDataset:
                     "velocity": [0.1, 0.0],
                 },
                 {
-                    "bbox_3d_isvalid": True,
+                    "bbox_3d_isvalid": False,
                     "num_lidar_pts": 0,
                     "gt_nusc_name": "pedestrian.adult",
                     "bbox_3d": [3.0, 1.0, 0.5, 0.6, 0.6, 1.7, 0.0],
@@ -203,7 +203,6 @@ class TestT4Detection3DDataset:
             name_mapping={"car": "car", "motorcycle": "bicycle"},
             frame_sampling=frame_sampling,
             filter_attributes=[["motorcycle", "vehicle_state.parked"]],
-            min_num_lidar_points=1,
         )
 
         assert weights == [1.0, 1.0]
@@ -253,7 +252,6 @@ class TestT4Detection3DDataset:
             class_names=["car", "bicycle"],
             name_mapping={"car": "car", "motorcycle": "bicycle"},
             filter_attributes=[["motorcycle", "vehicle_state.parked"]],
-            min_num_lidar_points=1,
             frame_sampling=FrameSamplingConfig(
                 repeat_sampling_factor=1.0,
                 object_bev_range=[-10.0, -10.0, 10.0, 10.0],
@@ -320,7 +318,7 @@ class TestNuscenesDetection3DDataModule:
             "sweeps": [],
         }
         with open(ann_file, "wb") as file:
-            pickle.dump({"data_list": [sample], "metainfo": {"categories": {"car": 0}}}, file)
+            pickle.dump({"data_list": [sample], "metainfo": {"classes": ["car"]}}, file)
 
         datamodule = NuscenesDetection3DDataModule(
             data_root=str(tmp_path),

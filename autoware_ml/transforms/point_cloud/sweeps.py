@@ -33,6 +33,7 @@ class LoadPointsFromMultiSweeps(BaseTransform):
 
     def __init__(
         self,
+        *,
         sweeps_num: int,
         load_dim: int = 5,
         use_dim: Sequence[int] | None = None,
@@ -40,7 +41,17 @@ class LoadPointsFromMultiSweeps(BaseTransform):
         remove_close: bool = False,
         close_radius: float = 1.0,
     ) -> None:
-        """Initialize the multi-sweep point loader."""
+        """Initialize the LoadPointsFromMultiSweeps transform.
+
+        Args:
+            sweeps_num: Number of sweeps included in the output including the
+                current frame.
+            load_dim: Number of features stored per point in sweep files.
+            use_dim: Selected feature dimensions preserved in the loaded tensor.
+            pad_empty_sweeps: Whether to repeat the current frame when no sweeps exist.
+            remove_close: Whether to drop sweep points close to the origin.
+            close_radius: Radius in meters used when ``remove_close`` is enabled.
+        """
         self.sweeps_num = sweeps_num
         self.load_dim = load_dim
         self.use_dim = tuple(use_dim) if use_dim is not None else tuple(range(min(load_dim, 4)))

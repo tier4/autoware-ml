@@ -9,8 +9,8 @@ from autoware_ml.transforms.point_cloud.crop import (
     SphereCrop,
 )
 from autoware_ml.transforms.point_cloud.geometry import (
-    GlobalRotScaleTrans as GeometryGlobalRotScaleTrans,
-    RandomFlip,
+    GlobalRotScaleTrans,
+    RandomFlip3D,
     RandomRotateTargetAngle,
 )
 from autoware_ml.transforms.point_cloud.loading import LoadPointsFromFile
@@ -21,7 +21,6 @@ from autoware_ml.transforms.point_cloud.sampling import (
     PointShuffle,
     RandomDropout,
 )
-from autoware_ml.transforms.point_cloud.scene import GlobalRotScaleTrans, RandomFlip3D
 
 
 class TestPointCloudTransforms:
@@ -148,7 +147,7 @@ class TestPointCloudTransforms:
             "segment": np.arange(4, dtype=np.int64),
         }
 
-        output = RandomDropout(dropout_ratio=0.5, dropout_application_ratio=1.0)(sample)
+        output = RandomDropout(dropout_ratio=0.5, p=1.0)(sample)
 
         assert output["coord"].shape[0] == 2
         assert output["strength"].shape[0] == 2
@@ -160,7 +159,7 @@ class TestPointCloudTransforms:
             "strength": np.arange(4, dtype=np.float32).reshape(4, 1),
         }
 
-        output = RandomDropout(dropout_ratio=0.5, dropout_application_ratio=0.0)(sample)
+        output = RandomDropout(dropout_ratio=0.5, p=0.0)(sample)
 
         assert output["coord"].shape[0] == 4
         assert output["strength"].shape[0] == 4
@@ -299,7 +298,7 @@ class TestPointCloudTransforms:
         # flip_ratio_bev_horizontal flips y-axis; flip_ratio_bev_vertical flips x-axis.
         # rand() returns 0.2 < 0.5 so horizontal flip triggers (y flipped),
         # rand() returns 0.8 >= 0.5 so vertical flip does not trigger.
-        output = RandomFlip(flip_ratio_bev_horizontal=0.5, flip_ratio_bev_vertical=0.5)(sample)
+        output = RandomFlip3D(flip_ratio_bev_horizontal=0.5, flip_ratio_bev_vertical=0.5)(sample)
 
         assert np.allclose(output["coord"], np.array([[1.0, -2.0, 0.0]], dtype=np.float32))
         assert np.allclose(output["normal"], np.array([[0.5, -0.25, 1.0]], dtype=np.float32))
@@ -313,7 +312,7 @@ class TestPointCloudTransforms:
             ),
         }
 
-        output = RandomFlip(flip_ratio_bev_horizontal=1.0, flip_ratio_bev_vertical=0.0)(sample)
+        output = RandomFlip3D(flip_ratio_bev_horizontal=1.0, flip_ratio_bev_vertical=0.0)(sample)
 
         assert np.allclose(output["coord"][0, :2], np.array([1.0, -2.0], dtype=np.float32))
         assert np.allclose(
@@ -331,7 +330,7 @@ class TestPointCloudTransforms:
         }
 
         np.random.seed(0)
-        output = GeometryGlobalRotScaleTrans(
+        output = GlobalRotScaleTrans(
             rot_range=[0.1, 0.1],
             scale_ratio_range=[2.0, 2.0],
             translation_std=None,

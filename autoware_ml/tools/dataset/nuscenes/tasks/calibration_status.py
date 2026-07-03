@@ -27,8 +27,11 @@ from autoware_ml.tools.dataset.nuscenes.tasks.base import TaskAnnotationGenerato
 class CalibrationStatusTask(TaskAnnotationGenerator):
     """Task generator for calibration status annotations.
 
-    Creates separate sample entries for each camera by reading pre-computed
-    calibration fields from the info dict's unified ``"images"`` schema.
+    The unified per-frame info schema already stores every camera's
+    calibration (``cam2img``, ``lidar2cam``, ``distortion_coefficients``,
+    ``distortion_model``) under ``images``. The calibration datamodule expands
+    one record per (frame, camera) at load time, so no per-frame annotation is
+    required here; this task is a no-op retained for the task interface.
     """
 
     def process_sample(
@@ -38,39 +41,15 @@ class CalibrationStatusTask(TaskAnnotationGenerator):
         sample: Mapping[str, Any],
         cam_name: Any = None,
     ) -> dict[str, Any]:
-        """Add calibration_status annotations to the info dict.
-
-        For calibration_status, we create separate samples for each camera.
-        This method adds a special marker that the generator will use to expand
-        into multiple samples.
+        """Return the info dict unchanged.
 
         Args:
-            info_dict: Base info dictionary. Must contain an ``"images"`` key
-                populated by the NuScenes generator with the unified schema.
+            info_dict: Base info dictionary with the unified ``images`` schema.
             nusc: NuScenes API instance (unused; retained for interface compat).
-            sample: NuScenes sample dictionary.
+            sample: NuScenes sample dictionary (unused).
             cam_name: Not used.
 
         Returns:
-            Updated info dictionary with calibration_status annotations.
+            The unchanged info dictionary.
         """
-        calibration_samples = []
-        for cam, cam_info in info_dict.get("images", {}).items():
-            calibration_sample = {
-                "image": {
-                    "img_path": cam_info["img_path"],
-                    "cam2img": cam_info["cam2img"],
-                    "lidar2cam": cam_info["lidar2cam"],
-                    "distortion_model": cam_info.get("distortion_model", ""),
-                    "distortion_coeffs": cam_info.get("distortion_coeffs", []),
-                },
-                "lidar_points": {
-                    "lidar_path": info_dict["lidar_path"],
-                },
-                "calibration_status_task": True,
-                "camera_name": cam,
-            }
-            calibration_samples.append(calibration_sample)
-
-        info_dict["calibration_status_samples"] = calibration_samples
         return info_dict

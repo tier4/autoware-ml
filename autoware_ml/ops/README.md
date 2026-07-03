@@ -26,6 +26,8 @@ bookkeeping, it should not live in `ops/`.
 - `spconv/`
   - deployment-aware sparse convolution wrappers built on top of external `spconv`
   - keeps eager execution aligned with exportable ONNX custom ops
+- `voxelization/`
+  - hard voxelization for PointPillars-style detectors (CenterPoint, TransFusion, BEVFusion)
 
 ## Design Rules
 

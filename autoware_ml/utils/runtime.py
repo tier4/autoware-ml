@@ -32,6 +32,7 @@ from omegaconf import DictConfig, OmegaConf, open_dict
 
 from autoware_ml.configs.paths import CONFIGS_ROOT
 from autoware_ml.configs.resolvers import register_config_resolvers
+from autoware_ml.utils.mlflow_helpers import sanitize_mlflow_param_keys
 
 logger = logging.getLogger(__name__)
 
@@ -167,4 +168,6 @@ def log_hyperparameters(cfg: DictConfig, trainer_logger: Logger | None, trainer:
     """
     if trainer_logger is None:
         return
-    trainer.logger.log_hyperparams(OmegaConf.to_container(cfg, resolve=True))
+
+    params = OmegaConf.to_container(cfg, resolve=True)
+    trainer_logger.log_hyperparams(sanitize_mlflow_param_keys(params))

@@ -28,8 +28,8 @@ from autoware_ml.transforms.base import BaseTransform
 class Copy(BaseTransform):
     """Copy selected fields to new keys."""
 
-    def __init__(self, keys_dict: dict[str, str]) -> None:
-        """Initialize the copy transform.
+    def __init__(self, *, keys_dict: dict[str, str]) -> None:
+        """Initialize the Copy transform.
 
         Args:
             keys_dict: Mapping from source key to destination key.

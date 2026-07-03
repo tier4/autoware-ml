@@ -21,7 +21,9 @@ autoware-ml deploy \
 ```
 
 `--weights` accepts one or more checkpoint paths and is the only way to supply
-parameters to the export model.
+parameters to the export model. For a single-task export, pass one
+checkpoint. For a multi-head export, pass one `--weights` per source
+checkpoint (see [Multi-head exports](#multi-head-exports)).
 
 This generates ONNX (`.onnx`) and TensorRT (`.engine`) files when both stages
 are enabled and supported by the model. The deploy command also creates a
@@ -62,6 +64,33 @@ autoware-ml deploy \
     --weights mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt \
     output_dir=mlruns/<task>/<model>/<config>/<deploy_run_id>/artifacts/custom_exports
 ```
+
+## Multi-head exports
+
+Multi-head export models can expose multiple deployable modules from one
+configured model. PTv3 detection exports the backbone and detection head as
+separate modules, and `--weights` can merge a pretrained backbone checkpoint
+with a detection checkpoint:
+
+```bash
+autoware-ml deploy \
+    --config-name detection3d/ptv3/voxel012_122m_t4dataset_j6gen2 \
+    --weights mlruns/segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/detection3d/ptv3/voxel012_122m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt
+```
+
+Checkpoints are applied in the order they appear on the command line, and
+later checkpoints overwrite any keys already set by earlier ones. Each
+checkpoint only contributes the state-dict keys that exist on the export
+model and match its tensor shapes. Keys missing from the model are skipped;
+keys with a matching name but mismatching shape raise an error immediately.
+
+**Full coverage is enforced.** After all checkpoints are loaded, deploy
+verifies that every parameter in the export model has been covered by at
+least one of the supplied `--weights`. If any parameter is left
+uninitialized, the command fails up front with the list of missing keys
+instead of producing an ONNX or engine that contains untrained layers. Add
+or replace `--weights` entries until every key is covered.
 
 ## Configuration
 

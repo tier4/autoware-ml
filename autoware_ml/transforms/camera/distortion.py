@@ -17,7 +17,13 @@ class UndistortImage(BaseTransform):
 
     _required_keys = ["img", "calibration_data"]
 
-    def __init__(self, alpha: float = 0.0) -> None:
+    def __init__(self, *, alpha: float = 0.0) -> None:
+        """Initialize the UndistortImage transform.
+
+        Args:
+            alpha: Free scaling parameter passed to OpenCV undistortion. ``0.0``
+                crops invalid pixels, while ``1.0`` retains the full field of view.
+        """
         self.alpha = alpha
 
     def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:

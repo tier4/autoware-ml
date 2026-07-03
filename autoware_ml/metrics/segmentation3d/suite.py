@@ -81,6 +81,15 @@ class Segmentation3DMetricSuite(MetricSuite[ConfusionState]):
             )
 
     def state_for(self, metric_range: MetricRange | None) -> ConfusionState:
+        """Build the confusion state for the requested metric range.
+
+        Args:
+            metric_range: Optional radial range selecting one confusion-matrix
+                bucket; ``None`` selects the overall bucket.
+
+        Returns:
+            Confusion state consumed by the configured metric components.
+        """
         index = 0 if metric_range is None else self.ranges.index(metric_range) + 1
         return ConfusionState(
             confusion=self.confusion[index],

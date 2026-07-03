@@ -1,0 +1,211 @@
+# @package _global_
+
+defaults:
+  - /tasks/detection3d/ptv3/tiny
+  - /datasets/t4dataset/detection3d
+  - /datasets/t4dataset/lidar
+  - _self_
+
+batch_size: 4
+num_workers: 8
+
+dataset: ${t4dataset}
+
+grid_size: 0.12
+point_cloud_range: [-122.88, -122.88, -3.0, 122.88, 122.88, 5.0]
+num_proposals: 500
+
+datamodule:
+  _target_: autoware_ml.datamodule.t4dataset.detection3d.T4Detection3DDataModule
+  filter_attributes: ${dataset.detection3d.filter_attributes}
+  use_valid_flag: ${dataset.detection3d.use_valid_flag}
+  train_transforms:
+    _target_: autoware_ml.transforms.base.TransformsCompose
+    pipeline:
+      - _target_: autoware_ml.transforms.boxes3d.merge.MergeObjects3D
+        merge_objects: ${dataset.detection3d.merge_objects}
+        name_mapping: ${dataset.detection3d.name_mapping}
+      - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
+        name_mapping: ${dataset.detection3d.name_mapping}
+        filter_attributes: ${dataset.detection3d.filter_attributes}
+        use_valid_flag: ${dataset.detection3d.use_valid_flag}
+      - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
+        sweeps_num: ${train_sweeps_num}
+        load_dim: 5
+        use_dim: [0, 1, 2, 3]
+        remove_close: true
+      - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
+      - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
+        rot_range: [-1.571, 1.571]
+        scale_ratio_range: [0.8, 1.2]
+        translation_std: [1.0, 1.0, 0.2]
+      - _target_: autoware_ml.transforms.point_cloud.geometry.RandomFlip3D
+        flip_ratio_bev_horizontal: 0.5
+        flip_ratio_bev_vertical: 0.5
+      - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
+        point_cloud_range: ${point_cloud_range}
+      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeFilter
+        point_cloud_range: ${point_cloud_range}
+      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
+        range_radius: [0.0, 60.0]
+        min_num_points: ${dataset.detection3d.train_min_points_near}
+      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
+        range_radius: [60.0, 130.0]
+        min_num_points: ${dataset.detection3d.train_min_points_far}
+      - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
+        grid_size: ${grid_size}
+        point_cloud_range: ${point_cloud_range}
+        hash_type: fnv
+        mode: train
+        keys: [coord, strength]
+        return_inverse: true
+        return_grid_coord: true
+      - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
+        keys: [coord, strength]
+        output_key: feat
+  val_transforms:
+    _target_: autoware_ml.transforms.base.TransformsCompose
+    pipeline:
+      - _target_: autoware_ml.transforms.boxes3d.merge.MergeObjects3D
+        merge_objects: ${dataset.detection3d.merge_objects}
+        name_mapping: ${dataset.detection3d.name_mapping}
+      - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
+        name_mapping: ${dataset.detection3d.name_mapping}
+        filter_attributes: ${dataset.detection3d.filter_attributes}
+        use_valid_flag: ${dataset.detection3d.use_valid_flag}
+      - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
+        sweeps_num: ${val_sweeps_num}
+        load_dim: 5
+        use_dim: [0, 1, 2, 3]
+        remove_close: true
+      - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
+      - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
+        point_cloud_range: ${point_cloud_range}
+      - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
+        grid_size: ${grid_size}
+        point_cloud_range: ${point_cloud_range}
+        hash_type: fnv
+        mode: test
+        keys: [coord, strength]
+        return_inverse: true
+        return_grid_coord: true
+      - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
+        keys: [coord, strength]
+        output_key: feat
+  test_transforms: ${datamodule.val_transforms}
+  predict_transforms:
+    _target_: autoware_ml.transforms.base.TransformsCompose
+    pipeline:
+      - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
+        sweeps_num: ${val_sweeps_num}
+        load_dim: 5
+        use_dim: [0, 1, 2, 3]
+        remove_close: true
+      - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
+      - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
+        point_cloud_range: ${point_cloud_range}
+      - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
+        grid_size: ${grid_size}
+        point_cloud_range: ${point_cloud_range}
+        hash_type: fnv
+        mode: test
+        keys: [coord, strength]
+        return_inverse: true
+        return_grid_coord: true
+      - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
+        keys: [coord, strength]
+        output_key: feat
+  train_frame_sampling:
+    object_bev_range: [-122.88, -122.88, 122.88, 122.88]
+  train_dataloader_cfg:
+    batch_size: ${batch_size}
+    num_workers: ${num_workers}
+    shuffle: true
+  val_dataloader_cfg:
+    batch_size: ${batch_size}
+    num_workers: ${num_workers}
+  test_dataloader_cfg:
+    batch_size: ${batch_size}
+    num_workers: ${num_workers}
+
+model:
+  export_output_names:
+    [
+      dense_heatmap,
+      query_heatmap_score,
+      query_labels,
+      heatmap,
+      center,
+      height,
+      dim,
+      rot,
+      vel,
+    ]
+  bev_projector:
+    bev_stride: 8
+    output_shape: [256, 256]
+  bbox_head:
+    _target_: autoware_ml.models.detection3d.heads.transfusion.TransFusionHead
+    num_proposals: ${num_proposals}
+    auxiliary: true
+    in_channels: 128
+    hidden_channel: 128
+    num_classes: ${dataset.detection3d.num_classes}
+    class_names: ${dataset.detection3d.class_names}
+    dense_heatmap_pooling_classes: [car, truck, bus, bicycle]
+    num_decoder_layers: 1
+    num_heads: 8
+    feedforward_channels: 256
+    common_heads:
+      center: [2, 2]
+      height: [1, 2]
+      dim: [3, 2]
+      rot: [2, 2]
+      vel: [2, 2]
+    bbox_coder:
+      _target_: autoware_ml.models.detection3d.task_modules.bbox_coders.TransFusionBBoxCoder
+      pc_range: ${point_cloud_range}
+      voxel_size: [0.96, 0.96, 8.0]
+      out_size_factor: 1
+      post_center_range: [-132.88, -132.88, -5.0, 132.88, 132.88, 12.0]
+      score_threshold: 0.0
+      code_size: 10
+    assigner:
+      _target_: autoware_ml.models.detection3d.task_modules.assigners.HungarianAssigner3D
+      cls_cost:
+        _target_: autoware_ml.models.detection3d.task_modules.match_costs.ClassificationCost
+        weight: 0.15
+        alpha: 0.25
+        gamma: 2.0
+      reg_cost:
+        _target_: autoware_ml.models.detection3d.task_modules.match_costs.BBoxBEVL1Cost
+        weight: 0.25
+      iou_cost:
+        _target_: autoware_ml.models.detection3d.task_modules.match_costs.IoU3DCost
+        weight: 0.25
+    point_cloud_range: ${point_cloud_range}
+    voxel_size: [0.96, 0.96, 8.0]
+    out_size_factor: 1
+    code_weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2]
+    min_radius: 2
+    gaussian_overlap: 0.1
+    score_threshold: 0.1
+    post_max_size: 100
+    nms_min_radius: 1.0
+    loss_cls_weight: 1.0
+    loss_bbox_weight: 0.25
+    loss_heatmap_weight: 1.0
+    heatmap_target: oriented
+    heatmap_init_bias: -2.19
+    nms_kernel_size: 3
+    use_velocity: true
+
+deploy:
+  onnx:
+    modules:
+      det3d_head:
+        modify_graph:
+          _target_: autoware_ml.utils.onnx_modifiers.TransHeadTensorRTModifier
+          k: ${num_proposals}
+          topk_node_name_substring: /bbox_head/TopK
+          attention_node_name_substring: /bbox_head/decoder

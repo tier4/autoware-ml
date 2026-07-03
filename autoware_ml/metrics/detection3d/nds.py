@@ -28,6 +28,15 @@ class Nds(Metric[DetectionState]):
         self.recall_target = float(recall_target)
 
     def evaluate(self, state: DetectionState, stage: EvalStage) -> dict[str, float]:
+        """Compute NDS-style summary scores from detection match curves.
+
+        Args:
+            state: Detection state with cached match curves.
+            stage: Evaluation stage requesting the metrics.
+
+        Returns:
+            Mapping containing mAP-based and heading-aware NDS values.
+        """
         labels = state.labels(full=True)
         per_class_ap: list[float] = []
         per_class_aph: list[float] = []

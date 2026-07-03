@@ -33,6 +33,19 @@ def _filter_present_box_keys(input_dict: dict[str, Any], mask: np.ndarray) -> No
             input_dict[key] = input_dict[key][mask]
 
 
+def _resolve_point_coords(input_dict: dict[str, Any]) -> np.ndarray:
+    """Return ``(N, 3)`` point coordinates from ``coord`` or ``points``.
+
+    PTv3-style pipelines split the cloud into ``coord``; pillar pipelines keep
+    the raw ``points`` array (consumed downstream by the voxel preprocessor).
+    Either is acceptable for counting points inside boxes.
+    """
+    for key in ("coord", "points"):
+        if key in input_dict:
+            return np.asarray(input_dict[key], dtype=np.float32)[:, :3]
+    raise KeyError("Point-count filters require a point cloud under 'coord' or 'points'.")
+
+
 def _count_points_in_rotated_boxes(
     coord: np.ndarray,
     boxes: np.ndarray,
@@ -87,10 +100,23 @@ class ObjectNameFilter(BaseTransform):
 
     _required_keys = ["gt_names"]
 
-    def __init__(self, classes: Sequence[str]) -> None:
+    def __init__(self, *, classes: Sequence[str]) -> None:
+        """Initialize the ObjectNameFilter transform.
+
+        Args:
+            classes: Allowed class names retained in the sample.
+        """
         self.classes = set(classes)
 
     def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
+        """Filter present box-aligned arrays by allowed class names.
+
+        Args:
+            input_dict: Sample dictionary containing ``gt_names``.
+
+        Returns:
+            Updated sample dictionary with disallowed classes removed.
+        """
         mask = np.array([n in self.classes for n in input_dict["gt_names"]], dtype=bool)
         _filter_present_box_keys(input_dict, mask)
         return input_dict
@@ -116,8 +142,8 @@ class ObjectRangeFilter(BaseTransform):
     _required_keys: list[str] = []
     _optional_keys = ["gt_boxes"]
 
-    def __init__(self, point_cloud_range: Sequence[float]) -> None:
-        """Initialize the object range filter.
+    def __init__(self, *, point_cloud_range: Sequence[float]) -> None:
+        """Initialize the ObjectRangeFilter transform.
 
         Args:
             point_cloud_range: ``[x_min, y_min, z_min, x_max, y_max, z_max]``.
@@ -125,7 +151,7 @@ class ObjectRangeFilter(BaseTransform):
         self.point_cloud_range = np.asarray(point_cloud_range, dtype=np.float32)
 
     def apply_defaults(self, input_dict: dict[str, Any]) -> None:
-        """No defaults needed — transform is a no-op when gt_boxes is absent."""
+        """No defaults needed - transform is a no-op when gt_boxes is absent."""
         pass
 
     def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
@@ -159,10 +185,12 @@ class ObjectMinPointsFilter(BaseTransform):
 
     Required keys:
         gt_names: Class name per box.
-        coord: Point coordinates (Nx3, float32).
 
     Optional keys:
         gt_boxes: 3D bounding boxes (Nx7 or Nx9). Filtered when present.
+        coord: Point coordinates (Nx3 or wider). Required when gt_boxes is present.
+        points: Raw point array (Nx3 or wider). Required when gt_boxes is present and
+            coord is absent.
         gt_num_points: Per-box lidar point counts. Filtered when present.
 
     Generated keys:
@@ -172,11 +200,11 @@ class ObjectMinPointsFilter(BaseTransform):
         gt_num_points: Filtered lidar point counts (when present).
     """
 
-    _required_keys = ["gt_names", "coord"]
-    _optional_keys = ["gt_boxes"]
+    _required_keys = ["gt_names"]
+    _optional_keys = ["gt_boxes", "coord", "points"]
 
-    def __init__(self, min_num_points: int) -> None:
-        """Initialize the minimum-points filter.
+    def __init__(self, *, min_num_points: int) -> None:
+        """Initialize the ObjectMinPointsFilter transform.
 
         Args:
             min_num_points: Minimum number of points required inside each box.
@@ -184,7 +212,7 @@ class ObjectMinPointsFilter(BaseTransform):
         self.min_num_points = min_num_points
 
     def apply_defaults(self, input_dict: dict[str, Any]) -> None:
-        """No defaults needed — transform is a no-op when gt_boxes is absent."""
+        """No defaults needed - transform is a no-op when gt_boxes is absent."""
         pass
 
     def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
@@ -199,7 +227,7 @@ class ObjectMinPointsFilter(BaseTransform):
         if "gt_boxes" not in input_dict:
             return input_dict
 
-        coord = np.asarray(input_dict["coord"], dtype=np.float32)
+        coord = _resolve_point_coords(input_dict)
         boxes = input_dict["gt_boxes"]
         counts = _count_points_in_rotated_boxes(coord, boxes)
         mask = counts >= self.min_num_points
@@ -208,12 +236,35 @@ class ObjectMinPointsFilter(BaseTransform):
 
 
 class ObjectRangeMinPointsFilter(BaseTransform):
-    """Remove boxes below a point-count threshold within a BEV radial interval."""
+    """Remove boxes below a point-count threshold within a BEV radial interval.
 
-    _required_keys = ["gt_names", "coord"]
-    _optional_keys = ["gt_boxes"]
+    Required keys:
+        gt_names: Class name per box.
 
-    def __init__(self, range_radius: Sequence[float], min_num_points: int) -> None:
+    Optional keys:
+        gt_boxes: 3D bounding boxes (Nx7 or Nx9). Filtered when present.
+        coord: Point coordinates (Nx3 or wider). Required when gt_boxes is present.
+        points: Raw point array (Nx3 or wider). Required when gt_boxes is present and
+            coord is absent.
+        gt_num_points: Per-box lidar point counts. Filtered when present.
+
+    Generated keys:
+        gt_boxes: Filtered boxes (when present).
+        gt_names: Filtered class names.
+        gt_labels: Filtered labels (when present).
+        gt_num_points: Filtered lidar point counts (when present).
+    """
+
+    _required_keys = ["gt_names"]
+    _optional_keys = ["gt_boxes", "coord", "points"]
+
+    def __init__(self, *, range_radius: Sequence[float], min_num_points: int) -> None:
+        """Initialize the ObjectRangeMinPointsFilter transform.
+
+        Args:
+            range_radius: Radial interval ``[min_radius, max_radius]`` in meters.
+            min_num_points: Minimum points required for boxes inside the interval.
+        """
         if len(range_radius) != 2:
             raise ValueError(f"range_radius must contain [min, max], got {range_radius}")
         min_radius, max_radius = (float(value) for value in range_radius)
@@ -230,16 +281,21 @@ class ObjectRangeMinPointsFilter(BaseTransform):
         pass
 
     def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
+        """Filter boxes in the configured radial band by point count.
+
+        Args:
+            input_dict: Sample dictionary updated in place.
+
+        Returns:
+            Updated sample dictionary with low-support in-range boxes removed.
+        """
         if "gt_boxes" not in input_dict:
             return input_dict
 
         boxes = input_dict["gt_boxes"]
         radii = np.linalg.norm(boxes[:, :2], axis=1)
         in_range = (radii >= self.min_radius) & (radii < self.max_radius)
-        counts = _count_points_in_rotated_boxes(
-            np.asarray(input_dict["coord"], dtype=np.float32),
-            boxes,
-        )
+        counts = _count_points_in_rotated_boxes(_resolve_point_coords(input_dict), boxes)
         mask = ~in_range | (counts >= self.min_num_points)
         _filter_present_box_keys(input_dict, mask)
         return input_dict

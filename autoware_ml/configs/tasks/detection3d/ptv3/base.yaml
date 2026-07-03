@@ -5,82 +5,27 @@ defaults:
   - /tasks/segmentation3d/ptv3/backbone_base
   - _self_
 
-task_name: detection3d
+dataset: ???
 
-class_names:
-  - car
-  - truck
-  - bus
-  - bicycle
-  - pedestrian
-num_classes: 5
 backbone_out_channels: 64
 
 grid_size: ???
 point_cloud_range: ???
-point_cloud_bev_range: ???
-bev_stride: ???
-bev_output_shape: ???
-head_voxel_size: ???
-
-train_min_num_lidar_points: 1
-train_object_min_num_points: 5
-eval_min_num_lidar_points: 1
-detection_filter_attributes: []
-detection_use_valid_flag: true
-
-head_out_size_factor: 1
-score_threshold: 0.1
-post_max_size: 100
-nms_min_radius: 1.0
 
 train_sweeps_num: 1
 val_sweeps_num: 1
 
-merge_objects: [[truck, [truck, trailer]]]
-
-name_mapping:
-  car: car
-  emergency_vehicle: truck
-  truck: truck
-  tractor_unit: truck
-  construction_vehicle: truck
-  fire_truck: truck
-  semi_trailer: trailer
-  trailer: trailer
-  bus: bus
-  bicycle: bicycle
-  motorcycle: bicycle
-  pedestrian: pedestrian
-  pedestrian.adult: pedestrian
-  pedestrian.child: pedestrian
-  pedestrian.construction_worker: pedestrian
-  pedestrian.police_officer: pedestrian
-  stroller: pedestrian
-  wheelchair: pedestrian
-  personal_mobility: pedestrian
-  vehicle.car: car
-  vehicle.truck: truck
-  vehicle.bus.rigid: bus
-  vehicle.bus.bendy: bus
-  vehicle.bicycle: bicycle
-  vehicle.motorcycle: bicycle
-  human.pedestrian.adult: pedestrian
-  human.pedestrian.child: pedestrian
-  human.pedestrian.construction_worker: pedestrian
-  human.pedestrian.police_officer: pedestrian
-
 datamodule:
-  _target_: autoware_ml.datamodule.t4dataset.detection3d.T4Detection3DDataModule
-  data_root: ${oc.env:AUTOWARE_ML_DATA_PATH}/t4dataset
+  _target_: ???
+  data_root: ${dataset.data_root}
   train_ann_file: ${datamodule.data_root}/info/detection3d/t4dataset_j6gen2_base_infos_train.pkl
   val_ann_file: ${datamodule.data_root}/info/detection3d/t4dataset_j6gen2_base_infos_val.pkl
   test_ann_file: ${datamodule.data_root}/info/detection3d/t4dataset_j6gen2_base_infos_val.pkl
-  class_names: ${class_names}
-  name_mapping: ${name_mapping}
+  class_names: ${dataset.detection3d.class_names}
+  name_mapping: ${dataset.detection3d.name_mapping}
   train_frame_sampling:
     repeat_sampling_factor: 0.30
-    object_bev_range: ${point_cloud_bev_range}
+    object_bev_range: ???
     low_pedestrian_height_threshold: 1.5
     low_pedestrian_bev_range: [-50.0, -50.0, 50.0, 50.0]
   collation_map:
@@ -91,157 +36,26 @@ datamodule:
     inverse: index_concat
     gt_boxes: list
     gt_labels: list
-  train_dataloader_cfg:
-    batch_size: 8
-    num_workers: 16
-    shuffle: true
-  val_dataloader_cfg:
-    batch_size: 8
-    num_workers: 16
-  test_dataloader_cfg:
-    batch_size: 8
-    num_workers: 16
-  predict_dataloader_cfg:
-    batch_size: 1
-    num_workers: 1
-    persistent_workers: false
-  train_transforms:
-    _target_: autoware_ml.transforms.base.TransformsCompose
-    pipeline:
-      - _target_: autoware_ml.transforms.boxes3d.merge.MergeObjects3D
-        merge_objects: ${merge_objects}
-        name_mapping: ${name_mapping}
-      - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
-        name_mapping: ${name_mapping}
-        min_num_lidar_points: ${train_min_num_lidar_points}
-        filter_attributes: ${detection_filter_attributes}
-        use_valid_flag: ${detection_use_valid_flag}
-      - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
-        sweeps_num: ${train_sweeps_num}
-        load_dim: 5
-        use_dim: [0, 1, 2, 3]
-        remove_close: true
-      - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
-      - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
-        rot_range: [-1.571, 1.571]
-        scale_ratio_range: [0.8, 1.2]
-        translation_std: [1.0, 1.0, 0.2]
-      - _target_: autoware_ml.transforms.point_cloud.geometry.RandomFlip
-        flip_ratio_bev_horizontal: 0.5
-        flip_ratio_bev_vertical: 0.5
-      - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
-        point_cloud_range: ${point_cloud_range}
-      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeFilter
-        point_cloud_range: ${point_cloud_range}
-      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectMinPointsFilter
-        min_num_points: ${train_object_min_num_points}
-      - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
-        grid_size: ${grid_size}
-        point_cloud_range: ${point_cloud_range}
-        hash_type: fnv
-        mode: train
-        keys: [coord, strength]
-        return_inverse: true
-        return_grid_coord: true
-      - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
-        keys: [coord, strength]
-        output_key: feat
-  val_transforms:
-    _target_: autoware_ml.transforms.base.TransformsCompose
-    pipeline:
-      - _target_: autoware_ml.transforms.boxes3d.merge.MergeObjects3D
-        merge_objects: ${merge_objects}
-        name_mapping: ${name_mapping}
-      - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
-        name_mapping: ${name_mapping}
-        min_num_lidar_points: ${eval_min_num_lidar_points}
-        filter_attributes: ${detection_filter_attributes}
-        use_valid_flag: ${detection_use_valid_flag}
-      - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
-        sweeps_num: ${val_sweeps_num}
-        load_dim: 5
-        use_dim: [0, 1, 2, 3]
-        remove_close: true
-      - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
-      - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
-        point_cloud_range: ${point_cloud_range}
-      - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
-        grid_size: ${grid_size}
-        point_cloud_range: ${point_cloud_range}
-        hash_type: fnv
-        mode: test
-        keys: [coord, strength]
-        return_inverse: true
-        return_grid_coord: true
-      - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
-        keys: [coord, strength]
-        output_key: feat
-  test_transforms: ${datamodule.val_transforms}
-  predict_transforms:
-    _target_: autoware_ml.transforms.base.TransformsCompose
-    pipeline:
-      - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
-        sweeps_num: ${val_sweeps_num}
-        load_dim: 5
-        use_dim: [0, 1, 2, 3]
-        remove_close: true
-      - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
-      - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
-        point_cloud_range: ${point_cloud_range}
-      - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
-        grid_size: ${grid_size}
-        point_cloud_range: ${point_cloud_range}
-        hash_type: fnv
-        mode: test
-        keys: [coord, strength]
-        return_inverse: true
-        return_grid_coord: true
-      - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
-        keys: [coord, strength]
-        output_key: feat
-
-metric_eval_class_range:
-  car: 121.0
-  truck: 121.0
-  bus: 121.0
-  bicycle: 121.0
-  pedestrian: 121.0
-metric_ranges:
-  - { _target_: autoware_ml.metrics.base.MetricRange, name: 0-50m, min_distance: 0.0, max_distance: 50.0 }
-  - { _target_: autoware_ml.metrics.base.MetricRange, name: 50-90m, min_distance: 50.0, max_distance: 90.0 }
-  - { _target_: autoware_ml.metrics.base.MetricRange, name: 90-121m, min_distance: 90.0, max_distance: 121.0 }
-  - { _target_: autoware_ml.metrics.base.MetricRange, name: 0-121m, min_distance: 0.0, max_distance: 121.0 }
 
 model:
   _target_: autoware_ml.models.detection3d.ptv3.PTv3DetectionModel
   export_output_names: ???
-  freeze_backbone: true
+  freeze_backbone: false
   grid_size: ${grid_size}
   point_cloud_range: ${point_cloud_range}
-  metrics:
-    - _target_: autoware_ml.metrics.detection3d.suite.Detection3DMetricSuite
-      class_names: ${class_names}
-      thresholds: [0.5, 1.0, 2.0, 4.0]
-      min_point_numbers: 0
-      eval_class_range: ${metric_eval_class_range}
-      ranges: ${metric_ranges}
-      components:
-        - { _target_: autoware_ml.metrics.detection3d.mean_ap.MeanAP, stages: [val, test] }
-        - { _target_: autoware_ml.metrics.detection3d.heading_ap.HeadingAP, stages: [test] }
-        - { _target_: autoware_ml.metrics.detection3d.nds.Nds, stages: [test] }
-        - { _target_: autoware_ml.metrics.detection3d.tp_errors.TpErrors, stages: [test] }
+  metrics: ${dataset.detection3d.metrics}
   bev_projector:
     _target_: autoware_ml.models.detection3d.ptv3.PTv3BEVProjection
     in_channels: ${backbone_out_channels}
     out_channels: ${backbone_out_channels}
-    output_shape: ${bev_output_shape}
-    bev_stride: ${bev_stride}
+    output_shape: ???
+    bev_stride: ???
   bev_encoder:
     _target_: autoware_ml.models.detection3d.ptv3.PTv3BEVEncoder
     in_channels: ${backbone_out_channels}
     hidden_channels: 128
     out_channels: 128
-    dilations: [1, 1, 2, 2]
+    dilations: [1, 2, 5, 2]
   bbox_head: ???
   optimizer:
     _target_: torch.optim.AdamW

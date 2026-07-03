@@ -34,6 +34,15 @@ class _Unique(Function):
 
     @staticmethod
     def symbolic(g, x: torch.Tensor):
+        """Emit the ONNX custom unique operator.
+
+        Args:
+            g: ONNX graph builder.
+            x: Input tensor value.
+
+        Returns:
+            Symbolic unique outputs: values, inverse indices, counts, and count.
+        """
         outputs = g.op("autoware::CustomUnique", x, outputs=4)
         x_shape = _get_tensor_sizes(x)
         if x_shape is not None:
@@ -62,6 +71,15 @@ class _Argsort(Function):
 
     @staticmethod
     def symbolic(g, x: torch.Tensor):
+        """Emit the ONNX custom argsort operator.
+
+        Args:
+            g: ONNX graph builder.
+            x: Input tensor value.
+
+        Returns:
+            Symbolic tensor containing sort indices.
+        """
         output = g.op("autoware::Argsort", x, outputs=1)
         x_shape = _get_tensor_sizes(x)
         if x_shape is not None:

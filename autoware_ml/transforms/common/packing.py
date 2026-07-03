@@ -16,9 +16,16 @@ class BuildPointFeatures(BaseTransform):
 
     def __init__(
         self,
+        *,
         keys: Sequence[str],
         output_key: str = "feat",
     ) -> None:
+        """Initialize the BuildPointFeatures transform.
+
+        Args:
+            keys: Input keys concatenated along the feature axis.
+            output_key: Destination key for the built point feature matrix.
+        """
         self.keys = list(keys)
         self.output_key = output_key
         self._required_keys = self.keys
