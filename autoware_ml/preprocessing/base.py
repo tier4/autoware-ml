@@ -41,7 +41,7 @@ class DataPreprocessing:
         preprocessing = DataPreprocessing(
             pipeline=[
                 Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-                RandomFlip3D(p=0.5),
+                RandomFlip3D(),
             ]
         )
         batch = preprocessing(batch)  # Applied on GPU
