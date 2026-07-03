@@ -36,6 +36,14 @@ class PreparePointCloudInput(BaseTransform):
     _required_keys = ["points"]
 
     def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
+        """Split raw point features into coordinate and intensity fields.
+
+        Args:
+            input_dict: Sample dictionary containing ``points``.
+
+        Returns:
+            Updated sample dictionary with ``coord`` and ``strength``.
+        """
         points = input_dict.pop("points")
         input_dict["coord"] = points[:, :3].astype(np.float32)
         input_dict["strength"] = (points[:, 3:4] / 255.0).astype(np.float32)

@@ -44,27 +44,34 @@ class MatchCurve:
 
     @property
     def num_predictions(self) -> int:
+        """Return the number of scored predictions in this match curve."""
         return int(self.scores.shape[0])
 
     @property
     def num_match(self) -> int:
+        """Return the number of true-positive matches in this curve."""
         return int(np.sum(self.true_positive))
 
     @property
     def cumulative_tp(self) -> np.ndarray:
+        """Return cumulative true positives in descending score order."""
         return np.cumsum(self.true_positive)
 
     @property
     def cumulative_fp(self) -> np.ndarray:
+        """Return cumulative false positives in descending score order."""
         return np.cumsum(self.false_positive)
 
     @property
     def cumulative_heading_tp(self) -> np.ndarray:
+        """Return cumulative heading-weighted true positives in score order."""
         return np.cumsum(self.heading_score)
 
 
 @dataclass(frozen=True)
 class PredictionRecord:
+    """Score-sorted prediction candidate used during center-distance matching."""
+
     score: float
     sample_index: int
     box: np.ndarray = field(compare=False)
@@ -72,6 +79,8 @@ class PredictionRecord:
 
 @dataclass(frozen=True)
 class CurveMetrics:
+    """AP-style summary values derived from one match curve."""
+
     ap: float
     aph: float
     max_f1: float
@@ -83,6 +92,8 @@ class CurveMetrics:
 
 @dataclass(frozen=True)
 class SelectedTpErrors:
+    """True-positive error values selected at one operating point."""
+
     count: int
     errors: dict[str, float]
 

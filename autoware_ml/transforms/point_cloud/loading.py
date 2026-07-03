@@ -29,8 +29,8 @@ class LoadPointsFromFile(BaseTransform):
 
     _required_keys = ["lidar_path"]
 
-    def __init__(self, load_dim: int = 5, use_dim: Sequence[int] | int = (0, 1, 2, 3)) -> None:
-        """Initialize the point-cloud loader.
+    def __init__(self, *, load_dim: int = 5, use_dim: Sequence[int] | int = (0, 1, 2, 3)) -> None:
+        """Initialize the LoadPointsFromFile transform.
 
         Args:
             load_dim: Number of features stored per point in the source file.

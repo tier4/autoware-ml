@@ -12,6 +12,15 @@ class Accuracy(Metric[ConfusionState]):
     """
 
     def evaluate(self, state: ConfusionState, stage: EvalStage) -> dict[str, float]:
+        """Compute global point accuracy from a confusion state.
+
+        Args:
+            state: Segmentation confusion state.
+            stage: Evaluation stage requesting the metric.
+
+        Returns:
+            Mapping containing the scalar accuracy value.
+        """
         if state.total > 0:
             return {"acc": float((state.true_positive.sum() / state.total).item())}
         return {"acc": float("nan")}

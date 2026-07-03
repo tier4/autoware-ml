@@ -18,6 +18,7 @@ This module defines segmentation-specific NuScenes dataset generation steps used
 by the dataset creation tooling.
 """
 
+import os
 from collections.abc import Mapping
 from typing import Any
 
@@ -51,6 +52,10 @@ class Segmentation3DTask(TaskAnnotationGenerator):
         """
         if "lidarseg" in nusc.table_names:
             lidar_token = sample["data"]["LIDAR_TOP"]
-            info_dict["pts_semantic_mask_path"] = nusc.get("lidarseg", lidar_token)["filename"]
+            # Store only the basename; the segmentation datamodule joins it against
+            # its configured ``lidarseg_dir`` (e.g. ``lidarseg/v1.0-trainval``),
+            # matching the reference info file's relative form.
+            filename = nusc.get("lidarseg", lidar_token)["filename"]
+            info_dict["pts_semantic_mask_path"] = os.path.basename(filename)
 
         return info_dict

@@ -44,25 +44,31 @@ class ConfusionState:
 
     @cached_property
     def true_positive(self) -> torch.Tensor:
+        """Return per-class diagonal counts."""
         return self._double.diag()
 
     @cached_property
     def predicted(self) -> torch.Tensor:
+        """Return predicted counts per class."""
         return self._double.sum(dim=0)  # column sums: predicted count per class
 
     @cached_property
     def actual(self) -> torch.Tensor:
+        """Return ground-truth counts per class."""
         return self._double.sum(dim=1)  # row sums: ground-truth count per class
 
     @cached_property
     def total(self) -> torch.Tensor:
+        """Return the total number of valid points in the matrix."""
         return self._double.sum()
 
     @cached_property
     def has_support(self) -> torch.Tensor:
+        """Return a mask for classes present in ground truth."""
         return self.actual > 0
 
     @cached_property
     def frequency(self) -> torch.Tensor:
+        """Return per-class ground-truth frequencies."""
         zeros = torch.zeros_like(self.actual)
         return self.actual / self.total if self.total > 0 else zeros

@@ -22,7 +22,7 @@ Open [http://localhost:5000](http://localhost:5000) in your browser.
 By default, the UI opens the shared tracking DB directly. To isolate a single experiment for sharing or inspection, export it first:
 
 ```bash
-autoware-ml mlflow export --config-name segmentation3d/ptv3/voxel005_102m_nuscenes --export-dir /tmp/ptv3_mlflow
+autoware-ml mlflow export --config-name segmentation3d/ptv3/voxel005_51m_nuscenes --export-dir /tmp/ptv3_mlflow
 autoware-ml mlflow ui --db-path /tmp/ptv3_mlflow/mlflow.db
 ```
 

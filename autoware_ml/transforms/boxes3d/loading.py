@@ -50,7 +50,7 @@ class LoadAnnotations3D(BaseTransform):
                      when ``name_mapping`` is ``None``.
 
     Generated keys:
-        gt_boxes: Bounding boxes (N, 9) — 7 box params + 2 velocity components.
+        gt_boxes: Bounding boxes (N, 9) - 7 box params + 2 velocity components.
         gt_names: Canonical class names per box.
         gt_labels: Integer label indices per box.
         gt_num_points: Lidar point count per box.
@@ -61,23 +61,41 @@ class LoadAnnotations3D(BaseTransform):
 
     def __init__(
         self,
+        *,
         name_mapping: Mapping[str, str | None] | None = None,
-        min_num_lidar_points: int = 1,
         filter_attributes: list[list[str]] | None = None,
         use_valid_flag: bool = True,
     ) -> None:
-        if min_num_lidar_points < 0:
-            raise ValueError(f"min_num_lidar_points must be >= 0, got {min_num_lidar_points}")
+        """Initialize the LoadAnnotations3D transform.
+
+        Args:
+            name_mapping: Optional raw-to-canonical class-name mapping. Values set
+                to ``None`` drop the corresponding raw class.
+            filter_attributes: Attribute groups used to filter raw annotations.
+            use_valid_flag: Whether to honor the raw ``bbox_3d_isvalid`` flag.
+        """
         self.name_mapping = dict(name_mapping) if name_mapping is not None else None
-        self.min_num_lidar_points = min_num_lidar_points
         self.filter_attributes = normalize_filter_attributes(filter_attributes)
         self.use_valid_flag = use_valid_flag
         self._validated_class_names: set[tuple[str, ...]] = set()
 
     def apply_defaults(self, input_dict: dict[str, Any]) -> None:
+        """Populate optional class-name metadata when it is absent.
+
+        Args:
+            input_dict: Sample dictionary updated in place.
+        """
         input_dict.setdefault("class_names", [])
 
     def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
+        """Convert raw instance annotations into detection target arrays.
+
+        Args:
+            input_dict: Sample dictionary containing raw ``instances``.
+
+        Returns:
+            Updated sample dictionary with 3D box target keys.
+        """
         instances = input_dict["instances"]
         class_names = input_dict.get("class_names", [])
         canonical_list = list(class_names)
@@ -92,7 +110,6 @@ class LoadAnnotations3D(BaseTransform):
                 name_mapping=self.name_mapping,
                 label_to_category=input_dict.get("label_to_category"),
                 filter_attributes=self.filter_attributes,
-                min_num_lidar_points=self.min_num_lidar_points,
                 use_valid_flag=self.use_valid_flag,
             )
             if canonical is None:

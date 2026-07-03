@@ -39,33 +39,27 @@ class PhotometricDistortion(BaseTransform):
 
     Generated keys:
         - img: Modified in-place with photometric distortions (when applied).
-
-    Args:
-        p: Probability of applying augmentation.
-        brightness: Max brightness deviation [0, 1].
-        contrast: Max contrast deviation [0, 1].
-        saturation: Max saturation deviation [0, 1].
-        hue: Max hue deviation [0, 0.5].
     """
 
     _required_keys = ["img"]
 
     def __init__(
         self,
+        *,
         p: float = 0.5,
         brightness: float = 0.0,
         contrast: float = 0.0,
         saturation: float = 0.0,
         hue: float = 0.0,
     ):
-        """Initialize the photometric distortion transform.
+        """Initialize the PhotometricDistortion transform.
 
         Args:
-            p: Probability of applying the transform.
-            brightness: Maximum multiplicative brightness deviation.
-            contrast: Maximum multiplicative contrast deviation.
-            saturation: Maximum multiplicative saturation deviation.
-            hue: Maximum hue deviation in normalized HSV units.
+            p: Probability of applying augmentation.
+            brightness: Max brightness deviation [0, 1].
+            contrast: Max contrast deviation [0, 1].
+            saturation: Max saturation deviation [0, 1].
+            hue: Max hue deviation [0, 0.5].
         """
         super().__init__()
         self.p = p

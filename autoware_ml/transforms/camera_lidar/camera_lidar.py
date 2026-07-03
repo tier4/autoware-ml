@@ -32,6 +32,7 @@ import transforms3d
 from scipy.stats import truncnorm
 
 from autoware_ml.transforms.base import BaseTransform
+from autoware_ml.transforms.camera.resize import ResizeCropFlipRotImage
 from autoware_ml.utils.calibration import CalibrationData, CalibrationStatus
 
 
@@ -57,45 +58,13 @@ class CalibrationMisalignment(BaseTransform):
         - gt_calibration_status: int (CalibrationStatus.CALIBRATED or MISCALIBRATED).
         - calibration_data.noise: 4x4 noise transform matrix (when augmentation applied).
         - calibration_data.lidar_to_camera_transformation: Modified with noise (when applied).
-
-    Args:
-        p: Probability of applying augmentation.
-        activate_roll: Whether to apply roll miscalibration.
-        activate_pitch: Whether to apply pitch miscalibration.
-        activate_yaw: Whether to apply yaw miscalibration.
-        activate_x: Whether to apply x translation miscalibration.
-        activate_y: Whether to apply y translation miscalibration.
-        activate_z: Whether to apply z translation miscalibration.
-        min_roll_neg: Min magnitude for negative roll in degrees (applied as negative).
-        max_roll_neg: Max magnitude for negative roll in degrees (applied as negative).
-        min_roll_pos: Min magnitude for positive roll in degrees.
-        max_roll_pos: Max magnitude for positive roll in degrees.
-        min_pitch_neg: Min magnitude for negative pitch in degrees (applied as negative).
-        max_pitch_neg: Max magnitude for negative pitch in degrees (applied as negative).
-        min_pitch_pos: Min magnitude for positive pitch in degrees.
-        max_pitch_pos: Max magnitude for positive pitch in degrees.
-        min_yaw_neg: Min magnitude for negative yaw in degrees (applied as negative).
-        max_yaw_neg: Max magnitude for negative yaw in degrees (applied as negative).
-        min_yaw_pos: Min magnitude for positive yaw in degrees.
-        max_yaw_pos: Max magnitude for positive yaw in degrees.
-        min_x_neg: Min magnitude for negative x translation in meters (applied as negative).
-        max_x_neg: Max magnitude for negative x translation in meters (applied as negative).
-        min_x_pos: Min magnitude for positive x translation in meters.
-        max_x_pos: Max magnitude for positive x translation in meters.
-        min_y_neg: Min magnitude for negative y translation in meters (applied as negative).
-        max_y_neg: Max magnitude for negative y translation in meters (applied as negative).
-        min_y_pos: Min magnitude for positive y translation in meters.
-        max_y_pos: Max magnitude for positive y translation in meters.
-        min_z_neg: Min magnitude for negative z translation in meters (applied as negative).
-        max_z_neg: Max magnitude for negative z translation in meters (applied as negative).
-        min_z_pos: Min magnitude for positive z translation in meters.
-        max_z_pos: Max magnitude for positive z translation in meters.
     """
 
     _required_keys = ["calibration_data"]
 
     def __init__(
         self,
+        *,
         p: float,
         activate_roll: bool = False,
         activate_pitch: bool = False,
@@ -128,40 +97,40 @@ class CalibrationMisalignment(BaseTransform):
         min_z_pos: float = 0.0,
         max_z_pos: float = 0.0,
     ):
-        """Initialize the calibration misalignment augmentation.
+        """Initialize the CalibrationMisalignment transform.
 
         Args:
             p: Probability of applying augmentation.
-            activate_roll: Whether to perturb roll.
-            activate_pitch: Whether to perturb pitch.
-            activate_yaw: Whether to perturb yaw.
-            activate_x: Whether to perturb x translation.
-            activate_y: Whether to perturb y translation.
-            activate_z: Whether to perturb z translation.
-            min_roll_neg: Minimum negative roll magnitude in degrees.
-            max_roll_neg: Maximum negative roll magnitude in degrees.
-            min_roll_pos: Minimum positive roll magnitude in degrees.
-            max_roll_pos: Maximum positive roll magnitude in degrees.
-            min_pitch_neg: Minimum negative pitch magnitude in degrees.
-            max_pitch_neg: Maximum negative pitch magnitude in degrees.
-            min_pitch_pos: Minimum positive pitch magnitude in degrees.
-            max_pitch_pos: Maximum positive pitch magnitude in degrees.
-            min_yaw_neg: Minimum negative yaw magnitude in degrees.
-            max_yaw_neg: Maximum negative yaw magnitude in degrees.
-            min_yaw_pos: Minimum positive yaw magnitude in degrees.
-            max_yaw_pos: Maximum positive yaw magnitude in degrees.
-            min_x_neg: Minimum negative x translation magnitude in meters.
-            max_x_neg: Maximum negative x translation magnitude in meters.
-            min_x_pos: Minimum positive x translation magnitude in meters.
-            max_x_pos: Maximum positive x translation magnitude in meters.
-            min_y_neg: Minimum negative y translation magnitude in meters.
-            max_y_neg: Maximum negative y translation magnitude in meters.
-            min_y_pos: Minimum positive y translation magnitude in meters.
-            max_y_pos: Maximum positive y translation magnitude in meters.
-            min_z_neg: Minimum negative z translation magnitude in meters.
-            max_z_neg: Maximum negative z translation magnitude in meters.
-            min_z_pos: Minimum positive z translation magnitude in meters.
-            max_z_pos: Maximum positive z translation magnitude in meters.
+            activate_roll: Whether to apply roll miscalibration.
+            activate_pitch: Whether to apply pitch miscalibration.
+            activate_yaw: Whether to apply yaw miscalibration.
+            activate_x: Whether to apply x translation miscalibration.
+            activate_y: Whether to apply y translation miscalibration.
+            activate_z: Whether to apply z translation miscalibration.
+            min_roll_neg: Min magnitude for negative roll in degrees (applied as negative).
+            max_roll_neg: Max magnitude for negative roll in degrees (applied as negative).
+            min_roll_pos: Min magnitude for positive roll in degrees.
+            max_roll_pos: Max magnitude for positive roll in degrees.
+            min_pitch_neg: Min magnitude for negative pitch in degrees (applied as negative).
+            max_pitch_neg: Max magnitude for negative pitch in degrees (applied as negative).
+            min_pitch_pos: Min magnitude for positive pitch in degrees.
+            max_pitch_pos: Max magnitude for positive pitch in degrees.
+            min_yaw_neg: Min magnitude for negative yaw in degrees (applied as negative).
+            max_yaw_neg: Max magnitude for negative yaw in degrees (applied as negative).
+            min_yaw_pos: Min magnitude for positive yaw in degrees.
+            max_yaw_pos: Max magnitude for positive yaw in degrees.
+            min_x_neg: Min magnitude for negative x translation in meters (applied as negative).
+            max_x_neg: Max magnitude for negative x translation in meters (applied as negative).
+            min_x_pos: Min magnitude for positive x translation in meters.
+            max_x_pos: Max magnitude for positive x translation in meters.
+            min_y_neg: Min magnitude for negative y translation in meters (applied as negative).
+            max_y_neg: Max magnitude for negative y translation in meters (applied as negative).
+            min_y_pos: Min magnitude for positive y translation in meters.
+            max_y_pos: Max magnitude for positive y translation in meters.
+            min_z_neg: Min magnitude for negative z translation in meters (applied as negative).
+            max_z_neg: Max magnitude for negative z translation in meters (applied as negative).
+            min_z_pos: Min magnitude for positive z translation in meters.
+            max_z_pos: Max magnitude for positive z translation in meters.
         """
         super().__init__()
 
@@ -455,30 +424,26 @@ class LidarCameraFusion(BaseTransform):
 
     Generated keys:
         - fused_img: (H, W, 5) float32 [0, 1] in BGRDI format (BGR + depth + intensity).
-
-    Args:
-        max_depth: Maximum depth for projected LiDAR points in meters.
-        dilation_size: Size of dilation kernel for point cloud rendering.
-        ego_box: List of 6 floats [x_min, y_min, z_min, x_max, y_max, z_max].
-        occlusion_adjust_margin: Distance (meters) to leave between camera and adjusted box wall."""
+    """
 
     _required_keys = ["img", "points", "calibration_data"]
     _optional_keys = ["affine_transform"]
 
     def __init__(
         self,
+        *,
         max_depth: float = 128.0,
         dilation_size: int = 1,
         ego_box: Sequence[float] | None = None,
         occlusion_adjust_margin: float = 0.01,
     ):
-        """Initialize the LiDAR-camera fusion transform.
+        """Initialize the LidarCameraFusion transform.
 
         Args:
-            max_depth: Maximum rendered depth in meters.
-            dilation_size: Dilation size applied to projected points.
-            ego_box: Optional ego-vehicle box used for occlusion filtering.
-            occlusion_adjust_margin: Margin used when adjusting the ego box.
+            max_depth: Maximum depth for projected LiDAR points in meters.
+            dilation_size: Size of dilation kernel for point cloud rendering.
+            ego_box: List of 6 floats [x_min, y_min, z_min, x_max, y_max, z_max].
+            occlusion_adjust_margin: Distance (meters) to leave between camera and adjusted box wall.
         """
         super().__init__()
         self.max_depth = max_depth
@@ -853,20 +818,16 @@ class Affine(BaseTransform):
         - affine_transform: (3, 3) float64 affine matrix. Always set - identity matrix
           if augmentation not applied, actual transform matrix if applied.
         - img: Modified in-place with affine transformation (when applied).
-
-    Args:
-        p: Probability of applying augmentation.
-        max_distortion: Maximum corner displacement as fraction of image size.
     """
 
     _required_keys = ["img"]
 
-    def __init__(self, p: float = 0.5, max_distortion: float = 0.1):
-        """Initialize the affine image augmentation.
+    def __init__(self, *, p: float = 0.5, max_distortion: float = 0.1):
+        """Initialize the Affine transform.
 
         Args:
-            p: Probability of applying the augmentation.
-            max_distortion: Maximum corner displacement as a fraction of image size.
+            p: Probability of applying augmentation.
+            max_distortion: Maximum corner displacement as fraction of image size.
         """
         super().__init__()
         self.p = p
@@ -957,14 +918,6 @@ class SaveFusionPreview(BaseTransform):
 
     Generated keys:
         - None (pass-through transform, only saves files to disk).
-
-    Args:
-        p: Probability of saving preview images (default: 1.0, always save).
-        out_dir: Output directory for saving preview images.
-        max_depth: Maximum depth value used during fusion (for recovery).
-        alpha: Blending factor for overlay (0.0 = RGB only, 1.0 = overlay only).
-        depth_colormap: Matplotlib colormap name for depth visualization.
-        intensity_colormap: Matplotlib colormap name for intensity visualization.
     """
 
     _required_keys = ["fused_img", "metadata"]
@@ -972,6 +925,7 @@ class SaveFusionPreview(BaseTransform):
 
     def __init__(
         self,
+        *,
         p: float = 1.0,
         out_dir: str = "",
         max_depth: float = 128.0,
@@ -979,15 +933,15 @@ class SaveFusionPreview(BaseTransform):
         depth_colormap: str = "turbo",
         intensity_colormap: str = "jet",
     ):
-        """Initialize the fusion preview writer.
+        """Initialize the SaveFusionPreview transform.
 
         Args:
-            p: Probability of saving a preview.
-            out_dir: Output directory for generated preview images.
-            max_depth: Maximum depth used when decoding the fused image.
-            alpha: Overlay blending factor.
-            depth_colormap: Colormap used for depth visualization.
-            intensity_colormap: Colormap used for intensity visualization.
+            p: Probability of saving preview images (default: 1.0, always save).
+            out_dir: Output directory for saving preview images.
+            max_depth: Maximum depth value used during fusion (for recovery).
+            alpha: Blending factor for overlay (0.0 = RGB only, 1.0 = overlay only).
+            depth_colormap: Matplotlib colormap name for depth visualization.
+            intensity_colormap: Matplotlib colormap name for intensity visualization.
         """
         super().__init__()
         self.p = p
@@ -1129,3 +1083,121 @@ class SaveFusionPreview(BaseTransform):
         """
         img_path = metadata["image"]["img_path"]
         return Path(img_path).stem
+
+
+class ImageAug3D(BaseTransform):
+    """Apply multiview image augmentation and expose per-view augmentation matrices."""
+
+    _required_keys = ["img"]
+
+    def __init__(
+        self,
+        *,
+        final_dim: Sequence[int],
+        resize_lim: Sequence[float],
+        bot_pct_lim: Sequence[float],
+        rand_flip: bool = False,
+        rot_lim: Sequence[float] | None = None,
+        training: bool = True,
+    ) -> None:
+        """Initialize the ImageAug3D transform.
+
+        Args:
+            final_dim: Final image size ``[height, width]``.
+            resize_lim: Minimum and maximum resize factors.
+            bot_pct_lim: Bottom crop ratios.
+            rand_flip: Whether horizontal flipping is enabled.
+            rot_lim: Optional in-plane rotation range in degrees.
+            training: Whether to sample stochastic augmentation parameters.
+        """
+        self.final_dim = tuple(final_dim)
+        self.resize_lim = resize_lim
+        self.bot_pct_lim = bot_pct_lim
+        self.rand_flip = rand_flip
+        self.rot_lim = rot_lim or [0.0, 0.0]
+        self.training = training
+
+    def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
+        """Apply multiview augmentation and update `img_aug_matrix`.
+
+        Args:
+            input_dict: Sample dictionary updated in place.
+
+        Returns:
+            Updated sample dictionary.
+        """
+        aug = ResizeCropFlipRotImage(
+            data_aug_conf={
+                "final_dim": self.final_dim,
+                "resize_lim": self.resize_lim,
+                "bot_pct_lim": self.bot_pct_lim,
+                "rand_flip": self.rand_flip,
+                "rot_lim": self.rot_lim,
+            },
+            training=self.training,
+        )
+        return aug(input_dict)
+
+
+class BEVLoadMultiViewImageFromFiles(BaseTransform):
+    """Load multiview camera images and derive lidar-to-image matrices."""
+
+    _required_keys = ["images"]
+
+    def __init__(self, *, camera_order: Sequence[str], to_float32: bool = False) -> None:
+        """Initialize the BEVLoadMultiViewImageFromFiles transform.
+
+        Args:
+            camera_order: Camera order used in the output image list.
+            to_float32: Whether to convert images to ``float32``.
+        """
+        self.camera_order = camera_order
+        self.to_float32 = to_float32
+
+    def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
+        """Load images and camera matrices from the dataset image dictionary.
+
+        Args:
+            input_dict: Sample dictionary with per-camera image metadata.
+
+        Returns:
+            Updated sample dictionary.
+        """
+        images = []
+        cam2img = []
+        lidar2cam = []
+        cam2lidar = []
+        lidar2img = []
+        img_paths = []
+
+        for camera_type in self.camera_order:
+            if camera_type not in input_dict["images"]:
+                continue
+            item = input_dict["images"][camera_type]
+            image = cv2.imread(str(item["img_path"]), cv2.IMREAD_COLOR)
+            if image is None:
+                raise FileNotFoundError(f"Failed to read image: {item['img_path']}")
+            if self.to_float32:
+                image = image.astype(np.float32)
+            images.append(image)
+            img_paths.append(item["img_path"])
+
+            lidar_to_cam = np.asarray(item["lidar2cam"], dtype=np.float32)
+            camera_intrinsic = np.eye(4, dtype=np.float32)
+            camera_intrinsic[:3, :3] = np.asarray(item["cam2img"], dtype=np.float32)
+            cam_to_lidar = np.linalg.inv(lidar_to_cam)
+
+            cam2img.append(camera_intrinsic)
+            lidar2cam.append(lidar_to_cam)
+            cam2lidar.append(cam_to_lidar)
+            lidar2img.append(camera_intrinsic @ lidar_to_cam)
+
+        input_dict["img_path"] = img_paths
+        input_dict["img"] = images
+        input_dict["cam2img"] = np.stack(cam2img, axis=0)
+        input_dict["camera_intrinsics"] = np.stack(cam2img, axis=0)
+        input_dict["lidar2cam"] = np.stack(lidar2cam, axis=0)
+        input_dict["cam2lidar"] = np.stack(cam2lidar, axis=0)
+        input_dict["lidar2img"] = np.stack(lidar2img, axis=0)
+        input_dict["ori_cam2img"] = input_dict["cam2img"].copy()
+        return input_dict

@@ -36,13 +36,13 @@ def _write_checkpoint_metadata(
 def test_resolve_deploy_lineage_uses_final_config_experiment_for_multi_checkpoint_export(
     tmp_path: Path,
 ) -> None:
-    config_name = "segmentation3d_detection3d/ptv3_segdet_transhead/voxel012"
+    config_name = "multi/ptv3/voxel012"
     detection_checkpoint = _write_checkpoint_metadata(
         tmp_path,
         "detection",
         run_id="det-run",
-        experiment_name="detection3d_ptv3_transhead_voxel012",
-        config_name="detection3d/ptv3/transhead_voxel012",
+        experiment_name="detection3d_ptv3_voxel012",
+        config_name="detection3d/ptv3/voxel012",
     )
     segmentation_checkpoint = _write_checkpoint_metadata(
         tmp_path,
@@ -67,12 +67,12 @@ def test_resolve_deploy_lineage_uses_final_config_experiment_for_multi_checkpoin
 
 
 def test_resolve_deploy_lineage_keeps_single_checkpoint_parent(tmp_path: Path) -> None:
-    config_name = "detection3d/ptv3/transhead_voxel012"
+    config_name = "detection3d/ptv3/voxel012"
     checkpoint = _write_checkpoint_metadata(
         tmp_path,
         "detection",
         run_id="det-run",
-        experiment_name="detection3d_ptv3_transhead_voxel012",
+        experiment_name="detection3d_ptv3_voxel012",
         config_name=config_name,
     )
 
@@ -83,4 +83,4 @@ def test_resolve_deploy_lineage_keeps_single_checkpoint_parent(tmp_path: Path) -
 
     assert experiment_name == generate_experiment_name(config_name)
     assert parent_run_id == "det-run"
-    assert source_checkpoints[0]["experiment_name"] == "detection3d_ptv3_transhead_voxel012"
+    assert source_checkpoints[0]["experiment_name"] == "detection3d_ptv3_voxel012"

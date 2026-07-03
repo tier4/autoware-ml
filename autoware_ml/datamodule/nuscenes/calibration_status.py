@@ -36,9 +36,15 @@ class NuscenesCalibrationStatusDataset(Dataset):
     ) -> None:
         """Initialize the NuScenes Calibration Status Dataset.
 
+        The dataset consumes the unified per-frame nuScenes info file and expands
+        one calibration record per (frame, camera) pair by iterating each frame's
+        ``images`` mapping. Each camera contributes its own ``cam2img``,
+        ``lidar2cam`` and distortion parameters against the shared frame lidar.
+
         Args:
             data_root: Root directory for data files.
-            ann_file: Path to the annotation file (info.pkl) containing sample data.
+            ann_file: Path to the unified annotation file (info.pkl) containing
+                per-frame samples under ``data_list`` (or legacy ``infos``).
         """
         super().__init__(**kwargs)
         self.data_root = data_root
@@ -46,47 +52,51 @@ class NuscenesCalibrationStatusDataset(Dataset):
         with open(ann_file, "rb") as f:
             data = pickle.load(f)
 
-        if "infos" in data:
-            self.data_infos = data["infos"]
-        elif "data_list" in data:
-            self.data_infos = data["data_list"]
+        if "data_list" in data:
+            frames = data["data_list"]
+        elif "infos" in data:
+            frames = data["infos"]
         else:
             raise ValueError(
-                f"Unknown info file format. Expected 'infos' or 'data_list' key, got: {list(data.keys())}"
+                f"Unknown info file format. Expected 'data_list' or 'infos' key, got: {list(data.keys())}"
             )
 
-        self.data_infos = [
-            info for info in self.data_infos if info.get("calibration_status_task", False)
-        ]
+        # Expand one record per (frame, camera). Each record stores the shared
+        # frame lidar path plus the camera's own calibration.
+        self.records: list[dict[str, Any]] = []
+        for frame in frames:
+            if "lidar_points" not in frame:
+                raise KeyError("Sample does not contain 'lidar_points' key")
+            lidar_path = frame["lidar_points"]["lidar_path"]
+            for camera_name, cam_info in frame.get("images", {}).items():
+                self.records.append(
+                    {
+                        "camera_name": camera_name,
+                        "cam_info": cam_info,
+                        "lidar_path": lidar_path,
+                        "frame": frame,
+                    }
+                )
 
     def __len__(self) -> int:
         """Get dataset length.
 
         Returns:
-            Dataset length.
+            Number of (frame, camera) calibration records.
         """
-        return len(self.data_infos)
+        return len(self.records)
 
     def get_data_info(self, idx: int) -> dict[str, Any]:
-        """Get sample metadata for a given index.
+        """Get sample metadata for a given (frame, camera) record.
 
         Args:
-            idx: Sample index.
+            idx: Record index.
 
         Returns:
             Metadata dictionary consumed by transform loaders.
         """
-        sample = self.data_infos[idx]
-
-        if "image" not in sample:
-            raise KeyError("Sample does not contain 'image' key")
-        if "lidar_points" not in sample:
-            raise KeyError("Sample does not contain 'lidar_points' key")
-
-        image_path: str = sample["image"]["img_path"]
-        lidar_path: str = sample["lidar_points"]["lidar_path"]
-
-        cam_info = sample["image"]
+        record = self.records[idx]
+        cam_info = record["cam_info"]
 
         camera_matrix = cam_info.get("cam2img", None)
         if camera_matrix is None:
@@ -106,9 +116,9 @@ class NuscenesCalibrationStatusDataset(Dataset):
                 f"lidar_to_camera_transformation must be 4x4, got shape {lidar_to_camera_transformation.shape}"
             )
 
-        distortion_coefficients = cam_info.get("distortion_coeffs", None)
+        distortion_coefficients = cam_info.get("distortion_coefficients", None)
         if distortion_coefficients is None:
-            raise ValueError("distortion_coeffs is missing")
+            raise ValueError("distortion_coefficients is missing")
         distortion_coefficients = np.array(distortion_coefficients, dtype=np.float32)
 
         calibration_data = CalibrationData(
@@ -119,12 +129,12 @@ class NuscenesCalibrationStatusDataset(Dataset):
         )
 
         return {
-            "img_path": os.path.join(self.data_root, image_path),
-            "lidar_path": os.path.join(self.data_root, lidar_path),
+            "img_path": os.path.join(self.data_root, cam_info["img_path"]),
+            "lidar_path": os.path.join(self.data_root, record["lidar_path"]),
             "num_pts_feats": 5,
             "calibration_data": calibration_data,
             "gt_calibration_status": CalibrationStatus.CALIBRATED.value,
-            "metadata": sample,
+            "metadata": record["frame"],
         }
 
 

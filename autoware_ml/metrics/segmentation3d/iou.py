@@ -18,6 +18,15 @@ class IoU(Metric[ConfusionState]):
     """
 
     def evaluate(self, state: ConfusionState, stage: EvalStage) -> dict[str, float]:
+        """Compute IoU metrics from a confusion state.
+
+        Args:
+            state: Segmentation confusion state.
+            stage: Evaluation stage requesting the metrics.
+
+        Returns:
+            Mapping of IoU metric names to scalar values.
+        """
         union = state.predicted + state.actual - state.true_positive
         zeros = torch.zeros_like(state.true_positive)
         iou = torch.where(union > 0, state.true_positive / union, zeros)

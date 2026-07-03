@@ -13,7 +13,13 @@ from autoware_ml.transforms.base import BaseTransform
 class PermuteAxes(BaseTransform):
     """Permute axes of arrays or tensors for selected keys."""
 
-    def __init__(self, input_keys: list[str], axes: tuple[int, ...]):
+    def __init__(self, *, input_keys: list[str], axes: tuple[int, ...]):
+        """Initialize the PermuteAxes transform.
+
+        Args:
+            input_keys: Sample keys whose arrays or tensors are permuted.
+            axes: Axis order passed to the backend permutation operation.
+        """
         self.input_keys = input_keys
         self.axes = axes
         self._required_keys = list(input_keys)

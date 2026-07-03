@@ -19,7 +19,13 @@ import numpy.typing as npt
 import pytest
 
 from autoware_ml.transforms.camera.distortion import UndistortImage
-from autoware_ml.transforms.camera.resize import CropAndScale
+from autoware_ml.transforms.camera.masking import GridMask
+from autoware_ml.transforms.camera.normalize import NormalizeMultiviewImage
+from autoware_ml.transforms.camera.resize import (
+    CropAndScale,
+    PadMultiViewImage,
+    ResizeCropFlipRotImage,
+)
 from autoware_ml.utils.calibration import CalibrationData
 
 
@@ -194,3 +200,55 @@ class TestCropAndScale:
             output_dict["calibration_data"].new_camera_matrix,
             original_camera_matrix,
         )
+
+
+def test_normalize_multiview_image_handles_chw_stack() -> None:
+    images = np.ones((2, 3, 4, 5), dtype=np.float32)
+
+    output = NormalizeMultiviewImage(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], to_rgb=False)(
+        {"img": images}
+    )
+
+    assert output["img"].shape == (2, 3, 4, 5)
+    assert np.allclose(output["img"], 1.0)
+
+
+def test_pad_multiview_image_handles_chw_stack() -> None:
+    images = np.ones((2, 3, 4, 5), dtype=np.float32)
+
+    output = PadMultiViewImage(size_divisor=4, pad_val=0.0)({"img": images})
+
+    assert output["img"].shape == (2, 3, 4, 8)
+    assert output["pad_shape"] == (4, 8)
+
+
+def test_resize_crop_flip_rot_image_updates_chw_stack_and_aug_matrix() -> None:
+    images = np.ones((2, 3, 8, 8), dtype=np.float32)
+    intrinsics = np.tile(np.eye(4, dtype=np.float32), (2, 1, 1))
+    lidar2cam = np.tile(np.eye(4, dtype=np.float32), (2, 1, 1))
+    transform = ResizeCropFlipRotImage(
+        data_aug_conf={
+            "resize_lim": (1.0, 1.0),
+            "final_dim": (6, 6),
+            "bot_pct_lim": (0.0, 0.0),
+            "rot_lim": (0.0, 0.0),
+            "rand_flip": False,
+        },
+        training=False,
+    )
+
+    output = transform({"img": images, "camera_intrinsics": intrinsics, "lidar2cam": lidar2cam})
+
+    assert output["img"].shape == (2, 3, 6, 6)
+    assert output["img_aug_matrix"].shape == (2, 4, 4)
+    assert output["lidar2img"].shape == (2, 4, 4)
+
+
+def test_grid_mask_handles_chw_stack() -> None:
+    np.random.seed(0)
+    images = np.ones((2, 3, 64, 64), dtype=np.float32)
+
+    output = GridMask(p=1.0, ratio=0.5, rotate=0)({"img": images})
+
+    assert output["img"].shape == images.shape
+    assert (output["img"] == 0).any()
