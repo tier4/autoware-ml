@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from typing import NamedTuple, Sequence
 
+import logging
 import numpy.typing as npt
 import numpy as np
 
 from autoware_ml.types.geometry import Box3DFieldIndex
+
+logger = logging.getLogger(__name__)
 
 
 class Detection3DGTSample(NamedTuple):
@@ -79,6 +82,13 @@ class Detection3DGTBatch(NamedTuple):
         # Fill the arrays with the data from gt_samples
         for i, sample in enumerate(detection3d_gt_samples):
             num_bboxes = min(sample.gt_bboxes_3d.shape[0], max_num_3d_gt_bboxes)
+            if sample.gt_bboxes_3d.shape[0] > max_num_3d_gt_bboxes:
+                logger.info(
+                    f"Warning: num_bboxes in the sample exceeds the "
+                    f"maximum value: {max_num_3d_gt_bboxes}, and thus they are trimmed to "
+                    f"{max_num_3d_gt_bboxes}"
+                )
+
             gt_bboxes_3d[i, :num_bboxes, :] = sample.gt_bboxes_3d[:num_bboxes, :]
             gt_labels_3d[i, :num_bboxes] = sample.gt_labels_3d[:num_bboxes]
 
