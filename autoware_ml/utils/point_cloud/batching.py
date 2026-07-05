@@ -1,8 +1,34 @@
+# Copyright 2026 TIER IV, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Batching helpers for point-cloud tensors."""
 
 from __future__ import annotations
 
 import torch
+
+
+def infer_batch_size_from_voxel_coords(voxel_coords: torch.Tensor) -> int:
+    """Infer batch size from batched voxel coordinates.
+
+    Args:
+        voxel_coords: Voxel coordinates with the batch index in column 0.
+
+    Returns:
+        Number of samples represented by the voxel coordinate tensor.
+    """
+    return int(voxel_coords[:, 0].max().item()) + 1 if voxel_coords.numel() > 0 else 1
 
 
 @torch.inference_mode()
