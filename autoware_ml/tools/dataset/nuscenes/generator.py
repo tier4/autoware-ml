@@ -27,10 +27,9 @@ from typing import Any
 
 import numpy as np
 import numpy.typing as npt
-from pyquaternion import Quaternion
-
 from nuscenes.nuscenes import NuScenes
 from nuscenes.utils import splits
+from pyquaternion import Quaternion
 
 from autoware_ml.tools.dataset.base import DatasetGenerator
 from autoware_ml.tools.dataset.nuscenes.tasks.registry import create_task
@@ -121,8 +120,7 @@ def _to_unified_record(
     """Reshape a working info dict into a unified v1.1 per-frame record.
 
     The unified record is consumed by every nuScenes task (detection3d,
-    segmentation3d, multiview/StreamPETR, and calibration_status), which expands
-    per-camera at load time.
+    segmentation3d, and calibration_status), which expand per-camera at load time.
 
     Args:
         info_dict: Working info dict with pose components, ``images`` and any
