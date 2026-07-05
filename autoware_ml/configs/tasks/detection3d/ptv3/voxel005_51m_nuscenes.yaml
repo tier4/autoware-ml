@@ -20,7 +20,7 @@ datamodule:
   data_root: ${dataset.data_root}
   train_ann_file: nuscenes_infos_train.pkl
   val_ann_file: nuscenes_infos_val.pkl
-  test_ann_file: nuscenes_infos_test.pkl
+  test_ann_file: nuscenes_infos_val.pkl
   class_names: ${dataset.detection3d.class_names}
   name_mapping: ${dataset.detection3d.name_mapping}
   train_frame_sampling: null

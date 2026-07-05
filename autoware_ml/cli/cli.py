@@ -65,6 +65,15 @@ class OptionFirstTyperCommand(TyperCommand):
     """Suggest command options even when completion starts on an empty token."""
 
     def shell_complete(self, ctx: click.Context, incomplete: str) -> list[CompletionItem]:
+        """Return shell completions with options prioritized for empty tokens.
+
+        Args:
+            ctx: Active Click command context.
+            incomplete: Current incomplete shell token.
+
+        Returns:
+            Completion candidates for the current command line.
+        """
         results = super().shell_complete(ctx, incomplete)
         if incomplete:
             return results
