@@ -113,7 +113,18 @@ class MultiviewDetection3DDataset(Dataset):
         self.data_infos = load_detection_data_infos(data)
         if filter_frames_with_camera_order:
             self.data_infos = self._filter_frames_with_camera_order(self.data_infos)
+        self.prev_exists = self._build_prev_exists(self.data_infos)
         self.label_to_category = build_label_to_category(data.get("metainfo", {}))
+
+    @staticmethod
+    def _build_prev_exists(data_infos: list[dict[str, Any]]) -> np.ndarray:
+        """Build stream-continuity flags from adjacent scene tokens."""
+        prev_exists = np.zeros(len(data_infos), dtype=np.float32)
+        for index in range(1, len(data_infos)):
+            prev_exists[index] = np.float32(
+                data_infos[index - 1]["scene_token"] == data_infos[index]["scene_token"]
+            )
+        return prev_exists
 
     def _filter_frames_with_camera_order(
         self, data_infos: list[dict[str, Any]]
@@ -268,13 +279,11 @@ class MultiviewDetection3DDataset(Dataset):
                 sample.get("num_features", sample.get("lidar_points", {}).get("num_pts_feats", 5))
             ),
             "sweeps": self._resolve_sweeps(sample),
+            "scene_token": sample["scene_token"],
+            "prev_exists": self.prev_exists[index],
         }
         ego_pose = _build_ego_pose(sample)
         if ego_pose is not None:
             data_info["ego_pose"] = ego_pose
             data_info["ego_pose_inv"] = np.linalg.inv(ego_pose).astype(np.float32)
-        if "scene_token" in sample:
-            data_info["scene_token"] = sample["scene_token"]
-        if "prev_exists" in sample:
-            data_info["prev_exists"] = np.float32(sample["prev_exists"])
         return data_info

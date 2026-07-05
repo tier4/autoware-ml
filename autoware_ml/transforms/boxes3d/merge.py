@@ -170,15 +170,18 @@ class MergeObjects3D(BaseTransform):
         """Resolve an instance's canonical class name via ``name_mapping``.
 
         Args:
-            instance: Raw annotation dict expected to carry ``gt_nusc_name``.
+            instance: Raw annotation dict carrying ``gt_nusc_name``.
 
         Returns:
             The canonical class name (raw name when ``name_mapping`` is ``None``),
-            or ``None`` when the raw name is missing or maps to ``None``.
+            or ``None`` when the raw name maps to ``None``.
+
+        Raises:
+            KeyError: If ``gt_nusc_name`` is missing from the instance.
         """
-        raw_name = instance.get("gt_nusc_name")
-        if raw_name is None:
-            return None
+        if "gt_nusc_name" not in instance:
+            raise KeyError("MergeObjects3D requires every instance to contain 'gt_nusc_name'.")
+        raw_name = instance["gt_nusc_name"]
         raw_name = str(raw_name)
         if self.name_mapping is None:
             return raw_name
