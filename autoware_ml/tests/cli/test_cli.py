@@ -163,7 +163,7 @@ class TestAdjustArgv:
     """Tests for adjust_argv."""
 
     def test_cli_syntax(self) -> None:
-        # Normal argv array — Hydra overrides with brackets pass through unchanged.
+        # Normal argv array - Hydra overrides with brackets pass through unchanged.
         argv = ["--config-name", SAMPLE_CONFIG_NAME, "trainer.devices=[0,1]", "model.lr=0.001"]
         assert adjust_argv(argv) == argv
 
@@ -556,8 +556,8 @@ class TestCliRuntime:
         self,
         tmp_path: Path,
     ) -> None:
-        config_name = "segmentation3d_detection3d/ptv3_segdet_transhead/voxel012"
-        experiment_name = "segmentation3d_detection3d_ptv3_segdet_transhead_voxel012"
+        config_name = "multi/ptv3/voxel012"
+        experiment_name = "multi_ptv3_voxel012"
         cfg = OmegaConf.create({"logger": {"tracking_uri": "sqlite:///mlruns/mlflow.db"}})
 
         with (

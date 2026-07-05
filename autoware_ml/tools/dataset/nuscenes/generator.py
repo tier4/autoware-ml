@@ -153,7 +153,6 @@ def _to_unified_record(
         record["pts_semantic_mask_path"] = info_dict["pts_semantic_mask_path"]
     if "sweeps" in info_dict:
         record["sweeps"] = info_dict["sweeps"]
-    record["prev_exists"] = info_dict["prev_exists"]
     record["scene_token"] = info_dict["scene_token"]
     return record
 
@@ -503,11 +502,7 @@ class NuScenesDatasetGenerator(DatasetGenerator):
                 "lidar_path": lidar_path,
                 "num_features": 5,
                 "token": sample["token"],
-                # Temporal metadata for sequence models (e.g. StreamPETR): the scene
-                # id groups frames, and prev_exists is False at each scene's first
-                # keyframe so the temporal memory resets at sequence boundaries.
                 "scene_token": sample["scene_token"],
-                "prev_exists": sample["prev"] != "",
                 "images": {},
                 "lidar2ego_translation": cs_record["translation"],
                 "lidar2ego_rotation": cs_record["rotation"],
