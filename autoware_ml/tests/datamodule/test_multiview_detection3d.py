@@ -77,5 +77,52 @@ def test_multiview_detection_dataset_applies_loader_pipeline(tmp_path: Path) -> 
     assert output["ego_pose"].shape == (4, 4)
     assert output["ego_pose_inv"].shape == (4, 4)
     assert output["scene_token"] == "scene-1"
+    assert output["prev_exists"] == np.float32(0.0)
     assert output["gt_boxes"].shape == (1, 9)
     assert output["gt_labels"].tolist() == [0]
+
+
+def test_multiview_detection_dataset_builds_prev_exists_from_scene_tokens(
+    tmp_path: Path,
+) -> None:
+    ann_file = tmp_path / "infos.pkl"
+    samples = [
+        {
+            "token": "sample-1",
+            "scene_token": "scene-1",
+            "prev_exists": True,
+            "lidar_points": {"lidar_path": "lidar-1.bin", "num_pts_feats": 5},
+            "images": {},
+            "instances": [],
+        },
+        {
+            "token": "sample-2",
+            "scene_token": "scene-1",
+            "prev_exists": False,
+            "lidar_points": {"lidar_path": "lidar-2.bin", "num_pts_feats": 5},
+            "images": {},
+            "instances": [],
+        },
+        {
+            "token": "sample-3",
+            "scene_token": "scene-2",
+            "prev_exists": True,
+            "lidar_points": {"lidar_path": "lidar-3.bin", "num_pts_feats": 5},
+            "images": {},
+            "instances": [],
+        },
+    ]
+    with open(ann_file, "wb") as file:
+        pickle.dump({"data_list": samples, "metainfo": {"classes": ["car"]}}, file)
+
+    dataset = _Dataset(
+        data_root=str(tmp_path),
+        ann_file=str(ann_file),
+        class_names=["car"],
+        camera_order=[],
+        filter_frames_with_camera_order=False,
+    )
+
+    assert dataset.get_data_info(0)["prev_exists"] == np.float32(0.0)
+    assert dataset.get_data_info(1)["prev_exists"] == np.float32(1.0)
+    assert dataset.get_data_info(2)["prev_exists"] == np.float32(0.0)
