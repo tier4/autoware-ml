@@ -30,8 +30,8 @@ class CropBoxOuter(BaseTransform):
 
     _required_keys = ["points"]
 
-    def __init__(self, crop_box: list[float]):
-        """Initialize the outer-distance crop transform.
+    def __init__(self, *, crop_box: list[float]):
+        """Initialize the CropBoxOuter transform.
 
         Args:
             crop_box: Box bounds ``[x_min, y_min, z_min, x_max, y_max, z_max]``.
@@ -62,8 +62,8 @@ class CropBoxInner(BaseTransform):
 
     _required_keys = ["points"]
 
-    def __init__(self, crop_box: list[float]):
-        """Initialize the inner-distance crop transform.
+    def __init__(self, *, crop_box: list[float]):
+        """Initialize the CropBoxInner transform.
 
         Args:
             crop_box: Box bounds ``[x_min, y_min, z_min, x_max, y_max, z_max]``.
@@ -93,15 +93,15 @@ class PointsRangeFilter(BaseTransform):
     """Drop points outside a configured spatial range.
 
     Operates on whichever per-point coordinate key is present in the sample
-    (``coord`` is preferred; ``points`` is supported for legacy pipelines that
-    have not converted to the ``coord``/``strength`` split yet). All aligned
-    per-point arrays in the sample are filtered with the same mask.
+    (``coord`` is preferred; ``points`` is supported before the sample is split
+    into ``coord`` and feature fields). All aligned per-point arrays in the
+    sample are filtered with the same mask.
     """
 
     _required_keys: list[str] = []
 
-    def __init__(self, point_cloud_range: Sequence[float]) -> None:
-        """Initialize the points range filter.
+    def __init__(self, *, point_cloud_range: Sequence[float]) -> None:
+        """Initialize the PointsRangeFilter transform.
 
         Args:
             point_cloud_range: Bounds ``[x_min, y_min, z_min, x_max, y_max, z_max]``.
@@ -135,8 +135,8 @@ class CenterShift(BaseTransform):
 
     _required_keys = ["coord"]
 
-    def __init__(self, apply_z: bool = True) -> None:
-        """Initialize the centering transform.
+    def __init__(self, *, apply_z: bool = True) -> None:
+        """Initialize the CenterShift transform.
 
         Args:
             apply_z: Whether to center the z coordinate as well.
@@ -165,12 +165,12 @@ class SphereCrop(BaseTransform):
 
     _required_keys = ["coord"]
 
-    def __init__(self, point_max: int, mode: str = "random") -> None:
-        """Initialize the sphere crop transform.
+    def __init__(self, *, point_max: int, mode: str = "random") -> None:
+        """Initialize the SphereCrop transform.
 
         Args:
             point_max: Maximum number of points kept after cropping.
-            mode: Crop-center strategy, either ``random`` or ``center``.
+            mode: Crop-center strategy, either ``"random"`` or ``"center"``.
         """
         self.point_max = point_max
         self.mode = mode

@@ -1,0 +1,5 @@
+# @package _global_
+defaults:
+  - /tasks/multi/ptv3/base
+  - /tasks/segmentation3d/ptv3/backbone_tiny
+  - _self_

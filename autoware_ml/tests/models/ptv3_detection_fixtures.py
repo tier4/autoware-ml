@@ -6,7 +6,6 @@ from collections.abc import Mapping
 
 import torch
 
-from autoware_ml.models.detection3d.heads.centerpoint import CenterHead
 from autoware_ml.models.detection3d.heads.transfusion import TransFusionHead
 from autoware_ml.models.detection3d.task_modules.assigners import HungarianAssigner3D
 from autoware_ml.models.detection3d.task_modules.bbox_coders import TransFusionBBoxCoder
@@ -59,40 +58,6 @@ def build_bev_encoder() -> PTv3BEVEncoder:
         hidden_channels=32,
         out_channels=64,
         dilations=(1, 2, 1),
-    )
-
-
-def build_center_model(
-    freeze_backbone: bool = False,
-) -> PTv3DetectionModel:
-    """Return a PTv3 + CenterHead detection model for tests."""
-    return PTv3DetectionModel(
-        backbone=build_ptv3_backbone(),
-        bev_projector=PTv3BEVProjection(
-            in_channels=8,
-            out_channels=16,
-            output_shape=[8, 8],
-            bev_stride=1,
-        ),
-        bev_encoder=build_bev_encoder(),
-        bbox_head=CenterHead(
-            in_channels=64,
-            num_classes=2,
-            shared_channels=32,
-            point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
-            voxel_size=[1.0, 1.0, 4.0],
-            out_size_factor=1,
-            max_objs=16,
-            min_radius=1,
-            score_threshold=0.1,
-            post_max_size=10,
-            nms_min_radius=1.0,
-        ),
-        export_output_names=["heatmap", "reg", "height", "dim", "rot", "vel"],
-        freeze_backbone=freeze_backbone,
-        grid_size=1.0,
-        point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
-        optimizer=lambda params: torch.optim.AdamW(params, lr=1e-3),
     )
 
 

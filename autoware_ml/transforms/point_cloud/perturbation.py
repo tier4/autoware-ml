@@ -29,13 +29,15 @@ class RandomJitter(BaseTransform):
 
     _required_keys = ["coord"]
 
-    def __init__(self, sigma: float, clip: float) -> None:
-        """Initialize the random jitter transform.
+    def __init__(self, *, p: float | None = None, sigma: float, clip: float) -> None:
+        """Initialize the RandomJitter transform.
 
         Args:
+            p: Probability of applying the transform (``None`` means always apply).
             sigma: Standard deviation of the Gaussian noise.
             clip: Maximum absolute jitter applied per coordinate.
         """
+        self.p = p
         self.sigma = sigma
         self.clip = clip
 
@@ -62,12 +64,14 @@ class RandomShift(BaseTransform):
 
     _required_keys = ["coord"]
 
-    def __init__(self, shift: Sequence[float]) -> None:
-        """Initialize the random shift transform.
+    def __init__(self, *, p: float | None = None, shift: Sequence[float]) -> None:
+        """Initialize the RandomShift transform.
 
         Args:
+            p: Probability of applying the transform (``None`` means always apply).
             shift: Maximum absolute translation per axis.
         """
+        self.p = p
         self.shift = np.asarray(shift, dtype=np.float32)
 
     def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:

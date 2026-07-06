@@ -6,7 +6,6 @@ from typing import Any
 
 import pytest
 import torch
-from omegaconf import OmegaConf
 
 from autoware_ml.metrics.base import EvalStage, MetricRange
 from autoware_ml.metrics.detection3d.heading_ap import HeadingAP
@@ -71,7 +70,6 @@ def _update(
     gt_boxes: list[torch.Tensor],
     gt_labels: list[torch.Tensor],
     gt_num_points: list[torch.Tensor] | None = None,
-    gt_attributes: list[list[list[str]]] | None = None,
 ) -> None:
     eval_out: dict[str, Any] = {
         "predictions": predictions,
@@ -80,8 +78,6 @@ def _update(
     }
     if gt_num_points is not None:
         eval_out["gt_num_points"] = gt_num_points
-    if gt_attributes is not None:
-        eval_out["gt_attributes"] = gt_attributes
     metric.update(eval_out)
 
 
@@ -194,47 +190,13 @@ def test_eval_class_range_filters_ground_truth_only_for_total_metric() -> None:
     assert metric.result(EvalStage.VAL) == {}
 
 
-def test_filter_attributes_excludes_matching_ground_truth() -> None:
-    metric = _suite(
-        thresholds=(0.5,),
-        class_names=("bicycle",),
-        filter_attributes=[("bicycle", "cycle_state.without_rider")],
-    )
-    _update(
-        metric,
-        predictions=[_prediction([(0.0, 0.0)], [0.9], [0])],
-        gt_boxes=[_boxes([(0.0, 0.0)])],
-        gt_labels=[torch.tensor([0], dtype=torch.long)],
-        gt_attributes=[[["cycle_state.without_rider"]]],
-    )
-
-    assert metric.result(EvalStage.VAL) == {}
-
-
-def test_filter_attributes_excludes_omegaconf_list_config_ground_truth() -> None:
-    metric = _suite(
-        thresholds=(0.5,),
-        class_names=("bicycle",),
-        filter_attributes=OmegaConf.create([["bicycle", "cycle_state.without_rider"]]),
-    )
-    _update(
-        metric,
-        predictions=[_prediction([(0.0, 0.0)], [0.9], [0])],
-        gt_boxes=[_boxes([(0.0, 0.0)])],
-        gt_labels=[torch.tensor([0], dtype=torch.long)],
-        gt_attributes=[[["cycle_state.without_rider"]]],
-    )
-
-    assert metric.result(EvalStage.VAL) == {}
-
-
-def test_class_based_filters_require_class_names() -> None:
+def test_eval_class_range_requires_class_names() -> None:
     with pytest.raises(ValueError, match="class_names"):
-        _suite(filter_attributes=[("bicycle", "cycle_state.without_rider")])
+        _suite(eval_class_range={"car": 50.0})
 
 
-def test_min_point_numbers_filters_gt_num_points() -> None:
-    metric = _suite(thresholds=(0.5,), min_point_numbers=2)
+def test_min_num_points_filters_gt_num_points() -> None:
+    metric = _suite(thresholds=(0.5,), min_num_points=2)
     _update(
         metric,
         predictions=[_prediction([(10.0, 0.0)], [0.9], [0])],

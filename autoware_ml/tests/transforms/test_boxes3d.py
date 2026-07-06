@@ -191,36 +191,6 @@ def test_load_annotations3d_replaces_nonfinite_velocity_with_zero() -> None:
     assert np.allclose(output["gt_boxes"][0, 7:], np.array([0.0, 0.0], dtype=np.float32))
 
 
-def test_load_annotations3d_filters_by_min_lidar_points() -> None:
-    sample = {
-        "class_names": ["car"],
-        "instances": [
-            {
-                "bbox_3d": [1.0, 2.0, 3.0, 4.0, 1.5, 1.7, 0.1],
-                "gt_nusc_name": "car",
-                "num_lidar_pts": 4,
-                "bbox_3d_isvalid": True,
-            },
-            {
-                "bbox_3d": [2.0, 3.0, 4.0, 4.0, 1.5, 1.7, 0.1],
-                "gt_nusc_name": "car",
-                "num_lidar_pts": 5,
-                "bbox_3d_isvalid": True,
-            },
-        ],
-    }
-
-    output = LoadAnnotations3D(min_num_lidar_points=5)(sample)
-
-    assert output["gt_boxes"].shape == (1, 9)
-    assert output["gt_num_points"].tolist() == [5]
-
-
-def test_load_annotations3d_rejects_negative_min_lidar_points() -> None:
-    with pytest.raises(ValueError, match="min_num_lidar_points"):
-        LoadAnnotations3D(min_num_lidar_points=-1)
-
-
 def test_load_annotations3d_preserves_ignored_bbox_label() -> None:
     sample = {
         "class_names": ["bicycle"],

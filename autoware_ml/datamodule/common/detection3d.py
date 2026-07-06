@@ -101,6 +101,30 @@ def load_detection_data_infos(data: dict[str, Any]) -> list[dict[str, Any]]:
     return [normalize_detection_sample(sample) for sample in data["data_list"]]
 
 
+def build_label_to_category(metainfo: Mapping[str, Any]) -> dict[int, str]:
+    """Build a ``{label_index: category_name}`` map from annotation metainfo.
+
+    Supports both annotation schemas:
+      - ``categories`` (a ``{name: index}`` mapping, e.g. the nuScenes converter), and
+      - ``classes`` (an ordered list, e.g. the T4 converter),
+
+    so the loaded ``bbox_label_3d`` indices can be decoded to class names.
+
+    Args:
+        metainfo: ``metainfo`` block from a deserialized annotation payload.
+
+    Returns:
+        Mapping from stored label index to category name.
+    """
+    categories = metainfo.get("categories")
+    if categories:
+        return {int(index): str(name) for name, index in categories.items()}
+    classes = metainfo.get("classes")
+    if classes:
+        return {label: str(category) for label, category in enumerate(classes)}
+    raise ValueError("Annotation file metainfo must define 'categories' or 'classes'.")
+
+
 def build_detection_dataloader(
     dataset: Dataset,
     dataloader_cfg: Any,

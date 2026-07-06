@@ -843,8 +843,8 @@ class Embedding(PointModule):
         self,
         in_channels: int,
         embed_channels: int,
-        kernel_size: int = 5,
-        stem_type: str = "conv",
+        kernel_size: int = 0,
+        stem_type: str = "linear",
     ) -> None:
         """Initialize the embedding stem.
 
@@ -918,8 +918,8 @@ class PointTransformerV3Backbone(PointModule):
         enable_flash: bool,
         upcast_attention: bool,
         upcast_softmax: bool,
-        stem_kernel_size: int = 5,
-        stem_type: str = "conv",
+        stem_kernel_size: int = 0,
+        stem_type: str = "linear",
     ) -> None:
         """Initialize the PTv3 encoder-decoder backbone.
 
@@ -947,8 +947,7 @@ class PointTransformerV3Backbone(PointModule):
             enable_flash: Whether to use flash attention.
             upcast_attention: Whether to upcast Q/K before attention.
             upcast_softmax: Whether to upcast logits before softmax.
-            stem_kernel_size: Embedding-stem submanifold-conv kernel size. The
-                default of 5 preserves the original 5x5x5 stem.
+            stem_kernel_size: Embedding-stem submanifold-conv kernel size.
             stem_type: Embedding-stem variant, ``"conv"`` (default) or
                 ``"linear"``. See :class:`Embedding`.
         """
