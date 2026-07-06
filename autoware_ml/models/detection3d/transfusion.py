@@ -36,45 +36,85 @@ from autoware_ml.utils.point_cloud.batching import infer_batch_size_from_voxel_c
 
 
 class _TransFusionExportWrapper(nn.Module):
-    """Wrap TransFusion export with an explicit lidar batch size.
+    """Wrap TransFusion export with the deployment tensor contract.
 
-    The wrapper keeps the exported forward signature tensor-only while fixing
-    the batch size derived from the sample batch.
+    The wrapper keeps the exported forward signature tensor-only, fixes the
+    batch size derived from the sample batch, and exposes only the deployment
+    tensors expected by Autoware consumers.
     """
 
-    def __init__(self, model: TransFusionDetectionModel, batch_size: int) -> None:
+    def __init__(
+        self,
+        pts_voxel_encoder: torch.nn.Module,
+        pts_middle_encoder: torch.nn.Module,
+        pts_backbone: torch.nn.Module,
+        pts_neck: torch.nn.Module,
+        bbox_head: torch.nn.Module,
+        batch_size: int,
+    ) -> None:
         """Initialize the export wrapper.
 
         Args:
-            model: TransFusion model instance.
+            pts_voxel_encoder: Lidar voxel feature encoder.
+            pts_middle_encoder: Export-ready sparse or dense middle encoder.
+            pts_backbone: BEV backbone.
+            pts_neck: BEV neck.
+            bbox_head: Export-ready TransFusion head.
             batch_size: Explicit export batch size.
         """
         super().__init__()
-        self.model = model
+        self.pts_voxel_encoder = pts_voxel_encoder
+        self.pts_middle_encoder = pts_middle_encoder
+        self.pts_backbone = pts_backbone
+        self.pts_neck = pts_neck
+        self.bbox_head = bbox_head
         self.batch_size = batch_size
 
     def forward(
         self,
         voxels: torch.Tensor,
         num_points: torch.Tensor,
-        voxel_coords: torch.Tensor,
-    ) -> dict[str, torch.Tensor]:
-        """Run export-time inference with a fixed batch size.
+        coors: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Run export-time inference and return deployment tensors.
 
         Args:
             voxels: Voxel features.
             num_points: Number of points in each voxel.
-            voxel_coords: Batched voxel coordinates.
+            coors: Batched voxel coordinates.
 
         Returns:
-            Detection head outputs.
+            ``cls_score0``, ``bbox_pred0``, and ``dir_cls_pred0`` tensors.
         """
-        return self.model._forward_with_batch_size(
-            voxels=voxels,
-            num_points=num_points,
-            voxel_coords=voxel_coords,
-            batch_size=self.batch_size,
+        point_features = self.pts_voxel_encoder(voxels, num_points, coors)
+        bev_features = self.pts_middle_encoder(point_features, coors, batch_size=self.batch_size)
+        bev_features = self.pts_backbone(bev_features)
+        bev_features = self.pts_neck(bev_features)
+        outputs = self.bbox_head(bev_features)
+        return _format_transfusion_export_outputs(outputs)
+
+
+def _format_transfusion_export_outputs(
+    outputs: Mapping[str, torch.Tensor],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Format TransFusion head outputs for deployment export."""
+    cls_score0 = outputs["heatmap"].sigmoid() * outputs["query_heatmap_score"]
+    bbox_pred0 = torch.cat(
+        (outputs["center"], outputs["height"], outputs["dim"], outputs["vel"]),
+        dim=1,
+    )
+    dir_cls_pred0 = outputs["rot"]
+
+    if bbox_pred0.shape[1] != 8:
+        raise ValueError(
+            f"TransFusion export expects bbox_pred0 to have 8 channels, got {bbox_pred0.shape[1]}."
         )
+    if dir_cls_pred0.shape[1] != 2:
+        raise ValueError(
+            "TransFusion export expects dir_cls_pred0 to have 2 channels, "
+            f"got {dir_cls_pred0.shape[1]}."
+        )
+    return cls_score0, bbox_pred0, dir_cls_pred0
 
 
 class TransFusionDetectionModel(BaseModel):
@@ -207,12 +247,23 @@ class TransFusionDetectionModel(BaseModel):
             Export specification for ONNX and TensorRT deployment.
         """
         batch_size = infer_batch_size_from_voxel_coords(batch_inputs_dict["voxel_coords"])
+        pts_middle_encoder = self.pts_middle_encoder
+        if hasattr(pts_middle_encoder, "prepare_for_export"):
+            pts_middle_encoder = pts_middle_encoder.prepare_for_export()
         return ExportSpec(
-            module=_TransFusionExportWrapper(self, batch_size=batch_size),
+            module=_TransFusionExportWrapper(
+                pts_voxel_encoder=self.pts_voxel_encoder,
+                pts_middle_encoder=pts_middle_encoder,
+                pts_backbone=self.pts_backbone,
+                pts_neck=self.pts_neck,
+                bbox_head=self.bbox_head.prepare_for_export(),
+                batch_size=batch_size,
+            ),
             args=(
                 batch_inputs_dict["voxels"],
                 batch_inputs_dict["num_points"],
                 batch_inputs_dict["voxel_coords"],
             ),
-            input_param_names=["voxels", "num_points", "voxel_coords"],
+            input_param_names=["voxels", "num_points", "coors"],
+            output_names=["cls_score0", "bbox_pred0", "dir_cls_pred0"],
         )

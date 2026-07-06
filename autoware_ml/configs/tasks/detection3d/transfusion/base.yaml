@@ -128,7 +128,7 @@ deploy:
         dynamic_axes:
           voxels: { 0: num_voxels }
           num_points: { 0: num_voxels }
-          voxel_coords: { 0: num_voxels }
+          coors: { 0: num_voxels }
   tensorrt:
     enabled: false
 

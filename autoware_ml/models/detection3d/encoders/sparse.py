@@ -25,6 +25,7 @@ The sparse grid order is ``(Y, X, Z)`` (= the``SparseEncoder`` "(H, W, D)") so t
 from __future__ import annotations
 
 from collections.abc import Sequence
+from copy import deepcopy
 
 import spconv.pytorch as spconv
 import torch
@@ -32,11 +33,82 @@ import torch.nn as nn
 from spconv.pytorch import SparseConvTensor, SparseSequential
 from spconv.pytorch.modules import SparseModule
 
+from autoware_ml.ops.spconv.sparse_conv import SparseConv3d as ExportableSparseConv3d
+from autoware_ml.ops.spconv.sparse_conv import SubMConv3d as ExportableSubMConv3d
+
 # Native spconv conv layers are used for training (autograd-friendly). The
 # framework's export wrappers in autoware_ml.ops.spconv are inference-only and
 # would be swapped in at ONNX-export time.
 SubMConv3d = spconv.SubMConv3d
 SparseConv3d = spconv.SparseConv3d
+
+
+def _copy_sparse_convolution_weights(
+    source: nn.Module,
+    target: nn.Module,
+) -> None:
+    """Copy trained sparse convolution weights into an export wrapper."""
+    target.weight.data.copy_(source.weight.data)
+    if source.bias is not None:
+        if target.bias is None:
+            raise ValueError("Cannot copy sparse convolution bias into a bias-free target.")
+        target.bias.data.copy_(source.bias.data)
+
+
+def _convert_sparse_convolution(module: nn.Module) -> nn.Module:
+    """Convert one native spconv layer into the export-aware equivalent."""
+    if isinstance(module, SubMConv3d):
+        converted = ExportableSubMConv3d(
+            module.in_channels,
+            module.out_channels,
+            kernel_size=module.kernel_size,
+            stride=module.stride,
+            padding=module.padding,
+            dilation=module.dilation,
+            groups=module.groups,
+            bias=module.bias is not None,
+            indice_key=module.indice_key,
+            algo=module.algo,
+            fp32_accum=module.fp32_accum,
+            large_kernel_fast_algo=getattr(module, "large_kernel_fast_algo", False),
+        )
+        _copy_sparse_convolution_weights(module, converted)
+        return converted.to(device=module.weight.device, dtype=module.weight.dtype)
+
+    if isinstance(module, SparseConv3d):
+        if module.inverse or module.transposed:
+            raise NotImplementedError(
+                "SparseEncoder export supports only forward sparse convolutions."
+            )
+        converted = ExportableSparseConv3d(
+            module.in_channels,
+            module.out_channels,
+            kernel_size=module.kernel_size,
+            stride=module.stride,
+            padding=module.padding,
+            dilation=module.dilation,
+            groups=module.groups,
+            bias=module.bias is not None,
+            indice_key=module.indice_key,
+            algo=module.algo,
+            fp32_accum=module.fp32_accum,
+            record_voxel_count=module.record_voxel_count,
+            large_kernel_fast_algo=getattr(module, "large_kernel_fast_algo", False),
+        )
+        _copy_sparse_convolution_weights(module, converted)
+        return converted.to(device=module.weight.device, dtype=module.weight.dtype)
+
+    return module
+
+
+def _replace_sparse_convolutions(module: nn.Module) -> None:
+    """Replace native sparse convolution children in-place on an export copy."""
+    for name, child in list(module.named_children()):
+        converted = _convert_sparse_convolution(child)
+        if converted is not child:
+            module.add_module(name, converted)
+        else:
+            _replace_sparse_convolutions(child)
 
 
 def _norm(channels: int, eps: float, momentum: float) -> nn.BatchNorm1d:
@@ -219,3 +291,14 @@ class SparseEncoder(nn.Module):
         # (B, Y, X, Z, C) -> (B, C, Z, Y, X) -> (B, C*Z, Y, X)
         dense = dense.permute(0, 4, 3, 1, 2).contiguous()
         return dense.view(batch_size, channels * depth, height, width)
+
+    def prepare_for_export(self) -> "SparseEncoder":
+        """Return an export-ready copy with sparse convolution wrappers.
+
+        Returns:
+            Deep copy of the encoder with native spconv layers replaced by the
+            deployment-aware wrappers from :mod:`autoware_ml.ops.spconv`.
+        """
+        encoder = deepcopy(self).eval()
+        _replace_sparse_convolutions(encoder)
+        return encoder

@@ -9,6 +9,7 @@ import pytest
 
 from autoware_ml.models.detection3d.backbones.second import SECONDBackbone
 from autoware_ml.models.detection3d.encoders.pillar import PillarFeatureNet, PointPillarsScatter
+from autoware_ml.models.detection3d.heads.transfusion import ExportableMultiheadAttention
 from autoware_ml.models.detection3d.heads.transfusion import TransFusionHead
 from autoware_ml.models.detection3d.necks.second_fpn import SECONDFPN
 from autoware_ml.models.detection3d.task_modules.assigners import AssignResult, HungarianAssigner3D
@@ -143,6 +144,48 @@ def test_transfusion_forward_returns_query_predictions() -> None:
     assert "query_labels" in outputs
     assert outputs["heatmap"].shape[-1] == 8
     assert outputs["center"].shape[-1] == 8
+
+
+def test_transfusion_build_export_spec_uses_deployment_io_contract() -> None:
+    model = _build_model().eval()
+    voxels = torch.randn(12, 5, 4)
+    num_points = torch.randint(1, 5, (12,), dtype=torch.int32)
+    voxel_coords = torch.randint(0, 8, (12, 4), dtype=torch.int32)
+    voxel_coords[:, 0] = 0
+
+    spec = model.build_export_spec(
+        {
+            "voxels": voxels,
+            "num_points": num_points,
+            "voxel_coords": voxel_coords,
+        }
+    )
+    cls_score0, bbox_pred0, dir_cls_pred0 = spec.module(*spec.args)
+
+    assert spec.input_param_names == ["voxels", "num_points", "coors"]
+    assert spec.output_names == ["cls_score0", "bbox_pred0", "dir_cls_pred0"]
+    assert cls_score0.shape == (1, 2, 8)
+    assert bbox_pred0.shape == (1, 8, 8)
+    assert dir_cls_pred0.shape == (1, 2, 8)
+
+
+def test_transfusion_build_export_spec_prepares_head_without_mutating_model() -> None:
+    model = _build_model().eval()
+    voxels = torch.randn(12, 5, 4)
+    num_points = torch.randint(1, 5, (12,), dtype=torch.int32)
+    voxel_coords = torch.randint(0, 8, (12, 4), dtype=torch.int32)
+    voxel_coords[:, 0] = 0
+
+    spec = model.build_export_spec(
+        {
+            "voxels": voxels,
+            "num_points": num_points,
+            "voxel_coords": voxel_coords,
+        }
+    )
+
+    assert isinstance(model.bbox_head.decoder[0].self_attn, torch.nn.MultiheadAttention)
+    assert isinstance(spec.module.bbox_head.decoder[0].self_attn, ExportableMultiheadAttention)
 
 
 def test_transfusion_predict_reweights_scores_by_query_labels() -> None:
