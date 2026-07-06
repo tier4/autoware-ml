@@ -34,7 +34,7 @@ from spconv.pytorch.modules import SparseModule
 
 # Native spconv conv layers are used for training (autograd-friendly). The
 # framework's export wrappers in autoware_ml.ops.spconv are inference-only and
-# would be swapped in at ONNX-export time, mirroring the PTv3 backbone.
+# would be swapped in at ONNX-export time.
 SubMConv3d = spconv.SubMConv3d
 SparseConv3d = spconv.SparseConv3d
 
