@@ -134,6 +134,7 @@
     "issubdtype",
     "isystem",
     "jaccard",
+    "jaxtyping",
     "jpntaxi",
     "jpntaxigen2",
     "javascripts",
