@@ -18,7 +18,7 @@ from torch import Tensor
 import numpy as np
 import numpy.typing as npt
 
-from autoware_ml.types.geometry import Box3DFieldIndex, Box3DCenterSystem
+from autoware_ml.types.geometry import Box3DFieldIndex, Box3DCenterCoordinateType
 from autoware_ml.types.spatial import BEVDirection, RotationAxis
 
 
@@ -37,7 +37,7 @@ class BaseBBoxes3D(Protocol):
         self,
         bbox_params: Float32[Tensor, "num_bboxes num_Box3DFieldIndex"],
         bbox_labels: Int32[Tensor, " num_bboxes"],
-        bbox_center_system: Box3DCenterSystem,
+        bbox_center_coordinate_type: Box3DCenterCoordinateType,
     ) -> None:
         """
         Initialize the base class for 3D bounding boxes. Note that the class in only available
@@ -47,17 +47,17 @@ class BaseBBoxes3D(Protocol):
         Args:
             bbox_params (Float32[Tensor, "num_bboxes num_Box3DFieldIndex"]): The parameters of the 3D bounding boxes.
             bbox_labels (Int32[Tensor, "num_bboxes"]): The labels of the 3D bounding boxes.
-            bbox_center_system (Box3DCenterSystem): The center system of the 3D bounding boxes.
-                It only support "gravity_center" for now. We specify this to make sure users
-                are aware of the center system being used.
+            bbox_center_coordinate_type (Box3DCenterCoordinateType): The center coordinate type of the 3D bounding boxes.
+                It only support "gravity_center (center of z is in the middle)" for now.
+                We specify this to make sure users are aware of the center coordinate type being used.
         """
 
         self.bbox_params = bbox_params
         self.bbox_labels = bbox_labels
-        self.bbox_center_system = bbox_center_system
-        if self.bbox_center_system != Box3DCenterSystem.GRAVITY_CENTER:
+        self.bbox_center_coordinate_type = bbox_center_coordinate_type
+        if self.bbox_center_coordinate_type != Box3DCenterCoordinateType.GRAVITY_CENTER:
             raise ValueError(
-                f"Only gravity center system is supported for now, but got {self.bbox_center_system}"
+                f"Only gravity center coordinate type is supported for now, but got {self.bbox_center_coordinate_type}"
             )
 
     def __len__(self) -> int:
@@ -97,9 +97,9 @@ class BaseBBoxes3D(Protocol):
         Returns:
             (N, ): The volume of the 3D bounding boxes.
         """
-        length = self.bbox_params[:, Box3DFieldIndex.LENGTH.value]
-        width = self.bbox_params[:, Box3DFieldIndex.WIDTH.value]
-        height = self.bbox_params[:, Box3DFieldIndex.HEIGHT.value]
+        length = self.bbox_params[:, Box3DFieldIndex.LENGTH]
+        width = self.bbox_params[:, Box3DFieldIndex.WIDTH]
+        height = self.bbox_params[:, Box3DFieldIndex.HEIGHT]
         return length * width * height
 
     @property
@@ -110,8 +110,8 @@ class BaseBBoxes3D(Protocol):
         Returns:
             (N, ): The area of the 3D bounding boxes.
         """
-        length = self.bbox_params[:, Box3DFieldIndex.LENGTH.value]
-        width = self.bbox_params[:, Box3DFieldIndex.WIDTH.value]
+        length = self.bbox_params[:, Box3DFieldIndex.LENGTH]
+        width = self.bbox_params[:, Box3DFieldIndex.WIDTH]
         return length * width
 
     @property
@@ -122,9 +122,7 @@ class BaseBBoxes3D(Protocol):
         Returns:
             (N, 3): The center coordinates of the 3D bounding boxes as (x, y, z).
         """
-        return self.bbox_params[
-            :, [Box3DFieldIndex.X.value, Box3DFieldIndex.Y.value, Box3DFieldIndex.Z.value]
-        ]
+        return self.bbox_params[:, [Box3DFieldIndex.X, Box3DFieldIndex.Y, Box3DFieldIndex.Z]]
 
     @property
     def height(self) -> Float32[Tensor, " num_bboxes"]:
@@ -134,7 +132,7 @@ class BaseBBoxes3D(Protocol):
         Returns:
             (N, ): The height of the 3D bounding boxes.
         """
-        return self.bbox_params[:, Box3DFieldIndex.HEIGHT.value]
+        return self.bbox_params[:, Box3DFieldIndex.HEIGHT]
 
     @property
     def yaw(self) -> Float32[Tensor, " num_bboxes"]:
@@ -144,7 +142,7 @@ class BaseBBoxes3D(Protocol):
         Returns:
             (N, ): The yaw angle of the 3D bounding boxes.
         """
-        return self.bbox_params[:, Box3DFieldIndex.YAW.value]
+        return self.bbox_params[:, Box3DFieldIndex.YAW]
 
     @property
     def dims(self) -> Float32[Tensor, " num_bboxes 3"]:
@@ -157,9 +155,9 @@ class BaseBBoxes3D(Protocol):
         return self.bbox_params[
             :,
             [
-                Box3DFieldIndex.LENGTH.value,
-                Box3DFieldIndex.WIDTH.value,
-                Box3DFieldIndex.HEIGHT.value,
+                Box3DFieldIndex.LENGTH,
+                Box3DFieldIndex.WIDTH,
+                Box3DFieldIndex.HEIGHT,
             ],
         ]
 
@@ -184,9 +182,9 @@ class BaseBBoxes3D(Protocol):
         return self.bbox_params[
             :,
             [
-                Box3DFieldIndex.VELOCITY_X.value,
-                Box3DFieldIndex.VELOCITY_Y.value,
-                Box3DFieldIndex.VELOCITY_Z.value,
+                Box3DFieldIndex.VELOCITY_X,
+                Box3DFieldIndex.VELOCITY_Y,
+                Box3DFieldIndex.VELOCITY_Z,
             ],
         ]
 
@@ -219,7 +217,7 @@ class BaseBBoxes3D(Protocol):
         Returns:
             (num_bboxes, 2): The BEV center coordinates of the 3D bounding boxes as (x, y).
         """
-        return self.bbox_params[:, [Box3DFieldIndex.X.value, Box3DFieldIndex.Y.value]]
+        return self.bbox_params[:, [Box3DFieldIndex.X, Box3DFieldIndex.Y]]
 
     @property
     def bev_dims(self) -> Float32[Tensor, " num_bboxes 2"]:
@@ -229,18 +227,19 @@ class BaseBBoxes3D(Protocol):
         Returns:
             (num_bboxes, 2): The BEV dimensions of the 3D bounding boxes as (length, width).
         """
-        return self.bbox_params[:, [Box3DFieldIndex.LENGTH.value, Box3DFieldIndex.WIDTH.value]]
+        return self.bbox_params[:, [Box3DFieldIndex.LENGTH, Box3DFieldIndex.WIDTH]]
 
     @abstractmethod
     def rotate(
         self,
-        rotation_angle: float,
+        rotation_matrices: Float32[Tensor, "3 3"],
     ) -> Float32[Tensor, "3 3"]:
         """
         Rotate the 3D bounding boxes globally using a given rotation angle.
 
         Args:
-            rotation_angle (float): The rotation angle to apply to the bounding boxes.
+            rotation_matrices (Float32[Tensor, "3 3"]): The rotation matrices to apply to the bounding boxes.
+                It should be a 3x3 matrix representing the rotation in 3D space.
 
         Returns:
             Tensor.float32 (3, 3): Rotation matrix.
@@ -271,9 +270,9 @@ class BaseBBoxes3D(Protocol):
         Args:
             translation_vector (Tensor.float32, (3)): The translation vector to apply to the bounding boxes.
         """
-        self.bbox_params[
-            :, [Box3DFieldIndex.X.value, Box3DFieldIndex.Y.value, Box3DFieldIndex.Z.value]
-        ] += translation_vector
+        self.bbox_params[:, [Box3DFieldIndex.X, Box3DFieldIndex.Y, Box3DFieldIndex.Z]] += (
+            translation_vector
+        )
 
     def in_range_3d(self, bev_range: Float32[Tensor, "6"]) -> Bool[Tensor, " num_bboxes"]:
         """
@@ -315,20 +314,20 @@ class BaseBBoxes3D(Protocol):
         self.bbox_params[
             :,
             [
-                Box3DFieldIndex.LENGTH.value,
-                Box3DFieldIndex.WIDTH.value,
-                Box3DFieldIndex.HEIGHT.value,
+                Box3DFieldIndex.LENGTH,
+                Box3DFieldIndex.WIDTH,
+                Box3DFieldIndex.HEIGHT,
             ],
         ] *= scale_factor
-        self.bbox_params[
-            :, [Box3DFieldIndex.X.value, Box3DFieldIndex.Y.value, Box3DFieldIndex.Z.value]
-        ] *= scale_factor
+        self.bbox_params[:, [Box3DFieldIndex.X, Box3DFieldIndex.Y, Box3DFieldIndex.Z]] *= (
+            scale_factor
+        )
         self.bbox_params[
             :,
             [
-                Box3DFieldIndex.VELOCITY_X.value,
-                Box3DFieldIndex.VELOCITY_Y.value,
-                Box3DFieldIndex.VELOCITY_Z.value,
+                Box3DFieldIndex.VELOCITY_X,
+                Box3DFieldIndex.VELOCITY_Y,
+                Box3DFieldIndex.VELOCITY_Z,
             ],
         ] *= scale_factor
 
@@ -343,8 +342,8 @@ class BaseBBoxes3D(Protocol):
         if period is None:
             period = 2 * torch.pi
 
-        bboxes_yaw = self.bbox_params[:, Box3DFieldIndex.YAW.value]
-        self.bbox_params[:, Box3DFieldIndex.YAW.value] = (
+        bboxes_yaw = self.bbox_params[:, Box3DFieldIndex.YAW]
+        self.bbox_params[:, Box3DFieldIndex.YAW] = (
             bboxes_yaw - torch.floor(bboxes_yaw / period + offset) * period
         )
 
@@ -400,7 +399,10 @@ class BaseBBoxes3D(Protocol):
 
     @classmethod
     def from_numpy(
-        cls, bbox_params: npt.NDArray[np.float32], bbox_labels: npt.NDArray[np.int32]
+        cls,
+        bbox_params: npt.NDArray[np.float32],
+        bbox_labels: npt.NDArray[np.int32],
+        bbox_center_coordinate_type: Box3DCenterCoordinateType,
     ) -> "BaseBBoxes3D":
         """
         Create a BaseBBoxes3D instance from a NumPy array.
@@ -410,7 +412,13 @@ class BaseBBoxes3D(Protocol):
                 representation of the 3D bounding boxes.
             bbox_labels (npt.NDArray[np.int32], (num_bboxes,)): A NumPy array representation of the
                 labels of the 3D bounding boxes.
+            bbox_center_coordinate_type (Box3DCenterCoordinateType): The center coordinate type of
+                the 3D bounding boxes.
         """
         bbox_params_tensor = torch.from_numpy(bbox_params).float()
         bbox_labels_tensor = torch.from_numpy(bbox_labels).int()
-        return cls(bbox_params=bbox_params_tensor, bbox_labels=bbox_labels_tensor)
+        return cls(
+            bbox_params=bbox_params_tensor,
+            bbox_labels=bbox_labels_tensor,
+            bbox_center_coordinate_type=bbox_center_coordinate_type,
+        )

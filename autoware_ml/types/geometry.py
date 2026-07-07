@@ -30,9 +30,9 @@ class Box3DFieldIndex(IntEnum):
     VELOCITY_Z = 9
 
 
-class Box3DCenterSystem(StrEnum):
+class Box3DCenterCoordinateType(StrEnum):
     """
-    Box 3D center system.
+    Box 3D center coordinate type.
 
     Attributes:
       GravityCenter: The center of the box is at the gravity center of the box, where z coordinate
