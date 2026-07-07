@@ -20,8 +20,10 @@ from collections.abc import Sequence
 
 import numpy as np
 
+from autoware_ml.geometry.points.lidar_points import LiDARPoints
 from autoware_ml.transforms.multi_task.base import MultiTaskBaseTransform
 from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTSample
+from autoware_ml.types.geometry import PointFeatureName, PointFieldIndex
 
 
 class LoadPointsFromFile(MultiTaskBaseTransform):
@@ -56,16 +58,26 @@ class LoadPointsFromFile(MultiTaskBaseTransform):
         current_lidar_point_path = multi_task_gt_sample.lidar_point_cloud_samples[
             0
         ].point_cloud_path
-        points = np.fromfile(current_lidar_point_path, dtype=np.float32).reshape(-1, self.load_dim)
+        points_np = np.fromfile(current_lidar_point_path, dtype=np.float32).reshape(
+            -1, self.load_dim
+        )
 
         if isinstance(self.use_dim, int):
-            points = points[:, : self.use_dim]
+            use_dims = list(range(self.use_dim))
         else:
-            points = points[:, self.use_dim]
+            use_dims = list(self.use_dim)
+
+        points_np = points_np[:, use_dims]
+        # Mapping from use_dims to PointFeatureName using PointFieldIndex enumeration
+        point_feature_names = [PointFeatureName(PointFieldIndex(i).name.lower()) for i in use_dims]
+
+        lidar_points = LiDARPoints.from_numpy(
+            points_np=points_np, point_feature_names=point_feature_names
+        )
 
         return MultiTaskGTSample(
             lidar_point_cloud_samples=multi_task_gt_sample.lidar_point_cloud_samples,
-            detection3d_gt_sample=multi_task_gt_sample.detection3d_gt_sample,
-            point_cloud_features=points,
+            detection3d_gt_bboxes_3d=multi_task_gt_sample.detection3d_gt_bboxes_3d,
+            point_cloud_features=lidar_points,
             segmentation3d_gt_sample=multi_task_gt_sample.segmentation3d_gt_sample,
         )

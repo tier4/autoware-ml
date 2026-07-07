@@ -2,45 +2,54 @@ from __future__ import annotations
 
 from typing import Sequence, NamedTuple
 
+from jaxtyping import Float32, Int32
 import numpy.typing as npt
 import numpy as np
+import torch
+from torch import Tensor
 
 from autoware_ml.datamodule.multi_task.dataclasses.detection3d import (
     Detection3DGTBatch,
 )
 from autoware_ml.datamodule.multi_task.dataclasses.segmentation3d import Segmentation3DGTSample
 from autoware_ml.geometry.bbox_3d.base_bbox3d import BaseBBoxes3D
+from autoware_ml.geometry.points.base_points import BasePoints
 
 
 class PointCloudGTBatch(NamedTuple):
     """Named tuple to represent pointcloud features in a batch size with their batch indices."""
 
-    points: npt.NDArray[np.float32]  # (B*P, number of features for each point)
-    batch_indices: npt.NDArray[np.int32] | None  # (B*P, ), batch indices for each point
+    points: Float32[
+        Tensor, "batch_size*num_points num_features"
+    ]  # (B*P, number of features for each point)
+    batch_indices: Int32[Tensor, " batch_size*num_points"]  # (B*P, ), batch indices for each point
 
     @staticmethod
     def collate_gt_samples(
-        point_gt_samples: Sequence[npt.NDArray[np.float32]],
-    ) -> PointCloudGTBatch:
+        point_gt_samples: Sequence[BasePoints],
+    ) -> PointCloudGTBatch | None:
         """
-        Collate a sequence of points (npt.NDArray[np.float32]) into a single PointCloudGTBatch.
+        Collate a sequence of points (BasePoints) into a single PointCloudGTBatch.
 
         Args:
-          point_gt_samples: Sequence of points (npt.NDArray[np.float32]) to be collated.
+          point_gt_samples: Sequence of points (BasePoints) to be collated.
 
         Returns:
           PointCloudGTBatch: Collated point cloud GT batch.
         """
+        if len(point_gt_samples) == 0:
+            return None
+
         # Concatenate all points from the sequence of point_gt_samples
-        points = np.concatenate(point_gt_samples, axis=0)
+        points = torch.cat([sample.points for sample in point_gt_samples], dim=0)
 
         # Convert it to (0, 0, 0, 1, 1, 1, 2, 2, 2, ...) for each point in the batch
-        batch_indices = np.concatenate(
+        batch_indices = torch.cat(
             [
-                np.full((point.shape[0],), i, dtype=np.int32)
+                torch.full((point.points.shape[0],), i, dtype=torch.int32)
                 for i, point in enumerate(point_gt_samples)
             ],
-            axis=0,
+            dim=0,
         )
         return PointCloudGTBatch(
             points=points,
@@ -75,7 +84,7 @@ class MultiTaskGTSample(NamedTuple):
 
     # (number of point clouds, number of features for each point), can be None
     # if it doesn't need to be loaded
-    point_cloud_features: npt.NDArray[np.float32] | None
+    point_cloud_features: BasePoints | None
 
     detection3d_gt_bboxes_3d: BaseBBoxes3D | None
     segmentation3d_gt_sample: Segmentation3DGTSample | None
@@ -108,14 +117,17 @@ class MultiTaskGTBatch(NamedTuple):
         if len(gt_samples) == 0:
             return None
 
-        # Check if pointclouds are available in the samples
-        available_pointcloud_samples = gt_samples[0].point_cloud_features is not None
-        if available_pointcloud_samples:
-            pointcloud_samples = [sample.point_cloud_features for sample in gt_samples]
-            point_cloud_gt_batch = PointCloudGTBatch.collate_gt_samples(pointcloud_samples)
-        else:
-            point_cloud_gt_batch = None
+        available_pointcloud = gt_samples[0].point_cloud_features is not None
+        if not available_pointcloud:
+            return None
 
+        pointcloud_samples = []
+        for sample in gt_samples:
+            if sample.point_cloud_features is None:
+                raise ValueError("All samples must have point_cloud_features for collating.")
+            pointcloud_samples.append(sample.point_cloud_features)
+
+        point_cloud_gt_batch = PointCloudGTBatch.collate_gt_samples(pointcloud_samples)
         return point_cloud_gt_batch
 
     @staticmethod
@@ -136,17 +148,22 @@ class MultiTaskGTBatch(NamedTuple):
         if len(gt_samples) == 0:
             return None
 
-        # Check if detection3d_gt_samples are available in the samples
-        available_detection3d_samples = gt_samples[0].detection3d_gt_sample is not None
-        if available_detection3d_samples:
-            detection3d_gt_samples = [sample.detection3d_gt_sample for sample in gt_samples]
-            detection3d_gt_batch = Detection3DGTBatch.collate_gt_samples(
-                detection3d_gt_samples=detection3d_gt_samples,
-                max_num_3d_gt_bboxes=max_num_3d_gt_bboxes,
-            )
-        else:
-            detection3d_gt_batch = None
+        # Check if detection3d_gt_bboxes_3d are available in the samples
+        available_detection3d_gt_bboxes_3d = gt_samples[0].detection3d_gt_bboxes_3d is not None
+        if not available_detection3d_gt_bboxes_3d:
+            return None
 
+        detection3d_gt_bboxes_3d = []
+        for sample in gt_samples:
+            if sample.detection3d_gt_bboxes_3d is None:
+                raise ValueError("All samples must have detection3d_gt_bboxes_3d for collating.")
+
+            detection3d_gt_bboxes_3d.append(sample.detection3d_gt_bboxes_3d)
+
+        detection3d_gt_batch = Detection3DGTBatch.collate_gt_samples(
+            detection3d_gt_bboxes_3d=detection3d_gt_bboxes_3d,
+            max_num_3d_gt_bboxes=max_num_3d_gt_bboxes,
+        )
         return detection3d_gt_batch
 
     @staticmethod

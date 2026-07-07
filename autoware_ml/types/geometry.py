@@ -40,3 +40,45 @@ class Box3DCenterCoordinateType(StrEnum):
     """
 
     GRAVITY_CENTER = "gravity_center"
+
+
+class PointFieldIndex(IntEnum):
+    """
+    Point field index.
+
+    Attributes:
+      X: X coordinate of the point.
+      Y: Y coordinate of the point.
+      Z: Z coordinate of the point.
+      INTENSITY: Intensity of the point.
+      RING: Ring index of the point.
+      TIME: Timestamp of the point.
+    """
+
+    X = 0
+    Y = 1
+    Z = 2
+    INTENSITY = 3
+    RING = 4
+    TIME = 5
+
+
+class PointFeatureName(StrEnum):
+    """
+    Point feature name.
+
+    Attributes:
+      X: X coordinate of the point.
+      Y: Y coordinate of the point.
+      Z: Z coordinate of the point.
+      INTENSITY: Intensity of the point.
+      RING: Ring index of the point.
+      TIME: Timestamp of the point.
+    """
+
+    X = "x"
+    Y = "y"
+    Z = "z"
+    INTENSITY = "intensity"
+    RING = "ring"
+    TIME = "time"

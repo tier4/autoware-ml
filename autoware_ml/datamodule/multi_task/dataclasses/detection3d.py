@@ -31,18 +31,18 @@ class Detection3DGTBatch(NamedTuple):
     """
 
     # (batch_size, maximum number of bboxes, num_Box3DFieldIndex)
-    gt_bboxes_3d: Float32[Tensor, "batch_size max_num_3d_gt_bboxes num_Box3DFieldIndex"]
+    gt_bboxes_3d: Float32[Tensor, "batch_size max_num_3d_gt_bboxes num_Box3DFieldIndex"] | None
     # (batch_size, maximum number of bboxes)
-    gt_labels_3d: Int32[Tensor, "batch_size max_num_3d_gt_bboxes"]
+    gt_labels_3d: Int32[Tensor, "batch_size max_num_3d_gt_bboxes"] | None
     # (batch_size, ), number of valid bboxes for each sample in the batch
-    gt_valid_bboxes: Int32[
-        Tensor, " batch_size"
-    ]  # (B, ), number of maximum valid bboxes for each sample.
+    gt_valid_bboxes: (
+        Int32[Tensor, " batch_size"] | None
+    )  # (B, ), number of maximum valid bboxes for each sample.
 
     @staticmethod
     def collate_gt_samples(
         detection3d_gt_bboxes_3d: Sequence[BaseBBoxes3D], max_num_3d_gt_bboxes: int
-    ) -> Detection3DGTBatch:
+    ) -> Detection3DGTBatch | None:
         """
         Collate a sequence of BaseBBoxes3D into a Detection3DGTBatch.
 
@@ -54,14 +54,11 @@ class Detection3DGTBatch(NamedTuple):
             and the rest will be ignored.
 
         Returns:
-          Detection3DGTBatch: Collated 3D detection GT batch.
+          Detection3DGTBatch | None: Collated 3D detection GT batch or None if the input
+            sequence is empty.
         """
         if len(detection3d_gt_bboxes_3d) == 0:
-            return Detection3DGTBatch(
-                gt_bboxes_3d=None,
-                gt_labels_3d=None,
-                gt_valid_bboxes=None,
-            )
+            return None
 
         num_bbox_params = len(Box3DFieldIndex)
 
@@ -84,17 +81,18 @@ class Detection3DGTBatch(NamedTuple):
         )
 
         # Fill the arrays with the data from gt_samples
-        for i, sample in enumerate(detection3d_gt_bboxes_3d):
-            num_bboxes = min(sample.gt_bboxes_3d.shape[0], max_num_3d_gt_bboxes)
-            if sample.gt_bboxes_3d.shape[0] > max_num_3d_gt_bboxes:
+        for i, sample_gt_bboxes_3d in enumerate(detection3d_gt_bboxes_3d):
+            num_gt_bboxes_3d = len(sample_gt_bboxes_3d)
+            num_bboxes = min(num_gt_bboxes_3d, max_num_3d_gt_bboxes)
+            if num_gt_bboxes_3d > max_num_3d_gt_bboxes:
                 logger.info(
-                    f"Warning: num_bboxes in the sample exceeds the "
+                    f"Warning: num_bboxes: {num_gt_bboxes_3d} in the sample exceeds the "
                     f"maximum value: {max_num_3d_gt_bboxes}, and thus they are trimmed to "
                     f"{max_num_3d_gt_bboxes}"
                 )
 
-            gt_bboxes_3d[i, :num_bboxes, :] = sample.gt_bboxes_3d[:num_bboxes, :]
-            gt_labels_3d[i, :num_bboxes] = sample.gt_labels_3d[:num_bboxes]
+            gt_bboxes_3d[i, :num_bboxes, :] = sample_gt_bboxes_3d.bbox_params[:num_bboxes, :]
+            gt_labels_3d[i, :num_bboxes] = sample_gt_bboxes_3d.bbox_labels[:num_bboxes]
 
             # Set to -1 for those gt_labels_3d that are invalid (i.e., beyond the number of valid bboxes)
             gt_labels_3d[i, num_bboxes:] = -1  # Assuming -1 is used to indicate invalid labels

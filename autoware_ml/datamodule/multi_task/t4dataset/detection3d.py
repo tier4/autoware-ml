@@ -5,7 +5,7 @@ from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDatasetSchema
 from autoware_ml.datamodule.multi_task.base_dataset_task import BaseDatasetTask
 from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTSample
-from autoware_ml.geometry.bbox_3d.base_bbox3d import BaseBBoxes3D
+from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LiDARBBoxes3D
 from autoware_ml.types.geometry import Box3DFieldIndex, Box3DCenterCoordinateType
 
 
@@ -56,7 +56,7 @@ class T4Detection3DTask(BaseDatasetTask):
         """
         return "T4Detection3DTask"
 
-    def get_data_sample(self, idx: int) -> BaseBBoxes3D:
+    def get_data_sample(self, idx: int) -> MultiTaskGTSample:
         """
         Process the dataset records dataframe for 3D detection in the T4 dataset.
 
@@ -67,6 +67,9 @@ class T4Detection3DTask(BaseDatasetTask):
         Returns:
           MultiTaskDataRow: Processed multi-task data row for 3D detection in the T4 dataset.
         """
+        if self.dataset_records_dataframe is None:
+            raise ValueError("Dataset records dataframe is not available.")
+
         # Retrieve the specific row from the dataset records dataframe based on the given index
         # and the bbox3d column.
         selected_row = self.dataset_records_dataframe.item(
@@ -82,6 +85,11 @@ class T4Detection3DTask(BaseDatasetTask):
             .to_numpy()
             .astype(np.int32, copy=False)
         )
+        gt_bboxes_valid = (
+            selected_row.field(Box3DDatasetSchema.BOX3D_VALID.name)
+            .to_numpy()
+            .astype(np.bool_, copy=False)
+        )
 
         if not len(gt_bboxes_3d):
             gt_bboxes_3d = np.zeros(
@@ -89,7 +97,11 @@ class T4Detection3DTask(BaseDatasetTask):
             )  # Zero shape of (0, 10) for empty bboxes
             gt_bboxes_labels = np.zeros((0,), dtype=np.int32)
 
-        detection3d_bboxes_3d = BaseBBoxes3D.from_numpy(
+        # Filter out invalid bounding boxes based on the valid mask
+        gt_bboxes_3d = gt_bboxes_3d[gt_bboxes_valid]
+        gt_bboxes_labels = gt_bboxes_labels[gt_bboxes_valid]
+
+        detection3d_bboxes_3d = LiDARBBoxes3D.from_numpy(
             bbox_params=gt_bboxes_3d,
             bbox_labels=gt_bboxes_labels,
             bbox_center_coordinate_type=Box3DCenterCoordinateType.GRAVITY_CENTER,

@@ -38,20 +38,23 @@ class LiDARBBoxes3D(BaseBBoxes3D):
 
     def __init__(
         self,
-        bbox_params: Float32[Tensor, " num_bboxes num_Box3DFieldIndex"],
+        bbox_params: Float32[Tensor, "num_bboxes num_Box3DFieldIndex"],
         bbox_labels: Int32[Tensor, " num_bboxes"],
-        bbox_center_system: Box3DCenterCoordinateType,
+        bbox_center_coordinate_type: Box3DCenterCoordinateType,
     ) -> None:
         """
         Initialize the LiDARBBoxes3D instance.
 
         Args:
-            bbox_params: A tensor of shape (num_bboxes, num_Box3DFieldIndex) representing the parameters of the 3D bounding boxes.
+            bbox_params: A tensor of shape (num_bboxes, num_Box3DFieldIndex) representing the
+                parameters of the 3D bounding boxes.
             bbox_labels: A tensor of shape (num_bboxes,) representing the labels of the 3D bounding boxes.
-            bbox_center_system: The center system of the 3D bounding boxes.
+            bbox_center_coordinate_type: The center coordinate type of the 3D bounding boxes.
         """
         super().__init__(
-            bbox_params=bbox_params, bbox_labels=bbox_labels, bbox_center_system=bbox_center_system
+            bbox_params=bbox_params,
+            bbox_labels=bbox_labels,
+            bbox_center_coordinate_type=bbox_center_coordinate_type,
         )
 
     @property
@@ -137,7 +140,7 @@ class LiDARBBoxes3D(BaseBBoxes3D):
             @ rotation_matrix[:2, :2]
         )
 
-    def flip(
+    def flip_bev(
         self,
         bev_direction: BEVDirection,
     ) -> None:
