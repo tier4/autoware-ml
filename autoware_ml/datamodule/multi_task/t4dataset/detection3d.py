@@ -5,7 +5,7 @@ from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDatasetSchema
 from autoware_ml.datamodule.multi_task.base_dataset_task import BaseDatasetTask
 from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTSample
-from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LiDARBBoxes3D
+from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
 from autoware_ml.types.geometry import Box3DFieldIndex, Box3DCenterCoordinateType
 
 
@@ -105,7 +105,7 @@ class T4Detection3DTask(BaseDatasetTask):
             gt_bboxes_3d = gt_bboxes_3d[gt_bboxes_valid]
             gt_bboxes_labels = gt_bboxes_labels[gt_bboxes_valid]
 
-        detection3d_bboxes_3d = LiDARBBoxes3D.from_numpy(
+        detection3d_bboxes_3d = LidarBBoxes3D.from_numpy(
             bbox_params=gt_bboxes_3d,
             bbox_labels=gt_bboxes_labels,
             bbox_center_coordinate_type=Box3DCenterCoordinateType.GRAVITY_CENTER,

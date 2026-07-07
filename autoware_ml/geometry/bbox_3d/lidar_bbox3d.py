@@ -16,7 +16,7 @@ from autoware_ml.types.spatial import BEVDirection, RotationAxis
 from autoware_ml.types.geometry import Box3DFieldIndex, Box3DCenterCoordinateType
 
 
-class LiDARBBoxes3D(BaseBBoxes3D):
+class LidarBBoxes3D(BaseBBoxes3D):
     """
     A class to represent 3D bounding boxes in LiDAR coordinate systems.
     This class extends the BaseBBoxes3D class and provides additional functionalities
@@ -43,7 +43,7 @@ class LiDARBBoxes3D(BaseBBoxes3D):
         bbox_center_coordinate_type: Box3DCenterCoordinateType,
     ) -> None:
         """
-        Initialize the LiDARBBoxes3D instance.
+        Initialize the LidarBBoxes3D instance.
 
         Args:
             bbox_params: A tensor of shape (num_bboxes, num_Box3DFieldIndex) representing the
