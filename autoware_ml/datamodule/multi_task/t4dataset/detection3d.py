@@ -15,13 +15,17 @@ class T4Detection3DTask(BaseDatasetTask):
     This class defines how to process the dataset records for 3D detection in the T4 dataset and retrieve the necessary information for training and evaluation.
     """
 
-    def __init__(self, dataset_records_dataframe: pl.DataFrame | None) -> None:
+    def __init__(
+        self, dataset_records_dataframe: pl.DataFrame | None, filter_valid_masks: bool = True
+    ) -> None:
         """
         Initialize the T4Detection3DTask class.
         Args:
           dataset_records_dataframe: Polars DataFrame of dataset records to be processed for 3D detection in the T4 dataset.
+          filter_valid_masks: Whether to filter out invalid bounding boxes based on valid_mask.
         """
         super().__init__(dataset_records_dataframe=dataset_records_dataframe)
+        self.filter_valid_masks = filter_valid_masks
 
     def pre_filter_dataset_records(
         self, dataset_records_dataframe: pl.DataFrame | None
@@ -96,10 +100,10 @@ class T4Detection3DTask(BaseDatasetTask):
                 (0, len(Box3DFieldIndex)), dtype=np.float32
             )  # Zero shape of (0, 10) for empty bboxes
             gt_bboxes_labels = np.zeros((0,), dtype=np.int32)
-
-        # Filter out invalid bounding boxes based on the valid mask
-        gt_bboxes_3d = gt_bboxes_3d[gt_bboxes_valid]
-        gt_bboxes_labels = gt_bboxes_labels[gt_bboxes_valid]
+        elif self.filter_valid_masks:
+            # Filter out invalid bounding boxes based on the valid mask if filter_valid_masks is True
+            gt_bboxes_3d = gt_bboxes_3d[gt_bboxes_valid]
+            gt_bboxes_labels = gt_bboxes_labels[gt_bboxes_valid]
 
         detection3d_bboxes_3d = LiDARBBoxes3D.from_numpy(
             bbox_params=gt_bboxes_3d,

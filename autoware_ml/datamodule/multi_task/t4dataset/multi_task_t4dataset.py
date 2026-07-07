@@ -67,22 +67,22 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
             f"transforms: {self.transforms} and max_num_3d_gt_bboxes: {self.max_num_3d_gt_bboxes}"
         )
 
-    def get_data_sample(self, idx: int) -> MultiTaskGTSample:
+    def get_data_sample(self, index: int) -> MultiTaskGTSample:
         """
         Process the dataset records dataframe for multiple tasks in the T4 dataset.
 
         Args:
-          idx: Index of the specific record to be processed.
+          index: Index of the specific record to be processed.
 
         Returns:
           MultiTaskGTSample: Processed multi-task data row, mapped by task type.
         """
         data_samples = {}
         for task_type, dataset_task in self.dataset_tasks.items():
-            data_samples[task_type] = dataset_task.get_data_sample(idx)
+            data_samples[task_type] = dataset_task.get_data_sample(index)
 
         # Retrieve general data row for the given index from the dataset records dataframe
-        lidar_pointcloud_samples = self.get_lidar_pointcloud_data_samples(idx)
+        lidar_pointcloud_samples = self.get_lidar_pointcloud_data_samples(index)
 
         # Retrieve the detection3d_gt_bboxes_3d and segmentation3d_gt_sample from the data_samples dictionary
         detection3d_gt_sample: MultiTaskGTSample = data_samples.get(TaskType.DETECTION3D, None)
