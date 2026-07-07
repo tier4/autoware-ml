@@ -131,5 +131,5 @@ dev = { features = ["dev"], solve-group = "default" }
 docs = { features = ["docs"], solve-group = "docs", no-default-feature = true }
 
 [tool.ruff.lint]
-# Ignore F722 error to fix error for JaxTyping string typing, which is not used in our codebase.
+# Ignore F722 error to fix the error for JaxTyping in string typing, which is not used in our codebase.
 ignore = ["F722"]
