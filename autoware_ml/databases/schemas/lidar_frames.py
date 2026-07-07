@@ -35,8 +35,8 @@ class LidarFrameDatasetSchema(BaseFieldSchema):
     lidar_frame_ego_pose_to_global_matrix = DatasetTableColumn(
         "lidar_frame_ego_pose_to_global_matrix", pl.Array(pl.Float32, shape=(4, 4))
     )
-    lidar_sensor_to_lidar_sweep_matrices = DatasetTableColumn(
-        "lidar_sensor_to_lidar_sweep_matrices", pl.Array(pl.Float32, shape=(4, 4))
+    lidar_sensor_to_lidar_sweep_matrix = DatasetTableColumn(
+        "lidar_sensor_to_lidar_sweep_matrix", pl.Array(pl.Float32, shape=(4, 4))
     )
     lidar_pointcloud_semantic_mask_path = DatasetTableColumn(
         "lidar_pointcloud_semantic_mask_path", pl.String
@@ -63,7 +63,7 @@ class LidarFrameDataModel(BaseModel, DataModelInterface):
         the ego pose of this lidar frame.
       lidar_frame_ego_pose_to_global_matrix: Transformation matrix from the ego pose of this lidar
         frame to the global frame.
-      lidar_sensor_to_lidar_sweep_matrices: Transformation matrices from the main lidar sensor
+      lidar_sensor_to_lidar_sweep_matrix: Transformation matrix from the main lidar sensor
         to other lidar sweeps at this frame.
       lidar_pointcloud_semantic_mask_path: Lidar pointcloud semantic mask path. Set to None if it's
         not available.
@@ -83,7 +83,7 @@ class LidarFrameDataModel(BaseModel, DataModelInterface):
     # Transformation matrix from the ego pose of this lidar frame to the global frame.
     lidar_frame_ego_pose_to_global_matrix: npt.NDArray[np.float64]  # (4, 4)
     # Transformation matrices from the main lidar sensor to other lidar sweeps at this frame.
-    lidar_sensor_to_lidar_sweep_matrices: npt.NDArray[np.float64]  # (4, 4)
+    lidar_sensor_to_lidar_sweep_matrix: npt.NDArray[np.float64]  # (4, 4)
     lidar_pointcloud_semantic_mask_path: str | None
 
     @property
@@ -146,15 +146,15 @@ class LidarFrameDataModel(BaseModel, DataModelInterface):
         return self.lidar_frame_ego_pose_to_global_matrix.astype(np.float32)
 
     @property
-    def lidar_sensor_to_lidar_sweep_matrices_fp32(self) -> npt.NDArray[np.float32]:
+    def lidar_sensor_to_lidar_sweep_matrix_fp32(self) -> npt.NDArray[np.float32]:
         """
-        Convert the lidar sensor to lidar sweep matrices to float32.
+        Convert the lidar sensor to lidar sweep matrix to float32.
 
         Returns:
-          npt.NDArray[np.float32] | None: Lidar sensor to lidar sweep matrices.
+          npt.NDArray[np.float32] | None: Lidar sensor to lidar sweep matrix.
         """
 
-        return self.lidar_sensor_to_lidar_sweep_matrices.astype(np.float32)
+        return self.lidar_sensor_to_lidar_sweep_matrix.astype(np.float32)
 
     def to_dictionary(self) -> Mapping[str, Any]:
         """
@@ -178,7 +178,7 @@ class LidarFrameDataModel(BaseModel, DataModelInterface):
             LidarFrameDatasetSchema.lidar_pointcloud_num_features.name: self.lidar_pointcloud_num_features,
             LidarFrameDatasetSchema.lidar_sensor_to_ego_pose_matrix.name: self.lidar_sensor_to_ego_pose_matrix_fp32,
             LidarFrameDatasetSchema.lidar_frame_ego_pose_to_global_matrix.name: self.lidar_frame_ego_pose_to_global_matrix_fp32,
-            LidarFrameDatasetSchema.lidar_sensor_to_lidar_sweep_matrices.name: self.lidar_sensor_to_lidar_sweep_matrices_fp32,
+            LidarFrameDatasetSchema.lidar_sensor_to_lidar_sweep_matrix.name: self.lidar_sensor_to_lidar_sweep_matrix_fp32,
             LidarFrameDatasetSchema.lidar_pointcloud_semantic_mask_path.name: self.lidar_pointcloud_semantic_mask_path,
         }
 
@@ -221,8 +221,8 @@ class LidarFrameDataModel(BaseModel, DataModelInterface):
                 data_model[LidarFrameDatasetSchema.lidar_frame_ego_pose_to_global_matrix.name],
                 dtype=np.float64,
             ),
-            lidar_sensor_to_lidar_sweep_matrices=np.asarray(
-                data_model[LidarFrameDatasetSchema.lidar_sensor_to_lidar_sweep_matrices.name],
+            lidar_sensor_to_lidar_sweep_matrix=np.asarray(
+                data_model[LidarFrameDatasetSchema.lidar_sensor_to_lidar_sweep_matrix.name],
                 dtype=np.float64,
             ),
             lidar_pointcloud_semantic_mask_path=data_model[

@@ -54,6 +54,21 @@ dataset_params:
     sample_steps: 1
   - _target_: autoware_ml.databases.scenarios.DatasetParams
     _convert_: all
+    dataset_name: db_j6gen2_v10
+    max_sweeps: 2
+    sample_steps: 1
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
+    _convert_: all
+    dataset_name: db_j6gen2_v11
+    max_sweeps: 2
+    sample_steps: 1
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
+    _convert_: all
+    dataset_name: db_j6gen2_v12
+    max_sweeps: 2
+    sample_steps: 1
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
+    _convert_: all
     dataset_name: db_largebus_v1
     max_sweeps: 2
     sample_steps: 1
@@ -65,30 +80,5 @@ dataset_params:
   - _target_: autoware_ml.databases.scenarios.DatasetParams
     _convert_: all
     dataset_name: db_largebus_v3
-    max_sweeps: 2
-    sample_steps: 1
-  - _target_: autoware_ml.databases.scenarios.DatasetParams
-    _convert_: all
-    dataset_name: db_gsm8_v1
-    max_sweeps: 2
-    sample_steps: 1
-  - _target_: autoware_ml.databases.scenarios.DatasetParams
-    _convert_: all
-    dataset_name: db_j6_v1
-    max_sweeps: 2
-    sample_steps: 1
-  - _target_: autoware_ml.databases.scenarios.DatasetParams
-    _convert_: all
-    dataset_name: db_j6_v2
-    max_sweeps: 2
-    sample_steps: 1
-  - _target_: autoware_ml.databases.scenarios.DatasetParams
-    _convert_: all
-    dataset_name: db_j6_v3
-    max_sweeps: 2
-    sample_steps: 1
-  - _target_: autoware_ml.databases.scenarios.DatasetParams
-    _convert_: all
-    dataset_name: db_j6_v5
     max_sweeps: 2
     sample_steps: 1

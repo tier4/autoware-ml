@@ -17,7 +17,6 @@ from __future__ import annotations
 import logging
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
-import hashlib
 import time
 from typing import Sequence
 from types import MappingProxyType
@@ -164,7 +163,7 @@ class T4Dataset(BaseDatabase):
             return False
         return str(self) == str(other)
 
-    def process_scenario_records(self) -> Sequence[DatasetRecord]:
+    def process_scenario_records(self) -> None:
         """
         Process scenario records from the database.
 
@@ -175,11 +174,15 @@ class T4Dataset(BaseDatabase):
         # Start the timer
         start_time = time.perf_counter()
 
-        # 1) Get the polar schema
+        # 1) Get the polar schema and check if the caches exist
         polars_schema = self.get_polars_schema()
         logger.info(f"Parquet schema: {polars_schema}")
 
-        # TODO (KokSeang): Read the cache if it exists, and return the records
+        df_hash = self.database_hash
+        df_cache_path = self._cache_path / f"{self._cache_file_prefix_name}_{df_hash}.parquet"
+        if df_cache_path.exists():
+            logger.info(f"Cache file {df_cache_path} already exists, skip generating the caches")
+            return
 
         # 1) Read all unique scenario data
         unique_scenario_data = self.get_unique_scenario_data()
@@ -202,8 +205,6 @@ class T4Dataset(BaseDatabase):
 
         # 5) Save the scenario sample records to a polars .parquet file
         df = pl.DataFrame(scenario_dict_records, schema=polars_schema)
-        df_hash = hashlib.sha256(str(self).encode("utf-8")).hexdigest()
-        df_cache_path = self._cache_path / f"{self._cache_file_prefix_name}_{df_hash}.parquet"
         df.write_parquet(df_cache_path)
         logger.info(f"Saved the database cache to {df_cache_path} with the hash: {df_hash}")
 
@@ -213,7 +214,6 @@ class T4Dataset(BaseDatabase):
         logger.info(
             f"Elapsed time to process scenario records: {elapsed:.4f} seconds for the database: {self.database_version}"
         )
-        return scenario_sample_records
 
     def _run_t4records_generator(
         self, scenario_data: MappingProxyType[str, ScenarioData]
@@ -253,14 +253,3 @@ class T4Dataset(BaseDatabase):
             for worker_param in tqdm(worker_params, total=len(worker_params)):
                 flatten_records.extend(_apply_t4_records_generator(worker_param))
             return flatten_records
-
-    def load_scenario_records(self) -> Sequence[DatasetRecord]:
-        """
-        Load scenario records from the database.
-
-        Returns:
-          Sequence[DatasetRecord]: Sequence of dataset records.
-        """
-
-        # TODO (KokSeang): Read the cache if it exists, and return the records
-        raise NotImplementedError("Subclasses must implement load_scenario_records method!")

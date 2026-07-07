@@ -1,0 +1,14 @@
+_target_: autoware_ml.datamodule.multi_task.t4dataset.multi_task_t4dataset.MultiTaskT4Dataset
+_convert_: all
+
+defaults:
+  - detection3d@dataset_tasks.Detection3D: default_detection3d
+  - ../../transforms@transforms: default_test_transforms
+
+# Always None since we run splitter in the process
+dataset_records_dataframe: null
+
+# When number of 3D GT bboxes in a scenario exceeds this number, we will select the first
+# `max_num_3d_gt_bboxes` bboxes and ignore the rest. 500 is usually a
+# common number of bboxes to include all 3D GT bboxes in a scenario.
+max_num_3d_gt_bboxes: 500

@@ -1,0 +1,2 @@
+_target_: autoware_ml.datamodule.splitters.dataset_record_splitter.ScenarioSplitter
+_convert_: all

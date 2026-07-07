@@ -99,6 +99,10 @@ class LidarSourceDataModel(BaseModel, DataModelInterface):
         return cls(
             channel_name=data_model[LidarSourceDatasetSchema.channel_name.name],
             sensor_token=data_model[LidarSourceDatasetSchema.sensor_token.name],
-            translation=data_model[LidarSourceDatasetSchema.translation.name],
-            rotation=data_model[LidarSourceDatasetSchema.rotation.name],
+            translation=np.asarray(
+                data_model[LidarSourceDatasetSchema.translation.name], dtype=np.float64
+            ),
+            rotation=np.asarray(
+                data_model[LidarSourceDatasetSchema.rotation.name], dtype=np.float64
+            ),
         )

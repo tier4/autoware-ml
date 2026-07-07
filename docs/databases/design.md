@@ -99,7 +99,7 @@ class DatabaseInterface(Protocol):
 
     def get_unique_scenario_data(self) -> MappingProxyType[str, ScenarioData]: ...
     def load_scenario_records(self) -> Sequence[DatasetRecord]: ...
-    def process_scenario_records(self) -> Sequence[DatasetRecord]: ...
+    def process_scenario_records(self) -> None: ...
 ```
 
 All concrete databases are accessed through this protocol, ensuring downstream code (training, evaluation) never depends on a specific dataset format.
@@ -123,7 +123,7 @@ class BaseDatabase:
     def get_polars_schema(self) -> pl.Schema: ...
     def get_main_database_scenario_data(self) -> Scenarios: ...
     def get_unique_scenario_data(self) -> Mapping[str, ScenarioData]: ...
-    def process_scenario_records(self) -> Sequence[DatasetRecord]:
+    def process_scenario_records(self) -> None:
         raise NotImplementedError("Subclasses must implement process_scenario_records!")
 ```
 
@@ -159,7 +159,7 @@ class Scenarios(BaseModel):
 
 ### Schema
 
-`process_scenario_records()` returns `Sequence[DatasetRecord]` — one frozen Pydantic row per sample/frame. `BaseDatabase.get_polars_schema()` delegates to `DatasetTableSchema` so records can be serialized to Parquet via `DatasetRecord.to_dictionary()`.
+`process_scenario_records()` — Process scenarios/samples from a database to a parquet file and save it. `BaseDatabase.get_polars_schema()` delegates to `DatasetTableSchema` so records can be serialized to Parquet via `DatasetRecord.to_dictionary()`.
 
 The schema is defined in the `autoware_ml/databases/schemas/` package and covers basic frame metadata, nested LiDAR structs, and annotation fields such as category mapping and 3D boxes. The 3D box payload is modeled by `Box3DDataModel` with its struct layout defined in `Box3DDatasetSchema`, and is stored in the top-level `boxes_3d` list column. See [Dataset Schema](schemas.md) for the full column layout, nested data models, and extension guide.
 
