@@ -6,10 +6,10 @@ import numpy.typing as npt
 import numpy as np
 
 from autoware_ml.datamodule.multi_task.dataclasses.detection3d import (
-    Detection3DGTSample,
     Detection3DGTBatch,
 )
 from autoware_ml.datamodule.multi_task.dataclasses.segmentation3d import Segmentation3DGTSample
+from autoware_ml.geometry.bbox_3d.base_bbox3d import BaseBBoxes3D
 
 
 class PointCloudGTBatch(NamedTuple):
@@ -77,7 +77,7 @@ class MultiTaskGTSample(NamedTuple):
     # if it doesn't need to be loaded
     point_cloud_features: npt.NDArray[np.float32] | None
 
-    detection3d_gt_sample: Detection3DGTSample | None
+    detection3d_gt_bboxes_3d: BaseBBoxes3D | None
     segmentation3d_gt_sample: Segmentation3DGTSample | None
 
 

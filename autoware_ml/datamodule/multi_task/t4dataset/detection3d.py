@@ -4,9 +4,9 @@ import polars as pl
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDatasetSchema
 from autoware_ml.datamodule.multi_task.base_dataset_task import BaseDatasetTask
-from autoware_ml.datamodule.multi_task.dataclasses.detection3d import Detection3DGTSample
 from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTSample
-from autoware_ml.types.geometry import Box3DFieldIndex
+from autoware_ml.geometry.bbox_3d.base_bbox3d import BaseBBoxes3D
+from autoware_ml.types.geometry import Box3DFieldIndex, Box3DCenterCoordinateType
 
 
 class T4Detection3DTask(BaseDatasetTask):
@@ -56,7 +56,7 @@ class T4Detection3DTask(BaseDatasetTask):
         """
         return "T4Detection3DTask"
 
-    def get_data_sample(self, idx: int) -> MultiTaskGTSample:
+    def get_data_sample(self, idx: int) -> BaseBBoxes3D:
         """
         Process the dataset records dataframe for 3D detection in the T4 dataset.
 
@@ -89,15 +89,15 @@ class T4Detection3DTask(BaseDatasetTask):
             )  # Zero shape of (0, 10) for empty bboxes
             gt_bboxes_labels = np.zeros((0,), dtype=np.int32)
 
-        detection3d_gt_sample = Detection3DGTSample(
-            gt_bboxes_3d=gt_bboxes_3d,
-            gt_labels_3d=gt_bboxes_labels,
-            # Add other necessary fields for 3D detection as needed
+        detection3d_bboxes_3d = BaseBBoxes3D.from_numpy(
+            bbox_params=gt_bboxes_3d,
+            bbox_labels=gt_bboxes_labels,
+            bbox_center_coordinate_type=Box3DCenterCoordinateType.GRAVITY_CENTER,
         )
 
         return MultiTaskGTSample(
             lidar_point_cloud_samples=None,
             point_cloud_features=None,
-            detection3d_gt_sample=detection3d_gt_sample,
+            detection3d_gt_bboxes_3d=detection3d_bboxes_3d,
             segmentation3d_gt_sample=None,
         )

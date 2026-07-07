@@ -1,4 +1,4 @@
-from enum import IntEnum
+from enum import IntEnum, StrEnum
 
 
 class Box3DFieldIndex(IntEnum):
@@ -28,3 +28,15 @@ class Box3DFieldIndex(IntEnum):
     VELOCITY_X = 7
     VELOCITY_Y = 8
     VELOCITY_Z = 9
+
+
+class Box3DCenterCoordinateType(StrEnum):
+    """
+    Box 3D center coordinate type.
+
+    Attributes:
+      GravityCenter: The center of the box is at the gravity center of the box, where z coordinate
+          is at the center of the bbox
+    """
+
+    GRAVITY_CENTER = "gravity_center"

@@ -1,4 +1,4 @@
-from enum import Enum
+from enum import Enum, StrEnum, IntEnum
 
 
 class CoordinateSystem(str, Enum):
@@ -22,3 +22,31 @@ class CoordinateSystem(str, Enum):
     EGO = "ego"
     GLOBAL = "global"
     MAP = "map"
+
+
+class BEVDirection(StrEnum):
+    """
+    BEV direction.
+
+    Attributes:
+      HORIZONTAL: Horizontal direction.
+      VERTICAL: Vertical direction.
+    """
+
+    HORIZONTAL = "horizontal"
+    VERTICAL = "vertical"
+
+
+class RotationAxis(IntEnum):
+    """
+    Rotation axis.
+
+    Attributes:
+      X: X axis.
+      Y: Y axis.
+      Z: Z axis.
+    """
+
+    X = 0
+    Y = 1
+    Z = 2
