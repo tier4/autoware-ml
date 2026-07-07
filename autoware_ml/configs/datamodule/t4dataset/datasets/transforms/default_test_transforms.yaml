@@ -1,9 +1,0 @@
-_target_: autoware_ml.transforms.multi_task.base.MultiTaskTransformsCompose
-_convert_: all
-
-pipeline:
-  - _target_: autoware_ml.transforms.multi_task.point_cloud.loading.LoadPointsFromFile
-    _convert_: all
-
-    load_dim: ${database.lidar_pointcloud_num_features}
-    use_dim: [0, 1, 2, 3]
