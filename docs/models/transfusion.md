@@ -73,3 +73,13 @@ The current verification scope covers ONNX export. TensorRT engine generation ha
 | `autoware_ml/datamodule/t4dataset/detection3d.py`       | T4Dataset detection datamodule    |
 | `autoware_ml/preprocessing/detection3d/point_pillar.py` | Pillar preprocessing              |
 | `autoware_ml/configs/tasks/detection3d/transfusion/`    | Task configurations               |
+
+## Acknowledgment
+
+The Autoware-ML TransFusion implementation was ported from the official mmdetection3d
+project by OpenMMLab.
+
+<!-- cspell:ignore Xuyang -->
+- Repository: <https://github.com/open-mmlab/mmdetection3d>
+- License: Apache License 2.0
+- Paper: Bai, Xuyang, et al. "TransFusion: Robust LiDAR-Camera Fusion for 3D Object Detection with Transformers" CVPR, 2022.
