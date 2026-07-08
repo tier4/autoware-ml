@@ -300,6 +300,8 @@ class SparseEncoder(nn.Module):
             Deep copy of the encoder with native spconv layers replaced by the
             deployment-aware wrappers from :mod:`autoware_ml.ops.spconv`.
         """
-        encoder = deepcopy(self).eval()
+        encoder = deepcopy(self)
         _replace_sparse_convolutions(encoder)
-        return encoder
+        # eval() last: the freshly constructed export wrappers start in train
+        # mode and are inference-only.
+        return encoder.eval()
