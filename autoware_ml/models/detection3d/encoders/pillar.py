@@ -47,12 +47,11 @@ class PFNLayer(nn.Module):
         self.linear = nn.Linear(in_channels, units, bias=False)
         self.norm = nn.BatchNorm1d(units, eps=1e-3, momentum=0.01)
 
-    def forward(self, inputs: torch.Tensor, num_points: torch.Tensor) -> torch.Tensor:
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         """Encode one PFN stage.
 
         Args:
             inputs: Decorated pillar feature tensor.
-            num_points: Number of points in each pillar.
 
         Returns:
             Encoded pillar features.
@@ -111,6 +110,7 @@ class PillarFeatureNet(nn.Module):
             feature_channels += 2
         if with_distance:
             feature_channels += 1
+        self.feature_channels = feature_channels
 
         pfn_layers: list[nn.Module] = []
         layer_channels = [feature_channels] + list(feat_channels)
@@ -121,10 +121,10 @@ class PillarFeatureNet(nn.Module):
             )
         self.pfn_layers = nn.ModuleList(pfn_layers)
 
-    def forward(
+    def decorate(
         self, voxels: torch.Tensor, num_points: torch.Tensor, coords: torch.Tensor
     ) -> torch.Tensor:
-        """Encode padded voxel pillars into BEV pillar features.
+        """Build PointPillars decorated point features.
 
         Args:
             voxels: Padded voxel tensor.
@@ -132,7 +132,7 @@ class PillarFeatureNet(nn.Module):
             coords: Voxel coordinates with batch indices.
 
         Returns:
-            Encoded pillar feature tensor.
+            Decorated point feature tensor.
         """
         features = [voxels]
         points_mean = voxels[:, :, :3].sum(dim=1, keepdim=True) / num_points.clamp_min(1).view(
@@ -160,9 +160,41 @@ class PillarFeatureNet(nn.Module):
         ) < num_points.unsqueeze(1)
         decorated = decorated * mask.unsqueeze(-1)
 
+        if decorated.shape[-1] != self.feature_channels:
+            raise ValueError(
+                f"Decorated pillar features have {decorated.shape[-1]} channels, "
+                f"expected {self.feature_channels}."
+            )
+        return decorated
+
+    def encode_decorated(self, input_features: torch.Tensor) -> torch.Tensor:
+        """Encode already-decorated PointPillars features.
+
+        Args:
+            input_features: Decorated point feature tensor.
+
+        Returns:
+            Per-pillar feature tensor with the singleton point dimension kept.
+        """
+        decorated = input_features
         for layer in self.pfn_layers:
-            decorated = layer(decorated, num_points)
-        return decorated.squeeze(1)
+            decorated = layer(decorated)
+        return decorated
+
+    def forward(
+        self, voxels: torch.Tensor, num_points: torch.Tensor, coords: torch.Tensor
+    ) -> torch.Tensor:
+        """Encode padded voxel pillars into BEV pillar features.
+
+        Args:
+            voxels: Padded voxel tensor.
+            num_points: Number of points in each voxel.
+            coords: Voxel coordinates with batch indices.
+
+        Returns:
+            Encoded pillar feature tensor.
+        """
+        return self.encode_decorated(self.decorate(voxels, num_points, coords)).squeeze(1)
 
 
 class PointPillarsScatter(nn.Module):
