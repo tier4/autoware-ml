@@ -70,9 +70,9 @@ class LoadPointsFromFile(MultiTaskBaseTransform):
         """
         if self.bev_remove_radius <= 0:
             return points_data
-        x_filt = torch.abs(points_data.points[:, PointFieldIndex.X]) < self.bev_remove_radius
-        y_filt = torch.abs(points_data.points[:, PointFieldIndex.Y]) < self.bev_remove_radius
-        not_close = ~(x_filt & y_filt)
+        x_filtered = torch.abs(points_data.points[:, PointFieldIndex.X]) < self.bev_remove_radius
+        y_filtered = torch.abs(points_data.points[:, PointFieldIndex.Y]) < self.bev_remove_radius
+        not_close = ~(x_filtered & y_filtered)
         points_data.remove_points(not_close)
         return points_data
 
