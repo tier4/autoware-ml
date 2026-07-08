@@ -60,7 +60,6 @@ class PointFieldIndex(IntEnum):
     Z = 2
     INTENSITY = 3
     RING = 4
-    TIME = 5
 
 
 class PointFeatureName(StrEnum):
@@ -73,7 +72,7 @@ class PointFeatureName(StrEnum):
       Z: Z coordinate of the point.
       INTENSITY: Intensity of the point.
       RING: Ring index of the point.
-      TIME: Timestamp of the point.
+      TIMESTAMP_DIFFERENCE: Timestamp difference with respect to another point data.
     """
 
     X = "x"
@@ -81,4 +80,4 @@ class PointFeatureName(StrEnum):
     Z = "z"
     INTENSITY = "intensity"
     RING = "ring"
-    TIME = "time"
+    TIMESTAMP_DIFFERENCE = "timestamp_difference"

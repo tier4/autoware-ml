@@ -16,15 +16,21 @@ class T4Detection3DTask(BaseDatasetTask):
     """
 
     def __init__(
-        self, dataset_records_dataframe: pl.DataFrame | None, filter_valid_masks: bool = True
+        self,
+        dataset_root: str,
+        dataset_records_dataframe: pl.DataFrame | None,
+        filter_valid_masks: bool = True,
     ) -> None:
         """
         Initialize the T4Detection3DTask class.
         Args:
+          dataset_root: Root directory of the dataset.
           dataset_records_dataframe: Polars DataFrame of dataset records to be processed for 3D detection in the T4 dataset.
           filter_valid_masks: Whether to filter out invalid bounding boxes based on valid_mask.
         """
-        super().__init__(dataset_records_dataframe=dataset_records_dataframe)
+        super().__init__(
+            dataset_root=dataset_root, dataset_records_dataframe=dataset_records_dataframe
+        )
         self.filter_valid_masks = filter_valid_masks
 
     def pre_filter_dataset_records(
@@ -113,7 +119,7 @@ class T4Detection3DTask(BaseDatasetTask):
 
         return MultiTaskGTSample(
             lidar_point_cloud_samples=None,
-            point_cloud_features=None,
+            point_cloud_data=None,
             detection3d_gt_bboxes_3d=detection3d_bboxes_3d,
             segmentation3d_gt_sample=None,
         )

@@ -3,8 +3,6 @@ from __future__ import annotations
 from typing import Sequence, NamedTuple
 
 from jaxtyping import Float32, Int32
-import numpy.typing as npt
-import numpy as np
 import torch
 from torch import Tensor
 
@@ -66,11 +64,11 @@ class LiDARPointCloudSample(NamedTuple):
     point_cloud_path: str
     timestamp_seconds: float
     # Transformation matrix from LiDAR sensor frame to ego pose of this LiDAR sensor frame
-    sensor_to_ego_pose_matrix: npt.NDArray[np.float32]  # (4, 4)
+    sensor_to_ego_pose_matrix: Float32[Tensor, "4 4"]  # (4, 4)
     # Transformation matrix from ego pose of this LiDAR sensor frame to global frame
-    lidar_to_ego_pose_to_global_matrix: npt.NDArray[np.float32]  # (4, 4)
+    lidar_to_ego_pose_to_global_matrix: Float32[Tensor, "4 4"]  # (4, 4)
     # Transformation matrix from the main lidar sensor to other lidar sweeps at this frame
-    lidar_sensor_to_lidar_sweep_matrix: npt.NDArray[np.float32]  # (4, 4)
+    lidar_sensor_to_lidar_sweep_matrix: Float32[Tensor, "4 4"]  # (4, 4)
 
 
 class MultiTaskGTSample(NamedTuple):
@@ -84,7 +82,7 @@ class MultiTaskGTSample(NamedTuple):
 
     # (number of point clouds, number of features for each point), can be None
     # if it doesn't need to be loaded
-    point_cloud_features: BasePoints | None
+    point_cloud_data: BasePoints | None
 
     detection3d_gt_bboxes_3d: BaseBBoxes3D | None
     segmentation3d_gt_sample: Segmentation3DGTSample | None
@@ -117,15 +115,15 @@ class MultiTaskGTBatch(NamedTuple):
         if len(gt_samples) == 0:
             return None
 
-        available_pointcloud = gt_samples[0].point_cloud_features is not None
+        available_pointcloud = gt_samples[0].point_cloud_data is not None
         if not available_pointcloud:
             return None
 
         pointcloud_samples = []
         for sample in gt_samples:
-            if sample.point_cloud_features is None:
+            if sample.point_cloud_data is None:
                 raise ValueError("All samples must have point_cloud_features for collating.")
-            pointcloud_samples.append(sample.point_cloud_features)
+            pointcloud_samples.append(sample.point_cloud_data)
 
         point_cloud_gt_batch = PointCloudGTBatch.collate_gt_samples(pointcloud_samples)
         return point_cloud_gt_batch

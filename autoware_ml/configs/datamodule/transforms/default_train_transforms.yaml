@@ -7,3 +7,14 @@ pipeline:
 
     load_dim: ${database.lidar_pointcloud_num_features}
     use_dim: [0, 1, 2, 3]
+    bev_remove_radius: 0.0
+
+  - _target_: autoware_ml.transforms.multi_task.point_cloud.loading.LoadMultiSweepPointsFromFile
+    _convert_: all
+
+    sweeps_num: 1
+    bev_remove_radius: 1.0
+    test_mode: true
+    use_timestamp_difference: true
+    load_dim: ${database.lidar_pointcloud_num_features}
+    use_dim: [0, 1, 2, 3]

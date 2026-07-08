@@ -1,20 +1,22 @@
-from typing import Protocol
+from abc import ABC
+from pathlib import Path
 
 import polars as pl
 
 from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTSample
 
 
-class BaseDatasetTask(Protocol):
+class BaseDatasetTask(ABC):
     """
     Protocol for dataset tasks that defines how a task-specific dataset should be implemented
     when retrieving data.
     """
 
-    def __init__(self, dataset_records_dataframe: pl.DataFrame | None) -> None:
+    def __init__(self, dataset_root: str, dataset_records_dataframe: pl.DataFrame | None) -> None:
         """
         Initialize the dataset task.
         """
+        self.dataset_root = Path(dataset_root)
         self.dataset_records_dataframe = self.pre_filter_dataset_records(dataset_records_dataframe)
 
     def pre_filter_dataset_records(

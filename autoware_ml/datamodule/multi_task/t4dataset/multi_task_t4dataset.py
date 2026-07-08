@@ -2,8 +2,10 @@ import logging
 from types import MappingProxyType
 from typing import Sequence
 
+from jaxtyping import Float32
 import polars as pl
 import numpy as np
+import torch
 
 from autoware_ml.databases.schemas.lidar_frames import LidarFrameDatasetSchema
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
@@ -31,6 +33,7 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
 
     def __init__(
         self,
+        dataset_root: str,
         max_num_3d_gt_bboxes: int,
         dataset_records_dataframe: pl.DataFrame | None,
         transforms: MultiTaskTransformsCompose | None,
@@ -49,6 +52,7 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
             task type.
         """
         super().__init__(
+            dataset_root=dataset_root,
             max_num_3d_gt_bboxes=max_num_3d_gt_bboxes,
             dataset_records_dataframe=dataset_records_dataframe,
             transforms=transforms,
@@ -98,10 +102,19 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
         # Merge the data samples from different tasks into a single multi-task data row
         return MultiTaskGTSample(
             lidar_point_cloud_samples=lidar_pointcloud_samples,
-            point_cloud_features=None,  # Add point cloud features if available
+            point_cloud_data=None,  # Add point cloud features if available
             detection3d_gt_bboxes_3d=detection3d_gt_bboxes_3d,
             segmentation3d_gt_sample=segmentation3d_gt_sample,
         )
+
+    def _update_lidar_pointcloud_path(self, lidar_pointcloud_path: str) -> str:
+        """
+        Remove the absolute path prefix from the lidar pointcloud path and return the updated path with the dataset root.
+        Note that this is dataset-specific.
+        """
+        # Return the relative path from the lidar pointcloud path
+        relative_path = "/".join(lidar_pointcloud_path.split("/")[-6:])
+        return str(self.dataset_root / relative_path)
 
     def get_lidar_pointcloud_data_samples(self, idx: int) -> Sequence[LiDARPointCloudSample]:
         """
@@ -114,34 +127,42 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
         lidar_pointcloud_metadata_samples = self.dataset_records_dataframe.item(
             idx, DatasetTableSchema.LIDAR_FRAMES.name
         )
-
         lidar_pointcloud_samples = []
         for lidar_pointcloud_metadata in lidar_pointcloud_metadata_samples:
+            lidar_sensor_to_ego_pose_matrix: Float32[np.ndarray, "4 4"] = lidar_pointcloud_metadata[
+                LidarFrameDatasetSchema.lidar_sensor_to_ego_pose_matrix.name
+            ]
+            lidar_to_ego_pose_to_global_matrix: Float32[np.ndarray, "4 4"] = (
+                lidar_pointcloud_metadata[
+                    LidarFrameDatasetSchema.lidar_frame_ego_pose_to_global_matrix.name
+                ]
+            )
+            lidar_sensor_to_lidar_sweep_matrix: Float32[np.ndarray, "4 4"] = (
+                lidar_pointcloud_metadata[
+                    LidarFrameDatasetSchema.lidar_sensor_to_lidar_sweep_matrix.name
+                ]
+            )
+            lidar_pointcloud_path = self._update_lidar_pointcloud_path(
+                lidar_pointcloud_metadata[LidarFrameDatasetSchema.lidar_pointcloud_path.name]
+            )
+
             lidar_pointcloud_samples.append(
                 LiDARPointCloudSample(
-                    point_cloud_path=lidar_pointcloud_metadata[
-                        LidarFrameDatasetSchema.lidar_pointcloud_path.name
-                    ],
+                    point_cloud_path=lidar_pointcloud_path,
                     timestamp_seconds=lidar_pointcloud_metadata[
                         LidarFrameDatasetSchema.lidar_timestamp_seconds.name
                     ],
-                    sensor_to_ego_pose_matrix=np.asarray(
-                        lidar_pointcloud_metadata[
-                            LidarFrameDatasetSchema.lidar_sensor_to_ego_pose_matrix.name
-                        ],
-                        dtype=np.float32,
+                    sensor_to_ego_pose_matrix=torch.tensor(
+                        lidar_sensor_to_ego_pose_matrix,
+                        dtype=torch.float32,
                     ),
-                    lidar_to_ego_pose_to_global_matrix=np.asarray(
-                        lidar_pointcloud_metadata[
-                            LidarFrameDatasetSchema.lidar_frame_ego_pose_to_global_matrix.name
-                        ],
-                        dtype=np.float32,
+                    lidar_to_ego_pose_to_global_matrix=torch.tensor(
+                        lidar_to_ego_pose_to_global_matrix,
+                        dtype=torch.float32,
                     ),
-                    lidar_sensor_to_lidar_sweep_matrix=np.asarray(
-                        lidar_pointcloud_metadata[
-                            LidarFrameDatasetSchema.lidar_sensor_to_lidar_sweep_matrix.name
-                        ],
-                        dtype=np.float32,
+                    lidar_sensor_to_lidar_sweep_matrix=torch.tensor(
+                        lidar_sensor_to_lidar_sweep_matrix,
+                        dtype=torch.float32,
                     ),
                 )
             )

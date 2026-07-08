@@ -32,6 +32,7 @@ class BasePoints(ABC):
         self,
         points: Float32[Tensor, "num_points num_point_features"],
         point_feature_names: Sequence[PointFeatureName],
+        timestamp_seconds: float,
     ) -> None:
         """
         Initialize the BasePoints instance.
@@ -39,9 +40,19 @@ class BasePoints(ABC):
         Args:
             points: A tensor of shape (num_points, num_point_features) representing the point cloud data.
             point_feature_names: A sequence of PointFeatureName representing the names of the features for each point.
+            timestamp_seconds: A float representing the timestamp of the point cloud data in seconds.
         """
         self._points = points
         self._point_feature_names = point_feature_names
+        self._timestamp_seconds = timestamp_seconds
+        # Dimension index for the timestamp difference feature, if it exists. -1 indicates
+        # that it does not exist.
+        self._timestamp_difference_dim = -1
+
+    @property
+    def timestamp_seconds(self) -> float:
+        """Timestamp of the point cloud data in seconds."""
+        return self._timestamp_seconds
 
     def __len__(self) -> int:
         """
@@ -106,6 +117,43 @@ class BasePoints(ABC):
         """Coordinates in BEV (x and y) of the points in shape (num_points, 2)."""
         return self.points[:, [PointFieldIndex.X, PointFieldIndex.Y]]
 
+    @property
+    def device(self) -> torch.device:
+        """torch.device: Device of the points."""
+        return self.points.device
+
+    @property
+    def timestamp_difference_dim(self) -> int:
+        """int: Dimension index for the timestamp difference feature, if it exists. -1 indicates that it does not exist."""
+        return self._timestamp_difference_dim
+
+    def add_timestamp_difference(self, timestamp_difference: float) -> None:
+        """Add a timestamp difference feature to the points.
+
+        Args:
+            timestamp_difference (float): The timestamp difference to be added to each point.
+        """
+        num_points = self.points.shape[0]
+        timestamp_column = torch.full(
+            (num_points, 1),
+            timestamp_difference,
+            dtype=self.points.dtype,
+            device=self.points.device,
+        )
+        self._points = torch.cat((self._points, timestamp_column), dim=1)
+        self._point_feature_names = list(self._point_feature_names) + [
+            PointFeatureName.TIMESTAMP_DIFFERENCE
+        ]
+        self._timestamp_difference_dim = self._points.shape[1] - 1
+
+    def remove_points(self, valid_mask: Bool[Tensor, " num_points"]) -> None:
+        """Remove points based on a validity mask.
+
+        Args:
+            valid_mask (Bool[Tensor, " num_points"]): A binary mask indicating which points to keep.
+        """
+        self._points = self._points[valid_mask]
+
     def shuffle(self) -> Int32[Tensor, " num_points"]:
         """Shuffle the points.
 
@@ -113,7 +161,7 @@ class BasePoints(ABC):
             Int32[Tensor, " num_points"]: The shuffled index.
         """
         idx = torch.randperm(self.__len__(), device=self.points.device)
-        self.points = self.points[idx]
+        self._points = self._points[idx]
         return idx
 
     def rotate(self, rotation_matrix: Float32[Tensor, "3 3"]) -> None:
@@ -228,7 +276,12 @@ class BasePoints(ABC):
                 )
 
         concatenated_points = torch.cat([point.points for point in points], dim=0)
-        return cls(concatenated_points, first_point_feature_names)
+        # Always use the timestamp_seconds of the first BasePoints instance for the concatenated result
+        return cls(
+            concatenated_points,
+            first_point_feature_names,
+            timestamp_seconds=points[0].timestamp_seconds,
+        )
 
     def to_numpy(self) -> npt.NDArray[np.float32]:
         """Convert the points to a numpy array.
@@ -278,12 +331,20 @@ class BasePoints(ABC):
 
     @classmethod
     def from_numpy(
-        cls, points_np: npt.NDArray[np.float32], point_feature_names: Sequence[PointFeatureName]
+        cls,
+        points_np: npt.NDArray[np.float32],
+        point_feature_names: Sequence[PointFeatureName],
+        timestamp_seconds: float,
     ) -> BasePoints:
         """Load points from a numpy array.
 
         Args:
             points_np (npt.NDArray[np.float32]): The points as a numpy array.
             point_feature_names (Sequence[PointFeatureName]): The names of the point features.
+            timestamp_seconds (float): The timestamp of the point cloud data in seconds.
         """
-        return cls(torch.from_numpy(points_np).float(), point_feature_names)
+        return cls(
+            torch.from_numpy(points_np).float(),
+            point_feature_names,
+            timestamp_seconds=timestamp_seconds,
+        )

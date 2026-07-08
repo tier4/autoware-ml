@@ -1,4 +1,5 @@
 from abc import abstractmethod
+from pathlib import Path
 from typing import Sequence
 
 
@@ -17,6 +18,7 @@ class MultiTaskBaseDataset(Dataset):
 
     def __init__(
         self,
+        dataset_root: str,
         max_num_3d_gt_bboxes: int,
         dataset_records_dataframe: pl.DataFrame | None,
         transforms: MultiTaskTransformsCompose | None,
@@ -24,6 +26,7 @@ class MultiTaskBaseDataset(Dataset):
         """
         Initialize the multi-task dataset interface.
         Args:
+          dataset_root: Root directory of the dataset.
           max_num_3d_gt_bboxes: Maximum number of 3D ground truth bounding boxes in the dataset.
               This is allowed to be 0 if the dataset does not contain any 3D ground truth
               bounding boxes or it does not need to run 3D detection tasks.
@@ -33,6 +36,7 @@ class MultiTaskBaseDataset(Dataset):
           transforms: Global transforms to be applied to the dataset records.
         """
         super().__init__()
+        self.dataset_root = Path(dataset_root)
         self.max_num_3d_gt_bboxes = max_num_3d_gt_bboxes
         self.transforms = transforms
         self.dataset_records_dataframe = dataset_records_dataframe
