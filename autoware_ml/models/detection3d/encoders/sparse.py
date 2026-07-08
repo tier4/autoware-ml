@@ -1,3 +1,4 @@
+# Copyright 2023 OpenMMLab.
 # Copyright 2026 TIER IV, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Sparse 3D voxel middle encoder for BEVFusion.
+"""Sparse 3D voxel middle encoder.
 
 SECOND/VoxelNet-style sparse 3D convolution backbone that consumes per-voxel features
 and produces a dense BEV feature map. Built on the framework's export-aware spconv wrappers.
