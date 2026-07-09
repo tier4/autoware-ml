@@ -22,7 +22,7 @@ dependencies = [
     "jaxtyping==0.3.11",
     "lightning==2.6.1",
     "matplotlib==3.10.8",
-    "mlflow==3.10.1",
+    "mlflow==3.11.0rc1",
     "numpy==1.26.4",
     "nuscenes-devkit==1.2.0",
     "optuna==4.8.0",
