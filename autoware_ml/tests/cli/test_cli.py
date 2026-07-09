@@ -727,6 +727,25 @@ class TestCliRuntime:
                 resume_checkpoint=str(tmp_path / "last.ckpt"),
             )
 
+    def test_prepare_runtime_environment_resume_rejects_incomplete_metadata(
+        self, tmp_path: Path
+    ) -> None:
+        config_name = "multi/ptv3/voxel012"
+        with (
+            self._patched_logger_config(config_name),
+            patch(
+                "autoware_ml.cli.runtime.load_run_metadata",
+                return_value={"experiment_name": "multi_ptv3_voxel012"},
+            ),
+            pytest.raises(ValueError, match="missing.*run_id.*config_name"),
+        ):
+            cli_runtime.prepare_runtime_environment(
+                config_name,
+                "tasks",
+                "train",
+                resume_checkpoint=str(tmp_path / "last.ckpt"),
+            )
+
     def test_prepare_runtime_environment_resume_rejects_config_mismatch(
         self, tmp_path: Path
     ) -> None:

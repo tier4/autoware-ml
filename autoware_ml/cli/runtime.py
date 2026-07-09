@@ -164,6 +164,13 @@ def prepare_resume_environment(
             f"'{checkpoint_path}', so the source MLflow run cannot be reused. "
             "Pass --new-run to resume into a fresh run."
         )
+    missing_keys = [key for key in ("run_id", "config_name") if key not in metadata]
+    if missing_keys:
+        raise ValueError(
+            f"The '{RUN_METADATA_FILENAME}' next to '{checkpoint_path}' is missing "
+            f"{missing_keys}, so the source MLflow run cannot be reused. "
+            "Pass --new-run to resume into a fresh run."
+        )
     if metadata["config_name"] != config_name:
         raise ValueError(
             f"Resume checkpoint belongs to config '{metadata['config_name']}', "
