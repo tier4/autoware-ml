@@ -214,7 +214,7 @@ deploy:
     modify_graph: null  # Optional graph modifier
 
   tensorrt:
-    workspace_size: 1073741824  # 1GB
+    workspace_size: 8589934592  # 8 GiB
     input_shapes:
       input:
         min_shape: [1, 5, 1080, 1920]

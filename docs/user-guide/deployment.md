@@ -133,7 +133,7 @@ derive equivalent symbolic axes.
 deploy:
   tensorrt:
     enabled: true
-    workspace_size: 1073741824  # 1GB
+    workspace_size: 8589934592  # 8 GiB
     input_shapes:
       input:
         min_shape: [1, 3, 224, 224]
@@ -176,5 +176,5 @@ autoware-ml deploy \
     --config-name <task>/<model>/<config> \
     --weights mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt \
     deploy.tensorrt.input_shapes.input.opt_shape=[1,3,256,256] \
-    deploy.tensorrt.workspace_size=2147483648
+    deploy.tensorrt.workspace_size=8589934592
 ```

@@ -110,7 +110,3 @@ model:
 
 trainer:
   max_epochs: 30
-
-deploy:
-  tensorrt:
-    workspace_size: 2147483648
