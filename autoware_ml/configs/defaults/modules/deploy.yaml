@@ -8,4 +8,4 @@ deploy:
     modify_graph: null
   tensorrt:
     enabled: true
-    workspace_size: 1073741824
+    workspace_size: 4294967296
