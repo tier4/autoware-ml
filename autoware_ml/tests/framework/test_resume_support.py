@@ -61,7 +61,7 @@ class TestResumedParamLogging:
         trainer_logger = self._logger_with_params({})
         cfg = OmegaConf.create({"trainer": {"max_epochs": 50}})
 
-        log_hyperparameters(cfg, trainer_logger, trainer=None)
+        log_hyperparameters(cfg, trainer_logger)
 
         trainer_logger.log_hyperparams.assert_called_once_with({"trainer": {"max_epochs": 50}})
 
@@ -78,7 +78,7 @@ class TestResumedParamLogging:
         )
 
         with caplog.at_level("WARNING"):
-            log_hyperparameters(cfg, trainer_logger, trainer=None)
+            log_hyperparameters(cfg, trainer_logger)
 
         trainer_logger.log_hyperparams.assert_called_once_with({"seed": 42})
         assert "callbacks/early_stopping/patience: 15 -> 40" in caplog.text
@@ -90,7 +90,7 @@ class TestResumedParamLogging:
         trainer_logger = self._logger_with_params({"trainer/max_epochs": "50"})
         cfg = OmegaConf.create({"trainer": {"max_epochs": 50}})
 
-        log_hyperparameters(cfg, trainer_logger, trainer=None)
+        log_hyperparameters(cfg, trainer_logger)
 
         trainer_logger.log_hyperparams.assert_called_once_with({})
         trainer_logger.experiment.set_tag.assert_not_called()

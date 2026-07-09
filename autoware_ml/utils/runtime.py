@@ -202,13 +202,12 @@ def _drop_params_already_logged(trainer_logger: MLFlowLogger, params: dict) -> d
     return new_params
 
 
-def log_hyperparameters(cfg: DictConfig, trainer_logger: Logger | None, trainer: L.Trainer) -> None:
+def log_hyperparameters(cfg: DictConfig, trainer_logger: Logger | None) -> None:
     """Log resolved hyperparameters through the configured trainer logger.
 
     Args:
         cfg: Fully composed Hydra configuration.
         trainer_logger: Logger configured for the current trainer, if any.
-        trainer: Instantiated Lightning trainer.
     """
     if trainer_logger is None:
         return
