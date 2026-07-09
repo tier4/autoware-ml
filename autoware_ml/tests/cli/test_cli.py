@@ -16,12 +16,13 @@
 
 import subprocess
 import sys
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from subprocess import CompletedProcess
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
 from omegaconf import OmegaConf
 from typer.testing import CliRunner
 
@@ -209,6 +210,8 @@ class TestCliCommands:
             stage="train",
             extra_args=["+trainer.strategy=ddp", "trainer.devices=2"],
             hydra_overrides=[],
+            resume_checkpoint=None,
+            new_run=False,
             config_prefix=cli.TASK_CONFIG_PREFIX,
         )
 
@@ -228,14 +231,25 @@ class TestCliCommands:
             stage="train",
             extra_args=[],
             hydra_overrides=["+weights=[seg.ckpt]"],
+            resume_checkpoint=None,
+            new_run=False,
             config_prefix=cli.TASK_CONFIG_PREFIX,
         )
 
-    def test_train_runs_with_resume_checkpoint(self) -> None:
+    def test_train_runs_with_resume_checkpoint(self, tmp_path: Path) -> None:
+        checkpoint_path = tmp_path / "last.ckpt"
+        checkpoint_path.touch()
+
         with patch("autoware_ml.cli.cli.run_lazy_script") as run_lazy_script_mock:
             result = self.runner.invoke(
                 app,
-                ["train", "--config-name", SAMPLE_CONFIG_NAME, "--resume-checkpoint", "last.ckpt"],
+                [
+                    "train",
+                    "--config-name",
+                    SAMPLE_CONFIG_NAME,
+                    "--resume-checkpoint",
+                    str(checkpoint_path),
+                ],
             )
 
         assert result.exit_code == 0
@@ -246,9 +260,46 @@ class TestCliCommands:
             config_name=SAMPLE_CONFIG_NAME,
             stage="train",
             extra_args=[],
-            hydra_overrides=["+resume_checkpoint=last.ckpt"],
+            hydra_overrides=[f"+resume_checkpoint={checkpoint_path.resolve()}"],
+            resume_checkpoint=str(checkpoint_path.resolve()),
+            new_run=False,
             config_prefix=cli.TASK_CONFIG_PREFIX,
         )
+
+    def test_train_resolves_relative_resume_checkpoint(self, tmp_path: Path, monkeypatch) -> None:
+        checkpoint_path = tmp_path / "last.ckpt"
+        checkpoint_path.touch()
+        monkeypatch.chdir(tmp_path)
+
+        with patch("autoware_ml.cli.cli.run_lazy_script") as run_lazy_script_mock:
+            result = self.runner.invoke(
+                app,
+                ["train", "--config-name", SAMPLE_CONFIG_NAME, "--resume-checkpoint", "last.ckpt"],
+            )
+
+        assert result.exit_code == 0
+        resume_kwarg = run_lazy_script_mock.call_args.kwargs["resume_checkpoint"]
+        assert resume_kwarg == str(checkpoint_path.resolve())
+
+    def test_train_rejects_missing_resume_checkpoint(self) -> None:
+        result = self.runner.invoke(
+            app,
+            [
+                "train",
+                "--config-name",
+                SAMPLE_CONFIG_NAME,
+                "--resume-checkpoint",
+                "/nonexistent/last.ckpt",
+            ],
+        )
+        assert result.exit_code != 0
+
+    def test_train_rejects_new_run_without_resume_checkpoint(self) -> None:
+        result = self.runner.invoke(
+            app,
+            ["train", "--config-name", SAMPLE_CONFIG_NAME, "--new-run"],
+        )
+        assert result.exit_code != 0
 
     def test_train_rejects_weights_and_resume_checkpoint_together(self) -> None:
         result = self.runner.invoke(
@@ -598,6 +649,101 @@ class TestCliRuntime:
             "seg-run,det-run"
         )
         assert env_updates["AUTOWARE_ML_RUN_ID"] == "deploy-run"
+
+    @contextmanager
+    def _patched_logger_config(self, config_name: str):
+        cfg = OmegaConf.create({"logger": {"tracking_uri": "sqlite:///mlruns/mlflow.db"}})
+        with (
+            patch(
+                "autoware_ml.cli.runtime.resolve_config_reference",
+                return_value=(None, f"tasks/{config_name}", []),
+            ),
+            patch("autoware_ml.cli.runtime.initialize_config_module", return_value=nullcontext()),
+            patch("autoware_ml.cli.runtime.compose", return_value=cfg),
+        ):
+            yield
+
+    def test_prepare_runtime_environment_reuses_source_run_for_resume(self, tmp_path: Path) -> None:
+        config_name = "multi/ptv3/voxel012"
+        with (
+            self._patched_logger_config(config_name),
+            patch(
+                "autoware_ml.cli.runtime.load_run_metadata",
+                return_value={"run_id": "source-run", "config_name": config_name},
+            ),
+            patch(
+                "autoware_ml.cli.runtime.load_run_context",
+                return_value=SimpleNamespace(run_id="source-run", hydra_dir=tmp_path / "hydra"),
+            ) as load_run_context_mock,
+            patch("autoware_ml.cli.runtime.prepare_run_context") as prepare_run_context_mock,
+        ):
+            env_updates = cli_runtime.prepare_runtime_environment(
+                config_name,
+                "tasks",
+                "train",
+                resume_checkpoint=str(tmp_path / "checkpoints" / "last.ckpt"),
+            )
+
+        prepare_run_context_mock.assert_not_called()
+        load_run_context_mock.assert_called_once()
+        assert env_updates["AUTOWARE_ML_RUN_ID"] == "source-run"
+        assert env_updates["AUTOWARE_ML_HYDRA_RUN_DIR"] == str(tmp_path / "hydra")
+
+    def test_prepare_runtime_environment_resume_new_run_creates_fresh_run(
+        self, tmp_path: Path
+    ) -> None:
+        config_name = "multi/ptv3/voxel012"
+        with (
+            self._patched_logger_config(config_name),
+            patch(
+                "autoware_ml.cli.runtime.prepare_run_context",
+                return_value=SimpleNamespace(run_id="fork-run", hydra_dir=tmp_path / "hydra"),
+            ) as prepare_run_context_mock,
+        ):
+            env_updates = cli_runtime.prepare_runtime_environment(
+                config_name,
+                "tasks",
+                "train",
+                resume_checkpoint=str(tmp_path / "last.ckpt"),
+                new_run=True,
+            )
+
+        prepare_run_context_mock.assert_called_once()
+        assert env_updates["AUTOWARE_ML_RUN_ID"] == "fork-run"
+
+    def test_prepare_runtime_environment_resume_without_metadata_fails(
+        self, tmp_path: Path
+    ) -> None:
+        config_name = "multi/ptv3/voxel012"
+        with (
+            self._patched_logger_config(config_name),
+            patch("autoware_ml.cli.runtime.load_run_metadata", return_value=None),
+            pytest.raises(ValueError, match="--new-run"),
+        ):
+            cli_runtime.prepare_runtime_environment(
+                config_name,
+                "tasks",
+                "train",
+                resume_checkpoint=str(tmp_path / "last.ckpt"),
+            )
+
+    def test_prepare_runtime_environment_resume_rejects_config_mismatch(
+        self, tmp_path: Path
+    ) -> None:
+        with (
+            self._patched_logger_config("multi/ptv3/voxel012"),
+            patch(
+                "autoware_ml.cli.runtime.load_run_metadata",
+                return_value={"run_id": "source-run", "config_name": "detection3d/other"},
+            ),
+            pytest.raises(ValueError, match="detection3d/other"),
+        ):
+            cli_runtime.prepare_runtime_environment(
+                "multi/ptv3/voxel012",
+                "tasks",
+                "train",
+                resume_checkpoint=str(tmp_path / "last.ckpt"),
+            )
 
 
 class TestResolveHydraArgv:

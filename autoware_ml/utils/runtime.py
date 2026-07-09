@@ -27,7 +27,8 @@ import hydra
 import lightning as L
 import torch
 from hydra.core.hydra_config import HydraConfig
-from lightning.pytorch.loggers import Logger
+from lightning.fabric.utilities.logger import _convert_params, _flatten_dict
+from lightning.pytorch.loggers import Logger, MLFlowLogger
 from omegaconf import DictConfig, OmegaConf, open_dict
 
 from autoware_ml.configs.paths import CONFIGS_ROOT
@@ -158,6 +159,49 @@ def instantiate_trainer(
     )
 
 
+# Mirrors the value truncation MLFlowLogger.log_hyperparams applies before logging.
+_MLFLOW_PARAM_VALUE_LIMIT = 250
+_MLFLOW_TAG_VALUE_LIMIT = 5000
+_PARAM_DRIFT_TAG = "param_drift"
+
+
+def _drop_params_already_logged(trainer_logger: MLFlowLogger, params: dict) -> dict:
+    """Keep MLflow params append-only when attaching to an existing run.
+
+    MLflow params are immutable, so a resumed run may only log new keys.
+    Identical keys are skipped; changed keys keep their originally logged
+    value, and each one is warned about and recorded in the mutable
+    ``param_drift`` run tag. The values actually in effect are always the
+    composed configuration's.
+
+    Args:
+        trainer_logger: MLflow logger attached to the current run.
+        params: Sanitized configuration parameters about to be logged.
+
+    Returns:
+        Flattened parameters that are not yet logged on the run.
+    """
+    logged = trainer_logger.experiment.get_run(trainer_logger.run_id).data.params
+    if not logged:
+        return params
+
+    flattened = _flatten_dict(_convert_params(params))
+    new_params: dict[str, object] = {}
+    drifted: list[str] = []
+    for key, value in flattened.items():
+        if key not in logged:
+            new_params[key] = value
+        elif logged[key] != str(value)[:_MLFLOW_PARAM_VALUE_LIMIT]:
+            drifted.append(f"{key}: {logged[key]} -> {value}")
+    for entry in drifted:
+        logger.warning("Param drift against the run's logged params: %s", entry)
+    if drifted:
+        trainer_logger.experiment.set_tag(
+            trainer_logger.run_id, _PARAM_DRIFT_TAG, "; ".join(drifted)[:_MLFLOW_TAG_VALUE_LIMIT]
+        )
+    return new_params
+
+
 def log_hyperparameters(cfg: DictConfig, trainer_logger: Logger | None, trainer: L.Trainer) -> None:
     """Log resolved hyperparameters through the configured trainer logger.
 
@@ -169,5 +213,7 @@ def log_hyperparameters(cfg: DictConfig, trainer_logger: Logger | None, trainer:
     if trainer_logger is None:
         return
 
-    params = OmegaConf.to_container(cfg, resolve=True)
-    trainer_logger.log_hyperparams(sanitize_mlflow_param_keys(params))
+    params = sanitize_mlflow_param_keys(OmegaConf.to_container(cfg, resolve=True))
+    if isinstance(trainer_logger, MLFlowLogger):
+        params = _drop_params_already_logged(trainer_logger, params)
+    trainer_logger.log_hyperparams(params)

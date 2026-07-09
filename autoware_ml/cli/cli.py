@@ -20,6 +20,7 @@ completion helpers used by the ``autoware-ml`` executable.
 
 import logging
 from importlib.metadata import version
+from pathlib import Path
 
 import click
 import typer
@@ -231,33 +232,49 @@ def train(
         typer.Option(
             "--resume-checkpoint",
             help="Full Lightning checkpoint path to resume training from "
-            "(restores model weights, optimizer state, and epoch). "
-            "Mutually exclusive with --weights.",
+            "(restores model weights, optimizer state, and epoch, and continues "
+            "the checkpoint's source MLflow run). Mutually exclusive with --weights.",
             autocompletion=complete_checkpoint_path,
         ),
     ] = None,
+    new_run: Annotated[
+        bool,
+        typer.Option(
+            "--new-run",
+            help="With --resume-checkpoint: continue the training state in a new "
+            "MLflow run instead of the checkpoint's source run.",
+        ),
+    ] = False,
 ) -> None:
     """Run model training through the Hydra-backed training entrypoint.
 
     Pass ``--weights`` to initialize model parameters from one or more pretrained
     checkpoints before training starts (e.g. transfer learning from a seg3d backbone
     into a det3d model). Pass ``--resume-checkpoint`` to resume an interrupted training
-    run from its full saved state. The two options are mutually exclusive.
+    run from its full saved state; it continues inside the checkpoint's source MLflow
+    run unless ``--new-run`` forks it. The two options are mutually exclusive.
 
     Args:
         ctx: Typer context containing additional Hydra overrides.
         config_name: Config name or config file path to train.
         weights: One or more checkpoint paths for pretrained weight initialization.
         resume_checkpoint: Full Lightning checkpoint path to resume training from.
+        new_run: Whether to fork the resumed training into a new MLflow run.
     """
     if weights and resume_checkpoint:
         raise typer.BadParameter("--weights and --resume-checkpoint are mutually exclusive.")
+    if new_run and not resume_checkpoint:
+        raise typer.BadParameter("--new-run requires --resume-checkpoint.")
 
     hydra_overrides: list[str] = []
     if weights:
         weights_list = "[" + ",".join(weights) + "]"
         hydra_overrides.append(f"+weights={weights_list}")
     if resume_checkpoint:
+        resume_path = Path(resume_checkpoint).expanduser().resolve()
+        if not resume_path.is_file():
+            raise typer.BadParameter(f"Resume checkpoint '{resume_checkpoint}' does not exist.")
+        resume_checkpoint = str(resume_path)
         hydra_overrides.append(f"+resume_checkpoint={resume_checkpoint}")
 
     run_lazy_script(
@@ -268,6 +285,8 @@ def train(
         stage="train",
         extra_args=ctx.args,
         hydra_overrides=hydra_overrides,
+        resume_checkpoint=resume_checkpoint,
+        new_run=new_run,
         config_prefix=TASK_CONFIG_PREFIX,
     )
 
