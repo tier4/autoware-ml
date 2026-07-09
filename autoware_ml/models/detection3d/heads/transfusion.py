@@ -361,7 +361,9 @@ class TransFusionHead(nn.Module):
             nms_type: Optional NMS type applied during prediction. Supported values
                 are ``None`` and ``"circle"``.
             nms_groups: Optional grouped NMS configuration. Each entry must provide
-                ``class_names`` or ``class_ids`` and may override ``nms_radius``.
+                ``class_names`` or ``class_ids`` and may override ``nms_radius``
+                and ``post_max_size``. A group with ``nms_radius`` of ``0`` keeps
+                its highest-scoring predictions up to ``post_max_size``.
             loss_cls_weight: Weight applied to the classification loss.
             loss_bbox_weight: Weight applied to the box regression loss.
             loss_heatmap_weight: Weight applied to the dense heatmap loss.
@@ -479,6 +481,7 @@ class TransFusionHead(nn.Module):
                 {
                     "class_ids": self._resolve_class_ids(class_spec) or [],
                     "nms_radius": float(group.get("nms_radius", self.nms_min_radius)),
+                    "post_max_size": int(group.get("post_max_size", self.post_max_size)),
                 }
             )
         return resolved_groups
@@ -525,6 +528,7 @@ class TransFusionHead(nn.Module):
             {
                 "class_ids": [class_id],
                 "nms_radius": self.nms_min_radius,
+                "post_max_size": self.post_max_size,
             }
             for class_id in range(self.num_classes)
         ]
@@ -546,16 +550,19 @@ class TransFusionHead(nn.Module):
             if not group_mask.any():
                 continue
             covered_mask |= group_mask
+            group_indices = group_mask.nonzero(as_tuple=False).squeeze(1)
+            group_post_max_size = group["post_max_size"]
             if group["nms_radius"] <= 0:
-                keep_mask |= group_mask
-                continue
-            keep = circle_nms(
-                boxes[group_mask],
-                scores[group_mask],
-                group["nms_radius"],
-                self.post_max_size,
-            )
-            keep_mask[group_mask.nonzero(as_tuple=False).squeeze(1)[keep]] = True
+                # No suppression: keep the group's highest-scoring predictions.
+                keep = scores[group_mask].argsort(descending=True)[:group_post_max_size]
+            else:
+                keep = circle_nms(
+                    boxes[group_mask],
+                    scores[group_mask],
+                    group["nms_radius"],
+                    group_post_max_size,
+                )
+            keep_mask[group_indices[keep]] = True
 
         keep_mask |= ~covered_mask
         return keep_mask.nonzero(as_tuple=False).squeeze(1)
