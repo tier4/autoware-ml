@@ -41,6 +41,7 @@ from autoware_ml.utils.mlflow_helpers import (
     generate_hydra_run_dir,
     load_run_context,
     load_run_metadata,
+    mark_run_running,
     prepare_run_context,
     resolve_deploy_lineage,
     resolve_lineage_context,
@@ -177,6 +178,7 @@ def prepare_resume_environment(
             f"but '{config_name}' was launched."
         )
     run_context = load_run_context(tracking_uri, metadata["run_id"])
+    mark_run_running(tracking_uri, run_context.run_id)
     return {
         AUTOWARE_ML_RUN_ID_ENV: run_context.run_id,
         AUTOWARE_ML_HYDRA_RUN_DIR_ENV: str(run_context.hydra_dir),

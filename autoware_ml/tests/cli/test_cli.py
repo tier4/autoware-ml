@@ -675,6 +675,7 @@ class TestCliRuntime:
                 "autoware_ml.cli.runtime.load_run_context",
                 return_value=SimpleNamespace(run_id="source-run", hydra_dir=tmp_path / "hydra"),
             ) as load_run_context_mock,
+            patch("autoware_ml.cli.runtime.mark_run_running") as mark_run_running_mock,
             patch("autoware_ml.cli.runtime.prepare_run_context") as prepare_run_context_mock,
         ):
             env_updates = cli_runtime.prepare_runtime_environment(
@@ -686,6 +687,7 @@ class TestCliRuntime:
 
         prepare_run_context_mock.assert_not_called()
         load_run_context_mock.assert_called_once()
+        mark_run_running_mock.assert_called_once_with("sqlite:///mlruns/mlflow.db", "source-run")
         assert env_updates["AUTOWARE_ML_RUN_ID"] == "source-run"
         assert env_updates["AUTOWARE_ML_HYDRA_RUN_DIR"] == str(tmp_path / "hydra")
 
