@@ -137,7 +137,6 @@ deploy:
           voxel_coors: { 0: { name: num_unique_coors, min: 2 } }
           inverse_map: { 0: { name: num_points, min: 2 } }
   tensorrt:
-    workspace_size: 4294967296
     input_shapes:
       points:
         min_shape: [5000, 4]
