@@ -29,6 +29,7 @@ import torch
 from hydra.core.hydra_config import HydraConfig
 from lightning.fabric.utilities.logger import _convert_params, _flatten_dict
 from lightning.pytorch.loggers import Logger, MLFlowLogger
+from lightning.pytorch.utilities.rank_zero import rank_zero_only
 from omegaconf import DictConfig, OmegaConf, open_dict
 
 from autoware_ml.configs.paths import CONFIGS_ROOT
@@ -213,6 +214,8 @@ def log_hyperparameters(cfg: DictConfig, trainer_logger: Logger | None) -> None:
         return
 
     params = sanitize_mlflow_param_keys(OmegaConf.to_container(cfg, resolve=True))
-    if isinstance(trainer_logger, MLFlowLogger):
+    # Off rank zero the MLflow experiment is a dummy and log_hyperparams is a
+    # no-op, so the reconciliation must not (and cannot) run there.
+    if isinstance(trainer_logger, MLFlowLogger) and rank_zero_only.rank == 0:
         params = _drop_params_already_logged(trainer_logger, params)
     trainer_logger.log_hyperparams(params)

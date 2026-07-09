@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 
 import torch
 from lightning.pytorch.loggers import MLFlowLogger
+from lightning.pytorch.utilities.rank_zero import rank_zero_only
 from omegaconf import OmegaConf
 
 from autoware_ml.callbacks.early_stopping import EarlyStopping
@@ -94,6 +95,18 @@ class TestResumedParamLogging:
 
         trainer_logger.log_hyperparams.assert_called_once_with({})
         trainer_logger.experiment.set_tag.assert_not_called()
+
+    def test_non_zero_rank_skips_param_reconciliation(self, monkeypatch) -> None:
+        # Off rank zero the MLflow experiment property returns a dummy whose
+        # get_run() yields None; touching it would crash every DDP launch.
+        monkeypatch.setattr(rank_zero_only, "rank", 1)
+        trainer_logger = self._logger_with_params({"trainer/max_epochs": "50"})
+        cfg = OmegaConf.create({"trainer": {"max_epochs": 50}})
+
+        log_hyperparameters(cfg, trainer_logger)
+
+        trainer_logger.experiment.get_run.assert_not_called()
+        trainer_logger.log_hyperparams.assert_called_once_with({"trainer": {"max_epochs": 50}})
 
 
 class TestDefaultCheckpointCallbacks:
