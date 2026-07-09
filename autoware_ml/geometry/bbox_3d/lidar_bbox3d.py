@@ -134,6 +134,7 @@ class LidarBBoxes3D(BaseBBoxes3D):
         angle = torch.arctan2(rot_sin, rot_cos)
         self.bbox_params[:, Box3DFieldIndex.YAW] += angle
 
+        # TODO (KokSeang): Apply to velocity_z as well.
         # Velocity
         self.bbox_params[:, [Box3DFieldIndex.VELOCITY_X, Box3DFieldIndex.VELOCITY_Y]] = (
             self.bbox_params[:, [Box3DFieldIndex.VELOCITY_X, Box3DFieldIndex.VELOCITY_Y]]

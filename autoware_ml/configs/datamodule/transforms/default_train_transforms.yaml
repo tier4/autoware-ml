@@ -18,3 +18,20 @@ pipeline:
     use_timestamp_difference: true
     load_dim: ${database.lidar_pointcloud_num_features}
     use_dim: [0, 1, 2, 3]
+
+  - _target_: autoware_ml.transforms.multi_task.point_cloud.geometry.GlobalRotScaleTrans
+    _convert_: all
+
+    # In radians, the range of rotation angles for random rotation around the Z-axis.
+    # The range is specified as [min_angle, max_angle].
+    yaw_rot_range: [-0.78539816, 0.78539816]
+    # The range of scale factors for random scaling.
+    scale_ratio_range: [0.95, 1.05]
+    # The standard deviation for Gaussian translation noise.
+    translation_std: [0.5, 0.5, 0.2]
+
+  - _target_: autoware_ml.transforms.multi_task.point_cloud.geometry.GlobalBEVRandomFlip
+    _convert_: all
+
+    horizontal_flip_ratio: 0.5
+    vertical_flip_ratio: 0.5

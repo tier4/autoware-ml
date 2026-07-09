@@ -44,7 +44,7 @@ class LiDARPoints(BasePoints):
             timestamp_seconds=timestamp_seconds,
         )
 
-    def flip(self, bev_direction: BEVDirection) -> None:
+    def flip_bev(self, bev_direction: BEVDirection) -> None:
         """Flip the points along given BEV direction.
 
         Args:

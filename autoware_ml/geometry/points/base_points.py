@@ -177,7 +177,7 @@ class BasePoints(ABC):
         )
 
     @abstractmethod
-    def flip(self, bev_direction: BEVDirection) -> None:
+    def flip_bev(self, bev_direction: BEVDirection) -> None:
         """Flip the points along given BEV direction.
 
         Args:
@@ -185,11 +185,11 @@ class BasePoints(ABC):
         """
         pass
 
-    def translate(self, trans_vector: Float32[Tensor, "3"]) -> None:
+    def translate(self, trans_vector: Float32[Tensor, "1 3"]) -> None:
         """Translate points with the given translation vector.
 
         Args:
-            trans_vector (Float32[Tensor, "3"]): Translation vector of size 3.
+            trans_vector (Float32[Tensor, "1 3"]): Translation vector of size 1x3.
 
         """
         self.points[:, [PointFieldIndex.X, PointFieldIndex.Y, PointFieldIndex.Z]] += trans_vector

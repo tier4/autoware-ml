@@ -318,12 +318,13 @@ class BaseBBoxes3D(ABC):
         """
         raise NotImplementedError("Subclasses must implement the `flip_bev` method.")
 
-    def translate(self, translation_vector: Float32[Tensor, "3"]) -> None:
+    def translate(self, translation_vector: Float32[Tensor, "1 3"]) -> None:
         """
         Translate the 3D bounding boxes globally using a given translation vector.
 
         Args:
-            translation_vector (Tensor.float32, (3)): The translation vector to apply to the bounding boxes.
+            translation_vector (Tensor.float32, (1, 3)): The translation vector to apply to the
+                bounding boxes.
         """
         self._bbox_params[:, [Box3DFieldIndex.X, Box3DFieldIndex.Y, Box3DFieldIndex.Z]] += (
             translation_vector
@@ -401,12 +402,12 @@ class BaseBBoxes3D(ABC):
         self._bbox_params[:, [Box3DFieldIndex.X, Box3DFieldIndex.Y, Box3DFieldIndex.Z]] *= (
             scale_factor
         )
+        # TODO (KokSeang): Apply to velocity_z as well.
         self._bbox_params[
             :,
             [
                 Box3DFieldIndex.VELOCITY_X,
                 Box3DFieldIndex.VELOCITY_Y,
-                Box3DFieldIndex.VELOCITY_Z,
             ],
         ] *= scale_factor
 

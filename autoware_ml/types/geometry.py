@@ -81,3 +81,22 @@ class PointFeatureName(StrEnum):
     INTENSITY = "intensity"
     RING = "ring"
     TIMESTAMP_DIFFERENCE = "timestamp_difference"
+
+
+class TransformationName(StrEnum):
+    """
+    Transformation name.
+
+    Attributes:
+      ROTATION: Rotation transformation.
+      SCALING: Scaling transformation.
+      TRANSLATION: Translation transformation.
+      HORIZONTAL_FLIP: Horizontal flip transformation.
+      VERTICAL_FLIP: Vertical flip transformation.
+    """
+
+    ROTATION = "rotation"
+    SCALING = "scaling"
+    TRANSLATION = "translation"
+    HORIZONTAL_FLIP = "horizontal_flip"
+    VERTICAL_FLIP = "vertical_flip"
