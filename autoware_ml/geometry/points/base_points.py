@@ -239,10 +239,8 @@ class BasePoints(ABC):
         in_range_flags = (
             (self.points[:, PointFieldIndex.X] >= point_range[0])
             & (self.points[:, PointFieldIndex.Y] >= point_range[1])
-            & (self.points[:, PointFieldIndex.Z] >= point_range[2])
-            & (self.points[:, PointFieldIndex.X] <= point_range[3])
-            & (self.points[:, PointFieldIndex.Y] <= point_range[4])
-            & (self.points[:, PointFieldIndex.Z] <= point_range[5])
+            & (self.points[:, PointFieldIndex.X] <= point_range[2])
+            & (self.points[:, PointFieldIndex.Y] <= point_range[3])
         )
         return in_range_flags
 
