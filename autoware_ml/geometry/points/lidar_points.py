@@ -19,9 +19,8 @@ from autoware_ml.types.spatial import BEVDirection
 
 class LiDARPoints(BasePoints):
     """
-    Abstract base class for point cloud data that defines the common interface
-    for every point cloud type.
-    Note that it only supports tensor data type for now.
+    LiDAR point cloud data structure that extends the BasePoints class to support LiDAR-specific
+    functionalities.
     """
 
     def __init__(
