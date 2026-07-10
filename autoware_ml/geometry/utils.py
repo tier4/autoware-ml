@@ -28,8 +28,8 @@ def create_axis_rotation_matrices(
     Returns:
         Float32[Tensor, "num_angles 3 3"]: A Nx3x3 rotation matrix.
     """
-    rot_sin = torch.sin(torch.tensor(angles))
-    rot_cos = torch.cos(torch.tensor(angles))
+    rot_sin = torch.sin(angles)
+    rot_cos = torch.cos(angles)
     ones = torch.ones_like(rot_cos)
     zeros = torch.zeros_like(rot_cos)
 
