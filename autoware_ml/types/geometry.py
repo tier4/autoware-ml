@@ -45,6 +45,8 @@ class Box3DCenterCoordinateType(StrEnum):
 class PointFieldIndex(IntEnum):
     """
     Point field index.
+    # Timestamp is stored separately (e.g., BasePoints.timestamp_seconds) and is not a
+    # point field index for now.
 
     Attributes:
       X: X coordinate of the point.
@@ -52,7 +54,6 @@ class PointFieldIndex(IntEnum):
       Z: Z coordinate of the point.
       INTENSITY: Intensity of the point.
       RING: Ring index of the point.
-      TIME: Timestamp of the point.
     """
 
     X = 0
