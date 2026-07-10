@@ -115,7 +115,7 @@ class LoadPointsFromFile(MultiTaskBaseTransform):
             multi_task_gt_sample: MultiTaskGTSample instance containing `lidar_point_cloud_samples`.
 
         Returns:
-            Updated MultiTaskGTSample instance with a loaded `point_cloud_features` array.
+            Updated MultiTaskGTSample instance with a loaded `point_cloud_data` array.
         """
         # Load the first index of the point cloud file, and reshape it to (N, load_dim)
         if not multi_task_gt_sample.lidar_point_cloud_samples:
@@ -176,7 +176,7 @@ class LoadMultiSweepPointsFromFile(LoadPointsFromFile):
             multi_task_gt_sample: MultiTaskGTSample instance containing `lidar_point_cloud_samples`.
 
         Returns:
-            Updated MultiTaskGTSample instance with a loaded `point_cloud_features` array.
+            Updated MultiTaskGTSample instance with a loaded `point_cloud_data` array.
         """
         if not multi_task_gt_sample.lidar_point_cloud_samples:
             raise ValueError("No lidar point cloud samples found in the MultiTaskGTSample.")
