@@ -208,7 +208,7 @@ class GlobalBEVRandomFlip(MultiTaskBaseTransform):
                 f"Invalid flip direction: {bev_flip_direction}. Must be 'horizontal' or 'vertical'."
             )
 
-        # Flip the point cloud along the directon
+        # Flip the point cloud along the direction
         multi_task_gt_sample.point_cloud_data.flip_bev(bev_direction=bev_flip_direction)
 
         # Flip the 3D bounding boxes along the direction if they exist
