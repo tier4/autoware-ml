@@ -89,20 +89,22 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
         lidar_pointcloud_samples = self.get_lidar_pointcloud_data_samples(index)
 
         # Retrieve the detection3d_gt_bboxes_3d and segmentation3d_gt_sample from the data_samples dictionary
-        detection3d_gt_sample: MultiTaskGTSample = data_samples.get(TaskType.DETECTION3D, None)
+        detection3d_gt_sample: MultiTaskGTSample | None = data_samples.get(
+            TaskType.DETECTION3D, None
+        )
         if detection3d_gt_sample is not None:
             detection3d_gt_bboxes_3d = detection3d_gt_sample.detection3d_gt_bboxes_3d
+        else:
+            detection3d_gt_bboxes_3d = None
 
-        segmentation3d_gt_sample: MultiTaskGTSample = data_samples.get(
+        segmentation3d_gt_sample: MultiTaskGTSample | None = data_samples.get(
             TaskType.SEGMENTATION3D, None
         )
-        if segmentation3d_gt_sample is not None:
-            segmentation3d_gt_sample = segmentation3d_gt_sample.segmentation3d_gt_sample
 
         # Merge the data samples from different tasks into a single multi-task data row
         return MultiTaskGTSample(
             lidar_point_cloud_samples=lidar_pointcloud_samples,
-            point_cloud_data=None,  # Add point cloud features if available
+            point_cloud_data=None,  # point cloud data will be populated in the transform pipeline
             detection3d_gt_bboxes_3d=detection3d_gt_bboxes_3d,
             segmentation3d_gt_sample=segmentation3d_gt_sample,
         )
