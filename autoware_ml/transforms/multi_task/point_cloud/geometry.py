@@ -1,4 +1,8 @@
-""" """
+"""
+Point cloud geometry transforms for augmentation to both points and 3D bboxes
+(rotation/scale/translation and BEV flips).
+The code is modified based on https://github.com/open-mmlab/mmdetection3d/blob/main/mmdet3d/datasets/transforms/transforms_3d.py.
+"""
 
 from typing import Sequence, Tuple
 
