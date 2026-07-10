@@ -126,7 +126,7 @@ class MultiTaskGTBatch(NamedTuple):
         pointcloud_samples = []
         for sample in gt_samples:
             if sample.point_cloud_data is None:
-                raise ValueError("All samples must have point_cloud_features for collating.")
+                raise ValueError("All samples must have point_cloud_data for collating.")
             pointcloud_samples.append(sample.point_cloud_data)
 
         point_cloud_gt_batch = PointCloudGTBatch.collate_gt_samples(pointcloud_samples)
