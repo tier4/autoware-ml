@@ -88,7 +88,7 @@ class MultiTaskGTSample(NamedTuple):
     detection3d_gt_bboxes_3d: BaseBBoxes3D | None
     segmentation3d_gt_sample: Segmentation3DGTSample | None
 
-    # Information about transformation matrices
+    # Information about lidar transformation
     lidar_transformation_sample: LiDARTransformationSample | None = None
 
 

@@ -97,7 +97,7 @@ class GlobalRotScaleTrans(MultiTaskBaseTransform):
             scale_factor=scale_factor,
             translation_vector=translation_tensor,
         )
-        global_transformation_sample = LiDARTransformationSample.create_lidar_transformation_sample(
+        lidar_transformation_sample = LiDARTransformationSample.create_lidar_transformation_sample(
             # row-vector convention for point cloud transformation, for right multiplication,
             # e.g., points @ R.T
             rotation_matrix=rotation_matrix_tensor.T,
@@ -105,7 +105,7 @@ class GlobalRotScaleTrans(MultiTaskBaseTransform):
             translation_vector=translation_tensor,
             transformation_order=transformation_order,
         )
-        return global_transformation_sample, rotation_scale_translation_data
+        return lidar_transformation_sample, rotation_scale_translation_data
 
     def transform(self, multi_task_gt_sample: MultiTaskGTSample) -> MultiTaskGTSample:
         """Rotate, scale, and translate points and bboxes."""
@@ -114,9 +114,7 @@ class GlobalRotScaleTrans(MultiTaskBaseTransform):
             raise ValueError("point_cloud_data is required for GlobalRotScaleTrans transform.")
 
         # Sample rotation, scale, and translation parameters
-        global_transformation_sample, rotation_scale_translation_data = (
-            self.sample_rot_scale_trans()
-        )
+        lidar_transformation_sample, rotation_scale_translation_data = self.sample_rot_scale_trans()
 
         # Rotate, scale, and translate the point cloud
         # Convert to row vector convention for point cloud transformation
@@ -138,7 +136,7 @@ class GlobalRotScaleTrans(MultiTaskBaseTransform):
 
         # Create the composed transformation matrix in the MultiTaskGTSample if it exists
         if multi_task_gt_sample.lidar_transformation_sample is not None:
-            global_transformation_sample = global_transformation_sample.create_composed_lidar_transformation_sample(
+            lidar_transformation_sample = lidar_transformation_sample.create_composed_lidar_transformation_sample(
                 previous_lidar_transformation_sample=multi_task_gt_sample.lidar_transformation_sample
             )
 
@@ -147,7 +145,7 @@ class GlobalRotScaleTrans(MultiTaskBaseTransform):
             point_cloud_data=multi_task_gt_sample.point_cloud_data,
             detection3d_gt_bboxes_3d=multi_task_gt_sample.detection3d_gt_bboxes_3d,
             segmentation3d_gt_sample=multi_task_gt_sample.segmentation3d_gt_sample,
-            lidar_transformation_sample=global_transformation_sample,
+            lidar_transformation_sample=lidar_transformation_sample,
         )
 
 
@@ -237,17 +235,17 @@ class GlobalBEVRandomFlip(MultiTaskBaseTransform):
             # Add the vertical flip transformation to the transformation order
             transformation_order.append(TransformationName.VERTICAL_FLIP)
 
-        # Create the global transformation matrix
-        global_transformation_sample = LiDARTransformationSample.create_lidar_transformation_sample(
+        # Create the lidar transformation sample
+        lidar_transformation_sample = LiDARTransformationSample.create_lidar_transformation_sample(
             rotation_matrix=rotation_matrix,
             scale_factor=1.0,  # No scaling applied
             translation_vector=torch.zeros((1, 3), dtype=torch.float32),  # No translation applied
             transformation_order=transformation_order,
         )
 
-        # Update the global transformation matrix in the MultiTaskGTSample if it exists
+        # Update the lidar transformation sample in the MultiTaskGTSample if it exists
         if multi_task_gt_sample.lidar_transformation_sample is not None:
-            global_transformation_sample = global_transformation_sample.create_composed_lidar_transformation_sample(
+            lidar_transformation_sample = lidar_transformation_sample.create_composed_lidar_transformation_sample(
                 previous_lidar_transformation_sample=multi_task_gt_sample.lidar_transformation_sample
             )
 
@@ -256,5 +254,5 @@ class GlobalBEVRandomFlip(MultiTaskBaseTransform):
             point_cloud_data=multi_task_gt_sample.point_cloud_data,
             detection3d_gt_bboxes_3d=multi_task_gt_sample.detection3d_gt_bboxes_3d,
             segmentation3d_gt_sample=multi_task_gt_sample.segmentation3d_gt_sample,
-            lidar_transformation_sample=global_transformation_sample,
+            lidar_transformation_sample=lidar_transformation_sample,
         )
