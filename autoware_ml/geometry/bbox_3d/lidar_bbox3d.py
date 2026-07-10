@@ -97,9 +97,8 @@ class LidarBBoxes3D(BaseBBoxes3D):
         corners = dims.view([-1, 1, 3]) * corners_norm.reshape([1, 8, 3])
 
         # rotate around z axis
-        angles = torch.full(corners.shape[:1], self.yaw, device=tensor_device, dtype=tensor_dtype)
         rotation_matrices = create_axis_rotation_matrices(
-            angles, axis=self.YAW_AXIS, clockwise=False
+            self.yaw, axis=self.YAW_AXIS, clockwise=False
         )
         corners = rotate_points_3d(points=corners, rotation_matrices=rotation_matrices)
         corners += self.bbox_params[:, :3].view(-1, 1, 3)
