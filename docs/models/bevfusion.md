@@ -59,7 +59,7 @@ autoware-ml deploy \
     --weights mlruns/detection3d/bevfusion/camera_lidar_voxel0075_second_secfpn_54m_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
-The export follows the AWML/Autoware runtime ONNX split. Camera-LiDAR configurations export two modules: `bevfusion_image_backbone.onnx` encodes raw `uint8` multiview images (the training-time `1 / 255` normalization is baked into the graph) into `image_feats`, and `bevfusion_camera_lidar.onnx` is the main body consuming those features together with precomputed `bev_pool` metadata. LiDAR-only configurations export a single `bevfusion_lidar.onnx` main body restricted to the first three inputs below.
+The export produces the ONNX modules consumed by `autoware_universe/perception/autoware_bevfusion`. Camera-LiDAR configurations export two modules: `bevfusion_image_backbone.onnx` encodes raw `uint8` multiview images (the training-time `1 / 255` normalization is baked into the graph) into `image_feats`, and `bevfusion_camera_lidar.onnx` is the main body consuming those features together with precomputed `bev_pool` metadata. LiDAR-only configurations export a single `bevfusion_lidar.onnx` main body restricted to the first three inputs below.
 
 | Input Tensor           | Description                                          |
 | ---------------------- | ---------------------------------------------------- |
