@@ -64,7 +64,7 @@ The export follows the AWML/Autoware runtime ONNX split. Camera-LiDAR configurat
 | Input Tensor           | Description                                          |
 | ---------------------- | ---------------------------------------------------- |
 | `voxels`               | Voxelized LiDAR features                             |
-| `coors`                | Voxel coordinates in `(x, y, z)` order, batch-free   |
+| `coors`                | Voxel coordinates in `(z, y, x)` order, batch-free   |
 | `num_points_per_voxel` | Point count per voxel                                |
 | `points`               | Raw point cloud used for LiDAR depth guidance        |
 | `lidar2image`          | Raw camera projection matrices                       |
