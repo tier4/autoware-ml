@@ -116,6 +116,46 @@ def test_depth_lss_transform_uses_bev_pool(monkeypatch) -> None:
     assert "shape" in calls
 
 
+def test_depth_lss_transform_emits_lidar_convention_bev_layout(monkeypatch) -> None:
+    def fake_bev_pool(feats, coords, ranks, batch_size, depth, height, width, is_training):
+        channels = feats.shape[1]
+        return feats.new_zeros((batch_size, channels, depth, height, width))
+
+    monkeypatch.setattr(
+        "autoware_ml.models.detection3d.view_transforms.depth_lss.bev_pool", fake_bev_pool
+    )
+
+    transform = DepthLSSTransform(
+        in_channels=32,
+        out_channels=8,
+        image_size=[64, 64],
+        feature_size=[8, 8],
+        xbound=[-8.0, 8.0, 1.0],
+        ybound=[-4.0, 4.0, 1.0],
+        zbound=[-5.0, 3.0, 8.0],
+        dbound=[1.0, 5.0, 1.0],
+        downsample=1,
+    )
+
+    image_features = torch.randn(2, 3, 32, 8, 8)
+    points = [torch.rand(50, 4) * 4.0 for _ in range(2)]
+    lidar2image = torch.eye(4).view(1, 1, 4, 4).repeat(2, 3, 1, 1)
+    intrinsics = torch.eye(4).view(1, 1, 4, 4).repeat(2, 3, 1, 1)
+    camera2lidar = torch.eye(4).view(1, 1, 4, 4).repeat(2, 3, 1, 1)
+    img_aug = torch.eye(4).view(1, 1, 4, 4).repeat(2, 3, 1, 1)
+    lidar_aug = torch.eye(4).view(1, 4, 4).repeat(2, 1, 1)
+
+    bev = transform(
+        image_features, points, lidar2image, intrinsics, camera2lidar, img_aug, lidar_aug
+    )
+
+    # nx = (X, Y, Z) = (16, 8, 1); the pooled grid must come out in the
+    # (Y, X) layout shared with the lidar branch, not the pooling-native (X, Y).
+    assert transform.nx == (16, 8, 1)
+    assert transform.expected_bev_shape == (8, 16)
+    assert bev.shape == (2, 8, 8, 16)
+
+
 def test_depth_lss_transform_supports_precomputed_pool_metadata(monkeypatch) -> None:
     calls = {}
 

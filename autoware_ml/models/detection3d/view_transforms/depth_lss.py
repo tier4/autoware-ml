@@ -491,7 +491,7 @@ class DepthLSSTransform(nn.Module):
             indices: Sorting indices aligned with ``ranks``.
 
         Returns:
-            BEV feature map.
+            BEV feature map of shape ``(B, C * Z, Y, X)``.
         """
         batch_size, num_cams, depth_bins, height, width, channels = feats.shape
         feats = feats.reshape(batch_size * num_cams * depth_bins * height * width, channels)
@@ -500,7 +500,10 @@ class DepthLSSTransform(nn.Module):
         bev = bev_pool(
             feats, geom_feats, ranks, batch_size, self.nx[2], self.nx[0], self.nx[1], self.training
         )
-        return torch.cat(bev.unbind(dim=2), dim=1)
+        # The pooling metadata is x-major (geometry column 0 is the X index),
+        # so the pooled grid comes out as (X, Y); transpose to the (Y, X) BEV
+        # layout shared with the lidar branch and the detection head.
+        return torch.cat(bev.unbind(dim=2), dim=1).transpose(-2, -1).contiguous()
 
     def _bev_pool(self, feats: torch.Tensor, geom_feats: torch.Tensor) -> torch.Tensor:
         """Pool camera features into BEV using on-the-fly metadata generation.
@@ -510,7 +513,7 @@ class DepthLSSTransform(nn.Module):
             geom_feats: Projected frustum coordinates in lidar space.
 
         Returns:
-            BEV feature map.
+            BEV feature map of shape ``(B, C * Z, Y, X)``.
         """
         pooled_geom_feats, kept, ranks, indices = self.bev_pool_aux(geom_feats)
         return self.bev_pool_precomputed(feats, pooled_geom_feats, kept, ranks, indices)
