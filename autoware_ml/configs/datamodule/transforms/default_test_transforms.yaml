@@ -28,3 +28,8 @@ pipeline:
     use_timestamp_difference: true
     load_dim: ${database.lidar_pointcloud_num_features}
     use_dim: [0, 1, 2, 3] # Feature dimensionality to keep when loading from pointcloud files.
+
+  - _target_: autoware_ml.transforms.multi_task.point_cloud.geometry.PointsRangeFilter
+    _convert_: all
+
+    points_range: ${point_cloud_range}
