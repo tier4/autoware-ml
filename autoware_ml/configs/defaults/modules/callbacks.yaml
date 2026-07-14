@@ -7,12 +7,18 @@ callbacks:
     dirpath: ${hydra:run.dir}/checkpoints
     filename: best
     save_top_k: 1
-    save_last: true
     mode: min
     verbose: true
 
+  model_checkpoint_last:
+    _target_: lightning.pytorch.callbacks.ModelCheckpoint
+    dirpath: ${hydra:run.dir}/checkpoints
+    filename: last
+    save_top_k: 1
+    enable_version_counter: false
+
   early_stopping:
-    _target_: lightning.pytorch.callbacks.EarlyStopping
+    _target_: autoware_ml.callbacks.early_stopping.EarlyStopping
     monitor: val/loss
     patience: 20
     mode: min

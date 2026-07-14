@@ -12,35 +12,38 @@ Bash completion is installed automatically by the Docker image build and by
 
 ## Commands
 
-| Command          | Purpose                                             |
-| ---------------- | --------------------------------------------------- |
-| `train`          | Train models using PyTorch Lightning                |
-| `test`           | Evaluate models from a checkpoint                   |
-| `deploy`         | Export models to ONNX and TensorRT                  |
-| `mlflow ui`      | Launch the MLflow tracking UI                       |
-| `mlflow export`  | Export one experiment into its own MLflow store     |
-| `session start`  | Start a managed background task                     |
-| `session attach` | View live terminal output from a background task    |
-| `session detach` | Disconnect raw tmux clients from a managed session  |
-| `session ls`     | List managed background tasks                       |
-| `session stop`   | Stop a managed background task                      |
-| `create-dataset` | Generate dataset info files                         |
+| Command          | Purpose                                            |
+| ---------------- | -------------------------------------------------- |
+| `train`          | Train models using PyTorch Lightning               |
+| `test`           | Evaluate models from a checkpoint                  |
+| `deploy`         | Export models to ONNX and TensorRT                 |
+| `mlflow ui`      | Launch the MLflow tracking UI                      |
+| `mlflow export`  | Export one experiment into its own MLflow store    |
+| `session start`  | Start a managed background task                    |
+| `session attach` | View live terminal output from a background task   |
+| `session detach` | Disconnect raw tmux clients from a managed session |
+| `session ls`     | List managed background tasks                      |
+| `session stop`   | Stop a managed background task                     |
+| `create-dataset` | Generate dataset info files                        |
 
 ## train
 
 Train a model using the specified Hydra configuration.
 
 ```bash
-autoware-ml train --config-name <config_path> [--weights <path> ...] [--resume-checkpoint <path>] [hydra_overrides...]
+autoware-ml train --config-name <config_path> [--weights <path> ...] [--resume-checkpoint <path>] [--new-run] [hydra_overrides...]
 ```
 
 **Arguments:**
 
 - `--config-name`: Path to config
 - `--weights`: One or more `.ckpt` paths for pretrained weight initialization (repeatable; later checkpoints overwrite earlier ones on overlapping keys). Use this for transfer learning, e.g. initializing a det3d backbone from a seg3d checkpoint. Mutually exclusive with `--resume-checkpoint`.
-- `--resume-checkpoint`: Full Lightning checkpoint path to resume an interrupted training run from (restores model weights, optimizer state, and epoch). Mutually exclusive with `--weights`.
+- `--resume-checkpoint`: Full Lightning checkpoint path to resume an interrupted training run from (restores model weights, optimizer state, and epoch). Training continues inside the checkpoint's source MLflow run: same run ID, metric curves, and checkpoint directory. Mutually exclusive with `--weights`.
+- `--new-run`: With `--resume-checkpoint`, fork the training state into a new MLflow run instead of continuing the source run.
 
 All remaining arguments are passed to Hydra as overrides. See [Configuration](configuration.md) for details.
+
+Resuming with a modified configuration is supported: the current config is authoritative for training, callback settings such as early-stopping patience take their configured values, and MLflow keeps the originally logged params (they are immutable) - every changed key is reported in a startup warning and in the run's `param_drift` tag, and the config artifact records the exact resumed configuration.
 
 **Examples:**
 
