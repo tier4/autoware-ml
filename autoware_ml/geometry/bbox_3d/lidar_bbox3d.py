@@ -105,7 +105,7 @@ class LidarBBoxes3D(BaseBBoxes3D):
         corners_norm = corners_norm[[0, 1, 3, 2, 4, 5, 7, 6]]
         # use relative origin (0.5, 0.5, 0.5), where the center of the box is at (0.5, 0.5, 0.5)
         # in the normalized box coordinate system
-        corners_norm = corners_norm - dims.new_tensor([0.5, 0.5, 0.0])
+        corners_norm = corners_norm - dims.new_tensor([0.5, 0.5, 0.5])
         corners = dims.view([-1, 1, 3]) * corners_norm.reshape([1, 8, 3])
 
         # rotate around z axis

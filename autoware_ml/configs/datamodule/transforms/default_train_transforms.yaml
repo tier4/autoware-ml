@@ -58,8 +58,8 @@ pipeline:
       - ${point_cloud_range.3}
       - ${point_cloud_range.4}
 
-  # Order matters, it first filters bboxes within default meters with less than or equal to 2 points
-  # Then it filters bboxes within 60 meters with less than or equal to 3 points
+  # Order matters, it first filters bboxes within the default meters with less than or
+  # equal to 2 points. Then it filters bboxes within 60 meters with less than or equal to 3 points
   - _target_: autoware_ml.transforms.multi_task.bboxes_3d.geometry.BBoxesMinPointsFilter
     _convert_: all
 
@@ -73,5 +73,5 @@ pipeline:
   - _target_: autoware_ml.transforms.multi_task.bboxes_3d.geometry.BBoxesMinPointsFilter
     _convert_: all
 
-    min_points: 3
+    min_points: 0
     bev_range: [-60.0, -60.0, 60.0, 60.0]
