@@ -125,6 +125,7 @@ class LoadPointsFromFile(MultiTaskBaseTransform):
         lidar_points = self.load_points_from_samples(
             0, multi_task_gt_sample.lidar_point_cloud_samples
         )
+        self.remove_close(lidar_points)
 
         return MultiTaskGTSample(
             lidar_point_cloud_samples=multi_task_gt_sample.lidar_point_cloud_samples,
