@@ -192,8 +192,10 @@ class LoadMultiSweepPointsFromFile(LoadPointsFromFile):
         if self.test_mode:
             sweep_indices = list(range(1, available_sweeps_nums + 1))
         else:
-            sweep_indices = torch.arange(1, len(multi_task_gt_sample.lidar_point_cloud_samples))
-            sweep_indices = torch.randperm(len(sweep_indices))[:available_sweeps_nums].tolist()
+            candidate_indices = torch.arange(1, len(multi_task_gt_sample.lidar_point_cloud_samples))
+            sweep_indices = candidate_indices[
+                torch.randperm(len(candidate_indices))[:available_sweeps_nums]
+            ].tolist()
 
         # Create timestamp_feature for each point
         main_lidar_frame_timestamp = current_frame_point_cloud_data.timestamp_seconds
