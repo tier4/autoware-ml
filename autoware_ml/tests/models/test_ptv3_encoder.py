@@ -1,4 +1,4 @@
-"""Unit tests for PTv3 backbone components."""
+"""Unit tests for PTv3 encoder components."""
 
 from __future__ import annotations
 
@@ -11,19 +11,28 @@ import torch
 import torch.nn as nn
 
 import autoware_ml.utils.point_cloud.structures as point_structures
-from autoware_ml.losses.segmentation3d.lovasz import LovaszLoss
-from autoware_ml.models.segmentation3d.backbones.ptv3 import (
+from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     Point,
     PointSequential,
-    PointTransformerV3Backbone,
+    PointTransformerV3Encoder,
     SerializedAttention,
     SerializedPooling,
     build_serialized_pooling_meta,
 )
-from autoware_ml.models.segmentation3d.ptv3 import PTv3SegmentationModel
+from autoware_ml.models.segmentation3d.ptv3 import (
+    PTv3SegmentationModel,
+    _PTv3SegmentationExportModule,
+)
 from autoware_ml.models.segmentation3d.ptv3_base import (
-    build_ptv3_backbone_dynamic_axes,
+    build_ptv3_encoder_dynamic_axes,
     validate_serialization_geometry,
+)
+from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
+from autoware_ml.tests.models.ptv3_detection_fixtures import (
+    build_inputs,
+    build_ptv3_encoder,
+    build_seg_head,
+    move_batch_to_device,
 )
 
 
@@ -64,7 +73,7 @@ def test_serialized_attention_uses_flash_module_when_enabled() -> None:
     )
 
     with patch(
-        "autoware_ml.models.segmentation3d.backbones.ptv3.load_flash_attn_module",
+        "autoware_ml.models.segmentation3d.encoders.ptv3.load_flash_attn_module",
         return_value=flash_module,
     ):
         attention = SerializedAttention(
@@ -88,7 +97,7 @@ def test_serialized_attention_uses_flash_module_when_enabled() -> None:
     assert attention.flash_attn is flash_module
 
 
-def test_build_export_module_disables_flash_attention_without_mutating_live_backbone() -> None:
+def test_build_export_module_disables_flash_attention_without_mutating_live_encoder() -> None:
     flash_module = SimpleNamespace(
         flash_attn_varlen_qkvpacked_func=lambda qkv,
         cu_seqlens,
@@ -97,7 +106,7 @@ def test_build_export_module_disables_flash_attention_without_mutating_live_back
         softmax_scale: (qkv[:, 2])
     )
     with patch(
-        "autoware_ml.models.segmentation3d.backbones.ptv3.load_flash_attn_module",
+        "autoware_ml.models.segmentation3d.encoders.ptv3.load_flash_attn_module",
         return_value=flash_module,
     ):
         attention = SerializedAttention(
@@ -115,7 +124,7 @@ def test_build_export_module_disables_flash_attention_without_mutating_live_back
             upcast_softmax=False,
         )
 
-    class _BackboneForExport(torch.nn.Module):
+    class _EncoderForExport(torch.nn.Module):
         def __init__(self, attention_module: SerializedAttention) -> None:
             super().__init__()
             self.order = ["hilbert"]
@@ -126,31 +135,29 @@ def test_build_export_module_disables_flash_attention_without_mutating_live_back
             self.order = list(order)
 
         def prepare_for_export(self, order: tuple[str, ...]) -> torch.nn.Module:
-            return PointTransformerV3Backbone.prepare_for_export(self, order)
+            return PointTransformerV3Encoder.prepare_for_export(self, order)
 
-    model = PTv3SegmentationModel.__new__(PTv3SegmentationModel)
-    torch.nn.Module.__init__(model)
-    model.seg3d_head = nn.Linear(4, 2)
-    model.backbone = _BackboneForExport(attention)
+    encoder = _EncoderForExport(attention)
 
     with patch(
-        "autoware_ml.models.segmentation3d.backbones.ptv3.replace_submconv3d_for_export",
+        "autoware_ml.models.segmentation3d.encoders.ptv3.replace_submconv3d_for_export",
         return_value=None,
     ):
-        export_module = PTv3SegmentationModel._build_export_module(
-            model,
+        export_module = _PTv3SegmentationExportModule(
+            encoder=encoder.prepare_for_export(("z", "z-trans")),
+            seg3d_head=nn.Linear(4, 2),
             sparse_shape=torch.tensor([64, 64, 64], dtype=torch.long),
             serialized_depth=torch.tensor(6, dtype=torch.long),
         )
 
-    export_attention = export_module.backbone.attention
+    export_attention = export_module.encoder.attention
     assert attention.enable_flash is True
     assert attention.patch_size == 4
     assert export_attention.enable_flash is False
     assert export_attention.flash_attn is None
     assert export_attention.patch_size == 0
-    assert model.backbone.shuffle_orders is True
-    assert export_module.backbone.shuffle_orders is False
+    assert encoder.shuffle_orders is True
+    assert export_module.encoder.shuffle_orders is False
 
 
 def test_prepare_for_export_handles_loaded_flash_attention_module() -> None:
@@ -170,7 +177,7 @@ def test_prepare_for_export_handles_loaded_flash_attention_module() -> None:
     )
     attention.flash_attn = math
 
-    class _BackboneForExport(torch.nn.Module):
+    class _EncoderForExport(torch.nn.Module):
         def __init__(self, attention_module: SerializedAttention) -> None:
             super().__init__()
             self.order = ["hilbert"]
@@ -181,19 +188,19 @@ def test_prepare_for_export_handles_loaded_flash_attention_module() -> None:
             self.order = list(order)
 
         def prepare_for_export(self, order: tuple[str, ...]) -> torch.nn.Module:
-            return PointTransformerV3Backbone.prepare_for_export(self, order)
+            return PointTransformerV3Encoder.prepare_for_export(self, order)
 
-    backbone = _BackboneForExport(attention)
+    encoder = _EncoderForExport(attention)
 
     with patch(
-        "autoware_ml.models.segmentation3d.backbones.ptv3.replace_submconv3d_for_export",
+        "autoware_ml.models.segmentation3d.encoders.ptv3.replace_submconv3d_for_export",
         return_value=None,
     ):
-        export_backbone = PointTransformerV3Backbone.prepare_for_export(backbone, ("z", "z-trans"))
+        export_encoder = PointTransformerV3Encoder.prepare_for_export(encoder, ("z", "z-trans"))
 
     assert attention.flash_attn is math
-    assert export_backbone.attention.flash_attn is None
-    assert export_backbone.attention.enable_flash is False
+    assert export_encoder.attention.flash_attn is None
+    assert export_encoder.attention.enable_flash is False
 
 
 def test_serialized_attention_export_mode_requires_fixed_patch_size_capacity() -> None:
@@ -279,10 +286,7 @@ def test_compute_metrics_reports_losses_and_point_level_accuracy() -> None:
     """compute_metrics should run losses on voxel logits and metrics at point level."""
     model = PTv3SegmentationModel.__new__(PTv3SegmentationModel)
     torch.nn.Module.__init__(model)
-    model.cross_entropy = nn.CrossEntropyLoss(ignore_index=-1)
-    model.lovasz = LovaszLoss(ignore_index=-1, loss_weight=1.0)
-    model.ignore_index = -1
-    model.num_classes = 3
+    model.seg3d_head = build_seg_head(num_classes=3, dec_depths=(0,))
 
     voxel_logits = torch.tensor(
         [
@@ -357,7 +361,7 @@ def test_point_serialization_accepts_explicit_depth_override() -> None:
     assert point["serialized_code"].shape == (2, 2)
 
 
-def test_ptv3_backbone_dynamic_axes_follow_generated_pooling_inputs() -> None:
+def test_ptv3_encoder_dynamic_axes_follow_generated_pooling_inputs() -> None:
     input_names = [
         "grid_coord",
         "feat",
@@ -372,7 +376,7 @@ def test_ptv3_backbone_dynamic_axes_follow_generated_pooling_inputs() -> None:
         "serialized_pooling_1_grid_coord",
     ]
 
-    dynamic_axes = build_ptv3_backbone_dynamic_axes(input_names)
+    dynamic_axes = build_ptv3_encoder_dynamic_axes(input_names, stage_count=3)
 
     assert dynamic_axes["grid_coord"] == {0: "num_voxels"}
     assert dynamic_axes["feat"] == {0: "num_voxels"}
@@ -393,8 +397,9 @@ def test_ptv3_backbone_dynamic_axes_follow_generated_pooling_inputs() -> None:
         1: "serialized_pooling_0_out_voxels"
     }
     assert dynamic_axes["serialized_pooling_1_grid_coord"] == {0: "serialized_pooling_1_out_voxels"}
-    assert dynamic_axes["point_feat"] == {0: "num_voxels"}
-    assert dynamic_axes["point_grid_coord"] == {0: "num_voxels"}
+    assert dynamic_axes["point_feat_0"] == {0: "num_voxels"}
+    assert dynamic_axes["point_feat_1"] == {0: "serialized_pooling_0_out_voxels"}
+    assert dynamic_axes["point_feat_2"] == {0: "serialized_pooling_1_out_voxels"}
 
 
 def test_validate_serialization_geometry_rejects_shallow_configs() -> None:
@@ -493,3 +498,27 @@ def test_serialized_pooling_export_mode_uses_precomputed_metadata(monkeypatch) -
             torch.testing.assert_close(left, right, msg=f"Mismatch for {key}")
         else:
             assert torch.equal(left, right), f"Mismatch for {key}"
+
+
+@pytest.mark.skipif(
+    not IS_SPCONV_AVAILABLE or not torch.cuda.is_available(),
+    reason="PTv3 sparse-convolution tests require CUDA spconv",
+)
+def test_ptv3_frozen_encoder_supports_decoder_block_backward() -> None:
+    """Stage-4 regression: a frozen (eval) encoder caches spconv indice pairs
+    without backward metadata; decoder blocks must not reuse them by key or
+    their CPE backward fails with an empty-indices assert."""
+    model = PTv3SegmentationModel(
+        encoder=build_ptv3_encoder(),
+        seg3d_head=build_seg_head(),
+        freeze_encoder=True,
+        grid_size=1.0,
+        point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
+    ).cuda()
+    batch = move_batch_to_device(build_inputs(), torch.device("cuda"))
+
+    logits = model(**batch)
+    logits.sum().backward()
+
+    assert all(p.grad is None for p in model.encoder.parameters())
+    assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in model.seg3d_head.parameters())

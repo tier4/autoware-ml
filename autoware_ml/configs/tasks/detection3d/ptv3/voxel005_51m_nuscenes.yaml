@@ -72,9 +72,6 @@ datamodule:
   val_transforms:
     _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
-      - _target_: autoware_ml.transforms.boxes3d.merge.MergeObjects3D
-        merge_objects: ${dataset.detection3d.merge_objects}
-        name_mapping: ${dataset.detection3d.name_mapping}
       - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
         name_mapping: ${dataset.detection3d.name_mapping}
         filter_attributes: ${dataset.detection3d.filter_attributes}
@@ -86,6 +83,8 @@ datamodule:
         remove_close: true
       - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
       - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
+        point_cloud_range: ${point_cloud_range}
+      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeFilter
         point_cloud_range: ${point_cloud_range}
       - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
         grid_size: ${grid_size}
@@ -135,9 +134,9 @@ model:
       rot,
       vel,
     ]
-  bev_projector:
-    bev_stride: 8
-    output_shape: [256, 256]
+  bev_neck:
+    bev_projector:
+      output_shape: [256, 256]
   bbox_head:
     _target_: autoware_ml.models.detection3d.heads.transfusion.TransFusionHead
     num_proposals: ${num_proposals}
@@ -178,7 +177,7 @@ model:
         _target_: autoware_ml.models.detection3d.task_modules.match_costs.IoU3DCost
         weight: 0.25
     point_cloud_range: ${point_cloud_range}
-    voxel_size: [0.4, 0.4, 8.0]   # grid 0.05 * bev_stride 8
+    voxel_size: [0.4, 0.4, 8.0]
     out_size_factor: 1
     code_weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2]
     min_radius: 2

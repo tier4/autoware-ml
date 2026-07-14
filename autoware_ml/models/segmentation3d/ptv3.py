@@ -15,53 +15,60 @@
 """PTv3 segmentation model wrapper.
 
 This module contains the high-level PTv3 Lightning wrapper and export logic.
+The model composes the shared PTv3 encoder with the segmentation decoder
+head; losses and prediction formatting are owned by the head module.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from copy import deepcopy
 from typing import Any
 
 import torch
 import torch.nn as nn
 
-from autoware_ml.losses.segmentation3d.lovasz import LovaszLoss
-from autoware_ml.models.segmentation3d.backbones.ptv3 import Block, PointTransformerV3Backbone
+from autoware_ml.models.segmentation3d.encoders.ptv3 import PointTransformerV3Encoder
+from autoware_ml.models.segmentation3d.heads.ptv3 import (
+    PTv3SegDecoderHead,
+    segmentation_eval_output,
+    segmentation_predict_outputs,
+)
 from autoware_ml.models.segmentation3d.ptv3_base import (
     PTv3BaseModel,
-    _PTv3BackboneExportModule,
-    _PTv3SegHeadExportModule,
-    _run_ptv3_backbone_export,
+    _run_ptv3_encoder_export,
+    build_encoder_export_spec,
     build_point_feature_dynamic_axes,
-    build_ptv3_backbone_dynamic_axes,
+    build_ptv3_export_context,
     build_ptv3_input_dynamic_axes,
-    build_serialized_pooling_export_inputs,
+    build_seg_head_export_spec,
+    build_serialized_pooling_metadata,
+    flatten_serialized_pooling_inputs,
+    split_block_parameters,
 )
 from autoware_ml.utils.deploy import ExportSpec
 from autoware_ml.utils.point_cloud.structures import serialize_point_cloud_batch
 
 
-class _PTv3ExportModule(nn.Module):
+class _PTv3SegmentationExportModule(nn.Module):
     """Expose a deployment-oriented PTv3 export graph without mutating the model."""
 
     def __init__(
         self,
-        backbone: PointTransformerV3Backbone,
-        seg3d_head: nn.Module,
+        encoder: PointTransformerV3Encoder,
+        seg3d_head: PTv3SegDecoderHead,
         sparse_shape: torch.Tensor,
         serialized_depth: torch.Tensor,
     ) -> None:
         """Initialize the isolated PTv3 export module.
 
         Args:
-            backbone: Export-prepared PTv3 backbone copy.
-            seg3d_head: Segmentation head copy.
+            encoder: Export-prepared PTv3 encoder copy.
+            seg3d_head: Export-prepared decoder head copy.
             sparse_shape: Static sparse shape used by exported sparse ops.
             serialized_depth: Serialization depth baked at export time.
         """
         super().__init__()
-        self.backbone = backbone
+        self.encoder = encoder
         self.seg3d_head = seg3d_head
         self.register_buffer("_sparse_shape", sparse_shape.to(dtype=torch.long), persistent=False)
         self.register_buffer("_serialized_depth", serialized_depth, persistent=False)
@@ -83,8 +90,8 @@ class _PTv3ExportModule(nn.Module):
         Returns:
             Predicted labels and point-wise semantic probabilities.
         """
-        point_feat, _, _ = _run_ptv3_backbone_export(
-            self.backbone,
+        point = _run_ptv3_encoder_export(
+            self.encoder,
             grid_coord,
             feat,
             self._serialized_depth,
@@ -92,7 +99,7 @@ class _PTv3ExportModule(nn.Module):
             self._sparse_shape,
             *serialized_pooling_inputs,
         )
-        point_logits = self.seg3d_head(point_feat)
+        point_logits = self.seg3d_head(point)
         pred_probs = torch.softmax(point_logits, dim=1)
         pred_labels = pred_probs.argmax(dim=1)
         return pred_labels, pred_probs
@@ -103,59 +110,35 @@ class PTv3SegmentationModel(PTv3BaseModel):
 
     def __init__(
         self,
-        backbone: PointTransformerV3Backbone,
-        num_classes: int,
-        backbone_out_channels: int,
-        ignore_index: int,
+        encoder: PointTransformerV3Encoder,
+        seg3d_head: PTv3SegDecoderHead,
         grid_size: float,
         point_cloud_range: Sequence[float],
-        lovasz_weight: float = 1.0,
         **kwargs: Any,
     ) -> None:
         """Initialize the PTv3 segmentation model.
 
         Args:
-            backbone: PTv3 backbone module.
-            num_classes: Number of semantic classes.
-            backbone_out_channels: Backbone output feature dimension.
-            ignore_index: Label value ignored by the losses.
+            encoder: PTv3 encoder module.
+            seg3d_head: Segmentation decoder head owning losses and the
+                classifier.
             grid_size: Voxel grid size used to derive sparse shape and
                 serialization depth.
             point_cloud_range: Point-cloud range used to derive sparse shape
                 and serialization depth.
-            lovasz_weight: Weight applied to the Lovasz loss term.
             **kwargs: Keyword arguments forwarded to :class:`BaseModel`.
         """
         super().__init__(
-            backbone=backbone,
+            encoder=encoder,
             grid_size=grid_size,
             point_cloud_range=point_cloud_range,
             **kwargs,
         )
-        self.seg3d_head = nn.Linear(backbone_out_channels, num_classes)
-        self.cross_entropy = nn.CrossEntropyLoss(ignore_index=ignore_index)
-        self.lovasz = LovaszLoss(ignore_index=ignore_index, loss_weight=lovasz_weight)
-        self.ignore_index = ignore_index
-        self.num_classes = num_classes
+        self.seg3d_head = seg3d_head
 
     def build_optimizer_groups(self) -> Mapping[str, Sequence[torch.nn.Parameter]]:
         """Group PTv3 parameters structurally for optimizer configuration."""
-        block_parameter_ids = {
-            id(parameter)
-            for module in self.backbone.modules()
-            if isinstance(module, Block)
-            for parameter in module.parameters()
-            if parameter.requires_grad
-        }
-        default_params: list[torch.nn.Parameter] = []
-        block_params: list[torch.nn.Parameter] = []
-        for parameter in self.parameters():
-            if not parameter.requires_grad:
-                continue
-            if id(parameter) in block_parameter_ids:
-                block_params.append(parameter)
-            else:
-                default_params.append(parameter)
+        default_params, block_params = split_block_parameters(self)
         return {"default": default_params, "block": block_params}
 
     def forward(
@@ -165,7 +148,7 @@ class PTv3SegmentationModel(PTv3BaseModel):
         grid_coord: torch.Tensor,
         offset: torch.Tensor,
     ) -> torch.Tensor:
-        """Run the backbone and segmentation head.
+        """Run the encoder and segmentation decoder head.
 
         Args:
             coord: Point coordinates.
@@ -177,7 +160,7 @@ class PTv3SegmentationModel(PTv3BaseModel):
             Voxel-level segmentation logits of shape
             ``(num_voxels, num_classes)``.
         """
-        point = self.backbone(
+        point = self.encoder(
             {
                 "coord": coord,
                 "feat": feat,
@@ -185,7 +168,7 @@ class PTv3SegmentationModel(PTv3BaseModel):
                 "offset": offset,
             }
         )
-        return self.seg3d_head(point.feat)
+        return self.seg3d_head(point)
 
     def compute_metrics(
         self,
@@ -205,76 +188,25 @@ class PTv3SegmentationModel(PTv3BaseModel):
         Returns:
             Dictionary with the segmentation losses.
         """
-        segment = batch_inputs_dict["segment"]
-        loss_ce = self.cross_entropy(outputs, segment)
-        loss_lovasz = self.lovasz(outputs, segment)
-        return {
-            "loss_ce": loss_ce,
-            "loss_lovasz": loss_lovasz,
-            "loss": loss_ce + loss_lovasz,
-        }
+        return self.seg3d_head.loss(outputs, batch_inputs_dict["segment"])
 
     def build_eval_output(
         self, batch: Mapping[str, Any], outputs: torch.Tensor
     ) -> dict[str, torch.Tensor]:
-        """Scatter voxel predictions to points for the segmentation metric.
-
-        Args:
-            batch: Full batch dictionary with ``inverse`` (voxel-to-point map),
-                ``origin_segment`` (original-point targets), and ``origin_coord``
-                (original-point coordinates for range bucketing).
-            outputs: Voxel-level segmentation logits returned by :meth:`forward`.
-
-        Returns:
-            Point-level predictions and targets keyed for the segmentation metric.
-        """
-        point_predictions = outputs.argmax(dim=1)[batch["inverse"].long()]
-        return {
-            "seg_pred_labels": point_predictions,
-            "seg_target_labels": batch["origin_segment"].long(),
-            "seg_coord": batch["origin_coord"],
-        }
+        """Scatter voxel predictions to points for the segmentation metric."""
+        return segmentation_eval_output(outputs, batch)
 
     def predict_outputs(
         self,
         batch_inputs_dict: Mapping[str, Any],
         outputs: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
-        """Format PTv3 segmentation predictions at the original-point level.
-
-        Args:
-            batch_inputs_dict: Full batch dictionary. Must contain ``inverse``
-                (voxel-to-point mapping).
-            outputs: Voxel-level segmentation logits returned by
-                :meth:`forward`.
-
-        Returns:
-            Dictionary with ``"pred_labels"`` (predicted class indices) and
-            ``"pred_probs"`` (per-class probabilities), both at the original-
-            point level.
-        """
-        inverse = batch_inputs_dict["inverse"].long()
-        point_probs = torch.softmax(outputs, dim=1)[inverse]
-        return {"pred_labels": point_probs.argmax(dim=1), "pred_probs": point_probs}
+        """Format PTv3 segmentation predictions at the original-point level."""
+        return segmentation_predict_outputs(outputs, batch_inputs_dict)
 
     def get_export_output_names(self) -> list[str]:
         """Return ordered PTv3 segmentation export output names."""
         return ["pred_labels", "pred_probs"]
-
-    def _build_export_module(
-        self,
-        sparse_shape: torch.Tensor,
-        serialized_depth: torch.Tensor,
-    ) -> _PTv3ExportModule:
-        """Create an isolated PTv3 export module from model copies."""
-        export_backbone = self._prepare_backbone_export()
-        export_seg3d_head = deepcopy(self.seg3d_head).eval()
-        return _PTv3ExportModule(
-            export_backbone,
-            export_seg3d_head,
-            sparse_shape,
-            serialized_depth,
-        ).eval()
 
     def build_export_spec(self, batch: Mapping[str, torch.Tensor]) -> ExportSpec:
         """Build the ONNX export specification.
@@ -289,11 +221,13 @@ class PTv3SegmentationModel(PTv3BaseModel):
         sparse_shape, serialization_depth = self._compute_export_geometry(batch)
         point, _ = serialize_point_cloud_batch(batch, self.EXPORT_ORDER, serialization_depth)
         serialized_pooling_inputs, serialized_pooling_input_names = (
-            build_serialized_pooling_export_inputs(
-                point["grid_coord"],
-                point["serialized_code"],
-                point["serialized_order"],
-                self.backbone.stride,
+            flatten_serialized_pooling_inputs(
+                build_serialized_pooling_metadata(
+                    point["grid_coord"],
+                    point["serialized_code"],
+                    point["serialized_order"],
+                    self.encoder.stride,
+                )
             )
         )
         input_args = (
@@ -308,11 +242,17 @@ class PTv3SegmentationModel(PTv3BaseModel):
             "serialized_code",
             *serialized_pooling_input_names,
         ]
+        export_module = _PTv3SegmentationExportModule(
+            self._prepare_encoder_export(),
+            self.seg3d_head.prepare_for_export(self.EXPORT_ORDER),
+            sparse_shape,
+            serialization_depth,
+        ).eval()
         output_names = self.get_export_output_names()
         dynamic_axes = build_ptv3_input_dynamic_axes(input_param_names)
         dynamic_axes.update(build_point_feature_dynamic_axes(output_names))
         return ExportSpec(
-            module=self._build_export_module(sparse_shape, serialization_depth),
+            module=export_module,
             args=input_args,
             input_param_names=input_param_names,
             output_names=output_names,
@@ -321,59 +261,13 @@ class PTv3SegmentationModel(PTv3BaseModel):
         )
 
     def build_export_specs(self, batch: Mapping[str, torch.Tensor]) -> dict[str, ExportSpec]:
-        """Build split PTv3 segmentation ONNX export specs for backbone and segmentation head."""
-        sparse_shape, serialization_depth = self._compute_export_geometry(batch)
-        point, input_args = serialize_point_cloud_batch(
-            batch, self.EXPORT_ORDER, serialization_depth
-        )
-        serialized_pooling_inputs, serialized_pooling_input_names = (
-            build_serialized_pooling_export_inputs(
-                point["grid_coord"],
-                point["serialized_code"],
-                point["serialized_order"],
-                self.backbone.stride,
-            )
-        )
-        backbone_input_args = (
-            input_args[0],
-            input_args[1],
-            input_args[3],
-            *serialized_pooling_inputs,
-        )
-        backbone_input_names = [
-            "grid_coord",
-            "feat",
-            "serialized_code",
-            *serialized_pooling_input_names,
-        ]
-
-        backbone_module = _PTv3BackboneExportModule(
-            backbone=self._prepare_backbone_export(),
-            sparse_shape=sparse_shape,
-            serialized_depth=serialization_depth,
-        ).eval()
-        with torch.no_grad():
-            point_feat, point_grid_coord, point_offset = backbone_module(*backbone_input_args)
-
-        seg3d_head_module = _PTv3SegHeadExportModule(deepcopy(self.seg3d_head).eval()).eval()
-
+        """Build split PTv3 segmentation ONNX export specs for encoder and head."""
+        context = build_ptv3_export_context(self, batch)
         return {
-            "backbone": ExportSpec(
-                module=backbone_module,
-                args=backbone_input_args,
-                input_param_names=backbone_input_names,
-                output_names=["point_feat", "point_grid_coord", "point_offset"],
-                dynamic_axes=build_ptv3_backbone_dynamic_axes(backbone_input_names),
-                supported_stages=self.EXPORT_SUPPORTED_STAGES,
-            ),
-            "seg3d_head": ExportSpec(
-                module=seg3d_head_module,
-                args=(point_feat,),
-                input_param_names=["point_feat"],
-                output_names=self.get_export_output_names(),
-                dynamic_axes=build_point_feature_dynamic_axes(
-                    ("point_feat", *self.get_export_output_names())
-                ),
-                supported_stages=self.EXPORT_SUPPORTED_STAGES,
+            "encoder": build_encoder_export_spec(context),
+            "seg3d_head": build_seg_head_export_spec(
+                context,
+                self.seg3d_head.prepare_for_export(self.EXPORT_ORDER),
+                self.get_export_output_names(),
             ),
         }

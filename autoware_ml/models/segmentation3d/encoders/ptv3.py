@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Reusable PTv3 backbone components.
+"""Reusable PTv3 encoder components.
 
 This module contains the reusable encoder-decoder blocks used by PTv3.
 """
@@ -885,12 +885,70 @@ class Embedding(PointModule):
         return self.stem(point)
 
 
-class PointTransformerV3Backbone(PointModule):
-    """Implement the PTv3 encoder-decoder backbone for point segmentation.
+def set_block_serialization_order(stages: PointSequential, order_count: int) -> None:
+    """Reassign block order indices after a serialization-order change.
 
-    The backbone serializes points, applies hierarchical encoder blocks with
-    sparse pooling, and reconstructs fine-grained features through decoder
-    stages with skip connections.
+    Args:
+        stages: Stage container whose :class:`Block` children are updated.
+        order_count: Number of serialization orders available.
+    """
+    for stage in stages._modules.values():
+        block_index = 0
+        for module in stage._modules.values():
+            if isinstance(module, Block):
+                module.attn.order_index = block_index % order_count
+                block_index += 1
+
+
+def prepare_point_module_for_export(module: nn.Module) -> None:
+    """Switch a PTv3 point-module hierarchy into export mode in place.
+
+    Args:
+        module: Module hierarchy whose attention, pooling, and sparse-conv
+            children are reconfigured for ONNX export.
+    """
+    replace_submconv3d_for_export(module)
+    pooling_stage_index = 0
+    for child in module.modules():
+        if isinstance(child, SerializedAttention):
+            child.disable_flash()
+            child.export_mode = True
+        if isinstance(child, SerializedPooling):
+            child.export_mode = True
+            child.export_stage_index = pooling_stage_index
+            pooling_stage_index += 1
+        if hasattr(child, "shuffle_orders"):
+            child.shuffle_orders = False
+
+
+def deepcopy_without_flash(module: nn.Module) -> nn.Module:
+    """Deep-copy a module while detaching loaded flash-attention handles.
+
+    Args:
+        module: Module to copy.
+
+    Returns:
+        Evaluation-mode deep copy of the module.
+    """
+    loaded_flash_modules: list[tuple[SerializedAttention, Any]] = []
+    for child in module.modules():
+        if isinstance(child, SerializedAttention) and child.flash_attn is not None:
+            loaded_flash_modules.append((child, child.flash_attn))
+            child.flash_attn = None
+    try:
+        return deepcopy(module).eval()
+    finally:
+        for child, flash_attn in loaded_flash_modules:
+            child.flash_attn = flash_attn
+
+
+class PointTransformerV3Encoder(PointModule):
+    """Implement the hierarchical PTv3 encoder.
+
+    The encoder serializes points and applies hierarchical attention blocks
+    with sparse pooling. It returns the deepest :class:`Point`, whose
+    ``pooling_parent``/``pooling_inverse`` chain carries every finer stage,
+    so decoders and BEV necks can consume any hierarchy level.
     """
 
     def __init__(
@@ -902,10 +960,6 @@ class PointTransformerV3Backbone(PointModule):
         enc_channels: Sequence[int],
         enc_num_head: Sequence[int],
         enc_patch_size: Sequence[int],
-        dec_depths: Sequence[int],
-        dec_channels: Sequence[int],
-        dec_num_head: Sequence[int],
-        dec_patch_size: Sequence[int],
         mlp_ratio: float,
         qkv_bias: bool,
         qk_scale: float | None,
@@ -921,20 +975,16 @@ class PointTransformerV3Backbone(PointModule):
         stem_kernel_size: int = 0,
         stem_type: str = "linear",
     ) -> None:
-        """Initialize the PTv3 encoder-decoder backbone.
+        """Initialize the PTv3 encoder.
 
         Args:
             in_channels: Input feature dimension.
-            order: Serialization orders used by the backbone.
+            order: Serialization orders used by the encoder.
             stride: Pooling strides between encoder stages.
             enc_depths: Number of blocks per encoder stage.
             enc_channels: Encoder channel widths per stage.
             enc_num_head: Attention head counts per encoder stage.
             enc_patch_size: Attention patch sizes per encoder stage.
-            dec_depths: Number of blocks per decoder stage.
-            dec_channels: Decoder channel widths per stage.
-            dec_num_head: Attention head counts per decoder stage.
-            dec_patch_size: Attention patch sizes per decoder stage.
             mlp_ratio: Hidden-layer expansion ratio for each block MLP.
             qkv_bias: Whether to use learnable bias in QKV projections.
             qk_scale: Optional manual attention scale.
@@ -956,6 +1006,7 @@ class PointTransformerV3Backbone(PointModule):
         self.order = list(order)
         self.stride = list(stride)
         self.shuffle_orders = shuffle_orders
+        self.enc_channels = list(enc_channels)
         stage_count = len(enc_depths)
         self.embedding = Embedding(
             in_channels, enc_channels[0], kernel_size=stem_kernel_size, stem_type=stem_type
@@ -999,130 +1050,54 @@ class PointTransformerV3Backbone(PointModule):
                 )
             self.enc.add(encoder, name=f"enc{stage_index}")
 
-        dec_drop_path = [value.item() for value in torch.linspace(0, drop_path, sum(dec_depths))]
-        self.dec = PointSequential()
-        decoder_channels = list(dec_channels) + [enc_channels[-1]]
-        for stage_index in reversed(range(stage_count - 1)):
-            decoder = PointSequential()
-            decoder.add(
-                SerializedUnpooling(
-                    decoder_channels[stage_index + 1],
-                    enc_channels[stage_index],
-                    decoder_channels[stage_index],
-                ),
-                name="up",
-            )
-            stage_drop = dec_drop_path[
-                sum(dec_depths[:stage_index]) : sum(dec_depths[: stage_index + 1])
-            ]
-            stage_drop.reverse()
-            for block_index in range(dec_depths[stage_index]):
-                decoder.add(
-                    Block(
-                        channels=decoder_channels[stage_index],
-                        num_heads=dec_num_head[stage_index],
-                        patch_size=dec_patch_size[stage_index],
-                        mlp_ratio=mlp_ratio,
-                        qkv_bias=qkv_bias,
-                        qk_scale=qk_scale,
-                        attn_drop=attn_drop,
-                        proj_drop=proj_drop,
-                        drop_path=stage_drop[block_index],
-                        pre_norm=pre_norm,
-                        order_index=block_index % len(self.order),
-                        cpe_indice_key=f"stage{stage_index}",
-                        enable_rpe=enable_rpe,
-                        enable_flash=enable_flash,
-                        upcast_attention=upcast_attention,
-                        upcast_softmax=upcast_softmax,
-                    ),
-                    name=f"block{block_index}",
-                )
-            self.dec.add(decoder, name=f"dec{stage_index}")
-
     def forward(self, data_dict: dict[str, torch.Tensor]) -> Point:
-        """Serialize inputs, run the encoder-decoder, and return point features.
+        """Serialize inputs, run the encoder, and return the deepest point stage.
 
         Args:
-            data_dict: Input tensors required by the PTv3 backbone.
+            data_dict: Input tensors required by the PTv3 encoder.
 
         Returns:
-            Point container with decoded point features.
+            Deepest point container with the full pooling chain attached.
         """
         point = Point(data_dict)
         depth = data_dict.get("serialization_depth", None)
         point.serialization(self.order, self.shuffle_orders, depth=depth)
         point.sparsify()
         point = self.embedding(point)
-        point = self.enc(point)
-        point = self.dec(point)
-        return point
+        return self.enc(point)
 
     def set_serialization_order(self, order: Sequence[str]) -> None:
         """Update serialization order and reassign block order indices.
 
         Args:
-            order: Serialization orders used by the backbone.
+            order: Serialization orders used by the encoder.
         """
         self.order = list(order)
+        set_block_serialization_order(self.enc, len(self.order))
 
-        for stage in self.enc._modules.values():
-            block_index = 0
-            for module in stage._modules.values():
-                if isinstance(module, Block):
-                    module.attn.order_index = block_index % len(self.order)
-                    block_index += 1
-
-        for stage in self.dec._modules.values():
-            block_index = 0
-            for module in stage._modules.values():
-                if isinstance(module, Block):
-                    module.attn.order_index = block_index % len(self.order)
-                    block_index += 1
-
-    def prepare_for_export(self, order: Sequence[str]) -> PointTransformerV3Backbone:
-        """Return an isolated backbone copy configured for ONNX export.
+    def prepare_for_export(self, order: Sequence[str]) -> PointTransformerV3Encoder:
+        """Return an isolated encoder copy configured for ONNX export.
 
         Args:
             order: Serialization orders used by the export graph.
 
         Returns:
-            Export-ready PTv3 backbone copy.
+            Export-ready PTv3 encoder copy.
         """
-        loaded_flash_modules: list[tuple[SerializedAttention, Any]] = []
-        for module in self.modules():
-            if isinstance(module, SerializedAttention) and module.flash_attn is not None:
-                loaded_flash_modules.append((module, module.flash_attn))
-                module.flash_attn = None
-        try:
-            export_backbone = deepcopy(self).eval()
-        finally:
-            for module, flash_attn in loaded_flash_modules:
-                module.flash_attn = flash_attn
-        export_backbone.set_serialization_order(order)
-        export_backbone.shuffle_orders = False
-        replace_submconv3d_for_export(export_backbone)
-        pooling_stage_index = 0
-        for module in export_backbone.modules():
-            if isinstance(module, SerializedAttention):
-                module.disable_flash()
-                module.export_mode = True
-            if isinstance(module, SerializedPooling):
-                module.export_mode = True
-                module.export_stage_index = pooling_stage_index
-                pooling_stage_index += 1
-            if hasattr(module, "shuffle_orders"):
-                module.shuffle_orders = False
-        return export_backbone
+        export_encoder = deepcopy_without_flash(self)
+        export_encoder.set_serialization_order(order)
+        export_encoder.shuffle_orders = False
+        prepare_point_module_for_export(export_encoder)
+        return export_encoder
 
     def export_forward(self, data_dict: dict[str, torch.Tensor]) -> Point:
-        """Run the backbone with precomputed serialization metadata for export.
+        """Run the encoder with precomputed serialization metadata for export.
 
         Args:
             data_dict: Input tensors and precomputed serialization metadata.
 
         Returns:
-            Point container with decoded point features.
+            Deepest point container with the full pooling chain attached.
         """
         point = Point(data_dict)
         point["serialized_depth"] = data_dict["serialized_depth"]
@@ -1134,6 +1109,21 @@ class PointTransformerV3Backbone(PointModule):
         point["sparse_shape"] = data_dict["sparse_shape"]
         point.sparsify()
         point = self.embedding(point)
-        point = self.enc(point)
-        point = self.dec(point)
-        return point
+        return self.enc(point)
+
+
+def collect_encoder_stage_points(deepest: Point) -> list[Point]:
+    """Return encoder stage outputs from finest to deepest.
+
+    Args:
+        deepest: Deepest encoder point whose ``pooling_parent`` chain links
+            every finer stage output.
+
+    Returns:
+        Stage points ordered ``[stage_0, ..., stage_deepest]``.
+    """
+    stages = [deepest]
+    while "pooling_parent" in stages[-1]:
+        stages.append(stages[-1]["pooling_parent"])
+    stages.reverse()
+    return stages

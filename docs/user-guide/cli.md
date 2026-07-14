@@ -37,7 +37,7 @@ autoware-ml train --config-name <config_path> [--weights <path> ...] [--resume-c
 **Arguments:**
 
 - `--config-name`: Path to config
-- `--weights`: One or more `.ckpt` paths for pretrained weight initialization (repeatable; later checkpoints overwrite earlier ones on overlapping keys). Use this for transfer learning, e.g. initializing a det3d backbone from a seg3d checkpoint. Mutually exclusive with `--resume-checkpoint`.
+- `--weights`: One or more `.ckpt` paths for pretrained weight initialization (repeatable; later checkpoints overwrite earlier ones on overlapping keys). Use this for transfer learning, e.g. initializing a det3d encoder from a seg3d checkpoint. Mutually exclusive with `--resume-checkpoint`.
 - `--resume-checkpoint`: Full Lightning checkpoint path to resume an interrupted training run from (restores model weights, optimizer state, and epoch). Training continues inside the checkpoint's source MLflow run: same run ID, metric curves, and checkpoint directory. Mutually exclusive with `--weights`.
 - `--new-run`: With `--resume-checkpoint`, fork the training state into a new MLflow run instead of continuing the source run.
 
@@ -51,7 +51,7 @@ Resuming with a modified configuration is supported: the current config is autho
 # Basic training
 autoware-ml train --config-name <task>/<model>/<config>
 
-# Initialize det3d backbone from a seg3d checkpoint
+# Initialize det3d encoder from a seg3d checkpoint
 autoware-ml train --config-name <task>/<model>/<config> \
     --weights mlruns/segmentation3d/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt
 
@@ -125,8 +125,7 @@ autoware-ml test \
     --weights mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
-**Multi-head PTv3 detection example** (merge a pretrained PTv3 backbone
-checkpoint with a detection checkpoint):
+**Multi-head PTv3 detection example** (merge a pretrained PTv3 encoder checkpoint with a detection checkpoint):
 
 ```bash
 autoware-ml test \

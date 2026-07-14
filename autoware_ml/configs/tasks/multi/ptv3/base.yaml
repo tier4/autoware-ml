@@ -1,20 +1,18 @@
 # @package _global_
 defaults:
   - /defaults/default_runtime
-  - /tasks/segmentation3d/ptv3/backbone_base
+  - /tasks/segmentation3d/ptv3/encoder_base
+  - /tasks/segmentation3d/ptv3/seg_head_base
+  - /tasks/detection3d/ptv3/bev_neck
   - _self_
 
 dataset: ???
-optimized_metric: val/det3d/mAP
 
 num_classes: ${dataset.detection3d.num_classes}
-backbone_out_channels: 64
 
 point_cloud_range: ???
 grid_size: ???
 head_voxel_size: ???
-
-segmentation_num_classes: ${dataset.segmentation3d.num_classes}
 
 num_proposals: ???
 
@@ -23,9 +21,9 @@ datamodule:
     coord: concat
     feat: concat
     grid_coord: concat
-    strength: concat
     segment: concat
     origin_segment: concat
+    origin_coord: concat
     inverse: index_concat
     gt_boxes: list
     gt_labels: list
@@ -35,22 +33,6 @@ datamodule:
 
 model:
   _target_: autoware_ml.models.multi.ptv3_segdet.PTv3SegDetModel
-  seg3d_head:
-    _target_: torch.nn.Linear
-    in_features: ${backbone_out_channels}
-    out_features: ${segmentation_num_classes}
-  bev_projector:
-    _target_: autoware_ml.models.detection3d.ptv3.PTv3BEVProjection
-    in_channels: ${backbone_out_channels}
-    out_channels: ${backbone_out_channels}
-    output_shape: ???
-    bev_stride: ???
-  bev_encoder:
-    _target_: autoware_ml.models.detection3d.ptv3.PTv3BEVEncoder
-    in_channels: ${backbone_out_channels}
-    hidden_channels: 128
-    out_channels: 128
-    dilations: [1, 2, 5, 2]
   bbox_head:
     _target_: autoware_ml.models.detection3d.heads.transfusion.TransFusionHead
     num_proposals: ${num_proposals}
@@ -106,8 +88,6 @@ model:
     heatmap_init_bias: -2.19
     nms_kernel_size: 3
     use_velocity: true
-  segmentation_num_classes: ${segmentation_num_classes}
-  segmentation_ignore_index: ${dataset.segmentation3d.ignore_index}
   segmentation_loss_weight: 1.0
   detection_loss_weight: 1.0
   metrics: ${merge_lists:${dataset.detection3d.metrics},${dataset.segmentation3d.metrics}}
@@ -133,9 +113,9 @@ model:
     lr: 0.0001
     weight_decay: 0.01
   optimizer_group_overrides:
-    backbone_block:
+    encoder_block:
       lr: 0.00002
-    backbone_default:
+    encoder_default:
       lr: 0.00005
     seg3d_head:
       lr: 0.00005
@@ -154,13 +134,8 @@ trainer:
   gradient_clip_algorithm: norm
 
 callbacks:
-  model_checkpoint:
-    monitor: val/det3d/mAP
-    mode: max
   early_stopping:
-    monitor: val/det3d/mAP
     patience: 30
-    mode: max
 
 deploy:
   onnx:
@@ -169,8 +144,8 @@ deploy:
     dynamo: false
     do_constant_folding: false
     modules:
-      backbone:
-        output_names: [point_feat, point_grid_coord, point_offset]
+      encoder:
+        output_names: [point_feat_0, point_feat_1, point_feat_2, point_feat_3, point_feat_4]
       seg3d_head:
         output_names: [pred_labels, pred_probs]
       det3d_head:
