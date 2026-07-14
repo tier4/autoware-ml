@@ -1,0 +1,22 @@
+# @package model.seg3d_head
+_target_: autoware_ml.models.segmentation3d.heads.ptv3.PTv3SegDecoderHead
+num_classes: ${dataset.segmentation3d.num_classes}
+ignore_index: ${dataset.segmentation3d.ignore_index}
+order: ${model.encoder.order}
+enc_channels: ${model.encoder.enc_channels}
+dec_depths: [2, 2, 2, 2]
+dec_channels: [64, 64, 128, 256]
+dec_num_head: [4, 4, 8, 16]
+dec_patch_size: [1024, 1024, 1024, 1024]
+mlp_ratio: ${model.encoder.mlp_ratio}
+qkv_bias: ${model.encoder.qkv_bias}
+qk_scale: ${model.encoder.qk_scale}
+attn_drop: ${model.encoder.attn_drop}
+proj_drop: ${model.encoder.proj_drop}
+drop_path: ${model.encoder.drop_path}
+pre_norm: ${model.encoder.pre_norm}
+enable_rpe: ${model.encoder.enable_rpe}
+enable_flash: ${model.encoder.enable_flash}
+upcast_attention: ${model.encoder.upcast_attention}
+upcast_softmax: ${model.encoder.upcast_softmax}
+lovasz_weight: 1.0

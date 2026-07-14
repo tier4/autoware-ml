@@ -97,8 +97,10 @@ datamodule:
       - _target_: autoware_ml.transforms.segmentation3d.formatting.PreparePointSegInput
       - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
         point_cloud_range: ${point_cloud_range}
+      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeFilter
+        point_cloud_range: ${point_cloud_range}
       - _target_: autoware_ml.transforms.common.copying.Copy
-        keys_dict: { segment: origin_segment }
+        keys_dict: { segment: origin_segment, coord: origin_coord }
       - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
         grid_size: ${grid_size}
         point_cloud_range: ${point_cloud_range}
@@ -135,9 +137,9 @@ datamodule:
         output_key: feat
 
 model:
-  bev_projector:
-    output_shape: [256, 256]
-    bev_stride: 8
+  bev_neck:
+    bev_projector:
+      output_shape: [256, 256]
   bbox_head:
     nms_min_radius: 1.0
     bbox_coder:
