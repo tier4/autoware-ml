@@ -1,3 +1,4 @@
+# Copyright 2023 OpenMMLab.
 # Copyright 2026 TIER IV, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -100,14 +101,16 @@ class PillarFeatureNet(nn.Module):
         self.with_voxel_center = with_voxel_center
         self.vx = float(voxel_size[0])
         self.vy = float(voxel_size[1])
+        self.vz = float(voxel_size[2])
         self.x_offset = self.vx / 2 + float(point_cloud_range[0])
         self.y_offset = self.vy / 2 + float(point_cloud_range[1])
+        self.z_offset = self.vz / 2 + float(point_cloud_range[2])
 
         feature_channels = in_channels
         if with_cluster_center:
             feature_channels += 3
         if with_voxel_center:
-            feature_channels += 2
+            feature_channels += 3
         if with_distance:
             feature_channels += 1
         self.feature_channels = feature_channels
@@ -142,12 +145,15 @@ class PillarFeatureNet(nn.Module):
             features.append(voxels[:, :, :3] - points_mean)
 
         if self.with_voxel_center:
-            center_offset = voxels.new_zeros((*voxels.shape[:2], 2))
+            center_offset = voxels.new_zeros((*voxels.shape[:2], 3))
             center_offset[:, :, 0] = voxels[:, :, 0] - (
                 coords[:, 3].to(voxels.dtype).unsqueeze(1) * self.vx + self.x_offset
             )
             center_offset[:, :, 1] = voxels[:, :, 1] - (
                 coords[:, 2].to(voxels.dtype).unsqueeze(1) * self.vy + self.y_offset
+            )
+            center_offset[:, :, 2] = voxels[:, :, 2] - (
+                coords[:, 1].to(voxels.dtype).unsqueeze(1) * self.vz + self.z_offset
             )
             features.append(center_offset)
 
