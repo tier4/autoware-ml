@@ -1,0 +1,133 @@
+# @package _global_
+defaults:
+  - /tasks/detection3d/bevfusion/base
+  - /datasets/nuscenes/detection3d
+  - /datasets/nuscenes/lidar
+  - /datasets/nuscenes/camera
+  - _self_
+
+batch_size: 16
+num_workers: 8
+
+dataset: ${nuscenes}
+
+point_cloud_range: [-54.0, -54.0, -5.0, 54.0, 54.0, 3.0]
+voxel_size: [0.075, 0.075, 0.2]
+out_size_factor: 8
+max_time_lag: 0.5
+bev_voxel_size: [0.3, 0.3]
+image_size: [256, 704]
+
+datamodule:
+  collation_map:
+    img: list
+    camera_intrinsics: list
+    lidar2cam: list
+    lidar2img: list
+    img_aug_matrix: list
+  _target_: autoware_ml.datamodule.nuscenes.multiview_detection3d.NuscenesMultiviewDetection3DDataModule
+  data_root: ${dataset.data_root}
+  train_ann_file: nuscenes_infos_train.pkl
+  val_ann_file: nuscenes_infos_val.pkl
+  test_ann_file: nuscenes_infos_test.pkl
+  class_names: ${dataset.detection3d.class_names}
+  camera_order: ${dataset.camera.camera_order}
+  train_dataloader_cfg:
+    batch_size: ${batch_size}
+    num_workers: ${num_workers}
+    shuffle: true
+  val_dataloader_cfg:
+    batch_size: ${batch_size}
+    num_workers: ${num_workers}
+  test_dataloader_cfg:
+    batch_size: ${batch_size}
+    num_workers: ${num_workers}
+  train_transforms:
+    _target_: autoware_ml.transforms.base.TransformsCompose
+    pipeline:
+      - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
+        name_mapping: ${dataset.detection3d.name_mapping}
+      - _target_: autoware_ml.transforms.camera.loading.LoadMultiViewImagesFromFiles
+      - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
+        sweeps_num: 10
+        load_dim: 5
+        use_dim: [0, 1, 2, 3, 4]
+        time_dim: 4
+        pad_empty_sweeps: true
+        remove_close: true
+      - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.ImageAug3D
+        final_dim: ${image_size}
+        resize_lim: [0.38, 0.55]
+        bot_pct_lim: [0.0, 0.0]
+        rand_flip: true
+        rot_lim: [-5.4, 5.4]
+        training: true
+      - _target_: autoware_ml.transforms.camera_lidar.geometry.GlobalRotScaleTrans
+        rot_range: [-0.78539816, 0.78539816]
+        scale_ratio_range: [0.9, 1.1]
+      - _target_: autoware_ml.transforms.camera_lidar.geometry.RandomFlip3D
+        flip_ratio_bev_horizontal: 0.5
+        flip_ratio_bev_vertical: 0.5
+      - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
+        point_cloud_range: ${point_cloud_range}
+      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeFilter
+        point_cloud_range: ${point_cloud_range}
+      - _target_: autoware_ml.transforms.camera.masking.GridMask
+        p: 0.0
+      - _target_: autoware_ml.transforms.point_cloud.sampling.PointShuffle
+  val_transforms:
+    _target_: autoware_ml.transforms.base.TransformsCompose
+    pipeline:
+      - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
+        name_mapping: ${dataset.detection3d.name_mapping}
+      - _target_: autoware_ml.transforms.camera.loading.LoadMultiViewImagesFromFiles
+      - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
+        sweeps_num: 10
+        load_dim: 5
+        use_dim: [0, 1, 2, 3, 4]
+        time_dim: 4
+        pad_empty_sweeps: true
+        remove_close: true
+      - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.ImageAug3D
+        final_dim: ${image_size}
+        resize_lim: [0.465, 0.465]
+        bot_pct_lim: [0.0, 0.0]
+        rand_flip: false
+        rot_lim: [0.0, 0.0]
+        training: false
+      - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
+        point_cloud_range: ${point_cloud_range}
+  test_transforms: ${datamodule.val_transforms}
+  predict_transforms:
+    _target_: autoware_ml.transforms.base.TransformsCompose
+    pipeline:
+      - _target_: autoware_ml.transforms.camera.loading.LoadMultiViewImagesFromFiles
+      - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
+        sweeps_num: 10
+        load_dim: 5
+        use_dim: [0, 1, 2, 3, 4]
+        time_dim: 4
+        pad_empty_sweeps: true
+        remove_close: true
+      - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.ImageAug3D
+        final_dim: ${image_size}
+        resize_lim: [0.465, 0.465]
+        bot_pct_lim: [0.0, 0.0]
+        rand_flip: false
+        rot_lim: [0.0, 0.0]
+        training: false
+      - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
+        point_cloud_range: ${point_cloud_range}
+
+model:
+  pts_middle_encoder:
+    sparse_shape: [1440, 1440, 41]
+    dense_output_shapes: [180, 180, 2]
+  view_transform:
+    feature_size: [32, 88]
+  bbox_head:
+    num_proposals: 200
+    class_names: ${dataset.detection3d.class_names}
+    nms_min_radius: 1.0
+    bbox_coder:
+      post_center_range: [-61.2, -61.2, -10.0, 61.2, 61.2, 10.0]

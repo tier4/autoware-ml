@@ -97,6 +97,7 @@
     "depthnet",
     "depthwise",
     "doxdocgen",
+    "dtransform",
     "DNDEBUG",
     "DTORCH",
     "DWITH",

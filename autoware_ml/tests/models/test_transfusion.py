@@ -445,3 +445,82 @@ def test_round_heatmap_is_isotropic_and_default() -> None:
 def test_invalid_heatmap_target_raises() -> None:
     with pytest.raises(ValueError):
         _build_head(heatmap_target="square")
+
+
+def test_transfusion_nms_groups_cap_zero_radius_groups_by_score() -> None:
+    head = _build_head(
+        nms_type="circle",
+        nms_groups=[
+            {"class_ids": [0], "nms_radius": 0.0, "post_max_size": 1},
+            {"class_ids": [1], "nms_radius": 0.0},
+        ],
+    )
+    outputs = {
+        "heatmap": torch.tensor([[[8.0, 2.0], [0.0, 0.0]]], dtype=torch.float32),
+        "query_heatmap_score": torch.ones((1, 2, 2), dtype=torch.float32),
+        "query_labels": torch.tensor([[0, 0]], dtype=torch.long),
+        "center": torch.tensor([[[1.0, 5.0], [1.0, 5.0]]], dtype=torch.float32),
+        "height": torch.zeros((1, 1, 2), dtype=torch.float32),
+        "dim": torch.zeros((1, 3, 2), dtype=torch.float32),
+        "rot": torch.tensor([[[0.0, 0.0], [1.0, 1.0]]], dtype=torch.float32),
+        "vel": torch.zeros((1, 2, 2), dtype=torch.float32),
+    }
+
+    predictions = head.predict(outputs)
+
+    # Both queries are class 0; the group cap keeps only the highest score.
+    assert predictions[0]["scores_3d"].shape[0] == 1
+    assert torch.isclose(
+        predictions[0]["scores_3d"][0], torch.sigmoid(torch.tensor(8.0)), atol=1e-4
+    )
+
+
+def test_transfusion_coder_supports_per_class_score_thresholds() -> None:
+    coder = TransFusionBBoxCoder(
+        pc_range=[0.0, 0.0],
+        out_size_factor=1,
+        voxel_size=[1.0, 1.0],
+        post_center_range=[-100.0, -100.0, -100.0, 100.0, 100.0, 100.0],
+        score_threshold=[0.3, 0.6],
+        code_size=10,
+    )
+    heatmap = torch.tensor([[[0.5, 0.2, 0.1], [0.1, 0.1, 0.7]]])
+    rot = torch.stack([torch.zeros(1, 1, 3), torch.ones(1, 1, 3)], dim=1).squeeze(2)
+    zeros = torch.zeros(1, 3, 3)
+
+    predictions = coder.decode(
+        heatmap,
+        rot,
+        zeros,
+        torch.zeros(1, 2, 3),
+        torch.zeros(1, 1, 3),
+        torch.zeros(1, 2, 3),
+        filter_predictions=True,
+    )
+
+    # Class 0 keeps only 0.5 (> 0.3); class 1 keeps only 0.7 (> 0.6).
+    assert predictions[0]["labels"].tolist() == [0, 1]
+    assert torch.allclose(predictions[0]["scores"], torch.tensor([0.5, 0.7]))
+
+
+def test_transfusion_coder_rejects_mismatched_threshold_length() -> None:
+    coder = TransFusionBBoxCoder(
+        pc_range=[0.0, 0.0],
+        out_size_factor=1,
+        voxel_size=[1.0, 1.0],
+        score_threshold=[0.3],
+        code_size=10,
+    )
+    heatmap = torch.rand(1, 2, 3)
+    rot = torch.rand(1, 2, 3)
+
+    with pytest.raises(ValueError, match="one value per class"):
+        coder.decode(
+            heatmap,
+            rot,
+            torch.rand(1, 3, 3),
+            torch.rand(1, 2, 3),
+            torch.rand(1, 1, 3),
+            torch.rand(1, 2, 3),
+            filter_predictions=True,
+        )

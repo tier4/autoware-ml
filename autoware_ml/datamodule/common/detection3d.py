@@ -24,6 +24,7 @@ from collections.abc import Callable, Mapping
 import os
 from typing import Any
 
+import numpy as np
 from torch.utils.data import DataLoader, Dataset
 
 from autoware_ml.datamodule.samplers import DistributedWeightedRandomSampler
@@ -71,6 +72,48 @@ def resolve_sweep_paths(sample: Mapping[str, Any], data_root: str) -> list[dict[
     return sweep_entries
 
 
+def build_sweep_entries(sample: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Convert stored ``lidar_sweeps`` metadata into loader-ready sweep entries.
+
+    Each entry carries the sweep point-cloud path, its timestamp, and the
+    rigid transform from the sweep lidar frame into the key lidar frame,
+    composed from the stored ego poses and lidar extrinsics.
+
+    Args:
+        sample: Raw sample dictionary with ``lidar_points``, ``ego2global``,
+            and ``lidar_sweeps`` metadata.
+
+    Returns:
+        Sweep dictionaries consumed by ``LoadPointsFromMultiSweeps``.
+
+    Raises:
+        KeyError: If a sweep is missing the pose or path metadata required to
+            express it in the key lidar frame.
+    """
+    lidar_sweeps = sample.get("lidar_sweeps", [])
+    if not lidar_sweeps:
+        return []
+
+    key_lidar2ego = np.asarray(sample["lidar_points"]["lidar2ego"], dtype=np.float64)
+    key_ego2global = np.asarray(sample["ego2global"], dtype=np.float64)
+    global2key_lidar = np.linalg.inv(key_ego2global @ key_lidar2ego)
+
+    entries = []
+    for sweep in lidar_sweeps:
+        sweep_lidar2ego = np.asarray(sweep["lidar_points"]["lidar2ego"], dtype=np.float64)
+        sweep_ego2global = np.asarray(sweep["ego2global"], dtype=np.float64)
+        sweep2key_lidar = global2key_lidar @ sweep_ego2global @ sweep_lidar2ego
+        entries.append(
+            {
+                "lidar_path": sweep["lidar_points"]["lidar_path"],
+                "timestamp": sweep["timestamp"],
+                "sensor2lidar_rotation": sweep2key_lidar[:3, :3].astype(np.float32),
+                "sensor2lidar_translation": sweep2key_lidar[:3, 3].astype(np.float32),
+            }
+        )
+    return entries
+
+
 def normalize_detection_sample(sample: dict[str, Any]) -> dict[str, Any]:
     """Normalize one detection annotation entry to the framework schema.
 
@@ -85,7 +128,8 @@ def normalize_detection_sample(sample: dict[str, Any]) -> dict[str, Any]:
     if "lidar_path" not in normalized:
         normalized["lidar_path"] = normalized["lidar_points"]["lidar_path"]
     normalized.setdefault("instances", [])
-    normalized.setdefault("sweeps", [])
+    if "sweeps" not in normalized:
+        normalized["sweeps"] = build_sweep_entries(normalized)
     return normalized
 
 
