@@ -1,0 +1,3 @@
+# @package model.seg3d_head
+dec_depths: [0, 0, 1, 1]
+dec_patch_size: [512, 512, 512, 512]

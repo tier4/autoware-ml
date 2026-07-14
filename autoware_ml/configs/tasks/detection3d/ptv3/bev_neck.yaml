@@ -1,0 +1,19 @@
+# @package model.bev_neck
+_target_: autoware_ml.models.detection3d.ptv3.PTv3DetBEVNeck
+fusion:
+  _target_: autoware_ml.models.detection3d.ptv3.PTv3DetFeatureFusion
+  in_channels: ${model.encoder.enc_channels[4]}
+  skip_channels: ${model.encoder.enc_channels[3]}
+  out_channels: 256
+bev_projector:
+  _target_: autoware_ml.models.detection3d.ptv3.PTv3BEVProjection
+  in_channels: ${model.bev_neck.fusion.out_channels}
+  out_channels: 128
+  output_shape: ???
+  bev_stride: 1
+bev_encoder:
+  _target_: autoware_ml.models.detection3d.ptv3.PTv3BEVEncoder
+  in_channels: ${model.bev_neck.bev_projector.out_channels}
+  hidden_channels: 128
+  out_channels: 128
+  dilations: [1, 2, 5, 2]
