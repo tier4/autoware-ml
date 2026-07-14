@@ -33,3 +33,8 @@ pipeline:
     _convert_: all
 
     points_range: ${point_cloud_range}
+
+  - _target_: autoware_ml.transforms.multi_task.bboxes_3d.loading.BBoxesLabelNameFilter
+    _convert_: all
+
+    label_names_to_keep: ${database.class_names}
