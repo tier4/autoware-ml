@@ -105,7 +105,6 @@ def build_bev_neck() -> PTv3DetBEVNeck:
             in_channels=16,
             out_channels=16,
             output_shape=[8, 8],
-            bev_stride=1,
         ),
         bev_encoder=build_bev_encoder(),
     )

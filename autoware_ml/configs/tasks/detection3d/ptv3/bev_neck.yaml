@@ -10,7 +10,6 @@ bev_projector:
   in_channels: ${model.bev_neck.fusion.out_channels}
   out_channels: 128
   output_shape: ???
-  bev_stride: 1
 bev_encoder:
   _target_: autoware_ml.models.detection3d.ptv3.PTv3BEVEncoder
   in_channels: ${model.bev_neck.bev_projector.out_channels}

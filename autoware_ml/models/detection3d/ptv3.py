@@ -89,7 +89,6 @@ class PTv3BEVProjection(nn.Module):
         in_channels: int,
         out_channels: int,
         output_shape: Sequence[int],
-        bev_stride: int = 1,
     ) -> None:
         """Initialize the PTv3-to-BEV projection path.
 
@@ -97,13 +96,10 @@ class PTv3BEVProjection(nn.Module):
             in_channels: PTv3 point-feature dimension.
             out_channels: Dense BEV channel dimension.
             output_shape: Dense BEV shape as ``(height, width)``.
-            bev_stride: Integer downsampling factor applied to XY grid cells
-                before scattering them into the dense BEV canvas.
         """
         super().__init__()
         self.output_shape = tuple(int(value) for value in output_shape)
         self.out_channels = out_channels
-        self.bev_stride = int(bev_stride)
         self.point_proj = nn.Sequential(
             nn.Linear(in_channels, out_channels, bias=False),
             nn.BatchNorm1d(out_channels),
@@ -138,8 +134,8 @@ class PTv3BEVProjection(nn.Module):
 
         projected_features = self.point_proj(point_features)
         batch_indices = offset_to_batch(offset, grid_coord)
-        x_indices = torch.div(grid_coord[:, 0].long(), self.bev_stride, rounding_mode="floor")
-        y_indices = torch.div(grid_coord[:, 1].long(), self.bev_stride, rounding_mode="floor")
+        x_indices = grid_coord[:, 0].long()
+        y_indices = grid_coord[:, 1].long()
         valid_mask = (
             (x_indices >= 0) & (x_indices < width) & (y_indices >= 0) & (y_indices < height)
         )
