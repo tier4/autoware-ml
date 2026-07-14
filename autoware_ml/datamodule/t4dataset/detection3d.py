@@ -38,8 +38,10 @@ from autoware_ml.datamodule.common.detection3d import (
 )
 from autoware_ml.transforms.base import TransformsCompose
 from autoware_ml.transforms.boxes3d.annotations import (
+    box_is_physical,
     normalize_filter_attributes,
     resolve_detection_class,
+    sanitize_velocity,
 )
 
 
@@ -155,7 +157,9 @@ def _sample_sampling_categories(
         if mapped_name is None:
             continue
         box = instance.get("bbox_3d")
-        if box is None or not _box_center_in_bev_range(box, frame_sampling.object_bev_range):
+        if box is None or not box_is_physical(box, sanitize_velocity(instance.get("velocity"))):
+            continue
+        if not _box_center_in_bev_range(box, frame_sampling.object_bev_range):
             continue
 
         category = mapped_name

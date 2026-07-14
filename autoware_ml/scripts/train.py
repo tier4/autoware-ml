@@ -23,6 +23,7 @@ import os
 
 import hydra
 import lightning as L
+import torch
 from omegaconf import DictConfig
 
 from autoware_ml.utils.checkpoints import apply_matching_weights
@@ -98,6 +99,19 @@ def main(cfg: DictConfig):
         raise ValueError("'--resume-checkpoint' and '--weights' are mutually exclusive.")
     if weights_path is not None:
         apply_matching_weights(model, weights_path, map_location="cpu", logger=logger)
+    if resume_checkpoint_path is not None:
+        progress = torch.load(
+            resume_checkpoint_path, map_location="cpu", weights_only=False, mmap=True
+        )
+        logger.info(
+            "Resuming from '%s': checkpoint saved at epoch %d (global step %d), "
+            "training continues at epoch %d.",
+            resume_checkpoint_path,
+            progress["epoch"],
+            progress["global_step"],
+            progress["epoch"] + 1,
+        )
+        del progress
 
     logger.info("Instantiating callbacks...")
     callbacks = instantiate_callbacks(
@@ -131,7 +145,7 @@ def main(cfg: DictConfig):
         run_context.artifact_dir if run_context is not None else work_dir,
     )
 
-    log_hyperparameters(cfg, trainer_logger, trainer)
+    log_hyperparameters(cfg, trainer_logger)
 
     # Start training
     logger.info("Starting training...")

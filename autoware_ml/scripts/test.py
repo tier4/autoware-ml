@@ -144,7 +144,7 @@ def main(cfg: DictConfig):
         run_context.artifact_dir if run_context is not None else work_dir,
     )
 
-    log_hyperparameters(cfg, trainer_logger, trainer)
+    log_hyperparameters(cfg, trainer_logger)
 
     logger.info("Starting evaluation...")
     logger.info(f"Weights: {weight_paths}")

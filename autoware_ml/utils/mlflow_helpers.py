@@ -581,6 +581,17 @@ def load_run_context(tracking_uri: str, run_id: str) -> MlflowRunContext:
     )
 
 
+def mark_run_running(tracking_uri: str, run_id: str) -> None:
+    """Set a reused run's status back to RUNNING while it is resumed.
+
+    Args:
+        tracking_uri: MLflow tracking URI.
+        run_id: Run whose status is reset.
+    """
+    client = MlflowClient(tracking_uri=resolve_tracking_uri(tracking_uri))
+    client.update_run(run_id, status="RUNNING")
+
+
 def build_run_metadata(
     run_context: MlflowRunContext,
     config_name: str,

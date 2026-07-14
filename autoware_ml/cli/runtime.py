@@ -36,8 +36,12 @@ from autoware_ml.utils.cli.helpers import adjust_argv, resolve_config_reference,
 from autoware_ml.utils.mlflow_helpers import (
     AUTOWARE_ML_HYDRA_RUN_DIR_ENV,
     AUTOWARE_ML_RUN_ID_ENV,
+    RUN_METADATA_FILENAME,
     generate_experiment_name,
     generate_hydra_run_dir,
+    load_run_context,
+    load_run_metadata,
+    mark_run_running,
     prepare_run_context,
     resolve_deploy_lineage,
     resolve_lineage_context,
@@ -134,6 +138,53 @@ def temporary_environment(updates: dict[str, str | None]):
                 os.environ[key] = value
 
 
+def prepare_resume_environment(
+    tracking_uri: str,
+    config_name: str,
+    checkpoint_path: Path,
+) -> dict[str, str | None]:
+    """Reuse the resume checkpoint's source MLflow run for the launched command.
+
+    Args:
+        tracking_uri: MLflow tracking URI from the composed configuration.
+        config_name: User-facing config name for the current command.
+        checkpoint_path: Full Lightning checkpoint the training resumes from.
+
+    Returns:
+        Environment updates binding the run ID and Hydra directory of the
+        checkpoint's source run.
+
+    Raises:
+        ValueError: If the checkpoint has no run metadata or belongs to a
+            different config.
+    """
+    metadata = load_run_metadata(checkpoint_path)
+    if metadata is None:
+        raise ValueError(
+            f"No '{RUN_METADATA_FILENAME}' found in the parent directories of "
+            f"'{checkpoint_path}', so the source MLflow run cannot be reused. "
+            "Pass --new-run to resume into a fresh run."
+        )
+    missing_keys = [key for key in ("run_id", "config_name") if key not in metadata]
+    if missing_keys:
+        raise ValueError(
+            f"The '{RUN_METADATA_FILENAME}' next to '{checkpoint_path}' is missing "
+            f"{missing_keys}, so the source MLflow run cannot be reused. "
+            "Pass --new-run to resume into a fresh run."
+        )
+    if metadata["config_name"] != config_name:
+        raise ValueError(
+            f"Resume checkpoint belongs to config '{metadata['config_name']}', "
+            f"but '{config_name}' was launched."
+        )
+    run_context = load_run_context(tracking_uri, metadata["run_id"])
+    mark_run_running(tracking_uri, run_context.run_id)
+    return {
+        AUTOWARE_ML_RUN_ID_ENV: run_context.run_id,
+        AUTOWARE_ML_HYDRA_RUN_DIR_ENV: str(run_context.hydra_dir),
+    }
+
+
 def prepare_runtime_environment(
     config_value: str,
     config_prefix: str,
@@ -142,6 +193,8 @@ def prepare_runtime_environment(
     hydra_overrides: Sequence[str] = (),
     checkpoint: str | None = None,
     checkpoints: Sequence[str] = (),
+    resume_checkpoint: str | None = None,
+    new_run: bool = False,
 ) -> dict[str, str | None]:
     """Prepare environment variables used by Hydra-backed runtime commands."""
     if checkpoint is not None and checkpoints:
@@ -167,6 +220,10 @@ def prepare_runtime_environment(
             cfg = compose(config_name=resolved_config_name, overrides=compose_overrides)
 
     if should_enable_logger(cfg):
+        if resume_checkpoint is not None and not new_run:
+            return prepare_resume_environment(
+                cfg.logger.tracking_uri, config_name, Path(resume_checkpoint)
+            )
         checkpoint_path = Path(checkpoint) if checkpoint is not None else None
         checkpoint_paths = [Path(path) for path in checkpoints]
         experiment_name = generate_experiment_name(config_name)
@@ -225,6 +282,8 @@ def run_hydra_entrypoint(
     hydra_overrides: Sequence[str] = (),
     checkpoint: str | None = None,
     checkpoints: Sequence[str] = (),
+    resume_checkpoint: str | None = None,
+    new_run: bool = False,
     config_prefix: str = TASK_CONFIG_PREFIX,
 ) -> None:
     """Execute one Hydra-backed runtime entrypoint through the CLI wrapper."""
@@ -238,6 +297,8 @@ def run_hydra_entrypoint(
             hydra_overrides=hydra_overrides,
             checkpoint=checkpoint,
             checkpoints=checkpoints,
+            resume_checkpoint=resume_checkpoint,
+            new_run=new_run,
         )
 
     sys.argv = resolve_hydra_entrypoint_argv(
