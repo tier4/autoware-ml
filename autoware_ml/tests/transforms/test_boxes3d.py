@@ -209,15 +209,20 @@ def test_load_annotations3d_drops_physically_invalid_instances() -> None:
             make_instance([1e39, 2.0, 3.0, 4.0, 1.5, 1.7, 0.1], [0.0, 0.0]),  # f32 overflow
             make_instance([3.0, 1.0, 0.5, 0.5, -0.8, 1.7, 0.0], [0.0, 0.0]),  # negative dim
             make_instance([1.0, 2.0, 3.0, 4.0, 1.5, 1.7, 0.1], [1e6, 0.0]),  # absurd velocity
+            make_instance(
+                [1.0, 2.0, 3.0, 4.0, 1.5, 1.7, 0.1], [120.0, 120.0]
+            ),  # speed norm > bound
+            make_instance([4.0, 4.0, 0.5, 4.5, 1.9, 1.4, 0.3], [140.0, 30.0]),  # fast but physical
             make_instance([5.0, 5.0, 0.5, 2.0, 1.0, 1.5, 0.2], [np.nan, np.nan]),  # nan vel: kept
         ],
     }
 
     output = LoadAnnotations3D()(sample)
 
-    assert output["gt_boxes"].shape == (2, 9)
+    assert output["gt_boxes"].shape == (3, 9)
     assert np.allclose(output["gt_boxes"][0, :3], [1.0, 2.0, 3.0])
-    assert np.allclose(output["gt_boxes"][1, 7:], [0.0, 0.0])  # nan velocity zeroed, box kept
+    assert np.allclose(output["gt_boxes"][1, 7:], [140.0, 30.0])  # component > norm/sqrt(2), kept
+    assert np.allclose(output["gt_boxes"][2, 7:], [0.0, 0.0])  # nan velocity zeroed, box kept
 
 
 def test_load_annotations3d_preserves_ignored_bbox_label() -> None:

@@ -24,8 +24,10 @@ import numpy as np
 
 from autoware_ml.transforms.base import BaseTransform
 from autoware_ml.transforms.boxes3d.annotations import (
+    box_is_physical,
     normalize_filter_attributes,
     resolve_detection_class,
+    sanitize_velocity,
 )
 
 logger = logging.getLogger(__name__)
@@ -117,9 +119,8 @@ class LoadAnnotations3D(BaseTransform):
 
             num_pts = int(inst.get("num_lidar_pts", 0))
             box = list(inst["bbox_3d"])  # 7 values: cx cy cz dx dy dz yaw
-            vel = list(inst.get("velocity", [0.0, 0.0]))
-            vel = [0.0 if not np.isfinite(v) else float(v) for v in vel]
-            if not self._box_is_physical(box + vel):
+            vel = sanitize_velocity(inst.get("velocity"))
+            if not box_is_physical(box, vel):
                 continue
             gt_boxes.append(box + vel)
             gt_names.append(canonical)
@@ -140,32 +141,6 @@ class LoadAnnotations3D(BaseTransform):
         input_dict["gt_labels"] = gt_labels
         input_dict["gt_num_points"] = np.array(gt_num_points, dtype=np.int64)
         return input_dict
-
-    # Physical sanity bound for annotation velocities: nothing on a road moves
-    # faster than 150 m/s (540 km/h). Values above this are pipeline garbage
-    # and would silently explode the velocity regression loss.
-    MAX_ABSOLUTE_VELOCITY = 150.0
-
-    @classmethod
-    def _box_is_physical(cls, box_with_velocity: list[float]) -> bool:
-        """Return whether an annotation can become a valid training target.
-
-        A physically invalid box cannot be trained on: non-finite values (incl.
-        float64 values that overflow the float32 cast), non-positive dimensions
-        (box size targets are log-encoded), or velocities beyond the physical
-        bound (velocity is never range-filtered). Such instances are dropped
-        like any other non-loadable instance - geometry outliers with sane
-        values are left to the range filters downstream.
-
-        Args:
-            box_with_velocity: ``[cx, cy, cz, dx, dy, dz, yaw, vx, vy]``.
-        """
-        values = np.array(box_with_velocity, dtype=np.float32)
-        return bool(
-            np.isfinite(values).all()
-            and values[3:6].min() > 0.0
-            and np.abs(values[7:9]).max(initial=0.0) <= cls.MAX_ABSOLUTE_VELOCITY
-        )
 
     def _validate_name_mapping_targets(self, class_names: list[str]) -> None:
         """Log mapping targets dropped because they are not detector classes.
