@@ -174,7 +174,8 @@ def _build_lidar_sweeps(
         max_sweeps: Maximum number of sweeps including the current frame.
 
     Returns:
-        Historical sweep records ordered from nearest to oldest.
+        Historical sweep records ordered from nearest to oldest, with
+        timestamps in seconds.
     """
     current_global_from_lidar = current_ego2global @ current_lidar2ego
     current_lidar_from_global = np.linalg.inv(current_global_from_lidar)
@@ -203,7 +204,7 @@ def _build_lidar_sweeps(
                 "sample_data_token": sweep_token,
                 "sensor2lidar_rotation": current_lidar_from_sweep[:3, :3].astype(np.float32),
                 "sensor2lidar_translation": current_lidar_from_sweep[:3, 3].astype(np.float32),
-                "timestamp": sweep_sd["timestamp"],
+                "timestamp": sweep_sd["timestamp"] / 1e6,
             }
         )
         sweep_token = sweep_sd["prev"]

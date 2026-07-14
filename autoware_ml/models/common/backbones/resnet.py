@@ -12,11 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""ResNet backbone implementations."""
+"""ResNet backbone implementations.
+
+This module contains reusable ResNet backbones for image-based models.
+"""
 
 import torch
 import torch.nn as nn
-from torchvision.models.resnet import BasicBlock, ResNet
+from torchvision.models.resnet import BasicBlock, Bottleneck, ResNet
 
 
 class ResNet18(ResNet):
@@ -77,3 +80,88 @@ class ResNet18(ResNet):
         x = self.layer4(x)
 
         return x
+
+
+class _ResNetMultiScale(ResNet):
+    """Expose a torchvision ResNet as a reusable multi-scale backbone.
+
+    The wrapper returns intermediate feature maps from selected stages instead
+    of only the final classification features.
+    """
+
+    def __init__(
+        self, block: type[BasicBlock] | type[Bottleneck], layers: list[int], in_channels: int
+    ) -> None:
+        """Initialize the reusable multi-scale ResNet backbone.
+
+        Args:
+            block: Residual block type.
+            layers: Number of residual blocks per stage.
+            in_channels: Number of channels in the input tensor.
+        """
+        super().__init__(block=block, layers=layers)
+
+        self.conv1 = nn.Conv2d(
+            in_channels=in_channels,
+            out_channels=64,
+            kernel_size=7,
+            stride=2,
+            padding=3,
+            bias=False,
+        )
+        nn.init.kaiming_normal_(self.conv1.weight, mode="fan_out", nonlinearity="relu")
+
+        del self.avgpool
+        del self.fc
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Extract feature maps from ``layer2`` through ``layer4``.
+
+        Args:
+            x: Input tensor of shape ``(B, C, H, W)``.
+
+        Returns:
+            Tuple of multi-scale feature maps ``(c3, c4, c5)``.
+        """
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+
+        x = self.layer1(x)
+        c3 = self.layer2(x)
+        c4 = self.layer3(c3)
+        c5 = self.layer4(c4)
+        return c3, c4, c5
+
+
+class ResNet18MultiScale(_ResNetMultiScale):
+    """Expose ResNet-18 intermediate feature maps for downstream tasks.
+
+    This wrapper is used by image and multiview models that need feature
+    pyramids rather than ImageNet classification logits.
+    """
+
+    def __init__(self, in_channels: int) -> None:
+        """Initialize the multi-scale ResNet18 backbone.
+
+        Args:
+            in_channels: Number of channels in the input tensor.
+        """
+        super().__init__(block=BasicBlock, layers=[2, 2, 2, 2], in_channels=in_channels)
+
+
+class ResNet50MultiScale(_ResNetMultiScale):
+    """Expose ResNet-50 intermediate feature maps for downstream tasks.
+
+    This wrapper is used by image and multiview models that need feature
+    pyramids rather than ImageNet classification logits.
+    """
+
+    def __init__(self, in_channels: int) -> None:
+        """Initialize the multi-scale ResNet50 backbone.
+
+        Args:
+            in_channels: Number of channels in the input tensor.
+        """
+        super().__init__(block=Bottleneck, layers=[3, 4, 6, 3], in_channels=in_channels)

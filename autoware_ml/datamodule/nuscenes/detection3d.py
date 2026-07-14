@@ -122,6 +122,7 @@ class NuscenesDetection3DDataset(Dataset):
             "name_mapping": self.name_mapping,
             "label_to_category": self.label_to_category,
             "sample_token": sample["token"],
+            "timestamp": sample.get("timestamp"),
             "lidar_path": lidar_path,
             "num_pts_feats": int(
                 sample.get("num_features", sample.get("lidar_points", {}).get("num_pts_feats", 5))

@@ -62,7 +62,7 @@ icon: lucide/house
 | Calibration Status             | Camera, LiDAR | ResNet18           | :lucide-check:     | :lucide-check:     | :lucide-check:     | :lucide-check:     | :lucide-check:     |
 | Detection 3D                   | LiDAR         | CenterPoint        | :lucide-check:     | :lucide-check:     | :lucide-check:     | :lucide-check:     | :lucide-hourglass: |
 | Detection 3D                   | LiDAR         | TransFusion        | :lucide-check:     | :lucide-check:     | :lucide-check:     | :lucide-check:     | :lucide-hourglass: |
-| Detection 3D                   | Camera, LiDAR | BEVFusion          | :lucide-hourglass: | :lucide-hourglass: | :lucide-hourglass: | :lucide-hourglass: | :lucide-hourglass: |
+| Detection 3D                   | Camera, LiDAR | BEVFusion          | :lucide-check:     | :lucide-check:     | :lucide-check:     | :lucide-check:     | :lucide-hourglass: |
 | Detection 3D                   | Camera        | StreamPETR         | :lucide-hourglass: | :lucide-hourglass: | :lucide-hourglass: | :lucide-hourglass: | :lucide-hourglass: |
 | Segmentation 3D                | LiDAR         | FRNet              | :lucide-check:     | :lucide-check:     | :lucide-check:     | :lucide-check:     | :lucide-check:     |
 | Segmentation 3D + Detection 3D | LiDAR         | PointTransformerV3 | :lucide-check:     | :lucide-check:     | :lucide-check:     | :lucide-check:     | :lucide-hourglass: |
