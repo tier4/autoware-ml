@@ -207,6 +207,51 @@ class TestT4Detection3DDataset:
 
         assert weights == [1.0, 1.0]
 
+    def test_frame_sampling_weights_exclude_physically_invalid_boxes(self) -> None:
+        data_infos = [
+            {
+                "instances": [
+                    {
+                        "gt_nusc_name": "car",
+                        "bbox_3d": [0.0, 0.0, 0.0, 4.0, 1.8, 1.5, 0.0],
+                        "num_lidar_pts": 10,
+                    }
+                ]
+            },
+            {
+                "instances": [
+                    {
+                        "gt_nusc_name": "pedestrian",
+                        "bbox_3d": [1.0, 1.0, 0.0, 0.6, -0.6, 1.2, 0.0],  # negative dim
+                        "num_lidar_pts": 10,
+                    },
+                    {
+                        "gt_nusc_name": "pedestrian",
+                        "bbox_3d": [2.0, 2.0, 0.0, 0.6, 0.6, 1.7, 0.0],
+                        "velocity": [200.0, 200.0],  # impossible speed
+                        "num_lidar_pts": 10,
+                    },
+                ]
+            },
+        ]
+        frame_sampling = FrameSamplingConfig(
+            repeat_sampling_factor=1.0,
+            object_bev_range=[-10.0, -10.0, 10.0, 10.0],
+            low_pedestrian_height_threshold=1.5,
+            low_pedestrian_bev_range=[-5.0, -5.0, 5.0, 5.0],
+        )
+
+        weights = compute_frame_sampling_weights(
+            data_infos,
+            class_names=["car", "pedestrian"],
+            name_mapping={"car": "car", "pedestrian": "pedestrian"},
+            frame_sampling=frame_sampling,
+        )
+
+        # The second frame carries only physically invalid pedestrians, so it
+        # contributes no category evidence and keeps the neutral weight.
+        assert weights[1] == 1.0
+
     def test_dataset_frame_sampling_uses_annotation_filter_policy(self, tmp_path) -> None:
         ann_file = tmp_path / "infos.pkl"
         data = {

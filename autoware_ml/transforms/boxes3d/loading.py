@@ -24,8 +24,10 @@ import numpy as np
 
 from autoware_ml.transforms.base import BaseTransform
 from autoware_ml.transforms.boxes3d.annotations import (
+    box_is_physical,
     normalize_filter_attributes,
     resolve_detection_class,
+    sanitize_velocity,
 )
 
 logger = logging.getLogger(__name__)
@@ -117,8 +119,9 @@ class LoadAnnotations3D(BaseTransform):
 
             num_pts = int(inst.get("num_lidar_pts", 0))
             box = list(inst["bbox_3d"])  # 7 values: cx cy cz dx dy dz yaw
-            vel = list(inst.get("velocity", [0.0, 0.0]))
-            vel = [0.0 if not np.isfinite(v) else float(v) for v in vel]
+            vel = sanitize_velocity(inst.get("velocity"))
+            if not box_is_physical(box, vel):
+                continue
             gt_boxes.append(box + vel)
             gt_names.append(canonical)
             gt_num_points.append(num_pts)

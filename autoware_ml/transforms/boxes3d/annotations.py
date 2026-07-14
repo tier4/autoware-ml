@@ -19,7 +19,45 @@ from __future__ import annotations
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from typing import Any
 
+import numpy as np
+
 FilterAttributeSet = frozenset[tuple[str, str]]
+
+# Physical sanity bound for annotation velocity: nothing on a road moves
+# faster than 150 m/s (540 km/h). Speeds above this are pipeline garbage
+# and would silently explode the velocity regression loss.
+MAX_ABSOLUTE_SPEED = 150.0
+
+
+def sanitize_velocity(velocity: Sequence[float] | None) -> list[float]:
+    """Return the ground-plane velocity with non-finite components zeroed."""
+    if velocity is None:
+        return [0.0, 0.0]
+    return [0.0 if not np.isfinite(v) else float(v) for v in velocity]
+
+
+def box_is_physical(box: Sequence[float], velocity: Sequence[float]) -> bool:
+    """Return whether an annotation can become a valid training target.
+
+    A physically invalid box cannot be trained on: non-finite box values
+    (including float64 values that overflow the float32 cast), non-positive
+    dimensions (box size targets are log-encoded), or a ground-plane speed
+    beyond the physical bound (velocity is never range-filtered). Such
+    instances are dropped like any other non-loadable instance - geometry
+    outliers with sane values are left to the range filters downstream.
+
+    Args:
+        box: ``[cx, cy, cz, dx, dy, dz, yaw]``.
+        velocity: Ground-plane ``[vx, vy]``, sanitized via
+            :func:`sanitize_velocity` so non-finite components never reach
+            the drop decision.
+    """
+    values = np.array([*box, *velocity], dtype=np.float32)
+    return bool(
+        np.isfinite(values).all()
+        and values[3:6].min() > 0.0
+        and float(np.linalg.norm(values[7:9])) <= MAX_ABSOLUTE_SPEED
+    )
 
 
 def normalize_filter_attributes(
