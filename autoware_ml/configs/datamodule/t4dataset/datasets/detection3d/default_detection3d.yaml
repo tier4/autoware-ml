@@ -1,7 +1,7 @@
 _target_: autoware_ml.datamodule.multi_task.t4dataset.detection3d.T4Detection3DTask
 _convert_: all
 
-dataset_root: ${database.database_root_path}
+database_root_path: ${database.root_path}
 
 # Always set to None since we run splitter in the process
 dataset_records_dataframe: null

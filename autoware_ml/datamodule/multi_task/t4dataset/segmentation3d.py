@@ -10,15 +10,16 @@ class T4Segmentation3DTask(BaseDatasetTask):
     This class defines how to process the dataset records for 3D segmentation in the T4 dataset and retrieve the necessary information for training and evaluation.
     """
 
-    def __init__(self, dataset_root: str, dataset_records_dataframe: pl.DataFrame) -> None:
+    def __init__(self, database_root_path: str, dataset_records_dataframe: pl.DataFrame) -> None:
         """
         Initialize the T4Segmentation3DTask class.
         Args:
-          dataset_root: Root directory of the dataset.
+          database_root_path: Root directory of the dataset.
           dataset_records_dataframe: Polars DataFrame of dataset records to be processed for 3D segmentation in the T4 dataset.
         """
         super().__init__(
-            dataset_root=dataset_root, dataset_records_dataframe=dataset_records_dataframe
+            database_root_path=database_root_path,
+            dataset_records_dataframe=dataset_records_dataframe,
         )
 
     def __str__(self) -> str:

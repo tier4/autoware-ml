@@ -12,11 +12,13 @@ class BaseDatasetTask(ABC):
     when retrieving data.
     """
 
-    def __init__(self, dataset_root: str, dataset_records_dataframe: pl.DataFrame | None) -> None:
+    def __init__(
+        self, database_root_path: str, dataset_records_dataframe: pl.DataFrame | None
+    ) -> None:
         """
         Initialize the dataset task.
         """
-        self.dataset_root = Path(dataset_root)
+        self.database_root_path = Path(database_root_path)
         self.dataset_records_dataframe = self.pre_filter_dataset_records(dataset_records_dataframe)
 
     def pre_filter_dataset_records(

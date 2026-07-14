@@ -33,7 +33,7 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
 
     def __init__(
         self,
-        dataset_root: str,
+        database_root_path: str,
         max_num_3d_gt_bboxes: int,
         dataset_records_dataframe: pl.DataFrame | None,
         transforms: MultiTaskTransformsCompose | None,
@@ -52,7 +52,7 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
             task type.
         """
         super().__init__(
-            dataset_root=dataset_root,
+            database_root_path=database_root_path,
             max_num_3d_gt_bboxes=max_num_3d_gt_bboxes,
             dataset_records_dataframe=dataset_records_dataframe,
             transforms=transforms,
@@ -116,7 +116,7 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
         """
         # Return the relative path from the lidar pointcloud path
         relative_path = "/".join(lidar_pointcloud_path.split("/")[-6:])
-        return str(self.dataset_root / relative_path)
+        return str(self.database_root_path / relative_path)
 
     def get_lidar_pointcloud_data_samples(self, idx: int) -> Sequence[LiDARPointCloudSample]:
         """
