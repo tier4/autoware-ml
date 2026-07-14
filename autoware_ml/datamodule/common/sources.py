@@ -116,6 +116,5 @@ def coerce_annotation_sources(ann_file: Any, data_root: str) -> list[AnnotationS
             raise ValueError("Annotation source lists must contain at least one entry.")
         return sources
     raise TypeError(
-        "Annotation files must be a path or a sequence of source mappings, "
-        f"got {type(ann_file)!r}."
+        f"Annotation files must be a path or a sequence of source mappings, got {type(ann_file)!r}."
     )

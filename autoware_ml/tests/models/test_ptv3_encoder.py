@@ -521,6 +521,4 @@ def test_ptv3_frozen_encoder_supports_decoder_block_backward() -> None:
     logits.sum().backward()
 
     assert all(p.grad is None for p in model.encoder.parameters())
-    assert any(
-        p.grad is not None and p.grad.abs().sum() > 0 for p in model.seg3d_head.parameters()
-    )
+    assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in model.seg3d_head.parameters())

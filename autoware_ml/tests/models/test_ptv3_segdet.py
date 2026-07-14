@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pytest
 import torch
 
 from autoware_ml.models.detection3d.ptv3 import PTv3DetFeatureFusion
