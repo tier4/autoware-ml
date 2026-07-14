@@ -191,6 +191,35 @@ def test_load_annotations3d_replaces_nonfinite_velocity_with_zero() -> None:
     assert np.allclose(output["gt_boxes"][0, 7:], np.array([0.0, 0.0], dtype=np.float32))
 
 
+def test_load_annotations3d_drops_physically_invalid_instances() -> None:
+    def make_instance(bbox_3d: list[float], velocity: list[float]) -> dict:
+        return {
+            "bbox_3d": bbox_3d,
+            "velocity": velocity,
+            "gt_nusc_name": "car",
+            "num_lidar_pts": 12,
+            "bbox_3d_isvalid": True,
+        }
+
+    sample = {
+        "class_names": ["car"],
+        "sample_token": "corrupt-frame",
+        "instances": [
+            make_instance([1.0, 2.0, 3.0, 4.0, 1.5, 1.7, 0.1], [0.5, -0.1]),  # sane
+            make_instance([1e39, 2.0, 3.0, 4.0, 1.5, 1.7, 0.1], [0.0, 0.0]),  # f32 overflow
+            make_instance([3.0, 1.0, 0.5, 0.5, -0.8, 1.7, 0.0], [0.0, 0.0]),  # negative dim
+            make_instance([1.0, 2.0, 3.0, 4.0, 1.5, 1.7, 0.1], [1e6, 0.0]),  # absurd velocity
+            make_instance([5.0, 5.0, 0.5, 2.0, 1.0, 1.5, 0.2], [np.nan, np.nan]),  # nan vel: kept
+        ],
+    }
+
+    output = LoadAnnotations3D()(sample)
+
+    assert output["gt_boxes"].shape == (2, 9)
+    assert np.allclose(output["gt_boxes"][0, :3], [1.0, 2.0, 3.0])
+    assert np.allclose(output["gt_boxes"][1, 7:], [0.0, 0.0])  # nan velocity zeroed, box kept
+
+
 def test_load_annotations3d_preserves_ignored_bbox_label() -> None:
     sample = {
         "class_names": ["bicycle"],
