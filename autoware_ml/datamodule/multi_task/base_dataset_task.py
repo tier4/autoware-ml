@@ -8,8 +8,8 @@ from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import Mul
 
 class BaseDatasetTask(ABC):
     """
-    Protocol for dataset tasks that defines how a task-specific dataset should be implemented
-    when retrieving data.
+    Abstract interface for dataset tasks that defines how a task-specific dataset should be
+    implemented when retrieving data.
     """
 
     def __init__(
