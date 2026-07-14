@@ -177,7 +177,7 @@ model:
         _target_: autoware_ml.models.detection3d.task_modules.match_costs.IoU3DCost
         weight: 0.25
     point_cloud_range: ${point_cloud_range}
-    voxel_size: [0.4, 0.4, 8.0]   # grid 0.05 * bev_stride 8
+    voxel_size: [0.4, 0.4, 8.0]
     out_size_factor: 1
     code_weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2]
     min_radius: 2
