@@ -101,11 +101,11 @@ class LoadPointsFromFile(MultiTaskBaseTransform):
 
         points_np = points_np[:, use_dims]
         point_feature_names = [PointFeatureName(PointFieldIndex(i).name.lower()) for i in use_dims]
-        timestamp_seconds = lidar_point_cloud_samples[index].timestamp_seconds
+        timestamp = lidar_point_cloud_samples[index].timestamp
         return LiDARPoints.from_numpy(
             points_np=points_np,
             point_feature_names=point_feature_names,
-            timestamp_seconds=timestamp_seconds,
+            timestamp=timestamp,
         )
 
     def transform(self, multi_task_gt_sample: MultiTaskGTSample) -> MultiTaskGTSample:
@@ -198,7 +198,7 @@ class LoadMultiSweepPointsFromFile(LoadPointsFromFile):
             ].tolist()
 
         # Create timestamp_feature for each point
-        main_lidar_frame_timestamp = current_frame_point_cloud_data.timestamp_seconds
+        main_lidar_frame_timestamp = current_frame_point_cloud_data.timestamp
 
         # Add timestamp difference feature to the current frame pointcloud points
         if self.use_timestamp_difference:
@@ -215,9 +215,7 @@ class LoadMultiSweepPointsFromFile(LoadPointsFromFile):
             # Get the lidar sweep point cloud sample data
             sweep_lidar_sample = multi_task_gt_sample.lidar_point_cloud_samples[sweep_idx]
             if self.use_timestamp_difference:
-                timestamp_difference = (
-                    main_lidar_frame_timestamp - sweep_lidar_sample.timestamp_seconds
-                )
+                timestamp_difference = main_lidar_frame_timestamp - sweep_lidar_sample.timestamp
                 sweep_points.add_timestamp_difference(timestamp_difference)
 
             # Transform from the last lidar sweep frame to the current lidar frame using the provided transformation matrices

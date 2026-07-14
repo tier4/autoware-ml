@@ -151,7 +151,7 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
             lidar_pointcloud_samples.append(
                 LiDARPointCloudSample(
                     point_cloud_path=lidar_pointcloud_path,
-                    timestamp_seconds=lidar_pointcloud_metadata[
+                    timestamp=lidar_pointcloud_metadata[
                         LidarFrameDatasetSchema.lidar_timestamp_seconds.name
                     ],
                     sensor_to_ego_pose_matrix=torch.tensor(
