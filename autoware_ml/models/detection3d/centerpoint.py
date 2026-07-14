@@ -52,14 +52,15 @@ class _CenterPointVoxelEncoderExportWrapper(nn.Module):
 class _CenterPointBackboneNeckHeadExportWrapper(nn.Module):
     """Export CenterPoint backbone, neck, and dense head from BEV features."""
 
-    output_names = ["heatmap", "reg", "height", "dim", "rot", "vel"]
-
     def __init__(self, backbone: nn.Module, neck: nn.Module, bbox_head: nn.Module) -> None:
         """Initialize the backbone-neck-head export wrapper."""
         super().__init__()
         self.backbone = backbone
         self.neck = neck
         self.bbox_head = bbox_head.prepare_for_export()
+        self.output_names = ["heatmap", "reg", "height", "dim", "rot"]
+        if self.bbox_head.use_velocity:
+            self.output_names.append("vel")
 
     def forward(self, spatial_features: torch.Tensor) -> tuple[torch.Tensor, ...]:
         """Run CenterPoint BEV feature extraction and prediction heads."""
@@ -204,6 +205,11 @@ class CenterPointDetectionModel(BaseModel):
                 batch_size=batch_size,
             )
 
+        head_wrapper = _CenterPointBackboneNeckHeadExportWrapper(
+            self.pts_backbone,
+            self.pts_neck,
+            self.bbox_head,
+        )
         return {
             "pts_voxel_encoder_centerpoint": ExportSpec(
                 module=_CenterPointVoxelEncoderExportWrapper(self.pts_voxel_encoder),
@@ -212,13 +218,9 @@ class CenterPointDetectionModel(BaseModel):
                 output_names=["pillar_features"],
             ),
             "pts_backbone_neck_head_centerpoint": ExportSpec(
-                module=_CenterPointBackboneNeckHeadExportWrapper(
-                    self.pts_backbone,
-                    self.pts_neck,
-                    self.bbox_head,
-                ),
+                module=head_wrapper,
                 args=(spatial_features,),
                 input_param_names=["spatial_features"],
-                output_names=_CenterPointBackboneNeckHeadExportWrapper.output_names,
+                output_names=head_wrapper.output_names,
             ),
         }
