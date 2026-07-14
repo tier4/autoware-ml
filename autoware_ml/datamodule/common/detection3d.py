@@ -90,7 +90,7 @@ def build_sweep_entries(sample: Mapping[str, Any]) -> list[dict[str, Any]]:
         KeyError: If a sweep is missing the pose or path metadata required to
             express it in the key lidar frame.
     """
-    lidar_sweeps = sample.get("lidar_sweeps")
+    lidar_sweeps = sample.get("lidar_sweeps", [])
     if not lidar_sweeps:
         return []
 
