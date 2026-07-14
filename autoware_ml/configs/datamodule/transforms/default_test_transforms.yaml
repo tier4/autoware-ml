@@ -17,4 +17,4 @@ pipeline:
     test_mode: true
     use_timestamp_difference: true
     load_dim: ${database.lidar_pointcloud_num_features}
-    use_dim: [0, 1, 2, 3] # Feature dimensionality to keep when loading from pointcloud files.
+    use_dim: [0, 1, 2, 3] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]

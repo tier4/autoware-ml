@@ -6,7 +6,7 @@ pipeline:
     _convert_: all
 
     load_dim: ${database.lidar_pointcloud_num_features}
-    use_dim: [0, 1, 2, 3] # Feature dimensionality to keep when loading from pointcloud files.
+    use_dim: [0, 1, 2, 3] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]
     bev_remove_radius: 0.0
 
   - _target_: autoware_ml.transforms.multi_task.point_cloud.loading.LoadMultiSweepPointsFromFile
@@ -17,7 +17,7 @@ pipeline:
     test_mode: false
     use_timestamp_difference: true
     load_dim: ${database.lidar_pointcloud_num_features}
-    use_dim: [0, 1, 2, 3] # Feature dimensionality to keep when loading from pointcloud files.
+    use_dim: [0, 1, 2, 3] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]
 
   - _target_: autoware_ml.transforms.multi_task.point_cloud.geometry.GlobalRotScaleTrans
     _convert_: all
