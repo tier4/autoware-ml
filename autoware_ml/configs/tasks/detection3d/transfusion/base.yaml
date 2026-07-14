@@ -66,8 +66,12 @@ model:
       vel: [2, 2]
     bbox_coder:
       _target_: autoware_ml.models.detection3d.task_modules.bbox_coders.TransFusionBBoxCoder
-      pc_range: ["${point_cloud_range.0}", "${point_cloud_range.1}"]
-      voxel_size: ["${voxel_size.0}", "${voxel_size.1}"]
+      pc_range:
+        - ${point_cloud_range.0}
+        - ${point_cloud_range.1}
+      voxel_size:
+        - ${voxel_size.0}
+        - ${voxel_size.1}
       out_size_factor: ${out_size_factor}
       post_center_range: ???
       score_threshold: 0.0
@@ -86,7 +90,9 @@ model:
         _target_: autoware_ml.models.detection3d.task_modules.match_costs.IoU3DCost
         weight: 0.25
     point_cloud_range: ${point_cloud_range}
-    voxel_size: ["${voxel_size.0}", "${voxel_size.1}"]
+    voxel_size:
+      - ${voxel_size.0}
+      - ${voxel_size.1}
     out_size_factor: ${out_size_factor}
     code_weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2]
     min_radius: 2
