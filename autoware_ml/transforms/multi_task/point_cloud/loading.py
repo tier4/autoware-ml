@@ -138,7 +138,7 @@ class LoadPointsFromFile(MultiTaskBaseTransform):
 class LoadMultiSweepPointsFromFile(LoadPointsFromFile):
     """Load multi-sweep point clouds from lidar file paths stored in sample metadata."""
 
-    _required_keys = ["lidar_point_cloud_samples"]
+    _required_keys = ["lidar_point_cloud_samples", "point_cloud_data"]
 
     def __init__(
         self,
