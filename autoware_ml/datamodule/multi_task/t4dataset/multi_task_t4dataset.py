@@ -97,9 +97,13 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
         else:
             detection3d_gt_bboxes_3d = None
 
-        segmentation3d_gt_sample: MultiTaskGTSample | None = data_samples.get(
+        segmentation3d_multi_task_gt_sample: MultiTaskGTSample | None = data_samples.get(
             TaskType.SEGMENTATION3D, None
         )
+        if segmentation3d_multi_task_gt_sample is not None:
+            segmentation3d_gt_sample = segmentation3d_multi_task_gt_sample.segmentation3d_gt_sample
+        else:
+            segmentation3d_gt_sample = None
 
         # Merge the data samples from different tasks into a single multi-task data row
         return MultiTaskGTSample(
