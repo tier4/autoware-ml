@@ -6,6 +6,7 @@ detection heads and deployment paths.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import torch
@@ -20,7 +21,9 @@ class TransFusionBBoxCoder:
         out_size_factor: BEV downsampling factor between point space and feature space.
         voxel_size: Voxel size along each spatial axis.
         post_center_range: Optional metric-space range used to filter predictions.
-        score_threshold: Optional score threshold applied during decoding.
+        score_threshold: Optional score threshold applied during decoding. A
+            scalar applies to every class; a sequence provides one threshold
+            per class index.
         code_size: Number of regression channels produced by the head.
     """
 
@@ -28,7 +31,7 @@ class TransFusionBBoxCoder:
     out_size_factor: int
     voxel_size: list[float]
     post_center_range: list[float] | None = None
-    score_threshold: float | None = None
+    score_threshold: float | Sequence[float] | None = None
     code_size: int = 8
 
     def encode(self, dst_boxes: torch.Tensor) -> torch.Tensor:
@@ -106,9 +109,20 @@ class TransFusionBBoxCoder:
             final_boxes = torch.cat([center, height, dim, yaw, vel], dim=1).permute(0, 2, 1)
 
         predictions = []
-        threshold_mask = (
-            final_scores > self.score_threshold if self.score_threshold is not None else None
-        )
+        if self.score_threshold is None:
+            threshold_mask = None
+        elif isinstance(self.score_threshold, (int, float)):
+            threshold_mask = final_scores > self.score_threshold
+        else:
+            thresholds = torch.tensor(
+                list(self.score_threshold), device=heatmap.device, dtype=final_scores.dtype
+            )
+            if thresholds.shape[0] != heatmap.shape[1]:
+                raise ValueError(
+                    "Per-class score_threshold must provide one value per class: "
+                    f"got {thresholds.shape[0]} thresholds for {heatmap.shape[1]} classes."
+                )
+            threshold_mask = final_scores > thresholds[final_preds]
         center_range = None
         if self.post_center_range is not None:
             center_range = torch.tensor(

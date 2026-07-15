@@ -21,6 +21,7 @@ from autoware_ml.transforms.point_cloud.sampling import (
     PointShuffle,
     RandomDropout,
 )
+from autoware_ml.transforms.point_cloud.sweeps import LoadPointsFromMultiSweeps
 
 
 class TestPointCloudTransforms:
@@ -138,6 +139,45 @@ class TestPointCloudTransforms:
         assert output["points"].shape == (1, 4)
         assert "idx_begin" not in output
         assert "length" not in output
+
+    def test_multi_sweeps_time_dim_overwrites_raw_column_with_time_lag(self, tmp_path):
+        key_points = np.zeros((2, 5), dtype=np.float32)
+        key_points[:, 4] = -1.0
+        sweep_points = np.full((3, 5), -1.0, dtype=np.float32)
+        sweep_path = tmp_path / "sweep.bin"
+        sweep_points.tofile(sweep_path)
+
+        transform = LoadPointsFromMultiSweeps(
+            sweeps_num=2, load_dim=5, use_dim=[0, 1, 2, 3, 4], time_dim=4
+        )
+        output = transform(
+            {
+                "points": key_points,
+                "timestamp": 10.0,
+                "sweeps": [{"lidar_path": str(sweep_path), "timestamp": 9.9}],
+            }
+        )
+
+        points = output["points"]
+        assert points.shape == (5, 5)
+        assert np.allclose(points[:2, 4], 0.0)
+        assert np.allclose(points[2:, 4], 0.1)
+
+    def test_multi_sweeps_time_dim_requires_key_timestamp(self):
+        transform = LoadPointsFromMultiSweeps(
+            sweeps_num=2, load_dim=5, use_dim=[0, 1, 2, 3, 4], time_dim=4
+        )
+
+        with pytest.raises(KeyError, match="timestamp"):
+            transform({"points": np.zeros((1, 5), dtype=np.float32), "sweeps": []})
+        with pytest.raises(KeyError, match="timestamp"):
+            transform(
+                {
+                    "points": np.zeros((1, 5), dtype=np.float32),
+                    "timestamp": None,
+                    "sweeps": [],
+                }
+            )
 
     def test_random_dropout_keeps_point_arrays_aligned(self):
         np.random.seed(0)

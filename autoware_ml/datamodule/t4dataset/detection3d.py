@@ -260,6 +260,7 @@ class T4Detection3DDataset(Dataset):
             "class_names": self.class_names,
             "name_mapping": self.name_mapping,
             "sample_token": sample["token"],
+            "timestamp": sample.get("timestamp"),
             "lidar_path": resolve_data_path(self.data_root, sample["lidar_path"]),
             "num_pts_feats": int(sample["lidar_points"].get("num_pts_feats", 5)),
             "sweeps": resolve_sweep_paths(sample, self.data_root),

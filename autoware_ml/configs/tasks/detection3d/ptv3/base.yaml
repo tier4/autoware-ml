@@ -2,12 +2,11 @@
 
 defaults:
   - /defaults/default_runtime
-  - /tasks/segmentation3d/ptv3/backbone_base
+  - /tasks/segmentation3d/ptv3/encoder_base
+  - /tasks/detection3d/ptv3/bev_neck
   - _self_
 
 dataset: ???
-
-backbone_out_channels: 64
 
 grid_size: ???
 point_cloud_range: ???
@@ -32,30 +31,16 @@ datamodule:
     coord: concat
     feat: concat
     grid_coord: concat
-    strength: concat
-    inverse: index_concat
     gt_boxes: list
     gt_labels: list
 
 model:
   _target_: autoware_ml.models.detection3d.ptv3.PTv3DetectionModel
   export_output_names: ???
-  freeze_backbone: false
+  freeze_encoder: false
   grid_size: ${grid_size}
   point_cloud_range: ${point_cloud_range}
   metrics: ${dataset.detection3d.metrics}
-  bev_projector:
-    _target_: autoware_ml.models.detection3d.ptv3.PTv3BEVProjection
-    in_channels: ${backbone_out_channels}
-    out_channels: ${backbone_out_channels}
-    output_shape: ???
-    bev_stride: ???
-  bev_encoder:
-    _target_: autoware_ml.models.detection3d.ptv3.PTv3BEVEncoder
-    in_channels: ${backbone_out_channels}
-    hidden_channels: 128
-    out_channels: 128
-    dilations: [1, 2, 5, 2]
   bbox_head: ???
   optimizer:
     _target_: torch.optim.AdamW
@@ -92,8 +77,8 @@ deploy:
     dynamo: false
     do_constant_folding: false
     modules:
-      backbone:
-        output_names: [point_feat, point_grid_coord, point_offset]
+      encoder:
+        output_names: [point_feat_0, point_feat_1, point_feat_2, point_feat_3, point_feat_4]
       det3d_head:
         output_names: ${model.export_output_names}
   tensorrt:

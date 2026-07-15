@@ -8,31 +8,64 @@ dataset: ???
 point_cloud_range: ???
 voxel_size: ???
 out_size_factor: ???
+score_threshold: 0.0
+max_time_lag: ???
 
 datamodule:
   collation_map:
     points: list
     gt_boxes: list
     gt_labels: list
+
 model:
-  _target_: autoware_ml.models.detection3d.transfusion.TransFusionDetectionModel
+  _target_: autoware_ml.models.detection3d.bevfusion.BEVFusionDetectionModel
   metrics: ${dataset.detection3d.metrics}
+  img_backbone:
+    _target_: autoware_ml.models.common.backbones.resnet.ResNet18MultiScale
+    in_channels: 3
+  img_neck:
+    _target_: autoware_ml.models.common.necks.lss_fpn.GeneralizedLSSFPN
+    in_channels: [128, 256, 512]
+    out_channels: 128
+  view_transform:
+    _target_: autoware_ml.models.detection3d.view_transforms.depth_lss.DepthLSSTransform
+    in_channels: 128
+    out_channels: 80
+    image_size: ${image_size}
+    xbound:
+      - ${point_cloud_range.0}
+      - ${point_cloud_range.3}
+      - ${bev_voxel_size.0}
+    ybound:
+      - ${point_cloud_range.1}
+      - ${point_cloud_range.4}
+      - ${bev_voxel_size.1}
+    zbound: [-10.0, 10.0, 20.0]
+    dbound: [1.0, 60.0, 0.5]
+    downsample: 2
+  fusion_layer:
+    _target_: autoware_ml.models.detection3d.fusion.ConvFuser
+    in_channels: [80, 256]
+    out_channels: 256
   pts_voxel_encoder:
     _target_: autoware_ml.models.detection3d.encoders.voxel.HardSimpleVoxelSinCosEncoder
-    in_channels: 4
+    in_channels: 5
+    # Normalization ranges for (x, y, z, intensity, time_lag).
     min_norm_values:
       - ${point_cloud_range.0}
       - ${point_cloud_range.1}
       - ${point_cloud_range.2}
+      - 0.0
       - 0.0
     max_norm_values:
       - ${point_cloud_range.3}
       - ${point_cloud_range.4}
       - ${point_cloud_range.5}
       - 255.0
+      - ${max_time_lag}
   pts_middle_encoder:
     _target_: autoware_ml.models.detection3d.encoders.sparse.SparseEncoder
-    in_channels: 32
+    in_channels: 50
     sparse_shape: ???
     output_channels: 128
     dense_output_shapes: ???
@@ -54,7 +87,6 @@ model:
     in_channels: 512
     hidden_channel: 128
     num_classes: ${dataset.detection3d.num_classes}
-    class_names: ${dataset.detection3d.class_names}
     num_decoder_layers: 1
     num_heads: 8
     feedforward_channels: 256
@@ -74,15 +106,13 @@ model:
         - ${voxel_size.1}
       out_size_factor: ${out_size_factor}
       post_center_range: ???
-      score_threshold: 0.0
+      score_threshold: ${score_threshold}
       code_size: 10
     assigner:
       _target_: autoware_ml.models.detection3d.task_modules.assigners.HungarianAssigner3D
       cls_cost:
         _target_: autoware_ml.models.detection3d.task_modules.match_costs.ClassificationCost
         weight: 0.15
-        alpha: 0.25
-        gamma: 2.0
       reg_cost:
         _target_: autoware_ml.models.detection3d.task_modules.match_costs.BBoxBEVL1Cost
         weight: 0.25
@@ -97,44 +127,60 @@ model:
     code_weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2]
     min_radius: 2
     gaussian_overlap: 0.1
-    score_threshold: 0.0
-    post_max_size: 100
+    score_threshold: ${score_threshold}
+    post_max_size: 300
     nms_min_radius: ???
-    loss_cls_weight: 1.0
-    loss_bbox_weight: 0.25
     heatmap_target: oriented
-    loss_heatmap_weight: 1.0
-    nms_kernel_size: 3
-    use_velocity: true
   optimizer:
-    _target_: torch.optim.AdamW
     _partial_: true
-    lr: 0.0001
+    _target_: torch.optim.AdamW
+    lr: 2.0e-4
     weight_decay: 0.01
   scheduler:
-    _target_: autoware_ml.utils.schedulers.cyclic_cosine_annealing.CyclicCosineAnnealingLR
     _partial_: true
-    warmup_epochs: 8
-    decay_epochs: 22
+    _target_: autoware_ml.utils.schedulers.cyclic_cosine_annealing.CyclicCosineAnnealingLR
+    warmup_epochs: 3
+    decay_epochs: 27
     max_lr_factor: 10.0
     min_lr_factor: 0.0001
 
 trainer:
   max_epochs: 30
-  gradient_clip_val: 5.0
+  gradient_clip_val: 35.0
   gradient_clip_algorithm: norm
 
+# Lidar-only models export the bevfusion_lidar main body; camera-lidar models
+# export bevfusion_image_backbone plus the bevfusion_camera_lidar main body.
 deploy:
   onnx:
     dynamo: false
     opset_version: 17
     do_constant_folding: false
     modules:
-      end_to_end:
+      bevfusion_lidar:
+        output_names: [bbox_pred, score, label_pred]
         dynamic_axes:
-          voxels: { 0: num_voxels }
-          num_points: { 0: num_voxels }
-          coors: { 0: num_voxels }
+          voxels: { 0: voxels_num }
+          coors: { 0: voxels_num }
+          num_points_per_voxel: { 0: voxels_num }
+      bevfusion_image_backbone:
+        output_names: [image_feats]
+        dynamic_axes:
+          imgs: { 0: num_imgs }
+      bevfusion_camera_lidar:
+        output_names: [bbox_pred, score, label_pred]
+        dynamic_axes:
+          voxels: { 0: voxels_num }
+          coors: { 0: voxels_num }
+          num_points_per_voxel: { 0: voxels_num }
+          points: { 0: num_points }
+          lidar2image: { 0: num_imgs }
+          img_aug_matrix: { 0: num_imgs }
+          geom_feats: { 0: num_kept }
+          kept: { 0: num_geom_feats }
+          ranks: { 0: num_kept }
+          indices: { 0: num_kept }
+          image_feats: { 0: num_imgs }
   tensorrt:
     enabled: false
 
