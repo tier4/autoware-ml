@@ -1,5 +1,5 @@
 """
-Bboxes 3d transforms for augmentating bboxes (for example, removing bboxes by distance and number of points).
+Bboxes 3d transforms for augmentation of bboxes (for example, removing bboxes by distance and number of points).
 The code is modified based on https://github.com/open-mmlab/mmdetection3d/blob/main/mmdet3d/datasets/transforms/transforms_3d.py.
 """
 
@@ -31,7 +31,7 @@ class BBoxesMinPointsFilter(MultiTaskBaseTransform):
         Args:
             min_points (int): The minimum number of points required for a bounding box to be kept.
             bev_range (Tuple[float]): The distance ([x_min, y_min, x_max, y_max]) of bounding boxes
-                to apply ths mininum number of points filtering.
+                to apply ths minimum number of points filtering.
         """
         super().__init__(probability=None)
         self.min_points = min_points
