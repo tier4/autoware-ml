@@ -104,6 +104,11 @@ class LoadPointsFromFile(MultiTaskBaseTransform):
         else:
             use_dims = list(self.use_dim)
 
+        if use_dims[:3] != [PointFieldIndex.X, PointFieldIndex.Y, PointFieldIndex.Z]:
+            raise ValueError(
+                f"use_dim must start with [0, 1, 2] (x, y, z) to keep geometry transforms correct, but got {use_dims}."
+            )
+
         points_np = points_np[:, use_dims]
         point_feature_names = [PointFeatureName(PointFieldIndex(i).name.lower()) for i in use_dims]
         timestamp = lidar_point_cloud_samples[index].timestamp
