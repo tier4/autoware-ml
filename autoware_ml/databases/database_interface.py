@@ -62,7 +62,7 @@ class DatabaseInterface(Protocol):
 
     @property
     @abstractmethod
-    def database_version(self) -> str:
+    def version(self) -> str:
         """
         Get the version of the database.
 
@@ -70,7 +70,7 @@ class DatabaseInterface(Protocol):
           str: Version of the database.
         """
 
-        raise NotImplementedError("Database must define database_version!")
+        raise NotImplementedError("Database must define version!")
 
     @property
     @abstractmethod

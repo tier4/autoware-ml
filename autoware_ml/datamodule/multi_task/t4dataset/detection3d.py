@@ -17,19 +17,20 @@ class T4Detection3DTask(BaseDatasetTask):
 
     def __init__(
         self,
-        dataset_root: str,
+        database_root_path: str,
         dataset_records_dataframe: pl.DataFrame | None,
         filter_valid_masks: bool = True,
     ) -> None:
         """
         Initialize the T4Detection3DTask class.
         Args:
-          dataset_root: Root directory of the dataset.
+          database_root_path: Root directory of the dataset.
           dataset_records_dataframe: Polars DataFrame of dataset records to be processed for 3D detection in the T4 dataset.
           filter_valid_masks: Whether to filter out invalid bounding boxes based on valid_mask.
         """
         super().__init__(
-            dataset_root=dataset_root, dataset_records_dataframe=dataset_records_dataframe
+            database_root_path=database_root_path,
+            dataset_records_dataframe=dataset_records_dataframe,
         )
         self.filter_valid_masks = filter_valid_masks
 

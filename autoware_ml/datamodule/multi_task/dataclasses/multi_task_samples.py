@@ -45,7 +45,9 @@ class PointCloudGTBatch(NamedTuple):
         # Convert it to (0, 0, 0, 1, 1, 1, 2, 2, 2, ...) for each point in the batch
         batch_indices = torch.cat(
             [
-                torch.full((point.points.shape[0],), i, dtype=torch.int32)
+                torch.full(
+                    (point.points.shape[0],), i, dtype=torch.int32, device=point.points.device
+                )
                 for i, point in enumerate(point_gt_samples)
             ],
             dim=0,
@@ -63,7 +65,7 @@ class LiDARPointCloudSample(NamedTuple):
     """
 
     point_cloud_path: str
-    timestamp_seconds: float
+    timestamp: float
     # Transformation matrix from LiDAR sensor frame to ego pose of this LiDAR sensor frame
     sensor_to_ego_pose_matrix: Float32[Tensor, "4 4"]  # (4, 4)
     # Transformation matrix from ego pose of this LiDAR sensor frame to global frame

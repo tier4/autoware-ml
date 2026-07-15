@@ -82,7 +82,12 @@ class LoadPointsFromFile(MultiTaskBaseTransform):
         """Load point cloud data from a binary file.
 
         Args:
-            file_path: Path to the binary file containing point cloud data.
+            index: Index of the point cloud sample to load.
+            lidar_point_cloud_samples: Sequence of LiDARPointCloudSample containing metadata for
+                each point cloud sample, including file paths and timestamps.
+
+        Returns:
+            BasePoints: Loaded point cloud data.
         """
         if index >= len(lidar_point_cloud_samples):
             raise IndexError(
@@ -99,13 +104,18 @@ class LoadPointsFromFile(MultiTaskBaseTransform):
         else:
             use_dims = list(self.use_dim)
 
+        if use_dims[:3] != [PointFieldIndex.X, PointFieldIndex.Y, PointFieldIndex.Z]:
+            raise ValueError(
+                f"use_dim must start with [0, 1, 2] (x, y, z) to keep geometry transforms correct, but got {use_dims}."
+            )
+
         points_np = points_np[:, use_dims]
         point_feature_names = [PointFeatureName(PointFieldIndex(i).name.lower()) for i in use_dims]
-        timestamp_seconds = lidar_point_cloud_samples[index].timestamp_seconds
+        timestamp = lidar_point_cloud_samples[index].timestamp
         return LiDARPoints.from_numpy(
             points_np=points_np,
             point_feature_names=point_feature_names,
-            timestamp_seconds=timestamp_seconds,
+            timestamp=timestamp,
         )
 
     def transform(self, multi_task_gt_sample: MultiTaskGTSample) -> MultiTaskGTSample:
@@ -125,6 +135,7 @@ class LoadPointsFromFile(MultiTaskBaseTransform):
         lidar_points = self.load_points_from_samples(
             0, multi_task_gt_sample.lidar_point_cloud_samples
         )
+        self.remove_close(lidar_points)
 
         return MultiTaskGTSample(
             lidar_point_cloud_samples=multi_task_gt_sample.lidar_point_cloud_samples,
@@ -137,7 +148,7 @@ class LoadPointsFromFile(MultiTaskBaseTransform):
 class LoadMultiSweepPointsFromFile(LoadPointsFromFile):
     """Load multi-sweep point clouds from lidar file paths stored in sample metadata."""
 
-    _required_keys = ["lidar_point_cloud_samples"]
+    _required_keys = ["lidar_point_cloud_samples", "point_cloud_data"]
 
     def __init__(
         self,
@@ -191,11 +202,13 @@ class LoadMultiSweepPointsFromFile(LoadPointsFromFile):
         if self.test_mode:
             sweep_indices = list(range(1, available_sweeps_nums + 1))
         else:
-            sweep_indices = torch.arange(1, len(multi_task_gt_sample.lidar_point_cloud_samples))
-            sweep_indices = torch.randperm(len(sweep_indices))[:available_sweeps_nums].tolist()
+            candidate_indices = torch.arange(1, len(multi_task_gt_sample.lidar_point_cloud_samples))
+            sweep_indices = candidate_indices[
+                torch.randperm(len(candidate_indices))[:available_sweeps_nums]
+            ].tolist()
 
         # Create timestamp_feature for each point
-        main_lidar_frame_timestamp = current_frame_point_cloud_data.timestamp_seconds
+        main_lidar_frame_timestamp = current_frame_point_cloud_data.timestamp
 
         # Add timestamp difference feature to the current frame pointcloud points
         if self.use_timestamp_difference:
@@ -212,9 +225,7 @@ class LoadMultiSweepPointsFromFile(LoadPointsFromFile):
             # Get the lidar sweep point cloud sample data
             sweep_lidar_sample = multi_task_gt_sample.lidar_point_cloud_samples[sweep_idx]
             if self.use_timestamp_difference:
-                timestamp_difference = (
-                    main_lidar_frame_timestamp - sweep_lidar_sample.timestamp_seconds
-                )
+                timestamp_difference = main_lidar_frame_timestamp - sweep_lidar_sample.timestamp
                 sweep_points.add_timestamp_difference(timestamp_difference)
 
             # Transform from the last lidar sweep frame to the current lidar frame using the provided transformation matrices

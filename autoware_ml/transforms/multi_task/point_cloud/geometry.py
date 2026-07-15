@@ -103,9 +103,7 @@ class GlobalRotScaleTrans(MultiTaskBaseTransform):
             translation_vector=translation_tensor,
         )
         lidar_transformation_sample = LiDARTransformationSample.create_lidar_transformation_sample(
-            # row-vector convention for point cloud transformation, for right multiplication,
-            # e.g., points @ R.T
-            rotation_matrix=rotation_matrix_tensor.T,
+            rotation_matrix=rotation_matrix_tensor,
             scale_factor=scale_factor,
             translation_vector=translation_tensor,
             transformation_order=transformation_order,

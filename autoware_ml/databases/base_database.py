@@ -34,8 +34,8 @@ class BaseDatabase:
 
     def __init__(
         self,
-        database_version: str,
-        database_root_path: str,
+        version: str,
+        root_path: str,
         cache_path: str,
         cache_file_prefix_name: str,
         num_workers: int,
@@ -48,8 +48,8 @@ class BaseDatabase:
         Initialize BaseDatabase.
 
         Args:
-          database_version: Version of the database.
-          database_root_path: Root path where the actual annotation files are stored.
+          version: Version of the database.
+          root_path: Root path where the actual annotation files are stored.
           cache_path: Path to cache the database records.
           cache_file_prefix_name: Prefix name of the cache file, it will be <cache_file_prefix_name>_<database_hash>.parquet
           num_workers: Number of workers to use for processing the database.
@@ -59,8 +59,8 @@ class BaseDatabase:
           box3d_pipelines: List of box 3D pipelines to process the box 3D annotations.
         """
 
-        self._database_version = database_version
-        self._database_root_path = Path(database_root_path)
+        self._version = version
+        self._root_path = Path(root_path)
         self._cache_path = Path(cache_path)
         self._cache_file_prefix_name = cache_file_prefix_name
         self._num_workers = num_workers
@@ -72,8 +72,8 @@ class BaseDatabase:
         # Create cache output path if it doesn't exist
         self._cache_path.mkdir(parents=True, exist_ok=True)
         logger.info(
-            f"Database initialized with version: {self._database_version}, "
-            f"root path: {self._database_root_path}, "
+            f"Database initialized with version: {self._version}, "
+            f"root path: {self._root_path}, "
             f"cache path: {self._cache_path}, "
             f"cache file prefix name: {self._cache_file_prefix_name}, "
             f"class names: {self._class_names}, "
@@ -163,7 +163,7 @@ class BaseDatabase:
         return string
 
     @property
-    def database_version(self) -> str:
+    def version(self) -> str:
         """
         Get the version of the database.
 
@@ -171,7 +171,7 @@ class BaseDatabase:
           str: Version of the database.
         """
 
-        return self._database_version
+        return self._version
 
     @property
     def scenarios(self) -> Mapping[str, Scenarios]:

@@ -32,7 +32,7 @@ class BasePoints(ABC):
         self,
         points: Float32[Tensor, "num_points num_point_features"],
         point_feature_names: Sequence[PointFeatureName],
-        timestamp_seconds: float,
+        timestamp: float,
     ) -> None:
         """
         Initialize the BasePoints instance.
@@ -40,19 +40,19 @@ class BasePoints(ABC):
         Args:
             points: A tensor of shape (num_points, num_point_features) representing the point cloud data.
             point_feature_names: A sequence of PointFeatureName representing the names of the features for each point.
-            timestamp_seconds: A float representing the timestamp of the point cloud data in seconds.
+            timestamp: A float representing the timestamp of the point cloud data in seconds.
         """
         self._points = points
         self._point_feature_names = point_feature_names
-        self._timestamp_seconds = timestamp_seconds
+        self._timestamp = timestamp
         # Dimension index for the timestamp difference feature, if it exists. -1 indicates
         # that it does not exist.
         self._timestamp_difference_dim = -1
 
     @property
-    def timestamp_seconds(self) -> float:
+    def timestamp(self) -> float:
         """Timestamp of the point cloud data in seconds."""
-        return self._timestamp_seconds
+        return self._timestamp
 
     def __len__(self) -> int:
         """
@@ -278,7 +278,7 @@ class BasePoints(ABC):
         return cls(
             concatenated_points,
             first_point_feature_names,
-            timestamp_seconds=points[0].timestamp_seconds,
+            timestamp=points[0].timestamp,
         )
 
     def to_numpy(self) -> npt.NDArray[np.float32]:
@@ -332,17 +332,17 @@ class BasePoints(ABC):
         cls,
         points_np: npt.NDArray[np.float32],
         point_feature_names: Sequence[PointFeatureName],
-        timestamp_seconds: float,
+        timestamp: float,
     ) -> BasePoints:
         """Load points from a numpy array.
 
         Args:
             points_np (npt.NDArray[np.float32]): The points as a numpy array.
             point_feature_names (Sequence[PointFeatureName]): The names of the point features.
-            timestamp_seconds (float): The timestamp of the point cloud data in seconds.
+            timestamp (float): The timestamp of the point cloud data in seconds.
         """
         return cls(
             torch.from_numpy(points_np).float(),
             point_feature_names,
-            timestamp_seconds=timestamp_seconds,
+            timestamp=timestamp,
         )

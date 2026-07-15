@@ -33,7 +33,7 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
 
     def __init__(
         self,
-        dataset_root: str,
+        database_root_path: str,
         max_num_3d_gt_bboxes: int,
         dataset_records_dataframe: pl.DataFrame | None,
         transforms: MultiTaskTransformsCompose | None,
@@ -52,7 +52,7 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
             task type.
         """
         super().__init__(
-            dataset_root=dataset_root,
+            database_root_path=database_root_path,
             max_num_3d_gt_bboxes=max_num_3d_gt_bboxes,
             dataset_records_dataframe=dataset_records_dataframe,
             transforms=transforms,
@@ -97,9 +97,13 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
         else:
             detection3d_gt_bboxes_3d = None
 
-        segmentation3d_gt_sample: MultiTaskGTSample | None = data_samples.get(
+        segmentation3d_multi_task_gt_sample: MultiTaskGTSample | None = data_samples.get(
             TaskType.SEGMENTATION3D, None
         )
+        if segmentation3d_multi_task_gt_sample is not None:
+            segmentation3d_gt_sample = segmentation3d_multi_task_gt_sample.segmentation3d_gt_sample
+        else:
+            segmentation3d_gt_sample = None
 
         # Merge the data samples from different tasks into a single multi-task data row
         return MultiTaskGTSample(
@@ -116,7 +120,7 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
         """
         # Return the relative path from the lidar pointcloud path
         relative_path = "/".join(lidar_pointcloud_path.split("/")[-6:])
-        return str(self.dataset_root / relative_path)
+        return str(self.database_root_path / relative_path)
 
     def get_lidar_pointcloud_data_samples(self, idx: int) -> Sequence[LiDARPointCloudSample]:
         """
@@ -151,7 +155,7 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
             lidar_pointcloud_samples.append(
                 LiDARPointCloudSample(
                     point_cloud_path=lidar_pointcloud_path,
-                    timestamp_seconds=lidar_pointcloud_metadata[
+                    timestamp=lidar_pointcloud_metadata[
                         LidarFrameDatasetSchema.lidar_timestamp_seconds.name
                     ],
                     sensor_to_ego_pose_matrix=torch.tensor(

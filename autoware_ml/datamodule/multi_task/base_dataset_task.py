@@ -8,15 +8,17 @@ from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import Mul
 
 class BaseDatasetTask(ABC):
     """
-    Protocol for dataset tasks that defines how a task-specific dataset should be implemented
-    when retrieving data.
+    Abstract interface for dataset tasks that defines how a task-specific dataset should be
+    implemented when retrieving data.
     """
 
-    def __init__(self, dataset_root: str, dataset_records_dataframe: pl.DataFrame | None) -> None:
+    def __init__(
+        self, database_root_path: str, dataset_records_dataframe: pl.DataFrame | None
+    ) -> None:
         """
         Initialize the dataset task.
         """
-        self.dataset_root = Path(dataset_root)
+        self.database_root_path = Path(database_root_path)
         self.dataset_records_dataframe = self.pre_filter_dataset_records(dataset_records_dataframe)
 
     def pre_filter_dataset_records(

@@ -5,7 +5,7 @@ defaults:
   - detection3d@dataset_tasks.Detection3D: default_detection3d
   - ../../transforms@transforms: default_test_transforms
 
-dataset_root: ${database.database_root_path}
+database_root_path: ${database.root_path}
 
 # Always None since we run splitter in the process
 dataset_records_dataframe: null

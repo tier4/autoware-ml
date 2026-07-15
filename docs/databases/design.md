@@ -20,7 +20,7 @@ classDiagram
 
     class DatabaseInterface {
         <<Protocol>>
-        database_version
+        version
         scenarios
         cache_path
         load_scenario_records()
@@ -92,7 +92,7 @@ classDiagram
 ```python
 class DatabaseInterface(Protocol):
     @property
-    def database_version(self) -> str: ...
+    def version(self) -> str: ...
 
     @property
     def scenarios(self) -> MappingProxyType[str, Scenarios]: ...
@@ -112,8 +112,8 @@ All concrete databases are accessed through this protocol, ensuring downstream c
 class BaseDatabase:
     def __init__(
         self,
-        database_version: str,
-        database_root_path: str,
+        version: str,
+        root_path: str,
         cache_path: str,
         cache_file_prefix_name: str,
         num_workers: int,
@@ -180,7 +180,7 @@ To run dataset generation:
 python3 autoware_ml/scripts/generate_dataset.py \
     --config-name default_t4dataset_generator \
     working_dir=<working_dir> \
-    data_root_path=<dataset_root_path> \
+    data_root_path=<data_root_path> \
     database.num_workers=32
 ```
 

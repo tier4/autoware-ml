@@ -88,6 +88,7 @@ class TestT4Detection3DDataset:
                 "token": "sample",
                 "lidar_path": str(lidar_path),
                 "lidar_points": {"num_pts_feats": 5},
+                "timestamp": 1700000000.1,
                 "instances": [],
                 "sweeps": [],
             }
@@ -100,6 +101,7 @@ class TestT4Detection3DDataset:
 
         assert sample["lidar_path"] == str(lidar_path)
         assert sample["num_pts_feats"] == 5
+        assert sample["timestamp"] == 1700000000.1
         assert sample["instances"] == []
         assert sample["sweeps"] == []
 
@@ -359,6 +361,7 @@ class TestNuscenesDetection3DDataModule:
         sample = {
             "token": "sample",
             "lidar_points": {"lidar_path": "sample.bin", "num_pts_feats": 5},
+            "timestamp": 1700000000.1,
             "instances": [],
             "sweeps": [],
         }
@@ -381,6 +384,7 @@ class TestNuscenesDetection3DDataModule:
         assert train_sample["class_names"] == ["car"]
         assert train_sample["name_mapping"] is None
         assert train_sample["label_to_category"] == {0: "car"}
+        assert train_sample["timestamp"] == 1700000000.1
 
     def test_rejects_train_frame_sampling(self, tmp_path) -> None:
         with pytest.raises(ValueError, match="train_frame_sampling"):

@@ -85,8 +85,8 @@ class T4Dataset(BaseDatabase):
 
     def __init__(
         self,
-        database_version: str,
-        database_root_path: str,
+        version: str,
+        root_path: str,
         scenarios: MappingProxyType[str, T4Scenarios],
         cache_path: str,
         cache_file_prefix_name: str,
@@ -101,8 +101,8 @@ class T4Dataset(BaseDatabase):
         Initialize T4 dataset. Please refer to the BaseDatabase class for more details.
 
         Args:
-          database_version: Version of the dataset.
-          database_root_path: Root path where the actual annotation files are stored.
+          version: Version of the dataset.
+          root_path: Root path where the actual annotation files are stored.
           scenarios: Scenario configurations for each scenario in {'scenario_group_name': scenario_config}.
           cache_path: Path to cache the dataset records.
           cache_file_prefix_name: Prefix name of the cache file, it will be <cache_file_prefix_name>_<dataset_hash>.parquet
@@ -116,8 +116,8 @@ class T4Dataset(BaseDatabase):
 
         logger.info("Initializing T4 dataset...")
         super().__init__(
-            database_version=database_version,
-            database_root_path=database_root_path,
+            version=version,
+            root_path=root_path,
             cache_path=cache_path,
             cache_file_prefix_name=cache_file_prefix_name,
             num_workers=num_workers,
@@ -138,8 +138,8 @@ class T4Dataset(BaseDatabase):
         """
 
         string = (
-            f"T4Dataset(database_version={self._database_version}, "
-            f"database_root_path={str(self._database_root_path)}, "
+            f"T4Dataset(version={self._version}, "
+            f"root_path={str(self._root_path)}, "
             f"cache path={str(self._cache_path)}, "
             f"cache file prefix name={self._cache_file_prefix_name}, "
             f"class_names={self._class_names}, "
@@ -212,7 +212,7 @@ class T4Dataset(BaseDatabase):
         end_time = time.perf_counter()
         elapsed = end_time - start_time
         logger.info(
-            f"Elapsed time to process scenario records: {elapsed:.4f} seconds for the database: {self.database_version}"
+            f"Elapsed time to process scenario records: {elapsed:.4f} seconds for the database: {self.version}"
         )
 
     def _run_t4records_generator(
@@ -231,7 +231,7 @@ class T4Dataset(BaseDatabase):
         # Group params for each worker
         worker_params = [
             T4RecordsGeneratorWorkerParams(
-                database_root_path=self._database_root_path,
+                database_root_path=str(self._root_path),
                 scenario_data=scenario,
                 lidar_pointcloud_num_features=self._lidar_pointcloud_num_features,
                 ignore_label_index=self._ignore_label_index,

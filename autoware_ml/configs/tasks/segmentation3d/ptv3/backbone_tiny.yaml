@@ -1,5 +1,0 @@
-# @package model.backbone
-enc_depths: [2, 2, 2, 2, 2]
-enc_patch_size: [512, 512, 512, 512, 512]
-dec_depths: [0, 0, 0, 0]
-dec_patch_size: [512, 512, 512, 512]
