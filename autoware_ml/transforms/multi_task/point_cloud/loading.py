@@ -82,7 +82,12 @@ class LoadPointsFromFile(MultiTaskBaseTransform):
         """Load point cloud data from a binary file.
 
         Args:
-            file_path: Path to the binary file containing point cloud data.
+            index: Index of the point cloud sample to load.
+            lidar_point_cloud_samples: Sequence of LiDARPointCloudSample containing metadata for
+                each point cloud sample, including file paths and timestamps.
+
+        Returns:
+            BasePoints: Loaded point cloud data.
         """
         if index >= len(lidar_point_cloud_samples):
             raise IndexError(
