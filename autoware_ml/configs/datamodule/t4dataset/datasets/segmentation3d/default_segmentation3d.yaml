@@ -1,5 +1,7 @@
 _target_: autoware_ml.datamodule.multi_task.t4dataset.segmentation3d.T4Segmentation3DTask
 _convert_: all
 
+database_root_path: ${database.root_path}
+
 # Always set to None since we run splitter in the process
 dataset_records_dataframe: null
