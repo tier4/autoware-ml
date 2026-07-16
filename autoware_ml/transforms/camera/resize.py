@@ -14,6 +14,25 @@ from autoware_ml.transforms.camera.utils import as_hwc_image_list, restore_image
 from autoware_ml.utils.calibration import CalibrationData
 
 
+def _crop_with_zero_padding(
+    image: npt.NDArray, crop_x: int, crop_y: int, width: int, height: int
+) -> npt.NDArray:
+    """Crop a window from ``image``, zero-filling any area outside its bounds.
+
+    The window may extend past the image edges (including negative offsets);
+    out-of-bounds pixels stay zero, matching the reference PIL crop behavior.
+    """
+    canvas = np.zeros((height, width) + image.shape[2:], dtype=image.dtype)
+    source_y0 = min(max(crop_y, 0), image.shape[0])
+    source_y1 = min(max(crop_y + height, 0), image.shape[0])
+    source_x0 = min(max(crop_x, 0), image.shape[1])
+    source_x1 = min(max(crop_x + width, 0), image.shape[1])
+    canvas[source_y0 - crop_y : source_y1 - crop_y, source_x0 - crop_x : source_x1 - crop_x] = (
+        image[source_y0:source_y1, source_x0:source_x1]
+    )
+    return canvas
+
+
 class CropAndScale(BaseTransform):
     """Crop and scale augmentation for images."""
 
@@ -223,27 +242,25 @@ class ResizeCropFlipRotImage(BaseTransform):
         final_height, final_width = self.data_aug_conf["final_dim"]
         resize_lim = self.data_aug_conf["resize_lim"]
         bot_pct_lim = self.data_aug_conf["bot_pct_lim"]
+        # The base scale covers the final crop on both axes so one resize plus
+        # one crop describes the pixel mapping exactly. A smaller scale would
+        # need a second stretch to reach final_dim, silently desynchronizing
+        # the updated intrinsics from the pixels.
+        base_resize = max(final_height / source_height, final_width / source_width)
 
         if self.training:
             if isinstance(resize_lim, (int, float)):
-                base_resize = min(final_height / source_height, final_width / source_width)
                 resize = np.random.uniform(base_resize - resize_lim, base_resize + resize_lim)
             else:
                 resize = np.random.uniform(*resize_lim)
             crop_bottom = np.random.uniform(*bot_pct_lim)
-            crop_height = int((1 - crop_bottom) * final_height)
-            crop_width = final_width
             flip = bool(self.data_aug_conf.get("rand_flip", False) and np.random.randint(2))
             rotate = float(np.random.uniform(*self.data_aug_conf.get("rot_lim", (0.0, 0.0))))
         else:
             resize = (
-                min(final_height / source_height, final_width / source_width)
-                if isinstance(resize_lim, (int, float))
-                else float(np.mean(resize_lim))
+                base_resize if isinstance(resize_lim, (int, float)) else float(np.mean(resize_lim))
             )
             crop_bottom = float(np.mean(bot_pct_lim))
-            crop_height = int((1 - crop_bottom) * final_height)
-            crop_width = final_width
             flip = False
             rotate = 0.0
 
@@ -251,16 +268,16 @@ class ResizeCropFlipRotImage(BaseTransform):
         resized_height = int(source_height * resize)
         resized = cv2.resize(image, (resized_width, resized_height))
 
-        crop_y = max(0, resized_height - crop_height)
-        crop_x = max(0, (resized_width - crop_width) // 2)
-        cropped = resized[crop_y : crop_y + crop_height, crop_x : crop_x + crop_width]
-        cropped = cv2.resize(cropped, (final_width, final_height))
+        crop_y = int((1.0 - crop_bottom) * resized_height) - final_height
+        max_crop_x = max(0, resized_width - final_width)
+        crop_x = int(np.random.uniform(0, max_crop_x)) if self.training else max_crop_x // 2
+        cropped = _crop_with_zero_padding(resized, crop_x, crop_y, final_width, final_height)
 
         transform = np.eye(4, dtype=np.float32)
-        transform[0, 0] = resize * final_width / crop_width
-        transform[1, 1] = resize * final_height / crop_height
-        transform[0, 2] = -crop_x * final_width / crop_width
-        transform[1, 2] = -crop_y * final_height / crop_height
+        transform[0, 0] = resize
+        transform[1, 1] = resize
+        transform[0, 2] = -crop_x
+        transform[1, 2] = -crop_y
 
         if flip:
             cropped = np.ascontiguousarray(np.fliplr(cropped))
@@ -283,4 +300,4 @@ class ResizeCropFlipRotImage(BaseTransform):
             rot_mat[:2, :3] = affine
             transform = rot_mat @ transform
 
-        return transform, cropped.astype(image.dtype)
+        return transform, cropped.astype(image.dtype, copy=False)
