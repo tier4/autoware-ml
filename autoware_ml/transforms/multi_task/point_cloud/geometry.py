@@ -284,7 +284,7 @@ class PointsRangeFilter(MultiTaskBaseTransform):
 
         # TODO(Kok Seang): Consider to make it immutable and return a new instance
         # instead of modifying in place.
-        # TODO(Kok Seang): Need to remove labels outside of range for 3D segmantic segmentation.
+        # TODO(Kok Seang): Need to remove labels outside of range for 3D semantic segmentation.
         point_cloud_data.remove_points(point_cloud_range_mask)
         return multi_task_gt_sample
 
