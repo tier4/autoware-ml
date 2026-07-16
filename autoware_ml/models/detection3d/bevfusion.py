@@ -249,7 +249,7 @@ class BEVFusionDetectionModel(BaseModel):
         fusion_layer: nn.Module | None = None,
         optimizer: Callable[..., Optimizer] | None = None,
         scheduler: Callable[[Optimizer], LRScheduler] | None = None,
-        metrics: list[MetricSuite] | None = None,
+        metrics: Sequence[MetricSuite] | None = None,
     ) -> None:
         """Initialize BEVFusion.
 
