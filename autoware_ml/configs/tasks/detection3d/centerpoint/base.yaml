@@ -1,0 +1,108 @@
+# @package _global_
+defaults:
+  - /defaults/default_runtime
+  - _self_
+
+dataset: ???
+
+point_cloud_range: ???
+voxel_size: ???
+
+datamodule:
+  collation_map:
+    points: list
+    gt_boxes: list
+    gt_labels: list
+model:
+  _target_: autoware_ml.models.detection3d.centerpoint.CenterPointDetectionModel
+  metrics: ${dataset.detection3d.metrics}
+  pts_voxel_encoder:
+    _target_: autoware_ml.models.detection3d.encoders.pillar.PillarFeatureNet
+    in_channels: 5
+    feat_channels: [32, 32]
+    voxel_size: ${voxel_size}
+    point_cloud_range: ${point_cloud_range}
+    with_distance: false
+    with_cluster_center: true
+    with_voxel_center: true
+  pts_middle_encoder:
+    _target_: autoware_ml.models.detection3d.encoders.pillar.PointPillarsScatter
+    in_channels: 32
+    output_shape: ???
+  pts_backbone:
+    _target_: autoware_ml.models.detection3d.backbones.second.SECONDBackbone
+    in_channels: 32
+    out_channels: [64, 128, 256]
+    layer_nums: [3, 5, 5]
+    layer_strides: ???
+  pts_neck:
+    _target_: autoware_ml.models.detection3d.necks.second_fpn.SECONDFPN
+    in_channels: [64, 128, 256]
+    out_channels: [128, 128, 128]
+    upsample_strides: [0.5, 1, 2]
+  bbox_head:
+    _target_: autoware_ml.models.detection3d.heads.centerpoint.CenterHead
+    in_channels: 384
+    num_classes: ${dataset.detection3d.num_classes}
+    class_names: ${dataset.detection3d.class_names}
+    shared_channels: 64
+    point_cloud_range: ${point_cloud_range}
+    voxel_size: ${voxel_size}
+    out_size_factor: ???
+    max_objs: 500
+    min_radius: 2
+    score_threshold: 0.0
+    post_max_size: 100
+    nms_min_radius: ???
+    use_velocity: true
+  optimizer:
+    _target_: torch.optim.AdamW
+    _partial_: true
+    lr: 0.0001
+    weight_decay: 0.01
+  scheduler:
+    _target_: autoware_ml.utils.schedulers.cyclic_cosine_annealing.CyclicCosineAnnealingLR
+    _partial_: true
+    warmup_epochs: 8
+    decay_epochs: 22
+    max_lr_factor: ???
+    min_lr_factor: 0.0001
+
+trainer:
+  max_epochs: 30
+  gradient_clip_val: 5.0
+  gradient_clip_algorithm: norm
+
+deploy:
+  onnx:
+    dynamo: false
+    opset_version: 17
+    do_constant_folding: false
+    modules:
+      pts_voxel_encoder_centerpoint:
+        input_names: [input_features]
+        output_names: [pillar_features]
+        dynamic_axes:
+          input_features: { 0: num_voxels, 1: num_max_points }
+          pillar_features: { 0: num_voxels }
+      pts_backbone_neck_head_centerpoint:
+        input_names: [spatial_features]
+        output_names: [heatmap, reg, height, dim, rot, vel]
+        dynamic_axes:
+          spatial_features: { 0: batch_size, 2: H, 3: W }
+          heatmap: { 0: batch_size, 2: H, 3: W }
+          reg: { 0: batch_size, 2: H, 3: W }
+          height: { 0: batch_size, 2: H, 3: W }
+          dim: { 0: batch_size, 2: H, 3: W }
+          rot: { 0: batch_size, 2: H, 3: W }
+          vel: { 0: batch_size, 2: H, 3: W }
+  tensorrt:
+    enabled: false
+
+data_preprocessing:
+  pipeline:
+    - _target_: autoware_ml.preprocessing.detection3d.point_pillar.PointPillarPreprocessor
+      voxel_size: ${voxel_size}
+      point_cloud_range: ${point_cloud_range}
+      max_num_points: 32
+      max_voxels: 96000

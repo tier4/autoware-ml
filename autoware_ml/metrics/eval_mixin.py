@@ -13,7 +13,7 @@ inside ``result`` at epoch end.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import torch.nn as nn
@@ -24,7 +24,9 @@ from autoware_ml.metrics.base import EvalStage, MetricSuite
 class MetricEvalMixin:
     """Owns the metric suites and the validation/test epoch lifecycle."""
 
-    def __init__(self, *args: Any, metrics: list[MetricSuite] | None = None, **kwargs: Any) -> None:
+    def __init__(
+        self, *args: Any, metrics: Sequence[MetricSuite] | None = None, **kwargs: Any
+    ) -> None:
         """Clone the metric suites per stage and register them as submodules.
 
         Args:

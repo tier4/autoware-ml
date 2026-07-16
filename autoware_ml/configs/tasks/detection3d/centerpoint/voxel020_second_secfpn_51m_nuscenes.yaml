@@ -1,0 +1,94 @@
+# @package _global_
+defaults:
+  - /tasks/detection3d/centerpoint/base
+  - /datasets/nuscenes/detection3d
+  - /datasets/nuscenes/lidar
+  - _self_
+
+batch_size: 16
+num_workers: 8
+
+dataset: ${nuscenes}
+
+point_cloud_range: [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
+voxel_size: [0.2, 0.2, 8.0]
+
+model:
+  pts_middle_encoder:
+    output_shape: [512, 512]
+  pts_backbone:
+    layer_strides: [2, 2, 2]
+  bbox_head:
+    out_size_factor: 4
+    nms_min_radius: 1.0
+  scheduler:
+    max_lr_factor: 10.0
+
+datamodule:
+  _target_: autoware_ml.datamodule.nuscenes.detection3d.NuscenesDetection3DDataModule
+  data_root: ${dataset.data_root}
+  train_ann_file: ${datamodule.data_root}/nuscenes_infos_train.pkl
+  val_ann_file: ${datamodule.data_root}/nuscenes_infos_val.pkl
+  test_ann_file: ${datamodule.data_root}/nuscenes_infos_val.pkl
+  class_names: ${dataset.detection3d.class_names}
+  train_dataloader_cfg:
+    batch_size: ${batch_size}
+    num_workers: ${num_workers}
+    shuffle: true
+  val_dataloader_cfg:
+    batch_size: ${batch_size}
+    num_workers: ${num_workers}
+  test_dataloader_cfg:
+    batch_size: ${batch_size}
+    num_workers: ${num_workers}
+  train_transforms:
+    _target_: autoware_ml.transforms.base.TransformsCompose
+    pipeline:
+      - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
+        name_mapping: ${dataset.detection3d.name_mapping}
+      - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
+        sweeps_num: 10
+        load_dim: 5
+        use_dim: [0, 1, 2, 3, 4]
+        time_dim: 4
+        pad_empty_sweeps: true
+        remove_close: true
+      - _target_: autoware_ml.transforms.point_cloud.geometry.RandomFlip3D
+        flip_ratio_bev_horizontal: 0.5
+        flip_ratio_bev_vertical: 0.5
+      - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
+        rot_range: [-1.571, 1.571]
+        scale_ratio_range: [0.9, 1.1]
+        translation_std: [0.5, 0.5, 0.2]
+      - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
+        point_cloud_range: ${point_cloud_range}
+      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeFilter
+        point_cloud_range: ${point_cloud_range}
+      - _target_: autoware_ml.transforms.point_cloud.sampling.PointShuffle
+  val_transforms:
+    _target_: autoware_ml.transforms.base.TransformsCompose
+    pipeline:
+      - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
+        name_mapping: ${dataset.detection3d.name_mapping}
+      - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
+        sweeps_num: 10
+        load_dim: 5
+        use_dim: [0, 1, 2, 3, 4]
+        time_dim: 4
+        pad_empty_sweeps: true
+        remove_close: true
+      - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
+        point_cloud_range: ${point_cloud_range}
+  test_transforms: ${datamodule.val_transforms}
+  predict_transforms:
+    _target_: autoware_ml.transforms.base.TransformsCompose
+    pipeline:
+      - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
+        sweeps_num: 10
+        load_dim: 5
+        use_dim: [0, 1, 2, 3, 4]
+        time_dim: 4
+        pad_empty_sweeps: true
+        remove_close: true
+      - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
+        point_cloud_range: ${point_cloud_range}

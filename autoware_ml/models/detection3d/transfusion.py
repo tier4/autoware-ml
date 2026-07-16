@@ -20,7 +20,7 @@ reusable TransFusion detection components.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 import torch
@@ -133,7 +133,7 @@ class TransFusionDetectionModel(BaseModel):
         bbox_head: torch.nn.Module,
         optimizer: Callable[..., Optimizer] | None = None,
         scheduler: Callable[[Optimizer], LRScheduler] | None = None,
-        metrics: list[MetricSuite] | None = None,
+        metrics: Sequence[MetricSuite] | None = None,
     ) -> None:
         """Initialize TransFusion.
 
