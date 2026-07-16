@@ -111,32 +111,6 @@ class CenterPointDetectionModel(BaseModel):
         """Decode detections and pair them with ground truth for metrics."""
         return detection_eval_output(self.bbox_head.predict(outputs), batch)
 
-    def _forward_with_batch_size(
-        self,
-        voxels: torch.Tensor,
-        num_points: torch.Tensor,
-        voxel_coords: torch.Tensor,
-        batch_size: int | None = None,
-    ) -> dict[str, torch.Tensor]:
-        """Run the lidar backbone and CenterPoint head.
-
-        Args:
-            voxels: Voxel features.
-            num_points: Number of points in each voxel.
-            voxel_coords: Batched voxel coordinates.
-            batch_size: Optional explicit batch size.
-
-        Returns:
-            Detection head outputs.
-        """
-        if batch_size is None:
-            batch_size = infer_batch_size_from_voxel_coords(voxel_coords)
-        point_features = self.pts_voxel_encoder(voxels, num_points, voxel_coords)
-        bev_features = self.pts_middle_encoder(point_features, voxel_coords, batch_size=batch_size)
-        bev_features = self.pts_backbone(bev_features)
-        bev_features = self.pts_neck(bev_features)
-        return self.bbox_head(bev_features)
-
     def forward(
         self,
         voxels: torch.Tensor,
@@ -153,9 +127,12 @@ class CenterPointDetectionModel(BaseModel):
         Returns:
             Detection head outputs.
         """
-        return self._forward_with_batch_size(
-            voxels=voxels, num_points=num_points, voxel_coords=voxel_coords
-        )
+        batch_size = infer_batch_size_from_voxel_coords(voxel_coords)
+        point_features = self.pts_voxel_encoder(voxels, num_points, voxel_coords)
+        bev_features = self.pts_middle_encoder(point_features, voxel_coords, batch_size=batch_size)
+        bev_features = self.pts_backbone(bev_features)
+        bev_features = self.pts_neck(bev_features)
+        return self.bbox_head(bev_features)
 
     def compute_metrics(
         self,
