@@ -130,8 +130,8 @@ Each list entry is a `Box3DDataModel` with the following struct fields:
 | `box3d_dataset_label_name`    | `String`                | Original dataset label name                                                      |
 | `box3d_label_name`            | `String`                | Normalized training/evaluation label name                                        |
 | `box3d_label_index`           | `Int32`                 | Class index of `box3d_label_name`                                                |
-| `box3d_num_lidar_pointclouds` | `Int32`                 | Number of LiDAR points in the box                                                |
-| `box3d_num_radar_pointclouds` | `Int32`                 | Number of radar points in the box                                                |
+| `box3d_num_lidar_points`      | `Int32`                 | Number of LiDAR points in the box                                                |
+| `box3d_num_radar_points`      | `Int32`                 | Number of radar points in the box                                                |
 | `box3d_valid`                 | `Boolean`               | Validity flag for this annotation                                                |
 | `box3d_attributes`            | `List(String)`          | Attribute tags associated with this box                                          |
 | `box3d_coordinate`            | `String`                | Coordinate frame identifier for the box representation                           |

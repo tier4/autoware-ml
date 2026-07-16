@@ -238,8 +238,8 @@ class T4RecordsGenerator:
                     box3d_label_name=box3d.semantic_label.name,
                     # Initially, set all label indices to the ignore label index
                     box3d_label_index=self.ignore_label_index,
-                    box3d_num_lidar_pointclouds=box3d.num_points,
-                    box3d_num_radar_pointclouds=sample_annotation_record.num_radar_pts,
+                    box3d_num_lidar_points=box3d.num_points,
+                    box3d_num_radar_points=sample_annotation_record.num_radar_pts,
                     box3d_valid=box3d_valid,
                     box3d_attributes=box_3d_attributes,
                     box3d_coordinate=CoordinateSystem.LIDAR_COMMON.name,
@@ -604,8 +604,8 @@ class T4RecordsGenerator:
                 [box.box3d_label_index for box in boxes_3d_data_model], dtype=np.int32
             ),
             bbox_label_names=[box.box3d_label_name for box in boxes_3d_data_model],
-            bbox_num_points=np.asarray(
-                [box.box3d_num_lidar_pointclouds for box in boxes_3d_data_model], dtype=np.int32
+            bbox_num_lidar_points=np.asarray(
+                [box.box3d_num_lidar_points for box in boxes_3d_data_model], dtype=np.int32
             ),
             bbox_center_coordinate_type=Box3DCenterCoordinateType.GRAVITY_CENTER,
         )
@@ -626,9 +626,7 @@ class T4RecordsGenerator:
             updated_boxes_3d_data_models.append(
                 boxes_3d.model_copy(
                     update={
-                        Box3DDatasetSchema.BOX3D_NUM_LIDAR_POINTCLOUDS.name: int(
-                            points_in_bboxes_num[i]
-                        )
+                        Box3DDatasetSchema.BOX3D_NUM_LIDAR_POINTS.name: int(points_in_bboxes_num[i])
                     }
                 )
             )

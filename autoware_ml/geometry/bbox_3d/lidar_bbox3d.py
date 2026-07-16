@@ -46,7 +46,7 @@ class LidarBBoxes3D(BaseBBoxes3D):
         bbox_params: Float32[Tensor, "num_bboxes num_Box3DFieldIndex"],
         bbox_labels: Int32[Tensor, " num_bboxes"],
         bbox_label_names: Sequence[str],
-        bbox_num_points: Int32[Tensor, " num_bboxes"],
+        bbox_num_lidar_points: Int32[Tensor, " num_bboxes"],
         bbox_center_coordinate_type: Box3DCenterCoordinateType,
     ) -> None:
         """
@@ -56,7 +56,7 @@ class LidarBBoxes3D(BaseBBoxes3D):
             bbox_params (Float32[Tensor, "num_bboxes num_Box3DFieldIndex"]): The parameters of the 3D bounding boxes.
             bbox_labels (Int32[Tensor, "num_bboxes"]): The labels of the 3D bounding boxes.
             bbox_label_names (Sequence[str]): The label names of the 3D bounding boxes.
-            bbox_num_points (Int32[Tensor, "num_bboxes"]): The number of points in each 3D bounding box.
+            bbox_num_lidar_points (Int32[Tensor, "num_bboxes"]): The number of LiDAR points in each 3D bounding box.
             bbox_center_coordinate_type (Box3DCenterCoordinateType): The center coordinate type of the 3D bounding boxes.
                 It only support "gravity_center (center of z is in the middle)" for now.
                 We specify this to make sure users are aware of the center coordinate type being used.
@@ -65,7 +65,7 @@ class LidarBBoxes3D(BaseBBoxes3D):
             bbox_params=bbox_params,
             bbox_labels=bbox_labels,
             bbox_label_names=bbox_label_names,
-            bbox_num_points=bbox_num_points,
+            bbox_num_lidar_points=bbox_num_lidar_points,
             bbox_center_coordinate_type=bbox_center_coordinate_type,
         )
 
