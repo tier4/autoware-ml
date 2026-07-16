@@ -73,5 +73,5 @@ pipeline:
   - _target_: autoware_ml.transforms.multi_task.bboxes_3d.geometry.BBoxesMinPointsFilter
     _convert_: all
 
-    min_points: 0
+    min_points: 3
     bev_range: [-60.0, -60.0, 60.0, 60.0]
