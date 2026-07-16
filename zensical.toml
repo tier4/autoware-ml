@@ -35,6 +35,7 @@ nav = [
   ]},
   { "Models" = [
     { "Calibration Status" = "models/calibration-status.md" },
+    { "CenterPoint" = "models/centerpoint.md" },
     { "TransFusion" = "models/transfusion.md" },
     { "BEVFusion" = "models/bevfusion.md" },
     { "FRNet" = "models/frnet.md" },
