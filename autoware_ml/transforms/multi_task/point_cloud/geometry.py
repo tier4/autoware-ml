@@ -309,5 +309,6 @@ class PointsRandomShuffle(MultiTaskBaseTransform):
 
         # TODO(Kok Seang): Consider to make it immutable and return a new instance
         # instead of modifying in place.
+        # TODO(Kok Seang): Need to maintain the same order for semseg3d.
         point_cloud_data.shuffle()
         return multi_task_gt_sample
