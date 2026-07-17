@@ -6,12 +6,17 @@ Note that the code is modified from:
 https://github.com/open-mmlab/mmdetection3d/blob/main/mmdet3d/structures/bbox_3d/lidar_box3d.py
 """
 
+from typing import Sequence
 from torch import Tensor
 from jaxtyping import Float32, Int32
 import torch
 
 from autoware_ml.geometry.bbox_3d.base_bbox3d import BaseBBoxes3D
-from autoware_ml.geometry.utils import create_axis_rotation_matrices, rotate_points_3d
+from autoware_ml.geometry.utils import (
+    create_axis_rotation_matrices,
+    rotate_points_3d,
+    points_in_convex_polygon_3d,
+)
 from autoware_ml.types.spatial import BEVDirection, RotationAxis
 from autoware_ml.types.geometry import Box3DFieldIndex, Box3DCenterCoordinateType
 
@@ -40,20 +45,27 @@ class LidarBBoxes3D(BaseBBoxes3D):
         self,
         bbox_params: Float32[Tensor, "num_bboxes num_Box3DFieldIndex"],
         bbox_labels: Int32[Tensor, " num_bboxes"],
+        bbox_label_names: Sequence[str],
+        bbox_num_lidar_points: Int32[Tensor, " num_bboxes"],
         bbox_center_coordinate_type: Box3DCenterCoordinateType,
     ) -> None:
         """
         Initialize the LidarBBoxes3D instance.
 
         Args:
-            bbox_params: A tensor of shape (num_bboxes, num_Box3DFieldIndex) representing the
-                parameters of the 3D bounding boxes.
-            bbox_labels: A tensor of shape (num_bboxes,) representing the labels of the 3D bounding boxes.
-            bbox_center_coordinate_type: The center coordinate type of the 3D bounding boxes.
+            bbox_params (Float32[Tensor, "num_bboxes num_Box3DFieldIndex"]): The parameters of the 3D bounding boxes.
+            bbox_labels (Int32[Tensor, "num_bboxes"]): The labels of the 3D bounding boxes.
+            bbox_label_names (Sequence[str]): The label names of the 3D bounding boxes.
+            bbox_num_lidar_points (Int32[Tensor, "num_bboxes"]): The number of LiDAR points in each 3D bounding box.
+            bbox_center_coordinate_type (Box3DCenterCoordinateType): The center coordinate type of the 3D bounding boxes.
+                It only support "gravity_center (center of z is in the middle)" for now.
+                We specify this to make sure users are aware of the center coordinate type being used.
         """
         super().__init__(
             bbox_params=bbox_params,
             bbox_labels=bbox_labels,
+            bbox_label_names=bbox_label_names,
+            bbox_num_lidar_points=bbox_num_lidar_points,
             bbox_center_coordinate_type=bbox_center_coordinate_type,
         )
 
@@ -103,6 +115,58 @@ class LidarBBoxes3D(BaseBBoxes3D):
         corners = rotate_points_3d(points=corners, rotation_matrices=rotation_matrices)
         corners += self.bbox_params[:, :3].view(-1, 1, 3)
         return corners
+
+    def corners_to_surfaces_3d(self) -> Float32[Tensor, "num_bboxes 6 4 3"]:
+        """
+        Get the corners of the 3D bounding boxes in the form of surfaces.
+
+        Returns:
+            (num_bboxes, 6, 4, 3): The corners of the 3D bounding boxes as surfaces, where
+                6 is the number of surface, 4 is the number of corners for each surface,
+                and 3 is the (x, y, z) coordinates.
+        """
+        corners = self.corners
+        surfaces = torch.stack(
+            [
+                corners[:, [0, 1, 2, 3]],  # front surface
+                corners[:, [7, 6, 5, 4]],  # back surface
+                corners[:, [0, 3, 7, 4]],  # bottom surface
+                corners[:, [1, 5, 6, 2]],  # top surface
+                corners[:, [0, 4, 5, 1]],  # left surface
+                corners[:, [3, 2, 6, 7]],  # right surface
+            ],
+            dim=1,
+        )
+        return surfaces
+
+    def compute_points_in_bboxes(
+        self, points: Float32[Tensor, "num_points 3"]
+    ) -> Float32[Tensor, "num_bboxes num_points"]:
+        """
+        Compute the number of points inside each 3D bounding box.
+
+        Args:
+            points (Float32[Tensor, "num_points 3"]): The point cloud data in shape (N, 3).
+
+        Returns:
+            Float32[Tensor, "num_bboxes num_points"]: A tensor indicating the number of points inside each bounding box.
+        """
+        if self.bbox_params.numel() == 0 or points.numel() == 0:
+            return torch.zeros(
+                (self.bbox_params.shape[0], points.shape[0]), device=self.bbox_params.device
+            )
+
+        # Create a mask for each bounding box to check if points are inside
+        in_bboxes_mask = torch.zeros(
+            (self.bbox_params.shape[0], points.shape[0]),
+            dtype=torch.bool,
+            device=self.bbox_params.device,
+        )
+
+        # Compute the surfaces of the bounding boxes
+        surfaces = self.corners_to_surfaces_3d()
+        in_bboxes_mask = points_in_convex_polygon_3d(points, surfaces)
+        return in_bboxes_mask
 
     def rotate(
         self,

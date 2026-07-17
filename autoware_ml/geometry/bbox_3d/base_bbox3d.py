@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import copy
+from typing import Sequence
 
 from jaxtyping import Float32, Int32, Bool
 import torch
@@ -36,6 +37,8 @@ class BaseBBoxes3D(ABC):
         self,
         bbox_params: Float32[Tensor, "num_bboxes num_Box3DFieldIndex"],
         bbox_labels: Int32[Tensor, " num_bboxes"],
+        bbox_label_names: Sequence[str],
+        bbox_num_lidar_points: Int32[Tensor, " num_bboxes"],
         bbox_center_coordinate_type: Box3DCenterCoordinateType,
     ) -> None:
         """
@@ -46,6 +49,8 @@ class BaseBBoxes3D(ABC):
         Args:
             bbox_params (Float32[Tensor, "num_bboxes num_Box3DFieldIndex"]): The parameters of the 3D bounding boxes.
             bbox_labels (Int32[Tensor, "num_bboxes"]): The labels of the 3D bounding boxes.
+            bbox_label_names (Sequence[str]): The label names of the 3D bounding boxes.
+            bbox_num_lidar_points (Int32[Tensor, "num_bboxes"]): The number of LiDAR points in each 3D bounding box.
             bbox_center_coordinate_type (Box3DCenterCoordinateType): The center coordinate type of the 3D bounding boxes.
                 It only support "gravity_center (center of z is in the middle)" for now.
                 We specify this to make sure users are aware of the center coordinate type being used.
@@ -53,6 +58,8 @@ class BaseBBoxes3D(ABC):
 
         self._bbox_params = bbox_params
         self._bbox_labels = bbox_labels
+        self._bbox_label_names = bbox_label_names
+        self._bbox_num_lidar_points = bbox_num_lidar_points
         self._bbox_center_coordinate_type = bbox_center_coordinate_type
         if self._bbox_center_coordinate_type != Box3DCenterCoordinateType.GRAVITY_CENTER:
             raise ValueError(
@@ -86,6 +93,9 @@ class BaseBBoxes3D(ABC):
 
         Args:
             other (BaseBBoxes3D): Another instance of BaseBBoxes3D to compare with.
+
+        Returns:
+            bool: True if the two instances are equal, False otherwise.
         """
         if not isinstance(other, BaseBBoxes3D):
             return NotImplemented
@@ -93,6 +103,7 @@ class BaseBBoxes3D(ABC):
         return (
             torch.equal(self.bbox_params, other.bbox_params)
             and torch.equal(self.bbox_labels, other.bbox_labels)
+            and self.bbox_label_names == other.bbox_label_names
             and self.bbox_center_coordinate_type == other.bbox_center_coordinate_type
         )
 
@@ -114,8 +125,8 @@ class BaseBBoxes3D(ABC):
                 f"but got {self.bbox_labels.shape} for {self.bbox_params.shape[0]} bounding boxes"
             )
 
-        if not (self.dims >= 0).all():
-            raise ValueError("All bounding boxes must have non-negative dimensions.")
+        if not (self.dims > 0).all():
+            raise ValueError("All bounding boxes must have positive dimensions.")
 
     @property
     def bbox_params(self) -> Float32[Tensor, "num_bboxes num_Box3DFieldIndex"]:
@@ -128,6 +139,26 @@ class BaseBBoxes3D(ABC):
             parameters defined in Box3DFieldIndex.
         """
         return self._bbox_params
+
+    @property
+    def bbox_label_names(self) -> Sequence[str]:
+        """
+        Get the label names of the 3D bounding boxes.
+
+        Returns:
+            Sequence[str]: The label names of the 3D bounding boxes.
+        """
+        return self._bbox_label_names
+
+    @property
+    def bbox_num_lidar_points(self) -> Int32[Tensor, " num_bboxes"]:
+        """
+        Get the number of points in each 3D bounding box.
+
+        Returns:
+            (num_bboxes,): The number of points in each 3D bounding box.
+        """
+        return self._bbox_num_lidar_points
 
     @property
     def bbox_center_coordinate_type(self) -> Box3DCenterCoordinateType:
@@ -270,6 +301,37 @@ class BaseBBoxes3D(ABC):
         """
         raise NotImplementedError("Subclasses must implement the `corners` property.")
 
+    @abstractmethod
+    def corners_to_surfaces_3d(self) -> Float32[Tensor, "num_bboxes 6 4 3"]:
+        """
+        Get the corners of the 3D bounding boxes in the form of surfaces.
+
+        Returns:
+            (num_bboxes, 6, 4, 3): The corners of the 3D bounding boxes as surfaces, where
+                6 is the number of surface, 4 is the number of corners for each surface,
+                and 3 is the (x, y, z) coordinates.
+        """
+        raise NotImplementedError(
+            "Subclasses must implement the `corners_to_surfaces_3d` property."
+        )
+
+    @abstractmethod
+    def compute_points_in_bboxes(
+        self, points: Float32[Tensor, "num_points 3"]
+    ) -> Bool[Tensor, "num_bboxes num_points"]:
+        """
+        Compute whether the given points are inside the 3D bounding boxes.
+
+        Args:
+            points (Float32[Tensor, "num_points 3"]): The points to check, with shape (num_points, 3).
+
+        Returns:
+            Bool[Tensor, "num_bboxes num_points"]: A boolean tensor indicating whether each point is inside each bounding box.
+        """
+        raise NotImplementedError(
+            "Subclasses must implement the `compute_points_in_bboxes` method."
+        )
+
     @property
     def bev_center(self) -> Float32[Tensor, "num_bboxes 2"]:
         """
@@ -382,6 +444,20 @@ class BaseBBoxes3D(ABC):
         )
         return in_range_masks
 
+    def remove_bboxes(self, valid_masks: Bool[Tensor, " num_bboxes"]) -> None:
+        """
+        Remove 3D bounding boxes based on a boolean mask.
+
+        Args:
+            valid_masks (Bool[Tensor, " num_bboxes"]): A boolean tensor indicating which bounding boxes to keep.
+        """
+        self._bbox_params = self._bbox_params[valid_masks]
+        self._bbox_labels = self._bbox_labels[valid_masks]
+        self._bbox_num_lidar_points = self._bbox_num_lidar_points[valid_masks]
+        self._bbox_label_names = [
+            name for i, name in enumerate(self._bbox_label_names) if valid_masks[i]
+        ]
+
     def scale(self, scale_factor: float) -> None:
         """
         Horizontally and vertically scale the 3D bounding boxes using a given scale factor.
@@ -482,6 +558,8 @@ class BaseBBoxes3D(ABC):
         cls,
         bbox_params: npt.NDArray[np.float32],
         bbox_labels: npt.NDArray[np.int32],
+        bbox_label_names: Sequence[str],
+        bbox_num_lidar_points: npt.NDArray[np.int32],
         bbox_center_coordinate_type: Box3DCenterCoordinateType,
     ) -> BaseBBoxes3D:
         """
@@ -492,13 +570,18 @@ class BaseBBoxes3D(ABC):
                 representation of the 3D bounding boxes.
             bbox_labels (npt.NDArray[np.int32], (num_bboxes,)): A NumPy array representation of the
                 labels of the 3D bounding boxes.
+            bbox_num_lidar_points (npt.NDArray[np.int32], (num_bboxes,)): A NumPy array representation of the
+                number of lidar points in each 3D bounding box.
             bbox_center_coordinate_type (Box3DCenterCoordinateType): The center coordinate type of
                 the 3D bounding boxes.
         """
         bbox_params_tensor = torch.from_numpy(bbox_params).float()
         bbox_labels_tensor = torch.from_numpy(bbox_labels).int()
+        bbox_num_lidar_points_tensor = torch.from_numpy(bbox_num_lidar_points).int()
         return cls(
             bbox_params=bbox_params_tensor,
             bbox_labels=bbox_labels_tensor,
+            bbox_num_lidar_points=bbox_num_lidar_points_tensor,
             bbox_center_coordinate_type=bbox_center_coordinate_type,
+            bbox_label_names=bbox_label_names,
         )

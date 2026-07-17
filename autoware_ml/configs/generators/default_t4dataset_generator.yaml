@@ -11,6 +11,10 @@ defaults:
   - override hydra/hydra_logging: none # Disable hydra's logging
   - _self_
 
+# Common settings
+# [x_min, y_min, z_min, x_max, y_max, z_max]
+point_cloud_range: [-122.40, -122.40, -3.0, 122.40, 122.40, 5.0]
+
 # Directory structure
 date_format: "%Y.%m.%d.%H.%M.%S"
 experiment_uid: ${now:${date_format}} # Unique Id of the experiment, default to timestamp

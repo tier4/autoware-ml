@@ -42,8 +42,8 @@ class Box3DDatasetSchema(BaseFieldSchema):
     BOX3D_DATASET_LABEL_NAME = DatasetTableColumn("box3d_dataset_label_name", pl.String)
     BOX3D_LABEL_NAME = DatasetTableColumn("box3d_label_name", pl.String)
     BOX3D_LABEL_INDEX = DatasetTableColumn("box3d_label_index", pl.Int32)
-    BOX3D_NUM_LIDAR_POINTCLOUDS = DatasetTableColumn("box3d_num_lidar_pointclouds", pl.Int32)
-    BOX3D_NUM_RADAR_POINTCLOUDS = DatasetTableColumn("box3d_num_radar_pointclouds", pl.Int32)
+    BOX3D_NUM_LIDAR_POINTS = DatasetTableColumn("box3d_num_lidar_points", pl.Int32)
+    BOX3D_NUM_RADAR_POINTS = DatasetTableColumn("box3d_num_radar_points", pl.Int32)
     BOX3D_VALID = DatasetTableColumn("box3d_valid", pl.Boolean)
     BOX3D_ATTRIBUTES = DatasetTableColumn("box3d_attributes", pl.List(pl.String))
     BOX3D_COORDINATE = DatasetTableColumn("box3d_coordinate", pl.String)
@@ -60,8 +60,8 @@ class Box3DDataModel(BaseModel, DataModelInterface):
       box3d_dataset_label_name: Dataset label name for the 3D bounding box.
       box3d_label_name: Label name for the 3D bounding box.
       box3d_label_index: Label index for the 3D bounding box.
-      box3d_num_lidar_pointclouds: Number of lidar pointclouds for the 3D bounding box.
-      box3d_num_radar_pointclouds: Number of radar pointclouds for the 3D bounding box.
+      box3d_num_lidar_points: Number of lidar points for the 3D bounding box.
+      box3d_num_radar_points: Number of radar points for the 3D bounding box.
       box3d_valid: Valid flag for the 3D bounding box.
       box3d_attributes: Attributes for the 3D bounding box.
     """
@@ -73,18 +73,18 @@ class Box3DDataModel(BaseModel, DataModelInterface):
     box3d_dataset_label_name: str
     box3d_label_name: str
     box3d_label_index: int
-    box3d_num_lidar_pointclouds: int
-    box3d_num_radar_pointclouds: int
+    box3d_num_lidar_points: int
+    box3d_num_radar_points: int
     box3d_valid: bool
     box3d_attributes: Set[str]
     box3d_coordinate: str
 
     def to_dictionary(self) -> Mapping[str, Any]:
         """
-        Convert the category mapping data model to a dictionary.
+        Convert the 3D bounding box data model to a dictionary.
 
         Returns:
-          Mapping[str, Any]: Dictionary representation of the category mapping data model.
+          Mapping[str, Any]: Dictionary representation of the 3D bounding box data model.
         """
         return {
             Box3DDatasetSchema.BOX3D_PARAMS.name: self.box3d_params_fp32,
@@ -92,8 +92,8 @@ class Box3DDataModel(BaseModel, DataModelInterface):
             Box3DDatasetSchema.BOX3D_DATASET_LABEL_NAME.name: self.box3d_dataset_label_name,
             Box3DDatasetSchema.BOX3D_LABEL_NAME.name: self.box3d_label_name,
             Box3DDatasetSchema.BOX3D_LABEL_INDEX.name: self.box3d_label_index,
-            Box3DDatasetSchema.BOX3D_NUM_LIDAR_POINTCLOUDS.name: self.box3d_num_lidar_pointclouds,
-            Box3DDatasetSchema.BOX3D_NUM_RADAR_POINTCLOUDS.name: self.box3d_num_radar_pointclouds,
+            Box3DDatasetSchema.BOX3D_NUM_LIDAR_POINTS.name: self.box3d_num_lidar_points,
+            Box3DDatasetSchema.BOX3D_NUM_RADAR_POINTS.name: self.box3d_num_radar_points,
             Box3DDatasetSchema.BOX3D_VALID.name: self.box3d_valid,
             Box3DDatasetSchema.BOX3D_ATTRIBUTES.name: sorted(list(self.box3d_attributes)),
             Box3DDatasetSchema.BOX3D_COORDINATE.name: self.box3d_coordinate,
@@ -112,11 +112,10 @@ class Box3DDataModel(BaseModel, DataModelInterface):
     @classmethod
     def load_from_dictionary(cls, data_model: Mapping[str, Any]) -> Box3DDataModel:
         """
-        Load the category mapping data model and decode it to the corresponding CategoryMappingDataModel
-        from a dictionary, which is deserialized from a Polars dataframe.
+        Load the 3D bounding box data model from a dictionary, which is deserialized from a Polars dataframe.
 
         Args:
-          data_model: Dictionary representation of the category mapping data model, which is
+          data_model: Dictionary representation of the 3D bounding box data model, which is
           deserialized from a Polars dataframe.
         """
         return cls(
@@ -127,12 +126,8 @@ class Box3DDataModel(BaseModel, DataModelInterface):
             box3d_dataset_label_name=data_model[Box3DDatasetSchema.BOX3D_DATASET_LABEL_NAME.name],
             box3d_label_name=data_model[Box3DDatasetSchema.BOX3D_LABEL_NAME.name],
             box3d_label_index=data_model[Box3DDatasetSchema.BOX3D_LABEL_INDEX.name],
-            box3d_num_lidar_pointclouds=data_model[
-                Box3DDatasetSchema.BOX3D_NUM_LIDAR_POINTCLOUDS.name
-            ],
-            box3d_num_radar_pointclouds=data_model[
-                Box3DDatasetSchema.BOX3D_NUM_RADAR_POINTCLOUDS.name
-            ],
+            box3d_num_lidar_points=data_model[Box3DDatasetSchema.BOX3D_NUM_LIDAR_POINTS.name],
+            box3d_num_radar_points=data_model[Box3DDatasetSchema.BOX3D_NUM_RADAR_POINTS.name],
             box3d_valid=data_model[Box3DDatasetSchema.BOX3D_VALID.name],
             box3d_attributes=set(data_model[Box3DDatasetSchema.BOX3D_ATTRIBUTES.name]),
             box3d_coordinate=data_model[Box3DDatasetSchema.BOX3D_COORDINATE.name],
@@ -145,14 +140,14 @@ class Box3DDataModel(BaseModel, DataModelInterface):
         box3d_dataset_label_name: str | None = None,
         box3d_label_name: str | None = None,
         box3d_label_index: int | None = None,
-        box3d_num_lidar_pointclouds: int | None = None,
-        box3d_num_radar_pointclouds: int | None = None,
+        box3d_num_lidar_points: int | None = None,
+        box3d_num_radar_points: int | None = None,
         box3d_valid: bool | None = None,
         box3d_attributes: Set[str] | None = None,
         box3d_coordinate: str | None = None,
     ) -> Box3DDataModel:
         """
-        Create a new Boxes3DDataModel object with the given attributes.
+        Create a new Box3DDataModel object with the given attributes.
         """
         updates = {k: v for k, v in locals().items() if k != "self" and v is not None}
         return self.model_copy(update=updates)

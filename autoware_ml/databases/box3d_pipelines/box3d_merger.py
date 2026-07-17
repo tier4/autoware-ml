@@ -257,13 +257,13 @@ class Box3DMerger(Box3DPipeline):
                 ].box3d_dataset_label_name
                 merged_box3d_label_name = target_label
                 merged_box3d_label_index = self.label_indices[target_label]
-                merged_box3d_num_lidar_pointclouds = (
-                    boxes3d_data_model[box3d_idx_1].box3d_num_lidar_pointclouds
-                    + boxes3d_data_model[box3d_idx_2].box3d_num_lidar_pointclouds
+                merged_box3d_num_lidar_points = (
+                    boxes3d_data_model[box3d_idx_1].box3d_num_lidar_points
+                    + boxes3d_data_model[box3d_idx_2].box3d_num_lidar_points
                 )
-                merged_box3d_num_radar_pointclouds = (
-                    boxes3d_data_model[box3d_idx_1].box3d_num_radar_pointclouds
-                    + boxes3d_data_model[box3d_idx_2].box3d_num_radar_pointclouds
+                merged_box3d_num_radar_points = (
+                    boxes3d_data_model[box3d_idx_1].box3d_num_radar_points
+                    + boxes3d_data_model[box3d_idx_2].box3d_num_radar_points
                 )
                 merged_box3d_valid = (
                     boxes3d_data_model[box3d_idx_1].box3d_valid
@@ -281,8 +281,8 @@ class Box3DMerger(Box3DPipeline):
                         box3d_dataset_label_name=merged_box3d_dataset_label_name,
                         box3d_label_name=merged_box3d_label_name,
                         box3d_label_index=merged_box3d_label_index,
-                        box3d_num_lidar_pointclouds=merged_box3d_num_lidar_pointclouds,
-                        box3d_num_radar_pointclouds=merged_box3d_num_radar_pointclouds,
+                        box3d_num_lidar_points=merged_box3d_num_lidar_points,
+                        box3d_num_radar_points=merged_box3d_num_radar_points,
                         box3d_valid=merged_box3d_valid,
                         box3d_attributes=merged_box3d_attributes,
                         box3d_coordinate=merged_box3d_coordinate,
