@@ -90,7 +90,7 @@ class TestVoxelization(unittest.TestCase):
         self.assertTrue(torch.allclose(hard_voxelization_outputs.voxels, self.expected_voxels))
 
         # coords is assumed to be in (x, y, z)
-        # Concat batch_indices to coords to get (batch, x, y, z)
+        # Concat batch_indices to coords to get (batch_idx, x, y, z)
         voxel_coords = torch.cat(
             [
                 hard_voxelization_outputs.batch_indices.unsqueeze(1),
