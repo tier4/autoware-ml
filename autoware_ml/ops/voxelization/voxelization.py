@@ -30,7 +30,8 @@ class VoxelsData(NamedTuple):
     Container for hard-voxelization results.
 
     Attributes:
-        voxels (M, max_num_points, C): Padded point features.
+        voxels (M, max_num_points, C): Padded point features grouped by their respective voxel,
+            where a point value is fully 0 when the voxel is padded.
             C is either (x, y, z, intensity) or (x, y, z, time_lag) if C is 4. C is
             (x, y, z, intensity, time_lag) when it's 5. Empty slots are zero-filled.
         coords (M, 3): Integer voxel coordinates in (x, y, z).
