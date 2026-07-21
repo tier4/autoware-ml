@@ -36,7 +36,7 @@ class VoxelsData(NamedTuple):
         coords (M, 3): Integer voxel coordinates in (x, y, z).
         num_points (M,): Number of valid points per voxel.
         batch_indices (M,): Batch indices for each voxel.
-      where M is batch_size * maximum number of voxels.
+      M = batch_size * maximum number of voxels.
     """
 
     voxels: Float32[torch.Tensor, "M max_num_points C"]
@@ -204,7 +204,7 @@ def batch_hard_voxelize(
             - coords (M, 3): Integer voxel coordinates in XYZ order.
             - num_points (M,): Number of valid points per voxel.
             - batch_indices (M,): Batch indices for each voxel.
-        where M = batch_size * maximum number of voxels.
+        M = batch_size * maximum number of voxels.
     """
     if points.shape[0] != points_batch_indices.shape[0]:
         raise ValueError(
