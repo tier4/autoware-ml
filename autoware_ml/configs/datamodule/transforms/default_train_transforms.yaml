@@ -9,40 +9,40 @@ pipeline:
     use_dim: [0, 1, 2, 3] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]
     bev_remove_radius: 0.0
 
-  # - _target_: autoware_ml.transforms.multi_task.point_cloud.loading.LoadMultiSweepPointsFromFile
-  #   _convert_: all
+  - _target_: autoware_ml.transforms.multi_task.point_cloud.loading.LoadMultiSweepPointsFromFile
+    _convert_: all
 
-  #   sweeps_num: 1
-  #   bev_remove_radius: 1.0
-  #   test_mode: false
-  #   use_timestamp_difference: true
-  #   load_dim: ${database.lidar_pointcloud_num_features}
-  #   use_dim: [0, 1, 2, 3] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]
+    sweeps_num: 1
+    bev_remove_radius: 1.0
+    test_mode: false
+    use_timestamp_difference: true
+    load_dim: ${database.lidar_pointcloud_num_features}
+    use_dim: [0, 1, 2, 3] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]
 
-  # - _target_: autoware_ml.transforms.multi_task.point_cloud.geometry.GlobalRotScaleTrans
-  #   _convert_: all
+  - _target_: autoware_ml.transforms.multi_task.point_cloud.geometry.GlobalRotScaleTrans
+    _convert_: all
 
-  #   # In radians, the range of rotation angles for random rotation around the Z-axis.
-  #   # The range is specified as [min_angle, max_angle].
-  #   yaw_rot_range: [-0.78539816, 0.78539816]
-  #   # The range of scale factors for random scaling.
-  #   scale_ratio_range: [0.95, 1.05]
-  #   # The standard deviation for Gaussian translation noise.
-  #   translation_std: [0.5, 0.5, 0.2]
+    # In radians, the range of rotation angles for random rotation around the Z-axis.
+    # The range is specified as [min_angle, max_angle].
+    yaw_rot_range: [-0.78539816, 0.78539816]
+    # The range of scale factors for random scaling.
+    scale_ratio_range: [0.95, 1.05]
+    # The standard deviation for Gaussian translation noise.
+    translation_std: [0.5, 0.5, 0.2]
 
-  # - _target_: autoware_ml.transforms.multi_task.point_cloud.geometry.GlobalBEVRandomFlip
-  #   _convert_: all
+  - _target_: autoware_ml.transforms.multi_task.point_cloud.geometry.GlobalBEVRandomFlip
+    _convert_: all
 
-  #   horizontal_flip_ratio: 0.5
-  #   vertical_flip_ratio: 0.5
+    horizontal_flip_ratio: 0.5
+    vertical_flip_ratio: 0.5
 
   - _target_: autoware_ml.transforms.multi_task.point_cloud.geometry.PointsRangeFilter
     _convert_: all
 
     points_range: ${point_cloud_range}
 
-  # - _target_: autoware_ml.transforms.multi_task.point_cloud.geometry.PointsRandomShuffle
-  #   _convert_: all
+  - _target_: autoware_ml.transforms.multi_task.point_cloud.geometry.PointsRandomShuffle
+    _convert_: all
 
   - _target_: autoware_ml.transforms.multi_task.bboxes_3d.loading.BBoxesLabelNameFilter
     _convert_: all
