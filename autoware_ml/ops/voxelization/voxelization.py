@@ -238,7 +238,7 @@ def batch_hard_voxelize(
             batch_indices=torch.zeros((0,), device=points.device, dtype=torch.int32),
         )
 
-    # Flat voxel key in BZYX order (Z varies slowest within a batch)
+    # Flat voxel key in (Batch, Z, Y, X) order (Z varies slowest within a batch)
     # key = batch_index * Nz * Ny * Nx  +  z * Ny * Nx  +  y * Nx  +  x
     # Given tuples of (batch_idx, x, y, z):
     # (0, 0, 0, 0), (0, 1, 0, 0), (1, 0, 0, 0), (1, 1, 0, 0), (2, 1, 0, 0), (3, 0, 0, 0),
@@ -275,7 +275,7 @@ def batch_hard_voxelize(
 
     # Compute max_voxels for each sample across voxels by ranking each voxel within its batch group.
     # For each sample within a batch, voxels are continuous since batch varies slowest in the key.
-    voxel_batch_indices = sorted_batch_indices[voxel_starts]  # (uniqie_total_voxels,)
+    voxel_batch_indices = sorted_batch_indices[voxel_starts]  # (unique_total_voxels,)
 
     # Compute unique batch indices and their counts. For example, if a batch has 3 samples, and the
     # number of voxels in each sample: [3, 2, 1], then voxel_batch_indices: [0, 0, 0, 1, 1, 2],
