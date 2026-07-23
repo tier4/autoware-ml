@@ -13,6 +13,18 @@ from autoware_ml.transforms.base import TransformsCompose
 logger = logging.getLogger(__name__)
 
 
+def _seeded_rng() -> np.random.Generator:
+    """Derive a generator from the globally seeded NumPy state.
+
+    ``seed_everything(workers=True)`` seeds the global NumPy RNG per dataloader
+    worker, so deriving from it keeps secondary-sample draws reproducible.
+
+    Returns:
+        Generator seeded from the global NumPy RNG.
+    """
+    return np.random.default_rng(np.random.randint(2**32))
+
+
 @dataclass
 class PipelineContext:
     """Provide dataset access for context-aware transforms.
@@ -24,7 +36,7 @@ class PipelineContext:
 
     dataset: Any
     index: int
-    rng: np.random.Generator = field(default_factory=np.random.default_rng)
+    rng: np.random.Generator = field(default_factory=_seeded_rng)
 
     def get_data_info(self, index: int) -> dict[str, Any]:
         """Load raw metadata for the requested dataset index.
