@@ -1,0 +1,116 @@
+# @package _global_
+defaults:
+  - /tasks/detection3d/streampetr/base
+  - /datasets/nuscenes/detection3d
+  - /datasets/nuscenes/camera
+  - _self_
+
+batch_size: 8
+num_workers: 16
+
+dataset: ${nuscenes}
+
+point_cloud_range: [-54.0, -54.0, -5.0, 54.0, 54.0, 3.0]
+post_center_range: [-61.2, -61.2, -10.0, 61.2, 61.2, 10.0]
+
+datamodule:
+  _target_: autoware_ml.datamodule.nuscenes.multiview_detection3d.NuscenesMultiviewDetection3DDataModule
+  data_root: ${dataset.data_root}
+  train_ann_file: nuscenes_infos_train.pkl
+  val_ann_file: nuscenes_infos_val.pkl
+  test_ann_file: nuscenes_infos_test.pkl
+  class_names: ${dataset.detection3d.class_names}
+  camera_order: ${dataset.camera.camera_order}
+  streaming: true
+  train_dataloader_cfg:
+    batch_size: ${batch_size}
+    num_workers: ${num_workers}
+    shuffle: false
+  # Streaming evaluation runs one lane per rank so every frame is scored;
+  # wider eval batches would trim lanes to the shortest one.
+  val_dataloader_cfg:
+    batch_size: 1
+    num_workers: ${num_workers}
+  test_dataloader_cfg:
+    batch_size: 1
+    num_workers: ${num_workers}
+  train_transforms:
+    _target_: autoware_ml.transforms.base.TransformsCompose
+    pipeline:
+      - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
+        name_mapping: ${dataset.detection3d.name_mapping}
+      - _target_: autoware_ml.transforms.camera.loading.LoadMultiViewImagesFromFiles
+      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeFilter
+        point_cloud_range: ${point_cloud_range}
+      - _target_: autoware_ml.transforms.camera.resize.ResizeCropFlipRotImage
+        data_aug_conf:
+          resize_lim: [0.47, 0.625]
+          final_dim: [320, 800]
+          bot_pct_lim: [0.0, 0.0]
+          rot_lim: [0.0, 0.0]
+          rand_flip: false
+        training: true
+      - _target_: autoware_ml.transforms.camera.geometry.GlobalRotScaleTrans
+        rot_range: [0.0, 0.0]
+        scale_ratio_range: [1.0, 1.0]
+      - _target_: autoware_ml.transforms.camera.resize.PadMultiViewImage
+        size_divisor: 32
+      - _target_: autoware_ml.transforms.camera.normalize.NormalizeMultiviewImage
+        mean: ${img_norm_cfg.mean}
+        std: ${img_norm_cfg.std}
+        to_rgb: ${img_norm_cfg.to_rgb}
+  val_transforms:
+    _target_: autoware_ml.transforms.base.TransformsCompose
+    pipeline:
+      - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
+        name_mapping: ${dataset.detection3d.name_mapping}
+      - _target_: autoware_ml.transforms.camera.loading.LoadMultiViewImagesFromFiles
+      - _target_: autoware_ml.transforms.camera.resize.ResizeCropFlipRotImage
+        data_aug_conf:
+          resize_lim: [0.47, 0.625]
+          final_dim: [320, 800]
+          bot_pct_lim: [0.0, 0.0]
+          rot_lim: [0.0, 0.0]
+          rand_flip: false
+        training: false
+      - _target_: autoware_ml.transforms.camera.resize.PadMultiViewImage
+        size_divisor: 32
+      - _target_: autoware_ml.transforms.camera.normalize.NormalizeMultiviewImage
+        mean: ${img_norm_cfg.mean}
+        std: ${img_norm_cfg.std}
+        to_rgb: ${img_norm_cfg.to_rgb}
+      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeFilter
+        point_cloud_range: ${point_cloud_range}
+  test_transforms: ${datamodule.val_transforms}
+  predict_transforms:
+    _target_: autoware_ml.transforms.base.TransformsCompose
+    pipeline:
+      - _target_: autoware_ml.transforms.camera.loading.LoadMultiViewImagesFromFiles
+      - _target_: autoware_ml.transforms.camera.resize.ResizeCropFlipRotImage
+        data_aug_conf:
+          resize_lim: [0.47, 0.625]
+          final_dim: [320, 800]
+          bot_pct_lim: [0.0, 0.0]
+          rot_lim: [0.0, 0.0]
+          rand_flip: false
+        training: false
+      - _target_: autoware_ml.transforms.camera.resize.PadMultiViewImage
+        size_divisor: 32
+      - _target_: autoware_ml.transforms.camera.normalize.NormalizeMultiviewImage
+        mean: ${img_norm_cfg.mean}
+        std: ${img_norm_cfg.std}
+        to_rgb: ${img_norm_cfg.to_rgb}
+
+model:
+  img_backbone:
+    _target_: autoware_ml.models.common.backbones.vovnet.VoVNet99MultiScale
+    input_ch: 3
+    out_features: [stage4, stage5]
+    frozen_stages: -1
+    norm_eval: true
+  img_neck:
+    _target_: autoware_ml.models.common.necks.lss_fpn.GeneralizedLSSFPN
+    in_channels: [768, 1024]
+    out_channels: 256
+  bbox_head:
+    num_queries: 644
