@@ -65,10 +65,10 @@ datamodule:
         point_cloud_range: ${point_cloud_range}
       - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
         range_radius: [0.0, 60.0]
-        min_num_points: 3
+        min_num_points: ${dataset.detection3d.train_min_points_near}
       - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
         range_radius: [60.0, 130.0]
-        min_num_points: 2
+        min_num_points: ${dataset.detection3d.train_min_points_far}
       - _target_: autoware_ml.transforms.point_cloud.sampling.PointShuffle
   val_transforms:
     _target_: autoware_ml.transforms.base.TransformsCompose
