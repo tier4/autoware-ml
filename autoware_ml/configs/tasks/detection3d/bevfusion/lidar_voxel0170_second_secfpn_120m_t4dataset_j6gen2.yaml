@@ -111,7 +111,7 @@ model:
     num_proposals: 500
     class_names: ${dataset.detection3d.class_names}
     num_classes: ${dataset.detection3d.num_classes}
-    dense_heatmap_pooling_classes: [car, truck, bus, barrier]
+    dense_heatmap_pooling_classes: [car, truck, bus]
     nms_type: circle
     nms_min_radius: 0.25
     nms_groups:
