@@ -60,7 +60,8 @@ def test_serialized_attention_uses_flash_module_when_enabled() -> None:
         cu_seqlens,
         max_seqlen,
         dropout_p,
-        softmax_scale: (qkv[:, 2])
+        softmax_scale,
+        deterministic=False: (qkv[:, 2])
     )
     point = Point(
         {
@@ -103,7 +104,8 @@ def test_build_export_module_disables_flash_attention_without_mutating_live_enco
         cu_seqlens,
         max_seqlen,
         dropout_p,
-        softmax_scale: (qkv[:, 2])
+        softmax_scale,
+        deterministic=False: (qkv[:, 2])
     )
     with patch(
         "autoware_ml.models.segmentation3d.encoders.ptv3.load_flash_attn_module",
