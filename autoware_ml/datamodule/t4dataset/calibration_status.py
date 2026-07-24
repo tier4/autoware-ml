@@ -21,6 +21,7 @@ from typing import Any
 import numpy as np
 
 from autoware_ml.datamodule.base import DataModule, Dataset
+from autoware_ml.datamodule.common.serialization import SerializedSampleList
 from autoware_ml.transforms.base import TransformsCompose
 from autoware_ml.utils.calibration import CalibrationData, CalibrationStatus
 
@@ -50,7 +51,7 @@ class T4CalibrationStatusDataset(Dataset):
             raise ValueError(
                 f"Unknown info file format. Expected 'data_list' key, got: {list(raw.keys())}"
             )
-        self.data_infos = raw["data_list"]
+        self.data_infos = SerializedSampleList(raw["data_list"])
 
     def __len__(self) -> int:
         """Get dataset length.

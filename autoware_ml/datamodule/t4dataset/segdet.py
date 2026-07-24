@@ -37,6 +37,7 @@ from autoware_ml.datamodule.common.detection3d import (
     resolve_data_path,
     resolve_sweep_paths,
 )
+from autoware_ml.datamodule.common.serialization import SerializedSampleList
 from autoware_ml.datamodule.common.sources import AnnotationSource, coerce_annotation_sources
 from autoware_ml.datamodule.t4dataset.detection3d import (
     FrameSamplingConfig,
@@ -70,18 +71,20 @@ class T4SegmentationDetection3DDataset(Dataset):
         self.use_valid_flag = use_valid_flag
         self.frame_sampling = frame_sampling
 
-        self.data_infos: list[dict[str, Any]] = []
+        data_infos: list[dict[str, Any]] = []
         for source in ann_sources:
-            self.data_infos.extend(self._load_source(source))
+            data_infos.extend(self._load_source(source))
 
         self.frame_weights = compute_frame_sampling_weights(
-            self.data_infos,
+            data_infos,
             self.class_names,
             self.name_mapping,
             self.frame_sampling,
             self.filter_attributes,
             self.use_valid_flag,
         )
+        # Serialize last: frame_weights above must run on the live list.
+        self.data_infos = SerializedSampleList(data_infos)
 
     def _load_source(self, source: AnnotationSource) -> list[dict[str, Any]]:
         """Load one annotation source and apply its supervision declaration."""

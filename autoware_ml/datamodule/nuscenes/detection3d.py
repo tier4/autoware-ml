@@ -30,6 +30,7 @@ from autoware_ml.datamodule.common.detection3d import (
     build_label_to_category,
     load_detection_data_infos,
 )
+from autoware_ml.datamodule.common.serialization import SerializedSampleList
 from autoware_ml.datamodule.nuscenes.common import resolve_lidar_path
 from autoware_ml.transforms.base import TransformsCompose
 
@@ -64,8 +65,8 @@ class NuscenesDetection3DDataset(Dataset):
         self.name_mapping = dict(name_mapping) if name_mapping is not None else None
         with open(ann_file, "rb") as file:
             data = pickle.load(file)
-        self.data_infos = load_detection_data_infos(data)
         self.label_to_category = build_label_to_category(data.get("metainfo", {}))
+        self.data_infos = SerializedSampleList(load_detection_data_infos(data))
 
     def __len__(self) -> int:
         """Return the number of annotated samples.
