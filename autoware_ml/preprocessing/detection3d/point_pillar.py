@@ -39,7 +39,7 @@ class PointPillarPreprocessor(nn.Module):
             in meters.
         max_num_points: Maximum number of points kept per pillar.
         max_voxels: Maximum number of pillars retained per sample.
-        voxelization_z_order_first: If ``True``, this preprocessor will tranpose [x, y, z]
+        voxelization_z_order_first: If ``True``, this preprocessor will transpose [x, y, z]
             coordinates to [z, y, x]. This is used for backward-compatible, and will be
             removed very soon.
     """
