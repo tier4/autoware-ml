@@ -1,0 +1,117 @@
+# Copyright 2026 TIER IV, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Unit tests for point pillar preprocessing."""
+
+from __future__ import annotations
+
+import unittest
+
+import torch
+
+from autoware_ml.preprocessing.detection3d.point_pillar import PointPillarPreprocessor
+
+
+class TestPointPillarPreprocessor(unittest.TestCase):
+    def setUp(self) -> None:
+        """Set up the same PointPillarPreprocessor instance for all tests. Note that this class will
+        be called in each test case.
+        """
+        self.point_pillar_preprocessor = PointPillarPreprocessor(
+            voxel_size=[1.0, 1.0, 4.0],
+            point_cloud_range=[0.0, 0.0, -2.0, 4.0, 4.0, 2.0],
+            max_num_points=2,
+            max_voxels=8,
+            voxelization_z_order_first=True,  # This is used for backward-compatible, and will be removed very soon.
+        )
+        torch.manual_seed(0)
+
+    def test_forward_builds_padded_pillars(self) -> None:
+        """
+        Test that the forward method correctly builds padded pillars from a batch of point
+        clouds.
+        """
+        batch = {
+            "points": [
+                torch.tensor(
+                    [
+                        [0.1, 0.1, 0.0, 1.0],
+                        [0.2, 0.2, 0.0, 2.0],
+                        [1.1, 1.1, 0.0, 3.0],
+                    ],
+                    dtype=torch.float32,
+                )
+            ]
+        }
+
+        outputs = self.point_pillar_preprocessor(batch)
+        self.assertEqual(outputs["voxels"].shape, (2, 2, 4))
+        self.assertEqual(outputs["num_points"].tolist(), [2, 1])
+        self.assertEqual(outputs["voxel_coords"].shape, (2, 4))
+        self.assertEqual(outputs["voxel_coords"][:, 0].tolist(), [0, 0])
+
+    def test_batch_column_increments_per_sample(self) -> None:
+        """
+        Test that the batch column in voxel coordinates increments correctly
+        for each sample in the batch.
+        """
+        point = torch.tensor([[0.5, 0.5, 0.0, 1.0]], dtype=torch.float32)
+        batch = {"points": [point, point, point]}
+
+        outputs = self.point_pillar_preprocessor(batch)
+
+        self.assertEqual(outputs["voxel_coords"][:, 0].tolist(), [0, 1, 2])
+
+    def test_empty_sample_in_batch(self) -> None:
+        """
+        Test that the PointPillarPreprocessor correctly handles a batch containing an empty
+        sample.
+        """
+        point = torch.tensor([[0.5, 0.5, 0.0, 1.0]], dtype=torch.float32)
+        empty = torch.zeros((0, 4), dtype=torch.float32)
+        batch = {"points": [point, empty, point]}
+
+        outputs = self.point_pillar_preprocessor(batch)
+
+        # Two non-empty samples  2 voxels total
+        self.assertEqual(outputs["voxels"].shape[0], 2)
+        self.assertEqual(set(outputs["voxel_coords"][:, 0].tolist()), {0, 2})
+
+    def test_empty_batch_returns_empty_pillar_tensors(self) -> None:
+        """
+        Test that the PointPillarPreprocessor returns empty pillar tensors when given an
+        empty batch.
+        """
+        outputs = self.point_pillar_preprocessor({"points": []})
+
+        self.assertEqual(outputs["voxels"].shape, (0, 2, 0))
+        self.assertEqual(outputs["num_points"].shape, (0,))
+        self.assertEqual(outputs["voxel_coords"].shape, (0, 4))
+
+    def test_passthrough_of_existing_keys(self) -> None:
+        """
+        Test that the PointPillarPreprocessor correctly passes through existing
+        keys in the input batch dictionary.
+        """
+        sentinel = torch.tensor([42.0])
+        batch = {
+            "points": [torch.tensor([[0.5, 0.5, 0.0, 1.0]], dtype=torch.float32)],
+            "gt_boxes": sentinel,
+        }
+        outputs = self.point_pillar_preprocessor(batch)
+        self.assertIs(outputs["gt_boxes"], sentinel)
+
+
+if __name__ == "__main__":
+    unittest.main()
