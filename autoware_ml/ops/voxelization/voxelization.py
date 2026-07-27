@@ -33,7 +33,7 @@ class VoxelsData(NamedTuple):
         voxels (M, max_num_points, C): Padded point features grouped by their respective voxel,
             where a point value is fully 0 when the voxel is padded.
             C is either (x, y, z, intensity) or (x, y, z, time_lag) if C is 4. C is
-            (x, y, z, intensity, time_lag) when it's 5. Empty slots are zero-filled.
+            (x, y, z, intensity, time_lag) when it's 5.
         coords (M, 3): Integer voxel coordinates in (x, y, z).
         num_points (M,): Number of valid points per voxel.
         batch_indices (M,): Batch indices for each voxel.
@@ -189,15 +189,15 @@ def batch_hard_voxelize(
     ``points``. No Python-level loops or CPU–GPU transfers are required.
 
     Args:
-        points (Float32[torch.Tensor, "number_points number_channels"]): Batch of input point clouds.
+        points: Batch of input point clouds.
             The first three columns are XYZ coordinates in meters.
-        points_batch_indices (Int32[torch.Tensor, "number_points"]): Batch indices for each point
+        points_batch_indices: Batch indices for each point
             in ``points``.
-        voxel_size (Float32[torch.Tensor, "3"]): Per-axis voxel size ``[dx, dy, dz]`` in meters.
-        point_cloud_range (Float32[torch.Tensor, "6"]): Spatial range ``[x_min, y_min, z_min, x_max, y_max, z_max]``
+        voxel_size: Per-axis voxel size ``[dx, dy, dz]`` in meters.
+        point_cloud_range: Spatial range ``[x_min, y_min, z_min, x_max, y_max, z_max]``
             in meters. Points outside this range are discarded.
-        max_num_points (int): Maximum number of points retained per voxel.
-        max_voxels (int): Maximum number of occupied voxels per batch returned.
+        max_num_points: Maximum number of points retained per voxel.
+        max_voxels: Maximum number of occupied voxels per batch returned.
 
     Returns:
         VoxelsData: Named tuple containing the following fields:
