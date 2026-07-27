@@ -41,7 +41,7 @@ model:
     hidden_channel: 128
     num_classes: ${num_classes}
     class_names: ${dataset.detection3d.class_names}
-    dense_heatmap_pooling_classes: [car, truck, bus, bicycle]
+    dense_heatmap_pooling_classes: [car, truck, bus]
     num_decoder_layers: 1
     num_heads: 8
     feedforward_channels: 256

@@ -518,6 +518,7 @@ class SerializedAttention(PointModule):
                 max_seqlen=patch_size,
                 dropout_p=self.attn_drop_p if self.training else 0.0,
                 softmax_scale=self.scale,
+                deterministic=True,
             ).reshape(-1, channel_count)
             feat = feat.to(qkv.dtype)
         feat = feat[inverse]

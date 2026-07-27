@@ -81,6 +81,11 @@ extra-index-urls = ["https://download.pytorch.org/whl/cu128", "https://pypi.nvid
 # so `first-index` would stop before considering the NVIDIA index.
 index-strategy = "unsafe-best-match"
 
+[tool.pixi.activation.env]
+# cuBLAS is only deterministic with a fixed workspace size; the trainer's
+# `deterministic` mode (torch.use_deterministic_algorithms) depends on it.
+CUBLAS_WORKSPACE_CONFIG = ":4096:8"
+
 [tool.pixi.dependencies]
 # Pixi keeps a small conda-forge base for Python and installer tooling. The
 # runtime stack comes from [project.dependencies] via PyPI.

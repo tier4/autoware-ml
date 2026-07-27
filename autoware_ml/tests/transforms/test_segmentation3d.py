@@ -80,7 +80,7 @@ def test_frustum_mix_combines_points_from_source_and_mix_sample() -> None:
     dataset = _MixDataset(mix_sample)
     output = FrustumMix(height=8, width=16, fov_up=10.0, fov_down=-30.0, num_areas=[2], p=1.0)(
         sample,
-        context=PipelineContext(dataset=dataset, index=0),
+        context=PipelineContext(dataset=dataset, index=0, rng=np.random.default_rng(0)),
     )
 
     assert output["points"].shape[1] == 4

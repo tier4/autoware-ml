@@ -78,8 +78,8 @@ filter_attributes:
   - [motorcycle, motorcycle_state.without_rider]
 merge_objects: [[truck, [truck, trailer]]]
 use_valid_flag: true
-train_min_points_near: 2
-train_min_points_far: 1
+train_min_points_near: 3
+train_min_points_far: 2
 eval_class_range:
   car: 121.0
   truck: 121.0
@@ -102,6 +102,6 @@ metrics:
       - { _target_: autoware_ml.metrics.detection3d.tp_errors.TpErrors, stages: [test] }
     class_names: ${t4dataset.detection3d.class_names}
     thresholds: [0.5, 1.0, 2.0, 4.0]
-    min_num_points: 0
+    min_num_points: 2
     eval_class_range: ${t4dataset.detection3d.eval_class_range}
     ranges: ${t4dataset.detection3d.metric_ranges}
