@@ -53,6 +53,7 @@
     "node_modules",
     "site"
   ],
+  "python-envs.defaultEnvManager": "ms-python.python:system",
   "python.defaultInterpreterPath": "/opt/conda/bin/python",
   "remote.autoForwardPorts": false,
   "ruff.lineLength": 100,
@@ -62,6 +63,5 @@
     "**/node_modules": true,
     "**/mlruns": true
   },
-  "yaml.schemaStore.enable": false,
-  "python-envs.defaultEnvManager": "ms-python.python:system"
+  "yaml.schemaStore.enable": false
 }
