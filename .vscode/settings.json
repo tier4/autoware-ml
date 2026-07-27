@@ -53,8 +53,8 @@
     "node_modules",
     "site"
   ],
-  "python-envs.defaultEnvManager": "ms-python.python:system",
   "python.defaultInterpreterPath": "/opt/conda/bin/python",
+  "python-envs.defaultEnvManager": "ms-python.python:system",
   "remote.autoForwardPorts": false,
   "ruff.lineLength": 100,
   "search.exclude": {
