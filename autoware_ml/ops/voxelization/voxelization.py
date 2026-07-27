@@ -35,8 +35,8 @@ class VoxelsData(NamedTuple):
             C is either (x, y, z, intensity) or (x, y, z, time_lag) if C is 4. C is
             (x, y, z, intensity, time_lag) when it's 5.
         coords (M, 3): Integer voxel coordinates in (x, y, z).
-        num_points (M,): Number of valid points per voxel.
-        batch_indices (M,): Batch indices for each voxel.
+        num_points (M): Number of valid points per voxel.
+        batch_indices (M): Batch indices for each voxel.
       M = batch_size * maximum number of voxels.
     """
 
@@ -80,8 +80,8 @@ def hard_voxelize(
         VoxelsData: Named tuple containing the following fields:
             - voxels (M, max_num_points, C): Padded point voxel features.
             - coords (M, 3): Integer voxel coordinates in XYZ order.
-            - num_points (M,): Number of valid points per voxel.
-            - batch_indices (M,): Batch indices for each voxel.
+            - num_points (M): Number of valid points per voxel.
+            - batch_indices (M): Batch indices for each voxel.
         M = batch_size * maximum number of voxels.
     """
     if points.shape[0] != points_batch_indices.shape[0]:

@@ -18,10 +18,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from jaxtyping import Float32
 import torch
 import torch.nn as nn
 
-from autoware_ml.ops.voxelization import hard_voxelize
+from autoware_ml.ops.voxelization.voxelization import hard_voxelize
 
 
 class PointPillarPreprocessor(nn.Module):
@@ -38,7 +39,14 @@ class PointPillarPreprocessor(nn.Module):
             in meters.
         max_num_points: Maximum number of points kept per pillar.
         max_voxels: Maximum number of pillars retained per sample.
+        voxelization_z_order_first: If ``True``, this preprocessor will tranpose [x, y, z]
+            coordinates to [z, y, x]. This is used for backward-compatible, and will be
+            removed very soon.
     """
+
+    # Add class attributes for type checking
+    voxel_size: Float32[torch.Tensor, " 3"]
+    point_cloud_range: Float32[torch.Tensor, " 6"]
 
     def __init__(
         self,
@@ -46,6 +54,7 @@ class PointPillarPreprocessor(nn.Module):
         point_cloud_range: list[float],
         max_num_points: int,
         max_voxels: int,
+        voxelization_z_order_first: bool = True,
     ) -> None:
         super().__init__()
         self.register_buffer("voxel_size", torch.tensor(voxel_size, dtype=torch.float32))
@@ -54,6 +63,7 @@ class PointPillarPreprocessor(nn.Module):
         )
         self.max_num_points = max_num_points
         self.max_voxels = max_voxels
+        self.voxelization_z_order_first = voxelization_z_order_first
 
     def forward(self, batch_inputs_dict: dict[str, Any]) -> dict[str, Any]:
         """Voxelize batched point clouds and append pillar tensors.
@@ -71,8 +81,8 @@ class PointPillarPreprocessor(nn.Module):
               ``[batch, z, y, x]`` order, ``dtype=torch.int32``.
         """
         points_list = batch_inputs_dict["points"]
+        outputs = dict(batch_inputs_dict)
         if not points_list:
-            outputs = dict(batch_inputs_dict)
             outputs["voxels"] = self.voxel_size.new_zeros((0, self.max_num_points, 0))
             outputs["num_points"] = torch.zeros(
                 (0,), device=self.voxel_size.device, dtype=torch.int32
@@ -86,34 +96,54 @@ class PointPillarPreprocessor(nn.Module):
         voxel_size = self.voxel_size.to(device=device)
         point_cloud_range = self.point_cloud_range.to(device=device)
 
-        batch_voxels: list[torch.Tensor] = []
-        batch_num_points: list[torch.Tensor] = []
-        batch_coords: list[torch.Tensor] = []
+        # Concat all points across a batch size to a single tensor for voxelization, but keep track of the batch index
+        # (N*B, point dimension)
+        points = torch.cat(points_list, dim=0)
+        # (N*B,) where each point has a batch index
+        points_batch_indices = torch.cat(
+            [
+                torch.full((p.shape[0],), i, device=device, dtype=torch.int32)
+                for i, p in enumerate(points_list)
+            ],
+            dim=0,
+        )
+        voxels_data = hard_voxelize(
+            points,
+            points_batch_indices=points_batch_indices,
+            voxel_size=voxel_size,
+            point_cloud_range=point_cloud_range,
+            max_num_points=self.max_num_points,
+            max_voxels=self.max_voxels,
+        )
 
-        for batch_index, points in enumerate(points_list):
-            voxels, coords, num_points = hard_voxelize(
-                points, voxel_size, point_cloud_range, self.max_num_points, self.max_voxels
-            )
-            batch_column = torch.full(
-                (coords.shape[0], 1), batch_index, device=device, dtype=torch.int32
-            )
-            coords = torch.cat([batch_column, coords], dim=1)
-            batch_voxels.append(voxels)
-            batch_num_points.append(num_points)
-            batch_coords.append(coords)
+        # Handle the case where no voxels are generated
+        if not len(voxels_data.voxels):
+            outputs["voxels"] = points.new_zeros((0, self.max_num_points, 0))
+            outputs["num_points"] = torch.zeros((0,), device=points.device, dtype=torch.int32)
+            outputs["voxel_coords"] = torch.zeros((0, 4), device=points.device, dtype=torch.int32)
+            return outputs
 
-        outputs = dict(batch_inputs_dict)
-        outputs["voxels"] = (
-            torch.cat(batch_voxels, dim=0) if batch_voxels else torch.zeros((0, 0, 0))
+        # Concat batch column to the voxel coordinates
+        batch_coords = torch.cat(
+            [voxels_data.batch_indices.unsqueeze(1), voxels_data.coords], dim=1
         )
-        outputs["num_points"] = (
-            torch.cat(batch_num_points, dim=0)
-            if batch_num_points
-            else torch.zeros((0,), dtype=torch.int32)
-        )
-        outputs["voxel_coords"] = (
-            torch.cat(batch_coords, dim=0)
-            if batch_coords
-            else torch.zeros((0, 4), dtype=torch.int32)
-        )
+        batch_voxels = voxels_data.voxels
+        batch_num_points = voxels_data.num_points
+
+        # TODO (KokSeang): Remove this backward compatibility code in the future
+        if self.voxelization_z_order_first:
+            # Transpose [x, y, z] to [z, y, x] for backward compatibility
+            channels = batch_voxels.shape[2]
+            if channels == 4:
+                batch_voxels = batch_voxels[:, :, [2, 1, 0, 3]].contiguous()
+            elif channels == 5:
+                batch_voxels = batch_voxels[:, :, [2, 1, 0, 3, 4]].contiguous()
+            else:
+                raise ValueError(f"Unsupported number of channels: {channels}")
+
+            batch_coords = batch_coords[:, [0, 3, 2, 1]].contiguous()
+
+        outputs["voxels"] = batch_voxels
+        outputs["num_points"] = batch_num_points
+        outputs["voxel_coords"] = batch_coords
         return outputs
