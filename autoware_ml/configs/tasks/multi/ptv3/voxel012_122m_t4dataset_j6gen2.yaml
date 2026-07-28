@@ -62,9 +62,9 @@ datamodule:
       - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
       - _target_: autoware_ml.transforms.segmentation3d.formatting.PreparePointSegInput
       - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
-        rot_range: [-1.571, 1.571]
-        scale_ratio_range: [0.8, 1.2]
-        translation_std: [1.0, 1.0, 0.2]
+        rot_range: [-0.78539816, 0.78539816]
+        scale_ratio_range: [0.95, 1.05]
+        translation_std: [0.5, 0.5, 0.2]
       - _target_: autoware_ml.transforms.point_cloud.geometry.RandomFlip3D
         flip_ratio_bev_horizontal: 0.5
         flip_ratio_bev_vertical: 0.5
@@ -115,6 +115,12 @@ datamodule:
         point_cloud_range: ${point_cloud_range}
       - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeFilter
         point_cloud_range: ${point_cloud_range}
+      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
+        range_radius: [0.0, 60.0]
+        min_num_points: ${dataset.detection3d.train_min_points_near}
+      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
+        range_radius: [60.0, 130.0]
+        min_num_points: ${dataset.detection3d.train_min_points_far}
       - _target_: autoware_ml.transforms.common.copying.Copy
         keys_dict: { segment: origin_segment, coord: origin_coord }
       - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
@@ -158,5 +164,22 @@ model:
       output_shape: [256, 256]
   bbox_head:
     nms_min_radius: 1.0
+    nms_groups:
+      - class_names: [car, truck, bus]
+        nms_radius: 0.25
+        post_max_size: 300
+      - class_names: [bicycle]
+        nms_radius: 0.0
+        post_max_size: 50
+      - class_names: [pedestrian]
+        nms_radius: 0.0
+        post_max_size: 100
+      - class_names: [traffic_cone]
+        nms_radius: 0.0
+        post_max_size: 100
+      - class_names: [barrier]
+        nms_radius: 0.0
+        post_max_size: 50
     bbox_coder:
       post_center_range: [-132.88, -132.88, -5.0, 132.88, 132.88, 12.0]
+      score_threshold: [0.015, 0.010, 0.010, 0.020, 0.030, 0.040, 0.020]
