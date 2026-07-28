@@ -40,8 +40,8 @@ class PointPillarPreprocessor(nn.Module):
         max_num_points: Maximum number of points kept per pillar.
         max_voxels: Maximum number of pillars retained per sample.
         voxelization_z_order_first: If ``True``, this preprocessor will transpose [x, y, z]
-            coordinates to [z, y, x]. This is used for backward-compatible, and will be
-            removed very soon.
+            coordinates to [z, y, x] in coords from voxelization.
+            This is used for backward-compatible, and will be removed very soon.
     """
 
     # Add class attributes for type checking
@@ -133,14 +133,6 @@ class PointPillarPreprocessor(nn.Module):
         # TODO (KokSeang): Remove this backward compatibility code in the future
         if self.voxelization_z_order_first:
             # Transpose [x, y, z] to [z, y, x] for backward compatibility
-            channels = batch_voxels.shape[2]
-            if channels == 4:
-                batch_voxels = batch_voxels[:, :, [2, 1, 0, 3]].contiguous()
-            elif channels == 5:
-                batch_voxels = batch_voxels[:, :, [2, 1, 0, 3, 4]].contiguous()
-            else:
-                raise ValueError(f"Unsupported number of channels: {channels}")
-
             batch_coords = batch_coords[:, [0, 3, 2, 1]].contiguous()
 
         outputs["voxels"] = batch_voxels
