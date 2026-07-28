@@ -347,6 +347,11 @@ class DataModule(L.LightningDataModule, ABC):
         if isinstance(value, np.ndarray):
             array = value if value.flags.c_contiguous else np.ascontiguousarray(value)
             return torch.from_numpy(array)
+        # Numpy scalars keep their dtype through collation; datasets rely on
+        # this to carry precision-critical scalars (e.g. float64 epoch-second
+        # timestamps, which float32 would quantize to 256 s steps).
+        if isinstance(value, np.generic):
+            return torch.from_numpy(np.asarray(value))
         # `bool` is a subclass of `int` and is handled by the same branch.
         if isinstance(value, (int, float)):
             return torch.tensor(value)
