@@ -163,6 +163,7 @@ model:
     bev_projector:
       output_shape: [256, 256]
   bbox_head:
+    nms_type: circle
     nms_min_radius: 1.0
     nms_groups:
       - class_names: [car, truck, bus]
