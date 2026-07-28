@@ -95,7 +95,7 @@ class TestPointPillarPreprocessor(unittest.TestCase):
         """
         outputs = self.point_pillar_preprocessor({"points": []})
 
-        self.assertEqual(outputs["voxels"].shape, (0, 2, 0))
+        self.assertEqual(outputs["voxels"].shape, (0, 2, 4))
         self.assertEqual(outputs["num_points"].shape, (0,))
         self.assertEqual(outputs["voxel_coords"].shape, (0, 4))
 

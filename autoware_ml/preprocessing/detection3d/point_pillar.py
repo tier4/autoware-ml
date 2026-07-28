@@ -42,6 +42,8 @@ class PointPillarPreprocessor(nn.Module):
         voxelization_z_order_first: If ``True``, this preprocessor will transpose [x, y, z]
             coordinates to [z, y, x] in coords from voxelization.
             This is used for backward-compatible, and will be removed very soon.
+        default_point_channels: Default number of point channels to be used when no points
+            are provided in the batch. Default is 4, which corresponds to (x, y, z, intensity).
     """
 
     # Add class attributes for type checking
@@ -55,6 +57,7 @@ class PointPillarPreprocessor(nn.Module):
         max_num_points: int,
         max_voxels: int,
         voxelization_z_order_first: bool = True,
+        default_point_channels: int = 4,
     ) -> None:
         super().__init__()
         self.register_buffer("voxel_size", torch.tensor(voxel_size, dtype=torch.float32))
@@ -64,6 +67,7 @@ class PointPillarPreprocessor(nn.Module):
         self.max_num_points = max_num_points
         self.max_voxels = max_voxels
         self.voxelization_z_order_first = voxelization_z_order_first
+        self._default_point_channels = default_point_channels
 
     def forward(self, batch_inputs_dict: dict[str, Any]) -> dict[str, Any]:
         """Voxelize batched point clouds and append pillar tensors.
@@ -83,7 +87,9 @@ class PointPillarPreprocessor(nn.Module):
         points_list = batch_inputs_dict["points"]
         outputs = dict(batch_inputs_dict)
         if not points_list:
-            outputs["voxels"] = self.voxel_size.new_zeros((0, self.max_num_points, 0))
+            outputs["voxels"] = self.voxel_size.new_zeros(
+                (0, self.max_num_points, self._default_point_channels)
+            )
             outputs["num_points"] = torch.zeros(
                 (0,), device=self.voxel_size.device, dtype=torch.int32
             )
@@ -118,7 +124,7 @@ class PointPillarPreprocessor(nn.Module):
 
         # Handle the case where no voxels are generated
         if not len(voxels_data.voxels):
-            outputs["voxels"] = points.new_zeros((0, self.max_num_points, 0))
+            outputs["voxels"] = points.new_zeros((0, self.max_num_points, points.shape[1]))
             outputs["num_points"] = torch.zeros((0,), device=points.device, dtype=torch.int32)
             outputs["voxel_coords"] = torch.zeros((0, 4), device=points.device, dtype=torch.int32)
             return outputs
