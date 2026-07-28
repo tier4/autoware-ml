@@ -88,6 +88,7 @@ datamodule:
         min_num_points: ${dataset.detection3d.train_min_points_near}
       - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
         range_radius: [60.0, 130.0]
+        min_num_points: ${dataset.detection3d.train_min_points_far}
       - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
         grid_size: ${grid_size}
         point_cloud_range: ${point_cloud_range}
@@ -198,6 +199,7 @@ model:
     gaussian_overlap: 0.1
     score_threshold: 0.1
     post_max_size: 100
+    nms_type: circle
     nms_min_radius: 1.0
     nms_groups:
       - class_names: [car, truck, bus]
