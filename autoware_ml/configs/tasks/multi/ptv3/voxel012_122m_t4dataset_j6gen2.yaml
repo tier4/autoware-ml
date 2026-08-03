@@ -162,6 +162,7 @@ model:
   bev_neck:
     bev_projector:
       output_shape: [256, 256]
+      assume_valid_grid_coord: true
   bbox_head:
     nms_type: circle
     nms_min_radius: 1.0
