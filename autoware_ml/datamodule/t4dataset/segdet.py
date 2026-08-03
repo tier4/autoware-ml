@@ -133,6 +133,8 @@ class T4SegmentationDetection3DDataset(Dataset):
             "lidar_path": resolve_data_path(self.data_root, sample["lidar_path"]),
             "num_pts_feats": int(sample["lidar_points"].get("num_pts_feats", 5)),
             "sweeps": resolve_sweep_paths(sample, self.data_root),
+            "lidar_sources": sample.get("lidar_sources"),
+            "lidar_sources_info": sample.get("lidar_sources_info"),
             "pts_semantic_mask_categories": sample["pts_semantic_mask_categories"],
             "pts_semantic_mask_path": resolve_data_path(
                 self.data_root, sample["pts_semantic_mask_path"]

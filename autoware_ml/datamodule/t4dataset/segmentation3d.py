@@ -120,6 +120,8 @@ class T4Segmentation3DDataset(Dataset):
         return {
             "lidar_path": lidar_path,
             "name": sample.get("token", f"{sample_index}_{source_name}"),
+            "source_name": source_name,
+            "sensor_token": sensor_token,
             "idx_begin": idx_begin,
             "length": length,
             "translation": translation,
@@ -143,6 +145,10 @@ class T4Segmentation3DDataset(Dataset):
                 self.data_root, sample["pts_semantic_mask_path"]
             ),
         }
+        if "lidar_sources" in sample:
+            info["lidar_sources"] = sample["lidar_sources"]
+        if "lidar_sources_info" in sample:
+            info["lidar_sources_info"] = sample["lidar_sources_info"]
         if "images" in sample:
             info["images"] = {
                 cam: {

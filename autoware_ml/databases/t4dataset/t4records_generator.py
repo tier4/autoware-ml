@@ -492,7 +492,7 @@ class T4RecordsGenerator:
                         current_sample_data_record.timestamp
                     ),
                     lidar_pointcloud_path=lidar_sweep_pointcloud_path,
-                    lidar_pointcloud_source_path=None,  # Always None for lidar sweeps
+                    lidar_pointcloud_source_path=current_sample_data_record.info_filename,
                     lidar_pointcloud_num_features=self.lidar_pointcloud_num_features,
                     lidar_sensor_to_ego_pose_matrix=current_lidar_sensor_to_ego_matrix,
                     lidar_frame_ego_pose_to_global_matrix=lidar_sweep_frame_ego_pose_to_global_matrix,
