@@ -65,6 +65,12 @@ autoware-ml = "autoware_ml.cli.cli:main"
 where = ["."]
 include = ["autoware_ml*"]
 
+[tool.setuptools.package-data]
+autoware_ml = [
+    "configs/assets/aip_x2_gen2/*/*.png",
+    "configs/assets/hesai/*.csv",
+]
+
 [tool.pixi.workspace]
 channels = ["conda-forge"]
 platforms = ["linux-64"]
