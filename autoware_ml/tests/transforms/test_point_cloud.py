@@ -8,6 +8,7 @@ from autoware_ml.transforms.point_cloud.crop import (
     PointsRangeFilter,
     SphereCrop,
 )
+from autoware_ml.transforms.point_cloud.filters import NebulaDownsampleMaskFilter
 from autoware_ml.transforms.point_cloud.geometry import (
     GlobalRotScaleTrans,
     RandomFlip3D,
@@ -203,6 +204,130 @@ class TestPointCloudTransforms:
 
         assert output["coord"].shape[0] == 4
         assert output["strength"].shape[0] == 4
+
+    def test_nebula_downsample_mask_filter_keeps_aligned_point_arrays(self, tmp_path):
+        mask_root = tmp_path / "masks"
+        calibration_root = tmp_path / "calibrations"
+        (mask_root / "front_upper").mkdir(parents=True)
+        calibration_root.mkdir()
+        mask = np.zeros((2, 10), dtype=np.uint8)
+        mask[0, :] = 255
+        cv2 = pytest.importorskip("cv2")
+        cv2.imwrite(str(mask_root / "front_upper" / "mask.png"), mask)
+        (calibration_root / "model.csv").write_text(
+            "Channel,Elevation,Azimuth\n1,0.0,0.0\n2,45.0,0.0\n"
+        )
+
+        sample = {
+            "points": np.array(
+                [
+                    [10.0, 0.0, 0.0, 1.0],
+                    [10.0, 0.0, 10.0, 2.0],
+                ],
+                dtype=np.float32,
+            ),
+            "pts_semantic_mask": np.array([7, 9], dtype=np.int64),
+            "source_name": "LIDAR_FRONT_UPPER",
+        }
+
+        output = NebulaDownsampleMaskFilter(
+            mask_root=str(mask_root),
+            calibration_root=str(calibration_root),
+            lidar_name_to_mask={"front_upper": "front_upper/mask.png"},
+            lidar_name_to_model={"front_upper": "test_model"},
+            model_to_calibration={"test_model": "model.csv"},
+            use_calibration_azimuth_offsets=False,
+            return_stats=True,
+        )(sample)
+
+        assert output["points"].shape == (1, 4)
+        np.testing.assert_array_equal(output["pts_semantic_mask"], np.array([7], dtype=np.int64))
+        assert output["nebula_downsample_stats"] == [
+            {"source_name": "LIDAR_FRONT_UPPER", "num_input_points": 2, "num_kept_points": 1}
+        ]
+
+    def test_nebula_downsample_mask_filter_uses_concat_source_slices(self, tmp_path):
+        mask_root = tmp_path / "masks"
+        calibration_root = tmp_path / "calibrations"
+        for name, value in {"front_upper": 255, "rear_upper": 0}.items():
+            (mask_root / name).mkdir(parents=True)
+            cv2 = pytest.importorskip("cv2")
+            cv2.imwrite(str(mask_root / name / "mask.png"), np.full((1, 10), value, np.uint8))
+        calibration_root.mkdir()
+        (calibration_root / "model.csv").write_text("Channel,Elevation,Azimuth\n1,0.0,0.0\n")
+
+        sample = {
+            "points": np.array(
+                [[10.0, 0.0, 0.0, 1.0], [20.0, 0.0, 0.0, 2.0]], dtype=np.float32
+            ),
+            "labels": np.array([1, 2], dtype=np.int64),
+            "lidar_sources": {
+                "LIDAR_FRONT_UPPER": {
+                    "sensor_token": "front",
+                    "translation": [0.0, 0.0, 0.0],
+                    "rotation": np.eye(3).tolist(),
+                },
+                "LIDAR_REAR_UPPER": {
+                    "sensor_token": "rear",
+                    "translation": [0.0, 0.0, 0.0],
+                    "rotation": np.eye(3).tolist(),
+                },
+            },
+            "lidar_sources_info": {
+                "sources": [
+                    {"sensor_token": "front", "idx_begin": 0, "length": 1},
+                    {"sensor_token": "rear", "idx_begin": 1, "length": 1},
+                ]
+            },
+        }
+
+        output = NebulaDownsampleMaskFilter(
+            mask_root=str(mask_root),
+            calibration_root=str(calibration_root),
+            lidar_name_to_mask={
+                "front_upper": "front_upper/mask.png",
+                "rear_upper": "rear_upper/mask.png",
+            },
+            lidar_name_to_model={"front_upper": "test_model", "rear_upper": "test_model"},
+            model_to_calibration={"test_model": "model.csv"},
+            use_calibration_azimuth_offsets=False,
+        )(sample)
+
+        np.testing.assert_allclose(output["points"], np.array([[10.0, 0.0, 0.0, 1.0]]))
+        np.testing.assert_array_equal(output["labels"], np.array([1], dtype=np.int64))
+
+    def test_nebula_downsample_mask_filter_uses_nebula_azimuth_convention(self, tmp_path):
+        mask_root = tmp_path / "masks"
+        calibration_root = tmp_path / "calibrations"
+        (mask_root / "front_upper").mkdir(parents=True)
+        calibration_root.mkdir()
+        cv2 = pytest.importorskip("cv2")
+        mask = np.zeros((1, 4), dtype=np.uint8)
+        mask[0, 0] = 255
+        cv2.imwrite(str(mask_root / "front_upper" / "mask.png"), mask)
+        (calibration_root / "model.csv").write_text("Channel,Elevation,Azimuth\n1,0.0,0.0\n")
+
+        sample = {
+            "points": np.array(
+                [
+                    [0.0, 10.0, 0.0, 1.0],
+                    [10.0, 0.0, 0.0, 2.0],
+                ],
+                dtype=np.float32,
+            ),
+            "source_name": "LIDAR_FRONT_UPPER",
+        }
+
+        output = NebulaDownsampleMaskFilter(
+            mask_root=str(mask_root),
+            calibration_root=str(calibration_root),
+            lidar_name_to_mask={"front_upper": "front_upper/mask.png"},
+            lidar_name_to_model={"front_upper": "test_model"},
+            model_to_calibration={"test_model": "model.csv"},
+            use_calibration_azimuth_offsets=False,
+        )(sample)
+
+        np.testing.assert_allclose(output["points"], np.array([[0.0, 10.0, 0.0, 1.0]]))
 
     def test_grid_sample_keeps_arrays_aligned(self):
         sample = {
