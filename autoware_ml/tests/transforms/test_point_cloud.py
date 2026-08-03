@@ -79,15 +79,55 @@ class TestPointCloudTransforms:
     def test_points_range_filter(self):
         sample = {
             "points": np.array(
-                [[0.0, 0.0, 0.0], [5.0, 0.0, 0.0], [1.0, 1.0, 1.0]], dtype=np.float32
+                [
+                    [-1.0, -1.0, -1.0],
+                    [0.0, 0.0, 0.0],
+                    [2.0, 0.0, 0.0],
+                    [0.0, 2.0, 0.0],
+                    [0.0, 0.0, 2.0],
+                    [5.0, 0.0, 0.0],
+                    [1.0, 1.0, 1.0],
+                ],
+                dtype=np.float32,
             ),
-            "intensity": np.array([1.0, 2.0, 3.0], dtype=np.float32),
+            "intensity": np.arange(7, dtype=np.float32),
         }
 
         output = PointsRangeFilter(point_cloud_range=[-1.0, -1.0, -1.0, 2.0, 2.0, 2.0])(sample)
 
-        assert output["points"].shape[0] == 2
-        assert output["intensity"].shape[0] == 2
+        expected_points = np.array(
+            [[-1.0, -1.0, -1.0], [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]], dtype=np.float32
+        )
+        assert np.allclose(output["points"], expected_points)
+        assert output["intensity"].tolist() == [0.0, 1.0, 6.0]
+
+    def test_points_range_filter_prevents_max_bound_grid_coords(self):
+        point_cloud_range = [0.0, 0.0, 0.0, 2.0, 2.0, 2.0]
+        sample = {
+            "coord": np.array(
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.999, 1.999, 1.999],
+                    [2.0, 0.0, 0.0],
+                    [0.0, 2.0, 0.0],
+                    [0.0, 0.0, 2.0],
+                ],
+                dtype=np.float32,
+            )
+        }
+
+        ranged = PointsRangeFilter(point_cloud_range=point_cloud_range)(sample)
+        output = GridSample(
+            grid_size=1.0,
+            mode="test",
+            keys=("coord",),
+            return_grid_coord=True,
+            point_cloud_range=point_cloud_range,
+        )(ranged)
+
+        assert output["grid_coord"].shape == (2, 3)
+        assert np.all(output["grid_coord"] >= 0)
+        assert np.all(output["grid_coord"] < 2)
 
     def test_random_flip3d_updates_detection_boxes(self):
         sample = {
