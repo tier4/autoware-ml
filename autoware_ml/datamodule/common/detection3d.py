@@ -76,8 +76,11 @@ def build_sweep_entries(sample: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Convert stored ``lidar_sweeps`` metadata into loader-ready sweep entries.
 
     Each entry carries the sweep point-cloud path, its timestamp, and the
-    rigid transform from the sweep lidar frame into the key lidar frame,
-    composed from the stored ego poses and lidar extrinsics.
+    rigid transform from the sweep lidar frame into the key lidar frame.
+
+    The precomputed ``lidar2sensor`` matrix (the key-lidar → sweep-lidar
+    transform including ego motion) is preferred when present. Recomposing the
+    transform from the stored ego poses is only a fallback
 
     Args:
         sample: Raw sample dictionary with ``lidar_points``, ``ego2global``,
@@ -94,15 +97,21 @@ def build_sweep_entries(sample: Mapping[str, Any]) -> list[dict[str, Any]]:
     if not lidar_sweeps:
         return []
 
-    key_lidar2ego = np.asarray(sample["lidar_points"]["lidar2ego"], dtype=np.float64)
-    key_ego2global = np.asarray(sample["ego2global"], dtype=np.float64)
-    global2key_lidar = np.linalg.inv(key_ego2global @ key_lidar2ego)
+    global2key_lidar = None
 
     entries = []
     for sweep in lidar_sweeps:
-        sweep_lidar2ego = np.asarray(sweep["lidar_points"]["lidar2ego"], dtype=np.float64)
-        sweep_ego2global = np.asarray(sweep["ego2global"], dtype=np.float64)
-        sweep2key_lidar = global2key_lidar @ sweep_ego2global @ sweep_lidar2ego
+        lidar2sensor = sweep["lidar_points"].get("lidar2sensor")
+        if lidar2sensor is not None:
+            sweep2key_lidar = np.linalg.inv(np.asarray(lidar2sensor, dtype=np.float64))
+        else:
+            if global2key_lidar is None:
+                key_lidar2ego = np.asarray(sample["lidar_points"]["lidar2ego"], dtype=np.float64)
+                key_ego2global = np.asarray(sample["ego2global"], dtype=np.float64)
+                global2key_lidar = np.linalg.inv(key_ego2global @ key_lidar2ego)
+            sweep_lidar2ego = np.asarray(sweep["lidar_points"]["lidar2ego"], dtype=np.float64)
+            sweep_ego2global = np.asarray(sweep["ego2global"], dtype=np.float64)
+            sweep2key_lidar = global2key_lidar @ sweep_ego2global @ sweep_lidar2ego
         entries.append(
             {
                 "lidar_path": sweep["lidar_points"]["lidar_path"],
