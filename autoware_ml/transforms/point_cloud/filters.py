@@ -275,6 +275,141 @@ class NebulaDownsampleMaskFilter(BaseTransform):
         return self._calibrations[lidar_name]
 
 
+class EgoCropBoxFilter(BaseTransform):
+    """Remove points falling inside the ego vehicle's crop boxes.
+
+    Autoware crops the vehicle body and the steered front wheels out of every LiDAR scan before
+    concatenation (two negative crop boxes, see ``nebula_node_container.launch.py``). T4Dataset
+    carries un-cropped concatenated clouds -- the ego vehicle is plainly visible in them -- so this
+    step has to be reapplied to match the inference-time point distribution. It removes up to 18%
+    of a single LiDAR's points (``rear_lower`` on AIP X2 Gen2).
+
+    Ordering matters. On the vehicle the crop is evaluated as a *mask* that is only AND-ed into the
+    output at the very end, so cropped points are still present as neighbours while the ring outlier
+    filter runs. Place this transform **after** :class:`RingOutlierFilter`; running it first
+    discards those neighbours and measurably changes the ring filter's decisions.
+
+    Points are expected in the ego/``base_link`` frame, which is how T4Dataset stores them.
+    """
+
+    _required_keys = ["points"]
+
+    def __init__(self, *, crop_boxes: Sequence[Sequence[float]] | None = None) -> None:
+        """Initialize the EgoCropBoxFilter transform.
+
+        Args:
+            crop_boxes: Boxes to remove, each ``[x_min, y_min, z_min, x_max, y_max, z_max]`` in the
+                ego frame. Defaults to the AIP X2 Gen2 self and wheels boxes.
+        """
+        boxes = AIP_X2_GEN2_EGO_CROP_BOXES if crop_boxes is None else crop_boxes
+        self.crop_boxes = np.asarray(boxes, dtype=np.float32).reshape(-1, 6)
+        if self.crop_boxes.size == 0:
+            raise ValueError("crop_boxes must contain at least one box")
+
+    def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
+        """Drop points inside any configured box, keeping aligned per-point arrays consistent."""
+        points = np.asarray(input_dict["points"], dtype=np.float32)
+        inside = np.zeros(points.shape[0], dtype=bool)
+        for x_min, y_min, z_min, x_max, y_max, z_max in self.crop_boxes:
+            inside |= (
+                (points[:, 0] >= x_min)
+                & (points[:, 0] <= x_max)
+                & (points[:, 1] >= y_min)
+                & (points[:, 1] <= y_max)
+                & (points[:, 2] >= z_min)
+                & (points[:, 2] <= z_max)
+            )
+
+        keep_mask = ~inside
+        for key, value in list(input_dict.items()):
+            if (
+                isinstance(value, np.ndarray)
+                and value.ndim > 0
+                and value.shape[0] == points.shape[0]
+            ):
+                input_dict[key] = value[keep_mask]
+        return input_dict
+
+
+def ego_crop_boxes_from_vehicle_info(
+    *,
+    wheel_base: float,
+    wheel_tread: float,
+    wheel_radius: float,
+    wheel_width: float,
+    front_overhang: float,
+    rear_overhang: float,
+    left_overhang: float,
+    right_overhang: float,
+    vehicle_height: float,
+    max_steer_angle: float,
+) -> list[list[float]]:
+    """Derive the self and wheels crop boxes from vehicle dimensions.
+
+    Transcribes ``get_vehicle_info()`` in
+    ``aip_x2_gen2_launch/launch/nebula_node_container.launch.py``, so the boxes stay consistent with
+    whatever the vehicle's ``vehicle_info.param.yaml`` declares.
+
+    Args:
+        wheel_base: Distance between front and rear wheel centres.
+        wheel_tread: Distance between left and right wheel centres.
+        wheel_radius: Wheel radius.
+        wheel_width: Wheel width.
+        front_overhang: Front wheel centre to vehicle front.
+        rear_overhang: Rear wheel centre to vehicle rear.
+        left_overhang: Left wheel centre to vehicle left.
+        right_overhang: Right wheel centre to vehicle right.
+        vehicle_height: Overall vehicle height.
+        max_steer_angle: Maximum tire cut angle in radians.
+
+    Returns:
+        Two boxes as ``[x_min, y_min, z_min, x_max, y_max, z_max]``: the vehicle body, then the
+        swept volume of the steered front wheels.
+    """
+    half_width = wheel_width / 2.0
+    center_to_corner = float(np.hypot(half_width, wheel_radius))
+    corner_angle = float(np.arctan2(half_width, wheel_radius))
+    if corner_angle < max_steer_angle:
+        max_longitudinal = center_to_corner
+    else:
+        max_longitudinal = center_to_corner * float(np.cos(max_steer_angle - corner_angle))
+    max_lateral = center_to_corner * float(np.sin(max_steer_angle + corner_angle))
+
+    self_box = [
+        -rear_overhang,
+        -(wheel_tread / 2.0 + right_overhang),
+        0.0,
+        front_overhang + wheel_base,
+        wheel_tread / 2.0 + left_overhang,
+        vehicle_height,
+    ]
+    # The wheel box is scaled to 110% of wheel diameter upstream to absorb suspension travel.
+    wheels_box = [
+        wheel_base - max_longitudinal,
+        -(wheel_tread / 2.0 + max_lateral),
+        0.0,
+        wheel_base + max_longitudinal,
+        wheel_tread / 2.0 + max_lateral,
+        wheel_radius * 2.2,
+    ]
+    return [self_box, wheels_box]
+
+
+# Derived from j6_gen2_description/config/vehicle_info.param.yaml.
+AIP_X2_GEN2_EGO_CROP_BOXES = ego_crop_boxes_from_vehicle_info(
+    wheel_base=4.76012,
+    wheel_tread=1.754,
+    wheel_radius=0.3725,
+    wheel_width=0.215,
+    front_overhang=0.95099,
+    rear_overhang=1.52579,
+    left_overhang=0.32358,
+    right_overhang=0.34983,
+    vehicle_height=3.080,
+    max_steer_angle=0.838,
+)
+
+
 def _dither_mask(image: npt.NDArray[np.uint8], model_name: str) -> npt.NDArray[np.bool_]:
     height, width = image.shape
     y, x = np.indices((height, width), dtype=np.int64)

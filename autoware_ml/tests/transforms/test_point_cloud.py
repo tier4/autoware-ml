@@ -9,6 +9,8 @@ from autoware_ml.transforms.point_cloud.crop import (
     SphereCrop,
 )
 from autoware_ml.transforms.point_cloud.filters import (
+    AIP_X2_GEN2_EGO_CROP_BOXES,
+    EgoCropBoxFilter,
     NebulaDownsampleMaskFilter,
 )
 from autoware_ml.transforms.point_cloud.geometry import (
@@ -328,6 +330,43 @@ class TestPointCloudTransforms:
         )(sample)
 
         np.testing.assert_allclose(output["points"], np.array([[0.0, 10.0, 0.0, 1.0]]))
+
+    def test_ego_crop_box_filter_removes_ego_points_and_keeps_arrays_aligned(self):
+        sample = {
+            "points": np.array(
+                [
+                    [0.0, 0.0, 0.5, 1.0, 0.0],  # inside the vehicle body
+                    [4.7, 0.0, 0.4, 2.0, 0.0],  # inside the wheels box
+                    [10.0, 0.0, 0.5, 3.0, 0.0],  # ahead of the vehicle
+                    [0.0, 0.0, -0.1, 4.0, 0.0],  # below the box floor (ground return)
+                ],
+                dtype=np.float32,
+            ),
+            "labels": np.array([10, 11, 12, 13], dtype=np.int64),
+        }
+
+        output = EgoCropBoxFilter()(sample)
+
+        np.testing.assert_allclose(
+            output["points"],
+            np.array(
+                [[10.0, 0.0, 0.5, 3.0, 0.0], [0.0, 0.0, -0.1, 4.0, 0.0]],
+                dtype=np.float32,
+            ),
+        )
+        np.testing.assert_array_equal(output["labels"], np.array([12, 13], dtype=np.int64))
+
+    def test_ego_crop_boxes_match_aip_x2_gen2_vehicle_info(self):
+        self_box, wheels_box = AIP_X2_GEN2_EGO_CROP_BOXES
+
+        # Body box spans rear overhang to front axle + front overhang, floor to roof.
+        np.testing.assert_allclose(
+            self_box, [-1.52579, -1.22683, 0.0, 5.71111, 1.20058, 3.080], atol=1e-5
+        )
+        # Wheels box straddles the front axle and is capped at 110% of wheel diameter.
+        np.testing.assert_allclose(
+            wheels_box, [4.372418, -1.225794, 0.0, 5.147822, 1.225794, 0.8195], atol=1e-5
+        )
 
     def test_grid_sample_keeps_arrays_aligned(self):
         sample = {
