@@ -8,7 +8,9 @@ from autoware_ml.transforms.point_cloud.crop import (
     PointsRangeFilter,
     SphereCrop,
 )
-from autoware_ml.transforms.point_cloud.filters import NebulaDownsampleMaskFilter
+from autoware_ml.transforms.point_cloud.filters import (
+    NebulaDownsampleMaskFilter,
+)
 from autoware_ml.transforms.point_cloud.geometry import (
     GlobalRotScaleTrans,
     RandomFlip3D,
@@ -235,7 +237,7 @@ class TestPointCloudTransforms:
             calibration_root=str(calibration_root),
             lidar_name_to_mask={"front_upper": "front_upper/mask.png"},
             lidar_name_to_model={"front_upper": "test_model"},
-            model_to_calibration={"test_model": "model.csv"},
+            lidar_name_to_calibration={"front_upper": "model.csv"},
             use_calibration_azimuth_offsets=False,
             return_stats=True,
         )(sample)
@@ -257,9 +259,7 @@ class TestPointCloudTransforms:
         (calibration_root / "model.csv").write_text("Channel,Elevation,Azimuth\n1,0.0,0.0\n")
 
         sample = {
-            "points": np.array(
-                [[10.0, 0.0, 0.0, 1.0], [20.0, 0.0, 0.0, 2.0]], dtype=np.float32
-            ),
+            "points": np.array([[10.0, 0.0, 0.0, 1.0], [20.0, 0.0, 0.0, 2.0]], dtype=np.float32),
             "labels": np.array([1, 2], dtype=np.int64),
             "lidar_sources": {
                 "LIDAR_FRONT_UPPER": {
@@ -289,7 +289,7 @@ class TestPointCloudTransforms:
                 "rear_upper": "rear_upper/mask.png",
             },
             lidar_name_to_model={"front_upper": "test_model", "rear_upper": "test_model"},
-            model_to_calibration={"test_model": "model.csv"},
+            lidar_name_to_calibration={"front_upper": "model.csv", "rear_upper": "model.csv"},
             use_calibration_azimuth_offsets=False,
         )(sample)
 
@@ -323,7 +323,7 @@ class TestPointCloudTransforms:
             calibration_root=str(calibration_root),
             lidar_name_to_mask={"front_upper": "front_upper/mask.png"},
             lidar_name_to_model={"front_upper": "test_model"},
-            model_to_calibration={"test_model": "model.csv"},
+            lidar_name_to_calibration={"front_upper": "model.csv"},
             use_calibration_azimuth_offsets=False,
         )(sample)
 

@@ -57,10 +57,7 @@ _DEFAULT_MODELS = {
     "rear_lower": "pandar_qt128",
     "right_lower": "pandar_qt128",
 }
-_DEFAULT_CALIBRATIONS = {
-    "pandar128e4x": "pandar128e4x.csv",
-    "pandar_qt128": "pandar_qt128.csv",
-}
+_DEFAULT_CALIBRATIONS = {name: f"{_DEFAULT_MODELS[name]}.csv" for name in _DEFAULT_MASKS}
 
 
 @dataclass(frozen=True)
@@ -110,7 +107,7 @@ class NebulaDownsampleMaskFilter(BaseTransform):
         calibration_root: str | None = None,
         lidar_name_to_mask: Mapping[str, str] | None = None,
         lidar_name_to_model: Mapping[str, str] | None = None,
-        model_to_calibration: Mapping[str, str] | None = None,
+        lidar_name_to_calibration: Mapping[str, str] | None = None,
         use_calibration_azimuth_offsets: bool = True,
         azimuth_start_deg: float = 0.0,
         azimuth_extent_deg: float = 360.0,
@@ -125,8 +122,8 @@ class NebulaDownsampleMaskFilter(BaseTransform):
             lidar_name_to_mask: LiDAR-name to mask path mapping. Relative paths resolve under
                 ``mask_root``.
             lidar_name_to_model: LiDAR-name to model key mapping.
-            model_to_calibration: Model key to calibration CSV mapping. Relative paths resolve under
-                ``calibration_root``.
+            lidar_name_to_calibration: LiDAR-name to calibration CSV mapping. Relative paths resolve
+                under ``calibration_root``.
             use_calibration_azimuth_offsets: Whether to subtract per-channel azimuth calibration
                 offsets before sampling the mask x-coordinate.
             azimuth_start_deg: Start of the mask azimuth range.
@@ -134,8 +131,10 @@ class NebulaDownsampleMaskFilter(BaseTransform):
             return_stats: Whether to attach per-source keep/drop counts.
         """
         self.mask_root = Path(mask_root) if mask_root is not None else Path(_DEFAULT_MASK_ROOT)
-        self.calibration_root = Path(calibration_root) if calibration_root is not None else Path(
-            _DEFAULT_CALIBRATION_ROOT
+        self.calibration_root = (
+            Path(calibration_root)
+            if calibration_root is not None
+            else Path(_DEFAULT_CALIBRATION_ROOT)
         )
         self.lidar_name_to_mask = {
             _normalize_lidar_name(name): path
@@ -145,9 +144,9 @@ class NebulaDownsampleMaskFilter(BaseTransform):
             _normalize_lidar_name(name): _normalize_model_name(model)
             for name, model in (lidar_name_to_model or _DEFAULT_MODELS).items()
         }
-        self.model_to_calibration = {
-            _normalize_model_name(model): path
-            for model, path in (model_to_calibration or _DEFAULT_CALIBRATIONS).items()
+        self.lidar_name_to_calibration = {
+            _normalize_lidar_name(name): path
+            for name, path in (lidar_name_to_calibration or _DEFAULT_CALIBRATIONS).items()
         }
         self.use_calibration_azimuth_offsets = use_calibration_azimuth_offsets
         self.azimuth_start_deg = float(azimuth_start_deg)
@@ -192,57 +191,12 @@ class NebulaDownsampleMaskFilter(BaseTransform):
         return input_dict
 
     def _iter_sources(self, input_dict: Mapping[str, Any], point_count: int) -> list[_SourceSlice]:
-        lidar_sources = input_dict.get("lidar_sources")
-        lidar_sources_info = input_dict.get("lidar_sources_info")
-        if isinstance(lidar_sources, Mapping) and isinstance(lidar_sources_info, Mapping):
-            return self._iter_concat_sources(lidar_sources, lidar_sources_info)
-
-        source_name = input_dict.get("source_name") or input_dict.get("lidar_source_name")
-        if source_name is None:
-            sample_name = str(input_dict.get("name", ""))
-            source_name = _infer_lidar_name_from_text(sample_name)
-        if source_name is None:
-            raise KeyError(
-                "NebulaDownsampleMaskFilter requires concat 'lidar_sources' metadata or a "
-                "single-source 'source_name'."
-            )
-        return [
-            _SourceSlice(
-                name=str(source_name),
-                sensor_token=input_dict.get("sensor_token"),
-                point_slice=slice(0, point_count),
-                translation=None,
-                rotation=None,
-            )
-        ]
+        return _iter_pointcloud_sources(input_dict, point_count)
 
     def _iter_concat_sources(
         self, lidar_sources: Mapping[str, Any], lidar_sources_info: Mapping[str, Any]
     ) -> list[_SourceSlice]:
-        source_ranges = {
-            str(source.get("sensor_token")): source
-            for source in lidar_sources_info.get("sources", [])
-        }
-        output = []
-        for source_name, source_meta in lidar_sources.items():
-            sensor_token = str(source_meta.get("sensor_token"))
-            source_range = source_ranges.get(sensor_token)
-            if source_range is None:
-                continue
-            idx_begin = int(source_range["idx_begin"])
-            length = int(source_range["length"])
-            output.append(
-                _SourceSlice(
-                    name=str(source_name),
-                    sensor_token=sensor_token,
-                    point_slice=slice(idx_begin, idx_begin + length),
-                    translation=np.asarray(source_meta.get("translation"), dtype=np.float32),
-                    rotation=np.asarray(source_meta.get("rotation"), dtype=np.float32),
-                )
-            )
-        if not output:
-            raise ValueError("lidar_sources_info did not match any configured lidar_sources.")
-        return output
+        return _iter_concat_sources(lidar_sources, lidar_sources_info)
 
     def _source_keep_mask(
         self,
@@ -256,7 +210,7 @@ class NebulaDownsampleMaskFilter(BaseTransform):
         if source.translation is not None and source.rotation is not None:
             local_points = (source_points - source.translation) @ source.rotation
 
-        calibration = self._load_calibration(model_name)
+        calibration = self._load_calibration(lidar_name)
         channels = _nearest_channel(local_points, calibration.elevation_rad)
         azimuth_deg = np.rad2deg(_nebula_azimuth_rad(local_points))
         if self.use_calibration_azimuth_offsets:
@@ -277,7 +231,7 @@ class NebulaDownsampleMaskFilter(BaseTransform):
         image = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
         if image is None:
             raise FileNotFoundError(f"Could not read Nebula downsample mask: {mask_path}")
-        calibration = self._load_calibration(model_name)
+        calibration = self._load_calibration(lidar_name)
         if image.shape[0] != calibration.elevation_rad.shape[0]:
             raise ValueError(
                 f"Mask {mask_path} has {image.shape[0]} rows, but {model_name} calibration has "
@@ -286,26 +240,39 @@ class NebulaDownsampleMaskFilter(BaseTransform):
         self._masks[lidar_name] = _dither_mask(image, model_name)
         return self._masks[lidar_name]
 
-    def _load_calibration(self, model_name: str) -> _Calibration:
-        if model_name in self._calibrations:
-            return self._calibrations[model_name]
+    def _load_calibration(self, lidar_name: str) -> _Calibration:
+        lidar_name = _normalize_lidar_name(lidar_name)
+        if lidar_name in self._calibrations:
+            return self._calibrations[lidar_name]
         calibration_path = _resolve_path(
-            self.calibration_root, self.model_to_calibration[model_name]
+            self.calibration_root, self.lidar_name_to_calibration[lidar_name]
         )
         elevations = []
         azimuths = []
         with open(calibration_path, newline="") as file:
-            reader = csv.DictReader(file)
+            rows = csv.reader(file)
+            header = None
+            for row in rows:
+                if "Elevation" in row and "Azimuth" in row:
+                    header = row
+                    break
+            if header is None:
+                raise ValueError(
+                    f"Calibration file has no Elevation/Azimuth header: {calibration_path}"
+                )
+            reader = csv.DictReader(file, fieldnames=header)
             for row in reader:
+                if not row.get("Elevation") or not row.get("Azimuth"):
+                    continue
                 elevations.append(float(row["Elevation"]))
                 azimuths.append(float(row["Azimuth"]))
         if not elevations:
             raise ValueError(f"Calibration file has no channel rows: {calibration_path}")
-        self._calibrations[model_name] = _Calibration(
+        self._calibrations[lidar_name] = _Calibration(
             elevation_rad=np.deg2rad(np.asarray(elevations, dtype=np.float32)),
             azimuth_deg=np.asarray(azimuths, dtype=np.float32),
         )
-        return self._calibrations[model_name]
+        return self._calibrations[lidar_name]
 
 
 def _dither_mask(image: npt.NDArray[np.uint8], model_name: str) -> npt.NDArray[np.bool_]:
@@ -313,9 +280,8 @@ def _dither_mask(image: npt.NDArray[np.uint8], model_name: str) -> npt.NDArray[n
     y, x = np.indices((height, width), dtype=np.int64)
     if model_name == "pandar128e4x":
         positions = (
-            ((x // 2) * 2 + (y // 4) * 4 + (y % 2))
-            % NebulaDownsampleMaskFilter._QUANTIZATION_LEVELS
-        )
+            (x // 2) * 2 + (y // 4) * 4 + (y % 2)
+        ) % NebulaDownsampleMaskFilter._QUANTIZATION_LEVELS
     else:
         positions = (x + y) % NebulaDownsampleMaskFilter._QUANTIZATION_LEVELS
 
@@ -323,10 +289,65 @@ def _dither_mask(image: npt.NDArray[np.uint8], model_name: str) -> npt.NDArray[n
     output = np.zeros(image.shape, dtype=bool)
     for keep_count in range(1, NebulaDownsampleMaskFilter._QUANTIZATION_LEVELS + 1):
         kept_positions = _round_half_up(
-            NebulaDownsampleMaskFilter._QUANTIZATION_LEVELS / float(keep_count)
+            NebulaDownsampleMaskFilter._QUANTIZATION_LEVELS
+            / float(keep_count)
             * np.arange(keep_count)
         )
         output |= (numerator == keep_count) & np.isin(positions, kept_positions)
+    return output
+
+
+def _iter_pointcloud_sources(input_dict: Mapping[str, Any], point_count: int) -> list[_SourceSlice]:
+    lidar_sources = input_dict.get("lidar_sources")
+    lidar_sources_info = input_dict.get("lidar_sources_info")
+    if isinstance(lidar_sources, Mapping) and isinstance(lidar_sources_info, Mapping):
+        return _iter_concat_sources(lidar_sources, lidar_sources_info)
+
+    source_name = input_dict.get("source_name") or input_dict.get("lidar_source_name")
+    if source_name is None:
+        sample_name = str(input_dict.get("name", ""))
+        source_name = _infer_lidar_name_from_text(sample_name)
+    if source_name is None:
+        raise KeyError(
+            "Pointcloud source-aware filters require concat 'lidar_sources' metadata or a "
+            "single-source 'source_name'."
+        )
+    return [
+        _SourceSlice(
+            name=str(source_name),
+            sensor_token=input_dict.get("sensor_token"),
+            point_slice=slice(0, point_count),
+            translation=None,
+            rotation=None,
+        )
+    ]
+
+
+def _iter_concat_sources(
+    lidar_sources: Mapping[str, Any], lidar_sources_info: Mapping[str, Any]
+) -> list[_SourceSlice]:
+    source_ranges = {
+        str(source.get("sensor_token")): source for source in lidar_sources_info.get("sources", [])
+    }
+    output = []
+    for source_name, source_meta in lidar_sources.items():
+        sensor_token = str(source_meta.get("sensor_token"))
+        source_range = source_ranges.get(sensor_token)
+        if source_range is None:
+            continue
+        idx_begin = int(source_range["idx_begin"])
+        length = int(source_range["length"])
+        output.append(
+            _SourceSlice(
+                name=str(source_name),
+                sensor_token=sensor_token,
+                point_slice=slice(idx_begin, idx_begin + length),
+                translation=np.asarray(source_meta.get("translation"), dtype=np.float32),
+                rotation=np.asarray(source_meta.get("rotation"), dtype=np.float32),
+            )
+        )
+    if not output:
+        raise ValueError("lidar_sources_info did not match any configured lidar_sources.")
     return output
 
 
