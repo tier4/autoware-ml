@@ -17,64 +17,81 @@
 import numpy as np
 import pytest
 
-from autoware_ml.transforms.point_cloud.nebula_mask import NebulaDownsampleMaskFilter
+from autoware_ml.transforms.point_cloud.nebula_mask import (
+    LidarMask,
+    NebulaDownsampleMaskFilter,
+)
+
+
+def lidar_mask(keep, *, elevation_deg=None, azimuth_deg=None) -> LidarMask:
+    """Build a LidarMask from a keep grid, defaulting the calibration to flat zeros.
+
+    Args:
+        keep: ``(channels, azimuth_bins)`` array-like of booleans or 0/1.
+        elevation_deg: Per-channel elevation. Defaults to all-zero, which makes the elevation-based
+            ring estimate resolve every point to channel 0.
+        azimuth_deg: Per-channel azimuth correction. Defaults to all-zero.
+    """
+    grid = np.asarray(keep, dtype=bool)
+    channels = grid.shape[0]
+    return LidarMask(
+        keep=grid,
+        elevation_rad=np.deg2rad(
+            np.asarray(
+                np.zeros(channels) if elevation_deg is None else elevation_deg, dtype=np.float32
+            )
+        ),
+        azimuth_deg=np.asarray(
+            np.zeros(channels) if azimuth_deg is None else azimuth_deg, dtype=np.float32
+        ),
+    )
+
+
+def single_source_filter(keep, *, name="front_upper", **kwargs) -> NebulaDownsampleMaskFilter:
+    """A filter configured with one LiDAR's mask."""
+    return NebulaDownsampleMaskFilter(lidar_masks={name: lidar_mask(keep)}, **kwargs)
 
 
 class TestNebulaDownsampleMaskFilter:
-    def test_nebula_downsample_mask_filter_keeps_aligned_point_arrays(self, tmp_path):
-        mask_root = tmp_path / "masks"
-        calibration_root = tmp_path / "calibrations"
-        (mask_root / "front_upper").mkdir(parents=True)
-        calibration_root.mkdir()
-        mask = np.zeros((2, 10), dtype=np.uint8)
-        mask[0, :] = 255
-        cv2 = pytest.importorskip("cv2")
-        cv2.imwrite(str(mask_root / "front_upper" / "mask.png"), mask)
-        (calibration_root / "model.csv").write_text(
-            "Channel,Elevation,Azimuth\n1,0.0,0.0\n2,45.0,0.0\n"
-        )
-
+    def test_keeps_aligned_point_arrays(self):
+        # One channel, two azimuth bins; only the first bin survives.
         sample = {
-            "points": np.array(
-                [
-                    [10.0, 0.0, 0.0, 1.0],
-                    [10.0, 0.0, 10.0, 2.0],
-                ],
-                dtype=np.float32,
-            ),
-            "pts_semantic_mask": np.array([7, 9], dtype=np.int64),
+            "points": np.array([[0.0, 10.0, 0.0, 1.0], [10.0, 0.0, 0.0, 2.0]], dtype=np.float32),
+            "labels": np.array([7, 8], dtype=np.int64),
             "source_name": "LIDAR_FRONT_UPPER",
         }
 
-        output = NebulaDownsampleMaskFilter(
-            mask_root=str(mask_root),
-            calibration_root=str(calibration_root),
-            lidar_name_to_mask={"front_upper": "front_upper/mask.png"},
-            lidar_name_to_model={"front_upper": "test_model"},
-            lidar_name_to_calibration={"front_upper": "model.csv"},
-            use_calibration_azimuth_offsets=False,
-            return_stats=True,
-        )(sample)
+        output = single_source_filter([[1, 0]], channel_dim=None)(sample)
 
-        assert output["points"].shape == (1, 4)
-        np.testing.assert_array_equal(output["pts_semantic_mask"], np.array([7], dtype=np.int64))
-        assert output["nebula_downsample_stats"] == [
-            {"source_name": "LIDAR_FRONT_UPPER", "num_input_points": 2, "num_kept_points": 1}
-        ]
+        # Azimuth is measured from +y, so the first point lands in bin 0 and the second in bin 1.
+        np.testing.assert_allclose(output["points"], np.array([[0.0, 10.0, 0.0, 1.0]]))
+        np.testing.assert_array_equal(output["labels"], np.array([7], dtype=np.int64))
 
-    def test_nebula_downsample_mask_filter_uses_concat_source_slices(self, tmp_path):
-        mask_root = tmp_path / "masks"
-        calibration_root = tmp_path / "calibrations"
-        for name, value in {"front_upper": 255, "rear_upper": 0}.items():
-            (mask_root / name).mkdir(parents=True)
-            cv2 = pytest.importorskip("cv2")
-            cv2.imwrite(str(mask_root / name / "mask.png"), np.full((1, 10), value, np.uint8))
-        calibration_root.mkdir()
-        (calibration_root / "model.csv").write_text("Channel,Elevation,Azimuth\n1,0.0,0.0\n")
-
+    def test_uses_nebula_azimuth_convention(self):
+        # Four bins of 90 deg. Nebula measures azimuth from +y toward +x, so a point on +y is at
+        # 0 deg (bin 0) and a point on +x is at 90 deg (bin 1). Only bin 0 is kept.
         sample = {
-            "points": np.array([[10.0, 0.0, 0.0, 1.0], [20.0, 0.0, 0.0, 2.0]], dtype=np.float32),
-            "labels": np.array([1, 2], dtype=np.int64),
+            "points": np.array([[0.0, 10.0, 0.0, 1.0], [10.0, 0.0, 0.0, 2.0]], dtype=np.float32),
+            "source_name": "LIDAR_FRONT_UPPER",
+        }
+
+        output = single_source_filter([[1, 0, 0, 0]], channel_dim=None)(sample)
+
+        np.testing.assert_allclose(output["points"], np.array([[0.0, 10.0, 0.0, 1.0]]))
+
+    def test_uses_concat_source_slices(self):
+        # Two sources with opposite masks: the front keeps bin 0, the rear keeps bin 1.
+        sample = {
+            "points": np.array(
+                [
+                    [0.0, 10.0, 0.0, 1.0],  # front, bin 0 -> kept
+                    [10.0, 0.0, 0.0, 2.0],  # front, bin 1 -> dropped
+                    [0.0, 10.0, 0.0, 3.0],  # rear,  bin 0 -> dropped
+                    [10.0, 0.0, 0.0, 4.0],  # rear,  bin 1 -> kept
+                ],
+                dtype=np.float32,
+            ),
+            "labels": np.array([1, 2, 3, 4], dtype=np.int64),
             "lidar_sources": {
                 "LIDAR_FRONT_UPPER": {
                     "sensor_token": "front",
@@ -89,102 +106,76 @@ class TestNebulaDownsampleMaskFilter:
             },
             "lidar_sources_info": {
                 "sources": [
-                    {"sensor_token": "front", "idx_begin": 0, "length": 1},
-                    {"sensor_token": "rear", "idx_begin": 1, "length": 1},
+                    {"sensor_token": "front", "idx_begin": 0, "length": 2},
+                    {"sensor_token": "rear", "idx_begin": 2, "length": 2},
                 ]
             },
         }
 
         output = NebulaDownsampleMaskFilter(
-            mask_root=str(mask_root),
-            calibration_root=str(calibration_root),
-            lidar_name_to_mask={
-                "front_upper": "front_upper/mask.png",
-                "rear_upper": "rear_upper/mask.png",
+            lidar_masks={
+                "front_upper": lidar_mask([[1, 0, 0, 0]]),
+                "rear_upper": lidar_mask([[0, 1, 0, 0]]),
             },
-            lidar_name_to_model={"front_upper": "test_model", "rear_upper": "test_model"},
-            lidar_name_to_calibration={"front_upper": "model.csv", "rear_upper": "model.csv"},
-            use_calibration_azimuth_offsets=False,
+            channel_dim=None,
         )(sample)
 
-        np.testing.assert_allclose(output["points"], np.array([[10.0, 0.0, 0.0, 1.0]]))
-        np.testing.assert_array_equal(output["labels"], np.array([1], dtype=np.int64))
+        np.testing.assert_array_equal(output["labels"], np.array([1, 4], dtype=np.int64))
 
-    def test_nebula_downsample_mask_filter_uses_nebula_azimuth_convention(self, tmp_path):
-        mask_root = tmp_path / "masks"
-        calibration_root = tmp_path / "calibrations"
-        (mask_root / "front_upper").mkdir(parents=True)
-        calibration_root.mkdir()
-        cv2 = pytest.importorskip("cv2")
-        mask = np.zeros((1, 4), dtype=np.uint8)
-        mask[0, 0] = 255
-        cv2.imwrite(str(mask_root / "front_upper" / "mask.png"), mask)
-        (calibration_root / "model.csv").write_text("Channel,Elevation,Azimuth\n1,0.0,0.0\n")
-
-        sample = {
-            "points": np.array(
-                [
-                    [0.0, 10.0, 0.0, 1.0],
-                    [10.0, 0.0, 0.0, 2.0],
-                ],
-                dtype=np.float32,
-            ),
-            "source_name": "LIDAR_FRONT_UPPER",
-        }
-
-        output = NebulaDownsampleMaskFilter(
-            mask_root=str(mask_root),
-            calibration_root=str(calibration_root),
-            lidar_name_to_mask={"front_upper": "front_upper/mask.png"},
-            lidar_name_to_model={"front_upper": "test_model"},
-            lidar_name_to_calibration={"front_upper": "model.csv"},
-            use_calibration_azimuth_offsets=False,
-        )(sample)
-
-        np.testing.assert_allclose(output["points"], np.array([[0.0, 10.0, 0.0, 1.0]]))
-
-    def test_nebula_downsample_mask_filter_prefers_the_stored_ring_index(self, tmp_path):
-        mask_root = tmp_path / "masks"
-        calibration_root = tmp_path / "calibrations"
-        (mask_root / "front_upper").mkdir(parents=True)
-        calibration_root.mkdir()
-        cv2 = pytest.importorskip("cv2")
+    def test_prefers_the_stored_ring_index(self):
         # Only ring 1 is kept. Both points sit at elevation 0, so estimating the ring from
         # elevation would put both on ring 0 and drop them; the stored index must win.
-        mask = np.zeros((2, 4), dtype=np.uint8)
-        mask[1, 0] = 255
-        cv2.imwrite(str(mask_root / "front_upper" / "mask.png"), mask)
-        (calibration_root / "model.csv").write_text(
-            "Channel,Elevation,Azimuth\n1,0.0,0.0\n2,45.0,0.0\n"
-        )
-
         # Columns are [x, y, z, intensity, channel].
         sample = {
             "points": np.array(
-                [[0.0, 10.0, 0.0, 1.0, 1.0], [0.0, 10.0, 0.0, 2.0, 0.0]],
-                dtype=np.float32,
+                [[0.0, 10.0, 0.0, 1.0, 1.0], [0.0, 10.0, 0.0, 2.0, 0.0]], dtype=np.float32
             ),
             "source_name": "LIDAR_FRONT_UPPER",
         }
+        keep = [[0, 0], [1, 0]]
 
-        kwargs = {
-            "mask_root": str(mask_root),
-            "calibration_root": str(calibration_root),
-            "lidar_name_to_mask": {"front_upper": "front_upper/mask.png"},
-            "lidar_name_to_model": {"front_upper": "test_model"},
-            "lidar_name_to_calibration": {"front_upper": "model.csv"},
-        }
-        output = NebulaDownsampleMaskFilter(channel_dim=4, **kwargs)(dict(sample))
+        output = single_source_filter(keep, channel_dim=4)(dict(sample))
         np.testing.assert_allclose(output["points"], sample["points"][:1])
 
-        # Opting out falls back to the elevation estimate, which drops both points.
-        fallback = NebulaDownsampleMaskFilter(channel_dim=None, **kwargs)(dict(sample))
+        # Opting out falls back to the elevation estimate, which puts both on ring 0 and drops them.
+        fallback = single_source_filter(keep, channel_dim=None)(dict(sample))
         assert fallback["points"].shape[0] == 0
 
-    def test_nebula_downsample_mask_filter_does_not_apply_azimuth_offsets_by_default(self):
+    def test_does_not_apply_azimuth_offsets_by_default(self):
         # The driver indexes the mask by raw azimuth; subtracting the per-channel calibration
         # offsets shifts points into the wrong column.
-        assert (
-            NebulaDownsampleMaskFilter(mask_root="aip_x2_gen2").use_calibration_azimuth_offsets
-            is False
-        )
+        assert single_source_filter([[1]]).use_calibration_azimuth_offsets is False
+
+    def test_decides_on_pre_correction_points_when_present(self):
+        # The point sits in the kept bin where T4Dataset put it, but in a dropped bin where it
+        # actually was when captured. The vehicle masks pre-correction, so it must be dropped.
+        sample = {
+            "points": np.array([[0.0, 10.0, 0.0, 1.0]], dtype=np.float32),
+            "pre_correction_points": np.array([[10.0, 0.0, 0.0]], dtype=np.float32),
+            "source_name": "LIDAR_FRONT_UPPER",
+        }
+
+        output = single_source_filter([[1, 0, 0, 0]], channel_dim=None)(sample)
+
+        assert output["points"].shape[0] == 0
+
+    def test_rejects_unknown_source(self):
+        sample = {
+            "points": np.zeros((1, 4), dtype=np.float32),
+            "source_name": "LIDAR_REAR_LOWER",
+        }
+
+        with pytest.raises(KeyError, match="No Nebula mask configured"):
+            single_source_filter([[1]], name="front_upper")(sample)
+
+    def test_rejects_empty_masks(self):
+        with pytest.raises(ValueError, match="must not be empty"):
+            NebulaDownsampleMaskFilter(lidar_masks={})
+
+    def test_lidar_mask_rejects_calibration_length_mismatch(self):
+        with pytest.raises(ValueError, match="channels but calibration has"):
+            LidarMask(
+                keep=np.ones((4, 8), dtype=bool),
+                elevation_rad=np.zeros(3, dtype=np.float32),
+                azimuth_deg=np.zeros(4, dtype=np.float32),
+            )
