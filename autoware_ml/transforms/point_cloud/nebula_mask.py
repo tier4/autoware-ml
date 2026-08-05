@@ -12,44 +12,35 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Point-cloud filters that emulate vehicle-side preprocessing."""
+"""Reproduce the Nebula driver's per-LiDAR downsample mask."""
 
 from __future__ import annotations
 
 import csv
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
-from importlib import resources
 from pathlib import Path
 from typing import Any
 
 import cv2
 import numpy as np
 import numpy.typing as npt
-import yaml
 
 from autoware_ml.transforms.base import BaseTransform
+from autoware_ml.transforms.point_cloud.assets import ASSET_ROOT, resolve_asset_path
 from autoware_ml.transforms.point_cloud.ego_motion import pre_correction_points
+from autoware_ml.transforms.point_cloud.lidar_sources import (
+    LIDAR_POSITION_NAMES,
+    SourceSlice,
+    iter_concat_sources,
+    iter_pointcloud_sources,
+    normalize_lidar_name,
+)
 
-
-# Per-platform assets (masks, crop boxes) and per-sensor calibration live under here, each in its
-# own subdirectory. Nothing in this module hard-codes which platform is in use.
-_ASSET_ROOT = resources.files("autoware_ml.configs").joinpath("assets")
-_DEFAULT_CALIBRATION_ROOT = _ASSET_ROOT.joinpath("hesai")
-
-_DEFAULT_MASKS = {
-    name: f"{name}/generated_30deg_roi.param.png"
-    for name in (
-        "front_upper",
-        "front_lower",
-        "left_upper",
-        "left_lower",
-        "rear_upper",
-        "rear_lower",
-        "right_upper",
-        "right_lower",
-    )
-}
+_DEFAULT_CALIBRATION_ROOT = ASSET_ROOT / "hesai"
+_DEFAULT_MASKS = {name: f"{name}/generated_30deg_roi.param.png" for name in LIDAR_POSITION_NAMES}
+# Sensor model per mounting position. Upper mounts carry a long-range Pandar, lower mounts a
+# short-range QT; the model selects which calibration table the mask is indexed against.
 _DEFAULT_MODELS = {
     "front_upper": "pandar128e4x",
     "left_upper": "pandar128e4x",
@@ -60,22 +51,13 @@ _DEFAULT_MODELS = {
     "rear_lower": "pandar_qt128",
     "right_lower": "pandar_qt128",
 }
-_DEFAULT_CALIBRATIONS = {name: f"{_DEFAULT_MODELS[name]}.csv" for name in _DEFAULT_MASKS}
+_DEFAULT_CALIBRATIONS = {name: f"{model}.csv" for name, model in _DEFAULT_MODELS.items()}
 
 
 @dataclass(frozen=True)
 class _Calibration:
     elevation_rad: npt.NDArray[np.float32]
     azimuth_deg: npt.NDArray[np.float32]
-
-
-@dataclass(frozen=True)
-class _SourceSlice:
-    name: str
-    sensor_token: str | None
-    point_slice: slice
-    translation: npt.NDArray[np.float32] | None
-    rotation: npt.NDArray[np.float32] | None
 
 
 class NebulaDownsampleMaskFilter(BaseTransform):
@@ -139,22 +121,22 @@ class NebulaDownsampleMaskFilter(BaseTransform):
             azimuth_extent_deg: Width of the mask azimuth range.
             return_stats: Whether to attach per-source keep/drop counts.
         """
-        self.mask_root = _resolve_path(Path(_ASSET_ROOT), mask_root)
+        self.mask_root = resolve_asset_path(mask_root)
         self.calibration_root = (
             Path(calibration_root)
             if calibration_root is not None
             else Path(_DEFAULT_CALIBRATION_ROOT)
         )
         self.lidar_name_to_mask = {
-            _normalize_lidar_name(name): path
+            normalize_lidar_name(name): path
             for name, path in (lidar_name_to_mask or _DEFAULT_MASKS).items()
         }
         self.lidar_name_to_model = {
-            _normalize_lidar_name(name): _normalize_model_name(model)
+            normalize_lidar_name(name): _normalize_model_name(model)
             for name, model in (lidar_name_to_model or _DEFAULT_MODELS).items()
         }
         self.lidar_name_to_calibration = {
-            _normalize_lidar_name(name): path
+            normalize_lidar_name(name): path
             for name, path in (lidar_name_to_calibration or _DEFAULT_CALIBRATIONS).items()
         }
         self.use_calibration_azimuth_offsets = use_calibration_azimuth_offsets
@@ -177,7 +159,7 @@ class NebulaDownsampleMaskFilter(BaseTransform):
         stats = []
 
         for source in self._iter_sources(input_dict, points.shape[0]):
-            lidar_name = _normalize_lidar_name(source.name)
+            lidar_name = normalize_lidar_name(source.name)
             model_name = self.lidar_name_to_model.get(lidar_name)
             if model_name is None:
                 raise KeyError(f"No Nebula lidar model configured for source {source.name!r}.")
@@ -205,18 +187,18 @@ class NebulaDownsampleMaskFilter(BaseTransform):
             input_dict["nebula_downsample_stats"] = stats
         return input_dict
 
-    def _iter_sources(self, input_dict: Mapping[str, Any], point_count: int) -> list[_SourceSlice]:
-        return _iter_pointcloud_sources(input_dict, point_count)
+    def _iter_sources(self, input_dict: Mapping[str, Any], point_count: int) -> list[SourceSlice]:
+        return iter_pointcloud_sources(input_dict, point_count)
 
-    def _iter_concat_sources(
+    def iter_concat_sources(
         self, lidar_sources: Mapping[str, Any], lidar_sources_info: Mapping[str, Any]
-    ) -> list[_SourceSlice]:
-        return _iter_concat_sources(lidar_sources, lidar_sources_info)
+    ) -> list[SourceSlice]:
+        return iter_concat_sources(lidar_sources, lidar_sources_info)
 
     def _source_keep_mask(
         self,
         points: npt.NDArray[np.float32],
-        source: _SourceSlice,
+        source: SourceSlice,
         lidar_name: str,
         model_name: str,
         decision_xyz: npt.NDArray[np.float32] | None = None,
@@ -263,7 +245,7 @@ class NebulaDownsampleMaskFilter(BaseTransform):
     def _load_mask(self, lidar_name: str, model_name: str) -> npt.NDArray[np.bool_]:
         if lidar_name in self._masks:
             return self._masks[lidar_name]
-        mask_path = _resolve_path(self.mask_root, self.lidar_name_to_mask[lidar_name])
+        mask_path = resolve_asset_path(self.lidar_name_to_mask[lidar_name], self.mask_root)
         image = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
         if image is None:
             raise FileNotFoundError(f"Could not read Nebula downsample mask: {mask_path}")
@@ -277,11 +259,11 @@ class NebulaDownsampleMaskFilter(BaseTransform):
         return self._masks[lidar_name]
 
     def _load_calibration(self, lidar_name: str) -> _Calibration:
-        lidar_name = _normalize_lidar_name(lidar_name)
+        lidar_name = normalize_lidar_name(lidar_name)
         if lidar_name in self._calibrations:
             return self._calibrations[lidar_name]
-        calibration_path = _resolve_path(
-            self.calibration_root, self.lidar_name_to_calibration[lidar_name]
+        calibration_path = resolve_asset_path(
+            self.lidar_name_to_calibration[lidar_name], self.calibration_root
         )
         elevations = []
         azimuths = []
@@ -311,78 +293,6 @@ class NebulaDownsampleMaskFilter(BaseTransform):
         return self._calibrations[lidar_name]
 
 
-class CropBoxFilter(BaseTransform):
-    """Remove points falling inside any of a set of axis-aligned boxes.
-
-    Autoware crops fixed volumes -- typically the vehicle body and the swept volume of the steered
-    wheels -- out of every LiDAR scan before concatenation, as a set of negative crop boxes.
-    T4Dataset carries un-cropped concatenated clouds, so the step has to be reapplied to match the
-    inference-time point distribution. How much it removes depends entirely on the boxes and the
-    sensor layout; for one vehicle it reached 18% of a single LiDAR's points.
-
-    The boxes are inputs, not knowledge this transform holds: deriving them from vehicle dimensions
-    is platform-specific, so it is left to whoever produces the configuration. Bundled box sets live
-    beside the other per-vehicle assets under ``autoware_ml/configs/assets/<platform>/``.
-
-    Points are expected in the frame the boxes are expressed in -- for vehicle crop boxes that is
-    the ego/``base_link`` frame, which is how T4Dataset stores them. On the vehicle the crop mask is
-    computed *before* ego-motion correction, so run
-    :class:`~autoware_ml.transforms.point_cloud.ego_motion.InvertEgoMotionCorrection` first and this
-    transform will decide on the pre-correction coordinates it attaches. Without it the boxes are
-    applied to the corrected coordinates directly, which is measurably worse: reconstructing a
-    recorded concatenated cloud from an unfiltered T4Dataset, voxel IoU at 0.12 m drops from 0.877
-    to 0.702.
-    """
-
-    _required_keys = ["points"]
-
-    def __init__(self, *, crop_boxes: Sequence[Sequence[float]]) -> None:
-        """Initialize the CropBoxFilter transform.
-
-        Args:
-            crop_boxes: Boxes to remove, each ``[x_min, y_min, z_min, x_max, y_max, z_max]``,
-                expressed in the same frame as ``points``.
-        """
-        self.crop_boxes = np.asarray(crop_boxes, dtype=np.float32).reshape(-1, 6)
-        if self.crop_boxes.size == 0:
-            raise ValueError("crop_boxes must contain at least one box")
-        lower, upper = self.crop_boxes[:, :3], self.crop_boxes[:, 3:]
-        if np.any(lower > upper):
-            raise ValueError(
-                "each crop box must be [x_min, y_min, z_min, x_max, y_max, z_max] with "
-                f"min <= max; got {self.crop_boxes.tolist()}"
-            )
-
-    def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
-        """Drop points inside any configured box, keeping aligned per-point arrays consistent."""
-        points = np.asarray(input_dict["points"], dtype=np.float32)
-        # The vehicle crops the raw sweep, so decide on pre-correction coordinates when the sample
-        # carries them. Surviving points keep their original corrected coordinates either way.
-        decision_xyz = pre_correction_points(input_dict, points)
-        if decision_xyz is None:
-            decision_xyz = points[:, :3]
-        inside = np.zeros(points.shape[0], dtype=bool)
-        for x_min, y_min, z_min, x_max, y_max, z_max in self.crop_boxes:
-            inside |= (
-                (decision_xyz[:, 0] >= x_min)
-                & (decision_xyz[:, 0] <= x_max)
-                & (decision_xyz[:, 1] >= y_min)
-                & (decision_xyz[:, 1] <= y_max)
-                & (decision_xyz[:, 2] >= z_min)
-                & (decision_xyz[:, 2] <= z_max)
-            )
-
-        keep_mask = ~inside
-        for key, value in list(input_dict.items()):
-            if (
-                isinstance(value, np.ndarray)
-                and value.ndim > 0
-                and value.shape[0] == points.shape[0]
-            ):
-                input_dict[key] = value[keep_mask]
-        return input_dict
-
-
 def _dither_mask(image: npt.NDArray[np.uint8], model_name: str) -> npt.NDArray[np.bool_]:
     height, width = image.shape
     y, x = np.indices((height, width), dtype=np.int64)
@@ -405,60 +315,6 @@ def _dither_mask(image: npt.NDArray[np.uint8], model_name: str) -> npt.NDArray[n
     return output
 
 
-def _iter_pointcloud_sources(input_dict: Mapping[str, Any], point_count: int) -> list[_SourceSlice]:
-    lidar_sources = input_dict.get("lidar_sources")
-    lidar_sources_info = input_dict.get("lidar_sources_info")
-    if isinstance(lidar_sources, Mapping) and isinstance(lidar_sources_info, Mapping):
-        return _iter_concat_sources(lidar_sources, lidar_sources_info)
-
-    source_name = input_dict.get("source_name") or input_dict.get("lidar_source_name")
-    if source_name is None:
-        sample_name = str(input_dict.get("name", ""))
-        source_name = _infer_lidar_name_from_text(sample_name)
-    if source_name is None:
-        raise KeyError(
-            "Pointcloud source-aware filters require concat 'lidar_sources' metadata or a "
-            "single-source 'source_name'."
-        )
-    return [
-        _SourceSlice(
-            name=str(source_name),
-            sensor_token=input_dict.get("sensor_token"),
-            point_slice=slice(0, point_count),
-            translation=None,
-            rotation=None,
-        )
-    ]
-
-
-def _iter_concat_sources(
-    lidar_sources: Mapping[str, Any], lidar_sources_info: Mapping[str, Any]
-) -> list[_SourceSlice]:
-    source_ranges = {
-        str(source.get("sensor_token")): source for source in lidar_sources_info.get("sources", [])
-    }
-    output = []
-    for source_name, source_meta in lidar_sources.items():
-        sensor_token = str(source_meta.get("sensor_token"))
-        source_range = source_ranges.get(sensor_token)
-        if source_range is None:
-            continue
-        idx_begin = int(source_range["idx_begin"])
-        length = int(source_range["length"])
-        output.append(
-            _SourceSlice(
-                name=str(source_name),
-                sensor_token=sensor_token,
-                point_slice=slice(idx_begin, idx_begin + length),
-                translation=np.asarray(source_meta.get("translation"), dtype=np.float32),
-                rotation=np.asarray(source_meta.get("rotation"), dtype=np.float32),
-            )
-        )
-    if not output:
-        raise ValueError("lidar_sources_info did not match any configured lidar_sources.")
-    return output
-
-
 def _nearest_channel(
     points: npt.NDArray[np.float32], elevation_rad: npt.NDArray[np.float32]
 ) -> npt.NDArray[np.int64]:
@@ -471,13 +327,6 @@ def _nebula_azimuth_rad(points: npt.NDArray[np.float32]) -> npt.NDArray[np.float
     return np.arctan2(points[:, 0], points[:, 1])
 
 
-def _normalize_lidar_name(name: str) -> str:
-    normalized = str(name).lower()
-    if normalized.startswith("lidar_"):
-        normalized = normalized[len("lidar_") :]
-    return normalized
-
-
 def _normalize_model_name(name: str) -> str:
     normalized = str(name).lower().replace("-", "_")
     if normalized in {"ot128", "pandar128", "pandar128e4x"}:
@@ -485,43 +334,6 @@ def _normalize_model_name(name: str) -> str:
     if normalized in {"qt128", "pandarqt128", "pandar_qt128"}:
         return "pandar_qt128"
     return normalized
-
-
-def _infer_lidar_name_from_text(text: str) -> str | None:
-    normalized = text.lower()
-    for lidar_name in _DEFAULT_MASKS:
-        if lidar_name in normalized:
-            return lidar_name
-    return None
-
-
-def _resolve_path(root: Path, path: str) -> Path:
-    resolved = Path(path)
-    if resolved.is_absolute():
-        return resolved
-    return root / resolved
-
-
-def load_crop_boxes(path: str) -> list[list[float]]:
-    """Read a crop-box list from a YAML asset.
-
-    The file holds a ``crop_boxes`` list of ``[x_min, y_min, z_min, x_max, y_max, z_max]`` entries.
-    A relative path resolves under the bundled asset root, so
-    ``load_crop_boxes("<platform>/crop_boxes.param.yaml")`` finds a bundled set. How a given
-    platform's boxes were derived is recorded in the asset file itself.
-
-    Args:
-        path: Path to the YAML file, absolute or relative to the bundled asset root.
-
-    Returns:
-        The boxes, ready to pass to :class:`CropBoxFilter`.
-    """
-    resolved = _resolve_path(Path(_ASSET_ROOT), path)
-    document = yaml.safe_load(Path(resolved).read_text())
-    boxes = (document or {}).get("crop_boxes")
-    if not boxes:
-        raise ValueError(f"No 'crop_boxes' entry in {resolved}")
-    return [[float(value) for value in box] for box in boxes]
 
 
 def _round_half_up(values: npt.ArrayLike) -> npt.NDArray[np.int64]:

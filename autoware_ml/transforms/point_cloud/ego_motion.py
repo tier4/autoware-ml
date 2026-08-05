@@ -166,8 +166,8 @@ class InvertEgoMotionCorrection(BaseTransform):
 
     Writes a ``(N, 3)`` array under :data:`PRE_CORRECTION_POINTS_KEY`, holding each point's position
     in the ego frame *at its own acquisition time* rather than at the frame reference time. Run this
-    before :class:`~autoware_ml.transforms.point_cloud.filters.NebulaDownsampleMaskFilter` and
-    :class:`~autoware_ml.transforms.point_cloud.filters.CropBoxFilter`; both prefer these
+    before :class:`~autoware_ml.transforms.point_cloud.nebula_mask.NebulaDownsampleMaskFilter` and
+    :class:`~autoware_ml.transforms.point_cloud.crop_box.CropBoxFilter`; both prefer these
     coordinates when present, because the vehicle evaluates them pre-correction.
 
     The attached array is per-point and the same length as ``points``, so the filters' aligned-array
