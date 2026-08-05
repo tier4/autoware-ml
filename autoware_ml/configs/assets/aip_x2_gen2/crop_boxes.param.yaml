@@ -1,0 +1,44 @@
+# Ego crop boxes for AIP X2 Gen2 (vehicle description: j6_gen2_description).
+#
+# These are the two negative crop boxes the vehicle applies to every LiDAR scan before
+# concatenation. Reproduce them in Autoware-ML with CropBoxFilter, which takes this list verbatim.
+#
+# Each box is [x_min, y_min, z_min, x_max, y_max, z_max] in metres, in the base_link frame.
+#
+# --- How these numbers were produced -------------------------------------------------------------
+#
+# Computed once from get_vehicle_info() in
+#   aip_x2_gen2_launch/launch/nebula_node_container.launch.py
+# using the dimensions in
+#   j6_gen2_description/config/vehicle_info.param.yaml:
+#
+#   wheel_base       4.76012      front_overhang    0.95099      vehicle_height   3.080
+#   wheel_tread      1.754        rear_overhang     1.52579      wheel_radius     0.3725
+#   left_overhang    0.32358      right_overhang    0.34983      wheel_width      0.215
+#   max_steer_angle  0.838 rad
+#
+# body box:
+#   x: [-rear_overhang, front_overhang + wheel_base]
+#   y: [-(wheel_tread/2 + right_overhang), wheel_tread/2 + left_overhang]
+#   z: [0, vehicle_height]
+#
+# wheels box, covering the volume the front wheels sweep at full lock:
+#   d      = hypot(wheel_width/2, wheel_radius)                       = 0.386014
+#   phi    = atan2(wheel_width/2, wheel_radius)                       = 0.280893 rad
+#   max_longitudinal = d                       (phi < max_steer_angle) = 0.387702
+#   max_lateral      = d * sin(max_steer_angle + phi)                  = 0.348794
+#   x: [wheel_base - max_longitudinal, wheel_base + max_longitudinal]
+#   y: [-(wheel_tread/2 + max_lateral), wheel_tread/2 + max_lateral]
+#   z: [0, wheel_radius * 2.2]
+#
+# The 2.2 factor is 110% of wheel diameter, applied upstream to absorb suspension travel.
+#
+# That derivation is specific to this platform's launch configuration, so it is recorded here as a
+# comment rather than as code. If the vehicle dimensions change, recompute and update the list.
+# -------------------------------------------------------------------------------------------------
+
+crop_boxes:
+  # vehicle body
+  - [-1.525790, -1.226830, 0.000000, 5.711110, 1.200580, 3.080000]
+  # swept volume of the steered front wheels
+  - [4.372418, -1.225794, 0.000000, 5.147822, 1.225794, 0.819500]

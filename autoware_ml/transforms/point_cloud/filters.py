@@ -26,13 +26,15 @@ from typing import Any
 import cv2
 import numpy as np
 import numpy.typing as npt
+import yaml
 
 from autoware_ml.transforms.base import BaseTransform
 from autoware_ml.transforms.point_cloud.ego_motion import pre_correction_points
 
 
+# Per-platform assets (masks, crop boxes) and per-sensor calibration live under here, each in its
+# own subdirectory. Nothing in this module hard-codes which platform is in use.
 _ASSET_ROOT = resources.files("autoware_ml.configs").joinpath("assets")
-_DEFAULT_MASK_ROOT = _ASSET_ROOT.joinpath("aip_x2_gen2")
 _DEFAULT_CALIBRATION_ROOT = _ASSET_ROOT.joinpath("hesai")
 
 _DEFAULT_MASKS = {
@@ -104,7 +106,7 @@ class NebulaDownsampleMaskFilter(BaseTransform):
     def __init__(
         self,
         *,
-        mask_root: str | None = None,
+        mask_root: str,
         calibration_root: str | None = None,
         lidar_name_to_mask: Mapping[str, str] | None = None,
         lidar_name_to_model: Mapping[str, str] | None = None,
@@ -118,7 +120,8 @@ class NebulaDownsampleMaskFilter(BaseTransform):
         """Initialize the Nebula mask-filter approximation.
 
         Args:
-            mask_root: Root directory for mask PNGs. Defaults to bundled J6 Gen2 masks.
+            mask_root: Directory holding the per-LiDAR mask PNGs. A relative path resolves under
+                the bundled asset root, so the name of a bundled platform directory is enough.
             calibration_root: Root directory for calibration CSVs. Defaults to bundled calibration
                 files for Pandar128E4X/OT128 and PandarQT128.
             lidar_name_to_mask: LiDAR-name to mask path mapping. Relative paths resolve under
@@ -136,7 +139,7 @@ class NebulaDownsampleMaskFilter(BaseTransform):
             azimuth_extent_deg: Width of the mask azimuth range.
             return_stats: Whether to attach per-source keep/drop counts.
         """
-        self.mask_root = Path(mask_root) if mask_root is not None else Path(_DEFAULT_MASK_ROOT)
+        self.mask_root = _resolve_path(Path(_ASSET_ROOT), mask_root)
         self.calibration_root = (
             Path(calibration_root)
             if calibration_root is not None
@@ -308,17 +311,22 @@ class NebulaDownsampleMaskFilter(BaseTransform):
         return self._calibrations[lidar_name]
 
 
-class EgoCropBoxFilter(BaseTransform):
-    """Remove points falling inside the ego vehicle's crop boxes.
+class CropBoxFilter(BaseTransform):
+    """Remove points falling inside any of a set of axis-aligned boxes.
 
-    Autoware crops the vehicle body and the steered front wheels out of every LiDAR scan before
-    concatenation (two negative crop boxes, see ``nebula_node_container.launch.py``). T4Dataset
-    carries un-cropped concatenated clouds -- the ego vehicle is plainly visible in them -- so this
-    step has to be reapplied to match the inference-time point distribution. It removes up to 18%
-    of a single LiDAR's points (``rear_lower`` on AIP X2 Gen2).
+    Autoware crops fixed volumes -- typically the vehicle body and the swept volume of the steered
+    wheels -- out of every LiDAR scan before concatenation, as a set of negative crop boxes.
+    T4Dataset carries un-cropped concatenated clouds, so the step has to be reapplied to match the
+    inference-time point distribution. How much it removes depends entirely on the boxes and the
+    sensor layout; for one vehicle it reached 18% of a single LiDAR's points.
 
-    Points are expected in the ego/``base_link`` frame, which is how T4Dataset stores them. On the
-    vehicle the crop mask is computed *before* ego-motion correction, so run
+    The boxes are inputs, not knowledge this transform holds: deriving them from vehicle dimensions
+    is platform-specific, so it is left to whoever produces the configuration. Bundled box sets live
+    beside the other per-vehicle assets under ``autoware_ml/configs/assets/<platform>/``.
+
+    Points are expected in the frame the boxes are expressed in -- for vehicle crop boxes that is
+    the ego/``base_link`` frame, which is how T4Dataset stores them. On the vehicle the crop mask is
+    computed *before* ego-motion correction, so run
     :class:`~autoware_ml.transforms.point_cloud.ego_motion.InvertEgoMotionCorrection` first and this
     transform will decide on the pre-correction coordinates it attaches. Without it the boxes are
     applied to the corrected coordinates directly, which is measurably worse: reconstructing a
@@ -328,17 +336,22 @@ class EgoCropBoxFilter(BaseTransform):
 
     _required_keys = ["points"]
 
-    def __init__(self, *, crop_boxes: Sequence[Sequence[float]] | None = None) -> None:
-        """Initialize the EgoCropBoxFilter transform.
+    def __init__(self, *, crop_boxes: Sequence[Sequence[float]]) -> None:
+        """Initialize the CropBoxFilter transform.
 
         Args:
-            crop_boxes: Boxes to remove, each ``[x_min, y_min, z_min, x_max, y_max, z_max]`` in the
-                ego frame. Defaults to the AIP X2 Gen2 self and wheels boxes.
+            crop_boxes: Boxes to remove, each ``[x_min, y_min, z_min, x_max, y_max, z_max]``,
+                expressed in the same frame as ``points``.
         """
-        boxes = AIP_X2_GEN2_EGO_CROP_BOXES if crop_boxes is None else crop_boxes
-        self.crop_boxes = np.asarray(boxes, dtype=np.float32).reshape(-1, 6)
+        self.crop_boxes = np.asarray(crop_boxes, dtype=np.float32).reshape(-1, 6)
         if self.crop_boxes.size == 0:
             raise ValueError("crop_boxes must contain at least one box")
+        lower, upper = self.crop_boxes[:, :3], self.crop_boxes[:, 3:]
+        if np.any(lower > upper):
+            raise ValueError(
+                "each crop box must be [x_min, y_min, z_min, x_max, y_max, z_max] with "
+                f"min <= max; got {self.crop_boxes.tolist()}"
+            )
 
     def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
         """Drop points inside any configured box, keeping aligned per-point arrays consistent."""
@@ -368,85 +381,6 @@ class EgoCropBoxFilter(BaseTransform):
             ):
                 input_dict[key] = value[keep_mask]
         return input_dict
-
-
-def ego_crop_boxes_from_vehicle_info(
-    *,
-    wheel_base: float,
-    wheel_tread: float,
-    wheel_radius: float,
-    wheel_width: float,
-    front_overhang: float,
-    rear_overhang: float,
-    left_overhang: float,
-    right_overhang: float,
-    vehicle_height: float,
-    max_steer_angle: float,
-) -> list[list[float]]:
-    """Derive the self and wheels crop boxes from vehicle dimensions.
-
-    Transcribes ``get_vehicle_info()`` in
-    ``aip_x2_gen2_launch/launch/nebula_node_container.launch.py``, so the boxes stay consistent with
-    whatever the vehicle's ``vehicle_info.param.yaml`` declares.
-
-    Args:
-        wheel_base: Distance between front and rear wheel centres.
-        wheel_tread: Distance between left and right wheel centres.
-        wheel_radius: Wheel radius.
-        wheel_width: Wheel width.
-        front_overhang: Front wheel centre to vehicle front.
-        rear_overhang: Rear wheel centre to vehicle rear.
-        left_overhang: Left wheel centre to vehicle left.
-        right_overhang: Right wheel centre to vehicle right.
-        vehicle_height: Overall vehicle height.
-        max_steer_angle: Maximum tire cut angle in radians.
-
-    Returns:
-        Two boxes as ``[x_min, y_min, z_min, x_max, y_max, z_max]``: the vehicle body, then the
-        swept volume of the steered front wheels.
-    """
-    half_width = wheel_width / 2.0
-    center_to_corner = float(np.hypot(half_width, wheel_radius))
-    corner_angle = float(np.arctan2(half_width, wheel_radius))
-    if corner_angle < max_steer_angle:
-        max_longitudinal = center_to_corner
-    else:
-        max_longitudinal = center_to_corner * float(np.cos(max_steer_angle - corner_angle))
-    max_lateral = center_to_corner * float(np.sin(max_steer_angle + corner_angle))
-
-    self_box = [
-        -rear_overhang,
-        -(wheel_tread / 2.0 + right_overhang),
-        0.0,
-        front_overhang + wheel_base,
-        wheel_tread / 2.0 + left_overhang,
-        vehicle_height,
-    ]
-    # The wheel box is scaled to 110% of wheel diameter upstream to absorb suspension travel.
-    wheels_box = [
-        wheel_base - max_longitudinal,
-        -(wheel_tread / 2.0 + max_lateral),
-        0.0,
-        wheel_base + max_longitudinal,
-        wheel_tread / 2.0 + max_lateral,
-        wheel_radius * 2.2,
-    ]
-    return [self_box, wheels_box]
-
-
-# Derived from j6_gen2_description/config/vehicle_info.param.yaml.
-AIP_X2_GEN2_EGO_CROP_BOXES = ego_crop_boxes_from_vehicle_info(
-    wheel_base=4.76012,
-    wheel_tread=1.754,
-    wheel_radius=0.3725,
-    wheel_width=0.215,
-    front_overhang=0.95099,
-    rear_overhang=1.52579,
-    left_overhang=0.32358,
-    right_overhang=0.34983,
-    vehicle_height=3.080,
-    max_steer_angle=0.838,
-)
 
 
 def _dither_mask(image: npt.NDArray[np.uint8], model_name: str) -> npt.NDArray[np.bool_]:
@@ -566,6 +500,28 @@ def _resolve_path(root: Path, path: str) -> Path:
     if resolved.is_absolute():
         return resolved
     return root / resolved
+
+
+def load_crop_boxes(path: str) -> list[list[float]]:
+    """Read a crop-box list from a YAML asset.
+
+    The file holds a ``crop_boxes`` list of ``[x_min, y_min, z_min, x_max, y_max, z_max]`` entries.
+    A relative path resolves under the bundled asset root, so
+    ``load_crop_boxes("<platform>/crop_boxes.param.yaml")`` finds a bundled set. How a given
+    platform's boxes were derived is recorded in the asset file itself.
+
+    Args:
+        path: Path to the YAML file, absolute or relative to the bundled asset root.
+
+    Returns:
+        The boxes, ready to pass to :class:`CropBoxFilter`.
+    """
+    resolved = _resolve_path(Path(_ASSET_ROOT), path)
+    document = yaml.safe_load(Path(resolved).read_text())
+    boxes = (document or {}).get("crop_boxes")
+    if not boxes:
+        raise ValueError(f"No 'crop_boxes' entry in {resolved}")
+    return [[float(value) for value in box] for box in boxes]
 
 
 def _round_half_up(values: npt.ArrayLike) -> npt.NDArray[np.int64]:

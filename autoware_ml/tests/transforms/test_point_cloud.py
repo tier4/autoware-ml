@@ -18,9 +18,9 @@ from autoware_ml.transforms.point_cloud.ego_motion import (
     normalize_quaternions,
 )
 from autoware_ml.transforms.point_cloud.filters import (
-    AIP_X2_GEN2_EGO_CROP_BOXES,
-    EgoCropBoxFilter,
+    CropBoxFilter,
     NebulaDownsampleMaskFilter,
+    load_crop_boxes,
 )
 from autoware_ml.transforms.point_cloud.geometry import (
     GlobalRotScaleTrans,
@@ -36,6 +36,12 @@ from autoware_ml.transforms.point_cloud.sampling import (
     RandomDropout,
 )
 from autoware_ml.transforms.point_cloud.sweeps import LoadPointsFromMultiSweeps
+
+
+_TEST_CROP_BOXES = [
+    [-1.5, -1.2, 0.0, 5.7, 1.2, 3.0],  # body-like
+    [4.4, -1.2, 0.0, 5.1, 1.2, 0.8],  # wheels-like
+]
 
 
 class TestPointCloudTransforms:
@@ -381,9 +387,12 @@ class TestPointCloudTransforms:
     def test_nebula_downsample_mask_filter_does_not_apply_azimuth_offsets_by_default(self):
         # The driver indexes the mask by raw azimuth; subtracting the per-channel calibration
         # offsets shifts points into the wrong column.
-        assert NebulaDownsampleMaskFilter().use_calibration_azimuth_offsets is False
+        assert (
+            NebulaDownsampleMaskFilter(mask_root="aip_x2_gen2").use_calibration_azimuth_offsets
+            is False
+        )
 
-    def test_ego_crop_box_filter_removes_ego_points_and_keeps_arrays_aligned(self):
+    def test_crop_box_filter_removes_points_inside_any_box_and_keeps_arrays_aligned(self):
         sample = {
             "points": np.array(
                 [
@@ -397,7 +406,7 @@ class TestPointCloudTransforms:
             "labels": np.array([10, 11, 12, 13], dtype=np.int64),
         }
 
-        output = EgoCropBoxFilter()(sample)
+        output = CropBoxFilter(crop_boxes=_TEST_CROP_BOXES)(sample)
 
         np.testing.assert_allclose(
             output["points"],
@@ -408,7 +417,7 @@ class TestPointCloudTransforms:
         )
         np.testing.assert_array_equal(output["labels"], np.array([12, 13], dtype=np.int64))
 
-    def test_ego_crop_box_filter_decides_on_pre_correction_points(self):
+    def test_crop_box_filter_decides_on_pre_correction_points(self):
         # The point sits outside the boxes where T4Dataset put it, but inside them where it
         # actually was when captured. The vehicle crops pre-correction, so it must be dropped --
         # and the surviving point must keep its corrected coordinates, not the pre-correction ones.
@@ -421,7 +430,7 @@ class TestPointCloudTransforms:
             ),
         }
 
-        output = EgoCropBoxFilter()(sample)
+        output = CropBoxFilter(crop_boxes=_TEST_CROP_BOXES)(sample)
 
         np.testing.assert_allclose(
             output["points"], np.array([[0.0, 0.0, 0.5, 1.0, 0.0]], dtype=np.float32)
@@ -439,7 +448,7 @@ class TestPointCloudTransforms:
         }
 
         with pytest.raises(ValueError, match="aligned"):
-            EgoCropBoxFilter()(sample)
+            CropBoxFilter(crop_boxes=_TEST_CROP_BOXES)(sample)
 
     def test_invert_ego_motion_correction_round_trips_a_stationary_vehicle(self):
         # With the ego pose constant across the sweep, undoing the correction is the identity.
@@ -514,17 +523,26 @@ class TestPointCloudTransforms:
         passthrough = InvertEgoMotionCorrection(strict=False)(dict(sample))
         assert PRE_CORRECTION_POINTS_KEY not in passthrough
 
-    def test_ego_crop_boxes_match_aip_x2_gen2_vehicle_info(self):
-        self_box, wheels_box = AIP_X2_GEN2_EGO_CROP_BOXES
+    def test_crop_box_filter_rejects_malformed_boxes(self):
+        with pytest.raises(ValueError, match="at least one box"):
+            CropBoxFilter(crop_boxes=[])
+        with pytest.raises(ValueError, match="min <= max"):
+            CropBoxFilter(crop_boxes=[[1.0, 0.0, 0.0, -1.0, 1.0, 1.0]])
 
-        # Body box spans rear overhang to front axle + front overhang, floor to roof.
+    def test_bundled_crop_boxes_asset_loads(self):
+        # Pins the values in configs/assets/aip_x2_gen2/crop_boxes.param.yaml, whose header records
+        # how they were derived from that platform's vehicle dimensions.
+        boxes = load_crop_boxes("aip_x2_gen2/crop_boxes.param.yaml")
+
+        assert len(boxes) == 2
         np.testing.assert_allclose(
-            self_box, [-1.52579, -1.22683, 0.0, 5.71111, 1.20058, 3.080], atol=1e-5
+            boxes[0], [-1.525790, -1.226830, 0.0, 5.711110, 1.200580, 3.080], atol=1e-6
         )
-        # Wheels box straddles the front axle and is capped at 110% of wheel diameter.
         np.testing.assert_allclose(
-            wheels_box, [4.372418, -1.225794, 0.0, 5.147822, 1.225794, 0.8195], atol=1e-5
+            boxes[1], [4.372418, -1.225794, 0.0, 5.147822, 1.225794, 0.8195], atol=1e-6
         )
+        # Usable directly as the transform's only configuration.
+        assert CropBoxFilter(crop_boxes=boxes).crop_boxes.shape == (2, 6)
 
     def test_grid_sample_keeps_arrays_aligned(self):
         sample = {

@@ -67,7 +67,10 @@ include = ["autoware_ml*"]
 
 [tool.setuptools.package-data]
 autoware_ml = [
-    "configs/assets/aip_x2_gen2/*/*.png",
+    # Per-platform assets: per-LiDAR masks and crop-box definitions.
+    "configs/assets/*/*/*.png",
+    "configs/assets/*/*.param.yaml",
+    # Per-sensor calibration.
     "configs/assets/hesai/*.csv",
 ]
 
