@@ -303,13 +303,15 @@ class PTv3SegDetModel(PTv3BaseModel):
         export_input_args = (
             input_args[0],
             input_args[1],
-            input_args[3],
+            point["serialized_order"],
+            point["serialized_inverse"],
             *serialized_pooling_inputs,
         )
         input_param_names = [
             "grid_coord",
             "feat",
-            "serialized_code",
+            "serialized_order",
+            "serialized_inverse",
             *serialized_pooling_input_names,
         ]
         output_names = self.get_export_output_names()
@@ -383,7 +385,8 @@ class _PTv3SegDetExportModule(nn.Module):
         self,
         grid_coord: torch.Tensor,
         feat: torch.Tensor,
-        serialized_code: torch.Tensor,
+        serialized_order: torch.Tensor,
+        serialized_inverse: torch.Tensor,
         *serialized_pooling_inputs: torch.Tensor,
     ) -> tuple[torch.Tensor, ...]:
         """Run the export graph and return outputs in configured order.
@@ -391,7 +394,8 @@ class _PTv3SegDetExportModule(nn.Module):
         Args:
             grid_coord: Input voxel coordinates.
             feat: Input point or voxel features.
-            serialized_code: Serialization codes for the base point set.
+            serialized_order: Level-0 serialization order, one row per curve.
+            serialized_inverse: Inverse of ``serialized_order``.
             serialized_pooling_inputs: Precomputed pooling metadata tensors.
 
         Returns:
@@ -402,7 +406,8 @@ class _PTv3SegDetExportModule(nn.Module):
             grid_coord,
             feat,
             self._serialized_depth,
-            serialized_code,
+            serialized_order,
+            serialized_inverse,
             self._sparse_shape,
             *serialized_pooling_inputs,
         )

@@ -367,7 +367,8 @@ def test_ptv3_encoder_dynamic_axes_follow_generated_pooling_inputs() -> None:
     input_names = [
         "grid_coord",
         "feat",
-        "serialized_code",
+        "serialized_order",
+        "serialized_inverse",
         "serialized_pooling_0_indices",
         "serialized_pooling_0_indptr",
         "serialized_pooling_0_cluster",
@@ -382,7 +383,8 @@ def test_ptv3_encoder_dynamic_axes_follow_generated_pooling_inputs() -> None:
 
     assert dynamic_axes["grid_coord"] == {0: "num_voxels"}
     assert dynamic_axes["feat"] == {0: "num_voxels"}
-    assert dynamic_axes["serialized_code"] == {1: "num_voxels"}
+    assert dynamic_axes["serialized_order"] == {1: "num_voxels"}
+    assert dynamic_axes["serialized_inverse"] == {1: "num_voxels"}
     assert dynamic_axes["serialized_pooling_0_indices"] == {0: "serialized_pooling_0_in_voxels"}
     assert dynamic_axes["serialized_pooling_0_indptr"] == {
         0: "serialized_pooling_0_out_voxels_plus_one"

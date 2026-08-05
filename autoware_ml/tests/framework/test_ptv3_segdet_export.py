@@ -26,7 +26,8 @@ from autoware_ml.utils.checkpoints import apply_matching_weights
 EXPECTED_PTV3_INPUT_NAMES = [
     "grid_coord",
     "feat",
-    "serialized_code",
+    "serialized_order",
+    "serialized_inverse",
     "serialized_pooling_0_indices",
     "serialized_pooling_0_indptr",
     "serialized_pooling_0_cluster",
@@ -94,7 +95,8 @@ def test_seg_head_export_input_names_follow_dec_depths_rule() -> None:
         "point_feat_0",
         "point_feat_1",
         "pooling_cluster_0",
-        "serialized_code",
+        "serialized_order",
+        "serialized_inverse",
         "grid_coord",
     ]
     with pytest.raises(ValueError, match="entries"):
@@ -124,10 +126,12 @@ def test_ptv3_seg_split_export_supports_decoder_blocks() -> None:
         "point_feat_0",
         "point_feat_1",
         "pooling_cluster_0",
-        "serialized_code",
+        "serialized_order",
+        "serialized_inverse",
         "grid_coord",
     ]
-    assert spec.dynamic_axes["serialized_code"] == {1: "num_voxels"}
+    assert spec.dynamic_axes["serialized_order"] == {1: "num_voxels"}
+    assert spec.dynamic_axes["serialized_inverse"] == {1: "num_voxels"}
     assert spec.dynamic_axes["grid_coord"] == {0: "num_voxels"}
 
     with torch.no_grad():
