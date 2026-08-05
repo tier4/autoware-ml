@@ -92,7 +92,7 @@ def load_lidar_masks(
     )
 
     loaded: dict[str, LidarMask] = {}
-    calibration_cache: dict[str, tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]] = {}
+    calibration_cache: dict[str, npt.NDArray[np.float32]] = {}
     for lidar_name, mask_path in masks.items():
         model_name = models.get(lidar_name)
         if model_name is None:
@@ -105,7 +105,7 @@ def load_lidar_masks(
             calibration_cache[calibration_file] = load_calibration(
                 resolve_asset_path(calibration_file, calibration_dir)
             )
-        elevation_rad, azimuth_deg = calibration_cache[calibration_file]
+        elevation_rad = calibration_cache[calibration_file]
 
         resolved_mask = resolve_asset_path(mask_path, mask_dir)
         image = cv2.imread(str(resolved_mask), cv2.IMREAD_GRAYSCALE)
@@ -119,42 +119,36 @@ def load_lidar_masks(
         loaded[lidar_name] = LidarMask(
             keep=dither_mask(image, model_name),
             elevation_rad=elevation_rad,
-            azimuth_deg=azimuth_deg,
         )
     return loaded
 
 
-def load_calibration(
-    path: str | Path,
-) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
-    """Read per-channel elevation and azimuth from a Hesai calibration CSV.
+def load_calibration(path: str | Path) -> npt.NDArray[np.float32]:
+    """Read per-channel elevation from a Hesai calibration CSV.
 
-    Tolerates the metadata rows Hesai ships ahead of the Channel/Elevation/Azimuth header.
+    Tolerates the metadata rows Hesai ships ahead of the column header. The file also carries a
+    per-channel azimuth correction, which is deliberately ignored: the driver does not apply it when
+    building the downsample mask.
 
     Returns:
-        Elevation in radians and azimuth correction in degrees, one entry per channel.
+        Elevation in radians, one entry per channel.
     """
     elevations: list[float] = []
-    azimuths: list[float] = []
     with open(path, newline="") as file:
         header = None
         for row in csv.reader(file):
-            if "Elevation" in row and "Azimuth" in row:
+            if "Elevation" in row:
                 header = row
                 break
         if header is None:
-            raise ValueError(f"Calibration file has no Elevation/Azimuth header: {path}")
+            raise ValueError(f"Calibration file has no Elevation header: {path}")
         for row in csv.DictReader(file, fieldnames=header):
-            if not row.get("Elevation") or not row.get("Azimuth"):
+            if not row.get("Elevation"):
                 continue
             elevations.append(float(row["Elevation"]))
-            azimuths.append(float(row["Azimuth"]))
     if not elevations:
         raise ValueError(f"Calibration file has no channel rows: {path}")
-    return (
-        np.deg2rad(np.asarray(elevations, dtype=np.float32)),
-        np.asarray(azimuths, dtype=np.float32),
-    )
+    return np.deg2rad(np.asarray(elevations, dtype=np.float32))
 
 
 def dither_mask(image: npt.NDArray[np.uint8], model_name: str) -> npt.NDArray[np.bool_]:

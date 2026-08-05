@@ -23,14 +23,13 @@ from autoware_ml.transforms.point_cloud.nebula_mask import (
 )
 
 
-def lidar_mask(keep, *, elevation_deg=None, azimuth_deg=None) -> LidarMask:
+def lidar_mask(keep, *, elevation_deg=None) -> LidarMask:
     """Build a LidarMask from a keep grid, defaulting the calibration to flat zeros.
 
     Args:
         keep: ``(channels, azimuth_bins)`` array-like of booleans or 0/1.
         elevation_deg: Per-channel elevation. Defaults to all-zero, which makes the elevation-based
             ring estimate resolve every point to channel 0.
-        azimuth_deg: Per-channel azimuth correction. Defaults to all-zero.
     """
     grid = np.asarray(keep, dtype=bool)
     channels = grid.shape[0]
@@ -40,9 +39,6 @@ def lidar_mask(keep, *, elevation_deg=None, azimuth_deg=None) -> LidarMask:
             np.asarray(
                 np.zeros(channels) if elevation_deg is None else elevation_deg, dtype=np.float32
             )
-        ),
-        azimuth_deg=np.asarray(
-            np.zeros(channels) if azimuth_deg is None else azimuth_deg, dtype=np.float32
         ),
     )
 
@@ -141,11 +137,6 @@ class TestNebulaDownsampleMaskFilter:
         fallback = single_source_filter(keep, channel_dim=None)(dict(sample))
         assert fallback["points"].shape[0] == 0
 
-    def test_does_not_apply_azimuth_offsets_by_default(self):
-        # The driver indexes the mask by raw azimuth; subtracting the per-channel calibration
-        # offsets shifts points into the wrong column.
-        assert single_source_filter([[1]]).use_calibration_azimuth_offsets is False
-
     def test_decides_on_pre_correction_points_when_present(self):
         # The point sits in the kept bin where T4Dataset put it, but in a dropped bin where it
         # actually was when captured. The vehicle masks pre-correction, so it must be dropped.
@@ -174,8 +165,4 @@ class TestNebulaDownsampleMaskFilter:
 
     def test_lidar_mask_rejects_calibration_length_mismatch(self):
         with pytest.raises(ValueError, match="channels but calibration has"):
-            LidarMask(
-                keep=np.ones((4, 8), dtype=bool),
-                elevation_rad=np.zeros(3, dtype=np.float32),
-                azimuth_deg=np.zeros(4, dtype=np.float32),
-            )
+            LidarMask(keep=np.ones((4, 8), dtype=bool), elevation_rad=np.zeros(3, dtype=np.float32))

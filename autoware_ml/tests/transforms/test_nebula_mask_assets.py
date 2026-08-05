@@ -38,7 +38,8 @@ def mask_tree(tmp_path):
 
     calibrations = tmp_path / "calibrations"
     calibrations.mkdir()
-    # Hesai ships metadata rows ahead of the real header; the loader must skip them.
+    # Hesai ships metadata rows ahead of the real header; the loader must skip them. The Azimuth
+    # column is present in real files and deliberately unused.
     (calibrations / "model.csv").write_text(
         "Hesai\nsome,metadata\nChannel,Elevation,Azimuth\n1,10.0,0.5\n2,-10.0,-0.5\n"
     )
@@ -64,7 +65,6 @@ class TestNebulaMaskAssets:
         assert entry.keep[0].all()
         assert not entry.keep[1].any()
         np.testing.assert_allclose(entry.elevation_rad, np.deg2rad([10.0, -10.0]), atol=1e-6)
-        np.testing.assert_allclose(entry.azimuth_deg, [0.5, -0.5], atol=1e-6)
 
     def test_load_lidar_masks_rejects_channel_count_mismatch(self, mask_tree):
         masks, calibrations = mask_tree
@@ -94,11 +94,19 @@ class TestNebulaMaskAssets:
                 lidar_name_to_calibration={"front_upper": "model.csv"},
             )
 
+    def test_load_calibration_ignores_the_azimuth_column(self, tmp_path):
+        # Azimuth corrections are never applied by Autoware-ML, so the loader does not return them
+        # and a file without that column still reads cleanly.
+        path = tmp_path / "no_azimuth.csv"
+        path.write_text("Channel,Elevation\n1,5.0\n2,-5.0\n")
+
+        np.testing.assert_allclose(load_calibration(path), np.deg2rad([5.0, -5.0]), atol=1e-6)
+
     def test_load_calibration_requires_a_header(self, tmp_path):
         path = tmp_path / "headerless.csv"
         path.write_text("1,2.0,3.0\n")
 
-        with pytest.raises(ValueError, match="no Elevation/Azimuth header"):
+        with pytest.raises(ValueError, match="no Elevation header"):
             load_calibration(path)
 
     def test_bundled_platform_masks_load(self):

@@ -44,23 +44,19 @@ class LidarMask:
         keep: ``(channels, azimuth_bins)`` boolean grid; ``True`` where the driver keeps a return.
         elevation_rad: Per-channel elevation, used only to estimate the ring index when the sample
             does not carry one.
-        azimuth_deg: Per-channel azimuth correction, used only when a caller opts into
-            ``use_calibration_azimuth_offsets``.
     """
 
     keep: npt.NDArray[np.bool_]
     elevation_rad: npt.NDArray[np.float32]
-    azimuth_deg: npt.NDArray[np.float32]
 
     def __post_init__(self) -> None:
         if self.keep.ndim != 2:
             raise ValueError(f"keep must be 2-D (channels, azimuth_bins); got {self.keep.shape}")
         channels = self.keep.shape[0]
-        if self.elevation_rad.shape[0] != channels or self.azimuth_deg.shape[0] != channels:
+        if self.elevation_rad.shape[0] != channels:
             raise ValueError(
                 f"mask has {channels} channels but calibration has "
-                f"{self.elevation_rad.shape[0]} elevation and {self.azimuth_deg.shape[0]} azimuth "
-                "entries"
+                f"{self.elevation_rad.shape[0]} elevation entries"
             )
 
 
@@ -96,7 +92,6 @@ class NebulaDownsampleMaskFilter(BaseTransform):
         self,
         *,
         lidar_masks: Mapping[str, LidarMask],
-        use_calibration_azimuth_offsets: bool = False,
         channel_dim: int | None = 4,
         azimuth_start_deg: float = 0.0,
         azimuth_extent_deg: float = 360.0,
@@ -107,10 +102,6 @@ class NebulaDownsampleMaskFilter(BaseTransform):
         Args:
             lidar_masks: Mask per LiDAR, keyed by mounting position (``"front_upper"``) or full
                 channel name (``"LIDAR_FRONT_UPPER"``).
-            use_calibration_azimuth_offsets: Whether to subtract per-channel azimuth calibration
-                offsets before sampling the mask column. Defaults to ``False``: the driver indexes
-                the mask by raw azimuth, and subtracting the offsets moves points into the wrong
-                column.
             channel_dim: Index of the per-point feature holding the ring/channel number. Set to
                 ``None`` to always estimate the ring from elevation instead.
             azimuth_start_deg: Start of the mask azimuth range.
@@ -120,7 +111,6 @@ class NebulaDownsampleMaskFilter(BaseTransform):
         if not lidar_masks:
             raise ValueError("lidar_masks must not be empty")
         self.lidar_masks = {normalize_lidar_name(name): mask for name, mask in lidar_masks.items()}
-        self.use_calibration_azimuth_offsets = use_calibration_azimuth_offsets
         self.channel_dim = channel_dim if channel_dim is None else int(channel_dim)
         self.azimuth_start_deg = float(azimuth_start_deg)
         self.azimuth_extent_deg = float(azimuth_extent_deg)
@@ -180,9 +170,10 @@ class NebulaDownsampleMaskFilter(BaseTransform):
             local_points = (source_points - source.translation) @ source.rotation
 
         channels = self._channels(source_rows, local_points, lidar_mask)
+        # Indexed by raw azimuth. The calibration CSVs also carry a per-channel azimuth
+        # correction, but the driver does not apply it when building the mask, so neither do we:
+        # subtracting it moves points into the wrong mask column.
         azimuth_deg = np.rad2deg(nebula_azimuth_rad(local_points))
-        if self.use_calibration_azimuth_offsets:
-            azimuth_deg = azimuth_deg - lidar_mask.azimuth_deg[channels]
         azimuth_deg = (azimuth_deg - self.azimuth_start_deg) % 360.0
 
         keep_grid = lidar_mask.keep
