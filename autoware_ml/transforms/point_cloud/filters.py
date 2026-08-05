@@ -108,7 +108,8 @@ class NebulaDownsampleMaskFilter(BaseTransform):
         lidar_name_to_mask: Mapping[str, str] | None = None,
         lidar_name_to_model: Mapping[str, str] | None = None,
         lidar_name_to_calibration: Mapping[str, str] | None = None,
-        use_calibration_azimuth_offsets: bool = True,
+        use_calibration_azimuth_offsets: bool = False,
+        channel_dim: int | None = 4,
         azimuth_start_deg: float = 0.0,
         azimuth_extent_deg: float = 360.0,
         return_stats: bool = False,
@@ -125,7 +126,11 @@ class NebulaDownsampleMaskFilter(BaseTransform):
             lidar_name_to_calibration: LiDAR-name to calibration CSV mapping. Relative paths resolve
                 under ``calibration_root``.
             use_calibration_azimuth_offsets: Whether to subtract per-channel azimuth calibration
-                offsets before sampling the mask x-coordinate.
+                offsets before sampling the mask x-coordinate. Defaults to ``False``: the driver
+                indexes the mask by raw azimuth, and subtracting the offsets moves points into the
+                wrong mask column.
+            channel_dim: Index of the per-point feature holding the ring/channel number. Set to
+                ``None`` to always estimate the ring from elevation instead.
             azimuth_start_deg: Start of the mask azimuth range.
             azimuth_extent_deg: Width of the mask azimuth range.
             return_stats: Whether to attach per-source keep/drop counts.
@@ -149,6 +154,7 @@ class NebulaDownsampleMaskFilter(BaseTransform):
             for name, path in (lidar_name_to_calibration or _DEFAULT_CALIBRATIONS).items()
         }
         self.use_calibration_azimuth_offsets = use_calibration_azimuth_offsets
+        self.channel_dim = channel_dim if channel_dim is None else int(channel_dim)
         self.azimuth_start_deg = float(azimuth_start_deg)
         self.azimuth_extent_deg = float(azimuth_extent_deg)
         if self.azimuth_extent_deg <= 0.0:
@@ -205,13 +211,14 @@ class NebulaDownsampleMaskFilter(BaseTransform):
         lidar_name: str,
         model_name: str,
     ) -> npt.NDArray[np.bool_]:
-        source_points = points[source.point_slice, :3]
+        source_rows = points[source.point_slice]
+        source_points = source_rows[:, :3]
         local_points = source_points
         if source.translation is not None and source.rotation is not None:
             local_points = (source_points - source.translation) @ source.rotation
 
         calibration = self._load_calibration(lidar_name)
-        channels = _nearest_channel(local_points, calibration.elevation_rad)
+        channels = self._channels(source_rows, local_points, calibration)
         azimuth_deg = np.rad2deg(_nebula_azimuth_rad(local_points))
         if self.use_calibration_azimuth_offsets:
             azimuth_deg = azimuth_deg - calibration.azimuth_deg[channels]
@@ -223,6 +230,23 @@ class NebulaDownsampleMaskFilter(BaseTransform):
         keep = np.zeros(source_points.shape[0], dtype=bool)
         keep[valid] = mask[channels[valid], x[valid]]
         return keep
+
+    def _channels(
+        self,
+        source_rows: npt.NDArray[np.float32],
+        local_points: npt.NDArray[np.float32],
+        calibration: _Calibration,
+    ) -> npt.NDArray[np.int64]:
+        """Prefer the stored ring index; fall back to estimating it from elevation.
+
+        Estimating the ring by nearest calibration elevation is unreliable -- on a recording where
+        the true index is available it agrees for only 14-68% of points on four of eight LiDARs,
+        because neighbouring Pandar channels are separated by less than the elevation spread of a
+        single return. T4Dataset preserves the ring index, so use it whenever it is present.
+        """
+        if self.channel_dim is not None and source_rows.shape[1] > self.channel_dim:
+            return source_rows[:, self.channel_dim].astype(np.int64)
+        return _nearest_channel(local_points, calibration.elevation_rad)
 
     def _load_mask(self, lidar_name: str, model_name: str) -> npt.NDArray[np.bool_]:
         if lidar_name in self._masks:

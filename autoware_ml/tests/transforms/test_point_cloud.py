@@ -331,6 +331,49 @@ class TestPointCloudTransforms:
 
         np.testing.assert_allclose(output["points"], np.array([[0.0, 10.0, 0.0, 1.0]]))
 
+    def test_nebula_downsample_mask_filter_prefers_the_stored_ring_index(self, tmp_path):
+        mask_root = tmp_path / "masks"
+        calibration_root = tmp_path / "calibrations"
+        (mask_root / "front_upper").mkdir(parents=True)
+        calibration_root.mkdir()
+        cv2 = pytest.importorskip("cv2")
+        # Only ring 1 is kept. Both points sit at elevation 0, so estimating the ring from
+        # elevation would put both on ring 0 and drop them; the stored index must win.
+        mask = np.zeros((2, 4), dtype=np.uint8)
+        mask[1, 0] = 255
+        cv2.imwrite(str(mask_root / "front_upper" / "mask.png"), mask)
+        (calibration_root / "model.csv").write_text(
+            "Channel,Elevation,Azimuth\n1,0.0,0.0\n2,45.0,0.0\n"
+        )
+
+        # Columns are [x, y, z, intensity, channel].
+        sample = {
+            "points": np.array(
+                [[0.0, 10.0, 0.0, 1.0, 1.0], [0.0, 10.0, 0.0, 2.0, 0.0]],
+                dtype=np.float32,
+            ),
+            "source_name": "LIDAR_FRONT_UPPER",
+        }
+
+        kwargs = dict(
+            mask_root=str(mask_root),
+            calibration_root=str(calibration_root),
+            lidar_name_to_mask={"front_upper": "front_upper/mask.png"},
+            lidar_name_to_model={"front_upper": "test_model"},
+            lidar_name_to_calibration={"front_upper": "model.csv"},
+        )
+        output = NebulaDownsampleMaskFilter(channel_dim=4, **kwargs)(dict(sample))
+        np.testing.assert_allclose(output["points"], sample["points"][:1])
+
+        # Opting out falls back to the elevation estimate, which drops both points.
+        fallback = NebulaDownsampleMaskFilter(channel_dim=None, **kwargs)(dict(sample))
+        assert fallback["points"].shape[0] == 0
+
+    def test_nebula_downsample_mask_filter_does_not_apply_azimuth_offsets_by_default(self):
+        # The driver indexes the mask by raw azimuth; subtracting the per-channel calibration
+        # offsets shifts points into the wrong column.
+        assert NebulaDownsampleMaskFilter().use_calibration_azimuth_offsets is False
+
     def test_ego_crop_box_filter_removes_ego_points_and_keeps_arrays_aligned(self):
         sample = {
             "points": np.array(
