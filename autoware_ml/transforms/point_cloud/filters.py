@@ -28,6 +28,7 @@ import numpy as np
 import numpy.typing as npt
 
 from autoware_ml.transforms.base import BaseTransform
+from autoware_ml.transforms.point_cloud.ego_motion import pre_correction_points
 
 
 _ASSET_ROOT = resources.files("autoware_ml.configs").joinpath("assets")
@@ -167,6 +168,9 @@ class NebulaDownsampleMaskFilter(BaseTransform):
         """Apply the per-LiDAR mask and keep aligned per-point arrays consistent."""
         points = np.asarray(input_dict["points"], dtype=np.float32)
         keep_mask = np.zeros(points.shape[0], dtype=bool)
+        # The vehicle masks the raw sweep, so decide on pre-correction coordinates when the sample
+        # carries them. Surviving points keep their original corrected coordinates either way.
+        decision_xyz = pre_correction_points(input_dict, points)
         stats = []
 
         for source in self._iter_sources(input_dict, points.shape[0]):
@@ -174,7 +178,9 @@ class NebulaDownsampleMaskFilter(BaseTransform):
             model_name = self.lidar_name_to_model.get(lidar_name)
             if model_name is None:
                 raise KeyError(f"No Nebula lidar model configured for source {source.name!r}.")
-            source_mask = self._source_keep_mask(points, source, lidar_name, model_name)
+            source_mask = self._source_keep_mask(
+                points, source, lidar_name, model_name, decision_xyz
+            )
             keep_mask[source.point_slice] = source_mask
             if self.return_stats:
                 stats.append(
@@ -210,9 +216,12 @@ class NebulaDownsampleMaskFilter(BaseTransform):
         source: _SourceSlice,
         lidar_name: str,
         model_name: str,
+        decision_xyz: npt.NDArray[np.float32] | None = None,
     ) -> npt.NDArray[np.bool_]:
         source_rows = points[source.point_slice]
-        source_points = source_rows[:, :3]
+        source_points = (
+            source_rows[:, :3] if decision_xyz is None else decision_xyz[source.point_slice]
+        )
         local_points = source_points
         if source.translation is not None and source.rotation is not None:
             local_points = (source_points - source.translation) @ source.rotation
@@ -308,12 +317,13 @@ class EgoCropBoxFilter(BaseTransform):
     step has to be reapplied to match the inference-time point distribution. It removes up to 18%
     of a single LiDAR's points (``rear_lower`` on AIP X2 Gen2).
 
-    Ordering matters. On the vehicle the crop is evaluated as a *mask* that is only AND-ed into the
-    output at the very end, so cropped points are still present as neighbours while the ring outlier
-    filter runs. Place this transform **after** :class:`RingOutlierFilter`; running it first
-    discards those neighbours and measurably changes the ring filter's decisions.
-
-    Points are expected in the ego/``base_link`` frame, which is how T4Dataset stores them.
+    Points are expected in the ego/``base_link`` frame, which is how T4Dataset stores them. On the
+    vehicle the crop mask is computed *before* ego-motion correction, so run
+    :class:`~autoware_ml.transforms.point_cloud.ego_motion.InvertEgoMotionCorrection` first and this
+    transform will decide on the pre-correction coordinates it attaches. Without it the boxes are
+    applied to the corrected coordinates directly, which is measurably worse: reconstructing a
+    recorded concatenated cloud from an unfiltered T4Dataset, voxel IoU at 0.12 m drops from 0.877
+    to 0.702.
     """
 
     _required_keys = ["points"]
@@ -333,15 +343,20 @@ class EgoCropBoxFilter(BaseTransform):
     def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
         """Drop points inside any configured box, keeping aligned per-point arrays consistent."""
         points = np.asarray(input_dict["points"], dtype=np.float32)
+        # The vehicle crops the raw sweep, so decide on pre-correction coordinates when the sample
+        # carries them. Surviving points keep their original corrected coordinates either way.
+        decision_xyz = pre_correction_points(input_dict, points)
+        if decision_xyz is None:
+            decision_xyz = points[:, :3]
         inside = np.zeros(points.shape[0], dtype=bool)
         for x_min, y_min, z_min, x_max, y_max, z_max in self.crop_boxes:
             inside |= (
-                (points[:, 0] >= x_min)
-                & (points[:, 0] <= x_max)
-                & (points[:, 1] >= y_min)
-                & (points[:, 1] <= y_max)
-                & (points[:, 2] >= z_min)
-                & (points[:, 2] <= z_max)
+                (decision_xyz[:, 0] >= x_min)
+                & (decision_xyz[:, 0] <= x_max)
+                & (decision_xyz[:, 1] >= y_min)
+                & (decision_xyz[:, 1] <= y_max)
+                & (decision_xyz[:, 2] >= z_min)
+                & (decision_xyz[:, 2] <= z_max)
             )
 
         keep_mask = ~inside

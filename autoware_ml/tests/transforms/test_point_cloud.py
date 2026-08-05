@@ -1,3 +1,5 @@
+import json
+
 import numpy as np
 import pytest
 
@@ -7,6 +9,13 @@ from autoware_ml.transforms.point_cloud.crop import (
     CropBoxOuter,
     PointsRangeFilter,
     SphereCrop,
+)
+from autoware_ml.transforms.point_cloud.ego_motion import (
+    PRE_CORRECTION_POINTS_KEY,
+    InvertEgoMotionCorrection,
+    PoseTable,
+    invert_ego_motion,
+    normalize_quaternions,
 )
 from autoware_ml.transforms.point_cloud.filters import (
     AIP_X2_GEN2_EGO_CROP_BOXES,
@@ -355,13 +364,13 @@ class TestPointCloudTransforms:
             "source_name": "LIDAR_FRONT_UPPER",
         }
 
-        kwargs = dict(
-            mask_root=str(mask_root),
-            calibration_root=str(calibration_root),
-            lidar_name_to_mask={"front_upper": "front_upper/mask.png"},
-            lidar_name_to_model={"front_upper": "test_model"},
-            lidar_name_to_calibration={"front_upper": "model.csv"},
-        )
+        kwargs = {
+            "mask_root": str(mask_root),
+            "calibration_root": str(calibration_root),
+            "lidar_name_to_mask": {"front_upper": "front_upper/mask.png"},
+            "lidar_name_to_model": {"front_upper": "test_model"},
+            "lidar_name_to_calibration": {"front_upper": "model.csv"},
+        }
         output = NebulaDownsampleMaskFilter(channel_dim=4, **kwargs)(dict(sample))
         np.testing.assert_allclose(output["points"], sample["points"][:1])
 
@@ -398,6 +407,112 @@ class TestPointCloudTransforms:
             ),
         )
         np.testing.assert_array_equal(output["labels"], np.array([12, 13], dtype=np.int64))
+
+    def test_ego_crop_box_filter_decides_on_pre_correction_points(self):
+        # The point sits outside the boxes where T4Dataset put it, but inside them where it
+        # actually was when captured. The vehicle crops pre-correction, so it must be dropped --
+        # and the surviving point must keep its corrected coordinates, not the pre-correction ones.
+        sample = {
+            "points": np.array(
+                [[0.0, 0.0, 0.5, 1.0, 0.0], [30.0, 0.0, 0.5, 2.0, 0.0]], dtype=np.float32
+            ),
+            PRE_CORRECTION_POINTS_KEY: np.array(
+                [[30.0, 0.0, 0.5], [1.0, 0.0, 0.5]], dtype=np.float32
+            ),
+        }
+
+        output = EgoCropBoxFilter()(sample)
+
+        np.testing.assert_allclose(
+            output["points"], np.array([[0.0, 0.0, 0.5, 1.0, 0.0]], dtype=np.float32)
+        )
+        # The parallel array is filtered by the same mask, so the two never drift apart.
+        assert output[PRE_CORRECTION_POINTS_KEY].shape[0] == output["points"].shape[0]
+        np.testing.assert_allclose(
+            output[PRE_CORRECTION_POINTS_KEY], np.array([[30.0, 0.0, 0.5]], dtype=np.float32)
+        )
+
+    def test_filters_reject_misaligned_pre_correction_points(self):
+        sample = {
+            "points": np.zeros((3, 5), dtype=np.float32),
+            PRE_CORRECTION_POINTS_KEY: np.zeros((2, 3), dtype=np.float32),
+        }
+
+        with pytest.raises(ValueError, match="aligned"):
+            EgoCropBoxFilter()(sample)
+
+    def test_invert_ego_motion_correction_round_trips_a_stationary_vehicle(self):
+        # With the ego pose constant across the sweep, undoing the correction is the identity.
+        poses = [
+            {
+                "timestamp": int((10.0 + i * 0.01) * 1e6),
+                "translation": [5.0, -2.0, 0.0],
+                "rotation": [1.0, 0.0, 0.0, 0.0],
+            }
+            for i in range(20)
+        ]
+        table = PoseTable(
+            times=np.array([p["timestamp"] * 1e-6 for p in poses], dtype=np.float64),
+            translations=np.array([p["translation"] for p in poses], dtype=np.float64),
+            quaternions=normalize_quaternions(
+                np.array([p["rotation"] for p in poses], dtype=np.float64)
+            ),
+        )
+        points = np.array([[1.0, 2.0, 3.0], [-4.0, 5.0, 6.0]], dtype=np.float32)
+        times = np.array([10.05, 10.09], dtype=np.float64)
+
+        out = invert_ego_motion(points, 10.02, times, table)
+
+        np.testing.assert_allclose(out, points, atol=1e-6)
+
+    def test_invert_ego_motion_correction_attaches_aligned_points(self, tmp_path):
+        scene = tmp_path / "scene"
+        (scene / "annotation").mkdir(parents=True)
+        (scene / "data").mkdir()
+        # Vehicle drives +x at 10 m/s; the sweep reference is t=10.0.
+        (scene / "annotation" / "ego_pose.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "timestamp": int((10.0 + i * 0.01) * 1e6),
+                        "translation": [10.0 * (i * 0.01), 0.0, 0.0],
+                        "rotation": [1.0, 0.0, 0.0, 0.0],
+                    }
+                    for i in range(20)
+                ]
+            )
+        )
+        # Columns [x, y, z, intensity, channel, return_type, timestamp_ns].
+        points = np.zeros((2, 7), dtype=np.float32)
+        points[:, 0] = [20.0, 20.0]
+        points[:, 6] = [0.0, 50_000_000.0]  # 0 ms and 50 ms into the sweep
+        sample = {
+            "points": points,
+            "lidar_path": str(scene / "data" / "00000.pcd.bin"),
+            "lidar_sources_info": {
+                "stamp": {"sec": 10, "nanosec": 0},
+                "sources": [{"idx_begin": 0, "length": 2, "stamp": {"sec": 10, "nanosec": 0}}],
+            },
+        }
+
+        output = InvertEgoMotionCorrection(timestamp_dim=6)(sample)
+
+        pre = output[PRE_CORRECTION_POINTS_KEY]
+        assert pre.shape == (2, 3)
+        # The first point was captured at the reference time, so it does not move. The second was
+        # captured 50 ms later, by which time the vehicle had advanced 0.5 m, so relative to the
+        # ego frame at that instant the point sits 0.5 m nearer.
+        np.testing.assert_allclose(pre[0], [20.0, 0.0, 0.0], atol=1e-4)
+        np.testing.assert_allclose(pre[1], [19.5, 0.0, 0.0], atol=1e-4)
+
+    def test_invert_ego_motion_correction_requires_metadata_when_strict(self):
+        sample = {"points": np.zeros((2, 7), dtype=np.float32)}
+
+        with pytest.raises(KeyError):
+            InvertEgoMotionCorrection()(sample)
+
+        passthrough = InvertEgoMotionCorrection(strict=False)(dict(sample))
+        assert PRE_CORRECTION_POINTS_KEY not in passthrough
 
     def test_ego_crop_boxes_match_aip_x2_gen2_vehicle_info(self):
         self_box, wheels_box = AIP_X2_GEN2_EGO_CROP_BOXES
