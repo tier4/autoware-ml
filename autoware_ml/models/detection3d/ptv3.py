@@ -376,7 +376,8 @@ class _PTv3DetectionExportModule(nn.Module):
         self,
         grid_coord: torch.Tensor,
         feat: torch.Tensor,
-        serialized_code: torch.Tensor,
+        serialized_order: torch.Tensor,
+        serialized_inverse: torch.Tensor,
         *serialized_pooling_inputs: torch.Tensor,
     ) -> tuple[torch.Tensor, ...]:
         """Run export-time inference on serialized point inputs."""
@@ -385,7 +386,8 @@ class _PTv3DetectionExportModule(nn.Module):
             grid_coord,
             feat,
             self._serialized_depth,
-            serialized_code,
+            serialized_order,
+            serialized_inverse,
             self._sparse_shape,
             *serialized_pooling_inputs,
         )
@@ -543,13 +545,15 @@ class PTv3DetectionModel(PTv3BaseModel):
         export_input_args = (
             input_args[0],
             input_args[1],
-            input_args[3],
+            point["serialized_order"],
+            point["serialized_inverse"],
             *serialized_pooling_inputs,
         )
         input_param_names = [
             "grid_coord",
             "feat",
-            "serialized_code",
+            "serialized_order",
+            "serialized_inverse",
             *serialized_pooling_input_names,
         ]
         return ExportSpec(

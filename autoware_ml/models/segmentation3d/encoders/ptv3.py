@@ -1102,7 +1102,6 @@ class PointTransformerV3Encoder(PointModule):
         """
         point = Point(data_dict)
         point["serialized_depth"] = data_dict["serialized_depth"]
-        point["serialized_code"] = data_dict["serialized_code"]
         point["serialized_order"] = data_dict["serialized_order"]
         point["serialized_inverse"] = data_dict["serialized_inverse"]
         if "serialized_pooling" in data_dict:
