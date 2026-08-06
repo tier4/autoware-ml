@@ -44,6 +44,7 @@ datamodule:
         time_dim: 4
         pad_empty_sweeps: true
         remove_close: true
+        selection: random
       - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
         rot_range: [-0.78539816, 0.78539816]
         scale_ratio_range: [0.9, 1.1]

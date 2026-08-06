@@ -52,6 +52,7 @@ datamodule:
         time_dim: 4
         pad_empty_sweeps: true
         remove_close: true
+        selection: random
       - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
         rot_range: [-0.78539816, 0.78539816]
         scale_ratio_range: [0.95, 1.05]
@@ -111,12 +112,14 @@ model:
     num_proposals: 500
     class_names: ${dataset.detection3d.class_names}
     num_classes: ${dataset.detection3d.num_classes}
-    dense_heatmap_pooling_classes: [car, truck, bus]
+    dense_heatmap_pooling_classes: [car, truck, bus, barrier]
+    head_hidden_channels: 64
+    norm_eps: 1.0e-5
     nms_type: circle
-    nms_min_radius: 0.25
+    nms_min_radius: 0.5
     nms_groups:
       - class_names: [car, truck, bus]
-        nms_radius: 0.25
+        nms_radius: 0.5
         post_max_size: 300
       - class_names: [bicycle]
         nms_radius: 0.0

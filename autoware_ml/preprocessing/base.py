@@ -19,7 +19,9 @@ and model forward passes.
 """
 
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, Self
+
+import torch.nn as nn
 
 
 class DataPreprocessing:
@@ -54,6 +56,26 @@ class DataPreprocessing:
             pipeline: List of callable layers to apply sequentially.
         """
         self.pipeline = list(pipeline)
+
+    def train(self, mode: bool = True) -> Self:
+        """Propagate the train/eval mode to ``nn.Module`` pipeline layers.
+
+        The pipeline is deliberately not registered as part of the neural
+        network, so Lightning's ``model.train()``/``model.eval()`` never
+        reaches it. Layers that behave differently between training and
+        evaluation (for example a voxelizer with a larger evaluation budget)
+        rely on the owning module forwarding its mode here.
+
+        Args:
+            mode: ``True`` for training behavior, ``False`` for evaluation.
+
+        Returns:
+            This ``DataPreprocessing`` instance for chaining.
+        """
+        for layer in self.pipeline:
+            if isinstance(layer, nn.Module):
+                layer.train(mode)
+        return self
 
     def __call__(self, batch_inputs_dict: dict[str, Any]) -> dict[str, Any]:
         """Apply preprocessing layers after the batch is already on device.

@@ -61,6 +61,7 @@ datamodule:
         time_dim: 4
         pad_empty_sweeps: true
         remove_close: true
+        selection: random
       - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.ImageAug3D
         final_dim: ${image_size}
         resize_lim: [0.29, 0.35]

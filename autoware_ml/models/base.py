@@ -104,6 +104,9 @@ class BaseModel(MetricEvalMixin, L.LightningModule, ABC):
             Batch dictionary after runtime preprocessing.
         """
         del dataloader_idx
+        # The preprocessing pipeline is not a registered submodule, so keep its
+        # train/eval mode in sync with the model before applying it.
+        self._data_preprocessing.train(self.training)
         return self._data_preprocessing(batch_inputs_dict)
 
     def predict_outputs(self, batch_inputs_dict: Mapping[str, Any], outputs: Any) -> Any:
