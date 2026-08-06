@@ -28,16 +28,22 @@ class Detection3DGTBatch(NamedTuple):
           For all invalid bboxes, they are all set to -1.
         gt_valid_bboxes: Valid number of gt bboxes for each sample, shape (B, ), where B is
           the batch size.
+        gt_bboxes_num_points: Number of points in each gt bbox, shape (B, M), where B is the
+          batch size and M is the theoretically maximum number of bounding boxes.
+          0 for invalid bboxes.
     """
 
     # (batch_size, maximum number of bboxes, num_Box3DFieldIndex)
-    gt_bboxes_3d: Float32[Tensor, "batch_size max_num_3d_gt_bboxes num_Box3DFieldIndex"] | None
+    gt_bboxes_3d: Float32[Tensor, "batch_size max_num_3d_gt_bboxes num_Box3DFieldIndex"]
     # (batch_size, maximum number of bboxes)
-    gt_labels_3d: Int32[Tensor, "batch_size max_num_3d_gt_bboxes"] | None
+    gt_labels_3d: Int32[Tensor, "batch_size max_num_3d_gt_bboxes"]
     # (batch_size, ), number of valid bboxes for each sample in the batch
-    gt_valid_bboxes: (
-        Int32[Tensor, " batch_size"] | None
-    )  # (B, ), number of maximum valid bboxes for each sample.
+    gt_valid_bboxes: Int32[
+        Tensor, " batch_size"
+    ]  # (B, ), number of maximum valid bboxes for each sample.
+    gt_bboxes_num_points: Int32[
+        Tensor, "batch_size max_num_3d_gt_bboxes"
+    ]  # (B, M), number of points in each gt bbox
 
     @staticmethod
     def collate_gt_samples(
@@ -79,6 +85,11 @@ class Detection3DGTBatch(NamedTuple):
         gt_valid_bboxes = torch.zeros(
             len(detection3d_gt_bboxes_3d), dtype=torch.int32, device=torch_device
         )
+        gt_bboxes_num_points = torch.zeros(
+            (len(detection3d_gt_bboxes_3d), max_num_3d_gt_bboxes),
+            dtype=torch.int32,
+            device=torch_device,
+        )
 
         # Fill the arrays with the data from gt_samples
         for i, sample_gt_bboxes_3d in enumerate(detection3d_gt_bboxes_3d):
@@ -93,6 +104,9 @@ class Detection3DGTBatch(NamedTuple):
 
             gt_bboxes_3d[i, :num_bboxes, :] = sample_gt_bboxes_3d.bbox_params[:num_bboxes, :]
             gt_labels_3d[i, :num_bboxes] = sample_gt_bboxes_3d.bbox_labels[:num_bboxes]
+            gt_bboxes_num_points[i, :num_bboxes] = sample_gt_bboxes_3d.bbox_num_lidar_points[
+                :num_bboxes
+            ]
 
             # Set to -1 for those gt_labels_3d that are invalid (i.e., beyond the number of valid bboxes)
             gt_labels_3d[i, num_bboxes:] = -1  # Assuming -1 is used to indicate invalid labels
@@ -102,4 +116,5 @@ class Detection3DGTBatch(NamedTuple):
             gt_bboxes_3d=gt_bboxes_3d,
             gt_labels_3d=gt_labels_3d,
             gt_valid_bboxes=gt_valid_bboxes,
+            gt_bboxes_num_points=gt_bboxes_num_points,
         )
