@@ -431,6 +431,8 @@ def create_tensorrt_builder_config(tensorrt_cfg: DictConfig) -> tuple[Any, Any, 
     trt_logger = trt.Logger(trt.Logger.WARNING)
     trt.init_libnvinfer_plugins(trt_logger, "")
     builder = trt.Builder(trt_logger)
+    # Always strongly typed: deploy.onnx.precision decides which dtypes the ONNX carries, and the
+    # engine has to use them as exported rather than let the builder reassign precisions.
     network = builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.STRONGLY_TYPED))
     parser = trt.OnnxParser(network, trt_logger)
     config = builder.create_builder_config()
