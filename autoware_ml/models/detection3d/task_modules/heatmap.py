@@ -24,7 +24,8 @@ def batch_circle_nms(
     This NMS checks only if two valid bboxes from the same classes heavily overlap by their
     L2 center distance without considering their box dimensions and orientations.
     Note that this NMS assumes bboxes from the same cluster/label share the same axis, for example,
-    all vehicles from the first batch are in [0, 0, :, :].
+    all vehicles from the first batch are in [0, 0, :, :]. Also, max_num_bboxes includes padded
+    boxes for each batch and class.
 
     Args:
         bboxes_centers: Decoded box centers in metric space.
@@ -39,7 +40,7 @@ def batch_circle_nms(
     batch_size, num_classes, max_num_bboxes = scores.shape
     num_dimensions = bboxes_centers.shape[-1]
 
-    # Invalid boxes always included
+    # max_num_bboxes includes padded boxes for each batch and class.
     # (batch_size, num_classes, max_num_bboxes)
     orders = scores.argsort(dim=2, descending=True, stable=True)
     sorted_bboxes_valid_masks = torch.gather(valid_bboxes_masks, index=orders, dim=2)
