@@ -270,7 +270,7 @@ def create_gaussian_heatmaps(
         num_classes: Number of classes.
         batch_size: Batch size.
         centers: Heatmap centers as ``(x, y)`` for each box.
-        gaussian_radius: Gaussian radius in pixels for each box.
+        gaussian_radii: Gaussian radius in pixels for each box.
         gt_bboxes_labels: Class labels for each bounding box.
         valid_masks: Mask indicating valid bounding boxes.
         device: Torch device.
