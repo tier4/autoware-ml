@@ -65,14 +65,16 @@ class TestVectorizeGaussian2D(unittest.TestCase):
         self.expected = torch.zeros(2, 3, 5, 5, device=self.device, dtype=torch.float32)
 
         # batch 0, box 0: 1x1
-        self.expected[0, 0, :1, :1] = torch.tensor([[1.0]])
+        self.expected[0, 0, :1, :1] = torch.tensor([[1.0]], device=self.device, dtype=torch.float32)
 
         # batch 0, box 1: 2x2
         self.expected[0, 1, :2, :2] = torch.tensor(
             [
                 [0.0019, 0.0019],
                 [0.0019, 0.0019],
-            ]
+            ],
+            device=self.device,
+            dtype=torch.float32,
         )
 
         # batch 0, box 2: 4x4
@@ -82,7 +84,9 @@ class TestVectorizeGaussian2D(unittest.TestCase):
                 [9.2925e-07, 6.2177e-02, 6.2177e-02, 9.2925e-07],
                 [9.2925e-07, 6.2177e-02, 6.2177e-02, 9.2925e-07],
                 [0.0000e00, 9.2925e-07, 9.2925e-07, 0.0000e00],
-            ]
+            ],
+            device=self.device,
+            dtype=torch.float32,
         )
 
         # batch 1, box 0: 3x3
@@ -91,7 +95,9 @@ class TestVectorizeGaussian2D(unittest.TestCase):
                 [1.4945e-05, 3.8659e-03, 1.4945e-05],
                 [3.8659e-03, 1.0000e00, 3.8659e-03],
                 [1.4945e-05, 3.8659e-03, 1.4945e-05],
-            ]
+            ],
+            device=self.device,
+            dtype=torch.float32,
         )
 
         # batch 1, box 1: 4x4
@@ -101,7 +107,9 @@ class TestVectorizeGaussian2D(unittest.TestCase):
                 [4.0465e-04, 2.0961e-01, 2.0961e-01, 4.0465e-04],
                 [4.0465e-04, 2.0961e-01, 2.0961e-01, 4.0465e-04],
                 [7.8115e-07, 4.0465e-04, 4.0465e-04, 7.8115e-07],
-            ]
+            ],
+            device=self.device,
+            dtype=torch.float32,
         )
 
         # batch 1, box 2: 5x5
@@ -112,7 +120,9 @@ class TestVectorizeGaussian2D(unittest.TestCase):
                 [0.0, 3.7267e-06, 1.0000e00, 3.7267e-06, 0.0],
                 [0.0, 0.0, 3.7267e-06, 0.0, 0.0],
                 [0.0, 0.0, 0.0, 0.0, 0.0],
-            ]
+            ],
+            device=self.device,
+            dtype=torch.float32,
         )
 
     def test_vectorize_gaussian2d(self) -> None:
