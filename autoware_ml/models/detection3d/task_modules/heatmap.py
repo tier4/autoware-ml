@@ -214,7 +214,6 @@ def create_gaussian_heatmaps(
     heatmap_width: int,
     heatmap_height: int,
     num_classes: int,
-    batch_size: int,
     centers: Int64[torch.Tensor, "batch_size max_num_boxes 2"],
     gaussian_radii: Int32[torch.Tensor, "batch_size max_num_boxes"],
     gt_bboxes_labels: Int64[torch.Tensor, "batch_size max_num_boxes"],
@@ -268,7 +267,6 @@ def create_gaussian_heatmaps(
         heatmap_width: Width of the heatmap.
         heatmap_height: Height of the heatmap.
         num_classes: Number of classes.
-        batch_size: Batch size.
         centers: Heatmap centers as ``(x, y)`` for each box.
         gaussian_radii: Gaussian radius in pixels for each box.
         gt_bboxes_labels: Class labels for each bounding box.
@@ -278,6 +276,11 @@ def create_gaussian_heatmaps(
     Returns:
         Heatmap tensor of shape ``(batch_size, num_classes, heatmap_height, heatmap_width)``.
     """
+    batch_size = centers.shape[0]
+    if batch_size != gaussian_radii.shape[0] or batch_size != gt_bboxes_labels.shape[0]:
+        raise ValueError(
+            "Batch size mismatch: centers, gaussian_radii, and gt_bboxes_labels must have the same batch size."
+        )
     heatmaps = torch.zeros(
         (batch_size, num_classes, heatmap_height, heatmap_width), device=device, dtype=torch.float32
     )

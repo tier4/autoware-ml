@@ -330,7 +330,6 @@ class TestCreateGaussianHeatmap(unittest.TestCase):
             gaussian_radii=self.gaussian_radii,
             gt_bboxes_labels=self.gt_bboxes_labels,
             valid_masks=torch.tensor([[1, 1, 1], [1, 1, 1]], device=self.device, dtype=torch.bool),
-            batch_size=self.batch_size,
             device=self.device,
         )
 
@@ -350,7 +349,6 @@ class TestCreateGaussianHeatmap(unittest.TestCase):
             gaussian_radii=self.gaussian_radii,
             gt_bboxes_labels=self.gt_bboxes_labels,
             valid_masks=torch.tensor([[1, 0, 1], [0, 1, 1]], device=self.device, dtype=torch.bool),
-            batch_size=self.batch_size,
             device=self.device,
         )
 
