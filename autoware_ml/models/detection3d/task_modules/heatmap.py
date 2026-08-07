@@ -15,21 +15,20 @@ import torch
 def batch_circle_nms(
     bboxes_centers: Float32[torch.Tensor, "batch_size num_classes max_num_boxes 2"],
     scores: Float32[torch.Tensor, "batch_size num_classes max_num_boxes"],
-    bboxes_labels: Int64[torch.Tensor, "batch_size num_classes max_num_boxes"],
     min_radius: float,
     valid_bboxes_masks: Bool[torch.Tensor, "batch_size num_classes max_num_boxes"],
     post_max_size: int,
 ) -> Bool[torch.Tensor, "batch_size num_classes max_num_boxes"]:
     """
-    Apply greedy center-distance NMS across batch and classes in the BEV plane.
+    Apply greedy center-distance NMS for each batch and classes in the BEV plane.
     This NMS checks only if two valid bboxes from the same classes heavily overlap by their
     L2 center distance without considering their box dimensions and orientations.
-    Note that this NMS assumes bboxes is ordered by classes.
+    Note that this NMS assumes bboxes from the same cluster/label share the same axis, for example,
+    all vehicles from the first batch are in [0, 0, :, :].
 
     Args:
         bboxes_centers: Decoded box centers in metric space.
         scores: Confidence scores for the boxes.
-        bboxes_labels: Labels for the boxes.
         min_radius: Minimum center distance for suppression.
         valid_bboxes_masks: Boolean mask indicating which boxes are valid and should be considered for NMS.
         post_max_size: Maximum number of boxes kept after suppression, counted per class.
@@ -44,7 +43,6 @@ def batch_circle_nms(
     # (batch_size, num_classes, max_num_bboxes)
     orders = scores.argsort(dim=2, descending=True, stable=True)
     sorted_bboxes_valid_masks = torch.gather(valid_bboxes_masks, index=orders, dim=2)
-    sorted_bboxes_labels = torch.gather(bboxes_labels, index=orders, dim=2)
     # (batch_size, num_classes, max_num_bboxes) -> (batch_size, num_classes, max_num_bboxes, 2)
     center_indices = orders.unsqueeze(-1).expand(-1, -1, -1, num_dimensions)
     sorted_bboxes_centers = torch.gather(bboxes_centers, index=center_indices, dim=2)
@@ -60,13 +58,9 @@ def batch_circle_nms(
         compute_mode="donot_use_mm_for_euclid_dist",
     ).view(batch_size, num_classes, max_num_bboxes, max_num_bboxes)
 
-    # A pair may only suppress when both boxes share a label.
-    # (batch_size, num_classes, max_num_bboxes, max_num_bboxes)
-    pairwise_labels = sorted_bboxes_labels.unsqueeze(-1) == sorted_bboxes_labels.unsqueeze(-2)
-
     # Keeps a box only when its center distance is strictly greater than min_radius.
     # (batch_size, num_classes, max_num_bboxes, max_num_bboxes)
-    pairwise_suppression = (pairwise_distances <= min_radius) & pairwise_labels
+    pairwise_suppression = pairwise_distances <= min_radius
 
     # Only a higher scoring box may suppress a lower scoring one. After the descending sort
     # that is exactly the strict upper triangle.
