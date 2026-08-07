@@ -120,7 +120,7 @@ def vectorize_gaussian_radii(
         min_overlap: Minimum Gaussian overlap with the target box.
 
     Returns:
-        Gaussian (2D) radius in meters.
+        Gaussian (2D) radius in feature-map cells.
     """
     a1 = 1
     b1 = heights + widths
