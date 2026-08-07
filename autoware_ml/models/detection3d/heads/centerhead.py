@@ -225,7 +225,6 @@ class CenterHead(nn.Module):
             heatmap_width=feature_width,
             heatmap_height=feature_height,
             num_classes=self.num_classes,
-            batch_size=batch_size,
             centers=center_int,
             gaussian_radii=gaussian_radii.long(),
             gt_bboxes_labels=gt_labels_3d,
@@ -529,7 +528,6 @@ class CenterHead(nn.Module):
         keep_masks = batch_circle_nms(
             bboxes_centers=bboxes_centers,
             scores=top_scores,
-            bboxes_labels=class_ids,
             valid_bboxes_masks=valid_bboxes_masks,
             post_max_size=self.post_max_size,
             min_radius=self.nms_min_radius,
