@@ -65,14 +65,16 @@ class TestVectorizeGaussian2D(unittest.TestCase):
         self.expected = torch.zeros(2, 3, 5, 5, device=self.device, dtype=torch.float32)
 
         # batch 0, box 0: 1x1
-        self.expected[0, 0, :1, :1] = torch.tensor([[1.0]])
+        self.expected[0, 0, :1, :1] = torch.tensor([[1.0]], device=self.device, dtype=torch.float32)
 
         # batch 0, box 1: 2x2
         self.expected[0, 1, :2, :2] = torch.tensor(
             [
                 [0.0019, 0.0019],
                 [0.0019, 0.0019],
-            ]
+            ],
+            device=self.device,
+            dtype=torch.float32,
         )
 
         # batch 0, box 2: 4x4
@@ -82,7 +84,9 @@ class TestVectorizeGaussian2D(unittest.TestCase):
                 [9.2925e-07, 6.2177e-02, 6.2177e-02, 9.2925e-07],
                 [9.2925e-07, 6.2177e-02, 6.2177e-02, 9.2925e-07],
                 [0.0000e00, 9.2925e-07, 9.2925e-07, 0.0000e00],
-            ]
+            ],
+            device=self.device,
+            dtype=torch.float32,
         )
 
         # batch 1, box 0: 3x3
@@ -91,7 +95,9 @@ class TestVectorizeGaussian2D(unittest.TestCase):
                 [1.4945e-05, 3.8659e-03, 1.4945e-05],
                 [3.8659e-03, 1.0000e00, 3.8659e-03],
                 [1.4945e-05, 3.8659e-03, 1.4945e-05],
-            ]
+            ],
+            device=self.device,
+            dtype=torch.float32,
         )
 
         # batch 1, box 1: 4x4
@@ -101,7 +107,9 @@ class TestVectorizeGaussian2D(unittest.TestCase):
                 [4.0465e-04, 2.0961e-01, 2.0961e-01, 4.0465e-04],
                 [4.0465e-04, 2.0961e-01, 2.0961e-01, 4.0465e-04],
                 [7.8115e-07, 4.0465e-04, 4.0465e-04, 7.8115e-07],
-            ]
+            ],
+            device=self.device,
+            dtype=torch.float32,
         )
 
         # batch 1, box 2: 5x5
@@ -112,7 +120,9 @@ class TestVectorizeGaussian2D(unittest.TestCase):
                 [0.0, 3.7267e-06, 1.0000e00, 3.7267e-06, 0.0],
                 [0.0, 0.0, 3.7267e-06, 0.0, 0.0],
                 [0.0, 0.0, 0.0, 0.0, 0.0],
-            ]
+            ],
+            device=self.device,
+            dtype=torch.float32,
         )
 
     def test_vectorize_gaussian2d(self) -> None:
@@ -320,7 +330,6 @@ class TestCreateGaussianHeatmap(unittest.TestCase):
             gaussian_radii=self.gaussian_radii,
             gt_bboxes_labels=self.gt_bboxes_labels,
             valid_masks=torch.tensor([[1, 1, 1], [1, 1, 1]], device=self.device, dtype=torch.bool),
-            batch_size=self.batch_size,
             device=self.device,
         )
 
@@ -340,7 +349,6 @@ class TestCreateGaussianHeatmap(unittest.TestCase):
             gaussian_radii=self.gaussian_radii,
             gt_bboxes_labels=self.gt_bboxes_labels,
             valid_masks=torch.tensor([[1, 0, 1], [0, 1, 1]], device=self.device, dtype=torch.bool),
-            batch_size=self.batch_size,
             device=self.device,
         )
 
@@ -393,7 +401,6 @@ class TestBatchCircleNMS(unittest.TestCase):
     ) -> tuple[
         Float32[torch.Tensor, "batch_size num_classes max_num_bboxes 2"],
         Float32[torch.Tensor, "batch_size num_classes max_num_bboxes"],
-        Bool[torch.Tensor, "batch_size num_classes max_num_bboxes"],
         Float32[torch.Tensor, "batch_size num_classes max_num_bboxes"],
     ]:
         """
@@ -416,13 +423,6 @@ class TestBatchCircleNMS(unittest.TestCase):
             .expand(shape)
             .contiguous()
         )
-        # Rows are class-wise, matching the class_ids layout decode_outputs builds
-        bboxes_labels = (
-            torch.arange(self.num_classes, dtype=torch.int64, device=self.device)
-            .view(1, self.num_classes, 1)
-            .expand(shape)
-            .contiguous()
-        )
         valid_bboxes_masks = (
             torch.tensor(
                 valid_masks if valid_masks is not None else [True] * max_num_bboxes,
@@ -433,7 +433,7 @@ class TestBatchCircleNMS(unittest.TestCase):
             .expand(shape)
             .contiguous()
         )
-        return (bboxes_centers, bboxes_scores, bboxes_labels, valid_bboxes_masks)
+        return (bboxes_centers, bboxes_scores, valid_bboxes_masks)
 
     def _expected_keep_masks(
         self, keep_masks_row: Sequence[bool]
@@ -449,7 +449,7 @@ class TestBatchCircleNMS(unittest.TestCase):
     def test_batch_circle_nms_suppresses_neighbours_within_radius(self) -> None:
         """Test that a lower scoring box within min_radius of a kept box is suppressed."""
         # Two tight pairs 5 m apart: the second box of each pair falls inside min_radius
-        centers, scores, labels, valid_masks = self._build_inputs(
+        centers, scores, valid_masks = self._build_inputs(
             centers=[[0.0, 0.0], [0.5, 0.0], [5.0, 0.0], [5.4, 0.0]],
             scores=[0.9, 0.8, 0.7, 0.6],
         )
@@ -457,7 +457,6 @@ class TestBatchCircleNMS(unittest.TestCase):
         keep_masks = batch_circle_nms(
             bboxes_centers=centers,
             scores=scores,
-            bboxes_labels=labels,
             min_radius=self.min_radius,
             valid_bboxes_masks=valid_masks,
             post_max_size=self.post_max_size,
@@ -474,7 +473,7 @@ class TestBatchCircleNMS(unittest.TestCase):
         Because B is already gone it cannot suppress anything, so C survives.
         """
         # Collinear boxes 1.5 m apart with min_radius 2.0: A-B and B-C overlap, A-C does not
-        centers, scores, labels, valid_masks = self._build_inputs(
+        centers, scores, valid_masks = self._build_inputs(
             centers=[[0.0, 0.0], [1.5, 0.0], [3.0, 0.0]],
             scores=[0.9, 0.8, 0.7],
         )
@@ -482,7 +481,6 @@ class TestBatchCircleNMS(unittest.TestCase):
         keep_masks = batch_circle_nms(
             bboxes_centers=centers,
             scores=scores,
-            bboxes_labels=labels,
             min_radius=2.0,
             valid_bboxes_masks=valid_masks,
             post_max_size=self.post_max_size,
@@ -498,7 +496,7 @@ class TestBatchCircleNMS(unittest.TestCase):
         Test that an invalid box is dropped and does not suppress its neighbour, so the
         neighbour survives even though it sits inside the invalid box's radius.
         """
-        centers, scores, labels, valid_masks = self._build_inputs(
+        centers, scores, valid_masks = self._build_inputs(
             centers=[[0.0, 0.0], [0.5, 0.0], [5.0, 0.0]],
             scores=[0.9, 0.8, 0.7],
             # The highest scoring box is invalid
@@ -508,7 +506,6 @@ class TestBatchCircleNMS(unittest.TestCase):
         keep_masks = batch_circle_nms(
             bboxes_centers=centers,
             scores=scores,
-            bboxes_labels=labels,
             min_radius=self.min_radius,
             valid_bboxes_masks=valid_masks,
             post_max_size=self.post_max_size,
@@ -523,7 +520,7 @@ class TestBatchCircleNMS(unittest.TestCase):
         Test that post_max_size truncates a class row to its highest scoring survivors even when
         no box overlaps another.
         """
-        centers, scores, labels, valid_masks = self._build_inputs(
+        centers, scores, valid_masks = self._build_inputs(
             centers=[[0.0, 0.0], [10.0, 0.0], [20.0, 0.0], [30.0, 0.0]],
             scores=[0.6, 0.9, 0.7, 0.8],
         )
@@ -531,7 +528,6 @@ class TestBatchCircleNMS(unittest.TestCase):
         keep_masks = batch_circle_nms(
             bboxes_centers=centers,
             scores=scores,
-            bboxes_labels=labels,
             min_radius=self.min_radius,
             valid_bboxes_masks=valid_masks,
             post_max_size=2,
@@ -549,7 +545,7 @@ class TestBatchCircleNMS(unittest.TestCase):
         """
         # Every class row of every sample holds the same two overlapping centers, so a box that
         # is suppressed anywhere other than inside its own row would show up as a missing keep
-        centers, scores, labels, valid_masks = self._build_inputs(
+        centers, scores, valid_masks = self._build_inputs(
             centers=[[0.0, 0.0], [0.2, 0.0]],
             scores=[0.9, 0.8],
         )
@@ -557,7 +553,6 @@ class TestBatchCircleNMS(unittest.TestCase):
         keep_masks = batch_circle_nms(
             bboxes_centers=centers,
             scores=scores,
-            bboxes_labels=labels,
             min_radius=self.min_radius,
             valid_bboxes_masks=valid_masks,
             post_max_size=self.post_max_size,
@@ -567,38 +562,6 @@ class TestBatchCircleNMS(unittest.TestCase):
         expected_keep_masks = self._expected_keep_masks([True, False])
         self.assertTrue(torch.equal(keep_masks, expected_keep_masks))
         self.assertEqual(int(keep_masks.sum().item()), self.batch_size * self.num_classes)
-
-    def test_batch_circle_nms_only_suppresses_boxes_sharing_a_label(self) -> None:
-        """
-        Test that overlapping boxes inside the same class row survive when their labels differ,
-        which is the only situation where the label check changes the outcome.
-        """
-        # Three overlapping centers per row, with the middle box carrying a different label
-        centers, scores, _, valid_masks = self._build_inputs(
-            centers=[[0.0, 0.0], [0.2, 0.0], [0.4, 0.0]],
-            scores=[0.9, 0.8, 0.7],
-        )
-        # Override the class-wise labels so a single row carries more than one label
-        bboxes_labels = (
-            torch.tensor([0, 1, 0], dtype=torch.int64, device=self.device)
-            .view(1, 1, 3)
-            .expand(self.batch_size, self.num_classes, 3)
-            .contiguous()
-        )
-
-        keep_masks = batch_circle_nms(
-            bboxes_centers=centers,
-            scores=scores,
-            bboxes_labels=bboxes_labels,
-            min_radius=self.min_radius,
-            valid_bboxes_masks=valid_masks,
-            post_max_size=self.post_max_size,
-        )
-
-        # Box 1 differs in label so it survives; box 2 shares label 0 with box 0 and is dropped
-        # because they overlap
-        expected_keep_masks = self._expected_keep_masks([True, True, False])
-        self.assertTrue(torch.equal(keep_masks, expected_keep_masks))
 
 
 if __name__ == "__main__":

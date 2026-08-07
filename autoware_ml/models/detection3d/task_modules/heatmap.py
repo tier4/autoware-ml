@@ -15,21 +15,21 @@ import torch
 def batch_circle_nms(
     bboxes_centers: Float32[torch.Tensor, "batch_size num_classes max_num_boxes 2"],
     scores: Float32[torch.Tensor, "batch_size num_classes max_num_boxes"],
-    bboxes_labels: Int64[torch.Tensor, "batch_size num_classes max_num_boxes"],
     min_radius: float,
     valid_bboxes_masks: Bool[torch.Tensor, "batch_size num_classes max_num_boxes"],
     post_max_size: int,
 ) -> Bool[torch.Tensor, "batch_size num_classes max_num_boxes"]:
     """
-    Apply greedy center-distance NMS across batch and classes in the BEV plane.
+    Apply greedy center-distance NMS for each batch and classes in the BEV plane.
     This NMS checks only if two valid bboxes from the same classes heavily overlap by their
     L2 center distance without considering their box dimensions and orientations.
-    Note that this NMS assumes bboxes is ordered by classes.
+    Note that this NMS assumes bboxes from the same cluster/label share the same axis, for example,
+    all vehicles from the first batch are in [0, 0, :, :]. Also, max_num_bboxes includes padded
+    boxes for each batch and class.
 
     Args:
         bboxes_centers: Decoded box centers in metric space.
         scores: Confidence scores for the boxes.
-        bboxes_labels: Labels for the boxes.
         min_radius: Minimum center distance for suppression.
         valid_bboxes_masks: Boolean mask indicating which boxes are valid and should be considered for NMS.
         post_max_size: Maximum number of boxes kept after suppression, counted per class.
@@ -40,18 +40,17 @@ def batch_circle_nms(
     batch_size, num_classes, max_num_bboxes = scores.shape
     num_dimensions = bboxes_centers.shape[-1]
 
-    # Invalid boxes always included
+    # max_num_bboxes includes padded boxes for each batch and class.
     # (batch_size, num_classes, max_num_bboxes)
     orders = scores.argsort(dim=2, descending=True, stable=True)
     sorted_bboxes_valid_masks = torch.gather(valid_bboxes_masks, index=orders, dim=2)
-    sorted_bboxes_labels = torch.gather(bboxes_labels, index=orders, dim=2)
     # (batch_size, num_classes, max_num_bboxes) -> (batch_size, num_classes, max_num_bboxes, 2)
     center_indices = orders.unsqueeze(-1).expand(-1, -1, -1, num_dimensions)
     sorted_bboxes_centers = torch.gather(bboxes_centers, index=center_indices, dim=2)
 
     # Pairwise center distances.The matmul-based distance path is disabled to match the elementwise.
-    # (batch_size, num_classes, max_num_bboxes, 2) -> (batch_size, num_classes*max_num_bboxes, 2) ->
-    # (batch_size, num_classes, max_num_bboxes, max_num_bboxes)
+    # (batch_size, num_classes, max_num_bboxes, 2) -> (batch_size*num_classes, max_num_bboxes, 2) ->
+    # (batch_size * num_classes, max_num_bboxes, max_num_bboxes) -> (batch_size, num_classes, max_num_bboxes, max_num_bboxes)
     flatten_bboxes_centers = sorted_bboxes_centers.reshape(-1, max_num_bboxes, num_dimensions)
     pairwise_distances = torch.cdist(
         flatten_bboxes_centers,
@@ -60,13 +59,9 @@ def batch_circle_nms(
         compute_mode="donot_use_mm_for_euclid_dist",
     ).view(batch_size, num_classes, max_num_bboxes, max_num_bboxes)
 
-    # A pair may only suppress when both boxes share a label.
-    # (batch_size, num_classes, max_num_bboxes, max_num_bboxes)
-    pairwise_labels = sorted_bboxes_labels.unsqueeze(-1) == sorted_bboxes_labels.unsqueeze(-2)
-
     # Keeps a box only when its center distance is strictly greater than min_radius.
     # (batch_size, num_classes, max_num_bboxes, max_num_bboxes)
-    pairwise_suppression = (pairwise_distances <= min_radius) & pairwise_labels
+    pairwise_suppression = pairwise_distances <= min_radius
 
     # Only a higher scoring box may suppress a lower scoring one. After the descending sort
     # that is exactly the strict upper triangle.
@@ -125,7 +120,7 @@ def vectorize_gaussian_radii(
         min_overlap: Minimum Gaussian overlap with the target box.
 
     Returns:
-        Gaussian (2D) radius in meters.
+        Gaussian (2D) radius in feature-map cells.
     """
     a1 = 1
     b1 = heights + widths
@@ -219,7 +214,6 @@ def create_gaussian_heatmaps(
     heatmap_width: int,
     heatmap_height: int,
     num_classes: int,
-    batch_size: int,
     centers: Int64[torch.Tensor, "batch_size max_num_boxes 2"],
     gaussian_radii: Int32[torch.Tensor, "batch_size max_num_boxes"],
     gt_bboxes_labels: Int64[torch.Tensor, "batch_size max_num_boxes"],
@@ -273,9 +267,8 @@ def create_gaussian_heatmaps(
         heatmap_width: Width of the heatmap.
         heatmap_height: Height of the heatmap.
         num_classes: Number of classes.
-        batch_size: Batch size.
         centers: Heatmap centers as ``(x, y)`` for each box.
-        gaussian_radius: Gaussian radius in pixels for each box.
+        gaussian_radii: Gaussian radius in pixels for each box.
         gt_bboxes_labels: Class labels for each bounding box.
         valid_masks: Mask indicating valid bounding boxes.
         device: Torch device.
@@ -283,6 +276,11 @@ def create_gaussian_heatmaps(
     Returns:
         Heatmap tensor of shape ``(batch_size, num_classes, heatmap_height, heatmap_width)``.
     """
+    batch_size = centers.shape[0]
+    if batch_size != gaussian_radii.shape[0] or batch_size != gt_bboxes_labels.shape[0]:
+        raise ValueError(
+            "Batch size mismatch: centers, gaussian_radii, and gt_bboxes_labels must have the same batch size."
+        )
     heatmaps = torch.zeros(
         (batch_size, num_classes, heatmap_height, heatmap_width), device=device, dtype=torch.float32
     )
