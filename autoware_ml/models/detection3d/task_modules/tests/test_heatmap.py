@@ -381,6 +381,56 @@ class TestCreateGaussianHeatmap(unittest.TestCase):
         )
         self.assertTrue(torch.allclose(gaussian_heatmaps, self.expected_heatmap, atol=1e-4))
 
+    def test_create_gaussian_heatmaps_ignores_padded_radii(self) -> None:
+        """Test that radii of invalid bboxes do not change the heatmap nor the kernel size."""
+        valid_masks = torch.tensor([[1, 0, 1], [0, 1, 1]], device=self.device, dtype=torch.bool)
+        # The padded boxes carry radii far larger and smaller than any valid box, so a leaking
+        # padded radius would blow up (or collapse) the shared kernel size.
+        padded_gaussian_radii = self.gaussian_radii.clone()
+        padded_gaussian_radii[0, 1] = 100
+        padded_gaussian_radii[1, 0] = -7
+
+        gaussian_heatmaps = create_gaussian_heatmaps(
+            heatmap_width=self.heatmap_width,
+            heatmap_height=self.heatmap_height,
+            num_classes=self.num_classes,
+            centers=self.centers,
+            gaussian_radii=padded_gaussian_radii,
+            gt_bboxes_labels=self.gt_bboxes_labels,
+            valid_masks=valid_masks,
+            device=self.device,
+        )
+        expected_heatmaps = create_gaussian_heatmaps(
+            heatmap_width=self.heatmap_width,
+            heatmap_height=self.heatmap_height,
+            num_classes=self.num_classes,
+            centers=self.centers,
+            gaussian_radii=self.gaussian_radii,
+            gt_bboxes_labels=self.gt_bboxes_labels,
+            valid_masks=valid_masks,
+            device=self.device,
+        )
+        self.assertTrue(torch.allclose(gaussian_heatmaps, expected_heatmaps, atol=1e-4))
+
+    def test_create_gaussian_heatmaps_with_all_invalid_masks(self) -> None:
+        """Test that an all-invalid batch with negative padded radii yields an empty heatmap."""
+        gaussian_heatmaps = create_gaussian_heatmaps(
+            heatmap_width=self.heatmap_width,
+            heatmap_height=self.heatmap_height,
+            num_classes=self.num_classes,
+            centers=self.centers,
+            gaussian_radii=torch.full_like(self.gaussian_radii, -1),
+            gt_bboxes_labels=self.gt_bboxes_labels,
+            valid_masks=torch.zeros_like(self.gt_bboxes_labels, dtype=torch.bool),
+            device=self.device,
+        )
+
+        self.assertEqual(
+            gaussian_heatmaps.shape,
+            (self.batch_size, self.num_classes, self.heatmap_height, self.heatmap_width),
+        )
+        self.assertTrue(torch.all(gaussian_heatmaps == 0.0))
+
 
 class TestBatchCircleNMS(unittest.TestCase):
     """Unit tests for the batch_circle_nms function."""

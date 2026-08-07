@@ -256,7 +256,9 @@ def create_gaussian_heatmaps(
           are zeroed in step 3, and zeros never beat the (non-negative) heatmap
           under ``amax``. Padding labels such as ``-1`` are safe via clamping.
         - Memory scales with ``B * N * max_diameter**2``; a single large radius
-          in the batch inflates the padded kernel tensor for all boxes.
+          in the batch inflates the padded kernel tensor for all boxes. Only
+          valid boxes count: radii of invalid (padded) boxes are normalized to
+          zero first, so they never drive the kernel size.
         - A box whose center lies outside the heatmap is expected to be marked
           invalid in ``valid_masks`` (the caller filters these via a center-in-bounds check).
           Such boxes contribute nothing, matching the scalar reference. The per-cell ``in_bounds``
@@ -268,7 +270,8 @@ def create_gaussian_heatmaps(
         heatmap_height: Height of the heatmap.
         num_classes: Number of classes.
         centers: Heatmap centers as ``(x, y)`` for each box.
-        gaussian_radii: Gaussian radius in pixels for each box.
+        gaussian_radii: Gaussian radius in pixels for each box. Radii of boxes marked invalid in
+            ``valid_masks`` are ignored, so callers need not pad them with any particular value.
         gt_bboxes_labels: Class labels for each bounding box.
         valid_masks: Mask indicating valid bounding boxes.
         device: Torch device.
@@ -285,8 +288,18 @@ def create_gaussian_heatmaps(
         (batch_size, num_classes, heatmap_height, heatmap_width), device=device, dtype=torch.float32
     )
 
+    # Radii of padded boxes are arbitrary, but _vectorize_gaussian2d sizes every kernel slot from
+    # the global maximum diameter, so a single large padded radius would inflate the padded kernel
+    # tensor for the whole batch (and a negative one could shrink it below the valid boxes' needs).
+    # Normalize invalid radii to zero, the smallest safe radius, so only valid boxes drive the
+    # kernel size. Invalid boxes still contribute nothing, because valid_masks zeroes them out.
     # (batch_size, max_num_boxes)
-    diameters = 2 * gaussian_radii + 1
+    normalized_gaussian_radii = torch.where(
+        valid_masks.bool(), gaussian_radii, torch.zeros_like(gaussian_radii)
+    )
+
+    # (batch_size, max_num_boxes)
+    diameters = 2 * normalized_gaussian_radii + 1
 
     # (batch_size, max_num_boxes, max_height, max_width)
     batch_gaussians_2d = _vectorize_gaussian2d(
@@ -305,11 +318,13 @@ def create_gaussian_heatmaps(
     # (0, 1, 2, ..., max_diameter-1)
     idx = torch.arange(max_diameter, device=device)  # (max_diameter,)
 
+    # The normalized radii keep the coordinates of padded boxes in a sane range; their cells are
+    # dropped by valid_masks in in_bounds regardless.
     # (B, max_num_bboxes, 1) - (B, max_num_bboxes, 1) + (1, 1, max_diameter) -> (B, N, max_diameter)
     # From [center_y - radius, center_y + radius], for each box, broadcast to all boxes in the batch
-    ys = centers[..., 1].unsqueeze(-1) - gaussian_radii.unsqueeze(-1) + idx
+    ys = centers[..., 1].unsqueeze(-1) - normalized_gaussian_radii.unsqueeze(-1) + idx
     # From [center_x - radius, center_x + radius], for each box, broadcast to all boxes in the batch
-    xs = centers[..., 0].unsqueeze(-1) - gaussian_radii.unsqueeze(-1) + idx
+    xs = centers[..., 0].unsqueeze(-1) - normalized_gaussian_radii.unsqueeze(-1) + idx
 
     # meshgrid to get all combinations of (y, x) for each box in the batch
     # (B, max_num_bboxes, max_diameter, 1) -> (B, max_num_bboxes, max_diameter, max_diameter)
