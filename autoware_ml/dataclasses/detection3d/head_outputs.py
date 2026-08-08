@@ -48,7 +48,7 @@ class CenterHeadOutputs(BaseModel):
     vels: Float32[torch.Tensor, "batch_size 2 height width"] | None
 
 
-class Detection3DOutputs(BaseModel):
+class Detection3DHeadOutputs(BaseModel):
     """
     Dataclass to save outputs from 3D detection models.
 
