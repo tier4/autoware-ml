@@ -21,7 +21,10 @@ from jaxtyping import Float32
 import torch
 
 from autoware_ml.models.detection3d.heads.centerhead import CenterHead
-from autoware_ml.models.detection3d.dataclasses.outputs import CenterHeadOutputs, Detection3DOutputs
+from autoware_ml.dataclasses.detection3d.head_outputs import (
+    CenterHeadOutputs,
+    Detection3DHeadOutputs,
+)
 from autoware_ml.datamodule.multi_task.dataclasses.detection3d import (
     Detection3DGTBatch,
 )
@@ -36,7 +39,7 @@ class TestCenterHead(unittest.TestCase):
         torch.manual_seed(0)
         self.center_head = CenterHead(
             in_channels=384,
-            num_classes=2,
+            class_names=["car", "pedestrian"],
             shared_channels=64,
             point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
             voxel_size=[0.5, 0.5, 4.0],
@@ -196,7 +199,7 @@ class TestCenterHead(unittest.TestCase):
         # Create a different CenterHead
         center_head = CenterHead(
             in_channels=4,
-            num_classes=5,
+            class_names=["car", "truck", "bus", "pedestrian", "bicycle"],
             shared_channels=4,
             point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
             voxel_size=[0.5, 0.5, 4.0],
@@ -217,7 +220,7 @@ class TestCenterHead(unittest.TestCase):
         dummy_outputs.heights[0, 0, 3, 2] = 0.2
         dummy_outputs.dims[0, :, 3, 2] = torch.tensor([4.0, 1.6, 1.5], device=self.device).log()
         dummy_outputs.rots[0, 1, 3, 2] = 1.0
-        dummy_detection3d_outputs = Detection3DOutputs(
+        dummy_detection3d_outputs = Detection3DHeadOutputs(
             center_head_outputs=dummy_outputs, transfusion_head_outputs=None
         )
 
@@ -238,7 +241,7 @@ class TestCenterHead(unittest.TestCase):
         """
         center_head = CenterHead(
             in_channels=4,
-            num_classes=2,
+            class_names=["car", "pdestrian"],
             shared_channels=4,
             point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
             voxel_size=[0.5, 0.5, 4.0],
@@ -286,7 +289,7 @@ class TestCenterHead(unittest.TestCase):
         dummy_outputs.rots[0, :, y_index, x_index] = reg_target[6:8]
 
         decoded_outputs = center_head.decode_outputs(
-            Detection3DOutputs(center_head_outputs=dummy_outputs, transfusion_head_outputs=None)
+            Detection3DHeadOutputs(center_head_outputs=dummy_outputs, transfusion_head_outputs=None)
         )
         predictions = decoded_outputs.detection3d_predictions
         assert predictions is not None
@@ -324,7 +327,7 @@ class TestCenterHead(unittest.TestCase):
         dummy_outputs.rots[0, 1, 3, 2] = 1.0
         assert dummy_outputs.vels is not None
         dummy_outputs.vels[0, :, 3, 2] = torch.tensor([0.5, -0.1], device=self.device)
-        dummy_detection3d_outputs = Detection3DOutputs(
+        dummy_detection3d_outputs = Detection3DHeadOutputs(
             center_head_outputs=dummy_outputs, transfusion_head_outputs=None
         )
 
@@ -424,7 +427,7 @@ class TestCenterHead(unittest.TestCase):
         """
         center_head = CenterHead(
             in_channels=384,
-            num_classes=2,
+            class_names=["car", "bus"],
             shared_channels=64,
             point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
             voxel_size=[0.5, 0.5, 4.0],

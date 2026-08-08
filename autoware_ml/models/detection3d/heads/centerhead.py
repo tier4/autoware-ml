@@ -15,17 +15,20 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from autoware_ml.dataclasses.detection3d.predictions import Detection3DSamplePredictions
+from autoware_ml.dataclasses.detection3d.head_outputs import (
+    Detection3DHeadOutputs,
+    CenterHeadOutputs,
+)
+from autoware_ml.dataclasses.detection3d.head_targets import CenterHeadTargets
+from autoware_ml.dataclasses.multi_task_predictions import MultiTaskPredictions
 from autoware_ml.losses.detection3d.gaussian_focal import GaussianFocalLoss
 from autoware_ml.models.common.layers.conv import ConvModule
-from autoware_ml.models.dataclasses.multi_task_predictions import MultiTaskPredictions
 from autoware_ml.models.detection3d.task_modules.heatmap import (
     batch_circle_nms,
     vectorize_gaussian_radii,
     create_gaussian_heatmaps,
 )
-from autoware_ml.models.detection3d.dataclasses.predictions import Detection3DPredictions
-from autoware_ml.models.detection3d.dataclasses.outputs import Detection3DOutputs, CenterHeadOutputs
-from autoware_ml.models.detection3d.dataclasses.targets import CenterHeadTargets
 from autoware_ml.types.geometry import Box3DFieldIndex
 
 
@@ -61,16 +64,15 @@ class CenterHead(nn.Module):
     def __init__(
         self,
         in_channels: int,
-        num_classes: int,
+        class_names: Sequence[str],
         shared_channels: int,
-        point_cloud_range: list[float],
-        voxel_size: list[float],
+        point_cloud_range: Sequence[float],
+        voxel_size: Sequence[float],
         out_size_factor: int,
         min_radius: int,
         score_threshold: float,
         post_max_size: int,
         nms_min_radius: float,
-        class_names: Sequence[str] | None = None,
         gaussian_overlap: float = 0.1,
         loss_bbox_weight: float = 0.25,
         heatmap_init_bias: float = -2.19,
@@ -80,6 +82,7 @@ class CenterHead(nn.Module):
 
         Args:
             in_channels: Input feature channels.
+            class_names: Sequence of class names.
             num_classes: Number of detection classes.
             shared_channels: Channel count for the shared tower.
             point_cloud_range: Detector point-cloud range.
@@ -89,14 +92,14 @@ class CenterHead(nn.Module):
             score_threshold: Score threshold applied during decoding.
             post_max_size: Maximum number of predictions kept after decoding.
             nms_min_radius: Minimum center distance used by circle NMS.
-            class_names: Optional ordered class names for metric logging.
             gaussian_overlap: Minimum Gaussian overlap with the target box.
             loss_bbox_weight: Weight applied to the box regression loss.
             heatmap_init_bias: Initial bias used by the heatmap prediction branch.
             use_velocity: Whether to predict velocity components.
         """
         super().__init__()
-        self.num_classes = num_classes
+        self.class_names = class_names
+        self.num_classes = len(self.class_names)
         self.point_cloud_range = point_cloud_range
         self.voxel_size = voxel_size
         self.out_size_factor = out_size_factor
@@ -104,7 +107,6 @@ class CenterHead(nn.Module):
         self.score_threshold = score_threshold
         self.post_max_size = post_max_size
         self.nms_min_radius = nms_min_radius
-        self.class_names = tuple(class_names) if class_names is not None else None
         self.gaussian_overlap = gaussian_overlap
         self.loss_bbox_weight = loss_bbox_weight
         self.heatmap_init_bias = heatmap_init_bias
@@ -112,7 +114,9 @@ class CenterHead(nn.Module):
         self.box_code_size = 10 if use_velocity else 8
 
         self.shared_conv = ConvModule(in_channels, shared_channels)
-        self.heatmap = self._build_head(shared_channels, num_classes, init_bias=heatmap_init_bias)
+        self.heatmap = self._build_head(
+            shared_channels, self.num_classes, init_bias=heatmap_init_bias
+        )
         self.regs = self._build_head(shared_channels, 2)
         self.height = self._build_head(shared_channels, 1)
         self.dim = self._build_head(shared_channels, 3)
@@ -270,7 +274,7 @@ class CenterHead(nn.Module):
 
     def loss(
         self,
-        outputs: Detection3DOutputs,
+        outputs: Detection3DHeadOutputs,
         gt_bboxes_3d: Float32[torch.Tensor, "batch_size max_num_3d_gt_bboxes num_Box3DFieldIndex"],
         gt_labels_3d: Float32[torch.Tensor, "batch_size max_num_3d_gt_bboxes"],
         gt_valid_bboxes: Float32[torch.Tensor, " batch_size"],
@@ -451,7 +455,7 @@ class CenterHead(nn.Module):
         for batch_index in range(batch_size):
             sample_keep_masks = topk_keep_masks[batch_index]
             detection3d_predictions.append(
-                Detection3DPredictions(
+                Detection3DSamplePredictions(
                     bboxes_3d=keep_flatten_bbox_predictions[batch_index][sample_keep_masks],
                     scores_3d=keep_flatten_scores[batch_index][sample_keep_masks],
                     labels_3d=keep_flatten_class_ids[batch_index][sample_keep_masks],
@@ -477,7 +481,7 @@ class CenterHead(nn.Module):
         heatmaps = heatmaps * (pooled == heatmaps)
         return heatmaps
 
-    def decode_outputs(self, outputs: Detection3DOutputs) -> MultiTaskPredictions:
+    def decode_outputs(self, outputs: Detection3DHeadOutputs) -> MultiTaskPredictions:
         """
         Decode dense head outputs into 3D boxes, scores, and labels.
         """
