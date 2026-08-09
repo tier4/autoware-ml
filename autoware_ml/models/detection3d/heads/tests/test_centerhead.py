@@ -345,6 +345,235 @@ class TestCenterHead(unittest.TestCase):
         self.assertTrue(losses["loss_bbox"].item() >= 0.0)
         self.assertTrue(torch.isclose(losses["loss"], losses["loss_heatmap"] + losses["loss_bbox"]))
 
+    def _build_zero_center_head_outputs_for_loss(
+        self, batch_size: int = 1, use_velocity: bool = True
+    ) -> Detection3DHeadOutputs:
+        """
+        Build head outputs whose regression maps are all zero so the L1 loss of a target reduces
+        to its absolute value, keeping the expectations of the NaN tests readable.
+        """
+        outputs = self._build_center_head_outputs(
+            batch_size=batch_size, height=4, width=4, use_velocity=use_velocity
+        )
+        outputs.heatmaps[:] = -20.0
+        return Detection3DHeadOutputs(center_head_outputs=outputs, transfusion_head_outputs=None)
+
+    def test_get_targets_produces_non_finite_targets_for_degenerate_boxes(self) -> None:
+        """
+        Test where the non-finite regression targets come from: unknown velocities stay NaN, and
+        padded rows are all zeros so their log-dimensions become -inf.
+        """
+        gt_bboxes_3d = torch.tensor(
+            [
+                [
+                    [2.2, 3.3, 0.2, 4.0, 1.6, 1.5, 0.25, math.nan, math.nan, 0.0],
+                    # Padded slot, zero dimensions turn into -inf once log-encoded
+                    [0.0] * 10,
+                ]
+            ],
+            device=self.device,
+            dtype=torch.float32,
+        )
+        targets = self.center_head.get_targets(
+            gt_bboxes_3d=gt_bboxes_3d,
+            gt_labels_3d=torch.tensor([[0, 0]], dtype=torch.int32, device=self.device),
+            gt_valid_bboxes=torch.tensor([1], dtype=torch.int32, device=self.device),
+            feature_map_size=(4, 4),
+            device=self.device,
+        )
+
+        # The valid box only carries NaN in its two velocity channels
+        self.assertTrue(torch.isnan(targets.reg_targets[0, 0, 8:10]).all())
+        self.assertTrue(torch.isfinite(targets.reg_targets[0, 0, 0:8]).all())
+        # The padded box carries -inf in its three log-dimension channels
+        self.assertTrue(torch.isneginf(targets.reg_targets[0, 1, 3:6]).all())
+        # Only the first box counts as valid, so the padded row must never reach the loss
+        self.assertTrue(targets.valid_masks[0, 0].item())
+        self.assertFalse(targets.valid_masks[0, 1].item())
+
+    def test_loss_ignores_nan_velocity_targets(self) -> None:
+        """
+        Test that the NaN velocity channels of an otherwise valid box are dropped from the box
+        loss instead of poisoning it, and that the remaining channels are still averaged over
+        their own count.
+        """
+        # Velocities are unknown for this box, everything else is a normal target
+        gt_bboxes_3d = torch.tensor(
+            [[[2.2, 3.3, 0.2, 4.0, 1.6, 1.5, 0.25, math.nan, math.nan, 0.0]]],
+            device=self.device,
+            dtype=torch.float32,
+        )
+
+        losses = self.center_head.loss(
+            outputs=self._build_zero_center_head_outputs_for_loss(),
+            gt_bboxes_3d=gt_bboxes_3d,
+            gt_labels_3d=self.gt_labels_3d,
+            gt_valid_bboxes=self.gt_valid_bboxes,
+        )
+
+        self.assertTrue(torch.isfinite(losses["loss"]))
+        self.assertTrue(torch.isfinite(losses["loss_bbox"]))
+        self.assertTrue(torch.isfinite(losses["loss_heatmap"]))
+
+        # Predictions are all zero, so every surviving channel contributes |target|, averaged over
+        # the eight non-NaN channels only and scaled by loss_bbox_weight.
+        expected_abs_targets = [
+            0.2,  # x offset inside the grid cell
+            0.3,  # y offset inside the grid cell
+            0.2,  # height
+            math.log(4.0),
+            math.log(1.6),
+            math.log(1.5),
+            abs(math.sin(0.25)),
+            abs(math.cos(0.25)),
+        ]
+        expected_loss_bbox = 0.25 * sum(expected_abs_targets) / len(expected_abs_targets)
+        self.assertAlmostEqual(losses["loss_bbox"].item(), expected_loss_bbox, places=5)
+
+    def test_loss_backward_keeps_gradients_finite_with_nan_velocity_targets(self) -> None:
+        """
+        Test that a batch holding NaN velocity and padded targets still backpropagates finite
+        gradients, since a single NaN in the loss would wipe out every head parameter.
+        """
+        outputs = self._build_zero_center_head_outputs_for_loss()
+        assert outputs.center_head_outputs is not None
+        center_head_outputs = outputs.center_head_outputs
+        predictions = [
+            center_head_outputs.heatmaps,
+            center_head_outputs.centers,
+            center_head_outputs.heights,
+            center_head_outputs.dims,
+            center_head_outputs.rots,
+            center_head_outputs.vels,
+        ]
+        for prediction in predictions:
+            assert prediction is not None
+            prediction.requires_grad_(True)
+
+        losses = self.center_head.loss(
+            outputs=outputs,
+            gt_bboxes_3d=torch.tensor(
+                [
+                    [
+                        [2.2, 3.3, 0.2, 4.0, 1.6, 1.5, 0.25, math.nan, math.nan, 0.0],
+                        [0.0] * 10,
+                    ]
+                ],
+                device=self.device,
+                dtype=torch.float32,
+            ),
+            gt_labels_3d=torch.tensor([[0, 0]], dtype=torch.int32, device=self.device),
+            gt_valid_bboxes=torch.tensor([1], dtype=torch.int32, device=self.device),
+        )
+        losses["loss"].backward()
+
+        for prediction in predictions:
+            assert prediction is not None and prediction.grad is not None
+            self.assertTrue(torch.isfinite(prediction.grad).all())
+        # The velocity channels are the NaN ones, so they must receive no gradient at all
+        assert center_head_outputs.vels is not None and center_head_outputs.vels.grad is not None
+        self.assertTrue(
+            torch.equal(
+                center_head_outputs.vels.grad,
+                torch.zeros_like(center_head_outputs.vels.grad),
+            )
+        )
+
+    def test_loss_is_non_finite_when_a_valid_box_has_non_finite_geometry_targets(self) -> None:
+        """
+        Test that only velocity is allowed to be unknown: a NaN or infinite target on any other
+        channel of a valid box is corrupt ground truth and is left to surface as a non-finite
+        loss instead of being masked away.
+        """
+        corrupt_gt_bboxes = {
+            # log(0) -> -inf on the length channel
+            "zero_length": [2.2, 3.3, 0.2, 0.0, 1.6, 1.5, 0.25, 0.5, -0.1, -0.2],
+            # log(negative) -> NaN on the width channel
+            "negative_width": [2.2, 3.3, 0.2, 4.0, -1.6, 1.5, 0.25, 0.5, -0.1, -0.2],
+            "nan_height": [2.2, 3.3, 0.2, 4.0, 1.6, math.nan, 0.25, 0.5, -0.1, -0.2],
+            "nan_z": [2.2, 3.3, math.nan, 4.0, 1.6, 1.5, 0.25, 0.5, -0.1, -0.2],
+            # sin/cos of a non-finite yaw -> NaN on both heading channels
+            "inf_yaw": [2.2, 3.3, 0.2, 4.0, 1.6, 1.5, math.inf, 0.5, -0.1, -0.2],
+        }
+        for case_name, gt_bbox in corrupt_gt_bboxes.items():
+            with self.subTest(case=case_name):
+                losses = self.center_head.loss(
+                    outputs=self._build_zero_center_head_outputs_for_loss(),
+                    gt_bboxes_3d=torch.tensor([[gt_bbox]], device=self.device, dtype=torch.float32),
+                    gt_labels_3d=self.gt_labels_3d,
+                    gt_valid_bboxes=self.gt_valid_bboxes,
+                )
+                # Both the box loss and the total loss come back as NaN or Inf
+                self.assertFalse(torch.isfinite(losses["loss_bbox"]))
+                self.assertFalse(torch.isfinite(losses["loss"]))
+
+    def test_loss_stays_finite_for_non_finite_geometry_of_invalid_boxes(self) -> None:
+        """
+        Test that only the boxes that contribute to the loss can make it non-finite, so the zero
+        padding that every batch carries, whose dimensions encode to -inf, is not mistaken for
+        corrupt ground truth.
+        """
+        gt_bbox = [2.2, 3.3, 0.2, 4.0, 1.6, 1.5, 0.25, 0.5, -0.1, -0.2]
+        corrupt_gt_bbox = [2.2, 3.3, 0.2, 0.0, -1.6, math.nan, math.inf, 0.5, -0.1, -0.2]
+
+        losses = self.center_head.loss(
+            outputs=self._build_zero_center_head_outputs_for_loss(),
+            # Only the first box is valid, so the corrupt one sits in the padded tail
+            gt_bboxes_3d=torch.tensor(
+                [[gt_bbox, corrupt_gt_bbox]], device=self.device, dtype=torch.float32
+            ),
+            gt_labels_3d=torch.tensor([[0, 0]], dtype=torch.int32, device=self.device),
+            gt_valid_bboxes=torch.tensor([1], dtype=torch.int32, device=self.device),
+        )
+        self.assertTrue(torch.isfinite(losses["loss"]))
+        self.assertTrue(torch.isfinite(losses["loss_bbox"]))
+
+    def test_loss_without_velocity_treats_every_channel_as_geometry(self) -> None:
+        """
+        Test that a head built without velocity treats all of its channels as geometry: the
+        velocity columns of the ground truth are never encoded, so their NaNs are harmless, while
+        a corrupt geometry channel still makes the loss non-finite.
+        """
+        center_head = CenterHead(
+            in_channels=384,
+            class_names=["car", "pedestrian"],
+            shared_channels=64,
+            point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
+            voxel_size=[0.5, 0.5, 4.0],
+            out_size_factor=2,
+            min_radius=1,
+            score_threshold=0.1,
+            post_max_size=10,
+            nms_min_radius=1.0,
+            use_velocity=False,
+        ).to(self.device)
+
+        losses = center_head.loss(
+            outputs=self._build_zero_center_head_outputs_for_loss(use_velocity=False),
+            gt_bboxes_3d=torch.tensor(
+                [[[2.2, 3.3, 0.2, 4.0, 1.6, 1.5, 0.25, math.nan, math.nan, 0.0]]],
+                device=self.device,
+                dtype=torch.float32,
+            ),
+            gt_labels_3d=self.gt_labels_3d,
+            gt_valid_bboxes=self.gt_valid_bboxes,
+        )
+        self.assertTrue(torch.isfinite(losses["loss"]))
+
+        # A zero height encodes to -inf and, with no velocity channel to excuse it, poisons the loss
+        corrupt_losses = center_head.loss(
+            outputs=self._build_zero_center_head_outputs_for_loss(use_velocity=False),
+            gt_bboxes_3d=torch.tensor(
+                [[[2.2, 3.3, 0.2, 4.0, 1.6, 0.0, 0.25, 0.0, 0.0, 0.0]]],
+                device=self.device,
+                dtype=torch.float32,
+            ),
+            gt_labels_3d=self.gt_labels_3d,
+            gt_valid_bboxes=self.gt_valid_bboxes,
+        )
+        self.assertFalse(torch.isfinite(corrupt_losses["loss_bbox"]))
+        self.assertFalse(torch.isfinite(corrupt_losses["loss"]))
+
     def test_decode_regression_outputs_converts_grid_cells_to_physical_boxes(self) -> None:
         """
         Test that _decode_regression_outputs turns the per-cell regression maps into physical

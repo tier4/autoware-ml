@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from copy import deepcopy
 from types import MappingProxyType
 
-from jaxtyping import Bool, Float32, Int64
+from jaxtyping import Bool, Float32, Int32, Int64
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -160,7 +160,7 @@ class CenterHead(nn.Module):
         self,
         gt_bboxes_3d: Float32[torch.Tensor, "batch_size max_num_3d_gt_bboxes num_Box3DFieldIndex"],
         gt_labels_3d: Float32[torch.Tensor, "batch_size max_num_3d_gt_bboxes"],
-        gt_valid_bboxes: Float32[torch.Tensor, " batch_size"],
+        gt_valid_bboxes: Int32[torch.Tensor, " batch_size"],
         feature_map_size: tuple[int, int],
         device: torch.device,
     ) -> CenterHeadTargets:
@@ -277,7 +277,7 @@ class CenterHead(nn.Module):
         outputs: Detection3DHeadOutputs,
         gt_bboxes_3d: Float32[torch.Tensor, "batch_size max_num_3d_gt_bboxes num_Box3DFieldIndex"],
         gt_labels_3d: Float32[torch.Tensor, "batch_size max_num_3d_gt_bboxes"],
-        gt_valid_bboxes: Float32[torch.Tensor, " batch_size"],
+        gt_valid_bboxes: Int32[torch.Tensor, " batch_size"],
     ) -> MappingProxyType[str, torch.Tensor]:
         """
         Compute CenterPoint heatmap and box losses.
@@ -291,6 +291,10 @@ class CenterHead(nn.Module):
         Returns:
             MappingProxyType[str, torch.Tensor]: A read-only dictionary containing the total loss,
                 heatmap loss, and box regression loss.
+
+        Raises:
+            ValueError: If the outputs hold no CenterHeadOutputs, or if a valid ground truth box
+                yields a non-finite regression target outside of the velocity channels.
         """
         if outputs.center_head_outputs is None:
             raise ValueError(
@@ -326,9 +330,27 @@ class CenterHead(nn.Module):
         bbox_valid_masks = (
             targets.valid_masks.unsqueeze(-1).expand_as(flatten_bbox_predictions).float()
         )
-        bbox_losses = (
-            self.loss_bbox(flatten_bbox_predictions, targets.reg_targets) * bbox_valid_masks
-        )
+
+        # Boxes that do not contribute to the loss are padding rows of zeros, whose dimensions
+        # encode to -inf. Masking them out is not enough because inf/nan * 0 stays nan, so their
+        # targets have to be neutralized before the L1 loss sees them.
+        # (batch_size, max_num_bboxes, output_channels)
+        reg_targets = torch.where(targets.valid_masks.unsqueeze(-1), targets.reg_targets, 0.0)
+
+        # Only the velocity channels of a valid box are allowed to be non-finite, they are unknown
+        # for objects the annotation pipeline could not track, so they are dropped from the loss
+        # and zeroed out for the same reason. A non-finite target on any other channel is corrupt
+        # ground truth and is left to surface as a non-finite loss.
+        if self.use_velocity:
+            num_geometry_channels = self.box_code_size - 2
+            # (batch_size, max_num_bboxes, 2)
+            velocity_finite_masks = torch.isfinite(reg_targets[:, :, num_geometry_channels:])
+            bbox_valid_masks[:, :, num_geometry_channels:] *= velocity_finite_masks.float()
+            reg_targets[:, :, num_geometry_channels:] = torch.where(
+                velocity_finite_masks, reg_targets[:, :, num_geometry_channels:], 0.0
+            )
+
+        bbox_losses = self.loss_bbox(flatten_bbox_predictions, reg_targets) * bbox_valid_masks
 
         # Average over the number of valid bounding boxes and avoid division by zero
         bbox_losses = self.loss_bbox_weight * (
