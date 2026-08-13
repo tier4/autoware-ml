@@ -23,8 +23,8 @@
 #   z: [0, vehicle_height]
 #
 # wheels box, covering the volume the front wheels sweep at full lock:
-#   d      = hypot(wheel_width/2, wheel_radius)                       = 0.386014
-#   phi    = atan2(wheel_width/2, wheel_radius)                       = 0.280893 rad
+#   d      = hypot(wheel_width/2, wheel_radius)                       = 0.387702
+#   phi    = atan2(wheel_width/2, wheel_radius)                       = 0.280957 rad
 #   max_longitudinal = d                       (phi < max_steer_angle) = 0.387702
 #   max_lateral      = d * sin(max_steer_angle + phi)                  = 0.348794
 #   x: [wheel_base - max_longitudinal, wheel_base + max_longitudinal]
