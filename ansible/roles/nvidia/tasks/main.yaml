@@ -6,7 +6,12 @@
   ignore_errors: true
 
 - name: Get installed NVIDIA driver version
-  ansible.builtin.shell: nvidia-smi --query-gpu=driver_version --format=csv,noheader | cut -d'.' -f1
+  # nvidia-smi returns one row per GPU, but the driver version is host-wide.
+  ansible.builtin.shell:
+    cmd: >-
+      nvidia-smi --query-gpu=driver_version --format=csv,noheader
+      | head -n 1
+      | cut -d'.' -f1
   register: nvidia_installed_version
   changed_when: false
   failed_when: false
