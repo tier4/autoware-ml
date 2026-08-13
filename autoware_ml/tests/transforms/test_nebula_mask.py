@@ -118,6 +118,36 @@ class TestNebulaDownsampleMaskFilter:
 
         np.testing.assert_array_equal(output["labels"], np.array([1, 4], dtype=np.int64))
 
+    def test_wraps_the_final_half_bin_of_a_full_circle_mask(self):
+        # A ray just short of 360 deg rounds up to one past the last column, which on a full circle
+        # is column 0 again. Azimuth is reconstructed from Cartesian coordinates, so a nominal
+        # 0 deg ray can land on either side of the wrap and must not be dropped for it.
+        azimuth = np.deg2rad(-0.04)
+        sample = {
+            "points": np.array(
+                [[10.0 * np.sin(azimuth), 10.0 * np.cos(azimuth), 0.0, 1.0]], dtype=np.float32
+            ),
+            "source_name": "LIDAR_FRONT_UPPER",
+        }
+
+        kept = single_source_filter([[1, 0, 0, 0]], channel_dim=None)(dict(sample))
+
+        assert kept["points"].shape[0] == 1
+
+    def test_does_not_wrap_a_partial_extent_mask(self):
+        # A mask covering only part of the circle has no column for a ray outside it, so beyond the
+        # extent the point really is out of range.
+        sample = {
+            "points": np.array([[0.0, -10.0, 0.0, 1.0]], dtype=np.float32),
+            "source_name": "LIDAR_FRONT_UPPER",
+        }
+
+        dropped = single_source_filter([[1, 1]], channel_dim=None, azimuth_extent_deg=90.0)(
+            dict(sample)
+        )
+
+        assert dropped["points"].shape[0] == 0
+
     def test_prefers_the_stored_ring_index(self):
         # Only ring 1 is kept. Both points sit at elevation 0, so estimating the ring from
         # elevation would put both on ring 0 and drop them; the stored index must win.

@@ -116,6 +116,7 @@ class NebulaDownsampleMaskFilter(BaseTransform):
         self.azimuth_extent_deg = float(azimuth_extent_deg)
         if self.azimuth_extent_deg <= 0.0:
             raise ValueError("azimuth_extent_deg must be positive.")
+        self._spans_full_circle = abs(self.azimuth_extent_deg - 360.0) < 1e-9
         self.return_stats = return_stats
 
     def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
@@ -178,6 +179,12 @@ class NebulaDownsampleMaskFilter(BaseTransform):
 
         keep_grid = lidar_mask.keep
         x = round_half_up(azimuth_deg / self.azimuth_extent_deg * keep_grid.shape[1])
+        if self._spans_full_circle:
+            # Azimuths in the final half-bin round up to one past the last column, which for a
+            # full-circle mask is column 0 again. Reconstructing azimuth from Cartesian coordinates
+            # puts a nominal 0 degree ray on either side of the wrap, so without this they are
+            # treated as out of range and dropped.
+            x %= keep_grid.shape[1]
         valid = (
             (x >= 0) & (x < keep_grid.shape[1]) & (channels >= 0) & (channels < keep_grid.shape[0])
         )
@@ -206,10 +213,25 @@ class NebulaDownsampleMaskFilter(BaseTransform):
 def nearest_channel(
     points: npt.NDArray[np.float32], elevation_rad: npt.NDArray[np.float32]
 ) -> npt.NDArray[np.int64]:
-    """Estimate each point's ring by nearest calibration elevation."""
+    """Estimate each point's ring by nearest calibration elevation.
+
+    Found by binary search over the sorted elevations rather than by comparing every point against
+    every channel: that comparison is an ``(N, channels)`` temporary, half a gigabyte for a
+    million-point cloud off a 128-channel sensor, on a path that exists only as a fallback.
+    """
     xy_norm = np.linalg.norm(points[:, :2], axis=1)
     point_elevation = np.arctan2(points[:, 2], xy_norm)
-    return np.abs(point_elevation[:, None] - elevation_rad[None, :]).argmin(axis=1).astype(np.int64)
+    if elevation_rad.shape[0] == 1:
+        return np.zeros(point_elevation.shape[0], dtype=np.int64)
+
+    order = np.argsort(elevation_rad)
+    ascending = elevation_rad[order]
+    above = np.clip(np.searchsorted(ascending, point_elevation), 1, ascending.shape[0] - 1)
+    below = above - 1
+    take_above = np.abs(point_elevation - ascending[above]) < np.abs(
+        point_elevation - ascending[below]
+    )
+    return order[np.where(take_above, above, below)].astype(np.int64)
 
 
 def nebula_azimuth_rad(points: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]:
