@@ -24,82 +24,67 @@ from __future__ import annotations
 import csv
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
 import numpy.typing as npt
+import yaml
 
 from autoware_ml.transforms.point_cloud.assets import ASSET_ROOT, resolve_asset_path
-from autoware_ml.transforms.point_cloud.lidar_sources import (
-    LIDAR_POSITION_NAMES,
-    normalize_lidar_name,
-)
+from autoware_ml.transforms.point_cloud.lidar_sources import normalize_lidar_name
 from autoware_ml.transforms.point_cloud.nebula_mask import LidarMask, round_half_up
 
 # Nebula quantises mask intensity into this many levels and dithers between them.
 QUANTIZATION_LEVELS = 10
 
 DEFAULT_CALIBRATION_ROOT = ASSET_ROOT / "hesai"
-DEFAULT_MASKS = {name: f"{name}/generated_30deg_roi.param.png" for name in LIDAR_POSITION_NAMES}
-# Sensor model per mounting position. Upper mounts carry a long-range Pandar, lower mounts a
-# short-range QT; the model selects both the calibration table and the dither pattern.
-DEFAULT_MODELS = {
-    "front_upper": "pandar128e4x",
-    "left_upper": "pandar128e4x",
-    "rear_upper": "pandar128e4x",
-    "right_upper": "pandar128e4x",
-    "front_lower": "pandar_qt128",
-    "left_lower": "pandar_qt128",
-    "rear_lower": "pandar_qt128",
-    "right_lower": "pandar_qt128",
-}
-DEFAULT_CALIBRATIONS = {name: f"{model}.csv" for name, model in DEFAULT_MODELS.items()}
+# Which LiDAR carries which sensor, and which mask belongs to it, is platform knowledge. It lives in
+# this file beside each platform's masks rather than as a default here, so that pointing the loader
+# at one platform's directory cannot quietly apply another's sensor models and dither patterns.
+MANIFEST_NAME = "lidar_masks.param.yaml"
 
 
 def load_lidar_masks(
     mask_root: str | Path,
     *,
     calibration_root: str | Path | None = None,
-    lidar_name_to_mask: Mapping[str, str] | None = None,
-    lidar_name_to_model: Mapping[str, str] | None = None,
-    lidar_name_to_calibration: Mapping[str, str] | None = None,
+    lidars: Mapping[str, Mapping[str, str]] | None = None,
 ) -> dict[str, LidarMask]:
     """Read a platform's per-LiDAR masks and pair each with its calibration.
 
     Args:
-        mask_root: Directory holding the per-LiDAR mask PNGs. A relative path resolves under the
-            bundled asset root, so the name of a bundled platform directory is enough.
+        mask_root: Directory holding the per-LiDAR masks and their manifest. A relative path
+            resolves under the bundled asset root, so the name of a bundled platform directory is
+            enough.
         calibration_root: Directory holding the calibration CSVs. Defaults to the bundled Hesai
             tables.
-        lidar_name_to_mask: LiDAR name to mask path, relative to ``mask_root``.
-        lidar_name_to_model: LiDAR name to sensor model, which selects the dither pattern.
-        lidar_name_to_calibration: LiDAR name to calibration CSV, relative to ``calibration_root``.
+        lidars: LiDAR name to ``{mask, model, calibration}``, overriding the manifest in
+            ``mask_root``. ``calibration`` is optional and defaults to the model's own table, so a
+            LiDAR cannot end up holding one model's dither pattern and another's elevations.
 
     Returns:
         Masks keyed by mounting position, ready to pass to
         :class:`~autoware_ml.transforms.point_cloud.nebula_mask.NebulaDownsampleMaskFilter`.
     """
-    masks = _normalize_keys(lidar_name_to_mask or DEFAULT_MASKS)
-    models = {
-        name: normalize_model_name(model)
-        for name, model in _normalize_keys(lidar_name_to_model or DEFAULT_MODELS).items()
-    }
-    calibrations = _normalize_keys(lidar_name_to_calibration or DEFAULT_CALIBRATIONS)
-
     mask_dir = resolve_asset_path(mask_root)
+    entries = read_mask_manifest(mask_dir) if lidars is None else lidars
     calibration_dir = (
         DEFAULT_CALIBRATION_ROOT if calibration_root is None else Path(calibration_root)
     )
 
     loaded: dict[str, LidarMask] = {}
     calibration_cache: dict[str, npt.NDArray[np.float32]] = {}
-    for lidar_name, mask_path in masks.items():
-        model_name = models.get(lidar_name)
-        if model_name is None:
-            raise KeyError(f"No sensor model configured for LiDAR {lidar_name!r}.")
-        calibration_file = calibrations.get(lidar_name)
-        if calibration_file is None:
-            raise KeyError(f"No calibration configured for LiDAR {lidar_name!r}.")
+    for raw_name, entry in entries.items():
+        lidar_name = normalize_lidar_name(raw_name)
+        try:
+            mask_path = entry["mask"]
+            model_name = normalize_model_name(entry["model"])
+        except KeyError as error:
+            raise KeyError(
+                f"LiDAR {lidar_name!r} needs both 'mask' and 'model'; got {sorted(entry)}."
+            ) from error
+        calibration_file = entry.get("calibration") or f"{model_name}.csv"
 
         if calibration_file not in calibration_cache:
             calibration_cache[calibration_file] = load_calibration(
@@ -120,7 +105,29 @@ def load_lidar_masks(
             keep=dither_mask(image, model_name),
             elevation_rad=elevation_rad,
         )
+    if not loaded:
+        raise ValueError(f"No LiDARs configured for mask root {mask_dir}.")
     return loaded
+
+
+def read_mask_manifest(mask_dir: Path) -> dict[str, dict[str, Any]]:
+    """Read a platform's ``lidar_masks.param.yaml``.
+
+    Raises:
+        FileNotFoundError: The directory carries no manifest, so the platform's sensor layout is
+            unknown and there is no safe default to fall back on.
+    """
+    manifest = Path(mask_dir) / MANIFEST_NAME
+    if not manifest.is_file():
+        raise FileNotFoundError(
+            f"No {MANIFEST_NAME} in {mask_dir}. It records which sensor model and mask each LiDAR "
+            "of the platform carries; pass 'lidars' explicitly if the platform has no manifest."
+        )
+    document = yaml.safe_load(manifest.read_text()) or {}
+    entries = document.get("lidars")
+    if not entries:
+        raise ValueError(f"No 'lidars' entry in {manifest}")
+    return {str(name): dict(entry) for name, entry in entries.items()}
 
 
 def load_calibration(path: str | Path) -> npt.NDArray[np.float32]:
@@ -157,13 +164,19 @@ def dither_mask(image: npt.NDArray[np.uint8], model_name: str) -> npt.NDArray[np
     Pixel intensity encodes what fraction of returns to keep. The driver spreads that fraction over
     a repeating pattern of cells so the survivors are distributed rather than clustered; the pattern
     differs per sensor model.
+
+    Raises:
+        ValueError: The model is not one this reproduces a pattern for. Falling back to a pattern
+            that happens to be implemented would return a plausible mask that is simply wrong,
+            which no later check would catch.
     """
     height, width = image.shape
     y, x = np.indices((height, width), dtype=np.int64)
-    if model_name == "pandar128e4x":
-        positions = ((x // 2) * 2 + (y // 4) * 4 + (y % 2)) % QUANTIZATION_LEVELS
-    else:
-        positions = (x + y) % QUANTIZATION_LEVELS
+    match normalize_model_name(model_name):
+        case "pandar128e4x":
+            positions = ((x // 2) * 2 + (y // 4) * 4 + (y % 2)) % QUANTIZATION_LEVELS
+        case "pandar_qt128":
+            positions = (x + y) % QUANTIZATION_LEVELS
 
     numerator = image.astype(np.uint32) * QUANTIZATION_LEVELS // 255
     output = np.zeros(image.shape, dtype=bool)
@@ -176,14 +189,19 @@ def dither_mask(image: npt.NDArray[np.uint8], model_name: str) -> npt.NDArray[np
 
 
 def normalize_model_name(name: str) -> str:
-    """Map the aliases used for Hesai models onto the two calibration tables that exist."""
+    """Map the aliases used for Hesai models onto the two calibration tables that exist.
+
+    Raises:
+        ValueError: The name is not a known alias of either model. A typo has to fail here: every
+            later step -- the dither pattern, the elevation table, the channel-count check that both
+            128-row tables pass -- would accept the wrong sensor and produce a mask nothing flags.
+    """
     normalized = str(name).lower().replace("-", "_")
     if normalized in {"ot128", "pandar128", "pandar128e4x"}:
         return "pandar128e4x"
     if normalized in {"qt128", "pandarqt128", "pandar_qt128"}:
         return "pandar_qt128"
-    return normalized
-
-
-def _normalize_keys(mapping: Mapping[str, str]) -> dict[str, str]:
-    return {normalize_lidar_name(name): value for name, value in mapping.items()}
+    raise ValueError(
+        f"Unsupported Hesai model {name!r}. Reproduced models are pandar128e4x (aliases ot128, "
+        "pandar128) and pandar_qt128 (aliases qt128, pandarqt128)."
+    )

@@ -17,11 +17,13 @@
 import numpy as np
 import pytest
 
+from autoware_ml.transforms.point_cloud.assets import resolve_asset_path
 from autoware_ml.transforms.point_cloud.nebula_mask_assets import (
     dither_mask,
     load_calibration,
     load_lidar_masks,
     normalize_model_name,
+    read_mask_manifest,
 )
 
 
@@ -53,9 +55,13 @@ class TestNebulaMaskAssets:
         loaded = load_lidar_masks(
             masks,
             calibration_root=calibrations,
-            lidar_name_to_mask={"front_upper": "front_upper/mask.png"},
-            lidar_name_to_model={"front_upper": "pandar_qt128"},
-            lidar_name_to_calibration={"front_upper": "model.csv"},
+            lidars={
+                "front_upper": {
+                    "mask": "front_upper/mask.png",
+                    "model": "pandar_qt128",
+                    "calibration": "model.csv",
+                }
+            },
         )
 
         assert set(loaded) == {"front_upper"}
@@ -77,9 +83,13 @@ class TestNebulaMaskAssets:
             load_lidar_masks(
                 masks,
                 calibration_root=calibrations,
-                lidar_name_to_mask={"front_upper": "front_upper/mask.png"},
-                lidar_name_to_model={"front_upper": "pandar_qt128"},
-                lidar_name_to_calibration={"front_upper": "three.csv"},
+                lidars={
+                    "front_upper": {
+                        "mask": "front_upper/mask.png",
+                        "model": "pandar_qt128",
+                        "calibration": "three.csv",
+                    }
+                },
             )
 
     def test_load_lidar_masks_reports_a_missing_mask_file(self, mask_tree):
@@ -89,10 +99,51 @@ class TestNebulaMaskAssets:
             load_lidar_masks(
                 masks,
                 calibration_root=calibrations,
-                lidar_name_to_mask={"front_upper": "front_upper/absent.png"},
-                lidar_name_to_model={"front_upper": "pandar_qt128"},
-                lidar_name_to_calibration={"front_upper": "model.csv"},
+                lidars={
+                    "front_upper": {
+                        "mask": "front_upper/absent.png",
+                        "model": "pandar_qt128",
+                        "calibration": "model.csv",
+                    }
+                },
             )
+
+    def test_load_lidar_masks_defaults_calibration_to_the_configured_model(self, mask_tree):
+        # Omitting the calibration must follow the model, never a table left over from some other
+        # mapping: both bundled tables have 128 channels, so a shape check would not notice.
+        masks, calibrations = mask_tree
+        (calibrations / "pandar_qt128.csv").write_text(
+            "Channel,Elevation,Azimuth\n1,20.0,0.5\n2,-20.0,-0.5\n"
+        )
+
+        loaded = load_lidar_masks(
+            masks,
+            calibration_root=calibrations,
+            lidars={"front_upper": {"mask": "front_upper/mask.png", "model": "qt128"}},
+        )
+
+        np.testing.assert_allclose(
+            loaded["front_upper"].elevation_rad, np.deg2rad([20.0, -20.0]), atol=1e-6
+        )
+
+    def test_load_lidar_masks_requires_a_manifest(self, mask_tree):
+        # A directory of masks says nothing about which sensor sits where, and there is no
+        # platform-neutral default to guess with.
+        masks, _ = mask_tree
+
+        with pytest.raises(FileNotFoundError, match="No lidar_masks.param.yaml"):
+            load_lidar_masks(masks)
+
+    def test_bundled_manifest_covers_every_bundled_mask(self):
+        # The manifest is the platform's own record of its layout, so it has to name every mask
+        # directory shipped beside it.
+        mask_dir = resolve_asset_path("aip_x2_gen2")
+        entries = read_mask_manifest(mask_dir)
+
+        assert set(entries) == {path.name for path in mask_dir.iterdir() if path.is_dir()}
+        for name, entry in entries.items():
+            assert (mask_dir / entry["mask"]).is_file(), name
+            assert normalize_model_name(entry["model"]) in {"pandar128e4x", "pandar_qt128"}, name
 
     def test_load_calibration_ignores_the_azimuth_column(self, tmp_path):
         # Azimuth corrections are never applied by Autoware-ML, so the loader does not return them
@@ -127,11 +178,20 @@ class TestNebulaMaskAssets:
             ("QT128", "pandar_qt128"),
             ("pandarqt128", "pandar_qt128"),
             ("pandar-qt128", "pandar_qt128"),
-            ("something_else", "something_else"),
         ],
     )
     def test_normalize_model_name(self, alias, expected):
         assert normalize_model_name(alias) == expected
+
+    def test_normalize_model_name_rejects_an_unknown_model(self):
+        # Accepting it would pick a dither pattern and an elevation table by accident, and the
+        # 128-row channel check passes for either bundled sensor, so nothing downstream would object.
+        with pytest.raises(ValueError, match="Unsupported Hesai model"):
+            normalize_model_name("pandar_xt32")
+
+    def test_dither_mask_rejects_an_unknown_model(self):
+        with pytest.raises(ValueError, match="Unsupported Hesai model"):
+            dither_mask(np.full((4, 4), 128, dtype=np.uint8), "pandar_xt32")
 
     def test_dither_mask_spreads_partial_keep_ratios(self):
         # A uniform mid-grey image keeps roughly half the cells, spread out rather than clustered.
