@@ -21,12 +21,17 @@ that reproduce per-LiDAR vehicle-side behaviour need those ranges to work sensor
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import numpy.typing as npt
+
+# T4 writes one of these beside every concatenated cloud, recording how that cloud was assembled.
+CONCAT_INFO_DIRECTORY = "LIDAR_CONCAT_INFO"
 
 # Mounting positions used to name per-LiDAR assets and to recognise a source from free text.
 LIDAR_POSITION_NAMES = (
@@ -63,6 +68,40 @@ def infer_lidar_name_from_text(text: str) -> str | None:
     for lidar_name in LIDAR_POSITION_NAMES:
         if lidar_name in normalized:
             return lidar_name
+    return None
+
+
+def sources_info_path(lidar_path: str | Path) -> Path | None:
+    """Locate the ``LIDAR_CONCAT_INFO`` sidecar belonging to a concatenated cloud.
+
+    T4 stores one JSON per concatenated cloud, under a sibling directory and sharing its frame
+    number. Returns ``None`` when there is none.
+    """
+    cloud = Path(lidar_path)
+    candidate = cloud.parent.parent / CONCAT_INFO_DIRECTORY / f"{cloud.name.split('.')[0]}.json"
+    return candidate if candidate.is_file() else None
+
+
+def resolve_sources_info(entry: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Find the concat metadata for one scan, wherever it happens to be recorded.
+
+    Keyframes carry ``lidar_sources_info`` inline. Sweeps generally do not: infos generated before
+    that was propagated name no source metadata at all, so it is read from the sidecar beside the
+    cloud, which is byte-identical to what the keyframes carry.
+
+    Returns ``None`` when the scan has no metadata anywhere, leaving the decision to the caller.
+    """
+    info = entry.get("lidar_sources_info")
+    if isinstance(info, Mapping):
+        return dict(info)
+    explicit = entry.get("lidar_pointcloud_source_path")
+    if explicit:
+        return json.loads(Path(explicit).read_text())
+    lidar_path = entry.get("lidar_path")
+    if lidar_path:
+        sidecar = sources_info_path(lidar_path)
+        if sidecar is not None:
+            return json.loads(sidecar.read_text())
     return None
 
 

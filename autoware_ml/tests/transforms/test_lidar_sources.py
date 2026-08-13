@@ -14,6 +14,8 @@
 
 """Tests for splitting a concatenated cloud back into its LiDARs."""
 
+import json
+
 import numpy as np
 import pytest
 
@@ -21,6 +23,8 @@ from autoware_ml.transforms.point_cloud.lidar_sources import (
     infer_lidar_name_from_text,
     iter_pointcloud_sources,
     normalize_lidar_name,
+    resolve_sources_info,
+    sources_info_path,
 )
 
 
@@ -129,6 +133,47 @@ class TestIterPointcloudSources:
     def test_requires_some_way_to_name_the_source(self):
         with pytest.raises(KeyError, match="require concat 'lidar_sources' metadata"):
             iter_pointcloud_sources({"name": "no-position-in-here"}, 3)
+
+
+class TestResolveSourcesInfo:
+    def test_prefers_metadata_carried_on_the_entry(self):
+        info = {"stamp": {"sec": 1, "nanosec": 0}, "sources": []}
+
+        assert resolve_sources_info({"lidar_sources_info": info, "lidar_path": "/absent"}) == info
+
+    def test_reads_the_path_the_entry_names(self, tmp_path):
+        named = tmp_path / "named.json"
+        named.write_text(json.dumps({"stamp": {"sec": 2, "nanosec": 0}}))
+
+        resolved = resolve_sources_info({"lidar_pointcloud_source_path": str(named)})
+
+        assert resolved["stamp"]["sec"] == 2
+
+    def test_falls_back_to_the_sidecar_beside_the_cloud(self, tmp_path):
+        # Sweeps in infos generated before source metadata was propagated name nothing at all, but
+        # T4 writes the same payload beside every concatenated cloud.
+        scene = tmp_path / "scene" / "data"
+        (scene / "LIDAR_CONCAT").mkdir(parents=True)
+        (scene / "LIDAR_CONCAT_INFO").mkdir()
+        (scene / "LIDAR_CONCAT_INFO" / "00042.json").write_text(
+            json.dumps({"stamp": {"sec": 3, "nanosec": 0}, "sources": []})
+        )
+        cloud = scene / "LIDAR_CONCAT" / "00042.pcd.bin"
+        cloud.touch()
+
+        resolved = resolve_sources_info({"lidar_path": str(cloud)})
+
+        assert resolved["stamp"]["sec"] == 3
+        assert sources_info_path(cloud).name == "00042.json"
+
+    def test_reports_nothing_when_there_is_nothing_to_find(self, tmp_path):
+        cloud = tmp_path / "LIDAR_CONCAT" / "00000.pcd.bin"
+        cloud.parent.mkdir(parents=True)
+        cloud.touch()
+
+        assert resolve_sources_info({"lidar_path": str(cloud)}) is None
+        assert resolve_sources_info({}) is None
+        assert sources_info_path(cloud) is None
 
 
 class TestNaming:
