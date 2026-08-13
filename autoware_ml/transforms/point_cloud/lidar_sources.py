@@ -78,7 +78,7 @@ def iter_pointcloud_sources(input_dict: Mapping[str, Any], point_count: int) -> 
     lidar_sources = input_dict.get("lidar_sources")
     lidar_sources_info = input_dict.get("lidar_sources_info")
     if isinstance(lidar_sources, Mapping) and isinstance(lidar_sources_info, Mapping):
-        return iter_concat_sources(lidar_sources, lidar_sources_info)
+        return iter_concat_sources(lidar_sources, lidar_sources_info, point_count)
 
     source_name = input_dict.get("source_name") or input_dict.get("lidar_source_name")
     if source_name is None:
@@ -100,12 +100,26 @@ def iter_pointcloud_sources(input_dict: Mapping[str, Any], point_count: int) -> 
 
 
 def iter_concat_sources(
-    lidar_sources: Mapping[str, Any], lidar_sources_info: Mapping[str, Any]
+    lidar_sources: Mapping[str, Any],
+    lidar_sources_info: Mapping[str, Any],
+    point_count: int,
 ) -> list[SourceSlice]:
     """Pair each configured LiDAR with its index range in the concatenated cloud.
 
+    Every point must fall in exactly one configured source's range. Callers decide per source, so a
+    point left outside all of them has no decision to be made about it -- a filter would silently
+    drop it, or worse judge it against the wrong LiDAR's calibration. That is checked here rather
+    than left to each caller.
+
+    A cloud longer than the recorded ranges is the shape of one specific mistake: appending
+    historical sweeps, as ``LoadPointsFromMultiSweeps`` does, while ``lidar_sources_info`` goes on
+    describing the keyframe alone. Masking a multi-sweep cloud needs per-sweep ranges, so this
+    raises instead.
+
     Raises:
-        ValueError: No configured source matched the recorded ranges.
+        ValueError: No configured source matched, a range falls outside the cloud, two ranges
+            overlap, or the ranges leave points uncovered.
+        KeyError: A matched source is missing its extrinsics.
     """
     source_ranges = {
         str(source.get("sensor_token")): source for source in lidar_sources_info.get("sources", [])
@@ -115,18 +129,54 @@ def iter_concat_sources(
         sensor_token = str(source_meta.get("sensor_token"))
         source_range = source_ranges.get(sensor_token)
         if source_range is None:
+            # A configured LiDAR that contributed nothing to this frame. Its absence is only a
+            # problem if it leaves points uncovered, which the coverage check below catches.
             continue
         idx_begin = int(source_range["idx_begin"])
         length = int(source_range["length"])
+        if length < 0 or idx_begin < 0 or idx_begin + length > point_count:
+            raise ValueError(
+                f"lidar_sources_info range {idx_begin}:{idx_begin + length} for source "
+                f"{source_name!r} does not fit a cloud of {point_count} points."
+            )
+        translation = source_meta.get("translation")
+        rotation = source_meta.get("rotation")
+        if translation is None or rotation is None:
+            raise KeyError(
+                f"Source {source_name!r} is missing its extrinsics; both 'translation' and "
+                "'rotation' are needed to bring its points into the sensor frame."
+            )
         output.append(
             SourceSlice(
                 name=str(source_name),
                 sensor_token=sensor_token,
                 point_slice=slice(idx_begin, idx_begin + length),
-                translation=np.asarray(source_meta.get("translation"), dtype=np.float32),
-                rotation=np.asarray(source_meta.get("rotation"), dtype=np.float32),
+                translation=np.asarray(translation, dtype=np.float32),
+                rotation=np.asarray(rotation, dtype=np.float32),
             )
         )
     if not output:
         raise ValueError("lidar_sources_info did not match any configured lidar_sources.")
+    _assert_partitions(output, point_count)
     return output
+
+
+def _assert_partitions(sources: list[SourceSlice], point_count: int) -> None:
+    """Check the slices tile ``0:point_count`` exactly once each."""
+    covered = 0
+    previous_end = 0
+    for source in sorted(sources, key=lambda item: item.point_slice.start):
+        start, stop = source.point_slice.start, source.point_slice.stop
+        if start < previous_end:
+            raise ValueError(
+                f"lidar_sources_info ranges overlap at index {start}; source {source.name!r} "
+                f"starts inside a range that runs to {previous_end}."
+            )
+        previous_end = stop
+        covered += stop - start
+    if covered != point_count:
+        raise ValueError(
+            f"lidar_sources_info covers {covered} of {point_count} points. Every point must belong "
+            "to exactly one source. If the cloud carries appended sweeps, the source ranges "
+            "describe only the keyframe and per-sweep ranges are needed."
+        )
