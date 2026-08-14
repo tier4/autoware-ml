@@ -251,6 +251,26 @@ class TestPointCloudTransforms:
 
         assert calls == [2]
 
+    def test_multi_sweeps_drop_the_frames_pre_correction_coordinates(self, tmp_path):
+        # They describe the current frame alone. Once sweeps are appended the cloud is longer than
+        # they are, so leaving them behind invites their being filtered as though still aligned.
+        sweep_path = tmp_path / "sweep.bin"
+        np.zeros((3, 5), dtype=np.float32).tofile(sweep_path)
+
+        output = LoadPointsFromMultiSweeps(
+            sweeps_num=2, load_dim=5, use_dim=[0, 1, 2, 3, 4], time_dim=4
+        )(
+            {
+                "points": np.zeros((2, 5), dtype=np.float32),
+                "pre_correction_points": np.zeros((2, 3), dtype=np.float32),
+                "timestamp": 10.0,
+                "sweeps": [{"lidar_path": str(sweep_path), "timestamp": 9.9}],
+            }
+        )
+
+        assert output["points"].shape[0] == 5
+        assert "pre_correction_points" not in output
+
     def test_sweep_transforms_reject_a_sweep_without_source_metadata(self, tmp_path):
         sweep_path = tmp_path / "sweep.bin"
         np.zeros((2, 5), dtype=np.float32).tofile(sweep_path)

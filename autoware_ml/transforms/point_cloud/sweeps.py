@@ -24,6 +24,7 @@ import numpy as np
 import numpy.typing as npt
 
 from autoware_ml.transforms.base import BaseTransform
+from autoware_ml.transforms.point_cloud.ego_motion import PRE_CORRECTION_POINTS_KEY
 from autoware_ml.transforms.point_cloud.lidar_sources import (
     SAMPLE_DATA_TABLE,
     resolve_sources_info,
@@ -151,6 +152,11 @@ class LoadPointsFromMultiSweeps(BaseTransform):
             sweep_points.append(sweep_array)
 
         input_dict["points"] = self._select_dims(np.concatenate(sweep_points, axis=0))
+        # Anything the current frame carried per point describes the current frame alone, and the
+        # cloud is now longer than it. Pre-correction coordinates are the one such array in play;
+        # left behind, they would ride along at the wrong length and be filtered as though aligned
+        # on any sample where the two counts happened to coincide.
+        input_dict.pop(PRE_CORRECTION_POINTS_KEY, None)
         return input_dict
 
     def _select_dims(self, points: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]:
