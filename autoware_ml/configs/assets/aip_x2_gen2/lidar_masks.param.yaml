@@ -1,0 +1,43 @@
+# Nebula downsample-mask assets for AIP X2 Gen2 (vehicle description: j6_gen2_description).
+#
+# Which sensor sits where is platform knowledge, so it is recorded here rather than in the loader:
+# `load_lidar_masks("aip_x2_gen2")` reads this file and needs nothing else. Another platform ships
+# its own manifest beside its own masks.
+#
+# Per LiDAR:
+#   mask         - greyscale keep-ratio image, relative to this directory. Pixel intensity is the
+#                  fraction of returns the driver keeps; it is dithered into per-cell decisions.
+#   model        - Hesai sensor model. Selects both the dither pattern and, unless `calibration`
+#                  says otherwise, the elevation table read from the bundled Hesai directory.
+#   calibration  - optional override, relative to the calibration root. Defaults to `<model>.csv`.
+#
+# The upper mounts carry a long-range OT128, the lower mounts a short-range QT128. Calibration is
+# keyed per LiDAR rather than per model because the bundled Hesai tables differ by mounting
+# position; the generic per-model tables are accurate enough for the mask, so both positions of a
+# model share one here.
+
+lidars:
+  front_upper:
+    mask: front_upper/generated_30deg_roi.param.png
+    model: pandar128e4x
+  front_lower:
+    mask: front_lower/generated_30deg_roi.param.png
+    model: pandar_qt128
+  left_upper:
+    mask: left_upper/generated_30deg_roi.param.png
+    model: pandar128e4x
+  left_lower:
+    mask: left_lower/generated_30deg_roi.param.png
+    model: pandar_qt128
+  rear_upper:
+    mask: rear_upper/generated_30deg_roi.param.png
+    model: pandar128e4x
+  rear_lower:
+    mask: rear_lower/generated_30deg_roi.param.png
+    model: pandar_qt128
+  right_upper:
+    mask: right_upper/generated_30deg_roi.param.png
+    model: pandar128e4x
+  right_lower:
+    mask: right_lower/generated_30deg_roi.param.png
+    model: pandar_qt128

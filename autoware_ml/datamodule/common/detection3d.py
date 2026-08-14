@@ -68,6 +68,10 @@ def resolve_sweep_paths(sample: Mapping[str, Any], data_root: str) -> list[dict[
         sweep_entry = dict(sweep)
         if "lidar_path" in sweep_entry:
             sweep_entry["lidar_path"] = resolve_data_path(data_root, sweep_entry["lidar_path"])
+        if sweep_entry.get("lidar_pointcloud_source_path") is not None:
+            sweep_entry["lidar_pointcloud_source_path"] = resolve_data_path(
+                data_root, sweep_entry["lidar_pointcloud_source_path"]
+            )
         sweep_entries.append(sweep_entry)
     return sweep_entries
 
@@ -106,6 +110,10 @@ def build_sweep_entries(sample: Mapping[str, Any]) -> list[dict[str, Any]]:
         entries.append(
             {
                 "lidar_path": sweep["lidar_points"]["lidar_path"],
+                "lidar_pointcloud_source_path": sweep["lidar_points"].get(
+                    "lidar_pointcloud_source_path"
+                ),
+                "lidar_sources_info": sweep["lidar_points"].get("lidar_sources_info"),
                 "timestamp": sweep["timestamp"],
                 "sensor2lidar_rotation": sweep2key_lidar[:3, :3].astype(np.float32),
                 "sensor2lidar_translation": sweep2key_lidar[:3, 3].astype(np.float32),

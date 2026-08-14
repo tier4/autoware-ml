@@ -91,6 +91,10 @@ class TestT4Detection3DDataset:
                 "timestamp": 1700000000.1,
                 "instances": [],
                 "sweeps": [],
+                "lidar_sources": {"LIDAR_FRONT_UPPER": {"sensor_token": "sensor-front"}},
+                "lidar_sources_info": {
+                    "sources": [{"sensor_token": "sensor-front", "idx_begin": 0, "length": 1}]
+                },
             }
         ]
         dataset.data_root = str(tmp_path)
@@ -104,6 +108,10 @@ class TestT4Detection3DDataset:
         assert sample["timestamp"] == 1700000000.1
         assert sample["instances"] == []
         assert sample["sweeps"] == []
+        assert sample["lidar_sources"] == {"LIDAR_FRONT_UPPER": {"sensor_token": "sensor-front"}}
+        assert sample["lidar_sources_info"] == {
+            "sources": [{"sensor_token": "sensor-front", "idx_begin": 0, "length": 1}]
+        }
 
     def test_frame_sampling_weights_emphasize_rare_categories(self, tmp_path) -> None:
         ann_file = tmp_path / "infos.pkl"

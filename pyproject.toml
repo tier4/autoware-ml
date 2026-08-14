@@ -65,6 +65,15 @@ autoware-ml = "autoware_ml.cli.cli:main"
 where = ["."]
 include = ["autoware_ml*"]
 
+[tool.setuptools.package-data]
+autoware_ml = [
+    # Per-platform assets: per-LiDAR masks and crop-box definitions.
+    "configs/assets/*/*/*.png",
+    "configs/assets/*/*.param.yaml",
+    # Per-sensor calibration.
+    "configs/assets/hesai/*.csv",
+]
+
 [tool.pixi.workspace]
 channels = ["conda-forge"]
 platforms = ["linux-64"]

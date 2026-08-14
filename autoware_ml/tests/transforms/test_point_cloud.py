@@ -23,6 +23,11 @@ from autoware_ml.transforms.point_cloud.sampling import (
 )
 from autoware_ml.transforms.point_cloud.sweeps import LoadPointsFromMultiSweeps
 
+_TEST_CROP_BOXES = [
+    [-1.5, -1.2, 0.0, 5.7, 1.2, 3.0],  # body-like
+    [4.4, -1.2, 0.0, 5.1, 1.2, 0.8],  # wheels-like
+]
+
 
 class TestPointCloudTransforms:
     @pytest.fixture
@@ -162,6 +167,130 @@ class TestPointCloudTransforms:
         assert points.shape == (5, 5)
         assert np.allclose(points[:2, 4], 0.0)
         assert np.allclose(points[2:, 4], 0.1)
+
+    def test_sweep_transforms_see_the_sweep_before_it_is_moved_or_restamped(self, tmp_path):
+        # Per-scan filtering has to happen while the sweep is still where and when it was captured.
+        # Afterwards this transform has rigidly moved it into the current frame and replaced the
+        # per-point timestamps with one per-sweep lag, so neither is recoverable.
+        sweep_points = np.zeros((3, 5), dtype=np.float32)
+        sweep_points[:, 0] = [1.0, 2.0, 3.0]
+        sweep_points[:, 4] = [0.01, 0.02, 0.03]  # per-point acquisition offsets
+        sweep_path = tmp_path / "sweep.bin"
+        sweep_points.tofile(sweep_path)
+        seen = {}
+
+        def record(sample, context=None):
+            seen["x"] = sample["points"][:, 0].copy()
+            seen["stamps"] = sample["points"][:, 4].copy()
+            seen["path"] = sample["lidar_path"]
+            seen["sources_info"] = sample["lidar_sources_info"]
+            # Drop the middle point, to check the survivors are the ones concatenated.
+            sample["points"] = sample["points"][[0, 2]]
+            return sample
+
+        transform = LoadPointsFromMultiSweeps(
+            sweeps_num=2,
+            load_dim=5,
+            use_dim=[0, 1, 2, 3, 4],
+            time_dim=4,
+            sweep_transforms=record,
+        )
+        output = transform(
+            {
+                "points": np.zeros((2, 5), dtype=np.float32),
+                "timestamp": 10.0,
+                "lidar_sources": {"LIDAR_FRONT_UPPER": {"sensor_token": "front"}},
+                "sweeps": [
+                    {
+                        "lidar_path": str(sweep_path),
+                        "timestamp": 9.9,
+                        "lidar_sources_info": {"stamp": {"sec": 9, "nanosec": 900000000}},
+                        "sensor2lidar_rotation": np.eye(3, dtype=np.float32),
+                        "sensor2lidar_translation": np.array([100.0, 0.0, 0.0], np.float32),
+                    }
+                ],
+            }
+        )
+
+        # Untranslated coordinates and the original per-point stamps, not the 0.1 s sweep lag.
+        np.testing.assert_allclose(seen["x"], [1.0, 2.0, 3.0])
+        np.testing.assert_allclose(seen["stamps"], [0.01, 0.02, 0.03])
+        assert seen["path"] == str(sweep_path)
+        assert seen["sources_info"]["stamp"] == {"sec": 9, "nanosec": 900000000}
+        # Two survivors, moved into the current frame afterwards and given the sweep's lag.
+        assert output["points"].shape == (4, 5)
+        np.testing.assert_allclose(output["points"][2:, 0], [101.0, 103.0])
+        np.testing.assert_allclose(output["points"][2:, 4], 0.1)
+
+    def test_sweep_transforms_do_not_touch_the_current_frame(self, tmp_path):
+        # The current frame stays the pipeline's business, so it can be filtered alongside its own
+        # per-point annotations.
+        sweep_path = tmp_path / "sweep.bin"
+        np.zeros((2, 5), dtype=np.float32).tofile(sweep_path)
+        calls = []
+
+        def count(sample, context=None):
+            calls.append(sample["points"].shape[0])
+            return sample
+
+        LoadPointsFromMultiSweeps(
+            sweeps_num=2, load_dim=5, use_dim=[0, 1, 2, 3, 4], time_dim=4, sweep_transforms=count
+        )(
+            {
+                "points": np.zeros((7, 5), dtype=np.float32),
+                "timestamp": 10.0,
+                "sweeps": [
+                    {
+                        "lidar_path": str(sweep_path),
+                        "timestamp": 9.9,
+                        "lidar_sources_info": {"stamp": {"sec": 9, "nanosec": 0}},
+                    }
+                ],
+            }
+        )
+
+        assert calls == [2]
+
+    def test_multi_sweeps_drop_the_frames_pre_correction_coordinates(self, tmp_path):
+        # They describe the current frame alone. Once sweeps are appended the cloud is longer than
+        # they are, so leaving them behind invites their being filtered as though still aligned.
+        sweep_path = tmp_path / "sweep.bin"
+        np.zeros((3, 5), dtype=np.float32).tofile(sweep_path)
+
+        output = LoadPointsFromMultiSweeps(
+            sweeps_num=2, load_dim=5, use_dim=[0, 1, 2, 3, 4], time_dim=4
+        )(
+            {
+                "points": np.zeros((2, 5), dtype=np.float32),
+                "pre_correction_points": np.zeros((2, 3), dtype=np.float32),
+                "timestamp": 10.0,
+                "sweeps": [{"lidar_path": str(sweep_path), "timestamp": 9.9}],
+            }
+        )
+
+        assert output["points"].shape[0] == 5
+        assert "pre_correction_points" not in output
+
+    def test_sweep_transforms_reject_a_sweep_without_source_metadata(self, tmp_path):
+        sweep_path = tmp_path / "sweep.bin"
+        np.zeros((2, 5), dtype=np.float32).tofile(sweep_path)
+
+        transform = LoadPointsFromMultiSweeps(
+            sweeps_num=2,
+            load_dim=5,
+            use_dim=[0, 1, 2, 3, 4],
+            time_dim=4,
+            sweep_transforms=lambda sample, context=None: sample,
+        )
+
+        with pytest.raises(KeyError, match="per-sweep concat metadata"):
+            transform(
+                {
+                    "points": np.zeros((1, 5), dtype=np.float32),
+                    "timestamp": 10.0,
+                    "sweeps": [{"lidar_path": str(sweep_path), "timestamp": 9.9}],
+                }
+            )
 
     def test_multi_sweeps_time_dim_requires_key_timestamp(self):
         transform = LoadPointsFromMultiSweeps(
