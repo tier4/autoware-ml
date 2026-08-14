@@ -37,6 +37,7 @@ import numpy as np
 import numpy.typing as npt
 
 from autoware_ml.transforms.base import BaseTransform
+from autoware_ml.transforms.point_cloud.lidar_sources import find_scene_directory
 
 # Sample key holding the pre-correction (raw sweep) coordinates, in the ego frame.
 PRE_CORRECTION_POINTS_KEY = "pre_correction_points"
@@ -344,11 +345,10 @@ def _resolve_ego_pose_path(lidar_path: Any) -> Path | None:
     """Find ``annotation/ego_pose.json`` for the scene owning ``lidar_path``."""
     if not lidar_path:
         return None
-    for parent in Path(lidar_path).resolve().parents:
-        candidate = parent / "annotation" / "ego_pose.json"
-        if candidate.is_file():
-            return candidate
-    return None
+    scene_directory = find_scene_directory(lidar_path, table="ego_pose.json")
+    if scene_directory is None:
+        return None
+    return scene_directory / "annotation" / "ego_pose.json"
 
 
 def _assert_aligned(values: npt.NDArray[Any], point_count: int) -> None:

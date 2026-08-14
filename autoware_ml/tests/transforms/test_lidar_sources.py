@@ -20,12 +20,32 @@ import numpy as np
 import pytest
 
 from autoware_ml.transforms.point_cloud.lidar_sources import (
+    find_scene_directory,
     infer_lidar_name_from_text,
     iter_pointcloud_sources,
     normalize_lidar_name,
+    recorded_sources_info_path,
     resolve_sources_info,
-    sources_info_path,
 )
+
+
+def t4_scene(tmp_path, *, cloud: str, info: str | None, payload: dict | None = None):
+    """A minimal T4 scene: one cloud, a sample_data table naming it, and its metainfo file."""
+    scene = tmp_path / "dataset" / "scene_token" / "0"
+    (scene / "annotation").mkdir(parents=True)
+    cloud_path = scene / cloud
+    cloud_path.parent.mkdir(parents=True, exist_ok=True)
+    cloud_path.touch()
+
+    record = {"filename": cloud, "is_key_frame": True}
+    if info is not None:
+        record["info_filename"] = info
+        info_path = scene / info
+        info_path.parent.mkdir(parents=True, exist_ok=True)
+        info_path.write_text(json.dumps(payload or {}))
+    (scene / "annotation" / "sample_data.json").write_text(json.dumps([record]))
+    # The lookup caches per scene, and every test builds a fresh directory, so nothing leaks.
+    return scene
 
 
 def concat_sample(*ranges: tuple[str, int, int], extrinsics: bool = True) -> dict:
@@ -149,31 +169,39 @@ class TestResolveSourcesInfo:
 
         assert resolved["stamp"]["sec"] == 2
 
-    def test_falls_back_to_the_sidecar_beside_the_cloud(self, tmp_path):
-        # Sweeps in infos generated before source metadata was propagated name nothing at all, but
-        # T4 writes the same payload beside every concatenated cloud.
-        scene = tmp_path / "scene" / "data"
-        (scene / "LIDAR_CONCAT").mkdir(parents=True)
-        (scene / "LIDAR_CONCAT_INFO").mkdir()
-        (scene / "LIDAR_CONCAT_INFO" / "00042.json").write_text(
-            json.dumps({"stamp": {"sec": 3, "nanosec": 0}, "sources": []})
+    def test_falls_back_to_the_file_the_dataset_records(self, tmp_path):
+        # Sweeps in infos generated before source metadata was propagated carry nothing, so the
+        # dataset is asked: SampleData.info_filename names the metainfo file for each cloud.
+        scene = t4_scene(
+            tmp_path,
+            cloud="data/LIDAR_CONCAT/00042.pcd.bin",
+            info="metainfo/whatever_it_is_called.json",
+            payload={"stamp": {"sec": 3, "nanosec": 0}, "sources": []},
         )
-        cloud = scene / "LIDAR_CONCAT" / "00042.pcd.bin"
-        cloud.touch()
+        cloud = scene / "data/LIDAR_CONCAT/00042.pcd.bin"
 
         resolved = resolve_sources_info({"lidar_path": str(cloud)})
 
         assert resolved["stamp"]["sec"] == 3
-        assert sources_info_path(cloud).name == "00042.json"
+        # Found by what the table says, not by where the file sits.
+        assert recorded_sources_info_path(cloud).name == "whatever_it_is_called.json"
 
-    def test_reports_nothing_when_there_is_nothing_to_find(self, tmp_path):
-        cloud = tmp_path / "LIDAR_CONCAT" / "00000.pcd.bin"
+    def test_reports_nothing_when_the_table_records_no_info_file(self, tmp_path):
+        # info_filename is optional in the schema, so a dataset may simply not say.
+        scene = t4_scene(tmp_path, cloud="data/LIDAR_CONCAT/00000.pcd.bin", info=None)
+        cloud = scene / "data/LIDAR_CONCAT/00000.pcd.bin"
+
+        assert recorded_sources_info_path(cloud) is None
+        assert resolve_sources_info({"lidar_path": str(cloud)}) is None
+
+    def test_reports_nothing_outside_a_dataset(self, tmp_path):
+        cloud = tmp_path / "loose" / "00000.pcd.bin"
         cloud.parent.mkdir(parents=True)
         cloud.touch()
 
-        assert resolve_sources_info({"lidar_path": str(cloud)}) is None
+        assert find_scene_directory(cloud) is None
+        assert recorded_sources_info_path(cloud) is None
         assert resolve_sources_info({}) is None
-        assert sources_info_path(cloud) is None
 
 
 class TestNaming:

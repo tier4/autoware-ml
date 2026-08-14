@@ -25,7 +25,7 @@ import numpy.typing as npt
 
 from autoware_ml.transforms.base import BaseTransform
 from autoware_ml.transforms.point_cloud.lidar_sources import (
-    CONCAT_INFO_DIRECTORY,
+    SAMPLE_DATA_TABLE,
     resolve_sources_info,
 )
 
@@ -191,8 +191,9 @@ class LoadPointsFromMultiSweeps(BaseTransform):
         if sources_info is None:
             raise KeyError(
                 "sweep_transforms needs per-sweep concat metadata: none was given as "
-                "'lidar_sources_info', named by 'lidar_pointcloud_source_path', or found in a "
-                f"{CONCAT_INFO_DIRECTORY} sidecar beside {sweep.get('lidar_path')!r}."
+                "'lidar_sources_info', none was named by 'lidar_pointcloud_source_path', and "
+                f"{SAMPLE_DATA_TABLE} records no info_filename for "
+                f"{sweep.get('lidar_path')!r}."
             )
         sub_sample = {
             "points": points,

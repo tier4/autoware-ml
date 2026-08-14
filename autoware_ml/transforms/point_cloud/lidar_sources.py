@@ -24,14 +24,17 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import numpy as np
 import numpy.typing as npt
 
-# T4 writes one of these beside every concatenated cloud, recording how that cloud was assembled.
-CONCAT_INFO_DIRECTORY = "LIDAR_CONCAT_INFO"
+# T4's own record of which file is which: SampleData.filename names a cloud, and its optional
+# info_filename names the metainfo JSON describing how that cloud was assembled.
+SAMPLE_DATA_TABLE = "sample_data.json"
 
 # Mounting positions used to name per-LiDAR assets and to recognise a source from free text.
 LIDAR_POSITION_NAMES = (
@@ -71,23 +74,63 @@ def infer_lidar_name_from_text(text: str) -> str | None:
     return None
 
 
-def sources_info_path(lidar_path: str | Path) -> Path | None:
-    """Locate the ``LIDAR_CONCAT_INFO`` sidecar belonging to a concatenated cloud.
+def find_scene_directory(path: str | Path, *, table: str = SAMPLE_DATA_TABLE) -> Path | None:
+    """The dataset directory owning ``path``, recognised by one of its annotation tables.
 
-    T4 stores one JSON per concatenated cloud, under a sibling directory and sharing its frame
-    number. Returns ``None`` when there is none.
+    T4 nests a scene's ``annotation`` and ``data`` directories under a version directory, so any file
+    below it can find the annotations that describe it. Returns ``None`` when none is above it.
     """
-    cloud = Path(lidar_path)
-    candidate = cloud.parent.parent / CONCAT_INFO_DIRECTORY / f"{cloud.name.split('.')[0]}.json"
+    for parent in Path(path).resolve().parents:
+        if (parent / "annotation" / table).is_file():
+            return parent
+    return None
+
+
+@lru_cache(maxsize=16)
+def _info_filenames(scene_directory: Path) -> Mapping[str, str]:
+    """Map each of a scene's data files to the metainfo file recorded for it.
+
+    Cached because a dataloader worker resolves this repeatedly for one scene, and the table covers
+    every sensor of every frame.
+    """
+    table = json.loads((scene_directory / "annotation" / SAMPLE_DATA_TABLE).read_text())
+    return MappingProxyType(
+        {
+            record["filename"]: record["info_filename"]
+            for record in table
+            if record.get("filename") and record.get("info_filename")
+        }
+    )
+
+
+def recorded_sources_info_path(lidar_path: str | Path) -> Path | None:
+    """The metainfo file T4 records for a cloud, through ``SampleData.info_filename``.
+
+    Read from the dataset's own ``sample_data.json`` rather than inferred from where the file sits,
+    so a layout this code has not seen cannot be silently mismatched. The field is optional in the
+    schema, so ``None`` means the dataset does not say.
+    """
+    cloud = Path(lidar_path).resolve()
+    scene_directory = find_scene_directory(cloud)
+    if scene_directory is None:
+        return None
+    try:
+        relative = cloud.relative_to(scene_directory)
+    except ValueError:  # pragma: no cover - relative_to on a resolved parent
+        return None
+    recorded = _info_filenames(scene_directory).get(relative.as_posix())
+    if recorded is None:
+        return None
+    candidate = scene_directory / recorded
     return candidate if candidate.is_file() else None
 
 
 def resolve_sources_info(entry: Mapping[str, Any]) -> dict[str, Any] | None:
     """Find the concat metadata for one scan, wherever it happens to be recorded.
 
-    Keyframes carry ``lidar_sources_info`` inline. Sweeps generally do not: infos generated before
-    that was propagated name no source metadata at all, so it is read from the sidecar beside the
-    cloud, which is byte-identical to what the keyframes carry.
+    Keyframes carry ``lidar_sources_info`` inline. Sweeps in infos generated before that was
+    propagated carry nothing, so the dataset is asked instead: ``SampleData.info_filename`` names the
+    metainfo file for each cloud, and its contents are byte-identical to what keyframes carry.
 
     Returns ``None`` when the scan has no metadata anywhere, leaving the decision to the caller.
     """
@@ -99,9 +142,9 @@ def resolve_sources_info(entry: Mapping[str, Any]) -> dict[str, Any] | None:
         return json.loads(Path(explicit).read_text())
     lidar_path = entry.get("lidar_path")
     if lidar_path:
-        sidecar = sources_info_path(lidar_path)
-        if sidecar is not None:
-            return json.loads(sidecar.read_text())
+        recorded = recorded_sources_info_path(lidar_path)
+        if recorded is not None:
+            return json.loads(recorded.read_text())
     return None
 
 
