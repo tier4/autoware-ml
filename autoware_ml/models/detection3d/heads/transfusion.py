@@ -58,21 +58,22 @@ class LearnedPositionalEncoding(nn.Module):
         """
         super().__init__()
         self.proj = nn.Sequential(
-            nn.Linear(input_channels, embed_dims),
+            nn.Conv1d(input_channels, embed_dims, kernel_size=1),
+            nn.BatchNorm1d(embed_dims),
             nn.ReLU(inplace=True),
-            nn.Linear(embed_dims, embed_dims),
+            nn.Conv1d(embed_dims, embed_dims, kernel_size=1),
         )
 
     def forward(self, position: torch.Tensor) -> torch.Tensor:
         """Encode BEV positions into query embeddings.
 
         Args:
-            position: BEV coordinate tensor.
+            position: BEV coordinate tensor of shape ``(batch, tokens, channels)``.
 
         Returns:
-            Learned positional embeddings.
+            Learned positional embeddings of shape ``(batch, tokens, embed_dims)``.
         """
-        return self.proj(position)
+        return self.proj(position.transpose(1, 2)).transpose(1, 2)
 
 
 class TransFusionDecoderLayer(nn.Module):
