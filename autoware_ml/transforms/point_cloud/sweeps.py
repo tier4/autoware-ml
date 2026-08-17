@@ -48,7 +48,7 @@ class LoadPointsFromMultiSweeps(BaseTransform):
         pad_empty_sweeps: bool = False,
         remove_close: bool = False,
         close_radius: float = 1.0,
-        selection: str = "nearest",
+        test_mode: bool = True,
     ) -> None:
         """Initialize the LoadPointsFromMultiSweeps transform.
 
@@ -63,11 +63,9 @@ class LoadPointsFromMultiSweeps(BaseTransform):
             remove_close: Whether to drop sweep points close to the origin.
             close_radius: Half-width in meters of the removed region when
                 ``remove_close`` is enabled.
-            selection: How to pick the appended sweeps from the available
-                entries: ``"nearest"`` takes the closest ones in time;
-                ``"random"`` samples them uniformly without replacement (a
-                temporal-jitter augmentation for training, matching mmdet3d's
-                train-time behavior).
+            test_mode: How to pick the appended sweeps from the available
+                entries. ``True`` takes the nearest ones in time; ``False``
+                samples them uniformly without replacement.
         """
         self.sweeps_num = sweeps_num
         self.load_dim = load_dim
@@ -78,9 +76,7 @@ class LoadPointsFromMultiSweeps(BaseTransform):
         self.pad_empty_sweeps = pad_empty_sweeps
         self.remove_close = remove_close
         self.close_radius = close_radius
-        if selection not in {"nearest", "random"}:
-            raise ValueError(f"selection must be 'nearest' or 'random', got {selection!r}.")
-        self.selection = selection
+        self.test_mode = test_mode
 
     def apply_defaults(self, input_dict: dict[str, Any]) -> None:
         """Load the current-frame point cloud when it is not present yet."""
@@ -120,7 +116,7 @@ class LoadPointsFromMultiSweeps(BaseTransform):
             return input_dict
 
         needed = max(0, self.sweeps_num - 1)
-        if self.selection == "random" and len(sweep_entries) > needed:
+        if not self.test_mode and len(sweep_entries) > needed:
             indices = np.random.choice(len(sweep_entries), needed, replace=False)
             selected_sweeps = [sweep_entries[i] for i in indices]
         else:
