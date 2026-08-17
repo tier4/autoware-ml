@@ -30,6 +30,7 @@ class ConvModule(nn.Module):
         stride: int = 1,
         transpose: bool = False,
         norm_eps: float = 1e-3,
+        norm_momentum: float = 0.01,
     ) -> None:
         """Initialize the convolution block.
 
@@ -39,6 +40,7 @@ class ConvModule(nn.Module):
             stride: Convolution stride.
             transpose: Whether to use transposed convolution.
             norm_eps: Epsilon used by the batch normalization layer.
+            norm_momentum: Momentum used by the batch normalization layer.
         """
         super().__init__()
         if transpose:
@@ -58,7 +60,7 @@ class ConvModule(nn.Module):
                 padding=1,
                 bias=False,
             )
-        self.norm = nn.BatchNorm2d(out_channels, eps=norm_eps, momentum=0.01)
+        self.norm = nn.BatchNorm2d(out_channels, eps=norm_eps, momentum=norm_momentum)
         self.activation = nn.ReLU(inplace=True)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

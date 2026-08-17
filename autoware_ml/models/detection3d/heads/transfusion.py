@@ -242,6 +242,7 @@ class SeparateHead1D(nn.Module):
         heads: dict[str, tuple[int, int]],
         hidden_channels: int,
         norm_eps: float = 1e-3,
+        norm_momentum: float = 0.01,
     ) -> None:
         """Initialize the per-query prediction heads.
 
@@ -250,6 +251,7 @@ class SeparateHead1D(nn.Module):
             heads: Mapping from head name to ``(out_channels, num_convs)``.
             hidden_channels: Width of the intermediate branch layers.
             norm_eps: Epsilon used by the branch batch-normalization layers.
+            norm_momentum: Momentum used by the branch batch-normalization layers.
         """
         super().__init__()
         self.heads = nn.ModuleDict()
@@ -260,7 +262,7 @@ class SeparateHead1D(nn.Module):
                 layers.append(
                     nn.Conv1d(current_channels, hidden_channels, kernel_size=1, bias=False)
                 )
-                layers.append(nn.BatchNorm1d(hidden_channels, eps=norm_eps, momentum=0.01))
+                layers.append(nn.BatchNorm1d(hidden_channels, eps=norm_eps, momentum=norm_momentum))
                 layers.append(nn.ReLU(inplace=True))
                 current_channels = hidden_channels
             layers.append(nn.Conv1d(current_channels, out_channels, kernel_size=1))
@@ -346,6 +348,7 @@ class TransFusionHead(nn.Module):
         use_velocity: bool = True,
         head_hidden_channels: int | None = None,
         norm_eps: float = 1e-3,
+        norm_momentum: float = 0.01,
     ) -> None:
         """Initialize the TransFusion detection head.
 
@@ -397,6 +400,8 @@ class TransFusionHead(nn.Module):
                 Defaults to ``hidden_channel``.
             norm_eps: Epsilon used by the head's batch-normalization layers
                 (shared conv, heatmap head, prediction branches).
+            norm_momentum: Momentum used by the head's batch-normalization layers
+                (shared conv, heatmap head, prediction branches).
         """
         super().__init__()
         self.num_proposals = num_proposals
@@ -434,11 +439,13 @@ class TransFusionHead(nn.Module):
         self.shared_conv = nn.Conv2d(
             in_channels, hidden_channel, kernel_size=3, padding=1, bias=False
         )
-        self.shared_norm = nn.BatchNorm2d(hidden_channel, eps=norm_eps, momentum=0.01)
+        self.shared_norm = nn.BatchNorm2d(hidden_channel, eps=norm_eps, momentum=norm_momentum)
         self.shared_act = nn.ReLU(inplace=True)
 
         self.heatmap_head = nn.Sequential(
-            ConvModule(hidden_channel, hidden_channel, norm_eps=norm_eps),
+            ConvModule(
+                hidden_channel, hidden_channel, norm_eps=norm_eps, norm_momentum=norm_momentum
+            ),
             nn.Conv2d(hidden_channel, num_classes, kernel_size=3, padding=1),
         )
         nn.init.constant_(self.heatmap_head[-1].bias, heatmap_init_bias)
@@ -462,6 +469,7 @@ class TransFusionHead(nn.Module):
                     prediction_heads,
                     hidden_channels=head_hidden,
                     norm_eps=norm_eps,
+                    norm_momentum=norm_momentum,
                 )
                 for _ in range(num_decoder_layers)
             ]

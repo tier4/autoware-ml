@@ -115,6 +115,7 @@ model:
     dense_heatmap_pooling_classes: [car, truck, bus, barrier]
     head_hidden_channels: 64
     norm_eps: 1.0e-5
+    norm_momentum: 0.1
     nms_type: circle
     nms_min_radius: 0.5
     nms_groups:
