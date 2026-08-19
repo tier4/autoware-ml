@@ -431,6 +431,71 @@ class TestCreateGaussianHeatmap(unittest.TestCase):
         )
         self.assertTrue(torch.all(gaussian_heatmaps == 0.0))
 
+    def test_create_gaussian_heatmaps_rejects_labels_beyond_num_classes(self) -> None:
+        """Test that a label outside [0, num_classes - 1] is rejected instead of silently clamped."""
+        # ``num_classes`` is the first out-of-range index; clamping it would splat the box onto
+        # the last class channel and corrupt that class's supervision without any warning.
+        for out_of_range_label in (self.num_classes, self.num_classes + 7):
+            with self.subTest(label=out_of_range_label):
+                gt_bboxes_labels = self.gt_bboxes_labels.clone()
+                gt_bboxes_labels[1, 0] = out_of_range_label
+
+                with self.assertRaisesRegex(ValueError, "label"):
+                    create_gaussian_heatmaps(
+                        heatmap_width=self.heatmap_width,
+                        heatmap_height=self.heatmap_height,
+                        num_classes=self.num_classes,
+                        centers=self.centers,
+                        gaussian_radii=self.gaussian_radii,
+                        gt_bboxes_labels=gt_bboxes_labels,
+                        valid_masks=torch.ones_like(gt_bboxes_labels, dtype=torch.bool),
+                        device=self.device,
+                    )
+
+    def test_create_gaussian_heatmaps_rejects_out_of_range_label_on_invalid_box(self) -> None:
+        """Test that the label range check covers padded boxes, not just the valid ones."""
+        # The check runs before ``valid_masks`` is applied, so padding must use a sentinel the
+        # clamp handles (such as -1) rather than an above-range one.
+        gt_bboxes_labels = self.gt_bboxes_labels.clone()
+        gt_bboxes_labels[0, 1] = self.num_classes
+        valid_masks = torch.tensor([[1, 0, 1], [1, 1, 1]], device=self.device, dtype=torch.bool)
+
+        with self.assertRaisesRegex(ValueError, "label"):
+            create_gaussian_heatmaps(
+                heatmap_width=self.heatmap_width,
+                heatmap_height=self.heatmap_height,
+                num_classes=self.num_classes,
+                centers=self.centers,
+                gaussian_radii=self.gaussian_radii,
+                gt_bboxes_labels=gt_bboxes_labels,
+                valid_masks=valid_masks,
+                device=self.device,
+            )
+
+    def test_create_gaussian_heatmaps_accepts_last_class_label(self) -> None:
+        """Test that ``num_classes - 1`` is still accepted, pinning the check to ``>=``."""
+        last_class = self.num_classes - 1
+        gt_bboxes_labels = self.gt_bboxes_labels.clone()
+        gt_bboxes_labels[1, 0] = last_class
+
+        gaussian_heatmaps = create_gaussian_heatmaps(
+            heatmap_width=self.heatmap_width,
+            heatmap_height=self.heatmap_height,
+            num_classes=self.num_classes,
+            centers=self.centers,
+            gaussian_radii=self.gaussian_radii,
+            gt_bboxes_labels=gt_bboxes_labels,
+            valid_masks=torch.ones_like(gt_bboxes_labels, dtype=torch.bool),
+            device=self.device,
+        )
+
+        self.assertEqual(
+            gaussian_heatmaps.shape,
+            (self.batch_size, self.num_classes, self.heatmap_height, self.heatmap_width),
+        )
+        # The relocated box is the only contributor to the last channel, so it must be drawn there.
+        self.assertTrue(torch.any(gaussian_heatmaps[1, last_class] > 0.0))
+
 
 class TestBatchCircleNMS(unittest.TestCase):
     """Unit tests for the batch_circle_nms function."""

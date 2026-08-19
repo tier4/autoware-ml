@@ -48,7 +48,8 @@ def batch_circle_nms(
     center_indices = orders.unsqueeze(-1).expand(-1, -1, -1, num_dimensions)
     sorted_bboxes_centers = torch.gather(bboxes_centers, index=center_indices, dim=2)
 
-    # Pairwise center distances.The matmul-based distance path is disabled to match the elementwise.
+    # Pairwise center distances. compute_mode disables the matmul-based path so distances
+    # are computed elementwise.
     # (batch_size, num_classes, max_num_bboxes, 2) -> (batch_size*num_classes, max_num_bboxes, 2) ->
     # (batch_size * num_classes, max_num_bboxes, max_num_bboxes) -> (batch_size, num_classes, max_num_bboxes, max_num_bboxes)
     flatten_bboxes_centers = sorted_bboxes_centers.reshape(
