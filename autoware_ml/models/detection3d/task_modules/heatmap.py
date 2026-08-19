@@ -355,8 +355,15 @@ def create_gaussian_heatmaps(
 
     # Labels for each box, shape (B, N, 1, 1)
     labels = gt_bboxes_labels.view(batch_size, max_num_bboxes, 1, 1)
+    # Check if labels are more than num_classes, if so, raise an error
+    if (labels >= num_classes).any():
+        raise ValueError(
+            f"Found label(s) >= num_classes ({num_classes}). "
+            "Please ensure that all labels are in the range [0, num_classes - 1]."
+        )
+
     # clamp invalid labels (e.g. -1 padding) so indexing stays legal;
-    clamp_labels = labels.clamp(min=0, max=num_classes - 1)
+    clamp_labels = labels.clamp(min=0)
 
     # (B, max_num_bboxes, 1, 1) + (B, max_num_bboxes, max_diameter, max_diameter) -> (B, max_num_bboxes, max_diameter, max_diameter)
     flat_idx = (
