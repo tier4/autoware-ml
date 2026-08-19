@@ -155,6 +155,9 @@ def _vectorize_gaussian2d(
     Padded with zeros for padded height and width values.
     """
     batch_size, max_num_boxes = heights.shape
+    if max_num_boxes == 0:
+        return torch.zeros((batch_size, 0, 0, 0), device=device, dtype=dtype)
+
     # Find the maximum height and width across the batch and boxes
     max_height = int(heights.max())
     max_width = int(widths.max())
@@ -288,7 +291,7 @@ def create_gaussian_heatmaps(
         (batch_size, num_classes, heatmap_height, heatmap_width), device=device, dtype=torch.float32
     )
 
-    # _vectorize_gaussian2d sizes every kernel slot from the global maximum diameter, 
+    # _vectorize_gaussian2d sizes every kernel slot from the global maximum diameter,
     # so a single large padded radius would inflate the padded kernel
     # tensor for the whole batch (and a negative one could shrink it below the valid boxes' needs).
     # Normalize invalid radii to zero, the smallest safe radius, so only valid boxes drive the
