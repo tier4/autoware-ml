@@ -51,7 +51,9 @@ def batch_circle_nms(
     # Pairwise center distances.The matmul-based distance path is disabled to match the elementwise.
     # (batch_size, num_classes, max_num_bboxes, 2) -> (batch_size*num_classes, max_num_bboxes, 2) ->
     # (batch_size * num_classes, max_num_bboxes, max_num_bboxes) -> (batch_size, num_classes, max_num_bboxes, max_num_bboxes)
-    flatten_bboxes_centers = sorted_bboxes_centers.reshape(-1, max_num_bboxes, num_dimensions)
+    flatten_bboxes_centers = sorted_bboxes_centers.reshape(
+        batch_size * num_classes, max_num_bboxes, num_dimensions
+    )
     pairwise_distances = torch.cdist(
         flatten_bboxes_centers,
         flatten_bboxes_centers,
