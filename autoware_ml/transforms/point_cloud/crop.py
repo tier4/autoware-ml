@@ -119,7 +119,7 @@ class PointsRangeFilter(BaseTransform):
         points: npt.NDArray[np.float32] = input_dict[coord_key]
         lower = self.point_cloud_range[:3]
         upper = self.point_cloud_range[3:]
-        mask = ((points[:, :3] >= lower) & (points[:, :3] <= upper)).all(axis=1)
+        mask = ((points[:, :3] >= lower) & (points[:, :3] < upper)).all(axis=1)
         for key, value in list(input_dict.items()):
             if (
                 isinstance(value, np.ndarray)

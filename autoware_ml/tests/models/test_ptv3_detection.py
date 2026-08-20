@@ -19,6 +19,32 @@ from autoware_ml.tests.models.ptv3_detection_fixtures import (
 from autoware_ml.utils.checkpoints import apply_matching_weights
 
 
+def test_ptv3_bev_projection_assume_valid_matches_guarded_path_for_valid_coords() -> None:
+    guarded = build_trans_model().bev_neck.bev_projector.eval()
+    unguarded = build_trans_model().bev_neck.bev_projector.eval()
+    unguarded.load_state_dict(guarded.state_dict())
+    unguarded.assume_valid_grid_coord = True
+
+    expected_bev_shape = (8, 8)
+    assert guarded.output_shape == expected_bev_shape
+    bev_height, bev_width = expected_bev_shape
+
+    point_features = torch.randn(6, guarded.point_proj[0].in_features)
+    offset = torch.tensor([point_features.shape[0]], dtype=torch.long)
+    grid_coord = torch.tensor(
+        [[0, 0, 0], [1, 2, 0], [1, 2, 1], [3, 4, 0], [7, 7, 0], [5, 6, 2]],
+        dtype=torch.int32,
+    )
+    assert torch.all((grid_coord[:, 0] >= 0) & (grid_coord[:, 0] < bev_width))
+    assert torch.all((grid_coord[:, 1] >= 0) & (grid_coord[:, 1] < bev_height))
+
+    with torch.no_grad():
+        expected = guarded(point_features, grid_coord, offset)
+        actual = unguarded(point_features, grid_coord, offset)
+
+    assert torch.allclose(actual, expected)
+
+
 @pytest.mark.skipif(
     not IS_SPCONV_AVAILABLE or not torch.cuda.is_available(),
     reason="PTv3 sparse-convolution tests require CUDA spconv",

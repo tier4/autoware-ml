@@ -89,6 +89,7 @@ class PTv3BEVProjection(nn.Module):
         in_channels: int,
         out_channels: int,
         output_shape: Sequence[int],
+        assume_valid_grid_coord: bool = False,
     ) -> None:
         """Initialize the PTv3-to-BEV projection path.
 
@@ -96,10 +97,15 @@ class PTv3BEVProjection(nn.Module):
             in_channels: PTv3 point-feature dimension.
             out_channels: Dense BEV channel dimension.
             output_shape: Dense BEV shape as ``(height, width)``.
+            assume_valid_grid_coord: Skip BEV bounds filtering. Use only when
+                preprocessing guarantees all ``grid_coord`` values are within
+                ``output_shape``; this avoids data-dependent ``NonZero`` nodes
+                in exported ONNX graphs.
         """
         super().__init__()
         self.output_shape = tuple(int(value) for value in output_shape)
         self.out_channels = out_channels
+        self.assume_valid_grid_coord = assume_valid_grid_coord
         self.point_proj = nn.Sequential(
             nn.Linear(in_channels, out_channels, bias=False),
             nn.BatchNorm1d(out_channels),
@@ -136,16 +142,17 @@ class PTv3BEVProjection(nn.Module):
         batch_indices = offset_to_batch(offset, grid_coord)
         x_indices = grid_coord[:, 0].long()
         y_indices = grid_coord[:, 1].long()
-        valid_mask = (
-            (x_indices >= 0) & (x_indices < width) & (y_indices >= 0) & (y_indices < height)
-        )
-        if not torch.any(valid_mask):
-            return projected_features.new_zeros((batch_size, self.out_channels, height, width))
+        if not self.assume_valid_grid_coord:
+            valid_mask = (
+                (x_indices >= 0) & (x_indices < width) & (y_indices >= 0) & (y_indices < height)
+            )
+            if not torch.any(valid_mask):
+                return projected_features.new_zeros((batch_size, self.out_channels, height, width))
 
-        projected_features = projected_features[valid_mask]
-        batch_indices = batch_indices[valid_mask]
-        x_indices = x_indices[valid_mask]
-        y_indices = y_indices[valid_mask]
+            projected_features = projected_features[valid_mask]
+            batch_indices = batch_indices[valid_mask]
+            x_indices = x_indices[valid_mask]
+            y_indices = y_indices[valid_mask]
 
         flat_indices = batch_indices * (height * width) + y_indices * width + x_indices
         canvas = projected_features.new_zeros((batch_size * height * width, self.out_channels))
