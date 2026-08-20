@@ -6,6 +6,7 @@ deploy:
     dynamo: true
     opset_version: 21
     modify_graph: null
+    precision: fp32
   tensorrt:
     enabled: true
     workspace_size: 4294967296
