@@ -26,6 +26,7 @@ import pickle
 from typing import Any
 
 from autoware_ml.datamodule.base import DataModule, Dataset
+from autoware_ml.datamodule.common.serialization import SerializedSampleList
 from autoware_ml.transforms.base import TransformsCompose
 
 logger = logging.getLogger(__name__)
@@ -66,7 +67,9 @@ class T4Segmentation3DDataset(Dataset):
         with open(ann_file, "rb") as file:
             data = pickle.load(file)
 
-        self.data_infos = data["data_list"] if "data_list" in data else data["infos"]
+        self.data_infos = SerializedSampleList(
+            data["data_list"] if "data_list" in data else data["infos"]
+        )
 
     def __len__(self) -> int:
         """Return the number of segmentation samples.
