@@ -342,13 +342,13 @@ class PTv3SegDetModel(PTv3BaseModel):
             n for n in self.get_export_output_names() if n not in ("pred_labels", "pred_probs")
         ]
         return {
-            "encoder": build_encoder_export_spec(context),
-            "seg3d_head": build_seg_head_export_spec(
+            "ptv3_encoder": build_encoder_export_spec(context),
+            "ptv3_seg3d_head": build_seg_head_export_spec(
                 context,
                 self.seg3d_head.prepare_for_export(self.EXPORT_ORDER),
                 ["pred_labels", "pred_probs"],
             ),
-            "det3d_head": build_det_head_export_spec(
+            "ptv3_det3d_head": build_det_head_export_spec(
                 context,
                 self.bev_neck,
                 self.bbox_head.prepare_for_export(),

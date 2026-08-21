@@ -1,0 +1,195 @@
+# Copyright 2026 TIER IV, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""ONNX metadata stamping for deployed artifacts.
+
+Every exported module carries its provenance and inference parameters inside
+the file itself: producer, release, config, export date and the per-module
+``metainfo`` declared in the deploy config — readable by any ONNX consumer
+(onnxruntime, netron, the Autoware nodes) with no side channel. The stamper is
+tracker-agnostic: whichever experiment tracker is active (MLflow today, W&B
+later) reduces to the generic ``tracker`` / ``run_id`` values the caller
+passes in.
+
+Identity model (reverse-DNS namespacing): ``domain`` is the constant
+``jp.tier4.autoware-ml`` — TIER IV owns ``tier4.jp``, so the namespace is
+globally collision-free — and the model name is derived from the config path
+(``tasks/<task>/<model>/<variant>``), never configured by hand.
+
+ONNX ``metadata_props`` are string key/value pairs (``StringStringEntryProto``)
+— no native lists — so every metainfo value is serialized through
+:func:`meta_value_to_str` into an unambiguous comma-separated string.
+"""
+
+from __future__ import annotations
+
+import datetime
+import re
+from collections.abc import Mapping, Sequence
+from pathlib import Path
+from typing import Any
+
+import onnx
+
+PRODUCER_NAME = "Autoware-ML"
+MODEL_DOMAIN = "jp.tier4.autoware-ml"
+UNVERSIONED = "unversioned"
+
+_RELEASE_PATTERN = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+
+# Property keys the stamper owns; user metainfo must not redefine them.
+RESERVED_META_KEYS = frozenset(
+    {
+        "release",
+        "model_name",
+        "task",
+        "module",
+        "config_name",
+        "export_date",
+        "exported_with",
+        "tracker",
+        "run_id",
+    }
+)
+
+
+def release_to_model_version(release: str | None) -> int:
+    """Encode a ``vMAJOR.MINOR.PATCH`` release into ONNX's int64 model_version.
+
+    The encoding is monotonic and reversible: ``major·10000 + minor·100 +
+    patch`` (``v0.0.1`` → 1, ``v0.1.0`` → 100, ``v1.2.3`` → 10203). ``None``
+    (an unversioned dev export) encodes to 0; a malformed release raises — a
+    typo must never ship as a mis-stamped artifact.
+    """
+    if release is None:
+        return 0
+    match = _RELEASE_PATTERN.match(release)
+    if match is None:
+        raise ValueError(f"release {release!r} must match vMAJOR.MINOR.PATCH (e.g. v0.0.1).")
+    major, minor, patch = (int(group) for group in match.groups())
+    if minor >= 100 or patch >= 100:
+        raise ValueError(
+            f"release {release!r} exceeds the model_version encoding (minor/patch < 100)."
+        )
+    return major * 10000 + minor * 100 + patch
+
+
+def parse_config_identity(config_name: str) -> tuple[str, str]:
+    """``(task, model)`` from a config name shaped ``<task>/<model>/<variant>``."""
+    parts = config_name.split("/")
+    if len(parts) < 3:
+        raise ValueError(
+            f"config name {config_name!r} does not follow <task>/<model>/<variant>; "
+            "the model identity cannot be derived."
+        )
+    return parts[0], parts[1]
+
+
+def meta_value_to_str(value: Any) -> str:
+    """Serialize one metainfo value into an ONNX metadata string.
+
+    Scalars map directly (``bool`` → ``"true"``/``"false"``, checked before
+    ``int`` since ``bool`` subclasses it); flat sequences join their serialized
+    elements with commas. Anything that would make the encoding ambiguous or
+    lossy — nested sequences, mappings, ``None``, strings containing a comma —
+    raises.
+    """
+    if isinstance(value, str):
+        if "," in value:
+            raise ValueError(
+                f"metainfo string {value!r} contains a comma; the comma-separated "
+                "encoding would be ambiguous."
+            )
+        return value
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, Sequence):
+        elements = []
+        for element in value:
+            if isinstance(element, Sequence) and not isinstance(element, str):
+                raise ValueError(
+                    f"metainfo sequence {value!r} is nested; only flat sequences "
+                    "serialize to an unambiguous comma-separated string."
+                )
+            elements.append(meta_value_to_str(element))
+        return ",".join(elements)
+    raise ValueError(
+        f"metainfo value {value!r} of type {type(value).__name__} is not serializable; "
+        "supported: str, bool, int, float, flat sequences thereof."
+    )
+
+
+def stamp_onnx_meta(
+    onnx_path: Path | str,
+    *,
+    config_name: str,
+    module: str,
+    release: str | None,
+    export_git_sha: str,
+    metainfo: Mapping[str, Any] | None = None,
+    tracker: str | None = None,
+    run_id: str | None = None,
+) -> None:
+    """Stamp one exported module in place with its identity and provenance.
+
+    Args:
+        onnx_path: The exported (and possibly graph-modified) module file.
+        config_name: Hydra config name, ``<task>/<model>/<variant>``.
+        module: Export module name (``ptv3_encoder``, ``ptv3_det3d_head``, ...).
+        release: ``vMAJOR.MINOR.PATCH`` or ``None`` for an unversioned export.
+        export_git_sha: Repository revision performing the export; recorded as
+            ``producer_version``.
+        metainfo: Per-module inference parameters declared in the deploy config
+            (``deploy.onnx.modules.<module>.metainfo``); each value serialized
+            with :func:`meta_value_to_str`. ``None`` stamps no extra props.
+        tracker / run_id: The active experiment tracker and its deploy run,
+            omitted from the stamp when no tracker is enabled.
+    """
+    task, model_name = parse_config_identity(config_name)
+    model = onnx.load(str(onnx_path))
+    # The original exporter identity (e.g. "pytorch 2.4") is diagnostic gold
+    # for ONNX quirks — preserve it before overwriting the producer fields.
+    exported_with = f"{model.producer_name} {model.producer_version}".strip()
+
+    model.producer_name = PRODUCER_NAME
+    model.producer_version = export_git_sha
+    model.domain = MODEL_DOMAIN
+    model.model_version = release_to_model_version(release)
+    model.doc_string = f"{model_name} ({module}) {release or UNVERSIONED}"
+
+    props = {
+        "release": release or UNVERSIONED,
+        "model_name": model_name,
+        "task": task,
+        "module": module,
+        "config_name": config_name,
+        "export_date": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+        "exported_with": exported_with,
+    }
+    if tracker is not None:
+        props["tracker"] = tracker
+    if run_id is not None:
+        props["run_id"] = run_id
+    for key, value in (metainfo or {}).items():
+        if key in RESERVED_META_KEYS:
+            raise ValueError(
+                f"metainfo key {key!r} collides with an automatically stamped property; "
+                f"reserved keys: {sorted(RESERVED_META_KEYS)}."
+            )
+        props[key] = meta_value_to_str(value)
+    onnx.helper.set_model_props(model, props)
+
+    onnx.save(model, str(onnx_path))

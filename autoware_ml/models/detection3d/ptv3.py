@@ -574,8 +574,8 @@ class PTv3DetectionModel(PTv3BaseModel):
         """Build split PTv3 detection ONNX export specs for encoder and detection head."""
         context = build_ptv3_export_context(self, batch_inputs_dict)
         return {
-            "encoder": build_encoder_export_spec(context),
-            "det3d_head": build_det_head_export_spec(
+            "ptv3_encoder": build_encoder_export_spec(context),
+            "ptv3_det3d_head": build_det_head_export_spec(
                 context,
                 self.bev_neck,
                 self.bbox_head.prepare_for_export(),
