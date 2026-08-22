@@ -43,6 +43,20 @@ def test_release_encoding_rejects_malformed(bad: str) -> None:
         release_to_model_version(bad)
 
 
+def test_release_encoding_reserves_zero_for_unversioned() -> None:
+    with pytest.raises(ValueError, match="reserved"):
+        release_to_model_version("v0.0.0")
+
+
+def test_release_encoding_bounds_to_int64() -> None:
+    # An over-int64 encoding must fail before export instead of at onnx.save.
+    assert release_to_model_version("v922337203685476.99.99") <= 2**63 - 1
+    with pytest.raises(ValueError, match="int64"):
+        release_to_model_version("v922337203685477.99.99")
+    with pytest.raises(ValueError, match="int64"):
+        release_to_model_version("v922337203685478.0.0")
+
+
 def test_config_identity_derivation() -> None:
     assert parse_config_identity("multi/ptv3/voxel012_122m_t4dataset_j6gen2") == (
         "multi",
