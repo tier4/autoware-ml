@@ -10,7 +10,6 @@ from autoware_ml.utils.onnx_meta import (
     MODEL_DOMAIN,
     PRODUCER_NAME,
     meta_value_to_str,
-    parse_config_identity,
     release_to_model_version,
     stamp_onnx_meta,
 )
@@ -55,15 +54,6 @@ def test_release_encoding_bounds_to_int64() -> None:
         release_to_model_version("v922337203685477.99.99")
     with pytest.raises(ValueError, match="int64"):
         release_to_model_version("v922337203685478.0.0")
-
-
-def test_config_identity_derivation() -> None:
-    assert parse_config_identity("multi/ptv3/voxel012_122m_t4dataset_j6gen2") == (
-        "multi",
-        "ptv3",
-    )
-    with pytest.raises(ValueError, match="task"):
-        parse_config_identity("just_a_name")
 
 
 def test_meta_value_serialization() -> None:
@@ -115,11 +105,9 @@ def test_stamp_release_export_with_metainfo(tmp_path) -> None:
     assert model.producer_version == "be5b967"
     assert model.domain == MODEL_DOMAIN
     assert model.model_version == 1
-    assert model.doc_string == "ptv3 (ptv3_det3d_head) v0.0.1"
+    assert model.doc_string == "ptv3_det3d_head v0.0.1"
     props = {p.key: p.value for p in model.metadata_props}
     assert props["release"] == "v0.0.1"
-    assert props["model_name"] == "ptv3"
-    assert props["task"] == "multi"
     assert props["module"] == "ptv3_det3d_head"
     assert props["class_names"] == "car,truck"
     assert props["num_proposals"] == "500"
@@ -128,8 +116,10 @@ def test_stamp_release_export_with_metainfo(tmp_path) -> None:
     assert props["exported_with"] == "pytorch 2.4.0"
     assert props["tracker"] == "mlflow" and props["run_id"] == "run-123"
     assert "export_date" in props
-    for absent in ("export_git_sha", "train_git_sha"):
-        assert absent not in props  # the export sha lives in producer_version only
+    # The export sha lives in producer_version only, and the identity is the
+    # config_name itself, never split into derived keys.
+    for absent in ("export_git_sha", "train_git_sha", "model_name", "task"):
+        assert absent not in props
 
 
 def test_stamp_unversioned_export_without_metainfo(tmp_path) -> None:
@@ -144,7 +134,7 @@ def test_stamp_unversioned_export_without_metainfo(tmp_path) -> None:
     )
     model = onnx.load(str(path))
     assert model.model_version == 0
-    assert model.doc_string == "ptv3 (ptv3_encoder) unversioned"
+    assert model.doc_string == "ptv3_encoder unversioned"
     props = {p.key: p.value for p in model.metadata_props}
     assert props["release"] == "unversioned"
     for absent in ("tracker", "run_id"):

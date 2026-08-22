@@ -16,7 +16,7 @@
 
 Every exported module carries its provenance and inference parameters inside
 the file itself: producer, release, config, export date and the per-module
-``metainfo`` declared in the deploy config. Any ONNX consumer can read them 
+``metainfo`` declared in the deploy config. Any ONNX consumer can read them
 with no side channel. The stamper is tracker-agnostic: whichever experiment
 tracker is active reduces to the generic ``tracker`` / ``run_id`` values the caller
 passes in.
@@ -46,8 +46,6 @@ _MODEL_VERSION_MAX = 2**63 - 1
 RESERVED_META_KEYS = frozenset(
     {
         "release",
-        "model_name",
-        "task",
         "module",
         "config_name",
         "export_date",
@@ -91,17 +89,6 @@ def release_to_model_version(release: str | None) -> int:
             "model_version ONNX can store."
         )
     return version
-
-
-def parse_config_identity(config_name: str) -> tuple[str, str]:
-    """``(task, model)`` from a config name shaped ``<task>/<model>/<variant>``."""
-    parts = config_name.split("/")
-    if len(parts) < 3:
-        raise ValueError(
-            f"config name {config_name!r} does not follow <task>/<model>/<variant>, "
-            "so the model identity cannot be derived."
-        )
-    return parts[0], parts[1]
 
 
 def meta_value_to_str(value: Any) -> str:
@@ -154,7 +141,7 @@ def stamp_onnx_meta(
 
     Args:
         onnx_path: The exported (and possibly graph-modified) module file.
-        config_name: Hydra config name, ``<task>/<model>/<variant>``.
+        config_name: Config name the deploy ran with, stamped as provenance.
         module: Export module name (``ptv3_encoder``, ``ptv3_det3d_head``, ...).
         release: ``vMAJOR.MINOR.PATCH`` or ``None`` for an unversioned export.
         export_git_sha: Repository revision performing the export, recorded as
@@ -165,22 +152,17 @@ def stamp_onnx_meta(
         tracker / run_id: The active experiment tracker and its deploy run,
             omitted from the stamp when no tracker is enabled.
     """
-    task, model_name = parse_config_identity(config_name)
     model = onnx.load(str(onnx_path))
-    # The original exporter identity (e.g. "pytorch 2.4") is diagnostic gold
-    # for ONNX quirks, so preserve it before overwriting the producer fields.
     exported_with = f"{model.producer_name} {model.producer_version}".strip()
 
     model.producer_name = PRODUCER_NAME
     model.producer_version = export_git_sha
     model.domain = MODEL_DOMAIN
     model.model_version = release_to_model_version(release)
-    model.doc_string = f"{model_name} ({module}) {release or UNVERSIONED}"
+    model.doc_string = f"{module} {release or UNVERSIONED}"
 
     props = {
         "release": release or UNVERSIONED,
-        "model_name": model_name,
-        "task": task,
         "module": module,
         "config_name": config_name,
         "export_date": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),

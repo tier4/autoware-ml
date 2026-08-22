@@ -106,8 +106,8 @@ or replace `--weights` entries until every key is covered.
 
 Every exported module carries its identity and provenance inside the ONNX
 file: producer, git commit of the export, release (encoded into
-`model_version` as `major * 10000 + minor * 100 + patch`), model name and
-task derived from the config path, export date, and the linked deploy run.
+`model_version` as `major * 10000 + minor * 100 + patch`), the config name,
+export date, and the linked deploy run.
 
 Per-module inference parameters come from the deploy config's `metainfo`
 block. The pipeline serializes whatever the config declares without
