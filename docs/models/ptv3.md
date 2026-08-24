@@ -133,6 +133,40 @@ graph contains no data-dependent pooling shape discovery. Pooled feature
 reduction is implemented with native ONNX `Gather` and the
 `autoware::SegmentCSR` plugin.
 
+### Attention window fill at export
+
+Serialized attention works on fixed-size windows, so the last window of a sample
+is short whenever the voxel count is not a multiple of the patch size. Training
+fills those slots by borrowing the tail of the preceding window, which makes the
+last window a full-size *sliding* window over the final `patch_size` tokens -
+every slot holds a real token, so nothing needs masking.
+
+The export path reproduces that fill exactly. For a sample of `n` voxels and a
+window of `K`, slot `i` of the padded index array is
+
+```text
+i                                    if i < n
+(i - K + ceil(K / n) * n) mod n      otherwise
+```
+
+For `n > K` the added multiple of `n` is exactly `n`, the remainder is inert, and
+the expression reduces to `i - K` - the same backward borrow training performs.
+For `n <= K` there is no preceding window, so it wraps around and cycles through
+the sample instead. Cycling keeps every key multiplicity within one of every
+other, and is *exact* whenever `n` divides `K`, because a uniform multiplicity
+cancels in the softmax. The `ceil(K / n) * n` term keeps the shifted index
+non-negative, so the result does not depend on the runtime's sign convention for
+integer modulo.
+
+This matters beyond the small-sample case. Filling the trailing slots by
+repeating the last token instead - as a naive clamp would - leaves that token
+duplicated up to `K - 1` times inside an unmasked softmax, where it dominates
+every query in the window. That is a silent divergence from training on *every*
+frame whose voxel count is not a multiple of `patch_size`.
+
+Because the window size stays static and `n` enters only as a value, no shape in
+the graph depends on the data.
+
 ### Split-export module contract
 
 The split export produces one graph per `deploy.onnx.modules` entry:
