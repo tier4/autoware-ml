@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
+import onnx
 import pytest
 import torch
+from omegaconf import OmegaConf
+from onnx import TensorProto
 
 from autoware_ml.models.detection3d.backbones.second import SECONDBackbone
 from autoware_ml.models.detection3d.encoders.sparse import SparseConv3d as NativeSparseConv3d
@@ -26,6 +30,7 @@ from autoware_ml.models.detection3d.task_modules.match_costs import (
 from autoware_ml.models.detection3d.transfusion import TransFusionDetectionModel
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
 from autoware_ml.ops.spconv.sparse_conv import SubMConv3d as ExportableSubMConv3d
+from autoware_ml.utils.onnx_precision import validate_module_onnx_precision
 
 # Scaled-down mirror of tasks/detection3d/transfusion/base.yaml: an 8 m range
 # with 0.25 m voxels gives a 32x32x40 grid, and the SparseEncoder's three
@@ -172,6 +177,23 @@ def _build_head(**kwargs) -> TransFusionHead:
     )
 
 
+def _export_attention(
+    attention: ExportableMultiheadAttention, output_path: Path
+) -> onnx.ModelProto:
+    query = torch.randn(1, 3, 16)
+    key = torch.randn(1, 5, 16)
+    torch.onnx.export(
+        attention,
+        (query, key, key),
+        output_path,
+        input_names=["query", "key", "value"],
+        output_names=["output"],
+        opset_version=17,
+        dynamo=False,
+    )
+    return onnx.load(output_path)
+
+
 @pytest.mark.skipif(
     not IS_SPCONV_AVAILABLE or not torch.cuda.is_available(),
     reason="TransFusion sparse middle encoder requires CUDA spconv",
@@ -219,6 +241,74 @@ def test_transfusion_build_export_spec_prepares_modules_without_mutating_model()
     assert not any(
         isinstance(module, (NativeSubMConv3d, NativeSparseConv3d))
         for module in spec.module.pts_middle_encoder.modules()
+    )
+
+
+def test_transfusion_bf16_export_emits_fusion_pattern(tmp_path: Path) -> None:
+    head = _build_head(use_bf16_cross_attention=True).prepare_for_export()
+    self_attention = head.decoder[0].self_attn
+    cross_attention = head.decoder[0].cross_attn
+    assert head.required_onnx_precision == "fp16"
+    assert self_attention.fuse_attention and not self_attention.use_bf16
+    assert cross_attention.fuse_attention and cross_attention.use_bf16
+    validate_module_onnx_precision(head, OmegaConf.create({"precision": "fp16"}))
+
+    model = _export_attention(cross_attention, tmp_path / "cross_attention.onnx")
+    assert not any(node.op_type in {"ReduceMax", "Sub"} for node in model.graph.node)
+    assert (
+        sum(
+            any(
+                attribute.name == "to" and attribute.i == TensorProto.BFLOAT16
+                for attribute in node.attribute
+            )
+            for node in model.graph.node
+            if node.op_type == "Cast"
+        )
+        == 3
+    )
+
+    softmax = next(node for node in model.graph.node if node.op_type == "Softmax")
+    producers = {output: node for node in model.graph.node for output in node.output}
+    assert producers[softmax.input[0]].op_type == "MatMul"
+    consumers = [node for node in model.graph.node if softmax.output[0] in node.input]
+    assert len(consumers) == 1 and consumers[0].op_type == "MatMul"
+
+
+def test_transfusion_bf16_export_rejects_non_fp16_precision() -> None:
+    head = _build_head(use_bf16_cross_attention=True).prepare_for_export()
+
+    with pytest.raises(
+        ValueError,
+        match="TransFusionHead requires deploy.onnx.precision='fp16'",
+    ):
+        validate_module_onnx_precision(head, OmegaConf.create({"precision": "fp32"}))
+
+
+def test_transfusion_default_export_keeps_explicit_attention(tmp_path: Path) -> None:
+    head = _build_head().prepare_for_export()
+    cross_attention = head.decoder[0].cross_attn
+    assert head.required_onnx_precision is None
+    assert not cross_attention.fuse_attention
+    assert not cross_attention.use_bf16
+
+    model = _export_attention(cross_attention, tmp_path / "explicit_cross_attention.onnx")
+    producers = {output: node for node in model.graph.node for output in node.output}
+    softmax = next(node for node in model.graph.node if node.op_type == "Softmax")
+    subtract = producers[softmax.input[0]]
+    assert subtract.op_type == "Sub"
+    assert producers[subtract.input[1]].op_type == "ReduceMax"
+
+    consumers = [node for node in model.graph.node if softmax.output[0] in node.input]
+    assert len(consumers) == 1 and consumers[0].op_type == "Cast"
+    cast_consumers = [node for node in model.graph.node if consumers[0].output[0] in node.input]
+    assert len(cast_consumers) == 1 and cast_consumers[0].op_type == "MatMul"
+    assert not any(
+        any(
+            attribute.name == "to" and attribute.i == TensorProto.BFLOAT16
+            for attribute in node.attribute
+        )
+        for node in model.graph.node
+        if node.op_type == "Cast"
     )
 
 
