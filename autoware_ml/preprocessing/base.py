@@ -19,9 +19,7 @@ and model forward passes.
 """
 
 from collections.abc import Sequence
-from typing import Any, Self
-
-import torch.nn as nn
+from typing import Any
 
 
 class DataPreprocessing:
@@ -35,8 +33,9 @@ class DataPreprocessing:
     current batch dictionary and returns updates to merge into it.
 
     Args:
-        pipeline: List of callable layers to apply sequentially.
-            Each layer should accept ``dict[str, Any]`` and return ``dict[str, Any]``.
+        pipeline: List of callable layers to apply sequentially. Each layer
+            should accept ``(dict[str, Any], *, is_training: bool)`` and return
+            ``dict[str, Any]``.
 
     Example:
         ```python
@@ -57,27 +56,7 @@ class DataPreprocessing:
         """
         self.pipeline = list(pipeline)
 
-    def train(self, mode: bool = True) -> Self:
-        """Propagate the train/eval mode to ``nn.Module`` pipeline layers.
-
-        The pipeline is deliberately not registered as part of the neural
-        network, so Lightning's ``model.train()``/``model.eval()`` never
-        reaches it. Layers that behave differently between training and
-        evaluation (for example a voxelizer with a larger evaluation budget)
-        rely on the owning module forwarding its mode here.
-
-        Args:
-            mode: ``True`` for training behavior, ``False`` for evaluation.
-
-        Returns:
-            This ``DataPreprocessing`` instance for chaining.
-        """
-        for layer in self.pipeline:
-            if isinstance(layer, nn.Module):
-                layer.train(mode)
-        return self
-
-    def __call__(self, batch_inputs_dict: dict[str, Any]) -> dict[str, Any]:
+    def __call__(self, batch_inputs_dict: dict[str, Any], *, is_training: bool) -> dict[str, Any]:
         """Apply preprocessing layers after the batch is already on device.
 
         The input dictionary is mutated in place; the same object is also
@@ -87,11 +66,15 @@ class DataPreprocessing:
             batch_inputs_dict: Collated batch dictionary on the target device.
                 Mutated in place: each layer's returned mapping is merged into
                 this dict.
+            is_training: Whether the owning model is in training mode. Passed
+                to every layer so mode-dependent behavior (for example a
+                voxelizer with a larger evaluation budget) never relies on
+                implicit module state.
 
         Returns:
             The same ``batch_inputs_dict`` with preprocessing applied.
         """
         for layer in self.pipeline:
-            batch_inputs_dict |= layer(batch_inputs_dict)
+            batch_inputs_dict |= layer(batch_inputs_dict, is_training=is_training)
 
         return batch_inputs_dict
