@@ -14,7 +14,7 @@ from autoware_ml.transforms.point_cloud.geometry import (
     RandomRotateTargetAngle,
 )
 from autoware_ml.transforms.point_cloud.loading import LoadPointsFromFile
-from autoware_ml.transforms.point_cloud.perturbation import RandomShift
+from autoware_ml.transforms.point_cloud.perturbation import RandomShift, RandomStrengthJitter
 from autoware_ml.transforms.point_cloud.sampling import (
     ElasticDistortion,
     GridSample,
@@ -313,6 +313,45 @@ class TestPointCloudTransforms:
 
         assert output["coord"].shape[0] == 4
         assert output["strength"].shape[0] == 4
+
+    def test_random_rotate_target_angle_rotates_boxes_with_points(self):
+        sample = {
+            "coord": np.array([[2.0, 0.0, 1.0]], dtype=np.float32),
+            "gt_boxes": np.array([[2.0, 0.0, 1.0, 4.0, 2.0, 1.5, 0.1, 3.0, 0.0]], dtype=np.float32),
+        }
+
+        output = RandomRotateTargetAngle(angle=[0.5], center=[0.0, 0.0, 0.0], p=1.0)(sample)
+
+        box = output["gt_boxes"][0]
+        assert np.allclose(output["coord"], [[0.0, 2.0, 1.0]], atol=1e-6)
+        assert np.allclose(box[:3], [0.0, 2.0, 1.0], atol=1e-6)
+        assert np.allclose(box[3:6], [4.0, 2.0, 1.5])
+        assert np.isclose(box[6], 0.1 + 0.5 * np.pi)
+        assert np.allclose(box[7:9], [0.0, 3.0], atol=1e-6)
+
+    def test_random_rotate_target_angle_rejects_boxes_off_z_axis(self):
+        sample = {
+            "coord": np.zeros((1, 3), dtype=np.float32),
+            "gt_boxes": np.zeros((1, 9), dtype=np.float32),
+        }
+
+        with pytest.raises(ValueError, match="axis='z'"):
+            RandomRotateTargetAngle(angle=[0.5], axis="x", p=1.0)(sample)
+
+    def test_random_strength_jitter_stays_normalized_and_monotonic(self):
+        np.random.seed(0)
+        sample = {"strength": np.linspace(0.0, 1.0, 5, dtype=np.float32).reshape(5, 1)}
+
+        output = RandomStrengthJitter(
+            gamma_range=[0.8, 1.25], scale_range=[0.9, 1.1], shift_range=[-0.02, 0.02]
+        )(sample)
+
+        strength = output["strength"]
+        assert strength.shape == (5, 1)
+        assert strength.dtype == np.float32
+        assert strength.min() >= 0.0
+        assert strength.max() <= 1.0
+        assert np.all(np.diff(strength[:, 0]) >= 0.0)
 
     def test_grid_sample_keeps_arrays_aligned(self):
         sample = {

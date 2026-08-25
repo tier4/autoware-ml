@@ -49,6 +49,15 @@ class PreparePointSegInput(BaseTransform):
 
     def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
         """Convert semantic mask into the standardized ``segment`` key."""
+        mask = input_dict["pts_semantic_mask"]
+        num_points = input_dict["coord"].shape[0]
+        if mask.shape[0] != num_points:
+            raise ValueError(
+                "PreparePointSegInput requires one semantic label per point: "
+                f"got {mask.shape[0]} labels for {num_points} points. A mismatch here "
+                "would silently desynchronize 'segment' from 'coord' in downstream "
+                "point filters and sampling."
+            )
         return {
-            "segment": input_dict["pts_semantic_mask"].astype(np.int64),
+            "segment": mask.astype(np.int64),
         }

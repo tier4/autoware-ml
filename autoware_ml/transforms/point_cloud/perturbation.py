@@ -59,6 +59,58 @@ class RandomJitter(BaseTransform):
         return input_dict
 
 
+class RandomStrengthJitter(BaseTransform):
+    """Perturb the normalized intensity with a random gamma, scale, and shift.
+
+    Applies ``clip(strength ** gamma * scale + shift, 0, 1)`` with parameters
+    drawn uniformly per sample, emulating reflectivity-calibration differences
+    between sensors.
+    """
+
+    _required_keys = ["strength"]
+
+    def __init__(
+        self,
+        *,
+        p: float | None = None,
+        gamma_range: Sequence[float],
+        scale_range: Sequence[float],
+        shift_range: Sequence[float],
+    ) -> None:
+        """Initialize the RandomStrengthJitter transform.
+
+        Args:
+            p: Probability of applying the transform (``None`` means always apply).
+            gamma_range: Min and max exponent applied to the normalized intensity.
+            scale_range: Min and max multiplicative factor.
+            shift_range: Min and max additive offset.
+        """
+        for name, bounds in (
+            ("gamma_range", gamma_range),
+            ("scale_range", scale_range),
+            ("shift_range", shift_range),
+        ):
+            if len(bounds) != 2 or bounds[0] > bounds[1]:
+                raise ValueError(f"{name} must be an ascending [min, max] pair, got {bounds}.")
+        if gamma_range[0] <= 0.0:
+            raise ValueError(f"gamma_range values must be positive, got {gamma_range}.")
+        self.p = p
+        self.gamma_range = tuple(gamma_range)
+        self.scale_range = tuple(scale_range)
+        self.shift_range = tuple(shift_range)
+
+    def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
+        """Apply the sampled gamma/scale/shift to the strength channel."""
+        gamma = np.random.uniform(*self.gamma_range)
+        scale = np.random.uniform(*self.scale_range)
+        shift = np.random.uniform(*self.shift_range)
+        strength = input_dict["strength"].astype(np.float32)
+        input_dict["strength"] = np.clip(
+            np.power(strength, gamma) * scale + shift, 0.0, 1.0
+        ).astype(np.float32)
+        return input_dict
+
+
 class RandomShift(BaseTransform):
     """Translate point coordinates by a sampled per-axis offset."""
 

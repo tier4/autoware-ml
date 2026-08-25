@@ -6,6 +6,7 @@ import logging
 
 import numpy as np
 import numpy.typing as npt
+import pytest
 
 from autoware_ml.datamodule.pipeline_context import PipelineContext
 from autoware_ml.transforms.base import BaseTransform, TransformsCompose
@@ -64,6 +65,17 @@ def test_prepare_point_seg_input_produces_segment_key() -> None:
     output = PreparePointSegInput()(sample)
 
     assert np.array_equal(output["segment"], np.array([7, 8], dtype=np.int64))
+
+
+def test_prepare_point_seg_input_rejects_mask_point_count_mismatch() -> None:
+    sample = {
+        "points": np.array([[1.0, 2.0, 3.0, 255.0], [4.0, 5.0, 6.0, 0.0]], dtype=np.float32),
+        "pts_semantic_mask": np.array([7, 8, 9], dtype=np.int64),
+    }
+    sample |= PreparePointCloudInput()(sample)
+
+    with pytest.raises(ValueError, match="one semantic label per point"):
+        PreparePointSegInput()(sample)
 
 
 def test_frustum_mix_combines_points_from_source_and_mix_sample() -> None:

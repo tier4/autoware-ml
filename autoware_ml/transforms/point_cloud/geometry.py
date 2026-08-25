@@ -59,8 +59,13 @@ class RandomRotateTargetAngle(BaseTransform):
         self.center = np.asarray(center, dtype=np.float32) if center is not None else None
 
     def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
-        """Rotate point coordinates by one selected target angle."""
+        """Rotate point coordinates (and boxes) by one selected target angle."""
         g3d.require_point_cloud(input_dict)
+        if "gt_boxes" in input_dict and self.axis != "z":
+            raise ValueError(
+                "RandomRotateTargetAngle with 'gt_boxes' requires axis='z'; a rotation "
+                f"around '{self.axis}' cannot be expressed as a yaw update."
+            )
         angle = float(np.random.choice(self.angle)) * np.pi
         rotation = g3d.rotation_matrix(self.axis, angle)
         reference = input_dict.get("coord")
@@ -69,6 +74,7 @@ class RandomRotateTargetAngle(BaseTransform):
         center = g3d.resolve_rotation_center(np.asarray(reference)[:, :3], self.center)
         g3d.rotate_points_about_center(input_dict, rotation, center)
         g3d.transform_normal(input_dict, rotation)
+        g3d.rotate_boxes_about_center(input_dict, rotation, angle, center)
         return input_dict
 
 
