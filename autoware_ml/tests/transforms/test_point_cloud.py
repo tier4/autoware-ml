@@ -203,6 +203,76 @@ class TestPointCloudTransforms:
         assert np.allclose(points[:2, 4], 0.0)
         assert np.allclose(points[2:, 4], 0.1)
 
+    def test_multi_sweeps_remove_close_removes_axis_aligned_box(self):
+        """The removed region is the box |x|,|y| < close_radius, not a radial circle:
+        (0.9, 0.9) lies outside the r=1.0 circle but inside the box, so only the box
+        semantics remove it."""
+        key_points = np.array([[5.0, 5.0, 0.0, 0.0]], dtype=np.float32)
+        sweep_points = np.array(
+            [
+                [0.9, 0.9, 0.0, 0.0],  # inside the box, outside the circle -> removed
+                [0.5, -0.5, 0.0, 0.0],  # inside the box -> removed
+                [1.05, 0.0, 0.0, 0.0],  # |x| >= radius -> kept
+                [0.0, -1.2, 0.0, 0.0],  # |y| >= radius -> kept
+            ],
+            dtype=np.float32,
+        )
+
+        transform = LoadPointsFromMultiSweeps(
+            sweeps_num=2,
+            load_dim=4,
+            use_dim=[0, 1, 2, 3],
+            remove_close=True,
+            close_radius=1.0,
+        )
+        output = transform({"points": key_points, "sweeps": [{"points": sweep_points}]})
+
+        points = output["points"]
+        # key point + the two sweep points outside the box
+        assert points.shape == (3, 4)
+        assert not np.any(np.all(np.isclose(points[:, :2], [0.9, 0.9]), axis=1))
+        assert np.any(np.all(np.isclose(points[:, :2], [1.05, 0.0]), axis=1))
+        assert np.any(np.all(np.isclose(points[:, :2], [0.0, -1.2]), axis=1))
+
+    def test_multi_sweeps_takes_nearest_sweeps_in_test_mode(self):
+        sweeps = [
+            {"points": np.full((1, 4), 10.0, dtype=np.float32)},
+            {"points": np.full((1, 4), 20.0, dtype=np.float32)},
+            {"points": np.full((1, 4), 30.0, dtype=np.float32)},
+        ]
+        transform = LoadPointsFromMultiSweeps(sweeps_num=2, load_dim=4, use_dim=[0, 1, 2, 3])
+
+        output = transform({"points": np.zeros((1, 4), dtype=np.float32), "sweeps": sweeps})
+
+        # test_mode defaults to True: always the nearest sweep, never a random one
+        assert output["points"].shape == (2, 4)
+        assert np.allclose(output["points"][1], 10.0)
+
+    def test_multi_sweeps_samples_sweeps_randomly_when_not_test_mode(self, monkeypatch):
+        sweeps = [
+            {"points": np.full((1, 4), 10.0, dtype=np.float32)},
+            {"points": np.full((1, 4), 20.0, dtype=np.float32)},
+            {"points": np.full((1, 4), 30.0, dtype=np.float32)},
+        ]
+        calls = {}
+
+        def fake_choice(num_entries, size, replace):
+            calls["args"] = (num_entries, size, replace)
+            return np.array([2])
+
+        monkeypatch.setattr(
+            "autoware_ml.transforms.point_cloud.sweeps.np.random.choice", fake_choice
+        )
+        transform = LoadPointsFromMultiSweeps(
+            sweeps_num=2, load_dim=4, use_dim=[0, 1, 2, 3], test_mode=False
+        )
+
+        output = transform({"points": np.zeros((1, 4), dtype=np.float32), "sweeps": sweeps})
+
+        # Sampled uniformly without replacement across all entries, not sliced to the nearest
+        assert calls["args"] == (3, 1, False)
+        assert np.allclose(output["points"][1], 30.0)
+
     def test_multi_sweeps_time_dim_requires_key_timestamp(self):
         transform = LoadPointsFromMultiSweeps(
             sweeps_num=2, load_dim=5, use_dim=[0, 1, 2, 3, 4], time_dim=4
