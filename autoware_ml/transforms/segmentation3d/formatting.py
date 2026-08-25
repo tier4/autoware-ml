@@ -54,9 +54,7 @@ class PreparePointSegInput(BaseTransform):
         if mask.shape[0] != num_points:
             raise ValueError(
                 "PreparePointSegInput requires one semantic label per point: "
-                f"got {mask.shape[0]} labels for {num_points} points. A mismatch here "
-                "would silently desynchronize 'segment' from 'coord' in downstream "
-                "point filters and sampling."
+                f"got {mask.shape[0]} labels for {num_points} points."
             )
         return {
             "segment": mask.astype(np.int64),
