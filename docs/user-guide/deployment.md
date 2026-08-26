@@ -157,20 +157,6 @@ Engines are always built strongly typed: the builder uses exactly the precisions
 the ONNX carries and never picks its own. Choose the engine's numerics with
 `deploy.onnx.precision`.
 
-PTv3 detection can export fusion-ready TransHead attention while keeping the long
-cross-attention core in bf16:
-
-```yaml
-model:
-  bbox_head:
-    use_bf16_cross_attention: true
-deploy:
-  onnx:
-    precision: fp16
-```
-
-Both settings are required, and the resulting model requires an SM80 or newer GPU.
-
 ## Model-Owned Export Wrappers
 
 The preferred deployment path is to keep export logic inside the model. Models
