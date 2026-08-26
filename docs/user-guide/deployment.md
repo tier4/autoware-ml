@@ -122,8 +122,11 @@ deploy:
           class_names: ${dataset.detection3d.class_names}
 ```
 
-Values must be scalars or flat lists. Anything ambiguous, and any key that
-collides with the automatically stamped properties, fails at export time.
+Each `metainfo` value is stamped as one compact JSON document (scalars,
+strings, lists and mappings, nested as declared), while the provenance
+properties above are plain strings, so a consumer reads a parameter with any
+JSON parser. Non-finite floats, values JSON cannot represent, and keys that
+collide with the automatically stamped properties fail at export time.
 
 ## Configuration
 

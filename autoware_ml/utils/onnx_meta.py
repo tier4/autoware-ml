@@ -16,8 +16,9 @@
 
 Every exported module carries its provenance and inference parameters inside
 the file itself: producer, release, config, export date and the per-module
-``metainfo`` declared in the deploy config. Any ONNX consumer can read them
-with no side channel. The stamper is tracker-agnostic: whichever experiment
+``metainfo`` declared in the deploy config. Provenance properties are plain
+strings and metainfo values are JSON documents, so any ONNX consumer can read
+them with no side channel. The stamper is tracker-agnostic: whichever experiment
 tracker is active reduces to the generic ``tracker`` / ``run_id`` values the caller
 passes in.
 """
@@ -25,8 +26,9 @@ passes in.
 from __future__ import annotations
 
 import datetime
+import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -92,38 +94,15 @@ def release_to_model_version(release: str | None) -> int:
 
 
 def meta_value_to_str(value: Any) -> str:
-    """Serialize one metainfo value into an ONNX metadata string.
+    """Serialize one metainfo value into its ONNX metadata string.
 
-    Scalars map directly. ``bool`` becomes ``"true"`` or ``"false"`` and is
-    checked before ``int`` since ``bool`` subclasses it. Flat sequences join
-    their serialized elements with commas. Anything that would make the
-    encoding ambiguous or lossy raises.
+    Every value is one compact JSON document, so a consumer parses the property
+    with any JSON parser and gets typed scalars, strings, lists and mappings
+    back, nested as the config declares them. Floats keep their shortest
+    round-trip form. NaN and infinity are rejected instead of being stamped as
+    non-standard tokens, and a value JSON cannot represent raises.
     """
-    if isinstance(value, str):
-        if "," in value:
-            raise ValueError(
-                f"metainfo string {value!r} contains a comma, so the comma-separated "
-                "encoding would be ambiguous."
-            )
-        return value
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, (int, float)):
-        return str(value)
-    if isinstance(value, Sequence):
-        elements = []
-        for element in value:
-            if isinstance(element, Sequence) and not isinstance(element, str):
-                raise ValueError(
-                    f"metainfo sequence {value!r} is nested. Only flat sequences "
-                    "serialize to an unambiguous comma-separated string."
-                )
-            elements.append(meta_value_to_str(element))
-        return ",".join(elements)
-    raise ValueError(
-        f"metainfo value {value!r} of type {type(value).__name__} is not serializable. "
-        "Supported: str, bool, int, float, flat sequences thereof."
-    )
+    return json.dumps(value, separators=(",", ":"), allow_nan=False)
 
 
 def stamp_onnx_meta(
@@ -147,8 +126,8 @@ def stamp_onnx_meta(
         export_git_sha: Repository revision performing the export, recorded as
             ``producer_version``.
         metainfo: Per-module inference parameters declared in the deploy config
-            (``deploy.onnx.modules.<module>.metainfo``), each value serialized
-            with :func:`meta_value_to_str`. ``None`` stamps no extra props.
+            (``deploy.onnx.modules.<module>.metainfo``), each value stamped as a
+            JSON document by :func:`meta_value_to_str`. ``None`` stamps no extra props.
         tracker / run_id: The active experiment tracker and its deploy run,
             omitted from the stamp when no tracker is enabled.
     """

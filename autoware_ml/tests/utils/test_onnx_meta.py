@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import onnx
 import pytest
 from onnx import TensorProto, helper
@@ -57,29 +59,36 @@ def test_release_encoding_bounds_to_int64() -> None:
 
 
 def test_meta_value_serialization() -> None:
-    assert meta_value_to_str("z-trans") == "z-trans"
+    assert meta_value_to_str("z-trans") == '"z-trans"'
     assert meta_value_to_str(True) == "true"
     assert meta_value_to_str(False) == "false"
     assert meta_value_to_str(500) == "500"
     assert meta_value_to_str(-122.88) == "-122.88"
-    assert meta_value_to_str(["z", "z-trans"]) == "z,z-trans"
-    assert meta_value_to_str([0.12, 0.12, 0.12]) == "0.12,0.12,0.12"
-    assert meta_value_to_str((2, 2, 2, 2)) == "2,2,2,2"
+    assert meta_value_to_str(["z", "z-trans"]) == '["z","z-trans"]'
+    assert meta_value_to_str([0.12, 0.12, 0.12]) == "[0.12,0.12,0.12]"
+    assert meta_value_to_str((2, 2, 2, 2)) == "[2,2,2,2]"
+    assert meta_value_to_str([[1, 2], [3, 4]]) == "[[1,2],[3,4]]"
+    assert meta_value_to_str({"car": 0.5, "truck": 0.4}) == '{"car":0.5,"truck":0.4}'
+    assert meta_value_to_str("car,truck") == '"car,truck"'
 
 
 @pytest.mark.parametrize(
-    "bad",
-    [
-        [[1, 2], [3, 4]],  # nested sequence
-        {"a": 1},  # mapping
-        None,
-        "car,truck",  # comma would make the encoding ambiguous
-        ["car,truck"],
-    ],
+    "value",
+    [500, -122.88, True, "z-trans", [0.12, 0.12, 0.12], ["car", "truck"], {"car": 1}],
 )
-def test_meta_value_serialization_rejects_ambiguous(bad) -> None:
+def test_meta_value_round_trips_through_json(value) -> None:
+    assert json.loads(meta_value_to_str(value)) == value
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), [1.0, float("-inf")]])
+def test_meta_value_serialization_rejects_non_finite(bad) -> None:
     with pytest.raises(ValueError):
         meta_value_to_str(bad)
+
+
+def test_meta_value_serialization_rejects_unsupported_types() -> None:
+    with pytest.raises(TypeError):
+        meta_value_to_str(object())
 
 
 def test_stamp_release_export_with_metainfo(tmp_path) -> None:
@@ -109,10 +118,10 @@ def test_stamp_release_export_with_metainfo(tmp_path) -> None:
     props = {p.key: p.value for p in model.metadata_props}
     assert props["release"] == "v0.0.1"
     assert props["module"] == "ptv3_det3d_head"
-    assert props["class_names"] == "car,truck"
+    assert props["class_names"] == '["car","truck"]'
     assert props["num_proposals"] == "500"
     assert props["has_twist"] == "true"
-    assert props["post_center_range"] == "-132.88,-132.88,-5.0,132.88,132.88,12.0"
+    assert props["post_center_range"] == "[-132.88,-132.88,-5.0,132.88,132.88,12.0]"
     assert props["exported_with"] == "pytorch 2.4.0"
     assert props["tracker"] == "mlflow" and props["run_id"] == "run-123"
     assert "export_date" in props
