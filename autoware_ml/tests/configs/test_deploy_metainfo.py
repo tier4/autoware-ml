@@ -15,6 +15,7 @@ PTV3_CONFIGS = [
     "tasks/segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2",
     "tasks/detection3d/ptv3/voxel012_122m_t4dataset_j6gen2",
 ]
+DET_CONFIGS = [name for name in PTV3_CONFIGS if "segmentation3d" not in name]
 
 
 def _compose(config_name: str):
@@ -43,3 +44,13 @@ def test_metainfo_interpolations_resolve_for_every_module(config_name: str) -> N
         assert metainfo, f"{config_name}: {module_name} has an empty metainfo block"
         if module_name in ("ptv3_seg3d_head", "ptv3_det3d_head"):
             assert len(metainfo["class_names"]) > 0
+
+
+@pytest.mark.parametrize("config_name", DET_CONFIGS)
+def test_det_head_has_twist_follows_use_velocity(config_name: str) -> None:
+    # The runtime learns from has_twist whether a velocity output exists, so it
+    # is derived from the head configuration instead of being declared twice.
+    cfg = _compose(config_name)
+    module_cfg = merge_module_onnx_cfg(cfg.deploy.onnx, "ptv3_det3d_head")
+    assert isinstance(module_cfg.metainfo.has_twist, bool)
+    assert module_cfg.metainfo.has_twist == cfg.model.bbox_head.use_velocity

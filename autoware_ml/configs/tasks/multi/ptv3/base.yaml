@@ -161,7 +161,7 @@ deploy:
         output_names: [dense_heatmap, query_heatmap_score, query_labels, heatmap, center, height, dim, rot, vel]
         metainfo:
           bbox_voxel_size: ${model.bbox_head.bbox_coder.voxel_size}
-          has_twist: true
+          has_twist: ${model.bbox_head.use_velocity}
           num_proposals: ${model.bbox_head.num_proposals}
           post_center_range: ${model.bbox_head.bbox_coder.post_center_range}
           class_names: ${dataset.detection3d.class_names}
