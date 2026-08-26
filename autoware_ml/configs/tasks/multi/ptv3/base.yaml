@@ -156,7 +156,7 @@ deploy:
         output_names: [pred_labels, pred_probs]
         metainfo:
           dec_depths: ${model.seg3d_head.dec_depths}
-          class_names: ${dataset.segmentation3d.class_names}
+          class_names: ${seg_class_names:${dataset.segmentation3d.class_mapping}, ${dataset.segmentation3d.num_classes}}
       ptv3_det3d_head:
         output_names: [dense_heatmap, query_heatmap_score, query_labels, heatmap, center, height, dim, rot, vel]
         metainfo:

@@ -7,6 +7,7 @@ from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from omegaconf import OmegaConf
 
+from autoware_ml.configs.resolvers import register_config_resolvers
 from autoware_ml.models.segmentation3d.ptv3_base import PTv3BaseModel
 from autoware_ml.utils.deploy import merge_module_onnx_cfg
 
@@ -19,6 +20,7 @@ DET_CONFIGS = [name for name in PTV3_CONFIGS if "segmentation3d" not in name]
 
 
 def _compose(config_name: str):
+    register_config_resolvers()
     GlobalHydra.instance().clear()
     with initialize_config_module(version_base=None, config_module="autoware_ml.configs"):
         return compose(config_name=config_name)
