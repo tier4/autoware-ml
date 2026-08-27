@@ -1,0 +1,25 @@
+# @package model.encoder
+_target_: autoware_ml.models.segmentation3d.encoders.ptv3.LitePTEncoder
+in_channels: 4
+order: [z, z-trans, hilbert, hilbert-trans]
+stride: [2, 2, 2, 2]
+enc_depths: [2, 2, 2, 6, 2]
+enc_channels: [32, 64, 128, 256, 512]
+enc_num_head: [1, 2, 4, 8, 16]
+enc_patch_size: [1024, 1024, 1024, 1024, 1024]
+enc_conv: [true, true, true, false, false]
+enc_attn: [false, false, false, true, true]
+enc_rope_base: 100.0
+mlp_ratio: 4
+qkv_bias: true
+qk_scale: null
+attn_drop: 0.0
+proj_drop: 0.0
+drop_path: 0.3
+pre_norm: true
+shuffle_orders: true
+enable_rpe: false
+enable_flash: true
+upcast_attention: false
+upcast_softmax: false
+stem_type: linear

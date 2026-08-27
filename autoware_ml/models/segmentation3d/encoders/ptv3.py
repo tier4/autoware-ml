@@ -116,6 +116,36 @@ class SerializedPoolingMeta:
     serialized_inverse: torch.Tensor  # [O, M] inverse of `serialized_order`
 
 
+def expand_stage_flags(
+    value: Sequence[Any] | Any | None, stage_count: int, default: Any, name: str
+) -> list[Any]:
+    """Broadcast a per-stage option into an explicit one-entry-per-stage list.
+
+    Accepts ``None`` (use ``default`` everywhere), a scalar (same value
+    everywhere), or an explicit sequence of exactly ``stage_count`` entries.
+
+    Args:
+        value: Configured option value.
+        stage_count: Number of stages the option must cover.
+        default: Value used when ``value`` is ``None``.
+        name: Option name, used in the error message.
+
+    Returns:
+        List of ``stage_count`` per-stage values.
+
+    Raises:
+        ValueError: Raised when an explicit sequence has the wrong length.
+    """
+    if value is None:
+        return [default] * stage_count
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        return [value] * stage_count
+    values = list(value)
+    if len(values) != stage_count:
+        raise ValueError(f"{name} must have {stage_count} entries, got {len(values)}.")
+    return values
+
+
 def _pooling_depth(stride: int) -> int:
     """Return how many serialized-code bit triplets are removed by one pooling stride."""
     depth = (math.ceil(stride) - 1).bit_length()
@@ -308,6 +338,115 @@ class RelativePositionEncoding(nn.Module):
         return output.permute(0, 3, 1, 2)
 
 
+def rope_span(head_dim: int) -> int:
+    """Return how many leading head dimensions an axis-split 3D RoPE can rotate.
+
+    The span splits into three equal per-axis chunks, and each chunk pairs
+    dimension ``i`` with ``i + chunk // 2`` as the two components one shared
+    ``(cos, sin)`` rotates together, so it must be a multiple of six.
+
+    Args:
+        head_dim: Per-head channel count.
+
+    Returns:
+        Length of the rotated prefix; the remaining ``head_dim % 6``
+        dimensions are left unrotated.
+    """
+    return (head_dim // 6) * 6
+
+
+class Point3DRoPE(nn.Module):
+    """Apply axis-split 3D rotary position embedding to attention queries/keys.
+
+    Any trailing ``head_dim % 6`` dimensions are passed through unrotated. That
+    keeps tensor-core-friendly head dimensions usable.
+
+    The rotation is emitted as one gather plus two elementwise ops over the full
+    head dimension, with the unrotated tail carrying ``cos=1``/``sin=0``. That
+    avoids ``Split``/``Concat`` in the exported graph and makes the cost
+    independent of how much of the head is rotated.
+    """
+
+    def __init__(self, head_dim: int, base: float) -> None:
+        """Initialize the axis-split rotary embedding.
+
+        Args:
+            head_dim: Per-head channel count. Must be at least six.
+            base: Geometric base of the frequency ladder, shared by all three
+                axes. LitePT's CUDA operator exposes this as ``rope_freq``.
+                This is a hyperparameter and needs tuning.
+
+        Raises:
+            ValueError: Raised when ``head_dim`` is too small to rotate.
+        """
+        super().__init__()
+        rotated = rope_span(head_dim)
+        if rotated == 0:
+            raise ValueError(f"head_dim must be at least 6 for axis-split 3D RoPE, got {head_dim}.")
+        self.head_dim = int(head_dim)
+        self.rotated = rotated
+        self.chunk = rotated // 3
+        self.base = float(base)
+
+        half = self.chunk // 2
+        inv_freq = 1.0 / (self.base ** (torch.arange(0, self.chunk, 2).float() / self.chunk))
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
+
+        # Constant rotate-half permutation and signs over the full head dim.
+        # The unrotated tail maps to itself; its zero sine cancels the term.
+        permutation = torch.arange(self.head_dim)
+        sign = torch.zeros(self.head_dim)
+        for axis in range(3):
+            start = axis * self.chunk
+            permutation[start : start + half] = torch.arange(start + half, start + self.chunk)
+            permutation[start + half : start + self.chunk] = torch.arange(start, start + half)
+            sign[start : start + half] = -1.0
+            sign[start + half : start + self.chunk] = 1.0
+        self.register_buffer("permutation", permutation, persistent=False)
+        self.register_buffer("sign", sign, persistent=False)
+
+    def tables(self, grid_coord: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Build full-width cosine/sine tables for one set of voxel positions.
+
+        Args:
+            grid_coord: Integer voxel coordinates of shape ``(N, 3)``.
+
+        Returns:
+            Cosine and sine tensors of shape ``(N, 1, head_dim)``, broadcastable
+            over the head axis.
+        """
+        position = grid_coord.to(self.inv_freq.dtype)
+        angles = [
+            (position[:, axis : axis + 1] * self.inv_freq.unsqueeze(0)).repeat(1, 2)
+            for axis in range(3)
+        ]
+        angle = torch.cat(angles, dim=-1)
+        if self.rotated < self.head_dim:
+            tail = angle.new_zeros((angle.shape[0], self.head_dim - self.rotated))
+            angle = torch.cat([angle, tail], dim=-1)
+        return angle.cos().unsqueeze(1), angle.sin().unsqueeze(1)
+
+    def forward(
+        self, query: torch.Tensor, key: torch.Tensor, grid_coord: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Rotate queries and keys by their voxel positions.
+
+        Args:
+            query: Query tensor of shape ``(N, num_heads, head_dim)``.
+            key: Key tensor of shape ``(N, num_heads, head_dim)``.
+            grid_coord: Integer voxel coordinates of shape ``(N, 3)``.
+
+        Returns:
+            Rotated ``(query, key)`` with the input shapes and dtype.
+        """
+        cos, sin = self.tables(grid_coord)
+        cos = cos.to(query.dtype)
+        sin = (sin * self.sign).to(query.dtype)
+        rotated_query = query * cos + query.index_select(-1, self.permutation) * sin
+        rotated_key = key * cos + key.index_select(-1, self.permutation) * sin
+        return rotated_query, rotated_key
+
+
 class SerializedAttention(PointModule):
     """Apply windowed self-attention over serialized point tokens.
 
@@ -329,6 +468,7 @@ class SerializedAttention(PointModule):
         enable_flash: bool,
         upcast_attention: bool,
         upcast_softmax: bool,
+        rope_base: float | None = None,
     ) -> None:
         """Initialize serialized attention.
 
@@ -345,6 +485,9 @@ class SerializedAttention(PointModule):
             enable_flash: Whether to use flash attention.
             upcast_attention: Whether to upcast Q/K before attention.
             upcast_softmax: Whether to upcast logits before softmax.
+            rope_base: Frequency base for axis-split 3D rotary embedding over
+                voxel coordinates. ``None`` disables RoPE, which is the PTv3
+                default and leaves the attention path unchanged.
         """
         super().__init__()
         if channels % num_heads != 0:
@@ -376,6 +519,7 @@ class SerializedAttention(PointModule):
         self.attn_drop = nn.Dropout(attn_drop)
         self.softmax = nn.Softmax(dim=-1)
         self.rpe = RelativePositionEncoding(patch_size, num_heads) if enable_rpe else None
+        self.rope = Point3DRoPE(channels // num_heads, rope_base) if rope_base is not None else None
         self.flash_attn = None
 
     @torch.no_grad()
@@ -491,10 +635,26 @@ class SerializedAttention(PointModule):
         order = point.serialized_order[self.order_index][pad]
         inverse = unpad[point.serialized_inverse[self.order_index]]
         qkv = self.qkv(point.feat)[order]
+        head_dim = channel_count // head_count
+
+        # With RoPE the projection has to be split before attention so queries
+        # and keys can be rotated by their voxel positions; without it the
+        # packed layout is handed to each branch untouched, as PTv3 expects.
+        roped: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = None
+        if self.rope is not None:
+            query, key, value = qkv.reshape(-1, 3, head_count, head_dim).unbind(dim=1)
+            query, key = self.rope(query, key, point.grid_coord[order])
+            roped = (query, key, value)
 
         if not self.enable_flash:
-            qkv = qkv.reshape(-1, patch_size, 3, head_count, channel_count // head_count)
-            q, k, v = qkv.permute(2, 0, 3, 1, 4).unbind(dim=0)
+            if roped is None:
+                qkv = qkv.reshape(-1, patch_size, 3, head_count, head_dim)
+                q, k, v = qkv.permute(2, 0, 3, 1, 4).unbind(dim=0)
+            else:
+                q, k, v = (
+                    tensor.reshape(-1, patch_size, head_count, head_dim).permute(0, 2, 1, 3)
+                    for tensor in roped
+                )
             if self.upcast_attention:
                 q = q.float()
                 k = k.float()
@@ -512,8 +672,13 @@ class SerializedAttention(PointModule):
             assert cu_seqlens is not None
             if self.flash_attn is None:
                 self.flash_attn = load_flash_attn_module()
+            packed = (
+                qkv.reshape(-1, 3, head_count, head_dim)
+                if roped is None
+                else torch.stack(roped, dim=1)
+            )
             feat = self.flash_attn.flash_attn_varlen_qkvpacked_func(
-                qkv.half().reshape(-1, 3, head_count, channel_count // head_count),
+                packed.half(),
                 cu_seqlens,
                 max_seqlen=patch_size,
                 dropout_p=self.attn_drop_p if self.training else 0.0,
@@ -585,6 +750,9 @@ class Block(PointModule):
         enable_flash: bool,
         upcast_attention: bool,
         upcast_softmax: bool,
+        enable_conv: bool = True,
+        enable_attn: bool = True,
+        rope_base: float | None = None,
     ) -> None:
         """Initialize one PTv3 attention block.
 
@@ -605,33 +773,65 @@ class Block(PointModule):
             enable_flash: Whether to use flash attention.
             upcast_attention: Whether to upcast Q/K before attention.
             upcast_softmax: Whether to upcast logits before softmax.
+            enable_conv: Whether the block carries the submanifold-convolution
+                positional encoding. When disabled the block normalizes its
+                input instead, which is how LitePT's attention-only stages
+                behave.
+            enable_attn: Whether the block carries attention and its MLP. When
+                disabled the block is convolution-only, as in LitePT's early
+                stages.
+            rope_base: Frequency base for axis-split 3D rotary embedding, or
+                ``None`` to disable it.
+
+        Raises:
+            ValueError: Raised when the block would carry no operation at all.
         """
         super().__init__()
+        if not enable_conv and not enable_attn:
+            raise ValueError("A block must enable at least one of convolution or attention.")
         self.pre_norm = pre_norm
-        self.cpe = PointSequential(
-            spconv.SubMConv3d(
-                channels, channels, kernel_size=3, bias=True, indice_key=cpe_indice_key
-            ),
-            nn.Linear(channels, channels),
-            nn.LayerNorm(channels),
-        )
-        self.norm1 = PointSequential(nn.LayerNorm(channels))
-        self.attn = SerializedAttention(
-            channels=channels,
-            num_heads=num_heads,
-            patch_size=patch_size,
-            qkv_bias=qkv_bias,
-            qk_scale=qk_scale,
-            attn_drop=attn_drop,
-            proj_drop=proj_drop,
-            order_index=order_index,
-            enable_rpe=enable_rpe,
-            enable_flash=enable_flash,
-            upcast_attention=upcast_attention,
-            upcast_softmax=upcast_softmax,
-        )
-        self.norm2 = PointSequential(nn.LayerNorm(channels))
-        self.mlp = PointSequential(MLP(channels, mlp_ratio, proj_drop))
+        self.enable_conv = bool(enable_conv)
+        self.enable_attn = bool(enable_attn)
+
+        if self.enable_conv:
+            self.cpe = PointSequential(
+                spconv.SubMConv3d(
+                    channels, channels, kernel_size=3, bias=True, indice_key=cpe_indice_key
+                ),
+                nn.Linear(channels, channels),
+                nn.LayerNorm(channels),
+            )
+            self.norm0 = None
+        else:
+            # No convolution to inject position, so the block normalizes on
+            # entry and relies on RoPE plus serialization locality instead.
+            self.cpe = None
+            self.norm0 = PointSequential(nn.LayerNorm(channels))
+
+        if self.enable_attn:
+            self.norm1 = PointSequential(nn.LayerNorm(channels))
+            self.attn = SerializedAttention(
+                channels=channels,
+                num_heads=num_heads,
+                patch_size=patch_size,
+                qkv_bias=qkv_bias,
+                qk_scale=qk_scale,
+                attn_drop=attn_drop,
+                proj_drop=proj_drop,
+                order_index=order_index,
+                enable_rpe=enable_rpe,
+                enable_flash=enable_flash,
+                upcast_attention=upcast_attention,
+                upcast_softmax=upcast_softmax,
+                rope_base=rope_base,
+            )
+            self.norm2 = PointSequential(nn.LayerNorm(channels))
+            self.mlp = PointSequential(MLP(channels, mlp_ratio, proj_drop))
+        else:
+            self.norm1 = None
+            self.attn = None
+            self.norm2 = None
+            self.mlp = None
         self.drop_path = PointSequential(DropPath(drop_path) if drop_path > 0 else nn.Identity())
 
     def forward(self, point: Point) -> Point:
@@ -643,25 +843,29 @@ class Block(PointModule):
         Returns:
             Point container with updated features.
         """
-        shortcut = point.feat
-        point = self.cpe(point)
-        point.feat = shortcut + point.feat
+        if self.enable_conv:
+            shortcut = point.feat
+            point = self.cpe(point)
+            point.feat = shortcut + point.feat
+        else:
+            point = self.norm0(point)
 
-        shortcut = point.feat
-        if self.pre_norm:
-            point = self.norm1(point)
-        point = self.drop_path(self.attn(point))
-        point.feat = shortcut + point.feat
-        if not self.pre_norm:
-            point = self.norm1(point)
+        if self.enable_attn:
+            shortcut = point.feat
+            if self.pre_norm:
+                point = self.norm1(point)
+            point = self.drop_path(self.attn(point))
+            point.feat = shortcut + point.feat
+            if not self.pre_norm:
+                point = self.norm1(point)
 
-        shortcut = point.feat
-        if self.pre_norm:
-            point = self.norm2(point)
-        point = self.drop_path(self.mlp(point))
-        point.feat = shortcut + point.feat
-        if not self.pre_norm:
-            point = self.norm2(point)
+            shortcut = point.feat
+            if self.pre_norm:
+                point = self.norm2(point)
+            point = self.drop_path(self.mlp(point))
+            point.feat = shortcut + point.feat
+            if not self.pre_norm:
+                point = self.norm2(point)
         point.sparse_conv_feat = point.sparse_conv_feat.replace_feature(point.feat)
         return point
 
@@ -896,7 +1100,10 @@ def set_block_serialization_order(stages: PointSequential, order_count: int) -> 
     for stage in stages._modules.values():
         block_index = 0
         for module in stage._modules.values():
-            if isinstance(module, Block):
+            # Convolution-only blocks read no serialization order, so they must
+            # not consume an index either - otherwise the attention blocks that
+            # follow them in the same stage would be shifted off their order.
+            if isinstance(module, Block) and module.attn is not None:
                 module.attn.order_index = block_index % order_count
                 block_index += 1
 
@@ -975,6 +1182,9 @@ class PointTransformerV3Encoder(PointModule):
         upcast_softmax: bool,
         stem_kernel_size: int = 0,
         stem_type: str = "linear",
+        enc_conv: Sequence[bool] | bool = True,
+        enc_attn: Sequence[bool] | bool = True,
+        enc_rope_base: Sequence[float | None] | float | None = None,
     ) -> None:
         """Initialize the PTv3 encoder.
 
@@ -1001,14 +1211,22 @@ class PointTransformerV3Encoder(PointModule):
             stem_kernel_size: Embedding-stem submanifold-conv kernel size.
             stem_type: Embedding-stem variant, ``"conv"`` (default) or
                 ``"linear"``. See :class:`Embedding`.
+            enc_conv: Per-stage flag for the submanifold-convolution positional
+                encoding, or one flag for every stage.
+            enc_attn: Per-stage flag for attention and its MLP, or one flag for
+                every stage.
+            enc_rope_base: Rotary-embedding frequency base, either one value for
+                every stage or one per stage. ``None`` disables RoPE.
         """
         super().__init__()
-
         self.order = list(order)
         self.stride = list(stride)
         self.shuffle_orders = shuffle_orders
         self.enc_channels = list(enc_channels)
         stage_count = len(enc_depths)
+        self.enc_conv = expand_stage_flags(enc_conv, stage_count, True, "enc_conv")
+        self.enc_attn = expand_stage_flags(enc_attn, stage_count, True, "enc_attn")
+        self.enc_rope_base = expand_stage_flags(enc_rope_base, stage_count, None, "enc_rope_base")
         self.embedding = Embedding(
             in_channels, enc_channels[0], kernel_size=stem_kernel_size, stem_type=stem_type
         )
@@ -1046,6 +1264,9 @@ class PointTransformerV3Encoder(PointModule):
                         enable_flash=enable_flash,
                         upcast_attention=upcast_attention,
                         upcast_softmax=upcast_softmax,
+                        enable_conv=self.enc_conv[stage_index],
+                        enable_attn=self.enc_attn[stage_index],
+                        rope_base=self.enc_rope_base[stage_index],
                     ),
                     name=f"block{block_index}",
                 )
@@ -1111,6 +1332,105 @@ class PointTransformerV3Encoder(PointModule):
         point.sparsify()
         point = self.embedding(point)
         return self.enc(point)
+
+
+class LitePTEncoder(PointTransformerV3Encoder):
+    """Configure the PTv3 encoder as LitePT: convolution early, attention late.
+
+    LitePT is a PTv3-compatible model that reduces latency by turning off early
+    attention and late convolution blocks. It is fully compatible with PTv3's
+    export contract, task models and heads.
+
+    Defaults follow the published LitePT topology but use channel widths that
+    are multiples of 32 for tensor-core-friendly GEMMs. That gives a head
+    dimension of 32 per stage, of which 30 dimensions are rotated and two form
+    an unrotated tail - see :class:`Point3DRoPE`.
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 4,
+        order: Sequence[str] = ("z", "z-trans", "hilbert", "hilbert-trans"),
+        stride: Sequence[int] = (2, 2, 2, 2),
+        enc_depths: Sequence[int] = (2, 2, 2, 6, 2),
+        enc_channels: Sequence[int] = (32, 64, 128, 256, 512),
+        enc_num_head: Sequence[int] = (1, 2, 4, 8, 16),
+        enc_patch_size: Sequence[int] = (1024, 1024, 1024, 1024, 1024),
+        mlp_ratio: float = 4.0,
+        qkv_bias: bool = True,
+        qk_scale: float | None = None,
+        attn_drop: float = 0.0,
+        proj_drop: float = 0.0,
+        drop_path: float = 0.3,
+        pre_norm: bool = True,
+        shuffle_orders: bool = True,
+        enable_rpe: bool = False,
+        enable_flash: bool = True,
+        upcast_attention: bool = False,
+        upcast_softmax: bool = False,
+        stem_kernel_size: int = 0,
+        stem_type: str = "linear",
+        enc_conv: Sequence[bool] = (True, True, True, False, False),
+        enc_attn: Sequence[bool] = (False, False, False, True, True),
+        enc_rope_base: Sequence[float | None] | float | None = 100.0,
+    ) -> None:
+        """Initialize the LitePT encoder.
+
+        Args:
+            in_channels: Input feature dimension.
+            order: Serialization orders used by the encoder.
+            stride: Pooling strides between encoder stages.
+            enc_depths: Number of blocks per encoder stage.
+            enc_channels: Encoder channel widths per stage.
+            enc_num_head: Attention head counts per encoder stage.
+            enc_patch_size: Attention patch sizes per encoder stage.
+            mlp_ratio: Hidden-layer expansion ratio for each block MLP.
+            qkv_bias: Whether to use learnable bias in QKV projections.
+            qk_scale: Optional manual attention scale.
+            attn_drop: Dropout applied to attention weights.
+            proj_drop: Dropout applied after output projections.
+            drop_path: Stochastic-depth probability.
+            pre_norm: Whether to apply pre-normalization.
+            shuffle_orders: Whether to shuffle serialization orders.
+            enable_rpe: Whether to use relative positional encoding. LitePT
+                uses rotary embedding instead and leaves this off.
+            enable_flash: Whether to use flash attention.
+            upcast_attention: Whether to upcast Q/K before attention.
+            upcast_softmax: Whether to upcast logits before softmax.
+            stem_kernel_size: Embedding-stem submanifold-conv kernel size.
+            stem_type: Embedding-stem variant. LitePT's reference uses a
+                kernel-5 submanifold stem; the linear stem is kept here because
+                it exports cleanly at no measured accuracy cost.
+            enc_conv: Per-stage convolution flags.
+            enc_attn: Per-stage attention flags.
+            enc_rope_base: Rotary-embedding frequency base per stage.
+        """
+        super().__init__(
+            in_channels=in_channels,
+            order=order,
+            stride=stride,
+            enc_depths=enc_depths,
+            enc_channels=enc_channels,
+            enc_num_head=enc_num_head,
+            enc_patch_size=enc_patch_size,
+            mlp_ratio=mlp_ratio,
+            qkv_bias=qkv_bias,
+            qk_scale=qk_scale,
+            attn_drop=attn_drop,
+            proj_drop=proj_drop,
+            drop_path=drop_path,
+            pre_norm=pre_norm,
+            shuffle_orders=shuffle_orders,
+            enable_rpe=enable_rpe,
+            enable_flash=enable_flash,
+            upcast_attention=upcast_attention,
+            upcast_softmax=upcast_softmax,
+            stem_kernel_size=stem_kernel_size,
+            stem_type=stem_type,
+            enc_conv=enc_conv,
+            enc_attn=enc_attn,
+            enc_rope_base=enc_rope_base,
+        )
 
 
 def collect_encoder_stage_points(deepest: Point) -> list[Point]:

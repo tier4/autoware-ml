@@ -44,18 +44,16 @@ from autoware_ml.models.segmentation3d.heads.ptv3 import (
 )
 from autoware_ml.models.segmentation3d.ptv3_base import (
     PTv3BaseModel,
-    _run_ptv3_encoder_export,
+    PTv3EncoderExportBase,
     build_encoder_export_spec,
+    build_monolithic_export_inputs,
     build_point_feature_dynamic_axes,
     build_ptv3_export_context,
     build_ptv3_input_dynamic_axes,
     build_seg_head_export_spec,
-    build_serialized_pooling_metadata,
-    flatten_serialized_pooling_inputs,
     split_block_parameters,
 )
 from autoware_ml.utils.deploy import ExportSpec
-from autoware_ml.utils.point_cloud.structures import serialize_point_cloud_batch
 
 
 class PTv3SegDetModel(PTv3BaseModel):
@@ -276,42 +274,19 @@ class PTv3SegDetModel(PTv3BaseModel):
                 "grid_size and point_cloud_range must be provided at construction time to use "
                 "export."
             )
-        sparse_shape, serialization_depth = self._compute_export_geometry(batch_inputs_dict)
-        point, input_args = serialize_point_cloud_batch(
-            batch_inputs_dict, self.EXPORT_ORDER, serialization_depth
-        )
-        serialized_pooling_inputs, serialized_pooling_input_names = (
-            flatten_serialized_pooling_inputs(
-                build_serialized_pooling_metadata(
-                    point["grid_coord"],
-                    point["serialized_code"],
-                    point["serialized_order"],
-                    self.encoder.stride,
-                )
-            )
-        )
+        inputs = build_monolithic_export_inputs(self, batch_inputs_dict)
         export_module = _PTv3SegDetExportModule(
             encoder=self._prepare_encoder_export(),
             seg3d_head=self.seg3d_head.prepare_for_export(self.EXPORT_ORDER),
             bev_neck=deepcopy(self.bev_neck).eval(),
             bbox_head=self.bbox_head.prepare_for_export(),
-            sparse_shape=sparse_shape,
-            serialized_depth=serialization_depth,
+            sparse_shape=inputs.sparse_shape,
+            serialized_depth=inputs.serialization_depth,
             output_names=self.get_export_output_names(),
         )
         export_module.eval()
-        export_input_args = (
-            input_args[0],
-            input_args[1],
-            input_args[3],
-            *serialized_pooling_inputs,
-        )
-        input_param_names = [
-            "grid_coord",
-            "feat",
-            "serialized_code",
-            *serialized_pooling_input_names,
-        ]
+        export_input_args = inputs.args
+        input_param_names = inputs.input_names
         output_names = self.get_export_output_names()
         dynamic_axes = build_ptv3_input_dynamic_axes(input_param_names)
         dynamic_axes.update(
@@ -357,7 +332,7 @@ class PTv3SegDetModel(PTv3BaseModel):
         }
 
 
-class _PTv3SegDetExportModule(nn.Module):
+class _PTv3SegDetExportModule(PTv3EncoderExportBase):
     """ONNX-exportable PTv3 segmentation+detection graph with baked sparse shape."""
 
     def __init__(
@@ -370,14 +345,11 @@ class _PTv3SegDetExportModule(nn.Module):
         serialized_depth: torch.Tensor,
         output_names: Sequence[str],
     ) -> None:
-        super().__init__()
-        self.encoder = encoder
+        super().__init__(encoder, sparse_shape, serialized_depth)
         self.seg3d_head = seg3d_head
         self.bev_neck = bev_neck
         self.bbox_head = bbox_head
         self.output_names = list(output_names)
-        self.register_buffer("_sparse_shape", sparse_shape.to(dtype=torch.long), persistent=False)
-        self.register_buffer("_serialized_depth", serialized_depth, persistent=False)
 
     def forward(
         self,
@@ -397,15 +369,7 @@ class _PTv3SegDetExportModule(nn.Module):
         Returns:
             Tuple of export tensors ordered according to ``output_names``.
         """
-        point = _run_ptv3_encoder_export(
-            self.encoder,
-            grid_coord,
-            feat,
-            self._serialized_depth,
-            serialized_code,
-            self._sparse_shape,
-            *serialized_pooling_inputs,
-        )
+        point = self.run_encoder(grid_coord, feat, serialized_code, *serialized_pooling_inputs)
         # BEV branch first: the segmentation decoder consumes the pooling
         # chain destructively.
         bev_features = self.bev_neck(point)
