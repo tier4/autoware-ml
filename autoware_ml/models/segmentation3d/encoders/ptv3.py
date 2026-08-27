@@ -409,19 +409,11 @@ class SerializedAttention(PointModule):
             padded_n = ((n + self.patch_size - 1) // self.patch_size) * self.patch_size
             unpad = torch.arange(n, device=point.offset.device)
             # Fill the trailing slots of the last window by cycling backwards through
-            # the serialization, so every slot holds a real token.
-            #
-            # For `n > patch_size` this borrows the tail of the preceding window and
-            # reproduces the training fill exactly: the last window becomes a full-size
-            # sliding window over the final `patch_size` tokens. With no preceding
-            # window to borrow from it wraps around instead, which keeps every key
-            # multiplicity within one of every other rather than repeating a single
-            # token to fill the gap - and is exact whenever `n` divides `patch_size`,
-            # because a uniform multiplicity cancels in the softmax.
-            #
-            # `cycle` is the smallest multiple of `n` that is at least `patch_size`, so
-            # the shifted index is never negative and the remainder needs no particular
-            # sign convention from the runtime's integer modulo.
+            # the serialization, so every slot holds a real token. For `n > patch_size`
+            # this is exactly the backward borrow training performs; below one window
+            # there is nothing to borrow from, so it wraps around instead. `cycle` keeps
+            # the shifted index non-negative, so the modulo needs no particular sign
+            # convention from the runtime. See docs/models/ptv3.md for why it matters.
             divisor = torch.clamp(n, min=1)
             cycle = ((self.patch_size + divisor - 1) // divisor) * divisor
             index = torch.arange(padded_n, device=point.offset.device)

@@ -547,6 +547,8 @@ def _build_attention(patch_size: int) -> SerializedAttention:
         upcast_attention=False,
         upcast_softmax=False,
     ).eval()
+    # `__init__` zeroes `patch_size` when flash is off, and `forward` - which these
+    # tests bypass to reach `_get_padding_and_inverse` - is what normally sets it.
     attention.patch_size = patch_size
     return attention
 
