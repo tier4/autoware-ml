@@ -413,7 +413,7 @@ class SerializedAttention(PointModule):
             # this is exactly the backward borrow training performs; below one window
             # there is nothing to borrow from, so it wraps around instead. `cycle` keeps
             # the shifted index non-negative, so the modulo needs no particular sign
-            # convention from the runtime. See docs/models/ptv3.md for why it matters.
+            # convention from the runtime.
             divisor = torch.clamp(n, min=1)
             cycle = ((self.patch_size + divisor - 1) // divisor) * divisor
             index = torch.arange(padded_n, device=point.offset.device)

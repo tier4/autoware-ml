@@ -135,26 +135,18 @@ reduction is implemented with native ONNX `Gather` and the
 
 ### Attention window fill at export
 
-Serialized attention works on fixed-size windows, so the last window is short
-whenever the voxel count is not a multiple of the patch size. Training fills
-those slots by borrowing the tail of the preceding window; export reproduces that
-fill exactly. For `n` voxels and a window of `K`, slot `i` of the padded index
-array is
+Serialized attention runs on fixed-size windows of `K = patch_size` tokens, so a
+sample of `n` voxels needs its last window filled unless `n` is a multiple of `K`:
 
-```text
-i                                    if i < n
-(i - K + ceil(K / n) * n) mod n      otherwise
-```
+- `n % K == 0` - the windows are exact, nothing to fill.
+- otherwise, `n > K` - the last window borrows tokens from the preceding one to
+  reach `K`, which is what training does.
+- otherwise, `n < K` - there is nothing to borrow from, so the sample's own
+  tokens are cycled round-robin to equalize their weight in the softmax as far as
+  possible.
 
-For `n > K` this reduces to `i - K`, the same backward borrow. For `n <= K` there
-is nothing to borrow from, so it cycles through the sample, keeping every key
-multiplicity within one of every other - uniform, hence exact, when `n` divides
-`K`. `ceil(K / n) * n` keeps the index non-negative whatever sign convention the
-runtime gives integer modulo. Filling with repeats of the last token instead - as
-a naive clamp would - leaves that token duplicated up to `K - 1` times in an
-unmasked softmax, where it dominates every query in the window, on every frame
-whose voxel count is not a multiple of `patch_size`. The window size stays static
-and `n` enters only as a value, so no shape in the graph depends on the data.
+Dynamic window sizes and masking are both awkward to express in TensorRT without
+a performance penalty, hence this fill.
 
 ### Split-export module contract
 
