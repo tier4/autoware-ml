@@ -41,6 +41,7 @@ from autoware_ml.databases.schemas.frame_basic_metadata import FrameBasicMetadat
 from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord
 from autoware_ml.databases.schemas.lidar_frames import LidarFrameDataModel
 from autoware_ml.databases.schemas.lidar_sources import LidarSourceDataModel
+from autoware_ml.databases.schemas.image_frames import ImageFrameDataModel
 from autoware_ml.databases.schemas.category_mapping import CategoryMappingDataModel
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDataModel, Box3DDatasetSchema
 from autoware_ml.databases.scenarios import ScenarioData
@@ -546,6 +547,110 @@ class T4RecordsGenerator:
 
         return lidar_source_data_models
 
+    def _extract_camera_channel_names(self, sample: Sample) -> Sequence[str]:
+        """
+        Extract camera channel names present in a T4 sample.
+
+        Args:
+          sample: T4 Sample.
+
+        Returns:
+          Sequence[str]: Sequence of camera channel names in the sample.
+        """
+
+        camera_channel_names = []
+        for channel_name, sample_data_token in sample.data.items():
+            sd_record: SampleData = self.t4_devkit_dataset.get(
+                SchemaName.SAMPLE_DATA, sample_data_token
+            )
+            cs_record: CalibratedSensor = self.t4_devkit_dataset.get(
+                SchemaName.CALIBRATED_SENSOR, sd_record.calibrated_sensor_token
+            )
+            sensor_record: Sensor = self.t4_devkit_dataset.get(
+                SchemaName.SENSOR, cs_record.sensor_token
+            )
+            modality = getattr(sensor_record, self.__MODALITY_STRING, None)
+            modality_value = getattr(modality, self.__VALUE_STRING, None)
+            if modality_value == Modality.CAMERA:
+                camera_channel_names.append(channel_name)
+
+        return camera_channel_names
+
+    def _extract_image_frame(
+            self,
+            sample: Sample,
+            camera_channel_name: str,
+            lidar_sensor_to_ego_pose_matrix: npt.NDArray[np.float64],
+            lidar_frame_ego_pose_to_global_matrix: npt.NDArray[np.float64],
+        ) -> ImageFrameDataModel:
+            """
+            Extract image frame from a T4 sample.
+
+            Args:
+              sample: T4 Sample.
+              camera_channel_name: Camera channel name.
+              lidar_sensor_to_ego_pose_matrix: Transformation matrix from LiDAR sensor to ego pose.
+              lidar_frame_ego_pose_to_global_matrix: Transformation matrix from LiDAR ego pose to global.
+
+            Returns:
+              ImageFrameDataModel: Image frame data model of the T4 sample.
+            """
+
+            calibrated_camera_sample_data_token = sample.data[camera_channel_name]
+            sd_record: SampleData = self.t4_devkit_dataset.get(
+                SchemaName.SAMPLE_DATA, calibrated_camera_sample_data_token
+            )
+            cs_record: CalibratedSensor = self.t4_devkit_dataset.get(
+                SchemaName.CALIBRATED_SENSOR, sd_record.calibrated_sensor_token
+            )
+            image_sensor_to_ego_matrix = convert_quaternion_to_matrix(
+                rotation_quaternion=cs_record.rotation,
+                translation=cs_record.translation,
+                convert_to_float32=False,
+            )
+
+            ego_pose_record: EgoPose = self.t4_devkit_dataset.get(
+                SchemaName.EGO_POSE, sd_record.ego_pose_token
+            )
+            image_frame_ego_pose_to_global_matrix = convert_quaternion_to_matrix(
+                rotation_quaternion=ego_pose_record.rotation,
+                translation=ego_pose_record.translation,
+                convert_to_float32=False,
+            )
+
+            image_path = self.t4_devkit_dataset.get_sample_data_path(
+                sample_data_token=calibrated_camera_sample_data_token
+            )
+
+            cam2img = np.asarray(cs_record.camera_intrinsic, dtype=np.float64)
+
+            # 1. 计算 lidar2cam 变换矩阵 (4x4)
+            cam2global = image_frame_ego_pose_to_global_matrix @ image_sensor_to_ego_matrix
+            global2cam = np.linalg.inv(cam2global)
+            lidar2global = lidar_frame_ego_pose_to_global_matrix @ lidar_sensor_to_ego_pose_matrix
+            lidar2cam = global2cam @ lidar2global
+
+            # 2. 计算 lidar2img 投影矩阵 (4x4)
+            cam2img_4x4 = np.eye(4, dtype=np.float64)
+            cam2img_4x4[:3, :3] = cam2img
+            lidar2img = cam2img_4x4 @ lidar2cam
+
+            return ImageFrameDataModel(
+                image_frame_id=calibrated_camera_sample_data_token,
+                image_keyframe=sd_record.is_key_frame,
+                image_sensor_id=cs_record.token,
+                image_sensor_channel_name=camera_channel_name,
+                image_timestamp_seconds=microseconds2seconds(sd_record.timestamp),
+                image_path=image_path,
+                image_height=sd_record.height,
+                image_width=sd_record.width,
+                cam2img=cam2img,
+                image_sensor_to_ego_pose_matrix=image_sensor_to_ego_matrix,
+                image_frame_ego_pose_to_global_matrix=image_frame_ego_pose_to_global_matrix,
+                lidar2cam=lidar2cam,
+                lidar2img=lidar2img,
+            )
+
     def _extract_category_mapping(self) -> CategoryMappingDataModel:
         """
         Extract category metadata from a T4 Sample.
@@ -677,13 +782,26 @@ class T4RecordsGenerator:
         # 4) Extract lidar sources information from the T4Dataset
         lidar_source_data_models = self._extract_lidar_sources()
 
-        # 5) Extract category information from the T4Dataset
+        # 5) Extract image frames information from the T4Dataset
+        camera_channel_names = self._extract_camera_channel_names(sample=sample)
+        image_frame_data_models = [
+            self._extract_image_frame(
+                sample=sample,
+                camera_channel_name=camera_channel_name,
+                lidar_sensor_to_ego_pose_matrix=lidar_frame_data_model.lidar_sensor_to_ego_pose_matrix,
+                lidar_frame_ego_pose_to_global_matrix=lidar_frame_data_model.lidar_frame_ego_pose_to_global_matrix,
+            )
+            for camera_channel_name in camera_channel_names
+        ]
+
+        # 6) Extract category information from the T4Dataset
         category_mapping_data_model = self._extract_category_mapping()
 
         return T4SampleRecord(
             frame_basic_metadata=frame_basic_metadata,
             lidar_frame_data_models=lidar_frame_data_models,
             lidar_source_data_models=lidar_source_data_models,
+            image_frame_data_models=image_frame_data_models,
             category_mapping_data_model=category_mapping_data_model,
             boxes_3d_data_model=boxes_3d_data_model,
         )

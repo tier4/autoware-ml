@@ -21,6 +21,7 @@ from autoware_ml.databases.schemas.frame_basic_metadata import FrameBasicMetadat
 from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord
 from autoware_ml.databases.schemas.lidar_frames import LidarFrameDataModel
 from autoware_ml.databases.schemas.lidar_sources import LidarSourceDataModel
+from autoware_ml.databases.schemas.image_frames import ImageFrameDataModel
 from autoware_ml.databases.schemas.category_mapping import CategoryMappingDataModel
 
 
@@ -32,6 +33,7 @@ class T4SampleRecord(BaseModel):
     frame_basic_metadata: FrameBasicMetadata
     lidar_frame_data_models: Sequence[LidarFrameDataModel]
     lidar_source_data_models: Sequence[LidarSourceDataModel]
+    image_frame_data_models: Sequence[ImageFrameDataModel]
     category_mapping_data_model: CategoryMappingDataModel
     boxes_3d_data_model: Sequence[Box3DDataModel]
 
@@ -53,6 +55,7 @@ class T4SampleRecord(BaseModel):
             vehicle_type=self.frame_basic_metadata.vehicle_type,
             lidar_frames=self.lidar_frame_data_models,
             lidar_sources=self.lidar_source_data_models,
+            image_frames=self.image_frame_data_models,
             category_mapping=self.category_mapping_data_model,
             boxes_3d=self.boxes_3d_data_model,
         )
