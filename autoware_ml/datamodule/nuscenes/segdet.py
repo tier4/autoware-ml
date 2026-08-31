@@ -23,6 +23,7 @@ from typing import Any
 
 from torch.utils.data import DataLoader
 
+import numpy as np
 from autoware_ml.datamodule.base import DataModule, Dataset
 from autoware_ml.datamodule.common.detection3d import (
     build_detection_dataloader,
@@ -145,6 +146,9 @@ class NuscenesSegmentationDetection3DDataset(Dataset):
             "pts_semantic_mask_path": os.path.join(
                 self.lidarseg_dir, sample["pts_semantic_mask_path"]
             ),
+            "timestamp": sample.get("timestamp"),
+            "ego2global": np.asarray(sample["ego2global"], dtype=np.float64),
+            "scene_token": sample["scene_token"],
         }
 
 

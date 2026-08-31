@@ -17,6 +17,9 @@ datamodule:
     gt_boxes: list
     gt_labels: list
     gt_num_points: list
+    ego2global: list
+    scene_token: list
+    timestamp: list
 
 model:
   _target_: autoware_ml.models.detection3d.bevfusion.BEVFusionDetectionModel
