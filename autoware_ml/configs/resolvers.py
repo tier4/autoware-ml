@@ -91,40 +91,8 @@ def raw_name_to_train_index(
     return cast(DictConfig, OmegaConf.create(mapping))
 
 
-def class_mapping_to_ordered_names(
-    class_mapping: Mapping[str, int] | None, num_classes: int, separator: str = "-"
-) -> ListConfig:
-    """Build an ordered class-name list from a ``name -> index`` mapping.
-
-    Inverts the segmentation ``class_mapping`` into per-index names for metric keys. Names
-    sharing an index are joined in definition order, indices outside ``[0, num_classes)`` are
-    dropped, and an index without a name falls back to ``class_<i>``.
-
-    Args:
-        class_mapping: Segmentation ``name -> index`` mapping, or ``None`` for no names.
-        num_classes: Number of trained class indices.
-        separator: Joiner for names sharing an index.
-
-    Returns:
-        A ``ListConfig`` of ``num_classes`` names, so in-place ``OmegaConf.resolve()`` can
-        write the result back into the config tree.
-    """
-    index_to_names: dict[int, list[str]] = {}
-    if class_mapping:
-        for name, index in class_mapping.items():
-            target = int(index)
-            if 0 <= target < int(num_classes):
-                index_to_names.setdefault(target, []).append(str(name))
-    names = [
-        separator.join(index_to_names[index]) if index in index_to_names else f"class_{index}"
-        for index in range(int(num_classes))
-    ]
-    return cast(ListConfig, OmegaConf.create(names))
-
-
 def register_config_resolvers() -> None:
     """Register all custom OmegaConf resolvers required by bundled configs."""
     OmegaConf.register_new_resolver("user_config_name", strip_tasks_prefix, replace=True)
     OmegaConf.register_new_resolver("seg_class_mapping", raw_name_to_train_index, replace=True)
-    OmegaConf.register_new_resolver("seg_class_names", class_mapping_to_ordered_names, replace=True)
     OmegaConf.register_new_resolver("merge_lists", merge_lists, replace=True)

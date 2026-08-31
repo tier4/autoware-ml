@@ -115,31 +115,3 @@ def test_merge_lists_resolver_preserves_hydra_recursive_instantiation() -> None:
     assert [type(metric) for metric in model.metrics] == [SimpleNamespace, SimpleNamespace]
     assert [metric.name for metric in model.metrics] == ["map", "iou"]
     assert model.metrics[0].classes == ["car", "truck"]
-
-
-def test_seg_class_names_resolver_in_interpolation() -> None:
-    register_config_resolvers()
-    cfg = OmegaConf.create(
-        {
-            "num_classes": 4,
-            "class_mapping": {"drivable_surface": 0, "car": 1, "noise": 3, "ghost_point": 3},
-            "names": "${seg_class_names:${oc.select:class_mapping, null}, ${num_classes}}",
-        }
-    )
-    assert OmegaConf.to_container(cfg, resolve=True)["names"] == [
-        "drivable_surface",
-        "car",
-        "class_2",
-        "noise-ghost_point",
-    ]
-
-
-def test_seg_class_names_resolver_falls_back_without_mapping() -> None:
-    register_config_resolvers()
-    cfg = OmegaConf.create(
-        {
-            "num_classes": 3,
-            "names": "${seg_class_names:${oc.select:class_mapping, null}, ${num_classes}}",
-        }
-    )
-    assert OmegaConf.to_container(cfg, resolve=True)["names"] == ["class_0", "class_1", "class_2"]
