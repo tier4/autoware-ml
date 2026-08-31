@@ -17,14 +17,30 @@ import torch
 
 
 def macro(values: torch.Tensor, has_support: torch.Tensor) -> float:
-    """Mean over classes with ground-truth support, or NaN when none have it."""
+    """Mean over classes with ground-truth support, or NaN when none have it.
+
+    Args:
+        values: Per-class values.
+        has_support: Mask of classes present in ground truth.
+
+    Returns:
+        The mean over supported classes.
+    """
     if not bool(has_support.any()):
         return float("nan")
     return float(values[has_support].mean().item())
 
 
 def class_name_token(class_index: int, class_names: tuple[str, ...] | None) -> str:
-    """Per-class key token, falling back to ``class_{index}``."""
+    """Per-class key token, falling back to ``class_{index}``.
+
+    Args:
+        class_index: Class index.
+        class_names: Class names in index order, or ``None``.
+
+    Returns:
+        The class token.
+    """
     if class_names is not None and class_index < len(class_names):
         return class_names[class_index]
     return f"class_{class_index}"
@@ -32,7 +48,12 @@ def class_name_token(class_index: int, class_names: tuple[str, ...] | None) -> s
 
 @dataclass
 class ConfusionState:
-    """Synced confusion matrix for one bucket, with cached marginals."""
+    """Synced confusion matrix for one bucket, with cached marginals.
+
+    In a grouped suite the matrix is already folded onto the behaviour taxonomy,
+    so ``class_names`` are the grouped names and every metric reads it exactly as
+    it reads the per-class matrix.
+    """
 
     confusion: torch.Tensor
     class_names: tuple[str, ...] | None

@@ -21,6 +21,8 @@ from autoware_ml.metrics.geometry.lanelet import (
     load_region_polygons,
 )
 from autoware_ml.metrics.geometry.reachability import ReachabilityParams
+from autoware_ml.metrics.segmentation3d.accuracy import Accuracy
+from autoware_ml.metrics.segmentation3d.suite import Segmentation3DConfusionMatrixMetricSuite
 
 _REAL_MAP = (
     "data/t4dataset/db_j6gen2_v2/13cabeac-a81b-4a57-ae31-d9520a442729/0/map/lanelet2_map.osm"
@@ -240,6 +242,36 @@ def test_region_absent_from_scene_is_empty_not_an_error() -> None:
     assert keep.tolist() == [False]
 
 
+def test_confusion_suite_region_filter_buckets() -> None:
+    # A correct point on the road (x=10) and a wrong point off it (x=100): the
+    # whole-scene accuracy is 0.5, the road slice sees only the correct point.
+    region = RegionFilter(["road"], _StubProvider(_road_map()))
+    suite = Segmentation3DConfusionMatrixMetricSuite(
+        components=[
+            Accuracy(stages=["test"]),
+            Accuracy(stages=["test"], filter=region),
+        ],
+        num_classes=2,
+        ranges=(),
+    )
+    suite.update(
+        {
+            "seg_frames": [
+                {
+                    "pred": torch.tensor([0, 1]),
+                    "target": torch.tensor([0, 0]),
+                    "coord": torch.tensor([[10.0, 0.0, 0.0], [100.0, 0.0, 0.0]]),
+                    "ego2global": np.eye(4),
+                    "scene_token": "scene",
+                }
+            ]
+        }
+    )
+    report = suite.result(EvalStage.TEST)
+    assert report["acc"] == pytest.approx(0.5)
+    assert report["region_road/acc"] == pytest.approx(1.0)
+
+
 def _box(x: float) -> list[float]:
     return [x, 0.0, 0.0, 4.0, 2.0, 1.5, 0.0, 0.0, 0.0]
 
@@ -311,6 +343,44 @@ def test_map_provider_available_delegates_to_resolver() -> None:
     provider = LaneletMapProvider(_Resolver())
     assert provider.available("yes") is True
     assert provider.available("no") is False
+
+
+def test_confusion_suite_excludes_scene_without_lanelet_map() -> None:
+    # Two frames: 's_map' has a lanelet map, 's_nomap' does not. Whole-scene
+    # accuracy sees every point, the road slice drops the map-less scene entirely
+    # (never loads its map, the stub would raise), and the coverage counters
+    # record 2 frames seen, 1 covered.
+    region = RegionFilter(["road"], _StubProvider(_road_map(), no_map=("s_nomap",)))
+    suite = Segmentation3DConfusionMatrixMetricSuite(
+        components=[Accuracy(stages=["test"]), Accuracy(stages=["test"], filter=region)],
+        num_classes=2,
+        ranges=(),
+    )
+    suite.update(
+        {
+            "seg_frames": [
+                {
+                    "pred": torch.tensor([0, 1]),
+                    "target": torch.tensor([0, 0]),
+                    "coord": torch.tensor([[10.0, 0.0, 0.0], [100.0, 0.0, 0.0]]),
+                    "ego2global": np.eye(4),
+                    "scene_token": "s_map",
+                },
+                {
+                    "pred": torch.tensor([1]),
+                    "target": torch.tensor([0]),
+                    "coord": torch.tensor([[10.0, 0.0, 0.0]]),
+                    "ego2global": np.eye(4),
+                    "scene_token": "s_nomap",
+                },
+            ]
+        }
+    )
+    report = suite.result(EvalStage.TEST)
+    assert report["acc"] == pytest.approx(1.0 / 3.0)  # 1 of 3 points correct, all scenes
+    assert report["region_road/acc"] == pytest.approx(1.0)  # only s_map's road point
+    assert suite.region_frames_seen.tolist() == [2]
+    assert suite.region_frames_covered.tolist() == [1]
 
 
 def test_detection_suite_excludes_scene_without_lanelet_map() -> None:
