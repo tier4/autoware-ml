@@ -1,46 +1,73 @@
-"""Data structures for the detection metrics.
+"""Pure data structures for the detection metrics.
 
-``Detection3DSample`` is the per-frame input. ``DetectionState`` is what the
-suite hands to each metric: the accumulated samples plus the shared config the
-metrics need, with a memoized ``match_curve`` so the expensive center-distance
-matching runs once per ``(label, threshold)`` and is shared across every metric.
+``Detection3DSample`` is the per-frame input. ``MatchCurve`` carries one
+class's score-ordered matching results and ``CurveMetrics`` its AP-style
+summary. The memoizing ``DetectionState`` that orchestrates the matching lives
+in :mod:`autoware_ml.metrics.detection3d.matching`.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 import torch
 
 ERROR_NAMES = ("ATE", "AOE", "ASE", "AVE", "AAE")
 
+# nuScenes center-distance AP thresholds (meters). The AP-family metrics own this
+# set. Metrics that need a single operating point share DEFAULT_TP_THRESHOLD (the
+# nuScenes dist_th_tp), so the whole report moves together when it changes. Nds
+# and TpErrors additionally require tp_threshold to be a configured threshold, so
+# the aggregate operating point always appears among the detail keys.
+DEFAULT_MATCH_THRESHOLDS = (0.5, 1.0, 2.0, 4.0)
+DEFAULT_TP_THRESHOLD = 2.0
+
 
 @dataclass(frozen=True)
 class Detection3DSample:
-    """Prediction and ground-truth tensors for one detection frame."""
+    """Prediction and ground-truth tensors for one detection frame.
+
+    ``gt_ttc`` / ``pred_ttc`` are the per-box reachability time-to-collision to
+    ego in seconds (``inf`` means unreachable), present only when the suite is
+    built with a collision provider, and read by the criticality
+    metrics. ``ttc_covered`` is False for frames whose scene has no lanelet map
+    (their TTC is all-``inf`` by construction): the criticality metrics exclude
+    such frames from their denominators, mirroring the region-filter coverage
+    rule.
+    """
 
     pred_boxes: torch.Tensor
     pred_scores: torch.Tensor
     pred_labels: torch.Tensor
     gt_boxes: torch.Tensor
     gt_labels: torch.Tensor
+    gt_ttc: torch.Tensor | None = None
+    pred_ttc: torch.Tensor | None = None
+    ttc_covered: bool = True
 
 
 @dataclass(frozen=True)
 class MatchCurve:
-    """Per-class, per-threshold score-ordered matching results."""
+    """Per-class, per-threshold score-ordered matching results.
+
+    ``corner_error`` and ``nearest_surface_error`` are per-prediction arrays
+    (``NaN`` for non-matches), filled for true positives alongside the nuScenes
+    error channels so the driving-aware components read them without re-matching.
+    """
 
     total_gt: int
     scores: np.ndarray
-    true_positive: np.ndarray
-    false_positive: np.ndarray
+    true_positive: np.ndarray  # (N,) bool, per-prediction match flag
+    false_positive: np.ndarray  # (N,) bool, complement of true_positive
     heading_score: np.ndarray
     translation_error: np.ndarray
     orientation_error: np.ndarray
     scale_error: np.ndarray
     velocity_error: np.ndarray
     attribute_error: np.ndarray
+    corner_error: np.ndarray
+    nearest_surface_error: np.ndarray
 
     @property
     def num_predictions(self) -> int:
@@ -69,15 +96,6 @@ class MatchCurve:
 
 
 @dataclass(frozen=True)
-class PredictionRecord:
-    """Score-sorted prediction candidate used during center-distance matching."""
-
-    score: float
-    sample_index: int
-    box: np.ndarray = field(compare=False)
-
-
-@dataclass(frozen=True)
 class CurveMetrics:
     """AP-style summary values derived from one match curve."""
 
@@ -98,45 +116,3 @@ class SelectedTpErrors:
     errors: dict[str, float]
 
 
-@dataclass
-class DetectionState:
-    """Synced detection state the suite hands to each metric.
-
-    Attributes:
-        samples: Per-frame samples (already GT-filtered, optionally range-clipped).
-        class_names: Ordered class names for metric keys, or ``None``.
-        thresholds: Center-distance match thresholds in meters.
-    """
-
-    samples: list[Detection3DSample]
-    class_names: tuple[str, ...] | None
-    thresholds: tuple[float, ...]
-    _curve_cache: dict[tuple[int, float], MatchCurve] = field(
-        default_factory=dict, init=False, repr=False, compare=False
-    )
-
-    def labels(self, full: bool) -> list[int]:
-        """Class labels to report.
-
-        At test (``full``) every configured class is reported; otherwise only
-        classes that actually have ground truth, matching the lightweight
-        validation report.
-        """
-        from autoware_ml.metrics.detection3d.matching import labels_to_evaluate
-
-        return labels_to_evaluate(self.samples, self.class_names if full else None)
-
-    def match_curve(self, label: int, threshold: float) -> MatchCurve:
-        """Return the score-ordered match curve for a class and threshold.
-
-        Memoized, so the matching runs once per ``(label, threshold)`` and is
-        shared by every metric that asks for it.
-        """
-        key = (label, float(threshold))
-        curve = self._curve_cache.get(key)
-        if curve is None:
-            from autoware_ml.metrics.detection3d.matching import match_center_distance
-
-            curve = match_center_distance(self.samples, label, threshold)
-            self._curve_cache[key] = curve
-        return curve
