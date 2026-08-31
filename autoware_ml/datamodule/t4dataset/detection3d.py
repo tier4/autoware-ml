@@ -20,13 +20,14 @@ T4Dataset annotations and sensor metadata.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass
 import math
 import os
 import pickle
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
 from torch.utils.data import DataLoader
 
 from autoware_ml.datamodule.base import DataModule, Dataset
@@ -36,6 +37,7 @@ from autoware_ml.datamodule.common.detection3d import (
     resolve_data_path,
     resolve_sweep_paths,
 )
+from autoware_ml.datamodule.common.frame_meta import scene_dir_fragment
 from autoware_ml.datamodule.common.serialization import SerializedSampleList
 from autoware_ml.transforms.base import TransformsCompose
 from autoware_ml.transforms.boxes3d.annotations import (
@@ -282,6 +284,8 @@ class T4Detection3DDataset(Dataset):
             "lidar_path": resolve_data_path(self.data_root, sample["lidar_path"]),
             "num_pts_feats": int(sample["lidar_points"].get("num_pts_feats", 5)),
             "sweeps": resolve_sweep_paths(sample, self.data_root),
+            "ego2global": np.asarray(sample["ego2global"], dtype=np.float64),
+            "scene_token": scene_dir_fragment(sample["lidar_path"], self.data_root),
         }
 
 
