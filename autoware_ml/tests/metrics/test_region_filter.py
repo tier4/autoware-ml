@@ -22,6 +22,8 @@ from autoware_ml.metrics.geometry.lanelet import (
 )
 from autoware_ml.metrics.geometry.reachability import ReachabilityParams
 from autoware_ml.metrics.segmentation3d.accuracy import Accuracy
+from autoware_ml.metrics.segmentation3d.error_clusters import ErrorClusters
+from autoware_ml.metrics.segmentation3d.point_cloud import Segmentation3DPointCloudMetricSuite
 from autoware_ml.metrics.segmentation3d.suite import Segmentation3DConfusionMatrixMetricSuite
 
 _REAL_MAP = (
@@ -422,6 +424,76 @@ def test_detection_suite_excludes_scene_without_lanelet_map() -> None:
     # per-frame denominators only count covered frames.
     assert len(suite.state_for(None, region).samples) == 1
     assert len(suite.state_for(None).samples) == 2
+
+
+def test_point_cloud_suite_excludes_scene_without_lanelet_map() -> None:
+    # 's_nomap' (one wrong point) is excluded from the road slice, the whole-scene
+    # error rate still counts it. Coverage records 2 frames seen, 1 covered.
+    region = RegionFilter(["road"], _StubProvider(_road_map(), no_map=("s_nomap",)))
+    suite = Segmentation3DPointCloudMetricSuite(
+        components=[ErrorClusters(stages=["test"]), ErrorClusters(stages=["test"], filter=region)],
+        num_classes=2,
+        ranges=(),
+    )
+    suite.update(
+        {
+            "seg_frames": [
+                {
+                    "coord": torch.tensor([[10.0, 0.0, 0.0], [20.0, 0.0, 0.0]]),
+                    "pred": torch.tensor([0, 0]),
+                    "target": torch.tensor([0, 0]),
+                    "scores": torch.full((2, 2), 0.5),
+                    "ego2global": np.eye(4),
+                    "scene_token": "s_map",
+                },
+                {
+                    "coord": torch.tensor([[10.0, 0.0, 0.0]]),
+                    "pred": torch.tensor([1]),
+                    "target": torch.tensor([0]),
+                    "scores": torch.full((1, 2), 0.5),
+                    "ego2global": np.eye(4),
+                    "scene_token": "s_nomap",
+                },
+            ]
+        }
+    )
+    report = suite.result(EvalStage.TEST)
+    assert report["error_rate"] == pytest.approx(1.0 / 3.0)  # 1 wrong of 3, all scenes
+    assert report["region_road/error_rate"] == pytest.approx(0.0)  # only s_map, clean
+    assert suite.region_frames_seen.tolist() == [2]
+    assert suite.region_frames_covered.tolist() == [1]
+
+
+def test_point_cloud_suite_region_filter_clips_boxes() -> None:
+    # A GT box off the road region is omitted from the filtered state, box
+    # membership is resolved through the same filter as the points.
+    region = RegionFilter(["road"], _StubProvider(_road_map()))
+    suite = Segmentation3DPointCloudMetricSuite(
+        components=[
+            ErrorClusters(stages=["test"]),
+            ErrorClusters(stages=["test"], filter=region),
+        ],
+        num_classes=2,
+        ranges=(),
+    )
+    suite.update(
+        {
+            "seg_frames": [
+                {
+                    "coord": torch.tensor([[10.0, 0.0, 0.0]]),
+                    "pred": torch.tensor([0]),
+                    "target": torch.tensor([0]),
+                    "scores": torch.full((1, 2), 0.5),
+                    "ego2global": np.eye(4),
+                    "scene_token": "scene",
+                    "gt_boxes": torch.tensor([_box(10.0), _box(100.0)]),
+                    "gt_box_labels": torch.tensor([0, 0]),
+                }
+            ]
+        }
+    )
+    assert suite.state_for(None, region).frames[0].gt_boxes.shape[0] == 1
+    assert suite.state_for(None).frames[0].gt_boxes.shape[0] == 2
 
 
 _MINI_OSM = """<?xml version='1.0'?>
