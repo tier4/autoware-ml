@@ -184,11 +184,14 @@ class Metric(ABC, Generic[StateT]):
     whole-scene) by which the suite groups components and prefixes their keys.
     ``needs_ttc`` declares that the metric reads the per-box collision TTC, so
     a suite only runs its collision provider at stages where such a metric is
-    active (TTC is expensive and test-only in practice).
+    active (TTC is expensive and test-only in practice). ``needs_boxes``
+    declares that the metric reads per-frame detection ground truth, so a suite
+    can demand those annotations instead of caching empty placeholders.
     """
 
     required_eval_keys: tuple[str, ...] = ()
     needs_ttc: bool = False
+    needs_boxes: bool = False
 
     def __init__(
         self,
