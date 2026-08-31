@@ -30,8 +30,8 @@ PTv3's defaults leave both off. Everything not listed below is identical to
 | ------------------- | ----------------------------------- | --------------------------------------------------- |
 | Block composition   | Every block: conv + attention + MLP | Stages 0-2 conv only, stages 3-4 attention only     |
 | Positional encoding | Submanifold conv per block          | Conv early; axis-split 3D RoPE on `grid_coord` late |
-| Decoder             | `dec_depths` blocks per stage       | `dec_depths` all zero - unpooling only              |
-| Encoder blocks      | 14 conv + 14 attention              | 6 conv + 8 attention                                |
+| Decoder             | `dec_depths` blocks per stage       | Unpooling only at `base`; gated blocks at `tiny`    |
+| Encoder blocks      | 14 conv + 14 attention              | 6 conv + 8 attention at `base`                      |
 | Serialization       | Every stage sorts for attention     | Only the two coarsest stages read an order          |
 
 ## Rotary position embedding
@@ -41,20 +41,29 @@ rotates each with a shared frequency ladder over integer `grid_coord` positions.
 Each chunk pairs dimension `i` with `i + chunk // 2` as the two components one
 shared `(cos, sin)` rotates together, so the rotated span must be a multiple of
 six: `rope_span` returns the largest one that fits and any trailing dimensions
-pass through unrotated. At `head_dim = 32` that is 30 rotated dimensions and a
-2-dimension NoPE tail.
+pass through unrotated. `base` sizes every stage at 18 channels per head and so
+rotates the whole head; `tiny` inherits PTv3-tiny's head counts for a `head_dim`
+of 16, rotating 12 dimensions and passing 4 through.
 
 The default `enc_rope_base` of 100.0 mirrors what LitePT's reference CUDA
 operator calls `rope_freq`. This is a hyperparameter and needs tuning.
 
 ## Available Configurations
 
-| Config Name                                            | Task           | Dataset   | Range | Purpose                |
-| ------------------------------------------------------ | -------------- | --------- | ----- | ---------------------- |
-| `segmentation3d/litept/voxel012_122m_t4dataset_j6gen2` | segmentation3d | T4Dataset | 122 m | T4Dataset segmentation |
+| Config Name                                            | Task                         | Dataset   | Head        | Range | Purpose                        |
+| ------------------------------------------------------ | ---------------------------- | --------- | ----------- | ----- | ------------------------------ |
+| `segmentation3d/litept/voxel012_122m_t4dataset_j6gen2` | segmentation3d               | T4Dataset | Seg decoder | 122 m | T4Dataset segmentation         |
+| `multi/litept/voxel012_122m_t4dataset_j6gen2`          | segmentation3d + detection3d | T4Dataset | TransFusion | 122 m | Joint segmentation + detection |
 
-The config inherits dataset, transforms, optimizer and deploy settings from the
-PTv3 config of the same name and swaps only the encoder and the decoder head.
+Each inherits dataset, transforms, optimizer and deploy settings from the PTv3
+config of the same name and swaps only the encoder and the decoder head.
+
+Both come in the two scales [PTv3](ptv3.md) uses. `base` is the published LitePT
+parametrization: 18 channels per attention head and a decoder that only unpools.
+`tiny` is PTv3-tiny with the gating applied and nothing else changed, so the two
+stay directly comparable - its decoder keeps PTv3-tiny's blocks and runs them
+under LitePT's rule. The configs above are at `tiny` scale, following the PTv3
+configs they inherit from.
 
 ```bash
 autoware-ml train --config-name segmentation3d/litept/voxel012_122m_t4dataset_j6gen2
@@ -79,7 +88,7 @@ is future work.
 | `autoware_ml/models/segmentation3d/encoders/ptv3.py` | `LitePTEncoder`, `Point3DRoPE`, block gating  |
 | `autoware_ml/models/segmentation3d/ptv3_base.py`     | `PTv3EncoderExportBase`, shared export inputs |
 | `autoware_ml/models/segmentation3d/heads/ptv3.py`    | Decoder gating (`dec_conv`, `dec_attn`)       |
-| `autoware_ml/configs/tasks/segmentation3d/litept/`   | Task configurations                           |
+| `autoware_ml/configs/tasks/*/litept/`                | Task configurations                           |
 | `autoware_ml/tests/models/test_litept.py`            | Rotary, gating, and export tests              |
 
 ## Acknowledgment

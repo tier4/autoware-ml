@@ -1341,10 +1341,9 @@ class LitePTEncoder(PointTransformerV3Encoder):
     attention and late convolution blocks. It is fully compatible with PTv3's
     export contract, task models and heads.
 
-    Defaults follow the published LitePT topology but use channel widths that
-    are multiples of 32 for tensor-core-friendly GEMMs. That gives a head
-    dimension of 32 per stage, of which 30 dimensions are rotated and two form
-    an unrotated tail - see :class:`Point3DRoPE`.
+    Defaults follow the published LitePT parametrization, whose channel widths
+    are 18 per head at every stage so the rotary embedding rotates the whole
+    head - see :class:`Point3DRoPE`.
     """
 
     def __init__(
@@ -1353,8 +1352,8 @@ class LitePTEncoder(PointTransformerV3Encoder):
         order: Sequence[str] = ("z", "z-trans", "hilbert", "hilbert-trans"),
         stride: Sequence[int] = (2, 2, 2, 2),
         enc_depths: Sequence[int] = (2, 2, 2, 6, 2),
-        enc_channels: Sequence[int] = (32, 64, 128, 256, 512),
-        enc_num_head: Sequence[int] = (1, 2, 4, 8, 16),
+        enc_channels: Sequence[int] = (36, 72, 144, 252, 504),
+        enc_num_head: Sequence[int] = (2, 4, 8, 14, 28),
         enc_patch_size: Sequence[int] = (1024, 1024, 1024, 1024, 1024),
         mlp_ratio: float = 4.0,
         qkv_bias: bool = True,

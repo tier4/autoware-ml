@@ -1,0 +1,5 @@
+# @package model.encoder
+_target_: autoware_ml.models.segmentation3d.encoders.ptv3.LitePTEncoder
+enc_conv: [true, true, true, false, false]
+enc_attn: [false, false, false, true, true]
+enc_rope_base: 100.0
