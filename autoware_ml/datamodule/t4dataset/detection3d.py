@@ -34,10 +34,9 @@ from autoware_ml.datamodule.base import DataModule, Dataset
 from autoware_ml.datamodule.common.detection3d import (
     build_detection_dataloader,
     load_detection_data_infos,
-    resolve_data_path,
-    resolve_sweep_paths,
 )
 from autoware_ml.datamodule.common.frame_meta import scene_dir_fragment
+from autoware_ml.datamodule.common.point_cloud import resolve_data_path, resolve_sweep_paths
 from autoware_ml.datamodule.common.serialization import SerializedSampleList
 from autoware_ml.transforms.base import TransformsCompose
 from autoware_ml.transforms.boxes3d.annotations import (
@@ -283,7 +282,7 @@ class T4Detection3DDataset(Dataset):
             "timestamp": sample.get("timestamp"),
             "lidar_path": resolve_data_path(self.data_root, sample["lidar_path"]),
             "num_pts_feats": int(sample["lidar_points"].get("num_pts_feats", 5)),
-            "sweeps": resolve_sweep_paths(sample, self.data_root),
+            "sweeps": resolve_sweep_paths(sample["sweeps"], self.data_root),
             "ego2global": np.asarray(sample["ego2global"], dtype=np.float64),
             "scene_token": scene_dir_fragment(sample["lidar_path"], self.data_root),
         }

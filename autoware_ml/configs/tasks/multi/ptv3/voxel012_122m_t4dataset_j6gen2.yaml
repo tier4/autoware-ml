@@ -43,6 +43,7 @@ t4dataset:
 
 point_cloud_range: [-122.88, -122.88, -3.0, 122.88, 122.88, 5.0]
 grid_size: 0.12
+max_voxels: 524288
 head_voxel_size: [0.96, 0.96, 8.0]
 
 num_proposals: 500
@@ -86,12 +87,18 @@ datamodule:
         class_mapping: ${segmentation_class_mapping}
         ignore_index: ${dataset.segmentation3d.ignore_index}
       - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
-        sweeps_num: 1
+        sweeps_num: 2
         load_dim: 5
-        use_dim: [0, 1, 2, 3]
+        use_dim: [0, 1, 2, 3, 4]
+        time_dim: 4
         remove_close: true
+        sweep_selection: random
+        time_lag_range: [0.05, 0.25]
       - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
+        time_lag_dim: 4
       - _target_: autoware_ml.transforms.segmentation3d.formatting.PreparePointSegInput
+        time_lag_dim: 4
+        ignore_index: ${dataset.segmentation3d.ignore_index}
       - _target_: autoware_ml.transforms.point_cloud.geometry.RandomRotateTargetAngle
         p: 0.75
         angle: [0.5, 1.0, 1.5]
@@ -120,22 +127,14 @@ datamodule:
       - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
         range_radius: [0.0, 60.0]
         min_num_points: ${dataset.detection3d.train_min_points_near}
+        time_lag_dim: 4
       - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
         range_radius: [60.0, 130.0]
         min_num_points: ${dataset.detection3d.train_min_points_far}
-      - _target_: autoware_ml.transforms.common.copying.Copy
-        keys_dict: { segment: origin_segment, coord: origin_coord }
-      - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
-        grid_size: ${grid_size}
-        point_cloud_range: ${point_cloud_range}
-        hash_type: fnv
-        mode: train
-        keys: [coord, strength, segment]
-        return_inverse: true
-        return_grid_coord: true
+        time_lag_dim: 4
       - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
-        keys: [coord, strength]
-        output_key: feat
+        keys: [coord, strength, time_lag]
+        output_key: points
   val_transforms:
     _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
@@ -149,52 +148,44 @@ datamodule:
         class_mapping: ${segmentation_class_mapping}
         ignore_index: ${dataset.segmentation3d.ignore_index}
       - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
-        sweeps_num: 1
+        sweeps_num: 2
         load_dim: 5
-        use_dim: [0, 1, 2, 3]
+        use_dim: [0, 1, 2, 3, 4]
+        time_dim: 4
         remove_close: true
+        sweep_selection: nearest
+        time_lag_range: [0.05, 0.25]
       - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
+        time_lag_dim: 4
       - _target_: autoware_ml.transforms.segmentation3d.formatting.PreparePointSegInput
+        time_lag_dim: 4
+        ignore_index: ${dataset.segmentation3d.ignore_index}
       - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
         point_cloud_range: ${point_cloud_range}
       - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeFilter
         point_cloud_range: ${point_cloud_range}
-      - _target_: autoware_ml.transforms.common.copying.Copy
-        keys_dict: { segment: origin_segment, coord: origin_coord }
-      - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
-        grid_size: ${grid_size}
-        point_cloud_range: ${point_cloud_range}
-        hash_type: fnv
-        mode: test
-        keys: [coord, strength, segment]
-        return_inverse: true
-        return_grid_coord: true
       - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
-        keys: [coord, strength]
-        output_key: feat
+        keys: [coord, strength, time_lag]
+        output_key: points
   test_transforms: ${datamodule.val_transforms}
   predict_transforms:
     _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
       - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
-        sweeps_num: 1
+        sweeps_num: 2
         load_dim: 5
-        use_dim: [0, 1, 2, 3]
+        use_dim: [0, 1, 2, 3, 4]
+        time_dim: 4
         remove_close: true
+        sweep_selection: nearest
+        time_lag_range: [0.05, 0.25]
       - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
+        time_lag_dim: 4
       - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
         point_cloud_range: ${point_cloud_range}
-      - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
-        grid_size: ${grid_size}
-        point_cloud_range: ${point_cloud_range}
-        hash_type: fnv
-        mode: test
-        keys: [coord, strength]
-        return_inverse: true
-        return_grid_coord: true
       - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
-        keys: [coord, strength]
-        output_key: feat
+        keys: [coord, strength, time_lag]
+        output_key: points
 
 model:
   bev_neck:

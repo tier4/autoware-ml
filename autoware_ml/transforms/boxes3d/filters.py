@@ -22,6 +22,7 @@ from typing import Any
 import numpy as np
 
 from autoware_ml.transforms.base import BaseTransform
+from autoware_ml.transforms.point_cloud.time_lag import current_frame_mask
 
 _BOX_KEYS = ("gt_boxes", "gt_names", "gt_labels", "gt_num_points")
 
@@ -44,6 +45,20 @@ def _resolve_point_coords(input_dict: dict[str, Any]) -> np.ndarray:
         if key in input_dict:
             return np.asarray(input_dict[key], dtype=np.float32)[:, :3]
     raise KeyError("Point-count filters require a point cloud under 'coord' or 'points'.")
+
+
+def _current_frame_coords(
+    input_dict: dict[str, Any], time_lag_dim: int | None
+) -> np.ndarray:
+    """Return the coordinates of the points a box point count may consider.
+
+    A ground-truth box is annotated on the current frame, so its point support is a property of that
+    frame: points appended from earlier sweeps must not decide whether the box is kept, or the
+    surviving set of boxes would depend on how many sweeps the model happens to consume.
+    """
+    coord = _resolve_point_coords(input_dict)
+    mask = current_frame_mask(input_dict, time_lag_dim)
+    return coord if mask is None else coord[mask]
 
 
 def _count_points_in_rotated_boxes(
@@ -191,6 +206,8 @@ class ObjectMinPointsFilter(BaseTransform):
         coord: Point coordinates (Nx3 or wider). Required when gt_boxes is present.
         points: Raw point array (Nx3 or wider). Required when gt_boxes is present and
             coord is absent.
+        time_lag: Per-point time lag. Read when the sample carries it, so only current-frame
+            points are counted.
         gt_num_points: Per-box lidar point counts. Filtered when present.
 
     Generated keys:
@@ -203,13 +220,17 @@ class ObjectMinPointsFilter(BaseTransform):
     _required_keys = ["gt_names"]
     _optional_keys = ["gt_boxes", "coord", "points"]
 
-    def __init__(self, *, min_num_points: int) -> None:
+    def __init__(self, *, min_num_points: int, time_lag_dim: int | None) -> None:
         """Initialize the ObjectMinPointsFilter transform.
 
         Args:
             min_num_points: Minimum number of points required inside each box.
+            time_lag_dim: Column of ``points`` holding the per-point time lag, or ``None`` when the
+                pipeline declares that its cloud carries no time lag. Only current-frame points are
+                counted, so the surviving boxes do not depend on the number of loaded sweeps.
         """
         self.min_num_points = min_num_points
+        self.time_lag_dim = time_lag_dim
 
     def apply_defaults(self, input_dict: dict[str, Any]) -> None:
         """No defaults needed - transform is a no-op when gt_boxes is absent."""
@@ -227,7 +248,7 @@ class ObjectMinPointsFilter(BaseTransform):
         if "gt_boxes" not in input_dict:
             return input_dict
 
-        coord = _resolve_point_coords(input_dict)
+        coord = _current_frame_coords(input_dict, self.time_lag_dim)
         boxes = input_dict["gt_boxes"]
         counts = _count_points_in_rotated_boxes(coord, boxes)
         mask = counts >= self.min_num_points
@@ -246,6 +267,8 @@ class ObjectRangeMinPointsFilter(BaseTransform):
         coord: Point coordinates (Nx3 or wider). Required when gt_boxes is present.
         points: Raw point array (Nx3 or wider). Required when gt_boxes is present and
             coord is absent.
+        time_lag: Per-point time lag. Read when the sample carries it, so only current-frame
+            points are counted.
         gt_num_points: Per-box lidar point counts. Filtered when present.
 
     Generated keys:
@@ -258,12 +281,17 @@ class ObjectRangeMinPointsFilter(BaseTransform):
     _required_keys = ["gt_names"]
     _optional_keys = ["gt_boxes", "coord", "points"]
 
-    def __init__(self, *, range_radius: Sequence[float], min_num_points: int) -> None:
+    def __init__(
+        self, *, range_radius: Sequence[float], min_num_points: int, time_lag_dim: int | None
+    ) -> None:
         """Initialize the ObjectRangeMinPointsFilter transform.
 
         Args:
             range_radius: Radial interval ``[min_radius, max_radius]`` in meters.
             min_num_points: Minimum points required for boxes inside the interval.
+            time_lag_dim: Column of ``points`` holding the per-point time lag, or ``None`` when the
+                pipeline declares that its cloud carries no time lag. Only current-frame points are
+                counted, so the surviving boxes do not depend on the number of loaded sweeps.
         """
         if len(range_radius) != 2:
             raise ValueError(f"range_radius must contain [min, max], got {range_radius}")
@@ -275,6 +303,7 @@ class ObjectRangeMinPointsFilter(BaseTransform):
         self.min_radius = min_radius
         self.max_radius = max_radius
         self.min_num_points = min_num_points
+        self.time_lag_dim = time_lag_dim
 
     def apply_defaults(self, input_dict: dict[str, Any]) -> None:
         """No defaults needed because missing boxes make this transform a no-op."""
@@ -295,7 +324,9 @@ class ObjectRangeMinPointsFilter(BaseTransform):
         boxes = input_dict["gt_boxes"]
         radii = np.linalg.norm(boxes[:, :2], axis=1)
         in_range = (radii >= self.min_radius) & (radii < self.max_radius)
-        counts = _count_points_in_rotated_boxes(_resolve_point_coords(input_dict), boxes)
+        counts = _count_points_in_rotated_boxes(
+            _current_frame_coords(input_dict, self.time_lag_dim), boxes
+        )
         mask = ~in_range | (counts >= self.min_num_points)
         _filter_present_box_keys(input_dict, mask)
         return input_dict

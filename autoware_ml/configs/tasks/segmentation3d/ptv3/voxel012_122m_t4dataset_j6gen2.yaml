@@ -11,6 +11,7 @@ batch_size: 16
 num_workers: 8
 
 grid_size: 0.12
+max_voxels: 524288
 point_cloud_range: [-122.88, -122.88, -3.0, 122.88, 122.88, 5.0]
 
 datamodule:
@@ -32,14 +33,22 @@ datamodule:
   train_transforms:
     _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
-      - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
+      - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
+        sweeps_num: 2
         load_dim: 5
-        use_dim: [0, 1, 2, 3]
+        use_dim: [0, 1, 2, 3, 4]
+        time_dim: 4
+        remove_close: true
+        sweep_selection: random
+        time_lag_range: [0.05, 0.25]
       - _target_: autoware_ml.transforms.segmentation3d.loading.LoadSegAnnotations3D
         class_mapping: ${dataset.segmentation3d.class_mapping}
         ignore_index: ${dataset.segmentation3d.ignore_index}
       - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
+        time_lag_dim: 4
       - _target_: autoware_ml.transforms.segmentation3d.formatting.PreparePointSegInput
+        time_lag_dim: 4
+        ignore_index: ${dataset.segmentation3d.ignore_index}
       - _target_: autoware_ml.transforms.point_cloud.geometry.RandomRotateTargetAngle
         p: 0.75
         angle: [0.5, 1.0, 1.5]
@@ -63,64 +72,52 @@ datamodule:
         gamma_range: [0.8, 1.25]
         scale_range: [0.9, 1.1]
         shift_range: [-0.02, 0.02]
-      - _target_: autoware_ml.transforms.common.copying.Copy
-        keys_dict: { segment: origin_segment, coord: origin_coord }
-      - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
-        grid_size: ${grid_size}
-        point_cloud_range: ${point_cloud_range}
-        hash_type: fnv
-        mode: train
-        keys: [coord, strength, segment]
-        return_inverse: true
-        return_grid_coord: true
       - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
-        keys: [coord, strength]
-        output_key: feat
+        keys: [coord, strength, time_lag]
+        output_key: points
   val_transforms:
     _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
-      - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
+      - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
+        sweeps_num: 2
         load_dim: 5
-        use_dim: [0, 1, 2, 3]
+        use_dim: [0, 1, 2, 3, 4]
+        time_dim: 4
+        remove_close: true
+        sweep_selection: nearest
+        time_lag_range: [0.05, 0.25]
       - _target_: autoware_ml.transforms.segmentation3d.loading.LoadSegAnnotations3D
         class_mapping: ${dataset.segmentation3d.class_mapping}
         ignore_index: ${dataset.segmentation3d.ignore_index}
       - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
+        time_lag_dim: 4
       - _target_: autoware_ml.transforms.segmentation3d.formatting.PreparePointSegInput
+        time_lag_dim: 4
+        ignore_index: ${dataset.segmentation3d.ignore_index}
       - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
         point_cloud_range: ${point_cloud_range}
-      - _target_: autoware_ml.transforms.common.copying.Copy
-        keys_dict: { segment: origin_segment, coord: origin_coord }
-      - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
-        grid_size: ${grid_size}
-        point_cloud_range: ${point_cloud_range}
-        hash_type: fnv
-        mode: test
-        keys: [coord, strength, segment]
-        return_inverse: true
-        return_grid_coord: true
       - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
-        keys: [coord, strength]
-        output_key: feat
+        keys: [coord, strength, time_lag]
+        output_key: points
   test_transforms: ${datamodule.val_transforms}
   predict_transforms:
     _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
-      - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
+      - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
+        sweeps_num: 2
         load_dim: 5
-        use_dim: [0, 1, 2, 3]
+        use_dim: [0, 1, 2, 3, 4]
+        time_dim: 4
+        remove_close: true
+        sweep_selection: nearest
+        time_lag_range: [0.05, 0.25]
       - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
+        time_lag_dim: 4
       - _target_: autoware_ml.transforms.segmentation3d.formatting.PreparePointSegInput
+        time_lag_dim: 4
+        ignore_index: ${dataset.segmentation3d.ignore_index}
       - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
         point_cloud_range: ${point_cloud_range}
-      - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
-        grid_size: ${grid_size}
-        point_cloud_range: ${point_cloud_range}
-        hash_type: fnv
-        mode: test
-        keys: [coord, strength]
-        return_inverse: true
-        return_grid_coord: true
       - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
-        keys: [coord, strength]
-        output_key: feat
+        keys: [coord, strength, time_lag]
+        output_key: points

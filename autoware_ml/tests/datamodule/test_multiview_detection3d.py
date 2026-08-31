@@ -66,7 +66,13 @@ def test_multiview_detection_dataset_applies_loader_pipeline(tmp_path: Path) -> 
             [
                 LoadAnnotations3D(),
                 LoadMultiViewImagesFromFiles(),
-                LoadPointsFromMultiSweeps(load_dim=5, use_dim=[0, 1, 2, 3], sweeps_num=0),
+                LoadPointsFromMultiSweeps(
+                    load_dim=5,
+                    use_dim=[0, 1, 2, 3],
+                    sweeps_num=0,
+                    sweep_selection="nearest",
+                    time_lag_range=[0.01, 1.0],
+                ),
             ]
         ),
     )

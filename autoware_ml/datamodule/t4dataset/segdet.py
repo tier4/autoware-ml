@@ -35,10 +35,9 @@ from autoware_ml.datamodule.common.detection3d import (
     build_detection_dataloader,
     build_label_to_category,
     normalize_detection_sample,
-    resolve_data_path,
-    resolve_sweep_paths,
 )
 from autoware_ml.datamodule.common.frame_meta import scene_dir_fragment
+from autoware_ml.datamodule.common.point_cloud import resolve_data_path, resolve_sweep_paths
 from autoware_ml.datamodule.common.serialization import SerializedSampleList
 from autoware_ml.datamodule.common.sources import AnnotationSource, coerce_annotation_sources
 from autoware_ml.datamodule.t4dataset.detection3d import (
@@ -151,7 +150,7 @@ class T4SegmentationDetection3DDataset(Dataset):
             "sample_token": sample["token"],
             "lidar_path": resolve_data_path(self.data_root, sample["lidar_path"]),
             "num_pts_feats": int(sample["lidar_points"].get("num_pts_feats", 5)),
-            "sweeps": resolve_sweep_paths(sample, self.data_root),
+            "sweeps": resolve_sweep_paths(sample["sweeps"], self.data_root),
             "pts_semantic_mask_categories": sample["pts_semantic_mask_categories"],
             "pts_semantic_mask_path": resolve_data_path(
                 self.data_root, sample["pts_semantic_mask_path"]

@@ -30,10 +30,7 @@ import torch
 import torch.nn as nn
 
 from autoware_ml.losses.segmentation3d.lovasz import LovaszLoss
-from autoware_ml.metrics.segmentation3d.eval_output import (
-    concat_frame_ids,
-    segmentation_frames_eval_output,
-)
+from autoware_ml.metrics.segmentation3d.eval_output import segmentation_frames_eval_output
 from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     Block,
     PointSequential,
@@ -239,51 +236,164 @@ class PTv3SegDecoderHead(nn.Module):
         return export_head
 
 
-def segmentation_eval_output(seg_logits: torch.Tensor, batch: Mapping[str, Any]) -> dict[str, Any]:
-    """Scatter point-level predictions back to original points, per frame.
+def current_frame_mask(points: torch.Tensor, time_lag_dim: int | None) -> torch.Tensor:
+    """Return the mask of points captured in the current frame.
 
-    Produces the ``seg_frames`` contract both segmentation suites consume: one
-    entry per frame with the original-resolution coordinates, predicted/target
-    labels and per-class softmax scores. The frame of every original point is
-    recovered from the sampled-space ``inverse`` map and the batch ``offset``
-    (inclusive cumulative sampled-point counts per frame).
+    Loaders assign a time lag of exactly ``0`` to the current frame and a
+    positive lag to every point appended from an earlier sweep.
 
     Args:
-        seg_logits: Point-wise segmentation logits at the sampled-point level.
-        batch: Batch dictionary with ``inverse``, ``offset``, ``origin_segment``,
-            and ``origin_coord``. Per-frame metadata (ego pose, scene token) is
+        points: Point array of shape ``(num_points, num_features)``.
+        time_lag_dim: Column of ``points`` holding the per-point time lag, or
+            ``None`` when the pipeline carries no time lag: every point then
+            belongs to the current frame.
+
+    Returns:
+        Boolean mask of shape ``(num_points,)``.
+    """
+    if time_lag_dim is None:
+        return torch.ones(points.shape[0], dtype=torch.bool, device=points.device)
+    if time_lag_dim >= points.shape[1]:
+        raise ValueError(
+            f"time_lag_dim {time_lag_dim} is out of bounds for points with "
+            f"{points.shape[1]} features."
+        )
+    return points[:, time_lag_dim] == 0
+
+
+def check_voxel_budget(num_dropped_voxels: torch.Tensor) -> None:
+    """Raise when the voxelizer discarded occupied voxels.
+
+    Segmentation scores every point through its voxel, so a voxel budget that
+    truncates the scene silently removes supervision and predictions.
+
+    Args:
+        num_dropped_voxels: Scalar count reported by the voxelizer.
+
+    Raises:
+        RuntimeError: If any occupied voxel was dropped.
+    """
+    if int(num_dropped_voxels) > 0:
+        raise RuntimeError(
+            f"The voxelizer dropped {int(num_dropped_voxels)} occupied voxels. Increase "
+            "'max_voxels' and 'eval_max_voxels' of the data preprocessing so every voxel is kept."
+        )
+
+
+def assigned_point_mask(point_voxel_indices: torch.Tensor) -> torch.Tensor:
+    """Return the mask of points that fall inside the voxel grid.
+
+    A point has no voxel when it lies outside the voxel grid, which happens at the
+    upper range bound when the range is not a multiple of the voxel size. Such
+    points are outside the model's world and take no part in loss or scoring.
+    """
+    return point_voxel_indices >= 0
+
+
+def gather_point_logits(
+    seg_logits: torch.Tensor, point_voxel_indices: torch.Tensor, mask: torch.Tensor
+) -> torch.Tensor:
+    """Scatter voxel-level logits to the selected points through their voxel row.
+
+    Args:
+        seg_logits: Voxel-level logits of shape ``(num_voxels, num_classes)``.
+        point_voxel_indices: Voxel row of every point.
+        mask: Points to gather, all of which must have a voxel.
+
+    Returns:
+        Point-level logits of shape ``(mask.sum(), num_classes)``.
+    """
+    return seg_logits[point_voxel_indices[mask]]
+
+
+def concat_point_frames(points: Sequence[torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
+    """Concatenate per-frame point arrays and return the frame index of every point."""
+    lengths = torch.tensor([frame.shape[0] for frame in points], device=points[0].device)
+    frame_ids = torch.repeat_interleave(torch.arange(len(points), device=lengths.device), lengths)
+    return torch.cat(list(points), dim=0), frame_ids
+
+
+def segmentation_point_loss(
+    head: PTv3SegDecoderHead, seg_logits: torch.Tensor, batch: Mapping[str, Any]
+) -> dict[str, torch.Tensor]:
+    """Compute the segmentation losses with every in-grid point supervising its voxel.
+
+    Args:
+        head: Segmentation head owning the losses.
+        seg_logits: Voxel-level segmentation logits.
+        batch: Batch dictionary with ``point_voxel_indices``, ``num_dropped_voxels``
+            and the point-level ``segment`` targets.
+
+    Returns:
+        Dictionary with the segmentation losses.
+    """
+    check_voxel_budget(batch["num_dropped_voxels"])
+    assigned = assigned_point_mask(batch["point_voxel_indices"])
+    point_logits = gather_point_logits(seg_logits, batch["point_voxel_indices"], assigned)
+    return head.loss(point_logits, batch["segment"][assigned])
+
+
+def segmentation_eval_output(
+    seg_logits: torch.Tensor, batch: Mapping[str, Any], time_lag_dim: int | None
+) -> dict[str, Any]:
+    """Scatter voxel-level predictions to the current-frame points, per frame.
+
+    Produces the ``seg_frames`` contract both segmentation suites consume: one
+    entry per frame with the coordinates, predicted/target labels and per-class
+    softmax scores of the current-frame points inside the voxel grid. Points
+    appended from earlier sweeps only shape the voxel features and are excluded.
+
+    Args:
+        seg_logits: Voxel-level segmentation logits.
+        batch: Batch dictionary with the per-frame ``points`` list, the
+            ``point_voxel_indices`` of the voxelizer and the point-level
+            ``segment`` targets. Per-frame metadata (ego pose, scene token) is
             passed through when the dataset supplies it.
+        time_lag_dim: Column of the points holding the per-point time lag, or
+            ``None`` when the pipeline carries no time lag.
 
     Returns:
         ``{"seg_frames": [...]}`` keyed for the segmentation suites.
     """
-    inverse = batch["inverse"].long()
-    offset = batch["offset"].long()
-    scores = torch.softmax(seg_logits, dim=1)[inverse]
+    check_voxel_budget(batch["num_dropped_voxels"])
+    points, frame_ids = concat_point_frames(batch["points"])
+    scored = current_frame_mask(points, time_lag_dim) & assigned_point_mask(
+        batch["point_voxel_indices"]
+    )
+    point_logits = gather_point_logits(seg_logits, batch["point_voxel_indices"], scored)
     return segmentation_frames_eval_output(
-        coord=batch["origin_coord"],
-        pred_labels=seg_logits.argmax(dim=1)[inverse],
-        target_labels=batch["origin_segment"].long(),
-        scores=scores,
-        frame_ids=concat_frame_ids(offset, inverse),
-        num_frames=int(offset.shape[0]),
+        coord=points[scored, :3],
+        pred_labels=point_logits.argmax(dim=1),
+        target_labels=batch["segment"].long()[scored],
+        scores=torch.softmax(point_logits, dim=1),
+        frame_ids=frame_ids[scored],
+        num_frames=len(batch["points"]),
         batch=batch,
     )
 
 
 def segmentation_predict_outputs(
-    seg_logits: torch.Tensor, batch: Mapping[str, Any]
+    seg_logits: torch.Tensor, batch: Mapping[str, Any], time_lag_dim: int | None
 ) -> dict[str, torch.Tensor]:
-    """Format segmentation predictions at the original-point level.
+    """Format segmentation predictions for the current-frame points.
 
     Args:
-        seg_logits: Point-wise segmentation logits at the sampled-point level.
-        batch: Batch dictionary with ``inverse`` (sampled-to-original point
-            map).
+        seg_logits: Voxel-level segmentation logits.
+        batch: Batch dictionary with the per-frame ``points`` list and the
+            ``point_voxel_indices`` of the voxelizer.
+        time_lag_dim: Column of the points holding the per-point time lag, or
+            ``None`` when the pipeline carries no time lag.
 
     Returns:
-        Dictionary with ``pred_labels`` and per-class ``pred_probs`` at the
-        original-point level.
+        Dictionary with ``pred_labels`` and per-class ``pred_probs`` for every
+        current-frame point inside the voxel grid, in batch order.
     """
-    point_probs = torch.softmax(seg_logits, dim=1)[batch["inverse"].long()]
+    check_voxel_budget(batch["num_dropped_voxels"])
+    points, _ = concat_point_frames(batch["points"])
+    scored = current_frame_mask(points, time_lag_dim) & assigned_point_mask(
+        batch["point_voxel_indices"]
+    )
+    point_probs = torch.softmax(
+        gather_point_logits(seg_logits, batch["point_voxel_indices"], scored), dim=1
+    )
     return {"pred_labels": point_probs.argmax(dim=1), "pred_probs": point_probs}

@@ -24,8 +24,9 @@ from autoware_ml.tests.models.ptv3_detection_fixtures import (
 from autoware_ml.utils.checkpoints import apply_matching_weights
 
 EXPECTED_PTV3_INPUT_NAMES = [
+    "voxels",
+    "num_points_per_voxel",
     "grid_coord",
-    "feat",
     "serialized_code",
     "serialized_pooling_0_indices",
     "serialized_pooling_0_indptr",
@@ -133,7 +134,7 @@ def test_ptv3_seg_split_export_supports_decoder_blocks() -> None:
     with torch.no_grad():
         pred_labels, pred_probs = spec.module(*spec.args)
 
-    num_voxels = batch["coord"].shape[0]
+    num_voxels = batch["voxels"].shape[0]
     assert pred_labels.shape == (num_voxels,)
     assert pred_probs.shape == (num_voxels, 3)
     assert pred_labels.dtype == torch.long
@@ -142,6 +143,7 @@ def test_ptv3_seg_split_export_supports_decoder_blocks() -> None:
 def test_ptv3_segdet_eval_output_scatters_segmentation_to_original_points() -> None:
     model = SimpleNamespace(
         bbox_head=_DummyBBoxHead(),
+        time_lag_dim=4,
         _detection_frame_mask=PTv3SegDetModel._detection_frame_mask,
         _mask_detection_outputs=PTv3SegDetModel._mask_detection_outputs,
         _mask_list=PTv3SegDetModel._mask_list,
@@ -156,21 +158,22 @@ def test_ptv3_segdet_eval_output_scatters_segmentation_to_original_points() -> N
             dtype=torch.float32,
         ),
     }
+    points = torch.tensor(
+        [
+            [0.0, 0.0, 0.0, 0.5, 0.0],
+            [1.0, 1.0, 0.0, 0.5, 0.0],
+            [2.0, 2.0, 0.0, 0.5, 0.0],
+            [3.0, 3.0, 0.0, 0.5, 0.0],
+        ],
+        dtype=torch.float32,
+    )
     batch = {
         "gt_boxes": [torch.zeros((0, 9), dtype=torch.float32)],
         "gt_labels": [torch.zeros((0,), dtype=torch.long)],
-        "inverse": torch.tensor([0, 1, 1, 0], dtype=torch.long),
-        "offset": torch.tensor([2], dtype=torch.long),
-        "origin_segment": torch.tensor([0, 1, 1, 0], dtype=torch.long),
-        "origin_coord": torch.tensor(
-            [
-                [0.0, 0.0, 0.0],
-                [1.0, 1.0, 0.0],
-                [2.0, 2.0, 0.0],
-                [3.0, 3.0, 0.0],
-            ],
-            dtype=torch.float32,
-        ),
+        "points": [points],
+        "point_voxel_indices": torch.tensor([0, 1, 1, 0], dtype=torch.long),
+        "num_dropped_voxels": torch.tensor(0),
+        "segment": torch.tensor([0, 1, 1, 0], dtype=torch.long),
     }
 
     eval_out = PTv3SegDetModel.build_eval_output(model, batch, outputs)
@@ -178,8 +181,8 @@ def test_ptv3_segdet_eval_output_scatters_segmentation_to_original_points() -> N
     frames = eval_out["seg_frames"]
     assert len(frames) == 1
     assert frames[0]["pred"].tolist() == [0, 1, 1, 0]
-    assert torch.equal(frames[0]["target"], batch["origin_segment"])
-    assert torch.equal(frames[0]["coord"], batch["origin_coord"])
+    assert torch.equal(frames[0]["target"], batch["segment"])
+    assert torch.equal(frames[0]["coord"], points[:, :3])
     assert frames[0]["scores"].shape == (4, 2)
     assert frames[0]["gt_boxes"].shape == (0, 9)
     assert len(eval_out["predictions"]) == 1
@@ -221,6 +224,7 @@ def _build_segdet_model() -> PTv3SegDetModel:
         seg3d_head=build_seg_head(),
         bev_neck=build_bev_neck(),
         bbox_head=build_transfusion_head(),
+        time_lag_dim=4,
         export_output_names=JOINT_EXPORT_OUTPUT_NAMES,
         grid_size=1.0,
         point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
@@ -300,14 +304,7 @@ def test_ptv3_segdet_seg_logits_invariant_to_det_branch_pass() -> None:
 
     with torch.no_grad():
         joint_logits = model(**batch)["seg_logits"]
-        point = model.encoder(
-            {
-                "coord": batch["coord"],
-                "feat": batch["feat"],
-                "grid_coord": batch["grid_coord"],
-                "offset": batch["offset"],
-            }
-        )
+        point = model.encode(batch["voxels"], batch["num_points"], batch["voxel_coords"])
         seg_only_logits = model.seg3d_head(point)
 
     torch.testing.assert_close(joint_logits, seg_only_logits)

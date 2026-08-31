@@ -47,6 +47,8 @@ datamodule:
         load_dim: 5
         use_dim: [0, 1, 2, 3]
         remove_close: true
+        sweep_selection: nearest
+        time_lag_range: [0.05, 0.25]
       - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
         rot_range: [-1.571, 1.571]
         scale_ratio_range: [0.8, 1.2]
@@ -61,9 +63,11 @@ datamodule:
       - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
         range_radius: [0.0, 60.0]
         min_num_points: ${dataset.detection3d.train_min_points_near}
+        time_lag_dim: null
       - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
         range_radius: [60.0, 130.0]
         min_num_points: ${dataset.detection3d.train_min_points_far}
+        time_lag_dim: null
       - _target_: autoware_ml.transforms.point_cloud.sampling.PointShuffle
   val_transforms:
     _target_: autoware_ml.transforms.base.TransformsCompose
@@ -79,6 +83,8 @@ datamodule:
         load_dim: 5
         use_dim: [0, 1, 2, 3]
         remove_close: true
+        sweep_selection: nearest
+        time_lag_range: [0.05, 0.25]
       - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
         point_cloud_range: ${point_cloud_range}
   test_transforms: ${datamodule.val_transforms}
@@ -90,6 +96,8 @@ datamodule:
         load_dim: 5
         use_dim: [0, 1, 2, 3]
         remove_close: true
+        sweep_selection: nearest
+        time_lag_range: [0.05, 0.25]
       - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
         point_cloud_range: ${point_cloud_range}
 

@@ -12,19 +12,15 @@ num_classes: ${dataset.detection3d.num_classes}
 
 point_cloud_range: ???
 grid_size: ???
+max_voxels: ???
 head_voxel_size: ???
 
 num_proposals: ???
 
 datamodule:
   collation_map:
-    coord: concat
-    feat: concat
-    grid_coord: concat
+    points: list
     segment: concat
-    origin_segment: concat
-    origin_coord: concat
-    inverse: index_concat
     gt_boxes: list
     gt_labels: list
     gt_num_points: list
@@ -35,8 +31,19 @@ datamodule:
   class_names: ${dataset.detection3d.class_names}
   name_mapping: ${dataset.detection3d.name_mapping}
 
+data_preprocessing:
+  pipeline:
+    - _target_: autoware_ml.preprocessing.detection3d.point_pillar.PointPillarPreprocessor
+      voxel_size: ["${grid_size}", "${grid_size}", "${grid_size}"]
+      point_cloud_range: ${point_cloud_range}
+      max_num_points: 32
+      max_voxels: ${max_voxels}
+      eval_max_voxels: ${max_voxels}
+      voxelization_z_order_first: false
+
 model:
   _target_: autoware_ml.models.multi.ptv3_segdet.PTv3SegDetModel
+  time_lag_dim: 4
   bbox_head:
     _target_: autoware_ml.models.detection3d.heads.transfusion.TransFusionHead
     num_proposals: ${num_proposals}
@@ -54,6 +61,7 @@ model:
       height: [1, 2]
       dim: [3, 2]
       rot: [2, 2]
+      vel: [2, 2]
     bbox_coder:
       _target_: autoware_ml.models.detection3d.task_modules.bbox_coders.TransFusionBBoxCoder
       pc_range: ${point_cloud_range}
@@ -61,7 +69,7 @@ model:
       out_size_factor: 1
       post_center_range: ???
       score_threshold: 0.0
-      code_size: 8
+      code_size: 10
     assigner:
       _target_: autoware_ml.models.detection3d.task_modules.assigners.HungarianAssigner3D
       cls_cost:
@@ -78,7 +86,7 @@ model:
     point_cloud_range: ${point_cloud_range}
     voxel_size: ${head_voxel_size}
     out_size_factor: 1
-    code_weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    code_weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2]
     min_radius: 2
     gaussian_overlap: 0.1
     score_threshold: 0.1
@@ -90,7 +98,7 @@ model:
     heatmap_target: oriented
     heatmap_init_bias: -2.19
     nms_kernel_size: 3
-    use_velocity: false
+    use_velocity: true
   segmentation_loss_weight: 1.0
   detection_loss_weight: 1.0
   metrics: ${merge_lists:${dataset.detection3d.metrics},${dataset.segmentation3d.metrics}}
@@ -106,6 +114,7 @@ model:
       height,
       dim,
       rot,
+      vel,
     ]
   grid_size: ${grid_size}
   point_cloud_range: ${point_cloud_range}
@@ -151,6 +160,8 @@ deploy:
         metainfo:
           point_cloud_range: ${point_cloud_range}
           voxel_size: ["${grid_size}", "${grid_size}", "${grid_size}"]
+          voxel_features: [x, y, z, intensity, time_lag]
+          max_points_per_voxel: ${data_preprocessing.pipeline.0.max_num_points}
           serialization_orders: [z, z-trans]
           pooling_strides: ${model.encoder.stride}
           enc_channels: ${model.encoder.enc_channels}
@@ -160,7 +171,7 @@ deploy:
           dec_depths: ${model.seg3d_head.dec_depths}
           class_names: ${dataset.segmentation3d.class_names}
       ptv3_det3d_head:
-        output_names: [dense_heatmap, query_heatmap_score, query_labels, heatmap, center, height, dim, rot]
+        output_names: [dense_heatmap, query_heatmap_score, query_labels, heatmap, center, height, dim, rot, vel]
         metainfo:
           bbox_voxel_size: ${model.bbox_head.bbox_coder.voxel_size}
           has_twist: ${model.bbox_head.use_velocity}

@@ -55,7 +55,8 @@ datamodule:
         time_dim: 4
         pad_empty_sweeps: true
         remove_close: true
-        test_mode: false
+        sweep_selection: random
+        time_lag_range: [0.025, 0.475]
       - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.ImageAug3D
         final_dim: ${image_size}
         resize_lim: [0.38, 0.55]
@@ -76,6 +77,7 @@ datamodule:
       - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
         range_radius: [0.0, 60.0]
         min_num_points: 1
+        time_lag_dim: 4
       - _target_: autoware_ml.transforms.camera.masking.GridMask
         p: 0.0
       - _target_: autoware_ml.transforms.point_cloud.sampling.PointShuffle
@@ -92,6 +94,8 @@ datamodule:
         time_dim: 4
         pad_empty_sweeps: true
         remove_close: true
+        sweep_selection: nearest
+        time_lag_range: [0.025, 0.475]
       - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.ImageAug3D
         final_dim: ${image_size}
         resize_lim: [0.465, 0.465]
@@ -113,6 +117,8 @@ datamodule:
         time_dim: 4
         pad_empty_sweeps: true
         remove_close: true
+        sweep_selection: nearest
+        time_lag_range: [0.025, 0.475]
       - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.ImageAug3D
         final_dim: ${image_size}
         resize_lim: [0.465, 0.465]
