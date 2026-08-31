@@ -1,6 +1,6 @@
 # @package model.encoder
 _target_: autoware_ml.models.segmentation3d.encoders.ptv3.PointTransformerV3Encoder
-in_channels: 4
+in_channels: 5
 order: [z, z-trans, hilbert, hilbert-trans]
 stride: [2, 2, 2, 2]
 enc_depths: [2, 2, 2, 6, 2]

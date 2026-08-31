@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from typing import Any
 
 import torch
 
@@ -27,12 +28,13 @@ from autoware_ml.models.segmentation3d.encoders.ptv3 import (
 )
 from autoware_ml.models.segmentation3d.heads.ptv3 import PTv3SegDecoderHead
 from autoware_ml.models.segmentation3d.ptv3 import PTv3SegmentationModel
+from autoware_ml.preprocessing.detection3d.point_pillar import PointPillarPreprocessor
 
 
 def build_ptv3_encoder() -> PointTransformerV3Encoder:
     """Return a small PTv3 encoder suitable for unit tests."""
     return PointTransformerV3Encoder(
-        in_channels=4,
+        in_channels=5,
         order=("z",),
         stride=(2,),
         enc_depths=(1, 1),
@@ -86,6 +88,7 @@ def build_seg_model() -> PTv3SegmentationModel:
         seg3d_head=build_seg_head(),
         optimizer=lambda params: torch.optim.AdamW(params, lr=1e-3),
         grid_size=1.0,
+        time_lag_dim=4,
         point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
     )
 
@@ -181,11 +184,31 @@ def build_trans_model(
     )
 
 
-def build_inputs() -> dict[str, torch.Tensor]:
-    """Return one small PTv3 detection input batch."""
+POINT_CLOUD_RANGE = [0.0, 0.0, -2.0, 8.0, 8.0, 2.0]
+
+
+def build_preprocessor() -> PointPillarPreprocessor:
+    """Return the voxelizer matching the test geometry (1 m voxels, 8 m range)."""
+    return PointPillarPreprocessor(
+        voxel_size=[1.0, 1.0, 1.0],
+        point_cloud_range=POINT_CLOUD_RANGE,
+        max_num_points=4,
+        max_voxels=64,
+        eval_max_voxels=64,
+        voxelization_z_order_first=False,
+    )
+
+
+def build_points() -> torch.Tensor:
+    """Return one small ``(x, y, z, intensity, time_lag)`` point cloud.
+
+    Two points share the first voxel and the last point comes from an earlier
+    sweep (positive time lag).
+    """
     coord = torch.tensor(
         [
             [0.2, 0.5, 0.0],
+            [0.4, 0.6, 0.1],
             [1.1, 1.3, 0.2],
             [2.0, 1.5, 0.4],
             [3.2, 2.1, 0.1],
@@ -196,11 +219,25 @@ def build_inputs() -> dict[str, torch.Tensor]:
         ],
         dtype=torch.float32,
     )
-    feat = torch.cat([coord, torch.linspace(0.1, 0.8, steps=coord.shape[0]).unsqueeze(1)], dim=1)
-    grid_coord = coord.floor().to(dtype=torch.int32)
-    grid_coord[:, 2] += 2
-    offset = torch.tensor([coord.shape[0]], dtype=torch.long)
-    return {"coord": coord, "feat": feat, "grid_coord": grid_coord, "offset": offset}
+    intensity = torch.linspace(0.1, 0.9, steps=coord.shape[0]).unsqueeze(1)
+    time_lag = torch.zeros((coord.shape[0], 1), dtype=torch.float32)
+    time_lag[-1] = 0.1
+    return torch.cat([coord, intensity, time_lag], dim=1)
+
+
+def build_batch() -> dict[str, Any]:
+    """Return one preprocessed single-frame PTv3 batch with segmentation targets."""
+    points = build_points()
+    segment = torch.arange(points.shape[0], dtype=torch.long) % 3
+    segment[-1] = -1
+    batch = {"points": [points], "segment": segment}
+    return build_preprocessor()(batch, is_training=True)
+
+
+def build_inputs() -> dict[str, torch.Tensor]:
+    """Return the forward inputs of one preprocessed single-frame PTv3 batch."""
+    batch = build_batch()
+    return {key: batch[key] for key in ("voxels", "num_points", "voxel_coords")}
 
 
 def build_targets() -> tuple[list[torch.Tensor], list[torch.Tensor]]:
@@ -216,11 +253,14 @@ def build_targets() -> tuple[list[torch.Tensor], list[torch.Tensor]]:
 
 
 def move_batch_to_device(
-    batch: Mapping[str, torch.Tensor],
+    batch: Mapping[str, Any],
     device: torch.device,
-) -> dict[str, torch.Tensor]:
+) -> dict[str, Any]:
     """Copy a PTv3 input batch onto one device."""
-    return {name: value.to(device) for name, value in batch.items()}
+    return {
+        name: [item.to(device) for item in value] if isinstance(value, list) else value.to(device)
+        for name, value in batch.items()
+    }
 
 
 def move_targets_to_device(
@@ -243,7 +283,7 @@ def build_litept_encoder() -> LitePTEncoder:
     that does (1), with no base-level order at all.
     """
     return LitePTEncoder(
-        in_channels=4,
+        in_channels=5,
         order=("z",),
         stride=(2, 2),
         enc_depths=(1, 1, 1),
@@ -295,5 +335,6 @@ def build_litept_seg_model() -> PTv3SegmentationModel:
         seg3d_head=build_litept_seg_head(),
         optimizer=lambda params: torch.optim.AdamW(params, lr=1e-3),
         grid_size=1.0,
+        time_lag_dim=4,
         point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
     )
