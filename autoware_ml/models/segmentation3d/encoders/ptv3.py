@@ -248,10 +248,23 @@ class PointSequential(PointModule):
             if isinstance(module, PointModule):
                 input_data = module(input_data)
             elif is_sparse_conv_module(module):
+                # spconv kernels require features and weights in one dtype; the
+                # eval path bypasses spconv's autocast cast, so autocast-halved
+                # features against fp32 weights abort the kernel tuner.
+                weight_dtype = module.weight.dtype
                 if isinstance(input_data, Point):
-                    input_data.sparse_conv_feat = module(input_data.sparse_conv_feat)
+                    sparse_feat = input_data.sparse_conv_feat
+                    if sparse_feat.features.dtype != weight_dtype:
+                        sparse_feat = sparse_feat.replace_feature(
+                            sparse_feat.features.to(weight_dtype)
+                        )
+                    input_data.sparse_conv_feat = module(sparse_feat)
                     input_data.feat = input_data.sparse_conv_feat.features
                 else:
+                    if input_data.features.dtype != weight_dtype:
+                        input_data = input_data.replace_feature(
+                            input_data.features.to(weight_dtype)
+                        )
                     input_data = module(input_data)
             else:
                 if isinstance(input_data, Point):

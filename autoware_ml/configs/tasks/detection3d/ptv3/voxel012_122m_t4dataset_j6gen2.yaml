@@ -12,7 +12,20 @@ num_workers: 8
 dataset: ${t4dataset}
 
 grid_size: 0.12
+max_voxels: 524288
 point_cloud_range: [-122.88, -122.88, -3.0, 122.88, 122.88, 5.0]
+# Point-count filters shared by training and validation: the validation loss is
+# computed on the same targets the model trains on. Test stays unfiltered, the
+# metric suites apply their own thresholds there.
+point_filters:
+  - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
+    range_radius: [0.0, 60.0]
+    min_num_points: ${dataset.detection3d.train_min_points_near}
+    time_lag_dim: 4
+  - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
+    range_radius: [60.0, .inf]
+    min_num_points: ${dataset.detection3d.train_min_points_far}
+    time_lag_dim: 4
 num_proposals: 500
 
 datamodule:
@@ -30,9 +43,13 @@ datamodule:
       - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
         sweeps_num: ${train_sweeps_num}
         load_dim: 5
-        use_dim: [0, 1, 2, 3]
+        use_dim: [0, 1, 2, 3, 4]
+        time_dim: 4
         remove_close: true
+        sweep_selection: random
+        time_lag_range: [0.05, 0.25]
       - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
+        time_lag_dim: 4
       - _target_: autoware_ml.transforms.point_cloud.geometry.RandomRotateTargetAngle
         p: 0.75
         angle: [0.5, 1.0, 1.5]
@@ -58,24 +75,12 @@ datamodule:
         shift_range: [-0.02, 0.02]
       - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeFilter
         point_cloud_range: ${point_cloud_range}
-      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
-        range_radius: [0.0, 60.0]
-        min_num_points: ${dataset.detection3d.train_min_points_near}
-      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
-        range_radius: [60.0, 130.0]
-        min_num_points: ${dataset.detection3d.train_min_points_far}
-      - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
-        grid_size: ${grid_size}
-        point_cloud_range: ${point_cloud_range}
-        hash_type: fnv
-        mode: train
-        keys: [coord, strength]
-        return_inverse: true
-        return_grid_coord: true
+      - ${point_filters.0}
+      - ${point_filters.1}
       - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
-        keys: [coord, strength]
-        output_key: feat
-  val_transforms:
+        keys: [coord, strength, time_lag]
+        output_key: points
+  test_transforms:
     _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
       - _target_: autoware_ml.transforms.boxes3d.merge.MergeObjects3D
@@ -87,53 +92,41 @@ datamodule:
       - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
         sweeps_num: ${val_sweeps_num}
         load_dim: 5
-        use_dim: [0, 1, 2, 3]
+        use_dim: [0, 1, 2, 3, 4]
+        time_dim: 4
         remove_close: true
+        sweep_selection: nearest
+        time_lag_range: [0.05, 0.25]
       - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
+        time_lag_dim: 4
       - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
         point_cloud_range: ${point_cloud_range}
       - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeFilter
         point_cloud_range: ${point_cloud_range}
-      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
-        range_radius: [0.0, 60.0]
-        min_num_points: ${dataset.detection3d.train_min_points_near}
-      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
-        range_radius: [60.0, 130.0]
-        min_num_points: ${dataset.detection3d.train_min_points_far}
-      - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
-        grid_size: ${grid_size}
-        point_cloud_range: ${point_cloud_range}
-        hash_type: fnv
-        mode: test
-        keys: [coord, strength]
-        return_inverse: true
-        return_grid_coord: true
       - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
-        keys: [coord, strength]
-        output_key: feat
-  test_transforms: ${datamodule.val_transforms}
+        keys: [coord, strength, time_lag]
+        output_key: points
+  val_transforms:
+    _target_: autoware_ml.transforms.base.TransformsCompose
+    pipeline: ${merge_lists:${datamodule.test_transforms.pipeline},${point_filters}}
   predict_transforms:
     _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
       - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
         sweeps_num: ${val_sweeps_num}
         load_dim: 5
-        use_dim: [0, 1, 2, 3]
+        use_dim: [0, 1, 2, 3, 4]
+        time_dim: 4
         remove_close: true
+        sweep_selection: nearest
+        time_lag_range: [0.05, 0.25]
       - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
+        time_lag_dim: 4
       - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
         point_cloud_range: ${point_cloud_range}
-      - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
-        grid_size: ${grid_size}
-        point_cloud_range: ${point_cloud_range}
-        hash_type: fnv
-        mode: test
-        keys: [coord, strength]
-        return_inverse: true
-        return_grid_coord: true
       - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
-        keys: [coord, strength]
-        output_key: feat
+        keys: [coord, strength, time_lag]
+        output_key: points
   train_frame_sampling:
     object_bev_range: [-122.88, -122.88, 122.88, 122.88]
   train_dataloader_cfg:
@@ -158,6 +151,7 @@ model:
       height,
       dim,
       rot,
+      vel,
     ]
   bev_neck:
     bev_projector:
@@ -182,6 +176,7 @@ model:
       height: [1, 2]
       dim: [3, 2]
       rot: [2, 2]
+      vel: [2, 2]
     bbox_coder:
       _target_: autoware_ml.models.detection3d.task_modules.bbox_coders.TransFusionBBoxCoder
       pc_range: ${point_cloud_range}
@@ -189,7 +184,7 @@ model:
       out_size_factor: 1
       post_center_range: [-132.88, -132.88, -5.0, 132.88, 132.88, 12.0]
       score_threshold: [0.015, 0.010, 0.010, 0.010, 0.020, 0.020, 0.030, 0.030, 0.020, 0.040, 0.020, 0.020, 0.020]
-      code_size: 8
+      code_size: 10
     assigner:
       _target_: autoware_ml.models.detection3d.task_modules.assigners.HungarianAssigner3D
       cls_cost:
@@ -206,7 +201,7 @@ model:
     point_cloud_range: ${point_cloud_range}
     voxel_size: [0.96, 0.96, 8.0]
     out_size_factor: 1
-    code_weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    code_weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2]
     min_radius: 2
     gaussian_overlap: 0.1
     score_threshold: 0.1
@@ -250,7 +245,7 @@ model:
     heatmap_target: oriented
     heatmap_init_bias: -2.19
     nms_kernel_size: 3
-    use_velocity: false
+    use_velocity: true
 
 deploy:
   onnx:

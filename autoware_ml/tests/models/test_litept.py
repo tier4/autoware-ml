@@ -201,14 +201,9 @@ def test_litept_is_a_drop_in_encoder_for_the_ptv3_segmentation_model() -> None:
     batch = move_batch_to_device(build_inputs(), torch.device("cuda"))
 
     with torch.no_grad():
-        logits = model(
-            coord=batch["coord"],
-            feat=batch["feat"],
-            grid_coord=batch["grid_coord"],
-            offset=batch["offset"],
-        )
+        logits = model(**batch)
 
-    assert logits.shape == (batch["coord"].shape[0], 3)
+    assert logits.shape == (batch["voxels"].shape[0], 3)
     assert torch.isfinite(logits).all()
 
 
@@ -247,8 +242,8 @@ def test_litept_split_export_declares_and_consumes_the_ptv3_contract() -> None:
     ]
     with torch.no_grad():
         pred_labels, pred_probs = head_spec.module(*head_spec.args)
-    assert pred_labels.shape == (batch["coord"].shape[0],)
-    assert pred_probs.shape == (batch["coord"].shape[0], 3)
+    assert pred_labels.shape == (batch["voxels"].shape[0],)
+    assert pred_probs.shape == (batch["voxels"].shape[0], 3)
 
 
 @REQUIRES_SPARSE_CUDA
@@ -267,8 +262,8 @@ def test_litept_monolithic_export_runs_on_its_declared_inputs() -> None:
 
     with torch.no_grad():
         pred_labels, pred_probs = spec.module(*spec.args)
-    assert pred_labels.shape == (batch["coord"].shape[0],)
-    assert pred_probs.shape == (batch["coord"].shape[0], 3)
+    assert pred_labels.shape == (batch["voxels"].shape[0],)
+    assert pred_probs.shape == (batch["voxels"].shape[0], 3)
 
 
 @REQUIRES_SPARSE_CUDA
@@ -280,8 +275,9 @@ def test_ptv3_monolithic_export_contract_still_lists_every_tensor() -> None:
     spec = model.build_export_spec(batch)
 
     assert spec.input_param_names == [
+        "voxels",
+        "num_points_per_voxel",
         "grid_coord",
-        "feat",
         "serialized_order",
         "serialized_inverse",
         "serialized_pooling_0_indices",
@@ -331,7 +327,7 @@ def test_exported_encoder_graph_declares_a_subset_of_the_contract(tmp_path) -> N
         graph = onnx.load(str(path)).graph
         declared = {value.name for value in graph.input}
         assert declared <= set(spec.input_param_names), tag
-        assert {"grid_coord", "feat"} <= declared, tag
+        assert {"voxels", "num_points_per_voxel"} <= declared, tag
         onnx.checker.check_model(onnx.load(str(path)))
 
 
@@ -351,9 +347,10 @@ def test_litept_encoder_contract_matches_ptv3_field_for_field() -> None:
         return {name.split("_", 3)[3] for name in names if name.startswith("serialized_pooling_")}
 
     # The fixtures differ in stage count, so compare the per-stage field structure.
-    assert litept.input_param_names[:4] == [
+    assert litept.input_param_names[:5] == [
+        "voxels",
+        "num_points_per_voxel",
         "grid_coord",
-        "feat",
         "serialized_order",
         "serialized_inverse",
     ]

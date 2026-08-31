@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
 import torch
 
 from autoware_ml.models.detection3d.ptv3 import PTv3DetFeatureFusion
 from autoware_ml.models.multi.ptv3_segdet import PTv3SegDetModel
+from autoware_ml.models.segmentation3d.heads.ptv3 import current_frame_mask
 from autoware_ml.utils.point_cloud.structures import Point
 
 
@@ -35,9 +37,14 @@ def _make_masking_model(recorded_calls: list) -> SimpleNamespace:
 
 def _make_batch(has_boxes: list[bool]) -> dict:
     """Detection supervision is carried by the ground truth itself: frames
-    without boxes are detection-unsupervised."""
+    without boxes are detection-unsupervised. Every frame carries two points
+    that map to their own voxels."""
+    num_frames = len(has_boxes)
     return {
-        "segment": torch.tensor([0, 1], dtype=torch.long),
+        "points": [torch.zeros((2, 5), dtype=torch.float32) for _ in range(num_frames)],
+        "point_voxel_indices": torch.arange(2 * num_frames, dtype=torch.long),
+        "num_dropped_voxels": torch.tensor(0),
+        "segment": torch.tensor([0, 1] * num_frames, dtype=torch.long),
         "gt_boxes": [
             torch.full((1, 9), float(i)) if with_boxes else torch.zeros((0, 9))
             for i, with_boxes in enumerate(has_boxes)
@@ -119,6 +126,7 @@ def _make_eval_model() -> SimpleNamespace:
 
     return SimpleNamespace(
         bbox_head=SimpleNamespace(predict=predict),
+        time_lag_dim=4,
         _detection_frame_mask=PTv3SegDetModel._detection_frame_mask,
     )
 
@@ -129,13 +137,7 @@ def test_build_eval_output_neutralizes_unflagged_frames_keeping_one_entry_per_fr
     frame regardless of its seg/det frame mix."""
     model = _make_eval_model()
     outputs = _make_outputs(batch_size=2)
-    batch = {
-        **_make_batch([False, True]),
-        "inverse": torch.tensor([0, 1, 2, 3], dtype=torch.long),
-        "offset": torch.tensor([2, 4], dtype=torch.long),
-        "origin_segment": torch.tensor([0, 1, 2, 0], dtype=torch.long),
-        "origin_coord": torch.zeros((4, 3)),
-    }
+    batch = _make_batch([False, True])
 
     eval_out = PTv3SegDetModel.build_eval_output(model, batch, outputs)
 
@@ -153,13 +155,7 @@ def test_build_eval_output_neutralizes_unflagged_frames_keeping_one_entry_per_fr
 def test_build_eval_output_without_flagged_frames_keeps_neutral_entries() -> None:
     model = _make_eval_model()
     outputs = _make_outputs(batch_size=1)
-    batch = {
-        **_make_batch([False]),
-        "inverse": torch.tensor([0, 1], dtype=torch.long),
-        "offset": torch.tensor([2], dtype=torch.long),
-        "origin_segment": torch.tensor([0, 1], dtype=torch.long),
-        "origin_coord": torch.zeros((2, 3)),
-    }
+    batch = _make_batch([False])
 
     eval_out = PTv3SegDetModel.build_eval_output(model, batch, outputs)
 
@@ -213,3 +209,12 @@ def test_det_feature_fusion_reads_pooling_chain_non_destructively() -> None:
     assert "pooling_parent" in deepest
     assert "pooling_inverse" in deepest
     assert torch.equal(parent.feat, parent_feat)
+
+
+def test_current_frame_mask_reads_the_declared_lag_column_or_keeps_every_point() -> None:
+    points = torch.tensor([[0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.1]])
+
+    assert current_frame_mask(points, 4).tolist() == [True, False]
+    assert current_frame_mask(points, None).tolist() == [True, True]
+    with pytest.raises(ValueError, match="out of bounds"):
+        current_frame_mask(points, 5)

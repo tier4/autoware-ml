@@ -29,6 +29,7 @@ import numpy as np
 
 from autoware_ml.datamodule.base import DataModule, Dataset
 from autoware_ml.datamodule.common.frame_meta import scene_dir_fragment
+from autoware_ml.datamodule.common.point_cloud import build_sweep_entries, resolve_sweep_paths
 from autoware_ml.datamodule.common.serialization import SerializedSampleList
 from autoware_ml.transforms.base import TransformsCompose
 
@@ -183,6 +184,7 @@ class T4Segmentation3DDataset(Dataset):
             sample["lidar_points"]["lidar_path"], self.data_root
         )
         info["timestamp"] = float(sample["timestamp"])
+        info["sweeps"] = resolve_sweep_paths(build_sweep_entries(sample), self.data_root)
         return info
 
 

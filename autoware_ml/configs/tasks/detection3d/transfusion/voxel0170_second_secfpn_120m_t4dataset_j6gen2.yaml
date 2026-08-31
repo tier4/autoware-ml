@@ -11,6 +11,19 @@ num_workers: 8
 dataset: ${t4dataset}
 
 point_cloud_range: [-122.4, -122.4, -3.0, 122.4, 122.4, 5.0]
+max_time_lag: 0.2
+# Point-count filters shared by training and validation: the validation loss is
+# computed on the same targets the model trains on. Test stays unfiltered, the
+# metric suites apply their own thresholds there.
+point_filters:
+  - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
+    range_radius: [0.0, 60.0]
+    min_num_points: ${dataset.detection3d.train_min_points_near}
+    time_lag_dim: 4
+  - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
+    range_radius: [60.0, .inf]
+    min_num_points: ${dataset.detection3d.train_min_points_far}
+    time_lag_dim: 4
 voxel_size: [0.17, 0.17, 0.2]
 out_size_factor: 8
 
@@ -45,8 +58,12 @@ datamodule:
       - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
         sweeps_num: 2
         load_dim: 5
-        use_dim: [0, 1, 2, 3]
+        use_dim: [0, 1, 2, 3, 4]
+        time_dim: 4
+        pad_empty_sweeps: true
         remove_close: true
+        sweep_selection: nearest
+        time_lag_range: [0.05, 0.25]
       - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
         rot_range: [-1.571, 1.571]
         scale_ratio_range: [0.8, 1.2]
@@ -58,14 +75,10 @@ datamodule:
         point_cloud_range: ${point_cloud_range}
       - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeFilter
         point_cloud_range: ${point_cloud_range}
-      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
-        range_radius: [0.0, 60.0]
-        min_num_points: ${dataset.detection3d.train_min_points_near}
-      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
-        range_radius: [60.0, 130.0]
-        min_num_points: ${dataset.detection3d.train_min_points_far}
+      - ${point_filters.0}
+      - ${point_filters.1}
       - _target_: autoware_ml.transforms.point_cloud.sampling.PointShuffle
-  val_transforms:
+  test_transforms:
     _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
       - _target_: autoware_ml.transforms.boxes3d.merge.MergeObjects3D
@@ -77,19 +90,29 @@ datamodule:
       - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
         sweeps_num: 2
         load_dim: 5
-        use_dim: [0, 1, 2, 3]
+        use_dim: [0, 1, 2, 3, 4]
+        time_dim: 4
+        pad_empty_sweeps: true
         remove_close: true
+        sweep_selection: nearest
+        time_lag_range: [0.05, 0.25]
       - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
         point_cloud_range: ${point_cloud_range}
-  test_transforms: ${datamodule.val_transforms}
+  val_transforms:
+    _target_: autoware_ml.transforms.base.TransformsCompose
+    pipeline: ${merge_lists:${datamodule.test_transforms.pipeline},${point_filters}}
   predict_transforms:
     _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
       - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
         sweeps_num: 2
         load_dim: 5
-        use_dim: [0, 1, 2, 3]
+        use_dim: [0, 1, 2, 3, 4]
+        time_dim: 4
+        pad_empty_sweeps: true
         remove_close: true
+        sweep_selection: nearest
+        time_lag_range: [0.05, 0.25]
       - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
         point_cloud_range: ${point_cloud_range}
 
