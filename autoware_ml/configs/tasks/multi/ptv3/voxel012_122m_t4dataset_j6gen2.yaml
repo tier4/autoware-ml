@@ -8,6 +8,39 @@ defaults:
 
 dataset: ${t4dataset}
 
+t4dataset:
+  segmentation3d:
+    point_components_extra:
+      - _target_: autoware_ml.metrics.segmentation3d.partial_detection.PartialDetectionScore
+        stages: [test]
+        box_label_to_seg_class: {4: 4, 5: 5, 6: 6, 9: 9}
+        seg_class_names: ${t4dataset.segmentation3d.class_names}
+        class_names: ${t4dataset.detection3d.class_names}
+      - _target_: autoware_ml.metrics.segmentation3d.partial_detection.PartialDetectionScore
+        stages: [test]
+        box_label_to_seg_class: {4: 4, 5: 5, 6: 6, 9: 9}
+        seg_class_names: ${t4dataset.segmentation3d.class_names}
+        class_names: ${t4dataset.detection3d.class_names}
+        filter: ${t4dataset.segmentation3d.region_filters.road}
+      - _target_: autoware_ml.metrics.segmentation3d.partial_detection.PartialDetectionScore
+        stages: [test]
+        box_label_to_seg_class: {4: 4, 5: 5, 6: 6, 9: 9}
+        seg_class_names: ${t4dataset.segmentation3d.class_names}
+        class_names: ${t4dataset.detection3d.class_names}
+        filter: ${t4dataset.segmentation3d.region_filters.walkway}
+      - _target_: autoware_ml.metrics.segmentation3d.partial_detection.PartialDetectionScore
+        stages: [test]
+        box_label_to_seg_class: {4: 4, 5: 5, 6: 6, 9: 9}
+        seg_class_names: ${t4dataset.segmentation3d.class_names}
+        class_names: ${t4dataset.detection3d.class_names}
+        filter: ${t4dataset.segmentation3d.corridor_filter}
+      - _target_: autoware_ml.metrics.segmentation3d.partial_detection.PartialDetectionScore
+        stages: [test]
+        box_label_to_seg_class: {4: 4, 5: 5, 6: 6, 9: 9}
+        seg_class_names: ${t4dataset.segmentation3d.class_names}
+        class_names: ${t4dataset.detection3d.class_names}
+        filter: ${t4dataset.segmentation3d.collision_filter}
+
 point_cloud_range: [-122.88, -122.88, -3.0, 122.88, 122.88, 5.0]
 grid_size: 0.12
 head_voxel_size: [0.96, 0.96, 8.0]
@@ -126,12 +159,6 @@ datamodule:
         point_cloud_range: ${point_cloud_range}
       - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeFilter
         point_cloud_range: ${point_cloud_range}
-      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
-        range_radius: [0.0, 60.0]
-        min_num_points: ${dataset.detection3d.train_min_points_near}
-      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
-        range_radius: [60.0, 130.0]
-        min_num_points: ${dataset.detection3d.train_min_points_far}
       - _target_: autoware_ml.transforms.common.copying.Copy
         keys_dict: { segment: origin_segment, coord: origin_coord }
       - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
@@ -178,9 +205,12 @@ model:
     nms_type: circle
     nms_min_radius: 1.0
     nms_groups:
-      - class_names: [car, truck, bus]
+      - class_names: [car, truck, bus, train]
         nms_radius: 0.25
         post_max_size: 300
+      - class_names: [motorcycle]
+        nms_radius: 0.0
+        post_max_size: 50
       - class_names: [bicycle]
         nms_radius: 0.0
         post_max_size: 50
@@ -193,6 +223,18 @@ model:
       - class_names: [barrier]
         nms_radius: 0.0
         post_max_size: 50
+      - class_names: [animal]
+        nms_radius: 0.0
+        post_max_size: 50
+      - class_names: [debris]
+        nms_radius: 0.0
+        post_max_size: 50
+      - class_names: [vehicle_extension]
+        nms_radius: 0.0
+        post_max_size: 50
+      - class_names: [bicycle_rack]
+        nms_radius: 0.0
+        post_max_size: 50
     bbox_coder:
       post_center_range: [-132.88, -132.88, -5.0, 132.88, 132.88, 12.0]
-      score_threshold: [0.015, 0.010, 0.010, 0.020, 0.030, 0.040, 0.020]
+      score_threshold: [0.015, 0.010, 0.010, 0.010, 0.020, 0.020, 0.030, 0.030, 0.020, 0.040, 0.020, 0.020, 0.020]

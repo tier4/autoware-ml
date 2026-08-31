@@ -94,12 +94,6 @@ datamodule:
         point_cloud_range: ${point_cloud_range}
       - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeFilter
         point_cloud_range: ${point_cloud_range}
-      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
-        range_radius: [0.0, 60.0]
-        min_num_points: ${dataset.detection3d.train_min_points_near}
-      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
-        range_radius: [60.0, 130.0]
-        min_num_points: ${dataset.detection3d.train_min_points_far}
       - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
         grid_size: ${grid_size}
         point_cloud_range: ${point_cloud_range}
@@ -186,7 +180,7 @@ model:
       voxel_size: [0.96, 0.96, 8.0]
       out_size_factor: 1
       post_center_range: [-132.88, -132.88, -5.0, 132.88, 132.88, 12.0]
-      score_threshold: [0.015, 0.010, 0.010, 0.020, 0.030, 0.040, 0.020]
+      score_threshold: [0.015, 0.010, 0.010, 0.010, 0.020, 0.020, 0.030, 0.030, 0.020, 0.040, 0.020, 0.020, 0.020]
       code_size: 8
     assigner:
       _target_: autoware_ml.models.detection3d.task_modules.assigners.HungarianAssigner3D
@@ -212,9 +206,12 @@ model:
     nms_type: circle
     nms_min_radius: 1.0
     nms_groups:
-      - class_names: [car, truck, bus]
+      - class_names: [car, truck, bus, train]
         nms_radius: 0.25
         post_max_size: 300
+      - class_names: [motorcycle]
+        nms_radius: 0.0
+        post_max_size: 50
       - class_names: [bicycle]
         nms_radius: 0.0
         post_max_size: 50
@@ -225,6 +222,18 @@ model:
         nms_radius: 0.0
         post_max_size: 100
       - class_names: [barrier]
+        nms_radius: 0.0
+        post_max_size: 50
+      - class_names: [animal]
+        nms_radius: 0.0
+        post_max_size: 50
+      - class_names: [debris]
+        nms_radius: 0.0
+        post_max_size: 50
+      - class_names: [vehicle_extension]
+        nms_radius: 0.0
+        post_max_size: 50
+      - class_names: [bicycle_rack]
         nms_radius: 0.0
         post_max_size: 50
     loss_cls_weight: 1.0

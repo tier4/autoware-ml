@@ -6,62 +6,218 @@ defaults:
 
 ignore_index: -1
 
-class_mapping:
-  car: 0
-  emergency_vehicle: 0
-  forklift: 0
-  kart: 0
-  truck: 1
-  tractor_unit: 1
-  semi_trailer: 1
-  construction_vehicle: 1
-  bus: 2
-  motorcycle: 3
-  bicycle: 3
-  pedestrian: 4
-  personal_mobility: 4
-  stroller: 4
-  traffic_cone: 5
-  barrier: 6
-  debris: 7
-  pushable_pullable: 7
-  drivable_surface: 8
-  other_flat_surface: 9
-  sidewalk: 9
-  vegetation: 10
-  manmade: 11
-  vertical_thin: 12
-  other_stuff: 13
-  noise: 14
-  animal: ${t4dataset.segmentation3d.ignore_index}
-  train: ${t4dataset.segmentation3d.ignore_index}
-  ghost_point: ${t4dataset.segmentation3d.ignore_index}
-  out_of_sync: ${t4dataset.segmentation3d.ignore_index}
-  unpainted: ${t4dataset.segmentation3d.ignore_index}
-num_classes: 15
+name_mapping:
+  # vehicles
+  car: car
+  forklift: car
+  kart: car
+  other_vehicle: car
+  police_car: car
+  ambulance: car
+  emergency_vehicle: car
+  truck: truck
+  trailer: truck
+  semi_trailer: truck
+  tractor_unit: truck
+  construction_vehicle: truck
+  fire_truck: truck
+  bus: bus
+  train: train
+  motorcycle: motorcycle
+  bicycle: bicycle
+  # vulnerable road users
+  pedestrian: pedestrian
+  personal_mobility: pedestrian
+  stroller: pedestrian
+  animal: animal
+  # static objects
+  barrier: barrier
+  construction_sign: barrier
+  traffic_cone: traffic_cone
+  debris: debris
+  pushable_pullable: debris
+  bicycle_rack: bicycle_rack
+  vehicle_protruding_object: vehicle_extension
+  open_door: vehicle_extension
+  vehicle_extension: vehicle_extension
+  solid_stuff: static_clutter
+  other_stuff: static_clutter
+  static_clutter: static_clutter
+  # surfaces / structure
+  drivable_surface: drivable_flat
+  drainage: drivable_flat
+  driveable_flat: drivable_flat
+  sidewalk: non_drivable_flat
+  other_flat_surface: non_drivable_flat
+  high_curb: non_drivable_flat
+  low_curb: non_drivable_flat
+  non_driveable_flat: non_drivable_flat
+  vegetation: vegetation
+  building: building
+  manmade: building
+  pole: vertical_thin
+  bollard: vertical_thin
+  traffic_light: vertical_thin
+  traffic_sign: vertical_thin
+  flag: vertical_thin
+  vertical_thin: vertical_thin
+  # spurious returns
+  noise: noise
+  ghost_point: noise
+  # ignored
+  background: null
+  ego_vehicle: null
+  out_of_sync: null
+  unpainted: null
+  ignored: null
+# Stage 2 - the trained final classes, in order (index = position).
+class_names:
+  - car
+  - truck
+  - bus
+  - train
+  - motorcycle
+  - bicycle
+  - pedestrian
+  - animal
+  - barrier
+  - traffic_cone
+  - debris
+  - bicycle_rack
+  - vehicle_extension
+  - drivable_flat
+  - non_drivable_flat
+  - vegetation
+  - building
+  - vertical_thin
+  - static_clutter
+  - noise
+num_classes: 20
+class_mapping: ${seg_class_mapping:${t4dataset.segmentation3d.name_mapping}, ${t4dataset.segmentation3d.class_names}, ${t4dataset.segmentation3d.ignore_index}}
+metric_ranges:
+  - { _target_: autoware_ml.metrics.base.MetricRange, name: 0-50m, min_distance: 0.0, max_distance: 50.0 }
+  - { _target_: autoware_ml.metrics.base.MetricRange, name: 50-90m, min_distance: 50.0, max_distance: 90.0 }
+  - { _target_: autoware_ml.metrics.base.MetricRange, name: 90-121m, min_distance: 90.0, max_distance: 121.0 }
+  - { _target_: autoware_ml.metrics.base.MetricRange, name: 0-121m, min_distance: 0.0, max_distance: 121.0 }
+map_provider:
+  _target_: autoware_ml.metrics.geometry.lanelet.LaneletMapProvider
+  resolve_osm:
+    _target_: autoware_ml.metrics.geometry.lanelet.T4LaneletMapResolver
+    data_root: ${t4dataset.data_root}
+region_filters:
+  road:
+    _target_: autoware_ml.metrics.filters.RegionFilter
+    region: [road, road_shoulder, crosswalk, drivable_area, intersection_area, crosswalk_polygon]
+    margin: -0.2
+    name: region_road
+    map_provider: ${t4dataset.segmentation3d.map_provider}
+  walkway:
+    _target_: autoware_ml.metrics.filters.RegionFilter
+    region: [walkway]
+    margin: -0.2
+    map_provider: ${t4dataset.segmentation3d.map_provider}
+corridor_filter:
+  _target_: autoware_ml.metrics.filters.CorridorFilter
+  width_m: 3.0
+collision_filter:
+  _target_: autoware_ml.metrics.filters.CollisionFilter
+  map_provider: ${t4dataset.segmentation3d.map_provider}
+  region: [road, road_shoulder, crosswalk, drivable_area, intersection_area, crosswalk_polygon]
+  max_speed_mps: 16.7
+  params:
+    _target_: autoware_ml.metrics.geometry.reachability.ReachabilityParams
+    horizon_s: 4.0
+    dt_s: 0.1
+    max_lateral_accel_mps2: 3.0
+class_groups:
+  grouped_vehicle: [car, truck, bus, train, vehicle_extension]
+  grouped_two_wheeler: [motorcycle, bicycle]
+  grouped_pedestrian_animal: [pedestrian, animal]
+  grouped_static_obstacle: [barrier, traffic_cone]
+  grouped_debris: [debris]
+  grouped_static_clutter: [static_clutter]
+  grouped_flat: [drivable_flat, non_drivable_flat]
+  grouped_vegetation: [vegetation]
+  grouped_structure: [building, vertical_thin, bicycle_rack]
+  grouped_noise: [noise]
+confusion_components:
+  # Whole-scene.
+  - { _target_: autoware_ml.metrics.segmentation3d.iou.IoU, stages: [val, test] }
+  - { _target_: autoware_ml.metrics.segmentation3d.accuracy.Accuracy, stages: [val, test] }
+  - { _target_: autoware_ml.metrics.segmentation3d.precision_recall_f1.PrecisionRecallF1, stages: [val, test] }
+  - { _target_: autoware_ml.metrics.segmentation3d.confusion_matrix.ConfusionMatrix, stages: [test] }
+  # Road slice.
+  - { _target_: autoware_ml.metrics.segmentation3d.iou.IoU, stages: [test], filter: '${t4dataset.segmentation3d.region_filters.road}' }
+  - { _target_: autoware_ml.metrics.segmentation3d.accuracy.Accuracy, stages: [test], filter: '${t4dataset.segmentation3d.region_filters.road}' }
+  - { _target_: autoware_ml.metrics.segmentation3d.precision_recall_f1.PrecisionRecallF1, stages: [test], filter: '${t4dataset.segmentation3d.region_filters.road}' }
+  - { _target_: autoware_ml.metrics.segmentation3d.confusion_matrix.ConfusionMatrix, stages: [test], filter: '${t4dataset.segmentation3d.region_filters.road}' }
+  # Walkway slice.
+  - { _target_: autoware_ml.metrics.segmentation3d.iou.IoU, stages: [test], filter: '${t4dataset.segmentation3d.region_filters.walkway}' }
+  - { _target_: autoware_ml.metrics.segmentation3d.accuracy.Accuracy, stages: [test], filter: '${t4dataset.segmentation3d.region_filters.walkway}' }
+  - { _target_: autoware_ml.metrics.segmentation3d.precision_recall_f1.PrecisionRecallF1, stages: [test], filter: '${t4dataset.segmentation3d.region_filters.walkway}' }
+  - { _target_: autoware_ml.metrics.segmentation3d.confusion_matrix.ConfusionMatrix, stages: [test], filter: '${t4dataset.segmentation3d.region_filters.walkway}' }
+  # Straight-corridor slice.
+  - { _target_: autoware_ml.metrics.segmentation3d.iou.IoU, stages: [test], filter: '${t4dataset.segmentation3d.corridor_filter}' }
+  - { _target_: autoware_ml.metrics.segmentation3d.accuracy.Accuracy, stages: [test], filter: '${t4dataset.segmentation3d.corridor_filter}' }
+  - { _target_: autoware_ml.metrics.segmentation3d.precision_recall_f1.PrecisionRecallF1, stages: [test], filter: '${t4dataset.segmentation3d.corridor_filter}' }
+  - { _target_: autoware_ml.metrics.segmentation3d.confusion_matrix.ConfusionMatrix, stages: [test], filter: '${t4dataset.segmentation3d.corridor_filter}' }
+  # Collision-area slice.
+  - { _target_: autoware_ml.metrics.segmentation3d.iou.IoU, stages: [test], filter: '${t4dataset.segmentation3d.collision_filter}' }
+  - { _target_: autoware_ml.metrics.segmentation3d.accuracy.Accuracy, stages: [test], filter: '${t4dataset.segmentation3d.collision_filter}' }
+  - { _target_: autoware_ml.metrics.segmentation3d.precision_recall_f1.PrecisionRecallF1, stages: [test], filter: '${t4dataset.segmentation3d.collision_filter}' }
+  - { _target_: autoware_ml.metrics.segmentation3d.confusion_matrix.ConfusionMatrix, stages: [test], filter: '${t4dataset.segmentation3d.collision_filter}' }
+point_components_extra: []
+point_components:
+  # Whole-scene.
+  - { _target_: autoware_ml.metrics.segmentation3d.error_clusters.ErrorClusters, stages: [test] }
+  - { _target_: autoware_ml.metrics.segmentation3d.tolerant_error.NeighbourhoodTolerantErrorRate, stages: [test] }
+  - { _target_: autoware_ml.metrics.segmentation3d.calibration.CalibrationError, stages: [test] }
+  - { _target_: autoware_ml.metrics.segmentation3d.entropy_auroc.UncertaintyUsefulness, stages: [test] }
+  - { _target_: autoware_ml.metrics.segmentation3d.confident_error.ConfidentErrorRate, stages: [test] }
+  # Road slice.
+  - { _target_: autoware_ml.metrics.segmentation3d.error_clusters.ErrorClusters, stages: [test], filter: '${t4dataset.segmentation3d.region_filters.road}' }
+  - { _target_: autoware_ml.metrics.segmentation3d.tolerant_error.NeighbourhoodTolerantErrorRate, stages: [test], filter: '${t4dataset.segmentation3d.region_filters.road}' }
+  - { _target_: autoware_ml.metrics.segmentation3d.calibration.CalibrationError, stages: [test], filter: '${t4dataset.segmentation3d.region_filters.road}' }
+  - { _target_: autoware_ml.metrics.segmentation3d.entropy_auroc.UncertaintyUsefulness, stages: [test], filter: '${t4dataset.segmentation3d.region_filters.road}' }
+  - { _target_: autoware_ml.metrics.segmentation3d.confident_error.ConfidentErrorRate, stages: [test], filter: '${t4dataset.segmentation3d.region_filters.road}' }
+  # Walkway slice.
+  - { _target_: autoware_ml.metrics.segmentation3d.error_clusters.ErrorClusters, stages: [test], filter: '${t4dataset.segmentation3d.region_filters.walkway}' }
+  - { _target_: autoware_ml.metrics.segmentation3d.tolerant_error.NeighbourhoodTolerantErrorRate, stages: [test], filter: '${t4dataset.segmentation3d.region_filters.walkway}' }
+  - { _target_: autoware_ml.metrics.segmentation3d.calibration.CalibrationError, stages: [test], filter: '${t4dataset.segmentation3d.region_filters.walkway}' }
+  - { _target_: autoware_ml.metrics.segmentation3d.entropy_auroc.UncertaintyUsefulness, stages: [test], filter: '${t4dataset.segmentation3d.region_filters.walkway}' }
+  - { _target_: autoware_ml.metrics.segmentation3d.confident_error.ConfidentErrorRate, stages: [test], filter: '${t4dataset.segmentation3d.region_filters.walkway}' }
+  # Straight-corridor slice.
+  - { _target_: autoware_ml.metrics.segmentation3d.error_clusters.ErrorClusters, stages: [test], filter: '${t4dataset.segmentation3d.corridor_filter}' }
+  - { _target_: autoware_ml.metrics.segmentation3d.tolerant_error.NeighbourhoodTolerantErrorRate, stages: [test], filter: '${t4dataset.segmentation3d.corridor_filter}' }
+  - { _target_: autoware_ml.metrics.segmentation3d.calibration.CalibrationError, stages: [test], filter: '${t4dataset.segmentation3d.corridor_filter}' }
+  - { _target_: autoware_ml.metrics.segmentation3d.entropy_auroc.UncertaintyUsefulness, stages: [test], filter: '${t4dataset.segmentation3d.corridor_filter}' }
+  - { _target_: autoware_ml.metrics.segmentation3d.confident_error.ConfidentErrorRate, stages: [test], filter: '${t4dataset.segmentation3d.corridor_filter}' }
+  # Collision-area slice.
+  - { _target_: autoware_ml.metrics.segmentation3d.error_clusters.ErrorClusters, stages: [test], filter: '${t4dataset.segmentation3d.collision_filter}' }
+  - { _target_: autoware_ml.metrics.segmentation3d.tolerant_error.NeighbourhoodTolerantErrorRate, stages: [test], filter: '${t4dataset.segmentation3d.collision_filter}' }
+  - { _target_: autoware_ml.metrics.segmentation3d.calibration.CalibrationError, stages: [test], filter: '${t4dataset.segmentation3d.collision_filter}' }
+  - { _target_: autoware_ml.metrics.segmentation3d.entropy_auroc.UncertaintyUsefulness, stages: [test], filter: '${t4dataset.segmentation3d.collision_filter}' }
+  - { _target_: autoware_ml.metrics.segmentation3d.confident_error.ConfidentErrorRate, stages: [test], filter: '${t4dataset.segmentation3d.collision_filter}' }
 metrics:
   - _target_: autoware_ml.metrics.segmentation3d.suite.Segmentation3DConfusionMatrixMetricSuite
-    components:
-      - { _target_: autoware_ml.metrics.segmentation3d.iou.IoU, stages: [val, test] }
-      - { _target_: autoware_ml.metrics.segmentation3d.accuracy.Accuracy, stages: [val, test] }
-      - { _target_: autoware_ml.metrics.segmentation3d.precision_recall_f1.PrecisionRecallF1, stages: [val, test] }
+    components: ${t4dataset.segmentation3d.confusion_components}
     num_classes: ${t4dataset.segmentation3d.num_classes}
     ignore_index: ${t4dataset.segmentation3d.ignore_index}
-    class_names: ${seg_class_names:${t4dataset.segmentation3d.class_mapping}, ${t4dataset.segmentation3d.num_classes}}
-    ranges:
-      - _target_: autoware_ml.metrics.base.MetricRange
-        name: 0-50m
-        min_distance: 0.0
-        max_distance: 50.0
-      - _target_: autoware_ml.metrics.base.MetricRange
-        name: 50-90m
-        min_distance: 50.0
-        max_distance: 90.0
-      - _target_: autoware_ml.metrics.base.MetricRange
-        name: 90-121m
-        min_distance: 90.0
-        max_distance: 121.0
-      - _target_: autoware_ml.metrics.base.MetricRange
-        name: 0-121m
-        min_distance: 0.0
-        max_distance: 121.0
+    class_names: ${t4dataset.segmentation3d.class_names}
+    ranges: ${t4dataset.segmentation3d.metric_ranges}
+  - _target_: autoware_ml.metrics.segmentation3d.suite.Segmentation3DConfusionMatrixMetricSuite
+    prefix: seg3d_grouped
+    components: ${t4dataset.segmentation3d.confusion_components}
+    num_classes: ${t4dataset.segmentation3d.num_classes}
+    ignore_index: ${t4dataset.segmentation3d.ignore_index}
+    class_names: ${t4dataset.segmentation3d.class_names}
+    class_groups: ${t4dataset.segmentation3d.class_groups}
+    ranges: ${t4dataset.segmentation3d.metric_ranges}
+  - _target_: autoware_ml.metrics.segmentation3d.point_cloud.Segmentation3DPointCloudMetricSuite
+    components: ${merge_lists:${t4dataset.segmentation3d.point_components},${t4dataset.segmentation3d.point_components_extra}}
+    grouped_components: ${t4dataset.segmentation3d.point_components}
+    num_classes: ${t4dataset.segmentation3d.num_classes}
+    ignore_index: ${t4dataset.segmentation3d.ignore_index}
+    class_names: ${t4dataset.segmentation3d.class_names}
+    class_groups: ${t4dataset.segmentation3d.class_groups}
+    ranges: ${t4dataset.segmentation3d.metric_ranges}

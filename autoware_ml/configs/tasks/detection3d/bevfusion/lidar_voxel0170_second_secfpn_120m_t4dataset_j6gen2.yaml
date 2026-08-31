@@ -109,16 +109,19 @@ model:
     num_proposals: 500
     class_names: ${dataset.detection3d.class_names}
     num_classes: ${dataset.detection3d.num_classes}
-    dense_heatmap_pooling_classes: [car, truck, bus, barrier]
+    dense_heatmap_pooling_classes: [car, truck, bus]
     head_hidden_channels: 64
     norm_eps: 1.0e-5
     norm_momentum: 0.1
     nms_type: circle
     nms_min_radius: 0.5
     nms_groups:
-      - class_names: [car, truck, bus]
+      - class_names: [car, truck, bus, train]
         nms_radius: 0.5
         post_max_size: 300
+      - class_names: [motorcycle]
+        nms_radius: 0.0
+        post_max_size: 50
       - class_names: [bicycle]
         nms_radius: 0.0
         post_max_size: 50
@@ -131,9 +134,21 @@ model:
       - class_names: [barrier]
         nms_radius: 0.0
         post_max_size: 50
+      - class_names: [animal]
+        nms_radius: 0.0
+        post_max_size: 50
+      - class_names: [debris]
+        nms_radius: 0.0
+        post_max_size: 50
+      - class_names: [vehicle_extension]
+        nms_radius: 0.0
+        post_max_size: 50
+      - class_names: [bicycle_rack]
+        nms_radius: 0.0
+        post_max_size: 50
     bbox_coder:
       post_center_range: [-200.0, -200.0, -10.0, 200.0, 200.0, 10.0]
-      score_threshold: [0.015, 0.010, 0.010, 0.020, 0.030, 0.040, 0.020]
+      score_threshold: [0.015, 0.010, 0.010, 0.010, 0.020, 0.020, 0.030, 0.030, 0.020, 0.040, 0.020, 0.020, 0.020]
   img_backbone: null
   img_neck: null
   view_transform: null
