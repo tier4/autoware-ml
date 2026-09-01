@@ -199,6 +199,25 @@ def transform_boxes(
     if boxes.shape[1] > 6:
         boxes[:, 6] += rotation_angle
     if boxes.shape[1] >= 9:
+        # Velocities live in the same scaled space as the coordinates.
+        boxes[:, 7:9] = (boxes[:, 7:9] @ rotation[:2, :2].T) * scale
+    input_dict["gt_boxes"] = boxes
+
+
+def rotate_boxes_about_center(
+    input_dict: dict[str, Any],
+    rotation: npt.NDArray[np.float32],
+    rotation_angle: float,
+    center: npt.NDArray[np.float32],
+) -> None:
+    """Rotate ``gt_boxes`` about ``center`` consistently with the point rotation."""
+    if "gt_boxes" not in input_dict:
+        return
+    boxes = np.asarray(input_dict["gt_boxes"]).copy()
+    boxes[:, :3] = (boxes[:, :3] - center) @ rotation.T + center
+    if boxes.shape[1] > 6:
+        boxes[:, 6] += rotation_angle
+    if boxes.shape[1] >= 9:
         boxes[:, 7:9] = boxes[:, 7:9] @ rotation[:2, :2].T
     input_dict["gt_boxes"] = boxes
 
