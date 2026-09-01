@@ -26,7 +26,6 @@ name_mapping:
   barrier: barrier
 # merge_objects: [[truck, [truck, trailer]]]  # TODO: support objects merge for nuscenes
 filter_attributes: []
-use_valid_flag: true
 eval_class_range:
   car: 50.0
   truck: 50.0

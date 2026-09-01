@@ -77,7 +77,6 @@ filter_attributes:
   - [motorcycle, cycle_state.without_rider]
   - [motorcycle, motorcycle_state.without_rider]
 merge_objects: [[truck, [truck, trailer]]]
-use_valid_flag: true
 train_min_points_near: 3
 train_min_points_far: 2
 eval_class_range:
