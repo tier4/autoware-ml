@@ -149,6 +149,21 @@ graph contains no data-dependent pooling shape discovery. Pooled feature
 reduction is implemented with native ONNX `Gather` and the
 `autoware::SegmentCSR` plugin.
 
+### Attention window fill at export
+
+Serialized attention runs on fixed-size windows of `K = patch_size` tokens, so a
+sample of `n` voxels needs its last window filled unless `n` is a multiple of `K`:
+
+- `n % K == 0` - the windows are exact, nothing to fill.
+- otherwise, `n > K` - the last window borrows tokens from the preceding one to
+  reach `K`, which is what training does.
+- otherwise, `n < K` - there is nothing to borrow from, so the sample's own
+  tokens are cycled round-robin to equalize their weight in the softmax as far as
+  possible.
+
+Dynamic window sizes and masking are both awkward to express in TensorRT without
+a performance penalty, hence this fill.
+
 ### Split-export module contract
 
 The split export produces one graph per `deploy.onnx.modules` entry:

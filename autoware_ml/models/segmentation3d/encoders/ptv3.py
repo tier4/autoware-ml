@@ -408,8 +408,16 @@ class SerializedAttention(PointModule):
             n = shape_as_tensor(point.feat)[0].to(device=point.offset.device)
             padded_n = ((n + self.patch_size - 1) // self.patch_size) * self.patch_size
             unpad = torch.arange(n, device=point.offset.device)
-            # Clamp pad indices to [0, n-1]: dummy slots repeat the last real token.
-            pad = torch.clamp(torch.arange(padded_n, device=point.offset.device), max=n - 1)
+            # Fill the trailing slots of the last window by cycling backwards through
+            # the serialization, so every slot holds a real token. For `n > patch_size`
+            # this is exactly the backward borrow training performs; below one window
+            # there is nothing to borrow from, so it wraps around instead. `cycle` keeps
+            # the shifted index non-negative, so the modulo needs no particular sign
+            # convention from the runtime.
+            divisor = torch.clamp(n, min=1)
+            cycle = ((self.patch_size + divisor - 1) // divisor) * divisor
+            index = torch.arange(padded_n, device=point.offset.device)
+            pad = torch.where(index < n, index, (index - self.patch_size + cycle) % divisor)
             if not self.enable_flash:
                 return pad, unpad, None
             # arange(0, padded_n+1, patch_size) gives [0, ps, 2*ps, ..., padded_n]
@@ -478,13 +486,14 @@ class SerializedAttention(PointModule):
         """
         head_count = self.num_heads
         if not self.enable_flash:
-            min_points = int(offset_to_bincount(point.offset).min().item())
-            if self.export_mode and min_points < self.patch_size_max:
-                raise ValueError(
-                    "PTv3 export mode requires each sample to have at least "
-                    f"{self.patch_size_max} serialized points, but found {min_points}."
-                )
-            self.patch_size = self.patch_size_max if self.export_mode else min_points
+            # Export keeps the window static so no shape depends on the voxel count;
+            # samples smaller than one window are handled by the cyclic fill in
+            # `_get_padding_and_inverse` rather than by shrinking the window.
+            self.patch_size = (
+                self.patch_size_max
+                if self.export_mode
+                else int(offset_to_bincount(point.offset).min().item())
+            )
         patch_size = self.patch_size
         channel_count = self.channels
         pad, unpad, cu_seqlens = self._get_padding_and_inverse(point)
