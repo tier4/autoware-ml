@@ -241,7 +241,7 @@ model:
 deploy:
   onnx:
     modules:
-      det3d_head:
+      ptv3_det3d_head:
         modify_graph:
           _target_: autoware_ml.utils.onnx_modifiers.TransHeadTensorRTModifier
           k: ${num_proposals}

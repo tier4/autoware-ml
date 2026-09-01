@@ -142,12 +142,27 @@ deploy:
     dynamo: false
     do_constant_folding: false
     modules:
-      encoder:
+      ptv3_encoder:
         output_names: [point_feat_0, point_feat_1, point_feat_2, point_feat_3, point_feat_4]
-      seg3d_head:
+        metainfo:
+          point_cloud_range: ${point_cloud_range}
+          voxel_size: ["${grid_size}", "${grid_size}", "${grid_size}"]
+          serialization_orders: [z, z-trans]
+          pooling_strides: ${model.encoder.stride}
+          enc_channels: ${model.encoder.enc_channels}
+      ptv3_seg3d_head:
         output_names: [pred_labels, pred_probs]
-      det3d_head:
+        metainfo:
+          dec_depths: ${model.seg3d_head.dec_depths}
+          class_names: ${seg_class_names:${dataset.segmentation3d.class_mapping}, ${dataset.segmentation3d.num_classes}}
+      ptv3_det3d_head:
         output_names: [dense_heatmap, query_heatmap_score, query_labels, heatmap, center, height, dim, rot]
+        metainfo:
+          bbox_voxel_size: ${model.bbox_head.bbox_coder.voxel_size}
+          has_twist: ${model.bbox_head.use_velocity}
+          num_proposals: ${model.bbox_head.num_proposals}
+          post_center_range: ${model.bbox_head.bbox_coder.post_center_range}
+          class_names: ${dataset.detection3d.class_names}
         modify_graph:
           _target_: autoware_ml.utils.onnx_modifiers.TransHeadTensorRTModifier
           k: ${num_proposals}

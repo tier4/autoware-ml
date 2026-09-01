@@ -264,8 +264,8 @@ class PTv3SegmentationModel(PTv3BaseModel):
         """Build split PTv3 segmentation ONNX export specs for encoder and head."""
         context = build_ptv3_export_context(self, batch)
         return {
-            "encoder": build_encoder_export_spec(context),
-            "seg3d_head": build_seg_head_export_spec(
+            "ptv3_encoder": build_encoder_export_spec(context),
+            "ptv3_seg3d_head": build_seg_head_export_spec(
                 context,
                 self.seg3d_head.prepare_for_export(self.EXPORT_ORDER),
                 self.get_export_output_names(),
