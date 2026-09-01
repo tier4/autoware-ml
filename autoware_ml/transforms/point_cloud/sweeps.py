@@ -48,6 +48,7 @@ class LoadPointsFromMultiSweeps(BaseTransform):
         pad_empty_sweeps: bool = False,
         remove_close: bool = False,
         close_radius: float = 1.0,
+        test_mode: bool = True,
     ) -> None:
         """Initialize the LoadPointsFromMultiSweeps transform.
 
@@ -60,7 +61,11 @@ class LoadPointsFromMultiSweeps(BaseTransform):
                 relative to the current frame before ``use_dim`` selection.
             pad_empty_sweeps: Whether to repeat the current frame when no sweeps exist.
             remove_close: Whether to drop sweep points close to the origin.
-            close_radius: Radius in meters used when ``remove_close`` is enabled.
+            close_radius: Half-width in meters of the removed region when
+                ``remove_close`` is enabled.
+            test_mode: How to pick the appended sweeps from the available
+                entries. ``True`` takes the nearest ones in time; ``False``
+                samples them uniformly without replacement.
         """
         self.sweeps_num = sweeps_num
         self.load_dim = load_dim
@@ -71,6 +76,7 @@ class LoadPointsFromMultiSweeps(BaseTransform):
         self.pad_empty_sweeps = pad_empty_sweeps
         self.remove_close = remove_close
         self.close_radius = close_radius
+        self.test_mode = test_mode
 
     def apply_defaults(self, input_dict: dict[str, Any]) -> None:
         """Load the current-frame point cloud when it is not present yet."""
@@ -109,7 +115,12 @@ class LoadPointsFromMultiSweeps(BaseTransform):
             input_dict["points"] = self._select_dims(points)
             return input_dict
 
-        selected_sweeps = sweep_entries[: max(0, self.sweeps_num - 1)]
+        needed = max(0, self.sweeps_num - 1)
+        if not self.test_mode and len(sweep_entries) > needed:
+            indices = np.random.choice(len(sweep_entries), needed, replace=False)
+            selected_sweeps = [sweep_entries[i] for i in indices]
+        else:
+            selected_sweeps = sweep_entries[:needed]
         sweep_points = [points]
         for sweep in selected_sweeps:
             sweep_array = self._load_sweep_points(sweep).copy()
@@ -149,6 +160,11 @@ class LoadPointsFromMultiSweeps(BaseTransform):
         return points
 
     def _remove_close_points(self, points: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]:
-        """Remove points close to the origin in the xy plane."""
-        radius = np.linalg.norm(points[:, :2], axis=1)
-        return points[radius >= self.close_radius]
+        """Remove points close to the origin in the xy plane.
+
+        The removed region is the axis-aligned box |x|, |y| < close_radius
+        """
+        close = (np.abs(points[:, 0]) < self.close_radius) & (
+            np.abs(points[:, 1]) < self.close_radius
+        )
+        return points[~close]

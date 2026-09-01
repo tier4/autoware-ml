@@ -40,6 +40,21 @@ def _sample() -> dict:
     }
 
 
+def test_global_rot_scale_trans_scales_velocity_with_space() -> None:
+    sample = {
+        "points": np.array([[1.0, 2.0, 0.5, 1.0]], dtype=np.float32),
+        "gt_boxes": np.array([[1.0, 2.0, 0.0, 4.0, 2.0, 1.0, 0.3, 1.5, -0.5]], dtype=np.float32),
+    }
+
+    out = pc.GlobalRotScaleTrans(rot_range=[0.0, 0.0], scale_ratio_range=[0.5, 0.5])(sample)
+
+    box = out["gt_boxes"][0]
+    assert np.allclose(box[:3], [0.5, 1.0, 0.0])
+    assert np.allclose(box[3:6], [2.0, 1.0, 0.5])
+    assert np.isclose(box[6], 0.3)
+    assert np.allclose(box[7:9], [0.75, -0.25])
+
+
 @pytest.mark.parametrize("seed", [0, 1, 7])
 def test_global_rot_scale_trans_shared_math_matches_across_namespaces(seed: int) -> None:
     kwargs = dict(

@@ -55,7 +55,7 @@ class TestPointPillarPreprocessor(unittest.TestCase):
             ]
         }
 
-        outputs = self.point_pillar_preprocessor(batch)
+        outputs = self.point_pillar_preprocessor(batch, is_training=True)
         self.assertEqual(outputs["voxels"].shape, (2, 2, 4))
         self.assertEqual(outputs["num_points"].tolist(), [2, 1])
         self.assertEqual(outputs["voxel_coords"].shape, (2, 4))
@@ -69,7 +69,7 @@ class TestPointPillarPreprocessor(unittest.TestCase):
         point = torch.tensor([[0.5, 0.5, 0.0, 1.0]], dtype=torch.float32)
         batch = {"points": [point, point, point]}
 
-        outputs = self.point_pillar_preprocessor(batch)
+        outputs = self.point_pillar_preprocessor(batch, is_training=True)
 
         self.assertEqual(outputs["voxel_coords"][:, 0].tolist(), [0, 1, 2])
 
@@ -82,7 +82,7 @@ class TestPointPillarPreprocessor(unittest.TestCase):
         empty = torch.zeros((0, 4), dtype=torch.float32)
         batch = {"points": [point, empty, point]}
 
-        outputs = self.point_pillar_preprocessor(batch)
+        outputs = self.point_pillar_preprocessor(batch, is_training=True)
 
         # Two non-empty samples  2 voxels total
         self.assertEqual(outputs["voxels"].shape[0], 2)
@@ -93,11 +93,61 @@ class TestPointPillarPreprocessor(unittest.TestCase):
         Test that the PointPillarPreprocessor returns empty pillar tensors when given an
         empty batch.
         """
-        outputs = self.point_pillar_preprocessor({"points": []})
+        outputs = self.point_pillar_preprocessor({"points": []}, is_training=True)
 
         self.assertEqual(outputs["voxels"].shape, (0, 2, 4))
         self.assertEqual(outputs["num_points"].shape, (0,))
         self.assertEqual(outputs["voxel_coords"].shape, (0, 4))
+
+    def test_eval_mode_uses_eval_max_voxels_budget(self) -> None:
+        """
+        Test that the voxel budget switches with ``is_training``: training truncates at
+        ``max_voxels`` while evaluation keeps pillars up to ``eval_max_voxels``.
+        """
+        preprocessor = PointPillarPreprocessor(
+            voxel_size=[1.0, 1.0, 4.0],
+            point_cloud_range=[0.0, 0.0, -2.0, 4.0, 4.0, 2.0],
+            max_num_points=2,
+            max_voxels=1,
+            eval_max_voxels=8,
+            voxelization_z_order_first=True,
+        )
+        # Three points in three distinct pillars
+        points = torch.tensor(
+            [
+                [0.1, 0.1, 0.0, 1.0],
+                [1.1, 1.1, 0.0, 2.0],
+                [2.1, 2.1, 0.0, 3.0],
+            ],
+            dtype=torch.float32,
+        )
+
+        train_outputs = preprocessor({"points": [points]}, is_training=True)
+        self.assertEqual(train_outputs["voxels"].shape[0], 1)
+
+        eval_outputs = preprocessor({"points": [points]}, is_training=False)
+        self.assertEqual(eval_outputs["voxels"].shape[0], 3)
+
+    def test_eval_mode_without_eval_max_voxels_raises(self) -> None:
+        """
+        Test that running in evaluation mode without an explicit ``eval_max_voxels`` raises
+        instead of silently reusing the training budget.
+        """
+        batch = {"points": [torch.tensor([[0.5, 0.5, 0.0, 1.0]], dtype=torch.float32)]}
+
+        with self.assertRaises(ValueError):
+            self.point_pillar_preprocessor(batch, is_training=False)
+
+    def test_train_mode_does_not_require_eval_max_voxels(self) -> None:
+        """
+        Test that training-mode forward keeps working when ``eval_max_voxels`` is not set,
+        so existing training configs stay valid.
+        """
+        batch = {"points": [torch.tensor([[0.5, 0.5, 0.0, 1.0]], dtype=torch.float32)]}
+
+        outputs = self.point_pillar_preprocessor(batch, is_training=True)
+
+        self.assertEqual(outputs["voxels"].shape[0], 1)
 
     def test_passthrough_of_existing_keys(self) -> None:
         """
@@ -109,7 +159,7 @@ class TestPointPillarPreprocessor(unittest.TestCase):
             "points": [torch.tensor([[0.5, 0.5, 0.0, 1.0]], dtype=torch.float32)],
             "gt_boxes": sentinel,
         }
-        outputs = self.point_pillar_preprocessor(batch)
+        outputs = self.point_pillar_preprocessor(batch, is_training=True)
         self.assertIs(outputs["gt_boxes"], sentinel)
 
 

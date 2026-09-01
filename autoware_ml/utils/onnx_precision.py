@@ -30,6 +30,8 @@ from pathlib import Path
 from typing import Any
 
 import onnx
+
+# cspell:ignore onnxconverter
 from onnxconverter_common import float16
 
 logger = logging.getLogger(__name__)
@@ -59,6 +61,19 @@ def resolve_onnx_precision(onnx_cfg: Any) -> OnnxPrecision:
             f"{', '.join(OnnxPrecision)}. Precisions that require calibration (e.g. int8) "
             "are out of scope for export-time conversion."
         ) from None
+
+
+def validate_module_onnx_precision(module: Any, onnx_cfg: Any) -> None:
+    """Reject export modules whose declared precision requirement is not configured."""
+    actual = resolve_onnx_precision(onnx_cfg)
+    for submodule in module.modules():
+        required = getattr(submodule, "required_onnx_precision", None)
+        if required is not None and str(required) != actual:
+            raise ValueError(
+                f"{type(submodule).__name__} requires deploy.onnx.precision='{required}', "
+                f"but the effective module config uses '{actual}'. Align the model's export "
+                "options with deploy.onnx.precision."
+            )
 
 
 def should_convert_precision(onnx_cfg: Any) -> bool:

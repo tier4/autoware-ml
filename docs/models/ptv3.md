@@ -95,6 +95,22 @@ autoware-ml deploy \
 The deployment command switches PTv3 attention blocks into non-flash export
 mode automatically.
 
+Transformer blocks in the detection head are not fused by default. Bf16 is required
+for numerically stable TensorRT operator fusion:
+
+```yaml
+model:
+  bbox_head:
+    use_bf16_cross_attention: true
+deploy:
+  onnx:
+    precision: fp16
+```
+
+Both settings are required to enable the fused path, and the resulting model requires
+an SM80 or newer GPU. Without both settings, export uses the stable but slower non-fused
+attention path.
+
 The exported ONNX model returns both `pred_labels` and `pred_probs`. The
 probability output is produced by a final softmax layer, while training and
 evaluation continue to use logits inside the Lightning model.
@@ -132,6 +148,21 @@ Because preprocessing resolves every pooling shape ahead of time, the exported
 graph contains no data-dependent pooling shape discovery. Pooled feature
 reduction is implemented with native ONNX `Gather` and the
 `autoware::SegmentCSR` plugin.
+
+### Attention window fill at export
+
+Serialized attention runs on fixed-size windows of `K = patch_size` tokens, so a
+sample of `n` voxels needs its last window filled unless `n` is a multiple of `K`:
+
+- `n % K == 0` - the windows are exact, nothing to fill.
+- otherwise, `n > K` - the last window borrows tokens from the preceding one to
+  reach `K`, which is what training does.
+- otherwise, `n < K` - there is nothing to borrow from, so the sample's own
+  tokens are cycled round-robin to equalize their weight in the softmax as far as
+  possible.
+
+Dynamic window sizes and masking are both awkward to express in TensorRT without
+a performance penalty, hence this fill.
 
 ### Split-export module contract
 

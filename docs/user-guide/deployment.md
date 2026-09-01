@@ -4,13 +4,18 @@ icon: lucide/package
 
 # Deployment
 
-Autoware-ML exports trained models for production use. The pipeline converts PyTorch checkpoints to optimized inference formats.
+Autoware-ML exports trained models for production use. The pipeline converts
+PyTorch checkpoints to optimized inference formats, one deployable module at a
+time, and stamps every exported module with its identity and provenance.
 
 ## Deployment Pipeline
 
 ```text
-Checkpoint (.ckpt) -> ONNX (.onnx) -> TensorRT (.engine)
+Checkpoint (.ckpt) -> ONNX (.onnx) -> graph modifiers -> precision -> metadata stamp -> TensorRT (.engine)
 ```
+
+Each stage runs per module. The stamp is applied to the final ONNX, so the
+shipped file always carries its own metadata.
 
 ## Basic Usage
 
@@ -25,10 +30,15 @@ parameters to the export model. For a single-task export, pass one
 checkpoint. For a multi-head export, pass one `--weights` per source
 checkpoint (see [Multi-head exports](#multi-head-exports)).
 
-This generates ONNX (`.onnx`) and TensorRT (`.engine`) files when both stages
-are enabled and supported by the model. The deploy command also creates a
-dedicated MLflow run linked to the source training run and logs exported
-artifacts there.
+!!! warning
+    Pass `--release vMAJOR.MINOR.PATCH` if the model is version controlled.
+    Without it the artifacts are stamped `unversioned`, which is fine for
+    quick iteration but never for a release build.
+
+This generates one ONNX (`<module>.onnx`) and one TensorRT engine
+(`<module>.engine`) per deployable module, when both stages are enabled and
+supported by the model. The deploy command also creates a dedicated MLflow run
+linked to the source training run and logs exported artifacts there.
 
 You can disable either stage during iteration:
 
@@ -39,22 +49,14 @@ autoware-ml deploy \
     deploy.tensorrt.enabled=false
 ```
 
-By default, deploy writes ONNX and TensorRT outputs into the current MLflow
-run artifact directory under `exports/`.
+By default, deploy writes outputs into the deploy MLflow run's artifact
+directory under `exports/`. Without MLflow logging, outputs land next to the
+checkpoint.
 
 When MLflow logging is enabled, any custom `output_dir` must stay inside that
 run artifact directory. Leave `output_dir` unset to use the default
 `exports/` location, or disable MLflow logging if you need to export outside
 the run artifact tree.
-
-**Custom output name:**
-
-```bash
-autoware-ml deploy \
-    --config-name <task>/<model>/<config> \
-    --weights mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt \
-    output_name=model_v1
-```
 
 **Custom output directory inside MLflow artifacts:**
 
@@ -65,12 +67,20 @@ autoware-ml deploy \
     output_dir=mlruns/<task>/<model>/<config>/<deploy_run_id>/artifacts/custom_exports
 ```
 
+## Export Modules
+
+A model exports one or more deployable modules. Models without a dedicated
+export split produce a single module named `end_to_end`.
+
+Every exported module must have a matching entry under `deploy.onnx.modules`,
+and artifact files are named after the module. A module missing from the
+config fails the deploy immediately.
+
 ## Multi-head exports
 
 Multi-head export models can expose multiple deployable modules from one
-configured model. PTv3 detection exports the backbone and detection head as
-separate modules, and `--weights` can merge a pretrained backbone checkpoint
-with a detection checkpoint:
+configured model. `--weights` can merge checkpoints from independently
+trained parts of that model into a single export:
 
 ```bash
 autoware-ml deploy \
@@ -82,8 +92,8 @@ autoware-ml deploy \
 Checkpoints are applied in the order they appear on the command line, and
 later checkpoints overwrite any keys already set by earlier ones. Each
 checkpoint only contributes the state-dict keys that exist on the export
-model and match its tensor shapes. Keys missing from the model are skipped;
-keys with a matching name but mismatching shape raise an error immediately.
+model and match its tensor shapes. Keys missing from the model are skipped.
+Keys with a matching name but mismatching shape raise an error immediately.
 
 **Full coverage is enforced.** After all checkpoints are loaded, deploy
 verifies that every parameter in the export model has been covered by at
@@ -92,9 +102,38 @@ uninitialized, the command fails up front with the list of missing keys
 instead of producing an ONNX or engine that contains untrained layers. Add
 or replace `--weights` entries until every key is covered.
 
+## ONNX Metadata
+
+Every exported module carries its identity and provenance inside the ONNX
+file: producer, git commit of the export, release (encoded into
+`model_version` as `major * 10000 + minor * 100 + patch`), the config name,
+export date, and the linked deploy run.
+
+Per-module inference parameters come from the deploy config's `metainfo`
+block. The pipeline serializes whatever the config declares without
+interpreting it:
+
+```yaml
+deploy:
+  onnx:
+    modules:
+      <module>:
+        metainfo:
+          class_names: ${dataset.detection3d.class_names}
+```
+
+Each `metainfo` value is stamped as one compact JSON document (scalars,
+strings, lists and mappings, nested as declared), while the provenance
+properties above are plain strings, so a consumer reads a parameter with any
+JSON parser. Non-finite floats, values JSON cannot represent, and keys that
+collide with the automatically stamped properties fail at export time.
+
 ## Configuration
 
 ### ONNX Settings
+
+Shared settings live at `deploy.onnx`. Per-module settings under
+`deploy.onnx.modules.<module>` override them:
 
 ```yaml
 deploy:
@@ -103,18 +142,22 @@ deploy:
     dynamo: true
     opset_version: 21
     precision: fp32
-    input_names: [input]
-    output_names: [output]
     dynamic_shapes:
       input_tensor: { 2: height, 3: width }
+    modules:
+      end_to_end:
+        output_names: [output]
 ```
+
+**input_names / output_names**: exported input names default to the export
+spec's forward parameter names. Output names are declared per module.
 
 **precision**: `fp32` exports the model unchanged. `fp16` halves the weights and
 internal tensors but keeps graph inputs and outputs fp32, so consumers keep their
 fp32 buffers either way. Calibrated precisions such as `int8` are out of scope here.
 
 An fp16 export only works if the inference engine honors its dtypes instead of
-reassigning them — in Autoware, that means `trt_precision: strongly-typed` on the
+reassigning them. In Autoware, that means `trt_precision: strongly-typed` on the
 node.
 
 **dynamic_shapes**: Keys are exported input names, values map dimension indices
@@ -168,17 +211,22 @@ ad hoc post-processing for most cases.
 
 ## Optional Graph Modification
 
-Post-export ONNX graph modification is still available as a fallback:
+Post-export ONNX graph modification is still available as a fallback, shared
+across modules or per module:
 
 ```yaml
 deploy:
   onnx:
-    modify_graph:
-      _target_: my_module.OnnxGraphModifier
-      # modifier-specific parameters
+    modules:
+      <module>:
+        modify_graph:
+          _target_: my_module.OnnxGraphModifier
+          # modifier-specific parameters
 ```
 
 Use for operator replacement, shape inference fixes, or custom plugin insertion.
+Modifiers run before the precision conversion and the metadata stamp, so the
+shipped file reflects them.
 
 ## Overriding at Runtime
 

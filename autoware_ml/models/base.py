@@ -104,7 +104,7 @@ class BaseModel(MetricEvalMixin, L.LightningModule, ABC):
             Batch dictionary after runtime preprocessing.
         """
         del dataloader_idx
-        return self._data_preprocessing(batch_inputs_dict)
+        return self._data_preprocessing(batch_inputs_dict, is_training=self.training)
 
     def predict_outputs(self, batch_inputs_dict: Mapping[str, Any], outputs: Any) -> Any:
         """Convert raw model outputs into task-level predictions.

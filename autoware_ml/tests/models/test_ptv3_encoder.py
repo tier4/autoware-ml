@@ -205,7 +205,8 @@ def test_prepare_for_export_handles_loaded_flash_attention_module() -> None:
     assert export_encoder.attention.enable_flash is False
 
 
-def test_serialized_attention_export_mode_requires_fixed_patch_size_capacity() -> None:
+def test_serialized_attention_export_mode_keeps_a_static_window_below_capacity() -> None:
+    """A sample smaller than one window exports without shrinking the window."""
     attention = SerializedAttention(
         channels=32,
         num_heads=4,
@@ -232,8 +233,12 @@ def test_serialized_attention_export_mode_requires_fixed_patch_size_capacity() -
         }
     )
 
-    with pytest.raises(ValueError, match="at least 4 serialized points"):
-        attention(point)
+    output = attention(point)
+
+    assert output.feat.shape == (3, 32)
+    # The window stays at its configured size; only the fill adapts.
+    assert attention.patch_size == 4
+    assert torch.isfinite(output.feat).all()
 
 
 def test_serialized_attention_non_export_mode_adapts_patch_size() -> None:
@@ -524,3 +529,103 @@ def test_ptv3_frozen_encoder_supports_decoder_block_backward() -> None:
 
     assert all(p.grad is None for p in model.encoder.parameters())
     assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in model.seg3d_head.parameters())
+
+
+def _build_attention(patch_size: int) -> SerializedAttention:
+    """Return a non-flash attention module with a fixed window size."""
+    attention = SerializedAttention(
+        channels=32,
+        num_heads=4,
+        patch_size=patch_size,
+        qkv_bias=True,
+        qk_scale=None,
+        attn_drop=0.0,
+        proj_drop=0.0,
+        order_index=0,
+        enable_rpe=False,
+        enable_flash=False,
+        upcast_attention=False,
+        upcast_softmax=False,
+    ).eval()
+    # `__init__` zeroes `patch_size` when flash is off, and `forward` - which these
+    # tests bypass to reach `_get_padding_and_inverse` - is what normally sets it.
+    attention.patch_size = patch_size
+    return attention
+
+
+def _identity_point(num_points: int) -> Point:
+    """Return a point whose serialization order is the identity, for readable indices."""
+    order = torch.arange(num_points).unsqueeze(0)
+    return Point(
+        feat=torch.zeros(num_points, 32),
+        grid_coord=torch.zeros(num_points, 3, dtype=torch.long),
+        offset=torch.tensor([num_points]),
+        serialized_order=order,
+        serialized_inverse=order.clone(),
+    )
+
+
+@pytest.mark.parametrize("patch_size", [4, 16, 48])
+def test_export_fill_reproduces_the_training_fill_above_one_window(patch_size: int) -> None:
+    """The cyclic fill must equal the training fill wherever training pads at all.
+
+    Training borrows the tail of the preceding window, making the last window a
+    full-size sliding window over the final ``patch_size`` tokens. Export has to
+    match that exactly, or every frame whose voxel count is not a multiple of the
+    window size drifts from what the model was trained on.
+    """
+    attention = _build_attention(patch_size)
+    for num_points in range(patch_size + 1, 4 * patch_size + 1):
+        attention.export_mode = False
+        training_pad, _, _ = attention._get_padding_and_inverse(_identity_point(num_points))
+        attention.export_mode = True
+        export_pad, _, _ = attention._get_padding_and_inverse(_identity_point(num_points))
+        assert torch.equal(export_pad, training_pad), f"n={num_points}, K={patch_size}"
+
+
+@pytest.mark.parametrize("patch_size", [4, 16, 48])
+def test_export_fill_only_ever_indexes_real_tokens(patch_size: int) -> None:
+    """No slot may fall outside ``[0, n)``: every padded slot holds a real token."""
+    attention = _build_attention(patch_size)
+    attention.export_mode = True
+    for num_points in range(1, 4 * patch_size + 1):
+        pad, unpad, _ = attention._get_padding_and_inverse(_identity_point(num_points))
+        assert int(pad.min()) >= 0, f"n={num_points}"
+        assert int(pad.max()) < num_points, f"n={num_points}"
+        assert pad.numel() % patch_size == 0, f"n={num_points}"
+        assert unpad.numel() == num_points
+
+
+def test_export_fill_wraps_instead_of_repeating_one_token() -> None:
+    """Below one window the fill cycles, so no single key dominates the softmax."""
+    attention = _build_attention(16)
+    attention.export_mode = True
+    pad, _, _ = attention._get_padding_and_inverse(_identity_point(5))
+
+    _, counts = torch.unique(pad, return_counts=True)
+    # Cycling keeps every multiplicity within one of every other; repeating the
+    # last token would put 12 copies of it against 1 of each of the others.
+    assert int(counts.max()) - int(counts.min()) <= 1
+    assert int(counts.max()) <= 4
+
+
+@pytest.mark.parametrize("num_points", [2, 4, 8, 16])
+def test_export_attention_is_exact_when_the_count_divides_the_window(num_points: int) -> None:
+    """A uniform key multiplicity cancels in the softmax, so these cases are exact."""
+    torch.manual_seed(0)
+    patch_size = 16
+    feat = torch.randn(num_points, 32)
+
+    reference = _build_attention(num_points)
+    reference.export_mode = False
+    padded = _build_attention(patch_size)
+    padded.export_mode = True
+    padded.load_state_dict(reference.state_dict())
+
+    def run(attention: SerializedAttention) -> torch.Tensor:
+        point = _identity_point(num_points)
+        point.feat = feat.clone()
+        with torch.no_grad():
+            return attention(point).feat
+
+    assert torch.allclose(run(padded), run(reference), atol=1e-5)

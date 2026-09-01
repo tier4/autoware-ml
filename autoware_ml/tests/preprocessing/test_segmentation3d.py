@@ -60,7 +60,7 @@ class TestFrustumRangePreprocessor:
             sample_labels=[torch.tensor([3, 3, 1], dtype=torch.long)],
         )
 
-        outputs = preprocessor(batch_inputs)
+        outputs = preprocessor(batch_inputs, is_training=False)
 
         assert outputs["points"].shape == (3, 4)
         assert outputs["coors"].shape == (3, 3)
@@ -92,7 +92,7 @@ class TestFrustumRangePreprocessor:
             ],
         )
 
-        outputs = preprocessor(batch_inputs)
+        outputs = preprocessor(batch_inputs, is_training=False)
 
         assert outputs["points"].shape == (3, 4)
         assert outputs["pts_semantic_mask"].shape == (3,)
@@ -113,7 +113,7 @@ class TestFrustumRangePreprocessor:
             sample_points=[torch.tensor([[1.0, 0.0, 0.0, 0.1]], dtype=torch.float32)]
         )
 
-        outputs = preprocessor(batch_inputs)
+        outputs = preprocessor(batch_inputs, is_training=False)
 
         assert "pts_semantic_mask" not in outputs
         assert "semantic_seg" not in outputs
@@ -137,7 +137,7 @@ class TestFrustumRangePreprocessor:
             sample_labels=[torch.tensor([-1, 2], dtype=torch.long)],
         )
 
-        outputs = preprocessor(batch_inputs)
+        outputs = preprocessor(batch_inputs, is_training=False)
 
         assert outputs["semantic_seg"].shape == (1, 2, 4)
         assert (outputs["semantic_seg"] == 2).any()
@@ -163,7 +163,7 @@ class TestFrustumRangePreprocessor:
             sample_labels=[torch.tensor([255, 255, 1], dtype=torch.long)],
         )
 
-        outputs = preprocessor(batch_inputs)
+        outputs = preprocessor(batch_inputs, is_training=False)
 
         assert outputs["semantic_seg"][0, 1, 2].item() == 255
         assert outputs["semantic_seg"][0, 1, 1].item() == 1
