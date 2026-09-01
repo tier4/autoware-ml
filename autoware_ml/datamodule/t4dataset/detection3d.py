@@ -36,6 +36,7 @@ from autoware_ml.datamodule.common.detection3d import (
     resolve_data_path,
     resolve_sweep_paths,
 )
+from autoware_ml.datamodule.common.serialization import SerializedSampleList
 from autoware_ml.transforms.base import TransformsCompose
 from autoware_ml.transforms.boxes3d.annotations import (
     box_is_physical,
@@ -227,15 +228,17 @@ class T4Detection3DDataset(Dataset):
 
         with open(ann_file, "rb") as file:
             data = pickle.load(file)
-        self.data_infos = load_detection_data_infos(data)
+        data_infos = load_detection_data_infos(data)
         self.frame_weights = compute_frame_sampling_weights(
-            self.data_infos,
+            data_infos,
             self.class_names,
             self.name_mapping,
             self.frame_sampling,
             filter_attributes=filter_attributes,
             use_valid_flag=use_valid_flag,
         )
+        # Serialize last: frame_weights above must run on the live list.
+        self.data_infos = SerializedSampleList(data_infos)
 
     def __len__(self) -> int:
         """Return the number of annotated samples.

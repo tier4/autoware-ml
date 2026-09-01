@@ -30,6 +30,7 @@ from autoware_ml.datamodule.common.detection3d import (
     load_detection_data_infos,
     normalize_detection_sample,
 )
+from autoware_ml.datamodule.common.serialization import SerializedSampleList
 from autoware_ml.datamodule.nuscenes.common import resolve_lidar_path
 from autoware_ml.datamodule.t4dataset.detection3d import (
     FrameSamplingConfig,
@@ -89,7 +90,7 @@ class NuscenesSegmentationDetection3DDataset(Dataset):
 
         raw_infos = load_detection_data_infos(data)
 
-        self.data_infos: list[dict[str, Any]] = []
+        data_infos: list[dict[str, Any]] = []
         for raw_sample in raw_infos:
             if "pts_semantic_mask_path" not in raw_sample:
                 raise ValueError(
@@ -100,14 +101,16 @@ class NuscenesSegmentationDetection3DDataset(Dataset):
             sample = normalize_detection_sample(raw_sample)
             sample["label_to_category"] = self.label_to_category
             sample["pts_semantic_mask_path"] = raw_sample["pts_semantic_mask_path"]
-            self.data_infos.append(sample)
+            data_infos.append(sample)
 
         self.frame_weights = compute_frame_sampling_weights(
-            self.data_infos,
+            data_infos,
             self.class_names,
             self.name_mapping or {},
             self.frame_sampling,
         )
+        # Serialize last: frame_weights above must run on the live list.
+        self.data_infos = SerializedSampleList(data_infos)
 
     def __len__(self) -> int:
         """Return the number of NuScenes segdet samples."""
