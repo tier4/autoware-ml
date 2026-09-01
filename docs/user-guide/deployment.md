@@ -102,11 +102,20 @@ deploy:
     enabled: true
     dynamo: true
     opset_version: 21
+    precision: fp32
     input_names: [input]
     output_names: [output]
     dynamic_shapes:
       input_tensor: { 2: height, 3: width }
 ```
+
+**precision**: `fp32` exports the model unchanged. `fp16` halves the weights and
+internal tensors but keeps graph inputs and outputs fp32, so consumers keep their
+fp32 buffers either way. Calibrated precisions such as `int8` are out of scope here.
+
+An fp16 export only works if the inference engine honors its dtypes instead of
+reassigning them — in Autoware, that means `trt_precision: strongly-typed` on the
+node.
 
 **dynamic_shapes**: Keys are exported input names, values map dimension indices
 to symbolic names. For the default export path these names come from
@@ -143,6 +152,10 @@ deploy:
 
 !!! tip
     TensorRT optimizes most aggressively for `opt_shape`. Set this to your typical inference resolution.
+
+Engines are always built strongly typed: the builder uses exactly the precisions
+the ONNX carries and never picks its own. Choose the engine's numerics with
+`deploy.onnx.precision`.
 
 ## Model-Owned Export Wrappers
 

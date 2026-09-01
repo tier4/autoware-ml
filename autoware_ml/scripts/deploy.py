@@ -37,6 +37,11 @@ from autoware_ml.utils.deploy import (
     supports_export_stage,
     validate_cuda_available,
 )
+from autoware_ml.utils.onnx_precision import (
+    convert_onnx_precision,
+    resolve_onnx_precision,
+    should_convert_precision,
+)
 from autoware_ml.utils.mlflow_helpers import (
     AUTOWARE_ML_RUN_ID_ENV,
     build_run_metadata,
@@ -230,6 +235,13 @@ def main(cfg: DictConfig) -> None:
                     modify_graph_cfg = module_onnx_cfg.get("modify_graph", None)
                     if should_modify_graph(modify_graph_cfg):
                         module_onnx_path = modify_onnx_graph(module_onnx_path, modify_graph_cfg)
+
+                    # Precision conversion runs last so graph modifiers keep operating on the
+                    # fp32 export they were written against.
+                    if should_convert_precision(module_onnx_cfg):
+                        module_onnx_path = convert_onnx_precision(
+                            module_onnx_path, resolve_onnx_precision(module_onnx_cfg)
+                        )
 
             if should_export_stage(deploy_cfg.tensorrt):
                 if not supports_export_stage(export_spec, "tensorrt"):
