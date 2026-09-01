@@ -21,7 +21,10 @@ from autoware_ml.models.detection3d.task_modules.match_costs import (
     ClassificationCost,
     IoU3DCost,
 )
-from autoware_ml.models.segmentation3d.encoders.ptv3 import PointTransformerV3Encoder
+from autoware_ml.models.segmentation3d.encoders.ptv3 import (
+    LitePTEncoder,
+    PointTransformerV3Encoder,
+)
 from autoware_ml.models.segmentation3d.heads.ptv3 import PTv3SegDecoderHead
 from autoware_ml.models.segmentation3d.ptv3 import PTv3SegmentationModel
 
@@ -229,4 +232,68 @@ def move_targets_to_device(
     return (
         [boxes.to(device) for boxes in gt_boxes],
         [labels.to(device) for labels in gt_labels],
+    )
+
+
+def build_litept_encoder() -> LitePTEncoder:
+    """Return a small LitePT encoder exercising both gating directions.
+
+    Stages 0 and 1 are convolution-only and stage 2 is attention-only, so the
+    encoder covers a pooling stage that needs no serialization order (0) and one
+    that does (1), with no base-level order at all.
+    """
+    return LitePTEncoder(
+        in_channels=4,
+        order=("z",),
+        stride=(2, 2),
+        enc_depths=(1, 1, 1),
+        enc_channels=(12, 24, 24),
+        enc_num_head=(1, 2, 2),
+        enc_patch_size=(2, 2, 2),
+        mlp_ratio=2.0,
+        qk_scale=None,
+        attn_drop=0.0,
+        proj_drop=0.0,
+        drop_path=0.0,
+        shuffle_orders=False,
+        enable_flash=False,
+        enc_conv=(True, True, False),
+        enc_attn=(False, False, True),
+        enc_rope_base=100.0,
+    )
+
+
+def build_litept_seg_head(num_classes: int = 3) -> PTv3SegDecoderHead:
+    """Return a LitePT-style decoder head: unpooling only, no decoder blocks."""
+    return PTv3SegDecoderHead(
+        num_classes=num_classes,
+        ignore_index=-1,
+        order=("z",),
+        enc_channels=(12, 24, 24),
+        dec_depths=(0, 0),
+        dec_channels=(12, 24),
+        dec_num_head=(1, 2),
+        dec_patch_size=(2, 2),
+        mlp_ratio=2.0,
+        qkv_bias=True,
+        qk_scale=None,
+        attn_drop=0.0,
+        proj_drop=0.0,
+        drop_path=0.0,
+        pre_norm=True,
+        enable_rpe=False,
+        enable_flash=False,
+        upcast_attention=False,
+        upcast_softmax=False,
+    )
+
+
+def build_litept_seg_model() -> PTv3SegmentationModel:
+    """Return a LitePT segmentation model using the unchanged PTv3 task wrapper."""
+    return PTv3SegmentationModel(
+        encoder=build_litept_encoder(),
+        seg3d_head=build_litept_seg_head(),
+        optimizer=lambda params: torch.optim.AdamW(params, lr=1e-3),
+        grid_size=1.0,
+        point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
     )

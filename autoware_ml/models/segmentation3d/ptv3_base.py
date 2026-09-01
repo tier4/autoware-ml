@@ -33,8 +33,7 @@ _BLOCK_STAGE_META_FIELDS = ("serialized_order", "serialized_inverse", "grid_coor
 
 SERIALIZED_POOLING_FIELDS = tuple(field.name for field in fields(SerializedPoolingMeta))
 # The encoder-only encoder graph never consumes `cluster` (it only drives the
-# heads' unpooling), so the split encoder export excludes it - the tracer
-# would prune it anyway, breaking the declared interface.
+# heads' unpooling), so the split encoder export excludes it.
 ENCODER_EXPORT_POOLING_FIELDS = tuple(
     name for name in SERIALIZED_POOLING_FIELDS if name != "cluster"
 )
@@ -316,18 +315,6 @@ def build_ptv3_encoder_dynamic_axes(
     return dynamic_axes
 
 
-def build_serialized_pooling_export_inputs(
-    grid_coord: torch.Tensor,
-    serialized_code: torch.Tensor,
-    serialized_order: torch.Tensor,
-    strides: Sequence[int],
-) -> tuple[tuple[torch.Tensor, ...], list[str]]:
-    """Build flattened serialized-pooling sample tensors and their ONNX input names."""
-    return flatten_serialized_pooling_inputs(
-        build_serialized_pooling_metadata(grid_coord, serialized_code, serialized_order, strides)
-    )
-
-
 def make_serialized_pooling_from_flat_inputs(
     serialized_pooling_inputs: tuple[torch.Tensor, ...],
     field_names: Sequence[str] = SERIALIZED_POOLING_FIELDS,
@@ -350,6 +337,66 @@ def make_serialized_pooling_from_flat_inputs(
     return metadata
 
 
+class PTv3EncoderExportBase(nn.Module):
+    """Share the encoder half of every PTv3 export graph.
+
+    Subclasses add their own task head and declare their outputs; the encoder
+    inputs, the baked geometry buffers, and the metadata unpacking are identical
+    across segmentation, detection, and the joint model.
+    """
+
+    def __init__(
+        self,
+        encoder: PointTransformerV3Encoder,
+        sparse_shape: torch.Tensor,
+        serialized_depth: torch.Tensor,
+        pooling_field_names: Sequence[str] = SERIALIZED_POOLING_FIELDS,
+    ) -> None:
+        """Initialize the shared encoder export half.
+
+        Args:
+            encoder: Export-prepared PTv3 encoder copy.
+            sparse_shape: Static sparse shape baked at export time.
+            serialized_depth: Serialization depth baked at export time.
+            pooling_field_names: Metadata fields the graph declares per pooling
+                stage. The split encoder graph excludes ``cluster``.
+        """
+        super().__init__()
+        self.encoder = encoder
+        self.pooling_field_names = tuple(pooling_field_names)
+        self.register_buffer("_sparse_shape", sparse_shape.to(dtype=torch.long), persistent=False)
+        self.register_buffer("_serialized_depth", serialized_depth, persistent=False)
+
+    def run_encoder(
+        self,
+        grid_coord: torch.Tensor,
+        feat: torch.Tensor,
+        serialized_code: torch.Tensor,
+        *serialized_pooling_inputs: torch.Tensor,
+    ) -> Point:
+        """Run the encoder over the declared inputs.
+
+        Args:
+            grid_coord: Discretized grid coordinates.
+            feat: Point features whose first three channels are xyz.
+            serialized_code: Base serialization codes.
+            serialized_pooling_inputs: Flattened per-stage pooling metadata.
+
+        Returns:
+            Deepest encoder point with the full pooling chain attached.
+        """
+        return _run_ptv3_encoder_export(
+            self.encoder,
+            grid_coord,
+            feat,
+            self._serialized_depth,
+            serialized_code,
+            self._sparse_shape,
+            *serialized_pooling_inputs,
+            pooling_field_names=self.pooling_field_names,
+        )
+
+
 def _run_ptv3_encoder_export(
     encoder: PointTransformerV3Encoder,
     grid_coord: torch.Tensor,
@@ -361,6 +408,16 @@ def _run_ptv3_encoder_export(
     pooling_field_names: "Sequence[str]" = SERIALIZED_POOLING_FIELDS,
 ) -> Point:
     """Run the shared tensor-only PTv3 encoder export path.
+
+    Args:
+        encoder: Export-prepared encoder.
+        grid_coord: Discretized grid coordinates.
+        feat: Point features whose first three channels are xyz.
+        serialized_depth: Baked serialization depth.
+        serialized_code: Base serialization codes.
+        sparse_shape: Baked sparse shape.
+        serialized_pooling_inputs: Flattened per-stage pooling metadata.
+        pooling_field_names: Metadata fields the flattened tensors carry.
 
     Returns:
         Deepest encoder point with the full pooling chain attached.
@@ -444,6 +501,7 @@ def build_ptv3_export_context(
         encoder=model._prepare_encoder_export(),
         sparse_shape=sparse_shape,
         serialized_depth=serialization_depth,
+        pooling_field_names=ENCODER_EXPORT_POOLING_FIELDS,
     ).eval()
     with torch.no_grad():
         stage_feats = encoder_module(
@@ -461,6 +519,50 @@ def build_ptv3_export_context(
         serialized_pooling_input_names=tuple(serialized_pooling_input_names),
         encoder_module=encoder_module,
         stage_feats=tuple(stage_feats),
+    )
+
+
+@dataclass(frozen=True)
+class MonolithicExportInputs:
+    """Encoder-side inputs shared by every single-graph PTv3 export."""
+
+    sparse_shape: torch.Tensor
+    serialization_depth: torch.Tensor
+    args: tuple[torch.Tensor, ...]
+    input_names: list[str]
+
+
+def build_monolithic_export_inputs(
+    model: "PTv3BaseModel", batch: Mapping[str, torch.Tensor]
+) -> MonolithicExportInputs:
+    """Serialize a batch and derive the encoder inputs for a single-graph export.
+
+    Single-graph exports keep the whole model in one engine, so unlike the split
+    encoder graph they do consume ``cluster`` for head-side unpooling.
+
+    Args:
+        model: Task model being exported.
+        batch: Preprocessed batch with ``coord``, ``feat``, ``grid_coord``, and
+            ``offset``.
+
+    Returns:
+        Baked geometry and the sample inputs matching the declared input names.
+    """
+    sparse_shape, serialization_depth = model._compute_export_geometry(batch)
+    point, input_args = serialize_point_cloud_batch(batch, model.EXPORT_ORDER, serialization_depth)
+    serialized_pooling_inputs, serialized_pooling_input_names = flatten_serialized_pooling_inputs(
+        build_serialized_pooling_metadata(
+            point["grid_coord"],
+            point["serialized_code"],
+            point["serialized_order"],
+            model.encoder.stride,
+        )
+    )
+    return MonolithicExportInputs(
+        sparse_shape=sparse_shape,
+        serialization_depth=serialization_depth,
+        args=(input_args[0], input_args[1], input_args[3], *serialized_pooling_inputs),
+        input_names=["grid_coord", "feat", "serialized_code", *serialized_pooling_input_names],
     )
 
 
@@ -509,26 +611,8 @@ def build_seg_head_export_spec(
     )
 
 
-class _PTv3EncoderExportModule(nn.Module):
+class _PTv3EncoderExportModule(PTv3EncoderExportBase):
     """Export-only PTv3 encoder producing per-stage point features."""
-
-    def __init__(
-        self,
-        encoder: PointTransformerV3Encoder,
-        sparse_shape: torch.Tensor,
-        serialized_depth: torch.Tensor,
-    ) -> None:
-        """Initialize the encoder export module.
-
-        Args:
-            encoder: Export-prepared PTv3 encoder copy.
-            sparse_shape: Static sparse shape baked at export time.
-            serialized_depth: Serialization depth baked at export time.
-        """
-        super().__init__()
-        self.encoder = encoder
-        self.register_buffer("_sparse_shape", sparse_shape.to(dtype=torch.long), persistent=False)
-        self.register_buffer("_serialized_depth", serialized_depth, persistent=False)
 
     def forward(
         self,
@@ -538,16 +622,7 @@ class _PTv3EncoderExportModule(nn.Module):
         *serialized_pooling_inputs: torch.Tensor,
     ) -> tuple[torch.Tensor, ...]:
         """Run the encoder and return per-stage features, finest to deepest."""
-        point = _run_ptv3_encoder_export(
-            self.encoder,
-            grid_coord,
-            feat,
-            self._serialized_depth,
-            serialized_code,
-            self._sparse_shape,
-            *serialized_pooling_inputs,
-            pooling_field_names=ENCODER_EXPORT_POOLING_FIELDS,
-        )
+        point = self.run_encoder(grid_coord, feat, serialized_code, *serialized_pooling_inputs)
         return tuple(stage.feat for stage in collect_encoder_stage_points(point))
 
 
@@ -595,7 +670,7 @@ def link_stage_points(
 
 
 def _block_stage_indices(dec_depths: Sequence[int]) -> list[int]:
-    """Return the decoder stages that contain attention blocks."""
+    """Return the decoder stages that contain blocks of any kind."""
     return [stage for stage, depth in enumerate(dec_depths) if depth > 0]
 
 

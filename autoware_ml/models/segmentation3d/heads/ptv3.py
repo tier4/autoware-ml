@@ -35,6 +35,7 @@ from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     PointSequential,
     SerializedUnpooling,
     deepcopy_without_flash,
+    expand_stage_flags,
     prepare_point_module_for_export,
     set_block_serialization_order,
 )
@@ -77,6 +78,9 @@ class PTv3SegDecoderHead(nn.Module):
         upcast_attention: bool,
         upcast_softmax: bool,
         lovasz_weight: float = 1.0,
+        dec_conv: Sequence[bool] | bool = True,
+        dec_attn: Sequence[bool] | bool = True,
+        dec_rope_base: Sequence[float | None] | float | None = None,
     ) -> None:
         """Initialize the PTv3 segmentation decoder head.
 
@@ -101,6 +105,12 @@ class PTv3SegDecoderHead(nn.Module):
             upcast_attention: Whether to upcast Q/K before attention.
             upcast_softmax: Whether to upcast logits before softmax.
             lovasz_weight: Weight applied to the Lovasz loss term.
+            dec_conv: Per-stage flag for the submanifold-convolution positional
+                encoding in decoder blocks, or one flag for every stage.
+            dec_attn: Per-stage flag for attention and its MLP in decoder
+                blocks, or one flag for every stage.
+            dec_rope_base: Rotary-embedding frequency base, either one value for
+                every stage or one per stage. ``None`` disables RoPE.
         """
         super().__init__()
         self.order = list(order)
@@ -108,6 +118,12 @@ class PTv3SegDecoderHead(nn.Module):
         self.ignore_index = int(ignore_index)
         self.dec_depths = list(dec_depths)
         stage_count = len(enc_channels)
+        decoder_stage_count = stage_count - 1
+        self.dec_conv = expand_stage_flags(dec_conv, decoder_stage_count, True, "dec_conv")
+        self.dec_attn = expand_stage_flags(dec_attn, decoder_stage_count, True, "dec_attn")
+        self.dec_rope_base = expand_stage_flags(
+            dec_rope_base, decoder_stage_count, None, "dec_rope_base"
+        )
 
         dec_drop_path = [value.item() for value in torch.linspace(0, drop_path, sum(dec_depths))]
         self.dec = PointSequential()
@@ -148,6 +164,9 @@ class PTv3SegDecoderHead(nn.Module):
                         enable_flash=enable_flash,
                         upcast_attention=upcast_attention,
                         upcast_softmax=upcast_softmax,
+                        enable_conv=self.dec_conv[stage_index],
+                        enable_attn=self.dec_attn[stage_index],
+                        rope_base=self.dec_rope_base[stage_index],
                     ),
                     name=f"block{block_index}",
                 )

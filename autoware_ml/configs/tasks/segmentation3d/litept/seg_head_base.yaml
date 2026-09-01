@@ -1,0 +1,4 @@
+# @package model.seg3d_head
+dec_depths: [0, 0, 0, 0]
+dec_channels: [72, 72, 144, 252]
+dec_num_head: [4, 4, 8, 14]

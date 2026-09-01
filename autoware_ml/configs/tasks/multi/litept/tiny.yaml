@@ -1,0 +1,6 @@
+# @package _global_
+defaults:
+  - /tasks/multi/ptv3/tiny
+  - /tasks/segmentation3d/litept/encoder_tiny
+  - /tasks/segmentation3d/litept/seg_head_tiny
+  - _self_

@@ -22,17 +22,17 @@ from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
 from autoware_ml.models.segmentation3d.encoders.ptv3 import PointTransformerV3Encoder
 from autoware_ml.models.segmentation3d.ptv3_base import (
     PTv3BaseModel,
+    PTv3EncoderExportBase,
     PTv3ExportContext,
-    _run_ptv3_encoder_export,
     build_encoder_export_spec,
+    build_monolithic_export_inputs,
     build_ptv3_export_context,
     build_ptv3_input_dynamic_axes,
-    build_serialized_pooling_export_inputs,
     stage_voxel_axis_name,
 )
 from autoware_ml.utils.deploy import ExportSpec
 from autoware_ml.utils.point_cloud.batching import offset_to_batch
-from autoware_ml.utils.point_cloud.structures import Point, serialize_point_cloud_batch
+from autoware_ml.utils.point_cloud.structures import Point
 
 
 class PTv3DetFeatureFusion(nn.Module):
@@ -358,7 +358,7 @@ def build_det_head_export_spec(
     )
 
 
-class _PTv3DetectionExportModule(nn.Module):
+class _PTv3DetectionExportModule(PTv3EncoderExportBase):
     """Export PTv3 detection as a tensor-only ONNX graph."""
 
     def __init__(
@@ -371,13 +371,10 @@ class _PTv3DetectionExportModule(nn.Module):
         output_names: Sequence[str],
     ) -> None:
         """Initialize the deployment-oriented PTv3 detection wrapper."""
-        super().__init__()
-        self.encoder = encoder
+        super().__init__(encoder, sparse_shape, serialized_depth)
         self.bev_neck = bev_neck
         self.bbox_head = bbox_head
         self.output_names = list(output_names)
-        self.register_buffer("_sparse_shape", sparse_shape.to(dtype=torch.long), persistent=False)
-        self.register_buffer("_serialized_depth", serialized_depth, persistent=False)
 
     def forward(
         self,
@@ -387,15 +384,7 @@ class _PTv3DetectionExportModule(nn.Module):
         *serialized_pooling_inputs: torch.Tensor,
     ) -> tuple[torch.Tensor, ...]:
         """Run export-time inference on serialized point inputs."""
-        point = _run_ptv3_encoder_export(
-            self.encoder,
-            grid_coord,
-            feat,
-            self._serialized_depth,
-            serialized_code,
-            self._sparse_shape,
-            *serialized_pooling_inputs,
-        )
+        point = self.run_encoder(grid_coord, feat, serialized_code, *serialized_pooling_inputs)
         bev_features = self.bev_neck(point)
         outputs = self.bbox_head(bev_features)
         return tuple(outputs[name] for name in self.output_names)
@@ -526,42 +515,20 @@ class PTv3DetectionModel(PTv3BaseModel):
 
     def build_export_spec(self, batch_inputs_dict: Mapping[str, torch.Tensor]) -> ExportSpec:
         """Build the PTv3 detection ONNX export specification."""
-        sparse_shape, serialization_depth = self._compute_export_geometry(batch_inputs_dict)
-        point, input_args = serialize_point_cloud_batch(
-            batch_inputs_dict, self.EXPORT_ORDER, serialization_depth
-        )
-        serialized_pooling_inputs, serialized_pooling_input_names = (
-            build_serialized_pooling_export_inputs(
-                point["grid_coord"],
-                point["serialized_code"],
-                point["serialized_order"],
-                self.encoder.stride,
-            )
-        )
+        inputs = build_monolithic_export_inputs(self, batch_inputs_dict)
         export_module = _PTv3DetectionExportModule(
             encoder=self._prepare_encoder_export(),
             bev_neck=deepcopy(self.bev_neck).eval(),
             bbox_head=self.bbox_head.prepare_for_export(),
-            sparse_shape=sparse_shape,
-            serialized_depth=serialization_depth,
+            sparse_shape=inputs.sparse_shape,
+            serialized_depth=inputs.serialization_depth,
             output_names=self.export_output_names,
         )
         export_module.eval()
-        export_input_args = (
-            input_args[0],
-            input_args[1],
-            input_args[3],
-            *serialized_pooling_inputs,
-        )
-        input_param_names = [
-            "grid_coord",
-            "feat",
-            "serialized_code",
-            *serialized_pooling_input_names,
-        ]
+        input_param_names = inputs.input_names
         return ExportSpec(
             module=export_module,
-            args=export_input_args,
+            args=inputs.args,
             input_param_names=input_param_names,
             output_names=self.get_export_output_names(),
             dynamic_axes=build_ptv3_input_dynamic_axes(input_param_names),
