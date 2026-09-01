@@ -192,3 +192,4 @@ data_preprocessing:
       point_cloud_range: ${point_cloud_range}
       max_num_points: 32
       max_voxels: 120000
+      eval_max_voxels: 160000
