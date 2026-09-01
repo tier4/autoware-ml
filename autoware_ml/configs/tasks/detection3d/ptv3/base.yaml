@@ -78,9 +78,21 @@ deploy:
     dynamo: false
     do_constant_folding: false
     modules:
-      encoder:
+      ptv3_encoder:
         output_names: [point_feat_0, point_feat_1, point_feat_2, point_feat_3, point_feat_4]
-      det3d_head:
+        metainfo:
+          point_cloud_range: ${point_cloud_range}
+          voxel_size: ["${grid_size}", "${grid_size}", "${grid_size}"]
+          serialization_orders: [z, z-trans]
+          pooling_strides: ${model.encoder.stride}
+          enc_channels: ${model.encoder.enc_channels}
+      ptv3_det3d_head:
         output_names: ${model.export_output_names}
+        metainfo:
+          bbox_voxel_size: ${model.bbox_head.bbox_coder.voxel_size}
+          has_twist: ${model.bbox_head.use_velocity}
+          num_proposals: ${model.bbox_head.num_proposals}
+          post_center_range: ${model.bbox_head.bbox_coder.post_center_range}
+          class_names: ${dataset.detection3d.class_names}
   tensorrt:
     enabled: false

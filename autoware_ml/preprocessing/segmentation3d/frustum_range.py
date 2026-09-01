@@ -57,7 +57,9 @@ class FrustumRangePreprocessor:
         self.ignore_index = int(ignore_index)
         self.num_classes = int(num_classes)
 
-    def __call__(self, batch_inputs_dict: dict[str, Any]) -> dict[str, Any]:
+    def __call__(
+        self, batch_inputs_dict: dict[str, Any], *, is_training: bool = False
+    ) -> dict[str, Any]:
         """Project concatenated point clouds into FRNet range-view tensors.
 
         Reads the concatenated batch produced by :meth:`DataModule.collate_fn`,
@@ -71,6 +73,8 @@ class FrustumRangePreprocessor:
             batch_inputs_dict: Batch dictionary containing the concatenated
                 ``points`` tensor, the cumulative per-sample ``offset``
                 tensor, and an optional concatenated ``pts_semantic_mask``.
+            is_training: Accepted for pipeline-contract compatibility; the
+                projection is mode-independent, so the value is unused.
 
         Returns:
             Dictionary with:

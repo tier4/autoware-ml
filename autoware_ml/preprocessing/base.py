@@ -33,8 +33,9 @@ class DataPreprocessing:
     current batch dictionary and returns updates to merge into it.
 
     Args:
-        pipeline: List of callable layers to apply sequentially.
-            Each layer should accept ``dict[str, Any]`` and return ``dict[str, Any]``.
+        pipeline: List of callable layers to apply sequentially. Each layer
+            should accept ``(dict[str, Any], *, is_training: bool)`` and return
+            ``dict[str, Any]``.
 
     Example:
         ```python
@@ -55,7 +56,7 @@ class DataPreprocessing:
         """
         self.pipeline = list(pipeline)
 
-    def __call__(self, batch_inputs_dict: dict[str, Any]) -> dict[str, Any]:
+    def __call__(self, batch_inputs_dict: dict[str, Any], *, is_training: bool) -> dict[str, Any]:
         """Apply preprocessing layers after the batch is already on device.
 
         The input dictionary is mutated in place; the same object is also
@@ -65,11 +66,15 @@ class DataPreprocessing:
             batch_inputs_dict: Collated batch dictionary on the target device.
                 Mutated in place: each layer's returned mapping is merged into
                 this dict.
+            is_training: Whether the owning model is in training mode. Passed
+                to every layer so mode-dependent behavior (for example a
+                voxelizer with a larger evaluation budget) never relies on
+                implicit module state.
 
         Returns:
             The same ``batch_inputs_dict`` with preprocessing applied.
         """
         for layer in self.pipeline:
-            batch_inputs_dict |= layer(batch_inputs_dict)
+            batch_inputs_dict |= layer(batch_inputs_dict, is_training=is_training)
 
         return batch_inputs_dict

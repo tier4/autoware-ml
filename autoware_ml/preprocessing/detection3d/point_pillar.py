@@ -20,12 +20,11 @@ from typing import Any
 
 from jaxtyping import Float32
 import torch
-import torch.nn as nn
 
 from autoware_ml.ops.voxelization.voxelization import hard_voxelize
 
 
-class PointPillarPreprocessor(nn.Module):
+class PointPillarPreprocessor:
     """Convert batched point clouds into padded pillars for PointPillars models.
 
     The preprocessor voxelizes each point cloud using
@@ -38,7 +37,10 @@ class PointPillarPreprocessor(nn.Module):
         point_cloud_range: Spatial range ``[x_min, y_min, z_min, x_max, y_max, z_max]``
             in meters.
         max_num_points: Maximum number of points kept per pillar.
-        max_voxels: Maximum number of pillars retained per sample.
+        max_voxels: Maximum number of pillars retained per sample during training.
+        eval_max_voxels: Maximum number of pillars retained per sample during
+            evaluation and inference. Required before the preprocessor runs in
+            evaluation mode.
         voxelization_z_order_first: If ``True``, this preprocessor will transpose [x, y, z]
             coordinates to [z, y, x] in coords from voxelization.
             This is used for backward-compatible, and will be removed very soon.
@@ -56,25 +58,27 @@ class PointPillarPreprocessor(nn.Module):
         point_cloud_range: list[float],
         max_num_points: int,
         max_voxels: int,
+        eval_max_voxels: int | None = None,
         voxelization_z_order_first: bool = True,
         default_point_channels: int = 4,
     ) -> None:
-        super().__init__()
-        self.register_buffer("voxel_size", torch.tensor(voxel_size, dtype=torch.float32))
-        self.register_buffer(
-            "point_cloud_range", torch.tensor(point_cloud_range, dtype=torch.float32)
-        )
+        self.voxel_size = torch.tensor(voxel_size, dtype=torch.float32)
+        self.point_cloud_range = torch.tensor(point_cloud_range, dtype=torch.float32)
         self.max_num_points = max_num_points
         self.max_voxels = max_voxels
+        self.eval_max_voxels = eval_max_voxels
         self.voxelization_z_order_first = voxelization_z_order_first
         self._default_point_channels = default_point_channels
 
-    def forward(self, batch_inputs_dict: dict[str, Any]) -> dict[str, Any]:
+    def __call__(self, batch_inputs_dict: dict[str, Any], *, is_training: bool) -> dict[str, Any]:
         """Voxelize batched point clouds and append pillar tensors.
 
         Args:
             batch_inputs_dict: Batch dictionary containing a ``"points"`` key
                 with a list of ``(N_i, C)`` point tensors.
+            is_training: Whether the owning model is in training mode. Selects
+                between the ``max_voxels`` (training) and ``eval_max_voxels``
+                (evaluation) pillar budgets.
 
         Returns:
             Updated batch dictionary with the following additional keys:
@@ -84,6 +88,12 @@ class PointPillarPreprocessor(nn.Module):
             - ``"voxel_coords"`` - pillar coordinates ``(total_pillars, 4)`` in
               ``[batch, z, y, x]`` order, ``dtype=torch.int32``.
         """
+        if not is_training and self.eval_max_voxels is None:
+            raise ValueError(
+                "PointPillarPreprocessor is running in evaluation mode but 'eval_max_voxels' "
+                "is not set. Set 'eval_max_voxels' in the data_preprocessing config (use the "
+                "same value as 'max_voxels' to keep the training-time budget)."
+            )
         points_list = batch_inputs_dict["points"]
         outputs = dict(batch_inputs_dict)
         if not points_list:
@@ -119,7 +129,7 @@ class PointPillarPreprocessor(nn.Module):
             voxel_size=voxel_size,
             point_cloud_range=point_cloud_range,
             max_num_points=self.max_num_points,
-            max_voxels=self.max_voxels,
+            max_voxels=self.max_voxels if is_training else self.eval_max_voxels,
         )
 
         # Handle the case where no voxels are generated

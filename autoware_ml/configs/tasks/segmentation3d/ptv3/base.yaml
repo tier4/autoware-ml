@@ -64,9 +64,18 @@ deploy:
     dynamo: false
     do_constant_folding: false
     modules:
-      encoder:
+      ptv3_encoder:
         output_names: [point_feat_0, point_feat_1, point_feat_2, point_feat_3, point_feat_4]
-      seg3d_head:
+        metainfo:
+          point_cloud_range: ${point_cloud_range}
+          voxel_size: ["${grid_size}", "${grid_size}", "${grid_size}"]
+          serialization_orders: [z, z-trans]
+          pooling_strides: ${model.encoder.stride}
+          enc_channels: ${model.encoder.enc_channels}
+      ptv3_seg3d_head:
         output_names: [pred_labels, pred_probs]
+        metainfo:
+          dec_depths: ${model.seg3d_head.dec_depths}
+          class_names: ${seg_class_names:${dataset.segmentation3d.class_mapping}, ${dataset.segmentation3d.num_classes}}
   tensorrt:
     enabled: false
