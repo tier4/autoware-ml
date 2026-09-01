@@ -13,7 +13,8 @@ from autoware_ml.preprocessing.base import DataPreprocessing
 
 
 class _AddPreprocessedFeature:
-    def __call__(self, batch_inputs_dict: dict[str, Any]) -> dict[str, Any]:
+    def __call__(self, batch_inputs_dict: dict[str, Any], *, is_training: bool) -> dict[str, Any]:
+        del is_training
         return {"x": batch_inputs_dict["x"] + 1.0, "preprocessed": torch.tensor(True)}
 
 

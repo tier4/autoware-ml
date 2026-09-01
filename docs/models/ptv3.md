@@ -95,6 +95,22 @@ autoware-ml deploy \
 The deployment command switches PTv3 attention blocks into non-flash export
 mode automatically.
 
+Transformer blocks in the detection head are not fused by default. Bf16 is required
+for numerically stable TensorRT operator fusion:
+
+```yaml
+model:
+  bbox_head:
+    use_bf16_cross_attention: true
+deploy:
+  onnx:
+    precision: fp16
+```
+
+Both settings are required to enable the fused path, and the resulting model requires
+an SM80 or newer GPU. Without both settings, export uses the stable but slower non-fused
+attention path.
+
 The exported ONNX model returns both `pred_labels` and `pred_probs`. The
 probability output is produced by a final softmax layer, while training and
 evaluation continue to use logits inside the Lightning model.

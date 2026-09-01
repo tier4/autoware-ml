@@ -315,6 +315,15 @@ def deploy(
             autocompletion=complete_checkpoint_path,
         ),
     ] = None,
+    release: Annotated[
+        str | None,
+        typer.Option(
+            "--release",
+            help="Release stamped into the ONNX metadata (vMAJOR.MINOR.PATCH, e.g. "
+            "v0.0.1). Omitting it marks the artifacts 'unversioned' — fine for quick "
+            "tests, never for production.",
+        ),
+    ] = None,
 ) -> None:
     """Export a trained model through the deployment entrypoint.
 
@@ -324,16 +333,24 @@ def deploy(
     ``--weights``; multi-task exports stack multiple ``--weights`` to merge
     independently trained heads into one model.
 
+    Every exported ONNX module is stamped with its identity and provenance
+    (producer, release, config, commits, class lists). Pass ``--release`` for
+    anything that may reach production; without it the artifacts are stamped
+    ``unversioned`` and the deploy logs a warning.
+
     Args:
         ctx: Typer context containing additional Hydra overrides.
         config_name: Config name or config file path to deploy.
         weights: One or more checkpoint paths to merge into the export model.
+        release: Release stamped into the ONNX metadata; None marks the export unversioned.
     """
     if not weights:
         raise typer.BadParameter("--weights <path> (repeatable) must be specified.")
 
     weights_list = "[" + ",".join(weights) + "]"
     hydra_overrides = [f"+weights={weights_list}"]
+    if release is not None:
+        hydra_overrides.append(f"+release={release}")
 
     run_lazy_script(
         CLI_RUNTIME_MODULE,

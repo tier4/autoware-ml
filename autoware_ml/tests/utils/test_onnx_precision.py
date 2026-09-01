@@ -27,6 +27,7 @@ from autoware_ml.utils.onnx_precision import (
     convert_onnx_precision,
     resolve_onnx_precision,
     should_convert_precision,
+    validate_module_onnx_precision,
 )
 
 
@@ -71,6 +72,19 @@ def test_resolve_precision_reads_config_string() -> None:
 def test_resolve_precision_rejects_unsupported() -> None:
     with pytest.raises(ValueError, match="int8"):
         resolve_onnx_precision(OmegaConf.create({"precision": "int8"}))
+
+
+def test_validate_module_precision_requirement() -> None:
+    class PrecisionAwareModule:
+        required_onnx_precision = "fp16"
+
+        def modules(self):
+            return [self]
+
+    module = PrecisionAwareModule()
+    validate_module_onnx_precision(module, OmegaConf.create({"precision": "fp16"}))
+    with pytest.raises(ValueError, match="requires deploy.onnx.precision='fp16'"):
+        validate_module_onnx_precision(module, OmegaConf.create({"precision": "fp32"}))
 
 
 def test_fp16_conversion(tmp_path) -> None:

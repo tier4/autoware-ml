@@ -58,21 +58,22 @@ class LearnedPositionalEncoding(nn.Module):
         """
         super().__init__()
         self.proj = nn.Sequential(
-            nn.Linear(input_channels, embed_dims),
+            nn.Conv1d(input_channels, embed_dims, kernel_size=1),
+            nn.BatchNorm1d(embed_dims),
             nn.ReLU(inplace=True),
-            nn.Linear(embed_dims, embed_dims),
+            nn.Conv1d(embed_dims, embed_dims, kernel_size=1),
         )
 
     def forward(self, position: torch.Tensor) -> torch.Tensor:
         """Encode BEV positions into query embeddings.
 
         Args:
-            position: BEV coordinate tensor.
+            position: BEV coordinate tensor of shape ``(batch, tokens, channels)``.
 
         Returns:
-            Learned positional embeddings.
+            Learned positional embeddings of shape ``(batch, tokens, embed_dims)``.
         """
-        return self.proj(position)
+        return self.proj(position.transpose(1, 2)).transpose(1, 2)
 
 
 class TransFusionDecoderLayer(nn.Module):
@@ -127,15 +128,26 @@ class TransFusionDecoderLayer(nn.Module):
         Returns:
             Refined query tensor.
         """
+        # TransformerDecoderLayer:
+        # The residual stream stays position-free
+        # and the positional embeddings are added to q/k/v at every attention call.
         query_tokens = query.transpose(1, 2)
         key_tokens = key.transpose(1, 2)
-        query_tokens = query_tokens + self.query_pos_encoding(query_pos)
-        key_tokens = key_tokens + self.key_pos_encoding(key_pos)
+        query_pos_embed = self.query_pos_encoding(query_pos)
+        key_pos_embed = self.key_pos_encoding(key_pos)
 
-        attended, _ = self.self_attn(query_tokens, query_tokens, query_tokens)
+        attended, _ = self.self_attn(
+            query_tokens + query_pos_embed,
+            query_tokens + query_pos_embed,
+            query_tokens + query_pos_embed,
+        )
         query_tokens = self.norm1(query_tokens + self.dropout(attended))
 
-        attended, _ = self.cross_attn(query_tokens, key_tokens, key_tokens)
+        attended, _ = self.cross_attn(
+            query_tokens + query_pos_embed,
+            key_tokens + key_pos_embed,
+            key_tokens + key_pos_embed,
+        )
         query_tokens = self.norm2(query_tokens + self.dropout(attended))
 
         ffn_output = self.ffn(query_tokens)
@@ -146,12 +158,17 @@ class TransFusionDecoderLayer(nn.Module):
 class ExportableMultiheadAttention(nn.Module):
     """ONNX/TensorRT-friendly equivalent of ``nn.MultiheadAttention``.
 
-    The runtime math and weights are unchanged, but the exported graph avoids
-    PyTorch's fused MultiheadAttention decomposition that TensorRT produces NaNs
-    for in the TransHead decoder.
+    The default path retains an explicitly stabilized attention graph. The optional fused path
+    emits the direct MatMul-Softmax-MatMul pattern recognized by TensorRT and can run its
+    attention core in bf16.
     """
 
-    def __init__(self, attention: nn.MultiheadAttention) -> None:
+    def __init__(
+        self,
+        attention: nn.MultiheadAttention,
+        fuse_attention: bool = False,
+        use_bf16: bool = False,
+    ) -> None:
         """Copy trained weights from a batch-first MultiheadAttention module."""
         super().__init__()
         if not attention.batch_first:
@@ -163,6 +180,10 @@ class ExportableMultiheadAttention(nn.Module):
         self.num_heads = attention.num_heads
         self.head_dim = self.embed_dim // self.num_heads
         self.dropout = attention.dropout
+        self.fuse_attention = fuse_attention
+        self.use_bf16 = use_bf16
+        if use_bf16 and not fuse_attention:
+            raise ValueError("bf16 attention requires the fusion-ready attention path.")
         self.q_proj = nn.Linear(self.embed_dim, self.embed_dim)
         self.k_proj = nn.Linear(self.embed_dim, self.embed_dim)
         self.v_proj = nn.Linear(self.embed_dim, self.embed_dim)
@@ -203,13 +224,25 @@ class ExportableMultiheadAttention(nn.Module):
         k = self._project(self.k_proj, key)
         v = self._project(self.v_proj, value)
 
-        scale = self.head_dim**0.5
-        attention = torch.matmul(q.float() / scale, k.float().transpose(-2, -1))
-        attention = attention - attention.max(dim=-1, keepdim=True).values
+        if self.fuse_attention:
+            q = q / self.head_dim**0.5
+            if self.use_bf16:
+                q = q.to(torch.bfloat16)
+                k = k.to(torch.bfloat16)
+                v = v.to(torch.bfloat16)
+            attention = torch.matmul(q, k.transpose(-2, -1))
+        else:
+            attention = torch.matmul(q.float() / self.head_dim**0.5, k.float().transpose(-2, -1))
+            attention = attention - attention.max(dim=-1, keepdim=True).values
         attention = attention.softmax(dim=-1)
         if self.training and self.dropout > 0.0:
             attention = F.dropout(attention, p=self.dropout)
-        attended = torch.matmul(attention.to(v.dtype), v)
+        if self.fuse_attention:
+            attended = torch.matmul(attention, v)
+        else:
+            attended = torch.matmul(attention.to(v.dtype), v)
+        if self.use_bf16:
+            attended = attended.to(query.dtype)
         attended = (
             attended.transpose(1, 2)
             .contiguous()
@@ -225,12 +258,22 @@ class SeparateHead1D(nn.Module):
     query dimension.
     """
 
-    def __init__(self, in_channels: int, heads: dict[str, tuple[int, int]]) -> None:
+    def __init__(
+        self,
+        in_channels: int,
+        heads: dict[str, tuple[int, int]],
+        hidden_channels: int,
+        norm_eps: float = 1e-3,
+        norm_momentum: float = 0.01,
+    ) -> None:
         """Initialize the per-query prediction heads.
 
         Args:
             in_channels: Input feature dimension.
             heads: Mapping from head name to ``(out_channels, num_convs)``.
+            hidden_channels: Width of the intermediate branch layers.
+            norm_eps: Epsilon used by the branch batch-normalization layers.
+            norm_momentum: Momentum used by the branch batch-normalization layers.
         """
         super().__init__()
         self.heads = nn.ModuleDict()
@@ -238,10 +281,12 @@ class SeparateHead1D(nn.Module):
             layers: list[nn.Module] = []
             current_channels = in_channels
             for _ in range(max(num_convs - 1, 0)):
-                layers.append(nn.Conv1d(current_channels, in_channels, kernel_size=1, bias=False))
-                layers.append(nn.BatchNorm1d(in_channels, eps=1e-3, momentum=0.01))
+                layers.append(
+                    nn.Conv1d(current_channels, hidden_channels, kernel_size=1, bias=False)
+                )
+                layers.append(nn.BatchNorm1d(hidden_channels, eps=norm_eps, momentum=norm_momentum))
                 layers.append(nn.ReLU(inplace=True))
-                current_channels = in_channels
+                current_channels = hidden_channels
             layers.append(nn.Conv1d(current_channels, out_channels, kernel_size=1))
             self.heads[name] = nn.Sequential(*layers)
 
@@ -323,6 +368,10 @@ class TransFusionHead(nn.Module):
         heatmap_init_bias: float = -2.19,
         nms_kernel_size: int = 3,
         use_velocity: bool = True,
+        head_hidden_channels: int | None = None,
+        norm_eps: float = 1e-3,
+        norm_momentum: float = 0.01,
+        use_bf16_cross_attention: bool = False,
     ) -> None:
         """Initialize the TransFusion detection head.
 
@@ -370,6 +419,14 @@ class TransFusionHead(nn.Module):
             heatmap_init_bias: Initial bias used by the dense heatmap branch.
             nms_kernel_size: Kernel size used for local-maximum suppression.
             use_velocity: Whether the head predicts object velocity.
+            head_hidden_channels: Width of the prediction-branch hidden layers.
+                Defaults to ``hidden_channel``.
+            norm_eps: Epsilon used by the head's batch-normalization layers
+                (shared conv, heatmap head, prediction branches).
+            norm_momentum: Momentum used by the head's batch-normalization layers
+                (shared conv, heatmap head, prediction branches).
+            use_bf16_cross_attention: Whether export emits fusion-ready attention and uses bf16 for
+                the long cross-attention core. Requires ``deploy.onnx.precision=fp16``.
         """
         super().__init__()
         self.num_proposals = num_proposals
@@ -396,6 +453,8 @@ class TransFusionHead(nn.Module):
         self.loss_heatmap_weight = loss_heatmap_weight
         self.heatmap_init_bias = heatmap_init_bias
         self.use_velocity = use_velocity
+        self.use_bf16_cross_attention = use_bf16_cross_attention
+        self.required_onnx_precision = "fp16" if use_bf16_cross_attention else None
         if nms_type not in {None, "circle"}:
             raise ValueError(f"Unsupported TransFusion NMS type: {nms_type!r}")
         self.nms_type = nms_type
@@ -407,11 +466,13 @@ class TransFusionHead(nn.Module):
         self.shared_conv = nn.Conv2d(
             in_channels, hidden_channel, kernel_size=3, padding=1, bias=False
         )
-        self.shared_norm = nn.BatchNorm2d(hidden_channel, eps=1e-3, momentum=0.01)
+        self.shared_norm = nn.BatchNorm2d(hidden_channel, eps=norm_eps, momentum=norm_momentum)
         self.shared_act = nn.ReLU(inplace=True)
 
         self.heatmap_head = nn.Sequential(
-            ConvModule(hidden_channel, hidden_channel),
+            ConvModule(
+                hidden_channel, hidden_channel, norm_eps=norm_eps, norm_momentum=norm_momentum
+            ),
             nn.Conv2d(hidden_channel, num_classes, kernel_size=3, padding=1),
         )
         nn.init.constant_(self.heatmap_head[-1].bias, heatmap_init_bias)
@@ -427,8 +488,18 @@ class TransFusionHead(nn.Module):
         prediction_heads["heatmap"] = (num_classes, 2)
         if not use_velocity and "vel" in prediction_heads:
             prediction_heads.pop("vel")
+        head_hidden = head_hidden_channels if head_hidden_channels is not None else hidden_channel
         self.prediction_heads = nn.ModuleList(
-            [SeparateHead1D(hidden_channel, prediction_heads) for _ in range(num_decoder_layers)]
+            [
+                SeparateHead1D(
+                    hidden_channel,
+                    prediction_heads,
+                    hidden_channels=head_hidden,
+                    norm_eps=norm_eps,
+                    norm_momentum=norm_momentum,
+                )
+                for _ in range(num_decoder_layers)
+            ]
         )
 
         self.loss_heatmap = GaussianFocalLoss()
@@ -942,7 +1013,14 @@ class TransFusionHead(nn.Module):
             return head
         for decoder_layer in head.decoder:
             if isinstance(decoder_layer.self_attn, nn.MultiheadAttention):
-                decoder_layer.self_attn = ExportableMultiheadAttention(decoder_layer.self_attn)
+                decoder_layer.self_attn = ExportableMultiheadAttention(
+                    decoder_layer.self_attn,
+                    fuse_attention=head.use_bf16_cross_attention,
+                )
             if isinstance(decoder_layer.cross_attn, nn.MultiheadAttention):
-                decoder_layer.cross_attn = ExportableMultiheadAttention(decoder_layer.cross_attn)
+                decoder_layer.cross_attn = ExportableMultiheadAttention(
+                    decoder_layer.cross_attn,
+                    fuse_attention=head.use_bf16_cross_attention,
+                    use_bf16=head.use_bf16_cross_attention,
+                )
         return head
