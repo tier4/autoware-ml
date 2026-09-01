@@ -38,6 +38,11 @@ from autoware_ml.utils.deploy import (
     supports_export_stage,
     validate_cuda_available,
 )
+from autoware_ml.utils.onnx_precision import (
+    convert_onnx_precision,
+    resolve_onnx_precision,
+    should_convert_precision,
+)
 from autoware_ml.utils.mlflow_helpers import (
     AUTOWARE_ML_RUN_ID_ENV,
     build_run_metadata,

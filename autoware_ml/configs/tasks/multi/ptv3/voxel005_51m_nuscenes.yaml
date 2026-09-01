@@ -55,6 +55,10 @@ datamodule:
         remove_close: true
       - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
       - _target_: autoware_ml.transforms.segmentation3d.formatting.PreparePointSegInput
+      - _target_: autoware_ml.transforms.point_cloud.geometry.RandomRotateTargetAngle
+        p: 0.75
+        angle: [0.5, 1.0, 1.5]
+        center: [0.0, 0.0, 0.0]
       - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
         rot_range: [-1.571, 1.571]
         scale_ratio_range: [0.8, 1.2]
@@ -62,8 +66,18 @@ datamodule:
       - _target_: autoware_ml.transforms.point_cloud.geometry.RandomFlip3D
         flip_ratio_bev_horizontal: 0.5
         flip_ratio_bev_vertical: 0.5
+      - _target_: autoware_ml.transforms.point_cloud.perturbation.RandomJitter
+        sigma: 0.005
+        clip: 0.02
       - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
         point_cloud_range: ${point_cloud_range}
+      - _target_: autoware_ml.transforms.point_cloud.sampling.RandomDropout
+        p: 0.5
+        dropout_ratio: 0.2
+      - _target_: autoware_ml.transforms.point_cloud.perturbation.RandomStrengthJitter
+        gamma_range: [0.8, 1.25]
+        scale_range: [0.9, 1.1]
+        shift_range: [-0.02, 0.02]
       - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeFilter
         point_cloud_range: ${point_cloud_range}
       - _target_: autoware_ml.transforms.common.copying.Copy

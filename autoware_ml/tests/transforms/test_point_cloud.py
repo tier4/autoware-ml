@@ -14,7 +14,7 @@ from autoware_ml.transforms.point_cloud.geometry import (
     RandomRotateTargetAngle,
 )
 from autoware_ml.transforms.point_cloud.loading import LoadPointsFromFile
-from autoware_ml.transforms.point_cloud.perturbation import RandomShift
+from autoware_ml.transforms.point_cloud.perturbation import RandomShift, RandomStrengthJitter
 from autoware_ml.transforms.point_cloud.sampling import (
     ElasticDistortion,
     GridSample,
@@ -203,6 +203,76 @@ class TestPointCloudTransforms:
         assert np.allclose(points[:2, 4], 0.0)
         assert np.allclose(points[2:, 4], 0.1)
 
+    def test_multi_sweeps_remove_close_removes_axis_aligned_box(self):
+        """The removed region is the box |x|,|y| < close_radius, not a radial circle:
+        (0.9, 0.9) lies outside the r=1.0 circle but inside the box, so only the box
+        semantics remove it."""
+        key_points = np.array([[5.0, 5.0, 0.0, 0.0]], dtype=np.float32)
+        sweep_points = np.array(
+            [
+                [0.9, 0.9, 0.0, 0.0],  # inside the box, outside the circle -> removed
+                [0.5, -0.5, 0.0, 0.0],  # inside the box -> removed
+                [1.05, 0.0, 0.0, 0.0],  # |x| >= radius -> kept
+                [0.0, -1.2, 0.0, 0.0],  # |y| >= radius -> kept
+            ],
+            dtype=np.float32,
+        )
+
+        transform = LoadPointsFromMultiSweeps(
+            sweeps_num=2,
+            load_dim=4,
+            use_dim=[0, 1, 2, 3],
+            remove_close=True,
+            close_radius=1.0,
+        )
+        output = transform({"points": key_points, "sweeps": [{"points": sweep_points}]})
+
+        points = output["points"]
+        # key point + the two sweep points outside the box
+        assert points.shape == (3, 4)
+        assert not np.any(np.all(np.isclose(points[:, :2], [0.9, 0.9]), axis=1))
+        assert np.any(np.all(np.isclose(points[:, :2], [1.05, 0.0]), axis=1))
+        assert np.any(np.all(np.isclose(points[:, :2], [0.0, -1.2]), axis=1))
+
+    def test_multi_sweeps_takes_nearest_sweeps_in_test_mode(self):
+        sweeps = [
+            {"points": np.full((1, 4), 10.0, dtype=np.float32)},
+            {"points": np.full((1, 4), 20.0, dtype=np.float32)},
+            {"points": np.full((1, 4), 30.0, dtype=np.float32)},
+        ]
+        transform = LoadPointsFromMultiSweeps(sweeps_num=2, load_dim=4, use_dim=[0, 1, 2, 3])
+
+        output = transform({"points": np.zeros((1, 4), dtype=np.float32), "sweeps": sweeps})
+
+        # test_mode defaults to True: always the nearest sweep, never a random one
+        assert output["points"].shape == (2, 4)
+        assert np.allclose(output["points"][1], 10.0)
+
+    def test_multi_sweeps_samples_sweeps_randomly_when_not_test_mode(self, monkeypatch):
+        sweeps = [
+            {"points": np.full((1, 4), 10.0, dtype=np.float32)},
+            {"points": np.full((1, 4), 20.0, dtype=np.float32)},
+            {"points": np.full((1, 4), 30.0, dtype=np.float32)},
+        ]
+        calls = {}
+
+        def fake_choice(num_entries, size, replace):
+            calls["args"] = (num_entries, size, replace)
+            return np.array([2])
+
+        monkeypatch.setattr(
+            "autoware_ml.transforms.point_cloud.sweeps.np.random.choice", fake_choice
+        )
+        transform = LoadPointsFromMultiSweeps(
+            sweeps_num=2, load_dim=4, use_dim=[0, 1, 2, 3], test_mode=False
+        )
+
+        output = transform({"points": np.zeros((1, 4), dtype=np.float32), "sweeps": sweeps})
+
+        # Sampled uniformly without replacement across all entries, not sliced to the nearest
+        assert calls["args"] == (3, 1, False)
+        assert np.allclose(output["points"][1], 30.0)
+
     def test_multi_sweeps_time_dim_requires_key_timestamp(self):
         transform = LoadPointsFromMultiSweeps(
             sweeps_num=2, load_dim=5, use_dim=[0, 1, 2, 3, 4], time_dim=4
@@ -243,6 +313,45 @@ class TestPointCloudTransforms:
 
         assert output["coord"].shape[0] == 4
         assert output["strength"].shape[0] == 4
+
+    def test_random_rotate_target_angle_rotates_boxes_with_points(self):
+        sample = {
+            "coord": np.array([[2.0, 0.0, 1.0]], dtype=np.float32),
+            "gt_boxes": np.array([[2.0, 0.0, 1.0, 4.0, 2.0, 1.5, 0.1, 3.0, 0.0]], dtype=np.float32),
+        }
+
+        output = RandomRotateTargetAngle(angle=[0.5], center=[0.0, 0.0, 0.0], p=1.0)(sample)
+
+        box = output["gt_boxes"][0]
+        assert np.allclose(output["coord"], [[0.0, 2.0, 1.0]], atol=1e-6)
+        assert np.allclose(box[:3], [0.0, 2.0, 1.0], atol=1e-6)
+        assert np.allclose(box[3:6], [4.0, 2.0, 1.5])
+        assert np.isclose(box[6], 0.1 + 0.5 * np.pi)
+        assert np.allclose(box[7:9], [0.0, 3.0], atol=1e-6)
+
+    def test_random_rotate_target_angle_rejects_boxes_off_z_axis(self):
+        sample = {
+            "coord": np.zeros((1, 3), dtype=np.float32),
+            "gt_boxes": np.zeros((1, 9), dtype=np.float32),
+        }
+
+        with pytest.raises(ValueError, match="axis='z'"):
+            RandomRotateTargetAngle(angle=[0.5], axis="x", p=1.0)(sample)
+
+    def test_random_strength_jitter_stays_normalized_and_monotonic(self):
+        np.random.seed(0)
+        sample = {"strength": np.linspace(0.0, 1.0, 5, dtype=np.float32).reshape(5, 1)}
+
+        output = RandomStrengthJitter(
+            gamma_range=[0.8, 1.25], scale_range=[0.9, 1.1], shift_range=[-0.02, 0.02]
+        )(sample)
+
+        strength = output["strength"]
+        assert strength.shape == (5, 1)
+        assert strength.dtype == np.float32
+        assert strength.min() >= 0.0
+        assert strength.max() <= 1.0
+        assert np.all(np.diff(strength[:, 0]) >= 0.0)
 
     def test_grid_sample_keeps_arrays_aligned(self):
         sample = {
