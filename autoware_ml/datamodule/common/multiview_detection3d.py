@@ -121,7 +121,9 @@ class MultiviewDetection3DDataModule(DataModule):
         filter_frames_with_camera_order: bool = True,
         require_image_files: bool = False,
         streaming: bool = False,
+        annotation_status_field: str | None = None,
         collation_map: Mapping[str, CollationStrategy] | None = None,
+        train_collation_map: Mapping[str, CollationStrategy] | None = None,
         train_transforms: TransformsCompose | None = None,
         val_transforms: TransformsCompose | None = None,
         test_transforms: TransformsCompose | None = None,
@@ -150,7 +152,12 @@ class MultiviewDetection3DDataModule(DataModule):
                 require it; non-temporal multiview models such as BEVFusion
                 share this datamodule and keep it false so their dataloaders
                 shuffle samples normally.
+            annotation_status_field: Optional annotation field carrying the
+                per-frame annotation-completeness flag consumed by
+                partial-ignore; samples expose it as ``annotation_status``.
             collation_map: Per-key collation strategy applied across all splits.
+            train_collation_map: Additional per-key strategies applied on top
+                of ``collation_map`` for the training split only.
             train_transforms: Transform pipeline applied to training samples.
             val_transforms: Transform pipeline applied to validation samples.
             test_transforms: Transform pipeline applied to test samples.
@@ -162,6 +169,7 @@ class MultiviewDetection3DDataModule(DataModule):
         """
         super().__init__(
             collation_map=collation_map,
+            train_collation_map=train_collation_map,
             train_transforms=train_transforms,
             val_transforms=val_transforms,
             test_transforms=test_transforms,
@@ -178,6 +186,7 @@ class MultiviewDetection3DDataModule(DataModule):
         self.filter_frames_with_camera_order = filter_frames_with_camera_order
         self.require_image_files = require_image_files
         self.streaming = streaming
+        self.annotation_status_field = annotation_status_field
         self.ann_files = {
             "train": _resolve_ann_file(data_root, train_ann_file),
             "val": _resolve_ann_file(data_root, val_ann_file),
@@ -192,7 +201,7 @@ class MultiviewDetection3DDataModule(DataModule):
         return build_streaming_dataloader(
             getattr(self, f"{split}_dataset"),
             getattr(self, f"{split}_dataloader_cfg"),
-            self.collate_fn,
+            self._collate_fn_for(split),
             shuffle_scenes=split == "train",
         )
 
@@ -245,6 +254,7 @@ class MultiviewDetection3DDataset(Dataset):
         name_mapping: Mapping[str, str] | None = None,
         filter_frames_with_camera_order: bool = True,
         require_image_files: bool = False,
+        annotation_status_field: str | None = None,
         dataset_transforms: Any = None,
     ) -> None:
         """Initialize the multiview detection dataset.
@@ -260,6 +270,9 @@ class MultiviewDetection3DDataset(Dataset):
                 image loading always sees a complete camera set.
             require_image_files: Also verify each camera image exists on disk
                 while filtering.
+            annotation_status_field: Optional annotation field carrying the
+                per-frame annotation-completeness flag consumed by
+                partial-ignore; emitted as ``annotation_status``.
             dataset_transforms: Optional transform pipeline.
         """
         super().__init__(dataset_transforms=dataset_transforms)
@@ -268,6 +281,7 @@ class MultiviewDetection3DDataset(Dataset):
         self.camera_order = camera_order
         self.name_mapping = {} if name_mapping is None else dict(name_mapping)
         self.require_image_files = require_image_files
+        self.annotation_status_field = annotation_status_field
         with open(ann_file, "rb") as file:
             data = pickle.load(file)
         data_infos = load_detection_data_infos(data)
@@ -281,7 +295,12 @@ class MultiviewDetection3DDataset(Dataset):
 
     @staticmethod
     def _build_prev_exists(data_infos: list[dict[str, Any]]) -> np.ndarray:
-        """Build stream-continuity flags from adjacent scene tokens."""
+        """Build stream-continuity flags from adjacent scene tokens.
+
+        Camera-order filtering may have dropped mid-scene frames, so a flagged
+        neighbor pair can span a larger time gap; the model consumes the real
+        ``timestamp`` deltas, which absorb this.
+        """
         prev_exists = np.zeros(len(data_infos), dtype=np.float32)
         for index in range(1, len(data_infos)):
             prev_exists[index] = np.float32(
@@ -336,14 +355,26 @@ class MultiviewDetection3DDataset(Dataset):
 
     @staticmethod
     def _build_scene_index_groups(data_infos: list[dict[str, Any]]) -> list[list[int]]:
-        """Group dataset indices by scene, preserving frame order."""
+        """Group dataset indices by scene, requiring scene-contiguous file order.
+
+        ``prev_exists`` is derived from file adjacency, so an annotation file
+        that interleaves scenes would silently reset temporal memory mid-scene;
+        fail loudly instead.
+        """
         groups: dict[str, list[int]] = {}
         for index, sample in enumerate(data_infos):
-            groups.setdefault(sample["scene_token"], []).append(index)
+            token = sample["scene_token"]
+            group = groups.setdefault(token, [])
+            if group and group[-1] != index - 1:
+                raise ValueError(
+                    f"Annotation file interleaves scene '{token}' (frame {index} follows a "
+                    f"gap after frame {group[-1]}); scene frames must be contiguous."
+                )
+            group.append(index)
         return list(groups.values())
 
     def scene_index_groups(self) -> list[list[int]]:
-        """Group dataset indices by scene, preserving frame order.
+        """Return the per-scene dataset index groups.
 
         Returns:
             One list of scene-contiguous dataset indices per scene. A fresh
@@ -465,6 +496,9 @@ class MultiviewDetection3DDataset(Dataset):
             "scene_token": sample["scene_token"],
             "prev_exists": self.prev_exists[index],
         }
+        if self.annotation_status_field is not None:
+            # Frames without the field count as fully annotated.
+            data_info["annotation_status"] = bool(sample.get(self.annotation_status_field, True))
         ego_pose = _build_ego_pose(sample)
         if ego_pose is not None:
             data_info["ego_pose"] = ego_pose

@@ -34,6 +34,7 @@ from omegaconf import DictConfig, OmegaConf, open_dict
 
 from autoware_ml.configs.paths import CONFIGS_ROOT
 from autoware_ml.configs.resolvers import register_config_resolvers
+from autoware_ml.utils.lightning_loops import install_epoch_end_validation
 from autoware_ml.utils.mlflow_helpers import sanitize_mlflow_param_keys
 
 logger = logging.getLogger(__name__)
@@ -152,12 +153,15 @@ def instantiate_trainer(
     Returns:
         Instantiated Lightning trainer.
     """
-    return hydra.utils.instantiate(
+    trainer: L.Trainer = hydra.utils.instantiate(
         cfg.trainer,
         callbacks=callbacks,
         logger=trainer_logger if trainer_logger is not None else False,
         default_root_dir=str(root_dir),
     )
+    # Variable-length streaming samplers silently skip validation on epochs
+    # shorter than the length Lightning captured at setup; see lightning_loops.
+    return install_epoch_end_validation(trainer)
 
 
 # Mirrors the value truncation MLFlowLogger.log_hyperparams applies before logging.

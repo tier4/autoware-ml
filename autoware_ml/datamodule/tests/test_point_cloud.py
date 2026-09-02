@@ -285,3 +285,41 @@ class TestDatamoduleCollation:
         dm = _make_seg_datamodule(collation_map={"inverse": "index_concat"})
         with pytest.raises(ValueError, match="index_concat"):
             dm.collate_fn(batch)
+
+
+class TestTrainCollationMap:
+    def _make_datamodule(self) -> T4Segmentation3DDataModule:
+        return _make_seg_datamodule(
+            collation_map={"coord": "concat"},
+            train_collation_map={"segment": "concat"},
+        )
+
+    def test_train_collate_includes_train_only_keys(self):
+        dm = self._make_datamodule()
+        collated = dm.train_collate_fn(_seg_batch())
+        assert "coord" in collated
+        assert torch.equal(collated["segment"], torch.tensor([0, 1, 2], dtype=torch.long))
+
+    def test_val_collate_ignores_train_only_keys_without_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ):
+        dm = self._make_datamodule()
+        batch = [{"coord": torch.zeros(2, 3)}, {"coord": torch.zeros(3, 3)}]
+
+        collated = dm.collate_fn(batch)
+
+        assert "segment" not in collated
+        assert "missing from samples" not in caplog.text
+
+    def test_collate_fn_for_selects_map_by_split(self):
+        dm = self._make_datamodule()
+        assert dm._collate_fn_for("train") == dm.train_collate_fn
+        for split in ("val", "test", "predict"):
+            assert dm._collate_fn_for(split) == dm.collate_fn
+
+    def test_reserved_offset_key_rejected_in_train_collation_map(self):
+        with pytest.raises(ValueError, match="offset"):
+            _make_seg_datamodule(
+                collation_map={"coord": "concat"},
+                train_collation_map={"offset": "concat"},
+            )
