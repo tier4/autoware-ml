@@ -216,10 +216,12 @@ class StreamPETRDetectionModel(BaseModel):
         img_backbone: nn.Module,
         img_neck: nn.Module,
         bbox_head: nn.Module,
+        img_roi_head: nn.Module | None = None,
         use_grid_mask: bool = False,
         optimizer: Callable[..., Optimizer] | None = None,
         scheduler: Callable[[Optimizer], LRScheduler] | None = None,
         optimizer_group_overrides: Mapping[str, Mapping[str, Any]] | None = None,
+        scheduler_config: Mapping[str, Any] | None = None,
         metrics: Sequence[MetricSuite] | None = None,
     ) -> None:
         """Initialize StreamPETR.
@@ -228,22 +230,28 @@ class StreamPETRDetectionModel(BaseModel):
             img_backbone: Image backbone.
             img_neck: Image neck.
             bbox_head: Detection head.
+            img_roi_head: Optional auxiliary 2D detection head supervising the
+                image features during training (Focal-PETR-style). Inference
+                never runs it.
             use_grid_mask: Whether to apply grid-mask image augmentation
                 during training.
             optimizer: Optimizer factory.
             scheduler: Scheduler factory.
             optimizer_group_overrides: Per-submodule optimizer overrides.
+            scheduler_config: Lightning scheduler metadata such as ``interval``.
             metrics: Detection metrics accumulated during validation and test.
         """
         super().__init__(
             optimizer=optimizer,
             scheduler=scheduler,
             optimizer_group_overrides=optimizer_group_overrides,
+            scheduler_config=scheduler_config,
             metrics=metrics,
         )
         self.img_backbone = img_backbone
         self.img_neck = img_neck
         self.bbox_head = bbox_head
+        self.img_roi_head = img_roi_head
         self.use_grid_mask = use_grid_mask
         self.grid_mask = GridMask()
         self.image_feature_extractor = MultiviewImageFeatureExtractor(
@@ -336,7 +344,7 @@ class StreamPETRDetectionModel(BaseModel):
                 batch_size, num_cams, *image_batch.shape[2:]
             )
         img_features = self._extract_img_features(image_batch)
-        return self.bbox_head(
+        outputs = self.bbox_head(
             img_features=img_features,
             img=image_batch,
             camera_intrinsics=self._stack_optional_tensor(camera_intrinsics),
@@ -349,6 +357,17 @@ class StreamPETRDetectionModel(BaseModel):
             gt_boxes=gt_boxes,
             gt_labels=gt_labels,
         )
+        # The auxiliary 2D head only shapes image features during training;
+        # inference and deployment never execute it.
+        if self.img_roi_head is not None and self.training:
+            outputs.update(
+                self.img_roi_head(
+                    img_features,
+                    image_height=int(image_batch.shape[-2]),
+                    image_width=int(image_batch.shape[-1]),
+                )
+            )
+        return outputs
 
     def _stack_optional_tensor(
         self,
@@ -377,9 +396,25 @@ class StreamPETRDetectionModel(BaseModel):
         Returns:
             Loss dictionary produced by the detection head.
         """
-        return self.bbox_head.loss(
-            outputs, batch_inputs_dict["gt_boxes"], batch_inputs_dict["gt_labels"]
+        losses = self.bbox_head.loss(
+            outputs,
+            batch_inputs_dict["gt_boxes"],
+            batch_inputs_dict["gt_labels"],
+            annotation_status=batch_inputs_dict.get("annotation_status"),
         )
+        if self.img_roi_head is not None and self.training:
+            roi_losses = self.img_roi_head.loss(
+                outputs,
+                gt_bboxes_2d=batch_inputs_dict["gt_bboxes_2d"],
+                gt_labels_2d=batch_inputs_dict["gt_labels_2d"],
+                centers_2d=batch_inputs_dict["centers_2d"],
+                annotation_status=batch_inputs_dict.get("annotation_status"),
+            )
+            losses.update(roi_losses)
+            losses["loss"] = losses["loss"] + sum(
+                value for key, value in roi_losses.items() if key.startswith("loss_")
+            )
+        return losses
 
     def predict_outputs(
         self, batch_inputs_dict: dict[str, Any], outputs: dict[str, torch.Tensor]

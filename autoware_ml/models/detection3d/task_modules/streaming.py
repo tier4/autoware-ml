@@ -13,6 +13,22 @@ import torch
 import torch.nn as nn
 
 
+def reduce_mean_count(value: torch.Tensor) -> torch.Tensor:
+    """Average a scalar sample count across DDP ranks (mmdetection's ``reduce_mean``).
+
+    DDP averages gradients, so normalizing every rank's ``sum`` loss by this
+    global mean count yields the true per-object mean over the whole effective
+    batch. Value-preserving float cast when distributed is unavailable or
+    uninitialized. Collective: every rank in the default group must call this
+    the same number of times per step.
+    """
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        value = value.float().clone()
+        torch.distributed.all_reduce(value.div_(torch.distributed.get_world_size()))
+        return value
+    return value.float()
+
+
 def inverse_sigmoid(x: torch.Tensor, eps: float = 1e-4) -> torch.Tensor:
     """Apply the inverse sigmoid transform with clamping for stability."""
     dtype = x.dtype
