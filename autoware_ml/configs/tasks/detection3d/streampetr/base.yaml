@@ -1,0 +1,138 @@
+# @package _global_
+defaults:
+  - /defaults/default_runtime
+  - _self_
+
+dataset: ???
+
+point_cloud_range: ???
+post_center_range: ???
+
+# RGB channel order, matching the RGB output of the image loading transform.
+img_norm_cfg:
+  mean: [123.675, 116.280, 103.530]
+  std: [58.395, 57.120, 57.375]
+  to_rgb: false
+
+datamodule:
+  collation_map:
+    img: list
+    camera_intrinsics: list
+    lidar2cam: list
+    lidar2img: list
+    timestamp: list
+    prev_exists: list
+    ego_pose: list
+    ego_pose_inv: list
+    gt_boxes: list
+    gt_labels: list
+model:
+  _target_: autoware_ml.models.detection3d.streampetr.StreamPETRDetectionModel
+  metrics: ${dataset.detection3d.metrics}
+  img_backbone:
+    _target_: autoware_ml.models.common.backbones.resnet.ResNet50MultiScale
+  img_neck:
+    _target_: autoware_ml.models.common.necks.lss_fpn.GeneralizedLSSFPN
+    in_channels: [512, 1024, 2048]
+    out_channels: 256
+  use_grid_mask: true
+  bbox_head:
+    _target_: autoware_ml.models.detection3d.heads.streampetr.StreamPETRHead
+    num_classes: ${dataset.detection3d.num_classes}
+    in_channels: 256
+    hidden_dim: 256
+    num_queries: ???
+    num_decoder_layers: 6
+    num_heads: 8
+    feedforward_channels: 2048
+    memory_len: 1024
+    topk_proposals: 256
+    num_propagated: 256
+    with_ego_pos: true
+    with_dn: true
+    loss_cls_weight: 2.0
+    loss_bbox_weight: 0.25
+    depth_num: 64
+    LID: true
+    position_range: ${post_center_range}
+    scalar: 10
+    noise_scale: 1.0
+    dn_weight: 1.0
+    split: 0.75
+    use_bottom_center: true
+    bbox_coder:
+      _target_: autoware_ml.models.detection3d.task_modules.bbox_coders.NMSFreeBBoxCoder3D
+      pc_range: ${point_cloud_range}
+      post_center_range: ${post_center_range}
+      score_threshold: 0.0
+      max_num: 300
+    assigner:
+      _target_: autoware_ml.models.detection3d.task_modules.assigners.HungarianAssigner3D
+      cls_cost:
+        _target_: autoware_ml.models.detection3d.task_modules.match_costs.ClassificationCost
+        weight: 2.0
+      reg_cost:
+        _target_: autoware_ml.models.detection3d.task_modules.match_costs.BBox3DL1Cost
+        weight: 0.25
+        # Velocity channels are excluded from matching (match_with_velo=False
+        # in the reference recipe).
+        code_weights: [2.0, 2.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0]
+      iou_cost:
+        _target_: autoware_ml.models.detection3d.task_modules.match_costs.IoU3DCost
+        weight: 0.0
+    point_cloud_range: ${point_cloud_range}
+    code_weights: [2.0, 2.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+  optimizer:
+    _target_: torch.optim.AdamW
+    _partial_: true
+    lr: 5.0e-5
+    weight_decay: 0.01
+  optimizer_group_overrides:
+    img_backbone:
+      lr: 5.0e-6
+  scheduler:
+    _target_: autoware_ml.utils.schedulers.cyclic_cosine_annealing.CyclicCosineAnnealingLR
+    _partial_: true
+    warmup_epochs: 1
+    decay_epochs: 34
+    max_lr_factor: 1.0
+    min_lr_factor: 0.0001
+
+trainer:
+  max_epochs: 35
+  precision: bf16-mixed
+  # GroupStreamingSampler shards scenes by rank itself.
+  use_distributed_sampler: false
+  gradient_clip_val: 1.0
+  gradient_clip_algorithm: norm
+
+deploy:
+  onnx:
+    dynamo: false
+    opset_version: 17
+    do_constant_folding: true
+    modules:
+      extract_img_feat:
+        output_names: [img_feats]
+      position_embedding:
+        output_names: [pos_embed, cone]
+      pts_head_memory:
+        output_names:
+          [
+            all_cls_scores,
+            all_bbox_preds,
+            post_memory_embedding,
+            post_memory_reference_point,
+            post_memory_timestamp,
+            post_memory_egopose,
+            post_memory_velo,
+            reference_points,
+            tgt,
+            temp_memory,
+            temp_pos,
+            query_pos,
+            query_pos_in,
+            outs_dec,
+          ]
+  tensorrt:
+    enabled: false

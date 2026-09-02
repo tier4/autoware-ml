@@ -1,0 +1,141 @@
+# @package _global_
+defaults:
+  - /tasks/detection3d/streampetr/base
+  - /datasets/t4dataset/detection3d
+  - /datasets/t4dataset/camera
+  - _self_
+
+batch_size: 8
+num_workers: 16
+
+dataset: ${t4dataset}
+
+point_cloud_range: [-54.0, -54.0, -5.0, 54.0, 54.0, 3.0]
+post_center_range: [-61.2, -61.2, -10.0, 61.2, 61.2, 10.0]
+
+t4dataset:
+  detection3d:
+    eval_class_range:
+      car: 54.0
+      truck: 54.0
+      bus: 54.0
+      bicycle: 54.0
+      pedestrian: 54.0
+      traffic_cone: 54.0
+      barrier: 54.0
+    metric_ranges:
+      - { _target_: autoware_ml.metrics.base.MetricRange, name: 0-50m, min_distance: 0.0, max_distance: 50.0 }
+      - { _target_: autoware_ml.metrics.base.MetricRange, name: 0-54m, min_distance: 0.0, max_distance: 54.0 }
+
+datamodule:
+  _target_: autoware_ml.datamodule.t4dataset.multiview_detection3d.T4MultiviewDetection3DDataModule
+  data_root: ${dataset.data_root}
+  train_ann_file: info/detection3d/t4dataset_j6gen2_base_infos_train.pkl
+  val_ann_file: info/detection3d/t4dataset_j6gen2_base_infos_val.pkl
+  test_ann_file: info/detection3d/t4dataset_j6gen2_base_infos_val.pkl
+  class_names: ${dataset.detection3d.class_names}
+  camera_order: ${dataset.camera.camera_order}
+  name_mapping: ${dataset.detection3d.name_mapping}
+  streaming: true
+  train_dataloader_cfg:
+    batch_size: ${batch_size}
+    num_workers: ${num_workers}
+    shuffle: false
+  # Streaming evaluation runs one lane per rank so every frame is scored;
+  # wider eval batches would trim lanes to the shortest one.
+  val_dataloader_cfg:
+    batch_size: 1
+    num_workers: ${num_workers}
+  test_dataloader_cfg:
+    batch_size: 1
+    num_workers: ${num_workers}
+  train_transforms:
+    _target_: autoware_ml.transforms.base.TransformsCompose
+    pipeline:
+      - _target_: autoware_ml.transforms.boxes3d.merge.MergeObjects3D
+        merge_objects: ${dataset.detection3d.merge_objects}
+        name_mapping: ${dataset.detection3d.name_mapping}
+      - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
+        name_mapping: ${dataset.detection3d.name_mapping}
+        filter_attributes: ${dataset.detection3d.filter_attributes}
+        use_valid_flag: ${dataset.detection3d.use_valid_flag}
+      - _target_: autoware_ml.transforms.camera.loading.LoadMultiViewImagesFromFiles
+      - _target_: autoware_ml.transforms.camera.resize.ResizeCropFlipRotImage
+        data_aug_conf:
+          resize_lim: 0.02
+          final_dim: [480, 640]
+          bot_pct_lim: [0.0, 0.0]
+          rot_lim: [0.0, 0.0]
+          rand_flip: false
+        training: true
+      - _target_: autoware_ml.transforms.camera.geometry.GlobalRotScaleTrans
+        rot_range: [0.0, 0.0]
+        scale_ratio_range: [1.0, 1.0]
+      - _target_: autoware_ml.transforms.camera.resize.PadMultiViewImage
+        size_divisor: 32
+      - _target_: autoware_ml.transforms.camera.normalize.NormalizeMultiviewImage
+        mean: ${img_norm_cfg.mean}
+        std: ${img_norm_cfg.std}
+        to_rgb: ${img_norm_cfg.to_rgb}
+      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeFilter
+        point_cloud_range: ${point_cloud_range}
+  val_transforms:
+    _target_: autoware_ml.transforms.base.TransformsCompose
+    pipeline:
+      - _target_: autoware_ml.transforms.boxes3d.merge.MergeObjects3D
+        merge_objects: ${dataset.detection3d.merge_objects}
+        name_mapping: ${dataset.detection3d.name_mapping}
+      - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
+        name_mapping: ${dataset.detection3d.name_mapping}
+        filter_attributes: ${dataset.detection3d.filter_attributes}
+        use_valid_flag: ${dataset.detection3d.use_valid_flag}
+      - _target_: autoware_ml.transforms.camera.loading.LoadMultiViewImagesFromFiles
+      - _target_: autoware_ml.transforms.camera.resize.ResizeCropFlipRotImage
+        data_aug_conf:
+          resize_lim: 0.02
+          final_dim: [480, 640]
+          bot_pct_lim: [0.0, 0.0]
+          rot_lim: [0.0, 0.0]
+          rand_flip: false
+        training: false
+      - _target_: autoware_ml.transforms.camera.resize.PadMultiViewImage
+        size_divisor: 32
+      - _target_: autoware_ml.transforms.camera.normalize.NormalizeMultiviewImage
+        mean: ${img_norm_cfg.mean}
+        std: ${img_norm_cfg.std}
+        to_rgb: ${img_norm_cfg.to_rgb}
+      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeFilter
+        point_cloud_range: ${point_cloud_range}
+  test_transforms: ${datamodule.val_transforms}
+  predict_transforms:
+    _target_: autoware_ml.transforms.base.TransformsCompose
+    pipeline:
+      - _target_: autoware_ml.transforms.camera.loading.LoadMultiViewImagesFromFiles
+      - _target_: autoware_ml.transforms.camera.resize.ResizeCropFlipRotImage
+        data_aug_conf:
+          resize_lim: 0.02
+          final_dim: [480, 640]
+          bot_pct_lim: [0.0, 0.0]
+          rot_lim: [0.0, 0.0]
+          rand_flip: false
+        training: false
+      - _target_: autoware_ml.transforms.camera.resize.PadMultiViewImage
+        size_divisor: 32
+      - _target_: autoware_ml.transforms.camera.normalize.NormalizeMultiviewImage
+        mean: ${img_norm_cfg.mean}
+        std: ${img_norm_cfg.std}
+        to_rgb: ${img_norm_cfg.to_rgb}
+
+model:
+  img_backbone:
+    _target_: autoware_ml.models.common.backbones.vovnet.VoVNet99MultiScale
+    input_ch: 3
+    out_features: [stage4, stage5]
+    frozen_stages: -1
+    norm_eval: true
+  img_neck:
+    _target_: autoware_ml.models.common.necks.lss_fpn.GeneralizedLSSFPN
+    in_channels: [768, 1024]
+    out_channels: 256
+  bbox_head:
+    num_queries: 644
