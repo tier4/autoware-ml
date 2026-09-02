@@ -7,7 +7,9 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import torch
 
+from autoware_ml.datamodule.base import DataModule
 from autoware_ml.datamodule.common.multiview_detection3d import MultiviewDetection3DDataset
 from autoware_ml.transforms.base import TransformsCompose
 from autoware_ml.transforms.boxes3d.loading import LoadAnnotations3D
@@ -126,3 +128,37 @@ def test_multiview_detection_dataset_builds_prev_exists_from_scene_tokens(
     assert dataset.get_data_info(0)["prev_exists"] == np.float32(0.0)
     assert dataset.get_data_info(1)["prev_exists"] == np.float32(1.0)
     assert dataset.get_data_info(2)["prev_exists"] == np.float32(0.0)
+
+
+def test_multiview_detection_dataset_keeps_timestamp_float64(tmp_path: Path) -> None:
+    """Epoch-second timestamps must survive batch collation at full precision.
+
+    float32 has 256-second steps at 1.7e9 seconds, which silently zeroes the
+    inter-frame deltas consumed by streaming temporal detectors.
+    """
+    ann_file = tmp_path / "infos.pkl"
+    sample = {
+        "token": "sample-1",
+        "scene_token": "scene-1",
+        "timestamp": 1740707698.147682,
+        "lidar_points": {"lidar_path": "lidar-1.bin", "num_pts_feats": 5},
+        "images": {},
+        "instances": [],
+    }
+    with open(ann_file, "wb") as file:
+        pickle.dump({"data_list": [sample], "metainfo": {"classes": ["car"]}}, file)
+
+    dataset = _Dataset(
+        data_root=str(tmp_path),
+        ann_file=str(ann_file),
+        class_names=["car"],
+        camera_order=[],
+        filter_frames_with_camera_order=False,
+    )
+
+    timestamp = dataset.get_data_info(0)["timestamp"]
+    coerced = DataModule._coerce_value(timestamp)
+
+    assert isinstance(timestamp, np.float64)
+    assert coerced.dtype == torch.float64
+    assert float(coerced) == 1740707698.147682

@@ -244,6 +244,35 @@ def test_resize_crop_flip_rot_image_updates_chw_stack_and_aug_matrix() -> None:
     assert output["lidar2img"].shape == (2, 4, 4)
 
 
+def test_resize_crop_aug_matrix_matches_pixels_for_mismatched_aspect() -> None:
+    """The augmentation matrix must describe the actual pixel mapping.
+
+    Regression test: with a source aspect ratio different from final_dim, a
+    hidden second resize used to stretch the pixels without entering the
+    matrix, desynchronizing the updated intrinsics from the image.
+    """
+    image = np.zeros((930, 1440, 3), dtype=np.uint8)
+    image[450:480, 705:735] = 255  # block centered at pixel (720, 465)
+    transform = ResizeCropFlipRotImage(
+        data_aug_conf={
+            "resize_lim": 0.02,
+            "final_dim": (240, 320),
+            "bot_pct_lim": (0.0, 0.0),
+            "rot_lim": (0.0, 0.0),
+            "rand_flip": False,
+        },
+        training=False,
+    )
+
+    matrix, augmented = transform._augment_image(image)
+
+    predicted = matrix @ np.array([720.0, 465.0, 1.0, 1.0])
+    rows, cols = np.nonzero(augmented[..., 0] > 128)
+    assert augmented.shape[:2] == (240, 320)
+    assert abs(cols.mean() - predicted[0]) < 1.0
+    assert abs(rows.mean() - predicted[1]) < 1.0
+
+
 def test_grid_mask_handles_chw_stack() -> None:
     np.random.seed(0)
     images = np.ones((2, 3, 64, 64), dtype=np.float32)
