@@ -51,6 +51,7 @@ from autoware_ml.models.segmentation3d.ptv3_base import (
     build_ptv3_input_dynamic_axes,
     build_seg_head_export_spec,
     build_serialized_pooling_metadata,
+    level_tensor_name,
     flatten_serialized_pooling_inputs,
     split_block_parameters,
 )
@@ -308,10 +309,10 @@ class PTv3SegDetModel(PTv3BaseModel):
             *serialized_pooling_inputs,
         )
         input_param_names = [
-            "grid_coord",
+            level_tensor_name(0, "grid_coord"),
             "feat",
-            "serialized_order",
-            "serialized_inverse",
+            level_tensor_name(0, "serialized_order"),
+            level_tensor_name(0, "serialized_inverse"),
             *serialized_pooling_input_names,
         ]
         output_names = self.get_export_output_names()

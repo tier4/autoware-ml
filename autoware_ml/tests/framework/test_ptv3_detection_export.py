@@ -5,6 +5,10 @@ from __future__ import annotations
 import pytest
 import torch
 
+from autoware_ml.models.detection3d.ptv3 import (
+    det_head_export_dynamic_axes,
+    det_head_export_input_names,
+)
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
 from autoware_ml.tests.models.ptv3_detection_fixtures import (
     build_inputs,
@@ -13,18 +17,43 @@ from autoware_ml.tests.models.ptv3_detection_fixtures import (
 )
 
 EXPECTED_PTV3_INPUT_NAMES = [
-    "grid_coord",
+    "level_0_grid_coord",
     "feat",
-    "serialized_order",
-    "serialized_inverse",
+    "level_0_serialized_order",
+    "level_0_serialized_inverse",
     "serialized_pooling_0_indices",
     "serialized_pooling_0_indptr",
     "serialized_pooling_0_cluster",
     "serialized_pooling_0_head_indices",
-    "serialized_pooling_0_grid_coord",
-    "serialized_pooling_0_serialized_order",
-    "serialized_pooling_0_serialized_inverse",
+    "level_1_grid_coord",
+    "level_1_serialized_order",
+    "level_1_serialized_inverse",
 ]
+
+
+def test_det_head_export_names_address_levels_not_pooling_stages() -> None:
+    """The det head taps the two coarsest levels; every input names the level it belongs to.
+
+    The skip level's coordinates used to be ``point_grid_coord_<l>`` here while the encoder and
+    the seg head called the same tensor ``serialized_pooling_<l-1>_grid_coord``.
+    """
+    names = det_head_export_input_names(stage_count=5)
+
+    assert names == [
+        "point_feat_3",
+        "point_feat_4",
+        "pooling_cluster_3",
+        "level_3_grid_coord",
+    ]
+
+    axes = det_head_export_dynamic_axes(stage_count=5)
+
+    # pooling_cluster_3 is sized by stage 3's input, which is level 3 - the same symbol the skip
+    # level's features and coordinates use, not a separate "in_voxels" name.
+    assert axes["point_feat_3"] == {0: "level_3_voxels"}
+    assert axes["pooling_cluster_3"] == {0: "level_3_voxels"}
+    assert axes["level_3_grid_coord"] == {0: "level_3_voxels"}
+    assert axes["point_feat_4"] == {0: "level_4_voxels"}
 
 
 @pytest.mark.skipif(
@@ -41,9 +70,7 @@ def test_ptv3_transhead_build_export_spec_uses_named_detection_outputs() -> None
 
     assert spec.input_param_names == EXPECTED_PTV3_INPUT_NAMES
     assert spec.dynamic_axes is not None
-    assert spec.dynamic_axes["serialized_pooling_0_serialized_order"] == {
-        1: "serialized_pooling_0_out_voxels"
-    }
+    assert spec.dynamic_axes["level_1_serialized_order"] == {1: "level_1_voxels"}
     assert spec.output_names == [
         "dense_heatmap",
         "query_heatmap_score",

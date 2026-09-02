@@ -365,45 +365,37 @@ def test_point_serialization_accepts_explicit_depth_override() -> None:
 
 def test_ptv3_encoder_dynamic_axes_follow_generated_pooling_inputs() -> None:
     input_names = [
-        "grid_coord",
+        "level_0_grid_coord",
         "feat",
-        "serialized_order",
-        "serialized_inverse",
+        "level_0_serialized_order",
+        "level_0_serialized_inverse",
         "serialized_pooling_0_indices",
         "serialized_pooling_0_indptr",
         "serialized_pooling_0_cluster",
         "serialized_pooling_0_head_indices",
-        "serialized_pooling_0_grid_coord",
-        "serialized_pooling_0_serialized_order",
-        "serialized_pooling_0_serialized_inverse",
-        "serialized_pooling_1_grid_coord",
+        "level_1_grid_coord",
+        "level_1_serialized_order",
+        "level_1_serialized_inverse",
+        "level_2_grid_coord",
     ]
 
     dynamic_axes = build_ptv3_encoder_dynamic_axes(input_names, stage_count=3)
 
-    assert dynamic_axes["grid_coord"] == {0: "num_voxels"}
-    assert dynamic_axes["feat"] == {0: "num_voxels"}
-    assert dynamic_axes["serialized_order"] == {1: "num_voxels"}
-    assert dynamic_axes["serialized_inverse"] == {1: "num_voxels"}
-    assert dynamic_axes["serialized_pooling_0_indices"] == {0: "serialized_pooling_0_in_voxels"}
-    assert dynamic_axes["serialized_pooling_0_indptr"] == {
-        0: "serialized_pooling_0_out_voxels_plus_one"
-    }
-    assert dynamic_axes["serialized_pooling_0_cluster"] == {0: "serialized_pooling_0_in_voxels"}
-    assert dynamic_axes["serialized_pooling_0_head_indices"] == {
-        0: "serialized_pooling_0_out_voxels"
-    }
-    assert dynamic_axes["serialized_pooling_0_grid_coord"] == {0: "serialized_pooling_0_out_voxels"}
-    assert dynamic_axes["serialized_pooling_0_serialized_order"] == {
-        1: "serialized_pooling_0_out_voxels"
-    }
-    assert dynamic_axes["serialized_pooling_0_serialized_inverse"] == {
-        1: "serialized_pooling_0_out_voxels"
-    }
-    assert dynamic_axes["serialized_pooling_1_grid_coord"] == {0: "serialized_pooling_1_out_voxels"}
-    assert dynamic_axes["point_feat_0"] == {0: "num_voxels"}
-    assert dynamic_axes["point_feat_1"] == {0: "serialized_pooling_0_out_voxels"}
-    assert dynamic_axes["point_feat_2"] == {0: "serialized_pooling_1_out_voxels"}
+    assert dynamic_axes["level_0_grid_coord"] == {0: "level_0_voxels"}
+    assert dynamic_axes["feat"] == {0: "level_0_voxels"}
+    assert dynamic_axes["level_0_serialized_order"] == {1: "level_0_voxels"}
+    assert dynamic_axes["level_0_serialized_inverse"] == {1: "level_0_voxels"}
+    assert dynamic_axes["serialized_pooling_0_indices"] == {0: "level_0_voxels"}
+    assert dynamic_axes["serialized_pooling_0_indptr"] == {0: "level_1_voxels_plus_one"}
+    assert dynamic_axes["serialized_pooling_0_cluster"] == {0: "level_0_voxels"}
+    assert dynamic_axes["serialized_pooling_0_head_indices"] == {0: "level_1_voxels"}
+    assert dynamic_axes["level_1_grid_coord"] == {0: "level_1_voxels"}
+    assert dynamic_axes["level_1_serialized_order"] == {1: "level_1_voxels"}
+    assert dynamic_axes["level_1_serialized_inverse"] == {1: "level_1_voxels"}
+    assert dynamic_axes["level_2_grid_coord"] == {0: "level_2_voxels"}
+    assert dynamic_axes["point_feat_0"] == {0: "level_0_voxels"}
+    assert dynamic_axes["point_feat_1"] == {0: "level_1_voxels"}
+    assert dynamic_axes["point_feat_2"] == {0: "level_2_voxels"}
 
 
 def test_validate_serialization_geometry_rejects_shallow_configs() -> None:

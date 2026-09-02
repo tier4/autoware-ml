@@ -24,17 +24,17 @@ from autoware_ml.tests.models.ptv3_detection_fixtures import (
 from autoware_ml.utils.checkpoints import apply_matching_weights
 
 EXPECTED_PTV3_INPUT_NAMES = [
-    "grid_coord",
+    "level_0_grid_coord",
     "feat",
-    "serialized_order",
-    "serialized_inverse",
+    "level_0_serialized_order",
+    "level_0_serialized_inverse",
     "serialized_pooling_0_indices",
     "serialized_pooling_0_indptr",
     "serialized_pooling_0_cluster",
     "serialized_pooling_0_head_indices",
-    "serialized_pooling_0_grid_coord",
-    "serialized_pooling_0_serialized_order",
-    "serialized_pooling_0_serialized_inverse",
+    "level_1_grid_coord",
+    "level_1_serialized_order",
+    "level_1_serialized_inverse",
 ]
 
 JOINT_EXPORT_OUTPUT_NAMES = [
@@ -84,20 +84,20 @@ def test_seg_head_export_input_names_follow_dec_depths_rule() -> None:
     ]
     assert seg_head_export_input_names(5, [0, 0, 0, 0]) == base_names
     assert seg_head_export_input_names(5, [0, 0, 1, 1]) == base_names + [
-        "serialized_pooling_1_serialized_order",
-        "serialized_pooling_1_serialized_inverse",
-        "serialized_pooling_1_grid_coord",
-        "serialized_pooling_2_serialized_order",
-        "serialized_pooling_2_serialized_inverse",
-        "serialized_pooling_2_grid_coord",
+        "level_2_serialized_order",
+        "level_2_serialized_inverse",
+        "level_2_grid_coord",
+        "level_3_serialized_order",
+        "level_3_serialized_inverse",
+        "level_3_grid_coord",
     ]
     assert seg_head_export_input_names(2, [1]) == [
         "point_feat_0",
         "point_feat_1",
         "pooling_cluster_0",
-        "serialized_order",
-        "serialized_inverse",
-        "grid_coord",
+        "level_0_serialized_order",
+        "level_0_serialized_inverse",
+        "level_0_grid_coord",
     ]
     with pytest.raises(ValueError, match="entries"):
         seg_head_export_input_names(5, [0, 0, 0])
@@ -126,13 +126,13 @@ def test_ptv3_seg_split_export_supports_decoder_blocks() -> None:
         "point_feat_0",
         "point_feat_1",
         "pooling_cluster_0",
-        "serialized_order",
-        "serialized_inverse",
-        "grid_coord",
+        "level_0_serialized_order",
+        "level_0_serialized_inverse",
+        "level_0_grid_coord",
     ]
-    assert spec.dynamic_axes["serialized_order"] == {1: "num_voxels"}
-    assert spec.dynamic_axes["serialized_inverse"] == {1: "num_voxels"}
-    assert spec.dynamic_axes["grid_coord"] == {0: "num_voxels"}
+    assert spec.dynamic_axes["level_0_serialized_order"] == {1: "level_0_voxels"}
+    assert spec.dynamic_axes["level_0_serialized_inverse"] == {1: "level_0_voxels"}
+    assert spec.dynamic_axes["level_0_grid_coord"] == {0: "level_0_voxels"}
 
     with torch.no_grad():
         pred_labels, pred_probs = spec.module(*spec.args)
@@ -252,10 +252,8 @@ def test_ptv3_transhead_segdet_export_uses_named_joint_outputs(tmp_path: Path) -
 
     assert spec.input_param_names == EXPECTED_PTV3_INPUT_NAMES
     assert spec.dynamic_axes is not None
-    assert spec.dynamic_axes["pred_probs"] == {0: "num_voxels"}
-    assert spec.dynamic_axes["serialized_pooling_0_serialized_inverse"] == {
-        1: "serialized_pooling_0_out_voxels"
-    }
+    assert spec.dynamic_axes["pred_probs"] == {0: "level_0_voxels"}
+    assert spec.dynamic_axes["level_1_serialized_inverse"] == {1: "level_1_voxels"}
     assert spec.output_names == JOINT_EXPORT_OUTPUT_NAMES
     assert len(outputs) == 11
     assert outputs[0].dtype == torch.long

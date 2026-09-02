@@ -28,7 +28,8 @@ from autoware_ml.models.segmentation3d.ptv3_base import (
     build_ptv3_export_context,
     build_ptv3_input_dynamic_axes,
     build_serialized_pooling_export_inputs,
-    stage_voxel_axis_name,
+    level_tensor_name,
+    level_voxel_axis_name,
 )
 from autoware_ml.utils.deploy import ExportSpec
 from autoware_ml.utils.point_cloud.batching import offset_to_batch
@@ -295,7 +296,7 @@ def det_head_export_input_names(stage_count: int) -> list[str]:
         f"point_feat_{skip_stage}",
         f"point_feat_{deep_stage}",
         f"pooling_cluster_{skip_stage}",
-        f"point_grid_coord_{skip_stage}",
+        level_tensor_name(skip_stage, "grid_coord"),
     ]
 
 
@@ -304,10 +305,10 @@ def det_head_export_dynamic_axes(stage_count: int) -> dict[str, dict[int, str]]:
     skip_stage = stage_count - 2
     deep_stage = stage_count - 1
     return {
-        f"point_feat_{skip_stage}": {0: stage_voxel_axis_name(skip_stage)},
-        f"point_feat_{deep_stage}": {0: stage_voxel_axis_name(deep_stage)},
-        f"pooling_cluster_{skip_stage}": {0: f"serialized_pooling_{skip_stage}_in_voxels"},
-        f"point_grid_coord_{skip_stage}": {0: stage_voxel_axis_name(skip_stage)},
+        f"point_feat_{skip_stage}": {0: level_voxel_axis_name(skip_stage)},
+        f"point_feat_{deep_stage}": {0: level_voxel_axis_name(deep_stage)},
+        f"pooling_cluster_{skip_stage}": {0: level_voxel_axis_name(skip_stage)},
+        level_tensor_name(skip_stage, "grid_coord"): {0: level_voxel_axis_name(skip_stage)},
     }
 
 
@@ -550,10 +551,10 @@ class PTv3DetectionModel(PTv3BaseModel):
             *serialized_pooling_inputs,
         )
         input_param_names = [
-            "grid_coord",
+            level_tensor_name(0, "grid_coord"),
             "feat",
-            "serialized_order",
-            "serialized_inverse",
+            level_tensor_name(0, "serialized_order"),
+            level_tensor_name(0, "serialized_inverse"),
             *serialized_pooling_input_names,
         ]
         return ExportSpec(

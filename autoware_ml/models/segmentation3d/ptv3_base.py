@@ -27,7 +27,10 @@ from autoware_ml.utils.point_cloud.structures import (
     serialize_point_cloud_batch,
 )
 
-_BLOCK_STAGE_META_FIELDS = ("serialized_order", "serialized_inverse", "grid_coord")
+# SerializedPoolingMeta fields that describe the *level* a pooling stage produces rather than the
+# transition itself. They are named after that level, so the graph never spells a level's tensors
+# with the index of the stage below it.
+LEVEL_META_FIELDS = ("serialized_order", "serialized_inverse", "grid_coord")
 
 SERIALIZED_POOLING_FIELDS = tuple(field.name for field in fields(SerializedPoolingMeta))
 # The encoder-only encoder graph never consumes `cluster` (it only drives the
@@ -39,6 +42,45 @@ ENCODER_EXPORT_POOLING_FIELDS = tuple(
 SERIALIZED_POOLING_INPUT_SIZED_FIELDS = frozenset({"indices", "cluster"})
 SERIALIZED_POOLING_OUTPUT_PLUS_ONE_FIELDS = frozenset({"indptr"})
 SERIALIZED_POOLING_ORDER_FIELDS = frozenset({"serialized_order", "serialized_inverse"})
+
+
+def level_tensor_name(level: int, field: str) -> str:
+    """Name of a per-level serialization tensor.
+
+    A level is a resolution; level 0 is the input voxels and level ``l`` is what pooling stage
+    ``l - 1`` produced. Naming these after the level rather than the producing stage keeps the
+    encoder, the segmentation head and the detection head spelling one tensor one way.
+    """
+    return f"level_{level}_{field}"
+
+
+def level_voxel_axis_name(level: int) -> str:
+    """Dynamic-axis name for the voxel count of one encoder level.
+
+    One name per level, so a stage's input count and the previous stage's output count are the
+    same symbol instead of two that shape inference cannot relate.
+    """
+    return f"level_{level}_voxels"
+
+
+def pooling_tensor_name(stage: int, field: str) -> str:
+    """Name of a per-pooling-stage metadata tensor, for the fields that describe the transition."""
+    return f"serialized_pooling_{stage}_{field}"
+
+
+def pooling_field_dynamic_axis(stage: int, field: str) -> dict[int, str]:
+    """Dynamic axis of one pooling metadata tensor.
+
+    Stage ``stage`` consumes level ``stage`` and produces level ``stage + 1``, so its
+    input-sized fields take the finer level's count and the rest the coarser level's.
+    """
+    if field in SERIALIZED_POOLING_INPUT_SIZED_FIELDS:
+        return {0: level_voxel_axis_name(stage)}
+    if field in SERIALIZED_POOLING_OUTPUT_PLUS_ONE_FIELDS:
+        return {0: f"{level_voxel_axis_name(stage + 1)}_plus_one"}
+    if field in SERIALIZED_POOLING_ORDER_FIELDS:
+        return {1: level_voxel_axis_name(stage + 1)}
+    return {0: level_voxel_axis_name(stage + 1)}
 
 
 def validate_serialization_geometry(
@@ -238,27 +280,26 @@ def flatten_serialized_pooling_inputs(
     for stage_index, meta in enumerate(metadata):
         for field in field_names:
             inputs.append(getattr(meta, field))
-            names.append(f"serialized_pooling_{stage_index}_{field}")
+            names.append(
+                level_tensor_name(stage_index + 1, field)
+                if field in LEVEL_META_FIELDS
+                else pooling_tensor_name(stage_index, field)
+            )
     return tuple(inputs), names
 
 
-def _serialized_pooling_dynamic_axis(input_name: str) -> dict[int, str]:
-    _, _, stage_index, field = input_name.split("_", 3)
-    stage_prefix = f"serialized_pooling_{stage_index}"
-    if field in SERIALIZED_POOLING_INPUT_SIZED_FIELDS:
-        return {0: f"{stage_prefix}_in_voxels"}
-    if field in SERIALIZED_POOLING_OUTPUT_PLUS_ONE_FIELDS:
-        return {0: f"{stage_prefix}_out_voxels_plus_one"}
-    if field in SERIALIZED_POOLING_ORDER_FIELDS:
-        return {1: f"{stage_prefix}_out_voxels"}
-    return {0: f"{stage_prefix}_out_voxels"}
-
-
-def stage_voxel_axis_name(stage_index: int) -> str:
-    """Return the dynamic-axis name for the voxel count of one encoder stage."""
-    if stage_index == 0:
-        return "num_voxels"
-    return f"serialized_pooling_{stage_index - 1}_out_voxels"
+def _input_dynamic_axis(input_name: str) -> dict[int, str] | None:
+    """Dynamic axis of one generated encoder input, or None if it has no dynamic axis."""
+    if input_name == "feat":
+        return {0: level_voxel_axis_name(0)}
+    if input_name.startswith("level_"):
+        _, level, field = input_name.split("_", 2)
+        axis = 1 if field in SERIALIZED_POOLING_ORDER_FIELDS else 0
+        return {axis: level_voxel_axis_name(int(level))}
+    if input_name.startswith("serialized_pooling_"):
+        _, _, stage, field = input_name.split("_", 3)
+        return pooling_field_dynamic_axis(int(stage), field)
+    return None
 
 
 def stage_feature_names(stage_count: int) -> list[str]:
@@ -274,34 +315,31 @@ def pooling_cluster_names(stage_count: int) -> list[str]:
 def build_stage_feature_dynamic_axes(stage_count: int) -> dict[str, dict[int, str]]:
     """Build dynamic axes for per-stage encoder feature tensors."""
     return {
-        name: {0: stage_voxel_axis_name(stage_index)}
-        for stage_index, name in enumerate(stage_feature_names(stage_count))
+        name: {0: level_voxel_axis_name(level)}
+        for level, name in enumerate(stage_feature_names(stage_count))
     }
 
 
 def build_pooling_cluster_dynamic_axes(stage_count: int) -> dict[str, dict[int, str]]:
     """Build dynamic axes for per-pooling cluster tensors."""
     return {
-        name: {0: f"serialized_pooling_{stage_index}_in_voxels"}
+        name: {0: level_voxel_axis_name(stage_index)}
         for stage_index, name in enumerate(pooling_cluster_names(stage_count))
     }
 
 
 def build_point_feature_dynamic_axes(tensor_names: Sequence[str]) -> dict[str, dict[int, str]]:
     """Build dynamic axes for tensors indexed by the decoded point/voxel count."""
-    return {tensor_name: {0: "num_voxels"} for tensor_name in tensor_names}
+    return {tensor_name: {0: level_voxel_axis_name(0)} for tensor_name in tensor_names}
 
 
 def build_ptv3_input_dynamic_axes(input_names: Sequence[str]) -> dict[str, dict[int, str]]:
     """Build dynamic axes for generated PTv3 encoder export inputs."""
     dynamic_axes: dict[str, dict[int, str]] = {}
     for input_name in input_names:
-        if input_name in {"grid_coord", "feat"}:
-            dynamic_axes[input_name] = {0: "num_voxels"}
-        elif input_name in {"serialized_code", "serialized_order", "serialized_inverse"}:
-            dynamic_axes[input_name] = {1: "num_voxels"}
-        elif input_name.startswith("serialized_pooling_"):
-            dynamic_axes[input_name] = _serialized_pooling_dynamic_axis(input_name)
+        axis = _input_dynamic_axis(input_name)
+        if axis is not None:
+            dynamic_axes[input_name] = axis
     return dynamic_axes
 
 
@@ -426,10 +464,10 @@ class PTv3ExportContext:
     @property
     def encoder_input_names(self) -> list[str]:
         return [
-            "grid_coord",
+            level_tensor_name(0, "grid_coord"),
             "feat",
-            "serialized_order",
-            "serialized_inverse",
+            level_tensor_name(0, "serialized_order"),
+            level_tensor_name(0, "serialized_inverse"),
             *self.serialized_pooling_input_names,
         ]
 
@@ -635,9 +673,8 @@ def seg_head_export_input_names(stage_count: int, dec_depths: Sequence[int]) -> 
             f"got {len(dec_depths)}."
         )
     names = [*stage_feature_names(stage_count), *pooling_cluster_names(stage_count)]
-    for stage in _block_stage_indices(dec_depths):
-        prefix = "" if stage == 0 else f"serialized_pooling_{stage - 1}_"
-        names += [prefix + field for field in _BLOCK_STAGE_META_FIELDS]
+    for level in _block_stage_indices(dec_depths):
+        names += [level_tensor_name(level, field) for field in LEVEL_META_FIELDS]
     return names
 
 
@@ -656,12 +693,11 @@ def build_seg_head_export_args(
         "grid_coord": grid_coord,
     }
     args = [*stage_feats, *(meta.cluster for meta in pooling_metadata)]
-    for stage in _block_stage_indices(dec_depths):
-        source = level0 if stage == 0 else pooling_metadata[stage - 1]
-        args += [
-            source[field] if stage == 0 else getattr(source, field)
-            for field in _BLOCK_STAGE_META_FIELDS
-        ]
+    for level in _block_stage_indices(dec_depths):
+        if level == 0:
+            args += [level0[field] for field in LEVEL_META_FIELDS]
+        else:
+            args += [getattr(pooling_metadata[level - 1], field) for field in LEVEL_META_FIELDS]
     return tuple(args)
 
 
@@ -671,15 +707,11 @@ def build_seg_head_input_dynamic_axes(
     """Build dynamic axes for the split seg-head export inputs."""
     dynamic_axes = build_stage_feature_dynamic_axes(stage_count)
     dynamic_axes.update(build_pooling_cluster_dynamic_axes(stage_count))
-    for stage in _block_stage_indices(dec_depths):
-        if stage == 0:
-            dynamic_axes["serialized_order"] = {1: "num_voxels"}
-            dynamic_axes["serialized_inverse"] = {1: "num_voxels"}
-            dynamic_axes["grid_coord"] = {0: "num_voxels"}
-        else:
-            prefix = f"serialized_pooling_{stage - 1}_"
-            for field in _BLOCK_STAGE_META_FIELDS:
-                dynamic_axes[prefix + field] = _serialized_pooling_dynamic_axis(prefix + field)
+    for level in _block_stage_indices(dec_depths):
+        for field in LEVEL_META_FIELDS:
+            name = level_tensor_name(level, field)
+            axis = 1 if field in SERIALIZED_POOLING_ORDER_FIELDS else 0
+            dynamic_axes[name] = {axis: level_voxel_axis_name(level)}
     return dynamic_axes
 
 
