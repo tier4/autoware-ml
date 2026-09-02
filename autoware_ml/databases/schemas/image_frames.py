@@ -36,6 +36,7 @@ class ImageFrameDatasetSchema(BaseFieldSchema):
     """
 
     image_frame_id = DatasetTableColumn("image_frame_id", pl.String)
+    image_keyframe = DatasetTableColumn("image_keyframe", pl.Boolean)
     image_sensor_id = DatasetTableColumn("image_sensor_id", pl.String)
     image_sensor_channel_name = DatasetTableColumn("image_sensor_channel_name", pl.String)
     image_timestamp_seconds = DatasetTableColumn("image_timestamp_seconds", pl.Float64)
@@ -60,6 +61,8 @@ class ImageFrameDataModel(BaseModel, DataModelInterface):
 
     Attributes:
       image_frame_id: Image frame ID (sample data token).
+      image_keyframe: Whether this sample_data record is a keyframe in the original T4Dataset
+        annotation.
       image_sensor_id: Image sensor ID (calibrated sensor token).
       image_sensor_channel_name: Image sensor channel name, e.g. CAM_FRONT.
       image_timestamp_seconds: Image timestamp in seconds.
@@ -71,13 +74,15 @@ class ImageFrameDataModel(BaseModel, DataModelInterface):
         to the ego pose of this image frame.
       image_frame_ego_pose_to_global_matrix: Transformation matrix from the ego pose of this
         image frame to the global frame.
-      lidar2cam: Transformation matrix from LiDAR frame to camera frame (4, 4).
+      lidar2cam: Transformation matrix from LiDAR frame to camera frame (4, 4). Set to None if
+        unavailable (e.g. for image sweeps, which are not associated with a specific lidar keyframe).
       lidar2img: Projection matrix from LiDAR frame to image plane (4, 4). Set to None if unavailable.
     """
 
     model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
 
     image_frame_id: str
+    image_keyframe: bool
     image_sensor_id: str
     image_sensor_channel_name: str
     image_timestamp_seconds: float
@@ -87,7 +92,7 @@ class ImageFrameDataModel(BaseModel, DataModelInterface):
     cam2img: npt.NDArray[np.float64]  # (3, 3)
     image_sensor_to_ego_pose_matrix: npt.NDArray[np.float64]  # (4, 4)
     image_frame_ego_pose_to_global_matrix: npt.NDArray[np.float64]  # (4, 4)
-    lidar2cam: npt.NDArray[np.float64]  # (4, 4)
+    lidar2cam: npt.NDArray[np.float64] | None  # (4, 4) or None
     lidar2img: npt.NDArray[np.float64] | None  # (4, 4) or None
 
     @property
@@ -124,14 +129,16 @@ class ImageFrameDataModel(BaseModel, DataModelInterface):
         return self.image_frame_ego_pose_to_global_matrix.astype(np.float32)
 
     @property
-    def lidar2cam_fp32(self) -> npt.NDArray[np.float32]:
+    def lidar2cam_fp32(self) -> npt.NDArray[np.float32] | None:
         """
-        Convert the lidar2cam matrix to float32.
+        Convert the lidar2cam matrix to float32 if available.
 
         Returns:
-          npt.NDArray[np.float32]: Lidar to camera transformation matrix.
+          npt.NDArray[np.float32] | None: Lidar to camera transformation matrix.
         """
 
+        if self.lidar2cam is None:
+            return None
         return self.lidar2cam.astype(np.float32)
 
     @property
@@ -157,6 +164,7 @@ class ImageFrameDataModel(BaseModel, DataModelInterface):
 
         return {
             ImageFrameDatasetSchema.image_frame_id.name: self.image_frame_id,
+            ImageFrameDatasetSchema.image_keyframe.name: self.image_keyframe,
             ImageFrameDatasetSchema.image_sensor_id.name: self.image_sensor_id,
             ImageFrameDatasetSchema.image_sensor_channel_name.name: self.image_sensor_channel_name,
             ImageFrameDatasetSchema.image_timestamp_seconds.name: self.image_timestamp_seconds,
@@ -184,10 +192,12 @@ class ImageFrameDataModel(BaseModel, DataModelInterface):
           ImageFrameDataModel: ImageFrameDataModel object.
         """
 
+        raw_lidar2cam = data_model.get(ImageFrameDatasetSchema.lidar2cam.name)
         raw_lidar2img = data_model.get(ImageFrameDatasetSchema.lidar2img.name)
 
         return cls(
             image_frame_id=data_model[ImageFrameDatasetSchema.image_frame_id.name],
+            image_keyframe=data_model[ImageFrameDatasetSchema.image_keyframe.name],
             image_sensor_id=data_model[ImageFrameDatasetSchema.image_sensor_id.name],
             image_sensor_channel_name=data_model[
                 ImageFrameDatasetSchema.image_sensor_channel_name.name
@@ -209,9 +219,8 @@ class ImageFrameDataModel(BaseModel, DataModelInterface):
                 data_model[ImageFrameDatasetSchema.image_frame_ego_pose_to_global_matrix.name],
                 dtype=np.float64,
             ),
-            lidar2cam=np.asarray(
-                data_model[ImageFrameDatasetSchema.lidar2cam.name],
-                dtype=np.float64,
+            lidar2cam=(
+                np.asarray(raw_lidar2cam, dtype=np.float64) if raw_lidar2cam is not None else None
             ),
             lidar2img=(
                 np.asarray(raw_lidar2img, dtype=np.float64)
