@@ -10,6 +10,7 @@ per-object refcounts, so all workers keep sharing the parent's pages.
 
 from __future__ import annotations
 
+import operator
 import pickle
 from collections.abc import Sequence
 from typing import Any
@@ -57,6 +58,7 @@ class SerializedSampleList(Sequence):
         """
         if isinstance(index, slice):
             raise TypeError("SerializedSampleList does not support slicing.")
+        index = operator.index(index)
         length = len(self)
         if index < 0:
             index += length

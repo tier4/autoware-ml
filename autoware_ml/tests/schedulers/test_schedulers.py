@@ -14,12 +14,15 @@
 
 """Unit tests for learning rate schedulers."""
 
+import math
+
 import pytest
 import torch
 
 from autoware_ml.utils.schedulers.cosine_annealing import CosineAnnealingLR
 from autoware_ml.utils.schedulers.cyclic_cosine_annealing import CyclicCosineAnnealingLR
 from autoware_ml.utils.schedulers.cyclic_momentum import CyclicMomentumScheduler
+from autoware_ml.utils.schedulers.iter_warmup_epoch_cosine import IterWarmupEpochCosineLR
 from autoware_ml.utils.schedulers.linear_warmup_cosine_annealing import (
     LinearWarmupCosineAnnealingLR,
 )
@@ -327,3 +330,81 @@ class TestLinearWarmupCosineAnnealingLR:
         assert abs(final_lr - eta_min) < eta_min * 0.1, (
             f"Final LR {final_lr} should be close to eta_min {eta_min}"
         )
+
+
+class TestIterWarmupEpochCosineLR:
+    """Tests for the iteration-warmup, epoch-cosine schedule."""
+
+    @staticmethod
+    def _build(total_steps: int, max_epochs: int = 10, warmup_iters: int = 5):
+        model = torch.nn.Linear(2, 2)
+        optimizer = torch.optim.SGD(model.parameters(), lr=1.0)
+        scheduler = IterWarmupEpochCosineLR(
+            optimizer,
+            total_steps=total_steps,
+            max_epochs=max_epochs,
+            warmup_iters=warmup_iters,
+            warmup_start_factor=1.0 / 3.0,
+            eta_min_factor=1e-4,
+        )
+        return optimizer, scheduler
+
+    @staticmethod
+    def _cosine_factor(epoch: int, max_epochs: int, eta_min_factor: float = 1e-4) -> float:
+        return eta_min_factor + (1.0 - eta_min_factor) * 0.5 * (
+            1.0 + math.cos(math.pi * epoch / max_epochs)
+        )
+
+    def test_schedule_shape(self) -> None:
+        optimizer, scheduler = self._build(total_steps=100)
+        assert optimizer.param_groups[0]["lr"] == pytest.approx(1.0 / 3.0)
+        lrs = []
+        for _ in range(100):
+            optimizer.step()
+            scheduler.step()
+            lrs.append(optimizer.param_groups[0]["lr"])
+        # After warmup and within the first epoch the factor is the epoch-0 cosine.
+        assert lrs[5] == pytest.approx(1.0)
+        # Epoch boundaries follow the cosine over epoch indices exactly.
+        assert lrs[10] == pytest.approx(self._cosine_factor(1, 10))
+        assert lrs[95] == pytest.approx(self._cosine_factor(9, 10))
+
+    def test_trailing_steps_stay_at_the_last_epoch_factor(self) -> None:
+        # total_steps % max_epochs = 5 trailing steps: they must keep the last
+        # training epoch's LR instead of dropping to the eta_min floor.
+        optimizer, scheduler = self._build(total_steps=105)
+        for _ in range(105):
+            optimizer.step()
+            scheduler.step()
+        assert optimizer.param_groups[0]["lr"] == pytest.approx(self._cosine_factor(9, 10))
+
+    def test_resume_reproduces_the_original_trajectory(self) -> None:
+        """A resumed scheduler must replay the original schedule.
+
+        The framework re-derives ``total_steps`` on resume (and a
+        variable-length sampler can make the estimate drift), so the restored
+        state must fully override the constructor arguments.
+        """
+        reference_optimizer, reference = self._build(total_steps=100)
+        reference_lrs = []
+        for _ in range(40):
+            reference_optimizer.step()
+            reference.step()
+            reference_lrs.append(reference_optimizer.param_groups[0]["lr"])
+
+        optimizer_a, scheduler_a = self._build(total_steps=100)
+        for _ in range(15):
+            optimizer_a.step()
+            scheduler_a.step()
+        state = scheduler_a.state_dict()
+
+        # Rebuild with a different total_steps estimate, then restore.
+        optimizer_b, scheduler_b = self._build(total_steps=57)
+        scheduler_b.load_state_dict(state)
+        resumed_lrs = []
+        for _ in range(25):
+            optimizer_b.step()
+            scheduler_b.step()
+            resumed_lrs.append(optimizer_b.param_groups[0]["lr"])
+
+        assert resumed_lrs == reference_lrs[15:]

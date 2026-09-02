@@ -62,5 +62,6 @@ class T4MultiviewDetection3DDataModule(MultiviewDetection3DDataModule):
             name_mapping=self.name_mapping,
             filter_frames_with_camera_order=self.filter_frames_with_camera_order,
             require_image_files=self.require_image_files,
+            annotation_status_field=self.annotation_status_field,
             dataset_transforms=dataset_transforms,
         )

@@ -33,6 +33,16 @@ class TestSerializedSampleList:
             assert restored["instances"] == original["instances"]
             assert restored["lidar_points"] == original["lidar_points"]
             np.testing.assert_array_equal(restored["array"], original["array"])
+            assert restored["array"].dtype == np.float32
+            # Epoch-second timestamps rely on float64 surviving the round trip.
+            assert isinstance(restored["timestamp"], float)
+            assert restored["timestamp"] == original["timestamp"]
+
+    def test_non_integer_index_is_rejected(self) -> None:
+        serialized = SerializedSampleList(_make_samples(2))
+
+        with pytest.raises(TypeError):
+            serialized[0.0]
 
     def test_negative_index_and_bounds(self) -> None:
         samples = _make_samples(3)
