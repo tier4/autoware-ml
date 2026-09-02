@@ -1,42 +1,86 @@
 # @package _global_
+# StreamPETR on T4/j6gen2 — the production fine-tune recipe (stage 3 of the
+# native three-stage flow: nuScenes pretrain -> T4 base -> j6gen2).
+#
+# This file is the configuration of the final accepted training run
+# (4 GPUs x batch 16 = total batch 64, 35 epochs, AdamW lr 4.0e-4 with
+# img_backbone lr_mult 0.1): pc_range +-51.2, full train-time augmentation,
+# auxiliary 2D FocalHead, traffic_cone/barrier partial-ignore, iteration
+# warmup + epoch cosine LR, seed 0, mAP-based checkpoint selection.
+# An equivalent verified recipe is 4 GPUs x batch 8 (total 32) with both LRs
+# halved (2.0e-4 / 2.0e-5); throughput is IO-bound so the two are within
+# ~6.5% of each other, with matching final quality.
+#
+# autoware-ml has no auto_scale_lr: the LRs and the GPU count are pinned here.
+# For any other total batch size N rescale both LRs by N/64.
+#
+# Initialize from the stage-2 T4-base checkpoint:
+#   --weights mlruns/detection3d/streampetr/vov_480x640_t4dataset_base/<run_id>/artifacts/checkpoints/best.ckpt
 defaults:
   - /tasks/detection3d/streampetr/base
   - /datasets/t4dataset/detection3d
   - /datasets/t4dataset/camera
+  - /tasks/detection3d/streampetr/focal2d_head@model.img_roi_head
   - _self_
 
-batch_size: 8
-num_workers: 16
+batch_size: 16         # per-GPU; 4 GPUs -> total batch 64
+# More workers oversubscribe a shared host's CPU and starve the GPUs; raise
+# only together with per-worker thread pinning (cv2.setNumThreads(0),
+# OMP_NUM_THREADS=1) and measure.
+num_workers: 8
 
 dataset: ${t4dataset}
 
-point_cloud_range: [-54.0, -54.0, -5.0, 54.0, 54.0, 3.0]
+point_cloud_range: [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
 post_center_range: [-61.2, -61.2, -10.0, 61.2, 61.2, 10.0]
 
+partial_ignore_classes: [traffic_cone, barrier]
+
+# Evaluation ranges: the GT is already limited to the +-51.2 m pc_range
+# SQUARE by the pipeline ObjectRangeFilter. Earlier revisions additionally
+# capped eval_class_range RADIALLY at the pc_range - that removed the
+# square's corners from the GT while corner predictions stayed and became
+# guaranteed FPs, a semantics AWML's T4MetricV2 (bev buckets, radial on both
+# GT and predictions) cannot reproduce. Restate the dataset-level 121 m
+# default instead: 121 m is a no-op inside the 51.2 m square, making the
+# headline mAP directly comparable to T4MetricV2's bev_center_0.0-121.0
+# evaluator - the pairing validated by BEVFusion parity. Buckets mirror
+# T4MetricV2's.
 t4dataset:
   detection3d:
     eval_class_range:
-      car: 54.0
-      truck: 54.0
-      bus: 54.0
-      bicycle: 54.0
-      pedestrian: 54.0
-      traffic_cone: 54.0
-      barrier: 54.0
+      car: 121.0
+      truck: 121.0
+      bus: 121.0
+      bicycle: 121.0
+      pedestrian: 121.0
+      traffic_cone: 121.0
+      barrier: 121.0
     metric_ranges:
       - { _target_: autoware_ml.metrics.base.MetricRange, name: 0-50m, min_distance: 0.0, max_distance: 50.0 }
-      - { _target_: autoware_ml.metrics.base.MetricRange, name: 0-54m, min_distance: 0.0, max_distance: 54.0 }
+      - { _target_: autoware_ml.metrics.base.MetricRange, name: 50-90m, min_distance: 50.0, max_distance: 90.0 }
+      - { _target_: autoware_ml.metrics.base.MetricRange, name: 90-121m, min_distance: 90.0, max_distance: 121.0 }
+      - { _target_: autoware_ml.metrics.base.MetricRange, name: 0-121m, min_distance: 0.0, max_distance: 121.0 }
 
 datamodule:
   _target_: autoware_ml.datamodule.t4dataset.multiview_detection3d.T4MultiviewDetection3DDataModule
   data_root: ${dataset.data_root}
-  train_ann_file: info/detection3d/t4dataset_j6gen2_base_infos_train.pkl
-  val_ann_file: info/detection3d/t4dataset_j6gen2_base_infos_val.pkl
-  test_ann_file: info/detection3d/t4dataset_j6gen2_base_infos_val.pkl
+  # The 2.8.1 info generation (7 classes incl. traffic_cone/barrier with
+  # per-frame annotation status). The previously accepted checkpoint was
+  # trained on the older 2.8 infos; keep stages 2 and 3 on the same
+  # generation so the splits stay consistent.
+  train_ann_file: info/kokseang_2_8_1/t4dataset_j6gen2_base_infos_train.pkl
+  val_ann_file: info/kokseang_2_8_1/t4dataset_j6gen2_base_infos_val.pkl
+  test_ann_file: info/kokseang_2_8_1/t4dataset_j6gen2_base_infos_test.pkl
   class_names: ${dataset.detection3d.class_names}
   camera_order: ${dataset.camera.camera_order}
   name_mapping: ${dataset.detection3d.name_mapping}
   streaming: true
+  # Per-frame annotation-completeness flag consumed by partial-ignore; the T4
+  # info files store it under this field name.
+  annotation_status_field: traffic_cone_barrier_status
+  collation_map:
+    annotation_status: list
   train_dataloader_cfg:
     batch_size: ${batch_size}
     num_workers: ${num_workers}
@@ -49,6 +93,13 @@ datamodule:
   test_dataloader_cfg:
     batch_size: 1
     num_workers: ${num_workers}
+  # Produced by LoadAnnotations2DFromBoxes3D in train_transforms below for the
+  # auxiliary 2D FocalHead; val/test/predict pipelines never carry these keys,
+  # so they are declared train-only.
+  train_collation_map:
+    gt_bboxes_2d: list
+    gt_labels_2d: list
+    centers_2d: list
   train_transforms:
     _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
@@ -60,23 +111,32 @@ datamodule:
         filter_attributes: ${dataset.detection3d.filter_attributes}
         use_valid_flag: ${dataset.detection3d.use_valid_flag}
       - _target_: autoware_ml.transforms.camera.loading.LoadMultiViewImagesFromFiles
+        # Keep pixels in [0,255]: img_norm_cfg mean/std are 0-255-scale ImageNet stats.
+        normalize_to_unit: false
+        # The reference recipe shuffles the camera order every training frame
+        # (StreamPETRDataset shuffle_cameras=True); train-time only.
+        shuffle_order: true
       - _target_: autoware_ml.transforms.camera.resize.ResizeCropFlipRotImage
         data_aug_conf:
           resize_lim: 0.02
           final_dim: [480, 640]
           bot_pct_lim: [0.0, 0.0]
           rot_lim: [0.0, 0.0]
-          rand_flip: false
+          rand_flip: true
         training: true
       - _target_: autoware_ml.transforms.camera.geometry.GlobalRotScaleTrans
-        rot_range: [0.0, 0.0]
-        scale_ratio_range: [1.0, 1.0]
+        rot_range: [-0.3925, 0.3925]
+        scale_ratio_range: [0.95, 1.05]
       - _target_: autoware_ml.transforms.camera.resize.PadMultiViewImage
         size_divisor: 32
       - _target_: autoware_ml.transforms.camera.normalize.NormalizeMultiviewImage
         mean: ${img_norm_cfg.mean}
         std: ${img_norm_cfg.std}
         to_rgb: ${img_norm_cfg.to_rgb}
+      # 2D annotations are projected from the augmented 3D boxes BEFORE the
+      # range filter (matching the reference): the auxiliary 2D head
+      # supervises every visible object even outside the 3D detection range.
+      - _target_: autoware_ml.transforms.camera.annotations2d.LoadAnnotations2DFromBoxes3D
       - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeFilter
         point_cloud_range: ${point_cloud_range}
   val_transforms:
@@ -90,6 +150,8 @@ datamodule:
         filter_attributes: ${dataset.detection3d.filter_attributes}
         use_valid_flag: ${dataset.detection3d.use_valid_flag}
       - _target_: autoware_ml.transforms.camera.loading.LoadMultiViewImagesFromFiles
+        # Keep pixels in [0,255]: img_norm_cfg mean/std are 0-255-scale ImageNet stats.
+        normalize_to_unit: false
       - _target_: autoware_ml.transforms.camera.resize.ResizeCropFlipRotImage
         data_aug_conf:
           resize_lim: 0.02
@@ -111,6 +173,8 @@ datamodule:
     _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
       - _target_: autoware_ml.transforms.camera.loading.LoadMultiViewImagesFromFiles
+        # Keep pixels in [0,255]: img_norm_cfg mean/std are 0-255-scale ImageNet stats.
+        normalize_to_unit: false
       - _target_: autoware_ml.transforms.camera.resize.ResizeCropFlipRotImage
         data_aug_conf:
           resize_lim: 0.02
@@ -133,9 +197,29 @@ model:
     out_features: [stage4, stage5]
     frozen_stages: -1
     norm_eval: true
+  # CPFPN is the reference StreamPETR neck; GeneralizedLSSFPN
+  # (concat + BN + ReLU) is a different architecture.
   img_neck:
-    _target_: autoware_ml.models.common.necks.lss_fpn.GeneralizedLSSFPN
+    _target_: autoware_ml.models.common.necks.cp_fpn.CPFPN
     in_channels: [768, 1024]
     out_channels: 256
   bbox_head:
     num_queries: 644
+    class_names: ${dataset.detection3d.class_names}
+    partial_ignore_classes: ${partial_ignore_classes}
+  img_roi_head:
+    partial_ignore_classes: ${partial_ignore_classes}
+  optimizer:
+    lr: 4.0e-4         # base 5.0e-5 scaled by total_batch/8 (64/8)
+  optimizer_group_overrides:
+    img_backbone:
+      lr: 4.0e-5       # lr_mult 0.1
+
+trainer:
+  # Pin to 4 GPUs so total batch stays 64 and the hard-coded LRs above match.
+  # Lightning would otherwise grab every visible GPU and change the batch size.
+  devices: 4
+  max_epochs: 35
+  # Mirrors the reference val_interval; override to 1 for finer
+  # best-checkpoint selection on the small (~3.6k frame) j6gen2 val split.
+  check_val_every_n_epoch: 5

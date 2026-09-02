@@ -3,6 +3,8 @@ defaults:
   - /defaults/default_runtime
   - _self_
 
+seed: 0
+
 dataset: ???
 
 point_cloud_range: ???
@@ -26,6 +28,7 @@ datamodule:
     ego_pose_inv: list
     gt_boxes: list
     gt_labels: list
+    gt_num_points: list
 model:
   _target_: autoware_ml.models.detection3d.streampetr.StreamPETRDetectionModel
   metrics: ${dataset.detection3d.metrics}
@@ -90,13 +93,30 @@ model:
   optimizer_group_overrides:
     img_backbone:
       lr: 5.0e-6
+  # StreamPETR LR schedule: 500-iteration linear warmup (start
+  # factor 1/3) into a per-epoch cosine decay, stepped every iteration.
   scheduler:
-    _target_: autoware_ml.utils.schedulers.cyclic_cosine_annealing.CyclicCosineAnnealingLR
+    _target_: autoware_ml.utils.schedulers.iter_warmup_epoch_cosine.IterWarmupEpochCosineLR
     _partial_: true
-    warmup_epochs: 1
-    decay_epochs: 34
-    max_lr_factor: 1.0
-    min_lr_factor: 0.0001
+    max_epochs: ${trainer.max_epochs}
+    warmup_iters: 500
+    warmup_start_factor: 0.3333333333333333
+    eta_min_factor: 1.0e-4
+  scheduler_config:
+    interval: step
+
+callbacks:
+  # Selects the best checkpoint by detection mAP, not
+  # validation loss, and always trains the configured number of epochs.
+  model_checkpoint:
+    _target_: lightning.pytorch.callbacks.ModelCheckpoint
+    monitor: val/det3d/mAP
+    dirpath: ${hydra:run.dir}/checkpoints
+    filename: best
+    save_top_k: 1
+    mode: max
+    verbose: true
+  early_stopping: null
 
 trainer:
   max_epochs: 35

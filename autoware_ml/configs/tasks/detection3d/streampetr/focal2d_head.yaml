@@ -1,0 +1,15 @@
+# Auxiliary 2D FocalHead2D shared by the StreamPETR pretrain and T4 configs.
+# Loss weights follow the reference Focal-PETR recipe (2 / 5 / 2 / 10 + 1
+# centerness); the default HungarianAssigner2D mirrors the same cost weights,
+# so no assigner block is needed here.
+_target_: autoware_ml.models.detection3d.heads.focal2d.FocalHead2D
+num_classes: ${dataset.detection3d.num_classes}
+in_channels: 256
+embed_dims: 256
+stride: 16
+loss_cls_weight: 2.0
+loss_bbox_weight: 5.0
+loss_iou_weight: 2.0
+loss_centers2d_weight: 10.0
+loss_centerness_weight: 1.0
+class_names: ${dataset.detection3d.class_names}

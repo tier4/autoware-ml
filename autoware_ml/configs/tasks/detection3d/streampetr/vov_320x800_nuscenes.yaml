@@ -40,6 +40,8 @@ datamodule:
       - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
         name_mapping: ${dataset.detection3d.name_mapping}
       - _target_: autoware_ml.transforms.camera.loading.LoadMultiViewImagesFromFiles
+        # Keep pixels in [0,255]: img_norm_cfg mean/std are 0-255-scale ImageNet stats.
+        normalize_to_unit: false
       - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeFilter
         point_cloud_range: ${point_cloud_range}
       - _target_: autoware_ml.transforms.camera.resize.ResizeCropFlipRotImage
@@ -65,6 +67,8 @@ datamodule:
       - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
         name_mapping: ${dataset.detection3d.name_mapping}
       - _target_: autoware_ml.transforms.camera.loading.LoadMultiViewImagesFromFiles
+        # Keep pixels in [0,255]: img_norm_cfg mean/std are 0-255-scale ImageNet stats.
+        normalize_to_unit: false
       - _target_: autoware_ml.transforms.camera.resize.ResizeCropFlipRotImage
         data_aug_conf:
           resize_lim: [0.47, 0.625]
@@ -86,6 +90,8 @@ datamodule:
     _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
       - _target_: autoware_ml.transforms.camera.loading.LoadMultiViewImagesFromFiles
+        # Keep pixels in [0,255]: img_norm_cfg mean/std are 0-255-scale ImageNet stats.
+        normalize_to_unit: false
       - _target_: autoware_ml.transforms.camera.resize.ResizeCropFlipRotImage
         data_aug_conf:
           resize_lim: [0.47, 0.625]

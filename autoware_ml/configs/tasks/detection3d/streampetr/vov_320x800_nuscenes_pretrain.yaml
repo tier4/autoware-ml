@@ -1,0 +1,97 @@
+# @package _global_
+# Stage 1 of the native three-stage StreamPETR flow
+# (nuScenes pretrain -> T4 base -> j6gen2 fine-tune), following the reference
+# StreamPETR nuScenes recipe: 30 epochs, AdamW with img_backbone lr_mult 0.1,
+# grad-clip 35, 500-iteration warmup into per-epoch cosine decay with
+# eta_min = lr * 1e-3, resize 0.47-0.625 to 320x800 with random flip, global
+# rot/scale augmentation.
+#
+# Pinned to the accepted stage-1 run: 4 GPUs x batch 8 (total 32),
+# lr 8.0e-4 / 8.0e-5 (the reference total-batch-16 recipe uses 4.0e-4 /
+# 4.0e-5; rescale both LRs by N/32 for another total batch size N). Watch the
+# first few hundred iterations: at this LR a loss spike/NaN means both LRs
+# should back off (e.g. to 6e-4 / 6e-5).
+#
+# This differs from `vov_320x800_nuscenes` (the plain nuScenes reference
+# config) in the two ways that matter for the three-stage flow:
+#   * CPFPN neck instead of GeneralizedLSSFPN, and an auxiliary FocalHead2D,
+#     so the produced checkpoint is weight-compatible with the T4 stages.
+#   * The reference pretrain augmentation and optimizer settings above.
+# The nuScenes and T4 detector class sets are both the same 7 classes, so the
+# checkpoint loads into stage 2 without dropping any classification layer.
+#
+# Running this stage needs the nuScenes dataset mounted (default data_root is
+# ${AUTOWARE_ML_DATA_PATH}/nuscenes) and an RGB-stem DD3D/FCOS3D-pretrained
+# VoVNet-99 backbone as --weights; without that backbone init the recipe
+# underperforms.
+defaults:
+  - /tasks/detection3d/streampetr/vov_320x800_nuscenes
+  - /tasks/detection3d/streampetr/focal2d_head@model.img_roi_head
+  - _self_
+
+batch_size: 8          # per-GPU; 4 GPUs -> total batch 32
+num_workers: 8
+
+datamodule:
+  # Produced by LoadAnnotations2DFromBoxes3D for the auxiliary 2D head;
+  # val/test/predict pipelines never carry these keys.
+  train_collation_map:
+    gt_bboxes_2d: list
+    gt_labels_2d: list
+    centers_2d: list
+  train_transforms:
+    _target_: autoware_ml.transforms.base.TransformsCompose
+    pipeline:
+      - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
+        name_mapping: ${dataset.detection3d.name_mapping}
+      - _target_: autoware_ml.transforms.camera.loading.LoadMultiViewImagesFromFiles
+        # Keep pixels in [0,255]: img_norm_cfg mean/std are 0-255-scale ImageNet stats.
+        normalize_to_unit: false
+      # The reference nuScenes pipeline range-filters before augmentation
+      # (unlike the T4 pipeline, which filters after projecting the 2D
+      # annotations).
+      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeFilter
+        point_cloud_range: ${point_cloud_range}
+      - _target_: autoware_ml.transforms.camera.resize.ResizeCropFlipRotImage
+        data_aug_conf:
+          resize_lim: [0.47, 0.625]
+          final_dim: [320, 800]
+          bot_pct_lim: [0.0, 0.0]
+          rot_lim: [0.0, 0.0]
+          rand_flip: true
+        training: true
+      - _target_: autoware_ml.transforms.camera.geometry.GlobalRotScaleTrans
+        rot_range: [-0.3925, 0.3925]
+        scale_ratio_range: [0.95, 1.05]
+      - _target_: autoware_ml.transforms.camera.resize.PadMultiViewImage
+        size_divisor: 32
+      - _target_: autoware_ml.transforms.camera.normalize.NormalizeMultiviewImage
+        mean: ${img_norm_cfg.mean}
+        std: ${img_norm_cfg.std}
+        to_rgb: ${img_norm_cfg.to_rgb}
+      - _target_: autoware_ml.transforms.camera.annotations2d.LoadAnnotations2DFromBoxes3D
+
+model:
+  # CPFPN is the reference StreamPETR neck, weight-compatible with the T4
+  # stages.
+  img_neck:
+    _target_: autoware_ml.models.common.necks.cp_fpn.CPFPN
+    in_channels: [768, 1024]
+    out_channels: 256
+  optimizer:
+    lr: 8.0e-4         # reference bs 16 -> 4e-4, scaled by total_batch/16
+  optimizer_group_overrides:
+    img_backbone:
+      lr: 8.0e-5       # lr_mult 0.1
+  scheduler:
+    # The reference nuScenes schedule anneals to lr * 1e-3, not the 1e-4 the
+    # T4 stages use.
+    eta_min_factor: 1.0e-3
+
+trainer:
+  # Pin to 4 GPUs so total batch stays 32 and the hard-coded LRs above match.
+  devices: 4
+  max_epochs: 30
+  # The reference nuScenes recipe clips at 35 (the T4 stages clip at 1).
+  gradient_clip_val: 35.0
+  check_val_every_n_epoch: 5
