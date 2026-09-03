@@ -624,13 +624,11 @@ class T4RecordsGenerator:
 
             cam2img = np.asarray(cs_record.camera_intrinsic, dtype=np.float64)
 
-            # 1. 计算 lidar2cam 变换矩阵 (4x4)
             cam2global = image_frame_ego_pose_to_global_matrix @ image_sensor_to_ego_matrix
             global2cam = np.linalg.inv(cam2global)
             lidar2global = lidar_frame_ego_pose_to_global_matrix @ lidar_sensor_to_ego_pose_matrix
             lidar2cam = global2cam @ lidar2global
 
-            # 2. 计算 lidar2img 投影矩阵 (4x4)
             cam2img_4x4 = np.eye(4, dtype=np.float64)
             cam2img_4x4[:3, :3] = cam2img
             lidar2img = cam2img_4x4 @ lidar2cam
