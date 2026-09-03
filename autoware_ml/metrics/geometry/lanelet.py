@@ -1,28 +1,43 @@
-"""Lanelet2 map parsing into region polygons, for the region-filter evaluation axis.
+"""Lanelet2 map reading into region polygons, for the region-filter evaluation axis.
 
 A T4 scene ships ``map/lanelet2_map.osm`` in the same local map frame the ego
-poses use. This module parses it into shapely polygons grouped by lanelet2 token,
-either a lanelet's ``subtype`` (road, walkway, crosswalk, road_shoulder) or an
-area way's ``type`` (drivable_area, crosswalk_polygon, intersection_area). A
-:class:`LaneletMap` then answers point-in-region membership. The map for a scene
-is parsed once and cached.
+poses use. The ``lanelet2`` library reads it and this module turns the result
+into shapely polygons grouped by lanelet2 token, either a lanelet's ``subtype``
+(road, walkway, crosswalk, road_shoulder) or an area way's ``type``
+(drivable_area, crosswalk_polygon, intersection_area). A :class:`LaneletMap`
+then answers point-in-region membership. The map for a scene is read once and
+cached.
 
-lanelet2 itself is not installed in the container, so the OSM is parsed with the
-standard-library XML parser and polygons are built with shapely (both available).
+Two properties of T4 maps shape the reader. Node geometry comes from the
+``local_x``/``local_y`` tags, the frame the ego poses live in, so the loader
+runs with a geocentric projector and its projected coordinates are discarded.
+The area regions are closed typed ways, which lanelet2 does not model (a
+polygon there is an area relation over open line strings), so their node
+references are read from the OSM while their coordinates still come from the
+parsed map.
+
+Membership is evaluated in 2D, so regions stacked at different heights, a road
+under a bridge for instance, are not separated.
 """
 
 from __future__ import annotations
 
+import logging
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from functools import lru_cache
 from pathlib import Path
+from typing import Protocol
 
+import lanelet2
 import numpy as np
 import shapely
 from shapely import STRtree
 from shapely.geometry import Point, Polygon
 from shapely.ops import unary_union
+
+logger = logging.getLogger(__name__)
+
 
 # Way ``type`` values that describe a closed area we can use as a region.
 AREA_WAY_TYPES = frozenset(
@@ -40,65 +55,104 @@ AREA_WAY_TYPES = frozenset(
 # fails loud at filter construction. A known token that happens to have no
 # polygons in a particular scene (walkway is sparse) is a legitimate empty
 # region where membership is simply false.
-KNOWN_REGION_TOKENS = frozenset(
-    {
-        "road",
-        "highway",
-        "road_shoulder",
-        "bicycle_lane",
-        "bus_lane",
-        "walkway",
-        "crosswalk",
-        "pedestrian_lane",
-        "play_street",
-        "emergency_lane",
-    }
-) | AREA_WAY_TYPES
+KNOWN_REGION_TOKENS = (
+    frozenset(
+        {
+            "road",
+            "highway",
+            "road_shoulder",
+            "bicycle_lane",
+            "bus_lane",
+            "walkway",
+            "crosswalk",
+            "pedestrian_lane",
+            "play_street",
+            "emergency_lane",
+        }
+    )
+    | AREA_WAY_TYPES
+)
 
 
-def _tags(element: ET.Element) -> dict[str, str]:
-    return {tag.get("k"): tag.get("v") for tag in element.findall("tag")}
+def _load_osm_map(osm_path: str) -> lanelet2.core.LaneletMap:
+    """Read one OSM file into a lanelet2 map.
+
+    T4 maps are excerpts whose regulatory elements reference primitives left
+    outside the cut, which the strict loader rejects outright, so the tolerant
+    loader is the only usable entry point. Its per-primitive errors describe the
+    map rather than our use of it and are reported once per file, while a load
+    that yields no geometry at all is a broken map and raises.
+
+    Args:
+        osm_path: Path to the ``lanelet2_map.osm`` file.
+
+    Returns:
+        The map as parsed by lanelet2.
+
+    Raises:
+        ValueError: If the file yields no points.
+    """
+    lanelet_map, errors = lanelet2.io.loadRobust(
+        osm_path, lanelet2.projection.GeocentricProjector()
+    )
+    if len(lanelet_map.pointLayer) == 0:
+        raise ValueError(
+            f"Lanelet map '{osm_path}' yielded no points. First loader error: "
+            f"{errors[0] if errors else 'none reported'}"
+        )
+    if errors:
+        logger.info("Lanelet map %s: %d loader errors, reading continued.", osm_path, len(errors))
+    return lanelet_map
 
 
-def _way_coords(
-    way: ET.Element, nodes: dict[str, tuple[float, float]]
-) -> list[tuple[float, float]]:
-    return [nodes[nd.get("ref")] for nd in way.findall("nd") if nd.get("ref") in nodes]
+def _local_xy(point: lanelet2.core.Point3d) -> tuple[float, float]:
+    """Position of a map point in the local frame the ego poses use.
+
+    The loader projects the geographic node coordinates, which land in a
+    different frame than the T4 ego poses, so the authoritative position is the
+    ``local_x``/``local_y`` tag pair the map ships on every node.
+    """
+    if "local_x" not in point.attributes or "local_y" not in point.attributes:
+        raise ValueError(
+            f"Map point {point.id} carries no local_x/local_y tags, so it cannot be placed "
+            "in the ego frame."
+        )
+    return float(point.attributes["local_x"]), float(point.attributes["local_y"])
 
 
-def _parse_osm(
-    osm_path: str,
-) -> tuple[ET.Element, dict[str, tuple[float, float]], dict[str, ET.Element]]:
-    """One XML pass shared by the region and speed loaders: root, nodes, ways."""
-    root = ET.parse(osm_path).getroot()
-    nodes: dict[str, tuple[float, float]] = {}
-    for node in root.findall("node"):
-        tags = _tags(node)
-        if "local_x" in tags and "local_y" in tags:
-            nodes[node.get("id")] = (float(tags["local_x"]), float(tags["local_y"]))
-    ways: dict[str, ET.Element] = {way.get("id"): way for way in root.findall("way")}
-    return root, nodes, ways
+def _lanelet_ring(lanelet: lanelet2.core.Lanelet) -> list[tuple[float, float]]:
+    """Closed ring of a lanelet: its left bound followed by its reversed right bound."""
+    return [_local_xy(point) for point in lanelet.leftBound] + [
+        _local_xy(point) for point in reversed(list(lanelet.rightBound))
+    ]
 
 
-def _lanelet_ring_polygon(
-    relation: ET.Element,
-    nodes: dict[str, tuple[float, float]],
-    ways: dict[str, ET.Element],
-) -> Polygon | None:
-    """A lanelet relation's polygon: left bound + reversed right bound, repaired."""
-    bounds = {
-        member.get("role"): ways.get(member.get("ref"))
-        for member in relation.findall("member")
-        if member.get("role") in ("left", "right")
-    }
-    left, right = bounds.get("left"), bounds.get("right")
-    if left is None or right is None:
-        return None
-    return _safe_polygon(_way_coords(left, nodes) + list(reversed(_way_coords(right, nodes))))
+def _area_way_rings(
+    osm_path: str, lanelet_map: lanelet2.core.LaneletMap
+) -> dict[str, list[list[tuple[float, float]]]]:
+    """Rings of the typed ways that carry the area regions, keyed by way ``type``.
+
+    lanelet2 models a polygon as an area relation over open line strings, so the
+    closed typed ways T4 maps use for ``drivable_area`` and its siblings reach no
+    layer of the parsed map. Only their node references are read from the OSM
+    here, every coordinate still comes from the parsed map. Exporting these
+    regions as area relations would make this reader unnecessary.
+    """
+    rings: dict[str, list[list[tuple[float, float]]]] = defaultdict(list)
+    for way in ET.parse(osm_path).getroot().findall("way"):
+        way_type = next(
+            (tag.get("v") for tag in way.findall("tag") if tag.get("k") == "type"), None
+        )
+        if way_type not in AREA_WAY_TYPES:
+            continue
+        rings[way_type].append(
+            [_local_xy(lanelet_map.pointLayer[int(nd.get("ref"))]) for nd in way.findall("nd")]
+        )
+    return dict(rings)
 
 
 def load_region_polygons(osm_path: str) -> dict[str, list[Polygon]]:
-    """Parse a lanelet2 OSM into ``{token: [polygon, ...]}``.
+    """Read a lanelet2 OSM into ``{token: [polygon, ...]}``.
 
     Lanelets are keyed by their ``subtype`` (polygon = left bound + reversed right
     bound), area ways in :data:`AREA_WAY_TYPES` by their ``type``.
@@ -109,79 +163,96 @@ def load_region_polygons(osm_path: str) -> dict[str, list[Polygon]]:
     Returns:
         Region token to polygons mapping.
     """
-    return _region_polygons(*_parse_osm(osm_path))
+    return _region_polygons(osm_path, _load_osm_map(osm_path))
 
 
 def _region_polygons(
-    root: ET.Element,
-    nodes: dict[str, tuple[float, float]],
-    ways: dict[str, ET.Element],
+    osm_path: str, lanelet_map: lanelet2.core.LaneletMap
 ) -> dict[str, list[Polygon]]:
     regions: dict[str, list[Polygon]] = defaultdict(list)
-    for relation in root.findall("relation"):
-        tags = _tags(relation)
-        if tags.get("type") != "lanelet":
-            continue
-        polygon = _lanelet_ring_polygon(relation, nodes, ways)
-        if polygon is not None:
-            regions[tags.get("subtype", "unknown")].append(polygon)
+    for lanelet in lanelet_map.laneletLayer:
+        subtype = lanelet.attributes["subtype"] if "subtype" in lanelet.attributes else "unknown"
+        regions[subtype].extend(_ring_polygons(_lanelet_ring(lanelet)))
 
-    for way in ways.values():
-        tags = _tags(way)
-        if tags.get("type") not in AREA_WAY_TYPES:
-            continue
-        polygon = _safe_polygon(_way_coords(way, nodes))
-        if polygon is not None:
-            regions[tags["type"]].append(polygon)
+    for way_type, rings in _area_way_rings(osm_path, lanelet_map).items():
+        for ring in rings:
+            regions[way_type].extend(_ring_polygons(ring))
 
     return dict(regions)
 
 
-def _safe_polygon(ring: list[tuple[float, float]]) -> Polygon | None:
+def _ring_polygons(ring: list[tuple[float, float]]) -> list[Polygon]:
+    """Polygons covered by one node ring, repaired when the ring self-intersects.
+
+    A ring that crosses itself is not a polygon, and repairing it can yield
+    several: a figure-eight covers two lobes. Every part is kept, because
+    picking one would silently shrink the region. Repair emits lines for a
+    degenerate ring, which carry no membership and are dropped, and a ring of
+    fewer than three nodes covers nothing at all.
+
+    Args:
+        ring: Node positions of the ring, in order.
+
+    Returns:
+        The polygons the ring covers, empty when it covers no area.
+
+    Raises:
+        ValueError: If the ring cannot be repaired into valid geometry.
+    """
     if len(ring) < 3:
-        return None
+        return []
     polygon = Polygon(ring)
-    if not polygon.is_valid:
-        polygon = polygon.buffer(0)  # repair self-touching rings
-    return polygon if (not polygon.is_empty and polygon.area > 0.0) else None
+    if polygon.is_valid:
+        return [polygon] if polygon.area > 0.0 else []
+    repaired = shapely.make_valid(polygon)
+    if not repaired.is_valid:
+        raise ValueError(f"Map ring starting at {ring[0]} cannot be repaired into valid geometry.")
+    return [
+        part
+        for part in shapely.get_parts(repaired)
+        if part.geom_type == "Polygon" and part.area > 0.0
+    ]
 
 
 def load_lanelet_speeds(osm_path: str) -> list[tuple[Polygon, float]]:
-    """Parse lanelet relations that carry a ``speed_limit`` into ``(polygon, m/s)``.
+    """Read the lanelets that carry a ``speed_limit`` into ``(polygon, m/s)`` pairs.
 
     Lanelet ``speed_limit`` tags are in km/h (values like 60/50/40/30). Each is
     paired with its lanelet polygon (left bound + reversed right bound) so a
     position can be resolved to its lane speed limit. Lanelets without the tag are
-    skipped (the caller falls back to a spec-versioned default).
+    skipped (the caller falls back to a spec-versioned default), while a tag that
+    is not a positive number is corrupt map data and raises.
 
     Args:
         osm_path: Path to the ``lanelet2_map.osm`` file.
 
     Returns:
         ``(polygon, speed limit in m/s)`` pairs.
+
+    Raises:
+        ValueError: If a ``speed_limit`` tag is not a positive number.
     """
-    return _lanelet_speeds(*_parse_osm(osm_path))
+    return _lanelet_speeds(_load_osm_map(osm_path))
 
 
-def _lanelet_speeds(
-    root: ET.Element,
-    nodes: dict[str, tuple[float, float]],
-    ways: dict[str, ET.Element],
-) -> list[tuple[Polygon, float]]:
+def _lanelet_speeds(lanelet_map: lanelet2.core.LaneletMap) -> list[tuple[Polygon, float]]:
     speeds: list[tuple[Polygon, float]] = []
-    for relation in root.findall("relation"):
-        tags = _tags(relation)
-        if tags.get("type") != "lanelet" or "speed_limit" not in tags:
+    for lanelet in lanelet_map.laneletLayer:
+        if "speed_limit" not in lanelet.attributes:
             continue
+        raw_speed = lanelet.attributes["speed_limit"]
         try:
-            speed_mps = float(tags["speed_limit"]) / 3.6  # km/h -> m/s
-        except ValueError:
-            continue
-        if speed_mps <= 0.0:
-            continue
-        polygon = _lanelet_ring_polygon(relation, nodes, ways)
-        if polygon is not None:
-            speeds.append((polygon, speed_mps))
+            speed_kmh = float(raw_speed)
+        except ValueError as error:
+            raise ValueError(
+                f"Lanelet {lanelet.id} carries an unparsable speed_limit {raw_speed!r}."
+            ) from error
+        if speed_kmh <= 0.0:
+            raise ValueError(
+                f"Lanelet {lanelet.id} carries a non-positive speed_limit {raw_speed!r}."
+            )
+        speed_mps = speed_kmh / 3.6
+        speeds.extend((polygon, speed_mps) for polygon in _ring_polygons(_lanelet_ring(lanelet)))
     return speeds
 
 
@@ -191,11 +262,11 @@ def _load_lanelet_map(osm_path: str) -> "LaneletMap":
 
     Filters and suites each hold their own provider instance (hydra instantiates
     one per config reference). Without this cache the same scene's map would be
-    parsed, unioned and eroded once per instance. One XML pass feeds both the
+    read, unioned and eroded once per instance. One lanelet2 load feeds both the
     region polygons and the speed lanelets.
     """
-    parsed = _parse_osm(osm_path)
-    return LaneletMap(_region_polygons(*parsed), _lanelet_speeds(*parsed))
+    parsed = _load_osm_map(osm_path)
+    return LaneletMap(_region_polygons(osm_path, parsed), _lanelet_speeds(parsed))
 
 
 class LaneletMap:
@@ -224,8 +295,12 @@ class LaneletMap:
     def speed_at(self, x: float, y: float, default: float) -> float:
         """Speed limit (m/s) of the lanelet containing ``(x, y)``, else ``default``.
 
-        On overlapping lanelets the lowest limit wins (conservative), so an object
-        straddling a slow lane is not over-propagated.
+        On overlapping lanelets the highest limit wins. The collision model is
+        worst case and a faster agent reaches further, so the higher limit is the
+        conservative reading of time to collision. Overlaps also occur between
+        lanelets stacked at different heights, a road under a bridge for
+        instance, which 2D membership cannot separate, and the higher limit is
+        the safe choice there as well.
 
         Args:
             x: Map-frame x coordinate.
@@ -242,7 +317,7 @@ class LaneletMap:
         speeds = [
             float(self._speed_values[i]) for i in candidates if self._speed_polys[i].contains(point)
         ]
-        return min(speeds) if speeds else default
+        return max(speeds) if speeds else default
 
     @classmethod
     def from_osm(cls, osm_path: str) -> "LaneletMap":
@@ -257,7 +332,20 @@ class LaneletMap:
         return _load_lanelet_map(osm_path)
 
     @lru_cache(maxsize=None)
-    def _region_union(self, tokens: tuple[str, ...]):
+    def region_union(self, tokens: tuple[str, ...]):
+        """Shapely (multi)polygon union of the given region tokens (map frame).
+
+        Used by the reachability collision engine to clip wheeled reachable sets
+        to the drivable area (road / road_shoulder / crosswalk), and by the
+        membership tests below. Cached per token set, so the tokens arrive as a
+        tuple.
+
+        Args:
+            tokens: Region tokens to unite.
+
+        Returns:
+            The shapely (multi)polygon union.
+        """
         polygons = [poly for token in tokens for poly in self._region_polygons.get(token, [])]
         if not polygons:
             # A known region that this scene's map simply does not contain, a
@@ -271,20 +359,6 @@ class LaneletMap:
         # milliseconds per frame at full point-cloud resolution.
         shapely.prepare(union)
         return union
-
-    def region_union(self, tokens: tuple[str, ...]):
-        """Public: shapely (multi)polygon union of the given region tokens (map frame).
-
-        Used by the reachability collision engine to clip wheeled reachable sets
-        to the drivable area (road / road_shoulder / crosswalk).
-
-        Args:
-            tokens: Region tokens to unite.
-
-        Returns:
-            The shapely (multi)polygon union.
-        """
-        return self._region_union(tuple(tokens))
 
     @lru_cache(maxsize=None)
     def _full_surface(self):
@@ -309,7 +383,7 @@ class LaneletMap:
     @lru_cache(maxsize=None)
     def _expanded_region(self, tokens: tuple[str, ...], margin: float):
         """The selected region dilated outward by ``margin``."""
-        expanded = self._region_union(tokens).buffer(margin)
+        expanded = self.region_union(tokens).buffer(margin)
         shapely.prepare(expanded)
         return expanded
 
@@ -322,7 +396,7 @@ class LaneletMap:
         touches the region only inside the removed border band while overlapping
         an adjacent region's eroded part.
         """
-        eroded = self._region_union(tokens).intersection(self._eroded_full_surface(margin))
+        eroded = self.region_union(tokens).intersection(self._eroded_full_surface(margin))
         shapely.prepare(eroded)
         return eroded
 
@@ -331,26 +405,24 @@ class LaneletMap:
         tokens: tuple[str, ...],
         xy: np.ndarray,
         margin: float = 0.0,
-        expand: bool = False,
     ) -> np.ndarray:
         """Boolean mask of map-frame ``xy`` points inside the union of ``tokens``.
 
-        ``margin`` adjusts the region border by that many meters and ``expand``
-        picks the direction:
+        ``margin`` moves the region border by that many meters, its sign picking
+        the direction the way a shapely buffer does:
 
-        * ``False`` (default) cuts inward: points within ``margin`` of the
-          outer border of the full mapped surface stop counting. Internal
-          borders between adjacent regions stay intact, so points near a
-          road-to-walkway border keep counting for both.
-        * ``True`` grows outward: the selected region additionally claims
-          off-map points within ``margin`` of it. Points belonging to another
-          mapped region are never claimed, so adjacent regions do not overlap.
+        * negative erodes: points within ``margin`` of the outer border of the
+          full mapped surface stop counting. Internal borders between adjacent
+          regions stay intact, so points near a road-to-walkway border keep
+          counting for both.
+        * positive dilates: the selected region additionally claims off-map
+          points within ``margin`` of it. Points belonging to another mapped
+          region are never claimed, so adjacent regions do not overlap.
 
         Args:
             tokens: Region tokens to unite.
             xy: Map-frame points ``(N, 2)``.
-            margin: Border adjustment in meters.
-            expand: Grow outward instead of cutting inward.
+            margin: Border shift in meters, negative erodes and positive dilates.
 
         Returns:
             Boolean mask ``(N,)``.
@@ -358,17 +430,17 @@ class LaneletMap:
         if xy.shape[0] == 0:
             return np.zeros((0,), dtype=bool)
         points = shapely.points(xy[:, 0], xy[:, 1])
-        mask = np.asarray(shapely.contains(self._region_union(tuple(tokens)), points), dtype=bool)
-        if margin <= 0.0:
+        mask = np.asarray(shapely.contains(self.region_union(tuple(tokens)), points), dtype=bool)
+        if margin == 0.0:
             return mask
-        if expand:
+        if margin > 0.0:
             in_expanded = np.asarray(
                 shapely.contains(self._expanded_region(tuple(tokens), float(margin)), points),
                 dtype=bool,
             )
             on_map = np.asarray(shapely.contains(self._full_surface(), points), dtype=bool)
             return mask | (in_expanded & ~on_map)
-        eroded = self._eroded_full_surface(float(margin))
+        eroded = self._eroded_full_surface(-float(margin))
         return mask & np.asarray(shapely.contains(eroded, points), dtype=bool)
 
     def intersects(
@@ -376,36 +448,34 @@ class LaneletMap:
         tokens: tuple[str, ...],
         footprints: list,
         margin: float = 0.0,
-        expand: bool = False,
     ) -> np.ndarray:
         """Boolean mask of BEV footprint polygons that overlap the region.
 
         The box counterpart of :meth:`contains`: a detection box belongs to the
         region when any part of its footprint lies inside it, so an object
         overhanging the region from an off-region center still counts.
-        ``margin`` / ``expand`` adjust the region border exactly as in
-        :meth:`contains`, applied here to the footprint-intersection test.
+        ``margin`` moves the region border exactly as in :meth:`contains`,
+        applied here to the footprint-intersection test.
 
         Args:
             tokens: Region tokens to unite.
             footprints: Map-frame BEV footprint polygons.
-            margin: Border adjustment in meters.
-            expand: Grow outward instead of cutting inward.
+            margin: Border shift in meters, negative erodes and positive dilates.
 
         Returns:
             Boolean mask over the footprints.
         """
         if len(footprints) == 0:
             return np.zeros((0,), dtype=bool)
-        if margin > 0.0 and not expand:
+        if margin < 0.0:
             return np.asarray(
-                shapely.intersects(self._eroded_region(tuple(tokens), float(margin)), footprints),
+                shapely.intersects(self._eroded_region(tuple(tokens), -float(margin)), footprints),
                 dtype=bool,
             )
         hit = np.asarray(
-            shapely.intersects(self._region_union(tuple(tokens)), footprints), dtype=bool
+            shapely.intersects(self.region_union(tuple(tokens)), footprints), dtype=bool
         )
-        if margin <= 0.0:
+        if margin == 0.0:
             return hit
         in_expanded = np.asarray(
             shapely.intersects(self._expanded_region(tuple(tokens), float(margin)), footprints),
@@ -415,25 +485,42 @@ class LaneletMap:
         return hit | (in_expanded & ~on_map)
 
 
-class LaneletMapProvider:
-    """Loads and caches one :class:`LaneletMap` per scene.
+class OsmPathResolver(Protocol):
+    """What a :class:`LaneletMapProvider` needs from its resolver.
 
-    ``resolve_osm`` maps a scene token to its ``lanelet2_map.osm`` path, and each
-    scene's map is parsed once and reused. A dataset adapter supplies the
-    resolver (it knows the on-disk scene layout), tests inject a direct path.
+    Two calls, because a scene may have no map at all: the provider asks for the
+    path when it reads a map and asks :meth:`available` when a filter has to
+    decide whether the scene can take part in a map-based slice.
     """
 
-    def __init__(self, resolve_osm) -> None:
+    def __call__(self, scene_token: object) -> str:
+        """Path of the scene's ``lanelet2_map.osm``."""
+
+    def available(self, scene_token: object) -> bool:
+        """Whether the scene has a map, decided without reading it."""
+
+
+class LaneletMapProvider:
+    """Resolves a scene token to its :class:`LaneletMap`.
+
+    ``resolve_osm`` maps a scene token to its ``lanelet2_map.osm`` path and
+    reports whether a scene has one, see :class:`OsmPathResolver`. Each scene's
+    map is parsed once and reused, cached by path in :meth:`LaneletMap.from_osm`.
+    A dataset adapter supplies the resolver (it knows the on-disk scene layout),
+    tests inject a direct path.
+    """
+
+    def __init__(self, resolve_osm: OsmPathResolver) -> None:
         """Store the scene-token to OSM-path resolver.
 
         Args:
-            resolve_osm: Callable mapping a scene token to its OSM path.
+            resolve_osm: Resolver satisfying :class:`OsmPathResolver`, so it
+                returns a path when called and answers ``available``.
         """
         self._resolve_osm = resolve_osm
-        self._cache: dict[object, LaneletMap] = {}
 
     def get(self, scene_token: object) -> LaneletMap:
-        """The scene's parsed map, from the cache after the first request.
+        """The scene's map, parsed on the first request and shared afterwards.
 
         Args:
             scene_token: Scene identifier.
@@ -441,9 +528,7 @@ class LaneletMapProvider:
         Returns:
             The scene's parsed map.
         """
-        if scene_token not in self._cache:
-            self._cache[scene_token] = LaneletMap.from_osm(self._resolve_osm(scene_token))
-        return self._cache[scene_token]
+        return LaneletMap.from_osm(self._resolve_osm(scene_token))
 
     def available(self, scene_token: object) -> bool:
         """Whether a lanelet map exists for the scene (no parse, no exception).
