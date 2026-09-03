@@ -75,7 +75,7 @@ class ImageFrameDataModel(BaseModel, DataModelInterface):
       image_frame_ego_pose_to_global_matrix: Transformation matrix from the ego pose of this
         image frame to the global frame.
       lidar2cam: Transformation matrix from LiDAR frame to camera frame (4, 4). Set to None if
-        unavailable (e.g. for image sweeps, which are not associated with a specific lidar keyframe).
+        unavailable.
       lidar2img: Projection matrix from LiDAR frame to image plane (4, 4). Set to None if unavailable.
     """
 

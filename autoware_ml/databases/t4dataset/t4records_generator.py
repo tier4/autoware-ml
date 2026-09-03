@@ -656,12 +656,7 @@ class T4RecordsGenerator:
     ) -> Sequence[ImageFrameDataModel]:
         """
         Extract multi-sweep image metadata (past camera keyframes) from a T4 Sample, for
-        sequence-based models. Unlike _extract_lidar_sweeps, this walks the sample.prev chain
-        (keyframe-to-keyframe) rather than the per-sensor sample_data.prev chain, since camera and
-        lidar sample_data are not directly linked to each other outside of a shared sample. Walking
-        sample.prev guarantees each image sweep is naturally paired with a lidar frame captured at
-        the same sample, so lidar2cam/lidar2img can be computed for every sweep exactly like the
-        current image frame.
+        sequence-based models.It walks the sample.prev chain(keyframe-to-keyframe). 
 
         Args:
           sample: T4 Sample to walk backwards from.
