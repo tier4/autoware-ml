@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict
 from autoware_ml.databases.schemas.base_schemas import DatasetTableColumn, DataModelInterface
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDataModel, Box3DDatasetSchema
 from autoware_ml.databases.schemas.lidar_frames import LidarFrameDatasetSchema, LidarFrameDataModel
+from autoware_ml.databases.schemas.image_frames import ImageFrameDatasetSchema, ImageFrameDataModel
 from autoware_ml.databases.schemas.category_mapping import (
     CategoryMappingDataModel,
     CategoryMappingDatasetSchema,
@@ -76,6 +77,11 @@ class DatasetTableSchema:
     # LiDAR Sources Schema
     LIDAR_SOURCES = DatasetTableColumn(
         "lidar_sources", pl.List(pl.Struct(LidarSourceDatasetSchema.to_polars_field_schema()))
+    )
+
+    # Image Frames Schema
+    IMAGE_FRAMES = DatasetTableColumn(
+        "image_frames", pl.List(pl.Struct(ImageFrameDatasetSchema.to_polars_field_schema()))
     )
 
     # Category Schema
@@ -143,6 +149,7 @@ class DatasetRecord(BaseModel, DataModelInterface):
 
     lidar_frames: Sequence[LidarFrameDataModel]
     lidar_sources: Sequence[LidarSourceDataModel] | None
+    image_frames: Sequence[ImageFrameDataModel] | None
     category_mapping: CategoryMappingDataModel | None
     boxes_3d: Sequence[Box3DDataModel] | None
 
@@ -172,6 +179,13 @@ class DatasetRecord(BaseModel, DataModelInterface):
             ]
         else:
             data_model[DatasetTableSchema.LIDAR_SOURCES.name] = []
+
+        if self.image_frames:
+            data_model[DatasetTableSchema.IMAGE_FRAMES.name] = [
+                image_frame.to_dictionary() for image_frame in self.image_frames
+            ]
+        else:
+            data_model[DatasetTableSchema.IMAGE_FRAMES.name] = []
 
         if self.category_mapping:
             data_model[DatasetTableSchema.CATEGORY_MAPPING.name] = (
@@ -215,6 +229,15 @@ class DatasetRecord(BaseModel, DataModelInterface):
         else:
             lidar_sources = None
 
+        image_frames = data_model[DatasetTableSchema.IMAGE_FRAMES.name]
+        if image_frames is not None:
+            image_frames = [
+                ImageFrameDataModel.load_from_dictionary(image_frame)
+                for image_frame in image_frames
+            ]
+        else:
+            image_frames = None
+
         category_mapping = data_model[DatasetTableSchema.CATEGORY_MAPPING.name]
         if category_mapping is not None:
             category_mapping = CategoryMappingDataModel.load_from_dictionary(category_mapping)
@@ -237,6 +260,7 @@ class DatasetRecord(BaseModel, DataModelInterface):
             scenario_name=data_model[DatasetTableSchema.SCENARIO_NAME.name],
             lidar_frames=lidar_frames,
             lidar_sources=lidar_sources,
+            image_frames=image_frames,
             category_mapping=category_mapping,
             boxes_3d=boxes_3d,
         )
