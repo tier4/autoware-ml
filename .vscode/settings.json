@@ -53,7 +53,12 @@
     "node_modules",
     "site"
   ],
-  "python.defaultInterpreterPath": "/opt/conda/bin/python",
+  "python.defaultInterpreterPath": "/opt/pixi/envs/autoware-ml-3316095427567709615/envs/dev/bin/python",
+  "python.analysis.languageServerMode": "full",
+  "python.analysis.indexing": true,
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}"
+  ],
   "python-envs.defaultEnvManager": "ms-python.python:system",
   "remote.autoForwardPorts": false,
   "ruff.lineLength": 100,
