@@ -347,6 +347,8 @@ class DataModule(L.LightningDataModule, ABC):
         if isinstance(value, np.ndarray):
             array = value if value.flags.c_contiguous else np.ascontiguousarray(value)
             return torch.from_numpy(array)
+        if isinstance(value, (np.number, np.bool_)):
+            return torch.from_numpy(np.asarray(value))
         # `bool` is a subclass of `int` and is handled by the same branch.
         if isinstance(value, (int, float)):
             return torch.tensor(value)

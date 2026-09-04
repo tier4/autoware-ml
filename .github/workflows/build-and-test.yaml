@@ -82,7 +82,7 @@ jobs:
         run: |
           docker run --rm \
             ${{ env.IMAGE_TAG }} \
-            pytest autoware_ml/tests/ -v
+            pytest autoware_ml/ -v
 
   required:
     name: build-and-test-required

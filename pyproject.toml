@@ -100,7 +100,7 @@ wheel = "*"
 install-project = "python -m pip install --no-cache-dir --no-build-isolation --no-deps -e ."
 install-bash-completion = "bash -lc 'mkdir -p \"${HOME}/.local/share/bash-completion/completions\" && autoware-ml --show-completion bash > \"${HOME}/.local/share/bash-completion/completions/autoware-ml\"'"
 setup-project = { depends-on = ["install-project", "install-bash-completion"] }
-test = "pytest autoware_ml/tests/ -v"
+test = "pytest autoware_ml/ -v"
 
 # Full contributor environment on top of the default runtime/use stack.
 [tool.pixi.feature.dev.dependencies]
