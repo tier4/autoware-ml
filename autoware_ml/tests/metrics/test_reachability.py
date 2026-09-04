@@ -13,10 +13,10 @@ from autoware_ml.metrics.geometry.reachability import (
     EgoReachability,
     ReachabilityParams,
     collision_weights,
-    reachable_region,
     reachable_set,
     time_to_collision,
-    wheeled_front,
+    wheeled_reachable_region,
+    wheeled_reachable_set,
 )
 from autoware_ml.types.metrics import AgentKind
 
@@ -29,11 +29,13 @@ def _footprint(x: float, y: float, size: float = 2.0):
     return box(x - size / 2, y - size / 2, x + size / 2, y + size / 2)
 
 
-def test_same_speed_lead_never_collides() -> None:
-    # Following a vehicle at matched speed: fronts stay a constant gap apart -> inf.
+def test_same_speed_lead_still_collides_in_the_worst_case() -> None:
+    # Matched speed is no protection: the lead can brake or reverse while ego
+    # keeps going, so the gap closes at the sum of the two worst-case speeds.
     ego = Agent.wheeled(0.0, 0.0, heading=0.0, speed=10.0, body_radius=1.2)
     lead = Agent.wheeled(25.0, 0.0, heading=0.0, speed=10.0, body_radius=1.2)
-    assert time_to_collision(ego, lead, ROAD, PARAMS) == inf
+    ttc = time_to_collision(ego, lead, ROAD, PARAMS)
+    assert ttc == pytest.approx(1.2, abs=PARAMS.dt_s)  # ~ (25 - 1.2 - 1.2) / 20
 
 
 def test_stationary_object_ahead_finite_near_distance_over_speed() -> None:
@@ -74,7 +76,7 @@ def test_far_object_is_rejected_cheaply() -> None:
     assert time_to_collision(ego, obj, ROAD, PARAMS) == inf
 
 
-def test_wheeled_front_needs_drivable() -> None:
+def test_a_wheeled_set_needs_a_drivable_surface() -> None:
     ego = Agent.wheeled(0.0, 0.0, heading=0.0, speed=10.0, body_radius=1.0)
     obj = Agent.static(20.0, 0.0, footprint=_footprint(20.0, 0.0))
     with pytest.raises(ValueError, match="drivable"):
@@ -82,9 +84,9 @@ def test_wheeled_front_needs_drivable() -> None:
 
 
 def test_disconnected_road_is_unreachable() -> None:
-    # Two drivable strips separated by a non-drivable gap: arcs whose endpoints land
-    # on the other strip cross the gap, so the strips can never meet. A wheeled agent
-    # off the surface entirely has no feasible arc at all.
+    # Two drivable strips separated by a non-drivable gap: an arc onto the other
+    # strip crosses the gap, so the strips can never meet. A wheeled agent off the
+    # surface entirely has no drivable arc at all.
     split_road = box(-80.0, -10.0, 200.0, 10.0).union(box(-80.0, 20.0, 200.0, 40.0))
     ego = Agent.wheeled(0.0, 0.0, heading=0.0, speed=10.0, body_radius=1.0)
     oncoming_across = Agent.wheeled(5.0, 30.0, heading=-pi / 2, speed=10.0, body_radius=1.0)
@@ -92,7 +94,7 @@ def test_disconnected_road_is_unreachable() -> None:
     off_road = Agent.wheeled(0.0, 60.0, heading=0.0, speed=10.0, body_radius=1.0)
     assert time_to_collision(ego, off_road, ROAD, PARAMS) == inf
     # The filled reachable region keeps only the strip the agent is on.
-    region = reachable_region(ego, PARAMS, split_road)
+    region = wheeled_reachable_region(ego, PARAMS, split_road)
     assert region.intersection(box(-80.0, 20.0, 200.0, 40.0)).is_empty
 
 
@@ -120,11 +122,11 @@ def test_collision_weights_monotone_and_bounds() -> None:
 
 
 def test_low_speed_region_stays_valid_past_pi_sweep() -> None:
-    # At low speed the max-curvature arcs sweep past pi and the raw hat ring
-    # self-touches, the region must still come out valid with sane membership.
+    # At low speed the max-curvature arcs sweep past pi and fold over each other,
+    # the region must still come out valid with sane membership.
     for speed in (0.83, 2.78, 3.0):
         agent = Agent.wheeled(0.0, 0.0, heading=0.0, speed=speed, body_radius=1.0)
-        region = reachable_region(agent, PARAMS, ROAD)
+        region = wheeled_reachable_region(agent, PARAMS, ROAD)
         assert region.is_valid and not region.is_empty
         assert region.contains(Point(min(speed * PARAMS.horizon_s * 0.9, 10.0), 0.0))
 
@@ -168,14 +170,14 @@ def test_ego_reachability_matches_bruteforce_stepping() -> None:
         assert frame.time_to_collision(obj) == brute_force(ego, obj), f"agent {index}: {obj}"
 
 
-def test_the_region_covers_every_front_including_the_first_step() -> None:
+def test_the_region_covers_every_step_including_the_first() -> None:
     """The prescreen only holds if the hat is a superset, right down to t = dt."""
     ego = Agent.wheeled(0.0, 0.0, heading=0.0, speed=10.0, body_radius=1.2)
-    hat = reachable_region(ego, PARAMS, ROAD)
+    hat = wheeled_reachable_region(ego, PARAMS, ROAD)
 
     for step in (1, 5, 10, 40):
-        front = wheeled_front(ego, step * PARAMS.dt_s, PARAMS, ROAD)
-        assert front.difference(hat).area < 1e-9, f"step {step} escapes the hat"
+        reachable = wheeled_reachable_set(ego, step * PARAMS.dt_s, PARAMS, ROAD)
+        assert reachable.difference(hat).area < 1e-9, f"step {step} escapes the hat"
 
 
 def test_an_object_beside_ego_collides_at_the_first_step() -> None:
@@ -187,14 +189,14 @@ def test_an_object_beside_ego_collides_at_the_first_step() -> None:
 
 
 def test_the_body_sweep_does_not_cross_a_narrow_median() -> None:
-    """Buffering the endpoints must not hop a gap thinner than the body."""
+    """Buffering the swept path must not hop a gap thinner than the body."""
     median = box(-100.0, -4.0, 200.0, 0.0).union(box(-100.0, 0.5, 200.0, 4.5))
     ego = Agent.wheeled(0.0, -2.0, heading=0.0, speed=10.0, body_radius=1.2)
     oncoming = Agent.wheeled(40.0, 2.5, heading=pi, speed=10.0, body_radius=1.2)
 
-    front = wheeled_front(ego, 2.0, PARAMS, median)
+    reachable = wheeled_reachable_set(ego, 2.0, PARAMS, median)
 
-    assert front.intersection(box(-100.0, 0.5, 200.0, 4.5)).is_empty
+    assert reachable.intersection(box(-100.0, 0.5, 200.0, 4.5)).is_empty
     assert EgoReachability(ego, median, PARAMS).time_to_collision(oncoming) == inf
 
 
@@ -230,8 +232,8 @@ def test_a_hairline_map_seam_does_not_shrink_the_front() -> None:
     seamless = box(-80.0, -3.5, 400.0, 3.5)
     ego = Agent.wheeled(0.0, -1.75, heading=0.0, speed=10.0, body_radius=1.0)
 
-    seamed_area = EgoReachability(ego, seamed, PARAMS)._front(30).area
-    seamless_area = EgoReachability(ego, seamless, PARAMS)._front(30).area
+    seamed_area = EgoReachability(ego, seamed, PARAMS)._reachable_set(30).area
+    seamless_area = EgoReachability(ego, seamless, PARAMS)._reachable_set(30).area
 
     assert seamed_area == pytest.approx(seamless_area, rel=1e-6)
 

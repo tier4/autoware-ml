@@ -14,22 +14,22 @@
 
 """Reachability time-to-collision for the criticality metrics.
 
-One planner-independent model. Every agent, ego included, travels at the
-maximum map-legal speed for its class. The recorded path and observed
-velocities are never used. Time-to-collision is the earliest look-ahead time
-``t`` at which ego and the object can occupy a common point at the same time
-``t``, each having travelled exactly ``speed * t`` along a feasible path
-(reachable at ``t``, not "arrive early and wait"). That is what makes
-same-direction traffic at matched speed non-critical: the two fronts stay a
-constant gap apart and never meet, so TTC = inf and its collision weight is 0.
+One planner-independent model answering the perception question: if ego never
+detects this object, what is the worst that can follow? Time-to-collision is
+therefore the earliest look-ahead time ``t`` at which ego and the object can
+share a point under the worst action either of them may take, never a
+prediction of what they will do. Recorded paths and observed velocities are
+never used, every agent moves at the maximum speed its class and the map allow,
+in whichever direction hurts most. Same-direction traffic at matched speed is
+not exempt: the lead can brake to a stop and ego can keep going, so a close
+lead has a small TTC.
 
 Reachable-at-``t`` set by class, in the map frame (metres):
 
-* wheeled (car / truck / bus / train / motorcycle, and ego): the endpoints
-  of every feasible constant-curvature arc of length ``v * t`` under bounded
-  steering (minimum turn radius), a curved front, clipped to the drivable
-  area (an arc leaving the road is infeasible) and given the vehicle's body
-  half-width.
+* wheeled (car / truck / bus / train / motorcycle, and ego): everything the
+  body sweeps along any feasible constant-curvature arc under bounded steering
+  (minimum turn radius) while travelling up to ``v * t`` forward or in reverse,
+  clipped to the drivable area, an arc truncated where it leaves the road.
 * living (pedestrian / animal / bicycle): the disc of radius ``v * t`` about the
   current position, free to move in any direction, over any surface.
 * static (barrier / traffic_cone / debris / bicycle_rack / vehicle_extension):
@@ -271,23 +271,44 @@ def _connected_sweep(locus: BaseGeometry, body: float, drivable: BaseGeometry) -
     return shapely.union_all([part for part in parts if part.intersects(locus)])
 
 
-def wheeled_front(
+def _feasible_arc(arc: LineString, seed: Point, drivable: BaseGeometry) -> LineString | None:
+    """The part of ``arc`` the agent can actually drive, from its own position.
+
+    An arc that leaves the road is truncated there rather than discarded, so a
+    lane that merely brushes a kerb keeps the travel before it. A reference point
+    off the surface has no drivable arc at all.
+    """
+    if drivable.covers(arc):
+        return arc
+    parts = [
+        part
+        for part in shapely.get_parts(arc.intersection(drivable))
+        if part.geom_type == "LineString" and not part.is_empty
+    ]
+    for part in parts:
+        if part.distance(seed) <= SURFACE_TOLERANCE_M:
+            return part
+    return None
+
+
+def wheeled_reachable_set(
     agent: Agent, t: float, params: ReachabilityParams, drivable: BaseGeometry
 ) -> BaseGeometry:
-    """The wheeled reachable-at-``t`` front: buffered endpoint locus of the feasible arcs.
+    """Everything a wheeled agent's body can occupy within ``t``, the worst case.
 
-    Every constant-curvature arc is sampled as a polyline at the front's own
-    resolution and kept only when the whole path stays on the drivable surface,
-    so an endpoint across a gap in the road stays unreachable even when it lands
-    on another drivable polygon. An agent whose reference point is off the
-    surface has no feasible arc and an empty front. The endpoints of consecutive
-    feasible arcs form the front, swept by the body radius and clipped to the
-    surface, and a sweep that would cross a non-drivable gap keeps only the part
-    connected to those endpoints. A stopped agent owns its own body, clipped the
-    same way.
+    The agent may travel up to ``speed * t`` forward or in reverse along any
+    constant-curvature arc its minimum turn radius allows, so the set is the body
+    swept over every such arc, truncated where an arc leaves the road, clipped to
+    the surface, and reduced to the part still connected to the agent (a body
+    must not hop a kerb into a lane it cannot drive to). An agent whose reference
+    point is off the surface reaches nothing.
+
+    The set grows with ``t``, so the same call at the horizon is the region the
+    prescreen and the collision filter use.
 
     The surface is expected to be sealed against hairline seams, which
-    :class:`EgoReachability` and :func:`reachable_region` do for their callers.
+    :class:`EgoReachability` and :func:`wheeled_reachable_region` do for their
+    callers.
 
     Args:
         agent: Wheeled agent in the map frame.
@@ -296,44 +317,34 @@ def wheeled_front(
         drivable: Drivable surface the arcs must stay on.
 
     Returns:
-        The buffered front geometry, empty when no arc is feasible.
+        The swept reachable set, empty when no arc is drivable.
     """
-    length = agent.speed * t
-    if length <= 1e-6:
-        # A stopped agent still owns its body, clipped like a moving front so it
-        # cannot spill over a kerb or a median into a lane it cannot drive to.
-        return _connected_sweep(Point(agent.x, agent.y), agent.body_radius, drivable)
+    seed = Point(agent.x, agent.y)
+    reach = agent.speed * t
+    if reach <= SURFACE_TOLERANCE_M:
+        # An agent that cannot move still owns its body, clipped the same way.
+        return _connected_sweep(seed, agent.body_radius, drivable)
     kmax = 1.0 / params.turn_radius(agent.speed)
-    grid = _arc_grid(agent, length, kmax, params.arc_samples)
-    runs: list[list[tuple[float, float]]] = [[]]
-    for arc in grid:
-        if drivable.covers(LineString(arc)):
-            runs[-1].append((float(arc[-1][0]), float(arc[-1][1])))
-        elif runs[-1]:
-            runs.append([])
-    pieces = [
-        _connected_sweep(
-            LineString(run) if len(run) > 1 else Point(run[0]), agent.body_radius, drivable
-        )
-        for run in runs
-        if run
-    ]
+    pieces = []
+    # Forward and reverse: the worst case is whichever direction closes the gap.
+    for signed_reach in (reach, -reach):
+        for arc in _arc_grid(agent, signed_reach, kmax, params.arc_samples):
+            drivable_arc = _feasible_arc(LineString(arc), seed, drivable)
+            if drivable_arc is not None:
+                pieces.append(_connected_sweep(drivable_arc, agent.body_radius, drivable))
     if not pieces:
         return Polygon()
     return shapely.union_all(pieces)
 
 
-def reachable_region(
-    agent: Agent, params: ReachabilityParams, drivable: BaseGeometry | None
+def wheeled_reachable_region(
+    agent: Agent, params: ReachabilityParams, drivable: BaseGeometry
 ) -> BaseGeometry:
-    """Filled region a wheeled agent can reach within the horizon (the "hat").
+    """The wheeled reachable set over the whole horizon (the "hat").
 
-    Union of its fronts over ``t`` in ``(0, T]``, whose boundary is the two
-    extreme max-curvature arcs plus the far arc at ``t = T``, swept by the body
-    radius and clipped to ``drivable``. The sweep covers the agent's own body at
-    the start, which keeps the region a superset of every front and is what the
-    prescreen relies on. Used by the collision filter's in-the-ego-path
-    membership test.
+    Every per-step set is a subset of this one, which is what the prescreen
+    relies on, and it is also the collision filter's in-the-ego-path test. The
+    surface is sealed here so callers do not have to.
 
     Args:
         agent: Wheeled agent in the map frame.
@@ -343,26 +354,11 @@ def reachable_region(
     Returns:
         The filled reachable region.
     """
-    length = agent.speed * params.horizon_s
-    if length <= 1e-6:
-        region = Point(agent.x, agent.y).buffer(agent.body_radius)
-    else:
-        kmax = 1.0 / params.turn_radius(agent.speed)
-        n = params.arc_samples
-        x, y, heading = agent.x, agent.y, agent.heading
-        left = [_arc_endpoint(x, y, heading, kmax, float(s)) for s in np.linspace(0.0, length, n)]
-        far = [_arc_endpoint(x, y, heading, float(k), length) for k in np.linspace(kmax, -kmax, n)]
-        right = [_arc_endpoint(x, y, heading, -kmax, float(s)) for s in np.linspace(length, 0.0, n)]
-        shell = Polygon(left + far + right)
-        if not shell.is_valid:
-            # At low speed the max-curvature arcs sweep past pi and the ring
-            # self-touches, so it is repaired into the parts it covers.
-            shell = shapely.union_all(_polygonal_parts(shapely.make_valid(shell)))
-        region = shell.buffer(agent.body_radius + REGION_SLACK_M)
-    if drivable is not None:
-        sealed = drivable.buffer(SURFACE_TOLERANCE_M)
-        region = _seed_component(region.intersection(sealed), Point(agent.x, agent.y))
-    return region
+    sealed = drivable.buffer(SURFACE_TOLERANCE_M)
+    shapely.prepare(sealed)
+    region = wheeled_reachable_set(agent, params.horizon_s, params, sealed)
+    # A numerical margin only: the per-step sets are subsets by construction.
+    return region.buffer(REGION_SLACK_M).intersection(sealed)
 
 
 def _polygonal_parts(geometry: BaseGeometry) -> list[BaseGeometry]:
@@ -415,7 +411,7 @@ def reachable_set(
         return Point(agent.x, agent.y).buffer(agent.speed * t + agent.body_radius)
     if drivable is None:
         raise ValueError("a wheeled reachable set needs a drivable polygon.")
-    return wheeled_front(agent, t, params, drivable)
+    return wheeled_reachable_set(agent, t, params, drivable)
 
 
 class EgoReachability:
@@ -456,18 +452,20 @@ class EgoReachability:
             box(ego.x - reach, ego.y - reach, ego.x + reach, ego.y + reach)
         ).buffer(SURFACE_TOLERANCE_M)
         shapely.prepare(self._drivable)
-        self._hat = reachable_region(ego, params, self._drivable)
+        self._hat = wheeled_reachable_region(ego, params, self._drivable)
         shapely.prepare(self._hat)
-        self._fronts: list[BaseGeometry | None] = [None] * (self.steps + 1)
+        self._sets: list[BaseGeometry | None] = [None] * (self.steps + 1)
 
-    def _front(self, index: int) -> BaseGeometry:
-        """Ego's prepared reachable-at-``index * dt`` front (built once per step)."""
-        front = self._fronts[index]
-        if front is None:
-            front = wheeled_front(self.ego, index * self.params.dt_s, self.params, self._drivable)
-            shapely.prepare(front)
-            self._fronts[index] = front
-        return front
+    def _reachable_set(self, index: int) -> BaseGeometry:
+        """Ego's prepared reachable-by-``index * dt`` set (built once per step)."""
+        reachable = self._sets[index]
+        if reachable is None:
+            reachable = wheeled_reachable_set(
+                self.ego, index * self.params.dt_s, self.params, self._drivable
+            )
+            shapely.prepare(reachable)
+            self._sets[index] = reachable
+        return reachable
 
     def _first_step(self, distance: float, speed: float, body: float) -> int | None:
         """Earliest step at which a set growing ``speed * t + body`` spans ``distance``.
@@ -510,7 +508,7 @@ class EgoReachability:
             if start is None:
                 return inf
             for index in range(start, self.steps + 1):
-                if self._front(index).intersects(obj.footprint):
+                if self._reachable_set(index).intersects(obj.footprint):
                     return index * params.dt_s
             return inf
 
@@ -535,7 +533,7 @@ class EgoReachability:
         for index in range(max(start_hat, start_gap), self.steps + 1):
             t = index * params.dt_s
             obj_set = reachable_set(obj, t, params, surface)
-            if not obj_set.is_empty and self._front(index).intersects(obj_set):
+            if not obj_set.is_empty and self._reachable_set(index).intersects(obj_set):
                 return t
         return inf
 
