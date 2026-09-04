@@ -450,7 +450,8 @@ class EgoReachability:
             # A static set never grows: it must already meet the hat.
             if not self._hat.intersects(obj.footprint):
                 return inf
-            # Ego's front is within speed * t + body of ego's position.
+            # Only ego moves against a static set, so the reachable side that
+            # grows is ego's, by speed * t plus its body.
             distance = obj.footprint.distance(Point(ego.x, ego.y))
             start = self._first_step(distance, ego.speed, ego.body_radius)
             if start is None:
