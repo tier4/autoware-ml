@@ -126,9 +126,11 @@ class Agent:
 
     ``kind`` selects the reachable-set shape. ``heading`` and ``speed`` are used
     by the wheeled kind, the living kind uses ``speed`` isotropically, and the
-    static kind ignores both and uses ``footprint``. ``body_radius`` is the
-    half-extent added so a collision is a footprint overlap, not a point
-    coincidence.
+    static kind ignores both and uses ``footprint``. ``half_length`` and
+    ``half_width`` are the body's extents along and across the heading, so a
+    collision is a body overlap rather than a point coincidence. A twelve metre
+    truck is not a disc, and modelling it as one would misplace its reach by
+    metres.
 
     Nothing is defaulted: a vehicle silently placed at heading 0 or speed 0
     scores a plausible looking TTC that is simply wrong. Build agents through
@@ -141,11 +143,14 @@ class Agent:
     y: float
     heading: float
     speed: float
-    body_radius: float
+    half_length: float
+    half_width: float
     footprint: Polygon | None = None
 
     @classmethod
-    def wheeled(cls, x: float, y: float, heading: float, speed: float, body_radius: float) -> Agent:
+    def wheeled(
+        cls, x: float, y: float, heading: float, speed: float, length: float, width: float
+    ) -> Agent:
         """A road-bound agent, whose reachable set follows its heading.
 
         Args:
@@ -153,27 +158,28 @@ class Agent:
             y: Position along the map y axis in meters.
             heading: Orientation in radians, counter-clockwise from the x axis.
             speed: Worst-case speed in m/s.
-            body_radius: Collision half-extent in meters.
+            length: Body length along the heading in meters.
+            width: Body width across the heading in meters.
 
         Returns:
             The wheeled agent.
         """
-        return cls(AgentKind.WHEELED, x, y, heading, speed, body_radius)
+        return cls(AgentKind.WHEELED, x, y, heading, speed, length / 2.0, width / 2.0)
 
     @classmethod
-    def living(cls, x: float, y: float, speed: float, body_radius: float) -> Agent:
+    def living(cls, x: float, y: float, speed: float, radius: float) -> Agent:
         """A pedestrian, animal or cyclist, whose reachable set is a disc.
 
         Args:
             x: Position along the map x axis in meters.
             y: Position along the map y axis in meters.
             speed: Worst-case speed in m/s, reachable in any direction.
-            body_radius: Collision half-extent in meters.
+            radius: Body radius in meters, isotropic like the motion.
 
         Returns:
             The living agent, whose heading no reachable set reads.
         """
-        return cls(AgentKind.LIVING, x, y, 0.0, speed, body_radius)
+        return cls(AgentKind.LIVING, x, y, 0.0, speed, radius, radius)
 
     @classmethod
     def static(cls, x: float, y: float, footprint: Polygon) -> Agent:
@@ -189,7 +195,14 @@ class Agent:
         """
         min_x, min_y, max_x, max_y = footprint.bounds
         return cls(
-            AgentKind.STATIC, x, y, 0.0, 0.0, hypot(max_x - min_x, max_y - min_y) / 2.0, footprint
+            AgentKind.STATIC,
+            x,
+            y,
+            0.0,
+            0.0,
+            (max_x - min_x) / 2.0,
+            (max_y - min_y) / 2.0,
+            footprint,
         )
 
     def __post_init__(self) -> None:
@@ -206,9 +219,21 @@ class Agent:
             raise ValueError("x, y, heading and speed must be finite.")
         if self.speed < 0.0:
             raise ValueError("speed must be >= 0.")
-        if not isfinite(self.body_radius) or self.body_radius <= 0.0:
+        if not all(isfinite(value) for value in (self.half_length, self.half_width)):
+            raise ValueError("half_length and half_width must be finite.")
+        if self.half_length <= 0.0 or self.half_width <= 0.0:
             # A zero body collapses every sweep to an empty geometry, same trap.
-            raise ValueError("body_radius must be a finite value > 0.")
+            raise ValueError("half_length and half_width must be > 0.")
+
+    @property
+    def body_reach(self) -> float:
+        """Farthest the swept body reaches from its reference point.
+
+        Along its path the body ends half a length ahead and the sweep rounds
+        that end off with the half width, so this is the padding every distance
+        bound needs to stay a superset.
+        """
+        return self.half_length + self.half_width
 
 
 def _arc_endpoint(
@@ -258,17 +283,22 @@ def _arc_grid(agent: Agent, length: float, kmax: float, samples: int) -> np.ndar
     )
 
 
-def _connected_sweep(locus: BaseGeometry, body: float, drivable: BaseGeometry) -> BaseGeometry:
+def _connected_sweep(
+    locus: BaseGeometry, body: float, drivable: BaseGeometry, anchor: BaseGeometry | None = None
+) -> BaseGeometry:
     """The body sweep around ``locus``, keeping only what stays connected to it.
 
     Buffering first and clipping second would let the body hop a non-drivable gap
     narrower than itself and re-land on a disconnected carriageway, so the parts
-    of the clipped sweep that do not touch the locus are dropped. A locus off the
-    surface keeps nothing, the same answer an infeasible arc gets.
+    of the clipped sweep that do not touch ``anchor`` are dropped. The anchor is
+    the driven path, which is on the surface, while ``locus`` may include the body
+    overhang past its ends. A locus off the surface keeps nothing, the same answer
+    an infeasible arc gets.
     """
     sweep = locus.buffer(body).intersection(drivable)
+    reference = locus if anchor is None else anchor
     parts = _polygonal_parts(sweep)
-    return shapely.union_all([part for part in parts if part.intersects(locus)])
+    return shapely.union_all([part for part in parts if part.intersects(reference)])
 
 
 def _feasible_arc(arc: LineString, seed: Point, drivable: BaseGeometry) -> LineString | None:
@@ -289,6 +319,39 @@ def _feasible_arc(arc: LineString, seed: Point, drivable: BaseGeometry) -> LineS
         if part.distance(seed) <= SURFACE_TOLERANCE_M:
             return part
     return None
+
+
+def _extended_path(path: LineString, half_length: float) -> LineString:
+    """``path`` grown by ``half_length`` at both ends along its own tangents.
+
+    A body is not a point on its path: its nose reaches half a length beyond
+    where its reference point stops, and its tail trails the same distance
+    behind. Extending the path and buffering by the half width sweeps the body
+    with rounded instead of square corners, which no map geometry can tell apart.
+    """
+    coords = list(path.coords)
+    (first_x, first_y), (second_x, second_y) = coords[0], coords[1]
+    (last_x, last_y), (previous_x, previous_y) = coords[-1], coords[-2]
+    head = _stepped_point(first_x, first_y, first_x - second_x, first_y - second_y, half_length)
+    tail = _stepped_point(last_x, last_y, last_x - previous_x, last_y - previous_y, half_length)
+    return LineString([head, *coords, tail])
+
+
+def _stepped_point(
+    x: float, y: float, dx: float, dy: float, distance: float
+) -> tuple[float, float]:
+    """``(x, y)`` moved ``distance`` along the ``(dx, dy)`` direction."""
+    norm = hypot(dx, dy)
+    if norm <= 0.0:
+        return (x, y)
+    return (x + dx / norm * distance, y + dy / norm * distance)
+
+
+def _body_sweep(path: LineString, agent: Agent, drivable: BaseGeometry) -> BaseGeometry:
+    """The agent's body swept along ``path``, clipped and kept connected to it."""
+    return _connected_sweep(
+        _extended_path(path, agent.half_length), agent.half_width, drivable, anchor=path
+    )
 
 
 def wheeled_reachable_set(
@@ -323,7 +386,10 @@ def wheeled_reachable_set(
     reach = agent.speed * t
     if reach <= SURFACE_TOLERANCE_M:
         # An agent that cannot move still owns its body, clipped the same way.
-        return _connected_sweep(seed, agent.body_radius, drivable)
+        along = (cos(agent.heading), sin(agent.heading))
+        nose = _stepped_point(agent.x, agent.y, *along, agent.half_length)
+        tail = _stepped_point(agent.x, agent.y, -along[0], -along[1], agent.half_length)
+        return _connected_sweep(LineString([tail, nose]), agent.half_width, drivable, anchor=seed)
     kmax = 1.0 / params.turn_radius(agent.speed)
     pieces = []
     # Forward and reverse: the worst case is whichever direction closes the gap.
@@ -331,7 +397,7 @@ def wheeled_reachable_set(
         for arc in _arc_grid(agent, signed_reach, kmax, params.arc_samples):
             drivable_arc = _feasible_arc(LineString(arc), seed, drivable)
             if drivable_arc is not None:
-                pieces.append(_connected_sweep(drivable_arc, agent.body_radius, drivable))
+                pieces.append(_body_sweep(drivable_arc, agent, drivable))
     if not pieces:
         return Polygon()
     return shapely.union_all(pieces)
@@ -408,7 +474,7 @@ def reachable_set(
     if agent.kind == AgentKind.STATIC:
         return agent.footprint
     if agent.kind == AgentKind.LIVING:
-        return Point(agent.x, agent.y).buffer(agent.speed * t + agent.body_radius)
+        return Point(agent.x, agent.y).buffer(agent.speed * t + agent.half_width)
     if drivable is None:
         raise ValueError("a wheeled reachable set needs a drivable polygon.")
     return wheeled_reachable_set(agent, t, params, drivable)
@@ -447,7 +513,7 @@ class EgoReachability:
         # non-divisible horizon never gains a step beyond it.
         self.steps = int(params.horizon_s / params.dt_s + 1e-9)
         self._surface = drivable
-        reach = ego.speed * params.horizon_s + ego.body_radius
+        reach = ego.speed * params.horizon_s + ego.body_reach
         self._drivable = drivable.intersection(
             box(ego.x - reach, ego.y - reach, ego.x + reach, ego.y + reach)
         ).buffer(SURFACE_TOLERANCE_M)
@@ -504,7 +570,7 @@ class EgoReachability:
             # Only ego moves against a static set, so the reachable side that
             # grows is ego's, by speed * t plus its body.
             distance = obj.footprint.distance(Point(ego.x, ego.y))
-            start = self._first_step(distance, ego.speed, ego.body_radius)
+            start = self._first_step(distance, ego.speed, ego.body_reach)
             if start is None:
                 return inf
             for index in range(start, self.steps + 1):
@@ -515,9 +581,9 @@ class EgoReachability:
         # Moving object: its set at t is within speed * t + body of its position, so
         # it must be able to reach the hat, and jointly close the gap to ego, in time.
         hat_distance = self._hat.distance(Point(obj.x, obj.y))
-        start_hat = self._first_step(hat_distance, obj.speed, obj.body_radius)
+        start_hat = self._first_step(hat_distance, obj.speed, obj.body_reach)
         gap = hypot(obj.x - ego.x, obj.y - ego.y)
-        start_gap = self._first_step(gap, ego.speed + obj.speed, ego.body_radius + obj.body_radius)
+        start_gap = self._first_step(gap, ego.speed + obj.speed, ego.body_reach + obj.body_reach)
         if start_hat is None or start_gap is None:
             return inf
         # A wheeled object's whole path must stay on the surface, so its feasibility
@@ -525,7 +591,7 @@ class EgoReachability:
         # never against ego's clip (the approach can start outside it).
         surface = None
         if obj.kind == AgentKind.WHEELED:
-            reach = obj.speed * params.horizon_s + obj.body_radius
+            reach = obj.speed * params.horizon_s + obj.body_reach
             surface = self._surface.intersection(
                 box(obj.x - reach, obj.y - reach, obj.x + reach, obj.y + reach)
             ).buffer(SURFACE_TOLERANCE_M)
