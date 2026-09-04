@@ -52,7 +52,6 @@ datamodule:
       - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
         name_mapping: ${dataset.detection3d.name_mapping}
         filter_attributes: ${dataset.detection3d.filter_attributes}
-        use_valid_flag: ${dataset.detection3d.use_valid_flag}
       - _target_: autoware_ml.transforms.camera.loading.LoadMultiViewImagesFromFiles
       - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
         sweeps_num: 2
@@ -95,7 +94,6 @@ datamodule:
       - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
         name_mapping: ${dataset.detection3d.name_mapping}
         filter_attributes: ${dataset.detection3d.filter_attributes}
-        use_valid_flag: ${dataset.detection3d.use_valid_flag}
       - _target_: autoware_ml.transforms.camera.loading.LoadMultiViewImagesFromFiles
       - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
         sweeps_num: 2
@@ -150,9 +148,12 @@ model:
     nms_type: circle
     nms_min_radius: 0.25
     nms_groups:
-      - class_names: [car, truck, bus]
+      - class_names: [car, truck, bus, train]
         nms_radius: 0.25
         post_max_size: 300
+      - class_names: [motorcycle]
+        nms_radius: 0.0
+        post_max_size: 50
       - class_names: [bicycle]
         nms_radius: 0.0
         post_max_size: 50
@@ -165,6 +166,18 @@ model:
       - class_names: [barrier]
         nms_radius: 0.0
         post_max_size: 50
+      - class_names: [animal]
+        nms_radius: 0.0
+        post_max_size: 50
+      - class_names: [debris]
+        nms_radius: 0.0
+        post_max_size: 50
+      - class_names: [vehicle_extension]
+        nms_radius: 0.0
+        post_max_size: 50
+      - class_names: [bicycle_rack]
+        nms_radius: 0.0
+        post_max_size: 50
     bbox_coder:
       post_center_range: [-200.0, -200.0, -10.0, 200.0, 200.0, 10.0]
-      score_threshold: [0.015, 0.010, 0.010, 0.020, 0.030, 0.040, 0.020]
+      score_threshold: [0.015, 0.010, 0.010, 0.010, 0.020, 0.020, 0.030, 0.030, 0.020, 0.040, 0.020, 0.020, 0.020]

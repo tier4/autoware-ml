@@ -72,14 +72,18 @@ class TestT4Detection3DDataset:
         names = output["gt_names"]
         num_points = output["gt_num_points"]
 
-        assert boxes.shape == (1, 9)
-        assert labels.tolist() == [0]
-        assert names.tolist() == ["car"]
-        assert num_points.tolist() == [12]
+        # An invalid 0-point box reaches eval and is filtered there by
+        # min_num_points, so the loader keeps both mapped instances and carries
+        # the point count through for the occlusion split.
+        assert boxes.shape == (2, 9)
+        assert labels.tolist() == [0, 2]
+        assert names.tolist() == ["car", "pedestrian"]
+        assert num_points.tolist() == [12, 0]
         assert np.allclose(boxes[0, -2:], np.array([0.1, 0.0], dtype=np.float32))
 
     def test_get_data_info_exposes_metadata_for_loader_pipeline(self, tmp_path) -> None:
-        lidar_path = tmp_path / "sample.bin"
+        lidar_path = tmp_path / "db" / "uuid" / "0" / "data" / "sample.bin"
+        lidar_path.parent.mkdir(parents=True)
         np.arange(10, dtype=np.float32).tofile(lidar_path)
 
         dataset = object.__new__(T4Detection3DDataset)
@@ -91,6 +95,7 @@ class TestT4Detection3DDataset:
                 "timestamp": 1700000000.1,
                 "instances": [],
                 "sweeps": [],
+                "ego2global": np.eye(4),
             }
         ]
         dataset.data_root = str(tmp_path)
@@ -164,6 +169,43 @@ class TestT4Detection3DDataset:
 
         assert dataset.frame_weights[5] > dataset.frame_weights[0]
         assert np.isclose(dataset.frame_weights[5], 42**0.25)
+
+    def test_frame_sampling_weights_skip_boxes_without_points(self) -> None:
+        # A rare-class box with no lidar points gives no supervision, so it must
+        # not earn its frame a repeat-factor boost.
+        def frame(token: str, name: str, num_points: int) -> dict:
+            return {
+                "token": token,
+                "instances": [
+                    {
+                        "bbox_3d_isvalid": True,
+                        "gt_nusc_name": "car",
+                        "bbox_3d": [0.0, 0.0, 0.0, 4.0, 1.8, 1.5, 0.0],
+                        "num_lidar_pts": 10,
+                    },
+                    {
+                        "bbox_3d_isvalid": True,
+                        "gt_nusc_name": name,
+                        "bbox_3d": [1.0, 1.0, 0.0, 0.6, 0.6, 1.2, 0.0],
+                        "num_lidar_pts": num_points,
+                    },
+                ],
+            }
+
+        frames = [frame(f"car_{index}", "car", 10) for index in range(5)]
+        frames.append(frame("ped_zero", "pedestrian", 0))
+        weights = compute_frame_sampling_weights(
+            frames,
+            ["car", "pedestrian"],
+            {"car": "car", "pedestrian": "pedestrian"},
+            FrameSamplingConfig(
+                repeat_sampling_factor=1.0,
+                object_bev_range=[-50.0, -50.0, 50.0, 50.0],
+                low_pedestrian_height_threshold=0.0,
+                low_pedestrian_bev_range=[-50.0, -50.0, 50.0, 50.0],
+            ),
+        )
+        assert weights == [1.0] * len(frames)
 
     def test_frame_sampling_weights_exclude_filtered_attributes(self) -> None:
         data_infos = [
@@ -364,6 +406,8 @@ class TestNuscenesDetection3DDataModule:
             "timestamp": 1700000000.1,
             "instances": [],
             "sweeps": [],
+            "ego2global": np.eye(4),
+            "scene_token": "scene-1",
         }
         with open(ann_file, "wb") as file:
             pickle.dump({"data_list": [sample], "metainfo": {"classes": ["car"]}}, file)
@@ -385,6 +429,7 @@ class TestNuscenesDetection3DDataModule:
         assert train_sample["name_mapping"] is None
         assert train_sample["label_to_category"] == {0: "car"}
         assert train_sample["timestamp"] == 1700000000.1
+        assert train_sample["scene_token"] == "scene-1"
 
     def test_rejects_train_frame_sampling(self, tmp_path) -> None:
         with pytest.raises(ValueError, match="train_frame_sampling"):
