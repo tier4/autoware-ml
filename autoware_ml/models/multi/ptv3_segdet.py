@@ -38,19 +38,22 @@ from torch.optim.lr_scheduler import LRScheduler
 from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
 from autoware_ml.models.detection3d.ptv3 import PTv3DetBEVNeck, build_det_head_export_spec
 from autoware_ml.models.segmentation3d.encoders.ptv3 import PointTransformerV3Encoder
+from autoware_ml.models.segmentation3d.encoders.voxel import MeanVoxelFeatureEncoder
 from autoware_ml.models.segmentation3d.heads.ptv3 import (
     PTv3SegDecoderHead,
     segmentation_eval_output,
+    segmentation_point_loss,
 )
 from autoware_ml.models.segmentation3d.ptv3_base import (
+    SERIALIZED_POOLING_FIELDS,
     PTv3BaseModel,
-    PTv3EncoderExportBase,
+    _run_ptv3_encoder_export,
     build_encoder_export_spec,
-    build_monolithic_export_inputs,
     build_point_feature_dynamic_axes,
     build_ptv3_export_context,
     build_ptv3_input_dynamic_axes,
     build_seg_head_export_spec,
+    prepare_ptv3_export_inputs,
     split_block_parameters,
 )
 from autoware_ml.utils.deploy import ExportSpec
@@ -70,6 +73,7 @@ class PTv3SegDetModel(PTv3BaseModel):
         seg3d_head: PTv3SegDecoderHead,
         bev_neck: PTv3DetBEVNeck,
         bbox_head: nn.Module,
+        time_lag_dim: int | None,
         segmentation_loss_weight: float = 1.0,
         detection_loss_weight: float = 1.0,
         export_output_names: Sequence[str] | None = None,
@@ -89,6 +93,8 @@ class PTv3SegDetModel(PTv3BaseModel):
                 classifier.
             bev_neck: Detection BEV neck consuming the encoder pooling chain.
             bbox_head: Detection head producing the decoded predictions.
+            time_lag_dim: Column of the input points holding the per-point
+                time lag, or ``None`` when the pipeline carries no time lag.
             segmentation_loss_weight: Weight of the segmentation loss term.
             detection_loss_weight: Weight of the detection loss term.
             export_output_names: Ordered output names used during export.
@@ -114,6 +120,7 @@ class PTv3SegDetModel(PTv3BaseModel):
         self.seg3d_head = seg3d_head
         self.bev_neck = bev_neck
         self.bbox_head = bbox_head
+        self.time_lag_dim = time_lag_dim
         self.segmentation_loss_weight = float(segmentation_loss_weight)
         self.detection_loss_weight = float(detection_loss_weight)
         self._export_output_names = (
@@ -140,16 +147,16 @@ class PTv3SegDetModel(PTv3BaseModel):
         }
 
     def forward(
-        self,
-        coord: torch.Tensor,
-        feat: torch.Tensor,
-        grid_coord: torch.Tensor,
-        offset: torch.Tensor,
+        self, voxels: torch.Tensor, num_points: torch.Tensor, voxel_coords: torch.Tensor
     ) -> dict[str, Any]:
-        """Run one shared PTv3 encoder pass and branch into both heads."""
-        point = self.encoder(
-            {"coord": coord, "feat": feat, "grid_coord": grid_coord, "offset": offset}
-        )
+        """Run one shared PTv3 encoder pass and branch into both heads.
+
+        Args:
+            voxels: Padded voxel points from the data preprocessing.
+            num_points: Valid point count per voxel.
+            voxel_coords: Voxel coordinates with a leading batch column.
+        """
+        point = self.encode(voxels, num_points, voxel_coords)
         # The BEV neck must read the encoder chain before the segmentation
         # decoder: SerializedUnpooling pops the chain and overwrites parent
         # features in place.
@@ -195,13 +202,15 @@ class PTv3SegDetModel(PTv3BaseModel):
     ) -> dict[str, torch.Tensor]:
         """Compute combined segmentation and detection losses.
 
-        The detection loss runs only on frames that carry ground-truth boxes;
-        on unlabeled frames, empty ground truth would turn every real object
-        into a hard negative.
+        The segmentation loss is computed at the point level: every point
+        supervises the logits of its voxel. The detection loss runs only on
+        frames that carry ground-truth boxes; on unlabeled frames, empty ground
+        truth would turn every real object into a hard negative.
         """
-        seg_logits = outputs["seg_logits"]
         det_outputs = outputs["det_outputs"]
-        seg_metrics = self.seg3d_head.loss(seg_logits, batch_inputs_dict["segment"])
+        seg_metrics = segmentation_point_loss(
+            self.seg3d_head, outputs["seg_logits"], batch_inputs_dict
+        )
 
         det_mask = self._detection_frame_mask(batch_inputs_dict)
         if bool(det_mask.any()):
@@ -249,7 +258,7 @@ class PTv3SegDetModel(PTv3BaseModel):
             for prediction, flagged in zip(predictions, det_mask.tolist())
         ]
         eval_out = detection_eval_output(predictions, batch)
-        eval_out.update(segmentation_eval_output(outputs["seg_logits"], batch))
+        eval_out.update(segmentation_eval_output(outputs["seg_logits"], batch, self.time_lag_dim))
         return eval_out
 
     def get_export_output_names(self) -> list[str]:
@@ -274,9 +283,11 @@ class PTv3SegDetModel(PTv3BaseModel):
                 "grid_size and point_cloud_range must be provided at construction time to use "
                 "export."
             )
-        inputs = build_monolithic_export_inputs(self, batch_inputs_dict)
+        inputs = prepare_ptv3_export_inputs(self, batch_inputs_dict)
+        export_input_args, input_param_names = inputs.encoder_args(SERIALIZED_POOLING_FIELDS)
         export_module = _PTv3SegDetExportModule(
             encoder=self._prepare_encoder_export(),
+            voxel_encoder=self.voxel_encoder,
             seg3d_head=self.seg3d_head.prepare_for_export(self.EXPORT_ORDER),
             bev_neck=deepcopy(self.bev_neck).eval(),
             bbox_head=self.bbox_head.prepare_for_export(),
@@ -285,8 +296,6 @@ class PTv3SegDetModel(PTv3BaseModel):
             output_names=self.get_export_output_names(),
         )
         export_module.eval()
-        export_input_args = inputs.args
-        input_param_names = inputs.input_names
         output_names = self.get_export_output_names()
         dynamic_axes = build_ptv3_input_dynamic_axes(input_param_names)
         dynamic_axes.update(
@@ -332,12 +341,13 @@ class PTv3SegDetModel(PTv3BaseModel):
         }
 
 
-class _PTv3SegDetExportModule(PTv3EncoderExportBase):
+class _PTv3SegDetExportModule(nn.Module):
     """ONNX-exportable PTv3 segmentation+detection graph with baked sparse shape."""
 
     def __init__(
         self,
         encoder: PointTransformerV3Encoder,
+        voxel_encoder: MeanVoxelFeatureEncoder,
         seg3d_head: PTv3SegDecoderHead,
         bev_neck: PTv3DetBEVNeck,
         bbox_head: nn.Module,
@@ -345,31 +355,47 @@ class _PTv3SegDetExportModule(PTv3EncoderExportBase):
         serialized_depth: torch.Tensor,
         output_names: Sequence[str],
     ) -> None:
-        super().__init__(encoder, sparse_shape, serialized_depth)
+        super().__init__()
+        self.encoder = encoder
+        self.voxel_encoder = voxel_encoder
         self.seg3d_head = seg3d_head
         self.bev_neck = bev_neck
         self.bbox_head = bbox_head
         self.output_names = list(output_names)
+        self.register_buffer("_sparse_shape", sparse_shape.to(dtype=torch.long), persistent=False)
+        self.register_buffer("_serialized_depth", serialized_depth, persistent=False)
 
     def forward(
         self,
+        voxels: torch.Tensor,
+        num_points_per_voxel: torch.Tensor,
         grid_coord: torch.Tensor,
-        feat: torch.Tensor,
         serialized_code: torch.Tensor,
         *serialized_pooling_inputs: torch.Tensor,
     ) -> tuple[torch.Tensor, ...]:
         """Run the export graph and return outputs in configured order.
 
         Args:
+            voxels: Padded voxel points.
+            num_points_per_voxel: Valid point count per voxel.
             grid_coord: Input voxel coordinates.
-            feat: Input point or voxel features.
-            serialized_code: Serialization codes for the base point set.
+            serialized_code: Serialization codes for the base voxel set.
             serialized_pooling_inputs: Precomputed pooling metadata tensors.
 
         Returns:
             Tuple of export tensors ordered according to ``output_names``.
         """
-        point = self.run_encoder(grid_coord, feat, serialized_code, *serialized_pooling_inputs)
+        point = _run_ptv3_encoder_export(
+            self.encoder,
+            self.voxel_encoder,
+            voxels,
+            num_points_per_voxel,
+            grid_coord,
+            self._serialized_depth,
+            serialized_code,
+            self._sparse_shape,
+            *serialized_pooling_inputs,
+        )
         # BEV branch first: the segmentation decoder consumes the pooling
         # chain destructively.
         bev_features = self.bev_neck(point)

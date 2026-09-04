@@ -374,6 +374,61 @@ class TestHardVoxelizationDummyPointData(unittest.TestCase):
                 max_voxels=10,
             )
 
+    def test_point_voxel_indices_map_every_input_point(self) -> None:
+        """Every input point maps to its voxel row; unassigned points get -1."""
+        points = torch.tensor(
+            [
+                [0.5, 0.5, 0.0, 1.0],  # voxel A
+                [9.0, 9.0, 0.0, 2.0],  # outside the range
+                [0.6, 0.6, 0.0, 3.0],  # voxel A, second slot
+                [0.7, 0.7, 0.0, 4.0],  # voxel A, beyond max_num_points
+                [1.5, 1.5, 0.0, 5.0],  # voxel B
+            ],
+            dtype=torch.float32,
+        )
+        batch_indices = torch.zeros(points.shape[0], dtype=torch.int32)
+
+        result = hard_voxelize(
+            points,
+            points_batch_indices=batch_indices,
+            voxel_size=torch.tensor([1.0, 1.0, 4.0]),
+            point_cloud_range=torch.tensor([0.0, 0.0, -2.0, 4.0, 4.0, 2.0]),
+            max_num_points=2,
+            max_voxels=8,
+        )
+
+        indices = result.point_voxel_indices
+        self.assertEqual(indices.dtype, torch.int64)
+        self.assertEqual(indices.shape, (points.shape[0],))
+        self.assertEqual(int(indices[1]), -1)
+        self.assertEqual(int(indices[0]), int(indices[2]))
+        self.assertEqual(int(indices[0]), int(indices[3]))
+        self.assertNotEqual(int(indices[0]), int(indices[4]))
+        self.assertEqual(result.num_points[indices[0]].item(), 2)
+        self.assertEqual(int(result.num_dropped_voxels), 0)
+        self.assertTrue(torch.equal(result.coords[indices[4]], torch.tensor([1, 1, 0], dtype=torch.int32)))
+
+    def test_point_voxel_indices_mark_dropped_voxels(self) -> None:
+        """Points whose voxel exceeds the max_voxels budget are unassigned."""
+        points = torch.tensor(
+            [[0.5, 0.5, 0.0, 1.0], [1.5, 1.5, 0.0, 2.0], [2.5, 2.5, 0.0, 3.0]],
+            dtype=torch.float32,
+        )
+        result = hard_voxelize(
+            points,
+            points_batch_indices=torch.zeros(3, dtype=torch.int32),
+            voxel_size=torch.tensor([1.0, 1.0, 4.0]),
+            point_cloud_range=torch.tensor([0.0, 0.0, -2.0, 4.0, 4.0, 2.0]),
+            max_num_points=2,
+            max_voxels=2,
+        )
+
+        self.assertEqual(result.voxels.shape[0], 2)
+        self.assertEqual(int(result.num_dropped_voxels), 1)
+        self.assertEqual(int((result.point_voxel_indices < 0).sum()), 1)
+        kept = result.point_voxel_indices[result.point_voxel_indices >= 0]
+        self.assertEqual(sorted(kept.tolist()), [0, 1])
+
     def test_boundary_points_never_exceed_grid(self) -> None:
         """Test the points that are on the edge never exceed the grid size."""
         # A point one float32 ulp below the upper range bound can floor to

@@ -201,14 +201,9 @@ def test_litept_is_a_drop_in_encoder_for_the_ptv3_segmentation_model() -> None:
     batch = move_batch_to_device(build_inputs(), torch.device("cuda"))
 
     with torch.no_grad():
-        logits = model(
-            coord=batch["coord"],
-            feat=batch["feat"],
-            grid_coord=batch["grid_coord"],
-            offset=batch["offset"],
-        )
+        logits = model(**batch)
 
-    assert logits.shape == (batch["coord"].shape[0], 3)
+    assert logits.shape == (batch["voxels"].shape[0], 3)
     assert torch.isfinite(logits).all()
 
 
@@ -223,7 +218,7 @@ def test_litept_split_export_declares_and_consumes_the_ptv3_contract() -> None:
     batch = move_batch_to_device(build_inputs(), torch.device("cuda"))
 
     specs = model.build_export_specs(batch)
-    encoder_spec = specs["encoder"]
+    encoder_spec = specs["ptv3_encoder"]
 
     assert "serialized_code" in encoder_spec.input_param_names
     assert not any("_cluster" in name for name in encoder_spec.input_param_names)
@@ -235,7 +230,7 @@ def test_litept_split_export_declares_and_consumes_the_ptv3_contract() -> None:
         stage_feats = encoder_spec.module(*encoder_spec.args)
     assert len(stage_feats) == 3
 
-    head_spec = specs["seg3d_head"]
+    head_spec = specs["ptv3_seg3d_head"]
     # dec_depths is all zeros, so the head reduces to features plus clusters.
     assert head_spec.input_param_names == [
         "point_feat_0",
@@ -246,8 +241,8 @@ def test_litept_split_export_declares_and_consumes_the_ptv3_contract() -> None:
     ]
     with torch.no_grad():
         pred_labels, pred_probs = head_spec.module(*head_spec.args)
-    assert pred_labels.shape == (batch["coord"].shape[0],)
-    assert pred_probs.shape == (batch["coord"].shape[0], 3)
+    assert pred_labels.shape == (batch["voxels"].shape[0],)
+    assert pred_probs.shape == (batch["voxels"].shape[0], 3)
 
 
 @REQUIRES_SPARSE_CUDA
@@ -265,8 +260,8 @@ def test_litept_monolithic_export_runs_on_its_declared_inputs() -> None:
 
     with torch.no_grad():
         pred_labels, pred_probs = spec.module(*spec.args)
-    assert pred_labels.shape == (batch["coord"].shape[0],)
-    assert pred_probs.shape == (batch["coord"].shape[0], 3)
+    assert pred_labels.shape == (batch["voxels"].shape[0],)
+    assert pred_probs.shape == (batch["voxels"].shape[0], 3)
 
 
 @REQUIRES_SPARSE_CUDA
@@ -278,8 +273,9 @@ def test_ptv3_monolithic_export_contract_still_lists_every_tensor() -> None:
     spec = model.build_export_spec(batch)
 
     assert spec.input_param_names == [
+        "voxels",
+        "num_points_per_voxel",
         "grid_coord",
-        "feat",
         "serialized_code",
         "serialized_pooling_0_indices",
         "serialized_pooling_0_indptr",
@@ -312,7 +308,7 @@ def test_exported_encoder_graph_declares_a_subset_of_the_contract(tmp_path) -> N
     for tag, model in (("litept", build_litept_seg_model()), ("ptv3", build_seg_model())):
         model = model.cuda().eval()
         batch = move_batch_to_device(build_inputs(), torch.device("cuda"))
-        spec = model.build_export_specs(batch)["encoder"]
+        spec = model.build_export_specs(batch)["ptv3_encoder"]
         path = tmp_path / f"{tag}_encoder.onnx"
 
         export_to_onnx(
@@ -328,7 +324,7 @@ def test_exported_encoder_graph_declares_a_subset_of_the_contract(tmp_path) -> N
         graph = onnx.load(str(path)).graph
         declared = {value.name for value in graph.input}
         assert declared <= set(spec.input_param_names), tag
-        assert {"grid_coord", "feat"} <= declared, tag
+        assert {"voxels", "num_points_per_voxel"} <= declared, tag
         onnx.checker.check_model(onnx.load(str(path)))
 
 
@@ -340,12 +336,17 @@ def test_litept_encoder_contract_matches_ptv3_field_for_field() -> None:
     every stage, plus ``serialized_code`` - and rejects an engine missing any of them.
     """
     batch = move_batch_to_device(build_inputs(), torch.device("cuda"))
-    litept = build_litept_seg_model().cuda().eval().build_export_specs(batch)["encoder"]
-    ptv3 = build_seg_model().cuda().eval().build_export_specs(batch)["encoder"]
+    litept = build_litept_seg_model().cuda().eval().build_export_specs(batch)["ptv3_encoder"]
+    ptv3 = build_seg_model().cuda().eval().build_export_specs(batch)["ptv3_encoder"]
 
     def stage_fields(names: list[str]) -> set[str]:
         return {name.split("_", 3)[3] for name in names if name.startswith("serialized_pooling_")}
 
     # The fixtures differ in stage count, so compare the per-stage field structure.
-    assert litept.input_param_names[:3] == ["grid_coord", "feat", "serialized_code"]
+    assert litept.input_param_names[:4] == [
+        "voxels",
+        "num_points_per_voxel",
+        "grid_coord",
+        "serialized_code",
+    ]
     assert stage_fields(litept.input_param_names) == stage_fields(ptv3.input_param_names)

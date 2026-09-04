@@ -25,33 +25,38 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 import torch
+import torch.nn as nn
 
 from autoware_ml.models.segmentation3d.encoders.ptv3 import PointTransformerV3Encoder
+from autoware_ml.models.segmentation3d.encoders.voxel import MeanVoxelFeatureEncoder
 from autoware_ml.models.segmentation3d.heads.ptv3 import (
     PTv3SegDecoderHead,
     segmentation_eval_output,
+    segmentation_point_loss,
     segmentation_predict_outputs,
 )
 from autoware_ml.models.segmentation3d.ptv3_base import (
+    SERIALIZED_POOLING_FIELDS,
     PTv3BaseModel,
-    PTv3EncoderExportBase,
+    _run_ptv3_encoder_export,
     build_encoder_export_spec,
-    build_monolithic_export_inputs,
     build_point_feature_dynamic_axes,
     build_ptv3_export_context,
     build_ptv3_input_dynamic_axes,
     build_seg_head_export_spec,
+    prepare_ptv3_export_inputs,
     split_block_parameters,
 )
 from autoware_ml.utils.deploy import ExportSpec
 
 
-class _PTv3SegmentationExportModule(PTv3EncoderExportBase):
+class _PTv3SegmentationExportModule(nn.Module):
     """Expose a deployment-oriented PTv3 export graph without mutating the model."""
 
     def __init__(
         self,
         encoder: PointTransformerV3Encoder,
+        voxel_encoder: MeanVoxelFeatureEncoder,
         seg3d_head: PTv3SegDecoderHead,
         sparse_shape: torch.Tensor,
         serialized_depth: torch.Tensor,
@@ -60,32 +65,48 @@ class _PTv3SegmentationExportModule(PTv3EncoderExportBase):
 
         Args:
             encoder: Export-prepared PTv3 encoder copy.
+            voxel_encoder: Voxel feature encoder feeding the embedding stem.
             seg3d_head: Export-prepared decoder head copy.
             sparse_shape: Static sparse shape used by exported sparse ops.
             serialized_depth: Serialization depth baked at export time.
         """
-        super().__init__(encoder, sparse_shape, serialized_depth)
+        super().__init__()
+        self.encoder = encoder
+        self.voxel_encoder = voxel_encoder
         self.seg3d_head = seg3d_head
+        self.register_buffer("_sparse_shape", sparse_shape.to(dtype=torch.long), persistent=False)
+        self.register_buffer("_serialized_depth", serialized_depth, persistent=False)
 
     def forward(
         self,
+        voxels: torch.Tensor,
+        num_points_per_voxel: torch.Tensor,
         grid_coord: torch.Tensor,
-        feat: torch.Tensor,
         serialized_code: torch.Tensor,
         *serialized_pooling_inputs: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Run export-time inference on serialized point inputs.
+        """Run export-time inference on serialized voxel inputs.
 
         Args:
-            grid_coord: Discretized grid coordinates.
-            feat: Point features whose first three channels are xyz.
+            voxels: Padded voxel points.
+            num_points_per_voxel: Valid point count per voxel.
+            grid_coord: Integer voxel coordinates.
             serialized_code: Serialized coordinate codes.
-            serialized_pooling_inputs: Precomputed pooling metadata tensors.
 
         Returns:
-            Predicted labels and point-wise semantic probabilities.
+            Predicted labels and voxel-wise semantic probabilities.
         """
-        point = self.run_encoder(grid_coord, feat, serialized_code, *serialized_pooling_inputs)
+        point = _run_ptv3_encoder_export(
+            self.encoder,
+            self.voxel_encoder,
+            voxels,
+            num_points_per_voxel,
+            grid_coord,
+            self._serialized_depth,
+            serialized_code,
+            self._sparse_shape,
+            *serialized_pooling_inputs,
+        )
         point_logits = self.seg3d_head(point)
         pred_probs = torch.softmax(point_logits, dim=1)
         pred_labels = pred_probs.argmax(dim=1)
@@ -101,6 +122,7 @@ class PTv3SegmentationModel(PTv3BaseModel):
         seg3d_head: PTv3SegDecoderHead,
         grid_size: float,
         point_cloud_range: Sequence[float],
+        time_lag_dim: int | None,
         **kwargs: Any,
     ) -> None:
         """Initialize the PTv3 segmentation model.
@@ -113,6 +135,8 @@ class PTv3SegmentationModel(PTv3BaseModel):
                 serialization depth.
             point_cloud_range: Point-cloud range used to derive sparse shape
                 and serialization depth.
+            time_lag_dim: Column of the input points holding the per-point
+                time lag, or ``None`` when the pipeline carries no time lag.
             **kwargs: Keyword arguments forwarded to :class:`BaseModel`.
         """
         super().__init__(
@@ -122,6 +146,7 @@ class PTv3SegmentationModel(PTv3BaseModel):
             **kwargs,
         )
         self.seg3d_head = seg3d_head
+        self.time_lag_dim = time_lag_dim
 
     def build_optimizer_groups(self) -> Mapping[str, Sequence[torch.nn.Parameter]]:
         """Group PTv3 parameters structurally for optimizer configuration."""
@@ -129,67 +154,56 @@ class PTv3SegmentationModel(PTv3BaseModel):
         return {"default": default_params, "block": block_params}
 
     def forward(
-        self,
-        coord: torch.Tensor,
-        feat: torch.Tensor,
-        grid_coord: torch.Tensor,
-        offset: torch.Tensor,
+        self, voxels: torch.Tensor, num_points: torch.Tensor, voxel_coords: torch.Tensor
     ) -> torch.Tensor:
-        """Run the encoder and segmentation decoder head.
+        """Run the voxel encoder, the PTv3 encoder and the segmentation decoder head.
 
         Args:
-            coord: Point coordinates.
-            feat: Point features.
-            grid_coord: Discretized grid coordinates.
-            offset: Batch offsets.
+            voxels: Padded voxel points from the data preprocessing.
+            num_points: Valid point count per voxel.
+            voxel_coords: Voxel coordinates with a leading batch column.
 
         Returns:
             Voxel-level segmentation logits of shape
             ``(num_voxels, num_classes)``.
         """
-        point = self.encoder(
-            {
-                "coord": coord,
-                "feat": feat,
-                "grid_coord": grid_coord,
-                "offset": offset,
-            }
-        )
-        return self.seg3d_head(point)
+        return self.seg3d_head(self.encode(voxels, num_points, voxel_coords))
 
     def compute_metrics(
         self,
         batch_inputs_dict: Mapping[str, Any],
         outputs: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
-        """Compute segmentation losses against voxel-level targets.
+        """Compute segmentation losses against point-level targets.
 
+        Every point inside the voxel grid supervises the logits of its voxel.
         Quality metrics (mIoU, accuracy) are produced at epoch end by the
         configured metrics through :meth:`build_eval_output`, not here.
 
         Args:
-            batch_inputs_dict: Full batch dictionary. Must contain ``segment``
-                (voxel-level targets).
+            batch_inputs_dict: Full batch dictionary. Must contain
+                ``point_voxel_indices``, ``num_dropped_voxels`` and the
+                point-level ``segment`` targets.
             outputs: Voxel-level segmentation logits returned by :meth:`forward`.
 
         Returns:
             Dictionary with the segmentation losses.
         """
-        return self.seg3d_head.loss(outputs, batch_inputs_dict["segment"])
+        return segmentation_point_loss(self.seg3d_head, outputs, batch_inputs_dict)
 
     def build_eval_output(
         self, batch: Mapping[str, Any], outputs: torch.Tensor
     ) -> dict[str, torch.Tensor]:
-        """Scatter voxel predictions to points for the segmentation metric."""
-        return segmentation_eval_output(outputs, batch)
+        """Scatter voxel predictions to the current-frame points for the metrics."""
+        return segmentation_eval_output(outputs, batch, self.time_lag_dim)
 
     def predict_outputs(
         self,
         batch_inputs_dict: Mapping[str, Any],
         outputs: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
-        """Format PTv3 segmentation predictions at the original-point level."""
-        return segmentation_predict_outputs(outputs, batch_inputs_dict)
+        """Format PTv3 segmentation predictions for the current-frame points."""
+        return segmentation_predict_outputs(outputs, batch_inputs_dict, self.time_lag_dim)
 
     def get_export_output_names(self) -> list[str]:
         """Return ordered PTv3 segmentation export output names."""
@@ -199,17 +213,17 @@ class PTv3SegmentationModel(PTv3BaseModel):
         """Build the ONNX export specification.
 
         Args:
-            batch: Preprocessed prediction batch containing ``coord``,
-                ``feat``, ``grid_coord``, and ``offset``.
+            batch: Preprocessed prediction batch containing ``voxels``,
+                ``num_points`` and ``voxel_coords``.
 
         Returns:
             Deployment export specification for PTv3.
         """
-        inputs = build_monolithic_export_inputs(self, batch)
-        input_args = inputs.args
-        input_param_names = inputs.input_names
+        inputs = prepare_ptv3_export_inputs(self, batch)
+        input_args, input_param_names = inputs.encoder_args(SERIALIZED_POOLING_FIELDS)
         export_module = _PTv3SegmentationExportModule(
             self._prepare_encoder_export(),
+            self.voxel_encoder,
             self.seg3d_head.prepare_for_export(self.EXPORT_ORDER),
             inputs.sparse_shape,
             inputs.serialization_depth,

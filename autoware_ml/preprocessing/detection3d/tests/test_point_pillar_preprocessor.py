@@ -61,6 +61,28 @@ class TestPointPillarPreprocessor(unittest.TestCase):
         self.assertEqual(outputs["voxel_coords"].shape, (2, 4))
         self.assertEqual(outputs["voxel_coords"][:, 0].tolist(), [0, 0])
 
+    def test_point_voxel_indices_follow_concatenated_batch_order(self) -> None:
+        """Point indices are emitted for the batch-concatenated points, -1 when unassigned."""
+        batch = {
+            "points": [
+                torch.tensor([[0.1, 0.1, 0.0, 1.0], [9.0, 9.0, 0.0, 2.0]], dtype=torch.float32),
+                torch.tensor([[0.2, 0.2, 0.0, 3.0], [1.1, 1.1, 0.0, 4.0]], dtype=torch.float32),
+            ]
+        }
+
+        outputs = self.point_pillar_preprocessor(batch, is_training=True)
+
+        indices = outputs["point_voxel_indices"]
+        self.assertEqual(indices.shape, (4,))
+        self.assertEqual(int(indices[1]), -1)
+        assigned = indices[indices >= 0]
+        self.assertEqual(sorted(assigned.tolist()), [0, 1, 2])
+        self.assertEqual(int(outputs["num_dropped_voxels"]), 0)
+        # the row a point maps to carries that point's batch index
+        self.assertEqual(int(outputs["voxel_coords"][indices[0], 0]), 0)
+        self.assertEqual(int(outputs["voxel_coords"][indices[2], 0]), 1)
+        self.assertEqual(int(outputs["voxel_coords"][indices[3], 0]), 1)
+
     def test_batch_column_increments_per_sample(self) -> None:
         """
         Test that the batch column in voxel coordinates increments correctly
@@ -98,6 +120,8 @@ class TestPointPillarPreprocessor(unittest.TestCase):
         self.assertEqual(outputs["voxels"].shape, (0, 2, 4))
         self.assertEqual(outputs["num_points"].shape, (0,))
         self.assertEqual(outputs["voxel_coords"].shape, (0, 4))
+        self.assertEqual(outputs["point_voxel_indices"].shape, (0,))
+        self.assertEqual(int(outputs["num_dropped_voxels"]), 0)
 
     def test_eval_mode_uses_eval_max_voxels_budget(self) -> None:
         """

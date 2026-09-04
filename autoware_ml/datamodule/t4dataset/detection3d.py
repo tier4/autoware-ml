@@ -20,22 +20,23 @@ T4Dataset annotations and sensor metadata.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass
 import math
 import os
 import pickle
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
 from torch.utils.data import DataLoader
 
 from autoware_ml.datamodule.base import DataModule, Dataset
 from autoware_ml.datamodule.common.detection3d import (
     build_detection_dataloader,
     load_detection_data_infos,
-    resolve_data_path,
-    resolve_sweep_paths,
 )
+from autoware_ml.datamodule.common.frame_meta import scene_dir_fragment
+from autoware_ml.datamodule.common.point_cloud import resolve_data_path, resolve_sweep_paths
 from autoware_ml.datamodule.common.serialization import SerializedSampleList
 from autoware_ml.transforms.base import TransformsCompose
 from autoware_ml.transforms.boxes3d.annotations import (
@@ -60,7 +61,14 @@ class FrameSamplingConfig:
 def coerce_frame_sampling(
     cfg: FrameSamplingConfig | Mapping[str, Any] | None,
 ) -> FrameSamplingConfig | None:
-    """Normalize frame-sampling settings to ``FrameSamplingConfig``."""
+    """Normalize frame-sampling settings to ``FrameSamplingConfig``.
+
+    Args:
+        cfg: Frame-sampling settings as a dataclass, a mapping, or ``None``.
+
+    Returns:
+        The settings as ``FrameSamplingConfig``, or ``None`` when disabled.
+    """
     if cfg is None:
         return None
     if isinstance(cfg, FrameSamplingConfig):
@@ -79,9 +87,19 @@ def compute_frame_sampling_weights(
     name_mapping: Mapping[str, str],
     frame_sampling: FrameSamplingConfig | None,
     filter_attributes: list[list[str]] | None = None,
-    use_valid_flag: bool = True,
 ) -> list[float]:
-    """Compute repeat-factor sampling weights for T4 detection samples."""
+    """Compute repeat-factor sampling weights for T4 detection samples.
+
+    Args:
+        data_infos: Annotation records of the split.
+        class_names: Detector class names in label order.
+        name_mapping: Raw category to detector class mapping.
+        frame_sampling: Repeat-factor settings, or ``None`` to disable weighting.
+        filter_attributes: Class and attribute name pairs excluded from class counting.
+
+    Returns:
+        One sampling weight per sample, uniform when weighting is disabled.
+    """
     if frame_sampling is None:
         return [1.0] * len(data_infos)
     normalized_filter_attributes = normalize_filter_attributes(filter_attributes)
@@ -98,7 +116,6 @@ def compute_frame_sampling_weights(
             name_mapping,
             frame_sampling,
             normalized_filter_attributes,
-            use_valid_flag,
         )
         frame_categories.append(categories)
         for category, count in categories.items():
@@ -140,7 +157,6 @@ def _sample_sampling_categories(
     name_mapping: Mapping[str, str],
     frame_sampling: FrameSamplingConfig,
     filter_attributes: frozenset[tuple[str, str]],
-    use_valid_flag: bool,
 ) -> dict[str, int]:
     """Return sampling category counts for one frame."""
     categories = {*class_names, frame_sampling.low_pedestrian_category_name}
@@ -153,12 +169,15 @@ def _sample_sampling_categories(
             name_mapping=name_mapping,
             label_to_category=sample.get("label_to_category"),
             filter_attributes=filter_attributes,
-            use_valid_flag=use_valid_flag,
         )
         if mapped_name is None:
             continue
         box = instance.get("bbox_3d")
         if box is None or not box_is_physical(box, sanitize_velocity(instance.get("velocity"))):
+            continue
+        # A box with no lidar points gives no supervision (the point-count train
+        # filters drop it), so it must not inflate the frame's sampling weight.
+        if int(instance.get("num_lidar_pts", 0)) <= 0:
             continue
         if not _box_center_in_bev_range(box, frame_sampling.object_bev_range):
             continue
@@ -204,7 +223,6 @@ class T4Detection3DDataset(Dataset):
         class_names: list[str],
         name_mapping: Mapping[str, str],
         filter_attributes: list[list[str]] | None = None,
-        use_valid_flag: bool = True,
         frame_sampling: FrameSamplingConfig | None = None,
         dataset_transforms: TransformsCompose | None = None,
     ) -> None:
@@ -216,7 +234,6 @@ class T4Detection3DDataset(Dataset):
             class_names: Ordered detector class names.
             name_mapping: Mapping from dataset labels to detector labels.
             filter_attributes: Raw class-attribute pairs excluded from detection targets.
-            use_valid_flag: Whether ``bbox_3d_isvalid`` excludes sampled boxes.
             frame_sampling: Optional repeat-factor frame sampling settings.
             dataset_transforms: Optional dataset transform pipeline.
         """
@@ -235,7 +252,6 @@ class T4Detection3DDataset(Dataset):
             self.name_mapping,
             self.frame_sampling,
             filter_attributes=filter_attributes,
-            use_valid_flag=use_valid_flag,
         )
         # Serialize last: frame_weights above must run on the live list.
         self.data_infos = SerializedSampleList(data_infos)
@@ -266,7 +282,9 @@ class T4Detection3DDataset(Dataset):
             "timestamp": sample.get("timestamp"),
             "lidar_path": resolve_data_path(self.data_root, sample["lidar_path"]),
             "num_pts_feats": int(sample["lidar_points"].get("num_pts_feats", 5)),
-            "sweeps": resolve_sweep_paths(sample, self.data_root),
+            "sweeps": resolve_sweep_paths(sample["sweeps"], self.data_root),
+            "ego2global": np.asarray(sample["ego2global"], dtype=np.float64),
+            "scene_token": scene_dir_fragment(sample["lidar_path"], self.data_root),
         }
 
 
@@ -286,7 +304,6 @@ class T4Detection3DDataModule(DataModule):
         class_names: list[str],
         name_mapping: Mapping[str, str],
         filter_attributes: list[list[str]] | None = None,
-        use_valid_flag: bool = True,
         train_frame_sampling: FrameSamplingConfig | Mapping[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
@@ -300,7 +317,6 @@ class T4Detection3DDataModule(DataModule):
             class_names: Ordered detector class names.
             name_mapping: Mapping from dataset labels to detector labels.
             filter_attributes: Raw class-attribute pairs excluded from detection targets.
-            use_valid_flag: Whether ``bbox_3d_isvalid`` excludes sampled train boxes.
             train_frame_sampling: Optional repeat-factor frame sampling
                 settings applied only to the training split.
             **kwargs: Additional base datamodule configuration.
@@ -310,10 +326,17 @@ class T4Detection3DDataModule(DataModule):
         self.class_names = class_names
         self.name_mapping = name_mapping
         self.filter_attributes = filter_attributes
-        self.use_valid_flag = use_valid_flag
         self.train_frame_sampling = coerce_frame_sampling(train_frame_sampling)
 
         def resolve_ann_file(ann_file: str) -> str:
+            """Return ``ann_file`` absolute, joined to the data root when relative.
+
+            Args:
+                ann_file: Annotation file path, absolute or relative to the data root.
+
+            Returns:
+                The absolute annotation file path.
+            """
             return ann_file if os.path.isabs(ann_file) else os.path.join(data_root, ann_file)
 
         self.ann_files = {
@@ -341,7 +364,6 @@ class T4Detection3DDataModule(DataModule):
             class_names=self.class_names,
             name_mapping=self.name_mapping,
             filter_attributes=self.filter_attributes,
-            use_valid_flag=self.use_valid_flag,
             frame_sampling=self.train_frame_sampling if split == "train" else None,
             dataset_transforms=dataset_transforms,
         )

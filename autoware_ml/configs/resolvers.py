@@ -17,32 +17,35 @@
 from collections.abc import Iterable, Mapping
 from typing import Any, cast
 
-from omegaconf import ListConfig, OmegaConf
+from omegaconf import DictConfig, ListConfig, OmegaConf
 
 
 def strip_tasks_prefix(config_name: str) -> str:
-    """Return the user-facing config name without the bundled ``tasks/`` prefix."""
+    """Return the user-facing config name without the bundled ``tasks/`` prefix.
+
+    Args:
+        config_name: Config name as referenced on the command line.
+
+    Returns:
+        The name without a leading ``tasks/`` component.
+    """
     return str(config_name).removeprefix("tasks/")
 
 
 def merge_lists(*lists: Iterable[Any]) -> ListConfig:
     """Concatenate several lists into one.
 
-    Hydra/OmegaConf replaces lists on merge rather than appending, so the joint
-    segmentation + detection task cannot accumulate both per-dataset metric
-    suites through the defaults list alone. A plain ``[${a}, ${b}]`` list of
-    references almost works, but breaks when a referenced suite contains a
-    custom resolver that returns a list (the segmentation suite's
-    ``${seg_class_names:...}``): OmegaConf cannot copy that list result into the
-    new list element. This resolver sidesteps it by fully resolving each item
-    (while its source node is still attached to the tree) and returning plain
-    containers, e.g.::
+    OmegaConf replaces lists on merge instead of appending, so a config that
+    needs the union of several lists requests it explicitly::
 
         model:
           metrics: ${merge_lists:${det.metrics},${seg.metrics}}
 
+    Every element is fully resolved while its source node is still attached to
+    the config tree, so the result carries plain values only.
+
     Args:
-        *lists: Any number of lists (or list-like configs) to concatenate, in order.
+        *lists: Lists or list-like configs to concatenate, in order.
 
     Returns:
         A single config list with every element of the inputs, in argument order.
@@ -57,49 +60,39 @@ def merge_lists(*lists: Iterable[Any]) -> ListConfig:
     return cast(ListConfig, OmegaConf.create(merged))
 
 
-def segmentation_class_names(
-    class_mapping: Mapping[str, int] | None, num_classes: int, separator: str = "-"
-) -> ListConfig:
-    """Build an ordered class-name list from a ``name -> index`` mapping.
+def raw_name_to_train_index(
+    name_mapping: Mapping[str, str | None], class_names, ignore_index: int = -1
+) -> DictConfig:
+    """Derive the raw category to training index map for segmentation loading.
 
-    Inverts the segmentation ``class_mapping`` into per-index names for metric
-    keys. When several names share an index the names are joined in definition
-    order (for example ``noise-ghost_point``). Indices outside
-    ``[0, num_classes)`` (such as the ignore index) are dropped, and any index
-    without a name falls back to ``class_<i>``.
+    ``name_mapping`` normalizes raw dataset categories to final class names,
+    where ``null`` drops a category. ``class_names`` is the ordered list of
+    trained classes, so a name's index is its position. A raw category whose
+    final name is ``null`` or absent from ``class_names`` maps to
+    ``ignore_index``. This way one mapping can also list categories a given
+    model does not train.
 
     Args:
-        class_mapping: Mapping of raw class name to target class index. May be
-            ``None`` or empty - as produced by ``${oc.select:...class_mapping,
-            null}`` when no mapping is defined - in which case every index falls
-            back to ``class_<i>``.
-        num_classes: Number of target classes.
-        separator: String used to join names that share an index.
+        name_mapping: Raw category name to final class name, ``null`` to drop.
+        class_names: Ordered final class names defining the training indices.
+        ignore_index: Index assigned to dropped and untrained categories.
 
     Returns:
-        Config list of length ``num_classes`` mapping each index to its name.
-        Returned as a ``ListConfig`` (not a plain ``list``) so that in-place
-        ``OmegaConf.resolve()`` - which ``hydra.utils.instantiate`` runs on the
-        model config - can write the resolved value back into the tree. A plain
-        list raises ``UnsupportedValueType`` there (the same trap ``merge_lists``
-        documents), which broke seg-only configs whose ``metrics`` reference this
-        resolver directly.
+        Config mapping of raw category name to training index. A config node
+        is required here because in-place resolution writes the value back
+        into the tree.
     """
-    index_to_names: dict[int, list[str]] = {}
-    if class_mapping:
-        for name, index in class_mapping.items():
-            target = int(index)
-            if 0 <= target < int(num_classes):
-                index_to_names.setdefault(target, []).append(str(name))
-    names = [
-        separator.join(index_to_names[index]) if index in index_to_names else f"class_{index}"
-        for index in range(int(num_classes))
-    ]
-    return cast(ListConfig, OmegaConf.create(names))
+    index_of = {str(name): index for index, name in enumerate(class_names)}
+    mapping: dict[str, int] = {}
+    for raw, final in dict(name_mapping).items():
+        mapping[str(raw)] = (
+            int(ignore_index) if final is None else index_of.get(str(final), int(ignore_index))
+        )
+    return cast(DictConfig, OmegaConf.create(mapping))
 
 
 def register_config_resolvers() -> None:
     """Register all custom OmegaConf resolvers required by bundled configs."""
     OmegaConf.register_new_resolver("user_config_name", strip_tasks_prefix, replace=True)
-    OmegaConf.register_new_resolver("seg_class_names", segmentation_class_names, replace=True)
+    OmegaConf.register_new_resolver("seg_class_mapping", raw_name_to_train_index, replace=True)
     OmegaConf.register_new_resolver("merge_lists", merge_lists, replace=True)

@@ -24,7 +24,6 @@ datamodule:
   class_names: ${dataset.detection3d.class_names}
   name_mapping: ${dataset.detection3d.name_mapping}
   filter_attributes: ${dataset.detection3d.filter_attributes}
-  use_valid_flag: ${dataset.detection3d.use_valid_flag}
   train_dataloader_cfg:
     batch_size: ${batch_size}
     num_workers: ${num_workers}
@@ -44,7 +43,6 @@ datamodule:
       - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
         name_mapping: ${dataset.detection3d.name_mapping}
         filter_attributes: ${dataset.detection3d.filter_attributes}
-        use_valid_flag: ${dataset.detection3d.use_valid_flag}
       - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
         sweeps_num: 2
         load_dim: 5
@@ -52,7 +50,8 @@ datamodule:
         time_dim: 4
         pad_empty_sweeps: true
         remove_close: true
-        test_mode: false
+        sweep_selection: random
+        time_lag_range: [0.05, 0.25]
       - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
         rot_range: [-0.78539816, 0.78539816]
         scale_ratio_range: [0.95, 1.05]
@@ -67,9 +66,11 @@ datamodule:
       - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
         range_radius: [0.0, 60.0]
         min_num_points: ${dataset.detection3d.train_min_points_near}
+        time_lag_dim: 4
       - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
         range_radius: [60.0, 130.0]
         min_num_points: ${dataset.detection3d.train_min_points_far}
+        time_lag_dim: 4
       - _target_: autoware_ml.transforms.point_cloud.sampling.PointShuffle
   val_transforms:
     _target_: autoware_ml.transforms.base.TransformsCompose
@@ -80,7 +81,6 @@ datamodule:
       - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
         name_mapping: ${dataset.detection3d.name_mapping}
         filter_attributes: ${dataset.detection3d.filter_attributes}
-        use_valid_flag: ${dataset.detection3d.use_valid_flag}
       - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
         sweeps_num: 2
         load_dim: 5
@@ -88,6 +88,8 @@ datamodule:
         time_dim: 4
         pad_empty_sweeps: true
         remove_close: true
+        sweep_selection: nearest
+        time_lag_range: [0.05, 0.25]
       - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
         point_cloud_range: ${point_cloud_range}
   test_transforms: ${datamodule.val_transforms}
@@ -101,6 +103,8 @@ datamodule:
         time_dim: 4
         pad_empty_sweeps: true
         remove_close: true
+        sweep_selection: nearest
+        time_lag_range: [0.05, 0.25]
       - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
         point_cloud_range: ${point_cloud_range}
 
@@ -112,16 +116,19 @@ model:
     num_proposals: 500
     class_names: ${dataset.detection3d.class_names}
     num_classes: ${dataset.detection3d.num_classes}
-    dense_heatmap_pooling_classes: [car, truck, bus, barrier]
+    dense_heatmap_pooling_classes: [car, truck, bus]
     head_hidden_channels: 64
     norm_eps: 1.0e-5
     norm_momentum: 0.1
     nms_type: circle
     nms_min_radius: 0.5
     nms_groups:
-      - class_names: [car, truck, bus]
+      - class_names: [car, truck, bus, train]
         nms_radius: 0.5
         post_max_size: 300
+      - class_names: [motorcycle]
+        nms_radius: 0.0
+        post_max_size: 50
       - class_names: [bicycle]
         nms_radius: 0.0
         post_max_size: 50
@@ -134,9 +141,21 @@ model:
       - class_names: [barrier]
         nms_radius: 0.0
         post_max_size: 50
+      - class_names: [animal]
+        nms_radius: 0.0
+        post_max_size: 50
+      - class_names: [debris]
+        nms_radius: 0.0
+        post_max_size: 50
+      - class_names: [vehicle_extension]
+        nms_radius: 0.0
+        post_max_size: 50
+      - class_names: [bicycle_rack]
+        nms_radius: 0.0
+        post_max_size: 50
     bbox_coder:
       post_center_range: [-200.0, -200.0, -10.0, 200.0, 200.0, 10.0]
-      score_threshold: [0.015, 0.010, 0.010, 0.020, 0.030, 0.040, 0.020]
+      score_threshold: [0.015, 0.010, 0.010, 0.010, 0.020, 0.020, 0.030, 0.030, 0.020, 0.040, 0.020, 0.020, 0.020]
   img_backbone: null
   img_neck: null
   view_transform: null
