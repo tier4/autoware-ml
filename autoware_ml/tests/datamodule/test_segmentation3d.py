@@ -6,6 +6,7 @@ import logging
 import pickle
 from pathlib import Path
 
+import numpy as np
 import torch
 
 from autoware_ml.datamodule.nuscenes.segmentation3d import NuscenesSegmentation3DDataset
@@ -36,6 +37,8 @@ def test_nuscenes_segmentation_dataset_resolves_lidar_top_samples(tmp_path: Path
                         "token": "sample-token",
                         "lidar_points": {"lidar_path": "sample.bin"},
                         "pts_semantic_mask_path": "sample_lidarseg.bin",
+                        "ego2global": np.eye(4),
+                        "scene_token": "scene-1",
                     }
                 ]
             }
@@ -54,6 +57,8 @@ def test_nuscenes_segmentation_dataset_resolves_lidar_top_samples(tmp_path: Path
 
     assert sample["lidar_path"] == str(lidar_path)
     assert sample["points"].shape == (1, 4)
+    assert sample["scene_token"] == "scene-1"
+    assert np.allclose(sample["ego2global"], np.eye(4))
     assert torch.equal(torch.as_tensor(sample["pts_semantic_mask"]), torch.tensor([1]))
 
 
@@ -70,6 +75,8 @@ def test_nuscenes_segmentation_dataset_returns_name_key(tmp_path: Path) -> None:
                         "token": "tok-123",
                         "lidar_points": {"lidar_path": "sample.bin"},
                         "pts_semantic_mask_path": "mask.bin",
+                        "ego2global": np.eye(4),
+                        "scene_token": "scene-1",
                     }
                 ]
             }
@@ -106,6 +113,8 @@ def test_nuscenes_segmentation_dataset_accepts_pre_prefixed_lidar_path(tmp_path:
                         "token": "sample-token",
                         "lidar_points": {"lidar_path": "samples/LIDAR_TOP/sample.bin"},
                         "pts_semantic_mask_path": "sample_lidarseg.bin",
+                        "ego2global": np.eye(4),
+                        "scene_token": "scene-1",
                     }
                 ]
             }
@@ -131,7 +140,7 @@ def test_t4_segmentation_dataset_warns_for_empty_source(caplog, tmp_path: Path) 
             {
                 "data_list": [
                     {
-                        "lidar_points": {"lidar_path": "sample.bin", "num_pts_feats": 5},
+                        "lidar_points": {"lidar_path": "db/uuid/0/sample.bin", "num_pts_feats": 5},
                         "lidar_sources": {
                             "LIDAR_FRONT_UPPER": {
                                 "sensor_token": "sensor-1",
@@ -150,6 +159,8 @@ def test_t4_segmentation_dataset_warns_for_empty_source(caplog, tmp_path: Path) 
                         },
                         "pts_semantic_mask_categories": {"car": 0},
                         "pts_semantic_mask_path": "labels.bin",
+                        "ego2global": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
+                        "timestamp": 0.0,
                     }
                 ]
             }
@@ -180,15 +191,19 @@ def test_t4_segmentation_dataset_without_lidar_sources(tmp_path: Path) -> None:
                 "data_list": [
                     {
                         "token": "tok-abc",
-                        "lidar_points": {"lidar_path": "sample.bin", "num_pts_feats": 4},
+                        "lidar_points": {"lidar_path": "db/uuid/0/sample.bin", "num_pts_feats": 4},
                         "pts_semantic_mask_categories": {"car": 0},
                         "pts_semantic_mask_path": "labels.bin",
+                        "ego2global": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
+                        "timestamp": 0.0,
                     },
                     {
                         "token": "tok-def",
-                        "lidar_points": {"lidar_path": "sample2.bin", "num_pts_feats": 4},
+                        "lidar_points": {"lidar_path": "db/uuid/0/sample2.bin", "num_pts_feats": 4},
                         "pts_semantic_mask_categories": {"car": 0},
                         "pts_semantic_mask_path": "labels2.bin",
+                        "ego2global": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
+                        "timestamp": 1.0,
                     },
                 ]
             }

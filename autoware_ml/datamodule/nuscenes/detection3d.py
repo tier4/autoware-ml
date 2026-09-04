@@ -25,6 +25,7 @@ import os
 import pickle
 from typing import Any
 
+import numpy as np
 from autoware_ml.datamodule.base import DataModule, Dataset
 from autoware_ml.datamodule.common.detection3d import (
     build_label_to_category,
@@ -129,6 +130,8 @@ class NuscenesDetection3DDataset(Dataset):
                 sample.get("num_features", sample.get("lidar_points", {}).get("num_pts_feats", 5))
             ),
             "sweeps": self._resolve_sweeps(sample),
+            "ego2global": np.asarray(sample["ego2global"], dtype=np.float64),
+            "scene_token": sample["scene_token"],
         }
 
 

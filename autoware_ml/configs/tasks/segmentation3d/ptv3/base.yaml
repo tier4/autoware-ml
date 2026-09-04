@@ -19,6 +19,9 @@ datamodule:
     origin_segment: concat
     origin_coord: concat
     feat: concat
+    ego2global: list
+    scene_token: list
+    timestamp: list
 
 model:
   _target_: autoware_ml.models.segmentation3d.ptv3.PTv3SegmentationModel
@@ -76,6 +79,6 @@ deploy:
         output_names: [pred_labels, pred_probs]
         metainfo:
           dec_depths: ${model.seg3d_head.dec_depths}
-          class_names: ${seg_class_names:${dataset.segmentation3d.class_mapping}, ${dataset.segmentation3d.num_classes}}
+          class_names: ${dataset.segmentation3d.class_names}
   tensorrt:
     enabled: false

@@ -22,7 +22,10 @@ from __future__ import annotations
 import os
 from typing import Any
 
+import numpy as np
+
 from autoware_ml.datamodule.base import DataModule, Dataset
+from autoware_ml.datamodule.common.frame_meta import scene_dir_fragment
 from autoware_ml.datamodule.common.multiview_detection3d import MultiviewDetection3DDataset
 from autoware_ml.transforms.base import TransformsCompose
 
@@ -33,6 +36,22 @@ class T4MultiviewDetection3DDataset(MultiviewDetection3DDataset):
     The dataset combines T4 image, lidar, calibration, and detection metadata
     into the common multiview detection interface.
     """
+
+    def get_data_info(self, index: int) -> dict[str, Any]:
+        """Extend the common metadata with the T4 metric-facing frame context.
+
+        Args:
+            index: Dataset sample index.
+
+        Returns:
+            Metadata dictionary with the map-frame ego pose and the
+            map-resolvable scene token attached.
+        """
+        data_info = super().get_data_info(index)
+        sample = self.data_infos[index]
+        data_info["ego2global"] = np.asarray(sample["ego2global"], dtype=np.float64)
+        data_info["scene_token"] = scene_dir_fragment(data_info["lidar_path"], self.data_root)
+        return data_info
 
 
 class T4MultiviewDetection3DDataModule(DataModule):
@@ -80,6 +99,14 @@ class T4MultiviewDetection3DDataModule(DataModule):
         self.require_image_files = require_image_files
 
         def resolve_ann_file(ann_file: str) -> str:
+            """Return ``ann_file`` absolute, joined to the data root when relative.
+
+            Args:
+                ann_file: Annotation file path, absolute or relative to the data root.
+
+            Returns:
+                The absolute annotation file path.
+            """
             return ann_file if os.path.isabs(ann_file) else os.path.join(data_root, ann_file)
 
         self.ann_files = {

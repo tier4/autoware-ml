@@ -9,65 +9,62 @@ from omegaconf import OmegaConf
 
 from autoware_ml.configs.resolvers import (
     merge_lists,
+    raw_name_to_train_index,
     register_config_resolvers,
-    segmentation_class_names,
 )
 
-_MAPPING = {
-    "drivable_surface": 0,
-    "car": 1,
-    "noise": 3,
-    "ghost_point": 3,
-    "unpainted": -1,
+_NAME_MAPPING = {
+    "car": "car",
+    "vehicle.car": "car",
+    "trailer": "truck",
+    "sidewalk": "non_drivable_flat",
+    "ghost_point": "noise",
+    "background": None,
+    "some_future_category": "not_a_trained_class",
 }
+_CLASS_NAMES = ["car", "truck", "non_drivable_flat", "noise"]
 
 
-def test_segmentation_class_names_concatenates_shared_index() -> None:
-    names = segmentation_class_names(_MAPPING, 4)
-    # Shared index 3 joins names in order; index 2 has no name; -1 is dropped.
-    assert names == ["drivable_surface", "car", "class_2", "noise-ghost_point"]
+def test_raw_name_to_train_index_maps_final_names() -> None:
+    mapping = raw_name_to_train_index(_NAME_MAPPING, _CLASS_NAMES, ignore_index=-1)
+    # Every raw name resolves to its final class index. Several raws may share one.
+    assert mapping["car"] == 0
+    assert mapping["vehicle.car"] == 0
+    assert mapping["trailer"] == 1
+    assert mapping["sidewalk"] == 2
+    assert mapping["ghost_point"] == 3
 
 
-def test_segmentation_class_names_single_name_has_no_separator() -> None:
-    names = segmentation_class_names({"car": 0, "truck": 1}, 2)
-    assert names == ["car", "truck"]
+def test_raw_name_to_train_index_sends_null_and_unknown_finals_to_ignore() -> None:
+    mapping = raw_name_to_train_index(_NAME_MAPPING, _CLASS_NAMES, ignore_index=-1)
+    # null final -> ignore, a final absent from class_names -> ignore (so a shared
+    # name_mapping can list categories a given model does not train).
+    assert mapping["background"] == -1
+    assert mapping["some_future_category"] == -1
 
 
-def test_segmentation_class_names_handles_missing_mapping() -> None:
-    assert segmentation_class_names(None, 3) == ["class_0", "class_1", "class_2"]
-    assert segmentation_class_names({}, 2) == ["class_0", "class_1"]
-
-
-def test_seg_class_names_resolver_in_interpolation() -> None:
+def test_seg_class_mapping_resolver_in_interpolation() -> None:
     register_config_resolvers()
     cfg = OmegaConf.create(
         {
-            "num_classes": 4,
-            "class_mapping": _MAPPING,
-            "names": "${seg_class_names:${oc.select:class_mapping, null}, ${num_classes}}",
+            "ignore_index": -1,
+            "name_mapping": dict(_NAME_MAPPING),
+            "class_names": list(_CLASS_NAMES),
+            "class_mapping": (
+                "${seg_class_mapping:${name_mapping}, ${class_names}, ${ignore_index}}"
+            ),
         }
     )
-    assert OmegaConf.to_container(cfg, resolve=True)["names"] == [
-        "drivable_surface",
-        "car",
-        "class_2",
-        "noise-ghost_point",
-    ]
-
-
-def test_seg_class_names_resolver_falls_back_without_mapping() -> None:
-    register_config_resolvers()
-    cfg = OmegaConf.create(
-        {
-            "num_classes": 3,
-            "names": "${seg_class_names:${oc.select:class_mapping, null}, ${num_classes}}",
-        }
-    )
-    assert OmegaConf.to_container(cfg, resolve=True)["names"] == [
-        "class_0",
-        "class_1",
-        "class_2",
-    ]
+    resolved = OmegaConf.to_container(cfg, resolve=True)["class_mapping"]
+    assert resolved == {
+        "car": 0,
+        "vehicle.car": 0,
+        "trailer": 1,
+        "sidewalk": 2,
+        "ghost_point": 3,
+        "background": -1,
+        "some_future_category": -1,
+    }
 
 
 def test_merge_lists_concatenates_in_order() -> None:
