@@ -30,7 +30,7 @@ Reachable-at-``t`` set by class, in the map frame (metres):
   steering (minimum turn radius), a curved front, clipped to the drivable
   area (an arc leaving the road is infeasible) and given the vehicle's body
   half-width.
-* VRU (pedestrian / animal / bicycle): the disc of radius ``v * t`` about the
+* living (pedestrian / animal / bicycle): the disc of radius ``v * t`` about the
   current position, free to move in any direction, over any surface.
 * static (barrier / traffic_cone / debris / bicycle_rack / vehicle_extension):
   the fixed footprint, for every ``t``.
@@ -124,7 +124,7 @@ class Agent:
     """One collision participant in the map frame.
 
     ``kind`` selects the reachable-set shape. ``heading`` and ``speed`` are used
-    by the wheeled kind, the VRU kind uses ``speed`` isotropically, and the
+    by the wheeled kind, the living kind uses ``speed`` isotropically, and the
     static kind ignores both and uses ``footprint``. ``body_radius`` is the
     half-extent added so a collision is a footprint overlap, not a point
     coincidence.
@@ -345,7 +345,7 @@ def reachable_set(
     """The agent's reachable-at-``t`` set in the map frame.
 
     Wheeled fronts keep only arcs that stay on ``drivable`` for their whole path,
-    so a wheeled evaluation needs a drivable polygon. VRU discs and static
+    so a wheeled evaluation needs a drivable polygon. Living discs and static
     footprints ignore ``drivable``.
 
     Args:
@@ -359,7 +359,7 @@ def reachable_set(
     """
     if agent.kind == AgentKind.STATIC:
         return agent.footprint
-    if agent.kind == AgentKind.VRU:
+    if agent.kind == AgentKind.LIVING:
         return Point(agent.x, agent.y).buffer(agent.speed * t + agent.body_radius)
     if drivable is None:
         raise ValueError("a wheeled reachable set needs a drivable polygon.")

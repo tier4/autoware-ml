@@ -7,10 +7,10 @@ class AgentKind(StrEnum):
 
     Attributes:
       WHEELED: Agent bound to a road surface, reaching along kinematically feasible arcs.
-      VRU: Agent free to move any direction, reaching an isotropic disc.
+      LIVING: Agent free to move any direction, reaching an isotropic disc.
       STATIC: Agent that never moves and keeps its own footprint.
     """
 
     WHEELED = auto()
-    VRU = auto()
+    LIVING = auto()
     STATIC = auto()

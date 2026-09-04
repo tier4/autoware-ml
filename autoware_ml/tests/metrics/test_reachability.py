@@ -61,9 +61,9 @@ def test_oncoming_beyond_ego_reach_still_collides() -> None:
     assert 2.3 <= ttc <= 2.6  # ~ 50 / (10 + 10)
 
 
-def test_crossing_vru_is_finite_within_horizon() -> None:
+def test_crossing_living_agent_is_finite_within_horizon() -> None:
     ego = Agent(AgentKind.WHEELED, 0.0, 0.0, heading=0.0, speed=10.0, body_radius=1.0)
-    ped = Agent(AgentKind.VRU, 18.0, 6.0, speed=4.0, body_radius=0.4)
+    ped = Agent(AgentKind.LIVING, 18.0, 6.0, speed=4.0, body_radius=0.4)
     ttc = time_to_collision(ego, ped, ROAD, PARAMS)
     assert ttc != inf and ttc <= PARAMS.horizon_s
 
@@ -110,8 +110,8 @@ def test_steps_stay_within_horizon() -> None:
     assert EgoReachability(ego, ROAD, ReachabilityParams(horizon_s=1.0, dt_s=0.6)).steps == 1
     assert EgoReachability(ego, ROAD, ReachabilityParams(horizon_s=3.0, dt_s=0.1)).steps == 30
     # A meeting first reachable at 1.1 s lies beyond the 1.0 s horizon, so it stays inf.
-    vru = Agent(AgentKind.VRU, 7.6, 0.0, speed=5.0, body_radius=0.5)
-    assert time_to_collision(ego, vru, ROAD, ReachabilityParams(horizon_s=1.0, dt_s=0.6)) == inf
+    living = Agent(AgentKind.LIVING, 7.6, 0.0, speed=5.0, body_radius=0.5)
+    assert time_to_collision(ego, living, ROAD, ReachabilityParams(horizon_s=1.0, dt_s=0.6)) == inf
 
 
 def test_collision_weights_monotone_and_bounds() -> None:
@@ -154,11 +154,11 @@ def test_ego_reachability_matches_bruteforce_stepping() -> None:
             x, y = float(rng.uniform(-2.0, 2.0)), float(rng.uniform(-2.0, 2.0))
         else:
             x, y = float(rng.uniform(-30, 130)), float(rng.uniform(-45, 45))
-        kind = (AgentKind.WHEELED, AgentKind.VRU, AgentKind.STATIC)[index % 3]
+        kind = (AgentKind.WHEELED, AgentKind.LIVING, AgentKind.STATIC)[index % 3]
         if kind == AgentKind.STATIC:
             obj = Agent(AgentKind.STATIC, x, y, footprint=_footprint(x, y))
-        elif kind == AgentKind.VRU:
-            obj = Agent(AgentKind.VRU, x, y, speed=float(rng.uniform(0.0, 6.0)), body_radius=0.4)
+        elif kind == AgentKind.LIVING:
+            obj = Agent(AgentKind.LIVING, x, y, speed=float(rng.uniform(0.0, 6.0)), body_radius=0.4)
         else:
             obj = Agent(
                 AgentKind.WHEELED,
@@ -184,7 +184,7 @@ def test_the_region_covers_every_front_including_the_first_step() -> None:
 def test_an_object_beside_ego_collides_at_the_first_step() -> None:
     """A pedestrian against ego's flank is the case the metric exists to score."""
     ego = Agent(AgentKind.WHEELED, 0.0, 0.0, heading=0.0, speed=10.0, body_radius=1.2)
-    ped = Agent(AgentKind.VRU, 0.1, 0.55, speed=1.4, body_radius=0.4)
+    ped = Agent(AgentKind.LIVING, 0.1, 0.55, speed=1.4, body_radius=0.4)
 
     assert EgoReachability(ego, ROAD, PARAMS).time_to_collision(ped) == PARAMS.dt_s
 
