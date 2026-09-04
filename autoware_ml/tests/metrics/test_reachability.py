@@ -38,7 +38,7 @@ def test_same_speed_lead_still_collides_in_the_worst_case() -> None:
     assert ttc == pytest.approx(0.8, abs=PARAMS.dt_s)  # ~ (25 - 2 * 3.4 body reach) / 20
 
 
-def test_stationary_object_ahead_finite_near_distance_over_speed() -> None:
+def test_a_stationary_object_ahead_collides_at_about_distance_over_speed() -> None:
     ego = Agent.wheeled(0.0, 0.0, heading=0.0, speed=10.0, length=4.8, width=2)
     obj = Agent.static(30.0, 0.0, footprint=_footprint(30.0, 0.0))
     ttc = time_to_collision(ego, obj, ROAD, PARAMS)
@@ -70,7 +70,7 @@ def test_crossing_living_agent_is_finite_within_horizon() -> None:
     assert ttc != inf and ttc <= PARAMS.horizon_s
 
 
-def test_far_object_is_rejected_cheaply() -> None:
+def test_a_far_object_is_unreachable_within_the_horizon() -> None:
     ego = Agent.wheeled(0.0, 0.0, heading=0.0, speed=10.0, length=4.8, width=2)
     obj = Agent.static(200.0, 0.0, footprint=_footprint(200.0, 0.0))
     assert time_to_collision(ego, obj, ROAD, PARAMS) == inf
