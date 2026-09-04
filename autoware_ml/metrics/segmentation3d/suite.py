@@ -13,7 +13,7 @@ from typing import Any
 
 import torch
 
-from autoware_ml.metrics.base import Metric, MetricRange, MetricSuite
+from autoware_ml.metrics.base import IDENTITY, Metric, MetricFilter, MetricRange, MetricSuite
 from autoware_ml.metrics.segmentation3d.confusion import ConfusionState
 
 
@@ -36,6 +36,12 @@ class Segmentation3DMetricSuite(MetricSuite[ConfusionState]):
         **kwargs: Any,
     ) -> None:
         super().__init__(components=components, ranges=ranges, **kwargs)
+        for component in components:
+            if component.filter is not IDENTITY:
+                raise ValueError(
+                    "Segmentation3DMetricSuite accumulates no filter buckets, its "
+                    "components must use the identity filter."
+                )
         self.num_classes = int(num_classes)
         self.ignore_index = int(ignore_index)
         self.class_names = tuple(class_names) if class_names is not None else None
@@ -80,12 +86,16 @@ class Segmentation3DMetricSuite(MetricSuite[ConfusionState]):
                 device
             )
 
-    def state_for(self, metric_range: MetricRange | None) -> ConfusionState:
+    def state_for(
+        self, metric_range: MetricRange | None, metric_filter: MetricFilter = IDENTITY
+    ) -> ConfusionState:
         """Build the confusion state for the requested metric range.
 
         Args:
             metric_range: Optional radial range selecting one confusion-matrix
-                bucket; ``None`` selects the overall bucket.
+                bucket. ``None`` selects the overall bucket.
+            metric_filter: Always the identity filter, ``__init__`` rejects
+                components carrying any other.
 
         Returns:
             Confusion state consumed by the configured metric components.
