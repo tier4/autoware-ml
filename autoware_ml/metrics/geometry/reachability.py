@@ -335,8 +335,6 @@ def _seed_component(region: BaseGeometry, seed: Point) -> BaseGeometry:
     parts = _polygonal_parts(region)
     if not parts:
         return Polygon()
-    if len(parts) == 1:
-        return parts[0]
     return min(parts, key=seed.distance)
 
 
