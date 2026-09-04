@@ -29,6 +29,22 @@ def _footprint(x: float, y: float, size: float = 2.0):
     return box(x - size / 2, y - size / 2, x + size / 2, y + size / 2)
 
 
+def _sampled_agent(kind: AgentKind, x: float, y: float, rng: np.random.Generator) -> Agent:
+    """One random agent of ``kind`` at ``(x, y)``, for the brute-force comparison."""
+    if kind == AgentKind.STATIC:
+        return Agent.static(x, y, footprint=_footprint(x, y))
+    if kind == AgentKind.LIVING:
+        return Agent.living(x, y, speed=float(rng.uniform(0.0, 6.0)), radius=0.4)
+    return Agent.wheeled(
+        x,
+        y,
+        heading=float(rng.uniform(0, 2 * pi)),
+        speed=float(rng.uniform(0.5, 16.7)),
+        length=4.8,
+        width=2.0,
+    )
+
+
 def test_same_speed_lead_still_collides_in_the_worst_case() -> None:
     # Matched speed is no protection: the lead can brake or reverse while ego
     # keeps going, so the gap closes at the sum of the two worst-case speeds.
@@ -155,19 +171,7 @@ def test_ego_reachability_matches_bruteforce_stepping() -> None:
         else:
             x, y = float(rng.uniform(-30, 130)), float(rng.uniform(-45, 45))
         kind = (AgentKind.WHEELED, AgentKind.LIVING, AgentKind.STATIC)[index % 3]
-        if kind == AgentKind.STATIC:
-            obj = Agent.static(x, y, footprint=_footprint(x, y))
-        elif kind == AgentKind.LIVING:
-            obj = Agent.living(x, y, speed=float(rng.uniform(0.0, 6.0)), radius=0.4)
-        else:
-            obj = Agent.wheeled(
-                x,
-                y,
-                heading=float(rng.uniform(0, 2 * pi)),
-                speed=float(rng.uniform(0.5, 16.7)),
-                length=4.8,
-                width=2.0,
-            )
+        obj = _sampled_agent(kind, x, y, rng)
         assert frame.time_to_collision(obj) == brute_force(ego, obj), f"agent {index}: {obj}"
 
 
