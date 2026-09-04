@@ -129,15 +129,68 @@ class Agent:
     static kind ignores both and uses ``footprint``. ``body_radius`` is the
     half-extent added so a collision is a footprint overlap, not a point
     coincidence.
+
+    Nothing is defaulted: a vehicle silently placed at heading 0 or speed 0
+    scores a plausible looking TTC that is simply wrong. Build agents through
+    :meth:`wheeled`, :meth:`living` and :meth:`static`, which each ask for
+    exactly what their kind uses.
     """
 
     kind: AgentKind
     x: float
     y: float
-    heading: float = 0.0
-    speed: float = 0.0
-    body_radius: float = 0.5
+    heading: float
+    speed: float
+    body_radius: float
     footprint: Polygon | None = None
+
+    @classmethod
+    def wheeled(cls, x: float, y: float, heading: float, speed: float, body_radius: float) -> Agent:
+        """A road-bound agent, whose reachable set follows its heading.
+
+        Args:
+            x: Position along the map x axis in meters.
+            y: Position along the map y axis in meters.
+            heading: Orientation in radians, counter-clockwise from the x axis.
+            speed: Worst-case speed in m/s.
+            body_radius: Collision half-extent in meters.
+
+        Returns:
+            The wheeled agent.
+        """
+        return cls(AgentKind.WHEELED, x, y, heading, speed, body_radius)
+
+    @classmethod
+    def living(cls, x: float, y: float, speed: float, body_radius: float) -> Agent:
+        """A pedestrian, animal or cyclist, whose reachable set is a disc.
+
+        Args:
+            x: Position along the map x axis in meters.
+            y: Position along the map y axis in meters.
+            speed: Worst-case speed in m/s, reachable in any direction.
+            body_radius: Collision half-extent in meters.
+
+        Returns:
+            The living agent, whose heading no reachable set reads.
+        """
+        return cls(AgentKind.LIVING, x, y, 0.0, speed, body_radius)
+
+    @classmethod
+    def static(cls, x: float, y: float, footprint: Polygon) -> Agent:
+        """An agent that never moves and is its own footprint.
+
+        Args:
+            x: Reference position along the map x axis in meters.
+            y: Reference position along the map y axis in meters.
+            footprint: Occupied polygon in the map frame.
+
+        Returns:
+            The static agent, whose body extent is the footprint's own.
+        """
+        min_x, min_y, max_x, max_y = footprint.bounds
+        return cls(
+            AgentKind.STATIC, x, y, 0.0, 0.0, hypot(max_x - min_x, max_y - min_y) / 2.0, footprint
+        )
 
     def __post_init__(self) -> None:
         if not isinstance(self.kind, AgentKind):
