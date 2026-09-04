@@ -18,7 +18,6 @@ num_proposals: 500
 datamodule:
   _target_: autoware_ml.datamodule.t4dataset.detection3d.T4Detection3DDataModule
   filter_attributes: ${dataset.detection3d.filter_attributes}
-  use_valid_flag: ${dataset.detection3d.use_valid_flag}
   train_transforms:
     _target_: autoware_ml.transforms.base.TransformsCompose
     pipeline:
@@ -28,7 +27,6 @@ datamodule:
       - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
         name_mapping: ${dataset.detection3d.name_mapping}
         filter_attributes: ${dataset.detection3d.filter_attributes}
-        use_valid_flag: ${dataset.detection3d.use_valid_flag}
       - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
         sweeps_num: ${train_sweeps_num}
         load_dim: 5
@@ -86,7 +84,6 @@ datamodule:
       - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
         name_mapping: ${dataset.detection3d.name_mapping}
         filter_attributes: ${dataset.detection3d.filter_attributes}
-        use_valid_flag: ${dataset.detection3d.use_valid_flag}
       - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
         sweeps_num: ${val_sweeps_num}
         load_dim: 5

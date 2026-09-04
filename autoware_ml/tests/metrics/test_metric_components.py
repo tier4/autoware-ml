@@ -12,10 +12,13 @@ import pytest
 import torch
 
 from autoware_ml.metrics.base import EvalStage
+from autoware_ml.metrics.detection3d.calibration import CalibrationError
+from autoware_ml.metrics.detection3d.confident_error import ConfidentErrorRate
 from autoware_ml.metrics.detection3d.heading_ap import HeadingAP
 from autoware_ml.metrics.detection3d.mean_ap import MeanAP
 from autoware_ml.metrics.detection3d.nds import Nds
-from autoware_ml.metrics.detection3d.structures import Detection3DSample, DetectionState
+from autoware_ml.metrics.detection3d.matching import DetectionState
+from autoware_ml.metrics.detection3d.structures import Detection3DSample
 from autoware_ml.metrics.detection3d.suite import Detection3DMetricSuite
 from autoware_ml.metrics.detection3d.tp_errors import TpErrors
 from autoware_ml.metrics.segmentation3d.accuracy import Accuracy
@@ -24,7 +27,7 @@ from autoware_ml.metrics.segmentation3d.iou import IoU
 from autoware_ml.metrics.segmentation3d.precision_recall_f1 import PrecisionRecallF1
 
 
-def _det_state(class_names=("car",), thresholds=(0.5,)) -> DetectionState:
+def _det_state(class_names=("car",)) -> DetectionState:
     box = torch.tensor([[0.0, 0.0, 0.0, 4.0, 2.0, 1.5, 0.0, 0.0, 0.0]])
     sample = Detection3DSample(
         pred_boxes=box.clone(),
@@ -33,7 +36,7 @@ def _det_state(class_names=("car",), thresholds=(0.5,)) -> DetectionState:
         gt_boxes=box.clone(),
         gt_labels=torch.tensor([0]),
     )
-    return DetectionState(samples=[sample], class_names=class_names, thresholds=thresholds)
+    return DetectionState(samples=[sample], class_names=class_names)
 
 
 def test_mean_ap_validation_emits_only_map_keys() -> None:
@@ -77,7 +80,7 @@ def test_tp_error_means_ignore_classes_without_true_positives() -> None:
         gt_boxes=boxes.clone(),
         gt_labels=torch.zeros(10, dtype=torch.long),
     )
-    state = DetectionState(samples=[sample], class_names=("car", "truck"), thresholds=(0.5,))
+    state = DetectionState(samples=[sample], class_names=("car", "truck"))
 
     nds_out = Nds().evaluate(state, EvalStage.TEST)
     assert nds_out["map_based_nds"] == pytest.approx(0.9)  # 0.7 if the absent truck leaked in
@@ -85,6 +88,60 @@ def test_tp_error_means_ignore_classes_without_true_positives() -> None:
     tp_out = TpErrors().evaluate(state, EvalStage.TEST)
     assert tp_out["mATE_default"] == pytest.approx(0.0)
     assert tp_out["mAAE_default"] == pytest.approx(1.0)
+
+
+def _det_state_tp_fp() -> DetectionState:
+    # One prediction on the GT (true positive, score 0.9) and one far away with no
+    # GT (false positive, score 0.8).
+    gt = torch.tensor([[0.0, 0.0, 0.0, 4.0, 2.0, 1.5, 0.0, 0.0, 0.0]])
+    preds = torch.tensor(
+        [
+            [0.0, 0.0, 0.0, 4.0, 2.0, 1.5, 0.0, 0.0, 0.0],
+            [100.0, 0.0, 0.0, 4.0, 2.0, 1.5, 0.0, 0.0, 0.0],
+        ]
+    )
+    sample = Detection3DSample(
+        pred_boxes=preds,
+        pred_scores=torch.tensor([0.9, 0.8]),
+        pred_labels=torch.tensor([0, 0]),
+        gt_boxes=gt,
+        gt_labels=torch.tensor([0]),
+    )
+    return DetectionState(samples=[sample], class_names=("car",))
+
+
+def test_det_confident_error_flags_high_score_false_positive() -> None:
+    out = ConfidentErrorRate(score_threshold=0.5).evaluate(_det_state_tp_fp(), EvalStage.TEST)
+    assert out["confident_error_rate"] == pytest.approx(1.0)  # the one FP (0.8) is confident
+    assert out["confident_error_count"] == pytest.approx(1.0)
+    lifted = ConfidentErrorRate(score_threshold=0.9).evaluate(_det_state_tp_fp(), EvalStage.TEST)
+    assert lifted["confident_error_rate"] == pytest.approx(0.0)  # 0.8 < 0.9
+
+
+def test_det_calibration_matches_hand_computed_ece() -> None:
+    # TP score 0.9 (correct) -> bin 13, gap |1-0.9|=0.1. FP score 0.8 (wrong) -> bin 12,
+    # gap |0-0.8|=0.8. Each bin weight 1/2 -> ECE = 0.5*0.1 + 0.5*0.8 = 0.45.
+    out = CalibrationError(num_bins=15).evaluate(_det_state_tp_fp(), EvalStage.TEST)
+    assert out["ece"] == pytest.approx(0.45)
+    assert "ece_macro" in out
+
+
+def test_suite_prefix_override_for_side_by_side_suites() -> None:
+    # B3 runs a second detection suite alongside the main one, a per-instance
+    # prefix keeps their keys in distinct namespaces (the mixin fails on a clash).
+    default = Detection3DMetricSuite(
+        components=[MeanAP(stages=["test"])], class_names=("car",), ranges=()
+    )
+    visible = Detection3DMetricSuite(
+        components=[MeanAP(stages=["test"])],
+        class_names=("car",),
+        ranges=(),
+        prefix="det3d_visible",
+        min_num_points=1,
+    )
+    assert default.prefix == "det3d"
+    assert visible.prefix == "det3d_visible"
+    assert visible.min_num_points == 1
 
 
 def _conf_state(num_classes: int = 2) -> ConfusionState:
@@ -124,8 +181,10 @@ def test_suite_gates_metrics_by_configured_stages() -> None:
     """A metric whose stages exclude val must not emit anything at val."""
     box = torch.tensor([[0.0, 0.0, 0.0, 4.0, 2.0, 1.5, 0.0, 0.0, 0.0]])
     suite = Detection3DMetricSuite(
-        components=[MeanAP(stages=["val", "test"]), TpErrors(stages=["test"])],
-        thresholds=(0.5,),
+        components=[
+            MeanAP(stages=["val", "test"], thresholds=(0.5,)),
+            TpErrors(stages=["test"], thresholds=(0.5,), tp_threshold=0.5),
+        ],
         class_names=("car",),
         ranges=(),
     )
