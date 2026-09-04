@@ -185,6 +185,22 @@ def test_the_region_covers_every_step_including_the_first() -> None:
         assert reachable.difference(hat).area < 1e-9, f"step {step} escapes the hat"
 
 
+def test_a_one_lane_bend_is_not_overly_pessimistic() -> None:
+    """Two legs of a one-lane junction: neither agent has to steer to meet.
+
+    A single-arc motion model must still find this collision, otherwise the
+    model is too pessimistic to trust in real intersections.
+    """
+    junction = box(-40.0, -2.0, 2.0, 2.0).union(box(-2.0, -40.0, 2.0, 2.0))
+    ego = Agent.wheeled(-30.0, 0.0, heading=0.0, speed=10.0, length=4.8, width=2.0)
+    crossing = Agent.wheeled(0.0, -30.0, heading=pi / 2, speed=10.0, length=4.8, width=2.0)
+
+    ttc = time_to_collision(ego, crossing, junction, PARAMS)
+
+    # Both need about (30 - 3.4 body reach) / 10 seconds to reach the corner.
+    assert 2.4 <= ttc <= 3.0
+
+
 def test_an_object_beside_ego_collides_at_the_first_step() -> None:
     """A pedestrian against ego's flank is the case the metric exists to score."""
     ego = Agent.wheeled(0.0, 0.0, heading=0.0, speed=10.0, length=4.8, width=2.4)
