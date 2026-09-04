@@ -225,7 +225,10 @@ def test_load_annotations3d_drops_physically_invalid_instances() -> None:
     assert np.allclose(output["gt_boxes"][2, 7:], [0.0, 0.0])  # nan velocity zeroed, box kept
 
 
-def test_load_annotations3d_preserves_ignored_bbox_label() -> None:
+def test_load_annotations3d_prefers_raw_name_over_stale_bbox_label() -> None:
+    # A stale bbox_label_3d (here -1, "unclassed" under the file's older taxonomy)
+    # must not override the raw gt_nusc_name: the config's name_mapping decides the
+    # class, so the box is kept and classified from its raw name.
     sample = {
         "class_names": ["bicycle"],
         "label_to_category": {5: "bicycle"},
@@ -241,27 +244,30 @@ def test_load_annotations3d_preserves_ignored_bbox_label() -> None:
 
     output = LoadAnnotations3D(name_mapping={"bicycle": "bicycle"})(sample)
 
-    assert output["gt_boxes"].shape == (0, 9)
+    assert output["gt_boxes"].shape == (1, 9)
+    assert output["gt_names"].tolist() == ["bicycle"]
 
 
-def test_load_annotations3d_can_match_awml_validity_policy() -> None:
+def test_load_annotations3d_ignores_validity_flag() -> None:
+    # bbox_3d_isvalid is not a load-time filter: low-point filtering is the
+    # point-count filters' job (min_num_points), so an "invalid" (0-lidar-point)
+    # box is loaded and left for the point filter to drop.
     sample = {
         "class_names": ["car"],
         "instances": [
             {
                 "bbox_3d": [1.0, 2.0, 3.0, 2.0, 1.0, 1.5, 0.0],
                 "gt_nusc_name": "car",
-                "num_lidar_pts": 10,
+                "num_lidar_pts": 0,
                 "bbox_3d_isvalid": False,
             }
         ],
     }
 
-    default_output = LoadAnnotations3D()(sample.copy())
-    awml_output = LoadAnnotations3D(use_valid_flag=False)(sample.copy())
+    output = LoadAnnotations3D()(sample.copy())
 
-    assert default_output["gt_boxes"].shape == (0, 9)
-    assert awml_output["gt_boxes"].shape == (1, 9)
+    assert output["gt_boxes"].shape == (1, 9)
+    assert output["gt_num_points"].tolist() == [0]
 
 
 def test_load_annotations3d_filters_raw_class_attributes() -> None:
@@ -300,7 +306,10 @@ def test_normalize_filter_attributes_rejects_invalid_entries() -> None:
         normalize_filter_attributes(["bicycle"])
 
 
-def test_load_annotations3d_rejects_disagreeing_source_label() -> None:
+def test_load_annotations3d_prefers_raw_name_over_source_label() -> None:
+    # When gt_nusc_name and a pre-baked bbox_label_3d disagree (e.g. the file's
+    # class table predates the configured taxonomy), the raw name is authoritative
+    # and the pre-baked integer is ignored, no error is raised.
     sample = {
         "class_names": ["car", "pedestrian"],
         "label_to_category": {0: "car"},
@@ -314,7 +323,9 @@ def test_load_annotations3d_rejects_disagreeing_source_label() -> None:
         ],
     }
 
-    with pytest.raises(ValueError, match="Annotation label disagreement"):
-        LoadAnnotations3D(
-            name_mapping={"car": "car", "pedestrian": "pedestrian"},
-        )(sample)
+    output = LoadAnnotations3D(
+        name_mapping={"car": "car", "pedestrian": "pedestrian"},
+    )(sample)
+
+    assert output["gt_names"].tolist() == ["pedestrian"]
+    assert output["gt_labels"].tolist() == [1]

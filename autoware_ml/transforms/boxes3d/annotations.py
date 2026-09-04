@@ -30,7 +30,14 @@ MAX_ABSOLUTE_SPEED = 150.0
 
 
 def sanitize_velocity(velocity: Sequence[float] | None) -> list[float]:
-    """Return the ground-plane velocity with non-finite components zeroed."""
+    """Return the ground-plane velocity with non-finite components zeroed.
+
+    Args:
+        velocity: Ground-plane ``[vx, vy]``, or ``None`` for a static annotation.
+
+    Returns:
+        The sanitized ``[vx, vy]`` list.
+    """
     if velocity is None:
         return [0.0, 0.0]
     return [0.0 if not np.isfinite(v) else float(v) for v in velocity]
@@ -51,6 +58,9 @@ def box_is_physical(box: Sequence[float], velocity: Sequence[float]) -> bool:
         velocity: Ground-plane ``[vx, vy]``, sanitized via
             :func:`sanitize_velocity` so non-finite components never reach
             the drop decision.
+
+    Returns:
+        Whether the annotation is trainable.
     """
     values = np.array([*box, *velocity], dtype=np.float32)
     return bool(
@@ -63,7 +73,14 @@ def box_is_physical(box: Sequence[float], velocity: Sequence[float]) -> bool:
 def normalize_filter_attributes(
     filter_attributes: Iterable[Sequence[str]] | None,
 ) -> FilterAttributeSet:
-    """Normalize configured class-attribute exclusions for repeated lookup."""
+    """Normalize configured class-attribute exclusions for repeated lookup.
+
+    Args:
+        filter_attributes: Class and attribute name pairs, or ``None`` for none.
+
+    Returns:
+        The exclusions as a frozenset of ``(class, attribute)`` tuples.
+    """
     if filter_attributes is None:
         return frozenset()
 
@@ -91,34 +108,44 @@ def resolve_detection_class(
     name_mapping: Mapping[str, str | None] | None,
     label_to_category: Mapping[int, str] | None = None,
     filter_attributes: Collection[tuple[str, str]] | None = None,
-    use_valid_flag: bool = True,
 ) -> str | None:
-    """Resolve one stored instance into a detector class or reject it."""
-    if "bbox_label_3d" in instance and int(instance["bbox_label_3d"]) < 0:
-        return None
-    if use_valid_flag and not bool(instance.get("bbox_3d_isvalid", True)):
-        return None
+    """Resolve one stored instance into a detector class or reject it.
 
+    The raw annotation category (``gt_nusc_name``) together with the configured
+    ``name_mapping`` is the single source of truth for the class: the config
+    decides the taxonomy, the annotation file only delivers raw categories. The
+    pre-computed ``bbox_label_3d`` integer (which indexes the file's own,
+    possibly older, class table) is consulted *only* as a fallback when no raw
+    category name is recorded. This way changing the configured class set never
+    requires regenerating the info files: categories the current model does not
+    train are dropped by ``name_mapping``/``class_names``, and categories a file
+    predates are still picked up from their raw name.
+
+    Low-point boxes are not filtered here, that is the job of the point-count
+    filters (``min_num_points`` at train time, the metric suite at eval), which
+    subsume the lidar-point validity flag.
+
+    Args:
+        instance: Stored annotation instance.
+        class_names: Detector class names.
+        name_mapping: Raw category to detector class mapping.
+        label_to_category: Label index to raw category, from the file's metainfo.
+        filter_attributes: Normalized class and attribute exclusions.
+
+    Returns:
+        The detector class name, or ``None`` when the instance is rejected.
+    """
     raw_name = instance.get("gt_nusc_name")
-    stored_name = _resolve_stored_name(instance, label_to_category)
     if raw_name is None:
-        raw_name = stored_name
+        # Older converters store only the integer label, decode it through the
+        # annotation file's own class table (a negative label is unclassed).
+        raw_name = _resolve_stored_name(instance, label_to_category)
     if raw_name is None:
         return None
 
     raw_name = str(raw_name)
     mapped_name = _map_name(raw_name, name_mapping)
-    if stored_name is not None:
-        mapped_stored_name = _map_name(stored_name, name_mapping)
-        if mapped_name != mapped_stored_name:
-            raise ValueError(
-                "Annotation label disagreement: "
-                f"gt_nusc_name={raw_name!r} maps to {mapped_name!r}, while "
-                f"bbox_label_3d maps to source class {stored_name!r} and target "
-                f"{mapped_stored_name!r}."
-            )
-
-    if mapped_name not in class_names:
+    if mapped_name is None or mapped_name not in class_names:
         return None
     if _has_filtered_attribute(instance, raw_name, filter_attributes):
         return None
@@ -129,10 +156,16 @@ def _resolve_stored_name(
     instance: Mapping[str, Any],
     label_to_category: Mapping[int, str] | None,
 ) -> str | None:
-    """Decode ``bbox_label_3d`` through the annotation file's class table."""
+    """Decode ``bbox_label_3d`` through the annotation file's class table.
+
+    A negative label marks a box the annotation file assigned to no class; it
+    resolves to ``None`` (dropped) rather than raising.
+    """
     if "bbox_label_3d" not in instance or label_to_category is None:
         return None
     label = int(instance["bbox_label_3d"])
+    if label < 0:
+        return None
     if label not in label_to_category:
         raise ValueError(f"bbox_label_3d={label} is absent from the annotation class table.")
     return str(label_to_category[label])

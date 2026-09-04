@@ -160,6 +160,7 @@ def test_ptv3_segdet_eval_output_scatters_segmentation_to_original_points() -> N
         "gt_boxes": [torch.zeros((0, 9), dtype=torch.float32)],
         "gt_labels": [torch.zeros((0,), dtype=torch.long)],
         "inverse": torch.tensor([0, 1, 1, 0], dtype=torch.long),
+        "offset": torch.tensor([2], dtype=torch.long),
         "origin_segment": torch.tensor([0, 1, 1, 0], dtype=torch.long),
         "origin_coord": torch.tensor(
             [
@@ -174,9 +175,13 @@ def test_ptv3_segdet_eval_output_scatters_segmentation_to_original_points() -> N
 
     eval_out = PTv3SegDetModel.build_eval_output(model, batch, outputs)
 
-    assert eval_out["seg_pred_labels"].tolist() == [0, 1, 1, 0]
-    assert torch.equal(eval_out["seg_target_labels"], batch["origin_segment"])
-    assert torch.equal(eval_out["seg_coord"], batch["origin_coord"])
+    frames = eval_out["seg_frames"]
+    assert len(frames) == 1
+    assert frames[0]["pred"].tolist() == [0, 1, 1, 0]
+    assert torch.equal(frames[0]["target"], batch["origin_segment"])
+    assert torch.equal(frames[0]["coord"], batch["origin_coord"])
+    assert frames[0]["scores"].shape == (4, 2)
+    assert frames[0]["gt_boxes"].shape == (0, 9)
     assert len(eval_out["predictions"]) == 1
     assert len(eval_out["gt_boxes"]) == 1
 
