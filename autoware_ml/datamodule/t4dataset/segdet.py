@@ -58,17 +58,25 @@ class T4SegmentationDetection3DDataset(Dataset):
         class_names: list[str],
         name_mapping: Mapping[str, str],
         filter_attributes: list[list[str]] | None = None,
-        use_valid_flag: bool = False,
         frame_sampling: FrameSamplingConfig | None = None,
         dataset_transforms: TransformsCompose | None = None,
     ) -> None:
-        """Initialize the combined T4 segmentation+detection dataset."""
+        """Initialize the combined T4 segmentation+detection dataset.
+
+        Args:
+            data_root: Dataset root directory.
+            ann_sources: Annotation sources merged into one sample list.
+            class_names: Detector class names in label order.
+            name_mapping: Raw category to detector class mapping.
+            filter_attributes: Class and attribute name pairs excluded from detection.
+            frame_sampling: Repeat-factor settings, or ``None`` to disable weighting.
+            dataset_transforms: Optional dataset transform pipeline.
+        """
         super().__init__(dataset_transforms=dataset_transforms)
         self.data_root = data_root
         self.class_names = class_names
         self.name_mapping = name_mapping
         self.filter_attributes = normalize_filter_attributes(filter_attributes)
-        self.use_valid_flag = use_valid_flag
         self.frame_sampling = frame_sampling
 
         data_infos: list[dict[str, Any]] = []
@@ -81,7 +89,6 @@ class T4SegmentationDetection3DDataset(Dataset):
             self.name_mapping,
             self.frame_sampling,
             self.filter_attributes,
-            self.use_valid_flag,
         )
         # Serialize last: frame_weights above must run on the live list.
         self.data_infos = SerializedSampleList(data_infos)
@@ -125,7 +132,14 @@ class T4SegmentationDetection3DDataset(Dataset):
         return len(self.data_infos)
 
     def get_data_info(self, index: int) -> dict[str, Any]:
-        """Build one combined metadata record consumed by the transform pipeline."""
+        """Build one combined metadata record consumed by the transform pipeline.
+
+        Args:
+            index: Dataset index.
+
+        Returns:
+            Metadata dictionary with detection and segmentation fields.
+        """
         sample = self.data_infos[index]
         return {
             "instances": sample.get("instances", []),
@@ -155,7 +169,6 @@ class T4SegmentationDetection3DDataModule(DataModule):
         class_names: list[str],
         name_mapping: Mapping[str, str],
         filter_attributes: list[list[str]] | None = None,
-        use_valid_flag: bool = False,
         train_frame_sampling: FrameSamplingConfig | Mapping[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
@@ -173,7 +186,6 @@ class T4SegmentationDetection3DDataModule(DataModule):
             class_names: Ordered detector class names.
             name_mapping: Raw-name to detector-class mapping.
             filter_attributes: Attribute pairs excluded from annotations.
-            use_valid_flag: Whether per-instance validity flags filter boxes.
             train_frame_sampling: Repeat-factor frame sampling configuration.
             **kwargs: Keyword arguments forwarded to :class:`DataModule`.
         """
@@ -182,7 +194,6 @@ class T4SegmentationDetection3DDataModule(DataModule):
         self.class_names = class_names
         self.name_mapping = name_mapping
         self.filter_attributes = normalize_filter_attributes(filter_attributes)
-        self.use_valid_flag = use_valid_flag
         self.train_frame_sampling = coerce_frame_sampling(train_frame_sampling)
 
         self.ann_sources = {
@@ -202,7 +213,6 @@ class T4SegmentationDetection3DDataModule(DataModule):
             class_names=self.class_names,
             name_mapping=self.name_mapping,
             filter_attributes=self.filter_attributes,
-            use_valid_flag=self.use_valid_flag,
             frame_sampling=self.train_frame_sampling if split == "train" else None,
             dataset_transforms=dataset_transforms,
         )
