@@ -69,13 +69,14 @@ from autoware_ml.types.metrics import AgentKind
 
 # Abutting map ways are authored with independently rounded coordinates, so their
 # union can keep a hairline seam. An exact path check would reject every arc that
-# crosses one, so a surface is sealed by this much before it is used.
-SURFACE_TOLERANCE_M = 1e-6
+# crosses one, so a surface is sealed by this much before it is used. Millimetre
+# precision is far below the accuracy the model claims, so seal generously.
+SURFACE_TOLERANCE_M = 1e-3
 
 # The reachable region's far edge is a chord approximation of the far arc, so a
-# front can poke a fraction of a millimetre past it. The prescreen bound is
-# inflated by this much to stay a true superset of every front.
-REGION_SLACK_M = 1e-3
+# front can poke past it. The prescreen bound is inflated by this much to stay a
+# true superset of every front, again well below the model's accuracy.
+REGION_SLACK_M = 1e-2
 
 
 @dataclass(frozen=True)
