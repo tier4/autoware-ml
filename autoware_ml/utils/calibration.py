@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 import numpy as np
-import numpy.typing as npt
+from jaxtyping import Float32
 
 
 class CalibrationStatus(Enum):
@@ -35,12 +35,11 @@ class CalibrationData:
     """Store camera intrinsics and lidar-to-camera calibration metadata.
 
     Args:
-        camera_matrix: Original camera intrinsic matrix with shape ``(3, 3)``.
+        camera_matrix: Original camera intrinsic matrix.
         distortion_coefficients: Camera distortion coefficients following OpenCV
             convention ``(k1, k2, p1, p2[, k3[, ...]])``. Length varies by model
             (4, 5, 8, 12, or 14). Empty array for pre-undistorted images.
-        lidar_to_camera_transformation: Homogeneous lidar-to-camera transform
-            with shape ``(4, 4)``.
+        lidar_to_camera_transformation: Homogeneous lidar-to-camera transform.
         distortion_model: Distortion model name following ROS convention
             (e.g. ``"plumb_bob"``, ``"rational_polynomial"``). Empty string for
             pre-undistorted images.
@@ -50,12 +49,12 @@ class CalibrationData:
             When omitted, a copy of ``camera_matrix`` is used.
     """
 
-    camera_matrix: npt.NDArray[np.float32]
-    distortion_coefficients: npt.NDArray[np.float32]
-    lidar_to_camera_transformation: npt.NDArray[np.float32]
+    camera_matrix: Float32[np.ndarray, "3 3"]
+    distortion_coefficients: Float32[np.ndarray, " num_coefficients"]
+    lidar_to_camera_transformation: Float32[np.ndarray, "4 4"]
     distortion_model: str = ""
-    noise: npt.NDArray[np.float32] | None = None
-    new_camera_matrix: npt.NDArray[np.float32] | None = None
+    noise: Float32[np.ndarray, "4 4"] | None = None
+    new_camera_matrix: Float32[np.ndarray, "3 3"] | None = None
 
     def __post_init__(self) -> None:
         """Initialize the post-transform intrinsic matrix if it is omitted."""
