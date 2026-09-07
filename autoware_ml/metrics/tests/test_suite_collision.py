@@ -20,12 +20,31 @@ from autoware_ml.metrics.detection3d.suite import Detection3DMetricSuite
 from autoware_ml.metrics.geometry.reachability import ReachabilityParams
 from autoware_ml.metrics.tests.conftest import CLASS_NAMES, EGO, FakeMapProvider, collision_box
 
+KINDS = {
+    "car": "wheeled",
+    "truck": "wheeled",
+    "bus": "wheeled",
+    "train": "wheeled",
+    "motorcycle": "wheeled",
+    "bicycle": "living",
+    "pedestrian": "living",
+    "animal": "living",
+    "barrier": "static",
+    "traffic_cone": "static",
+    "debris": "static",
+    "bicycle_rack": "static",
+    "vehicle_extension": "static",
+}
+LIVING_SPEEDS = {"pedestrian": 3.0, "animal": 4.0, "bicycle": 6.0}
+
 
 def test_suite_computes_ttc_and_criticality_metrics() -> None:
     collision = CollisionTTC(
         CLASS_NAMES,
         FakeMapProvider(box(-80.0, -60.0, 500.0, 60.0)),
         vehicle=EGO,
+        kinds=KINDS,
+        living_speeds=LIVING_SPEEDS,
         params=ReachabilityParams(horizon_s=4.0, dt_s=0.1),
         max_speed_mps=10.0,
     )
@@ -87,6 +106,8 @@ def test_collision_provider_declares_context_keys() -> None:
             CLASS_NAMES,
             FakeMapProvider(box(-80.0, -60.0, 500.0, 60.0)),
             vehicle=EGO,
+            kinds=KINDS,
+            living_speeds=LIVING_SPEEDS,
             params=ReachabilityParams(horizon_s=4.0, dt_s=0.1),
         ),
     )
@@ -103,6 +124,8 @@ def test_the_score_floor_skips_only_what_no_metric_reads() -> None:
         CLASS_NAMES,
         FakeMapProvider(road),
         vehicle=EGO,
+        kinds=KINDS,
+        living_speeds=LIVING_SPEEDS,
         params=ReachabilityParams(horizon_s=4.0, dt_s=0.1),
         max_speed_mps=10.0,
     )

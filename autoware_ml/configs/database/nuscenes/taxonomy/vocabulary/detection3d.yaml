@@ -1,0 +1,29 @@
+# Detection vocabulary of nuScenes: the devkit box categories mapped onto the trained class
+# names. A category outside every level, such as vehicle.trailer, is listed with null.
+_target_: autoware_ml.databases.taxonomy.LabelVocabulary
+_convert_: all
+
+name_mapping:
+  vehicle.car: car
+  vehicle.truck: truck
+  vehicle.construction: truck
+  vehicle.bus.bendy: bus
+  vehicle.bus.rigid: bus
+  vehicle.bicycle: bicycle
+  vehicle.motorcycle: bicycle
+  human.pedestrian.adult: pedestrian
+  human.pedestrian.child: pedestrian
+  human.pedestrian.construction_worker: pedestrian
+  human.pedestrian.police_officer: pedestrian
+  movable_object.trafficcone: traffic_cone
+  movable_object.barrier: barrier
+  animal: null
+  human.pedestrian.personal_mobility: null
+  human.pedestrian.stroller: null
+  human.pedestrian.wheelchair: null
+  movable_object.debris: null
+  movable_object.pushable_pullable: null
+  static_object.bicycle_rack: null
+  vehicle.emergency.ambulance: null
+  vehicle.emergency.police: null
+  vehicle.trailer: null

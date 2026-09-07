@@ -1,0 +1,39 @@
+# Segmentation vocabulary of nuScenes: the lidarseg categories named by the category table of
+# the records, mapped onto the trained class names. A category outside every level, animal,
+# the bicycle rack and the ego vehicle, is listed with null.
+_target_: autoware_ml.databases.taxonomy.LabelVocabulary
+_convert_: all
+
+name_mapping:
+  noise: noise
+  human.pedestrian.adult: pedestrian
+  human.pedestrian.child: pedestrian
+  human.pedestrian.construction_worker: pedestrian
+  human.pedestrian.personal_mobility: pedestrian
+  human.pedestrian.police_officer: pedestrian
+  human.pedestrian.stroller: pedestrian
+  human.pedestrian.wheelchair: pedestrian
+  movable_object.barrier: barrier
+  movable_object.debris: debris
+  movable_object.pushable_pullable: debris
+  movable_object.trafficcone: traffic_cone
+  vehicle.bicycle: bicycle
+  vehicle.bus.bendy: bus
+  vehicle.bus.rigid: bus
+  vehicle.car: car
+  vehicle.construction: truck
+  vehicle.emergency.ambulance: car
+  vehicle.emergency.police: car
+  vehicle.motorcycle: bicycle
+  vehicle.trailer: truck
+  vehicle.truck: truck
+  flat.driveable_surface: drivable_surface
+  flat.other: other_flat_surface
+  flat.sidewalk: other_flat_surface
+  flat.terrain: other_flat_surface
+  static.manmade: manmade
+  static.other: other_stuff
+  static.vegetation: vegetation
+  animal: null
+  static_object.bicycle_rack: null
+  vehicle.ego: null

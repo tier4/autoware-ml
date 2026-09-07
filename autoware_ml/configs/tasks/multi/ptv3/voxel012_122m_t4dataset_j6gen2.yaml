@@ -211,7 +211,7 @@ model:
     nms_type: circle
     nms_min_radius: 1.0
     nms_groups:
-      - class_names: [car, truck, bus, train]
+      - class_names: [car, truck, bus]
         nms_radius: 0.25
         post_max_size: 300
       - class_names: [motorcycle]
@@ -243,4 +243,4 @@ model:
         post_max_size: 50
     bbox_coder:
       post_center_range: [-132.88, -132.88, -5.0, 132.88, 132.88, 12.0]
-      score_threshold: [0.015, 0.010, 0.010, 0.010, 0.020, 0.020, 0.030, 0.030, 0.020, 0.040, 0.020, 0.020, 0.020]
+      score_threshold: [0.015, 0.010, 0.010, 0.020, 0.020, 0.030, 0.030, 0.020, 0.040, 0.020]
