@@ -16,9 +16,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Set, Any, Mapping
 
+from jaxtyping import Float32, Float64
 from pydantic import BaseModel, ConfigDict
 import numpy as np
-import numpy.typing as npt
 import polars as pl
 
 from autoware_ml.databases.schemas.base_schemas import (
@@ -68,7 +68,7 @@ class Box3DDataModel(BaseModel, DataModelInterface):
 
     model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
 
-    box3d_params: npt.NDArray[np.float64]
+    box3d_params: Float64[np.ndarray, " num_box_fields"]
     box3d_instance_id: str
     box3d_dataset_label_name: str
     box3d_label_name: str
@@ -100,12 +100,12 @@ class Box3DDataModel(BaseModel, DataModelInterface):
         }
 
     @property
-    def box3d_params_fp32(self) -> npt.NDArray[np.float32]:
+    def box3d_params_fp32(self) -> Float32[np.ndarray, " num_box_fields"]:
         """
         Convert the box3d_params to float32.
 
         Returns:
-          npt.NDArray[np.float32]: Box3D parameters in float32.
+          Float32[np.ndarray, " num_box_fields"]: Box3D parameters in float32.
         """
         return self.box3d_params.astype(np.float32)
 
@@ -135,7 +135,7 @@ class Box3DDataModel(BaseModel, DataModelInterface):
 
     def create_new_data_model(
         self,
-        box3d_params: npt.NDArray[np.float32] | None = None,
+        box3d_params: Float64[np.ndarray, " num_box_fields"] | None = None,
         box3d_instance_id: str | None = None,
         box3d_dataset_label_name: str | None = None,
         box3d_label_name: str | None = None,

@@ -15,11 +15,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping, Any
+from typing import Any, Mapping, Sequence
 
 import numpy as np
-import numpy.typing as npt
 import polars as pl
+from jaxtyping import Float32, Float64
 from pydantic import BaseModel, ConfigDict
 
 from autoware_ml.databases.schemas.base_schemas import (
@@ -44,6 +44,10 @@ class ImageFrameDatasetSchema(BaseFieldSchema):
     image_height = DatasetTableColumn("image_height", pl.Int32)
     image_width = DatasetTableColumn("image_width", pl.Int32)
     cam2img = DatasetTableColumn("cam2img", pl.Array(pl.Float32, shape=(3, 3)))
+    image_distortion_coefficients = DatasetTableColumn(
+        "image_distortion_coefficients", pl.List(pl.Float64)
+    )
+    image_distortion_model = DatasetTableColumn("image_distortion_model", pl.String)
     image_sensor_to_ego_pose_matrix = DatasetTableColumn(
         "image_sensor_to_ego_pose_matrix", pl.Array(pl.Float32, shape=(4, 4))
     )
@@ -70,6 +74,9 @@ class ImageFrameDataModel(BaseModel, DataModelInterface):
       image_height: Image height in pixels. Set to None if it's not available.
       image_width: Image width in pixels. Set to None if it's not available.
       cam2img: Camera intrinsic matrix (3, 3).
+      image_distortion_coefficients: Lens distortion coefficients. The length depends on the
+        distortion model.
+      image_distortion_model: Lens distortion model name.
       image_sensor_to_ego_pose_matrix: Transformation matrix from the image sensor of this frame
         to the ego pose of this image frame.
       image_frame_ego_pose_to_global_matrix: Transformation matrix from the ego pose of this
@@ -89,52 +96,54 @@ class ImageFrameDataModel(BaseModel, DataModelInterface):
     image_path: str
     image_height: int | None
     image_width: int | None
-    cam2img: npt.NDArray[np.float64]  # (3, 3)
-    image_sensor_to_ego_pose_matrix: npt.NDArray[np.float64]  # (4, 4)
-    image_frame_ego_pose_to_global_matrix: npt.NDArray[np.float64]  # (4, 4)
-    lidar2cam: npt.NDArray[np.float64] | None  # (4, 4) or None
-    lidar2img: npt.NDArray[np.float64] | None  # (4, 4) or None
+    cam2img: Float64[np.ndarray, "3 3"]
+    image_distortion_coefficients: Sequence[float]
+    image_distortion_model: str
+    image_sensor_to_ego_pose_matrix: Float64[np.ndarray, "4 4"]
+    image_frame_ego_pose_to_global_matrix: Float64[np.ndarray, "4 4"]
+    lidar2cam: Float64[np.ndarray, "4 4"] | None
+    lidar2img: Float64[np.ndarray, "4 4"] | None
 
     @property
-    def cam2img_fp32(self) -> npt.NDArray[np.float32]:
+    def cam2img_fp32(self) -> Float32[np.ndarray, "3 3"]:
         """
         Convert the camera intrinsic matrix to float32.
 
         Returns:
-          npt.NDArray[np.float32]: Camera intrinsic matrix.
+          Float32[np.ndarray, "3 3"]: Camera intrinsic matrix.
         """
 
         return self.cam2img.astype(np.float32)
 
     @property
-    def image_sensor_to_ego_pose_matrix_fp32(self) -> npt.NDArray[np.float32]:
+    def image_sensor_to_ego_pose_matrix_fp32(self) -> Float32[np.ndarray, "4 4"]:
         """
         Convert the image sensor to ego pose matrix to float32.
 
         Returns:
-          npt.NDArray[np.float32]: Image sensor to ego pose matrix.
+          Float32[np.ndarray, "4 4"]: Image sensor to ego pose matrix.
         """
 
         return self.image_sensor_to_ego_pose_matrix.astype(np.float32)
 
     @property
-    def image_frame_ego_pose_to_global_matrix_fp32(self) -> npt.NDArray[np.float32]:
+    def image_frame_ego_pose_to_global_matrix_fp32(self) -> Float32[np.ndarray, "4 4"]:
         """
         Convert the image frame ego pose to global matrix to float32.
 
         Returns:
-          npt.NDArray[np.float32]: Image frame ego pose to global matrix.
+          Float32[np.ndarray, "4 4"]: Image frame ego pose to global matrix.
         """
 
         return self.image_frame_ego_pose_to_global_matrix.astype(np.float32)
 
     @property
-    def lidar2cam_fp32(self) -> npt.NDArray[np.float32] | None:
+    def lidar2cam_fp32(self) -> Float32[np.ndarray, "4 4"] | None:
         """
         Convert the lidar2cam matrix to float32 if available.
 
         Returns:
-          npt.NDArray[np.float32] | None: Lidar to camera transformation matrix.
+          Float32[np.ndarray, "4 4"] | None: Lidar to camera transformation matrix.
         """
 
         if self.lidar2cam is None:
@@ -142,12 +151,12 @@ class ImageFrameDataModel(BaseModel, DataModelInterface):
         return self.lidar2cam.astype(np.float32)
 
     @property
-    def lidar2img_fp32(self) -> npt.NDArray[np.float32] | None:
+    def lidar2img_fp32(self) -> Float32[np.ndarray, "4 4"] | None:
         """
         Convert the lidar2img projection matrix to float32 if available.
 
         Returns:
-          npt.NDArray[np.float32] | None: Lidar to image projection matrix.
+          Float32[np.ndarray, "4 4"] | None: Lidar to image projection matrix.
         """
 
         if self.lidar2img is None:
@@ -172,6 +181,10 @@ class ImageFrameDataModel(BaseModel, DataModelInterface):
             ImageFrameDatasetSchema.image_height.name: self.image_height,
             ImageFrameDatasetSchema.image_width.name: self.image_width,
             ImageFrameDatasetSchema.cam2img.name: self.cam2img_fp32,
+            ImageFrameDatasetSchema.image_distortion_coefficients.name: list(
+                self.image_distortion_coefficients
+            ),
+            ImageFrameDatasetSchema.image_distortion_model.name: self.image_distortion_model,
             ImageFrameDatasetSchema.image_sensor_to_ego_pose_matrix.name: self.image_sensor_to_ego_pose_matrix_fp32,
             ImageFrameDatasetSchema.image_frame_ego_pose_to_global_matrix.name: self.image_frame_ego_pose_to_global_matrix_fp32,
             ImageFrameDatasetSchema.lidar2cam.name: self.lidar2cam_fp32,
@@ -211,6 +224,12 @@ class ImageFrameDataModel(BaseModel, DataModelInterface):
             cam2img=np.asarray(
                 data_model[ImageFrameDatasetSchema.cam2img.name], dtype=np.float64
             ),
+            image_distortion_coefficients=list(
+                data_model[ImageFrameDatasetSchema.image_distortion_coefficients.name]
+            ),
+            image_distortion_model=data_model[
+                ImageFrameDatasetSchema.image_distortion_model.name
+            ],
             image_sensor_to_ego_pose_matrix=np.asarray(
                 data_model[ImageFrameDatasetSchema.image_sensor_to_ego_pose_matrix.name],
                 dtype=np.float64,
