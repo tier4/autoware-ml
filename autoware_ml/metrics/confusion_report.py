@@ -32,8 +32,7 @@ def confusion_class_token(index: int, class_names: tuple[str, ...] | None) -> st
         return f"class_{index}"
     if not 0 <= index < len(class_names):
         raise ValueError(
-            f"class index {index} is outside the configured class set "
-            f"({len(class_names)} classes)."
+            f"class index {index} is outside the configured class set ({len(class_names)} classes)."
         )
     return metric_token(class_names[index])
 

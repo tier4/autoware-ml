@@ -58,9 +58,6 @@ from autoware_ml.utils.mlflow_helpers import (
 )
 from autoware_ml.utils.onnx_meta import release_to_model_version, stamp_onnx_meta
 from autoware_ml.utils.onnx_precision import (
-    convert_onnx_precision,
-    resolve_onnx_precision,
-    should_convert_precision,
     validate_module_onnx_precision,
 )
 from autoware_ml.utils.runtime import (

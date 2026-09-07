@@ -17,9 +17,7 @@ from autoware_ml.metrics.detection3d.matching import DetectionState, mean_valid
 from autoware_ml.metrics.detection3d.structures import DEFAULT_TP_THRESHOLD
 
 
-def _expected_calibration_error(
-    scores: np.ndarray, correct: np.ndarray, num_bins: int
-) -> float:
+def _expected_calibration_error(scores: np.ndarray, correct: np.ndarray, num_bins: int) -> float:
     """Prediction-weighted mean gap between confidence and correctness over score bins."""
     if scores.shape[0] == 0:
         return float("nan")
