@@ -13,8 +13,11 @@ from autoware_ml.utils.deploy import merge_module_onnx_cfg
 
 PTV3_CONFIGS = [
     "tasks/multi/ptv3/voxel012_122m_t4dataset_j6gen2",
+    "tasks/multi/litept/voxel012_122m_t4dataset_j6gen2",
     "tasks/segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2",
+    "tasks/segmentation3d/litept/voxel012_122m_t4dataset_j6gen2",
     "tasks/detection3d/ptv3/voxel012_122m_t4dataset_j6gen2",
+    "tasks/detection3d/ptv3/voxel005_51m_nuscenes",
 ]
 DET_CONFIGS = [name for name in PTV3_CONFIGS if "segmentation3d" not in name]
 
@@ -56,3 +59,13 @@ def test_det_head_has_twist_follows_use_velocity(config_name: str) -> None:
     module_cfg = merge_module_onnx_cfg(cfg.deploy.onnx, "ptv3_det3d_head")
     assert isinstance(module_cfg.metainfo.has_twist, bool)
     assert module_cfg.metainfo.has_twist == cfg.model.bbox_head.use_velocity
+
+
+@pytest.mark.parametrize("config_name", DET_CONFIGS)
+def test_det_head_exports_fused_bf16_attention(config_name: str) -> None:
+    # The fused TransHead path needs the head flag and the fp16 module precision
+    # together; export refuses a mismatch, so every shipped config must pair them.
+    cfg = _compose(config_name)
+    module_cfg = merge_module_onnx_cfg(cfg.deploy.onnx, "ptv3_det3d_head")
+    assert cfg.model.bbox_head.use_bf16_cross_attention is True
+    assert module_cfg.precision == "fp16"
