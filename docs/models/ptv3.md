@@ -95,8 +95,10 @@ autoware-ml deploy \
 The deployment command switches PTv3 attention blocks into non-flash export
 mode automatically.
 
-Transformer blocks in the detection head are not fused by default. Bf16 is required
-for numerically stable TensorRT operator fusion:
+Every shipped detection config, including the LitePT ones that inherit from
+`multi/ptv3`, exports the detection head with TensorRT-fusable attention. Bf16 is
+required for numerically stable operator fusion, so the configs pair the head flag
+with an fp16 precision for the detection-head module:
 
 ```yaml
 model:
@@ -104,12 +106,22 @@ model:
     use_bf16_cross_attention: true
 deploy:
   onnx:
-    precision: fp16
+    modules:
+      ptv3_det3d_head:
+        precision: fp16
 ```
 
-Both settings are required to enable the fused path, and the resulting model requires
-an SM80 or newer GPU. Without both settings, export uses the stable but slower non-fused
-attention path.
+Both settings are required to enable the fused path, and the resulting engine requires
+an SM80 or newer GPU. Export refuses to run with only one of them set. To fall back to
+the stable but slower non-fused attention path, disable both:
+
+```bash
+autoware-ml deploy \
+    --config-name detection3d/ptv3/voxel012_122m_t4dataset_j6gen2 \
+    --weights <checkpoint> \
+    model.bbox_head.use_bf16_cross_attention=false \
+    deploy.onnx.modules.ptv3_det3d_head.precision=fp32
+```
 
 The exported ONNX model returns both `pred_labels` and `pred_probs`. The
 probability output is produced by a final softmax layer, while training and
