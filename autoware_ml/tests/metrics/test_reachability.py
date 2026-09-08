@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from math import cos, hypot, inf, isclose, pi, sin
+from math import cos, hypot, inf, isclose, pi, sin, tan
 
 import numpy as np
 import pytest
@@ -28,8 +28,8 @@ ROAD = box(-80.0, -50.0, 500.0, 50.0)
 # A single 6 m lane, so most arcs leave the surface and are truncated.
 LANE = box(-80.0, -3.0, 500.0, 3.0)
 # A bus measured at its rear axle, and a centred passenger car box.
-BUS = {"front": 5.71, "rear": 1.53, "width": 2.29}
-CAR = {"front": 2.4, "rear": 2.4, "width": 2.0}
+BUS = {"front": 5.71, "rear": 1.53, "width": 2.29, "min_turn_radius": 6.4}
+CAR = {"front": 2.4, "rear": 2.4, "width": 2.0, "min_turn_radius": 3.0}
 
 
 def _footprint(x: float, y: float, size: float = 2.0):
@@ -50,14 +50,19 @@ def _sampled_agent(kind: AgentKind, x: float, y: float, rng: np.random.Generator
         front=2.4,
         rear=2.4,
         width=2.0,
+        min_turn_radius=3.0,
     )
 
 
 def test_same_speed_lead_still_collides_in_the_worst_case() -> None:
     # Matched speed is no protection: the lead can brake or reverse while ego
     # keeps going, so the gap closes at the sum of the two worst-case speeds.
-    ego = Agent.wheeled(0.0, 0.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2.4)
-    lead = Agent.wheeled(25.0, 0.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2.4)
+    ego = Agent.wheeled(
+        0.0, 0.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2.4, min_turn_radius=3.0
+    )
+    lead = Agent.wheeled(
+        25.0, 0.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2.4, min_turn_radius=3.0
+    )
     ttc = time_to_collision(ego, lead, ROAD, PARAMS)
     # The 20.2 m between the two bodies close at 20 m/s in 1.01 s, and the corners
     # of the slightly turning bodies swing out enough to take the last 0.2 m.
@@ -65,7 +70,9 @@ def test_same_speed_lead_still_collides_in_the_worst_case() -> None:
 
 
 def test_a_stationary_object_ahead_collides_at_about_distance_over_speed() -> None:
-    ego = Agent.wheeled(0.0, 0.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2)
+    ego = Agent.wheeled(
+        0.0, 0.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2, min_turn_radius=3.0
+    )
     obj = Agent.static(30.0, 0.0, footprint=_footprint(30.0, 0.0))
     ttc = time_to_collision(ego, obj, ROAD, PARAMS)
     assert ttc != inf
@@ -73,8 +80,12 @@ def test_a_stationary_object_ahead_collides_at_about_distance_over_speed() -> No
 
 
 def test_oncoming_closes_at_combined_speed() -> None:
-    ego = Agent.wheeled(0.0, 0.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2)
-    obj = Agent.wheeled(40.0, 0.0, heading=pi, speed=10.0, front=2.4, rear=2.4, width=2)
+    ego = Agent.wheeled(
+        0.0, 0.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2, min_turn_radius=3.0
+    )
+    obj = Agent.wheeled(
+        40.0, 0.0, heading=pi, speed=10.0, front=2.4, rear=2.4, width=2, min_turn_radius=3.0
+    )
     ttc = time_to_collision(ego, obj, ROAD, PARAMS)
     assert ttc != inf
     assert 1.7 <= ttc <= 2.1  # ~ 40 / (10 + 10)
@@ -83,27 +94,37 @@ def test_oncoming_closes_at_combined_speed() -> None:
 def test_oncoming_beyond_ego_reach_still_collides() -> None:
     # The object's approach path is checked on the full drivable surface localized to
     # its own reach, so an incoming vehicle starting outside ego's reach clip is found.
-    ego = Agent.wheeled(0.0, 0.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2)
-    obj = Agent.wheeled(50.0, 0.0, heading=pi, speed=10.0, front=2.4, rear=2.4, width=2)
+    ego = Agent.wheeled(
+        0.0, 0.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2, min_turn_radius=3.0
+    )
+    obj = Agent.wheeled(
+        50.0, 0.0, heading=pi, speed=10.0, front=2.4, rear=2.4, width=2, min_turn_radius=3.0
+    )
     ttc = time_to_collision(ego, obj, ROAD, PARAMS)
     assert 2.1 <= ttc <= 2.4  # ~ (50 - 2 * 3.4 body reach) / 20
 
 
 def test_crossing_living_agent_is_finite_within_horizon() -> None:
-    ego = Agent.wheeled(0.0, 0.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2)
+    ego = Agent.wheeled(
+        0.0, 0.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2, min_turn_radius=3.0
+    )
     ped = Agent.living(18.0, 6.0, speed=4.0, radius=0.4)
     ttc = time_to_collision(ego, ped, ROAD, PARAMS)
     assert ttc != inf and ttc <= PARAMS.horizon_s
 
 
 def test_a_far_object_is_unreachable_within_the_horizon() -> None:
-    ego = Agent.wheeled(0.0, 0.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2)
+    ego = Agent.wheeled(
+        0.0, 0.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2, min_turn_radius=3.0
+    )
     obj = Agent.static(200.0, 0.0, footprint=_footprint(200.0, 0.0))
     assert time_to_collision(ego, obj, ROAD, PARAMS) == inf
 
 
 def test_a_wheeled_set_needs_a_drivable_surface() -> None:
-    ego = Agent.wheeled(0.0, 0.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2)
+    ego = Agent.wheeled(
+        0.0, 0.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2, min_turn_radius=3.0
+    )
     obj = Agent.static(20.0, 0.0, footprint=_footprint(20.0, 0.0))
     with pytest.raises(ValueError, match="drivable"):
         time_to_collision(ego, obj, None, PARAMS)
@@ -114,12 +135,16 @@ def test_disconnected_road_is_unreachable() -> None:
     # strip crosses the gap, so the strips can never meet. A wheeled agent off the
     # surface entirely has no drivable arc at all.
     split_road = box(-80.0, -10.0, 200.0, 10.0).union(box(-80.0, 20.0, 200.0, 40.0))
-    ego = Agent.wheeled(0.0, 0.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2)
+    ego = Agent.wheeled(
+        0.0, 0.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2, min_turn_radius=3.0
+    )
     oncoming_across = Agent.wheeled(
-        5.0, 30.0, heading=-pi / 2, speed=10.0, front=2.4, rear=2.4, width=2
+        5.0, 30.0, heading=-pi / 2, speed=10.0, front=2.4, rear=2.4, width=2, min_turn_radius=3.0
     )
     assert time_to_collision(ego, oncoming_across, split_road, PARAMS) == inf
-    off_road = Agent.wheeled(0.0, 60.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2)
+    off_road = Agent.wheeled(
+        0.0, 60.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2, min_turn_radius=3.0
+    )
     assert time_to_collision(ego, off_road, ROAD, PARAMS) == inf
     # The filled reachable region keeps only the strip the agent is on.
     region = wheeled_reachable_region(ego, PARAMS, split_road)
@@ -134,7 +159,9 @@ def test_params_reject_step_exceeding_horizon() -> None:
 def test_steps_stay_within_horizon() -> None:
     # A non-divisible horizon/dt floors to the last step inside the horizon, while an
     # exact multiple keeps its final step despite floating point.
-    ego = Agent.wheeled(0.0, 0.0, heading=0.0, speed=1.0, front=2.4, rear=2.4, width=1)
+    ego = Agent.wheeled(
+        0.0, 0.0, heading=0.0, speed=1.0, front=2.4, rear=2.4, width=1, min_turn_radius=3.0
+    )
     assert EgoReachability(ego, ROAD, ReachabilityParams(horizon_s=1.0, dt_s=0.6)).steps == 1
     assert EgoReachability(ego, ROAD, ReachabilityParams(horizon_s=3.0, dt_s=0.1)).steps == 30
     # A meeting first reachable at 1.1 s lies beyond the 1.0 s horizon, so it stays inf.
@@ -153,7 +180,9 @@ def test_low_speed_region_stays_valid_past_pi_sweep() -> None:
     # At low speed the max-curvature arcs sweep past pi and fold over each other,
     # the region must still come out valid with sane membership.
     for speed in (0.83, 2.78, 3.0):
-        agent = Agent.wheeled(0.0, 0.0, heading=0.0, speed=speed, front=2.4, rear=2.4, width=2)
+        agent = Agent.wheeled(
+            0.0, 0.0, heading=0.0, speed=speed, front=2.4, rear=2.4, width=2, min_turn_radius=3.0
+        )
         region = wheeled_reachable_region(agent, PARAMS, ROAD)
         assert region.is_valid and not region.is_empty
         assert region.contains(Point(min(speed * PARAMS.horizon_s * 0.9, 10.0), 0.0))
@@ -229,7 +258,7 @@ def test_the_swept_body_covers_the_outer_front_corner_through_a_tight_turn() -> 
     so a static obstacle at the corner collides no later than that.
     """
     ego = Agent.wheeled(0.0, 0.0, heading=0.0, speed=3.0, **BUS)
-    radius = PARAMS.turn_radius(ego.speed)
+    radius = PARAMS.turn_radius(ego)
     travel = 0.5 * ego.speed * PARAMS.horizon_s
 
     # Mid-turn pose on the tightest left arc, the turn centre is (0, radius).
@@ -249,7 +278,11 @@ def test_the_swept_body_covers_the_outer_front_corner_through_a_tight_turn() -> 
 
 @pytest.mark.parametrize(
     ("speed", "body"),
-    [(16.7, BUS), (16.7, {"front": 1.0, "rear": 1.0, "width": 0.8}), (3.0, BUS)],
+    [
+        (16.7, BUS),
+        (16.7, {"front": 1.0, "rear": 1.0, "width": 0.8, "min_turn_radius": 3.0}),
+        (3.0, BUS),
+    ],
     ids=["bus", "motorcycle", "bus-at-the-radius-floor"],
 )
 def test_neighbouring_arcs_overlap_at_their_far_ends(speed: float, body: dict) -> None:
@@ -308,8 +341,12 @@ def test_a_one_lane_bend_is_not_overly_pessimistic() -> None:
     model is too pessimistic to trust in real intersections.
     """
     junction = box(-40.0, -2.0, 2.0, 2.0).union(box(-2.0, -40.0, 2.0, 2.0))
-    ego = Agent.wheeled(-30.0, 0.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2.0)
-    crossing = Agent.wheeled(0.0, -30.0, heading=pi / 2, speed=10.0, front=2.4, rear=2.4, width=2.0)
+    ego = Agent.wheeled(
+        -30.0, 0.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2.0, min_turn_radius=3.0
+    )
+    crossing = Agent.wheeled(
+        0.0, -30.0, heading=pi / 2, speed=10.0, front=2.4, rear=2.4, width=2.0, min_turn_radius=3.0
+    )
 
     ttc = time_to_collision(ego, crossing, junction, PARAMS)
 
@@ -319,7 +356,9 @@ def test_a_one_lane_bend_is_not_overly_pessimistic() -> None:
 
 def test_an_object_beside_ego_collides_at_the_first_step() -> None:
     """A pedestrian against ego's flank is the case the metric exists to score."""
-    ego = Agent.wheeled(0.0, 0.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2.4)
+    ego = Agent.wheeled(
+        0.0, 0.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2.4, min_turn_radius=3.0
+    )
     ped = Agent.living(0.1, 0.55, speed=1.4, radius=0.4)
 
     assert EgoReachability(ego, ROAD, PARAMS).time_to_collision(ped) == PARAMS.dt_s
@@ -328,8 +367,12 @@ def test_an_object_beside_ego_collides_at_the_first_step() -> None:
 def test_the_body_sweep_does_not_cross_a_narrow_median() -> None:
     """The swept body must not hop a gap thinner than the body itself."""
     median = box(-100.0, -4.0, 200.0, 0.0).union(box(-100.0, 0.5, 200.0, 4.5))
-    ego = Agent.wheeled(0.0, -2.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2.4)
-    oncoming = Agent.wheeled(40.0, 2.5, heading=pi, speed=10.0, front=2.4, rear=2.4, width=2.4)
+    ego = Agent.wheeled(
+        0.0, -2.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2.4, min_turn_radius=3.0
+    )
+    oncoming = Agent.wheeled(
+        40.0, 2.5, heading=pi, speed=10.0, front=2.4, rear=2.4, width=2.4, min_turn_radius=3.0
+    )
 
     reachable = wheeled_reachable_set(ego, 2.0, PARAMS, median)
 
@@ -340,7 +383,9 @@ def test_the_body_sweep_does_not_cross_a_narrow_median() -> None:
 def test_a_stopped_agent_still_occupies_its_body() -> None:
     # Ego is measured at its rear axle, so the body reaches much further ahead of
     # the reference point than behind it.
-    stopped = Agent.wheeled(20.0, 0.0, heading=0.0, speed=0.0, front=3.9, rear=1.0, width=3.0)
+    stopped = Agent.wheeled(
+        20.0, 0.0, heading=0.0, speed=0.0, front=3.9, rear=1.0, width=3.0, min_turn_radius=3.0
+    )
 
     body = reachable_set(stopped, 1.0, PARAMS, ROAD)
 
@@ -354,7 +399,9 @@ def test_the_leading_end_of_the_body_follows_the_travel_direction() -> None:
     # rear extent, so an ego measured at its rear axle reaches its reach plus 3.9 m
     # ahead but only its reach plus 1.0 m behind. A slightly turning body swings a
     # corner a few centimetres further along, hence the one-sided slack.
-    ego = Agent.wheeled(0.0, 0.0, heading=0.0, speed=10.0, front=3.9, rear=1.0, width=2.0)
+    ego = Agent.wheeled(
+        0.0, 0.0, heading=0.0, speed=10.0, front=3.9, rear=1.0, width=2.0, min_turn_radius=3.0
+    )
 
     reachable = wheeled_reachable_set(ego, 1.0, PARAMS, ROAD)
     min_x, _, max_x, _ = reachable.bounds
@@ -373,20 +420,44 @@ def test_vehicle_geometry_is_measured_from_the_rear_axle() -> None:
         wheel_tread=1.64,
         left_overhang=0.128,
         right_overhang=0.128,
+        max_steer_angle=0.64,
     )
 
     assert vehicle.front == pytest.approx(3.79)
     assert vehicle.rear == pytest.approx(1.1)
     assert vehicle.width == pytest.approx(1.896)
+    assert vehicle.min_turn_radius == pytest.approx(2.79 / tan(0.64))
     with pytest.raises(ValueError, match="wheel_base"):
-        VehicleGeometry(0.0, 1.0, 1.0, 1.6, 0.1, 0.1)
+        VehicleGeometry(0.0, 1.0, 1.0, 1.6, 0.1, 0.1, 0.64)
+    with pytest.raises(ValueError, match="max_steer_angle"):
+        VehicleGeometry(2.79, 1.0, 1.1, 1.64, 0.128, 0.128, 0.0)
+
+
+def test_the_turn_radius_floor_belongs_to_the_agent() -> None:
+    """At low speed the steering limit, not the friction bound, decides the reach.
+
+    The same bus body with a 3 m friction floor (unknown steering) swings much
+    wider than with its 6.4 m steering limit, so the two must not share one floor.
+    """
+    unknown = Agent.wheeled(0.0, 0.0, heading=0.0, speed=3.0, **{**BUS, "min_turn_radius": 3.0})
+    ego = Agent.wheeled(0.0, 0.0, heading=0.0, speed=3.0, **BUS)
+
+    assert PARAMS.turn_radius(unknown) == pytest.approx(3.0)
+    assert PARAMS.turn_radius(ego) == pytest.approx(6.4)
+    _, unknown_min_y, _, unknown_max_y = wheeled_reachable_set(unknown, 2.0, PARAMS, ROAD).bounds
+    _, ego_min_y, _, ego_max_y = wheeled_reachable_set(ego, 2.0, PARAMS, ROAD).bounds
+    assert unknown_max_y - unknown_min_y > ego_max_y - ego_min_y + 1.0
 
 
 def test_a_stopped_body_stays_on_its_own_side_of_a_median() -> None:
     """A parked car must not buffer across a median into a lane it cannot drive to."""
     median = box(-100.0, -4.0, 200.0, 0.0).union(box(-100.0, 0.5, 200.0, 4.5))
-    ego = Agent.wheeled(0.0, -2.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2.4)
-    parked = Agent.wheeled(40.0, 0.7, heading=pi, speed=0.0, front=2.4, rear=2.4, width=2.4)
+    ego = Agent.wheeled(
+        0.0, -2.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2.4, min_turn_radius=3.0
+    )
+    parked = Agent.wheeled(
+        40.0, 0.7, heading=pi, speed=0.0, front=2.4, rear=2.4, width=2.4, min_turn_radius=3.0
+    )
 
     body = reachable_set(parked, 1.0, PARAMS, median)
 
@@ -396,7 +467,9 @@ def test_a_stopped_body_stays_on_its_own_side_of_a_median() -> None:
 
 def test_a_stopped_agent_off_the_surface_has_no_body() -> None:
     """Off-surface is infeasible for a stopped agent exactly as it is for a moving one."""
-    parked = Agent.wheeled(20.0, 70.0, heading=0.0, speed=0.0, front=2.4, rear=2.4, width=2)
+    parked = Agent.wheeled(
+        20.0, 70.0, heading=0.0, speed=0.0, front=2.4, rear=2.4, width=2, min_turn_radius=3.0
+    )
 
     assert reachable_set(parked, 1.0, PARAMS, ROAD).is_empty
 
@@ -405,7 +478,9 @@ def test_a_hairline_map_seam_does_not_shrink_the_front() -> None:
     """Abutting ways rounded apart by a nanometre must not reject crossing arcs."""
     seamed = box(-80.0, -3.5, 400.0, 0.0).union(box(-80.0, 1e-9, 400.0, 3.5))
     seamless = box(-80.0, -3.5, 400.0, 3.5)
-    ego = Agent.wheeled(0.0, -1.75, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2)
+    ego = Agent.wheeled(
+        0.0, -1.75, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2, min_turn_radius=3.0
+    )
 
     seamed_area = EgoReachability(ego, seamed, PARAMS)._reachable_set(30).area
     seamless_area = EgoReachability(ego, seamless, PARAMS)._reachable_set(30).area
@@ -424,6 +499,7 @@ def test_a_hairline_map_seam_does_not_shrink_the_front() -> None:
             "front": 1.0,
             "rear": 1.0,
             "half_width": 1.0,
+            "min_turn_radius": 3.0,
         },
         {
             "kind": AgentKind.WHEELED,
@@ -432,6 +508,7 @@ def test_a_hairline_map_seam_does_not_shrink_the_front() -> None:
             "front": 1.0,
             "rear": 1.0,
             "half_width": 1.0,
+            "min_turn_radius": 3.0,
         },
         {
             "kind": AgentKind.STATIC,
@@ -439,6 +516,7 @@ def test_a_hairline_map_seam_does_not_shrink_the_front() -> None:
             "front": 1.0,
             "rear": 1.0,
             "half_width": 1.0,
+            "min_turn_radius": 3.0,
             "footprint": box(0.0, 0.0, 1.0, 1.0),
         },
         {
@@ -447,6 +525,7 @@ def test_a_hairline_map_seam_does_not_shrink_the_front() -> None:
             "front": 1.0,
             "rear": 1.0,
             "half_width": 1.0,
+            "min_turn_radius": 3.0,
             "footprint": box(0.0, 0.0, 1.0, 1.0),
         },
         {
@@ -455,9 +534,19 @@ def test_a_hairline_map_seam_does_not_shrink_the_front() -> None:
             "front": 1.0,
             "rear": 1.0,
             "half_width": 1.0,
+            "min_turn_radius": 3.0,
             "footprint": Polygon(),
         },
-        {"kind": "wheeled", "speed": 10.0, "front": 1.0, "rear": 1.0, "half_width": 1.0},
+        {
+            "kind": "wheeled",
+            "speed": 10.0,
+            "front": 1.0,
+            "rear": 1.0,
+            "half_width": 1.0,
+            "min_turn_radius": 3.0,
+        },
+        {"kind": AgentKind.WHEELED, "speed": 10.0, "min_turn_radius": 0.0},
+        {"kind": AgentKind.LIVING, "speed": 1.0, "min_turn_radius": 3.0},
     ],
 )
 def test_an_unusable_agent_is_rejected(kwargs: dict) -> None:
@@ -471,6 +560,7 @@ def test_an_unusable_agent_is_rejected(kwargs: dict) -> None:
                 "front": 1.0,
                 "rear": 1.0,
                 "half_width": 1.0,
+                "min_turn_radius": 3.0,
                 **kwargs,
             }
         )

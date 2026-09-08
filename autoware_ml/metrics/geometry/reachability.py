@@ -58,7 +58,7 @@ identical ego geometry per box.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import ceil, cos, hypot, inf, isfinite, sin
+from math import ceil, cos, hypot, inf, isfinite, pi, sin, tan
 
 import numpy as np
 import shapely
@@ -84,10 +84,12 @@ class ReachabilityParams:
     """Spec-versioned parameters shared by every reachability TTC evaluation.
 
     The wheeled turn radius is bounded by the lateral-acceleration (friction)
-    limit, ``R = v^2 / max_lateral_accel``, floored at ``min_radius_m`` for low
-    speed, so a fast vehicle cannot turn implausibly tight. ``arc_samples`` is
-    the least number of curvatures a set is traced with, raised per set until
-    neighbouring arcs still overlap at their far ends.
+    limit, ``R = v^2 / max_lateral_accel``, and floored by the agent's own
+    steering limit. ``min_radius_m`` is that floor for agents whose steering
+    geometry is unknown, a detection box, and callers hand it to
+    :meth:`Agent.wheeled`. ``arc_samples`` is the least number of curvatures a
+    set is traced with, raised per set until neighbouring arcs still overlap at
+    their far ends.
     """
 
     horizon_s: float = 4.0
@@ -110,16 +112,18 @@ class ReachabilityParams:
             # the most important one for a lane follower, untested.
             raise ValueError("arc_samples must be odd so zero curvature is sampled.")
 
-    def turn_radius(self, speed: float) -> float:
-        """Minimum feasible turn radius at ``speed`` (friction-limited, floored).
+    def turn_radius(self, agent: Agent) -> float:
+        """Tightest turn ``agent`` can drive at its speed.
+
+        The friction limit governs at speed, the agent's steering limit at low speed.
 
         Args:
-            speed: Speed in m/s.
+            agent: Wheeled agent, carrying its speed and steering floor.
 
         Returns:
             The minimum turn radius in meters.
         """
-        return max(speed * speed / self.max_lateral_accel_mps2, self.min_radius_m)
+        return max(agent.speed * agent.speed / self.max_lateral_accel_mps2, agent.min_turn_radius)
 
 
 @dataclass(frozen=True)
@@ -149,6 +153,7 @@ class Agent:
     front: float
     rear: float
     half_width: float
+    min_turn_radius: float
     footprint: Polygon | None = None
 
     @classmethod
@@ -162,6 +167,7 @@ class Agent:
         front: float,
         rear: float,
         width: float,
+        min_turn_radius: float,
     ) -> Agent:
         """A road-bound agent, whose reachable set follows its heading.
 
@@ -173,11 +179,16 @@ class Agent:
             front: Body extent ahead of the reference point along the heading, in meters.
             rear: Body extent behind the reference point, in meters.
             width: Body width across the heading in meters.
+            min_turn_radius: Tightest turn the steering allows, in meters. Ego takes
+                it from its vehicle description, a box has no steering geometry and
+                takes the friction floor of the shared parameters.
 
         Returns:
             The wheeled agent.
         """
-        return cls(AgentKind.WHEELED, x, y, heading, speed, front, rear, width / 2.0)
+        return cls(
+            AgentKind.WHEELED, x, y, heading, speed, front, rear, width / 2.0, min_turn_radius
+        )
 
     @classmethod
     def living(cls, x: float, y: float, speed: float, radius: float) -> Agent:
@@ -192,7 +203,7 @@ class Agent:
         Returns:
             The living agent, whose heading no reachable set reads.
         """
-        return cls(AgentKind.LIVING, x, y, 0.0, speed, radius, radius, radius)
+        return cls(AgentKind.LIVING, x, y, 0.0, speed, radius, radius, radius, 0.0)
 
     @classmethod
     def static(cls, x: float, y: float, footprint: Polygon) -> Agent:
@@ -216,6 +227,7 @@ class Agent:
             (max_x - min_x) / 2.0,
             (max_x - min_x) / 2.0,
             (max_y - min_y) / 2.0,
+            0.0,
             footprint,
         )
 
@@ -239,6 +251,11 @@ class Agent:
         if any(value <= 0.0 for value in extents):
             # A zero body collapses every sweep to an empty geometry, same trap.
             raise ValueError("front, rear and half_width must be > 0.")
+        if self.kind == AgentKind.WHEELED:
+            if not isfinite(self.min_turn_radius) or self.min_turn_radius <= 0.0:
+                raise ValueError("a wheeled agent needs a finite min_turn_radius > 0.")
+        elif self.min_turn_radius != 0.0:
+            raise ValueError(f"a {self.kind} agent does not steer, so it takes no turn radius.")
 
     @property
     def body_reach(self) -> float:
@@ -257,8 +274,9 @@ class VehicleGeometry:
 
     The ego pose the datasets record is ``base_link``, the rear axle centre, so
     the body extends ``wheel_base + front_overhang`` ahead of it and only
-    ``rear_overhang`` behind it. Taking the numbers in the form the vehicle
-    description ships them keeps them copyable rather than re-derived by hand.
+    ``rear_overhang`` behind it, and the steering limit sets the tightest turn
+    that axle can drive. Taking the numbers in the form the vehicle description
+    ships them keeps them copyable rather than re-derived by hand.
     """
 
     wheel_base: float
@@ -267,6 +285,7 @@ class VehicleGeometry:
     wheel_tread: float
     left_overhang: float
     right_overhang: float
+    max_steer_angle: float
 
     def __post_init__(self) -> None:
         values = (
@@ -281,6 +300,8 @@ class VehicleGeometry:
             raise ValueError("every vehicle dimension must be a finite value >= 0.")
         if self.wheel_base <= 0.0 or self.wheel_tread <= 0.0 or self.rear_overhang <= 0.0:
             raise ValueError("wheel_base, wheel_tread and rear_overhang must be > 0.")
+        if not isfinite(self.max_steer_angle) or not 0.0 < self.max_steer_angle < pi / 2.0:
+            raise ValueError("max_steer_angle must be in (0, pi/2) radians.")
 
     @property
     def front(self) -> float:
@@ -296,6 +317,11 @@ class VehicleGeometry:
     def width(self) -> float:
         """Body width in meters."""
         return self.wheel_tread + self.left_overhang + self.right_overhang
+
+    @property
+    def min_turn_radius(self) -> float:
+        """Tightest turn radius of the rear axle at full steering, in meters."""
+        return self.wheel_base / tan(self.max_steer_angle)
 
 
 def _arc_poses(agent: Agent, distances: np.ndarray, kappas: np.ndarray) -> np.ndarray:
@@ -449,7 +475,7 @@ def wheeled_reachable_set(
     reach = agent.speed * t
     if reach <= SURFACE_TOLERANCE_M:
         return pieces[0]
-    kmax = 1.0 / params.turn_radius(agent.speed)
+    kmax = 1.0 / params.turn_radius(agent)
     # Sized for the horizon so every step samples the same curvatures and stays
     # inside the horizon set.
     horizon_reach = agent.speed * params.horizon_s
