@@ -262,9 +262,11 @@ class ResizeCropFlipRotImage(BaseTransform):
             flip = False
             rotate = 0.0
 
-        resized_width = int(source_width * resize)
-        resized_height = int(source_height * resize)
+        resized_width = int(round(source_width * resize))
+        resized_height = int(round(source_height * resize))
         resized = cv2.resize(image, (resized_width, resized_height))
+        scale_x = resized_width / source_width
+        scale_y = resized_height / source_height
 
         crop_y = int((1.0 - crop_bottom) * resized_height) - final_height
         max_crop_x = max(0, resized_width - final_width)
@@ -272,8 +274,8 @@ class ResizeCropFlipRotImage(BaseTransform):
         cropped = _crop_with_zero_padding(resized, crop_x, crop_y, final_width, final_height)
 
         transform = np.eye(4, dtype=np.float32)
-        transform[0, 0] = resize
-        transform[1, 1] = resize
+        transform[0, 0] = scale_x
+        transform[1, 1] = scale_y
         transform[0, 2] = -crop_x
         transform[1, 2] = -crop_y
 
