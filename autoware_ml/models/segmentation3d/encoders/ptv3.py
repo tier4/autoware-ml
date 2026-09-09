@@ -577,40 +577,26 @@ class SerializedAttention(PointModule):
 
         offset = nn.functional.pad(point.offset, (1, 0))
         padded_offset = nn.functional.pad(torch.cumsum(padded_bincount, dim=0), (1, 0))
-        pad = torch.arange(padded_offset[-1], device=point.offset.device)
-        unpad = torch.arange(offset[-1], device=point.offset.device)
-        cu_seqlens = [] if self.enable_flash else None
-        for batch_index in range(point.offset.numel()):
-            unpad[offset[batch_index] : offset[batch_index + 1]] += (
-                padded_offset[batch_index] - offset[batch_index]
-            )
-            if bincount[batch_index] != padded_bincount[batch_index]:
-                pad[
-                    padded_offset[batch_index + 1]
-                    - self.patch_size
-                    + (bincount[batch_index] % self.patch_size) : padded_offset[batch_index + 1]
-                ] = pad[
-                    padded_offset[batch_index + 1]
-                    - 2 * self.patch_size
-                    + (bincount[batch_index] % self.patch_size) : padded_offset[batch_index + 1]
-                    - self.patch_size
-                ]
-            pad[padded_offset[batch_index] : padded_offset[batch_index + 1]] -= (
-                padded_offset[batch_index] - offset[batch_index]
-            )
-            if cu_seqlens is not None:
-                cu_seqlens.append(
-                    torch.arange(
-                        padded_offset[batch_index],
-                        padded_offset[batch_index + 1],
-                        step=self.patch_size,
-                        dtype=torch.int32,
-                        device=point.offset.device,
-                    )
-                )
-        if cu_seqlens is None:
+        # Build the padded token grid for the whole batch at once. The per-sample
+        # loop this replaces sliced CUDA tensors with 0-d CUDA bounds, and every
+        # bound cost a host synchronisation: ~15 per sample per attention block,
+        # about 3000 per training step, which serialised the CPU against the GPU.
+        device = point.offset.device
+        slot = torch.arange(padded_offset[-1], device=device)
+        token = torch.arange(point.feat.shape[0], device=device)
+        slot_batch = torch.searchsorted(padded_offset[1:], slot, right=True)
+        token_batch = torch.searchsorted(offset[1:], token, right=True)
+        shift = padded_offset[:-1] - offset[:-1]
+        unpad = token + shift[token_batch]
+        local = slot - padded_offset[slot_batch]
+        # The padding slots at the tail of a sample borrow the tokens one window
+        # back, so the last window is a full sliding window over the final tokens.
+        borrowed = torch.where(local < bincount[slot_batch], local, local - self.patch_size)
+        pad = offset[:-1][slot_batch] + borrowed
+        if not self.enable_flash:
             return pad, unpad, None
-        return pad, unpad, nn.functional.pad(torch.cat(cu_seqlens), (0, 1), value=padded_offset[-1])
+        window_start = slot[local % self.patch_size == 0]
+        return pad, unpad, torch.cat([window_start, padded_offset[-1:]]).to(torch.int32)
 
     @torch.no_grad()
     def disable_flash(self) -> None:
@@ -640,7 +626,19 @@ class SerializedAttention(PointModule):
             )
         patch_size = self.patch_size
         channel_count = self.channels
-        pad, unpad, cu_seqlens = self._get_padding_and_inverse(point)
+        # Every block of a stage sees the same offsets, so the padding is computed
+        # once per stage and cached on the point (a new Point is built at every
+        # pooling, which invalidates it).
+        pad_key, unpad_key, seq_key = (f"{k}_{patch_size}" for k in ("pad", "unpad", "cu_seqlens"))
+        if not self.export_mode and pad_key in point:
+            pad, unpad = point[pad_key], point[unpad_key]
+            cu_seqlens = point.get(seq_key)
+        else:
+            pad, unpad, cu_seqlens = self._get_padding_and_inverse(point)
+            if not self.export_mode:
+                point[pad_key], point[unpad_key] = pad, unpad
+                if cu_seqlens is not None:
+                    point[seq_key] = cu_seqlens
         order = point.serialized_order[self.order_index][pad]
         inverse = unpad[point.serialized_inverse[self.order_index]]
         qkv = self.qkv(point.feat)[order]
