@@ -17,67 +17,14 @@ from autoware_ml.metrics.detection3d.critical_fp_fn import CriticalFPFN
 from autoware_ml.metrics.detection3d.matching import DetectionState
 from autoware_ml.metrics.detection3d.structures import Detection3DSample
 from autoware_ml.metrics.detection3d.suite import Detection3DMetricSuite
-from autoware_ml.metrics.geometry.reachability import ReachabilityParams, VehicleGeometry
-
-# Ego body in vehicle description terms, measured from the rear axle: 2.0 m wide,
-# 3.79 m ahead of the reference point and 1.1 m behind it.
-EGO = VehicleGeometry(
-    wheel_base=2.79,
-    front_overhang=1.0,
-    rear_overhang=1.1,
-    wheel_tread=1.64,
-    left_overhang=0.18,
-    right_overhang=0.18,
-    max_steer_angle=0.64,
-)
-
-CLASS_NAMES = (
-    "car",
-    "truck",
-    "bus",
-    "train",
-    "motorcycle",
-    "bicycle",
-    "pedestrian",
-    "animal",
-    "barrier",
-    "traffic_cone",
-    "debris",
-    "bicycle_rack",
-    "vehicle_extension",
-)
-
-
-class _FakeMap:
-    def __init__(self, polygon):
-        self._polygon = polygon
-
-    def region_union(self, tokens):
-        return self._polygon
-
-    def speed_at(self, x, y, default):
-        return default
-
-
-class _FakeProvider:
-    def __init__(self, polygon):
-        self._map = _FakeMap(polygon)
-
-    def get(self, scene_token):
-        return self._map
-
-    def available(self, scene_token):
-        return True
-
-
-def _b(cx, cy, yaw=0.0):
-    return [cx, cy, 0.0, 4.0, 2.0, 1.5, yaw, 0.0, 0.0]
+from autoware_ml.metrics.geometry.reachability import ReachabilityParams
+from autoware_ml.tests.metrics.conftest import CLASS_NAMES, EGO, FakeMapProvider, collision_box
 
 
 def test_suite_computes_ttc_and_criticality_metrics() -> None:
     collision = CollisionTTC(
         CLASS_NAMES,
-        _FakeProvider(box(-80.0, -60.0, 500.0, 60.0)),
+        FakeMapProvider(box(-80.0, -60.0, 500.0, 60.0)),
         vehicle=EGO,
         params=ReachabilityParams(horizon_s=4.0, dt_s=0.1),
         max_speed_mps=10.0,
@@ -92,12 +39,15 @@ def test_suite_computes_ttc_and_criticality_metrics() -> None:
     )
 
     # GT: a lead car and a barrier ahead, both reachable in the worst case.
-    gt_boxes = torch.tensor([_b(25.0, 0.0), _b(30.0, 0.0)], dtype=torch.float32)
+    gt_boxes = torch.tensor(
+        [collision_box(25.0, 0.0), collision_box(30.0, 0.0)], dtype=torch.float32
+    )
     gt_labels = torch.tensor([0, 8], dtype=torch.long)  # car, barrier
     # Preds: match both GT + a phantom barrier in the path (critical FP).
     preds = {
         "bboxes_3d": torch.tensor(
-            [_b(25.0, 0.0), _b(30.0, 0.0), _b(18.0, 0.0)], dtype=torch.float32
+            [collision_box(25.0, 0.0), collision_box(30.0, 0.0), collision_box(18.0, 0.0)],
+            dtype=torch.float32,
         ),
         "scores_3d": torch.tensor([0.9, 0.9, 0.9], dtype=torch.float32),
         "labels_3d": torch.tensor([0, 8, 8], dtype=torch.long),  # car, barrier, phantom barrier
@@ -135,7 +85,7 @@ def test_collision_provider_declares_context_keys() -> None:
         class_names=CLASS_NAMES,
         collision=CollisionTTC(
             CLASS_NAMES,
-            _FakeProvider(box(-80.0, -60.0, 500.0, 60.0)),
+            FakeMapProvider(box(-80.0, -60.0, 500.0, 60.0)),
             vehicle=EGO,
             params=ReachabilityParams(horizon_s=4.0, dt_s=0.1),
         ),
@@ -151,7 +101,7 @@ def test_the_score_floor_skips_only_what_no_metric_reads() -> None:
     road = box(-80.0, -60.0, 500.0, 60.0)
     collision = CollisionTTC(
         CLASS_NAMES,
-        _FakeProvider(road),
+        FakeMapProvider(road),
         vehicle=EGO,
         params=ReachabilityParams(horizon_s=4.0, dt_s=0.1),
         max_speed_mps=10.0,
@@ -159,12 +109,12 @@ def test_the_score_floor_skips_only_what_no_metric_reads() -> None:
     eval_out = {
         "predictions": [
             {
-                "bboxes_3d": torch.tensor([_b(10.0, 0.0), _b(14.0, 0.0)]),
+                "bboxes_3d": torch.tensor([collision_box(10.0, 0.0), collision_box(14.0, 0.0)]),
                 "scores_3d": torch.tensor([0.9, 0.1]),
                 "labels_3d": torch.tensor([0, 0]),
             }
         ],
-        "gt_boxes": [torch.tensor([_b(10.0, 0.0)])],
+        "gt_boxes": [torch.tensor([collision_box(10.0, 0.0)])],
         "gt_labels": [torch.tensor([0])],
         "ego2global": [np.eye(4)],
         "scene_token": ["scene"],
@@ -191,7 +141,7 @@ def test_a_metric_reading_a_skipped_prediction_fails_loud() -> None:
     state = DetectionState(
         samples=[
             Detection3DSample(
-                pred_boxes=torch.tensor([_b(10.0, 0.0)]),
+                pred_boxes=torch.tensor([collision_box(10.0, 0.0)]),
                 pred_scores=torch.tensor([0.6]),
                 pred_labels=torch.tensor([0]),
                 gt_boxes=torch.zeros((0, 9)),
