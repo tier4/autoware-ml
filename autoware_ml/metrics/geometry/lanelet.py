@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 import xml.etree.ElementTree as ET
 from collections import defaultdict
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Protocol
@@ -490,16 +491,26 @@ class OsmPathResolver(Protocol):
 
     Two calls, because a scene may have no map at all: the provider asks for the
     path when it reads a map and asks :meth:`available` when a filter has to
-    decide whether the scene can take part in a map-based slice.
+    decide whether the scene can take part in a map-based slice. On top of that
+    it names the corpus it resolves against, so consumers can tell two providers
+    apart without reading a map.
     """
+
+    @property
+    def cache_key(self) -> str:
+        """The set of maps this resolver serves, e.g. the dataset root."""
+        ...
 
     def __call__(self, scene_token: object) -> str:
         """Path of the scene's ``lanelet2_map.osm``."""
+        ...
 
     def available(self, scene_token: object) -> bool:
         """Whether the scene has a map, decided without reading it."""
+        ...
 
 
+@dataclass(frozen=True)
 class LaneletMapProvider:
     """Resolves a scene token to its :class:`LaneletMap`.
 
@@ -508,16 +519,24 @@ class LaneletMapProvider:
     map is parsed once and reused, cached by path in :meth:`LaneletMap.from_osm`.
     A dataset adapter supplies the resolver (it knows the on-disk scene layout),
     tests inject a direct path.
+
+    Attributes:
+        resolve_osm: Resolver satisfying :class:`OsmPathResolver`, so it returns
+            a path when called and answers ``available``.
     """
 
-    def __init__(self, resolve_osm: OsmPathResolver) -> None:
-        """Store the scene-token to OSM-path resolver.
+    resolve_osm: OsmPathResolver
 
-        Args:
-            resolve_osm: Resolver satisfying :class:`OsmPathResolver`, so it
-                returns a path when called and answers ``available``.
+    @property
+    def cache_key(self) -> str:
+        """The set of maps this provider serves, taken from its resolver.
+
+        Consumers that group work by configuration, such as the evaluation
+        filters, have to tell two providers apart. The resolver knows which
+        corpus it points at, so the provider passes that through rather than
+        inventing an identity of its own.
         """
-        self._resolve_osm = resolve_osm
+        return self.resolve_osm.cache_key
 
     def get(self, scene_token: object) -> LaneletMap:
         """The scene's map, parsed on the first request and shared afterwards.
@@ -528,7 +547,7 @@ class LaneletMapProvider:
         Returns:
             The scene's parsed map.
         """
-        return LaneletMap.from_osm(self._resolve_osm(scene_token))
+        return LaneletMap.from_osm(self.resolve_osm(scene_token))
 
     def available(self, scene_token: object) -> bool:
         """Whether a lanelet map exists for the scene (no parse, no exception).
@@ -543,9 +562,10 @@ class LaneletMapProvider:
         Returns:
             Whether a map exists for the scene.
         """
-        return self._resolve_osm.available(scene_token)
+        return self.resolve_osm.available(scene_token)
 
 
+@dataclass(frozen=True)
 class T4LaneletMapResolver:
     """Resolves a T4 scene-directory token to its ``lanelet2_map.osm`` path.
 
@@ -555,15 +575,21 @@ class T4LaneletMapResolver:
     ``map/`` directory. :meth:`available` reports that up front so the region
     filters can exclude the scene, while :meth:`__call__` still raises if a map a
     caller expected to resolve is absent.
+
+    Attributes:
+        data_root: Dataset root the scene tokens are relative to.
     """
 
-    def __init__(self, data_root: str) -> None:
-        """Store the dataset root the scene tokens are relative to.
+    data_root: str
 
-        Args:
-            data_root: Dataset root directory.
-        """
-        self.data_root = str(data_root)
+    def __post_init__(self) -> None:
+        """Accept whatever the config layer hands over as the root path."""
+        object.__setattr__(self, "data_root", str(self.data_root))
+
+    @property
+    def cache_key(self) -> str:
+        """The dataset root, which is what decides the maps this resolver serves."""
+        return f"t4:{self.data_root}"
 
     def _osm_path(self, scene_token: object) -> Path:
         return Path(self.data_root) / str(scene_token) / "map" / "lanelet2_map.osm"

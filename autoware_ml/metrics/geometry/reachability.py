@@ -495,6 +495,30 @@ def wheeled_reachable_set(
     return shapely.union_all(pieces)
 
 
+def localized_surface(
+    agent: Agent, params: ReachabilityParams, drivable: BaseGeometry
+) -> BaseGeometry:
+    """``drivable`` clipped to the square the agent can still touch by the horizon.
+
+    Sealing and sweeping cost grow with the surface's vertex count, and a whole
+    scene's drivable union is orders of magnitude larger than one agent's reach,
+    so every consumer clips it first. The clip cannot drop reachable area:
+    ``speed * horizon + body_reach`` is the reachable set's own radius.
+
+    Args:
+        agent: Agent the surface is localized around.
+        params: Shared reachability parameters.
+        drivable: Drivable surface in the map frame.
+
+    Returns:
+        The part of ``drivable`` within the agent's reach.
+    """
+    reach = agent.speed * params.horizon_s + agent.body_reach
+    return drivable.intersection(
+        box(agent.x - reach, agent.y - reach, agent.x + reach, agent.y + reach)
+    )
+
+
 def wheeled_reachable_region(
     agent: Agent, params: ReachabilityParams, drivable: BaseGeometry
 ) -> BaseGeometry:
@@ -605,10 +629,7 @@ class EgoReachability:
         # non-divisible horizon never gains a step beyond it.
         self.steps = int(params.horizon_s / params.dt_s + 1e-9)
         self._surface = drivable
-        reach = ego.speed * params.horizon_s + ego.body_reach
-        self._drivable = drivable.intersection(
-            box(ego.x - reach, ego.y - reach, ego.x + reach, ego.y + reach)
-        ).buffer(SURFACE_TOLERANCE_M)
+        self._drivable = localized_surface(ego, params, drivable).buffer(SURFACE_TOLERANCE_M)
         shapely.prepare(self._drivable)
         self._hat = wheeled_reachable_region(ego, params, self._drivable)
         shapely.prepare(self._hat)
@@ -683,10 +704,7 @@ class EgoReachability:
         # never against ego's clip (the approach can start outside it).
         surface = None
         if obj.kind == AgentKind.WHEELED:
-            reach = obj.speed * params.horizon_s + obj.body_reach
-            surface = self._surface.intersection(
-                box(obj.x - reach, obj.y - reach, obj.x + reach, obj.y + reach)
-            ).buffer(SURFACE_TOLERANCE_M)
+            surface = localized_surface(obj, params, self._surface).buffer(SURFACE_TOLERANCE_M)
             shapely.prepare(surface)
         for index in range(max(start_hat, start_gap), self.steps + 1):
             t = index * params.dt_s
