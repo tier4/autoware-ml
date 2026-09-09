@@ -1,8 +1,9 @@
 """Critical FP / FN over the ego reachable set.
 
-Two numbers, never averaged: false positives in ego's path cause phantom braking
-(usability), false negatives in ego's path mean driving toward something unseen
-(safety). "In ego's path" is the one reachability model: an object is critical
+The two counts are reported separately because they mean different things: a
+false positive in ego's path causes phantom braking, a false negative in ego's
+path means driving toward something nobody saw. "In ego's path" is the one
+reachability model: an object is critical
 when it can collide with ego within the horizon, i.e. its per-box TTC (computed
 by the suite's collision provider, which caps finite values at its horizon) is
 finite. Both are reported as a function of the confidence threshold, because
