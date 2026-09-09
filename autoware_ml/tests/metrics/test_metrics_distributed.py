@@ -34,7 +34,13 @@ from autoware_ml.metrics.segmentation3d.suite import Segmentation3DMetricSuite
 
 
 def _det_suite(**kwargs):
-    return Detection3DMetricSuite(components=[MeanAP(), HeadingAP(), Nds(), TpErrors()], **kwargs)
+    components = [
+        MeanAP(thresholds=(0.5,)),
+        HeadingAP(thresholds=(0.5,)),
+        Nds(thresholds=(0.5,), tp_threshold=0.5),
+        TpErrors(thresholds=(0.5,), tp_threshold=0.5),
+    ]
+    return Detection3DMetricSuite(components=components, **kwargs)
 
 
 def _seg_suite(**kwargs):
@@ -108,12 +114,12 @@ def _det_worker(rank: int, world_size: int, init_file: str) -> None:
         "gloo", init_method=f"file://{init_file}", rank=rank, world_size=world_size
     )
     try:
-        metric = _det_suite(thresholds=(0.5,))
+        metric = _det_suite()
         metric.update(_det_shard(rank))
         report = metric.result(EvalStage.VAL)  # list-state gather inside compute, then build report
 
         if rank == 0:
-            reference = _det_suite(thresholds=(0.5,), sync_on_compute=False)
+            reference = _det_suite(sync_on_compute=False)
             for other in range(world_size):
                 reference.update(_det_shard(other))
             _assert_reports_equal(report, reference.result(EvalStage.VAL))
