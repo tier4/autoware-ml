@@ -15,9 +15,12 @@
 """Tests for the point-wise Lovasz-Softmax loss.
 
 The expected values come from the definition of the loss (Berman et al., 2018):
-for every class present in the labels, sort the errors ``|1[y = c] - p_c|`` in
-descending order and take their dot product with the discrete gradient of the
-Jaccard loss along that order; the loss is the mean over the present classes.
+for every class ``c`` present in the labels, the error of a point is
+``|foreground - p_c|``, where ``foreground`` is 1 if the point's label is ``c``
+and 0 otherwise, and ``p_c`` is its predicted probability for ``c``. Sort the
+errors in descending order and take their dot product with the discrete
+gradient of the Jaccard loss along that order; the loss is the mean over the
+present classes.
 """
 
 import math
@@ -39,7 +42,7 @@ def test_hand_computed_two_class_example() -> None:
     """Three points, two classes, worked through by hand from the definition.
 
     Probabilities for class 0 are 0.9, 0.6, 0.2; labels are 0, 0, 1. For each
-    present class: take the errors ``|1[y = c] - p_c|``, sort them descending,
+    present class: take the errors ``|foreground - p_c|``, sort them descending,
     and after each prefix of the sorted order compute the Jaccard loss
     ``1 - intersection / union`` between the prefix and the ground truth. The
     class term is the dot product of the sorted errors with the increments of
