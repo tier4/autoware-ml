@@ -134,10 +134,11 @@ class LovaszLoss(_Loss):
             return (probabilities * 0.0).sum()
 
         losses = []
-        for class_index in labels.unique():
+        # One device->host copy for the class list; iterating the CUDA tensor
+        # directly would synchronise once per class, and every class listed here
+        # is present, so the old per-class emptiness check was redundant.
+        for class_index in labels.unique().tolist():
             foreground = (labels == class_index).type_as(probabilities)
-            if foreground.sum() == 0:
-                continue
             class_errors = (foreground - probabilities[:, class_index]).abs()
             class_errors, permutation = torch.sort(class_errors, descending=True)
             foreground = foreground[permutation]
