@@ -5,8 +5,10 @@ e^(-decay * TTC)``, with TTC the reachability time-to-collision to ego computed
 once per frame by the suite's collision provider: each agent and ego are
 propagated at their class max speed, and TTC is the first time their reachable
 sets overlap. An object that cannot be reached within the horizon has TTC = inf
-and weight 0, so a same-speed lead or off-road scenery buys no score,
-while an imminent in-path object dominates it.
+and weight 0, so scenery off the drivable area or an object parked beyond the
+horizon buys no score, while an imminent in-path object dominates it. A lead at
+matched speed is not one of those: it may brake, so it keeps a small TTC and a
+high weight.
 
 Matching is the usual per-frame greedy center distance, only the precision and
 recall accumulation is weighted. Reported alongside the unweighted mAP, never
