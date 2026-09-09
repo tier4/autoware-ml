@@ -67,7 +67,9 @@ DEFAULT_KINDS: dict[str, AgentKind] = {
     "traffic_cone": AgentKind.STATIC,
     "debris": AgentKind.STATIC,
     "bicycle_rack": AgentKind.STATIC,
-    "vehicle_extension": AgentKind.STATIC,
+    # A trailer or towed body moves with whatever pulls it, so it gets the wheeled
+    # worst case rather than staying where the frame found it.
+    "vehicle_extension": AgentKind.WHEELED,
 }
 # Living "reasonable run" speeds (m/s). Wheeled speed comes from the lanelet map.
 DEFAULT_LIVING_SPEEDS: dict[str, float] = {"pedestrian": 3.0, "animal": 4.0, "bicycle": 6.0}
