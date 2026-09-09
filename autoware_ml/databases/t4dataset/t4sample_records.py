@@ -33,7 +33,7 @@ class T4SampleRecord(BaseModel):
     frame_basic_metadata: FrameBasicMetadata
     lidar_frame_data_models: Sequence[LidarFrameDataModel]
     lidar_source_data_models: Sequence[LidarSourceDataModel]
-    image_frame_data_models: Sequence[ImageFrameDataModel]
+    image_frame_data_models: Sequence[Sequence[ImageFrameDataModel]]
     category_mapping_data_model: CategoryMappingDataModel
     boxes_3d_data_model: Sequence[Box3DDataModel]
 

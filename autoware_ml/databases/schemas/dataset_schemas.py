@@ -81,7 +81,8 @@ class DatasetTableSchema:
 
     # Image Frames Schema
     IMAGE_FRAMES = DatasetTableColumn(
-        "image_frames", pl.List(pl.Struct(ImageFrameDatasetSchema.to_polars_field_schema()))
+        "image_frames",
+        pl.List(pl.List(pl.Struct(ImageFrameDatasetSchema.to_polars_field_schema()))),
     )
 
     # Category Schema
@@ -149,7 +150,7 @@ class DatasetRecord(BaseModel, DataModelInterface):
 
     lidar_frames: Sequence[LidarFrameDataModel]
     lidar_sources: Sequence[LidarSourceDataModel] | None
-    image_frames: Sequence[ImageFrameDataModel] | None
+    image_frames: Sequence[Sequence[ImageFrameDataModel]] | None
     category_mapping: CategoryMappingDataModel | None
     boxes_3d: Sequence[Box3DDataModel] | None
 
@@ -182,7 +183,8 @@ class DatasetRecord(BaseModel, DataModelInterface):
 
         if self.image_frames:
             data_model[DatasetTableSchema.IMAGE_FRAMES.name] = [
-                image_frame.to_dictionary() for image_frame in self.image_frames
+                [image_frame.to_dictionary() for image_frame in image_channel_frames]
+                for image_channel_frames in self.image_frames
             ]
         else:
             data_model[DatasetTableSchema.IMAGE_FRAMES.name] = []
@@ -232,8 +234,11 @@ class DatasetRecord(BaseModel, DataModelInterface):
         image_frames = data_model[DatasetTableSchema.IMAGE_FRAMES.name]
         if image_frames is not None:
             image_frames = [
-                ImageFrameDataModel.load_from_dictionary(image_frame)
-                for image_frame in image_frames
+                [
+                    ImageFrameDataModel.load_from_dictionary(image_frame)
+                    for image_frame in image_channel_frames
+                ]
+                for image_channel_frames in image_frames
             ]
         else:
             image_frames = None

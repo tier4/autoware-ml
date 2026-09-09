@@ -19,6 +19,7 @@ from typing import Sequence, Tuple
 
 import numpy as np
 import numpy.typing as npt
+from PIL import Image
 from t4_devkit import Tier4
 from t4_devkit.dataclass.box import Box3D
 from t4_devkit.schema import (
@@ -622,6 +623,12 @@ class T4RecordsGenerator:
                 sample_data_token=calibrated_camera_sample_data_token
             )
 
+            image_height = sd_record.height
+            image_width = sd_record.width
+            if image_height is None or image_width is None:
+                with Image.open(image_path) as image:
+                    image_width, image_height = image.size
+
             cam2img = np.asarray(cs_record.camera_intrinsic, dtype=np.float64)
 
             cam2global = image_frame_ego_pose_to_global_matrix @ image_sensor_to_ego_matrix
@@ -640,8 +647,8 @@ class T4RecordsGenerator:
                 image_sensor_channel_name=camera_channel_name,
                 image_timestamp_seconds=microseconds2seconds(sd_record.timestamp),
                 image_path=image_path,
-                image_height=sd_record.height,
-                image_width=sd_record.width,
+                image_height=image_height,
+                image_width=image_width,
                 cam2img=cam2img,
                 image_sensor_to_ego_pose_matrix=image_sensor_to_ego_matrix,
                 image_frame_ego_pose_to_global_matrix=image_frame_ego_pose_to_global_matrix,
@@ -649,24 +656,52 @@ class T4RecordsGenerator:
                 lidar2img=lidar2img,
             )
 
-    def _extract_image_sweeps(
-        self, sample: Sample, camera_channel_name: str, lidar_channel_name: str
+    def _extract_image_channel_frames(
+        self, sample: Sample, lidar_frame_data_model: LidarFrameDataModel
     ) -> Sequence[ImageFrameDataModel]:
         """
-        Extract multi-sweep image metadata (past camera keyframes) from a T4 Sample, for
-        sequence-based models.It walks the sample.prev chain(keyframe-to-keyframe). 
+        Extract the current-frame image metadata for all camera channels of a T4 Sample.
+
+        Args:
+          sample: T4 Sample.
+          lidar_frame_data_model: Lidar frame data model of the current T4 sample, used to
+            compute lidar2cam / lidar2img projections for each camera channel.
+
+        Returns:
+          Sequence[ImageFrameDataModel]: Image frame data models of all camera channels present
+            in the current T4 sample.
+        """
+
+        camera_channel_names = self._extract_camera_channel_names(sample=sample)
+
+        return [
+            self._extract_image_frame(
+                sample=sample,
+                camera_channel_name=camera_channel_name,
+                lidar_sensor_to_ego_pose_matrix=lidar_frame_data_model.lidar_sensor_to_ego_pose_matrix,
+                lidar_frame_ego_pose_to_global_matrix=lidar_frame_data_model.lidar_frame_ego_pose_to_global_matrix,
+            )
+            for camera_channel_name in camera_channel_names
+        ]
+
+    def _extract_image_channel_sweeps(
+        self, sample: Sample, lidar_channel_name: str
+    ) -> Sequence[Sequence[ImageFrameDataModel]]:
+        """
+        Extract multi-sweep image metadata (past camera keyframes, all channels) from a T4
+        Sample, for sequence-based models. It walks the sample.prev chain (keyframe-to-keyframe).
 
         Args:
           sample: T4 Sample to walk backwards from.
-          camera_channel_name: Camera channel name.
           lidar_channel_name: Lidar channel name.
 
         Returns:
-          Sequence[ImageFrameDataModel]: Image sweep data models, ordered from most recent to
-            oldest.
+          Sequence[Sequence[ImageFrameDataModel]]: Image sweep data models, ordered from most
+            recent to oldest. Each item is the list of image frame data models across all camera
+            channels present at that sweep offset.
         """
 
-        image_sweep_data_models = []
+        image_channel_sweep_data_models = []
         current_sample = sample
 
         for _ in range(self.max_sweeps):
@@ -676,8 +711,6 @@ class T4RecordsGenerator:
             current_sample: Sample = self.t4_devkit_dataset.get(
                 SchemaName.SAMPLE, current_sample.prev
             )
-            if camera_channel_name not in current_sample.data:
-                break
             if lidar_channel_name not in current_sample.data:
                 break
 
@@ -701,15 +734,20 @@ class T4RecordsGenerator:
                 convert_to_float32=False,
             )
 
-            image_sweep_data_models.append(
-                self._extract_image_frame(
-                    sample=current_sample,
-                    camera_channel_name=camera_channel_name,
-                    lidar_sensor_to_ego_pose_matrix=current_lidar_sensor_to_ego_pose_matrix,
-                    lidar_frame_ego_pose_to_global_matrix=current_lidar_frame_ego_pose_to_global_matrix,
-                )
+            camera_channel_names = self._extract_camera_channel_names(sample=current_sample)
+
+            image_channel_sweep_data_models.append(
+                [
+                    self._extract_image_frame(
+                        sample=current_sample,
+                        camera_channel_name=camera_channel_name,
+                        lidar_sensor_to_ego_pose_matrix=current_lidar_sensor_to_ego_pose_matrix,
+                        lidar_frame_ego_pose_to_global_matrix=current_lidar_frame_ego_pose_to_global_matrix,
+                    )
+                    for camera_channel_name in camera_channel_names
+                ]
             )
-        return image_sweep_data_models
+        return image_channel_sweep_data_models
 
     def _extract_category_mapping(self) -> CategoryMappingDataModel:
         """
@@ -843,21 +881,17 @@ class T4RecordsGenerator:
         lidar_source_data_models = self._extract_lidar_sources()
 
         # 5) Extract image frames information from the T4Dataset
-        camera_channel_names = self._extract_camera_channel_names(sample=sample)
-        image_frame_data_models = []
-        for camera_channel_name in camera_channel_names:
-            image_frame_data_model = self._extract_image_frame(
-                sample=sample,
-                camera_channel_name=camera_channel_name,
-                lidar_sensor_to_ego_pose_matrix=lidar_frame_data_model.lidar_sensor_to_ego_pose_matrix,
-                lidar_frame_ego_pose_to_global_matrix=lidar_frame_data_model.lidar_frame_ego_pose_to_global_matrix,
-            )
-            image_sweep_data_models = self._extract_image_sweeps(
-                sample=sample,
-                camera_channel_name=camera_channel_name,
-                lidar_channel_name=lidar_channel_name,
-            )
-            image_frame_data_models.extend([image_frame_data_model] + image_sweep_data_models)
+        image_channel_frame_data_models = self._extract_image_channel_frames(
+            sample=sample, lidar_frame_data_model=lidar_frame_data_model
+        )
+        image_channel_sweep_data_models = self._extract_image_channel_sweeps(
+            sample=sample, lidar_channel_name=lidar_channel_name
+        )
+
+        # Concat image channel frame data models and image channel sweep data models
+        image_frame_data_models = [
+            image_channel_frame_data_models
+        ] + image_channel_sweep_data_models
 
         # 6) Extract category information from the T4Dataset
         category_mapping_data_model = self._extract_category_mapping()
