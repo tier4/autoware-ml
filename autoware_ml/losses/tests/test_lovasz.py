@@ -38,18 +38,45 @@ def _logits_for(probabilities: torch.Tensor) -> torch.Tensor:
 def test_hand_computed_two_class_example() -> None:
     """Three points, two classes, worked through by hand from the definition.
 
-    Class 0 (points 0 and 1): errors 0.1, 0.4, 0.2 -> sorted 0.4, 0.2, 0.1 with
-    foreground 1, 0, 1. Intersection after each prefix: 1, 1, 0; union: 2, 3, 3;
-    Jaccard loss: 1/2, 2/3, 1; its increments: 1/2, 1/6, 1/3.
-    Loss_0 = 0.4/2 + 0.2/6 + 0.1/3 = 4/15.
-    Class 1 (point 2): errors 0.1, 0.4, 0.2 -> sorted 0.4, 0.2, 0.1 with
-    foreground 0, 1, 0. Intersection: 1, 0, 0; union: 2, 2, 3; Jaccard loss:
-    1/2, 1, 1; increments 1/2, 1/2, 0. Loss_1 = 0.4/2 + 0.2/2 = 0.3.
+    Probabilities for class 0 are 0.9, 0.6, 0.2; labels are 0, 0, 1. For each
+    present class: take the errors ``|1[y = c] - p_c|``, sort them descending,
+    and after each prefix of the sorted order compute the Jaccard loss
+    ``1 - intersection / union`` between the prefix and the ground truth. The
+    class term is the dot product of the sorted errors with the increments of
+    that Jaccard loss.
+
+    Class 0 (ground truth: points 0 and 1)::
+
+        point               0     1     2
+        error               0.1   0.4   0.2
+        sorted (point)      1     2     0
+        sorted error        0.4   0.2   0.1
+        is foreground       1     0     1
+        intersection        1     1     0
+        union               2     3     3
+        Jaccard loss        1/2   2/3   1
+        increment           1/2   1/6   1/3
+
+        term = 0.4 * 1/2 + 0.2 * 1/6 + 0.1 * 1/3 = 4/15
+
+    Class 1 (ground truth: point 2; p_1 = 0.1, 0.4, 0.8)::
+
+        sorted (point)      1     2     0
+        sorted error        0.4   0.2   0.1
+        is foreground       0     1     0
+        intersection        1     0     0
+        union               2     2     3
+        Jaccard loss        1/2   1     1
+        increment           1/2   1/2   0
+
+        term = 0.4 * 1/2 + 0.2 * 1/2 + 0.1 * 0 = 3/10
+
+    The loss is the mean of the two terms.
     """
     probabilities = torch.tensor([[0.9, 0.1], [0.6, 0.4], [0.2, 0.8]], dtype=torch.float64)
     labels = torch.tensor([0, 0, 1])
     loss = LovaszLoss(ignore_index=IGNORE)(_logits_for(probabilities), labels)
-    assert math.isclose(loss.item(), (4 / 15 + 0.3) / 2, rel_tol=1e-9)
+    assert math.isclose(loss.item(), (4 / 15 + 3 / 10) / 2, rel_tol=1e-9)
 
 
 def test_perfect_prediction_has_zero_loss() -> None:
