@@ -55,6 +55,9 @@ class CriticalFPFN(Metric[DetectionState]):
             raise ValueError("confidences must name at least one score floor in [0, 1].")
         if self.match_threshold <= 0.0:
             raise ValueError("match_threshold must be > 0.")
+        # Predictions below the lowest operating point are never counted here, so
+        # the suite does not have to propagate them.
+        self.ttc_score_floor = min(self.confidences)
 
     def evaluate(self, state: DetectionState, stage: EvalStage) -> dict[str, float]:
         """Count critical FP / FN (finite TTC) at each confidence threshold.
@@ -85,13 +88,19 @@ class CriticalFPFN(Metric[DetectionState]):
             pred_boxes = sample.pred_boxes.numpy().astype(np.float64)
             pred_scores = sample.pred_scores.numpy().astype(np.float64)
             pred_labels = sample.pred_labels.numpy().astype(np.int64)
-            pred_critical = np.isfinite(sample.pred_ttc.numpy())
+            pred_ttc = sample.pred_ttc.numpy()
             for conf in self.confidences:
                 keep = pred_scores >= conf
                 kept_boxes = pred_boxes[keep]
                 kept_scores = pred_scores[keep]
                 kept_labels = pred_labels[keep]
-                kept_critical = pred_critical[keep]
+                kept_ttc = pred_ttc[keep]
+                if np.isnan(kept_ttc).any():
+                    raise ValueError(
+                        "prediction TTC is missing at this confidence: the suite skipped it "
+                        "below its score floor, which must be the lowest confidence read here."
+                    )
+                kept_critical = np.isfinite(kept_ttc)
                 is_tp, matched_gt = greedy_match(
                     gt_boxes[:, :2], kept_boxes[:, :2], kept_scores, self.match_threshold
                 )

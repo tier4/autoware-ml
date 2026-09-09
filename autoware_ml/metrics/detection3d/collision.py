@@ -23,11 +23,16 @@ in (off-map they fall back to ``max_speed_mps``), living agents run at a per-cla
 Moving agents carry half their box width as the collision body radius, static
 agents use the full footprint. The metrics turn TTC into the collision weight
 or the critical set.
+
+One box costs one propagation, and a detection head emits hundreds per frame:
+200 predictions inside 60 m take about 15 s for a single frame. Metrics that
+only read confident predictions declare a ``ttc_score_floor`` so the suite can
+skip the rest, which is why the provider takes the scores and that floor.
 """
 
 from __future__ import annotations
 
-from math import inf
+from math import inf, nan
 from typing import Any
 
 import numpy as np
@@ -130,18 +135,31 @@ class CollisionTTC:
         return self.map_provider.available(scene_token)
 
     def per_box_ttc(
-        self, boxes: np.ndarray, labels: np.ndarray, ego2global: Any, scene_token: str
+        self,
+        boxes: np.ndarray,
+        labels: np.ndarray,
+        ego2global: Any,
+        scene_token: str,
+        scores: np.ndarray | None = None,
+        score_floor: float = 0.0,
     ) -> np.ndarray:
         """TTC (seconds, ``inf`` = unreachable) for each base_link box in the frame.
+
+        Propagation runs per box and dominates the suite's cost, so a caller that
+        knows no active metric reads the low-score tail passes ``scores`` and the
+        floor below which it can be skipped. Skipped boxes come back ``nan``.
 
         Args:
             boxes: Box rows ``[cx, cy, cz, dx, dy, dz, yaw, ...]`` in base_link.
             labels: Integer class labels aligned with ``boxes``.
             ego2global: 4x4 ego-to-global transform of the frame.
             scene_token: Scene identifier resolving to the lanelet map.
+            scores: Detection scores aligned with ``boxes``, for the floor. Ground
+                truth has none, so it is always propagated.
+            score_floor: Lowest score worth propagating, ``0.0`` propagates every box.
 
         Returns:
-            Per-box TTC array of shape ``(N,)``.
+            Per-box TTC array of shape ``(N,)``, ``nan`` where the floor skipped a box.
         """
         boxes = np.asarray(boxes, dtype=np.float64)
         labels = np.asarray(labels).astype(int)
@@ -160,30 +178,64 @@ class CollisionTTC:
         centroids = np.array([[p.centroid.x, p.centroid.y] for p in footprints], dtype=np.float64)
 
         for index in range(boxes.shape[0]):
-            name = self.class_names[int(labels[index])]
-            kind = self.kinds[name]
-            cx, cy = centroids[index, 0], centroids[index, 1]
-            length, width = float(boxes[index, 3]), float(boxes[index, 4])
-            if kind == AgentKind.STATIC:
-                agent = Agent.static(cx, cy, footprints[index])
-            elif kind == AgentKind.WHEELED:
-                # Max speed = the speed limit of the lanelet the agent is in. A box
-                # is centred, so its body splits evenly around the reference point,
-                # and it carries no steering geometry, so the friction floor stands in.
-                speed = lanelet_map.speed_at(cx, cy, self.max_speed_mps)
-                agent = Agent.wheeled(
-                    cx,
-                    cy,
-                    float(boxes[index, 6]) + ego.heading,
-                    speed,
-                    front=length / 2.0,
-                    rear=length / 2.0,
-                    width=width,
-                    min_turn_radius=self.params.min_radius_m,
-                )
-            else:
-                # A living agent runs at its class speed in any direction, so its
-                # body is a disc across the widest extent the box reports.
-                agent = Agent.living(cx, cy, self.living_speeds[name], max(length, width) / 2.0)
+            if scores is not None and scores[index] < score_floor:
+                # Never read by any active metric: NaN so a metric that reads it
+                # anyway fails loud instead of taking it for "unreachable".
+                ttc[index] = nan
+                continue
+            agent = self._agent_for_box(
+                boxes[index],
+                int(labels[index]),
+                footprints[index],
+                centroids[index],
+                lanelet_map,
+                ego.heading,
+            )
             ttc[index] = frame.time_to_collision(agent)
         return ttc
+
+    def _agent_for_box(
+        self,
+        box: np.ndarray,
+        label: int,
+        footprint: Any,
+        centroid: np.ndarray,
+        lanelet_map: Any,
+        ego_heading: float,
+    ) -> Agent:
+        """The collision agent one detection box stands for, by its class kind.
+
+        Args:
+            box: Box row ``[cx, cy, cz, dx, dy, dz, yaw, ...]`` in base_link.
+            label: Integer class label of the box.
+            footprint: The box's map-frame footprint polygon.
+            centroid: The footprint's map-frame ``(x, y)`` centroid.
+            lanelet_map: The scene's parsed lanelet map, for the local speed limit.
+            ego_heading: Ego map-frame heading, added to the box's own yaw.
+
+        Returns:
+            The agent for this box.
+        """
+        name = self.class_names[label]
+        kind = self.kinds[name]
+        cx, cy = float(centroid[0]), float(centroid[1])
+        length, width = float(box[3]), float(box[4])
+        if kind == AgentKind.STATIC:
+            return Agent.static(cx, cy, footprint)
+        if kind == AgentKind.WHEELED:
+            # Max speed = the speed limit of the lanelet the agent is in. A box is
+            # centred, so its body splits evenly around the reference point, and it
+            # carries no steering geometry, so the friction floor stands in.
+            return Agent.wheeled(
+                cx,
+                cy,
+                float(box[6]) + ego_heading,
+                lanelet_map.speed_at(cx, cy, self.max_speed_mps),
+                front=length / 2.0,
+                rear=length / 2.0,
+                width=width,
+                min_turn_radius=self.params.min_radius_m,
+            )
+        # A living agent runs at its class speed in any direction, so its body is a
+        # disc across the widest extent the box reports.
+        return Agent.living(cx, cy, self.living_speeds[name], max(length, width) / 2.0)

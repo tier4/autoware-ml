@@ -6,6 +6,7 @@ from __future__ import annotations
 from math import inf
 
 import numpy as np
+import pytest
 import torch
 from shapely.geometry import box
 
@@ -13,6 +14,8 @@ from autoware_ml.metrics.base import EvalStage
 from autoware_ml.metrics.detection3d.collision import CollisionTTC
 from autoware_ml.metrics.detection3d.collision_weighted_map import CollisionWeightedMeanAP
 from autoware_ml.metrics.detection3d.critical_fp_fn import CriticalFPFN
+from autoware_ml.metrics.detection3d.matching import DetectionState
+from autoware_ml.metrics.detection3d.structures import Detection3DSample
 from autoware_ml.metrics.detection3d.suite import Detection3DMetricSuite
 from autoware_ml.metrics.geometry.reachability import ReachabilityParams, VehicleGeometry
 
@@ -141,9 +144,71 @@ def test_collision_provider_declares_context_keys() -> None:
     assert "ego2global" in keys and "scene_token" in keys
 
 
-def test_min_num_points_without_counts_raises() -> None:
-    import pytest
+def test_the_score_floor_skips_only_what_no_metric_reads() -> None:
+    # CriticalFPFN counts nothing below its lowest confidence, so the suite may skip
+    # propagating those predictions. The counts must not change, and a skipped box
+    # must read nan so a metric that does look at it fails loud.
+    road = box(-80.0, -60.0, 500.0, 60.0)
+    collision = CollisionTTC(
+        CLASS_NAMES,
+        _FakeProvider(road),
+        vehicle=EGO,
+        params=ReachabilityParams(horizon_s=4.0, dt_s=0.1),
+        max_speed_mps=10.0,
+    )
+    eval_out = {
+        "predictions": [
+            {
+                "bboxes_3d": torch.tensor([_b(10.0, 0.0), _b(14.0, 0.0)]),
+                "scores_3d": torch.tensor([0.9, 0.1]),
+                "labels_3d": torch.tensor([0, 0]),
+            }
+        ],
+        "gt_boxes": [torch.tensor([_b(10.0, 0.0)])],
+        "gt_labels": [torch.tensor([0])],
+        "ego2global": [np.eye(4)],
+        "scene_token": ["scene"],
+    }
+    suite = Detection3DMetricSuite(
+        components=[CriticalFPFN(confidences=(0.5,))], class_names=CLASS_NAMES, collision=collision
+    )
+    suite.bind_stage(EvalStage.TEST)
 
+    assert suite._ttc_score_floor() == 0.5
+    suite.update(eval_out)
+    pred_ttc = suite.pred_ttc[0].numpy()
+
+    assert np.isfinite(pred_ttc[0])  # confident, propagated
+    assert np.isnan(pred_ttc[1])  # below the floor, skipped
+    assert suite.result(EvalStage.TEST)["critical_fp_conf0p5"] == 0.0
+
+
+def test_a_metric_reading_a_skipped_prediction_fails_loud() -> None:
+    # Guards the floor contract: a confidence below the declared floor would read a
+    # box the suite never propagated.
+    metric = CriticalFPFN(confidences=(0.5,))
+    metric.ttc_score_floor = 0.9
+    state = DetectionState(
+        samples=[
+            Detection3DSample(
+                pred_boxes=torch.tensor([_b(10.0, 0.0)]),
+                pred_scores=torch.tensor([0.6]),
+                pred_labels=torch.tensor([0]),
+                gt_boxes=torch.zeros((0, 9)),
+                gt_labels=torch.zeros(0, dtype=torch.long),
+                pred_ttc=torch.tensor([float("nan")]),
+                gt_ttc=torch.zeros(0),
+                ttc_covered=True,
+            )
+        ],
+        class_names=CLASS_NAMES,
+    )
+
+    with pytest.raises(ValueError, match="missing at this confidence"):
+        metric.evaluate(state, EvalStage.TEST)
+
+
+def test_min_num_points_without_counts_raises() -> None:
     suite = Detection3DMetricSuite(
         components=[CriticalFPFN(confidences=(0.5,))],
         class_names=CLASS_NAMES,

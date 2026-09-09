@@ -279,6 +279,7 @@ class Detection3DMetricSuite(MetricSuite[DetectionState]):
                         eval_out,
                         i,
                         covered,
+                        scores=prediction["scores_3d"].detach(),
                     )
                 )
 
@@ -324,13 +325,15 @@ class Detection3DMetricSuite(MetricSuite[DetectionState]):
         eval_out: dict[str, Any],
         frame_index: int,
         covered: bool,
+        scores: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Per-box collision TTC for one frame, all-``inf`` when uncovered.
 
         An uncovered frame (map-less scene) is flagged via ``ttc_covered`` so the
-        criticality metrics exclude it from their denominators. The result lives
-        on the boxes' device: every list state must be device-consistent for the
-        DDP gather.
+        criticality metrics exclude it from their denominators. Predictions carry
+        their scores so the propagation can skip the tail no active metric reads.
+        The result lives on the boxes' device: every list state must be
+        device-consistent for the DDP gather.
         """
         if not covered:
             return torch.full((int(boxes.shape[0]),), float("inf"), device=boxes.device)
@@ -339,8 +342,22 @@ class Detection3DMetricSuite(MetricSuite[DetectionState]):
             labels.detach().cpu().numpy().astype(np.int64),
             eval_out["ego2global"][frame_index],
             eval_out["scene_token"][frame_index],
+            scores=None if scores is None else scores.cpu().numpy().astype(np.float64),
+            score_floor=self._ttc_score_floor(),
         )
         return torch.from_numpy(np.asarray(ttc, dtype=np.float32)).to(boxes.device)
+
+    def _ttc_score_floor(self) -> float:
+        """Lowest prediction score whose TTC any active metric reads.
+
+        The minimum over the metrics that read TTC at all, so one metric that
+        integrates the whole score range keeps every box propagated.
+        """
+        return min(
+            component.ttc_score_floor
+            for component in self.active_components()
+            if component.needs_ttc
+        )
 
     def _frame_region_availability(self, eval_out: dict[str, Any], frame_index: int) -> list[bool]:
         """Per region filter: active at this stage *and* its map present this frame.
