@@ -25,6 +25,12 @@ so the body splits evenly along the heading, a living agent expands a disc acros
 the widest extent the box reports, and a static agent keeps its footprint. The
 metrics turn TTC into the collision weight or the critical set.
 
+Both sides of a collision are clipped to the mapped drivable area, so a wheeled
+agent whose reference point sits outside it cannot move and is scored as
+unreachable. A vehicle in an unmapped driveway is therefore not counted, even
+with part of its body already on the road. Map coverage is what fixes that, not
+the speed fallback: off the map the speed is only the ``max_speed_mps`` default.
+
 One box costs one propagation, and a detection head emits hundreds per frame:
 200 predictions inside 60 m take about 15 s for a single frame. Metrics that
 only read confident predictions declare a ``ttc_score_floor`` so the suite can
