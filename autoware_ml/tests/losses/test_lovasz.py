@@ -42,10 +42,13 @@ def test_hand_computed_two_class_example() -> None:
     """Three points, two classes, worked through by hand from the definition.
 
     Probabilities for class 0 are 0.9, 0.6, 0.2; labels are 0, 0, 1. For each
-    present class: take the errors ``|foreground - p_c|``, sort them descending,
-    and after each prefix of the sorted order compute the Jaccard loss
-    ``1 - intersection / union`` between the prefix and the ground truth. The
-    class term is the dot product of the sorted errors with the increments of
+    present class: take the errors ``|foreground - p_c|`` and sort them
+    descending. Walk down the sorted order, and at each position treat the
+    points seen so far as the set predicted for the class: ``intersection`` is
+    the number of those points whose label is the class, ``union`` is the number
+    of points that are either seen so far or labelled the class, and the
+    Jaccard loss is ``1 - intersection / union``. The class term is the dot
+    product of the sorted errors with the position-to-position increments of
     that Jaccard loss.
 
     Class 0 (ground truth: points 0 and 1)::
