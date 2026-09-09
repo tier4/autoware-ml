@@ -631,3 +631,64 @@ def test_export_attention_is_exact_when_the_count_divides_the_window(num_points:
             return attention(point).feat
 
     assert torch.allclose(run(padded), run(reference), atol=1e-5)
+
+
+def _reference_padding_and_inverse(
+    offset: torch.Tensor, patch_size: int
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """The original per-sample loop, kept as the reference for the batched version."""
+    from autoware_ml.utils.point_cloud.batching import offset_to_bincount
+
+    bincount = offset_to_bincount(offset)
+    padded_bincount = (
+        torch.maximum(
+            torch.div(bincount + patch_size - 1, patch_size, rounding_mode="trunc"),
+            torch.ones_like(bincount),
+        )
+        * patch_size
+    )
+    mask = bincount > patch_size
+    padded_bincount = (~mask).long() * bincount + mask.long() * padded_bincount
+    offset = torch.nn.functional.pad(offset, (1, 0))
+    padded_offset = torch.nn.functional.pad(torch.cumsum(padded_bincount, dim=0), (1, 0))
+    pad = torch.arange(padded_offset[-1])
+    unpad = torch.arange(offset[-1])
+    cu_seqlens = []
+    for i in range(offset.numel() - 1):
+        start, end = padded_offset[i], padded_offset[i + 1]
+        unpad[offset[i] : offset[i + 1]] += start - offset[i]
+        if bincount[i] != padded_bincount[i]:
+            tail = bincount[i] % patch_size
+            pad[end - patch_size + tail : end] = pad[end - 2 * patch_size + tail : end - patch_size]
+        pad[start:end] -= start - offset[i]
+        cu_seqlens.append(torch.arange(start, end, step=patch_size, dtype=torch.int32))
+    cu_seqlens = torch.nn.functional.pad(torch.cat(cu_seqlens), (0, 1), value=padded_offset[-1])
+    return pad, unpad, cu_seqlens
+
+
+@pytest.mark.parametrize("patch_size", [4, 16, 48])
+@pytest.mark.parametrize("seed", range(8))
+def test_batched_padding_matches_the_per_sample_reference(patch_size: int, seed: int) -> None:
+    """The loop-free padding must reproduce the per-sample loop exactly, including
+    samples smaller than one window, exact multiples of it, and empty samples."""
+    generator = torch.Generator().manual_seed(seed)
+    counts = torch.randint(0, 5 * patch_size, (6,), generator=generator)
+    counts[1] = patch_size * 2  # an exact multiple: no padding at all
+    counts[2] = patch_size // 2  # below one window
+    counts[3] = 0  # an empty sample
+    offset = torch.cumsum(counts, dim=0)
+    attention = _build_attention(patch_size)
+    attention.enable_flash = True
+    point = Point(
+        feat=torch.zeros(int(offset[-1]), 32),
+        grid_coord=torch.zeros(int(offset[-1]), 3, dtype=torch.long),
+        offset=offset,
+        serialized_order=torch.arange(int(offset[-1])).unsqueeze(0),
+        serialized_inverse=torch.arange(int(offset[-1])).unsqueeze(0),
+    )
+    pad, unpad, cu_seqlens = attention._get_padding_and_inverse(point)
+    ref_pad, ref_unpad, ref_cu = _reference_padding_and_inverse(offset, patch_size)
+    assert torch.equal(pad, ref_pad)
+    assert torch.equal(unpad, ref_unpad)
+    assert torch.equal(cu_seqlens, ref_cu)
+    assert cu_seqlens.dtype == torch.int32
