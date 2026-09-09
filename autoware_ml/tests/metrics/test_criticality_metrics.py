@@ -5,7 +5,7 @@ collision provider would), plus the shared matching / weighted-AP helpers."""
 from __future__ import annotations
 
 from dataclasses import replace
-from math import inf
+from math import inf, isnan
 
 import numpy as np
 import pytest
@@ -109,12 +109,10 @@ def test_critical_fp_fn_excludes_uncovered_frames() -> None:
 
 
 def test_critical_fp_fn_no_coverage_is_nan() -> None:
-    import math
-
     frame = replace(_sample([_box(10.0)], [0.9], [0], [_box(10.0)], [0]), ttc_covered=False)
     state = DetectionState(samples=[frame], class_names=("car",))
     out = CriticalFPFN(confidences=(0.5,)).evaluate(state, EvalStage.TEST)
-    assert math.isnan(out["critical_fp_conf0p5"])  # no basis, never a fake zero
+    assert isnan(out["critical_fp_conf0p5"])  # no basis, never a fake zero
 
 
 def test_critical_fp_fn_confidence_gate() -> None:
@@ -138,8 +136,6 @@ def test_collision_weighted_map_perfect_detection() -> None:
 
 def test_collision_weighted_map_unreachable_gt_has_no_weight() -> None:
     # All GT unreachable (TTC inf) -> total GT weight 0 -> AP is NaN (nothing to score).
-    import math
-
     state = DetectionState(
         samples=[
             _sample([_box(10.0)], [0.9], [0], [_box(10.0)], [0], gt_ttc=[inf], pred_ttc=[inf])
@@ -147,7 +143,7 @@ def test_collision_weighted_map_unreachable_gt_has_no_weight() -> None:
         class_names=("car",),
     )
     out = CollisionWeightedMeanAP(thresholds=(2.0,), decay=0.5).evaluate(state, EvalStage.TEST)
-    assert math.isnan(out["cw_mAP_car"])
+    assert isnan(out["cw_mAP_car"])
 
 
 @pytest.mark.parametrize(
