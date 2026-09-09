@@ -20,9 +20,10 @@ assigns every class its reachable-set kind, pulls the drivable polygon and the
 per-lanelet speed limits from the scene's lanelet map, and returns one TTC per
 box. Ego and wheeled agents move at the ``speed_limit`` of the lanelet they are
 in (off-map they fall back to ``max_speed_mps``), living agents run at a per-class speed.
-Moving agents carry half their box width as the collision body radius, static
-agents use the full footprint. The metrics turn TTC into the collision weight
-or the critical set.
+A wheeled box sweeps its own rectangle, its reference point being the box centre
+so the body splits evenly along the heading, a living agent expands a disc across
+the widest extent the box reports, and a static agent keeps its footprint. The
+metrics turn TTC into the collision weight or the critical set.
 
 One box costs one propagation, and a detection head emits hundreds per frame:
 200 predictions inside 60 m take about 15 s for a single frame. Metrics that
