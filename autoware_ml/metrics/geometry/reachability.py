@@ -32,7 +32,7 @@ Reachable-at-``t`` set by class, in the map frame (metres):
   clipped to the drivable area, an arc truncated where it leaves the road.
 * living (pedestrian / animal / bicycle): the disc of radius ``v * t`` about the
   current position, free to move in any direction, over any surface.
-* static (barrier / traffic_cone / debris / bicycle_rack / vehicle_extension):
+* static (barrier / traffic_cone / debris / bicycle_rack):
   the fixed footprint, for every ``t``.
 
 The two steps match the metric's contract:
