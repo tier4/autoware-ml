@@ -66,7 +66,6 @@ class LoadAnnotations3D(BaseTransform):
         *,
         name_mapping: Mapping[str, str | None] | None = None,
         filter_attributes: list[list[str]] | None = None,
-        use_valid_flag: bool = True,
     ) -> None:
         """Initialize the LoadAnnotations3D transform.
 
@@ -74,11 +73,9 @@ class LoadAnnotations3D(BaseTransform):
             name_mapping: Optional raw-to-canonical class-name mapping. Values set
                 to ``None`` drop the corresponding raw class.
             filter_attributes: Attribute groups used to filter raw annotations.
-            use_valid_flag: Whether to honor the raw ``bbox_3d_isvalid`` flag.
         """
         self.name_mapping = dict(name_mapping) if name_mapping is not None else None
         self.filter_attributes = normalize_filter_attributes(filter_attributes)
-        self.use_valid_flag = use_valid_flag
         self._validated_class_names: set[tuple[str, ...]] = set()
 
     def apply_defaults(self, input_dict: dict[str, Any]) -> None:
@@ -112,7 +109,6 @@ class LoadAnnotations3D(BaseTransform):
                 name_mapping=self.name_mapping,
                 label_to_category=input_dict.get("label_to_category"),
                 filter_attributes=self.filter_attributes,
-                use_valid_flag=self.use_valid_flag,
             )
             if canonical is None:
                 continue

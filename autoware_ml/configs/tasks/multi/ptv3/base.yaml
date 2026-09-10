@@ -27,6 +27,7 @@ datamodule:
     inverse: index_concat
     gt_boxes: list
     gt_labels: list
+    gt_num_points: list
   data_root: ${dataset.data_root}
   class_names: ${dataset.detection3d.class_names}
   name_mapping: ${dataset.detection3d.name_mapping}
@@ -45,6 +46,8 @@ model:
     num_decoder_layers: 1
     num_heads: 8
     feedforward_channels: 256
+    # Fusable bf16 cross-attention export; requires the fp16 module precision below and SM80+.
+    use_bf16_cross_attention: true
     common_heads:
       center: [2, 2]
       height: [1, 2]
@@ -156,6 +159,7 @@ deploy:
           dec_depths: ${model.seg3d_head.dec_depths}
           class_names: ${seg_class_names:${dataset.segmentation3d.class_mapping}, ${dataset.segmentation3d.num_classes}}
       ptv3_det3d_head:
+        precision: fp16
         output_names: [dense_heatmap, query_heatmap_score, query_labels, heatmap, center, height, dim, rot]
         metainfo:
           bbox_voxel_size: ${model.bbox_head.bbox_coder.voxel_size}
