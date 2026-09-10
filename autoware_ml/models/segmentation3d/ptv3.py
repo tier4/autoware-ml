@@ -71,8 +71,8 @@ class _PTv3SegmentationExportModule(PTv3EncoderExportBase):
         self,
         grid_coord: torch.Tensor,
         feat: torch.Tensor,
-        serialized_order: torch.Tensor,
         serialized_inverse: torch.Tensor,
+        patch_order: torch.Tensor,
         *serialized_pooling_inputs: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Run export-time inference on serialized point inputs.
@@ -80,15 +80,15 @@ class _PTv3SegmentationExportModule(PTv3EncoderExportBase):
         Args:
             grid_coord: Discretized grid coordinates.
             feat: Point features whose first three channels are xyz.
-            serialized_order: Level-0 serialization order, one row per curve.
-            serialized_inverse: Inverse of ``serialized_order``.
+            serialized_inverse: Inverse of the level-0 serialization orders.
+            patch_order: Those orders padded to whole attention windows.
             serialized_pooling_inputs: Precomputed pooling metadata tensors.
 
         Returns:
             Predicted labels and point-wise semantic probabilities.
         """
         point = self.run_encoder(
-            grid_coord, feat, serialized_order, serialized_inverse, *serialized_pooling_inputs
+            grid_coord, feat, serialized_inverse, patch_order, *serialized_pooling_inputs
         )
         point_logits = self.seg3d_head(point)
         pred_probs = torch.softmax(point_logits, dim=1)
