@@ -22,7 +22,6 @@ num_workers: 8
 datamodule:
   _target_: autoware_ml.datamodule.t4dataset.segdet.T4SegmentationDetection3DDataModule
   filter_attributes: ${dataset.detection3d.filter_attributes}
-  use_valid_flag: false
   train_frame_sampling:
     repeat_sampling_factor: 0.30
     object_bev_range: [-122.88, -122.88, 122.88, 122.88]
@@ -50,7 +49,6 @@ datamodule:
       - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
         name_mapping: ${dataset.detection3d.name_mapping}
         filter_attributes: ${dataset.detection3d.filter_attributes}
-        use_valid_flag: false
       - _target_: autoware_ml.transforms.segmentation3d.loading.LoadSegAnnotations3D
         class_mapping: ${segmentation_class_mapping}
         ignore_index: ${dataset.segmentation3d.ignore_index}
@@ -114,7 +112,6 @@ datamodule:
       - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
         name_mapping: ${dataset.detection3d.name_mapping}
         filter_attributes: ${dataset.detection3d.filter_attributes}
-        use_valid_flag: false
       - _target_: autoware_ml.transforms.segmentation3d.loading.LoadSegAnnotations3D
         class_mapping: ${segmentation_class_mapping}
         ignore_index: ${dataset.segmentation3d.ignore_index}
