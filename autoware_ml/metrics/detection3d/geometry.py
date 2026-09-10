@@ -28,11 +28,31 @@ def wrap_angle(angle: float) -> float:
     return (float(angle) + pi) % (2.0 * pi) - pi
 
 
-def bev_corners(box: np.ndarray) -> np.ndarray:
-    """Return the four BEV corners of a box as a ``(4, 2)`` array.
+def bev_corners_batch(boxes: np.ndarray) -> np.ndarray:
+    """The four BEV corners of every box, as an ``(N, 4, 2)`` array.
 
-    Corners are ordered clockwise starting from the ``(+dx/2, +dy/2)`` corner
-    in the box frame, then rotated by ``yaw`` and shifted to the center.
+    Corners run clockwise from the ``(+dx/2, +dy/2)`` corner of the box frame,
+    rotated by ``yaw`` and shifted to the center.
+
+    Args:
+        boxes: Box rows ``(N, 7+)``.
+
+    Returns:
+        Corner coordinates ``(N, 4, 2)``.
+    """
+    boxes = np.asarray(boxes, dtype=np.float64)
+    half_dx, half_dy = boxes[:, 3] / 2.0, boxes[:, 4] / 2.0
+    local_x = np.stack([half_dx, half_dx, -half_dx, -half_dx], axis=1)
+    local_y = np.stack([half_dy, -half_dy, -half_dy, half_dy], axis=1)
+    cos_yaw = np.cos(boxes[:, 6])[:, None]
+    sin_yaw = np.sin(boxes[:, 6])[:, None]
+    corners_x = local_x * cos_yaw - local_y * sin_yaw + boxes[:, 0:1]
+    corners_y = local_x * sin_yaw + local_y * cos_yaw + boxes[:, 1:2]
+    return np.stack([corners_x, corners_y], axis=2)
+
+
+def bev_corners(box: np.ndarray) -> np.ndarray:
+    """:func:`bev_corners_batch` for a single box row, as a ``(4, 2)`` array.
 
     Args:
         box: Box row ``[cx, cy, cz, dx, dy, dz, yaw, ...]``.
@@ -40,21 +60,7 @@ def bev_corners(box: np.ndarray) -> np.ndarray:
     Returns:
         Corner coordinates ``(4, 2)``.
     """
-    center = box[:2].astype(np.float64)
-    half = box[3:5].astype(np.float64) / 2.0
-    yaw = float(box[6])
-    local = np.array(
-        [
-            [half[0], half[1]],
-            [half[0], -half[1]],
-            [-half[0], -half[1]],
-            [-half[0], half[1]],
-        ],
-        dtype=np.float64,
-    )
-    cos_yaw, sin_yaw = np.cos(yaw), np.sin(yaw)
-    rotation = np.array([[cos_yaw, -sin_yaw], [sin_yaw, cos_yaw]], dtype=np.float64)
-    return local @ rotation.T + center
+    return bev_corners_batch(np.asarray(box, dtype=np.float64)[None, :])[0]
 
 
 def corner_displacement(pred_box: np.ndarray, gt_box: np.ndarray) -> float:
@@ -124,27 +130,6 @@ def signed_nearest_surface_error(pred_box: np.ndarray, gt_box: np.ndarray) -> fl
         The signed error in meters.
     """
     return nearest_surface_distance(pred_box) - nearest_surface_distance(gt_box)
-
-
-def bev_corners_batch(boxes: np.ndarray) -> np.ndarray:
-    """:func:`bev_corners` for ``(N, 7+)`` boxes at once, as ``(N, 4, 2)``.
-
-    Args:
-        boxes: Box rows ``(N, 7+)``.
-
-    Returns:
-        Corner coordinates ``(N, 4, 2)``.
-    """
-    boxes = np.asarray(boxes, dtype=np.float64)
-    half_dx, half_dy = boxes[:, 3] / 2.0, boxes[:, 4] / 2.0
-    # Same counter-clockwise corner order as bev_corners.
-    local_x = np.stack([half_dx, half_dx, -half_dx, -half_dx], axis=1)
-    local_y = np.stack([half_dy, -half_dy, -half_dy, half_dy], axis=1)
-    cos_yaw = np.cos(boxes[:, 6])[:, None]
-    sin_yaw = np.sin(boxes[:, 6])[:, None]
-    corners_x = local_x * cos_yaw - local_y * sin_yaw + boxes[:, 0:1]
-    corners_y = local_x * sin_yaw + local_y * cos_yaw + boxes[:, 1:2]
-    return np.stack([corners_x, corners_y], axis=2)
 
 
 def corner_displacements(pred_boxes: np.ndarray, gt_boxes: np.ndarray) -> np.ndarray:
