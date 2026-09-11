@@ -40,8 +40,8 @@ class TestT4Segmentation3DDataset:
         )
         labels = np.array([1, 2, 2, 1], dtype=np.uint8)
 
-        lidar_relpath = "sample/points.bin"
-        mask_relpath = "sample/labels.bin"
+        lidar_relpath = "db_test/scene-uuid/0/points.bin"
+        mask_relpath = "db_test/scene-uuid/0/labels.bin"
         point_path = tmp_path / lidar_relpath
         mask_path = tmp_path / mask_relpath
         point_path.parent.mkdir(parents=True)
@@ -50,6 +50,13 @@ class TestT4Segmentation3DDataset:
 
         sample = {
             "token": "sample-token",
+            "ego2global": [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+            "timestamp": 0.0,
             "lidar_points": {"lidar_path": lidar_relpath, "num_pts_feats": 5},
             "pts_semantic_mask_path": mask_relpath,
             "pts_semantic_mask_categories": {"car": 1, "noise": 2},

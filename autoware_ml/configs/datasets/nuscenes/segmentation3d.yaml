@@ -41,7 +41,7 @@ seg_label_mapping:
   30: 10  # vegetation -> vegetation
   31: ${nuscenes.segmentation3d.ignore_index}   # ego
 metrics:
-  - _target_: autoware_ml.metrics.segmentation3d.suite.Segmentation3DMetricSuite
+  - _target_: autoware_ml.metrics.segmentation3d.suite.Segmentation3DConfusionMatrixMetricSuite
     components:
       - { _target_: autoware_ml.metrics.segmentation3d.iou.IoU, stages: [val, test] }
       - { _target_: autoware_ml.metrics.segmentation3d.accuracy.Accuracy, stages: [val, test] }

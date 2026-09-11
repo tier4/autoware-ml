@@ -24,6 +24,7 @@ import os
 import pickle
 from typing import Any
 
+import numpy as np
 from autoware_ml.datamodule.base import DataModule, Dataset
 from autoware_ml.datamodule.common.serialization import SerializedSampleList
 from autoware_ml.datamodule.nuscenes.common import resolve_lidar_path
@@ -95,6 +96,9 @@ class NuscenesSegmentation3DDataset(Dataset):
             "pts_semantic_mask_path": os.path.join(
                 self.lidarseg_dir, sample["pts_semantic_mask_path"]
             ),
+            "timestamp": sample.get("timestamp"),
+            "ego2global": np.asarray(sample["ego2global"], dtype=np.float64),
+            "scene_token": sample["scene_token"],
         }
 
 
