@@ -35,7 +35,7 @@ def test_object_filters() -> None:
 
     named = ObjectNameFilter(classes=["car"])(sample.copy())
     ranged = ObjectRangeFilter(point_cloud_range=[-1.0, -1.0, -1.0, 5.0, 5.0, 5.0])(sample.copy())
-    min_points = ObjectMinPointsFilter(min_num_points=3)(sample.copy())
+    min_points = ObjectMinPointsFilter(min_num_points=3, time_lag_dim=None)(sample.copy())
 
     assert named["gt_names"].tolist() == ["car"]
     assert ranged["gt_names"].tolist() == ["car"]
@@ -56,7 +56,7 @@ def test_object_filters_keep_gt_num_points_aligned() -> None:
 
     named = ObjectNameFilter(classes=["car"])(sample.copy())
     ranged = ObjectRangeFilter(point_cloud_range=[-1.0, -1.0, -1.0, 5.0, 5.0, 5.0])(sample.copy())
-    min_points = ObjectMinPointsFilter(min_num_points=1)(sample.copy())
+    min_points = ObjectMinPointsFilter(min_num_points=1, time_lag_dim=None)(sample.copy())
 
     assert named["gt_num_points"].tolist() == [7]
     assert ranged["gt_num_points"].tolist() == [7]
@@ -80,7 +80,7 @@ def test_object_min_points_filter_counts_points_inside_rotated_boxes() -> None:
         ),
     }
 
-    output = ObjectMinPointsFilter(min_num_points=2)(sample)
+    output = ObjectMinPointsFilter(min_num_points=2, time_lag_dim=None)(sample)
 
     assert output["gt_boxes"].shape == (1, 7)
 
@@ -113,13 +113,91 @@ def test_object_range_min_points_filter_uses_distance_specific_threshold() -> No
     near_filtered = ObjectRangeMinPointsFilter(
         range_radius=[0.0, 60.0],
         min_num_points=5,
+        time_lag_dim=None,
     )(sample)
     output = ObjectRangeMinPointsFilter(
         range_radius=[60.0, 130.0],
         min_num_points=3,
+        time_lag_dim=None,
     )(near_filtered)
 
     assert output["gt_boxes"][:, 0].tolist() == [70.0]
+
+
+# A ground-truth box is annotated on the current frame, so sweep points must never decide whether it
+# survives: otherwise the evaluated GT set would depend on how many sweeps the model consumes.
+def _densified_sample() -> dict:
+    """One box holding 2 current-frame points and 2 sweep points."""
+    return {
+        "gt_boxes": np.array([[0.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0]], dtype=np.float32),
+        "gt_names": np.array(["car"]),
+        "gt_labels": np.array([0], dtype=np.int64),
+        "points": np.array(
+            [
+                [0.1, 0.0, 0.0, 1.0, 0.0],
+                [0.2, 0.0, 0.0, 1.0, 0.0],
+                [0.3, 0.0, 0.0, 1.0, 0.1],
+                [0.4, 0.0, 0.0, 1.0, 0.1],
+            ],
+            dtype=np.float32,
+        ),
+    }
+
+
+def test_min_points_filters_ignore_sweep_points_packed_layout() -> None:
+    sample = _densified_sample()
+
+    kept = ObjectMinPointsFilter(min_num_points=2, time_lag_dim=4)(dict(sample))
+    dropped = ObjectMinPointsFilter(min_num_points=3, time_lag_dim=4)(dict(sample))
+
+    assert kept["gt_names"].tolist() == ["car"]
+    assert dropped["gt_names"].tolist() == []
+
+
+def test_min_points_filters_ignore_sweep_points_split_layout() -> None:
+    packed = _densified_sample()
+    sample = {
+        "gt_boxes": packed["gt_boxes"],
+        "gt_names": packed["gt_names"],
+        "coord": packed["points"][:, :3],
+        "time_lag": packed["points"][:, 4:5],
+    }
+
+    dropped = ObjectRangeMinPointsFilter(
+        range_radius=[0.0, 60.0], min_num_points=3, time_lag_dim=4
+    )(dict(sample))
+
+    assert dropped["gt_names"].tolist() == []
+
+
+def test_min_points_filters_count_every_point_when_no_time_lag_is_declared() -> None:
+    sample = _densified_sample()
+
+    output = ObjectMinPointsFilter(min_num_points=3, time_lag_dim=None)(sample)
+
+    # 4 points inside the box once sweep points count too, so the box survives.
+    assert output["gt_names"].tolist() == ["car"]
+
+
+def test_min_points_filters_reject_a_declared_absence_contradicted_by_the_sample() -> None:
+    packed = _densified_sample()
+    sample = {
+        "gt_boxes": packed["gt_boxes"],
+        "gt_names": packed["gt_names"],
+        "coord": packed["points"][:, :3],
+        "time_lag": packed["points"][:, 4:5],
+    }
+
+    with pytest.raises(ValueError, match="time_lag_dim is None"):
+        ObjectMinPointsFilter(min_num_points=3, time_lag_dim=None)(sample)
+
+
+def test_min_points_filters_reject_an_out_of_range_time_lag_column() -> None:
+    sample = _densified_sample()
+    sample["points"] = sample["points"][:, :4]
+
+    with pytest.raises(ValueError, match="outside the 4 point features"):
+        ObjectMinPointsFilter(min_num_points=3, time_lag_dim=4)(sample)
 
 
 def test_load_annotations3d_builds_detection_targets() -> None:

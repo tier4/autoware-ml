@@ -43,39 +43,110 @@ class _MixDataset:
         return dataset_transforms(input_dict)
 
 
-def test_prepare_point_cloud_input_splits_points() -> None:
-    output = PreparePointCloudInput()(
-        {
-            "points": np.array([[1.0, 2.0, 3.0, 255.0], [4.0, 5.0, 6.0, 0.0]], dtype=np.float32),
-        }
+def _five_dim_points(time_lags: list[float]) -> np.ndarray:
+    return np.array(
+        [[float(i), 2.0, 3.0, 255.0 if i == 0 else 0.0, lag] for i, lag in enumerate(time_lags)],
+        dtype=np.float32,
     )
+
+
+def test_prepare_point_cloud_input_splits_points() -> None:
+    output = PreparePointCloudInput(time_lag_dim=4)({"points": _five_dim_points([0.0, 0.1])})
 
     assert np.allclose(
-        output["coord"], np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float32)
+        output["coord"], np.array([[0.0, 2.0, 3.0], [1.0, 2.0, 3.0]], dtype=np.float32)
     )
     assert np.allclose(output["strength"], np.array([[1.0], [0.0]], dtype=np.float32))
+    assert np.allclose(output["time_lag"], np.array([[0.0], [0.1]], dtype=np.float32))
+    assert output["time_lag"].dtype == np.float32
 
 
-def test_prepare_point_seg_input_produces_segment_key() -> None:
+def test_prepare_point_cloud_input_rejects_other_layouts() -> None:
+    with pytest.raises(ValueError, match="time_lag"):
+        PreparePointCloudInput(time_lag_dim=4)({"points": np.zeros((2, 4), dtype=np.float32)})
+
+
+def test_prepare_point_seg_input_pads_sweep_points_with_ignore_index() -> None:
     sample = {
-        "points": np.array([[1.0, 2.0, 3.0, 255.0], [4.0, 5.0, 6.0, 0.0]], dtype=np.float32),
+        "points": _five_dim_points([0.0, 0.0, 0.1]),
+        "num_current_points": 2,
         "pts_semantic_mask": np.array([7, 8], dtype=np.int64),
     }
-    sample |= PreparePointCloudInput()(sample)
-    output = PreparePointSegInput()(sample)
+    sample |= PreparePointCloudInput(time_lag_dim=4)(sample)
+    output = PreparePointSegInput(ignore_index=-1, time_lag_dim=4)(sample)
 
-    assert np.array_equal(output["segment"], np.array([7, 8], dtype=np.int64))
+    assert np.array_equal(output["segment"], np.array([7, 8, -1], dtype=np.int64))
+    assert "num_current_points" not in sample
+
+
+def test_prepare_point_seg_input_defaults_to_ignore_without_mask() -> None:
+    sample = {"points": _five_dim_points([0.0, 0.1]), "num_current_points": 1}
+    sample |= PreparePointCloudInput(time_lag_dim=4)(sample)
+
+    output = PreparePointSegInput(ignore_index=-1, time_lag_dim=4)(sample)
+
+    assert np.array_equal(output["segment"], np.array([-1, -1], dtype=np.int64))
 
 
 def test_prepare_point_seg_input_rejects_mask_point_count_mismatch() -> None:
     sample = {
-        "points": np.array([[1.0, 2.0, 3.0, 255.0], [4.0, 5.0, 6.0, 0.0]], dtype=np.float32),
+        "points": _five_dim_points([0.0, 0.0]),
+        "num_current_points": 2,
         "pts_semantic_mask": np.array([7, 8, 9], dtype=np.int64),
     }
-    sample |= PreparePointCloudInput()(sample)
+    sample |= PreparePointCloudInput(time_lag_dim=4)(sample)
 
-    with pytest.raises(ValueError, match="one semantic label per point"):
-        PreparePointSegInput()(sample)
+    with pytest.raises(ValueError, match="one semantic label per current-frame point"):
+        PreparePointSegInput(ignore_index=-1, time_lag_dim=4)(sample)
+
+
+def test_prepare_point_seg_input_rejects_current_frame_outside_leading_block() -> None:
+    sample = {
+        "points": _five_dim_points([0.0, 0.1, 0.0]),
+        "num_current_points": 2,
+        "pts_semantic_mask": np.array([7, 8], dtype=np.int64),
+    }
+    sample |= PreparePointCloudInput(time_lag_dim=4)(sample)
+
+    with pytest.raises(ValueError, match="leading block"):
+        PreparePointSegInput(ignore_index=-1, time_lag_dim=4)(sample)
+
+
+def test_prepare_point_input_transforms_support_a_pipeline_without_time_lag() -> None:
+    sample = {
+        "points": np.array([[0.0, 2.0, 3.0, 255.0], [1.0, 2.0, 3.0, 0.0]], dtype=np.float32),
+        "num_current_points": 2,
+        "pts_semantic_mask": np.array([7, 8], dtype=np.int64),
+    }
+    sample |= PreparePointCloudInput(time_lag_dim=None)(sample)
+    output = PreparePointSegInput(ignore_index=-1, time_lag_dim=None)(sample)
+
+    assert "time_lag" not in sample
+    assert np.array_equal(output["segment"], np.array([7, 8], dtype=np.int64))
+
+
+def test_prepare_point_seg_input_rejects_a_lag_carrying_sample_declared_lag_free() -> None:
+    sample = {
+        "points": _five_dim_points([0.0, 0.1]),
+        "num_current_points": 1,
+        "pts_semantic_mask": np.array([7], dtype=np.int64),
+    }
+    sample |= PreparePointCloudInput(time_lag_dim=4)(sample)
+
+    with pytest.raises(ValueError, match="carries a 'time_lag' field"):
+        PreparePointSegInput(ignore_index=-1, time_lag_dim=None)(sample)
+
+
+def test_prepare_point_seg_input_rejects_sweep_points_without_a_lag_declaration() -> None:
+    sample = {
+        "points": np.zeros((2, 4), dtype=np.float32),
+        "num_current_points": 1,
+        "pts_semantic_mask": np.array([7], dtype=np.int64),
+    }
+    sample |= PreparePointCloudInput(time_lag_dim=None)(sample)
+
+    with pytest.raises(ValueError, match="every point must belong to the current frame"):
+        PreparePointSegInput(ignore_index=-1, time_lag_dim=None)(sample)
 
 
 def test_frustum_mix_combines_points_from_source_and_mix_sample() -> None:

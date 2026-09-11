@@ -25,7 +25,11 @@ import os
 import pickle
 from typing import Any
 
+import numpy as np
+
 from autoware_ml.datamodule.base import DataModule, Dataset
+from autoware_ml.datamodule.common.frame_meta import scene_dir_fragment
+from autoware_ml.datamodule.common.point_cloud import build_sweep_entries, resolve_sweep_paths
 from autoware_ml.datamodule.common.serialization import SerializedSampleList
 from autoware_ml.transforms.base import TransformsCompose
 
@@ -170,10 +174,18 @@ class T4Segmentation3DDataset(Dataset):
         if self.lidar_sources is not None:
             sample_index, source_name = self._map_index(index)
             sample = self.data_infos[sample_index]
-            return self._get_per_sensor_info(sample, sample_index, source_name)
+            info = self._get_per_sensor_info(sample, sample_index, source_name)
+        else:
+            sample = self.data_infos[index]
+            info = self._get_sample_info(sample)
 
-        sample = self.data_infos[index]
-        return self._get_sample_info(sample)
+        info["ego2global"] = np.asarray(sample["ego2global"], dtype=np.float64)
+        info["scene_token"] = scene_dir_fragment(
+            sample["lidar_points"]["lidar_path"], self.data_root
+        )
+        info["timestamp"] = float(sample["timestamp"])
+        info["sweeps"] = resolve_sweep_paths(build_sweep_entries(sample), self.data_root)
+        return info
 
 
 class T4Segmentation3DDataModule(DataModule):

@@ -26,6 +26,10 @@ from typing import Any
 import torch
 import torch.nn as nn
 
+from autoware_ml.metrics.segmentation3d.eval_output import (
+    concat_frame_ids,
+    segmentation_frames_eval_output,
+)
 from autoware_ml.models.base import BaseModel
 from autoware_ml.utils.deploy import ExportSpec
 
@@ -51,7 +55,17 @@ class _FRNetExportModule(nn.Module):
         voxel_coors: torch.Tensor,
         inverse_map: torch.Tensor,
     ) -> torch.Tensor:
-        """Run export-time inference and return point-wise probabilities."""
+        """Run export-time inference and return point-wise probabilities.
+
+        Args:
+            points: Concatenated point features.
+            coors: Per-point frustum cell coordinates.
+            voxel_coors: Active frustum cell coordinates.
+            inverse_map: Point to frustum cell index mapping.
+
+        Returns:
+            Point-wise class probabilities.
+        """
         voxel_coors_active, voxel_feats, point_feats_encoder = self.voxel_encoder(
             points, inverse_map, voxel_coors
         )
@@ -224,14 +238,32 @@ class FRNet(BaseModel):
 
     def build_eval_output(
         self, batch: Mapping[str, Any], outputs: tuple[torch.Tensor, ...]
-    ) -> dict[str, torch.Tensor]:
-        """Pair point predictions with targets for the segmentation metric."""
+    ) -> dict[str, Any]:
+        """Pair per-frame point predictions with targets for the segmentation suites.
+
+        FRNet's logits are already at the original point level, so each point's
+        frame is its own position in the batch-concatenated ``points`` tensor,
+        bucketed by the batch ``offset``.
+
+        Args:
+            batch: Collated batch as fed to the model.
+            outputs: Raw forward outputs.
+
+        Returns:
+            Flat dict with the per-frame ``seg_frames`` the suites read.
+        """
         point_logits = outputs[0]
-        return {
-            "seg_pred_labels": point_logits.argmax(dim=1),
-            "seg_target_labels": batch["pts_semantic_mask"],
-            "seg_coord": batch["points"][:, :3],
-        }
+        offset = batch["offset"].long()
+        point_index = torch.arange(point_logits.shape[0], device=point_logits.device)
+        return segmentation_frames_eval_output(
+            coord=batch["points"][:, :3],
+            pred_labels=point_logits.argmax(dim=1),
+            target_labels=batch["pts_semantic_mask"].long(),
+            scores=torch.softmax(point_logits, dim=1),
+            frame_ids=concat_frame_ids(offset, point_index),
+            num_frames=int(offset.shape[0]),
+            batch=batch,
+        )
 
     def predict_outputs(
         self,
@@ -259,11 +291,22 @@ class FRNet(BaseModel):
         return {"pred_labels": pred_probs.argmax(dim=1), "pred_probs": pred_probs}
 
     def get_export_output_names(self) -> list[str]:
-        """Return ordered FRNet export output names."""
+        """Return ordered FRNet export output names.
+
+        Returns:
+            The output tensor names in export order.
+        """
         return ["pred_probs"]
 
     def get_log_batch_size(self, batch_inputs_dict: Mapping[str, Any]) -> int:
-        """Return the number of samples represented by the FRNet batch."""
+        """Return the number of samples represented by the FRNet batch.
+
+        Args:
+            batch_inputs_dict: Collated model inputs.
+
+        Returns:
+            The batch size.
+        """
         return int(batch_inputs_dict["sample_count"])
 
     def build_export_spec(self, batch_inputs_dict: Mapping[str, torch.Tensor]) -> ExportSpec:
@@ -271,6 +314,12 @@ class FRNet(BaseModel):
 
         FRNet uses an explicit export wrapper because deployment needs a copied
         module graph and a single probability tensor with a stable output name.
+
+        Args:
+            batch_inputs_dict: Example model inputs used for tracing.
+
+        Returns:
+            The export specification.
         """
         input_names = ["points", "coors", "voxel_coors", "inverse_map"]
         input_args = tuple(batch_inputs_dict[name] for name in input_names)
