@@ -17,7 +17,10 @@ from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     PointTransformerV3Encoder,
     SerializedAttention,
     SerializedPooling,
+    build_patch_order,
     build_serialized_pooling_meta,
+    collect_stage_patch_sizes,
+    padded_patch_count,
 )
 from autoware_ml.models.segmentation3d.ptv3 import (
     PTv3SegmentationModel,
@@ -223,12 +226,14 @@ def test_serialized_attention_export_mode_keeps_a_static_window_below_capacity()
     )
     attention.disable_flash()
     attention.export_mode = True
+    serialized_order = torch.arange(3).reshape(1, 3)
     point = Point(
         {
             "feat": torch.randn(3, 32),
             "grid_coord": torch.randint(0, 8, (3, 3), dtype=torch.int32),
-            "serialized_order": torch.arange(3).reshape(1, 3),
+            "serialized_order": serialized_order,
             "serialized_inverse": torch.arange(3).reshape(1, 3),
+            "patch_order": build_patch_order(serialized_order, patch_size=4),
             "offset": torch.tensor([3], dtype=torch.long),
         }
     )
@@ -372,8 +377,9 @@ def test_ptv3_encoder_dynamic_axes_follow_generated_pooling_inputs() -> None:
     input_names = [
         "grid_coord",
         "feat",
-        "serialized_order",
         "serialized_inverse",
+        "patch_order",
+        "serialized_pooling_0_patch_order",
         "serialized_pooling_0_indices",
         "serialized_pooling_0_indptr",
         "serialized_pooling_0_cluster",
@@ -388,8 +394,12 @@ def test_ptv3_encoder_dynamic_axes_follow_generated_pooling_inputs() -> None:
 
     assert dynamic_axes["grid_coord"] == {0: "num_voxels"}
     assert dynamic_axes["feat"] == {0: "num_voxels"}
-    assert dynamic_axes["serialized_order"] == {1: "num_voxels"}
     assert dynamic_axes["serialized_inverse"] == {1: "num_voxels"}
+    # Padded to whole attention windows, so its extent is its own axis, not the voxel count.
+    assert dynamic_axes["patch_order"] == {1: "padded_voxels"}
+    assert dynamic_axes["serialized_pooling_0_patch_order"] == {
+        1: "serialized_pooling_0_padded_voxels"
+    }
     assert dynamic_axes["serialized_pooling_0_indices"] == {0: "serialized_pooling_0_in_voxels"}
     assert dynamic_axes["serialized_pooling_0_indptr"] == {
         0: "serialized_pooling_0_out_voxels_plus_one"
@@ -488,6 +498,7 @@ def test_serialized_pooling_export_mode_uses_precomputed_metadata(monkeypatch) -
         export_point.serialized_code,
         export_point.serialized_order,
         stride=2,
+        patch_size=4,
     )
     export_point["serialized_pooling"] = [meta]
     export_out = export_module(export_point)
@@ -507,6 +518,83 @@ def test_serialized_pooling_export_mode_uses_precomputed_metadata(monkeypatch) -
             torch.testing.assert_close(left, right, msg=f"Mismatch for {key}")
         else:
             assert torch.equal(left, right), f"Mismatch for {key}"
+    # The pooled level hands its blocks the precomputed gather order.
+    assert torch.equal(
+        export_out["patch_order"], build_patch_order(train_out["serialized_order"], 4)
+    )
+
+
+def _reference_patch_order(serialized_order: torch.Tensor, patch_size: int) -> torch.Tensor:
+    """The formula the exported attention block used to trace, kept as the oracle."""
+    n = serialized_order.shape[1]
+    padded_n = ((n + patch_size - 1) // patch_size) * patch_size
+    divisor = max(n, 1)
+    cycle = ((patch_size + divisor - 1) // divisor) * divisor
+    index = torch.arange(padded_n)
+    pad = torch.where(index < n, index, (index - patch_size + cycle) % divisor)
+    return serialized_order[:, pad]
+
+
+@pytest.mark.parametrize(
+    ("count", "patch_size"),
+    [
+        (3, 4),  # below one window: wraps around
+        (4, 4),  # exactly one window: no padding
+        (8, 4),  # whole windows: no padding
+        (9, 4),  # one token into the last window: borrows three backwards
+        (13, 4),
+        (5, 512),  # deployment window, tiny sample: wraps many times
+        (1, 4),
+    ],
+)
+def test_build_patch_order_matches_the_traced_formula(count: int, patch_size: int) -> None:
+    """The precomputed gather order is exactly what the graph used to compute per block.
+
+    It is also the contract the deployed runtime reimplements, so the reference stays here
+    as the oracle for both sides. Every slot must hold a real token (no mask in attention).
+    """
+    torch.manual_seed(count)
+    serialized_order = torch.stack([torch.randperm(count), torch.randperm(count)])
+
+    patch_order = build_patch_order(serialized_order, patch_size)
+
+    assert torch.equal(patch_order, _reference_patch_order(serialized_order, patch_size))
+    assert patch_order.shape == (2, padded_patch_count(count, patch_size))
+    assert patch_order.shape[1] % patch_size == 0
+    assert torch.equal(patch_order[:, :count], serialized_order)
+    assert (patch_order >= 0).all() and (patch_order < count).all()
+
+
+def test_build_patch_order_without_attention_is_the_order_itself() -> None:
+    serialized_order = torch.stack([torch.randperm(7), torch.randperm(7)])
+    assert build_patch_order(serialized_order, None) is serialized_order
+    assert build_patch_order(serialized_order[:, :0], 4).shape == (2, 0)
+
+
+def test_collect_stage_patch_sizes_reads_the_blocks_windows() -> None:
+    encoder = PointTransformerV3Encoder(
+        in_channels=4,
+        order=("z",),
+        stride=(2,),
+        enc_depths=(1, 1),
+        enc_channels=(8, 16),
+        enc_num_head=(1, 2),
+        enc_patch_size=(4, 8),
+        mlp_ratio=2.0,
+        qkv_bias=True,
+        qk_scale=None,
+        attn_drop=0.0,
+        proj_drop=0.0,
+        drop_path=0.0,
+        pre_norm=True,
+        shuffle_orders=False,
+        enable_rpe=False,
+        enable_flash=False,
+        upcast_attention=False,
+        upcast_softmax=False,
+        enc_attn=(False, True),  # a convolution-only stage has no window
+    )
+    assert collect_stage_patch_sizes(encoder.enc) == [None, 8]
 
 
 @pytest.mark.skipif(
@@ -549,22 +637,34 @@ def _build_attention(patch_size: int) -> SerializedAttention:
         upcast_attention=False,
         upcast_softmax=False,
     ).eval()
-    # `__init__` zeroes `patch_size` when flash is off, and `forward` - which these
-    # tests bypass to reach `_get_padding_and_inverse` - is what normally sets it.
+    # `__init__` zeroes `patch_size` when flash is off, and `forward` - which the fill tests
+    # bypass to reach `_get_padding_and_inverse` - is what normally sets it.
     attention.patch_size = patch_size
     return attention
 
 
-def _identity_point(num_points: int) -> Point:
-    """Return a point whose serialization order is the identity, for readable indices."""
+def _identity_point(num_points: int, patch_size: int | None = None) -> Point:
+    """Return a point whose serialization order is the identity, for readable indices.
+
+    With ``patch_size`` the point also carries the precomputed ``patch_order`` an
+    export-mode block reads (the serialize stage's job in deployment).
+    """
     order = torch.arange(num_points).unsqueeze(0)
-    return Point(
+    point = Point(
         feat=torch.zeros(num_points, 32),
         grid_coord=torch.zeros(num_points, 3, dtype=torch.long),
         offset=torch.tensor([num_points]),
         serialized_order=order,
         serialized_inverse=order.clone(),
     )
+    if patch_size is not None:
+        point["patch_order"] = build_patch_order(order, patch_size)
+    return point
+
+
+def _export_fill(num_points: int, patch_size: int) -> torch.Tensor:
+    """The exported gather order over an identity serialization: the fill itself."""
+    return build_patch_order(torch.arange(num_points).unsqueeze(0), patch_size)[0]
 
 
 @pytest.mark.parametrize("patch_size", [4, 16, 48])
@@ -578,31 +678,24 @@ def test_export_fill_reproduces_the_training_fill_above_one_window(patch_size: i
     """
     attention = _build_attention(patch_size)
     for num_points in range(patch_size + 1, 4 * patch_size + 1):
-        attention.export_mode = False
         training_pad, _, _ = attention._get_padding_and_inverse(_identity_point(num_points))
-        attention.export_mode = True
-        export_pad, _, _ = attention._get_padding_and_inverse(_identity_point(num_points))
+        export_pad = _export_fill(num_points, patch_size)
         assert torch.equal(export_pad, training_pad), f"n={num_points}, K={patch_size}"
 
 
 @pytest.mark.parametrize("patch_size", [4, 16, 48])
 def test_export_fill_only_ever_indexes_real_tokens(patch_size: int) -> None:
     """No slot may fall outside ``[0, n)``: every padded slot holds a real token."""
-    attention = _build_attention(patch_size)
-    attention.export_mode = True
     for num_points in range(1, 4 * patch_size + 1):
-        pad, unpad, _ = attention._get_padding_and_inverse(_identity_point(num_points))
+        pad = _export_fill(num_points, patch_size)
         assert int(pad.min()) >= 0, f"n={num_points}"
         assert int(pad.max()) < num_points, f"n={num_points}"
         assert pad.numel() % patch_size == 0, f"n={num_points}"
-        assert unpad.numel() == num_points
 
 
 def test_export_fill_wraps_instead_of_repeating_one_token() -> None:
     """Below one window the fill cycles, so no single key dominates the softmax."""
-    attention = _build_attention(16)
-    attention.export_mode = True
-    pad, _, _ = attention._get_padding_and_inverse(_identity_point(5))
+    pad = _export_fill(5, 16)
 
     _, counts = torch.unique(pad, return_counts=True)
     # Cycling keeps every multiplicity within one of every other; repeating the
@@ -625,7 +718,7 @@ def test_export_attention_is_exact_when_the_count_divides_the_window(num_points:
     padded.load_state_dict(reference.state_dict())
 
     def run(attention: SerializedAttention) -> torch.Tensor:
-        point = _identity_point(num_points)
+        point = _identity_point(num_points, patch_size if attention.export_mode else None)
         point.feat = feat.clone()
         with torch.no_grad():
             return attention(point).feat
