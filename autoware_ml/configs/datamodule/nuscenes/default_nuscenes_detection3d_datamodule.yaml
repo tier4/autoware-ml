@@ -1,0 +1,14 @@
+_target_: autoware_ml.datamodule.multi_task.multi_task_data_module.MultiTaskDataModule
+_convert_: all
+
+defaults:
+  - /datamodule/splitter@splitter: default_scenario_splitter
+  - /datamodule/dataloader@train_dataloader: default_dataloader
+  - /datamodule/dataloader@validation_dataloader: default_dataloader
+  - /datamodule/dataloader@test_dataloader: default_dataloader
+  - /datamodule/dataloader@predict_dataloader: default_dataloader
+  - nuscenes/datasets@train_dataset: default_detection3d_train_dataset
+  - nuscenes/datasets@test_dataset: default_detection3d_test_dataset
+  - nuscenes/datasets@validation_dataset: default_detection3d_test_dataset
+
+predict_dataset: null
