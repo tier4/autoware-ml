@@ -123,6 +123,7 @@
     "getitem",
     "gloo",
     "graphsurgeon",
+    "Hardsigmoid",
     "Hardswish",
     "hilberts",
     "hparams",

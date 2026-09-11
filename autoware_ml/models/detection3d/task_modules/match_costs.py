@@ -9,6 +9,8 @@ from dataclasses import dataclass
 
 import torch
 
+from autoware_ml.models.detection3d.task_modules.bbox_coders import normalize_boxes3d
+
 
 @dataclass(frozen=True)
 class ClassificationCost:
@@ -65,6 +67,39 @@ class BBoxBEVL1Cost:
         pc_extent = bboxes.new_tensor(point_cloud_range[3:5]) - pc_start
         norm_bboxes = (bboxes[:, :2] - pc_start) / pc_extent
         norm_gt_bboxes = (gt_bboxes[:, :2] - pc_start) / pc_extent
+        return torch.cdist(norm_bboxes, norm_gt_bboxes, p=1) * self.weight
+
+
+@dataclass(frozen=True)
+class BBox3DL1Cost:
+    """Compute weighted L1 cost over full normalized 3D box encodings.
+
+    Both proposals and ground truth are encoded with :func:`normalize_boxes3d`
+    and every channel is scaled by ``code_weights`` before the pairwise L1
+    distance. This is the DETR-style matching cost used by query-based camera
+    detectors, where center, size, and heading all steer the assignment.
+    """
+
+    weight: float = 1.0
+    code_weights: tuple[float, ...] = (1.0,) * 10
+
+    def __call__(
+        self, bboxes: torch.Tensor, gt_bboxes: torch.Tensor, point_cloud_range: list[float]
+    ) -> torch.Tensor:
+        """Compute pairwise weighted L1 cost in the normalized box encoding.
+
+        Args:
+            bboxes: Predicted metric boxes ``[cx, cy, cz, dx, dy, dz, yaw, vx, vy]``.
+            gt_bboxes: Ground-truth metric boxes in the same layout.
+            point_cloud_range: Unused; kept for the shared assigner interface.
+
+        Returns:
+            Pairwise weighted L1 cost matrix.
+        """
+        del point_cloud_range
+        channel_weights = bboxes.new_tensor(self.code_weights)
+        norm_bboxes = normalize_boxes3d(bboxes) * channel_weights
+        norm_gt_bboxes = normalize_boxes3d(gt_bboxes) * channel_weights
         return torch.cdist(norm_bboxes, norm_gt_bboxes, p=1) * self.weight
 
 

@@ -12,6 +12,47 @@ from dataclasses import dataclass
 import torch
 
 
+def normalize_boxes3d(boxes: torch.Tensor) -> torch.Tensor:
+    """Encode metric 3D boxes into the query-regression space.
+
+    Args:
+        boxes: Metric boxes ``[cx, cy, cz, dx, dy, dz, yaw, vx, vy]``.
+
+    Returns:
+        Encoded boxes ``[cx, cy, cz, log dx, log dy, log dz, sin, cos, vx, vy]``.
+    """
+    return torch.cat(
+        [
+            boxes[..., :3],
+            boxes[..., 3:6].log(),
+            torch.sin(boxes[..., 6:7]),
+            torch.cos(boxes[..., 6:7]),
+            boxes[..., 7:9],
+        ],
+        dim=-1,
+    )
+
+
+def denormalize_boxes3d(boxes: torch.Tensor) -> torch.Tensor:
+    """Decode query-regression boxes back into the metric space.
+
+    Args:
+        boxes: Encoded boxes ``[cx, cy, cz, log dx, log dy, log dz, sin, cos, vx, vy]``.
+
+    Returns:
+        Metric boxes ``[cx, cy, cz, dx, dy, dz, yaw, vx, vy]``.
+    """
+    return torch.cat(
+        [
+            boxes[..., :3],
+            boxes[..., 3:6].exp(),
+            torch.atan2(boxes[..., 6:7], boxes[..., 7:8]),
+            boxes[..., 8:10],
+        ],
+        dim=-1,
+    )
+
+
 @dataclass
 class TransFusionBBoxCoder:
     """Encode and decode boxes for TransFusion-style query heads.
@@ -145,3 +186,64 @@ class TransFusionBBoxCoder:
                 labels = labels[mask]
             predictions.append({"bboxes": boxes, "scores": scores, "labels": labels})
         return predictions
+
+
+@dataclass
+class NMSFreeBBoxCoder3D:
+    """Decode box predictions for query-based 3D detectors without NMS.
+
+    Attributes:
+        pc_range: Point-cloud range used by the detector.
+        post_center_range: Optional metric-space range used to filter predictions.
+        score_threshold: Optional confidence threshold applied during decoding.
+        max_num: Maximum number of predictions retained per sample.
+    """
+
+    pc_range: list[float]
+    post_center_range: list[float] | None = None
+    score_threshold: float | None = None
+    max_num: int = 100
+
+    def decode(
+        self,
+        cls_logits: torch.Tensor,
+        box_params: torch.Tensor,
+    ) -> list[dict[str, torch.Tensor]]:
+        """Decode class logits and box parameters into metric-space predictions.
+
+        Args:
+            cls_logits: Classification logits for each query.
+            box_params: Box regression outputs for each query.
+
+        Returns:
+            Per-sample prediction dictionaries with boxes, scores, and labels.
+        """
+        batch_predictions: list[dict[str, torch.Tensor]] = []
+        center_range = None
+        if self.post_center_range is not None:
+            center_range = box_params.new_tensor(self.post_center_range)
+
+        for sample_scores, sample_boxes in zip(cls_logits.sigmoid(), box_params):
+            flat_scores = sample_scores.flatten()
+            topk = min(self.max_num, flat_scores.numel())
+            scores, flat_indices = flat_scores.topk(topk)
+            labels = flat_indices % sample_scores.shape[1]
+            box_indices = flat_indices // sample_scores.shape[1]
+            selected_boxes = sample_boxes[box_indices]
+
+            if self.score_threshold is not None:
+                keep = scores >= self.score_threshold
+                scores = scores[keep]
+                labels = labels[keep]
+                selected_boxes = selected_boxes[keep]
+
+            metric_boxes = denormalize_boxes3d(selected_boxes)
+            if center_range is not None and metric_boxes.numel() > 0:
+                keep = (metric_boxes[:, :3] >= center_range[:3]).all(dim=1)
+                keep &= (metric_boxes[:, :3] <= center_range[3:]).all(dim=1)
+                metric_boxes = metric_boxes[keep]
+                scores = scores[keep]
+                labels = labels[keep]
+
+            batch_predictions.append({"bboxes": metric_boxes, "scores": scores, "labels": labels})
+        return batch_predictions
