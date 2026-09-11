@@ -2,7 +2,7 @@ FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-ARG PIXI_VERSION=0.66.0
+ARG PIXI_VERSION=0.80.0
 ARG USERNAME=autoware-ml
 ARG USER_UID=1000
 ARG USER_GID=1000

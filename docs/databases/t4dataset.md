@@ -38,7 +38,7 @@ classDiagram
 
     class t4_devkit {
         <<external>>
-        Tier4
+        T4Devkit
         Sample
         SampleData
         CalibratedSensor
