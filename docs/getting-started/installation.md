@@ -232,7 +232,7 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
           exit 1
         fi
 
-        PIXI_VERSION="0.66.0"
+        PIXI_VERSION="0.80.0"
         PIXI_ARCHIVE="pixi-x86_64-unknown-linux-musl.tar.gz"
         PIXI_BASE_URL="https://github.com/prefix-dev/pixi/releases/download/v${PIXI_VERSION}"
 

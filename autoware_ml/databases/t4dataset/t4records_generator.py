@@ -19,7 +19,7 @@ from typing import Sequence, Tuple
 
 import numpy as np
 import numpy.typing as npt
-from t4_devkit import Tier4
+from t4_devkit import T4Devkit
 from t4_devkit.dataclass.box import Box3D
 from t4_devkit.schema import (
     Attribute,
@@ -104,12 +104,12 @@ class T4RecordsGenerator:
         assert sample_steps > 0, "Sample steps must be greater than 0."
         assert max_sweeps >= 0, "Max sweeps must be greater than or equal to 0."
 
-    def _construct_t4_devkit_dataset(self) -> Tier4:
+    def _construct_t4_devkit_dataset(self) -> T4Devkit:
         """
         Construct T4Devkit class instance.
 
         Returns:
-          Tier4: T4 dataset.
+          T4Devkit: T4 dataset.
         """
 
         scene_root_dir_path = (
@@ -120,7 +120,7 @@ class T4RecordsGenerator:
         )
         if not scene_root_dir_path.exists():
             raise ValueError(f"Scene root directory {scene_root_dir_path} does not exist.")
-        return Tier4(data_root=scene_root_dir_path, verbose=False)
+        return T4Devkit(data_root=scene_root_dir_path, verbose=False)
 
     def generate_dataset_records(self) -> Sequence[DatasetRecord]:
         """
