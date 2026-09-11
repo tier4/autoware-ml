@@ -25,9 +25,16 @@ def detection_eval_output(
     Returns:
         Flat eval-output dict consumed by the detection metric.
     """
-    return {
+    eval_out = {
         "predictions": predictions,
         "gt_boxes": batch["gt_boxes"],
         "gt_labels": batch["gt_labels"],
-        "gt_num_points": batch.get("gt_num_points"),
     }
+    # Per-frame evaluation metadata, copied through when the dataset supplies it.
+    # Region and collision filters need the ego pose and scene token. A configured
+    # filter that needs a missing key fails loud in the suite naming it, so
+    # absence is never silent.
+    for key in ("gt_num_points", "ego2global", "scene_token"):
+        if key in batch:
+            eval_out[key] = batch[key]
+    return eval_out
