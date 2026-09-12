@@ -30,6 +30,10 @@ import torch
 import torch.nn as nn
 
 from autoware_ml.losses.segmentation3d.lovasz import LovaszLoss
+from autoware_ml.metrics.segmentation3d.eval_output import (
+    concat_frame_ids,
+    segmentation_frames_eval_output,
+)
 from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     Block,
     PointSequential,
@@ -235,25 +239,36 @@ class PTv3SegDecoderHead(nn.Module):
         return export_head
 
 
-def segmentation_eval_output(
-    seg_logits: torch.Tensor, batch: Mapping[str, Any]
-) -> dict[str, torch.Tensor]:
-    """Scatter point-level predictions back to original points for the metric.
+def segmentation_eval_output(seg_logits: torch.Tensor, batch: Mapping[str, Any]) -> dict[str, Any]:
+    """Scatter point-level predictions back to original points, per frame.
+
+    Produces the ``seg_frames`` contract both segmentation suites consume: one
+    entry per frame with the original-resolution coordinates, predicted/target
+    labels and per-class softmax scores. The frame of every original point is
+    recovered from the sampled-space ``inverse`` map and the batch ``offset``
+    (inclusive cumulative sampled-point counts per frame).
 
     Args:
         seg_logits: Point-wise segmentation logits at the sampled-point level.
-        batch: Batch dictionary with ``inverse`` (sampled-to-original point
-            map), ``origin_segment``, and ``origin_coord``.
+        batch: Batch dictionary with ``inverse``, ``offset``, ``origin_segment``,
+            and ``origin_coord``. Per-frame metadata (ego pose, scene token) is
+            passed through when the dataset supplies it.
 
     Returns:
-        Original-point predictions and targets keyed for the segmentation
-        metric.
+        ``{"seg_frames": [...]}`` keyed for the segmentation suites.
     """
-    return {
-        "seg_pred_labels": seg_logits.argmax(dim=1)[batch["inverse"].long()],
-        "seg_target_labels": batch["origin_segment"].long(),
-        "seg_coord": batch["origin_coord"],
-    }
+    inverse = batch["inverse"].long()
+    offset = batch["offset"].long()
+    scores = torch.softmax(seg_logits, dim=1)[inverse]
+    return segmentation_frames_eval_output(
+        coord=batch["origin_coord"],
+        pred_labels=seg_logits.argmax(dim=1)[inverse],
+        target_labels=batch["origin_segment"].long(),
+        scores=scores,
+        frame_ids=concat_frame_ids(offset, inverse),
+        num_frames=int(offset.shape[0]),
+        batch=batch,
+    )
 
 
 def segmentation_predict_outputs(
