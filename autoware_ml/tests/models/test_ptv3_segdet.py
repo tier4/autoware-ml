@@ -132,12 +132,14 @@ def test_build_eval_output_neutralizes_unflagged_frames_keeping_one_entry_per_fr
     batch = {
         **_make_batch([False, True]),
         "inverse": torch.tensor([0, 1, 2, 3], dtype=torch.long),
+        "offset": torch.tensor([2, 4], dtype=torch.long),
         "origin_segment": torch.tensor([0, 1, 2, 0], dtype=torch.long),
         "origin_coord": torch.zeros((4, 3)),
     }
 
     eval_out = PTv3SegDetModel.build_eval_output(model, batch, outputs)
 
+    assert len(eval_out["seg_frames"]) == 2
     assert len(eval_out["predictions"]) == 2
     assert len(eval_out["gt_boxes"]) == 2
     # Unflagged frame: empty predictions with preserved trailing dims.
@@ -154,12 +156,14 @@ def test_build_eval_output_without_flagged_frames_keeps_neutral_entries() -> Non
     batch = {
         **_make_batch([False]),
         "inverse": torch.tensor([0, 1], dtype=torch.long),
+        "offset": torch.tensor([2], dtype=torch.long),
         "origin_segment": torch.tensor([0, 1], dtype=torch.long),
         "origin_coord": torch.zeros((2, 3)),
     }
 
     eval_out = PTv3SegDetModel.build_eval_output(model, batch, outputs)
 
+    assert len(eval_out["seg_frames"]) == 1
     assert len(eval_out["predictions"]) == 1
     assert eval_out["predictions"][0]["bboxes_3d"].shape == (0, 9)
     assert len(eval_out["gt_boxes"]) == 1

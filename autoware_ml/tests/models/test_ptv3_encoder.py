@@ -312,6 +312,7 @@ def test_compute_metrics_reports_losses_and_point_level_accuracy() -> None:
     batch = {
         "segment": segment,
         "inverse": inverse,
+        "offset": torch.tensor([3], dtype=torch.long),
         "origin_segment": origin_segment,
         "origin_coord": origin_coord,
     }
@@ -324,9 +325,11 @@ def test_compute_metrics_reports_losses_and_point_level_accuracy() -> None:
     assert metrics["loss"] > 0
 
     eval_out = PTv3SegmentationModel.build_eval_output(model, batch, voxel_logits)
-    assert torch.equal(eval_out["seg_pred_labels"], torch.tensor([0, 1]))
-    assert torch.equal(eval_out["seg_target_labels"], origin_segment)
-    assert torch.equal(eval_out["seg_coord"], origin_coord)
+    (frame,) = eval_out["seg_frames"]
+    assert torch.equal(frame["pred"], torch.tensor([0, 1]))
+    assert torch.equal(frame["target"], origin_segment)
+    assert torch.equal(frame["coord"], origin_coord)
+    assert frame["scores"].shape == (2, 3)
 
 
 def test_predict_outputs_reconstructs_point_level_predictions() -> None:
