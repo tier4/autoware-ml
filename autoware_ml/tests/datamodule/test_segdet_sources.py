@@ -15,9 +15,11 @@ from autoware_ml.datamodule.t4dataset.segdet import T4SegmentationDetection3DDat
 def _make_frame(token: str, *, with_instances: bool = True) -> dict[str, Any]:
     frame: dict[str, Any] = {
         "token": token,
-        "lidar_points": {"lidar_path": f"lidar/{token}.bin", "num_pts_feats": 5},
+        "lidar_points": {"lidar_path": f"db/uuid/0/{token}.bin", "num_pts_feats": 5},
         "pts_semantic_mask_path": f"seg/{token}.bin",
         "pts_semantic_mask_categories": {"car": 0, "vegetation": 1},
+        "ego2global": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
+        "timestamp": 0.0,
     }
     if with_instances:
         frame["instances"] = [
