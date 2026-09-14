@@ -159,21 +159,22 @@ def build_patch_order(serialized_order: torch.Tensor, patch_size: int | None) ->
     return torch.cat([serialized_order, serialized_order[:, tail]], dim=1)
 
 
-def collect_stage_patch_sizes(stages: nn.Module) -> list[int | None]:
-    """Attention window per stage of a ``PointSequential`` of stages, ``None`` without attention.
+def collect_level_patch_sizes(levels: nn.Module) -> list[int | None]:
+    """Attention window per resolution level of a ``PointSequential`` of block stacks.
 
-    Every attention block of one stage shares a window (a level has one ``patch_order``), which
-    is asserted here rather than assumed.
+    One ``patch_order`` per level is the graph contract, so every attention block of one
+    level must share a window; that is asserted here rather than assumed. ``None`` marks a
+    level without attention blocks.
     """
     patch_sizes: list[int | None] = []
-    for stage in stages._modules.values():
+    for level in levels._modules.values():
         windows = {
             module.attn.patch_size_max
-            for module in stage._modules.values()
+            for module in level._modules.values()
             if isinstance(module, Block) and module.attn is not None
         }
         if len(windows) > 1:
-            raise ValueError(f"Attention blocks of one stage disagree on patch_size: {windows}.")
+            raise ValueError(f"Attention blocks of one level disagree on patch_size: {windows}.")
         patch_sizes.append(next(iter(windows)) if windows else None)
     return patch_sizes
 

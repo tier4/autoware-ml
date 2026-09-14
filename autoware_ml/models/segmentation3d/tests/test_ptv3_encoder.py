@@ -19,7 +19,7 @@ from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     SerializedPooling,
     build_patch_order,
     build_serialized_pooling_meta,
-    collect_stage_patch_sizes,
+    collect_level_patch_sizes,
     padded_patch_count,
 )
 from autoware_ml.models.segmentation3d.ptv3 import (
@@ -27,7 +27,10 @@ from autoware_ml.models.segmentation3d.ptv3 import (
     _PTv3SegmentationExportModule,
 )
 from autoware_ml.models.segmentation3d.ptv3_base import (
+    build_monolithic_export_inputs,
     build_ptv3_encoder_dynamic_axes,
+    build_ptv3_export_context,
+    require_single_sample_export_batch,
     validate_serialization_geometry,
 )
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
@@ -35,6 +38,7 @@ from autoware_ml.models.detection3d.tests.ptv3_detection_fixtures import (
     build_inputs,
     build_ptv3_encoder,
     build_seg_head,
+    build_seg_model,
     move_batch_to_device,
 )
 
@@ -568,13 +572,48 @@ def test_build_patch_order_matches_the_traced_formula(count: int, patch_size: in
     assert (patch_order >= 0).all() and (patch_order < count).all()
 
 
+#: Literal `patch_order` vectors, hand-derived from the contract, shared with the deployed
+#: runtime's test (autoware.universe, autoware_ptv3 `serialized_pooling_metadata_test.cpp`):
+#: two implementations of one formula in two languages must agree on the same numbers, not
+#: each on its own reimplementation of the formula. (patch_size, serialized_order, expected).
+PATCH_ORDER_GOLDEN_VECTORS = [
+    # below one window: the tail wraps around (cycle = 6 for count 3)
+    (4, [[0, 1, 2]], [[0, 1, 2, 2]]),
+    (4, [[2, 0, 1]], [[2, 0, 1, 1]]),
+    # exactly one window and whole windows: nothing to pad
+    (4, [[3, 0, 2, 1]], [[3, 0, 2, 1]]),
+    (4, [[7, 0, 6, 1, 5, 2, 4, 3]], [[7, 0, 6, 1, 5, 2, 4, 3]]),
+    # one token into the last window (k * K + 1): borrows three backwards
+    (4, [[4, 0, 3, 1, 2]], [[4, 0, 3, 1, 2, 0, 3, 1]]),
+    # a partial last window: borrows the two before it
+    (4, [[5, 2, 7, 1, 0, 3]], [[5, 2, 7, 1, 0, 3, 7, 1]]),
+    # two distinct rows are padded independently, from their own entries
+    (
+        4,
+        [[0, 5, 2, 1, 4, 3], [3, 1, 5, 0, 2, 4]],
+        [[0, 5, 2, 1, 4, 3, 2, 1], [3, 1, 5, 0, 2, 4, 5, 0]],
+    ),
+    # the deployed window on a tiny sample: 507 tail slots cycle through the 5 tokens
+    (512, [[4, 0, 3, 1, 2]], [[4, 0, 3, 1, 2] + [1, 2, 4, 0, 3] * 101 + [1, 2]]),
+]
+
+
+@pytest.mark.parametrize(("patch_size", "serialized_order", "expected"), PATCH_ORDER_GOLDEN_VECTORS)
+def test_build_patch_order_golden_vectors(
+    patch_size: int, serialized_order: list[list[int]], expected: list[list[int]]
+) -> None:
+    """The cross-language contract: fixed inputs, fixed outputs, no formula in the assertion."""
+    patch_order = build_patch_order(torch.tensor(serialized_order), patch_size)
+    assert patch_order.tolist() == expected
+
+
 def test_build_patch_order_without_attention_is_the_order_itself() -> None:
     serialized_order = torch.stack([torch.randperm(7), torch.randperm(7)])
     assert build_patch_order(serialized_order, None) is serialized_order
     assert build_patch_order(serialized_order[:, :0], 4).shape == (2, 0)
 
 
-def test_collect_stage_patch_sizes_reads_the_blocks_windows() -> None:
+def test_collect_level_patch_sizes_reads_the_blocks_windows() -> None:
     encoder = PointTransformerV3Encoder(
         in_channels=4,
         order=("z",),
@@ -597,7 +636,7 @@ def test_collect_stage_patch_sizes_reads_the_blocks_windows() -> None:
         upcast_softmax=False,
         enc_attn=(False, True),  # a convolution-only stage has no window
     )
-    assert collect_stage_patch_sizes(encoder.enc) == [None, 8]
+    assert collect_level_patch_sizes(encoder.enc) == [None, 8]
 
 
 @pytest.mark.skipif(
@@ -624,7 +663,7 @@ def test_ptv3_frozen_encoder_supports_decoder_block_backward() -> None:
     assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in model.seg3d_head.parameters())
 
 
-def _build_attention(patch_size: int) -> SerializedAttention:
+def _build_attention(patch_size: int, order_index: int = 0) -> SerializedAttention:
     """Return a non-flash attention module with a fixed window size."""
     attention = SerializedAttention(
         channels=32,
@@ -634,7 +673,7 @@ def _build_attention(patch_size: int) -> SerializedAttention:
         qk_scale=None,
         attn_drop=0.0,
         proj_drop=0.0,
-        order_index=0,
+        order_index=order_index,
         enable_rpe=False,
         enable_flash=False,
         upcast_attention=False,
@@ -727,3 +766,64 @@ def test_export_attention_is_exact_when_the_count_divides_the_window(num_points:
             return attention(point).feat
 
     assert torch.allclose(run(padded), run(reference), atol=1e-5)
+
+
+@pytest.mark.parametrize("num_points", [6, 9])
+def test_export_attention_matches_training_on_a_non_identity_second_order(
+    num_points: int,
+) -> None:
+    """The export wiring end to end: `patch_order[order_index]` with `serialized_inverse[order_index]`.
+
+    Two distinct non-identity serialization rows, `order_index=1`, and a count that does not
+    divide the window, so a row mix-up or a drift in the precomputed padding changes the
+    output (the helper tests cannot see either). The training path is the oracle; it takes
+    its window from the smallest sample of the batch, so the sample under test rides along
+    with a window-sized filler sample that keeps the training window at ``patch_size``.
+    """
+    torch.manual_seed(1)
+    patch_size = 4
+    feat = torch.randn(num_points, 32)
+    orders = torch.stack([torch.randperm(num_points), torch.randperm(num_points)])
+    assert not torch.equal(orders[0], orders[1])
+
+    export = _build_attention(patch_size, order_index=1)
+    export.export_mode = True
+    reference = _build_attention(patch_size, order_index=1)
+    reference.load_state_dict(export.state_dict())
+
+    export_point = Point(
+        feat=feat.clone(),
+        grid_coord=torch.zeros(num_points, 3, dtype=torch.long),
+        offset=torch.tensor([num_points]),
+        serialized_order=orders,
+        serialized_inverse=torch.argsort(orders, dim=1),
+        patch_order=build_patch_order(orders, patch_size),
+    )
+    filler_orders = torch.stack([torch.randperm(patch_size), torch.randperm(patch_size)])
+    batch_orders = torch.cat([filler_orders, orders + patch_size], dim=1)
+    training_point = Point(
+        feat=torch.cat([torch.randn(patch_size, 32), feat]),
+        grid_coord=torch.zeros(patch_size + num_points, 3, dtype=torch.long),
+        offset=torch.tensor([patch_size, patch_size + num_points]),
+        serialized_order=batch_orders,
+        serialized_inverse=torch.argsort(batch_orders, dim=1),
+    )
+
+    with torch.no_grad():
+        export_feat = export(export_point).feat
+        training_feat = reference(training_point).feat[patch_size:]
+    assert reference.patch_size == patch_size
+    torch.testing.assert_close(export_feat, training_feat, atol=1e-5, rtol=1e-5)
+
+
+def test_export_input_builders_reject_a_multi_sample_batch() -> None:
+    """The graphs pad and offset one frame; a second sample fails here, not by attending across."""
+    model = build_seg_model().eval()
+    single = build_inputs()
+    require_single_sample_export_batch(single)
+
+    double = {name: torch.cat([value, value]) for name, value in single.items() if name != "offset"}
+    double["offset"] = torch.tensor([8, 16], dtype=torch.long)
+    for builder in (build_monolithic_export_inputs, build_ptv3_export_context):
+        with pytest.raises(ValueError, match="single-sample"):
+            builder(model, double)

@@ -157,19 +157,25 @@ below `patch_size`). It depends only on the count, the order and the window, so
 it is precomputed rather than traced into every block. `build_patch_order` in
 `encoders/ptv3.py` is the reference implementation, and the deployed runtime
 (`autoware_ptv3`) reimplements it from its own `encoder.patch_sizes` parameter.
+The per-level windows are therefore part of the graph contract: the exporter
+stamps them into the encoder module's ONNX metadata as `patch_sizes` (one entry
+per level, from the deploy config's `metainfo`), and the runtime's list must
+equal it. A mismatch is not caught by shape alone — two windows can pad a count
+to the same extent while borrowing different tokens — so the runtime should
+validate its parameter against the stamped list rather than trust the rollout.
 
 For every encoder pooling stage `i`, with input voxel count `N_i` and pooled
 output voxel count `M_i`, preprocessing also provides:
 
-| Pooling metadata                          | Shape       | Meaning                                                       |
-| ----------------------------------------- | ----------- | ------------------------------------------------------------- |
-| `serialized_pooling_i_indices`            | `[N_i]`     | ONNX `Gather` indices grouping features before CSR reduction. |
-| `serialized_pooling_i_indptr`             | `[M_i + 1]` | CSR row pointer consumed by `autoware::SegmentCSR`.           |
-| `serialized_pooling_i_cluster`            | `[N_i]`     | Input voxel to pooled voxel id mapping for unpooling.         |
-| `serialized_pooling_i_head_indices`       | `[M_i]`     | Representative input voxel for each pooled voxel.             |
-| `serialized_pooling_i_grid_coord`         | `[M_i, 3]`  | Integer coordinates of pooled voxels.                         |
-| `serialized_pooling_i_serialized_inverse` | `[O, M_i]`  | Inverse serialization order for pooled voxels.                |
-| `serialized_pooling_i_patch_order`        | `[O, P_i]`  | The pooled level's order padded to whole attention windows.   |
+| Pooling metadata                          | Shape          | Meaning                                                                     |
+| ----------------------------------------- | -------------- | --------------------------------------------------------------------------- |
+| `serialized_pooling_i_indices`            | `[N_i]`        | ONNX `Gather` indices grouping features before CSR reduction.               |
+| `serialized_pooling_i_indptr`             | `[M_i + 1]`    | CSR row pointer consumed by `autoware::SegmentCSR`.                         |
+| `serialized_pooling_i_cluster`            | `[N_i]`        | Input voxel to pooled voxel id mapping for unpooling.                       |
+| `serialized_pooling_i_head_indices`       | `[M_i]`        | Representative input voxel for each pooled voxel.                           |
+| `serialized_pooling_i_grid_coord`         | `[M_i, 3]`     | Integer coordinates of pooled voxels.                                       |
+| `serialized_pooling_i_serialized_inverse` | `[O, M_i]`     | Inverse serialization order for pooled voxels.                              |
+| `serialized_pooling_i_patch_order`        | `[O, P_{i+1}]` | The pooled level's (level `i + 1`) order padded to whole attention windows. |
 
 Because preprocessing resolves every pooling shape ahead of time, the exported
 graph contains no data-dependent pooling shape discovery. Pooled feature

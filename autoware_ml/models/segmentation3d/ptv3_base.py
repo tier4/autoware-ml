@@ -20,7 +20,7 @@ from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     build_patch_order,
     build_serialized_pooling_meta,
     collect_encoder_stage_points,
-    collect_stage_patch_sizes,
+    collect_level_patch_sizes,
 )
 from autoware_ml.utils.deploy import ExportSpec
 from autoware_ml.utils.point_cloud.structures import (
@@ -263,22 +263,39 @@ def export_patch_sizes(model: "PTv3BaseModel") -> list[int | None]:
     the window; both PTv3 configurations do, and a disagreement is a config error reported
     here rather than a silently mis-padded gather.
     """
-    patch_sizes = collect_stage_patch_sizes(model.encoder.enc)
+    patch_sizes = collect_level_patch_sizes(model.encoder.enc)
     head = getattr(model, "seg3d_head", None)
     if head is not None:
-        for stage, dec_patch_size in enumerate(collect_stage_patch_sizes(head.dec)):
+        for level, dec_patch_size in enumerate(collect_level_patch_sizes(head.dec)):
             if dec_patch_size is None:
                 continue
-            if patch_sizes[stage] is None:
-                patch_sizes[stage] = dec_patch_size
-            elif patch_sizes[stage] != dec_patch_size:
+            if patch_sizes[level] is None:
+                patch_sizes[level] = dec_patch_size
+            elif patch_sizes[level] != dec_patch_size:
                 raise ValueError(
-                    f"Level {stage}: encoder patch_size {patch_sizes[stage]} != decoder "
+                    f"Level {level}: encoder patch_size {patch_sizes[level]} != decoder "
                     f"patch_size {dec_patch_size}; the deployed graphs share one patch_order "
                     "per level, so enc_patch_size and dec_patch_size must match where both "
                     "have attention blocks."
                 )
     return patch_sizes
+
+
+def require_single_sample_export_batch(batch: Mapping[str, torch.Tensor]) -> None:
+    """Reject a multi-sample export batch before any graph input is built from it.
+
+    The deployed graphs describe one frame: ``patch_order`` pads the serialization as a
+    whole (training pads every sample separately so no window crosses a sample) and the
+    export encoder sets ``offset`` to the total count. Tracing a multi-sample batch through
+    them would attend across samples without any error, so the constraint is asserted
+    here, at the export boundary, rather than relied on implicitly.
+    """
+    sample_count = int(batch["offset"].numel())
+    if sample_count != 1:
+        raise ValueError(
+            "PTv3 export supports only single-sample export batches, got "
+            f"{sample_count} samples (offset entries)."
+        )
 
 
 def build_input_level_serialization(
@@ -572,6 +589,7 @@ def build_ptv3_export_context(
     model: "PTv3BaseModel", batch: Mapping[str, torch.Tensor]
 ) -> PTv3ExportContext:
     """Serialize the batch, precompute pooling metadata, and run the encoder once."""
+    require_single_sample_export_batch(batch)
     sparse_shape, serialization_depth = model._compute_export_geometry(batch)
     point, input_args = serialize_point_cloud_batch(batch, model.EXPORT_ORDER, serialization_depth)
     patch_sizes = export_patch_sizes(model)
@@ -640,6 +658,7 @@ def build_monolithic_export_inputs(
     Returns:
         Baked geometry and the sample inputs matching the declared input names.
     """
+    require_single_sample_export_batch(batch)
     sparse_shape, serialization_depth = model._compute_export_geometry(batch)
     point, input_args = serialize_point_cloud_batch(batch, model.EXPORT_ORDER, serialization_depth)
     patch_sizes = export_patch_sizes(model)
