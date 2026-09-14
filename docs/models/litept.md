@@ -72,8 +72,8 @@ autoware-ml train --config-name segmentation3d/litept/voxel012_122m_t4dataset_j6
 ## Export contract
 
 Declared identically to [PTv3](ptv3.md#onnx-preprocessing-contract), but the
-gated graph reads fewer of the inputs - nothing consumes the base serialization
-order, nor the `head_indices` of the stages that carry no convolution - and
+gated graph reads fewer of the inputs - nothing consumes the `head_indices` of the
+stages that carry no convolution - and
 `torch.onnx.export` drops whatever the traced graph never consumes. A LitePT
 artifact therefore exposes a subset of the PTv3 inputs.
 

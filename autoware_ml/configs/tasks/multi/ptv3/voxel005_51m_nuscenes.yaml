@@ -80,6 +80,9 @@ datamodule:
         shift_range: [-0.02, 0.02]
       - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeFilter
         point_cloud_range: ${point_cloud_range}
+      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
+        range_radius: [0.0, 60.0]
+        min_num_points: 1
       - _target_: autoware_ml.transforms.common.copying.Copy
         keys_dict: { segment: origin_segment }
       - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample

@@ -355,7 +355,8 @@ class _PTv3SegDetExportModule(PTv3EncoderExportBase):
         self,
         grid_coord: torch.Tensor,
         feat: torch.Tensor,
-        serialized_code: torch.Tensor,
+        serialized_order: torch.Tensor,
+        serialized_inverse: torch.Tensor,
         *serialized_pooling_inputs: torch.Tensor,
     ) -> tuple[torch.Tensor, ...]:
         """Run the export graph and return outputs in configured order.
@@ -363,13 +364,16 @@ class _PTv3SegDetExportModule(PTv3EncoderExportBase):
         Args:
             grid_coord: Input voxel coordinates.
             feat: Input point or voxel features.
-            serialized_code: Serialization codes for the base point set.
+            serialized_order: Level-0 serialization order, one row per curve.
+            serialized_inverse: Inverse of ``serialized_order``.
             serialized_pooling_inputs: Precomputed pooling metadata tensors.
 
         Returns:
             Tuple of export tensors ordered according to ``output_names``.
         """
-        point = self.run_encoder(grid_coord, feat, serialized_code, *serialized_pooling_inputs)
+        point = self.run_encoder(
+            grid_coord, feat, serialized_order, serialized_inverse, *serialized_pooling_inputs
+        )
         # BEV branch first: the segmentation decoder consumes the pooling
         # chain destructively.
         bev_features = self.bev_neck(point)

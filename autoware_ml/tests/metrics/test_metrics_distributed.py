@@ -30,15 +30,25 @@ from autoware_ml.metrics.detection3d.tp_errors import TpErrors
 from autoware_ml.metrics.segmentation3d.accuracy import Accuracy
 from autoware_ml.metrics.segmentation3d.iou import IoU
 from autoware_ml.metrics.segmentation3d.precision_recall_f1 import PrecisionRecallF1
-from autoware_ml.metrics.segmentation3d.suite import Segmentation3DMetricSuite
+from autoware_ml.metrics.segmentation3d.suite import Segmentation3DConfusionMatrixMetricSuite
 
 
-def _det_suite(**kwargs):
-    return Detection3DMetricSuite(components=[MeanAP(), HeadingAP(), Nds(), TpErrors()], **kwargs)
+def _det_suite(thresholds=(0.5, 1.0, 2.0, 4.0), **kwargs):
+    return Detection3DMetricSuite(
+        components=[
+            MeanAP(thresholds=thresholds),
+            HeadingAP(thresholds=thresholds),
+            Nds(thresholds=thresholds, tp_threshold=thresholds[0]),
+            TpErrors(thresholds=thresholds, tp_threshold=thresholds[0]),
+        ],
+        **kwargs,
+    )
 
 
 def _seg_suite(**kwargs):
-    return Segmentation3DMetricSuite(components=[IoU(), Accuracy(), PrecisionRecallF1()], **kwargs)
+    return Segmentation3DConfusionMatrixMetricSuite(
+        components=[IoU(), Accuracy(), PrecisionRecallF1()], **kwargs
+    )
 
 
 pytestmark = pytest.mark.skipif(
@@ -50,12 +60,16 @@ _WORLD_SIZES = [2, 8]
 _SEG_RANGES = (MetricRange("0-50m", 0.0, 50.0), MetricRange("50-90m", 50.0, 90.0))
 
 
-def _seg_shard(rank: int) -> dict[str, torch.Tensor]:
+def _seg_shard(rank: int) -> dict[str, object]:
     """Deterministic per-rank points, two near (10 m) and one far (60 m)."""
     return {
-        "seg_pred_labels": torch.tensor([0, 1, rank % 2]),
-        "seg_target_labels": torch.tensor([0, 1, 0]),
-        "seg_coord": torch.tensor([[10.0, 0.0, 0.0], [10.0, 0.0, 0.0], [60.0, 0.0, 0.0]]),
+        "seg_frames": [
+            {
+                "pred": torch.tensor([0, 1, rank % 2]),
+                "target": torch.tensor([0, 1, 0]),
+                "coord": torch.tensor([[10.0, 0.0, 0.0], [10.0, 0.0, 0.0], [60.0, 0.0, 0.0]]),
+            }
+        ]
     }
 
 

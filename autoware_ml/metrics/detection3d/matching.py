@@ -1,27 +1,76 @@
-"""Center-distance matching math shared by the detection metrics.
+"""Matching math and the memoizing detection state shared by the metrics.
 
-Pure helpers only. The metrics orchestrate these: they ask a ``DetectionState``
-for match curves (which it memoizes) and turn them into AP, APH, NDS, or TP
-errors. Matching is nuScenes-style BEV center distance with score-ordered
-precision/recall curves.
+Metrics ask a :class:`DetectionState` for match curves and turn them into AP,
+APH, NDS, or TP errors. The state memoizes per class and threshold, so the
+expensive matching runs once and is shared across every metric. Matching is
+greedy and score-ordered with a configurable cost: nuScenes-style BEV center
+distance by default, corner distance optionally.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from math import pi
 
 import numpy as np
 import torch
 
 from autoware_ml.metrics.base import MetricRange
+from autoware_ml.metrics.detection3d.geometry import (
+    corner_displacement_matrix,
+    corner_displacements,
+    nearest_surface_distances,
+)
 from autoware_ml.metrics.detection3d.structures import (
     ERROR_NAMES,
     CurveMetrics,
     Detection3DSample,
     MatchCurve,
-    PredictionRecord,
     SelectedTpErrors,
 )
+
+
+def cost_center(pred_boxes: np.ndarray, gt_boxes: np.ndarray) -> np.ndarray:
+    """BEV center distance for every prediction and ground-truth pair, ``(P, G)``.
+
+    Args:
+        pred_boxes: Prediction box rows ``(P, 7+)``.
+        gt_boxes: Ground-truth box rows ``(G, 7+)``.
+
+    Returns:
+        The ``(P, G)`` cost matrix in meters.
+    """
+    return np.linalg.norm(pred_boxes[:, None, :2] - gt_boxes[None, :, :2], axis=2)
+
+
+def cost_corner(pred_boxes: np.ndarray, gt_boxes: np.ndarray) -> np.ndarray:
+    """Mean BEV corner distance for every prediction and ground-truth pair, ``(P, G)``.
+
+    Args:
+        pred_boxes: Prediction box rows ``(P, 7+)``.
+        gt_boxes: Ground-truth box rows ``(G, 7+)``.
+
+    Returns:
+        The ``(P, G)`` cost matrix in meters.
+    """
+    return corner_displacement_matrix(pred_boxes, gt_boxes)
+
+
+MATCH_COSTS = {"center": cost_center, "corner": cost_corner}
+
+
+def resolve_match_cost(name: str):
+    """Return the matching cost function for a configured name (fail-loud).
+
+    Args:
+        name: Configured cost name, ``center`` or ``corner``.
+
+    Returns:
+        The cost function computing a ``(P, G)`` matrix.
+    """
+    if name not in MATCH_COSTS:
+        raise ValueError(f"Unknown match cost {name!r}, expected one of {sorted(MATCH_COSTS)}.")
+    return MATCH_COSTS[name]
 
 
 def _distance_mask(
@@ -52,6 +101,17 @@ def gt_keep_mask(
 
     Combines per-class distance caps and the minimum LiDAR point count into one
     boolean mask, so the suite stores only kept GT.
+
+    Args:
+        gt_boxes: Ground-truth box tensor ``(G, 7+)``.
+        gt_labels: Integer class labels ``(G,)``.
+        gt_num_points: Lidar points per box, or ``None`` to skip the point-count filter.
+        class_names: Class names in label order.
+        eval_class_range: Class name to maximum evaluation distance in meters.
+        min_num_points: Minimum lidar points for a box to count.
+
+    Returns:
+        Boolean keep mask ``(G,)``.
     """
     n = gt_boxes.shape[0]
     keep = torch.ones(n, dtype=torch.bool, device=gt_boxes.device)
@@ -85,6 +145,9 @@ def _slice_sample(
         pred_labels=sample.pred_labels[pred_keep],
         gt_boxes=sample.gt_boxes[gt_keep],
         gt_labels=sample.gt_labels[gt_keep],
+        gt_ttc=None if sample.gt_ttc is None else sample.gt_ttc[gt_keep],
+        pred_ttc=None if sample.pred_ttc is None else sample.pred_ttc[pred_keep],
+        ttc_covered=sample.ttc_covered,
     )
 
 
@@ -92,7 +155,15 @@ def clip_to_range(
     samples: list[Detection3DSample],
     metric_range: MetricRange,
 ) -> list[Detection3DSample]:
-    """Clip both GT and predictions to a radial distance window."""
+    """Clip both GT and predictions to a radial distance window.
+
+    Args:
+        samples: Accumulated per-frame samples.
+        metric_range: Radial window in meters.
+
+    Returns:
+        New samples with boxes outside the window removed.
+    """
     return [
         _slice_sample(
             sample,
@@ -111,90 +182,201 @@ def labels_to_evaluate(
     samples: list[Detection3DSample],
     class_names: tuple[str, ...] | None,
 ) -> list[int]:
-    """All class indices when ``class_names`` is given, else only present labels."""
+    """All class indices when ``class_names`` is given, else only present labels.
+
+    Args:
+        samples: Accumulated per-frame samples.
+        class_names: Class names in label order, or ``None``.
+
+    Returns:
+        The class indices to evaluate.
+    """
     if class_names is not None:
         return list(range(len(class_names)))
-    labels = {
-        int(label.item())
-        for sample in samples
-        for label in sample.gt_labels.reshape(-1)
-        if int(label.item()) >= 0
-    }
-    return sorted(labels)
+    if not samples:
+        return []
+    labels = torch.unique(torch.cat([sample.gt_labels.reshape(-1) for sample in samples]))
+    return [int(label) for label in labels.tolist() if int(label) >= 0]
 
 
-def match_center_distance(
+class PreparedLabel:
+    """One class's boxes across all frames, flattened in global score order.
+
+    Everything threshold-independent is done once here (masking, tensor to
+    NumPy conversion, the per-frame cost matrices, and the global score sort),
+    so :class:`DetectionState` builds this once per label and matches every
+    threshold against it. Per-frame boxes are concatenated in frame order and
+    stably sorted by descending score. Greedy claims never cross frames, so
+    the flat order matches per-frame greedy matching exactly.
+    """
+
+    __slots__ = (
+        "total_gt",
+        "pred_boxes",
+        "scores",
+        "cost_rows",
+        "candidate_rows",
+        "gt_flat",
+        "gt_flat_index",
+    )
+
+    def __init__(self, samples: list[Detection3DSample], label: int, cost_fn) -> None:
+        """Mask, convert and cost the label's boxes across all frames, in score order.
+
+        Args:
+            samples: Per-frame detection samples.
+            label: Class index this preparation is for.
+            cost_fn: ``cost_fn(pred_boxes, gt_boxes)`` returning the ``(P, G)`` cost matrix.
+        """
+        pred_chunks: list[np.ndarray] = []
+        score_chunks: list[np.ndarray] = []
+        cost_row_chunks: list[list[np.ndarray]] = []
+        candidate_row_chunks: list[list[np.ndarray]] = []
+        gt_index_chunks: list[np.ndarray] = []
+        gt_frames: list[np.ndarray] = []
+        self.total_gt = 0
+        gt_offset = 0
+        for sample in samples:
+            _validate_box_tensor(sample.gt_boxes, "gt_boxes")
+            _validate_box_tensor(sample.pred_boxes, "pred_boxes")
+            gt_boxes = sample.gt_boxes[sample.gt_labels == label].numpy().astype(np.float64)
+            self.total_gt += int(gt_boxes.shape[0])
+            pred_mask = sample.pred_labels == label
+            if not bool(pred_mask.any()):
+                continue
+            pred_boxes = sample.pred_boxes[pred_mask].numpy().astype(np.float64)
+            cost = cost_fn(pred_boxes, gt_boxes)  # (P, G)
+            pred_chunks.append(pred_boxes)
+            score_chunks.append(sample.pred_scores[pred_mask].numpy().astype(np.float64))
+            cost_row_chunks.append(list(cost))
+            # Candidates in ascending cost order, once per row: matching at any
+            # threshold then only walks each row past its claimed entries. The
+            # stable sort keeps the lowest index first among equal costs, the
+            # argmin tie rule.
+            candidate_row_chunks.append(np.argsort(cost, axis=1, kind="stable").tolist())
+            gt_frames.append(gt_boxes)
+            gt_index_chunks.append(np.full(pred_boxes.shape[0], gt_offset, dtype=np.int64))
+            gt_offset += gt_boxes.shape[0]
+
+        if not pred_chunks:
+            self.pred_boxes = np.zeros((0, 7), dtype=np.float64)
+            self.scores = np.zeros(0, dtype=np.float64)
+            self.cost_rows: list[np.ndarray] = []
+            self.candidate_rows: list[list[int]] = []
+            self.gt_flat = np.zeros((0, 7), dtype=np.float64)
+            self.gt_flat_index = np.zeros(0, dtype=np.int64)
+            return
+
+        scores = np.concatenate(score_chunks)
+        order = np.argsort(-scores, kind="stable")
+        self.pred_boxes = np.concatenate(pred_chunks)[order]
+        self.scores = scores[order]
+        # Per prediction: its frame's cost row and the flat offset of GT slot 0
+        # in that frame, so a claim index maps straight into gt_flat.
+        cost_rows = [row for chunk in cost_row_chunks for row in chunk]
+        self.cost_rows = [cost_rows[index] for index in order]
+        candidate_rows = [row for chunk in candidate_row_chunks for row in chunk]
+        self.candidate_rows = [candidate_rows[index] for index in order]
+        self.gt_flat = (
+            np.concatenate(gt_frames) if gt_frames else np.zeros((0, 7), dtype=np.float64)
+        )
+        self.gt_flat_index = np.concatenate(gt_index_chunks)[order]
+
+    def match(self, threshold: float) -> MatchCurve:
+        """Greedy matching at one threshold over the prepared, score-ordered boxes.
+
+        The Python loop does only the inherently sequential part, claiming,
+        against precomputed cost rows. Every error channel is then computed
+        vectorized over all matched pairs at once.
+
+        Args:
+            threshold: Maximum match cost in meters.
+
+        Returns:
+            The score-ordered match curve at ``threshold``.
+        """
+        num_pred = self.scores.shape[0]
+        true_positive = np.zeros(num_pred, dtype=bool)
+        matched_flat_gt = np.full(num_pred, -1, dtype=np.int64)
+        claimed = np.zeros(self.gt_flat.shape[0], dtype=bool)
+        for index in range(num_pred):
+            costs = self.cost_rows[index]
+            offset = int(self.gt_flat_index[index])
+            # The first unclaimed candidate in ascending cost order is the
+            # nearest unclaimed ground truth, past the threshold nothing later
+            # can match either.
+            for candidate_gt in self.candidate_rows[index]:
+                if costs[candidate_gt] > threshold:
+                    break
+                flat = offset + candidate_gt
+                if claimed[flat]:
+                    continue
+                true_positive[index] = True
+                matched_flat_gt[index] = flat
+                claimed[flat] = True
+                break
+
+        heading_score = np.zeros(num_pred, dtype=np.float64)
+        errors = {name: np.full(num_pred, np.nan, dtype=np.float64) for name in ERROR_NAMES}
+        corner_error = np.full(num_pred, np.nan, dtype=np.float64)
+        nearest_surface = np.full(num_pred, np.nan, dtype=np.float64)
+        matched = matched_flat_gt >= 0
+        if matched.any():
+            pred_boxes = self.pred_boxes[matched]
+            gt_boxes = self.gt_flat[matched_flat_gt[matched]]
+            errors["ATE"][matched] = np.linalg.norm(pred_boxes[:, :2] - gt_boxes[:, :2], axis=1)
+            errors["AOE"][matched] = _orientation_errors(pred_boxes, gt_boxes)
+            errors["ASE"][matched] = _scale_errors(pred_boxes, gt_boxes)
+            errors["AVE"][matched] = _velocity_errors(pred_boxes, gt_boxes)
+            # TODO: attribute errors are not evaluated, every match carries the neutral 1.0.
+            errors["AAE"][matched] = 1.0
+            heading_score[matched] = _heading_scores(errors["AOE"][matched])
+            corner_error[matched] = corner_displacements(pred_boxes, gt_boxes)
+            nearest_surface[matched] = nearest_surface_distances(
+                pred_boxes
+            ) - nearest_surface_distances(gt_boxes)
+
+        return MatchCurve(
+            total_gt=self.total_gt,
+            scores=self.scores,
+            true_positive=true_positive,
+            false_positive=~true_positive,
+            heading_score=heading_score,
+            translation_error=errors["ATE"],
+            orientation_error=errors["AOE"],
+            scale_error=errors["ASE"],
+            velocity_error=errors["AVE"],
+            attribute_error=errors["AAE"],
+            corner_error=corner_error,
+            nearest_surface_error=nearest_surface,
+        )
+
+
+def match_by_cost(
     samples: list[Detection3DSample],
     label: int,
     threshold: float,
+    cost_fn,
 ) -> MatchCurve:
-    """Greedy score-ordered nuScenes-style matching for one class and threshold."""
-    gt_boxes_by_sample: list[np.ndarray] = []
-    matched_by_sample: list[np.ndarray] = []
-    predictions: list[PredictionRecord] = []
-    total_gt = 0
+    """Greedy score-ordered matching for one class and threshold under ``cost_fn``.
 
-    for sample_index, sample in enumerate(samples):
-        _validate_box_tensor(sample.gt_boxes, "gt_boxes")
-        _validate_box_tensor(sample.pred_boxes, "pred_boxes")
+    ``cost_fn(pred_boxes, gt_boxes)`` returns the ``(P, G)`` match-cost matrix. A
+    prediction matches its lowest-cost unclaimed GT in its frame when that cost is
+    within ``threshold``. Center distance reproduces the nuScenes behaviour,
+    corner distance couples size and yaw into the match itself. One-threshold
+    form of :class:`PreparedLabel`, which callers matching several thresholds
+    should build once and reuse.
 
-        gt_mask = sample.gt_labels == label
-        sample_gt_boxes = sample.gt_boxes[gt_mask].numpy()
-        gt_boxes_by_sample.append(sample_gt_boxes)
-        matched_by_sample.append(np.zeros(sample_gt_boxes.shape[0], dtype=bool))
-        total_gt += int(sample_gt_boxes.shape[0])
+    Args:
+        samples: Accumulated per-frame samples.
+        label: Class label to match.
+        threshold: Maximum match cost in meters.
+        cost_fn: Cost function computing the ``(P, G)`` matrix.
 
-        pred_mask = sample.pred_labels == label
-        sample_pred_boxes = sample.pred_boxes[pred_mask].numpy()
-        sample_pred_scores = sample.pred_scores[pred_mask].numpy()
-        predictions.extend(
-            PredictionRecord(float(score), sample_index, box)
-            for score, box in zip(sample_pred_scores, sample_pred_boxes, strict=True)
-        )
-
-    predictions.sort(key=lambda item: item.score, reverse=True)
-
-    count = len(predictions)
-    scores = np.asarray([item.score for item in predictions], dtype=np.float64)
-    true_positive = np.zeros(count, dtype=np.float64)
-    false_positive = np.zeros(count, dtype=np.float64)
-    heading_score = np.zeros(count, dtype=np.float64)
-    error_values = {name: np.full(count, np.nan, dtype=np.float64) for name in ERROR_NAMES}
-
-    for pred_index, prediction in enumerate(predictions):
-        sample_gt_boxes = gt_boxes_by_sample[prediction.sample_index]
-        if sample_gt_boxes.shape[0] == 0:
-            false_positive[pred_index] = 1.0
-            continue
-
-        distances = np.linalg.norm(sample_gt_boxes[:, :2] - prediction.box[:2], axis=1)
-        distances[matched_by_sample[prediction.sample_index]] = np.inf
-        gt_index = int(np.argmin(distances))
-        if float(distances[gt_index]) <= threshold:
-            gt_box = sample_gt_boxes[gt_index]
-            true_positive[pred_index] = 1.0
-            matched_by_sample[prediction.sample_index][gt_index] = True
-            error_values["ATE"][pred_index] = _translation_error_bev(prediction.box, gt_box)
-            error_values["AOE"][pred_index] = _orientation_error(prediction.box, gt_box)
-            error_values["ASE"][pred_index] = _scale_error(prediction.box, gt_box)
-            error_values["AVE"][pred_index] = _velocity_error(prediction.box, gt_box)
-            error_values["AAE"][pred_index] = 1.0
-            heading_score[pred_index] = _heading_score(error_values["AOE"][pred_index])
-        else:
-            false_positive[pred_index] = 1.0
-
-    return MatchCurve(
-        total_gt=total_gt,
-        scores=scores,
-        true_positive=true_positive,
-        false_positive=false_positive,
-        heading_score=heading_score,
-        translation_error=error_values["ATE"],
-        orientation_error=error_values["AOE"],
-        scale_error=error_values["ASE"],
-        velocity_error=error_values["AVE"],
-        attribute_error=error_values["AAE"],
-    )
+    Returns:
+        The score-ordered match curve.
+    """
+    return PreparedLabel(samples, label, cost_fn).match(threshold)
 
 
 def _validate_box_tensor(boxes: torch.Tensor, name: str) -> None:
@@ -203,12 +385,23 @@ def _validate_box_tensor(boxes: torch.Tensor, name: str) -> None:
 
 
 def curve_metrics(curve: MatchCurve) -> CurveMetrics:
-    """AP, APH, max-F1 and the optimal-confidence operating point for a curve."""
-    precision, recall = _precision_recall(curve.cumulative_tp, curve.cumulative_fp, curve.total_gt)
+    """AP, APH, max-F1 and the optimal-confidence operating point for a curve.
+
+    Callers holding a :class:`DetectionState` should use its memoized
+    ``curve_metrics(label, threshold)`` instead of calling this repeatedly.
+
+    Args:
+        curve: Score-ordered match curve.
+
+    Returns:
+        The curve summary.
+    """
+    cumulative_fp = curve.cumulative_fp  # cumsum once, both curves share it
+    precision, recall = _precision_recall(curve.cumulative_tp, cumulative_fp, curve.total_gt)
     ap = _interpolated_ap(precision, recall, curve.total_gt, curve.num_predictions)
 
     heading_precision, heading_recall = _precision_recall(
-        curve.cumulative_heading_tp, curve.cumulative_fp, curve.total_gt
+        curve.cumulative_heading_tp, cumulative_fp, curve.total_gt
     )
     f1_scores = _f1_scores(precision, recall)
     optimal_index = _max_f1_index(f1_scores)
@@ -289,19 +482,35 @@ def _max_f1_index(f1_scores: np.ndarray) -> int:
 
 
 def select_recall_tp_errors(curve: MatchCurve, recall_target: float) -> SelectedTpErrors:
-    """Mean TP errors over the matches up to a recall target."""
+    """Mean TP errors over the matches up to a recall target.
+
+    Args:
+        curve: Score-ordered match curve.
+        recall_target: Recall level up to which matches are pooled.
+
+    Returns:
+        The mean TP errors over the selected matches.
+    """
     effective_recall = (int(round(100 * recall_target)) + 1) / 100.0
     target_matches = int(np.floor(curve.total_gt * effective_recall))
-    tp_indices = np.flatnonzero(curve.true_positive == 1.0)[:target_matches]
+    tp_indices = np.flatnonzero(curve.true_positive)[:target_matches]
     return _selected_error_values(curve, tp_indices)
 
 
 def select_optimal_tp_errors(curve: MatchCurve, optimal_index: int) -> SelectedTpErrors:
-    """Mean TP errors over the matches up to the optimal-F1 operating point."""
+    """Mean TP errors over the matches up to the optimal-F1 operating point.
+
+    Args:
+        curve: Score-ordered match curve.
+        optimal_index: Index of the optimal-F1 operating point.
+
+    Returns:
+        The mean TP errors over the selected matches.
+    """
     if optimal_index < 0:
         return _selected_error_values(curve, np.asarray([], dtype=np.int64))
     prefix_true_positive = curve.true_positive[: optimal_index + 1]
-    tp_indices = np.flatnonzero(prefix_true_positive == 1.0)
+    tp_indices = np.flatnonzero(prefix_true_positive)
     return _selected_error_values(curve, tp_indices)
 
 
@@ -317,49 +526,60 @@ def _selected_error_values(curve: MatchCurve, tp_indices: np.ndarray) -> Selecte
 
 
 def mean_tp_errors(error_dicts: list[dict[str, float]]) -> dict[str, float]:
-    """Mean of each error name across the given per-class/threshold error dicts."""
+    """Mean of each error name across the given per-class/threshold error dicts.
+
+    Args:
+        error_dicts: Error dicts collected per class and threshold.
+
+    Returns:
+        Mean value per error name.
+    """
     return {
-        error_name: _mean_valid([errors[error_name] for errors in error_dicts])
+        error_name: mean_valid([errors[error_name] for errors in error_dicts])
         for error_name in ERROR_NAMES
     }
 
 
 def nds(mean_ap: float, errors: dict[str, float]) -> float:
-    """nuScenes detection score from mean AP and the mean TP errors."""
+    """nuScenes detection score from mean AP and the mean TP errors.
+
+    Args:
+        mean_ap: Mean AP over classes and thresholds.
+        errors: Mean TP errors by name.
+
+    Returns:
+        The detection score in ``[0, 1]``.
+    """
     error_score = sum(max(0.0, 1.0 - errors[name]) for name in ERROR_NAMES)
     return (5.0 * mean_ap + error_score) / 10.0
 
 
-def _translation_error_bev(pred_box: np.ndarray, gt_box: np.ndarray) -> float:
-    return float(np.linalg.norm(pred_box[:2] - gt_box[:2]))
+def _orientation_errors(pred_boxes: np.ndarray, gt_boxes: np.ndarray) -> np.ndarray:
+    """Absolute yaw error wrapped to ``[0, pi]``, per matched pair."""
+    diff = np.abs(pred_boxes[:, 6] - gt_boxes[:, 6])
+    return np.abs((diff + pi) % (2.0 * pi) - pi)
 
 
-def _orientation_error(pred_box: np.ndarray, gt_box: np.ndarray) -> float:
-    diff = abs(float(pred_box[6] - gt_box[6]))
-    diff = (diff + pi) % (2.0 * pi) - pi
-    return abs(diff)
+def _heading_scores(orientation_errors: np.ndarray) -> np.ndarray:
+    return np.round(np.clip(1.0 - orientation_errors / pi, 0.0, 1.0), 10)
 
 
-def _heading_score(orientation_error: float) -> float:
-    return round(max(0.0, min(1.0, 1.0 - orientation_error / pi)), 10)
+def _scale_errors(pred_boxes: np.ndarray, gt_boxes: np.ndarray) -> np.ndarray:
+    """``1 - IoU`` of the aligned (center- and yaw-matched) 3D dimensions."""
+    pred_dims = np.maximum(pred_boxes[:, 3:6], 0.0)
+    gt_dims = np.maximum(gt_boxes[:, 3:6], 0.0)
+    intersection = np.prod(np.minimum(pred_dims, gt_dims), axis=1)
+    union = np.prod(pred_dims, axis=1) + np.prod(gt_dims, axis=1) - intersection
+    errors = np.ones(pred_boxes.shape[0], dtype=np.float64)
+    positive = union > 0.0
+    errors[positive] = 1.0 - intersection[positive] / union[positive]
+    return errors
 
 
-def _scale_error(pred_box: np.ndarray, gt_box: np.ndarray) -> float:
-    pred_dims = np.maximum(pred_box[3:6], 0.0)
-    gt_dims = np.maximum(gt_box[3:6], 0.0)
-    intersection = float(np.prod(np.minimum(pred_dims, gt_dims)))
-    pred_volume = float(np.prod(pred_dims))
-    gt_volume = float(np.prod(gt_dims))
-    union = pred_volume + gt_volume - intersection
-    if union <= 0.0:
-        return 1.0
-    return 1.0 - intersection / union
-
-
-def _velocity_error(pred_box: np.ndarray, gt_box: np.ndarray) -> float:
-    if pred_box.shape[0] < 9 or gt_box.shape[0] < 9:
-        return 1.0
-    return float(np.linalg.norm(pred_box[7:9] - gt_box[7:9]))
+def _velocity_errors(pred_boxes: np.ndarray, gt_boxes: np.ndarray) -> np.ndarray:
+    if pred_boxes.shape[1] < 9 or gt_boxes.shape[1] < 9:
+        return np.ones(pred_boxes.shape[0], dtype=np.float64)
+    return np.linalg.norm(pred_boxes[:, 7:9] - gt_boxes[:, 7:9], axis=1)
 
 
 def _mean_or_one(values: np.ndarray) -> float:
@@ -369,12 +589,108 @@ def _mean_or_one(values: np.ndarray) -> float:
     return float(np.mean(valid))
 
 
-def _mean_valid(values: list[float] | tuple[float, ...]) -> float:
+def mean_valid(values: list[float] | tuple[float, ...]) -> float:
+    """Mean of the non-NaN values, or NaN when none are valid.
+
+    Args:
+        values: Values that may contain NaN.
+
+    Returns:
+        The mean of the valid values.
+    """
     valid_values = [float(value) for value in values if not np.isnan(float(value))]
     if not valid_values:
         return np.nan
     return float(sum(valid_values) / len(valid_values))
 
 
-# Public alias: metrics compute class-means and threshold-means with this.
-mean_valid = _mean_valid
+@dataclass
+class DetectionState:
+    """Synced detection state the suite hands to each metric.
+
+    Attributes:
+        samples: Per-frame samples (already GT-filtered, optionally range-clipped).
+        class_names: Ordered class names for metric keys, or ``None`` to fall
+            back to ``class_{label}`` tokens in every metric key.
+        match_cost: Matching cost name (``center`` or ``corner``). Each metric asks
+            for the match curves at whatever thresholds it needs.
+    """
+
+    samples: list[Detection3DSample]
+    class_names: tuple[str, ...] | None
+    match_cost: str = "center"
+    _curve_cache: dict[tuple[int, float], MatchCurve] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
+    # Prepared per-label boxes (masking, NumPy conversion, cost matrices) are
+    # threshold-independent, so they are built once per label (PreparedLabel)
+    # and every threshold's matching reuses them.
+    _label_cache: dict[int, PreparedLabel] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
+    _labels_cache: dict[bool, list[int]] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
+    _metrics_cache: dict[tuple[int, float], CurveMetrics] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
+
+    def labels(self, full: bool) -> list[int]:
+        """Class labels to report, memoized because every component asks.
+
+        Args:
+            full: Report every configured class when true, otherwise only
+                classes that actually have ground truth.
+
+        Returns:
+            The class indices to report.
+        """
+        cached = self._labels_cache.get(bool(full))
+        if cached is None:
+            cached = labels_to_evaluate(self.samples, self.class_names if full else None)
+            self._labels_cache[bool(full)] = cached
+        return cached
+
+    def curve_metrics(self, label: int, threshold: float) -> CurveMetrics:
+        """AP/APH/F1 summary of a match curve, memoized like the curve itself.
+
+        Several components read the same summary (mAP, APH, NDS, TP errors), so
+        the cumulative passes over every prediction of the class run once here.
+
+        Args:
+            label: Class label.
+            threshold: Match threshold in meters.
+
+        Returns:
+            The memoized curve summary.
+        """
+        key = (label, float(threshold))
+        metrics = self._metrics_cache.get(key)
+        if metrics is None:
+            metrics = curve_metrics(self.match_curve(label, threshold))
+            self._metrics_cache[key] = metrics
+        return metrics
+
+    def match_curve(self, label: int, threshold: float) -> MatchCurve:
+        """Return the score-ordered match curve for a class and threshold.
+
+        Memoized, so the matching runs once per ``(label, threshold)`` and is
+        shared by every metric that asks for it.
+
+        Args:
+            label: Class label.
+            threshold: Match threshold in meters.
+
+        Returns:
+            The memoized match curve.
+        """
+        key = (label, float(threshold))
+        curve = self._curve_cache.get(key)
+        if curve is None:
+            prepared = self._label_cache.get(label)
+            if prepared is None:
+                prepared = PreparedLabel(self.samples, label, resolve_match_cost(self.match_cost))
+                self._label_cache[label] = prepared
+            curve = prepared.match(threshold)
+            self._curve_cache[key] = curve
+        return curve

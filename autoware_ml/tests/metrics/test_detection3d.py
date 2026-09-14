@@ -16,10 +16,20 @@ from autoware_ml.metrics.detection3d.tp_errors import TpErrors
 from autoware_ml.metrics.eval_mixin import MetricEvalMixin
 
 
-def _suite(recall_targets=None, **kwargs):
-    """Build a detection suite with the full standard metric set injected."""
+def _suite(recall_targets=None, thresholds=(0.5, 1.0, 2.0, 4.0), **kwargs):
+    """Build a detection suite with the full standard metric set injected.
+
+    Thresholds now live on the AP-family metrics, so the helper routes them there.
+    """
     return Detection3DMetricSuite(
-        components=[MeanAP(), HeadingAP(), Nds(), TpErrors(recall_targets=recall_targets)],
+        components=[
+            MeanAP(thresholds=thresholds),
+            HeadingAP(thresholds=thresholds),
+            Nds(thresholds=thresholds, tp_threshold=thresholds[0]),
+            TpErrors(
+                recall_targets=recall_targets, thresholds=thresholds, tp_threshold=thresholds[0]
+            ),
+        ],
         **kwargs,
     )
 
@@ -187,7 +197,12 @@ def test_eval_class_range_filters_ground_truth_only_for_total_metric() -> None:
         gt_labels=[torch.tensor([0], dtype=torch.long)],
     )
 
-    assert metric.result(EvalStage.VAL) == {}
+    # The GT at 100 m is filtered by eval_class_range (car capped at 50 m), the
+    # phantom prediction remains, so AP is 0, and the monitored key is always
+    # present, never dropped.
+    report = metric.result(EvalStage.VAL)
+    assert report["mAP"] == 0.0
+    assert report["mAP_car"] == 0.0
 
 
 def test_eval_class_range_requires_class_names() -> None:
@@ -404,3 +419,75 @@ def test_detailed_center_distance_metrics_report_optimal_error_subset() -> None:
         torch.tensor(metrics["tp_error_num_match_car_optimal_0p5m"]), torch.tensor(2.0)
     )
     assert torch.isclose(torch.tensor(metrics["optimal_conf_car_0p5m"]), torch.tensor(0.7))
+
+
+def test_match_by_cost_equals_reference_global_greedy() -> None:
+    # The vectorized per-frame matcher must reproduce the straightforward
+    # single-pass global greedy exactly: frame-local claims make per-frame
+    # score order equivalent to global score order.
+    import numpy as np
+    import torch
+
+    from autoware_ml.metrics.detection3d.matching import cost_center, match_by_cost
+    from autoware_ml.metrics.detection3d.structures import Detection3DSample
+
+    rng = np.random.default_rng(11)
+
+    def _random_sample() -> Detection3DSample:
+        def _boxes(n):
+            boxes = np.zeros((n, 9), dtype=np.float32)
+            boxes[:, :2] = rng.uniform(-40, 40, (n, 2))
+            boxes[:, 3:6] = rng.uniform(0.5, 5.0, (n, 3))
+            boxes[:, 6] = rng.uniform(-np.pi, np.pi, n)
+            boxes[:, 7:9] = rng.uniform(-5, 5, (n, 2))
+            return torch.from_numpy(boxes)
+
+        num_pred, num_gt = int(rng.integers(0, 12)), int(rng.integers(0, 8))
+        return Detection3DSample(
+            pred_boxes=_boxes(num_pred),
+            pred_scores=torch.from_numpy(rng.uniform(0, 1, num_pred).astype(np.float32)),
+            pred_labels=torch.from_numpy(rng.integers(0, 3, num_pred)),
+            gt_boxes=_boxes(num_gt),
+            gt_labels=torch.from_numpy(rng.integers(0, 3, num_gt)),
+        )
+
+    def _reference(samples, label, threshold):
+        """Direct port of the retired single-pass global greedy matcher."""
+        records, gt_by_sample, claimed = [], [], []
+        total_gt = 0
+        for sample_index, sample in enumerate(samples):
+            gt = sample.gt_boxes[sample.gt_labels == label].numpy().astype(np.float64)
+            gt_by_sample.append(gt)
+            claimed.append(np.zeros(gt.shape[0], dtype=bool))
+            total_gt += gt.shape[0]
+            mask = sample.pred_labels == label
+            for score, box in zip(
+                sample.pred_scores[mask].numpy(), sample.pred_boxes[mask].numpy(), strict=True
+            ):
+                records.append((float(score), sample_index, box.astype(np.float64)))
+        records.sort(key=lambda record: record[0], reverse=True)
+        scores = np.array([record[0] for record in records])
+        tp = np.zeros(len(records))
+        ate = np.full(len(records), np.nan)
+        for i, (_, sample_index, box) in enumerate(records):
+            gt = gt_by_sample[sample_index]
+            if gt.shape[0] == 0:
+                continue
+            costs = np.linalg.norm(gt[:, :2] - box[:2], axis=1)
+            costs[claimed[sample_index]] = np.inf
+            best = int(np.argmin(costs))
+            if costs[best] <= threshold:
+                tp[i] = 1.0
+                claimed[sample_index][best] = True
+                ate[i] = np.linalg.norm(box[:2] - gt[best, :2])
+        return total_gt, scores, tp, ate
+
+    samples = [_random_sample() for _ in range(30)]
+    for label in range(3):
+        for threshold in (0.5, 2.0, 4.0):
+            curve = match_by_cost(samples, label, threshold, cost_center)
+            total_gt, scores, tp, ate = _reference(samples, label, threshold)
+            assert curve.total_gt == total_gt
+            np.testing.assert_allclose(curve.scores, scores)
+            np.testing.assert_array_equal(curve.true_positive, tp)
+            np.testing.assert_allclose(curve.translation_error, ate, rtol=1e-9)

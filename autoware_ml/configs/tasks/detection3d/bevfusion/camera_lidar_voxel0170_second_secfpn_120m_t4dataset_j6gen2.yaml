@@ -52,7 +52,6 @@ datamodule:
       - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
         name_mapping: ${dataset.detection3d.name_mapping}
         filter_attributes: ${dataset.detection3d.filter_attributes}
-        use_valid_flag: ${dataset.detection3d.use_valid_flag}
       - _target_: autoware_ml.transforms.camera.loading.LoadMultiViewImagesFromFiles
       - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
         sweeps_num: 2
@@ -95,7 +94,6 @@ datamodule:
       - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
         name_mapping: ${dataset.detection3d.name_mapping}
         filter_attributes: ${dataset.detection3d.filter_attributes}
-        use_valid_flag: ${dataset.detection3d.use_valid_flag}
       - _target_: autoware_ml.transforms.camera.loading.LoadMultiViewImagesFromFiles
       - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
         sweeps_num: 2
