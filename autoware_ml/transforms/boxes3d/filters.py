@@ -21,6 +21,8 @@ from typing import Any
 
 import numpy as np
 
+from autoware_ml.geometry.utils import points_in_rotated_box
+
 from autoware_ml.transforms.base import BaseTransform
 
 _BOX_KEYS = ("gt_boxes", "gt_names", "gt_labels", "gt_num_points")
@@ -60,24 +62,9 @@ def _count_points_in_rotated_boxes(
     Returns:
         Integer array of shape ``(M,)`` with the point count per box.
     """
-    counts = np.zeros(len(boxes), dtype=np.int64)
-    for i, box in enumerate(boxes):
-        cx, cy, cz, dx, dy, dz, yaw = box[:7]
-        cos_yaw = np.cos(-yaw)
-        sin_yaw = np.sin(-yaw)
-        # Translate to box center
-        delta = coord[:, :3] - np.array([cx, cy, cz], dtype=np.float32)
-        # Rotate into box-local frame (around z-axis)
-        local_x = delta[:, 0] * cos_yaw - delta[:, 1] * sin_yaw
-        local_y = delta[:, 0] * sin_yaw + delta[:, 1] * cos_yaw
-        local_z = delta[:, 2]
-        inside = (
-            (np.abs(local_x) <= dx / 2.0)
-            & (np.abs(local_y) <= dy / 2.0)
-            & (np.abs(local_z) <= dz / 2.0)
-        )
-        counts[i] = inside.sum()
-    return counts
+    return np.array(
+        [int(points_in_rotated_box(coord, box).sum()) for box in boxes], dtype=np.int64
+    ).reshape(len(boxes))
 
 
 class ObjectNameFilter(BaseTransform):
