@@ -19,7 +19,12 @@ This module contains the T4Dataset multiview adapter used by camera-lidar detect
 
 from __future__ import annotations
 
+from typing import Any
+
+import numpy as np
+
 from autoware_ml.datamodule.base import Dataset
+from autoware_ml.datamodule.t4dataset.frame_meta import scene_dir_fragment
 from autoware_ml.datamodule.common.multiview_detection3d import (
     MultiviewDetection3DDataModule,
     MultiviewDetection3DDataset,
@@ -33,6 +38,22 @@ class T4MultiviewDetection3DDataset(MultiviewDetection3DDataset):
     The dataset combines T4 image, lidar, calibration, and detection metadata
     into the common multiview detection interface.
     """
+
+    def get_data_info(self, index: int) -> dict[str, Any]:
+        """Extend the common metadata with the T4 metric-facing frame context.
+
+        Args:
+            index: Dataset sample index.
+
+        Returns:
+            Metadata dictionary with the map-frame ego pose and the
+            map-resolvable scene token attached.
+        """
+        data_info = super().get_data_info(index)
+        sample = self.data_infos[index]
+        data_info["ego2global"] = np.asarray(sample["ego2global"], dtype=np.float64)
+        data_info["scene_token"] = scene_dir_fragment(data_info["lidar_path"], self.data_root)
+        return data_info
 
 
 class T4MultiviewDetection3DDataModule(MultiviewDetection3DDataModule):

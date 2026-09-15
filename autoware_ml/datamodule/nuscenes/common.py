@@ -21,6 +21,10 @@ shared by NuScenes task adapters.
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
+from typing import Any
+
+import numpy as np
 
 
 def resolve_lidar_path(data_root: str, relative_path: str) -> str:
@@ -38,3 +42,27 @@ def resolve_lidar_path(data_root: str, relative_path: str) -> str:
     if os.sep not in relative_path:
         return os.path.join(data_root, "samples", "LIDAR_TOP", relative_path)
     return os.path.join(data_root, relative_path)
+
+
+def lidar_to_map(sample: Mapping[str, Any], ego_pose: np.ndarray | None = None) -> np.ndarray:
+    """Transform from the lidar frame of a sample to the map frame.
+
+    NuScenes keeps its points and boxes in the LIDAR_TOP frame, not in base_link, so the
+    ego pose alone would place them a sensor mounting off the map. The evaluation filters
+    read one ``ego2global`` meaning sensor frame to map, so the mounting is composed in
+    here.
+
+    Args:
+        sample: NuScenes annotation record of the frame.
+        ego_pose: Ego pose to compose with, read from ``sample`` when omitted.
+
+    Returns:
+        The 4x4 lidar-to-map transform.
+    """
+    pose = (
+        np.asarray(sample["ego2global"], dtype=np.float64)
+        if ego_pose is None
+        else np.asarray(ego_pose, dtype=np.float64)
+    )
+    lidar2ego = np.asarray(sample["lidar_points"]["lidar2ego"], dtype=np.float64)
+    return pose @ lidar2ego

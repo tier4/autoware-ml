@@ -82,7 +82,8 @@ class TestT4Detection3DDataset:
         assert np.allclose(boxes[0, -2:], np.array([0.1, 0.0], dtype=np.float32))
 
     def test_get_data_info_exposes_metadata_for_loader_pipeline(self, tmp_path) -> None:
-        lidar_path = tmp_path / "sample.bin"
+        lidar_path = tmp_path / "db" / "uuid" / "0" / "data" / "sample.bin"
+        lidar_path.parent.mkdir(parents=True)
         np.arange(10, dtype=np.float32).tofile(lidar_path)
 
         dataset = object.__new__(T4Detection3DDataset)
@@ -90,10 +91,11 @@ class TestT4Detection3DDataset:
             {
                 "token": "sample",
                 "lidar_path": str(lidar_path),
-                "lidar_points": {"num_pts_feats": 5},
+                "lidar_points": {"num_pts_feats": 5, "lidar2ego": np.eye(4)},
                 "timestamp": 1700000000.1,
                 "instances": [],
                 "sweeps": [],
+                "ego2global": np.eye(4),
             }
         ]
         dataset.data_root = str(tmp_path)
@@ -116,7 +118,7 @@ class TestT4Detection3DDataset:
                     {
                         "token": f"car_only_{index}",
                         "lidar_path": f"a_{index}.bin",
-                        "lidar_points": {"num_pts_feats": 5},
+                        "lidar_points": {"num_pts_feats": 5, "lidar2ego": np.eye(4)},
                         "instances": [
                             {
                                 "bbox_3d_isvalid": True,
@@ -131,7 +133,7 @@ class TestT4Detection3DDataset:
                 {
                     "token": "car_and_ped",
                     "lidar_path": "b.bin",
-                    "lidar_points": {"num_pts_feats": 5},
+                    "lidar_points": {"num_pts_feats": 5, "lidar2ego": np.eye(4)},
                     "instances": [
                         {
                             "bbox_3d_isvalid": True,
@@ -301,7 +303,7 @@ class TestT4Detection3DDataset:
                 {
                     "token": "car_only",
                     "lidar_path": "a.bin",
-                    "lidar_points": {"num_pts_feats": 5},
+                    "lidar_points": {"num_pts_feats": 5, "lidar2ego": np.eye(4)},
                     "instances": [
                         {
                             "gt_nusc_name": "car",
@@ -313,7 +315,7 @@ class TestT4Detection3DDataset:
                 {
                     "token": "car_and_filtered_bicycle",
                     "lidar_path": "b.bin",
-                    "lidar_points": {"num_pts_feats": 5},
+                    "lidar_points": {"num_pts_feats": 5, "lidar2ego": np.eye(4)},
                     "instances": [
                         {
                             "gt_nusc_name": "car",
@@ -359,7 +361,7 @@ class TestT4Detection3DDataset:
                 {
                     "token": "sample",
                     "lidar_path": "sample.bin",
-                    "lidar_points": {"num_pts_feats": 5},
+                    "lidar_points": {"num_pts_feats": 5, "lidar2ego": np.eye(4)},
                     "instances": [
                         {
                             "bbox_3d_isvalid": True,
@@ -400,10 +402,12 @@ class TestNuscenesDetection3DDataModule:
         ann_file = tmp_path / "nuscenes_infos_train.pkl"
         sample = {
             "token": "sample",
-            "lidar_points": {"lidar_path": "sample.bin", "num_pts_feats": 5},
+            "lidar_points": {"lidar_path": "sample.bin", "num_pts_feats": 5, "lidar2ego": np.eye(4)},
             "timestamp": 1700000000.1,
             "instances": [],
             "sweeps": [],
+            "ego2global": np.eye(4),
+            "scene_token": "scene-1",
         }
         with open(ann_file, "wb") as file:
             pickle.dump({"data_list": [sample], "metainfo": {"classes": ["car"]}}, file)
@@ -425,6 +429,7 @@ class TestNuscenesDetection3DDataModule:
         assert train_sample["name_mapping"] is None
         assert train_sample["label_to_category"] == {0: "car"}
         assert train_sample["timestamp"] == 1700000000.1
+        assert train_sample["scene_token"] == "scene-1"
 
     def test_rejects_train_frame_sampling(self, tmp_path) -> None:
         with pytest.raises(ValueError, match="train_frame_sampling"):
