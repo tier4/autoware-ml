@@ -189,12 +189,15 @@ class Metric(ABC, Generic[StateT]):
     detection head's low-score tail costs more than everything else in the suite
     together, and a metric that only counts confident predictions does not need
     it. The default reads every prediction, so a metric that does not think
-    about the floor stays correct.
+    about the floor stays correct. ``needs_boxes`` declares that the metric reads
+    per-frame detection ground truth, so a suite can demand those annotations
+    instead of caching empty placeholders.
     """
 
     required_eval_keys: tuple[str, ...] = ()
     needs_ttc: bool = False
     ttc_score_floor: float = 0.0
+    needs_boxes: bool = False
 
     def __init__(
         self,
