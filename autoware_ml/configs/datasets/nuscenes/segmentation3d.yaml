@@ -6,6 +6,22 @@ defaults:
 
 ignore_index: -1
 num_classes: 15
+class_names:
+  - car
+  - truck
+  - bus
+  - bicycle
+  - pedestrian
+  - traffic_cone
+  - barrier
+  - debris
+  - drivable_surface
+  - other_flat_surface
+  - vegetation
+  - manmade
+  - vertical_thin
+  - other_stuff
+  - noise
 max_label: 31
 seg_label_mapping:
   0: 14   # noise -> noise
@@ -48,22 +64,7 @@ metrics:
       - { _target_: autoware_ml.metrics.segmentation3d.precision_recall_f1.PrecisionRecallF1, stages: [val, test] }
     num_classes: ${nuscenes.segmentation3d.num_classes}
     ignore_index: ${nuscenes.segmentation3d.ignore_index}
-    class_names:
-      - car
-      - truck
-      - bus
-      - bicycle
-      - pedestrian
-      - traffic_cone
-      - barrier
-      - debris
-      - drivable_surface
-      - other_flat_surface
-      - vegetation
-      - manmade
-      - vertical_thin
-      - other_stuff
-      - noise
+    class_names: ${nuscenes.segmentation3d.class_names}
     ranges:
       - { _target_: autoware_ml.metrics.base.MetricRange, name: 0-50m, min_distance: 0.0, max_distance: 50.0 }
       - { _target_: autoware_ml.metrics.base.MetricRange, name: 50-90m, min_distance: 50.0, max_distance: 90.0 }
