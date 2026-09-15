@@ -23,12 +23,14 @@ from __future__ import annotations
 import os
 from typing import Any
 
+import numpy as np
+
 from autoware_ml.datamodule.base import Dataset
 from autoware_ml.datamodule.common.multiview_detection3d import (
     MultiviewDetection3DDataModule,
     MultiviewDetection3DDataset,
 )
-from autoware_ml.datamodule.nuscenes.common import resolve_lidar_path
+from autoware_ml.datamodule.nuscenes.common import lidar_to_map, resolve_lidar_path
 from autoware_ml.transforms.base import TransformsCompose
 
 
@@ -38,6 +40,29 @@ class NuscenesMultiviewDetection3DDataset(MultiviewDetection3DDataset):
     The dataset exposes synchronized camera images, lidar points, calibration,
     and detection annotations through the common multiview interface.
     """
+
+    def get_data_info(self, index: int) -> dict[str, Any]:
+        """Extend the common metadata with the map-frame ego pose.
+
+        Args:
+            index: Dataset sample index.
+
+        Returns:
+            Metadata dictionary with ``ego2global`` attached, the pose the
+            evaluation filters read. The scene token comes from the common
+            record.
+        """
+        data_info = super().get_data_info(index)
+        if "ego_pose" not in data_info:
+            raise ValueError(
+                f"NuScenes sample {index} carries no ego pose, the evaluation filters read "
+                "it as ego2global."
+            )
+        # NuScenes records store the pose as a matrix or as translation plus rotation,
+        # and the common record already assembles both into ego_pose. The points stay in
+        # the lidar frame, so the sensor mounting is composed on top.
+        data_info["ego2global"] = lidar_to_map(self.data_infos[index], data_info["ego_pose"])
+        return data_info
 
     def _resolve_lidar_path(self, sample: dict[str, Any]) -> str:
         """Resolve the lidar path for one NuScenes sample.
