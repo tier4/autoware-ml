@@ -20,6 +20,7 @@ from typing import Any, Mapping, Sequence, Tuple
 
 import numpy as np
 import numpy.typing as npt
+from PIL import Image
 from nuscenes.nuscenes import NuScenes
 from nuscenes.utils.data_classes import Box
 from pyquaternion import Quaternion
@@ -31,6 +32,7 @@ from autoware_ml.databases.schemas.frame_basic_metadata import FrameBasicMetadat
 from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord
 from autoware_ml.databases.schemas.lidar_frames import LidarFrameDataModel
 from autoware_ml.databases.schemas.lidar_sources import LidarSourceDataModel
+from autoware_ml.databases.schemas.image_frames import ImageFrameDataModel
 from autoware_ml.databases.schemas.category_mapping import CategoryMappingDataModel
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDataModel
 from autoware_ml.databases.scenarios import ScenarioData
@@ -507,6 +509,191 @@ class NuScenesRecordsGenerator:
 
         return lidar_source_data_models
 
+    def _extract_camera_channel_names(self, sample: Mapping[str, Any]) -> Sequence[str]:
+        """
+        Extract camera channel names present in a NuScenes sample.
+
+        Args:
+          sample: NuScenes sample record.
+
+        Returns:
+          Sequence[str]: Sequence of camera channel names in the sample.
+        """
+
+        camera_channel_names = []
+        for channel_name, sample_data_token in sample["data"].items():
+            sd_record = self.nusc.get("sample_data", sample_data_token)
+            cs_record = self.nusc.get("calibrated_sensor", sd_record["calibrated_sensor_token"])
+            sensor_record = self.nusc.get("sensor", cs_record["sensor_token"])
+            if sensor_record["modality"] == Modality.CAMERA:
+                camera_channel_names.append(channel_name)
+
+        return camera_channel_names
+
+    def _extract_image_frame(
+        self,
+        sample: Mapping[str, Any],
+        camera_channel_name: str,
+        lidar_sensor_to_ego_pose_matrix: npt.NDArray[np.float64],
+        lidar_frame_ego_pose_to_global_matrix: npt.NDArray[np.float64],
+    ) -> ImageFrameDataModel:
+        """
+        Extract image frame from a NuScenes sample.
+
+        Args:
+          sample: NuScenes sample record.
+          camera_channel_name: Camera channel name.
+          lidar_sensor_to_ego_pose_matrix: Transformation matrix from LiDAR sensor to ego pose.
+          lidar_frame_ego_pose_to_global_matrix: Transformation matrix from LiDAR ego pose to global.
+
+        Returns:
+          ImageFrameDataModel: Image frame data model of the NuScenes sample.
+        """
+
+        calibrated_camera_sample_data_token = sample["data"][camera_channel_name]
+        sd_record = self.nusc.get("sample_data", calibrated_camera_sample_data_token)
+        cs_record = self.nusc.get("calibrated_sensor", sd_record["calibrated_sensor_token"])
+        image_sensor_to_ego_matrix = convert_quaternion_to_matrix(
+            rotation_quaternion=Quaternion(cs_record["rotation"]),
+            translation=np.asarray(cs_record["translation"], dtype=np.float64),
+            convert_to_float32=False,
+        )
+
+        ego_pose_record = self.nusc.get("ego_pose", sd_record["ego_pose_token"])
+        image_frame_ego_pose_to_global_matrix = convert_quaternion_to_matrix(
+            rotation_quaternion=Quaternion(ego_pose_record["rotation"]),
+            translation=np.asarray(ego_pose_record["translation"], dtype=np.float64),
+            convert_to_float32=False,
+        )
+
+        image_path = self.nusc.get_sample_data_path(calibrated_camera_sample_data_token)
+
+        image_height = sd_record.get("height")
+        image_width = sd_record.get("width")
+        if not image_height or not image_width:
+            with Image.open(image_path) as image:
+                image_width, image_height = image.size
+
+        cam2img = np.asarray(cs_record["camera_intrinsic"], dtype=np.float64)
+
+        cam2global = image_frame_ego_pose_to_global_matrix @ image_sensor_to_ego_matrix
+        global2cam = np.linalg.inv(cam2global)
+        lidar2global = lidar_frame_ego_pose_to_global_matrix @ lidar_sensor_to_ego_pose_matrix
+        lidar2cam = global2cam @ lidar2global
+
+        cam2img_4x4 = np.eye(4, dtype=np.float64)
+        cam2img_4x4[:3, :3] = cam2img
+        lidar2img = cam2img_4x4 @ lidar2cam
+
+        return ImageFrameDataModel(
+            image_frame_id=calibrated_camera_sample_data_token,
+            image_keyframe=sd_record["is_key_frame"],
+            image_sensor_id=cs_record["token"],
+            image_sensor_channel_name=camera_channel_name,
+            image_timestamp_seconds=sd_record["timestamp"] / 1e6,
+            image_path=image_path,
+            image_height=image_height,
+            image_width=image_width,
+            cam2img=cam2img,
+            image_sensor_to_ego_pose_matrix=image_sensor_to_ego_matrix,
+            image_frame_ego_pose_to_global_matrix=image_frame_ego_pose_to_global_matrix,
+            lidar2cam=lidar2cam,
+            lidar2img=lidar2img,
+        )
+
+    def _extract_image_channel_frames(
+        self, sample: Mapping[str, Any], lidar_frame_data_model: LidarFrameDataModel
+    ) -> Sequence[ImageFrameDataModel]:
+        """
+        Extract the current-frame image metadata for all camera channels of a NuScenes sample.
+
+        Args:
+          sample: NuScenes sample record.
+          lidar_frame_data_model: Lidar frame data model of the current sample, used to compute
+            lidar2cam / lidar2img projections for each camera channel.
+
+        Returns:
+          Sequence[ImageFrameDataModel]: Image frame data models of all camera channels present
+            in the current sample.
+        """
+
+        camera_channel_names = self._extract_camera_channel_names(sample=sample)
+
+        return [
+            self._extract_image_frame(
+                sample=sample,
+                camera_channel_name=camera_channel_name,
+                lidar_sensor_to_ego_pose_matrix=lidar_frame_data_model.lidar_sensor_to_ego_pose_matrix,
+                lidar_frame_ego_pose_to_global_matrix=lidar_frame_data_model.lidar_frame_ego_pose_to_global_matrix,
+            )
+            for camera_channel_name in camera_channel_names
+        ]
+
+    def _extract_image_channel_sweeps(
+        self, sample: Mapping[str, Any], lidar_channel_name: str
+    ) -> Sequence[Sequence[ImageFrameDataModel]]:
+        """
+        Extract multi-sweep image metadata (past camera keyframes, all channels) from a NuScenes
+        sample, for sequence-based models. It walks the sample's `prev` chain (keyframe-to-keyframe).
+
+        Args:
+          sample: NuScenes sample record to walk backwards from.
+          lidar_channel_name: Lidar channel name.
+
+        Returns:
+          Sequence[Sequence[ImageFrameDataModel]]: Image sweep data models, ordered from most
+            recent to oldest. Each item is the list of image frame data models across all camera
+            channels present at that sweep offset.
+        """
+
+        image_channel_sweep_data_models = []
+        current_sample = sample
+
+        for _ in range(self.max_sweeps):
+            if not current_sample["prev"]:
+                break
+
+            current_sample = self.nusc.get("sample", current_sample["prev"])
+            if lidar_channel_name not in current_sample["data"]:
+                break
+
+            current_lidar_sd_record = self.nusc.get(
+                "sample_data", current_sample["data"][lidar_channel_name]
+            )
+            current_lidar_cs_record = self.nusc.get(
+                "calibrated_sensor", current_lidar_sd_record["calibrated_sensor_token"]
+            )
+            current_lidar_sensor_to_ego_pose_matrix = convert_quaternion_to_matrix(
+                rotation_quaternion=Quaternion(current_lidar_cs_record["rotation"]),
+                translation=np.asarray(current_lidar_cs_record["translation"], dtype=np.float64),
+                convert_to_float32=False,
+            )
+            current_lidar_ego_pose_record = self.nusc.get(
+                "ego_pose", current_lidar_sd_record["ego_pose_token"]
+            )
+            current_lidar_frame_ego_pose_to_global_matrix = convert_quaternion_to_matrix(
+                rotation_quaternion=Quaternion(current_lidar_ego_pose_record["rotation"]),
+                translation=np.asarray(
+                    current_lidar_ego_pose_record["translation"], dtype=np.float64
+                ),
+                convert_to_float32=False,
+            )
+
+            camera_channel_names = self._extract_camera_channel_names(sample=current_sample)
+
+            image_channel_sweep_data_models.append(
+                [
+                    self._extract_image_frame(
+                        sample=current_sample,
+                        camera_channel_name=camera_channel_name,
+                        lidar_sensor_to_ego_pose_matrix=current_lidar_sensor_to_ego_pose_matrix,
+                        lidar_frame_ego_pose_to_global_matrix=current_lidar_frame_ego_pose_to_global_matrix,
+                    )
+                    for camera_channel_name in camera_channel_names
+                ]
+            )
+        return image_channel_sweep_data_models
+
     def _extract_category_mapping(self) -> CategoryMappingDataModel:
         """
         Extract category metadata for this NuScenes version.
@@ -574,12 +761,23 @@ class NuScenesRecordsGenerator:
 
         lidar_source_data_models = self._extract_lidar_sources()
 
+        image_channel_frame_data_models = self._extract_image_channel_frames(
+            sample=sample, lidar_frame_data_model=lidar_frame_data_model
+        )
+        image_channel_sweep_data_models = self._extract_image_channel_sweeps(
+            sample=sample, lidar_channel_name=lidar_channel_name
+        )
+        image_frame_data_models = [
+            image_channel_frame_data_models
+        ] + image_channel_sweep_data_models
+
         category_mapping_data_model = self._extract_category_mapping()
 
         return T4SampleRecord(
             frame_basic_metadata=frame_basic_metadata,
             lidar_frame_data_models=lidar_frame_data_models,
             lidar_source_data_models=lidar_source_data_models,
+            image_frame_data_models=image_frame_data_models,
             category_mapping_data_model=category_mapping_data_model,
             boxes_3d_data_model=boxes_3d_data_model,
         )
