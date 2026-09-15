@@ -11,7 +11,7 @@ import torch
 from autoware_ml.models.multi.ptv3_segdet import PTv3SegDetModel
 from autoware_ml.models.segmentation3d.ptv3_base import seg_head_export_input_names
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
-from autoware_ml.tests.models.ptv3_detection_fixtures import (
+from autoware_ml.models.detection3d.tests.ptv3_detection_fixtures import (
     build_bev_neck,
     build_inputs,
     build_ptv3_encoder,

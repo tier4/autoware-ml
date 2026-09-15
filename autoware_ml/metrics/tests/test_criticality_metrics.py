@@ -17,7 +17,7 @@ from autoware_ml.metrics.detection3d.criticality import greedy_match, weighted_a
 from autoware_ml.metrics.detection3d.critical_fp_fn import CriticalFPFN
 from autoware_ml.metrics.detection3d.matching import DetectionState
 from autoware_ml.metrics.detection3d.structures import Detection3DSample
-from autoware_ml.tests.metrics.conftest import collision_box
+from autoware_ml.metrics.tests.conftest import collision_box
 
 
 def _sample(preds, pred_scores, pred_labels, gts, gt_labels, pred_ttc=None, gt_ttc=None):

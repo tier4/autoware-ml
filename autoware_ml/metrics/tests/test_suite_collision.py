@@ -18,7 +18,7 @@ from autoware_ml.metrics.detection3d.matching import DetectionState
 from autoware_ml.metrics.detection3d.structures import Detection3DSample
 from autoware_ml.metrics.detection3d.suite import Detection3DMetricSuite
 from autoware_ml.metrics.geometry.reachability import ReachabilityParams
-from autoware_ml.tests.metrics.conftest import CLASS_NAMES, EGO, FakeMapProvider, collision_box
+from autoware_ml.metrics.tests.conftest import CLASS_NAMES, EGO, FakeMapProvider, collision_box
 
 
 def test_suite_computes_ttc_and_criticality_metrics() -> None:

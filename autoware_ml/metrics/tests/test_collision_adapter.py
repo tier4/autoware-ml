@@ -9,7 +9,7 @@ from shapely.geometry import box
 
 from autoware_ml.metrics.detection3d.collision import CollisionTTC
 from autoware_ml.metrics.geometry.reachability import ReachabilityParams
-from autoware_ml.tests.metrics.conftest import CLASS_NAMES, EGO, FakeMapProvider, collision_box
+from autoware_ml.metrics.tests.conftest import CLASS_NAMES, EGO, FakeMapProvider, collision_box
 from autoware_ml.types.metrics import AgentKind
 
 

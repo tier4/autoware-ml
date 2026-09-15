@@ -173,7 +173,7 @@ def test_seg_head_loss_returns_connected_zero_when_all_targets_ignored() -> None
     """A batch can carry zero seg supervision (e.g. seg-masked det-val frames);
     CE over zero valid targets is nan, so the head must short-circuit to a
     graph-connected zero."""
-    from autoware_ml.tests.models.ptv3_detection_fixtures import build_seg_head
+    from autoware_ml.models.detection3d.tests.ptv3_detection_fixtures import build_seg_head
 
     head = build_seg_head(num_classes=3, dec_depths=(0,))
     logits = torch.randn(5, 3, requires_grad=True)

@@ -28,7 +28,7 @@ from autoware_ml.models.segmentation3d.ptv3_base import (
     validate_serialization_geometry,
 )
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
-from autoware_ml.tests.models.ptv3_detection_fixtures import (
+from autoware_ml.models.detection3d.tests.ptv3_detection_fixtures import (
     build_inputs,
     build_ptv3_encoder,
     build_seg_head,

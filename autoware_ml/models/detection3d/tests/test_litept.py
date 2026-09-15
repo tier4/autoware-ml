@@ -26,7 +26,7 @@ from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     rope_span,
 )
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
-from autoware_ml.tests.models.ptv3_detection_fixtures import (
+from autoware_ml.models.detection3d.tests.ptv3_detection_fixtures import (
     build_inputs,
     build_litept_encoder,
     build_litept_seg_model,
