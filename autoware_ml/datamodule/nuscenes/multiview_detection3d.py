@@ -23,8 +23,11 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from autoware_ml.datamodule.base import DataModule, Dataset
-from autoware_ml.datamodule.common.multiview_detection3d import MultiviewDetection3DDataset
+from autoware_ml.datamodule.base import Dataset
+from autoware_ml.datamodule.common.multiview_detection3d import (
+    MultiviewDetection3DDataModule,
+    MultiviewDetection3DDataset,
+)
 from autoware_ml.datamodule.nuscenes.common import resolve_lidar_path
 from autoware_ml.transforms.base import TransformsCompose
 
@@ -64,56 +67,12 @@ class NuscenesMultiviewDetection3DDataset(MultiviewDetection3DDataset):
         return os.path.join(self.data_root, image_path)
 
 
-class NuscenesMultiviewDetection3DDataModule(DataModule):
+class NuscenesMultiviewDetection3DDataModule(MultiviewDetection3DDataModule):
     """Create NuScenes dataloaders for multiview 3D detection.
 
     The datamodule configures shared multiview dataset logic for fusion and
     camera-based 3D detection models.
     """
-
-    def __init__(
-        self,
-        data_root: str,
-        train_ann_file: str,
-        val_ann_file: str,
-        test_ann_file: str,
-        class_names: list[str],
-        camera_order: list[str],
-        filter_frames_with_camera_order: bool = True,
-        require_image_files: bool = False,
-        **kwargs: Any,
-    ) -> None:
-        """Initialize the NuScenes multiview detection datamodule.
-
-        Args:
-            data_root: Dataset root directory.
-            train_ann_file: Training annotation file path.
-            val_ann_file: Validation annotation file path.
-            test_ann_file: Test annotation file path.
-            class_names: Ordered detector class names.
-            camera_order: Ordered camera names expected by the model.
-            filter_frames_with_camera_order: Drop frames missing any camera in
-                ``camera_order`` so image loading always sees a complete set.
-            require_image_files: Also verify camera image files exist on disk
-                while filtering (slower; off by default).
-            **kwargs: Additional base datamodule configuration.
-        """
-        super().__init__(**kwargs)
-        self.data_root = data_root
-        self.class_names = class_names
-        self.camera_order = camera_order
-        self.filter_frames_with_camera_order = filter_frames_with_camera_order
-        self.require_image_files = require_image_files
-
-        def resolve_ann_file(ann_file: str) -> str:
-            return ann_file if os.path.isabs(ann_file) else os.path.join(data_root, ann_file)
-
-        self.ann_files = {
-            "train": resolve_ann_file(train_ann_file),
-            "val": resolve_ann_file(val_ann_file),
-            "test": resolve_ann_file(test_ann_file),
-            "predict": resolve_ann_file(test_ann_file),
-        }
 
     def _create_dataset(
         self, split: str, dataset_transforms: TransformsCompose | None = None
@@ -132,6 +91,7 @@ class NuscenesMultiviewDetection3DDataModule(DataModule):
             ann_file=self.ann_files[split],
             class_names=self.class_names,
             camera_order=self.camera_order,
+            name_mapping=self.name_mapping,
             filter_frames_with_camera_order=self.filter_frames_with_camera_order,
             require_image_files=self.require_image_files,
             dataset_transforms=dataset_transforms,
