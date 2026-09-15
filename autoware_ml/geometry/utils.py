@@ -5,6 +5,7 @@ The code is modified from:
 https://github.com/open-mmlab/mmdetection3d/blob/main/mmdet3d/structures/bbox_3d/utils.py
 """
 
+import numpy as np
 from jaxtyping import Float32
 from torch import Tensor
 import torch
@@ -143,3 +144,30 @@ def points_in_convex_polygon_3d(
     # ax + by + cz + d <= 0 inequality for points inside or on the surfaces
     inner_product = torch.einsum("aij, kj->aik", normal_vec, points) + d.unsqueeze(-1)
     return (inner_product <= 0).all(dim=1).float()
+
+
+def points_in_rotated_box(coord: np.ndarray, box: np.ndarray) -> np.ndarray:
+    """Boolean mask of the points inside one oriented 3D box.
+
+    ``cz`` is the box's gravity center, so the height bound keeps ground from a lower
+    level and returns from an object above out of the box.
+
+    Args:
+        coord: Point coordinates of shape ``(N, 3+)``, only xyz is read.
+        box: Box row ``[cx, cy, cz, dx, dy, dz, yaw, ...]``.
+
+    Returns:
+        Boolean mask of shape ``(N,)``, True for a point inside the box.
+    """
+    center = np.asarray(box[:3], dtype=np.float64)
+    half = np.asarray(box[3:6], dtype=np.float64) / 2.0
+    yaw = float(box[6])
+    offset = np.asarray(coord[:, :3], dtype=np.float64) - center
+    cos_yaw, sin_yaw = np.cos(yaw), np.sin(yaw)
+    local_x = offset[:, 0] * cos_yaw + offset[:, 1] * sin_yaw
+    local_y = -offset[:, 0] * sin_yaw + offset[:, 1] * cos_yaw
+    return (
+        (np.abs(local_x) <= half[0])
+        & (np.abs(local_y) <= half[1])
+        & (np.abs(offset[:, 2]) <= half[2])
+    )
