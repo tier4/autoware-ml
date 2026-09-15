@@ -42,9 +42,7 @@ def greedy_match_thresholds(
     }
     if num_pred == 0 or gt_centers.shape[0] == 0:
         return empty
-    distances = np.linalg.norm(
-        pred_centers[:, None, :2] - gt_centers[None, :, :2], axis=2
-    )
+    distances = np.linalg.norm(pred_centers[:, None, :2] - gt_centers[None, :, :2], axis=2)
     # Candidates in ascending distance order, computed once: each claim pass
     # then only walks a row past its claimed entries. The stable sort keeps
     # the lowest index first among equal distances, the argmin tie rule.
@@ -118,9 +116,7 @@ def weighted_average_precision(
     cum_tp = np.cumsum(tp_weight)
     cum_fp = np.cumsum(fp_weight)
     denominator = cum_tp + cum_fp
-    precision = np.divide(
-        cum_tp, denominator, out=np.zeros_like(cum_tp), where=denominator != 0.0
-    )
+    precision = np.divide(cum_tp, denominator, out=np.zeros_like(cum_tp), where=denominator != 0.0)
     recall = cum_tp / total_gt_weight
     envelope = np.maximum.accumulate(precision[::-1])[::-1]
     recall_grid = np.linspace(0.0, 1.0, 101)

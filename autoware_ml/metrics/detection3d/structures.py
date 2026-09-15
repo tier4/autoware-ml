@@ -114,5 +114,3 @@ class SelectedTpErrors:
 
     count: int
     errors: dict[str, float]
-
-
