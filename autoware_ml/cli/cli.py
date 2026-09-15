@@ -26,7 +26,7 @@ import click
 import typer
 from click.core import ParameterSource
 from click.shell_completion import CompletionItem
-from typer.core import TyperCommand
+from typer.core import TyperCommand, TyperGroup
 from typing_extensions import Annotated
 
 from autoware_ml.utils.cli.helpers import (
@@ -38,19 +38,37 @@ from autoware_ml.utils.cli.helpers import (
     run_lazy_script,
 )
 
+class CompletableGroup(TyperGroup, click.Group):
+    """Typer group that click recognizes as a group.
+
+    Click walks the command tree for shell completion only through instances of
+    ``click.Group``, and ``TyperGroup`` alone does not inherit from it, so completion
+    would stop at the top level and offer the subcommand names instead of the options
+    of the subcommand being typed.
+
+    ``TyperGroup`` does not run ``click.Group.__init__``, so the flag that walker reads
+    is declared here. These groups dispatch one command at a time, never a chain.
+    """
+
+    chain = False
+
+
 app = typer.Typer(
     name="autoware-ml",
+    cls=CompletableGroup,
     help="Autoware-ML - Machine learning framework for Autoware",
     no_args_is_help=True,
     add_completion=True,
 )
 mlflow_app = typer.Typer(
     name="mlflow",
+    cls=CompletableGroup,
     help="MLflow utilities",
     no_args_is_help=True,
 )
 session_app = typer.Typer(
     name="session",
+    cls=CompletableGroup,
     help="Managed background task sessions",
     no_args_is_help=True,
 )
@@ -685,9 +703,15 @@ def main() -> None:
     """Run the top-level Typer application.
 
     This wrapper keeps the installed entrypoint and ``python -m`` execution
-    path aligned on the same CLI startup logic.
+    path aligned on the same CLI startup logic. Typer lets a click exception
+    raised inside a command escape, so the entrypoint reports it the way click
+    reports its own errors and exits with the status carried by the exception.
     """
-    app()
+    try:
+        app()
+    except click.ClickException as error:
+        error.show()
+        raise SystemExit(error.exit_code) from error
 
 
 app.add_typer(mlflow_app, name="mlflow")

@@ -14,6 +14,7 @@
 
 """Unit tests for CLI utilities."""
 
+import os
 import subprocess
 import sys
 from contextlib import contextmanager, nullcontext
@@ -23,6 +24,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+import typer.main
+from click.shell_completion import get_completion_class
 from omegaconf import OmegaConf
 from typer.testing import CliRunner
 
@@ -561,15 +564,17 @@ class TestCliCommands:
             raw=False,
         )
 
-    def test_session_start_reports_clean_error(self) -> None:
+    def test_session_start_reports_clean_error(self, capsys: pytest.CaptureFixture) -> None:
+        argv = ["autoware-ml", "session", "start", "--name", SAMPLE_SESSION_NAME]
         with patch(
             "autoware_ml.cli.cli.run_lazy_script",
             side_effect=SessionCommandError("A command is required"),
         ):
-            result = self.runner.invoke(app, ["session", "start", "--name", SAMPLE_SESSION_NAME])
+            with patch.object(sys, "argv", argv), pytest.raises(SystemExit) as exit_info:
+                cli.main()
 
-        assert result.exit_code == 1
-        assert "A command is required" in result.output
+        assert exit_info.value.code == 1
+        assert "A command is required" in capsys.readouterr().err
 
 
 class TestCliRuntime:
@@ -838,19 +843,25 @@ class TestSessionCompletion:
 
 
 class TestShellCompletion:
-    def test_train_suggests_options_on_empty_token(self) -> None:
-        runner = CliRunner()
-        result = runner.invoke(
-            app,
-            [],
-            env={
-                "_AUTOWARE_ML_COMPLETE": "complete_bash",
-                "COMP_WORDS": "autoware-ml train ",
-                "COMP_CWORD": "2",
-            },
-        )
-        assert result.exit_code == 0
-        assert "--config-name" in result.stdout.splitlines()
+    @staticmethod
+    def _completions(words: str, cword: str) -> list[str]:
+        """Completion values the shell would receive for a partially typed command."""
+        command = typer.main.get_command(app)
+        with patch.dict(os.environ, {"COMP_WORDS": words, "COMP_CWORD": cword}):
+            completion = get_completion_class("bash")(
+                command, {}, "autoware-ml", "_AUTOWARE_ML_COMPLETE"
+            )
+            args, incomplete = completion.get_completion_args()
+            return [item.value for item in completion.get_completions(args, incomplete)]
+
+    def test_train_suggests_its_options_on_a_dash(self) -> None:
+        assert "--config-name" in self._completions("autoware-ml train -", "2")
+
+    def test_train_narrows_the_options_on_a_prefix(self) -> None:
+        assert self._completions("autoware-ml train --con", "2") == ["--config-name"]
+
+    def test_the_root_suggests_its_commands(self) -> None:
+        assert "train" in self._completions("autoware-ml ", "1")
 
 
 class TestPathCompletion:
