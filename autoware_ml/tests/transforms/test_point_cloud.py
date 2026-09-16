@@ -17,7 +17,6 @@ from autoware_ml.transforms.point_cloud.loading import LoadPointsFromFile
 from autoware_ml.transforms.point_cloud.perturbation import RandomShift, RandomStrengthJitter
 from autoware_ml.transforms.point_cloud.sampling import (
     ElasticDistortion,
-    GridSample,
     PointShuffle,
     RandomDropout,
 )
@@ -117,17 +116,12 @@ class TestPointCloudTransforms:
         }
 
         ranged = PointsRangeFilter(point_cloud_range=point_cloud_range)(sample)
-        output = GridSample(
-            grid_size=1.0,
-            mode="test",
-            keys=("coord",),
-            return_grid_coord=True,
-            point_cloud_range=point_cloud_range,
-        )(ranged)
 
-        assert output["grid_coord"].shape == (2, 3)
-        assert np.all(output["grid_coord"] >= 0)
-        assert np.all(output["grid_coord"] < 2)
+        # points on the upper bound are excluded so voxel indices stay inside the grid
+        assert ranged["coord"].shape == (2, 3)
+        grid_coord = np.floor(ranged["coord"] / 1.0).astype(np.int64)
+        assert np.all(grid_coord >= 0)
+        assert np.all(grid_coord < 2)
 
     def test_random_flip3d_updates_detection_boxes(self):
         sample = {
@@ -177,6 +171,7 @@ class TestPointCloudTransforms:
         )
 
         assert output["points"].shape == (1, 4)
+        assert output["num_current_points"] == 1
         assert "idx_begin" not in output
         assert "length" not in output
 
@@ -188,7 +183,12 @@ class TestPointCloudTransforms:
         sweep_points.tofile(sweep_path)
 
         transform = LoadPointsFromMultiSweeps(
-            sweeps_num=2, load_dim=5, use_dim=[0, 1, 2, 3, 4], time_dim=4
+            sweeps_num=2,
+            load_dim=5,
+            use_dim=[0, 1, 2, 3, 4],
+            time_dim=4,
+            sweep_selection="nearest",
+            time_lag_range=[0.01, 1.0],
         )
         output = transform(
             {
@@ -224,8 +224,16 @@ class TestPointCloudTransforms:
             use_dim=[0, 1, 2, 3],
             remove_close=True,
             close_radius=1.0,
+            sweep_selection="nearest",
+            time_lag_range=[0.01, 1.0],
         )
-        output = transform({"points": key_points, "sweeps": [{"points": sweep_points}]})
+        output = transform(
+            {
+                "points": key_points,
+                "timestamp": 10.0,
+                "sweeps": [{"points": sweep_points, "timestamp": 9.9}],
+            }
+        )
 
         points = output["points"]
         # key point + the two sweep points outside the box
@@ -234,60 +242,221 @@ class TestPointCloudTransforms:
         assert np.any(np.all(np.isclose(points[:, :2], [1.05, 0.0]), axis=1))
         assert np.any(np.all(np.isclose(points[:, :2], [0.0, -1.2]), axis=1))
 
-    def test_multi_sweeps_takes_nearest_sweeps_in_test_mode(self):
-        sweeps = [
-            {"points": np.full((1, 4), 10.0, dtype=np.float32)},
-            {"points": np.full((1, 4), 20.0, dtype=np.float32)},
-            {"points": np.full((1, 4), 30.0, dtype=np.float32)},
+    @staticmethod
+    def _aged_sweeps():
+        """Three stored sweeps at 0.1, 0.2 and 0.5 s before the current frame."""
+        return [
+            {"points": np.full((1, 4), 10.0, dtype=np.float32), "timestamp": 9.9},
+            {"points": np.full((1, 4), 20.0, dtype=np.float32), "timestamp": 9.8},
+            {"points": np.full((1, 4), 30.0, dtype=np.float32), "timestamp": 9.5},
         ]
-        transform = LoadPointsFromMultiSweeps(sweeps_num=2, load_dim=4, use_dim=[0, 1, 2, 3])
 
-        output = transform({"points": np.zeros((1, 4), dtype=np.float32), "sweeps": sweeps})
+    def _load_with(self, selection, window, sweeps_num=2):
+        return LoadPointsFromMultiSweeps(
+            sweeps_num=sweeps_num,
+            load_dim=4,
+            use_dim=[0, 1, 2, 3],
+            sweep_selection=selection,
+            time_lag_range=window,
+        )
 
-        # test_mode defaults to True: always the nearest sweep, never a random one
+    def test_nearest_selection_takes_the_most_recent_eligible_sweep(self):
+        transform = self._load_with("nearest", [0.05, 0.25])
+
+        output = transform(
+            {
+                "points": np.zeros((1, 4), dtype=np.float32),
+                "timestamp": 10.0,
+                "sweeps": self._aged_sweeps(),
+            }
+        )
+
         assert output["points"].shape == (2, 4)
         assert np.allclose(output["points"][1], 10.0)
 
-    def test_multi_sweeps_samples_sweeps_randomly_when_not_test_mode(self, monkeypatch):
-        sweeps = [
-            {"points": np.full((1, 4), 10.0, dtype=np.float32)},
-            {"points": np.full((1, 4), 20.0, dtype=np.float32)},
-            {"points": np.full((1, 4), 30.0, dtype=np.float32)},
-        ]
+    def test_time_lag_range_makes_sweeps_outside_the_window_unavailable(self):
+        # only the 0.2 s sweep is eligible: 0.1 s is too recent and 0.5 s too old
+        transform = self._load_with("nearest", [0.15, 0.25])
+
+        output = transform(
+            {
+                "points": np.zeros((1, 4), dtype=np.float32),
+                "timestamp": 10.0,
+                "sweeps": self._aged_sweeps(),
+            }
+        )
+
+        assert np.allclose(output["points"][1], 20.0)
+
+    def test_a_frame_whose_sweeps_are_all_stale_runs_without_them(self):
+        transform = self._load_with("nearest", [0.05, 0.25])
+
+        output = transform(
+            {
+                "points": np.zeros((1, 4), dtype=np.float32),
+                "timestamp": 10.0,
+                "sweeps": [{"points": np.ones((1, 4), dtype=np.float32), "timestamp": 9.0}],
+            }
+        )
+
+        assert output["points"].shape == (1, 4)
+        assert output["num_current_points"] == 1
+
+    def test_random_selection_samples_only_among_the_eligible_sweeps(self, monkeypatch):
         calls = {}
 
         def fake_choice(num_entries, size, replace):
             calls["args"] = (num_entries, size, replace)
-            return np.array([2])
+            return np.array([1])
 
         monkeypatch.setattr(
             "autoware_ml.transforms.point_cloud.sweeps.np.random.choice", fake_choice
         )
-        transform = LoadPointsFromMultiSweeps(
-            sweeps_num=2, load_dim=4, use_dim=[0, 1, 2, 3], test_mode=False
+        # window admits the 0.1 s and 0.2 s sweeps but not the 0.5 s one
+        transform = self._load_with("random", [0.05, 0.25])
+
+        output = transform(
+            {
+                "points": np.zeros((1, 4), dtype=np.float32),
+                "timestamp": 10.0,
+                "sweeps": self._aged_sweeps(),
+            }
         )
 
-        output = transform({"points": np.zeros((1, 4), dtype=np.float32), "sweeps": sweeps})
+        assert calls["args"] == (2, 1, False)
+        assert np.allclose(output["points"][1], 20.0)
 
-        # Sampled uniformly without replacement across all entries, not sliced to the nearest
-        assert calls["args"] == (3, 1, False)
-        assert np.allclose(output["points"][1], 30.0)
+    def test_random_selection_keeps_the_appended_sweeps_ordered_by_recency(self, monkeypatch):
+        monkeypatch.setattr(
+            "autoware_ml.transforms.point_cloud.sweeps.np.random.choice",
+            lambda num_entries, size, replace: np.array([2, 0]),
+        )
+        transform = self._load_with("random", [0.05, 0.6], sweeps_num=3)
 
-    def test_multi_sweeps_time_dim_requires_key_timestamp(self):
-        transform = LoadPointsFromMultiSweeps(
-            sweeps_num=2, load_dim=5, use_dim=[0, 1, 2, 3, 4], time_dim=4
+        output = transform(
+            {
+                "points": np.zeros((1, 4), dtype=np.float32),
+                "timestamp": 10.0,
+                "sweeps": self._aged_sweeps(),
+            }
         )
 
-        with pytest.raises(KeyError, match="timestamp"):
-            transform({"points": np.zeros((1, 5), dtype=np.float32), "sweeps": []})
+        # sampled the 0.5 s and 0.1 s sweeps, appended newest first
+        assert np.allclose(output["points"][1], 10.0)
+        assert np.allclose(output["points"][2], 30.0)
+
+    def test_multi_sweeps_requires_timestamps_to_age_the_sweeps(self):
+        transform = self._load_with("nearest", [0.05, 0.25])
+
         with pytest.raises(KeyError, match="timestamp"):
             transform(
                 {
-                    "points": np.zeros((1, 5), dtype=np.float32),
-                    "timestamp": None,
-                    "sweeps": [],
+                    "points": np.zeros((1, 4), dtype=np.float32),
+                    "sweeps": [{"points": np.ones((1, 4), dtype=np.float32), "timestamp": 9.9}],
                 }
             )
+        with pytest.raises(KeyError, match="sweep 'timestamp'"):
+            transform(
+                {
+                    "points": np.zeros((1, 4), dtype=np.float32),
+                    "timestamp": 10.0,
+                    "sweeps": [{"points": np.ones((1, 4), dtype=np.float32)}],
+                }
+            )
+
+    def test_multi_sweeps_rejects_an_unknown_selection_or_window(self):
+        with pytest.raises(ValueError, match="sweep_selection"):
+            self._load_with("newest", [0.05, 0.25])
+        with pytest.raises(ValueError, match="min time lag < max time lag"):
+            self._load_with("nearest", [0.25, 0.05])
+        with pytest.raises(ValueError, match=r"\[min, max\]"):
+            self._load_with("nearest", [0.25])
+
+    def test_multi_sweeps_exposes_current_frame_as_leading_block(self):
+        key_points = np.zeros((2, 5), dtype=np.float32)
+        sweep_points = np.ones((3, 5), dtype=np.float32) * 5.0
+        transform = LoadPointsFromMultiSweeps(
+            sweeps_num=2,
+            load_dim=5,
+            use_dim=[0, 1, 2, 3, 4],
+            time_dim=4,
+            sweep_selection="nearest",
+            time_lag_range=[0.01, 1.0],
+        )
+
+        output = transform(
+            {
+                "points": key_points,
+                "timestamp": 10.0,
+                "sweeps": [{"points": sweep_points, "timestamp": 9.9}],
+            }
+        )
+
+        assert output["num_current_points"] == 2
+        assert np.all(output["points"][:2, 4] == 0.0)
+        assert np.allclose(output["points"][2:, 4], 0.1)
+
+    def test_multi_sweeps_pads_empty_sweeps_with_non_current_lag(self):
+        """Scene-first padding stands in for sweeps: the copies carry the minimum
+        admissible lag so current-frame selections never count them."""
+        transform = LoadPointsFromMultiSweeps(
+            sweeps_num=3,
+            load_dim=5,
+            use_dim=[0, 1, 2, 3, 4],
+            time_dim=4,
+            pad_empty_sweeps=True,
+            sweep_selection="nearest",
+            time_lag_range=[0.05, 0.25],
+        )
+
+        output = transform({"points": np.zeros((2, 5), dtype=np.float32), "sweeps": []})
+
+        assert output["points"].shape == (6, 5)
+        assert output["num_current_points"] == 2
+        assert np.all(output["points"][:2, 4] == 0.0)
+        assert np.allclose(output["points"][2:, 4], 0.05)
+
+    def test_multi_sweeps_rejects_a_zero_minimum_time_lag(self):
+        """The current frame owns lag 0, so a window admitting zero-lag sweeps is a config
+        error: such a sweep would be indistinguishable from the current frame downstream."""
+        with pytest.raises(ValueError, match="0 < min time lag"):
+            LoadPointsFromMultiSweeps(
+                sweeps_num=2,
+                load_dim=5,
+                use_dim=[0, 1, 2, 3, 4],
+                sweep_selection="nearest",
+                time_lag_range=[0.0, 1.0],
+            )
+
+    def test_multi_sweeps_rejects_per_sensor_slicing(self):
+        transform = LoadPointsFromMultiSweeps(
+            sweeps_num=2,
+            load_dim=5,
+            use_dim=[0, 1, 2, 3, 4],
+            sweep_selection="nearest",
+            time_lag_range=[0.01, 1.0],
+        )
+
+        with pytest.raises(ValueError, match="idx_begin"):
+            transform({"lidar_path": "unused.bin", "idx_begin": 0, "length": 3})
+
+    def test_a_sweepless_frame_needs_no_timestamp(self):
+        """The current frame carries lag 0 by definition, so ageing information is only needed
+        once there is a sweep to age. Scene-first frames therefore load without a timestamp."""
+        transform = LoadPointsFromMultiSweeps(
+            sweeps_num=2,
+            load_dim=5,
+            use_dim=[0, 1, 2, 3, 4],
+            time_dim=4,
+            sweep_selection="nearest",
+            time_lag_range=[0.01, 1.0],
+        )
+
+        output = transform({"points": np.zeros((1, 5), dtype=np.float32), "sweeps": []})
+
+        assert output["points"].shape == (1, 5)
+        assert output["points"][0, 4] == 0.0
+        assert output["num_current_points"] == 1
 
     def test_random_dropout_keeps_point_arrays_aligned(self):
         np.random.seed(0)
@@ -352,77 +521,6 @@ class TestPointCloudTransforms:
         assert strength.min() >= 0.0
         assert strength.max() <= 1.0
         assert np.all(np.diff(strength[:, 0]) >= 0.0)
-
-    def test_grid_sample_keeps_arrays_aligned(self):
-        sample = {
-            "coord": np.array(
-                [[0.0, 0.0, 0.0], [0.01, 0.01, 0.01], [1.0, 1.0, 1.0]],
-                dtype=np.float32,
-            ),
-            "strength": np.array([[1.0], [2.0], [3.0]], dtype=np.float32),
-            "segment": np.array([10, 11, 12], dtype=np.int64),
-        }
-
-        output = GridSample(
-            grid_size=0.05,
-            mode="train",
-            keys=("coord", "strength", "segment"),
-            return_grid_coord=True,
-        )(sample)
-
-        assert output["coord"].shape[0] == output["strength"].shape[0] == output["segment"].shape[0]
-        assert output["grid_coord"].shape[0] == output["coord"].shape[0]
-
-    def test_grid_sample_test_mode_returns_voxels_and_inverse(self):
-        sample = {
-            "coord": np.array(
-                [[0.0, 0.0, 0.0], [0.01, 0.01, 0.01], [1.0, 1.0, 1.0]],
-                dtype=np.float32,
-            ),
-            "strength": np.array([[1.0], [2.0], [3.0]], dtype=np.float32),
-            "segment": np.array([10, 11, 12], dtype=np.int64),
-        }
-
-        output = GridSample(
-            grid_size=0.05,
-            hash_type="fnv",
-            mode="test",
-            keys=("coord", "strength"),
-            return_grid_coord=True,
-            return_inverse=True,
-        )(sample)
-
-        assert isinstance(output, dict)
-        assert output["coord"].shape == (2, 3)
-        assert output["strength"].shape == (2, 1)
-        assert output["grid_coord"].shape == (2, 3)
-        assert output["inverse"].shape == (3,)
-        assert output["inverse"].max() < output["coord"].shape[0]
-        assert output["inverse"][0] == output["inverse"][1]
-        assert output["inverse"][0] != output["inverse"][2]
-
-    def test_grid_sample_rejects_unknown_hash_type(self):
-        with pytest.raises(ValueError, match="hash_type"):
-            GridSample(grid_size=0.05, hash_type="typo", mode="test", keys=("coord",))
-
-    def test_grid_sample_train_mode_selects_representatives_per_voxel(self, monkeypatch):
-        sample = {
-            "coord": np.array(
-                [[0.0, 0.0, 0.0], [0.01, 0.01, 0.01], [1.0, 1.0, 1.0]],
-                dtype=np.float32,
-            ),
-            "segment": np.array([10, 11, 12], dtype=np.int64),
-        }
-        monkeypatch.setattr(np.random, "random", lambda size: np.array([0.0, 0.75]))
-
-        output = GridSample(
-            grid_size=0.05,
-            hash_type="fnv",
-            mode="train",
-            keys=("coord", "segment"),
-        )(sample)
-
-        assert sorted(output["segment"].tolist()) == [11, 12]
 
     def test_sphere_crop_crops_all_point_arrays_consistently(self):
         sample = {

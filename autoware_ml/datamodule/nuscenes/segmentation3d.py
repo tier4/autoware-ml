@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import pickle
+from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
@@ -93,6 +94,8 @@ class NuscenesSegmentation3DDataset(Dataset):
             "lidar_path": lidar_path,
             "name": sample["token"],
             "num_pts_feats": int(sample.get("lidar_points", {}).get("num_pts_feats", 5)),
+            "timestamp": sample.get("timestamp"),
+            "sweeps": self._resolve_sweeps(sample),
             "pts_semantic_mask_path": os.path.join(
                 self.lidarseg_dir, sample["pts_semantic_mask_path"]
             ),
@@ -100,6 +103,17 @@ class NuscenesSegmentation3DDataset(Dataset):
             "ego2global": lidar_to_map(sample),
             "scene_token": sample["scene_token"],
         }
+
+    def _resolve_sweeps(self, sample: Mapping[str, Any]) -> list[dict[str, Any]]:
+        """Resolve sweep lidar paths for one sample."""
+        sweep_entries = []
+        for sweep in sample.get("sweeps", []):
+            sweep_entry = dict(sweep)
+            sweep_entry["lidar_path"] = resolve_lidar_path(
+                self.data_root, sweep_entry["lidar_path"]
+            )
+            sweep_entries.append(sweep_entry)
+        return sweep_entries
 
 
 class NuscenesSegmentation3DDataModule(DataModule):

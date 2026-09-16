@@ -9,10 +9,11 @@ defaults:
 dataset: ???
 
 grid_size: ???
+max_voxels: ???
 point_cloud_range: ???
 
-train_sweeps_num: 1
-val_sweeps_num: 1
+train_sweeps_num: 2
+val_sweeps_num: 2
 
 datamodule:
   _target_: ???
@@ -28,15 +29,23 @@ datamodule:
     low_pedestrian_height_threshold: 1.5
     low_pedestrian_bev_range: [-50.0, -50.0, 50.0, 50.0]
   collation_map:
-    coord: concat
-    feat: concat
-    grid_coord: concat
+    points: list
     gt_boxes: list
     gt_labels: list
     gt_num_points: list
     ego2global: list
     scene_token: list
     timestamp: list
+
+data_preprocessing:
+  pipeline:
+    - _target_: autoware_ml.preprocessing.detection3d.point_pillar.PointPillarPreprocessor
+      voxel_size: ["${grid_size}", "${grid_size}", "${grid_size}"]
+      point_cloud_range: ${point_cloud_range}
+      max_num_points: 32
+      max_voxels: ${max_voxels}
+      eval_max_voxels: ${max_voxels}
+      voxelization_z_order_first: false
 
 model:
   _target_: autoware_ml.models.detection3d.ptv3.PTv3DetectionModel
@@ -86,6 +95,8 @@ deploy:
         metainfo:
           point_cloud_range: ${point_cloud_range}
           voxel_size: ["${grid_size}", "${grid_size}", "${grid_size}"]
+          voxel_features: [x, y, z, intensity, time_lag]
+          max_points_per_voxel: ${data_preprocessing.pipeline.0.max_num_points}
           serialization_orders: [z, z-trans]
           pooling_strides: ${model.encoder.stride}
           enc_channels: ${model.encoder.enc_channels}

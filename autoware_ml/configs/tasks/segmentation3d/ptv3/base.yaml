@@ -8,23 +8,30 @@ defaults:
 dataset: ???
 
 grid_size: ???
+max_voxels: ???
 point_cloud_range: ???
 
 datamodule:
   collation_map:
-    coord: concat
-    grid_coord: concat
+    points: list
     segment: concat
-    inverse: index_concat
-    origin_segment: concat
-    origin_coord: concat
-    feat: concat
     ego2global: list
     scene_token: list
     timestamp: list
 
+data_preprocessing:
+  pipeline:
+    - _target_: autoware_ml.preprocessing.detection3d.point_pillar.PointPillarPreprocessor
+      voxel_size: ["${grid_size}", "${grid_size}", "${grid_size}"]
+      point_cloud_range: ${point_cloud_range}
+      max_num_points: 32
+      max_voxels: ${max_voxels}
+      eval_max_voxels: ${max_voxels}
+      voxelization_z_order_first: false
+
 model:
   _target_: autoware_ml.models.segmentation3d.ptv3.PTv3SegmentationModel
+  time_lag_dim: 4
   metrics: ${dataset.segmentation3d.metrics}
   grid_size: ${grid_size}
   point_cloud_range: ${point_cloud_range}
@@ -72,6 +79,8 @@ deploy:
         metainfo:
           point_cloud_range: ${point_cloud_range}
           voxel_size: ["${grid_size}", "${grid_size}", "${grid_size}"]
+          voxel_features: [x, y, z, intensity, time_lag]
+          max_points_per_voxel: ${data_preprocessing.pipeline.0.max_num_points}
           serialization_orders: [z, z-trans]
           pooling_strides: ${model.encoder.stride}
           enc_channels: ${model.encoder.enc_channels}

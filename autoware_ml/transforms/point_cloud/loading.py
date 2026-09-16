@@ -25,7 +25,13 @@ from autoware_ml.transforms.base import BaseTransform
 
 
 class LoadPointsFromFile(BaseTransform):
-    """Load point clouds from a lidar file path stored in sample metadata."""
+    """Load point clouds from a lidar file path stored in sample metadata.
+
+    Generated keys:
+        points: Loaded point array.
+        num_current_points: Number of points belonging to the current frame,
+            which is every loaded point for a single-frame loader.
+    """
 
     _required_keys = ["lidar_path"]
 
@@ -69,7 +75,7 @@ class LoadPointsFromFile(BaseTransform):
         else:
             points = points[:, list(use_dim)]
 
-        output = {"points": points.astype(np.float32)}
+        output = {"points": points.astype(np.float32), "num_current_points": points.shape[0]}
         if idx_begin is not None:
             output["idx_begin"] = idx_begin
         if length is not None:

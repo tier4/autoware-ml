@@ -7,6 +7,7 @@ dataset: ???
 
 point_cloud_range: ???
 voxel_size: ???
+max_time_lag: ???
 out_size_factor: ???
 
 datamodule:
@@ -24,17 +25,20 @@ model:
   metrics: ${dataset.detection3d.metrics}
   pts_voxel_encoder:
     _target_: autoware_ml.models.detection3d.encoders.voxel.HardSimpleVoxelSinCosEncoder
-    in_channels: 4
+    in_channels: 5
+    # Normalization ranges for (x, y, z, intensity, time_lag).
     min_norm_values:
       - ${point_cloud_range.0}
       - ${point_cloud_range.1}
       - ${point_cloud_range.2}
+      - 0.0
       - 0.0
     max_norm_values:
       - ${point_cloud_range.3}
       - ${point_cloud_range.4}
       - ${point_cloud_range.5}
       - 255.0
+      - ${max_time_lag}
   pts_middle_encoder:
     _target_: autoware_ml.models.detection3d.encoders.sparse.SparseEncoder
     in_channels: 32
