@@ -1,0 +1,13 @@
+_target_: autoware_ml.databases.nuscenes.nuscenes_scenarios.NuScenesScenarios
+_convert_: all
+
+# Root path where the NuScenes version directories (e.g. v1.0-trainval) are stored.
+scenario_root_path: ${data_root_path}/nuscenes/
+
+# List of dataset parameters, one per NuScenes version to include.
+dataset_params:
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
+    _convert_: all
+    dataset_name: v1.0-trainval
+    max_sweeps: 10
+    sample_steps: 1
