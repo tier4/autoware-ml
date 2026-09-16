@@ -1,8 +1,7 @@
 _target_: autoware_ml.databases.nuscenes.nuscenes_scenarios.NuScenesScenarios
 _convert_: all
 
-# Root path where the NuScenes version directories (e.g. v1.0-trainval) and the
-# nuscenes_infos_<split>.pkl files are stored.
+# Root path where the NuScenes version directories (e.g. v1.0-trainval) are stored.
 scenario_root_path: ${data_root_path}/nuscenes/
 
 # List of dataset parameters, one per NuScenes version to include.

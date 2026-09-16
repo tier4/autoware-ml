@@ -15,12 +15,12 @@
 from __future__ import annotations
 
 import logging
-import pickle
 from collections import defaultdict
 from typing import Mapping, Sequence
 from types import MappingProxyType
 
 from nuscenes.nuscenes import NuScenes
+from nuscenes.utils import splits as nuscenes_splits
 from pydantic import model_validator
 
 from autoware_ml.types.dataset import SplitType
@@ -28,33 +28,37 @@ from autoware_ml.databases.scenarios import DatasetParams, ScenarioData, Scenari
 
 logger = logging.getLogger(__name__)
 
-# Maps SplitType to the `nuscenes_infos_<name>.pkl` filename suffix that carries that split's
-# scene membership (mmdet3d-style info files, e.g. `nuscenes_infos_train.pkl`).
-_SPLIT_INFO_FILE_SUFFIX = {
-    SplitType.TRAIN: "train",
-    SplitType.VAL: "val",
-    SplitType.TEST: "test",
+# Maps a NuScenes version directory name to the nuscenes-devkit `nuscenes.utils.splits` scene-name
+# lists that apply to it. 
+_VERSION_TO_SPLIT_SCENE_NAMES = {
+    "v1.0-trainval": {
+        SplitType.TRAIN: nuscenes_splits.train,
+        SplitType.VAL: nuscenes_splits.val,
+    },
+    "v1.0-mini": {
+        SplitType.TRAIN: nuscenes_splits.mini_train,
+        SplitType.VAL: nuscenes_splits.mini_val,
+    },
+    "v1.0-test": {
+        SplitType.TEST: nuscenes_splits.test,
+    },
 }
 
 
 class NuScenesScenarios(Scenarios):
     """
     NuScenesScenarios class inherits from Scenarios and defines the logic for building scenario
-    data for a NuScenesDataset, where one scenario corresponds to one NuScenes scene.
+    data for a NuScenesDataset.
 
-    Unlike T4Scenarios (which reads per-dataset scenario YAML files listing scene IDs per split),
-    NuScenes ships one flat table set per version (e.g. `v1.0-trainval` holds all 850 scenes
-    together). Train/val/test split membership is instead derived from the scene_token set found
-    in the existing `nuscenes_infos_<split>.pkl` info files (mmdet3d-style), which are already the
-    authoritative split for this dataset copy.
+    Train/val/test split membership is derived from nuscenes-devkit's own
+    official scene-name split lists (`nuscenes.utils.splits`).
     """
 
     @model_validator(mode="after")
     def build_scenarios(self) -> NuScenesScenarios:
         """
         Build scenarios by loading the NuScenes version tables via nuscenes-devkit, and splitting
-        scenes into train/val/test according to the scene_token membership found in each
-        `nuscenes_infos_<split>.pkl` file.
+        scenes into train/val/test according to nuscenes-devkit's official scene-name split lists.
 
         Returns:
           NuScenesScenarios: NuScenesScenarios class instance.
@@ -94,14 +98,12 @@ class NuScenesScenarios(Scenarios):
             verbose=False,
         )
 
-        scene_token_to_split = self._build_scene_token_to_split(dataset_params.dataset_name)
+        scene_name_to_split = self._build_scene_name_to_split(dataset_params.dataset_name)
 
         scenario_splits = defaultdict(list)
         for scene in nusc.scene:
-            split = scene_token_to_split.get(scene["token"])
+            split = scene_name_to_split.get(scene["name"])
             if split is None:
-                # Scene not present in any known split's info pkl (e.g. v1.0-mini scenes,
-                # or a version without info pkls for every split); skip it.
                 continue
             log_record = nusc.get("log", scene["log_token"])
             scenario_splits[split].append(
@@ -117,42 +119,29 @@ class NuScenesScenarios(Scenarios):
             )
         return scenario_splits
 
-    def _build_scene_token_to_split(self, dataset_name: str) -> Mapping[str, SplitType]:
+    def _build_scene_name_to_split(self, dataset_name: str) -> Mapping[str, SplitType]:
         """
-        Build a mapping of scene_token -> SplitType by reading scene membership out of each
-        `nuscenes_infos_<split>.pkl` file found under `scenario_root_path`.
+        Build a mapping of scene name -> SplitType using nuscenes-devkit's official scene-name
+        split lists (`nuscenes.utils.splits`) for this NuScenes version.
 
         Args:
-          dataset_name: NuScenes version directory name, only used for logging.
+          dataset_name: NuScenes version directory name (e.g. `v1.0-trainval`, `v1.0-mini`,
+            `v1.0-test`), used to select which official split lists apply.
 
         Returns:
-          Mapping[str, SplitType]: Dictionary of scene_token to the split it belongs to.
+          Mapping[str, SplitType]: Dictionary of scene name to the split it belongs to.
         """
 
-        scene_token_to_split = {}
-        for split, suffix in _SPLIT_INFO_FILE_SUFFIX.items():
-            info_path = self.scenario_root_path / f"nuscenes_infos_{suffix}.pkl"
-            if not info_path.exists():
-                logger.warning(
-                    f"No info pkl found at {info_path} for split {split} "
-                    f"of dataset {dataset_name}; scenes for this split will be skipped."
-                )
-                continue
+        split_scene_names = _VERSION_TO_SPLIT_SCENE_NAMES.get(dataset_name)
+        if split_scene_names is None:
+            raise ValueError(
+                f"No known train/val/test split for NuScenes version {dataset_name}; "
+                f"expected one of {sorted(_VERSION_TO_SPLIT_SCENE_NAMES.keys())}."
+            )
 
-            with open(info_path, "rb") as f:
-                info = pickle.load(f)
+        scene_name_to_split = {}
+        for split, scene_names in split_scene_names.items():
+            for scene_name in scene_names:
+                scene_name_to_split[scene_name] = split
 
-            # The test split's info pkl is trimmed (no GT), so `scene_token` may be absent from
-            # its records; skip records that lack it rather than failing the whole split.
-            scene_tokens = {
-                record["scene_token"] for record in info["data_list"] if "scene_token" in record
-            }
-            if len(scene_tokens) == 0 and len(info["data_list"]) > 0:
-                logger.warning(
-                    f"Info pkl {info_path} for split {split} has no scene_token field in its "
-                    f"records; scenes for this split cannot be determined and will be skipped."
-                )
-            for scene_token in scene_tokens:
-                scene_token_to_split[scene_token] = split
-
-        return scene_token_to_split
+        return scene_name_to_split
