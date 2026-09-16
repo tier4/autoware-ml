@@ -83,13 +83,13 @@ is future work.
 
 ## Implementation
 
-| Path                                                 | Description                                   |
-| ---------------------------------------------------- | --------------------------------------------- |
-| `autoware_ml/models/segmentation3d/encoders/ptv3.py` | `LitePTEncoder`, `Point3DRoPE`, block gating  |
-| `autoware_ml/models/segmentation3d/ptv3_base.py`     | `PTv3EncoderExportBase`, shared export inputs |
-| `autoware_ml/models/segmentation3d/heads/ptv3.py`    | Decoder gating (`dec_conv`, `dec_attn`)       |
-| `autoware_ml/configs/tasks/*/litept/`                | Task configurations                           |
-| `autoware_ml/tests/models/test_litept.py`            | Rotary, gating, and export tests              |
+| Path                                                  | Description                                   |
+| ----------------------------------------------------- | --------------------------------------------- |
+| `autoware_ml/models/segmentation3d/encoders/ptv3.py`  | `LitePTEncoder`, `Point3DRoPE`, block gating  |
+| `autoware_ml/models/segmentation3d/ptv3_base.py`      | `PTv3EncoderExportBase`, shared export inputs |
+| `autoware_ml/models/segmentation3d/heads/ptv3.py`     | Decoder gating (`dec_conv`, `dec_attn`)       |
+| `autoware_ml/configs/tasks/*/litept/`                 | Task configurations                           |
+| `autoware_ml/models/detection3d/tests/test_litept.py` | Rotary, gating, and export tests              |
 
 ## Acknowledgment
 

@@ -8,7 +8,7 @@ import pytest
 import torch
 
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
-from autoware_ml.tests.models.ptv3_detection_fixtures import (
+from autoware_ml.models.detection3d.tests.ptv3_detection_fixtures import (
     build_inputs,
     build_seg_model,
     build_targets,
