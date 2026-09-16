@@ -2,7 +2,6 @@
 data/
 mlruns/
 outputs/
-work_dirs/
 
 # Model files and artifacts
 *.bin
@@ -10,8 +9,6 @@ work_dirs/
 *.onnx
 *.engine
 *.pth
-*.pt
-*.npz
 *.ckpt
 *.log
 *.out

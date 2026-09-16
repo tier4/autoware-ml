@@ -7,6 +7,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 import torch
 
 from autoware_ml.datamodule.base import DataModule
@@ -274,3 +275,51 @@ def test_multiview_detection_dataset_keeps_timestamp_float64(tmp_path: Path) -> 
     assert isinstance(timestamp, np.float64)
     assert coerced.dtype == torch.float64
     assert float(coerced) == 1740707698.147682
+
+
+def _scene_dataset(tmp_path: Path, scene_tokens: list[str]) -> _Dataset:
+    ann_file = tmp_path / "infos.pkl"
+    samples = [
+        {
+            "token": f"sample-{index}",
+            "scene_token": token,
+            "lidar_points": {"lidar_path": f"lidar-{index}.bin", "num_pts_feats": 5},
+            "images": {},
+            "instances": [],
+        }
+        for index, token in enumerate(scene_tokens)
+    ]
+    with open(ann_file, "wb") as file:
+        pickle.dump({"data_list": samples, "metainfo": {"classes": ["car"]}}, file)
+    return _Dataset(
+        data_root=str(tmp_path),
+        ann_file=str(ann_file),
+        class_names=["car"],
+        camera_order=[],
+        filter_frames_with_camera_order=False,
+    )
+
+
+def test_scene_index_groups_follow_file_order(tmp_path: Path) -> None:
+    dataset = _scene_dataset(tmp_path, ["scene-1", "scene-1", "scene-2", "scene-3", "scene-3"])
+
+    assert dataset.scene_index_groups() == [[0, 1], [2], [3, 4]]
+
+
+def test_scene_index_groups_returns_a_fresh_copy(tmp_path: Path) -> None:
+    dataset = _scene_dataset(tmp_path, ["scene-1", "scene-1", "scene-2"])
+
+    dataset.scene_index_groups()[0].append(99)
+
+    assert dataset.scene_index_groups() == [[0, 1], [2]]
+
+
+def test_interleaved_scenes_load_but_fail_at_the_streaming_accessor(tmp_path: Path) -> None:
+    # prev_exists is derived from file adjacency, so an interleaved file would
+    # silently reset temporal memory mid-scene. Non-temporal multiview models
+    # never call scene_index_groups(), so construction itself must still work.
+    dataset = _scene_dataset(tmp_path, ["scene-1", "scene-2", "scene-1"])
+
+    assert len(dataset) == 3
+    with pytest.raises(ValueError, match="interleaves scene 'scene-1'"):
+        dataset.scene_index_groups()

@@ -289,8 +289,11 @@ class MultiviewDetection3DDataset(Dataset):
             data_infos = self._filter_frames_with_camera_order(data_infos)
         self.prev_exists = self._build_prev_exists(data_infos)
         self.label_to_category = build_label_to_category(data.get("metainfo", {}))
+        # Kept as plain tokens so scene grouping (streaming only) never has to
+        # deserialize the samples again.
+        self._scene_tokens = [sample["scene_token"] for sample in data_infos]
+        self._scene_index_groups: list[list[int]] | None = None
         # Serialize last: the full passes above must run on the live list.
-        self._scene_index_groups = self._build_scene_index_groups(data_infos)
         self.data_infos = SerializedSampleList(data_infos)
 
     @staticmethod
@@ -354,16 +357,18 @@ class MultiviewDetection3DDataset(Dataset):
         return len(self.data_infos)
 
     @staticmethod
-    def _build_scene_index_groups(data_infos: list[dict[str, Any]]) -> list[list[int]]:
+    def _build_scene_index_groups(scene_tokens: Sequence[str]) -> list[list[int]]:
         """Group dataset indices by scene, requiring scene-contiguous file order.
 
         ``prev_exists`` is derived from file adjacency, so an annotation file
         that interleaves scenes would silently reset temporal memory mid-scene;
         fail loudly instead.
+
+        Raises:
+            ValueError: If a scene's frames are not contiguous in the file.
         """
         groups: dict[str, list[int]] = {}
-        for index, sample in enumerate(data_infos):
-            token = sample["scene_token"]
+        for index, token in enumerate(scene_tokens):
             group = groups.setdefault(token, [])
             if group and group[-1] != index - 1:
                 raise ValueError(
@@ -376,10 +381,20 @@ class MultiviewDetection3DDataset(Dataset):
     def scene_index_groups(self) -> list[list[int]]:
         """Return the per-scene dataset index groups.
 
+        Only streaming consumers (``GroupStreamingSampler``) call this, so the
+        scene-contiguity requirement is enforced here rather than in
+        ``__init__``: non-temporal multiview models sharing this dataset never
+        read ``prev_exists`` and keep loading whatever file order they have.
+
         Returns:
             One list of scene-contiguous dataset indices per scene. A fresh
             copy is returned so callers may mutate it freely.
+
+        Raises:
+            ValueError: If a scene's frames are not contiguous in the file.
         """
+        if self._scene_index_groups is None:
+            self._scene_index_groups = self._build_scene_index_groups(self._scene_tokens)
         return [list(group) for group in self._scene_index_groups]
 
     def _resolve_path(self, relative_path: str) -> str:

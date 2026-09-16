@@ -62,16 +62,6 @@ def _format_keys(keys: tuple[str, ...]) -> str:
     return ", ".join(keys) if keys else "<none>"
 
 
-def _tensor_identity(tensor: torch.Tensor) -> tuple[int, tuple[int, ...], torch.dtype]:
-    """Identity of the underlying storage, for shared-tensor alias detection.
-
-    A module registered under two attributes (e.g. StreamPETR's ``img_backbone``
-    also living inside ``image_feature_extractor``) yields state-dict entries
-    that are views of the same storage; loading either key initializes both.
-    """
-    return (tensor.data_ptr(), tuple(tensor.shape), tensor.dtype)
-
-
 def _format_shape_mismatches(
     keys: tuple[str, ...],
     checkpoint_state_dict: dict[str, torch.Tensor],
@@ -145,12 +135,19 @@ def load_matching_weights(
             "the target model by key and shape."
         )
 
-    loaded_identities = {_tensor_identity(model_state_dict[key]) for key in loaded_state_dict}
+    # A module registered under two attributes (e.g. StreamPETR's ``img_backbone``
+    # also living inside ``image_feature_extractor``) exposes the *same* Parameter
+    # or buffer object under two state-dict keys; loading either key initializes
+    # both. ``keep_vars=True`` returns those objects instead of detached copies,
+    # so object identity is exact where a ``data_ptr`` comparison would also
+    # match unrelated views of one storage.
+    live_tensors = model.state_dict(keep_vars=True)
+    loaded_tensor_ids = {id(live_tensors[key]) for key in loaded_state_dict}
     alias_initialized_keys = tuple(
         sorted(
             key
-            for key, value in model_state_dict.items()
-            if key not in loaded_state_dict and _tensor_identity(value) in loaded_identities
+            for key, tensor in live_tensors.items()
+            if key not in loaded_state_dict and id(tensor) in loaded_tensor_ids
         )
     )
     alias_initialized = set(alias_initialized_keys)
