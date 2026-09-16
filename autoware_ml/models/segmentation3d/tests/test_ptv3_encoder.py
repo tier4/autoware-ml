@@ -384,8 +384,8 @@ def test_ptv3_encoder_dynamic_axes_follow_generated_pooling_inputs() -> None:
     input_names = [
         "grid_coord",
         "feat",
-        "serialized_inverse",
         "patch_order",
+        "serialized_inverse",
         "serialized_pooling_0_patch_order",
         "serialized_pooling_0_indices",
         "serialized_pooling_0_indptr",

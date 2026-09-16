@@ -15,15 +15,15 @@ from autoware_ml.models.detection3d.tests.ptv3_detection_fixtures import (
 EXPECTED_PTV3_INPUT_NAMES = [
     "grid_coord",
     "feat",
-    "serialized_inverse",
     "patch_order",
+    "serialized_inverse",
     "serialized_pooling_0_indices",
     "serialized_pooling_0_indptr",
     "serialized_pooling_0_cluster",
     "serialized_pooling_0_head_indices",
     "serialized_pooling_0_grid_coord",
-    "serialized_pooling_0_serialized_inverse",
     "serialized_pooling_0_patch_order",
+    "serialized_pooling_0_serialized_inverse",
 ]
 
 

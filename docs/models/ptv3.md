@@ -141,8 +141,8 @@ and `O` is the number of serialization orders.
 | -------------------- | ----------- | ----------------------------------------------------------------------- |
 | `grid_coord`         | `[N_0, 3]`  | Integer voxel coordinates.                                              |
 | `feat`               | `[N_0, 4]`  | Per-voxel input features.                                               |
-| `serialized_inverse` | `[O, N_0]`  | Inverse of the serialization order per curve (argsort of the codes).    |
 | `patch_order`        | `[O, P_0]`  | The order padded to whole attention windows (see below).                |
+| `serialized_inverse` | `[O, N_0]`  | Inverse of the serialization order per curve (argsort of the codes).    |
 
 `P_k = ceil(N_k / patch_size_k) * patch_size_k` is the padded slot count of level `k`.
 The graph does not sort: preprocessing computes the input level's order anyway
@@ -174,8 +174,8 @@ output voxel count `M_i`, preprocessing also provides:
 | `serialized_pooling_i_cluster`            | `[N_i]`        | Input voxel to pooled voxel id mapping for unpooling.                       |
 | `serialized_pooling_i_head_indices`       | `[M_i]`        | Representative input voxel for each pooled voxel.                           |
 | `serialized_pooling_i_grid_coord`         | `[M_i, 3]`     | Integer coordinates of pooled voxels.                                       |
-| `serialized_pooling_i_serialized_inverse` | `[O, M_i]`     | Inverse serialization order for pooled voxels.                              |
 | `serialized_pooling_i_patch_order`        | `[O, P_{i+1}]` | The pooled level's (level `i + 1`) order padded to whole attention windows. |
+| `serialized_pooling_i_serialized_inverse` | `[O, M_i]`     | Inverse serialization order for pooled voxels.                              |
 
 Because preprocessing resolves every pooling shape ahead of time, the exported
 graph contains no data-dependent pooling shape discovery. Pooled feature
@@ -211,10 +211,10 @@ The split export produces one graph per `deploy.onnx.modules` entry:
   and outputs `pred_labels`/`pred_probs`. For every decoder stage `i` with
   attention blocks (`dec_depths[i] > 0`) the graph additionally consumes that
   stage's serialization metadata, under the same names as the encoder
-  inputs: `serialized_pooling_{i-1}_serialized_inverse`,
-  `serialized_pooling_{i-1}_grid_coord` and `serialized_pooling_{i-1}_patch_order`
-  (stage 0 instead takes the base `serialized_inverse`, `patch_order` and
-  `grid_coord`). The rule is implemented once in
+  inputs: `serialized_pooling_{i-1}_patch_order`,
+  `serialized_pooling_{i-1}_serialized_inverse` and
+  `serialized_pooling_{i-1}_grid_coord` (stage 0 instead takes the base
+  `patch_order`, `serialized_inverse` and `grid_coord`). The rule is implemented once in
   `seg_head_export_input_names` and must be mirrored by deployment consumers
   from the artifact's `dec_depths`.
 - `det3d_head` - consumes `point_feat_{S-2}`, `point_feat_{S-1}`,

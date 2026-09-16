@@ -113,8 +113,8 @@ class SerializedPoolingMeta:
     head_indices: torch.Tensor  # [M] representative input voxel per pooled voxel
     grid_coord: torch.Tensor  # [M, 3] integer voxel coordinates of pooled voxels
     serialized_order: torch.Tensor  # [O, M] space-filling-curve order of pooled voxels, per curve
-    serialized_inverse: torch.Tensor  # [O, M] inverse of `serialized_order`
     patch_order: torch.Tensor  # [O, padded M] `serialized_order` padded to whole attention windows
+    serialized_inverse: torch.Tensor  # [O, M] inverse of `serialized_order`
 
 
 def padded_patch_count(count: int, patch_size: int) -> int:
@@ -276,8 +276,8 @@ def build_serialized_pooling_meta(
             head_indices=head_indices,
             grid_coord=next_grid_coord,
             serialized_order=next_serialized_order,
-            serialized_inverse=next_serialized_inverse,
             patch_order=build_patch_order(next_serialized_order, patch_size),
+            serialized_inverse=next_serialized_inverse,
         ),
         next_serialized_code,
     )
@@ -1388,8 +1388,8 @@ class PointTransformerV3Encoder(PointModule):
         """
         point = Point(data_dict)
         point["serialized_depth"] = data_dict["serialized_depth"]
-        point["serialized_inverse"] = data_dict["serialized_inverse"]
         point["patch_order"] = data_dict["patch_order"]
+        point["serialized_inverse"] = data_dict["serialized_inverse"]
         # The bare order and the codes are not graph inputs (patch_order carries the order
         # in its first entries; nothing in export mode reads the codes), but a caller that
         # has them may pass them through.

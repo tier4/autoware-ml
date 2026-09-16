@@ -282,15 +282,15 @@ def test_ptv3_monolithic_export_contract_still_lists_every_tensor() -> None:
     assert spec.input_param_names == [
         "grid_coord",
         "feat",
-        "serialized_inverse",
         "patch_order",
+        "serialized_inverse",
         "serialized_pooling_0_indices",
         "serialized_pooling_0_indptr",
         "serialized_pooling_0_cluster",
         "serialized_pooling_0_head_indices",
         "serialized_pooling_0_grid_coord",
-        "serialized_pooling_0_serialized_inverse",
         "serialized_pooling_0_patch_order",
+        "serialized_pooling_0_serialized_inverse",
     ]
 
 
@@ -353,7 +353,7 @@ def test_litept_encoder_contract_matches_ptv3_field_for_field() -> None:
     assert litept.input_param_names[:4] == [
         "grid_coord",
         "feat",
-        "serialized_inverse",
         "patch_order",
+        "serialized_inverse",
     ]
     assert stage_fields(litept.input_param_names) == stage_fields(ptv3.input_param_names)
