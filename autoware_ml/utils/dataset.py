@@ -1,22 +1,22 @@
 import numpy as np
-import numpy.typing as npt
+from jaxtyping import Float32, Float64
 from pyquaternion import Quaternion
 
 
 def convert_quaternion_to_matrix(
     rotation_quaternion: Quaternion,
-    translation: npt.NDArray[np.float64] | None = None,
+    translation: Float64[np.ndarray, " 3"] | None = None,
     convert_to_float32: bool = False,
-) -> npt.NDArray[np.float32] | npt.NDArray[np.float64]:  # (4, 4)
+) -> Float32[np.ndarray, "4 4"] | Float64[np.ndarray, "4 4"]:
     """
     Convert a translation and quaternion to a 4x4 transformation matrix.
 
     Args:
         rotation: Quaternion to represent the rotation.
-        translation (3x1 or None): Translation to represent the translation.
+        translation: Translation to represent the translation, or None.
         convert_to_float32: Whether to convert the result to float32.
     Returns:
-        npt.NDArray[np.float32] | npt.NDArray[np.float64]: 4x4 transformation matrix.
+        Float32[np.ndarray, "4 4"] | Float64[np.ndarray, "4 4"]: 4x4 transformation matrix.
     """
 
     assert isinstance(rotation_quaternion, Quaternion), (
