@@ -34,7 +34,6 @@ from autoware_ml.utils.cli.helpers import (
     complete_path_value,
     complete_session_command_value,
     complete_session_name_value,
-    parse_extra_args,
     run_lazy_script,
 )
 
@@ -536,51 +535,6 @@ def mlflow_export(
         config_name=config_name,
         export_dir=export_dir,
         override=override,
-    )
-
-
-@app.command(
-    name="create-dataset",
-    cls=OptionFirstTyperCommand,
-    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-)
-def create_dataset(
-    ctx: typer.Context,
-    dataset: Annotated[
-        str,
-        typer.Option("--dataset", help="Dataset name (e.g., nuscenes, nuscenes_mini)"),
-    ],
-    task: Annotated[list[str], typer.Option("--task", help="Task name (can be repeated)")],
-    root_path: Annotated[
-        str,
-        typer.Option(
-            "--root-path",
-            help="Root path of the dataset",
-            autocompletion=complete_directory_path,
-        ),
-    ],
-    out_dir: Annotated[
-        str,
-        typer.Option(
-            "--out-dir",
-            help="Output directory for info files",
-            autocompletion=complete_directory_path,
-        ),
-    ],
-) -> None:
-    """Generate dataset info files with specified tasks.
-
-    Requires dataset name and at least one task.
-    """
-
-    run_lazy_script(
-        "autoware_ml.scripts.create_dataset",
-        "main",
-        dataset=dataset,
-        tasks=task,
-        root_path=root_path,
-        out_dir=out_dir,
-        **parse_extra_args(ctx.args),
     )
 
 

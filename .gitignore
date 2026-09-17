@@ -43,6 +43,7 @@ wheels/
 .installed.cfg
 *.egg
 MANIFEST
+external/
 
 # Extra tooling
 .ansible/
