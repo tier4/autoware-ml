@@ -63,12 +63,6 @@ living_speeds:
   pedestrian.personal_mobility: 6.0
   pedestrian.stroller: 3.0
   animal: 4.0
-partial_detection_classes:
-  [motorcycle, bicycle, pedestrian.common, pedestrian.personal_mobility, pedestrian.stroller,
-   traffic_cone]
-heatmap_pooling_classes:
-  [car.common, car.emergency, car.special, truck.common, truck.emergency, truck.trailer,
-   truck.construction, bus, train]
 class_names:
   - car.common
   - car.emergency

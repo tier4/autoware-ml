@@ -30,8 +30,6 @@ collision_kinds:
 living_speeds:
   pedestrian: 3.0
   bicycle: 6.0
-partial_detection_classes: [bicycle, pedestrian, traffic_cone]
-heatmap_pooling_classes: [car, truck, bus]
 class_names:
   - car
   - truck

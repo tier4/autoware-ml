@@ -328,8 +328,6 @@ class DetectionTaxonomy(LabelTaxonomy):
         eval_range: Mapping[str, float],
         collision_kinds: Mapping[str, str],
         living_speeds: Mapping[str, float],
-        partial_detection_classes: Sequence[str],
-        heatmap_pooling_classes: Sequence[str],
     ) -> None:
         """
         Initialize the detection taxonomy.
@@ -343,56 +341,9 @@ class DetectionTaxonomy(LabelTaxonomy):
           eval_range: Range in meters up to which every class is evaluated.
           collision_kinds: Reachable set kind of every class in the collision metrics.
           living_speeds: Run speed in meters per second of every living class.
-          partial_detection_classes: Classes the partial detection score of the joint metrics
-            reports, the small objects where a few correctly segmented points already matter.
-          heatmap_pooling_classes: Classes whose dense heatmap the detection heads pool before
-            the proposal selection, the vehicles large enough to raise several peaks.
         """
 
         super().__init__(vocabulary, class_names, coarsening, ignore_index, class_groups)
-        unknown_partial = sorted(set(partial_detection_classes) - set(class_names))
-        if unknown_partial or not len(partial_detection_classes):
-            raise ValueError(
-                "partial_detection_classes must name at least one class of the level, unknown "
-                f"{unknown_partial}."
-            )
-        self._validate_class_table(eval_range, class_names, "eval_range")
-        self._validate_class_table(collision_kinds, class_names, "collision_kinds")
-        unknown_kinds = sorted(set(collision_kinds.values()) - set(AgentKind))
-        if unknown_kinds:
-            raise ValueError(
-                f"Unknown collision kinds {unknown_kinds}, valid kinds are "
-                f"{[kind.value for kind in AgentKind]}."
-            )
-        living_classes = {
-            name for name, kind in collision_kinds.items() if kind == AgentKind.LIVING
-        }
-        if set(living_speeds) != living_classes:
-            raise ValueError(
-                "living_speeds must list exactly the living classes, missing "
-                f"{sorted(living_classes - set(living_speeds))}, unknown "
-                f"{sorted(set(living_speeds) - living_classes)}."
-            )
-        self._eval_range = {name: float(value) for name, value in eval_range.items()}
-        self._collision_kinds = {name: AgentKind(kind) for name, kind in collision_kinds.items()}
-        self._living_speeds = {name: float(speed) for name, speed in living_speeds.items()}
-        self._partial_detection_classes = tuple(partial_detection_classes)
-        unknown_pooling = sorted(set(heatmap_pooling_classes) - set(class_names))
-        if unknown_pooling:
-            raise ValueError(
-                f"heatmap_pooling_classes must name classes of the level, unknown {unknown_pooling}."
-            )
-        self._heatmap_pooling_classes = tuple(heatmap_pooling_classes)
-
-    @property
-    def partial_detection_classes(self) -> tuple[str, ...]:
-        """Classes the partial detection score of the joint metrics reports."""
-        return self._partial_detection_classes
-
-    @property
-    def heatmap_pooling_classes(self) -> tuple[str, ...]:
-        """Classes whose dense heatmap the detection heads pool before the proposal selection."""
-        return self._heatmap_pooling_classes
 
     @property
     def eval_range(self) -> Mapping[str, float]:
