@@ -33,7 +33,8 @@ class ImageGTBatchTestCase(unittest.TestCase):
     def make_images(self, num_cameras: int, fill: float, with_depth: bool = False) -> BaseImages:
         """
         Build a BaseImages sample whose per-camera tensors all carry ``fill`` so a test can tell
-        which sample a collated slice came from.
+        which sample a collated slice came from. ``lidar2cams`` carries ``fill + 0.5`` so it can
+        be told apart from ``lidar2images``.
         """
         image_shape = (num_cameras, self.NUM_CHANNELS, self.HEIGHT, self.WIDTH)
         depth_shape = (num_cameras, 1, self.HEIGHT, self.WIDTH)
@@ -53,11 +54,28 @@ class ImageGTBatchTestCase(unittest.TestCase):
             * fill,
         )
 
+    def collate(self, samples: list[BaseImages]) -> ImageGTBatch:
+        """
+        Collate the given samples into a batch.
+
+        The samples are never empty here, so the None branch of ``collate_gt_samples`` is
+        asserted away to narrow the return type for the callers.
+        """
+        batch = ImageGTBatch.collate_gt_samples(samples)
+        assert batch is not None
+        return batch
+
 
 class TestImageGTBatchFields(ImageGTBatchTestCase):
     """The named tuple contract of ImageGTBatch."""
 
     def test_field_order(self) -> None:
+        """
+        Input: the class itself.
+        Expected: the tuple exposes its six fields in the documented order, since downstream
+        code unpacks the batch positionally.
+        Check: compare ``_fields`` against the expected names.
+        """
         self.assertEqual(
             ImageGTBatch._fields,
             (
@@ -71,24 +89,40 @@ class TestImageGTBatchFields(ImageGTBatchTestCase):
         )
 
     def test_is_immutable(self) -> None:
-        batch = ImageGTBatch.collate_gt_samples(self.samples)
+        """
+        Input: a batch collated from the fixture samples.
+        Expected: named tuple fields cannot be reassigned after construction.
+        Check: assigning to ``images`` raises AttributeError.
+        """
+        batch = self.collate(self.samples)
 
         with self.assertRaises(AttributeError):
-            batch.images = torch.zeros(1)  # type: ignore
+            batch.images = torch.zeros(1)
 
 
 class TestImageGTBatchCollate(ImageGTBatchTestCase):
     """ImageGTBatch.collate_gt_samples."""
 
     def test_empty_sequence_returns_none(self) -> None:
+        """
+        Input: an empty sample sequence.
+        Expected: there is nothing to collate, so the result is None instead of an empty batch.
+        Check: the return value is None.
+        """
         self.assertIsNone(ImageGTBatch.collate_gt_samples([]))
 
     def test_stacks_samples_along_batch_dimension(self) -> None:
-        batch = ImageGTBatch.collate_gt_samples(self.samples)
+        """
+        Input: the two fixture samples with two cameras each and no depth maps.
+        Expected: every tensor field gains a leading batch dimension of 2 ahead of the camera
+        dimension, slice ``i`` of each field equals sample ``i``'s tensor, and the depth maps
+        stay None.
+        Check: compare the shape of every field, then compare each batch slice against its
+        source sample with ``torch.equal``.
+        """
+        batch = self.collate(self.samples)
 
-        self.assertIsNotNone(batch)
         batch_size, num_cameras = len(self.samples), self.num_cameras
-        assert batch is not None
         self.assertEqual(
             batch.images.shape,
             (batch_size, num_cameras, self.NUM_CHANNELS, self.HEIGHT, self.WIDTH),
@@ -111,16 +145,28 @@ class TestImageGTBatchCollate(ImageGTBatchTestCase):
             self.assertTrue(torch.equal(batch.lidar2cams[index], sample.lidar2cams))
 
     def test_mismatched_camera_counts_raise(self) -> None:
+        """
+        Input: a two-camera sample next to a three-camera sample.
+        Expected: stacking requires an identical camera count per sample, so the collate fails
+        instead of silently producing a ragged batch.
+        Check: ``torch.stack`` raises RuntimeError.
+        """
         samples = [self.make_images(2, fill=1.0), self.make_images(3, fill=2.0)]
 
         with self.assertRaises(RuntimeError):
             ImageGTBatch.collate_gt_samples(samples)
 
     def test_single_sample_adds_batch_dimension(self) -> None:
+        """
+        Input: a single three-camera sample.
+        Expected: a batch of size 1 is still batched, so the images become
+        ``(1, 3, C, H, W)`` and slice 0 of every field equals the sample's tensor.
+        Check: compare the image shape, then compare slice 0 of each field with ``torch.equal``.
+        """
         sample = self.make_images(3, fill=4.0)
 
-        batch = ImageGTBatch.collate_gt_samples([sample])
-        assert batch is not None
+        batch = self.collate([sample])
+
         self.assertEqual(batch.images.shape, (1, 3, self.NUM_CHANNELS, self.HEIGHT, self.WIDTH))
         self.assertTrue(torch.equal(batch.images[0], sample.images))
         self.assertTrue(torch.equal(batch.camera_intrinsics[0], sample.camera_intrinsics))
@@ -131,8 +177,14 @@ class TestImageGTBatchCollate(ImageGTBatchTestCase):
         )
 
     def test_stacks_depth_maps_when_every_sample_carries_them(self) -> None:
-        batch = ImageGTBatch.collate_gt_samples(self.samples_with_depth)
-        assert batch is not None
+        """
+        Input: the two fixture samples that both carry depth maps filled with 1.0 and 2.0.
+        Expected: the depth maps are stacked to ``(2, num_cameras, 1, H, W)`` with each batch
+        slice holding its sample's fill value.
+        Check: compare the shape and assert every element of each slice equals its fill.
+        """
+        batch = self.collate(self.samples_with_depth)
+
         assert batch.depth_maps is not None
         self.assertEqual(
             batch.depth_maps.shape,
@@ -142,14 +194,24 @@ class TestImageGTBatchCollate(ImageGTBatchTestCase):
         self.assertTrue(torch.all(batch.depth_maps[1] == 2.0))
 
     def test_mixed_depth_maps_raise(self) -> None:
+        """
+        Input: one sample with depth maps and one without.
+        Expected: a batch must carry depth for all samples or none, so the mix is rejected.
+        Check: a ValueError reporting "1 out of 2 samples with depth" is raised.
+        """
         samples = [self.samples_with_depth[0], self.samples[1]]
 
         with self.assertRaisesRegex(ValueError, "1 out of 2 samples with depth"):
             ImageGTBatch.collate_gt_samples(samples)
 
     def test_output_dtypes(self) -> None:
-        batch = ImageGTBatch.collate_gt_samples(self.samples_with_depth)
-        assert batch is not None
+        """
+        Input: the fixture samples with depth maps, so every field is a tensor.
+        Expected: every collated field keeps the float32 dtype of its source.
+        Check: iterate the tuple and read each field's dtype.
+        """
+        batch = self.collate(self.samples_with_depth)
+
         for tensor in batch:
             assert tensor is not None
             self.assertEqual(tensor.dtype, torch.float32)
@@ -161,32 +223,47 @@ class TestImageGTBatchToDevice(ImageGTBatchTestCase):
     def setUp(self) -> None:
         """Collate the fixture samples once, with and without depth maps."""
         super().setUp()
-        self.batch_with_depth = ImageGTBatch.collate_gt_samples(self.samples_with_depth)
-        self.batch_without_depth = ImageGTBatch.collate_gt_samples(self.samples)
+        self.batch_with_depth = self.collate(self.samples_with_depth)
+        self.batch_without_depth = self.collate(self.samples)
 
     def test_returns_new_batch_with_equal_tensors(self) -> None:
-        moved = self.batch_with_depth.to_device(self.device)  # type: ignore
+        """
+        Input: the fixture batch with depth maps, moved to the CPU it already lives on.
+        Expected: a new ImageGTBatch is returned rather than the same object, and every field
+        holds the same values.
+        Check: assert the identity differs and compare every field pair with ``torch.equal``.
+        """
+        moved = self.batch_with_depth.to_device(self.device)
 
         self.assertIsInstance(moved, ImageGTBatch)
         self.assertIsNot(moved, self.batch_with_depth)
-        assert self.batch_with_depth is not None
         for original, result in zip(self.batch_with_depth, moved):
-            self.assertTrue(torch.equal(original, result))  # type: ignore
+            assert original is not None and result is not None
+            self.assertTrue(torch.equal(original, result))
 
     def test_preserves_none_depth_maps(self) -> None:
-        moved = self.batch_without_depth.to_device(self.device)  # type: ignore
+        """
+        Input: the fixture batch without depth maps.
+        Expected: a None depth field is passed through instead of being moved like a tensor.
+        Check: the moved batch's depth maps are None.
+        """
+        moved = self.batch_without_depth.to_device(self.device)
 
         self.assertIsNone(moved.depth_maps)
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required to move tensors to GPU")
     def test_moves_every_tensor_to_cuda(self) -> None:
-        moved = self.batch_with_depth.to_device(torch.device("cuda"))  # type: ignore
+        """
+        Input: the fixture batch with depth maps, moved to CUDA.
+        Expected: every field of the result lives on CUDA while the original stays on CPU,
+        since named tuples are immutable and the move must not alias.
+        Check: read ``device.type`` of every field on both batches.
+        """
+        moved = self.batch_with_depth.to_device(torch.device("cuda"))
 
         for tensor in moved:
             assert tensor is not None
             self.assertEqual(tensor.device.type, "cuda")
-
-        assert self.batch_with_depth is not None
         for tensor in self.batch_with_depth:
             assert tensor is not None
             self.assertEqual(tensor.device.type, "cpu")
@@ -207,7 +284,7 @@ class ImageSampleTestCase(unittest.TestCase):
             distortion_model="plumb_bob",
             distortion_coefficients=torch.tensor([0.1, -0.2, 0.0, 0.0, 0.05], dtype=torch.float32),
         )
-        self.sample = ImageSample(**self.fields)  # type: ignore
+        self.sample = ImageSample(**self.fields)
 
     def make_sample(self, **overrides) -> ImageSample:
         """Build an ImageSample from the fixture fields with some of them overridden."""
@@ -218,6 +295,12 @@ class TestImageSample(ImageSampleTestCase):
     """The named tuple contract of ImageSample."""
 
     def test_field_order(self) -> None:
+        """
+        Input: the class itself.
+        Expected: the tuple exposes its eight fields in the documented order, matching the
+        dataset record layout.
+        Check: compare ``_fields`` against the expected names.
+        """
         self.assertEqual(
             ImageSample._fields,
             (
@@ -233,6 +316,12 @@ class TestImageSample(ImageSampleTestCase):
         )
 
     def test_holds_given_fields(self) -> None:
+        """
+        Input: the fixture sample with a plumb_bob camera and five distortion coefficients.
+        Expected: every field is stored as given, without conversion.
+        Check: read each scalar back, compare matrix shapes, and compare the doubled identity
+        ``lidar2image`` with ``torch.equal``.
+        """
         self.assertEqual(self.sample.image_path, "/data/camera0/000001.jpg")
         self.assertEqual(self.sample.camera_name, "camera0")
         self.assertEqual(self.sample.timestamp, 1700000000.25)
@@ -243,6 +332,12 @@ class TestImageSample(ImageSampleTestCase):
         self.assertEqual(self.sample.distortion_coefficients.shape, (5,))
 
     def test_accepts_empty_distortion_coefficients(self) -> None:
+        """
+        Input: the fixture fields with an empty distortion model and a zero-length coefficient
+        tensor, as a pre-undistorted image is recorded.
+        Expected: the sample accepts the empty values without complaint.
+        Check: the model string is empty and the coefficient tensor has zero elements.
+        """
         sample = self.make_sample(
             distortion_model="", distortion_coefficients=torch.empty(0, dtype=torch.float32)
         )
@@ -251,10 +346,21 @@ class TestImageSample(ImageSampleTestCase):
         self.assertEqual(sample.distortion_coefficients.numel(), 0)
 
     def test_is_immutable(self) -> None:
+        """
+        Input: the fixture sample.
+        Expected: named tuple fields cannot be reassigned after construction.
+        Check: assigning to ``camera_name`` raises AttributeError.
+        """
         with self.assertRaises(AttributeError):
-            self.sample.camera_name = "camera1"  # type: ignore
+            self.sample.camera_name = "camera1"
 
     def test_asdict_round_trip(self) -> None:
+        """
+        Input: the fixture sample.
+        Expected: ``_asdict`` yields keyword arguments that rebuild an equivalent sample, with
+        tensor fields shared rather than copied.
+        Check: compare the scalar fields for equality and the tensor fields for identity.
+        """
         rebuilt = ImageSample(**self.sample._asdict())
 
         self.assertEqual(rebuilt.image_path, self.sample.image_path)
