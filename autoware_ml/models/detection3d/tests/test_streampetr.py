@@ -91,17 +91,15 @@ def _stream_state(
     }
 
 
-def test_streampetr_forward_returns_decoder_outputs_and_last_layer_aliases() -> None:
+def test_streampetr_forward_returns_per_layer_decoder_outputs() -> None:
     model = _build_model()
     img = torch.randn(2, 6, 3, 96, 160)
     intrinsics, lidar2cam = _build_geometry(batch_size=2, num_cams=6)
     outputs = model(img=img, camera_intrinsics=intrinsics, lidar2cam=lidar2cam, **_stream_state(2))
 
-    # 32 learnable queries + 8 propagated from the temporal memory.
+    # 3 decoder layers x (32 learnable queries + 8 propagated from the temporal memory).
     assert outputs["all_cls_scores"].shape == (3, 2, 40, 3)
     assert outputs["all_bbox_preds"].shape == (3, 2, 40, 10)
-    assert outputs["cls_logits"].shape == (2, 40, 3)
-    assert outputs["box_params"].shape == (2, 40, 10)
 
 
 def test_streampetr_loss_and_predict_run_with_denoising_queries() -> None:
@@ -132,52 +130,31 @@ def test_streampetr_loss_and_predict_run_with_denoising_queries() -> None:
 
 
 def test_streampetr_memory_resets_without_stream_continuity() -> None:
-    model = _build_model()
+    """``prev_exists == 0`` drops the carried bank; only the frame's top-k survives."""
+    model = _build_model().eval()
+    head = model.bbox_head
     intrinsics, lidar2cam = _build_geometry(batch_size=1, num_cams=6)
+    topk = head.topk_proposals
 
-    first_img = torch.randn(1, 6, 3, 96, 160)
-    second_img = torch.randn(1, 6, 3, 96, 160)
+    with torch.no_grad():
+        model(
+            img=torch.randn(1, 6, 3, 96, 160),
+            camera_intrinsics=intrinsics,
+            lidar2cam=lidar2cam,
+            **_stream_state(1),
+        )
+        assert (head.memory_embedding[:, :topk] != 0).any()
+        model(
+            img=torch.randn(1, 6, 3, 96, 160),
+            camera_intrinsics=intrinsics,
+            lidar2cam=lidar2cam,
+            **_stream_state(1, timestamp=1.0),
+        )
 
-    model(
-        img=first_img,
-        camera_intrinsics=intrinsics,
-        lidar2cam=lidar2cam,
-        **_stream_state(1),
-    )
-    first_memory = model.bbox_head.memory_embedding.clone()
-
-    model(
-        img=second_img,
-        camera_intrinsics=intrinsics,
-        lidar2cam=lidar2cam,
-        **_stream_state(1, timestamp=1.0),
-    )
-    second_memory = model.bbox_head.memory_embedding
-
-    assert first_memory.shape == second_memory.shape
-    assert torch.isfinite(second_memory).all()
-
-
-def test_streampetr_stream_state_uses_feature_device_for_cpu_metadata() -> None:
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    head = _build_model().bbox_head.to(device)
-    expected_device = next(head.parameters()).device
-    ego_pose = torch.eye(4).unsqueeze(0)
-
-    stream_state = head._build_stream_state(
-        device=expected_device,
-        timestamp=torch.ones(1),
-        prev_exists=torch.zeros(1),
-        ego_pose=ego_pose,
-        ego_pose_inv=ego_pose,
-    )
-    head.pre_update_memory(stream_state)
-
-    assert stream_state["prev_exists"].device == expected_device
-    assert stream_state["timestamp"].device == expected_device
-    assert stream_state["ego_pose"].device == expected_device
-    assert stream_state["ego_pose_inv"].device == expected_device
-    assert head.memory_reference_point.device == expected_device
+    # The first frame's proposals were pushed to slots [topk, 2 * topk) and must be gone.
+    assert (head.memory_embedding[:, topk:] == 0).all()
+    assert (head.memory_embedding[:, :topk] != 0).any()
+    assert torch.isfinite(head.memory_embedding).all()
 
 
 def test_streampetr_builds_three_module_runtime_export() -> None:
@@ -204,8 +181,16 @@ def test_streampetr_builds_three_module_runtime_export() -> None:
         head.memory_len + head.topk_proposals,
         head.hidden_dim,
     )
-    assert named["temp_memory"].shape[1] == head.memory_len - head.num_propagated
-    assert named["outs_dec"].shape == (num_layers, 1, num_queries, head.hidden_dim)
+    # The runtime binds exactly these; nothing else leaves the graph.
+    assert specs["pts_head_memory"].output_names == [
+        "all_cls_scores",
+        "all_bbox_preds",
+        "post_memory_embedding",
+        "post_memory_reference_point",
+        "post_memory_timestamp",
+        "post_memory_egopose",
+        "post_memory_velo",
+    ]
 
 
 def test_exported_head_matches_eval_forward_on_a_propagated_frame() -> None:
@@ -312,7 +297,7 @@ def test_loss_keys_and_graph_are_uniform_without_ground_truth() -> None:
 def test_memory_alignment_preserves_meter_motion_under_bf16_autocast() -> None:
     """Kilometer-scale global poses must not lose meter-level ego motion.
 
-    Regression test: the memory alignment matmuls previously ran under
+    Regression test: the memory alignment matrix products previously ran under
     autocast, quantizing global-frame reference points (~6.5e4 m) to 256 m
     bf16 steps and destroying the propagated queries.
     """
@@ -349,7 +334,7 @@ def test_memory_alignment_preserves_meter_motion_under_bf16_autocast() -> None:
     assert torch.allclose(local_point, torch.tensor([-2.5, 0.0, 0.0]), atol=0.05)
 
 
-def test_forward_contains_nan_poisoned_memory_and_keeps_float64_timestamps() -> None:
+def test_forward_sanitizes_nan_poisoned_memory_and_keeps_float64_timestamps() -> None:
     model = _build_model().eval()
     img = torch.randn(1, 6, 3, 96, 160)
     intrinsics, lidar2cam = _build_geometry(batch_size=1, num_cams=6)

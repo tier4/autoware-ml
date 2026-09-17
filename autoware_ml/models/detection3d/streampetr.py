@@ -18,8 +18,8 @@ from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.models.base import BaseModel
 from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
 from autoware_ml.models.detection3d.feature_extractors import MultiviewImageFeatureExtractor
+from autoware_ml.models.detection3d.heads.streampetr import StreamPETRHead, identity_poses
 from autoware_ml.models.detection3d.task_modules.streaming import (
-    inverse_sigmoid,
     pos2posemb3d,
     topk_gather,
     transform_reference_points,
@@ -27,17 +27,9 @@ from autoware_ml.models.detection3d.task_modules.streaming import (
 from autoware_ml.utils.deploy import ExportSpec
 
 
-class _StreamPETRImageFeatureExportWrapper(nn.Module):
-    """Export the multiview image feature extractor."""
-
-    def __init__(self, model: StreamPETRDetectionModel) -> None:
-        """Initialize the image feature export wrapper."""
-        super().__init__()
-        self.model = model
-
-    def forward(self, img: torch.Tensor) -> torch.Tensor:
-        """Encode multiview images into stride-16 neck features."""
-        return self.model.image_feature_extractor(img)
+def _stack(value: torch.Tensor | Sequence[torch.Tensor]) -> torch.Tensor:
+    """Stack a per-sample sequence into a batch tensor; pass a tensor through."""
+    return value if isinstance(value, torch.Tensor) else torch.stack(list(value), dim=0)
 
 
 class _StreamPETRPositionEmbeddingExportWrapper(nn.Module):
@@ -47,8 +39,7 @@ class _StreamPETRPositionEmbeddingExportWrapper(nn.Module):
     embedding once and cache it for the stream lifetime.
     """
 
-    def __init__(self, head: nn.Module, num_cams: int, feature_hw: tuple[int, int]) -> None:
-        """Initialize the position embedding export wrapper."""
+    def __init__(self, head: StreamPETRHead, num_cams: int, feature_hw: tuple[int, int]) -> None:
         super().__init__()
         self.head = head
         self.num_cams = num_cams
@@ -60,7 +51,11 @@ class _StreamPETRPositionEmbeddingExportWrapper(nn.Module):
         intrinsics: torch.Tensor,
         img2lidar: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Build ``pos_embed`` and ``cone`` from static calibration."""
+        """Build ``pos_embed`` and ``cone`` from static calibration.
+
+        ``img_metas_pad`` is ``[image_height, image_width, channels]`` (reference ABI);
+        the sizes stay tensors so they remain graph inputs.
+        """
         feature_height, feature_width = self.feature_hw
         shape_source = intrinsics.new_zeros((1, self.num_cams, 1, feature_height, feature_width))
         return self.head.position_embedding(
@@ -81,8 +76,7 @@ class _StreamPETRHeadMemoryExportWrapper(nn.Module):
     back as pre-memory and manages timestamps outside the graph.
     """
 
-    def __init__(self, head: nn.Module) -> None:
-        """Initialize the recurrent head export wrapper."""
+    def __init__(self, head: StreamPETRHead) -> None:
         super().__init__()
         self.head = head
 
@@ -124,19 +118,11 @@ class _StreamPETRHeadMemoryExportWrapper(nn.Module):
         reference_points = head.reference_points.weight.unsqueeze(0).repeat(batch_size, 1, 1)
         query_pos = head.query_embedding(pos2posemb3d(reference_points, head.hidden_dim // 2))
         query = torch.zeros_like(query_pos)
-        query_pos_in = query_pos.detach()
         query, query_pos, reference_points, temp_memory, temp_pos = head.temporal_alignment(
             query, query_pos, reference_points
         )
-        tgt = query
-        rec_ego_pose = (
-            torch.eye(4, device=query.device)
-            .unsqueeze(0)
-            .unsqueeze(0)
-            .repeat(batch_size, query.shape[1], 1, 1)
-        )
+        rec_ego_pose = identity_poses(batch_size, query.shape[1], query.device)
 
-        reference = inverse_sigmoid(reference_points.clone())
         outputs_classes = []
         outputs_coords = []
         decoder_outputs = []
@@ -147,24 +133,18 @@ class _StreamPETRHeadMemoryExportWrapper(nn.Module):
             # Predictions and the propagated memory consume the post-normed
             # intermediates, exactly as in the head's training forward.
             normed_query = head.post_norm(query)
-            cls_logits = cls_branch(normed_query)
-            raw_box = reg_branch(normed_query)
-            centers = (raw_box[..., :3] + reference[..., :3]).sigmoid()
-            outputs_classes.append(cls_logits)
-            outputs_coords.append(torch.cat([centers, raw_box[..., 3:]], dim=-1))
+            outputs_classes.append(cls_branch(normed_query))
+            outputs_coords.append(
+                head._decode_box_params(reg_branch(normed_query), reference_points)
+            )
             decoder_outputs.append(normed_query)
         all_cls_scores = torch.stack(outputs_classes)
         all_bbox_preds = torch.stack(outputs_coords)
-        metric_centers = (
-            all_bbox_preds[..., :3] * (head.pc_range[3:6] - head.pc_range[:3]) + head.pc_range[:3]
-        )
-        all_bbox_preds = torch.cat([metric_centers, all_bbox_preds[..., 3:]], dim=-1)
-        outs_dec = torch.stack(decoder_outputs)
 
         rec_reference_points = all_bbox_preds[-1][..., :3]
         rec_velo = all_bbox_preds[-1][..., -2:]
-        rec_memory = outs_dec[-1]
-        rec_score = all_cls_scores[-1].sigmoid().topk(1, dim=-1).values[..., 0:1]
+        rec_memory = decoder_outputs[-1]
+        rec_score = all_cls_scores[-1].sigmoid().amax(dim=-1, keepdim=True)
         rec_timestamp = torch.zeros_like(rec_score)
         _, topk_indexes = torch.topk(rec_score, head.topk_proposals, dim=1)
         rec_timestamp = topk_gather(rec_timestamp, topk_indexes)
@@ -193,13 +173,6 @@ class _StreamPETRHeadMemoryExportWrapper(nn.Module):
             post_memory_timestamp,
             post_memory_egopose,
             post_memory_velo,
-            reference_points,
-            tgt,
-            temp_memory,
-            temp_pos,
-            query_pos,
-            query_pos_in,
-            outs_dec,
         )
 
 
@@ -214,35 +187,22 @@ class StreamPETRDetectionModel(BaseModel):
         self,
         img_backbone: nn.Module,
         img_neck: nn.Module,
-        bbox_head: nn.Module,
+        bbox_head: StreamPETRHead,
         optimizer: Callable[..., Optimizer] | None = None,
         scheduler: Callable[[Optimizer], LRScheduler] | None = None,
         optimizer_group_overrides: Mapping[str, Mapping[str, Any]] | None = None,
         metrics: Sequence[MetricSuite] | None = None,
     ) -> None:
-        """Initialize StreamPETR.
-
-        Args:
-            img_backbone: Image backbone.
-            img_neck: Image neck.
-            bbox_head: Detection head.
-            optimizer: Optimizer factory.
-            scheduler: Scheduler factory.
-            optimizer_group_overrides: Per-submodule optimizer overrides.
-            metrics: Detection metrics accumulated during validation and test.
-        """
         super().__init__(
             optimizer=optimizer,
             scheduler=scheduler,
             optimizer_group_overrides=optimizer_group_overrides,
             metrics=metrics,
         )
-        self.img_backbone = img_backbone
-        self.img_neck = img_neck
-        self.bbox_head = bbox_head
         self.image_feature_extractor = MultiviewImageFeatureExtractor(
             img_backbone=img_backbone, img_neck=img_neck
         )
+        self.bbox_head = bbox_head
 
     def setup(self, stage: str) -> None:
         """Require a streaming datamodule; the memory bank needs lane-contiguous batches."""
@@ -270,118 +230,64 @@ class StreamPETRDetectionModel(BaseModel):
 
     def build_optimizer_groups(self) -> dict[str, list[nn.Parameter]]:
         """Split parameters into the image backbone and the remaining modules."""
-        backbone_params = [p for p in self.img_backbone.parameters() if p.requires_grad]
+        backbone_params = [
+            p for p in self.image_feature_extractor.img_backbone.parameters() if p.requires_grad
+        ]
         backbone_ids = {id(p) for p in backbone_params}
         default_params = [
             p for p in self.parameters() if p.requires_grad and id(p) not in backbone_ids
         ]
         return {"default": default_params, "img_backbone": backbone_params}
 
-    def _extract_img_features(self, img: torch.Tensor | Sequence[torch.Tensor]) -> torch.Tensor:
-        """Encode multiview images into neck features.
-
-        Args:
-            img: Multiview image tensor or per-sample image sequence.
-
-        Returns:
-            Neck feature tensor consumed by the StreamPETR head.
-        """
-        return self.image_feature_extractor(img)
-
     def forward(
         self,
         img: torch.Tensor | Sequence[torch.Tensor],
-        camera_intrinsics: Sequence[torch.Tensor] | torch.Tensor | None = None,
-        lidar2cam: Sequence[torch.Tensor] | torch.Tensor | None = None,
-        lidar2img: Sequence[torch.Tensor] | torch.Tensor | None = None,
-        timestamp: Sequence[torch.Tensor] | torch.Tensor | None = None,
-        prev_exists: Sequence[torch.Tensor] | torch.Tensor | None = None,
-        ego_pose: Sequence[torch.Tensor] | torch.Tensor | None = None,
-        ego_pose_inv: Sequence[torch.Tensor] | torch.Tensor | None = None,
+        camera_intrinsics: torch.Tensor | Sequence[torch.Tensor],
+        lidar2cam: torch.Tensor | Sequence[torch.Tensor],
+        timestamp: torch.Tensor | Sequence[torch.Tensor],
+        prev_exists: torch.Tensor | Sequence[torch.Tensor],
+        ego_pose: torch.Tensor | Sequence[torch.Tensor],
+        ego_pose_inv: torch.Tensor | Sequence[torch.Tensor],
+        lidar2img: torch.Tensor | Sequence[torch.Tensor] | None = None,
         gt_boxes: list[torch.Tensor] | None = None,
         gt_labels: list[torch.Tensor] | None = None,
         **kwargs: Any,
-    ) -> dict[str, torch.Tensor]:
+    ) -> dict[str, Any]:
         """Run the camera backbone and StreamPETR head.
 
-        Args:
-            img: Multiview image tensor or per-sample image sequence.
-            camera_intrinsics: Optional camera intrinsic matrices.
-            lidar2cam: Optional lidar-to-camera extrinsics.
-            lidar2img: Optional lidar-to-image projection matrices.
-            timestamp: Optional per-sample frame timestamps.
-            prev_exists: Optional stream-continuity mask for temporal memory.
-            ego_pose: Optional ego-pose matrices for the current frame.
-            ego_pose_inv: Optional inverse ego-pose matrices.
-            gt_boxes: Optional per-sample ground-truth boxes for denoising queries.
-            gt_labels: Optional per-sample ground-truth labels for denoising queries.
-            **kwargs: Additional unused keyword arguments.
-
-        Returns:
-            Detection head outputs.
+        Batch metadata arrives either stacked or as per-sample sequences from the
+        collator; ``gt_boxes`` / ``gt_labels`` feed the denoising queries in training.
         """
         del kwargs
-        image_batch = (
-            torch.stack(list(img), dim=0).float() if isinstance(img, (list, tuple)) else img.float()
-        )
-        img_features = self._extract_img_features(image_batch)
+        image_batch = _stack(img).float()
+        img_features = self.image_feature_extractor(image_batch)
         return self.bbox_head(
             img_features=img_features,
-            img=image_batch,
-            camera_intrinsics=self._stack_optional_tensor(camera_intrinsics),
-            lidar2cam=self._stack_optional_tensor(lidar2cam),
-            lidar2img=self._stack_optional_tensor(lidar2img),
-            timestamp=self._stack_optional_tensor(timestamp),
-            prev_exists=self._stack_optional_tensor(prev_exists),
-            ego_pose=self._stack_optional_tensor(ego_pose),
-            ego_pose_inv=self._stack_optional_tensor(ego_pose_inv),
+            image_height=int(image_batch.shape[-2]),
+            image_width=int(image_batch.shape[-1]),
+            camera_intrinsics=_stack(camera_intrinsics),
+            lidar2cam=_stack(lidar2cam),
+            timestamp=_stack(timestamp),
+            prev_exists=_stack(prev_exists),
+            ego_pose=_stack(ego_pose),
+            ego_pose_inv=_stack(ego_pose_inv),
+            lidar2img=None if lidar2img is None else _stack(lidar2img),
             gt_boxes=gt_boxes,
             gt_labels=gt_labels,
         )
 
-    def _stack_optional_tensor(
-        self,
-        value: Sequence[torch.Tensor] | torch.Tensor | None,
-    ) -> torch.Tensor | None:
-        """Stack list-backed batch metadata into tensors when present."""
-        if value is None:
-            return None
-        if isinstance(value, torch.Tensor):
-            return value
-        if isinstance(value[0], torch.Tensor):
-            return torch.stack(list(value), dim=0)
-        return torch.as_tensor(value)
-
     def compute_metrics(
         self,
         batch_inputs_dict: dict[str, Any],
-        outputs: dict[str, torch.Tensor],
+        outputs: dict[str, Any],
     ) -> dict[str, torch.Tensor]:
-        """Compute StreamPETR training losses.
-
-        Args:
-            batch_inputs_dict: Full batch dictionary.
-            outputs: Detection head outputs.
-
-        Returns:
-            Loss dictionary produced by the detection head.
-        """
+        """Compute the head's multi-layer detection and denoising losses."""
         return self.bbox_head.loss(
             outputs, batch_inputs_dict["gt_boxes"], batch_inputs_dict["gt_labels"]
         )
 
-    def predict_outputs(
-        self, batch_inputs_dict: dict[str, Any], outputs: dict[str, torch.Tensor]
-    ) -> Any:
-        """Decode predictions for inference.
-
-        Args:
-            batch_inputs_dict: Full batch dictionary.
-            outputs: Detection head outputs.
-
-        Returns:
-            Decoded prediction results.
-        """
+    def predict_outputs(self, batch_inputs_dict: dict[str, Any], outputs: dict[str, Any]) -> Any:
+        """Decode the last decoder layer into per-sample detections."""
         del batch_inputs_dict
         return self.bbox_head.predict(outputs)
 
@@ -444,7 +350,7 @@ class StreamPETRDetectionModel(BaseModel):
 
         return {
             "extract_img_feat": ExportSpec(
-                module=_StreamPETRImageFeatureExportWrapper(export_model),
+                module=export_model.image_feature_extractor,
                 args=(img,),
                 input_param_names=["img"],
                 output_names=["img_feats"],
@@ -478,13 +384,6 @@ class StreamPETRDetectionModel(BaseModel):
                     "post_memory_timestamp",
                     "post_memory_egopose",
                     "post_memory_velo",
-                    "reference_points",
-                    "tgt",
-                    "temp_memory",
-                    "temp_pos",
-                    "query_pos",
-                    "query_pos_in",
-                    "outs_dec",
                 ],
             ),
         }

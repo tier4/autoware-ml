@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -31,6 +32,11 @@ from autoware_ml.models.detection3d.task_modules.streaming import (
     topk_gather,
     transform_reference_points,
 )
+
+
+def identity_poses(batch_size: int, count: int, device: torch.device) -> torch.Tensor:
+    """``[batch_size, count, 4, 4]`` identity poses (read-only view of one ``eye``)."""
+    return torch.eye(4, device=device).expand(batch_size, count, 4, 4)
 
 
 class StreamPETRDecoderLayer(nn.Module):
@@ -107,13 +113,19 @@ class StreamPETRDecoderLayer(nn.Module):
 class StreamPETRTargets:
     """Assignment targets for one decoder layer and one batch element."""
 
-    labels: torch.Tensor
-    bbox_targets: torch.Tensor
-    bbox_weights: torch.Tensor
+    labels: torch.Tensor  # [Q] assigned class, -1 for unmatched queries
+    bbox_targets: torch.Tensor  # [Q, 9] matched ground-truth box, zeros where unmatched
 
 
 class StreamPETRHead(nn.Module):
     """Native StreamPETR query head."""
+
+    # The five-tensor temporal memory bank; ``None`` until the first frame.
+    memory_embedding: torch.Tensor | None
+    memory_reference_point: torch.Tensor | None
+    memory_timestamp: torch.Tensor | None
+    memory_egopose: torch.Tensor | None
+    memory_velo: torch.Tensor | None
 
     def __init__(
         self,
@@ -152,7 +164,6 @@ class StreamPETRHead(nn.Module):
         self.num_decoder_layers = num_decoder_layers
         self.hidden_dim = hidden_dim
         self.point_cloud_range = point_cloud_range
-        self.position_range = position_range
         self.assigner = assigner
         self.bbox_coder = bbox_coder
         self.memory_len = memory_len
@@ -225,7 +236,7 @@ class StreamPETRHead(nn.Module):
         )
         self.register_buffer(
             "position_range_tensor",
-            torch.tensor(self.position_range, dtype=torch.float32),
+            torch.tensor(position_range, dtype=torch.float32),
             persistent=False,
         )
         self.register_buffer("coords_d", self._build_depth_bins(), persistent=False)
@@ -250,16 +261,13 @@ class StreamPETRHead(nn.Module):
         return nn.Sequential(*layers)
 
     def _build_depth_bins(self) -> torch.Tensor:
+        index = torch.arange(self.depth_num, dtype=torch.float32)
+        depth_span = self.position_range_tensor[3] - self.depth_start
         if self.LID:
-            index = torch.arange(start=0, end=self.depth_num, step=1).float()
-            index_1 = index + 1
-            bin_size = (self.position_range_tensor[3] - self.depth_start) / (
-                self.depth_num * (1 + self.depth_num)
+            return self.depth_start + depth_span / (self.depth_num * (1 + self.depth_num)) * (
+                index * (index + 1)
             )
-            return self.depth_start + bin_size * index * index_1
-        index = torch.arange(start=0, end=self.depth_num, step=1).float()
-        bin_size = (self.position_range_tensor[3] - self.depth_start) / self.depth_num
-        return self.depth_start + bin_size * index
+        return self.depth_start + depth_span / self.depth_num * index
 
     def _init_pseudo_reference_points(self) -> None:
         if self.num_propagated <= 0:
@@ -271,6 +279,8 @@ class StreamPETRHead(nn.Module):
         centers = (linspace[:-1] + linspace[1:]) / 2
         grid = torch.meshgrid(centers, centers, centers, indexing="ij")
         points = torch.stack(grid, dim=-1).reshape(-1, 3)[: self.num_propagated]
+        # A frozen Parameter rather than a buffer: reference checkpoints store it under
+        # this key in the state dict.
         self.pseudo_reference_points = nn.Parameter(points, requires_grad=False)
 
     def init_weights(self) -> None:
@@ -282,30 +292,26 @@ class StreamPETRHead(nn.Module):
         # Focal-loss prior: start every class at ~1% foreground probability so
         # the first iterations are not dominated by massive negative losses.
         bias_init = -math.log((1.0 - 0.01) / 0.01)
-        for cls_branch in self.cls_branches:
-            nn.init.constant_(cls_branch[-1].bias, bias_init)
+        # cls_branches holds one shared module, so one init covers every layer.
+        nn.init.constant_(self.cls_branches[0][-1].bias, bias_init)
 
     def reset_memory(self) -> None:
         """Reset the temporal memory bank."""
-        self.memory_embedding: torch.Tensor | None = None
-        self.memory_reference_point: torch.Tensor | None = None
-        self.memory_timestamp: torch.Tensor | None = None
-        self.memory_egopose: torch.Tensor | None = None
-        self.memory_velo: torch.Tensor | None = None
+        self.memory_embedding = None
+        self.memory_reference_point = None
+        self.memory_timestamp = None
+        self.memory_egopose = None
+        self.memory_velo = None
 
     def _build_stream_state(
         self,
         device: torch.device,
-        timestamp: torch.Tensor | None,
-        prev_exists: torch.Tensor | None,
-        ego_pose: torch.Tensor | None,
-        ego_pose_inv: torch.Tensor | None,
+        timestamp: torch.Tensor,
+        prev_exists: torch.Tensor,
+        ego_pose: torch.Tensor,
+        ego_pose_inv: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
-        if timestamp is None or prev_exists is None or ego_pose is None or ego_pose_inv is None:
-            raise ValueError(
-                "StreamPETRHead requires timestamp, prev_exists, ego_pose, and ego_pose_inv "
-                "for every frame; check the datamodule collation_map and annotation files."
-            )
+        """Move the per-frame stream metadata onto the feature device in the bank's dtypes."""
         return {
             "timestamp": timestamp.to(device=device, dtype=torch.float64),
             "prev_exists": prev_exists.to(device=device, dtype=torch.float32),
@@ -356,7 +362,7 @@ class StreamPETRHead(nn.Module):
                     self.memory_velo[:, : self.memory_len], prev_exists
                 )
 
-            if self.num_propagated > 0 and self.pseudo_reference_points is not None:
+            if self.pseudo_reference_points is not None:
                 pseudo_reference_points = (
                     self.pseudo_reference_points * (self.pc_range[3:6] - self.pc_range[:3])
                     + self.pc_range[:3]
@@ -376,7 +382,7 @@ class StreamPETRHead(nn.Module):
         all_cls_scores: torch.Tensor,
         all_bbox_preds: torch.Tensor,
         decoder_outputs: torch.Tensor,
-        mask_dict: dict[str, torch.Tensor] | None,
+        mask_dict: dict[str, Any] | None,
     ) -> None:
         """Append the strongest current-frame proposals to the temporal memory.
 
@@ -385,21 +391,12 @@ class StreamPETRHead(nn.Module):
         half precision, so none of this may execute under autocast.
         """
         with torch.autocast(device_type=all_cls_scores.device.type, enabled=False):
-            if mask_dict and mask_dict["pad_size"] > 0:
-                rec_reference_points = all_bbox_preds[-1, :, mask_dict["pad_size"] :, :3].float()
-                rec_velo = all_bbox_preds[-1, :, mask_dict["pad_size"] :, -2:].float()
-                rec_memory = decoder_outputs[-1, :, mask_dict["pad_size"] :, :].float()
-                rec_score = (
-                    all_cls_scores[-1, :, mask_dict["pad_size"] :, :]
-                    .float()
-                    .sigmoid()
-                    .amax(dim=-1, keepdim=True)
-                )
-            else:
-                rec_reference_points = all_bbox_preds[-1, :, :, :3].float()
-                rec_velo = all_bbox_preds[-1, :, :, -2:].float()
-                rec_memory = decoder_outputs[-1].float()
-                rec_score = all_cls_scores[-1].float().sigmoid().amax(dim=-1, keepdim=True)
+            # Denoising queries occupy the first pad_size slots and never enter the bank.
+            start = mask_dict["pad_size"] if mask_dict else 0
+            rec_reference_points = all_bbox_preds[-1, :, start:, :3].float()
+            rec_velo = all_bbox_preds[-1, :, start:, -2:].float()
+            rec_memory = decoder_outputs[-1, :, start:].float()
+            rec_score = all_cls_scores[-1, :, start:].float().sigmoid().amax(dim=-1, keepdim=True)
             rec_timestamp = torch.zeros_like(rec_score, dtype=torch.float64)
 
             topk_proposals = min(self.topk_proposals, rec_score.shape[1])
@@ -449,9 +446,9 @@ class StreamPETRHead(nn.Module):
         self,
         img_features: torch.Tensor,
         camera_intrinsics: torch.Tensor,
-        lidar2cam: torch.Tensor,
-        image_height: int,
-        image_width: int,
+        lidar2cam: torch.Tensor | None,
+        image_height: int | torch.Tensor,
+        image_width: int | torch.Tensor,
         lidar2img: torch.Tensor | None = None,
         img2lidar: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -459,10 +456,13 @@ class StreamPETRHead(nn.Module):
 
         The frustum projection multiplies pixel coordinates by metric depths,
         which exceeds float16 range; the whole geometry path therefore runs in
-        float32 regardless of autocast.
+        float32 regardless of autocast. Only ``img_features``' shape is read.
+        ``image_height`` / ``image_width`` are 0-d tensors on the export path so
+        they stay graph inputs. One of ``lidar2cam``, ``lidar2img`` or
+        ``img2lidar`` must be given.
         """
         with torch.autocast(device_type=img_features.device.type, enabled=False):
-            return self._position_embedding_fp32(
+            return self._position_embedding(
                 img_features,
                 camera_intrinsics,
                 lidar2cam,
@@ -472,17 +472,16 @@ class StreamPETRHead(nn.Module):
                 img2lidar,
             )
 
-    def _position_embedding_fp32(
+    def _position_embedding(
         self,
         img_features: torch.Tensor,
         camera_intrinsics: torch.Tensor,
         lidar2cam: torch.Tensor | None,
-        image_height: int,
-        image_width: int,
-        lidar2img: torch.Tensor | None = None,
-        img2lidar: torch.Tensor | None = None,
+        image_height: int | torch.Tensor,
+        image_width: int | torch.Tensor,
+        lidar2img: torch.Tensor | None,
+        img2lidar: torch.Tensor | None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Float32 body of :meth:`position_embedding`."""
         batch_size, num_cams, _, feature_height, feature_width = img_features.shape
         device = img_features.device
         memory_centers = self._build_memory_centers(
@@ -490,12 +489,16 @@ class StreamPETRHead(nn.Module):
         )
         batch_tokens = batch_size * num_cams
         token_count = num_cams * feature_height * feature_width
-        depth_count = self.coords_d.shape[0]
+        depth_count = self.depth_num
 
         intrinsics = torch.stack(
             [camera_intrinsics[..., 0, 0], camera_intrinsics[..., 1, 1]], dim=-1
         )
         intrinsics = torch.abs(intrinsics) / 1e3
+        # Intentional, not a bug: this tiling is camera-minor while the tokens are
+        # camera-major, so a token's cone carries another camera's focal length. It
+        # reproduces the reference (AWML streampetr_head.py:421) and the checkpoints
+        # trained with it; fixing the order breaks weight compatibility.
         intrinsics = intrinsics.repeat(1, feature_height * feature_width, 1).view(
             batch_size, token_count, 2
         )
@@ -554,12 +557,7 @@ class StreamPETRHead(nn.Module):
         temp_memory = self.memory_embedding
 
         if self.with_ego_pos:
-            identity_ego_pose = (
-                torch.eye(4, device=query.device)
-                .unsqueeze(0)
-                .unsqueeze(0)
-                .repeat(query_pos.size(0), query_pos.size(1), 1, 1)
-            )
+            identity_ego_pose = identity_poses(query_pos.size(0), query_pos.size(1), query.device)
             rec_ego_motion = torch.cat(
                 [
                     torch.zeros_like(reference_points[..., :3]),
@@ -607,7 +605,7 @@ class StreamPETRHead(nn.Module):
         reference_points: torch.Tensor,
         gt_boxes: list[torch.Tensor] | None,
         gt_labels: list[torch.Tensor] | None,
-    ) -> tuple[torch.Tensor, torch.Tensor | None, dict[str, torch.Tensor] | None]:
+    ) -> tuple[torch.Tensor, torch.Tensor | None, dict[str, Any] | None]:
         """Prepare denoising queries following the StreamPETR training recipe."""
         if not self.training or not self.with_dn or gt_boxes is None or gt_labels is None:
             return reference_points.unsqueeze(0).repeat(batch_size, 1, 1), None, None
@@ -634,26 +632,21 @@ class StreamPETRHead(nn.Module):
         known_indices = torch.arange(labels.shape[0], device=reference_points.device).repeat(
             self.scalar
         )
-        known_labels = labels.repeat(self.scalar).long().to(reference_points.device)
+        known_labels = labels.repeat(self.scalar)
         known_batch_idx = batch_idx.repeat(self.scalar)
-        known_boxes = boxes.repeat(self.scalar, 1).to(reference_points.device)
+        known_boxes = boxes.repeat(self.scalar, 1)
         known_bbox_center = known_boxes[:, :3].clone()
-        known_bbox_scale = known_boxes[:, 3:6].clone()
 
         if self.bbox_noise_scale > 0:
-            diff = known_bbox_scale / 2 + self.bbox_noise_trans
+            diff = known_boxes[:, 3:6] / 2 + self.bbox_noise_trans
             rand_prob = torch.rand_like(known_bbox_center) * 2 - 1.0
             known_bbox_center += rand_prob * diff * self.bbox_noise_scale
-            known_bbox_center = (known_bbox_center - self.pc_range[:3]) / (
-                self.pc_range[3:6] - self.pc_range[:3]
-            )
-            known_bbox_center = known_bbox_center.clamp(min=0.0, max=1.0)
             background_mask = torch.norm(rand_prob, dim=1) > self.split
             known_labels[background_mask] = self.num_classes
-        else:
-            known_bbox_center = (known_bbox_center - self.pc_range[:3]) / (
-                self.pc_range[3:6] - self.pc_range[:3]
-            )
+        known_bbox_center = (known_bbox_center - self.pc_range[:3]) / (
+            self.pc_range[3:6] - self.pc_range[:3]
+        )
+        known_bbox_center = known_bbox_center.clamp(min=0.0, max=1.0)
 
         single_pad = int(max(known_num))
         pad_size = int(single_pad * self.scalar)
@@ -672,8 +665,8 @@ class StreamPETRHead(nn.Module):
         map_known_indice = torch.cat(
             [map_known_indice + single_pad * group_index for group_index in range(self.scalar)],
             dim=0,
-        ).long()
-        padded_reference_points[(known_batch_idx.long(), map_known_indice)] = known_bbox_center
+        )
+        padded_reference_points[(known_batch_idx, map_known_indice)] = known_bbox_center
 
         dn_size = pad_size + self.num_queries
         attn_mask = torch.zeros(dn_size, dn_size, dtype=torch.bool, device=reference_points.device)
@@ -698,9 +691,9 @@ class StreamPETRHead(nn.Module):
         attn_mask = temporal_attn_mask
 
         mask_dict = {
-            "known_indices": known_indices.long(),
-            "batch_idx": known_batch_idx.long(),
-            "map_known_indice": map_known_indice.long(),
+            "known_indices": known_indices,
+            "batch_idx": known_batch_idx,
+            "map_known_indice": map_known_indice,
             "known_lbs_bboxes": (known_labels, known_boxes),
             "pad_size": pad_size,
         }
@@ -735,7 +728,6 @@ class StreamPETRHead(nn.Module):
             num_queries = sample_logits.shape[0]
             labels = sample_gt_labels.new_full((num_queries,), -1)
             bbox_targets = sample_boxes.new_zeros((num_queries, 9))
-            bbox_weights = sample_boxes.new_zeros((num_queries, 9))
 
             assigned = self.assigner.assign(
                 bboxes=denormalize_boxes3d(sample_boxes),
@@ -749,12 +741,7 @@ class StreamPETRHead(nn.Module):
                 matched_gt_inds = assigned.gt_inds[pos_inds] - 1
                 labels[pos_inds] = sample_gt_labels[matched_gt_inds]
                 bbox_targets[pos_inds] = sample_gt_boxes[matched_gt_inds]
-                bbox_weights[pos_inds] = 1.0
-            targets.append(
-                StreamPETRTargets(
-                    labels=labels, bbox_targets=bbox_targets, bbox_weights=bbox_weights
-                )
-            )
+            targets.append(StreamPETRTargets(labels=labels, bbox_targets=bbox_targets))
         return targets
 
     def _loss_single(
@@ -784,32 +771,29 @@ class StreamPETRHead(nn.Module):
         # The regression loss runs over every query with 0/1 positive weights so
         # the regression branches join the backward graph on every rank each
         # step; positive-free batches contribute exactly zero.
-        encoded_preds = bbox_preds
         target_encodings = []
         positive_weights = []
         for sample_targets in targets:
-            encoding = encoded_preds.new_zeros((sample_targets.labels.shape[0], 10))
-            pos_mask = sample_targets.bbox_weights.sum(dim=1) > 0
+            encoding = bbox_preds.new_zeros((sample_targets.labels.shape[0], 10))
+            pos_mask = sample_targets.labels >= 0
             encoding[pos_mask] = normalize_boxes3d(sample_targets.bbox_targets[pos_mask])
             target_encodings.append(encoding)
             positive_weights.append(pos_mask.to(encoding.dtype))
         target_tensor = torch.stack(target_encodings, dim=0)
         weight_tensor = torch.stack(positive_weights, dim=0).unsqueeze(-1)
-        per_box = self.loss_bbox(encoded_preds[..., :10], target_tensor) * self.code_weights
+        per_box = self.loss_bbox(bbox_preds, target_tensor) * self.code_weights
         bbox_loss = self.loss_bbox_weight * (per_box * weight_tensor).sum() / max(total_pos, 1)
         return loss_cls, bbox_loss
 
     def prepare_for_loss(
-        self,
-        mask_dict: dict[str, torch.Tensor],
+        self, mask_dict: dict[str, Any]
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, int]:
         """Gather denoising outputs aligned with the replicated GT targets."""
         output_known_class, output_known_coord = mask_dict["output_known_lbs_bboxes"]
         known_labels, known_bboxs = mask_dict["known_lbs_bboxes"]
-        map_known_indice = mask_dict["map_known_indice"].long()
-        known_indices = mask_dict["known_indices"].long()
-        batch_idx = mask_dict["batch_idx"].long()
-        batch_selection = batch_idx[known_indices]
+        map_known_indice = mask_dict["map_known_indice"]
+        known_indices = mask_dict["known_indices"]
+        batch_selection = mask_dict["batch_idx"][known_indices]
 
         if output_known_class.numel() > 0:
             output_known_class = output_known_class.permute(1, 2, 0, 3)[
@@ -848,9 +832,7 @@ class StreamPETRHead(nn.Module):
         loss_bbox = (
             self.dn_weight
             * self.loss_bbox_weight
-            * (
-                self.loss_bbox(bbox_preds[:, :10], target_encoding[:, :10]) * self.code_weights
-            ).sum()
+            * (self.loss_bbox(bbox_preds, target_encoding) * self.code_weights).sum()
             / max(num_total_pos, 1)
         )
         return loss_cls, loss_bbox
@@ -858,31 +840,28 @@ class StreamPETRHead(nn.Module):
     def forward(
         self,
         img_features: torch.Tensor,
-        img: torch.Tensor,
-        camera_intrinsics: torch.Tensor | None = None,
-        lidar2cam: torch.Tensor | None = None,
+        image_height: int,
+        image_width: int,
+        camera_intrinsics: torch.Tensor,
+        lidar2cam: torch.Tensor,
+        timestamp: torch.Tensor,
+        prev_exists: torch.Tensor,
+        ego_pose: torch.Tensor,
+        ego_pose_inv: torch.Tensor,
         lidar2img: torch.Tensor | None = None,
-        timestamp: torch.Tensor | None = None,
-        prev_exists: torch.Tensor | None = None,
-        ego_pose: torch.Tensor | None = None,
-        ego_pose_inv: torch.Tensor | None = None,
         gt_boxes: list[torch.Tensor] | None = None,
         gt_labels: list[torch.Tensor] | None = None,
-    ) -> dict[str, torch.Tensor]:
-        """Predict StreamPETR query outputs from multiview image features."""
-        if camera_intrinsics is None or lidar2cam is None:
-            raise ValueError(
-                "StreamPETR requires camera_intrinsics and lidar2cam for geometry-aware decoding."
-            )
+    ) -> dict[str, Any]:
+        """Predict StreamPETR query outputs from multiview image features.
 
-        batch_size = img_features.shape[0]
+        Every frame carries its stream metadata (``timestamp``, ``prev_exists``,
+        ``ego_pose``, ``ego_pose_inv``); the datamodule's collation map provides them.
+        """
         device = img_features.device
         camera_intrinsics = camera_intrinsics.to(device=device, dtype=torch.float32)
         lidar2cam = lidar2cam.to(device=device, dtype=torch.float32)
         if lidar2img is not None:
             lidar2img = lidar2img.to(device=device, dtype=torch.float32)
-        image_height = int(img.shape[-2])
-        image_width = int(img.shape[-1])
 
         stream_state = self._build_stream_state(
             device, timestamp, prev_exists, ego_pose, ego_pose_inv
@@ -915,12 +894,7 @@ class StreamPETRHead(nn.Module):
         query, query_pos, reference_points, temp_memory, temp_pos = self.temporal_alignment(
             query, query_pos, reference_points
         )
-        rec_ego_pose = (
-            torch.eye(4, device=device)
-            .unsqueeze(0)
-            .unsqueeze(0)
-            .repeat(batch_size, query.shape[1], 1, 1)
-        )
+        rec_ego_pose = identity_poses(batch_size, query.shape[1], device)
 
         outputs_classes = []
         outputs_coords = []
@@ -966,13 +940,11 @@ class StreamPETRHead(nn.Module):
             "all_cls_scores": all_cls_scores,
             "all_bbox_preds": all_bbox_preds,
             "dn_mask_dict": mask_dict,
-            "cls_logits": all_cls_scores[-1],
-            "box_params": all_bbox_preds[-1],
         }
 
     def loss(
         self,
-        outputs: dict[str, torch.Tensor],
+        outputs: dict[str, Any],
         gt_boxes: list[torch.Tensor],
         gt_labels: list[torch.Tensor],
     ) -> dict[str, torch.Tensor]:
@@ -1032,7 +1004,7 @@ class StreamPETRHead(nn.Module):
         loss_dict["loss"] = total_loss
         return loss_dict
 
-    def predict(self, outputs: dict[str, torch.Tensor]) -> list[dict[str, torch.Tensor]]:
+    def predict(self, outputs: dict[str, Any]) -> list[dict[str, torch.Tensor]]:
         """Decode final detections from the last decoder layer.
 
         Returns the shared detection prediction contract
@@ -1043,7 +1015,9 @@ class StreamPETRHead(nn.Module):
         re-center the boxes, or the deployed output would silently diverge
         from what the metrics evaluate.
         """
-        predictions = self.bbox_coder.decode(outputs["cls_logits"], outputs["box_params"])
+        predictions = self.bbox_coder.decode(
+            outputs["all_cls_scores"][-1], outputs["all_bbox_preds"][-1]
+        )
         results = []
         for prediction in predictions:
             results.append(
