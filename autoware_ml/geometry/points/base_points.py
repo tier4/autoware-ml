@@ -33,6 +33,7 @@ class BasePoints(ABC):
         points: Float32[Tensor, "num_points num_point_features"],
         point_feature_names: Sequence[PointFeatureName],
         timestamp: float,
+        timestamp_difference_dim: int = -1,
     ) -> None:
         """
         Initialize the BasePoints instance.
@@ -41,13 +42,36 @@ class BasePoints(ABC):
             points: A tensor of shape (num_points, num_point_features) representing the point cloud data.
             point_feature_names: A sequence of PointFeatureName representing the names of the features for each point.
             timestamp: A float representing the timestamp of the point cloud data in seconds.
+            timestamp_difference_dim: Dimension index of the timestamp difference feature, ``-1``
+                when the points carry none. When given, it must point at the feature named
+                ``PointFeatureName.TIMESTAMP_DIFFERENCE``.
+
+        Raises:
+            ValueError: If ``timestamp_difference_dim`` is out of range or does not point at the
+                timestamp difference feature.
         """
+        if timestamp_difference_dim != -1:
+            if not 0 <= timestamp_difference_dim < len(point_feature_names):
+                raise ValueError(
+                    f"timestamp_difference_dim must be -1 or within [0, {len(point_feature_names)}), "
+                    f"got {timestamp_difference_dim}."
+                )
+            if (
+                point_feature_names[timestamp_difference_dim]
+                != PointFeatureName.TIMESTAMP_DIFFERENCE
+            ):
+                raise ValueError(
+                    f"timestamp_difference_dim {timestamp_difference_dim} points at feature "
+                    f"'{point_feature_names[timestamp_difference_dim]}', expected "
+                    f"'{PointFeatureName.TIMESTAMP_DIFFERENCE}'."
+                )
+
         self._points = points
         self._point_feature_names = point_feature_names
         self._timestamp = timestamp
         # Dimension index for the timestamp difference feature, if it exists. -1 indicates
         # that it does not exist.
-        self._timestamp_difference_dim = -1
+        self._timestamp_difference_dim = timestamp_difference_dim
 
     @property
     def timestamp(self) -> float:
@@ -265,12 +289,19 @@ class BasePoints(ABC):
         if not points:
             raise ValueError("The points list must not be empty.")
 
-        # Ensure all point_feature_names are the same
+        # Ensure all point_feature_names and timestamp difference dims are the same
         first_point_feature_names = points[0].point_feature_names
+        first_timestamp_difference_dim = points[0].timestamp_difference_dim
         for point in points:
             if point.point_feature_names != first_point_feature_names:
                 raise ValueError(
                     "All BasePoints instances must have the same point_feature_names for concatenation."
+                )
+            if point.timestamp_difference_dim != first_timestamp_difference_dim:
+                raise ValueError(
+                    "All BasePoints instances must have the same timestamp_difference_dim for "
+                    f"concatenation, got {first_timestamp_difference_dim} and "
+                    f"{point.timestamp_difference_dim}."
                 )
 
         concatenated_points = torch.cat([point.points for point in points], dim=0)
@@ -279,6 +310,7 @@ class BasePoints(ABC):
             concatenated_points,
             first_point_feature_names,
             timestamp=points[0].timestamp,
+            timestamp_difference_dim=first_timestamp_difference_dim,
         )
 
     def to_numpy(self) -> npt.NDArray[np.float32]:
