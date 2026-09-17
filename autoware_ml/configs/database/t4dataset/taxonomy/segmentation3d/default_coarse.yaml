@@ -33,7 +33,7 @@ class_names:
   - manmade
   - vertical_thin
   - noise
-coarsening:
+class_mapping:
   car: car
   emergency_vehicle: car
   forklift: truck

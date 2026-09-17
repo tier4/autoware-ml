@@ -90,7 +90,7 @@ def test_vocabulary_resolves_fine_names_and_rejects_unlisted_raw_names() -> None
 
 
 def test_vocabulary_string_form_is_canonical() -> None:
-    reordered = LabelVocabulary(dict(reversed(list(VOCABULARY.name_mapping.items()))))
+    reordered = LabelVocabulary(dict(reversed(list(VOCABULARY.class_renaming.items()))))
 
     assert str(reordered) == str(VOCABULARY)
     assert reordered == VOCABULARY
@@ -133,7 +133,7 @@ def test_fine_level_trains_every_fine_name() -> None:
 def test_levels_differ_in_their_string_form() -> None:
     assert _coarse() != _fine()
     assert str(_coarse()) == str(_coarse())
-    assert "coarsening=(car: car, emergency_vehicle: car" in str(_coarse())
+    assert "class_mapping=(car: car, emergency_vehicle: car" in str(_coarse())
 
 
 def test_taxonomy_rejects_inconsistent_definitions() -> None:
@@ -184,7 +184,7 @@ def test_a_class_without_fine_labels_is_a_placeholder() -> None:
     )
 
     assert taxonomy.num_classes == 3
-    assert "vertical_thin" not in taxonomy.coarsening.values()
+    assert "vertical_thin" not in taxonomy.class_mapping.values()
 
 
 
@@ -193,9 +193,9 @@ def test_the_mappings_cannot_be_mutated_after_construction() -> None:
     taxonomy = _coarse()
 
     with pytest.raises(TypeError):
-        taxonomy.coarsening["car"] = "truck"
+        taxonomy.class_mapping["car"] = "truck"
     with pytest.raises(TypeError):
-        taxonomy.vocabulary.name_mapping["car"] = "truck"
+        taxonomy.vocabulary.class_renaming["car"] = "truck"
     with pytest.raises(TypeError):
         taxonomy.class_groups["grouped_vehicle"] = ()
 

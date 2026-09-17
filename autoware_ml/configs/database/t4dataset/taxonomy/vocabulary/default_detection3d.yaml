@@ -5,7 +5,7 @@
 _target_: autoware_ml.databases.taxonomy.LabelVocabulary
 _convert_: all
 
-name_mapping:
+class_renaming:
   # cars
   car: car
   vehicle.car: car

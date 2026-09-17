@@ -38,7 +38,7 @@ class_names:
   - pedestrian
   - traffic_cone
   - barrier
-coarsening:
+class_mapping:
   car: car
   truck: truck
   bus: bus

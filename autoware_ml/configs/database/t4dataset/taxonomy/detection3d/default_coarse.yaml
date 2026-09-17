@@ -48,7 +48,7 @@ class_names:
   - barrier
   - traffic_cone
   - debris
-coarsening:
+class_mapping:
   # A trailer attached to a truck is merged into the truck box by the pipelines, a trailer
   # on its own is an obstacle the size of a truck and trains as one. Protruding parts of a
   # vehicle wait for the post process that assigns them to the parent vehicle.

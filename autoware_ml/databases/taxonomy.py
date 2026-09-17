@@ -35,16 +35,16 @@ from autoware_ml.types.metrics import AgentKind
 class LabelVocabulary:
     """Raw label names of a dataset family mapped onto fine label names."""
 
-    def __init__(self, name_mapping: Mapping[str, str | None]) -> None:
+    def __init__(self, class_renaming: Mapping[str, str | None]) -> None:
         """
         Initialize the vocabulary.
 
         Args:
-          name_mapping: Raw label name to fine label name, None for a raw label the corpora
+          class_renaming: Raw label name to fine label name, None for a raw label the corpora
             carry that is outside every level. Every raw label of the corpora needs an entry.
         """
 
-        for raw_name, fine_name in name_mapping.items():
+        for raw_name, fine_name in class_renaming.items():
             if not isinstance(raw_name, str) or not raw_name:
                 raise ValueError(f"Raw label names must be non-empty strings, got {raw_name!r}.")
             if fine_name is not None and (not isinstance(fine_name, str) or not fine_name):
@@ -52,10 +52,10 @@ class LabelVocabulary:
                     f"Fine label names must be non-empty strings or None, got {fine_name!r} "
                     f"for raw label {raw_name!r}."
                 )
-        fine_names = {fine_name for fine_name in name_mapping.values() if fine_name is not None}
+        fine_names = {fine_name for fine_name in class_renaming.values() if fine_name is not None}
         if not fine_names:
             raise ValueError("A label vocabulary requires at least one fine label name.")
-        self._name_mapping = dict(name_mapping)
+        self._class_renaming = dict(class_renaming)
         self._fine_names = tuple(sorted(fine_names))
 
     @property
@@ -64,9 +64,9 @@ class LabelVocabulary:
         return self._fine_names
 
     @property
-    def name_mapping(self) -> Mapping[str, str | None]:
+    def class_renaming(self) -> Mapping[str, str | None]:
         """Raw label name to fine label name, None for a raw label outside every level."""
-        return MappingProxyType(self._name_mapping)
+        return MappingProxyType(self._class_renaming)
 
     def unlisted(self, raw_names: Iterable[str]) -> list[str]:
         """
@@ -79,7 +79,7 @@ class LabelVocabulary:
           list[str]: The unlisted names, sorted.
         """
 
-        return sorted(set(raw_names) - set(self._name_mapping))
+        return sorted(set(raw_names) - set(self._class_renaming))
 
     def fine_name(self, raw_name: str) -> str | None:
         """
@@ -92,17 +92,17 @@ class LabelVocabulary:
           str | None: The fine label name, None for a raw label outside every level.
         """
 
-        if raw_name not in self._name_mapping:
+        if raw_name not in self._class_renaming:
             raise KeyError(
                 f"Raw label name {raw_name!r} is not listed in the vocabulary. List it with "
                 "its fine label name, or with null when it is outside every level."
             )
-        return self._name_mapping[raw_name]
+        return self._class_renaming[raw_name]
 
     def __str__(self) -> str:
         """Canonical string form, the input of the database hash."""
         entries = ", ".join(
-            f"{raw_name}: {fine_name}" for raw_name, fine_name in sorted(self._name_mapping.items())
+            f"{raw_name}: {fine_name}" for raw_name, fine_name in sorted(self._class_renaming.items())
         )
         return f"{self.__class__.__name__}({entries})"
 
@@ -122,7 +122,7 @@ class LabelTaxonomy:
         self,
         vocabulary: LabelVocabulary,
         class_names: Sequence[str],
-        coarsening: Mapping[str, str | None],
+        class_mapping: Mapping[str, str | None],
         ignore_index: int,
         class_groups: Mapping[str, Sequence[str]],
     ) -> None:
@@ -132,7 +132,7 @@ class LabelTaxonomy:
         Args:
           vocabulary: Raw label names mapped onto fine label names.
           class_names: Classes of the level, in index order.
-          coarsening: Fine label name to class name, null for a fine label the level drops.
+          class_mapping: Fine label name to class name, null for a fine label the level drops.
             Every fine name of the vocabulary needs an entry. A class no fine label coarsens
             to is a placeholder the level trains without data.
           ignore_index: Label index of a label outside the classes of the level.
@@ -154,15 +154,15 @@ class LabelTaxonomy:
             )
 
         fine_names = set(vocabulary.fine_names)
-        coarsened_names = set(coarsening)
+        coarsened_names = set(class_mapping)
         if coarsened_names != fine_names:
             raise ValueError(
-                "The coarsening must cover exactly the fine names of the vocabulary, missing "
+                "The class_mapping must cover exactly the fine names of the vocabulary, missing "
                 f"{sorted(fine_names - coarsened_names)}, unknown "
                 f"{sorted(coarsened_names - fine_names)}."
             )
         class_set = set(class_names)
-        for fine_name, class_name in coarsening.items():
+        for fine_name, class_name in class_mapping.items():
             if class_name is not None and class_name not in class_set:
                 raise ValueError(
                     f"Fine label {fine_name!r} coarsens to {class_name!r}, which is not a class "
@@ -177,7 +177,7 @@ class LabelTaxonomy:
 
         self._vocabulary = vocabulary
         self._class_names = tuple(class_names)
-        self._coarsening = dict(coarsening)
+        self._class_mapping = dict(class_mapping)
         self._ignore_index = ignore_index
         self._class_groups = {name: tuple(members) for name, members in class_groups.items()}
         self._class_indices = {name: index for index, name in enumerate(self._class_names)}
@@ -223,9 +223,9 @@ class LabelTaxonomy:
         return self._ignore_index
 
     @property
-    def coarsening(self) -> Mapping[str, str | None]:
+    def class_mapping(self) -> Mapping[str, str | None]:
         """Fine label name to class name, None for a dropped fine label."""
-        return MappingProxyType(self._coarsening)
+        return MappingProxyType(self._class_mapping)
 
     @property
     def class_groups(self) -> Mapping[str, tuple[str, ...]]:
@@ -258,9 +258,9 @@ class LabelTaxonomy:
 
         if fine_name is None:
             return None
-        if fine_name not in self._coarsening:
+        if fine_name not in self._class_mapping:
             raise KeyError(f"{fine_name!r} is not a fine label name of the vocabulary.")
-        return self._coarsening[fine_name]
+        return self._class_mapping[fine_name]
 
     def class_index(self, fine_name: str | None) -> int:
         """
@@ -293,13 +293,13 @@ class LabelTaxonomy:
 
     def __str__(self) -> str:
         """Canonical string form, the input of the database hash."""
-        coarsening = ", ".join(
+        class_mapping = ", ".join(
             f"{fine_name}: {class_name}"
-            for fine_name, class_name in sorted(self._coarsening.items())
+            for fine_name, class_name in sorted(self._class_mapping.items())
         )
         return (
             f"{self.__class__.__name__}(class_names={list(self._class_names)}, "
-            f"ignore_index={self._ignore_index}, coarsening=({coarsening}), "
+            f"ignore_index={self._ignore_index}, class_mapping=({class_mapping}), "
             f"vocabulary={self._vocabulary})"
         )
 
@@ -323,7 +323,7 @@ class DetectionTaxonomy(LabelTaxonomy):
         self,
         vocabulary: LabelVocabulary,
         class_names: Sequence[str],
-        coarsening: Mapping[str, str | None],
+        class_mapping: Mapping[str, str | None],
         ignore_index: int,
         class_groups: Mapping[str, Sequence[str]],
         eval_range: Mapping[str, float],
@@ -336,7 +336,7 @@ class DetectionTaxonomy(LabelTaxonomy):
         Args:
           vocabulary: Raw label names mapped onto fine label names.
           class_names: Classes of the level, in index order.
-          coarsening: Fine label name to class name, null for a dropped fine label.
+          class_mapping: Fine label name to class name, null for a dropped fine label.
           ignore_index: Label index of a label outside the classes of the level.
           class_groups: Behaviour groups the metrics report, group name to its classes.
           eval_range: Range in meters up to which every class is evaluated.
@@ -344,7 +344,7 @@ class DetectionTaxonomy(LabelTaxonomy):
           living_speeds: Run speed in meters per second of every living class.
         """
 
-        super().__init__(vocabulary, class_names, coarsening, ignore_index, class_groups)
+        super().__init__(vocabulary, class_names, class_mapping, ignore_index, class_groups)
         self._validate_class_table(eval_range, class_names, "eval_range")
         self._validate_class_table(collision_kinds, class_names, "collision_kinds")
         unknown_kinds = sorted(set(collision_kinds.values()) - set(AgentKind))

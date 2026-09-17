@@ -4,7 +4,7 @@
 _target_: autoware_ml.databases.taxonomy.LabelVocabulary
 _convert_: all
 
-name_mapping:
+class_renaming:
   noise: noise
   human.pedestrian.adult: pedestrian
   human.pedestrian.child: pedestrian

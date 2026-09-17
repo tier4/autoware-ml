@@ -84,7 +84,7 @@ class_names:
   - traffic_cone
   - debris.unclassified
   - debris.pushable_pullable
-coarsening:
+class_mapping:
   car: car.common
   kart: car.special
   other_vehicle: car.special

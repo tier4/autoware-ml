@@ -33,7 +33,7 @@ class_names:
   - vertical_thin
   - other_stuff
   - noise
-coarsening:
+class_mapping:
   car: car
   truck: truck
   bus: bus

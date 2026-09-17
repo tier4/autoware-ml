@@ -56,7 +56,7 @@ class_names:
   - noise.noise
   - noise.ghost_point
   - ego_vehicle
-coarsening:
+class_mapping:
   car: car.common
   emergency_vehicle: car.emergency
   forklift: truck.construction
