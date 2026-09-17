@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from typing import Mapping, Any
 
 import numpy as np
-import numpy.typing as npt
 import polars as pl
+from jaxtyping import Float32, Float64
 from pydantic import BaseModel, ConfigDict
 
 from autoware_ml.databases.schemas.base_schemas import (
@@ -34,35 +34,35 @@ class LidarSourceDataModel(BaseModel, DataModelInterface):
     Attributes:
       channel_name: Lidar source channel name.
       sensor_token: Lidar source sensor token.
-      translation: Lidar source translation (3, ).
-      rotation: Lidar source rotation (3, 3).
+      translation: Lidar source translation.
+      rotation: Lidar source rotation.
     """
 
     model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
 
     channel_name: str
     sensor_token: str
-    translation: npt.NDArray[np.float64]
-    rotation: npt.NDArray[np.float64]  # (3, 3)
+    translation: Float64[np.ndarray, " 3"]
+    rotation: Float64[np.ndarray, "3 3"]
 
     @property
-    def translation_fp32(self) -> npt.NDArray[np.float32]:
+    def translation_fp32(self) -> Float32[np.ndarray, " 3"]:
         """
         Convert the lidar source translations to float32.
 
         Returns:
-          npt.NDArray[np.float32]: Lidar source translation.
+          Float32[np.ndarray, " 3"]: Lidar source translation.
         """
 
         return self.translation.astype(np.float32)
 
     @property
-    def rotation_fp32(self) -> npt.NDArray[np.float32]:
+    def rotation_fp32(self) -> Float32[np.ndarray, "3 3"]:
         """
         Convert the lidar source rotations to float32.
 
         Returns:
-          npt.NDArray[np.float32]: Lidar source rotation.
+          Float32[np.ndarray, "3 3"]: Lidar source rotation.
         """
 
         return self.rotation.astype(np.float32)

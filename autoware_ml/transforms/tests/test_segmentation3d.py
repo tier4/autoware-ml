@@ -223,13 +223,13 @@ def test_load_seg_annotations_maps_unlisted_labels_to_ignore(tmp_path) -> None:
     assert np.array_equal(output["pts_semantic_mask"], np.array([3, 255, 9, 255], dtype=np.int64))
 
 
-def test_load_seg_annotations_class_mapping_path(tmp_path) -> None:
-    """LoadSegAnnotations3D should resolve labels via class_mapping and per-sample categories."""
+def test_load_seg_annotations_class_indices_path(tmp_path) -> None:
+    """LoadSegAnnotations3D should resolve labels via class_indices and per-sample categories."""
     path = tmp_path / "labels.bin"
     np.array([2, 5, 9], dtype=np.uint8).tofile(path)
 
     output = LoadSegAnnotations3D(
-        class_mapping={"car": 0, "pedestrian": 1},
+        class_indices={"car": 0, "pedestrian": 1},
         ignore_index=255,
     )(
         {

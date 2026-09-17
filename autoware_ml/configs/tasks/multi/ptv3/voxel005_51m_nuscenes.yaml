@@ -17,7 +17,7 @@ head_voxel_size: [0.4, 0.4, 8.0]
 
 num_proposals: 200
 
-segmentation_class_mapping: null
+segmentation_class_indices: null
 
 datamodule:
   _target_: autoware_ml.datamodule.nuscenes.segdet.NuscenesSegmentationDetection3DDataModule

@@ -1,0 +1,84 @@
+# Coarse detection3d taxonomy of T4dataset
+_target_: autoware_ml.databases.taxonomy.DetectionTaxonomy
+
+defaults:
+  - /database/t4dataset/taxonomy/vocabulary@vocabulary: default_detection3d
+  - _self_
+
+ignore_index: -1
+class_groups:
+  grouped_vehicle: [car, truck, bus]
+  grouped_two_wheeler: [motorcycle, bicycle]
+  grouped_living: [pedestrian, animal]
+  grouped_obstacle: [barrier, traffic_cone, debris]
+eval_range:
+  car: 121.0
+  truck: 121.0
+  bus: 121.0
+  motorcycle: 121.0
+  bicycle: 121.0
+  pedestrian: 121.0
+  animal: 121.0
+  barrier: 121.0
+  traffic_cone: 121.0
+  debris: 121.0
+collision_kinds:
+  car: wheeled
+  truck: wheeled
+  bus: wheeled
+  motorcycle: wheeled
+  bicycle: living
+  pedestrian: living
+  animal: living
+  barrier: static
+  traffic_cone: static
+  debris: static
+living_speeds:
+  pedestrian: 3.0
+  animal: 4.0
+  bicycle: 6.0
+class_names:
+  - car
+  - truck
+  - bus
+  - motorcycle
+  - bicycle
+  - pedestrian
+  - animal
+  - barrier
+  - traffic_cone
+  - debris
+class_mapping:
+  # A trailer attached to a truck is merged into the truck box by the pipelines, a trailer
+  # on its own is an obstacle the size of a truck and trains as one. Protruding parts of a
+  # vehicle wait for the post process that assigns them to the parent vehicle.
+  car: car
+  kart: car
+  other_vehicle: car
+  police_car: car
+  ambulance: car
+  emergency_vehicle: car
+  forklift: truck
+  truck: truck
+  fire_truck: truck
+  construction_vehicle: truck
+  trailer: truck
+  bus: bus
+  # A train runs on rails the vehicle never shares, so it is dropped here and stays a class
+  # of the offline taxonomy.
+  train: null
+  motorcycle: motorcycle
+  bicycle: bicycle
+  pedestrian: pedestrian
+  stroller: pedestrian
+  personal_mobility: pedestrian
+  animal: animal
+  barrier: barrier
+  construction_sign: barrier
+  traffic_cone: traffic_cone
+  debris: debris
+  pushable_pullable: debris
+  bicycle_rack: null
+  other_stuff: null
+  open_door: null
+  vehicle_protruding_object: null

@@ -1,0 +1,85 @@
+# Coarse segmentation3d taxonomy of T4dataset
+_target_: autoware_ml.databases.taxonomy.SegmentationTaxonomy
+
+defaults:
+  - /database/t4dataset/taxonomy/vocabulary@vocabulary: default_segmentation3d
+  - _self_
+
+ignore_index: -1
+class_groups:
+  grouped_vehicle: [car, truck, bus]
+  grouped_two_wheeler: [motorcycle, bicycle]
+  grouped_living: [pedestrian, animal]
+  grouped_obstacle: [barrier, traffic_cone, debris]
+  grouped_static_structure: [manmade, vertical_thin, vegetation]
+  grouped_flat_surface: [driveable_flat, non_driveable_flat]
+  grouped_artifact: [noise]
+# The detection classes come first, in the same order, so a detection class and its
+# segmentation class share one index
+class_names:
+  - car
+  - truck
+  - bus
+  - motorcycle
+  - bicycle
+  - pedestrian
+  - animal
+  - barrier
+  - traffic_cone
+  - debris
+  - driveable_flat
+  - non_driveable_flat
+  - vegetation
+  - manmade
+  - vertical_thin
+  - noise
+class_mapping:
+  car: car
+  emergency_vehicle: car
+  forklift: truck
+  other_vehicle: car
+  fire_truck: truck
+  ambulance: car
+  police_car: car
+  kart: car
+  truck: truck
+  construction_vehicle: truck
+  trailer: truck
+  bus: bus
+  train: null
+  motorcycle: motorcycle
+  bicycle: bicycle
+  pedestrian: pedestrian
+  personal_mobility: pedestrian
+  stroller: pedestrian
+  animal: animal
+  barrier: barrier
+  construction_sign: barrier
+  traffic_cone: traffic_cone
+  debris: debris
+  pushable_pullable: debris
+  bicycle_rack: manmade
+  open_door: null
+  vehicle_protruding_object: null
+  solid_stuff: manmade
+  other_stuff: manmade
+  drivable_surface: driveable_flat
+  drainage: driveable_flat
+  sidewalk: non_driveable_flat
+  other_flat_surface: non_driveable_flat
+  # A curb is the step between the two flat surfaces it separates, and the deployed models
+  # only need to know which side of it a point belongs to.
+  high_curb: non_driveable_flat
+  low_curb: driveable_flat
+  vegetation: vegetation
+  building: manmade
+  pole: vertical_thin
+  bollard: vertical_thin
+  traffic_light: vertical_thin
+  traffic_sign: vertical_thin
+  flag: vertical_thin
+  noise: noise
+  ghost_point: noise
+  background: null
+  ego_vehicle: null
+  out_of_sync: null

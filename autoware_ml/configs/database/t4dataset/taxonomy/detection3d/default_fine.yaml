@@ -1,0 +1,115 @@
+# Fine detection3d taxonomy of T4dataset
+_target_: autoware_ml.databases.taxonomy.DetectionTaxonomy
+
+defaults:
+  - /database/t4dataset/taxonomy/vocabulary@vocabulary: default_detection3d
+  - _self_
+
+ignore_index: -1
+class_groups:
+  grouped_vehicle:
+    [car.common, car.emergency, car.special, truck.common, truck.emergency, truck.trailer,
+     truck.construction, bus, train]
+  grouped_two_wheeler: [motorcycle, bicycle]
+  grouped_living: [pedestrian.common, pedestrian.personal_mobility, pedestrian.stroller, animal]
+  grouped_obstacle:
+    [barrier.movable, barrier.construction_sign, traffic_cone, debris.unclassified,
+     debris.pushable_pullable]
+eval_range:
+  car.common: 121.0
+  car.emergency: 121.0
+  car.special: 121.0
+  truck.common: 121.0
+  truck.emergency: 121.0
+  truck.trailer: 121.0
+  truck.construction: 121.0
+  bus: 121.0
+  train: 121.0
+  motorcycle: 121.0
+  bicycle: 121.0
+  pedestrian.common: 121.0
+  pedestrian.personal_mobility: 121.0
+  pedestrian.stroller: 121.0
+  animal: 121.0
+  barrier.movable: 121.0
+  barrier.construction_sign: 121.0
+  traffic_cone: 121.0
+  debris.unclassified: 121.0
+  debris.pushable_pullable: 121.0
+collision_kinds:
+  car.common: wheeled
+  car.emergency: wheeled
+  car.special: wheeled
+  truck.common: wheeled
+  truck.emergency: wheeled
+  truck.trailer: wheeled
+  truck.construction: wheeled
+  bus: wheeled
+  train: wheeled
+  motorcycle: wheeled
+  bicycle: living
+  pedestrian.common: living
+  pedestrian.personal_mobility: living
+  pedestrian.stroller: living
+  animal: living
+  barrier.movable: static
+  barrier.construction_sign: static
+  traffic_cone: static
+  debris.unclassified: static
+  debris.pushable_pullable: static
+living_speeds:
+  bicycle: 6.0
+  pedestrian.common: 3.0
+  pedestrian.personal_mobility: 6.0
+  pedestrian.stroller: 3.0
+  animal: 4.0
+class_names:
+  - car.common
+  - car.emergency
+  - car.special
+  - truck.common
+  - truck.emergency
+  - truck.trailer
+  - truck.construction
+  - bus
+  - train
+  - motorcycle
+  - bicycle
+  - pedestrian.common
+  - pedestrian.personal_mobility
+  - pedestrian.stroller
+  - animal
+  - barrier.movable
+  - barrier.construction_sign
+  - traffic_cone
+  - debris.unclassified
+  - debris.pushable_pullable
+class_mapping:
+  car: car.common
+  kart: car.special
+  other_vehicle: car.special
+  police_car: car.emergency
+  ambulance: car.emergency
+  emergency_vehicle: car.emergency
+  forklift: truck.construction
+  truck: truck.common
+  fire_truck: truck.emergency
+  construction_vehicle: truck.construction
+  trailer: truck.trailer
+  bus: bus
+  train: train
+  motorcycle: motorcycle
+  bicycle: bicycle
+  pedestrian: pedestrian.common
+  stroller: pedestrian.stroller
+  personal_mobility: pedestrian.personal_mobility
+  animal: animal
+  barrier: barrier.movable
+  construction_sign: barrier.construction_sign
+  traffic_cone: traffic_cone
+  debris: debris.unclassified
+  pushable_pullable: debris.pushable_pullable
+  bicycle_rack: null
+  other_stuff: null
+  open_door: null
+  vehicle_protruding_object: null

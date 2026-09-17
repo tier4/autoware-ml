@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from typing import Mapping, Any
 
 import numpy as np
-import numpy.typing as npt
 import polars as pl
+from jaxtyping import Float32, Float64
 from pydantic import BaseModel, ConfigDict
 
 from autoware_ml.databases.schemas.base_schemas import (
@@ -50,8 +50,9 @@ class LidarFrameDataModel(BaseModel, DataModelInterface):
 
     Attributes:
       lidar_frame_id: Lidar frame ID.
-      lidar_keyframe: Whether this lidar frame is a keyframe. Set to True if it's a keyframe,
-        otherwise, it is a sweep frame.
+      lidar_keyframe: Whether the dataset annotates this lidar frame. The first frame of a
+        record is the frame of the sample and the following frames are its sweeps, captured
+        before or after it, which carry the flag too when the dataset annotates every frame.
       lidar_sensor_id: Lidar sensor ID.
       lidar_sensor_channel_name: Lidar sensor channel name.
       lidar_timestamp_seconds: Lidar timestamp in seconds.
@@ -79,11 +80,11 @@ class LidarFrameDataModel(BaseModel, DataModelInterface):
     lidar_pointcloud_path: str
     lidar_pointcloud_source_path: str | None
     lidar_pointcloud_num_features: int
-    lidar_sensor_to_ego_pose_matrix: npt.NDArray[np.float64]  # (4, 4)
+    lidar_sensor_to_ego_pose_matrix: Float64[np.ndarray, "4 4"]
     # Transformation matrix from the ego pose of this lidar frame to the global frame.
-    lidar_frame_ego_pose_to_global_matrix: npt.NDArray[np.float64]  # (4, 4)
+    lidar_frame_ego_pose_to_global_matrix: Float64[np.ndarray, "4 4"]
     # Transformation matrices from the main lidar sensor to other lidar sweeps at this frame.
-    lidar_sensor_to_lidar_sweep_matrix: npt.NDArray[np.float64]  # (4, 4)
+    lidar_sensor_to_lidar_sweep_matrix: Float64[np.ndarray, "4 4"]
     lidar_pointcloud_semantic_mask_path: str | None
 
     @property
@@ -124,34 +125,34 @@ class LidarFrameDataModel(BaseModel, DataModelInterface):
         return "/".join(self.lidar_pointcloud_semantic_mask_path.split("/")[-6:])
 
     @property
-    def lidar_sensor_to_ego_pose_matrix_fp32(self) -> npt.NDArray[np.float32]:
+    def lidar_sensor_to_ego_pose_matrix_fp32(self) -> Float32[np.ndarray, "4 4"]:
         """
         Convert the lidar sensor to ego pose matrix to float32.
 
         Returns:
-          npt.NDArray[np.float32]: Lidar sensor to ego pose matrix.
+          Float32[np.ndarray, "4 4"]: Lidar sensor to ego pose matrix.
         """
 
         return self.lidar_sensor_to_ego_pose_matrix.astype(np.float32)
 
     @property
-    def lidar_frame_ego_pose_to_global_matrix_fp32(self) -> npt.NDArray[np.float32]:
+    def lidar_frame_ego_pose_to_global_matrix_fp32(self) -> Float32[np.ndarray, "4 4"]:
         """
         Convert the lidar frame ego pose to global matrix to float32.
 
         Returns:
-          npt.NDArray[np.float32]: Lidar frame ego pose to global matrix.
+          Float32[np.ndarray, "4 4"]: Lidar frame ego pose to global matrix.
         """
 
         return self.lidar_frame_ego_pose_to_global_matrix.astype(np.float32)
 
     @property
-    def lidar_sensor_to_lidar_sweep_matrix_fp32(self) -> npt.NDArray[np.float32]:
+    def lidar_sensor_to_lidar_sweep_matrix_fp32(self) -> Float32[np.ndarray, "4 4"]:
         """
         Convert the lidar sensor to lidar sweep matrix to float32.
 
         Returns:
-          npt.NDArray[np.float32] | None: Lidar sensor to lidar sweep matrix.
+          Float32[np.ndarray, "4 4"]: Lidar sensor to lidar sweep matrix.
         """
 
         return self.lidar_sensor_to_lidar_sweep_matrix.astype(np.float32)

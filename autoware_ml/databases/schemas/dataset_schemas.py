@@ -129,6 +129,10 @@ class DatasetRecord(BaseModel, DataModelInterface):
       # LiDAR frame data
       lidar_frames: List of lidar frame data models, including multi-sweep lidar frames.
 
+      # Image frame data
+      image_frames: Image frames of the sample, one list per camera channel, the keyframe
+        of the channel first and its sweeps after it.
+
       # Lidar sources data
       lidar_sources: List of lidar source data models.
 
@@ -174,34 +178,29 @@ class DatasetRecord(BaseModel, DataModelInterface):
             lidar_frame.to_dictionary() for lidar_frame in self.lidar_frames
         ]
 
-        if self.lidar_sources:
-            data_model[DatasetTableSchema.LIDAR_SOURCES.name] = [
-                lidar_source.to_dictionary() for lidar_source in self.lidar_sources
-            ]
-        else:
-            data_model[DatasetTableSchema.LIDAR_SOURCES.name] = []
-
-        if self.image_frames:
-            data_model[DatasetTableSchema.IMAGE_FRAMES.name] = [
+        # None marks an absent annotation kind and survives the round trip as a null value,
+        # while an empty list means annotated with zero entries
+        data_model[DatasetTableSchema.IMAGE_FRAMES.name] = (
+            [
                 [image_frame.to_dictionary() for image_frame in image_channel_frames]
                 for image_channel_frames in self.image_frames
             ]
-        else:
-            data_model[DatasetTableSchema.IMAGE_FRAMES.name] = []
-
-        if self.category_mapping:
-            data_model[DatasetTableSchema.CATEGORY_MAPPING.name] = (
-                self.category_mapping.to_dictionary()
-            )
-        else:
-            data_model[DatasetTableSchema.CATEGORY_MAPPING.name] = {}
-
-        if self.boxes_3d is not None:
-            data_model[DatasetTableSchema.BOXES_3D.name] = [
-                box3d.to_dictionary() for box3d in self.boxes_3d
-            ]
-        else:
-            data_model[DatasetTableSchema.BOXES_3D.name] = []
+            if self.image_frames is not None
+            else None
+        )
+        data_model[DatasetTableSchema.LIDAR_SOURCES.name] = (
+            [lidar_source.to_dictionary() for lidar_source in self.lidar_sources]
+            if self.lidar_sources is not None
+            else None
+        )
+        data_model[DatasetTableSchema.CATEGORY_MAPPING.name] = (
+            self.category_mapping.to_dictionary() if self.category_mapping is not None else None
+        )
+        data_model[DatasetTableSchema.BOXES_3D.name] = (
+            [box3d.to_dictionary() for box3d in self.boxes_3d]
+            if self.boxes_3d is not None
+            else None
+        )
 
         return data_model
 
@@ -243,8 +242,12 @@ class DatasetRecord(BaseModel, DataModelInterface):
         else:
             image_frames = None
 
+        # Polars materializes a null struct as a dictionary of null fields, treat both forms
+        # as an absent mapping
         category_mapping = data_model[DatasetTableSchema.CATEGORY_MAPPING.name]
-        if category_mapping is not None:
+        if category_mapping is not None and any(
+            value is not None for value in category_mapping.values()
+        ):
             category_mapping = CategoryMappingDataModel.load_from_dictionary(category_mapping)
         else:
             category_mapping = None

@@ -47,7 +47,7 @@ datamodule:
         load_dim: 5
         use_dim: [0, 1, 2, 3]
       - _target_: autoware_ml.transforms.segmentation3d.loading.LoadSegAnnotations3D
-        class_mapping: ${dataset.segmentation3d.class_mapping}
+        class_indices: ${dataset.segmentation3d.class_indices}
         ignore_index: ${dataset.segmentation3d.ignore_index}
       - _target_: autoware_ml.transforms.point_cloud.geometry.RandomFlip3D
         flip_ratio_bev_horizontal: 0.5
@@ -69,7 +69,7 @@ datamodule:
               load_dim: 5
               use_dim: [0, 1, 2, 3]
             - _target_: autoware_ml.transforms.segmentation3d.loading.LoadSegAnnotations3D
-              class_mapping: ${dataset.segmentation3d.class_mapping}
+              class_indices: ${dataset.segmentation3d.class_indices}
               ignore_index: ${dataset.segmentation3d.ignore_index}
             - _target_: autoware_ml.transforms.point_cloud.geometry.RandomFlip3D
               flip_ratio_bev_horizontal: 0.5
@@ -87,7 +87,7 @@ datamodule:
               load_dim: 5
               use_dim: [0, 1, 2, 3]
             - _target_: autoware_ml.transforms.segmentation3d.loading.LoadSegAnnotations3D
-              class_mapping: ${dataset.segmentation3d.class_mapping}
+              class_indices: ${dataset.segmentation3d.class_indices}
               ignore_index: ${dataset.segmentation3d.ignore_index}
             - _target_: autoware_ml.transforms.point_cloud.geometry.RandomFlip3D
               flip_ratio_bev_horizontal: 0.5
@@ -109,7 +109,7 @@ datamodule:
         load_dim: 5
         use_dim: [0, 1, 2, 3]
       - _target_: autoware_ml.transforms.segmentation3d.loading.LoadSegAnnotations3D
-        class_mapping: ${dataset.segmentation3d.class_mapping}
+        class_indices: ${dataset.segmentation3d.class_indices}
         ignore_index: ${dataset.segmentation3d.ignore_index}
       - _target_: autoware_ml.transforms.segmentation3d.range_view.RangeInterpolation
         height: ${range_height}

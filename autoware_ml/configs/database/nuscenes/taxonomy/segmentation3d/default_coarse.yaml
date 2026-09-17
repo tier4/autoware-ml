@@ -1,0 +1,50 @@
+# Coarse segmentation3d taxonomy of nuScenes
+_target_: autoware_ml.databases.taxonomy.SegmentationTaxonomy
+
+defaults:
+  - /database/nuscenes/taxonomy/vocabulary@vocabulary: default_segmentation3d
+  - _self_
+
+ignore_index: -1
+class_groups:
+  grouped_vehicle: [car, truck, bus]
+  grouped_two_wheeler: [bicycle]
+  grouped_pedestrian_animal: [pedestrian]
+  grouped_static_obstacle: [barrier, traffic_cone]
+  grouped_debris: [debris]
+  grouped_flat: [drivable_surface, other_flat_surface]
+  grouped_vegetation: [vegetation]
+  grouped_structure: [manmade, vertical_thin]
+  grouped_static_clutter: [other_stuff]
+  grouped_noise: [noise]
+class_names:
+  - car
+  - truck
+  - bus
+  - bicycle
+  - pedestrian
+  - traffic_cone
+  - barrier
+  - debris
+  - drivable_surface
+  - other_flat_surface
+  - vegetation
+  - manmade
+  - vertical_thin
+  - other_stuff
+  - noise
+class_mapping:
+  car: car
+  truck: truck
+  bus: bus
+  bicycle: bicycle
+  pedestrian: pedestrian
+  traffic_cone: traffic_cone
+  barrier: barrier
+  debris: debris
+  drivable_surface: drivable_surface
+  other_flat_surface: other_flat_surface
+  vegetation: vegetation
+  manmade: manmade
+  other_stuff: other_stuff
+  noise: noise

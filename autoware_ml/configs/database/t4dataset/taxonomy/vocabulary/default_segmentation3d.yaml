@@ -1,0 +1,104 @@
+# Segmentation vocabulary of T4dataset: every raw mask category the human labelled and the
+# pseudo labelled corpora carry, mapped onto the fine label names the levels coarsen. A raw
+# category outside every level, such as the no-label markers, is listed with null, a raw
+# category missing from the list fails the table generation. A pseudo labelled corpus writes
+# coarse category names, each folds onto one fine member of its group.
+_target_: autoware_ml.databases.taxonomy.LabelVocabulary
+_convert_: all
+
+class_renaming:
+  # cars
+  car: car
+  emergency_vehicle: emergency_vehicle
+  forklift: forklift
+  other_vehicle: other_vehicle
+  fire_truck: fire_truck
+  ambulance: ambulance
+  police_car: police_car
+  kart: kart
+  # trucks
+  truck: truck
+  tractor_unit: truck
+  construction_vehicle: construction_vehicle
+  trailer: trailer
+  semi_trailer: trailer
+  # buses and trains
+  bus: bus
+  train: train
+  # two wheelers
+  motorcycle: motorcycle
+  bicycle: bicycle
+  # vulnerable road users
+  pedestrian: pedestrian
+  personal_mobility: personal_mobility
+  stroller: stroller
+  animal: animal
+  # static objects
+  barrier: barrier
+  construction_sign: construction_sign
+  traffic_cone: traffic_cone
+  debris: debris
+  pushable_pullable: pushable_pullable
+  bicycle_rack: bicycle_rack
+  # parts protruding from a vehicle
+  open_door: open_door
+  vehicle_protruding_object: vehicle_protruding_object
+  vehicle_extension: vehicle_protruding_object
+  # clutter
+  solid_stuff: solid_stuff
+  other_stuff: other_stuff
+  static_clutter: other_stuff
+  # surfaces
+  drivable_surface: drivable_surface
+  driveable_flat: drivable_surface
+  drainage: drainage
+  sidewalk: sidewalk
+  other_flat_surface: other_flat_surface
+  non_driveable_flat: other_flat_surface
+  high_curb: high_curb
+  low_curb: low_curb
+  # vegetation
+  vegetation: vegetation
+  # structure
+  building: building
+  manmade: building
+  pole: pole
+  vertical_thin: pole
+  bollard: bollard
+  traffic_light: traffic_light
+  traffic_sign: traffic_sign
+  flag: flag
+  # spurious returns
+  noise: noise
+  ghost_point: ghost_point
+  # L1 names of the pseudo labelling taxonomy, each folds onto its fine member
+  car.common: car
+  car.emergency: emergency_vehicle
+  car.special: other_vehicle
+  truck.common: truck
+  truck.emergency: fire_truck
+  truck.trailer: trailer
+  truck.construction: construction_vehicle
+  pedestrian.common: pedestrian
+  pedestrian.personal_mobility: personal_mobility
+  pedestrian.stroller: stroller
+  barrier.movable: barrier
+  barrier.construction_sign: construction_sign
+  debris.unclassified: debris
+  debris.pushable_pullable: pushable_pullable
+  non_driveable_flat.sidewalk: sidewalk
+  non_driveable_flat.other_flat_surface: other_flat_surface
+  curb.low_curb: low_curb
+  curb.high_curb: high_curb
+  manmade.building: building
+  manmade.solid_stuff: solid_stuff
+  manmade.special: other_stuff
+  noise.noise: noise
+  noise.ghost_point: ghost_point
+  # annotation markers
+  background: background
+  ego_vehicle: ego_vehicle
+  out_of_sync: out_of_sync
+  # no-label markers
+  unpainted: null
+  ignored: null

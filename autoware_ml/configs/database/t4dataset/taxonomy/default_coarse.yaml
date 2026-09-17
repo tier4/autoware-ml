@@ -1,0 +1,8 @@
+# Coarse taxonomy of T4dataset
+_target_: autoware_ml.databases.taxonomy.DatabaseTaxonomy
+_convert_: all
+
+defaults:
+  - /database/t4dataset/taxonomy/detection3d@detection3d: default_coarse
+  - /database/t4dataset/taxonomy/segmentation3d@segmentation3d: default_coarse
+  - _self_
