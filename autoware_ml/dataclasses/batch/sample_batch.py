@@ -8,7 +8,10 @@ from autoware_ml.dataclasses.batch.detection3d import (
     Detection3DGTBatch,
 )
 from autoware_ml.dataclasses.batch.frame_meta import FrameMetaBatch, FrameMetaSample
-from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTSample
+from autoware_ml.dataclasses.batch.segmentation3d import (
+    Segmentation3DGTBatch,
+    Segmentation3DGTSample,
+)
 from autoware_ml.dataclasses.geometry.transformation import LiDARTransformationSample
 from autoware_ml.geometry.bbox_3d.base_bbox3d import BaseBBoxes3D
 from autoware_ml.geometry.points.base_points import BasePoints
@@ -64,8 +67,7 @@ class ModelGTBatch(NamedTuple):
     # 3D branch
     point_cloud_gt_batch: PointCloudGTBatch | None
     detection3d_gt_batch: Detection3DGTBatch | None
-
-    # TODO (Kok Seang): 3D segmentation
+    segmentation3d_gt_batch: Segmentation3DGTBatch | None
 
     # Images
     image_gt_batch: ImageGTBatch | None
@@ -92,6 +94,9 @@ class ModelGTBatch(NamedTuple):
             else None,
             detection3d_gt_batch=self.detection3d_gt_batch.to_device(device)
             if self.detection3d_gt_batch is not None
+            else None,
+            segmentation3d_gt_batch=self.segmentation3d_gt_batch.to_device(device)
+            if self.segmentation3d_gt_batch is not None
             else None,
             image_gt_batch=self.image_gt_batch.to_device(device)
             if self.image_gt_batch is not None
@@ -180,6 +185,46 @@ class ModelGTBatch(NamedTuple):
         return detection3d_gt_batch
 
     @staticmethod
+    def collate_segmentation3d_gt_samples(
+        gt_samples: Sequence[ModelGTSample],
+    ) -> Segmentation3DGTBatch | None:
+        """
+        Collate a sequence of segmentation3d GT samples into a Segmentation3DGTBatch.
+
+        Args:
+          gt_samples: Sequence of ModelGTSample to be collated.
+
+        Returns:
+          Segmentation3DGTBatch: Collated segmentation3d GT batch, None when no sample
+            carries semantic labels.
+
+        Raises:
+          ValueError: If only some of the samples carry semantic labels, or if a sample
+            carries a label count its point count disagrees with.
+        """
+        if len(gt_samples) == 0 or gt_samples[0].segmentation3d_gt_sample is None:
+            if any(sample.segmentation3d_gt_sample is not None for sample in gt_samples):
+                raise ValueError("All samples must have segmentation3d_gt_sample for collating.")
+            return None
+
+        segmentation3d_gt_samples = []
+        for index, sample in enumerate(gt_samples):
+            if sample.segmentation3d_gt_sample is None:
+                raise ValueError("All samples must have segmentation3d_gt_sample for collating.")
+
+            # A label and its point share a position in the collated tensors, so a sample whose
+            # counts disagree would pair every later sample label with another sample point
+            num_labels = sample.segmentation3d_gt_sample.gt_semantic_mask.shape[0]
+            if sample.point_cloud_data is not None and len(sample.point_cloud_data) != num_labels:
+                raise ValueError(
+                    f"Sample {index} carries {num_labels} semantic labels for "
+                    f"{len(sample.point_cloud_data)} points, every point takes one label."
+                )
+            segmentation3d_gt_samples.append(sample.segmentation3d_gt_sample)
+
+        return Segmentation3DGTBatch.collate_gt_samples(segmentation3d_gt_samples)
+
+    @staticmethod
     def collate_image_gt_samples(gt_samples: Sequence[ModelGTSample]) -> ImageGTBatch | None:
         """
         Collate sequence of ModelGTSample into a ImagesGtBatch
@@ -256,6 +301,11 @@ class ModelGTBatch(NamedTuple):
             gt_samples=gt_samples, max_num_3d_gt_bboxes=max_num_3d_gt_bboxes
         )
 
+        # Collate segmentation3d GT batch
+        segmentation3d_gt_batch = ModelGTBatch.collate_segmentation3d_gt_samples(
+            gt_samples=gt_samples
+        )
+
         # Collate image gt batch
         image_gt_batch = ModelGTBatch.collate_image_gt_samples(gt_samples=gt_samples)
 
@@ -265,6 +315,7 @@ class ModelGTBatch(NamedTuple):
         return ModelGTBatch(
             point_cloud_gt_batch=point_cloud_gt_batch,
             detection3d_gt_batch=detection3d_gt_batch,
+            segmentation3d_gt_batch=segmentation3d_gt_batch,
             image_gt_batch=image_gt_batch,
             io_processing_time=sum(sample.io_processing_time for sample in gt_samples),
             frame_meta_batch=frame_meta_batch,
