@@ -101,3 +101,11 @@ class TransformationName(StrEnum):
     TRANSLATION = "translation"
     HORIZONTAL_FLIP = "horizontal_flip"
     VERTICAL_FLIP = "vertical_flip"
+
+
+class ImageChannel(StrEnum):
+    """
+    Supported image channel order.
+    """
+
+    RGB = "RGB"
