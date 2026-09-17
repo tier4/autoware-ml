@@ -19,7 +19,6 @@ from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     SerializedPooling,
     build_patch_order,
     build_serialized_pooling_meta,
-    collect_level_patch_sizes,
     padded_patch_count,
 )
 from autoware_ml.models.segmentation3d.ptv3 import (
@@ -30,6 +29,7 @@ from autoware_ml.models.segmentation3d.ptv3_base import (
     build_monolithic_export_inputs,
     build_ptv3_encoder_dynamic_axes,
     build_ptv3_export_context,
+    export_patch_sizes,
     require_single_sample_export_batch,
     validate_serialization_geometry,
 )
@@ -392,7 +392,6 @@ def test_ptv3_encoder_dynamic_axes_follow_generated_pooling_inputs() -> None:
         "serialized_pooling_0_cluster",
         "serialized_pooling_0_head_indices",
         "serialized_pooling_0_grid_coord",
-        "serialized_pooling_0_serialized_order",
         "serialized_pooling_0_serialized_inverse",
         "serialized_pooling_1_grid_coord",
     ]
@@ -416,9 +415,6 @@ def test_ptv3_encoder_dynamic_axes_follow_generated_pooling_inputs() -> None:
         0: "serialized_pooling_0_out_voxels"
     }
     assert dynamic_axes["serialized_pooling_0_grid_coord"] == {0: "serialized_pooling_0_out_voxels"}
-    assert dynamic_axes["serialized_pooling_0_serialized_order"] == {
-        1: "serialized_pooling_0_out_voxels"
-    }
     assert dynamic_axes["serialized_pooling_0_serialized_inverse"] == {
         1: "serialized_pooling_0_out_voxels"
     }
@@ -500,7 +496,7 @@ def test_serialized_pooling_export_mode_uses_precomputed_metadata(monkeypatch) -
 
     train_out = train_module(make_point())
     export_point = make_point()
-    meta, _ = build_serialized_pooling_meta(
+    meta, _, _ = build_serialized_pooling_meta(
         export_point.grid_coord,
         export_point.serialized_code,
         export_point.serialized_order,
@@ -608,36 +604,16 @@ def test_build_patch_order_golden_vectors(
     assert patch_order.tolist() == expected
 
 
-def test_build_patch_order_without_attention_is_the_order_itself() -> None:
-    serialized_order = torch.stack([torch.randperm(7), torch.randperm(7)])
-    assert build_patch_order(serialized_order, None) is serialized_order
-    assert build_patch_order(serialized_order[:, :0], 4).shape == (2, 0)
+def test_build_patch_order_of_an_empty_level_is_empty() -> None:
+    assert build_patch_order(torch.empty(2, 0, dtype=torch.long), 4).shape == (2, 0)
 
 
-def test_collect_level_patch_sizes_reads_the_blocks_windows() -> None:
-    encoder = PointTransformerV3Encoder(
-        in_channels=4,
-        order=("z",),
-        stride=(2,),
-        enc_depths=(1, 1),
-        enc_channels=(8, 16),
-        enc_num_head=(1, 2),
-        enc_patch_size=(4, 8),
-        mlp_ratio=2.0,
-        qkv_bias=True,
-        qk_scale=None,
-        attn_drop=0.0,
-        proj_drop=0.0,
-        drop_path=0.0,
-        pre_norm=True,
-        shuffle_orders=False,
-        enable_rpe=False,
-        enable_flash=False,
-        upcast_attention=False,
-        upcast_softmax=False,
-        enc_attn=(False, True),  # a convolution-only stage has no window
-    )
-    assert collect_level_patch_sizes(encoder.enc) == [None, 8]
+def test_export_patch_sizes_rejects_an_encoder_decoder_mismatch() -> None:
+    model = build_seg_model().eval()
+    assert export_patch_sizes(model) == list(model.encoder.enc_patch_size)
+    model.seg3d_head.dec_patch_size[0] += 1
+    with pytest.raises(ValueError, match="disagree"):
+        export_patch_sizes(model)
 
 
 @pytest.mark.skipif(

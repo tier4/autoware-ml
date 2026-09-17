@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import importlib
 import math
-from collections.abc import Iterator, Sequence
+from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
@@ -112,9 +112,8 @@ class SerializedPoolingMeta:
     cluster: torch.Tensor  # [N] input voxel -> pooled voxel id, used by unpooling
     head_indices: torch.Tensor  # [M] representative input voxel per pooled voxel
     grid_coord: torch.Tensor  # [M, 3] integer voxel coordinates of pooled voxels
-    serialized_order: torch.Tensor  # [O, M] space-filling-curve order of pooled voxels, per curve
-    patch_order: torch.Tensor  # [O, padded M] `serialized_order` padded to whole attention windows
-    serialized_inverse: torch.Tensor  # [O, M] inverse of `serialized_order`
+    patch_order: torch.Tensor  # [O, padded M] serialization order padded to whole attention windows
+    serialized_inverse: torch.Tensor  # [O, M] inverse of the (unpadded) serialization order
 
 
 def padded_patch_count(count: int, patch_size: int) -> int:
@@ -122,7 +121,7 @@ def padded_patch_count(count: int, patch_size: int) -> int:
     return -(-count // patch_size) * patch_size
 
 
-def build_patch_order(serialized_order: torch.Tensor, patch_size: int | None) -> torch.Tensor:
+def build_patch_order(serialized_order: torch.Tensor, patch_size: int) -> torch.Tensor:
     """Pad every serialization order to whole attention windows.
 
     This is the gather order the exported attention blocks consume (``qkv[order]``): the
@@ -138,15 +137,12 @@ def build_patch_order(serialized_order: torch.Tensor, patch_size: int | None) ->
 
     Args:
         serialized_order: ``[num_orders, count]`` permutations.
-        patch_size: Attention window of the blocks at this level; ``None`` for a level without
-            attention blocks, which needs no padding.
+        patch_size: Attention window of the blocks at this level.
 
     Returns:
         ``[num_orders, padded]`` gather order, ``padded = padded_patch_count(count, patch_size)``.
     """
     count = int(serialized_order.shape[1])
-    if patch_size is None or count == 0:
-        return serialized_order
     padded = padded_patch_count(count, patch_size)
     if padded == count:
         return serialized_order
@@ -157,29 +153,6 @@ def build_patch_order(serialized_order: torch.Tensor, patch_size: int | None) ->
         + cycle
     ) % count
     return torch.cat([serialized_order, serialized_order[:, tail]], dim=1)
-
-
-def attention_blocks(stage: nn.Module) -> Iterator["Block"]:
-    """The blocks of one stage that carry serialized attention, in order."""
-    for module in stage._modules.values():
-        if isinstance(module, Block) and module.attn is not None:
-            yield module
-
-
-def collect_level_patch_sizes(levels: nn.Module) -> list[int | None]:
-    """Attention window per resolution level of a ``PointSequential`` of block stacks.
-
-    One ``patch_order`` per level is the graph contract, so every attention block of one
-    level must share a window; that is asserted here rather than assumed. ``None`` marks a
-    level without attention blocks.
-    """
-    patch_sizes: list[int | None] = []
-    for level in levels._modules.values():
-        windows = {block.attn.patch_size_max for block in attention_blocks(level)}
-        if len(windows) > 1:
-            raise ValueError(f"Attention blocks of one level disagree on patch_size: {windows}.")
-        patch_sizes.append(next(iter(windows)) if windows else None)
-    return patch_sizes
 
 
 def expand_stage_flags(
@@ -225,8 +198,8 @@ def build_serialized_pooling_meta(
     serialized_code: torch.Tensor,
     serialized_order: torch.Tensor,
     stride: int,
-    patch_size: int | None,
-) -> tuple[SerializedPoolingMeta, torch.Tensor]:
+    patch_size: int,
+) -> tuple[SerializedPoolingMeta, torch.Tensor, torch.Tensor]:
     """Build ONNX-facing serialized-pooling metadata for one encoder stage.
 
     Args:
@@ -234,8 +207,10 @@ def build_serialized_pooling_meta(
         serialized_code: Input-level codes, ``[num_orders, count]``.
         serialized_order: Input-level orders, ``[num_orders, count]``.
         stride: Pooling stride of this stage.
-        patch_size: Attention window of the pooled level's blocks (``None`` without attention);
-            sizes the pooled level's ``patch_order``.
+        patch_size: Attention window of the pooled level's blocks; sizes its ``patch_order``.
+
+    Returns:
+        The stage's metadata, then the pooled level's codes and orders for the next stage.
     """
     depth = _pooling_depth(stride)
     pooled_code = serialized_code >> (depth * 3)
@@ -278,11 +253,11 @@ def build_serialized_pooling_meta(
             cluster=cluster,
             head_indices=head_indices,
             grid_coord=next_grid_coord,
-            serialized_order=next_serialized_order,
             patch_order=build_patch_order(next_serialized_order, patch_size),
             serialized_inverse=next_serialized_inverse,
         ),
         next_serialized_code,
+        next_serialized_order,
     )
 
 
@@ -1004,14 +979,9 @@ class SerializedPooling(PointModule):
             del pooled_code0
             idx_ptr = torch.cat([counts.new_zeros(1), torch.cumsum(counts, dim=0)])
         if self.export_mode:
-            # The exported blocks gather through the precomputed `patch_order`; the pooled
-            # level carries no codes and no bare order.
             head_indices = metadata.head_indices
+            pooled_inverse = metadata.serialized_inverse
             grid_coord = metadata.grid_coord
-            serialization = {
-                "patch_order": metadata.patch_order,
-                "serialized_inverse": metadata.serialized_inverse,
-            }
         else:
             head_indices = indices[idx_ptr[:-1]]
             pooled_code = code[:, head_indices]
@@ -1030,11 +1000,6 @@ class SerializedPooling(PointModule):
                 pooled_code = pooled_code[permutation]
                 pooled_order = pooled_order[permutation]
                 pooled_inverse = pooled_inverse[permutation]
-            serialization = {
-                "serialized_code": pooled_code,
-                "serialized_order": pooled_order,
-                "serialized_inverse": pooled_inverse,
-            }
 
         scatter_feat = segment_csr(self.proj(point.feat)[indices], idx_ptr, "max")
         if self.export_mode:
@@ -1045,7 +1010,7 @@ class SerializedPooling(PointModule):
             feat=scatter_feat,
             coord=scatter_coord,
             grid_coord=grid_coord,
-            **serialization,
+            serialized_inverse=pooled_inverse,
             serialized_depth=point.serialized_depth - pooling_depth,
             batch=point.batch[head_indices],
             sparse_shape=point.sparse_shape >> pooling_depth,
@@ -1060,6 +1025,10 @@ class SerializedPooling(PointModule):
         )
         if self.export_mode:
             pooled["serialized_pooling"] = point.serialized_pooling
+            pooled["patch_order"] = metadata.patch_order
+        else:
+            pooled["serialized_code"] = pooled_code
+            pooled["serialized_order"] = pooled_order
         pooled = self.norm(pooled)
         pooled = self.act(pooled)
         pooled.sparsify()
@@ -1171,10 +1140,14 @@ def set_block_serialization_order(stages: PointSequential, order_count: int) -> 
         order_count: Number of serialization orders available.
     """
     for stage in stages._modules.values():
-        # Convolution-only blocks read no serialization order, so they must not consume an
-        # index either - otherwise the attention blocks after them would shift off their order.
-        for block_index, block in enumerate(attention_blocks(stage)):
-            block.attn.order_index = block_index % order_count
+        block_index = 0
+        for module in stage._modules.values():
+            # Convolution-only blocks read no serialization order, so they must
+            # not consume an index either - otherwise the attention blocks that
+            # follow them in the same stage would be shifted off their order.
+            if isinstance(module, Block) and module.attn is not None:
+                module.attn.order_index = block_index % order_count
+                block_index += 1
 
 
 def prepare_point_module_for_export(module: nn.Module) -> None:
@@ -1292,6 +1265,7 @@ class PointTransformerV3Encoder(PointModule):
         self.stride = list(stride)
         self.shuffle_orders = shuffle_orders
         self.enc_channels = list(enc_channels)
+        self.enc_patch_size = list(enc_patch_size)
         stage_count = len(enc_depths)
         self.enc_conv = expand_stage_flags(enc_conv, stage_count, True, "enc_conv")
         self.enc_attn = expand_stage_flags(enc_attn, stage_count, True, "enc_attn")

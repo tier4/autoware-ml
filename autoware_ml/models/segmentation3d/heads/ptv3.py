@@ -121,6 +121,7 @@ class PTv3SegDecoderHead(nn.Module):
         self.num_classes = int(num_classes)
         self.ignore_index = int(ignore_index)
         self.dec_depths = list(dec_depths)
+        self.dec_patch_size = list(dec_patch_size)
         stage_count = len(enc_channels)
         decoder_stage_count = stage_count - 1
         self.dec_conv = expand_stage_flags(dec_conv, decoder_stage_count, True, "dec_conv")

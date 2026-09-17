@@ -20,7 +20,6 @@ from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     build_patch_order,
     build_serialized_pooling_meta,
     collect_encoder_stage_points,
-    collect_level_patch_sizes,
 )
 from autoware_ml.utils.deploy import ExportSpec
 from autoware_ml.utils.point_cloud.structures import (
@@ -29,21 +28,17 @@ from autoware_ml.utils.point_cloud.structures import (
     serialize_point_cloud_batch,
 )
 
-# The blocks gather through `patch_order` (the serialization order padded to whole attention
-# windows), so the bare `serialized_order` is not a graph input: the tracer would prune an
-# input nothing reads, and the deployed runtime binds every name it declares.
 _BLOCK_STAGE_META_FIELDS = ("patch_order", "serialized_inverse", "grid_coord")
 
 SERIALIZED_POOLING_FIELDS = tuple(field.name for field in fields(SerializedPoolingMeta))
-GRAPH_POOLING_FIELDS = tuple(
-    name for name in SERIALIZED_POOLING_FIELDS if name != "serialized_order"
-)
 # The encoder-only encoder graph never consumes `cluster` (it only drives the
 # heads' unpooling), so the split encoder export excludes it.
-ENCODER_EXPORT_POOLING_FIELDS = tuple(name for name in GRAPH_POOLING_FIELDS if name != "cluster")
+ENCODER_EXPORT_POOLING_FIELDS = tuple(
+    name for name in SERIALIZED_POOLING_FIELDS if name != "cluster"
+)
 SERIALIZED_POOLING_INPUT_SIZED_FIELDS = frozenset({"indices", "cluster"})
 SERIALIZED_POOLING_OUTPUT_PLUS_ONE_FIELDS = frozenset({"indptr"})
-SERIALIZED_POOLING_ORDER_FIELDS = frozenset({"serialized_order", "serialized_inverse"})
+SERIALIZED_POOLING_ORDER_FIELDS = frozenset({"serialized_inverse"})
 SERIALIZED_POOLING_PADDED_FIELDS = frozenset({"patch_order"})
 
 
@@ -214,7 +209,7 @@ def build_serialized_pooling_metadata(
     serialized_code: torch.Tensor,
     serialized_order: torch.Tensor,
     strides: Sequence[int],
-    patch_sizes: Sequence[int | None],
+    patch_sizes: Sequence[int],
 ) -> list[SerializedPoolingMeta]:
     """Build serialized-pooling metadata for every encoder pooling stage.
 
@@ -233,38 +228,28 @@ def build_serialized_pooling_metadata(
         )
     metadata = []
     for stride, patch_size in zip(strides, patch_sizes[1:]):
-        meta, serialized_code = build_serialized_pooling_meta(
+        meta, serialized_code, serialized_order = build_serialized_pooling_meta(
             grid_coord, serialized_code, serialized_order, stride, patch_size
         )
         metadata.append(meta)
         grid_coord = meta.grid_coord
-        serialized_order = meta.serialized_order
     return metadata
 
 
-def export_patch_sizes(model: "PTv3BaseModel") -> list[int | None]:
+def export_patch_sizes(model: PTv3BaseModel) -> list[int]:
     """The attention window of every hierarchy level, as the export graphs need it.
 
-    One ``patch_order`` per level is the graph contract, so a level's encoder blocks and its
-    decoder blocks (when the model has a segmentation head with blocks there) must agree on
-    the window; both PTv3 configurations do, and a disagreement is a config error reported
-    here rather than a silently mis-padded gather.
+    One ``patch_order`` per level is the graph contract, so the encoder and the segmentation
+    decoder must agree on the window of every level they share; a disagreement is a config
+    error reported here rather than a silently mis-padded gather.
     """
-    patch_sizes = collect_level_patch_sizes(model.encoder.enc)
+    patch_sizes = list(model.encoder.enc_patch_size)
     head = getattr(model, "seg3d_head", None)
-    if head is not None:
-        for level, dec_patch_size in enumerate(collect_level_patch_sizes(head.dec)):
-            if dec_patch_size is None:
-                continue
-            if patch_sizes[level] is None:
-                patch_sizes[level] = dec_patch_size
-            elif patch_sizes[level] != dec_patch_size:
-                raise ValueError(
-                    f"Level {level}: encoder patch_size {patch_sizes[level]} != decoder "
-                    f"patch_size {dec_patch_size}; the deployed graphs share one patch_order "
-                    "per level, so enc_patch_size and dec_patch_size must match where both "
-                    "have attention blocks."
-                )
+    if head is not None and list(head.dec_patch_size) != patch_sizes[: len(head.dec_patch_size)]:
+        raise ValueError(
+            f"enc_patch_size {patch_sizes} and dec_patch_size {list(head.dec_patch_size)} "
+            "disagree; the deployed graphs share one patch_order per level."
+        )
     return patch_sizes
 
 
@@ -287,7 +272,7 @@ def require_single_sample_export_batch(batch: Mapping[str, torch.Tensor]) -> Non
 
 def flatten_serialized_pooling_inputs(
     metadata: Sequence[SerializedPoolingMeta],
-    field_names: Sequence[str] = GRAPH_POOLING_FIELDS,
+    field_names: Sequence[str] = SERIALIZED_POOLING_FIELDS,
 ) -> tuple[tuple[torch.Tensor, ...], list[str]]:
     """Flatten per-stage metadata into ONNX args and input names.
 
@@ -384,7 +369,7 @@ def build_ptv3_encoder_dynamic_axes(
 
 def make_serialized_pooling_from_flat_inputs(
     serialized_pooling_inputs: tuple[torch.Tensor, ...],
-    field_names: Sequence[str] = GRAPH_POOLING_FIELDS,
+    field_names: Sequence[str] = SERIALIZED_POOLING_FIELDS,
 ) -> list[SerializedPoolingMeta]:
     """Reconstruct per-stage metadata objects from flattened ONNX graph inputs.
 
@@ -417,7 +402,7 @@ class PTv3EncoderExportBase(nn.Module):
         encoder: PointTransformerV3Encoder,
         sparse_shape: torch.Tensor,
         serialized_depth: torch.Tensor,
-        pooling_field_names: Sequence[str] = GRAPH_POOLING_FIELDS,
+        pooling_field_names: Sequence[str] = SERIALIZED_POOLING_FIELDS,
     ) -> None:
         """Initialize the shared encoder export half.
 
@@ -476,7 +461,7 @@ def _run_ptv3_encoder_export(
     serialized_inverse: torch.Tensor,
     sparse_shape: torch.Tensor,
     *serialized_pooling_inputs: torch.Tensor,
-    pooling_field_names: "Sequence[str]" = GRAPH_POOLING_FIELDS,
+    pooling_field_names: "Sequence[str]" = SERIALIZED_POOLING_FIELDS,
 ) -> Point:
     """Run the shared tensor-only PTv3 encoder export path.
 
@@ -650,8 +635,7 @@ def build_monolithic_export_inputs(
             point["serialized_order"],
             model.encoder.stride,
             patch_sizes,
-        ),
-        GRAPH_POOLING_FIELDS,
+        )
     )
     return MonolithicExportInputs(
         sparse_shape=sparse_shape,
