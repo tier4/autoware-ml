@@ -1,0 +1,98 @@
+# Detection vocabulary of T4dataset: every raw box category the corpora carry, mapped onto the
+# fine label names the levels coarsen. A raw category outside every level is listed with null,
+# a raw category missing from the list fails the table generation. Box records store the fine
+# name whatever level they were baked for.
+_target_: autoware_ml.databases.taxonomy.LabelVocabulary
+_convert_: all
+
+class_renaming:
+  # cars
+  car: car
+  vehicle.car: car
+  kart: kart
+  other_vehicle: other_vehicle
+  police_car: police_car
+  vehicle.police: police_car
+  vehicle.police_car: police_car
+  ambulance: ambulance
+  vehicle.ambulance: ambulance
+  # the generic emergency label of the older corpora, the vehicle kind is not recorded
+  "vehicle.emergency (ambulance & police)": emergency_vehicle
+  emergency_vehicle: emergency_vehicle
+  forklift: forklift
+  # trucks
+  truck: truck
+  vehicle.truck: truck
+  tractor_unit: truck
+  tractor: truck
+  fire_truck: fire_truck
+  vehicle.fire: fire_truck
+  construction_vehicle: construction_vehicle
+  vehicle.construction: construction_vehicle
+  trailer: trailer
+  vehicle.trailer: trailer
+  semi_trailer: trailer
+  # buses and trains
+  bus: bus
+  vehicle.bus: bus
+  "vehicle.bus (bendy & rigid)": bus
+  train: train
+  vehicle.train: train
+  # two wheelers
+  motorcycle: motorcycle
+  vehicle.motorcycle: motorcycle
+  bicycle: bicycle
+  vehicle.bicycle: bicycle
+  # vulnerable road users
+  pedestrian: pedestrian
+  pedestrian.adult: pedestrian
+  pedestrian.child: pedestrian
+  other_pedestrian: pedestrian
+  police_officer: pedestrian
+  pedestrian.police_officer: pedestrian
+  construction_worker: pedestrian
+  pedestrian.construction_worker: pedestrian
+  stroller: stroller
+  pedestrian.stroller: stroller
+  personal_mobility: personal_mobility
+  pedestrian.personal_mobility: personal_mobility
+  wheelchair: personal_mobility
+  pedestrian.wheelchair: personal_mobility
+  animal: animal
+  # static objects
+  barrier: barrier
+  movable_object.barrier: barrier
+  construction_sign: construction_sign
+  "construction sign": construction_sign
+  traffic_cone: traffic_cone
+  trafficcone: traffic_cone
+  movable_object.traffic_cone: traffic_cone
+  movable_object.trafficcone: traffic_cone
+  debris: debris
+  movable_object.debris: debris
+  pushable_pullable: pushable_pullable
+  movable_object.pushable_pullable: pushable_pullable
+  bicycle_rack: bicycle_rack
+  static_object.bicycle_rack: bicycle_rack
+  "static_object.bicycle rack": bicycle_rack
+  # bollard boxes are outside every detection level
+  static_object.bollard: null
+  # parts protruding from a vehicle, a post process resolves them to the parent vehicle
+  open_door: open_door
+  vehicle_protruding_object: vehicle_protruding_object
+  vehicle_extension: vehicle_protruding_object
+  # L1 names of the pseudo labelling taxonomy, each folds onto its fine member
+  car.common: car
+  car.emergency: emergency_vehicle
+  car.special: other_vehicle
+  truck.common: truck
+  truck.emergency: fire_truck
+  truck.trailer: trailer
+  truck.construction: construction_vehicle
+  pedestrian.common: pedestrian
+  barrier.movable: barrier
+  barrier.construction_sign: construction_sign
+  debris.unclassified: debris
+  debris.pushable_pullable: pushable_pullable
+  # box annotated manmade clutter, outside every detection level like the bicycle racks
+  manmade.special: other_stuff

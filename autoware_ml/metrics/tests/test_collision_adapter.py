@@ -12,6 +12,23 @@ from autoware_ml.metrics.geometry.reachability import ReachabilityParams
 from autoware_ml.metrics.tests.conftest import CLASS_NAMES, EGO, FakeMapProvider, collision_box
 from autoware_ml.types.metrics import AgentKind
 
+KINDS = {
+    "car": "wheeled",
+    "truck": "wheeled",
+    "bus": "wheeled",
+    "train": "wheeled",
+    "motorcycle": "wheeled",
+    "bicycle": "living",
+    "pedestrian": "living",
+    "animal": "living",
+    "barrier": "static",
+    "traffic_cone": "static",
+    "debris": "static",
+    "bicycle_rack": "static",
+    "vehicle_extension": "static",
+}
+LIVING_SPEEDS = {"pedestrian": 3.0, "animal": 4.0, "bicycle": 6.0}
+
 
 def _adapter():
     road = box(-80.0, -60.0, 500.0, 60.0)
@@ -19,6 +36,8 @@ def _adapter():
         CLASS_NAMES,
         FakeMapProvider(road),
         vehicle=EGO,
+        kinds=KINDS,
+        living_speeds=LIVING_SPEEDS,
         params=ReachabilityParams(horizon_s=4.0, dt_s=0.1),
         max_speed_mps=10.0,
     )
@@ -57,7 +76,13 @@ def test_adapter_empty_frame() -> None:
 def test_adapter_rejects_unmapped_class() -> None:
     road = box(-10.0, -10.0, 10.0, 10.0)
     try:
-        CollisionTTC(("car", "spaceship"), FakeMapProvider(road), vehicle=EGO)
+        CollisionTTC(
+            ("car", "spaceship"),
+            FakeMapProvider(road),
+            vehicle=EGO,
+            kinds={"car": "wheeled"},
+            living_speeds={},
+        )
     except ValueError:
         pass
     else:
@@ -72,6 +97,7 @@ def test_adapter_rejects_living_class_without_run_speed() -> None:
             FakeMapProvider(road),
             vehicle=EGO,
             kinds={"car": "wheeled", "wheelchair": "living"},
+            living_speeds={},
         )
     except ValueError as error:
         assert "wheelchair" in str(error)
@@ -81,7 +107,9 @@ def test_adapter_rejects_living_class_without_run_speed() -> None:
 
 def test_adapter_reads_kind_names_into_the_enum() -> None:
     road = box(-10.0, -10.0, 10.0, 10.0)
-    adapter = CollisionTTC(("car",), FakeMapProvider(road), vehicle=EGO, kinds={"car": "wheeled"})
+    adapter = CollisionTTC(
+        ("car",), FakeMapProvider(road), vehicle=EGO, kinds={"car": "wheeled"}, living_speeds={}
+    )
     assert adapter.kinds["car"] is AgentKind.WHEELED
 
 
@@ -93,6 +121,7 @@ def test_adapter_rejects_unknown_kind_value() -> None:
             FakeMapProvider(road),
             vehicle=EGO,
             kinds={"car": "hovercraft"},
+            living_speeds={},
         )
     except ValueError as error:
         assert "hovercraft" in str(error)

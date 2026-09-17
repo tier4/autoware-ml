@@ -1,0 +1,106 @@
+# Fine segmentation3d taxonomy of T4dataset
+_target_: autoware_ml.databases.taxonomy.SegmentationTaxonomy
+
+defaults:
+  - /database/t4dataset/taxonomy/vocabulary@vocabulary: default_segmentation3d
+  - _self_
+
+ignore_index: -1
+class_groups:
+  grouped_vehicle:
+    [car.common, car.emergency, car.special, truck.common, truck.emergency, truck.trailer,
+     truck.construction, bus, train]
+  grouped_two_wheeler: [motorcycle, bicycle]
+  grouped_living: [pedestrian.common, pedestrian.personal_mobility, pedestrian.stroller, animal]
+  grouped_obstacle:
+    [barrier.movable, barrier.construction_sign, traffic_cone, debris.unclassified,
+     debris.pushable_pullable]
+  grouped_static_structure: [manmade.building, manmade.solid_stuff, manmade.special, vertical_thin, vegetation]
+  grouped_flat_surface:
+    [driveable_flat, non_driveable_flat.sidewalk, non_driveable_flat.other_flat_surface,
+     curb.low_curb, curb.high_curb]
+  grouped_artifact: [noise.noise, noise.ghost_point, ego_vehicle]
+# The detection classes come first, in the same order, so a detection class and its
+# segmentation class share one index. The ego vehicle is an output of this level only.
+class_names:
+  - car.common
+  - car.emergency
+  - car.special
+  - truck.common
+  - truck.emergency
+  - truck.trailer
+  - truck.construction
+  - bus
+  - train
+  - motorcycle
+  - bicycle
+  - pedestrian.common
+  - pedestrian.personal_mobility
+  - pedestrian.stroller
+  - animal
+  - barrier.movable
+  - barrier.construction_sign
+  - traffic_cone
+  - debris.unclassified
+  - debris.pushable_pullable
+  - vegetation
+  - manmade.building
+  - manmade.solid_stuff
+  - manmade.special
+  - vertical_thin
+  - driveable_flat
+  - non_driveable_flat.sidewalk
+  - non_driveable_flat.other_flat_surface
+  - curb.low_curb
+  - curb.high_curb
+  - noise.noise
+  - noise.ghost_point
+  - ego_vehicle
+class_mapping:
+  car: car.common
+  emergency_vehicle: car.emergency
+  forklift: truck.construction
+  other_vehicle: car.special
+  fire_truck: truck.emergency
+  ambulance: car.emergency
+  police_car: car.emergency
+  kart: car.special
+  truck: truck.common
+  construction_vehicle: truck.construction
+  trailer: truck.trailer
+  bus: bus
+  train: train
+  motorcycle: motorcycle
+  bicycle: bicycle
+  pedestrian: pedestrian.common
+  personal_mobility: pedestrian.personal_mobility
+  stroller: pedestrian.stroller
+  animal: animal
+  barrier: barrier.movable
+  construction_sign: barrier.construction_sign
+  traffic_cone: traffic_cone
+  debris: debris.unclassified
+  pushable_pullable: debris.pushable_pullable
+  bicycle_rack: manmade.special
+  open_door: null
+  vehicle_protruding_object: null
+  solid_stuff: manmade.solid_stuff
+  other_stuff: manmade.special
+  drivable_surface: driveable_flat
+  drainage: driveable_flat
+  sidewalk: non_driveable_flat.sidewalk
+  other_flat_surface: non_driveable_flat.other_flat_surface
+  high_curb: curb.high_curb
+  low_curb: curb.low_curb
+  vegetation: vegetation
+  building: manmade.building
+  pole: vertical_thin
+  bollard: vertical_thin
+  traffic_light: vertical_thin
+  traffic_sign: vertical_thin
+  flag: vertical_thin
+  noise: noise.noise
+  ghost_point: noise.ghost_point
+  background: null
+  ego_vehicle: ego_vehicle
+  out_of_sync: null

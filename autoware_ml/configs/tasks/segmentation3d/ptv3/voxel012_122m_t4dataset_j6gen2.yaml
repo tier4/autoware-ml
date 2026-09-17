@@ -36,7 +36,7 @@ datamodule:
         load_dim: 5
         use_dim: [0, 1, 2, 3]
       - _target_: autoware_ml.transforms.segmentation3d.loading.LoadSegAnnotations3D
-        class_mapping: ${dataset.segmentation3d.class_mapping}
+        class_indices: ${dataset.segmentation3d.class_indices}
         ignore_index: ${dataset.segmentation3d.ignore_index}
       - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
       - _target_: autoware_ml.transforms.segmentation3d.formatting.PreparePointSegInput
@@ -83,7 +83,7 @@ datamodule:
         load_dim: 5
         use_dim: [0, 1, 2, 3]
       - _target_: autoware_ml.transforms.segmentation3d.loading.LoadSegAnnotations3D
-        class_mapping: ${dataset.segmentation3d.class_mapping}
+        class_indices: ${dataset.segmentation3d.class_indices}
         ignore_index: ${dataset.segmentation3d.ignore_index}
       - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
       - _target_: autoware_ml.transforms.segmentation3d.formatting.PreparePointSegInput
