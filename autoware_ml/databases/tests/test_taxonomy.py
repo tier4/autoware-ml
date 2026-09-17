@@ -187,6 +187,19 @@ def test_a_class_without_fine_labels_is_a_placeholder() -> None:
     assert "vertical_thin" not in taxonomy.coarsening.values()
 
 
+
+def test_the_mappings_cannot_be_mutated_after_construction() -> None:
+    # A mutated mapping would change the hash of a taxonomy a table was already baked with
+    taxonomy = _coarse()
+
+    with pytest.raises(TypeError):
+        taxonomy.coarsening["car"] = "truck"
+    with pytest.raises(TypeError):
+        taxonomy.vocabulary.name_mapping["car"] = "truck"
+    with pytest.raises(TypeError):
+        taxonomy.class_groups["grouped_vehicle"] = ()
+
+
 def test_detection_taxonomy_carries_typed_evaluation_tables() -> None:
     taxonomy = _detection()
 

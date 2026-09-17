@@ -26,6 +26,7 @@ heads.
 
 from __future__ import annotations
 
+from types import MappingProxyType
 from typing import Iterable, Mapping, Sequence
 
 from autoware_ml.types.metrics import AgentKind
@@ -65,7 +66,7 @@ class LabelVocabulary:
     @property
     def name_mapping(self) -> Mapping[str, str | None]:
         """Raw label name to fine label name, None for a raw label outside every level."""
-        return self._name_mapping
+        return MappingProxyType(self._name_mapping)
 
     def unlisted(self, raw_names: Iterable[str]) -> list[str]:
         """
@@ -224,12 +225,12 @@ class LabelTaxonomy:
     @property
     def coarsening(self) -> Mapping[str, str | None]:
         """Fine label name to class name, None for a dropped fine label."""
-        return self._coarsening
+        return MappingProxyType(self._coarsening)
 
     @property
     def class_groups(self) -> Mapping[str, tuple[str, ...]]:
         """Behaviour groups the metrics report, group name to its classes."""
-        return self._class_groups
+        return MappingProxyType(self._class_groups)
 
     def fine_name(self, raw_name: str) -> str | None:
         """
@@ -344,21 +345,41 @@ class DetectionTaxonomy(LabelTaxonomy):
         """
 
         super().__init__(vocabulary, class_names, coarsening, ignore_index, class_groups)
+        self._validate_class_table(eval_range, class_names, "eval_range")
+        self._validate_class_table(collision_kinds, class_names, "collision_kinds")
+        unknown_kinds = sorted(set(collision_kinds.values()) - set(AgentKind))
+        if unknown_kinds:
+            raise ValueError(
+                f"Unknown collision kinds {unknown_kinds}, valid kinds are "
+                f"{[kind.value for kind in AgentKind]}."
+            )
+        living_classes = {
+            name for name, kind in collision_kinds.items() if kind == AgentKind.LIVING
+        }
+        if set(living_speeds) != living_classes:
+            raise ValueError(
+                "living_speeds must list exactly the living classes, missing "
+                f"{sorted(living_classes - set(living_speeds))}, unknown "
+                f"{sorted(set(living_speeds) - living_classes)}."
+            )
+        self._eval_range = {name: float(value) for name, value in eval_range.items()}
+        self._collision_kinds = {name: AgentKind(kind) for name, kind in collision_kinds.items()}
+        self._living_speeds = {name: float(speed) for name, speed in living_speeds.items()}
 
     @property
     def eval_range(self) -> Mapping[str, float]:
         """Range in meters up to which every class is evaluated."""
-        return self._eval_range
+        return MappingProxyType(self._eval_range)
 
     @property
     def collision_kinds(self) -> Mapping[str, AgentKind]:
         """Reachable set kind of every class in the collision metrics."""
-        return self._collision_kinds
+        return MappingProxyType(self._collision_kinds)
 
     @property
     def living_speeds(self) -> Mapping[str, float]:
         """Run speed in meters per second of every living class."""
-        return self._living_speeds
+        return MappingProxyType(self._living_speeds)
 
 
 class SegmentationTaxonomy(LabelTaxonomy):
