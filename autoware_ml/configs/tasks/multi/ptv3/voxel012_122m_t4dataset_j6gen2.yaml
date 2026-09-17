@@ -41,9 +41,9 @@ datamodule:
           # In radians, the range of rotation angles for random rotation around the Z-axis.
           yaw_rot_range: [-1.57079633, 1.57079633]
           # The range of scale factors for random scaling.
-          scale_ratio_range: [0.9, 1.1]
+          scale_ratio_range: ${dataset.detection3d.train_scale_ratio_range}
           # The standard deviation for Gaussian translation noise.
-          translation_std: [0.5, 0.5, 0.2]
+          translation_std: ${dataset.detection3d.train_translation_std}
         - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalBEVRandomFlip
           _convert_: all
           horizontal_flip_ratio: 0.5
@@ -78,8 +78,7 @@ datamodule:
             - ${point_cloud_range.1}
             - ${point_cloud_range.3}
             - ${point_cloud_range.4}
-        # Order matters, it first filters bboxes over the whole range with less than 2 points.
-        # Then it filters bboxes within 60 meters with less than 3 points
+        # Order matters, it first filters the boxes of the whole range, then the boxes within 60 meters
         - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesMinPointsFilter
           _convert_: all
           min_points: 2
@@ -158,12 +157,6 @@ model:
         nms_radius: 0.0
         post_max_size: 50
       - class_names: [debris]
-        nms_radius: 0.0
-        post_max_size: 50
-      - class_names: [vehicle_extension]
-        nms_radius: 0.0
-        post_max_size: 50
-      - class_names: [bicycle_rack]
         nms_radius: 0.0
         post_max_size: 50
     bbox_coder:

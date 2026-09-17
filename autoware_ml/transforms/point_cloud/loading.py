@@ -168,6 +168,17 @@ class LoadPointsFromFile(BaseTransform):
             )
 
         points_np = self.read_points(lidar_point_cloud_samples[index])
+        source_view = lidar_point_cloud_samples[index].source_view
+        if source_view is not None:
+            end = source_view.point_index_begin + source_view.num_points
+            if end > points_np.shape[0]:
+                raise ValueError(
+                    f"Lidar source points [{source_view.point_index_begin}, {end}) exceed the "
+                    f"{points_np.shape[0]} points of {current_lidar_point_path}."
+                )
+            points_np = points_np[source_view.point_index_begin : end].copy()
+            frame_to_sensor = np.linalg.inv(source_view.sensor_to_frame_matrix.numpy())
+            points_np[:, :3] = points_np[:, :3] @ frame_to_sensor[:3, :3].T + frame_to_sensor[:3, 3]
 
         use_dims = self.use_dim
         if use_dims[:3] != [PointFieldIndex.X, PointFieldIndex.Y, PointFieldIndex.Z]:
@@ -264,6 +275,12 @@ class LoadMultiSweepPointsFromFile(LoadPointsFromFile):
 
         if model_gt_sample.point_cloud_data is None:
             raise ValueError("Point cloud data is not available in the ModelGTSample.")
+
+        if model_gt_sample.lidar_point_cloud_samples[0].source_view is not None:
+            raise ValueError(
+                "The sample serves a single lidar source, and the stored sweeps merge every "
+                "source, so no sweep can be appended to it."
+            )
 
         current_frame_point_cloud_data = model_gt_sample.point_cloud_data
         available_sweeps_nums = min(

@@ -7,183 +7,155 @@ batch_size: 8
 num_workers: 8
 
 datamodule:
-  train_dataloader_cfg:
+  train_dataset:
+    camera_sources: ${camera_sources}
+    transforms:
+      _target_: autoware_ml.transforms.base.TransformsCompose
+      _convert_: all
+      pipeline:
+        - _target_: autoware_ml.transforms.camera.loading.LoadImagesFromFile
+          _convert_: all
+        - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
+          _convert_: all
+          load_dim: ${database.lidar_pointcloud_num_features}
+          use_dim: [0, 1, 2, 3]
+          bev_remove_radius: 0.0
+        - _target_: autoware_ml.transforms.point_cloud.geometry.CropBoxInner
+          _convert_: all
+          crop_box: ${ego_box}
+        - _target_: autoware_ml.transforms.camera.distortion.UndistortImage
+          _convert_: all
+          alpha: 0.0
+        - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.CalibrationMisalignment
+          _convert_: all
+          probability: 0.5
+          activate_roll: true
+          activate_pitch: true
+          activate_yaw: true
+          activate_x: true
+          activate_y: true
+          activate_z: true
+          min_roll_neg: 0.2
+          max_roll_neg: 0.4
+          min_roll_pos: 0.2
+          max_roll_pos: 0.4
+          min_pitch_neg: 0.2
+          max_pitch_neg: 0.4
+          min_pitch_pos: 0.2
+          max_pitch_pos: 0.4
+          min_yaw_neg: 4.2
+          max_yaw_neg: 8.4
+          min_yaw_pos: 4.2
+          max_yaw_pos: 8.4
+          min_x_neg: 0.22
+          max_x_neg: 0.44
+          min_x_pos: 0.22
+          max_x_pos: 0.44
+          min_y_neg: 0.12
+          max_y_neg: 0.24
+          min_y_pos: 0.06
+          max_y_pos: 0.12
+          min_z_neg: 0.24
+          max_z_neg: 0.48
+          min_z_pos: 0.54
+          max_z_pos: 1.08
+        - _target_: autoware_ml.transforms.camera.geometry.CropAndScale
+          _convert_: all
+          probability: 0.2
+          crop_ratio: 0.8
+        - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.Affine
+          _convert_: all
+          probability: 0.2
+          max_distortion: 0.05
+        - _target_: autoware_ml.transforms.image.image.PhotometricDistortion
+          _convert_: all
+          probability: 0.2
+          brightness: 0.1
+          contrast: 0.1
+          saturation: 0.1
+          hue: 0.05
+        - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.LidarCameraFusion
+          _convert_: all
+          max_depth: 128.0
+          dilation_size: 1
+          ego_box: ${ego_box}
+        - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.SaveFusionPreview
+          _convert_: all
+          probability: 0.00001
+          out_dir: ${hydra:run.dir}/previews
+          max_depth: 128.0
+          alpha: 1.0
+          depth_colormap: jet
+  validation_dataset:
+    camera_sources: ${camera_sources}
+  test_dataset:
+    camera_sources: ${camera_sources}
+    transforms:
+      _target_: autoware_ml.transforms.base.TransformsCompose
+      _convert_: all
+      pipeline:
+        - _target_: autoware_ml.transforms.camera.loading.LoadImagesFromFile
+          _convert_: all
+        - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
+          _convert_: all
+          load_dim: ${database.lidar_pointcloud_num_features}
+          use_dim: [0, 1, 2, 3]
+          bev_remove_radius: 0.0
+        - _target_: autoware_ml.transforms.point_cloud.geometry.CropBoxInner
+          _convert_: all
+          crop_box: ${ego_box}
+        - _target_: autoware_ml.transforms.camera.distortion.UndistortImage
+          _convert_: all
+          alpha: 0.0
+        - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.CalibrationMisalignment
+          _convert_: all
+          probability: 0.5
+          activate_roll: true
+          activate_pitch: true
+          activate_yaw: true
+          activate_x: true
+          activate_y: true
+          activate_z: true
+          min_roll_neg: 0.2
+          max_roll_neg: 0.4
+          min_roll_pos: 0.2
+          max_roll_pos: 0.4
+          min_pitch_neg: 0.2
+          max_pitch_neg: 0.4
+          min_pitch_pos: 0.2
+          max_pitch_pos: 0.4
+          min_yaw_neg: 4.2
+          max_yaw_neg: 8.4
+          min_yaw_pos: 4.2
+          max_yaw_pos: 8.4
+          min_x_neg: 0.22
+          max_x_neg: 0.44
+          min_x_pos: 0.22
+          max_x_pos: 0.44
+          min_y_neg: 0.12
+          max_y_neg: 0.24
+          min_y_pos: 0.06
+          max_y_pos: 0.12
+          min_z_neg: 0.24
+          max_z_neg: 0.48
+          min_z_pos: 0.54
+          max_z_pos: 1.08
+        - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.LidarCameraFusion
+          _convert_: all
+          max_depth: 128.0
+          dilation_size: 1
+          ego_box: ${ego_box}
+  train_dataloader:
     batch_size: ${batch_size}
     num_workers: ${num_workers}
     shuffle: true
-  val_dataloader_cfg:
+  validation_dataloader:
     batch_size: ${batch_size}
     num_workers: ${num_workers}
-  test_dataloader_cfg:
+  test_dataloader:
     batch_size: ${batch_size}
     num_workers: ${num_workers}
-  collation_map:
-    fused_img: stack
-    gt_calibration_status: stack
-  train_transforms:
-    pipeline:
-      - _target_: autoware_ml.transforms.camera.loading.LoadImageFromFile
-      - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
-        use_dim: [0, 1, 2, 3, 4]
-      - _target_: autoware_ml.transforms.point_cloud.crop.CropBoxInner
-        crop_box: [-1.53, -1.15, -0.1, 5.72, 1.15, 3.1]
-      - _target_: autoware_ml.transforms.camera.distortion.UndistortImage
-        alpha: 0.0
-      - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.CalibrationMisalignment
-        p: 0.5
-        activate_roll: true
-        activate_pitch: true
-        activate_yaw: true
-        activate_x: true
-        activate_y: true
-        activate_z: true
-        min_roll_neg: 0.2
-        max_roll_neg: 0.4
-        min_roll_pos: 0.2
-        max_roll_pos: 0.4
-        min_pitch_neg: 0.2
-        max_pitch_neg: 0.4
-        min_pitch_pos: 0.2
-        max_pitch_pos: 0.4
-        min_yaw_neg: 4.2
-        max_yaw_neg: 8.4
-        min_yaw_pos: 4.2
-        max_yaw_pos: 8.4
-        min_x_neg: 0.22
-        max_x_neg: 0.44
-        min_x_pos: 0.22
-        max_x_pos: 0.44
-        min_y_neg: 0.12
-        max_y_neg: 0.24
-        min_y_pos: 0.06
-        max_y_pos: 0.12
-        min_z_neg: 0.24
-        max_z_neg: 0.48
-        min_z_pos: 0.54
-        max_z_pos: 1.08
-      - _target_: autoware_ml.transforms.camera.resize.CropAndScale
-        p: 0.2
-        crop_ratio: 0.8
-      - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.Affine
-        p: 0.2
-        max_distortion: 0.05
-      - _target_: autoware_ml.transforms.image.image.PhotometricDistortion
-        p: 0.2
-        brightness: 0.1
-        contrast: 0.1
-        saturation: 0.1
-        hue: 0.05
-      - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.LidarCameraFusion
-        max_depth: 128.0
-        dilation_size: 1
-        ego_box: [-1.53, -1.15, -0.1, 5.72, 1.15, 3.1]
-      - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.SaveFusionPreview
-        p: 0.00001
-        out_dir: ${hydra:run.dir}/previews
-        max_depth: 128.0
-        alpha: 1.0
-        depth_colormap: jet
-        intensity_colormap: turbo
-      - _target_: autoware_ml.transforms.common.tensor.PermuteAxes
-        input_keys: [fused_img]
-        axes: [2, 0, 1]
-  val_transforms:
-    pipeline:
-      - _target_: autoware_ml.transforms.camera.loading.LoadImageFromFile
-      - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
-        use_dim: [0, 1, 2, 3, 4]
-      - _target_: autoware_ml.transforms.point_cloud.crop.CropBoxInner
-        crop_box: [-1.53, -1.15, -0.1, 5.72, 1.15, 3.1]
-      - _target_: autoware_ml.transforms.camera.distortion.UndistortImage
-        alpha: 0.0
-      - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.CalibrationMisalignment
-        p: 0.5
-        activate_roll: true
-        activate_pitch: true
-        activate_yaw: true
-        activate_x: true
-        activate_y: true
-        activate_z: true
-        min_roll_neg: 0.2
-        max_roll_neg: 0.4
-        min_roll_pos: 0.2
-        max_roll_pos: 0.4
-        min_pitch_neg: 0.2
-        max_pitch_neg: 0.4
-        min_pitch_pos: 0.2
-        max_pitch_pos: 0.4
-        min_yaw_neg: 4.2
-        max_yaw_neg: 8.4
-        min_yaw_pos: 4.2
-        max_yaw_pos: 8.4
-        min_x_neg: 0.22
-        max_x_neg: 0.44
-        min_x_pos: 0.22
-        max_x_pos: 0.44
-        min_y_neg: 0.12
-        max_y_neg: 0.24
-        min_y_pos: 0.06
-        max_y_pos: 0.12
-        min_z_neg: 0.24
-        max_z_neg: 0.48
-        min_z_pos: 0.54
-        max_z_pos: 1.08
-      - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.LidarCameraFusion
-        max_depth: 128.0
-        dilation_size: 1
-        ego_box: [-1.53, -1.15, -0.1, 5.72, 1.15, 3.1]
-      - _target_: autoware_ml.transforms.common.tensor.PermuteAxes
-        input_keys: [fused_img]
-        axes: [2, 0, 1]
-  test_transforms: ${datamodule.val_transforms}
-  predict_transforms:
-    pipeline:
-      - _target_: autoware_ml.transforms.camera.loading.LoadImageFromFile
-      - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
-        use_dim: [0, 1, 2, 3, 4]
-      - _target_: autoware_ml.transforms.point_cloud.crop.CropBoxInner
-        crop_box: [-1.53, -1.15, -0.1, 5.72, 1.15, 3.1]
-      - _target_: autoware_ml.transforms.camera.distortion.UndistortImage
-        alpha: 0.0
-      - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.CalibrationMisalignment
-        p: 0.5
-        activate_roll: true
-        activate_pitch: true
-        activate_yaw: true
-        activate_x: true
-        activate_y: true
-        activate_z: true
-        min_roll_neg: 0.2
-        max_roll_neg: 0.4
-        min_roll_pos: 0.2
-        max_roll_pos: 0.4
-        min_pitch_neg: 0.2
-        max_pitch_neg: 0.4
-        min_pitch_pos: 0.2
-        max_pitch_pos: 0.4
-        min_yaw_neg: 4.2
-        max_yaw_neg: 8.4
-        min_yaw_pos: 4.2
-        max_yaw_pos: 8.4
-        min_x_neg: 0.22
-        max_x_neg: 0.44
-        min_x_pos: 0.22
-        max_x_pos: 0.44
-        min_y_neg: 0.12
-        max_y_neg: 0.24
-        min_y_pos: 0.06
-        max_y_pos: 0.12
-        min_z_neg: 0.24
-        max_z_neg: 0.48
-        min_z_pos: 0.54
-        max_z_pos: 1.08
-      - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.LidarCameraFusion
-        max_depth: 128.0
-        dilation_size: 1
-        ego_box: [-1.53, -1.15, -0.1, 5.72, 1.15, 3.1]
-      - _target_: autoware_ml.transforms.common.tensor.PermuteAxes
-        input_keys: [fused_img]
-        axes: [2, 0, 1]
+
 model:
   _target_: autoware_ml.models.calibration_status.calibration_status.CalibrationStatusClassifier
   backbone:

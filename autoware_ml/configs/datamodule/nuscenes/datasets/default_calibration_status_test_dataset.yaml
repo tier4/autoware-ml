@@ -1,5 +1,5 @@
 defaults:
-  - /datamodule/t4dataset/datasets/default_detection3d_test_dataset@_here_
+  - /datamodule/t4dataset/datasets/default_calibration_status_test_dataset@_here_
   - _self_
 
 _target_: autoware_ml.datamodule.nuscenes.dataset.NuScenesDataset

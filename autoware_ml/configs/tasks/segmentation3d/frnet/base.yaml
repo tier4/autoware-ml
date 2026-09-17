@@ -12,13 +12,32 @@ range_width: ???
 frustum_height: ???
 frustum_width: ???
 
-datamodule:
-  collation_map:
-    points: concat
-    pts_semantic_mask: concat
-    ego2global: list
-    scene_token: list
-    timestamp: list
+data_preprocessing:
+  pipeline:
+    - _target_: autoware_ml.preprocessing.segmentation3d.range_view.FrustumMix
+      probability: 1.0
+      height: ${range_height}
+      width: ${range_width}
+      fov_up: ${fov_up}
+      fov_down: ${fov_down}
+      num_areas: [3, 4, 5, 6]
+    - _target_: autoware_ml.preprocessing.segmentation3d.range_view.InstanceCopy
+      probability: 1.0
+      instance_classes: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    - _target_: autoware_ml.preprocessing.segmentation3d.range_view.RangeInterpolation
+      height: ${range_height}
+      width: ${range_width}
+      fov_up: ${fov_up}
+      fov_down: ${fov_down}
+      ignore_index: ${dataset.segmentation3d.ignore_index}
+    - _target_: autoware_ml.preprocessing.segmentation3d.frustum_range.FrustumRangePreprocessor
+      height: ${frustum_height}
+      width: ${frustum_width}
+      fov_up: ${fov_up}
+      fov_down: ${fov_down}
+      ignore_index: ${dataset.segmentation3d.ignore_index}
+      num_classes: ${dataset.segmentation3d.num_classes}
+
 model:
   _target_: autoware_ml.models.segmentation3d.frnet.FRNet
   metrics: ${dataset.segmentation3d.metrics}
@@ -157,13 +176,3 @@ deploy:
         min_shape: [5000]
         opt_shape: [60000]
         max_shape: [160000]
-
-data_preprocessing:
-  pipeline:
-    - _target_: autoware_ml.preprocessing.segmentation3d.frustum_range.FrustumRangePreprocessor
-      height: ${frustum_height}
-      width: ${frustum_width}
-      fov_up: ${fov_up}
-      fov_down: ${fov_down}
-      ignore_index: ${dataset.segmentation3d.ignore_index}
-      num_classes: ${dataset.segmentation3d.num_classes}
