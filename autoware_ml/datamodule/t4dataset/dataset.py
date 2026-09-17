@@ -22,6 +22,7 @@ from autoware_ml.databases.schemas.lidar_sources import (
     LidarSourceDataModel,
     LidarSourceDatasetSchema,
 )
+from autoware_ml.dataclasses.batch.frame_meta import FrameMetaSample
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.dataclasses.geometry.images import ImageSample
 from autoware_ml.dataclasses.geometry.point_clouds import LiDARPointCloudSample, LidarSourceView
@@ -29,6 +30,7 @@ from autoware_ml.datamodule.base_dataset import (
     BaseDataset,
 )
 from autoware_ml.datamodule.base_dataset_task import BaseDatasetTask
+from autoware_ml.datamodule.t4dataset.frame_meta import scene_dir_fragment
 from autoware_ml.transforms.base import TransformsCompose
 from autoware_ml.types.tasks import TaskType
 
@@ -201,6 +203,7 @@ class T4Dataset(BaseDataset):
             camera_image_data=None,
             detection3d_gt_bboxes_3d=detection3d_gt_bboxes_3d,
             segmentation3d_gt_sample=segmentation3d_gt_sample,
+            frame_meta=self.get_frame_meta_sample(record_index, source_view),
         )
 
     def get_lidar_source_view(self, idx: int, channel_name: str) -> LidarSourceView:
@@ -258,6 +261,38 @@ class T4Dataset(BaseDataset):
             point_index_begin=int(entry["idx_begin"]),
             num_points=int(entry["length"]),
             sensor_to_frame_matrix=torch.from_numpy(sensor_to_frame),
+        )
+
+    def get_frame_meta_sample(
+        self, idx: int, source_view: LidarSourceView | None
+    ) -> FrameMetaSample:
+        """
+        Return the map pose and the scene id of the keyframe lidar frame. The evaluation uses
+        them to find the lanelet map of the scene.
+
+        Args:
+          idx: Index of the specific record to be processed.
+          source_view: Lidar source the sample serves, None for the merged cloud.
+
+        Returns:
+          FrameMetaSample: Metadata of the keyframe lidar frame.
+        """
+        lidar_frame = LidarFrameDataModel.load_from_dictionary(
+            self.dataset_records_dataframe.item(idx, DatasetTableSchema.LIDAR_FRAMES.name)[0]
+        )
+        sensor_to_ego = lidar_frame.lidar_sensor_to_ego_pose_matrix_fp32
+        if source_view is not None:
+            sensor_to_ego = sensor_to_ego @ source_view.sensor_to_frame_matrix.numpy()
+        return FrameMetaSample(
+            # The boxes and the points live in the lidar sensor frame, so the map transform
+            # composes the sensor mounting with the ego pose of the frame
+            ego2global=torch.tensor(
+                lidar_frame.lidar_frame_ego_pose_to_global_matrix_fp32 @ sensor_to_ego,
+                dtype=torch.float32,
+            ),
+            scene_token=scene_dir_fragment(
+                lidar_frame.lidar_pointcloud_relative_path, str(self.database_root_path)
+            ),
         )
 
     def get_image_data_samples(
