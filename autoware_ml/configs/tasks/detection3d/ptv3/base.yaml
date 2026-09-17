@@ -11,32 +11,11 @@ dataset: ???
 grid_size: ???
 point_cloud_range: ???
 
-train_sweeps_num: 1
-val_sweeps_num: 1
-
-datamodule:
-  _target_: ???
-  data_root: ${dataset.data_root}
-  train_ann_file: ${datamodule.data_root}/info/detection3d/t4dataset_j6gen2_base_infos_train.pkl
-  val_ann_file: ${datamodule.data_root}/info/detection3d/t4dataset_j6gen2_base_infos_val.pkl
-  test_ann_file: ${datamodule.data_root}/info/detection3d/t4dataset_j6gen2_base_infos_val.pkl
-  class_names: ${dataset.detection3d.class_names}
-  name_mapping: ${dataset.detection3d.name_mapping}
-  train_frame_sampling:
-    repeat_sampling_factor: 0.30
-    object_bev_range: ???
-    low_pedestrian_height_threshold: 1.5
-    low_pedestrian_bev_range: [-50.0, -50.0, 50.0, 50.0]
-  collation_map:
-    coord: concat
-    feat: concat
-    grid_coord: concat
-    gt_boxes: list
-    gt_labels: list
-    gt_num_points: list
-    ego2global: list
-    scene_token: list
-    timestamp: list
+data_preprocessing:
+  pipeline:
+    - _target_: autoware_ml.preprocessing.point_cloud.grid_sample.GridSamplePreprocessor
+      grid_size: ${grid_size}
+      point_cloud_range: ${point_cloud_range}
 
 model:
   _target_: autoware_ml.models.detection3d.ptv3.PTv3DetectionModel

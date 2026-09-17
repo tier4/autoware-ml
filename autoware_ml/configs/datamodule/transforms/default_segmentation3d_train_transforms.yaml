@@ -1,0 +1,54 @@
+_target_: autoware_ml.transforms.base.TransformsCompose
+_convert_: all
+
+pipeline:
+  - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
+    _convert_: all
+
+    load_dim: ${database.lidar_pointcloud_num_features}
+    use_dim: [0, 1, 2, 3] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]
+    bev_remove_radius: 0.0
+
+  - _target_: autoware_ml.transforms.point_cloud.geometry.RandomRotateTargetAngle
+    _convert_: all
+
+    probability: 0.75
+    # Multiples of pi
+    yaw_angle_ratios: [0.5, 1.0, 1.5]
+
+  - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
+    _convert_: all
+
+    yaw_rot_range: [-3.14159265, 3.14159265]
+    scale_ratio_range: [0.9, 1.1]
+    translation_std: [0.5, 0.5, 0.2]
+
+  - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalBEVRandomFlip
+    _convert_: all
+
+    horizontal_flip_ratio: 0.5
+    vertical_flip_ratio: 0.5
+
+  - _target_: autoware_ml.transforms.point_cloud.perturbation.RandomJitter
+    _convert_: all
+
+    sigma: 0.012
+    clip: 0.05
+
+  - _target_: autoware_ml.transforms.point_cloud.geometry.PointsRangeFilter
+    _convert_: all
+
+    points_range: ${point_cloud_range}
+
+  - _target_: autoware_ml.transforms.point_cloud.sampling.RandomDropout
+    _convert_: all
+
+    probability: 0.5
+    dropout_ratio: 0.2
+
+  - _target_: autoware_ml.transforms.point_cloud.perturbation.RandomStrengthJitter
+    _convert_: all
+
+    gamma_range: [0.8, 1.25]
+    scale_range: [0.9, 1.1]
+    shift_range: [-0.02, 0.02]

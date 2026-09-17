@@ -12,6 +12,7 @@ from shapely.geometry import Polygon
 from autoware_ml.types.geometry import Box3DFieldIndex
 from autoware_ml.databases.box3d_pipelines.box3d_pipeline import Box3DPipeline
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDataModel
+from autoware_ml.databases.taxonomy import LabelTaxonomy
 
 
 class Box3DMerger(Box3DPipeline):
@@ -23,7 +24,7 @@ class Box3DMerger(Box3DPipeline):
         self,
         target_labels: MappingProxyType[str, Sequence[str]],
         proximity_distance_threshold: float,
-        class_names: Sequence[str],
+        taxonomy: LabelTaxonomy,
     ):
         """
         Initialize Box3DMerger.
@@ -32,13 +33,12 @@ class Box3DMerger(Box3DPipeline):
           target_classes: Mapping of the target classes to the list of source classes.
           proximity_distance_threshold: Proximity distance threshold to check if two boxes are
             close to each other.
-          class_names: List of class names in the database, used for category mapping.
+          taxonomy: Taxonomy that maps a label name to its class index.
         """
         super().__init__()
         self.target_labels = target_labels
         self.proximity_distance_threshold = proximity_distance_threshold
-        self.class_names = class_names
-        self.label_indices = {label_name: index for index, label_name in enumerate(class_names)}
+        self.taxonomy = taxonomy
 
         # Check if target labels are valid, it supports only two source labels for each target label
         for target_label, source_labels in self.target_labels.items():
@@ -256,7 +256,7 @@ class Box3DMerger(Box3DPipeline):
                     box3d_idx_1
                 ].box3d_dataset_label_name
                 merged_box3d_label_name = target_label
-                merged_box3d_label_index = self.label_indices[target_label]
+                merged_box3d_label_index = self.taxonomy.class_index(target_label)
                 merged_box3d_num_lidar_points = (
                     boxes3d_data_model[box3d_idx_1].box3d_num_lidar_points
                     + boxes3d_data_model[box3d_idx_2].box3d_num_lidar_points
@@ -322,7 +322,7 @@ class Box3DExtendLongerMerger(Box3DMerger):
         self,
         target_labels: MappingProxyType[str, Sequence[str]],
         proximity_distance_threshold: float,
-        class_names: Sequence[str],
+        taxonomy: LabelTaxonomy,
     ):
         """
         Initialize Box3DExtendLongerMerger.
@@ -331,13 +331,13 @@ class Box3DExtendLongerMerger(Box3DMerger):
           target_labels: Mapping of the target classes to the list of source classes.
           proximity_distance_threshold: Proximity distance threshold to check if two boxes are
             close to each other.
-          class_names: List of class names in the database, used for category mapping.
+          taxonomy: Taxonomy that maps a label name to its class index.
         """
 
         super().__init__(
             target_labels=target_labels,
             proximity_distance_threshold=proximity_distance_threshold,
-            class_names=class_names,
+            taxonomy=taxonomy,
         )
 
     def __str__(self) -> str:
@@ -350,7 +350,7 @@ class Box3DExtendLongerMerger(Box3DMerger):
         return (
             f"{self.__class__.__name__}(target_labels={self.target_labels}, "
             f"proximity_distance_threshold={self.proximity_distance_threshold}, "
-            f"class_names={self.class_names})"
+            f"taxonomy={self.taxonomy})"
         )
 
     @staticmethod

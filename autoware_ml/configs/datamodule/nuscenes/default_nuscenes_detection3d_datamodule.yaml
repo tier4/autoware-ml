@@ -1,4 +1,4 @@
-_target_: autoware_ml.datamodule.multi_task.multi_task_data_module.MultiTaskDataModule
+_target_: autoware_ml.datamodule.data_module.DataModule
 _convert_: all
 
 defaults:
@@ -10,5 +10,7 @@ defaults:
   - nuscenes/datasets@train_dataset: default_detection3d_train_dataset
   - nuscenes/datasets@test_dataset: default_detection3d_test_dataset
   - nuscenes/datasets@validation_dataset: default_detection3d_test_dataset
+
+database: ${database}
 
 predict_dataset: null

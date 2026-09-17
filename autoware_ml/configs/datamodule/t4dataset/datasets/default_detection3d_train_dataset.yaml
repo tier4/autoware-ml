@@ -1,4 +1,4 @@
-_target_: autoware_ml.datamodule.multi_task.t4dataset.multi_task_t4dataset.MultiTaskT4Dataset
+_target_: autoware_ml.datamodule.t4dataset.dataset.T4Dataset
 _convert_: all
 
 defaults:
@@ -6,6 +6,7 @@ defaults:
   - ../../transforms@transforms: default_train_transforms
 
 database_root_path: ${database.root_path}
+lidar_intensity_scale: ${database.lidar_intensity_scale}
 
 # Always None since we run splitter in the process
 dataset_records_dataframe: null

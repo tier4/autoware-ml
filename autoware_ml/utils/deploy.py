@@ -98,19 +98,6 @@ def get_export_parameter_names(model: L.LightningModule) -> list[str]:
     ]
 
 
-def move_to_device(value: Any, device: torch.device) -> Any:
-    """Move tensors nested in common Python containers to ``device``."""
-    if isinstance(value, torch.Tensor):
-        return value.to(device)
-    if isinstance(value, list):
-        return [move_to_device(item, device) for item in value]
-    if isinstance(value, tuple):
-        return tuple(move_to_device(item, device) for item in value)
-    if isinstance(value, dict):
-        return {key: move_to_device(item, device) for key, item in value.items()}
-    return value
-
-
 def extract_input_from_batch(batch: dict[str, Any], param_name: str) -> Any:
     """Extract one export input from a batch dictionary."""
     if param_name not in batch:
@@ -132,8 +119,8 @@ def get_predict_batch(
     """Load one prediction batch and apply transfer-time preprocessing."""
     datamodule.setup("predict")
     predict_dataloader = datamodule.predict_dataloader()
-    batch = next(iter(predict_dataloader))
-    batch = move_to_device(batch, device)
+    # The typed batch moves its own tensors
+    batch = next(iter(predict_dataloader)).to_device(device)
     return model.on_after_batch_transfer(batch, dataloader_idx=0)
 
 

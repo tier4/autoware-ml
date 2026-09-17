@@ -4,116 +4,22 @@ defaults:
   - /datasets/t4dataset/base
   - _self_
 
-class_names:
-  - car
-  - truck
-  - bus
-  - train
-  - motorcycle
-  - bicycle
-  - pedestrian
-  - animal
-  - barrier
-  - traffic_cone
-  - debris
-  - bicycle_rack
-  - vehicle_extension
-num_classes: 13
-name_mapping:
-  # vehicles
-  car: car
-  vehicle.car: car
-  forklift: car
-  kart: car
-  other_vehicle: car
-  police_car: car
-  vehicle.police: car
-  ambulance: car
-  vehicle.ambulance: car
-  "vehicle.emergency (ambulance & police)": car
-  emergency_vehicle: car
-  truck: truck
-  vehicle.truck: truck
-  tractor_unit: truck
-  construction_vehicle: truck
-  vehicle.construction: truck
-  fire_truck: truck
-  vehicle.fire: truck
-  trailer: trailer
-  vehicle.trailer: trailer
-  semi_trailer: trailer
-  bus: bus
-  vehicle.bus: bus
-  "vehicle.bus (bendy & rigid)": bus
-  train: train
-  vehicle.train: train
-  motorcycle: motorcycle
-  vehicle.motorcycle: motorcycle
-  bicycle: bicycle
-  vehicle.bicycle: bicycle
-  # vulnerable road users
-  pedestrian: pedestrian
-  pedestrian.adult: pedestrian
-  pedestrian.child: pedestrian
-  other_pedestrian: pedestrian
-  police_officer: pedestrian
-  pedestrian.police_officer: pedestrian
-  construction_worker: pedestrian
-  pedestrian.construction_worker: pedestrian
-  personal_mobility: pedestrian
-  pedestrian.personal_mobility: pedestrian
-  wheelchair: pedestrian
-  pedestrian.wheelchair: pedestrian
-  stroller: pedestrian
-  pedestrian.stroller: pedestrian
-  animal: animal
-  # static objects
-  barrier: barrier
-  movable_object.barrier: barrier
-  construction_sign: barrier
-  traffic_cone: traffic_cone
-  trafficcone: traffic_cone
-  movable_object.traffic_cone: traffic_cone
-  movable_object.trafficcone: traffic_cone
-  debris: debris
-  movable_object.debris: debris
-  pushable_pullable: debris
-  movable_object.pushable_pullable: debris
-  bicycle_rack: bicycle_rack
-  static_object.bicycle_rack: bicycle_rack
-  static_object.bicycle rack: bicycle_rack
-  vehicle_protruding_object: vehicle_extension
-  open_door: vehicle_extension
+# Classes of the database taxonomy, in its order
+class_names: ${database.taxonomy.detection3d.class_names}
+num_classes: ${class_count:${database.taxonomy.detection3d.class_names}}
+ignore_index: ${database.taxonomy.detection3d.ignore_index}
+# Parked or riderless bicycles and motorcycles are no detection targets
 filter_attributes:
-  # new t4 spec (two_wheel_vehicle_state), drop parked / rider-less two-wheelers
   - [bicycle, vehicle_state.parked]
   - [bicycle, two_wheel_vehicle_state.without_rider]
+  - [bicycle, cycle_state.without_rider]
   - [motorcycle, vehicle_state.parked]
   - [motorcycle, two_wheel_vehicle_state.without_rider]
-  # nuScenes + older-t4 aliases kept for compatibility
-  - [vehicle.bicycle, vehicle_state.parked]
-  - [vehicle.bicycle, cycle_state.without_rider]
-  - [vehicle.motorcycle, vehicle_state.parked]
-  - [vehicle.motorcycle, motorcycle_state.without_rider]
-  - [bicycle, cycle_state.without_rider]
+  - [motorcycle, cycle_state.without_rider]
   - [motorcycle, motorcycle_state.without_rider]
-merge_objects: [[truck, [truck, trailer]]]
 train_min_points_near: 3
 train_min_points_far: 2
-eval_class_range:
-  car: 121.0
-  truck: 121.0
-  bus: 121.0
-  train: 121.0
-  motorcycle: 121.0
-  bicycle: 121.0
-  pedestrian: 121.0
-  animal: 121.0
-  barrier: 121.0
-  traffic_cone: 121.0
-  debris: 121.0
-  bicycle_rack: 121.0
-  vehicle_extension: 121.0
+eval_class_range: ${database.taxonomy.detection3d.eval_range}
 metric_ranges:
   - { _target_: autoware_ml.metrics.base.MetricRange, name: 0-50m, min_distance: 0.0, max_distance: 50.0 }
   - { _target_: autoware_ml.metrics.base.MetricRange, name: 50-90m, min_distance: 50.0, max_distance: 90.0 }
@@ -148,18 +54,14 @@ collision_filter:
 collision:
   _target_: autoware_ml.metrics.detection3d.collision.CollisionTTC
   class_names: ${t4dataset.detection3d.class_names}
+  kinds: ${database.taxonomy.detection3d.collision_kinds}
+  living_speeds: ${database.taxonomy.detection3d.living_speeds}
   map_provider: ${t4dataset.detection3d.map_provider}
   vehicle: ${t4dataset.vehicle}
   region: ${t4dataset.drivable_region}
   max_speed_mps: ${t4dataset.max_speed_mps}
   params: ${t4dataset.reachability}
-class_groups:
-  grouped_vehicle: [car, truck, bus, train, vehicle_extension]
-  grouped_two_wheeler: [motorcycle, bicycle]
-  grouped_pedestrian_animal: [pedestrian, animal]
-  grouped_static_obstacle: [barrier, traffic_cone]
-  grouped_debris: [debris]
-  grouped_structure: [bicycle_rack]
+class_groups: ${database.taxonomy.detection3d.class_groups}
 detection_components:
   # Whole-scene.
   - { _target_: autoware_ml.metrics.detection3d.mean_ap.MeanAP, stages: [val, test] }

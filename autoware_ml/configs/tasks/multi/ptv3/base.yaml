@@ -16,24 +16,11 @@ head_voxel_size: ???
 
 num_proposals: ???
 
-datamodule:
-  collation_map:
-    coord: concat
-    feat: concat
-    grid_coord: concat
-    segment: concat
-    origin_segment: concat
-    origin_coord: concat
-    inverse: index_concat
-    gt_boxes: list
-    gt_labels: list
-    gt_num_points: list
-    ego2global: list
-    scene_token: list
-    timestamp: list
-  data_root: ${dataset.data_root}
-  class_names: ${dataset.detection3d.class_names}
-  name_mapping: ${dataset.detection3d.name_mapping}
+data_preprocessing:
+  pipeline:
+    - _target_: autoware_ml.preprocessing.point_cloud.grid_sample.GridSamplePreprocessor
+      grid_size: ${grid_size}
+      point_cloud_range: ${point_cloud_range}
 
 model:
   _target_: autoware_ml.models.multi.ptv3_segdet.PTv3SegDetModel

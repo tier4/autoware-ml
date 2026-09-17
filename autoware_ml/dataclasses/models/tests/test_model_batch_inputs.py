@@ -53,6 +53,7 @@ class TestModelBatchInputs(unittest.TestCase):
             image_augmentation_matrices=torch.eye(4).expand(batch_size, num_cameras, 4, 4),
             lidar2images=torch.eye(4).expand(batch_size, num_cameras, 4, 4),
             lidar2cams=torch.eye(4).expand(batch_size, num_cameras, 4, 4),
+            calibration_statuses=None,
         )
 
     def test_lidar_only_inputs_leave_images_absent(self) -> None:

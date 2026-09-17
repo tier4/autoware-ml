@@ -130,8 +130,8 @@ class DatasetRecord(BaseModel, DataModelInterface):
       lidar_frames: List of lidar frame data models, including multi-sweep lidar frames.
 
       # Image frame data
-      image_frames: Image frames of the sample, one list per camera channel, the keyframe
-        of the channel first and its sweeps after it.
+      image_frames: Image frames of the sample, the frames of every camera at the sample time
+        first and one list per camera sweep after it.
 
       # Lidar sources data
       lidar_sources: List of lidar source data models.

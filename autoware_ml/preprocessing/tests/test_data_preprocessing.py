@@ -17,7 +17,10 @@
 from typing import Any
 
 import pytest
+import torch
 
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
+from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch
 from autoware_ml.preprocessing.base import DataPreprocessing
 
 
@@ -32,14 +35,28 @@ class _ModeRecorder:
         return {"stage_ran": True}
 
 
+def _batch() -> ModelGTBatch:
+    """Build a one sample batch holding two points."""
+    return ModelGTBatch(
+        point_cloud_gt_batch=PointCloudGTBatch(
+            points=torch.zeros((2, 4), dtype=torch.float32),
+            batch_indices=torch.zeros(2, dtype=torch.int32),
+            batch_size=1,
+        ),
+        detection3d_gt_batch=None,
+        segmentation3d_gt_batch=None,
+        image_gt_batch=None,
+    )
+
+
 def test_call_forwards_is_training_to_every_layer():
     """The pipeline is not a registered submodule, so the owning model's mode reaches
     the stages only through the explicit is_training argument."""
     first, second = _ModeRecorder(), _ModeRecorder()
     pipeline = DataPreprocessing([first, second])
 
-    pipeline({}, is_training=True)
-    pipeline({}, is_training=False)
+    pipeline(_batch(), is_training=True)
+    pipeline(_batch(), is_training=False)
 
     assert first.seen_modes == [True, False]
     assert second.seen_modes == [True, False]
@@ -51,15 +68,13 @@ def test_call_requires_explicit_is_training():
     pipeline = DataPreprocessing([_ModeRecorder()])
 
     with pytest.raises(TypeError):
-        pipeline({})  # type: ignore[call-arg]
+        pipeline(_batch())  # type: ignore[call-arg]
 
 
-def test_call_merges_layer_outputs_into_batch():
+def test_call_merges_layer_outputs_into_the_named_batch():
     pipeline = DataPreprocessing([_ModeRecorder()])
-    batch = {"points": [1, 2, 3]}
 
-    result = pipeline(batch, is_training=True)
+    result = pipeline(_batch(), is_training=True)
 
-    assert result is batch  # mutated in place and returned for chaining
     assert result["stage_ran"] is True
-    assert result["points"] == [1, 2, 3]
+    assert [len(points) for points in result["points"]] == [2]

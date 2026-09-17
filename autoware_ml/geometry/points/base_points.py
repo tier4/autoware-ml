@@ -1,5 +1,6 @@
 """
-It is a base class for all point cloud data structures, providing common attributes and methods that can be used by derived classes.
+Base class of the point cloud data structures, with the attributes and methods the derived
+classes share.
 
 Note that the code is modified from:
 https://github.com/open-mmlab/mmdetection3d/blob/main/mmdet3d/structures/points/base_points.py
@@ -39,8 +40,8 @@ class BasePoints(ABC):
         Initialize the BasePoints instance.
 
         Args:
-            points: A tensor of shape (num_points, num_point_features) representing the point cloud data.
-            point_feature_names: A sequence of PointFeatureName representing the names of the features for each point.
+            points: Point cloud tensor of shape (num_points, num_point_features).
+            point_feature_names: Name of every feature of a point.
             timestamp: A float representing the timestamp of the point cloud data in seconds.
             timestamp_difference_dim: Dimension index of the timestamp difference feature, ``-1``
                 when the points carry none. When given, it must point at the feature named
@@ -53,7 +54,8 @@ class BasePoints(ABC):
         if timestamp_difference_dim != -1:
             if not 0 <= timestamp_difference_dim < len(point_feature_names):
                 raise ValueError(
-                    f"timestamp_difference_dim must be -1 or within [0, {len(point_feature_names)}), "
+                    "timestamp_difference_dim must be -1 or within "
+                    f"[0, {len(point_feature_names)}), "
                     f"got {timestamp_difference_dim}."
                 )
             if (
@@ -136,6 +138,48 @@ class BasePoints(ABC):
         """torch.Size(int, int): Shape of points."""
         return self.points.shape
 
+    def feature_dim(self, point_feature_name: PointFeatureName) -> int:
+        """Dimension index of the named feature.
+
+        Args:
+            point_feature_name (PointFeatureName): Name of the feature to look up.
+
+        Returns:
+            int: Dimension index of the feature.
+
+        Raises:
+            ValueError: If the points do not carry the feature.
+        """
+        if point_feature_name not in self._point_feature_names:
+            raise ValueError(
+                f"The points carry {list(self._point_feature_names)}, not {point_feature_name}."
+            )
+        return list(self._point_feature_names).index(point_feature_name)
+
+    def feature(self, point_feature_name: PointFeatureName) -> Float32[Tensor, " num_points"]:
+        """Values of the named feature for each point.
+
+        Args:
+            point_feature_name (PointFeatureName): Name of the feature to read.
+
+        Returns:
+            Float32[Tensor, " num_points"]: The feature of each point.
+        """
+        return self.points[:, self.feature_dim(point_feature_name)]
+
+    def set_feature(
+        self,
+        point_feature_name: PointFeatureName,
+        values: Float32[Tensor, " num_points"],
+    ) -> None:
+        """Overwrite the values of the named feature.
+
+        Args:
+            point_feature_name (PointFeatureName): Name of the feature to write.
+            values (Float32[Tensor, " num_points"]): New value of the feature for each point.
+        """
+        self.points[:, self.feature_dim(point_feature_name)] = values
+
     @property
     def bev_coords(self) -> Float32[Tensor, "num_points 2"]:
         """Coordinates in BEV (x and y) of the points in shape (num_points, 2)."""
@@ -148,7 +192,7 @@ class BasePoints(ABC):
 
     @property
     def timestamp_difference_dim(self) -> int:
-        """int: Dimension index for the timestamp difference feature, if it exists. -1 indicates that it does not exist."""
+        """int: Dimension index of the timestamp difference feature, -1 when there is none."""
         return self._timestamp_difference_dim
 
     def add_timestamp_difference(self, timestamp_difference: float) -> None:
@@ -244,6 +288,23 @@ class BasePoints(ABC):
         )
         return in_range_flags
 
+    def in_grid_range_3d(self, point_range: Float32[Tensor, "6"]) -> Bool[Tensor, " num_points"]:
+        """Check whether the points lie in the half-open range [min, max).
+
+        A point on the maximum would fall one cell past a voxel grid over the range, so it
+        counts as outside.
+
+        Args:
+            point_range (Float32[Tensor, "6"]): The range of
+                point (x_min, y_min, z_min, x_max, y_max, z_max).
+
+        Returns:
+            Bool[Tensor, " num_points"]: A binary vector indicating whether each point is inside
+            the grid range.
+        """
+        coordinates = self.points[:, [PointFieldIndex.X, PointFieldIndex.Y, PointFieldIndex.Z]]
+        return ((coordinates >= point_range[:3]) & (coordinates < point_range[3:])).all(dim=1)
+
     def in_range_bev(self, point_range: Float32[Tensor, "4"]) -> Bool[Tensor, " num_points"]:
         """Check whether the points are in the given BEV range.
 
@@ -295,7 +356,8 @@ class BasePoints(ABC):
         for point in points:
             if point.point_feature_names != first_point_feature_names:
                 raise ValueError(
-                    "All BasePoints instances must have the same point_feature_names for concatenation."
+                    "All BasePoints instances must have the same point_feature_names for "
+                    "concatenation."
                 )
             if point.timestamp_difference_dim != first_timestamp_difference_dim:
                 raise ValueError(
@@ -305,7 +367,7 @@ class BasePoints(ABC):
                 )
 
         concatenated_points = torch.cat([point.points for point in points], dim=0)
-        # Always use the timestamp_seconds of the first BasePoints instance for the concatenated result
+        # The concatenated points take the timestamp of the first instance
         return cls(
             concatenated_points,
             first_point_feature_names,

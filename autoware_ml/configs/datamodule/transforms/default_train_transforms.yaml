@@ -1,15 +1,15 @@
-_target_: autoware_ml.transforms.multi_task.base.MultiTaskTransformsCompose
+_target_: autoware_ml.transforms.base.TransformsCompose
 _convert_: all
 
 pipeline:
-  - _target_: autoware_ml.transforms.multi_task.point_cloud.loading.LoadPointsFromFile
+  - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
     _convert_: all
 
     load_dim: ${database.lidar_pointcloud_num_features}
     use_dim: [0, 1, 2, 3] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]
     bev_remove_radius: 0.0
 
-  - _target_: autoware_ml.transforms.multi_task.point_cloud.loading.LoadMultiSweepPointsFromFile
+  - _target_: autoware_ml.transforms.point_cloud.loading.LoadMultiSweepPointsFromFile
     _convert_: all
 
     sweeps_num: 1
@@ -19,7 +19,7 @@ pipeline:
     load_dim: ${database.lidar_pointcloud_num_features}
     use_dim: [0, 1, 2, 3] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]
 
-  - _target_: autoware_ml.transforms.multi_task.point_cloud.geometry.GlobalRotScaleTrans
+  - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
     _convert_: all
 
     # In radians, the range of rotation angles for random rotation around the Z-axis.
@@ -30,26 +30,32 @@ pipeline:
     # The standard deviation for Gaussian translation noise.
     translation_std: [0.5, 0.5, 0.2]
 
-  - _target_: autoware_ml.transforms.multi_task.point_cloud.geometry.GlobalBEVRandomFlip
+  - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalBEVRandomFlip
     _convert_: all
 
     horizontal_flip_ratio: 0.5
     vertical_flip_ratio: 0.5
 
-  - _target_: autoware_ml.transforms.multi_task.point_cloud.geometry.PointsRangeFilter
+  - _target_: autoware_ml.transforms.point_cloud.geometry.PointsRangeFilter
     _convert_: all
 
     points_range: ${point_cloud_range}
 
-  - _target_: autoware_ml.transforms.multi_task.point_cloud.geometry.PointsRandomShuffle
+  - _target_: autoware_ml.transforms.point_cloud.geometry.PointsRandomShuffle
     _convert_: all
 
-  - _target_: autoware_ml.transforms.multi_task.bboxes_3d.loading.BBoxesLabelNameFilter
+  - _target_: autoware_ml.transforms.boxes3d.loading.BBoxesLabelNameFilter
     _convert_: all
 
-    label_names_to_keep: ${database.class_names}
+    label_names_to_keep: ${database.taxonomy.detection3d.class_names}
+    class_names: ${database.taxonomy.detection3d.class_names}
 
-  - _target_: autoware_ml.transforms.multi_task.bboxes_3d.geometry.BBoxesBEVDistanceFilter
+  - _target_: autoware_ml.transforms.boxes3d.loading.BBoxesAttributeFilter
+    _convert_: all
+
+    filter_attributes: ${dataset.detection3d.filter_attributes}
+
+  - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesBEVDistanceFilter
     _convert_: all
 
     bev_range:
@@ -60,7 +66,7 @@ pipeline:
 
   # Order matters, it first filters bboxes within the default meters with less than 2 points.
   # Then it filters bboxes within 60 meters with less than 3 points
-  - _target_: autoware_ml.transforms.multi_task.bboxes_3d.geometry.BBoxesMinPointsFilter
+  - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesMinPointsFilter
     _convert_: all
 
     min_points: 2
@@ -70,7 +76,7 @@ pipeline:
       - ${point_cloud_range.3}
       - ${point_cloud_range.4}
 
-  - _target_: autoware_ml.transforms.multi_task.bboxes_3d.geometry.BBoxesMinPointsFilter
+  - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesMinPointsFilter
     _convert_: all
 
     min_points: 3
