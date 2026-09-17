@@ -8,16 +8,12 @@ import pytest
 import torch
 
 from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
-from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
 from autoware_ml.models.detection3d.tests.ptv3_detection_fixtures import (
     build_inputs,
     build_seg_model,
-    build_targets,
     build_trans_model,
-    build_ptv3_batch_inputs,
-    move_batch_to_device,
-    move_targets_to_device,
 )
+from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
 from autoware_ml.utils.checkpoints import apply_matching_weights
 
 
@@ -52,18 +48,15 @@ def test_ptv3_bev_projection_assume_valid_matches_guarded_path_for_valid_coords(
     reason="PTv3 sparse-convolution tests require CUDA spconv",
 )
 def test_ptv3_transhead_detection_runs_loss_and_predict() -> None:
-    device = torch.device("cuda")
-    model = build_trans_model().to(device)
-    inputs = move_batch_to_device(build_inputs(), device)
-    gt_boxes, gt_labels = build_targets()
-    gt_boxes, gt_labels = move_targets_to_device(gt_boxes, gt_labels, device)
+    model = build_trans_model().to(torch.device("cuda"))
+    batch = build_inputs(device=torch.device("cuda"))
 
-    outputs = model(**inputs)
-    metrics = model.compute_metrics(build_ptv3_batch_inputs(inputs, gt_boxes, gt_labels), outputs)
-    predictions = model.bbox_head.predict(outputs.detection3d().transfusion_head())
+    outputs = model(**model.forward_inputs(batch))
+    metrics = model.compute_metrics(batch, outputs)
+    predictions = model.predict_outputs(batch, outputs).detection3d_predictions
+    head_outputs = outputs.detection3d().transfusion_head()
 
     assert "loss" in metrics
-    head_outputs = outputs.detection3d().transfusion_head()
     assert head_outputs.dense_heatmap.shape[:2] == (1, 2)
     assert head_outputs.query_labels.shape == (1, 8)
     assert isinstance(predictions, list)

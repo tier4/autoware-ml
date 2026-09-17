@@ -60,11 +60,14 @@ def build_detection_gt_batch(
     )
 
 
-def build_point_cloud_batch(points: Sequence[torch.Tensor]) -> PointCloudGTBatch:
+def build_point_cloud_batch(
+    points: Sequence[torch.Tensor], timestamp_difference_dim: int = -1
+) -> PointCloudGTBatch:
     """Concatenate the points of every sample into a point cloud batch.
 
     Args:
         points: Points of every sample.
+        timestamp_difference_dim: Column of the time lag, -1 for points without one.
 
     Returns:
         The collated point cloud.
@@ -76,7 +79,10 @@ def build_point_cloud_batch(points: Sequence[torch.Tensor]) -> PointCloudGTBatch
         ]
     )
     return PointCloudGTBatch(
-        points=torch.cat(list(points)), batch_indices=batch_indices, batch_size=len(points)
+        points=torch.cat(list(points)),
+        batch_indices=batch_indices,
+        batch_size=len(points),
+        timestamp_difference_dim=timestamp_difference_dim,
     )
 
 
@@ -98,6 +104,8 @@ def voxels_data_from_zyx(
         coords=voxel_coords[:, [3, 2, 1]].to(torch.int32),
         num_points=num_points.to(torch.int32),
         batch_indices=voxel_coords[:, 0].to(torch.int32),
+        point_voxel_indices=torch.zeros((0,), dtype=torch.int64),
+        num_dropped_voxels=torch.zeros((), dtype=torch.int64),
     )
 
 

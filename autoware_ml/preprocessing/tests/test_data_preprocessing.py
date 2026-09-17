@@ -42,6 +42,7 @@ def _batch() -> ModelGTBatch:
             points=torch.zeros((2, 4), dtype=torch.float32),
             batch_indices=torch.zeros(2, dtype=torch.int32),
             batch_size=1,
+            timestamp_difference_dim=-1,
         ),
         detection3d_gt_batch=None,
         segmentation3d_gt_batch=None,
@@ -79,6 +80,8 @@ def test_call_chains_the_layers_from_the_collated_batch():
         coords=torch.zeros((1, 3), dtype=torch.int32),
         num_points=torch.full((1,), 2, dtype=torch.int32),
         batch_indices=torch.zeros(1, dtype=torch.int32),
+        point_voxel_indices=torch.zeros(2, dtype=torch.int64),
+        num_dropped_voxels=torch.zeros((), dtype=torch.int64),
     )
     seen: list[ModelBatchInputs] = []
 

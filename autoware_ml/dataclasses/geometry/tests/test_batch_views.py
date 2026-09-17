@@ -35,6 +35,7 @@ class TestPointCloudGTBatchViews(unittest.TestCase):
             points=torch.arange(12, dtype=torch.float32).reshape(3, 4),
             batch_indices=torch.tensor([0, 0, 2], dtype=torch.int32),
             batch_size=4,
+            timestamp_difference_dim=-1,
         )
 
     def test_offsets_end_every_sample(self) -> None:
@@ -93,20 +94,24 @@ class TestImageGTBatchFusedImages(unittest.TestCase):
 
 
 class TestVoxelsDataCoords(unittest.TestCase):
-    """The voxel coordinates come out with the sample first and the axes in z, y, x order."""
+    """The voxel coordinates come out with the sample first and the axes in either order."""
 
-    def test_batch_zyx_coords(self) -> None:
+    def test_batch_coords(self) -> None:
         voxels = VoxelsData(
             voxels=torch.zeros(2, 1, 4),
             coords=torch.tensor([[1, 2, 3], [4, 5, 6]], dtype=torch.int32),
             num_points=torch.ones(2, dtype=torch.int32),
             batch_indices=torch.tensor([0, 1], dtype=torch.int32),
+            point_voxel_indices=torch.tensor([0, 1]),
+            num_dropped_voxels=torch.zeros((), dtype=torch.int64),
         )
 
-        coords = voxels.batch_zyx_coords()
+        zyx = voxels.batch_zyx_coords()
+        xyz = voxels.batch_xyz_coords()
 
-        self.assertEqual(coords.tolist(), [[0, 3, 2, 1], [1, 6, 5, 4]])
-        self.assertEqual(coords.dtype, torch.int32)
+        self.assertEqual(zyx.tolist(), [[0, 3, 2, 1], [1, 6, 5, 4]])
+        self.assertEqual(xyz.tolist(), [[0, 1, 2, 3], [1, 4, 5, 6]])
+        self.assertEqual(zyx.dtype, torch.int32)
 
 
 if __name__ == "__main__":

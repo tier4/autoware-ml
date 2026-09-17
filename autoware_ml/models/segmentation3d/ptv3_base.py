@@ -10,8 +10,6 @@ import torch
 import torch.nn as nn
 from torch.onnx.operators import shape_as_tensor
 
-from autoware_ml.dataclasses.geometry.grid_sample import GridSampleData
-from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.models.base import BaseModel
 from autoware_ml.models.segmentation3d.encoders.ptv3 import (
@@ -23,7 +21,12 @@ from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     build_serialized_pooling_meta,
     collect_encoder_stage_points,
 )
+from autoware_ml.models.segmentation3d.encoders.voxel import (
+    TIME_LAG_COLUMN,
+    VoxelFeatureEncoder,
+)
 from autoware_ml.utils.deploy import ExportSpec
+from autoware_ml.utils.point_cloud.batching import batch_to_offset
 from autoware_ml.utils.point_cloud.structures import (
     Point,
     bit_length_tensor,
@@ -41,6 +44,14 @@ ENCODER_EXPORT_POOLING_FIELDS = tuple(
 SERIALIZED_POOLING_INPUT_SIZED_FIELDS = frozenset({"indices", "cluster"})
 SERIALIZED_POOLING_OUTPUT_PLUS_ONE_FIELDS = frozenset({"indptr"})
 SERIALIZED_POOLING_ORDER_FIELDS = frozenset({"serialized_order", "serialized_inverse"})
+# Voxel-level export inputs shared by every PTv3 graph, ahead of the pooling metadata.
+ENCODER_EXPORT_INPUT_NAMES = (
+    "voxels",
+    "num_points_per_voxel",
+    "grid_coord",
+    "serialized_order",
+    "serialized_inverse",
+)
 
 
 def validate_serialization_geometry(
@@ -89,18 +100,6 @@ def split_block_parameters(
     return default_params, block_params
 
 
-def _point_cloud_batch(batch_inputs: ModelBatchInputs) -> PointCloudGTBatch:
-    """Read the point cloud of the batch.
-
-    Raises:
-        ValueError: If the batch carries no point cloud.
-    """
-    point_batch = batch_inputs.multi_task_gt_batch.point_cloud_gt_batch
-    if point_batch is None:
-        raise ValueError("PTv3 needs the point cloud of the batch.")
-    return point_batch
-
-
 class PTv3BaseModel(BaseModel):
     """Abstract base class for all PTv3 task models.
 
@@ -115,6 +114,7 @@ class PTv3BaseModel(BaseModel):
     def __init__(
         self,
         encoder: PointTransformerV3Encoder,
+        voxel_encoder: VoxelFeatureEncoder,
         grid_size: float | None,
         point_cloud_range: Sequence[float] | None,
         freeze_encoder: bool = False,
@@ -124,6 +124,7 @@ class PTv3BaseModel(BaseModel):
 
         Args:
             encoder: PTv3 encoder module.
+            voxel_encoder: Voxel feature encoder feeding the embedding stem.
             grid_size: Voxel grid size used to derive sparse shape and
                 serialization depth for export.
             point_cloud_range: Six-element sequence ``[x_min, y_min, z_min,
@@ -134,7 +135,13 @@ class PTv3BaseModel(BaseModel):
                 further up the MRO chain).
         """
         super().__init__(**kwargs)
+        if encoder.in_channels != voxel_encoder.out_channels:
+            raise ValueError(
+                f"The encoder reads {encoder.in_channels} point features but the voxel encoder "
+                f"describes a voxel with {voxel_encoder.out_channels}."
+            )
         self.encoder = encoder
+        self.voxel_encoder = voxel_encoder
         self.grid_size = grid_size
         self.point_cloud_range = (
             tuple(float(v) for v in point_cloud_range) if point_cloud_range is not None else None
@@ -173,71 +180,109 @@ class PTv3BaseModel(BaseModel):
         }
 
     def forward_inputs(self, batch_inputs: ModelBatchInputs) -> dict[str, Any]:
-        """Pick the grid sampled points of the batch.
+        """Pick the voxels of the batch and the column of the point time lag.
 
         Args:
-            batch_inputs: Model inputs holding the point cloud and its grid samples.
+            batch_inputs: Model inputs holding the point cloud and its voxels.
 
         Returns:
-            The coordinates, features and voxel coordinates of the representatives and the
-            representative count of every sample.
+            The padded voxels, their point counts, their ``[batch, x, y, z]`` coordinates, the
+            occupied voxels the voxelizer discarded and the time lag column of the points.
+
+        Raises:
+            ValueError: If the batch carries no point cloud or no voxels.
         """
-        grid_sample_data = self.grid_sample_data(batch_inputs)
-        points = _point_cloud_batch(batch_inputs).points[grid_sample_data.representative_indices]
+        point_batch = batch_inputs.multi_task_gt_batch.point_cloud_gt_batch
+        voxels_data = batch_inputs.voxels_data
+        if point_batch is None or voxels_data is None:
+            raise ValueError("PTv3 needs the points of the batch and the voxels of a voxelizer.")
         return {
-            "coord": points[:, :3],
-            "feat": points,
-            "grid_coord": grid_sample_data.grid_coords,
-            "offset": grid_sample_data.offsets,
+            "voxels": voxels_data.voxels,
+            "num_points": voxels_data.num_points,
+            "voxel_coords": voxels_data.batch_xyz_coords(),
+            "num_dropped_voxels": voxels_data.num_dropped_voxels,
+            "time_lag_column": point_batch.timestamp_difference_dim,
         }
 
-    @staticmethod
-    def grid_sample_data(batch_inputs: ModelBatchInputs) -> GridSampleData:
-        """Read the grid samples a grid sampler added to the model inputs.
+    def build_encoder_inputs(
+        self, voxels: torch.Tensor, num_points: torch.Tensor, voxel_coords: torch.Tensor
+    ) -> dict[str, torch.Tensor]:
+        """Turn preprocessed voxels into the PTv3 encoder input dictionary.
 
         Args:
-            batch_inputs: Model inputs of the batch.
+            voxels: Padded voxel points ``(num_voxels, max_points, channels)``.
+            num_points: Valid point count per voxel ``(num_voxels,)``.
+            voxel_coords: Voxel coordinates ``(num_voxels, 4)`` laid out as
+                ``(batch, x, y, z)`` with voxels grouped by batch index.
 
         Returns:
-            The grid samples of the batch.
-
-        Raises:
-            ValueError: If the model inputs carry no grid samples.
+            Dictionary with ``coord``, ``feat``, ``grid_coord`` and ``offset``.
         """
-        if batch_inputs.grid_sample_data is None:
-            raise ValueError("PTv3 needs the grid samples of a GridSamplePreprocessor.")
-        return batch_inputs.grid_sample_data
+        feat = self.voxel_encoder(voxels, num_points)
+        return {
+            "coord": feat[:, :3],
+            "feat": feat,
+            "grid_coord": voxel_coords[:, 1:],
+            "offset": batch_to_offset(voxel_coords[:, 0].long()),
+        }
 
-    def sampled_semantic_labels(self, batch_inputs: ModelBatchInputs) -> torch.Tensor:
-        """Give every grid sample the semantic label of its representative point.
+    def encode(
+        self,
+        voxels: torch.Tensor,
+        num_points: torch.Tensor,
+        voxel_coords: torch.Tensor,
+        num_dropped_voxels: torch.Tensor,
+        time_lag_column: int,
+    ) -> Point:
+        """Run the voxel encoder and the PTv3 encoder on preprocessed voxels.
 
         Args:
-            batch_inputs: Model inputs holding the point labels and the grid samples.
+            voxels: Padded voxel points ``(num_voxels, max_points, channels)``.
+            num_points: Valid point count per voxel ``(num_voxels,)``.
+            voxel_coords: Voxel coordinates ``(num_voxels, 4)`` with a leading batch column.
+            num_dropped_voxels: Occupied voxels the voxelizer discarded.
+            time_lag_column: Point column holding the time lag.
 
         Returns:
-            The label of every grid sample.
+            Deepest encoder point with the full pooling chain attached.
 
         Raises:
-            ValueError: If the batch carries no semantic labels.
+            ValueError: If the points carry the time lag in another column than
+                the voxel encoder reads, or hold future points the voxel encoder does not read.
+            RuntimeError: If the voxelizer dropped occupied voxels.
         """
-        labels = batch_inputs.multi_task_gt_batch.segmentation3d_gt_batch
-        if labels is None:
-            raise ValueError("PTv3 segmentation needs the semantic labels of the batch.")
-        return labels.gt_semantic_masks[self.grid_sample_data(batch_inputs).representative_indices]
+        if time_lag_column != TIME_LAG_COLUMN:
+            raise ValueError(
+                f"PTv3 needs the time lag of the points in column {TIME_LAG_COLUMN}, the batch "
+                f"has it in column {time_lag_column}. Enable use_timestamp_difference in the "
+                "sweep loader."
+            )
+        if not self.voxel_encoder.reads_future and bool((voxels[..., TIME_LAG_COLUMN] < 0).any()):
+            raise ValueError(
+                f"{type(self.voxel_encoder).__name__} reads no future points, but the batch has "
+                "some. Load no future sweeps or use PastFutureVoxelFeatureEncoder."
+            )
+        if int(num_dropped_voxels) > 0:
+            raise RuntimeError(
+                f"The voxelizer dropped {int(num_dropped_voxels)} occupied voxels. Increase "
+                "'max_voxels' and 'eval_max_voxels' of the data preprocessing so every voxel "
+                "is kept."
+            )
+        return self.encoder(self.build_encoder_inputs(voxels, num_points, voxel_coords))
 
     def _compute_export_geometry(
-        self, forward_inputs: Mapping[str, torch.Tensor]
+        self, forward_inputs: Mapping[str, Any]
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute sparse shape and serialization depth for export.
 
         Args:
-            forward_inputs: Forward arguments of the example batch, ``coord`` sets the device.
+            forward_inputs: Forward arguments of the example batch, used for device inference.
 
         Returns:
             ``(sparse_shape, serialization_depth)`` as long tensors on the
-            same device as ``forward_inputs["coord"]``.
+            same device as the voxels.
         """
-        device = forward_inputs["coord"].device
+        device = forward_inputs["voxels"].device
         point_cloud_range = torch.tensor(self.point_cloud_range, dtype=torch.float32, device=device)
         axis_extents = (point_cloud_range[3:] - point_cloud_range[:3]) / self.grid_size
         serialization_depth = bit_length_tensor(torch.max(axis_extents))
@@ -347,7 +392,7 @@ def build_ptv3_input_dynamic_axes(input_names: Sequence[str]) -> dict[str, dict[
     """Build dynamic axes for generated PTv3 encoder export inputs."""
     dynamic_axes: dict[str, dict[int, str]] = {}
     for input_name in input_names:
-        if input_name in {"grid_coord", "feat"}:
+        if input_name in {"voxels", "num_points_per_voxel", "grid_coord"}:
             dynamic_axes[input_name] = {0: "num_voxels"}
         elif input_name in {"serialized_order", "serialized_inverse"}:
             dynamic_axes[input_name] = {1: "num_voxels"}
@@ -398,6 +443,7 @@ class PTv3EncoderExportBase(nn.Module):
     def __init__(
         self,
         encoder: PointTransformerV3Encoder,
+        voxel_encoder: VoxelFeatureEncoder,
         sparse_shape: torch.Tensor,
         serialized_depth: torch.Tensor,
         pooling_field_names: Sequence[str] = SERIALIZED_POOLING_FIELDS,
@@ -406,6 +452,7 @@ class PTv3EncoderExportBase(nn.Module):
 
         Args:
             encoder: Export-prepared PTv3 encoder copy.
+            voxel_encoder: Voxel feature encoder feeding the embedding stem.
             sparse_shape: Static sparse shape baked at export time.
             serialized_depth: Serialization depth baked at export time.
             pooling_field_names: Metadata fields the graph declares per pooling
@@ -413,23 +460,26 @@ class PTv3EncoderExportBase(nn.Module):
         """
         super().__init__()
         self.encoder = encoder
+        self.voxel_encoder = voxel_encoder
         self.pooling_field_names = tuple(pooling_field_names)
         self.register_buffer("_sparse_shape", sparse_shape.to(dtype=torch.long), persistent=False)
         self.register_buffer("_serialized_depth", serialized_depth, persistent=False)
 
     def run_encoder(
         self,
+        voxels: torch.Tensor,
+        num_points_per_voxel: torch.Tensor,
         grid_coord: torch.Tensor,
-        feat: torch.Tensor,
         serialized_order: torch.Tensor,
         serialized_inverse: torch.Tensor,
         *serialized_pooling_inputs: torch.Tensor,
     ) -> Point:
-        """Run the encoder over the declared inputs.
+        """Run the voxel encoder and the encoder over the declared inputs.
 
         Args:
+            voxels: Padded voxel points.
+            num_points_per_voxel: Valid point count per voxel.
             grid_coord: Discretized grid coordinates.
-            feat: Point features whose first three channels are xyz.
             serialized_order: Level-0 serialization order, one row per curve.
             serialized_inverse: Inverse of ``serialized_order``.
             serialized_pooling_inputs: Flattened per-stage pooling metadata.
@@ -439,8 +489,10 @@ class PTv3EncoderExportBase(nn.Module):
         """
         return _run_ptv3_encoder_export(
             self.encoder,
+            self.voxel_encoder,
+            voxels,
+            num_points_per_voxel,
             grid_coord,
-            feat,
             self._serialized_depth,
             serialized_order,
             serialized_inverse,
@@ -452,8 +504,10 @@ class PTv3EncoderExportBase(nn.Module):
 
 def _run_ptv3_encoder_export(
     encoder: PointTransformerV3Encoder,
+    voxel_encoder: VoxelFeatureEncoder,
+    voxels: torch.Tensor,
+    num_points: torch.Tensor,
     grid_coord: torch.Tensor,
-    feat: torch.Tensor,
     serialized_depth: torch.Tensor,
     serialized_order: torch.Tensor,
     serialized_inverse: torch.Tensor,
@@ -469,8 +523,10 @@ def _run_ptv3_encoder_export(
 
     Args:
         encoder: Export-prepared encoder.
+        voxel_encoder: Voxel feature encoder feeding the embedding stem.
+        voxels: Padded voxel points.
+        num_points: Valid point count per voxel.
         grid_coord: Discretized grid coordinates.
-        feat: Point features whose first three channels are xyz.
         serialized_depth: Baked serialization depth.
         serialized_order: Level-0 serialization order, one row per curve.
         serialized_inverse: Inverse of ``serialized_order``.
@@ -481,6 +537,7 @@ def _run_ptv3_encoder_export(
     Returns:
         Deepest encoder point with the full pooling chain attached.
     """
+    feat = voxel_encoder(voxels, num_points)
     point_count = shape_as_tensor(grid_coord)[:1].to(grid_coord.device)
     return encoder.export_forward(
         {
@@ -500,24 +557,87 @@ def _run_ptv3_encoder_export(
 
 
 @dataclass(frozen=True)
-class PTv3ExportContext:
-    """Shared front half of every split PTv3 export.
+class PTv3ExportInputs:
+    """Serialized voxel batch shared by every PTv3 export graph.
 
-    Built once per export: the serialized batch, per-stage pooling metadata,
-    the export-ready encoder module, and its per-stage features. Artifact
-    spec builders pair this context with their own input-name rule.
+    Built once per export from a preprocessed batch: the export geometry, the
+    voxel-level inputs, the level-0 serialization order with its inverse and the
+    per-stage pooling metadata.
     """
 
     sparse_shape: torch.Tensor
     serialization_depth: torch.Tensor
+    voxels: torch.Tensor
+    num_points: torch.Tensor
     grid_coord: torch.Tensor
-    feat: torch.Tensor
     serialized_order: torch.Tensor
     serialized_inverse: torch.Tensor
-    strides: tuple[int, ...]
     pooling_metadata: tuple[SerializedPoolingMeta, ...]
-    serialized_pooling_inputs: tuple[torch.Tensor, ...]
-    serialized_pooling_input_names: tuple[str, ...]
+
+    def encoder_args(
+        self, pooling_field_names: Sequence[str]
+    ) -> tuple[tuple[torch.Tensor, ...], list[str]]:
+        """Return the ordered export args and input names of an encoder graph.
+
+        Args:
+            pooling_field_names: Pooling metadata fields the graph consumes.
+        """
+        pooling_inputs, pooling_names = flatten_serialized_pooling_inputs(
+            self.pooling_metadata, pooling_field_names
+        )
+        args = (
+            self.voxels,
+            self.num_points,
+            self.grid_coord,
+            self.serialized_order,
+            self.serialized_inverse,
+            *pooling_inputs,
+        )
+        return args, [*ENCODER_EXPORT_INPUT_NAMES, *pooling_names]
+
+
+def prepare_ptv3_export_inputs(
+    model: "PTv3BaseModel", batch_inputs: ModelBatchInputs
+) -> PTv3ExportInputs:
+    """Serialize a preprocessed voxel batch and precompute its pooling metadata."""
+    batch = model.forward_inputs(batch_inputs)
+    sparse_shape, serialization_depth = model._compute_export_geometry(batch)
+    encoder_inputs = model.build_encoder_inputs(
+        batch["voxels"],
+        batch["num_points"],
+        batch["voxel_coords"],
+    )
+    point, _ = serialize_point_cloud_batch(encoder_inputs, model.EXPORT_ORDER, serialization_depth)
+    pooling_metadata = build_serialized_pooling_metadata(
+        point["grid_coord"],
+        point["serialized_code"],
+        point["serialized_order"],
+        model.encoder.stride,
+    )
+    return PTv3ExportInputs(
+        sparse_shape=sparse_shape,
+        serialization_depth=serialization_depth,
+        voxels=batch["voxels"],
+        num_points=batch["num_points"],
+        grid_coord=encoder_inputs["grid_coord"],
+        serialized_order=point["serialized_order"],
+        serialized_inverse=point["serialized_inverse"],
+        pooling_metadata=tuple(pooling_metadata),
+    )
+
+
+@dataclass(frozen=True)
+class PTv3ExportContext:
+    """Shared front half of every split PTv3 export.
+
+    Built once per export: the serialized voxel batch, the args and input names of the
+    encoder graph, the export-ready encoder module, and its per-stage features.
+    """
+
+    inputs: PTv3ExportInputs
+    strides: tuple[int, ...]
+    encoder_input_args: tuple[torch.Tensor, ...]
+    encoder_input_names: list[str]
     encoder_module: nn.Module
     stage_feats: tuple[torch.Tensor, ...]
 
@@ -525,130 +645,28 @@ class PTv3ExportContext:
     def stage_count(self) -> int:
         return len(self.stage_feats)
 
-    @property
-    def encoder_input_args(self) -> tuple[torch.Tensor, ...]:
-        return (
-            self.grid_coord,
-            self.feat,
-            self.serialized_order,
-            self.serialized_inverse,
-            *self.serialized_pooling_inputs,
-        )
-
-    @property
-    def encoder_input_names(self) -> list[str]:
-        return [
-            "grid_coord",
-            "feat",
-            "serialized_order",
-            "serialized_inverse",
-            *self.serialized_pooling_input_names,
-        ]
-
 
 def build_ptv3_export_context(
     model: "PTv3BaseModel", batch_inputs: ModelBatchInputs
 ) -> PTv3ExportContext:
     """Serialize the batch, precompute pooling metadata, and run the encoder once."""
-    forward_inputs = model.forward_inputs(batch_inputs)
-    sparse_shape, serialization_depth = model._compute_export_geometry(forward_inputs)
-    point, input_args = serialize_point_cloud_batch(
-        forward_inputs, model.EXPORT_ORDER, serialization_depth
-    )
-    pooling_metadata = build_serialized_pooling_metadata(
-        point["grid_coord"],
-        point["serialized_code"],
-        point["serialized_order"],
-        model.encoder.stride,
-    )
-    serialized_pooling_inputs, serialized_pooling_input_names = flatten_serialized_pooling_inputs(
-        pooling_metadata, ENCODER_EXPORT_POOLING_FIELDS
-    )
+    inputs = prepare_ptv3_export_inputs(model, batch_inputs)
     encoder_module = _PTv3EncoderExportModule(
         encoder=model._prepare_encoder_export(),
-        sparse_shape=sparse_shape,
-        serialized_depth=serialization_depth,
-        pooling_field_names=ENCODER_EXPORT_POOLING_FIELDS,
+        voxel_encoder=model.voxel_encoder,
+        sparse_shape=inputs.sparse_shape,
+        serialized_depth=inputs.serialization_depth,
     ).eval()
+    args, input_names = inputs.encoder_args(ENCODER_EXPORT_POOLING_FIELDS)
     with torch.no_grad():
-        stage_feats = encoder_module(
-            input_args[0],
-            input_args[1],
-            point["serialized_order"],
-            point["serialized_inverse"],
-            *serialized_pooling_inputs,
-        )
+        stage_feats = encoder_module(*args)
     return PTv3ExportContext(
-        sparse_shape=sparse_shape,
-        serialization_depth=serialization_depth,
-        grid_coord=input_args[0],
-        feat=input_args[1],
-        serialized_order=point["serialized_order"],
-        serialized_inverse=point["serialized_inverse"],
+        inputs=inputs,
         strides=tuple(model.encoder.stride),
-        pooling_metadata=tuple(pooling_metadata),
-        serialized_pooling_inputs=tuple(serialized_pooling_inputs),
-        serialized_pooling_input_names=tuple(serialized_pooling_input_names),
+        encoder_input_args=args,
+        encoder_input_names=input_names,
         encoder_module=encoder_module,
         stage_feats=tuple(stage_feats),
-    )
-
-
-@dataclass(frozen=True)
-class MonolithicExportInputs:
-    """Encoder-side inputs shared by every single-graph PTv3 export."""
-
-    sparse_shape: torch.Tensor
-    serialization_depth: torch.Tensor
-    args: tuple[torch.Tensor, ...]
-    input_names: list[str]
-
-
-def build_monolithic_export_inputs(
-    model: "PTv3BaseModel", batch_inputs: ModelBatchInputs
-) -> MonolithicExportInputs:
-    """Serialize a batch and derive the encoder inputs for a single-graph export.
-
-    Single-graph exports keep the whole model in one engine, so unlike the split
-    encoder graph they do consume ``cluster`` for head-side unpooling.
-
-    Args:
-        model: Task model being exported.
-        batch_inputs: Preprocessed example batch.
-
-    Returns:
-        Baked geometry and the sample inputs matching the declared input names.
-    """
-    forward_inputs = model.forward_inputs(batch_inputs)
-    sparse_shape, serialization_depth = model._compute_export_geometry(forward_inputs)
-    point, input_args = serialize_point_cloud_batch(
-        forward_inputs, model.EXPORT_ORDER, serialization_depth
-    )
-    serialized_pooling_inputs, serialized_pooling_input_names = flatten_serialized_pooling_inputs(
-        build_serialized_pooling_metadata(
-            point["grid_coord"],
-            point["serialized_code"],
-            point["serialized_order"],
-            model.encoder.stride,
-        )
-    )
-    return MonolithicExportInputs(
-        sparse_shape=sparse_shape,
-        serialization_depth=serialization_depth,
-        args=(
-            input_args[0],
-            input_args[1],
-            point["serialized_order"],
-            point["serialized_inverse"],
-            *serialized_pooling_inputs,
-        ),
-        input_names=[
-            "grid_coord",
-            "feat",
-            "serialized_order",
-            "serialized_inverse",
-            *serialized_pooling_input_names,
-        ],
     )
 
 
@@ -676,7 +694,7 @@ def build_seg_head_export_spec(
         output_names: Ordered head output names.
     """
     module = _PTv3SegHeadExportModule(
-        seg3d_head, context.stage_count, context.sparse_shape, context.strides
+        seg3d_head, context.stage_count, context.inputs.sparse_shape, context.strides
     ).eval()
     input_names = seg_head_export_input_names(context.stage_count, seg3d_head.dec_depths)
     dynamic_axes = build_seg_head_input_dynamic_axes(context.stage_count, seg3d_head.dec_depths)
@@ -685,10 +703,10 @@ def build_seg_head_export_spec(
         module=module,
         args=build_seg_head_export_args(
             context.stage_feats,
-            context.pooling_metadata,
-            context.serialized_order,
-            context.serialized_inverse,
-            context.grid_coord,
+            context.inputs.pooling_metadata,
+            context.inputs.serialized_order,
+            context.inputs.serialized_inverse,
+            context.inputs.grid_coord,
             seg3d_head.dec_depths,
         ),
         input_param_names=input_names,
@@ -701,17 +719,46 @@ def build_seg_head_export_spec(
 class _PTv3EncoderExportModule(PTv3EncoderExportBase):
     """Export-only PTv3 encoder producing per-stage point features."""
 
+    def __init__(
+        self,
+        encoder: PointTransformerV3Encoder,
+        voxel_encoder: VoxelFeatureEncoder,
+        sparse_shape: torch.Tensor,
+        serialized_depth: torch.Tensor,
+    ) -> None:
+        """Initialize the encoder export module.
+
+        Args:
+            encoder: Export-prepared PTv3 encoder copy.
+            voxel_encoder: Voxel feature encoder feeding the embedding stem.
+            sparse_shape: Static sparse shape baked at export time.
+            serialized_depth: Serialization depth baked at export time.
+        """
+        super().__init__(
+            encoder,
+            voxel_encoder,
+            sparse_shape,
+            serialized_depth,
+            pooling_field_names=ENCODER_EXPORT_POOLING_FIELDS,
+        )
+
     def forward(
         self,
+        voxels: torch.Tensor,
+        num_points_per_voxel: torch.Tensor,
         grid_coord: torch.Tensor,
-        feat: torch.Tensor,
         serialized_order: torch.Tensor,
         serialized_inverse: torch.Tensor,
         *serialized_pooling_inputs: torch.Tensor,
     ) -> tuple[torch.Tensor, ...]:
         """Run the encoder and return per-stage features, finest to deepest."""
         point = self.run_encoder(
-            grid_coord, feat, serialized_order, serialized_inverse, *serialized_pooling_inputs
+            voxels,
+            num_points_per_voxel,
+            grid_coord,
+            serialized_order,
+            serialized_inverse,
+            *serialized_pooling_inputs,
         )
         return tuple(stage.feat for stage in collect_encoder_stage_points(point))
 

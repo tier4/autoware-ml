@@ -44,6 +44,8 @@ class TestModelBatchInputs(unittest.TestCase):
             coords=torch.zeros(num_voxels, 3, dtype=torch.int32),
             num_points=torch.ones(num_voxels, dtype=torch.int32),
             batch_indices=torch.zeros(num_voxels, dtype=torch.int32),
+            point_voxel_indices=torch.arange(num_voxels, dtype=torch.int64),
+            num_dropped_voxels=torch.zeros((), dtype=torch.int64),
         )
         batch_size, num_cameras = 2, 3
         self.image_data = ImageGTBatch(
@@ -62,7 +64,6 @@ class TestModelBatchInputs(unittest.TestCase):
             multi_task_gt_batch=self.gt_batch,
             voxels_data=self.voxels_data,
             image_data=None,
-            grid_sample_data=None,
             range_view_data=None,
         )
 
@@ -77,7 +78,6 @@ class TestModelBatchInputs(unittest.TestCase):
             multi_task_gt_batch=self.gt_batch,
             voxels_data=self.voxels_data,
             image_data=self.image_data,
-            grid_sample_data=None,
             range_view_data=None,
         )
 
@@ -93,7 +93,6 @@ class TestModelBatchInputs(unittest.TestCase):
             multi_task_gt_batch=self.gt_batch,
             voxels_data=None,
             image_data=None,
-            grid_sample_data=None,
             range_view_data=None,
         )
 
@@ -107,7 +106,6 @@ class TestModelBatchInputs(unittest.TestCase):
                 multi_task_gt_batch={"point_cloud_gt_batch": None},  # type: ignore[arg-type]
                 voxels_data=None,
                 image_data=None,
-                grid_sample_data=None,
                 range_view_data=None,
             )
 
@@ -118,7 +116,6 @@ class TestModelBatchInputs(unittest.TestCase):
                 multi_task_gt_batch=self.gt_batch,
                 voxels_data=torch.zeros(4, 5, 4),  # type: ignore[arg-type]
                 image_data=None,
-                grid_sample_data=None,
                 range_view_data=None,
             )
 
@@ -131,7 +128,6 @@ class TestModelBatchInputs(unittest.TestCase):
         self.assertIs(batch_inputs.multi_task_gt_batch, gt_batch)
         self.assertIs(batch_inputs.image_data, self.image_data)
         self.assertIsNone(batch_inputs.voxels_data)
-        self.assertIsNone(batch_inputs.grid_sample_data)
         self.assertIsNone(batch_inputs.range_view_data)
 
     def test_replace_keeps_the_other_fields(self) -> None:
@@ -152,7 +148,6 @@ class TestModelBatchInputs(unittest.TestCase):
             multi_task_gt_batch=self.gt_batch,
             voxels_data=None,
             image_data=None,
-            grid_sample_data=None,
             range_view_data=None,
         )
 

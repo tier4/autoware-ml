@@ -192,6 +192,7 @@ def test_frnet_with_preprocessing_runs_shared_step_end_to_end() -> None:
             ),
             batch_indices=torch.zeros(3, dtype=torch.int32),
             batch_size=1,
+            timestamp_difference_dim=-1,
         ),
         detection3d_gt_batch=None,
         segmentation3d_gt_batch=Segmentation3DGTBatch(

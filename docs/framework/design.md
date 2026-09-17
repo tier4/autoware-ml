@@ -217,7 +217,7 @@ class DataPreprocessing:
 ```
 
 The model inputs are a typed `ModelBatchInputs`. It holds the collated `ModelGTBatch` and one
-field for each kind of preprocessed feature, such as `voxels_data`, `grid_sample_data`,
+field for each kind of preprocessed feature, such as `voxels_data`,
 `range_view_data` and `image_data`. Every layer returns the inputs with the features it
 computes added or the data it changes replaced.
 

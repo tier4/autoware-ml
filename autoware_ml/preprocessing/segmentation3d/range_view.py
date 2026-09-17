@@ -27,7 +27,6 @@ from jaxtyping import Float32, Int64
 from torch import Tensor
 
 from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTBatch
-from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 
 
@@ -106,8 +105,11 @@ def join_batch(
         torch.arange(len(points), dtype=torch.int32, device=concatenated.device), counts
     )
     gt_batch = batch_inputs.multi_task_gt_batch
+    point_batch = gt_batch.point_cloud_gt_batch
+    if point_batch is None:
+        raise ValueError("Range view preprocessing needs the point cloud of the batch.")
     gt_batch = gt_batch._replace(
-        point_cloud_gt_batch=PointCloudGTBatch(
+        point_cloud_gt_batch=point_batch._replace(
             points=concatenated, batch_indices=batch_indices, batch_size=len(points)
         )
     )

@@ -52,6 +52,7 @@ def _batch_inputs() -> ModelBatchInputs:
         points=torch.ones(3, 4),
         batch_indices=torch.tensor([0, 0, 1], dtype=torch.int32),
         batch_size=2,
+        timestamp_difference_dim=-1,
     )
     return ModelBatchInputs.from_gt_batch(
         ModelGTBatch(

@@ -8,6 +8,7 @@ defaults:
   - _self_
 
 grid_size: 0.06
+max_voxels: 1048576
 head_voxel_size: [0.48, 0.48, 8.0]
 
 batch_size: 1
@@ -20,8 +21,18 @@ datamodule:
       pipeline:
         - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
           _convert_: all
-          use_dim: [0, 1, 2, 3] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]
+          use_dim: [0, 1, 2, 3]
           bev_remove_radius: 0.0
+        - _target_: autoware_ml.transforms.point_cloud.loading.LoadMultiSweepPointsFromFile
+          _convert_: all
+          past:
+            _target_: autoware_ml.transforms.point_cloud.loading.SweepWindow
+            num: 1
+            time_lag_range: [0.05, 0.25]
+            selection: random
+          bev_remove_radius: 1.0
+          use_timestamp_difference: true
+          use_dim: [0, 1, 2, 3]
         - _target_: autoware_ml.transforms.point_cloud.geometry.RandomRotateTargetAngle
           _convert_: all
           probability: 0.75
@@ -63,7 +74,6 @@ datamodule:
         - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesRangeFilter
           _convert_: all
           point_cloud_range: ${point_cloud_range}
-        # Order matters, it first filters the boxes of the whole range, then the boxes within 60 meters
         - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesMinPointsFilter
           _convert_: all
           min_points: 2
@@ -80,8 +90,11 @@ datamodule:
     pedestrian_class_name: pedestrian.common
 
 model:
+  voxel_encoder:
+    _target_: autoware_ml.models.segmentation3d.encoders.voxel.PastFutureVoxelFeatureEncoder
   # PT-v3m3 encoder and decoder
   encoder:
+    in_channels: 17
     enc_depths: [3, 3, 3, 12, 3]
     enc_channels: [54, 108, 216, 432, 576]
     enc_num_head: [3, 6, 12, 24, 32]

@@ -35,7 +35,10 @@ def _inputs(samples: list[torch.Tensor]) -> ModelBatchInputs:
         ]
     )
     points = PointCloudGTBatch(
-        points=torch.cat(samples), batch_indices=batch_indices, batch_size=len(samples)
+        points=torch.cat(samples),
+        batch_indices=batch_indices,
+        batch_size=len(samples),
+        timestamp_difference_dim=-1,
     )
     return ModelBatchInputs.from_gt_batch(
         ModelGTBatch(

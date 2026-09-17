@@ -10,7 +10,6 @@ from pydantic import BaseModel, ConfigDict, InstanceOf
 
 from autoware_ml.dataclasses.geometry.images import ImageGTBatch
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
-from autoware_ml.dataclasses.geometry.grid_sample import GridSampleData
 from autoware_ml.dataclasses.geometry.range_view import RangeViewData
 from autoware_ml.dataclasses.geometry.voxels import VoxelsData
 
@@ -30,9 +29,6 @@ class ModelBatchInputs(BaseModel):
 
     # Image data
     image_data: InstanceOf[ImageGTBatch] | None
-
-    # Point cloud subsampled to one point per voxel
-    grid_sample_data: InstanceOf[GridSampleData] | None
 
     # Point cloud projected into range images
     range_view_data: InstanceOf[RangeViewData] | None
@@ -54,7 +50,6 @@ class ModelBatchInputs(BaseModel):
             multi_task_gt_batch=batch,
             voxels_data=None,
             image_data=batch.image_gt_batch,
-            grid_sample_data=None,
             range_view_data=None,
         )
 

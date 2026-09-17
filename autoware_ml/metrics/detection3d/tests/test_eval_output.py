@@ -96,7 +96,6 @@ class TestTypedDetectionEvalOutput(unittest.TestCase):
             ),
             voxels_data=None,
             image_data=None,
-            grid_sample_data=None,
             range_view_data=None,
         )
 
@@ -112,7 +111,6 @@ class TestTypedDetectionEvalOutput(unittest.TestCase):
             ),
             voxels_data=None,
             image_data=None,
-            grid_sample_data=None,
             range_view_data=None,
         )
         with self.assertRaises(ValueError):
@@ -205,11 +203,7 @@ class TestTypedDetectionEvalOutput(unittest.TestCase):
             )
         )
         multi_task_batch_inputs = ModelBatchInputs(
-            multi_task_gt_batch=gt_batch,
-            voxels_data=None,
-            image_data=None,
-            grid_sample_data=None,
-            range_view_data=None,
+            multi_task_gt_batch=gt_batch, voxels_data=None, image_data=None, range_view_data=None
         )
 
         eval_outputs = detection_eval_output(

@@ -24,11 +24,12 @@ from autoware_ml.ops.voxelization.voxelization import hard_voxelize
 
 
 class PointPillarPreprocessor:
-    """Convert the batched point cloud into padded pillars for PointPillars models.
+    """Convert batched point clouds into padded pillars for PointPillars models.
 
-    The preprocessor voxelizes the points of the batch using
-    :func:`~autoware_ml.ops.voxelization.hard_voxelize`, pads every voxel to
-    ``max_num_points`` points, and adds the voxels to the model inputs.
+    The preprocessor voxelizes each point cloud using
+    :func:`~autoware_ml.ops.voxelization.hard_voxelize`, pads variable-size
+    pillars to ``max_num_points``, and packages the tensors expected by
+    PointPillars-style detectors.
 
     Args:
         voxel_size: Voxel size along each axis ``[dx, dy, dz]`` in meters.
