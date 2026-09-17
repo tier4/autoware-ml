@@ -1,0 +1,36 @@
+# @package t4dataset
+
+segdet3d:
+  partial_detection_classes: ???
+  joint_metrics:
+    - _target_: autoware_ml.metrics.segmentation3d.point_cloud.Segmentation3DPointCloudMetricSuite
+      prefix: segdet3d
+      components:
+        - _target_: autoware_ml.metrics.segmentation3d.partial_detection.PartialDetectionScore
+          stages: [test]
+          det_class_names: ${t4dataset.detection3d.class_names}
+          seg_class_names: ${t4dataset.segmentation3d.class_names}
+          class_names: ${t4dataset.segdet3d.partial_detection_classes}
+        - _target_: autoware_ml.metrics.segmentation3d.partial_detection.PartialDetectionScore
+          stages: [test]
+          det_class_names: ${t4dataset.detection3d.class_names}
+          seg_class_names: ${t4dataset.segmentation3d.class_names}
+          class_names: ${t4dataset.segdet3d.partial_detection_classes}
+          filter: ${t4dataset.segmentation3d.region_filters.road}
+        - _target_: autoware_ml.metrics.segmentation3d.partial_detection.PartialDetectionScore
+          stages: [test]
+          det_class_names: ${t4dataset.detection3d.class_names}
+          seg_class_names: ${t4dataset.segmentation3d.class_names}
+          class_names: ${t4dataset.segdet3d.partial_detection_classes}
+          filter: ${t4dataset.segmentation3d.region_filters.walkway}
+        - _target_: autoware_ml.metrics.segmentation3d.partial_detection.PartialDetectionScore
+          stages: [test]
+          det_class_names: ${t4dataset.detection3d.class_names}
+          seg_class_names: ${t4dataset.segmentation3d.class_names}
+          class_names: ${t4dataset.segdet3d.partial_detection_classes}
+          filter: ${t4dataset.segmentation3d.corridor_filter}
+      num_classes: ${t4dataset.segmentation3d.num_classes}
+      ignore_index: ${t4dataset.segmentation3d.ignore_index}
+      class_names: ${t4dataset.segmentation3d.class_names}
+      ranges: ${t4dataset.segmentation3d.metric_ranges}
+  metrics: ${merge_lists:${t4dataset.detection3d.metrics},${t4dataset.segmentation3d.metrics},${t4dataset.segdet3d.joint_metrics}}

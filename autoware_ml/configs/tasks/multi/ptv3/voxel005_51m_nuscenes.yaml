@@ -3,6 +3,7 @@ defaults:
   - /tasks/multi/ptv3/base
   - /datasets/nuscenes/detection3d
   - /datasets/nuscenes/segmentation3d
+  - /datasets/nuscenes/segdet3d
   - /datasets/nuscenes/lidar
   - _self_
 

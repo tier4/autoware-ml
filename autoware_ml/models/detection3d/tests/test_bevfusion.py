@@ -28,7 +28,6 @@ from autoware_ml.models.detection3d.bevfusion import (
     _runtime_coors_to_voxel_coords,
 )
 from autoware_ml.models.detection3d.fusion import ConvFuser
-from autoware_ml.transforms.camera.resize import ResizeMultiviewImages
 from autoware_ml.models.detection3d.view_transforms.depth_lss import DepthLSSTransform
 
 
@@ -196,22 +195,6 @@ def test_depth_lss_transform_supports_precomputed_pool_metadata(monkeypatch) -> 
 
     assert bev.shape == (1, 4, 8, 8)
     assert calls["coords"].shape[1] == 4
-
-
-def test_resize_multiview_images_updates_intrinsics() -> None:
-    transform = ResizeMultiviewImages(target_size=[4, 8])
-    input_dict = {
-        "img": torch.ones(2, 3, 2, 4).numpy(),
-        "camera_intrinsics": torch.eye(4).view(1, 4, 4).repeat(2, 1, 1).numpy(),
-        "lidar2cam": torch.eye(4).view(1, 4, 4).repeat(2, 1, 1).numpy(),
-        "lidar2img": torch.eye(4).view(1, 4, 4).repeat(2, 1, 1).numpy(),
-    }
-
-    output = transform(input_dict)
-
-    assert output["img"].shape == (2, 3, 4, 8)
-    assert output["camera_intrinsics"][0, 0, 0] == 2.0
-    assert output["camera_intrinsics"][0, 1, 1] == 2.0
 
 
 def test_bevfusion_model_fuses_camera_and_lidar_branches() -> None:

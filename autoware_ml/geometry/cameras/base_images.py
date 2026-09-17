@@ -11,6 +11,28 @@ from pydantic import BaseModel, ConfigDict, model_validator
 import torch
 
 
+def compose_lidar2images(
+    camera_intrinsics: Float32[torch.Tensor, "num_cameras 3 3"],
+    lidar2cams: Float32[torch.Tensor, "num_cameras 4 4"],
+) -> Float32[torch.Tensor, "num_cameras 4 4"]:
+    """
+    Compose the lidar to image matrices of every camera.
+
+    Args:
+      camera_intrinsics: 3x3 intrinsics of every camera.
+      lidar2cams: 4x4 lidar to camera matrices.
+
+    Returns:
+      The 4x4 lidar to image matrices, the intrinsics padded to homogeneous coordinates
+      applied after the lidar to camera matrices.
+    """
+    homogeneous_intrinsics = torch.eye(
+        4, dtype=camera_intrinsics.dtype, device=camera_intrinsics.device
+    ).repeat(camera_intrinsics.shape[0], 1, 1)
+    homogeneous_intrinsics[:, :3, :3] = camera_intrinsics
+    return homogeneous_intrinsics @ lidar2cams
+
+
 class BaseImages(BaseModel):
     """
     Immutable container for the camera images of a sample and their calibration.
@@ -21,8 +43,9 @@ class BaseImages(BaseModel):
 
     Attributes:
         images: Images in Tensor to represent images for a sample.
-        depth_maps: Tensor to represent depth value (distance to cameras) of pixels
-        for each image. None when the sample carries no depth.
+        depth_maps: Tensor holding the channels the points projected onto each image carry,
+        for example their depth and their intensity. None when the points have not been
+        projected onto the images.
         timestamps: Tensor represents the timestamps for each images.
         camera_intrinsics: Tensor represents camera intrinsics for each camera.
         camera_names: Sequence for camera names to represent each image.
@@ -65,7 +88,7 @@ class BaseImages(BaseModel):
     )
 
     images: Float32[torch.Tensor, "num_cameras num_channels height width"]
-    depth_maps: Float32[torch.Tensor, "num_cameras 1 height width"] | None = None
+    depth_maps: Float32[torch.Tensor, "num_cameras num_depth_channels height width"] | None = None
     timestamps: Float64[torch.Tensor, " num_cameras"]
     camera_intrinsics: Float32[torch.Tensor, "num_cameras 3 3"]
     camera_names: Sequence[str]
@@ -203,21 +226,14 @@ class BaseImages(BaseModel):
         # (num_cameras, 4, 4) @ (4, 4)
         augmented_lidar2cam = self.lidar2cams @ augmentation_inverse
 
-        # (num_cameras, 4, 4), the intrinsics padded to homogeneous coordinates.
-        camera_intrinsics = torch.eye(
-            4,
-            device=self.augmented_camera_intrinsics.device,
-            dtype=self.augmented_camera_intrinsics.dtype,
-        ).repeat(self.augmented_camera_intrinsics.shape[0], 1, 1)
-        camera_intrinsics[:, :3, :3] = self.augmented_camera_intrinsics
-
         # model_copy does not validate what it is given, so the copy is validated explicitly.
         return BaseImages.model_validate(
             self.model_copy(
                 update={
                     "lidar2cams": augmented_lidar2cam,
-                    # augmented_intrinsic @ augmented_lidar2cam -> lidar2img
-                    "lidar2images": camera_intrinsics @ augmented_lidar2cam,
+                    "lidar2images": compose_lidar2images(
+                        self.augmented_camera_intrinsics, augmented_lidar2cam
+                    ),
                 }
             )
         )

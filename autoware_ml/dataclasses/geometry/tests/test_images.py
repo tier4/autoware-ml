@@ -18,7 +18,7 @@ class ImageGTBatchTestCase(unittest.TestCase):
     WIDTH = 6
 
     def setUp(self) -> None:
-        """Build two two-camera samples, without and with depth maps."""
+        """Build two two-camera samples, plain and with every optional field filled in."""
         self.device = torch.device("cpu")
         self.num_cameras = 2
         self.samples = [
@@ -26,11 +26,17 @@ class ImageGTBatchTestCase(unittest.TestCase):
             self.make_images(self.num_cameras, fill=2.0),
         ]
         self.samples_with_depth = [
-            self.make_images(self.num_cameras, fill=1.0, with_depth=True),
-            self.make_images(self.num_cameras, fill=2.0, with_depth=True),
+            self.make_images(self.num_cameras, fill=1.0, with_depth=True, with_statuses=True),
+            self.make_images(self.num_cameras, fill=2.0, with_depth=True, with_statuses=True),
         ]
 
-    def make_images(self, num_cameras: int, fill: float, with_depth: bool = False) -> BaseImages:
+    def make_images(
+        self,
+        num_cameras: int,
+        fill: float,
+        with_depth: bool = False,
+        with_statuses: bool = False,
+    ) -> BaseImages:
         """
         Build a BaseImages sample whose per-camera tensors all carry ``fill`` so a test can tell
         which sample a collated slice came from. ``lidar2cams`` carries ``fill + 0.5`` so it can
@@ -42,6 +48,9 @@ class ImageGTBatchTestCase(unittest.TestCase):
         return BaseImages(
             images=torch.full(image_shape, fill, dtype=torch.float32),
             depth_maps=torch.full(depth_shape, fill, dtype=torch.float32) if with_depth else None,
+            calibration_statuses=torch.ones(num_cameras, dtype=torch.int64)
+            if with_statuses
+            else None,
             timestamps=torch.full((num_cameras,), fill, dtype=torch.float64),
             camera_intrinsics=intrinsics,
             camera_names=[f"camera{i}" for i in range(num_cameras)],
@@ -72,7 +81,7 @@ class TestImageGTBatchFields(ImageGTBatchTestCase):
     def test_field_order(self) -> None:
         """
         Input: the class itself.
-        Expected: the tuple exposes its six fields in the documented order, since downstream
+        Expected: the tuple exposes its seven fields in the documented order, since downstream
         code unpacks the batch positionally.
         Check: compare ``_fields`` against the expected names.
         """
@@ -85,6 +94,7 @@ class TestImageGTBatchFields(ImageGTBatchTestCase):
                 "image_augmentation_matrices",
                 "lidar2images",
                 "lidar2cams",
+                "calibration_statuses",
             ),
         )
 
@@ -199,36 +209,81 @@ class TestImageGTBatchCollate(ImageGTBatchTestCase):
         Expected: a batch must carry depth for all samples or none, so the mix is rejected.
         Check: a ValueError reporting "1 out of 2 samples with depth" is raised.
         """
-        samples = [self.samples_with_depth[0], self.samples[1]]
+        samples = [self.make_images(self.num_cameras, fill=1.0, with_depth=True), self.samples[1]]
 
         with self.assertRaisesRegex(ValueError, "1 out of 2 samples with depth"):
             ImageGTBatch.collate_gt_samples(samples)
 
-    def test_output_dtypes(self) -> None:
+    def test_stacks_calibration_statuses_when_every_sample_carries_them(self) -> None:
         """
-        Input: the fixture samples with depth maps, so every field is a tensor.
-        Expected: every collated field keeps the float32 dtype of its source.
-        Check: iterate the tuple and read each field's dtype.
+        Input: the two fixture samples that both carry a calibration status per camera.
+        Expected: the statuses are stacked to ``(2, num_cameras)`` so every camera of the batch
+        keeps the status the misalignment augmentation wrote for it.
+        Check: read the shape and the values of the stacked statuses.
         """
         batch = self.collate(self.samples_with_depth)
 
-        for tensor in batch:
+        assert batch.calibration_statuses is not None
+        self.assertEqual(
+            batch.calibration_statuses.shape, (len(self.samples_with_depth), self.num_cameras)
+        )
+        self.assertTrue(torch.all(batch.calibration_statuses == 1))
+
+    def test_calibration_statuses_stay_none_when_no_sample_carries_them(self) -> None:
+        """
+        Input: the two fixture samples built before the misalignment augmentation runs.
+        Expected: the batch reports no calibration status rather than inventing one.
+        Check: the collated statuses are None.
+        """
+        batch = self.collate(self.samples)
+
+        self.assertIsNone(batch.calibration_statuses)
+
+    def test_mixed_calibration_statuses_raise(self) -> None:
+        """
+        Input: one sample with a calibration status per camera and one without.
+        Expected: a batch must carry the status for all samples or none, so the mix is
+        rejected instead of collating a status tensor shorter than the batch.
+        Check: a ValueError reporting "1 out of 2 samples with calibration statuses" is raised.
+        """
+        samples = [
+            self.make_images(self.num_cameras, fill=1.0, with_statuses=True),
+            self.samples[1],
+        ]
+
+        with self.assertRaisesRegex(ValueError, "1 out of 2 samples with calibration statuses"):
+            ImageGTBatch.collate_gt_samples(samples)
+
+    def test_output_dtypes(self) -> None:
+        """
+        Input: the fixture samples with every optional field filled in, so every field is a
+        tensor.
+        Expected: the image fields keep the float32 dtype of their source while the calibration
+        status keeps its integer labels.
+        Check: iterate the image fields and read the status dtype on its own.
+        """
+        batch = self.collate(self.samples_with_depth)
+
+        for tensor in batch[: batch._fields.index("calibration_statuses")]:
             assert tensor is not None
             self.assertEqual(tensor.dtype, torch.float32)
+        assert batch.calibration_statuses is not None
+        self.assertEqual(batch.calibration_statuses.dtype, torch.int64)
 
 
 class TestImageGTBatchToDevice(ImageGTBatchTestCase):
     """ImageGTBatch.to_device."""
 
     def setUp(self) -> None:
-        """Collate the fixture samples once, with and without depth maps."""
+        """Collate the fixture samples once, with and without the optional fields."""
         super().setUp()
         self.batch_with_depth = self.collate(self.samples_with_depth)
         self.batch_without_depth = self.collate(self.samples)
 
     def test_returns_new_batch_with_equal_tensors(self) -> None:
         """
-        Input: the fixture batch with depth maps, moved to the CPU it already lives on.
+        Input: the fixture batch with every optional field, moved to the CPU it already lives
+        on.
         Expected: a new ImageGTBatch is returned rather than the same object, and every field
         holds the same values.
         Check: assert the identity differs and compare every field pair with ``torch.equal``.
@@ -254,7 +309,7 @@ class TestImageGTBatchToDevice(ImageGTBatchTestCase):
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required to move tensors to GPU")
     def test_moves_every_tensor_to_cuda(self) -> None:
         """
-        Input: the fixture batch with depth maps, moved to CUDA.
+        Input: the fixture batch with every optional field, moved to CUDA.
         Expected: every field of the result lives on CUDA while the original stays on CPU,
         since named tuples are immutable and the move must not alias.
         Check: read ``device.type`` of every field on both batches.
@@ -371,6 +426,44 @@ class TestImageSample(ImageSampleTestCase):
         self.assertIs(rebuilt.lidar2image, self.sample.lidar2image)
         self.assertEqual(rebuilt.distortion_model, self.sample.distortion_model)
         self.assertIs(rebuilt.distortion_coefficients, self.sample.distortion_coefficients)
+
+
+class TestImageGTBatchCameraGeometry(ImageGTBatchTestCase):
+    """The collated calibration describes the augmented images."""
+
+    def test_intrinsics_back_project_what_lidar2images_projects(self) -> None:
+        """
+        Input: one camera whose image was resized by 0.5, so its augmented intrinsics are half
+        the raw ones and lidar2images is built from the augmented ones.
+        Expected: back projecting a projected lidar point with the collated intrinsics and
+        lidar2cams recovers the point, so the camera to BEV lift and the depth guidance of a
+        model describe the same image.
+        Check: the round trip of the point (10, 0, 20) in camera coordinates.
+        """
+        sample = self.make_images(1, fill=1.0)
+        raw = torch.tensor([[[1000.0, 0.0, 800.0], [0.0, 1000.0, 450.0], [0.0, 0.0, 1.0]]])
+        resize = torch.diag(torch.tensor([0.5, 0.5, 1.0])).unsqueeze(0)
+        augmented = resize @ raw
+        lidar2cams = torch.eye(4).unsqueeze(0)
+        lidar2images = torch.eye(4).unsqueeze(0)
+        lidar2images[:, :3, :3] = augmented
+        sample = sample.model_copy(
+            update={
+                "camera_intrinsics": raw,
+                "augmented_camera_intrinsics": augmented,
+                "lidar2cams": lidar2cams,
+                "lidar2images": lidar2images,
+            }
+        )
+
+        batch = self.collate([sample])
+
+        point = torch.tensor([10.0, 0.0, 20.0, 1.0])
+        pixel = batch.lidar2images[0, 0] @ point
+        pixel = pixel[:3] / pixel[2]
+        ray = torch.linalg.inv(batch.camera_intrinsics[0, 0]) @ pixel
+        recovered = torch.linalg.inv(batch.lidar2cams[0, 0])[:3, :3] @ (ray * point[2])
+        torch.testing.assert_close(recovered, point[:3])
 
 
 if __name__ == "__main__":

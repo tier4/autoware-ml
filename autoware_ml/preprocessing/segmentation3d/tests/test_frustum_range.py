@@ -22,14 +22,18 @@ from autoware_ml.preprocessing.segmentation3d.frustum_range import FrustumRangeP
 def _make_batch(
     sample_points: list[torch.Tensor],
     sample_labels: list[torch.Tensor] | None = None,
-) -> dict[str, torch.Tensor]:
+) -> dict[str, torch.Tensor | int]:
     """Build a concatenated batch from per-sample tensors."""
-    points = torch.cat(sample_points, dim=0)
     lengths = torch.tensor([p.shape[0] for p in sample_points], dtype=torch.long)
-    offset = torch.cumsum(lengths, dim=0)
-    batch: dict[str, torch.Tensor] = {"points": points, "offset": offset}
+    batch: dict[str, torch.Tensor | int] = {
+        "feat": torch.cat(sample_points, dim=0),
+        "batch_indices": torch.repeat_interleave(
+            torch.arange(len(sample_points), dtype=torch.int32), lengths
+        ),
+        "sample_count": len(sample_points),
+    }
     if sample_labels is not None:
-        batch["pts_semantic_mask"] = torch.cat(sample_labels, dim=0)
+        batch["segment"] = torch.cat(sample_labels, dim=0)
     return batch
 
 
@@ -62,18 +66,16 @@ class TestFrustumRangePreprocessor:
 
         outputs = preprocessor(batch_inputs, is_training=False)
 
-        assert outputs["points"].shape == (3, 4)
         assert outputs["coors"].shape == (3, 3)
         assert outputs["voxel_coors"].shape == (2, 3)
         assert outputs["inverse_map"].shape == (3,)
-        assert torch.equal(outputs["pts_semantic_mask"], torch.tensor([3, 3, 1]))
         assert outputs["semantic_seg"].shape == (1, 2, 4)
         assert outputs["semantic_seg"][0, 1, 2].item() == 3
         assert outputs["semantic_seg"][0, 1, 1].item() == 1
         assert outputs["semantic_seg"][0, 0, 0].item() == 255
 
     def test_forward_handles_batch_of_two_samples(self) -> None:
-        """Multi-sample batches should produce concatenated point arrays and stacked seg maps."""
+        """Multi-sample batches should produce per-sample coordinates and stacked seg maps."""
         preprocessor = FrustumRangePreprocessor(
             height=2,
             width=4,
@@ -94,13 +96,11 @@ class TestFrustumRangePreprocessor:
 
         outputs = preprocessor(batch_inputs, is_training=False)
 
-        assert outputs["points"].shape == (3, 4)
-        assert outputs["pts_semantic_mask"].shape == (3,)
+        assert outputs["coors"][:, 0].tolist() == [0, 0, 1]
         assert outputs["semantic_seg"].shape == (2, 2, 4)
-        assert outputs["sample_count"] == 2
 
     def test_forward_predict_mode_produces_no_label_keys(self) -> None:
-        """When pts_semantic_mask is absent, semantic_seg should not appear in output."""
+        """When segment is absent, semantic_seg should not appear in output."""
         preprocessor = FrustumRangePreprocessor(
             height=2,
             width=4,
@@ -115,9 +115,7 @@ class TestFrustumRangePreprocessor:
 
         outputs = preprocessor(batch_inputs, is_training=False)
 
-        assert "pts_semantic_mask" not in outputs
         assert "semantic_seg" not in outputs
-        assert "points" in outputs
         assert "voxel_coors" in outputs
 
     def test_forward_masks_negative_ignore_labels_before_majority_vote(self) -> None:

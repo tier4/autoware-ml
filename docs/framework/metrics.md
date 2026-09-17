@@ -1140,8 +1140,9 @@ right there.
 `PartialDetectionScore` groups segmentation points inside each small-object ground-truth box and
 rewards partial hits with a saturating credit: for a pedestrian or a cone, classifying even a few
 points correctly is far better than none, which point-averaged mIoU cannot see. A diagnostic
-metric wired in the joint detection plus segmentation configs, whose `seg_frames` carry the
-detection ground-truth boxes.
+metric of the joint detection plus segmentation suite (`datasets/<dataset>/segdet3d`), whose
+`seg_frames` carry the detection ground-truth boxes. The metric config of each taxonomy lists the
+classes it reports in `partial_detection_classes`.
 
 <div class="metrics-fig">
 <svg viewBox="0 0 660 210" width="660" height="210" role="img" aria-labelledby="fig-d3-title">

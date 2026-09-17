@@ -22,6 +22,7 @@ import polars as pl
 
 from autoware_ml.databases.scenarios import Scenarios, ScenarioData
 from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord
+from autoware_ml.databases.taxonomy import DatabaseTaxonomy
 
 
 class DatabaseInterface(Protocol):
@@ -119,27 +120,15 @@ class DatabaseInterface(Protocol):
 
     @property
     @abstractmethod
-    def label_remapper(self) -> Mapping[str, str] | None:
+    def taxonomy(self) -> DatabaseTaxonomy:
         """
-        Get the label remapper in the database.
+        Get the taxonomies the database labels are built with.
 
         Returns:
-          Mapping[str, str] | None: Label remapper in the database.
+          DatabaseTaxonomy: Taxonomies of the database.
         """
 
-        raise NotImplementedError("Database must define label_remapper!")
-
-    @property
-    @abstractmethod
-    def ignore_label_index(self) -> int:
-        """
-        Get the ignore label index in the database.
-
-        Returns:
-          int: Ignore label index in the database.
-        """
-
-        raise NotImplementedError("Database must define ignore_label_index!")
+        raise NotImplementedError("Database must define taxonomy!")
 
     @property
     @abstractmethod

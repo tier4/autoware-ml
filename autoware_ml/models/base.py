@@ -32,6 +32,7 @@ import torch.nn as nn
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.eval_mixin import MetricEvalMixin
 from autoware_ml.preprocessing.base import DataPreprocessing
@@ -91,20 +92,34 @@ class BaseModel(MetricEvalMixin, L.LightningModule, ABC):
         """
         self._data_preprocessing = data_preprocessing
 
-    def on_after_batch_transfer(
-        self, batch_inputs_dict: dict[str, Any], dataloader_idx: int
-    ) -> dict[str, Any]:
+    def transfer_batch_to_device(
+        self, batch: ModelGTBatch, device: torch.device, dataloader_idx: int
+    ) -> ModelGTBatch:
+        """Move the typed batch to the device Lightning runs the step on.
+
+        Args:
+            batch: Collated typed batch from the dataloader.
+            device: Target device.
+            dataloader_idx: Lightning dataloader index.
+
+        Returns:
+            The batch on the target device.
+        """
+        del dataloader_idx
+        return batch.to_device(device)
+
+    def on_after_batch_transfer(self, batch: ModelGTBatch, dataloader_idx: int) -> dict[str, Any]:
         """Apply runtime preprocessing after Lightning moves a batch to device.
 
         Args:
-            batch_inputs_dict: Collated batch dictionary on the target device.
+            batch: Collated typed batch on the target device.
             dataloader_idx: Lightning dataloader index.
 
         Returns:
             Batch dictionary after runtime preprocessing.
         """
         del dataloader_idx
-        return self._data_preprocessing(batch_inputs_dict, is_training=self.training)
+        return self._data_preprocessing(batch, is_training=self.training)
 
     def predict_outputs(self, batch_inputs_dict: Mapping[str, Any], outputs: Any) -> Any:
         """Convert raw model outputs into task-level predictions.

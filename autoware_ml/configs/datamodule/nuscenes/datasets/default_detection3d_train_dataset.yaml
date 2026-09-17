@@ -1,11 +1,12 @@
-_target_: autoware_ml.datamodule.multi_task.nuscenes.multi_task_nuscenes_dataset.MultiTaskNuScenesDataset
+_target_: autoware_ml.datamodule.nuscenes.dataset.NuScenesDataset
 _convert_: all
 
 defaults:
-  - /datamodule/t4dataset/datasets/detection3d@dataset_tasks.Detection3D: default_detection3d
-  - /datamodule/transforms@transforms: default_train_transforms
+  - /datamodule/t4dataset/datasets/default_detection3d_train_dataset@_here_
+  - _self_
 
 database_root_path: ${database.root_path}
+lidar_intensity_scale: ${database.lidar_intensity_scale}
 
 # Always None since we run splitter in the process
 dataset_records_dataframe: null

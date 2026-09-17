@@ -34,12 +34,16 @@ from autoware_ml.databases.schemas.lidar_frames import LidarFrameDataModel
 from autoware_ml.databases.schemas.lidar_sources import LidarSourceDataModel
 from autoware_ml.databases.schemas.image_frames import ImageFrameDataModel
 from autoware_ml.databases.schemas.category_mapping import CategoryMappingDataModel
+from autoware_ml.databases.taxonomy import DatabaseTaxonomy
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDataModel
 from autoware_ml.databases.scenarios import ScenarioData
 from autoware_ml.databases.t4dataset.t4sample_records import T4SampleRecord
 from autoware_ml.utils.dataset import convert_quaternion_to_matrix
 
 logger = logging.getLogger(__name__)
+
+# Lidar channel each nuScenes sample is keyed on
+LIDAR_CHANNEL = LidarChannel.LIDAR_TOP
 
 
 class NuScenesRecordsGenerator:
@@ -57,7 +61,7 @@ class NuScenesRecordsGenerator:
         max_sweeps: int,
         sample_steps: int,
         lidar_pointcloud_num_features: int,
-        ignore_label_index: int,
+        taxonomy: DatabaseTaxonomy,
         box3d_pipelines: Sequence[Box3DPipeline],
     ) -> None:
         """
@@ -71,7 +75,7 @@ class NuScenesRecordsGenerator:
           sample_steps: Number of frames/samples to skip between each sample, set to 1
             if not skipping any samples/frames.
           lidar_pointcloud_num_features: Number of features of the lidar pointcloud.
-          ignore_label_index: Label index to use for ignored labels in the box3d annotations.
+          taxonomy: Taxonomies the labels of the database are baked with.
           box3d_pipelines: List of box3d pipelines to process the box3d annotations.
         """
 
@@ -80,7 +84,7 @@ class NuScenesRecordsGenerator:
         self.max_sweeps = max_sweeps
         self.sample_steps = sample_steps
         self.lidar_pointcloud_num_features = lidar_pointcloud_num_features
-        self.ignore_label_index = ignore_label_index
+        self.taxonomy = taxonomy
         self.box3d_pipelines = box3d_pipelines
 
         assert sample_steps > 0, "Sample steps must be greater than 0."
@@ -154,16 +158,6 @@ class NuScenesRecordsGenerator:
             sample_token = self.sample_tokens[sample_index]
             sample = self.nusc.get("sample", sample_token)
             nuscenes_sample_record = self.extract_nuscenes_sample_record(sample, sample_index)
-
-            if nuscenes_sample_record is None:
-                logger.info(
-                    f"dataset_name: {self.scenario_data.dataset_name}, "
-                    f"scenario_id: {self.scenario_data.scenario_id}, "
-                    f"sample_index: {sample_index}, "
-                    f"No lidar channel found in sample data"
-                )
-                continue
-
             records.append(nuscenes_sample_record.to_dataset_record())
 
         return records
@@ -263,7 +257,7 @@ class NuScenesRecordsGenerator:
                     box3d_dataset_label_name=box3d.name,
                     box3d_label_name=box3d.name,
                     # Initially, set all label indices to the ignore label index
-                    box3d_label_index=self.ignore_label_index,
+                    box3d_label_index=self.taxonomy.detection3d.ignore_index,
                     box3d_num_lidar_points=sample_annotation_record["num_lidar_pts"],
                     box3d_num_radar_points=sample_annotation_record["num_radar_pts"],
                     box3d_valid=box3d_valid,
@@ -298,14 +292,13 @@ class NuScenesRecordsGenerator:
         return str(Path(self.nusc.dataroot) / lidarseg_record["filename"])
 
     def _extract_lidar_frame(
-        self, sample: Mapping[str, Any], lidar_channel_name: str
+        self, sample: Mapping[str, Any]
     ) -> Tuple[LidarFrameDataModel, Sequence[Box]]:
         """
         Extract lidar frame records from a NuScenes sample.
 
         Args:
           sample: NuScenes sample record.
-          lidar_channel_name: Lidar channel name.
 
         Returns:
           Tuple of:
@@ -314,7 +307,7 @@ class NuScenesRecordsGenerator:
               coordinate.
         """
 
-        calibrated_lidar_sample_data_token = sample["data"][lidar_channel_name]
+        calibrated_lidar_sample_data_token = sample["data"][LIDAR_CHANNEL]
         sd_record = self.nusc.get("sample_data", calibrated_lidar_sample_data_token)
         cs_record = self.nusc.get("calibrated_sensor", sd_record["calibrated_sensor_token"])
         lidar_sensor_to_ego_matrix = convert_quaternion_to_matrix(
@@ -340,7 +333,7 @@ class NuScenesRecordsGenerator:
             lidar_frame_id=calibrated_lidar_sample_data_token,
             lidar_keyframe=sd_record["is_key_frame"],
             lidar_sensor_id=cs_record["token"],
-            lidar_sensor_channel_name=lidar_channel_name,
+            lidar_sensor_channel_name=LIDAR_CHANNEL.value,
             lidar_timestamp_seconds=sd_record["timestamp"] / 1e6,
             lidar_pointcloud_path=lidar_path,
             lidar_pointcloud_source_path=None,
@@ -595,6 +588,9 @@ class NuScenesRecordsGenerator:
             image_height=image_height,
             image_width=image_width,
             cam2img=cam2img,
+            # nuScenes stores undistorted images
+            image_distortion_coefficients=[],
+            image_distortion_model="",
             image_sensor_to_ego_pose_matrix=image_sensor_to_ego_matrix,
             image_frame_ego_pose_to_global_matrix=image_frame_ego_pose_to_global_matrix,
             lidar2cam=lidar2cam,
@@ -630,7 +626,7 @@ class NuScenesRecordsGenerator:
         ]
 
     def _extract_image_channel_sweeps(
-        self, sample: Mapping[str, Any], lidar_channel_name: str
+        self, sample: Mapping[str, Any]
     ) -> Sequence[Sequence[ImageFrameDataModel]]:
         """
         Extract multi-sweep image metadata (past camera keyframes, all channels) from a NuScenes
@@ -638,7 +634,6 @@ class NuScenesRecordsGenerator:
 
         Args:
           sample: NuScenes sample record to walk backwards from.
-          lidar_channel_name: Lidar channel name.
 
         Returns:
           Sequence[Sequence[ImageFrameDataModel]]: Image sweep data models, ordered from most
@@ -654,11 +649,10 @@ class NuScenesRecordsGenerator:
                 break
 
             current_sample = self.nusc.get("sample", current_sample["prev"])
-            if lidar_channel_name not in current_sample["data"]:
-                break
+            self._check_lidar_channel(current_sample)
 
             current_lidar_sd_record = self.nusc.get(
-                "sample_data", current_sample["data"][lidar_channel_name]
+                "sample_data", current_sample["data"][LIDAR_CHANNEL]
             )
             current_lidar_cs_record = self.nusc.get(
                 "calibrated_sensor", current_lidar_sd_record["calibrated_sensor_token"]
@@ -717,9 +711,27 @@ class NuScenesRecordsGenerator:
             category_indices=category_indices,
         )
 
+    def _check_lidar_channel(self, sample: Mapping[str, Any]) -> None:
+        """
+        Check that a sample has a frame of the lidar channel of the database.
+
+        Args:
+          sample: NuScenes sample record.
+
+        Raises:
+          ValueError: If the sample has no frame of the lidar channel.
+        """
+
+        # Every sample must have the lidar channel of the database.
+        if LIDAR_CHANNEL not in sample["data"]:
+            raise ValueError(
+                f"Scenario {self.scenario_data.scenario_id} holds sample {sample['token']} "
+                f"without a {LIDAR_CHANNEL.value} frame."
+            )
+
     def extract_nuscenes_sample_record(
         self, sample: Mapping[str, Any], sample_index: int
-    ) -> T4SampleRecord | None:
+    ) -> T4SampleRecord:
         """
         Extract a T4SampleRecord (unified intermediate sample container) from a NuScenes sample.
 
@@ -728,23 +740,16 @@ class NuScenesRecordsGenerator:
           sample_index: Sample index.
 
         Returns:
-          T4SampleRecord | None: T4SampleRecord, or None if no supported lidar channel was found.
+          T4SampleRecord: T4SampleRecord of the sample.
         """
 
-        if LidarChannel.LIDAR_TOP in sample["data"]:
-            lidar_channel_name = LidarChannel.LIDAR_TOP
-        elif LidarChannel.LIDAR_CONCAT in sample["data"]:
-            lidar_channel_name = LidarChannel.LIDAR_CONCAT
-        else:
-            return None
+        self._check_lidar_channel(sample)
 
         frame_basic_metadata = self._extract_sample_basic_metadata(
             sample=sample, sample_index=sample_index
         )
 
-        lidar_frame_data_model, box3d = self._extract_lidar_frame(
-            sample=sample, lidar_channel_name=lidar_channel_name
-        )
+        lidar_frame_data_model, box3d = self._extract_lidar_frame(sample=sample)
 
         boxes_3d_data_model = self._extract_boxes_3d_annotations(
             sample=sample,
@@ -764,9 +769,7 @@ class NuScenesRecordsGenerator:
         image_channel_frame_data_models = self._extract_image_channel_frames(
             sample=sample, lidar_frame_data_model=lidar_frame_data_model
         )
-        image_channel_sweep_data_models = self._extract_image_channel_sweeps(
-            sample=sample, lidar_channel_name=lidar_channel_name
-        )
+        image_channel_sweep_data_models = self._extract_image_channel_sweeps(sample=sample)
         image_frame_data_models = [
             image_channel_frame_data_models
         ] + image_channel_sweep_data_models

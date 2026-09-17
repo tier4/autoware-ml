@@ -7,6 +7,7 @@ import torch
 from torch import Tensor
 
 from autoware_ml.geometry.points.base_points import BasePoints
+from autoware_ml.databases.t4pack.t4pack_frame import T4PackFrame
 
 
 class PointCloudGTBatch(NamedTuple):
@@ -15,7 +16,8 @@ class PointCloudGTBatch(NamedTuple):
     points: Float32[
         Tensor, "batch_size*num_points num_features"
     ]  # (B*P, number of features for each point)
-    batch_indices: Int32[Tensor, " batch_size*num_points"]  # (B*P, ), batch indices for each point
+    # (B*P, ), batch indices for each point
+    batch_indices: Int32[Tensor, " batch_size*num_points"]
     # Number of samples collated into this batch. Fixed by the number of collated samples, so it
     # stays correct even when the trailing samples carry zero points and are absent from
     # batch_indices.
@@ -88,9 +90,13 @@ class LiDARPointCloudSample(NamedTuple):
 
     point_cloud_path: str
     timestamp: float
+    # Intensity of the strongest return in the file, declared by the database
+    intensity_scale: float
     # Transformation matrix from LiDAR sensor frame to ego pose of this LiDAR sensor frame
     sensor_to_ego_pose_matrix: Float32[Tensor, "4 4"]  # (4, 4)
     # Transformation matrix from ego pose of this LiDAR sensor frame to global frame
     lidar_to_ego_pose_to_global_matrix: Float32[Tensor, "4 4"]  # (4, 4)
     # Transformation matrix from the main lidar sensor to other lidar sweeps at this frame
     lidar_sensor_to_lidar_sweep_matrix: Float32[Tensor, "4 4"]  # (4, 4)
+    # Location of the frame in the t4pack file of its channel, None when the scene has no pack
+    t4pack_frame: T4PackFrame | None = None

@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Sequence, NamedTuple
 
 import torch
+from jaxtyping import Bool
+from torch import Tensor
 
 from autoware_ml.dataclasses.batch.detection3d import (
     Detection3DGTBatch,
@@ -56,6 +58,29 @@ class ModelGTSample(NamedTuple):
     # Seconds spent loading this sample and running it through the transform pipeline.
     # Assigned by the dataset once the pipeline has finished.
     io_processing_time: float = 0.0
+
+    def keep_points(self, keep_mask: Bool[Tensor, " num_points"]) -> ModelGTSample:
+        """
+        Keep the masked points and, when the sample carries them, their semantic labels. The
+        point cloud is filtered in place.
+
+        Args:
+          keep_mask: Mask of the points to keep.
+
+        Returns:
+          ModelGTSample: The sample holding the kept points and their labels.
+
+        Raises:
+          ValueError: If the sample carries no point cloud.
+        """
+        if self.point_cloud_data is None:
+            raise ValueError("The sample carries no point cloud to filter.")
+        self.point_cloud_data.remove_points(keep_mask)
+        if self.segmentation3d_gt_sample is None:
+            return self
+        return self._replace(
+            segmentation3d_gt_sample=self.segmentation3d_gt_sample.remove_labels(keep_mask)
+        )
 
 
 class ModelGTBatch(NamedTuple):
@@ -159,22 +184,23 @@ class ModelGTBatch(NamedTuple):
 
     @staticmethod
     def collate_detection3d_gt_samples(
-        gt_samples: Sequence[ModelGTSample], max_num_3d_gt_bboxes: int
+        gt_samples: Sequence[ModelGTSample], max_num_3d_gt_bboxes: int | None
     ) -> Detection3DGTBatch | None:
         """
         Collate a sequence of detection3d GT samples into a Detection3DGTBatch.
 
         Args:
           gt_samples: Sequence of ModelGTSample to be collated.
-          max_num_3d_gt_bboxes: The maximum number of 3D ground truth bounding boxes
-            for each sample in the batch.
+          max_num_3d_gt_bboxes: Number of 3D boxes every sample is padded to. Required when the
+            samples carry 3D boxes.
 
         Returns:
           Detection3DGTBatch: Collated detection3d GT batch, None when no sample carries 3D
             detection ground truth.
 
         Raises:
-          ValueError: If only some of the samples carry 3D detection ground truth.
+          ValueError: If only some of the samples carry 3D detection ground truth, or the samples
+            carry 3D boxes without a padding size.
         """
         if len(gt_samples) == 0:
             return None
@@ -192,6 +218,11 @@ class ModelGTBatch(NamedTuple):
         # If only some samples have detection3d_gt_bboxes_3d, the batch cannot be built.
         if len(detection3d_gt_bboxes_3d) != len(gt_samples):
             raise ValueError("All samples must have detection3d_gt_bboxes_3d for collating.")
+
+        if max_num_3d_gt_bboxes is None:
+            raise ValueError(
+                "The samples carry 3D boxes, so the dataset needs max_num_3d_gt_bboxes."
+            )
 
         return Detection3DGTBatch.collate_gt_samples(
             detection3d_gt_bboxes_3d=detection3d_gt_bboxes_3d,
@@ -315,7 +346,7 @@ class ModelGTBatch(NamedTuple):
 
     @staticmethod
     def collate_gt_samples(
-        gt_samples: Sequence[ModelGTSample], max_num_3d_gt_bboxes: int
+        gt_samples: Sequence[ModelGTSample], max_num_3d_gt_bboxes: int | None
     ) -> ModelGTBatch:
         """
         Collate a sequence of ModelGTSample into a ModelGTBatch.

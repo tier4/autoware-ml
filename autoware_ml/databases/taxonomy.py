@@ -102,7 +102,8 @@ class LabelVocabulary:
     def __str__(self) -> str:
         """Canonical string form, the input of the database hash."""
         entries = ", ".join(
-            f"{raw_name}: {fine_name}" for raw_name, fine_name in sorted(self._class_renaming.items())
+            f"{raw_name}: {fine_name}"
+            for raw_name, fine_name in sorted(self._class_renaming.items())
         )
         return f"{self.__class__.__name__}({entries})"
 

@@ -1,4 +1,4 @@
-_target_: autoware_ml.datamodule.multi_task.t4dataset.detection3d.T4Detection3DTask
+_target_: autoware_ml.datamodule.t4dataset.detection3d.T4Detection3DTask
 _convert_: all
 
 database_root_path: ${database.root_path}
