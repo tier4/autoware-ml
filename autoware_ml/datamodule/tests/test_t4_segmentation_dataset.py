@@ -92,7 +92,7 @@ class TestT4Segmentation3DDataset:
                 pipeline=[
                     LoadPointsFromFile(load_dim=5, use_dim=4),
                     LoadSegAnnotations3D(
-                        class_mapping={"car": 0, "noise": 1},
+                        class_indices={"car": 0, "noise": 1},
                         ignore_index=-1,
                     ),
                 ]

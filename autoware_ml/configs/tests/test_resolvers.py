@@ -43,19 +43,19 @@ def test_raw_name_to_train_index_sends_null_and_unknown_finals_to_ignore() -> No
     assert mapping["some_future_category"] == -1
 
 
-def test_seg_class_mapping_resolver_in_interpolation() -> None:
+def test_seg_class_indices_resolver_in_interpolation() -> None:
     register_config_resolvers()
     cfg = OmegaConf.create(
         {
             "ignore_index": -1,
             "name_mapping": dict(_NAME_MAPPING),
             "class_names": list(_CLASS_NAMES),
-            "class_mapping": (
-                "${seg_class_mapping:${name_mapping}, ${class_names}, ${ignore_index}}"
+            "class_indices": (
+                "${seg_class_indices:${name_mapping}, ${class_names}, ${ignore_index}}"
             ),
         }
     )
-    resolved = OmegaConf.to_container(cfg, resolve=True)["class_mapping"]
+    resolved = OmegaConf.to_container(cfg, resolve=True)["class_indices"]
     assert resolved == {
         "car": 0,
         "vehicle.car": 0,

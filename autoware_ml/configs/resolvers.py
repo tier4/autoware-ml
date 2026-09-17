@@ -94,5 +94,5 @@ def raw_name_to_train_index(
 def register_config_resolvers() -> None:
     """Register all custom OmegaConf resolvers required by bundled configs."""
     OmegaConf.register_new_resolver("user_config_name", strip_tasks_prefix, replace=True)
-    OmegaConf.register_new_resolver("seg_class_mapping", raw_name_to_train_index, replace=True)
+    OmegaConf.register_new_resolver("seg_class_indices", raw_name_to_train_index, replace=True)
     OmegaConf.register_new_resolver("merge_lists", merge_lists, replace=True)

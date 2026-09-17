@@ -93,7 +93,7 @@ class_names:
   - static_clutter
   - noise
 num_classes: 20
-class_mapping: ${seg_class_mapping:${t4dataset.segmentation3d.name_mapping}, ${t4dataset.segmentation3d.class_names}, ${t4dataset.segmentation3d.ignore_index}}
+class_indices: ${seg_class_indices:${t4dataset.segmentation3d.name_mapping}, ${t4dataset.segmentation3d.class_names}, ${t4dataset.segmentation3d.ignore_index}}
 metric_ranges:
   - { _target_: autoware_ml.metrics.base.MetricRange, name: 0-50m, min_distance: 0.0, max_distance: 50.0 }
   - { _target_: autoware_ml.metrics.base.MetricRange, name: 50-90m, min_distance: 50.0, max_distance: 90.0 }
