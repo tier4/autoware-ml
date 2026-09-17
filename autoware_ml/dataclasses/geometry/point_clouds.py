@@ -21,6 +21,8 @@ class PointCloudGTBatch(NamedTuple):
     # stays correct even when the trailing samples carry zero points and are absent from
     # batch_indices.
     batch_size: int
+    # Column of the time lag feature, -1 when the points carry none
+    timestamp_difference_dim: int
 
     @staticmethod
     def collate_gt_samples(
@@ -34,9 +36,18 @@ class PointCloudGTBatch(NamedTuple):
 
         Returns:
           PointCloudGTBatch: Collated point cloud GT batch.
+
+        Raises:
+          ValueError: If the samples carry the time lag in different columns.
         """
         if len(point_gt_samples) == 0:
             return None
+        timestamp_difference_dims = {sample.timestamp_difference_dim for sample in point_gt_samples}
+        if len(timestamp_difference_dims) != 1:
+            raise ValueError(
+                "All samples of a batch must have the time lag in the same column, got "
+                f"{sorted(timestamp_difference_dims)}."
+            )
 
         # Concatenate all points from the sequence of point_gt_samples
         points = torch.cat([sample.points for sample in point_gt_samples], dim=0)
@@ -62,6 +73,7 @@ class PointCloudGTBatch(NamedTuple):
             points=points,
             batch_indices=batch_indices,
             batch_size=len(point_gt_samples),
+            timestamp_difference_dim=point_gt_samples[0].timestamp_difference_dim,
         )
 
     def to_device(self, device: torch.device) -> PointCloudGTBatch:
@@ -78,6 +90,7 @@ class PointCloudGTBatch(NamedTuple):
             points=self.points.to(device),
             batch_indices=self.batch_indices.to(device),
             batch_size=self.batch_size,
+            timestamp_difference_dim=self.timestamp_difference_dim,
         )
 
 

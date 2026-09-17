@@ -3,6 +3,8 @@
 defaults:
   - /defaults/default_runtime
   - /tasks/segmentation3d/ptv3/encoder_base
+  - /tasks/segmentation3d/ptv3/voxel_encoder
+  - /tasks/segmentation3d/ptv3/data_preprocessing
   - /tasks/detection3d/ptv3/bev_neck
   - _self_
 
@@ -11,13 +13,9 @@ dataset: ???
 grid_size: ???
 point_cloud_range: ???
 
-global_rot_scale_trans: ???
+max_voxels: ???
 
-data_preprocessing:
-  pipeline:
-    - _target_: autoware_ml.preprocessing.point_cloud.grid_sample.GridSamplePreprocessor
-      grid_size: ${grid_size}
-      point_cloud_range: ${point_cloud_range}
+global_rot_scale_trans: ???
 
 model:
   _target_: autoware_ml.models.detection3d.ptv3.PTv3DetectionModel

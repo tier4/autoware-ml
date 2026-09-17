@@ -44,6 +44,8 @@ class TestModelBatchInputs(unittest.TestCase):
             coords=torch.zeros(num_voxels, 3, dtype=torch.int32),
             num_points=torch.ones(num_voxels, dtype=torch.int32),
             batch_indices=torch.zeros(num_voxels, dtype=torch.int32),
+            point_voxel_indices=torch.arange(num_voxels, dtype=torch.int64),
+            num_dropped_voxels=torch.zeros((), dtype=torch.int64),
         )
         batch_size, num_cameras = 2, 3
         self.image_data = ImageGTBatch(

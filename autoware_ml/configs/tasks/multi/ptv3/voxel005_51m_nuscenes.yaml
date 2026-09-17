@@ -13,6 +13,7 @@ dataset: ${nuscenes}
 batch_size: 16
 num_workers: 8
 
+max_voxels: 524288
 grid_size: 0.05
 point_cloud_range: [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
 

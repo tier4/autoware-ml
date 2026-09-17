@@ -36,6 +36,7 @@ def build_batch(with_segmentation: bool = False, with_detection: bool = False) -
         points=points,
         batch_indices=torch.tensor([0, 0, 0, 1, 1], dtype=torch.int32),
         batch_size=2,
+        timestamp_difference_dim=-1,
     )
     segmentation3d_gt_batch = (
         Segmentation3DGTBatch(

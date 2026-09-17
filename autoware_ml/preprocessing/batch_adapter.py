@@ -111,6 +111,7 @@ class ModelGTBatchAdapter:
             "batch_indices": point_cloud_gt_batch.batch_indices,
             "points": list(torch.split(point_cloud_gt_batch.points, counts.tolist())),
             "sample_count": int(counts.shape[0]),
+            "time_lag_column": point_cloud_gt_batch.timestamp_difference_dim,
         }
 
     @staticmethod

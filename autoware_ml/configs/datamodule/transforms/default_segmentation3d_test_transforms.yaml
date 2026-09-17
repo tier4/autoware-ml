@@ -8,6 +8,18 @@ pipeline:
     use_dim: [0, 1, 2, 3]
     bev_remove_radius: 0.0
 
+  - _target_: autoware_ml.transforms.point_cloud.loading.LoadMultiSweepPointsFromFile
+    _convert_: all
+
+    past:
+      _target_: autoware_ml.transforms.point_cloud.loading.SweepWindow
+      num: 1
+      time_lag_range: ${dataset.lidar.sweep_time_lag_range}
+      selection: nearest
+    bev_remove_radius: 1.0
+    use_timestamp_difference: true
+    use_dim: [0, 1, 2, 3]
+
   - _target_: autoware_ml.transforms.point_cloud.geometry.PointsRangeFilter
     _convert_: all
 

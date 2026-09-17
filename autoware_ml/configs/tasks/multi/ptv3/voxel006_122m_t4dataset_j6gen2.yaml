@@ -14,6 +14,7 @@ partial_detection_classes:
    pedestrian.stroller, traffic_cone]
 
 grid_size: 0.06
+max_voxels: 1048576
 head_voxel_size: [0.48, 0.48, 8.0]
 
 t4dataset:
@@ -24,9 +25,17 @@ t4dataset:
 
 batch_size: 1
 
+datamodule:
+  train_frame_sampling:
+    pedestrian_class_name: pedestrian.common
+
 model:
+  # Describes the past and future points of a voxel apart
+  voxel_encoder:
+    _target_: autoware_ml.models.segmentation3d.encoders.voxel.PastFutureVoxelFeatureEncoder
   # PT-v3m3 encoder and decoder
   encoder:
+    in_channels: 17
     enc_depths: [3, 3, 3, 12, 3]
     enc_channels: [54, 108, 216, 432, 576]
     enc_num_head: [3, 6, 12, 24, 32]

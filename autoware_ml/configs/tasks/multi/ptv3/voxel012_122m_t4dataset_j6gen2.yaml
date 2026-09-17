@@ -48,6 +48,7 @@ t4dataset:
         filter: ${t4dataset.segmentation3d.collision_filter}
 
 point_cloud_range: [-122.88, -122.88, -3.0, 122.88, 122.88, 5.0]
+max_voxels: 524288
 grid_size: 0.12
 
 global_rot_scale_trans:

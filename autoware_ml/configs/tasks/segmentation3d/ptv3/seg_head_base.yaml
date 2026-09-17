@@ -20,3 +20,5 @@ enable_flash: ${model.encoder.enable_flash}
 upcast_attention: ${model.encoder.upcast_attention}
 upcast_softmax: ${model.encoder.upcast_softmax}
 lovasz_weight: 1.0
+# Cross entropy weight of mixed voxels
+mixed_voxel_weight: 1.0

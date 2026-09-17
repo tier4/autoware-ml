@@ -42,6 +42,7 @@ def _batch() -> ModelGTBatch:
             points=torch.zeros((2, 4), dtype=torch.float32),
             batch_indices=torch.zeros(2, dtype=torch.int32),
             batch_size=1,
+            timestamp_difference_dim=-1,
         ),
         detection3d_gt_batch=None,
         segmentation3d_gt_batch=None,
