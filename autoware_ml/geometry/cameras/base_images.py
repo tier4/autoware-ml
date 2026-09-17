@@ -6,8 +6,8 @@ from __future__ import annotations
 
 from typing import Sequence
 
-from jaxtyping import Float32, Int64
-from pydantic import BaseModel, ConfigDict
+from jaxtyping import Float32, Float64, Int64
+from pydantic import BaseModel, ConfigDict, model_validator
 import torch
 
 
@@ -66,7 +66,7 @@ class BaseImages(BaseModel):
 
     images: Float32[torch.Tensor, "num_cameras num_channels height width"]
     depth_maps: Float32[torch.Tensor, "num_cameras 1 height width"] | None = None
-    timestamps: Float32[torch.Tensor, " num_cameras"]
+    timestamps: Float64[torch.Tensor, " num_cameras"]
     camera_intrinsics: Float32[torch.Tensor, "num_cameras 3 3"]
     camera_names: Sequence[str]
     lidar2images: Float32[torch.Tensor, "num_cameras 4 4"]
@@ -77,6 +77,53 @@ class BaseImages(BaseModel):
     image_augmentation_matrices: Float32[torch.Tensor, "num_cameras 4 4"]
     noises: Float32[torch.Tensor, "num_cameras 4 4"] | None = None
     calibration_statuses: Int64[torch.Tensor, " num_cameras"] | None = None
+
+    @model_validator(mode="after")
+    def check_num_cameras(self) -> BaseImages:
+        """
+        Check that every per-camera attribute describes the same number of cameras.
+
+        The jaxtyping annotations validate each field on its own, so a shared dimension
+        name such as ``num_cameras`` is not enforced across fields. This validator takes
+        the leading dimension of ``images`` as the reference and compares the leading
+        dimension, or the length, of every other per-camera attribute against it.
+        Optional attributes left as ``None`` are skipped.
+
+        Returns:
+            The validated instance.
+
+        Raises:
+            ValueError: If any per-camera attribute disagrees with ``images`` on the
+                number of cameras.
+        """
+        num_cameras = self.images.shape[0]
+        per_camera_counts = {
+            "depth_maps": None if self.depth_maps is None else self.depth_maps.shape[0],
+            "timestamps": self.timestamps.shape[0],
+            "camera_intrinsics": self.camera_intrinsics.shape[0],
+            "camera_names": len(self.camera_names),
+            "lidar2images": self.lidar2images.shape[0],
+            "lidar2cams": self.lidar2cams.shape[0],
+            "distortion_models": len(self.distortion_models),
+            "distortion_coefficients": len(self.distortion_coefficients),
+            "augmented_camera_intrinsics": self.augmented_camera_intrinsics.shape[0],
+            "image_augmentation_matrices": self.image_augmentation_matrices.shape[0],
+            "noises": None if self.noises is None else self.noises.shape[0],
+            "calibration_statuses": (
+                None if self.calibration_statuses is None else self.calibration_statuses.shape[0]
+            ),
+        }
+        mismatches = {
+            name: count
+            for name, count in per_camera_counts.items()
+            if count is not None and count != num_cameras
+        }
+        if mismatches:
+            details = ", ".join(f"{name}={count}" for name, count in mismatches.items())
+            raise ValueError(
+                f"Inconsistent number of cameras: images has {num_cameras} but {details}."
+            )
+        return self
 
     @staticmethod
     def identity_image_augmentation_matrices(
