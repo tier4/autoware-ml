@@ -513,7 +513,6 @@ def test_serialized_pooling_export_mode_uses_precomputed_metadata(monkeypatch) -
     for key in (
         "feat",
         "grid_coord",
-        "serialized_order",
         "serialized_inverse",
         "batch",
         "sparse_shape",
@@ -525,10 +524,12 @@ def test_serialized_pooling_export_mode_uses_precomputed_metadata(monkeypatch) -
             torch.testing.assert_close(left, right, msg=f"Mismatch for {key}")
         else:
             assert torch.equal(left, right), f"Mismatch for {key}"
-    # The pooled level hands its blocks the precomputed gather order.
+    # The pooled level hands its blocks the precomputed gather order instead of the bare order.
     assert torch.equal(
         export_out["patch_order"], build_patch_order(train_out["serialized_order"], 4)
     )
+    assert "serialized_order" not in export_out
+    assert "serialized_code" not in export_out
 
 
 def _reference_patch_order(serialized_order: torch.Tensor, patch_size: int) -> torch.Tensor:

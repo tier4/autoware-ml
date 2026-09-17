@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import importlib
 import math
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
@@ -159,6 +159,13 @@ def build_patch_order(serialized_order: torch.Tensor, patch_size: int | None) ->
     return torch.cat([serialized_order, serialized_order[:, tail]], dim=1)
 
 
+def attention_blocks(stage: nn.Module) -> Iterator["Block"]:
+    """The blocks of one stage that carry serialized attention, in order."""
+    for module in stage._modules.values():
+        if isinstance(module, Block) and module.attn is not None:
+            yield module
+
+
 def collect_level_patch_sizes(levels: nn.Module) -> list[int | None]:
     """Attention window per resolution level of a ``PointSequential`` of block stacks.
 
@@ -168,11 +175,7 @@ def collect_level_patch_sizes(levels: nn.Module) -> list[int | None]:
     """
     patch_sizes: list[int | None] = []
     for level in levels._modules.values():
-        windows = {
-            module.attn.patch_size_max
-            for module in level._modules.values()
-            if isinstance(module, Block) and module.attn is not None
-        }
+        windows = {block.attn.patch_size_max for block in attention_blocks(level)}
         if len(windows) > 1:
             raise ValueError(f"Attention blocks of one level disagree on patch_size: {windows}.")
         patch_sizes.append(next(iter(windows)) if windows else None)
@@ -1001,11 +1004,14 @@ class SerializedPooling(PointModule):
             del pooled_code0
             idx_ptr = torch.cat([counts.new_zeros(1), torch.cumsum(counts, dim=0)])
         if self.export_mode:
+            # The exported blocks gather through the precomputed `patch_order`; the pooled
+            # level carries no codes and no bare order.
             head_indices = metadata.head_indices
-            pooled_code = torch.zeros_like(metadata.serialized_order)
-            pooled_order = metadata.serialized_order
-            pooled_inverse = metadata.serialized_inverse
             grid_coord = metadata.grid_coord
+            serialization = {
+                "patch_order": metadata.patch_order,
+                "serialized_inverse": metadata.serialized_inverse,
+            }
         else:
             head_indices = indices[idx_ptr[:-1]]
             pooled_code = code[:, head_indices]
@@ -1019,11 +1025,16 @@ class SerializedPooling(PointModule):
                 .expand_as(pooled_order),
             )
             grid_coord = point.grid_coord[head_indices] >> pooling_depth
-        if self.shuffle_orders:
-            permutation = torch.randperm(pooled_code.shape[0], device=pooled_code.device)
-            pooled_code = pooled_code[permutation]
-            pooled_order = pooled_order[permutation]
-            pooled_inverse = pooled_inverse[permutation]
+            if self.shuffle_orders:
+                permutation = torch.randperm(pooled_code.shape[0], device=pooled_code.device)
+                pooled_code = pooled_code[permutation]
+                pooled_order = pooled_order[permutation]
+                pooled_inverse = pooled_inverse[permutation]
+            serialization = {
+                "serialized_code": pooled_code,
+                "serialized_order": pooled_order,
+                "serialized_inverse": pooled_inverse,
+            }
 
         scatter_feat = segment_csr(self.proj(point.feat)[indices], idx_ptr, "max")
         if self.export_mode:
@@ -1034,9 +1045,7 @@ class SerializedPooling(PointModule):
             feat=scatter_feat,
             coord=scatter_coord,
             grid_coord=grid_coord,
-            serialized_code=pooled_code,
-            serialized_order=pooled_order,
-            serialized_inverse=pooled_inverse,
+            **serialization,
             serialized_depth=point.serialized_depth - pooling_depth,
             batch=point.batch[head_indices],
             sparse_shape=point.sparse_shape >> pooling_depth,
@@ -1051,7 +1060,6 @@ class SerializedPooling(PointModule):
         )
         if self.export_mode:
             pooled["serialized_pooling"] = point.serialized_pooling
-            pooled["patch_order"] = metadata.patch_order
         pooled = self.norm(pooled)
         pooled = self.act(pooled)
         pooled.sparsify()
@@ -1163,14 +1171,10 @@ def set_block_serialization_order(stages: PointSequential, order_count: int) -> 
         order_count: Number of serialization orders available.
     """
     for stage in stages._modules.values():
-        block_index = 0
-        for module in stage._modules.values():
-            # Convolution-only blocks read no serialization order, so they must
-            # not consume an index either - otherwise the attention blocks that
-            # follow them in the same stage would be shifted off their order.
-            if isinstance(module, Block) and module.attn is not None:
-                module.attn.order_index = block_index % order_count
-                block_index += 1
+        # Convolution-only blocks read no serialization order, so they must not consume an
+        # index either - otherwise the attention blocks after them would shift off their order.
+        for block_index, block in enumerate(attention_blocks(stage)):
+            block.attn.order_index = block_index % order_count
 
 
 def prepare_point_module_for_export(module: nn.Module) -> None:
@@ -1390,12 +1394,6 @@ class PointTransformerV3Encoder(PointModule):
         point["serialized_depth"] = data_dict["serialized_depth"]
         point["patch_order"] = data_dict["patch_order"]
         point["serialized_inverse"] = data_dict["serialized_inverse"]
-        # The bare order and the codes are not graph inputs (patch_order carries the order
-        # in its first entries; nothing in export mode reads the codes), but a caller that
-        # has them may pass them through.
-        for optional in ("serialized_order", "serialized_code"):
-            if optional in data_dict:
-                point[optional] = data_dict[optional]
         if "serialized_pooling" in data_dict:
             point["serialized_pooling"] = data_dict["serialized_pooling"]
         point["sparse_shape"] = data_dict["sparse_shape"]
