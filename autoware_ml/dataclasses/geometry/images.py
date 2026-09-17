@@ -38,15 +38,14 @@ class ImageGTBatch(NamedTuple):
         if len(images_gt_samples) == 0:
             return None
 
-        # Concatenate all images from the sequence of BaseImages
-        images = torch.cat([sample.images for sample in images_gt_samples], dim=0)
-        lidar2images = torch.cat([sample.lidar2images for sample in images_gt_samples], dim=0)
-        lidar2cams = torch.cat([sample.lidar2cams for sample in images_gt_samples], dim=0)
-        camera_intrinsics = torch.cat(
-            [sample.camera_intrinsics for sample in images_gt_samples], dim=0
-        )
-        image_augmentation_matrices = torch.cat(
-            [sample.image_augmentation_matrices for sample in images_gt_samples], dim=0
+        # Stack the per-camera tensors of every sample along a new leading batch dimension,
+        # so every field is laid out as (batch_size, num_cameras, ...).
+        images = torch.stack([sample.images for sample in images_gt_samples])
+        lidar2images = torch.stack([sample.lidar2images for sample in images_gt_samples])
+        lidar2cams = torch.stack([sample.lidar2cams for sample in images_gt_samples])
+        camera_intrinsics = torch.stack([sample.camera_intrinsics for sample in images_gt_samples])
+        image_augmentation_matrices = torch.stack(
+            [sample.image_augmentation_matrices for sample in images_gt_samples]
         )
 
         # Depth images are optional, but either every sample of the batch carries them or

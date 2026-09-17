@@ -133,6 +133,13 @@ dev = { features = ["dev"], solve-group = "default" }
 # Docs env is intentionally isolated from the default CUDA/ML stack.
 docs = { features = ["docs"], solve-group = "docs", no-default-feature = true }
 
+[tool.pytest.ini_options]
+# The repository root is on sys.path through the editable install, so tests colocated under
+# ``autoware_ml/<package>/tests`` import as ``autoware_ml.<package>.tests.<module>``. Without
+# this, pytest names them ``<package>.tests.<module>`` and a package such as
+# ``autoware_ml/dataclasses`` shadows the standard library module of the same name.
+consider_namespace_packages = true
+
 [tool.ruff.lint]
 # Ignore F722 error to fix the error for JaxTyping in string typing, which is not used in our codebase.
 ignore = ["F722"]
