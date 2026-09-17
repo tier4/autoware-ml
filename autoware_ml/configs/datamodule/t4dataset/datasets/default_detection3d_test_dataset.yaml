@@ -3,7 +3,7 @@ _convert_: all
 
 defaults:
   - detection3d@dataset_tasks.Detection3D: default_detection3d
-  - ../../transforms@transforms: default_test_transforms
+  - /datamodule/transforms@transforms: default_test_transforms
 
 database_root_path: ${database.root_path}
 lidar_intensity_scale: ${database.lidar_intensity_scale}

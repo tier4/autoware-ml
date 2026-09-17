@@ -81,6 +81,22 @@ class PointCloudGTBatch(NamedTuple):
         )
 
 
+class LidarSourceView(NamedTuple):
+    """
+    One lidar source inside a point cloud that merges several lidars.
+
+    Attributes:
+      point_index_begin: Index of the first point of the source in the merged cloud.
+      num_points: Number of consecutive points the source contributes.
+      sensor_to_frame_matrix: Transformation matrix from the source sensor to the frame of the
+        merged cloud.
+    """
+
+    point_index_begin: int
+    num_points: int
+    sensor_to_frame_matrix: Float32[Tensor, "4 4"]
+
+
 class LiDARPointCloudSample(NamedTuple):
     """
     Named tuple to represent a single row of LiDAR point cloud data,
@@ -97,3 +113,5 @@ class LiDARPointCloudSample(NamedTuple):
     lidar_to_ego_pose_to_global_matrix: Float32[Tensor, "4 4"]  # (4, 4)
     # Transformation matrix from the main lidar sensor to other lidar sweeps at this frame
     lidar_sensor_to_lidar_sweep_matrix: Float32[Tensor, "4 4"]  # (4, 4)
+    # Lidar source to serve from a merged cloud, None to serve the whole file
+    source_view: LidarSourceView | None = None

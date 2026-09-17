@@ -3,7 +3,7 @@ _convert_: all
 
 defaults:
   - segmentation3d@dataset_tasks.Segmentation3D: default_segmentation3d
-  - ../../transforms@transforms: default_segmentation3d_train_transforms
+  - /datamodule/transforms@transforms: default_segmentation3d_train_transforms
 
 database_root_path: ${database.root_path}
 lidar_intensity_scale: ${database.lidar_intensity_scale}

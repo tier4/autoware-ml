@@ -6,6 +6,9 @@ defaults:
   - /datasets/t4dataset/lidar
   - /database@database: t4dataset/t4dataset_j6gen2_base
   - /datamodule@datamodule: t4dataset/default_detection3d_datamodule
+  - override /datamodule/transforms@datamodule.train_dataset.transforms: default_segdet3d_train_transforms
+  - override /datamodule/transforms@datamodule.validation_dataset.transforms: default_segdet3d_test_transforms
+  - override /datamodule/transforms@datamodule.test_dataset.transforms: default_segdet3d_test_transforms
   - _self_
 
 batch_size: 8
@@ -117,12 +120,6 @@ model:
         nms_radius: 0.0
         post_max_size: 50
       - class_names: [debris]
-        nms_radius: 0.0
-        post_max_size: 50
-      - class_names: [vehicle_extension]
-        nms_radius: 0.0
-        post_max_size: 50
-      - class_names: [bicycle_rack]
         nms_radius: 0.0
         post_max_size: 50
     loss_cls_weight: 1.0

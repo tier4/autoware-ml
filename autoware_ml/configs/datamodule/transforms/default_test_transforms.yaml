@@ -24,7 +24,7 @@ pipeline:
 
     points_range: ${point_cloud_range}
 
-  - _target_: autoware_ml.transforms.boxes3d.loading.BBoxesLabelNameFilter
+  - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesLabelNameFilter
     _convert_: all
 
     label_names_to_keep: ${database.taxonomy.detection3d.class_names}

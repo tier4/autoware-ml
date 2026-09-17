@@ -9,16 +9,6 @@ point_cloud_range: ???
 voxel_size: ???
 out_size_factor: ???
 
-datamodule:
-  collation_map:
-    points: list
-    gt_boxes: list
-    gt_labels: list
-    gt_num_points: list
-    ego2global: list
-    scene_token: list
-    timestamp: list
-
 model:
   _target_: autoware_ml.models.detection3d.transfusion.TransFusionDetectionModel
   metrics: ${dataset.detection3d.metrics}
@@ -34,7 +24,8 @@ model:
       - ${point_cloud_range.3}
       - ${point_cloud_range.4}
       - ${point_cloud_range.5}
-      - 255.0
+      # Intensity arrives in [0, 1] from the loader
+      - 1.0
   pts_middle_encoder:
     _target_: autoware_ml.models.detection3d.encoders.sparse.SparseEncoder
     in_channels: 32

@@ -3,3 +3,7 @@
 defaults:
   - /datasets/nuscenes/base
   - _self_
+
+# Gaussian jitter of the point coordinates in training, in meters
+train_jitter_sigma: 0.005
+train_jitter_clip: 0.02

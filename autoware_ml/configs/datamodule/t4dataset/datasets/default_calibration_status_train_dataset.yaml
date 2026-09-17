@@ -1,0 +1,17 @@
+_target_: autoware_ml.datamodule.t4dataset.dataset.T4Dataset
+_convert_: all
+
+defaults:
+  - /datamodule/transforms@transforms: default_calibration_status_train_transforms
+
+database_root_path: ${database.root_path}
+lidar_intensity_scale: ${database.lidar_intensity_scale}
+
+# No per task ground truth, the misalignment augmentation writes the label
+dataset_tasks: {}
+
+# Always None since we run splitter in the process
+dataset_records_dataframe: null
+
+# No boxes to pad
+max_num_3d_gt_bboxes: 0

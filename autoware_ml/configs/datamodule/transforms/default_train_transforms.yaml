@@ -44,13 +44,13 @@ pipeline:
   - _target_: autoware_ml.transforms.point_cloud.geometry.PointsRandomShuffle
     _convert_: all
 
-  - _target_: autoware_ml.transforms.boxes3d.loading.BBoxesLabelNameFilter
+  - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesLabelNameFilter
     _convert_: all
 
     label_names_to_keep: ${database.taxonomy.detection3d.class_names}
     class_names: ${database.taxonomy.detection3d.class_names}
 
-  - _target_: autoware_ml.transforms.boxes3d.loading.BBoxesAttributeFilter
+  - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesAttributeFilter
     _convert_: all
 
     filter_attributes: ${dataset.detection3d.filter_attributes}
@@ -64,12 +64,11 @@ pipeline:
       - ${point_cloud_range.3}
       - ${point_cloud_range.4}
 
-  # Order matters, it first filters bboxes within the default meters with less than 2 points.
-  # Then it filters bboxes within 60 meters with less than 3 points
+  # Order matters, it first filters the boxes of the whole range, then the boxes within 60 meters
   - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesMinPointsFilter
     _convert_: all
 
-    min_points: 2
+    min_points: ${dataset.detection3d.train_min_points_far}
     bev_range:
       - ${point_cloud_range.0}
       - ${point_cloud_range.1}
@@ -79,5 +78,5 @@ pipeline:
   - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesMinPointsFilter
     _convert_: all
 
-    min_points: 3
+    min_points: ${dataset.detection3d.train_min_points_near}
     bev_range: [-60.0, -60.0, 60.0, 60.0]

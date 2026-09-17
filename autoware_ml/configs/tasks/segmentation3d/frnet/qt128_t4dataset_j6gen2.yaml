@@ -3,6 +3,11 @@ defaults:
   - /tasks/segmentation3d/frnet/base
   - /datasets/t4dataset/segmentation3d
   - /datasets/t4dataset/lidar
+  - /database@database: t4dataset/t4dataset_j6gen2_semaseg
+  - /datamodule@datamodule: t4dataset/default_segmentation3d_datamodule
+  - override /datamodule/transforms@datamodule.train_dataset.transforms: frnet_train_transforms
+  - override /datamodule/transforms@datamodule.validation_dataset.transforms: frnet_test_transforms
+  - override /datamodule/transforms@datamodule.test_dataset.transforms: frnet_test_transforms
   - _self_
 
 batch_size: 8
@@ -17,6 +22,7 @@ range_width: 1024
 frustum_height: 128
 frustum_width: 256
 
+# One sample per lidar
 lidar_sources:
   - LIDAR_FRONT_LOWER
   - LIDAR_LEFT_LOWER
@@ -24,109 +30,19 @@ lidar_sources:
   - LIDAR_REAR_LOWER
 
 datamodule:
-  _target_: autoware_ml.datamodule.t4dataset.segmentation3d.T4Segmentation3DDataModule
-  data_root: ${dataset.data_root}
-  train_ann_file: ${datamodule.data_root}/info/lidarseg/t4dataset_j6gen2_lidarseg_infos_train.pkl
-  val_ann_file: ${datamodule.data_root}/info/lidarseg/t4dataset_j6gen2_lidarseg_infos_val.pkl
-  test_ann_file: ${datamodule.data_root}/info/lidarseg/t4dataset_j6gen2_lidarseg_infos_test.pkl
-  lidar_sources: ${lidar_sources}
-  train_dataloader_cfg:
+  train_dataset:
+    lidar_sources: ${lidar_sources}
+  validation_dataset:
+    lidar_sources: ${lidar_sources}
+  test_dataset:
+    lidar_sources: ${lidar_sources}
+  train_dataloader:
     batch_size: ${batch_size}
     num_workers: ${num_workers}
     shuffle: true
-  val_dataloader_cfg:
+  validation_dataloader:
     batch_size: ${batch_size}
     num_workers: ${num_workers}
-  test_dataloader_cfg:
+  test_dataloader:
     batch_size: ${batch_size}
     num_workers: ${num_workers}
-  train_transforms:
-    _target_: autoware_ml.transforms.base.TransformsCompose
-    pipeline:
-      - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
-        load_dim: 5
-        use_dim: [0, 1, 2, 3]
-      - _target_: autoware_ml.transforms.segmentation3d.loading.LoadSegAnnotations3D
-        class_indices: ${dataset.segmentation3d.class_indices}
-        ignore_index: ${dataset.segmentation3d.ignore_index}
-      - _target_: autoware_ml.transforms.point_cloud.geometry.RandomFlip3D
-        flip_ratio_bev_horizontal: 0.5
-        flip_ratio_bev_vertical: 0.5
-      - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
-        rot_range: [-3.1415926, 3.1415926]
-        scale_ratio_range: [0.95, 1.05]
-        translation_std: [0.1, 0.1, 0.1]
-      - _target_: autoware_ml.transforms.segmentation3d.mixing.FrustumMix
-        height: ${frustum_height}
-        width: ${frustum_width}
-        fov_up: ${fov_up}
-        fov_down: ${fov_down}
-        num_areas: [3, 4, 5, 6]
-        pre_transform:
-          _target_: autoware_ml.transforms.base.TransformsCompose
-          pipeline:
-            - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
-              load_dim: 5
-              use_dim: [0, 1, 2, 3]
-            - _target_: autoware_ml.transforms.segmentation3d.loading.LoadSegAnnotations3D
-              class_indices: ${dataset.segmentation3d.class_indices}
-              ignore_index: ${dataset.segmentation3d.ignore_index}
-            - _target_: autoware_ml.transforms.point_cloud.geometry.RandomFlip3D
-              flip_ratio_bev_horizontal: 0.5
-              flip_ratio_bev_vertical: 0.5
-            - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
-              rot_range: [-3.1415926, 3.1415926]
-              scale_ratio_range: [0.95, 1.05]
-              translation_std: [0.1, 0.1, 0.1]
-      - _target_: autoware_ml.transforms.segmentation3d.mixing.InstanceCopy
-        instance_classes: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
-        pre_transform:
-          _target_: autoware_ml.transforms.base.TransformsCompose
-          pipeline:
-            - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
-              load_dim: 5
-              use_dim: [0, 1, 2, 3]
-            - _target_: autoware_ml.transforms.segmentation3d.loading.LoadSegAnnotations3D
-              class_indices: ${dataset.segmentation3d.class_indices}
-              ignore_index: ${dataset.segmentation3d.ignore_index}
-            - _target_: autoware_ml.transforms.point_cloud.geometry.RandomFlip3D
-              flip_ratio_bev_horizontal: 0.5
-              flip_ratio_bev_vertical: 0.5
-            - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
-              rot_range: [-3.1415926, 3.1415926]
-              scale_ratio_range: [0.95, 1.05]
-              translation_std: [0.1, 0.1, 0.1]
-      - _target_: autoware_ml.transforms.segmentation3d.range_view.RangeInterpolation
-        height: ${range_height}
-        width: ${range_width}
-        fov_up: ${fov_up}
-        fov_down: ${fov_down}
-        ignore_index: ${dataset.segmentation3d.ignore_index}
-  val_transforms:
-    _target_: autoware_ml.transforms.base.TransformsCompose
-    pipeline:
-      - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
-        load_dim: 5
-        use_dim: [0, 1, 2, 3]
-      - _target_: autoware_ml.transforms.segmentation3d.loading.LoadSegAnnotations3D
-        class_indices: ${dataset.segmentation3d.class_indices}
-        ignore_index: ${dataset.segmentation3d.ignore_index}
-      - _target_: autoware_ml.transforms.segmentation3d.range_view.RangeInterpolation
-        height: ${range_height}
-        width: ${range_width}
-        fov_up: ${fov_up}
-        fov_down: ${fov_down}
-        ignore_index: ${dataset.segmentation3d.ignore_index}
-  test_transforms: ${datamodule.val_transforms}
-  predict_transforms:
-    _target_: autoware_ml.transforms.base.TransformsCompose
-    pipeline:
-      - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
-        load_dim: 5
-        use_dim: [0, 1, 2, 3]
-      - _target_: autoware_ml.transforms.segmentation3d.range_view.RangeInterpolation
-        height: ${range_height}
-        width: ${range_width}
-        fov_up: ${fov_up}
-        fov_down: ${fov_down}
-        ignore_index: ${dataset.segmentation3d.ignore_index}

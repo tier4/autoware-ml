@@ -10,7 +10,7 @@ defaults:
 
 dataset: ${t4dataset}
 
-# Classes a mask names on a part of an object the detector reports whole
+# Classes with partial masks
 partial_detection_classes: [motorcycle, bicycle, pedestrian, traffic_cone]
 
 t4dataset:
@@ -95,12 +95,6 @@ model:
         nms_radius: 0.0
         post_max_size: 50
       - class_names: [debris]
-        nms_radius: 0.0
-        post_max_size: 50
-      - class_names: [vehicle_extension]
-        nms_radius: 0.0
-        post_max_size: 50
-      - class_names: [bicycle_rack]
         nms_radius: 0.0
         post_max_size: 50
     bbox_coder:

@@ -3,3 +3,7 @@
 defaults:
   - /datasets/t4dataset/base
   - _self_
+
+# Gaussian jitter of the point coordinates in training, in meters
+train_jitter_sigma: 0.012
+train_jitter_clip: 0.05

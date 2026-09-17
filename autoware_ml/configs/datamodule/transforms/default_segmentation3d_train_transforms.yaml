@@ -32,8 +32,8 @@ pipeline:
   - _target_: autoware_ml.transforms.point_cloud.perturbation.RandomJitter
     _convert_: all
 
-    sigma: 0.012
-    clip: 0.05
+    sigma: ${dataset.lidar.train_jitter_sigma}
+    clip: ${dataset.lidar.train_jitter_clip}
 
   - _target_: autoware_ml.transforms.point_cloud.geometry.PointsRangeFilter
     _convert_: all

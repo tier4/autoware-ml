@@ -4,6 +4,11 @@ defaults:
   - /tasks/detection3d/ptv3/base
   - /datasets/nuscenes/detection3d
   - /datasets/nuscenes/lidar
+  - /database@database: nuscenes/nuscenes_base
+  - /datamodule@datamodule: nuscenes/default_detection3d_datamodule
+  - override /datamodule/transforms@datamodule.train_dataset.transforms: default_segdet3d_train_transforms
+  - override /datamodule/transforms@datamodule.validation_dataset.transforms: default_segdet3d_test_transforms
+  - override /datamodule/transforms@datamodule.test_dataset.transforms: default_segdet3d_test_transforms
   - _self_
 
 batch_size: 16
@@ -16,125 +21,16 @@ point_cloud_range: [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
 num_proposals: 200
 
 datamodule:
-  _target_: autoware_ml.datamodule.nuscenes.detection3d.NuscenesDetection3DDataModule
-  data_root: ${dataset.data_root}
-  train_ann_file: nuscenes_infos_train.pkl
-  val_ann_file: nuscenes_infos_val.pkl
-  test_ann_file: nuscenes_infos_val.pkl
-  class_names: ${dataset.detection3d.class_names}
-  name_mapping: ${dataset.detection3d.name_mapping}
-  train_frame_sampling: null
-  train_dataloader_cfg:
+  train_dataloader:
     batch_size: ${batch_size}
     num_workers: ${num_workers}
     shuffle: true
-  val_dataloader_cfg:
+  validation_dataloader:
     batch_size: ${batch_size}
     num_workers: ${num_workers}
-  test_dataloader_cfg:
+  test_dataloader:
     batch_size: ${batch_size}
     num_workers: ${num_workers}
-  train_transforms:
-    _target_: autoware_ml.transforms.base.TransformsCompose
-    pipeline:
-      - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
-        name_mapping: ${dataset.detection3d.name_mapping}
-        filter_attributes: ${dataset.detection3d.filter_attributes}
-      - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
-        sweeps_num: ${train_sweeps_num}
-        load_dim: 5
-        use_dim: [0, 1, 2, 3]
-        remove_close: true
-      - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
-      - _target_: autoware_ml.transforms.point_cloud.geometry.RandomRotateTargetAngle
-        p: 0.75
-        angle: [0.5, 1.0, 1.5]
-        center: [0.0, 0.0, 0.0]
-      - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
-        rot_range: [-1.571, 1.571]
-        scale_ratio_range: [0.8, 1.2]
-        translation_std: [1.0, 1.0, 0.2]
-      - _target_: autoware_ml.transforms.point_cloud.geometry.RandomFlip3D
-        flip_ratio_bev_horizontal: 0.5
-        flip_ratio_bev_vertical: 0.5
-      - _target_: autoware_ml.transforms.point_cloud.perturbation.RandomJitter
-        sigma: 0.005
-        clip: 0.02
-      - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
-        point_cloud_range: ${point_cloud_range}
-      - _target_: autoware_ml.transforms.point_cloud.sampling.RandomDropout
-        p: 0.5
-        dropout_ratio: 0.2
-      - _target_: autoware_ml.transforms.point_cloud.perturbation.RandomStrengthJitter
-        gamma_range: [0.8, 1.25]
-        scale_range: [0.9, 1.1]
-        shift_range: [-0.02, 0.02]
-      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeFilter
-        point_cloud_range: ${point_cloud_range}
-      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
-        range_radius: [0.0, 60.0]
-        min_num_points: 1
-      - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
-        grid_size: ${grid_size}
-        point_cloud_range: ${point_cloud_range}
-        hash_type: fnv
-        mode: train
-        keys: [coord, strength]
-        return_inverse: true
-        return_grid_coord: true
-      - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
-        keys: [coord, strength]
-        output_key: feat
-  val_transforms:
-    _target_: autoware_ml.transforms.base.TransformsCompose
-    pipeline:
-      - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
-        name_mapping: ${dataset.detection3d.name_mapping}
-        filter_attributes: ${dataset.detection3d.filter_attributes}
-      - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
-        sweeps_num: ${val_sweeps_num}
-        load_dim: 5
-        use_dim: [0, 1, 2, 3]
-        remove_close: true
-      - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
-      - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
-        point_cloud_range: ${point_cloud_range}
-      - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeFilter
-        point_cloud_range: ${point_cloud_range}
-      - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
-        grid_size: ${grid_size}
-        point_cloud_range: ${point_cloud_range}
-        hash_type: fnv
-        mode: test
-        keys: [coord, strength]
-        return_inverse: true
-        return_grid_coord: true
-      - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
-        keys: [coord, strength]
-        output_key: feat
-  test_transforms: ${datamodule.val_transforms}
-  predict_transforms:
-    _target_: autoware_ml.transforms.base.TransformsCompose
-    pipeline:
-      - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
-        sweeps_num: ${val_sweeps_num}
-        load_dim: 5
-        use_dim: [0, 1, 2, 3]
-        remove_close: true
-      - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
-      - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
-        point_cloud_range: ${point_cloud_range}
-      - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
-        grid_size: ${grid_size}
-        point_cloud_range: ${point_cloud_range}
-        hash_type: fnv
-        mode: test
-        keys: [coord, strength]
-        return_inverse: true
-        return_grid_coord: true
-      - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
-        keys: [coord, strength]
-        output_key: feat
 
 model:
   export_output_names:

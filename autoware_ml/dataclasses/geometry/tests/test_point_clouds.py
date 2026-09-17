@@ -232,7 +232,7 @@ class TestLiDARPointCloudSample(LiDARPointCloudSampleTestCase):
     def test_field_order(self) -> None:
         """
         Input: the class itself.
-        Expected: the tuple exposes its six fields in the documented order, matching the
+        Expected: the tuple exposes its seven fields in the documented order, matching the
         dataset record layout.
         Check: compare ``_fields`` against the expected names.
         """
@@ -245,6 +245,7 @@ class TestLiDARPointCloudSample(LiDARPointCloudSampleTestCase):
                 "sensor_to_ego_pose_matrix",
                 "lidar_to_ego_pose_to_global_matrix",
                 "lidar_sensor_to_lidar_sweep_matrix",
+                "source_view",
             ),
         )
 
