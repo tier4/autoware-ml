@@ -49,11 +49,11 @@ OFFLINE_GROUPS = {
 }
 
 
-def _online() -> LabelTaxonomy:
+def _coarse() -> LabelTaxonomy:
     return LabelTaxonomy(VOCABULARY, ONLINE_CLASSES, ONLINE_COARSENING, -1, ONLINE_GROUPS)
 
 
-def _offline() -> LabelTaxonomy:
+def _fine() -> LabelTaxonomy:
     return LabelTaxonomy(VOCABULARY, OFFLINE_CLASSES, OFFLINE_COARSENING, -1, OFFLINE_GROUPS)
 
 
@@ -107,8 +107,8 @@ def test_vocabulary_rejects_empty_definitions() -> None:
         LabelVocabulary({"car": ""})
 
 
-def test_online_level_coarsens_fine_names_and_drops_the_rest() -> None:
-    taxonomy = _online()
+def test_coarse_level_coarsens_fine_names_and_drops_the_rest() -> None:
+    taxonomy = _coarse()
 
     assert taxonomy.class_names == ("car", "truck")
     assert taxonomy.num_classes == 2
@@ -125,17 +125,17 @@ def test_online_level_coarsens_fine_names_and_drops_the_rest() -> None:
         taxonomy.class_index("drainage")
 
 
-def test_offline_level_trains_every_fine_name() -> None:
-    taxonomy = _offline()
+def test_fine_level_trains_every_fine_name() -> None:
+    taxonomy = _fine()
 
     assert taxonomy.resolve_index("police_car") == 1
     assert taxonomy.resolve_index("semi_trailer") == 3
 
 
 def test_levels_differ_in_their_string_form() -> None:
-    assert _online() != _offline()
-    assert str(_online()) == str(_online())
-    assert "coarsening=(car: car, emergency_vehicle: car" in str(_online())
+    assert _coarse() != _fine()
+    assert str(_coarse()) == str(_coarse())
+    assert "coarsening=(car: car, emergency_vehicle: car" in str(_coarse())
 
 
 def test_taxonomy_rejects_inconsistent_definitions() -> None:
@@ -236,6 +236,6 @@ def test_database_taxonomy_compares_both_levels() -> None:
 
 def test_database_taxonomy_rejects_untyped_levels() -> None:
     with pytest.raises(TypeError, match="detection3d must be a DetectionTaxonomy"):
-        DatabaseTaxonomy(detection3d=_online(), segmentation3d=_segmentation())
+        DatabaseTaxonomy(detection3d=_coarse(), segmentation3d=_segmentation())
     with pytest.raises(TypeError, match="segmentation3d must be a SegmentationTaxonomy"):
         DatabaseTaxonomy(detection3d=_detection(), segmentation3d=_detection())
