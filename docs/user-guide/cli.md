@@ -12,19 +12,18 @@ Bash completion is installed automatically by the Docker image build and by
 
 ## Commands
 
-| Command          | Purpose                                            |
-| ---------------- | -------------------------------------------------- |
-| `train`          | Train models using PyTorch Lightning               |
-| `test`           | Evaluate models from a checkpoint                  |
-| `deploy`         | Export models to ONNX and TensorRT                 |
-| `mlflow ui`      | Launch the MLflow tracking UI                      |
-| `mlflow export`  | Export one experiment into its own MLflow store    |
-| `session start`  | Start a managed background task                    |
-| `session attach` | View live terminal output from a background task   |
-| `session detach` | Disconnect raw tmux clients from a managed session |
-| `session ls`     | List managed background tasks                      |
-| `session stop`   | Stop a managed background task                     |
-| `create-dataset` | Generate dataset info files                        |
+| Command            | Purpose                                            |
+| ------------------ | -------------------------------------------------- |
+| `train`            | Train models using PyTorch Lightning               |
+| `test`             | Evaluate models from a checkpoint                  |
+| `deploy`           | Export models to ONNX and TensorRT                 |
+| `mlflow ui`        | Launch the MLflow tracking UI                      |
+| `mlflow export`    | Export one experiment into its own MLflow store    |
+| `session start`    | Start a managed background task                    |
+| `session attach`   | View live terminal output from a background task   |
+| `session detach`   | Disconnect raw tmux clients from a managed session |
+| `session ls`       | List managed background tasks                      |
+| `session stop`     | Stop a managed background task                     |
 
 ## train
 
@@ -228,40 +227,4 @@ Stop the tracked task and close its managed session.
 
 ```bash
 autoware-ml session stop --name <session_name>
-```
-
-## create-dataset
-
-Generate preprocessed info files for a dataset.
-
-```bash
-autoware-ml create-dataset \
-    --dataset <name> \
-    --task <task> \
-    --root-path <path> \
-    --out-dir <path> \
-    [options...]
-```
-
-**Arguments:**
-
-- `--dataset`: Dataset name
-- `--task`: Task name (can be repeated for multiple tasks)
-- `--root-path`: Dataset root directory
-- `--out-dir`: Output directory for info files
-
-**Options:**
-
-- `--version`: Dataset version
-- `--max-sweeps`: Max LiDAR sweeps to include
-- `--info-prefix`: Prefix for output files
-
-**Example:**
-
-```bash
-autoware-ml create-dataset \
-    --dataset nuscenes \
-    --task my_task \
-    --root-path /path/to/dataset \
-    --out-dir /path/to/output
 ```

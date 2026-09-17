@@ -7,5 +7,6 @@ defaults:
   - modules/deploy
   - modules/logger
   - modules/model
+  - modules/paths
   - modules/run
   - modules/trainer
