@@ -23,6 +23,7 @@ from autoware_ml.dataclasses.batch.detection3d import (
     Detection3DGTBatch,
 )
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
+from autoware_ml.deployment.stages import GraphStage, run_stages_in_torch
 from autoware_ml.models.detection3d.main_modules.centerpoint import (
     CenterPointDetection3DModel,
     _CenterPointBackboneNeckHeadExportWrapper,
@@ -319,6 +320,34 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "eval mode"):
             self.centerpoint.build_export_specs(self._build_multi_task_batch_inputs())
+
+    def test_stage_graph_reproduces_forward_and_names_the_deployed_modules(self) -> None:
+        """The declared stages are the deployed split of forward(): same outputs, same names."""
+        self.centerpoint.eval()
+        multi_task_batch_inputs = self._build_multi_task_batch_inputs()
+        stages = self.centerpoint.build_stages()
+        graph = [stage for stage in stages if isinstance(stage, GraphStage)]
+        self.assertEqual(
+            [stage.name for stage in stages],
+            [
+                "decorate",
+                "pts_voxel_encoder_centerpoint",
+                "scatter",
+                "pts_backbone_neck_head_centerpoint",
+            ],
+        )
+        names = ["heatmap", "reg", "height", "dim", "rot", "vel"]
+        self.assertEqual(graph[-1].output_fields, tuple((name, name) for name in names))
+
+        with torch.no_grad():
+            expected = self.centerpoint(multi_task_batch_inputs).detection3d().center_head()
+        state = run_stages_in_torch(stages, multi_task_batch_inputs, self.device)
+        for name in names:
+            # Same modules, so the only differences are kernel-selection noise: on CUDA two
+            # forward() calls of this model already differ by up to 1.3e-4 when another job
+            # shares the GPU (the library picks kernels per call from the workspace it gets).
+            # A wrong dataflow would be off by O(1).
+            torch.testing.assert_close(state[name], getattr(expected, name), rtol=1e-3, atol=1e-3)
 
 
 if __name__ == "__main__":

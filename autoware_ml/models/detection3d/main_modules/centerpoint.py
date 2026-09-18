@@ -35,6 +35,7 @@ from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DHeadOutputs
+from autoware_ml.deployment.stages import GraphStage, RunState, Stage, TorchStage
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
@@ -230,66 +231,70 @@ class CenterPointDetection3DModel(ModuleBaseModel):
     def build_export_spec(self, multi_task_batch_inputs: ModelBatchInputs) -> ExportSpec:
         """Reject single-module CenterPoint deployment export."""
         del multi_task_batch_inputs
-        raise RuntimeError("CenterPoint deployment uses split modules; call build_export_specs().")
+        raise RuntimeError(
+            "CenterPoint deployment uses split modules; build_export_specs() derives them "
+            "from build_stages()."
+        )
 
-    def build_export_specs(
-        self, multi_task_batch_inputs: ModelBatchInputs
-    ) -> dict[str, ExportSpec]:
-        """Build split CenterPoint deployment export specifications.
+    def build_stages(self) -> Sequence[Stage]:
+        """Declare the deployed CenterPoint: two exported graphs with PyTorch glue between.
 
-        The exported ABI follows the original CenterPoint deployment split:
-        decorated pillar features feed the PFN ONNX module, and dense BEV
-        spatial features feed the backbone/neck/head ONNX module. Scatter is a
-        runtime preprocessing step between the two exported modules.
+        The split is the one the Autoware runtime expects and the module names are the
+        artifact names it loads::
 
-        Args:
-            multi_task_batch_inputs: Example preprocessed batch used to trace both modules.
+            decorate (torch) -> pts_voxel_encoder_centerpoint (graph)
+                -> scatter (torch) -> pts_backbone_neck_head_centerpoint (graph)
 
-        Returns:
-            Ordered mapping of module name to export specification.
-
-        Raises:
-            RuntimeError: If the model is in training mode. Tracing the pillar encoder would
-                update its BatchNorm running statistics, so the caller puts the model in eval
-                mode first, as the deploy script does.
-            ValueError: If the batch carries no voxel data.
+        Pillar decoration and the BEV scatter are pure tensor bookkeeping without learned
+        parameters and stay outside the graphs. The export specs, the per-backend
+        inference pipeline, verification and evaluation are all derived from this
+        declaration.
         """
-        if self.training:
-            raise RuntimeError("CenterPoint export needs the model in eval mode.")
-        voxels_data = multi_task_batch_inputs.voxels_data
-        if voxels_data is None:
-            raise ValueError(
-                "ModelBatchInputs must contain voxels_data to build CenterPoint export specs."
-            )
 
-        with torch.no_grad():
-            input_features = self.pts_voxel_encoder.encode(voxels_data)
-            pillar_features = self.pts_voxel_encoder.encode_decorated(input_features).squeeze(1)
+        def voxels_data(state: RunState):
+            voxels_data = state.batch.voxels_data
+            if voxels_data is None:
+                raise ValueError(
+                    "ModelBatchInputs must contain voxels_data to run the CenterPoint stages."
+                )
+            return voxels_data
+
+        def decorate(state: RunState) -> dict[str, torch.Tensor]:
+            return {"input_features": self.pts_voxel_encoder.encode(voxels_data(state))}
+
+        def scatter(state: RunState) -> dict[str, torch.Tensor]:
+            voxels = voxels_data(state)
+            pillar_features = state["pillar_features"].to(state.device).squeeze(1)
             # Sized by the batch, as in forward(): the voxel batch indices miss a sample
             # without voxels.
-            spatial_features = self.pts_middle_encoder(
-                pillar_features=pillar_features,
-                coords=voxels_data.coords,
-                batch_indices=voxels_data.batch_indices,
-                batch_size=multi_task_batch_inputs.batch_size(),
-            )
+            return {
+                "spatial_features": self.pts_middle_encoder(
+                    pillar_features=pillar_features,
+                    coords=voxels.coords.to(state.device),
+                    batch_indices=voxels.batch_indices.to(state.device),
+                    batch_size=state.batch.batch_size(),
+                )
+            }
 
         head_wrapper = _CenterPointBackboneNeckHeadExportWrapper(
-            self.pts_backbone,
-            self.pts_neck,
-            self.bbox_head,
+            self.pts_backbone, self.pts_neck, self.bbox_head
         )
-        return {
-            "pts_voxel_encoder_centerpoint": ExportSpec(
+        return (
+            TorchStage("decorate", run=decorate),
+            GraphStage(
+                "pts_voxel_encoder_centerpoint",
                 module=_CenterPointVoxelEncoderExportWrapper(self.pts_voxel_encoder),
-                args=(input_features,),
-                input_names=["input_features"],
-                output_names=["pillar_features"],
+                inputs=("input_features",),
+                outputs=("pillar_features",),
             ),
-            "pts_backbone_neck_head_centerpoint": ExportSpec(
+            TorchStage("scatter", run=scatter),
+            GraphStage(
+                "pts_backbone_neck_head_centerpoint",
                 module=head_wrapper,
-                args=(spatial_features,),
-                input_names=["spatial_features"],
-                output_names=head_wrapper.output_names,
+                inputs=("spatial_features",),
+                outputs=tuple(head_wrapper.output_names),
+                # The head's ONNX outputs are the keys of forward()'s output dict, so a
+                # backend's raw outputs feed build_eval_output unchanged.
+                output_fields=tuple((name, name) for name in head_wrapper.output_names),
             ),
-        }
+        )

@@ -5,6 +5,22 @@ defaults:
 
 voxel_size: [0.24, 0.24, 8.0]
 
+deploy:
+  tensorrt:
+    # One profile per exported module input (each engine takes the entries it has).
+    input_shapes:
+      input_features:
+        # (pillars, max points per pillar, decorated channels): the pillar count is bounded by
+        # the evaluation voxel limit, the channels are [x, y, z, i, t] + cluster and center offsets.
+        min_shape: [1, "${max_num_points}", 11]
+        opt_shape: [20000, "${max_num_points}", 11]
+        max_shape: ["${eval_max_voxels}", "${max_num_points}", 11]
+      # Static BEV canvas: (batch, pfn_channels, *pts_middle_encoder.output_shape).
+      spatial_features:
+        min_shape: [1, 32, 1020, 1020]
+        opt_shape: [1, 32, 1020, 1020]
+        max_shape: [1, 32, 1020, 1020]
+
 model:
   pts_middle_encoder:
     # 244.8 m / 0.24 m = 1020 pillars per BEV axis.
