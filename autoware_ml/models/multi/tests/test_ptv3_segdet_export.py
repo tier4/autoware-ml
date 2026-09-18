@@ -26,14 +26,14 @@ from autoware_ml.utils.checkpoints import apply_matching_weights
 EXPECTED_PTV3_INPUT_NAMES = [
     "grid_coord",
     "feat",
-    "serialized_order",
+    "patch_order",
     "serialized_inverse",
     "serialized_pooling_0_indices",
     "serialized_pooling_0_indptr",
     "serialized_pooling_0_cluster",
     "serialized_pooling_0_head_indices",
     "serialized_pooling_0_grid_coord",
-    "serialized_pooling_0_serialized_order",
+    "serialized_pooling_0_patch_order",
     "serialized_pooling_0_serialized_inverse",
 ]
 
@@ -84,10 +84,10 @@ def test_seg_head_export_input_names_follow_dec_depths_rule() -> None:
     ]
     assert seg_head_export_input_names(5, [0, 0, 0, 0]) == base_names
     assert seg_head_export_input_names(5, [0, 0, 1, 1]) == base_names + [
-        "serialized_pooling_1_serialized_order",
+        "serialized_pooling_1_patch_order",
         "serialized_pooling_1_serialized_inverse",
         "serialized_pooling_1_grid_coord",
-        "serialized_pooling_2_serialized_order",
+        "serialized_pooling_2_patch_order",
         "serialized_pooling_2_serialized_inverse",
         "serialized_pooling_2_grid_coord",
     ]
@@ -95,7 +95,7 @@ def test_seg_head_export_input_names_follow_dec_depths_rule() -> None:
         "point_feat_0",
         "point_feat_1",
         "pooling_cluster_0",
-        "serialized_order",
+        "patch_order",
         "serialized_inverse",
         "grid_coord",
     ]
@@ -126,12 +126,12 @@ def test_ptv3_seg_split_export_supports_decoder_blocks() -> None:
         "point_feat_0",
         "point_feat_1",
         "pooling_cluster_0",
-        "serialized_order",
+        "patch_order",
         "serialized_inverse",
         "grid_coord",
     ]
-    assert spec.dynamic_axes["serialized_order"] == {1: "num_voxels"}
     assert spec.dynamic_axes["serialized_inverse"] == {1: "num_voxels"}
+    assert spec.dynamic_axes["patch_order"] == {1: "padded_voxels"}
     assert spec.dynamic_axes["grid_coord"] == {0: "num_voxels"}
 
     with torch.no_grad():

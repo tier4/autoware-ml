@@ -112,8 +112,47 @@ class SerializedPoolingMeta:
     cluster: torch.Tensor  # [N] input voxel -> pooled voxel id, used by unpooling
     head_indices: torch.Tensor  # [M] representative input voxel per pooled voxel
     grid_coord: torch.Tensor  # [M, 3] integer voxel coordinates of pooled voxels
-    serialized_order: torch.Tensor  # [O, M] space-filling-curve order of pooled voxels, per curve
-    serialized_inverse: torch.Tensor  # [O, M] inverse of `serialized_order`
+    patch_order: torch.Tensor  # [O, padded M] serialization order padded to whole attention windows
+    serialized_inverse: torch.Tensor  # [O, M] inverse of the (unpadded) serialization order
+
+
+def padded_patch_count(count: int, patch_size: int) -> int:
+    """Number of attention slots for ``count`` tokens: the next multiple of ``patch_size``."""
+    return -(-count // patch_size) * patch_size
+
+
+def build_patch_order(serialized_order: torch.Tensor, patch_size: int) -> torch.Tensor:
+    """Pad every serialization order to whole attention windows.
+
+    This is the gather order the exported attention blocks consume (``qkv[order]``): the
+    serialized order itself, extended to a multiple of ``patch_size`` by filling the trailing
+    slots of the last window with real tokens borrowed backwards along the serialization
+    (``(slot - patch_size + cycle) % count``, ``cycle`` = the smallest multiple of ``count``
+    not below ``patch_size`` so the shift stays non-negative; below one window it wraps around).
+    Every slot therefore holds a real token and attention needs no mask. It depends only on
+    the token count, the order and the window size — nothing the network computes — which is
+    why it is precomputed by the serialize stage instead of being traced into every block
+    (see ``SerializedAttention.forward``). The deployed C++ runtime rebuilds the same tensor;
+    keep the two in step.
+
+    Args:
+        serialized_order: ``[num_orders, count]`` permutations.
+        patch_size: Attention window of the blocks at this level.
+
+    Returns:
+        ``[num_orders, padded]`` gather order, ``padded = padded_patch_count(count, patch_size)``.
+    """
+    count = int(serialized_order.shape[1])
+    padded = padded_patch_count(count, patch_size)
+    if padded == count:
+        return serialized_order
+    cycle = -(-patch_size // count) * count
+    tail = (
+        torch.arange(count, padded, device=serialized_order.device, dtype=serialized_order.dtype)
+        - patch_size
+        + cycle
+    ) % count
+    return torch.cat([serialized_order, serialized_order[:, tail]], dim=1)
 
 
 def expand_stage_flags(
@@ -159,8 +198,20 @@ def build_serialized_pooling_meta(
     serialized_code: torch.Tensor,
     serialized_order: torch.Tensor,
     stride: int,
-) -> tuple[SerializedPoolingMeta, torch.Tensor]:
-    """Build ONNX-facing serialized-pooling metadata for one encoder stage."""
+    patch_size: int,
+) -> tuple[SerializedPoolingMeta, torch.Tensor, torch.Tensor]:
+    """Build ONNX-facing serialized-pooling metadata for one encoder stage.
+
+    Args:
+        grid_coord: Input-level voxel coordinates.
+        serialized_code: Input-level codes, ``[num_orders, count]``.
+        serialized_order: Input-level orders, ``[num_orders, count]``.
+        stride: Pooling stride of this stage.
+        patch_size: Attention window of the pooled level's blocks; sizes its ``patch_order``.
+
+    Returns:
+        The stage's metadata, then the pooled level's codes and orders for the next stage.
+    """
     depth = _pooling_depth(stride)
     pooled_code = serialized_code >> (depth * 3)
 
@@ -202,10 +253,11 @@ def build_serialized_pooling_meta(
             cluster=cluster,
             head_indices=head_indices,
             grid_coord=next_grid_coord,
-            serialized_order=next_serialized_order,
+            patch_order=build_patch_order(next_serialized_order, patch_size),
             serialized_inverse=next_serialized_inverse,
         ),
         next_serialized_code,
+        next_serialized_order,
     )
 
 
@@ -546,35 +598,6 @@ class SerializedAttention(PointModule):
         mask = bincount > self.patch_size
         padded_bincount = (~mask).long() * bincount + mask.long() * padded_bincount
 
-        if self.export_mode:
-            if point.offset.numel() != 1:
-                raise ValueError("PTv3 export mode supports only single-sample export batches.")
-            n = shape_as_tensor(point.feat)[0].to(device=point.offset.device)
-            padded_n = ((n + self.patch_size - 1) // self.patch_size) * self.patch_size
-            unpad = torch.arange(n, device=point.offset.device)
-            # Fill the trailing slots of the last window by cycling backwards through
-            # the serialization, so every slot holds a real token. For `n > patch_size`
-            # this is exactly the backward borrow training performs; below one window
-            # there is nothing to borrow from, so it wraps around instead. `cycle` keeps
-            # the shifted index non-negative, so the modulo needs no particular sign
-            # convention from the runtime.
-            divisor = torch.clamp(n, min=1)
-            cycle = ((self.patch_size + divisor - 1) // divisor) * divisor
-            index = torch.arange(padded_n, device=point.offset.device)
-            pad = torch.where(index < n, index, (index - self.patch_size + cycle) % divisor)
-            if not self.enable_flash:
-                return pad, unpad, None
-            # arange(0, padded_n+1, patch_size) gives [0, ps, 2*ps, ..., padded_n]
-            # since padded_n is always a multiple of patch_size.
-            cu_seqlens = torch.arange(
-                0,
-                padded_n + 1,
-                step=self.patch_size,
-                dtype=torch.int32,
-                device=point.offset.device,
-            )
-            return pad, unpad, cu_seqlens
-
         offset = nn.functional.pad(point.offset, (1, 0))
         padded_offset = nn.functional.pad(torch.cumsum(padded_bincount, dim=0), (1, 0))
         pad = torch.arange(padded_offset[-1], device=point.offset.device)
@@ -640,9 +663,19 @@ class SerializedAttention(PointModule):
             )
         patch_size = self.patch_size
         channel_count = self.channels
-        pad, unpad, cu_seqlens = self._get_padding_and_inverse(point)
-        order = point.serialized_order[self.order_index][pad]
-        inverse = unpad[point.serialized_inverse[self.order_index]]
+        if self.export_mode:
+            # The gather order arrives precomputed (`build_patch_order`, from the serialize
+            # stage or the deployed runtime): its padding depends only on the token count,
+            # the serialization and the window, so computing it in-graph would trace ~30
+            # integer ops per block that TensorRT then runs every frame. For one export sample
+            # `unpad` is the identity, so the inverse is the serialization's own.
+            cu_seqlens = None
+            order = point.patch_order[self.order_index]
+            inverse = point.serialized_inverse[self.order_index]
+        else:
+            pad, unpad, cu_seqlens = self._get_padding_and_inverse(point)
+            order = point.serialized_order[self.order_index][pad]
+            inverse = unpad[point.serialized_inverse[self.order_index]]
         qkv = self.qkv(point.feat)[order]
         head_dim = channel_count // head_count
 
@@ -947,8 +980,6 @@ class SerializedPooling(PointModule):
             idx_ptr = torch.cat([counts.new_zeros(1), torch.cumsum(counts, dim=0)])
         if self.export_mode:
             head_indices = metadata.head_indices
-            pooled_code = torch.zeros_like(metadata.serialized_order)
-            pooled_order = metadata.serialized_order
             pooled_inverse = metadata.serialized_inverse
             grid_coord = metadata.grid_coord
         else:
@@ -964,11 +995,11 @@ class SerializedPooling(PointModule):
                 .expand_as(pooled_order),
             )
             grid_coord = point.grid_coord[head_indices] >> pooling_depth
-        if self.shuffle_orders:
-            permutation = torch.randperm(pooled_code.shape[0], device=pooled_code.device)
-            pooled_code = pooled_code[permutation]
-            pooled_order = pooled_order[permutation]
-            pooled_inverse = pooled_inverse[permutation]
+            if self.shuffle_orders:
+                permutation = torch.randperm(pooled_code.shape[0], device=pooled_code.device)
+                pooled_code = pooled_code[permutation]
+                pooled_order = pooled_order[permutation]
+                pooled_inverse = pooled_inverse[permutation]
 
         scatter_feat = segment_csr(self.proj(point.feat)[indices], idx_ptr, "max")
         if self.export_mode:
@@ -979,8 +1010,6 @@ class SerializedPooling(PointModule):
             feat=scatter_feat,
             coord=scatter_coord,
             grid_coord=grid_coord,
-            serialized_code=pooled_code,
-            serialized_order=pooled_order,
             serialized_inverse=pooled_inverse,
             serialized_depth=point.serialized_depth - pooling_depth,
             batch=point.batch[head_indices],
@@ -996,6 +1025,10 @@ class SerializedPooling(PointModule):
         )
         if self.export_mode:
             pooled["serialized_pooling"] = point.serialized_pooling
+            pooled["patch_order"] = metadata.patch_order
+        else:
+            pooled["serialized_code"] = pooled_code
+            pooled["serialized_order"] = pooled_order
         pooled = self.norm(pooled)
         pooled = self.act(pooled)
         pooled.sparsify()
@@ -1232,6 +1265,7 @@ class PointTransformerV3Encoder(PointModule):
         self.stride = list(stride)
         self.shuffle_orders = shuffle_orders
         self.enc_channels = list(enc_channels)
+        self.enc_patch_size = list(enc_patch_size)
         stage_count = len(enc_depths)
         self.enc_conv = expand_stage_flags(enc_conv, stage_count, True, "enc_conv")
         self.enc_attn = expand_stage_flags(enc_attn, stage_count, True, "enc_attn")
@@ -1332,7 +1366,7 @@ class PointTransformerV3Encoder(PointModule):
         """
         point = Point(data_dict)
         point["serialized_depth"] = data_dict["serialized_depth"]
-        point["serialized_order"] = data_dict["serialized_order"]
+        point["patch_order"] = data_dict["patch_order"]
         point["serialized_inverse"] = data_dict["serialized_inverse"]
         if "serialized_pooling" in data_dict:
             point["serialized_pooling"] = data_dict["serialized_pooling"]

@@ -156,6 +156,7 @@ deploy:
           serialization_orders: [z, z-trans]
           pooling_strides: ${model.encoder.stride}
           enc_channels: ${model.encoder.enc_channels}
+          patch_sizes: ${model.encoder.enc_patch_size}
       ptv3_seg3d_head:
         output_names: [pred_labels, pred_probs]
         metainfo:
