@@ -36,6 +36,8 @@ from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.datamodule.streaming_data_module import StreamingDataModule
+from autoware_ml.deployment.export_specs import build_export_specs_from_stages
+from autoware_ml.deployment.stages import Stage
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.eval_mixin import MetricEvalMixin
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
@@ -416,19 +418,51 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
         """
         raise NotImplementedError("Model must implement build_export_spec()")
 
+    def build_stages(self) -> Sequence[Stage] | None:
+        """Declare the model's deployment stage graph, or ``None`` when it has none.
+
+        A stage graph (:mod:`autoware_ml.deployment.stages`) states once how inference
+        splits into exportable graphs and the PyTorch glue between them. Declaring it
+        gives the model its :meth:`build_export_specs` for free — one spec per
+        ``GraphStage``, traced with the tensors the glue produces — and is what
+        cross-backend verification and per-backend evaluation run on. Models that keep
+        a hand-written :meth:`build_export_specs` leave this at ``None``.
+
+        Returns:
+            The ordered stages, or ``None`` for models without a stage graph.
+        """
+        return None
+
     def build_export_specs(
         self, multi_task_batch_inputs: ModelBatchInputs
     ) -> dict[str, ExportSpec]:
         """Build per-module deployment export specifications.
 
-        The default implementation wraps :meth:`build_export_spec` as a single
-        ``end_to_end`` module. Models with separate exportable sub-graphs
-        override this to return one spec per architectural component.
+        When the model declares :meth:`build_stages`, the specs are derived from that
+        declaration (:func:`~autoware_ml.deployment.export_specs.build_export_specs_from_stages`):
+        the stage graph runs once on the example batch and every ``GraphStage`` becomes
+        one module keyed by its stage name. Otherwise the default wraps
+        :meth:`build_export_spec` as a single ``end_to_end`` module; models with
+        separate exportable sub-graphs and no stage graph override this to return one
+        spec per architectural component.
 
         Args:
             multi_task_batch_inputs: Example preprocessed batch used for export.
 
         Returns:
             Ordered mapping of module name to export specification.
+
+        Raises:
+            RuntimeError: If the model declares a stage graph but is in training mode;
+                tracing the graphs would update the BatchNorm running statistics.
         """
+        stages = self.build_stages()
+        if stages is not None:
+            if self.training:
+                raise RuntimeError(
+                    f"{type(self).__name__}.build_export_specs() needs the model in eval "
+                    "mode: tracing the stage graph in training mode would update the "
+                    "BatchNorm running statistics."
+                )
+            return build_export_specs_from_stages(stages, multi_task_batch_inputs, self.device)
         return {"end_to_end": self.build_export_spec(multi_task_batch_inputs)}
