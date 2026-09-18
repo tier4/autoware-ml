@@ -36,7 +36,11 @@ class TestModelPredictions(unittest.TestCase):
     def _build_sample_predictions(self, num_boxes: int) -> Detection3DSamplePredictions:
         """Build ``num_boxes`` decoded boxes with velocity, distinct per box."""
         return Detection3DSamplePredictions(
-            bboxes_3d=torch.arange(num_boxes * 9, dtype=torch.float32).view(num_boxes, 9),
+            # Box i holds the value i in every parameter, so boxes stay distinguishable.
+            bboxes_3d=torch.arange(num_boxes, dtype=torch.float32)
+            .unsqueeze(1)
+            .expand(num_boxes, 9)
+            .contiguous(),
             scores_3d=torch.linspace(1.0, 0.0, num_boxes, dtype=torch.float32),
             labels_3d=torch.arange(num_boxes, dtype=torch.int64),
         )

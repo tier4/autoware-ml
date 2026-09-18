@@ -31,11 +31,14 @@ class TestCenterHeadTargets(unittest.TestCase):
     """Unit tests for the CenterHead training targets."""
 
     def setUp(self) -> None:
-        """Set up a two-sample batch of targets on a 4x4 grid with up to three boxes."""
+        """Set up the batch layout: two samples, two classes, up to three boxes on a 4x4 grid."""
         self.batch_size, self.num_classes, self.max_num_boxes = 2, 2, 3
-        self.tensors = {
+
+    def _build_fields(self, num_reg_targets: int = 10) -> dict[str, torch.Tensor]:
+        """Build a fresh, valid set of target tensors with ``num_reg_targets`` regression channels."""
+        return {
             "heatmaps": torch.zeros(self.batch_size, self.num_classes, 4, 4),
-            "reg_targets": torch.zeros(self.batch_size, self.max_num_boxes, 10),
+            "reg_targets": torch.zeros(self.batch_size, self.max_num_boxes, num_reg_targets),
             "reg_indices": torch.zeros(self.batch_size, self.max_num_boxes, dtype=torch.int64),
             "valid_masks": torch.zeros(self.batch_size, self.max_num_boxes, dtype=torch.bool),
         }
@@ -44,67 +47,62 @@ class TestCenterHeadTargets(unittest.TestCase):
         """Test that both the 8- and 10-channel regression target layouts are accepted."""
         for num_reg_targets in (8, 10):
             with self.subTest(num_reg_targets=num_reg_targets):
-                targets = CenterHeadTargets(
-                    **{
-                        **self.tensors,
-                        "reg_targets": torch.zeros(
-                            self.batch_size, self.max_num_boxes, num_reg_targets
-                        ),
-                    }
-                )
+                targets = CenterHeadTargets.model_validate(self._build_fields(num_reg_targets))
 
                 self.assertEqual(targets.reg_targets.shape[-1], num_reg_targets)
 
     def test_valid_masks_must_be_boolean(self) -> None:
         """Test that an integer mask is rejected, so masking never silently multiplies."""
+        fields = self._build_fields()
+        fields["valid_masks"] = torch.zeros(self.batch_size, self.max_num_boxes, dtype=torch.int64)
+
         with self.assertRaises(ValidationError):
-            CenterHeadTargets(
-                **{
-                    **self.tensors,
-                    "valid_masks": torch.zeros(
-                        self.batch_size, self.max_num_boxes, dtype=torch.int64
-                    ),
-                }
-            )
+            CenterHeadTargets.model_validate(fields)
 
     def test_reg_indices_must_be_int64(self) -> None:
         """Test that gather indices in another dtype are rejected."""
+        fields = self._build_fields()
+        fields["reg_indices"] = torch.zeros(self.batch_size, self.max_num_boxes, dtype=torch.int32)
+
         with self.assertRaises(ValidationError):
-            CenterHeadTargets(
-                **{
-                    **self.tensors,
-                    "reg_indices": torch.zeros(
-                        self.batch_size, self.max_num_boxes, dtype=torch.int32
-                    ),
-                }
-            )
+            CenterHeadTargets.model_validate(fields)
 
     def test_is_frozen(self) -> None:
         """Test that targets cannot be mutated after construction."""
-        targets = CenterHeadTargets(**self.tensors)
+        fields = self._build_fields()
+        targets = CenterHeadTargets.model_validate(fields)
 
         with self.assertRaises(ValidationError):
-            targets.valid_masks = self.tensors["valid_masks"]  # type: ignore[misc]
+            targets.valid_masks = fields["valid_masks"]  # type: ignore[misc]
 
 
 class TestTransFusionHeadTargets(unittest.TestCase):
     """Unit tests for the TransFusion assignment targets."""
 
     def setUp(self) -> None:
-        """Set up targets for two samples, four proposals, three classes and a 10-value code."""
+        """Set up the layout: two samples, four proposals, three classes and a 10-value code."""
         self.batch_size, self.num_proposals, self.num_classes, self.code_size = 2, 4, 3, 10
-        self.tensors = {
+
+    def _build_fields(self) -> dict[str, object]:
+        """Build a fresh, valid set of constructor fields with no positives."""
+        return {
             "labels": torch.zeros(self.batch_size, self.num_proposals, dtype=torch.int64),
             "label_weights": torch.ones(self.batch_size, self.num_proposals, self.num_classes),
             "bbox_targets": torch.zeros(self.batch_size, self.num_proposals, self.code_size),
             "bbox_weights": torch.zeros(self.batch_size, self.num_proposals, self.code_size),
+            "num_pos": 0,
+            "matched_iou": 0.0,
             "dense_heatmaps": torch.zeros(self.batch_size, self.num_classes, 8, 8),
             "class_weights": torch.ones(self.batch_size, self.num_classes),
         }
 
     def test_carries_counts_alongside_the_tensors(self) -> None:
         """Test that the positive count and matched IoU travel with the tensors."""
-        targets = TransFusionHeadTargets(**self.tensors, num_pos=3, matched_iou=0.5)
+        fields = self._build_fields()
+        fields["num_pos"] = 3
+        fields["matched_iou"] = 0.5
+
+        targets = TransFusionHeadTargets.model_validate(fields)
 
         self.assertEqual(targets.num_pos, 3)
         self.assertEqual(targets.matched_iou, 0.5)
@@ -115,32 +113,27 @@ class TestTransFusionHeadTargets(unittest.TestCase):
 
     def test_labels_must_be_int64(self) -> None:
         """Test that class labels in another integer dtype are rejected."""
+        fields = self._build_fields()
+        fields["labels"] = torch.zeros(self.batch_size, self.num_proposals, dtype=torch.int32)
+
         with self.assertRaises(ValidationError):
-            TransFusionHeadTargets(
-                **{
-                    **self.tensors,
-                    "labels": torch.zeros(self.batch_size, self.num_proposals, dtype=torch.int32),
-                },
-                num_pos=0,
-                matched_iou=0.0,
-            )
+            TransFusionHeadTargets.model_validate(fields)
 
     def test_label_weights_are_per_class(self) -> None:
         """Test that per-proposal weights without the class axis are rejected."""
+        fields = self._build_fields()
+        fields["label_weights"] = torch.ones(self.batch_size, self.num_proposals)
+
         with self.assertRaises(ValidationError):
-            TransFusionHeadTargets(
-                **{
-                    **self.tensors,
-                    "label_weights": torch.ones(self.batch_size, self.num_proposals),
-                },
-                num_pos=0,
-                matched_iou=0.0,
-            )
+            TransFusionHeadTargets.model_validate(fields)
 
     def test_num_pos_must_be_an_int(self) -> None:
         """Test that the positive count is not coerced from a string."""
+        fields = self._build_fields()
+        fields["num_pos"] = "3"
+
         with self.assertRaises(ValidationError):
-            TransFusionHeadTargets(**self.tensors, num_pos="3", matched_iou=0.0)  # type: ignore[arg-type]
+            TransFusionHeadTargets.model_validate(fields)
 
 
 if __name__ == "__main__":

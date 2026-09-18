@@ -34,9 +34,12 @@ class TestTransFusionSeparateHeadOutputs(unittest.TestCase):
     """Unit tests for the per-proposal TransFusion regression outputs."""
 
     def setUp(self) -> None:
-        """Set up the proposal layout and a full set of output tensors."""
+        """Set up the proposal layout."""
         self.batch_size, self.num_classes, self.num_proposals = 2, 3, 4
-        self.tensors = {
+
+    def _build_tensors(self) -> dict[str, torch.Tensor]:
+        """Build a fresh, complete set of per-proposal output tensors, velocity included."""
+        return {
             "heatmaps": torch.zeros(self.batch_size, self.num_classes, self.num_proposals),
             "centers": torch.zeros(self.batch_size, 2, self.num_proposals),
             "heights": torch.zeros(self.batch_size, 1, self.num_proposals),
@@ -47,9 +50,11 @@ class TestTransFusionSeparateHeadOutputs(unittest.TestCase):
 
     def test_from_dict_with_velocity(self) -> None:
         """Test that every head tensor is picked up by name and the keys keep the runtime order."""
-        outputs = TransFusionSeparateHeadOutputs.from_dict(MappingProxyType(self.tensors))
+        tensors = self._build_tensors()
 
-        for name, tensor in self.tensors.items():
+        outputs = TransFusionSeparateHeadOutputs.from_dict(MappingProxyType(tensors))
+
+        for name, tensor in tensors.items():
             self.assertIs(getattr(outputs, name), tensor)
         self.assertEqual(
             list(outputs.ordered_keys), ["heatmaps", "centers", "heights", "dims", "rots", "vels"]
@@ -57,7 +62,8 @@ class TestTransFusionSeparateHeadOutputs(unittest.TestCase):
 
     def test_from_dict_without_velocity(self) -> None:
         """Test that a head without a velocity branch leaves ``vels`` absent and out of the keys."""
-        tensors = {name: tensor for name, tensor in self.tensors.items() if name != "vels"}
+        tensors = self._build_tensors()
+        del tensors["vels"]
 
         outputs = TransFusionSeparateHeadOutputs.from_dict(MappingProxyType(tensors))
 
@@ -68,7 +74,8 @@ class TestTransFusionSeparateHeadOutputs(unittest.TestCase):
 
     def test_from_dict_ignores_unknown_keys(self) -> None:
         """Test that extra entries in the head's output mapping are not carried over."""
-        tensors = {**self.tensors, "query_pos": torch.zeros(self.batch_size, 2, self.num_proposals)}
+        tensors = self._build_tensors()
+        tensors["query_pos"] = torch.zeros(self.batch_size, 2, self.num_proposals)
 
         outputs = TransFusionSeparateHeadOutputs.from_dict(MappingProxyType(tensors))
 
@@ -76,7 +83,8 @@ class TestTransFusionSeparateHeadOutputs(unittest.TestCase):
 
     def test_from_dict_requires_every_regression_branch(self) -> None:
         """Test that a mapping missing a mandatory branch is rejected."""
-        tensors = {name: tensor for name, tensor in self.tensors.items() if name != "rots"}
+        tensors = self._build_tensors()
+        del tensors["rots"]
 
         with self.assertRaises(KeyError):
             TransFusionSeparateHeadOutputs.from_dict(MappingProxyType(tensors))
@@ -85,12 +93,10 @@ class TestTransFusionSeparateHeadOutputs(unittest.TestCase):
         """Test that each regression branch must carry its fixed number of channels."""
         for name, wrong_channels in (("centers", 3), ("heights", 2), ("dims", 2), ("rots", 1)):
             with self.subTest(branch=name):
-                tensors = {
-                    **self.tensors,
-                    name: torch.zeros(self.batch_size, wrong_channels, self.num_proposals),
-                }
+                tensors = self._build_tensors()
+                tensors[name] = torch.zeros(self.batch_size, wrong_channels, self.num_proposals)
                 with self.assertRaises(ValidationError):
-                    TransFusionSeparateHeadOutputs(**tensors)
+                    TransFusionSeparateHeadOutputs.model_validate(tensors)
 
 
 class TestTransFusionHeadOutputs(unittest.TestCase):
@@ -157,9 +163,9 @@ class TestTransFusionHeadOutputs(unittest.TestCase):
 class TestCenterHeadOutputs(unittest.TestCase):
     """Unit tests for the dense CenterHead output."""
 
-    def setUp(self) -> None:
-        """Set up a full set of dense head tensors on a 4x4 grid."""
-        self.tensors = {
+    def _build_tensors(self) -> dict[str, torch.Tensor | None]:
+        """Build a fresh, complete set of dense head tensors on a 4x4 grid, velocity included."""
+        return {
             "heatmaps": torch.zeros(2, 3, 4, 4),
             "centers": torch.zeros(2, 2, 4, 4),
             "heights": torch.zeros(2, 1, 4, 4),
@@ -170,8 +176,10 @@ class TestCenterHeadOutputs(unittest.TestCase):
 
     def test_velocity_is_optional(self) -> None:
         """Test that the head can be built with or without a velocity map."""
-        with_velocity = CenterHeadOutputs(**self.tensors)
-        without_velocity = CenterHeadOutputs(**{**self.tensors, "vels": None})
+        with_velocity = CenterHeadOutputs.model_validate(self._build_tensors())
+        tensors = self._build_tensors()
+        tensors["vels"] = None
+        without_velocity = CenterHeadOutputs.model_validate(tensors)
 
         assert with_velocity.vels is not None
         self.assertEqual(tuple(with_velocity.vels.shape), (2, 2, 4, 4))
@@ -187,23 +195,26 @@ class TestCenterHeadOutputs(unittest.TestCase):
             ("vels", 3),
         ):
             with self.subTest(branch=name):
+                tensors = self._build_tensors()
+                tensors[name] = torch.zeros(2, wrong_channels, 4, 4)
                 with self.assertRaises(ValidationError):
-                    CenterHeadOutputs(
-                        **{**self.tensors, name: torch.zeros(2, wrong_channels, 4, 4)}
-                    )
+                    CenterHeadOutputs.model_validate(tensors)
 
     def test_rank_and_dtype_are_enforced(self) -> None:
         """Test that a 3-D or non-float32 heatmap is rejected."""
+        wrong_rank = self._build_tensors()
+        wrong_rank["heatmaps"] = torch.zeros(3, 4, 4)
+        wrong_dtype = self._build_tensors()
+        wrong_dtype["heatmaps"] = torch.zeros(2, 3, 4, 4, dtype=torch.float64)
+
         with self.assertRaises(ValidationError):
-            CenterHeadOutputs(**{**self.tensors, "heatmaps": torch.zeros(3, 4, 4)})
+            CenterHeadOutputs.model_validate(wrong_rank)
         with self.assertRaises(ValidationError):
-            CenterHeadOutputs(
-                **{**self.tensors, "heatmaps": torch.zeros(2, 3, 4, 4, dtype=torch.float64)}
-            )
+            CenterHeadOutputs.model_validate(wrong_dtype)
 
     def test_is_frozen(self) -> None:
         """Test that the outputs cannot be mutated after construction."""
-        outputs = CenterHeadOutputs(**self.tensors)
+        outputs = CenterHeadOutputs.model_validate(self._build_tensors())
 
         with self.assertRaises(ValidationError):
             outputs.vels = None  # type: ignore[misc]

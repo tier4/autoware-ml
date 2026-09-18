@@ -27,6 +27,14 @@ from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSa
 class TestDetection3DSamplePredictions(unittest.TestCase):
     """Unit tests for the per-sample decoded 3D detections."""
 
+    def _build_fields(self, num_boxes: int = 2) -> dict[str, torch.Tensor]:
+        """Build a valid set of constructor fields for ``num_boxes`` boxes with velocity."""
+        return {
+            "bboxes_3d": torch.zeros(num_boxes, 9),
+            "scores_3d": torch.zeros(num_boxes),
+            "labels_3d": torch.zeros(num_boxes, dtype=torch.int64),
+        }
+
     def test_accepts_boxes_with_and_without_velocity(self) -> None:
         """Test that both the 7- and 9-parameter box layouts are accepted."""
         for num_bbox_params in (7, 9):
@@ -41,53 +49,39 @@ class TestDetection3DSamplePredictions(unittest.TestCase):
 
     def test_accepts_empty_predictions(self) -> None:
         """Test that a sample with no boxes is representable."""
-        predictions = Detection3DSamplePredictions(
-            bboxes_3d=torch.zeros(0, 9),
-            scores_3d=torch.zeros(0),
-            labels_3d=torch.zeros(0, dtype=torch.int64),
-        )
+        predictions = Detection3DSamplePredictions.model_validate(self._build_fields(num_boxes=0))
 
         self.assertEqual(predictions.scores_3d.shape[0], 0)
 
     def test_rejects_wrong_dtypes(self) -> None:
         """Test that boxes and scores must be float32 and labels int64."""
-        valid = {
-            "bboxes_3d": torch.zeros(2, 9),
-            "scores_3d": torch.zeros(2),
-            "labels_3d": torch.zeros(2, dtype=torch.int64),
-        }
         for field, bad_value in (
             ("bboxes_3d", torch.zeros(2, 9, dtype=torch.float64)),
             ("scores_3d", torch.zeros(2, dtype=torch.float16)),
             ("labels_3d", torch.zeros(2, dtype=torch.int32)),
         ):
             with self.subTest(field=field):
+                fields = self._build_fields()
+                fields[field] = bad_value
                 with self.assertRaises(ValidationError):
-                    Detection3DSamplePredictions(**{**valid, field: bad_value})
+                    Detection3DSamplePredictions.model_validate(fields)
 
     def test_rejects_wrong_ranks(self) -> None:
         """Test that boxes are 2-D and scores and labels are 1-D."""
-        valid = {
-            "bboxes_3d": torch.zeros(2, 9),
-            "scores_3d": torch.zeros(2),
-            "labels_3d": torch.zeros(2, dtype=torch.int64),
-        }
         for field, bad_value in (
             ("bboxes_3d", torch.zeros(9)),
             ("scores_3d", torch.zeros(2, 1)),
             ("labels_3d", torch.zeros(2, 1, dtype=torch.int64)),
         ):
             with self.subTest(field=field):
+                fields = self._build_fields()
+                fields[field] = bad_value
                 with self.assertRaises(ValidationError):
-                    Detection3DSamplePredictions(**{**valid, field: bad_value})
+                    Detection3DSamplePredictions.model_validate(fields)
 
     def test_is_frozen(self) -> None:
         """Test that decoded predictions cannot be mutated after construction."""
-        predictions = Detection3DSamplePredictions(
-            bboxes_3d=torch.zeros(1, 9),
-            scores_3d=torch.zeros(1),
-            labels_3d=torch.zeros(1, dtype=torch.int64),
-        )
+        predictions = Detection3DSamplePredictions.model_validate(self._build_fields(num_boxes=1))
 
         with self.assertRaises(ValidationError):
             predictions.scores_3d = torch.ones(1)  # type: ignore[misc]
