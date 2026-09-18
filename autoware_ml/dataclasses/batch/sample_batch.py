@@ -129,19 +129,28 @@ class ModelGTBatch(NamedTuple):
           gt_samples: Sequence of ModelGTSample to be collated.
 
         Returns:
-          PointCloudGTBatch: Collated point cloud GT batch.
+          PointCloudGTBatch: Collated point cloud GT batch, None when no sample carries
+            point cloud data.
+
+        Raises:
+          ValueError: If only some of the samples carry point cloud data.
         """
         if len(gt_samples) == 0:
             return None
 
-        pointcloud_samples = []
-        for sample in gt_samples:
-            if sample.point_cloud_data is None:
-                raise ValueError("All samples must have point_cloud_data for collating.")
-            pointcloud_samples.append(sample.point_cloud_data)
+        pointcloud_samples = [
+            sample.point_cloud_data for sample in gt_samples if sample.point_cloud_data is not None
+        ]
 
-        point_cloud_gt_batch = PointCloudGTBatch.collate_gt_samples(pointcloud_samples)
-        return point_cloud_gt_batch
+        # If no sample has point_cloud_data, this part of the batch is absent.
+        if not len(pointcloud_samples):
+            return None
+
+        # If only some samples have point_cloud_data, the batch cannot be built.
+        if len(pointcloud_samples) != len(gt_samples):
+            raise ValueError("All samples must have point_cloud_data for collating.")
+
+        return PointCloudGTBatch.collate_gt_samples(pointcloud_samples)
 
     @staticmethod
     def collate_detection3d_gt_samples(
@@ -156,54 +165,69 @@ class ModelGTBatch(NamedTuple):
             for each sample in the batch.
 
         Returns:
-          Detection3DGTBatch: Collated detection3d GT batch.
+          Detection3DGTBatch: Collated detection3d GT batch, None when no sample carries 3D
+            detection ground truth.
+
+        Raises:
+          ValueError: If only some of the samples carry 3D detection ground truth.
         """
         if len(gt_samples) == 0:
             return None
 
-        detection3d_gt_bboxes_3d = []
-        detection3d_traffic_cone_barrier_bbox_status = []
-        for sample in gt_samples:
-            if sample.detection3d_gt_bboxes_3d is None:
-                raise ValueError("All samples must have detection3d_gt_bboxes_3d for collating.")
+        detection3d_gt_bboxes_3d = [
+            sample.detection3d_gt_bboxes_3d
+            for sample in gt_samples
+            if sample.detection3d_gt_bboxes_3d is not None
+        ]
 
-            detection3d_gt_bboxes_3d.append(sample.detection3d_gt_bboxes_3d)
-            detection3d_traffic_cone_barrier_bbox_status.append(
-                sample.detection3d_traffic_cone_barrier_bbox_status
-            )
+        # If no sample has detection3d_gt_bboxes_3d, this part of the batch is absent.
+        if not len(detection3d_gt_bboxes_3d):
+            return None
 
-        detection3d_gt_batch = Detection3DGTBatch.collate_gt_samples(
+        # If only some samples have detection3d_gt_bboxes_3d, the batch cannot be built.
+        if len(detection3d_gt_bboxes_3d) != len(gt_samples):
+            raise ValueError("All samples must have detection3d_gt_bboxes_3d for collating.")
+
+        return Detection3DGTBatch.collate_gt_samples(
             detection3d_gt_bboxes_3d=detection3d_gt_bboxes_3d,
             max_num_3d_gt_bboxes=max_num_3d_gt_bboxes,
-            detection3d_traffic_cone_barrier_bbox_status=detection3d_traffic_cone_barrier_bbox_status,
+            detection3d_traffic_cone_barrier_bbox_status=[
+                sample.detection3d_traffic_cone_barrier_bbox_status for sample in gt_samples
+            ],
         )
-        return detection3d_gt_batch
 
     @staticmethod
     def collate_image_gt_samples(gt_samples: Sequence[ModelGTSample]) -> ImageGTBatch | None:
         """
-        Collate sequence of ModelGTSample into a ImagesGtBatch
+        Collate a sequence of ModelGTSample into an ImageGTBatch.
 
         Args:
           gt_samples: Sequence of ModelGTSample to be collated.
-          max_num_3d_gt_bboxes: The maximum number of 3D ground truth bounding boxes
-            for each sample in the batch.
 
         Returns:
-          ImageGTBatch: Collated images GT batch.
+          ImageGTBatch: Collated images GT batch, None when no sample carries camera images.
+
+        Raises:
+          ValueError: If only some of the samples carry camera images.
         """
         if len(gt_samples) == 0:
             return None
 
-        image_gt_samples = []
-        for sample in gt_samples:
-            if sample.camera_image_data is None:
-                raise ValueError("All samples must have camera_image_data for collating.")
+        image_gt_samples = [
+            sample.camera_image_data
+            for sample in gt_samples
+            if sample.camera_image_data is not None
+        ]
 
-            image_gt_samples.append(sample.camera_image_data)
+        # If no sample has camera_image_data, this part of the batch is absent.
+        if not len(image_gt_samples):
+            return None
 
-        image_gt_batch = ImageGTBatch.collate_gt_samples(images_gt_samples=image_gt_samples)
-        return image_gt_batch
+        # If only some samples have camera_image_data, the batch cannot be built.
+        if len(image_gt_samples) != len(gt_samples):
+            raise ValueError("All samples must have camera_image_data for collating.")
+
+        return ImageGTBatch.collate_gt_samples(images_gt_samples=image_gt_samples)
 
     @staticmethod
     def collate_frame_meta_samples(gt_samples: Sequence[ModelGTSample]) -> FrameMetaBatch | None:
@@ -222,11 +246,17 @@ class ModelGTBatch(NamedTuple):
         if len(gt_samples) == 0:
             return None
 
-        frame_meta_samples = []
-        for sample in gt_samples:
-            if sample.frame_meta is None:
-                raise ValueError("All samples must have frame_meta for collating.")
-            frame_meta_samples.append(sample.frame_meta)
+        frame_meta_samples = [
+            sample.frame_meta for sample in gt_samples if sample.frame_meta is not None
+        ]
+
+        # If no sample has frame_meta, this part of the batch is absent.
+        if not len(frame_meta_samples):
+            return None
+
+        # If only some samples have frame_meta, the batch cannot be built.
+        if len(frame_meta_samples) != len(gt_samples):
+            raise ValueError("All samples must have frame_meta for collating.")
 
         return FrameMetaBatch.collate_gt_samples(
             frame_meta_samples=frame_meta_samples,
