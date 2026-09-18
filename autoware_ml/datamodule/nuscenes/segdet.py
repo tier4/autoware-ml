@@ -23,7 +23,6 @@ from typing import Any
 
 from torch.utils.data import DataLoader
 
-import numpy as np
 from autoware_ml.datamodule.base import DataModule, Dataset
 from autoware_ml.datamodule.common.detection3d import (
     build_detection_dataloader,
@@ -215,5 +214,5 @@ class NuscenesSegmentationDetection3DDataModule(DataModule):
             dataloader_cfg=getattr(self, f"{split}_dataloader_cfg"),
             is_train=split == "train",
             train_frame_sampling=self.train_frame_sampling,
-            collate_fn=self.collate_fn,
+            collate_fn=self._collate_fn_for(split),
         )

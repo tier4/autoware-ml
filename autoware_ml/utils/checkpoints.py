@@ -33,6 +33,12 @@ class MatchingWeightsLoadReport:
     loaded_keys: tuple[str, ...]
     unexpected_keys: tuple[str, ...]
     not_loaded_model_keys: tuple[str, ...]
+    alias_initialized_keys: tuple[str, ...] = ()
+
+    @property
+    def initialized_keys(self) -> tuple[str, ...]:
+        """All model keys covered by this load, directly or via a shared-tensor alias."""
+        return tuple(sorted((*self.loaded_keys, *self.alias_initialized_keys)))
 
 
 def load_checkpoint(
@@ -129,8 +135,28 @@ def load_matching_weights(
             "the target model by key and shape."
         )
 
+    # A module registered under two attributes (e.g. StreamPETR's ``img_backbone``
+    # also living inside ``image_feature_extractor``) exposes the *same* Parameter
+    # or buffer object under two state-dict keys; loading either key initializes
+    # both. ``keep_vars=True`` returns those objects instead of detached copies,
+    # so object identity is exact where a ``data_ptr`` comparison would also
+    # match unrelated views of one storage.
+    live_tensors = model.state_dict(keep_vars=True)
+    loaded_tensor_ids = {id(live_tensors[key]) for key in loaded_state_dict}
+    alias_initialized_keys = tuple(
+        sorted(
+            key
+            for key, tensor in live_tensors.items()
+            if key not in loaded_state_dict and id(tensor) in loaded_tensor_ids
+        )
+    )
+    alias_initialized = set(alias_initialized_keys)
     not_loaded_model_keys = tuple(
-        sorted(key for key in model_state_dict if key not in loaded_state_dict)
+        sorted(
+            key
+            for key in model_state_dict
+            if key not in loaded_state_dict and key not in alias_initialized
+        )
     )
 
     incompatible_keys = model.load_state_dict(loaded_state_dict, strict=False)
@@ -142,13 +168,21 @@ def load_matching_weights(
 
     active_logger.info("Loaded weights from: %s", checkpoint_path)
     active_logger.info(
-        "Loaded matching weight tensors: %d/%d", len(loaded_keys), len(model_state_dict)
+        "Loaded matching weight tensors: %d/%d (+%d shared-tensor aliases)",
+        len(loaded_keys),
+        len(model_state_dict),
+        len(alias_initialized_keys),
     )
     active_logger.info("Loaded weight keys (%d): %s", len(loaded_keys), _format_keys(loaded_keys))
     active_logger.info(
         "Skipped checkpoint keys missing in model (%d): %s",
         len(unexpected_keys),
         _format_keys(unexpected_keys),
+    )
+    active_logger.info(
+        "Model keys initialized via shared-tensor aliases (%d): %s",
+        len(alias_initialized_keys),
+        _format_keys(alias_initialized_keys),
     )
     active_logger.info(
         "Model keys not initialized from weights (%d): %s",
@@ -160,6 +194,7 @@ def load_matching_weights(
         loaded_keys=loaded_keys,
         unexpected_keys=unexpected_keys,
         not_loaded_model_keys=not_loaded_model_keys,
+        alias_initialized_keys=alias_initialized_keys,
     )
 
 
@@ -204,7 +239,7 @@ def apply_matching_weights(
         for weight_path in weight_paths
     )
     if enforce_full_coverage:
-        loaded = set().union(*(report.loaded_keys for report in reports))
+        loaded = set().union(*(report.initialized_keys for report in reports))
         missing = tuple(key for key in model.state_dict().keys() if key not in loaded)
         if missing:
             joined = ", ".join(missing)

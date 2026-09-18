@@ -19,7 +19,10 @@ from __future__ import annotations
 import pytest
 import torch
 
+from autoware_ml.datamodule.nuscenes.segdet import NuscenesSegmentationDetection3DDataModule
 from autoware_ml.datamodule.nuscenes.segmentation3d import NuscenesSegmentation3DDataModule
+from autoware_ml.datamodule.t4dataset.detection3d import T4Detection3DDataModule
+from autoware_ml.datamodule.t4dataset.segdet import T4SegmentationDetection3DDataModule
 from autoware_ml.datamodule.t4dataset.segmentation3d import T4Segmentation3DDataModule
 
 
@@ -285,3 +288,113 @@ class TestDatamoduleCollation:
         dm = _make_seg_datamodule(collation_map={"inverse": "index_concat"})
         with pytest.raises(ValueError, match="index_concat"):
             dm.collate_fn(batch)
+
+
+class TestTrainCollationMap:
+    def _make_datamodule(self) -> T4Segmentation3DDataModule:
+        return _make_seg_datamodule(
+            collation_map={"coord": "concat"},
+            train_collation_map={"segment": "concat"},
+        )
+
+    def test_train_collate_includes_train_only_keys(self):
+        dm = self._make_datamodule()
+        collated = dm.train_collate_fn(_seg_batch())
+        assert "coord" in collated
+        assert torch.equal(collated["segment"], torch.tensor([0, 1, 2], dtype=torch.long))
+
+    def test_val_collate_ignores_train_only_keys_without_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ):
+        dm = self._make_datamodule()
+        batch = [{"coord": torch.zeros(2, 3)}, {"coord": torch.zeros(3, 3)}]
+
+        collated = dm.collate_fn(batch)
+
+        assert "segment" not in collated
+        assert "missing from samples" not in caplog.text
+
+    def test_collate_fn_for_selects_map_by_split(self):
+        dm = self._make_datamodule()
+        assert dm._collate_fn_for("train") == dm.train_collate_fn
+        for split in ("val", "test", "predict"):
+            assert dm._collate_fn_for(split) == dm.collate_fn
+
+    def test_reserved_offset_key_rejected_in_train_collation_map(self):
+        with pytest.raises(ValueError, match="offset"):
+            _make_seg_datamodule(
+                collation_map={"coord": "concat"},
+                train_collation_map={"offset": "concat"},
+            )
+
+
+class _DictDataset(torch.utils.data.Dataset):
+    def __init__(self, samples: list[dict]) -> None:
+        self.samples = samples
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def __getitem__(self, index: int) -> dict:
+        return self.samples[index]
+
+
+@pytest.mark.parametrize(
+    "make_datamodule",
+    [
+        pytest.param(
+            lambda **kw: T4Detection3DDataModule(
+                data_root=".",
+                train_ann_file="train.pkl",
+                val_ann_file="val.pkl",
+                test_ann_file="test.pkl",
+                class_names=["car"],
+                name_mapping={},
+                **kw,
+            ),
+            id="t4-detection3d",
+        ),
+        pytest.param(
+            lambda **kw: T4SegmentationDetection3DDataModule(
+                data_root=".",
+                train_ann_file="train.pkl",
+                val_ann_file="val.pkl",
+                test_ann_file="test.pkl",
+                class_names=["car"],
+                name_mapping={},
+                **kw,
+            ),
+            id="t4-segdet",
+        ),
+        pytest.param(
+            lambda **kw: NuscenesSegmentationDetection3DDataModule(
+                data_root=".",
+                train_ann_file="train.pkl",
+                val_ann_file="val.pkl",
+                test_ann_file="test.pkl",
+                class_names=["car"],
+                **kw,
+            ),
+            id="nuscenes-segdet",
+        ),
+        pytest.param(lambda **kw: _make_seg_datamodule(**kw), id="t4-segmentation3d"),
+    ],
+)
+def test_dataloaders_apply_train_collation_map_to_the_train_split_only(make_datamodule):
+    # Goes through each datamodule's real ``_create_dataloader`` override, so a
+    # subclass that hard-wires ``self.collate_fn`` for every split fails here.
+    dm = make_datamodule(
+        collation_map={"coord": "concat"},
+        train_collation_map={"segment": "concat"},
+        train_dataloader_cfg={"batch_size": 2, "num_workers": 0, "shuffle": False},
+        val_dataloader_cfg={"batch_size": 2, "num_workers": 0},
+    )
+    dm.train_dataset = _DictDataset(_seg_batch())
+    dm.val_dataset = _DictDataset([{"coord": sample["coord"]} for sample in _seg_batch()])
+
+    train_batch = next(iter(dm.train_dataloader()))
+    val_batch = next(iter(dm.val_dataloader()))
+
+    assert torch.equal(train_batch["segment"], torch.tensor([0, 1, 2], dtype=torch.long))
+    assert "segment" not in val_batch
+    assert val_batch["coord"].shape == (3, 3)
