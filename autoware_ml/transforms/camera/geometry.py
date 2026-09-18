@@ -63,7 +63,9 @@ class RandomFlip3D(BaseTransform):
         if flip_x:
             g3d.flip_boxes(input_dict, axis=0)
         flip = g3d.flip_matrix(flip_x, flip_y)
-        g3d.update_camera_matrices(input_dict, np.linalg.inv(flip))
+        flip_inv = np.linalg.inv(flip)
+        g3d.update_camera_matrices(input_dict, flip_inv)
+        g3d.update_ego_poses(input_dict, flip, flip_inv)
         input_dict["bev_flip_matrix"] = flip
         return input_dict
 
@@ -100,6 +102,8 @@ class GlobalRotScaleTrans(BaseTransform):
         )
         g3d.transform_boxes(input_dict, rotation, rotation_angle, scale, translation)
         augmentation = g3d.rot_scale_trans_matrix(rotation, scale, translation)
-        g3d.update_camera_matrices(input_dict, np.linalg.inv(augmentation))
+        augmentation_inv = np.linalg.inv(augmentation)
+        g3d.update_camera_matrices(input_dict, augmentation_inv)
+        g3d.update_ego_poses(input_dict, augmentation, augmentation_inv)
         input_dict["global_aug_matrix"] = augmentation
         return input_dict
