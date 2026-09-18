@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Sequence, NamedTuple
 
-from jaxtyping import Int32
 import torch
 
 from autoware_ml.dataclasses.batch.detection3d import (
@@ -103,7 +102,7 @@ class ModelGTBatch(NamedTuple):
             else None,
         )
 
-    def infer_batch_size(self) -> Int32:
+    def infer_batch_size(self) -> int:
         """
         Infer the batch size from the collated multi-task GT batch.
 
@@ -111,7 +110,7 @@ class ModelGTBatch(NamedTuple):
             Batch size if it can be inferred, otherwise raises ValueError.
         """
         if self.point_cloud_gt_batch is not None:
-            return torch.max(self.point_cloud_gt_batch.batch_indices) + 1
+            return self.point_cloud_gt_batch.batch_size
         elif self.detection3d_gt_batch is not None:
             return self.detection3d_gt_batch.gt_bboxes_3d.shape[0]
         elif self.image_gt_batch is not None:

@@ -16,6 +16,10 @@ class PointCloudGTBatch(NamedTuple):
         Tensor, "batch_size*num_points num_features"
     ]  # (B*P, number of features for each point)
     batch_indices: Int32[Tensor, " batch_size*num_points"]  # (B*P, ), batch indices for each point
+    # Number of samples collated into this batch. Fixed by the number of collated samples, so it
+    # stays correct even when the trailing samples carry zero points and are absent from
+    # batch_indices.
+    batch_size: int
 
     @staticmethod
     def collate_gt_samples(
@@ -56,6 +60,7 @@ class PointCloudGTBatch(NamedTuple):
         return PointCloudGTBatch(
             points=points,
             batch_indices=batch_indices,
+            batch_size=len(point_gt_samples),
         )
 
     def to_device(self, device: torch.device) -> PointCloudGTBatch:
@@ -71,6 +76,7 @@ class PointCloudGTBatch(NamedTuple):
         return PointCloudGTBatch(
             points=self.points.to(device),
             batch_indices=self.batch_indices.to(device),
+            batch_size=self.batch_size,
         )
 
 
