@@ -17,6 +17,9 @@ bookkeeping, it should not live in `ops/`.
 
 - `bev_pool/`
   - BEV pooling CUDA/C++ extension used by camera-lidar detection models
+- `diff_iou_rotated/`
+  - differentiable IoU of rotated 2D/3D boxes, ported from mmcv
+  - CUDA extension sorts the intersection polygon vertices; the rest is plain torch
 - `indexing/`
   - export-aware indexing operators such as `argsort` and `unique`
   - used by PTv3 export and other graph-level point-cloud utilities
