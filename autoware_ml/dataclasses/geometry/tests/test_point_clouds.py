@@ -55,11 +55,11 @@ class TestPointCloudGTBatchFields(PointCloudGTBatchTestCase):
     def test_field_order(self) -> None:
         """
         Input: the class itself.
-        Expected: the tuple exposes ``points`` then ``batch_indices``, since downstream code
-        unpacks the batch positionally.
+        Expected: the tuple exposes ``points``, ``batch_indices`` then ``batch_size``, since
+        downstream code unpacks the batch positionally.
         Check: compare ``_fields`` against the expected names.
         """
-        self.assertEqual(PointCloudGTBatch._fields, ("points", "batch_indices"))
+        self.assertEqual(PointCloudGTBatch._fields, ("points", "batch_indices", "batch_size"))
 
     def test_is_immutable(self) -> None:
         """
@@ -97,6 +97,7 @@ class TestPointCloudGTBatchCollate(PointCloudGTBatchTestCase):
         self.assertEqual(batch.points.shape, (5, len(self.FEATURE_NAMES)))
         self.assertEqual(batch.batch_indices.shape, (5,))
         self.assertEqual(batch.batch_indices.tolist(), [0, 0, 0, 1, 1])
+        self.assertEqual(batch.batch_size, 2)
         self.assertTrue(torch.all(batch.points[:3] == 1.0))
         self.assertTrue(torch.all(batch.points[3:] == 2.0))
 
@@ -155,6 +156,20 @@ class TestPointCloudGTBatchCollate(PointCloudGTBatchTestCase):
 
         self.assertEqual(batch.points.shape, (0, len(self.FEATURE_NAMES)))
         self.assertEqual(batch.batch_indices.shape, (0,))
+        self.assertEqual(batch.batch_size, 1)
+
+    def test_batch_size_counts_trailing_empty_samples(self) -> None:
+        """
+        Input: samples with 2 and 0 points.
+        Expected: the empty last sample never appears in ``batch_indices``, so the batch size
+        cannot be recovered from the indices alone; ``batch_size`` still reports 2 because it is
+        fixed by the number of collated samples.
+        Check: the indices are ``[0, 0]`` while ``batch_size`` is 2.
+        """
+        batch = self.collate([self.make_points(2, fill=1.0), self.make_points(0, fill=0.0)])
+
+        self.assertEqual(batch.batch_indices.tolist(), [0, 0])
+        self.assertEqual(batch.batch_size, 2)
 
 
 class TestPointCloudGTBatchToDevice(PointCloudGTBatchTestCase):
@@ -178,6 +193,7 @@ class TestPointCloudGTBatchToDevice(PointCloudGTBatchTestCase):
         self.assertIsNot(moved, self.batch)
         self.assertTrue(torch.equal(moved.points, self.batch.points))
         self.assertTrue(torch.equal(moved.batch_indices, self.batch.batch_indices))
+        self.assertEqual(moved.batch_size, self.batch.batch_size)
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required to move tensors to GPU")
     def test_moves_every_tensor_to_cuda(self) -> None:
