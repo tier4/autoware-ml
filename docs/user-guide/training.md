@@ -78,8 +78,8 @@ autoware-ml train --config-name <task>/<model>/<config> \
 
 # Batch size and workers
 autoware-ml train --config-name <task>/<model>/<config> \
-    datamodule.train_dataloader_cfg.batch_size=16 \
-    datamodule.train_dataloader_cfg.num_workers=8
+    datamodule.train_dataloader.batch_size=16 \
+    datamodule.train_dataloader.num_workers=8
 
 # Learning rate
 autoware-ml train --config-name <task>/<model>/<config> \

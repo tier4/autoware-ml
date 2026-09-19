@@ -7,7 +7,6 @@ defaults:
   - /database@database: nuscenes/nuscenes_base
   - /datamodule@datamodule: nuscenes/default_detection3d_datamodule
   - override /datamodule/transforms@datamodule.train_dataset.transforms: default_segdet3d_train_transforms
-  - override /datamodule/transforms@datamodule.validation_dataset.transforms: default_segdet3d_test_transforms
   - override /datamodule/transforms@datamodule.test_dataset.transforms: default_segdet3d_test_transforms
   - _self_
 

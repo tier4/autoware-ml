@@ -1,15 +1,11 @@
 _target_: autoware_ml.datamodule.t4dataset.dataset.T4Dataset
 _convert_: all
+# Completed by the datamodule with the records of each dataset source
+_partial_: true
 
 defaults:
   - detection3d@dataset_tasks.Detection3D: default_detection3d
   - /datamodule/transforms@transforms: default_train_transforms
-
-database_root_path: ${database.root_path}
-lidar_intensity_scale: ${database.lidar_intensity_scale}
-
-# Always None since we run splitter in the process
-dataset_records_dataframe: null
 
 # When number of 3D GT bboxes in a scenario exceeds this number, we will select the first
 # `max_num_3d_gt_bboxes` bboxes and ignore the rest. 500 is usually a

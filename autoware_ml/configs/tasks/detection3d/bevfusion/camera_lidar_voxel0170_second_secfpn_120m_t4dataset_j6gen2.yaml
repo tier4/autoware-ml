@@ -26,8 +26,6 @@ camera_names: ${dataset.camera.camera_order}
 datamodule:
   train_dataset:
     camera_names: ${camera_names}
-  validation_dataset:
-    camera_names: ${camera_names}
   test_dataset:
     camera_names: ${camera_names}
   train_dataloader:

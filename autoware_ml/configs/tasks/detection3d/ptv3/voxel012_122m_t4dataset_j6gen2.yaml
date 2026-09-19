@@ -6,8 +6,8 @@ defaults:
   - /datasets/t4dataset/lidar
   - /database@database: t4dataset/t4dataset_j6gen2_base
   - /datamodule@datamodule: t4dataset/default_detection3d_datamodule
+  - /datamodule/frame_sampling@datamodule.train_frame_sampling: default_frame_sampling
   - override /datamodule/transforms@datamodule.train_dataset.transforms: default_segdet3d_train_transforms
-  - override /datamodule/transforms@datamodule.validation_dataset.transforms: default_segdet3d_test_transforms
   - override /datamodule/transforms@datamodule.test_dataset.transforms: default_segdet3d_test_transforms
   - _self_
 
@@ -24,13 +24,15 @@ datamodule:
   train_dataloader:
     batch_size: ${batch_size}
     num_workers: ${num_workers}
-    shuffle: true
+    shuffle: false
   validation_dataloader:
     batch_size: ${batch_size}
     num_workers: ${num_workers}
   test_dataloader:
     batch_size: ${batch_size}
     num_workers: ${num_workers}
+  train_frame_sampling:
+    pedestrian_class_name: pedestrian
 
 model:
   export_output_names:

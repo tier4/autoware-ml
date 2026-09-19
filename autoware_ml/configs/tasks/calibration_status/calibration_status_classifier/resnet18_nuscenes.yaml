@@ -8,6 +8,3 @@ defaults:
 
 # One sample per camera
 camera_sources: ${nuscenes.camera.camera_order}
-
-# Ego vehicle body, its points are dropped
-ego_box: [-1.53, -1.15, -0.1, 5.72, 1.15, 3.1]

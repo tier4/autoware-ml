@@ -1,0 +1,16 @@
+_target_: autoware_ml.datamodule.samplers.FrameSamplingConfig
+_convert_: all
+
+repeat_sampling_factor: 0.30
+object_bev_range:
+  - ${point_cloud_range.0}
+  - ${point_cloud_range.1}
+  - ${point_cloud_range.3}
+  - ${point_cloud_range.4}
+pedestrian_class_name: ???
+low_pedestrian_height_threshold: 1.5
+low_pedestrian_bev_range: [-50.0, -50.0, 50.0, 50.0]
+class_names: ${dataset.detection3d.class_names}
+ignore_index: ${dataset.detection3d.ignore_index}
+filter_attributes: ${dataset.detection3d.filter_attributes}
+seed: ${seed}

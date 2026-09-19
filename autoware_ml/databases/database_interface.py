@@ -15,8 +15,9 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import Mapping, Sequence, Protocol
+from typing import Sequence, Protocol
 from types import MappingProxyType
+from pathlib import Path
 
 import polars as pl
 
@@ -60,6 +61,18 @@ class DatabaseInterface(Protocol):
         """
 
         raise NotImplementedError("Database must define __eq__!")
+
+    @property
+    @abstractmethod
+    def root_path(self) -> Path:
+        """
+        Get the root path the annotation files of the database live under.
+
+        Returns:
+          Path: Root path of the database.
+        """
+
+        raise NotImplementedError("Database must define root_path!")
 
     @property
     @abstractmethod
@@ -129,6 +142,18 @@ class DatabaseInterface(Protocol):
         """
 
         raise NotImplementedError("Database must define taxonomy!")
+
+    @property
+    @abstractmethod
+    def lidar_intensity_scale(self) -> float:
+        """
+        Get the intensity value of the strongest return in the stored point clouds.
+
+        Returns:
+          float: Full scale intensity of the database.
+        """
+
+        raise NotImplementedError("Database must define lidar_intensity_scale!")
 
     @property
     @abstractmethod

@@ -151,6 +151,17 @@ class BaseDatabase:
         return string
 
     @property
+    def root_path(self) -> Path:
+        """
+        Get the root path the annotation files of the database live under.
+
+        Returns:
+          Path: Root path of the database.
+        """
+
+        return self._root_path
+
+    @property
     def version(self) -> str:
         """
         Get the version of the database.

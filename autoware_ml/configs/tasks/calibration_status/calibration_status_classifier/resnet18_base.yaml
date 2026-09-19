@@ -6,10 +6,11 @@ defaults:
 batch_size: 8
 num_workers: 8
 
+# Ego vehicle body, its points are dropped
+ego_box: [-1.53, -1.15, -0.1, 5.72, 1.15, 3.1]
+
 datamodule:
   train_dataset:
-    camera_sources: ${camera_sources}
-  validation_dataset:
     camera_sources: ${camera_sources}
   test_dataset:
     camera_sources: ${camera_sources}

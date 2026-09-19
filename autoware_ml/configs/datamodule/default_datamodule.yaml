@@ -1,0 +1,20 @@
+_target_: autoware_ml.datamodule.data_module.DataModule
+_convert_: all
+
+defaults:
+  - splitter: default_scenario_splitter
+  - dataloader@train_dataloader: default_dataloader
+  - dataloader@validation_dataloader: default_dataloader
+  - dataloader@test_dataloader: default_dataloader
+  - dataloader@predict_dataloader: default_dataloader
+
+train_sources:
+  - database: ${database}
+validation_sources: ${datamodule.train_sources}
+test_sources: ${datamodule.validation_sources}
+predict_sources: ${datamodule.test_sources}
+
+validation_dataset: ${datamodule.test_dataset}
+predict_dataset: ${datamodule.test_dataset}
+
+train_frame_sampling: null

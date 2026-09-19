@@ -65,41 +65,43 @@ A complete task config includes these sections:
 
 ### `datamodule`
 
-Controls data loading and split-specific transforms:
+Controls the dataset sources, datasets, transforms and dataloaders of every split. Task configs
+select a datamodule config from `configs/datamodule/` and override what they need:
 
 ```yaml
+defaults:
+  - /database@database: t4dataset/t4dataset_j6gen2_semaseg
+  - /datamodule@datamodule: t4dataset/default_segmentation3d_datamodule
+  - override /datamodule/transforms@datamodule.train_dataset.transforms: my_train_transforms
+  - _self_
+
 datamodule:
-  _target_: autoware_ml.datamodule.my_dataset.MyDataModule
-  data_root: ${data_root}
-  train_ann_file: ${data_root}/info/train.pkl
-  val_ann_file: ${data_root}/info/val.pkl
+  # Dataset sources of the training split, several sources mix their corpora
+  train_sources:
+    - database: ${database}
+      det3d: false
+      seg3d: true
+      repeat: 1
 
-  # collation_map: whitelist of batch keys and how to merge them across samples.
-  # Keys not listed here are dropped before the batch reaches the model.
-  # Strategies:
-  #   stack        - fixed-shape tensors concatenated along a new batch dim (all shapes must match)
-  #   concat       - variable-length tensors concatenated along dim 0. Adds a
-  #                  batch["offset"] key with cumulative per-sample lengths so
-  #                  downstream code can recover per-sample boundaries.
-  #   index_concat - like concat, but values are integer indices into the
-  #                  concatenated concat key (e.g. point indices into the point cloud).
-  #                  Each sample's indices are shifted by the cumulative element
-  #                  count of preceding samples so they remain globally valid after concat.
-  #   list         - variable-shape values kept as a Python list (no tensor conversion)
-  collation_map:
-    input_tensor: stack
-    gt_labels: stack
+  # Arguments of the dataset of the training split
+  train_dataset:
+    max_num_3d_gt_bboxes: 0
 
-  train_dataloader_cfg:
+  train_dataloader:
     batch_size: 8
     num_workers: 4
     shuffle: true
-
-  train_transforms:
-    pipeline:
-      - _target_: autoware_ml.transforms.my_transforms.my_transform.MyTransform
-        param: value
 ```
+
+Every split (`train`, `validation`, `test`, `predict`) has the same three keys:
+
+- `<split>_sources` lists the databases the split reads. `det3d` and `seg3d` decide whether the
+  boxes and semantic masks of a source supervise the run, and `repeat` how many times its frames
+  appear in one epoch.
+- `<split>_dataset` is a partial dataset config. The datamodule completes it for every source
+  with the root path and the records of that source. It carries the task datasets
+  (`dataset_tasks`) and the transforms of the split.
+- `<split>_dataloader` holds the dataloader settings (batch size, workers, shuffling, pin_memory).
 
 For custom components, point `_target_` at the concrete implementation module,
 for example `autoware_ml.transforms.my_transforms.my_transform.MyTransform` or
@@ -233,10 +235,9 @@ defaults:
   - _self_                        # Apply this file's overrides
 
 # Override specific values
-data_root: /path/to/dataset
-
 datamodule:
-  data_root: ${data_root}
+  train_dataloader:
+    batch_size: 4
 ```
 
 ## Variable Interpolation
@@ -244,11 +245,13 @@ datamodule:
 Reference other config values with `${...}`:
 
 ```yaml
-data_root: /path/to/dataset
+batch_size: 8
 
 datamodule:
-  data_root: ${data_root}
-  train_ann_file: ${data_root}/info/train.pkl
+  train_dataloader:
+    batch_size: ${batch_size}
+  validation_dataloader:
+    batch_size: ${batch_size}
 ```
 
 Hydra resolvers:

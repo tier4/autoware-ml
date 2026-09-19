@@ -4,11 +4,7 @@ defaults:
   - /database@database: t4dataset/t4dataset_j6gen2_base
   - /datamodule@datamodule: t4dataset/default_calibration_status_datamodule
   - /datasets/t4dataset/camera
-  - /datasets/t4dataset/lidar
   - _self_
 
 # One sample per camera
 camera_sources: ${t4dataset.camera.camera_order}
-
-# Ego vehicle body, its points are dropped
-ego_box: [-1.53, -1.15, -0.1, 5.72, 1.15, 3.1]

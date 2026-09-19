@@ -7,7 +7,6 @@ defaults:
   - /database@database: nuscenes/nuscenes_base
   - /datamodule@datamodule: nuscenes/default_multiview_detection3d_datamodule
   - override /datamodule/transforms@datamodule.train_dataset.transforms: bevfusion_camera_lidar_nuscenes_train_transforms
-  - override /datamodule/transforms@datamodule.validation_dataset.transforms: bevfusion_camera_lidar_nuscenes_test_transforms
   - override /datamodule/transforms@datamodule.test_dataset.transforms: bevfusion_camera_lidar_nuscenes_test_transforms
   - _self_
 
@@ -28,8 +27,6 @@ camera_names: ${dataset.camera.camera_order}
 
 datamodule:
   train_dataset:
-    camera_names: ${camera_names}
-  validation_dataset:
     camera_names: ${camera_names}
   test_dataset:
     camera_names: ${camera_names}
