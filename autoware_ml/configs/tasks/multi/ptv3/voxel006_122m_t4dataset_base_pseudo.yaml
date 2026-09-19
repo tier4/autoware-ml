@@ -1,0 +1,62 @@
+# @package _global_
+
+# Teacher stage 2: pseudo label pretraining
+
+defaults:
+  - /tasks/multi/ptv3/voxel006_122m_t4dataset_j6gen2
+  - /database@j6gen2_database: t4dataset/t4dataset_j6gen2_pseudo
+  - /database@seg3d_gt_database: t4dataset/t4dataset_j6gen2_semaseg
+  - override /database/t4dataset/taxonomy@j6gen2_database.taxonomy: default_fine
+  - override /database/t4dataset/box3d_pipelines@j6gen2_database.box3d_pipelines: trailer_class_box3d_pipelines
+  - override /database/t4dataset/taxonomy@seg3d_gt_database.taxonomy: default_fine
+  - override /database/t4dataset/box3d_pipelines@seg3d_gt_database.box3d_pipelines: trailer_class_box3d_pipelines
+  - override /database@database: t4dataset/t4dataset_base_pseudo
+  - _self_
+
+datamodule:
+  train_sources:
+    - database: ${database}
+      det3d: true
+      seg3d: true
+      repeat: 1
+    - database: ${j6gen2_database}
+      det3d: true
+      seg3d: true
+      repeat: 1
+    - database: ${seg3d_gt_database}
+      det3d: false
+      seg3d: true
+      repeat: 6
+  validation_sources:
+    - database: ${database}
+      det3d: true
+      seg3d: false
+      repeat: 1
+    - database: ${j6gen2_database}
+      det3d: true
+      seg3d: false
+      repeat: 1
+    - database: ${seg3d_gt_database}
+      det3d: false
+      seg3d: true
+      repeat: 1
+
+model:
+  optimizer_group_overrides:
+    encoder_block:
+      lr: 0.00001
+    encoder_default:
+      lr: 0.000025
+    seg3d_head:
+      lr: 0.00005
+  scheduler:
+    warmup_epochs: 2
+    decay_epochs: 22
+    max_lr_factor: 5.0
+
+trainer:
+  max_epochs: 24
+
+callbacks:
+  early_stopping:
+    patience: 8

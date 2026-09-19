@@ -1,0 +1,159 @@
+# @package _global_
+
+defaults:
+  - /tasks/multi/ptv3/voxel012_122m_t4dataset_j6gen2
+  - override /database/t4dataset/box3d_pipelines@database.box3d_pipelines: trailer_class_box3d_pipelines
+  - override /database/t4dataset/taxonomy@database.taxonomy: default_fine
+  - override /datasets/t4dataset/segdet3d: default_fine
+  - _self_
+
+grid_size: 0.06
+head_voxel_size: [0.48, 0.48, 8.0]
+
+batch_size: 1
+
+datamodule:
+  train_dataset:
+    transforms:
+      _target_: autoware_ml.transforms.base.TransformsCompose
+      _convert_: all
+      pipeline:
+        - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
+          _convert_: all
+          load_dim: ${database.lidar_pointcloud_num_features}
+          use_dim: [0, 1, 2, 3] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]
+          bev_remove_radius: 0.0
+        - _target_: autoware_ml.transforms.point_cloud.geometry.RandomRotateTargetAngle
+          _convert_: all
+          probability: 0.75
+          # Multiples of pi
+          yaw_angle_ratios: [0.5, 1.0, 1.5]
+        - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
+          _convert_: all
+          # In radians, the range of rotation angles for random rotation around the Z-axis.
+          yaw_rot_range: [-1.57079633, 1.57079633]
+          # The range of scale factors for random scaling.
+          scale_ratio_range: ${dataset.detection3d.train_scale_ratio_range}
+          # The standard deviation for Gaussian translation noise.
+          translation_std: ${dataset.detection3d.train_translation_std}
+        - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalBEVRandomFlip
+          _convert_: all
+          horizontal_flip_ratio: 0.5
+          vertical_flip_ratio: 0.5
+        - _target_: autoware_ml.transforms.point_cloud.perturbation.RandomJitter
+          _convert_: all
+          # Jitter scaled to the 6 cm grid
+          sigma: 0.006
+          clip: 0.024
+        - _target_: autoware_ml.transforms.point_cloud.geometry.PointsRangeFilter
+          _convert_: all
+          points_range: ${point_cloud_range}
+        - _target_: autoware_ml.transforms.point_cloud.sampling.RandomDropout
+          _convert_: all
+          probability: 0.5
+          dropout_ratio: 0.2
+        - _target_: autoware_ml.transforms.point_cloud.perturbation.RandomStrengthJitter
+          _convert_: all
+          gamma_range: [0.8, 1.25]
+          scale_range: [0.9, 1.1]
+          shift_range: [-0.02, 0.02]
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesLabelNameFilter
+          _convert_: all
+          label_names_to_keep: ${database.taxonomy.detection3d.class_names}
+          class_names: ${database.taxonomy.detection3d.class_names}
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesAttributeFilter
+          _convert_: all
+          filter_attributes: ${dataset.detection3d.filter_attributes}
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesRangeFilter
+          _convert_: all
+          point_cloud_range: ${point_cloud_range}
+        # Order matters, it first filters the boxes of the whole range, then the boxes within 60 meters
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesMinPointsFilter
+          _convert_: all
+          min_points: 2
+          bev_range:
+            - ${point_cloud_range.0}
+            - ${point_cloud_range.1}
+            - ${point_cloud_range.3}
+            - ${point_cloud_range.4}
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesMinPointsFilter
+          _convert_: all
+          min_points: 3
+          bev_range: [-60.0, -60.0, 60.0, 60.0]
+  train_frame_sampling:
+    pedestrian_class_name: pedestrian.common
+
+model:
+  # PT-v3m3 encoder and decoder
+  encoder:
+    enc_depths: [3, 3, 3, 12, 3]
+    enc_channels: [54, 108, 216, 432, 576]
+    enc_num_head: [3, 6, 12, 24, 32]
+    enc_patch_size: [1024, 1024, 1024, 1024, 1024]
+  seg3d_head:
+    dec_depths: [2, 2, 2, 2]
+    dec_channels: [54, 108, 216, 432]
+    dec_num_head: [3, 6, 12, 24]
+    dec_patch_size: [1024, 1024, 1024, 1024]
+  bev_neck:
+    fusion:
+      out_channels: 512
+    bev_projector:
+      out_channels: 256
+      output_shape: [512, 512]
+    bev_encoder:
+      hidden_channels: 256
+      out_channels: 256
+      dilations: [2, 4, 10, 4]
+  bbox_head:
+    in_channels: 256
+    hidden_channel: 256
+    feedforward_channels: 512
+    dense_heatmap_pooling_classes:
+      [car.common, car.emergency, car.special, truck.common, truck.emergency, truck.trailer,
+       truck.construction, bus]
+    # 2.4 m window at the halved BEV cell
+    nms_kernel_size: 5
+    nms_groups:
+      - class_names:
+          [car.common, car.emergency, car.special, truck.common, truck.emergency, truck.trailer,
+           truck.construction, bus, train]
+        nms_radius: 0.25
+        post_max_size: 300
+      - class_names: [motorcycle, bicycle]
+        nms_radius: 0.5
+        post_max_size: 100
+      - class_names: [pedestrian.common]
+        nms_radius: 0.0
+        post_max_size: 100
+      - class_names: [pedestrian.personal_mobility]
+        nms_radius: 0.0
+        post_max_size: 50
+      - class_names: [pedestrian.stroller]
+        nms_radius: 0.0
+        post_max_size: 50
+      - class_names: [animal]
+        nms_radius: 0.0
+        post_max_size: 50
+      - class_names: [barrier.movable]
+        nms_radius: 0.0
+        post_max_size: 50
+      - class_names: [barrier.construction_sign]
+        nms_radius: 0.0
+        post_max_size: 50
+      - class_names: [traffic_cone]
+        nms_radius: 0.0
+        post_max_size: 100
+      - class_names: [debris.unclassified]
+        nms_radius: 0.0
+        post_max_size: 50
+      - class_names: [debris.pushable_pullable]
+        nms_radius: 0.0
+        post_max_size: 50
+    bbox_coder:
+      score_threshold: 0.0
+
+trainer:
+  precision: 32-true
+  accumulate_grad_batches: 8
+  sync_batchnorm: true

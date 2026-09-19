@@ -20,12 +20,14 @@ from typing import Mapping, Sequence, Tuple
 
 import numpy as np
 import numpy.typing as npt
-from t4_devkit import T4Devkit
+from t4_devkit import T4Devkit, load_table
 from t4_devkit.dataclass.box import Box3D
 from t4_devkit.schema import (
     Attribute,
     CalibratedSensor,
+    Category,
     EgoPose,
+    Instance,
     LidarSeg,
     Sample,
     SampleAnnotation,
@@ -75,6 +77,7 @@ class T4RecordsGenerator:
         max_sweeps: int,
         sample_steps: int,
         lidar_pointcloud_num_features: int,
+        box_annotation_dir: str,
         taxonomy: DatabaseTaxonomy,
         box3d_pipelines: Sequence[Box3DPipeline],
         recompute_boxes3d_lidar_points_num: bool = False,
@@ -90,6 +93,8 @@ class T4RecordsGenerator:
           sample_steps: Number of frames/samples to skip between each sample, set to 1
             if not skipping any samples/frames.
           lidar_pointcloud_num_features: Number of features of the lidar pointcloud.
+          box_annotation_dir: Directory of every scene holding the category and instance
+            tables the box names are read from.
           taxonomy: Taxonomies the labels of the database are baked with.
           box3d_pipelines: List of box3d pipelines to process the box3d annotations.
           recompute_boxes3d_lidar_points_num: Whether to recompute the number of lidar points in
@@ -102,8 +107,11 @@ class T4RecordsGenerator:
         self.max_sweeps = max_sweeps
         self.sample_steps = sample_steps
         self.lidar_pointcloud_num_features = lidar_pointcloud_num_features
-        self.t4_devkit_dataset = self._construct_t4_devkit_dataset()
+        self.scene_root_path = self._scene_root_path()
+        self.t4_devkit_dataset = T4Devkit(data_root=self.scene_root_path, verbose=False)
         self.lidarseg_by_sample_data = self._index_lidarseg()
+        self.box_annotation_dir = box_annotation_dir
+        self.box_category_tokens, self.box_category_names = self._index_box_categories()
         self.taxonomy = taxonomy
         self.box3d_pipelines = box3d_pipelines
         self.recompute_boxes3d_lidar_points_num = recompute_boxes3d_lidar_points_num
@@ -112,12 +120,12 @@ class T4RecordsGenerator:
         assert sample_steps > 0, "Sample steps must be greater than 0."
         assert max_sweeps >= 0, "Max sweeps must be greater than or equal to 0."
 
-    def _construct_t4_devkit_dataset(self) -> T4Devkit:
+    def _scene_root_path(self) -> Path:
         """
-        Construct T4Devkit class instance.
+        Root directory of the scene this generator reads.
 
         Returns:
-          T4Devkit: T4 dataset.
+          Path: Scene root directory.
         """
 
         scene_root_dir_path = (
@@ -128,7 +136,57 @@ class T4RecordsGenerator:
         )
         if not scene_root_dir_path.exists():
             raise ValueError(f"Scene root directory {scene_root_dir_path} does not exist.")
-        return T4Devkit(data_root=scene_root_dir_path, verbose=False)
+        return scene_root_dir_path
+
+    def _index_box_categories(self) -> Tuple[Mapping[str, str], Mapping[str, str]]:
+        """
+        Category tables the box names are read from.
+
+        A pseudo labelled scene keeps the original tables beside the rewritten ones, so the
+        database names the directory to read.
+
+        Returns:
+          Tuple[Mapping[str, str], Mapping[str, str]]: Category token of every instance token
+            and category name of every category token.
+        """
+
+        tables_dir = self.scene_root_path / self.box_annotation_dir
+        if not tables_dir.is_dir():
+            raise ValueError(
+                f"Scenario {self.scenario_data.scenario_id} has no box annotation directory "
+                f"{tables_dir}."
+            )
+        categories: Sequence[Category] = load_table(str(tables_dir), SchemaName.CATEGORY)
+        instances: Sequence[Instance] = load_table(str(tables_dir), SchemaName.INSTANCE)
+        return (
+            {instance.token: instance.category_token for instance in instances},
+            {category.token: category.name for category in categories},
+        )
+
+    def _box_category_name(self, instance_token: str) -> str:
+        """
+        Category name of a box, read through its instance from the box annotation tables.
+
+        Args:
+          instance_token: Instance token of the box annotation.
+
+        Returns:
+          str: Category name of the instance.
+        """
+
+        if instance_token not in self.box_category_tokens:
+            raise ValueError(
+                f"The instance table of {self.box_annotation_dir} in scenario "
+                f"{self.scenario_data.scenario_id} does not list the instance {instance_token}."
+            )
+        category_token = self.box_category_tokens[instance_token]
+        if category_token not in self.box_category_names:
+            raise ValueError(
+                f"The category table of {self.box_annotation_dir} in scenario "
+                f"{self.scenario_data.scenario_id} does not list the category "
+                f"{category_token} of the instance {instance_token}."
+            )
+        return self.box_category_names[category_token]
 
     def generate_dataset_records(self) -> Sequence[DatasetRecord]:
         """
@@ -256,12 +314,13 @@ class T4RecordsGenerator:
                 )
                 box_3d_attributes.add(attribute_record.name)
 
+            box3d_category_name = self._box_category_name(sample_annotation_record.instance_token)
             boxes_3d_data_model.append(
                 Box3DDataModel(
                     box3d_params=box3d_params,
                     box3d_instance_id=box3d.uuid,
-                    box3d_dataset_label_name=box3d.semantic_label.name,
-                    box3d_label_name=box3d.semantic_label.name,
+                    box3d_dataset_label_name=box3d_category_name,
+                    box3d_label_name=box3d_category_name,
                     # Initially, set all label indices to the ignore label index
                     box3d_label_index=self.taxonomy.detection3d.ignore_index,
                     box3d_num_lidar_points=box3d.num_points,
@@ -309,7 +368,7 @@ class T4RecordsGenerator:
         # The lidarseg table names the mask relative to the scene. The record table stores the
         # tail of a rooted path and resolves it against a database root several scenes share, so
         # the scene root is prepended here as the pointcloud path already carries it.
-        return str(Path(self.t4_devkit_dataset.data_root) / lidarseg_record.filename)
+        return str(self.scene_root_path / lidarseg_record.filename)
 
     def _find_t4pack_frame(self, lidar_pointcloud_path: str) -> T4PackFrame | None:
         """
@@ -390,7 +449,7 @@ class T4RecordsGenerator:
         lidar_pointcloud_source_path = (
             None
             if sd_record.info_filename is None
-            else str(Path(self.t4_devkit_dataset.data_root) / sd_record.info_filename)
+            else str(self.scene_root_path / sd_record.info_filename)
         )
 
         lidar_frame_data_model = LidarFrameDataModel(
