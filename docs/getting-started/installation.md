@@ -45,24 +45,32 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
     # Remove apt-installed Ansible (In Ubuntu 22.04, the Ansible version is old)
     sudo apt purge ansible
 
-    # Install pip
+    # Install Python 3.11 and pip
     sudo apt -y update
-    sudo apt -y install python3-pip
+    sudo apt -y install python3.11 python3.11-venv python3-pip
 
     # Install Ansible (if not already installed)
-    sudo python3 -m pip install ansible==10.7.0
+    sudo python3.11 -m pip install ansible==10.7.0
 
     # Install required Ansible collections
     cd ~/autoware-ml
     ansible-galaxy collection install -f -r ansible-galaxy-requirements.yaml
 
-    # Pick one of the two playbooks below depending on your workflow:
-    # Docker-based development host
-    ansible-playbook ansible/playbooks/setup_docker_host.yaml -K
-
-    # Local pixi development host
-    ansible-playbook ansible/playbooks/setup_local_host.yaml -K
     ```
+
+    Then run the playbook that matches your workflow:
+
+    === "Docker-based development host"
+
+        ```bash
+        ansible-playbook ansible/playbooks/setup_docker_host.yaml -K
+        ```
+
+    === "Local pixi development host"
+
+        ```bash
+        ansible-playbook ansible/playbooks/setup_local_host.yaml -K
+        ```
 
 === "Manual Setup"
 
