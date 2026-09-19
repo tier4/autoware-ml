@@ -85,8 +85,6 @@ datamodule:
           _convert_: all
           min_points: 1
           bev_range: [-60.0, -60.0, 60.0, 60.0]
-  validation_dataset:
-    camera_names: ${camera_names}
   test_dataset:
     camera_names: ${camera_names}
     transforms:

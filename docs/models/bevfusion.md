@@ -95,11 +95,11 @@ TensorRT engine generation is disabled (`deploy.tensorrt.enabled=false`); the ru
 | `autoware_ml/models/common/backbones/resnet.py`               | ResNet multiview image backbone                  |
 | `autoware_ml/models/common/necks/lss_fpn.py`                  | Multiview image neck                             |
 | `autoware_ml/models/detection3d/task_modules/`                | Shared assigners, costs, coders                  |
-| `autoware_ml/datamodule/nuscenes/detection3d.py`              | NuScenes detection datamodule (LiDAR-only)       |
-| `autoware_ml/datamodule/t4dataset/detection3d.py`             | T4Dataset detection datamodule (LiDAR-only)      |
-| `autoware_ml/datamodule/common/multiview_detection3d.py`      | Shared multiview detection dataset               |
-| `autoware_ml/datamodule/nuscenes/multiview_detection3d.py`    | NuScenes multiview datamodule                    |
-| `autoware_ml/datamodule/t4dataset/multiview_detection3d.py`   | T4Dataset multiview datamodule                   |
+| `autoware_ml/datamodule/t4dataset/dataset.py`                 | T4Dataset records as a dataset                   |
+| `autoware_ml/datamodule/nuscenes/dataset.py`                  | nuScenes dataset                                 |
+| `autoware_ml/datamodule/t4dataset/detection3d.py`             | 3D boxes of a T4Dataset record                   |
+| `autoware_ml/transforms/camera/`                              | Multiview image loading and augmentation         |
+| `autoware_ml/configs/datamodule/`                             | Datamodule, dataset and transform configurations |
 | `autoware_ml/preprocessing/detection3d/point_pillar.py`       | Pillar preprocessing                             |
 | `autoware_ml/configs/tasks/detection3d/bevfusion/`            | Task configurations                              |
 

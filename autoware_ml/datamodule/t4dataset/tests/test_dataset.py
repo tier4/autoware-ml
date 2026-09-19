@@ -87,6 +87,8 @@ def build_dataset(
         dataset_records_dataframe=records,
         transforms=None,
         dataset_tasks=MappingProxyType({}),
+        det3d_supervised=True,
+        seg3d_supervised=True,
         camera_names=camera_names,
         camera_sources=camera_sources,
     )
@@ -97,7 +99,7 @@ def test_every_camera_at_the_sample_time_is_served_and_the_sweeps_are_not() -> N
         [[[camera_frame("CAM_FRONT"), camera_frame("CAM_BACK")], [camera_frame("CAM_FRONT")]]]
     )
 
-    samples = dataset.get_image_data_samples(0)
+    samples = dataset.get_image_data_samples(0, 0)
 
     assert samples is not None
     assert [sample.camera_name for sample in samples] == ["CAM_FRONT", "CAM_BACK"]
@@ -187,6 +189,8 @@ def test_camera_sources_reject_other_selections(selection: dict) -> None:
             dataset_records_dataframe=records,
             transforms=None,
             dataset_tasks=MappingProxyType({}),
+            det3d_supervised=True,
+            seg3d_supervised=True,
             **selection,
         )
 
@@ -194,8 +198,8 @@ def test_camera_sources_reject_other_selections(selection: dict) -> None:
 def test_a_record_without_a_camera_at_the_sample_time_carries_no_image() -> None:
     dataset = build_dataset([[[], [camera_frame("CAM_FRONT")]], []])
 
-    assert dataset.get_image_data_samples(0) is None
-    assert dataset.get_image_data_samples(1) is None
+    assert dataset.get_image_data_samples(0, 0) is None
+    assert dataset.get_image_data_samples(1, 0) is None
 
 
 def test_lidar_sources_multiply_the_samples_of_every_record() -> None:
@@ -207,6 +211,8 @@ def test_lidar_sources_multiply_the_samples_of_every_record() -> None:
         dataset_records_dataframe=records,
         transforms=None,
         dataset_tasks=MappingProxyType({}),
+        det3d_supervised=True,
+        seg3d_supervised=True,
         lidar_sources=["LIDAR_FRONT_LOWER", "LIDAR_REAR_LOWER"],
     )
 
@@ -222,6 +228,8 @@ def test_a_record_without_lidar_sources_cannot_serve_one() -> None:
         dataset_records_dataframe=records,
         transforms=None,
         dataset_tasks=MappingProxyType({}),
+        det3d_supervised=True,
+        seg3d_supervised=True,
         lidar_sources=["LIDAR_FRONT_LOWER"],
     )
 
@@ -238,5 +246,7 @@ def test_lidar_sources_reject_detection() -> None:
             dataset_records_dataframe=pl.DataFrame(),
             transforms=None,
             dataset_tasks=MappingProxyType({"Detection3D": lambda **kwargs: None}),
+            det3d_supervised=True,
+            seg3d_supervised=True,
             lidar_sources=["LIDAR_FRONT_LOWER"],
         )

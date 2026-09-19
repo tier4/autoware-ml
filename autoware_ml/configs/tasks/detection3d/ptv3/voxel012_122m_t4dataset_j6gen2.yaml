@@ -6,6 +6,7 @@ defaults:
   - /datasets/t4dataset/lidar
   - /database@database: t4dataset/t4dataset_j6gen2_base
   - /datamodule@datamodule: t4dataset/default_detection3d_datamodule
+  - /datamodule/frame_sampling@datamodule.train_frame_sampling: default_frame_sampling
   - _self_
 
 batch_size: 8
@@ -110,13 +111,15 @@ datamodule:
   train_dataloader:
     batch_size: ${batch_size}
     num_workers: ${num_workers}
-    shuffle: true
+    shuffle: false
   validation_dataloader:
     batch_size: ${batch_size}
     num_workers: ${num_workers}
   test_dataloader:
     batch_size: ${batch_size}
     num_workers: ${num_workers}
+  train_frame_sampling:
+    pedestrian_class_name: pedestrian
 
 model:
   export_output_names:

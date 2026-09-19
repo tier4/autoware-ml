@@ -6,6 +6,9 @@ defaults:
 batch_size: 8
 num_workers: 8
 
+# [x_min, y_min, z_min, x_max, y_max, z_max]
+ego_box: [-1.53, -1.15, -0.1, 5.72, 1.15, 3.1]
+
 datamodule:
   train_dataset:
     camera_sources: ${camera_sources}
@@ -86,8 +89,6 @@ datamodule:
           max_depth: 128.0
           alpha: 1.0
           depth_colormap: jet
-  validation_dataset:
-    camera_sources: ${camera_sources}
   test_dataset:
     camera_sources: ${camera_sources}
     transforms:

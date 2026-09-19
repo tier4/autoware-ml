@@ -50,7 +50,7 @@ On the first run, you may wait for a while to install the dependencies.
 5. Fill in the input fields:
     - Command: Pick available commands from the dropdown
     - Config: Type the config name e.g. `segmentation3d/ptv3/voxel005_51m_nuscenes`
-    - Arguments: Type the extra arguments you want to pass to the command e.g. `datamodule.train_dataloader_cfg.batch_size=2 datamodule.val_dataloader_cfg.batch_size=2`
+    - Arguments: Type the extra arguments you want to pass to the command e.g. `datamodule.train_dataloader.batch_size=2 datamodule.validation_dataloader.batch_size=2`
 
 For custom commands, you can add a new launch configuration to `.vscode/launch.json`.
 

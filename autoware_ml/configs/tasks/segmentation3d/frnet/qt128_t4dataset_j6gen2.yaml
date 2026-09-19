@@ -47,8 +47,6 @@ datamodule:
           yaw_rot_range: [-3.14159265, 3.14159265]
           scale_ratio_range: [0.95, 1.05]
           translation_std: [0.1, 0.1, 0.1]
-  validation_dataset:
-    lidar_sources: ${lidar_sources}
   test_dataset:
     lidar_sources: ${lidar_sources}
     transforms:

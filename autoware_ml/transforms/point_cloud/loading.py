@@ -44,7 +44,7 @@ class LoadPointsFromFile(BaseTransform):
     def __init__(
         self,
         load_dim: int = 5,
-        use_dim: Sequence[int] | int = (0, 1, 2, 3),
+        use_dim: Sequence[int] = (0, 1, 2, 3),
         bev_remove_radius: float = 0.0,
         pcd_file_format: PCDFileFormat = PCDFileFormat.AUTO,
     ) -> None:
@@ -68,7 +68,7 @@ class LoadPointsFromFile(BaseTransform):
             )
         super().__init__(probability=None)
         self.load_dim = load_dim
-        self.use_dim = use_dim
+        self.use_dim = list(use_dim)
         self.bev_remove_radius = bev_remove_radius
         self.pcd_file_format = pcd_file_format
 
@@ -234,7 +234,7 @@ class LoadMultiSweepPointsFromFile(LoadPointsFromFile):
         test_mode: bool,
         use_timestamp_difference: bool = True,
         load_dim: int = 5,
-        use_dim: Sequence[int] | int = (0, 1, 2, 3),
+        use_dim: Sequence[int] = (0, 1, 2, 3),
         bev_remove_radius: float = 1.0,
         pcd_file_format: PCDFileFormat = PCDFileFormat.AUTO,
     ) -> None:
