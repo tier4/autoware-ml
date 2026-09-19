@@ -10,5 +10,6 @@ dataset_params:
   - _target_: autoware_ml.databases.scenarios.DatasetParams
     _convert_: all
     dataset_name: db_j6gen2_semaseg_v1
-    max_sweeps: 2
+    max_past_sweeps: 2
+    max_future_sweeps: 0
     sample_steps: 1

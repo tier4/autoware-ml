@@ -16,6 +16,9 @@ defaults:
   - t4dataset/box3d_pipelines@box3d_pipelines: default_box3d_pipelines
   - t4dataset/scenarios@scenarios.db_jpntaxi_base: detection3d/db_jpntaxi_base
 
+# Sensor channel of the lidar frame every sample is built around
+lidar_channel: LIDAR_CONCAT
+
 # Number of features in the lidar pointcloud
 lidar_pointcloud_num_features: 5
 

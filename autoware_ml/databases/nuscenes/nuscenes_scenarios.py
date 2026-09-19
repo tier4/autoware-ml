@@ -113,8 +113,6 @@ class NuScenesScenarios(Scenarios):
                     scenario_version=dataset_params.dataset_name,
                     vehicle_type=log_record.get("vehicle"),
                     location=log_record.get("location"),
-                    max_sweeps=dataset_params.max_sweeps,
-                    sample_steps=dataset_params.sample_steps,
                 )
             )
         return scenario_splits
