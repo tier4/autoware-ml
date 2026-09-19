@@ -63,6 +63,9 @@ from autoware_ml.utils.dataset import convert_quaternion_to_matrix
 
 logger = logging.getLogger(__name__)
 
+# Lens distortion model of every T4 camera, the coefficients follow its parameter order
+CAMERA_DISTORTION_MODEL = "plumb_bob"
+
 
 class T4RecordsGenerator:
     """RecordsGenerator for T4Dataset."""
@@ -775,6 +778,11 @@ class T4RecordsGenerator:
                     image_width, image_height = image.size
 
             cam2img = np.asarray(cs_record.camera_intrinsic, dtype=np.float64)
+            # A camera recorded without distortion coefficients was undistorted before it was
+            # stored, so it carries no model name either
+            distortion_coefficients = np.asarray(
+                cs_record.camera_distortion, dtype=np.float64
+            ).tolist()
 
             cam2global = image_frame_ego_pose_to_global_matrix @ image_sensor_to_ego_matrix
             global2cam = np.linalg.inv(cam2global)
@@ -795,6 +803,8 @@ class T4RecordsGenerator:
                 image_height=image_height,
                 image_width=image_width,
                 cam2img=cam2img,
+                image_distortion_coefficients=distortion_coefficients,
+                image_distortion_model=CAMERA_DISTORTION_MODEL if distortion_coefficients else "",
                 image_sensor_to_ego_pose_matrix=image_sensor_to_ego_matrix,
                 image_frame_ego_pose_to_global_matrix=image_frame_ego_pose_to_global_matrix,
                 lidar2cam=lidar2cam,
