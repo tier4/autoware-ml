@@ -49,7 +49,7 @@ class T4Dataset(BaseDataset):
         max_num_3d_gt_bboxes: int,
         dataset_records_dataframe: pl.DataFrame,
         transforms: TransformsCompose | None,
-        dataset_tasks: Mapping[TaskType, Callable[..., BaseDatasetTask]],
+        dataset_tasks: Mapping[str, Callable[..., BaseDatasetTask]],
         lidar_intensity_scale: float,
         det3d_supervised: bool,
         seg3d_supervised: bool,
@@ -67,8 +67,8 @@ class T4Dataset(BaseDataset):
             bounding boxes or it does not need to run 3D detection tasks.
           dataset_records_dataframe: Records of the corpus.
           transforms: Global transforms to be applied to the dataset records.
-          dataset_tasks: Factory of every task dataset, mapped by task type. Each one is called
-            with the root path and the records of this corpus.
+          dataset_tasks: Factory of every task dataset, mapped by task type name. Each one is
+            called with the root path and the records of this corpus.
           lidar_intensity_scale: Intensity of the strongest return in the point clouds of the
             database, every loaded intensity is divided by it.
           det3d_supervised: Whether the boxes of this corpus are used.
@@ -84,12 +84,13 @@ class T4Dataset(BaseDataset):
             record as its own sample. The records missing one of them at the sample time are
             left out. It replaces camera_names and cannot be combined with lidar_sources.
         """
+        task_builders = {TaskType(key): build_task for key, build_task in dataset_tasks.items()}
         if lidar_sources is not None:
             if len(lidar_sources) == 0 or len(set(lidar_sources)) != len(lidar_sources):
                 raise ValueError(
                     f"lidar_sources must name distinct lidars, got {list(lidar_sources)}."
                 )
-            if TaskType.DETECTION3D in {TaskType(key) for key in dataset_tasks}:
+            if TaskType.DETECTION3D in task_builders:
                 raise ValueError(
                     "Boxes are annotated in the frame of the merged cloud, so 3D detection "
                     "cannot run on single lidar sources."
@@ -122,11 +123,11 @@ class T4Dataset(BaseDataset):
 
         self.dataset_tasks: MappingProxyType[TaskType, BaseDatasetTask] = MappingProxyType(
             {
-                TaskType(key): build_task(
+                task_type: build_task(
                     database_root_path=database_root_path,
                     dataset_records_dataframe=dataset_records_dataframe,
                 )
-                for key, build_task in dataset_tasks.items()
+                for task_type, build_task in task_builders.items()
             }
         )
         logger.info(
@@ -448,6 +449,9 @@ class T4Dataset(BaseDataset):
                     point_cloud_path=lidar_pointcloud_path,
                     timestamp=lidar_pointcloud_metadata[
                         LidarFrameDatasetSchema.lidar_timestamp_seconds.name
+                    ],
+                    num_features=lidar_pointcloud_metadata[
+                        LidarFrameDatasetSchema.lidar_pointcloud_num_features.name
                     ],
                     intensity_scale=self.lidar_intensity_scale,
                     sensor_to_ego_pose_matrix=torch.tensor(

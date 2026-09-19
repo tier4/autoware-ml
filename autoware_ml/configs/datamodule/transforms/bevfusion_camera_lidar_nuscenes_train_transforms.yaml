@@ -6,18 +6,20 @@ pipeline:
   - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
     _convert_: all
 
-    load_dim: ${database.lidar_pointcloud_num_features}
     use_dim: [0, 1, 2, 3] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]
     bev_remove_radius: 0.0
 
   - _target_: autoware_ml.transforms.point_cloud.loading.LoadMultiSweepPointsFromFile
     _convert_: all
 
-    sweeps_num: 9
+    # Nine sweeps of the 20 Hz lidar
+    past:
+      _target_: autoware_ml.transforms.point_cloud.loading.SweepWindow
+      num: 9
+      time_lag_range: [0.025, 0.475]
+      selection: random
     bev_remove_radius: 1.0
-    test_mode: false
     use_timestamp_difference: true
-    load_dim: ${database.lidar_pointcloud_num_features}
     use_dim: [0, 1, 2, 3] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]
 
   - _target_: autoware_ml.transforms.camera.loading.LoadImagesFromFile

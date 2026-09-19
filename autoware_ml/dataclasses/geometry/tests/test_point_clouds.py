@@ -219,6 +219,7 @@ class LiDARPointCloudSampleTestCase(unittest.TestCase):
         self.sample = LiDARPointCloudSample(
             point_cloud_path="/data/lidar/000001.pcd.bin",
             timestamp=1700000000.5,
+            num_features=5,
             intensity_scale=255.0,
             sensor_to_ego_pose_matrix=torch.eye(4, dtype=torch.float32),
             lidar_to_ego_pose_to_global_matrix=torch.eye(4, dtype=torch.float32) * 2.0,
@@ -232,7 +233,7 @@ class TestLiDARPointCloudSample(LiDARPointCloudSampleTestCase):
     def test_field_order(self) -> None:
         """
         Input: the class itself.
-        Expected: the tuple exposes its seven fields in the documented order, matching the
+        Expected: the tuple exposes its eight fields in the documented order, matching the
         dataset record layout.
         Check: compare ``_fields`` against the expected names.
         """
@@ -241,6 +242,7 @@ class TestLiDARPointCloudSample(LiDARPointCloudSampleTestCase):
             (
                 "point_cloud_path",
                 "timestamp",
+                "num_features",
                 "intensity_scale",
                 "sensor_to_ego_pose_matrix",
                 "lidar_to_ego_pose_to_global_matrix",

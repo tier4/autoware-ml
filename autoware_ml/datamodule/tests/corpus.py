@@ -36,12 +36,20 @@ from autoware_ml.transforms.point_cloud.geometry import (
     PointsRangeFilter,
     RandomRotateTargetAngle,
 )
-from autoware_ml.transforms.point_cloud.loading import LoadPointsFromFile
+from autoware_ml.transforms.point_cloud.loading import (
+    LoadMultiSweepPointsFromFile,
+    LoadPointsFromFile,
+    SweepWindow,
+)
 from autoware_ml.transforms.point_cloud.perturbation import RandomJitter, RandomStrengthJitter
 from autoware_ml.transforms.point_cloud.sampling import RandomDropout
 from autoware_ml.types.geometry import Box3DFieldIndex
 
 NUM_POINTS = 512
+# The record of a sample stores its own frame, then its past sweeps, then its future ones
+NUM_PAST_SWEEPS = 1
+NUM_FUTURE_SWEEPS = 1
+NUM_SWEEPS = 1 + NUM_PAST_SWEEPS + NUM_FUTURE_SWEEPS
 POINT_CLOUD_RANGE = (-8.0, -8.0, -2.0, 8.0, 8.0, 2.0)
 SCENE = "db_v1/scene_0/dataset_v1"
 
@@ -49,6 +57,25 @@ VOCABULARY = LabelVocabulary({"car": "car", "vehicle.car": "car", "unpainted": N
 SEGMENTATION_TAXONOMY = SegmentationTaxonomy(
     VOCABULARY, ("car",), {"car": "car"}, -1, {"vehicle": ("car",)}
 )
+
+
+def sweep_time_offset(sweep_index: int) -> float:
+    """Seconds subtracted from the sample timestamp to date one stored frame.
+
+    The sample owns position 0, the past sweeps follow it and then the future ones, so the
+    loader reads the side of a frame off the sign of its time lag.
+
+    Args:
+        sweep_index: Position of the frame in the record.
+
+    Returns:
+        float: Offset of the frame, positive for a past sweep and negative for a future one.
+    """
+    if sweep_index == 0:
+        return 0.0
+    if sweep_index <= NUM_PAST_SWEEPS:
+        return 0.05 * sweep_index
+    return -0.05 * (sweep_index - NUM_PAST_SWEEPS)
 
 
 def write_lidar_frame(
@@ -59,7 +86,8 @@ def write_lidar_frame(
     Args:
         root: Database root the relative paths resolve against.
         record_index: Position of the record the frame belongs to.
-        frame_index: Position of the frame in the record, zero for the frame of the sample.
+        frame_index: Position of the frame in the record, zero for the frame of the sample,
+            then its past sweeps and then its future ones.
         seed: Seed of the points so every frame differs.
         masked: Whether the frame carries a semantic mask.
 
@@ -87,7 +115,7 @@ def write_lidar_frame(
         "lidar_keyframe": frame_index == 0,
         "lidar_sensor_id": "lidar",
         "lidar_sensor_channel_name": "LIDAR_TOP",
-        "lidar_timestamp_seconds": float(record_index),
+        "lidar_timestamp_seconds": float(record_index) - sweep_time_offset(frame_index),
         "lidar_pointcloud_path": str(path),
         "lidar_pointcloud_source_path": None,
         "lidar_pointcloud_num_features": 5,
@@ -115,8 +143,13 @@ def write_corpus(
     for record_index in range(num_records):
         lidar_frames = [
             write_lidar_frame(
-                root, record_index, 0, record_index, masked=record_index not in unmasked_records
+                root,
+                record_index,
+                frame_index,
+                record_index * NUM_SWEEPS + frame_index,
+                masked=record_index not in unmasked_records,
             )
+            for frame_index in range(NUM_SWEEPS)
         ]
 
         box = np.zeros(len(Box3DFieldIndex), dtype=np.float64)
@@ -162,10 +195,21 @@ def write_corpus(
 
 
 def build_transforms() -> TransformsCompose:
-    """Build the PTv3 training pipeline the task configs describe."""
+    """Build a lidar training pipeline that loads the sweeps on both sides of a sample."""
     return TransformsCompose(
         pipeline=[
-            LoadPointsFromFile(load_dim=5, use_dim=(0, 1, 2, 3)),
+            LoadPointsFromFile(use_dim=(0, 1, 2, 3)),
+            LoadMultiSweepPointsFromFile(
+                past=SweepWindow(
+                    num=NUM_PAST_SWEEPS, time_lag_range=(0.01, 1.0), selection="random"
+                ),
+                future=SweepWindow(
+                    num=NUM_FUTURE_SWEEPS, time_lag_range=(0.01, 1.0), selection="random"
+                ),
+                use_timestamp_difference=True,
+                use_dim=(0, 1, 2, 3),
+                bev_remove_radius=0.0,
+            ),
             RandomRotateTargetAngle(probability=1.0, yaw_angle_ratios=[0.5, 1.0, 1.5]),
             GlobalRotScaleTrans(
                 yaw_rot_range=(-0.2, 0.2),

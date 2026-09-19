@@ -105,6 +105,8 @@ class LiDARPointCloudSample(NamedTuple):
 
     point_cloud_path: str
     timestamp: float
+    # Number of float32 features stored per point in the file, declared by the database
+    num_features: int
     # Intensity of the strongest return in the file, declared by the database
     intensity_scale: float
     # Transformation matrix from LiDAR sensor frame to ego pose of this LiDAR sensor frame

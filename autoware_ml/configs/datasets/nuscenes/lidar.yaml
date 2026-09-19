@@ -4,6 +4,9 @@ defaults:
   - /datasets/nuscenes/base
   - _self_
 
+# Time lags a sweep is taken from, the frames 0.1 s to 0.2 s back of the 20 Hz lidar
+sweep_time_lag_range: [0.075, 0.225]
+
 # Gaussian jitter of the point coordinates in training, in meters
 train_jitter_sigma: 0.005
 train_jitter_clip: 0.02

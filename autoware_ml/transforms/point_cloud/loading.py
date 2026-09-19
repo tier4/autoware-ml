@@ -21,9 +21,12 @@ The code is modified from mmdetection3d.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from enum import StrEnum
+from typing import Annotated
 
 import numpy as np
 import torch
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
 from autoware_ml.geometry.points.base_points import BasePoints
 from autoware_ml.geometry.points.lidar_points import LiDARPoints
@@ -33,6 +36,66 @@ from autoware_ml.dataclasses.geometry.point_clouds import LiDARPointCloudSample
 from autoware_ml.types.geometry import PointFeatureName, PointFieldIndex
 
 
+class SweepSelection(StrEnum):
+    """
+    How the appended sweeps are picked among the eligible stored frames.
+
+    Attributes:
+      NEAREST: The frames closest in time to the current frame. Used in evaluation.
+      RANDOM: A uniform draw without replacement. Used in training so the network sees varying
+        time lags.
+    """
+
+    NEAREST = "nearest"
+    RANDOM = "random"
+
+
+class SweepWindow(BaseModel):
+    """
+    Sweeps appended from one side of the current frame.
+
+    time_lag_range bounds the distance in seconds between an eligible stored frame and the
+    current frame. Frames outside it are skipped, like frames past the start or end of a scene.
+
+    Attributes:
+      num: Number of sweeps appended when enough frames are eligible.
+      time_lag_range: Inclusive [min, max] distance in seconds, with 0 < min < max. Lag 0 marks
+        the current frame.
+      selection: How the appended sweeps are picked among the eligible frames.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    num: int = Field(ge=1)
+    time_lag_range: Annotated[tuple[float, float], BeforeValidator(tuple)]
+    selection: Annotated[SweepSelection, BeforeValidator(SweepSelection)]
+
+    @model_validator(mode="after")
+    def validate_time_lag_range(self) -> SweepWindow:
+        """
+        Validate the ordering of the time lag bounds.
+
+        Returns:
+          SweepWindow: The validated window.
+        """
+
+        if self.min_time_lag <= 0.0 or self.min_time_lag >= self.max_time_lag:
+            raise ValueError(
+                f"Expected 0 < min time lag < max time lag, got {list(self.time_lag_range)}."
+            )
+        return self
+
+    @property
+    def min_time_lag(self) -> float:
+        """Smallest distance in seconds an eligible frame may have."""
+        return self.time_lag_range[0]
+
+    @property
+    def max_time_lag(self) -> float:
+        """Largest distance in seconds an eligible frame may have."""
+        return self.time_lag_range[1]
+
+
 class LoadPointsFromFile(BaseTransform):
     """Load point clouds from a lidar file path stored in sample metadata."""
 
@@ -40,20 +103,18 @@ class LoadPointsFromFile(BaseTransform):
 
     def __init__(
         self,
-        load_dim: int = 5,
         use_dim: Sequence[int] = (0, 1, 2, 3),
         bev_remove_radius: float = 0.0,
     ) -> None:
         """Initialize the point-cloud loader.
 
         Args:
-            load_dim: Number of features stored per point in the source file.
-            use_dim: Selected feature dimensions preserved in the loaded tensor.
-            bev_remove_radius: Radius (x and y) within which points will be removed (e.g., to remove ego vehicle
-                points). Set to 0.0 to disable point removal.
+            use_dim: Feature dimensions to keep. The number of stored features is read from
+                each frame of the record.
+            bev_remove_radius: Radius (x and y) within which points are removed, for example the
+                ego vehicle points. Set to 0.0 to disable point removal.
         """
         super().__init__(probability=None)
-        self.load_dim = load_dim
         self.use_dim = list(use_dim)
         self.bev_remove_radius = bev_remove_radius
 
@@ -93,17 +154,17 @@ class LoadPointsFromFile(BaseTransform):
                 f"{len(lidar_point_cloud_samples)}."
             )
 
-        current_lidar_point_path = lidar_point_cloud_samples[index].point_cloud_path
-        points_np = np.fromfile(current_lidar_point_path, dtype=np.float32).reshape(
-            -1, self.load_dim
-        )
-        source_view = lidar_point_cloud_samples[index].source_view
+        lidar_point_cloud_sample = lidar_point_cloud_samples[index]
+        points_np = np.fromfile(
+            lidar_point_cloud_sample.point_cloud_path, dtype=np.float32
+        ).reshape(-1, lidar_point_cloud_sample.num_features)
+        source_view = lidar_point_cloud_sample.source_view
         if source_view is not None:
             end = source_view.point_index_begin + source_view.num_points
             if end > points_np.shape[0]:
                 raise ValueError(
                     f"Lidar source points [{source_view.point_index_begin}, {end}) exceed the "
-                    f"{points_np.shape[0]} points of {current_lidar_point_path}."
+                    f"{points_np.shape[0]} points of {lidar_point_cloud_sample.point_cloud_path}."
                 )
             points_np = points_np[source_view.point_index_begin : end].copy()
             frame_to_sensor = np.linalg.inv(source_view.sensor_to_frame_matrix.numpy())
@@ -116,20 +177,25 @@ class LoadPointsFromFile(BaseTransform):
                 f"correct, but got {use_dims}."
             )
 
+        if max(use_dims) >= points_np.shape[1]:
+            raise ValueError(
+                f"use_dim {use_dims} reads past the {points_np.shape[1]} features stored per "
+                f"point in {lidar_point_cloud_sample.point_cloud_path}."
+            )
+
         points_np = points_np[:, use_dims]
         # Every model reads intensity in [0, 1], scaled once here by the full scale value the
         # database declares for its files
         if PointFieldIndex.INTENSITY in use_dims:
             points_np = points_np.copy()
-            points_np[:, use_dims.index(PointFieldIndex.INTENSITY)] /= lidar_point_cloud_samples[
-                index
-            ].intensity_scale
+            points_np[:, use_dims.index(PointFieldIndex.INTENSITY)] /= (
+                lidar_point_cloud_sample.intensity_scale
+            )
         point_feature_names = [PointFeatureName(PointFieldIndex(i).name.lower()) for i in use_dims]
-        timestamp = lidar_point_cloud_samples[index].timestamp
         return LiDARPoints.from_numpy(
             points_np=points_np,
             point_feature_names=point_feature_names,
-            timestamp=timestamp,
+            timestamp=lidar_point_cloud_sample.timestamp,
         )
 
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
@@ -141,7 +207,6 @@ class LoadPointsFromFile(BaseTransform):
         Returns:
             Updated ModelGTSample instance with a loaded `point_cloud_data` array.
         """
-        # Load the first index of the point cloud file, and reshape it to (N, load_dim)
         if not model_gt_sample.lidar_point_cloud_samples:
             raise ValueError("No lidar point cloud samples found in the ModelGTSample.")
 
@@ -153,48 +218,72 @@ class LoadPointsFromFile(BaseTransform):
 
 
 class LoadMultiSweepPointsFromFile(LoadPointsFromFile):
-    """Load multi-sweep point clouds from lidar file paths stored in sample metadata."""
+    """Append the stored sweep points of a sample to its current frame.
+
+    The stored frames of the record are split into past and future frames by their capture
+    time, and each window selects the sweeps of its side. Every point carries a time lag, the
+    current frame timestamp minus its capture timestamp. The lag is 0 for the current frame,
+    positive for past sweeps and negative for future sweeps. The output holds the current frame
+    first, then the past sweeps nearest first, then the future sweeps nearest first.
+
+    A sweep that is missing, or outside the window, adds no points and is not replaced by
+    another frame.
+    """
 
     _required_keys = ["lidar_point_cloud_samples", "point_cloud_data"]
 
     def __init__(
         self,
-        sweeps_num: int,
-        test_mode: bool,
+        past: SweepWindow | None = None,
+        future: SweepWindow | None = None,
         use_timestamp_difference: bool = True,
-        load_dim: int = 5,
         use_dim: Sequence[int] = (0, 1, 2, 3),
         bev_remove_radius: float = 1.0,
     ) -> None:
         """Initialize the multi-sweep point-cloud loader.
 
         Args:
-            sweeps_num: Number of sweeps to concatenate for each sample. If the number of available
-              sweeps is less than sweeps_num, it will take the maximum available sweeps.
-            test_mode: Whether the loader is in test mode. If True, it will always load the
-              first sweeps_num sweeps. If False, it will randomly select sweeps_num sweeps.
-            use_timestamp_difference: Whether to add a timestamp difference feature to each point.
-              If True, it will add a feature representing the time difference between the main lidar
-              frame and the sweep frame for each point.
-            load_dim: Number of features stored per point in the source file.
+            past: Sweeps appended from the frames captured before the current frame, none when
+              omitted.
+            future: Sweeps appended from the frames captured after the current frame, none when
+              omitted.
+            use_timestamp_difference: Whether to add a timestamp difference feature to each
+              point, the current frame timestamp minus the capture timestamp of the point.
             use_dim: Selected feature dimensions preserved in the loaded tensor.
-            bev_remove_radius: Radius (x and y) within which points will be removed (e.g., to remove ego vehicle
-                points). Set to 0.0 to disable point removal.
+            bev_remove_radius: Radius (x and y) within which sweep points are removed, for
+              instance to drop the ego vehicle returns. Set to 0.0 to keep every point.
         """
-        super().__init__(load_dim=load_dim, use_dim=use_dim)
-        self.sweeps_num = sweeps_num
-        self.test_mode = test_mode
-        self.bev_remove_radius = bev_remove_radius
+        super().__init__(use_dim=use_dim, bev_remove_radius=bev_remove_radius)
+        self._check_window("past", past)
+        self._check_window("future", future)
+        if past is None and future is None:
+            raise ValueError(
+                "The multi sweep loader appends no points without a past or a future window, "
+                "load the current frame alone with LoadPointsFromFile."
+            )
+        self.past = past
+        self.future = future
         self.use_timestamp_difference = use_timestamp_difference
 
+    @staticmethod
+    def _check_window(name: str, window: SweepWindow | None) -> None:
+        """Reject a window that is not a SweepWindow.
+
+        Args:
+            name: Argument name for the error message.
+            window: Configured window.
+        """
+        if window is not None and not isinstance(window, SweepWindow):
+            raise TypeError(f"{name} must be a SweepWindow or None, got {type(window).__name__}.")
+
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
-        """Load multi-sweep point data from the current sample.
+        """Load the sweeps each window selects and append them to the current frame.
 
         Args:
             model_gt_sample: ModelGTSample instance containing `lidar_point_cloud_samples`.
 
         Returns:
-            Updated ModelGTSample instance with a loaded `point_cloud_data` array.
+            Updated ModelGTSample instance whose `point_cloud_data` carries the sweeps.
         """
         if not model_gt_sample.lidar_point_cloud_samples:
             raise ValueError("No lidar point cloud samples found in the ModelGTSample.")
@@ -209,44 +298,30 @@ class LoadMultiSweepPointsFromFile(LoadPointsFromFile):
             )
 
         current_frame_point_cloud_data = model_gt_sample.point_cloud_data
-        available_sweeps_nums = min(
-            len(model_gt_sample.lidar_point_cloud_samples) - 1, self.sweeps_num
-        )
-        if self.test_mode:
-            sweep_indices = list(range(1, available_sweeps_nums + 1))
-        else:
-            candidate_indices = torch.arange(1, len(model_gt_sample.lidar_point_cloud_samples))
-            sweep_indices = candidate_indices[
-                torch.randperm(len(candidate_indices))[:available_sweeps_nums]
-            ].tolist()
+        past_frames, future_frames = self._split_stored_frames(model_gt_sample)
+        selected_sweeps = [
+            *self._select_sweeps(self.past, past_frames),
+            *self._select_sweeps(self.future, future_frames),
+        ]
 
-        # Create timestamp_feature for each point
-        main_lidar_frame_timestamp = current_frame_point_cloud_data.timestamp
-
-        # Add timestamp difference feature to the current frame pointcloud points
         if self.use_timestamp_difference:
             current_frame_point_cloud_data.add_timestamp_difference(0.0)
 
         concat_points = [current_frame_point_cloud_data]
-        for sweep_idx in sweep_indices:
+        for time_lag, sweep_index in selected_sweeps:
             sweep_points = self.load_points_from_samples(
-                sweep_idx, model_gt_sample.lidar_point_cloud_samples
+                sweep_index, model_gt_sample.lidar_point_cloud_samples
             )
-            # Remove the sweep points within bev_remove_radius of the origin
             sweep_points = self.remove_close(sweep_points)
-
-            # Get the lidar sweep point cloud sample data
-            sweep_lidar_sample = model_gt_sample.lidar_point_cloud_samples[sweep_idx]
             if self.use_timestamp_difference:
-                timestamp_difference = main_lidar_frame_timestamp - sweep_lidar_sample.timestamp
-                sweep_points.add_timestamp_difference(timestamp_difference)
+                sweep_points.add_timestamp_difference(time_lag)
 
-            # Transform from the last lidar sweep frame to the current lidar frame using the provided transformation matrices
+            # Transform from the lidar sweep frame to the current lidar frame using the provided
+            # transformation matrices.
+            # Check https://github.com/open-mmlab/mmdetection3d/issues/3054
+            sweep_lidar_sample = model_gt_sample.lidar_point_cloud_samples[sweep_index]
             translation_vector = sweep_lidar_sample.lidar_sensor_to_lidar_sweep_matrix[:3, 3]
             rotation_matrix = sweep_lidar_sample.lidar_sensor_to_lidar_sweep_matrix[:3, :3]
-
-            # Transformation
-            # Check https://github.com/open-mmlab/mmdetection3d/issues/3054
             # Subtract first, sensor to lidar
             sweep_points.translate(-translation_vector)
             # Rotate: P @ R (Lidar_to_sweep) equivalent to R^T (sweep_to_lidar) @ P
@@ -267,3 +342,68 @@ class LoadMultiSweepPointsFromFile(LoadPointsFromFile):
             point_cloud_data=multi_sweep_points,
             segmentation3d_gt_sample=segmentation3d_gt_sample,
         )
+
+    @staticmethod
+    def _split_stored_frames(
+        model_gt_sample: ModelGTSample,
+    ) -> tuple[list[tuple[float, int]], list[tuple[float, int]]]:
+        """Pair every stored sweep with its signed time lag and split the two sides.
+
+        The frames after the first are the stored sweeps. A sweep with the timestamp of the
+        current frame is rejected, because lag 0 marks the current frame.
+
+        Args:
+            model_gt_sample: ModelGTSample holding the stored lidar frames.
+
+        Returns:
+            The frames captured before the current frame and the ones captured after it, each
+            paired with its signed time lag and its position in the record.
+        """
+        lidar_point_cloud_samples: Sequence[LiDARPointCloudSample] = (
+            model_gt_sample.lidar_point_cloud_samples
+        )
+        current_timestamp = lidar_point_cloud_samples[0].timestamp
+        past_frames: list[tuple[float, int]] = []
+        future_frames: list[tuple[float, int]] = []
+        for index, sweep_lidar_sample in enumerate(lidar_point_cloud_samples[1:], start=1):
+            time_lag = current_timestamp - sweep_lidar_sample.timestamp
+            if time_lag == 0.0:
+                raise ValueError(
+                    f"The record stores sweep {sweep_lidar_sample.point_cloud_path} at the "
+                    "timestamp of its current frame."
+                )
+            side = past_frames if time_lag > 0.0 else future_frames
+            side.append((time_lag, index))
+        return past_frames, future_frames
+
+    @staticmethod
+    def _select_sweeps(
+        window: SweepWindow | None, lagged_frames: Sequence[tuple[float, int]]
+    ) -> list[tuple[float, int]]:
+        """Return the sweeps a window appends from one side, nearest first.
+
+        Frames outside the window are skipped, so a scene with missing neighbors yields fewer
+        sweeps.
+
+        Args:
+            window: Window declared for this side, None when nothing is appended from it.
+            lagged_frames: Stored sweeps of this side with their signed time lag.
+
+        Returns:
+            Selected sweeps with their signed time lag, nearest first.
+        """
+        if window is None:
+            return []
+        eligible = [
+            lagged_frame
+            for lagged_frame in lagged_frames
+            if window.min_time_lag <= abs(lagged_frame[0]) <= window.max_time_lag
+        ]
+        eligible.sort(key=lambda lagged_frame: abs(lagged_frame[0]))
+        if window.selection is SweepSelection.RANDOM and len(eligible) > window.num:
+            indices = torch.randperm(len(eligible))[: window.num].tolist()
+            return sorted(
+                (eligible[index] for index in indices),
+                key=lambda lagged_frame: abs(lagged_frame[0]),
+            )
+        return eligible[: window.num]
