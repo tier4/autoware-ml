@@ -29,6 +29,7 @@ from autoware_ml.dataclasses.geometry.point_clouds import LiDARPointCloudSample
 from autoware_ml.transforms.point_cloud.loading import (
     LoadMultiSweepPointsFromFile,
     LoadPointsFromFile,
+    SweepWindow,
 )
 from autoware_ml.types.dataset import PCDFileFormat
 
@@ -40,6 +41,7 @@ def _record(path: Path, i: int, t4pack_frame: T4PackFrame | None) -> LiDARPointC
     return LiDARPointCloudSample(
         point_cloud_path=str(path),
         timestamp=10.0 - 0.1 * i,
+        num_features=5,
         intensity_scale=1.0,
         sensor_to_ego_pose_matrix=torch.eye(4),
         lidar_to_ego_pose_to_global_matrix=torch.eye(4),
@@ -65,8 +67,7 @@ def _load(
     )(sample)
     if sweeps_num:
         sample = LoadMultiSweepPointsFromFile(
-            sweeps_num=sweeps_num,
-            test_mode=True,
+            past=SweepWindow(num=sweeps_num, time_lag_range=(0.05, 0.25), selection="nearest"),
             use_dim=[0, 1, 2, 3],
             pcd_file_format=pcd_file_format,
         )(sample)

@@ -27,8 +27,7 @@ datamodule:
       pipeline:
         - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
           _convert_: all
-          load_dim: ${database.lidar_pointcloud_num_features}
-          use_dim: [0, 1, 2, 3] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]
+          use_dim: [0, 1, 2, 3]
           bev_remove_radius: 0.0
         - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalBEVRandomFlip
           _convert_: all
@@ -46,8 +45,7 @@ datamodule:
       pipeline:
         - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
           _convert_: all
-          load_dim: ${database.lidar_pointcloud_num_features}
-          use_dim: [0, 1, 2, 3] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]
+          use_dim: [0, 1, 2, 3]
           bev_remove_radius: 0.0
   train_dataloader:
     batch_size: ${batch_size}
