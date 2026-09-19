@@ -1,0 +1,29 @@
+# Pseudo labelled J6 gen2 and large bus databases
+_target_: autoware_ml.databases.t4dataset.t4dataset.T4Dataset
+_convert_: all
+
+defaults:
+  - t4dataset/taxonomy@taxonomy: default_coarse
+  - t4dataset/box3d_pipelines@box3d_pipelines: default_box3d_pipelines
+  - t4dataset/scenarios@scenarios.db_j6gen2_pseudo: detection3d_segmentation3d_pseudo/db_j6gen2_pseudo
+
+version: T4Dataset-j6gen2_pseudo-v1.0.0
+# Root path of actual annotation files
+root_path: ${data_root_path}/t4dataset/pseudo_large/
+
+# Caches
+cache_path: ${cache_root_path}/t4dataset_pseudo/
+# Prefix name of the cache file, it will be <cache_file_prefix_name>_<database_hash>.parquet
+cache_file_prefix_name: database
+
+# Intensity of the strongest return in the stored point clouds
+lidar_intensity_scale: 255.0
+
+# Processor settings
+num_workers: 16
+
+# Number of features in the lidar pointcloud
+lidar_pointcloud_num_features: 5
+
+# The original tables keep the fine box names, the rewritten ones carry the pseudo label names
+box_annotation_dir: annotation_orig
