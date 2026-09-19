@@ -10,12 +10,14 @@ dataset_params:
   - _target_: autoware_ml.databases.scenarios.DatasetParams
     _convert_: all
     dataset_name: semseg_batch1_fixed_v1
-    max_sweeps: 2
+    max_past_sweeps: 2
+    max_future_sweeps: 0
     # The masks sit on every tenth frame
     sample_steps: 10
   - _target_: autoware_ml.databases.scenarios.DatasetParams
     _convert_: all
     dataset_name: semseg_batch3_fixed_v1
-    max_sweeps: 2
+    max_past_sweeps: 2
+    max_future_sweeps: 0
     # The masks sit on every tenth frame
     sample_steps: 10

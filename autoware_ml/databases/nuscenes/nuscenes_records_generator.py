@@ -37,6 +37,7 @@ from autoware_ml.databases.schemas.category_mapping import CategoryMappingDataMo
 from autoware_ml.databases.taxonomy import DatabaseTaxonomy
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDataModel
 from autoware_ml.databases.scenarios import ScenarioData
+from autoware_ml.types.dataset import SweepDirection
 from autoware_ml.databases.t4dataset.t4sample_records import T4SampleRecord
 from autoware_ml.utils.dataset import convert_quaternion_to_matrix
 
@@ -58,8 +59,6 @@ class NuScenesRecordsGenerator:
         self,
         database_root_path: str,
         scenario_data: ScenarioData,
-        max_sweeps: int,
-        sample_steps: int,
         lidar_pointcloud_num_features: int,
         taxonomy: DatabaseTaxonomy,
         box3d_pipelines: Sequence[Box3DPipeline],
@@ -69,26 +68,20 @@ class NuScenesRecordsGenerator:
 
         Args:
           database_root_path: Root path where the NuScenes version directories are stored.
-          scenario_data: Scenario data, one NuScenes scene.
-          max_sweeps: Max number of lidar sweeps to include, only for 3D, set to 0
-            if skipping lidar sweep concatenation.
-          sample_steps: Number of frames/samples to skip between each sample, set to 1
-            if not skipping any samples/frames.
-          lidar_pointcloud_num_features: Number of features of the lidar pointcloud.
-          taxonomy: Taxonomies the labels of the database are baked with.
+          scenario_data: Scenario data of one NuScenes scene with the dataset parameters, which
+            set the sweep window on either side of a sample and the sampling step.
+          lidar_pointcloud_num_features: Number of float32 values per point in the stored point
+            clouds.
+          taxonomy: Taxonomies the database labels are built with.
           box3d_pipelines: List of box3d pipelines to process the box3d annotations.
         """
 
         self.database_root_path = Path(database_root_path)
         self.scenario_data = scenario_data
-        self.max_sweeps = max_sweeps
-        self.sample_steps = sample_steps
+        self.sample_steps = scenario_data.dataset_params.sample_steps
         self.lidar_pointcloud_num_features = lidar_pointcloud_num_features
         self.taxonomy = taxonomy
         self.box3d_pipelines = box3d_pipelines
-
-        assert sample_steps > 0, "Sample steps must be greater than 0."
-        assert max_sweeps >= 0, "Max sweeps must be greater than or equal to 0."
 
         self.nusc = self._construct_nuscenes_devkit_dataset()
         self.scene_record = self._find_scene_record()
@@ -151,7 +144,9 @@ class NuScenesRecordsGenerator:
         records = []
         logger.info(
             f"Generating dataset records for scenario: {self.scenario_data.scenario_id} "
-            f"with sample steps: {self.sample_steps} and max sweeps: {self.max_sweeps}"
+            f"with sample steps: {self.sample_steps}, "
+            f"past sweeps: {self.scenario_data.dataset_params.max_past_sweeps} and "
+            f"future sweeps: {self.scenario_data.dataset_params.max_future_sweeps}"
         )
 
         for sample_index in range(0, len(self.sample_tokens), self.sample_steps):
@@ -397,18 +392,18 @@ class NuScenesRecordsGenerator:
         return sensor_frame_ego_pose_to_global_matrix, sensor_to_selected_sensor_matrix
 
     def _extract_lidar_sweeps(
-        self, lidar_frame_data_model: LidarFrameDataModel
+        self, lidar_frame_data_model: LidarFrameDataModel, direction: SweepDirection
     ) -> Sequence[LidarFrameDataModel]:
         """
-        Extract multi-sweep lidar metadata from a NuScenes sample.
+        Extract the lidar frames on one side of a sample, nearest first, at most the number the
+        dataset declares for that side. Fewer sweeps are returned at a scene boundary.
 
         Args:
-            lidar_frame_data_model: Lidar frame data model of the key frame to walk sweeps back
-              from.
+            lidar_frame_data_model: Lidar frame data model of the key frame to walk from.
+            direction: Side of the sample the frames are collected from.
 
         Returns:
-            Sequence[LidarFrameDataModel]: Lidar sweep metadata corresponding to the current
-              lidar frame.
+            Sequence[LidarFrameDataModel]: Lidar sweep metadata, nearest frame first.
         """
 
         current_lidar_sample_data_token = lidar_frame_data_model.lidar_frame_id
@@ -416,13 +411,12 @@ class NuScenesRecordsGenerator:
         lidar_frame_data_models = []
         current_sample_data_record = self.nusc.get("sample_data", current_lidar_sample_data_token)
 
-        for _ in range(self.max_sweeps):
-            if not current_sample_data_record["prev"]:
+        for _ in range(self.scenario_data.dataset_params.max_sweeps(direction)):
+            neighbour_token = current_sample_data_record[direction.link]
+            if not neighbour_token:
                 break
 
-            current_sample_data_record = self.nusc.get(
-                "sample_data", current_sample_data_record["prev"]
-            )
+            current_sample_data_record = self.nusc.get("sample_data", neighbour_token)
             current_cs_record = self.nusc.get(
                 "calibrated_sensor", current_sample_data_record["calibrated_sensor_token"]
             )
@@ -464,6 +458,28 @@ class NuScenesRecordsGenerator:
                 )
             )
         return lidar_frame_data_models
+
+    def _extract_lidar_window(
+        self, lidar_frame_data_model: LidarFrameDataModel
+    ) -> Sequence[LidarFrameDataModel]:
+        """
+        Lidar frames recorded with a sample. The sample frame comes first, then the past sweeps
+        and the future sweeps, each side ordered nearest first.
+
+        Args:
+            lidar_frame_data_model: Lidar frame metadata of the sample itself.
+
+        Returns:
+            Sequence[LidarFrameDataModel]: Lidar frames of the record.
+        """
+
+        past_sweep_data_models = self._extract_lidar_sweeps(
+            lidar_frame_data_model=lidar_frame_data_model, direction=SweepDirection.PAST
+        )
+        future_sweep_data_models = self._extract_lidar_sweeps(
+            lidar_frame_data_model=lidar_frame_data_model, direction=SweepDirection.FUTURE
+        )
+        return [lidar_frame_data_model] + past_sweep_data_models + future_sweep_data_models
 
     def _extract_lidar_sources(self) -> Sequence[LidarSourceDataModel]:
         """
@@ -644,7 +660,8 @@ class NuScenesRecordsGenerator:
         image_channel_sweep_data_models = []
         current_sample = sample
 
-        for _ in range(self.max_sweeps):
+        # Camera sweeps are taken from the past only. The future window is lidar only.
+        for _ in range(self.scenario_data.dataset_params.max_past_sweeps):
             if not current_sample["prev"]:
                 break
 
@@ -713,7 +730,7 @@ class NuScenesRecordsGenerator:
 
     def _check_lidar_channel(self, sample: Mapping[str, Any]) -> None:
         """
-        Check that a sample has a frame of the lidar channel of the database.
+        Check that a sample has a LIDAR_TOP frame.
 
         Args:
           sample: NuScenes sample record.
@@ -722,7 +739,6 @@ class NuScenesRecordsGenerator:
           ValueError: If the sample has no frame of the lidar channel.
         """
 
-        # Every sample must have the lidar channel of the database.
         if LIDAR_CHANNEL not in sample["data"]:
             raise ValueError(
                 f"Scenario {self.scenario_data.scenario_id} holds sample {sample['token']} "
@@ -758,11 +774,7 @@ class NuScenesRecordsGenerator:
             lidar_frame_ego_pose_to_global_matrix=lidar_frame_data_model.lidar_frame_ego_pose_to_global_matrix,
         )
 
-        lidar_sweep_data_models = self._extract_lidar_sweeps(
-            lidar_frame_data_model=lidar_frame_data_model
-        )
-
-        lidar_frame_data_models = [lidar_frame_data_model] + lidar_sweep_data_models
+        lidar_frame_data_models = self._extract_lidar_window(lidar_frame_data_model)
 
         lidar_source_data_models = self._extract_lidar_sources()
 

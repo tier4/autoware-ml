@@ -16,11 +16,14 @@ cache_path: ${cache_root_path}/t4dataset_pseudo_10hz/
 # Prefix name of the cache file, it will be <cache_file_prefix_name>_<database_hash>.parquet
 cache_file_prefix_name: database
 
-# Intensity of the strongest return in the stored point clouds
-lidar_intensity_scale: 255.0
-
 # Processor settings
 num_workers: 16
 
+# Sensor channel of the lidar frame every sample is built around
+lidar_channel: LIDAR_CONCAT
+
 # Number of features in the lidar pointcloud
 lidar_pointcloud_num_features: 5
+
+# Intensity of the strongest return in the stored point clouds
+lidar_intensity_scale: 255.0

@@ -106,7 +106,7 @@ All concrete databases are accessed through this protocol, ensuring downstream c
 
 ### BaseDatabase
 
-`BaseDatabase` provides the shared implementation of `DatabaseInterface`. It handles initialization from version and paths, caching directory creation, Polars schema retrieval, resolving the main scenario group, and deduplicating scenario data across groups:
+`BaseDatabase` provides the shared implementation of `DatabaseInterface`. It handles initialization from version and paths, caching directory creation, Polars schema retrieval, and deduplicating scenario data across groups:
 
 ```python
 class BaseDatabase:
@@ -117,14 +117,17 @@ class BaseDatabase:
         cache_path: str,
         cache_file_prefix_name: str,
         num_workers: int,
+        taxonomy: DatabaseTaxonomy,
+        box3d_pipelines: Sequence[Box3DPipeline],
+        lidar_intensity_scale: float,
+        lidar_pointcloud_num_features: int,
     ) -> None:
         ...
 
     def get_polars_schema(self) -> pl.Schema: ...
-    def get_main_database_scenario_data(self) -> Scenarios: ...
-    def get_unique_scenario_data(self) -> Mapping[str, ScenarioData]: ...
+    def get_unique_scenario_data(self) -> MappingProxyType[str, ScenarioData]: ...
     def process_scenario_records(self) -> None:
-        raise NotImplementedError("Subclasses must implement process_scenario_records!")
+        raise NotImplementedError("Subclasses must implement process_scenario_records method!")
 ```
 
 To add a new dataset family, subclass `BaseDatabase` and implement `process_scenario_records()`. See [T4Dataset](t4dataset.md) for a concrete example.
@@ -136,30 +139,30 @@ The `scenarios` module models scenario metadata as immutable Pydantic objects. `
 ```python
 class DatasetParams(BaseModel):
     dataset_name: str
-    max_sweeps: int
+    max_past_sweeps: int
+    max_future_sweeps: int
     sample_steps: int
 
 class ScenarioData(BaseModel):
+    dataset_params: DatasetParams
     scenario_id: str
     scenario_version: str
     vehicle_type: str | None = None
     location: str | None = None
-    ...
 
 class Scenarios(BaseModel):
-    version: str
     scenario_root_path: Path
     dataset_params: Sequence[DatasetParams]
     scenario_data: Mapping[SplitType, Sequence[ScenarioData]] | None = None
 
     @model_validator(mode="after")
-    def build_scenarios(self) -> None:
+    def build_scenarios(self) -> Scenarios:
         raise NotImplementedError("Subclasses must implement build_scenarios!")
 ```
 
 ### Schema
 
-`process_scenario_records()` — Process scenarios/samples from a database to a parquet file and save it. `BaseDatabase.get_polars_schema()` delegates to `DatasetTableSchema` so records can be serialized to Parquet via `DatasetRecord.to_dictionary()`.
+`process_scenario_records()` writes the records of every scenario to a Parquet file. `BaseDatabase.get_polars_schema()` delegates to `DatasetTableSchema` so records can be serialized to Parquet via `DatasetRecord.to_dictionary()`.
 
 The schema is defined in the `autoware_ml/databases/schemas/` package and covers basic frame metadata, nested LiDAR structs, and annotation fields such as category mapping and 3D boxes. The 3D box payload is modeled by `Box3DDataModel` with its struct layout defined in `Box3DDatasetSchema`, and is stored in the top-level `boxes_3d` list column. See [Dataset Schema](schemas.md) for the full column layout, nested data models, and extension guide.
 
@@ -198,7 +201,7 @@ Configuration is done through YAML files under `autoware_ml/configs/generators/`
 
 | Path                                          | Description                                           |
 | --------------------------------------------- | ----------------------------------------------------- |
-| `autoware_ml/databases/schemas/`              | Dataset schema package — see [schemas.md](schemas.md) |
+| `autoware_ml/databases/schemas/`              | Dataset schema package, see [schemas.md](schemas.md)  |
 | `autoware_ml/databases/scenarios.py`          | `ScenarioData`, `DatasetParams`, `Scenarios`          |
 | `autoware_ml/databases/database_interface.py` | `DatabaseInterface` protocol                          |
 | `autoware_ml/databases/base_database.py`      | Shared `BaseDatabase` implementation                  |

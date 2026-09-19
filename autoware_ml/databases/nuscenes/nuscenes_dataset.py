@@ -45,7 +45,10 @@ class NuScenesRecordsGeneratorWorkerParams:
     Attributes:
       database_root_path: Root path of the NuScenes database.
       scenario_data: Scenario data.
-      lidar_pointcloud_num_features: Number of features in the lidar pointcloud.
+      lidar_pointcloud_num_features: Number of float32 values per point in the stored point
+        clouds.
+      taxonomy: Taxonomies the database labels are built with.
+      box3d_pipelines: List of box 3D pipelines to process the box 3D annotations.
     """
 
     database_root_path: str
@@ -70,8 +73,6 @@ def _apply_nuscenes_records_generator(
     nuscenes_records_generator = NuScenesRecordsGenerator(
         database_root_path=worker_params.database_root_path,
         scenario_data=worker_params.scenario_data,
-        sample_steps=worker_params.scenario_data.sample_steps,
-        max_sweeps=worker_params.scenario_data.max_sweeps,
         lidar_pointcloud_num_features=worker_params.lidar_pointcloud_num_features,
         taxonomy=worker_params.taxonomy,
         box3d_pipelines=worker_params.box3d_pipelines,
@@ -91,7 +92,6 @@ class NuScenesDataset(BaseDatabase):
         cache_file_prefix_name: str,
         num_workers: int,
         taxonomy: DatabaseTaxonomy,
-        lidar_pointcloud_num_features: int,
         box3d_pipelines: Sequence[Box3DPipeline],
         lidar_intensity_scale: float,
         lidar_pointcloud_num_features: int,
@@ -106,8 +106,7 @@ class NuScenesDataset(BaseDatabase):
           cache_path: Path to cache the dataset records.
           cache_file_prefix_name: Prefix name of the cache file, it will be <cache_file_prefix_name>_<dataset_hash>.parquet
           num_workers: Number of workers to use for processing the dataset.
-          taxonomy: Taxonomies the labels of the database are baked with.
-          lidar_pointcloud_num_features: Number of features in the lidar pointcloud.
+          taxonomy: Taxonomies the database labels are built with.
           box3d_pipelines: List of box 3D pipelines to process the box 3D annotations.
           lidar_intensity_scale: Intensity value of the strongest return in the stored point
             clouds.
@@ -128,7 +127,6 @@ class NuScenesDataset(BaseDatabase):
             lidar_pointcloud_num_features=lidar_pointcloud_num_features,
         )
         self._scenarios = scenarios
-        self._lidar_pointcloud_num_features = lidar_pointcloud_num_features
 
     def __str__(self) -> str:
         """

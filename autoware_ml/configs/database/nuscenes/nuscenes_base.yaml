@@ -18,7 +18,6 @@ defaults:
 
 # Number of features in the lidar pointcloud
 lidar_pointcloud_num_features: 5
-
 # Intensity of the strongest return in the stored point clouds
 lidar_intensity_scale: 255.0
 
