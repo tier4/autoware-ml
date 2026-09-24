@@ -158,6 +158,7 @@ model:
       height,
       dim,
       rot,
+      vel,
     ]
   bev_neck:
     bev_projector:
@@ -182,6 +183,7 @@ model:
       height: [1, 2]
       dim: [3, 2]
       rot: [2, 2]
+      vel: [2, 2]
     bbox_coder:
       _target_: autoware_ml.models.detection3d.task_modules.bbox_coders.TransFusionBBoxCoder
       pc_range: ${point_cloud_range}
@@ -189,7 +191,7 @@ model:
       out_size_factor: 1
       post_center_range: [-132.88, -132.88, -5.0, 132.88, 132.88, 12.0]
       score_threshold: [0.015, 0.010, 0.010, 0.020, 0.020, 0.030, 0.030, 0.020, 0.040, 0.020]
-      code_size: 8
+      code_size: 10
     assigner:
       _target_: autoware_ml.models.detection3d.task_modules.assigners.HungarianAssigner3D
       cls_cost:
@@ -206,7 +208,7 @@ model:
     point_cloud_range: ${point_cloud_range}
     voxel_size: [0.96, 0.96, 8.0]
     out_size_factor: 1
-    code_weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    code_weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2]
     min_radius: 2
     gaussian_overlap: 0.1
     score_threshold: 0.1
@@ -250,7 +252,7 @@ model:
     heatmap_target: oriented
     heatmap_init_bias: -2.19
     nms_kernel_size: 3
-    use_velocity: false
+    use_velocity: true
 
 deploy:
   onnx:
