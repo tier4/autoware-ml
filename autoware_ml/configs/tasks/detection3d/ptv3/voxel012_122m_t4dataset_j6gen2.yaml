@@ -219,12 +219,9 @@ model:
       - class_names: [car, truck, bus]
         nms_radius: 0.25
         post_max_size: 300
-      - class_names: [motorcycle]
-        nms_radius: 0.0
-        post_max_size: 50
-      - class_names: [bicycle]
-        nms_radius: 0.0
-        post_max_size: 50
+      - class_names: [motorcycle, bicycle]
+        nms_radius: 0.5
+        post_max_size: 100
       - class_names: [pedestrian]
         nms_radius: 0.0
         post_max_size: 100
