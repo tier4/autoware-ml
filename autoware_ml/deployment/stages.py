@@ -25,8 +25,10 @@ named tensors (the :class:`RunState`):
   bookkeeping ...). It always runs in PyTorch, on every backend.
 
 From the declaration, generic code derives the export specs and their trace inputs
-(:mod:`.export_specs`), the artifact names (:func:`artifact_path`), and — once the
-runners exist — the per-backend inference pipeline, verification and evaluation.
+(:mod:`.export_specs`) and the artifact names (:func:`artifact_path`); later consumers
+(a per-backend pipeline, verification, evaluation) read the same declaration. The final
+``GraphStage``'s ``outputs`` are the keys of the model's ``forward()`` output, so a
+backend's raw outputs feed the same ``build_eval_output`` as the PyTorch forward.
 Nothing model-specific lives outside the model's own ``build_stages``.
 """
 
@@ -103,47 +105,30 @@ class GraphStage:
             tensors named by ``inputs``, in order.
         inputs: Run-state names fed to the module — these ARE the ONNX input names.
         outputs: Names the module's outputs are written under — the ONNX output names,
-            in the module's return order (a single tensor return maps to one name).
-        output_fields: Only on the final stage: ``(output_name, key)`` pairs naming the
-            key of the model's ``forward()`` output each ONNX output reassembles into,
-            so a backend's raw outputs can be handed to the same ``build_eval_output`` as
-            the PyTorch forward. Empty on intermediate stages.
+            in the module's return order (a single tensor return maps to one name). On
+            the final graph stage these are also the keys of the model's ``forward()``
+            output dict.
         torch_fallback_backends: Backends on which this stage runs its PyTorch module
             instead of an artifact — for graphs a backend cannot execute, e.g. a
-            plugin-op graph on ONNX Runtime. Naming ``tensorrt`` here also drops
-            ``tensorrt`` from the derived spec's ``supported_stages``.
+            plugin-op graph on ONNX Runtime.
         onnx_dynamic_axes: Axes this graph makes dynamic *by construction*
             (``{tensor_name: {dim_index: dim_name}}``), for graphs whose dynamic axes are
             a property of the declaration rather than a per-config choice — a point
             model where every tensor is indexed by a point count, say. Becomes the
             derived spec's ``dynamic_axes``; a ``dynamic_axes`` under
             ``deploy.onnx.modules.<name>`` applies when the stage declares none.
-        onnx_transforms: Rewrites applied to this stage's exported ``.onnx``, in order,
-            each taking and returning the file path. For fusions intrinsic to the
-            deployed form of this graph — folding a bias and an activation into a
-            runtime plugin node, say — not for user-configurable graph surgery, which
-            belongs in ``deploy.onnx.modify_graph``.
     """
 
     name: str
     module: nn.Module
     inputs: tuple[str, ...]
     outputs: tuple[str, ...]
-    output_fields: tuple[tuple[str, str], ...] = ()
     torch_fallback_backends: tuple[Backend, ...] = ()
     onnx_dynamic_axes: Mapping[str, Mapping[int, str]] = field(default_factory=dict)
-    onnx_transforms: tuple[Callable[[Path], Path], ...] = ()
 
     def __post_init__(self) -> None:
         if not self.inputs or not self.outputs:
             raise ValueError(f"GraphStage {self.name!r} must declare inputs and outputs.")
-        declared = {onnx_name for onnx_name, _ in self.output_fields}
-        unknown = declared - set(self.outputs)
-        if unknown:
-            raise ValueError(
-                f"GraphStage {self.name!r} maps output_fields for {sorted(unknown)}, "
-                f"which are not among its outputs {list(self.outputs)}."
-            )
 
 
 Stage = TorchStage | GraphStage
@@ -159,9 +144,8 @@ def validate_stages(stages: Sequence[Stage]) -> tuple[Stage, ...]:
     the opening stage, whose run state is empty by construction.
 
     Raises:
-        ValueError: On duplicate names, no exportable stage, an opening ``GraphStage``
-            (nothing has produced its inputs yet), or a final graph stage without
-            ``output_fields``.
+        ValueError: On duplicate names, no exportable stage, or an opening ``GraphStage``
+            (nothing has produced its inputs yet).
     """
     stages = tuple(stages)
     names = [stage.name for stage in stages]
@@ -174,19 +158,8 @@ def validate_stages(stages: Sequence[Stage]) -> tuple[Stage, ...]:
             f"{list(stages[0].inputs)}, but the run state starts empty. A glue "
             "TorchStage has to put a graph stage's inputs there first."
         )
-    graph = graph_stages(stages)
-    if not graph:
+    if not graph_stages(stages):
         raise ValueError("A stage graph needs at least one exportable GraphStage.")
-    if not graph[-1].output_fields:
-        raise ValueError(
-            f"The final GraphStage {graph[-1].name!r} must declare output_fields so a "
-            "backend's raw outputs can be reassembled into the model's forward outputs."
-        )
-    for stage in graph[:-1]:
-        if stage.output_fields:
-            raise ValueError(
-                f"Only the final GraphStage may declare output_fields (got them on {stage.name!r})."
-            )
     return stages
 
 
@@ -196,7 +169,7 @@ def graph_stages(stages: Sequence[Stage]) -> tuple[GraphStage, ...]:
 
 
 def final_stage(stages: Sequence[Stage]) -> GraphStage:
-    """Return the last exportable stage (the one whose outputs are the model outputs)."""
+    """Return the last exportable stage — its ``outputs`` are the model's forward output keys."""
     return graph_stages(stages)[-1]
 
 

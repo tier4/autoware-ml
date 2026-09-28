@@ -89,13 +89,7 @@ class _StagedModel(_ToyModel):
             TorchStage("prep", run=prep),
             GraphStage("encoder", module=self.encoder, inputs=("features",), outputs=("encoded",)),
             TorchStage("scatter", run=scatter),
-            GraphStage(
-                "head",
-                module=self.head,
-                inputs=("bev",),
-                outputs=("plus", "minus"),
-                output_fields=(("plus", "plus"), ("minus", "minus")),
-            ),
+            GraphStage("head", module=self.head, inputs=("bev",), outputs=("plus", "minus")),
         )
 
 
@@ -148,7 +142,7 @@ def test_trace_inputs_are_the_context_tensors_the_glue_produced() -> None:
     assert torch.equal(plus, forward["plus"]) and torch.equal(minus, forward["minus"])
 
 
-def test_stage_declared_axes_and_tensorrt_fallback_land_in_the_spec() -> None:
+def test_stage_declared_axes_land_in_the_spec_and_fallback_keeps_export_targets() -> None:
     stages = (
         TorchStage("seed", run=lambda ctx: {"x": ctx.batch["x"]}),
         GraphStage(
@@ -156,37 +150,15 @@ def test_stage_declared_axes_and_tensorrt_fallback_land_in_the_spec() -> None:
             module=nn.Identity(),
             inputs=("x",),
             outputs=("y",),
-            output_fields=(("y", "y"),),
             onnx_dynamic_axes={"x": {0: "num_points"}, "y": {0: "num_points"}},
-            torch_fallback_backends=(Backend.TENSORRT,),
+            torch_fallback_backends=(Backend.ONNX,),
         ),
     )
     specs = build_export_specs_from_stages(stages, {"x": torch.ones(3, 2)}, torch.device("cpu"))
     spec = specs["points"]
     assert spec.dynamic_axes == {"x": {0: "num_points"}, "y": {0: "num_points"}}
-    assert spec.supported_stages == frozenset({"onnx"})
-
-
-def test_stage_onnx_transforms_land_in_the_spec_in_order() -> None:
-    def fuse(path):
-        return path
-
-    def stamp_scales(path):
-        return path
-
-    stages = (
-        TorchStage("seed", run=lambda ctx: {"x": ctx.batch["x"]}),
-        GraphStage(
-            "sparse",
-            module=nn.Identity(),
-            inputs=("x",),
-            outputs=("y",),
-            output_fields=(("y", "y"),),
-            onnx_transforms=(fuse, stamp_scales),
-        ),
-    )
-    specs = build_export_specs_from_stages(stages, {"x": torch.ones(3, 2)}, torch.device("cpu"))
-    assert specs["sparse"].onnx_transforms == (fuse, stamp_scales)
+    # A runtime fallback says where the artifact is *run*, not whether it is exported.
+    assert spec.supported_stages == frozenset({"onnx", "tensorrt"})
 
 
 def test_a_stage_graph_refuses_to_trace_in_training_mode() -> None:
@@ -206,9 +178,7 @@ def test_models_without_a_stage_graph_keep_the_end_to_end_default() -> None:
 def test_a_stage_reading_an_unproduced_name_fails_with_the_available_names() -> None:
     stages = (
         TorchStage("seed", run=lambda ctx: {"x": ctx.batch["x"]}),
-        GraphStage(
-            "g", module=nn.Identity(), inputs=("typo",), outputs=("y",), output_fields=(("y", "y"),)
-        ),
+        GraphStage("g", module=nn.Identity(), inputs=("typo",), outputs=("y",)),
     )
     with pytest.raises(KeyError, match="available: \\['x'\\]"):
         build_export_specs_from_stages(stages, {"x": torch.ones(1)}, torch.device("cpu"))

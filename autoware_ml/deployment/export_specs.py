@@ -36,10 +36,7 @@ from autoware_ml.deployment.stages import (
     graph_stages,
     run_stages_in_torch,
 )
-from autoware_ml.types.backend import Backend
 from autoware_ml.utils.deploy import ExportSpec
-
-_ALL_EXPORT_STAGES = frozenset({"onnx", "tensorrt"})
 
 
 def export_spec_for_stage(stage: GraphStage, state: RunState) -> ExportSpec:
@@ -52,14 +49,9 @@ def export_spec_for_stage(stage: GraphStage, state: RunState) -> ExportSpec:
 
     Returns:
         Spec whose ``input_param_names`` / ``output_names`` are the stage's declared
-        context names, whose ``dynamic_axes`` are the stage's intrinsic axes (``None``
-        when it declares none, so the module's config entry applies), and whose
-        ``supported_stages`` drops ``tensorrt`` when the stage runs in PyTorch on that
-        backend, and whose ``onnx_transforms`` are the stage's declared graph rewrites.
+        context names and whose ``dynamic_axes`` are the stage's intrinsic axes (``None``
+        when it declares none, so the module's config entry applies).
     """
-    supported = set(_ALL_EXPORT_STAGES)
-    if Backend.TENSORRT in stage.torch_fallback_backends:
-        supported.discard("tensorrt")
     dynamic_axes = (
         {name: dict(axes) for name, axes in stage.onnx_dynamic_axes.items()}
         if stage.onnx_dynamic_axes
@@ -71,8 +63,6 @@ def export_spec_for_stage(stage: GraphStage, state: RunState) -> ExportSpec:
         input_names=list(stage.inputs),
         output_names=list(stage.outputs),
         dynamic_axes=dynamic_axes,
-        supported_stages=frozenset(supported),
-        onnx_transforms=tuple(stage.onnx_transforms),
     )
 
 

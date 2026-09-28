@@ -30,7 +30,6 @@ from autoware_ml.datamodule.tests.corpus import build_dataset, write_corpus
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 import autoware_ml.utils.deploy as deploy
 from autoware_ml.utils.deploy import (
-    apply_onnx_transforms,
     ExportSpec,
     build_dynamic_shapes,
     build_dynamic_axes,
@@ -222,24 +221,6 @@ def test_export_to_onnx_refuses_declared_axes_under_dynamo(tmp_path: Path) -> No
             OmegaConf.create({"dynamo": True}),
             tmp_path / "static.onnx",
         )
-
-
-def test_apply_onnx_transforms_runs_in_order_and_follows_returned_paths(tmp_path: Path) -> None:
-    calls: list[tuple[str, Path]] = []
-
-    def fuse(path: Path) -> Path:
-        calls.append(("fuse", path))
-        return path
-
-    def rewrite_elsewhere(path: Path) -> Path:
-        calls.append(("rewrite", path))
-        return path.with_name("rewritten.onnx")
-
-    start = tmp_path / "stage.onnx"
-    result = apply_onnx_transforms(start, (fuse, rewrite_elsewhere))
-    assert calls == [("fuse", start), ("rewrite", start)]
-    assert result == tmp_path / "rewritten.onnx"
-    assert apply_onnx_transforms(start, ()) == start
 
 
 def test_should_modify_graph_handles_none_and_config() -> None:

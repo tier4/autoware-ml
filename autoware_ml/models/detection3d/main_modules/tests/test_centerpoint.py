@@ -337,7 +337,7 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
             ],
         )
         names = ["heatmap", "reg", "height", "dim", "rot", "vel"]
-        self.assertEqual(graph[-1].output_fields, tuple((name, name) for name in names))
+        self.assertEqual(graph[-1].outputs, tuple(names))
 
         with torch.no_grad():
             expected = self.centerpoint(multi_task_batch_inputs).detection3d().center_head()

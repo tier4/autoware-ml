@@ -52,13 +52,7 @@ def _toy_stages():
         TorchStage("prep", run=lambda ctx: {"x": ctx.batch["x"].float()}),
         GraphStage("encoder", module=_Double(), inputs=("x",), outputs=("y",)),
         TorchStage("glue", run=lambda ctx: {"z": ctx["y"].to(ctx.device) + 0.5}),
-        GraphStage(
-            "head",
-            module=_SplitHead(),
-            inputs=("z",),
-            outputs=("plus", "minus"),
-            output_fields=(("plus", "a"), ("minus", "b")),
-        ),
+        GraphStage("head", module=_SplitHead(), inputs=("z",), outputs=("plus", "minus")),
     )
 
 
@@ -74,40 +68,16 @@ class TestStageDeclaration:
         with pytest.raises(ValueError, match="Duplicate"):
             validate_stages(stages)
 
-    def test_final_stage_needs_output_fields(self):
-        stages = list(_toy_stages())
-        stages[3] = GraphStage(
-            "head", module=_SplitHead(), inputs=("z",), outputs=("plus", "minus")
-        )
-        with pytest.raises(ValueError, match="output_fields"):
-            validate_stages(stages)
-
-    def test_only_final_stage_may_declare_output_fields(self):
-        stages = list(_toy_stages())
-        stages[1] = GraphStage(
-            "encoder", module=_Double(), inputs=("x",), outputs=("y",), output_fields=(("y", "f"),)
-        )
-        with pytest.raises(ValueError, match="Only the final"):
-            validate_stages(stages)
-
-    def test_output_fields_must_name_declared_outputs(self):
-        with pytest.raises(ValueError, match="not among its outputs"):
-            GraphStage(
-                "h", module=_Double(), inputs=("x",), outputs=("y",), output_fields=(("q", "f"),)
-            )
+    def test_graph_stage_needs_inputs_and_outputs(self):
+        with pytest.raises(ValueError, match="must declare inputs and outputs"):
+            GraphStage("h", module=_Double(), inputs=(), outputs=("y",))
 
     def test_no_graph_stage_rejected(self):
         with pytest.raises(ValueError, match="at least one"):
             validate_stages([TorchStage("only", run=lambda ctx: {})])
 
     def test_opening_graph_stage_rejected(self):
-        first = GraphStage(
-            "first",
-            module=nn.Identity(),
-            inputs=("x",),
-            outputs=("y",),
-            output_fields=(("y", "y"),),
-        )
+        first = GraphStage("first", module=nn.Identity(), inputs=("x",), outputs=("y",))
         with pytest.raises(ValueError, match="run state starts empty"):
             validate_stages((first,))
         assert len(validate_stages((TorchStage("glue", run=lambda ctx: {}), first))) == 2
@@ -137,13 +107,7 @@ class TestRunStagesInTorch:
 
     def test_graph_stage_output_arity_is_checked(self):
         stages = list(_toy_stages())
-        stages[3] = GraphStage(
-            "head",
-            module=_Double(),
-            inputs=("z",),
-            outputs=("plus", "minus"),
-            output_fields=(("plus", "a"),),
-        )
+        stages[3] = GraphStage("head", module=_Double(), inputs=("z",), outputs=("plus", "minus"))
         with pytest.raises(ValueError, match="returned 1 tensor"):
             run_stages_in_torch(stages, {"x": torch.tensor([1.0])}, torch.device("cpu"))
 
