@@ -95,6 +95,22 @@ class TestResolveConfigReference:
         assert config_name == SAMPLE_CONFIG_PATH
         assert hydra_overrides == []
 
+    def test_resolve_bundled_config_name_ignores_a_same_named_directory(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        # An MLflow artifact tree is laid out by config name; it must not turn
+        # the bundled reference into a filesystem one.
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / SAMPLE_CONFIG_NAME).mkdir(parents=True)
+
+        config_path, config_name, overrides = resolve_config_reference(
+            SAMPLE_CONFIG_NAME, cli.TASK_CONFIG_PREFIX
+        )
+
+        assert config_path is None
+        assert config_name == SAMPLE_CONFIG_PATH
+        assert overrides == []
+
     def test_resolve_packaged_yaml_path(self) -> None:
         config_path, config_name, hydra_overrides = resolve_config_reference(
             "autoware_ml/configs/tasks/calibration_status/calibration_status_classifier/resnet18_t4dataset_j6gen2.yaml",
