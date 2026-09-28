@@ -15,7 +15,7 @@
 import logging
 
 from pathlib import Path
-from typing import Sequence, Tuple
+from typing import Mapping, Sequence, Tuple
 
 import numpy as np
 import numpy.typing as npt
@@ -100,6 +100,7 @@ class T4RecordsGenerator:
         self.sample_steps = sample_steps
         self.lidar_pointcloud_num_features = lidar_pointcloud_num_features
         self.t4_devkit_dataset = self._construct_t4_devkit_dataset()
+        self.lidarseg_by_sample_data = self._index_lidarseg()
         self.taxonomy = taxonomy
         self.box3d_pipelines = box3d_pipelines
         self.recompute_boxes3d_lidar_points_num = recompute_boxes3d_lidar_points_num
@@ -152,6 +153,24 @@ class T4RecordsGenerator:
 
             records.append(t4_sample_record.to_dataset_record())
 
+        return records
+
+    def _index_lidarseg(self) -> Mapping[str, LidarSeg]:
+        """
+        Semantic mask records of the scene keyed by the sample data token they annotate.
+
+        Returns:
+          Mapping[str, LidarSeg]: Semantic mask record of every annotated lidar frame.
+        """
+
+        records: dict[str, LidarSeg] = {}
+        for record in self.t4_devkit_dataset.lidarseg:
+            if record.sample_data_token in records:
+                raise ValueError(
+                    f"Scenario {self.scenario_data.scenario_id} holds several lidarseg records "
+                    f"for sample data {record.sample_data_token}."
+                )
+            records[record.sample_data_token] = record
         return records
 
     def _extract_sample_basic_metadata(
@@ -265,45 +284,30 @@ class T4RecordsGenerator:
         return boxes_3d_data_model
 
     def _extract_lidar_pointcloud_semantic_mask_path(
-        self,
-        sample_index: int,
-        calibrated_lidar_sample_data_token: str,
-        lidar_pointcloud_source_path: str | None,
+        self, calibrated_lidar_sample_data_token: str
     ) -> str | None:
         """
-        Extract lidarseg metadata from a T4 Sample.
+        Path of the semantic mask annotating one lidar frame.
+
+        Only some frames have a mask, so look it up by the sample data token of the frame.
 
         Args:
-          sample_index: Sample index.
           calibrated_lidar_sample_data_token: Calibrated lidar sample data token.
-          lidar_pointcloud_source_path: Lidar pointcloud source path.
 
         Returns:
-          LidarSegMetaData: Lidarseg metadata of the T4 sample.
+          str | None: Mask path, None when the frame has no mask.
         """
-        lidarseg_records: Sequence[LidarSeg] = getattr(
-            self.t4_devkit_dataset, SchemaName.LIDARSEG, []
-        )
-        # If there are no lidarseg records or the lidar pointcloud source path is not available,
-        # return None
-        if not len(lidarseg_records) or not lidar_pointcloud_source_path:
+        lidarseg_record = self.lidarseg_by_sample_data.get(calibrated_lidar_sample_data_token)
+        if lidarseg_record is None:
             return None
 
-        assert sample_index < len(lidarseg_records), (
-            "Sample index is out of range of lidarseg records."
-        )
-
-        current_lidarseg_record = lidarseg_records[sample_index]
-        assert current_lidarseg_record.sample_data_token == calibrated_lidar_sample_data_token, (
-            "Lidarseg record sample data token does not match the calibrated lidar sample data token."
-        )
         # The lidarseg table names the mask relative to the scene. The record table stores the
         # tail of a rooted path and resolves it against a database root several scenes share, so
         # the scene root is prepended here as the pointcloud path already carries it.
-        return str(Path(self.t4_devkit_dataset.data_root) / current_lidarseg_record.filename)
+        return str(Path(self.t4_devkit_dataset.data_root) / lidarseg_record.filename)
 
     def _extract_lidar_frame(
-        self, sample: Sample, sample_index: int, lidar_channel_name: str
+        self, sample: Sample, lidar_channel_name: str
     ) -> Tuple[LidarFrameDataModel, Sequence[Box3D]]:
         """
         Extract lidar frame records from a T4 sample.
@@ -348,9 +352,7 @@ class T4RecordsGenerator:
 
         # Extract lidar pointcloud semantic mask path
         lidar_pointcloud_semantic_mask_path = self._extract_lidar_pointcloud_semantic_mask_path(
-            sample_index=sample_index,
-            calibrated_lidar_sample_data_token=calibrated_lidar_sample_data_token,
-            lidar_pointcloud_source_path=sd_record.info_filename,
+            calibrated_lidar_sample_data_token=calibrated_lidar_sample_data_token
         )
 
         # Prepend the scene root to the metainfo path as well.
@@ -908,7 +910,7 @@ class T4RecordsGenerator:
 
         # 2) Extract lidar information from the T4Dataset
         lidar_frame_data_model, box3d = self._extract_lidar_frame(
-            sample=sample, lidar_channel_name=lidar_channel_name, sample_index=sample_index
+            sample=sample, lidar_channel_name=lidar_channel_name
         )
 
         # 3) Extract boxes 3D annotations and process them with the pipeline
