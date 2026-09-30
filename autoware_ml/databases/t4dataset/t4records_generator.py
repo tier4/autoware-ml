@@ -19,6 +19,7 @@ from typing import Mapping, Sequence, Tuple
 
 import numpy as np
 import numpy.typing as npt
+from PIL import Image
 from t4_devkit import T4Devkit, load_table
 from t4_devkit.dataclass.box import Box3D
 from t4_devkit.schema import (
