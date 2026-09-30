@@ -49,7 +49,7 @@ LIDAR_CHANNEL = LidarChannel.LIDAR_TOP
 
 class NuScenesRecordsGenerator:
     """
-    RecordsGenerator for NuScenesDataset. 
+    RecordsGenerator for NuScenesDataset.
 
     It reuses T4SampleRecord as the intermediate per-sample container since the unified dataset
     row model (DatasetRecord) is shared across all dataset families.
@@ -210,7 +210,7 @@ class NuScenesRecordsGenerator:
             return []
 
         # NuScenes.box_velocity() returns velocity in the **global** frame, unlike box.center
-        # from get_sample_data() which is already in the sensor frame. 
+        # from get_sample_data() which is already in the sensor frame.
         global_to_ego_rotation = lidar_frame_ego_pose_to_global_matrix[:3, :3].T
         ego_to_sensor_rotation = lidar_sensor_to_ego_pose_matrix[:3, :3].T
         global_to_sensor_rotation = ego_to_sensor_rotation @ global_to_ego_rotation
@@ -377,7 +377,9 @@ class NuScenesRecordsGenerator:
 
         sensor_to_ego_pose_matrix = convert_quaternion_to_matrix(
             rotation_quaternion=Quaternion(sensor_calibrated_sensor_record["rotation"]),
-            translation=np.asarray(sensor_calibrated_sensor_record["translation"], dtype=np.float64),
+            translation=np.asarray(
+                sensor_calibrated_sensor_record["translation"], dtype=np.float64
+            ),
             convert_to_float32=False,
         )
 
@@ -418,7 +420,8 @@ class NuScenesRecordsGenerator:
 
             current_sample_data_record = self.nusc.get("sample_data", neighbour_token)
             current_cs_record = self.nusc.get(
-                "calibrated_sensor", current_sample_data_record["calibrated_sensor_token"]
+                "calibrated_sensor",
+                current_sample_data_record["calibrated_sensor_token"],
             )
             current_lidar_sensor_to_ego_matrix = convert_quaternion_to_matrix(
                 rotation_quaternion=Quaternion(current_cs_record["rotation"]),
@@ -431,9 +434,10 @@ class NuScenesRecordsGenerator:
                 selected_sensor_to_ego_pose_matrix=lidar_frame_data_model.lidar_sensor_to_ego_pose_matrix,
                 selected_sensor_frame_ego_pose_to_global_matrix=lidar_frame_data_model.lidar_frame_ego_pose_to_global_matrix,
             )
-            lidar_sweep_frame_ego_pose_to_global_matrix, lidar_sweep_to_lidar_sensor_matrix = (
-                lidar_sweep_transformations
-            )
+            (
+                lidar_sweep_frame_ego_pose_to_global_matrix,
+                lidar_sweep_to_lidar_sensor_matrix,
+            ) = lidar_sweep_transformations
 
             lidar_sensor_to_lidar_sweep_matrix = np.linalg.inv(lidar_sweep_to_lidar_sensor_matrix)
 

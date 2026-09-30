@@ -47,7 +47,10 @@ from autoware_ml.databases.schemas.lidar_sources import LidarSourceDataModel
 from autoware_ml.databases.schemas.image_frames import ImageFrameDataModel
 from autoware_ml.databases.schemas.category_mapping import CategoryMappingDataModel
 from autoware_ml.databases.taxonomy import DatabaseTaxonomy
-from autoware_ml.databases.schemas.box3d_schemas import Box3DDataModel, Box3DDatasetSchema
+from autoware_ml.databases.schemas.box3d_schemas import (
+    Box3DDataModel,
+    Box3DDatasetSchema,
+)
 from autoware_ml.databases.scenarios import ScenarioData
 from autoware_ml.databases.t4dataset.t4sample_records import (
     T4SampleRecord,
@@ -251,7 +254,10 @@ class T4RecordsGenerator:
         )
 
     def _extract_boxes_3d_annotations(
-        self, sample: Sample, boxes_3d: Sequence[Box3D], lidar_frame_data_model: LidarFrameDataModel
+        self,
+        sample: Sample,
+        boxes_3d: Sequence[Box3D],
+        lidar_frame_data_model: LidarFrameDataModel,
     ) -> Sequence[Box3DDataModel]:
         """
         Extract boxes 3D annotations from a T4 sample and process them with the pipeline.
@@ -452,7 +458,8 @@ class T4RecordsGenerator:
               2. Selected sensor to sensor transformation matrix (4x4)
         """
         sensor_calibrated_sensor_record: CalibratedSensor = self.t4_devkit_dataset.get(
-            SchemaName.CALIBRATED_SENSOR, sensor_sample_data_record.calibrated_sensor_token
+            SchemaName.CALIBRATED_SENSOR,
+            sensor_sample_data_record.calibrated_sensor_token,
         )
         sensor_ego_pose_record: EgoPose = self.t4_devkit_dataset.get(
             SchemaName.EGO_POSE, sensor_sample_data_record.ego_pose_token
@@ -521,7 +528,8 @@ class T4RecordsGenerator:
                 SchemaName.SAMPLE_DATA, neighbour_token
             )
             current_cs_record: CalibratedSensor = self.t4_devkit_dataset.get(
-                SchemaName.CALIBRATED_SENSOR, current_sample_data_record.calibrated_sensor_token
+                SchemaName.CALIBRATED_SENSOR,
+                current_sample_data_record.calibrated_sensor_token,
             )
             current_lidar_sensor_to_ego_matrix = convert_quaternion_to_matrix(
                 rotation_quaternion=current_cs_record.rotation,
@@ -535,9 +543,10 @@ class T4RecordsGenerator:
                 selected_sensor_to_ego_pose_matrix=lidar_frame_data_model.lidar_sensor_to_ego_pose_matrix,
                 selected_sensor_frame_ego_pose_to_global_matrix=lidar_frame_data_model.lidar_frame_ego_pose_to_global_matrix,
             )
-            lidar_sweep_frame_ego_pose_to_global_matrix, lidar_sweep_to_lidar_sensor_matrix = (
-                lidar_sweep_transformations
-            )
+            (
+                lidar_sweep_frame_ego_pose_to_global_matrix,
+                lidar_sweep_to_lidar_sensor_matrix,
+            ) = lidar_sweep_transformations
 
             # Inverse it to obtain the transformation matrix
             # from the lidar sensor to the lidar sweeps
@@ -680,90 +689,89 @@ class T4RecordsGenerator:
         return camera_channel_names
 
     def _extract_image_frame(
-            self,
-            sample: Sample,
-            camera_channel_name: str,
-            lidar_sensor_to_ego_pose_matrix: npt.NDArray[np.float64],
-            lidar_frame_ego_pose_to_global_matrix: npt.NDArray[np.float64],
-        ) -> ImageFrameDataModel:
-            """
-            Extract image frame from a T4 sample.
+        self,
+        sample: Sample,
+        camera_channel_name: str,
+        lidar_sensor_to_ego_pose_matrix: npt.NDArray[np.float64],
+        lidar_frame_ego_pose_to_global_matrix: npt.NDArray[np.float64],
+    ) -> ImageFrameDataModel:
+        """
+        Extract image frame from a T4 sample.
 
-            Args:
-              sample: T4 Sample.
-              camera_channel_name: Camera channel name.
-              lidar_sensor_to_ego_pose_matrix: Transformation matrix from LiDAR sensor to ego pose.
-              lidar_frame_ego_pose_to_global_matrix: Transformation matrix from LiDAR ego pose to global.
+        Args:
+          sample: T4 Sample.
+          camera_channel_name: Camera channel name.
+          lidar_sensor_to_ego_pose_matrix: Transformation matrix from LiDAR sensor to ego pose.
+          lidar_frame_ego_pose_to_global_matrix: Transformation matrix from LiDAR ego pose to
+            global.
 
-            Returns:
-              ImageFrameDataModel: Image frame data model of the T4 sample.
-            """
+        Returns:
+          ImageFrameDataModel: Image frame data model of the T4 sample.
+        """
 
-            calibrated_camera_sample_data_token = sample.data[camera_channel_name]
-            sd_record: SampleData = self.t4_devkit_dataset.get(
-                SchemaName.SAMPLE_DATA, calibrated_camera_sample_data_token
-            )
-            cs_record: CalibratedSensor = self.t4_devkit_dataset.get(
-                SchemaName.CALIBRATED_SENSOR, sd_record.calibrated_sensor_token
-            )
-            image_sensor_to_ego_matrix = convert_quaternion_to_matrix(
-                rotation_quaternion=cs_record.rotation,
-                translation=cs_record.translation,
-                convert_to_float32=False,
-            )
+        calibrated_camera_sample_data_token = sample.data[camera_channel_name]
+        sd_record: SampleData = self.t4_devkit_dataset.get(
+            SchemaName.SAMPLE_DATA, calibrated_camera_sample_data_token
+        )
+        cs_record: CalibratedSensor = self.t4_devkit_dataset.get(
+            SchemaName.CALIBRATED_SENSOR, sd_record.calibrated_sensor_token
+        )
+        image_sensor_to_ego_matrix = convert_quaternion_to_matrix(
+            rotation_quaternion=cs_record.rotation,
+            translation=cs_record.translation,
+            convert_to_float32=False,
+        )
 
-            ego_pose_record: EgoPose = self.t4_devkit_dataset.get(
-                SchemaName.EGO_POSE, sd_record.ego_pose_token
-            )
-            image_frame_ego_pose_to_global_matrix = convert_quaternion_to_matrix(
-                rotation_quaternion=ego_pose_record.rotation,
-                translation=ego_pose_record.translation,
-                convert_to_float32=False,
-            )
+        ego_pose_record: EgoPose = self.t4_devkit_dataset.get(
+            SchemaName.EGO_POSE, sd_record.ego_pose_token
+        )
+        image_frame_ego_pose_to_global_matrix = convert_quaternion_to_matrix(
+            rotation_quaternion=ego_pose_record.rotation,
+            translation=ego_pose_record.translation,
+            convert_to_float32=False,
+        )
 
-            image_path = self.t4_devkit_dataset.get_sample_data_path(
-                sample_data_token=calibrated_camera_sample_data_token
-            )
+        image_path = self.t4_devkit_dataset.get_sample_data_path(
+            sample_data_token=calibrated_camera_sample_data_token
+        )
 
-            image_height = sd_record.height
-            image_width = sd_record.width
-            if image_height is None or image_width is None:
-                with Image.open(image_path) as image:
-                    image_width, image_height = image.size
+        image_height = sd_record.height
+        image_width = sd_record.width
+        if image_height is None or image_width is None:
+            with Image.open(image_path) as image:
+                image_width, image_height = image.size
 
-            cam2img = np.asarray(cs_record.camera_intrinsic, dtype=np.float64)
-            # A camera recorded without distortion coefficients was undistorted before it was
-            # stored, so it carries no model name either
-            distortion_coefficients = np.asarray(
-                cs_record.camera_distortion, dtype=np.float64
-            ).tolist()
+        cam2img = np.asarray(cs_record.camera_intrinsic, dtype=np.float64)
+        # A camera without distortion coefficients stores undistorted images and has no model
+        # name
+        distortion_coefficients = np.asarray(cs_record.camera_distortion, dtype=np.float64).tolist()
 
-            cam2global = image_frame_ego_pose_to_global_matrix @ image_sensor_to_ego_matrix
-            global2cam = np.linalg.inv(cam2global)
-            lidar2global = lidar_frame_ego_pose_to_global_matrix @ lidar_sensor_to_ego_pose_matrix
-            lidar2cam = global2cam @ lidar2global
+        cam2global = image_frame_ego_pose_to_global_matrix @ image_sensor_to_ego_matrix
+        global2cam = np.linalg.inv(cam2global)
+        lidar2global = lidar_frame_ego_pose_to_global_matrix @ lidar_sensor_to_ego_pose_matrix
+        lidar2cam = global2cam @ lidar2global
 
-            cam2img_4x4 = np.eye(4, dtype=np.float64)
-            cam2img_4x4[:3, :3] = cam2img
-            lidar2img = cam2img_4x4 @ lidar2cam
+        cam2img_4x4 = np.eye(4, dtype=np.float64)
+        cam2img_4x4[:3, :3] = cam2img
+        lidar2img = cam2img_4x4 @ lidar2cam
 
-            return ImageFrameDataModel(
-                image_frame_id=calibrated_camera_sample_data_token,
-                image_keyframe=sd_record.is_key_frame,
-                image_sensor_id=cs_record.token,
-                image_sensor_channel_name=camera_channel_name,
-                image_timestamp_seconds=microseconds2seconds(sd_record.timestamp),
-                image_path=image_path,
-                image_height=image_height,
-                image_width=image_width,
-                cam2img=cam2img,
-                image_distortion_coefficients=distortion_coefficients,
-                image_distortion_model=CAMERA_DISTORTION_MODEL if distortion_coefficients else "",
-                image_sensor_to_ego_pose_matrix=image_sensor_to_ego_matrix,
-                image_frame_ego_pose_to_global_matrix=image_frame_ego_pose_to_global_matrix,
-                lidar2cam=lidar2cam,
-                lidar2img=lidar2img,
-            )
+        return ImageFrameDataModel(
+            image_frame_id=calibrated_camera_sample_data_token,
+            image_keyframe=sd_record.is_key_frame,
+            image_sensor_id=cs_record.token,
+            image_sensor_channel_name=camera_channel_name,
+            image_timestamp_seconds=microseconds2seconds(sd_record.timestamp),
+            image_path=image_path,
+            image_height=image_height,
+            image_width=image_width,
+            cam2img=cam2img,
+            image_distortion_coefficients=distortion_coefficients,
+            image_distortion_model=CAMERA_DISTORTION_MODEL if distortion_coefficients else "",
+            image_sensor_to_ego_pose_matrix=image_sensor_to_ego_matrix,
+            image_frame_ego_pose_to_global_matrix=image_frame_ego_pose_to_global_matrix,
+            lidar2cam=lidar2cam,
+            lidar2img=lidar2img,
+        )
 
     def _extract_image_channel_frames(
         self, sample: Sample, lidar_frame_data_model: LidarFrameDataModel
@@ -826,7 +834,8 @@ class T4RecordsGenerator:
                 SchemaName.SAMPLE_DATA, current_sample.data[self.lidar_channel]
             )
             current_lidar_cs_record: CalibratedSensor = self.t4_devkit_dataset.get(
-                SchemaName.CALIBRATED_SENSOR, current_lidar_sd_record.calibrated_sensor_token
+                SchemaName.CALIBRATED_SENSOR,
+                current_lidar_sd_record.calibrated_sensor_token,
             )
             current_lidar_sensor_to_ego_pose_matrix = convert_quaternion_to_matrix(
                 rotation_quaternion=current_lidar_cs_record.rotation,
@@ -916,7 +925,8 @@ class T4RecordsGenerator:
             ),
             bbox_label_names=[box.box3d_label_name for box in boxes_3d_data_model],
             bbox_num_lidar_points=np.asarray(
-                [box.box3d_num_lidar_points for box in boxes_3d_data_model], dtype=np.int32
+                [box.box3d_num_lidar_points for box in boxes_3d_data_model],
+                dtype=np.int32,
             ),
             bbox_center_coordinate_type=Box3DCenterCoordinateType.GRAVITY_CENTER,
         )
