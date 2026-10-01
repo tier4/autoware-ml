@@ -380,6 +380,47 @@ class TestLoadPointsFromFile(SweepLoadingTestCase):
         self.assertAlmostEqual(float(points[0, PointFieldIndex.INTENSITY]), 1.0, places=6)
         self.assertAlmostEqual(float(points[0, PointFieldIndex.X]), 255.0, places=4)
 
+    def test_the_labels_leave_with_the_points_removed_around_the_origin(self) -> None:
+        """
+        Input: a labeled frame with one point inside the removal radius and two outside it.
+        Expected: the removed point takes its label along, so every kept point keeps its own.
+        Check: the kept points and their labels.
+        """
+        path = self.root / "close.bin"
+        points = np.zeros((3, 5), dtype=np.float32)
+        points[0, :2] = 0.5
+        points[1, 0] = 5.0
+        points[2, 1] = 5.0
+        points.tofile(path)
+        frame = LiDARPointCloudSample(
+            point_cloud_path=str(path),
+            timestamp=self.SAMPLE_TIMESTAMP,
+            num_features=5,
+            intensity_scale=255.0,
+            sensor_to_ego_pose_matrix=torch.eye(4, dtype=torch.float32),
+            lidar_to_ego_pose_to_global_matrix=torch.eye(4, dtype=torch.float32),
+            lidar_sensor_to_lidar_sweep_matrix=torch.eye(4, dtype=torch.float32),
+        )
+        sample = ModelGTSample(
+            lidar_point_cloud_samples=[frame],
+            image_samples=None,
+            point_cloud_data=None,
+            camera_image_data=None,
+            detection3d_gt_bboxes_3d=None,
+            segmentation3d_gt_sample=Segmentation3DGTSample(
+                gt_semantic_mask=torch.tensor([1, 2, 3]), ignore_index=-1
+            ),
+        )
+
+        loaded = LoadPointsFromFile(use_dim=(0, 1, 2, 3), bev_remove_radius=1.0)(sample)
+
+        assert loaded.point_cloud_data is not None
+        assert loaded.segmentation3d_gt_sample is not None
+        kept = loaded.point_cloud_data.points
+        self.assertEqual(kept[:, PointFieldIndex.X].tolist(), [5.0, 0.0])
+        self.assertEqual(kept[:, PointFieldIndex.Y].tolist(), [0.0, 5.0])
+        self.assertEqual(loaded.segmentation3d_gt_sample.gt_semantic_mask.tolist(), [2, 3])
+
     def test_serves_one_lidar_source_in_its_own_sensor_frame(self) -> None:
         """
         Input: a merged frame whose points carry their own index, and a source view naming
