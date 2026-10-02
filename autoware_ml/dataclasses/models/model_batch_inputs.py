@@ -4,7 +4,7 @@ from pydantic import BaseModel, ConfigDict, InstanceOf
 
 from autoware_ml.dataclasses.geometry.images import ImageGTBatch
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
-from autoware_ml.ops.voxelization.voxelization import VoxelsData
+from autoware_ml.dataclasses.geometry.voxels import VoxelsData
 
 
 class ModelBatchInputs(BaseModel):

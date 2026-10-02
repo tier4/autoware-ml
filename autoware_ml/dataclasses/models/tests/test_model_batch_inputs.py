@@ -24,7 +24,7 @@ import torch
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.dataclasses.geometry.images import ImageGTBatch
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
-from autoware_ml.ops.voxelization.voxelization import VoxelsData
+from autoware_ml.dataclasses.geometry.voxels import VoxelsData
 
 
 class TestModelBatchInputs(unittest.TestCase):
