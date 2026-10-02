@@ -59,9 +59,12 @@ class TestModelPredictions(unittest.TestCase):
             self.assertIs(entry["scores_3d"], sample.scores_3d)
             self.assertIs(entry["labels_3d"], sample.labels_3d)
 
-    def test_to_list_without_detection_predictions_is_empty(self) -> None:
-        """Test that a container without 3D detections converts to an empty list."""
-        self.assertEqual(ModelPredictions(detection3d_predictions=None).to_list(), [])
+    def test_to_list_without_detection_predictions_raises(self) -> None:
+        """Test that a container without 3D detections cannot be converted to a list."""
+        predictions = ModelPredictions(detection3d_predictions=None)
+
+        with self.assertRaises(ValueError):
+            predictions.to_list()
 
     def test_to_list_keeps_empty_samples(self) -> None:
         """Test that a sample with no surviving boxes still occupies its slot."""
