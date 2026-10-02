@@ -4,7 +4,7 @@ Modules to save decoded predictions from multi-task models.
 
 from typing import Sequence
 
-from jaxtyping import Float32
+from jaxtyping import Float32, Int64
 from pydantic import BaseModel, ConfigDict
 import torch
 
@@ -32,7 +32,8 @@ class ModelPredictions(BaseModel):
         dict[
             str,
             Float32[torch.Tensor, "num_boxes num_bbox_params"]
-            | Float32[torch.Tensor, " num_boxes"],
+            | Float32[torch.Tensor, " num_boxes"]
+            | Int64[torch.Tensor, " num_boxes"],
         ]
     ]:
         """
