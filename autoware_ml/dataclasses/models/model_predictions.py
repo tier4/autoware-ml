@@ -24,7 +24,7 @@ class ModelPredictions(BaseModel):
     # Decoded predictions across samples.
     detection3d_predictions: Sequence[Detection3DSamplePredictions] | None
 
-    # TODO (Kok Seang): Add predictions for other tasks in the future.
+    # TODO(Kok Seang): Add predictions for other tasks in the future.
 
     def to_list(
         self,

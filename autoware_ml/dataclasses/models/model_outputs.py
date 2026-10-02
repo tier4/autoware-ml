@@ -18,4 +18,4 @@ class ModelOutputs(BaseModel):
 
     detection3d_head_outputs: Detection3DHeadOutputs | None
 
-    # TODO (Kok Seang): Add outputs for other tasks in the future.
+    # TODO(Kok Seang): Add outputs for other tasks in the future.
