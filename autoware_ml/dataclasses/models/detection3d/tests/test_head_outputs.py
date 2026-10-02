@@ -98,6 +98,19 @@ class TestTransFusionSeparateHeadOutputs(unittest.TestCase):
                 with self.assertRaises(ValidationError):
                     TransFusionSeparateHeadOutputs.model_validate(tensors)
 
+    def test_batch_and_proposal_counts_must_match(self) -> None:
+        """Test that a branch covering another batch or proposal count is rejected."""
+        for name, shape in (
+            ("heatmaps", (self.batch_size + 1, self.num_classes, self.num_proposals)),
+            ("dims", (self.batch_size, 3, self.num_proposals + 1)),
+            ("vels", (self.batch_size, 2, self.num_proposals + 1)),
+        ):
+            with self.subTest(branch=name):
+                tensors = self._build_tensors()
+                tensors[name] = torch.zeros(shape)
+                with self.assertRaises(ValidationError):
+                    TransFusionSeparateHeadOutputs.model_validate(tensors)
+
 
 class TestTransFusionHeadOutputs(unittest.TestCase):
     """Unit tests for the full TransFusion head output."""
@@ -135,6 +148,69 @@ class TestTransFusionHeadOutputs(unittest.TestCase):
         self.assertEqual(
             tuple(outputs.dense_heatmaps.shape),
             (self.batch_size, self.num_classes, self.height, self.width),
+        )
+
+    def test_batch_class_and_query_counts_must_match(self) -> None:
+        """Test that the dense, query and per-proposal outputs must agree on shared dims."""
+        for name, bad_value in (
+            (
+                "dense_heatmaps",
+                torch.zeros(self.batch_size + 1, self.num_classes, self.height, self.width),
+            ),
+            (
+                "query_heatmap_scores",
+                torch.zeros(self.batch_size, self.num_classes + 1, self.num_proposals),
+            ),
+            (
+                "query_labels",
+                torch.zeros(self.batch_size, self.num_proposals + 1, dtype=torch.int64),
+            ),
+            (
+                "separate_head_outputs",
+                TransFusionSeparateHeadOutputs(
+                    heatmaps=torch.zeros(self.batch_size, self.num_classes + 1, self.num_proposals),
+                    centers=torch.zeros(self.batch_size, 2, self.num_proposals),
+                    heights=torch.zeros(self.batch_size, 1, self.num_proposals),
+                    dims=torch.zeros(self.batch_size, 3, self.num_proposals),
+                    rots=torch.zeros(self.batch_size, 2, self.num_proposals),
+                    vels=None,
+                ),
+            ),
+        ):
+            with self.subTest(field=name):
+                fields = {
+                    "dense_heatmaps": self.dense_heatmaps,
+                    "query_heatmap_scores": self.query_heatmap_scores,
+                    "query_labels": self.query_labels,
+                    "separate_head_outputs": self.separate_head_outputs,
+                }
+                fields[name] = bad_value
+                with self.assertRaises(ValidationError):
+                    TransFusionHeadOutputs.model_validate(fields)
+
+    def test_auxiliary_layers_may_widen_the_separate_head(self) -> None:
+        """Test that the separate head may carry more proposals than there are queries."""
+        num_layers = 3
+        separate_head_outputs = TransFusionSeparateHeadOutputs(
+            heatmaps=torch.zeros(
+                self.batch_size, self.num_classes, num_layers * self.num_proposals
+            ),
+            centers=torch.zeros(self.batch_size, 2, num_layers * self.num_proposals),
+            heights=torch.zeros(self.batch_size, 1, num_layers * self.num_proposals),
+            dims=torch.zeros(self.batch_size, 3, num_layers * self.num_proposals),
+            rots=torch.zeros(self.batch_size, 2, num_layers * self.num_proposals),
+            vels=None,
+        )
+
+        outputs = TransFusionHeadOutputs(
+            dense_heatmaps=self.dense_heatmaps,
+            query_heatmap_scores=self.query_heatmap_scores,
+            query_labels=self.query_labels,
+            separate_head_outputs=separate_head_outputs,
+        )
+
+        self.assertEqual(
+            outputs.separate_head_outputs.heatmaps.shape[-1], num_layers * self.num_proposals
         )
 
     def test_query_labels_must_be_int64(self) -> None:
@@ -197,6 +273,19 @@ class TestCenterHeadOutputs(unittest.TestCase):
             with self.subTest(branch=name):
                 tensors = self._build_tensors()
                 tensors[name] = torch.zeros(2, wrong_channels, 4, 4)
+                with self.assertRaises(ValidationError):
+                    CenterHeadOutputs.model_validate(tensors)
+
+    def test_batch_and_grid_must_match(self) -> None:
+        """Test that a branch on another batch or BEV grid is rejected."""
+        for name, shape in (
+            ("heatmaps", (3, 3, 4, 4)),
+            ("rots", (2, 2, 5, 4)),
+            ("vels", (2, 2, 4, 5)),
+        ):
+            with self.subTest(branch=name):
+                tensors = self._build_tensors()
+                tensors[name] = torch.zeros(shape)
                 with self.assertRaises(ValidationError):
                     CenterHeadOutputs.model_validate(tensors)
 

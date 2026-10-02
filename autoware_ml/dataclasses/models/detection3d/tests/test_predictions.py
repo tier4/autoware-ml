@@ -79,6 +79,19 @@ class TestDetection3DSamplePredictions(unittest.TestCase):
                 with self.assertRaises(ValidationError):
                     Detection3DSamplePredictions.model_validate(fields)
 
+    def test_rejects_mismatched_num_boxes(self) -> None:
+        """Test that boxes, scores and labels must agree on the number of boxes."""
+        for field, bad_value in (
+            ("bboxes_3d", torch.zeros(3, 9)),
+            ("scores_3d", torch.zeros(3)),
+            ("labels_3d", torch.zeros(3, dtype=torch.int64)),
+        ):
+            with self.subTest(field=field):
+                fields = self._build_fields()
+                fields[field] = bad_value
+                with self.assertRaises(ValidationError):
+                    Detection3DSamplePredictions.model_validate(fields)
+
     def test_is_frozen(self) -> None:
         """Test that decoded predictions cannot be mutated after construction."""
         predictions = Detection3DSamplePredictions.model_validate(self._build_fields(num_boxes=1))

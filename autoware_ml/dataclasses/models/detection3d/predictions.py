@@ -2,8 +2,10 @@
 Modules to save decoded predictions from a detection3d head.
 """
 
+from __future__ import annotations
+
 from jaxtyping import Float32, Int64
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 import torch
 
@@ -26,3 +28,14 @@ class Detection3DSamplePredictions(BaseModel):
     bboxes_3d: Float32[torch.Tensor, "num_boxes num_bbox_params"]
     scores_3d: Float32[torch.Tensor, " num_boxes"]
     labels_3d: Int64[torch.Tensor, " num_boxes"]
+
+    @model_validator(mode="after")
+    def _check_num_boxes(self) -> Detection3DSamplePredictions:
+        """Check that boxes, scores and labels describe the same number of boxes."""
+        num_boxes = self.bboxes_3d.shape[0]
+        if self.scores_3d.shape[0] != num_boxes or self.labels_3d.shape[0] != num_boxes:
+            raise ValueError(
+                "bboxes_3d, scores_3d and labels_3d must have the same number of boxes, got "
+                f"{num_boxes}, {self.scores_3d.shape[0]} and {self.labels_3d.shape[0]}."
+            )
+        return self

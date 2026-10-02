@@ -67,6 +67,26 @@ class TestCenterHeadTargets(unittest.TestCase):
         with self.assertRaises(ValidationError):
             CenterHeadTargets.model_validate(fields)
 
+    def test_batch_and_box_budget_must_match(self) -> None:
+        """Test that the heatmap and the box targets must agree on batch and box budget."""
+        for name, bad_value in (
+            ("heatmaps", torch.zeros(self.batch_size + 1, self.num_classes, 4, 4)),
+            ("reg_targets", torch.zeros(self.batch_size, self.max_num_boxes + 1, 10)),
+            (
+                "reg_indices",
+                torch.zeros(self.batch_size, self.max_num_boxes + 1, dtype=torch.int64),
+            ),
+            (
+                "valid_masks",
+                torch.zeros(self.batch_size + 1, self.max_num_boxes, dtype=torch.bool),
+            ),
+        ):
+            with self.subTest(field=name):
+                fields = self._build_fields()
+                fields[name] = bad_value
+                with self.assertRaises(ValidationError):
+                    CenterHeadTargets.model_validate(fields)
+
     def test_is_frozen(self) -> None:
         """Test that targets cannot be mutated after construction."""
         fields = self._build_fields()
@@ -126,6 +146,30 @@ class TestTransFusionHeadTargets(unittest.TestCase):
 
         with self.assertRaises(ValidationError):
             TransFusionHeadTargets.model_validate(fields)
+
+    def test_shared_dims_must_match(self) -> None:
+        """Test that batch, proposal count, class count and code size must agree."""
+        for name, bad_value in (
+            (
+                "labels",
+                torch.zeros(self.batch_size, self.num_proposals + 1, dtype=torch.int64),
+            ),
+            (
+                "label_weights",
+                torch.ones(self.batch_size, self.num_proposals, self.num_classes + 1),
+            ),
+            (
+                "bbox_weights",
+                torch.zeros(self.batch_size, self.num_proposals, self.code_size + 1),
+            ),
+            ("dense_heatmaps", torch.zeros(self.batch_size + 1, self.num_classes, 8, 8)),
+            ("class_weights", torch.ones(self.batch_size, self.num_classes + 1)),
+        ):
+            with self.subTest(field=name):
+                fields = self._build_fields()
+                fields[name] = bad_value
+                with self.assertRaises(ValidationError):
+                    TransFusionHeadTargets.model_validate(fields)
 
     def test_num_pos_must_be_an_int(self) -> None:
         """Test that the positive count is not coerced from a string."""

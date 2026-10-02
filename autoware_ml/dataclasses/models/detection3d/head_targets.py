@@ -2,8 +2,10 @@
 Module to save encoded targets for a 3D detection head.
 """
 
+from __future__ import annotations
+
 from jaxtyping import Float32, Int64, Bool
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 import torch
 
@@ -27,6 +29,23 @@ class CenterHeadTargets(BaseModel):
     reg_targets: Float32[torch.Tensor, "batch_size max_num_boxes num_reg_targets"]
     reg_indices: Int64[torch.Tensor, "batch_size max_num_boxes"]
     valid_masks: Bool[torch.Tensor, "batch_size max_num_boxes"]
+
+    @model_validator(mode="after")
+    def _check_batch_and_box_budget(self) -> CenterHeadTargets:
+        """Check that the heatmap and the box targets share a batch and a box budget."""
+        batch_size = self.heatmaps.shape[0]
+        max_num_boxes = self.reg_targets.shape[1]
+        if self.reg_targets.shape[0] != batch_size:
+            raise ValueError(
+                f"reg_targets must have batch_size={batch_size}, got {tuple(self.reg_targets.shape)}."
+            )
+        for name, tensor in (("reg_indices", self.reg_indices), ("valid_masks", self.valid_masks)):
+            if tensor.shape != (batch_size, max_num_boxes):
+                raise ValueError(
+                    f"{name} must have shape ({batch_size}, {max_num_boxes}), "
+                    f"got {tuple(tensor.shape)}."
+                )
+        return self
 
 
 class TransFusionHeadTargets(BaseModel):
@@ -55,3 +74,34 @@ class TransFusionHeadTargets(BaseModel):
     matched_iou: float
     dense_heatmaps: Float32[torch.Tensor, "batch_size num_classes height width"]
     class_weights: Float32[torch.Tensor, "batch_size num_classes"]
+
+    @model_validator(mode="after")
+    def _check_shared_dims(self) -> TransFusionHeadTargets:
+        """Check that all targets share a batch, proposal count, class count and code size."""
+        batch_size, num_proposals = self.labels.shape
+        num_classes = self.class_weights.shape[1]
+        code_size = self.bbox_targets.shape[2]
+        if self.class_weights.shape[0] != batch_size:
+            raise ValueError(
+                f"class_weights must have batch_size={batch_size}, got {tuple(self.class_weights.shape)}."
+            )
+        if self.label_weights.shape != (batch_size, num_proposals, num_classes):
+            raise ValueError(
+                f"label_weights must have shape ({batch_size}, {num_proposals}, {num_classes}), "
+                f"got {tuple(self.label_weights.shape)}."
+            )
+        for name, tensor in (
+            ("bbox_targets", self.bbox_targets),
+            ("bbox_weights", self.bbox_weights),
+        ):
+            if tensor.shape != (batch_size, num_proposals, code_size):
+                raise ValueError(
+                    f"{name} must have shape ({batch_size}, {num_proposals}, {code_size}), "
+                    f"got {tuple(tensor.shape)}."
+                )
+        if self.dense_heatmaps.shape[:2] != (batch_size, num_classes):
+            raise ValueError(
+                f"dense_heatmaps must have batch_size={batch_size} and num_classes={num_classes}, "
+                f"got {tuple(self.dense_heatmaps.shape)}."
+            )
+        return self

@@ -55,7 +55,7 @@ class TestMultiTaskEvalOutput(unittest.TestCase):
                         [[4.9, 0.2, 0.1, 6.8, 7.2, 9.2, 40.0, 50.0, 60.0]], device=self.device
                     ),
                     scores_3d=torch.tensor([0.9], dtype=torch.float32, device=self.device),
-                    labels_3d=torch.tensor([1, 2], dtype=torch.int64, device=self.device),
+                    labels_3d=torch.tensor([1], dtype=torch.int64, device=self.device),
                 ),
             ]
         )
