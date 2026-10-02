@@ -16,7 +16,7 @@ class ModelPredictions(BaseModel):
     Dataclass to save decoded predictions from multi-task models.
 
     Attributes:
-      detection_3d_predictions: Decoded predictions from a 3D detection task.
+      detection3d_predictions: Decoded predictions from a 3D detection task.
     """
 
     model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
