@@ -22,7 +22,7 @@ class TransFusionSeparateHeadOutputs(BaseModel):
       centers: Center_x and center_y translation from each cell in a BEV heatmap.
       heights: Height value from each cell in a BEV heatmap.
       dims: Dimension values (length, width, height) from each cell in a BEV heatmap.
-      rots: Rotation values (sin, cos) from each cell in a BEV heatmap
+      rots: Rotation values (sin, cos) from each cell in a BEV heatmap.
       vels: Velocity values (vel_x, vel_y) from each cell in a BEV heatmap.
     """
 
@@ -143,7 +143,7 @@ class CenterHeadOutputs(BaseModel):
       centers: Center_x and center_y translation from each cell in a BEV heatmap.
       heights: Height value from each cell in a BEV heatmap.
       dims: Dimension values (length, width, height) from each cell in a BEV heatmap.
-      rots: Rotation values (sin, cos) from each cell in a BEV heatmap
+      rots: Rotation values (sin, cos) from each cell in a BEV heatmap.
       vels: Velocity values (vel_x, vel_y) from each cell in a BEV heatmap.
     """
 
