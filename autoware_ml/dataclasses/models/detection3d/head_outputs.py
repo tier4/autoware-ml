@@ -65,13 +65,13 @@ class TransFusionSeparateHeadOutputs(BaseModel):
         Args:
             data: A dictionary containing the output tensors.
         """
-        vels = None if "vels" not in data else data["vels"]
+        vels = None if "vels" not in data else data.get("vels")
         return cls(
-            heatmaps=data["heatmaps"],
-            centers=data["centers"],
-            heights=data["heights"],
-            dims=data["dims"],
-            rots=data["rots"],
+            heatmaps=data.get("heatmaps"),
+            centers=data.get("centers"),
+            heights=data.get("heights"),
+            dims=data.get("dims"),
+            rots=data.get("rots"),
             vels=vels,
         )
 
