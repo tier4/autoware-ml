@@ -48,9 +48,9 @@ def multi_task_eval_output(
 ) -> dict[str, Any]:
     """
     Pair decoded predictions with ground truth for the detection metric.
-    This function is a temporary interface between ModelPredictions, MultiTaskFeatures and
+    This function is a temporary interface between ModelPredictions, ModelBatchInputs and
     detection_eval_output, and this will be removed once the detection metric is refactored to
-    accept ModelPredictions and MultiTaskFeatures directly.
+    accept ModelPredictions and ModelBatchInputs directly.
 
     Args:
         multi_task_predictions: ModelPredictions containing the decoded predictions.
