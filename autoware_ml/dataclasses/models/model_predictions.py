@@ -44,7 +44,9 @@ class ModelPredictions(BaseModel):
         """
         predictions_list = []
         if self.detection3d_predictions is None:
-            return []
+            raise ValueError(
+                "ModelPredictions must contain detection3d_predictions for multi_task_eval_output."
+            )
 
         for detection_pred in self.detection3d_predictions:
             predictions_list.append(
