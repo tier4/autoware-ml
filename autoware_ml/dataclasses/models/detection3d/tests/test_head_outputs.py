@@ -312,9 +312,9 @@ class TestCenterHeadOutputs(unittest.TestCase):
 class TestDetection3DHeadOutputs(unittest.TestCase):
     """Unit tests for the head-agnostic 3D detection output wrapper."""
 
-    def test_holds_one_head_family_at_a_time(self) -> None:
-        """Test that the wrapper exposes the head that produced the outputs and leaves the other."""
-        center_head_outputs = CenterHeadOutputs(
+    def setUp(self) -> None:
+        """Set up one valid output per head family."""
+        self.center_head_outputs = CenterHeadOutputs(
             heatmaps=torch.zeros(1, 2, 4, 4),
             centers=torch.zeros(1, 2, 4, 4),
             heights=torch.zeros(1, 1, 4, 4),
@@ -322,20 +322,46 @@ class TestDetection3DHeadOutputs(unittest.TestCase):
             rots=torch.zeros(1, 2, 4, 4),
             vels=None,
         )
-
-        outputs = Detection3DHeadOutputs(
-            center_head_outputs=center_head_outputs, transfusion_head_outputs=None
+        self.transfusion_head_outputs = TransFusionHeadOutputs(
+            dense_heatmaps=torch.zeros(1, 2, 4, 4),
+            query_heatmap_scores=torch.zeros(1, 2, 3),
+            query_labels=torch.zeros(1, 3, dtype=torch.int64),
+            separate_head_outputs=TransFusionSeparateHeadOutputs(
+                heatmaps=torch.zeros(1, 2, 3),
+                centers=torch.zeros(1, 2, 3),
+                heights=torch.zeros(1, 1, 3),
+                dims=torch.zeros(1, 3, 3),
+                rots=torch.zeros(1, 2, 3),
+                vels=None,
+            ),
         )
 
-        self.assertIs(outputs.center_head_outputs, center_head_outputs)
-        self.assertIsNone(outputs.transfusion_head_outputs)
+    def test_holds_one_head_family_at_a_time(self) -> None:
+        """Test that the wrapper exposes the head that produced the outputs and leaves the other."""
+        center_outputs = Detection3DHeadOutputs(
+            center_head_outputs=self.center_head_outputs, transfusion_head_outputs=None
+        )
+        transfusion_outputs = Detection3DHeadOutputs(
+            center_head_outputs=None, transfusion_head_outputs=self.transfusion_head_outputs
+        )
 
-    def test_allows_no_head_outputs(self) -> None:
-        """Test that an empty wrapper is representable, for consumers to reject explicitly."""
-        outputs = Detection3DHeadOutputs(center_head_outputs=None, transfusion_head_outputs=None)
+        self.assertIs(center_outputs.center_head_outputs, self.center_head_outputs)
+        self.assertIsNone(center_outputs.transfusion_head_outputs)
+        self.assertIs(transfusion_outputs.transfusion_head_outputs, self.transfusion_head_outputs)
+        self.assertIsNone(transfusion_outputs.center_head_outputs)
 
-        self.assertIsNone(outputs.center_head_outputs)
-        self.assertIsNone(outputs.transfusion_head_outputs)
+    def test_rejects_no_head_outputs(self) -> None:
+        """Test that a wrapper carrying no head outputs is rejected."""
+        with self.assertRaises(ValidationError):
+            Detection3DHeadOutputs(center_head_outputs=None, transfusion_head_outputs=None)
+
+    def test_rejects_both_head_outputs(self) -> None:
+        """Test that a wrapper carrying outputs from both head families is rejected."""
+        with self.assertRaises(ValidationError):
+            Detection3DHeadOutputs(
+                center_head_outputs=self.center_head_outputs,
+                transfusion_head_outputs=self.transfusion_head_outputs,
+            )
 
 
 if __name__ == "__main__":

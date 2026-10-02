@@ -180,6 +180,8 @@ class Detection3DHeadOutputs(BaseModel):
     """
     Dataclass to save outputs from 3D detection models.
 
+    Exactly one of the two heads must be set.
+
     Attributes:
       center_head_outputs: Outputs from a CenterHead-based 3D detection model.
       transfusion_head_outputs: Outputs from a TransFusion-based 3D detection model.
@@ -189,3 +191,16 @@ class Detection3DHeadOutputs(BaseModel):
 
     center_head_outputs: CenterHeadOutputs | None
     transfusion_head_outputs: TransFusionHeadOutputs | None
+
+    @model_validator(mode="after")
+    def _check_exactly_one_head(self) -> Detection3DHeadOutputs:
+        """Check that exactly one head family produced the outputs."""
+        has_center_head = self.center_head_outputs is not None
+        has_transfusion_head = self.transfusion_head_outputs is not None
+        if has_center_head == has_transfusion_head:
+            raise ValueError(
+                "Exactly one of center_head_outputs and transfusion_head_outputs must be set, "
+                f"got center_head_outputs={has_center_head} and "
+                f"transfusion_head_outputs={has_transfusion_head}."
+            )
+        return self
