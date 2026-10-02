@@ -1,3 +1,7 @@
+"""
+Modules to save the batched inputs to multi-task models.
+"""
+
 from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, InstanceOf
