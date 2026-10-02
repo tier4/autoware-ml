@@ -15,10 +15,11 @@ class Detection3DSamplePredictions(BaseModel):
     Dataclass to save decoded predictions from a 3D detection model for a sample.
 
     Attributes:
-      model_name: Name of the model.
-      dataset_name: Name of the dataset.
-      max_sweeps: Maximum number of sweeps to include.
-      sample_steps: Number of steps to sample.
+      bboxes_3d: Predicted 3D bounding boxes, 7 (center_x, center_y, center_z, length, width,
+        height, heading) parameters per box, or 9 when velocity (velocity_x, velocity_y) is
+        predicted as well.
+      scores_3d: Confidence score for each predicted box.
+      labels_3d: Class index for each predicted box.
     """
 
     model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
