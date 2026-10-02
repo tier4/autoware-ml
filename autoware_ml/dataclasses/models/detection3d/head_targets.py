@@ -25,7 +25,7 @@ class CenterHeadTargets(BaseModel):
 
     heatmaps: Float32[torch.Tensor, "batch_size num_classes height width"]
     # 8 (center_x, center_y, center_z, length, width, height, sin(heading), cos(heading)) if not velocity else
-    # 10 (center_x, center_y, center_z, length, width, height, heading, velocity_x, velocity_y)
+    # 10 (center_x, center_y, center_z, length, width, height, sin(heading), cos(heading), velocity_x, velocity_y)
     reg_targets: Float32[torch.Tensor, "batch_size max_num_boxes num_reg_targets"]
     reg_indices: Int64[torch.Tensor, "batch_size max_num_boxes"]
     valid_masks: Bool[torch.Tensor, "batch_size max_num_boxes"]
