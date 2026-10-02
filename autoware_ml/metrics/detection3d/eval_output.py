@@ -70,7 +70,16 @@ def multi_task_eval_output(
         )
 
     gt_detections = multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch
-    valid = gt_detections.gt_valid_bboxes
+    # Read the valid counts back to the host once: they index every ground-truth tensor below,
+    # and gt_valid_bboxes can live on the GPU.
+    valid = gt_detections.gt_valid_bboxes.tolist()
+    if len(multi_task_predictions.detection3d_predictions) != len(valid):
+        raise ValueError(
+            "ModelPredictions must hold one prediction per sample, got "
+            f"{len(multi_task_predictions.detection3d_predictions)} predictions for "
+            f"{len(valid)} samples."
+        )
+
     batch: dict[str, Any] = {
         "gt_boxes": [gt_detections.gt_bboxes_3d[i, : valid[i]] for i in range(len(valid))],
         "gt_labels": [gt_detections.gt_labels_3d[i, : valid[i]] for i in range(len(valid))],
