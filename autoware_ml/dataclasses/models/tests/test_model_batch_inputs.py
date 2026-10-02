@@ -58,11 +58,9 @@ class TestModelBatchInputs(unittest.TestCase):
             multi_task_gt_batch=self.gt_batch, voxels_data=self.voxels_data, image_data=None
         )
 
-        # Pydantic rebuilds NamedTuple fields on validation, so compare contents, not identity.
-        self.assertEqual(batch_inputs.multi_task_gt_batch, self.gt_batch)
-        assert batch_inputs.voxels_data is not None
-        self.assertTrue(torch.equal(batch_inputs.voxels_data.voxels, self.voxels_data.voxels))
-        self.assertTrue(torch.equal(batch_inputs.voxels_data.coords, self.voxels_data.coords))
+        # InstanceOf keeps the payloads themselves, so they must come back identical.
+        self.assertIs(batch_inputs.multi_task_gt_batch, self.gt_batch)
+        self.assertIs(batch_inputs.voxels_data, self.voxels_data)
         self.assertIsNone(batch_inputs.image_data)
 
     def test_camera_lidar_inputs_carry_both_modalities(self) -> None:
@@ -73,10 +71,9 @@ class TestModelBatchInputs(unittest.TestCase):
             image_data=self.image_data,
         )
 
-        assert batch_inputs.voxels_data is not None
+        self.assertIs(batch_inputs.voxels_data, self.voxels_data)
+        self.assertIs(batch_inputs.image_data, self.image_data)
         assert batch_inputs.image_data is not None
-        self.assertTrue(torch.equal(batch_inputs.voxels_data.voxels, self.voxels_data.voxels))
-        self.assertTrue(torch.equal(batch_inputs.image_data.images, self.image_data.images))
         self.assertIsNone(batch_inputs.image_data.depth_maps)
         self.assertEqual(tuple(batch_inputs.image_data.images.shape), (2, 3, 3, 8, 8))
 
