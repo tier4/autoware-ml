@@ -93,10 +93,10 @@ class TransFusionHeadOutputs(BaseModel):
     Dataclass to save Transfusion-based outputs from a 3D detection model.
 
     Attributes:
-      model_name: Name of the model.
-      dataset_name: Name of the dataset.
-      max_sweeps: Maximum number of sweeps to include.
-      sample_steps: Number of steps to sample.
+      dense_heatmaps: Heatmap to save probability for each class in a BEV heatmap.
+      query_heatmap_scores: Heatmap scores gathered at each query position.
+      query_labels: Class index predicted for each query.
+      separate_head_outputs: Per-proposal outputs from the separate head.
     """
 
     model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
