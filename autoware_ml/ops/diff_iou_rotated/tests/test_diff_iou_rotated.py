@@ -334,6 +334,55 @@ class TestDiffIoURotated(unittest.TestCase):
         with self.assertRaises(ValueError):
             enclosing_area(corners1, corners2, "unknown")
 
+    def test_zero_size_and_disjoint_boxes_give_zero_iou_with_finite_gradients(self) -> None:
+        """Degenerate inputs yield IoU 0 and finite gradients instead of NaN.
+
+        A zero-size box with no overlap has a zero union, so the unguarded ratio was 0 / 0.
+        Disjoint boxes have no valid polygon candidate, so the mean used to normalize the
+        vertices before sorting divided by zero as well. Both are routine for predicted boxes
+        early in training and must not poison the loss.
+        """
+        boxes1 = torch.tensor(
+            [
+                [
+                    # Zero width and height, far from box 2: zero union.
+                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                    # Regular box, far from box 2: no valid candidate at all.
+                    [0.0, 0.0, 1.0, 1.0, 0.3],
+                ]
+            ],
+            device=self.device,
+            requires_grad=True,
+        )
+        boxes2 = torch.tensor(
+            [[[5.0, 5.0, 1.0, 1.0, 0.0], [5.0, 5.0, 1.0, 1.0, 0.0]]], device=self.device
+        )
+        boxes3d1 = torch.tensor(
+            [
+                [
+                    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.3],
+                ]
+            ],
+            device=self.device,
+            requires_grad=True,
+        )
+        boxes3d2 = torch.tensor(
+            [[[5.0, 5.0, 5.0, 1.0, 1.0, 1.0, 0.0], [5.0, 5.0, 5.0, 1.0, 1.0, 1.0, 0.0]]],
+            device=self.device,
+        )
+
+        ious = diff_iou_rotated_2d(boxes1, boxes2)
+        ious_3d = diff_iou_rotated_3d(boxes3d1, boxes3d2)
+        (ious.sum() + ious_3d.sum()).backward()
+
+        torch.testing.assert_close(ious, torch.zeros_like(ious), rtol=0.0, atol=0.0)
+        torch.testing.assert_close(ious_3d, torch.zeros_like(ious_3d), rtol=0.0, atol=0.0)
+        assert boxes1.grad is not None
+        assert boxes3d1.grad is not None
+        self.assertTrue(torch.isfinite(boxes1.grad).all())
+        self.assertTrue(torch.isfinite(boxes3d1.grad).all())
+
     def test_empty_batch_returns_empty_iou(self) -> None:
         """A batch with no boxes yields an empty IoU tensor instead of launching a bad kernel."""
         boxes = torch.zeros((1, 0, 5), device=self.device)

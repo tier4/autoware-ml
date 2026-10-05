@@ -426,8 +426,11 @@ def sort_indices(
     Returns:
         ``(B, N, 25)`` Sorted indices.
     """
+    # Disjoint boxes have no valid candidate; the clamp keeps their (unused) mean finite.
     num_valid = torch.sum(mask.int(), dim=2, keepdim=True).unsqueeze(-1)  # (B, N, 1, 1)
-    mean = torch.sum(vertices * mask.float().unsqueeze(-1), dim=2, keepdim=True) / num_valid
+    mean = torch.sum(vertices * mask.float().unsqueeze(-1), dim=2, keepdim=True) / num_valid.clamp(
+        min=1
+    )
     vertices_normalized = vertices - mean  # normalization makes sorting easier
     return SortVertices.apply(vertices_normalized, mask).long()
 
@@ -537,7 +540,9 @@ def diff_iou_rotated_2d(
     intersection, _ = oriented_box_intersection_2d(corners1, corners2)  # (B, N)
     area1 = box1[:, :, 2] * box1[:, :, 3]
     area2 = box2[:, :, 2] * box2[:, :, 3]
-    union = area1 + area2 - intersection
+    # A zero-size box with no overlap has a zero union; the clamp turns 0 / 0 into an IoU of 0
+    # with a finite gradient instead of NaN. Callers must still provide non-negative sizes.
+    union = (area1 + area2 - intersection).clamp(min=EPSILON)
     iou = intersection / union
     return iou
 
@@ -568,5 +573,6 @@ def diff_iou_rotated_3d(
     intersection_3d = intersection * z_overlap
     volume1 = box3d1[..., 3] * box3d1[..., 4] * box3d1[..., 5]
     volume2 = box3d2[..., 3] * box3d2[..., 4] * box3d2[..., 5]
-    union_3d = volume1 + volume2 - intersection_3d
+    # Same guard as in :func:`diff_iou_rotated_2d`: a zero-volume box with no overlap.
+    union_3d = (volume1 + volume2 - intersection_3d).clamp(min=EPSILON)
     return intersection_3d / union_3d
