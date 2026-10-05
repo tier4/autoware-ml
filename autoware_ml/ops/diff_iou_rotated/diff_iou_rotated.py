@@ -500,16 +500,18 @@ def oriented_box_intersection_2d(
         Tuple of the ``(B, N)`` intersection area and the ``(B, N, 25, 2)`` polygon vertices
         with zero padding.
     """
-    intersections, valid_mask = box_intersection(corners1, corners2)
-    c12, c21 = box_in_box(corners1, corners2)
-    vertices, mask = build_vertices(corners1, corners2, c12, c21, intersections, valid_mask)
-    mask = drop_duplicate_vertices(vertices, mask)
-    # The sorting kernel pads every row with an invalid intersection candidate and relies on
-    # its value being zero, so the padding adds nothing to the shoelace sum. Candidates dropped
-    # as duplicates still hold their coordinates, so zero every invalid candidate explicitly.
-    vertices = vertices * mask.unsqueeze(-1)
-    sorted_indices = sort_indices(vertices, mask)
-    return calculate_area(sorted_indices, vertices)
+    corners1, corners2 = corners1.float(), corners2.float()
+    with torch.autocast(device_type=corners1.device.type, enabled=False):
+        intersections, valid_mask = box_intersection(corners1, corners2)
+        c12, c21 = box_in_box(corners1, corners2)
+        vertices, mask = build_vertices(corners1, corners2, c12, c21, intersections, valid_mask)
+        mask = drop_duplicate_vertices(vertices, mask)
+        # The sorting kernel pads every row with an invalid intersection candidate and relies on
+        # its value being zero, so the padding adds nothing to the shoelace sum. Candidates dropped
+        # as duplicates still hold their coordinates, so zero every invalid candidate explicitly.
+        vertices = vertices * mask.unsqueeze(-1)
+        sorted_indices = sort_indices(vertices, mask)
+        return calculate_area(sorted_indices, vertices)
 
 
 def box2corners(
@@ -524,23 +526,28 @@ def box2corners(
     Returns:
         ``(B, N, 4, 2)`` Corners.
     """
-    batch_size, num_boxes = box.size()[0], box.size()[1]
-    x, y, length, width, yaw = box.split([1, 1, 1, 1, 1], dim=-1)
-    x4 = box.new_tensor([0.5, -0.5, -0.5, 0.5]).to(box.device)
-    x4 = x4 * length  # (B, N, 4)
-    y4 = box.new_tensor([0.5, 0.5, -0.5, -0.5]).to(box.device)
-    y4 = y4 * width  # (B, N, 4)
-    corners = torch.stack([x4, y4], dim=-1)  # (B, N, 4, 2)
-    sin = torch.sin(yaw)
-    cos = torch.cos(yaw)
-    row1 = torch.cat([cos, sin], dim=-1)
-    row2 = torch.cat([-sin, cos], dim=-1)  # (B, N, 2)
-    rot_t = torch.stack([row1, row2], dim=-2)  # (B, N, 2, 2)
-    rotated = torch.bmm(corners.view([-1, 4, 2]), rot_t.view([-1, 2, 2]))
-    rotated = rotated.view([batch_size, num_boxes, 4, 2])  # (B * N, 4, 2) -> (B, N, 4, 2)
-    rotated[..., 0] += x
-    rotated[..., 1] += y
-    return rotated
+    # The geometry downstream compares coordinates against 1e-6 tolerances and the sorting
+    # kernel only accepts float32, so half precision boxes are upcast and autocast is kept
+    # from demoting the rotation matmul. Gradients reach the original tensor through the cast.
+    box = box.float()
+    with torch.autocast(device_type=box.device.type, enabled=False):
+        batch_size, num_boxes = box.size()[0], box.size()[1]
+        x, y, length, width, yaw = box.split([1, 1, 1, 1, 1], dim=-1)
+        x4 = box.new_tensor([0.5, -0.5, -0.5, 0.5]).to(box.device)
+        x4 = x4 * length  # (B, N, 4)
+        y4 = box.new_tensor([0.5, 0.5, -0.5, -0.5]).to(box.device)
+        y4 = y4 * width  # (B, N, 4)
+        corners = torch.stack([x4, y4], dim=-1)  # (B, N, 4, 2)
+        sin = torch.sin(yaw)
+        cos = torch.cos(yaw)
+        row1 = torch.cat([cos, sin], dim=-1)
+        row2 = torch.cat([-sin, cos], dim=-1)  # (B, N, 2)
+        rot_t = torch.stack([row1, row2], dim=-2)  # (B, N, 2, 2)
+        rotated = torch.bmm(corners.view([-1, 4, 2]), rot_t.view([-1, 2, 2]))
+        rotated = rotated.view([batch_size, num_boxes, 4, 2])  # (B * N, 4, 2) -> (B, N, 4, 2)
+        rotated[..., 0] += x
+        rotated[..., 1] += y
+        return rotated
 
 
 def diff_iou_rotated_2d(
@@ -554,18 +561,20 @@ def diff_iou_rotated_2d(
         box2: ``(B, N, 5)`` Second box as (x, y, length, width, yaw).
 
     Returns:
-        ``(B, N)`` IoU.
+        ``(B, N)`` IoU, float32 whatever the input dtype.
     """
-    corners1 = box2corners(box1)
-    corners2 = box2corners(box2)
-    intersection, _ = oriented_box_intersection_2d(corners1, corners2)  # (B, N)
-    area1 = box1[:, :, 2] * box1[:, :, 3]
-    area2 = box2[:, :, 2] * box2[:, :, 3]
-    # A zero-size box with no overlap has a zero union; the clamp turns 0 / 0 into an IoU of 0
-    # with a finite gradient instead of NaN. Callers must still provide non-negative sizes.
-    union = (area1 + area2 - intersection).clamp(min=EPSILON)
-    iou = intersection / union
-    return iou
+    box1, box2 = box1.float(), box2.float()
+    with torch.autocast(device_type=box1.device.type, enabled=False):
+        corners1 = box2corners(box1)
+        corners2 = box2corners(box2)
+        intersection, _ = oriented_box_intersection_2d(corners1, corners2)  # (B, N)
+        area1 = box1[:, :, 2] * box1[:, :, 3]
+        area2 = box2[:, :, 2] * box2[:, :, 3]
+        # A zero-size box with no overlap has a zero union; the clamp turns 0 / 0 into an IoU of 0
+        # with a finite gradient instead of NaN. Callers must still provide non-negative sizes.
+        union = (area1 + area2 - intersection).clamp(min=EPSILON)
+        iou = intersection / union
+        return iou
 
 
 def diff_iou_rotated_3d(
@@ -580,27 +589,29 @@ def diff_iou_rotated_3d(
         box3d2: ``(B, N, 7)`` Second box in the same layout.
 
     Returns:
-        ``(B, N)`` IoU.
+        ``(B, N)`` IoU, float32 whatever the input dtype.
     """
-    bev_fields = [
-        Box3DFieldIndex.X,
-        Box3DFieldIndex.Y,
-        Box3DFieldIndex.LENGTH,
-        Box3DFieldIndex.WIDTH,
-        Box3DFieldIndex.YAW,
-    ]
-    corners1 = box2corners(box3d1[..., bev_fields])
-    corners2 = box2corners(box3d2[..., bev_fields])
-    intersection, _ = oriented_box_intersection_2d(corners1, corners2)
-    z1, height1 = box3d1[..., Box3DFieldIndex.Z], box3d1[..., Box3DFieldIndex.HEIGHT]
-    z2, height2 = box3d2[..., Box3DFieldIndex.Z], box3d2[..., Box3DFieldIndex.HEIGHT]
-    z_overlap = (
-        torch.min(z1 + height1 * 0.5, z2 + height2 * 0.5)
-        - torch.max(z1 - height1 * 0.5, z2 - height2 * 0.5)
-    ).clamp_(min=0.0)
-    intersection_3d = intersection * z_overlap
-    volume1 = box3d1[..., Box3DFieldIndex.LENGTH] * box3d1[..., Box3DFieldIndex.WIDTH] * height1
-    volume2 = box3d2[..., Box3DFieldIndex.LENGTH] * box3d2[..., Box3DFieldIndex.WIDTH] * height2
-    # Same guard as in :func:`diff_iou_rotated_2d`: a zero-volume box with no overlap.
-    union_3d = (volume1 + volume2 - intersection_3d).clamp(min=EPSILON)
-    return intersection_3d / union_3d
+    box3d1, box3d2 = box3d1.float(), box3d2.float()
+    with torch.autocast(device_type=box3d1.device.type, enabled=False):
+        bev_fields = [
+            Box3DFieldIndex.X,
+            Box3DFieldIndex.Y,
+            Box3DFieldIndex.LENGTH,
+            Box3DFieldIndex.WIDTH,
+            Box3DFieldIndex.YAW,
+        ]
+        corners1 = box2corners(box3d1[..., bev_fields])
+        corners2 = box2corners(box3d2[..., bev_fields])
+        intersection, _ = oriented_box_intersection_2d(corners1, corners2)
+        z1, height1 = box3d1[..., Box3DFieldIndex.Z], box3d1[..., Box3DFieldIndex.HEIGHT]
+        z2, height2 = box3d2[..., Box3DFieldIndex.Z], box3d2[..., Box3DFieldIndex.HEIGHT]
+        z_overlap = (
+            torch.min(z1 + height1 * 0.5, z2 + height2 * 0.5)
+            - torch.max(z1 - height1 * 0.5, z2 - height2 * 0.5)
+        ).clamp_(min=0.0)
+        intersection_3d = intersection * z_overlap
+        volume1 = box3d1[..., Box3DFieldIndex.LENGTH] * box3d1[..., Box3DFieldIndex.WIDTH] * height1
+        volume2 = box3d2[..., Box3DFieldIndex.LENGTH] * box3d2[..., Box3DFieldIndex.WIDTH] * height2
+        # Same guard as in :func:`diff_iou_rotated_2d`: a zero-volume box with no overlap.
+        union_3d = (volume1 + volume2 - intersection_3d).clamp(min=EPSILON)
+        return intersection_3d / union_3d

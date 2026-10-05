@@ -422,13 +422,64 @@ class TestDiffIoURotated(unittest.TestCase):
         self.assertTrue(torch.isfinite(boxes1.grad).all())
         self.assertTrue(torch.isfinite(boxes3d1.grad).all())
 
-    def test_empty_batch_returns_empty_iou(self) -> None:
-        """A batch with no boxes yields an empty IoU tensor instead of launching a bad kernel."""
-        boxes = torch.zeros((1, 0, 5), device=self.device)
+    def test_empty_inputs_return_empty_iou(self) -> None:
+        """Empty batch or box axes yield empty IoU tensors instead of launching a bad kernel."""
+        for shape in ((1, 0, 5), (0, 3, 5), (0, 0, 5)):
+            boxes = torch.zeros(shape, device=self.device)
+            boxes3d = torch.zeros(shape[:2] + (7,), device=self.device)
 
-        ious = diff_iou_rotated_2d(boxes, boxes)
+            ious = diff_iou_rotated_2d(boxes, boxes)
+            ious_3d = diff_iou_rotated_3d(boxes3d, boxes3d)
 
-        self.assertEqual(ious.shape, (1, 0))
+            self.assertEqual(ious.shape, shape[:2])
+            self.assertEqual(ious_3d.shape, shape[:2])
+
+    def test_half_precision_inputs_and_autocast_match_float32(self) -> None:
+        """fp16 and bf16 boxes, and float32 boxes under autocast, compute in float32.
+
+        The geometry compares coordinates against 1e-6 tolerances and the sorting kernel only
+        accepts float32. Without the cast, fp16 inputs produced NaN for the shifted squares
+        below and bf16 was off by a few tenths of a percent, because autocast demotes the
+        corner rotation matmul. The result is float32 and the gradient reaches the half
+        precision leaf.
+        """
+        boxes1 = torch.tensor(
+            [[[0.5, 0.5, 1.0, 1.0, 0.0], [0.3, 0.0, 1.0, 1.0, 0.1]]], device=self.device
+        )
+        boxes2 = torch.tensor(
+            [[[1.0, 1.0, 1.0, 1.0, 0.0], [0.0, 0.0, 1.0, 1.0, 0.0]]], device=self.device
+        )
+        boxes3d1 = torch.tensor([[[0.5, 0.5, 0.5, 1.0, 1.0, 1.0, 0.0]]], device=self.device)
+        boxes3d2 = torch.tensor([[[1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0]]], device=self.device)
+        reference = diff_iou_rotated_2d(boxes1, boxes2)
+        reference_3d = diff_iou_rotated_3d(boxes3d1, boxes3d2)
+
+        for dtype in (torch.float16, torch.bfloat16):
+            half1 = boxes1.to(dtype).requires_grad_(True)
+            half2 = boxes2.to(dtype)
+            ious = diff_iou_rotated_2d(half1, half2)
+            ious_3d = diff_iou_rotated_3d(boxes3d1.to(dtype), boxes3d2.to(dtype))
+            ious.sum().backward()
+
+            self.assertEqual(ious.dtype, torch.float32)
+            self.assertEqual(ious_3d.dtype, torch.float32)
+            # 0.3 and 0.1 are not representable in half precision, so the reference for the
+            # 2D case is the float32 result on the rounded boxes; the 3D values are exact.
+            rounded = diff_iou_rotated_2d(half1.detach().float(), half2.float())
+            torch.testing.assert_close(ious, rounded, rtol=0.0, atol=0.0)
+            torch.testing.assert_close(ious, reference, rtol=0.0, atol=1e-2)
+            torch.testing.assert_close(ious_3d, reference_3d, rtol=0.0, atol=0.0)
+            assert half1.grad is not None
+            self.assertEqual(half1.grad.dtype, dtype)
+            self.assertTrue(torch.isfinite(half1.grad).all())
+
+            with torch.autocast(device_type="cuda", dtype=dtype):
+                autocast_ious = diff_iou_rotated_2d(boxes1, boxes2)
+                autocast_ious_3d = diff_iou_rotated_3d(boxes3d1, boxes3d2)
+
+            self.assertEqual(autocast_ious.dtype, torch.float32)
+            torch.testing.assert_close(autocast_ious, reference, rtol=0.0, atol=0.0)
+            torch.testing.assert_close(autocast_ious_3d, reference_3d, rtol=0.0, atol=0.0)
 
 
 if __name__ == "__main__":
