@@ -365,11 +365,15 @@ def build_vertices(
     return vertices, mask
 
 
+@torch.no_grad()
 def drop_duplicate_vertices(
     vertices: Float32[torch.Tensor, "batch_size num_boxes 24 2"],
     mask: Bool[torch.Tensor, "batch_size num_boxes 24"],
 ) -> Bool[torch.Tensor, "batch_size num_boxes 24"]:
     """Invalidate candidate vertices that coincide with an earlier valid candidate.
+
+    Only a boolean mask comes out, so the pairwise distances are computed without autograd,
+    which skips the graph bookkeeping for the ``(B, N, 24, 24)`` distance tensors.
 
     Two boxes that share a corner, or that are (nearly) identical, produce the same point
     several times: once per box corner and once more per edge pair meeting there. The sorting
