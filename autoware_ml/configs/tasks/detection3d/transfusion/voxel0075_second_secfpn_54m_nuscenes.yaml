@@ -60,13 +60,9 @@ datamodule:
         - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesAttributeFilter
           _convert_: all
           filter_attributes: ${dataset.detection3d.filter_attributes}
-        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesBEVDistanceFilter
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesRangeFilter
           _convert_: all
-          bev_range:
-            - ${point_cloud_range.0}
-            - ${point_cloud_range.1}
-            - ${point_cloud_range.3}
-            - ${point_cloud_range.4}
+          point_cloud_range: ${point_cloud_range}
         - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesMinPointsFilter
           _convert_: all
           min_points: 1
