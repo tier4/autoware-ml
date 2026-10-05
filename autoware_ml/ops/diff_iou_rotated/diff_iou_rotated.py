@@ -51,27 +51,25 @@ class SortVertices(Function):
         ctx,
         vertices: Float32[torch.Tensor, "batch_size num_boxes 24 2"],
         mask: Bool[torch.Tensor, "batch_size num_boxes 24"],
-        num_valid: Int32[torch.Tensor, "batch_size num_boxes"],
-    ) -> Int32[torch.Tensor, "batch_size num_boxes 9"]:
+    ) -> Int32[torch.Tensor, "batch_size num_boxes 25"]:
         """Run the CUDA sorting kernel.
 
         Args:
             ctx: Autograd context.
             vertices: Candidate vertices normalized around their mean, ``(B, N, 24, 2)``.
             mask: Validity mask of the candidates, ``(B, N, 24)``.
-            num_valid: Number of valid candidates per pair, ``(B, N)``.
 
         Returns:
-            Sorted vertex indices of shape ``(B, N, 9)``.
+            Sorted vertex indices of shape ``(B, N, 25)``.
         """
         idx = diff_iou_rotated_ext.diff_iou_rotated_sort_vertices_forward(
-            vertices.contiguous(), mask.contiguous(), num_valid.contiguous()
+            vertices.contiguous(), mask.contiguous()
         )
         ctx.mark_non_differentiable(idx)
         return idx
 
     @staticmethod
-    def backward(ctx, gradout: Int32[torch.Tensor, "batch_size num_boxes 9"]) -> tuple:
+    def backward(ctx, gradout: Int32[torch.Tensor, "batch_size num_boxes 25"]) -> tuple:
         """Indices carry no gradient."""
         return ()
 
@@ -406,47 +404,49 @@ def drop_duplicate_vertices(
 def sort_indices(
     vertices: Float32[torch.Tensor, "batch_size num_boxes 24 2"],
     mask: Bool[torch.Tensor, "batch_size num_boxes 24"],
-) -> Int64[torch.Tensor, "batch_size num_boxes 9"]:
+) -> Int64[torch.Tensor, "batch_size num_boxes 25"]:
     """Sort indices.
 
     Note:
-        why 9? the polygon has maximal 8 vertices.
-        +1 to duplicate the first element.
-        the index should have following structure:
-            (A, B, C, ... , A, X, X, X)
-        and X indicates the index of arbitrary elements in the last
-        16 (intersections not corners) with value 0 and mask False.
-        (cause they have zero value and zero gradient)
+        The row has the structure (A, B, C, ..., A, X, X, X): the valid vertices sorted
+        counter-clockwise, the first one repeated to close the polygon, then X, the index of
+        an arbitrary invalid intersection candidate, whose value and gradient are zero.
+
+        Why 25 slots when two rectangles share at most 8 polygon vertices? The candidates are
+        classified with float tolerances, and near-degenerate pairs (nearly identical boxes
+        far from the origin, a box inscribed in the other) can leave more than 8 of the 24
+        candidates valid. The row has room for all of them plus the closing duplicate, so no
+        vertex is ever dropped; the extra ones sit on slivers of the polygon and add
+        negligible area.
 
     Args:
         vertices: ``(B, N, 24, 2)`` Box vertices.
         mask: ``(B, N, 24)`` Mask.
 
     Returns:
-        ``(B, N, 9)`` Sorted indices.
+        ``(B, N, 25)`` Sorted indices.
     """
-    num_valid = torch.sum(mask.int(), dim=2).int()  # (B, N)
-    mean = torch.sum(
-        vertices * mask.float().unsqueeze(-1), dim=2, keepdim=True
-    ) / num_valid.unsqueeze(-1).unsqueeze(-1)
+    num_valid = torch.sum(mask.int(), dim=2, keepdim=True).unsqueeze(-1)  # (B, N, 1, 1)
+    mean = torch.sum(vertices * mask.float().unsqueeze(-1), dim=2, keepdim=True) / num_valid
     vertices_normalized = vertices - mean  # normalization makes sorting easier
-    return SortVertices.apply(vertices_normalized, mask, num_valid).long()
+    return SortVertices.apply(vertices_normalized, mask).long()
 
 
 def calculate_area(
-    idx_sorted: Int64[torch.Tensor, "batch_size num_boxes 9"],
+    idx_sorted: Int64[torch.Tensor, "batch_size num_boxes 25"],
     vertices: Float32[torch.Tensor, "batch_size num_boxes 24 2"],
 ) -> tuple[
-    Float32[torch.Tensor, "batch_size num_boxes"], Float32[torch.Tensor, "batch_size num_boxes 9 2"]
+    Float32[torch.Tensor, "batch_size num_boxes"],
+    Float32[torch.Tensor, "batch_size num_boxes 25 2"],
 ]:
     """Calculate area of intersection.
 
     Args:
-        idx_sorted: ``(B, N, 9)`` Sorted vertex ids.
+        idx_sorted: ``(B, N, 25)`` Sorted vertex ids.
         vertices: ``(B, N, 24, 2)`` Vertices.
 
     Returns:
-        Tuple of the ``(B, N)`` intersection area and the ``(B, N, 9, 2)`` polygon vertices
+        Tuple of the ``(B, N)`` intersection area and the ``(B, N, 25, 2)`` polygon vertices
         with zero padding.
     """
     idx_ext = idx_sorted.unsqueeze(-1).repeat([1, 1, 1, 2])
@@ -464,7 +464,8 @@ def oriented_box_intersection_2d(
     corners1: Float32[torch.Tensor, "batch_size num_boxes 4 2"],
     corners2: Float32[torch.Tensor, "batch_size num_boxes 4 2"],
 ) -> tuple[
-    Float32[torch.Tensor, "batch_size num_boxes"], Float32[torch.Tensor, "batch_size num_boxes 9 2"]
+    Float32[torch.Tensor, "batch_size num_boxes"],
+    Float32[torch.Tensor, "batch_size num_boxes 25 2"],
 ]:
     """Calculate intersection area of 2d rotated boxes.
 
@@ -473,13 +474,17 @@ def oriented_box_intersection_2d(
         corners2: ``(B, N, 4, 2)`` Second batch of boxes.
 
     Returns:
-        Tuple of the ``(B, N)`` intersection area and the ``(B, N, 9, 2)`` polygon vertices
+        Tuple of the ``(B, N)`` intersection area and the ``(B, N, 25, 2)`` polygon vertices
         with zero padding.
     """
     intersections, valid_mask = box_intersection(corners1, corners2)
     c12, c21 = box_in_box(corners1, corners2)
     vertices, mask = build_vertices(corners1, corners2, c12, c21, intersections, valid_mask)
     mask = drop_duplicate_vertices(vertices, mask)
+    # The sorting kernel pads every row with an invalid intersection candidate and relies on
+    # its value being zero, so the padding adds nothing to the shoelace sum. Candidates dropped
+    # as duplicates still hold their coordinates, so zero every invalid candidate explicitly.
+    vertices = vertices * mask.unsqueeze(-1)
     sorted_indices = sort_indices(vertices, mask)
     return calculate_area(sorted_indices, vertices)
 

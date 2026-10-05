@@ -31,13 +31,15 @@
  * vertices (the 8 corners plus the 16 edge-edge intersections) with a validity mask. This
  * kernel orders the valid vertices counter-clockwise around their mean so the shoelace
  * formula can integrate the polygon area on the Python side.
+ *
+ * Two convex quadrilaterals share at most 8 polygon vertices, but the candidates are
+ * classified with float tolerances, and near-degenerate pairs (nearly identical boxes, a box
+ * inscribed in the other) can leave more than 8 of them valid. The output row therefore has
+ * room for every candidate, so no valid vertex is ever dropped.
  */
 
 namespace
 {
-/// Maximum number of sorted vertex indices per polygon: 8 vertices plus the duplicated first one.
-constexpr int kMaxNumVertexIndices = 9;
-
 /// Offset of the first edge-edge intersection candidate in the vertex axis (after the 8 corners).
 constexpr int kIntersectionOffset = 8;
 
@@ -89,25 +91,26 @@ __device__ bool compare_vertices(float x1, float y1, float x2, float y2)
  * One block handles one batch element, one thread one polygon. The output index row has the
  * layout (A, B, C, ..., A, X, X, X): the sorted valid vertices, the first one repeated to close
  * the polygon, then padding with the index of an arbitrary invalid intersection candidate, whose
- * value and gradient are zero.
+ * value and gradient are zero. The row holds m + 1 indices, enough for every candidate plus
+ * the closing duplicate, and the number of valid vertices is counted from the mask, so the
+ * writes below stay inside the row for any mask.
  *
  * @param b Batch size.
  * @param n Number of box pairs per batch element.
  * @param m Number of candidate vertices per pair (24).
  * @param vertices Normalized candidate vertices of shape (b, n, m, 2).
  * @param mask Validity mask of shape (b, n, m).
- * @param num_valid Number of valid vertices per pair of shape (b, n).
- * @param idx Output sorted indices of shape (b, n, 9).
+ * @param idx Output sorted indices of shape (b, n, m + 1).
  */
 __global__ void diff_iou_rotated_sort_vertices_forward_cuda_kernel(
   int b, int n, int m, const float * __restrict__ vertices, const bool * __restrict__ mask,
-  const int * __restrict__ num_valid, int * __restrict__ idx)
+  int * __restrict__ idx)
 {
+  const int row = m + 1;  // indices per polygon
   const int batch_idx = blockIdx.x;
   vertices += batch_idx * n * m * 2;
   mask += batch_idx * n * m;
-  num_valid += batch_idx * n;
-  idx += batch_idx * n * kMaxNumVertexIndices;
+  idx += batch_idx * n * row;
 
   const int index = threadIdx.x;  // index of polygon
   const int stride = blockDim.x;
@@ -119,18 +122,17 @@ __global__ void diff_iou_rotated_sort_vertices_forward_cuda_kernel(
         break;
       }
     }
-    // The intersection of two convex quadrilaterals has at most 8 vertices. Float noise on
-    // nearly collinear edges can still flag extra intersection candidates as valid, so the
-    // count is clamped to the row capacity: without it the loops below would write past this
-    // polygon's 9 slots into the next polygon's row.
-    const int n_valid = min(num_valid[i], kMaxNumVertexIndices - 1);
+    int n_valid = 0;
+    for (int j = 0; j < m; ++j) {
+      n_valid += mask[i * m + j] ? 1 : 0;
+    }
     if (n_valid < 3) {
       // not enough vertices for a polygon: take an invalid intersection point (zero padding)
-      for (int j = 0; j < kMaxNumVertexIndices; ++j) {
-        idx[i * kMaxNumVertexIndices + j] = pad;
+      for (int j = 0; j < row; ++j) {
+        idx[i * row + j] = pad;
       }
     } else {
-      // sort the valid vertices; the number of valid vertices is known and at most 8
+      // sort the valid vertices
       for (int j = 0; j < n_valid; ++j) {
         // initialize with a "big" value
         float x_min = 1;
@@ -140,7 +142,7 @@ __global__ void diff_iou_rotated_sort_vertices_forward_cuda_kernel(
         float x2 = 0.0f;
         float y2 = 0.0f;
         if (j != 0) {
-          i2 = idx[i * kMaxNumVertexIndices + j - 1];
+          i2 = idx[i * row + j - 1];
           x2 = vertices[i * m * 2 + i2 * 2 + 0];
           y2 = vertices[i * m * 2 + i2 * 2 + 1];
         }
@@ -155,14 +157,14 @@ __global__ void diff_iou_rotated_sort_vertices_forward_cuda_kernel(
             }
           }
         }
-        idx[i * kMaxNumVertexIndices + j] = i_take;
+        idx[i * row + j] = i_take;
       }
       // duplicate the first index to close the polygon
-      idx[i * kMaxNumVertexIndices + n_valid] = idx[i * kMaxNumVertexIndices + 0];
+      idx[i * row + n_valid] = idx[i * row + 0];
 
       // pad the remaining slots
-      for (int j = n_valid + 1; j < kMaxNumVertexIndices; ++j) {
-        idx[i * kMaxNumVertexIndices + j] = pad;
+      for (int j = n_valid + 1; j < row; ++j) {
+        idx[i * row + j] = pad;
       }
 
       // Corner case: the two boxes are exactly the same. idx then holds duplicate elements,
@@ -171,15 +173,15 @@ __global__ void diff_iou_rotated_sort_vertices_forward_cuda_kernel(
       if (n_valid == 8) {
         int counter = 0;
         for (int j = 0; j < 4; ++j) {
-          const int check = idx[i * kMaxNumVertexIndices + j];
+          const int check = idx[i * row + j];
           for (int k = 4; k < kIntersectionOffset; ++k) {
-            if (idx[i * kMaxNumVertexIndices + k] == check) counter++;
+            if (idx[i * row + k] == check) counter++;
           }
         }
         if (counter == 4) {
-          idx[i * kMaxNumVertexIndices + 4] = idx[i * kMaxNumVertexIndices + 0];
-          for (int j = 5; j < kMaxNumVertexIndices; ++j) {
-            idx[i * kMaxNumVertexIndices + j] = pad;
+          idx[i * row + 4] = idx[i * row + 0];
+          for (int j = 5; j < row; ++j) {
+            idx[i * row + j] = pad;
           }
         }
       }
@@ -193,11 +195,10 @@ __global__ void diff_iou_rotated_sort_vertices_forward_cuda_kernel(
  *
  * @param vertices Normalized candidate vertices of shape (B, N, 24, 2), float32, contiguous.
  * @param mask Validity mask of shape (B, N, 24), bool, contiguous.
- * @param num_valid Number of valid vertices per pair of shape (B, N), int32, contiguous.
- * @return Sorted vertex indices of shape (B, N, 9), int32.
+ * @return Sorted vertex indices of shape (B, N, 25), int32.
  */
 at::Tensor diff_iou_rotated_sort_vertices_forward_cuda(
-  const at::Tensor vertices, const at::Tensor mask, const at::Tensor num_valid)
+  const at::Tensor vertices, const at::Tensor mask)
 {
   const at::cuda::CUDAGuard device_guard(vertices.device());
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
@@ -205,15 +206,14 @@ at::Tensor diff_iou_rotated_sort_vertices_forward_cuda(
   const int b = vertices.size(0);
   const int n = vertices.size(1);
   const int m = vertices.size(2);
-  at::Tensor idx = torch::zeros(
-    {b, n, kMaxNumVertexIndices}, at::device(vertices.device()).dtype(at::ScalarType::Int));
+  at::Tensor idx =
+    torch::zeros({b, n, m + 1}, at::device(vertices.device()).dtype(at::ScalarType::Int));
   if (b == 0 || n == 0) {
     return idx;
   }
 
   diff_iou_rotated_sort_vertices_forward_cuda_kernel<<<b, optimal_num_threads(n), 0, stream>>>(
-    b, n, m, vertices.data_ptr<float>(), mask.data_ptr<bool>(), num_valid.data_ptr<int>(),
-    idx.data_ptr<int>());
+    b, n, m, vertices.data_ptr<float>(), mask.data_ptr<bool>(), idx.data_ptr<int>());
   AT_CUDA_CHECK(cudaGetLastError());
 
   return idx;

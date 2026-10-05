@@ -20,7 +20,7 @@
 #ifdef WITH_CUDA
 // Implemented in diff_iou_rotated_cuda.cu
 at::Tensor diff_iou_rotated_sort_vertices_forward_cuda(
-  const at::Tensor vertices, const at::Tensor mask, const at::Tensor num_valid);
+  const at::Tensor vertices, const at::Tensor mask);
 #endif
 
 /**
@@ -28,34 +28,26 @@ at::Tensor diff_iou_rotated_sort_vertices_forward_cuda(
  *
  * @param vertices Candidate vertices normalized around their mean, shape (B, N, 24, 2), float32.
  * @param mask Validity mask of the candidates, shape (B, N, 24), bool.
- * @param num_valid Number of valid candidates per pair, shape (B, N), int32.
- * @return Sorted vertex indices of shape (B, N, 9), int32. See the CUDA kernel for the layout.
+ * @return Sorted vertex indices of shape (B, N, 25), int32. See the CUDA kernel for the layout.
  */
-at::Tensor diff_iou_rotated_sort_vertices_forward(
-  const at::Tensor vertices, const at::Tensor mask, const at::Tensor num_valid)
+at::Tensor diff_iou_rotated_sort_vertices_forward(const at::Tensor vertices, const at::Tensor mask)
 {
   TORCH_CHECK(
     vertices.dim() == 4 && vertices.size(3) == 2, "vertices must have shape (B, N, M, 2)");
   TORCH_CHECK(mask.dim() == 3, "mask must have shape (B, N, M)");
-  TORCH_CHECK(num_valid.dim() == 2, "num_valid must have shape (B, N)");
   TORCH_CHECK(
     mask.size(0) == vertices.size(0) && mask.size(1) == vertices.size(1) &&
       mask.size(2) == vertices.size(2),
     "mask must match the leading dimensions of vertices");
-  TORCH_CHECK(
-    num_valid.size(0) == vertices.size(0) && num_valid.size(1) == vertices.size(1),
-    "num_valid must match the leading dimensions of vertices");
   TORCH_CHECK(vertices.scalar_type() == at::ScalarType::Float, "vertices must be float32");
   TORCH_CHECK(mask.scalar_type() == at::ScalarType::Bool, "mask must be bool");
-  TORCH_CHECK(num_valid.scalar_type() == at::ScalarType::Int, "num_valid must be int32");
   TORCH_CHECK(vertices.is_contiguous(), "vertices must be contiguous");
   TORCH_CHECK(mask.is_contiguous(), "mask must be contiguous");
-  TORCH_CHECK(num_valid.is_contiguous(), "num_valid must be contiguous");
 
   if (vertices.is_cuda()) {
 #ifdef WITH_CUDA
-    TORCH_CHECK(mask.is_cuda() && num_valid.is_cuda(), "all inputs must be on the same device");
-    return diff_iou_rotated_sort_vertices_forward_cuda(vertices, mask, num_valid);
+    TORCH_CHECK(mask.is_cuda(), "all inputs must be on the same device");
+    return diff_iou_rotated_sort_vertices_forward_cuda(vertices, mask);
 #else
     TORCH_CHECK(false, "diff_iou_rotated_sort_vertices_forward was compiled without CUDA");
 #endif
@@ -69,5 +61,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
   m.def(
     "diff_iou_rotated_sort_vertices_forward", &diff_iou_rotated_sort_vertices_forward,
     "Sort intersection polygon vertices counter-clockwise (CUDA)", py::arg("vertices"),
-    py::arg("mask"), py::arg("num_valid"));
+    py::arg("mask"));
 }
