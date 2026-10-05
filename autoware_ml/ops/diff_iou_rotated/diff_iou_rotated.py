@@ -32,6 +32,8 @@ from jaxtyping import Bool, Float32, Int32, Int64
 import torch
 from torch.autograd import Function
 
+from autoware_ml.types.geometry import Box3DFieldIndex
+
 from . import diff_iou_rotated_ext
 
 EPSILON = 1e-8
@@ -498,20 +500,21 @@ def box2corners(
     """Convert rotated 2d box coordinate to corners.
 
     Args:
-        box: ``(B, N, 5)`` with x, y, w, h, alpha.
+        box: ``(B, N, 5)`` with (x, y, length, width, yaw); the length lies along the yaw
+            direction and the width across it.
 
     Returns:
         ``(B, N, 4, 2)`` Corners.
     """
     batch_size, num_boxes = box.size()[0], box.size()[1]
-    x, y, w, h, alpha = box.split([1, 1, 1, 1, 1], dim=-1)
+    x, y, length, width, yaw = box.split([1, 1, 1, 1, 1], dim=-1)
     x4 = box.new_tensor([0.5, -0.5, -0.5, 0.5]).to(box.device)
-    x4 = x4 * w  # (B, N, 4)
+    x4 = x4 * length  # (B, N, 4)
     y4 = box.new_tensor([0.5, 0.5, -0.5, -0.5]).to(box.device)
-    y4 = y4 * h  # (B, N, 4)
+    y4 = y4 * width  # (B, N, 4)
     corners = torch.stack([x4, y4], dim=-1)  # (B, N, 4, 2)
-    sin = torch.sin(alpha)
-    cos = torch.cos(alpha)
+    sin = torch.sin(yaw)
+    cos = torch.cos(yaw)
     row1 = torch.cat([cos, sin], dim=-1)
     row2 = torch.cat([-sin, cos], dim=-1)  # (B, N, 2)
     rot_t = torch.stack([row1, row2], dim=-2)  # (B, N, 2, 2)
@@ -529,8 +532,8 @@ def diff_iou_rotated_2d(
     """Calculate differentiable iou of rotated 2d boxes.
 
     Args:
-        box1: ``(B, N, 5)`` First box as (x, y, w, h, alpha).
-        box2: ``(B, N, 5)`` Second box as (x, y, w, h, alpha).
+        box1: ``(B, N, 5)`` First box as (x, y, length, width, yaw).
+        box2: ``(B, N, 5)`` Second box as (x, y, length, width, yaw).
 
     Returns:
         ``(B, N)`` IoU.
@@ -554,25 +557,32 @@ def diff_iou_rotated_3d(
     """Calculate differentiable iou of rotated 3d boxes.
 
     Args:
-        box3d1: ``(B, N, 3+3+1)`` First box as (x, y, z, w, h, l, alpha).
-        box3d2: ``(B, N, 3+3+1)`` Second box as (x, y, z, w, h, l, alpha).
+        box3d1: ``(B, N, 7)`` First box as (x, y, z, length, width, height, yaw), the
+            :class:`~autoware_ml.types.geometry.Box3DFieldIndex` layout.
+        box3d2: ``(B, N, 7)`` Second box in the same layout.
 
     Returns:
         ``(B, N)`` IoU.
     """
-    box1 = box3d1[..., [0, 1, 3, 4, 6]]  # 2d box
-    box2 = box3d2[..., [0, 1, 3, 4, 6]]
-    corners1 = box2corners(box1)
-    corners2 = box2corners(box2)
+    bev_fields = [
+        Box3DFieldIndex.X,
+        Box3DFieldIndex.Y,
+        Box3DFieldIndex.LENGTH,
+        Box3DFieldIndex.WIDTH,
+        Box3DFieldIndex.YAW,
+    ]
+    corners1 = box2corners(box3d1[..., bev_fields])
+    corners2 = box2corners(box3d2[..., bev_fields])
     intersection, _ = oriented_box_intersection_2d(corners1, corners2)
-    zmax1 = box3d1[..., 2] + box3d1[..., 5] * 0.5
-    zmin1 = box3d1[..., 2] - box3d1[..., 5] * 0.5
-    zmax2 = box3d2[..., 2] + box3d2[..., 5] * 0.5
-    zmin2 = box3d2[..., 2] - box3d2[..., 5] * 0.5
-    z_overlap = (torch.min(zmax1, zmax2) - torch.max(zmin1, zmin2)).clamp_(min=0.0)
+    z1, height1 = box3d1[..., Box3DFieldIndex.Z], box3d1[..., Box3DFieldIndex.HEIGHT]
+    z2, height2 = box3d2[..., Box3DFieldIndex.Z], box3d2[..., Box3DFieldIndex.HEIGHT]
+    z_overlap = (
+        torch.min(z1 + height1 * 0.5, z2 + height2 * 0.5)
+        - torch.max(z1 - height1 * 0.5, z2 - height2 * 0.5)
+    ).clamp_(min=0.0)
     intersection_3d = intersection * z_overlap
-    volume1 = box3d1[..., 3] * box3d1[..., 4] * box3d1[..., 5]
-    volume2 = box3d2[..., 3] * box3d2[..., 4] * box3d2[..., 5]
+    volume1 = box3d1[..., Box3DFieldIndex.LENGTH] * box3d1[..., Box3DFieldIndex.WIDTH] * height1
+    volume2 = box3d2[..., Box3DFieldIndex.LENGTH] * box3d2[..., Box3DFieldIndex.WIDTH] * height2
     # Same guard as in :func:`diff_iou_rotated_2d`: a zero-volume box with no overlap.
     union_3d = (volume1 + volume2 - intersection_3d).clamp(min=EPSILON)
     return intersection_3d / union_3d
