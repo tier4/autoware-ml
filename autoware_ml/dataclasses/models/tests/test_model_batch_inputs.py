@@ -33,7 +33,10 @@ class TestModelBatchInputs(unittest.TestCase):
     def setUp(self) -> None:
         """Set up an empty GT batch and small voxel and image payloads."""
         self.gt_batch = ModelGTBatch(
-            point_cloud_gt_batch=None, detection3d_gt_batch=None, image_gt_batch=None
+            point_cloud_gt_batch=None,
+            detection3d_gt_batch=None,
+            segmentation3d_gt_batch=None,
+            image_gt_batch=None,
         )
         num_voxels, max_points, channels = 4, 5, 4
         self.voxels_data = VoxelsData(

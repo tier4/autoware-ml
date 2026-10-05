@@ -91,6 +91,7 @@ class TestMultiTaskEvalOutput(unittest.TestCase):
             multi_task_gt_batch=ModelGTBatch(
                 point_cloud_gt_batch=None,
                 detection3d_gt_batch=detection3d_gt_batch,
+                segmentation3d_gt_batch=None,
                 image_gt_batch=None,
             ),
             voxels_data=None,
@@ -104,6 +105,7 @@ class TestMultiTaskEvalOutput(unittest.TestCase):
             multi_task_gt_batch=ModelGTBatch(
                 point_cloud_gt_batch=None,
                 detection3d_gt_batch=None,
+                segmentation3d_gt_batch=None,
                 image_gt_batch=None,
             ),
             voxels_data=None,
