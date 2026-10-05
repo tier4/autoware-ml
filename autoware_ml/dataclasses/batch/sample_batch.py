@@ -202,25 +202,28 @@ class ModelGTBatch(NamedTuple):
           ValueError: If only some of the samples carry semantic labels, or if a sample
             carries a label count its point count disagrees with.
         """
-        if len(gt_samples) == 0 or gt_samples[0].segmentation3d_gt_sample is None:
-            if any(sample.segmentation3d_gt_sample is not None for sample in gt_samples):
-                raise ValueError("All samples must have segmentation3d_gt_sample for collating.")
+        segmentation3d_gt_samples = [
+            sample.segmentation3d_gt_sample
+            for sample in gt_samples
+            if sample.segmentation3d_gt_sample is not None
+        ]
+        if not len(segmentation3d_gt_samples):
             return None
 
-        segmentation3d_gt_samples = []
-        for index, sample in enumerate(gt_samples):
-            if sample.segmentation3d_gt_sample is None:
-                raise ValueError("All samples must have segmentation3d_gt_sample for collating.")
+        if len(segmentation3d_gt_samples) != len(gt_samples):
+            raise ValueError("All samples must have segmentation3d_gt_sample for collating.")
 
-            # A label and its point share a position in the collated tensors, so a sample whose
-            # counts disagree would pair every later sample label with another sample point
-            num_labels = sample.segmentation3d_gt_sample.gt_semantic_mask.shape[0]
+        # A label and its point share a position in the collated tensors, so a sample whose
+        # counts disagree would pair every later sample label with another sample point
+        for index, (sample, segmentation3d_gt_sample) in enumerate(
+            zip(gt_samples, segmentation3d_gt_samples)
+        ):
+            num_labels = segmentation3d_gt_sample.gt_semantic_mask.shape[0]
             if sample.point_cloud_data is not None and len(sample.point_cloud_data) != num_labels:
                 raise ValueError(
                     f"Sample {index} carries {num_labels} semantic labels for "
                     f"{len(sample.point_cloud_data)} points, every point takes one label."
                 )
-            segmentation3d_gt_samples.append(sample.segmentation3d_gt_sample)
 
         return Segmentation3DGTBatch.collate_gt_samples(segmentation3d_gt_samples)
 
