@@ -372,11 +372,11 @@ def drop_duplicate_vertices(
     """Invalidate candidate vertices that coincide with an earlier valid candidate.
 
     Two boxes that share a corner, or that are (nearly) identical, produce the same point
-    several times: once per box corner and once more per edge pair meeting there. Exactly equal
-    duplicates are handled by the sorting kernel, but points a few float ulps apart are not, and
-    they break its angular ordering. Keeping only the first occurrence removes both kinds. The
-    candidate order is (corners of box1, corners of box2, intersections), so box1's corners are
-    always the ones kept and gradients keep flowing to them.
+    several times: once per box corner and once more per edge pair meeting there. The sorting
+    kernel cannot order equal or nearly equal points and expects every valid candidate to be
+    distinct. Keeping only the first occurrence removes both exact duplicates and points a few
+    float ulps apart. The candidate order is (corners of box1, corners of box2, intersections),
+    so box1's corners are always the ones kept and gradients keep flowing to them.
 
     Args:
         vertices: ``(B, N, 24, 2)`` Candidate vertices.

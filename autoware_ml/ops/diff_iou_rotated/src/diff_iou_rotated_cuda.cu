@@ -152,25 +152,6 @@ __global__ void diff_iou_rotated_sort_vertices_forward_cuda_kernel(
       for (int j = n_valid + 1; j < row; ++j) {
         idx[i * row + j] = pad;
       }
-
-      // Corner case: the two boxes are exactly the same. idx then holds duplicate elements,
-      // which breaks the shoelace formula. By construction the duplicates only appear in the
-      // first 8 positions (they are "corners in box", not "intersections of edges").
-      if (n_valid == 8) {
-        int counter = 0;
-        for (int j = 0; j < 4; ++j) {
-          const int check = idx[i * row + j];
-          for (int k = 4; k < kIntersectionOffset; ++k) {
-            if (idx[i * row + k] == check) counter++;
-          }
-        }
-        if (counter == 4) {
-          idx[i * row + 4] = idx[i * row + 0];
-          for (int j = 5; j < row; ++j) {
-            idx[i * row + j] = pad;
-          }
-        }
-      }
     }
   }
 }
