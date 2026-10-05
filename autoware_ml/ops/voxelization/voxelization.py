@@ -19,31 +19,11 @@ Runs entirely on the input tensor's device.
 """
 
 from __future__ import annotations
-from typing import NamedTuple
 
 from jaxtyping import Float32, Int32, Int64, Bool
 import torch
 
-
-class VoxelsData(NamedTuple):
-    """
-    Container for hard-voxelization results.
-
-    Attributes:
-        voxels (M, max_num_points, C): Padded point features grouped by their respective voxel,
-            where a point value is fully 0 when the voxel is padded.
-            C is either (x, y, z, intensity) or (x, y, z, time_lag) if C is 4. C is
-            (x, y, z, intensity, time_lag) when it's 5.
-        coords (M, 3): Integer voxel coordinates in (x, y, z).
-        num_points (M): Number of valid points per voxel.
-        batch_indices (M): Batch indices for each voxel.
-      M = batch_size * maximum number of voxels.
-    """
-
-    voxels: Float32[torch.Tensor, "M max_num_points C"]
-    coords: Int32[torch.Tensor, "M 3"]
-    num_points: Int32[torch.Tensor, " M"]
-    batch_indices: Int32[torch.Tensor, " M"]
+from autoware_ml.dataclasses.geometry.voxels import VoxelsData
 
 
 def hard_voxelize(
