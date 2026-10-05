@@ -21,19 +21,18 @@ import unittest
 
 import torch
 
-from autoware_ml.ops.diff_iou_rotated import (
-    box2corners,
-    diff_iou_rotated_2d,
-    diff_iou_rotated_3d,
-    enclosing_area,
-    oriented_box_intersection_2d,
-)
 from autoware_ml.ops.diff_iou_rotated.diff_iou_rotated import (
+    EnclosingType,
+    box2corners,
     box_in_box,
     box_intersection,
     build_vertices,
     calculate_area,
+    diff_iou_rotated_2d,
+    diff_iou_rotated_3d,
     drop_duplicate_vertices,
+    enclosing_area,
+    oriented_box_intersection_2d,
     sort_indices,
 )
 
@@ -325,14 +324,54 @@ class TestDiffIoURotated(unittest.TestCase):
         corners1 = box2corners(torch.tensor([[[0.0, 0.0, 2.0, 1.0, 0.3]]], device=self.device))
         corners2 = box2corners(torch.tensor([[[1.0, 0.5, 1.0, 1.0, -0.6]]], device=self.device))
 
-        aligned = enclosing_area(corners1, corners2, "aligned")
-        smallest = enclosing_area(corners1, corners2, "smallest")
-        hull = enclosing_area(corners1, corners2, "convex_hull")
+        aligned = enclosing_area(corners1, corners2, EnclosingType.ALIGNED)
+        smallest = enclosing_area(corners1, corners2, EnclosingType.SMALLEST)
+        hull = enclosing_area(corners1, corners2, EnclosingType.CONVEX_HULL)
 
         self.assertLessEqual(float(hull), float(smallest) + 1e-5)
         self.assertLessEqual(float(smallest), float(aligned) + 1e-5)
         with self.assertRaises(ValueError):
             enclosing_area(corners1, corners2, "unknown")
+
+    def test_convex_hull_area_matches_hand_computed_values(self) -> None:
+        """The convex hull area is exact on layouts whose hull can be worked out by hand.
+
+        The three layouts exercise the cases the fan dynamic program must get right: a hull
+        mixing corners of both boxes, interior corners that must be ignored, and collinear
+        corners lying on a hull edge.
+        """
+        boxes1 = torch.tensor(
+            [
+                [
+                    # Unit square at the origin next to a diamond centered at (3, 0) with
+                    # vertices (2, 0), (4, 0), (3, 1), (3, -1). The hull is the pentagon
+                    # (-0.5, -0.5), (3, -1), (4, 0), (3, 1), (-0.5, 0.5): shoelace area 6.25.
+                    [0.0, 0.0, 1.0, 1.0, 0.0],
+                    # Unit square inside a 4 x 2 box rotated by 0.3 rad about the same center:
+                    # its corners are interior, so the hull is the big box, area 8.
+                    [0.0, 0.0, 4.0, 2.0, 0.3],
+                    # Two unit squares two units apart: the hull is the 3 x 1 strip between
+                    # them, area 3, with the inner corners collinear on its long edges.
+                    [0.0, 0.0, 1.0, 1.0, 0.0],
+                ]
+            ],
+            device=self.device,
+        )
+        boxes2 = torch.tensor(
+            [
+                [
+                    [3.0, 0.0, math.sqrt(2.0), math.sqrt(2.0), math.pi / 4],
+                    [0.0, 0.0, 1.0, 1.0, 0.0],
+                    [2.0, 0.0, 1.0, 1.0, 0.0],
+                ]
+            ],
+            device=self.device,
+        )
+
+        hull = enclosing_area(box2corners(boxes1), box2corners(boxes2), EnclosingType.CONVEX_HULL)
+
+        expected = torch.tensor([[6.25, 8.0, 3.0]], device=self.device)
+        torch.testing.assert_close(hull, expected, rtol=0.0, atol=1e-5)
 
     def test_zero_size_and_disjoint_boxes_give_zero_iou_with_finite_gradients(self) -> None:
         """Degenerate inputs yield IoU 0 and finite gradients instead of NaN.

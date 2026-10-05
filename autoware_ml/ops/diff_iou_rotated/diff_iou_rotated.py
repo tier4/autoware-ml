@@ -28,6 +28,8 @@ parameters and can be used as a loss or matching cost.
 
 from __future__ import annotations
 
+from enum import StrEnum
+
 from jaxtyping import Bool, Float32, Int32, Int64
 import torch
 from torch.autograd import Function
@@ -43,6 +45,20 @@ EPSILON = 1e-8
 # intersections only adds duplicate vertices. Float noise on rotated corners otherwise produces
 # them, and the intersection polygon then exceeds the 8 vertices two rectangles can share.
 GEOMETRY_TOLERANCE = 1e-6
+
+
+class EnclosingType(StrEnum):
+    """Shape of the region enclosing two rotated boxes, from loosest to tightest.
+
+    Attributes:
+        ALIGNED: Axis-aligned box.
+        SMALLEST: Minimum-area rotated box.
+        CONVEX_HULL: Convex hull of the two boxes.
+    """
+
+    ALIGNED = "aligned"
+    SMALLEST = "smallest"
+    CONVEX_HULL = "convex_hull"
 
 
 class SortVertices(Function):
@@ -183,32 +199,30 @@ def convex_hull_area(
 def enclosing_area(
     corners1: Float32[torch.Tensor, "batch_size num_boxes 4 2"],
     corners2: Float32[torch.Tensor, "batch_size num_boxes 4 2"],
-    enclosing_type: str = "smallest",
+    enclosing_type: EnclosingType = EnclosingType.SMALLEST,
 ) -> Float32[torch.Tensor, "batch_size num_boxes"]:
     """Area of the region enclosing two rotated boxes.
 
     Args:
         corners1: ``(B, N, 4, 2)`` First batch of boxes.
         corners2: ``(B, N, 4, 2)`` Second batch of boxes.
-        enclosing_type: Shape of the enclosing region, one of ``'aligned'`` (axis-aligned
-            box), ``'smallest'`` (minimum-area rotated box) and ``'convex_hull'`` (tightest
-            convex region). Defaults to ``'smallest'``.
+        enclosing_type: Shape of the enclosing region, see :class:`EnclosingType`. Defaults
+            to the minimum-area rotated box.
 
     Returns:
         ``(B, N)`` Area of the enclosing region.
 
     Raises:
-        ValueError: If ``enclosing_type`` is not one of the supported values.
+        ValueError: If ``enclosing_type`` is not a member of :class:`EnclosingType`.
     """
-    if enclosing_type == "aligned":
+    if enclosing_type == EnclosingType.ALIGNED:
         return enclosing_box_aligned(corners1, corners2)
-    if enclosing_type == "smallest":
+    if enclosing_type == EnclosingType.SMALLEST:
         return enclosing_box_smallest(corners1, corners2)
-    if enclosing_type == "convex_hull":
+    if enclosing_type == EnclosingType.CONVEX_HULL:
         return convex_hull_area(corners1, corners2)
-    raise ValueError(
-        f"Unknown enclosing type {enclosing_type}. Supported: aligned, smallest, convex_hull"
-    )
+    supported = ", ".join(member.value for member in EnclosingType)
+    raise ValueError(f"Unknown enclosing type {enclosing_type}. Supported: {supported}")
 
 
 def box_intersection(
