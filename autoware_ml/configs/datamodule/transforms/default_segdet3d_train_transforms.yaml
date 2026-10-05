@@ -67,14 +67,10 @@ pipeline:
 
     filter_attributes: ${dataset.detection3d.filter_attributes}
 
-  - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesBEVDistanceFilter
+  - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesRangeFilter
     _convert_: all
 
-    bev_range:
-      - ${point_cloud_range.0}
-      - ${point_cloud_range.1}
-      - ${point_cloud_range.3}
-      - ${point_cloud_range.4}
+    point_cloud_range: ${point_cloud_range}
 
   # Order matters, it first filters the boxes of the whole range, then the boxes within 60 meters
   - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesMinPointsFilter

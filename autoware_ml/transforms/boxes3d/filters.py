@@ -83,27 +83,27 @@ class BBoxesMinPointsFilter(BaseTransform):
         return model_gt_sample
 
 
-class BBoxesBEVDistanceFilter(BaseTransform):
-    """Filter 3D bounding boxes by their bev distance."""
+class BBoxesRangeFilter(BaseTransform):
+    """Filter 3D bounding boxes whose center lies outside the point cloud range."""
 
     _required_keys = ["detection3d_gt_bboxes_3d"]
 
     def __init__(
         self,
-        bev_range: Sequence[float],
+        point_cloud_range: Sequence[float],
     ) -> None:
         """
-        Initialize the BBoxesBEVDistanceFilter transform.
+        Initialize the BBoxesRangeFilter transform.
 
         Args:
-            bev_range (Sequence[float]): The distance ([x_min, y_min, x_max, y_max]) of bounding boxes
-                to apply the BEV distance filtering.
+            point_cloud_range (Sequence[float]): The range ([x_min, y_min, z_min, x_max, y_max,
+                z_max]) the bounding box centers have to lie in.
         """
         super().__init__(probability=None)
-        self.bev_range = torch.tensor(bev_range, dtype=torch.float32)
+        self.point_cloud_range = torch.tensor(point_cloud_range, dtype=torch.float32)
 
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
-        """Filter 3D bounding boxes by BEV distance."""
+        """Drop the boxes whose center lies outside the point cloud range."""
         # This is checked in the _validate_required_keys()
         detection3d_gt_bboxes_3d: BaseBBoxes3D = (
             model_gt_sample.detection3d_gt_bboxes_3d  # type: ignore[reportOptionalMemberAccess]
@@ -111,8 +111,8 @@ class BBoxesBEVDistanceFilter(BaseTransform):
         if not len(detection3d_gt_bboxes_3d):
             return model_gt_sample
 
-        distance_in_range_masks = detection3d_gt_bboxes_3d.in_range_bev(self.bev_range)
-        detection3d_gt_bboxes_3d.remove_bboxes(distance_in_range_masks)
+        in_range_masks = detection3d_gt_bboxes_3d.in_range_3d(self.point_cloud_range)
+        detection3d_gt_bboxes_3d.remove_bboxes(in_range_masks)
 
         return model_gt_sample
 
