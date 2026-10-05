@@ -1,27 +1,7 @@
-# J6 gen2 database carrying semantic masks
-_target_: autoware_ml.databases.t4dataset.t4dataset.T4Dataset
-_convert_: all
+defaults:
+  - t4dataset/t4dataset_common@_here_
+  - t4dataset/scenarios@scenarios.db_j6gen2_semaseg: segmentation3d/db_j6gen2_semaseg
+  - _self_
 
 version: T4Dataset-j6gen2_semaseg-v1.0.0
-# Root path of actual annotation files
-root_path: ${data_root_path}/t4dataset/
-
-# Caches
 cache_path: ${cache_root_path}/segmentation3d/
-# Prefix name of the cache file, it will be <cache_file_prefix_name>_<database_hash>.parquet
-cache_file_prefix_name: database
-
-# Read each database into their corresponding scenarios, it will run evaluation/visualization on each scenario
-defaults:
-  - t4dataset/taxonomy@taxonomy: default_coarse
-  - t4dataset/box3d_pipelines@box3d_pipelines: default_box3d_pipelines
-  - t4dataset/scenarios@scenarios.db_j6gen2_semaseg: segmentation3d/db_j6gen2_semaseg
-
-# Sensor channel of the lidar frame every sample is built around
-lidar_channel: LIDAR_CONCAT
-
-# Intensity of the strongest return in the stored point clouds
-lidar_intensity_scale: 255.0
-
-# Processor settings
-num_workers: 16

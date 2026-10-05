@@ -1,0 +1,19 @@
+_target_: autoware_ml.databases.t4dataset.t4dataset.T4Dataset
+_convert_: all
+
+defaults:
+  - taxonomy@taxonomy: default_coarse
+  - box3d_pipelines@box3d_pipelines: default_box3d_pipelines
+
+root_path: ${data_root_path}/t4dataset/
+# Prefix name of the cache file, it will be <cache_file_prefix_name>_<database_hash>.parquet
+cache_file_prefix_name: database
+
+lidar_channel: LIDAR_CONCAT
+# Number of features in the lidar pointcloud
+lidar_pointcloud_num_features: 5
+# Intensity of the strongest return in the stored point clouds
+lidar_intensity_scale: 255.0
+box_annotation_dir: annotation
+
+num_workers: 16
