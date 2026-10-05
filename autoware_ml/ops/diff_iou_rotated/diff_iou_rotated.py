@@ -536,9 +536,9 @@ def box2corners(
     with torch.autocast(device_type=box.device.type, enabled=False):
         batch_size, num_boxes = box.size()[0], box.size()[1]
         x, y, length, width, yaw = box.split([1, 1, 1, 1, 1], dim=-1)
-        x4 = box.new_tensor([0.5, -0.5, -0.5, 0.5]).to(box.device)
+        x4 = box.new_tensor([0.5, -0.5, -0.5, 0.5])
         x4 = x4 * length  # (B, N, 4)
-        y4 = box.new_tensor([0.5, 0.5, -0.5, -0.5]).to(box.device)
+        y4 = box.new_tensor([0.5, 0.5, -0.5, -0.5])
         y4 = y4 * width  # (B, N, 4)
         corners = torch.stack([x4, y4], dim=-1)  # (B, N, 4, 2)
         sin = torch.sin(yaw)
