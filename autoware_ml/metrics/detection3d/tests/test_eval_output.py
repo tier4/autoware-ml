@@ -26,11 +26,11 @@ from autoware_ml.dataclasses.batch.detection3d import (
 )
 from autoware_ml.dataclasses.batch.frame_meta import FrameMetaBatch
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
-from autoware_ml.metrics.detection3d.eval_output import multi_task_eval_output
+from autoware_ml.metrics.detection3d.eval_output import typed_detection_eval_output
 
 
-class TestMultiTaskEvalOutput(unittest.TestCase):
-    """Unit tests for the multi_task_eval_output function."""
+class TestTypedDetectionEvalOutput(unittest.TestCase):
+    """Unit tests for the typed_detection_eval_output function."""
 
     def setUp(self) -> None:
         """Set up the common inputs for the tests."""
@@ -99,7 +99,7 @@ class TestMultiTaskEvalOutput(unittest.TestCase):
         )
 
     def test_detection3d_gt_batch_assertion(self):
-        """Test that multi_task_eval_output raises ValueError when detection3d_gt_batch is None."""
+        """Test that detection_eval_output raises ValueError when detection3d_gt_batch is None."""
 
         multi_task_batch_inputs = ModelBatchInputs(
             multi_task_gt_batch=ModelGTBatch(
@@ -112,27 +112,27 @@ class TestMultiTaskEvalOutput(unittest.TestCase):
             image_data=None,
         )
         with self.assertRaises(ValueError):
-            multi_task_eval_output(
-                multi_task_batch_inputs=multi_task_batch_inputs,
-                multi_task_predictions=self.multi_task_predictions,
+            typed_detection_eval_output(
+                batch_inputs=batch_inputs,
+                predictions=self.predictions,
             )
 
     def test_detection3d_predictions_assertion(self):
-        """Test that multi_task_eval_output raises ValueError when detection3d_predictions is None."""
+        """Test that predictions without detections raise."""
 
-        multi_task_predictions = ModelPredictions(detection3d_predictions=None)
+        predictions = ModelPredictions(detection3d_predictions=None)
         with self.assertRaises(ValueError):
-            multi_task_eval_output(
-                multi_task_batch_inputs=self.multi_task_batch_inputs,
-                multi_task_predictions=multi_task_predictions,
+            typed_detection_eval_output(
+                batch_inputs=self.batch_inputs,
+                predictions=predictions,
             )
 
     def test_eval_outputs(self):
-        """Test that multi_task_eval_output correctly pairs predictions with ground truth."""
+        """Test that typed_detection_eval_output correctly pairs predictions with ground truth."""
 
-        eval_outputs = multi_task_eval_output(
-            multi_task_batch_inputs=self.multi_task_batch_inputs,
-            multi_task_predictions=self.multi_task_predictions,
+        eval_outputs = typed_detection_eval_output(
+            batch_inputs=self.batch_inputs,
+            predictions=self.predictions,
         )
 
         self.assertIn("predictions", eval_outputs)
@@ -200,13 +200,13 @@ class TestMultiTaskEvalOutput(unittest.TestCase):
                 ego2globals=ego2globals, scene_tokens=["db/scene_a/0", "db/scene_b/1"]
             )
         )
-        multi_task_batch_inputs = ModelBatchInputs(
+        batch_inputs = ModelBatchInputs(
             multi_task_gt_batch=gt_batch, voxels_data=None, image_data=None
         )
 
-        eval_outputs = multi_task_eval_output(
-            multi_task_batch_inputs=multi_task_batch_inputs,
-            multi_task_predictions=self.multi_task_predictions,
+        eval_outputs = typed_detection_eval_output(
+            batch_inputs=batch_inputs,
+            predictions=self.predictions,
         )
 
         self.assertEqual(len(eval_outputs["ego2global"]), 2)
@@ -215,9 +215,9 @@ class TestMultiTaskEvalOutput(unittest.TestCase):
 
     def test_frame_meta_keys_absent_without_frame_meta_batch(self):
         """Test that the metadata keys are left out when the batch carries none."""
-        eval_outputs = multi_task_eval_output(
-            multi_task_batch_inputs=self.multi_task_batch_inputs,
-            multi_task_predictions=self.multi_task_predictions,
+        eval_outputs = typed_detection_eval_output(
+            batch_inputs=self.batch_inputs,
+            predictions=self.predictions,
         )
 
         self.assertNotIn("ego2global", eval_outputs)

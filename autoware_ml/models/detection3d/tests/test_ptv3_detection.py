@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 import torch
 
+from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
 from autoware_ml.models.detection3d.tests.ptv3_detection_fixtures import (
     build_inputs,
@@ -64,7 +65,7 @@ def test_ptv3_transhead_detection_runs_loss_and_predict() -> None:
     assert outputs["dense_heatmap"].shape[:2] == (1, 2)
     assert outputs["query_labels"].shape == (1, 8)
     assert isinstance(predictions, list)
-    assert set(predictions[0]) == {"bboxes_3d", "scores_3d", "labels_3d"}
+    assert isinstance(predictions[0], Detection3DSamplePredictions)
 
 
 def test_ptv3_detection_loads_encoder_from_seg_checkpoint_via_matching_weights(

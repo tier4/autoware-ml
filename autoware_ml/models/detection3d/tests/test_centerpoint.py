@@ -20,6 +20,7 @@ import math
 
 import torch
 
+from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
 from autoware_ml.models.detection3d.backbones.second import SECONDBackbone
 from autoware_ml.models.detection3d.centerpoint import CenterPointDetectionModel
 from autoware_ml.models.detection3d.encoders.pillar import PillarFeatureNet, PointPillarsScatter
@@ -93,7 +94,9 @@ class TestCenterPointTargets:
         )
         assert torch.allclose(targets.anno_boxes[0, 0, 8:], torch.tensor([0.5, -0.1]))
 
-    def test_predict_returns_length_width_height_after_unified_dim_order(self) -> None:
+    @staticmethod
+    def _single_box_head_and_outputs() -> tuple[CenterHead, dict[str, torch.Tensor]]:
+        """Build a head and raw outputs that decode into one known box."""
         head = CenterHead(
             in_channels=4,
             num_classes=2,
@@ -119,13 +122,28 @@ class TestCenterPointTargets:
         outputs["height"][0, 0, 3, 2] = 0.2
         outputs["dim"][0, :, 3, 2] = torch.tensor([4.0, 1.6, 1.5]).log()
         outputs["rot"][0, 1, 3, 2] = 1.0
+        return head, outputs
+
+    def test_predict_returns_length_width_height_after_unified_dim_order(self) -> None:
+        head, outputs = self._single_box_head_and_outputs()
 
         predictions = head.predict(outputs)
 
-        assert predictions[0]["bboxes_3d"].shape == (1, 7)
+        assert predictions[0].bboxes_3d.shape == (1, 7)
         assert torch.allclose(
-            predictions[0]["bboxes_3d"][0, 3:6],
+            predictions[0].bboxes_3d[0, 3:6],
             torch.tensor([4.0, 1.6, 1.5]),
+        )
+
+    def test_predict_decodes_half_precision_outputs_in_float32(self) -> None:
+        head, outputs = self._single_box_head_and_outputs()
+
+        predictions = head.predict({name: value.half() for name, value in outputs.items()})
+
+        assert predictions[0].bboxes_3d.dtype == torch.float32
+        assert predictions[0].scores_3d.dtype == torch.float32
+        assert torch.allclose(
+            predictions[0].bboxes_3d[0, 3:6], torch.tensor([4.0, 1.6, 1.5]), atol=1e-2
         )
 
     def test_centerpoint_loss_and_predict_run(self) -> None:
@@ -146,7 +164,7 @@ class TestCenterPointTargets:
         assert "loss" in metrics
         assert outputs["heatmap"].shape[:2] == (1, 2)
         assert isinstance(predictions, list)
-        assert set(predictions[0]) == {"bboxes_3d", "scores_3d", "labels_3d"}
+        assert isinstance(predictions[0], Detection3DSamplePredictions)
 
     def test_centerpoint_builds_split_deployment_specs(self) -> None:
         model = _build_model().eval()
@@ -290,6 +308,6 @@ def test_centerhead_uses_natural_dimension_order() -> None:
     predictions = head.predict(outputs)
 
     assert torch.allclose(
-        predictions[0]["bboxes_3d"][0, 3:6],
+        predictions[0].bboxes_3d[0, 3:6],
         torch.tensor([4.0, 1.6, 1.5]),
     )

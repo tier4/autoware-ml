@@ -35,6 +35,7 @@ import torch.nn as nn
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
+from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
 from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
 from autoware_ml.models.detection3d.ptv3 import PTv3DetBEVNeck, build_det_head_export_spec
 from autoware_ml.models.segmentation3d.encoders.ptv3 import PointTransformerV3Encoder
@@ -233,7 +234,7 @@ class PTv3SegDetModel(PTv3BaseModel):
     def build_eval_output(
         self, batch: Mapping[str, Any], outputs: dict[str, Any]
     ) -> dict[str, Any]:
-        """Produce detection and original-point segmentation eval data.
+        """Produce the detection and the current frame segmentation eval data.
 
         Frames without detection supervision contribute empty predictions and
         their (already empty) ground truth instead of being dropped: the
@@ -245,7 +246,13 @@ class PTv3SegDetModel(PTv3BaseModel):
         det_mask = self._detection_frame_mask(batch)
         predictions = self.bbox_head.predict(outputs["det_outputs"])
         predictions = [
-            prediction if flagged else {key: value[:0] for key, value in prediction.items()}
+            prediction
+            if flagged
+            else Detection3DSamplePredictions(
+                bboxes_3d=prediction.bboxes_3d[:0],
+                scores_3d=prediction.scores_3d[:0],
+                labels_3d=prediction.labels_3d[:0],
+            )
             for prediction, flagged in zip(predictions, det_mask.tolist())
         ]
         eval_out = detection_eval_output(predictions, batch)

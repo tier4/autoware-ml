@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
 from autoware_ml.models.multi.ptv3_segdet import PTv3SegDetModel
 from autoware_ml.models.segmentation3d.ptv3_base import seg_head_export_input_names
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
@@ -53,13 +54,13 @@ JOINT_EXPORT_OUTPUT_NAMES = [
 
 
 class _DummyBBoxHead:
-    def predict(self, det_outputs: object) -> list[dict[str, torch.Tensor]]:
+    def predict(self, det_outputs: object) -> list[Detection3DSamplePredictions]:
         return [
-            {
-                "bboxes_3d": torch.zeros((0, 9), dtype=torch.float32),
-                "scores_3d": torch.zeros((0,), dtype=torch.float32),
-                "labels_3d": torch.zeros((0,), dtype=torch.long),
-            }
+            Detection3DSamplePredictions(
+                bboxes_3d=torch.zeros((0, 9), dtype=torch.float32),
+                scores_3d=torch.zeros((0,), dtype=torch.float32),
+                labels_3d=torch.zeros((0,), dtype=torch.long),
+            )
         ]
 
 
