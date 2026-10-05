@@ -21,8 +21,6 @@
 #include <c10/cuda/CUDAGuard.h>
 #include <torch/torch.h>
 
-#include <cmath>
-
 /**
  * @file diff_iou_rotated_cuda.cu
  * @brief CUDA kernel sorting the vertices of the intersection polygon of two rotated boxes.
@@ -46,15 +44,8 @@ constexpr int kIntersectionOffset = 8;
 /// Tolerance used when comparing vertex coordinates.
 constexpr float kEpsilon = 1e-8f;
 
-/// Upper bound on the number of threads per CUDA block.
-constexpr int kMaxThreadsPerBlock = 512;
-
-/// Choose the largest power of two thread count that does not exceed the work size.
-inline int optimal_num_threads(int work_size)
-{
-  const int pow_2 = static_cast<int>(std::log(static_cast<double>(work_size)) / std::log(2.0));
-  return std::max(std::min(1 << pow_2, kMaxThreadsPerBlock), 1);
-}
+/// Number of threads per CUDA block; one thread sorts one polygon.
+constexpr int kThreadsPerBlock = 256;
 
 /**
  * @brief Compare two vertices normalized around the polygon mean.
@@ -88,33 +79,28 @@ __device__ bool compare_vertices(float x1, float y1, float x2, float y2)
 /**
  * @brief Sort the valid vertices of every intersection polygon counter-clockwise.
  *
- * One block handles one batch element, one thread one polygon. The output index row has the
- * layout (A, B, C, ..., A, X, X, X): the sorted valid vertices, the first one repeated to close
- * the polygon, then padding with the index of an arbitrary invalid intersection candidate, whose
- * value and gradient are zero. The row holds m + 1 indices, enough for every candidate plus
+ * One thread handles one polygon; the batch and pair axes are flattened so the grid covers
+ * every polygon no matter how the pairs are split across batch elements. The output index row
+ * has the layout (A, B, C, ..., A, X, X, X): the sorted valid vertices, the first one repeated to
+ * close the polygon, then padding with the index of an arbitrary invalid intersection candidate,
+ * whose value and gradient are zero. The row holds m + 1 indices, enough for every candidate plus
  * the closing duplicate, and the number of valid vertices is counted from the mask, so the
  * writes below stay inside the row for any mask.
  *
- * @param b Batch size.
- * @param n Number of box pairs per batch element.
+ * @param num_polygons Number of polygons, i.e. batch size times box pairs per batch element.
  * @param m Number of candidate vertices per pair (24).
- * @param vertices Normalized candidate vertices of shape (b, n, m, 2).
- * @param mask Validity mask of shape (b, n, m).
- * @param idx Output sorted indices of shape (b, n, m + 1).
+ * @param vertices Normalized candidate vertices of shape (num_polygons, m, 2).
+ * @param mask Validity mask of shape (num_polygons, m).
+ * @param idx Output sorted indices of shape (num_polygons, m + 1).
  */
 __global__ void diff_iou_rotated_sort_vertices_forward_cuda_kernel(
-  int b, int n, int m, const float * __restrict__ vertices, const bool * __restrict__ mask,
+  int num_polygons, int m, const float * __restrict__ vertices, const bool * __restrict__ mask,
   int * __restrict__ idx)
 {
-  const int row = m + 1;  // indices per polygon
-  const int batch_idx = blockIdx.x;
-  vertices += batch_idx * n * m * 2;
-  mask += batch_idx * n * m;
-  idx += batch_idx * n * row;
-
-  const int index = threadIdx.x;  // index of polygon
-  const int stride = blockDim.x;
-  for (int i = index; i < n; i += stride) {
+  const int row = m + 1;                                    // indices per polygon
+  const int index = blockIdx.x * blockDim.x + threadIdx.x;  // index of polygon
+  const int stride = gridDim.x * blockDim.x;
+  for (int i = index; i < num_polygons; i += stride) {
     int pad = kIntersectionOffset;  // index of an arbitrary invalid intersection point
     for (int j = kIntersectionOffset; j < m; ++j) {
       if (!mask[i * m + j]) {
@@ -212,8 +198,10 @@ at::Tensor diff_iou_rotated_sort_vertices_forward_cuda(
     return idx;
   }
 
-  diff_iou_rotated_sort_vertices_forward_cuda_kernel<<<b, optimal_num_threads(n), 0, stream>>>(
-    b, n, m, vertices.data_ptr<float>(), mask.data_ptr<bool>(), idx.data_ptr<int>());
+  const int num_polygons = b * n;
+  const int num_blocks = (num_polygons + kThreadsPerBlock - 1) / kThreadsPerBlock;
+  diff_iou_rotated_sort_vertices_forward_cuda_kernel<<<num_blocks, kThreadsPerBlock, 0, stream>>>(
+    num_polygons, m, vertices.data_ptr<float>(), mask.data_ptr<bool>(), idx.data_ptr<int>());
   AT_CUDA_CHECK(cudaGetLastError());
 
   return idx;
