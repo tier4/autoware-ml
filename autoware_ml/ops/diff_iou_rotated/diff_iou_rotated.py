@@ -41,7 +41,7 @@ from . import diff_iou_rotated_ext
 EPSILON = 1e-8
 # Relative tolerance below which two edges count as parallel (sine of the angle between them)
 # and an intersection counts as sitting on an edge endpoint. Both cases are already covered by
-# the corner-in-box test, which uses the same 1e-6 tolerance, so flagging them again as
+# the corner-in-box test, which uses the same tolerance, so flagging them again as
 # intersections only adds duplicate vertices. Float noise on rotated corners otherwise produces
 # them, and the intersection polygon then exceeds the 8 vertices two rectangles can share.
 GEOMETRY_TOLERANCE = 1e-6
@@ -310,8 +310,11 @@ def box1_in_box2(
     norm_ad = torch.sum(ad * ad, dim=-1)  # (B, N, 1)
     # NOTE: the expression looks ugly but is stable if the two boxes
     # are exactly the same also stable with different scale of bboxes
-    cond1 = (prod_ab / norm_ab > -1e-6) & (prod_ab / norm_ab < 1 + 1e-6)  # (B, N, 4)
-    cond2 = (prod_ad / norm_ad > -1e-6) & (prod_ad / norm_ad < 1 + 1e-6)  # (B, N, 4)
+    # Projections onto the two edges of box2, normalized to [0, 1] inside it. (B, N, 4)
+    along_ab = prod_ab / norm_ab
+    along_ad = prod_ad / norm_ad
+    cond1 = (along_ab > -GEOMETRY_TOLERANCE) & (along_ab < 1 + GEOMETRY_TOLERANCE)
+    cond2 = (along_ad > -GEOMETRY_TOLERANCE) & (along_ad < 1 + GEOMETRY_TOLERANCE)
     return cond1 & cond2
 
 
@@ -526,7 +529,7 @@ def box2corners(
     Returns:
         ``(B, N, 4, 2)`` Corners.
     """
-    # The geometry downstream compares coordinates against 1e-6 tolerances and the sorting
+    # The geometry downstream compares coordinates against GEOMETRY_TOLERANCE and the sorting
     # kernel only accepts float32, so half precision boxes are upcast and autocast is kept
     # from demoting the rotation matmul. Gradients reach the original tensor through the cast.
     box = box.float()
