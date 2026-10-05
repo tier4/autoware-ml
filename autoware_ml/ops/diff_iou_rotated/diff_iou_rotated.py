@@ -87,9 +87,9 @@ class SortVertices(Function):
         return idx
 
     @staticmethod
-    def backward(ctx, gradout: Int32[torch.Tensor, "batch_size num_boxes 25"]) -> tuple:
-        """Indices carry no gradient."""
-        return ()
+    def backward(ctx, gradout: Int32[torch.Tensor, "batch_size num_boxes 25"]) -> tuple[None, None]:
+        """Indices carry no gradient: one ``None`` per forward input (vertices, mask)."""
+        return None, None
 
 
 def enclosing_box_aligned(
