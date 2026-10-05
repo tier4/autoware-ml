@@ -327,7 +327,33 @@ def test_transfusion_predict_reweights_scores_by_query_labels() -> None:
 
     predictions = head.predict(outputs)
 
-    assert predictions[0]["labels_3d"].tolist() == [0, 1]
+    assert predictions[0].labels_3d.tolist() == [0, 1]
+
+
+def test_transfusion_predict_decodes_half_precision_outputs_in_float32() -> None:
+    head = _build_head()
+    outputs = {
+        "heatmap": torch.tensor([[[0.0, 9.0], [9.0, 0.0]]], dtype=torch.float32),
+        "query_heatmap_score": torch.ones((1, 2, 2), dtype=torch.float32),
+        "query_labels": torch.tensor([[0, 1]], dtype=torch.long),
+        "center": torch.tensor([[[1.0, 2.0], [1.0, 2.0]]], dtype=torch.float32),
+        "height": torch.zeros((1, 1, 2), dtype=torch.float32),
+        "dim": torch.zeros((1, 3, 2), dtype=torch.float32),
+        "rot": torch.tensor([[[0.0, 0.0], [1.0, 1.0]]], dtype=torch.float32),
+        "vel": torch.zeros((1, 2, 2), dtype=torch.float32),
+    }
+
+    predictions = head.predict(
+        {
+            name: value.half() if value.is_floating_point() else value
+            for name, value in outputs.items()
+        }
+    )
+    reference = head.predict(outputs)
+
+    assert predictions[0].bboxes_3d.dtype == torch.float32
+    assert predictions[0].scores_3d.dtype == torch.float32
+    assert torch.allclose(predictions[0].bboxes_3d, reference[0].bboxes_3d, atol=1e-2)
 
 
 def test_transfusion_predict_skips_circle_nms_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -352,7 +378,7 @@ def test_transfusion_predict_skips_circle_nms_by_default(monkeypatch: pytest.Mon
 
     predictions = head.predict(outputs)
 
-    assert predictions[0]["scores_3d"].shape[0] == 2
+    assert predictions[0].scores_3d.shape[0] == 2
 
 
 def test_transfusion_predict_applies_circle_nms_when_requested(
@@ -380,7 +406,7 @@ def test_transfusion_predict_applies_circle_nms_when_requested(
 
     predictions = head.predict(outputs)
 
-    assert predictions[0]["scores_3d"].shape[0] == 1
+    assert predictions[0].scores_3d.shape[0] == 1
 
 
 def test_transfusion_targets_use_raw_logits_for_assignment() -> None:
@@ -559,10 +585,8 @@ def test_transfusion_nms_groups_cap_zero_radius_groups_by_score() -> None:
     predictions = head.predict(outputs)
 
     # Both queries are class 0; the group cap keeps only the highest score.
-    assert predictions[0]["scores_3d"].shape[0] == 1
-    assert torch.isclose(
-        predictions[0]["scores_3d"][0], torch.sigmoid(torch.tensor(8.0)), atol=1e-4
-    )
+    assert predictions[0].scores_3d.shape[0] == 1
+    assert torch.isclose(predictions[0].scores_3d[0], torch.sigmoid(torch.tensor(8.0)), atol=1e-4)
 
 
 def test_transfusion_coder_supports_per_class_score_thresholds() -> None:

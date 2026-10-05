@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import torch
 
+from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
 from autoware_ml.models.detection3d.ptv3 import PTv3DetFeatureFusion
 from autoware_ml.models.multi.ptv3_segdet import PTv3SegDetModel
 from autoware_ml.utils.point_cloud.structures import Point
@@ -109,11 +110,11 @@ def _make_eval_model() -> SimpleNamespace:
     def predict(det_outputs):
         batch_size = det_outputs["heatmap"].shape[0]
         return [
-            {
-                "bboxes_3d": torch.full((2, 9), float(index)),
-                "scores_3d": torch.full((2,), float(index)),
-                "labels_3d": torch.zeros(2, dtype=torch.long),
-            }
+            Detection3DSamplePredictions(
+                bboxes_3d=torch.full((2, 9), float(index)),
+                scores_3d=torch.full((2,), float(index)),
+                labels_3d=torch.zeros(2, dtype=torch.long),
+            )
             for index in range(batch_size)
         ]
 
