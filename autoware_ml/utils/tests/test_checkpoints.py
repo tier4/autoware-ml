@@ -34,6 +34,15 @@ class _TinyModel(L.LightningModule):
         self.layer = torch.nn.Linear(2, 1)
 
 
+class _AliasedModel(L.LightningModule):
+    """Registers the same module under two attributes (shared-tensor aliases)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.layer = torch.nn.Linear(2, 1)
+        self.wrapper = torch.nn.ModuleDict({"layer": self.layer})
+
+
 def test_load_matching_weights_loads_same_key_and_shape_tensors(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -55,6 +64,54 @@ def test_load_matching_weights_loads_same_key_and_shape_tensors(
     assert "Loaded weight keys (1): layer.weight" in caplog.text
     assert "Skipped checkpoint keys missing in model (1): extra.weight" in caplog.text
     assert "Model keys not initialized from weights (1): layer.bias" in caplog.text
+
+
+def test_load_matching_weights_reports_shared_tensor_aliases_as_initialized(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level("INFO")
+    model = _AliasedModel()
+    checkpoint_path = tmp_path / "weights.ckpt"
+    checkpoint_state_dict = {
+        "layer.weight": torch.full_like(model.layer.weight, 3.0),
+        "layer.bias": torch.full_like(model.layer.bias, 2.0),
+    }
+    torch.save({"state_dict": checkpoint_state_dict}, checkpoint_path)
+
+    report = load_matching_weights(model, checkpoint_path)
+
+    assert report.loaded_keys == ("layer.bias", "layer.weight")
+    assert report.alias_initialized_keys == ("wrapper.layer.bias", "wrapper.layer.weight")
+    assert report.not_loaded_model_keys == ()
+    assert torch.equal(model.wrapper["layer"].weight, torch.full_like(model.layer.weight, 3.0))
+    assert "Model keys not initialized from weights (0): <none>" in caplog.text
+    assert (
+        "Model keys initialized via shared-tensor aliases (2): "
+        "wrapper.layer.bias, wrapper.layer.weight" in caplog.text
+    )
+
+
+def test_apply_matching_weights_full_coverage_counts_aliases(tmp_path: Path) -> None:
+    model = _AliasedModel()
+    checkpoint_path = tmp_path / "weights.ckpt"
+    torch.save(
+        {
+            "state_dict": {
+                "layer.weight": torch.full_like(model.layer.weight, 3.0),
+                "layer.bias": torch.full_like(model.layer.bias, 2.0),
+            }
+        },
+        checkpoint_path,
+    )
+
+    reports = apply_matching_weights(model, checkpoint_path, enforce_full_coverage=True)
+
+    assert reports[0].initialized_keys == (
+        "layer.bias",
+        "layer.weight",
+        "wrapper.layer.bias",
+        "wrapper.layer.weight",
+    )
 
 
 def test_load_matching_weights_raises_on_shape_mismatch(tmp_path: Path) -> None:

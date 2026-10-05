@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Sequence
 
 import torch
@@ -89,12 +90,25 @@ class GroupStreamingSampler(Sampler[int]):
     frame, so consecutive iterations feed consecutive frames of the same scene
     into the same batch position. Stateful temporal models can therefore carry
     per-lane memory across iterations, with scene changes signalled by the
-    dataset's ``prev_exists`` metadata. Scenes are shuffled per epoch and
-    partitioned round-robin over distributed ranks and lanes. Each rank builds
-    its own index list, and every list is then truncated to the length of the
-    shortest one, so all ranks iterate the same number of steps and every
-    batch stays complete. Without that equalization the ranks would run a
-    different number of steps and collective operations would deadlock.
+    dataset's ``prev_exists`` metadata. Scenes are partitioned round-robin over
+    distributed ranks and each rank assigns every scene to its currently
+    shortest lane, which keeps lane lengths close to each other.
+
+    Epoch length is fixed when ``shuffle`` is true (training). Every lane is
+    padded by cycling back to its own first scene (whose first frame carries
+    ``prev_exists == 0``, so the model resets its memory as at any scene start)
+    or truncated so that every rank serves exactly
+    ``ceil(total_frames / (world_size * batch_size))`` rounds. A constant
+    ``len()`` is what Lightning assumes: it derives ``val_check_batch`` and
+    ``estimated_stepping_batches`` once from the first epoch, and a shorter
+    later epoch would silently skip its validation. Padding follows the
+    ``DistributedSampler`` convention of repeating a few indices instead of
+    dropping frames.
+
+    Without ``shuffle`` (evaluation) the scene order is deterministic, so the
+    length is constant anyway; lanes are trimmed to the shortest one and no
+    frame is ever scored twice. Evaluation should run one lane per rank so
+    that trimming drops nothing.
 
     The sampler shards by rank itself, so the trainer must run with
     ``use_distributed_sampler: false`` (the StreamPETR base config does):
@@ -116,7 +130,8 @@ class GroupStreamingSampler(Sampler[int]):
                 scene-contiguous dataset indices.
             batch_size: Number of dataloader lanes fed in parallel. Must match
                 the dataloader batch size.
-            shuffle: Whether to shuffle the scene order every epoch.
+            shuffle: Whether to shuffle the scene order every epoch. Also
+                selects the fixed-length (padded) epoch described above.
             seed: Base seed for the per-epoch scene shuffle.
         """
         self.scene_groups = dataset.scene_index_groups()
@@ -134,23 +149,42 @@ class GroupStreamingSampler(Sampler[int]):
         else:
             self.rank = 0
             self.world_size = 1
+        self.total_frames = sum(len(group) for group in self.scene_groups)
+        self.rounds_per_epoch = math.ceil(self.total_frames / (self.world_size * self.batch_size))
+
+    def _scene_order(self, epoch: int) -> list[int]:
+        if not self.shuffle:
+            return list(range(len(self.scene_groups)))
+        generator = torch.Generator()
+        generator.manual_seed(self.seed + epoch)
+        return torch.randperm(len(self.scene_groups), generator=generator).tolist()
+
+    def _rank_lanes(self, scene_order: list[int], rank: int) -> list[list[int]]:
+        """Assign this rank's scenes to lanes, each scene to the shortest lane."""
+        lanes: list[list[int]] = [[] for _ in range(self.batch_size)]
+        for scene_index in scene_order[rank :: self.world_size]:
+            min(lanes, key=len).extend(self.scene_groups[scene_index])
+        return lanes
+
+    @staticmethod
+    def _fit_lane(lane: list[int], rounds: int) -> list[int]:
+        """Cycle a lane back to its own start, or cut it, to exactly ``rounds`` frames."""
+        if not lane:
+            return lane
+        repeats = math.ceil(rounds / len(lane))
+        return (lane * repeats)[:rounds]
 
     def _epoch_indices(self, epoch: int) -> list[list[int]]:
         """Build (or reuse) the per-rank interleaved index lists for one epoch."""
         if epoch == self._cached_epoch:
             return self._cached_indices
-        if self.shuffle:
-            generator = torch.Generator()
-            generator.manual_seed(self.seed + epoch)
-            scene_order = torch.randperm(len(self.scene_groups), generator=generator).tolist()
-        else:
-            scene_order = list(range(len(self.scene_groups)))
+        scene_order = self._scene_order(epoch)
 
         per_rank_indices: list[list[int]] = []
         for rank in range(self.world_size):
-            lanes: list[list[int]] = [[] for _ in range(self.batch_size)]
-            for scene_position, scene_index in enumerate(scene_order[rank :: self.world_size]):
-                lanes[scene_position % self.batch_size].extend(self.scene_groups[scene_index])
+            lanes = self._rank_lanes(scene_order, rank)
+            if self.shuffle:
+                lanes = [self._fit_lane(lane, self.rounds_per_epoch) for lane in lanes]
             rounds = min(len(lane) for lane in lanes)
             indices = [lane[round_index] for round_index in range(rounds) for lane in lanes]
             per_rank_indices.append(indices)
@@ -164,15 +198,28 @@ class GroupStreamingSampler(Sampler[int]):
             )
         self._cached_epoch = epoch
         self._cached_indices = [indices[:min_length] for indices in per_rank_indices]
-        total_frames = sum(len(group) for group in self.scene_groups)
-        dropped = total_frames - min_length * self.world_size
-        if dropped:
+        served = min_length * self.world_size
+        if self.shuffle:
+            distinct = len({index for indices in self._cached_indices for index in indices})
+            logger.info(
+                "GroupStreamingSampler epoch %d: %d/%d distinct frames, %d repeated to keep "
+                "%d rank(s) x %d lane(s) at a fixed %d rounds.",
+                epoch,
+                distinct,
+                self.total_frames,
+                served - distinct,
+                self.world_size,
+                self.batch_size,
+                self.rounds_per_epoch,
+            )
+        elif served < self.total_frames:
             logger.warning(
-                "GroupStreamingSampler serves %d/%d frames this epoch; %d tail frames are "
-                "trimmed to keep %d rank(s) x %d lane(s) aligned.",
-                min_length * self.world_size,
-                total_frames,
-                dropped,
+                "GroupStreamingSampler serves %d/%d frames; %d tail frames are trimmed to keep "
+                "%d rank(s) x %d lane(s) aligned. Evaluate with one lane per rank to score "
+                "every frame.",
+                served,
+                self.total_frames,
+                self.total_frames - served,
                 self.world_size,
                 self.batch_size,
             )
@@ -183,7 +230,7 @@ class GroupStreamingSampler(Sampler[int]):
         return iter(self._epoch_indices(self.epoch)[self.rank])
 
     def __len__(self) -> int:
-        """Return the per-rank sample count of the current epoch."""
+        """Return the per-rank sample count; constant across epochs when shuffling."""
         return len(self._epoch_indices(self.epoch)[self.rank])
 
     def set_epoch(self, epoch: int) -> None:
