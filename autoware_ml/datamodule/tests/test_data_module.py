@@ -29,6 +29,7 @@ from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.databases.taxonomy import DatabaseTaxonomy, DetectionTaxonomy
 from autoware_ml.datamodule.base import DataLoaderConfig
 from autoware_ml.datamodule.data_module import DataModule
+from autoware_ml.datamodule.resumable import ResumableDistributedSampler
 from autoware_ml.datamodule.samplers import (
     DistributedWeightedRandomSampler,
     FrameSamplingConfig,
@@ -204,6 +205,7 @@ class MultiSourceTestCase(unittest.TestCase):
         validation_sources: Sequence[Mapping[str, object]] | None = None,
         train_dataloader: DataLoaderConfig | None = None,
         train_frame_sampling: FrameSamplingConfig | None = None,
+        resumable_train_sampler: bool = False,
     ) -> DataModule:
         """Build a datamodule whose validation split reads the main corpus by default."""
         factory = build_dataset_factory()
@@ -226,6 +228,7 @@ class MultiSourceTestCase(unittest.TestCase):
             test_dataloader=None,
             predict_dataloader=None,
             train_frame_sampling=train_frame_sampling,
+            resumable_train_sampler=resumable_train_sampler,
         )
 
 
@@ -543,6 +546,27 @@ class TestFrameSampling(MultiSourceTestCase):
 
         self.assertIsInstance(loader.sampler, DistributedWeightedRandomSampler)
         self.assertEqual(len(list(loader.sampler)), len(self.main_records))
+
+    def test_the_resumable_sampler_is_opt_in_and_keeps_the_weights(self) -> None:
+        """
+        Input: the same training split with the resumable sampler switched on.
+        Expected: the loader draws through the resumable sampler, still weighted.
+        Check: the sampler type, its weights and the length of one epoch.
+        """
+        data_module = self.build_data_module(
+            [{"database": self.main_database}],
+            train_dataloader=DataLoaderConfig(batch_size=1),
+            train_frame_sampling=FRAME_SAMPLING,
+            resumable_train_sampler=True,
+        )
+        data_module.setup("fit")
+
+        loader = data_module.train_dataloader()
+
+        self.assertIsInstance(loader.sampler, ResumableDistributedSampler)
+        self.assertIsNotNone(loader.sampler.weights)
+        self.assertEqual(len(list(loader.sampler)), len(self.main_records))
+        self.assertIn("train_dataloader", data_module.state_dict())
 
     def test_rejects_shuffling_next_to_the_weighted_sampler(self) -> None:
         """

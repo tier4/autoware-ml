@@ -61,6 +61,7 @@ from autoware_ml.types.geometry import Box3DCenterCoordinateType
 from autoware_ml.types.sensor import LidarChannel, Modality
 from autoware_ml.types.spatial import CoordinateSystem
 from autoware_ml.utils.dataset import convert_quaternion_to_matrix
+from autoware_ml.utils.point_cloud.t4pack import load_point_cloud_file
 
 
 logger = logging.getLogger(__name__)
@@ -205,6 +206,13 @@ class T4RecordsGenerator:
 
         for sample_index in range(0, len(self.t4_devkit_dataset.sample), self.sample_steps):
             sample = self.t4_devkit_dataset.sample[sample_index]
+            # A corpus labelled at a lower rate than it was recorded keeps its labelled
+            # samples only, looked up like the mask path of the record
+            if (
+                self.scenario_data.dataset_params.semantic_masks
+                and sample.data.get(self.lidar_channel) not in self.lidarseg_by_sample_data
+            ):
+                continue
             t4_sample_record = self.extract_t4_sample_record(sample, sample_index)
             records.append(t4_sample_record.to_dataset_record())
 
@@ -671,6 +679,9 @@ class T4RecordsGenerator:
         """
 
         camera_channel_names = []
+        # A LiDAR only corpus, or a mirror that lacks the images, records no camera frames
+        if not self.scenario_data.dataset_params.camera_frames:
+            return camera_channel_names
         for channel_name, sample_data_token in sample.data.items():
             sd_record: SampleData = self.t4_devkit_dataset.get(
                 SchemaName.SAMPLE_DATA, sample_data_token
@@ -884,10 +895,13 @@ class T4RecordsGenerator:
                 category_indices=[],
             )
 
+        # The aliases of the dataset resolve a name that means something else in this corpus
+        # under the name the vocabulary reserves for that meaning
+        aliases = self.scenario_data.dataset_params.category_aliases
         category_names = []
         category_indices = []
         for category_record in category_records:
-            category_names.append(category_record.name)
+            category_names.append(aliases.get(category_record.name, category_record.name))
             category_indices.append(category_record.index)
 
         return CategoryMappingDataModel(
@@ -933,9 +947,7 @@ class T4RecordsGenerator:
 
         # Load pointclouds
         lidar_pointcloud_path = lidar_frame_data_model.lidar_pointcloud_path
-        points = np.fromfile(lidar_pointcloud_path, dtype=np.float32).reshape(
-            -1, self.lidar_pointcloud_num_features
-        )
+        points = load_point_cloud_file(lidar_pointcloud_path, self.lidar_pointcloud_num_features)
         lidar_points = torch.tensor(points[:, :3], dtype=torch.float32)  # Only take the x, y, z
         # (num_of_bboxes, point_mask)
         points_in_bboxes = lidar_bboxes_3d.compute_points_in_bboxes(points=lidar_points)

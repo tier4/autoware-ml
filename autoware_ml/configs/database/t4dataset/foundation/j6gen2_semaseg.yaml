@@ -1,0 +1,11 @@
+# The J6 gen2 semantic segmentation ground truth (old specification) bound to the foundation
+# level, with the aliases of its scenario config resolving the coarser old names to label sets.
+defaults:
+  - t4dataset/t4dataset_common@_here_
+  - t4dataset/scenarios@scenarios.db_j6gen2_semaseg: foundation/j6gen2_semaseg
+  - override t4dataset/taxonomy@taxonomy: foundation
+  - override t4dataset/box3d_pipelines@box3d_pipelines: trailer_class_box3d_pipelines
+  - _self_
+
+version: T4Dataset-j6gen2_semaseg-v1.0.0
+cache_path: ${cache_root_path}/segmentation3d/

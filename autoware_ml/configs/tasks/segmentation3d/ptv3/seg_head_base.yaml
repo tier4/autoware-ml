@@ -2,6 +2,8 @@
 _target_: autoware_ml.models.segmentation3d.heads.ptv3.PTv3SegDecoderHead
 num_classes: ${dataset.segmentation3d.num_classes}
 ignore_index: ${dataset.segmentation3d.ignore_index}
+class_names: ${dataset.segmentation3d.class_names}
+class_sets: ${oc.select:dataset.segmentation3d.class_sets,null}
 order: ${model.encoder.order}
 enc_channels: ${model.encoder.enc_channels}
 dec_depths: [2, 2, 2, 2]
@@ -22,3 +24,6 @@ upcast_softmax: ${model.encoder.upcast_softmax}
 lovasz_weight: 1.0
 # Cross entropy weight of mixed voxels
 mixed_voxel_weight: 1.0
+sparse_conv_backend: ${model.encoder.sparse_conv_backend}
+activation_checkpointing: ${model.encoder.activation_checkpointing}
+fp32_sublayers: ${model.encoder.fp32_sublayers}

@@ -755,8 +755,9 @@ class TransFusionHead(nn.Module):
 
         results = []
         for prediction in decoded:
-            boxes = prediction["bboxes"]
-            scores = prediction["scores"]
+            # Under autocast the decoded tensors are fp16; the prediction type is fp32.
+            boxes = prediction["bboxes"].float()
+            scores = prediction["scores"].float()
             labels = prediction["labels"]
             if boxes.numel() == 0:
                 results.append(

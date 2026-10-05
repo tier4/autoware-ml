@@ -134,10 +134,10 @@ class LovaszLoss(_Loss):
             return (probabilities * 0.0).sum()
 
         losses = []
-        for class_index in labels.unique():
+        # One host copy of the present classes; iterating the CUDA tensor itself
+        # would synchronise the device at every class.
+        for class_index in labels.unique().tolist():
             foreground = (labels == class_index).type_as(probabilities)
-            if foreground.sum() == 0:
-                continue
             class_errors = (foreground - probabilities[:, class_index]).abs()
             class_errors, permutation = torch.sort(class_errors, descending=True)
             foreground = foreground[permutation]
@@ -204,10 +204,12 @@ class LovaszSoftmaxLoss(nn.Module):
             return (probabilities * 0.0).sum()
 
         class_losses = []
-        for class_index in range(probabilities.shape[1]):
-            foreground = (labels == class_index).float()
-            if foreground.sum() == 0:
+        num_classes = probabilities.shape[1]
+        present = torch.bincount(labels[labels >= 0], minlength=num_classes)[:num_classes] > 0
+        for class_index, is_present in enumerate(present.tolist()):
+            if not is_present:
                 continue
+            foreground = (labels == class_index).float()
             class_errors = (foreground - probabilities[:, class_index]).abs()
             class_errors, permutation = torch.sort(class_errors, descending=True)
             foreground = foreground[permutation]

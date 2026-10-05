@@ -24,7 +24,10 @@ from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 
+from omegaconf import OmegaConf
+
 from autoware_ml.configs.resolvers import register_config_resolvers
+from autoware_ml.ops.sparse_backend import IS_RULEBOOK_AVAILABLE
 
 _CONFIGS = Path(__file__).resolve().parents[1]
 TASK_CONFIGS = sorted(
@@ -47,6 +50,9 @@ def compose_task(config_name: str):
 @pytest.mark.parametrize("config_name", TASK_CONFIGS)
 def test_every_task_instantiates_its_model_and_pipeline(config_name: str) -> None:
     cfg = compose_task(config_name)
+    backend = OmegaConf.select(cfg, "model.encoder.sparse_conv_backend")
+    if backend == "rulebook" and not IS_RULEBOOK_AVAILABLE:
+        pytest.skip("the task trains on the rulebook sparse convolutions, which are not installed")
 
     hydra.utils.instantiate(cfg.data_preprocessing)
     hydra.utils.instantiate(cfg.datamodule.train_dataset.transforms)
