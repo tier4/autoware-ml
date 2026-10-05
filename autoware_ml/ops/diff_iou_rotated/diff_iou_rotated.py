@@ -13,9 +13,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Adapted from mmcv/ops/diff_iou_rotated.py, itself adapted from
+# The polygon construction (box2corners, box_intersection, box_in_box, build_vertices,
+# sort_indices, calculate_area) and the IoU entry points are adapted from
+# mmcv/ops/diff_iou_rotated.py, itself adapted from
 # https://github.com/lilanxiao/Rotated_IoU/blob/master/box_intersection_2d.py and
 # https://github.com/lilanxiao/Rotated_IoU/blob/master/oriented_iou_loss.py
+#
+# New in this port: drop_duplicate_vertices and GEOMETRY_TOLERANCE, the zero-union guards,
+# the float32 enforcement under autocast, and the enclosing_box_smallest and convex_hull_area
+# enclosing regions.
 
 """Differentiable IoU of rotated 2D and 3D boxes.
 

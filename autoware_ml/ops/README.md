@@ -18,7 +18,10 @@ bookkeeping, it should not live in `ops/`.
 - `bev_pool/`
   - BEV pooling CUDA/C++ extension used by camera-lidar detection models
 - `diff_iou_rotated/`
-  - differentiable IoU of rotated 2D/3D boxes, ported from mmcv
+  - differentiable IoU of rotated 2D/3D boxes. The polygon construction and the vertex
+    sorting kernel are adapted from mmcv; the candidate deduplication, the geometry
+    tolerances, the zero-union guards, the float32 enforcement under autocast and the
+    `smallest` and `convex_hull` enclosing areas are our from `autoware-ml`
   - CUDA extension sorts the intersection polygon vertices; the rest is plain torch
 - `indexing/`
   - export-aware indexing operators such as `argsort` and `unique`

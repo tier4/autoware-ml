@@ -16,6 +16,11 @@
 // Adapted from mmcv/ops/csrc/common/cuda/diff_iou_rotated_cuda_kernel.cuh and
 // mmcv/ops/csrc/pytorch/cuda/diff_iou_rotated_cuda.cu, which were adapted from
 // https://github.com/lilanxiao/Rotated_IoU/cuda_op/sort_vert_kernel.cu
+//
+// Differences from mmcv: the output row holds every candidate (m + 1 slots instead of 9), the
+// number of valid vertices is counted from the mask, the launch covers all polygons instead of
+// one block per batch element, and the identical-box special case is gone because the Python
+// side drops duplicate candidates before calling the kernel.
 
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
