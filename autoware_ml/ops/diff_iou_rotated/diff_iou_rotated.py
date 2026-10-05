@@ -273,7 +273,7 @@ def box_intersection(
     u[parallel] = -1.0
     # intersection strictly inside line segment 2, away from its endpoints
     mask_u = (u > GEOMETRY_TOLERANCE) & (u < 1 - GEOMETRY_TOLERANCE)
-    mask = mask_t * mask_u
+    mask = mask_t & mask_u
     # overwrite with EPSILON. otherwise numerically unstable
     t = denumerator_t / (numerator + EPSILON)
     intersections = torch.stack([x1 + t * (x2 - x1), y1 + t * (y2 - y1)], dim=-1)
@@ -310,9 +310,9 @@ def box1_in_box2(
     norm_ad = torch.sum(ad * ad, dim=-1)  # (B, N, 1)
     # NOTE: the expression looks ugly but is stable if the two boxes
     # are exactly the same also stable with different scale of bboxes
-    cond1 = (prod_ab / norm_ab > -1e-6) * (prod_ab / norm_ab < 1 + 1e-6)  # (B, N, 4)
-    cond2 = (prod_ad / norm_ad > -1e-6) * (prod_ad / norm_ad < 1 + 1e-6)  # (B, N, 4)
-    return cond1 * cond2
+    cond1 = (prod_ab / norm_ab > -1e-6) & (prod_ab / norm_ab < 1 + 1e-6)  # (B, N, 4)
+    cond2 = (prod_ad / norm_ad > -1e-6) & (prod_ad / norm_ad < 1 + 1e-6)  # (B, N, 4)
+    return cond1 & cond2
 
 
 def box_in_box(
