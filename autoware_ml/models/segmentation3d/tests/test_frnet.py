@@ -163,9 +163,10 @@ def test_frnet_forward_uses_explicit_sample_count() -> None:
 
     outputs = model(points, coors, voxel_coors, inverse_map, sample_count=2)
 
-    point_logits, *voxel_feats = outputs
+    point_logits = outputs.segmentation3d().logits
     assert point_logits.shape == (4, 4)
-    assert len(voxel_feats) == 1  # _IdentityBackbone returns a single-level pyramid
+    # _IdentityBackbone returns a single-level pyramid
+    assert len(outputs.segmentation3d().auxiliary_features) == 1
     assert model.backbone.last_sample_count == 2
 
 
