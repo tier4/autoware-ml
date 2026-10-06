@@ -259,7 +259,7 @@ def test_bevfusion_model_fuses_camera_and_lidar_branches() -> None:
     )
 
     batch_size = 2
-    outputs = model(
+    outputs = model._forward_with_batch_size(
         voxels=torch.randn(8, 5, 5),
         num_points=torch.ones(8, dtype=torch.int32),
         voxel_coords=torch.tensor([[0, 0, 0, 0], [1, 0, 0, 0]], dtype=torch.int32),

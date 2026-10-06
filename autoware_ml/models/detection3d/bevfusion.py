@@ -30,8 +30,12 @@ from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
 from autoware_ml.dataclasses.geometry.voxels import VoxelsData
-from autoware_ml.dataclasses.models.detection3d.head_outputs import TransFusionHeadOutputs
+from autoware_ml.dataclasses.models.detection3d.head_outputs import (
+    Detection3DHeadOutputs,
+    TransFusionHeadOutputs,
+)
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
@@ -607,7 +611,7 @@ class BEVFusionDetectionModel(BaseModel):
         camera_intrinsics: Sequence[torch.Tensor] | None = None,
         lidar2cam: Sequence[torch.Tensor] | None = None,
         **kwargs: Any,
-    ) -> TransFusionHeadOutputs:
+    ) -> ModelOutputs:
         """Run the detector on lidar, image, or fused BEV inputs.
 
         Args:
@@ -624,7 +628,7 @@ class BEVFusionDetectionModel(BaseModel):
         Returns:
             Detection head outputs.
         """
-        return self._forward_with_batch_size(
+        head_outputs = self._forward_with_batch_size(
             voxels=voxels,
             num_points=num_points,
             voxel_coords=voxel_coords,
@@ -634,6 +638,11 @@ class BEVFusionDetectionModel(BaseModel):
             camera_intrinsics=camera_intrinsics,
             lidar2cam=lidar2cam,
             **kwargs,
+        )
+        return ModelOutputs(
+            detection3d_head_outputs=Detection3DHeadOutputs(
+                center_head_outputs=None, transfusion_head_outputs=head_outputs
+            )
         )
 
     def forward_inputs(self, batch_inputs: ModelBatchInputs) -> dict[str, Any]:
@@ -673,7 +682,7 @@ class BEVFusionDetectionModel(BaseModel):
     def compute_metrics(
         self,
         batch_inputs: ModelBatchInputs,
-        outputs: TransFusionHeadOutputs,
+        outputs: ModelOutputs,
     ) -> dict[str, torch.Tensor]:
         """Compute BEVFusion training losses.
 
@@ -691,12 +700,14 @@ class BEVFusionDetectionModel(BaseModel):
         if gt_detections is None:
             raise ValueError("BEVFusion losses need the 3D detection ground truth of the batch.")
         return self.bbox_head.loss(
-            outputs, gt_detections.valid_bboxes_3d(), gt_detections.valid_labels_3d()
+            outputs.detection3d().transfusion_head(),
+            gt_detections.valid_bboxes_3d(),
+            gt_detections.valid_labels_3d(),
         )
 
     def predict_outputs(
-        self, batch_inputs: ModelBatchInputs, outputs: TransFusionHeadOutputs
-    ) -> Any:
+        self, batch_inputs: ModelBatchInputs, outputs: ModelOutputs
+    ) -> ModelPredictions:
         """Decode predictions for inference.
 
         Args:
@@ -707,12 +718,13 @@ class BEVFusionDetectionModel(BaseModel):
             Decoded prediction results.
         """
         del batch_inputs
-        return self.bbox_head.predict(outputs)
+        return ModelPredictions(
+            detection3d_predictions=self.bbox_head.predict(outputs.detection3d().transfusion_head())
+        )
 
-    def build_eval_output(self, batch: ModelBatchInputs, outputs: Any) -> dict[str, Any]:
+    def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> dict[str, Any]:
         """Decode detections and pair them with ground truth for metrics."""
-        predictions = ModelPredictions(detection3d_predictions=self.bbox_head.predict(outputs))
-        return detection_eval_output(predictions, batch)
+        return detection_eval_output(self.predict_outputs(batch, outputs), batch)
 
     @staticmethod
     def _first_sample_voxel_inputs(
