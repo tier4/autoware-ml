@@ -20,7 +20,15 @@ import unittest
 
 import torch
 
+from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTBatch
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.models.tests.batch_inputs_fixtures import (
+    build_batch_inputs,
+    build_point_cloud_batch,
+)
 from autoware_ml.preprocessing.segmentation3d.range_view import (
+    FrustumMix,
+    InstanceCopy,
     RangeInterpolation,
     nearest_point_per_pixel,
 )
@@ -78,6 +86,45 @@ class TestNearestPointPerPixel(unittest.TestCase):
         torch.testing.assert_close(new_points[0], torch.tensor([10.0, 0.0, 0.0, 0.5]))
         assert new_labels is not None
         self.assertEqual(new_labels.tolist(), [1])
+
+
+class TestRangeViewBatchLayers(unittest.TestCase):
+    """The batch layers rebuild the typed point and label batches they change."""
+
+    def _inputs(self) -> ModelBatchInputs:
+        left = [10.0, 10.0, 0.0, 0.5]
+        right = [10.0, -10.0, 0.0, 0.5]
+        points = torch.tensor([left, right])
+        point_cloud = build_point_cloud_batch([points, points])
+        labels = Segmentation3DGTBatch(
+            gt_semantic_masks=torch.tensor([1, 1, 2, 2]), batch_indices=point_cloud.batch_indices
+        )
+        return build_batch_inputs(point_cloud=point_cloud, segmentation=labels)
+
+    def test_interpolation_keeps_points_and_labels_aligned_per_sample(self) -> None:
+        """
+        Input: two samples, each with two points around one empty range image pixel.
+        Expected: every sample gains one interpolated point and its label.
+        Check: the sample of every point and label and the appended labels.
+        """
+        layer = RangeInterpolation(height=1, width=8, fov_up=10.0, fov_down=-10.0, ignore_index=-1)
+
+        outputs = layer(self._inputs(), is_training=False).multi_task_gt_batch
+
+        assert outputs.point_cloud_gt_batch is not None
+        assert outputs.segmentation3d_gt_batch is not None
+        self.assertEqual(outputs.point_cloud_gt_batch.batch_indices.tolist(), [0, 0, 0, 1, 1, 1])
+        self.assertEqual(outputs.segmentation3d_gt_batch.batch_indices.tolist(), [0, 0, 0, 1, 1, 1])
+        self.assertEqual(
+            outputs.segmentation3d_gt_batch.gt_semantic_masks.tolist(), [1, 1, 1, 2, 2, 2]
+        )
+
+    def test_mixing_layers_leave_an_evaluation_batch_untouched(self) -> None:
+        inputs = self._inputs()
+        mix = FrustumMix(height=1, width=8, fov_up=10.0, fov_down=-10.0, num_areas=[2])
+
+        self.assertIs(mix(inputs, is_training=False), inputs)
+        self.assertIs(InstanceCopy(instance_classes=[1])(inputs, is_training=False), inputs)
 
 
 if __name__ == "__main__":

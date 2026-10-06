@@ -21,11 +21,14 @@ draw their second cloud from the batch instead of from a second read of the data
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
 
 import torch
 from jaxtyping import Float32, Int64
 from torch import Tensor
+
+from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTBatch
+from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 
 
 def project_range(
@@ -56,30 +59,44 @@ def project_range(
     )
 
 
-def split_batch(batch_inputs_dict: dict[str, Any], key: str) -> list[Tensor]:
-    """Split a concatenated per point tensor of the batch per sample.
+def split_batch(batch_inputs: ModelBatchInputs) -> tuple[list[Tensor], list[Tensor] | None]:
+    """Split the points and the labels of the batch per sample.
 
     Args:
-        batch_inputs_dict: Model inputs holding ``offset`` and the tensor to split.
-        key: Name of the per point tensor, such as ``feat`` or ``segment``.
+        batch_inputs: Model inputs holding the point cloud and, when labelled, its labels.
 
     Returns:
-        The tensor of every sample.
+        tuple: The points of every sample, and their labels or None when the batch carries
+            none.
+
+    Raises:
+        ValueError: If the batch carries no point cloud.
     """
-    offset = batch_inputs_dict["offset"].tolist()
-    tensor = batch_inputs_dict[key]
-    return [tensor[start:end] for start, end in zip([0] + offset[:-1], offset)]
+    point_batch = batch_inputs.multi_task_gt_batch.point_cloud_gt_batch
+    if point_batch is None:
+        raise ValueError("Range view preprocessing needs the point cloud of the batch.")
+    counts = point_batch.sample_point_counts().tolist()
+    label_batch = batch_inputs.multi_task_gt_batch.segmentation3d_gt_batch
+    labels = (
+        list(torch.split(label_batch.gt_semantic_masks, counts))
+        if label_batch is not None
+        else None
+    )
+    return list(torch.split(point_batch.points, counts)), labels
 
 
-def join_batch(points: Sequence[Tensor], labels: Sequence[Tensor] | None) -> dict[str, Any]:
+def join_batch(
+    batch_inputs: ModelBatchInputs, points: Sequence[Tensor], labels: Sequence[Tensor] | None
+) -> ModelBatchInputs:
     """Concatenate the points and labels of every sample back into the batch.
 
     Args:
+        batch_inputs: Model inputs the points and labels were split from.
         points: Points of every sample.
         labels: Labels of every sample, None when the batch carries none.
 
     Returns:
-        The model inputs that describe the points of the batch.
+        The model inputs with the new point cloud and labels.
     """
     concatenated = torch.cat(list(points), dim=0)
     counts = torch.tensor(
@@ -88,17 +105,19 @@ def join_batch(points: Sequence[Tensor], labels: Sequence[Tensor] | None) -> dic
     batch_indices = torch.repeat_interleave(
         torch.arange(len(points), dtype=torch.int32, device=concatenated.device), counts
     )
-    outputs: dict[str, Any] = {
-        "feat": concatenated,
-        "coord": concatenated[:, :3],
-        "points": list(points),
-        "offset": torch.cumsum(counts, dim=0),
-        "batch_indices": batch_indices,
-        "sample_count": len(points),
-    }
+    gt_batch = batch_inputs.multi_task_gt_batch
+    gt_batch = gt_batch._replace(
+        point_cloud_gt_batch=PointCloudGTBatch(
+            points=concatenated, batch_indices=batch_indices, batch_size=len(points)
+        )
+    )
     if labels is not None:
-        outputs["segment"] = torch.cat(list(labels), dim=0)
-    return outputs
+        gt_batch = gt_batch._replace(
+            segmentation3d_gt_batch=Segmentation3DGTBatch(
+                gt_semantic_masks=torch.cat(list(labels), dim=0), batch_indices=batch_indices
+            )
+        )
+    return batch_inputs.replace(multi_task_gt_batch=gt_batch)
 
 
 def nearest_point_per_pixel(
@@ -140,25 +159,20 @@ class RangeInterpolation:
         self.fov_down_rad = torch.deg2rad(torch.tensor(fov_down)).item()
         self.ignore_index = ignore_index
 
-    def __call__(self, batch_inputs_dict: dict[str, Any], *, is_training: bool) -> dict[str, Any]:
+    def __call__(self, batch_inputs: ModelBatchInputs, *, is_training: bool) -> ModelBatchInputs:
         """Append the interpolated points of every sample.
 
         Args:
-            batch_inputs_dict: Model inputs holding the points of the batch.
+            batch_inputs: Model inputs holding the points of the batch. A batch served for
+                prediction carries no labels.
             is_training: Whether the owning model is in training mode. The interpolation is
                 deterministic, so it runs in both modes.
 
         Returns:
-            The model inputs with the interpolated points appended, together with
-            ``num_points``, the point count before the interpolation.
+            The model inputs with the interpolated points appended.
         """
         del is_training
-        points = split_batch(batch_inputs_dict, "feat")
-        # A batch served for prediction carries no labels
-        labels = (
-            split_batch(batch_inputs_dict, "segment") if "segment" in batch_inputs_dict else None
-        )
-        num_points = [sample.shape[0] for sample in points]
+        points, labels = split_batch(batch_inputs)
 
         interpolated_points = []
         interpolated_labels = [] if labels is not None else None
@@ -170,9 +184,7 @@ class RangeInterpolation:
             if interpolated_labels is not None:
                 interpolated_labels.append(torch.cat([labels[index], new_labels], dim=0))
 
-        outputs = join_batch(interpolated_points, interpolated_labels)
-        outputs["num_points"] = torch.tensor(num_points, dtype=torch.int64)
-        return outputs
+        return join_batch(batch_inputs, interpolated_points, interpolated_labels)
 
     def interpolate(self, points: Tensor, labels: Tensor | None) -> tuple[Tensor, Tensor | None]:
         """Build the points the empty range image pixels of one sample interpolate to.
@@ -261,22 +273,26 @@ class FrustumMix:
         self.num_areas = list(num_areas)
         self.probability = probability
 
-    def __call__(self, batch_inputs_dict: dict[str, Any], *, is_training: bool) -> dict[str, Any]:
+    def __call__(self, batch_inputs: ModelBatchInputs, *, is_training: bool) -> ModelBatchInputs:
         """Mix the samples of the batch, leaving them untouched outside training.
 
         Args:
-            batch_inputs_dict: Model inputs holding the points and the labels of the batch.
+            batch_inputs: Model inputs holding the points and the labels of the batch.
             is_training: Whether the owning model is in training mode.
 
         Returns:
             The model inputs of the mixed batch.
+
+        Raises:
+            ValueError: If a training batch carries no labels.
         """
         if not is_training:
-            return {}
-        points = split_batch(batch_inputs_dict, "feat")
-        labels = split_batch(batch_inputs_dict, "segment")
+            return batch_inputs
+        points, labels = split_batch(batch_inputs)
+        if labels is None:
+            raise ValueError("FrustumMix needs the labels of the training batch.")
         if len(points) < 2:
-            return {}
+            return batch_inputs
 
         mixed_points = []
         mixed_labels = []
@@ -293,7 +309,7 @@ class FrustumMix:
             mixed_points.append(sample_points)
             mixed_labels.append(sample_labels)
 
-        return join_batch(mixed_points, mixed_labels)
+        return join_batch(batch_inputs, mixed_points, mixed_labels)
 
     def mix_vertical(
         self, points: Tensor, labels: Tensor, mix_points: Tensor, mix_labels: Tensor
@@ -379,22 +395,26 @@ class InstanceCopy:
         self.instance_classes = list(instance_classes)
         self.probability = probability
 
-    def __call__(self, batch_inputs_dict: dict[str, Any], *, is_training: bool) -> dict[str, Any]:
+    def __call__(self, batch_inputs: ModelBatchInputs, *, is_training: bool) -> ModelBatchInputs:
         """Copy the selected classes between the samples of the batch.
 
         Args:
-            batch_inputs_dict: Model inputs holding the points and the labels of the batch.
+            batch_inputs: Model inputs holding the points and the labels of the batch.
             is_training: Whether the owning model is in training mode.
 
         Returns:
             The model inputs of the enriched batch.
+
+        Raises:
+            ValueError: If a training batch carries no labels.
         """
         if not is_training:
-            return {}
-        points = split_batch(batch_inputs_dict, "feat")
-        labels = split_batch(batch_inputs_dict, "segment")
+            return batch_inputs
+        points, labels = split_batch(batch_inputs)
+        if labels is None:
+            raise ValueError("InstanceCopy needs the labels of the training batch.")
         if len(points) < 2:
-            return {}
+            return batch_inputs
 
         copied_points = []
         copied_labels = []
@@ -411,4 +431,4 @@ class InstanceCopy:
             copied_points.append(torch.cat([sample, points[partner][instance_mask]], dim=0))
             copied_labels.append(torch.cat([labels[index], labels[partner][instance_mask]], dim=0))
 
-        return join_batch(copied_points, copied_labels)
+        return join_batch(batch_inputs, copied_points, copied_labels)
