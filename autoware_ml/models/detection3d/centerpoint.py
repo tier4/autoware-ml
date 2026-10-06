@@ -21,7 +21,7 @@ around the reusable PointPillars and CenterPoint detection components.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import torch
@@ -29,11 +29,39 @@ import torch.nn as nn
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
+from autoware_ml.dataclasses.batch.detection3d import Detection3DGTBatch
+from autoware_ml.dataclasses.geometry.voxels import VoxelsData
+from autoware_ml.dataclasses.models.detection3d.head_outputs import CenterHeadOutputs
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
 from autoware_ml.models.base import BaseModel
 from autoware_ml.utils.deploy import ExportSpec
 from autoware_ml.utils.point_cloud.batching import infer_batch_size_from_voxel_coords
+
+
+def _voxels_data(batch_inputs: ModelBatchInputs) -> VoxelsData:
+    """Read the voxels a pillar preprocessor added to the model inputs.
+
+    Raises:
+        ValueError: If the model inputs carry no voxels.
+    """
+    if batch_inputs.voxels_data is None:
+        raise ValueError("CenterPoint needs the voxels of a PointPillarPreprocessor.")
+    return batch_inputs.voxels_data
+
+
+def _detection3d_gt_batch(batch_inputs: ModelBatchInputs) -> Detection3DGTBatch:
+    """Read the ground truth boxes of the batch.
+
+    Raises:
+        ValueError: If the batch carries no detection ground truth.
+    """
+    gt_detections = batch_inputs.multi_task_gt_batch.detection3d_gt_batch
+    if gt_detections is None:
+        raise ValueError("CenterPoint losses need the 3D detection ground truth of the batch.")
+    return gt_detections
 
 
 class _CenterPointVoxelEncoderExportWrapper(nn.Module):
@@ -107,16 +135,17 @@ class CenterPointDetectionModel(BaseModel):
         self.pts_neck = pts_neck
         self.bbox_head = bbox_head
 
-    def build_eval_output(self, batch: Mapping[str, Any], outputs: Any) -> dict[str, Any]:
+    def build_eval_output(self, batch: ModelBatchInputs, outputs: Any) -> dict[str, Any]:
         """Decode detections and pair them with ground truth for metrics."""
-        return detection_eval_output(self.bbox_head.predict(outputs), batch)
+        predictions = ModelPredictions(detection3d_predictions=self.bbox_head.predict(outputs))
+        return detection_eval_output(predictions, batch)
 
     def forward(
         self,
         voxels: torch.Tensor,
         num_points: torch.Tensor,
         voxel_coords: torch.Tensor,
-    ) -> dict[str, torch.Tensor]:
+    ) -> CenterHeadOutputs:
         """Run the detector on voxelized lidar inputs.
 
         Args:
@@ -134,33 +163,44 @@ class CenterPointDetectionModel(BaseModel):
         bev_features = self.pts_neck(bev_features)
         return self.bbox_head(bev_features)
 
+    def forward_inputs(self, batch_inputs: ModelBatchInputs) -> dict[str, Any]:
+        """Pick the pillars of the batch.
+
+        Args:
+            batch_inputs: Model inputs holding the voxelized point cloud.
+
+        Returns:
+            The padded pillars, their point counts and their ``[batch, z, y, x]`` coordinates.
+        """
+        voxels_data = _voxels_data(batch_inputs)
+        return {
+            "voxels": voxels_data.voxels,
+            "num_points": voxels_data.num_points,
+            "voxel_coords": voxels_data.batch_zyx_coords(),
+        }
+
     def compute_metrics(
         self,
-        batch_inputs_dict: dict[str, Any],
-        outputs: dict[str, torch.Tensor],
+        batch_inputs: ModelBatchInputs,
+        outputs: CenterHeadOutputs,
     ) -> dict[str, torch.Tensor]:
         """Compute CenterPoint training losses."""
+        gt_detections = _detection3d_gt_batch(batch_inputs)
         return self.bbox_head.loss(
-            outputs, batch_inputs_dict["gt_boxes"], batch_inputs_dict["gt_labels"]
+            outputs, gt_detections.valid_bboxes_3d(), gt_detections.valid_labels_3d()
         )
 
-    def predict_outputs(
-        self, batch_inputs_dict: dict[str, Any], outputs: dict[str, torch.Tensor]
-    ) -> Any:
+    def predict_outputs(self, batch_inputs: ModelBatchInputs, outputs: CenterHeadOutputs) -> Any:
         """Decode predictions for inference."""
-        del batch_inputs_dict
+        del batch_inputs
         return self.bbox_head.predict(outputs)
 
-    def get_log_batch_size(self, batch_inputs_dict: dict[str, Any]) -> int | None:
-        """Log the sample count instead of voxel count for lidar detection."""
-        return len(batch_inputs_dict["gt_boxes"])
-
-    def build_export_spec(self, batch_inputs_dict: Mapping[str, Any]) -> ExportSpec:
+    def build_export_spec(self, batch_inputs: ModelBatchInputs) -> ExportSpec:
         """Reject single-module CenterPoint deployment export."""
-        del batch_inputs_dict
+        del batch_inputs
         raise RuntimeError("CenterPoint deployment uses split modules; call build_export_specs().")
 
-    def build_export_specs(self, batch_inputs_dict: Mapping[str, Any]) -> dict[str, ExportSpec]:
+    def build_export_specs(self, batch_inputs: ModelBatchInputs) -> dict[str, ExportSpec]:
         """Build split CenterPoint deployment export specifications.
 
         The exported ABI follows the original CenterPoint deployment split:
@@ -168,18 +208,16 @@ class CenterPointDetectionModel(BaseModel):
         spatial features feed the backbone/neck/head ONNX module. Scatter is a
         runtime preprocessing step between the two exported modules.
         """
-        batch_size = infer_batch_size_from_voxel_coords(batch_inputs_dict["voxel_coords"])
+        inputs = self.forward_inputs(batch_inputs)
+        voxel_coords = inputs["voxel_coords"]
+        batch_size = infer_batch_size_from_voxel_coords(voxel_coords)
         with torch.no_grad():
             input_features = self.pts_voxel_encoder.decorate(
-                batch_inputs_dict["voxels"],
-                batch_inputs_dict["num_points"],
-                batch_inputs_dict["voxel_coords"],
+                inputs["voxels"], inputs["num_points"], voxel_coords
             )
             pillar_features = self.pts_voxel_encoder.encode_decorated(input_features).squeeze(1)
             spatial_features = self.pts_middle_encoder(
-                pillar_features,
-                batch_inputs_dict["voxel_coords"],
-                batch_size=batch_size,
+                pillar_features, voxel_coords, batch_size=batch_size
             )
 
         head_wrapper = _CenterPointBackboneNeckHeadExportWrapper(

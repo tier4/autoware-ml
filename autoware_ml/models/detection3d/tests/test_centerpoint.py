@@ -27,6 +27,11 @@ from autoware_ml.models.detection3d.centerpoint import CenterPointDetectionModel
 from autoware_ml.models.detection3d.encoders.pillar import PillarFeatureNet, PointPillarsScatter
 from autoware_ml.models.detection3d.heads.centerpoint import CenterHead
 from autoware_ml.models.detection3d.necks.second_fpn import SECONDFPN
+from autoware_ml.models.tests.batch_inputs_fixtures import (
+    build_batch_inputs,
+    build_detection_gt_batch,
+    voxels_data_from_zyx,
+)
 
 
 def _build_model(use_velocity: bool = True) -> CenterPointDetectionModel:
@@ -161,7 +166,9 @@ class TestCenterHeadTargets:
         ]
         gt_labels = [torch.tensor([0], dtype=torch.long)]
 
-        metrics = model.compute_metrics({"gt_boxes": gt_boxes, "gt_labels": gt_labels}, outputs)
+        metrics = model.compute_metrics(
+            build_batch_inputs(detection=build_detection_gt_batch(gt_boxes, gt_labels)), outputs
+        )
         predictions = model.bbox_head.predict(outputs)
 
         assert "loss" in metrics
@@ -177,7 +184,7 @@ class TestCenterHeadTargets:
         voxel_coords[:, 0] = 0
 
         specs = model.build_export_specs(
-            {"voxels": voxels, "num_points": num_points, "voxel_coords": voxel_coords}
+            build_batch_inputs(voxels=voxels_data_from_zyx(voxels, num_points, voxel_coords))
         )
 
         assert list(specs) == [
@@ -205,7 +212,7 @@ class TestCenterHeadTargets:
         voxel_coords[:, 0] = 0
 
         specs = model.build_export_specs(
-            {"voxels": voxels, "num_points": num_points, "voxel_coords": voxel_coords}
+            build_batch_inputs(voxels=voxels_data_from_zyx(voxels, num_points, voxel_coords))
         )
 
         head_spec = specs["pts_backbone_neck_head_centerpoint"]
