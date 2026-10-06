@@ -31,8 +31,9 @@ from torch.optim.lr_scheduler import LRScheduler
 
 from autoware_ml.dataclasses.batch.detection3d import Detection3DGTBatch
 from autoware_ml.dataclasses.geometry.voxels import VoxelsData
-from autoware_ml.dataclasses.models.detection3d.head_outputs import CenterHeadOutputs
+from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DHeadOutputs
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
@@ -135,17 +136,16 @@ class CenterPointDetectionModel(BaseModel):
         self.pts_neck = pts_neck
         self.bbox_head = bbox_head
 
-    def build_eval_output(self, batch: ModelBatchInputs, outputs: Any) -> dict[str, Any]:
+    def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> dict[str, Any]:
         """Decode detections and pair them with ground truth for metrics."""
-        predictions = ModelPredictions(detection3d_predictions=self.bbox_head.predict(outputs))
-        return detection_eval_output(predictions, batch)
+        return detection_eval_output(self.predict_outputs(batch, outputs), batch)
 
     def forward(
         self,
         voxels: torch.Tensor,
         num_points: torch.Tensor,
         voxel_coords: torch.Tensor,
-    ) -> CenterHeadOutputs:
+    ) -> ModelOutputs:
         """Run the detector on voxelized lidar inputs.
 
         Args:
@@ -161,7 +161,11 @@ class CenterPointDetectionModel(BaseModel):
         bev_features = self.pts_middle_encoder(point_features, voxel_coords, batch_size=batch_size)
         bev_features = self.pts_backbone(bev_features)
         bev_features = self.pts_neck(bev_features)
-        return self.bbox_head(bev_features)
+        return ModelOutputs(
+            detection3d_head_outputs=Detection3DHeadOutputs(
+                center_head_outputs=self.bbox_head(bev_features), transfusion_head_outputs=None
+            )
+        )
 
     def forward_inputs(self, batch_inputs: ModelBatchInputs) -> dict[str, Any]:
         """Pick the pillars of the batch.
@@ -182,18 +186,24 @@ class CenterPointDetectionModel(BaseModel):
     def compute_metrics(
         self,
         batch_inputs: ModelBatchInputs,
-        outputs: CenterHeadOutputs,
+        outputs: ModelOutputs,
     ) -> dict[str, torch.Tensor]:
         """Compute CenterPoint training losses."""
         gt_detections = _detection3d_gt_batch(batch_inputs)
         return self.bbox_head.loss(
-            outputs, gt_detections.valid_bboxes_3d(), gt_detections.valid_labels_3d()
+            outputs.detection3d().center_head(),
+            gt_detections.valid_bboxes_3d(),
+            gt_detections.valid_labels_3d(),
         )
 
-    def predict_outputs(self, batch_inputs: ModelBatchInputs, outputs: CenterHeadOutputs) -> Any:
+    def predict_outputs(
+        self, batch_inputs: ModelBatchInputs, outputs: ModelOutputs
+    ) -> ModelPredictions:
         """Decode predictions for inference."""
         del batch_inputs
-        return self.bbox_head.predict(outputs)
+        return ModelPredictions(
+            detection3d_predictions=self.bbox_head.predict(outputs.detection3d().center_head())
+        )
 
     def build_export_spec(self, batch_inputs: ModelBatchInputs) -> ExportSpec:
         """Reject single-module CenterPoint deployment export."""

@@ -169,10 +169,10 @@ class TestCenterHeadTargets:
         metrics = model.compute_metrics(
             build_batch_inputs(detection=build_detection_gt_batch(gt_boxes, gt_labels)), outputs
         )
-        predictions = model.bbox_head.predict(outputs)
+        predictions = model.predict_outputs(build_batch_inputs(), outputs).detection3d_predictions
 
         assert "loss" in metrics
-        assert outputs.heatmap.shape[:2] == (1, 2)
+        assert outputs.detection3d().center_head().heatmap.shape[:2] == (1, 2)
         assert isinstance(predictions, list)
         assert isinstance(predictions[0], Detection3DSamplePredictions)
 
