@@ -222,6 +222,28 @@ class Detection3DHeadOutputs(BaseModel):
     center_head_outputs: CenterHeadOutputs | None
     transfusion_head_outputs: TransFusionHeadOutputs | None
 
+    def center_head(self) -> CenterHeadOutputs:
+        """
+        Read the outputs of a CenterHead-based model.
+
+        Raises:
+            ValueError: If a TransFusion-based head produced the outputs.
+        """
+        if self.center_head_outputs is None:
+            raise ValueError("The detection outputs come from a TransFusion head.")
+        return self.center_head_outputs
+
+    def transfusion_head(self) -> TransFusionHeadOutputs:
+        """
+        Read the outputs of a TransFusion-based model.
+
+        Raises:
+            ValueError: If a CenterHead-based head produced the outputs.
+        """
+        if self.transfusion_head_outputs is None:
+            raise ValueError("The detection outputs come from a CenterHead.")
+        return self.transfusion_head_outputs
+
     @model_validator(mode="after")
     def _check_exactly_one_head(self) -> Detection3DHeadOutputs:
         """Check that exactly one head family produced the outputs."""
