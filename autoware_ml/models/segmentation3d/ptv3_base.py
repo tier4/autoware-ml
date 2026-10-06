@@ -10,6 +10,9 @@ import torch
 import torch.nn as nn
 from torch.onnx.operators import shape_as_tensor
 
+from autoware_ml.dataclasses.geometry.grid_sample import GridSampleData
+from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.models.base import BaseModel
 from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     Block,
@@ -86,6 +89,18 @@ def split_block_parameters(
     return default_params, block_params
 
 
+def _point_cloud_batch(batch_inputs: ModelBatchInputs) -> PointCloudGTBatch:
+    """Read the point cloud of the batch.
+
+    Raises:
+        ValueError: If the batch carries no point cloud.
+    """
+    point_batch = batch_inputs.multi_task_gt_batch.point_cloud_gt_batch
+    if point_batch is None:
+        raise ValueError("PTv3 needs the point cloud of the batch.")
+    return point_batch
+
+
 class PTv3BaseModel(BaseModel):
     """Abstract base class for all PTv3 task models.
 
@@ -157,35 +172,72 @@ class PTv3BaseModel(BaseModel):
             "freeze_encoder": self.freeze_encoder,
         }
 
-    def get_log_batch_size(self, batch_inputs_dict: Mapping[str, Any]) -> int | None:
-        """Infer the effective sample batch size for logging.
+    def forward_inputs(self, batch_inputs: ModelBatchInputs) -> dict[str, Any]:
+        """Pick the grid sampled points of the batch.
 
         Args:
-            batch_inputs_dict: Full batch dictionary from the dataloader.
+            batch_inputs: Model inputs holding the point cloud and its grid samples.
 
         Returns:
-            Sample batch size when it can be inferred, otherwise ``None``.
+            The coordinates, features and voxel coordinates of the representatives and the
+            representative count of every sample.
         """
-        if "gt_boxes" in batch_inputs_dict:
-            return len(batch_inputs_dict["gt_boxes"])
-        if "offset" in batch_inputs_dict:
-            return int(batch_inputs_dict["offset"].numel())
-        return super().get_log_batch_size(batch_inputs_dict)
+        grid_sample_data = self.grid_sample_data(batch_inputs)
+        points = _point_cloud_batch(batch_inputs).points[grid_sample_data.representative_indices]
+        return {
+            "coord": points[:, :3],
+            "feat": points,
+            "grid_coord": grid_sample_data.grid_coords,
+            "offset": grid_sample_data.offsets,
+        }
+
+    @staticmethod
+    def grid_sample_data(batch_inputs: ModelBatchInputs) -> GridSampleData:
+        """Read the grid samples a grid sampler added to the model inputs.
+
+        Args:
+            batch_inputs: Model inputs of the batch.
+
+        Returns:
+            The grid samples of the batch.
+
+        Raises:
+            ValueError: If the model inputs carry no grid samples.
+        """
+        if batch_inputs.grid_sample_data is None:
+            raise ValueError("PTv3 needs the grid samples of a GridSamplePreprocessor.")
+        return batch_inputs.grid_sample_data
+
+    def sampled_semantic_labels(self, batch_inputs: ModelBatchInputs) -> torch.Tensor:
+        """Give every grid sample the semantic label of its representative point.
+
+        Args:
+            batch_inputs: Model inputs holding the point labels and the grid samples.
+
+        Returns:
+            The label of every grid sample.
+
+        Raises:
+            ValueError: If the batch carries no semantic labels.
+        """
+        labels = batch_inputs.multi_task_gt_batch.segmentation3d_gt_batch
+        if labels is None:
+            raise ValueError("PTv3 segmentation needs the semantic labels of the batch.")
+        return labels.gt_semantic_masks[self.grid_sample_data(batch_inputs).representative_indices]
 
     def _compute_export_geometry(
-        self, batch_inputs_dict: Mapping[str, torch.Tensor]
+        self, forward_inputs: Mapping[str, torch.Tensor]
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute sparse shape and serialization depth for export.
 
         Args:
-            batch_inputs_dict: Preprocessed batch containing at least
-                ``coord`` (used for device inference).
+            forward_inputs: Forward arguments of the example batch, ``coord`` sets the device.
 
         Returns:
             ``(sparse_shape, serialization_depth)`` as long tensors on the
-            same device as ``batch_inputs_dict["coord"]``.
+            same device as ``forward_inputs["coord"]``.
         """
-        device = batch_inputs_dict["coord"].device
+        device = forward_inputs["coord"].device
         point_cloud_range = torch.tensor(self.point_cloud_range, dtype=torch.float32, device=device)
         axis_extents = (point_cloud_range[3:] - point_cloud_range[:3]) / self.grid_size
         serialization_depth = bit_length_tensor(torch.max(axis_extents))
@@ -495,11 +547,14 @@ class PTv3ExportContext:
 
 
 def build_ptv3_export_context(
-    model: "PTv3BaseModel", batch: Mapping[str, torch.Tensor]
+    model: "PTv3BaseModel", batch_inputs: ModelBatchInputs
 ) -> PTv3ExportContext:
     """Serialize the batch, precompute pooling metadata, and run the encoder once."""
-    sparse_shape, serialization_depth = model._compute_export_geometry(batch)
-    point, input_args = serialize_point_cloud_batch(batch, model.EXPORT_ORDER, serialization_depth)
+    forward_inputs = model.forward_inputs(batch_inputs)
+    sparse_shape, serialization_depth = model._compute_export_geometry(forward_inputs)
+    point, input_args = serialize_point_cloud_batch(
+        forward_inputs, model.EXPORT_ORDER, serialization_depth
+    )
     pooling_metadata = build_serialized_pooling_metadata(
         point["grid_coord"],
         point["serialized_code"],
@@ -550,7 +605,7 @@ class MonolithicExportInputs:
 
 
 def build_monolithic_export_inputs(
-    model: "PTv3BaseModel", batch: Mapping[str, torch.Tensor]
+    model: "PTv3BaseModel", batch_inputs: ModelBatchInputs
 ) -> MonolithicExportInputs:
     """Serialize a batch and derive the encoder inputs for a single-graph export.
 
@@ -559,14 +614,16 @@ def build_monolithic_export_inputs(
 
     Args:
         model: Task model being exported.
-        batch: Preprocessed batch with ``coord``, ``feat``, ``grid_coord``, and
-            ``offset``.
+        batch_inputs: Preprocessed example batch.
 
     Returns:
         Baked geometry and the sample inputs matching the declared input names.
     """
-    sparse_shape, serialization_depth = model._compute_export_geometry(batch)
-    point, input_args = serialize_point_cloud_batch(batch, model.EXPORT_ORDER, serialization_depth)
+    forward_inputs = model.forward_inputs(batch_inputs)
+    sparse_shape, serialization_depth = model._compute_export_geometry(forward_inputs)
+    point, input_args = serialize_point_cloud_batch(
+        forward_inputs, model.EXPORT_ORDER, serialization_depth
+    )
     serialized_pooling_inputs, serialized_pooling_input_names = flatten_serialized_pooling_inputs(
         build_serialized_pooling_metadata(
             point["grid_coord"],

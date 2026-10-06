@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 import torch
 from torch.onnx.operators import shape_as_tensor
@@ -150,15 +150,15 @@ def invert_permutation(order: torch.Tensor) -> torch.Tensor:
 
 
 def serialize_point_cloud_batch(
-    batch: dict,
+    batch: Mapping[str, torch.Tensor],
     export_order: Sequence[str],
     serialization_depth: torch.Tensor,
 ) -> tuple[Point, tuple[torch.Tensor, ...]]:
     """Serialize a preprocessed point-cloud batch for export.
 
     Args:
-        batch: Preprocessed batch dictionary with ``coord``, ``feat``,
-            ``grid_coord``, and ``offset`` keys.
+        batch: Forward arguments of the batch, ``coord``, ``feat``, ``grid_coord`` and
+            ``offset``.
         export_order: Ordered serialization order names.
         serialization_depth: Scalar long tensor specifying the serialization depth.
 

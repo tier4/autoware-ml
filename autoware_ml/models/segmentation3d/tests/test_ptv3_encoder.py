@@ -11,6 +11,12 @@ import torch
 import torch.nn as nn
 
 import autoware_ml.utils.point_cloud.structures as point_structures
+from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTBatch
+from autoware_ml.dataclasses.geometry.grid_sample import GridSampleData
+from autoware_ml.models.tests.batch_inputs_fixtures import (
+    build_batch_inputs,
+    build_point_cloud_batch,
+)
 from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     Point,
     PointSequential,
@@ -289,6 +295,26 @@ def test_point_sequential_skips_dense_module_on_empty_sparse_tensor() -> None:
     assert output.features.shape == (0, 4)
 
 
+def _grid_sampled_inputs(
+    points: torch.Tensor, labels: torch.Tensor, representatives: torch.Tensor, inverse: torch.Tensor
+):
+    """Build one-frame model inputs whose grid samples are the given representatives."""
+    return build_batch_inputs(
+        point_cloud=build_point_cloud_batch([points]),
+        segmentation=Segmentation3DGTBatch(
+            gt_semantic_masks=labels,
+            batch_indices=torch.zeros(labels.shape[0], dtype=torch.int32),
+        ),
+    ).replace(
+        grid_sample_data=GridSampleData(
+            grid_coords=torch.zeros((representatives.shape[0], 3), dtype=torch.int32),
+            representative_indices=representatives,
+            inverse=inverse,
+            offsets=torch.tensor([representatives.shape[0]]),
+        )
+    )
+
+
 def test_compute_metrics_reports_losses_and_point_level_accuracy() -> None:
     """compute_metrics should run losses on voxel logits and metrics at point level."""
     model = PTv3SegmentationModel.__new__(PTv3SegmentationModel)
@@ -303,19 +329,14 @@ def test_compute_metrics_reports_losses_and_point_level_accuracy() -> None:
         ],
         dtype=torch.float32,
     )
-    segment = torch.tensor([0, 1, -1], dtype=torch.long)
-    # Two source points: one maps to voxel 0, the other to voxel 1.
-    inverse = torch.tensor([0, 1], dtype=torch.long)
-    origin_segment = torch.tensor([0, 1], dtype=torch.long)
-
-    origin_coord = torch.tensor([[10.0, 0.0, 0.0], [60.0, 0.0, 0.0]], dtype=torch.float32)
-    batch = {
-        "segment": segment,
-        "inverse": inverse,
-        "offset": torch.tensor([3], dtype=torch.long),
-        "origin_segment": origin_segment,
-        "origin_coord": origin_coord,
-    }
+    # Four source points, the last two share the third voxel, which keeps the ignored point
+    points = torch.tensor(
+        [[10.0, 0.0, 0.0, 1.0], [60.0, 0.0, 0.0, 1.0], [5.0, 0.0, 0.0, 1.0], [5.1, 0.0, 0.0, 1.0]]
+    )
+    labels = torch.tensor([0, 1, -1, 2], dtype=torch.long)
+    batch = _grid_sampled_inputs(
+        points, labels, representatives=torch.tensor([0, 1, 2]), inverse=torch.tensor([0, 1, 2, 2])
+    )
 
     metrics = PTv3SegmentationModel.compute_metrics(model, batch, voxel_logits)
 
@@ -326,10 +347,10 @@ def test_compute_metrics_reports_losses_and_point_level_accuracy() -> None:
 
     eval_out = PTv3SegmentationModel.build_eval_output(model, batch, voxel_logits)
     (frame,) = eval_out["seg_frames"]
-    assert torch.equal(frame["pred"], torch.tensor([0, 1]))
-    assert torch.equal(frame["target"], origin_segment)
-    assert torch.equal(frame["coord"], origin_coord)
-    assert frame["scores"].shape == (2, 3)
+    assert torch.equal(frame["pred"], torch.tensor([0, 1, 2, 2]))
+    assert torch.equal(frame["target"], labels)
+    assert torch.equal(frame["coord"], points[:, :3])
+    assert frame["scores"].shape == (4, 3)
 
 
 def test_predict_outputs_reconstructs_point_level_predictions() -> None:
@@ -339,12 +360,14 @@ def test_predict_outputs_reconstructs_point_level_predictions() -> None:
 
     voxel_logits = torch.tensor([[4.0, 0.1], [0.1, 5.0]], dtype=torch.float32)
     inverse = torch.tensor([0, 1, 0], dtype=torch.long)
-
-    predictions = PTv3SegmentationModel.predict_outputs(
-        model,
-        {"inverse": inverse},
-        voxel_logits,
+    batch = _grid_sampled_inputs(
+        torch.zeros((3, 4)),
+        torch.zeros(3, dtype=torch.long),
+        representatives=torch.tensor([0, 1]),
+        inverse=inverse,
     )
+
+    predictions = PTv3SegmentationModel.predict_outputs(model, batch, voxel_logits)
 
     assert torch.equal(predictions["pred_labels"], torch.tensor([0, 1, 0]))
     assert predictions["pred_probs"].shape == (3, 2)

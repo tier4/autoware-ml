@@ -32,6 +32,7 @@ from autoware_ml.models.detection3d.tests.ptv3_detection_fixtures import (
     build_litept_seg_model,
     build_ptv3_encoder,
     build_seg_model,
+    build_ptv3_batch_inputs,
     move_batch_to_device,
 )
 
@@ -222,7 +223,7 @@ def test_litept_split_export_declares_and_consumes_the_ptv3_contract() -> None:
     model = build_litept_seg_model().cuda().eval()
     batch = move_batch_to_device(build_inputs(), torch.device("cuda"))
 
-    specs = model.build_export_specs(batch)
+    specs = model.build_export_specs(build_ptv3_batch_inputs(batch))
     encoder_spec = specs["ptv3_encoder"]
 
     assert "serialized_order" in encoder_spec.input_param_names
@@ -257,7 +258,7 @@ def test_litept_monolithic_export_runs_on_its_declared_inputs() -> None:
     model = build_litept_seg_model().cuda().eval()
     batch = move_batch_to_device(build_inputs(), torch.device("cuda"))
 
-    spec = model.build_export_spec(batch)
+    spec = model.build_export_spec(build_ptv3_batch_inputs(batch))
 
     assert "serialized_order" in spec.input_param_names
     assert "serialized_inverse" in spec.input_param_names
@@ -277,7 +278,7 @@ def test_ptv3_monolithic_export_contract_still_lists_every_tensor() -> None:
     model = build_seg_model().cuda().eval()
     batch = move_batch_to_device(build_inputs(), torch.device("cuda"))
 
-    spec = model.build_export_spec(batch)
+    spec = model.build_export_spec(build_ptv3_batch_inputs(batch))
 
     assert spec.input_param_names == [
         "grid_coord",
@@ -315,7 +316,7 @@ def test_exported_encoder_graph_declares_a_subset_of_the_contract(tmp_path) -> N
     for tag, model in (("litept", build_litept_seg_model()), ("ptv3", build_seg_model())):
         model = model.cuda().eval()
         batch = move_batch_to_device(build_inputs(), torch.device("cuda"))
-        spec = model.build_export_specs(batch)["ptv3_encoder"]
+        spec = model.build_export_specs(build_ptv3_batch_inputs(batch))["ptv3_encoder"]
         path = tmp_path / f"{tag}_encoder.onnx"
 
         export_to_onnx(
@@ -344,8 +345,18 @@ def test_litept_encoder_contract_matches_ptv3_field_for_field() -> None:
     rejects an engine missing any of them.
     """
     batch = move_batch_to_device(build_inputs(), torch.device("cuda"))
-    litept = build_litept_seg_model().cuda().eval().build_export_specs(batch)["ptv3_encoder"]
-    ptv3 = build_seg_model().cuda().eval().build_export_specs(batch)["ptv3_encoder"]
+    litept = (
+        build_litept_seg_model()
+        .cuda()
+        .eval()
+        .build_export_specs(build_ptv3_batch_inputs(batch))["ptv3_encoder"]
+    )
+    ptv3 = (
+        build_seg_model()
+        .cuda()
+        .eval()
+        .build_export_specs(build_ptv3_batch_inputs(batch))["ptv3_encoder"]
+    )
 
     def stage_fields(names: list[str]) -> set[str]:
         return {name.split("_", 3)[3] for name in names if name.startswith("serialized_pooling_")}

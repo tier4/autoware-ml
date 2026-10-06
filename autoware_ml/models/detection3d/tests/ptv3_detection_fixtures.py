@@ -6,6 +6,8 @@ from collections.abc import Mapping, Sequence
 
 import torch
 
+from autoware_ml.dataclasses.geometry.grid_sample import GridSampleData
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.models.detection3d.heads.transfusion import TransFusionHead
 from autoware_ml.models.detection3d.ptv3 import (
     PTv3BEVEncoder,
@@ -20,6 +22,11 @@ from autoware_ml.models.detection3d.task_modules.match_costs import (
     BBoxBEVL1Cost,
     ClassificationCost,
     IoU3DCost,
+)
+from autoware_ml.models.tests.batch_inputs_fixtures import (
+    build_batch_inputs,
+    build_detection_gt_batch,
+    build_point_cloud_batch,
 )
 from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     LitePTEncoder,
@@ -201,6 +208,35 @@ def build_inputs() -> dict[str, torch.Tensor]:
     grid_coord[:, 2] += 2
     offset = torch.tensor([coord.shape[0]], dtype=torch.long)
     return {"coord": coord, "feat": feat, "grid_coord": grid_coord, "offset": offset}
+
+
+def build_ptv3_batch_inputs(
+    batch: Mapping[str, torch.Tensor],
+    gt_boxes: list[torch.Tensor] | None = None,
+    gt_labels: list[torch.Tensor] | None = None,
+) -> ModelBatchInputs:
+    """Wrap one-sample forward arguments as model inputs whose grid samples are the points.
+
+    Args:
+        batch: Forward arguments as built by :func:`build_inputs`.
+        gt_boxes: Optional boxes of the sample.
+        gt_labels: Optional labels of the sample.
+
+    Returns:
+        Model inputs from which the PTv3 models pick the same forward arguments back.
+    """
+    points = batch["feat"]
+    indices = torch.arange(points.shape[0], device=points.device)
+    grid_sample_data = GridSampleData(
+        grid_coords=batch["grid_coord"],
+        representative_indices=indices,
+        inverse=indices,
+        offsets=batch["offset"],
+    )
+    detection = build_detection_gt_batch(gt_boxes, gt_labels) if gt_boxes is not None else None
+    return build_batch_inputs(
+        point_cloud=build_point_cloud_batch([points]), detection=detection
+    ).replace(grid_sample_data=grid_sample_data)
 
 
 def build_targets() -> tuple[list[torch.Tensor], list[torch.Tensor]]:

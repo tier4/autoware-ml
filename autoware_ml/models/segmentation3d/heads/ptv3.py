@@ -23,12 +23,14 @@ encoder guarantees the detection branch is untouched.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from typing import Any
 
 import torch
 import torch.nn as nn
 
+from autoware_ml.dataclasses.geometry.grid_sample import GridSampleData
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.losses.segmentation3d.lovasz import LovaszLoss
 from autoware_ml.metrics.segmentation3d.eval_output import (
     concat_frame_ids,
@@ -239,51 +241,59 @@ class PTv3SegDecoderHead(nn.Module):
         return export_head
 
 
-def segmentation_eval_output(seg_logits: torch.Tensor, batch: Mapping[str, Any]) -> dict[str, Any]:
+def segmentation_eval_output(
+    seg_logits: torch.Tensor, batch_inputs: ModelBatchInputs, grid_sample_data: GridSampleData
+) -> dict[str, Any]:
     """Scatter point-level predictions back to original points, per frame.
 
     Produces the ``seg_frames`` contract both segmentation suites consume: one
     entry per frame with the original-resolution coordinates, predicted/target
     labels and per-class softmax scores. The frame of every original point is
-    recovered from the sampled-space ``inverse`` map and the batch ``offset``
-    (inclusive cumulative sampled-point counts per frame).
+    recovered from the grid sample ``inverse`` map and the grid sample offsets
+    (inclusive cumulative sample counts per frame).
 
     Args:
         seg_logits: Point-wise segmentation logits at the sampled-point level.
-        batch: Batch dictionary with ``inverse``, ``offset``, ``origin_segment``,
-            and ``origin_coord``. Per-frame metadata (ego pose, scene token) is
-            passed through when the dataset supplies it.
+        batch_inputs: Model inputs holding the original points and their labels. Per-frame
+            metadata (ego pose, scene token) is passed through when the dataset supplies it.
+        grid_sample_data: Grid samples the logits were predicted for.
 
     Returns:
         ``{"seg_frames": [...]}`` keyed for the segmentation suites.
+
+    Raises:
+        ValueError: If the batch carries no point cloud or no semantic labels.
     """
-    inverse = batch["inverse"].long()
-    offset = batch["offset"].long()
+    gt_batch = batch_inputs.multi_task_gt_batch
+    if gt_batch.point_cloud_gt_batch is None or gt_batch.segmentation3d_gt_batch is None:
+        raise ValueError("The segmentation eval output needs the points and their labels.")
+    inverse = grid_sample_data.inverse.long()
+    offset = grid_sample_data.offsets.long()
     scores = torch.softmax(seg_logits, dim=1)[inverse]
     return segmentation_frames_eval_output(
-        coord=batch["origin_coord"],
+        coord=gt_batch.point_cloud_gt_batch.points[:, :3],
         pred_labels=seg_logits.argmax(dim=1)[inverse],
-        target_labels=batch["origin_segment"].long(),
+        target_labels=gt_batch.segmentation3d_gt_batch.gt_semantic_masks.long(),
         scores=scores,
         frame_ids=concat_frame_ids(offset, inverse),
         num_frames=int(offset.shape[0]),
-        batch=batch,
+        batch_inputs=batch_inputs,
     )
 
 
 def segmentation_predict_outputs(
-    seg_logits: torch.Tensor, batch: Mapping[str, Any]
+    seg_logits: torch.Tensor, grid_sample_data: GridSampleData
 ) -> dict[str, torch.Tensor]:
     """Format segmentation predictions at the original-point level.
 
     Args:
         seg_logits: Point-wise segmentation logits at the sampled-point level.
-        batch: Batch dictionary with ``inverse`` (sampled-to-original point
-            map).
+        grid_sample_data: Grid samples the logits were predicted for, their inverse index
+            maps every original point to its sample.
 
     Returns:
         Dictionary with ``pred_labels`` and per-class ``pred_probs`` at the
         original-point level.
     """
-    point_probs = torch.softmax(seg_logits, dim=1)[batch["inverse"].long()]
+    point_probs = torch.softmax(seg_logits, dim=1)[grid_sample_data.inverse.long()]
     return {"pred_labels": point_probs.argmax(dim=1), "pred_probs": point_probs}
