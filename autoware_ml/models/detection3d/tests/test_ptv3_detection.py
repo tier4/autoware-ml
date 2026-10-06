@@ -60,11 +60,12 @@ def test_ptv3_transhead_detection_runs_loss_and_predict() -> None:
 
     outputs = model(**inputs)
     metrics = model.compute_metrics(build_ptv3_batch_inputs(inputs, gt_boxes, gt_labels), outputs)
-    predictions = model.bbox_head.predict(outputs)
+    predictions = model.bbox_head.predict(outputs.detection3d().transfusion_head())
 
     assert "loss" in metrics
-    assert outputs.dense_heatmap.shape[:2] == (1, 2)
-    assert outputs.query_labels.shape == (1, 8)
+    head_outputs = outputs.detection3d().transfusion_head()
+    assert head_outputs.dense_heatmap.shape[:2] == (1, 2)
+    assert head_outputs.query_labels.shape == (1, 8)
     assert isinstance(predictions, list)
     assert isinstance(predictions[0], Detection3DSamplePredictions)
 

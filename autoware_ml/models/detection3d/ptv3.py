@@ -18,8 +18,9 @@ import torch
 import torch.nn as nn
 from torch.onnx.operators import shape_as_tensor
 
-from autoware_ml.dataclasses.models.detection3d.head_outputs import TransFusionHeadOutputs
+from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DHeadOutputs
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
 from autoware_ml.models.segmentation3d.encoders.ptv3 import PointTransformerV3Encoder
@@ -470,10 +471,9 @@ class PTv3DetectionModel(PTv3BaseModel):
         self.bbox_head = bbox_head
         self.export_output_names = list(export_output_names)
 
-    def build_eval_output(self, batch: ModelBatchInputs, outputs: Any) -> dict[str, Any]:
+    def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> dict[str, Any]:
         """Decode detections and pair them with ground truth for metrics."""
-        predictions = ModelPredictions(detection3d_predictions=self.bbox_head.predict(outputs))
-        return detection_eval_output(predictions, batch)
+        return detection_eval_output(self.predict_outputs(batch, outputs), batch)
 
     def get_export_output_names(self) -> list[str]:
         """Return the ordered export output names."""
@@ -498,15 +498,19 @@ class PTv3DetectionModel(PTv3BaseModel):
         feat: torch.Tensor,
         grid_coord: torch.Tensor,
         offset: torch.Tensor,
-    ) -> TransFusionHeadOutputs:
+    ) -> ModelOutputs:
         """Run PTv3 feature extraction followed by the configured detection head."""
         bev_features = self._extract_bev_features(coord, feat, grid_coord, offset)
-        return self.bbox_head(bev_features)
+        return ModelOutputs(
+            detection3d_head_outputs=Detection3DHeadOutputs(
+                center_head_outputs=None, transfusion_head_outputs=self.bbox_head(bev_features)
+            )
+        )
 
     def compute_metrics(
         self,
         batch_inputs: ModelBatchInputs,
-        outputs: TransFusionHeadOutputs,
+        outputs: ModelOutputs,
     ) -> dict[str, torch.Tensor]:
         """Compute detection losses for one batched step.
 
@@ -517,15 +521,19 @@ class PTv3DetectionModel(PTv3BaseModel):
         if gt_detections is None:
             raise ValueError("PTv3 detection losses need the 3D detection ground truth.")
         return self.bbox_head.loss(
-            outputs, gt_detections.valid_bboxes_3d(), gt_detections.valid_labels_3d()
+            outputs.detection3d().transfusion_head(),
+            gt_detections.valid_bboxes_3d(),
+            gt_detections.valid_labels_3d(),
         )
 
     def predict_outputs(
-        self, batch_inputs: ModelBatchInputs, outputs: TransFusionHeadOutputs
-    ) -> Any:
+        self, batch_inputs: ModelBatchInputs, outputs: ModelOutputs
+    ) -> ModelPredictions:
         """Decode predictions for inference."""
         del batch_inputs
-        return self.bbox_head.predict(outputs)
+        return ModelPredictions(
+            detection3d_predictions=self.bbox_head.predict(outputs.detection3d().transfusion_head())
+        )
 
     def build_export_spec(self, batch_inputs: ModelBatchInputs) -> ExportSpec:
         """Build the PTv3 detection ONNX export specification."""
