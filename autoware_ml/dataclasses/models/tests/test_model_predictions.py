@@ -53,12 +53,12 @@ class TestModelOutputs(unittest.TestCase):
     def _build_center_head_outputs(self) -> CenterHeadOutputs:
         """Build all-zero CenterHead outputs on a 4x4 grid with two classes."""
         return CenterHeadOutputs(
-            heatmaps=torch.zeros(1, 2, 4, 4),
-            centers=torch.zeros(1, 2, 4, 4),
-            heights=torch.zeros(1, 1, 4, 4),
-            dims=torch.zeros(1, 3, 4, 4),
-            rots=torch.zeros(1, 2, 4, 4),
-            vels=None,
+            heatmap=torch.zeros(1, 2, 4, 4),
+            reg=torch.zeros(1, 2, 4, 4),
+            height=torch.zeros(1, 1, 4, 4),
+            dim=torch.zeros(1, 3, 4, 4),
+            rot=torch.zeros(1, 2, 4, 4),
+            vel=None,
         )
 
     def test_holds_detection3d_head_outputs(self) -> None:
