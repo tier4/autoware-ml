@@ -30,6 +30,7 @@ from autoware_ml.models.detection3d.bevfusion import (
 from autoware_ml.models.detection3d.fusion import ConvFuser
 from autoware_ml.models.detection3d.view_transforms.depth_lss import DepthLSSTransform
 from autoware_ml.models.detection3d.tests.head_output_fixtures import build_transfusion_outputs
+from autoware_ml.models.tests.batch_inputs_fixtures import voxels_data_from_zyx
 
 
 class _IdentityHead(nn.Module):
@@ -357,15 +358,13 @@ def test_runtime_coors_conversion_keeps_zyx_order_and_adds_batch_column() -> Non
 
 
 def test_first_sample_voxel_inputs_round_trip_to_internal_layout() -> None:
-    batch_inputs_dict = {
-        "voxel_coords": torch.tensor([[0, 1, 2, 3], [0, 4, 5, 6], [1, 7, 8, 9]], dtype=torch.int64),
-        "voxels": torch.arange(3 * 2 * 5, dtype=torch.float32).view(3, 2, 5),
-        "num_points": torch.tensor([2, 1, 2], dtype=torch.int64),
-    }
-
-    voxels, coors, num_points = BEVFusionDetectionModel._first_sample_voxel_inputs(
-        batch_inputs_dict
+    voxels_data = voxels_data_from_zyx(
+        voxels=torch.arange(3 * 2 * 5, dtype=torch.float32).view(3, 2, 5),
+        num_points=torch.tensor([2, 1, 2], dtype=torch.int64),
+        voxel_coords=torch.tensor([[0, 1, 2, 3], [0, 4, 5, 6], [1, 7, 8, 9]], dtype=torch.int64),
     )
+
+    voxels, coors, num_points = BEVFusionDetectionModel._first_sample_voxel_inputs(voxels_data)
 
     assert coors.tolist() == [[1, 2, 3], [4, 5, 6]]
     assert voxels.shape[0] == 2
