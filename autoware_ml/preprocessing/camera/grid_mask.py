@@ -16,20 +16,18 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import numpy as np
 import torch
 from PIL import Image
+
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 
 
 class BatchGridMask:
     """Mask a rotated regular grid out of every image in a collated batch.
 
     The mask follows the StreamPETR implementation. The layer runs after batch transfer,
-    reads ``img`` from the batch dictionary and returns the masked images under the same key
-    and in the same container type (a list of ``(N, C, H, W)`` tensors or one
-    ``(B, N, C, H, W)`` tensor).
+    reads the images of the model inputs and replaces them with the masked images.
 
     * One random grid is sampled per call and shared by every image in the batch.
     * The grid period is sampled from ``[2, H)``.
@@ -71,34 +69,28 @@ class BatchGridMask:
         self.mode = mode
         self.prob = prob
 
-    def __call__(self, batch_inputs_dict: dict[str, Any], *, is_training: bool) -> dict[str, Any]:
-        """Apply one shared grid mask to the batch's ``img`` entry.
+    def __call__(self, batch_inputs: ModelBatchInputs, *, is_training: bool) -> ModelBatchInputs:
+        """Apply one shared grid mask to the images of the batch.
 
         Args:
-            batch_inputs_dict: Collated batch on the target device. ``img`` is
-                either a list of per-sample ``(N, C, H, W)`` tensors or one
-                ``(B, N, C, H, W)`` tensor.
+            batch_inputs: Model inputs holding the ``(B, N, C, H, W)`` images of the batch.
             is_training: Whether the owning model is in training mode. The mask
                 is only applied during training.
 
         Returns:
-            ``{"img": masked}`` in the same container type as the input, or an
-            empty dict when the augmentation is skipped.
+            The model inputs with the masked images, unchanged when the augmentation is skipped.
+
+        Raises:
+            ValueError: If the model inputs carry no images.
         """
         if not is_training or np.random.rand() > self.prob:
-            return {}
-        images = batch_inputs_dict["img"]
-        if isinstance(images, (list, tuple)):
-            stacked = torch.stack(list(images), dim=0)
-        else:
-            stacked = images
-        batch_size, num_cams = stacked.shape[:2]
-        masked = self.mask_images(stacked.flatten(0, 1)).reshape(
-            batch_size, num_cams, *stacked.shape[2:]
-        )
-        if isinstance(images, (list, tuple)):
-            return {"img": list(masked.unbind(0))}
-        return {"img": masked}
+            return batch_inputs
+        image_data = batch_inputs.image_data
+        if image_data is None:
+            raise ValueError("BatchGridMask needs the images of the batch.")
+        images = image_data.images
+        masked = self.mask_images(images.flatten(0, 1)).reshape(images.shape)
+        return batch_inputs.replace(image_data=image_data._replace(images=masked))
 
     def mask_images(self, x: torch.Tensor) -> torch.Tensor:
         """Apply one shared grid mask to a ``(N, C, H, W)`` image batch.
