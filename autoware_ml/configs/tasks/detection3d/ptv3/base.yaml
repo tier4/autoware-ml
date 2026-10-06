@@ -11,6 +11,8 @@ dataset: ???
 grid_size: ???
 point_cloud_range: ???
 
+global_rot_scale_trans: ???
+
 data_preprocessing:
   pipeline:
     - _target_: autoware_ml.preprocessing.point_cloud.grid_sample.GridSamplePreprocessor

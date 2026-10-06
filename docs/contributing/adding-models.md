@@ -154,7 +154,7 @@ model:
 
   encoder:
     _target_: torch.nn.Linear
-    in_features: 4
+    in_features: 5
     out_features: 64
 
   decoder:
@@ -196,6 +196,10 @@ defaults:
 
 dataset: ${t4dataset}
 point_cloud_range: [-122.88, -122.88, -3.0, 122.88, 122.88, 5.0]
+global_rot_scale_trans:
+  yaw_rot_range: [-3.14159265, 3.14159265]
+  scale_ratio_range: [0.9, 1.1]
+  translation_std: [0.5, 0.5, 0.2]
 
 datamodule:
   train_dataloader:
@@ -206,6 +210,10 @@ datamodule:
     batch_size: 8
     num_workers: 4
 ```
+
+The default segmentation transforms read a few top level keys of the task config:
+`point_cloud_range`, `global_rot_scale_trans` and the `dataset.lidar` keys. They append the time
+lag of every point, so the encoder takes 5 point features.
 
 A split can mix several corpora. Each entry of `train_sources`, `validation_sources`,
 `test_sources` or `predict_sources` names a database, whether its boxes (`det3d`) and semantic

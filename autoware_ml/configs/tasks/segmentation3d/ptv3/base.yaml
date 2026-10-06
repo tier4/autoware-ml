@@ -10,6 +10,11 @@ dataset: ???
 grid_size: ???
 point_cloud_range: ???
 
+global_rot_scale_trans:
+  yaw_rot_range: [-3.14159265, 3.14159265]
+  scale_ratio_range: [0.9, 1.1]
+  translation_std: [0.5, 0.5, 0.2]
+
 data_preprocessing:
   pipeline:
     - _target_: autoware_ml.preprocessing.point_cloud.grid_sample.GridSamplePreprocessor

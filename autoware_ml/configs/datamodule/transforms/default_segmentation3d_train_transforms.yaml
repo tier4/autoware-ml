@@ -18,9 +18,9 @@ pipeline:
   - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
     _convert_: all
 
-    yaw_rot_range: [-3.14159265, 3.14159265]
-    scale_ratio_range: [0.9, 1.1]
-    translation_std: [0.5, 0.5, 0.2]
+    yaw_rot_range: ${global_rot_scale_trans.yaw_rot_range}
+    scale_ratio_range: ${global_rot_scale_trans.scale_ratio_range}
+    translation_std: ${global_rot_scale_trans.translation_std}
 
   - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalBEVRandomFlip
     _convert_: all

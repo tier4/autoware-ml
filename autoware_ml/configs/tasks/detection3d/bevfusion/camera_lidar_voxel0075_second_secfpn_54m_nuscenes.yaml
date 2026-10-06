@@ -22,7 +22,7 @@ max_time_lag: 0.5
 bev_voxel_size: [0.3, 0.3]
 image_size: [256, 704]
 
-# Every frame serves the images of these cameras, in this order
+# Camera order of the images
 camera_names: ${dataset.camera.camera_order}
 
 datamodule:

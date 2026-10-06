@@ -24,7 +24,7 @@ model:
       - ${point_cloud_range.3}
       - ${point_cloud_range.4}
       - ${point_cloud_range.5}
-      # Intensity arrives in [0, 1] from the loader
+      # Intensity is in [0, 1]
       - 1.0
   pts_middle_encoder:
     _target_: autoware_ml.models.detection3d.encoders.sparse.SparseEncoder

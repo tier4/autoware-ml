@@ -55,7 +55,7 @@ model:
       - ${point_cloud_range.3}
       - ${point_cloud_range.4}
       - ${point_cloud_range.5}
-      # Intensity arrives in [0, 1] from the loader
+      # Intensity is in [0, 1]
       - 1.0
       - ${max_time_lag}
   pts_middle_encoder:
@@ -144,8 +144,6 @@ trainer:
   gradient_clip_val: 35.0
   gradient_clip_algorithm: norm
 
-# Lidar-only models export the bevfusion_lidar main body; camera-lidar models
-# export bevfusion_image_backbone plus the bevfusion_camera_lidar main body.
 deploy:
   onnx:
     dynamo: false

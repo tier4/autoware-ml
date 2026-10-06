@@ -49,6 +49,12 @@ t4dataset:
 
 point_cloud_range: [-122.88, -122.88, -3.0, 122.88, 122.88, 5.0]
 grid_size: 0.12
+
+global_rot_scale_trans:
+  yaw_rot_range: [-1.57079633, 1.57079633]
+  scale_ratio_range: [0.9, 1.1]
+  translation_std: [0.5, 0.5, 0.2]
+
 head_voxel_size: [0.96, 0.96, 8.0]
 
 num_proposals: 500

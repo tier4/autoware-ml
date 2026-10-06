@@ -17,6 +17,12 @@ dataset: ${nuscenes}
 
 grid_size: 0.05
 point_cloud_range: [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
+
+global_rot_scale_trans:
+  yaw_rot_range: [-1.57079633, 1.57079633]
+  scale_ratio_range: [0.8, 1.2]
+  translation_std: [1.0, 1.0, 0.2]
+
 num_proposals: 200
 
 datamodule:
@@ -60,7 +66,7 @@ model:
     num_decoder_layers: 1
     num_heads: 8
     feedforward_channels: 256
-    # Fusable bf16 cross-attention export; requires the fp16 module precision below and SM80+.
+    # Fused bf16 cross attention, needs fp16 precision and SM80+
     use_bf16_cross_attention: true
     common_heads:
       center: [2, 2]

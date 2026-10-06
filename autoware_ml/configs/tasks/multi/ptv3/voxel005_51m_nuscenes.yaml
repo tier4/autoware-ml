@@ -15,6 +15,12 @@ num_workers: 8
 
 grid_size: 0.05
 point_cloud_range: [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
+
+global_rot_scale_trans:
+  yaw_rot_range: [-1.57079633, 1.57079633]
+  scale_ratio_range: [0.8, 1.2]
+  translation_std: [1.0, 1.0, 0.2]
+
 head_voxel_size: [0.4, 0.4, 8.0]
 
 num_proposals: 200
