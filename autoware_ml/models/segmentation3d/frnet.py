@@ -19,13 +19,16 @@ This module contains the high-level FRNet Lightning wrapper and export logic.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from copy import deepcopy
 from typing import Any
 
 import torch
 import torch.nn as nn
 
+from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch
+from autoware_ml.dataclasses.geometry.range_view import RangeViewData
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.metrics.segmentation3d.eval_output import (
     concat_frame_ids,
     segmentation_frames_eval_output,
@@ -81,6 +84,41 @@ class _FRNetExportModule(nn.Module):
             coors, point_feats_encoder, voxel_feats_pyramid, point_feats_backbone
         )
         return torch.softmax(point_logits, dim=1)
+
+
+def _point_cloud_batch(batch_inputs: ModelBatchInputs) -> PointCloudGTBatch:
+    """Read the point cloud of the batch.
+
+    Raises:
+        ValueError: If the batch carries no point cloud.
+    """
+    point_batch = batch_inputs.multi_task_gt_batch.point_cloud_gt_batch
+    if point_batch is None:
+        raise ValueError("FRNet needs the point cloud of the batch.")
+    return point_batch
+
+
+def _point_labels(batch_inputs: ModelBatchInputs) -> torch.Tensor:
+    """Read the semantic label of every point of the batch.
+
+    Raises:
+        ValueError: If the batch carries no labels.
+    """
+    label_batch = batch_inputs.multi_task_gt_batch.segmentation3d_gt_batch
+    if label_batch is None:
+        raise ValueError("FRNet needs the semantic labels of the batch.")
+    return label_batch.gt_semantic_masks.long()
+
+
+def _range_view_data(batch_inputs: ModelBatchInputs) -> RangeViewData:
+    """Read the range view projection a frustum range preprocessor added.
+
+    Raises:
+        ValueError: If the model inputs carry no range view data.
+    """
+    if batch_inputs.range_view_data is None:
+        raise ValueError("FRNet needs the range view data of a FrustumRangePreprocessor.")
+    return batch_inputs.range_view_data
 
 
 class FRNet(BaseModel):
@@ -200,28 +238,52 @@ class FRNet(BaseModel):
         )
         return (point_logits, *voxel_feats_pyramid)
 
+    def forward_inputs(self, batch_inputs: ModelBatchInputs) -> dict[str, Any]:
+        """Pick the points of the batch and their range view projection.
+
+        Args:
+            batch_inputs: Model inputs holding the point cloud and its range view data.
+
+        Returns:
+            The points, the range view cell of every point, the occupied cells, the cell index
+            of every point and the sample count of the batch.
+        """
+        range_view_data = _range_view_data(batch_inputs)
+        return {
+            "feat": _point_cloud_batch(batch_inputs).points,
+            "coors": range_view_data.coors,
+            "voxel_coors": range_view_data.voxel_coors,
+            "inverse_map": range_view_data.inverse_map,
+            "sample_count": batch_inputs.batch_size(),
+        }
+
     def compute_metrics(
         self,
-        batch_inputs_dict: Mapping[str, Any],
+        batch_inputs: ModelBatchInputs,
         outputs: tuple[torch.Tensor, ...],
     ) -> dict[str, torch.Tensor]:
         """Compute FRNet losses and point-wise accuracy.
 
         Args:
-            batch_inputs_dict: Full batch dictionary after runtime
-                preprocessing. Must contain ``segment`` and ``semantic_seg``.
+            batch_inputs: Model inputs holding the point labels and the dense range view
+                labels.
             outputs: Tuple returned by :meth:`forward`. The first element is
-                ``point_logits``; the remainder is the voxel-feature
+                ``point_logits``. The remainder is the voxel-feature
                 pyramid consumed by auxiliary heads.
 
         Returns:
             Dictionary of named loss tensors and segmentation metrics. The
             total loss is exposed under the ``"loss"`` key.
+
+        Raises:
+            ValueError: If the batch carries no labels.
         """
-        semantic_seg = batch_inputs_dict["semantic_seg"]
+        semantic_seg = _range_view_data(batch_inputs).semantic_labels
+        if semantic_seg is None:
+            raise ValueError("FRNet losses need the labels of the batch.")
         point_logits, *voxel_feats = outputs
 
-        decode_losses = self.decode_head.loss(point_logits, batch_inputs_dict["segment"].long())
+        decode_losses = self.decode_head.loss(point_logits, _point_labels(batch_inputs))
         total_loss = decode_losses["loss_ce"]
         metrics: dict[str, torch.Tensor] = {"loss_decode_ce": decode_losses["loss_ce"]}
 
@@ -235,37 +297,38 @@ class FRNet(BaseModel):
         return metrics
 
     def build_eval_output(
-        self, batch: Mapping[str, Any], outputs: tuple[torch.Tensor, ...]
+        self, batch: ModelBatchInputs, outputs: tuple[torch.Tensor, ...]
     ) -> dict[str, Any]:
         """Pair per-frame point predictions with targets for the segmentation suites.
 
         FRNet's logits are already at the original point level, so each point's
-        frame is its own position in the batch-concatenated ``feat`` tensor,
-        bucketed by the batch ``offset``.
+        frame is its own position in the concatenated points, bucketed by the
+        point offsets of the batch.
 
         Args:
-            batch: Collated batch as fed to the model.
+            batch: Model inputs as fed to the model.
             outputs: Raw forward outputs.
 
         Returns:
             Flat dict with the per-frame ``seg_frames`` the suites read.
         """
         point_logits = outputs[0]
-        offset = batch["offset"].long()
+        point_batch = _point_cloud_batch(batch)
+        offset = point_batch.offsets()
         point_index = torch.arange(point_logits.shape[0], device=point_logits.device)
         return segmentation_frames_eval_output(
-            coord=batch["coord"],
+            coord=point_batch.points[:, :3],
             pred_labels=point_logits.argmax(dim=1),
-            target_labels=batch["segment"].long(),
+            target_labels=_point_labels(batch),
             scores=torch.softmax(point_logits, dim=1),
             frame_ids=concat_frame_ids(offset, point_index),
             num_frames=int(offset.shape[0]),
-            batch=batch,
+            batch_inputs=batch,
         )
 
     def predict_outputs(
         self,
-        batch_inputs_dict: Mapping[str, Any],
+        batch_inputs: ModelBatchInputs,
         outputs: tuple[torch.Tensor, ...],
     ) -> dict[str, torch.Tensor]:
         """Format FRNet segmentation predictions at the point level.
@@ -274,8 +337,8 @@ class FRNet(BaseModel):
         ``inverse_map``, so no voxel-to-point scatter is needed here.
 
         Args:
-            batch_inputs_dict: Full batch dictionary (unused; FRNet's logits
-                are already at point level).
+            batch_inputs: Model inputs of the batch, unused because FRNet's logits are
+                already at point level.
             outputs: Tuple returned by :meth:`forward`. Only the first
                 element (``point_logits``) is consumed.
 
@@ -283,7 +346,7 @@ class FRNet(BaseModel):
             Dictionary with ``"pred_labels"`` (predicted class indices) and
             ``"pred_probs"`` (per-class probabilities).
         """
-        del batch_inputs_dict
+        del batch_inputs
         point_logits = outputs[0]
         pred_probs = torch.softmax(point_logits, dim=1)
         return {"pred_labels": pred_probs.argmax(dim=1), "pred_probs": pred_probs}
@@ -296,32 +359,20 @@ class FRNet(BaseModel):
         """
         return ["pred_probs"]
 
-    def get_log_batch_size(self, batch_inputs_dict: Mapping[str, Any]) -> int:
-        """Return the number of samples represented by the FRNet batch.
-
-        Args:
-            batch_inputs_dict: Collated model inputs.
-
-        Returns:
-            The batch size.
-        """
-        return int(batch_inputs_dict["sample_count"])
-
-    def build_export_spec(self, batch_inputs_dict: Mapping[str, torch.Tensor]) -> ExportSpec:
+    def build_export_spec(self, batch_inputs: ModelBatchInputs) -> ExportSpec:
         """Build the FRNet deployment export specification.
 
         FRNet uses an explicit export wrapper because deployment needs a copied
         module graph and a single probability tensor with a stable output name.
 
         Args:
-            batch_inputs_dict: Example model inputs used for tracing.
+            batch_inputs: Example model inputs used for tracing.
 
         Returns:
             The export specification.
         """
-        input_args = tuple(
-            batch_inputs_dict[name] for name in ("feat", "coors", "voxel_coors", "inverse_map")
-        )
+        inputs = self.forward_inputs(batch_inputs)
+        input_args = tuple(inputs[name] for name in ("feat", "coors", "voxel_coors", "inverse_map"))
         return ExportSpec(
             module=_FRNetExportModule(self),
             args=input_args,

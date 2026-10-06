@@ -9,7 +9,13 @@ import torch
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTBatch
 from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch
+from autoware_ml.dataclasses.geometry.range_view import RangeViewData
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.models.segmentation3d.frnet import FRNet
+from autoware_ml.models.tests.batch_inputs_fixtures import (
+    build_batch_inputs,
+    build_point_cloud_batch,
+)
 from autoware_ml.preprocessing.base import DataPreprocessing
 from autoware_ml.preprocessing.segmentation3d.frustum_range import FrustumRangePreprocessor
 
@@ -93,8 +99,8 @@ def _make_frnet(num_classes: int = 3) -> FRNet:
     )
 
 
-def _make_batch(num_points: int = 5, num_classes: int = 3) -> dict:
-    """Return a minimal preprocessed batch compatible with the test model."""
+def _make_batch(num_points: int = 5, num_classes: int = 3) -> ModelBatchInputs:
+    """Return minimal preprocessed model inputs compatible with the test model."""
     points = torch.rand(num_points, 4)
     coors = torch.stack(
         [
@@ -105,17 +111,19 @@ def _make_batch(num_points: int = 5, num_classes: int = 3) -> dict:
         dim=1,
     )
     voxel_coors, inverse_map = torch.unique(coors, return_inverse=True, dim=0)
-    semantic_seg = torch.zeros(1, 2, 2, dtype=torch.long)  # (B, H, W)
-    segment = torch.randint(0, num_classes - 1, (num_points,))
-    return {
-        "feat": points,
-        "coors": coors,
-        "voxel_coors": voxel_coors,
-        "inverse_map": inverse_map,
-        "segment": segment,
-        "semantic_seg": semantic_seg,
-        "sample_count": 1,
-    }
+    point_cloud = build_point_cloud_batch([points])
+    labels = Segmentation3DGTBatch(
+        gt_semantic_masks=torch.randint(0, num_classes - 1, (num_points,)),
+        batch_indices=point_cloud.batch_indices,
+    )
+    return build_batch_inputs(point_cloud=point_cloud, segmentation=labels).replace(
+        range_view_data=RangeViewData(
+            coors=coors,
+            voxel_coors=voxel_coors,
+            inverse_map=inverse_map,
+            semantic_labels=torch.zeros(1, 2, 2, dtype=torch.long),
+        )
+    )
 
 
 def test_frnet_shared_step_returns_scalar_loss_with_grad() -> None:
@@ -136,7 +144,7 @@ def test_frnet_get_log_batch_size_uses_sample_count() -> None:
     model = _make_frnet(num_classes=4)
     batch = _make_batch(num_points=8, num_classes=4)
 
-    assert model.get_log_batch_size(batch) == batch["sample_count"]
+    assert model.get_log_batch_size(batch) == 1
 
 
 def test_frnet_forward_uses_explicit_sample_count() -> None:
