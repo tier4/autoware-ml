@@ -17,6 +17,7 @@ metrics:
       - { _target_: autoware_ml.metrics.detection3d.heading_ap.HeadingAP, stages: [test] }
       - { _target_: autoware_ml.metrics.detection3d.nds.Nds, stages: [test] }
       - { _target_: autoware_ml.metrics.detection3d.tp_errors.TpErrors, stages: [test] }
+      - { _target_: autoware_ml.metrics.detection3d.box_counts.BoxCounts, stages: [test] }
     class_names: ${nuscenes.detection3d.class_names}
     min_num_points: 2
     eval_class_range: ${nuscenes.detection3d.eval_class_range}

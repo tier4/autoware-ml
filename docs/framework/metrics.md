@@ -945,6 +945,13 @@ the label-confusion view among detections that did match, not a recall metric.
 </svg>
 </div>
 
+### Box counts
+
+`BoxCounts` reports how many ground-truth and predicted boxes the other metrics scored, in total
+and per class. The ground truth is already filtered by the minimum point count and the class range
+of the suite, and both sides are clipped to the evaluated range, so a change of the eval filters
+shows up in the counts next to the scores.
+
 ### Occlusion-aware recall split
 
 Not a component but a suite pattern: with per-box point counts (`gt_num_points`) in the eval

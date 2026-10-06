@@ -72,6 +72,7 @@ detection_components:
   - { _target_: autoware_ml.metrics.detection3d.confusion_matrix.ConfusionMatrix, stages: [test] }
   - { _target_: autoware_ml.metrics.detection3d.critical_fp_fn.CriticalFPFN, stages: [test] }
   - { _target_: autoware_ml.metrics.detection3d.collision_weighted_map.CollisionWeightedMeanAP, stages: [test] }
+  - { _target_: autoware_ml.metrics.detection3d.box_counts.BoxCounts, stages: [test] }
   # Road slice (lanelet road + road_shoulder + crosswalk).
   - { _target_: autoware_ml.metrics.detection3d.mean_ap.MeanAP, stages: [test], filter: '${t4dataset.detection3d.region_filters.road}' }
   - { _target_: autoware_ml.metrics.detection3d.heading_ap.HeadingAP, stages: [test], filter: '${t4dataset.detection3d.region_filters.road}' }
