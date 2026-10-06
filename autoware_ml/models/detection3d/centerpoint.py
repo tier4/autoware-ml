@@ -67,7 +67,7 @@ class _CenterPointBackboneNeckHeadExportWrapper(nn.Module):
         bev_features = self.backbone(spatial_features)
         bev_features = self.neck(bev_features)
         outputs = self.bbox_head(bev_features)
-        return tuple(outputs[name] for name in self.output_names)
+        return outputs.export_tensors(self.output_names)
 
 
 class CenterPointDetectionModel(BaseModel):

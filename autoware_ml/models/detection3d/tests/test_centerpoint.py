@@ -20,6 +20,7 @@ import math
 
 import torch
 
+from autoware_ml.dataclasses.models.detection3d.head_outputs import CenterHeadOutputs
 from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
 from autoware_ml.models.detection3d.backbones.second import SECONDBackbone
 from autoware_ml.models.detection3d.centerpoint import CenterPointDetectionModel
@@ -127,7 +128,7 @@ class TestCenterPointTargets:
     def test_predict_returns_length_width_height_after_unified_dim_order(self) -> None:
         head, outputs = self._single_box_head_and_outputs()
 
-        predictions = head.predict(outputs)
+        predictions = head.predict(CenterHeadOutputs(**outputs, vel=None))
 
         assert predictions[0].bboxes_3d.shape == (1, 7)
         assert torch.allclose(
@@ -138,7 +139,9 @@ class TestCenterPointTargets:
     def test_predict_decodes_half_precision_outputs_in_float32(self) -> None:
         head, outputs = self._single_box_head_and_outputs()
 
-        predictions = head.predict({name: value.half() for name, value in outputs.items()})
+        predictions = head.predict(
+            CenterHeadOutputs(**{name: value.half() for name, value in outputs.items()}, vel=None)
+        )
 
         assert predictions[0].bboxes_3d.dtype == torch.float32
         assert predictions[0].scores_3d.dtype == torch.float32
@@ -162,7 +165,7 @@ class TestCenterPointTargets:
         predictions = model.bbox_head.predict(outputs)
 
         assert "loss" in metrics
-        assert outputs["heatmap"].shape[:2] == (1, 2)
+        assert outputs.heatmap.shape[:2] == (1, 2)
         assert isinstance(predictions, list)
         assert isinstance(predictions[0], Detection3DSamplePredictions)
 
@@ -305,7 +308,7 @@ def test_centerhead_uses_natural_dimension_order() -> None:
     outputs["dim"][0, :, y_index, x_index] = target_box[3:6]
     outputs["rot"][0, :, y_index, x_index] = target_box[6:8]
 
-    predictions = head.predict(outputs)
+    predictions = head.predict(CenterHeadOutputs(**outputs, vel=None))
 
     assert torch.allclose(
         predictions[0].bboxes_3d[0, 3:6],
