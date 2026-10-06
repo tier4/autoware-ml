@@ -9,7 +9,10 @@ import torch
 from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTBatch
 from autoware_ml.dataclasses.geometry.grid_sample import GridSampleData
 from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
+from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DHeadOutputs
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
+from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentation3DHeadOutputs
 from autoware_ml.models.detection3d.ptv3 import PTv3DetFeatureFusion
 from autoware_ml.models.detection3d.tests.head_output_fixtures import build_transfusion_outputs
 from autoware_ml.models.multi.ptv3_segdet import PTv3SegDetModel
@@ -85,22 +88,27 @@ def _make_batch(has_boxes: list[bool], points_per_frame: int = 2) -> ModelBatchI
     )
 
 
-def _make_outputs(batch_size: int) -> dict:
-    return {
-        "seg_logits": torch.randn(4, 3, requires_grad=True),
-        "det_outputs": build_transfusion_outputs(
-            {
-                name: torch.randn(batch_size, channels, 8, requires_grad=True)
-                for name, channels in (
-                    ("heatmap", 2),
-                    ("center", 2),
-                    ("height", 1),
-                    ("dim", 3),
-                    ("rot", 2),
-                )
-            }
+def _make_outputs(batch_size: int) -> ModelOutputs:
+    det_outputs = build_transfusion_outputs(
+        {
+            name: torch.randn(batch_size, channels, 8, requires_grad=True)
+            for name, channels in (
+                ("heatmap", 2),
+                ("center", 2),
+                ("height", 1),
+                ("dim", 3),
+                ("rot", 2),
+            )
+        }
+    )
+    return ModelOutputs(
+        detection3d_head_outputs=Detection3DHeadOutputs(
+            center_head_outputs=None, transfusion_head_outputs=det_outputs
         ),
-    }
+        segmentation3d_head_outputs=Segmentation3DHeadOutputs(
+            logits=torch.randn(4, 3, requires_grad=True)
+        ),
+    )
 
 
 def test_compute_metrics_masks_detection_loss_to_frames_with_boxes() -> None:
@@ -115,7 +123,9 @@ def test_compute_metrics_masks_detection_loss_to_frames_with_boxes() -> None:
     det_outputs, gt_boxes, gt_labels = recorded_calls[0]
     heatmap = det_outputs.separate_head_outputs.heatmap
     assert heatmap.shape[0] == 1
-    assert torch.equal(heatmap[0], outputs["det_outputs"].separate_head_outputs.heatmap[0])
+    assert torch.equal(
+        heatmap[0], outputs.detection3d().transfusion_head().separate_head_outputs.heatmap[0]
+    )
     assert len(gt_boxes) == 1 and float(gt_boxes[0][0, 0]) == 0.0
     assert len(gt_labels) == 1
     assert "det_loss" in metrics and "loss" in metrics
@@ -132,7 +142,7 @@ def test_compute_metrics_keeps_every_frame_when_all_have_boxes() -> None:
     det_outputs, gt_boxes, _ = recorded_calls[0]
     assert torch.equal(
         det_outputs.separate_head_outputs.heatmap,
-        outputs["det_outputs"].separate_head_outputs.heatmap,
+        outputs.detection3d().transfusion_head().separate_head_outputs.heatmap,
     )
     assert len(gt_boxes) == 2
 

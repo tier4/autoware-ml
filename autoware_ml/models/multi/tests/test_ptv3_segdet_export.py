@@ -8,6 +8,10 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DHeadOutputs
+from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
+from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentation3DHeadOutputs
+from autoware_ml.models.detection3d.tests.head_output_fixtures import build_transfusion_outputs
 from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTBatch
 from autoware_ml.dataclasses.geometry.grid_sample import GridSampleData
 from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
@@ -160,16 +164,26 @@ def test_ptv3_segdet_eval_output_scatters_segmentation_to_original_points() -> N
         _mask_list=PTv3SegDetModel._mask_list,
         grid_sample_data=PTv3SegDetModel.grid_sample_data,
     )
-    outputs = {
-        "det_outputs": None,
-        "seg_logits": torch.tensor(
-            [
-                [3.0, 0.0],
-                [0.0, 3.0],
-            ],
-            dtype=torch.float32,
+    det_outputs = build_transfusion_outputs(
+        {
+            name: torch.zeros((1, channels, 8))
+            for name, channels in (
+                ("heatmap", 2),
+                ("center", 2),
+                ("height", 1),
+                ("dim", 3),
+                ("rot", 2),
+            )
+        }
+    )
+    outputs = ModelOutputs(
+        detection3d_head_outputs=Detection3DHeadOutputs(
+            center_head_outputs=None, transfusion_head_outputs=det_outputs
         ),
-    }
+        segmentation3d_head_outputs=Segmentation3DHeadOutputs(
+            logits=torch.tensor([[3.0, 0.0], [0.0, 3.0]], dtype=torch.float32)
+        ),
+    )
     points = torch.tensor(
         [
             [0.0, 0.0, 0.0, 0.5],
@@ -308,11 +322,11 @@ def test_ptv3_segdet_detection_outputs_invariant_to_seg_head() -> None:
 
     names = ["dense_heatmap", "query_heatmap_score", "query_labels", "heatmap", "center"]
     names += ["height", "dim", "rot", "vel"]
-    reference_tensors = reference["det_outputs"].export_tensors(names)
-    perturbed_tensors = perturbed["det_outputs"].export_tensors(names)
+    reference_tensors = reference.detection3d().transfusion_head().export_tensors(names)
+    perturbed_tensors = perturbed.detection3d().transfusion_head().export_tensors(names)
     for name, value, perturbed_value in zip(names, reference_tensors, perturbed_tensors):
         assert torch.equal(value, perturbed_value), name
-    assert not torch.equal(reference["seg_logits"], perturbed["seg_logits"])
+    assert not torch.equal(reference.segmentation3d().logits, perturbed.segmentation3d().logits)
 
 
 @pytest.mark.skipif(
@@ -327,7 +341,7 @@ def test_ptv3_segdet_seg_logits_invariant_to_det_branch_pass() -> None:
     batch = move_batch_to_device(build_inputs(), torch.device("cuda"))
 
     with torch.no_grad():
-        joint_logits = model(**batch)["seg_logits"]
+        joint_logits = model(**batch).segmentation3d().logits
         point = model.encoder(
             {
                 "coord": batch["coord"],
