@@ -286,7 +286,10 @@ The base class handles:
 - **Export contract** - Every model builds its own export specification from the model inputs
 
 Models can have **any internal architecture**. `forward()` takes the plain tensors the network
-reads, the same tensors the deployment export traces. `forward_inputs()` maps the typed model
+reads, the same tensors the deployment export traces, and returns a typed `ModelOutputs` with the
+head outputs of every task the model predicts. `predict_outputs()` decodes them into a typed
+`ModelPredictions`. Both hold one optional field per task, so a single task model fills one field
+and a multi task model fills several. `forward_inputs()` maps the typed model
 inputs to those tensors, so the model states every input it needs and a missing one raises.
 Specialized models can override hooks such as `predict_outputs()`, `get_log_batch_size()`,
 `set_data_preprocessing()`, or `build_export_spec()` without leaving the shared framework

@@ -1305,18 +1305,14 @@ The same component listed once more with a filter is one more reported slice.
 
 ## What a model provides
 
-One method. It maps the raw forward outputs to the flat dict the suites read. Model-specific work
-like box decoding happens here, and per-frame metadata the dataset supplies (ego pose, scene
-token) is passed through.
+One method. It maps the typed forward outputs and model inputs to the flat dict the suites read.
+Model-specific work like box decoding happens here, and per-frame metadata the dataset supplies
+(ego pose, scene token) is passed through.
 
 ```python
 class ModelA(BaseModel):
     def build_eval_output(self, batch, outputs):
-        return {
-            "predictions": self.bbox_head.predict(outputs),
-            "gt_boxes": batch["gt_boxes"],
-            "gt_labels": batch["gt_labels"],
-        }
+        return detection_eval_output(self.predict_outputs(batch, outputs), batch)
 ```
 
 The mixin feeds this dict into every attached suite. The model never calls `update`, `compute`,

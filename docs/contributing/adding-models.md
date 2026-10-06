@@ -53,6 +53,8 @@ import torch
 import torch.nn as nn
 
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
+from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentation3DHeadOutputs
 from autoware_ml.models.base import BaseModel
 
 
@@ -71,9 +73,10 @@ class MyModel(BaseModel):
         self.num_classes = num_classes
         self.loss_fn = nn.CrossEntropyLoss(ignore_index=ignore_index)
 
-    def forward(self, feat: torch.Tensor) -> torch.Tensor:
+    def forward(self, feat: torch.Tensor) -> ModelOutputs:
         features = self.encoder(feat)
-        return self.decoder(features)
+        logits = self.decoder(features)
+        return ModelOutputs(segmentation3d_head_outputs=Segmentation3DHeadOutputs(logits=logits))
 
     def forward_inputs(self, batch_inputs: ModelBatchInputs) -> dict[str, Any]:
         return {"feat": batch_inputs.multi_task_gt_batch.point_cloud_gt_batch.points}
@@ -81,10 +84,10 @@ class MyModel(BaseModel):
     def compute_metrics(
         self,
         batch_inputs: ModelBatchInputs,
-        outputs: torch.Tensor,
+        outputs: ModelOutputs,
     ) -> dict[str, torch.Tensor]:
         labels = batch_inputs.multi_task_gt_batch.segmentation3d_gt_batch.gt_semantic_masks
-        loss = self.loss_fn(outputs, labels)
+        loss = self.loss_fn(outputs.segmentation3d().logits, labels)
         return {"loss": loss}
 ```
 
@@ -101,9 +104,13 @@ class MyModel(BaseModel):
 
 3. **Return `'loss'`** - The metrics dict must include a `'loss'` key for backpropagation.
 
-4. **Optimizer and scheduler** - Passed as callables to `BaseModel.__init__()`. Need to be marked as `_partial_: true` in YAML configs.
+4. **Typed outputs** - `forward()` returns a `ModelOutputs` with the head outputs of every task
+   the model predicts, and `predict_outputs()` returns a `ModelPredictions`. A task the model does
+   not predict stays unset.
 
-5. **Use hooks when needed** - If your model needs custom batch unpacking,
+5. **Optimizer and scheduler** - Passed as callables to `BaseModel.__init__()`. Need to be marked as `_partial_: true` in YAML configs.
+
+6. **Use hooks when needed** - If your model needs custom batch unpacking,
    prediction formatting, or an explicit deployment wrapper, override the
    appropriate `BaseModel` hook instead of bypassing the shared training and
    deployment flow.
@@ -397,23 +404,28 @@ def forward(self, image: torch.Tensor, lidar: torch.Tensor) -> torch.Tensor:
 
 `forward_inputs()` returns both tensors, keyed `image` and `lidar`.
 
-### Multiple Outputs
+### Multiple Tasks
 
 ```python
-def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+def forward(self, x: torch.Tensor) -> ModelOutputs:
     features = self.backbone(x)
-    boxes = self.box_head(features)
-    scores = self.score_head(features)
-    return boxes, scores
+    return ModelOutputs(
+        detection3d_head_outputs=Detection3DHeadOutputs(
+            center_head_outputs=None, transfusion_head_outputs=self.bbox_head(features)
+        ),
+        segmentation3d_head_outputs=Segmentation3DHeadOutputs(logits=self.seg_head(features)),
+    )
 
-def compute_metrics(
-    self,
-    batch_inputs: ModelBatchInputs,
-    outputs: tuple[torch.Tensor, torch.Tensor],
-):
-    boxes, scores = outputs
-    gt_detections = batch_inputs.multi_task_gt_batch.detection3d_gt_batch
-    box_loss = self.box_loss(boxes, gt_detections.valid_bboxes_3d())
-    score_loss = self.score_loss(scores, gt_detections.valid_labels_3d())
-    return {"loss": box_loss + score_loss, "box_loss": box_loss, "score_loss": score_loss}
+def compute_metrics(self, batch_inputs: ModelBatchInputs, outputs: ModelOutputs):
+    gt_batch = batch_inputs.multi_task_gt_batch
+    gt_detections = gt_batch.detection3d_gt_batch
+    box_losses = self.bbox_head.loss(
+        outputs.detection3d().transfusion_head(),
+        gt_detections.valid_bboxes_3d(),
+        gt_detections.valid_labels_3d(),
+    )
+    seg_loss = self.seg_loss(
+        outputs.segmentation3d().logits, gt_batch.segmentation3d_gt_batch.gt_semantic_masks
+    )
+    return {"loss": box_losses["loss"] + seg_loss, "seg_loss": seg_loss}
 ```
