@@ -9,6 +9,7 @@ from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
 from autoware_ml.models.detection3d.tests.ptv3_detection_fixtures import (
     build_inputs,
     build_trans_model,
+    build_ptv3_batch_inputs,
     move_batch_to_device,
 )
 
@@ -36,7 +37,7 @@ def test_ptv3_transhead_build_export_spec_uses_named_detection_outputs() -> None
     model = build_trans_model().to(device)
     batch = move_batch_to_device(build_inputs(), device)
 
-    spec = model.build_export_spec(batch)
+    spec = model.build_export_spec(build_ptv3_batch_inputs(batch))
     outputs = spec.module(*spec.args)
 
     assert spec.input_param_names == EXPECTED_PTV3_INPUT_NAMES

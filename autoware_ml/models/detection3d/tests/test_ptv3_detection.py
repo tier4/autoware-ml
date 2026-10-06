@@ -14,6 +14,7 @@ from autoware_ml.models.detection3d.tests.ptv3_detection_fixtures import (
     build_seg_model,
     build_targets,
     build_trans_model,
+    build_ptv3_batch_inputs,
     move_batch_to_device,
     move_targets_to_device,
 )
@@ -58,7 +59,7 @@ def test_ptv3_transhead_detection_runs_loss_and_predict() -> None:
     gt_boxes, gt_labels = move_targets_to_device(gt_boxes, gt_labels, device)
 
     outputs = model(**inputs)
-    metrics = model.compute_metrics({"gt_boxes": gt_boxes, "gt_labels": gt_labels}, outputs)
+    metrics = model.compute_metrics(build_ptv3_batch_inputs(inputs, gt_boxes, gt_labels), outputs)
     predictions = model.bbox_head.predict(outputs)
 
     assert "loss" in metrics
