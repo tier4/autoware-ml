@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 
 import torch
 
+from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTBatch
+from autoware_ml.dataclasses.geometry.grid_sample import GridSampleData
 from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.models.detection3d.ptv3 import PTv3DetFeatureFusion
 from autoware_ml.models.detection3d.tests.head_output_fixtures import build_transfusion_outputs
 from autoware_ml.models.multi.ptv3_segdet import PTv3SegDetModel
+from autoware_ml.models.tests.batch_inputs_fixtures import (
+    build_batch_inputs,
+    build_detection_gt_batch,
+    build_point_cloud_batch,
+)
 from autoware_ml.utils.point_cloud.structures import Point
 
 
@@ -24,30 +32,57 @@ def _make_masking_model(recorded_calls: list) -> SimpleNamespace:
         zero = seg_logits.sum() * 0.0
         return {"loss_ce": zero, "loss_lovasz": zero, "loss": zero}
 
-    return SimpleNamespace(
-        seg3d_head=SimpleNamespace(loss=seg_loss),
-        bbox_head=SimpleNamespace(loss=bbox_loss),
-        segmentation_loss_weight=1.0,
-        detection_loss_weight=1.0,
-        _detection_frame_mask=PTv3SegDetModel._detection_frame_mask,
-        _mask_list=PTv3SegDetModel._mask_list,
+    return _bind_batch_readers(
+        SimpleNamespace(
+            seg3d_head=SimpleNamespace(loss=seg_loss),
+            bbox_head=SimpleNamespace(loss=bbox_loss),
+            segmentation_loss_weight=1.0,
+            detection_loss_weight=1.0,
+        )
     )
 
 
-def _make_batch(has_boxes: list[bool]) -> dict:
+def _bind_batch_readers(model: SimpleNamespace) -> SimpleNamespace:
+    """Give a duck-typed segdet model the batch readers of the real one."""
+    model._detection_gt_batch = PTv3SegDetModel._detection_gt_batch
+    model._detection_frame_mask = PTv3SegDetModel._detection_frame_mask
+    model._mask_list = PTv3SegDetModel._mask_list
+    model.grid_sample_data = PTv3SegDetModel.grid_sample_data
+    model.sampled_semantic_labels = MethodType(PTv3SegDetModel.sampled_semantic_labels, model)
+    return model
+
+
+def _make_batch(has_boxes: list[bool], points_per_frame: int = 2) -> ModelBatchInputs:
     """Detection supervision is carried by the ground truth itself: frames
-    without boxes are detection-unsupervised."""
-    return {
-        "segment": torch.tensor([0, 1], dtype=torch.long),
-        "gt_boxes": [
-            torch.full((1, 9), float(i)) if with_boxes else torch.zeros((0, 9))
-            for i, with_boxes in enumerate(has_boxes)
-        ],
-        "gt_labels": [
-            torch.tensor([i]) if with_boxes else torch.zeros((0,), dtype=torch.long)
-            for i, with_boxes in enumerate(has_boxes)
-        ],
-    }
+    without boxes are detection-unsupervised. Every point is its own grid sample."""
+    num_frames = len(has_boxes)
+    num_points = num_frames * points_per_frame
+    indices = torch.arange(num_points)
+    batch_inputs = build_batch_inputs(
+        point_cloud=build_point_cloud_batch([torch.zeros((points_per_frame, 4))] * num_frames),
+        detection=build_detection_gt_batch(
+            [
+                torch.full((1, 9), float(i)) if with_boxes else torch.zeros((0, 9))
+                for i, with_boxes in enumerate(has_boxes)
+            ],
+            [
+                torch.tensor([i]) if with_boxes else torch.zeros((0,), dtype=torch.long)
+                for i, with_boxes in enumerate(has_boxes)
+            ],
+        ),
+        segmentation=Segmentation3DGTBatch(
+            gt_semantic_masks=indices % 3,
+            batch_indices=(indices // points_per_frame).to(torch.int32),
+        ),
+    )
+    return batch_inputs.replace(
+        grid_sample_data=GridSampleData(
+            grid_coords=torch.zeros((num_points, 3), dtype=torch.int32),
+            representative_indices=indices,
+            inverse=indices,
+            offsets=torch.arange(1, num_frames + 1) * points_per_frame,
+        )
+    )
 
 
 def _make_outputs(batch_size: int) -> dict:
@@ -130,10 +165,7 @@ def _make_eval_model() -> SimpleNamespace:
             for index in range(batch_size)
         ]
 
-    return SimpleNamespace(
-        bbox_head=SimpleNamespace(predict=predict),
-        _detection_frame_mask=PTv3SegDetModel._detection_frame_mask,
-    )
+    return _bind_batch_readers(SimpleNamespace(bbox_head=SimpleNamespace(predict=predict)))
 
 
 def test_build_eval_output_neutralizes_unflagged_frames_keeping_one_entry_per_frame() -> None:
@@ -142,13 +174,7 @@ def test_build_eval_output_neutralizes_unflagged_frames_keeping_one_entry_per_fr
     frame regardless of its seg/det frame mix."""
     model = _make_eval_model()
     outputs = _make_outputs(batch_size=2)
-    batch = {
-        **_make_batch([False, True]),
-        "inverse": torch.tensor([0, 1, 2, 3], dtype=torch.long),
-        "offset": torch.tensor([2, 4], dtype=torch.long),
-        "origin_segment": torch.tensor([0, 1, 2, 0], dtype=torch.long),
-        "origin_coord": torch.zeros((4, 3)),
-    }
+    batch = _make_batch([False, True])
 
     eval_out = PTv3SegDetModel.build_eval_output(model, batch, outputs)
 
@@ -166,13 +192,7 @@ def test_build_eval_output_neutralizes_unflagged_frames_keeping_one_entry_per_fr
 def test_build_eval_output_without_flagged_frames_keeps_neutral_entries() -> None:
     model = _make_eval_model()
     outputs = _make_outputs(batch_size=1)
-    batch = {
-        **_make_batch([False]),
-        "inverse": torch.tensor([0, 1], dtype=torch.long),
-        "offset": torch.tensor([2], dtype=torch.long),
-        "origin_segment": torch.tensor([0, 1], dtype=torch.long),
-        "origin_coord": torch.zeros((2, 3)),
-    }
+    batch = _make_batch([False])
 
     eval_out = PTv3SegDetModel.build_eval_output(model, batch, outputs)
 

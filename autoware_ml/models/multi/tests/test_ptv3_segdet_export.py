@@ -8,7 +8,14 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTBatch
+from autoware_ml.dataclasses.geometry.grid_sample import GridSampleData
 from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
+from autoware_ml.models.tests.batch_inputs_fixtures import (
+    build_batch_inputs,
+    build_detection_gt_batch,
+    build_point_cloud_batch,
+)
 from autoware_ml.models.multi.ptv3_segdet import PTv3SegDetModel
 from autoware_ml.models.segmentation3d.ptv3_base import seg_head_export_input_names
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
@@ -20,6 +27,7 @@ from autoware_ml.models.detection3d.tests.ptv3_detection_fixtures import (
     build_seg_model,
     build_trans_model,
     build_transfusion_head,
+    build_ptv3_batch_inputs,
     move_batch_to_device,
 )
 from autoware_ml.utils.checkpoints import apply_matching_weights
@@ -113,7 +121,7 @@ def test_ptv3_seg_split_export_supports_decoder_blocks() -> None:
     model = build_seg_model().cuda().eval()
     batch = move_batch_to_device(build_inputs(), torch.device("cuda"))
 
-    specs = model.build_export_specs(batch)
+    specs = model.build_export_specs(build_ptv3_batch_inputs(batch))
 
     # The encoder-only encoder graph never consumes pooling clusters; the
     # tracer would prune them, so the declared interface must not list them.
@@ -147,11 +155,13 @@ def test_ptv3_seg_split_export_supports_decoder_blocks() -> None:
 def test_ptv3_segdet_eval_output_scatters_segmentation_to_original_points() -> None:
     model = SimpleNamespace(
         bbox_head=_DummyBBoxHead(),
+        _detection_gt_batch=PTv3SegDetModel._detection_gt_batch,
         _detection_frame_mask=PTv3SegDetModel._detection_frame_mask,
         _mask_list=PTv3SegDetModel._mask_list,
+        grid_sample_data=PTv3SegDetModel.grid_sample_data,
     )
     outputs = {
-        "det_outputs": {"heatmap": torch.zeros((1, 2, 8), dtype=torch.float32)},
+        "det_outputs": None,
         "seg_logits": torch.tensor(
             [
                 [3.0, 0.0],
@@ -160,30 +170,40 @@ def test_ptv3_segdet_eval_output_scatters_segmentation_to_original_points() -> N
             dtype=torch.float32,
         ),
     }
-    batch = {
-        "gt_boxes": [torch.zeros((0, 9), dtype=torch.float32)],
-        "gt_labels": [torch.zeros((0,), dtype=torch.long)],
-        "inverse": torch.tensor([0, 1, 1, 0], dtype=torch.long),
-        "offset": torch.tensor([2], dtype=torch.long),
-        "origin_segment": torch.tensor([0, 1, 1, 0], dtype=torch.long),
-        "origin_coord": torch.tensor(
-            [
-                [0.0, 0.0, 0.0],
-                [1.0, 1.0, 0.0],
-                [2.0, 2.0, 0.0],
-                [3.0, 3.0, 0.0],
-            ],
-            dtype=torch.float32,
+    points = torch.tensor(
+        [
+            [0.0, 0.0, 0.0, 0.5],
+            [1.0, 1.0, 0.0, 0.5],
+            [2.0, 2.0, 0.0, 0.5],
+            [3.0, 3.0, 0.0, 0.5],
+        ],
+        dtype=torch.float32,
+    )
+    labels = torch.tensor([0, 1, 1, 0], dtype=torch.long)
+    batch = build_batch_inputs(
+        point_cloud=build_point_cloud_batch([points]),
+        detection=build_detection_gt_batch(
+            [torch.zeros((0, 9), dtype=torch.float32)], [torch.zeros((0,), dtype=torch.long)]
         ),
-    }
+        segmentation=Segmentation3DGTBatch(
+            gt_semantic_masks=labels, batch_indices=torch.zeros(4, dtype=torch.int32)
+        ),
+    ).replace(
+        grid_sample_data=GridSampleData(
+            grid_coords=torch.zeros((2, 3), dtype=torch.int32),
+            representative_indices=torch.tensor([0, 1]),
+            inverse=torch.tensor([0, 1, 1, 0]),
+            offsets=torch.tensor([2]),
+        )
+    )
 
     eval_out = PTv3SegDetModel.build_eval_output(model, batch, outputs)
 
     frames = eval_out["seg_frames"]
     assert len(frames) == 1
     assert frames[0]["pred"].tolist() == [0, 1, 1, 0]
-    assert torch.equal(frames[0]["target"], batch["origin_segment"])
-    assert torch.equal(frames[0]["coord"], batch["origin_coord"])
+    assert torch.equal(frames[0]["target"], labels)
+    assert torch.equal(frames[0]["coord"], points[:, :3])
     assert frames[0]["scores"].shape == (4, 2)
     assert frames[0]["gt_boxes"].shape == (0, 9)
     assert len(eval_out["predictions"]) == 1
@@ -252,7 +272,7 @@ def test_ptv3_transhead_segdet_export_uses_named_joint_outputs(tmp_path: Path) -
     )
 
     batch = move_batch_to_device(build_inputs(), torch.device("cuda"))
-    spec = model.build_export_spec(batch)
+    spec = model.build_export_spec(build_ptv3_batch_inputs(batch))
     outputs = spec.module(*spec.args)
 
     assert spec.input_param_names == EXPECTED_PTV3_INPUT_NAMES
