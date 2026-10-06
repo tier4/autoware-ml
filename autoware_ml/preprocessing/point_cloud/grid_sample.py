@@ -17,11 +17,13 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
 
 import torch
 from jaxtyping import Int64
 from torch import Tensor
+
+from autoware_ml.dataclasses.geometry.grid_sample import GridSampleData
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 
 
 class GridSamplePreprocessor:
@@ -43,24 +45,27 @@ class GridSamplePreprocessor:
         self.grid_size = float(grid_size)
         self.point_cloud_range = tuple(float(bound) for bound in point_cloud_range)
 
-    def __call__(self, batch_inputs_dict: dict[str, Any], *, is_training: bool) -> dict[str, Any]:
+    def __call__(self, batch_inputs: ModelBatchInputs, *, is_training: bool) -> ModelBatchInputs:
         """Subsample the points of the batch to one point per voxel.
 
         Args:
-            batch_inputs_dict: Model inputs holding ``coord``, ``feat``, ``offset`` and the
-                per point ``batch_indices``, and ``segment`` when segmentation is active.
+            batch_inputs: Model inputs holding the point cloud of the batch.
             is_training: Whether the owning model is in training mode. Training picks a
                 random point of every voxel, evaluation and deployment the first one.
 
         Returns:
-            The subsampled model inputs together with ``grid_coord``, the ``inverse`` index
-            of every input point, and the ``origin_coord`` and ``origin_segment`` of the
-            points before the subsampling.
+            The model inputs with ``grid_sample_data`` holding the voxel coordinate and the
+            row of every representative, the inverse index of every input point and the
+            representative count of every sample.
+
+        Raises:
+            ValueError: If the batch carries no point cloud.
         """
-        coord: Tensor = batch_inputs_dict["coord"]
-        batch_indices: Tensor = batch_inputs_dict["batch_indices"]
-        grid_coord = self.voxel_coords(coord)
-        voxel_keys = self.voxel_keys(grid_coord, batch_indices)
+        point_batch = batch_inputs.multi_task_gt_batch.point_cloud_gt_batch
+        if point_batch is None:
+            raise ValueError("GridSamplePreprocessor needs the point cloud of the batch.")
+        grid_coord = self.voxel_coords(point_batch.points[:, :3])
+        voxel_keys = self.voxel_keys(grid_coord, point_batch.batch_indices)
 
         # Group the points of one voxel together, unique runs over the sorted keys
         sort_indices = torch.argsort(voxel_keys)
@@ -77,19 +82,16 @@ class GridSamplePreprocessor:
         inverse = torch.empty_like(sorted_inverse)
         inverse[sort_indices] = sorted_inverse
 
-        outputs: dict[str, Any] = {
-            "origin_coord": coord,
-            "inverse": inverse,
-            "coord": coord[representatives],
-            "feat": batch_inputs_dict["feat"][representatives],
-            "grid_coord": grid_coord[representatives].to(torch.int32),
-            "batch_indices": batch_indices[representatives],
-            "offset": self.voxel_offset(batch_indices[representatives], batch_inputs_dict),
-        }
-        if "segment" in batch_inputs_dict:
-            outputs["origin_segment"] = batch_inputs_dict["segment"]
-            outputs["segment"] = batch_inputs_dict["segment"][representatives]
-        return outputs
+        voxel_counts = torch.bincount(
+            point_batch.batch_indices[representatives].long(), minlength=point_batch.batch_size
+        )
+        grid_sample_data = GridSampleData(
+            grid_coords=grid_coord[representatives].to(torch.int32),
+            representative_indices=representatives,
+            inverse=inverse,
+            offsets=torch.cumsum(voxel_counts, dim=0),
+        )
+        return batch_inputs.replace(grid_sample_data=grid_sample_data)
 
     def voxel_coords(self, coord: Tensor) -> Int64[Tensor, "num_points 3"]:
         """Discretize the point coordinates into voxel coordinates.
@@ -128,17 +130,3 @@ class GridSamplePreprocessor:
         for dimension in range(keyed.shape[1]):
             keys = keys * extent[dimension] + shifted[:, dimension]
         return keys
-
-    @staticmethod
-    def voxel_offset(batch_indices: Tensor, batch_inputs_dict: dict[str, Any]) -> Tensor:
-        """Split the retained voxels per sample the way the encoder reads them.
-
-        Args:
-            batch_indices: Sample every retained voxel belongs to.
-            batch_inputs_dict: Model inputs holding the sample count of the batch.
-
-        Returns:
-            Tensor: Cumulative voxel count of every sample.
-        """
-        counts = torch.bincount(batch_indices.long(), minlength=batch_inputs_dict["sample_count"])
-        return torch.cumsum(counts, dim=0)

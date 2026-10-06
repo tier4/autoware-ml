@@ -22,21 +22,32 @@ import unittest
 import numpy as np
 import torch
 
+from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.models.tests.batch_inputs_fixtures import build_batch_inputs
 from autoware_ml.preprocessing.point_cloud.grid_sample import GridSamplePreprocessor
 
 POINT_CLOUD_RANGE = (-10.0, -10.0, -10.0, 10.0, 10.0, 10.0)
 
 
-def build_inputs(coords: Sequence[Sequence[float]], batch_indices: Sequence[int]) -> dict:
+def build_inputs(
+    coords: Sequence[Sequence[float]], batch_indices: Sequence[int]
+) -> ModelBatchInputs:
     """Build the model inputs the grid subsampling reads."""
-    coord = torch.tensor(coords, dtype=torch.float32)
-    return {
-        "coord": coord,
-        "feat": coord,
-        "batch_indices": torch.tensor(batch_indices, dtype=torch.int32),
-        "offset": torch.cumsum(torch.bincount(torch.tensor(batch_indices)), dim=0),
-        "sample_count": len(set(batch_indices)),
-    }
+    points = PointCloudGTBatch(
+        points=torch.tensor(coords, dtype=torch.float32),
+        batch_indices=torch.tensor(batch_indices, dtype=torch.int32),
+        batch_size=max(batch_indices) + 1,
+    )
+    return build_batch_inputs(point_cloud=points)
+
+
+def representative_coords(inputs: ModelBatchInputs, outputs: ModelBatchInputs) -> torch.Tensor:
+    """Read the coordinates of the representatives the subsampling kept."""
+    assert outputs.grid_sample_data is not None
+    points = inputs.multi_task_gt_batch.point_cloud_gt_batch
+    assert points is not None
+    return points.points[outputs.grid_sample_data.representative_indices]
 
 
 class TestGridSamplePreprocessor(unittest.TestCase):
@@ -54,25 +65,29 @@ class TestGridSamplePreprocessor(unittest.TestCase):
 
         outputs = self.preprocessor(inputs, is_training=False)
 
-        self.assertEqual(outputs["coord"].shape[0], 2)
-        self.assertEqual(outputs["grid_coord"].tolist(), [[10, 10, 10], [11, 10, 10]])
+        assert outputs.grid_sample_data is not None
+        self.assertEqual(representative_coords(inputs, outputs).shape[0], 2)
+        self.assertEqual(
+            outputs.grid_sample_data.grid_coords.tolist(), [[10, 10, 10], [11, 10, 10]]
+        )
 
     def test_separates_the_same_voxel_of_two_samples(self) -> None:
         inputs = build_inputs([[0.1, 0.0, 0.0], [0.2, 0.0, 0.0]], [0, 1])
 
         outputs = self.preprocessor(inputs, is_training=False)
 
-        self.assertEqual(outputs["coord"].shape[0], 2)
-        self.assertEqual(outputs["batch_indices"].tolist(), [0, 1])
-        self.assertEqual(outputs["offset"].tolist(), [1, 2])
+        assert outputs.grid_sample_data is not None
+        self.assertEqual(outputs.grid_sample_data.representative_indices.tolist(), [0, 1])
+        self.assertEqual(outputs.grid_sample_data.offsets.tolist(), [1, 2])
 
     def test_inverse_scatters_the_voxels_back_onto_the_points(self) -> None:
         inputs = build_inputs([[0.1, 0.0, 0.0], [1.5, 0.0, 0.0], [0.2, 0.0, 0.0]], [0, 0, 0])
 
         outputs = self.preprocessor(inputs, is_training=False)
 
-        inverse = outputs["inverse"]
-        scattered = outputs["coord"][inverse]
+        assert outputs.grid_sample_data is not None
+        inverse = outputs.grid_sample_data.inverse
+        scattered = representative_coords(inputs, outputs)[inverse]
         self.assertEqual(inverse[0].item(), inverse[2].item())
         self.assertNotEqual(inverse[0].item(), inverse[1].item())
         self.assertEqual(scattered.shape[0], 3)
@@ -82,33 +97,26 @@ class TestGridSamplePreprocessor(unittest.TestCase):
 
         outputs = self.preprocessor(inputs, is_training=False)
 
-        torch.testing.assert_close(outputs["coord"], torch.tensor([[0.1, 0.0, 0.0]]))
+        torch.testing.assert_close(
+            representative_coords(inputs, outputs), torch.tensor([[0.1, 0.0, 0.0]])
+        )
 
     def test_training_picks_a_point_of_the_voxel(self) -> None:
         candidates = [[0.1, 0.0, 0.0], [0.2, 0.0, 0.0]]
+        inputs = build_inputs(candidates, [0, 0])
         allowed = set(torch.tensor(candidates, dtype=torch.float32)[:, 0].tolist())
 
-        picked = {
-            float(
-                self.preprocessor(build_inputs(candidates, [0, 0]), is_training=True)["coord"][0, 0]
-            )
+        picked = [
+            representative_coords(inputs, self.preprocessor(inputs, is_training=True))
             for _ in range(64)
-        }
+        ]
 
-        self.assertTrue(picked <= allowed)
-        self.assertEqual(
-            self.preprocessor(build_inputs(candidates, [0, 0]), is_training=True)["coord"].shape[0],
-            1,
-        )
+        self.assertTrue({float(coords[0, 0]) for coords in picked} <= allowed)
+        self.assertTrue(all(coords.shape[0] == 1 for coords in picked))
 
-    def test_segment_follows_the_representatives(self) -> None:
-        inputs = build_inputs([[0.1, 0.0, 0.0], [1.5, 0.0, 0.0]], [0, 0])
-        inputs["segment"] = torch.tensor([3, 7], dtype=torch.int64)
-
-        outputs = self.preprocessor(inputs, is_training=False)
-
-        self.assertEqual(outputs["segment"].tolist(), [3, 7])
-        self.assertEqual(outputs["origin_segment"].tolist(), [3, 7])
+    def test_batch_without_point_cloud_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            self.preprocessor(build_batch_inputs(), is_training=False)
 
 
 @unittest.skipUnless(torch.cuda.is_available(), "exact division on the device requires CUDA")
