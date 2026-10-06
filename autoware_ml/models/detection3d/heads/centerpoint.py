@@ -8,13 +8,13 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from copy import deepcopy
-from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from autoware_ml.dataclasses.models.detection3d.head_outputs import CenterHeadOutputs
+from autoware_ml.dataclasses.models.detection3d.head_targets import CenterHeadTargets
 from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
 from autoware_ml.losses.detection3d.gaussian_focal import GaussianFocalLoss
 from autoware_ml.models.common.layers.conv import ConvModule
@@ -37,23 +37,6 @@ def _transpose_and_gather_feat(features: torch.Tensor, indices: torch.Tensor) ->
     features = features.permute(0, 2, 3, 1).contiguous()
     features = features.view(features.shape[0], -1, features.shape[-1])
     return _gather_feat(features, indices)
-
-
-@dataclass
-class CenterPointTargets:
-    """Store dense heatmap and regression targets for CenterPoint.
-
-    Attributes:
-        heatmap: Dense class heatmap targets.
-        anno_boxes: Encoded box regression targets.
-        indices: Flattened feature-map indices of positive targets.
-        mask: Mask indicating valid target slots.
-    """
-
-    heatmap: torch.Tensor
-    anno_boxes: torch.Tensor
-    indices: torch.Tensor
-    mask: torch.Tensor
 
 
 class CenterHead(nn.Module):
@@ -162,7 +145,7 @@ class CenterHead(nn.Module):
         gt_labels: list[torch.Tensor],
         feature_map_size: tuple[int, int],
         device: torch.device,
-    ) -> CenterPointTargets:
+    ) -> CenterHeadTargets:
         """Build heatmap and regression targets for one batch."""
         batch_size = len(gt_boxes)
         feature_height, feature_width = feature_map_size
@@ -221,8 +204,8 @@ class CenterHead(nn.Module):
                     encoded_box.extend([box[7], box[8]])
                 anno_boxes[batch_index, object_index] = torch.stack(encoded_box)
 
-        return CenterPointTargets(
-            heatmap=heatmap, anno_boxes=anno_boxes, indices=indices, mask=mask
+        return CenterHeadTargets(
+            heatmaps=heatmap, reg_targets=anno_boxes, reg_indices=indices, valid_masks=mask
         )
 
     def loss(
@@ -235,15 +218,15 @@ class CenterHead(nn.Module):
         targets = self.get_targets(
             gt_boxes, gt_labels, outputs.heatmap.shape[-2:], outputs.heatmap.device
         )
-        loss_heatmap = self.loss_heatmap(outputs.heatmap, targets.heatmap)
+        loss_heatmap = self.loss_heatmap(outputs.heatmap, targets.heatmaps)
 
         pred_parts = [outputs.reg, outputs.height, outputs.dim, outputs.rot]
         if outputs.vel is not None:
             pred_parts.append(outputs.vel)
         pred_boxes = torch.cat(pred_parts, dim=1)
-        pred_boxes = _transpose_and_gather_feat(pred_boxes, targets.indices)
-        bbox_mask = targets.mask.unsqueeze(-1).expand_as(targets.anno_boxes).float()
-        loss_bbox = self.loss_bbox(pred_boxes, targets.anno_boxes) * bbox_mask
+        pred_boxes = _transpose_and_gather_feat(pred_boxes, targets.reg_indices)
+        bbox_mask = targets.valid_masks.unsqueeze(-1).expand_as(targets.reg_targets).float()
+        loss_bbox = self.loss_bbox(pred_boxes, targets.reg_targets) * bbox_mask
         loss_bbox = loss_bbox.sum() / bbox_mask.sum().clamp_min(1.0)
         total_loss = loss_heatmap + self.loss_bbox_weight * loss_bbox
         return {"loss": total_loss, "loss_heatmap": loss_heatmap, "loss_bbox": loss_bbox}

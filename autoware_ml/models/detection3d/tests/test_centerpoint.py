@@ -66,7 +66,7 @@ def _build_model(use_velocity: bool = True) -> CenterPointDetectionModel:
     )
 
 
-class TestCenterPointTargets:
+class TestCenterHeadTargets:
     def test_build_targets_populates_heatmap_and_boxes(self) -> None:
         model = _build_model()
         gt_boxes = [
@@ -81,19 +81,19 @@ class TestCenterPointTargets:
             device=torch.device("cpu"),
         )
 
-        assert targets.heatmap.shape == (1, 2, 4, 4)
-        assert targets.mask[0, 0].item() is True
-        assert targets.indices[0, 0].item() == 14
-        assert targets.heatmap[0, 0, 3, 2].item() == 1.0
+        assert targets.heatmaps.shape == (1, 2, 4, 4)
+        assert targets.valid_masks[0, 0].item() is True
+        assert targets.reg_indices[0, 0].item() == 14
+        assert targets.heatmaps[0, 0, 3, 2].item() == 1.0
         assert torch.allclose(
-            targets.anno_boxes[0, 0, 3:6],
+            targets.reg_targets[0, 0, 3:6],
             torch.tensor([4.0, 1.6, 1.5]).log(),
         )
         assert torch.allclose(
-            targets.anno_boxes[0, 0, 6:8],
+            targets.reg_targets[0, 0, 6:8],
             torch.tensor([math.sin(0.25), math.cos(0.25)]),
         )
-        assert torch.allclose(targets.anno_boxes[0, 0, 8:], torch.tensor([0.5, -0.1]))
+        assert torch.allclose(targets.reg_targets[0, 0, 8:], torch.tensor([0.5, -0.1]))
 
     @staticmethod
     def _single_box_head_and_outputs() -> tuple[CenterHead, dict[str, torch.Tensor]]:
@@ -287,13 +287,13 @@ def test_centerhead_uses_natural_dimension_order() -> None:
     )
 
     assert torch.allclose(
-        targets.anno_boxes[0, 0, 3:6],
+        targets.reg_targets[0, 0, 3:6],
         torch.tensor([4.0, 1.6, 1.5]).log(),
     )
 
-    flat_index = int(targets.indices[0, 0].item())
+    flat_index = int(targets.reg_indices[0, 0].item())
     y_index, x_index = divmod(flat_index, 4)
-    target_box = targets.anno_boxes[0, 0]
+    target_box = targets.reg_targets[0, 0]
 
     outputs = {
         "heatmap": torch.full((1, 2, 4, 4), -20.0),
