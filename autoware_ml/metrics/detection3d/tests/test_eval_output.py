@@ -26,11 +26,11 @@ from autoware_ml.dataclasses.batch.detection3d import (
 )
 from autoware_ml.dataclasses.batch.frame_meta import FrameMetaBatch
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
-from autoware_ml.metrics.detection3d.eval_output import typed_detection_eval_output
+from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
 
 
 class TestTypedDetectionEvalOutput(unittest.TestCase):
-    """Unit tests for the typed_detection_eval_output function."""
+    """Unit tests for the detection_eval_output function."""
 
     def setUp(self) -> None:
         """Set up the common inputs for the tests."""
@@ -96,6 +96,8 @@ class TestTypedDetectionEvalOutput(unittest.TestCase):
             ),
             voxels_data=None,
             image_data=None,
+            grid_sample_data=None,
+            range_view_data=None,
         )
 
     def test_detection3d_gt_batch_assertion(self):
@@ -110,29 +112,31 @@ class TestTypedDetectionEvalOutput(unittest.TestCase):
             ),
             voxels_data=None,
             image_data=None,
+            grid_sample_data=None,
+            range_view_data=None,
         )
         with self.assertRaises(ValueError):
-            typed_detection_eval_output(
-                batch_inputs=batch_inputs,
-                predictions=self.predictions,
+            detection_eval_output(
+                batch_inputs=multi_task_batch_inputs,
+                predictions=self.multi_task_predictions,
             )
 
     def test_detection3d_predictions_assertion(self):
-        """Test that predictions without detections raise."""
+        """Test that detection_eval_output raises ValueError when detection3d_predictions is None."""
 
-        predictions = ModelPredictions(detection3d_predictions=None)
+        multi_task_predictions = ModelPredictions(detection3d_predictions=None)
         with self.assertRaises(ValueError):
-            typed_detection_eval_output(
-                batch_inputs=self.batch_inputs,
-                predictions=predictions,
+            detection_eval_output(
+                batch_inputs=self.multi_task_batch_inputs,
+                predictions=multi_task_predictions,
             )
 
     def test_eval_outputs(self):
-        """Test that typed_detection_eval_output correctly pairs predictions with ground truth."""
+        """Test that detection_eval_output correctly pairs predictions with ground truth."""
 
-        eval_outputs = typed_detection_eval_output(
-            batch_inputs=self.batch_inputs,
-            predictions=self.predictions,
+        eval_outputs = detection_eval_output(
+            batch_inputs=self.multi_task_batch_inputs,
+            predictions=self.multi_task_predictions,
         )
 
         self.assertIn("predictions", eval_outputs)
@@ -160,7 +164,7 @@ class TestTypedDetectionEvalOutput(unittest.TestCase):
             self.assertTrue(
                 torch.equal(
                     eval_outputs["gt_labels"][batch_idx],
-                    detection3d_gt_batch.gt_labels_3d[batch_idx, :num_valid],
+                    detection3d_gt_batch.gt_labels_3d[batch_idx, :num_valid].long(),
                 )
             )
             self.assertTrue(
@@ -200,13 +204,17 @@ class TestTypedDetectionEvalOutput(unittest.TestCase):
                 ego2globals=ego2globals, scene_tokens=["db/scene_a/0", "db/scene_b/1"]
             )
         )
-        batch_inputs = ModelBatchInputs(
-            multi_task_gt_batch=gt_batch, voxels_data=None, image_data=None
+        multi_task_batch_inputs = ModelBatchInputs(
+            multi_task_gt_batch=gt_batch,
+            voxels_data=None,
+            image_data=None,
+            grid_sample_data=None,
+            range_view_data=None,
         )
 
-        eval_outputs = typed_detection_eval_output(
-            batch_inputs=batch_inputs,
-            predictions=self.predictions,
+        eval_outputs = detection_eval_output(
+            batch_inputs=multi_task_batch_inputs,
+            predictions=self.multi_task_predictions,
         )
 
         self.assertEqual(len(eval_outputs["ego2global"]), 2)
@@ -215,9 +223,9 @@ class TestTypedDetectionEvalOutput(unittest.TestCase):
 
     def test_frame_meta_keys_absent_without_frame_meta_batch(self):
         """Test that the metadata keys are left out when the batch carries none."""
-        eval_outputs = typed_detection_eval_output(
-            batch_inputs=self.batch_inputs,
-            predictions=self.predictions,
+        eval_outputs = detection_eval_output(
+            batch_inputs=self.multi_task_batch_inputs,
+            predictions=self.multi_task_predictions,
         )
 
         self.assertNotIn("ego2global", eval_outputs)
