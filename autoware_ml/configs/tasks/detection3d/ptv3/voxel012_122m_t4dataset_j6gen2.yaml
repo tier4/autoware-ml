@@ -16,6 +16,7 @@ dataset: ${t4dataset}
 
 grid_size: 0.12
 point_cloud_range: [-122.88, -122.88, -3.0, 122.88, 122.88, 5.0]
+
 num_proposals: 500
 
 datamodule:
@@ -35,12 +36,9 @@ datamodule:
           yaw_angle_ratios: [0.5, 1.0, 1.5]
         - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
           _convert_: all
-          # In radians, the range of rotation angles for random rotation around the Z-axis.
           yaw_rot_range: [-1.57079633, 1.57079633]
-          # The range of scale factors for random scaling.
-          scale_ratio_range: ${dataset.detection3d.train_scale_ratio_range}
-          # The standard deviation for Gaussian translation noise.
-          translation_std: ${dataset.detection3d.train_translation_std}
+          scale_ratio_range: [0.9, 1.1]
+          translation_std: [0.5, 0.5, 0.2]
         - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalBEVRandomFlip
           _convert_: all
           horizontal_flip_ratio: 0.5
@@ -148,7 +146,7 @@ model:
     num_decoder_layers: 1
     num_heads: 8
     feedforward_channels: 256
-    # Fusable bf16 cross-attention export; requires the fp16 module precision below and SM80+.
+    # Fused bf16 cross attention, needs fp16 precision and SM80+
     use_bf16_cross_attention: true
     common_heads:
       center: [2, 2]

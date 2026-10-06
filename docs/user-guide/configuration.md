@@ -109,6 +109,13 @@ Every split (`train`, `validation`, `test`, `predict`) has the same three keys:
   (`dataset_tasks`) and the transforms of the split.
 - `<split>_dataloader` holds the dataloader settings (batch size, workers, shuffling, pin_memory).
 
+By default the validation and predict splits use the test dataset config, and every split reads
+the training sources.
+
+The dataset configs leave `transforms` required. Every model writes the pipeline of the training
+and test datasets in its own task config, so two models never share a pipeline and a fine tuning
+config changes only the values it needs.
+
 For custom components, point `_target_` at the concrete implementation module,
 for example `autoware_ml.transforms.my_transforms.my_transform.MyTransform` or
 `autoware_ml.models.common.backbones.my_backbone.MyBackbone`.

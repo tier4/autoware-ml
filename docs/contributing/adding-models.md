@@ -154,7 +154,7 @@ model:
 
   encoder:
     _target_: torch.nn.Linear
-    in_features: 4
+    in_features: 5
     out_features: 64
 
   decoder:
@@ -198,6 +198,28 @@ dataset: ${t4dataset}
 point_cloud_range: [-122.88, -122.88, -3.0, 122.88, 122.88, 5.0]
 
 datamodule:
+  train_dataset:
+    transforms:
+      _target_: autoware_ml.transforms.base.TransformsCompose
+      _convert_: all
+      pipeline:
+        - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
+          use_dim: [0, 1, 2, 3]
+        - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
+          yaw_rot_range: [-3.14159265, 3.14159265]
+          scale_ratio_range: [0.9, 1.1]
+          translation_std: [0.5, 0.5, 0.2]
+        - _target_: autoware_ml.transforms.point_cloud.geometry.PointsRangeFilter
+          points_range: ${point_cloud_range}
+  test_dataset:
+    transforms:
+      _target_: autoware_ml.transforms.base.TransformsCompose
+      _convert_: all
+      pipeline:
+        - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
+          use_dim: [0, 1, 2, 3]
+        - _target_: autoware_ml.transforms.point_cloud.geometry.PointsRangeFilter
+          points_range: ${point_cloud_range}
   train_dataloader:
     batch_size: 8
     num_workers: 4
@@ -206,6 +228,10 @@ datamodule:
     batch_size: 8
     num_workers: 4
 ```
+
+The dataset configs leave `transforms` required, so every task config writes the pipeline of the
+training and test datasets. Validation and predict use the test pipeline. Models never share a
+pipeline, a model that needs the same steps copies them.
 
 A split can mix several corpora. Each entry of `train_sources`, `validation_sources`,
 `test_sources` or `predict_sources` names a database, whether its boxes (`det3d`) and semantic

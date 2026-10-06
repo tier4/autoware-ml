@@ -16,6 +16,7 @@ num_workers: 8
 
 grid_size: 0.05
 point_cloud_range: [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
+
 head_voxel_size: [0.4, 0.4, 8.0]
 
 num_proposals: 200
@@ -37,12 +38,9 @@ datamodule:
           yaw_angle_ratios: [0.5, 1.0, 1.5]
         - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
           _convert_: all
-          # In radians, the range of rotation angles for random rotation around the Z-axis.
           yaw_rot_range: [-1.57079633, 1.57079633]
-          # The range of scale factors for random scaling.
-          scale_ratio_range: ${dataset.detection3d.train_scale_ratio_range}
-          # The standard deviation for Gaussian translation noise.
-          translation_std: ${dataset.detection3d.train_translation_std}
+          scale_ratio_range: [0.8, 1.2]
+          translation_std: [1.0, 1.0, 0.2]
         - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalBEVRandomFlip
           _convert_: all
           horizontal_flip_ratio: 0.5

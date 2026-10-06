@@ -4,11 +4,9 @@ defaults:
   - /datasets/t4dataset/base
   - _self_
 
-# Classes of the database taxonomy, in its order
 class_names: ${database.taxonomy.detection3d.class_names}
 num_classes: ${class_count:${database.taxonomy.detection3d.class_names}}
 ignore_index: ${database.taxonomy.detection3d.ignore_index}
-# Parked or riderless bicycles and motorcycles are no detection targets
 filter_attributes:
   - [bicycle, vehicle_state.parked]
   - [bicycle, two_wheel_vehicle_state.without_rider]
@@ -17,9 +15,6 @@ filter_attributes:
   - [motorcycle, two_wheel_vehicle_state.without_rider]
   - [motorcycle, cycle_state.without_rider]
   - [motorcycle, motorcycle_state.without_rider]
-# Global scaling and translation of a training sample
-train_scale_ratio_range: [0.9, 1.1]
-train_translation_std: [0.5, 0.5, 0.2]
 eval_class_range: ${database.taxonomy.detection3d.eval_range}
 metric_ranges:
   - { _target_: autoware_ml.metrics.base.MetricRange, name: 0-50m, min_distance: 0.0, max_distance: 50.0 }

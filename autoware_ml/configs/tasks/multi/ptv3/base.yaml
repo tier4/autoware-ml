@@ -36,7 +36,7 @@ model:
     num_decoder_layers: 1
     num_heads: 8
     feedforward_channels: 256
-    # Fusable bf16 cross-attention export; requires the fp16 module precision below and SM80+.
+    # Fused bf16 cross attention, needs fp16 precision and SM80+
     use_bf16_cross_attention: true
     common_heads:
       center: [2, 2]

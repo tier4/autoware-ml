@@ -1,6 +1,5 @@
 _target_: autoware_ml.datamodule.t4dataset.dataset.T4Dataset
 _convert_: all
-# Completed by the datamodule with the records of each dataset source
 _partial_: true
 
 defaults:

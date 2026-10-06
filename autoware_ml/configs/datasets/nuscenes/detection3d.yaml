@@ -4,14 +4,9 @@ defaults:
   - /datasets/nuscenes/base
   - _self_
 
-# Classes of the database taxonomy, in its order
 class_names: ${database.taxonomy.detection3d.class_names}
 num_classes: ${class_count:${database.taxonomy.detection3d.class_names}}
-# No attribute rule excludes a box
 filter_attributes: []
-# Global scaling and translation of a training sample
-train_scale_ratio_range: [0.8, 1.2]
-train_translation_std: [1.0, 1.0, 0.2]
 eval_class_range: ${database.taxonomy.detection3d.eval_range}
 metric_ranges:
   - { _target_: autoware_ml.metrics.base.MetricRange, name: 0-50m, min_distance: 0.0, max_distance: 50.0 }
