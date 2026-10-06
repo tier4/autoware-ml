@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import torch
@@ -25,7 +25,15 @@ from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
 from autoware_ml.dataclasses.geometry.images import ImageGTBatch
+from autoware_ml.dataclasses.models.calibration_status.head_outputs import (
+    CalibrationStatusHeadOutputs,
+)
+from autoware_ml.dataclasses.models.calibration_status.predictions import (
+    CalibrationStatusPredictions,
+)
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
+from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.models.base import BaseModel
 from autoware_ml.utils.deploy import ExportSpec
 
@@ -82,19 +90,21 @@ class CalibrationStatusClassifier(BaseModel):
         self.neck = neck
         self.head = head
 
-    def forward(self, fused_img: torch.Tensor) -> torch.Tensor:
+    def forward(self, fused_img: torch.Tensor) -> ModelOutputs:
         """Run the classifier on fused image inputs.
 
         Args:
             fused_img: Batched fused image tensor.
 
         Returns:
-            Classification logits for each sample.
+            Calibration status head outputs with the classification logits of every image.
         """
         feats = self.backbone(fused_img)
         feats = self.neck(feats)
         logits = self.head(feats)
-        return logits
+        return ModelOutputs(
+            calibration_status_head_outputs=CalibrationStatusHeadOutputs(logits=logits)
+        )
 
     def forward_inputs(self, batch_inputs: ModelBatchInputs) -> dict[str, Any]:
         """Pick the fused image of every camera of the batch.
@@ -108,16 +118,19 @@ class CalibrationStatusClassifier(BaseModel):
         return {"fused_img": _image_data(batch_inputs).fused_images()}
 
     def predict_outputs(
-        self, batch_inputs: ModelBatchInputs, outputs: torch.Tensor
-    ) -> torch.Tensor:
+        self, batch_inputs: ModelBatchInputs, outputs: ModelOutputs
+    ) -> ModelPredictions:
         """Convert logits into class probabilities."""
         del batch_inputs
-        return self.head.predict(outputs)
+        probabilities = self.head.predict(outputs.calibration_status().logits)
+        return ModelPredictions(
+            calibration_status_predictions=CalibrationStatusPredictions(probabilities=probabilities)
+        )
 
     def compute_metrics(
         self,
         batch_inputs: ModelBatchInputs,
-        outputs: torch.Tensor | Sequence[torch.Tensor],
+        outputs: ModelOutputs,
     ) -> dict[str, torch.Tensor]:
         """Compute training losses and metrics for one batch.
 
@@ -134,7 +147,7 @@ class CalibrationStatusClassifier(BaseModel):
         calibration_statuses = _image_data(batch_inputs).calibration_statuses
         if calibration_statuses is None:
             raise ValueError("Calibration status losses need the status of every camera.")
-        return self.head.loss(outputs, calibration_statuses.flatten())
+        return self.head.loss(outputs.calibration_status().logits, calibration_statuses.flatten())
 
     def build_export_spec(self, batch_inputs: ModelBatchInputs) -> ExportSpec:
         """Build a calibration-status-specific export specification.
