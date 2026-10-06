@@ -29,6 +29,7 @@ import torch.nn.functional as F
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
+from autoware_ml.dataclasses.models.detection3d.head_outputs import TransFusionHeadOutputs
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
 from autoware_ml.models.base import BaseModel
@@ -60,7 +61,7 @@ def _runtime_coors_to_voxel_coords(coors: torch.Tensor) -> torch.Tensor:
 
 
 def _export_detection_outputs(
-    head: nn.Module, outputs: dict[str, torch.Tensor]
+    head: nn.Module, outputs: TransFusionHeadOutputs
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Pack raw head outputs into the runtime detection interface.
 
@@ -68,8 +69,8 @@ def _export_detection_outputs(
     its own parameters, so no metric-space decoding happens in the graph.
 
     Args:
-        head: TransFusion detection head producing the output dictionary.
-        outputs: Raw prediction tensors from the head forward pass.
+        head: TransFusion detection head producing the outputs.
+        outputs: Raw predictions from the head forward pass.
 
     Returns:
         Tuple of ``bbox_pred`` with the concatenated regression channels of
@@ -77,17 +78,27 @@ def _export_detection_outputs(
         and ``label_pred`` of shape ``(num_proposals,)``.
     """
     num_proposals = head.num_proposals
-    query_labels = outputs["query_labels"]
-    heatmap = outputs["heatmap"][..., -num_proposals:].sigmoid()
+    branches = outputs.separate_head_outputs
+    query_labels = outputs.query_labels
+    heatmap = branches.heatmap[..., -num_proposals:].sigmoid()
     one_hot = (
         F.one_hot(query_labels, num_classes=head.num_classes).permute(0, 2, 1).to(heatmap.dtype)
     )
-    score = (heatmap * outputs["query_heatmap_score"] * one_hot)[0].max(dim=0).values
+    score = (heatmap * outputs.query_heatmap_score * one_hot)[0].max(dim=0).values
 
-    if outputs.get("vel") is None:
+    if branches.vel is None:
         raise ValueError("BEVFusion export requires a velocity branch in the detection head.")
     bbox_pred = torch.cat(
-        [outputs[key][0, :, -num_proposals:] for key in ("center", "height", "dim", "rot", "vel")],
+        [
+            branch[0, :, -num_proposals:]
+            for branch in (
+                branches.center,
+                branches.height,
+                branches.dim,
+                branches.rot,
+                branches.vel,
+            )
+        ],
         dim=0,
     )
     return bbox_pred, score, query_labels[0]

@@ -29,6 +29,7 @@ from autoware_ml.models.detection3d.bevfusion import (
 )
 from autoware_ml.models.detection3d.fusion import ConvFuser
 from autoware_ml.models.detection3d.view_transforms.depth_lss import DepthLSSTransform
+from autoware_ml.models.detection3d.tests.head_output_fixtures import build_transfusion_outputs
 
 
 class _IdentityHead(nn.Module):
@@ -379,7 +380,7 @@ def test_export_detection_outputs_packs_runtime_tensors() -> None:
 
     num_proposals, num_classes = 4, 3
     query_labels = torch.tensor([[0, 2, 1, 0]])
-    outputs = {
+    tensors = {
         "query_labels": query_labels,
         "heatmap": torch.randn(1, num_classes, num_proposals),
         "query_heatmap_score": torch.rand(1, num_classes, num_proposals),
@@ -390,16 +391,18 @@ def test_export_detection_outputs_packs_runtime_tensors() -> None:
         "vel": torch.randn(1, 2, num_proposals),
     }
 
-    bbox_pred, score, label_pred = _export_detection_outputs(FakeHead(), outputs)
+    bbox_pred, score, label_pred = _export_detection_outputs(
+        FakeHead(), build_transfusion_outputs(tensors)
+    )
 
     assert bbox_pred.shape == (10, num_proposals)
     assert torch.equal(
         bbox_pred,
-        torch.cat([outputs[key][0] for key in ("center", "height", "dim", "rot", "vel")], dim=0),
+        torch.cat([tensors[key][0] for key in ("center", "height", "dim", "rot", "vel")], dim=0),
     )
     assert label_pred.dtype == torch.int64
     assert torch.equal(label_pred, query_labels[0])
-    expected_score = (outputs["heatmap"].sigmoid() * outputs["query_heatmap_score"])[0].gather(
+    expected_score = (tensors["heatmap"].sigmoid() * tensors["query_heatmap_score"])[0].gather(
         0, query_labels
     )[0]
     assert torch.allclose(score, expected_score)
@@ -410,7 +413,7 @@ def test_export_detection_outputs_requires_velocity_branch() -> None:
         num_proposals = 2
         num_classes = 1
 
-    outputs = {
+    tensors = {
         "query_labels": torch.zeros(1, 2, dtype=torch.int64),
         "heatmap": torch.randn(1, 1, 2),
         "query_heatmap_score": torch.rand(1, 1, 2),
@@ -421,7 +424,7 @@ def test_export_detection_outputs_requires_velocity_branch() -> None:
     }
 
     try:
-        _export_detection_outputs(FakeHead(), outputs)
+        _export_detection_outputs(FakeHead(), build_transfusion_outputs(tensors))
     except ValueError as error:
         assert "velocity branch" in str(error)
     else:

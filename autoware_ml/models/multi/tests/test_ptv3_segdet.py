@@ -8,6 +8,7 @@ import torch
 
 from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
 from autoware_ml.models.detection3d.ptv3 import PTv3DetFeatureFusion
+from autoware_ml.models.detection3d.tests.head_output_fixtures import build_transfusion_outputs
 from autoware_ml.models.multi.ptv3_segdet import PTv3SegDetModel
 from autoware_ml.utils.point_cloud.structures import Point
 
@@ -17,7 +18,7 @@ def _make_masking_model(recorded_calls: list) -> SimpleNamespace:
 
     def bbox_loss(det_outputs, gt_boxes, gt_labels):
         recorded_calls.append((det_outputs, gt_boxes, gt_labels))
-        return {"loss": det_outputs["heatmap"].sum() * 0.0 + 1.0}
+        return {"loss": det_outputs.separate_head_outputs.heatmap.sum() * 0.0 + 1.0}
 
     def seg_loss(seg_logits, segment):
         zero = seg_logits.sum() * 0.0
@@ -29,7 +30,6 @@ def _make_masking_model(recorded_calls: list) -> SimpleNamespace:
         segmentation_loss_weight=1.0,
         detection_loss_weight=1.0,
         _detection_frame_mask=PTv3SegDetModel._detection_frame_mask,
-        _mask_detection_outputs=PTv3SegDetModel._mask_detection_outputs,
         _mask_list=PTv3SegDetModel._mask_list,
     )
 
@@ -53,10 +53,18 @@ def _make_batch(has_boxes: list[bool]) -> dict:
 def _make_outputs(batch_size: int) -> dict:
     return {
         "seg_logits": torch.randn(4, 3, requires_grad=True),
-        "det_outputs": {
-            "heatmap": torch.randn(batch_size, 2, 8, requires_grad=True),
-            "center": torch.randn(batch_size, 2, 8, requires_grad=True),
-        },
+        "det_outputs": build_transfusion_outputs(
+            {
+                name: torch.randn(batch_size, channels, 8, requires_grad=True)
+                for name, channels in (
+                    ("heatmap", 2),
+                    ("center", 2),
+                    ("height", 1),
+                    ("dim", 3),
+                    ("rot", 2),
+                )
+            }
+        ),
     }
 
 
@@ -70,8 +78,9 @@ def test_compute_metrics_masks_detection_loss_to_frames_with_boxes() -> None:
 
     assert len(recorded_calls) == 1
     det_outputs, gt_boxes, gt_labels = recorded_calls[0]
-    assert det_outputs["heatmap"].shape[0] == 1
-    assert torch.equal(det_outputs["heatmap"][0], outputs["det_outputs"]["heatmap"][0])
+    heatmap = det_outputs.separate_head_outputs.heatmap
+    assert heatmap.shape[0] == 1
+    assert torch.equal(heatmap[0], outputs["det_outputs"].separate_head_outputs.heatmap[0])
     assert len(gt_boxes) == 1 and float(gt_boxes[0][0, 0]) == 0.0
     assert len(gt_labels) == 1
     assert "det_loss" in metrics and "loss" in metrics
@@ -86,7 +95,10 @@ def test_compute_metrics_keeps_every_frame_when_all_have_boxes() -> None:
     PTv3SegDetModel.compute_metrics(model, batch, outputs)
 
     det_outputs, gt_boxes, _ = recorded_calls[0]
-    assert torch.equal(det_outputs["heatmap"], outputs["det_outputs"]["heatmap"])
+    assert torch.equal(
+        det_outputs.separate_head_outputs.heatmap,
+        outputs["det_outputs"].separate_head_outputs.heatmap,
+    )
     assert len(gt_boxes) == 2
 
 
@@ -108,7 +120,7 @@ def test_compute_metrics_keeps_det_branch_in_graph_without_supervised_frames() -
 
 def _make_eval_model() -> SimpleNamespace:
     def predict(det_outputs):
-        batch_size = det_outputs["heatmap"].shape[0]
+        batch_size = det_outputs.separate_head_outputs.heatmap.shape[0]
         return [
             Detection3DSamplePredictions(
                 bboxes_3d=torch.full((2, 9), float(index)),

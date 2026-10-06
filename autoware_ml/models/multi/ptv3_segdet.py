@@ -178,13 +178,6 @@ class PTv3SegDetModel(PTv3BaseModel):
         return torch.tensor([boxes.shape[0] > 0 for boxes in gt_boxes], device=gt_boxes[0].device)
 
     @staticmethod
-    def _mask_detection_outputs(
-        det_outputs: Mapping[str, torch.Tensor], mask: torch.Tensor
-    ) -> dict[str, torch.Tensor]:
-        """Select the flagged batch entries from every detection output tensor."""
-        return {name: value[mask] for name, value in det_outputs.items()}
-
-    @staticmethod
     def _mask_list(values: Sequence[Any], mask: torch.Tensor) -> list[Any]:
         """Select the flagged entries from a per-sample list."""
         return [value for value, flagged in zip(values, mask.tolist()) if flagged]
@@ -207,14 +200,25 @@ class PTv3SegDetModel(PTv3BaseModel):
         det_mask = self._detection_frame_mask(batch_inputs_dict)
         if bool(det_mask.any()):
             det_metrics = self.bbox_head.loss(
-                self._mask_detection_outputs(det_outputs, det_mask),
+                det_outputs.select_samples(det_mask),
                 self._mask_list(batch_inputs_dict["gt_boxes"], det_mask),
                 self._mask_list(batch_inputs_dict["gt_labels"], det_mask),
             )
         else:
             # Keep the detection branch in the autograd graph with zero
             # gradients so DDP reducers see every parameter.
-            zero_loss = sum(value.float().sum() for value in det_outputs.values()) * 0.0
+            branches = det_outputs.separate_head_outputs
+            graph_tensors = [
+                det_outputs.dense_heatmap,
+                branches.heatmap,
+                branches.center,
+                branches.height,
+                branches.dim,
+                branches.rot,
+            ]
+            if branches.vel is not None:
+                graph_tensors.append(branches.vel)
+            zero_loss = sum(tensor.float().sum() for tensor in graph_tensors) * 0.0
             det_metrics = {"loss": zero_loss}
 
         seg_loss = seg_metrics["loss"]
@@ -390,9 +394,8 @@ class _PTv3SegDetExportModule(PTv3EncoderExportBase):
         pred_probs = torch.softmax(seg_logits, dim=1)
         pred_labels = pred_probs.argmax(dim=1)
 
-        outputs: dict[str, torch.Tensor] = {
-            "pred_labels": pred_labels,
-            "pred_probs": pred_probs,
-            **det_outputs,
-        }
+        segmentation = {"pred_labels": pred_labels, "pred_probs": pred_probs}
+        detection_names = [name for name in self.output_names if name not in segmentation]
+        detection = dict(zip(detection_names, det_outputs.export_tensors(detection_names)))
+        outputs = segmentation | detection
         return tuple(outputs[name] for name in self.output_names)

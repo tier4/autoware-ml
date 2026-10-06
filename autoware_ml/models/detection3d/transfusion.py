@@ -28,6 +28,7 @@ import torch.nn as nn
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
+from autoware_ml.dataclasses.models.detection3d.head_outputs import TransFusionHeadOutputs
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
 from autoware_ml.models.base import BaseModel
@@ -95,15 +96,15 @@ class _TransFusionExportWrapper(nn.Module):
 
 
 def _format_transfusion_export_outputs(
-    outputs: Mapping[str, torch.Tensor],
+    outputs: TransFusionHeadOutputs,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Format TransFusion head outputs for deployment export."""
-    cls_score0 = outputs["heatmap"].sigmoid() * outputs["query_heatmap_score"]
-    bbox_pred0 = torch.cat(
-        (outputs["center"], outputs["height"], outputs["dim"], outputs["vel"]),
-        dim=1,
-    )
-    dir_cls_pred0 = outputs["rot"]
+    branches = outputs.separate_head_outputs
+    if branches.vel is None:
+        raise ValueError("TransFusion export requires a velocity branch in the detection head.")
+    cls_score0 = branches.heatmap.sigmoid() * outputs.query_heatmap_score
+    bbox_pred0 = torch.cat((branches.center, branches.height, branches.dim, branches.vel), dim=1)
+    dir_cls_pred0 = branches.rot
 
     if bbox_pred0.shape[1] != 8:
         raise ValueError(

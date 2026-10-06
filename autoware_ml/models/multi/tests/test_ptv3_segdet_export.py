@@ -148,7 +148,6 @@ def test_ptv3_segdet_eval_output_scatters_segmentation_to_original_points() -> N
     model = SimpleNamespace(
         bbox_head=_DummyBBoxHead(),
         _detection_frame_mask=PTv3SegDetModel._detection_frame_mask,
-        _mask_detection_outputs=PTv3SegDetModel._mask_detection_outputs,
         _mask_list=PTv3SegDetModel._mask_list,
     )
     outputs = {
@@ -287,8 +286,12 @@ def test_ptv3_segdet_detection_outputs_invariant_to_seg_head() -> None:
             parameter.add_(1.0)
         perturbed = model(**batch)
 
-    for name, value in reference["det_outputs"].items():
-        assert torch.equal(value, perturbed["det_outputs"][name]), name
+    names = ["dense_heatmap", "query_heatmap_score", "query_labels", "heatmap", "center"]
+    names += ["height", "dim", "rot", "vel"]
+    reference_tensors = reference["det_outputs"].export_tensors(names)
+    perturbed_tensors = perturbed["det_outputs"].export_tensors(names)
+    for name, value, perturbed_value in zip(names, reference_tensors, perturbed_tensors):
+        assert torch.equal(value, perturbed_value), name
     assert not torch.equal(reference["seg_logits"], perturbed["seg_logits"])
 
 

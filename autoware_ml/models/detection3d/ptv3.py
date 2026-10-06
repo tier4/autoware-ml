@@ -390,7 +390,7 @@ class _PTv3DetectionExportModule(PTv3EncoderExportBase):
         )
         bev_features = self.bev_neck(point)
         outputs = self.bbox_head(bev_features)
-        return tuple(outputs[name] for name in self.output_names)
+        return outputs.export_tensors(self.output_names)
 
 
 class _PTv3DetHeadExportModule(nn.Module):
@@ -427,7 +427,7 @@ class _PTv3DetHeadExportModule(nn.Module):
         point = Point(feat=deepest_feat, pooling_parent=parent, pooling_inverse=cluster)
         bev = self.bev_neck(point)
         outputs = self.bbox_head(bev)
-        return tuple(outputs[name] for name in self.output_names)
+        return outputs.export_tensors(self.output_names)
 
 
 class PTv3DetectionModel(PTv3BaseModel):

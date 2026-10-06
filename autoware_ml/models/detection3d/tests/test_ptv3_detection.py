@@ -62,8 +62,8 @@ def test_ptv3_transhead_detection_runs_loss_and_predict() -> None:
     predictions = model.bbox_head.predict(outputs)
 
     assert "loss" in metrics
-    assert outputs["dense_heatmap"].shape[:2] == (1, 2)
-    assert outputs["query_labels"].shape == (1, 8)
+    assert outputs.dense_heatmap.shape[:2] == (1, 2)
+    assert outputs.query_labels.shape == (1, 8)
     assert isinstance(predictions, list)
     assert isinstance(predictions[0], Detection3DSamplePredictions)
 

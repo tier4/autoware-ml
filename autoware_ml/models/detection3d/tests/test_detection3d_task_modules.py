@@ -5,6 +5,7 @@ from __future__ import annotations
 import torch
 
 from autoware_ml.models.detection3d.heads.transfusion import TransFusionHead
+from autoware_ml.models.detection3d.tests.head_output_fixtures import build_transfusion_outputs
 from autoware_ml.models.detection3d.task_modules.assigners import HungarianAssigner3D
 from autoware_ml.models.detection3d.task_modules.bbox_coders import TransFusionBBoxCoder
 from autoware_ml.models.detection3d.task_modules.match_costs import (
@@ -58,7 +59,7 @@ def _build_transfusion_head(heatmap_target: str) -> TransFusionHead:
 
 def test_transfusion_oriented_heatmap_target_runs_through_get_targets() -> None:
     head = _build_transfusion_head(heatmap_target="oriented")
-    outputs = {
+    tensors = {
         "dense_heatmap": torch.zeros((1, 1, 16, 16), dtype=torch.float32),
         "heatmap": torch.zeros((1, 1, 2), dtype=torch.float32),
         "center": torch.zeros((1, 2, 2), dtype=torch.float32),
@@ -70,7 +71,7 @@ def test_transfusion_oriented_heatmap_target_runs_through_get_targets() -> None:
     gt_boxes = [torch.tensor([[8.0, 8.0, 0.0, 12.0, 2.0, 1.5, 0.0, 0.0, 0.0]], dtype=torch.float32)]
     gt_labels = [torch.tensor([0], dtype=torch.long)]
 
-    targets = head.get_targets(gt_boxes, gt_labels, outputs)
+    targets = head.get_targets(gt_boxes, gt_labels, build_transfusion_outputs(tensors))
     heatmap = targets.heatmap[0, 0]
 
     assert heatmap[8, 8] == torch.tensor(1.0)

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-from jaxtyping import Float, Int64
+from jaxtyping import Bool, Float, Int64
 from pydantic import BaseModel, ConfigDict, model_validator
 
 import torch
@@ -99,6 +99,31 @@ class TransFusionHeadOutputs(BaseModel):
                 f"num_classes={num_classes}, got {tuple(self.separate_head_outputs.heatmap.shape)}."
             )
         return self
+
+    def select_samples(self, mask: Bool[torch.Tensor, " batch_size"]) -> TransFusionHeadOutputs:
+        """
+        Keep the outputs of the samples a mask selects.
+
+        Args:
+            mask: True for every sample to keep.
+
+        Returns:
+            The outputs of the selected samples.
+        """
+        separate = self.separate_head_outputs
+        return TransFusionHeadOutputs(
+            dense_heatmap=self.dense_heatmap[mask],
+            query_heatmap_score=self.query_heatmap_score[mask],
+            query_labels=self.query_labels[mask],
+            separate_head_outputs=TransFusionSeparateHeadOutputs(
+                heatmap=separate.heatmap[mask],
+                center=separate.center[mask],
+                height=separate.height[mask],
+                dim=separate.dim[mask],
+                rot=separate.rot[mask],
+                vel=None if separate.vel is None else separate.vel[mask],
+            ),
+        )
 
     def export_tensors(self, names: Sequence[str]) -> tuple[torch.Tensor, ...]:
         """
