@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Sequence, NamedTuple
 
-from jaxtyping import Float32, Int32
+from jaxtyping import Float32, Int32, Int64
 import torch
 from torch import Tensor
 
@@ -64,6 +64,34 @@ class PointCloudGTBatch(NamedTuple):
             batch_indices=batch_indices,
             batch_size=len(point_gt_samples),
         )
+
+    def sample_point_counts(self) -> Int64[Tensor, " batch_size"]:
+        """
+        Count the points of every sample of the batch.
+
+        Returns:
+          Int64[Tensor, " batch_size"]: Number of points of every sample, zero for a sample
+            without points.
+        """
+        return torch.bincount(self.batch_indices.long(), minlength=self.batch_size)
+
+    def offsets(self) -> Int64[Tensor, " batch_size"]:
+        """
+        Give the end of every sample in the concatenated points.
+
+        Returns:
+          Int64[Tensor, " batch_size"]: Cumulative point count of every sample.
+        """
+        return torch.cumsum(self.sample_point_counts(), dim=0)
+
+    def split_points(self) -> list[Float32[Tensor, "num_points num_features"]]:
+        """
+        Split the concatenated points into the points of every sample.
+
+        Returns:
+          list: Points of every sample of the batch.
+        """
+        return list(torch.split(self.points, self.sample_point_counts().tolist()))
 
     def to_device(self, device: torch.device) -> PointCloudGTBatch:
         """

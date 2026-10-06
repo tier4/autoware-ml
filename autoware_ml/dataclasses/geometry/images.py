@@ -95,6 +95,23 @@ class ImageGTBatch(NamedTuple):
             calibration_statuses=calibration_statuses,
         )
 
+    def fused_images(
+        self,
+    ) -> Float32[Tensor, "batch_size*num_cameras num_fused_channels height width"]:
+        """
+        Stack the depth maps onto the images, one fused image per camera of every sample.
+
+        Returns:
+          Float32[Tensor, "batch_size*num_cameras num_fused_channels height width"]: The images
+            with their depth channels appended, the sample and the camera dimensions merged.
+
+        Raises:
+          ValueError: If the batch carries no depth maps.
+        """
+        if self.depth_maps is None:
+            raise ValueError("Fused images need the depth maps of the images.")
+        return torch.cat([self.images, self.depth_maps], dim=2).flatten(0, 1)
+
     def to_device(self, device: torch.device) -> ImageGTBatch:
         """
         Move the ImageGtBatch to the specified device.

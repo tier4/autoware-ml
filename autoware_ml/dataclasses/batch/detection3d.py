@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import NamedTuple, Sequence
 
-from jaxtyping import Bool, Float32, Int32
+from jaxtyping import Bool, Float32, Int32, Int64
 from torch import Tensor
 import torch
 
@@ -179,6 +179,42 @@ class Detection3DGTBatch(NamedTuple):
             gt_bboxes_num_points=gt_bboxes_num_points,
             gt_traffic_cone_barrier_bbox_status=gt_traffic_cone_barrier_bbox_status,
         )
+
+    def valid_bboxes_3d(self) -> list[Float32[Tensor, "num_gt_bboxes num_Box3DFieldIndex"]]:
+        """
+        Keep the valid boxes of every sample of the batch.
+
+        Returns:
+          list: Boxes of every sample without the padding.
+        """
+        return [
+            self.gt_bboxes_3d[index, :count]
+            for index, count in enumerate(self.gt_valid_bboxes.tolist())
+        ]
+
+    def valid_labels_3d(self) -> list[Int64[Tensor, " num_gt_bboxes"]]:
+        """
+        Keep the valid box labels of every sample of the batch.
+
+        Returns:
+          list: Labels of every sample without the padding, as int64 class indices.
+        """
+        return [
+            self.gt_labels_3d[index, :count].long()
+            for index, count in enumerate(self.gt_valid_bboxes.tolist())
+        ]
+
+    def valid_bboxes_num_points(self) -> list[Int32[Tensor, " num_gt_bboxes"]]:
+        """
+        Keep the point count of the valid boxes of every sample of the batch.
+
+        Returns:
+          list: Point count of every box of every sample without the padding.
+        """
+        return [
+            self.gt_bboxes_num_points[index, :count]
+            for index, count in enumerate(self.gt_valid_bboxes.tolist())
+        ]
 
     def to_device(self, device: torch.device) -> Detection3DGTBatch:
         """

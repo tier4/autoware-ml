@@ -59,7 +59,11 @@ class TestModelBatchInputs(unittest.TestCase):
     def test_lidar_only_inputs_leave_images_absent(self) -> None:
         """Test that a lidar-only payload keeps the GT batch and voxels and no image data."""
         batch_inputs = ModelBatchInputs(
-            multi_task_gt_batch=self.gt_batch, voxels_data=self.voxels_data, image_data=None
+            multi_task_gt_batch=self.gt_batch,
+            voxels_data=self.voxels_data,
+            image_data=None,
+            grid_sample_data=None,
+            range_view_data=None,
         )
 
         # InstanceOf keeps the payloads themselves, so they must come back identical.
@@ -73,6 +77,8 @@ class TestModelBatchInputs(unittest.TestCase):
             multi_task_gt_batch=self.gt_batch,
             voxels_data=self.voxels_data,
             image_data=self.image_data,
+            grid_sample_data=None,
+            range_view_data=None,
         )
 
         self.assertIs(batch_inputs.voxels_data, self.voxels_data)
@@ -84,7 +90,11 @@ class TestModelBatchInputs(unittest.TestCase):
     def test_gt_batch_only_inputs_are_allowed(self) -> None:
         """Test that a payload without any preprocessed modality is still valid."""
         batch_inputs = ModelBatchInputs(
-            multi_task_gt_batch=self.gt_batch, voxels_data=None, image_data=None
+            multi_task_gt_batch=self.gt_batch,
+            voxels_data=None,
+            image_data=None,
+            grid_sample_data=None,
+            range_view_data=None,
         )
 
         self.assertIsNone(batch_inputs.voxels_data)
@@ -97,6 +107,8 @@ class TestModelBatchInputs(unittest.TestCase):
                 multi_task_gt_batch={"point_cloud_gt_batch": None},  # type: ignore[arg-type]
                 voxels_data=None,
                 image_data=None,
+                grid_sample_data=None,
+                range_view_data=None,
             )
 
     def test_rejects_voxels_that_are_not_voxels_data(self) -> None:
@@ -106,12 +118,42 @@ class TestModelBatchInputs(unittest.TestCase):
                 multi_task_gt_batch=self.gt_batch,
                 voxels_data=torch.zeros(4, 5, 4),  # type: ignore[arg-type]
                 image_data=None,
+                grid_sample_data=None,
+                range_view_data=None,
             )
+
+    def test_starts_from_the_gt_batch_with_its_images(self) -> None:
+        """Test that the unprocessed inputs carry the images of the batch and nothing else."""
+        gt_batch = self.gt_batch._replace(image_gt_batch=self.image_data)
+
+        batch_inputs = ModelBatchInputs.from_gt_batch(gt_batch)
+
+        self.assertIs(batch_inputs.multi_task_gt_batch, gt_batch)
+        self.assertIs(batch_inputs.image_data, self.image_data)
+        self.assertIsNone(batch_inputs.voxels_data)
+        self.assertIsNone(batch_inputs.grid_sample_data)
+        self.assertIsNone(batch_inputs.range_view_data)
+
+    def test_replace_keeps_the_other_fields(self) -> None:
+        """Test that replacing one field keeps every other payload and validates the new one."""
+        batch_inputs = ModelBatchInputs.from_gt_batch(self.gt_batch)
+
+        replaced = batch_inputs.replace(voxels_data=self.voxels_data)
+
+        self.assertIs(replaced.voxels_data, self.voxels_data)
+        self.assertIs(replaced.multi_task_gt_batch, self.gt_batch)
+        self.assertIsNone(batch_inputs.voxels_data)
+        with self.assertRaises(ValidationError):
+            batch_inputs.replace(voxels_data=torch.zeros(4, 5, 4))
 
     def test_is_frozen(self) -> None:
         """Test that the payload cannot be mutated after construction."""
         batch_inputs = ModelBatchInputs(
-            multi_task_gt_batch=self.gt_batch, voxels_data=None, image_data=None
+            multi_task_gt_batch=self.gt_batch,
+            voxels_data=None,
+            image_data=None,
+            grid_sample_data=None,
+            range_view_data=None,
         )
 
         with self.assertRaises(ValidationError):
