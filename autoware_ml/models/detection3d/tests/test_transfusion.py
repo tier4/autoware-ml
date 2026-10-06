@@ -203,7 +203,7 @@ def _export_attention(
 def test_transfusion_forward_returns_query_predictions() -> None:
     model = _build_model().cuda()
 
-    outputs = model(**_build_voxel_inputs(torch.device("cuda")))
+    outputs = model(**_build_voxel_inputs(torch.device("cuda"))).detection3d().transfusion_head()
 
     assert outputs.dense_heatmap.ndim == 4
     assert outputs.query_labels.shape[-1] == 8

@@ -28,8 +28,12 @@ import torch.nn as nn
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
-from autoware_ml.dataclasses.models.detection3d.head_outputs import TransFusionHeadOutputs
+from autoware_ml.dataclasses.models.detection3d.head_outputs import (
+    Detection3DHeadOutputs,
+    TransFusionHeadOutputs,
+)
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
@@ -157,10 +161,9 @@ class TransFusionDetectionModel(BaseModel):
         self.pts_neck = pts_neck
         self.bbox_head = bbox_head
 
-    def build_eval_output(self, batch: ModelBatchInputs, outputs: Any) -> dict[str, Any]:
+    def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> dict[str, Any]:
         """Decode detections and pair them with ground truth for metrics."""
-        predictions = ModelPredictions(detection3d_predictions=self.bbox_head.predict(outputs))
-        return detection_eval_output(predictions, batch)
+        return detection_eval_output(self.predict_outputs(batch, outputs), batch)
 
     def _forward_with_batch_size(
         self,
@@ -190,7 +193,7 @@ class TransFusionDetectionModel(BaseModel):
 
     def forward(
         self, voxels: torch.Tensor, num_points: torch.Tensor, voxel_coords: torch.Tensor
-    ) -> TransFusionHeadOutputs:
+    ) -> ModelOutputs:
         """Run the detector on voxelized lidar inputs.
 
         Args:
@@ -200,8 +203,13 @@ class TransFusionDetectionModel(BaseModel):
         Returns:
             Detection head outputs.
         """
-        return self._forward_with_batch_size(
+        head_outputs = self._forward_with_batch_size(
             voxels=voxels, num_points=num_points, voxel_coords=voxel_coords
+        )
+        return ModelOutputs(
+            detection3d_head_outputs=Detection3DHeadOutputs(
+                center_head_outputs=None, transfusion_head_outputs=head_outputs
+            )
         )
 
     def forward_inputs(self, batch_inputs: ModelBatchInputs) -> dict[str, Any]:
@@ -228,7 +236,7 @@ class TransFusionDetectionModel(BaseModel):
     def compute_metrics(
         self,
         batch_inputs: ModelBatchInputs,
-        outputs: TransFusionHeadOutputs,
+        outputs: ModelOutputs,
     ) -> dict[str, torch.Tensor]:
         """Compute training losses for one detection batch.
 
@@ -246,12 +254,14 @@ class TransFusionDetectionModel(BaseModel):
         if gt_detections is None:
             raise ValueError("TransFusion losses need the 3D detection ground truth of the batch.")
         return self.bbox_head.loss(
-            outputs, gt_detections.valid_bboxes_3d(), gt_detections.valid_labels_3d()
+            outputs.detection3d().transfusion_head(),
+            gt_detections.valid_bboxes_3d(),
+            gt_detections.valid_labels_3d(),
         )
 
     def predict_outputs(
-        self, batch_inputs: ModelBatchInputs, outputs: TransFusionHeadOutputs
-    ) -> Any:
+        self, batch_inputs: ModelBatchInputs, outputs: ModelOutputs
+    ) -> ModelPredictions:
         """Decode predictions for inference.
 
         Args:
@@ -262,7 +272,9 @@ class TransFusionDetectionModel(BaseModel):
             Decoded detector predictions for the current batch.
         """
         del batch_inputs
-        return self.bbox_head.predict(outputs)
+        return ModelPredictions(
+            detection3d_predictions=self.bbox_head.predict(outputs.detection3d().transfusion_head())
+        )
 
     def build_export_spec(self, batch_inputs: ModelBatchInputs) -> ExportSpec:
         """Build an export specification with explicit tensor inputs.
