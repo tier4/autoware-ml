@@ -29,6 +29,7 @@ from autoware_ml.models.detection3d.task_modules.match_costs import (
     IoU3DCost,
 )
 from autoware_ml.models.detection3d.transfusion import TransFusionDetectionModel
+from autoware_ml.models.tests.batch_inputs_fixtures import build_batch_inputs, voxels_data_from_zyx
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
 from autoware_ml.ops.spconv.sparse_conv import SubMConv3d as ExportableSubMConv3d
 from autoware_ml.utils.onnx_precision import validate_module_onnx_precision
@@ -217,7 +218,9 @@ def test_transfusion_forward_returns_query_predictions() -> None:
 def test_transfusion_build_export_spec_uses_deployment_io_contract() -> None:
     model = _build_model().cuda().eval()
 
-    spec = model.build_export_spec(_build_voxel_inputs(torch.device("cuda")))
+    spec = model.build_export_spec(
+        build_batch_inputs(voxels=voxels_data_from_zyx(**_build_voxel_inputs(torch.device("cuda"))))
+    )
     with torch.no_grad():
         cls_score0, bbox_pred0, dir_cls_pred0 = spec.module(*spec.args)
 
@@ -232,7 +235,9 @@ def test_transfusion_build_export_spec_uses_deployment_io_contract() -> None:
 def test_transfusion_build_export_spec_prepares_modules_without_mutating_model() -> None:
     model = _build_model().eval()
 
-    spec = model.build_export_spec(_build_voxel_inputs(torch.device("cpu")))
+    spec = model.build_export_spec(
+        build_batch_inputs(voxels=voxels_data_from_zyx(**_build_voxel_inputs(torch.device("cpu"))))
+    )
 
     assert isinstance(model.bbox_head.decoder[0].self_attn, torch.nn.MultiheadAttention)
     assert isinstance(spec.module.bbox_head.decoder[0].self_attn, ExportableMultiheadAttention)
