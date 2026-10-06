@@ -202,11 +202,15 @@ def test_litept_is_a_drop_in_encoder_for_the_ptv3_segmentation_model() -> None:
     batch = move_batch_to_device(build_inputs(), torch.device("cuda"))
 
     with torch.no_grad():
-        logits = model(
-            coord=batch["coord"],
-            feat=batch["feat"],
-            grid_coord=batch["grid_coord"],
-            offset=batch["offset"],
+        logits = (
+            model(
+                coord=batch["coord"],
+                feat=batch["feat"],
+                grid_coord=batch["grid_coord"],
+                offset=batch["offset"],
+            )
+            .segmentation3d()
+            .logits
         )
 
     assert logits.shape == (batch["coord"].shape[0], 3)

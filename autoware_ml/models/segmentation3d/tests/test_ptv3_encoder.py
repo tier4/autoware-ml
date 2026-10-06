@@ -11,6 +11,8 @@ import torch
 import torch.nn as nn
 
 import autoware_ml.utils.point_cloud.structures as point_structures
+from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
+from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentation3DHeadOutputs
 from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTBatch
 from autoware_ml.dataclasses.geometry.grid_sample import GridSampleData
 from autoware_ml.models.tests.batch_inputs_fixtures import (
@@ -338,14 +340,17 @@ def test_compute_metrics_reports_losses_and_point_level_accuracy() -> None:
         points, labels, representatives=torch.tensor([0, 1, 2]), inverse=torch.tensor([0, 1, 2, 2])
     )
 
-    metrics = PTv3SegmentationModel.compute_metrics(model, batch, voxel_logits)
+    outputs = ModelOutputs(
+        segmentation3d_head_outputs=Segmentation3DHeadOutputs(logits=voxel_logits)
+    )
+    metrics = PTv3SegmentationModel.compute_metrics(model, batch, outputs)
 
     # compute_metrics now returns only losses; quality metrics are produced at
     # epoch end from build_eval_output via the attached AutowareSegmentation3DMetrics.
     assert set(metrics) == {"loss", "loss_ce", "loss_lovasz"}
     assert metrics["loss"] > 0
 
-    eval_out = PTv3SegmentationModel.build_eval_output(model, batch, voxel_logits)
+    eval_out = PTv3SegmentationModel.build_eval_output(model, batch, outputs)
     (frame,) = eval_out["seg_frames"]
     assert torch.equal(frame["pred"], torch.tensor([0, 1, 2, 2]))
     assert torch.equal(frame["target"], labels)
@@ -367,12 +372,17 @@ def test_predict_outputs_reconstructs_point_level_predictions() -> None:
         inverse=inverse,
     )
 
-    predictions = PTv3SegmentationModel.predict_outputs(model, batch, voxel_logits)
+    outputs = ModelOutputs(
+        segmentation3d_head_outputs=Segmentation3DHeadOutputs(logits=voxel_logits)
+    )
+    predictions = PTv3SegmentationModel.predict_outputs(model, batch, outputs)
 
-    assert torch.equal(predictions["pred_labels"], torch.tensor([0, 1, 0]))
-    assert predictions["pred_probs"].shape == (3, 2)
+    segmentation = predictions.segmentation3d_predictions
+    assert segmentation is not None
+    assert torch.equal(segmentation.pred_labels, torch.tensor([0, 1, 0]))
+    assert segmentation.pred_probs.shape == (3, 2)
     expected_probs = torch.softmax(voxel_logits, dim=1)[inverse]
-    assert torch.allclose(predictions["pred_probs"], expected_probs)
+    assert torch.allclose(segmentation.pred_probs, expected_probs)
 
 
 def test_point_serialization_accepts_explicit_depth_override() -> None:
@@ -552,7 +562,7 @@ def test_ptv3_frozen_encoder_supports_decoder_block_backward() -> None:
     ).cuda()
     batch = move_batch_to_device(build_inputs(), torch.device("cuda"))
 
-    logits = model(**batch)
+    logits = model(**batch).segmentation3d().logits
     logits.sum().backward()
 
     assert all(p.grad is None for p in model.encoder.parameters())

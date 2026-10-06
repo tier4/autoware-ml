@@ -27,6 +27,9 @@ from typing import Any
 import torch
 
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
+from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
+from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentation3DHeadOutputs
 from autoware_ml.models.segmentation3d.encoders.ptv3 import PointTransformerV3Encoder
 from autoware_ml.models.segmentation3d.heads.ptv3 import (
     PTv3SegDecoderHead,
@@ -139,7 +142,7 @@ class PTv3SegmentationModel(PTv3BaseModel):
         feat: torch.Tensor,
         grid_coord: torch.Tensor,
         offset: torch.Tensor,
-    ) -> torch.Tensor:
+    ) -> ModelOutputs:
         """Run the encoder and segmentation decoder head.
 
         Args:
@@ -149,7 +152,7 @@ class PTv3SegmentationModel(PTv3BaseModel):
             offset: Batch offsets.
 
         Returns:
-            Voxel-level segmentation logits of shape
+            Segmentation head outputs with the voxel-level logits of shape
             ``(num_voxels, num_classes)``.
         """
         point = self.encoder(
@@ -160,12 +163,14 @@ class PTv3SegmentationModel(PTv3BaseModel):
                 "offset": offset,
             }
         )
-        return self.seg3d_head(point)
+        return ModelOutputs(
+            segmentation3d_head_outputs=Segmentation3DHeadOutputs(logits=self.seg3d_head(point))
+        )
 
     def compute_metrics(
         self,
         batch_inputs: ModelBatchInputs,
-        outputs: torch.Tensor,
+        outputs: ModelOutputs,
     ) -> dict[str, torch.Tensor]:
         """Compute segmentation losses against voxel-level targets.
 
@@ -174,26 +179,34 @@ class PTv3SegmentationModel(PTv3BaseModel):
 
         Args:
             batch_inputs: Model inputs holding the point labels and the grid samples.
-            outputs: Voxel-level segmentation logits returned by :meth:`forward`.
+            outputs: Segmentation head outputs returned by :meth:`forward`.
 
         Returns:
             Dictionary with the segmentation losses.
         """
-        return self.seg3d_head.loss(outputs, self.sampled_semantic_labels(batch_inputs))
+        return self.seg3d_head.loss(
+            outputs.segmentation3d().logits, self.sampled_semantic_labels(batch_inputs)
+        )
 
     def build_eval_output(
-        self, batch: ModelBatchInputs, outputs: torch.Tensor
+        self, batch: ModelBatchInputs, outputs: ModelOutputs
     ) -> dict[str, torch.Tensor]:
         """Scatter voxel predictions to points for the segmentation metric."""
-        return segmentation_eval_output(outputs, batch, self.grid_sample_data(batch))
+        return segmentation_eval_output(
+            outputs.segmentation3d().logits, batch, self.grid_sample_data(batch)
+        )
 
     def predict_outputs(
         self,
         batch_inputs: ModelBatchInputs,
-        outputs: torch.Tensor,
-    ) -> dict[str, torch.Tensor]:
+        outputs: ModelOutputs,
+    ) -> ModelPredictions:
         """Format PTv3 segmentation predictions at the original-point level."""
-        return segmentation_predict_outputs(outputs, self.grid_sample_data(batch_inputs))
+        return ModelPredictions(
+            segmentation3d_predictions=segmentation_predict_outputs(
+                outputs.segmentation3d().logits, self.grid_sample_data(batch_inputs)
+            )
+        )
 
     def get_export_output_names(self) -> list[str]:
         """Return ordered PTv3 segmentation export output names."""

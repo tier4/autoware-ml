@@ -31,6 +31,7 @@ import torch.nn as nn
 
 from autoware_ml.dataclasses.geometry.grid_sample import GridSampleData
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.dataclasses.models.segmentation3d.predictions import Segmentation3DPredictions
 from autoware_ml.losses.segmentation3d.lovasz import LovaszLoss
 from autoware_ml.metrics.segmentation3d.eval_output import (
     concat_frame_ids,
@@ -283,7 +284,7 @@ def segmentation_eval_output(
 
 def segmentation_predict_outputs(
     seg_logits: torch.Tensor, grid_sample_data: GridSampleData
-) -> dict[str, torch.Tensor]:
+) -> Segmentation3DPredictions:
     """Format segmentation predictions at the original-point level.
 
     Args:
@@ -292,8 +293,7 @@ def segmentation_predict_outputs(
             maps every original point to its sample.
 
     Returns:
-        Dictionary with ``pred_labels`` and per-class ``pred_probs`` at the
-        original-point level.
+        The predicted label and the class probabilities of every original point.
     """
     point_probs = torch.softmax(seg_logits, dim=1)[grid_sample_data.inverse.long()]
-    return {"pred_labels": point_probs.argmax(dim=1), "pred_probs": point_probs}
+    return Segmentation3DPredictions(pred_labels=point_probs.argmax(dim=1), pred_probs=point_probs)
