@@ -22,7 +22,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from copy import deepcopy
-from dataclasses import dataclass
 from typing import Any
 
 import torch
@@ -33,6 +32,7 @@ from autoware_ml.dataclasses.models.detection3d.head_outputs import (
     TransFusionHeadOutputs,
     TransFusionSeparateHeadOutputs,
 )
+from autoware_ml.dataclasses.models.detection3d.head_targets import TransFusionHeadTargets
 from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
 from autoware_ml.losses.detection3d.focal import SigmoidFocalLoss
 from autoware_ml.losses.detection3d.gaussian_focal import GaussianFocalLoss
@@ -311,29 +311,6 @@ class SeparateHead1D(nn.Module):
             Dictionary of prediction tensors keyed by branch name.
         """
         return {name: head(x) for name, head in self.heads.items()}
-
-
-@dataclass
-class TransFusionTargets:
-    """Store assignment targets for one TransFusion training batch.
-
-    Attributes:
-        labels: Target class labels for all decoder queries.
-        label_weights: Per-query classification weights.
-        bbox_targets: Encoded box regression targets.
-        bbox_weights: Per-query box regression weights.
-        num_pos: Number of matched positive queries.
-        matched_iou: Mean IoU of matched positive queries.
-        heatmap: Dense heatmap target used for query initialization.
-    """
-
-    labels: torch.Tensor
-    label_weights: torch.Tensor
-    bbox_targets: torch.Tensor
-    bbox_weights: torch.Tensor
-    num_pos: int
-    matched_iou: float
-    heatmap: torch.Tensor
 
 
 class TransFusionHead(nn.Module):
@@ -866,7 +843,7 @@ class TransFusionHead(nn.Module):
         gt_boxes: list[torch.Tensor],
         gt_labels: list[torch.Tensor],
         outputs: TransFusionHeadOutputs,
-    ) -> TransFusionTargets:
+    ) -> TransFusionHeadTargets:
         """Build TransFusion training targets.
 
         Args:
@@ -923,7 +900,8 @@ class TransFusionHead(nn.Module):
                     point_cloud_range=self.point_cloud_range,
                 )
                 labels = decoded.new_full((self.num_proposals,), self.num_classes, dtype=torch.long)
-                label_weights = decoded.new_ones((self.num_proposals,))
+                # Every sample is annotated for every class, so no class is masked out
+                label_weights = decoded.new_ones((self.num_proposals, self.num_classes))
                 bbox_targets = decoded.new_zeros((self.num_proposals, self.bbox_coder.code_size))
                 bbox_weights = decoded.new_zeros((self.num_proposals, self.bbox_coder.code_size))
 
@@ -953,14 +931,15 @@ class TransFusionHead(nn.Module):
             outputs.dense_heatmap.shape[-2:],
             outputs.dense_heatmap.device,
         )
-        return TransFusionTargets(
+        return TransFusionHeadTargets(
             labels=torch.stack(all_labels, dim=0),
             label_weights=torch.stack(all_label_weights, dim=0),
             bbox_targets=torch.stack(all_bbox_targets, dim=0),
             bbox_weights=torch.stack(all_bbox_weights, dim=0),
             num_pos=num_pos,
             matched_iou=matched_ious / max(num_pos, 1),
-            heatmap=dense_heatmap,
+            dense_heatmaps=dense_heatmap,
+            class_weights=dense_heatmap.new_ones((batch_size, self.num_classes)),
         )
 
     def loss(
@@ -981,7 +960,11 @@ class TransFusionHead(nn.Module):
         """
         targets = self.get_targets(gt_boxes, gt_labels, outputs)
         loss_dict: dict[str, torch.Tensor] = {}
-        loss_heatmap = self.loss_heatmap(outputs.dense_heatmap, targets.heatmap)
+        loss_heatmap = self.loss_heatmap(
+            outputs.dense_heatmap,
+            targets.dense_heatmaps,
+            weights=targets.class_weights[:, :, None, None],
+        )
         loss_dict["loss_heatmap"] = self.loss_heatmap_weight * loss_heatmap
 
         branches = outputs.separate_head_outputs
@@ -998,7 +981,7 @@ class TransFusionHead(nn.Module):
             cls_targets = layer_logits.new_zeros((layer_labels.shape[0], self.num_classes))
             valid_mask = layer_labels < self.num_classes
             cls_targets[valid_mask, layer_labels[valid_mask]] = 1.0
-            layer_label_weights = targets.label_weights[:, start:end].reshape(-1)
+            layer_label_weights = targets.label_weights[:, start:end].reshape(-1, self.num_classes)
             loss_cls = self.loss_cls(
                 layer_logits, cls_targets, layer_label_weights, avg_factor=max(targets.num_pos, 1)
             )

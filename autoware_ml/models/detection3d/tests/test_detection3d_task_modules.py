@@ -72,7 +72,7 @@ def test_transfusion_oriented_heatmap_target_runs_through_get_targets() -> None:
     gt_labels = [torch.tensor([0], dtype=torch.long)]
 
     targets = head.get_targets(gt_boxes, gt_labels, build_transfusion_outputs(tensors))
-    heatmap = targets.heatmap[0, 0]
+    heatmap = targets.dense_heatmaps[0, 0]
 
     assert heatmap[8, 8] == torch.tensor(1.0)
     assert heatmap[8, 12] > heatmap[12, 8]

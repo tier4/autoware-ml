@@ -448,8 +448,8 @@ def test_transfusion_heatmap_loss_receives_raw_logits() -> None:
     captured_prediction: list[torch.Tensor] = []
 
     class RecordingHeatmapLoss(torch.nn.Module):
-        def forward(self, prediction, target):
-            del target
+        def forward(self, prediction, target, weights):
+            del target, weights
             captured_prediction.append(prediction.detach().clone())
             return prediction.new_tensor(0.0)
 
