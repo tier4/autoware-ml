@@ -14,13 +14,13 @@
 
 """Unit tests for the DataPreprocessing pipeline wrapper."""
 
-from typing import Any
-
 import pytest
 import torch
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch
+from autoware_ml.dataclasses.geometry.voxels import VoxelsData
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.preprocessing.base import DataPreprocessing
 
 
@@ -30,9 +30,9 @@ class _ModeRecorder:
     def __init__(self) -> None:
         self.seen_modes: list[bool] = []
 
-    def __call__(self, batch_inputs_dict: dict[str, Any], *, is_training: bool) -> dict[str, Any]:
+    def __call__(self, batch_inputs: ModelBatchInputs, *, is_training: bool) -> ModelBatchInputs:
         self.seen_modes.append(is_training)
-        return {"stage_ran": True}
+        return batch_inputs
 
 
 def _batch() -> ModelGTBatch:
@@ -71,10 +71,28 @@ def test_call_requires_explicit_is_training():
         pipeline(_batch())  # type: ignore[call-arg]
 
 
-def test_call_merges_layer_outputs_into_the_named_batch():
-    pipeline = DataPreprocessing([_ModeRecorder()])
+def test_call_chains_the_layers_from_the_collated_batch():
+    """Every layer receives the inputs the previous one returned, starting from the batch."""
+    batch = _batch()
+    voxels = VoxelsData(
+        voxels=torch.zeros((1, 2, 4)),
+        coords=torch.zeros((1, 3), dtype=torch.int32),
+        num_points=torch.full((1,), 2, dtype=torch.int32),
+        batch_indices=torch.zeros(1, dtype=torch.int32),
+    )
+    seen: list[ModelBatchInputs] = []
 
-    result = pipeline(_batch(), is_training=True)
+    def voxelize(batch_inputs: ModelBatchInputs, *, is_training: bool) -> ModelBatchInputs:
+        seen.append(batch_inputs)
+        return batch_inputs.replace(voxels_data=voxels)
 
-    assert result["stage_ran"] is True
-    assert [len(points) for points in result["points"]] == [2]
+    def check(batch_inputs: ModelBatchInputs, *, is_training: bool) -> ModelBatchInputs:
+        seen.append(batch_inputs)
+        return batch_inputs
+
+    result = DataPreprocessing([voxelize, check])(batch, is_training=True)
+
+    assert seen[0].multi_task_gt_batch is batch
+    assert seen[0].voxels_data is None
+    assert seen[1].voxels_data is voxels
+    assert result is seen[1]

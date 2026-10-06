@@ -22,6 +22,7 @@ from omegaconf import OmegaConf
 import pytest
 import torch
 
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.datamodule.tests.corpus import build_dataset, write_corpus
 from autoware_ml.preprocessing.base import DataPreprocessing
 import autoware_ml.utils.deploy as deploy
@@ -30,7 +31,6 @@ from autoware_ml.utils.deploy import (
     build_dynamic_shapes,
     build_dynamic_axes,
     export_to_onnx,
-    get_export_parameter_names,
     merge_module_onnx_cfg,
     normalize_dynamic_shapes_for_model,
     resolve_export_specs,
@@ -40,16 +40,8 @@ from autoware_ml.utils.deploy import (
 
 
 class _DummyModel(torch.nn.Module):
-    def forward(
-        self, voxels: torch.Tensor, num_points: torch.Tensor, **kwargs: object
-    ) -> torch.Tensor:
+    def forward(self, voxels: torch.Tensor, num_points: torch.Tensor) -> torch.Tensor:
         return voxels + num_points.unsqueeze(-1)
-
-
-def test_get_export_parameter_names_ignores_variadic_parameters() -> None:
-    model = _DummyModel()
-
-    assert get_export_parameter_names(model) == ["voxels", "num_points"]
 
 
 def test_export_to_onnx_prefers_export_spec_output_names(tmp_path: Path) -> None:
@@ -250,7 +242,7 @@ def test_get_predict_batch_keeps_the_typed_batch_through_the_device_transfer(
 ) -> None:
     """A collated batch of the real pipeline reaches preprocessing as a ModelGTBatch.
 
-    The batch is moved with its own transfer, so the adapter can read its named fields.
+    The batch is moved with its own transfer, so preprocessing reads its named fields.
     """
 
     dataset = build_dataset(tmp_path, write_corpus(tmp_path, num_records=2))
@@ -265,10 +257,14 @@ def test_get_predict_batch_keeps_the_typed_batch_through_the_device_transfer(
             return [batch]
 
     class _Model:
-        def on_after_batch_transfer(self, batch, dataloader_idx: int) -> dict:
+        def on_after_batch_transfer(self, batch, dataloader_idx: int) -> ModelBatchInputs:
             return preprocessing(batch, is_training=False)
 
     inputs = deploy.get_predict_batch(_Datamodule(), _Model(), torch.device("cpu"))
 
-    assert inputs["sample_count"] == 2
-    assert inputs["feat"].shape[0] == batch.point_cloud_gt_batch.points.shape[0]
+    assert inputs.batch_size() == 2
+    assert inputs.multi_task_gt_batch.point_cloud_gt_batch is not None
+    assert torch.equal(
+        inputs.multi_task_gt_batch.point_cloud_gt_batch.points,
+        batch.point_cloud_gt_batch.points,
+    )

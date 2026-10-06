@@ -164,10 +164,10 @@ class TestCameraPipelineSmoke(unittest.TestCase):
         self.assertEqual(batch.image_gt_batch.images.shape, (2, len(CAMERAS), 3, 24, 32))
         self.assertEqual(int(batch.infer_batch_size()), 2)
 
-        batch_inputs_dict = DataPreprocessing()(batch, is_training=True)
-        self.assertEqual(len(batch_inputs_dict["img"]), 2)
-        self.assertEqual(batch_inputs_dict["img"][0].shape, (2, 3, 24, 32))
-        self.assertEqual(len(batch_inputs_dict["lidar2img"]), 2)
+        batch_inputs = DataPreprocessing()(batch, is_training=True)
+        assert batch_inputs.image_data is not None
+        self.assertEqual(batch_inputs.image_data.images.shape, (2, len(CAMERAS), 3, 24, 32))
+        self.assertEqual(batch_inputs.image_data.lidar2images.shape, (2, len(CAMERAS), 4, 4))
 
     def test_calibration_pipeline_runs_a_training_step(self) -> None:
         transforms = TransformsCompose(
@@ -192,10 +192,12 @@ class TestCameraPipelineSmoke(unittest.TestCase):
         )
         dataset = build_dataset(self.root, self.records, transforms)
         batch = dataset.collate_fn([dataset[0], dataset[1]])
-        batch_inputs_dict = DataPreprocessing()(batch, is_training=True)
+        batch_inputs = DataPreprocessing()(batch, is_training=True)
 
-        self.assertEqual(batch_inputs_dict["fused_img"].shape, (4, 5, *IMAGE_SIZE))
-        self.assertEqual(batch_inputs_dict["gt_calibration_status"].shape, (4,))
+        assert batch_inputs.image_data is not None
+        assert batch_inputs.image_data.calibration_statuses is not None
+        self.assertEqual(batch_inputs.image_data.fused_images().shape, (4, 5, *IMAGE_SIZE))
+        self.assertEqual(batch_inputs.image_data.calibration_statuses.flatten().shape, (4,))
 
         model = CalibrationStatusClassifier(
             backbone=ResNet18(in_channels=5),
@@ -207,7 +209,7 @@ class TestCameraPipelineSmoke(unittest.TestCase):
         )
         model.log_dict = lambda *args, **kwargs: None
 
-        loss = model.training_step(batch_inputs_dict, batch_idx=0)
+        loss = model.training_step(batch_inputs, batch_idx=0)
         loss.backward()
 
         self.assertTrue(torch.isfinite(loss))

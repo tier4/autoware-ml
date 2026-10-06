@@ -8,8 +8,7 @@ This guide walks you through adding a new model to Autoware-ML. You'll implement
 
 ## The BaseModel Interface
 
-New models should inherit from `BaseModel`. The minimal contract is still the
-same two abstract methods:
+New models should inherit from `BaseModel`. The minimal contract is three abstract methods:
 
 ```python
 from autoware_ml.models.base import BaseModel
@@ -18,8 +17,11 @@ class MyModel(BaseModel):
     def forward(self, **kwargs: Any) -> Any:
         ...
 
+    def forward_inputs(self, batch_inputs: ModelBatchInputs) -> dict[str, Any]:
+        ...
+
     def compute_metrics(
-        self, batch_inputs_dict: Mapping[str, Any], outputs: Any
+        self, batch_inputs: ModelBatchInputs, outputs: Any
     ) -> dict[str, torch.Tensor]:
         ...
 ```
@@ -27,12 +29,12 @@ class MyModel(BaseModel):
 The base class handles training/validation/test/predict steps, optimizer
 configuration, metric logging, prediction output conversion, runtime
 preprocessing, and deployment export integration. The `forward()` method
-can have any signature as long as the default batch-to-argument mapping
-matches, or the model overrides the relevant hooks.
+takes the tensors the network reads, and `forward_inputs()` picks them from
+the typed model inputs.
 
 !!! note "Extending `BaseModel`"
     Specialized models should still use `BaseModel`. When the default
-    signature-based path is not enough, prefer overriding hooks such as
+    shared step path is not enough, prefer overriding hooks such as
     `set_data_preprocessing()`, `predict_outputs()`, `get_log_batch_size()`,
     or `build_export_spec()` instead of introducing a standalone
     `LightningModule`. Output decoding (for example, voxel-to-point scatter
@@ -45,12 +47,12 @@ matches, or the model overrides the relevant hooks.
 Create a new file in `autoware_ml/models/`:
 
 ```python title="autoware_ml/models/my_task/my_model.py"
-from collections.abc import Mapping
 from typing import Any
 
 import torch
 import torch.nn as nn
 
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.models.base import BaseModel
 
 
@@ -73,20 +75,29 @@ class MyModel(BaseModel):
         features = self.encoder(feat)
         return self.decoder(features)
 
+    def forward_inputs(self, batch_inputs: ModelBatchInputs) -> dict[str, Any]:
+        return {"feat": batch_inputs.multi_task_gt_batch.point_cloud_gt_batch.points}
+
     def compute_metrics(
         self,
-        batch_inputs_dict: Mapping[str, Any],
+        batch_inputs: ModelBatchInputs,
         outputs: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
-        loss = self.loss_fn(outputs, batch_inputs_dict["segment"])
+        labels = batch_inputs.multi_task_gt_batch.segmentation3d_gt_batch.gt_semantic_masks
+        loss = self.loss_fn(outputs, labels)
         return {"loss": loss}
 ```
 
 ### Key Points
 
-1. **`forward()` signature matters** - Parameter names must match keys in your batch dictionary. The batch adapter names the tensors of the collated batch, for example `feat`, `coord` and `offset` for points, `segment` for point labels and `gt_boxes` and `gt_labels` for boxes. Preprocessing layers add more keys. The base class extracts matching keys using signature inspection.
+1. **`forward_inputs()` picks the forward arguments** - It reads the typed model inputs, for
+   example the points of `multi_task_gt_batch.point_cloud_gt_batch` or the `voxels_data` a
+   preprocessing layer computed, and returns them keyed by the `forward()` parameter names.
 
-2. **`compute_metrics()` receives the full batch and outputs** - The first argument is `batch_inputs_dict` (the full batch dictionary after preprocessing), and the second is `outputs` from `forward()`. Extract any needed targets (e.g. `segment`) from `batch_inputs_dict`.
+2. **`compute_metrics()` receives the model inputs and outputs** - The first argument is the
+   `ModelBatchInputs` of the batch, and the second is `outputs` from `forward()`. Read the
+   targets from its ground truth batches, for example the point labels of
+   `segmentation3d_gt_batch`.
 
 3. **Return `'loss'`** - The metrics dict must include a `'loss'` key for backpropagation.
 
@@ -122,8 +133,8 @@ get_data_sample() -> transforms -> collate_fn() -> BaseModel.on_after_batch_tran
    as a `ModelGTSample`
 2. `transforms`: load files and apply per sample augmentations (in the dataset)
 3. `collate_fn()`: stack the samples into a typed `ModelGTBatch`
-4. `BaseModel.on_after_batch_transfer()`: name the batch tensors and run the model's runtime
-   preprocessing
+4. `BaseModel.on_after_batch_transfer()`: run the model's runtime preprocessing, which turns
+   the batch into the typed `ModelBatchInputs`
 5. `forward()`: model inference/training forward pass
 6. `compute_metrics()` / `predict_outputs()`: model owns any output shaping
    (e.g., voxel-to-point scatter for segmentation) directly inside these
@@ -304,17 +315,18 @@ the model by the entrypoint scripts.
 If your task needs custom preprocessing:
 
 ```python title="autoware_ml/preprocessing/my_preprocessing/my_preprocessing.py"
-from typing import Any
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 
 
 class MyPreprocessingLayer:
-    def __init__(self, input_key: str = "feat", scale: float = 1.0):
-        self.input_key = input_key
+    def __init__(self, scale: float = 1.0):
         self.scale = scale
 
-    def __call__(self, batch_inputs_dict: dict[str, Any], *, is_training: bool) -> dict[str, Any]:
-        processed = batch_inputs_dict[self.input_key] * self.scale
-        return {self.input_key: processed}
+    def __call__(self, batch_inputs: ModelBatchInputs, *, is_training: bool) -> ModelBatchInputs:
+        batch = batch_inputs.multi_task_gt_batch
+        points = batch.point_cloud_gt_batch
+        scaled = points._replace(points=points.points * self.scale)
+        return batch_inputs.replace(multi_task_gt_batch=batch._replace(point_cloud_gt_batch=scaled))
 ```
 
 Add to config:
@@ -324,13 +336,13 @@ data_preprocessing:
   _target_: autoware_ml.preprocessing.base.DataPreprocessing
   pipeline:
     - _target_: autoware_ml.preprocessing.my_preprocessing.my_preprocessing.MyPreprocessingLayer
-      input_key: feat
       scale: 1.0
 ```
 
 !!! warning
-    Preprocessing layers must be callable objects that accept `dict[str, Any]` and the keyword
-    `is_training`, and return `dict[str, Any]` with the entries to add or replace.
+    Preprocessing layers must be callable objects that accept `ModelBatchInputs` and the keyword
+    `is_training`, and return `ModelBatchInputs` with the features they compute added or the
+    data they change replaced.
 
 Output-side shaping (logits -> probabilities, decoder scatter, voxel-to-point mapping, etc.) belongs
 **inside the model** - in `forward()`, `compute_metrics()`, or `predict_outputs()`.
@@ -383,7 +395,7 @@ def forward(self, image: torch.Tensor, lidar: torch.Tensor) -> torch.Tensor:
     return self.head(fused)
 ```
 
-Batch dict must have `image` and `lidar` keys.
+`forward_inputs()` returns both tensors, keyed `image` and `lidar`.
 
 ### Multiple Outputs
 
@@ -396,13 +408,12 @@ def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
 
 def compute_metrics(
     self,
-    batch_inputs_dict: Mapping[str, Any],
+    batch_inputs: ModelBatchInputs,
     outputs: tuple[torch.Tensor, torch.Tensor],
 ):
     boxes, scores = outputs
-    gt_boxes = batch_inputs_dict["gt_boxes"]
-    gt_scores = batch_inputs_dict["gt_scores"]
-    box_loss = self.box_loss(boxes, gt_boxes)
-    score_loss = self.score_loss(scores, gt_scores)
+    gt_detections = batch_inputs.multi_task_gt_batch.detection3d_gt_batch
+    box_loss = self.box_loss(boxes, gt_detections.valid_bboxes_3d())
+    score_loss = self.score_loss(scores, gt_detections.valid_labels_3d())
     return {"loss": box_loss + score_loss, "box_loss": box_loss, "score_loss": score_loss}
 ```
