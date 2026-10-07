@@ -319,7 +319,7 @@ class T4RecordsGenerator:
         """
 
         pack = T4Pack.from_point_cloud_path(lidar_pointcloud_path)
-        if pack.pack_path not in self._t4pack_indices and not os.path.isfile(pack.pack_path):
+        if not os.path.isfile(pack.pack_path):
             return None
         if pack.pack_path not in self._t4pack_indices:
             self._t4pack_indices[pack.pack_path] = pack.read_index()
