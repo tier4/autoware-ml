@@ -85,6 +85,8 @@ class PTv3SegDecoderHead(nn.Module):
         dec_attn: Sequence[bool] | bool = True,
         dec_rope_base: Sequence[float | None] | float | None = None,
         sparse_conv_backend: str = "spconv",
+        activation_checkpointing: bool = False,
+        fp32_sublayers: Sequence[str] = (),
     ) -> None:
         """Initialize the PTv3 segmentation decoder head.
 
@@ -120,6 +122,11 @@ class PTv3SegDecoderHead(nn.Module):
             sparse_conv_backend: Library implementing the decoder's submanifold
                 convolutions (``"auto"``, ``"spconv"`` or ``"rulebook"``), see
                 :func:`autoware_ml.ops.sparse_backend.submanifold_conv3d`.
+            activation_checkpointing: Recompute the attention and MLP activations of the
+                decoder blocks in the backward pass, see the encoder ``Block``.
+            fp32_sublayers: Sublayers computed in fp32 under autocast; ``"mlp"`` runs the
+                feed-forward network in fp32, which recovers the accuracy bf16 loses there.
+                Empty by default.
         """
         super().__init__()
         self.order = list(order)
@@ -178,6 +185,8 @@ class PTv3SegDecoderHead(nn.Module):
                         enable_attn=self.dec_attn[stage_index],
                         rope_base=self.dec_rope_base[stage_index],
                         sparse_conv_backend=sparse_conv_backend,
+                        activation_checkpointing=activation_checkpointing,
+                        fp32_sublayers=fp32_sublayers,
                     ),
                     name=f"block{block_index}",
                 )
