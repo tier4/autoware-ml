@@ -22,3 +22,4 @@ upcast_softmax: ${model.encoder.upcast_softmax}
 lovasz_weight: 1.0
 # Cross entropy weight of mixed voxels
 mixed_voxel_weight: 1.0
+sparse_conv_backend: ${model.encoder.sparse_conv_backend}

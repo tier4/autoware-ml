@@ -26,14 +26,20 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
-import spconv.pytorch as spconv
 import torch
 import torch.nn as nn
 from torch.onnx.operators import shape_as_tensor
 
 from autoware_ml.ops.indexing.operators import argsort
 from autoware_ml.ops.segment.segment_csr import segment_csr
-from autoware_ml.ops.spconv.sparse_conv import SubMConv3d as ExportableSubMConv3d
+from autoware_ml.ops.sparse_backend import (
+    is_sparse_conv_module,
+    is_sparse_conv_tensor,
+    sparse_conv_backend_of,
+    submanifold_conv3d,
+    submanifold_conv_backend_of,
+    warn_if_rulebook_runs_fp32,
+)
 from autoware_ml.utils.point_cloud.batching import offset_to_bincount
 from autoware_ml.utils.point_cloud.structures import Point
 
@@ -50,41 +56,43 @@ def load_flash_attn_module() -> Any:
     return importlib.import_module("flash_attn")
 
 
-def is_sparse_conv_module(module: nn.Module) -> bool:
-    """Return whether a module consumes sparse convolution tensors.
-
-    Args:
-        module: Module inspected for sparse-convolution semantics.
-
-    Returns:
-        ``True`` when the module expects sparse convolution tensors.
-    """
-    return spconv.modules.is_spconv_module(module) or isinstance(module, ExportableSubMConv3d)
-
-
 def replace_submconv3d_for_export(module: nn.Module) -> None:
-    """Replace native ``spconv.SubMConv3d`` layers with exportable wrappers.
+    """Replace native submanifold convolutions with exportable spconv wrappers.
+
+    Layers of either training backend are converted: spconv and rulebook share
+    the KRSC weight layout, so the state dict transfers unchanged. Export needs
+    spconv installed even when training ran on rulebook.
 
     Args:
         module: Module hierarchy traversed in-place.
     """
+    from autoware_ml.ops.spconv.sparse_conv import SubMConv3d as ExportableSubMConv3d
+
     for name, child in list(module.named_children()):
         if isinstance(child, ExportableSubMConv3d):
             continue
-        if isinstance(child, spconv.SubMConv3d):
+        backend = submanifold_conv_backend_of(child)
+        if backend is not None:
+            spconv_options = (
+                {
+                    "algo": child.algo,
+                    "fp32_accum": child.fp32_accum,
+                    "name": getattr(child, "name", None),
+                }
+                if backend == "spconv"
+                else {}
+            )
             exportable_child = ExportableSubMConv3d(
                 child.in_channels,
                 child.out_channels,
                 kernel_size=child.kernel_size,
-                stride=child.stride,
-                padding=child.padding,
-                dilation=child.dilation,
-                groups=child.groups,
+                stride=getattr(child, "stride", 1),
+                padding=getattr(child, "padding", 0),
+                dilation=getattr(child, "dilation", 1),
+                groups=getattr(child, "groups", 1),
                 bias=child.bias is not None,
                 indice_key=child.indice_key,
-                algo=child.algo,
-                fp32_accum=child.fp32_accum,
-                name=getattr(child, "name", None),
+                **spconv_options,
             )
             exportable_child = exportable_child.to(
                 device=child.weight.device, dtype=child.weight.dtype
@@ -93,6 +101,30 @@ def replace_submconv3d_for_export(module: nn.Module) -> None:
             module._modules[name] = exportable_child
             continue
         replace_submconv3d_for_export(child)
+
+
+def apply_sparse_conv(module: nn.Module, sparse_feat: Any) -> Any:
+    """Run one sparse convolution on a sparse tensor, reconciling operand dtypes.
+
+    spconv kernels require features and weights in one dtype; the eval path
+    bypasses spconv's autocast cast, so autocast-halved features against fp32
+    weights abort the kernel tuner. rulebook casts inside its own autograd
+    function and must see the features as they are, so it receives none of this.
+
+    Args:
+        module: Sparse convolution of either backend.
+        sparse_feat: Sparse tensor holding the input features.
+
+    Returns:
+        Sparse tensor holding the convolved features.
+    """
+    if sparse_conv_backend_of(module) == "rulebook":
+        warn_if_rulebook_runs_fp32(module, sparse_feat.features)
+        return module(sparse_feat)
+    weight_dtype = module.weight.dtype
+    if sparse_feat.features.dtype != weight_dtype:
+        sparse_feat = sparse_feat.replace_feature(sparse_feat.features.to(weight_dtype))
+    return module(sparse_feat)
 
 
 class PointModule(nn.Module):
@@ -235,7 +267,7 @@ class PointSequential(PointModule):
         """
         self.add_module(name or str(len(self._modules)), module)
 
-    def forward(self, input_data: Point | spconv.SparseConvTensor | torch.Tensor) -> Any:
+    def forward(self, input_data: Any) -> Any:
         """Apply the contained modules to point, sparse, or dense inputs.
 
         Args:
@@ -248,23 +280,13 @@ class PointSequential(PointModule):
             if isinstance(module, PointModule):
                 input_data = module(input_data)
             elif is_sparse_conv_module(module):
-                # spconv needs the features and the weights in one dtype, autocast leaves them
-                # apart in eval.
-                weight_dtype = module.weight.dtype
                 if isinstance(input_data, Point):
-                    sparse_feat = input_data.sparse_conv_feat
-                    if sparse_feat.features.dtype != weight_dtype:
-                        sparse_feat = sparse_feat.replace_feature(
-                            sparse_feat.features.to(weight_dtype)
-                        )
-                    input_data.sparse_conv_feat = module(sparse_feat)
+                    input_data.sparse_conv_feat = apply_sparse_conv(
+                        module, input_data.sparse_conv_feat
+                    )
                     input_data.feat = input_data.sparse_conv_feat.features
                 else:
-                    if input_data.features.dtype != weight_dtype:
-                        input_data = input_data.replace_feature(
-                            input_data.features.to(weight_dtype)
-                        )
-                    input_data = module(input_data)
+                    input_data = apply_sparse_conv(module, input_data)
             else:
                 if isinstance(input_data, Point):
                     input_data.feat = module(input_data.feat)
@@ -272,7 +294,7 @@ class PointSequential(PointModule):
                         input_data.sparse_conv_feat = input_data.sparse_conv_feat.replace_feature(
                             input_data.feat
                         )
-                elif isinstance(input_data, spconv.SparseConvTensor):
+                elif is_sparse_conv_tensor(input_data):
                     if input_data.indices.shape[0] != 0:
                         input_data = input_data.replace_feature(module(input_data.features))
                 else:
@@ -774,6 +796,7 @@ class Block(PointModule):
         enable_conv: bool = True,
         enable_attn: bool = True,
         rope_base: float | None = None,
+        sparse_conv_backend: str = "spconv",
     ) -> None:
         """Initialize one PTv3 attention block.
 
@@ -803,6 +826,8 @@ class Block(PointModule):
                 stages.
             rope_base: Frequency base for axis-split 3D rotary embedding, or
                 ``None`` to disable it.
+            sparse_conv_backend: Library implementing the positional-encoding
+                convolution, see :func:`autoware_ml.ops.sparse_backend.submanifold_conv3d`.
 
         Raises:
             ValueError: Raised when the block would carry no operation at all.
@@ -816,8 +841,13 @@ class Block(PointModule):
 
         if self.enable_conv:
             self.cpe = PointSequential(
-                spconv.SubMConv3d(
-                    channels, channels, kernel_size=3, bias=True, indice_key=cpe_indice_key
+                submanifold_conv3d(
+                    channels,
+                    channels,
+                    3,
+                    bias=True,
+                    indice_key=cpe_indice_key,
+                    backend=sparse_conv_backend,
                 ),
                 nn.Linear(channels, channels),
                 nn.LayerNorm(channels),
@@ -1071,6 +1101,7 @@ class Embedding(PointModule):
         embed_channels: int,
         kernel_size: int = 0,
         stem_type: str = "linear",
+        sparse_conv_backend: str = "spconv",
     ) -> None:
         """Initialize the embedding stem.
 
@@ -1082,14 +1113,21 @@ class Embedding(PointModule):
                 3 rides spconv's implicit-GEMM path like the network's other convs.
             stem_type: Stem variant. ``"conv"`` (default) uses a submanifold conv;
                 ``"linear"`` uses a Utonia-style (PT-v3m3) per-point ``nn.Linear``.
+            sparse_conv_backend: Library implementing the convolutional stem, see
+                :func:`autoware_ml.ops.sparse_backend.submanifold_conv3d`.
         """
         super().__init__()
         if stem_type == "linear":
             # Utonia-style stem: drop the submanifold conv for a per-point Linear.
             stem = nn.Linear(in_channels, embed_channels)
         elif stem_type == "conv":
-            stem = spconv.SubMConv3d(
-                in_channels, embed_channels, kernel_size=kernel_size, bias=False, indice_key="stem"
+            stem = submanifold_conv3d(
+                in_channels,
+                embed_channels,
+                kernel_size,
+                bias=False,
+                indice_key="stem",
+                backend=sparse_conv_backend,
             )
         else:
             raise ValueError(f"Unknown stem_type: {stem_type!r} (expected 'conv' or 'linear')")
@@ -1206,6 +1244,7 @@ class PointTransformerV3Encoder(PointModule):
         enc_conv: Sequence[bool] | bool = True,
         enc_attn: Sequence[bool] | bool = True,
         enc_rope_base: Sequence[float | None] | float | None = None,
+        sparse_conv_backend: str = "spconv",
     ) -> None:
         """Initialize the PTv3 encoder.
 
@@ -1239,6 +1278,9 @@ class PointTransformerV3Encoder(PointModule):
                 every stage.
             enc_rope_base: Rotary-embedding frequency base, either one value for
                 every stage or one per stage. ``None`` disables RoPE.
+            sparse_conv_backend: Library implementing the submanifold convolutions
+                (``"auto"``, ``"spconv"`` or ``"rulebook"``), see
+                :func:`autoware_ml.ops.sparse_backend.submanifold_conv3d`.
         """
         super().__init__()
         self.in_channels = in_channels
@@ -1246,12 +1288,17 @@ class PointTransformerV3Encoder(PointModule):
         self.stride = list(stride)
         self.shuffle_orders = shuffle_orders
         self.enc_channels = list(enc_channels)
+        self.sparse_conv_backend = sparse_conv_backend
         stage_count = len(enc_depths)
         self.enc_conv = expand_stage_flags(enc_conv, stage_count, True, "enc_conv")
         self.enc_attn = expand_stage_flags(enc_attn, stage_count, True, "enc_attn")
         self.enc_rope_base = expand_stage_flags(enc_rope_base, stage_count, None, "enc_rope_base")
         self.embedding = Embedding(
-            in_channels, enc_channels[0], kernel_size=stem_kernel_size, stem_type=stem_type
+            in_channels,
+            enc_channels[0],
+            kernel_size=stem_kernel_size,
+            stem_type=stem_type,
+            sparse_conv_backend=sparse_conv_backend,
         )
 
         enc_drop_path = [value.item() for value in torch.linspace(0, drop_path, sum(enc_depths))]
@@ -1290,6 +1337,7 @@ class PointTransformerV3Encoder(PointModule):
                         enable_conv=self.enc_conv[stage_index],
                         enable_attn=self.enc_attn[stage_index],
                         rope_base=self.enc_rope_base[stage_index],
+                        sparse_conv_backend=sparse_conv_backend,
                     ),
                     name=f"block{block_index}",
                 )
@@ -1394,6 +1442,7 @@ class LitePTEncoder(PointTransformerV3Encoder):
         enc_conv: Sequence[bool] = (True, True, True, False, False),
         enc_attn: Sequence[bool] = (False, False, False, True, True),
         enc_rope_base: Sequence[float | None] | float | None = 100.0,
+        sparse_conv_backend: str = "spconv",
     ) -> None:
         """Initialize the LitePT encoder.
 
@@ -1426,6 +1475,8 @@ class LitePTEncoder(PointTransformerV3Encoder):
             enc_conv: Per-stage convolution flags.
             enc_attn: Per-stage attention flags.
             enc_rope_base: Rotary-embedding frequency base per stage.
+            sparse_conv_backend: Library implementing the submanifold convolutions,
+                see :class:`PointTransformerV3Encoder`.
         """
         super().__init__(
             in_channels=in_channels,
@@ -1452,6 +1503,7 @@ class LitePTEncoder(PointTransformerV3Encoder):
             enc_conv=enc_conv,
             enc_attn=enc_attn,
             enc_rope_base=enc_rope_base,
+            sparse_conv_backend=sparse_conv_backend,
         )
 
 
