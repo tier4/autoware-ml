@@ -61,6 +61,7 @@ from autoware_ml.types.geometry import Box3DCenterCoordinateType
 from autoware_ml.types.sensor import LidarChannel, Modality
 from autoware_ml.types.spatial import CoordinateSystem
 from autoware_ml.utils.dataset import convert_quaternion_to_matrix
+from autoware_ml.utils.point_cloud.t4pack import load_point_cloud_file
 
 
 logger = logging.getLogger(__name__)
@@ -946,9 +947,7 @@ class T4RecordsGenerator:
 
         # Load pointclouds
         lidar_pointcloud_path = lidar_frame_data_model.lidar_pointcloud_path
-        points = np.fromfile(lidar_pointcloud_path, dtype=np.float32).reshape(
-            -1, self.lidar_pointcloud_num_features
-        )
+        points = load_point_cloud_file(lidar_pointcloud_path, self.lidar_pointcloud_num_features)
         lidar_points = torch.tensor(points[:, :3], dtype=torch.float32)  # Only take the x, y, z
         # (num_of_bboxes, point_mask)
         points_in_bboxes = lidar_bboxes_3d.compute_points_in_bboxes(points=lidar_points)

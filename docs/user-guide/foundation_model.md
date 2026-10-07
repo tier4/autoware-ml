@@ -80,6 +80,14 @@ Lists written without `--holdout` put 33 test scenes of det3d-j6gen2 into the tr
 filter of the vehicle, at the density of every other J6 gen2 database; only labelled frames
 are kept (`semantic_masks: true`).
 
+### Compressed point clouds
+
+A host short of storage may replace the loose frames of a scene,
+`data/LIDAR_CONCAT/*.pcd.bin`, by one `data/LIDAR_CONCAT.pack` file (t4pack: every frame
+zstd-compressed over byte-shuffled columns). The loader reads the
+loose file when it exists and the frame from the pack otherwise
+(`autoware_ml/utils/point_cloud/t4pack.py`), so record tables and configs are the same for both.
+
 ## Running
 
 ```bash
