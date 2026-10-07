@@ -29,6 +29,7 @@ nav = [
     { "CLI Reference" = "user-guide/cli.md" },
     { "Configuration" = "user-guide/configuration.md" },
     { "Training" = "user-guide/training.md" },
+    { "Preemptible training" = "user-guide/preemption_resume.md" },
     { "MLflow" = "user-guide/mlflow.md" },
     { "Optuna" = "user-guide/optuna.md" },
     { "Deployment" = "user-guide/deployment.md" },
