@@ -19,6 +19,7 @@ completion helpers used by the ``autoware-ml`` executable.
 """
 
 import logging
+from enum import StrEnum
 from importlib.metadata import version
 from pathlib import Path
 
@@ -36,6 +37,7 @@ from autoware_ml.utils.cli.helpers import (
     complete_session_name_value,
     run_lazy_script,
 )
+
 
 class CompletableGroup(TyperGroup, click.Group):
     """Typer group that click recognizes as a group.
@@ -65,6 +67,15 @@ mlflow_app = typer.Typer(
     help="MLflow utilities",
     no_args_is_help=True,
 )
+
+
+class VisualizationBackendChoice(StrEnum):
+    """Supported CLI visualization backends."""
+
+    RERUN = "rerun"
+    NOOP = "noop"
+
+
 session_app = typer.Typer(
     name="session",
     cls=CompletableGroup,
@@ -76,6 +87,7 @@ TASK_CONFIG_PREFIX = "tasks"
 TRAIN_ENTRYPOINT_MODULE = "autoware_ml.scripts.train"
 DEPLOY_ENTRYPOINT_MODULE = "autoware_ml.scripts.deploy"
 TEST_ENTRYPOINT_MODULE = "autoware_ml.scripts.test"
+VISUALIZE_ENTRYPOINT_MODULE = "autoware_ml.scripts.visualize"
 CLI_RUNTIME_MODULE = "autoware_ml.cli.runtime"
 
 
@@ -455,6 +467,145 @@ def test(
     )
 
 
+@app.command(
+    name="visualize",
+    cls=OptionFirstTyperCommand,
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)
+def visualize(
+    ctx: typer.Context,
+    config_name: Annotated[
+        str,
+        typer.Option(
+            "--config-name",
+            help="Config name or YAML config path",
+            autocompletion=complete_task_config,
+        ),
+    ],
+    weights: Annotated[
+        str | None,
+        typer.Option(
+            "--weights",
+            help="Checkpoint path (optional for transformed-data preview)",
+            autocompletion=complete_checkpoint_path,
+        ),
+    ] = None,
+    mode: Annotated[
+        str,
+        typer.Option("--mode", help="Visualization mode: auto, predictions, or data"),
+    ] = "auto",
+    split: Annotated[
+        str,
+        typer.Option("--split", help="Dataset split to preview"),
+    ] = "test",
+    sample_index: Annotated[
+        int,
+        typer.Option("--sample-index", help="First dataset sample index to preview"),
+    ] = 0,
+    max_samples: Annotated[
+        int,
+        typer.Option("--max-samples", help="Number of consecutive samples to preview"),
+    ] = 1,
+    prediction_frequency_hz: Annotated[
+        float,
+        typer.Option(
+            "--prediction-frequency-hz",
+            help="Intermediate prediction frequency for datasets with source frames",
+        ),
+    ] = 10.0,
+    backend: Annotated[
+        VisualizationBackendChoice,
+        typer.Option("--backend", help="Visualization backend: rerun or noop"),
+    ] = VisualizationBackendChoice.RERUN,
+    device: Annotated[
+        str,
+        typer.Option("--device", help="Preview execution device: cpu, cuda, or auto"),
+    ] = "auto",
+    point_labels: Annotated[
+        bool,
+        typer.Option("--point-labels/--no-point-labels", help="Log per-point label text"),
+    ] = False,
+    point_color_mode: Annotated[
+        str,
+        typer.Option("--point-color-mode", help="Point colors: semantic, intensity, or solid"),
+    ] = "semantic",
+    camera_frustums_visible: Annotated[
+        bool,
+        typer.Option(
+            "--camera-frustums/--no-camera-frustums",
+            help="Show camera frustums and image planes initially in 3D views",
+        ),
+    ] = False,
+    web_port: Annotated[
+        int,
+        typer.Option("--web-port", help="Rerun web viewer HTTP port"),
+    ] = 9090,
+    grpc_port: Annotated[
+        int,
+        typer.Option("--grpc-port", help="Rerun SDK gRPC port"),
+    ] = 9876,
+    wait: Annotated[
+        bool,
+        typer.Option("--wait/--no-wait", help="Keep the Rerun web server alive after logging"),
+    ] = True,
+    recording_id: Annotated[
+        str | None,
+        typer.Option("--recording-id", help="Optional visualization recording ID"),
+    ] = None,
+) -> None:
+    """Preview task predictions through the visualization backend.
+
+    Args:
+        ctx: Typer context containing additional Hydra overrides.
+        config_name: Config name or config file path to visualize.
+        weights: Optional checkpoint path used for prediction preview.
+        mode: Whether to preview transformed data, model predictions, or infer
+            the mode automatically from checkpoint availability.
+        split: Dataset split to preview.
+        sample_index: First dataset sample index to visualize.
+        max_samples: Number of consecutive samples to visualize.
+        prediction_frequency_hz: Frequency used for prediction-only frames between GT keyframes.
+        backend: Visualization backend name.
+        device: Preview execution device.
+        point_labels: Whether to log per-point label text.
+        camera_frustums_visible: Whether camera geometry starts visible in 3D views.
+        web_port: HTTP port for the Rerun web viewer.
+        grpc_port: gRPC port used by the Rerun SDK and web viewer proxy.
+        wait: Whether to keep the web viewer server alive after logging.
+        recording_id: Optional explicit recording ID for the preview session.
+    """
+    hydra_overrides = [
+        f"+visualization.mode={mode}",
+        f"+visualization.split={split}",
+        f"+visualization.sample_index={sample_index}",
+        f"+visualization.max_samples={max_samples}",
+        f"+visualization.prediction_frequency_hz={prediction_frequency_hz}",
+        f"+visualization.backend={backend}",
+        f"+visualization.device={device}",
+        f"+visualization.point_labels={str(point_labels).lower()}",
+        f"+visualization.point_color_mode={point_color_mode}",
+        f"+visualization.camera_frustums_visible={str(camera_frustums_visible).lower()}",
+        f"+visualization.web_port={web_port}",
+        f"+visualization.grpc_port={grpc_port}",
+        f"+visualization.wait={str(wait).lower()}",
+    ]
+    if weights is not None:
+        hydra_overrides.append(f"+weights={weights}")
+    if recording_id is not None:
+        hydra_overrides.append(f"+visualization.recording_id={recording_id}")
+
+    run_lazy_script(
+        CLI_RUNTIME_MODULE,
+        "run_hydra_entrypoint",
+        entrypoint_module=VISUALIZE_ENTRYPOINT_MODULE,
+        config_name=config_name,
+        stage=None,
+        extra_args=ctx.args,
+        hydra_overrides=hydra_overrides,
+        config_prefix=TASK_CONFIG_PREFIX,
+    )
+
+
 @mlflow_app.command(name="ui", cls=OptionFirstTyperCommand)
 def mlflow_ui(
     host: Annotated[str, typer.Option("--host", "-h", help="Host to listen on")] = "0.0.0.0",
@@ -503,7 +654,8 @@ def mlflow_export(
         ),
     ] = None,
     experiment_name: Annotated[
-        str | None, typer.Option("--experiment-name", help="Export only this MLflow experiment")
+        str | None,
+        typer.Option("--experiment-name", help="Export only this MLflow experiment"),
     ] = None,
     export_dir: Annotated[
         str | None,
@@ -553,7 +705,8 @@ def session_start(
         ),
     ] = None,
     attach: Annotated[
-        bool, typer.Option("--attach", help="Open the live viewer immediately after starting")
+        bool,
+        typer.Option("--attach", help="Open the live viewer immediately after starting"),
     ] = False,
     raw: Annotated[
         bool,
