@@ -548,21 +548,32 @@ def build_synced_scene_layouts(
     scene_paths = {path for path in paths if path == "scene" or path.startswith("scene/")}
     if not any(path.endswith(("/segmentation", "/detections")) for path in scene_paths):
         return None
-    if not any(
-        path in paths for path in ("scene/prediction/segmentation", "scene/prediction/detections")
-    ):
-        return None
     task_name = _scene_task_name(scene_paths)
     comparisons = _scene_comparisons(paths, task_name)
+    prediction_available = any(
+        path in paths for path in ("scene/prediction/segmentation", "scene/prediction/detections")
+    )
+    if prediction_available:
+        left_name = f"Prediction · {task_name}"
+        left_points = (
+            "scene/prediction/segmentation"
+            if "scene/prediction/segmentation" in paths
+            else "scene/lidar/solid"
+        )
+        left_detections = "scene/prediction/detections"
+    else:
+        # A data preview has no prediction, so the ground truth anchors the
+        # left side and leaves the selectable comparisons to the other variants.
+        ground_truth = [item for item in comparisons if item[0].key == "gt"]
+        if not ground_truth:
+            return None
+        _, left_points, left_detections = ground_truth[0]
+        left_name = f"GT · {task_name}"
+        comparisons = [item for item in comparisons if item[0].key != "gt"]
     if not comparisons:
         return None
-    prediction_points = (
-        "scene/prediction/segmentation"
-        if "scene/prediction/segmentation" in paths
-        else "scene/lidar/solid"
-    )
     camera_states = ("off", "on") if cameras else ("off",)
-    statistics = _detection_statistics_views(paths, timeline)
+    statistics = _statistics_views(paths, timeline)
 
     def side_layout(view: ViewSpec, identity: str) -> ViewSpec | LayoutGroup:
         view = replace(view, identity=identity)
@@ -576,7 +587,7 @@ def build_synced_scene_layouts(
             kind="vertical",
             children=(
                 view,
-                LayoutGroup(kind="horizontal", children=plots, name="Detection statistics"),
+                LayoutGroup(kind="horizontal", children=plots, name="Statistics"),
             ),
             name=view.name,
             shares=(2.0, 1.0),
@@ -587,9 +598,9 @@ def build_synced_scene_layouts(
             _scene_view(
                 paths,
                 cameras,
-                name=f"Prediction · {task_name}",
-                point_path=prediction_points,
-                detection_path="scene/prediction/detections",
+                name=left_name,
+                point_path=left_points,
+                detection_path=left_detections,
                 camera_frustums_visible=state == "on",
             ),
             SYNCED_LEFT_IDENTITY,

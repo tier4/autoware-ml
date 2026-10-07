@@ -513,6 +513,54 @@ def test_synced_layouts_without_cameras_or_statistics_are_single_views() -> None
     assert layouts.right["gt"]["off"].name == "GT · Segmentation3D"
 
 
+def test_synced_layouts_anchor_ground_truth_left_for_data_previews() -> None:
+    """Without predictions the synced page pairs the ground truth with the other variants."""
+    layouts = build_synced_scene_layouts(
+        {
+            "scene/ground_truth/detections",
+            "scene/lidar/intensity",
+            "scene/lidar/solid",
+            "scene/metrics/detection/num_ground_truth",
+            SCENE_EXTENT_PATH,
+        },
+        [],
+        point_color_mode="semantic",
+        camera_frustums_visible=False,
+        timeline="frame",
+    )
+
+    assert layouts is not None
+    assert [comparison.key for comparison in layouts.comparisons] == ["intensity"]
+    assert layouts.initial_comparison == "intensity"
+    (left,) = _scene_views(layouts.left["off"])
+    assert left.name == "GT · Detection3D"
+    assert "scene/ground_truth/detections" in left.contents
+    assert "scene/lidar/solid" in left.contents
+    plots = [view for view in _views(layouts.left["off"]) if view.kind == "time_series"]
+    assert [plot.name for plot in plots] == ["Detection counts"]
+
+
+def test_synced_layouts_plot_segmentation_statistics() -> None:
+    layouts = build_synced_scene_layouts(
+        {
+            "scene/prediction/segmentation",
+            "scene/ground_truth/segmentation",
+            "scene/lidar/intensity",
+            "scene/metrics/segmentation/mean_confidence",
+            "scene/metrics/segmentation/num_points",
+            SCENE_EXTENT_PATH,
+        },
+        [],
+        point_color_mode="semantic",
+        camera_frustums_visible=False,
+        timeline="frame",
+    )
+
+    assert layouts is not None
+    plots = [view for view in _views(layouts.right["gt"]["off"]) if view.kind == "time_series"]
+    assert [plot.name for plot in plots] == ["Segmentation confidence", "Points per frame"]
+
+
 def test_synced_layouts_need_a_prediction_and_a_comparison() -> None:
     for paths in (
         {"scene/ground_truth/segmentation"},
