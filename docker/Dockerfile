@@ -1,7 +1,15 @@
-FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+# Selects the locked pixi environment the image is built around, and with it the
+# `env-<PIXI_ENV>` stage that provides the sparse convolution backend of the PTv3
+# family. `dev` (the default) and `default` take spconv from the lockfile;
+# `rulebook` has no spconv and compiles `rulebook_torch` from source instead.
+# See docs/getting-started/installation.md.
+ARG PIXI_ENV=dev
+
+FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04 AS base
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
+ARG PIXI_ENV
 ARG PIXI_VERSION=0.80.0
 ARG USERNAME=autoware-ml
 ARG USER_UID=1000
@@ -79,14 +87,72 @@ RUN mkdir -p /workspace /ccache /etc/pixi /opt/pixi/bin /opt/pixi/envs \
 # repository's pinned CUDA stack during image build.
 COPY LICENSE README.md pyproject.toml setup.py pixi.lock /workspace/
 WORKDIR /workspace
-RUN CONDA_OVERRIDE_CUDA=12.8 /opt/pixi/bin/pixi install --locked --environment dev && \
-    PIXI_HOME=/opt/pixi PIXI_BIN_DIR=/opt/pixi/bin /opt/pixi/bin/pixi shell-hook --manifest-path /workspace --environment dev --change-ps1 false > /etc/profile.d/autoware-ml.sh
+RUN CONDA_OVERRIDE_CUDA=12.8 /opt/pixi/bin/pixi install --locked --environment "${PIXI_ENV}" && \
+    PIXI_HOME=/opt/pixi PIXI_BIN_DIR=/opt/pixi/bin /opt/pixi/bin/pixi shell-hook --manifest-path /workspace --environment "${PIXI_ENV}" --change-ps1 false > /etc/profile.d/autoware-ml.sh
+
+# Sparse convolution backend. The `FROM env-${PIXI_ENV}` below picks the stage
+# matching the pixi environment; spconv ships as a wheel in the lockfile, so the
+# `default` and `dev` environments need nothing on top of the base stage.
+FROM base AS env-default
+
+FROM base AS env-dev
+
+# The `rulebook` environment has no spconv. Its submanifold convolutions come
+# from `rulebook_torch`, a CMake build of the `spconv-replacement` repository
+# against the pinned torch and the CUDA toolkit of this base image. That
+# repository is private, so its sources arrive through the named build context
+# `rulebook`, which `docker/build.sh --rulebook <path>` wires to a local
+# checkout. CUTLASS is public and is fetched here at the pinned commit.
+FROM base AS env-rulebook
+
+ARG PIXI_ENV
+ARG CUTLASS_REF=6c68991985ca8b09594ac6fd43abbfd5830c4140
+ARG RULEBOOK_ARCHS="90;120"
+ARG RULEBOOK_DTYPES="f16;bf16"
+
+COPY --from=rulebook . /opt/rulebook/src
+
+# One layer: the CUTLASS checkout and the build tree are worth several hundred
+# megabytes and are of no use once the extension is installed. The module is
+# built in place at python/rulebook_torch/_C*.so, and `pip install` ships only
+# the Python sources, so the compiled module is copied in afterwards.
+RUN mkdir -p /etc/autoware-ml \
+  && { git -C /opt/rulebook/src rev-parse HEAD || echo unknown; } > /etc/autoware-ml/rulebook.commit \
+  && rm -rf /opt/rulebook/src/.git /opt/rulebook/src/third_party/cutlass \
+  && mkdir -p /opt/rulebook/src/third_party/cutlass \
+  && git -C /opt/rulebook/src/third_party/cutlass init -q . \
+  && git -C /opt/rulebook/src/third_party/cutlass remote add origin https://github.com/NVIDIA/cutlass.git \
+  && git -C /opt/rulebook/src/third_party/cutlass fetch -q --depth 1 --filter=blob:none origin "${CUTLASS_REF}" \
+  && git -C /opt/rulebook/src/third_party/cutlass checkout -q --detach FETCH_HEAD \
+  && CONDA_OVERRIDE_CUDA=12.8 /opt/pixi/bin/pixi run --manifest-path /workspace --environment "${PIXI_ENV}" bash -c '\
+       set -euo pipefail; \
+       cmake -S /opt/rulebook/src -B /opt/rulebook/build \
+         -DCMAKE_BUILD_TYPE=Release \
+         -DRULEBOOK_BUILD_TORCH=ON \
+         -DRULEBOOK_BUILD_TESTS=OFF \
+         -DRULEBOOK_ARCHS="${RULEBOOK_ARCHS}" \
+         -DRULEBOOK_DTYPES="${RULEBOOK_DTYPES}" \
+         -DCMAKE_CUDA_COMPILER="${CUDA_HOME}/bin/nvcc" \
+         -DCUDAToolkit_ROOT="${CUDA_HOME}" \
+         -DCUDA_TOOLKIT_ROOT_DIR="${CUDA_HOME}" \
+         -DPython3_EXECUTABLE="$(command -v python)"; \
+       cmake --build /opt/rulebook/build --target rulebook_torch -j "$(nproc)"; \
+       python -m pip install --no-cache-dir --no-build-isolation --no-deps /opt/rulebook/src/python' \
+  && SITE_PACKAGES="$(CONDA_OVERRIDE_CUDA=12.8 /opt/pixi/bin/pixi run --manifest-path /workspace --environment "${PIXI_ENV}" python -c "import sysconfig; print(sysconfig.get_paths()['purelib'])" | tail -n 1)" \
+  && cp /opt/rulebook/src/python/rulebook_torch/_C*.so "${SITE_PACKAGES}/rulebook_torch/" \
+  && chmod -R a+rX "${SITE_PACKAGES}/rulebook_torch" \
+  && rm -rf /opt/rulebook
+
+FROM env-${PIXI_ENV} AS final
+
+ARG PIXI_ENV
+ARG USERNAME=autoware-ml
 
 # Install the project itself in editable mode inside the environment
 COPY . /workspace/
-RUN /opt/pixi/bin/pixi run --environment dev install-project \
+RUN /opt/pixi/bin/pixi run --environment "${PIXI_ENV}" install-project \
   && mkdir -p /usr/share/bash-completion/completions \
-  && /opt/pixi/bin/pixi run --environment dev autoware-ml --show-completion bash \
+  && /opt/pixi/bin/pixi run --environment "${PIXI_ENV}" autoware-ml --show-completion bash \
       > /usr/share/bash-completion/completions/autoware-ml \
   && chown -R "${USERNAME}:${USERNAME}" /workspace /ccache
 
