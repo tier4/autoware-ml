@@ -345,6 +345,17 @@ def _log_preview_sample(
     raise ValueError(f"Unsupported visualization task: {task}")
 
 
+def _is_calibration_sample(batch: dict[str, Any]) -> bool:
+    """Return whether the batch carries a calibration-status sample.
+
+    The fused image and the status label are the model-facing keys, so a sample
+    is recognized by them even when ``calibration_data`` was dropped during
+    collation. Routing on them lets the adapter report the missing entry
+    instead of the sample matching no task at all.
+    """
+    return bool({"calibration_data", "gt_calibration_status", "fused_img"} & batch.keys())
+
+
 def _infer_preview_task(batch: dict[str, Any], predictions: Any) -> PreviewTask:
     """Infer which task adapter should handle the preview sample.
 
@@ -358,7 +369,7 @@ def _infer_preview_task(batch: dict[str, Any], predictions: Any) -> PreviewTask:
         return "multi"
 
     matches: list[PreviewTask] = []
-    if "calibration_data" in batch:
+    if _is_calibration_sample(batch):
         matches.append("calibration_status")
     if _has_segmentation_sample(batch) or _is_segmentation_predictions(predictions):
         matches.append("segmentation3d")
@@ -485,6 +496,15 @@ def _log_calibration_preview(
     mode: PreviewMode,
 ) -> None:
     """Render one calibration-status preview sample."""
+    if "calibration_data" not in batch:
+        raise ValueError(
+            "A calibration-status preview needs the 'calibration_data' entry, but this "
+            "batch does not carry it. collation_map is a whitelist and the shipped "
+            "calibration configs list only the model inputs, so the entry the transforms "
+            "produce is dropped. Carry it, the camera image, and the point cloud through, "
+            "for example with '+datamodule.collation_map.calibration_data=list "
+            "+datamodule.collation_map.img=list +datamodule.collation_map.points=list'."
+        )
     calibration_data = _unwrap_single_item(batch["calibration_data"])
     pred_status: int | None = None
     root_path = "dataset/calibration_status" if mode == "data" else "calibration_status"
