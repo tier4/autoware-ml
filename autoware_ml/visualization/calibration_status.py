@@ -35,6 +35,7 @@ from autoware_ml.visualization.events import (
     PointCloud3DEvent,
     Points2DEvent,
     ScalarEvent,
+    TextDocumentEvent,
     TextEvent,
     Transform3DEvent,
     VisualizationEvent,
@@ -134,6 +135,33 @@ def _build_status_summary_text(
     if not summary_parts:
         return None
     return " | ".join(summary_parts)
+
+
+def _build_status_verdict_document(
+    gt_status: int | None,
+    pred_status: int | None,
+    pred_score: float | None,
+) -> str | None:
+    """Build the markdown verdict shown in its own pane under the images.
+
+    The log-stream summary is easy to miss, so the verdict repeats the
+    prediction and the ground truth as headings and states whether they agree.
+    """
+    details: list[str] = []
+    if pred_status is not None:
+        pred_label = _STATUS_TEXT.get(pred_status, str(pred_status)).upper()
+        score = "" if pred_score is None else f" ({pred_score:.2f})"
+        details.append(f"Prediction: {pred_label}{score}")
+    if gt_status is not None:
+        details.append(f"Ground truth: {_STATUS_TEXT.get(gt_status, str(gt_status)).upper()}")
+    if not details:
+        return None
+    # The agreement is the one word that matters, so it is the headline; the
+    # two statuses share the line under it so both fit a short pane.
+    if pred_status is not None and gt_status is not None:
+        headline = "MATCH" if pred_status == gt_status else "MISMATCH"
+        return f"# {headline}\n\n## " + " \u00b7 ".join(details)
+    return "# " + details[0]
 
 
 def build_calibration_status_events(
@@ -245,5 +273,8 @@ def build_calibration_status_events(
     summary_text = _build_status_summary_text(gt_status, pred_status, pred_score)
     if summary_text is not None:
         events.append(TextEvent(f"{root_path}/status/summary", summary_text))
+    verdict_document = _build_status_verdict_document(gt_status, pred_status, pred_score)
+    if verdict_document is not None:
+        events.append(TextDocumentEvent(f"{root_path}/status/verdict", verdict_document))
 
     return events
