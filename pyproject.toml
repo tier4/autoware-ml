@@ -67,6 +67,9 @@ autoware-ml = "autoware_ml.cli.cli:main"
 where = ["."]
 include = ["autoware_ml*"]
 
+[tool.setuptools.package-data]
+"autoware_ml.visualization" = ["synced_viewer.html"]
+
 [tool.pixi.workspace]
 channels = ["conda-forge"]
 platforms = [{ platform = "linux-64", cuda = "12.8", glibc = "2.31" }]
