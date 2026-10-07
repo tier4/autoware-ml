@@ -33,6 +33,7 @@ from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import (
     MultiTaskGTSample,
     LiDARPointCloudSample,
 )
+from autoware_ml.types.dataset import PCDFileFormat
 from autoware_ml.types.geometry import PointFeatureName, PointFieldIndex
 from autoware_ml.utils.point_cloud.t4pack import read_t4pack_frame, t4pack_path
 
@@ -47,6 +48,7 @@ class LoadPointsFromFile(MultiTaskBaseTransform):
         load_dim: int = 5,
         use_dim: Sequence[int] | int = (0, 1, 2, 3),
         bev_remove_radius: float = 0.0,
+        pcd_file_format: PCDFileFormat | str = PCDFileFormat.AUTO,
     ) -> None:
         """Initialize the point-cloud loader.
 
@@ -55,11 +57,15 @@ class LoadPointsFromFile(MultiTaskBaseTransform):
             use_dim: Selected feature dimensions preserved in the loaded tensor.
             bev_remove_radius: Radius (x and y) within which points will be removed (e.g., to remove ego vehicle
                 points). Set to 0.0 to disable point removal.
+            pcd_file_format: File format to read the point clouds from: ``bin`` for the
+                ``.pcd.bin`` files, ``t4pack`` for the pack of the channel, or ``auto`` for the
+                pack when the record has a pack location and the ``.pcd.bin`` file otherwise.
         """
         super().__init__(probability=None)
         self.load_dim = load_dim
         self.use_dim = use_dim
         self.bev_remove_radius = bev_remove_radius
+        self.pcd_file_format = PCDFileFormat(pcd_file_format)
 
     def remove_close(self, points_data: BasePoints) -> BasePoints:
         """Remove point too close within a certain radius from origin.
@@ -81,16 +87,27 @@ class LoadPointsFromFile(MultiTaskBaseTransform):
     def read_points(
         self, lidar_point_cloud_sample: LiDARPointCloudSample
     ) -> Float32[np.ndarray, "num_points load_dim"]:
-        """Read all features of one point cloud from its ``.pcd.bin`` file.
+        """Read all features of one point cloud in the configured file format.
 
         Args:
-            lidar_point_cloud_sample: Metadata of the point cloud.
+            lidar_point_cloud_sample: Metadata of the point cloud, with its pack location if any.
 
         Returns:
             Float32[np.ndarray, "num_points load_dim"]: The points with every stored feature.
         """
-        return np.fromfile(lidar_point_cloud_sample.point_cloud_path, dtype=np.float32).reshape(
-            -1, self.load_dim
+        t4pack_frame = lidar_point_cloud_sample.t4pack_frame
+        if self.pcd_file_format == PCDFileFormat.T4PACK and t4pack_frame is None:
+            raise ValueError(
+                f"The record of {lidar_point_cloud_sample.point_cloud_path} has no t4pack "
+                "location. Generate the records with the pack in place, or set "
+                "pcd_file_format to bin or auto."
+            )
+        if self.pcd_file_format == PCDFileFormat.BIN or t4pack_frame is None:
+            return np.fromfile(lidar_point_cloud_sample.point_cloud_path, dtype=np.float32).reshape(
+                -1, self.load_dim
+            )
+        return read_t4pack_frame(
+            t4pack_path(lidar_point_cloud_sample.point_cloud_path), t4pack_frame, self.load_dim
         )
 
     def load_points_from_samples(
@@ -172,6 +189,7 @@ class LoadMultiSweepPointsFromFile(LoadPointsFromFile):
         load_dim: int = 5,
         use_dim: Sequence[int] | int = (0, 1, 2, 3),
         bev_remove_radius: float = 1.0,
+        pcd_file_format: PCDFileFormat | str = PCDFileFormat.AUTO,
     ) -> None:
         """Initialize the multi-sweep point-cloud loader.
 
@@ -187,8 +205,10 @@ class LoadMultiSweepPointsFromFile(LoadPointsFromFile):
             use_dim: Selected feature dimensions preserved in the loaded tensor.
             bev_remove_radius: Radius (x and y) within which points will be removed (e.g., to remove ego vehicle
                 points). Set to 0.0 to disable point removal.
+            pcd_file_format: File format to read the point clouds from, see
+                ``LoadPointsFromFile``.
         """
-        super().__init__(load_dim=load_dim, use_dim=use_dim)
+        super().__init__(load_dim=load_dim, use_dim=use_dim, pcd_file_format=pcd_file_format)
         self.sweeps_num = sweeps_num
         self.test_mode = test_mode
         self.bev_remove_radius = bev_remove_radius
@@ -263,40 +283,3 @@ class LoadMultiSweepPointsFromFile(LoadPointsFromFile):
             point_cloud_data=multi_sweep_points,
             segmentation3d_gt_sample=multi_task_gt_sample.segmentation3d_gt_sample,
         )
-
-
-class _T4PackReading:
-    """Read the point clouds from the t4pack file of their channel instead of ``.pcd.bin``."""
-
-    load_dim: int
-
-    def read_points(
-        self, lidar_point_cloud_sample: LiDARPointCloudSample
-    ) -> Float32[np.ndarray, "num_points load_dim"]:
-        """Read all features of one point cloud from the pack of its channel.
-
-        Args:
-            lidar_point_cloud_sample: Metadata of the point cloud, with its location in the pack.
-
-        Returns:
-            Float32[np.ndarray, "num_points load_dim"]: The points with every stored feature.
-        """
-        if lidar_point_cloud_sample.t4pack_frame is None:
-            raise ValueError(
-                f"The record of {lidar_point_cloud_sample.point_cloud_path} has no t4pack "
-                "location. Generate the records with the pack in place, or load the "
-                "point clouds with LoadPointsFromFile."
-            )
-        return read_t4pack_frame(
-            t4pack_path(lidar_point_cloud_sample.point_cloud_path),
-            lidar_point_cloud_sample.t4pack_frame,
-            self.load_dim,
-        )
-
-
-class LoadPointsFromT4Pack(_T4PackReading, LoadPointsFromFile):
-    """Load point clouds from the t4pack file of their channel, ``data/<channel>.pack``."""
-
-
-class LoadMultiSweepPointsFromT4Pack(_T4PackReading, LoadMultiSweepPointsFromFile):
-    """Load multi-sweep point clouds from the t4pack file of their channel."""
