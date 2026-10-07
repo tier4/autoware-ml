@@ -17,6 +17,7 @@ from autoware_ml.models.detection3d.encoders.sparse import SubMConv3d as NativeS
 from autoware_ml.models.detection3d.encoders.voxel import HardSimpleVoxelSinCosEncoder
 from autoware_ml.models.detection3d.heads.transfusion import (
     ExportableMultiheadAttention,
+    LearnedPositionalEncoding,
     TransFusionHead,
 )
 from autoware_ml.models.detection3d.necks.second_fpn import SECONDFPN
@@ -614,3 +615,30 @@ def test_transfusion_coder_rejects_mismatched_threshold_length() -> None:
             torch.rand(1, 2, 3),
             filter_predictions=True,
         )
+
+
+def test_transfusion_positional_encoding_kind_selects_the_checkpoint_layout() -> None:
+    """The legacy linear encoder must reproduce the parameter layout of older checkpoints."""
+    conv_head = _build_head()
+    linear_head = _build_head(positional_encoding="linear")
+
+    conv_state = conv_head.state_dict()
+    linear_state = linear_head.state_dict()
+    prefix = "decoder.0.query_pos_encoding.proj."
+    assert conv_state[prefix + "0.weight"].shape == (16, 2, 1)
+    assert prefix + "1.running_mean" in conv_state
+    assert conv_state[prefix + "3.weight"].shape == (16, 16, 1)
+    assert linear_state[prefix + "0.weight"].shape == (16, 2)
+    assert linear_state[prefix + "2.weight"].shape == (16, 16)
+    assert not any(key.startswith(prefix + "1.") for key in linear_state)
+    assert not any(key.startswith(prefix + "3.") for key in linear_state)
+
+    positions = torch.rand(1, 5, 2)
+    for head in (conv_head, linear_head):
+        head.eval()
+        assert head.decoder[0].query_pos_encoding(positions).shape == (1, 5, 16)
+
+
+def test_learned_positional_encoding_rejects_unknown_kinds() -> None:
+    with pytest.raises(ValueError, match="Unknown positional encoding kind"):
+        LearnedPositionalEncoding(2, 16, kind="mlp")
