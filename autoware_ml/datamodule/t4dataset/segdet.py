@@ -23,8 +23,11 @@ treat box-less frames as detection-unsupervised).
 
 from __future__ import annotations
 
+from copy import deepcopy
 import pickle
 from collections.abc import Mapping, Sequence
+from pathlib import Path
+import re
 from typing import Any
 
 import numpy as np
@@ -38,9 +41,9 @@ from autoware_ml.datamodule.common.detection3d import (
     resolve_data_path,
     resolve_sweep_paths,
 )
-from autoware_ml.datamodule.t4dataset.frame_meta import scene_dir_fragment
 from autoware_ml.datamodule.common.serialization import SerializedSampleList
 from autoware_ml.datamodule.common.sources import AnnotationSource, coerce_annotation_sources
+from autoware_ml.datamodule.t4dataset.frame_meta import scene_dir_fragment
 from autoware_ml.datamodule.t4dataset.detection3d import (
     FrameSamplingConfig,
     coerce_frame_sampling,
@@ -48,6 +51,45 @@ from autoware_ml.datamodule.t4dataset.detection3d import (
 )
 from autoware_ml.transforms.base import TransformsCompose
 from autoware_ml.transforms.boxes3d.annotations import normalize_filter_attributes
+
+
+def _interpolate_numbered_path(
+    current_path: str,
+    next_path: str,
+    fraction: float,
+) -> Path | None:
+    """Interpolate between matching paths whose filenames contain frame numbers."""
+    current = Path(current_path)
+    following = Path(next_path)
+    if current.parent != following.parent:
+        return None
+
+    current_matches = list(re.finditer(r"\d+", current.name))
+    next_matches = list(re.finditer(r"\d+", following.name))
+    if not current_matches or not next_matches:
+        return None
+    current_match = current_matches[-1]
+    next_match = next_matches[-1]
+    if (
+        current.name[: current_match.start()] != following.name[: next_match.start()]
+        or current.name[current_match.end() :] != following.name[next_match.end() :]
+    ):
+        return None
+
+    current_number = int(current_match.group())
+    next_number = int(next_match.group())
+    target_number = round(current_number + (next_number - current_number) * fraction)
+    lower, upper = sorted((current_number, next_number))
+    if not lower < target_number < upper:
+        return None
+
+    width = max(len(current_match.group()), len(next_match.group()))
+    filename = (
+        current.name[: current_match.start()]
+        + f"{target_number:0{width}d}"
+        + current.name[current_match.end() :]
+    )
+    return current.parent / filename
 
 
 class T4SegmentationDetection3DDataset(Dataset):
@@ -121,6 +163,8 @@ class T4SegmentationDetection3DDataset(Dataset):
             sample = normalize_detection_sample(raw_sample)
             if not source.det3d:
                 sample["instances"] = []
+            sample["has_detection_ground_truth"] = source.det3d
+            sample["has_segmentation_ground_truth"] = source.seg3d
             sample["label_to_category"] = label_to_category
             sample["pts_semantic_mask_path"] = raw_sample["pts_semantic_mask_path"]
             sample["pts_semantic_mask_categories"] = (
@@ -143,12 +187,14 @@ class T4SegmentationDetection3DDataset(Dataset):
             Metadata dictionary with detection and segmentation fields.
         """
         sample = self.data_infos[index]
-        return {
+        info = {
             "instances": sample.get("instances", []),
             "class_names": self.class_names,
             "name_mapping": self.name_mapping,
             "label_to_category": sample["label_to_category"],
             "sample_token": sample["token"],
+            "has_detection_ground_truth": sample["has_detection_ground_truth"],
+            "has_segmentation_ground_truth": sample["has_segmentation_ground_truth"],
             "lidar_path": resolve_data_path(self.data_root, sample["lidar_path"]),
             "num_pts_feats": int(sample["lidar_points"].get("num_pts_feats", 5)),
             "sweeps": resolve_sweep_paths(sample, self.data_root),
@@ -160,6 +206,159 @@ class T4SegmentationDetection3DDataset(Dataset):
             "ego2global": np.asarray(sample["ego2global"], dtype=np.float64),
             "scene_token": scene_dir_fragment(sample["lidar_path"], self.data_root),
         }
+        images = sample.get("images")
+        if images is not None:
+            if not isinstance(images, Mapping):
+                raise TypeError(f"Record {sample['token']!r} images must be a mapping")
+            resolved_images = {}
+            for camera_name, camera_info in images.items():
+                if not isinstance(camera_info, Mapping):
+                    raise TypeError(
+                        f"Record {sample['token']!r} camera {camera_name!r} must be a mapping"
+                    )
+                image_path = camera_info.get("img_path")
+                if not image_path:
+                    raise ValueError(
+                        f"Record {sample['token']!r} camera {camera_name!r} is missing img_path"
+                    )
+                resolved_images[camera_name] = {
+                    **camera_info,
+                    "img_path": resolve_data_path(self.data_root, image_path),
+                }
+            info["images"] = resolved_images
+        return info
+
+    def get_intermediate_prediction_infos(
+        self,
+        index: int,
+        prediction_frequency_hz: float,
+    ) -> list[dict[str, Any]]:
+        """Build unlabeled current-sweep frames between adjacent 1 Hz GT records.
+
+        T4 segdet annotation pickles contain ground-truth keyframes, while the
+        source folders retain the intermediate LiDAR and camera files. This
+        method reconstructs those prediction-only records by interpolating the
+        numbered filenames and timestamps. Historical ``sweeps`` are always
+        emptied so each prediction consumes only its current 10 Hz frame.
+        """
+        if prediction_frequency_hz <= 0:
+            raise ValueError("prediction_frequency_hz must be greater than zero")
+        if index + 1 >= len(self):
+            return []
+
+        current = self.get_data_info(index)
+        following = self.get_data_info(index + 1)
+        current_scene = current.get("scene_token")
+        following_scene = following.get("scene_token")
+        if current_scene is None or following_scene is None:
+            raise ValueError(
+                "Intermediate prediction reconstruction requires scene_token on both keyframes"
+            )
+        if current_scene != following_scene:
+            return []
+
+        if current.get("timestamp") is None or following.get("timestamp") is None:
+            raise ValueError(
+                "Intermediate prediction reconstruction requires timestamps on both keyframes"
+            )
+        current_timestamp = float(current["timestamp"])
+        next_timestamp = float(following["timestamp"])
+        duration = next_timestamp - current_timestamp
+        if duration <= 0:
+            raise ValueError(
+                "Following keyframe timestamp must be later than the current timestamp"
+            )
+        interval_count = int(round(duration * prediction_frequency_hz))
+        if interval_count <= 1:
+            return []
+
+        current_images = current.get("images")
+        next_images = following.get("images")
+        if current_images is None and next_images is None:
+            current_images = {}
+            next_images = {}
+        elif not isinstance(current_images, Mapping) or not isinstance(next_images, Mapping):
+            raise ValueError(
+                "Camera metadata must be present on both keyframes when reconstructing images"
+            )
+        if set(current_images) != set(next_images):
+            raise ValueError(
+                "Camera sets differ between adjacent keyframes: "
+                f"{sorted(current_images)} != {sorted(next_images)}"
+            )
+
+        intermediate_infos: list[dict[str, Any]] = []
+        used_lidar_paths: set[Path] = set()
+        for offset in range(1, interval_count):
+            fraction = offset / interval_count
+            lidar_path = _interpolate_numbered_path(
+                current["lidar_path"], following["lidar_path"], fraction
+            )
+            if lidar_path is None:
+                raise ValueError(
+                    "Could not interpolate an intermediate LiDAR path between "
+                    f"{current['lidar_path']!r} and {following['lidar_path']!r}"
+                )
+            if lidar_path in used_lidar_paths:
+                raise ValueError(
+                    f"Intermediate frequency maps multiple timestamps to {str(lidar_path)!r}"
+                )
+            if not lidar_path.is_file():
+                raise FileNotFoundError(
+                    f"Missing intermediate LiDAR frame at offset {offset}: {lidar_path}"
+                )
+            used_lidar_paths.add(lidar_path)
+
+            info = deepcopy(current)
+            info["sample_token"] = (
+                f"{current['sample_token']}:prediction:{lidar_path.name.split('.', 1)[0]}"
+            )
+            info["timestamp"] = current_timestamp + duration * fraction
+            info["lidar_path"] = str(lidar_path)
+            info["sweeps"] = []
+            info["instances"] = []
+            info["label_to_category"] = {}
+            info["has_detection_ground_truth"] = False
+            info["has_segmentation_ground_truth"] = False
+            info["pts_semantic_mask_categories"] = {}
+            info.pop("pts_semantic_mask_path", None)
+
+            interpolated_images: dict[str, Any] = {}
+            for camera_name, current_camera in current_images.items():
+                next_camera = next_images.get(camera_name)
+                if not isinstance(next_camera, Mapping):
+                    raise TypeError(
+                        f"Following camera metadata for {camera_name!r} must be a mapping"
+                    )
+                image_path = _interpolate_numbered_path(
+                    current_camera["img_path"], next_camera["img_path"], fraction
+                )
+                if image_path is None:
+                    raise ValueError(
+                        f"Could not interpolate camera {camera_name!r} between "
+                        f"{current_camera['img_path']!r} and {next_camera['img_path']!r}"
+                    )
+                if not image_path.is_file():
+                    raise FileNotFoundError(
+                        f"Missing intermediate image for {camera_name!r} at offset "
+                        f"{offset}: {image_path}"
+                    )
+                camera_info = deepcopy(current_camera)
+                camera_info["img_path"] = str(image_path)
+                if (
+                    current_camera.get("timestamp") is not None
+                    and next_camera.get("timestamp") is not None
+                ):
+                    camera_info["timestamp"] = (
+                        float(current_camera["timestamp"])
+                        + (float(next_camera["timestamp"]) - float(current_camera["timestamp"]))
+                        * fraction
+                    )
+                interpolated_images[camera_name] = camera_info
+            info["images"] = interpolated_images
+            intermediate_infos.append(info)
+
+        return intermediate_infos
 
 
 class T4SegmentationDetection3DDataModule(DataModule):

@@ -98,7 +98,9 @@ class T4CalibrationStatusDataset(Dataset):
                 f"lidar_to_camera_transformation must be 4x4, got shape {lidar_to_camera_transformation.shape}"
             )
 
-        distortion_coefficients = cam_info.get("distortion_coeffs", None)
+        distortion_coefficients = cam_info.get(
+            "distortion_coeffs", cam_info.get("distortion_coefficients", None)
+        )
         if distortion_coefficients is None:
             raise ValueError("distortion_coeffs is missing")
         distortion_coefficients = np.asarray(distortion_coefficients, dtype=np.float32)
