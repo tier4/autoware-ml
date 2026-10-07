@@ -86,3 +86,15 @@ A batch-scheduler wrapper (slurm or similar) needs three hooks, all generic:
   the wrapper requeues the job. A signal handler cannot do this safely in a DDP run because
   it would need a collective. A preemption needs none of it: the relaunch resumes from the
   newest periodic file.
+
+## Memory of the 6 cm foundation model
+
+The PT-v3m3 model at 6 cm over the 122 m range holds up to about a million voxels per
+frame (three frames: the current one, one past and one future sweep). With the
+hardware-aligned widths, bf16 and activation checkpointing
+(`model.encoder.activation_checkpointing: true`, set by `tasks/foundation/ptv3/common.yaml`) one frame peaks at 13 to 16 GB on a 96 GB GPU, and a stage 2 run on eight H100
+used about 42 GB per GPU. The foundation stage configs use one frame per GPU with four
+accumulation steps on eight GPUs for a global batch of 32. Checkpointing recomputes the
+attention and MLP of every block in the backward pass, roughly a third more compute per
+step; it is kept on so that a heavy frame cannot run out of memory and stall a resumed run
+on the same frame.
