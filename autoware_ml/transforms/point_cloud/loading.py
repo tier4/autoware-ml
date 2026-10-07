@@ -36,7 +36,6 @@ from autoware_ml.transforms.base import BaseTransform
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.dataclasses.geometry.point_clouds import LiDARPointCloudSample
 from autoware_ml.types.geometry import PointFeatureName, PointFieldIndex
-from autoware_ml.utils.point_cloud.t4pack import load_point_cloud_file
 
 
 class SweepSelection(StrEnum):
@@ -169,9 +168,9 @@ class LoadPointsFromFile(BaseTransform):
             )
 
         lidar_point_cloud_sample = lidar_point_cloud_samples[index]
-        points_np = load_point_cloud_file(
-            lidar_point_cloud_sample.point_cloud_path, lidar_point_cloud_sample.num_features
-        )
+        points_np = np.fromfile(
+            lidar_point_cloud_sample.point_cloud_path, dtype=np.float32
+        ).reshape(-1, lidar_point_cloud_sample.num_features)
         source_view = lidar_point_cloud_sample.source_view
         if source_view is not None:
             end = source_view.point_index_begin + source_view.num_points

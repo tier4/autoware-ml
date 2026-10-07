@@ -102,8 +102,7 @@ class LabelVocabulary:
     def __str__(self) -> str:
         """Canonical string form, the input of the database hash."""
         entries = ", ".join(
-            f"{raw_name}: {fine_name}"
-            for raw_name, fine_name in sorted(self._class_renaming.items())
+            f"{raw_name}: {fine_name}" for raw_name, fine_name in sorted(self._class_renaming.items())
         )
         return f"{self.__class__.__name__}({entries})"
 
@@ -126,7 +125,6 @@ class LabelTaxonomy:
         class_mapping: Mapping[str, str | None],
         ignore_index: int,
         class_groups: Mapping[str, Sequence[str]],
-        class_sets: Mapping[str, Sequence[str]] | None = None,
     ) -> None:
         """
         Initialize the taxonomy.
@@ -134,17 +132,12 @@ class LabelTaxonomy:
         Args:
           vocabulary: Raw label names mapped onto fine label names.
           class_names: Classes of the level, in index order.
-          class_mapping: Fine label name to class name or label set name, null for a fine
-            label the level drops. Every fine name of the vocabulary needs an entry. A class
-            no fine label coarsens to is a placeholder the level trains without data.
+          class_mapping: Fine label name to class name, null for a fine label the level drops.
+            Every fine name of the vocabulary needs an entry. A class no fine label coarsens
+            to is a placeholder the level trains without data.
           ignore_index: Label index of a label outside the classes of the level.
           class_groups: Behaviour groups the metrics report besides the classes, group name to
             its classes. Every class belongs to exactly one group.
-          class_sets: Label sets, set name to at least two classes of the level. A fine label
-            mapped to a set names a point that belongs to one of the set's classes without
-            saying which: a corpus annotated at a coarser specification than the level. Such
-            points resolve to the index ``num_classes + set position``, supervise the summed
-            probability of the set in training and are excluded from the metrics.
         """
 
         if not len(class_names):
@@ -169,25 +162,11 @@ class LabelTaxonomy:
                 f"{sorted(coarsened_names - fine_names)}."
             )
         class_set = set(class_names)
-        sets = {name: tuple(members) for name, members in (class_sets or {}).items()}
-        for set_name, members in sets.items():
-            if set_name in class_set:
-                raise ValueError(f"Label set {set_name!r} collides with a class of the level.")
-            if len(members) < 2 or len(set(members)) != len(members):
-                raise ValueError(
-                    f"Label set {set_name!r} must list at least two distinct classes, got "
-                    f"{list(members)}."
-                )
-            unknown = [member for member in members if member not in class_set]
-            if unknown:
-                raise ValueError(
-                    f"Label set {set_name!r} lists {unknown}, which are not classes of the level."
-                )
         for fine_name, class_name in class_mapping.items():
-            if class_name is not None and class_name not in class_set and class_name not in sets:
+            if class_name is not None and class_name not in class_set:
                 raise ValueError(
                     f"Fine label {fine_name!r} coarsens to {class_name!r}, which is not a class "
-                    f"of the level {list(class_names)} nor one of its label sets."
+                    f"of the level {list(class_names)}."
                 )
         grouped = [name for members in class_groups.values() for name in members]
         if sorted(grouped) != sorted(class_names):
@@ -202,10 +181,6 @@ class LabelTaxonomy:
         self._ignore_index = ignore_index
         self._class_groups = {name: tuple(members) for name, members in class_groups.items()}
         self._class_indices = {name: index for index, name in enumerate(self._class_names)}
-        self._class_sets = sets
-        self._set_indices = {
-            name: len(self._class_names) + position for position, name in enumerate(sets)
-        }
 
     @staticmethod
     def _validate_class_table(
@@ -257,11 +232,6 @@ class LabelTaxonomy:
         """Behaviour groups the metrics report, group name to its classes."""
         return MappingProxyType(self._class_groups)
 
-    @property
-    def class_sets(self) -> Mapping[str, tuple[str, ...]]:
-        """Label sets of the level, set name to its classes, in set index order."""
-        return MappingProxyType(self._class_sets)
-
     def fine_name(self, raw_name: str) -> str | None:
         """
         Fine label name of a raw label name.
@@ -306,8 +276,6 @@ class LabelTaxonomy:
         class_name = self.class_name(fine_name)
         if class_name is None:
             return self._ignore_index
-        if class_name in self._set_indices:
-            return self._set_indices[class_name]
         return self._class_indices[class_name]
 
     def resolve_index(self, raw_name: str) -> int:
@@ -329,17 +297,10 @@ class LabelTaxonomy:
             f"{fine_name}: {class_name}"
             for fine_name, class_name in sorted(self._class_mapping.items())
         )
-        # Named only when the level has sets, so the hash of every other level is unchanged.
-        class_sets = ""
-        if self._class_sets:
-            entries = ", ".join(
-                f"{name}: {list(members)}" for name, members in self._class_sets.items()
-            )
-            class_sets = f"class_sets=({entries}), "
         return (
             f"{self.__class__.__name__}(class_names={list(self._class_names)}, "
             f"ignore_index={self._ignore_index}, class_mapping=({class_mapping}), "
-            f"{class_sets}vocabulary={self._vocabulary})"
+            f"vocabulary={self._vocabulary})"
         )
 
     def __eq__(self, other: object) -> bool:

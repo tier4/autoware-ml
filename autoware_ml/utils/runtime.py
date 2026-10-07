@@ -128,9 +128,7 @@ def instantiate_callbacks(
         target = callback_cfg.get("_target_", "")
         if not logger_enabled and target == "lightning.pytorch.callbacks.LearningRateMonitor":
             continue
-        # Every checkpoint-writing callback (ModelCheckpoint, PeriodicCheckpoint, ...)
-        # declares a dirpath; all of them write into the run's artifact tree.
-        if "dirpath" in callback_cfg and checkpoint_dir is not None:
+        if target == "lightning.pytorch.callbacks.ModelCheckpoint" and checkpoint_dir is not None:
             with open_dict(callback_cfg):
                 callback_cfg.dirpath = str(checkpoint_dir)
         callbacks.append(hydra.utils.instantiate(callback_cfg))

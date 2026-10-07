@@ -7,8 +7,6 @@ defaults:
 class_names: ${database.taxonomy.segmentation3d.class_names}
 num_classes: ${class_count:${database.taxonomy.segmentation3d.class_names}}
 ignore_index: ${database.taxonomy.segmentation3d.ignore_index}
-# Label sets of the level (see the taxonomy), null when it has none.
-class_sets: ${oc.select:database.taxonomy.segmentation3d.class_sets,null}
 metric_ranges:
   - { _target_: autoware_ml.metrics.base.MetricRange, name: 0-50m, min_distance: 0.0, max_distance: 50.0 }
   - { _target_: autoware_ml.metrics.base.MetricRange, name: 50-90m, min_distance: 50.0, max_distance: 90.0 }

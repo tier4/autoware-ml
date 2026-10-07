@@ -26,7 +26,7 @@ import lightning as L
 import torch
 from omegaconf import DictConfig
 
-from autoware_ml.utils.checkpoints import apply_matching_weights, write_run_pointer
+from autoware_ml.utils.checkpoints import apply_matching_weights
 from autoware_ml.utils.mlflow_helpers import (
     AUTOWARE_ML_RUN_ID_ENV,
     build_run_metadata,
@@ -136,11 +136,6 @@ def main(cfg: DictConfig):
             run_id=run_context.run_id,
         )
         trainer_logger = hydra.utils.instantiate(cfg.logger)
-
-    if run_context is not None:
-        # A relaunch of a preempted job finds its own run through this pointer, see
-        # `autoware-ml train --resume-latest`.
-        write_run_pointer(run_context.checkpoints_dir)
 
     logger.info("Instantiating trainer...")
     trainer: L.Trainer = instantiate_trainer(

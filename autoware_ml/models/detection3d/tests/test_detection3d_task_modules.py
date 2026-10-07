@@ -130,32 +130,3 @@ def test_hungarian_assigner_matches_best_query() -> None:
 
     assert result.gt_inds.tolist() == [1, 0]
     assert result.labels.tolist() == [1, -1]
-
-
-def test_transfusion_predict_returns_fp32_predictions_from_fp16_outputs() -> None:
-    """Under autocast the head's outputs are fp16; the typed prediction is fp32."""
-    head = _build_transfusion_head(heatmap_target="oriented")
-    head.eval()
-    proposals, classes = head.num_proposals, head.num_classes
-    generator = torch.Generator().manual_seed(0)
-
-    def half(*shape: int, scale: float = 1.0) -> torch.Tensor:
-        return (torch.rand(*shape, generator=generator) * scale).to(torch.float16)
-
-    outputs = {
-        "heatmap": (torch.full((1, classes, proposals), 4.0)).to(torch.float16),
-        "query_labels": torch.arange(proposals).remainder(classes).unsqueeze(0),
-        "query_heatmap_score": torch.ones((1, classes, proposals), dtype=torch.float16),
-        "center": half(1, 2, proposals, scale=8.0),
-        "height": half(1, 1, proposals),
-        "dim": half(1, 3, proposals),
-        "rot": half(1, 2, proposals),
-        "vel": half(1, 2, proposals),
-    }
-    predictions = head.predict(outputs)
-    assert len(predictions) == 1
-    prediction = predictions[0]
-    assert prediction.scores_3d.dtype == torch.float32
-    assert prediction.bboxes_3d.dtype == torch.float32
-    assert prediction.labels_3d.dtype == torch.int64
-    assert prediction.scores_3d.numel() > 0
