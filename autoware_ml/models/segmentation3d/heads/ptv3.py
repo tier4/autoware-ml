@@ -84,6 +84,7 @@ class PTv3SegDecoderHead(nn.Module):
         dec_conv: Sequence[bool] | bool = True,
         dec_attn: Sequence[bool] | bool = True,
         dec_rope_base: Sequence[float | None] | float | None = None,
+        sparse_conv_backend: str = "spconv",
     ) -> None:
         """Initialize the PTv3 segmentation decoder head.
 
@@ -116,10 +117,14 @@ class PTv3SegDecoderHead(nn.Module):
                 blocks, or one flag for every stage.
             dec_rope_base: Rotary-embedding frequency base, either one value for
                 every stage or one per stage. ``None`` disables RoPE.
+            sparse_conv_backend: Library implementing the decoder's submanifold
+                convolutions (``"auto"``, ``"spconv"`` or ``"rulebook"``), see
+                :func:`autoware_ml.ops.sparse_backend.submanifold_conv3d`.
         """
         super().__init__()
         self.order = list(order)
         self.num_classes = int(num_classes)
+        self.sparse_conv_backend = sparse_conv_backend
         self.ignore_index = int(ignore_index)
         self.dec_depths = list(dec_depths)
         stage_count = len(enc_channels)
@@ -172,6 +177,7 @@ class PTv3SegDecoderHead(nn.Module):
                         enable_conv=self.dec_conv[stage_index],
                         enable_attn=self.dec_attn[stage_index],
                         rope_base=self.dec_rope_base[stage_index],
+                        sparse_conv_backend=sparse_conv_backend,
                     ),
                     name=f"block{block_index}",
                 )
