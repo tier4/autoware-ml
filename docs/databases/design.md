@@ -186,6 +186,17 @@ semantic mask, for a corpus labelled at a lower rate than it was recorded) and `
 the label sets enter the database hash only when they differ from their defaults, so the
 record tables of every other database keep their hash.
 
+### Packed LiDAR frames
+
+A scene's `data/LIDAR_CONCAT/*.pcd.bin` frames may be replaced by one `data/LIDAR_CONCAT.pack`
+file (the t4pack container: per frame zstd over byte-shuffled columns). The record table keeps
+the loose paths; the point loader reads the loose file when it exists and otherwise looks the
+frame up in the pack by name: T4 frames are a gapless five digit sequence and the packing tool
+names frame `i` `{i:05d}.pcd.bin`, so the index names are the file names, and surplus sweeps
+without a table entry do not shift the others. Frames named differently fall back to their
+rank among the sorted LiDAR names of the scene's `sample_data.json`, with the frame count
+checked. See `autoware_ml/utils/point_cloud/t4pack.py`.
+
 ### Schema
 
 `process_scenario_records()` writes the records of every scenario to a Parquet file. `BaseDatabase.get_polars_schema()` delegates to `DatasetTableSchema` so records can be serialized to Parquet via `DatasetRecord.to_dictionary()`.
