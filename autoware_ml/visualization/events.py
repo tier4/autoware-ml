@@ -144,6 +144,20 @@ class TextEvent:
 
 
 @dataclass(frozen=True)
+class TextDocumentEvent:
+    """Log a standalone document for a dedicated text view.
+
+    Unlike :class:`TextEvent`, which lands in the viewer's log stream, a
+    document is meant to be read on screen next to the spatial views, so it
+    can carry markdown for headings and emphasis.
+    """
+
+    path: str
+    text: str
+    markdown: bool = True
+
+
+@dataclass(frozen=True)
 class ClearEvent:
     """Clear current and historical components from an entity path."""
 
@@ -166,7 +180,7 @@ class ViewOverride:
 class ViewSpec:
     """Describe one backend-neutral spatial, plot, or text view."""
 
-    kind: Literal["spatial3d", "spatial2d", "time_series", "text_log"]
+    kind: Literal["spatial3d", "spatial2d", "time_series", "text_log", "text_document"]
     name: str
     origin: str
     contents: tuple[str, ...]

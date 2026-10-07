@@ -35,12 +35,13 @@ from autoware_ml.visualization.events import (
     Boxes3DEvent,
     ClearEvent,
     ImageEvent,
-    LineStrips2DEvent,
     LayoutGroup,
+    LineStrips2DEvent,
     PinholeEvent,
     PointCloud3DEvent,
     Points2DEvent,
     ScalarEvent,
+    TextDocumentEvent,
     TextEvent,
     Transform3DEvent,
     ViewSpec,
@@ -158,6 +159,10 @@ def _build_fake_rerun(calls: dict[str, Any]) -> Any:
         @classmethod
         def TextLogView(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
             return cls._part("TextLogView", *args, **kwargs)
+
+        @classmethod
+        def TextDocumentView(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            return cls._part("TextDocumentView", *args, **kwargs)
 
         @classmethod
         def Horizontal(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -284,6 +289,13 @@ def _build_fake_rerun(calls: dict[str, Any]) -> Any:
         @staticmethod
         def TextLog(text: str, **kwargs: Any) -> tuple[str, str, dict[str, Any]]:
             return ("TextLog", text, kwargs)
+
+        class MediaType:
+            MARKDOWN = "text/markdown"
+
+        @staticmethod
+        def TextDocument(text: str, **kwargs: Any) -> tuple[str, str, dict[str, Any]]:
+            return ("TextDocument", text, kwargs)
 
         @staticmethod
         def Clear(**kwargs: Any) -> tuple[str, dict[str, Any]]:
@@ -678,6 +690,47 @@ def test_backend_converts_yaw_to_a_z_axis_quaternion(
     np.testing.assert_allclose(
         quaternion, [[0.0, 0.0, np.sin(np.pi / 4), np.cos(np.pi / 4)]], atol=1e-6
     )
+
+
+def test_backend_logs_a_markdown_document(
+    backend: RerunVisualizationBackend, rerun_calls: dict[str, Any]
+) -> None:
+    backend.log_event(
+        TextDocumentEvent(path="calibration_status/status/verdict", text="# Prediction: CALIBRATED")
+    )
+
+    path, payload, _ = rerun_calls["logs"][0]
+    assert path == "calibration_status/status/verdict"
+    assert payload == ("TextDocument", "# Prediction: CALIBRATED", {"media_type": "text/markdown"})
+
+
+def test_backend_logs_a_plain_document_without_a_media_type(
+    backend: RerunVisualizationBackend, rerun_calls: dict[str, Any]
+) -> None:
+    backend.log_event(TextDocumentEvent(path="notes", text="plain", markdown=False))
+
+    _, payload, _ = rerun_calls["logs"][0]
+    assert payload == ("TextDocument", "plain", {})
+
+
+def test_backend_builds_a_text_document_view(
+    backend: RerunVisualizationBackend, rerun_calls: dict[str, Any]
+) -> None:
+    backend.log_event(
+        BlueprintEvent(
+            layout=ViewSpec(
+                kind="text_document",
+                name="Calibration verdict",
+                origin="calibration_status/status/verdict",
+                contents=("calibration_status/status/verdict",),
+            ),
+            auto_views=False,
+        )
+    )
+
+    assert len(rerun_calls["blueprints"]) == 1
+    assert "TextDocumentView" in repr(rerun_calls["blueprints"][0][0])
+    assert "Calibration verdict" in repr(rerun_calls["blueprints"][0][0])
 
 
 def test_backend_rejects_unknown_events(backend: RerunVisualizationBackend) -> None:

@@ -28,6 +28,7 @@ from autoware_ml.visualization.events import (
     BlueprintEvent,
     ImageEvent,
     LayoutGroup,
+    TextDocumentEvent,
     ViewOverride,
     ViewSpec,
     VisualizationEvent,
@@ -89,9 +90,34 @@ def build_calibration_blueprint(
             contents=(fused_path, f"{fused_path}/depth", f"{fused_path}/intensity"),
         )
     )
+    images = LayoutGroup(kind="horizontal", children=tuple(children))
+    verdict_paths = [
+        event.path
+        for event in events
+        if isinstance(event, TextDocumentEvent) and event.path.endswith("/status/verdict")
+    ]
+    # The viewer's side and time panels are collapsed, as for the 3D layouts,
+    # so the images and the verdict get the window; the time panel still
+    # exposes the frame cursor when collapsed.
+    panels = {
+        "blueprint_panel_expanded": False,
+        "selection_panel_expanded": False,
+        "time_panel_expanded": False,
+    }
+    if not verdict_paths:
+        return BlueprintEvent(layout=images, auto_views=False, **panels)
+    # The verdict pane sits under the images so the status is read without
+    # opening the log stream. Two headings need about a third of the height.
+    verdict = ViewSpec(
+        kind="text_document",
+        name="Calibration verdict",
+        origin=verdict_paths[0],
+        contents=(verdict_paths[0],),
+    )
     return BlueprintEvent(
-        layout=LayoutGroup(kind="horizontal", children=tuple(children)),
+        layout=LayoutGroup(kind="vertical", children=(images, verdict), shares=(0.7, 0.3)),
         auto_views=False,
+        **panels,
     )
 
 
