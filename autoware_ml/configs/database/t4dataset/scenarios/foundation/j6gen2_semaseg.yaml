@@ -1,0 +1,22 @@
+# The J6 gen2 semantic segmentation ground truth (old specification) as the foundation level
+# reads it: the old specification labelled poles, signs, lights and barriers 'manmade' and
+# folded the curbs into 'sidewalk' and 'other_flat_surface', so those names resolve to the
+# label sets of the foundation level (see its vocabulary) instead of one of its classes. One
+# following frame is recorded for the past and future sweep windows of the foundation model.
+_target_: autoware_ml.databases.t4dataset.t4scenarios.T4Scenarios
+_convert_: all
+
+scenario_root_path: ${t4dataset_scenario_root_path}/segmentation3d/
+
+dataset_params:
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
+    _convert_: all
+    dataset_name: db_j6gen2_semaseg_v1
+    max_past_sweeps: 2
+    max_future_sweeps: 1
+    sample_steps: 1
+    semantic_masks: true
+    category_aliases:
+      manmade: legacy_manmade
+      sidewalk: legacy_sidewalk
+      other_flat_surface: legacy_other_flat_surface
