@@ -203,30 +203,69 @@ ports when running in Docker; the page connects to `--grpc-port` directly, so
 keep that port reachable from the browser. See
 [Visualization Design](../framework/visualization.md#synced-comparison-page).
 
-**Example:**
+**Starting a preview for each task:**
+
+Every task uses the same command. Only `--config-name` and the checkpoint path
+change. `--weights` is optional: without it the command previews transformed
+data instead of predictions.
+
+Detection 3D:
 
 ```bash
 autoware-ml visualize \
-    --config-name detection3d/centerpoint/voxel020_second_secfpn_51m_nuscenes \
-    --weights mlruns/detection3d/centerpoint/voxel020_second_secfpn_51m_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt \
+    --config-name detection3d/centerpoint/voxel024_second_secfpn_120m_t4dataset_j6gen2 \
+    --weights mlruns/detection3d/centerpoint/voxel024_second_secfpn_120m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt \
+    --mode predictions \
     --split test \
     --sample-index 0 \
+    --max-samples 3 \
     --backend rerun
 ```
 
-Compare prediction and ground truth from one shared viewpoint:
+Segmentation 3D:
+
+```bash
+autoware-ml visualize \
+    --config-name segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2 \
+    --weights mlruns/segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt \
+    --mode predictions \
+    --split test \
+    --sample-index 0 \
+    --max-samples 3 \
+    --point-color-mode semantic \
+    --backend rerun
+```
+
+Combined detection and segmentation, with the synced comparison page and the
+frames between GT keyframes:
 
 ```bash
 autoware-ml visualize \
     --config-name multi/ptv3/voxel012_122m_t4dataset_j6gen2 \
     --weights mlruns/multi/ptv3/voxel012_122m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/last.ckpt \
+    --mode predictions \
     --split test \
-    --max-samples 3 \
+    --sample-index 0 \
+    --max-samples 2 \
+    --prediction-frequency-hz 10 \
+    --point-color-mode semantic \
     --sync-views \
     --sync-port 9091
 ```
 
-Preview transformed data only, without weights:
+Calibration status:
+
+```bash
+autoware-ml visualize \
+    --config-name calibration_status/calibration_status_classifier/resnet18_t4dataset_j6gen2 \
+    --weights mlruns/calibration_status/calibration_status_classifier/resnet18_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt \
+    --mode predictions \
+    --split test \
+    --sample-index 0 \
+    --backend rerun
+```
+
+Preview transformed data only, without weights. This works for every task:
 
 ```bash
 autoware-ml visualize \
@@ -237,6 +276,49 @@ autoware-ml visualize \
     --sample-index 0 \
     --backend rerun
 ```
+
+**How many frames a run records:**
+
+`--max-samples` counts annotated keyframes, not rendered frames. For most tasks
+the two are the same. The T4 multi-task datamodule
+(`T4SegmentationDetection3DDataModule`, used by `multi/*/*_t4dataset_j6gen2*`)
+also reconstructs the unlabeled source frames between adjacent keyframes, so
+keyframe `i` is logged at timeline step `i * round(hz)` and the reconstructed
+frames fill the steps after it. Three keyframes at `--prediction-frequency-hz
+10` therefore record 30 frames, not 3. GT is logged only on the keyframes, so
+the comparison pane is empty on the frames in between; GT is never interpolated
+or held.
+
+Every other task, and the NuScenes multi-task config, has no intermediate
+frames: `--prediction-frequency-hz` is accepted but has no effect there, and
+one keyframe is one frame.
+
+The browser-side Rerun viewer has its own heap limit of roughly 2.3 GiB, which
+is independent of `server_memory_limit`. A recording that exceeds it reports
+`Reached memory limit of 2.3 GiB, dropping oldest data`, discards the start of
+the stream, and then never becomes active, so the synced page waits forever on
+`connecting the left viewer`. With six cameras and dense point clouds the
+practical ceiling is about 20 frames. Prefer `--max-samples 2
+--prediction-frequency-hz 10` over three keyframes, or lower the frequency to
+keep more keyframes inside the same budget, as in `--max-samples 3
+--prediction-frequency-hz 5`. There is no option to omit camera images from a
+recording, so the frame count is the only lever.
+
+**Opening the viewer:**
+
+The regular Rerun page is logged on startup as
+`http://localhost:<web-port>/?url=rerun%2Bhttp%3A%2F%2Flocalhost%3A<grpc-port>%2Fproxy`.
+With `--sync-views`, the synced comparison page is served at
+`http://localhost:<sync-port>/`. Append `?renderer=webgl` to either URL when
+the default renderer misbehaves in the browser.
+
+Both pages replay the whole recording when they connect, so a recording of
+twenty camera-equipped frames can take a few minutes before the synced page
+reports `synced` and its toolbar becomes usable. That wait is normal and is not
+a failure.
+
+Use the toolbar arrows, the frame slider, or the Rerun time panel to step
+between frames one at a time.
 
 Current visualization coverage:
 

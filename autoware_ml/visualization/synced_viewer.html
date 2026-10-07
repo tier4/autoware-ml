@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Autoware-ML synced comparison</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #0d1011; color: #cad8de; font-family: Inter, "Segoe UI", sans-serif; font-size: 13px; }
+    #toolbar { box-sizing: border-box; height: 42px; display: flex; align-items: center; gap: 10px; padding: 0 12px; background: #141414; border-bottom: 1px solid #2a2f33; }
+    .group { display: flex; align-items: center; gap: 6px; }
+    .label { color: #7d8c92; }
+    .spacer { flex: 1; }
+    button { background: #1f2428; color: #e6edf3; border: 1px solid #3a4046; border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 12px; }
+    button:hover { background: #2a3037; }
+    button.active { background: #2d5bff; border-color: #2d5bff; }
+    button[hidden] { display: none; }
+    input[type="range"] { width: 180px; }
+    #status { color: #7d8c92; max-width: 32em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #status.error { color: #ff7b72; }
+    #views { display: flex; height: calc(100% - 42px); }
+    .pane { flex: 1; min-width: 0; position: relative; }
+    .pane + .pane { border-left: 2px solid #2a2f33; }
+    iframe { display: block; width: 100%; height: 100%; border: 0; background: #0d1011; }
+  </style>
+</head>
+<body>
+  <div id="toolbar">
+    <span class="group"><span class="label">Comparison</span><span id="comparisons" class="group"></span></span>
+    <button id="cameras" hidden>Camera projections: OFF</button>
+    <span class="spacer"></span>
+    <span class="group">
+      <button id="prev" title="Previous frame">&#9664;</button>
+      <input id="frame" type="range" min="0" max="0" value="0" title="Frame">
+      <span id="frame-label">frame</span>
+      <button id="next" title="Next frame">&#9654;</button>
+      <button id="play">Play</button>
+    </span>
+    <button id="reload" title="Load the layouts again">Reload layout</button>
+    <span id="status">loading…</span>
+  </div>
+  <div id="views">
+    <div class="pane"><iframe id="left" title="Prediction"></iframe></div>
+    <div class="pane"><iframe id="right" title="Comparison"></iframe></div>
+  </div>
+  <script>
+    "use strict";
+    (async () => {
+      const SIDES = ["left", "right"];
+      const statusElement = document.getElementById("status");
+      const setStatus = (text, isError = false) => {
+        statusElement.textContent = text;
+        statusElement.classList.toggle("error", isError);
+      };
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const byId = (id) => document.getElementById(id);
+
+      async function fetchConfig() {
+        const response = await fetch("config.json", { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error(`config.json returned ${response.status}`);
+        }
+        return response.json();
+      }
+
+      async function waitFor(probe, label, timeoutMs, failure) {
+        const deadline = performance.now() + timeoutMs;
+        while (performance.now() < deadline) {
+          if (failure) {
+            const reason = failure();
+            if (reason) {
+              throw new Error(reason);
+            }
+          }
+          let value;
+          try {
+            value = probe();
+          } catch (error) {
+            value = undefined;
+          }
+          if (value) {
+            return value;
+          }
+          await sleep(100);
+        }
+        throw new Error(`timed out waiting for ${label}`);
+      }
+
+      let config = await fetchConfig();
+      const streamUrl = `rerun+http://${window.location.hostname}:${config.grpc_port}/proxy`;
+      const viewerQuery = new URLSearchParams({ url: streamUrl, hide_welcome_screen: "", persist: "false" });
+      // The viewer's own graphics switches, such as ?renderer=webgl, are passed through.
+      const pageQuery = new URLSearchParams(window.location.search);
+      for (const key of ["renderer", "video_decoder"]) {
+        if (pageQuery.has(key)) {
+          viewerQuery.set(key, pageQuery.get(key));
+        }
+      }
+      const viewerUrl = `viewer/?${viewerQuery.toString()}`;
+      const frames = Object.fromEntries(SIDES.map((side) => [side, byId(side)]));
+      for (const side of SIDES) {
+        frames[side].src = viewerUrl;
+      }
+
+      // ---- viewer handles -------------------------------------------------
+      const handles = {};
+      const crashed = (side) =>
+        handles[side] && handles[side].has_panicked()
+          ? `the ${side} viewer crashed: ${handles[side].panic_message()}`
+          : null;
+      for (const side of SIDES) {
+        setStatus(`loading the ${side} viewer…`);
+        handles[side] = await waitFor(
+          () => frames[side].contentWindow && frames[side].contentWindow.rerunHandle,
+          `the ${side} viewer`,
+          120000,
+        );
+      }
+      const stores = {};
+      for (const side of SIDES) {
+        setStatus(`connecting the ${side} viewer…`);
+        stores[side] = await waitFor(
+          () => handles[side].get_active_recording_id(),
+          `the ${side} recording`,
+          600000,
+          () => crashed(side),
+        );
+      }
+
+      function normalizeRange(range) {
+        if (range == null) {
+          return null;
+        }
+        if (Array.isArray(range)) {
+          return { min: Number(range[0]), max: Number(range[1]) };
+        }
+        if (typeof range === "object" && "min" in range && "max" in range) {
+          return { min: Number(range.min), max: Number(range.max) };
+        }
+        return null;
+      }
+      const timelineRange = (side) => {
+        try {
+          return normalizeRange(handles[side].get_timeline_time_range(stores[side], config.timeline));
+        } catch (error) {
+          return null;
+        }
+      };
+      const currentTime = (side) => {
+        try {
+          const value = handles[side].get_time_for_timeline(stores[side], config.timeline);
+          return value === undefined || value === null ? null : Number(value);
+        } catch (error) {
+          return null;
+        }
+      };
+
+      // A viewer that joins late replays the whole stream, including the
+      // layout the backend streams for the plain viewer page. Wait until the
+      // timeline stops growing before loading the one-view layouts on top.
+      setStatus("waiting for the recording…");
+      {
+        const started = performance.now();
+        let previous = null;
+        let stableSince = performance.now();
+        while (performance.now() - started < 60000) {
+          const current = JSON.stringify(timelineRange("left"));
+          if (current !== previous) {
+            previous = current;
+            stableSince = performance.now();
+          } else if (performance.now() - stableSince > 1500) {
+            break;
+          }
+          await sleep(250);
+        }
+      }
+
+      for (const side of SIDES) {
+        const handle = handles[side];
+        for (const panel of ["top", "blueprint", "selection", "time"]) {
+          try {
+            handle.override_panel_state(panel, "hidden");
+          } catch (error) {
+            console.warn(`could not hide the ${panel} panel of the ${side} viewer`, error);
+          }
+        }
+        try {
+          handle.toggle_panel_overrides(true);
+        } catch (error) {
+          console.warn(`could not enable the panel overrides of the ${side} viewer`, error);
+        }
+      }
+
+      // ---- layouts ---------------------------------------------------------
+      const state = {
+        comparison: config.initial_comparison,
+        cameraState: config.initial_camera_state,
+        loads: 0,
+        version: config.version,
+      };
+      const blueprintFile = (side) =>
+        side === "left" ? config.left[state.cameraState] : (config.right[state.comparison] || {})[state.cameraState];
+      function applyLayout(side) {
+        const file = blueprintFile(side);
+        if (!file) {
+          return;
+        }
+        state.loads += 1;
+        handles[side].add_receiver(
+          `${window.location.origin}/blueprints/${file}?v=${config.version}&n=${state.loads}`,
+          false,
+        );
+      }
+      const applyLayouts = () => SIDES.forEach(applyLayout);
+
+      const comparisonsElement = byId("comparisons");
+      function renderComparisons() {
+        comparisonsElement.replaceChildren();
+        for (const comparison of config.comparisons) {
+          const button = document.createElement("button");
+          button.textContent = comparison.label;
+          button.classList.toggle("active", comparison.key === state.comparison);
+          button.onclick = () => {
+            state.comparison = comparison.key;
+            renderComparisons();
+            applyLayout("right");
+          };
+          comparisonsElement.appendChild(button);
+        }
+      }
+      const camerasButton = byId("cameras");
+      function renderCameras() {
+        camerasButton.hidden = !config.camera_states.includes("on");
+        camerasButton.textContent = `Camera projections: ${state.cameraState.toUpperCase()}`;
+        camerasButton.classList.toggle("active", state.cameraState === "on");
+      }
+      camerasButton.onclick = () => {
+        state.cameraState = state.cameraState === "on" ? "off" : "on";
+        renderCameras();
+        applyLayouts();
+      };
+      byId("reload").onclick = applyLayouts;
+      renderComparisons();
+      renderCameras();
+      applyLayouts();
+
+      // The backend republishes the layouts when new entity kinds appear.
+      setInterval(async () => {
+        try {
+          const latest = await fetchConfig();
+          if (latest.version !== state.version) {
+            config = latest;
+            state.version = latest.version;
+            if (!config.right[state.comparison]) {
+              state.comparison = config.initial_comparison;
+            }
+            renderComparisons();
+            renderCameras();
+            applyLayouts();
+          }
+        } catch (error) {
+          console.warn("could not refresh config.json", error);
+        }
+      }, 2000);
+
+      // ---- input mirroring ------------------------------------------------
+      // The viewer handles mouse events; pointer events are mirrored as well so a
+      // viewer build that switches to them keeps working.
+      const MOUSE_KEYS = [
+        "button", "buttons", "clientX", "clientY", "screenX", "screenY",
+        "ctrlKey", "shiftKey", "altKey", "metaKey", "movementX", "movementY",
+      ];
+      const POINTER_KEYS = [
+        ...MOUSE_KEYS, "pointerId", "pointerType", "isPrimary", "width", "height", "pressure",
+        "tangentialPressure", "tiltX", "tiltY", "twist",
+      ];
+      const WHEEL_KEYS = [
+        "deltaX", "deltaY", "deltaZ", "deltaMode", "button", "buttons", "clientX", "clientY",
+        "screenX", "screenY", "ctrlKey", "shiftKey", "altKey", "metaKey",
+      ];
+      const KEY_KEYS = [
+        "key", "code", "location", "repeat", "isComposing", "ctrlKey", "shiftKey", "altKey", "metaKey",
+        "keyCode", "which",
+      ];
+      const MIRRORED = {
+        mousedown: MOUSE_KEYS, mousemove: MOUSE_KEYS, mouseup: MOUSE_KEYS,
+        pointerdown: POINTER_KEYS, pointermove: POINTER_KEYS, pointerup: POINTER_KEYS,
+        pointercancel: POINTER_KEYS, wheel: WHEEL_KEYS, keydown: KEY_KEYS, keyup: KEY_KEYS,
+      };
+      const mirrorStats = { forwarded: 0 };
+      function mirror(source, target) {
+        const forward = (event) => {
+          if (event.__mirrored) {
+            return;
+          }
+          const canvas = target.contentDocument && target.contentDocument.querySelector("canvas");
+          if (!canvas) {
+            return;
+          }
+          const init = { bubbles: true, cancelable: true, composed: true, view: target.contentWindow };
+          for (const key of MIRRORED[event.type]) {
+            init[key] = event[key];
+          }
+          const Constructor = target.contentWindow[event.constructor.name] || target.contentWindow.Event;
+          let clone;
+          try {
+            clone = new Constructor(event.type, init);
+          } catch (error) {
+            console.warn(`could not mirror ${event.type}`, error);
+            return;
+          }
+          clone.__mirrored = true;
+          mirrorStats.forwarded += 1;
+          canvas.dispatchEvent(clone);
+        };
+        for (const type of Object.keys(MIRRORED)) {
+          source.contentDocument.addEventListener(type, forward, { capture: true, passive: true });
+        }
+      }
+      mirror(frames.left, frames.right);
+      mirror(frames.right, frames.left);
+
+      // ---- time controls --------------------------------------------------
+      const slider = byId("frame");
+      const frameLabel = byId("frame-label");
+      const playButton = byId("play");
+      let shownTime = null;
+      // A viewer applies set_time_for_timeline asynchronously, and it keeps
+      // advancing by itself while the recording is still streaming. Both make
+      // a reading taken right after a write disagree with the frame the page
+      // just asked for, so the poller below must not mistake either for a
+      // manual scrub inside a viewer and undo the step.
+      const ADOPT_GRACE_MS = 1500;
+      let graceUntil = 0;
+      let candidateTime = null;
+      function showTime(time) {
+        shownTime = time;
+        slider.value = time;
+        frameLabel.textContent = `${config.timeline} #${time}`;
+      }
+      function setTime(time) {
+        for (const side of SIDES) {
+          try {
+            handles[side].set_time_for_timeline(stores[side], config.timeline, time);
+          } catch (error) {
+            console.warn(`could not set the time of the ${side} viewer`, error);
+          }
+        }
+        showTime(time);
+        graceUntil = performance.now() + ADOPT_GRACE_MS;
+        candidateTime = null;
+      }
+      function setPlaying(playing) {
+        for (const side of SIDES) {
+          try {
+            handles[side].set_playing(stores[side], playing);
+          } catch (error) {
+            console.warn(`could not change the playback of the ${side} viewer`, error);
+          }
+        }
+        playButton.textContent = playing ? "Pause" : "Play";
+      }
+      // Stepping by hand wins over playback: a viewer that is still following
+      // the incoming recording would otherwise pull the timeline forward again
+      // on the next poll.
+      function stepTo(time) {
+        setPlaying(false);
+        setTime(time);
+      }
+      setInterval(() => {
+        const range = timelineRange("left") || timelineRange("right");
+        if (range) {
+          slider.min = range.min;
+          slider.max = range.max;
+        }
+        const times = SIDES.map(currentTime).filter((time) => time !== null);
+        const settled = times.length > 0 && times.every((time) => time === shownTime);
+        if (settled) {
+          graceUntil = 0;
+          candidateTime = null;
+        } else if (performance.now() >= graceUntil) {
+          // Follow a viewer only once both sides report the same new frame on
+          // two consecutive polls, so that a half-applied write or a single
+          // stale reading never moves the timeline on its own.
+          const agreed =
+            times.length === SIDES.length && times.every((time) => time === times[0])
+              ? times[0]
+              : null;
+          if (agreed !== null && agreed !== shownTime && agreed === candidateTime) {
+            setTime(agreed);
+          } else {
+            candidateTime = agreed;
+          }
+        }
+        try {
+          playButton.textContent = handles.left.get_playing(stores.left) ? "Pause" : "Play";
+        } catch (error) {
+          // The viewer may not have a time control yet.
+        }
+      }, 250);
+      slider.oninput = () => stepTo(Number(slider.value));
+      byId("prev").onclick = () => stepTo(Math.max(Number(slider.min), Number(slider.value) - 1));
+      byId("next").onclick = () => stepTo(Math.min(Number(slider.max), Number(slider.value) + 1));
+      playButton.onclick = () => setPlaying(playButton.textContent === "Play");
+
+      window.autowareSyncedViewer = { handles, stores, frames, state, mirrorStats, applyLayouts };
+      setStatus("synced");
+    })().catch((error) => {
+      console.error(error);
+      document.getElementById("status").textContent = `error: ${error.message}`;
+      document.getElementById("status").classList.add("error");
+    });
+  </script>
+</body>
+</html>
