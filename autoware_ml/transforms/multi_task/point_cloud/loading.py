@@ -24,6 +24,7 @@ from collections.abc import Sequence
 
 import numpy as np
 import torch
+from jaxtyping import Float32
 
 from autoware_ml.geometry.points.base_points import BasePoints
 from autoware_ml.geometry.points.lidar_points import LiDARPoints
@@ -33,6 +34,7 @@ from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import (
     LiDARPointCloudSample,
 )
 from autoware_ml.types.geometry import PointFeatureName, PointFieldIndex
+from autoware_ml.utils.point_cloud.t4pack import read_t4pack_frame, t4pack_path
 
 
 class LoadPointsFromFile(MultiTaskBaseTransform):
@@ -76,6 +78,21 @@ class LoadPointsFromFile(MultiTaskBaseTransform):
         points_data.remove_points(not_close)
         return points_data
 
+    def read_points(
+        self, lidar_point_cloud_sample: LiDARPointCloudSample
+    ) -> Float32[np.ndarray, "num_points load_dim"]:
+        """Read all features of one point cloud from its ``.pcd.bin`` file.
+
+        Args:
+            lidar_point_cloud_sample: Metadata of the point cloud.
+
+        Returns:
+            Float32[np.ndarray, "num_points load_dim"]: The points with every stored feature.
+        """
+        return np.fromfile(lidar_point_cloud_sample.point_cloud_path, dtype=np.float32).reshape(
+            -1, self.load_dim
+        )
+
     def load_points_from_samples(
         self, index: int, lidar_point_cloud_samples: Sequence[LiDARPointCloudSample]
     ) -> BasePoints:
@@ -94,10 +111,7 @@ class LoadPointsFromFile(MultiTaskBaseTransform):
                 f"Index {index} is out of bounds for lidar_point_cloud_samples with length {len(lidar_point_cloud_samples)}."
             )
 
-        current_lidar_point_path = lidar_point_cloud_samples[index].point_cloud_path
-        points_np = np.fromfile(current_lidar_point_path, dtype=np.float32).reshape(
-            -1, self.load_dim
-        )
+        points_np = self.read_points(lidar_point_cloud_samples[index])
 
         if isinstance(self.use_dim, int):
             use_dims = list(range(self.use_dim))
@@ -249,3 +263,40 @@ class LoadMultiSweepPointsFromFile(LoadPointsFromFile):
             point_cloud_data=multi_sweep_points,
             segmentation3d_gt_sample=multi_task_gt_sample.segmentation3d_gt_sample,
         )
+
+
+class _T4PackReading:
+    """Read the point clouds from the t4pack file of their channel instead of ``.pcd.bin``."""
+
+    load_dim: int
+
+    def read_points(
+        self, lidar_point_cloud_sample: LiDARPointCloudSample
+    ) -> Float32[np.ndarray, "num_points load_dim"]:
+        """Read all features of one point cloud from the pack of its channel.
+
+        Args:
+            lidar_point_cloud_sample: Metadata of the point cloud, with its location in the pack.
+
+        Returns:
+            Float32[np.ndarray, "num_points load_dim"]: The points with every stored feature.
+        """
+        if lidar_point_cloud_sample.t4pack_frame is None:
+            raise ValueError(
+                f"The record of {lidar_point_cloud_sample.point_cloud_path} has no t4pack "
+                "location. Generate the records with the pack in place, or load the "
+                "point clouds with LoadPointsFromFile."
+            )
+        return read_t4pack_frame(
+            t4pack_path(lidar_point_cloud_sample.point_cloud_path),
+            lidar_point_cloud_sample.t4pack_frame,
+            self.load_dim,
+        )
+
+
+class LoadPointsFromT4Pack(_T4PackReading, LoadPointsFromFile):
+    """Load point clouds from the t4pack file of their channel, ``data/<channel>.pack``."""
+
+
+class LoadMultiSweepPointsFromT4Pack(_T4PackReading, LoadMultiSweepPointsFromFile):
+    """Load multi-sweep point clouds from the t4pack file of their channel."""

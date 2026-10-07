@@ -163,6 +163,27 @@ class Scenarios(BaseModel):
 
 The schema is defined in the `autoware_ml/databases/schemas/` package and covers basic frame metadata, nested LiDAR structs, and annotation fields such as category mapping and 3D boxes. The 3D box payload is modeled by `Box3DDataModel` with its struct layout defined in `Box3DDatasetSchema`, and is stored in the top-level `boxes_3d` list column. See [Dataset Schema](schemas.md) for the full column layout, nested data models, and extension guide.
 
+### Packed LiDAR frames
+
+A scene may keep the frames of a LiDAR channel, `data/<channel>/*.pcd.bin`, as one
+`data/<channel>.pack` file (t4pack v1: every frame compressed on its own with zstd over its
+columns, plus a frame index). Packs are written by the data processing tools; autoware-ml only
+reads them.
+
+When a scene has a pack, record generation reads its index once and stores the location of every
+frame and sweep in `lidar_pointcloud_t4pack_frame`. `lidar_pointcloud_path` keeps the path of the
+loose file, so the pack is found next to it. The point cloud loader is chosen in the transform
+config:
+
+| Point cloud files | Current frame          | Sweeps                           |
+| ----------------- | ---------------------- | -------------------------------- |
+| `.pcd.bin`        | `LoadPointsFromFile`   | `LoadMultiSweepPointsFromFile`   |
+| `.pack`           | `LoadPointsFromT4Pack` | `LoadMultiSweepPointsFromT4Pack` |
+
+Both live in `autoware_ml.transforms.multi_task.point_cloud.loading` and return the same points.
+The pack loaders read one byte range per frame and fail on a record without a pack location.
+See `autoware_ml/utils/point_cloud/t4pack.py`.
+
 ### Dataset Generation (Hydra Entrypoint)
 
 The `generate_dataset.py` script is the Hydra-based entrypoint that wires everything together. It reads a YAML config, instantiates the configured database class, and triggers record generation:

@@ -13,6 +13,7 @@ from autoware_ml.datamodule.multi_task.dataclasses.segmentation3d import Segment
 from autoware_ml.datamodule.multi_task.dataclasses.transformation import LiDARTransformationSample
 from autoware_ml.geometry.bbox_3d.base_bbox3d import BaseBBoxes3D
 from autoware_ml.geometry.points.base_points import BasePoints
+from autoware_ml.utils.point_cloud.t4pack import T4PackFrameLocation
 
 
 class PointCloudGTBatch(NamedTuple):
@@ -72,6 +73,8 @@ class LiDARPointCloudSample(NamedTuple):
     lidar_to_ego_pose_to_global_matrix: Float32[Tensor, "4 4"]  # (4, 4)
     # Transformation matrix from the main lidar sensor to other lidar sweeps at this frame
     lidar_sensor_to_lidar_sweep_matrix: Float32[Tensor, "4 4"]  # (4, 4)
+    # Location of the frame in the t4pack file of its channel, None when the scene has no pack
+    t4pack_frame: T4PackFrameLocation | None = None
 
 
 class MultiTaskGTSample(NamedTuple):
