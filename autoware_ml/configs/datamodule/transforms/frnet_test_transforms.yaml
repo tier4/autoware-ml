@@ -1,0 +1,9 @@
+_target_: autoware_ml.transforms.base.TransformsCompose
+_convert_: all
+
+pipeline:
+  - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
+    _convert_: all
+
+    use_dim: [0, 1, 2, 3]
+    bev_remove_radius: 0.0

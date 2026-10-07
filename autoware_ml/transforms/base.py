@@ -20,94 +20,66 @@ pipelines and provides sequential composition helpers.
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
-from typing import Any
 
 import numpy as np
 
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
+
 
 class BaseTransform(ABC):
-    """Abstract base class for dict-to-dict data transformations.
+    """Abstract base class for ModelGTSample data transformations.
 
     Class Attributes (override in subclasses):
-        p: Probability of applying the transform (0.0=never, 1.0=always).
-           Set to None for transforms that always run.
-        _required_keys: List of keys that must exist in input_dict.
-        _optional_keys: List of keys that may be missing (triggers apply_defaults).
-
-    Subclasses should document their key contracts in the class docstring:
-        - Required keys: Keys that must exist (KeyError raised otherwise)
-        - Optional keys: Keys that are used if present (apply_defaults called if missing)
-        - Generated keys: Keys added/modified by the transform
+        _required_keys: Fields of the sample that must be set before the transform runs.
     """
 
-    p: float | None = None  # None means always run (no probability)
     _required_keys: Sequence[str] = ()
-    _optional_keys: Sequence[str] = ()
-    pre_transform: Any = None
 
-    def __call__(self, input_dict: dict[str, Any], context: Any = None) -> dict[str, Any]:
+    def __init__(self, probability: float | None = None) -> None:
+        """Initialize the transform.
+
+        Args:
+            probability: Probability of applying the transform (0.0=never, 1.0=always).
+                         Set to None if the transform should always run.
+        """
+        self._probability = probability
+
+    def __call__(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
         """Execute transform with probability and key validation.
 
         Order of operations:
             1. Validate required keys (raises KeyError if any missing)
-            2. Handle optional keys (call apply_defaults if any missing)
-            3. Check probability (skip if not triggered)
-            4. Execute the actual transform
+            2. Check probability (skip if not triggered)
+            3. Execute the actual transform
 
         Args:
-            input_dict: Sample dictionary passed to the transform.
-            context: Optional dataset pipeline context.
+            model_gt_sample: Dataclass to hold inputs for each sample.
 
         Returns:
-            Updated sample dictionary.
+            Updated ModelGTSample.
         """
-        self._context = context
-
         # 1. Validate required keys (raises error if any missing)
-        self._validate_required_keys(input_dict)
+        self._validate_required_keys(model_gt_sample)
 
-        # 2. Handle optional keys (call apply_defaults if any missing)
-        self._handle_optional_keys(input_dict)
-
-        # 3. Check probability (skip if not triggered)
+        # 2. Check probability (skip if not triggered)
         if not self._should_apply():
-            return self.on_skip(input_dict)
+            return self.on_skip(model_gt_sample)
 
-        # 4. Execute the actual transform
-        return self.transform(input_dict)
+        # 3. Execute the actual transform
+        return self.transform(model_gt_sample)
 
-    @property
-    def context(self) -> Any:
-        """Return the active execution context for the current transform call.
-
-        Returns:
-            Pipeline context associated with the current sample, or ``None``
-            when the transform is executed outside a dataset pipeline.
-        """
-        return getattr(self, "_context", None)
-
-    def _validate_required_keys(self, input_dict: dict[str, Any]) -> None:
+    def _validate_required_keys(self, model_gt_sample: ModelGTSample) -> None:
         """Raise ``KeyError`` when any required key is missing.
 
         Args:
-            input_dict: Input mapping validated before transform execution.
+            model_gt_sample: ModelGTSample instance validated before transform execution.
 
         Raises:
             KeyError: If a required key defined by the transform is absent.
         """
         for key in self._required_keys:
-            if key not in input_dict:
+            if getattr(model_gt_sample, key) is None:
                 raise KeyError(f"{self.__class__.__name__}: Missing required key '{key}'")
-
-    def _handle_optional_keys(self, input_dict: dict[str, Any]) -> None:
-        """Populate missing optional keys before executing the transform.
-
-        Args:
-            input_dict: Input mapping validated before transform execution.
-        """
-        missing = [key for key in self._optional_keys if key not in input_dict]
-        if missing:
-            self.apply_defaults(input_dict)
 
     def _should_apply(self) -> bool:
         """Determine if transform should be applied based on probability.
@@ -115,51 +87,37 @@ class BaseTransform(ABC):
         Returns:
             True if transform should be applied, False to skip.
         """
-        if self.p is None:
+        if self._probability is None:
             return True
-        if self.p <= 0.0:
+        if self._probability <= 0.0:
             return False
-        if self.p >= 1.0:
+        if self._probability >= 1.0:
             return True
-        return np.random.rand() < self.p
+        return np.random.rand() < self._probability
 
-    def apply_defaults(self, input_dict: dict[str, Any]) -> None:
-        """Set default values for missing optional keys. Override in subclasses.
-
-        Base implementation raises error - subclasses with optional keys MUST override.
-        Classes with no optional keys don't need to override (empty list never triggers).
-
-        Args:
-            input_dict: The input dictionary to modify in-place with default values.
-        """
-        raise NotImplementedError(
-            f"{self.__class__.__name__}: Missing optional keys but apply_defaults() not implemented"
-        )
-
-    def on_skip(self, input_dict: dict[str, Any]) -> dict[str, Any]:
+    def on_skip(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
         """Called when transform is skipped due to probability.
 
         Override for custom behavior when transform is skipped.
         Default implementation returns input unchanged.
 
         Args:
-            input_dict: The input dictionary.
+            model_gt_sample: The sample the transform skipped.
 
         Returns:
-            The (possibly modified) input dictionary.
+            The sample, unchanged by default.
         """
-        return input_dict
+        return model_gt_sample
 
     @abstractmethod
-    def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
-        """Process input dictionary and return updated mapping.
+    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
+        """Transform one sample.
 
         Args:
-            input_dict: Dictionary with required keys present, optional keys
-                        populated by apply_defaults() if they were missing.
+            model_gt_sample: ModelGTSample instance with its required fields set.
 
         Returns:
-            Updated dictionary (may be the same object modified in-place).
+            Updated ModelGTSample, possibly the same instance modified in place.
         """
         raise NotImplementedError
 
@@ -167,42 +125,31 @@ class BaseTransform(ABC):
 class TransformsCompose:
     """Apply a sequence of transforms in order.
 
-    The composed transform forwards one sample dictionary through every
-    configured transform and returns the final result.
+    The composed transform forwards one sample through every configured transform
+    and returns the final result.
     """
 
-    def __init__(self, pipeline: Sequence["BaseTransform"] = ()):
-        """Initialize the transform composition.
+    def __init__(self, pipeline: Sequence[BaseTransform]):
+        """Initialize the transform pipeline.
 
         Args:
-            pipeline: Ordered transforms applied to each input dictionary.
+            pipeline: Ordered transforms applied to each sample.
         """
-        self.pipeline = list(pipeline)
+        self.pipeline = pipeline
 
-    def __call__(self, input_dict: dict[str, Any], context: Any = None) -> dict[str, Any]:
-        """Apply each transform sequentially, merging updates.
+    def __call__(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
+        """Apply each transform in order.
 
         Args:
-            input_dict: Input mapping passed through the configured transforms.
-            context: Optional pipeline context forwarded to each transform.
+            model_gt_sample: ModelGTSample instance passed through the configured transforms.
 
         Returns:
-            Transformed mapping after all pipeline stages have been applied.
+            Transformed ModelGTSample instance after all pipeline stages have been applied.
         """
-        if not isinstance(input_dict, dict):
-            raise TypeError(
-                f"{self.__class__.__name__} input must be a dict, got {type(input_dict).__name__}."
-            )
         for transform in self.pipeline:
-            output = transform(input_dict, context=context)
-            if not isinstance(output, dict):
-                raise TypeError(
-                    f"{transform.__class__.__name__} must return a dict, "
-                    f"got {type(output).__name__}."
-                )
-            input_dict |= output
+            model_gt_sample = transform(model_gt_sample)
 
-        return input_dict
+        return model_gt_sample
 
     def __repr__(self) -> str:
         """Return a formatted string representation of the composition.

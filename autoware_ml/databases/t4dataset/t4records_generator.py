@@ -15,16 +15,19 @@
 import logging
 
 from pathlib import Path
-from typing import Sequence, Tuple
+from typing import Mapping, Sequence, Tuple
 
 import numpy as np
 import numpy.typing as npt
-from t4_devkit import T4Devkit
+from PIL import Image
+from t4_devkit import T4Devkit, load_table
 from t4_devkit.dataclass.box import Box3D
 from t4_devkit.schema import (
     Attribute,
     CalibratedSensor,
+    Category,
     EgoPose,
+    Instance,
     LidarSeg,
     Sample,
     SampleAnnotation,
@@ -43,19 +46,28 @@ from autoware_ml.databases.schemas.lidar_frames import LidarFrameDataModel
 from autoware_ml.databases.schemas.lidar_sources import LidarSourceDataModel
 from autoware_ml.databases.schemas.image_frames import ImageFrameDataModel
 from autoware_ml.databases.schemas.category_mapping import CategoryMappingDataModel
-from autoware_ml.databases.schemas.box3d_schemas import Box3DDataModel, Box3DDatasetSchema
+from autoware_ml.databases.taxonomy import DatabaseTaxonomy
+from autoware_ml.databases.schemas.box3d_schemas import (
+    Box3DDataModel,
+    Box3DDatasetSchema,
+)
 from autoware_ml.databases.scenarios import ScenarioData
 from autoware_ml.databases.t4dataset.t4sample_records import (
     T4SampleRecord,
 )
 from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
+from autoware_ml.types.dataset import SweepDirection
 from autoware_ml.types.geometry import Box3DCenterCoordinateType
 from autoware_ml.types.sensor import LidarChannel, Modality
 from autoware_ml.types.spatial import CoordinateSystem
 from autoware_ml.utils.dataset import convert_quaternion_to_matrix
+from autoware_ml.utils.point_cloud.t4pack import load_point_cloud_file
 
 
 logger = logging.getLogger(__name__)
+
+# Lens distortion model of every T4 camera, the coefficients follow its parameter order
+CAMERA_DISTORTION_MODEL = "plumb_bob"
 
 
 class T4RecordsGenerator:
@@ -68,10 +80,10 @@ class T4RecordsGenerator:
         self,
         database_root_path: str,
         scenario_data: ScenarioData,
-        max_sweeps: int,
-        sample_steps: int,
+        lidar_channel: LidarChannel,
         lidar_pointcloud_num_features: int,
-        ignore_label_index: int,
+        box_annotation_dir: str,
+        taxonomy: DatabaseTaxonomy,
         box3d_pipelines: Sequence[Box3DPipeline],
         recompute_boxes3d_lidar_points_num: bool = False,
     ) -> None:
@@ -80,13 +92,14 @@ class T4RecordsGenerator:
 
         Args:
           database_root_path: Root path of the T4 database.
-          scenario_data: Scenario data.
-          max_sweeps: Max number of lidar sweeps to include, only for 3D, set to 0
-            if skipping lidar sweep concatenation.
-          sample_steps: Number of frames/samples to skip between each sample, set to 1
-            if not skipping any samples/frames.
-          lidar_pointcloud_num_features: Number of features of the lidar pointcloud.
-          ignore_label_index: Label index to use for ignored labels in the box3d annotations.
+          scenario_data: Scenario data with the dataset parameters, which set the sweep window
+            on either side of a sample and the sampling step.
+          lidar_channel: Lidar channel each sample is keyed on.
+          lidar_pointcloud_num_features: Number of float32 values per point in the stored point
+            clouds.
+          box_annotation_dir: Directory of each scene with the category and instance tables to
+            read box names from.
+          taxonomy: Taxonomies the database labels are built with.
           box3d_pipelines: List of box3d pipelines to process the box3d annotations.
           recompute_boxes3d_lidar_points_num: Whether to recompute the number of lidar points in
             each box3d annotation. Note that this slows down a lot, so it's not recommended
@@ -95,33 +108,85 @@ class T4RecordsGenerator:
 
         self.database_root_path = Path(database_root_path)
         self.scenario_data = scenario_data
-        self.max_sweeps = max_sweeps
-        self.sample_steps = sample_steps
+        self.lidar_channel = lidar_channel
+        self.sample_steps = scenario_data.dataset_params.sample_steps
         self.lidar_pointcloud_num_features = lidar_pointcloud_num_features
-        self.t4_devkit_dataset = self._construct_t4_devkit_dataset()
-        self.ignore_label_index = ignore_label_index
+        self.scene_root_path = self._scene_root_path()
+        self.t4_devkit_dataset = T4Devkit(data_root=self.scene_root_path, verbose=False)
+        self.lidarseg_by_sample_data = self._index_lidarseg()
+        self.box_annotation_dir = box_annotation_dir
+        self.box_category_tokens, self.box_category_names = self._index_box_categories()
+        self.taxonomy = taxonomy
         self.box3d_pipelines = box3d_pipelines
         self.recompute_boxes3d_lidar_points_num = recompute_boxes3d_lidar_points_num
-        assert sample_steps > 0, "Sample steps must be greater than 0."
-        assert max_sweeps >= 0, "Max sweeps must be greater than or equal to 0."
 
-    def _construct_t4_devkit_dataset(self) -> T4Devkit:
+    def _scene_root_path(self) -> Path:
         """
-        Construct T4Devkit class instance.
+        Root directory of the scene this generator reads.
 
         Returns:
-          T4Devkit: T4 dataset.
+          Path: Scene root directory.
         """
 
         scene_root_dir_path = (
             self.database_root_path
-            / self.scenario_data.dataset_name
+            / self.scenario_data.dataset_params.dataset_name
             / self.scenario_data.scenario_id
             / self.scenario_data.scenario_version
         )
         if not scene_root_dir_path.exists():
             raise ValueError(f"Scene root directory {scene_root_dir_path} does not exist.")
-        return T4Devkit(data_root=scene_root_dir_path, verbose=False)
+        return scene_root_dir_path
+
+    def _index_box_categories(self) -> Tuple[Mapping[str, str], Mapping[str, str]]:
+        """
+        Category tables the box names are read from.
+
+        A pseudo labelled scene keeps the original tables beside the rewritten ones, so the
+        database names the directory to read.
+
+        Returns:
+          Tuple[Mapping[str, str], Mapping[str, str]]: Category token of every instance token
+            and category name of every category token.
+        """
+
+        tables_dir = self.scene_root_path / self.box_annotation_dir
+        if not tables_dir.is_dir():
+            raise ValueError(
+                f"Scenario {self.scenario_data.scenario_id} has no box annotation directory "
+                f"{tables_dir}."
+            )
+        categories: Sequence[Category] = load_table(str(tables_dir), SchemaName.CATEGORY)
+        instances: Sequence[Instance] = load_table(str(tables_dir), SchemaName.INSTANCE)
+        return (
+            {instance.token: instance.category_token for instance in instances},
+            {category.token: category.name for category in categories},
+        )
+
+    def _box_category_name(self, instance_token: str) -> str:
+        """
+        Category name of a box, read through its instance from the box annotation tables.
+
+        Args:
+          instance_token: Instance token of the box annotation.
+
+        Returns:
+          str: Category name of the instance.
+        """
+
+        if instance_token not in self.box_category_tokens:
+            raise ValueError(
+                f"The instance table of {self.box_annotation_dir} in scenario "
+                f"{self.scenario_data.scenario_id} does not list the instance {instance_token}."
+            )
+        category_token = self.box_category_tokens[instance_token]
+        if category_token not in self.box_category_names:
+            raise ValueError(
+                f"The category table of {self.box_annotation_dir} in scenario "
+                f"{self.scenario_data.scenario_id} does not list the category "
+                f"{category_token} of the instance {instance_token}."
+            )
+        return self.box_category_names[category_token]
 
     def generate_dataset_records(self) -> Sequence[DatasetRecord]:
         """
@@ -133,24 +198,42 @@ class T4RecordsGenerator:
 
         records = []
         logger.info(
-            f"Generating dataset records for scenario: {self.scenario_data.scenario_id} with sample steps: {self.sample_steps} and max sweeps: {self.max_sweeps}"
+            f"Generating dataset records for scenario: {self.scenario_data.scenario_id} with "
+            f"sample steps: {self.sample_steps}, "
+            f"past sweeps: {self.scenario_data.dataset_params.max_past_sweeps} and "
+            f"future sweeps: {self.scenario_data.dataset_params.max_future_sweeps}"
         )
 
         for sample_index in range(0, len(self.t4_devkit_dataset.sample), self.sample_steps):
             sample = self.t4_devkit_dataset.sample[sample_index]
-            t4_sample_record = self.extract_t4_sample_record(sample, sample_index)
-
-            if t4_sample_record is None:
-                logger.info(
-                    f"dataset_name: {self.scenario_data.dataset_name}, "
-                    f"scenario_id: {self.scenario_data.scenario_id}, "
-                    f"sample_index: {sample_index}, "
-                    f"No lidar channel found in sample data"
-                )
+            # A corpus labelled at a lower rate than it was recorded keeps its labelled
+            # samples only, looked up like the mask path of the record
+            if (
+                self.scenario_data.dataset_params.semantic_masks
+                and sample.data.get(self.lidar_channel) not in self.lidarseg_by_sample_data
+            ):
                 continue
-
+            t4_sample_record = self.extract_t4_sample_record(sample, sample_index)
             records.append(t4_sample_record.to_dataset_record())
 
+        return records
+
+    def _index_lidarseg(self) -> Mapping[str, LidarSeg]:
+        """
+        Semantic mask records of the scene keyed by the sample data token they annotate.
+
+        Returns:
+          Mapping[str, LidarSeg]: Semantic mask record of every annotated lidar frame.
+        """
+
+        records: dict[str, LidarSeg] = {}
+        for record in self.t4_devkit_dataset.lidarseg:
+            if record.sample_data_token in records:
+                raise ValueError(
+                    f"Scenario {self.scenario_data.scenario_id} holds several lidarseg records "
+                    f"for sample data {record.sample_data_token}."
+                )
+            records[record.sample_data_token] = record
         return records
 
     def _extract_sample_basic_metadata(
@@ -179,7 +262,10 @@ class T4RecordsGenerator:
         )
 
     def _extract_boxes_3d_annotations(
-        self, sample: Sample, boxes_3d: Sequence[Box3D], lidar_frame_data_model: LidarFrameDataModel
+        self,
+        sample: Sample,
+        boxes_3d: Sequence[Box3D],
+        lidar_frame_data_model: LidarFrameDataModel,
     ) -> Sequence[Box3DDataModel]:
         """
         Extract boxes 3D annotations from a T4 sample and process them with the pipeline.
@@ -231,14 +317,15 @@ class T4RecordsGenerator:
                 )
                 box_3d_attributes.add(attribute_record.name)
 
+            box3d_category_name = self._box_category_name(sample_annotation_record.instance_token)
             boxes_3d_data_model.append(
                 Box3DDataModel(
                     box3d_params=box3d_params,
                     box3d_instance_id=box3d.uuid,
-                    box3d_dataset_label_name=box3d.semantic_label.name,
-                    box3d_label_name=box3d.semantic_label.name,
+                    box3d_dataset_label_name=box3d_category_name,
+                    box3d_label_name=box3d_category_name,
                     # Initially, set all label indices to the ignore label index
-                    box3d_label_index=self.ignore_label_index,
+                    box3d_label_index=self.taxonomy.detection3d.ignore_index,
                     box3d_num_lidar_points=box3d.num_points,
                     box3d_num_radar_points=sample_annotation_record.num_radar_pts,
                     box3d_valid=box3d_valid,
@@ -264,49 +351,33 @@ class T4RecordsGenerator:
         return boxes_3d_data_model
 
     def _extract_lidar_pointcloud_semantic_mask_path(
-        self,
-        sample_index: int,
-        calibrated_lidar_sample_data_token: str,
-        lidar_pointcloud_source_path: str | None,
+        self, calibrated_lidar_sample_data_token: str
     ) -> str | None:
         """
-        Extract lidarseg metadata from a T4 Sample.
+        Path of the semantic mask annotating one lidar frame.
+
+        Only some frames have a mask, so look it up by the sample data token of the frame.
 
         Args:
-          sample_index: Sample index.
           calibrated_lidar_sample_data_token: Calibrated lidar sample data token.
-          lidar_pointcloud_source_path: Lidar pointcloud source path.
 
         Returns:
-          LidarSegMetaData: Lidarseg metadata of the T4 sample.
+          str | None: Mask path, None when the frame has no mask.
         """
-        lidarseg_records: Sequence[LidarSeg] = getattr(
-            self.t4_devkit_dataset, SchemaName.LIDARSEG, []
-        )
-        # If there are no lidarseg records or the lidar pointcloud source path is not available,
-        # return None
-        if not len(lidarseg_records) or not lidar_pointcloud_source_path:
+        lidarseg_record = self.lidarseg_by_sample_data.get(calibrated_lidar_sample_data_token)
+        if lidarseg_record is None:
             return None
 
-        assert sample_index < len(lidarseg_records), (
-            "Sample index is out of range of lidarseg records."
-        )
+        # The lidarseg table gives the mask path relative to the scene. Prepend the scene root,
+        # as the pointcloud path does.
+        return str(self.scene_root_path / lidarseg_record.filename)
 
-        current_lidarseg_record = lidarseg_records[sample_index]
-        assert current_lidarseg_record.sample_data_token == calibrated_lidar_sample_data_token, (
-            "Lidarseg record sample data token does not match the calibrated lidar sample data token."
-        )
-        return current_lidarseg_record.filename
-
-    def _extract_lidar_frame(
-        self, sample: Sample, sample_index: int, lidar_channel_name: str
-    ) -> Tuple[LidarFrameDataModel, Sequence[Box3D]]:
+    def _extract_lidar_frame(self, sample: Sample) -> Tuple[LidarFrameDataModel, Sequence[Box3D]]:
         """
         Extract lidar frame records from a T4 sample.
 
         Args:
           sample: T4 Sample.
-          lidar_channel_name: Lidar channel name.
 
         Returns:
           Tuple of:
@@ -314,7 +385,7 @@ class T4RecordsGenerator:
             Sequence[Box3D]: Sequence of Box3D annotations in the lidar frame, in the sensor coordinate.
         """
 
-        calibrated_lidar_sample_data_token = sample.data[lidar_channel_name]
+        calibrated_lidar_sample_data_token = sample.data[self.lidar_channel]
         sd_record: SampleData = self.t4_devkit_dataset.get(
             SchemaName.SAMPLE_DATA, calibrated_lidar_sample_data_token
         )
@@ -345,19 +416,24 @@ class T4RecordsGenerator:
 
         # Extract lidar pointcloud semantic mask path
         lidar_pointcloud_semantic_mask_path = self._extract_lidar_pointcloud_semantic_mask_path(
-            sample_index=sample_index,
-            calibrated_lidar_sample_data_token=calibrated_lidar_sample_data_token,
-            lidar_pointcloud_source_path=sd_record.info_filename,
+            calibrated_lidar_sample_data_token=calibrated_lidar_sample_data_token
+        )
+
+        # Prepend the scene root to the metainfo path as well.
+        lidar_pointcloud_source_path = (
+            None
+            if sd_record.info_filename is None
+            else str(self.scene_root_path / sd_record.info_filename)
         )
 
         lidar_frame_data_model = LidarFrameDataModel(
             lidar_frame_id=calibrated_lidar_sample_data_token,
             lidar_keyframe=sd_record.is_key_frame,
             lidar_sensor_id=cs_record.token,
-            lidar_sensor_channel_name=lidar_channel_name,
+            lidar_sensor_channel_name=self.lidar_channel.value,
             lidar_timestamp_seconds=microseconds2seconds(sd_record.timestamp),
             lidar_pointcloud_path=lidar_path,
-            lidar_pointcloud_source_path=sd_record.info_filename,
+            lidar_pointcloud_source_path=lidar_pointcloud_source_path,
             lidar_pointcloud_num_features=self.lidar_pointcloud_num_features,
             lidar_sensor_to_ego_pose_matrix=lidar_sensor_to_ego_matrix,
             lidar_frame_ego_pose_to_global_matrix=lidar_frame_ego_pose_to_global_matrix,
@@ -390,7 +466,8 @@ class T4RecordsGenerator:
               2. Selected sensor to sensor transformation matrix (4x4)
         """
         sensor_calibrated_sensor_record: CalibratedSensor = self.t4_devkit_dataset.get(
-            SchemaName.CALIBRATED_SENSOR, sensor_sample_data_record.calibrated_sensor_token
+            SchemaName.CALIBRATED_SENSOR,
+            sensor_sample_data_record.calibrated_sensor_token,
         )
         sensor_ego_pose_record: EgoPose = self.t4_devkit_dataset.get(
             SchemaName.EGO_POSE, sensor_sample_data_record.ego_pose_token
@@ -428,17 +505,18 @@ class T4RecordsGenerator:
         return sensor_frame_ego_pose_to_global_matrix, sensor_to_selected_sensor_matrix
 
     def _extract_lidar_sweeps(
-        self, lidar_frame_data_model: LidarFrameDataModel
+        self, lidar_frame_data_model: LidarFrameDataModel, direction: SweepDirection
     ) -> Sequence[LidarFrameDataModel]:
         """
-        Extract multi-sweep lidar metadata from a T4 Sample.
+        Extract the lidar frames on one side of a sample, nearest first, at most the number the
+        dataset declares for that side. Fewer sweeps are returned at a scene boundary.
 
         Args:
-            t4_sample_record_lidar_info: T4 Sample lidar metadata.
+            lidar_frame_data_model: Lidar frame metadata of the sample itself.
+            direction: Side of the sample the frames are collected from.
 
         Returns:
-            LidarSweepsMetaData: T4 sample lidar sweep metadata
-            corresponding to the current T4 sample.
+            Sequence[LidarFrameDataModel]: Lidar sweep metadata, nearest frame first.
         """
 
         current_lidar_sample_data_token = lidar_frame_data_model.lidar_frame_id
@@ -448,16 +526,18 @@ class T4RecordsGenerator:
             SchemaName.SAMPLE_DATA, current_lidar_sample_data_token
         )
 
-        for _ in range(self.max_sweeps):
-            # Stop processing if the current lidar sample data has no previous sample data
-            if not current_sample_data_record.prev:
+        for _ in range(self.scenario_data.dataset_params.max_sweeps(direction)):
+            # Stop processing when the chain of lidar frames ends on this side
+            neighbour_token = getattr(current_sample_data_record, direction.link)
+            if not neighbour_token:
                 break
 
             current_sample_data_record: SampleData = self.t4_devkit_dataset.get(
-                SchemaName.SAMPLE_DATA, current_sample_data_record.prev
+                SchemaName.SAMPLE_DATA, neighbour_token
             )
             current_cs_record: CalibratedSensor = self.t4_devkit_dataset.get(
-                SchemaName.CALIBRATED_SENSOR, current_sample_data_record.calibrated_sensor_token
+                SchemaName.CALIBRATED_SENSOR,
+                current_sample_data_record.calibrated_sensor_token,
             )
             current_lidar_sensor_to_ego_matrix = convert_quaternion_to_matrix(
                 rotation_quaternion=current_cs_record.rotation,
@@ -471,9 +551,10 @@ class T4RecordsGenerator:
                 selected_sensor_to_ego_pose_matrix=lidar_frame_data_model.lidar_sensor_to_ego_pose_matrix,
                 selected_sensor_frame_ego_pose_to_global_matrix=lidar_frame_data_model.lidar_frame_ego_pose_to_global_matrix,
             )
-            lidar_sweep_frame_ego_pose_to_global_matrix, lidar_sweep_to_lidar_sensor_matrix = (
-                lidar_sweep_transformations
-            )
+            (
+                lidar_sweep_frame_ego_pose_to_global_matrix,
+                lidar_sweep_to_lidar_sensor_matrix,
+            ) = lidar_sweep_transformations
 
             # Inverse it to obtain the transformation matrix
             # from the lidar sensor to the lidar sweeps
@@ -502,6 +583,45 @@ class T4RecordsGenerator:
                 )
             )
         return lidar_frame_data_models
+
+    def _extract_lidar_window(
+        self, lidar_frame_data_model: LidarFrameDataModel
+    ) -> Sequence[LidarFrameDataModel]:
+        """
+        Lidar frames recorded with a sample. The sample frame comes first, then the past sweeps
+        and the future sweeps, each side ordered nearest first.
+
+        Args:
+            lidar_frame_data_model: Lidar frame metadata of the sample itself.
+
+        Returns:
+            Sequence[LidarFrameDataModel]: Lidar frames of the record.
+        """
+
+        past_sweep_data_models = self._extract_lidar_sweeps(
+            lidar_frame_data_model=lidar_frame_data_model, direction=SweepDirection.PAST
+        )
+        future_sweep_data_models = self._extract_lidar_sweeps(
+            lidar_frame_data_model=lidar_frame_data_model, direction=SweepDirection.FUTURE
+        )
+        return [lidar_frame_data_model] + past_sweep_data_models + future_sweep_data_models
+
+    def _check_lidar_channel(self, sample: Sample) -> None:
+        """
+        Check that a sample has a frame of the lidar channel of the database.
+
+        Args:
+          sample: T4 Sample.
+
+        Raises:
+          ValueError: If the sample has no frame of the lidar channel.
+        """
+
+        if self.lidar_channel not in sample.data:
+            raise ValueError(
+                f"Scenario {self.scenario_data.scenario_id} holds sample {sample.token} without "
+                f"a {self.lidar_channel.value} frame."
+            )
 
     def _extract_lidar_sources(self) -> Sequence[LidarSourceDataModel]:
         """
@@ -559,6 +679,9 @@ class T4RecordsGenerator:
         """
 
         camera_channel_names = []
+        # A LiDAR only corpus, or a mirror that lacks the images, records no camera frames
+        if not self.scenario_data.dataset_params.camera_frames:
+            return camera_channel_names
         for channel_name, sample_data_token in sample.data.items():
             sd_record: SampleData = self.t4_devkit_dataset.get(
                 SchemaName.SAMPLE_DATA, sample_data_token
@@ -577,83 +700,89 @@ class T4RecordsGenerator:
         return camera_channel_names
 
     def _extract_image_frame(
-            self,
-            sample: Sample,
-            camera_channel_name: str,
-            lidar_sensor_to_ego_pose_matrix: npt.NDArray[np.float64],
-            lidar_frame_ego_pose_to_global_matrix: npt.NDArray[np.float64],
-        ) -> ImageFrameDataModel:
-            """
-            Extract image frame from a T4 sample.
+        self,
+        sample: Sample,
+        camera_channel_name: str,
+        lidar_sensor_to_ego_pose_matrix: npt.NDArray[np.float64],
+        lidar_frame_ego_pose_to_global_matrix: npt.NDArray[np.float64],
+    ) -> ImageFrameDataModel:
+        """
+        Extract image frame from a T4 sample.
 
-            Args:
-              sample: T4 Sample.
-              camera_channel_name: Camera channel name.
-              lidar_sensor_to_ego_pose_matrix: Transformation matrix from LiDAR sensor to ego pose.
-              lidar_frame_ego_pose_to_global_matrix: Transformation matrix from LiDAR ego pose to global.
+        Args:
+          sample: T4 Sample.
+          camera_channel_name: Camera channel name.
+          lidar_sensor_to_ego_pose_matrix: Transformation matrix from LiDAR sensor to ego pose.
+          lidar_frame_ego_pose_to_global_matrix: Transformation matrix from LiDAR ego pose to
+            global.
 
-            Returns:
-              ImageFrameDataModel: Image frame data model of the T4 sample.
-            """
+        Returns:
+          ImageFrameDataModel: Image frame data model of the T4 sample.
+        """
 
-            calibrated_camera_sample_data_token = sample.data[camera_channel_name]
-            sd_record: SampleData = self.t4_devkit_dataset.get(
-                SchemaName.SAMPLE_DATA, calibrated_camera_sample_data_token
-            )
-            cs_record: CalibratedSensor = self.t4_devkit_dataset.get(
-                SchemaName.CALIBRATED_SENSOR, sd_record.calibrated_sensor_token
-            )
-            image_sensor_to_ego_matrix = convert_quaternion_to_matrix(
-                rotation_quaternion=cs_record.rotation,
-                translation=cs_record.translation,
-                convert_to_float32=False,
-            )
+        calibrated_camera_sample_data_token = sample.data[camera_channel_name]
+        sd_record: SampleData = self.t4_devkit_dataset.get(
+            SchemaName.SAMPLE_DATA, calibrated_camera_sample_data_token
+        )
+        cs_record: CalibratedSensor = self.t4_devkit_dataset.get(
+            SchemaName.CALIBRATED_SENSOR, sd_record.calibrated_sensor_token
+        )
+        image_sensor_to_ego_matrix = convert_quaternion_to_matrix(
+            rotation_quaternion=cs_record.rotation,
+            translation=cs_record.translation,
+            convert_to_float32=False,
+        )
 
-            ego_pose_record: EgoPose = self.t4_devkit_dataset.get(
-                SchemaName.EGO_POSE, sd_record.ego_pose_token
-            )
-            image_frame_ego_pose_to_global_matrix = convert_quaternion_to_matrix(
-                rotation_quaternion=ego_pose_record.rotation,
-                translation=ego_pose_record.translation,
-                convert_to_float32=False,
-            )
+        ego_pose_record: EgoPose = self.t4_devkit_dataset.get(
+            SchemaName.EGO_POSE, sd_record.ego_pose_token
+        )
+        image_frame_ego_pose_to_global_matrix = convert_quaternion_to_matrix(
+            rotation_quaternion=ego_pose_record.rotation,
+            translation=ego_pose_record.translation,
+            convert_to_float32=False,
+        )
 
-            image_path = self.t4_devkit_dataset.get_sample_data_path(
-                sample_data_token=calibrated_camera_sample_data_token
-            )
+        image_path = self.t4_devkit_dataset.get_sample_data_path(
+            sample_data_token=calibrated_camera_sample_data_token
+        )
 
-            image_height = sd_record.height
-            image_width = sd_record.width
-            if image_height is None or image_width is None:
-                with Image.open(image_path) as image:
-                    image_width, image_height = image.size
+        image_height = sd_record.height
+        image_width = sd_record.width
+        if image_height is None or image_width is None:
+            with Image.open(image_path) as image:
+                image_width, image_height = image.size
 
-            cam2img = np.asarray(cs_record.camera_intrinsic, dtype=np.float64)
+        cam2img = np.asarray(cs_record.camera_intrinsic, dtype=np.float64)
+        # A camera without distortion coefficients stores undistorted images and has no model
+        # name
+        distortion_coefficients = np.asarray(cs_record.camera_distortion, dtype=np.float64).tolist()
 
-            cam2global = image_frame_ego_pose_to_global_matrix @ image_sensor_to_ego_matrix
-            global2cam = np.linalg.inv(cam2global)
-            lidar2global = lidar_frame_ego_pose_to_global_matrix @ lidar_sensor_to_ego_pose_matrix
-            lidar2cam = global2cam @ lidar2global
+        cam2global = image_frame_ego_pose_to_global_matrix @ image_sensor_to_ego_matrix
+        global2cam = np.linalg.inv(cam2global)
+        lidar2global = lidar_frame_ego_pose_to_global_matrix @ lidar_sensor_to_ego_pose_matrix
+        lidar2cam = global2cam @ lidar2global
 
-            cam2img_4x4 = np.eye(4, dtype=np.float64)
-            cam2img_4x4[:3, :3] = cam2img
-            lidar2img = cam2img_4x4 @ lidar2cam
+        cam2img_4x4 = np.eye(4, dtype=np.float64)
+        cam2img_4x4[:3, :3] = cam2img
+        lidar2img = cam2img_4x4 @ lidar2cam
 
-            return ImageFrameDataModel(
-                image_frame_id=calibrated_camera_sample_data_token,
-                image_keyframe=sd_record.is_key_frame,
-                image_sensor_id=cs_record.token,
-                image_sensor_channel_name=camera_channel_name,
-                image_timestamp_seconds=microseconds2seconds(sd_record.timestamp),
-                image_path=image_path,
-                image_height=image_height,
-                image_width=image_width,
-                cam2img=cam2img,
-                image_sensor_to_ego_pose_matrix=image_sensor_to_ego_matrix,
-                image_frame_ego_pose_to_global_matrix=image_frame_ego_pose_to_global_matrix,
-                lidar2cam=lidar2cam,
-                lidar2img=lidar2img,
-            )
+        return ImageFrameDataModel(
+            image_frame_id=calibrated_camera_sample_data_token,
+            image_keyframe=sd_record.is_key_frame,
+            image_sensor_id=cs_record.token,
+            image_sensor_channel_name=camera_channel_name,
+            image_timestamp_seconds=microseconds2seconds(sd_record.timestamp),
+            image_path=image_path,
+            image_height=image_height,
+            image_width=image_width,
+            cam2img=cam2img,
+            image_distortion_coefficients=distortion_coefficients,
+            image_distortion_model=CAMERA_DISTORTION_MODEL if distortion_coefficients else "",
+            image_sensor_to_ego_pose_matrix=image_sensor_to_ego_matrix,
+            image_frame_ego_pose_to_global_matrix=image_frame_ego_pose_to_global_matrix,
+            lidar2cam=lidar2cam,
+            lidar2img=lidar2img,
+        )
 
     def _extract_image_channel_frames(
         self, sample: Sample, lidar_frame_data_model: LidarFrameDataModel
@@ -684,7 +813,7 @@ class T4RecordsGenerator:
         ]
 
     def _extract_image_channel_sweeps(
-        self, sample: Sample, lidar_channel_name: str
+        self, sample: Sample
     ) -> Sequence[Sequence[ImageFrameDataModel]]:
         """
         Extract multi-sweep image metadata (past camera keyframes, all channels) from a T4
@@ -692,7 +821,6 @@ class T4RecordsGenerator:
 
         Args:
           sample: T4 Sample to walk backwards from.
-          lidar_channel_name: Lidar channel name.
 
         Returns:
           Sequence[Sequence[ImageFrameDataModel]]: Image sweep data models, ordered from most
@@ -703,21 +831,22 @@ class T4RecordsGenerator:
         image_channel_sweep_data_models = []
         current_sample = sample
 
-        for _ in range(self.max_sweeps):
+        # Camera sweeps are taken from the past only. The future window is lidar only.
+        for _ in range(self.scenario_data.dataset_params.max_past_sweeps):
             if not current_sample.prev:
                 break
 
             current_sample: Sample = self.t4_devkit_dataset.get(
                 SchemaName.SAMPLE, current_sample.prev
             )
-            if lidar_channel_name not in current_sample.data:
-                break
+            self._check_lidar_channel(current_sample)
 
             current_lidar_sd_record: SampleData = self.t4_devkit_dataset.get(
-                SchemaName.SAMPLE_DATA, current_sample.data[lidar_channel_name]
+                SchemaName.SAMPLE_DATA, current_sample.data[self.lidar_channel]
             )
             current_lidar_cs_record: CalibratedSensor = self.t4_devkit_dataset.get(
-                SchemaName.CALIBRATED_SENSOR, current_lidar_sd_record.calibrated_sensor_token
+                SchemaName.CALIBRATED_SENSOR,
+                current_lidar_sd_record.calibrated_sensor_token,
             )
             current_lidar_sensor_to_ego_pose_matrix = convert_quaternion_to_matrix(
                 rotation_quaternion=current_lidar_cs_record.rotation,
@@ -766,10 +895,13 @@ class T4RecordsGenerator:
                 category_indices=[],
             )
 
+        # The aliases of the dataset resolve a name that means something else in this corpus
+        # under the name the vocabulary reserves for that meaning
+        aliases = self.scenario_data.dataset_params.category_aliases
         category_names = []
         category_indices = []
         for category_record in category_records:
-            category_names.append(category_record.name)
+            category_names.append(aliases.get(category_record.name, category_record.name))
             category_indices.append(category_record.index)
 
         return CategoryMappingDataModel(
@@ -807,16 +939,15 @@ class T4RecordsGenerator:
             ),
             bbox_label_names=[box.box3d_label_name for box in boxes_3d_data_model],
             bbox_num_lidar_points=np.asarray(
-                [box.box3d_num_lidar_points for box in boxes_3d_data_model], dtype=np.int32
+                [box.box3d_num_lidar_points for box in boxes_3d_data_model],
+                dtype=np.int32,
             ),
             bbox_center_coordinate_type=Box3DCenterCoordinateType.GRAVITY_CENTER,
         )
 
         # Load pointclouds
         lidar_pointcloud_path = lidar_frame_data_model.lidar_pointcloud_path
-        points = np.fromfile(lidar_pointcloud_path, dtype=np.float32).reshape(
-            -1, self.lidar_pointcloud_num_features
-        )
+        points = load_point_cloud_file(lidar_pointcloud_path, self.lidar_pointcloud_num_features)
         lidar_points = torch.tensor(points[:, :3], dtype=torch.float32)  # Only take the x, y, z
         # (num_of_bboxes, point_mask)
         points_in_bboxes = lidar_bboxes_3d.compute_points_in_bboxes(points=lidar_points)
@@ -834,7 +965,7 @@ class T4RecordsGenerator:
             )
         return updated_boxes_3d_data_models
 
-    def extract_t4_sample_record(self, sample: Sample, sample_index: int) -> T4SampleRecord | None:
+    def extract_t4_sample_record(self, sample: Sample, sample_index: int) -> T4SampleRecord:
         """
         Extract T4 sample record from a T4Dataset.
 
@@ -845,13 +976,7 @@ class T4RecordsGenerator:
           T4SampleRecord: T4 sample record.
         """
 
-        # Read lidar channel name
-        if LidarChannel.LIDAR_TOP in sample.data:
-            lidar_channel_name = LidarChannel.LIDAR_TOP
-        elif LidarChannel.LIDAR_CONCAT in sample.data:
-            lidar_channel_name = LidarChannel.LIDAR_CONCAT
-        else:
-            return None
+        self._check_lidar_channel(sample)
 
         # 1) Extract basic information from the T4Dataset
         frame_basic_metadata = self._extract_sample_basic_metadata(
@@ -859,40 +984,31 @@ class T4RecordsGenerator:
         )
 
         # 2) Extract lidar information from the T4Dataset
-        lidar_frame_data_model, box3d = self._extract_lidar_frame(
-            sample=sample, lidar_channel_name=lidar_channel_name, sample_index=sample_index
-        )
+        lidar_frame_data_model, box3d = self._extract_lidar_frame(sample=sample)
 
         # 3) Extract boxes 3D annotations and process them with the pipeline
         boxes_3d_data_model = self._extract_boxes_3d_annotations(
             sample=sample, boxes_3d=box3d, lidar_frame_data_model=lidar_frame_data_model
         )
 
-        # 4) Extract multi-sweep lidar information from the T4Dataset
-        lidar_sweep_data_models = self._extract_lidar_sweeps(
-            lidar_frame_data_model=lidar_frame_data_model
-        )
+        # 4) Extract the lidar sweeps recorded on either side of the sample
+        lidar_frame_data_models = self._extract_lidar_window(lidar_frame_data_model)
 
-        # Concat lidar frame data models and lidar sweep data models
-        lidar_frame_data_models = [lidar_frame_data_model] + lidar_sweep_data_models
-
-        # 4) Extract lidar sources information from the T4Dataset
+        # 5) Extract lidar sources information from the T4Dataset
         lidar_source_data_models = self._extract_lidar_sources()
 
-        # 5) Extract image frames information from the T4Dataset
+        # 6) Extract image frames information from the T4Dataset
         image_channel_frame_data_models = self._extract_image_channel_frames(
             sample=sample, lidar_frame_data_model=lidar_frame_data_model
         )
-        image_channel_sweep_data_models = self._extract_image_channel_sweeps(
-            sample=sample, lidar_channel_name=lidar_channel_name
-        )
+        image_channel_sweep_data_models = self._extract_image_channel_sweeps(sample=sample)
 
         # Concat image channel frame data models and image channel sweep data models
         image_frame_data_models = [
             image_channel_frame_data_models
         ] + image_channel_sweep_data_models
 
-        # 6) Extract category information from the T4Dataset
+        # 7) Extract category information from the T4Dataset
         category_mapping_data_model = self._extract_category_mapping()
 
         return T4SampleRecord(

@@ -1,0 +1,48 @@
+# @package _global_
+
+# Stage 3: joint training on pseudo labelled J6 gen2
+
+defaults:
+  - /tasks/multi/ptv3/voxel012_122m_t4dataset_j6gen2
+  - /database@seg3d_gt_database: t4dataset/t4dataset_j6gen2_semaseg
+  - override /database@database: t4dataset/t4dataset_j6gen2_pseudo
+  - _self_
+
+datamodule:
+  train_sources:
+    - database: ${database}
+      det3d: true
+      seg3d: true
+      repeat: 1
+    - database: ${seg3d_gt_database}
+      det3d: false
+      seg3d: true
+      repeat: 6
+  validation_sources:
+    - database: ${database}
+      det3d: true
+      seg3d: false
+      repeat: 1
+    - database: ${seg3d_gt_database}
+      det3d: false
+      seg3d: true
+      repeat: 1
+
+model:
+  optimizer_group_overrides:
+    encoder_block:
+      lr: 0.00001
+    encoder_default:
+      lr: 0.000025
+    seg3d_head:
+      lr: 0.000025
+  scheduler:
+    warmup_epochs: 1
+    decay_epochs: 15
+    max_lr_factor: 2.0
+
+trainer:
+  max_epochs: 16
+
+callbacks:
+  early_stopping: null

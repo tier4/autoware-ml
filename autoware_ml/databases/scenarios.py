@@ -17,9 +17,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Sequence, Mapping, Annotated
 
-from pydantic import BaseModel, ConfigDict, BeforeValidator, model_validator
+from pydantic import BaseModel, ConfigDict, BeforeValidator, Field, model_validator
 
-from autoware_ml.types.dataset import SplitType
+from autoware_ml.types.dataset import SplitType, SweepDirection
 
 
 def path_adapter(path: str | Path) -> Path:
@@ -44,40 +44,83 @@ PathAdapter = Annotated[Path, BeforeValidator(path_adapter)]
 
 class DatasetParams(BaseModel):
     """
-    Parameters for a dataset, for example, max_sweeps and sampling steps
+    Parameters for a dataset, for example, the sweep window and sampling steps
     when preprocessing it.
 
     Attributes:
       dataset_name: Name of the dataset.
-      max_sweeps: Maximum number of sweeps to include.
+      max_past_sweeps: Maximum number of past lidar frames and past camera keyframes recorded
+        with a sample.
+      max_future_sweeps: Maximum number of lidar frames captured after a sample to record
+        with it.
       sample_steps: Number of steps to sample.
+      semantic_masks: Whether only the samples carrying a semantic segmentation mask are
+        kept, so a corpus labelled at a lower rate than it was recorded trains on its
+        labelled samples only.
+      category_aliases: Raw mask category name to the name the vocabulary resolves it
+        under, for a corpus whose category names mean something else than the same names
+        elsewhere (an older annotation specification whose ``sidewalk`` still contains the
+        curbs, a pseudo label corpus written at a coarser level). Applied when the record
+        table is generated, so the records carry the aliased names.
+      camera_frames: Whether the records carry the camera frames of every sample. Off for
+        a LiDAR only corpus, or a mirror that lacks the images: the record generation then
+        neither reads nor requires them.
     """
 
     model_config = ConfigDict(frozen=True, strict=True)
 
     dataset_name: str
-    max_sweeps: int
-    sample_steps: int
+    max_past_sweeps: int = Field(ge=0)
+    max_future_sweeps: int = Field(ge=0)
+    sample_steps: int = Field(ge=1)
+    semantic_masks: bool = False
+    category_aliases: dict[str, str] = Field(default_factory=dict)
+    camera_frames: bool = True
+
+    def max_sweeps(self, direction: SweepDirection) -> int:
+        """
+        Number of sweeps recorded on one side of a sample.
+
+        Args:
+          direction: Side of the sample the sweeps are collected from.
+
+        Returns:
+          int: Maximum number of sweeps on that side.
+        """
+
+        if direction is SweepDirection.PAST:
+            return self.max_past_sweeps
+        return self.max_future_sweeps
 
     def __str__(self) -> str:
-        """String representation of the database version."""
+        """String representation of the dataset parameters."""
         return (
             f"DatasetParams(dataset_name={self.dataset_name}, "
-            f"max_sweeps={self.max_sweeps}, "
-            f"sample_steps={self.sample_steps})"
+            f"max_past_sweeps={self.max_past_sweeps}, "
+            f"max_future_sweeps={self.max_future_sweeps}, "
+            f"sample_steps={self.sample_steps}"
+            f"{self._record_options_str()})"
         )
 
-    def __eq__(self, other: DatasetParams) -> bool:
-        """Compare two database versions by their version and settings."""
-        return (
-            self.dataset_name == other.dataset_name
-            and self.max_sweeps == other.max_sweeps
-            and self.sample_steps == other.sample_steps
-        )
+    def _record_options_str(self) -> str:
+        """
+        String form of the record options that differ from their defaults.
 
-    def __hash__(self) -> int:
-        """Hash the database version by its version and settings."""
-        return hash(str(self))
+        Only the options a corpus sets are named, so the record tables of every corpus that
+        keeps the defaults keep their hash.
+
+        Returns:
+          str: The options as ``, name=value`` items, empty when all are at their default.
+        """
+
+        options = ""
+        if self.semantic_masks:
+            options += f", semantic_masks={self.semantic_masks}"
+        if self.category_aliases:
+            options += f", category_aliases={sorted(self.category_aliases.items())}"
+        if not self.camera_frames:
+            options += f", camera_frames={self.camera_frames}"
+        return options
 
 
 class ScenarioData(BaseModel):
@@ -87,11 +130,9 @@ class ScenarioData(BaseModel):
     in the scenario.
 
     Attributes:
-      dataset_name: Name of the dataset.
+      dataset_params: Parameters of the dataset the scenario belongs to.
       scenario_id: ID of the scenario.
       scenario_version: Version of the scenario.
-      max_sweeps: Maximum number of sweeps to include.
-      sample_steps: Number of steps to sample.
       vehicle_type: Type of the vehicle.
       location: Location of the scenario.
     """
@@ -99,11 +140,9 @@ class ScenarioData(BaseModel):
     # Set model config to frozen and strict
     model_config = ConfigDict(frozen=True, strict=True)
 
-    dataset_name: str
+    dataset_params: DatasetParams
     scenario_id: str
     scenario_version: str
-    max_sweeps: int
-    sample_steps: int
     vehicle_type: str | None = None
     location: str | None = None
 
@@ -116,42 +155,12 @@ class ScenarioData(BaseModel):
         """
 
         return (
-            f"ScenarioData(dataset_name={self.dataset_name}, "
+            f"ScenarioData(dataset_params={self.dataset_params}, "
             f"scenario_id={self.scenario_id}, "
             f"scenario_version={self.scenario_version}, "
-            f"max_sweeps={self.max_sweeps}, "
-            f"sample_steps={self.sample_steps}, "
             f"vehicle_type={self.vehicle_type}, "
             f"location={self.location})"
         )
-
-    def __eq__(self, other: ScenarioData) -> bool:
-        """
-        Compare two scenario data by their version and scenario IDs.
-
-        Returns:
-          bool: True if the scenario data are equal, False otherwise.
-        """
-
-        return (
-            self.dataset_name == other.dataset_name
-            and self.scenario_id == other.scenario_id
-            and self.scenario_version == other.scenario_version
-            and self.max_sweeps == other.max_sweeps
-            and self.sample_steps == other.sample_steps
-            and self.vehicle_type == other.vehicle_type
-            and self.location == other.location
-        )
-
-    def __hash__(self) -> int:
-        """
-        Hash the scenario data by its version and scenario IDs.
-
-        Returns:
-          int: Hash of the scenario data.
-        """
-
-        return hash(str(self))
 
 
 class Scenarios(BaseModel):

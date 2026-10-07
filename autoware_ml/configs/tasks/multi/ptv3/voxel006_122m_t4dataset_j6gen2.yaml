@@ -1,0 +1,110 @@
+# @package _global_
+
+# Teacher model on the 6 cm grid with the fine taxonomy
+
+defaults:
+  - /tasks/multi/ptv3/voxel012_122m_t4dataset_j6gen2
+  - override /database/t4dataset/box3d_pipelines@database.box3d_pipelines: trailer_class_box3d_pipelines
+  - override /database/t4dataset/taxonomy@database.taxonomy: default_fine
+  - _self_
+
+# Classes with partial masks
+partial_detection_classes:
+  [motorcycle, bicycle, pedestrian.common, pedestrian.personal_mobility,
+   pedestrian.stroller, traffic_cone]
+
+grid_size: 0.06
+max_voxels: 1048576
+head_voxel_size: [0.48, 0.48, 8.0]
+
+t4dataset:
+  lidar:
+    # Jitter scaled to the 6 cm grid
+    train_jitter_sigma: 0.006
+    train_jitter_clip: 0.024
+
+batch_size: 1
+
+datamodule:
+  train_frame_sampling:
+    pedestrian_class_name: pedestrian.common
+
+model:
+  # Describes the past and future points of a voxel apart
+  voxel_encoder:
+    _target_: autoware_ml.models.segmentation3d.encoders.voxel.PastFutureVoxelFeatureEncoder
+  # PT-v3m3 encoder and decoder
+  encoder:
+    in_channels: 17
+    enc_depths: [3, 3, 3, 12, 3]
+    enc_channels: [54, 108, 216, 432, 576]
+    enc_num_head: [3, 6, 12, 24, 32]
+    enc_patch_size: [1024, 1024, 1024, 1024, 1024]
+  seg3d_head:
+    dec_depths: [2, 2, 2, 2]
+    dec_channels: [54, 108, 216, 432]
+    dec_num_head: [3, 6, 12, 24]
+    dec_patch_size: [1024, 1024, 1024, 1024]
+  bev_neck:
+    fusion:
+      out_channels: 512
+    bev_projector:
+      out_channels: 256
+      output_shape: [512, 512]
+    bev_encoder:
+      hidden_channels: 256
+      out_channels: 256
+      dilations: [2, 4, 10, 4]
+  bbox_head:
+    in_channels: 256
+    hidden_channel: 256
+    feedforward_channels: 512
+    # Large vehicle subtypes of the fine taxonomy
+    dense_heatmap_pooling_classes:
+      [car.common, car.emergency, car.special, truck.common, truck.emergency, truck.trailer,
+       truck.construction, bus]
+    # 2.4 m window at the halved BEV cell
+    nms_kernel_size: 5
+    nms_groups:
+      - class_names:
+          [car.common, car.emergency, car.special, truck.common, truck.emergency, truck.trailer,
+           truck.construction, bus, train]
+        nms_radius: 0.25
+        post_max_size: 300
+      - class_names: [motorcycle, bicycle]
+        nms_radius: 0.5
+        post_max_size: 100
+      - class_names: [pedestrian.common]
+        nms_radius: 0.0
+        post_max_size: 100
+      - class_names: [pedestrian.personal_mobility]
+        nms_radius: 0.0
+        post_max_size: 50
+      - class_names: [pedestrian.stroller]
+        nms_radius: 0.0
+        post_max_size: 50
+      - class_names: [animal]
+        nms_radius: 0.0
+        post_max_size: 50
+      - class_names: [barrier.movable]
+        nms_radius: 0.0
+        post_max_size: 50
+      - class_names: [barrier.construction_sign]
+        nms_radius: 0.0
+        post_max_size: 50
+      - class_names: [traffic_cone]
+        nms_radius: 0.0
+        post_max_size: 100
+      - class_names: [debris.unclassified]
+        nms_radius: 0.0
+        post_max_size: 50
+      - class_names: [debris.pushable_pullable]
+        nms_radius: 0.0
+        post_max_size: 50
+    bbox_coder:
+      score_threshold: 0.0
+
+trainer:
+  precision: 32-true
+  accumulate_grad_batches: 8
+  sync_batchnorm: true

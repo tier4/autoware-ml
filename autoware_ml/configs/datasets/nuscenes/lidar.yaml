@@ -3,3 +3,10 @@
 defaults:
   - /datasets/nuscenes/base
   - _self_
+
+# Sweep time lag range in seconds
+sweep_time_lag_range: [0.075, 0.225]
+
+# Training jitter of the point coordinates in meters
+train_jitter_sigma: 0.005
+train_jitter_clip: 0.02

@@ -328,11 +328,11 @@ class TestModelGTBatchSegmentation3DCollation(unittest.TestCase):
     def test_collate_without_any_mask_leaves_it_none(self) -> None:
         self.assertIsNone(self._collate([self._build_sample(None), self._build_sample(None)]))
 
-    def test_collate_rejects_a_partially_labelled_batch(self) -> None:
+    def test_collate_rejects_a_partially_labeled_batch(self) -> None:
         with self.assertRaises(ValueError):
             self._collate([self._build_sample([1]), self._build_sample(None)])
 
-    def test_collate_rejects_a_partially_labelled_batch_in_any_order(self) -> None:
+    def test_collate_rejects_a_partially_labeled_batch_in_any_order(self) -> None:
         # Reading the availability off the first sample alone would drop the second sample's
         # labels without a word, so the whole batch decides
         with self.assertRaises(ValueError):

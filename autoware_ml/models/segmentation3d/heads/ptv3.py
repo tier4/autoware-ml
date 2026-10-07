@@ -30,10 +30,7 @@ import torch
 import torch.nn as nn
 
 from autoware_ml.losses.segmentation3d.lovasz import LovaszLoss
-from autoware_ml.metrics.segmentation3d.eval_output import (
-    concat_frame_ids,
-    segmentation_frames_eval_output,
-)
+from autoware_ml.metrics.segmentation3d.eval_output import segmentation_frames_eval_output
 from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     Block,
     PointSequential,
@@ -43,6 +40,7 @@ from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     prepare_point_module_for_export,
     set_block_serialization_order,
 )
+from autoware_ml.models.segmentation3d.encoders.voxel import TIME_LAG_COLUMN
 from autoware_ml.utils.point_cloud.structures import Point
 
 
@@ -81,10 +79,16 @@ class PTv3SegDecoderHead(nn.Module):
         enable_flash: bool,
         upcast_attention: bool,
         upcast_softmax: bool,
+        mixed_voxel_weight: float,
         lovasz_weight: float = 1.0,
         dec_conv: Sequence[bool] | bool = True,
         dec_attn: Sequence[bool] | bool = True,
         dec_rope_base: Sequence[float | None] | float | None = None,
+        sparse_conv_backend: str = "spconv",
+        class_names: Sequence[str] | None = None,
+        class_sets: Mapping[str, Sequence[str]] | None = None,
+        activation_checkpointing: bool = False,
+        fp32_sublayers: Sequence[str] = (),
     ) -> None:
         """Initialize the PTv3 segmentation decoder head.
 
@@ -108,6 +112,8 @@ class PTv3SegDecoderHead(nn.Module):
             enable_flash: Whether to use flash attention.
             upcast_attention: Whether to upcast Q/K before attention.
             upcast_softmax: Whether to upcast logits before softmax.
+            mixed_voxel_weight: Largest extra weight a voxel gains in the cross entropy
+                when its points carry different classes.
             lovasz_weight: Weight applied to the Lovasz loss term.
             dec_conv: Per-stage flag for the submanifold-convolution positional
                 encoding in decoder blocks, or one flag for every stage.
@@ -115,11 +121,31 @@ class PTv3SegDecoderHead(nn.Module):
                 blocks, or one flag for every stage.
             dec_rope_base: Rotary-embedding frequency base, either one value for
                 every stage or one per stage. ``None`` disables RoPE.
+            sparse_conv_backend: Library implementing the decoder's submanifold
+                convolutions (``"auto"``, ``"spconv"`` or ``"rulebook"``), see
+                :func:`autoware_ml.ops.sparse_backend.submanifold_conv3d`.
+            class_names: Class names in index order, needed to resolve ``class_sets``.
+            class_sets: Label sets of the taxonomy, set name to member class names, in the
+                order the taxonomy indexes them. A target ``num_classes + k`` names a point
+                that belongs to one of the classes of set ``k``; such targets are trained on
+                the summed probability of the set (see :meth:`loss`).
+            activation_checkpointing: Recompute the attention and MLP activations of the
+                decoder blocks in the backward pass, see the encoder ``Block``.
+            fp32_sublayers: Sublayers computed in fp32 under autocast; ``"mlp"`` runs the
+                feed-forward network in fp32, which recovers the accuracy bf16 loses there.
+                Empty by default.
         """
         super().__init__()
         self.order = list(order)
         self.num_classes = int(num_classes)
+        self.sparse_conv_backend = sparse_conv_backend
         self.ignore_index = int(ignore_index)
+        self.set_membership: torch.Tensor | None
+        self.register_buffer(
+            "set_membership",
+            build_set_membership(self.num_classes, class_names, class_sets),
+            persistent=False,
+        )
         self.dec_depths = list(dec_depths)
         stage_count = len(enc_channels)
         decoder_stage_count = stage_count - 1
@@ -171,17 +197,23 @@ class PTv3SegDecoderHead(nn.Module):
                         enable_conv=self.dec_conv[stage_index],
                         enable_attn=self.dec_attn[stage_index],
                         rope_base=self.dec_rope_base[stage_index],
+                        sparse_conv_backend=sparse_conv_backend,
+                        activation_checkpointing=activation_checkpointing,
+                        fp32_sublayers=fp32_sublayers,
                     ),
                     name=f"block{block_index}",
                 )
             self.dec.add(decoder, name=f"dec{stage_index}")
 
         self.classifier = nn.Linear(decoder_channels[0], self.num_classes)
-        # Sum-reduction with an explicit valid-count divisor equals mean-over-valid,
-        # but degrades to a clean zero (instead of 0/0 = nan) when a batch carries
-        # no segmentation supervision at all.
-        self.cross_entropy = nn.CrossEntropyLoss(ignore_index=self.ignore_index, reduction="sum")
+        self.cross_entropy = nn.CrossEntropyLoss(ignore_index=self.ignore_index, reduction="none")
         self.lovasz = LovaszLoss(ignore_index=self.ignore_index, loss_weight=lovasz_weight)
+        self.mixed_voxel_weight = float(mixed_voxel_weight)
+
+    @property
+    def num_sets(self) -> int:
+        """Number of label sets the targets may name after the classes."""
+        return 0 if self.set_membership is None else int(self.set_membership.shape[0])
 
     def forward(self, point: Point) -> torch.Tensor:
         """Decode the deepest encoder stage into point-wise logits.
@@ -196,19 +228,58 @@ class PTv3SegDecoderHead(nn.Module):
         decoded = self.dec(point)
         return self.classifier(decoded.feat)
 
-    def loss(self, seg_logits: torch.Tensor, segment: torch.Tensor) -> dict[str, torch.Tensor]:
-        """Compute segmentation losses against point-level targets.
+    def loss(
+        self, seg_logits: torch.Tensor, segment: torch.Tensor, weights: torch.Tensor
+    ) -> dict[str, torch.Tensor]:
+        """Compute segmentation losses against the targets of every row.
+
+        Cross entropy scores each row on its own, so it takes the weights. Lovasz optimizes
+        the intersection over union of a whole set of rows and has no per row term to weigh,
+        so it takes the targets alone.
+
+        A target in ``[0, num_classes)`` is a class; ``num_classes + k`` names label set ``k``
+        of the taxonomy, a row known to belong to one of the set's classes. Such a row
+        contributes the cross entropy of the summed probability of its set, so a corpus
+        annotated at a coarser specification supervises exactly what it knows; it takes no
+        part in the Lovasz term, which needs one class per row.
 
         Args:
-            seg_logits: Point-wise segmentation logits.
-            segment: Point-level segmentation targets.
+            seg_logits: Row-wise segmentation logits.
+            segment: Target of every row.
+            weights: Weight of every row, zero where the row carries no supervision.
 
         Returns:
             Dictionary with ``loss_ce``, ``loss_lovasz``, and their sum ``loss``.
         """
-        valid_count = (segment != self.ignore_index).sum().clamp(min=1)
-        loss_ce = self.cross_entropy(seg_logits, segment) / valid_count
-        loss_lovasz = self.lovasz(seg_logits, segment)
+        is_set = segment >= self.num_classes
+        if self.set_membership is None:
+            if bool(is_set.any()):
+                raise ValueError(
+                    "The segmentation targets name label sets, but the head was built without "
+                    "class_sets; pass the taxonomy's class_names and class_sets to the head."
+                )
+            row_losses = self.cross_entropy(seg_logits, segment)
+            class_targets = segment
+        else:
+            # Log probability of every class and of every set (logsumexp over its members),
+            # so one negative log likelihood scores class and set targets alike.
+            log_probs = torch.log_softmax(seg_logits.float(), dim=1)
+            set_log_probs = torch.logsumexp(
+                log_probs.unsqueeze(1).masked_fill(~self.set_membership, float("-inf")), dim=2
+            )
+            row_losses = nn.functional.nll_loss(
+                torch.cat([log_probs, set_log_probs], dim=1),
+                segment,
+                ignore_index=self.ignore_index,
+                reduction="none",
+            )
+            class_targets = torch.where(
+                is_set, torch.full_like(segment, self.ignore_index), segment
+            )
+        # Dividing the weighted sum by the summed weights gives the weighted mean over the
+        # supervised rows, and zero instead of nan when a batch has no supervision.
+        loss_ce = (row_losses * weights).sum() / weights.sum().clamp(min=1e-6)
+        loss_lovasz = self.lovasz(seg_logits, class_targets)
         return {
             "loss_ce": loss_ce,
             "loss_lovasz": loss_lovasz,
@@ -239,51 +310,223 @@ class PTv3SegDecoderHead(nn.Module):
         return export_head
 
 
-def segmentation_eval_output(seg_logits: torch.Tensor, batch: Mapping[str, Any]) -> dict[str, Any]:
-    """Scatter point-level predictions back to original points, per frame.
-
-    Produces the ``seg_frames`` contract both segmentation suites consume: one
-    entry per frame with the original-resolution coordinates, predicted/target
-    labels and per-class softmax scores. The frame of every original point is
-    recovered from the sampled-space ``inverse`` map and the batch ``offset``
-    (inclusive cumulative sampled-point counts per frame).
+def build_set_membership(
+    num_classes: int,
+    class_names: Sequence[str] | None,
+    class_sets: Mapping[str, Sequence[str]] | None,
+) -> torch.Tensor | None:
+    """Build the ``[num_sets, num_classes]`` membership table of the label sets.
 
     Args:
-        seg_logits: Point-wise segmentation logits at the sampled-point level.
-        batch: Batch dictionary with ``inverse``, ``offset``, ``origin_segment``,
-            and ``origin_coord``. Per-frame metadata (ego pose, scene token) is
+        num_classes: Number of classes of the level.
+        class_names: Class names in index order.
+        class_sets: Set name to member class names, in set index order.
+
+    Returns:
+        Boolean table with row ``k`` marking the classes of set ``k``, or ``None`` when the
+        taxonomy has no label sets.
+
+    Raises:
+        ValueError: Raised when sets are given without class names, or name unknown classes.
+    """
+    if not class_sets:
+        return None
+    if class_names is None or len(class_names) != num_classes:
+        raise ValueError(
+            "class_sets need the class_names of the level to resolve their members, got "
+            f"{None if class_names is None else len(class_names)} names for {num_classes} classes."
+        )
+    indices = {name: index for index, name in enumerate(class_names)}
+    membership = torch.zeros(len(class_sets), num_classes, dtype=torch.bool)
+    for row, (set_name, members) in enumerate(class_sets.items()):
+        unknown = [member for member in members if member not in indices]
+        if unknown:
+            raise ValueError(f"Label set {set_name!r} names unknown classes {unknown}.")
+        membership[row, [indices[member] for member in members]] = True
+    return membership
+
+
+def current_frame_mask(points: torch.Tensor) -> torch.Tensor:
+    """Return the mask of points captured in the current frame.
+
+    Loaders give the current frame points a time lag of exactly ``0`` and every
+    sweep point a nonzero one.
+
+    Args:
+        points: Point array of shape ``(num_points, num_features)``.
+
+    Returns:
+        Boolean mask of shape ``(num_points,)``.
+    """
+    return points[:, TIME_LAG_COLUMN] == 0
+
+
+def assigned_point_mask(point_voxel_indices: torch.Tensor) -> torch.Tensor:
+    """Return the mask of points that fall inside the voxel grid.
+
+    Points with no voxel lie outside the grid, which happens at the upper bound when
+    the range is not a multiple of the voxel size. They are left out of the loss and
+    the scoring.
+    """
+    return point_voxel_indices >= 0
+
+
+def gather_point_logits(
+    seg_logits: torch.Tensor, point_voxel_indices: torch.Tensor, mask: torch.Tensor
+) -> torch.Tensor:
+    """Gather the voxel logits of the selected points through their voxel row.
+
+    Args:
+        seg_logits: Voxel-level logits of shape ``(num_voxels, num_classes)``.
+        point_voxel_indices: Voxel row of every point.
+        mask: Points to gather, all of which must have a voxel.
+
+    Returns:
+        Point-level logits of shape ``(mask.sum(), num_classes)``.
+    """
+    return seg_logits[point_voxel_indices[mask]]
+
+
+def concat_point_frames(points: Sequence[torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
+    """Concatenate per-frame point arrays and return the frame index of every point."""
+    lengths = torch.tensor([frame.shape[0] for frame in points], device=points[0].device)
+    frame_ids = torch.repeat_interleave(torch.arange(len(points), device=lengths.device), lengths)
+    return torch.cat(list(points), dim=0), frame_ids
+
+
+def voxel_supervision(
+    point_voxel_indices: torch.Tensor,
+    segment: torch.Tensor,
+    *,
+    num_voxels: int,
+    num_classes: int,
+    ignore_index: int,
+    sample: bool,
+    mixed_weight: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Reduce the points of every voxel to the label and the weight supervising it.
+
+    A voxel predicts one class for all of its points, so it gets one label. When sampling,
+    the label is drawn from the label distribution of the voxel, so over many steps every
+    class is supervised in proportion to its points. Otherwise the majority label is used.
+    A voxel whose points are all ignored stays ignored.
+
+    A voxel whose points disagree gets a larger weight, which grows with the share of points
+    its label leaves out. A single class voxel has weight 1.
+
+    Args:
+        point_voxel_indices: Voxel row of every point.
+        segment: Segmentation label of every point.
+        num_voxels: Number of voxels of the batch.
+        num_classes: Number of labels a point can carry: the classes the head predicts plus
+            the label sets of the taxonomy, which take the indices after the classes.
+        ignore_index: Label of the points that carry no supervision.
+        sample: Whether to draw the label instead of taking the majority.
+        mixed_weight: Weight a voxel gains when its points disagree completely.
+
+    Returns:
+        Label and weight of every voxel, both of shape ``(num_voxels,)``.
+    """
+    labelled = assigned_point_mask(point_voxel_indices) & (segment != ignore_index)
+    counts = torch.zeros((num_voxels, num_classes), dtype=torch.float32, device=segment.device)
+    # Only labelled points index the table because the ignore index can lie outside the classes.
+    counts.index_put_(
+        (point_voxel_indices[labelled], segment[labelled]),
+        torch.ones_like(segment[labelled], dtype=torch.float32),
+        accumulate=True,
+    )
+    totals = counts.sum(dim=1)
+    supervised = totals > 0
+    labels = torch.full((num_voxels,), ignore_index, dtype=torch.long, device=segment.device)
+    if sample:
+        drawn = torch.multinomial(counts + (~supervised).unsqueeze(1).to(counts.dtype), 1)
+        labels = torch.where(supervised, drawn.squeeze(1), labels)
+    else:
+        labels = torch.where(supervised, counts.argmax(dim=1), labels)
+    purity = counts.max(dim=1).values / totals.clamp(min=1.0)
+    weights = torch.where(supervised, 1.0 + mixed_weight * (1.0 - purity), torch.zeros_like(purity))
+    return labels, weights
+
+
+def segmentation_point_loss(
+    head: PTv3SegDecoderHead, seg_logits: torch.Tensor, batch_inputs_dict: Mapping[str, Any]
+) -> dict[str, torch.Tensor]:
+    """Compute the segmentation losses with one term per voxel.
+
+    Every voxel adds one cross entropy term, so dense areas near the sensor do not dominate
+    the loss. Voxels whose points disagree weigh more.
+
+    Args:
+        head: Segmentation head owning the losses.
+        seg_logits: Voxel-level segmentation logits.
+        batch_inputs_dict: Preprocessed batch with the voxelizer outputs and the point level
+            segment targets.
+
+    Returns:
+        Dictionary with the segmentation losses.
+    """
+    labels, weights = voxel_supervision(
+        batch_inputs_dict["point_voxel_indices"],
+        batch_inputs_dict["segment"],
+        num_voxels=seg_logits.shape[0],
+        num_classes=seg_logits.shape[1] + head.num_sets,
+        ignore_index=head.ignore_index,
+        sample=head.training,
+        mixed_weight=head.mixed_voxel_weight,
+    )
+    return head.loss(seg_logits, labels, weights)
+
+
+def segmentation_eval_output(
+    seg_logits: torch.Tensor, batch_inputs_dict: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Gather the voxel predictions of the current frame points, per frame.
+
+    Produces the ``seg_frames`` entries both segmentation suites read: one entry
+    per frame with the coordinates, predicted and target labels and per class
+    softmax scores of the current frame points inside the voxel grid. Sweep points
+    only shape the voxel features. They are found by their time lag and left out.
+
+    Args:
+        seg_logits: Voxel-level segmentation logits.
+        batch_inputs_dict: Preprocessed batch with the per frame points, the voxelizer outputs
+            and the point level segment targets. Per frame metadata (ego pose, scene token) is
             passed through when the dataset supplies it.
 
     Returns:
         ``{"seg_frames": [...]}`` keyed for the segmentation suites.
     """
-    inverse = batch["inverse"].long()
-    offset = batch["offset"].long()
-    scores = torch.softmax(seg_logits, dim=1)[inverse]
+    point_frames = batch_inputs_dict["points"]
+    point_voxel_indices = batch_inputs_dict["point_voxel_indices"]
+    points, frame_ids = concat_point_frames(point_frames)
+    scored = current_frame_mask(points) & assigned_point_mask(point_voxel_indices)
+    point_logits = gather_point_logits(seg_logits, point_voxel_indices, scored)
     return segmentation_frames_eval_output(
-        coord=batch["origin_coord"],
-        pred_labels=seg_logits.argmax(dim=1)[inverse],
-        target_labels=batch["origin_segment"].long(),
-        scores=scores,
-        frame_ids=concat_frame_ids(offset, inverse),
-        num_frames=int(offset.shape[0]),
-        batch=batch,
+        coord=points[scored, :3],
+        pred_labels=point_logits.argmax(dim=1),
+        target_labels=batch_inputs_dict["segment"].long()[scored],
+        scores=torch.softmax(point_logits, dim=1),
+        frame_ids=frame_ids[scored],
+        num_frames=len(point_frames),
+        batch=batch_inputs_dict,
     )
 
 
 def segmentation_predict_outputs(
-    seg_logits: torch.Tensor, batch: Mapping[str, Any]
+    seg_logits: torch.Tensor, batch_inputs_dict: Mapping[str, Any]
 ) -> dict[str, torch.Tensor]:
-    """Format segmentation predictions at the original-point level.
+    """Format segmentation predictions for the current-frame points.
 
     Args:
-        seg_logits: Point-wise segmentation logits at the sampled-point level.
-        batch: Batch dictionary with ``inverse`` (sampled-to-original point
-            map).
+        seg_logits: Voxel-level segmentation logits.
+        batch_inputs_dict: Preprocessed batch with the per-frame points and the voxelizer outputs.
 
     Returns:
-        Dictionary with ``pred_labels`` and per-class ``pred_probs`` at the
-        original-point level.
+        Dictionary with ``pred_labels`` and per-class ``pred_probs`` for every
+        current-frame point inside the voxel grid, in batch order.
     """
-    point_probs = torch.softmax(seg_logits, dim=1)[batch["inverse"].long()]
+    point_voxel_indices = batch_inputs_dict["point_voxel_indices"]
+    points, _ = concat_point_frames(batch_inputs_dict["points"])
+    scored = current_frame_mask(points) & assigned_point_mask(point_voxel_indices)
+    point_probs = torch.softmax(gather_point_logits(seg_logits, point_voxel_indices, scored), dim=1)
     return {"pred_labels": point_probs.argmax(dim=1), "pred_probs": point_probs}

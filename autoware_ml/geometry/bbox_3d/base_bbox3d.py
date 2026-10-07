@@ -26,7 +26,8 @@ class BaseBBoxes3D(ABC):
     """
     Base class for 3D bounding boxes in different coordinate systems.
     This class defines the interface and common properties for 3D bounding boxes, which can be
-    extended by specific implementations for different coordinate systems (e.g., camera, LiDAR, etc.).
+    extended by specific implementations for different coordinate systems (e.g., camera,
+    LiDAR, etc.).
     """
 
     # Default yaw axis is the x-axis.
@@ -48,17 +49,18 @@ class BaseBBoxes3D(ABC):
             (middle of the box).
 
         Args:
-            bbox_params (Float32[Tensor, "num_bboxes num_Box3DFieldIndex"]): The parameters of the 3D bounding boxes.
+            bbox_params (Float32[Tensor, "num_bboxes num_Box3DFieldIndex"]): The parameters of
+                the 3D bounding boxes.
             bbox_labels (Int32[Tensor, "num_bboxes"]): The labels of the 3D bounding boxes.
             bbox_label_names (Sequence[str]): The label names of the 3D bounding boxes.
-            bbox_num_lidar_points (Int32[Tensor, "num_bboxes"]): The number of LiDAR points in each 3D bounding box.
-            bbox_center_coordinate_type (Box3DCenterCoordinateType): The center coordinate type of the 3D bounding boxes.
-                It only support "gravity_center (center of z is in the middle)" for now.
-                We specify this to make sure users are aware of the center coordinate type being used.
-            bbox_attributes (Sequence[Sequence[str]] | None): The attributes of every 3D bounding box, where
-                the outer sequence is aligned with the bounding boxes and the inner sequence holds
-                the attribute names of the corresponding bounding box. It is optional since not every
-                dataset provides attributes. Defaults to None.
+            bbox_num_lidar_points (Int32[Tensor, "num_bboxes"]): The number of LiDAR points in
+                each 3D bounding box.
+            bbox_center_coordinate_type (Box3DCenterCoordinateType): The center coordinate type
+                of the 3D bounding boxes. Only "gravity_center" (center of z in the middle) is
+                supported. It is passed explicitly so callers state which center they use.
+            bbox_attributes (Sequence[Sequence[str]] | None): The attribute names of every 3D
+                bounding box, one inner sequence per box. None when the dataset provides no
+                attributes.
         """
 
         self._bbox_params = bbox_params
@@ -69,7 +71,8 @@ class BaseBBoxes3D(ABC):
         self._bbox_attributes = bbox_attributes
         if self._bbox_center_coordinate_type != Box3DCenterCoordinateType.GRAVITY_CENTER:
             raise ValueError(
-                f"Only gravity center coordinate type is supported for now, but got {self._bbox_center_coordinate_type}"
+                "Only gravity center coordinate type is supported, but got "
+                f"{self._bbox_center_coordinate_type}"
             )
 
         # Verify if bbox_params and bbox_labels are correct
@@ -123,7 +126,8 @@ class BaseBBoxes3D(ABC):
         """
         if self.bbox_params.ndim != 2 or self.bbox_params.shape[1] != len(Box3DFieldIndex):
             raise ValueError(
-                f"bbox_params must have shape (N, {len(Box3DFieldIndex)}), but got {self.bbox_params.shape}"
+                f"bbox_params must have shape (N, {len(Box3DFieldIndex)}), but got "
+                f"{self.bbox_params.shape}"
             )
 
         if self.bbox_labels.ndim != 1 or self.bbox_labels.shape[0] != self.bbox_params.shape[0]:
@@ -388,7 +392,8 @@ class BaseBBoxes3D(ABC):
         Rotate the 3D bounding boxes globally using a given rotation angle.
 
         Args:
-            rotation_matrix (Float32[Tensor, "3 3"]): The rotation matrix to apply to the bounding boxes.
+            rotation_matrix (Float32[Tensor, "3 3"]): The rotation matrix to apply to the
+                bounding boxes.
                 It should be a 3x3 matrix representing the rotation in 3D space.
         """
         raise NotImplementedError("Subclasses must implement the `rotate` method.")
@@ -419,30 +424,31 @@ class BaseBBoxes3D(ABC):
             translation_vector
         )
 
-    def in_range_3d(self, bev_range: Float32[Tensor, "6"]) -> Bool[Tensor, " num_bboxes"]:
+    def in_range_3d(self, point_range: Float32[Tensor, "6"]) -> Bool[Tensor, " num_bboxes"]:
         """
-        Check if the 3D bounding boxes are within a given BEV (Bird's Eye View) range.
+        Check if the centers of the 3D bounding boxes are within a given 3D range.
 
         Args:
-            bev_range (Float32[Tensor, "6"]): The BEV range to check against, defined as
+            point_range (Float32[Tensor, "6"]): The 3D range to check against, defined as
                 [x_min, y_min, z_min, x_max, y_max, z_max].
 
         Returns:
             Tensor.bool, (num_bboxes,): A boolean tensor to indicate whether
-                each 3D bounding box is within the BEV range.
+                each 3D bounding box is within the 3D range.
         """
-        if bev_range.shape != (6,):
+        if point_range.shape != (6,):
             raise ValueError(
-                "BEV range must be a 1D array of shape (6,) representing [x_min, y_min, z_min, x_max, y_max, z_max]."
+                "3D range must be a 1D array of shape (6,) representing "
+                "[x_min, y_min, z_min, x_max, y_max, z_max]."
             )
 
         in_range_masks = (
-            (self.center[:, 0] >= bev_range[0])
-            & (self.center[:, 0] <= bev_range[3])
-            & (self.center[:, 1] >= bev_range[1])
-            & (self.center[:, 1] <= bev_range[4])
-            & (self.center[:, 2] >= bev_range[2])
-            & (self.center[:, 2] <= bev_range[5])
+            (self.center[:, 0] >= point_range[0])
+            & (self.center[:, 0] <= point_range[3])
+            & (self.center[:, 1] >= point_range[1])
+            & (self.center[:, 1] <= point_range[4])
+            & (self.center[:, 2] >= point_range[2])
+            & (self.center[:, 2] <= point_range[5])
         )
         return in_range_masks
 
@@ -460,7 +466,8 @@ class BaseBBoxes3D(ABC):
         """
         if bev_range.shape != (4,):
             raise ValueError(
-                "BEV range must be a 1D array of shape (4,) representing [x_min, y_min, x_max, y_max]."
+                "BEV range must be a 1D array of shape (4,) representing "
+                "[x_min, y_min, x_max, y_max]."
             )
 
         in_range_masks = (
@@ -476,7 +483,8 @@ class BaseBBoxes3D(ABC):
         Remove 3D bounding boxes based on a boolean mask.
 
         Args:
-            valid_masks (Bool[Tensor, " num_bboxes"]): A boolean tensor indicating which bounding boxes to keep.
+            valid_masks (Bool[Tensor, " num_bboxes"]): A boolean tensor indicating which
+                bounding boxes to keep.
         """
         self._bbox_params = self._bbox_params[valid_masks]
         self._bbox_labels = self._bbox_labels[valid_masks]
@@ -524,7 +532,8 @@ class BaseBBoxes3D(ABC):
 
         Args:
             offset (float): The offset to apply to the yaw angle. Default is 0.5.
-            period (float | None): The period to limit the yaw angle. If None, it will be set to 2 * torch.pi.
+            period (float | None): The period to limit the yaw angle. If None, it will be set
+                to 2 * torch.pi.
         """
         if period is None:
             period = 2 * torch.pi
@@ -602,12 +611,12 @@ class BaseBBoxes3D(ABC):
                 representation of the 3D bounding boxes.
             bbox_labels (npt.NDArray[np.int32], (num_bboxes,)): A NumPy array representation of the
                 labels of the 3D bounding boxes.
-            bbox_num_lidar_points (npt.NDArray[np.int32], (num_bboxes,)): A NumPy array representation of the
-                number of lidar points in each 3D bounding box.
+            bbox_num_lidar_points (npt.NDArray[np.int32], (num_bboxes,)): A NumPy array
+                representation of the number of lidar points in each 3D bounding box.
             bbox_center_coordinate_type (Box3DCenterCoordinateType): The center coordinate type of
                 the 3D bounding boxes.
-            bbox_attributes (Sequence[Sequence[str]] | None): The attributes of every 3D bounding box.
-                Defaults to None when the attributes are not available.
+            bbox_attributes (Sequence[Sequence[str]] | None): The attributes of every 3D
+                bounding box, None when the attributes are not available.
         """
         bbox_params_tensor = torch.from_numpy(bbox_params).float()
         bbox_labels_tensor = torch.from_numpy(bbox_labels).int()

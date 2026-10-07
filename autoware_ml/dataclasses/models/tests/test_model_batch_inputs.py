@@ -33,7 +33,10 @@ class TestModelBatchInputs(unittest.TestCase):
     def setUp(self) -> None:
         """Set up an empty GT batch and small voxel and image payloads."""
         self.gt_batch = ModelGTBatch(
-            point_cloud_gt_batch=None, detection3d_gt_batch=None, image_gt_batch=None
+            point_cloud_gt_batch=None,
+            detection3d_gt_batch=None,
+            segmentation3d_gt_batch=None,
+            image_gt_batch=None,
         )
         num_voxels, max_points, channels = 4, 5, 4
         self.voxels_data = VoxelsData(
@@ -41,6 +44,8 @@ class TestModelBatchInputs(unittest.TestCase):
             coords=torch.zeros(num_voxels, 3, dtype=torch.int32),
             num_points=torch.ones(num_voxels, dtype=torch.int32),
             batch_indices=torch.zeros(num_voxels, dtype=torch.int32),
+            point_voxel_indices=torch.arange(num_voxels, dtype=torch.int64),
+            num_dropped_voxels=torch.zeros((), dtype=torch.int64),
         )
         batch_size, num_cameras = 2, 3
         self.image_data = ImageGTBatch(
@@ -50,6 +55,7 @@ class TestModelBatchInputs(unittest.TestCase):
             image_augmentation_matrices=torch.eye(4).expand(batch_size, num_cameras, 4, 4),
             lidar2images=torch.eye(4).expand(batch_size, num_cameras, 4, 4),
             lidar2cams=torch.eye(4).expand(batch_size, num_cameras, 4, 4),
+            calibration_statuses=None,
         )
 
     def test_lidar_only_inputs_leave_images_absent(self) -> None:

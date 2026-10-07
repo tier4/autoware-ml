@@ -37,6 +37,7 @@ from autoware_ml.utils.cli.helpers import (
     run_lazy_script,
 )
 
+
 class CompletableGroup(TyperGroup, click.Group):
     """Typer group that click recognizes as a group.
 
@@ -262,6 +263,16 @@ def train(
             "MLflow run instead of the checkpoint's source run.",
         ),
     ] = False,
+    resume_latest: Annotated[
+        str | None,
+        typer.Option(
+            "--resume-latest",
+            help="Checkpoint directory of an earlier launch of this job: resume from its "
+            "newest loadable checkpoint (last.ckpt first) and continue the source MLflow run, "
+            "or start a fresh run when the directory holds no checkpoint yet. Made for "
+            "relaunches after a slurm requeue; --weights then only applies to the fresh start.",
+        ),
+    ] = None,
 ) -> None:
     """Run model training through the Hydra-backed training entrypoint.
 
@@ -280,8 +291,27 @@ def train(
     """
     if weights and resume_checkpoint:
         raise typer.BadParameter("--weights and --resume-checkpoint are mutually exclusive.")
-    if new_run and not resume_checkpoint:
-        raise typer.BadParameter("--new-run requires --resume-checkpoint.")
+    if resume_latest and resume_checkpoint:
+        raise typer.BadParameter("--resume-latest and --resume-checkpoint are mutually exclusive.")
+    if new_run and not (resume_checkpoint or resume_latest):
+        raise typer.BadParameter("--new-run requires --resume-checkpoint or --resume-latest.")
+    if resume_latest:
+        from autoware_ml.utils.checkpoints import find_latest_checkpoint
+
+        latest = find_latest_checkpoint(Path(resume_latest).expanduser())
+        if latest is None:
+            typer.echo(
+                f"No loadable checkpoint under '{resume_latest}', starting a fresh run.",
+                err=True,
+            )
+        else:
+            typer.echo(f"Resuming from the latest checkpoint '{latest}'.", err=True)
+            resume_checkpoint = str(latest)
+            if weights:
+                typer.echo(
+                    "Ignoring --weights: the resumed checkpoint carries the weights.", err=True
+                )
+                weights = None
 
     hydra_overrides: list[str] = []
     if weights:

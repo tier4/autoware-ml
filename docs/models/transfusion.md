@@ -60,19 +60,21 @@ The current verification scope covers ONNX export. TensorRT engine generation ha
 
 ## Implementation
 
-| Path                                                    | Description                       |
-| ------------------------------------------------------- | --------------------------------- |
-| `autoware_ml/models/detection3d/transfusion.py`         | TransFusion model wrapper         |
-| `autoware_ml/models/detection3d/encoders/voxel.py`      | Hard voxelization feature encoder |
-| `autoware_ml/models/detection3d/encoders/sparse.py`     | Sparse 3D convolution encoder     |
-| `autoware_ml/models/detection3d/backbones/second.py`    | SECOND backbone                   |
-| `autoware_ml/models/detection3d/necks/second_fpn.py`    | SECONDFPN neck                    |
-| `autoware_ml/models/detection3d/heads/transfusion.py`   | TransFusion detection head        |
-| `autoware_ml/models/detection3d/task_modules/`          | Shared assigners, costs, coders   |
-| `autoware_ml/datamodule/nuscenes/detection3d.py`        | NuScenes detection datamodule     |
-| `autoware_ml/datamodule/t4dataset/detection3d.py`       | T4Dataset detection datamodule    |
-| `autoware_ml/preprocessing/detection3d/point_pillar.py` | Pillar preprocessing              |
-| `autoware_ml/configs/tasks/detection3d/transfusion/`    | Task configurations               |
+| Path                                                    | Description                                      |
+| ------------------------------------------------------- | ------------------------------------------------ |
+| `autoware_ml/models/detection3d/transfusion.py`         | TransFusion model wrapper                        |
+| `autoware_ml/models/detection3d/encoders/voxel.py`      | Hard voxelization feature encoder                |
+| `autoware_ml/models/detection3d/encoders/sparse.py`     | Sparse 3D convolution encoder                    |
+| `autoware_ml/models/detection3d/backbones/second.py`    | SECOND backbone                                  |
+| `autoware_ml/models/detection3d/necks/second_fpn.py`    | SECONDFPN neck                                   |
+| `autoware_ml/models/detection3d/heads/transfusion.py`   | TransFusion detection head                       |
+| `autoware_ml/models/detection3d/task_modules/`          | Shared assigners, costs, coders                  |
+| `autoware_ml/datamodule/t4dataset/dataset.py`           | T4Dataset records as a dataset                   |
+| `autoware_ml/datamodule/nuscenes/dataset.py`            | nuScenes dataset                                 |
+| `autoware_ml/datamodule/t4dataset/detection3d.py`       | 3D boxes of a T4Dataset record                   |
+| `autoware_ml/configs/datamodule/`                       | Datamodule, dataset and transform configurations |
+| `autoware_ml/preprocessing/detection3d/point_pillar.py` | Pillar preprocessing                             |
+| `autoware_ml/configs/tasks/detection3d/transfusion/`    | Task configurations                              |
 
 ## Acknowledgment
 

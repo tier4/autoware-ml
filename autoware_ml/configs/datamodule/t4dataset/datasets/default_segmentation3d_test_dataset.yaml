@@ -1,0 +1,9 @@
+_target_: autoware_ml.datamodule.t4dataset.dataset.T4Dataset
+_convert_: all
+_partial_: true
+
+defaults:
+  - segmentation3d@dataset_tasks.Segmentation3D: default_segmentation3d
+  - /datamodule/transforms@transforms: default_segmentation3d_test_transforms
+
+max_num_3d_gt_bboxes: 0

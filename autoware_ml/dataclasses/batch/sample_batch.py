@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Sequence, NamedTuple
 
 import torch
+from jaxtyping import Bool
+from torch import Tensor
 
 from autoware_ml.dataclasses.batch.detection3d import (
     Detection3DGTBatch,
@@ -26,7 +28,7 @@ class ModelGTSample(NamedTuple):
     multi-task model.
     """
 
-    # Can be multi-sweep LiDAR point cloud data, which is a list of LiDAR point cloud data rows for each sweep.
+    # LiDAR point cloud rows of the sample, the current frame first and then one per sweep
     lidar_point_cloud_samples: Sequence[LiDARPointCloudSample] | None
     # Sequence of image data, which is a list of image data row for each sample.
     image_samples: Sequence[ImageSample] | None
@@ -56,6 +58,29 @@ class ModelGTSample(NamedTuple):
     # Seconds spent loading this sample and running it through the transform pipeline.
     # Assigned by the dataset once the pipeline has finished.
     io_processing_time: float = 0.0
+
+    def keep_points(self, keep_mask: Bool[Tensor, " num_points"]) -> ModelGTSample:
+        """
+        Keep the masked points and, when the sample carries them, their semantic labels. The
+        point cloud is filtered in place.
+
+        Args:
+          keep_mask: Mask of the points to keep.
+
+        Returns:
+          ModelGTSample: The sample holding the kept points and their labels.
+
+        Raises:
+          ValueError: If the sample carries no point cloud.
+        """
+        if self.point_cloud_data is None:
+            raise ValueError("The sample carries no point cloud to filter.")
+        self.point_cloud_data.remove_points(keep_mask)
+        if self.segmentation3d_gt_sample is None:
+            return self
+        return self._replace(
+            segmentation3d_gt_sample=self.segmentation3d_gt_sample.remove_labels(keep_mask)
+        )
 
 
 class ModelGTBatch(NamedTuple):

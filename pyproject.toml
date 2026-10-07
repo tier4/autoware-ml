@@ -38,8 +38,8 @@ dependencies = [
     "pydantic>=2.12.5,<2.13.0",
     "rerun-sdk==0.23.1",
     "scipy==1.17.1",
-    "spconv-cu120==2.3.6",
     "t4-devkit @ git+https://github.com/tier4/t4-devkit.git@v0.8.0",
+    "zstandard>=0.23,<1",
     "tensorrt-cu12==10.16.0.72",
     "torch==2.9.1+cu128",
     "torchvision==0.24.1+cu128",
@@ -54,6 +54,13 @@ dev = [
 ]
 test = [
     "pytest==9.0.2",
+]
+# Sparse convolution backend for the PTv3 family. Required for the strided
+# detection encoders, ONNX export and every fp32/CPU path; the mixed precision
+# image replaces it with the `rulebook_torch` kernels instead. See
+# `autoware_ml/ops/sparse_backend.py`.
+spconv = [
+    "spconv-cu120==2.3.6",
 ]
 
 [project.urls]
@@ -115,6 +122,34 @@ zensical = "*"
 [tool.pixi.feature.dev.tasks]
 docs = "zensical build --clean"
 
+# Sparse convolution backend of the default and dev environments. Kept as its
+# own feature so the `rulebook` environment can leave it out; the PEP 621
+# `spconv` extra installs the same pin outside pixi.
+[tool.pixi.feature.spconv.pypi-dependencies]
+spconv-cu120 = "==2.3.6"
+
+# Toolchain for building `rulebook_torch` (repository `spconv-replacement`) from
+# source. The conda-forge CUDA 12.8 toolkit makes the build independent of the
+# host toolkit, which on some machines is 12.1 or 13.2 rather than 12.8.
+# `nvcc` from this feature and the gcc 14 of the `dev` compilers are a supported
+# pair. The extension itself is not a pixi dependency: it needs a CMake build
+# against the pinned torch, driven by `docker/Dockerfile`.
+[tool.pixi.feature.rulebook.dependencies]
+cmake = ">=3.22"
+cuda-cccl = "*"
+cuda-cudart-dev = "*"
+cuda-nvcc = "*"
+# torch's own CMake config links `nvrtc`, and its ATen CUDA headers include
+# `cublas_v2.h`, `cublasLt.h`, `cusolverDn.h` and `cusparse.h`, so the -dev
+# packages of the math libraries have to be in the environment even though
+# rulebook itself never calls into them.
+cuda-nvrtc-dev = "*"
+cuda-version = "12.8.*"
+libcublas-dev = "*"
+libcusolver-dev = "*"
+libcusparse-dev = "*"
+ninja = "*"
+
 # Lightweight environment used by CI to build documentation only.
 [tool.pixi.feature.docs.dependencies]
 python = "3.11.*"
@@ -127,9 +162,13 @@ docs = "zensical build --clean"
 
 [tool.pixi.environments]
 # Default env is the non-dev "use" environment.
-default = { solve-group = "default" }
+default = { features = ["spconv"], solve-group = "default" }
 # Dev env extends the default stack with contributor and docs tooling.
-dev = { features = ["dev"], solve-group = "default" }
+dev = { features = ["dev", "spconv"], solve-group = "default" }
+# Dev stack without spconv, plus the toolchain that builds `rulebook_torch`.
+# Its own solve group keeps the default/dev solve untouched by the CUDA toolkit
+# packages.
+rulebook = { features = ["dev", "rulebook"], solve-group = "rulebook" }
 # Docs env is intentionally isolated from the default CUDA/ML stack.
 docs = { features = ["docs"], solve-group = "docs", no-default-feature = true }
 

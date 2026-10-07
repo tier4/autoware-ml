@@ -1,0 +1,11 @@
+# Pseudo labelled databases of the platforms other than J6 gen2 and large bus
+defaults:
+  - t4dataset/t4dataset_common@_here_
+  - t4dataset/scenarios@scenarios.db_base_pseudo: detection3d_segmentation3d_pseudo/db_base_pseudo
+  - _self_
+
+version: T4Dataset-base_pseudo-v2.0.0
+cache_path: ${cache_root_path}/t4dataset_pseudo/
+root_path: ${data_root_path}/t4dataset/pseudo_large/
+# The original tables keep the fine box names
+box_annotation_dir: annotation_orig

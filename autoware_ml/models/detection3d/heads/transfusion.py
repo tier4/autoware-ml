@@ -29,6 +29,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
 from autoware_ml.losses.detection3d.focal import SigmoidFocalLoss
 from autoware_ml.losses.detection3d.gaussian_focal import GaussianFocalLoss
 from autoware_ml.models.common.layers.conv import ConvModule
@@ -714,16 +715,17 @@ class TransFusionHead(nn.Module):
         outputs["query_labels"] = top_classes
         return outputs
 
-    def predict(self, outputs: dict[str, torch.Tensor]) -> list[dict[str, torch.Tensor]]:
+    def predict(self, outputs: dict[str, torch.Tensor]) -> list[Detection3DSamplePredictions]:
         """Decode predictions into metric-space boxes.
 
         Args:
             outputs: Raw prediction tensors produced by the head.
 
         Returns:
-            List of decoded prediction dictionaries, one per batch element.
+            Typed predictions, one per sample of the batch.
         """
-        batch_score = outputs["heatmap"][..., -self.num_proposals :].sigmoid()
+        # Mixed precision evaluation hands over float16 outputs, the boxes decode in float32.
+        batch_score = outputs["heatmap"][..., -self.num_proposals :].float().sigmoid()
         query_labels = outputs.get("query_labels")
         if query_labels is None:
             raise ValueError("TransFusion prediction requires query_labels from forward().")
@@ -732,14 +734,14 @@ class TransFusionHead(nn.Module):
             .permute(0, 2, 1)
             .to(batch_score.dtype)
         )
-        batch_score = batch_score * outputs["query_heatmap_score"] * one_hot
-        batch_center = outputs["center"][..., -self.num_proposals :]
-        batch_height = outputs["height"][..., -self.num_proposals :]
-        batch_dim = outputs["dim"][..., -self.num_proposals :]
-        batch_rot = outputs["rot"][..., -self.num_proposals :]
+        batch_score = batch_score * outputs["query_heatmap_score"].float() * one_hot
+        batch_center = outputs["center"][..., -self.num_proposals :].float()
+        batch_height = outputs["height"][..., -self.num_proposals :].float()
+        batch_dim = outputs["dim"][..., -self.num_proposals :].float()
+        batch_rot = outputs["rot"][..., -self.num_proposals :].float()
         batch_vel = outputs.get("vel")
         if batch_vel is not None:
-            batch_vel = batch_vel[..., -self.num_proposals :]
+            batch_vel = batch_vel[..., -self.num_proposals :].float()
 
         decoded = self.bbox_coder.decode(
             batch_score,
@@ -753,11 +755,16 @@ class TransFusionHead(nn.Module):
 
         results = []
         for prediction in decoded:
-            boxes = prediction["bboxes"]
-            scores = prediction["scores"]
+            # Under autocast the decoded tensors are fp16; the prediction type is fp32.
+            boxes = prediction["bboxes"].float()
+            scores = prediction["scores"].float()
             labels = prediction["labels"]
             if boxes.numel() == 0:
-                results.append({"bboxes_3d": boxes, "scores_3d": scores, "labels_3d": labels})
+                results.append(
+                    Detection3DSamplePredictions(
+                        bboxes_3d=boxes, scores_3d=scores, labels_3d=labels
+                    )
+                )
                 continue
             if self.nms_type is None:
                 kept_indices = torch.arange(scores.shape[0], device=scores.device)
@@ -768,11 +775,11 @@ class TransFusionHead(nn.Module):
                     f"Unsupported TransFusion NMS type at runtime: {self.nms_type!r}"
                 )
             results.append(
-                {
-                    "bboxes_3d": boxes[kept_indices],
-                    "scores_3d": scores[kept_indices],
-                    "labels_3d": labels[kept_indices],
-                }
+                Detection3DSamplePredictions(
+                    bboxes_3d=boxes[kept_indices],
+                    scores_3d=scores[kept_indices],
+                    labels_3d=labels[kept_indices],
+                )
             )
         return results
 

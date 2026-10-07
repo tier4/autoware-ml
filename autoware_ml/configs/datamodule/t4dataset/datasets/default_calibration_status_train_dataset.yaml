@@ -1,0 +1,10 @@
+_target_: autoware_ml.datamodule.t4dataset.dataset.T4Dataset
+_convert_: all
+_partial_: true
+
+defaults:
+  - /datamodule/transforms@transforms: default_calibration_status_train_transforms
+
+dataset_tasks: {}
+
+max_num_3d_gt_bboxes: 0

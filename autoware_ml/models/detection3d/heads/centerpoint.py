@@ -14,6 +14,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
 from autoware_ml.losses.detection3d.gaussian_focal import GaussianFocalLoss
 from autoware_ml.models.common.layers.conv import ConvModule
 from autoware_ml.models.detection3d.task_modules.heatmap import (
@@ -248,8 +249,10 @@ class CenterHead(nn.Module):
         total_loss = loss_heatmap + self.loss_bbox_weight * loss_bbox
         return {"loss": total_loss, "loss_heatmap": loss_heatmap, "loss_bbox": loss_bbox}
 
-    def predict(self, outputs: dict[str, torch.Tensor]) -> list[dict[str, torch.Tensor]]:
+    def predict(self, outputs: dict[str, torch.Tensor]) -> list[Detection3DSamplePredictions]:
         """Decode dense head outputs into 3D boxes, scores, and labels."""
+        # Mixed precision evaluation hands over float16 outputs, the boxes decode in float32.
+        outputs = {name: value.float() for name, value in outputs.items()}
         heatmap = outputs["heatmap"].sigmoid()
         pooled = F.max_pool2d(heatmap, kernel_size=3, stride=1, padding=1)
         heatmap = heatmap * (pooled == heatmap)
@@ -270,11 +273,13 @@ class CenterHead(nn.Module):
             keep = flat_scores > self.score_threshold
             if keep.sum() == 0:
                 predictions.append(
-                    {
-                        "bboxes_3d": heatmap.new_zeros((0, 9 if self.use_velocity else 7)),
-                        "scores_3d": heatmap.new_zeros((0,)),
-                        "labels_3d": heatmap.new_zeros((0,), dtype=torch.long),
-                    }
+                    Detection3DSamplePredictions(
+                        bboxes_3d=heatmap.new_zeros(
+                            (0, 9 if self.use_velocity else 7), dtype=torch.float32
+                        ),
+                        scores_3d=heatmap.new_zeros((0,), dtype=torch.float32),
+                        labels_3d=heatmap.new_zeros((0,), dtype=torch.long),
+                    )
                 )
                 continue
 
@@ -327,11 +332,12 @@ class CenterHead(nn.Module):
                 kept_indices = kept_indices[ranking]
 
             predictions.append(
-                {
-                    "bboxes_3d": boxes[kept_indices],
-                    "scores_3d": flat_scores[kept_indices],
-                    "labels_3d": flat_classes[kept_indices],
-                }
+                Detection3DSamplePredictions(
+                    # Under autocast the decoded tensors are fp16; the prediction type is fp32.
+                    bboxes_3d=boxes[kept_indices].float(),
+                    scores_3d=flat_scores[kept_indices].float(),
+                    labels_3d=flat_classes[kept_indices],
+                )
             )
         return predictions
 

@@ -25,64 +25,15 @@ from autoware_ml.dataclasses.models.detection3d.head_outputs import (
     CenterHeadOutputs,
     Detection3DHeadOutputs,
 )
-from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 
 
 class TestModelPredictions(unittest.TestCase):
-    """Unit tests for the decoded multi-task predictions container."""
-
-    def _build_sample_predictions(self, num_boxes: int) -> Detection3DSamplePredictions:
-        """Build ``num_boxes`` decoded boxes with velocity, distinct per box."""
-        return Detection3DSamplePredictions(
-            # Box i holds the value i in every parameter, so boxes stay distinguishable.
-            bboxes_3d=torch.arange(num_boxes, dtype=torch.float32)
-            .unsqueeze(1)
-            .expand(num_boxes, 9)
-            .contiguous(),
-            scores_3d=torch.linspace(1.0, 0.0, num_boxes, dtype=torch.float32),
-            labels_3d=torch.arange(num_boxes, dtype=torch.int64),
-        )
-
-    def test_to_list_emits_one_dict_per_sample_in_batch_order(self) -> None:
-        """Test that the legacy list layout keeps sample order and hands over the same tensors."""
-        samples = [self._build_sample_predictions(2), self._build_sample_predictions(1)]
-        predictions = ModelPredictions(detection3d_predictions=samples)
-
-        predictions_list = predictions.to_list()
-
-        self.assertEqual(len(predictions_list), 2)
-        for sample, entry in zip(samples, predictions_list):
-            self.assertEqual(set(entry), {"bboxes_3d", "scores_3d", "labels_3d"})
-            self.assertIs(entry["bboxes_3d"], sample.bboxes_3d)
-            self.assertIs(entry["scores_3d"], sample.scores_3d)
-            self.assertIs(entry["labels_3d"], sample.labels_3d)
-
-    def test_to_list_without_detection_predictions_raises(self) -> None:
-        """Test that a container without 3D detections cannot be converted to a list."""
-        predictions = ModelPredictions(detection3d_predictions=None)
-
-        with self.assertRaises(ValueError):
-            predictions.to_list()
-
-    def test_to_list_keeps_empty_samples(self) -> None:
-        """Test that a sample with no surviving boxes still occupies its slot."""
-        predictions = ModelPredictions(
-            detection3d_predictions=[
-                self._build_sample_predictions(0),
-                self._build_sample_predictions(3),
-            ]
-        )
-
-        predictions_list = predictions.to_list()
-
-        self.assertEqual(len(predictions_list), 2)
-        self.assertEqual(tuple(predictions_list[0]["bboxes_3d"].shape), (0, 9))
-        self.assertEqual(tuple(predictions_list[1]["bboxes_3d"].shape), (3, 9))
+    """Unit tests for the decoded predictions container."""
 
     def test_rejects_plain_dicts_as_sample_predictions(self) -> None:
-        """Test that the legacy dict layout is not accepted as input, only produced as output."""
+        """Test that plain dicts are not accepted as sample predictions."""
         with self.assertRaises(ValidationError):
             ModelPredictions(
                 detection3d_predictions=[{"bboxes_3d": torch.zeros(1, 9)}]  # type: ignore[list-item]

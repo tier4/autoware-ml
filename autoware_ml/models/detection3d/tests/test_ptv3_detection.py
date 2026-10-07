@@ -7,15 +7,13 @@ from pathlib import Path
 import pytest
 import torch
 
-from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
+from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
 from autoware_ml.models.detection3d.tests.ptv3_detection_fixtures import (
     build_inputs,
     build_seg_model,
-    build_targets,
     build_trans_model,
-    move_batch_to_device,
-    move_targets_to_device,
 )
+from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
 from autoware_ml.utils.checkpoints import apply_matching_weights
 
 
@@ -50,21 +48,18 @@ def test_ptv3_bev_projection_assume_valid_matches_guarded_path_for_valid_coords(
     reason="PTv3 sparse-convolution tests require CUDA spconv",
 )
 def test_ptv3_transhead_detection_runs_loss_and_predict() -> None:
-    device = torch.device("cuda")
-    model = build_trans_model().to(device)
-    inputs = move_batch_to_device(build_inputs(), device)
-    gt_boxes, gt_labels = build_targets()
-    gt_boxes, gt_labels = move_targets_to_device(gt_boxes, gt_labels, device)
+    model = build_trans_model().to(torch.device("cuda"))
+    batch = build_inputs(device=torch.device("cuda"))
 
-    outputs = model(**inputs)
-    metrics = model.compute_metrics({"gt_boxes": gt_boxes, "gt_labels": gt_labels}, outputs)
+    outputs = model(**model.bind_forward_inputs(batch))
+    metrics = model.compute_metrics(batch, outputs)
     predictions = model.bbox_head.predict(outputs)
 
     assert "loss" in metrics
     assert outputs["dense_heatmap"].shape[:2] == (1, 2)
     assert outputs["query_labels"].shape == (1, 8)
     assert isinstance(predictions, list)
-    assert set(predictions[0]) == {"bboxes_3d", "scores_3d", "labels_3d"}
+    assert isinstance(predictions[0], Detection3DSamplePredictions)
 
 
 def test_ptv3_detection_loads_encoder_from_seg_checkpoint_via_matching_weights(

@@ -1,0 +1,34 @@
+# TransFusion evaluation pipeline on nuScenes, four point features and nine sweeps
+_target_: autoware_ml.transforms.base.TransformsCompose
+_convert_: all
+
+pipeline:
+  - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
+    _convert_: all
+
+    use_dim: [0, 1, 2, 3]
+    bev_remove_radius: 0.0
+
+  - _target_: autoware_ml.transforms.point_cloud.loading.LoadMultiSweepPointsFromFile
+    _convert_: all
+
+    # Nine sweeps of the 20 Hz lidar
+    past:
+      _target_: autoware_ml.transforms.point_cloud.loading.SweepWindow
+      num: 9
+      time_lag_range: [0.025, 0.475]
+      selection: nearest
+    bev_remove_radius: 1.0
+    use_timestamp_difference: false
+    use_dim: [0, 1, 2, 3] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]
+
+  - _target_: autoware_ml.transforms.point_cloud.geometry.PointsRangeFilter
+    _convert_: all
+
+    points_range: ${point_cloud_range}
+
+  - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesLabelNameFilter
+    _convert_: all
+
+    label_names_to_keep: ${database.taxonomy.detection3d.class_names}
+    class_names: ${database.taxonomy.detection3d.class_names}

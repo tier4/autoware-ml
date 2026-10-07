@@ -1,288 +1,212 @@
-# Copyright 2026 TIER IV, Inc.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-"""3D bounding-box filter transforms."""
-
-from __future__ import annotations
+"""
+Filters of the 3D bounding boxes of a sample, by class, attribute, range and point count.
+The code is modified based on
+https://github.com/open-mmlab/mmdetection3d/blob/main/mmdet3d/datasets/transforms/transforms_3d.py.
+"""
 
 from collections.abc import Sequence
-from typing import Any
 
-import numpy as np
+import torch
 
-from autoware_ml.geometry.utils import points_in_rotated_box
-
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
+from autoware_ml.geometry.points.base_points import BasePoints
+from autoware_ml.geometry.bbox_3d.base_bbox3d import BaseBBoxes3D
 from autoware_ml.transforms.base import BaseTransform
 
-_BOX_KEYS = ("gt_boxes", "gt_names", "gt_labels", "gt_num_points")
 
-
-def _filter_present_box_keys(input_dict: dict[str, Any], mask: np.ndarray) -> None:
-    """Apply one per-box mask to every present box-aligned annotation key."""
-    for key in _BOX_KEYS:
-        if key in input_dict:
-            input_dict[key] = input_dict[key][mask]
-
-
-def _resolve_point_coords(input_dict: dict[str, Any]) -> np.ndarray:
-    """Return ``(N, 3)`` point coordinates from ``coord`` or ``points``.
-
-    PTv3-style pipelines split the cloud into ``coord``; pillar pipelines keep
-    the raw ``points`` array (consumed downstream by the voxel preprocessor).
-    Either is acceptable for counting points inside boxes.
+def parse_exclusion_rules(rules: Sequence[Sequence[str]]) -> frozenset[tuple[str, str]]:
     """
-    for key in ("coord", "points"):
-        if key in input_dict:
-            return np.asarray(input_dict[key], dtype=np.float32)[:, :3]
-    raise KeyError("Point-count filters require a point cloud under 'coord' or 'points'.")
-
-
-def _count_points_in_rotated_boxes(
-    coord: np.ndarray,
-    boxes: np.ndarray,
-) -> np.ndarray:
-    """Count the number of points inside each oriented 3D bounding box.
+    Read box exclusion rules as class and attribute pairs.
 
     Args:
-        coord: Point coordinates of shape ``(N, 3)``.
-        boxes: Bounding boxes of shape ``(M, 7)`` with columns
-            ``[cx, cy, cz, dx, dy, dz, yaw]``.
+      rules: Exclusion rules, each a [class_name, attribute] pair.
 
     Returns:
-        Integer array of shape ``(M,)`` with the point count per box.
+      frozenset[tuple[str, str]]: The rules as (class_name, attribute) pairs.
+
+    Raises:
+      ValueError: If a rule is not a pair.
     """
-    return np.array(
-        [int(points_in_rotated_box(coord, box).sum()) for box in boxes], dtype=np.int64
-    ).reshape(len(boxes))
+    for index, rule in enumerate(rules):
+        if isinstance(rule, str) or len(rule) != 2:
+            raise ValueError(
+                f"Exclusion rule {index} must be a [class_name, attribute] pair, got {rule!r}."
+            )
+    return frozenset((str(rule[0]), str(rule[1])) for rule in rules)
 
 
-class ObjectNameFilter(BaseTransform):
-    """Keep only 3D boxes whose class name is in the allowed list.
+class BBoxesMinPointsFilter(BaseTransform):
+    """Filter 3D bounding boxes by minimum number of points and distance of bboxes."""
 
-    Required keys:
-        gt_names: Per-box class name array.
+    _required_keys = ["detection3d_gt_bboxes_3d", "point_cloud_data"]
 
-    Optional keys:
-        gt_boxes: 3D bounding boxes. Filtered when present.
-        gt_labels: Per-box label indices. Filtered when present.
-        gt_num_points: Per-box lidar point counts. Filtered when present.
-
-    Generated keys:
-        gt_names: Filtered class names.
-        gt_boxes: Filtered boxes (when present).
-        gt_labels: Filtered labels (when present).
-        gt_num_points: Filtered lidar point counts (when present).
-    """
-
-    _required_keys = ["gt_names"]
-
-    def __init__(self, *, classes: Sequence[str]) -> None:
-        """Initialize the ObjectNameFilter transform.
+    def __init__(
+        self,
+        min_points: int,
+        bev_range: Sequence[float],
+    ) -> None:
+        """
+        Initialize the BBoxesMinPointsFilter transform.
 
         Args:
-            classes: Allowed class names retained in the sample.
+            min_points (int): The minimum number of points required for a bounding box to be
+                kept.
+            bev_range (Sequence[float]): The BEV range ([x_min, y_min, x_max, y_max]) of the
+                bounding boxes the minimum number of points applies to.
         """
-        self.classes = set(classes)
+        super().__init__(probability=None)
+        self.min_points = min_points
+        self.bev_range = torch.tensor(bev_range, dtype=torch.float32)
 
-    def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
-        """Filter present box-aligned arrays by allowed class names.
-
-        Args:
-            input_dict: Sample dictionary containing ``gt_names``.
-
-        Returns:
-            Updated sample dictionary with disallowed classes removed.
-        """
-        mask = np.array([n in self.classes for n in input_dict["gt_names"]], dtype=bool)
-        _filter_present_box_keys(input_dict, mask)
-        return input_dict
-
-
-class ObjectRangeFilter(BaseTransform):
-    """Filter 3D bounding boxes and associated labels by point-cloud range.
-
-    Required keys:
-        (none)
-
-    Optional keys:
-        gt_boxes: 3D bounding boxes (Nx7 or Nx9). Filtered when present.
-        gt_num_points: Per-box lidar point counts. Filtered when present.
-
-    Generated keys:
-        gt_boxes: Filtered boxes (when present).
-        gt_names: Filtered class names (when present alongside gt_boxes).
-        gt_labels: Filtered labels (when present alongside gt_boxes).
-        gt_num_points: Filtered lidar point counts (when present alongside gt_boxes).
-    """
-
-    _required_keys: list[str] = []
-    _optional_keys = ["gt_boxes"]
-
-    def __init__(self, *, point_cloud_range: Sequence[float]) -> None:
-        """Initialize the ObjectRangeFilter transform.
-
-        Args:
-            point_cloud_range: ``[x_min, y_min, z_min, x_max, y_max, z_max]``.
-        """
-        self.point_cloud_range = np.asarray(point_cloud_range, dtype=np.float32)
-
-    def apply_defaults(self, input_dict: dict[str, Any]) -> None:
-        """No defaults needed - transform is a no-op when gt_boxes is absent."""
-        pass
-
-    def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
-        """Filter boxes whose centers fall outside the configured range.
-
-        Args:
-            input_dict: Sample dictionary updated in place.
-
-        Returns:
-            Updated sample dictionary.
-        """
-        if "gt_boxes" not in input_dict:
-            return input_dict
-
-        boxes = input_dict["gt_boxes"]
-        pcr = self.point_cloud_range
-        mask = (
-            (boxes[:, 0] >= pcr[0])
-            & (boxes[:, 1] >= pcr[1])
-            & (boxes[:, 2] >= pcr[2])
-            & (boxes[:, 0] <= pcr[3])
-            & (boxes[:, 1] <= pcr[4])
-            & (boxes[:, 2] <= pcr[5])
+    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
+        """Drop the boxes in range that hold fewer than ``min_points`` points."""
+        # This is checked in the _validate_required_keys()
+        detection3d_gt_bboxes_3d: BaseBBoxes3D = (
+            model_gt_sample.detection3d_gt_bboxes_3d  # type: ignore[reportOptionalMemberAccess]
         )
-        _filter_present_box_keys(input_dict, mask)
-        return input_dict
+        if not len(detection3d_gt_bboxes_3d):
+            return model_gt_sample
+
+        # This is checked in the _validate_required_keys()
+        point_cloud_data: BasePoints = (
+            model_gt_sample.point_cloud_data  # type: ignore[reportOptionalMemberAccess]
+        )
+
+        in_range = detection3d_gt_bboxes_3d.in_range_bev(self.bev_range)
+        points_in_bboxes = detection3d_gt_bboxes_3d.compute_points_in_bboxes(
+            points=point_cloud_data.coords,
+        )
+
+        # Boxes outside the range are kept whatever their point count
+        keep_bboxes_mask = (points_in_bboxes.sum(dim=1) >= self.min_points) | ~in_range
+        detection3d_gt_bboxes_3d.remove_bboxes(keep_bboxes_mask)
+        return model_gt_sample
 
 
-class ObjectMinPointsFilter(BaseTransform):
-    """Remove 3D boxes that contain fewer than a minimum number of points.
+class BBoxesRangeFilter(BaseTransform):
+    """Filter 3D bounding boxes whose center lies outside the point cloud range."""
 
-    Required keys:
-        gt_names: Class name per box.
+    _required_keys = ["detection3d_gt_bboxes_3d"]
 
-    Optional keys:
-        gt_boxes: 3D bounding boxes (Nx7 or Nx9). Filtered when present.
-        coord: Point coordinates (Nx3 or wider). Required when gt_boxes is present.
-        points: Raw point array (Nx3 or wider). Required when gt_boxes is present and
-            coord is absent.
-        gt_num_points: Per-box lidar point counts. Filtered when present.
+    def __init__(
+        self,
+        point_cloud_range: Sequence[float],
+    ) -> None:
+        """
+        Initialize the BBoxesRangeFilter transform.
 
-    Generated keys:
-        gt_boxes: Filtered boxes (when present).
-        gt_names: Filtered class names.
-        gt_labels: Filtered labels (when present).
-        gt_num_points: Filtered lidar point counts (when present).
+        Args:
+            point_cloud_range (Sequence[float]): The range ([x_min, y_min, z_min, x_max, y_max,
+                z_max]) the bounding box centers have to lie in.
+        """
+        super().__init__(probability=None)
+        self.point_cloud_range = torch.tensor(point_cloud_range, dtype=torch.float32)
+
+    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
+        """Drop the boxes whose center lies outside the point cloud range."""
+        # This is checked in the _validate_required_keys()
+        detection3d_gt_bboxes_3d: BaseBBoxes3D = (
+            model_gt_sample.detection3d_gt_bboxes_3d  # type: ignore[reportOptionalMemberAccess]
+        )
+        if not len(detection3d_gt_bboxes_3d):
+            return model_gt_sample
+
+        in_range_masks = detection3d_gt_bboxes_3d.in_range_3d(self.point_cloud_range)
+        detection3d_gt_bboxes_3d.remove_bboxes(in_range_masks)
+
+        return model_gt_sample
+
+
+class BBoxesLabelNameFilter(BaseTransform):
+    """Filter 3D bounding boxes by the name of the class they are mapped to.
+
+    A box keeps the label name it was annotated with, which can be finer than the class it
+    trains as (an ambulance trains as a car). The class is read from the label index of the
+    box, so a box is kept when its class is one of the kept names, whatever its own name.
     """
 
-    _required_keys = ["gt_names"]
-    _optional_keys = ["gt_boxes", "coord", "points"]
+    _required_keys = ["detection3d_gt_bboxes_3d"]
 
-    def __init__(self, *, min_num_points: int) -> None:
-        """Initialize the ObjectMinPointsFilter transform.
-
-        Args:
-            min_num_points: Minimum number of points required inside each box.
-        """
-        self.min_num_points = min_num_points
-
-    def apply_defaults(self, input_dict: dict[str, Any]) -> None:
-        """No defaults needed - transform is a no-op when gt_boxes is absent."""
-        pass
-
-    def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
-        """Remove boxes with too few interior points.
+    def __init__(self, label_names_to_keep: Sequence[str], class_names: Sequence[str]) -> None:
+        """Initialize the BBoxesLabelNameFilter transform.
 
         Args:
-            input_dict: Sample dictionary updated in place.
-
-        Returns:
-            Updated sample dictionary.
+            label_names_to_keep: Names of the classes whose boxes are kept.
+            class_names: Class names in label index order.
         """
-        if "gt_boxes" not in input_dict:
-            return input_dict
+        super().__init__(probability=None)
+        unknown = sorted(set(label_names_to_keep) - set(class_names))
+        if unknown:
+            raise ValueError(f"label_names_to_keep names classes that do not exist: {unknown}.")
+        self.label_indices_to_keep = torch.tensor(
+            [index for index, name in enumerate(class_names) if name in label_names_to_keep],
+            dtype=torch.int64,
+        )
 
-        coord = _resolve_point_coords(input_dict)
-        boxes = input_dict["gt_boxes"]
-        counts = _count_points_in_rotated_boxes(coord, boxes)
-        mask = counts >= self.min_num_points
-        _filter_present_box_keys(input_dict, mask)
-        return input_dict
+    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
+        """Filter 3D bounding boxes by the class of their label index."""
+        # This is checked in the _validate_required_keys()
+        detection3d_gt_bboxes_3d: BaseBBoxes3D = (
+            model_gt_sample.detection3d_gt_bboxes_3d  # type: ignore[reportOptionalMemberAccess]
+        )
+        if not len(detection3d_gt_bboxes_3d):
+            return model_gt_sample
+
+        labels = detection3d_gt_bboxes_3d.bbox_labels.to(torch.int64)
+        bboxes_to_keep_mask = torch.isin(labels, self.label_indices_to_keep.to(labels.device))
+
+        # TODO(Kok Seang): Consider to make it immutable and return a new instance
+        # instead of modifying in place.
+        detection3d_gt_bboxes_3d.remove_bboxes(bboxes_to_keep_mask)
+        return model_gt_sample
 
 
-class ObjectRangeMinPointsFilter(BaseTransform):
-    """Remove boxes below a point-count threshold within a BEV radial interval.
+class BBoxesAttributeFilter(BaseTransform):
+    """
+    Drop the 3D bounding boxes whose class and attributes match an exclusion rule.
 
-    Required keys:
-        gt_names: Class name per box.
-
-    Optional keys:
-        gt_boxes: 3D bounding boxes (Nx7 or Nx9). Filtered when present.
-        coord: Point coordinates (Nx3 or wider). Required when gt_boxes is present.
-        points: Raw point array (Nx3 or wider). Required when gt_boxes is present and
-            coord is absent.
-        gt_num_points: Per-box lidar point counts. Filtered when present.
-
-    Generated keys:
-        gt_boxes: Filtered boxes (when present).
-        gt_names: Filtered class names.
-        gt_labels: Filtered labels (when present).
-        gt_num_points: Filtered lidar point counts (when present).
+    Some annotated objects are not detection targets, for example a parked bicycle or a
+    motorcycle without a rider. A rule names a class and an attribute. Boxes of that class with
+    that attribute are removed, so they are neither trained on nor scored.
     """
 
-    _required_keys = ["gt_names"]
-    _optional_keys = ["gt_boxes", "coord", "points"]
+    _required_keys = ["detection3d_gt_bboxes_3d"]
 
-    def __init__(self, *, range_radius: Sequence[float], min_num_points: int) -> None:
-        """Initialize the ObjectRangeMinPointsFilter transform.
+    def __init__(self, filter_attributes: Sequence[Sequence[str]]) -> None:
+        """
+        Initialize the BBoxesAttributeFilter transform.
 
         Args:
-            range_radius: Radial interval ``[min_radius, max_radius]`` in meters.
-            min_num_points: Minimum points required for boxes inside the interval.
+          filter_attributes: Exclusion rules, each a pair of class name and attribute name.
         """
-        if len(range_radius) != 2:
-            raise ValueError(f"range_radius must contain [min, max], got {range_radius}")
-        min_radius, max_radius = (float(value) for value in range_radius)
-        if min_radius < 0.0 or min_radius >= max_radius:
-            raise ValueError(f"Expected 0 <= min radius < max radius, got {range_radius}")
-        if min_num_points <= 0:
-            raise ValueError(f"min_num_points must be positive, got {min_num_points}")
-        self.min_radius = min_radius
-        self.max_radius = max_radius
-        self.min_num_points = min_num_points
+        super().__init__(probability=None)
+        self.filter_attributes = parse_exclusion_rules(filter_attributes)
 
-    def apply_defaults(self, input_dict: dict[str, Any]) -> None:
-        """No defaults needed because missing boxes make this transform a no-op."""
-        pass
+    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
+        """Drop the boxes matching an exclusion rule."""
+        # This is checked in the _validate_required_keys()
+        detection3d_gt_bboxes_3d: BaseBBoxes3D = (
+            model_gt_sample.detection3d_gt_bboxes_3d  # type: ignore[reportOptionalMemberAccess]
+        )
+        if not len(detection3d_gt_bboxes_3d) or not self.filter_attributes:
+            return model_gt_sample
 
-    def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
-        """Filter boxes in the configured radial band by point count.
+        bbox_attributes = detection3d_gt_bboxes_3d.bbox_attributes
+        if bbox_attributes is None:
+            raise ValueError(
+                "The attribute filter needs the attributes of every box, the dataset served none."
+            )
 
-        Args:
-            input_dict: Sample dictionary updated in place.
-
-        Returns:
-            Updated sample dictionary with low-support in-range boxes removed.
-        """
-        if "gt_boxes" not in input_dict:
-            return input_dict
-
-        boxes = input_dict["gt_boxes"]
-        radii = np.linalg.norm(boxes[:, :2], axis=1)
-        in_range = (radii >= self.min_radius) & (radii < self.max_radius)
-        counts = _count_points_in_rotated_boxes(_resolve_point_coords(input_dict), boxes)
-        mask = ~in_range | (counts >= self.min_num_points)
-        _filter_present_box_keys(input_dict, mask)
-        return input_dict
+        bboxes_to_keep_mask = torch.tensor(
+            [
+                not any(
+                    (label_name, attribute) in self.filter_attributes for attribute in attributes
+                )
+                for label_name, attributes in zip(
+                    detection3d_gt_bboxes_3d.bbox_label_names, bbox_attributes, strict=True
+                )
+            ],
+            dtype=torch.bool,
+        )
+        detection3d_gt_bboxes_3d.remove_bboxes(bboxes_to_keep_mask)
+        return model_gt_sample

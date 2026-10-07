@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import math
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -11,6 +13,12 @@ import torch
 import torch.nn as nn
 
 import autoware_ml.utils.point_cloud.structures as point_structures
+from autoware_ml.models.detection3d.tests.ptv3_detection_fixtures import (
+    build_inputs,
+    build_ptv3_encoder,
+    build_seg_head,
+    build_seg_model,
+)
 from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     Point,
     PointSequential,
@@ -18,6 +26,16 @@ from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     SerializedAttention,
     SerializedPooling,
     build_serialized_pooling_meta,
+)
+from autoware_ml.models.segmentation3d.encoders.voxel import (
+    PastFutureVoxelFeatureEncoder,
+    SweepSplitVoxelFeatureEncoder,
+)
+from autoware_ml.models.segmentation3d.heads.ptv3 import (
+    segmentation_eval_output,
+    segmentation_point_loss,
+    segmentation_predict_outputs,
+    voxel_supervision,
 )
 from autoware_ml.models.segmentation3d.ptv3 import (
     PTv3SegmentationModel,
@@ -28,12 +46,6 @@ from autoware_ml.models.segmentation3d.ptv3_base import (
     validate_serialization_geometry,
 )
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
-from autoware_ml.models.detection3d.tests.ptv3_detection_fixtures import (
-    build_inputs,
-    build_ptv3_encoder,
-    build_seg_head,
-    move_batch_to_device,
-)
 
 
 def test_serialized_attention_requires_supported_flash_configuration() -> None:
@@ -147,6 +159,7 @@ def test_build_export_module_disables_flash_attention_without_mutating_live_enco
     ):
         export_module = _PTv3SegmentationExportModule(
             encoder=encoder.prepare_for_export(("z", "z-trans")),
+            voxel_encoder=SweepSplitVoxelFeatureEncoder(),
             seg3d_head=nn.Linear(4, 2),
             sparse_shape=torch.tensor([64, 64, 64], dtype=torch.long),
             serialized_depth=torch.tensor(6, dtype=torch.long),
@@ -273,6 +286,51 @@ def test_serialized_attention_non_export_mode_adapts_patch_size() -> None:
     assert attention.patch_size == 3
 
 
+def test_serialized_attention_export_padding_matches_batched_branch() -> None:
+    """Export-mode padding wraps the preceding patch exactly like the batched branch."""
+    attention = SerializedAttention(
+        channels=32,
+        num_heads=4,
+        patch_size=4,
+        qkv_bias=True,
+        qk_scale=None,
+        attn_drop=0.0,
+        proj_drop=0.0,
+        order_index=0,
+        enable_rpe=False,
+        enable_flash=True,
+        upcast_attention=False,
+        upcast_softmax=False,
+    )
+    attention.disable_flash()
+    attention.patch_size = attention.patch_size_max
+
+    def make_point(num_points: int) -> Point:
+        return Point(
+            {
+                "feat": torch.randn(num_points, 32),
+                "offset": torch.tensor([num_points], dtype=torch.long),
+            }
+        )
+
+    # Both a non-divisible count (padded last window) and a divisible one (no padding).
+    for num_points in (10, 8):
+        point = make_point(num_points)
+        attention.export_mode = False
+        batched_pad, batched_unpad, _ = attention._get_padding_and_inverse(point)
+        attention.export_mode = True
+        export_pad, export_unpad, _ = attention._get_padding_and_inverse(point)
+        assert torch.equal(export_pad, batched_pad)
+        assert torch.equal(export_unpad, batched_unpad)
+
+    # Sequences shorter than one patch cannot wrap a full patch back, and the padded
+    # indices must still stay within the real token range.
+    attention.export_mode = True
+    short_pad, _, _ = attention._get_padding_and_inverse(make_point(2))
+    assert short_pad.min().item() >= 0
+    assert short_pad.max().item() < 2
+
+
 def test_point_sequential_skips_dense_module_on_empty_sparse_tensor() -> None:
     spconv = pytest.importorskip("spconv.pytorch")
     sparse_tensor = spconv.SparseConvTensor(
@@ -289,11 +347,182 @@ def test_point_sequential_skips_dense_module_on_empty_sparse_tensor() -> None:
     assert output.features.shape == (0, 4)
 
 
-def test_compute_metrics_reports_losses_and_point_level_accuracy() -> None:
-    """compute_metrics should run losses on voxel logits and metrics at point level."""
-    model = PTv3SegmentationModel.__new__(PTv3SegmentationModel)
-    torch.nn.Module.__init__(model)
-    model.seg3d_head = build_seg_head(num_classes=3, dec_depths=(0,))
+def _seg_processed(
+    point_frames: list[torch.Tensor],
+    point_voxel_indices: torch.Tensor,
+    segment_frames: list[torch.Tensor] | None = None,
+) -> Mapping[str, Any]:
+    """Build model inputs from per frame points and handmade voxelizer outputs."""
+    num_voxels = int(point_voxel_indices.max()) + 1 if point_voxel_indices.numel() else 0
+    inputs: dict[str, Any] = {
+        "points": list(point_frames),
+        "sample_count": len(point_frames),
+        "voxels": torch.zeros((num_voxels, 1, point_frames[0].shape[1])),
+        "num_points": torch.ones(num_voxels, dtype=torch.int32),
+        "voxel_coords": torch.zeros((num_voxels, 4), dtype=torch.int32),
+        "point_voxel_indices": point_voxel_indices,
+    }
+    if segment_frames is not None:
+        inputs["segment"] = torch.cat(list(segment_frames), dim=0)
+    return inputs
+
+
+def _split_voxels() -> tuple[torch.Tensor, torch.Tensor]:
+    """Build five voxels covering every combination of current, past and future points."""
+    voxels = torch.zeros(5, 4, 5)
+    # Current and past points
+    voxels[0, 0] = torch.tensor([1.0, 0.0, 0.0, 0.5, 0.0])
+    voxels[0, 1] = torch.tensor([2.0, 0.0, 0.0, 0.7, 0.1])
+    # Past points only
+    voxels[1, 0] = torch.tensor([5.0, 0.0, 0.0, 0.2, 0.1])
+    # Current points only
+    voxels[2, 0] = torch.tensor([9.0, 1.0, 0.0, 0.4, 0.0])
+    voxels[2, 1] = torch.tensor([9.2, 1.0, 0.0, 0.6, 0.0])
+    # Current and future points
+    voxels[3, 0] = torch.tensor([3.0, 2.0, 0.0, 0.3, 0.0])
+    voxels[3, 1] = torch.tensor([4.0, 2.0, 0.0, 0.9, -0.1])
+    # Future points only
+    voxels[4, 0] = torch.tensor([7.0, 3.0, 0.0, 0.8, -0.2])
+    return voxels, torch.tensor([2, 1, 2, 2, 1], dtype=torch.int32)
+
+
+# Column layout of the encoder output: the voxel itself, then the past block and the future one
+PAST_OFFSET = slice(5, 8)
+PAST_INTENSITY = 8
+PAST_SHARE = 9
+PAST_LAG = 10
+FUTURE_OFFSET = slice(11, 14)
+FUTURE_INTENSITY = 14
+FUTURE_SHARE = 15
+FUTURE_LAG = 16
+
+
+def test_voxel_encoder_describes_the_current_frame_and_the_past_points() -> None:
+    """The current frame points give the position, the past points their offset from it."""
+    voxels, num_points = _split_voxels()
+    features = SweepSplitVoxelFeatureEncoder()(voxels[:3], num_points[:3])
+
+    assert features.shape == (3, 11)
+    assert torch.allclose(features[0, :5], torch.tensor([1.0, 0.0, 0.0, 0.5, 0.0]))
+    assert torch.allclose(features[0, PAST_OFFSET], torch.tensor([1.0, 0.0, 0.0]))
+    assert torch.allclose(features[0, PAST_INTENSITY : PAST_LAG + 1], torch.tensor([0.7, 0.5, 0.1]))
+    # Past points only: the voxel takes their position and the past share is 1.
+    assert torch.allclose(features[1, :5], torch.tensor([5.0, 0.0, 0.0, 0.2, 0.1]))
+    assert float(features[1, PAST_SHARE]) == 1.0
+    assert torch.allclose(features[2, 5:], torch.zeros(6))
+
+
+def test_past_future_voxel_encoder_extends_the_past_one_without_future_points() -> None:
+    """Without future points the 17 channel features start with the 11 channel ones."""
+    voxels, num_points = _split_voxels()
+    past = SweepSplitVoxelFeatureEncoder()(voxels[:3], num_points[:3])
+    past_future = PastFutureVoxelFeatureEncoder()(voxels[:3], num_points[:3])
+
+    assert torch.equal(past_future[:, :11], past)
+    assert torch.equal(past_future[:, 11:], torch.zeros(3, 6))
+
+
+def test_past_future_voxel_encoder_places_the_voxel_on_its_current_frame_points() -> None:
+    """The current frame points give the position, the sweep points their offset from it."""
+    features = PastFutureVoxelFeatureEncoder()(*_split_voxels())
+
+    assert features.shape == (5, 17)
+    # Current and past points: the current point positions the voxel.
+    assert torch.allclose(features[0, :5], torch.tensor([1.0, 0.0, 0.0, 0.5, 0.0]))
+    assert torch.allclose(features[0, PAST_OFFSET], torch.tensor([1.0, 0.0, 0.0]))
+    assert torch.allclose(features[0, PAST_INTENSITY : PAST_LAG + 1], torch.tensor([0.7, 0.5, 0.1]))
+    # Nothing was measured after the sample, so the future block stays empty.
+    assert torch.allclose(features[0, FUTURE_OFFSET.start :], torch.zeros(6))
+    # Current points only: nothing to report about either side.
+    assert torch.allclose(features[2, :5], torch.tensor([9.1, 1.0, 0.0, 0.5, 0.0]))
+    assert torch.allclose(features[2, 5:], torch.zeros(12))
+
+
+def test_past_future_voxel_encoder_keeps_the_past_and_the_future_points_apart() -> None:
+    """A surface crossing the voxel leaves the two sides in opposite directions.
+
+    One mean over both sides would cancel the displacement, so each side reports its own
+    offset, intensity, share and lag.
+    """
+    features = PastFutureVoxelFeatureEncoder()(*_split_voxels())
+
+    # Current and future points: the future point sits ahead of the voxel position.
+    assert torch.allclose(features[3, :5], torch.tensor([3.0, 2.0, 0.0, 0.3, 0.0]))
+    assert torch.allclose(features[3, PAST_OFFSET.start : PAST_LAG + 1], torch.zeros(6))
+    assert torch.allclose(features[3, FUTURE_OFFSET], torch.tensor([1.0, 0.0, 0.0]))
+    assert torch.allclose(
+        features[3, FUTURE_INTENSITY : FUTURE_LAG + 1], torch.tensor([0.9, 0.5, -0.1])
+    )
+
+
+def test_past_future_voxel_encoder_falls_back_to_the_sweep_points_and_reports_their_lag() -> None:
+    """A voxel with no current frame points takes the position and lag of its sweep points."""
+    features = PastFutureVoxelFeatureEncoder()(*_split_voxels())
+
+    # Past points only: the voxel takes their position and the past share is 1.
+    assert torch.allclose(features[1, :5], torch.tensor([5.0, 0.0, 0.0, 0.2, 0.1]))
+    assert torch.allclose(features[1, PAST_OFFSET], torch.zeros(3))
+    assert float(features[1, PAST_SHARE]) == 1.0
+    assert float(features[1, FUTURE_SHARE]) == 0.0
+    # Future points only: the same, on the other side.
+    assert torch.allclose(features[4, :5], torch.tensor([7.0, 3.0, 0.0, 0.8, -0.2]))
+    assert torch.allclose(features[4, FUTURE_OFFSET], torch.zeros(3))
+    assert float(features[4, FUTURE_SHARE]) == 1.0
+    assert float(features[4, PAST_SHARE]) == 0.0
+
+
+def test_past_future_voxel_encoder_keeps_the_average_over_every_point_recoverable() -> None:
+    """Splitting the points by side keeps all the information of the voxel."""
+    voxels, num_points = _split_voxels()
+    features = PastFutureVoxelFeatureEncoder()(voxels, num_points)
+
+    filled = torch.arange(voxels.shape[1]).unsqueeze(0) < num_points.long().unsqueeze(1)
+    expected = (voxels * filled.unsqueeze(-1)).sum(dim=1) / num_points.unsqueeze(1)
+    recovered = (
+        features[:, :3]
+        + features[:, PAST_SHARE : PAST_SHARE + 1] * features[:, PAST_OFFSET]
+        + features[:, FUTURE_SHARE : FUTURE_SHARE + 1] * features[:, FUTURE_OFFSET]
+    )
+    assert torch.allclose(recovered, expected[:, :3])
+
+
+def test_past_future_voxel_encoder_ignores_the_padded_slots() -> None:
+    """Zero padding is not read as a current frame point."""
+    voxels, num_points = _split_voxels()
+    padded = PastFutureVoxelFeatureEncoder()(voxels, num_points)
+    voxels[1, 1] = torch.tensor([0.0, 0.0, 0.0, 0.0, 0.0])
+
+    assert torch.allclose(PastFutureVoxelFeatureEncoder()(voxels, num_points), padded)
+
+
+def test_voxel_encoder_rejects_a_point_layout_without_the_time_lag() -> None:
+    with pytest.raises(ValueError, match="time_lag"):
+        SweepSplitVoxelFeatureEncoder()(
+            torch.zeros(2, 3, 4), torch.tensor([1, 1], dtype=torch.int32)
+        )
+    with pytest.raises(ValueError, match="time_lag"):
+        PastFutureVoxelFeatureEncoder()(
+            torch.zeros(2, 3, 4), torch.tensor([1, 1], dtype=torch.int32)
+        )
+
+
+def test_model_rejects_future_points_its_voxel_encoder_does_not_read() -> None:
+    voxels, num_points = _split_voxels()
+    model = build_seg_model()
+
+    with pytest.raises(ValueError, match="future"):
+        model.encode(
+            voxels=voxels,
+            num_points=num_points,
+            voxel_coords=torch.zeros(5, 4, dtype=torch.int32),
+            num_dropped_voxels=torch.tensor(0),
+            time_lag_column=4,
+        )
+
+
+def test_point_loss_and_eval_output_work_at_the_point_level() -> None:
+    """The loss runs on the voxel labels and eval keeps the current-frame points only."""
+    head = build_seg_head(num_classes=3, dec_depths=(0,))
 
     voxel_logits = torch.tensor(
         [
@@ -303,52 +532,200 @@ def test_compute_metrics_reports_losses_and_point_level_accuracy() -> None:
         ],
         dtype=torch.float32,
     )
-    segment = torch.tensor([0, 1, -1], dtype=torch.long)
-    # Two source points: one maps to voxel 0, the other to voxel 1.
-    inverse = torch.tensor([0, 1], dtype=torch.long)
-    origin_segment = torch.tensor([0, 1], dtype=torch.long)
+    # Three points in two voxels, the last point comes from an earlier sweep.
+    points = torch.tensor(
+        [
+            [10.0, 0.0, 0.0, 0.5, 0.0],
+            [60.0, 0.0, 0.0, 0.5, 0.0],
+            [60.5, 0.0, 0.0, 0.5, 0.1],
+        ],
+        dtype=torch.float32,
+    )
+    batch = _seg_processed(
+        [points],
+        torch.tensor([0, 1, 1], dtype=torch.long),
+        segment_frames=[torch.tensor([0, 1, -1], dtype=torch.long)],
+    )
 
-    origin_coord = torch.tensor([[10.0, 0.0, 0.0], [60.0, 0.0, 0.0]], dtype=torch.float32)
-    batch = {
-        "segment": segment,
-        "inverse": inverse,
-        "offset": torch.tensor([3], dtype=torch.long),
-        "origin_segment": origin_segment,
-        "origin_coord": origin_coord,
-    }
+    metrics = segmentation_point_loss(head, voxel_logits, batch)
 
-    metrics = PTv3SegmentationModel.compute_metrics(model, batch, voxel_logits)
-
-    # compute_metrics now returns only losses; quality metrics are produced at
-    # epoch end from build_eval_output via the attached AutowareSegmentation3DMetrics.
     assert set(metrics) == {"loss", "loss_ce", "loss_lovasz"}
     assert metrics["loss"] > 0
 
-    eval_out = PTv3SegmentationModel.build_eval_output(model, batch, voxel_logits)
+    eval_out = segmentation_eval_output(voxel_logits, batch)
     (frame,) = eval_out["seg_frames"]
     assert torch.equal(frame["pred"], torch.tensor([0, 1]))
-    assert torch.equal(frame["target"], origin_segment)
-    assert torch.equal(frame["coord"], origin_coord)
+    assert torch.equal(frame["target"], torch.tensor([0, 1]))
+    assert torch.equal(frame["coord"], points[:2, :3])
     assert frame["scores"].shape == (2, 3)
 
 
-def test_predict_outputs_reconstructs_point_level_predictions() -> None:
-    """predict_outputs should scatter voxel logits to source points via inverse."""
-    model = PTv3SegmentationModel.__new__(PTv3SegmentationModel)
-    torch.nn.Module.__init__(model)
+def test_voxel_supervision_takes_the_majority_of_the_voxel_outside_training() -> None:
+    """The label that scores the most points of the voxel supervises it."""
+    labels, _ = voxel_supervision(
+        torch.tensor([0, 0, 0, 1], dtype=torch.long),
+        torch.tensor([2, 2, 1, 1], dtype=torch.long),
+        num_voxels=2,
+        num_classes=3,
+        ignore_index=-1,
+        sample=False,
+        mixed_weight=0.0,
+    )
 
+    assert torch.equal(labels, torch.tensor([2, 1]))
+
+
+@pytest.mark.parametrize("ignore_index", [-1, 255])
+def test_voxel_supervision_leaves_ignored_points_out_whatever_the_ignore_index(
+    ignore_index: int,
+) -> None:
+    """Ignored points do not index the class table, and a voxel of ignored points only is
+    unsupervised."""
+    labels, weights = voxel_supervision(
+        torch.tensor([0, 0, 1, 1, -1], dtype=torch.long),
+        torch.tensor([2, ignore_index, ignore_index, ignore_index, 1], dtype=torch.long),
+        num_voxels=2,
+        num_classes=3,
+        ignore_index=ignore_index,
+        sample=False,
+        mixed_weight=0.0,
+    )
+
+    assert labels.tolist() == [2, ignore_index]
+    assert float(weights[1]) == 0.0
+
+
+def test_voxel_supervision_weighs_a_voxel_by_how_much_its_points_disagree() -> None:
+    """One label describes a voxel worse the more of its points it leaves out."""
+    _, weights = voxel_supervision(
+        torch.tensor([0, 0, 0, 1, 2, 2], dtype=torch.long),
+        torch.tensor([2, 2, 1, 1, 0, 1], dtype=torch.long),
+        num_voxels=3,
+        num_classes=3,
+        ignore_index=-1,
+        sample=False,
+        mixed_weight=1.0,
+    )
+
+    # Two of three points share the label, one of one, one of two.
+    assert torch.allclose(weights, torch.tensor([1 + 1 / 3, 1.0, 1.5]))
+
+
+def test_voxel_supervision_leaves_unsupervised_voxels_weightless() -> None:
+    """A voxel holding only ignored points takes no part in the loss."""
+    labels, weights = voxel_supervision(
+        torch.tensor([0, 1, 1], dtype=torch.long),
+        torch.tensor([-1, -1, 2], dtype=torch.long),
+        num_voxels=3,
+        num_classes=3,
+        ignore_index=-1,
+        sample=False,
+        mixed_weight=1.0,
+    )
+
+    assert torch.equal(labels, torch.tensor([-1, 2, -1]))
+    assert torch.equal(weights, torch.tensor([0.0, 1.0, 0.0]))
+
+
+def test_voxel_supervision_draws_from_the_voxel_distribution_in_training() -> None:
+    """Sampling supervises a voxel in proportion to how its points are labelled."""
+    point_voxel_indices = torch.zeros(4, dtype=torch.long)
+    segment = torch.tensor([0, 0, 0, 1], dtype=torch.long)
+
+    torch.manual_seed(0)
+    drawn = [
+        int(
+            voxel_supervision(
+                point_voxel_indices,
+                segment,
+                num_voxels=1,
+                num_classes=2,
+                ignore_index=-1,
+                sample=True,
+                mixed_weight=0.0,
+            )[0][0]
+        )
+        for _ in range(400)
+    ]
+
+    assert set(drawn) == {0, 1}
+    assert 0.6 < drawn.count(0) / len(drawn) < 0.9
+
+
+def test_points_of_a_voxel_do_not_weight_the_loss() -> None:
+    """Repeating a label inside a voxel leaves the loss unchanged."""
+    head = build_seg_head(num_classes=3, dec_depths=(0,)).eval()
+    voxel_logits = torch.tensor([[3.0, 0.1, 0.2], [0.2, 2.5, 0.1]], dtype=torch.float32)
+    dense = _seg_processed(
+        [torch.zeros((5, 5), dtype=torch.float32)],
+        torch.tensor([0, 0, 0, 0, 1], dtype=torch.long),
+        segment_frames=[torch.tensor([0, 0, 0, 0, 1], dtype=torch.long)],
+    )
+    sparse = _seg_processed(
+        [torch.zeros((2, 5), dtype=torch.float32)],
+        torch.tensor([0, 1], dtype=torch.long),
+        segment_frames=[torch.tensor([0, 1], dtype=torch.long)],
+    )
+
+    assert torch.allclose(
+        segmentation_point_loss(head, voxel_logits, dense)["loss"],
+        segmentation_point_loss(head, voxel_logits, sparse)["loss"],
+    )
+
+
+def test_encode_rejects_dropped_voxels_and_a_misplaced_time_lag() -> None:
+    model = build_seg_model()
+    voxels = torch.zeros((1, 1, 5))
+    num_points = torch.ones(1, dtype=torch.int32)
+    voxel_coords = torch.zeros((1, 4), dtype=torch.int32)
+
+    with pytest.raises(RuntimeError, match="max_voxels"):
+        model.encode(voxels, num_points, voxel_coords, torch.tensor(3), 4)
+    with pytest.raises(ValueError, match="time lag"):
+        model.encode(voxels, num_points, voxel_coords, torch.tensor(0), -1)
+
+
+def test_points_outside_the_voxel_grid_are_excluded_from_loss_and_eval() -> None:
+    """A point without a voxel (outside the grid) neither supervises nor gets scored."""
+    head = build_seg_head(num_classes=3, dec_depths=(0,))
+    voxel_logits = torch.tensor([[3.0, 0.1, 0.2], [0.2, 2.5, 0.1]], dtype=torch.float32)
+    points = torch.zeros((3, 5), dtype=torch.float32)
+    batch = _seg_processed(
+        [points],
+        torch.tensor([0, -1, 1], dtype=torch.long),
+        segment_frames=[torch.tensor([0, 2, 1], dtype=torch.long)],
+    )
+    reference = _seg_processed(
+        [points[[0, 2]]],
+        torch.tensor([0, 1], dtype=torch.long),
+        segment_frames=[torch.tensor([0, 1], dtype=torch.long)],
+    )
+
+    metrics = segmentation_point_loss(head, voxel_logits, batch)
+    expected = segmentation_point_loss(head, voxel_logits, reference)
+    assert torch.allclose(metrics["loss"], expected["loss"])
+
+    (frame,) = segmentation_eval_output(voxel_logits, batch)["seg_frames"]
+    assert torch.equal(frame["pred"], torch.tensor([0, 1]))
+    assert torch.equal(frame["target"], torch.tensor([0, 1]))
+
+
+def test_predict_outputs_reconstructs_current_frame_point_predictions() -> None:
+    """predict_outputs gathers the voxel logits of the current frame points only."""
     voxel_logits = torch.tensor([[4.0, 0.1], [0.1, 5.0]], dtype=torch.float32)
-    inverse = torch.tensor([0, 1, 0], dtype=torch.long)
+    point_voxel_indices = torch.tensor([0, 1, 0, 1], dtype=torch.long)
+    points = torch.zeros((4, 5), dtype=torch.float32)
+    # the last point comes from an earlier sweep and gets no prediction
+    points[3, 4] = 0.1
 
-    predictions = PTv3SegmentationModel.predict_outputs(
-        model,
-        {"inverse": inverse},
+    predictions = segmentation_predict_outputs(
         voxel_logits,
+        _seg_processed([points[:2], points[2:]], point_voxel_indices),
     )
 
     assert torch.equal(predictions["pred_labels"], torch.tensor([0, 1, 0]))
     assert predictions["pred_probs"].shape == (3, 2)
-    expected_probs = torch.softmax(voxel_logits, dim=1)[inverse]
+    expected_probs = torch.softmax(voxel_logits, dim=1)[point_voxel_indices[:3]]
     assert torch.allclose(predictions["pred_probs"], expected_probs)
 
 
@@ -373,8 +750,9 @@ def test_point_serialization_accepts_explicit_depth_override() -> None:
 
 def test_ptv3_encoder_dynamic_axes_follow_generated_pooling_inputs() -> None:
     input_names = [
+        "voxels",
+        "num_points_per_voxel",
         "grid_coord",
-        "feat",
         "serialized_order",
         "serialized_inverse",
         "serialized_pooling_0_indices",
@@ -389,8 +767,9 @@ def test_ptv3_encoder_dynamic_axes_follow_generated_pooling_inputs() -> None:
 
     dynamic_axes = build_ptv3_encoder_dynamic_axes(input_names, stage_count=3)
 
+    assert dynamic_axes["voxels"] == {0: "num_voxels"}
+    assert dynamic_axes["num_points_per_voxel"] == {0: "num_voxels"}
     assert dynamic_axes["grid_coord"] == {0: "num_voxels"}
-    assert dynamic_axes["feat"] == {0: "num_voxels"}
     assert dynamic_axes["serialized_order"] == {1: "num_voxels"}
     assert dynamic_axes["serialized_inverse"] == {1: "num_voxels"}
     assert dynamic_axes["serialized_pooling_0_indices"] == {0: "serialized_pooling_0_in_voxels"}
@@ -522,15 +901,17 @@ def test_ptv3_frozen_encoder_supports_decoder_block_backward() -> None:
     their CPE backward fails with an empty-indices assert."""
     model = PTv3SegmentationModel(
         encoder=build_ptv3_encoder(),
+        voxel_encoder=SweepSplitVoxelFeatureEncoder(),
         seg3d_head=build_seg_head(),
         freeze_encoder=True,
         grid_size=1.0,
         point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
     ).cuda()
-    batch = move_batch_to_device(build_inputs(), torch.device("cuda"))
+    batch = build_inputs(device=torch.device("cuda"))
 
-    logits = model(**batch)
+    logits = model(**model.bind_forward_inputs(batch))
     logits.sum().backward()
+    assert logits.shape == (batch["voxels"].shape[0], 3)
 
     assert all(p.grad is None for p in model.encoder.parameters())
     assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in model.seg3d_head.parameters())
@@ -634,3 +1015,56 @@ def test_export_attention_is_exact_when_the_count_divides_the_window(num_points:
             return attention(point).feat
 
     assert torch.allclose(run(padded), run(reference), atol=1e-5)
+
+
+def _attention_only_encoder(fp32_sublayers: tuple[str, ...]) -> PointTransformerV3Encoder:
+    torch.manual_seed(0)
+    return PointTransformerV3Encoder(
+        in_channels=5,
+        order=("z",),
+        stride=(),
+        enc_depths=(1,),
+        enc_channels=(16,),
+        enc_num_head=(2,),
+        enc_patch_size=(8,),
+        mlp_ratio=2.0,
+        qkv_bias=True,
+        qk_scale=None,
+        attn_drop=0.0,
+        proj_drop=0.0,
+        drop_path=0.0,
+        pre_norm=True,
+        shuffle_orders=False,
+        enable_rpe=False,
+        enable_flash=False,
+        upcast_attention=False,
+        upcast_softmax=False,
+        enc_conv=False,
+        fp32_sublayers=fp32_sublayers,
+    )
+
+
+def test_fp32_sublayers_rejects_unknown_sublayers() -> None:
+    with pytest.raises(ValueError, match="fp32_sublayers"):
+        _attention_only_encoder(("attn",))
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA autocast required")
+def test_fp32_mlp_runs_the_feed_forward_network_in_fp32_under_autocast() -> None:
+    encoder = _attention_only_encoder(("mlp",)).cuda()
+    mlp_dtypes = []
+    for module in encoder.modules():
+        if getattr(module, "mlp", None) is not None and hasattr(module, "fp32_sublayers"):
+            module.mlp.register_forward_hook(lambda _m, _i, out: mlp_dtypes.append(out.feat.dtype))
+    count = 64
+    inputs = {
+        "feat": torch.randn(count, 5, device="cuda"),
+        "coord": torch.rand(count, 3, device="cuda"),
+        "grid_coord": torch.randint(0, 16, (count, 3), device="cuda"),
+        "offset": torch.tensor([count], device="cuda"),
+        "grid_size": torch.tensor(0.1, device="cuda"),
+    }
+    with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+        point = encoder(inputs)
+    assert mlp_dtypes and all(dtype == torch.float32 for dtype in mlp_dtypes)
+    assert torch.isfinite(point.feat).all()

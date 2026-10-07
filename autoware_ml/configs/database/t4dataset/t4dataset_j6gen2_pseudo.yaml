@@ -1,0 +1,11 @@
+# Pseudo labelled J6 gen2 and large bus databases
+defaults:
+  - t4dataset/t4dataset_common@_here_
+  - t4dataset/scenarios@scenarios.db_j6gen2_pseudo: detection3d_segmentation3d_pseudo/db_j6gen2_pseudo
+  - _self_
+
+version: T4Dataset-j6gen2_pseudo-v1.0.0
+cache_path: ${cache_root_path}/t4dataset_pseudo/
+root_path: ${data_root_path}/t4dataset/pseudo_large/
+# The original tables keep the fine box names
+box_annotation_dir: annotation_orig

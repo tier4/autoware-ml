@@ -117,7 +117,7 @@ class FRNet(BaseModel):
 
     def extract_feat(
         self,
-        points: torch.Tensor,
+        feat: torch.Tensor,
         coors: torch.Tensor,
         voxel_coors: torch.Tensor,
         inverse_map: torch.Tensor,
@@ -126,7 +126,7 @@ class FRNet(BaseModel):
         """Extract multiscale features from preprocessed range-view inputs.
 
         Args:
-            points: Concatenated point tensor of shape
+            feat: Concatenated point tensor of shape
                 ``(num_points, in_channels)``.
             coors: Per-point range-view coordinates of shape
                 ``(num_points, 3)``.
@@ -144,7 +144,7 @@ class FRNet(BaseModel):
                 * ``point_feats_backbone``: backbone point feature pyramid.
         """
         voxel_coors_active, voxel_feats, point_feats_encoder = self.voxel_encoder(
-            points, inverse_map, voxel_coors
+            feat, inverse_map, voxel_coors
         )
         voxel_feats_pyramid, point_feats_backbone = self.backbone(
             point_feats_encoder,
@@ -158,7 +158,7 @@ class FRNet(BaseModel):
 
     def forward(
         self,
-        points: torch.Tensor,
+        feat: torch.Tensor,
         coors: torch.Tensor,
         voxel_coors: torch.Tensor,
         inverse_map: torch.Tensor,
@@ -173,7 +173,7 @@ class FRNet(BaseModel):
         returned tuple by position.
 
         Args:
-            points: Concatenated point tensor.
+            feat: Concatenated point tensor.
             coors: Point-to-range-view coordinates.
             voxel_coors: Unique range-view voxel coordinates.
             inverse_map: Mapping from points to voxel indices.
@@ -189,7 +189,7 @@ class FRNet(BaseModel):
                   pyramid level.
         """
         point_feats_encoder, voxel_feats_pyramid, point_feats_backbone = self.extract_feat(
-            points=points,
+            feat=feat,
             coors=coors,
             voxel_coors=voxel_coors,
             inverse_map=inverse_map,
@@ -209,8 +209,7 @@ class FRNet(BaseModel):
 
         Args:
             batch_inputs_dict: Full batch dictionary after runtime
-                preprocessing. Must contain ``pts_semantic_mask`` and
-                ``semantic_seg``.
+                preprocessing. Must contain ``segment`` and ``semantic_seg``.
             outputs: Tuple returned by :meth:`forward`. The first element is
                 ``point_logits``; the remainder is the voxel-feature
                 pyramid consumed by auxiliary heads.
@@ -219,11 +218,10 @@ class FRNet(BaseModel):
             Dictionary of named loss tensors and segmentation metrics. The
             total loss is exposed under the ``"loss"`` key.
         """
-        pts_semantic_mask = batch_inputs_dict["pts_semantic_mask"]
         semantic_seg = batch_inputs_dict["semantic_seg"]
         point_logits, *voxel_feats = outputs
 
-        decode_losses = self.decode_head.loss(point_logits, pts_semantic_mask)
+        decode_losses = self.decode_head.loss(point_logits, batch_inputs_dict["segment"].long())
         total_loss = decode_losses["loss_ce"]
         metrics: dict[str, torch.Tensor] = {"loss_decode_ce": decode_losses["loss_ce"]}
 
@@ -242,7 +240,7 @@ class FRNet(BaseModel):
         """Pair per-frame point predictions with targets for the segmentation suites.
 
         FRNet's logits are already at the original point level, so each point's
-        frame is its own position in the batch-concatenated ``points`` tensor,
+        frame is its own position in the batch-concatenated ``feat`` tensor,
         bucketed by the batch ``offset``.
 
         Args:
@@ -256,9 +254,9 @@ class FRNet(BaseModel):
         offset = batch["offset"].long()
         point_index = torch.arange(point_logits.shape[0], device=point_logits.device)
         return segmentation_frames_eval_output(
-            coord=batch["points"][:, :3],
+            coord=batch["coord"],
             pred_labels=point_logits.argmax(dim=1),
-            target_labels=batch["pts_semantic_mask"].long(),
+            target_labels=batch["segment"].long(),
             scores=torch.softmax(point_logits, dim=1),
             frame_ids=concat_frame_ids(offset, point_index),
             num_frames=int(offset.shape[0]),
@@ -321,11 +319,12 @@ class FRNet(BaseModel):
         Returns:
             The export specification.
         """
-        input_names = ["points", "coors", "voxel_coors", "inverse_map"]
-        input_args = tuple(batch_inputs_dict[name] for name in input_names)
+        input_args = tuple(
+            batch_inputs_dict[name] for name in ("feat", "coors", "voxel_coors", "inverse_map")
+        )
         return ExportSpec(
             module=_FRNetExportModule(self),
             args=input_args,
-            input_param_names=input_names,
+            input_param_names=["points", "coors", "voxel_coors", "inverse_map"],
             output_names=self.get_export_output_names(),
         )
