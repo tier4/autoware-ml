@@ -253,7 +253,11 @@ autoware-ml visualize \
     --sync-port 9091
 ```
 
-Calibration status:
+Calibration status. `collation_map` is a whitelist, and the shipped calibration
+configs list only the model inputs, so the calibration metadata, the camera
+image, and the point cloud that the transforms produce are dropped before the
+batch is built. Carry them through, or the preview reports the missing entry
+and stops:
 
 ```bash
 autoware-ml visualize \
@@ -262,7 +266,10 @@ autoware-ml visualize \
     --mode predictions \
     --split test \
     --sample-index 0 \
-    --backend rerun
+    --backend rerun \
+    +datamodule.collation_map.calibration_data=list \
+    +datamodule.collation_map.img=list \
+    +datamodule.collation_map.points=list
 ```
 
 Preview transformed data only, without weights. This works for every task:
