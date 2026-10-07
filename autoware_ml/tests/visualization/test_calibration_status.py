@@ -26,6 +26,7 @@ from autoware_ml.visualization.events import (
     PointCloud3DEvent,
     Points2DEvent,
     ScalarEvent,
+    TextDocumentEvent,
     TextEvent,
     Transform3DEvent,
 )
@@ -93,6 +94,46 @@ def test_build_calibration_status_events_summarizes_prediction_and_ground_truth(
         if isinstance(event, TextEvent) and event.path == "calibration_status/status/summary"
     )
     assert summary.text == "pred: miscalibrated (0.90) | gt: calibrated"
+
+
+def test_build_calibration_status_events_states_the_verdict_as_a_document(
+    preview_calibration_data: CalibrationData,
+) -> None:
+    """The verdict repeats both statuses as headings and says whether they agree."""
+    events = build_calibration_status_events(
+        preview_calibration_data,
+        fused_image=_FUSED_IMAGE,
+        gt_status=CalibrationStatus.CALIBRATED.value,
+        pred_status=CalibrationStatus.MISCALIBRATED.value,
+        pred_score=0.9,
+    )
+
+    verdict = next(
+        event
+        for event in events
+        if isinstance(event, TextDocumentEvent)
+        and event.path == "calibration_status/status/verdict"
+    )
+    assert verdict.markdown
+    assert verdict.text.splitlines()[0] == "# MISMATCH"
+    assert verdict.text.rstrip().endswith(
+        "## Prediction: MISCALIBRATED (0.90) \u00b7 Ground truth: CALIBRATED"
+    )
+
+
+def test_build_calibration_status_events_reports_a_match(
+    preview_calibration_data: CalibrationData,
+) -> None:
+    events = build_calibration_status_events(
+        preview_calibration_data,
+        fused_image=_FUSED_IMAGE,
+        gt_status=CalibrationStatus.CALIBRATED.value,
+        pred_status=CalibrationStatus.CALIBRATED.value,
+        pred_score=0.75,
+    )
+
+    verdict = next(event for event in events if isinstance(event, TextDocumentEvent))
+    assert verdict.text.splitlines()[0] == "# MATCH"
 
 
 def test_build_calibration_status_events_logs_camera_geometry_with_an_image(

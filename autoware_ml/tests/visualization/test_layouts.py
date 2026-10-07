@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from autoware_ml.visualization.events import ImageEvent, LayoutGroup, ViewSpec
+from autoware_ml.visualization.events import ImageEvent, LayoutGroup, TextDocumentEvent, ViewSpec
 from autoware_ml.visualization.layouts import (
     SCENE_EXTENT_PATH,
     build_calibration_blueprint,
@@ -72,6 +72,40 @@ def test_calibration_layout_is_expressed_only_as_neutral_specs() -> None:
         "Raw camera",
         "Fused camera",
     ]
+
+
+def test_calibration_layout_puts_the_verdict_under_the_images() -> None:
+    """With a verdict logged, the images share a row and the verdict gets its own pane."""
+    blueprint = build_calibration_blueprint(
+        [
+            ImageEvent(
+                path="calibration_status/camera/image",
+                image=np.zeros((4, 4, 3), dtype=np.uint8),
+            ),
+            ImageEvent(
+                path="calibration_status/camera/fused",
+                image=np.zeros((4, 4, 3), dtype=np.uint8),
+            ),
+            TextDocumentEvent(
+                path="calibration_status/status/verdict", text="# Prediction: CALIBRATED"
+            ),
+        ]
+    )
+
+    assert blueprint is not None
+    assert isinstance(blueprint.layout, LayoutGroup)
+    assert blueprint.layout.kind == "vertical"
+    assert blueprint.layout.shares == (0.7, 0.3)
+    assert blueprint.blueprint_panel_expanded is False
+    assert blueprint.selection_panel_expanded is False
+    assert blueprint.time_panel_expanded is False
+    images, verdict = blueprint.layout.children
+    assert isinstance(images, LayoutGroup) and images.kind == "horizontal"
+    assert [child.name for child in images.children] == ["Raw camera", "Fused camera"]
+    assert isinstance(verdict, ViewSpec)
+    assert verdict.kind == "text_document"
+    assert verdict.name == "Calibration verdict"
+    assert verdict.contents == ("calibration_status/status/verdict",)
 
 
 def test_scene_layout_keeps_multi_prediction_left_and_comparison_selectable() -> None:
