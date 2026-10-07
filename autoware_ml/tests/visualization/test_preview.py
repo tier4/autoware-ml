@@ -225,6 +225,26 @@ def test_preview_logs_a_calibration_sample(
     )
 
 
+def test_preview_names_the_missing_calibration_entry(
+    preview_session: RecordingBackend,
+) -> None:
+    """A dropped calibration entry must name itself instead of matching no task."""
+    sample = {
+        "fused_img": np.zeros((5, 720, 1280), dtype=np.float32),
+        "gt_calibration_status": CalibrationStatus.CALIBRATED.value,
+    }
+
+    with pytest.raises(ValueError, match=r"calibration_data.*collation_map"):
+        run_visualization_preview(
+            CalibrationPreviewModel(),
+            PreviewDataModule(
+                [sample],
+                {"fused_img": "stack", "gt_calibration_status": "list"},
+            ),
+            _NOOP_PREVIEW,
+        )
+
+
 def test_preview_logs_a_segmentation_sample(preview_session: RecordingBackend) -> None:
     visualized = run_visualization_preview(
         SegmentationPreviewModel(),
