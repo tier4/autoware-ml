@@ -108,6 +108,101 @@ def test_calibration_layout_puts_the_verdict_under_the_images() -> None:
     assert verdict.contents == ("calibration_status/status/verdict",)
 
 
+def _statistics_group(layout: ViewSpec | LayoutGroup) -> LayoutGroup | None:
+    """Return the statistics row of a task comparison, if any."""
+    if isinstance(layout, LayoutGroup):
+        if layout.name == "Statistics":
+            return layout
+        for child in layout.children:
+            found = _statistics_group(child)
+            if found is not None:
+                return found
+    return None
+
+
+def test_data_preview_layout_anchors_ground_truth_on_the_left() -> None:
+    """Without predictions the ground truth is the fixed pane and the rest stay selectable."""
+    blueprint = build_scene_blueprint(
+        {
+            "scene/ground_truth/segmentation",
+            "scene/lidar/intensity",
+            "scene/lidar/solid",
+            "scene/metrics/segmentation/num_points",
+        },
+        [],
+        point_color_mode="semantic",
+        camera_frustums_visible=False,
+        timeline="frame",
+    )
+
+    assert blueprint is not None
+    comparison = blueprint.layout.children[0]
+    assert isinstance(comparison, LayoutGroup)
+    panes = comparison.children[0]
+    assert isinstance(panes, LayoutGroup) and panes.kind == "horizontal"
+    left, tabs = panes.children
+    assert isinstance(left, ViewSpec) and left.name == "GT · Segmentation3D"
+    assert isinstance(tabs, LayoutGroup) and tabs.kind == "tabs"
+    assert [view.name for view in tabs.children] == ["Intensity"]
+    statistics = _statistics_group(blueprint.layout)
+    assert statistics is not None
+    assert [view.name for view in statistics.children] == ["Points per frame"]
+
+
+def test_detection_data_preview_plots_ground_truth_counts() -> None:
+    blueprint = build_scene_blueprint(
+        {
+            "scene/ground_truth/detections",
+            "scene/lidar/intensity",
+            "scene/lidar/solid",
+            "scene/metrics/detection/num_ground_truth",
+        },
+        [],
+        point_color_mode="semantic",
+        camera_frustums_visible=False,
+        timeline="frame",
+    )
+
+    assert blueprint is not None
+    statistics = _statistics_group(blueprint.layout)
+    assert statistics is not None
+    (counts,) = statistics.children
+    assert counts.name == "Detection counts"
+    assert counts.contents == ("scene/metrics/detection/num_ground_truth",)
+    assert counts.overrides[0].series_name == "GT boxes"
+
+
+def test_segmentation_prediction_layout_plots_confidence() -> None:
+    blueprint = build_scene_blueprint(
+        {
+            "scene/prediction/segmentation",
+            "scene/ground_truth/segmentation",
+            "scene/lidar/intensity",
+            "scene/metrics/segmentation/mean_confidence",
+            "scene/metrics/segmentation/mean_entropy",
+            "scene/metrics/segmentation/num_points",
+        },
+        [],
+        point_color_mode="semantic",
+        camera_frustums_visible=False,
+        timeline="frame",
+    )
+
+    assert blueprint is not None
+    statistics = _statistics_group(blueprint.layout)
+    assert statistics is not None
+    assert [view.name for view in statistics.children] == [
+        "Segmentation confidence",
+        "Points per frame",
+    ]
+    confidence = statistics.children[0]
+    assert confidence.y_range == (0.0, 1.0)
+    assert [o.series_name for o in confidence.overrides] == [
+        "Mean confidence",
+        "Mean normalized entropy",
+    ]
+
+
 def test_scene_layout_keeps_multi_prediction_left_and_comparison_selectable() -> None:
     paths = {
         "scene/ground_truth/segmentation",
