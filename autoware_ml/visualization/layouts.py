@@ -46,6 +46,14 @@ _DETECTION_METRIC_LABELS = {
     "true_positives": "True positives",
     "false_positives": "False positives",
     "false_negatives": "False negatives",
+    "num_ground_truth": "GT boxes",
+    "num_predictions": "Predicted boxes",
+}
+
+_SEGMENTATION_METRIC_LABELS = {
+    "mean_confidence": "Mean confidence",
+    "mean_entropy": "Mean normalized entropy",
+    "num_points": "Points",
 }
 
 
@@ -148,8 +156,76 @@ def _scene_view(
     )
 
 
+def _series_overrides(paths: list[str], labels: dict[str, str]) -> tuple[ViewOverride, ...]:
+    """Name and size the series of one statistics plot."""
+    return tuple(
+        ViewOverride(
+            path=path,
+            series_name=labels[path.rsplit("/", 1)[-1]],
+            marker_size=8.0,
+        )
+        for path in paths
+    )
+
+
+def _segmentation_statistics_views(observed_paths: set[str], timeline: str) -> list[ViewSpec]:
+    """Build the per-frame segmentation plots: confidence and point count."""
+    metrics_root = "scene/metrics/segmentation"
+    confidence_paths = [
+        f"{metrics_root}/{name}"
+        for name in ("mean_confidence", "mean_entropy")
+        if f"{metrics_root}/{name}" in observed_paths
+    ]
+    count_paths = [
+        f"{metrics_root}/num_points" for _ in (0,) if f"{metrics_root}/num_points" in observed_paths
+    ]
+    views = []
+    if confidence_paths:
+        views.append(
+            ViewSpec(
+                kind="time_series",
+                name="Segmentation confidence",
+                origin=metrics_root,
+                contents=tuple(confidence_paths),
+                overrides=_series_overrides(confidence_paths, _SEGMENTATION_METRIC_LABELS),
+                y_range=(0.0, 1.0),
+                visible_time_range=(-10, 10),
+                timeline=timeline,
+            )
+        )
+    if count_paths:
+        views.append(
+            ViewSpec(
+                kind="time_series",
+                name="Points per frame",
+                origin=metrics_root,
+                contents=tuple(count_paths),
+                overrides=_series_overrides(count_paths, _SEGMENTATION_METRIC_LABELS),
+                visible_time_range=(-10, 10),
+                timeline=timeline,
+            )
+        )
+    return views
+
+
+def _statistics_views(observed_paths: set[str], timeline: str) -> list[ViewSpec]:
+    """Build every per-frame statistics plot the observed entities support.
+
+    Detection plots come first because they carry the match quality; the
+    segmentation plots follow so a multi-task preview shows both rows' worth.
+    """
+    return _detection_statistics_views(observed_paths, timeline) + _segmentation_statistics_views(
+        observed_paths, timeline
+    )
+
+
 def _detection_statistics_views(observed_paths: set[str], timeline: str) -> list[ViewSpec]:
-    """Build compact IoU quality and match-count plot specifications."""
+    """Build compact IoU quality and match-count plot specifications.
+
+    Without predictions only the ground-truth box count exists, so the count
+    plot then reports counts instead of matches; it still gives data previews
+    one curve to follow across frames.
+    """
     metrics_root = "scene/metrics/detection"
     quality_paths = [
         f"{metrics_root}/{name}"
@@ -162,21 +238,19 @@ def _detection_statistics_views(observed_paths: set[str], timeline: str) -> list
         )
         if f"{metrics_root}/{name}" in observed_paths
     ]
-    count_paths = [
+    match_paths = [
         f"{metrics_root}/{name}"
         for name in ("true_positives", "false_positives", "false_negatives")
         if f"{metrics_root}/{name}" in observed_paths
     ]
+    count_paths = match_paths + [
+        f"{metrics_root}/{name}"
+        for name in ("num_ground_truth", "num_predictions")
+        if f"{metrics_root}/{name}" in observed_paths
+    ]
 
     def series_overrides(paths: list[str]) -> tuple[ViewOverride, ...]:
-        return tuple(
-            ViewOverride(
-                path=path,
-                series_name=_DETECTION_METRIC_LABELS[path.rsplit("/", 1)[-1]],
-                marker_size=8.0,
-            )
-            for path in paths
-        )
+        return _series_overrides(paths, _DETECTION_METRIC_LABELS)
 
     views = []
     if quality_paths:
@@ -196,7 +270,7 @@ def _detection_statistics_views(observed_paths: set[str], timeline: str) -> list
         views.append(
             ViewSpec(
                 kind="time_series",
-                name="Detection matches",
+                name="Detection matches" if match_paths else "Detection counts",
                 origin=metrics_root,
                 contents=tuple(count_paths),
                 overrides=series_overrides(count_paths),
@@ -327,6 +401,11 @@ def _task_comparison(
                     camera_frustums_visible=camera_visible,
                 )
             )
+        elif ground_truth_available and len(comparison_views) > 1:
+            # A data preview has no prediction to anchor the left side, so the
+            # ground truth takes that place and the remaining variants stay
+            # selectable on the right, which keeps the two-pane reading.
+            children.append(comparison_views.pop(0)[1])
         if comparison_views:
             comparison_names = [name for name, _ in comparison_views]
             active_comparison = (
@@ -363,7 +442,7 @@ def _task_comparison(
             camera_frustums_visible,
             layout_name=f"{task_name} comparison",
         )
-    statistics = _detection_statistics_views(observed_paths, timeline)
+    statistics = _statistics_views(observed_paths, timeline)
     if not statistics:
         return comparison
     return LayoutGroup(
@@ -373,7 +452,7 @@ def _task_comparison(
             LayoutGroup(
                 kind="horizontal",
                 children=tuple(statistics),
-                name="Detection statistics",
+                name="Statistics",
             ),
         ),
         name=f"{task_name} comparison",
