@@ -217,3 +217,98 @@ def apply_matching_weights(
     if set_eval:
         model.eval()
     return reports
+
+
+# --- Resume helpers for preemptible runs ----------------------------------------------------
+
+AUTOWARE_ML_RUN_POINTER_FILE_ENV = "AUTOWARE_ML_RUN_POINTER_FILE"
+"""Environment variable naming a file that receives the run's checkpoint directory.
+
+A slurm launch script sets it to a path derived from the stable job id; the training
+entrypoint writes the checkpoint directory of its run there, and the relaunch after a
+requeue reads it back to pass ``--resume-latest``.
+"""
+
+_RESUME_REQUIRED_KEYS = ("state_dict", "optimizer_states", "loops")
+
+
+def write_run_pointer(
+    checkpoints_dir: Path, pointer_env: str = AUTOWARE_ML_RUN_POINTER_FILE_ENV
+) -> None:
+    """Write the checkpoint directory of the current run to the pointer file, if requested.
+
+    Args:
+        checkpoints_dir: Directory the run's checkpoints are written to.
+        pointer_env: Environment variable holding the pointer file path.
+    """
+    import os
+
+    pointer = os.environ.get(pointer_env)
+    if not pointer:
+        return
+    pointer_path = Path(pointer)
+    pointer_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = pointer_path.with_suffix(pointer_path.suffix + ".tmp")
+    tmp_path.write_text(f"{checkpoints_dir}\n")
+    os.replace(tmp_path, pointer_path)
+    _LOGGER.info("Wrote the run pointer '%s' -> '%s'.", pointer_path, checkpoints_dir)
+
+
+def checkpoint_is_loadable(checkpoint_path: Path) -> bool:
+    """Return whether a checkpoint file holds a complete, readable training state.
+
+    A job killed while a file was being written can leave a truncated checkpoint
+    behind; this reads it through and checks the keys a resume needs.
+
+    Args:
+        checkpoint_path: Candidate checkpoint file.
+
+    Returns:
+        ``True`` when the file loads and carries the training state.
+    """
+    try:
+        payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False, mmap=True)
+    except Exception as error:  # noqa: BLE001 - any read error means "not this file"
+        _LOGGER.warning("Checkpoint '%s' is not loadable (%s).", checkpoint_path, error)
+        return False
+    missing = [key for key in _RESUME_REQUIRED_KEYS if key not in payload]
+    if missing:
+        _LOGGER.warning("Checkpoint '%s' misses %s; skipping it.", checkpoint_path, missing)
+        return False
+    return True
+
+
+def find_latest_checkpoint(checkpoints_dir: Path, last_name: str = "last.ckpt") -> Path | None:
+    """Return the newest loadable checkpoint in a directory, or ``None``.
+
+    ``last.ckpt`` is tried first when it exists (following a symlink), then every
+    other ``*.ckpt`` file from the newest to the oldest by modification time. Files
+    that do not load are skipped, so a checkpoint truncated by a kill never blocks
+    the resume.
+
+    Args:
+        checkpoints_dir: Directory to search.
+        last_name: Name of the pointer checkpoint written by the periodic callback.
+
+    Returns:
+        The checkpoint to resume from, or ``None`` when the directory holds none.
+    """
+    if not checkpoints_dir.is_dir():
+        return None
+    candidates: list[Path] = []
+    last = checkpoints_dir / last_name
+    if last.exists():
+        candidates.append(last.resolve())
+    others = [
+        path.resolve()
+        for path in checkpoints_dir.glob("*.ckpt")
+        if path.name != last_name and path.is_file()
+    ]
+    others.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    for path in others:
+        if path not in candidates:
+            candidates.append(path)
+    for candidate in candidates:
+        if checkpoint_is_loadable(candidate):
+            return candidate
+    return None
