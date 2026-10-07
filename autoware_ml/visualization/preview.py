@@ -545,6 +545,7 @@ def _log_segmentation_data_preview(
     raw_info: dict[str, Any] | None = None,
     *,
     log_cameras: bool = True,
+    log_extent: bool = True,
 ) -> None:
     """Render one transformed segmentation sample without predictions."""
     gt_labels = _get_segmentation_gt_labels(batch)
@@ -559,6 +560,8 @@ def _log_segmentation_data_preview(
         point_color_mode=config.point_color_mode,
         root_path="scene",
     )
+    if log_extent:
+        session.log_scene_extent(points)
     if log_cameras:
         _log_camera_preview(
             session,
@@ -581,6 +584,7 @@ def _log_detection_data_preview(
     raw_info: dict[str, Any] | None = None,
     *,
     log_cameras: bool = True,
+    log_extent: bool = True,
 ) -> None:
     """Render one transformed detection sample without predictions."""
     points = _unwrap_single_item(batch.get("points"))
@@ -596,6 +600,8 @@ def _log_detection_data_preview(
         point_color_mode=config.point_color_mode,
         root_path="scene",
     )
+    if log_extent:
+        session.log_scene_extent(points, boxes=(gt_boxes,))
     if log_cameras:
         _log_camera_preview(
             session,
@@ -770,6 +776,7 @@ def _log_multitask_preview(
                 config,
                 raw_info,
                 log_cameras=False,
+                log_extent=False,
             )
         if has_detection_ground_truth:
             _log_detection_data_preview(
@@ -779,7 +786,16 @@ def _log_multitask_preview(
                 config,
                 raw_info,
                 log_cameras=False,
+                log_extent=False,
             )
+        # One union extent for both branches: two competing ones would leave
+        # the sibling views with the bounds of whichever was logged last.
+        session.log_scene_extent(
+            _get_segmentation_points(batch, segmentation_ground_truth)
+            if has_segmentation_ground_truth
+            else _unwrap_single_item(batch.get("points")),
+            boxes=(detection_ground_truth_boxes if has_detection_ground_truth else None,),
+        )
         point_layers: dict[str, CameraPointProjection] = {}
         box_layers: dict[str, CameraBoxProjection] = {}
         if has_segmentation_ground_truth:
