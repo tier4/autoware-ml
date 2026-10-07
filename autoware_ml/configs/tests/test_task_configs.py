@@ -25,7 +25,10 @@ from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import OmegaConf
 
+from omegaconf import OmegaConf
+
 from autoware_ml.configs.resolvers import register_config_resolvers
+from autoware_ml.ops.sparse_backend import IS_RULEBOOK_AVAILABLE
 
 _CONFIGS = Path(__file__).resolve().parents[1]
 # Building blocks and bases are not runnable on their own, only the leaves are.
@@ -58,6 +61,9 @@ def compose_experiment(config_name: str):
 @pytest.mark.parametrize("config_name", EXPERIMENT_CONFIGS)
 def test_every_experiment_instantiates_its_model_and_pipelines(config_name: str) -> None:
     cfg = compose_experiment(config_name)
+    backend = OmegaConf.select(cfg, "model.encoder.sparse_conv_backend")
+    if backend == "rulebook" and not IS_RULEBOOK_AVAILABLE:
+        pytest.skip("the experiment trains on the rulebook sparse convolutions, which are not installed")
 
     data_preprocessor = hydra.utils.instantiate(cfg.data_preprocessor)
     hydra.utils.instantiate(cfg.datasets.train.transforms)
