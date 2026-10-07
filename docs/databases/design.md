@@ -160,6 +160,32 @@ class Scenarios(BaseModel):
         raise NotImplementedError("Subclasses must implement build_scenarios!")
 ```
 
+### Label sets, category aliases and record options
+
+A taxonomy level may declare `class_sets`: named groups of at least two of its classes. A fine
+label mapped to a set names a point that belongs to one of the set's classes without saying
+which. Such points resolve to the label index `num_classes + k` for set `k`; the segmentation
+head trains the summed probability of the set for them (cross entropy of the marginal, also
+after the voxel reduction of the targets), leaves them out of the Lovasz term, and every
+metric skips them because the target is outside the class range. This is how a corpus
+annotated at a coarser specification than the level supervises exactly what it knows instead
+of forcing a guess. The `foundation` level uses it for the old J6 gen2 specification
+(`manmade` covering poles, signs and barriers; curbs inside the flat surfaces) and for the
+pseudo labels predicted at that specification.
+
+Raw category names are shared across corpora, but their meaning is not: `sidewalk` in the old
+specification still contains the curbs, in the new one it does not. A dataset's
+`DatasetParams.category_aliases` maps such raw names to alias names (`legacy_sidewalk`) when
+its record table is generated; the vocabulary of the level lists the aliases as fine names of
+their own and the level maps them to the class or set they mean there. Only the foundation
+vocabularies list the aliases, so a corpus with aliases is bound to that level.
+
+`DatasetParams` also carries `semantic_masks` (keep only the samples whose LiDAR frame has a
+semantic mask, for a corpus labelled at a lower rate than it was recorded) and `camera_frames`
+(off for a LiDAR only corpus or a mirror without the images). These options, the aliases and
+the label sets enter the database hash only when they differ from their defaults, so the
+record tables of every other database keep their hash.
+
 ### Schema
 
 `process_scenario_records()` writes the records of every scenario to a Parquet file. `BaseDatabase.get_polars_schema()` delegates to `DatasetTableSchema` so records can be serialized to Parquet via `DatasetRecord.to_dictionary()`.

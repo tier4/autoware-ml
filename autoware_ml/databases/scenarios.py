@@ -54,6 +54,17 @@ class DatasetParams(BaseModel):
       max_future_sweeps: Maximum number of lidar frames captured after a sample to record
         with it.
       sample_steps: Number of steps to sample.
+      semantic_masks: Whether only the samples carrying a semantic segmentation mask are
+        kept, so a corpus labelled at a lower rate than it was recorded trains on its
+        labelled samples only.
+      category_aliases: Raw mask category name to the name the vocabulary resolves it
+        under, for a corpus whose category names mean something else than the same names
+        elsewhere (an older annotation specification whose ``sidewalk`` still contains the
+        curbs, a pseudo label corpus written at a coarser level). Applied when the record
+        table is generated, so the records carry the aliased names.
+      camera_frames: Whether the records carry the camera frames of every sample. Off for
+        a LiDAR only corpus, or a mirror that lacks the images: the record generation then
+        neither reads nor requires them.
     """
 
     model_config = ConfigDict(frozen=True, strict=True)
@@ -62,6 +73,9 @@ class DatasetParams(BaseModel):
     max_past_sweeps: int = Field(ge=0)
     max_future_sweeps: int = Field(ge=0)
     sample_steps: int = Field(ge=1)
+    semantic_masks: bool = False
+    category_aliases: dict[str, str] = Field(default_factory=dict)
+    camera_frames: bool = True
 
     def max_sweeps(self, direction: SweepDirection) -> int:
         """
@@ -84,8 +98,29 @@ class DatasetParams(BaseModel):
             f"DatasetParams(dataset_name={self.dataset_name}, "
             f"max_past_sweeps={self.max_past_sweeps}, "
             f"max_future_sweeps={self.max_future_sweeps}, "
-            f"sample_steps={self.sample_steps})"
+            f"sample_steps={self.sample_steps}"
+            f"{self._record_options_str()})"
         )
+
+    def _record_options_str(self) -> str:
+        """
+        String form of the record options that differ from their defaults.
+
+        Only the options a corpus sets are named, so the record tables of every corpus that
+        keeps the defaults keep their hash.
+
+        Returns:
+          str: The options as ``, name=value`` items, empty when all are at their default.
+        """
+
+        options = ""
+        if self.semantic_masks:
+            options += f", semantic_masks={self.semantic_masks}"
+        if self.category_aliases:
+            options += f", category_aliases={sorted(self.category_aliases.items())}"
+        if not self.camera_frames:
+            options += f", camera_frames={self.camera_frames}"
+        return options
 
 
 class ScenarioData(BaseModel):
