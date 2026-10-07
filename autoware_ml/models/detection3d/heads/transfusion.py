@@ -42,27 +42,50 @@ from autoware_ml.models.detection3d.task_modules.heatmap import (
 )
 
 
+POSITIONAL_ENCODING_KINDS = ("conv", "linear")
+
+
 class LearnedPositionalEncoding(nn.Module):
     """Learn positional embeddings from 2D BEV coordinates.
 
     The module maps BEV cell coordinates into query or key embeddings used by
-    the TransFusion decoder.
+    the TransFusion decoder. The ``conv`` kind follows the reference
+    implementation: two pointwise convolutions with batch normalization in
+    between. The ``linear`` kind is the earlier two-layer perceptron without
+    normalization that checkpoints trained before the reference alignment
+    contain; it keeps those checkpoints loadable and is not meant for new
+    trainings.
     """
 
-    def __init__(self, input_channels: int, embed_dims: int) -> None:
+    def __init__(self, input_channels: int, embed_dims: int, kind: str = "conv") -> None:
         """Initialize the positional encoding module.
 
         Args:
             input_channels: Number of input coordinate channels.
             embed_dims: Output embedding dimension.
+            kind: ``"conv"`` for the reference pointwise-convolution encoder or
+                ``"linear"`` for the legacy two-layer linear encoder.
         """
         super().__init__()
-        self.proj = nn.Sequential(
-            nn.Conv1d(input_channels, embed_dims, kernel_size=1),
-            nn.BatchNorm1d(embed_dims),
-            nn.ReLU(inplace=True),
-            nn.Conv1d(embed_dims, embed_dims, kernel_size=1),
-        )
+        if kind not in POSITIONAL_ENCODING_KINDS:
+            raise ValueError(
+                f"Unknown positional encoding kind {kind!r}; "
+                f"expected one of {POSITIONAL_ENCODING_KINDS}."
+            )
+        self.kind = kind
+        if kind == "linear":
+            self.proj = nn.Sequential(
+                nn.Linear(input_channels, embed_dims),
+                nn.ReLU(inplace=True),
+                nn.Linear(embed_dims, embed_dims),
+            )
+        else:
+            self.proj = nn.Sequential(
+                nn.Conv1d(input_channels, embed_dims, kernel_size=1),
+                nn.BatchNorm1d(embed_dims),
+                nn.ReLU(inplace=True),
+                nn.Conv1d(embed_dims, embed_dims, kernel_size=1),
+            )
 
     def forward(self, position: torch.Tensor) -> torch.Tensor:
         """Encode BEV positions into query embeddings.
@@ -73,6 +96,8 @@ class LearnedPositionalEncoding(nn.Module):
         Returns:
             Learned positional embeddings of shape ``(batch, tokens, embed_dims)``.
         """
+        if self.kind == "linear":
+            return self.proj(position)
         return self.proj(position.transpose(1, 2)).transpose(1, 2)
 
 
@@ -84,7 +109,12 @@ class TransFusionDecoderLayer(nn.Module):
     """
 
     def __init__(
-        self, embed_dims: int, num_heads: int, feedforward_channels: int, dropout: float = 0.1
+        self,
+        embed_dims: int,
+        num_heads: int,
+        feedforward_channels: int,
+        dropout: float = 0.1,
+        positional_encoding: str = "conv",
     ) -> None:
         """Initialize one TransFusion decoder layer.
 
@@ -93,10 +123,12 @@ class TransFusionDecoderLayer(nn.Module):
             num_heads: Number of attention heads.
             feedforward_channels: Hidden dimension of the feed-forward block.
             dropout: Dropout probability used throughout the decoder.
+            positional_encoding: Kind of learned positional encoding, see
+                :class:`LearnedPositionalEncoding`.
         """
         super().__init__()
-        self.query_pos_encoding = LearnedPositionalEncoding(2, embed_dims)
-        self.key_pos_encoding = LearnedPositionalEncoding(2, embed_dims)
+        self.query_pos_encoding = LearnedPositionalEncoding(2, embed_dims, kind=positional_encoding)
+        self.key_pos_encoding = LearnedPositionalEncoding(2, embed_dims, kind=positional_encoding)
         self.self_attn = nn.MultiheadAttention(
             embed_dims, num_heads, dropout=dropout, batch_first=True
         )
@@ -372,6 +404,7 @@ class TransFusionHead(nn.Module):
         norm_eps: float = 1e-3,
         norm_momentum: float = 0.01,
         use_bf16_cross_attention: bool = False,
+        positional_encoding: str = "conv",
     ) -> None:
         """Initialize the TransFusion detection head.
 
@@ -480,7 +513,12 @@ class TransFusionHead(nn.Module):
 
         self.decoder = nn.ModuleList(
             [
-                TransFusionDecoderLayer(hidden_channel, num_heads, feedforward_channels)
+                TransFusionDecoderLayer(
+                    hidden_channel,
+                    num_heads,
+                    feedforward_channels,
+                    positional_encoding=positional_encoding,
+                )
                 for _ in range(num_decoder_layers)
             ]
         )
