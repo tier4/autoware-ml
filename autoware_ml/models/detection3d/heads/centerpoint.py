@@ -274,10 +274,8 @@ class CenterHead(nn.Module):
             if keep.sum() == 0:
                 predictions.append(
                     Detection3DSamplePredictions(
-                        bboxes_3d=heatmap.new_zeros(
-                            (0, 9 if self.use_velocity else 7), dtype=torch.float32
-                        ),
-                        scores_3d=heatmap.new_zeros((0,), dtype=torch.float32),
+                        bboxes_3d=heatmap.new_zeros((0, 9 if self.use_velocity else 7)),
+                        scores_3d=heatmap.new_zeros((0,)),
                         labels_3d=heatmap.new_zeros((0,), dtype=torch.long),
                     )
                 )
@@ -333,9 +331,8 @@ class CenterHead(nn.Module):
 
             predictions.append(
                 Detection3DSamplePredictions(
-                    # Under autocast the decoded tensors are fp16; the prediction type is fp32.
-                    bboxes_3d=boxes[kept_indices].float(),
-                    scores_3d=flat_scores[kept_indices].float(),
+                    bboxes_3d=boxes[kept_indices],
+                    scores_3d=flat_scores[kept_indices],
                     labels_3d=flat_classes[kept_indices],
                 )
             )

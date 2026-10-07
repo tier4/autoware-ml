@@ -16,8 +16,6 @@ pipeline:
       num: 1
       time_lag_range: ${dataset.lidar.sweep_time_lag_range}
       selection: nearest
-    # Frames after the current one, none unless the task sets a window (offline models)
-    future: ${oc.select:dataset.lidar.test_future_sweeps,null}
     bev_remove_radius: 1.0
     use_timestamp_difference: true
     use_dim: [0, 1, 2, 3]

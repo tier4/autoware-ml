@@ -335,47 +335,6 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
 
 ---
 
-## Mixed Precision Image (rulebook)
-
-The submanifold convolutions of the PTv3 family run on either `spconv` or
-`rulebook_torch`, the in-house replacement developed by Max Schmeller in the
-`spconv-replacement` repository (autoware-ml only carries the adapter,
-`autoware_ml/ops/sparse_backend.py`). `spconv` accumulates in fp16 and is not registered with autocast, so
-mixed precision either aborts in its kernel tuner or trains on fp16 partial sums; `rulebook_torch` accumulates in fp32 and reproduces fp32 training
-under autocast. It only ships fp16 and bf16 kernels and is CUDA only, so it
-replaces `spconv` for mixed precision training rather than everywhere.
-
-`spconv` is therefore optional. It is a PEP 621 extra (`autoware-ml[spconv]`)
-and a pixi feature that the `default` and `dev` environments keep, so nothing
-changes for the standard image or the standard local install. The `rulebook`
-environment is the same dev stack without `spconv`, plus the conda-forge CUDA
-12.8 toolkit that compiles the extension on a machine whose system toolkit is a
-different version.
-
-The variant image needs a local checkout of the (private)
-`spconv-replacement` repository, which is wired in as a named build
-context; only CUTLASS is fetched during the build. Docker 23 or newer is
-required.
-
-```bash
-cd ~/autoware-ml
-./docker/build.sh --rulebook ~/spconv-replacement
-```
-
-That produces `ghcr.io/tier4/autoware-ml:rulebook` with `rulebook_torch`
-compiled for H100 and Blackwell (`RULEBOOK_ARCHS="90;120"`) and no `spconv`.
-Run it like the default image:
-
-```bash
-IMAGE=ghcr.io/tier4/autoware-ml:rulebook ./docker/container.sh --run
-```
-
-Mixed precision runs need `sparse_conv_backend=rulebook` together
-with `trainer.precision=bf16-mixed` (or `16-mixed`); `/defaults/amp_rulebook`
-sets both.
-
----
-
 ## Dataset Setup
 
 We assume all datasets are stored in the same directory. You can organize paths as you prefer, but you will need to update our configuration files to match your dataset paths. The recommended structure is:

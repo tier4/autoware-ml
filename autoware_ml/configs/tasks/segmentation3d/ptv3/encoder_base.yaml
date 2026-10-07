@@ -19,10 +19,3 @@ enable_rpe: false
 enable_flash: true
 upcast_attention: false
 upcast_softmax: false
-# Submanifold convolution library: spconv (default), rulebook (fp32 accumulation under
-# autocast, CUDA only), or auto (rulebook when installed); see autoware_ml/ops/sparse_backend.py.
-sparse_conv_backend: spconv
-# Recompute attention and MLP activations in the backward pass to save memory.
-activation_checkpointing: false
-# Sublayers kept in fp32 under autocast (only "mlp").
-fp32_sublayers: []

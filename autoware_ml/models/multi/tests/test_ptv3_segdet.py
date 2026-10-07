@@ -28,7 +28,7 @@ def _make_masking_model(recorded_calls: list) -> SimpleNamespace:
 
     return SimpleNamespace(
         seg3d_head=SimpleNamespace(
-            loss=seg_loss, ignore_index=-1, training=False, mixed_voxel_weight=0.0, num_sets=0
+            loss=seg_loss, ignore_index=-1, training=False, mixed_voxel_weight=0.0
         ),
         bbox_head=SimpleNamespace(loss=bbox_loss),
         segmentation_loss_weight=1.0,
