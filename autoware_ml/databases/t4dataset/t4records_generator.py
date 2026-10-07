@@ -45,9 +45,9 @@ from autoware_ml.databases.schemas.lidar_sources import LidarSourceDataModel
 from autoware_ml.databases.schemas.image_frames import ImageFrameDataModel
 from autoware_ml.databases.schemas.category_mapping import CategoryMappingDataModel
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDataModel, Box3DDatasetSchema
-from autoware_ml.databases.schemas.t4pack_frames import T4PackFrame
+from autoware_ml.databases.t4pack.t4pack_frame import T4PackFrame
 from autoware_ml.databases.scenarios import ScenarioData
-from autoware_ml.databases.t4pack import T4Pack
+from autoware_ml.databases.t4pack.t4pack import T4Pack
 from autoware_ml.databases.t4dataset.t4sample_records import (
     T4SampleRecord,
 )
@@ -319,7 +319,7 @@ class T4RecordsGenerator:
         """
 
         pack = T4Pack.from_point_cloud_path(lidar_pointcloud_path)
-        if not os.path.isfile(pack.pack_path):
+        if pack.pack_path not in self._t4pack_indices and not os.path.isfile(pack.pack_path):
             return None
         if pack.pack_path not in self._t4pack_indices:
             self._t4pack_indices[pack.pack_path] = pack.read_index()

@@ -21,9 +21,9 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from autoware_ml.databases.schemas.t4pack_frames import T4PackFrame
-from autoware_ml.databases.t4pack import T4Pack
-from autoware_ml.databases.tests.t4pack_fixtures import random_lidar_frame, write_test_pack
+from autoware_ml.databases.t4pack.t4pack_frame import T4PackFrame
+from autoware_ml.databases.t4pack.t4pack import T4Pack
+from autoware_ml.databases.t4pack.tests.t4pack_fixtures import random_lidar_frame, write_test_pack
 from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import (
     LiDARPointCloudSample,
     MultiTaskGTSample,

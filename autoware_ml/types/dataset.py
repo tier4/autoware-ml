@@ -1,4 +1,4 @@
-from enum import Enum, StrEnum
+from enum import Enum, StrEnum, auto
 
 
 class SplitType(str, Enum):
@@ -28,6 +28,6 @@ class PCDFileFormat(StrEnum):
       T4PACK: The ``data/<channel>.pack`` file of the channel; every record needs a pack location.
     """
 
-    AUTO = "auto"
-    BIN = "bin"
-    T4PACK = "t4pack"
+    AUTO = auto()
+    BIN = auto()
+    T4PACK = auto()

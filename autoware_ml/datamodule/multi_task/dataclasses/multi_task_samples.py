@@ -13,7 +13,7 @@ from autoware_ml.datamodule.multi_task.dataclasses.segmentation3d import Segment
 from autoware_ml.datamodule.multi_task.dataclasses.transformation import LiDARTransformationSample
 from autoware_ml.geometry.bbox_3d.base_bbox3d import BaseBBoxes3D
 from autoware_ml.geometry.points.base_points import BasePoints
-from autoware_ml.databases.schemas.t4pack_frames import T4PackFrame
+from autoware_ml.databases.t4pack.t4pack_frame import T4PackFrame
 
 
 class PointCloudGTBatch(NamedTuple):

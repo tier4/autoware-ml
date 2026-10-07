@@ -20,9 +20,9 @@ from pathlib import Path
 
 import numpy as np
 
-from autoware_ml.databases.schemas.t4pack_frames import T4PackFrame
-from autoware_ml.databases.t4pack import T4Pack
-from autoware_ml.databases.tests.t4pack_fixtures import random_lidar_frame, write_test_pack
+from autoware_ml.databases.t4pack.t4pack_frame import T4PackFrame
+from autoware_ml.databases.t4pack.t4pack import T4Pack
+from autoware_ml.databases.t4pack.tests.t4pack_fixtures import random_lidar_frame, write_test_pack
 
 
 class TestT4Pack(unittest.TestCase):

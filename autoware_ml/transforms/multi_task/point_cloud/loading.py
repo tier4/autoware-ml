@@ -35,7 +35,7 @@ from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import (
 )
 from autoware_ml.types.dataset import PCDFileFormat
 from autoware_ml.types.geometry import PointFeatureName, PointFieldIndex
-from autoware_ml.databases.t4pack import T4Pack
+from autoware_ml.databases.t4pack.t4pack import T4Pack
 
 
 class LoadPointsFromFile(MultiTaskBaseTransform):

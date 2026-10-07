@@ -25,9 +25,9 @@ from autoware_ml.databases.schemas.lidar_frames import (
     LidarFrameDataModel,
     LidarFrameDatasetSchema,
 )
-from autoware_ml.databases.schemas.t4pack_frames import T4PackFrame
+from autoware_ml.databases.t4pack.t4pack_frame import T4PackFrame
 from autoware_ml.databases.t4dataset.t4records_generator import T4RecordsGenerator
-from autoware_ml.databases.tests.t4pack_fixtures import random_lidar_frame, write_test_pack
+from autoware_ml.databases.t4pack.tests.t4pack_fixtures import random_lidar_frame, write_test_pack
 
 _T4PACK_FRAME = T4PackFrame(
     offset=8, size=1234, num_points=100, dtypes=("f4s", "f4s", "f4s", "u1", "i1")

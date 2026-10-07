@@ -191,7 +191,7 @@ Both formats return the same points. A pack is read one byte range per frame. In
     _args_: [t4pack]
 ```
 
-See `autoware_ml/databases/t4pack.py`.
+See `autoware_ml/databases/t4pack/t4pack.py`.
 
 ### Dataset Generation (Hydra Entrypoint)
 

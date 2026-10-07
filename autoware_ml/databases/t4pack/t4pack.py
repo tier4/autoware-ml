@@ -37,7 +37,7 @@ import numpy as np
 import zstandard
 from jaxtyping import Float32
 
-from autoware_ml.databases.schemas.t4pack_frames import T4PackFrame
+from autoware_ml.databases.t4pack.t4pack_frame import T4PackFrame
 
 
 class T4Pack:

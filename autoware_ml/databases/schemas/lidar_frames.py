@@ -13,7 +13,7 @@ from autoware_ml.databases.schemas.base_schemas import (
     DatasetTableColumn,
     DataModelInterface,
 )
-from autoware_ml.databases.schemas.t4pack_frames import T4PackFrame, T4PackFrameDatasetSchema
+from autoware_ml.databases.t4pack.t4pack_frame import T4PackFrame, T4PackFrameDatasetSchema
 
 
 @dataclass(frozen=True)

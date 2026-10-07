@@ -27,7 +27,7 @@ from pathlib import Path
 import numpy as np
 import zstandard
 
-from autoware_ml.databases.t4pack import T4Pack
+from autoware_ml.databases.t4pack.t4pack import T4Pack
 
 #: Column types of a T4 LiDAR frame: x, y, z byte-shuffled float32, intensity u8, ring i8.
 LIDAR_DTYPES = ("f4s", "f4s", "f4s", "u1", "i1")
