@@ -173,7 +173,8 @@ reads them.
 When a scene has a pack, record generation reads its index once and stores the location of every
 frame and sweep in `lidar_pointcloud_t4pack_frame`. `lidar_pointcloud_path` keeps the path of the
 loose file, so the pack is found next to it. `LoadPointsFromFile` and
-`LoadMultiSweepPointsFromFile` choose the file format with `pcd_file_format`:
+`LoadMultiSweepPointsFromFile` choose the file format with `pcd_file_format`, a
+`PCDFileFormat` from `autoware_ml.types.dataset`:
 
 | `pcd_file_format` | Reads                                                                         |
 | ----------------- | ----------------------------------------------------------------------------- |
@@ -181,8 +182,16 @@ loose file, so the pack is found next to it. `LoadPointsFromFile` and
 | `bin`             | the `.pcd.bin` file of every frame                                            |
 | `t4pack`          | the pack of every frame; fails on a record without a pack location            |
 
-Both formats return the same points. A pack is read one byte range per frame.
-See `autoware_ml/utils/point_cloud/t4pack.py`.
+Both formats return the same points. A pack is read one byte range per frame. In a Hydra config:
+
+```yaml
+- _target_: autoware_ml.transforms.multi_task.point_cloud.loading.LoadPointsFromFile
+  pcd_file_format:
+    _target_: autoware_ml.types.dataset.PCDFileFormat
+    _args_: [t4pack]
+```
+
+See `autoware_ml/databases/t4pack.py`.
 
 ### Dataset Generation (Hydra Entrypoint)
 

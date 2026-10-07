@@ -13,7 +13,7 @@ from autoware_ml.databases.schemas.base_schemas import (
     DatasetTableColumn,
     DataModelInterface,
 )
-from autoware_ml.utils.point_cloud.t4pack import T4PackFrameLocation
+from autoware_ml.databases.schemas.t4pack_frames import T4PackFrame, T4PackFrameDatasetSchema
 
 
 @dataclass(frozen=True)
@@ -44,14 +44,7 @@ class LidarFrameDatasetSchema(BaseFieldSchema):
     )
     lidar_pointcloud_t4pack_frame = DatasetTableColumn(
         "lidar_pointcloud_t4pack_frame",
-        pl.Struct(
-            [
-                pl.Field("offset", pl.Int64),
-                pl.Field("size", pl.Int64),
-                pl.Field("num_points", pl.Int64),
-                pl.Field("dtypes", pl.List(pl.String)),
-            ]
-        ),
+        pl.Struct(T4PackFrameDatasetSchema.to_polars_field_schema()),
     )
 
 
@@ -100,7 +93,7 @@ class LidarFrameDataModel(BaseModel, DataModelInterface):
     # Transformation matrices from the main lidar sensor to other lidar sweeps at this frame.
     lidar_sensor_to_lidar_sweep_matrix: Float64[np.ndarray, "4 4"]
     lidar_pointcloud_semantic_mask_path: str | None
-    lidar_pointcloud_t4pack_frame: T4PackFrameLocation | None = None
+    lidar_pointcloud_t4pack_frame: T4PackFrame | None = None
 
     @property
     def lidar_pointcloud_relative_path(self) -> str:
@@ -199,7 +192,7 @@ class LidarFrameDataModel(BaseModel, DataModelInterface):
             LidarFrameDatasetSchema.lidar_pointcloud_t4pack_frame.name: (
                 None
                 if self.lidar_pointcloud_t4pack_frame is None
-                else self.lidar_pointcloud_t4pack_frame.model_dump()
+                else self.lidar_pointcloud_t4pack_frame.to_dictionary()
             ),
         }
 
@@ -249,31 +242,24 @@ class LidarFrameDataModel(BaseModel, DataModelInterface):
             lidar_pointcloud_semantic_mask_path=data_model[
                 LidarFrameDatasetSchema.lidar_pointcloud_semantic_mask_path.name
             ],
-            lidar_pointcloud_t4pack_frame=load_t4pack_frame_location(
+            lidar_pointcloud_t4pack_frame=cls.load_t4pack_frame(
                 data_model.get(LidarFrameDatasetSchema.lidar_pointcloud_t4pack_frame.name)
             ),
         )
 
+    @staticmethod
+    def load_t4pack_frame(t4pack_frame: Mapping[str, Any] | None) -> T4PackFrame | None:
+        """
+        Load the location of a lidar frame in its t4pack file from its record table struct.
 
-def load_t4pack_frame_location(
-    t4pack_frame: Mapping[str, Any] | None,
-) -> T4PackFrameLocation | None:
-    """
-    Decode the t4pack location of a lidar frame from its record table struct.
+        Args:
+          t4pack_frame: The ``lidar_pointcloud_t4pack_frame`` struct of the frame, None when the
+            scene has no pack.
 
-    Args:
-      t4pack_frame: The ``lidar_pointcloud_t4pack_frame`` struct of the frame, None when the
-        scene has no pack.
+        Returns:
+          T4PackFrame | None: Location of the frame in its pack, None when the scene has no pack.
+        """
 
-    Returns:
-      T4PackFrameLocation | None: Location of the frame in its pack.
-    """
-
-    if t4pack_frame is None:
-        return None
-    return T4PackFrameLocation(
-        offset=int(t4pack_frame["offset"]),
-        size=int(t4pack_frame["size"]),
-        num_points=int(t4pack_frame["num_points"]),
-        dtypes=tuple(t4pack_frame["dtypes"]),
-    )
+        if t4pack_frame is None:
+            return None
+        return T4PackFrame.load_from_dictionary(t4pack_frame)

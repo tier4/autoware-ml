@@ -27,7 +27,7 @@ from pathlib import Path
 import numpy as np
 import zstandard
 
-from autoware_ml.utils.point_cloud.t4pack import _TRAILER, T4PACK_MAGIC
+from autoware_ml.databases.t4pack import T4Pack
 
 #: Column types of a T4 LiDAR frame: x, y, z byte-shuffled float32, intensity u8, ring i8.
 LIDAR_DTYPES = ("f4s", "f4s", "f4s", "u1", "i1")
@@ -55,7 +55,7 @@ def write_test_pack(
     compressor = zstandard.ZstdCompressor(level=1)
     entries = []
     with path.open("wb") as writer:
-        writer.write(T4PACK_MAGIC)
+        writer.write(T4Pack.MAGIC)
         for name, frame in frames.items():
             blob = compressor.compress(encode_columns(np.asarray(frame, np.float32), dtypes))
             entries.append(
@@ -75,8 +75,8 @@ def write_test_pack(
         )
         index_offset = writer.tell()
         writer.write(index)
-        writer.write(_TRAILER.pack(index_offset, len(index)))
-        writer.write(T4PACK_MAGIC)
+        writer.write(T4Pack.TRAILER.pack(index_offset, len(index)))
+        writer.write(T4Pack.MAGIC)
 
 
 def random_lidar_frame(rng: np.random.Generator, num_points: int) -> np.ndarray:

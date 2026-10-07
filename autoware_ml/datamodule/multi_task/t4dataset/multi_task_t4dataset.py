@@ -8,8 +8,8 @@ import numpy as np
 import torch
 
 from autoware_ml.databases.schemas.lidar_frames import (
+    LidarFrameDataModel,
     LidarFrameDatasetSchema,
-    load_t4pack_frame_location,
 )
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import (
@@ -173,7 +173,7 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
                         lidar_sensor_to_lidar_sweep_matrix,
                         dtype=torch.float32,
                     ),
-                    t4pack_frame=load_t4pack_frame_location(
+                    t4pack_frame=LidarFrameDataModel.load_t4pack_frame(
                         lidar_pointcloud_metadata[
                             LidarFrameDatasetSchema.lidar_pointcloud_t4pack_frame.name
                         ]
