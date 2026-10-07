@@ -169,6 +169,20 @@ def test_build_eval_output_without_flagged_frames_keeps_neutral_entries() -> Non
     assert len(eval_out["gt_boxes"]) == 1
 
 
+def test_predict_outputs_decodes_unlabeled_frames_and_preserves_point_logits() -> None:
+    model = _make_eval_model()
+    outputs = _make_outputs(batch_size=1)
+    outputs["seg_logits"] = torch.tensor([[4.0, 0.0, 0.0], [0.0, 4.0, 0.0]], dtype=torch.float32)
+    batch = {"inverse": torch.tensor([0, 1, 1, 0], dtype=torch.long)}
+
+    predictions = PTv3SegDetModel.predict_outputs(model, batch, outputs)
+
+    assert len(predictions["predictions"]) == 1
+    assert predictions["predictions"][0]["bboxes_3d"].shape == (2, 9)
+    assert predictions["seg_pred_labels"].tolist() == [0, 1, 1, 0]
+    assert predictions["seg_pred_logits"].shape == (4, 3)
+
+
 def test_seg_head_loss_returns_connected_zero_when_all_targets_ignored() -> None:
     """A batch can carry zero seg supervision (e.g. seg-masked det-val frames);
     CE over zero valid targets is nan, so the head must short-circuit to a
