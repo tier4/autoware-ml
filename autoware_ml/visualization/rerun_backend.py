@@ -42,6 +42,7 @@ from autoware_ml.visualization.events import (
     PointCloud3DEvent,
     Points2DEvent,
     ScalarEvent,
+    TextDocumentEvent,
     TextEvent,
     Transform3DEvent,
     ViewOverride,
@@ -313,6 +314,13 @@ class _RerunVisualizationBackendBase:
             self.rr.log(event.path, self.rr.TextLog(event.text, level=event.level))
             return
 
+        if isinstance(event, TextDocumentEvent):
+            document_kwargs = {}
+            if event.markdown:
+                document_kwargs["media_type"] = self.rr.MediaType.MARKDOWN
+            self.rr.log(event.path, self.rr.TextDocument(event.text, **document_kwargs))
+            return
+
         if isinstance(event, ClearEvent):
             self.rr.log(event.path, self.rr.Clear(recursive=event.recursive))
             return
@@ -377,6 +385,8 @@ class _RerunVisualizationBackendBase:
             view = self.rr.blueprint.Spatial2DView(**kwargs)
         elif layout.kind == "text_log":
             view = self.rr.blueprint.TextLogView(**kwargs)
+        elif layout.kind == "text_document":
+            view = self.rr.blueprint.TextDocumentView(**kwargs)
         elif layout.kind == "time_series":
             if layout.y_range is not None:
                 kwargs["axis_y"] = self.rr.blueprint.ScalarAxis(
