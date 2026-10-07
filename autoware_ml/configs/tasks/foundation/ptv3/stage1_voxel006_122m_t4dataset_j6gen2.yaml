@@ -1,0 +1,58 @@
+# @package _global_
+
+# Stage 1 of the offline foundation model: the 6 cm PT-v3m3 segmentation model on the J6 gen2
+# semantic segmentation ground truth (old specification, about 3.2k training frames), bound to
+# the foundation level, whose label sets take the coarser old names. It reads one past and one
+# following frame, trains in bf16 on the rulebook submanifold convolutions (no spconv) with the
+# feed-forward layers in fp32, and checkpoints so a relaunch with `--resume-latest` continues
+# mid-epoch. Never deployed.
+
+defaults:
+  - /tasks/segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2
+  - /tasks/foundation/ptv3/common
+  - override /database@database: t4dataset/foundation/j6gen2_semaseg
+  - _self_
+
+grid_size: 0.06
+max_voxels: 1048576
+
+t4dataset:
+  lidar:
+    # Jitter scaled to the 6 cm grid
+    train_jitter_sigma: 0.006
+    train_jitter_clip: 0.024
+
+# Eight 80 GB GPUs, one frame each, four accumulation steps: global batch 32
+batch_size: 1
+
+model:
+  # 3,209 frames are 100 optimizer steps per epoch. The 170M model memorises the corpus
+  # quickly, the validation cross entropy rose from epoch 2 on at a peak of 1e-3 and the run
+  # diverged in epoch 8; 4e-4 over twelve epochs anneals the OneCycle schedule before that.
+  optimizer:
+    lr: 0.0004
+  optimizer_group_overrides:
+    block:
+      lr: 0.00004
+  scheduler:
+    max_lr: [0.0004, 0.00004]
+    pct_start: 0.1
+  # Describes the past and future points of a voxel apart (17 features)
+  voxel_encoder:
+    _target_: autoware_ml.models.segmentation3d.encoders.voxel.PastFutureVoxelFeatureEncoder
+  # PT-v3m3 depths and patches, the widths and heads come from the common config
+  encoder:
+    in_channels: 17
+    enc_depths: [3, 3, 3, 12, 3]
+    enc_patch_size: [1024, 1024, 1024, 1024, 1024]
+  seg3d_head:
+    dec_depths: [2, 2, 2, 2]
+    dec_patch_size: [1024, 1024, 1024, 1024]
+
+trainer:
+  max_epochs: 12
+  accumulate_grad_batches: 4
+  # BatchNorm statistics pooled across ranks, one frame per GPU is too few
+  sync_batchnorm: true
+  # Tight clipping, one spiky step at a small batch would poison the Adam moments
+  gradient_clip_val: 5.0
