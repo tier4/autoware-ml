@@ -20,7 +20,7 @@ import numpy as np
 import polars as pl
 
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
-from autoware_ml.datamodule.t4dataset.detection3d import T4Detection3DTask
+from autoware_ml.datamodule.detection3d import Detection3DTask
 from autoware_ml.types.geometry import Box3DFieldIndex
 
 _ROOT = "/data/t4dataset"
@@ -64,7 +64,7 @@ def box(
     }
 
 
-def build_task(boxes: list[dict]) -> T4Detection3DTask:
+def build_task(boxes: list[dict]) -> Detection3DTask:
     """
     Detection task over a single record carrying the given boxes.
 
@@ -72,14 +72,14 @@ def build_task(boxes: list[dict]) -> T4Detection3DTask:
       boxes: Boxes of the record, as the record table stores them.
 
     Returns:
-      T4Detection3DTask: Task serving that one record.
+      Detection3DTask: Task serving that one record.
     """
     schema = DatasetTableSchema.to_polars_schema()
     records = pl.DataFrame(
         {DatasetTableSchema.BOXES_3D.name: [boxes]},
         schema={DatasetTableSchema.BOXES_3D.name: schema[DatasetTableSchema.BOXES_3D.name]},
     )
-    return T4Detection3DTask(database_root_path=_ROOT, dataset_records_dataframe=records)
+    return Detection3DTask(database_root_path=_ROOT, dataset_records_dataframe=records)
 
 
 def test_every_box_keeps_its_attributes_and_an_unseen_box_stays() -> None:

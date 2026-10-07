@@ -1,5 +1,7 @@
-defaults:
-  - /datamodule/t4dataset/datasets/default_calibration_status_train_dataset@_here_
-  - _self_
-
 _target_: autoware_ml.datamodule.nuscenes.dataset.NuScenesDataset
+_convert_: all
+_partial_: true
+
+dataset_tasks: {}
+
+transforms: ???

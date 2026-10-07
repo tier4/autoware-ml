@@ -1,6 +1,11 @@
-defaults:
-  - /datamodule/t4dataset/datasets/default_segdet3d_train_dataset@_here_
-  - segmentation3d@dataset_tasks.Segmentation3D: default_segmentation3d
-  - _self_
-
 _target_: autoware_ml.datamodule.nuscenes.dataset.NuScenesDataset
+_convert_: all
+_partial_: true
+
+defaults:
+  - detection3d@dataset_tasks.Detection3D: default_detection3d
+  - segmentation3d@dataset_tasks.Segmentation3D: default_segmentation3d
+
+max_num_3d_gt_bboxes: 500
+
+transforms: ???

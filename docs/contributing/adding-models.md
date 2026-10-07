@@ -127,7 +127,7 @@ splits it by scenario lists and builds one dataset per dataset source of a split
 - the transforms of every split, written in its own task config
 
 The dataset of a split is `T4Dataset` (or `NuScenesDataset`) with one task dataset per task,
-such as `T4Detection3DTask` or `T4Segmentation3DTask`. A task dataset reads the annotations of a
+such as `Detection3DTask` or `T4Segmentation3DTask`. A task dataset reads the annotations of a
 record and returns them as a `ModelGTSample`.
 
 ### Data Flow

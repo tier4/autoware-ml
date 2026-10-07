@@ -151,7 +151,7 @@ class BaseDataset(Dataset):
 
 `T4Dataset` implements it for T4 databases, and `NuScenesDataset` extends it for nuScenes. The
 annotations of each task come from a task dataset deriving `BaseDatasetTask`, such as
-`T4Detection3DTask` and `T4Segmentation3DTask`. A dataset config lists its task datasets under
+`Detection3DTask` and `T4Segmentation3DTask`. A dataset config lists its task datasets under
 `dataset_tasks`, so one dataset class serves detection, segmentation or both. The dataset config
 leaves its transforms required (`???`), and every model sets the pipeline of each split in its
 task config.

@@ -35,7 +35,7 @@ from autoware_ml.datamodule.samplers import (
 )
 from autoware_ml.datamodule.sources import DatasetSource
 from autoware_ml.datamodule.t4dataset.dataset import T4Dataset
-from autoware_ml.datamodule.t4dataset.detection3d import T4Detection3DTask
+from autoware_ml.datamodule.detection3d import Detection3DTask
 from autoware_ml.datamodule.t4dataset.segmentation3d import T4Segmentation3DTask
 from autoware_ml.datamodule.tests.corpus import (
     SEGMENTATION_TAXONOMY,
@@ -172,7 +172,7 @@ def build_dataset_factory():
         max_num_3d_gt_bboxes=8,
         transforms=build_transforms(),
         dataset_tasks={
-            "Detection3D": T4Detection3DTask,
+            "Detection3D": Detection3DTask,
             "Segmentation3D": partial(T4Segmentation3DTask, taxonomy=SEGMENTATION_TAXONOMY),
         },
     )
