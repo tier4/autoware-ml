@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+import math
+
 from pathlib import Path
 from typing import Any
 
@@ -259,6 +261,71 @@ def test_preview_logs_a_segmentation_sample(preview_session: RecordingBackend) -
     assert "scene/prediction/entropy" in point_paths
     assert "scene/prediction/probability" in point_paths
     assert "scene/meta/extent" in point_paths
+
+
+def test_data_previews_log_the_scene_extent(preview_session: RecordingBackend) -> None:
+    """Sibling views need the shared extent to start from one eye, predictions or not."""
+    data_config = VisualizationPreviewConfig(
+        mode="data",
+        split="test",
+        session=VisualizationSessionConfig(backend="noop"),
+    )
+
+    run_visualization_preview(
+        None,
+        PreviewDataModule([_segmentation_sample()], _SEGMENTATION_COLLATION),
+        data_config,
+    )
+    assert "scene/meta/extent" in preview_session.paths_of(PointCloud3DEvent)
+
+    preview_session.events.clear()
+    run_visualization_preview(
+        None,
+        PreviewDataModule([_detection_sample()], _DETECTION_COLLATION),
+        data_config,
+    )
+    assert "scene/meta/extent" in preview_session.paths_of(PointCloud3DEvent)
+
+
+def test_multi_task_data_preview_logs_one_union_extent(
+    preview_session: RecordingBackend,
+) -> None:
+    """Both branches share a single extent; two would leave the last one winning."""
+    sample = {
+        "points": np.array([[0.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0]], dtype=np.float32),
+        "segment": np.array([0, 1], dtype=np.int64),
+        "gt_boxes": np.array([[10.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0]], dtype=np.float32),
+        "gt_labels": np.array([1], dtype=np.int64),
+    }
+
+    run_visualization_preview(
+        None,
+        PreviewDataModule(
+            [sample],
+            {
+                "points": "concat",
+                "segment": "concat",
+                "gt_boxes": "concat",
+                "gt_labels": "concat",
+            },
+        ),
+        VisualizationPreviewConfig(
+            mode="data",
+            split="test",
+            session=VisualizationSessionConfig(backend="noop"),
+        ),
+    )
+
+    extents = [
+        event
+        for event in preview_session.events
+        if isinstance(event, PointCloud3DEvent) and event.path == "scene/meta/extent"
+    ]
+    assert len(extents) == 1
+    # The box sits at x=10 and the points at x<=1, so the union must span both.
+    # Half the box diagonal bounds every yaw, which is what the extent adds.
+    half_diagonal = math.sqrt(2.0**2 + 2.0**2 + 2.0**2) / 2.0
+    assert extents[0].positions[:, 0].tolist() == pytest.approx([0.0, 10.0 + half_diagonal])
 
 
 def test_preview_requires_logits_for_pointwise_probability_and_entropy(
