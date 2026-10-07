@@ -24,11 +24,13 @@ import math
 from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
 import torch
 import torch.nn as nn
 from torch.onnx.operators import shape_as_tensor
+from torch.utils.checkpoint import checkpoint
 
 from autoware_ml.ops.indexing.operators import argsort
 from autoware_ml.ops.segment.segment_csr import segment_csr
@@ -481,6 +483,61 @@ class Point3DRoPE(nn.Module):
         return rotated_query, rotated_key
 
 
+def serialized_window_padding(
+    offset: torch.Tensor, patch_size: int, enable_flash: bool
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    """Compute the padded token order of windowed attention for a whole batch.
+
+    Every sample longer than one window is padded up to a multiple of
+    ``patch_size``; the padding slots of its last window borrow the tokens that
+    sit one window earlier in the serialization, so no slot is empty. Samples
+    that fit in one window are not padded at all.
+
+    The computation is expressed on the padded and unpadded index grids with
+    ``searchsorted``, so it costs two device to host copies (the two grid sizes)
+    instead of a dozen per sample.
+
+    Args:
+        offset: Cumulative per sample point counts, shape ``[num_samples]``.
+        patch_size: Attention window size.
+        enable_flash: Whether flash attention's cumulative sequence lengths are needed.
+
+    Returns:
+        ``pad`` mapping every padded slot to the token it holds, ``unpad`` mapping
+        every token to its padded slot, and the ``int32`` cumulative sequence
+        lengths of the windows or ``None`` without flash attention.
+    """
+    device = offset.device
+    bincount = offset_to_bincount(offset)
+    windows = torch.div(bincount + patch_size - 1, patch_size, rounding_mode="trunc").clamp(min=1)
+    padded_bincount = torch.where(bincount > patch_size, windows * patch_size, bincount)
+    sample_start = nn.functional.pad(offset, (1, 0))[:-1]
+    padded_offset = nn.functional.pad(torch.cumsum(padded_bincount, dim=0), (1, 0))
+    shift = padded_offset[:-1] - sample_start
+
+    num_points = int(offset[-1]) if offset.numel() > 0 else 0
+    num_padded = int(padded_offset[-1])
+    token = torch.arange(num_points, device=device)
+    token_sample = torch.searchsorted(offset, token, right=True)
+    unpad = token + shift[token_sample]
+
+    slot = torch.arange(num_padded, device=device)
+    slot_sample = torch.searchsorted(padded_offset[1:], slot, right=True)
+    padding_start = padded_offset[1:] - patch_size + bincount % patch_size
+    is_padding = (bincount != padded_bincount)[slot_sample] & (slot >= padding_start[slot_sample])
+    pad = slot - shift[slot_sample] - patch_size * is_padding.long()
+    if not enable_flash:
+        return pad, unpad, None
+
+    windows_per_sample = torch.where(bincount > 0, windows, torch.zeros_like(windows))
+    window_offset = nn.functional.pad(torch.cumsum(windows_per_sample, dim=0), (1, 0))
+    window = torch.arange(int(window_offset[-1]), device=device)
+    window_sample = torch.searchsorted(window_offset[1:], window, right=True)
+    cu_seqlens = padded_offset[window_sample] + patch_size * (window - window_offset[window_sample])
+    cu_seqlens = torch.cat([cu_seqlens, padded_offset[-1:]]).to(torch.int32)
+    return pad, unpad, cu_seqlens
+
+
 class SerializedAttention(PointModule):
     """Apply windowed self-attention over serialized point tokens.
 
@@ -569,17 +626,6 @@ class SerializedAttention(PointModule):
             Tuple containing padded ordering indices, inverse indices, and
             optional cumulative sequence lengths for flash attention.
         """
-        bincount = offset_to_bincount(point.offset)
-        padded_bincount = (
-            torch.maximum(
-                torch.div(bincount + self.patch_size - 1, self.patch_size, rounding_mode="trunc"),
-                torch.ones_like(bincount),
-            )
-            * self.patch_size
-        )
-        mask = bincount > self.patch_size
-        padded_bincount = (~mask).long() * bincount + mask.long() * padded_bincount
-
         if self.export_mode:
             if point.offset.numel() != 1:
                 raise ValueError("PTv3 export mode supports only single-sample export batches.")
@@ -609,42 +655,22 @@ class SerializedAttention(PointModule):
             )
             return pad, unpad, cu_seqlens
 
-        offset = nn.functional.pad(point.offset, (1, 0))
-        padded_offset = nn.functional.pad(torch.cumsum(padded_bincount, dim=0), (1, 0))
-        pad = torch.arange(padded_offset[-1], device=point.offset.device)
-        unpad = torch.arange(offset[-1], device=point.offset.device)
-        cu_seqlens = [] if self.enable_flash else None
-        for batch_index in range(point.offset.numel()):
-            unpad[offset[batch_index] : offset[batch_index + 1]] += (
-                padded_offset[batch_index] - offset[batch_index]
+        # The padding depends only on the sample offsets and the window size, so
+        # every block of a stage reads the one computed by the first, as
+        # upstream PTv3 does; the keys are namespaced by window size because
+        # encoder and decoder stages may use different ones on one Point.
+        pad_key = f"pad_{self.patch_size}"
+        unpad_key = f"unpad_{self.patch_size}"
+        cu_seqlens_key = f"cu_seqlens_{self.patch_size}"
+        if pad_key not in point:
+            pad, unpad, cu_seqlens = serialized_window_padding(
+                point.offset, self.patch_size, self.enable_flash
             )
-            if bincount[batch_index] != padded_bincount[batch_index]:
-                pad[
-                    padded_offset[batch_index + 1]
-                    - self.patch_size
-                    + (bincount[batch_index] % self.patch_size) : padded_offset[batch_index + 1]
-                ] = pad[
-                    padded_offset[batch_index + 1]
-                    - 2 * self.patch_size
-                    + (bincount[batch_index] % self.patch_size) : padded_offset[batch_index + 1]
-                    - self.patch_size
-                ]
-            pad[padded_offset[batch_index] : padded_offset[batch_index + 1]] -= (
-                padded_offset[batch_index] - offset[batch_index]
-            )
+            point[pad_key] = pad
+            point[unpad_key] = unpad
             if cu_seqlens is not None:
-                cu_seqlens.append(
-                    torch.arange(
-                        padded_offset[batch_index],
-                        padded_offset[batch_index + 1],
-                        step=self.patch_size,
-                        dtype=torch.int32,
-                        device=point.offset.device,
-                    )
-                )
-        if cu_seqlens is None:
-            return pad, unpad, None
-        return pad, unpad, nn.functional.pad(torch.cat(cu_seqlens), (0, 1), value=padded_offset[-1])
+                point[cu_seqlens_key] = cu_seqlens
+        return point[pad_key], point[unpad_key], point.get(cu_seqlens_key)
 
     @torch.no_grad()
     def disable_flash(self) -> None:
@@ -720,8 +746,13 @@ class SerializedAttention(PointModule):
                 if roped is None
                 else torch.stack(roped, dim=1)
             )
+            # flash attention takes fp16 or bf16; keep the autocast dtype instead of forcing
+            # fp16, and fall back to fp16 for an fp32 (no autocast) projection.
+            flash_dtype = (
+                packed.dtype if packed.dtype in (torch.float16, torch.bfloat16) else torch.float16
+            )
             feat = self.flash_attn.flash_attn_varlen_qkvpacked_func(
-                packed.half(),
+                packed.to(flash_dtype),
                 cu_seqlens,
                 max_seqlen=patch_size,
                 dropout_p=self.attn_drop_p if self.training else 0.0,
@@ -797,6 +828,8 @@ class Block(PointModule):
         enable_attn: bool = True,
         rope_base: float | None = None,
         sparse_conv_backend: str = "spconv",
+        activation_checkpointing: bool = False,
+        fp32_sublayers: Sequence[str] = (),
     ) -> None:
         """Initialize one PTv3 attention block.
 
@@ -828,6 +861,12 @@ class Block(PointModule):
                 ``None`` to disable it.
             sparse_conv_backend: Library implementing the positional-encoding
                 convolution, see :func:`autoware_ml.ops.sparse_backend.submanifold_conv3d`.
+            activation_checkpointing: Recompute the attention and MLP activations of the
+                block in the backward pass instead of keeping them, trading roughly a third
+                more compute for most of the block's activation memory. Training only.
+            fp32_sublayers: Sublayers computed in fp32 under autocast; ``"mlp"`` runs the
+                feed-forward network in fp32, which recovers the accuracy bf16 loses there.
+                Empty by default.
 
         Raises:
             ValueError: Raised when the block would carry no operation at all.
@@ -836,6 +875,11 @@ class Block(PointModule):
         if not enable_conv and not enable_attn:
             raise ValueError("A block must enable at least one of convolution or attention.")
         self.pre_norm = pre_norm
+        self.activation_checkpointing = bool(activation_checkpointing)
+        self.fp32_sublayers = frozenset(fp32_sublayers)
+        unknown = self.fp32_sublayers - {"mlp"}
+        if unknown:
+            raise ValueError(f"fp32_sublayers supports only 'mlp', got {sorted(unknown)}.")
         self.enable_conv = bool(enable_conv)
         self.enable_attn = bool(enable_attn)
 
@@ -902,23 +946,56 @@ class Block(PointModule):
             point = self.norm0(point)
 
         if self.enable_attn:
-            shortcut = point.feat
-            if self.pre_norm:
-                point = self.norm1(point)
-            point = self.drop_path(self.attn(point))
-            point.feat = shortcut + point.feat
-            if not self.pre_norm:
-                point = self.norm1(point)
-
-            shortcut = point.feat
-            if self.pre_norm:
-                point = self.norm2(point)
-            point = self.drop_path(self.mlp(point))
-            point.feat = shortcut + point.feat
-            if not self.pre_norm:
-                point = self.norm2(point)
+            if self.activation_checkpointing and self.training and torch.is_grad_enabled():
+                # The window metadata of the point is read from the closure and stays as it
+                # is; only the features are differentiable inputs, so the recomputation in
+                # the backward pass reproduces the forward exactly (dropout RNG included).
+                # The recomputation rewrites `point.feat` of this stage's container while the
+                # backward runs; nothing reads the container then.
+                point.feat = checkpoint(
+                    partial(self._attention_and_mlp, point), point.feat, use_reentrant=False
+                )
+            else:
+                point.feat = self._attention_and_mlp(point, point.feat)
         point.sparse_conv_feat = point.sparse_conv_feat.replace_feature(point.feat)
         return point
+
+    def _attention_and_mlp(self, point: Point, feat: torch.Tensor) -> torch.Tensor:
+        """Run the attention and MLP sublayers on ``feat`` and return the new features.
+
+        Args:
+            point: Point container carrying the serialization and window metadata.
+            feat: Input features of the sublayers.
+
+        Returns:
+            Features after both residual sublayers.
+        """
+        point.feat = feat
+        shortcut = point.feat
+        if self.pre_norm:
+            point = self.norm1(point)
+        point = self.drop_path(self.attn(point))
+        point.feat = shortcut + point.feat
+        if not self.pre_norm:
+            point = self.norm1(point)
+
+        shortcut = point.feat
+        if self.pre_norm:
+            point = self.norm2(point)
+        if (
+            "mlp" in self.fp32_sublayers
+            and point.feat.is_cuda
+            and torch.is_autocast_enabled("cuda")
+        ):
+            with torch.autocast("cuda", enabled=False):
+                point.feat = point.feat.float()
+                point = self.drop_path(self.mlp(point))
+        else:
+            point = self.drop_path(self.mlp(point))
+        point.feat = shortcut + point.feat
+        if not self.pre_norm:
+            point = self.norm2(point)
+        return point.feat
 
 
 class SerializedPooling(PointModule):
@@ -1245,6 +1322,8 @@ class PointTransformerV3Encoder(PointModule):
         enc_attn: Sequence[bool] | bool = True,
         enc_rope_base: Sequence[float | None] | float | None = None,
         sparse_conv_backend: str = "spconv",
+        activation_checkpointing: bool = False,
+        fp32_sublayers: Sequence[str] = (),
     ) -> None:
         """Initialize the PTv3 encoder.
 
@@ -1281,6 +1360,11 @@ class PointTransformerV3Encoder(PointModule):
             sparse_conv_backend: Library implementing the submanifold convolutions
                 (``"auto"``, ``"spconv"`` or ``"rulebook"``), see
                 :func:`autoware_ml.ops.sparse_backend.submanifold_conv3d`.
+            activation_checkpointing: Recompute the attention and MLP activations of every
+                block in the backward pass, see :class:`Block`.
+            fp32_sublayers: Sublayers computed in fp32 under autocast; ``"mlp"`` runs the
+                feed-forward network in fp32, which recovers the accuracy bf16 loses there.
+                Empty by default.
         """
         super().__init__()
         self.in_channels = in_channels
@@ -1289,6 +1373,11 @@ class PointTransformerV3Encoder(PointModule):
         self.shuffle_orders = shuffle_orders
         self.enc_channels = list(enc_channels)
         self.sparse_conv_backend = sparse_conv_backend
+        self.activation_checkpointing = bool(activation_checkpointing)
+        self.fp32_sublayers = frozenset(fp32_sublayers)
+        unknown = self.fp32_sublayers - {"mlp"}
+        if unknown:
+            raise ValueError(f"fp32_sublayers supports only 'mlp', got {sorted(unknown)}.")
         stage_count = len(enc_depths)
         self.enc_conv = expand_stage_flags(enc_conv, stage_count, True, "enc_conv")
         self.enc_attn = expand_stage_flags(enc_attn, stage_count, True, "enc_attn")
@@ -1338,6 +1427,8 @@ class PointTransformerV3Encoder(PointModule):
                         enable_attn=self.enc_attn[stage_index],
                         rope_base=self.enc_rope_base[stage_index],
                         sparse_conv_backend=sparse_conv_backend,
+                        activation_checkpointing=activation_checkpointing,
+                        fp32_sublayers=fp32_sublayers,
                     ),
                     name=f"block{block_index}",
                 )
@@ -1443,6 +1534,8 @@ class LitePTEncoder(PointTransformerV3Encoder):
         enc_attn: Sequence[bool] = (False, False, False, True, True),
         enc_rope_base: Sequence[float | None] | float | None = 100.0,
         sparse_conv_backend: str = "spconv",
+        activation_checkpointing: bool = False,
+        fp32_sublayers: Sequence[str] = (),
     ) -> None:
         """Initialize the LitePT encoder.
 
@@ -1477,6 +1570,10 @@ class LitePTEncoder(PointTransformerV3Encoder):
             enc_rope_base: Rotary-embedding frequency base per stage.
             sparse_conv_backend: Library implementing the submanifold convolutions,
                 see :class:`PointTransformerV3Encoder`.
+            activation_checkpointing: See :class:`PointTransformerV3Encoder`.
+            fp32_sublayers: Sublayers computed in fp32 under autocast; ``"mlp"`` runs the
+                feed-forward network in fp32, which recovers the accuracy bf16 loses there.
+                Empty by default.
         """
         super().__init__(
             in_channels=in_channels,
@@ -1504,6 +1601,8 @@ class LitePTEncoder(PointTransformerV3Encoder):
             enc_attn=enc_attn,
             enc_rope_base=enc_rope_base,
             sparse_conv_backend=sparse_conv_backend,
+            activation_checkpointing=activation_checkpointing,
+            fp32_sublayers=fp32_sublayers,
         )
 
 
