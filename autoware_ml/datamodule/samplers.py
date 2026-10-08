@@ -12,16 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Repeat factor sampling of the training frames.
+"""Data samplers shared by Autoware-ML datamodules.
 
 A detection corpus is dominated by cars, and a frame that carries a rare class is drawn as
 often as one that does not. Repeat factor sampling gives every frame a weight from the
 rarest category it carries, so frames with rare objects come up more often within an epoch
 of the same length. The weights come straight from the record table, before any transform.
+The scene streaming sampler feeds temporal models whole scenes frame by frame.
 """
 
 from __future__ import annotations
 
+import logging
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -29,7 +31,7 @@ from typing import Any
 
 import torch
 import torch.distributed as dist
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Sampler
 from torch.utils.data.distributed import DistributedSampler
 
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDatasetSchema
@@ -37,6 +39,8 @@ from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.datamodule.base_dataset import BaseDataset, ConcatDataset
 from autoware_ml.transforms.boxes3d.filters import parse_exclusion_rules
 from autoware_ml.types.geometry import Box3DFieldIndex
+
+logger = logging.getLogger(__name__)
 
 LOW_PEDESTRIAN_CATEGORY = "low_pedestrian"
 
@@ -246,43 +250,168 @@ def _center_in_range(params: Sequence[float], bev_range: Sequence[float]) -> boo
 
 
 class DistributedWeightedRandomSampler(DistributedSampler):
-    """
-    Draw one weighted epoch and hand every rank its share of it.
+    """Weighted random sampler that partitions one sampled epoch across ranks."""
 
-    An epoch has as many draws as the dataset has samples, drawn with replacement in
-    proportion to the weights. Every rank draws the same epoch from the same seed and keeps
-    every world-size-th draw. Lightning leaves a distributed sampler in place and sets its
-    epoch, which reseeds the draw.
-    """
-
-    def __init__(self, dataset: Dataset, weights: Sequence[float], seed: int) -> None:
-        """
-        Initialize the sampler.
+    def __init__(
+        self,
+        dataset: Dataset,
+        weights: Sequence[float],
+        *,
+        replacement: bool = True,
+        seed: int = 0,
+        drop_last: bool = False,
+    ) -> None:
+        """Initialize the sampler.
 
         Args:
-          dataset: Dataset the loader indexes.
-          weights: Sampling weight of every sample, all positive.
-          seed: Seed of the first epoch, every epoch adds its number.
+            dataset: Dataset sampled by the dataloader.
+            weights: Per-sample non-negative sampling weights.
+            replacement: Whether to sample indices with replacement.
+            seed: Base seed used with ``set_epoch`` for deterministic shuffling.
+            drop_last: Whether to drop tail samples when dataset length is not
+                divisible by world size.
         """
         if len(weights) != len(dataset):
-            raise ValueError(f"Got {len(weights)} weights for {len(dataset)} samples.")
-        distributed = dist.is_available() and dist.is_initialized()
+            raise ValueError(f"Expected {len(dataset)} sampler weights, got {len(weights)}.")
+        num_replicas = dist.get_world_size() if dist.is_available() and dist.is_initialized() else 1
+        rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
         super().__init__(
             dataset,
-            num_replicas=dist.get_world_size() if distributed else 1,
-            rank=dist.get_rank() if distributed else 0,
+            num_replicas=num_replicas,
+            rank=rank,
             shuffle=False,
             seed=seed,
+            drop_last=drop_last,
         )
         self.weights = torch.as_tensor(weights, dtype=torch.double)
-        if torch.any(self.weights <= 0.0):
-            raise ValueError("Sampling weights must be positive.")
+        if torch.any(self.weights < 0):
+            raise ValueError("Sampler weights must be non-negative.")
+        if float(self.weights.sum().item()) <= 0.0:
+            raise ValueError("At least one sampler weight must be positive.")
+        self.replacement = replacement
 
     def __iter__(self):
-        """Yield the indices of this rank for the current epoch."""
+        """Yield the weighted sample indices for this rank."""
         generator = torch.Generator()
         generator.manual_seed(self.seed + self.epoch)
         indices = torch.multinomial(
-            self.weights, self.total_size, replacement=True, generator=generator
+            self.weights,
+            self.total_size,
+            replacement=self.replacement,
+            generator=generator,
         ).tolist()
-        return iter(indices[self.rank : self.total_size : self.num_replicas])
+        indices = indices[self.rank : self.total_size : self.num_replicas]
+        return iter(indices)
+
+
+class GroupStreamingSampler(Sampler[int]):
+    """Interleave scene-contiguous frame indices across dataloader lanes.
+
+    Each of the ``batch_size`` dataloader lanes walks whole scenes frame by
+    frame, so consecutive iterations feed consecutive frames of the same scene
+    into the same batch position. Stateful temporal models can therefore carry
+    per-lane memory across iterations, with scene changes signalled by the
+    dataset's ``prev_exists`` metadata. Scenes are shuffled per epoch and
+    partitioned round-robin over distributed ranks and lanes. Each rank builds
+    its own index list, and every list is then truncated to the length of the
+    shortest one, so all ranks iterate the same number of steps and every
+    batch stays complete. Without that equalization the ranks would run a
+    different number of steps and collective operations would deadlock.
+
+    The sampler shards by rank itself, so the trainer must run with
+    ``use_distributed_sampler: false`` (the StreamPETR base config does):
+    Lightning would otherwise wrap it in a ``DistributedSamplerWrapper``,
+    re-striding the indices and destroying the lane/scene contiguity.
+    """
+
+    def __init__(
+        self,
+        dataset: Dataset,
+        batch_size: int,
+        shuffle: bool = True,
+        seed: int = 0,
+    ) -> None:
+        """Initialize the streaming sampler.
+
+        Args:
+            dataset: Dataset exposing ``scene_index_groups()`` with
+                scene-contiguous dataset indices.
+            batch_size: Number of dataloader lanes fed in parallel. Must match
+                the dataloader batch size.
+            shuffle: Whether to shuffle the scene order every epoch.
+            seed: Base seed for the per-epoch scene shuffle.
+        """
+        self.scene_groups = dataset.scene_index_groups()
+        if not self.scene_groups:
+            raise ValueError("GroupStreamingSampler requires at least one scene group.")
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.seed = seed
+        self.epoch = 0
+        self._cached_epoch: int | None = None
+        self._cached_indices: list[list[int]] = []
+        if dist.is_available() and dist.is_initialized():
+            self.rank = dist.get_rank()
+            self.world_size = dist.get_world_size()
+        else:
+            self.rank = 0
+            self.world_size = 1
+
+    def _epoch_indices(self, epoch: int) -> list[list[int]]:
+        """Build (or reuse) the per-rank interleaved index lists for one epoch."""
+        if epoch == self._cached_epoch:
+            return self._cached_indices
+        if self.shuffle:
+            generator = torch.Generator()
+            generator.manual_seed(self.seed + epoch)
+            scene_order = torch.randperm(len(self.scene_groups), generator=generator).tolist()
+        else:
+            scene_order = list(range(len(self.scene_groups)))
+
+        per_rank_indices: list[list[int]] = []
+        for rank in range(self.world_size):
+            lanes: list[list[int]] = [[] for _ in range(self.batch_size)]
+            for scene_position, scene_index in enumerate(scene_order[rank :: self.world_size]):
+                lanes[scene_position % self.batch_size].extend(self.scene_groups[scene_index])
+            rounds = min(len(lane) for lane in lanes)
+            indices = [lane[round_index] for round_index in range(rounds) for lane in lanes]
+            per_rank_indices.append(indices)
+
+        min_length = min(len(indices) for indices in per_rank_indices)
+        if min_length == 0:
+            raise ValueError(
+                f"GroupStreamingSampler cannot fill {self.world_size} rank(s) x "
+                f"{self.batch_size} lane(s) from {len(self.scene_groups)} scene(s); "
+                "reduce batch_size or world size."
+            )
+        self._cached_epoch = epoch
+        self._cached_indices = [indices[:min_length] for indices in per_rank_indices]
+        total_frames = sum(len(group) for group in self.scene_groups)
+        dropped = total_frames - min_length * self.world_size
+        if dropped:
+            logger.warning(
+                "GroupStreamingSampler serves %d/%d frames this epoch; %d tail frames are "
+                "trimmed to keep %d rank(s) x %d lane(s) aligned.",
+                min_length * self.world_size,
+                total_frames,
+                dropped,
+                self.world_size,
+                self.batch_size,
+            )
+        return self._cached_indices
+
+    def __iter__(self):
+        """Yield this rank's interleaved indices for the current epoch."""
+        return iter(self._epoch_indices(self.epoch)[self.rank])
+
+    def __len__(self) -> int:
+        """Return the per-rank sample count of the current epoch."""
+        return len(self._epoch_indices(self.epoch)[self.rank])
+
+    def set_epoch(self, epoch: int) -> None:
+        """Select the epoch used for the scene shuffle.
+
+        Lightning calls this before every training epoch, which is what
+        advances the shuffle; without it every epoch replays the same order.
+        """
+        self.epoch = epoch

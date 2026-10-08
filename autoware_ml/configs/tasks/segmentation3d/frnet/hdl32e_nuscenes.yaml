@@ -5,8 +5,6 @@ defaults:
   - /datasets/nuscenes/lidar
   - /database@database: nuscenes/nuscenes_base
   - /datamodule@datamodule: nuscenes/default_segmentation3d_datamodule
-  - override /datamodule/transforms@datamodule.train_dataset.transforms: frnet_train_transforms
-  - override /datamodule/transforms@datamodule.test_dataset.transforms: frnet_test_transforms
   - _self_
 
 batch_size: 16
@@ -22,6 +20,33 @@ frustum_height: 32
 frustum_width: 480
 
 datamodule:
+  train_dataset:
+    transforms:
+      _target_: autoware_ml.transforms.base.TransformsCompose
+      _convert_: all
+      pipeline:
+        - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
+          _convert_: all
+          use_dim: [0, 1, 2, 3]
+          bev_remove_radius: 0.0
+        - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalBEVRandomFlip
+          _convert_: all
+          horizontal_flip_ratio: 0.5
+          vertical_flip_ratio: 0.5
+        - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
+          _convert_: all
+          yaw_rot_range: [-3.14159265, 3.14159265]
+          scale_ratio_range: [0.95, 1.05]
+          translation_std: [0.1, 0.1, 0.1]
+  test_dataset:
+    transforms:
+      _target_: autoware_ml.transforms.base.TransformsCompose
+      _convert_: all
+      pipeline:
+        - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
+          _convert_: all
+          use_dim: [0, 1, 2, 3]
+          bev_remove_radius: 0.0
   train_dataloader:
     batch_size: ${batch_size}
     num_workers: ${num_workers}

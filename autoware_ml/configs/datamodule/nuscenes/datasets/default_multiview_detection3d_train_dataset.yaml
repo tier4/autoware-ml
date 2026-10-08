@@ -1,5 +1,10 @@
-defaults:
-  - /datamodule/t4dataset/datasets/default_multiview_detection3d_train_dataset@_here_
-  - _self_
-
 _target_: autoware_ml.datamodule.nuscenes.dataset.NuScenesDataset
+_convert_: all
+_partial_: true
+
+defaults:
+  - detection3d@dataset_tasks.Detection3D: default_detection3d
+
+max_num_3d_gt_bboxes: 500
+
+transforms: ???

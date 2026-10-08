@@ -51,13 +51,14 @@ def test_ptv3_transhead_detection_runs_loss_and_predict() -> None:
     model = build_trans_model().to(torch.device("cuda"))
     batch = build_inputs(device=torch.device("cuda"))
 
-    outputs = model(**model.bind_forward_inputs(batch))
+    outputs = model(**model.forward_inputs(batch))
     metrics = model.compute_metrics(batch, outputs)
-    predictions = model.bbox_head.predict(outputs)
+    predictions = model.predict_outputs(batch, outputs).detection3d_predictions
+    head_outputs = outputs.detection3d().transfusion_head()
 
     assert "loss" in metrics
-    assert outputs["dense_heatmap"].shape[:2] == (1, 2)
-    assert outputs["query_labels"].shape == (1, 8)
+    assert head_outputs.dense_heatmap.shape[:2] == (1, 2)
+    assert head_outputs.query_labels.shape == (1, 8)
     assert isinstance(predictions, list)
     assert isinstance(predictions[0], Detection3DSamplePredictions)
 

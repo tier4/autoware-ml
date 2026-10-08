@@ -45,10 +45,8 @@ class NuScenesRecordsGeneratorWorkerParams:
     Attributes:
       database_root_path: Root path of the NuScenes database.
       scenario_data: Scenario data.
-      lidar_pointcloud_num_features: Number of float32 values per point in the stored point
-        clouds.
+      lidar_pointcloud_num_features: Number of features in the lidar pointcloud.
       taxonomy: Taxonomies the database labels are built with.
-      box3d_pipelines: List of box 3D pipelines to process the box 3D annotations.
     """
 
     database_root_path: str
@@ -92,9 +90,9 @@ class NuScenesDataset(BaseDatabase):
         cache_file_prefix_name: str,
         num_workers: int,
         taxonomy: DatabaseTaxonomy,
+        lidar_pointcloud_num_features: int,
         box3d_pipelines: Sequence[Box3DPipeline],
         lidar_intensity_scale: float,
-        lidar_pointcloud_num_features: int,
     ) -> None:
         """
         Initialize NuScenes dataset. Please refer to the BaseDatabase class for more details.
@@ -107,10 +105,9 @@ class NuScenesDataset(BaseDatabase):
           cache_file_prefix_name: Prefix name of the cache file, it will be <cache_file_prefix_name>_<dataset_hash>.parquet
           num_workers: Number of workers to use for processing the dataset.
           taxonomy: Taxonomies the database labels are built with.
+          lidar_pointcloud_num_features: Number of features in the lidar pointcloud.
           box3d_pipelines: List of box 3D pipelines to process the box 3D annotations.
           lidar_intensity_scale: Intensity value of the strongest return in the stored point
-            clouds.
-          lidar_pointcloud_num_features: Number of float32 values per point in the stored point
             clouds.
         """
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 import math
 from types import SimpleNamespace
 from typing import Any
@@ -13,6 +12,13 @@ import torch
 import torch.nn as nn
 
 import autoware_ml.utils.point_cloud.structures as point_structures
+from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTBatch
+from autoware_ml.dataclasses.geometry.voxels import VoxelsData
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.models.tests.batch_inputs_fixtures import (
+    build_batch_inputs,
+    build_point_cloud_batch,
+)
 from autoware_ml.models.detection3d.tests.ptv3_detection_fixtures import (
     build_inputs,
     build_ptv3_encoder,
@@ -353,20 +359,27 @@ def _seg_processed(
     point_frames: list[torch.Tensor],
     point_voxel_indices: torch.Tensor,
     segment_frames: list[torch.Tensor] | None = None,
-) -> Mapping[str, Any]:
+) -> ModelBatchInputs:
     """Build model inputs from per frame points and handmade voxelizer outputs."""
     num_voxels = int(point_voxel_indices.max()) + 1 if point_voxel_indices.numel() else 0
-    inputs: dict[str, Any] = {
-        "points": list(point_frames),
-        "sample_count": len(point_frames),
-        "voxels": torch.zeros((num_voxels, 1, point_frames[0].shape[1])),
-        "num_points": torch.ones(num_voxels, dtype=torch.int32),
-        "voxel_coords": torch.zeros((num_voxels, 4), dtype=torch.int32),
-        "point_voxel_indices": point_voxel_indices,
-    }
-    if segment_frames is not None:
-        inputs["segment"] = torch.cat(list(segment_frames), dim=0)
-    return inputs
+    point_cloud = build_point_cloud_batch(point_frames, timestamp_difference_dim=4)
+    labels = (
+        Segmentation3DGTBatch(
+            gt_semantic_masks=torch.cat(list(segment_frames), dim=0),
+            batch_indices=point_cloud.batch_indices,
+        )
+        if segment_frames is not None
+        else None
+    )
+    voxels = VoxelsData(
+        voxels=torch.zeros((num_voxels, 1, point_frames[0].shape[1])),
+        coords=torch.zeros((num_voxels, 3), dtype=torch.int32),
+        num_points=torch.ones(num_voxels, dtype=torch.int32),
+        batch_indices=torch.zeros(num_voxels, dtype=torch.int32),
+        point_voxel_indices=point_voxel_indices,
+        num_dropped_voxels=torch.zeros((), dtype=torch.int64),
+    )
+    return build_batch_inputs(point_cloud=point_cloud, segmentation=labels, voxels=voxels)
 
 
 def _split_voxels() -> tuple[torch.Tensor, torch.Tensor]:
@@ -725,10 +738,10 @@ def test_predict_outputs_reconstructs_current_frame_point_predictions() -> None:
         _seg_processed([points[:2], points[2:]], point_voxel_indices),
     )
 
-    assert torch.equal(predictions["pred_labels"], torch.tensor([0, 1, 0]))
-    assert predictions["pred_probs"].shape == (3, 2)
+    assert torch.equal(predictions.pred_labels, torch.tensor([0, 1, 0]))
+    assert predictions.pred_probs.shape == (3, 2)
     expected_probs = torch.softmax(voxel_logits, dim=1)[point_voxel_indices[:3]]
-    assert torch.allclose(predictions["pred_probs"], expected_probs)
+    assert torch.allclose(predictions.pred_probs, expected_probs)
 
 
 def test_point_serialization_accepts_explicit_depth_override() -> None:
@@ -911,9 +924,9 @@ def test_ptv3_frozen_encoder_supports_decoder_block_backward() -> None:
     ).cuda()
     batch = build_inputs(device=torch.device("cuda"))
 
-    logits = model(**model.bind_forward_inputs(batch))
+    logits = model(**model.forward_inputs(batch)).segmentation3d().logits
     logits.sum().backward()
-    assert logits.shape == (batch["voxels"].shape[0], 3)
+    assert logits.shape == (batch.voxels_data.voxels.shape[0], 3)
 
     assert all(p.grad is None for p in model.encoder.parameters())
     assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in model.seg3d_head.parameters())

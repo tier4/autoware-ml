@@ -7,5 +7,6 @@ defaults:
 version: T4Dataset-j6gen2_pseudo-v1.0.0
 cache_path: ${cache_root_path}/t4dataset_pseudo/
 root_path: ${data_root_path}/t4dataset/pseudo_large/
+# TODO(amadeuszsz): remove when dataset fixed
 # The original tables keep the fine box names
 box_annotation_dir: annotation_orig

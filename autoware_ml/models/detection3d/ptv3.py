@@ -10,7 +10,7 @@ segmentation head and is not part of the detection path.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from copy import deepcopy
 from typing import Any
 
@@ -18,14 +18,18 @@ import torch
 import torch.nn as nn
 from torch.onnx.operators import shape_as_tensor
 
+from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DHeadOutputs
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
+from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
 from autoware_ml.models.segmentation3d.encoders.ptv3 import PointTransformerV3Encoder
 from autoware_ml.models.segmentation3d.encoders.voxel import VoxelFeatureEncoder
 from autoware_ml.models.segmentation3d.ptv3_base import (
     SERIALIZED_POOLING_FIELDS,
     PTv3BaseModel,
-    PTv3ExportContext,
     PTv3EncoderExportBase,
+    PTv3ExportContext,
     build_encoder_export_spec,
     build_ptv3_export_context,
     build_ptv3_input_dynamic_axes,
@@ -399,7 +403,7 @@ class _PTv3DetectionExportModule(PTv3EncoderExportBase):
         )
         bev_features = self.bev_neck(point)
         outputs = self.bbox_head(bev_features)
-        return tuple(outputs[name] for name in self.output_names)
+        return outputs.export_tensors(self.output_names)
 
 
 class _PTv3DetHeadExportModule(nn.Module):
@@ -436,7 +440,7 @@ class _PTv3DetHeadExportModule(nn.Module):
         point = Point(feat=deepest_feat, pooling_parent=parent, pooling_inverse=cluster)
         bev = self.bev_neck(point)
         outputs = self.bbox_head(bev)
-        return tuple(outputs[name] for name in self.output_names)
+        return outputs.export_tensors(self.output_names)
 
 
 class PTv3DetectionModel(PTv3BaseModel):
@@ -479,19 +483,17 @@ class PTv3DetectionModel(PTv3BaseModel):
         self.bbox_head = bbox_head
         self.export_output_names = list(export_output_names)
 
-    def build_eval_output(
-        self, batch_inputs_dict: Mapping[str, Any], outputs: Any
-    ) -> dict[str, Any]:
+    def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> dict[str, Any]:
         """Decode detections and pair them with ground truth for metrics.
 
         Args:
-            batch_inputs_dict: Preprocessed batch of the evaluation step.
+            batch: Model inputs of the evaluation step.
             outputs: Raw head outputs returned by :meth:`forward`.
 
         Returns:
             Flat eval output dict consumed by the detection metric.
         """
-        return detection_eval_output(self.bbox_head.predict(outputs), batch_inputs_dict)
+        return detection_eval_output(self.predict_outputs(batch, outputs), batch)
 
     def get_export_output_names(self) -> list[str]:
         """Return the ordered export output names."""
@@ -504,7 +506,7 @@ class PTv3DetectionModel(PTv3BaseModel):
         voxel_coords: torch.Tensor,
         num_dropped_voxels: torch.Tensor,
         time_lag_column: int,
-    ) -> dict[str, torch.Tensor]:
+    ) -> ModelOutputs:
         """Run PTv3 feature extraction followed by the configured detection head.
 
         Args:
@@ -515,51 +517,66 @@ class PTv3DetectionModel(PTv3BaseModel):
             time_lag_column: Point column holding the time lag.
         """
         point = self.encode(voxels, num_points, voxel_coords, num_dropped_voxels, time_lag_column)
-        return self.bbox_head(self.bev_neck(point))
+        return ModelOutputs(
+            detection3d_head_outputs=Detection3DHeadOutputs(
+                center_head_outputs=None,
+                transfusion_head_outputs=self.bbox_head(self.bev_neck(point)),
+            )
+        )
 
     def compute_metrics(
         self,
-        batch_inputs_dict: Mapping[str, Any],
-        outputs: dict[str, torch.Tensor],
+        batch_inputs: ModelBatchInputs,
+        outputs: ModelOutputs,
     ) -> dict[str, torch.Tensor]:
         """Compute detection losses for one batched step.
 
         Args:
-            batch_inputs_dict: Preprocessed batch after runtime preprocessing.
+            batch_inputs: Model inputs holding the ground truth boxes.
             outputs: Raw head outputs returned by :meth:`forward`.
 
         Returns:
             Dictionary of loss terms produced by the detection head.
+
+        Raises:
+            ValueError: If the batch carries no detection ground truth.
         """
+        gt_detections = batch_inputs.multi_task_gt_batch.detection3d_gt_batch
+        if gt_detections is None:
+            raise ValueError("PTv3 detection losses need the 3D detection ground truth.")
         return self.bbox_head.loss(
-            outputs, batch_inputs_dict["gt_boxes"], batch_inputs_dict["gt_labels"]
+            outputs.detection3d().transfusion_head(),
+            gt_detections.valid_bboxes_3d(),
+            gt_detections.valid_labels_3d(),
         )
 
     def predict_outputs(
-        self, batch_inputs_dict: Mapping[str, Any], outputs: dict[str, torch.Tensor]
-    ) -> Any:
+        self, batch_inputs: ModelBatchInputs, outputs: ModelOutputs
+    ) -> ModelPredictions:
         """Decode predictions for inference.
 
         Args:
-            batch_inputs_dict: Preprocessed batch of the prediction step, unused.
+            batch_inputs: Model inputs of the prediction step, unused.
             outputs: Raw head outputs returned by :meth:`forward`.
 
         Returns:
             Decoded detector predictions for the current batch.
         """
-        del batch_inputs_dict
-        return self.bbox_head.predict(outputs)
+        del batch_inputs
+        return ModelPredictions(
+            detection3d_predictions=self.bbox_head.predict(outputs.detection3d().transfusion_head())
+        )
 
-    def build_export_spec(self, batch_inputs_dict: Mapping[str, Any]) -> ExportSpec:
+    def build_export_spec(self, batch_inputs: ModelBatchInputs) -> ExportSpec:
         """Build the PTv3 detection ONNX export specification.
 
         Args:
-            batch_inputs_dict: Example preprocessed batch with the voxelizer outputs.
+            batch_inputs: Example preprocessed batch with the voxels.
 
         Returns:
             Deployment export specification for the PTv3 detector.
         """
-        inputs = prepare_ptv3_export_inputs(self, batch_inputs_dict)
+        inputs = prepare_ptv3_export_inputs(self, batch_inputs)
         input_args, input_param_names = inputs.encoder_args(SERIALIZED_POOLING_FIELDS)
         export_module = _PTv3DetectionExportModule(
             encoder=self._prepare_encoder_export(),
@@ -580,16 +597,16 @@ class PTv3DetectionModel(PTv3BaseModel):
             supported_stages=self.EXPORT_SUPPORTED_STAGES,
         )
 
-    def build_export_specs(self, batch_inputs_dict: Mapping[str, Any]) -> dict[str, ExportSpec]:
+    def build_export_specs(self, batch_inputs: ModelBatchInputs) -> dict[str, ExportSpec]:
         """Build split PTv3 detection ONNX export specs for encoder and detection head.
 
         Args:
-            batch_inputs_dict: Example preprocessed batch with the voxelizer outputs.
+            batch_inputs: Example preprocessed batch with the voxels.
 
         Returns:
             Export specs of the encoder and the detection head.
         """
-        context = build_ptv3_export_context(self, batch_inputs_dict)
+        context = build_ptv3_export_context(self, batch_inputs)
         return {
             "ptv3_encoder": build_encoder_export_spec(context),
             "ptv3_det3d_head": build_det_head_export_spec(

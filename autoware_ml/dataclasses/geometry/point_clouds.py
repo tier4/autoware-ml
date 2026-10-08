@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from typing import Sequence, NamedTuple
 
-from jaxtyping import Float32, Int32
+from jaxtyping import Float32, Int32, Int64
 import torch
 from torch import Tensor
 
-from autoware_ml.databases.t4pack.t4pack_frame import T4PackFrame
 from autoware_ml.geometry.points.base_points import BasePoints
+from autoware_ml.databases.t4pack.t4pack_frame import T4PackFrame
 
 
 class PointCloudGTBatch(NamedTuple):
@@ -77,6 +77,34 @@ class PointCloudGTBatch(NamedTuple):
             timestamp_difference_dim=point_gt_samples[0].timestamp_difference_dim,
         )
 
+    def sample_point_counts(self) -> Int64[Tensor, " batch_size"]:
+        """
+        Count the points of every sample of the batch.
+
+        Returns:
+          Int64[Tensor, " batch_size"]: Number of points of every sample, zero for a sample
+            without points.
+        """
+        return torch.bincount(self.batch_indices.long(), minlength=self.batch_size)
+
+    def offsets(self) -> Int64[Tensor, " batch_size"]:
+        """
+        Give the end of every sample in the concatenated points.
+
+        Returns:
+          Int64[Tensor, " batch_size"]: Cumulative point count of every sample.
+        """
+        return torch.cumsum(self.sample_point_counts(), dim=0)
+
+    def split_points(self) -> list[Float32[Tensor, "num_points num_features"]]:
+        """
+        Split the concatenated points into the points of every sample.
+
+        Returns:
+          list: Points of every sample of the batch.
+        """
+        return list(torch.split(self.points, self.sample_point_counts().tolist()))
+
     def to_device(self, device: torch.device) -> PointCloudGTBatch:
         """
         Move the PointCloudGTBatch to the specified device.
@@ -129,7 +157,7 @@ class LiDARPointCloudSample(NamedTuple):
     lidar_to_ego_pose_to_global_matrix: Float32[Tensor, "4 4"]  # (4, 4)
     # Transformation matrix from the main lidar sensor to other lidar sweeps at this frame
     lidar_sensor_to_lidar_sweep_matrix: Float32[Tensor, "4 4"]  # (4, 4)
-    # Lidar source to serve from a merged cloud, None to serve the whole file
-    source_view: LidarSourceView | None = None
     # Location of the frame in the t4pack file of its channel, None when the scene has no pack
     t4pack_frame: T4PackFrame | None = None
+    # Lidar source to serve from a merged cloud, None to serve the whole file
+    source_view: LidarSourceView | None = None

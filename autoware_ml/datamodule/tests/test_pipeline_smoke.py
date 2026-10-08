@@ -101,11 +101,11 @@ class TestPipelineSmoke(unittest.TestCase):
         device = torch.device("cuda")
         model = build_seg_model(POINT_CLOUD_RANGE, PastFutureVoxelFeatureEncoder).to(device)
         model.log_dict = lambda *args, **kwargs: None
-        batch_inputs_dict = DataPreprocessing([build_preprocessor(POINT_CLOUD_RANGE)])(
+        batch_inputs = DataPreprocessing([build_preprocessor(POINT_CLOUD_RANGE)])(
             self.batch.to_device(device), is_training=True
         )
 
-        loss = model.training_step(batch_inputs_dict, batch_idx=0)
+        loss = model.training_step(batch_inputs, batch_idx=0)
         loss.backward()
 
         self.assertTrue(torch.isfinite(loss))
@@ -123,11 +123,11 @@ class TestPipelineSmoke(unittest.TestCase):
             point_cloud_range=POINT_CLOUD_RANGE, voxel_encoder_type=PastFutureVoxelFeatureEncoder
         ).to(device)
         model.log_dict = lambda *args, **kwargs: None
-        batch_inputs_dict = DataPreprocessing([build_preprocessor(POINT_CLOUD_RANGE)])(
+        batch_inputs = DataPreprocessing([build_preprocessor(POINT_CLOUD_RANGE)])(
             self.batch.to_device(device), is_training=True
         )
 
-        loss = model.training_step(batch_inputs_dict, batch_idx=0)
+        loss = model.training_step(batch_inputs, batch_idx=0)
         loss.backward()
 
         self.assertTrue(torch.isfinite(loss))
@@ -147,11 +147,11 @@ class TestPipelineSmoke(unittest.TestCase):
             point_cloud_range=list(POINT_CLOUD_RANGE),
         ).to(device)
         model.log_dict = lambda *args, **kwargs: None
-        batch_inputs_dict = DataPreprocessing([build_preprocessor(POINT_CLOUD_RANGE)])(
+        batch_inputs = DataPreprocessing([build_preprocessor(POINT_CLOUD_RANGE)])(
             self.batch.to_device(device), is_training=True
         )
 
-        loss = model.training_step(batch_inputs_dict, batch_idx=0)
+        loss = model.training_step(batch_inputs, batch_idx=0)
         loss.backward()
 
         self.assertTrue(torch.isfinite(loss))
@@ -163,13 +163,13 @@ class TestPipelineSmoke(unittest.TestCase):
         )
         device = next(model.parameters()).device
         model.log_dict = lambda *args, **kwargs: None
-        batch_inputs_dict = DataPreprocessing([build_preprocessor(POINT_CLOUD_RANGE)])(
+        batch_inputs = DataPreprocessing([build_preprocessor(POINT_CLOUD_RANGE)])(
             self.batch.to_device(device), is_training=False
         )
 
         with torch.no_grad():
-            outputs = model(**model.bind_forward_inputs(batch_inputs_dict))
-            eval_output = model.build_eval_output(batch_inputs_dict, outputs)
+            outputs = model(**model.forward_inputs(batch_inputs))
+            eval_output = model.build_eval_output(batch_inputs, outputs)
 
         frames = eval_output["seg_frames"]
         self.assertEqual(len(frames), 2)

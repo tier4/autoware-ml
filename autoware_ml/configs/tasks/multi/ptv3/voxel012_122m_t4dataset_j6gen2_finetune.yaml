@@ -1,7 +1,5 @@
 # @package _global_
 
-# Fine tuning on J6 gen2 ground truth
-
 defaults:
   - /tasks/multi/ptv3/voxel012_122m_t4dataset_j6gen2
   - _self_

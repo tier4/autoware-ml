@@ -6,4 +6,3 @@ pipeline:
     max_num_points: 32
     max_voxels: ${max_voxels}
     eval_max_voxels: ${max_voxels}
-    voxelization_z_order_first: false

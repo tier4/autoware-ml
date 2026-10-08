@@ -49,3 +49,21 @@ class VoxelsData(NamedTuple):
     batch_indices: Int32[torch.Tensor, " M"]
     point_voxel_indices: Int64[torch.Tensor, " N"]
     num_dropped_voxels: Int64[torch.Tensor, ""]
+
+    def batch_zyx_coords(self) -> Int32[torch.Tensor, "M 4"]:
+        """
+        Give every voxel its sample index followed by its coordinates in (z, y, x) order.
+
+        Returns:
+            Int32[torch.Tensor, "M 4"]: The ``[batch, z, y, x]`` coordinate of every voxel.
+        """
+        return torch.cat([self.batch_indices.unsqueeze(1), self.coords[:, [2, 1, 0]]], dim=1)
+
+    def batch_xyz_coords(self) -> Int32[torch.Tensor, "M 4"]:
+        """
+        Give every voxel its sample index followed by its coordinates in (x, y, z) order.
+
+        Returns:
+            Int32[torch.Tensor, "M 4"]: The ``[batch, x, y, z]`` coordinate of every voxel.
+        """
+        return torch.cat([self.batch_indices.unsqueeze(1), self.coords], dim=1)

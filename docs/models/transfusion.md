@@ -71,7 +71,7 @@ The current verification scope covers ONNX export. TensorRT engine generation ha
 | `autoware_ml/models/detection3d/task_modules/`          | Shared assigners, costs, coders                  |
 | `autoware_ml/datamodule/t4dataset/dataset.py`           | T4Dataset records as a dataset                   |
 | `autoware_ml/datamodule/nuscenes/dataset.py`            | nuScenes dataset                                 |
-| `autoware_ml/datamodule/t4dataset/detection3d.py`       | 3D boxes of a T4Dataset record                   |
+| `autoware_ml/datamodule/detection3d.py`                 | 3D boxes of a record                             |
 | `autoware_ml/configs/datamodule/`                       | Datamodule, dataset and transform configurations |
 | `autoware_ml/preprocessing/detection3d/point_pillar.py` | Pillar preprocessing                             |
 | `autoware_ml/configs/tasks/detection3d/transfusion/`    | Task configurations                              |

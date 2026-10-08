@@ -1,4 +1,3 @@
-# Box pipelines keeping trailer as a class
 - _target_: autoware_ml.databases.box3d_pipelines.box3d_label_resolver.Box3DLabelResolver
   _convert_: all
 

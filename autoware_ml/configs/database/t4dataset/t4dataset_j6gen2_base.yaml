@@ -1,3 +1,4 @@
+# Read each database into their corresponding scenarios, it will run evaluation/visualization on each scenario
 defaults:
   - t4dataset/t4dataset_common@_here_
   - t4dataset/scenarios@scenarios.db_j6gen2_base: detection3d/db_j6gen2_base
@@ -6,4 +7,5 @@ defaults:
   - _self_
 
 version: T4Dataset-j6gen2_base-v1.0.0
+# Caches
 cache_path: ${cache_root_path}/detection3d/

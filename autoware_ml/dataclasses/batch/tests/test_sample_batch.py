@@ -72,6 +72,13 @@ class TestModelGTBatchDetection3DCollation(unittest.TestCase):
             detection3d_traffic_cone_barrier_bbox_status=traffic_cone_barrier_bbox_status,
         )
 
+    def test_samples_with_boxes_need_a_padding_size(self) -> None:
+        """Collating 3D boxes without a padding size fails instead of dropping them."""
+        with self.assertRaises(ValueError):
+            ModelGTBatch.collate_gt_samples(
+                gt_samples=[self._build_sample(2, None)], max_num_3d_gt_bboxes=None
+            )
+
     def _collate(self, samples: Sequence[ModelGTSample]) -> Detection3DGTBatch:
         """Collate the samples and return the 3D detection batch, which must exist."""
         batch = ModelGTBatch.collate_gt_samples(
@@ -328,11 +335,11 @@ class TestModelGTBatchSegmentation3DCollation(unittest.TestCase):
     def test_collate_without_any_mask_leaves_it_none(self) -> None:
         self.assertIsNone(self._collate([self._build_sample(None), self._build_sample(None)]))
 
-    def test_collate_rejects_a_partially_labeled_batch(self) -> None:
+    def test_collate_rejects_a_partially_labelled_batch(self) -> None:
         with self.assertRaises(ValueError):
             self._collate([self._build_sample([1]), self._build_sample(None)])
 
-    def test_collate_rejects_a_partially_labeled_batch_in_any_order(self) -> None:
+    def test_collate_rejects_a_partially_labelled_batch_in_any_order(self) -> None:
         # Reading the availability off the first sample alone would drop the second sample's
         # labels without a word, so the whole batch decides
         with self.assertRaises(ValueError):

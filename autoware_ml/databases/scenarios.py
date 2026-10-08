@@ -96,7 +96,7 @@ class DatasetParams(BaseModel):
         return self.max_future_sweeps
 
     def __str__(self) -> str:
-        """String representation of the dataset parameters."""
+        """String representation of the database version."""
         return (
             f"DatasetParams(dataset_name={self.dataset_name}, "
             f"max_past_sweeps={self.max_past_sweeps}, "
@@ -104,6 +104,20 @@ class DatasetParams(BaseModel):
             f"sample_steps={self.sample_steps}"
             f"{self._record_options_str()})"
         )
+
+    def __eq__(self, other: DatasetParams) -> bool:
+        """Compare two database versions by their version and settings."""
+        return (
+            self.dataset_name == other.dataset_name
+            and self.max_past_sweeps == other.max_past_sweeps
+            and self.max_future_sweeps == other.max_future_sweeps
+            and self.sample_steps == other.sample_steps
+            and self._record_options_str() == other._record_options_str()
+        )
+
+    def __hash__(self) -> int:
+        """Hash the database version by its version and settings."""
+        return hash(str(self))
 
     def _record_options_str(self) -> str:
         """
@@ -164,6 +178,32 @@ class ScenarioData(BaseModel):
             f"vehicle_type={self.vehicle_type}, "
             f"location={self.location})"
         )
+
+    def __eq__(self, other: ScenarioData) -> bool:
+        """
+        Compare two scenario data by their version and scenario IDs.
+
+        Returns:
+          bool: True if the scenario data are equal, False otherwise.
+        """
+
+        return (
+            self.dataset_params == other.dataset_params
+            and self.scenario_id == other.scenario_id
+            and self.scenario_version == other.scenario_version
+            and self.vehicle_type == other.vehicle_type
+            and self.location == other.location
+        )
+
+    def __hash__(self) -> int:
+        """
+        Hash the scenario data by its version and scenario IDs.
+
+        Returns:
+          int: Hash of the scenario data.
+        """
+
+        return hash(str(self))
 
 
 class Scenarios(BaseModel):

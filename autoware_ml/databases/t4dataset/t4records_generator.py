@@ -48,10 +48,7 @@ from autoware_ml.databases.schemas.lidar_sources import LidarSourceDataModel
 from autoware_ml.databases.schemas.image_frames import ImageFrameDataModel
 from autoware_ml.databases.schemas.category_mapping import CategoryMappingDataModel
 from autoware_ml.databases.taxonomy import DatabaseTaxonomy
-from autoware_ml.databases.schemas.box3d_schemas import (
-    Box3DDataModel,
-    Box3DDatasetSchema,
-)
+from autoware_ml.databases.schemas.box3d_schemas import Box3DDataModel, Box3DDatasetSchema
 from autoware_ml.databases.t4pack.t4pack_frame import T4PackFrame
 from autoware_ml.databases.scenarios import ScenarioData
 from autoware_ml.databases.t4pack.t4pack import T4Pack
@@ -97,8 +94,7 @@ class T4RecordsGenerator:
           scenario_data: Scenario data with the dataset parameters, which set the sweep window
             on either side of a sample and the sampling step.
           lidar_channel: Lidar channel each sample is keyed on.
-          lidar_pointcloud_num_features: Number of float32 values per point in the stored point
-            clouds.
+          lidar_pointcloud_num_features: Number of features of the lidar pointcloud.
           box_annotation_dir: Directory of each scene with the category and instance tables to
             read box names from.
           taxonomy: Taxonomies the database labels are built with.
@@ -278,10 +274,7 @@ class T4RecordsGenerator:
         )
 
     def _extract_boxes_3d_annotations(
-        self,
-        sample: Sample,
-        boxes_3d: Sequence[Box3D],
-        lidar_frame_data_model: LidarFrameDataModel,
+        self, sample: Sample, boxes_3d: Sequence[Box3D], lidar_frame_data_model: LidarFrameDataModel
     ) -> Sequence[Box3DDataModel]:
         """
         Extract boxes 3D annotations from a T4 sample and process them with the pipeline.
@@ -370,7 +363,7 @@ class T4RecordsGenerator:
         self, calibrated_lidar_sample_data_token: str
     ) -> str | None:
         """
-        Path of the semantic mask annotating one lidar frame.
+        Extract lidarseg metadata from a T4 Sample.
 
         Only some frames have a mask, so look it up by the sample data token of the frame.
 
@@ -509,8 +502,7 @@ class T4RecordsGenerator:
               2. Selected sensor to sensor transformation matrix (4x4)
         """
         sensor_calibrated_sensor_record: CalibratedSensor = self.t4_devkit_dataset.get(
-            SchemaName.CALIBRATED_SENSOR,
-            sensor_sample_data_record.calibrated_sensor_token,
+            SchemaName.CALIBRATED_SENSOR, sensor_sample_data_record.calibrated_sensor_token
         )
         sensor_ego_pose_record: EgoPose = self.t4_devkit_dataset.get(
             SchemaName.EGO_POSE, sensor_sample_data_record.ego_pose_token
@@ -579,8 +571,7 @@ class T4RecordsGenerator:
                 SchemaName.SAMPLE_DATA, neighbour_token
             )
             current_cs_record: CalibratedSensor = self.t4_devkit_dataset.get(
-                SchemaName.CALIBRATED_SENSOR,
-                current_sample_data_record.calibrated_sensor_token,
+                SchemaName.CALIBRATED_SENSOR, current_sample_data_record.calibrated_sensor_token
             )
             current_lidar_sensor_to_ego_matrix = convert_quaternion_to_matrix(
                 rotation_quaternion=current_cs_record.rotation,
@@ -594,10 +585,9 @@ class T4RecordsGenerator:
                 selected_sensor_to_ego_pose_matrix=lidar_frame_data_model.lidar_sensor_to_ego_pose_matrix,
                 selected_sensor_frame_ego_pose_to_global_matrix=lidar_frame_data_model.lidar_frame_ego_pose_to_global_matrix,
             )
-            (
-                lidar_sweep_frame_ego_pose_to_global_matrix,
-                lidar_sweep_to_lidar_sensor_matrix,
-            ) = lidar_sweep_transformations
+            lidar_sweep_frame_ego_pose_to_global_matrix, lidar_sweep_to_lidar_sensor_matrix = (
+                lidar_sweep_transformations
+            )
 
             # Inverse it to obtain the transformation matrix
             # from the lidar sensor to the lidar sweeps
@@ -891,8 +881,7 @@ class T4RecordsGenerator:
                 SchemaName.SAMPLE_DATA, current_sample.data[self.lidar_channel]
             )
             current_lidar_cs_record: CalibratedSensor = self.t4_devkit_dataset.get(
-                SchemaName.CALIBRATED_SENSOR,
-                current_lidar_sd_record.calibrated_sensor_token,
+                SchemaName.CALIBRATED_SENSOR, current_lidar_sd_record.calibrated_sensor_token
             )
             current_lidar_sensor_to_ego_pose_matrix = convert_quaternion_to_matrix(
                 rotation_quaternion=current_lidar_cs_record.rotation,
@@ -985,8 +974,7 @@ class T4RecordsGenerator:
             ),
             bbox_label_names=[box.box3d_label_name for box in boxes_3d_data_model],
             bbox_num_lidar_points=np.asarray(
-                [box.box3d_num_lidar_points for box in boxes_3d_data_model],
-                dtype=np.int32,
+                [box.box3d_num_lidar_points for box in boxes_3d_data_model], dtype=np.int32
             ),
             bbox_center_coordinate_type=Box3DCenterCoordinateType.GRAVITY_CENTER,
         )
@@ -1048,10 +1036,10 @@ class T4RecordsGenerator:
         # 4) Extract the lidar sweeps recorded on either side of the sample
         lidar_frame_data_models = self._extract_lidar_window(lidar_frame_data_model)
 
-        # 5) Extract lidar sources information from the T4Dataset
+        # 4) Extract lidar sources information from the T4Dataset
         lidar_source_data_models = self._extract_lidar_sources()
 
-        # 6) Extract image frames information from the T4Dataset
+        # 5) Extract image frames information from the T4Dataset
         image_channel_frame_data_models = self._extract_image_channel_frames(
             sample=sample, lidar_frame_data_model=lidar_frame_data_model
         )
@@ -1062,7 +1050,7 @@ class T4RecordsGenerator:
             image_channel_frame_data_models
         ] + image_channel_sweep_data_models
 
-        # 7) Extract category information from the T4Dataset
+        # 6) Extract category information from the T4Dataset
         category_mapping_data_model = self._extract_category_mapping()
 
         return T4SampleRecord(

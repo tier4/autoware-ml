@@ -68,7 +68,6 @@ confusion_components:
   - { _target_: autoware_ml.metrics.segmentation3d.accuracy.Accuracy, stages: [test], filter: '${t4dataset.segmentation3d.collision_filter}' }
   - { _target_: autoware_ml.metrics.segmentation3d.precision_recall_f1.PrecisionRecallF1, stages: [test], filter: '${t4dataset.segmentation3d.collision_filter}' }
   - { _target_: autoware_ml.metrics.segmentation3d.confusion_matrix.ConfusionMatrix, stages: [test], filter: '${t4dataset.segmentation3d.collision_filter}' }
-point_components_extra: []
 point_components:
   # Whole-scene.
   - { _target_: autoware_ml.metrics.segmentation3d.error_clusters.ErrorClusters, stages: [test] }
@@ -116,7 +115,7 @@ metrics:
     class_groups: ${t4dataset.segmentation3d.class_groups}
     ranges: ${t4dataset.segmentation3d.metric_ranges}
   - _target_: autoware_ml.metrics.segmentation3d.point_cloud.Segmentation3DPointCloudMetricSuite
-    components: ${merge_lists:${t4dataset.segmentation3d.point_components},${t4dataset.segmentation3d.point_components_extra}}
+    components: ${t4dataset.segmentation3d.point_components}
     grouped_components: ${t4dataset.segmentation3d.point_components}
     num_classes: ${t4dataset.segmentation3d.num_classes}
     ignore_index: ${t4dataset.segmentation3d.ignore_index}

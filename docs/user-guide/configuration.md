@@ -72,7 +72,6 @@ select a datamodule config from `configs/datamodule/` and override what they nee
 defaults:
   - /database@database: t4dataset/t4dataset_j6gen2_semaseg
   - /datamodule@datamodule: t4dataset/default_segmentation3d_datamodule
-  - override /datamodule/transforms@datamodule.train_dataset.transforms: my_train_transforms
   - _self_
 
 datamodule:
@@ -86,6 +85,13 @@ datamodule:
   # Arguments of the dataset of the training split
   train_dataset:
     max_num_3d_gt_bboxes: 0
+    # Transform pipeline of the training split
+    transforms:
+      _target_: autoware_ml.transforms.base.TransformsCompose
+      _convert_: all
+      pipeline:
+        - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
+          use_dim: [0, 1, 2, 3]
 
   train_dataloader:
     batch_size: 8
@@ -106,9 +112,9 @@ Every split (`train`, `validation`, `test`, `predict`) has the same three keys:
 By default the validation and predict splits use the test dataset config, and every split reads
 the training sources.
 
-The default segmentation and segdet3d transforms read the top level keys `point_cloud_range`,
-`global_rot_scale_trans` and `dataset.lidar`. CenterPoint, TransFusion and BEVFusion each have
-their own transforms.
+The dataset configs leave `transforms` required. Every model writes the pipeline of the training
+and test datasets in its own task config, so two models never share a pipeline and a fine tuning
+config changes only the values it needs.
 
 For custom components, point `_target_` at the concrete implementation module,
 for example `autoware_ml.transforms.my_transforms.my_transform.MyTransform` or

@@ -18,7 +18,8 @@ class BaseDataset(Dataset):
     def __init__(
         self,
         database_root_path: str,
-        max_num_3d_gt_bboxes: int,
+        *,
+        max_num_3d_gt_bboxes: int | None = None,
         dataset_records_dataframe: pl.DataFrame,
         transforms: TransformsCompose | None,
         det3d_supervised: bool,
@@ -29,9 +30,8 @@ class BaseDataset(Dataset):
 
         Args:
           database_root_path: Root directory of the dataset.
-          max_num_3d_gt_bboxes: Maximum number of 3D ground truth bounding boxes in the dataset.
-              This is allowed to be 0 if the dataset does not contain any 3D ground truth
-              bounding boxes or it does not need to run 3D detection tasks.
+          max_num_3d_gt_bboxes: Number of 3D boxes every sample is padded to in a batch, extra
+              boxes are dropped. Required when the samples carry 3D boxes, None otherwise.
           dataset_records_dataframe: Polars DataFrame of the dataset records.
           transforms: Global transforms to be applied to the dataset records.
           det3d_supervised: Whether the boxes of this corpus are used. If False, every sample
@@ -156,7 +156,11 @@ class ConcatDataset(Dataset):
                 len(dataset) * repeat for dataset, repeat in zip(datasets, repeats, strict=True)
             )
         )
-        self.max_num_3d_gt_bboxes = max(dataset.max_num_3d_gt_bboxes for dataset in self.datasets)
+        # Padding size of the 3D boxes, the largest one a source sets
+        self.max_num_3d_gt_bboxes = max(
+            (d.max_num_3d_gt_bboxes for d in self.datasets if d.max_num_3d_gt_bboxes is not None),
+            default=None,
+        )
 
     def __len__(self) -> int:
         """Return the number of samples of the split, repeated sources included.

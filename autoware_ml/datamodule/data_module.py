@@ -255,7 +255,10 @@ class DataModule(ResumableTrainLoaderMixin, L.LightningDataModule):
                 )
             weights = compute_frame_sampling_weights(dataset, self.train_frame_sampling)
             kwargs["sampler"] = DistributedWeightedRandomSampler(
-                dataset, weights, self.train_frame_sampling.seed
+                dataset,
+                weights,
+                seed=self.train_frame_sampling.seed,
+                drop_last=config.drop_last,
             )
         return DataLoader(dataset=dataset, collate_fn=dataset.collate_fn, **kwargs)
 

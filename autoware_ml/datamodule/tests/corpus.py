@@ -26,7 +26,7 @@ import polars as pl
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.databases.taxonomy import LabelVocabulary, SegmentationTaxonomy
 from autoware_ml.datamodule.t4dataset.dataset import T4Dataset
-from autoware_ml.datamodule.t4dataset.detection3d import T4Detection3DTask
+from autoware_ml.datamodule.detection3d import Detection3DTask
 from autoware_ml.datamodule.t4dataset.segmentation3d import T4Segmentation3DTask
 from autoware_ml.transforms.base import TransformsCompose
 from autoware_ml.transforms.boxes3d.filters import BBoxesLabelNameFilter, BBoxesRangeFilter
@@ -239,7 +239,7 @@ def build_dataset(root: Path, records: pl.DataFrame) -> T4Dataset:
         transforms=build_transforms(),
         dataset_tasks=MappingProxyType(
             {
-                "Detection3D": T4Detection3DTask,
+                "Detection3D": Detection3DTask,
                 "Segmentation3D": partial(T4Segmentation3DTask, taxonomy=SEGMENTATION_TAXONOMY),
             }
         ),

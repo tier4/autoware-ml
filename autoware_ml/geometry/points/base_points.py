@@ -1,6 +1,5 @@
 """
-Base class of the point cloud data structures, with the attributes and methods the derived
-classes share.
+It is a base class for all point cloud data structures, providing common attributes and methods that can be used by derived classes.
 
 Note that the code is modified from:
 https://github.com/open-mmlab/mmdetection3d/blob/main/mmdet3d/structures/points/base_points.py
@@ -40,8 +39,8 @@ class BasePoints(ABC):
         Initialize the BasePoints instance.
 
         Args:
-            points: Point cloud tensor of shape (num_points, num_point_features).
-            point_feature_names: Name of every feature of a point.
+            points: A tensor of shape (num_points, num_point_features) representing the point cloud data.
+            point_feature_names: A sequence of PointFeatureName representing the names of the features for each point.
             timestamp: A float representing the timestamp of the point cloud data in seconds.
             timestamp_difference_dim: Dimension index of the timestamp difference feature, ``-1``
                 when the points carry none. When given, it must point at the feature named
@@ -54,8 +53,7 @@ class BasePoints(ABC):
         if timestamp_difference_dim != -1:
             if not 0 <= timestamp_difference_dim < len(point_feature_names):
                 raise ValueError(
-                    "timestamp_difference_dim must be -1 or within "
-                    f"[0, {len(point_feature_names)}), "
+                    f"timestamp_difference_dim must be -1 or within [0, {len(point_feature_names)}), "
                     f"got {timestamp_difference_dim}."
                 )
             if (
@@ -192,7 +190,7 @@ class BasePoints(ABC):
 
     @property
     def timestamp_difference_dim(self) -> int:
-        """int: Dimension index of the timestamp difference feature, -1 when there is none."""
+        """int: Dimension index for the timestamp difference feature, if it exists. -1 indicates that it does not exist."""
         return self._timestamp_difference_dim
 
     def add_timestamp_difference(self, timestamp_difference: float) -> None:
@@ -356,8 +354,7 @@ class BasePoints(ABC):
         for point in points:
             if point.point_feature_names != first_point_feature_names:
                 raise ValueError(
-                    "All BasePoints instances must have the same point_feature_names for "
-                    "concatenation."
+                    "All BasePoints instances must have the same point_feature_names for concatenation."
                 )
             if point.timestamp_difference_dim != first_timestamp_difference_dim:
                 raise ValueError(
@@ -367,7 +364,7 @@ class BasePoints(ABC):
                 )
 
         concatenated_points = torch.cat([point.points for point in points], dim=0)
-        # The concatenated points take the timestamp of the first instance
+        # Always use the timestamp_seconds of the first BasePoints instance for the concatenated result
         return cls(
             concatenated_points,
             first_point_feature_names,

@@ -70,8 +70,7 @@ class NuScenesRecordsGenerator:
           database_root_path: Root path where the NuScenes version directories are stored.
           scenario_data: Scenario data of one NuScenes scene with the dataset parameters, which
             set the sweep window on either side of a sample and the sampling step.
-          lidar_pointcloud_num_features: Number of float32 values per point in the stored point
-            clouds.
+          lidar_pointcloud_num_features: Number of features of the lidar pointcloud.
           taxonomy: Taxonomies the database labels are built with.
           box3d_pipelines: List of box3d pipelines to process the box3d annotations.
         """
@@ -420,8 +419,7 @@ class NuScenesRecordsGenerator:
 
             current_sample_data_record = self.nusc.get("sample_data", neighbour_token)
             current_cs_record = self.nusc.get(
-                "calibrated_sensor",
-                current_sample_data_record["calibrated_sensor_token"],
+                "calibrated_sensor", current_sample_data_record["calibrated_sensor_token"]
             )
             current_lidar_sensor_to_ego_matrix = convert_quaternion_to_matrix(
                 rotation_quaternion=Quaternion(current_cs_record["rotation"]),
@@ -434,10 +432,9 @@ class NuScenesRecordsGenerator:
                 selected_sensor_to_ego_pose_matrix=lidar_frame_data_model.lidar_sensor_to_ego_pose_matrix,
                 selected_sensor_frame_ego_pose_to_global_matrix=lidar_frame_data_model.lidar_frame_ego_pose_to_global_matrix,
             )
-            (
-                lidar_sweep_frame_ego_pose_to_global_matrix,
-                lidar_sweep_to_lidar_sensor_matrix,
-            ) = lidar_sweep_transformations
+            lidar_sweep_frame_ego_pose_to_global_matrix, lidar_sweep_to_lidar_sensor_matrix = (
+                lidar_sweep_transformations
+            )
 
             lidar_sensor_to_lidar_sweep_matrix = np.linalg.inv(lidar_sweep_to_lidar_sensor_matrix)
 

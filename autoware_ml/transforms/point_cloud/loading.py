@@ -338,7 +338,7 @@ class LoadMultiSweepPointsFromFile(LoadPointsFromFile):
             bev_remove_radius: Radius (x and y) within which sweep points are removed, for
               instance to drop the ego vehicle returns. Set to 0.0 to keep every point.
             pcd_file_format: File format to read the point clouds from, see
-              ``LoadPointsFromFile``.
+                ``LoadPointsFromFile``.
         """
         super().__init__(
             use_dim=use_dim, bev_remove_radius=bev_remove_radius, pcd_file_format=pcd_file_format

@@ -29,6 +29,11 @@ from typing import Any
 import torch
 import torch.nn as nn
 
+from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTBatch
+from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch
+from autoware_ml.dataclasses.geometry.voxels import VoxelsData
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.dataclasses.models.segmentation3d.predictions import Segmentation3DPredictions
 from autoware_ml.losses.segmentation3d.lovasz import LovaszLoss
 from autoware_ml.metrics.segmentation3d.eval_output import segmentation_frames_eval_output
 from autoware_ml.models.segmentation3d.encoders.ptv3 import (
@@ -430,11 +435,40 @@ def gather_point_logits(
     return seg_logits[point_voxel_indices[mask]]
 
 
-def concat_point_frames(points: Sequence[torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
-    """Concatenate per-frame point arrays and return the frame index of every point."""
-    lengths = torch.tensor([frame.shape[0] for frame in points], device=points[0].device)
-    frame_ids = torch.repeat_interleave(torch.arange(len(points), device=lengths.device), lengths)
-    return torch.cat(list(points), dim=0), frame_ids
+def voxelized_points(
+    batch_inputs: ModelBatchInputs,
+) -> tuple[PointCloudGTBatch, VoxelsData, Segmentation3DGTBatch | None]:
+    """Read the points of the batch, their voxels and, when labelled, their labels.
+
+    Args:
+        batch_inputs: Model inputs of the batch.
+
+    Returns:
+        The point cloud, the voxels a voxelizer built from it and the point labels, None for
+        a batch without labels.
+
+    Raises:
+        ValueError: If the batch carries no point cloud or no voxels.
+    """
+    point_batch = batch_inputs.multi_task_gt_batch.point_cloud_gt_batch
+    if point_batch is None or batch_inputs.voxels_data is None:
+        raise ValueError("PTv3 segmentation needs the points of the batch and their voxels.")
+    return (
+        point_batch,
+        batch_inputs.voxels_data,
+        batch_inputs.multi_task_gt_batch.segmentation3d_gt_batch,
+    )
+
+
+def _point_labels(label_batch: Segmentation3DGTBatch | None) -> torch.Tensor:
+    """Read the point labels of a labelled batch.
+
+    Raises:
+        ValueError: If the batch carries no labels.
+    """
+    if label_batch is None:
+        raise ValueError("PTv3 segmentation needs the semantic labels of the batch.")
+    return label_batch.gt_semantic_masks
 
 
 def voxel_supervision(
@@ -492,7 +526,7 @@ def voxel_supervision(
 
 
 def segmentation_point_loss(
-    head: PTv3SegDecoderHead, seg_logits: torch.Tensor, batch_inputs_dict: Mapping[str, Any]
+    head: PTv3SegDecoderHead, seg_logits: torch.Tensor, batch_inputs: ModelBatchInputs
 ) -> dict[str, torch.Tensor]:
     """Compute the segmentation losses with one term per voxel.
 
@@ -502,15 +536,15 @@ def segmentation_point_loss(
     Args:
         head: Segmentation head owning the losses.
         seg_logits: Voxel-level segmentation logits.
-        batch_inputs_dict: Preprocessed batch with the voxelizer outputs and the point level
-            segment targets.
+        batch_inputs: Model inputs with the voxels and the point labels.
 
     Returns:
         Dictionary with the segmentation losses.
     """
+    _, voxels_data, label_batch = voxelized_points(batch_inputs)
     labels, weights = voxel_supervision(
-        batch_inputs_dict["point_voxel_indices"],
-        batch_inputs_dict["segment"],
+        voxels_data.point_voxel_indices,
+        _point_labels(label_batch),
         num_voxels=seg_logits.shape[0],
         num_classes=seg_logits.shape[1] + head.num_sets,
         ignore_index=head.ignore_index,
@@ -521,7 +555,7 @@ def segmentation_point_loss(
 
 
 def segmentation_eval_output(
-    seg_logits: torch.Tensor, batch_inputs_dict: Mapping[str, Any]
+    seg_logits: torch.Tensor, batch_inputs: ModelBatchInputs
 ) -> dict[str, Any]:
     """Gather the voxel predictions of the current frame points, per frame.
 
@@ -532,44 +566,44 @@ def segmentation_eval_output(
 
     Args:
         seg_logits: Voxel-level segmentation logits.
-        batch_inputs_dict: Preprocessed batch with the per frame points, the voxelizer outputs
-            and the point level segment targets. Per frame metadata (ego pose, scene token) is
-            passed through when the dataset supplies it.
+        batch_inputs: Model inputs with the points, the voxels and the point labels. Per
+            frame metadata (ego pose, scene token) is passed through when the dataset supplies
+            it.
 
     Returns:
         ``{"seg_frames": [...]}`` keyed for the segmentation suites.
     """
-    point_frames = batch_inputs_dict["points"]
-    point_voxel_indices = batch_inputs_dict["point_voxel_indices"]
-    points, frame_ids = concat_point_frames(point_frames)
+    point_batch, voxels_data, label_batch = voxelized_points(batch_inputs)
+    points = point_batch.points
+    point_voxel_indices = voxels_data.point_voxel_indices
     scored = current_frame_mask(points) & assigned_point_mask(point_voxel_indices)
     point_logits = gather_point_logits(seg_logits, point_voxel_indices, scored)
     return segmentation_frames_eval_output(
         coord=points[scored, :3],
         pred_labels=point_logits.argmax(dim=1),
-        target_labels=batch_inputs_dict["segment"].long()[scored],
+        target_labels=_point_labels(label_batch).long()[scored],
         scores=torch.softmax(point_logits, dim=1),
-        frame_ids=frame_ids[scored],
-        num_frames=len(point_frames),
-        batch=batch_inputs_dict,
+        frame_ids=point_batch.batch_indices.long()[scored],
+        num_frames=point_batch.batch_size,
+        batch_inputs=batch_inputs,
     )
 
 
 def segmentation_predict_outputs(
-    seg_logits: torch.Tensor, batch_inputs_dict: Mapping[str, Any]
-) -> dict[str, torch.Tensor]:
+    seg_logits: torch.Tensor, batch_inputs: ModelBatchInputs
+) -> Segmentation3DPredictions:
     """Format segmentation predictions for the current-frame points.
 
     Args:
         seg_logits: Voxel-level segmentation logits.
-        batch_inputs_dict: Preprocessed batch with the per-frame points and the voxelizer outputs.
+        batch_inputs: Model inputs with the points and their voxels.
 
     Returns:
-        Dictionary with ``pred_labels`` and per-class ``pred_probs`` for every
-        current-frame point inside the voxel grid, in batch order.
+        The predicted label and the class probabilities of every current-frame point inside
+        the voxel grid, in batch order.
     """
-    point_voxel_indices = batch_inputs_dict["point_voxel_indices"]
-    points, _ = concat_point_frames(batch_inputs_dict["points"])
-    scored = current_frame_mask(points) & assigned_point_mask(point_voxel_indices)
+    point_batch, voxels_data, _ = voxelized_points(batch_inputs)
+    point_voxel_indices = voxels_data.point_voxel_indices
+    scored = current_frame_mask(point_batch.points) & assigned_point_mask(point_voxel_indices)
     point_probs = torch.softmax(gather_point_logits(seg_logits, point_voxel_indices, scored), dim=1)
-    return {"pred_labels": point_probs.argmax(dim=1), "pred_probs": point_probs}
+    return Segmentation3DPredictions(pred_labels=point_probs.argmax(dim=1), pred_probs=point_probs)

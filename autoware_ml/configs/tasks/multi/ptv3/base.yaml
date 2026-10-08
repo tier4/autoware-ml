@@ -20,8 +20,6 @@ num_proposals: ???
 
 max_voxels: ???
 
-global_rot_scale_trans: ???
-
 model:
   _target_: autoware_ml.models.multi.ptv3_segdet.PTv3SegDetModel
   bbox_head:
@@ -83,7 +81,7 @@ model:
     use_velocity: true
   segmentation_loss_weight: 1.0
   detection_loss_weight: 1.0
-  metrics: ${merge_lists:${dataset.detection3d.metrics},${dataset.segmentation3d.metrics}}
+  metrics: ${dataset.segdet3d.metrics}
   export_output_names:
     [
       pred_labels,

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for the point cloud file formats of the point cloud loaders."""
+"""Unit tests for the point cloud file formats of the multi-task point cloud loaders."""
 
 import tempfile
 import unittest
@@ -21,11 +21,11 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from autoware_ml.databases.t4pack.t4pack_frame import T4PackFrame
+from autoware_ml.databases.t4pack.t4pack import T4Pack
+from autoware_ml.databases.t4pack.tests.t4pack_fixtures import random_lidar_frame, write_test_pack
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.dataclasses.geometry.point_clouds import LiDARPointCloudSample
-from autoware_ml.databases.t4pack.t4pack import T4Pack
-from autoware_ml.databases.t4pack.t4pack_frame import T4PackFrame
-from autoware_ml.databases.t4pack.tests.t4pack_fixtures import random_lidar_frame, write_test_pack
 from autoware_ml.transforms.point_cloud.loading import (
     LoadMultiSweepPointsFromFile,
     LoadPointsFromFile,
@@ -42,7 +42,7 @@ def _record(path: Path, i: int, t4pack_frame: T4PackFrame | None) -> LiDARPointC
         point_cloud_path=str(path),
         timestamp=10.0 - 0.1 * i,
         num_features=5,
-        intensity_scale=255.0,
+        intensity_scale=1.0,
         sensor_to_ego_pose_matrix=torch.eye(4),
         lidar_to_ego_pose_to_global_matrix=torch.eye(4),
         lidar_sensor_to_lidar_sweep_matrix=torch.eye(4),
@@ -53,7 +53,7 @@ def _record(path: Path, i: int, t4pack_frame: T4PackFrame | None) -> LiDARPointC
 def _load(
     records: list[LiDARPointCloudSample], pcd_file_format: PCDFileFormat, sweeps_num: int = 0
 ) -> torch.Tensor:
-    """Load the current frame, and its past sweeps when ``sweeps_num`` is set."""
+    """Load the current frame, and its sweeps when ``sweeps_num`` is set."""
     sample = ModelGTSample(
         lidar_point_cloud_samples=records,
         image_samples=None,
@@ -62,10 +62,13 @@ def _load(
         detection3d_gt_bboxes_3d=None,
         segmentation3d_gt_sample=None,
     )
-    sample = LoadPointsFromFile(bev_remove_radius=1.0, pcd_file_format=pcd_file_format)(sample)
+    sample = LoadPointsFromFile(
+        use_dim=[0, 1, 2, 3], bev_remove_radius=1.0, pcd_file_format=pcd_file_format
+    )(sample)
     if sweeps_num:
         sample = LoadMultiSweepPointsFromFile(
-            past=SweepWindow(num=sweeps_num, time_lag_range=(0.01, 1.0), selection="nearest"),
+            past=SweepWindow(num=sweeps_num, time_lag_range=(0.05, 0.25), selection="nearest"),
+            use_dim=[0, 1, 2, 3],
             pcd_file_format=pcd_file_format,
         )(sample)
     return sample.point_cloud_data.points

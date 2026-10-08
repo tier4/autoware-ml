@@ -1,6 +1,5 @@
 """
-Base class of the image data structures, with the attributes and methods the derived classes
-share.
+It is a base class for all image data structures, providing common attributes and methods that can be used by derived classes.
 """
 
 from __future__ import annotations

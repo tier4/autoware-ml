@@ -7,7 +7,6 @@ defaults:
 class_names: ${database.taxonomy.detection3d.class_names}
 num_classes: ${class_count:${database.taxonomy.detection3d.class_names}}
 ignore_index: ${database.taxonomy.detection3d.ignore_index}
-# Parked or riderless two wheelers are not detection targets
 filter_attributes:
   - [bicycle, vehicle_state.parked]
   - [bicycle, two_wheel_vehicle_state.without_rider]
@@ -16,9 +15,6 @@ filter_attributes:
   - [motorcycle, two_wheel_vehicle_state.without_rider]
   - [motorcycle, cycle_state.without_rider]
   - [motorcycle, motorcycle_state.without_rider]
-# Minimum points per training box, within 60 m and over the whole range
-train_min_points_near: 3
-train_min_points_far: 2
 eval_class_range: ${database.taxonomy.detection3d.eval_range}
 metric_ranges:
   - { _target_: autoware_ml.metrics.base.MetricRange, name: 0-50m, min_distance: 0.0, max_distance: 50.0 }
@@ -76,6 +72,7 @@ detection_components:
   - { _target_: autoware_ml.metrics.detection3d.confusion_matrix.ConfusionMatrix, stages: [test] }
   - { _target_: autoware_ml.metrics.detection3d.critical_fp_fn.CriticalFPFN, stages: [test] }
   - { _target_: autoware_ml.metrics.detection3d.collision_weighted_map.CollisionWeightedMeanAP, stages: [test] }
+  - { _target_: autoware_ml.metrics.detection3d.box_counts.BoxCounts, stages: [test] }
   # Road slice (lanelet road + road_shoulder + crosswalk).
   - { _target_: autoware_ml.metrics.detection3d.mean_ap.MeanAP, stages: [test], filter: '${t4dataset.detection3d.region_filters.road}' }
   - { _target_: autoware_ml.metrics.detection3d.heading_ap.HeadingAP, stages: [test], filter: '${t4dataset.detection3d.region_filters.road}' }

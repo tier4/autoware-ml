@@ -16,7 +16,6 @@ from autoware_ml.databases.schemas.image_frames import (
 from autoware_ml.databases.schemas.lidar_frames import (
     LidarFrameDataModel,
     LidarFrameDatasetSchema,
-    relative_to_database_root,
 )
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.databases.schemas.lidar_sources import (
@@ -46,7 +45,8 @@ class T4Dataset(BaseDataset):
     def __init__(
         self,
         database_root_path: str,
-        max_num_3d_gt_bboxes: int,
+        *,
+        max_num_3d_gt_bboxes: int | None = None,
         dataset_records_dataframe: pl.DataFrame,
         transforms: TransformsCompose | None,
         dataset_tasks: Mapping[str, Callable[..., BaseDatasetTask]],
@@ -62,9 +62,8 @@ class T4Dataset(BaseDataset):
 
         Args:
           database_root_path: Root directory of the database.
-          max_num_3d_gt_bboxes: Maximum number of 3D ground truth bounding boxes in the dataset.
-            This is allowed to be 0 if the dataset does not contain any 3D ground truth
-            bounding boxes or it does not need to run 3D detection tasks.
+          max_num_3d_gt_bboxes: Number of 3D boxes every sample is padded to in a batch, extra
+            boxes are dropped. Required when the samples carry 3D boxes, None otherwise.
           dataset_records_dataframe: Records of the corpus.
           transforms: Global transforms to be applied to the dataset records.
           dataset_tasks: Factory of every task dataset, mapped by task type name. Each one is
@@ -402,7 +401,10 @@ class T4Dataset(BaseDataset):
         Returns:
           str: Path of the frame under the database root.
         """
-        return str(self.database_root_path / relative_to_database_root(frame_path, "frame path"))
+        return str(
+            self.database_root_path
+            / LidarFrameDatasetSchema.relative_to_database_root(frame_path, "frame path")
+        )
 
     def get_lidar_pointcloud_data_samples(
         self, idx: int, source_view: LidarSourceView | None
@@ -466,12 +468,12 @@ class T4Dataset(BaseDataset):
                         lidar_sensor_to_lidar_sweep_matrix,
                         dtype=torch.float32,
                     ),
-                    source_view=source_view,
                     t4pack_frame=LidarFrameDataModel.load_t4pack_frame(
                         lidar_pointcloud_metadata[
                             LidarFrameDatasetSchema.lidar_pointcloud_t4pack_frame.name
                         ]
                     ),
+                    source_view=source_view,
                 )
             )
         return lidar_pointcloud_samples

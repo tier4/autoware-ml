@@ -200,9 +200,9 @@ def test_litept_is_a_drop_in_encoder_for_the_ptv3_segmentation_model() -> None:
     batch = build_inputs(device=torch.device("cuda"))
 
     with torch.no_grad():
-        logits = model(**model.bind_forward_inputs(batch))
+        logits = model(**model.forward_inputs(batch)).segmentation3d().logits
 
-    assert logits.shape == (batch["voxels"].shape[0], 3)
+    assert logits.shape == (batch.voxels_data.voxels.shape[0], 3)
     assert torch.isfinite(logits).all()
 
 
@@ -241,8 +241,8 @@ def test_litept_split_export_declares_and_consumes_the_ptv3_contract() -> None:
     ]
     with torch.no_grad():
         pred_labels, pred_probs = head_spec.module(*head_spec.args)
-    assert pred_labels.shape == (batch["voxels"].shape[0],)
-    assert pred_probs.shape == (batch["voxels"].shape[0], 3)
+    assert pred_labels.shape == (batch.voxels_data.voxels.shape[0],)
+    assert pred_probs.shape == (batch.voxels_data.voxels.shape[0], 3)
 
 
 @REQUIRES_SPARSE_CUDA
@@ -261,8 +261,8 @@ def test_litept_monolithic_export_runs_on_its_declared_inputs() -> None:
 
     with torch.no_grad():
         pred_labels, pred_probs = spec.module(*spec.args)
-    assert pred_labels.shape == (batch["voxels"].shape[0],)
-    assert pred_probs.shape == (batch["voxels"].shape[0], 3)
+    assert pred_labels.shape == (batch.voxels_data.voxels.shape[0],)
+    assert pred_probs.shape == (batch.voxels_data.voxels.shape[0], 3)
 
 
 @REQUIRES_SPARSE_CUDA

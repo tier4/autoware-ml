@@ -1,5 +1,13 @@
-defaults:
-  - /datamodule/t4dataset/datasets/default_detection3d_test_dataset@_here_
-  - _self_
-
 _target_: autoware_ml.datamodule.nuscenes.dataset.NuScenesDataset
+_convert_: all
+_partial_: true
+
+defaults:
+  - detection3d@dataset_tasks.Detection3D: default_detection3d
+
+# When number of 3D GT bboxes in a scenario exceeds this number, we will select the first
+# `max_num_3d_gt_bboxes` bboxes and ignore the rest. 500 is usually a
+# common number of bboxes to include all 3D GT bboxes in a scenario.
+max_num_3d_gt_bboxes: 500
+
+transforms: ???

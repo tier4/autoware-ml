@@ -17,12 +17,12 @@ t4dataset:
     train_future_sweeps:
       _target_: autoware_ml.transforms.point_cloud.loading.SweepWindow
       num: 1
-      time_lag_range: ${dataset.lidar.sweep_time_lag_range}
+      time_lag_range: [0.05, 0.25]
       selection: random
     test_future_sweeps:
       _target_: autoware_ml.transforms.point_cloud.loading.SweepWindow
       num: 1
-      time_lag_range: ${dataset.lidar.sweep_time_lag_range}
+      time_lag_range: [0.05, 0.25]
       selection: nearest
 
 model:

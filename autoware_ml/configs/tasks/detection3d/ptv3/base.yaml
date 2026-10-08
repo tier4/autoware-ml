@@ -15,8 +15,6 @@ point_cloud_range: ???
 
 max_voxels: ???
 
-global_rot_scale_trans: ???
-
 model:
   _target_: autoware_ml.models.detection3d.ptv3.PTv3DetectionModel
   export_output_names: ???

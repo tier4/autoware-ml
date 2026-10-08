@@ -218,7 +218,7 @@ See `autoware_ml/databases/t4pack/t4pack.py`.
 
 ### Schema
 
-`process_scenario_records()` writes the records of every scenario to a Parquet file. `BaseDatabase.get_polars_schema()` delegates to `DatasetTableSchema` so records can be serialized to Parquet via `DatasetRecord.to_dictionary()`.
+`process_scenario_records()` — Process scenarios/samples from a database to a parquet file and save it. `BaseDatabase.get_polars_schema()` delegates to `DatasetTableSchema` so records can be serialized to Parquet via `DatasetRecord.to_dictionary()`.
 
 The schema is defined in the `autoware_ml/databases/schemas/` package and covers basic frame metadata, nested LiDAR structs, and annotation fields such as category mapping and 3D boxes. The 3D box payload is modeled by `Box3DDataModel` with its struct layout defined in `Box3DDatasetSchema`, and is stored in the top-level `boxes_3d` list column. See [Dataset Schema](schemas.md) for the full column layout, nested data models, and extension guide.
 
@@ -257,7 +257,7 @@ Configuration is done through YAML files under `autoware_ml/configs/generators/`
 
 | Path                                          | Description                                           |
 | --------------------------------------------- | ----------------------------------------------------- |
-| `autoware_ml/databases/schemas/`              | Dataset schema package, see [schemas.md](schemas.md)  |
+| `autoware_ml/databases/schemas/`              | Dataset schema package — see [schemas.md](schemas.md) |
 | `autoware_ml/databases/scenarios.py`          | `ScenarioData`, `DatasetParams`, `Scenarios`          |
 | `autoware_ml/databases/database_interface.py` | `DatabaseInterface` protocol                          |
 | `autoware_ml/databases/base_database.py`      | Shared `BaseDatabase` implementation                  |

@@ -10,6 +10,9 @@
     truck:
       - truck
       - trailer
+    construction_vehicle:
+      - construction_vehicle
+      - trailer
 
   proximity_distance_threshold: 1.0
   taxonomy: ${...taxonomy.detection3d}

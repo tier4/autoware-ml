@@ -262,8 +262,8 @@ class TestLiDARPointCloudSample(LiDARPointCloudSampleTestCase):
                 "sensor_to_ego_pose_matrix",
                 "lidar_to_ego_pose_to_global_matrix",
                 "lidar_sensor_to_lidar_sweep_matrix",
-                "source_view",
                 "t4pack_frame",
+                "source_view",
             ),
         )
 

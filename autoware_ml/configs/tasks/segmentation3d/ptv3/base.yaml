@@ -14,11 +14,6 @@ point_cloud_range: ???
 
 max_voxels: ???
 
-global_rot_scale_trans:
-  yaw_rot_range: [-3.14159265, 3.14159265]
-  scale_ratio_range: [0.9, 1.1]
-  translation_std: [0.5, 0.5, 0.2]
-
 model:
   _target_: autoware_ml.models.segmentation3d.ptv3.PTv3SegmentationModel
   metrics: ${dataset.segmentation3d.metrics}

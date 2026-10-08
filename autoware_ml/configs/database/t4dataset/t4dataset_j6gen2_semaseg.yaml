@@ -1,4 +1,3 @@
-# J6 gen2 database with semantic masks
 defaults:
   - t4dataset/t4dataset_common@_here_
   - t4dataset/scenarios@scenarios.db_j6gen2_semaseg: segmentation3d/db_j6gen2_semaseg

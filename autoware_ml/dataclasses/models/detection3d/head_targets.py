@@ -4,7 +4,7 @@ Module to save encoded targets for a 3D detection head.
 
 from __future__ import annotations
 
-from jaxtyping import Float32, Int64, Bool
+from jaxtyping import Bool, Float, Int64
 from pydantic import BaseModel, ConfigDict, model_validator
 
 import torch
@@ -23,10 +23,10 @@ class CenterHeadTargets(BaseModel):
 
     model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
 
-    heatmaps: Float32[torch.Tensor, "batch_size num_classes height width"]
+    heatmaps: Float[torch.Tensor, "batch_size num_classes height width"]
     # 8 (center_x, center_y, center_z, length, width, height, sin(heading), cos(heading)) if not velocity else
     # 10 (center_x, center_y, center_z, length, width, height, sin(heading), cos(heading), velocity_x, velocity_y)
-    reg_targets: Float32[torch.Tensor, "batch_size max_num_boxes num_reg_targets"]
+    reg_targets: Float[torch.Tensor, "batch_size max_num_boxes num_reg_targets"]
     reg_indices: Int64[torch.Tensor, "batch_size max_num_boxes"]
     valid_masks: Bool[torch.Tensor, "batch_size max_num_boxes"]
 
@@ -67,13 +67,13 @@ class TransFusionHeadTargets(BaseModel):
     model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
 
     labels: Int64[torch.Tensor, "batch_size num_proposals"]
-    label_weights: Float32[torch.Tensor, "batch_size num_proposals num_classes"]
-    bbox_targets: Float32[torch.Tensor, "batch_size num_proposals code_size"]
-    bbox_weights: Float32[torch.Tensor, "batch_size num_proposals code_size"]
+    label_weights: Float[torch.Tensor, "batch_size num_proposals num_classes"]
+    bbox_targets: Float[torch.Tensor, "batch_size num_proposals code_size"]
+    bbox_weights: Float[torch.Tensor, "batch_size num_proposals code_size"]
     num_pos: int
     matched_iou: float
-    dense_heatmaps: Float32[torch.Tensor, "batch_size num_classes height width"]
-    class_weights: Float32[torch.Tensor, "batch_size num_classes"]
+    dense_heatmaps: Float[torch.Tensor, "batch_size num_classes height width"]
+    class_weights: Float[torch.Tensor, "batch_size num_classes"]
 
     @model_validator(mode="after")
     def _check_shared_dims(self) -> TransFusionHeadTargets:

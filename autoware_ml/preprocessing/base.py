@@ -22,7 +22,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
-from autoware_ml.preprocessing.batch_adapter import ModelGTBatchAdapter
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 
 
 class DataPreprocessing:
@@ -32,22 +32,22 @@ class DataPreprocessing:
     preprocessing operations like voxelization, projection, and format conversion
     without registering the pipeline as part of the neural network.
 
-    A ModelGTBatchAdapter first turns the typed batch into a dictionary of named tensors. Each
-    layer then receives that dictionary and returns updates to merge into it.
+    The collated batch starts the model inputs. Each layer receives the model inputs and
+    returns them with the features it computes added or the data it changes replaced.
 
     Args:
         pipeline: List of callable layers to apply sequentially. Each layer
-            should accept ``(dict[str, Any], *, is_training: bool)`` and return
-            ``dict[str, Any]``.
+            should accept ``(ModelBatchInputs, *, is_training: bool)`` and return
+            ``ModelBatchInputs``.
 
     Example:
         ```python
         preprocessing = DataPreprocessing(
             pipeline=[
-                Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                PointPillarPreprocessor(...),
             ]
         )
-        batch_inputs_dict = preprocessing(batch, is_training=True)
+        batch_inputs = preprocessing(batch, is_training=True)
         ```
     """
 
@@ -58,9 +58,8 @@ class DataPreprocessing:
             pipeline: List of callable layers to apply sequentially.
         """
         self.pipeline = list(pipeline)
-        self.batch_adapter = ModelGTBatchAdapter()
 
-    def __call__(self, batch: ModelGTBatch, *, is_training: bool) -> dict[str, Any]:
+    def __call__(self, batch: ModelGTBatch, *, is_training: bool) -> ModelBatchInputs:
         """Apply preprocessing layers after the batch is already on device.
 
         Args:
@@ -71,8 +70,7 @@ class DataPreprocessing:
         Returns:
             The model inputs of the batch with preprocessing applied.
         """
-        batch_inputs_dict = self.batch_adapter(batch)
+        batch_inputs = ModelBatchInputs.from_gt_batch(batch)
         for layer in self.pipeline:
-            batch_inputs_dict |= layer(batch_inputs_dict, is_training=is_training)
-
-        return batch_inputs_dict
+            batch_inputs = layer(batch_inputs, is_training=is_training)
+        return batch_inputs

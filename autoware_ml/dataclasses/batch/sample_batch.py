@@ -28,7 +28,7 @@ class ModelGTSample(NamedTuple):
     multi-task model.
     """
 
-    # LiDAR point cloud rows of the sample, the current frame first and then one per sweep
+    # Can be multi-sweep LiDAR point cloud data, which is a list of LiDAR point cloud data rows for each sweep.
     lidar_point_cloud_samples: Sequence[LiDARPointCloudSample] | None
     # Sequence of image data, which is a list of image data row for each sample.
     image_samples: Sequence[ImageSample] | None
@@ -184,22 +184,23 @@ class ModelGTBatch(NamedTuple):
 
     @staticmethod
     def collate_detection3d_gt_samples(
-        gt_samples: Sequence[ModelGTSample], max_num_3d_gt_bboxes: int
+        gt_samples: Sequence[ModelGTSample], max_num_3d_gt_bboxes: int | None
     ) -> Detection3DGTBatch | None:
         """
         Collate a sequence of detection3d GT samples into a Detection3DGTBatch.
 
         Args:
           gt_samples: Sequence of ModelGTSample to be collated.
-          max_num_3d_gt_bboxes: The maximum number of 3D ground truth bounding boxes
-            for each sample in the batch.
+          max_num_3d_gt_bboxes: Number of 3D boxes every sample is padded to. Required when the
+            samples carry 3D boxes.
 
         Returns:
           Detection3DGTBatch: Collated detection3d GT batch, None when no sample carries 3D
             detection ground truth.
 
         Raises:
-          ValueError: If only some of the samples carry 3D detection ground truth.
+          ValueError: If only some of the samples carry 3D detection ground truth, or the samples
+            carry 3D boxes without a padding size.
         """
         if len(gt_samples) == 0:
             return None
@@ -217,6 +218,11 @@ class ModelGTBatch(NamedTuple):
         # If only some samples have detection3d_gt_bboxes_3d, the batch cannot be built.
         if len(detection3d_gt_bboxes_3d) != len(gt_samples):
             raise ValueError("All samples must have detection3d_gt_bboxes_3d for collating.")
+
+        if max_num_3d_gt_bboxes is None:
+            raise ValueError(
+                "The samples carry 3D boxes, so the dataset needs max_num_3d_gt_bboxes."
+            )
 
         return Detection3DGTBatch.collate_gt_samples(
             detection3d_gt_bboxes_3d=detection3d_gt_bboxes_3d,
@@ -340,7 +346,7 @@ class ModelGTBatch(NamedTuple):
 
     @staticmethod
     def collate_gt_samples(
-        gt_samples: Sequence[ModelGTSample], max_num_3d_gt_bboxes: int
+        gt_samples: Sequence[ModelGTSample], max_num_3d_gt_bboxes: int | None
     ) -> ModelGTBatch:
         """
         Collate a sequence of ModelGTSample into a ModelGTBatch.

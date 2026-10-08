@@ -8,8 +8,7 @@ This guide walks you through adding a new model to Autoware-ML. You'll implement
 
 ## The BaseModel Interface
 
-New models should inherit from `BaseModel`. The minimal contract is still the
-same two abstract methods:
+New models should inherit from `BaseModel`. The minimal contract is three abstract methods:
 
 ```python
 from autoware_ml.models.base import BaseModel
@@ -18,8 +17,11 @@ class MyModel(BaseModel):
     def forward(self, **kwargs: Any) -> Any:
         ...
 
+    def forward_inputs(self, batch_inputs: ModelBatchInputs) -> dict[str, Any]:
+        ...
+
     def compute_metrics(
-        self, batch_inputs_dict: Mapping[str, Any], outputs: Any
+        self, batch_inputs: ModelBatchInputs, outputs: Any
     ) -> dict[str, torch.Tensor]:
         ...
 ```
@@ -27,12 +29,12 @@ class MyModel(BaseModel):
 The base class handles training/validation/test/predict steps, optimizer
 configuration, metric logging, prediction output conversion, runtime
 preprocessing, and deployment export integration. The `forward()` method
-can have any signature as long as the default batch-to-argument mapping
-matches, or the model overrides the relevant hooks.
+takes the tensors the network reads, and `forward_inputs()` picks them from
+the typed model inputs.
 
 !!! note "Extending `BaseModel`"
     Specialized models should still use `BaseModel`. When the default
-    signature-based path is not enough, prefer overriding hooks such as
+    shared step path is not enough, prefer overriding hooks such as
     `set_data_preprocessing()`, `predict_outputs()`, `get_log_batch_size()`,
     or `build_export_spec()` instead of introducing a standalone
     `LightningModule`. Output decoding (for example, voxel-to-point scatter
@@ -45,12 +47,14 @@ matches, or the model overrides the relevant hooks.
 Create a new file in `autoware_ml/models/`:
 
 ```python title="autoware_ml/models/my_task/my_model.py"
-from collections.abc import Mapping
 from typing import Any
 
 import torch
 import torch.nn as nn
 
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
+from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentation3DHeadOutputs
 from autoware_ml.models.base import BaseModel
 
 
@@ -69,30 +73,44 @@ class MyModel(BaseModel):
         self.num_classes = num_classes
         self.loss_fn = nn.CrossEntropyLoss(ignore_index=ignore_index)
 
-    def forward(self, feat: torch.Tensor) -> torch.Tensor:
+    def forward(self, feat: torch.Tensor) -> ModelOutputs:
         features = self.encoder(feat)
-        return self.decoder(features)
+        logits = self.decoder(features)
+        return ModelOutputs(segmentation3d_head_outputs=Segmentation3DHeadOutputs(logits=logits))
+
+    def forward_inputs(self, batch_inputs: ModelBatchInputs) -> dict[str, Any]:
+        return {"feat": batch_inputs.multi_task_gt_batch.point_cloud_gt_batch.points}
 
     def compute_metrics(
         self,
-        batch_inputs_dict: Mapping[str, Any],
-        outputs: torch.Tensor,
+        batch_inputs: ModelBatchInputs,
+        outputs: ModelOutputs,
     ) -> dict[str, torch.Tensor]:
-        loss = self.loss_fn(outputs, batch_inputs_dict["segment"])
+        labels = batch_inputs.multi_task_gt_batch.segmentation3d_gt_batch.gt_semantic_masks
+        loss = self.loss_fn(outputs.segmentation3d().logits, labels)
         return {"loss": loss}
 ```
 
 ### Key Points
 
-1. **`forward()` signature matters** - Parameter names must match keys in your batch dictionary. The batch adapter names the tensors of the collated batch, for example `feat`, `coord` and `offset` for points, `segment` for point labels and `gt_boxes` and `gt_labels` for boxes. Preprocessing layers add more keys. The base class extracts matching keys using signature inspection.
+1. **`forward_inputs()` picks the forward arguments** - It reads the typed model inputs, for
+   example the points of `multi_task_gt_batch.point_cloud_gt_batch` or the `voxels_data` a
+   preprocessing layer computed, and returns them keyed by the `forward()` parameter names.
 
-2. **`compute_metrics()` receives the full batch and outputs** - The first argument is `batch_inputs_dict` (the full batch dictionary after preprocessing), and the second is `outputs` from `forward()`. Extract any needed targets (e.g. `segment`) from `batch_inputs_dict`.
+2. **`compute_metrics()` receives the model inputs and outputs** - The first argument is the
+   `ModelBatchInputs` of the batch, and the second is `outputs` from `forward()`. Read the
+   targets from its ground truth batches, for example the point labels of
+   `segmentation3d_gt_batch`.
 
 3. **Return `'loss'`** - The metrics dict must include a `'loss'` key for backpropagation.
 
-4. **Optimizer and scheduler** - Passed as callables to `BaseModel.__init__()`. Need to be marked as `_partial_: true` in YAML configs.
+4. **Typed outputs** - `forward()` returns a `ModelOutputs` with the head outputs of every task
+   the model predicts, and `predict_outputs()` returns a `ModelPredictions`. A task the model does
+   not predict stays unset.
 
-5. **Use hooks when needed** - If your model needs custom batch unpacking,
+5. **Optimizer and scheduler** - Passed as callables to `BaseModel.__init__()`. Need to be marked as `_partial_: true` in YAML configs.
+
+6. **Use hooks when needed** - If your model needs custom batch unpacking,
    prediction formatting, or an explicit deployment wrapper, override the
    appropriate `BaseModel` hook instead of bypassing the shared training and
    deployment flow.
@@ -106,10 +124,10 @@ splits it by scenario lists and builds one dataset per dataset source of a split
 - a database config from `configs/database/`, which names the record table and its taxonomy
 - a datamodule config from `configs/datamodule/<database>/`, which selects the task datasets of
   every split, for example `t4dataset/default_segmentation3d_datamodule`
-- the transforms of every split from `configs/datamodule/transforms/`
+- the transforms of every split, written in its own task config
 
 The dataset of a split is `T4Dataset` (or `NuScenesDataset`) with one task dataset per task,
-such as `T4Detection3DTask` or `T4Segmentation3DTask`. A task dataset reads the annotations of a
+such as `Detection3DTask` or `T4Segmentation3DTask`. A task dataset reads the annotations of a
 record and returns them as a `ModelGTSample`.
 
 ### Data Flow
@@ -122,8 +140,8 @@ get_data_sample() -> transforms -> collate_fn() -> BaseModel.on_after_batch_tran
    as a `ModelGTSample`
 2. `transforms`: load files and apply per sample augmentations (in the dataset)
 3. `collate_fn()`: stack the samples into a typed `ModelGTBatch`
-4. `BaseModel.on_after_batch_transfer()`: name the batch tensors and run the model's runtime
-   preprocessing
+4. `BaseModel.on_after_batch_transfer()`: run the model's runtime preprocessing, which turns
+   the batch into the typed `ModelBatchInputs`
 5. `forward()`: model inference/training forward pass
 6. `compute_metrics()` / `predict_outputs()`: model owns any output shaping
    (e.g., voxel-to-point scatter for segmentation) directly inside these
@@ -196,12 +214,30 @@ defaults:
 
 dataset: ${t4dataset}
 point_cloud_range: [-122.88, -122.88, -3.0, 122.88, 122.88, 5.0]
-global_rot_scale_trans:
-  yaw_rot_range: [-3.14159265, 3.14159265]
-  scale_ratio_range: [0.9, 1.1]
-  translation_std: [0.5, 0.5, 0.2]
 
 datamodule:
+  train_dataset:
+    transforms:
+      _target_: autoware_ml.transforms.base.TransformsCompose
+      _convert_: all
+      pipeline:
+        - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
+          use_dim: [0, 1, 2, 3]
+        - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
+          yaw_rot_range: [-3.14159265, 3.14159265]
+          scale_ratio_range: [0.9, 1.1]
+          translation_std: [0.5, 0.5, 0.2]
+        - _target_: autoware_ml.transforms.point_cloud.geometry.PointsRangeFilter
+          points_range: ${point_cloud_range}
+  test_dataset:
+    transforms:
+      _target_: autoware_ml.transforms.base.TransformsCompose
+      _convert_: all
+      pipeline:
+        - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
+          use_dim: [0, 1, 2, 3]
+        - _target_: autoware_ml.transforms.point_cloud.geometry.PointsRangeFilter
+          points_range: ${point_cloud_range}
   train_dataloader:
     batch_size: 8
     num_workers: 4
@@ -211,9 +247,9 @@ datamodule:
     num_workers: 4
 ```
 
-The default segmentation transforms read a few top level keys of the task config:
-`point_cloud_range`, `global_rot_scale_trans` and the `dataset.lidar` keys. They append the time
-lag of every point, so the encoder takes 5 point features.
+The dataset configs leave `transforms` required, so every task config writes the pipeline of the
+training and test datasets. Validation and predict use the test pipeline. Models never share a
+pipeline, a model that needs the same steps copies them.
 
 A split can mix several corpora. Each entry of `train_sources`, `validation_sources`,
 `test_sources` or `predict_sources` names a database, whether its boxes (`det3d`) and semantic
@@ -261,26 +297,20 @@ class MyAugmentation(BaseTransform):
         return model_gt_sample._replace(point_cloud_data=point_cloud_data)
 ```
 
-Every dataset config carries its own transform pipeline, kept as a transforms config under
-`configs/datamodule/transforms/`. Add the transform to a pipeline of your own:
+Add the transform to the training pipeline in your task config:
 
-```yaml title="configs/datamodule/transforms/my_train_transforms.yaml"
-_target_: autoware_ml.transforms.base.TransformsCompose
-_convert_: all
-
-pipeline:
-  - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
-    use_dim: [0, 1, 2, 3]
-  - _target_: autoware_ml.transforms.point_cloud.my_transform.MyAugmentation
-    probability: 0.5
-    intensity: 0.1
-```
-
-Select it for the training split with a defaults override in the task config:
-
-```yaml
-defaults:
-  - override /datamodule/transforms@datamodule.train_dataset.transforms: my_train_transforms
+```yaml title="configs/tasks/my_task/my_model/my_config.yaml"
+datamodule:
+  train_dataset:
+    transforms:
+      _target_: autoware_ml.transforms.base.TransformsCompose
+      _convert_: all
+      pipeline:
+        - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
+          use_dim: [0, 1, 2, 3]
+        - _target_: autoware_ml.transforms.point_cloud.my_transform.MyAugmentation
+          probability: 0.5
+          intensity: 0.1
 ```
 
 ## Step 5: Add Runtime Data Preprocessing (Optional)
@@ -292,17 +322,18 @@ the model by the entrypoint scripts.
 If your task needs custom preprocessing:
 
 ```python title="autoware_ml/preprocessing/my_preprocessing/my_preprocessing.py"
-from typing import Any
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 
 
 class MyPreprocessingLayer:
-    def __init__(self, input_key: str = "feat", scale: float = 1.0):
-        self.input_key = input_key
+    def __init__(self, scale: float = 1.0):
         self.scale = scale
 
-    def __call__(self, batch_inputs_dict: dict[str, Any], *, is_training: bool) -> dict[str, Any]:
-        processed = batch_inputs_dict[self.input_key] * self.scale
-        return {self.input_key: processed}
+    def __call__(self, batch_inputs: ModelBatchInputs, *, is_training: bool) -> ModelBatchInputs:
+        batch = batch_inputs.multi_task_gt_batch
+        points = batch.point_cloud_gt_batch
+        scaled = points._replace(points=points.points * self.scale)
+        return batch_inputs.replace(multi_task_gt_batch=batch._replace(point_cloud_gt_batch=scaled))
 ```
 
 Add to config:
@@ -312,13 +343,13 @@ data_preprocessing:
   _target_: autoware_ml.preprocessing.base.DataPreprocessing
   pipeline:
     - _target_: autoware_ml.preprocessing.my_preprocessing.my_preprocessing.MyPreprocessingLayer
-      input_key: feat
       scale: 1.0
 ```
 
 !!! warning
-    Preprocessing layers must be callable objects that accept `dict[str, Any]` and the keyword
-    `is_training`, and return `dict[str, Any]` with the entries to add or replace.
+    Preprocessing layers must be callable objects that accept `ModelBatchInputs` and the keyword
+    `is_training`, and return `ModelBatchInputs` with the features they compute added or the
+    data they change replaced.
 
 Output-side shaping (logits -> probabilities, decoder scatter, voxel-to-point mapping, etc.) belongs
 **inside the model** - in `forward()`, `compute_metrics()`, or `predict_outputs()`.
@@ -371,26 +402,30 @@ def forward(self, image: torch.Tensor, lidar: torch.Tensor) -> torch.Tensor:
     return self.head(fused)
 ```
 
-Batch dict must have `image` and `lidar` keys.
+`forward_inputs()` returns both tensors, keyed `image` and `lidar`.
 
-### Multiple Outputs
+### Multiple Tasks
 
 ```python
-def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+def forward(self, x: torch.Tensor) -> ModelOutputs:
     features = self.backbone(x)
-    boxes = self.box_head(features)
-    scores = self.score_head(features)
-    return boxes, scores
+    return ModelOutputs(
+        detection3d_head_outputs=Detection3DHeadOutputs(
+            center_head_outputs=None, transfusion_head_outputs=self.bbox_head(features)
+        ),
+        segmentation3d_head_outputs=Segmentation3DHeadOutputs(logits=self.seg_head(features)),
+    )
 
-def compute_metrics(
-    self,
-    batch_inputs_dict: Mapping[str, Any],
-    outputs: tuple[torch.Tensor, torch.Tensor],
-):
-    boxes, scores = outputs
-    gt_boxes = batch_inputs_dict["gt_boxes"]
-    gt_scores = batch_inputs_dict["gt_scores"]
-    box_loss = self.box_loss(boxes, gt_boxes)
-    score_loss = self.score_loss(scores, gt_scores)
-    return {"loss": box_loss + score_loss, "box_loss": box_loss, "score_loss": score_loss}
+def compute_metrics(self, batch_inputs: ModelBatchInputs, outputs: ModelOutputs):
+    gt_batch = batch_inputs.multi_task_gt_batch
+    gt_detections = gt_batch.detection3d_gt_batch
+    box_losses = self.bbox_head.loss(
+        outputs.detection3d().transfusion_head(),
+        gt_detections.valid_bboxes_3d(),
+        gt_detections.valid_labels_3d(),
+    )
+    seg_loss = self.seg_loss(
+        outputs.segmentation3d().logits, gt_batch.segmentation3d_gt_batch.gt_semantic_masks
+    )
+    return {"loss": box_losses["loss"] + seg_loss, "seg_loss": seg_loss}
 ```

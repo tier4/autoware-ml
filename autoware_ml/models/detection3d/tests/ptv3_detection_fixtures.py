@@ -246,7 +246,6 @@ def build_preprocessor(
         max_num_points=32,
         max_voxels=4096,
         eval_max_voxels=4096,
-        voxelization_z_order_first=False,
     )
 
 

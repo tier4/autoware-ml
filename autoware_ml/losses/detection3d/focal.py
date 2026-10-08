@@ -41,7 +41,7 @@ class SigmoidFocalLoss(nn.Module):
         Args:
             logits: Raw classification logits with shape ``(N, C)``.
             targets: One-hot classification targets with shape ``(N, C)``.
-            weights: Optional per-query weights with shape ``(N,)``.
+            weights: Optional per-query, per-class weights with shape ``(N, C)``.
             avg_factor: Optional normalization factor.
 
         Returns:
@@ -53,7 +53,7 @@ class SigmoidFocalLoss(nn.Module):
         alpha_factor = self.alpha * targets + (1.0 - self.alpha) * (1.0 - targets)
         loss = ce * alpha_factor * (1.0 - p_t).pow(self.gamma)
         if weights is not None:
-            loss = loss * weights.unsqueeze(-1)
+            loss = loss * weights
         loss = loss.sum()
         if avg_factor is not None:
             loss = loss / max(avg_factor, 1.0)

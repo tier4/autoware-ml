@@ -47,12 +47,10 @@ class T4RecordsGeneratorWorkerParams:
       database_root_path: Root path of the T4 database.
       scenario_data: Scenario data.
       lidar_channel: Lidar channel each sample is keyed on.
-      lidar_pointcloud_num_features: Number of float32 values per point in the stored point
-        clouds.
+      lidar_pointcloud_num_features: Number of features in the lidar pointcloud.
       box_annotation_dir: Directory of each scene with the category and instance tables to read
         box names from.
       taxonomy: Taxonomies the database labels are built with.
-      box3d_pipelines: List of box 3D pipelines to process the box 3D annotations.
     """
 
     database_root_path: str
@@ -105,9 +103,9 @@ class T4Dataset(BaseDatabase):
         num_workers: int,
         taxonomy: DatabaseTaxonomy,
         lidar_channel: str,
+        lidar_pointcloud_num_features: int,
         box3d_pipelines: Sequence[Box3DPipeline],
         lidar_intensity_scale: float,
-        lidar_pointcloud_num_features: int,
         box_annotation_dir: str,
     ) -> None:
         """
@@ -122,10 +120,9 @@ class T4Dataset(BaseDatabase):
           num_workers: Number of workers to use for processing the dataset.
           taxonomy: Taxonomies the database labels are built with.
           lidar_channel: Lidar channel each sample is keyed on.
+          lidar_pointcloud_num_features: Number of features in the lidar pointcloud.
           box3d_pipelines: List of box 3D pipelines to process the box 3D annotations.
           lidar_intensity_scale: Intensity value of the strongest return in the stored point
-            clouds.
-          lidar_pointcloud_num_features: Number of float32 values per point in the stored point
             clouds.
           box_annotation_dir: Directory of each scene with the category and instance tables to
             read box names from.

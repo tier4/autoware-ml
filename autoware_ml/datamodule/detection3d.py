@@ -9,7 +9,7 @@ from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
 from autoware_ml.types.geometry import Box3DFieldIndex, Box3DCenterCoordinateType
 
 
-class T4Detection3DTask(BaseDatasetTask):
+class Detection3DTask(BaseDatasetTask):
     """Read the 3D boxes of a record."""
 
     def select_columns(self, dataset_records_dataframe: pl.DataFrame) -> pl.DataFrame:

@@ -20,12 +20,18 @@ import math
 
 import torch
 
+from autoware_ml.dataclasses.models.detection3d.head_outputs import CenterHeadOutputs
 from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
 from autoware_ml.models.detection3d.backbones.second import SECONDBackbone
 from autoware_ml.models.detection3d.centerpoint import CenterPointDetectionModel
 from autoware_ml.models.detection3d.encoders.pillar import PillarFeatureNet, PointPillarsScatter
 from autoware_ml.models.detection3d.heads.centerpoint import CenterHead
 from autoware_ml.models.detection3d.necks.second_fpn import SECONDFPN
+from autoware_ml.models.tests.batch_inputs_fixtures import (
+    build_batch_inputs,
+    build_detection_gt_batch,
+    voxels_data_from_zyx,
+)
 
 
 def _build_model(use_velocity: bool = True) -> CenterPointDetectionModel:
@@ -65,7 +71,7 @@ def _build_model(use_velocity: bool = True) -> CenterPointDetectionModel:
     )
 
 
-class TestCenterPointTargets:
+class TestCenterHeadTargets:
     def test_build_targets_populates_heatmap_and_boxes(self) -> None:
         model = _build_model()
         gt_boxes = [
@@ -80,19 +86,19 @@ class TestCenterPointTargets:
             device=torch.device("cpu"),
         )
 
-        assert targets.heatmap.shape == (1, 2, 4, 4)
-        assert targets.mask[0, 0].item() is True
-        assert targets.indices[0, 0].item() == 14
-        assert targets.heatmap[0, 0, 3, 2].item() == 1.0
+        assert targets.heatmaps.shape == (1, 2, 4, 4)
+        assert targets.valid_masks[0, 0].item() is True
+        assert targets.reg_indices[0, 0].item() == 14
+        assert targets.heatmaps[0, 0, 3, 2].item() == 1.0
         assert torch.allclose(
-            targets.anno_boxes[0, 0, 3:6],
+            targets.reg_targets[0, 0, 3:6],
             torch.tensor([4.0, 1.6, 1.5]).log(),
         )
         assert torch.allclose(
-            targets.anno_boxes[0, 0, 6:8],
+            targets.reg_targets[0, 0, 6:8],
             torch.tensor([math.sin(0.25), math.cos(0.25)]),
         )
-        assert torch.allclose(targets.anno_boxes[0, 0, 8:], torch.tensor([0.5, -0.1]))
+        assert torch.allclose(targets.reg_targets[0, 0, 8:], torch.tensor([0.5, -0.1]))
 
     @staticmethod
     def _single_box_head_and_outputs() -> tuple[CenterHead, dict[str, torch.Tensor]]:
@@ -127,7 +133,7 @@ class TestCenterPointTargets:
     def test_predict_returns_length_width_height_after_unified_dim_order(self) -> None:
         head, outputs = self._single_box_head_and_outputs()
 
-        predictions = head.predict(outputs)
+        predictions = head.predict(CenterHeadOutputs(**outputs, vel=None))
 
         assert predictions[0].bboxes_3d.shape == (1, 7)
         assert torch.allclose(
@@ -138,7 +144,9 @@ class TestCenterPointTargets:
     def test_predict_decodes_half_precision_outputs_in_float32(self) -> None:
         head, outputs = self._single_box_head_and_outputs()
 
-        predictions = head.predict({name: value.half() for name, value in outputs.items()})
+        predictions = head.predict(
+            CenterHeadOutputs(**{name: value.half() for name, value in outputs.items()}, vel=None)
+        )
 
         assert predictions[0].bboxes_3d.dtype == torch.float32
         assert predictions[0].scores_3d.dtype == torch.float32
@@ -158,11 +166,13 @@ class TestCenterPointTargets:
         ]
         gt_labels = [torch.tensor([0], dtype=torch.long)]
 
-        metrics = model.compute_metrics({"gt_boxes": gt_boxes, "gt_labels": gt_labels}, outputs)
-        predictions = model.bbox_head.predict(outputs)
+        metrics = model.compute_metrics(
+            build_batch_inputs(detection=build_detection_gt_batch(gt_boxes, gt_labels)), outputs
+        )
+        predictions = model.predict_outputs(build_batch_inputs(), outputs).detection3d_predictions
 
         assert "loss" in metrics
-        assert outputs["heatmap"].shape[:2] == (1, 2)
+        assert outputs.detection3d().center_head().heatmap.shape[:2] == (1, 2)
         assert isinstance(predictions, list)
         assert isinstance(predictions[0], Detection3DSamplePredictions)
 
@@ -174,7 +184,7 @@ class TestCenterPointTargets:
         voxel_coords[:, 0] = 0
 
         specs = model.build_export_specs(
-            {"voxels": voxels, "num_points": num_points, "voxel_coords": voxel_coords}
+            build_batch_inputs(voxels=voxels_data_from_zyx(voxels, num_points, voxel_coords))
         )
 
         assert list(specs) == [
@@ -202,7 +212,7 @@ class TestCenterPointTargets:
         voxel_coords[:, 0] = 0
 
         specs = model.build_export_specs(
-            {"voxels": voxels, "num_points": num_points, "voxel_coords": voxel_coords}
+            build_batch_inputs(voxels=voxels_data_from_zyx(voxels, num_points, voxel_coords))
         )
 
         head_spec = specs["pts_backbone_neck_head_centerpoint"]
@@ -284,13 +294,13 @@ def test_centerhead_uses_natural_dimension_order() -> None:
     )
 
     assert torch.allclose(
-        targets.anno_boxes[0, 0, 3:6],
+        targets.reg_targets[0, 0, 3:6],
         torch.tensor([4.0, 1.6, 1.5]).log(),
     )
 
-    flat_index = int(targets.indices[0, 0].item())
+    flat_index = int(targets.reg_indices[0, 0].item())
     y_index, x_index = divmod(flat_index, 4)
-    target_box = targets.anno_boxes[0, 0]
+    target_box = targets.reg_targets[0, 0]
 
     outputs = {
         "heatmap": torch.full((1, 2, 4, 4), -20.0),
@@ -305,7 +315,7 @@ def test_centerhead_uses_natural_dimension_order() -> None:
     outputs["dim"][0, :, y_index, x_index] = target_box[3:6]
     outputs["rot"][0, :, y_index, x_index] = target_box[6:8]
 
-    predictions = head.predict(outputs)
+    predictions = head.predict(CenterHeadOutputs(**outputs, vel=None))
 
     assert torch.allclose(
         predictions[0].bboxes_3d[0, 3:6],

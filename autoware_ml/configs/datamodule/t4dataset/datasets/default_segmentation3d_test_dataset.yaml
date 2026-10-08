@@ -4,6 +4,5 @@ _partial_: true
 
 defaults:
   - segmentation3d@dataset_tasks.Segmentation3D: default_segmentation3d
-  - /datamodule/transforms@transforms: default_segmentation3d_test_transforms
 
-max_num_3d_gt_bboxes: 0
+transforms: ???
