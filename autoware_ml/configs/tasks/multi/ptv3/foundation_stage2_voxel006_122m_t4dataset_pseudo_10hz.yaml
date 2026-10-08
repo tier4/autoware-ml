@@ -10,9 +10,11 @@
 
 defaults:
   - /tasks/multi/ptv3/voxel006_122m_t4dataset_j6gen2_pseudo
-  - /tasks/foundation/ptv3/common
+  - /tasks/multi/ptv3/foundation_common
   - override /database@database: t4dataset/foundation/pseudo_10hz
   - override /database@seg3d_gt_database: t4dataset/foundation/j6gen2_semaseg
+  # The base task pins both taxonomies to default_fine (and the box pipelines of the ground
+  # truth), which would override what the foundation databases bind: restore it
   - override /database/t4dataset/taxonomy@database.taxonomy: foundation
   - override /database/t4dataset/taxonomy@seg3d_gt_database.taxonomy: foundation
   - override /database/t4dataset/box3d_pipelines@seg3d_gt_database.box3d_pipelines: trailer_class_box3d_pipelines

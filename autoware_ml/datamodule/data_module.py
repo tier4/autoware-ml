@@ -8,7 +8,6 @@ from torch.utils.data import DataLoader
 from autoware_ml.databases.base_database import BaseDatabase
 from autoware_ml.datamodule.base import DataLoaderConfig
 from autoware_ml.datamodule.base_dataset import BaseDataset, ConcatDataset
-from autoware_ml.datamodule.resumable import ResumableDataLoader, ResumableDistributedSampler
 from autoware_ml.datamodule.samplers import (
     DistributedWeightedRandomSampler,
     FrameSamplingConfig,
@@ -16,6 +15,11 @@ from autoware_ml.datamodule.samplers import (
 )
 from autoware_ml.datamodule.sources import DatasetSource
 from autoware_ml.datamodule.splitters.splitter_interface import SplitterInterface
+from autoware_ml.resume.data_loader import (
+    ResumableDataLoader,
+    ResumableDistributedSampler,
+    ResumableTrainLoaderMixin,
+)
 from autoware_ml.types.dataset import SplitType
 
 logger = logging.getLogger(__name__)
@@ -30,7 +34,7 @@ _RECORD_SPLIT = {
 }
 
 
-class DataModule(L.LightningDataModule):
+class DataModule(ResumableTrainLoaderMixin, L.LightningDataModule):
     """LightningDataModule shared by every task and database.
 
     Every split lists the dataset sources it reads. Each source keeps its own database, root
@@ -79,7 +83,7 @@ class DataModule(L.LightningDataModule):
             samples are drawn uniformly.
           resumable_train_sampler: Serve the training split through a sampler whose position
             is saved in the checkpoint, so a resumed run continues mid-epoch instead of
-            restarting it (see ``autoware_ml/datamodule/resumable.py``). Off by default.
+            restarting it (see ``autoware_ml/resume/data_loader.py``). Off by default.
         """
         super().__init__()
 
@@ -123,8 +127,6 @@ class DataModule(L.LightningDataModule):
         self.predict_dataloader_config = predict_dataloader
         self.train_frame_sampling = train_frame_sampling
         self.resumable_train_sampler = resumable_train_sampler
-        self._train_loader: ResumableDataLoader | None = None
-        self._train_loader_state: dict[str, int] | None = None
 
     def _validate_shared_taxonomy(self) -> None:
         """
@@ -293,32 +295,7 @@ class DataModule(L.LightningDataModule):
             collate_fn=dataset.collate_fn,
             **kwargs,
         )
-        if self._train_loader_state is not None:
-            loader.load_state_dict(self._train_loader_state)
-        self._train_loader = loader
-        return loader
-
-    def state_dict(self) -> dict[str, Any]:
-        """
-        Position of the resumable training dataloader for the checkpoint.
-
-        Returns:
-          dict[str, Any]: The loader state, empty without the resumable sampler.
-        """
-        if self._train_loader is None:
-            return {}
-        return {"train_dataloader": self._train_loader.state_dict()}
-
-    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
-        """
-        Remember the training dataloader position of a resumed checkpoint.
-
-        Args:
-          state_dict: Mapping produced by :meth:`state_dict`.
-        """
-        self._train_loader_state = state_dict.get("train_dataloader")
-        if self._train_loader is not None and self._train_loader_state is not None:
-            self._train_loader.load_state_dict(self._train_loader_state)
+        return self._attach_train_loader(loader)
 
     def train_dataloader(self) -> DataLoader:
         """Create the dataloader of the training split."""

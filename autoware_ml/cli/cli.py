@@ -21,6 +21,7 @@ completion helpers used by the ``autoware-ml`` executable.
 import logging
 from importlib.metadata import version
 from pathlib import Path
+from typing import NamedTuple
 
 import click
 import typer
@@ -36,6 +37,18 @@ from autoware_ml.utils.cli.helpers import (
     complete_session_name_value,
     run_lazy_script,
 )
+
+
+class ResumeChoice(NamedTuple):
+    """Checkpoint and weights a training launch starts from.
+
+    Attributes:
+        checkpoint: Full checkpoint to resume from, ``None`` for a fresh start.
+        weights: Checkpoints initializing a fresh start, ``None`` when resuming.
+    """
+
+    checkpoint: str | None
+    weights: list[str] | None
 
 
 class CompletableGroup(TyperGroup, click.Group):
@@ -220,6 +233,30 @@ def complete_session_name(incomplete: str) -> list[str]:
     return complete_session_name_value(incomplete)
 
 
+def _resolve_resume_latest(checkpoints_dir: Path, weights: list[str] | None) -> ResumeChoice:
+    """Choose between resuming the newest checkpoint of a directory and a fresh start.
+
+    Args:
+        checkpoints_dir: Checkpoint directory of an earlier launch of the job.
+        weights: ``--weights`` of the command line, kept only for a fresh start.
+
+    Returns:
+        The checkpoint to resume from and the weights to initialize with.
+    """
+    from autoware_ml.resume.checkpoint_locator import CheckpointLocator
+
+    latest = CheckpointLocator(checkpoints_dir.expanduser()).find_latest()
+    if latest is None:
+        typer.echo(
+            f"No loadable checkpoint under '{checkpoints_dir}', starting a fresh run.", err=True
+        )
+        return ResumeChoice(checkpoint=None, weights=weights)
+    typer.echo(f"Resuming from the latest checkpoint '{latest}'.", err=True)
+    if weights:
+        typer.echo("Ignoring --weights: the resumed checkpoint carries the weights.", err=True)
+    return ResumeChoice(checkpoint=str(latest), weights=None)
+
+
 @app.command(
     name="train",
     cls=OptionFirstTyperCommand,
@@ -264,7 +301,7 @@ def train(
         ),
     ] = False,
     resume_latest: Annotated[
-        str | None,
+        Path | None,
         typer.Option(
             "--resume-latest",
             help="Checkpoint directory of an earlier launch of this job: resume from its "
@@ -288,30 +325,16 @@ def train(
         weights: One or more checkpoint paths for pretrained weight initialization.
         resume_checkpoint: Full Lightning checkpoint path to resume training from.
         new_run: Whether to fork the resumed training into a new MLflow run.
+        resume_latest: Checkpoint directory whose newest loadable checkpoint is resumed.
     """
     if weights and resume_checkpoint:
         raise typer.BadParameter("--weights and --resume-checkpoint are mutually exclusive.")
-    if resume_latest and resume_checkpoint:
+    if resume_latest is not None and resume_checkpoint:
         raise typer.BadParameter("--resume-latest and --resume-checkpoint are mutually exclusive.")
-    if new_run and not (resume_checkpoint or resume_latest):
+    if new_run and not (resume_checkpoint or resume_latest is not None):
         raise typer.BadParameter("--new-run requires --resume-checkpoint or --resume-latest.")
-    if resume_latest:
-        from autoware_ml.utils.checkpoints import find_latest_checkpoint
-
-        latest = find_latest_checkpoint(Path(resume_latest).expanduser())
-        if latest is None:
-            typer.echo(
-                f"No loadable checkpoint under '{resume_latest}', starting a fresh run.",
-                err=True,
-            )
-        else:
-            typer.echo(f"Resuming from the latest checkpoint '{latest}'.", err=True)
-            resume_checkpoint = str(latest)
-            if weights:
-                typer.echo(
-                    "Ignoring --weights: the resumed checkpoint carries the weights.", err=True
-                )
-                weights = None
+    if resume_latest is not None:
+        resume_checkpoint, weights = _resolve_resume_latest(resume_latest, weights)
 
     hydra_overrides: list[str] = []
     if weights:

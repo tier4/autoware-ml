@@ -9,7 +9,7 @@
 
 defaults:
   - /tasks/segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2
-  - /tasks/foundation/ptv3/common
+  - /tasks/multi/ptv3/foundation_common
   - override /database@database: t4dataset/foundation/j6gen2_semaseg
   - _self_
 

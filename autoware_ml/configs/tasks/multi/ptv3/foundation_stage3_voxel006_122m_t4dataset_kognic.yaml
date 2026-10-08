@@ -6,9 +6,12 @@
 # epoch, while rehearsing the 10 Hz pseudo corpus at 1 Hz (about 17k frames, label sets where
 # the old specification is coarser). Kognic alone validates and tests, the first ground truth
 # scoring every class. Start from the stage 2 checkpoint with `--weights`.
+#
+# The root-level `pseudo_10hz_sample_steps` sets the sample step of every database of the
+# pseudo corpus (scenarios/foundation/pseudo_10hz.yaml, 1 when unset).
 
 defaults:
-  - /tasks/foundation/ptv3/stage2_voxel006_122m_t4dataset_pseudo_10hz
+  - /tasks/multi/ptv3/foundation_stage2_voxel006_122m_t4dataset_pseudo_10hz
   - /database@pseudo_database: t4dataset/foundation/pseudo_10hz
   - override /database@database: t4dataset/foundation/kognic_fused
   - _self_

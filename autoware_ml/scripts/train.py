@@ -26,7 +26,8 @@ import lightning as L
 import torch
 from omegaconf import DictConfig
 
-from autoware_ml.utils.checkpoints import apply_matching_weights, write_run_pointer
+from autoware_ml.resume.checkpoint_locator import RunPointer
+from autoware_ml.utils.checkpoints import apply_matching_weights
 from autoware_ml.utils.mlflow_helpers import (
     AUTOWARE_ML_RUN_ID_ENV,
     build_run_metadata,
@@ -51,6 +52,42 @@ from autoware_ml.utils.runtime import (
 
 logger = logging.getLogger(__name__)
 _CONFIG_PATH = get_config_path()
+
+
+def _log_resume_position(checkpoint_path: str) -> None:
+    """Log where in training a resumed run continues.
+
+    A checkpoint written after the last batch of an epoch continues with the next
+    epoch; one written mid-epoch continues the same epoch after its last trained batch.
+
+    Args:
+        checkpoint_path: Full Lightning checkpoint the run resumes from.
+    """
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False, mmap=True)
+    epoch, global_step = checkpoint["epoch"], checkpoint["global_step"]
+    fit_loop = checkpoint.get("loops", {}).get("fit_loop", {})
+    batch_progress = fit_loop.get("epoch_loop.batch_progress", {})
+    if batch_progress.get("is_last_batch", True):
+        logger.info(
+            "Resuming from '%s': checkpoint saved at the end of epoch %d (global step %d), "
+            "training continues at epoch %d.",
+            checkpoint_path,
+            epoch,
+            global_step,
+            epoch + 1,
+        )
+        return
+    batches_done = batch_progress.get("current", {}).get("processed", 0)
+    logger.info(
+        "Resuming from '%s': checkpoint saved in epoch %d after batch %d (global step %d), "
+        "training continues epoch %d with batch %d.",
+        checkpoint_path,
+        epoch,
+        batches_done,
+        global_step,
+        epoch,
+        batches_done + 1,
+    )
 
 
 @hydra.main(version_base=None, config_path=_CONFIG_PATH)
@@ -100,18 +137,7 @@ def main(cfg: DictConfig):
     if weights_path is not None:
         apply_matching_weights(model, weights_path, map_location="cpu", logger=logger)
     if resume_checkpoint_path is not None:
-        progress = torch.load(
-            resume_checkpoint_path, map_location="cpu", weights_only=False, mmap=True
-        )
-        logger.info(
-            "Resuming from '%s': checkpoint saved at epoch %d (global step %d), "
-            "training continues at epoch %d.",
-            resume_checkpoint_path,
-            progress["epoch"],
-            progress["global_step"],
-            progress["epoch"] + 1,
-        )
-        del progress
+        _log_resume_position(resume_checkpoint_path)
 
     logger.info("Instantiating callbacks...")
     callbacks = instantiate_callbacks(
@@ -137,10 +163,11 @@ def main(cfg: DictConfig):
         )
         trainer_logger = hydra.utils.instantiate(cfg.logger)
 
-    if run_context is not None:
+    run_pointer = RunPointer.from_env()
+    if run_context is not None and run_pointer is not None:
         # A relaunch of a preempted job finds its own run through this pointer, see
         # `autoware-ml train --resume-latest`.
-        write_run_pointer(run_context.checkpoints_dir)
+        run_pointer.write(run_context.checkpoints_dir)
 
     logger.info("Instantiating trainer...")
     trainer: L.Trainer = instantiate_trainer(

@@ -170,19 +170,7 @@ class LabelTaxonomy:
             )
         class_set = set(class_names)
         sets = {name: tuple(members) for name, members in (class_sets or {}).items()}
-        for set_name, members in sets.items():
-            if set_name in class_set:
-                raise ValueError(f"Label set {set_name!r} collides with a class of the level.")
-            if len(members) < 2 or len(set(members)) != len(members):
-                raise ValueError(
-                    f"Label set {set_name!r} must list at least two distinct classes, got "
-                    f"{list(members)}."
-                )
-            unknown = [member for member in members if member not in class_set]
-            if unknown:
-                raise ValueError(
-                    f"Label set {set_name!r} lists {unknown}, which are not classes of the level."
-                )
+        self._validate_class_sets(class_names, sets, ignore_index)
         for fine_name, class_name in class_mapping.items():
             if class_name is not None and class_name not in class_set and class_name not in sets:
                 raise ValueError(
@@ -225,6 +213,45 @@ class LabelTaxonomy:
                 f"{table_name} must have one entry per class, missing "
                 f"{sorted(set(class_names) - set(table))}, unknown "
                 f"{sorted(set(table) - set(class_names))}."
+            )
+
+    @staticmethod
+    def _validate_class_sets(
+        class_names: Sequence[str], sets: Mapping[str, Sequence[str]], ignore_index: int
+    ) -> None:
+        """
+        Check the label sets of the level and that the ignore index lies past their indices.
+
+        Args:
+          class_names: Classes of the level, in index order.
+          sets: Label sets, set name to its classes, in set index order.
+          ignore_index: Label index of a label outside the classes of the level.
+
+        Raises:
+          ValueError: Raised when a set name collides with a class, a set lists fewer than two
+            distinct classes or names an unknown class, or the ignore index collides with a
+            set index.
+        """
+
+        class_set = set(class_names)
+        for set_name, members in sets.items():
+            if set_name in class_set:
+                raise ValueError(f"Label set {set_name!r} collides with a class of the level.")
+            if len(members) < 2 or len(set(members)) != len(members):
+                raise ValueError(
+                    f"Label set {set_name!r} must list at least two distinct classes, got "
+                    f"{list(members)}."
+                )
+            unknown = [member for member in members if member not in class_set]
+            if unknown:
+                raise ValueError(
+                    f"Label set {set_name!r} lists {unknown}, which are not classes of the level."
+                )
+        num_labels = len(class_names) + len(sets)
+        if 0 <= ignore_index < num_labels:
+            raise ValueError(
+                f"The ignore index {ignore_index} collides with the class and label set indices "
+                f"0..{num_labels - 1}."
             )
 
     @property

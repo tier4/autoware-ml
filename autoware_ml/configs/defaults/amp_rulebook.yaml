@@ -1,7 +1,7 @@
 # @package _global_
 # Mixed precision training of the PTv3 family on the rulebook sparse convolutions.
 # spconv accumulates in fp16 and is not registered with autocast, so 16-bit training needs
-# rulebook_torch (autoware_ml/ops/sparse_backend.py), which accumulates in fp32. bf16 needs no
+# rulebook_torch (autoware_ml/ops/sparse_conv/), which accumulates in fp32. bf16 needs no
 # loss scaler; two callbacks stop a run that goes non-finite and log the numbers that warn
 # of it. Accuracy options that cost speed (model.encoder.fp32_sublayers,
 # model.encoder.activation_checkpointing) stay with the task config.
@@ -10,7 +10,9 @@
 
 model:
   encoder:
-    sparse_conv_backend: rulebook
+    sparse_conv_backend:
+      _target_: autoware_ml.ops.sparse_conv.backend.SparseConvBackend
+      _args_: [rulebook]
 
 trainer:
   precision: bf16-mixed

@@ -6,6 +6,7 @@ from jaxtyping import Float32, Int32
 import torch
 from torch import Tensor
 
+from autoware_ml.databases.t4pack.t4pack_frame import T4PackFrame
 from autoware_ml.geometry.points.base_points import BasePoints
 
 
@@ -130,3 +131,5 @@ class LiDARPointCloudSample(NamedTuple):
     lidar_sensor_to_lidar_sweep_matrix: Float32[Tensor, "4 4"]  # (4, 4)
     # Lidar source to serve from a merged cloud, None to serve the whole file
     source_view: LidarSourceView | None = None
+    # Location of the frame in the t4pack file of its channel, None when the scene has no pack
+    t4pack_frame: T4PackFrame | None = None

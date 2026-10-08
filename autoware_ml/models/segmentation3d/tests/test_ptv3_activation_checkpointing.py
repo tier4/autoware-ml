@@ -16,9 +16,11 @@
 
 from __future__ import annotations
 
+import unittest
+
 import torch
 
-from autoware_ml.models.segmentation3d.encoders.ptv3 import PointTransformerV3Encoder
+from autoware_ml.models.segmentation3d.encoders.ptv3 import Block, PointTransformerV3Encoder
 
 
 def _encoder(checkpointing: bool) -> PointTransformerV3Encoder:
@@ -77,22 +79,26 @@ def _run(checkpointing: bool) -> tuple[torch.Tensor, list[torch.Tensor]]:
     return output, grads
 
 
-def test_checkpointed_blocks_reproduce_outputs_and_gradients() -> None:
-    plain_out, plain_grads = _run(False)
-    ckpt_out, ckpt_grads = _run(True)
-    torch.testing.assert_close(ckpt_out, plain_out)
-    assert len(plain_grads) == len(ckpt_grads) > 0
-    for plain, ckpt in zip(plain_grads, ckpt_grads):
-        torch.testing.assert_close(ckpt, plain)
+class TestActivationCheckpointing(unittest.TestCase):
+    """Activation checkpointing keeps the outputs and gradients of the blocks."""
 
+    def test_checkpointed_blocks_reproduce_outputs_and_gradients(self) -> None:
+        """Test that checkpointed blocks give the outputs and gradients of plain ones."""
+        plain_out, plain_grads = _run(False)
+        ckpt_out, ckpt_grads = _run(True)
+        torch.testing.assert_close(ckpt_out, plain_out)
+        self.assertGreater(len(plain_grads), 0)
+        self.assertEqual(len(ckpt_grads), len(plain_grads))
+        for index, (plain, ckpt) in enumerate(zip(plain_grads, ckpt_grads)):
+            with self.subTest(parameter=index):
+                torch.testing.assert_close(ckpt, plain)
 
-def test_checkpointing_is_inactive_in_eval_mode() -> None:
-    encoder = _encoder(True).eval()
-    assert all(
-        block.activation_checkpointing
-        for block in encoder.modules()
-        if hasattr(block, "_attention_and_mlp")
-    )
-    with torch.no_grad():
-        point = encoder(_inputs())
-    assert torch.isfinite(point.feat).all()
+    def test_checkpointing_is_inactive_in_eval_mode(self) -> None:
+        """Test that a checkpointing encoder runs without gradients in eval mode."""
+        encoder = _encoder(True).eval()
+        blocks = [module for module in encoder.modules() if isinstance(module, Block)]
+        self.assertGreater(len(blocks), 0)
+        self.assertTrue(all(block.activation_checkpointing for block in blocks))
+        with torch.no_grad():
+            point = encoder(_inputs())
+        self.assertTrue(torch.isfinite(point.feat).all())

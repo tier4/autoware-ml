@@ -188,14 +188,33 @@ record tables of every other database keep their hash.
 
 ### Packed LiDAR frames
 
-A scene's `data/LIDAR_CONCAT/*.pcd.bin` frames may be replaced by one `data/LIDAR_CONCAT.pack`
-file (the t4pack container: per frame zstd over byte-shuffled columns). The record table keeps
-the loose paths; the point loader reads the loose file when it exists and otherwise looks the
-frame up in the pack by name: T4 frames are a gapless five digit sequence and the packing tool
-names frame `i` `{i:05d}.pcd.bin`, so the index names are the file names, and surplus sweeps
-without a table entry do not shift the others. Frames named differently fall back to their
-rank among the sorted LiDAR names of the scene's `sample_data.json`, with the frame count
-checked. See `autoware_ml/utils/point_cloud/t4pack.py`.
+A scene may keep the frames of a LiDAR channel, `data/<channel>/*.pcd.bin`, as one
+`data/<channel>.pack` file (t4pack v1: every frame compressed on its own with zstd over its
+columns, plus a frame index). Packs are written by the data processing tools; autoware-ml only
+reads them.
+
+When a scene has a pack, record generation reads its index once and stores the location of every
+frame and sweep in `lidar_pointcloud_t4pack_frame`. `lidar_pointcloud_path` keeps the path of the
+loose file, so the pack is found next to it. `LoadPointsFromFile` and
+`LoadMultiSweepPointsFromFile` choose the file format with `pcd_file_format`, a
+`PCDFileFormat` from `autoware_ml.types.dataset`:
+
+| `pcd_file_format` | Reads                                                                         |
+| ----------------- | ----------------------------------------------------------------------------- |
+| `auto` (default)  | the pack when the record has a pack location, else the `.pcd.bin` file        |
+| `bin`             | the `.pcd.bin` file of every frame                                            |
+| `t4pack`          | the pack of every frame; fails on a record without a pack location            |
+
+Both formats return the same points. A pack is read one byte range per frame. In a Hydra config:
+
+```yaml
+- _target_: autoware_ml.transforms.multi_task.point_cloud.loading.LoadPointsFromFile
+  pcd_file_format:
+    _target_: autoware_ml.types.dataset.PCDFileFormat
+    _args_: [t4pack]
+```
+
+See `autoware_ml/databases/t4pack/t4pack.py`.
 
 ### Schema
 

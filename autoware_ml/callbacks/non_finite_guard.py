@@ -56,6 +56,14 @@ class NonFiniteGuard(L.Callback):
 
     @staticmethod
     def _loss_of(outputs: Any) -> torch.Tensor | None:
+        """Return the training loss of a step's outputs.
+
+        Args:
+            outputs: Outputs of ``training_step``, a loss tensor or a mapping with ``loss``.
+
+        Returns:
+            The loss tensor, or ``None`` when the outputs carry none.
+        """
         loss = outputs.get("loss") if isinstance(outputs, dict) else outputs
         return loss if torch.is_tensor(loss) else None
 
@@ -67,9 +75,35 @@ class NonFiniteGuard(L.Callback):
         batch: Any,
         batch_idx: int,
     ) -> None:
+        """Abort the run when the loss or the gradient scaler shows it can no longer learn.
+
+        Args:
+            trainer: The running trainer.
+            pl_module: The trained module.
+            outputs: Outputs of the training step.
+            batch: The training batch.
+            batch_idx: Index of the batch in the epoch.
+
+        Raises:
+            NonFiniteTrainingError: Raised by the loss or the scaler check.
+        """
         loss = self._loss_of(outputs)
         if loss is None:
             return
+        self._check_loss(trainer, loss, batch_idx)
+        self._check_scaler(trainer, batch_idx)
+
+    def _check_loss(self, trainer: L.Trainer, loss: torch.Tensor, batch_idx: int) -> None:
+        """Count consecutive batches whose loss is non-finite on any rank.
+
+        Args:
+            trainer: The running trainer.
+            loss: Training loss of this rank.
+            batch_idx: Index of the batch in the epoch.
+
+        Raises:
+            NonFiniteTrainingError: Raised after ``max_consecutive`` such batches.
+        """
         bad = torch.tensor(float(not bool(torch.isfinite(loss.detach()).all())), device=loss.device)
         # One rank overflowing poisons the all-reduced gradients of every rank, so the
         # decision has to be shared; otherwise the ranks would disagree on stopping.
@@ -82,12 +116,26 @@ class NonFiniteGuard(L.Callback):
                 "the run cannot recover. Typical causes are fp16 activation overflow or a "
                 "learning rate the model cannot take."
             )
+
+    def _check_scaler(self, trainer: L.Trainer, batch_idx: int) -> None:
+        """Check that the gradient scaler of fp16 training has not collapsed.
+
+        bf16 and fp32 runs have no scaler and pass.
+
+        Args:
+            trainer: The running trainer.
+            batch_idx: Index of the batch in the epoch.
+
+        Raises:
+            NonFiniteTrainingError: Raised when the scale fell below ``min_scale``.
+        """
         scaler = getattr(getattr(trainer.strategy, "precision_plugin", None), "scaler", None)
-        if scaler is not None and hasattr(scaler, "get_scale"):
-            scale = float(scaler.get_scale())
-            if scale < self.min_scale:
-                raise NonFiniteTrainingError(
-                    f"NonFiniteGuard: the gradient scaler collapsed to {scale:g} at batch "
-                    f"{batch_idx} of epoch {trainer.current_epoch}; every optimizer step is being "
-                    "skipped, so the weights no longer change. The forward pass overflows fp16."
-                )
+        if scaler is None or not hasattr(scaler, "get_scale"):
+            return
+        scale = float(scaler.get_scale())
+        if scale < self.min_scale:
+            raise NonFiniteTrainingError(
+                f"NonFiniteGuard: the gradient scaler collapsed to {scale:g} at batch "
+                f"{batch_idx} of epoch {trainer.current_epoch}; every optimizer step is being "
+                "skipped, so the weights no longer change. The forward pass overflows fp16."
+            )

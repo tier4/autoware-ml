@@ -39,7 +39,9 @@ model:
     # bf16 loses accuracy in the feed-forward network: on a 1,200 batch probe the plain
     # bf16 run reached mIoU 0.202 against 0.226 in fp32, and keeping only the MLP in fp32
     # brought it back to 0.225. It costs about a quarter of the step time.
-    fp32_sublayers: [mlp]
+    fp32_sublayers:
+      - _target_: autoware_ml.models.segmentation3d.encoders.ptv3.Fp32Sublayer
+        _args_: [mlp]
     # The 6 cm model peaks above 86 GB per frame without it; with it a frame fits an 80 GB
     # H100. Costs about a third more compute per step.
     activation_checkpointing: true

@@ -340,7 +340,7 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
 The submanifold convolutions of the PTv3 family run on either `spconv` or
 `rulebook_torch`, the in-house replacement developed by Max Schmeller in the
 `spconv-replacement` repository (autoware-ml only carries the adapter,
-`autoware_ml/ops/sparse_backend.py`). `spconv` accumulates in fp16 and is not registered with autocast, so
+`autoware_ml/ops/sparse_conv/`). `spconv` accumulates in fp16 and is not registered with autocast, so
 mixed precision either aborts in its kernel tuner or trains on fp16 partial sums; `rulebook_torch` accumulates in fp32 and reproduces fp32 training
 under autocast. It only ships fp16 and bf16 kernels and is CUDA only, so it
 replaces `spconv` for mixed precision training rather than everywhere.
@@ -370,9 +370,12 @@ Run it like the default image:
 IMAGE=ghcr.io/tier4/autoware-ml:rulebook ./docker/container.sh --run
 ```
 
-Mixed precision runs need `sparse_conv_backend=rulebook` together
-with `trainer.precision=bf16-mixed` (or `16-mixed`); `/defaults/amp_rulebook`
-sets both.
+Mixed precision runs need the rulebook backend together with
+`trainer.precision=bf16-mixed` (or `16-mixed`); `/defaults/amp_rulebook` sets
+both. The backend is a `SparseConvBackend` (`auto`, `spconv` or `rulebook`), so
+on the command line it is overridden through its argument, for example
+`model.encoder.sparse_conv_backend._args_=[rulebook]`. `auto` picks rulebook
+when it is installed and CUDA is available, and spconv otherwise.
 
 ---
 

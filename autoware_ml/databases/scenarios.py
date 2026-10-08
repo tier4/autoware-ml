@@ -54,9 +54,11 @@ class DatasetParams(BaseModel):
       max_future_sweeps: Maximum number of lidar frames captured after a sample to record
         with it.
       sample_steps: Number of steps to sample.
-      semantic_masks: Whether only the samples carrying a semantic segmentation mask are
-        kept, so a corpus labelled at a lower rate than it was recorded trains on its
-        labelled samples only.
+      semantic_masks: Whether to keep only the samples whose lidar frame has a semantic
+        segmentation mask, dropping every other sample from the record table. For a corpus
+        labelled at a lower rate than it was recorded, so it trains on its labelled samples
+        only. Not a switch for loading the masks: the masks of the kept samples are recorded
+        either way.
       category_aliases: Raw mask category name to the name the vocabulary resolves it
         under, for a corpus whose category names mean something else than the same names
         elsewhere (an older annotation specification whose ``sidewalk`` still contains the
@@ -73,6 +75,7 @@ class DatasetParams(BaseModel):
     max_past_sweeps: int = Field(ge=0)
     max_future_sweeps: int = Field(ge=0)
     sample_steps: int = Field(ge=1)
+    # Keeps only the samples that have a semantic mask; the name is part of the database hash
     semantic_masks: bool = False
     category_aliases: dict[str, str] = Field(default_factory=dict)
     camera_frames: bool = True
@@ -113,14 +116,14 @@ class DatasetParams(BaseModel):
           str: The options as ``, name=value`` items, empty when all are at their default.
         """
 
-        options = ""
+        options = []
         if self.semantic_masks:
-            options += f", semantic_masks={self.semantic_masks}"
+            options.append(f", semantic_masks={self.semantic_masks}")
         if self.category_aliases:
-            options += f", category_aliases={sorted(self.category_aliases.items())}"
+            options.append(f", category_aliases={sorted(self.category_aliases.items())}")
         if not self.camera_frames:
-            options += f", camera_frames={self.camera_frames}"
-        return options
+            options.append(f", camera_frames={self.camera_frames}")
+        return "".join(options)
 
 
 class ScenarioData(BaseModel):

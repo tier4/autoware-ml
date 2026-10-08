@@ -24,8 +24,9 @@ import math
 from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass
+from enum import StrEnum, auto
 from functools import partial
-from typing import Any
+from typing import Any, NamedTuple
 
 import torch
 import torch.nn as nn
@@ -34,14 +35,8 @@ from torch.utils.checkpoint import checkpoint
 
 from autoware_ml.ops.indexing.operators import argsort
 from autoware_ml.ops.segment.segment_csr import segment_csr
-from autoware_ml.ops.sparse_backend import (
-    is_sparse_conv_module,
-    is_sparse_conv_tensor,
-    sparse_conv_backend_of,
-    submanifold_conv3d,
-    submanifold_conv_backend_of,
-    warn_if_rulebook_runs_fp32,
-)
+from autoware_ml.ops.sparse_conv.backend import SparseConvBackend
+from autoware_ml.ops.sparse_conv.tensor import SparseTensorLike
 from autoware_ml.utils.point_cloud.batching import offset_to_bincount
 from autoware_ml.utils.point_cloud.structures import Point
 
@@ -61,8 +56,8 @@ def load_flash_attn_module() -> Any:
 def replace_submconv3d_for_export(module: nn.Module) -> None:
     """Replace native submanifold convolutions with exportable spconv wrappers.
 
-    Layers of either training backend are converted: spconv and rulebook share
-    the KRSC weight layout, so the state dict transfers unchanged. Export needs
+    Layers of either training backend are converted, see
+    :meth:`autoware_ml.ops.spconv.sparse_conv.SubMConv3d.from_layer`. Export needs
     spconv installed even when training ran on rulebook.
 
     Args:
@@ -73,39 +68,14 @@ def replace_submconv3d_for_export(module: nn.Module) -> None:
     for name, child in list(module.named_children()):
         if isinstance(child, ExportableSubMConv3d):
             continue
-        backend = submanifold_conv_backend_of(child)
-        if backend is not None:
-            spconv_options = (
-                {
-                    "algo": child.algo,
-                    "fp32_accum": child.fp32_accum,
-                    "name": getattr(child, "name", None),
-                }
-                if backend == "spconv"
-                else {}
-            )
-            exportable_child = ExportableSubMConv3d(
-                child.in_channels,
-                child.out_channels,
-                kernel_size=child.kernel_size,
-                stride=getattr(child, "stride", 1),
-                padding=getattr(child, "padding", 0),
-                dilation=getattr(child, "dilation", 1),
-                groups=getattr(child, "groups", 1),
-                bias=child.bias is not None,
-                indice_key=child.indice_key,
-                **spconv_options,
-            )
-            exportable_child = exportable_child.to(
-                device=child.weight.device, dtype=child.weight.dtype
-            )
-            exportable_child.load_state_dict(child.state_dict())
-            module._modules[name] = exportable_child
-            continue
-        replace_submconv3d_for_export(child)
+        backend = SparseConvBackend.of_module(child, submanifold_only=True)
+        if backend is None:
+            replace_submconv3d_for_export(child)
+        else:
+            module._modules[name] = ExportableSubMConv3d.from_layer(child, backend)
 
 
-def apply_sparse_conv(module: nn.Module, sparse_feat: Any) -> Any:
+def apply_sparse_conv(module: nn.Module, sparse_feat: SparseTensorLike) -> SparseTensorLike:
     """Run one sparse convolution on a sparse tensor, reconciling operand dtypes.
 
     spconv kernels require features and weights in one dtype; the eval path
@@ -120,12 +90,12 @@ def apply_sparse_conv(module: nn.Module, sparse_feat: Any) -> Any:
     Returns:
         Sparse tensor holding the convolved features.
     """
-    if sparse_conv_backend_of(module) == "rulebook":
-        warn_if_rulebook_runs_fp32(module, sparse_feat.features)
-        return module(sparse_feat)
-    weight_dtype = module.weight.dtype
-    if sparse_feat.features.dtype != weight_dtype:
-        sparse_feat = sparse_feat.replace_feature(sparse_feat.features.to(weight_dtype))
+    needs_cast = (
+        SparseConvBackend.of_module(module) is SparseConvBackend.SPCONV
+        and sparse_feat.features.dtype != module.weight.dtype
+    )
+    if needs_cast:
+        sparse_feat = sparse_feat.replace_feature(sparse_feat.features.to(module.weight.dtype))
     return module(sparse_feat)
 
 
@@ -269,7 +239,9 @@ class PointSequential(PointModule):
         """
         self.add_module(name or str(len(self._modules)), module)
 
-    def forward(self, input_data: Any) -> Any:
+    def forward(
+        self, input_data: Point | SparseTensorLike | torch.Tensor
+    ) -> Point | SparseTensorLike | torch.Tensor:
         """Apply the contained modules to point, sparse, or dense inputs.
 
         Args:
@@ -281,7 +253,7 @@ class PointSequential(PointModule):
         for module in self._modules.values():
             if isinstance(module, PointModule):
                 input_data = module(input_data)
-            elif is_sparse_conv_module(module):
+            elif SparseConvBackend.is_module(module):
                 if isinstance(input_data, Point):
                     input_data.sparse_conv_feat = apply_sparse_conv(
                         module, input_data.sparse_conv_feat
@@ -296,7 +268,7 @@ class PointSequential(PointModule):
                         input_data.sparse_conv_feat = input_data.sparse_conv_feat.replace_feature(
                             input_data.feat
                         )
-                elif is_sparse_conv_tensor(input_data):
+                elif SparseConvBackend.is_tensor(input_data):
                     if input_data.indices.shape[0] != 0:
                         input_data = input_data.replace_feature(module(input_data.features))
                 else:
@@ -483,59 +455,19 @@ class Point3DRoPE(nn.Module):
         return rotated_query, rotated_key
 
 
-def serialized_window_padding(
-    offset: torch.Tensor, patch_size: int, enable_flash: bool
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
-    """Compute the padded token order of windowed attention for a whole batch.
+class WindowPadding(NamedTuple):
+    """Padded token order of the windowed attention for one window size.
 
-    Every sample longer than one window is padded up to a multiple of
-    ``patch_size``; the padding slots of its last window borrow the tokens that
-    sit one window earlier in the serialization, so no slot is empty. Samples
-    that fit in one window are not padded at all.
-
-    The computation is expressed on the padded and unpadded index grids with
-    ``searchsorted``, so it costs two device to host copies (the two grid sizes)
-    instead of a dozen per sample.
-
-    Args:
-        offset: Cumulative per sample point counts, shape ``[num_samples]``.
-        patch_size: Attention window size.
-        enable_flash: Whether flash attention's cumulative sequence lengths are needed.
-
-    Returns:
-        ``pad`` mapping every padded slot to the token it holds, ``unpad`` mapping
-        every token to its padded slot, and the ``int32`` cumulative sequence
-        lengths of the windows or ``None`` without flash attention.
+    Attributes:
+        pad: Token held by every padded slot.
+        unpad: Padded slot of every token.
+        cu_seqlens: ``int32`` cumulative sequence lengths of the windows, read by flash
+            attention only; ``None`` in the export graph without flash attention.
     """
-    device = offset.device
-    bincount = offset_to_bincount(offset)
-    windows = torch.div(bincount + patch_size - 1, patch_size, rounding_mode="trunc").clamp(min=1)
-    padded_bincount = torch.where(bincount > patch_size, windows * patch_size, bincount)
-    sample_start = nn.functional.pad(offset, (1, 0))[:-1]
-    padded_offset = nn.functional.pad(torch.cumsum(padded_bincount, dim=0), (1, 0))
-    shift = padded_offset[:-1] - sample_start
 
-    num_points = int(offset[-1]) if offset.numel() > 0 else 0
-    num_padded = int(padded_offset[-1])
-    token = torch.arange(num_points, device=device)
-    token_sample = torch.searchsorted(offset, token, right=True)
-    unpad = token + shift[token_sample]
-
-    slot = torch.arange(num_padded, device=device)
-    slot_sample = torch.searchsorted(padded_offset[1:], slot, right=True)
-    padding_start = padded_offset[1:] - patch_size + bincount % patch_size
-    is_padding = (bincount != padded_bincount)[slot_sample] & (slot >= padding_start[slot_sample])
-    pad = slot - shift[slot_sample] - patch_size * is_padding.long()
-    if not enable_flash:
-        return pad, unpad, None
-
-    windows_per_sample = torch.where(bincount > 0, windows, torch.zeros_like(windows))
-    window_offset = nn.functional.pad(torch.cumsum(windows_per_sample, dim=0), (1, 0))
-    window = torch.arange(int(window_offset[-1]), device=device)
-    window_sample = torch.searchsorted(window_offset[1:], window, right=True)
-    cu_seqlens = padded_offset[window_sample] + patch_size * (window - window_offset[window_sample])
-    cu_seqlens = torch.cat([cu_seqlens, padded_offset[-1:]]).to(torch.int32)
-    return pad, unpad, cu_seqlens
+    pad: torch.Tensor
+    unpad: torch.Tensor
+    cu_seqlens: torch.Tensor | None
 
 
 class SerializedAttention(PointModule):
@@ -614,17 +546,15 @@ class SerializedAttention(PointModule):
         self.flash_attn = None
 
     @torch.no_grad()
-    def _get_padding_and_inverse(
-        self, point: Point
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    def _get_padding_and_inverse(self, point: Point) -> WindowPadding:
         """Compute padded token indices and inverse mapping for windowed attention.
 
         Args:
             point: Serialized point container.
 
         Returns:
-            Tuple containing padded ordering indices, inverse indices, and
-            optional cumulative sequence lengths for flash attention.
+            Padded ordering indices, inverse indices, and cumulative sequence
+            lengths of the windows (``None`` in export mode without flash attention).
         """
         if self.export_mode:
             if point.offset.numel() != 1:
@@ -643,7 +573,7 @@ class SerializedAttention(PointModule):
             index = torch.arange(padded_n, device=point.offset.device)
             pad = torch.where(index < n, index, (index - self.patch_size + cycle) % divisor)
             if not self.enable_flash:
-                return pad, unpad, None
+                return WindowPadding(pad, unpad, None)
             # arange(0, padded_n+1, patch_size) gives [0, ps, 2*ps, ..., padded_n]
             # since padded_n is always a multiple of patch_size.
             cu_seqlens = torch.arange(
@@ -653,24 +583,94 @@ class SerializedAttention(PointModule):
                 dtype=torch.int32,
                 device=point.offset.device,
             )
-            return pad, unpad, cu_seqlens
+            return WindowPadding(pad, unpad, cu_seqlens)
 
         # The padding depends only on the sample offsets and the window size, so
         # every block of a stage reads the one computed by the first, as
-        # upstream PTv3 does; the keys are namespaced by window size because
+        # upstream PTv3 does; the key is namespaced by window size because
         # encoder and decoder stages may use different ones on one Point.
-        pad_key = f"pad_{self.patch_size}"
-        unpad_key = f"unpad_{self.patch_size}"
-        cu_seqlens_key = f"cu_seqlens_{self.patch_size}"
-        if pad_key not in point:
-            pad, unpad, cu_seqlens = serialized_window_padding(
-                point.offset, self.patch_size, self.enable_flash
-            )
-            point[pad_key] = pad
-            point[unpad_key] = unpad
-            if cu_seqlens is not None:
-                point[cu_seqlens_key] = cu_seqlens
-        return point[pad_key], point[unpad_key], point.get(cu_seqlens_key)
+        padding_key = f"window_padding_{self.patch_size}"
+        if padding_key not in point:
+            point[padding_key] = self._batched_window_padding(point.offset, self.patch_size)
+        return point[padding_key]
+
+    @staticmethod
+    def _batched_window_padding(offset: torch.Tensor, patch_size: int) -> WindowPadding:
+        """Compute the padded token order of windowed attention for a whole batch.
+
+        Every sample longer than one window is padded up to a multiple of
+        ``patch_size``; the padding slots of its last window borrow the tokens that
+        sit one window earlier in the serialization, so no slot is empty. Samples
+        that fit in one window are not padded at all.
+
+        The computation is expressed on the padded and unpadded index grids with
+        ``searchsorted``, so it costs a few device to host copies (the grid sizes)
+        instead of a dozen per sample.
+
+        Args:
+            offset: Cumulative per sample point counts, shape ``[num_samples]``.
+            patch_size: Attention window size.
+
+        Returns:
+            Padding of the batch; its cumulative sequence lengths are always set, so
+            one cached entry serves callers with and without flash attention.
+        """
+        device = offset.device
+        bincount = offset_to_bincount(offset)
+        windows = torch.div(bincount + patch_size - 1, patch_size, rounding_mode="trunc").clamp(
+            min=1
+        )
+        padded_bincount = torch.where(bincount > patch_size, windows * patch_size, bincount)
+        sample_start = nn.functional.pad(offset, (1, 0))[:-1]
+        padded_offset = nn.functional.pad(torch.cumsum(padded_bincount, dim=0), (1, 0))
+        shift = padded_offset[:-1] - sample_start
+
+        num_points = int(offset[-1]) if offset.numel() > 0 else 0
+        num_padded = int(padded_offset[-1])
+        token = torch.arange(num_points, device=device)
+        token_sample = torch.searchsorted(offset, token, right=True)
+        unpad = token + shift[token_sample]
+
+        slot = torch.arange(num_padded, device=device)
+        slot_sample = torch.searchsorted(padded_offset[1:], slot, right=True)
+        padding_start = padded_offset[1:] - patch_size + bincount % patch_size
+        is_padding = (bincount != padded_bincount)[slot_sample] & (
+            slot >= padding_start[slot_sample]
+        )
+        pad = slot - shift[slot_sample] - patch_size * is_padding.long()
+        cu_seqlens = SerializedAttention._window_cu_seqlens(
+            bincount, windows, padded_offset, patch_size
+        )
+        return WindowPadding(pad, unpad, cu_seqlens)
+
+    @staticmethod
+    def _window_cu_seqlens(
+        bincount: torch.Tensor,
+        windows: torch.Tensor,
+        padded_offset: torch.Tensor,
+        patch_size: int,
+    ) -> torch.Tensor:
+        """Compute the cumulative sequence lengths of the attention windows of a batch.
+
+        Args:
+            bincount: Per sample point counts, shape ``[num_samples]``.
+            windows: Per sample window counts, at least one, shape ``[num_samples]``.
+            padded_offset: Cumulative padded per sample counts with a leading zero,
+                shape ``[num_samples + 1]``.
+            patch_size: Attention window size.
+
+        Returns:
+            ``int32`` start of every window followed by the padded total, as flash
+            attention's ``cu_seqlens`` expects.
+        """
+        windows_per_sample = torch.where(bincount > 0, windows, torch.zeros_like(windows))
+        window_offset = nn.functional.pad(torch.cumsum(windows_per_sample, dim=0), (1, 0))
+        window = torch.arange(int(window_offset[-1]), device=bincount.device)
+        window_sample = torch.searchsorted(window_offset[1:], window, right=True)
+        cu_seqlens = padded_offset[window_sample] + patch_size * (
+            window - window_offset[window_sample]
+        )
+        return torch.cat([cu_seqlens, padded_offset[-1:]]).to(torch.int32)
 
     @torch.no_grad()
     def disable_flash(self) -> None:
@@ -799,6 +799,17 @@ class MLP(nn.Module):
         return self.drop(self.fc2(self.drop(self.act(self.fc1(x)))))
 
 
+class Fp32Sublayer(StrEnum):
+    """
+    Block sublayer that can be computed in fp32 under autocast.
+
+    Attributes:
+      MLP: The feed-forward network, which recovers the accuracy bf16 loses there.
+    """
+
+    MLP = auto()
+
+
 class Block(PointModule):
     """Compose positional encoding, attention, and MLP for one PTv3 block.
 
@@ -827,9 +838,9 @@ class Block(PointModule):
         enable_conv: bool = True,
         enable_attn: bool = True,
         rope_base: float | None = None,
-        sparse_conv_backend: str = "spconv",
+        sparse_conv_backend: SparseConvBackend = SparseConvBackend.SPCONV,
         activation_checkpointing: bool = False,
-        fp32_sublayers: Sequence[str] = (),
+        fp32_sublayers: Sequence[Fp32Sublayer] = (),
     ) -> None:
         """Initialize one PTv3 attention block.
 
@@ -860,38 +871,41 @@ class Block(PointModule):
             rope_base: Frequency base for axis-split 3D rotary embedding, or
                 ``None`` to disable it.
             sparse_conv_backend: Library implementing the positional-encoding
-                convolution, see :func:`autoware_ml.ops.sparse_backend.submanifold_conv3d`.
+                convolution, see :class:`autoware_ml.ops.sparse_conv.backend.SparseConvBackend`.
             activation_checkpointing: Recompute the attention and MLP activations of the
                 block in the backward pass instead of keeping them, trading roughly a third
                 more compute for most of the block's activation memory. Training only.
-            fp32_sublayers: Sublayers computed in fp32 under autocast; ``"mlp"`` runs the
-                feed-forward network in fp32, which recovers the accuracy bf16 loses there.
-                Empty by default.
+            fp32_sublayers: Sublayers computed in fp32 under autocast, see
+                :class:`Fp32Sublayer`. Empty by default.
 
         Raises:
             ValueError: Raised when the block would carry no operation at all.
+            TypeError: Raised when ``sparse_conv_backend`` is not a ``SparseConvBackend`` or an
+                entry of ``fp32_sublayers`` is not a ``Fp32Sublayer``.
         """
         super().__init__()
         if not enable_conv and not enable_attn:
             raise ValueError("A block must enable at least one of convolution or attention.")
+        if not isinstance(sparse_conv_backend, SparseConvBackend):
+            raise TypeError(
+                "sparse_conv_backend must be a SparseConvBackend, "
+                f"got {type(sparse_conv_backend).__name__}."
+            )
+        for sublayer in fp32_sublayers:
+            if not isinstance(sublayer, Fp32Sublayer):
+                raise TypeError(
+                    f"fp32_sublayers entries must be Fp32Sublayer, got {type(sublayer).__name__}."
+                )
         self.pre_norm = pre_norm
         self.activation_checkpointing = bool(activation_checkpointing)
         self.fp32_sublayers = frozenset(fp32_sublayers)
-        unknown = self.fp32_sublayers - {"mlp"}
-        if unknown:
-            raise ValueError(f"fp32_sublayers supports only 'mlp', got {sorted(unknown)}.")
         self.enable_conv = bool(enable_conv)
         self.enable_attn = bool(enable_attn)
 
         if self.enable_conv:
             self.cpe = PointSequential(
-                submanifold_conv3d(
-                    channels,
-                    channels,
-                    3,
-                    bias=True,
-                    indice_key=cpe_indice_key,
-                    backend=sparse_conv_backend,
+                sparse_conv_backend.submanifold_conv3d(
+                    channels, channels, 3, bias=True, indice_key=cpe_indice_key
                 ),
                 nn.Linear(channels, channels),
                 nn.LayerNorm(channels),
@@ -971,6 +985,19 @@ class Block(PointModule):
             Features after both residual sublayers.
         """
         point.feat = feat
+        point = self._attention_sublayer(point)
+        point = self._mlp_sublayer(point)
+        return point.feat
+
+    def _attention_sublayer(self, point: Point) -> Point:
+        """Apply the residual serialized attention sublayer.
+
+        Args:
+            point: Point container carrying the serialization and window metadata.
+
+        Returns:
+            Point container with the attention residual added to its features.
+        """
         shortcut = point.feat
         if self.pre_norm:
             point = self.norm1(point)
@@ -978,12 +1005,22 @@ class Block(PointModule):
         point.feat = shortcut + point.feat
         if not self.pre_norm:
             point = self.norm1(point)
+        return point
 
+    def _mlp_sublayer(self, point: Point) -> Point:
+        """Apply the residual MLP sublayer, in fp32 under CUDA autocast when configured.
+
+        Args:
+            point: Point container processed by the sublayer.
+
+        Returns:
+            Point container with the MLP residual added to its features.
+        """
         shortcut = point.feat
         if self.pre_norm:
             point = self.norm2(point)
         if (
-            "mlp" in self.fp32_sublayers
+            Fp32Sublayer.MLP in self.fp32_sublayers
             and point.feat.is_cuda
             and torch.is_autocast_enabled("cuda")
         ):
@@ -995,7 +1032,7 @@ class Block(PointModule):
         point.feat = shortcut + point.feat
         if not self.pre_norm:
             point = self.norm2(point)
-        return point.feat
+        return point
 
 
 class SerializedPooling(PointModule):
@@ -1178,7 +1215,7 @@ class Embedding(PointModule):
         embed_channels: int,
         kernel_size: int = 0,
         stem_type: str = "linear",
-        sparse_conv_backend: str = "spconv",
+        sparse_conv_backend: SparseConvBackend = SparseConvBackend.SPCONV,
     ) -> None:
         """Initialize the embedding stem.
 
@@ -1191,20 +1228,24 @@ class Embedding(PointModule):
             stem_type: Stem variant. ``"conv"`` (default) uses a submanifold conv;
                 ``"linear"`` uses a Utonia-style (PT-v3m3) per-point ``nn.Linear``.
             sparse_conv_backend: Library implementing the convolutional stem, see
-                :func:`autoware_ml.ops.sparse_backend.submanifold_conv3d`.
+                :class:`autoware_ml.ops.sparse_conv.backend.SparseConvBackend`.
+
+        Raises:
+            TypeError: Raised when ``sparse_conv_backend`` is not a ``SparseConvBackend``.
+            ValueError: Raised for an unknown ``stem_type``.
         """
         super().__init__()
+        if not isinstance(sparse_conv_backend, SparseConvBackend):
+            raise TypeError(
+                "sparse_conv_backend must be a SparseConvBackend, "
+                f"got {type(sparse_conv_backend).__name__}."
+            )
         if stem_type == "linear":
             # Utonia-style stem: drop the submanifold conv for a per-point Linear.
             stem = nn.Linear(in_channels, embed_channels)
         elif stem_type == "conv":
-            stem = submanifold_conv3d(
-                in_channels,
-                embed_channels,
-                kernel_size,
-                bias=False,
-                indice_key="stem",
-                backend=sparse_conv_backend,
+            stem = sparse_conv_backend.submanifold_conv3d(
+                in_channels, embed_channels, kernel_size, bias=False, indice_key="stem"
             )
         else:
             raise ValueError(f"Unknown stem_type: {stem_type!r} (expected 'conv' or 'linear')")
@@ -1321,9 +1362,9 @@ class PointTransformerV3Encoder(PointModule):
         enc_conv: Sequence[bool] | bool = True,
         enc_attn: Sequence[bool] | bool = True,
         enc_rope_base: Sequence[float | None] | float | None = None,
-        sparse_conv_backend: str = "spconv",
+        sparse_conv_backend: SparseConvBackend = SparseConvBackend.SPCONV,
         activation_checkpointing: bool = False,
-        fp32_sublayers: Sequence[str] = (),
+        fp32_sublayers: Sequence[Fp32Sublayer] = (),
     ) -> None:
         """Initialize the PTv3 encoder.
 
@@ -1357,14 +1398,12 @@ class PointTransformerV3Encoder(PointModule):
                 every stage.
             enc_rope_base: Rotary-embedding frequency base, either one value for
                 every stage or one per stage. ``None`` disables RoPE.
-            sparse_conv_backend: Library implementing the submanifold convolutions
-                (``"auto"``, ``"spconv"`` or ``"rulebook"``), see
-                :func:`autoware_ml.ops.sparse_backend.submanifold_conv3d`.
+            sparse_conv_backend: Library implementing the submanifold convolutions, see
+                :class:`autoware_ml.ops.sparse_conv.backend.SparseConvBackend`.
             activation_checkpointing: Recompute the attention and MLP activations of every
                 block in the backward pass, see :class:`Block`.
-            fp32_sublayers: Sublayers computed in fp32 under autocast; ``"mlp"`` runs the
-                feed-forward network in fp32, which recovers the accuracy bf16 loses there.
-                Empty by default.
+            fp32_sublayers: Sublayers computed in fp32 under autocast, see
+                :class:`Fp32Sublayer`. Empty by default.
         """
         super().__init__()
         self.in_channels = in_channels
@@ -1372,12 +1411,6 @@ class PointTransformerV3Encoder(PointModule):
         self.stride = list(stride)
         self.shuffle_orders = shuffle_orders
         self.enc_channels = list(enc_channels)
-        self.sparse_conv_backend = sparse_conv_backend
-        self.activation_checkpointing = bool(activation_checkpointing)
-        self.fp32_sublayers = frozenset(fp32_sublayers)
-        unknown = self.fp32_sublayers - {"mlp"}
-        if unknown:
-            raise ValueError(f"fp32_sublayers supports only 'mlp', got {sorted(unknown)}.")
         stage_count = len(enc_depths)
         self.enc_conv = expand_stage_flags(enc_conv, stage_count, True, "enc_conv")
         self.enc_attn = expand_stage_flags(enc_attn, stage_count, True, "enc_attn")
@@ -1533,9 +1566,9 @@ class LitePTEncoder(PointTransformerV3Encoder):
         enc_conv: Sequence[bool] = (True, True, True, False, False),
         enc_attn: Sequence[bool] = (False, False, False, True, True),
         enc_rope_base: Sequence[float | None] | float | None = 100.0,
-        sparse_conv_backend: str = "spconv",
+        sparse_conv_backend: SparseConvBackend = SparseConvBackend.SPCONV,
         activation_checkpointing: bool = False,
-        fp32_sublayers: Sequence[str] = (),
+        fp32_sublayers: Sequence[Fp32Sublayer] = (),
     ) -> None:
         """Initialize the LitePT encoder.
 
@@ -1571,9 +1604,8 @@ class LitePTEncoder(PointTransformerV3Encoder):
             sparse_conv_backend: Library implementing the submanifold convolutions,
                 see :class:`PointTransformerV3Encoder`.
             activation_checkpointing: See :class:`PointTransformerV3Encoder`.
-            fp32_sublayers: Sublayers computed in fp32 under autocast; ``"mlp"`` runs the
-                feed-forward network in fp32, which recovers the accuracy bf16 loses there.
-                Empty by default.
+            fp32_sublayers: Sublayers computed in fp32 under autocast, see
+                :class:`Fp32Sublayer`. Empty by default.
         """
         super().__init__(
             in_channels=in_channels,

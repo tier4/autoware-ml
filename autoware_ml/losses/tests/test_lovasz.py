@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+import unittest
+
 import torch
 
 from autoware_ml.losses.segmentation3d.lovasz import (
@@ -63,51 +65,57 @@ def _reference_dense_flat(
     return torch.stack(class_losses).mean()
 
 
-def test_point_lovasz_matches_the_reference_loop() -> None:
-    generator = torch.Generator().manual_seed(7)
-    num_classes, ignore_index = 6, -1
-    loss = LovaszLoss(ignore_index=ignore_index, loss_weight=1.0)
-    for _ in range(20):
-        logits = torch.randn(2, num_classes, 300, generator=generator)
-        # Only a subset of the classes is present, and some points are ignored.
-        labels = torch.randint(0, 3, (2, 300), generator=generator)
-        labels[torch.rand(2, 300, generator=generator) < 0.2] = ignore_index
-        # The default loss flattens the whole batch into one class loop.
-        expected = _reference_flat(
-            *_flatten_probabilities(logits.softmax(dim=1), labels, ignore_index)
-        )
-        torch.testing.assert_close(loss(logits, labels), expected)
+class TestLovaszLoss(unittest.TestCase):
+    """The host side class loops reproduce the per class reference loops."""
 
+    def test_point_lovasz_matches_the_reference_loop(self) -> None:
+        """Test that the point loss matches the loop over ``labels.unique()``."""
+        generator = torch.Generator().manual_seed(7)
+        num_classes, ignore_index = 6, -1
+        loss = LovaszLoss(ignore_index=ignore_index, loss_weight=1.0)
+        for trial in range(20):
+            with self.subTest(trial=trial):
+                logits = torch.randn(2, num_classes, 300, generator=generator)
+                # Only a subset of the classes is present, and some points are ignored.
+                labels = torch.randint(0, 3, (2, 300), generator=generator)
+                labels[torch.rand(2, 300, generator=generator) < 0.2] = ignore_index
+                # The default loss flattens the whole batch into one class loop.
+                expected = _reference_flat(
+                    *_flatten_probabilities(logits.softmax(dim=1), labels, ignore_index)
+                )
+                torch.testing.assert_close(loss(logits, labels), expected)
 
-def test_point_lovasz_keeps_the_graph_when_everything_is_ignored() -> None:
-    loss = LovaszLoss(ignore_index=-1, loss_weight=1.0)
-    logits = torch.randn(1, 4, 10, requires_grad=True)
-    labels = torch.full((1, 10), -1)
-    value = loss(logits, labels)
-    value.backward()
-    assert value.item() == 0.0
-    assert logits.grad is not None
+    def test_point_lovasz_keeps_the_graph_when_everything_is_ignored(self) -> None:
+        """Test that a fully ignored batch gives zero loss and still backpropagates."""
+        loss = LovaszLoss(ignore_index=-1, loss_weight=1.0)
+        logits = torch.randn(1, 4, 10, requires_grad=True)
+        labels = torch.full((1, 10), -1)
+        value = loss(logits, labels)
+        value.backward()
+        self.assertEqual(value.item(), 0.0)
+        self.assertIsNotNone(logits.grad)
 
-
-def test_dense_lovasz_matches_the_reference_loop() -> None:
-    generator = torch.Generator().manual_seed(11)
-    num_classes, ignore_index = 5, 255
-    loss = LovaszSoftmaxLoss(ignore_index=ignore_index, loss_weight=2.0)
-    for _ in range(10):
-        logits = torch.randn(2, num_classes, 8, 9, generator=generator)
-        labels = torch.randint(0, 3, (2, 8, 9), generator=generator)
-        labels[torch.rand(2, 8, 9, generator=generator) < 0.3] = ignore_index
-        expected = (
-            torch.stack(
-                [
-                    _reference_dense_flat(
-                        prob.permute(1, 2, 0).reshape(-1, num_classes),
-                        label.reshape(-1),
-                        ignore_index,
-                    )
-                    for prob, label in zip(logits.softmax(dim=1), labels)
-                ]
-            ).mean()
-            * 2.0
-        )
-        torch.testing.assert_close(loss(logits, labels), expected)
+    def test_dense_lovasz_matches_the_reference_loop(self) -> None:
+        """Test that the dense loss matches the ``range(num_classes)`` loop."""
+        generator = torch.Generator().manual_seed(11)
+        num_classes, ignore_index = 5, 255
+        loss = LovaszSoftmaxLoss(ignore_index=ignore_index, loss_weight=2.0)
+        for trial in range(10):
+            with self.subTest(trial=trial):
+                logits = torch.randn(2, num_classes, 8, 9, generator=generator)
+                labels = torch.randint(0, 3, (2, 8, 9), generator=generator)
+                labels[torch.rand(2, 8, 9, generator=generator) < 0.3] = ignore_index
+                expected = (
+                    torch.stack(
+                        [
+                            _reference_dense_flat(
+                                prob.permute(1, 2, 0).reshape(-1, num_classes),
+                                label.reshape(-1),
+                                ignore_index,
+                            )
+                            for prob, label in zip(logits.softmax(dim=1), labels)
+                        ]
+                    ).mean()
+                    * 2.0
+                )
+                torch.testing.assert_close(loss(logits, labels), expected)

@@ -10,7 +10,7 @@
 
 callbacks:
   periodic_checkpoint:
-    _target_: autoware_ml.callbacks.periodic_checkpoint.PeriodicCheckpoint
+    _target_: autoware_ml.resume.periodic_checkpoint.PeriodicCheckpoint
     dirpath: ${hydra:run.dir}/checkpoints
     # Four saves per epoch plus one at the end of the epoch; a preemption costs at
     # most a quarter epoch of work.
@@ -25,7 +25,7 @@ callbacks:
 
 trainer:
   plugins:
-    - _target_: autoware_ml.plugins.atomic_checkpoint_io.AtomicCheckpointIO
+    - _target_: autoware_ml.resume.atomic_checkpoint_io.AtomicCheckpointIO
 
 # The training position is part of the checkpoint, so a relaunch continues the epoch.
 datamodule:

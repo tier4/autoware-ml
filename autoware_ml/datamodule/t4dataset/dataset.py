@@ -467,6 +467,11 @@ class T4Dataset(BaseDataset):
                         dtype=torch.float32,
                     ),
                     source_view=source_view,
+                    t4pack_frame=LidarFrameDataModel.load_t4pack_frame(
+                        lidar_pointcloud_metadata[
+                            LidarFrameDatasetSchema.lidar_pointcloud_t4pack_frame.name
+                        ]
+                    ),
                 )
             )
         return lidar_pointcloud_samples

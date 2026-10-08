@@ -8,7 +8,7 @@ import torch
 from torch.onnx.operators import shape_as_tensor
 
 from autoware_ml.ops.indexing.operators import argsort
-from autoware_ml.ops.sparse_backend import sparse_conv_tensor
+from autoware_ml.ops.sparse_conv.tensor import sparse_conv_tensor
 from autoware_ml.utils.point_cloud.batching import offset_to_batch
 from autoware_ml.utils.point_cloud.serialization.default import encode
 
@@ -103,7 +103,7 @@ class Point(dict[str, torch.Tensor]):
         """Populate the sparse-convolution view of the point container.
 
         The container type follows the installed sparse convolution backends, see
-        :func:`autoware_ml.ops.sparse_backend.sparse_conv_tensor`.
+        :func:`autoware_ml.ops.sparse_conv.tensor.sparse_conv_tensor`.
 
         Args:
             pad: Spatial padding added to the sparse tensor shape.

@@ -19,6 +19,8 @@ position: it runs the remaining number of batches from a fresh iterator, so the
 head of the epoch is seen twice and its tail never. The two classes here close
 that gap.
 
+* :class:`LoaderPosition` is the position of the loader in an epoch, as stored in
+  the checkpoint.
 * :class:`ResumableDistributedSampler` draws the order of an epoch from
   ``(seed, epoch)`` alone, so any process can rebuild it, and can skip the first
   samples of the next iteration.
@@ -27,17 +29,19 @@ that gap.
   that the next ``__iter__`` at the same epoch consumes.
 
 The datamodule stores the loader state in the checkpoint through its own
-``state_dict`` hook, which Lightning restores before any dataloader is built, so
+``state_dict`` hook (:class:`ResumableTrainLoaderMixin`), which Lightning restores before any dataloader is built, so
 the position survives even when the trainer builds the dataloaders early (it does,
 to estimate the number of optimizer steps for the scheduler).
 """
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import math
 import os
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import torch
@@ -48,9 +52,74 @@ from torch.utils.data.distributed import DistributedSampler
 logger = logging.getLogger(__name__)
 
 
-def default_sampler_seed() -> int:
-    """Return the seed Lightning uses for the distributed samplers it injects."""
-    return int(os.environ.get("PL_GLOBAL_SEED", "0"))
+@dataclass(frozen=True)
+class LoaderPosition:
+    """Position of the training dataloader in an epoch.
+
+    Attributes:
+        epoch: Epoch the position belongs to.
+        batches_yielded: Batches handed to the training loop in that epoch.
+        batch_size: Samples per batch of the loader that saved the position.
+        num_replicas: Number of ranks of the run that saved the position.
+    """
+
+    epoch: int
+    batches_yielded: int
+    batch_size: int
+    num_replicas: int
+
+    def to_dict(self) -> dict[str, int]:
+        """Return the position as the plain mapping stored in the checkpoint."""
+        return dataclasses.asdict(self)
+
+    @classmethod
+    def from_dict(cls, state_dict: Mapping[str, Any]) -> LoaderPosition:
+        """Build a position from the mapping stored in the checkpoint.
+
+        Args:
+            state_dict: Mapping produced by :meth:`to_dict`.
+
+        Returns:
+            The position.
+
+        Raises:
+            KeyError: Raised when the mapping misses a field.
+        """
+        names = [field.name for field in dataclasses.fields(cls)]
+        missing = [name for name in names if name not in state_dict]
+        if missing:
+            raise KeyError(f"Resumable dataloader state misses {missing}.")
+        return cls(**{name: int(state_dict[name]) for name in names})
+
+    def has_layout(self, batch_size: int, num_replicas: int) -> bool:
+        """Return whether the position was saved with this batch size and rank count.
+
+        Args:
+            batch_size: Samples per batch of the resuming loader.
+            num_replicas: Number of ranks of the resuming run.
+
+        Returns:
+            ``True`` when both match the saving run.
+        """
+        return self.batch_size == batch_size and self.num_replicas == num_replicas
+
+    def batches_to_skip(self, batch_size: int, num_replicas: int) -> int:
+        """Translate the position into batches of a loader with the given layout.
+
+        A changed batch size or rank count is converted through the number of
+        samples the whole run consumed, rounded down to a full batch.
+
+        Args:
+            batch_size: Samples per batch of the resuming loader.
+            num_replicas: Number of ranks of the resuming run.
+
+        Returns:
+            Number of batches the resuming loader skips.
+        """
+        if self.has_layout(batch_size, num_replicas):
+            return self.batches_yielded
+        consumed = self.batches_yielded * self.batch_size * self.num_replicas
+        return consumed // (batch_size * num_replicas)
 
 
 class ResumableDistributedSampler(DistributedSampler):
@@ -89,14 +158,13 @@ class ResumableDistributedSampler(DistributedSampler):
         Raises:
             ValueError: Raised for weights of the wrong length or with no mass.
         """
-        num_replicas = dist.get_world_size() if dist.is_available() and dist.is_initialized() else 1
-        rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
+        num_replicas, rank = self.distributed_layout()
         super().__init__(
             dataset,
             num_replicas=num_replicas,
             rank=rank,
             shuffle=shuffle,
-            seed=default_sampler_seed() if seed is None else seed,
+            seed=self.default_seed() if seed is None else seed,
             drop_last=drop_last,
         )
         self.weights: torch.Tensor | None = None
@@ -110,6 +178,18 @@ class ResumableDistributedSampler(DistributedSampler):
                 raise ValueError("At least one sampler weight must be positive.")
         self.replacement = replacement
         self._skip_samples = 0
+
+    @staticmethod
+    def default_seed() -> int:
+        """Return the seed Lightning uses for the distributed samplers it injects."""
+        return int(os.environ.get("PL_GLOBAL_SEED", "0"))
+
+    @staticmethod
+    def distributed_layout() -> tuple[int, int]:
+        """Return the number of ranks and this process's rank, ``(1, 0)`` without DDP."""
+        if not (dist.is_available() and dist.is_initialized()):
+            return 1, 0
+        return dist.get_world_size(), dist.get_rank()
 
     def skip_samples(self, count: int) -> None:
         """Skip the first samples of this rank's share on the next iteration only.
@@ -185,7 +265,7 @@ class ResumableDataLoader(DataLoader):
             raise ValueError("Pass shuffle to the sampler, not to the ResumableDataLoader.")
         super().__init__(dataset, batch_size=batch_size, sampler=sampler, **kwargs)
         self._batches_yielded = 0
-        self._resume_state: dict[str, int] | None = None
+        self._resume_position: LoaderPosition | None = None
 
     @property
     def resumable_sampler(self) -> ResumableDistributedSampler:
@@ -197,21 +277,38 @@ class ResumableDataLoader(DataLoader):
         """Return the number of batches handed out so far in the current epoch."""
         return self._batches_yielded
 
-    def state_dict(self) -> dict[str, int]:
-        """Return the position of the loader in the current epoch."""
-        sampler = self.resumable_sampler
-        return {
-            "epoch": int(sampler.epoch),
-            "batches_yielded": int(self._batches_yielded),
-            "batch_size": int(self.batch_size or 1),
-            "num_replicas": int(sampler.num_replicas),
-        }
+    @property
+    def samples_per_batch(self) -> int:
+        """Return the batch size, 1 for a loader without automatic batching."""
+        return int(self.batch_size or 1)
 
-    def load_state_dict(self, state_dict: dict[str, int]) -> None:
+    def position(self) -> LoaderPosition:
+        """Return the position of the loader in the current epoch."""
+        return LoaderPosition(
+            epoch=int(self.resumable_sampler.epoch),
+            batches_yielded=int(self._batches_yielded),
+            batch_size=self.samples_per_batch,
+            num_replicas=int(self.resumable_sampler.num_replicas),
+        )
+
+    def resume_from(self, position: LoaderPosition) -> None:
         """Arm the loader to continue from a saved position.
 
         The sampler is moved to the saved epoch right away, because the trainer
         builds the first iterator before it sets the epoch on the samplers.
+
+        Args:
+            position: Position saved by an earlier run.
+        """
+        self._resume_position = position
+        self.resumable_sampler.set_epoch(position.epoch)
+
+    def state_dict(self) -> dict[str, int]:
+        """Return the position of the loader in the current epoch as a plain mapping."""
+        return self.position().to_dict()
+
+    def load_state_dict(self, state_dict: Mapping[str, Any]) -> None:
+        """Arm the loader to continue from a saved position mapping.
 
         Args:
             state_dict: Mapping produced by :meth:`state_dict`.
@@ -219,54 +316,97 @@ class ResumableDataLoader(DataLoader):
         Raises:
             KeyError: Raised when the state misses a required key.
         """
-        required = ("epoch", "batches_yielded", "batch_size", "num_replicas")
-        missing = [key for key in required if key not in state_dict]
-        if missing:
-            raise KeyError(f"Resumable dataloader state misses {missing}.")
-        self._resume_state = {key: int(state_dict[key]) for key in required}
-        self.resumable_sampler.set_epoch(self._resume_state["epoch"])
+        self.resume_from(LoaderPosition.from_dict(state_dict))
 
-    def _batches_to_skip(self, state: dict[str, int]) -> int:
-        """Translate a saved position into batches of this loader."""
-        batch_size = int(self.batch_size or 1)
+    def _consume_resume_position(self) -> int:
+        """Apply a pending resume position to the sampler, once.
+
+        Returns:
+            Number of batches of the epoch the position already consumed, 0 when no
+            position is pending or it belongs to another epoch.
+        """
+        position, self._resume_position = self._resume_position, None
+        if position is None:
+            return 0
+        epoch = self.resumable_sampler.epoch
+        if position.epoch != epoch:
+            logger.info(
+                "Dropping a dataloader position saved at epoch %d, iterating epoch %d.",
+                position.epoch,
+                epoch,
+            )
+            return 0
+        batch_size = self.samples_per_batch
         num_replicas = self.resumable_sampler.num_replicas
-        if state["batch_size"] == batch_size and state["num_replicas"] == num_replicas:
-            return state["batches_yielded"]
-        consumed = state["batches_yielded"] * state["batch_size"] * state["num_replicas"]
-        skip = consumed // (batch_size * num_replicas)
-        logger.warning(
-            "Resuming a dataloader saved with batch_size=%d on %d ranks into batch_size=%d on "
-            "%d ranks; continuing from batch %d of the epoch instead of %d.",
-            state["batch_size"],
-            state["num_replicas"],
-            batch_size,
-            num_replicas,
-            skip,
-            state["batches_yielded"],
-        )
-        return skip
+        start = position.batches_to_skip(batch_size, num_replicas)
+        if not position.has_layout(batch_size, num_replicas):
+            logger.warning(
+                "Resuming a dataloader saved with batch_size=%d on %d ranks into batch_size=%d "
+                "on %d ranks; continuing from batch %d of the epoch instead of %d.",
+                position.batch_size,
+                position.num_replicas,
+                batch_size,
+                num_replicas,
+                start,
+                position.batches_yielded,
+            )
+        self.resumable_sampler.skip_samples(start * batch_size)
+        logger.info("Resuming the training dataloader at batch %d of epoch %d.", start, epoch)
+        return start
 
     def __iter__(self) -> Iterator[Any]:  # type: ignore[override]
-        """Iterate the epoch, skipping the batches a loaded state already consumed."""
-        start = 0
-        state = self._resume_state
-        if state is not None:
-            if state["epoch"] == self.resumable_sampler.epoch:
-                start = self._batches_to_skip(state)
-                self.resumable_sampler.skip_samples(start * int(self.batch_size or 1))
-                logger.info(
-                    "Resuming the training dataloader at batch %d of epoch %d.",
-                    start,
-                    state["epoch"],
-                )
-            else:
-                logger.info(
-                    "Dropping a dataloader position saved at epoch %d, iterating epoch %d.",
-                    state["epoch"],
-                    self.resumable_sampler.epoch,
-                )
-            self._resume_state = None
-        self._batches_yielded = start
+        """Iterate the epoch, skipping the batches a loaded position already consumed."""
+        self._batches_yielded = self._consume_resume_position()
         for batch in super().__iter__():
             self._batches_yielded += 1
             yield batch
+
+
+class ResumableTrainLoaderMixin:
+    """Datamodule hooks that carry the training loader position through a checkpoint.
+
+    Lightning restores the datamodule state before any dataloader is built, so a
+    loaded position is kept until :meth:`_attach_train_loader` hands it to the
+    training loader. Mix it into a :class:`~lightning.LightningDataModule` before
+    the Lightning base class.
+    """
+
+    _train_loader: ResumableDataLoader | None = None
+    _train_loader_state: LoaderPosition | None = None
+
+    def _attach_train_loader(self, loader: ResumableDataLoader) -> ResumableDataLoader:
+        """Track the training loader and arm it with a loaded position.
+
+        Args:
+            loader: Freshly built training loader.
+
+        Returns:
+            The same loader.
+        """
+        if self._train_loader_state is not None:
+            loader.resume_from(self._train_loader_state)
+        self._train_loader = loader
+        return loader
+
+    def state_dict(self) -> dict[str, Any]:
+        """Return the training loader position for the checkpoint.
+
+        Returns:
+            The loader state, empty when no resumable training loader was built.
+        """
+        if self._train_loader is None:
+            return {}
+        return {"train_dataloader": self._train_loader.state_dict()}
+
+    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
+        """Remember the training loader position of a resumed checkpoint.
+
+        Args:
+            state_dict: Mapping produced by :meth:`state_dict`.
+        """
+        loader_state = state_dict.get("train_dataloader")
+        self._train_loader_state = (
+            None if loader_state is None else LoaderPosition.from_dict(loader_state)
+        )
+        if self._train_loader is not None and self._train_loader_state is not None:
+            self._train_loader.resume_from(self._train_loader_state)

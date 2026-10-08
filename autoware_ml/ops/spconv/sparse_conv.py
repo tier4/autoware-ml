@@ -28,6 +28,7 @@ from spconv.utils import nullcontext
 from torch.nn import functional as F
 
 import autoware_ml.ops.spconv.sparse_functional as Fsp_custom
+from autoware_ml.ops.sparse_conv.backend import SparseConvBackend
 
 _MAX_NUM_VOXELS_DURING_TRAINING = "max_num_voxels_during_training"
 
@@ -761,3 +762,42 @@ class SubMConv3d(SparseConvolution):
             large_kernel_fast_algo=large_kernel_fast_algo,
             name=name,
         )
+
+    @classmethod
+    def from_layer(cls, layer: torch.nn.Module, backend: SparseConvBackend) -> "SubMConv3d":
+        """Build the exportable twin of a training submanifold convolution.
+
+        spconv and rulebook share the KRSC weight layout, so the state dict
+        transfers unchanged. spconv layers also pass on their algorithm settings.
+
+        Args:
+            layer: ``SubMConv3d`` of either training backend.
+            backend: Backend the layer belongs to.
+
+        Returns:
+            The exportable layer, on the device and in the dtype of ``layer``.
+        """
+        spconv_options = (
+            {
+                "algo": layer.algo,
+                "fp32_accum": layer.fp32_accum,
+                "name": getattr(layer, "name", None),
+            }
+            if backend is SparseConvBackend.SPCONV
+            else {}
+        )
+        exportable = cls(
+            layer.in_channels,
+            layer.out_channels,
+            kernel_size=layer.kernel_size,
+            stride=getattr(layer, "stride", 1),
+            padding=getattr(layer, "padding", 0),
+            dilation=getattr(layer, "dilation", 1),
+            groups=getattr(layer, "groups", 1),
+            bias=layer.bias is not None,
+            indice_key=layer.indice_key,
+            **spconv_options,
+        )
+        exportable = exportable.to(device=layer.weight.device, dtype=layer.weight.dtype)
+        exportable.load_state_dict(layer.state_dict())
+        return exportable

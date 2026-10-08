@@ -20,6 +20,8 @@ from autoware_ml.models.detection3d.tests.ptv3_detection_fixtures import (
     build_seg_model,
 )
 from autoware_ml.models.segmentation3d.encoders.ptv3 import (
+    Block,
+    Fp32Sublayer,
     Point,
     PointSequential,
     PointTransformerV3Encoder,
@@ -1017,7 +1019,7 @@ def test_export_attention_is_exact_when_the_count_divides_the_window(num_points:
     assert torch.allclose(run(padded), run(reference), atol=1e-5)
 
 
-def _attention_only_encoder(fp32_sublayers: tuple[str, ...]) -> PointTransformerV3Encoder:
+def _attention_only_encoder(fp32_sublayers: Any) -> PointTransformerV3Encoder:
     torch.manual_seed(0)
     return PointTransformerV3Encoder(
         in_channels=5,
@@ -1044,17 +1046,25 @@ def _attention_only_encoder(fp32_sublayers: tuple[str, ...]) -> PointTransformer
     )
 
 
-def test_fp32_sublayers_rejects_unknown_sublayers() -> None:
-    with pytest.raises(ValueError, match="fp32_sublayers"):
-        _attention_only_encoder(("attn",))
+@pytest.mark.parametrize("fp32_sublayers", [("mlp",), ("attn",), "mlp"])
+def test_fp32_sublayers_rejects_entries_that_are_not_fp32_sublayer(fp32_sublayers: Any) -> None:
+    with pytest.raises(TypeError, match="fp32_sublayers"):
+        _attention_only_encoder(fp32_sublayers)
+
+
+def test_fp32_sublayers_reach_every_block() -> None:
+    encoder = _attention_only_encoder((Fp32Sublayer.MLP,))
+    blocks = [module for module in encoder.modules() if isinstance(module, Block)]
+    assert blocks
+    assert all(block.fp32_sublayers == {Fp32Sublayer.MLP} for block in blocks)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA autocast required")
 def test_fp32_mlp_runs_the_feed_forward_network_in_fp32_under_autocast() -> None:
-    encoder = _attention_only_encoder(("mlp",)).cuda()
+    encoder = _attention_only_encoder((Fp32Sublayer.MLP,)).cuda()
     mlp_dtypes = []
     for module in encoder.modules():
-        if getattr(module, "mlp", None) is not None and hasattr(module, "fp32_sublayers"):
+        if isinstance(module, Block) and module.mlp is not None:
             module.mlp.register_forward_hook(lambda _m, _i, out: mlp_dtypes.append(out.feat.dtype))
     count = 64
     inputs = {

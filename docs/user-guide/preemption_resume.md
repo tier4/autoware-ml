@@ -53,6 +53,12 @@ The `best.ckpt` of the default `model_checkpoint` callback is unchanged; the
 default epoch-end `last.ckpt` writer is disabled because the periodic callback
 owns that file.
 
+The pieces live in the `autoware_ml/resume/` package: `periodic_checkpoint.py`
+(`PeriodicCheckpoint`), `atomic_checkpoint_io.py` (`AtomicCheckpointIO`),
+`data_loader.py` (the resumable sampler and dataloader and the datamodule hooks
+that store their position) and `checkpoint_locator.py` (`CheckpointLocator`
+behind `--resume-latest`, and `RunPointer`).
+
 ## Resuming
 
 ```bash
@@ -92,7 +98,7 @@ A batch-scheduler wrapper (slurm or similar) needs three hooks, all generic:
 The PT-v3m3 model at 6 cm over the 122 m range holds up to about a million voxels per
 frame (three frames: the current one, one past and one future sweep). With the
 hardware-aligned widths, bf16 and activation checkpointing
-(`model.encoder.activation_checkpointing: true`, set by `tasks/foundation/ptv3/common.yaml`) one frame peaks at 13 to 16 GB on a 96 GB GPU, and a stage 2 run on eight H100
+(`model.encoder.activation_checkpointing: true`, set by `tasks/multi/ptv3/foundation_common.yaml`) one frame peaks at 13 to 16 GB on a 96 GB GPU, and a stage 2 run on eight H100
 used about 42 GB per GPU. The foundation stage configs use one frame per GPU with four
 accumulation steps on eight GPUs for a global batch of 32. Checkpointing recomputes the
 attention and MLP of every block in the backward pass, roughly a third more compute per

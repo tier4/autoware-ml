@@ -36,6 +36,8 @@ import lightning as L
 from lightning.pytorch.utilities.exceptions import SIGTERMException
 from lightning.pytorch.utilities.rank_zero import rank_zero_only
 
+from autoware_ml.resume.checkpoint_locator import CheckpointLocator
+
 logger = logging.getLogger(__name__)
 
 
@@ -49,7 +51,7 @@ class PeriodicCheckpoint(L.Callback):
     training epoch, and when the job is asked to stop.
 
     A stop request is a file: the launcher creates the path named by the
-    ``AUTOWARE_ML_STOP_FILE`` environment variable (or ``stop_file``) when the time
+    :attr:`STOP_FILE_ENV` environment variable (or ``stop_file``) when the time
     limit approaches. Every rank checks for it at the end of every batch, the ranks
     agree on the decision through one all-reduce, save a checkpoint together and set
     ``trainer.should_stop``. Signals are not used for this: Lightning's SIGTERM
@@ -58,7 +60,8 @@ class PeriodicCheckpoint(L.Callback):
     for its whole 15 minute grace period and was hard-killed without a requeue).
     """
 
-    LAST_NAME = "last.ckpt"
+    LAST_NAME = CheckpointLocator.LAST_NAME
+    STOP_FILE_ENV = "AUTOWARE_ML_STOP_FILE"
 
     def __init__(
         self,
@@ -79,7 +82,7 @@ class PeriodicCheckpoint(L.Callback):
             save_on_train_epoch_end: Whether to also save at the end of every epoch.
             filename: Format of the periodic files, with ``epoch`` and ``step``.
             stop_file: Path whose existence asks the run to save and stop; defaults to
-                the ``AUTOWARE_ML_STOP_FILE`` environment variable.
+                the :attr:`STOP_FILE_ENV` environment variable.
 
         Raises:
             ValueError: Raised for a non-positive count.
@@ -94,7 +97,7 @@ class PeriodicCheckpoint(L.Callback):
         self.keep_last = int(keep_last)
         self.save_on_train_epoch_end = bool(save_on_train_epoch_end)
         self.filename = filename
-        self.stop_file = stop_file or os.environ.get("AUTOWARE_ML_STOP_FILE") or None
+        self.stop_file = stop_file or os.environ.get(self.STOP_FILE_ENV) or None
         self.stop_requested = False
         self.every_n_steps: int | None = None
         self.saved_paths: list[str] = []
@@ -140,19 +143,65 @@ class PeriodicCheckpoint(L.Callback):
         batch: Any,
         batch_idx: int,
     ) -> None:
-        """Save right after every ``every_n_steps``-th optimizer step."""
+        """Save right after every ``every_n_steps``-th optimizer step, or stop on request.
+
+        Args:
+            trainer: The running trainer.
+            pl_module: The trained module.
+            outputs: Outputs of the training step.
+            batch: The training batch.
+            batch_idx: Index of the batch in the epoch.
+        """
         if self._stop_requested(trainer):
-            if trainer.global_step > 0 and trainer.global_step != self._last_saved_step:
-                self._save(trainer)
-            trainer.should_stop = True
+            self._save_and_stop(trainer)
             return
         step = trainer.global_step
         if step == self._last_seen_step:
             return  # gradient accumulation, no optimizer step happened
         self._last_seen_step = step
-        assert self.every_n_steps is not None
-        if step % self.every_n_steps == 0 and step != self._last_saved_step:
+        if self._is_save_step(step):
             self._save(trainer)
+
+    def _has_unsaved_progress(self, trainer: L.Trainer) -> bool:
+        """Return whether optimizer steps were taken since the last save.
+
+        Args:
+            trainer: The running trainer.
+
+        Returns:
+            ``True`` when the current step is past zero and not saved yet.
+        """
+        return trainer.global_step > 0 and trainer.global_step != self._last_saved_step
+
+    def _is_save_step(self, step: int) -> bool:
+        """Return whether the periodic schedule saves at this optimizer step.
+
+        Args:
+            step: Current global optimizer step.
+
+        Returns:
+            ``True`` on a multiple of the period that was not saved yet.
+
+        Raises:
+            RuntimeError: Raised when the period has not been derived by
+                :meth:`on_train_start`.
+        """
+        if self.every_n_steps is None:
+            raise RuntimeError(
+                "PeriodicCheckpoint has no save period; on_train_start derives it from the "
+                "length of the training epoch before the first batch."
+            )
+        return step % self.every_n_steps == 0 and step != self._last_saved_step
+
+    def _save_and_stop(self, trainer: L.Trainer) -> None:
+        """Save any unsaved progress and ask the trainer to stop.
+
+        Args:
+            trainer: The running trainer.
+        """
+        if self._has_unsaved_progress(trainer):
+            self._save(trainer)
+        trainer.should_stop = True
 
     def _stop_requested(self, trainer: L.Trainer) -> bool:
         """Return whether the launcher asked the job to stop, agreed on by every rank.
@@ -168,13 +217,12 @@ class PeriodicCheckpoint(L.Callback):
         seen = os.path.exists(self.stop_file)
         if trainer.world_size > 1:
             seen = bool(trainer.strategy.reduce_boolean_decision(seen, all=False))
-        if seen:
-            self.stop_requested = True
-            if trainer.is_global_zero:
-                logger.info(
-                    "PeriodicCheckpoint: stop requested through %s, saving and ending the run.",
-                    self.stop_file,
-                )
+        self.stop_requested = seen
+        if seen and trainer.is_global_zero:
+            logger.info(
+                "PeriodicCheckpoint: stop requested through %s, saving and ending the run.",
+                self.stop_file,
+            )
         return seen
 
     def on_train_epoch_end(self, trainer: L.Trainer, pl_module: L.LightningModule) -> None:
@@ -191,23 +239,31 @@ class PeriodicCheckpoint(L.Callback):
         collective save is safe there. An arbitrary exception may have occurred on
         one rank only, where a collective save would deadlock.
         """
-        if (
-            isinstance(exception, (SIGTERMException, KeyboardInterrupt))
-            and trainer.global_step > 0
-            and trainer.global_step != self._last_saved_step
-        ):
+        if isinstance(
+            exception, (SIGTERMException, KeyboardInterrupt)
+        ) and self._has_unsaved_progress(trainer):
             self._save(trainer)
 
     def state_dict(self) -> dict[str, Any]:
-        """Return the rotation bookkeeping."""
+        """Return the rotation bookkeeping.
+
+        The save period is not part of it: :meth:`on_train_start` derives it again
+        from the resumed run's epoch length.
+        """
         return {
             "saved_paths": list(self.saved_paths),
-            "every_n_steps": self.every_n_steps,
             "last_saved_step": self._last_saved_step,
         }
 
     def load_state_dict(self, state_dict: dict[str, Any]) -> None:
-        """Restore the rotation bookkeeping."""
+        """Restore the rotation bookkeeping.
+
+        Keys this version no longer writes (``every_n_steps`` of older checkpoints)
+        are ignored.
+
+        Args:
+            state_dict: Mapping produced by :meth:`state_dict`.
+        """
         self.saved_paths = [path for path in state_dict.get("saved_paths", []) if path]
         self._last_saved_step = int(state_dict.get("last_saved_step", -1))
 
@@ -251,11 +307,20 @@ class PeriodicCheckpoint(L.Callback):
         self.saved_paths = kept
 
     def _link_last(self, target: str) -> None:
-        """Make ``last.ckpt`` a relative symlink to ``target``, copying if links fail."""
+        """Make ``last.ckpt`` a relative symlink to ``target``, copying if links fail.
+
+        The link is created under a temporary name and renamed over ``last.ckpt``, so
+        a kill in between never leaves the directory without ``last.ckpt``.
+
+        Args:
+            target: Newest checkpoint file.
+        """
         last = str(self.last_path)
-        if os.path.lexists(last):
-            os.remove(last)
+        tmp = f"{last}.{os.getpid()}.tmp"
+        if os.path.lexists(tmp):
+            os.remove(tmp)
         try:
-            os.symlink(os.path.relpath(target, os.path.dirname(last)), last)
+            os.symlink(os.path.relpath(target, os.path.dirname(last)), tmp)
         except OSError:
-            shutil.copy(target, last)
+            shutil.copy(target, tmp)
+        os.replace(tmp, last)

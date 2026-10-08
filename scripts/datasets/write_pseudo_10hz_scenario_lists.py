@@ -43,23 +43,187 @@ import argparse
 import csv
 import hashlib
 from collections import defaultdict
+from collections.abc import Sequence
+from dataclasses import dataclass
+from enum import StrEnum, auto
 from pathlib import Path
 
 import yaml
 
 
-def holdout_scenes(directories: list[Path]) -> set[str]:
-    """Scene ids of the val and test splits of every scenario list in the directories."""
-    scenes: set[str] = set()
-    for directory in directories:
-        for path in sorted(directory.glob("*.yaml")):
-            lists = yaml.safe_load(path.read_text()) or {}
-            for split in ("val", "test"):
-                scenes.update(entry.split("/")[0] for entry in lists.get(split) or [])
-    return scenes
+class Split(StrEnum):
+    """Split of a scenario list."""
+
+    TRAIN = auto()
+    VAL = auto()
+    TEST = auto()
+
+
+@dataclass(frozen=True)
+class CorpusEntries:
+    """
+    Scene entries of the corpus, grouped by their source database.
+
+    Attributes:
+      per_database: Source database name to its ``<scene>/<version>`` entries, in corpus order.
+      skipped: Number of scenes left out because their source data is missing.
+    """
+
+    per_database: dict[str, list[str]]
+    skipped: int
+
+
+class PseudoScenarioListWriter:
+    """Writes the per database scenario lists of the 10 Hz pseudo label corpus."""
+
+    def __init__(self, root: Path, val_every: int, holdout_dirs: Sequence[Path]) -> None:
+        """
+        Initialize the writer.
+
+        Args:
+          root: Corpus root holding ``DATASET_SCENES.csv``.
+          val_every: Hold out about one scene in this many for validation, and as many for test.
+          holdout_dirs: Scenario list directories whose val and test scenes must not be trained
+            on.
+        """
+
+        self._root = root
+        self._val_every = val_every
+        self._holdout_dirs = list(holdout_dirs)
+        self._held_out = self.read_holdout_scenes(self._holdout_dirs)
+
+    @property
+    def out_dir(self) -> Path:
+        """Directory the scenario lists are written to."""
+        return self._root / "scenario_lists"
+
+    @staticmethod
+    def read_holdout_scenes(directories: Sequence[Path]) -> set[str]:
+        """
+        Scene ids of the val and test splits of every scenario list in the directories.
+
+        Args:
+          directories: Scenario list directories.
+
+        Returns:
+          set[str]: Scene ids that must not be trained on.
+        """
+
+        scenes: set[str] = set()
+        for directory in directories:
+            for path in sorted(directory.glob("*.yaml")):
+                lists = yaml.safe_load(path.read_text()) or {}
+                for split in (Split.VAL, Split.TEST):
+                    scenes.update(entry.split("/")[0] for entry in lists.get(split) or [])
+        return scenes
+
+    def read_entries(self) -> CorpusEntries:
+        """
+        Read the scene entries of the corpus, leaving out the scenes without source data.
+
+        Returns:
+          CorpusEntries: Entries of every source database and the number of skipped scenes.
+        """
+
+        per_database: dict[str, list[str]] = defaultdict(list)
+        skipped = 0
+        with (self._root / "DATASET_SCENES.csv").open(newline="") as csv_file:
+            for row in csv.DictReader(csv_file):
+                if not (self._root / row["key"] / "data").exists():
+                    skipped += 1
+                    continue
+                per_database[row["db"]].append(f"{row['scene']}/{row['version']}")
+        return CorpusEntries(per_database=dict(per_database), skipped=skipped)
+
+    def split_of(self, entry: str) -> Split:
+        """
+        Split of one scene entry.
+
+        Hash bucket 0 is validation and bucket 1 test; a scene of another bucket is a test
+        scene when another benchmark holds it out, a training scene otherwise.
+
+        Args:
+          entry: Scene entry, ``<scene>/<version>``.
+
+        Returns:
+          Split: Split the entry belongs to.
+        """
+
+        scene = entry.split("/")[0]
+        bucket = int(hashlib.sha1(scene.encode()).hexdigest(), 16) % self._val_every
+        if bucket == 0:
+            return Split.VAL
+        if bucket == 1 or scene in self._held_out:
+            return Split.TEST
+        return Split.TRAIN
+
+    def split(self, entries: Sequence[str]) -> dict[Split, list[str]]:
+        """
+        Split the entries of one database, keeping their order within every split.
+
+        Args:
+          entries: Scene entries of the database.
+
+        Returns:
+          dict[Split, list[str]]: Entries of every split, train, val and test in this order.
+        """
+
+        splits: dict[Split, list[str]] = {split: [] for split in Split}
+        for entry in entries:
+            splits[self.split_of(entry)].append(entry)
+        return splits
+
+    def write(self, database: str, splits: dict[Split, list[str]]) -> None:
+        """
+        Write the scenario list of one database.
+
+        Args:
+          database: Source database name, the stem of the written file.
+          splits: Entries of every split.
+        """
+
+        holdout_dirs = [str(path) for path in self._holdout_dirs]
+        lines = [
+            f"# Scenario list of {database} in the pseudo_10hz corpus: "
+            "<scenario_id>/<version> per split.",
+            "# Point layout ['x', 'y', 'z', 'intensity', 'ring'], "
+            "semantic masks: True (pseudo labels).",
+            "# Written by scripts/datasets/write_pseudo_10hz_scenario_lists.py; val and test are "
+            f"two disjoint 1-in-{self._val_every} hash buckets of the scene id,",
+            f"# test also holds the val/test scenes of {holdout_dirs}.",
+        ]
+        for split, split_entries in splits.items():
+            lines.append(f"{split}:" + (" []" if not split_entries else ""))
+            lines.extend(f"- {entry}" for entry in split_entries)
+        with (self.out_dir / f"{database}.yaml").open("w") as list_file:
+            list_file.write("\n".join(lines) + "\n")
+
+    def run(self) -> None:
+        """Write the scenario list of every database of the corpus and print a summary."""
+        corpus = self.read_entries()
+        self.out_dir.mkdir(exist_ok=True)
+        totals = {split: 0 for split in Split}
+        for database, entries in sorted(corpus.per_database.items()):
+            splits = self.split(entries)
+            for split, split_entries in splits.items():
+                totals[split] += len(split_entries)
+            self.write(database, splits)
+        print(
+            f"{len(self._held_out)} held-out benchmark scenes; "
+            f"{len(corpus.per_database)} databases, {totals[Split.TRAIN]} train, "
+            f"{totals[Split.VAL]} val and {totals[Split.TEST]} test scenes written "
+            f"to {self.out_dir}; {corpus.skipped} scenes without source data skipped."
+        )
 
 
 def main() -> int:
+    """
+    Parse the command line and write the scenario lists.
+
+    Returns:
+      int: Exit code.
+    """
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path, help="corpus root holding DATASET_SCENES.csv")
     parser.add_argument("--val-every", type=int, default=40, help="hold out about one scene in n")
@@ -71,54 +235,7 @@ def main() -> int:
         help="scenario list directories whose val and test scenes must not be trained on",
     )
     args = parser.parse_args()
-    held_out = holdout_scenes(args.holdout)
-
-    rows = list(csv.DictReader((args.root / "DATASET_SCENES.csv").open()))
-    per_db: dict[str, list[str]] = defaultdict(list)
-    skipped = 0
-    for row in rows:
-        entry = f"{row['scene']}/{row['version']}"
-        if not (args.root / row["key"] / "data").exists():
-            skipped += 1
-            continue
-        per_db[row["db"]].append(entry)
-
-    out_dir = args.root / "scenario_lists"
-    out_dir.mkdir(exist_ok=True)
-    total = {"train": 0, "val": 0, "test": 0}
-
-    def bucket(entry: str) -> int:
-        scene = entry.split("/")[0]
-        return int(hashlib.sha1(scene.encode()).hexdigest(), 16) % args.val_every
-
-    for db, entries in sorted(per_db.items()):
-        val = [entry for entry in entries if bucket(entry) == 0]
-        test = [
-            entry
-            for entry in entries
-            if bucket(entry) == 1 or (bucket(entry) > 1 and entry.split("/")[0] in held_out)
-        ]
-        train = [
-            entry for entry in entries if bucket(entry) > 1 and entry.split("/")[0] not in held_out
-        ]
-        total["train"] += len(train)
-        total["val"] += len(val)
-        total["test"] += len(test)
-        lines = [
-            f"# Scenario list of {db} in the pseudo_10hz corpus: <scenario_id>/<version> per split.",
-            "# Point layout ['x', 'y', 'z', 'intensity', 'ring'], semantic masks: True (pseudo labels).",
-            f"# Written by scripts/datasets/write_pseudo_10hz_scenario_lists.py; val and test are two disjoint 1-in-{args.val_every} hash buckets of the scene id,",
-            f"# test also holds the val/test scenes of {[str(path) for path in args.holdout]}.",
-        ]
-        for split, split_entries in (("train", train), ("val", val), ("test", test)):
-            lines.append(f"{split}:" + (" []" if not split_entries else ""))
-            lines.extend(f"- {entry}" for entry in split_entries)
-        (out_dir / f"{db}.yaml").write_text("\n".join(lines) + "\n")
-    print(
-        f"{len(held_out)} held-out benchmark scenes; "
-        f"{len(per_db)} databases, {total['train']} train, {total['val']} val and {total['test']} test scenes written "
-        f"to {out_dir}; {skipped} scenes without source data skipped."
-    )
+    PseudoScenarioListWriter(args.root, args.val_every, args.holdout).run()
     return 0
 
 

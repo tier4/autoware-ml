@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import logging
+import os
 
 from pathlib import Path
 from typing import Mapping, Sequence, Tuple
@@ -51,7 +52,9 @@ from autoware_ml.databases.schemas.box3d_schemas import (
     Box3DDataModel,
     Box3DDatasetSchema,
 )
+from autoware_ml.databases.t4pack.t4pack_frame import T4PackFrame
 from autoware_ml.databases.scenarios import ScenarioData
+from autoware_ml.databases.t4pack.t4pack import T4Pack
 from autoware_ml.databases.t4dataset.t4sample_records import (
     T4SampleRecord,
 )
@@ -61,7 +64,6 @@ from autoware_ml.types.geometry import Box3DCenterCoordinateType
 from autoware_ml.types.sensor import LidarChannel, Modality
 from autoware_ml.types.spatial import CoordinateSystem
 from autoware_ml.utils.dataset import convert_quaternion_to_matrix
-from autoware_ml.utils.point_cloud.t4pack import load_point_cloud_file
 
 
 logger = logging.getLogger(__name__)
@@ -119,6 +121,8 @@ class T4RecordsGenerator:
         self.taxonomy = taxonomy
         self.box3d_pipelines = box3d_pipelines
         self.recompute_boxes3d_lidar_points_num = recompute_boxes3d_lidar_points_num
+        # Frame index of every t4pack file of the scene, read once
+        self._t4pack_indices: dict[str, Mapping[str, T4PackFrame]] = {}
 
     def _scene_root_path(self) -> Path:
         """
@@ -204,14 +208,11 @@ class T4RecordsGenerator:
             f"future sweeps: {self.scenario_data.dataset_params.max_future_sweeps}"
         )
 
+        # A corpus labelled at a lower rate than it was recorded keeps its labelled samples only
+        masked_samples_only = self.scenario_data.dataset_params.semantic_masks
         for sample_index in range(0, len(self.t4_devkit_dataset.sample), self.sample_steps):
             sample = self.t4_devkit_dataset.sample[sample_index]
-            # A corpus labelled at a lower rate than it was recorded keeps its labelled
-            # samples only, looked up like the mask path of the record
-            if (
-                self.scenario_data.dataset_params.semantic_masks
-                and sample.data.get(self.lidar_channel) not in self.lidarseg_by_sample_data
-            ):
+            if masked_samples_only and not self._has_semantic_mask(sample):
                 continue
             t4_sample_record = self.extract_t4_sample_record(sample, sample_index)
             records.append(t4_sample_record.to_dataset_record())
@@ -235,6 +236,21 @@ class T4RecordsGenerator:
                 )
             records[record.sample_data_token] = record
         return records
+
+    def _has_semantic_mask(self, sample: Sample) -> bool:
+        """
+        Whether the lidar frame of a sample has a semantic mask.
+
+        The frame is looked up like the mask path of the record, by its sample data token.
+
+        Args:
+          sample: Sample to check.
+
+        Returns:
+          bool: True when the lidar frame of the sample has a semantic mask.
+        """
+
+        return sample.data.get(self.lidar_channel) in self.lidarseg_by_sample_data
 
     def _extract_sample_basic_metadata(
         self, sample: Sample, sample_index: int
@@ -372,6 +388,32 @@ class T4RecordsGenerator:
         # as the pointcloud path does.
         return str(self.scene_root_path / lidarseg_record.filename)
 
+    def _find_t4pack_frame(self, lidar_pointcloud_path: str) -> T4PackFrame | None:
+        """
+        Look a lidar frame up in the t4pack file of its channel.
+
+        Args:
+          lidar_pointcloud_path: Path of the frame's ``.pcd.bin`` file, which need not exist.
+
+        Returns:
+          T4PackFrame | None: Location of the frame in the pack, None when the scene has
+            no pack for the channel.
+
+        Raises:
+          ValueError: Raised when the pack exists but does not hold the frame.
+        """
+
+        pack = T4Pack.from_point_cloud_path(lidar_pointcloud_path)
+        if pack.pack_path not in self._t4pack_indices and not os.path.isfile(pack.pack_path):
+            return None
+        if pack.pack_path not in self._t4pack_indices:
+            self._t4pack_indices[pack.pack_path] = pack.read_index()
+        frame_name = os.path.basename(lidar_pointcloud_path)
+        t4pack_frame = self._t4pack_indices[pack.pack_path].get(frame_name)
+        if t4pack_frame is None:
+            raise ValueError(f"{pack.pack_path} has no frame {frame_name}.")
+        return t4pack_frame
+
     def _extract_lidar_frame(self, sample: Sample) -> Tuple[LidarFrameDataModel, Sequence[Box3D]]:
         """
         Extract lidar frame records from a T4 sample.
@@ -441,6 +483,7 @@ class T4RecordsGenerator:
                 4
             ),  # Always the identity matrix for the main lidar sensor
             lidar_pointcloud_semantic_mask_path=lidar_pointcloud_semantic_mask_path,
+            lidar_pointcloud_t4pack_frame=self._find_t4pack_frame(lidar_path),
         )
         return lidar_frame_data_model, box3d
 
@@ -580,6 +623,9 @@ class T4RecordsGenerator:
                     lidar_frame_ego_pose_to_global_matrix=lidar_sweep_frame_ego_pose_to_global_matrix,
                     lidar_sensor_to_lidar_sweep_matrix=lidar_sensor_to_lidar_sweep_matrix,
                     lidar_pointcloud_semantic_mask_path=None,  # Always None for lidar sweeps
+                    lidar_pointcloud_t4pack_frame=self._find_t4pack_frame(
+                        lidar_sweep_pointcloud_path
+                    ),
                 )
             )
         return lidar_frame_data_models
@@ -945,9 +991,17 @@ class T4RecordsGenerator:
             bbox_center_coordinate_type=Box3DCenterCoordinateType.GRAVITY_CENTER,
         )
 
-        # Load pointclouds
+        # Load pointclouds, from the pack when the scene keeps only the pack
         lidar_pointcloud_path = lidar_frame_data_model.lidar_pointcloud_path
-        points = load_point_cloud_file(lidar_pointcloud_path, self.lidar_pointcloud_num_features)
+        t4pack_frame = lidar_frame_data_model.lidar_pointcloud_t4pack_frame
+        if t4pack_frame is not None and not os.path.isfile(lidar_pointcloud_path):
+            points = T4Pack.from_point_cloud_path(lidar_pointcloud_path).read_frame(
+                t4pack_frame, self.lidar_pointcloud_num_features
+            )
+        else:
+            points = np.fromfile(lidar_pointcloud_path, dtype=np.float32).reshape(
+                -1, self.lidar_pointcloud_num_features
+            )
         lidar_points = torch.tensor(points[:, :3], dtype=torch.float32)  # Only take the x, y, z
         # (num_of_bboxes, point_mask)
         points_in_bboxes = lidar_bboxes_3d.compute_points_in_bboxes(points=lidar_points)

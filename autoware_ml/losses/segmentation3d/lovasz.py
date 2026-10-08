@@ -205,10 +205,14 @@ class LovaszSoftmaxLoss(nn.Module):
 
         class_losses = []
         num_classes = probabilities.shape[1]
-        present = torch.bincount(labels[labels >= 0], minlength=num_classes)[:num_classes] > 0
-        for class_index, is_present in enumerate(present.tolist()):
-            if not is_present:
-                continue
+        # One host copy of the present classes; iterating the CUDA tensor itself
+        # would synchronise the device at every class.
+        present_classes = [
+            class_index
+            for class_index in labels.unique().tolist()
+            if 0 <= class_index < num_classes
+        ]
+        for class_index in present_classes:
             foreground = (labels == class_index).float()
             class_errors = (foreground - probabilities[:, class_index]).abs()
             class_errors, permutation = torch.sort(class_errors, descending=True)

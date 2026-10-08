@@ -29,7 +29,6 @@ from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.databases.taxonomy import DatabaseTaxonomy, DetectionTaxonomy
 from autoware_ml.datamodule.base import DataLoaderConfig
 from autoware_ml.datamodule.data_module import DataModule
-from autoware_ml.datamodule.resumable import ResumableDistributedSampler
 from autoware_ml.datamodule.samplers import (
     DistributedWeightedRandomSampler,
     FrameSamplingConfig,
@@ -44,6 +43,7 @@ from autoware_ml.datamodule.tests.corpus import (
     build_transforms,
     write_corpus,
 )
+from autoware_ml.resume.data_loader import ResumableDistributedSampler
 from autoware_ml.types.dataset import SplitType
 
 

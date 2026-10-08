@@ -16,22 +16,18 @@
 
 from __future__ import annotations
 
-import pytest
+import unittest
+
 import torch
 from torch import nn
 
-from autoware_ml.models.segmentation3d.encoders.ptv3 import (
-    SerializedAttention,
-    serialized_window_padding,
-)
+from autoware_ml.models.segmentation3d.encoders.ptv3 import SerializedAttention, WindowPadding
 from autoware_ml.utils.point_cloud.batching import offset_to_bincount
 from autoware_ml.utils.point_cloud.structures import Point
 
 
-def _reference_padding(
-    offset: torch.Tensor, patch_size: int, enable_flash: bool
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
-    """The per sample loop the batched implementation replaced, kept verbatim."""
+def _reference_padding(offset: torch.Tensor, patch_size: int) -> WindowPadding:
+    """The per sample loop the batched implementation replaced, with flash enabled."""
     bincount = offset_to_bincount(offset)
     padded_bincount = (
         torch.maximum(
@@ -47,7 +43,7 @@ def _reference_padding(
     padded_offset = nn.functional.pad(torch.cumsum(padded_bincount, dim=0), (1, 0))
     pad = torch.arange(padded_offset[-1], device=offset.device)
     unpad = torch.arange(offset[-1], device=offset.device)
-    cu_seqlens = [] if enable_flash else None
+    cu_seqlens = []
     for batch_index in range(offset.numel() - 1):
         unpad[offset[batch_index] : offset[batch_index + 1]] += (
             padded_offset[batch_index] - offset[batch_index]
@@ -65,80 +61,27 @@ def _reference_padding(
         pad[padded_offset[batch_index] : padded_offset[batch_index + 1]] -= (
             padded_offset[batch_index] - offset[batch_index]
         )
-        if cu_seqlens is not None:
-            cu_seqlens.append(
-                torch.arange(
-                    padded_offset[batch_index],
-                    padded_offset[batch_index + 1],
-                    step=patch_size,
-                    dtype=torch.int32,
-                    device=offset.device,
-                )
+        cu_seqlens.append(
+            torch.arange(
+                padded_offset[batch_index],
+                padded_offset[batch_index + 1],
+                step=patch_size,
+                dtype=torch.int32,
+                device=offset.device,
             )
-    if cu_seqlens is None:
-        return pad, unpad, None
-    return pad, unpad, nn.functional.pad(torch.cat(cu_seqlens), (0, 1), value=padded_offset[-1])
+        )
+    return WindowPadding(
+        pad, unpad, nn.functional.pad(torch.cat(cu_seqlens), (0, 1), value=padded_offset[-1])
+    )
 
 
 def _offsets(counts: list[int]) -> torch.Tensor:
+    """Cumulative offsets of per sample point counts."""
     return torch.cumsum(torch.tensor(counts, dtype=torch.long), dim=0)
 
 
-_CASES = [
-    pytest.param([5], 8, id="single_sample_below_window"),
-    pytest.param([8], 8, id="single_sample_exact_window"),
-    pytest.param([9], 8, id="single_sample_one_over"),
-    pytest.param([17, 3, 16, 0, 25], 8, id="mixed_including_empty"),
-    pytest.param([0, 0], 8, id="all_empty"),
-    pytest.param([32, 64, 96], 32, id="exact_multiples"),
-    pytest.param([33, 1, 31, 65], 32, id="remainders"),
-    pytest.param([1000, 1024, 1025, 7], 1024, id="training_window"),
-]
-
-
-@pytest.mark.parametrize(("counts", "patch_size"), _CASES)
-@pytest.mark.parametrize("enable_flash", [True, False], ids=["flash", "dense"])
-def test_batched_padding_matches_the_reference_loop(
-    counts: list[int], patch_size: int, enable_flash: bool
-) -> None:
-    offset = _offsets(counts)
-    pad, unpad, cu_seqlens = serialized_window_padding(offset, patch_size, enable_flash)
-    ref_pad, ref_unpad, ref_cu_seqlens = _reference_padding(offset, patch_size, enable_flash)
-    assert torch.equal(pad, ref_pad)
-    assert torch.equal(unpad, ref_unpad)
-    if enable_flash:
-        assert ref_cu_seqlens is not None and cu_seqlens is not None
-        assert cu_seqlens.dtype == ref_cu_seqlens.dtype == torch.int32
-        assert torch.equal(cu_seqlens, ref_cu_seqlens)
-    else:
-        assert cu_seqlens is None and ref_cu_seqlens is None
-
-
-def test_batched_padding_matches_the_reference_loop_on_random_batches() -> None:
-    generator = torch.Generator().manual_seed(1234)
-    for _ in range(200):
-        patch_size = int(torch.randint(1, 12, (1,), generator=generator))
-        num_samples = int(torch.randint(1, 6, (1,), generator=generator))
-        counts = torch.randint(0, 4 * patch_size + 1, (num_samples,), generator=generator)
-        offset = torch.cumsum(counts, dim=0)
-        for enable_flash in (True, False):
-            pad, unpad, cu_seqlens = serialized_window_padding(offset, patch_size, enable_flash)
-            ref = _reference_padding(offset, patch_size, enable_flash)
-            assert torch.equal(pad, ref[0]), (counts.tolist(), patch_size)
-            assert torch.equal(unpad, ref[1]), (counts.tolist(), patch_size)
-            if enable_flash:
-                assert torch.equal(cu_seqlens, ref[2]), (counts.tolist(), patch_size)
-
-
-def test_padding_round_trips_every_real_token() -> None:
-    offset = _offsets([17, 3, 25])
-    pad, unpad, _ = serialized_window_padding(offset, 8, True)
-    # Every token lands in its own slot, and every slot holds a real token.
-    assert torch.equal(pad[unpad], torch.arange(int(offset[-1])))
-    assert pad.min() >= 0 and pad.max() < int(offset[-1])
-
-
-def test_attention_caches_the_padding_on_the_point() -> None:
+def _attention(enable_flash: bool) -> SerializedAttention:
+    """Serialized attention with a window of 8 tokens."""
     attention = SerializedAttention(
         channels=8,
         num_heads=2,
@@ -149,15 +92,68 @@ def test_attention_caches_the_padding_on_the_point() -> None:
         proj_drop=0.0,
         order_index=0,
         enable_rpe=False,
-        enable_flash=False,
+        enable_flash=enable_flash,
         upcast_attention=False,
         upcast_softmax=False,
     )
     # Without flash attention the forward pass sizes the window per batch; set it here.
     attention.patch_size = 8
-    point = Point(offset=_offsets([17, 3]))
-    pad, unpad, cu_seqlens = attention._get_padding_and_inverse(point)
-    assert cu_seqlens is None
-    assert "pad_8" in point and "unpad_8" in point and "cu_seqlens_8" not in point
-    again = attention._get_padding_and_inverse(point)
-    assert again[0] is pad and again[1] is unpad
+    return attention
+
+
+class TestWindowPadding(unittest.TestCase):
+    """The batched window padding reproduces the per sample loop it replaced."""
+
+    _CASES = (
+        ("single_sample_below_window", [5], 8),
+        ("single_sample_exact_window", [8], 8),
+        ("single_sample_one_over", [9], 8),
+        ("mixed_including_empty", [17, 3, 16, 0, 25], 8),
+        ("all_empty", [0, 0], 8),
+        ("exact_multiples", [32, 64, 96], 32),
+        ("remainders", [33, 1, 31, 65], 32),
+        ("training_window", [1000, 1024, 1025, 7], 1024),
+    )
+
+    def _assert_matches_reference(self, offset: torch.Tensor, patch_size: int) -> None:
+        """Assert that the batched padding equals the reference loop."""
+        padding = SerializedAttention._batched_window_padding(offset, patch_size)
+        reference = _reference_padding(offset, patch_size)
+        self.assertTrue(torch.equal(padding.pad, reference.pad))
+        self.assertTrue(torch.equal(padding.unpad, reference.unpad))
+        self.assertEqual(padding.cu_seqlens.dtype, torch.int32)
+        self.assertTrue(torch.equal(padding.cu_seqlens, reference.cu_seqlens))
+
+    def test_batched_padding_matches_the_reference_loop(self) -> None:
+        """Test the batched padding against the reference loop on hand-picked batches."""
+        for name, counts, patch_size in self._CASES:
+            with self.subTest(name):
+                self._assert_matches_reference(_offsets(counts), patch_size)
+
+    def test_batched_padding_matches_the_reference_loop_on_random_batches(self) -> None:
+        """Test the batched padding against the reference loop on random batches."""
+        generator = torch.Generator().manual_seed(1234)
+        for _ in range(200):
+            patch_size = int(torch.randint(1, 12, (1,), generator=generator))
+            num_samples = int(torch.randint(1, 6, (1,), generator=generator))
+            counts = torch.randint(0, 4 * patch_size + 1, (num_samples,), generator=generator)
+            with self.subTest(counts=counts.tolist(), patch_size=patch_size):
+                self._assert_matches_reference(torch.cumsum(counts, dim=0), patch_size)
+
+    def test_padding_round_trips_every_real_token(self) -> None:
+        """Test that every token lands in its own slot and every slot holds a real token."""
+        offset = _offsets([17, 3, 25])
+        padding = SerializedAttention._batched_window_padding(offset, 8)
+        self.assertTrue(torch.equal(padding.pad[padding.unpad], torch.arange(int(offset[-1]))))
+        self.assertGreaterEqual(int(padding.pad.min()), 0)
+        self.assertLess(int(padding.pad.max()), int(offset[-1]))
+
+    def test_attention_caches_one_padding_per_window_size(self) -> None:
+        """Test that one cached entry serves attention with and without flash."""
+        point = Point(offset=_offsets([17, 3]))
+        padding = _attention(enable_flash=False)._get_padding_and_inverse(point)
+        self.assertIsInstance(padding, WindowPadding)
+        self.assertIs(point["window_padding_8"], padding)
+        self.assertIsNotNone(padding.cu_seqlens)
+        self.assertIs(_attention(enable_flash=False)._get_padding_and_inverse(point), padding)
+        self.assertIs(_attention(enable_flash=True)._get_padding_and_inverse(point), padding)

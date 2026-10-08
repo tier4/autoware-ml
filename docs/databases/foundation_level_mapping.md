@@ -30,7 +30,7 @@ The tables are generated from the category tables of the corpora and the configu
 ## Label sets
 
 | set | member classes |
-|---|---|
+| --- | --- |
 | `thin_or_sign` | `vertical_thin`, `traffic_sign`, `traffic_light` |
 | `manmade_or_thin` | `manmade.building`, `manmade.solid_stuff`, `manmade.special`, `vertical_thin`, `traffic_sign`, `traffic_light`, `barrier.movable`, `barrier.construction_sign` |
 | `sidewalk_or_curb` | `non_driveable_flat.sidewalk`, `curb.low_curb`, `curb.high_curb` |
@@ -40,7 +40,7 @@ The tables are generated from the category tables of the corpora and the configu
 ## J6 gen2 semantic segmentation v1
 
 | raw category | foundation target |
-|---|---|
+| --- | --- |
 | `animal` | `animal` |
 | `bicycle` | `bicycle` |
 | `bus` | `bus` |
@@ -74,7 +74,7 @@ The tables are generated from the category tables of the corpora and the configu
 ## 10 Hz pseudo labels
 
 | raw category | foundation target |
-|---|---|
+| --- | --- |
 | `animal` | `animal` |
 | `barrier.construction_sign` | `barrier.construction_sign` |
 | `barrier.movable` | `barrier.movable` |
@@ -113,7 +113,7 @@ The tables are generated from the category tables of the corpora and the configu
 ## Kognic (new specification)
 
 | raw category | foundation target |
-|---|---|
+| --- | --- |
 | `ambulance` | `car.emergency` |
 | `animal` | `animal` |
 | `background` | ignored |
