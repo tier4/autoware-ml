@@ -996,7 +996,11 @@ class SerializedPooling(PointModule):
             serialized_inverse=pooled_inverse,
             serialized_depth=point.serialized_depth - pooling_depth,
             batch=point.batch[head_indices],
-            sparse_shape=point.sparse_shape >> pooling_depth,
+            # ceil(shape / stride): coordinate 66 pools to 33, so an odd extent of 67 needs
+            # 34 slices. A floored shape leaves the top slice outside the declared grid and
+            # its voxels alias (x, y + 1, 0) in the spconv hash table, which makes the
+            # sub-manifold neighbour table run-dependent.
+            sparse_shape=(point.sparse_shape + (1 << pooling_depth) - 1) >> pooling_depth,
             pooling_inverse=cluster,
             pooling_parent=point,
             offset=(
