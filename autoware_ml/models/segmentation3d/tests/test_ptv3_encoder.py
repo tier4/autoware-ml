@@ -907,6 +907,35 @@ def test_serialized_pooling_export_mode_uses_precomputed_metadata(monkeypatch) -
     not IS_SPCONV_AVAILABLE or not torch.cuda.is_available(),
     reason="PTv3 sparse-convolution tests require CUDA spconv",
 )
+def test_serialized_pooling_rounds_the_sparse_shape_up() -> None:
+    """Pooling keeps ceil(shape / stride) slices so the coarsest occupied slice stays inside.
+
+    Coordinate 66 pools to 33, so a stage-0 extent of 67 must become 34, not 33. With the
+    floored value the top slice lies outside the declared grid, its voxels share a spconv
+    hash key with ``(x, y + 1, 0)`` and the sub-manifold neighbour table becomes run-dependent.
+    """
+    grid_coord = torch.tensor([[0, 0, 0], [66, 66, 66], [65, 64, 66], [1, 66, 0]], dtype=torch.int32)
+    point = Point(
+        {
+            "coord": grid_coord.to(torch.float32),
+            "grid_coord": grid_coord,
+            "feat": torch.randn(grid_coord.shape[0], 6),
+            "batch": torch.zeros(grid_coord.shape[0], dtype=torch.long),
+            "offset": torch.tensor([grid_coord.shape[0]], dtype=torch.long),
+            "sparse_shape": torch.tensor([67, 67, 67], dtype=torch.long),
+        }
+    )
+    point.serialization(("z",), shuffle_orders=False, depth=torch.tensor(7))
+    module = SerializedPooling(6, 8, stride=2, shuffle_orders=False)
+    module.norm = nn.Identity()
+    module.act = nn.Identity()
+
+    pooled = module(point)
+
+    assert torch.equal(pooled.sparse_shape, torch.tensor([34, 34, 34], dtype=torch.long))
+    assert bool((pooled.grid_coord.max(dim=0).values + 1 <= pooled.sparse_shape).all())
+
+
 def test_ptv3_frozen_encoder_supports_decoder_block_backward() -> None:
     """Stage-4 regression: a frozen (eval) encoder caches spconv indice pairs
     without backward metadata; decoder blocks must not reuse them by key or
