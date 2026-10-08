@@ -55,11 +55,14 @@ class TestPointCloudGTBatchFields(PointCloudGTBatchTestCase):
     def test_field_order(self) -> None:
         """
         Input: the class itself.
-        Expected: the tuple exposes ``points``, ``batch_indices`` then ``batch_size``, since
-        downstream code unpacks the batch positionally.
+        Expected: the tuple exposes ``points``, ``batch_indices``, ``batch_size`` then
+        ``timestamp_difference_dim``, since downstream code unpacks the batch positionally.
         Check: compare ``_fields`` against the expected names.
         """
-        self.assertEqual(PointCloudGTBatch._fields, ("points", "batch_indices", "batch_size"))
+        self.assertEqual(
+            PointCloudGTBatch._fields,
+            ("points", "batch_indices", "batch_size", "timestamp_difference_dim"),
+        )
 
     def test_is_immutable(self) -> None:
         """
@@ -171,6 +174,18 @@ class TestPointCloudGTBatchCollate(PointCloudGTBatchTestCase):
         self.assertEqual(batch.batch_indices.tolist(), [0, 0])
         self.assertEqual(batch.batch_size, 2)
 
+    def test_rejects_samples_with_the_time_lag_in_different_columns(self) -> None:
+        """
+        Input: one sample carrying a timestamp difference column and one carrying none.
+        Expected: the batch has no single column to report.
+        Check: collation raises a ValueError.
+        """
+        with_time_lag = self.make_points(2, fill=1.0)
+        with_time_lag.add_timestamp_difference(0.0)
+
+        with self.assertRaises(ValueError):
+            self.collate([with_time_lag, self.make_points(2, fill=2.0)])
+
 
 class TestPointCloudGTBatchToDevice(PointCloudGTBatchTestCase):
     """PointCloudGTBatch.to_device."""
@@ -219,6 +234,8 @@ class LiDARPointCloudSampleTestCase(unittest.TestCase):
         self.sample = LiDARPointCloudSample(
             point_cloud_path="/data/lidar/000001.pcd.bin",
             timestamp=1700000000.5,
+            num_features=5,
+            intensity_scale=255.0,
             sensor_to_ego_pose_matrix=torch.eye(4, dtype=torch.float32),
             lidar_to_ego_pose_to_global_matrix=torch.eye(4, dtype=torch.float32) * 2.0,
             lidar_sensor_to_lidar_sweep_matrix=torch.eye(4, dtype=torch.float32) * 3.0,
@@ -231,7 +248,7 @@ class TestLiDARPointCloudSample(LiDARPointCloudSampleTestCase):
     def test_field_order(self) -> None:
         """
         Input: the class itself.
-        Expected: the tuple exposes its five fields in the documented order, matching the
+        Expected: the tuple exposes its nine fields in the documented order, matching the
         dataset record layout.
         Check: compare ``_fields`` against the expected names.
         """
@@ -240,9 +257,13 @@ class TestLiDARPointCloudSample(LiDARPointCloudSampleTestCase):
             (
                 "point_cloud_path",
                 "timestamp",
+                "num_features",
+                "intensity_scale",
                 "sensor_to_ego_pose_matrix",
                 "lidar_to_ego_pose_to_global_matrix",
                 "lidar_sensor_to_lidar_sweep_matrix",
+                "t4pack_frame",
+                "source_view",
             ),
         )
 

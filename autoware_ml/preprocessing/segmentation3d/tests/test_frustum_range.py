@@ -16,21 +16,30 @@
 
 import torch
 
+from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTBatch
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.models.tests.batch_inputs_fixtures import (
+    build_batch_inputs,
+    build_point_cloud_batch,
+)
 from autoware_ml.preprocessing.segmentation3d.frustum_range import FrustumRangePreprocessor
 
 
 def _make_batch(
     sample_points: list[torch.Tensor],
     sample_labels: list[torch.Tensor] | None = None,
-) -> dict[str, torch.Tensor]:
-    """Build a concatenated batch from per-sample tensors."""
-    points = torch.cat(sample_points, dim=0)
-    lengths = torch.tensor([p.shape[0] for p in sample_points], dtype=torch.long)
-    offset = torch.cumsum(lengths, dim=0)
-    batch: dict[str, torch.Tensor] = {"points": points, "offset": offset}
-    if sample_labels is not None:
-        batch["pts_semantic_mask"] = torch.cat(sample_labels, dim=0)
-    return batch
+) -> ModelBatchInputs:
+    """Build model inputs from per-sample tensors."""
+    point_cloud = build_point_cloud_batch(sample_points)
+    segmentation = (
+        Segmentation3DGTBatch(
+            gt_semantic_masks=torch.cat(sample_labels, dim=0),
+            batch_indices=point_cloud.batch_indices,
+        )
+        if sample_labels is not None
+        else None
+    )
+    return build_batch_inputs(point_cloud=point_cloud, segmentation=segmentation)
 
 
 class TestFrustumRangePreprocessor:
@@ -60,20 +69,19 @@ class TestFrustumRangePreprocessor:
             sample_labels=[torch.tensor([3, 3, 1], dtype=torch.long)],
         )
 
-        outputs = preprocessor(batch_inputs, is_training=False)
+        outputs = preprocessor(batch_inputs, is_training=False).range_view_data
+        assert outputs is not None
 
-        assert outputs["points"].shape == (3, 4)
-        assert outputs["coors"].shape == (3, 3)
-        assert outputs["voxel_coors"].shape == (2, 3)
-        assert outputs["inverse_map"].shape == (3,)
-        assert torch.equal(outputs["pts_semantic_mask"], torch.tensor([3, 3, 1]))
-        assert outputs["semantic_seg"].shape == (1, 2, 4)
-        assert outputs["semantic_seg"][0, 1, 2].item() == 3
-        assert outputs["semantic_seg"][0, 1, 1].item() == 1
-        assert outputs["semantic_seg"][0, 0, 0].item() == 255
+        assert outputs.coors.shape == (3, 3)
+        assert outputs.voxel_coors.shape == (2, 3)
+        assert outputs.inverse_map.shape == (3,)
+        assert outputs.semantic_labels.shape == (1, 2, 4)
+        assert outputs.semantic_labels[0, 1, 2].item() == 3
+        assert outputs.semantic_labels[0, 1, 1].item() == 1
+        assert outputs.semantic_labels[0, 0, 0].item() == 255
 
     def test_forward_handles_batch_of_two_samples(self) -> None:
-        """Multi-sample batches should produce concatenated point arrays and stacked seg maps."""
+        """Multi-sample batches should produce per-sample coordinates and stacked seg maps."""
         preprocessor = FrustumRangePreprocessor(
             height=2,
             width=4,
@@ -92,15 +100,14 @@ class TestFrustumRangePreprocessor:
             ],
         )
 
-        outputs = preprocessor(batch_inputs, is_training=False)
+        outputs = preprocessor(batch_inputs, is_training=False).range_view_data
+        assert outputs is not None
 
-        assert outputs["points"].shape == (3, 4)
-        assert outputs["pts_semantic_mask"].shape == (3,)
-        assert outputs["semantic_seg"].shape == (2, 2, 4)
-        assert outputs["sample_count"] == 2
+        assert outputs.coors[:, 0].tolist() == [0, 0, 1]
+        assert outputs.semantic_labels.shape == (2, 2, 4)
 
     def test_forward_predict_mode_produces_no_label_keys(self) -> None:
-        """When pts_semantic_mask is absent, semantic_seg should not appear in output."""
+        """When the labels are absent, no semantic target image is built."""
         preprocessor = FrustumRangePreprocessor(
             height=2,
             width=4,
@@ -113,12 +120,11 @@ class TestFrustumRangePreprocessor:
             sample_points=[torch.tensor([[1.0, 0.0, 0.0, 0.1]], dtype=torch.float32)]
         )
 
-        outputs = preprocessor(batch_inputs, is_training=False)
+        outputs = preprocessor(batch_inputs, is_training=False).range_view_data
+        assert outputs is not None
 
-        assert "pts_semantic_mask" not in outputs
-        assert "semantic_seg" not in outputs
-        assert "points" in outputs
-        assert "voxel_coors" in outputs
+        assert outputs.semantic_labels is None
+        assert outputs.voxel_coors.shape == (1, 3)
 
     def test_forward_masks_negative_ignore_labels_before_majority_vote(self) -> None:
         """Ignore labels should be excluded before one-hot voting."""
@@ -137,11 +143,12 @@ class TestFrustumRangePreprocessor:
             sample_labels=[torch.tensor([-1, 2], dtype=torch.long)],
         )
 
-        outputs = preprocessor(batch_inputs, is_training=False)
+        outputs = preprocessor(batch_inputs, is_training=False).range_view_data
+        assert outputs is not None
 
-        assert outputs["semantic_seg"].shape == (1, 2, 4)
-        assert (outputs["semantic_seg"] == 2).any()
-        assert (outputs["semantic_seg"] == -1).any()
+        assert outputs.semantic_labels.shape == (1, 2, 4)
+        assert (outputs.semantic_labels == 2).any()
+        assert (outputs.semantic_labels == -1).any()
 
     def test_forward_keeps_ignore_only_cells_at_ignore_index(self) -> None:
         """Cells containing only ignored labels should remain ignored."""
@@ -163,7 +170,8 @@ class TestFrustumRangePreprocessor:
             sample_labels=[torch.tensor([255, 255, 1], dtype=torch.long)],
         )
 
-        outputs = preprocessor(batch_inputs, is_training=False)
+        outputs = preprocessor(batch_inputs, is_training=False).range_view_data
+        assert outputs is not None
 
-        assert outputs["semantic_seg"][0, 1, 2].item() == 255
-        assert outputs["semantic_seg"][0, 1, 1].item() == 1
+        assert outputs.semantic_labels[0, 1, 2].item() == 255
+        assert outputs.semantic_labels[0, 1, 1].item() == 1

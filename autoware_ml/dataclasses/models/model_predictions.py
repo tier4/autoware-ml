@@ -2,59 +2,34 @@
 Modules to save decoded predictions from multi-task models.
 """
 
+from __future__ import annotations
+
 from typing import Sequence
 
-from jaxtyping import Float32, Int64
 from pydantic import BaseModel, ConfigDict
-import torch
 
+from autoware_ml.dataclasses.models.calibration_status.predictions import (
+    CalibrationStatusPredictions,
+)
 from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
+from autoware_ml.dataclasses.models.segmentation3d.predictions import Segmentation3DPredictions
 
 
 class ModelPredictions(BaseModel):
     """
     Dataclass to save decoded predictions from multi-task models.
 
+    A model fills the predictions of the tasks it predicts and leaves the others unset.
+
     Attributes:
       detection3d_predictions: Decoded predictions from a 3D detection task.
+      segmentation3d_predictions: Decoded predictions from a 3D segmentation task.
+      calibration_status_predictions: Decoded predictions from a calibration status task.
     """
 
     model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
 
     # Decoded predictions across samples.
-    detection3d_predictions: Sequence[Detection3DSamplePredictions] | None
-
-    # TODO(Kok Seang): Add predictions for other tasks in the future.
-
-    def to_list(
-        self,
-    ) -> list[
-        dict[
-            str,
-            Float32[torch.Tensor, "num_boxes num_bbox_params"]
-            | Float32[torch.Tensor, " num_boxes"]
-            | Int64[torch.Tensor, " num_boxes"],
-        ]
-    ]:
-        """
-        Convert the ModelPredictions to a list of dictionaries.
-        Note that this method is primarily for compatibility with the existing detection metric,
-        which expects a list of dictionaries.
-        Returns:
-            A list of dictionaries representing the predictions for each sample.
-        """
-        predictions_list = []
-        if self.detection3d_predictions is None:
-            raise ValueError(
-                "ModelPredictions must contain detection3d_predictions for multi_task_eval_output."
-            )
-
-        for detection_pred in self.detection3d_predictions:
-            predictions_list.append(
-                {
-                    "bboxes_3d": detection_pred.bboxes_3d,
-                    "scores_3d": detection_pred.scores_3d,
-                    "labels_3d": detection_pred.labels_3d,
-                }
-            )
-        return predictions_list
+    detection3d_predictions: Sequence[Detection3DSamplePredictions] | None = None
+    segmentation3d_predictions: Segmentation3DPredictions | None = None
+    calibration_status_predictions: CalibrationStatusPredictions | None = None

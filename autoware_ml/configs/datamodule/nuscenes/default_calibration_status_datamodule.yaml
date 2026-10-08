@@ -1,0 +1,4 @@
+defaults:
+  - default_datamodule@_here_
+  - nuscenes/datasets@train_dataset: default_calibration_status_train_dataset
+  - nuscenes/datasets@test_dataset: default_calibration_status_test_dataset

@@ -106,7 +106,7 @@ All concrete databases are accessed through this protocol, ensuring downstream c
 
 ### BaseDatabase
 
-`BaseDatabase` provides the shared implementation of `DatabaseInterface`. It handles initialization from version and paths, caching directory creation, Polars schema retrieval, resolving the main scenario group, and deduplicating scenario data across groups:
+`BaseDatabase` provides the shared implementation of `DatabaseInterface`. It handles initialization from version and paths, caching directory creation, Polars schema retrieval, and deduplicating scenario data across groups:
 
 ```python
 class BaseDatabase:
@@ -117,14 +117,17 @@ class BaseDatabase:
         cache_path: str,
         cache_file_prefix_name: str,
         num_workers: int,
+        taxonomy: DatabaseTaxonomy,
+        box3d_pipelines: Sequence[Box3DPipeline],
+        lidar_intensity_scale: float,
+        lidar_pointcloud_num_features: int,
     ) -> None:
         ...
 
     def get_polars_schema(self) -> pl.Schema: ...
-    def get_main_database_scenario_data(self) -> Scenarios: ...
-    def get_unique_scenario_data(self) -> Mapping[str, ScenarioData]: ...
+    def get_unique_scenario_data(self) -> MappingProxyType[str, ScenarioData]: ...
     def process_scenario_records(self) -> None:
-        raise NotImplementedError("Subclasses must implement process_scenario_records!")
+        raise NotImplementedError("Subclasses must implement process_scenario_records method!")
 ```
 
 To add a new dataset family, subclass `BaseDatabase` and implement `process_scenario_records()`. See [T4Dataset](t4dataset.md) for a concrete example.
@@ -136,24 +139,24 @@ The `scenarios` module models scenario metadata as immutable Pydantic objects. `
 ```python
 class DatasetParams(BaseModel):
     dataset_name: str
-    max_sweeps: int
+    max_past_sweeps: int
+    max_future_sweeps: int
     sample_steps: int
 
 class ScenarioData(BaseModel):
+    dataset_params: DatasetParams
     scenario_id: str
     scenario_version: str
     vehicle_type: str | None = None
     location: str | None = None
-    ...
 
 class Scenarios(BaseModel):
-    version: str
     scenario_root_path: Path
     dataset_params: Sequence[DatasetParams]
     scenario_data: Mapping[SplitType, Sequence[ScenarioData]] | None = None
 
     @model_validator(mode="after")
-    def build_scenarios(self) -> None:
+    def build_scenarios(self) -> Scenarios:
         raise NotImplementedError("Subclasses must implement build_scenarios!")
 ```
 

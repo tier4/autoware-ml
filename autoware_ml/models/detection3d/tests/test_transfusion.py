@@ -20,6 +20,7 @@ from autoware_ml.models.detection3d.heads.transfusion import (
     TransFusionHead,
 )
 from autoware_ml.models.detection3d.necks.second_fpn import SECONDFPN
+from autoware_ml.models.detection3d.tests.head_output_fixtures import build_transfusion_outputs
 from autoware_ml.models.detection3d.task_modules.assigners import AssignResult, HungarianAssigner3D
 from autoware_ml.models.detection3d.task_modules.bbox_coders import TransFusionBBoxCoder
 from autoware_ml.models.detection3d.task_modules.match_costs import (
@@ -28,6 +29,7 @@ from autoware_ml.models.detection3d.task_modules.match_costs import (
     IoU3DCost,
 )
 from autoware_ml.models.detection3d.transfusion import TransFusionDetectionModel
+from autoware_ml.models.tests.batch_inputs_fixtures import build_batch_inputs, voxels_data_from_zyx
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
 from autoware_ml.ops.spconv.sparse_conv import SubMConv3d as ExportableSubMConv3d
 from autoware_ml.utils.onnx_precision import validate_module_onnx_precision
@@ -201,13 +203,12 @@ def _export_attention(
 def test_transfusion_forward_returns_query_predictions() -> None:
     model = _build_model().cuda()
 
-    outputs = model(**_build_voxel_inputs(torch.device("cuda")))
+    outputs = model(**_build_voxel_inputs(torch.device("cuda"))).detection3d().transfusion_head()
 
-    assert "dense_heatmap" in outputs
-    assert "query_heatmap_score" in outputs
-    assert "query_labels" in outputs
-    assert outputs["heatmap"].shape[-1] == 8
-    assert outputs["center"].shape[-1] == 8
+    assert outputs.dense_heatmap.ndim == 4
+    assert outputs.query_labels.shape[-1] == 8
+    assert outputs.separate_head_outputs.heatmap.shape[-1] == 8
+    assert outputs.separate_head_outputs.center.shape[-1] == 8
 
 
 @pytest.mark.skipif(
@@ -217,7 +218,9 @@ def test_transfusion_forward_returns_query_predictions() -> None:
 def test_transfusion_build_export_spec_uses_deployment_io_contract() -> None:
     model = _build_model().cuda().eval()
 
-    spec = model.build_export_spec(_build_voxel_inputs(torch.device("cuda")))
+    spec = model.build_export_spec(
+        build_batch_inputs(voxels=voxels_data_from_zyx(**_build_voxel_inputs(torch.device("cuda"))))
+    )
     with torch.no_grad():
         cls_score0, bbox_pred0, dir_cls_pred0 = spec.module(*spec.args)
 
@@ -232,7 +235,9 @@ def test_transfusion_build_export_spec_uses_deployment_io_contract() -> None:
 def test_transfusion_build_export_spec_prepares_modules_without_mutating_model() -> None:
     model = _build_model().eval()
 
-    spec = model.build_export_spec(_build_voxel_inputs(torch.device("cpu")))
+    spec = model.build_export_spec(
+        build_batch_inputs(voxels=voxels_data_from_zyx(**_build_voxel_inputs(torch.device("cpu"))))
+    )
 
     assert isinstance(model.bbox_head.decoder[0].self_attn, torch.nn.MultiheadAttention)
     assert isinstance(spec.module.bbox_head.decoder[0].self_attn, ExportableMultiheadAttention)
@@ -314,7 +319,7 @@ def test_transfusion_default_export_keeps_explicit_attention(tmp_path: Path) -> 
 
 def test_transfusion_predict_reweights_scores_by_query_labels() -> None:
     head = _build_head()
-    outputs = {
+    tensors = {
         "heatmap": torch.tensor([[[0.0, 9.0], [9.0, 0.0]]], dtype=torch.float32),
         "query_heatmap_score": torch.ones((1, 2, 2), dtype=torch.float32),
         "query_labels": torch.tensor([[0, 1]], dtype=torch.long),
@@ -325,14 +330,42 @@ def test_transfusion_predict_reweights_scores_by_query_labels() -> None:
         "vel": torch.zeros((1, 2, 2), dtype=torch.float32),
     }
 
-    predictions = head.predict(outputs)
+    predictions = head.predict(build_transfusion_outputs(tensors))
 
-    assert predictions[0]["labels_3d"].tolist() == [0, 1]
+    assert predictions[0].labels_3d.tolist() == [0, 1]
+
+
+def test_transfusion_predict_decodes_half_precision_outputs_in_float32() -> None:
+    head = _build_head()
+    tensors = {
+        "heatmap": torch.tensor([[[0.0, 9.0], [9.0, 0.0]]], dtype=torch.float32),
+        "query_heatmap_score": torch.ones((1, 2, 2), dtype=torch.float32),
+        "query_labels": torch.tensor([[0, 1]], dtype=torch.long),
+        "center": torch.tensor([[[1.0, 2.0], [1.0, 2.0]]], dtype=torch.float32),
+        "height": torch.zeros((1, 1, 2), dtype=torch.float32),
+        "dim": torch.zeros((1, 3, 2), dtype=torch.float32),
+        "rot": torch.tensor([[[0.0, 0.0], [1.0, 1.0]]], dtype=torch.float32),
+        "vel": torch.zeros((1, 2, 2), dtype=torch.float32),
+    }
+
+    predictions = head.predict(
+        build_transfusion_outputs(
+            {
+                name: value.half() if value.is_floating_point() else value
+                for name, value in tensors.items()
+            }
+        )
+    )
+    reference = head.predict(build_transfusion_outputs(tensors))
+
+    assert predictions[0].bboxes_3d.dtype == torch.float32
+    assert predictions[0].scores_3d.dtype == torch.float32
+    assert torch.allclose(predictions[0].bboxes_3d, reference[0].bboxes_3d, atol=1e-2)
 
 
 def test_transfusion_predict_skips_circle_nms_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     head = _build_head()
-    outputs = {
+    tensors = {
         "heatmap": torch.tensor([[[8.0, 8.0], [0.0, 0.0]]], dtype=torch.float32),
         "query_heatmap_score": torch.ones((1, 2, 2), dtype=torch.float32),
         "query_labels": torch.tensor([[0, 0]], dtype=torch.long),
@@ -350,16 +383,16 @@ def test_transfusion_predict_skips_circle_nms_by_default(monkeypatch: pytest.Mon
         "autoware_ml.models.detection3d.heads.transfusion.circle_nms", fail_circle_nms
     )
 
-    predictions = head.predict(outputs)
+    predictions = head.predict(build_transfusion_outputs(tensors))
 
-    assert predictions[0]["scores_3d"].shape[0] == 2
+    assert predictions[0].scores_3d.shape[0] == 2
 
 
 def test_transfusion_predict_applies_circle_nms_when_requested(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     head = _build_head(nms_type="circle")
-    outputs = {
+    tensors = {
         "heatmap": torch.tensor([[[8.0, 8.0], [0.0, 0.0]]], dtype=torch.float32),
         "query_heatmap_score": torch.ones((1, 2, 2), dtype=torch.float32),
         "query_labels": torch.tensor([[0, 0]], dtype=torch.long),
@@ -378,9 +411,9 @@ def test_transfusion_predict_applies_circle_nms_when_requested(
         "autoware_ml.models.detection3d.heads.transfusion.circle_nms", fake_circle_nms
     )
 
-    predictions = head.predict(outputs)
+    predictions = head.predict(build_transfusion_outputs(tensors))
 
-    assert predictions[0]["scores_3d"].shape[0] == 1
+    assert predictions[0].scores_3d.shape[0] == 1
 
 
 def test_transfusion_targets_use_raw_logits_for_assignment() -> None:
@@ -398,7 +431,7 @@ def test_transfusion_targets_use_raw_logits_for_assignment() -> None:
             )
 
     head = _build_head(assigner=RecordingAssigner())
-    outputs = {
+    tensors = {
         "heatmap": torch.tensor([[[0.2, -1.1], [1.3, -0.7]]], dtype=torch.float32),
         "dense_heatmap": torch.zeros((1, 2, 4, 4), dtype=torch.float32),
         "center": torch.zeros((1, 2, 2), dtype=torch.float32),
@@ -410,18 +443,18 @@ def test_transfusion_targets_use_raw_logits_for_assignment() -> None:
     gt_boxes = [torch.tensor([[1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0]], dtype=torch.float32)]
     gt_labels = [torch.tensor([0], dtype=torch.long)]
 
-    head.get_targets(gt_boxes, gt_labels, outputs)
+    head.get_targets(gt_boxes, gt_labels, build_transfusion_outputs(tensors))
 
     assert captured_cls_pred
-    assert torch.allclose(captured_cls_pred[0], outputs["heatmap"][0])
+    assert torch.allclose(captured_cls_pred[0], tensors["heatmap"][0])
 
 
 def test_transfusion_heatmap_loss_receives_raw_logits() -> None:
     captured_prediction: list[torch.Tensor] = []
 
     class RecordingHeatmapLoss(torch.nn.Module):
-        def forward(self, prediction, target):
-            del target
+        def forward(self, prediction, target, weights):
+            del target, weights
             captured_prediction.append(prediction.detach().clone())
             return prediction.new_tensor(0.0)
 
@@ -437,7 +470,7 @@ def test_transfusion_heatmap_loss_receives_raw_logits() -> None:
 
     head = _build_head(assigner=RecordingAssigner())
     head.loss_heatmap = RecordingHeatmapLoss()
-    outputs = {
+    tensors = {
         "heatmap": torch.zeros((1, 2, 2), dtype=torch.float32),
         "dense_heatmap": torch.full((1, 2, 4, 4), -2.19, dtype=torch.float32),
         "center": torch.zeros((1, 2, 2), dtype=torch.float32),
@@ -449,10 +482,10 @@ def test_transfusion_heatmap_loss_receives_raw_logits() -> None:
     gt_boxes = [torch.tensor([[1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0]], dtype=torch.float32)]
     gt_labels = [torch.tensor([0], dtype=torch.long)]
 
-    head.loss(outputs, gt_boxes, gt_labels)
+    head.loss(build_transfusion_outputs(tensors), gt_boxes, gt_labels)
 
     assert captured_prediction
-    assert torch.allclose(captured_prediction[0], outputs["dense_heatmap"])
+    assert torch.allclose(captured_prediction[0], tensors["dense_heatmap"])
 
 
 def test_transfusion_bbox_loss_normalizes_by_positive_count() -> None:
@@ -467,7 +500,7 @@ def test_transfusion_bbox_loss_normalizes_by_positive_count() -> None:
             )
 
     head = _build_head(assigner=OnePositiveAssigner())
-    outputs = {
+    tensors = {
         "heatmap": torch.zeros((1, 2, 2), dtype=torch.float32),
         "dense_heatmap": torch.zeros((1, 2, 4, 4), dtype=torch.float32),
         "center": torch.zeros((1, 2, 2), dtype=torch.float32),
@@ -479,7 +512,7 @@ def test_transfusion_bbox_loss_normalizes_by_positive_count() -> None:
     gt_boxes = [torch.tensor([[1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0]], dtype=torch.float32)]
     gt_labels = [torch.tensor([0], dtype=torch.long)]
 
-    losses = head.loss(outputs, gt_boxes, gt_labels)
+    losses = head.loss(build_transfusion_outputs(tensors), gt_boxes, gt_labels)
 
     encoded_target = head.bbox_coder.encode(gt_boxes[0])[0]
     expected = (
@@ -545,7 +578,7 @@ def test_transfusion_nms_groups_cap_zero_radius_groups_by_score() -> None:
             {"class_ids": [1], "nms_radius": 0.0},
         ],
     )
-    outputs = {
+    tensors = {
         "heatmap": torch.tensor([[[8.0, 2.0], [0.0, 0.0]]], dtype=torch.float32),
         "query_heatmap_score": torch.ones((1, 2, 2), dtype=torch.float32),
         "query_labels": torch.tensor([[0, 0]], dtype=torch.long),
@@ -556,13 +589,11 @@ def test_transfusion_nms_groups_cap_zero_radius_groups_by_score() -> None:
         "vel": torch.zeros((1, 2, 2), dtype=torch.float32),
     }
 
-    predictions = head.predict(outputs)
+    predictions = head.predict(build_transfusion_outputs(tensors))
 
     # Both queries are class 0; the group cap keeps only the highest score.
-    assert predictions[0]["scores_3d"].shape[0] == 1
-    assert torch.isclose(
-        predictions[0]["scores_3d"][0], torch.sigmoid(torch.tensor(8.0)), atol=1e-4
-    )
+    assert predictions[0].scores_3d.shape[0] == 1
+    assert torch.isclose(predictions[0].scores_3d[0], torch.sigmoid(torch.tensor(8.0)), atol=1e-4)
 
 
 def test_transfusion_coder_supports_per_class_score_thresholds() -> None:

@@ -63,7 +63,8 @@ __global__ void bev_pool_kernel(
     return;
   }
 
-  const int interval_start = interval_starts[interval_idx];
+  // Point and grid offsets exceed the int range for large batches, so they are 64-bit.
+  const int64_t interval_start = interval_starts[interval_idx];
   const int interval_length = interval_lengths[interval_idx];
 
   const int * cur_geom_feats = geom_feats + interval_start * kGeomFeatureDim;
@@ -76,12 +77,12 @@ __global__ void bev_pool_kernel(
   const int b_idx = cur_geom_feats[3];
 
   float * cur_out =
-    out + b_idx * d * h * w * c + d_idx * h * w * c + h_idx * w * c + w_idx * c + channel_idx;
+    out + (((static_cast<int64_t>(b_idx) * d + d_idx) * h + h_idx) * w + w_idx) * c + channel_idx;
 
   // Sum features from all points in this interval
   float sum = 0.0f;
   for (int i = 0; i < interval_length; ++i) {
-    sum += cur_x[i * c];
+    sum += cur_x[static_cast<int64_t>(i) * c];
   }
   *cur_out = sum;
 }
@@ -119,7 +120,8 @@ __global__ void bev_pool_grad_kernel(
     return;
   }
 
-  const int interval_start = interval_starts[interval_idx];
+  // Point and grid offsets exceed the int range for large batches, so they are 64-bit.
+  const int64_t interval_start = interval_starts[interval_idx];
   const int interval_length = interval_lengths[interval_idx];
 
   const int * cur_geom_feats = geom_feats + interval_start * kGeomFeatureDim;
@@ -132,12 +134,13 @@ __global__ void bev_pool_grad_kernel(
   const int b_idx = cur_geom_feats[3];
 
   const float * cur_out_grad =
-    out_grad + b_idx * d * h * w * c + d_idx * h * w * c + h_idx * w * c + w_idx * c + channel_idx;
+    out_grad + (((static_cast<int64_t>(b_idx) * d + d_idx) * h + h_idx) * w + w_idx) * c +
+    channel_idx;
 
   // Broadcast gradient to all points in the interval
   const float grad_value = *cur_out_grad;
   for (int i = 0; i < interval_length; ++i) {
-    cur_x_grad[i * c] = grad_value;
+    cur_x_grad[static_cast<int64_t>(i) * c] = grad_value;
   }
 }
 

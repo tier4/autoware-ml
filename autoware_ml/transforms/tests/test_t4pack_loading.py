@@ -24,13 +24,12 @@ import torch
 from autoware_ml.databases.t4pack.t4pack_frame import T4PackFrame
 from autoware_ml.databases.t4pack.t4pack import T4Pack
 from autoware_ml.databases.t4pack.tests.t4pack_fixtures import random_lidar_frame, write_test_pack
-from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import (
-    LiDARPointCloudSample,
-    MultiTaskGTSample,
-)
-from autoware_ml.transforms.multi_task.point_cloud.loading import (
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
+from autoware_ml.dataclasses.geometry.point_clouds import LiDARPointCloudSample
+from autoware_ml.transforms.point_cloud.loading import (
     LoadMultiSweepPointsFromFile,
     LoadPointsFromFile,
+    SweepWindow,
 )
 from autoware_ml.types.dataset import PCDFileFormat
 
@@ -42,6 +41,8 @@ def _record(path: Path, i: int, t4pack_frame: T4PackFrame | None) -> LiDARPointC
     return LiDARPointCloudSample(
         point_cloud_path=str(path),
         timestamp=10.0 - 0.1 * i,
+        num_features=5,
+        intensity_scale=1.0,
         sensor_to_ego_pose_matrix=torch.eye(4),
         lidar_to_ego_pose_to_global_matrix=torch.eye(4),
         lidar_sensor_to_lidar_sweep_matrix=torch.eye(4),
@@ -53,16 +54,22 @@ def _load(
     records: list[LiDARPointCloudSample], pcd_file_format: PCDFileFormat, sweeps_num: int = 0
 ) -> torch.Tensor:
     """Load the current frame, and its sweeps when ``sweeps_num`` is set."""
-    sample = MultiTaskGTSample(
+    sample = ModelGTSample(
         lidar_point_cloud_samples=records,
+        image_samples=None,
         point_cloud_data=None,
+        camera_image_data=None,
         detection3d_gt_bboxes_3d=None,
         segmentation3d_gt_sample=None,
     )
-    sample = LoadPointsFromFile(bev_remove_radius=1.0, pcd_file_format=pcd_file_format)(sample)
+    sample = LoadPointsFromFile(
+        use_dim=[0, 1, 2, 3], bev_remove_radius=1.0, pcd_file_format=pcd_file_format
+    )(sample)
     if sweeps_num:
         sample = LoadMultiSweepPointsFromFile(
-            sweeps_num=sweeps_num, test_mode=True, pcd_file_format=pcd_file_format
+            past=SweepWindow(num=sweeps_num, time_lag_range=(0.05, 0.25), selection="nearest"),
+            use_dim=[0, 1, 2, 3],
+            pcd_file_format=pcd_file_format,
         )(sample)
     return sample.point_cloud_data.points
 

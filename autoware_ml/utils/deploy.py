@@ -32,6 +32,7 @@ from omegaconf import DictConfig, OmegaConf
 import torch
 from torch.export import Dim
 
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.ops.segment.scatter_reduce import register_scatter_reduce_onnx_symbolic
 
 logger = logging.getLogger(__name__)
@@ -83,75 +84,17 @@ def resolve_output_paths(
     return output_directory, onnx_path, engine_path
 
 
-def get_forward_signature(model: L.LightningModule) -> inspect.Signature:
-    """Return the cached forward signature from BaseModel, or compute it."""
-    return getattr(model, "forward_signature", inspect.signature(model.forward))
-
-
-def get_export_parameter_names(model: L.LightningModule) -> list[str]:
-    """Return concrete forward parameter names used for export."""
-    signature = get_forward_signature(model)
-    return [
-        name
-        for name, parameter in signature.parameters.items()
-        if parameter.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
-    ]
-
-
-def move_to_device(value: Any, device: torch.device) -> Any:
-    """Move tensors nested in common Python containers to ``device``."""
-    if isinstance(value, torch.Tensor):
-        return value.to(device)
-    if isinstance(value, list):
-        return [move_to_device(item, device) for item in value]
-    if isinstance(value, tuple):
-        return tuple(move_to_device(item, device) for item in value)
-    if isinstance(value, dict):
-        return {key: move_to_device(item, device) for key, item in value.items()}
-    return value
-
-
-def extract_input_from_batch(batch: dict[str, Any], param_name: str) -> Any:
-    """Extract one export input from a batch dictionary."""
-    if param_name not in batch:
-        raise ValueError(
-            f"Parameter '{param_name}' not found in batch. Available keys: {list(batch.keys())}"
-        )
-
-    input_value = batch[param_name]
-    if isinstance(input_value, (list, tuple)):
-        input_value = input_value[0]
-    return input_value
-
-
 def get_predict_batch(
     datamodule: L.LightningDataModule,
     model: L.LightningModule,
     device: torch.device,
-) -> dict[str, Any]:
+) -> ModelBatchInputs:
     """Load one prediction batch and apply transfer-time preprocessing."""
     datamodule.setup("predict")
     predict_dataloader = datamodule.predict_dataloader()
-    batch = next(iter(predict_dataloader))
-    batch = move_to_device(batch, device)
+    # The typed batch moves its own tensors
+    batch = next(iter(predict_dataloader)).to_device(device)
     return model.on_after_batch_transfer(batch, dataloader_idx=0)
-
-
-def infer_export_spec(model: L.LightningModule, batch: dict[str, Any]) -> ExportSpec:
-    """Infer an export specification directly from the model forward signature."""
-    forward_params = get_export_parameter_names(model)
-    if not forward_params:
-        raise ValueError("Model forward signature has no parameters.")
-
-    if (
-        isinstance(batch, dict)
-        and len(forward_params) == 1
-        and forward_params[0] == "batch_inputs_dict"
-    ):
-        return ExportSpec(module=model, args=(batch,), input_param_names=forward_params)
-
-    input_args = tuple(extract_input_from_batch(batch, param_name) for param_name in forward_params)
-    return ExportSpec(module=model, args=input_args, input_param_names=forward_params)
 
 
 def resolve_export_specs(

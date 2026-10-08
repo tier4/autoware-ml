@@ -72,6 +72,13 @@ class TestModelGTBatchDetection3DCollation(unittest.TestCase):
             detection3d_traffic_cone_barrier_bbox_status=traffic_cone_barrier_bbox_status,
         )
 
+    def test_samples_with_boxes_need_a_padding_size(self) -> None:
+        """Collating 3D boxes without a padding size fails instead of dropping them."""
+        with self.assertRaises(ValueError):
+            ModelGTBatch.collate_gt_samples(
+                gt_samples=[self._build_sample(2, None)], max_num_3d_gt_bboxes=None
+            )
+
     def _collate(self, samples: Sequence[ModelGTSample]) -> Detection3DGTBatch:
         """Collate the samples and return the 3D detection batch, which must exist."""
         batch = ModelGTBatch.collate_gt_samples(

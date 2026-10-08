@@ -1,9 +1,7 @@
-- _target_: autoware_ml.databases.box3d_pipelines.box3d_label_remapper.Box3DLabelRemapper
+- _target_: autoware_ml.databases.box3d_pipelines.box3d_label_resolver.Box3DLabelResolver
   _convert_: all
 
-  label_remapper: ${database.label_remapper}
-  class_names: ${database.class_names}
-  ignore_label_index: ${database.ignore_label_index}
+  taxonomy: ${...taxonomy.detection3d}
 
 - _target_: autoware_ml.databases.box3d_pipelines.box3d_velocity_clip.Box3DVelocityNormClip
   _convert_: all

@@ -19,7 +19,7 @@ PTv3's defaults leave both off. Everything not listed below is identical to
 | ------------ | --------------------------------------------------------------- |
 | Task         | 3D semantic segmentation, 3D object detection                   |
 | Modality     | LiDAR                                                           |
-| Input        | Point cloud                                                     |
+| Input        | Current point cloud and its sweeps, every point with a time lag |
 | Output       | Point-wise semantic labels or 3D boxes/scores/classes           |
 | Architecture | PTv3 hierarchy with per-stage conv/attention gating and 3D RoPE |
 | Datasets     | T4Dataset                                                       |
