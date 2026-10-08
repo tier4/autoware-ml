@@ -43,7 +43,8 @@ dependencies = [
     "tensorrt-cu12==10.16.0.72",
     "torch==2.9.1+cu128",
     "torchvision==0.24.1+cu128",
-    "transforms3d==0.4.2"
+    "transforms3d==0.4.2",
+    "zstandard==0.25.0"
 ]
 
 [project.optional-dependencies]
