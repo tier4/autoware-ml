@@ -250,12 +250,23 @@ The detection adapter can log:
   matched-IoU scalars
 - threshold-independent mean-best-GT and frame-maximum IoU scalars, so near
   misses remain visible even when no prediction reaches the matching threshold
+- predicted and ground-truth boxes projected onto every camera image as
+  class-colored wireframes, with edges behind the image plane dropped
 
 Detection and segmentation use sibling `scene/prediction` and
 `scene/ground_truth` entities. A frame with no detection annotations remains a
 segmentation-only preview; no synthetic detection objects are created.
 
 ### Camera and timing behavior
+
+Cameras are read from the dataset record's `images` mapping, which each T4
+dataset class copies into `get_data_info` with every `img_path` resolved against
+`data_root`. Availability is therefore a property of the annotation file, not of
+the task: the `detection3d` and `segdet3d` info files carry six cameras, while
+the `lidarseg` info files carry an empty mapping and produce a LiDAR-only
+preview. All three single-task and multi-task adapters project their own layers
+in both data and prediction mode - segmentation as class-colored points,
+detection as box wireframes, each for ground truth and prediction.
 
 Each available camera is logged as a transform, pinhole calibration, and image.
 The Rerun blueprint places the camera frustums in the same 3D scene as the
