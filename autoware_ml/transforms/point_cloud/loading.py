@@ -24,9 +24,10 @@ from collections.abc import Sequence
 from enum import StrEnum
 from typing import Annotated
 
-from jaxtyping import Bool, Float32
+from jaxtyping import Bool
 import numpy as np
 import torch
+from jaxtyping import Float32
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 from torch import Tensor
 
