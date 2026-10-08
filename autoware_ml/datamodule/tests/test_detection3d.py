@@ -109,6 +109,62 @@ class TestT4Detection3DDataset:
         assert sample["timestamp"] == 1700000000.1
         assert sample["instances"] == []
         assert sample["sweeps"] == []
+        assert "images" not in sample
+
+    def test_get_data_info_resolves_camera_images_for_visualization(self, tmp_path) -> None:
+        # The visualization stack projects LiDAR points and 3D boxes into every
+        # camera, which needs the calibration and a loadable image path.
+        dataset = self._single_sample_dataset(
+            tmp_path,
+            images={
+                "CAM_FRONT": {
+                    "img_path": "db/uuid/0/data/CAM_FRONT/0.jpg",
+                    "cam2img": np.eye(3),
+                    "lidar2cam": np.eye(4),
+                }
+            },
+        )
+
+        sample = dataset.get_data_info(0)
+
+        camera = sample["images"]["CAM_FRONT"]
+        assert camera["img_path"] == str(tmp_path / "db/uuid/0/data/CAM_FRONT/0.jpg")
+        assert np.array_equal(camera["cam2img"], np.eye(3))
+        assert np.array_equal(camera["lidar2cam"], np.eye(4))
+
+    def test_get_data_info_rejects_camera_without_image_path(self, tmp_path) -> None:
+        dataset = self._single_sample_dataset(
+            tmp_path,
+            images={"CAM_FRONT": {"cam2img": np.eye(3), "lidar2cam": np.eye(4)}},
+        )
+
+        with pytest.raises(ValueError, match="missing img_path"):
+            dataset.get_data_info(0)
+
+    @staticmethod
+    def _single_sample_dataset(tmp_path, *, images: dict | None = None) -> T4Detection3DDataset:
+        """Build a one-record dataset without touching the annotation loader."""
+        lidar_path = tmp_path / "db" / "uuid" / "0" / "data" / "sample.bin"
+        lidar_path.parent.mkdir(parents=True, exist_ok=True)
+        np.arange(10, dtype=np.float32).tofile(lidar_path)
+
+        dataset = object.__new__(T4Detection3DDataset)
+        record = {
+            "token": "sample",
+            "lidar_path": str(lidar_path),
+            "lidar_points": {"num_pts_feats": 5, "lidar2ego": np.eye(4)},
+            "timestamp": 1700000000.1,
+            "instances": [],
+            "sweeps": [],
+            "ego2global": np.eye(4),
+        }
+        if images is not None:
+            record["images"] = images
+        dataset.data_infos = [record]
+        dataset.data_root = str(tmp_path)
+        dataset.class_names = []
+        dataset.name_mapping = {}
+        return dataset
 
     def test_frame_sampling_weights_emphasize_rare_categories(self, tmp_path) -> None:
         ann_file = tmp_path / "infos.pkl"
@@ -402,7 +458,11 @@ class TestNuscenesDetection3DDataModule:
         ann_file = tmp_path / "nuscenes_infos_train.pkl"
         sample = {
             "token": "sample",
-            "lidar_points": {"lidar_path": "sample.bin", "num_pts_feats": 5, "lidar2ego": np.eye(4)},
+            "lidar_points": {
+                "lidar_path": "sample.bin",
+                "num_pts_feats": 5,
+                "lidar2ego": np.eye(4),
+            },
             "timestamp": 1700000000.1,
             "instances": [],
             "sweeps": [],
