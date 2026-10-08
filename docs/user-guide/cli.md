@@ -330,9 +330,29 @@ between frames one at a time.
 Current visualization coverage:
 
 - calibration status: camera image, projected lidar overlay, fused image, status labels, and confidence summary
-- segmentation3d: GT/PD point clouds, semantic/intensity/solid coloring, and pointwise entropy computed from prediction logits
-- detection3d: GT/PD boxes overlaid on point clouds with prediction labels initially hidden to avoid proposal clutter; labels remain available through Rerun's **Show labels** property, while line-and-point plots include same-class yaw-aware 3D IoU and pre-threshold best-overlap signals
-- multi-task PTv3: combined segmentation and detection comparisons, optional calibrated live 3D camera frustums, and 10 Hz prediction-only intermediate frames between 1 Hz GT anchors
+- segmentation3d: GT/PD point clouds, semantic/intensity/solid coloring, pointwise entropy computed from prediction logits, and camera projections when the annotation file carries camera metadata
+- detection3d: GT/PD boxes overlaid on point clouds with prediction labels initially hidden to avoid proposal clutter; labels remain available through Rerun's **Show labels** property, while line-and-point plots include same-class yaw-aware 3D IoU and pre-threshold best-overlap signals; camera projections draw GT and predicted boxes as wireframes on every camera image
+- multi-task PTv3: combined segmentation and detection comparisons and 10 Hz prediction-only intermediate frames between 1 Hz GT anchors
+
+**Camera projections per task.** Cameras are logged from the annotation file's
+`images` metadata, so the task's info file decides whether they appear, not the
+task itself. Both data and prediction mode project the same layers: segmentation
+colors its points by class, detection draws box wireframes, and both are
+available for GT and prediction simultaneously. Use the **Camera projections
+OFF** / **Camera projections ON** switch inside a 3D comparison, or start with
+them visible through `--camera-frustums`.
+
+The T4 `detection3d` and `segdet3d` info files carry six cameras. The `lidarseg`
+info files that the shipped segmentation3d configs point at carry an empty
+`images` mapping, so a segmentation preview shows no cameras unless it is
+pointed at an info file that has them, for example:
+
+```bash
+autoware-ml visualize \
+    --config-name segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2 \
+    --mode data --camera-frustums \
+    datamodule.test_ann_file=${AUTOWARE_ML_DATA_PATH}/t4dataset/info/segdet3d/t4dataset_j6gen2_segdet3d_infos_test.pkl
+```
 
 ## mlflow ui
 
