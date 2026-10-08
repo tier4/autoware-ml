@@ -12,18 +12,19 @@ Bash completion is installed automatically by the Docker image build and by
 
 ## Commands
 
-| Command            | Purpose                                            |
-| ------------------ | -------------------------------------------------- |
-| `train`            | Train models using PyTorch Lightning               |
-| `test`             | Evaluate models from a checkpoint                  |
-| `deploy`           | Export models to ONNX and TensorRT                 |
-| `mlflow ui`        | Launch the MLflow tracking UI                      |
-| `mlflow export`    | Export one experiment into its own MLflow store    |
-| `session start`    | Start a managed background task                    |
-| `session attach`   | View live terminal output from a background task   |
-| `session detach`   | Disconnect raw tmux clients from a managed session |
-| `session ls`       | List managed background tasks                      |
-| `session stop`     | Stop a managed background task                     |
+| Command            | Purpose                                             |
+| ------------------ | --------------------------------------------------- |
+| `train`            | Train models using PyTorch Lightning                |
+| `test`             | Evaluate models from a checkpoint                   |
+| `visualize`        | Preview predictions through the visualization stack |
+| `deploy`           | Export models to ONNX and TensorRT                  |
+| `mlflow ui`        | Launch the MLflow tracking UI                       |
+| `mlflow export`    | Export one experiment into its own MLflow store     |
+| `session start`    | Start a managed background task                     |
+| `session attach`   | View live terminal output from a background task    |
+| `session detach`   | Disconnect raw tmux clients from a managed session  |
+| `session ls`       | List managed background tasks                       |
+| `session stop`     | Stop a managed background task                      |
 
 ## train
 
@@ -131,6 +132,226 @@ autoware-ml test \
     --config-name detection3d/ptv3/voxel012_122m_t4dataset_j6gen2 \
     --weights mlruns/segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt \
     --weights mlruns/detection3d/ptv3/voxel012_122m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt
+```
+
+## visualize
+
+Preview one or more samples through the isolated visualization backend.
+
+```bash
+autoware-ml visualize \
+    --config-name <config_path> \
+    [--weights <path>] \
+    [--mode auto|predictions|data] \
+    [--split test|predict|val|train] \
+    [--sample-index N] \
+    [--max-samples N] \
+    [--prediction-frequency-hz HZ] \
+    [--backend rerun|noop] \
+    [--device cpu|cuda|auto] \
+    [--point-labels/--no-point-labels] \
+    [--point-color-mode semantic|intensity|solid] \
+    [--camera-frustums/--no-camera-frustums] \
+    [--web-port PORT] \
+    [--grpc-port PORT] \
+    [--wait/--no-wait] \
+    [--sync-views/--no-sync-views] \
+    [--sync-port PORT]
+```
+
+**Arguments:**
+
+- `--config-name`: Path to config (same as used for training)
+- `--weights`: Optional path to a `.ckpt` checkpoint file
+
+**Common options:**
+
+- `--mode`: Preview mode. `auto` uses predictions when weights are given and transformed data otherwise (default: `auto`)
+- `--split`: Dataset split whose transforms and collation should be previewed; when weights are provided, the model-owned preprocessing and prediction path is used (default: `test`)
+- `--sample-index`: First sample index to preview (default: `0`)
+- `--max-samples`: Number of consecutive dataset keyframes to use as preview anchors (default: `1`)
+- `--prediction-frequency-hz`: Prediction frequency used to resolve unlabeled source frames between annotated keyframes when the dataset supports them (default: `10`)
+- `--backend`: Visualization backend (default: `rerun`)
+- `--device`: Execution device for preview inference (default: `auto`, which uses CUDA when available)
+- `--point-labels` / `--no-point-labels`: Log per-point text labels. Disabled by default because large semantic point clouds become slow when every point has text.
+- `--point-color-mode`: Initially active point-cloud tab: semantic class, normalized LiDAR intensity, or solid geometry color (default: `semantic`). All available modes remain selectable in Rerun.
+- `--camera-frustums` / `--no-camera-frustums`: Initial visibility of camera frustums and projected image planes in 3D views (default: hidden). When cameras are available, use the **Camera projections OFF** / **Camera projections ON** switch inside a 3D comparison to change them dynamically; the eye control beside `cameras` remains available for per-view adjustment.
+- `--web-port`: Rerun web viewer HTTP port (default: `9090`)
+- `--grpc-port`: Rerun SDK gRPC port used by the web viewer proxy (default: `9876`)
+- `--wait` / `--no-wait`: Keep the Rerun web server alive after logging (default: `--wait`)
+- `--recording-id`: Optional explicit recording ID
+- `--sync-views` / `--no-sync-views`: Also serve the synced comparison page, which shows the prediction and one selectable comparison in two viewers that share one eye: rotating, panning, zooming, or flying in either side moves both (default: `--no-sync-views`)
+- `--sync-port`: HTTP port of the synced comparison page (default: `9091`)
+
+Backend modes:
+
+- `rerun`: serves the Rerun web viewer and logs the browser URL. Forward both `--web-port` and `--grpc-port` when running in Docker.
+- `noop`: runs the preview path and drops all visualization events. Use this for smoke tests and CI.
+
+Rerun logs every rendered frame on the same timeline. For T4 multi-task data,
+one 1 Hz GT anchor can additionally produce nine prediction-only frames at the
+default 10 Hz setting. Those frames use only their current LiDAR sweep and do
+not interpolate or retain GT.
+
+The 3D views of the regular Rerun page each keep their own eye. To compare the
+prediction with GT, intensity, entropy, or probability from exactly the same
+viewpoint, add `--sync-views` and open `http://localhost:<sync-port>/`. The
+page embeds two viewers side by side, mirrors the mouse and keyboard input of
+one into the other, and offers the comparison, the camera projections, and the
+frame cursor in its toolbar. Forward `--sync-port` together with the other two
+ports when running in Docker; the page connects to `--grpc-port` directly, so
+keep that port reachable from the browser. See
+[Visualization Design](../framework/visualization.md#synced-comparison-page).
+
+**Starting a preview for each task:**
+
+Every task uses the same command. Only `--config-name` and the checkpoint path
+change. `--weights` is optional: without it the command previews transformed
+data instead of predictions.
+
+Detection 3D:
+
+```bash
+autoware-ml visualize \
+    --config-name detection3d/centerpoint/voxel024_second_secfpn_120m_t4dataset_j6gen2 \
+    --weights mlruns/detection3d/centerpoint/voxel024_second_secfpn_120m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt \
+    --mode predictions \
+    --split test \
+    --sample-index 0 \
+    --max-samples 3 \
+    --backend rerun
+```
+
+Segmentation 3D:
+
+```bash
+autoware-ml visualize \
+    --config-name segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2 \
+    --weights mlruns/segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt \
+    --mode predictions \
+    --split test \
+    --sample-index 0 \
+    --max-samples 3 \
+    --point-color-mode semantic \
+    --backend rerun
+```
+
+Combined detection and segmentation, with the synced comparison page and the
+frames between GT keyframes:
+
+```bash
+autoware-ml visualize \
+    --config-name multi/ptv3/voxel012_122m_t4dataset_j6gen2 \
+    --weights mlruns/multi/ptv3/voxel012_122m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/last.ckpt \
+    --mode predictions \
+    --split test \
+    --sample-index 0 \
+    --max-samples 2 \
+    --prediction-frequency-hz 10 \
+    --point-color-mode semantic \
+    --sync-views \
+    --sync-port 9091
+```
+
+Calibration status. `collation_map` is a whitelist, and the shipped calibration
+configs list only the model inputs, so the calibration metadata, the camera
+image, and the point cloud that the transforms produce are dropped before the
+batch is built. Carry them through, or the preview reports the missing entry
+and stops:
+
+```bash
+autoware-ml visualize \
+    --config-name calibration_status/calibration_status_classifier/resnet18_t4dataset_j6gen2 \
+    --weights mlruns/calibration_status/calibration_status_classifier/resnet18_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt \
+    --mode predictions \
+    --split test \
+    --sample-index 0 \
+    --backend rerun \
+    +datamodule.collation_map.calibration_data=list \
+    +datamodule.collation_map.img=list \
+    +datamodule.collation_map.points=list
+```
+
+Preview transformed data only, without weights. This works for every task:
+
+```bash
+autoware-ml visualize \
+    --config-name segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2 \
+    --mode data \
+    --device cpu \
+    --split train \
+    --sample-index 0 \
+    --backend rerun
+```
+
+**How many frames a run records:**
+
+`--max-samples` counts annotated keyframes, not rendered frames. For most tasks
+the two are the same. The T4 multi-task datamodule
+(`T4SegmentationDetection3DDataModule`, used by `multi/*/*_t4dataset_j6gen2*`)
+also reconstructs the unlabeled source frames between adjacent keyframes, so
+keyframe `i` is logged at timeline step `i * round(hz)` and the reconstructed
+frames fill the steps after it. Three keyframes at `--prediction-frequency-hz
+10` therefore record 30 frames, not 3. GT is logged only on the keyframes, so
+the comparison pane is empty on the frames in between; GT is never interpolated
+or held.
+
+Every other task, and the NuScenes multi-task config, has no intermediate
+frames: `--prediction-frequency-hz` is accepted but has no effect there, and
+one keyframe is one frame.
+
+The browser-side Rerun viewer has its own heap limit of roughly 2.3 GiB, which
+is independent of `server_memory_limit`. A recording that exceeds it reports
+`Reached memory limit of 2.3 GiB, dropping oldest data`, discards the start of
+the stream, and then never becomes active, so the synced page waits forever on
+`connecting the left viewer`. With six cameras and dense point clouds the
+practical ceiling is about 20 frames. Prefer `--max-samples 2
+--prediction-frequency-hz 10` over three keyframes, or lower the frequency to
+keep more keyframes inside the same budget, as in `--max-samples 3
+--prediction-frequency-hz 5`. There is no option to omit camera images from a
+recording, so the frame count is the only lever.
+
+**Opening the viewer:**
+
+The regular Rerun page is logged on startup as
+`http://localhost:<web-port>/?url=rerun%2Bhttp%3A%2F%2Flocalhost%3A<grpc-port>%2Fproxy`.
+With `--sync-views`, the synced comparison page is served at
+`http://localhost:<sync-port>/`. Append `?renderer=webgl` to either URL when
+the default renderer misbehaves in the browser.
+
+Both pages replay the whole recording when they connect, so a recording of
+twenty camera-equipped frames can take a few minutes before the synced page
+reports `synced` and its toolbar becomes usable. That wait is normal and is not
+a failure.
+
+Use the toolbar arrows, the frame slider, or the Rerun time panel to step
+between frames one at a time.
+
+Current visualization coverage:
+
+- calibration status: camera image, projected lidar overlay, fused image, status labels, and confidence summary
+- segmentation3d: GT/PD point clouds, semantic/intensity/solid coloring, pointwise entropy computed from prediction logits, and camera projections when the annotation file carries camera metadata
+- detection3d: GT/PD boxes overlaid on point clouds with prediction labels initially hidden to avoid proposal clutter; labels remain available through Rerun's **Show labels** property, while line-and-point plots include same-class yaw-aware 3D IoU and pre-threshold best-overlap signals; camera projections draw GT and predicted boxes as wireframes on every camera image
+- multi-task PTv3: combined segmentation and detection comparisons and 10 Hz prediction-only intermediate frames between 1 Hz GT anchors
+
+**Camera projections per task.** Cameras are logged from the annotation file's
+`images` metadata, so the task's info file decides whether they appear, not the
+task itself. Both data and prediction mode project the same layers: segmentation
+colors its points by class, detection draws box wireframes, and both are
+available for GT and prediction simultaneously. Use the **Camera projections
+OFF** / **Camera projections ON** switch inside a 3D comparison, or start with
+them visible through `--camera-frustums`.
+
+The T4 `detection3d` and `segdet3d` info files carry six cameras. The `lidarseg`
+info files that the shipped segmentation3d configs point at carry an empty
+`images` mapping, so a segmentation preview shows no cameras unless it is
+pointed at an info file that has them, for example:
+
+```bash
+autoware-ml visualize \
+    --config-name segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2 \
+    --mode data --camera-frustums \
+    datamodule.test_ann_file=${AUTOWARE_ML_DATA_PATH}/t4dataset/info/segdet3d/t4dataset_j6gen2_segdet3d_infos_test.pkl
 ```
 
 ## mlflow ui

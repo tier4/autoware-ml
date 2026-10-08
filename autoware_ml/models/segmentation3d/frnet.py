@@ -288,7 +288,11 @@ class FRNet(BaseModel):
         del batch_inputs_dict
         point_logits = outputs[0]
         pred_probs = torch.softmax(point_logits, dim=1)
-        return {"pred_labels": pred_probs.argmax(dim=1), "pred_probs": pred_probs}
+        return {
+            "pred_labels": pred_probs.argmax(dim=1),
+            "pred_probs": pred_probs,
+            "pred_logits": point_logits,
+        }
 
     def get_export_output_names(self) -> list[str]:
         """Return ordered FRNet export output names.
