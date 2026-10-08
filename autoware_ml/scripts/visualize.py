@@ -95,6 +95,8 @@ def _build_preview_config(cfg: DictConfig) -> VisualizationPreviewConfig:
             timeline=str(visualization_cfg.get("timeline", "frame")),
             point_color_mode=str(visualization_cfg.get("point_color_mode", "semantic")),
             camera_frustums_visible=bool(visualization_cfg.get("camera_frustums_visible", False)),
+            sync_views=bool(visualization_cfg.get("sync_views", False)),
+            sync_port=int(visualization_cfg.get("sync_port", 9091)),
         ),
     )
 

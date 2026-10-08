@@ -87,6 +87,8 @@ def test_build_preview_config_maps_every_visualization_override() -> None:
                     "server_memory_limit": "10%",
                     "timeline": "sample",
                     "camera_frustums_visible": True,
+                    "sync_views": True,
+                    "sync_port": 9095,
                     "segmentation3d_class_names": ["road", "car"],
                     "detection3d_class_names": ["car"],
                 }
@@ -113,3 +115,5 @@ def test_build_preview_config_maps_every_visualization_override() -> None:
     assert config.session.timeline == "sample"
     assert config.session.point_color_mode == "semantic"
     assert config.session.camera_frustums_visible is True
+    assert config.session.sync_views is True
+    assert config.session.sync_port == 9095

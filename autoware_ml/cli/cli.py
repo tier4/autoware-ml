@@ -552,6 +552,17 @@ def visualize(
         str | None,
         typer.Option("--recording-id", help="Optional visualization recording ID"),
     ] = None,
+    sync_views: Annotated[
+        bool,
+        typer.Option(
+            "--sync-views/--no-sync-views",
+            help="Also serve the synced comparison page, whose two 3D views share one eye",
+        ),
+    ] = False,
+    sync_port: Annotated[
+        int,
+        typer.Option("--sync-port", help="HTTP port of the synced comparison page"),
+    ] = 9091,
 ) -> None:
     """Preview task predictions through the visualization backend.
 
@@ -573,6 +584,8 @@ def visualize(
         grpc_port: gRPC port used by the Rerun SDK and web viewer proxy.
         wait: Whether to keep the web viewer server alive after logging.
         recording_id: Optional explicit recording ID for the preview session.
+        sync_views: Whether to serve the synced comparison page as well.
+        sync_port: HTTP port of the synced comparison page.
     """
     hydra_overrides = [
         f"+visualization.mode={mode}",
@@ -588,6 +601,8 @@ def visualize(
         f"+visualization.web_port={web_port}",
         f"+visualization.grpc_port={grpc_port}",
         f"+visualization.wait={str(wait).lower()}",
+        f"+visualization.sync_views={str(sync_views).lower()}",
+        f"+visualization.sync_port={sync_port}",
     ]
     if weights is not None:
         hydra_overrides.append(f"+weights={weights}")

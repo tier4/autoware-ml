@@ -216,7 +216,16 @@ on port `9091`, that keeps both sides on one eye:
   the other. Because both sides have the same structure, the same statistics
   row, and the same shared extent, identical input produces identical eyes.
 - The page hides the viewer panels and drives the frame cursor and playback of
-  both viewers from its own toolbar.
+  both viewers from its own toolbar. The viewer's graphics switches, such as
+  `?renderer=webgl`, are passed from the page address to both embedded viewers.
+- A poll follows the viewers so that scrubbing inside one of them moves the
+  page too. Because `set_time_for_timeline` is applied asynchronously, the poll
+  that follows a write still reports the previous frame, so the page keeps a
+  short grace period after every write and additionally requires both viewers
+  to report the same new frame on two consecutive polls before it follows them.
+  Without that, a manual step read its own stale frame back and jumped forward
+  again. Stepping by hand also pauses playback, so a viewer that is still
+  following an incoming recording cannot pull the timeline along.
 
 Selection and double-click focus act on whatever entity is under the cursor on
 each side, so they are the one interaction that can differ between the sides;
@@ -241,12 +250,23 @@ The detection adapter can log:
   matched-IoU scalars
 - threshold-independent mean-best-GT and frame-maximum IoU scalars, so near
   misses remain visible even when no prediction reaches the matching threshold
+- predicted and ground-truth boxes projected onto every camera image as
+  class-colored wireframes, with edges behind the image plane dropped
 
 Detection and segmentation use sibling `scene/prediction` and
 `scene/ground_truth` entities. A frame with no detection annotations remains a
 segmentation-only preview; no synthetic detection objects are created.
 
 ### Camera and timing behavior
+
+Cameras are read from the dataset record's `images` mapping, which each T4
+dataset class copies into `get_data_info` with every `img_path` resolved against
+`data_root`. Availability is therefore a property of the annotation file, not of
+the task: the `detection3d` and `segdet3d` info files carry six cameras, while
+the `lidarseg` info files carry an empty mapping and produce a LiDAR-only
+preview. All three single-task and multi-task adapters project their own layers
+in both data and prediction mode - segmentation as class-colored points,
+detection as box wireframes, each for ground truth and prediction.
 
 Each available camera is logged as a transform, pinhole calibration, and image.
 The Rerun blueprint places the camera frustums in the same 3D scene as the
@@ -279,6 +299,17 @@ numbered LiDAR and camera files between adjacent 1 Hz keyframes. The anchor is
 rendered with GT and prediction, while intermediate frames contain prediction
 only. Missing source files are skipped, scene boundaries are never crossed, and
 GT is neither interpolated nor held from the previous frame.
+
+Because `--max-samples` counts keyframes, that reconstruction multiplies the
+recording: three keyframes at 10 Hz are 30 frames. The browser-side viewer
+keeps the whole recording in a heap of roughly 2.3 GiB, independently of the
+`server_memory_limit` that bounds the sending side. A recording past that
+limit logs `Reached memory limit of 2.3 GiB, dropping oldest data` in the
+viewer, drops the head of the stream including the store info, and therefore
+never activates a recording, which leaves the synced page waiting on its
+handle. With six cameras and dense point clouds the practical ceiling is about
+twenty frames. Camera images cannot be excluded from a recording, so the frame
+count is the only way to stay inside it.
 
 Detection statistics are rendered as both line and point series. Point markers
 keep a single GT keyframe visible and expose its exact value on hover. A

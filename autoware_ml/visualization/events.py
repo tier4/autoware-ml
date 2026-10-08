@@ -188,6 +188,9 @@ class ViewSpec:
     y_range: tuple[float, float] | None = None
     visible_time_range: tuple[int, int] | None = None
     timeline: str | None = None
+    #: Optional stable identity. Backends derive the view id from it, so a
+    #: re-published layout keeps the viewer state of the view, such as its 3D eye.
+    identity: str | None = None
 
 
 @dataclass(frozen=True)
