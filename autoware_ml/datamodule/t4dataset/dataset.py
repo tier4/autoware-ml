@@ -16,7 +16,6 @@ from autoware_ml.databases.schemas.image_frames import (
 from autoware_ml.databases.schemas.lidar_frames import (
     LidarFrameDataModel,
     LidarFrameDatasetSchema,
-    relative_to_database_root,
 )
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.databases.schemas.lidar_sources import (
@@ -402,7 +401,10 @@ class T4Dataset(BaseDataset):
         Returns:
           str: Path of the frame under the database root.
         """
-        return str(self.database_root_path / relative_to_database_root(frame_path, "frame path"))
+        return str(
+            self.database_root_path
+            / LidarFrameDatasetSchema.relative_to_database_root(frame_path, "frame path")
+        )
 
     def get_lidar_pointcloud_data_samples(
         self, idx: int, source_view: LidarSourceView | None
