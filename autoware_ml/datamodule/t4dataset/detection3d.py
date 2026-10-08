@@ -210,6 +210,31 @@ def _box_center_in_bev_range(box: list[float], bev_range: list[float]) -> bool:
     return bev_range[0] <= x <= bev_range[2] and bev_range[1] <= y <= bev_range[3]
 
 
+def _resolve_camera_images(
+    token: str,
+    images: Mapping[str, Any],
+    data_root: str,
+) -> dict[str, dict[str, Any]]:
+    """Resolve every camera image path of one record against *data_root*.
+
+    The calibration entries (``cam2img``, ``lidar2cam``) are carried through
+    unchanged so that the visualization stack can project LiDAR points and 3D
+    boxes into each camera image.
+    """
+    resolved: dict[str, dict[str, Any]] = {}
+    for camera_name, camera_info in images.items():
+        if not isinstance(camera_info, Mapping):
+            raise TypeError(f"Record {token!r} camera {camera_name!r} must be a mapping")
+        image_path = camera_info.get("img_path")
+        if not image_path:
+            raise ValueError(f"Record {token!r} camera {camera_name!r} is missing img_path")
+        resolved[camera_name] = {
+            **camera_info,
+            "img_path": resolve_data_path(data_root, image_path),
+        }
+    return resolved
+
+
 class T4Detection3DDataset(Dataset):
     """Load T4Dataset lidar samples for 3D object detection.
 
@@ -275,7 +300,7 @@ class T4Detection3DDataset(Dataset):
             Metadata dictionary consumed by detection transform pipelines.
         """
         sample = self.data_infos[index]
-        return {
+        info = {
             "instances": sample.get("instances", []),
             "class_names": self.class_names,
             "name_mapping": self.name_mapping,
@@ -287,6 +312,12 @@ class T4Detection3DDataset(Dataset):
             "ego2global": np.asarray(sample["ego2global"], dtype=np.float64),
             "scene_token": scene_dir_fragment(sample["lidar_path"], self.data_root),
         }
+        images = sample.get("images")
+        if images is not None:
+            if not isinstance(images, Mapping):
+                raise TypeError(f"Record {sample['token']!r} images must be a mapping")
+            info["images"] = _resolve_camera_images(sample["token"], images, self.data_root)
+        return info
 
 
 class T4Detection3DDataModule(DataModule):
