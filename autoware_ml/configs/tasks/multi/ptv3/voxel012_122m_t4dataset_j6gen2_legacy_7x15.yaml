@@ -1,0 +1,136 @@
+# @package _global_
+
+# Compatibility overlay for the multitask PTv3 checkpoints trained before the
+# J6 gen2 taxonomy grew to 13 detection and 20 segmentation classes (the
+# September 2026 "headdim" runs). It restores their seven detection and fifteen
+# segmentation classes, the original class mappings, thresholds and NMS groups,
+# the velocity regression branch, and the two-layer linear positional encoder
+# those checkpoints contain, so they can be evaluated and visualized with the
+# current pipeline. Do not start new trainings from it.
+
+defaults:
+  - /tasks/multi/ptv3/voxel012_122m_t4dataset_j6gen2
+  - _self_
+
+t4dataset:
+  detection3d:
+    class_names: [car, truck, bus, bicycle, pedestrian, traffic_cone, barrier]
+    num_classes: 7
+    name_mapping:
+      car: car
+      vehicle.car: car
+      "vehicle.emergency (ambulance & police)": car
+      ambulance: car
+      vehicle.ambulance: car
+      police_car: car
+      vehicle.police: car
+      forklift: car
+      kart: car
+      other_vehicle: car
+      truck: truck
+      vehicle.truck: truck
+      fire_truck: truck
+      vehicle.fire: truck
+      trailer: trailer
+      vehicle.trailer: trailer
+      semi_trailer: trailer
+      tractor_unit: truck
+      construction_vehicle: truck
+      vehicle.construction: truck
+      bus: bus
+      vehicle.bus: bus
+      "vehicle.bus (bendy & rigid)": bus
+      motorcycle: bicycle
+      vehicle.motorcycle: bicycle
+      bicycle: bicycle
+      vehicle.bicycle: bicycle
+      pedestrian: pedestrian
+      pedestrian.adult: pedestrian
+      pedestrian.child: pedestrian
+      other_pedestrian: pedestrian
+      police_officer: pedestrian
+      pedestrian.police_officer: pedestrian
+      construction_worker: pedestrian
+      pedestrian.construction_worker: pedestrian
+      personal_mobility: pedestrian
+      pedestrian.personal_mobility: pedestrian
+      wheelchair: pedestrian
+      pedestrian.wheelchair: pedestrian
+      stroller: pedestrian
+      pedestrian.stroller: pedestrian
+      barrier: barrier
+      movable_object.barrier: barrier
+      movable_object.debris: barrier
+      pushable_pullable: barrier
+      movable_object.pushable_pullable: barrier
+      traffic_cone: traffic_cone
+      trafficcone: traffic_cone
+      movable_object.traffic_cone: traffic_cone
+      movable_object.trafficcone: traffic_cone
+      construction_sign: barrier
+      debris: barrier
+  segmentation3d:
+    class_names:
+      [car, truck, bus, motorcycle, pedestrian, traffic_cone, barrier, debris,
+       drivable_surface, other_flat_surface, vegetation, manmade, vertical_thin,
+       other_stuff, noise]
+    num_classes: 15
+    class_indices:
+      car: 0
+      emergency_vehicle: 0
+      forklift: 0
+      kart: 0
+      truck: 1
+      tractor_unit: 1
+      semi_trailer: 1
+      construction_vehicle: 1
+      bus: 2
+      motorcycle: 3
+      bicycle: 3
+      pedestrian: 4
+      personal_mobility: 4
+      stroller: 4
+      traffic_cone: 5
+      barrier: 6
+      debris: 7
+      pushable_pullable: 7
+      drivable_surface: 8
+      other_flat_surface: 9
+      sidewalk: 9
+      vegetation: 10
+      manmade: 11
+      vertical_thin: 12
+      other_stuff: 13
+      noise: 14
+      animal: -1
+      train: -1
+      ghost_point: -1
+      out_of_sync: -1
+      unpainted: -1
+
+model:
+  bbox_head:
+    positional_encoding: linear
+    common_heads:
+      vel: [2, 2]
+    use_velocity: true
+    code_weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2]
+    bbox_coder:
+      code_size: 10
+      score_threshold: [0.015, 0.01, 0.01, 0.02, 0.03, 0.04, 0.02]
+    nms_groups:
+      - class_names: [car, truck, bus]
+        nms_radius: 0.25
+        post_max_size: 300
+      - class_names: [bicycle]
+        nms_radius: 0.0
+        post_max_size: 50
+      - class_names: [pedestrian]
+        nms_radius: 0.0
+        post_max_size: 100
+      - class_names: [traffic_cone]
+        nms_radius: 0.0
+        post_max_size: 100
+      - class_names: [barrier]
+        nms_radius: 0.0
+        post_max_size: 50
