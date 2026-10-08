@@ -36,7 +36,10 @@ from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
 from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
-from autoware_ml.models.detection3d.ptv3 import PTv3DetBEVNeck, build_det_head_export_spec
+from autoware_ml.models.detection3d.ptv3 import (
+    PTv3DetBEVNeck,
+    build_det_head_export_spec,
+)
 from autoware_ml.models.segmentation3d.encoders.ptv3 import PointTransformerV3Encoder
 from autoware_ml.models.segmentation3d.heads.ptv3 import (
     PTv3SegDecoderHead,
@@ -250,7 +253,28 @@ class PTv3SegDetModel(PTv3BaseModel):
         ]
         eval_out = detection_eval_output(predictions, batch)
         eval_out.update(segmentation_eval_output(outputs["seg_logits"], batch))
+        eval_out["seg_pred_logits"] = outputs["seg_logits"][batch["inverse"].long()]
         return eval_out
+
+    def predict_outputs(
+        self,
+        batch_inputs_dict: Mapping[str, Any],
+        outputs: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Decode both branches without requiring ground-truth annotations.
+
+        Prediction transforms intentionally omit detection boxes and semantic
+        masks. Keeping this path independent from :meth:`build_eval_output`
+        allows the visualizer to run the model on unlabeled 10 Hz frames while
+        still retaining per-point logits for entropy.
+        """
+        inverse = batch_inputs_dict["inverse"].long()
+        point_logits = outputs["seg_logits"][inverse]
+        return {
+            "predictions": self.bbox_head.predict(outputs["det_outputs"]),
+            "seg_pred_labels": point_logits.argmax(dim=1),
+            "seg_pred_logits": point_logits,
+        }
 
     def get_export_output_names(self) -> list[str]:
         """Return configured ONNX export output names.
