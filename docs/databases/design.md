@@ -212,12 +212,11 @@ To run dataset generation:
 ```bash
 python3 autoware_ml/scripts/generate_dataset.py \
     --config-name default_t4dataset_generator \
-    working_dir=<working_dir> \
     data_root_path=<data_root_path> \
     database.num_workers=32
 ```
 
-Configuration is done through YAML files under `autoware_ml/configs/generators/`. Override any parameter from the command line using Hydra syntax. See [Configuration Guide](../user-guide/configuration.md) for full details.
+The record table is written below the repository checkout unless `AUTOWARE_ML_WORKING_DIR` points elsewhere. Configuration is done through YAML files under `autoware_ml/configs/generators/`. Override any parameter from the command line using Hydra syntax. See [Configuration Guide](../user-guide/configuration.md) for full details.
 
 ## Extending the Database
 

@@ -169,7 +169,7 @@ class NuScenesDataset(BaseDatabase):
         logger.info(f"Parquet schema: {polars_schema}")
 
         df_hash = self.database_hash
-        df_cache_path = self._cache_path / f"{self._cache_file_prefix_name}_{df_hash}.parquet"
+        df_cache_path = self.cache_file_path
         if df_cache_path.exists():
             logger.info(f"Cache file {df_cache_path} already exists, skip generating the caches")
             return
