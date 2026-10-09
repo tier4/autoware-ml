@@ -11,6 +11,7 @@ import torch
 import torch.nn as nn
 
 import autoware_ml.utils.point_cloud.structures as point_structures
+from autoware_ml.utils.point_cloud.structures import pooled_sparse_shape
 from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTBatch
 from autoware_ml.dataclasses.geometry.voxels import VoxelsData
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
@@ -907,6 +908,18 @@ def test_serialized_pooling_export_mode_uses_precomputed_metadata(monkeypatch) -
     not IS_SPCONV_AVAILABLE or not torch.cuda.is_available(),
     reason="PTv3 sparse-convolution tests require CUDA spconv",
 )
+def test_pooled_sparse_shape_rounds_up_for_every_depth() -> None:
+    shape = torch.tensor([2048, 2048, 67], dtype=torch.long)
+    assert torch.equal(pooled_sparse_shape(shape, 0), shape)
+    assert torch.equal(pooled_sparse_shape(shape, 1), torch.tensor([1024, 1024, 34]))
+    assert torch.equal(pooled_sparse_shape(shape, 2), torch.tensor([512, 512, 17]))
+    assert torch.equal(pooled_sparse_shape(shape, 3), torch.tensor([256, 256, 9]))
+    assert torch.equal(pooled_sparse_shape(shape, 4), torch.tensor([128, 128, 5]))
+    # the pooled coordinate of the last cell always stays inside the pooled shape
+    for depth in range(5):
+        assert bool(((shape - 1) >> depth < pooled_sparse_shape(shape, depth)).all())
+
+
 def test_serialized_pooling_rounds_the_sparse_shape_up() -> None:
     """Pooling keeps ceil(shape / stride) slices so the coarsest occupied slice stays inside.
 

@@ -35,7 +35,7 @@ from autoware_ml.ops.indexing.operators import argsort
 from autoware_ml.ops.segment.segment_csr import segment_csr
 from autoware_ml.ops.spconv.sparse_conv import SubMConv3d as ExportableSubMConv3d
 from autoware_ml.utils.point_cloud.batching import offset_to_bincount
-from autoware_ml.utils.point_cloud.structures import Point
+from autoware_ml.utils.point_cloud.structures import Point, pooled_sparse_shape
 
 
 def load_flash_attn_module() -> Any:
@@ -996,11 +996,10 @@ class SerializedPooling(PointModule):
             serialized_inverse=pooled_inverse,
             serialized_depth=point.serialized_depth - pooling_depth,
             batch=point.batch[head_indices],
-            # ceil(shape / stride): coordinate 66 pools to 33, so an odd extent of 67 needs
-            # 34 slices. A floored shape leaves the top slice outside the declared grid and
-            # its voxels alias (x, y + 1, 0) in the spconv hash table, which makes the
-            # sub-manifold neighbour table run-dependent.
-            sparse_shape=(point.sparse_shape + (1 << pooling_depth) - 1) >> pooling_depth,
+            # Rounded up, not floored: a size that is not a multiple of the stride would
+            # otherwise leave the last occupied slice outside the declared shape and let
+            # spconv's hash keys alias (see pooled_sparse_shape).
+            sparse_shape=pooled_sparse_shape(point.sparse_shape, pooling_depth),
             pooling_inverse=cluster,
             pooling_parent=point,
             offset=(

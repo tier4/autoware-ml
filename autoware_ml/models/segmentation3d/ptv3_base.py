@@ -30,6 +30,7 @@ from autoware_ml.utils.point_cloud.batching import batch_to_offset
 from autoware_ml.utils.point_cloud.structures import (
     Point,
     bit_length_tensor,
+    pooled_sparse_shape,
     serialize_point_cloud_batch,
 )
 
@@ -893,8 +894,8 @@ class _PTv3SegHeadExportModule(nn.Module):
             seg3d_head: Export-prepared decoder head copy.
             stage_count: Number of encoder stages feeding the decoder.
             sparse_shape: Static base sparse shape baked at export time;
-                block stages use it right-shifted by their cumulative pooling
-                depth.
+                block stages use it pooled by their cumulative pooling depth
+                (rounded up, see :func:`pooled_sparse_shape`).
             strides: Encoder pooling strides (one per pooling stage).
         """
         super().__init__()
@@ -909,7 +910,7 @@ class _PTv3SegHeadExportModule(nn.Module):
         for stage in _block_stage_indices(self.dec_depths):
             self.register_buffer(
                 f"_sparse_shape_{stage}",
-                sparse_shape.to(dtype=torch.long) >> stage_depths[stage],
+                pooled_sparse_shape(sparse_shape, stage_depths[stage]),
                 persistent=False,
             )
 
