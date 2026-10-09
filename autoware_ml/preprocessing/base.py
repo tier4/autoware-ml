@@ -21,6 +21,9 @@ and model forward passes.
 from collections.abc import Sequence
 from typing import Any
 
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+
 
 class DataPreprocessing:
     """Apply a sequence of preprocessing layers to a collated batch.
@@ -29,22 +32,22 @@ class DataPreprocessing:
     preprocessing operations like voxelization, projection, and format conversion
     without registering the pipeline as part of the neural network.
 
-    The pipeline follows a dict-in/dict-out pattern where each layer receives the
-    current batch dictionary and returns updates to merge into it.
+    The collated batch starts the model inputs. Each layer receives the model inputs and
+    returns them with the features it computes added or the data it changes replaced.
 
     Args:
         pipeline: List of callable layers to apply sequentially. Each layer
-            should accept ``(dict[str, Any], *, is_training: bool)`` and return
-            ``dict[str, Any]``.
+            should accept ``(ModelBatchInputs, *, is_training: bool)`` and return
+            ``ModelBatchInputs``.
 
     Example:
         ```python
         preprocessing = DataPreprocessing(
             pipeline=[
-                Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                PointPillarPreprocessor(...),
             ]
         )
-        batch = preprocessing(batch)  # Applied on GPU
+        batch_inputs = preprocessing(batch, is_training=True)
         ```
     """
 
@@ -56,25 +59,18 @@ class DataPreprocessing:
         """
         self.pipeline = list(pipeline)
 
-    def __call__(self, batch_inputs_dict: dict[str, Any], *, is_training: bool) -> dict[str, Any]:
+    def __call__(self, batch: ModelGTBatch, *, is_training: bool) -> ModelBatchInputs:
         """Apply preprocessing layers after the batch is already on device.
 
-        The input dictionary is mutated in place; the same object is also
-        returned for chaining convenience.
-
         Args:
-            batch_inputs_dict: Collated batch dictionary on the target device.
-                Mutated in place: each layer's returned mapping is merged into
-                this dict.
-            is_training: Whether the owning model is in training mode. Passed
-                to every layer so mode-dependent behavior (for example a
-                voxelizer with a larger evaluation budget) never relies on
-                implicit module state.
+            batch: Collated typed batch on the target device.
+            is_training: Whether the model is in training mode. Passed to every layer, so
+                a layer that behaves differently in training does not read module state.
 
         Returns:
-            The same ``batch_inputs_dict`` with preprocessing applied.
+            The model inputs of the batch with preprocessing applied.
         """
+        batch_inputs = ModelBatchInputs.from_gt_batch(batch)
         for layer in self.pipeline:
-            batch_inputs_dict |= layer(batch_inputs_dict, is_training=is_training)
-
-        return batch_inputs_dict
+            batch_inputs = layer(batch_inputs, is_training=is_training)
+        return batch_inputs

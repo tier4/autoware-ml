@@ -1,0 +1,7 @@
+_target_: autoware_ml.datamodule.t4dataset.dataset.T4Dataset
+_convert_: all
+_partial_: true
+
+dataset_tasks: {}
+
+transforms: ???

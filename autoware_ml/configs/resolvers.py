@@ -91,8 +91,27 @@ def raw_name_to_train_index(
     return cast(DictConfig, OmegaConf.create(mapping))
 
 
+def class_count(class_names: Iterable[Any]) -> int:
+    """Number of classes a taxonomy names.
+
+    The taxonomy owns the class list, so the count is read off it rather than restated. A
+    model trains as many outputs as its database has classes, and two taxonomies of the same
+    task disagree on that number::
+
+        num_classes: ${class_count:${database.taxonomy.detection3d.class_names}}
+
+    Args:
+        class_names: Class names of the taxonomy.
+
+    Returns:
+        The number of classes.
+    """
+    return len(list(class_names))
+
+
 def register_config_resolvers() -> None:
     """Register all custom OmegaConf resolvers required by bundled configs."""
     OmegaConf.register_new_resolver("user_config_name", strip_tasks_prefix, replace=True)
     OmegaConf.register_new_resolver("seg_class_indices", raw_name_to_train_index, replace=True)
     OmegaConf.register_new_resolver("merge_lists", merge_lists, replace=True)
+    OmegaConf.register_new_resolver("class_count", class_count, replace=True)

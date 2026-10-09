@@ -1,0 +1,26 @@
+# @package _global_
+
+defaults:
+  - /tasks/multi/ptv3/voxel012_122m_t4dataset_j6gen2
+  - _self_
+
+model:
+  optimizer:
+    lr: 0.0001
+  optimizer_group_overrides:
+    encoder_block:
+      lr: 0.00001
+    encoder_default:
+      lr: 0.000025
+    seg3d_head:
+      lr: 0.0001
+  scheduler:
+    warmup_epochs: 2
+    decay_epochs: 38
+    max_lr_factor: 2.0
+
+trainer:
+  max_epochs: 40
+
+callbacks:
+  early_stopping: null

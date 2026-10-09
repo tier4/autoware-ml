@@ -187,7 +187,6 @@ def test_a_class_without_fine_labels_is_a_placeholder() -> None:
     assert "vertical_thin" not in taxonomy.class_mapping.values()
 
 
-
 def test_the_mappings_cannot_be_mutated_after_construction() -> None:
     # A mutated mapping would change the hash of a taxonomy a table was already baked with
     taxonomy = _coarse()

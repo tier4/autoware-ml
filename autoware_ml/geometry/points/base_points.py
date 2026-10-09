@@ -136,6 +136,48 @@ class BasePoints(ABC):
         """torch.Size(int, int): Shape of points."""
         return self.points.shape
 
+    def feature_dim(self, point_feature_name: PointFeatureName) -> int:
+        """Dimension index of the named feature.
+
+        Args:
+            point_feature_name (PointFeatureName): Name of the feature to look up.
+
+        Returns:
+            int: Dimension index of the feature.
+
+        Raises:
+            ValueError: If the points do not carry the feature.
+        """
+        if point_feature_name not in self._point_feature_names:
+            raise ValueError(
+                f"The points carry {list(self._point_feature_names)}, not {point_feature_name}."
+            )
+        return list(self._point_feature_names).index(point_feature_name)
+
+    def feature(self, point_feature_name: PointFeatureName) -> Float32[Tensor, " num_points"]:
+        """Values of the named feature for each point.
+
+        Args:
+            point_feature_name (PointFeatureName): Name of the feature to read.
+
+        Returns:
+            Float32[Tensor, " num_points"]: The feature of each point.
+        """
+        return self.points[:, self.feature_dim(point_feature_name)]
+
+    def set_feature(
+        self,
+        point_feature_name: PointFeatureName,
+        values: Float32[Tensor, " num_points"],
+    ) -> None:
+        """Overwrite the values of the named feature.
+
+        Args:
+            point_feature_name (PointFeatureName): Name of the feature to write.
+            values (Float32[Tensor, " num_points"]): New value of the feature for each point.
+        """
+        self.points[:, self.feature_dim(point_feature_name)] = values
+
     @property
     def bev_coords(self) -> Float32[Tensor, "num_points 2"]:
         """Coordinates in BEV (x and y) of the points in shape (num_points, 2)."""
@@ -243,6 +285,23 @@ class BasePoints(ABC):
             & (self.points[:, PointFieldIndex.Z] <= point_range[5])
         )
         return in_range_flags
+
+    def in_grid_range_3d(self, point_range: Float32[Tensor, "6"]) -> Bool[Tensor, " num_points"]:
+        """Check whether the points lie in the half-open range [min, max).
+
+        A point on the maximum would fall one cell past a voxel grid over the range, so it
+        counts as outside.
+
+        Args:
+            point_range (Float32[Tensor, "6"]): The range of
+                point (x_min, y_min, z_min, x_max, y_max, z_max).
+
+        Returns:
+            Bool[Tensor, " num_points"]: A binary vector indicating whether each point is inside
+            the grid range.
+        """
+        coordinates = self.points[:, [PointFieldIndex.X, PointFieldIndex.Y, PointFieldIndex.Z]]
+        return ((coordinates >= point_range[:3]) & (coordinates < point_range[3:])).all(dim=1)
 
     def in_range_bev(self, point_range: Float32[Tensor, "4"]) -> Bool[Tensor, " num_points"]:
         """Check whether the points are in the given BEV range.

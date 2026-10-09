@@ -35,22 +35,33 @@ import torch.nn as nn
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
+from autoware_ml.dataclasses.batch.detection3d import Detection3DGTBatch
+from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DHeadOutputs
+from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
+from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
+from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentation3DHeadOutputs
 from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
 from autoware_ml.models.detection3d.ptv3 import PTv3DetBEVNeck, build_det_head_export_spec
 from autoware_ml.models.segmentation3d.encoders.ptv3 import PointTransformerV3Encoder
+from autoware_ml.models.segmentation3d.encoders.voxel import VoxelFeatureEncoder
 from autoware_ml.models.segmentation3d.heads.ptv3 import (
     PTv3SegDecoderHead,
     segmentation_eval_output,
+    segmentation_point_loss,
+    segmentation_predict_outputs,
 )
 from autoware_ml.models.segmentation3d.ptv3_base import (
+    SERIALIZED_POOLING_FIELDS,
     PTv3BaseModel,
     PTv3EncoderExportBase,
     build_encoder_export_spec,
-    build_monolithic_export_inputs,
     build_point_feature_dynamic_axes,
     build_ptv3_export_context,
     build_ptv3_input_dynamic_axes,
     build_seg_head_export_spec,
+    prepare_ptv3_export_inputs,
     split_block_parameters,
 )
 from autoware_ml.utils.deploy import ExportSpec
@@ -67,6 +78,7 @@ class PTv3SegDetModel(PTv3BaseModel):
     def __init__(
         self,
         encoder: PointTransformerV3Encoder,
+        voxel_encoder: VoxelFeatureEncoder,
         seg3d_head: PTv3SegDecoderHead,
         bev_neck: PTv3DetBEVNeck,
         bbox_head: nn.Module,
@@ -85,6 +97,7 @@ class PTv3SegDetModel(PTv3BaseModel):
 
         Args:
             encoder: PTv3 encoder module shared by both branches.
+            voxel_encoder: Voxel feature encoder feeding the embedding stem.
             seg3d_head: Segmentation decoder head owning losses and the
                 classifier.
             bev_neck: Detection BEV neck consuming the encoder pooling chain.
@@ -103,6 +116,7 @@ class PTv3SegDetModel(PTv3BaseModel):
         """
         super().__init__(
             encoder=encoder,
+            voxel_encoder=voxel_encoder,
             grid_size=grid_size,
             point_cloud_range=point_cloud_range,
             optimizer=optimizer,
@@ -141,25 +155,55 @@ class PTv3SegDetModel(PTv3BaseModel):
 
     def forward(
         self,
-        coord: torch.Tensor,
-        feat: torch.Tensor,
-        grid_coord: torch.Tensor,
-        offset: torch.Tensor,
-    ) -> dict[str, Any]:
-        """Run one shared PTv3 encoder pass and branch into both heads."""
-        point = self.encoder(
-            {"coord": coord, "feat": feat, "grid_coord": grid_coord, "offset": offset}
-        )
+        voxels: torch.Tensor,
+        num_points: torch.Tensor,
+        voxel_coords: torch.Tensor,
+        num_dropped_voxels: torch.Tensor,
+        time_lag_column: int,
+    ) -> ModelOutputs:
+        """Run one shared PTv3 encoder pass and branch into both heads.
+
+        Args:
+            voxels: Padded voxel points from the data preprocessing.
+            num_points: Valid point count per voxel.
+            voxel_coords: Voxel coordinates with a leading batch column.
+            num_dropped_voxels: Occupied voxels the voxelizer discarded.
+            time_lag_column: Point column holding the time lag.
+        """
+        point = self.encode(voxels, num_points, voxel_coords, num_dropped_voxels, time_lag_column)
         # The BEV neck must read the encoder chain before the segmentation
         # decoder: SerializedUnpooling pops the chain and overwrites parent
         # features in place.
         bev_features = self.bev_neck(point)
         seg_logits = self.seg3d_head(point)
         det_outputs = self.bbox_head(bev_features)
-        return {"seg_logits": seg_logits, "det_outputs": det_outputs}
+        return ModelOutputs(
+            detection3d_head_outputs=Detection3DHeadOutputs(
+                center_head_outputs=None, transfusion_head_outputs=det_outputs
+            ),
+            segmentation3d_head_outputs=Segmentation3DHeadOutputs(logits=seg_logits),
+        )
 
     @staticmethod
-    def _detection_frame_mask(batch_inputs_dict: Mapping[str, Any]) -> torch.Tensor:
+    def _detection_gt_batch(batch_inputs: ModelBatchInputs) -> Detection3DGTBatch:
+        """Read the detection ground truth of the batch.
+
+        Args:
+            batch_inputs: Model inputs of the batch.
+
+        Returns:
+            The detection ground truth.
+
+        Raises:
+            ValueError: If the batch carries no detection ground truth.
+        """
+        gt_detections = batch_inputs.multi_task_gt_batch.detection3d_gt_batch
+        if gt_detections is None:
+            raise ValueError("PTv3 seg det needs the 3D detection ground truth of the batch.")
+        return gt_detections
+
+    @staticmethod
+    def _detection_frame_mask(gt_detections: Detection3DGTBatch) -> torch.Tensor:
         """Return the per-frame detection supervision mask.
 
         Supervision is carried by the annotations themselves: a frame with no
@@ -168,20 +212,12 @@ class PTv3SegDetModel(PTv3BaseModel):
         signal - the deliberate price of not carrying a separate flag.
 
         Args:
-            batch_inputs_dict: Full batch dictionary with per-frame ``gt_boxes``.
+            gt_detections: Detection ground truth of the batch.
 
         Returns:
             Boolean tensor of shape ``(batch_size,)``.
         """
-        gt_boxes = batch_inputs_dict["gt_boxes"]
-        return torch.tensor([boxes.shape[0] > 0 for boxes in gt_boxes], device=gt_boxes[0].device)
-
-    @staticmethod
-    def _mask_detection_outputs(
-        det_outputs: Mapping[str, torch.Tensor], mask: torch.Tensor
-    ) -> dict[str, torch.Tensor]:
-        """Select the flagged batch entries from every detection output tensor."""
-        return {name: value[mask] for name, value in det_outputs.items()}
+        return gt_detections.gt_valid_bboxes > 0
 
     @staticmethod
     def _mask_list(values: Sequence[Any], mask: torch.Tensor) -> list[Any]:
@@ -190,8 +226,8 @@ class PTv3SegDetModel(PTv3BaseModel):
 
     def compute_metrics(
         self,
-        batch_inputs_dict: Mapping[str, Any],
-        outputs: dict[str, Any],
+        batch_inputs: ModelBatchInputs,
+        outputs: ModelOutputs,
     ) -> dict[str, torch.Tensor]:
         """Compute combined segmentation and detection losses.
 
@@ -199,21 +235,33 @@ class PTv3SegDetModel(PTv3BaseModel):
         on unlabeled frames, empty ground truth would turn every real object
         into a hard negative.
         """
-        seg_logits = outputs["seg_logits"]
-        det_outputs = outputs["det_outputs"]
-        seg_metrics = self.seg3d_head.loss(seg_logits, batch_inputs_dict["segment"])
+        seg_logits = outputs.segmentation3d().logits
+        det_outputs = outputs.detection3d().transfusion_head()
+        seg_metrics = segmentation_point_loss(self.seg3d_head, seg_logits, batch_inputs)
 
-        det_mask = self._detection_frame_mask(batch_inputs_dict)
+        gt_detections = self._detection_gt_batch(batch_inputs)
+        det_mask = self._detection_frame_mask(gt_detections)
         if bool(det_mask.any()):
             det_metrics = self.bbox_head.loss(
-                self._mask_detection_outputs(det_outputs, det_mask),
-                self._mask_list(batch_inputs_dict["gt_boxes"], det_mask),
-                self._mask_list(batch_inputs_dict["gt_labels"], det_mask),
+                det_outputs.select_samples(det_mask),
+                self._mask_list(gt_detections.valid_bboxes_3d(), det_mask),
+                self._mask_list(gt_detections.valid_labels_3d(), det_mask),
             )
         else:
             # Keep the detection branch in the autograd graph with zero
             # gradients so DDP reducers see every parameter.
-            zero_loss = sum(value.float().sum() for value in det_outputs.values()) * 0.0
+            branches = det_outputs.separate_head_outputs
+            graph_tensors = [
+                det_outputs.dense_heatmap,
+                branches.heatmap,
+                branches.center,
+                branches.height,
+                branches.dim,
+                branches.rot,
+            ]
+            if branches.vel is not None:
+                graph_tensors.append(branches.vel)
+            zero_loss = sum(tensor.float().sum() for tensor in graph_tensors) * 0.0
             det_metrics = {"loss": zero_loss}
 
         seg_loss = seg_metrics["loss"]
@@ -230,10 +278,8 @@ class PTv3SegDetModel(PTv3BaseModel):
         metrics.update({f"det_{name}": value for name, value in det_metrics.items()})
         return metrics
 
-    def build_eval_output(
-        self, batch: Mapping[str, Any], outputs: dict[str, Any]
-    ) -> dict[str, Any]:
-        """Produce detection and original-point segmentation eval data.
+    def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> dict[str, Any]:
+        """Produce the detection and the current frame segmentation eval data.
 
         Frames without detection supervision contribute empty predictions and
         their (already empty) ground truth instead of being dropped: the
@@ -242,15 +288,44 @@ class PTv3SegDetModel(PTv3BaseModel):
         deadlocks under DDP when ranks see different seg/det frame mixes.
         Empty prediction + empty ground truth is metric-neutral.
         """
-        det_mask = self._detection_frame_mask(batch)
-        predictions = self.bbox_head.predict(outputs["det_outputs"])
+        det_mask = self._detection_frame_mask(self._detection_gt_batch(batch))
+        predictions = self.bbox_head.predict(outputs.detection3d().transfusion_head())
         predictions = [
-            prediction if flagged else {key: value[:0] for key, value in prediction.items()}
+            prediction
+            if flagged
+            else Detection3DSamplePredictions(
+                bboxes_3d=prediction.bboxes_3d[:0],
+                scores_3d=prediction.scores_3d[:0],
+                labels_3d=prediction.labels_3d[:0],
+            )
             for prediction, flagged in zip(predictions, det_mask.tolist())
         ]
-        eval_out = detection_eval_output(predictions, batch)
-        eval_out.update(segmentation_eval_output(outputs["seg_logits"], batch))
+        eval_out = detection_eval_output(
+            ModelPredictions(detection3d_predictions=predictions), batch
+        )
+        eval_out.update(segmentation_eval_output(outputs.segmentation3d().logits, batch))
         return eval_out
+
+    def predict_outputs(
+        self, batch_inputs: ModelBatchInputs, outputs: ModelOutputs
+    ) -> ModelPredictions:
+        """Decode the boxes and the point labels of the batch for inference.
+
+        Args:
+            batch_inputs: Model inputs holding the grid samples the logits were predicted for.
+            outputs: Raw outputs returned by :meth:`forward`.
+
+        Returns:
+            The decoded boxes of every sample and the label of every original point.
+        """
+        return ModelPredictions(
+            detection3d_predictions=self.bbox_head.predict(
+                outputs.detection3d().transfusion_head()
+            ),
+            segmentation3d_predictions=segmentation_predict_outputs(
+                outputs.segmentation3d().logits, batch_inputs
+            ),
+        )
 
     def get_export_output_names(self) -> list[str]:
         """Return configured ONNX export output names.
@@ -267,16 +342,25 @@ class PTv3SegDetModel(PTv3BaseModel):
             )
         return list(self._export_output_names)
 
-    def build_export_spec(self, batch_inputs_dict: Mapping[str, torch.Tensor]) -> ExportSpec:
-        """Build the ONNX export spec for joint PTv3 segmentation+detection."""
+    def build_export_spec(self, batch_inputs: ModelBatchInputs) -> ExportSpec:
+        """Build the ONNX export spec for joint PTv3 segmentation+detection.
+
+        Args:
+            batch_inputs: Example preprocessed batch with the voxels.
+
+        Returns:
+            Deployment export specification for the joint model.
+        """
         if self.grid_size is None or self.point_cloud_range is None:
             raise ValueError(
                 "grid_size and point_cloud_range must be provided at construction time to use "
                 "export."
             )
-        inputs = build_monolithic_export_inputs(self, batch_inputs_dict)
+        inputs = prepare_ptv3_export_inputs(self, batch_inputs)
+        export_input_args, input_param_names = inputs.encoder_args(SERIALIZED_POOLING_FIELDS)
         export_module = _PTv3SegDetExportModule(
             encoder=self._prepare_encoder_export(),
+            voxel_encoder=self.voxel_encoder,
             seg3d_head=self.seg3d_head.prepare_for_export(self.EXPORT_ORDER),
             bev_neck=deepcopy(self.bev_neck).eval(),
             bbox_head=self.bbox_head.prepare_for_export(),
@@ -285,8 +369,6 @@ class PTv3SegDetModel(PTv3BaseModel):
             output_names=self.get_export_output_names(),
         )
         export_module.eval()
-        export_input_args = inputs.args
-        input_param_names = inputs.input_names
         output_names = self.get_export_output_names()
         dynamic_axes = build_ptv3_input_dynamic_axes(input_param_names)
         dynamic_axes.update(
@@ -303,16 +385,21 @@ class PTv3SegDetModel(PTv3BaseModel):
             supported_stages=self.EXPORT_SUPPORTED_STAGES,
         )
 
-    def build_export_specs(
-        self, batch_inputs_dict: Mapping[str, torch.Tensor]
-    ) -> dict[str, ExportSpec]:
-        """Build split PTv3 segdet ONNX export specs for encoder, seg head, and det head."""
+    def build_export_specs(self, batch_inputs: ModelBatchInputs) -> dict[str, ExportSpec]:
+        """Build split PTv3 segdet ONNX export specs for encoder, seg head, and det head.
+
+        Args:
+            batch_inputs: Example preprocessed batch with the voxels.
+
+        Returns:
+            Export specs of the encoder, the segmentation head, and the detection head.
+        """
         if self.grid_size is None or self.point_cloud_range is None:
             raise ValueError(
                 "grid_size and point_cloud_range must be provided at construction time to use "
                 "export."
             )
-        context = build_ptv3_export_context(self, batch_inputs_dict)
+        context = build_ptv3_export_context(self, batch_inputs)
         det_output_names = [
             n for n in self.get_export_output_names() if n not in ("pred_labels", "pred_probs")
         ]
@@ -338,6 +425,7 @@ class _PTv3SegDetExportModule(PTv3EncoderExportBase):
     def __init__(
         self,
         encoder: PointTransformerV3Encoder,
+        voxel_encoder: VoxelFeatureEncoder,
         seg3d_head: PTv3SegDecoderHead,
         bev_neck: PTv3DetBEVNeck,
         bbox_head: nn.Module,
@@ -345,7 +433,7 @@ class _PTv3SegDetExportModule(PTv3EncoderExportBase):
         serialized_depth: torch.Tensor,
         output_names: Sequence[str],
     ) -> None:
-        super().__init__(encoder, sparse_shape, serialized_depth)
+        super().__init__(encoder, voxel_encoder, sparse_shape, serialized_depth)
         self.seg3d_head = seg3d_head
         self.bev_neck = bev_neck
         self.bbox_head = bbox_head
@@ -353,8 +441,9 @@ class _PTv3SegDetExportModule(PTv3EncoderExportBase):
 
     def forward(
         self,
+        voxels: torch.Tensor,
+        num_points_per_voxel: torch.Tensor,
         grid_coord: torch.Tensor,
-        feat: torch.Tensor,
         patch_order: torch.Tensor,
         serialized_inverse: torch.Tensor,
         *serialized_pooling_inputs: torch.Tensor,
@@ -362,8 +451,9 @@ class _PTv3SegDetExportModule(PTv3EncoderExportBase):
         """Run the export graph and return outputs in configured order.
 
         Args:
+            voxels: Padded voxel points.
+            num_points_per_voxel: Valid point count per voxel.
             grid_coord: Input voxel coordinates.
-            feat: Input point or voxel features.
             patch_order: The level-0 serialization orders padded to whole attention windows.
             serialized_inverse: Inverse of those orders.
             serialized_pooling_inputs: Precomputed pooling metadata tensors.
@@ -372,7 +462,12 @@ class _PTv3SegDetExportModule(PTv3EncoderExportBase):
             Tuple of export tensors ordered according to ``output_names``.
         """
         point = self.run_encoder(
-            grid_coord, feat, patch_order, serialized_inverse, *serialized_pooling_inputs
+            voxels,
+            num_points_per_voxel,
+            grid_coord,
+            patch_order,
+            serialized_inverse,
+            *serialized_pooling_inputs,
         )
         # BEV branch first: the segmentation decoder consumes the pooling
         # chain destructively.
@@ -383,9 +478,8 @@ class _PTv3SegDetExportModule(PTv3EncoderExportBase):
         pred_probs = torch.softmax(seg_logits, dim=1)
         pred_labels = pred_probs.argmax(dim=1)
 
-        outputs: dict[str, torch.Tensor] = {
-            "pred_labels": pred_labels,
-            "pred_probs": pred_probs,
-            **det_outputs,
-        }
+        segmentation = {"pred_labels": pred_labels, "pred_probs": pred_probs}
+        detection_names = [name for name in self.output_names if name not in segmentation]
+        detection = dict(zip(detection_names, det_outputs.export_tensors(detection_names)))
+        outputs = segmentation | detection
         return tuple(outputs[name] for name in self.output_names)

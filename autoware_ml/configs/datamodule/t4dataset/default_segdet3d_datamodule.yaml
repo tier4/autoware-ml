@@ -1,0 +1,4 @@
+defaults:
+  - default_datamodule@_here_
+  - t4dataset/datasets@train_dataset: default_segdet3d_train_dataset
+  - t4dataset/datasets@test_dataset: default_segdet3d_test_dataset

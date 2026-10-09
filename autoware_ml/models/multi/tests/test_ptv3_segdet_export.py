@@ -8,9 +8,18 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from autoware_ml.models.multi.ptv3_segdet import PTv3SegDetModel
-from autoware_ml.models.segmentation3d.ptv3_base import seg_head_export_input_names
-from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
+from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTBatch
+from autoware_ml.dataclasses.geometry.voxels import VoxelsData
+from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DHeadOutputs
+from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
+from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentation3DHeadOutputs
+from autoware_ml.models.detection3d.tests.head_output_fixtures import build_transfusion_outputs
+from autoware_ml.models.tests.batch_inputs_fixtures import (
+    build_batch_inputs,
+    build_detection_gt_batch,
+    build_point_cloud_batch,
+)
+from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
 from autoware_ml.models.detection3d.tests.ptv3_detection_fixtures import (
     build_bev_neck,
     build_inputs,
@@ -19,13 +28,17 @@ from autoware_ml.models.detection3d.tests.ptv3_detection_fixtures import (
     build_seg_model,
     build_trans_model,
     build_transfusion_head,
-    move_batch_to_device,
 )
+from autoware_ml.models.multi.ptv3_segdet import PTv3SegDetModel
+from autoware_ml.models.segmentation3d.encoders.voxel import SweepSplitVoxelFeatureEncoder
+from autoware_ml.models.segmentation3d.ptv3_base import seg_head_export_input_names
+from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
 from autoware_ml.utils.checkpoints import apply_matching_weights
 
 EXPECTED_PTV3_INPUT_NAMES = [
+    "voxels",
+    "num_points_per_voxel",
     "grid_coord",
-    "feat",
     "patch_order",
     "serialized_inverse",
     "serialized_pooling_0_indices",
@@ -53,13 +66,13 @@ JOINT_EXPORT_OUTPUT_NAMES = [
 
 
 class _DummyBBoxHead:
-    def predict(self, det_outputs: object) -> list[dict[str, torch.Tensor]]:
+    def predict(self, det_outputs: object) -> list[Detection3DSamplePredictions]:
         return [
-            {
-                "bboxes_3d": torch.zeros((0, 9), dtype=torch.float32),
-                "scores_3d": torch.zeros((0,), dtype=torch.float32),
-                "labels_3d": torch.zeros((0,), dtype=torch.long),
-            }
+            Detection3DSamplePredictions(
+                bboxes_3d=torch.zeros((0, 9), dtype=torch.float32),
+                scores_3d=torch.zeros((0,), dtype=torch.float32),
+                labels_3d=torch.zeros((0,), dtype=torch.long),
+            )
         ]
 
 
@@ -110,7 +123,7 @@ def test_seg_head_export_input_names_follow_dec_depths_rule() -> None:
 def test_ptv3_seg_split_export_supports_decoder_blocks() -> None:
     """A blocks decoder (dec_depths (1,) at stage 0) exports and runs as a split seg head."""
     model = build_seg_model().cuda().eval()
-    batch = move_batch_to_device(build_inputs(), torch.device("cuda"))
+    batch = build_inputs(device=torch.device("cuda"))
 
     specs = model.build_export_specs(batch)
 
@@ -137,7 +150,7 @@ def test_ptv3_seg_split_export_supports_decoder_blocks() -> None:
     with torch.no_grad():
         pred_labels, pred_probs = spec.module(*spec.args)
 
-    num_voxels = batch["coord"].shape[0]
+    num_voxels = batch.voxels_data.voxels.shape[0]
     assert pred_labels.shape == (num_voxels,)
     assert pred_probs.shape == (num_voxels, 3)
     assert pred_labels.dtype == torch.long
@@ -146,44 +159,66 @@ def test_ptv3_seg_split_export_supports_decoder_blocks() -> None:
 def test_ptv3_segdet_eval_output_scatters_segmentation_to_original_points() -> None:
     model = SimpleNamespace(
         bbox_head=_DummyBBoxHead(),
+        _detection_gt_batch=PTv3SegDetModel._detection_gt_batch,
         _detection_frame_mask=PTv3SegDetModel._detection_frame_mask,
-        _mask_detection_outputs=PTv3SegDetModel._mask_detection_outputs,
         _mask_list=PTv3SegDetModel._mask_list,
     )
-    outputs = {
-        "det_outputs": {"heatmap": torch.zeros((1, 2, 8), dtype=torch.float32)},
-        "seg_logits": torch.tensor(
-            [
-                [3.0, 0.0],
-                [0.0, 3.0],
-            ],
-            dtype=torch.float32,
+    det_outputs = build_transfusion_outputs(
+        {
+            name: torch.zeros((1, channels, 8))
+            for name, channels in (
+                ("heatmap", 2),
+                ("center", 2),
+                ("height", 1),
+                ("dim", 3),
+                ("rot", 2),
+            )
+        }
+    )
+    outputs = ModelOutputs(
+        detection3d_head_outputs=Detection3DHeadOutputs(
+            center_head_outputs=None, transfusion_head_outputs=det_outputs
         ),
-    }
-    batch = {
-        "gt_boxes": [torch.zeros((0, 9), dtype=torch.float32)],
-        "gt_labels": [torch.zeros((0,), dtype=torch.long)],
-        "inverse": torch.tensor([0, 1, 1, 0], dtype=torch.long),
-        "offset": torch.tensor([2], dtype=torch.long),
-        "origin_segment": torch.tensor([0, 1, 1, 0], dtype=torch.long),
-        "origin_coord": torch.tensor(
-            [
-                [0.0, 0.0, 0.0],
-                [1.0, 1.0, 0.0],
-                [2.0, 2.0, 0.0],
-                [3.0, 3.0, 0.0],
-            ],
-            dtype=torch.float32,
+        segmentation3d_head_outputs=Segmentation3DHeadOutputs(
+            logits=torch.tensor([[3.0, 0.0], [0.0, 3.0]], dtype=torch.float32)
         ),
-    }
+    )
+    points = torch.tensor(
+        [
+            [0.0, 0.0, 0.0, 0.5, 0.0],
+            [1.0, 1.0, 0.0, 0.5, 0.0],
+            [2.0, 2.0, 0.0, 0.5, 0.0],
+            [3.0, 3.0, 0.0, 0.5, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+    segment = torch.tensor([0, 1, 1, 0], dtype=torch.long)
+    point_cloud = build_point_cloud_batch([points], timestamp_difference_dim=4)
+    batch = build_batch_inputs(
+        point_cloud=point_cloud,
+        detection=build_detection_gt_batch(
+            [torch.zeros((0, 9), dtype=torch.float32)], [torch.zeros((0,), dtype=torch.long)]
+        ),
+        segmentation=Segmentation3DGTBatch(
+            gt_semantic_masks=segment, batch_indices=point_cloud.batch_indices
+        ),
+        voxels=VoxelsData(
+            voxels=torch.zeros((2, 2, 5), dtype=torch.float32),
+            coords=torch.zeros((2, 3), dtype=torch.int32),
+            num_points=torch.full((2,), 2, dtype=torch.int32),
+            batch_indices=torch.zeros(2, dtype=torch.int32),
+            point_voxel_indices=torch.tensor([0, 1, 1, 0], dtype=torch.long),
+            num_dropped_voxels=torch.tensor(0),
+        ),
+    )
 
     eval_out = PTv3SegDetModel.build_eval_output(model, batch, outputs)
 
     frames = eval_out["seg_frames"]
     assert len(frames) == 1
     assert frames[0]["pred"].tolist() == [0, 1, 1, 0]
-    assert torch.equal(frames[0]["target"], batch["origin_segment"])
-    assert torch.equal(frames[0]["coord"], batch["origin_coord"])
+    assert torch.equal(frames[0]["target"], segment)
+    assert torch.equal(frames[0]["coord"], points[:, :3])
     assert frames[0]["scores"].shape == (4, 2)
     assert frames[0]["gt_boxes"].shape == (0, 9)
     assert len(eval_out["predictions"]) == 1
@@ -222,6 +257,7 @@ def _save_detection_checkpoint(
 def _build_segdet_model() -> PTv3SegDetModel:
     return PTv3SegDetModel(
         encoder=build_ptv3_encoder(),
+        voxel_encoder=SweepSplitVoxelFeatureEncoder(),
         seg3d_head=build_seg_head(),
         bev_neck=build_bev_neck(),
         bbox_head=build_transfusion_head(),
@@ -251,7 +287,7 @@ def test_ptv3_transhead_segdet_export_uses_named_joint_outputs(tmp_path: Path) -
         set_eval=True,
     )
 
-    batch = move_batch_to_device(build_inputs(), torch.device("cuda"))
+    batch = build_inputs(device=torch.device("cuda"))
     spec = model.build_export_spec(batch)
     outputs = spec.module(*spec.args)
 
@@ -278,17 +314,22 @@ def test_ptv3_segdet_detection_outputs_invariant_to_seg_head() -> None:
     must not change detection outputs (the det branch taps the encoder only)."""
     torch.manual_seed(0)
     model = _build_segdet_model().cuda().eval()
-    batch = move_batch_to_device(build_inputs(), torch.device("cuda"))
+    batch = build_inputs(device=torch.device("cuda"))
+    forward_inputs = model.forward_inputs(batch)
 
     with torch.no_grad():
-        reference = model(**batch)
+        reference = model(**forward_inputs)
         for parameter in model.seg3d_head.parameters():
             parameter.add_(1.0)
-        perturbed = model(**batch)
+        perturbed = model(**forward_inputs)
 
-    for name, value in reference["det_outputs"].items():
-        assert torch.equal(value, perturbed["det_outputs"][name]), name
-    assert not torch.equal(reference["seg_logits"], perturbed["seg_logits"])
+    names = ["dense_heatmap", "query_heatmap_score", "query_labels", "heatmap", "center"]
+    names += ["height", "dim", "rot", "vel"]
+    reference_tensors = reference.detection3d().transfusion_head().export_tensors(names)
+    perturbed_tensors = perturbed.detection3d().transfusion_head().export_tensors(names)
+    for name, value, perturbed_value in zip(names, reference_tensors, perturbed_tensors):
+        assert torch.equal(value, perturbed_value), name
+    assert not torch.equal(reference.segmentation3d().logits, perturbed.segmentation3d().logits)
 
 
 @pytest.mark.skipif(
@@ -300,18 +341,12 @@ def test_ptv3_segdet_seg_logits_invariant_to_det_branch_pass() -> None:
     are identical whether or not the detection branch ran first."""
     torch.manual_seed(0)
     model = _build_segdet_model().cuda().eval()
-    batch = move_batch_to_device(build_inputs(), torch.device("cuda"))
+    batch = build_inputs(device=torch.device("cuda"))
+    forward_inputs = model.forward_inputs(batch)
 
     with torch.no_grad():
-        joint_logits = model(**batch)["seg_logits"]
-        point = model.encoder(
-            {
-                "coord": batch["coord"],
-                "feat": batch["feat"],
-                "grid_coord": batch["grid_coord"],
-                "offset": batch["offset"],
-            }
-        )
+        joint_logits = model(**forward_inputs).segmentation3d().logits
+        point = model.encode(**forward_inputs)
         seg_only_logits = model.seg3d_head(point)
 
     torch.testing.assert_close(joint_logits, seg_only_logits)
