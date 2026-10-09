@@ -71,3 +71,16 @@ def test_det_head_exports_fused_bf16_attention(config_name: str) -> None:
     module_cfg = merge_module_onnx_cfg(cfg.deploy.onnx, "ptv3_det3d_head")
     assert cfg.model.bbox_head.use_bf16_cross_attention is True
     assert module_cfg.precision == "fp16"
+
+
+@pytest.mark.parametrize("config_name", PTV3_CONFIGS)
+def test_encoder_metainfo_stamps_the_attention_windows(config_name: str) -> None:
+    # `patch_order` is built from the per-level attention window on both sides of the
+    # deployment boundary (exporter and runtime), so the artifact records the windows it
+    # was exported with: one per level, straight from the encoder config, never retyped.
+    cfg = _compose(config_name)
+    module_cfg = merge_module_onnx_cfg(cfg.deploy.onnx, "ptv3_encoder")
+    patch_sizes = OmegaConf.to_container(module_cfg.metainfo.patch_sizes, resolve=True)
+    assert patch_sizes == list(cfg.model.encoder.enc_patch_size)
+    assert len(patch_sizes) == len(cfg.model.encoder.stride) + 1
+    assert all(isinstance(size, int) and size > 0 for size in patch_sizes)
