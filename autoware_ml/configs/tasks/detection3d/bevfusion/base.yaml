@@ -11,16 +11,6 @@ out_size_factor: ???
 score_threshold: 0.0
 max_time_lag: ???
 
-datamodule:
-  collation_map:
-    points: list
-    gt_boxes: list
-    gt_labels: list
-    gt_num_points: list
-    ego2global: list
-    scene_token: list
-    timestamp: list
-
 model:
   _target_: autoware_ml.models.detection3d.bevfusion.BEVFusionDetectionModel
   metrics: ${dataset.detection3d.metrics}
@@ -65,7 +55,8 @@ model:
       - ${point_cloud_range.3}
       - ${point_cloud_range.4}
       - ${point_cloud_range.5}
-      - 255.0
+      # Intensity is in [0, 1]
+      - 1.0
       - ${max_time_lag}
   pts_middle_encoder:
     _target_: autoware_ml.models.detection3d.encoders.sparse.SparseEncoder

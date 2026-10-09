@@ -101,6 +101,12 @@ def get_ext_modules() -> list[Extension]:
                 "src/bev_pool_cuda.cu",
             ],
         ),
+        make_cuda_ext(
+            name="diff_iou_rotated_ext",
+            module="autoware_ml.ops.diff_iou_rotated",
+            sources=["src/diff_iou_rotated.cpp"],
+            sources_cuda=["src/diff_iou_rotated_cuda.cu"],
+        ),
     ]
 
 

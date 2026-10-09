@@ -90,6 +90,12 @@ Each list entry is a `LidarFrameDataModel` covering one keyframe or sweep:
 | `lidar_frame_ego_pose_to_global_matrix` | `Array(Float32, 4x4)` | Ego-to-global transform for this frame                     |
 | `lidar_sensor_to_lidar_sweep_matrices`  | `Array(Float32, 4x4)` | Sensor-to-sweep transform                                  |
 | `lidar_pointcloud_semantic_mask_path`   | `String`              | LiDAR segmentation mask path (or null)                     |
+| `lidar_pointcloud_t4pack_frame`         | `Struct`              | Location in its t4pack file (or null), see below           |
+
+`lidar_pointcloud_t4pack_frame` holds `offset` and `size` (`Int64`, the byte range of the
+compressed frame), `num_points` (`Int64`) and `dtypes` (`List(String)`, the t4pack type of every
+column). It is filled when the scene keeps the frames of the channel in a t4pack file, see
+[Packed LiDAR frames](design.md#packed-lidar-frames).
 
 ### `lidar_sources` struct fields
 

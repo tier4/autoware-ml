@@ -6,6 +6,11 @@ from collections.abc import Mapping, Sequence
 
 import torch
 
+from autoware_ml.dataclasses.batch.detection3d import Detection3DGTBatch
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
+from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTBatch
+from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch
+from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
 from autoware_ml.models.detection3d.heads.transfusion import TransFusionHead
 from autoware_ml.models.detection3d.ptv3 import (
     PTv3BEVEncoder,
@@ -25,14 +30,25 @@ from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     LitePTEncoder,
     PointTransformerV3Encoder,
 )
+from autoware_ml.models.segmentation3d.encoders.voxel import (
+    SweepSplitVoxelFeatureEncoder,
+    VoxelFeatureEncoder,
+)
 from autoware_ml.models.segmentation3d.heads.ptv3 import PTv3SegDecoderHead
 from autoware_ml.models.segmentation3d.ptv3 import PTv3SegmentationModel
+from autoware_ml.preprocessing.base import DataPreprocessing
+from autoware_ml.preprocessing.detection3d.point_pillar import PointPillarPreprocessor
+from autoware_ml.types.geometry import Box3DCenterCoordinateType
+
+POINT_CLOUD_RANGE = [0.0, 0.0, -2.0, 8.0, 8.0, 2.0]
 
 
-def build_ptv3_encoder() -> PointTransformerV3Encoder:
+def build_ptv3_encoder(
+    in_channels: int = SweepSplitVoxelFeatureEncoder.out_channels,
+) -> PointTransformerV3Encoder:
     """Return a small PTv3 encoder suitable for unit tests."""
     return PointTransformerV3Encoder(
-        in_channels=4,
+        in_channels=in_channels,
         order=("z",),
         stride=(2,),
         enc_depths=(1, 1),
@@ -76,17 +92,22 @@ def build_seg_head(num_classes: int = 3, dec_depths: Sequence[int] = (1,)) -> PT
         enable_flash=False,
         upcast_attention=False,
         upcast_softmax=False,
+        mixed_voxel_weight=0.0,
     )
 
 
-def build_seg_model() -> PTv3SegmentationModel:
+def build_seg_model(
+    point_cloud_range: Sequence[float] = POINT_CLOUD_RANGE,
+    voxel_encoder_type: type[VoxelFeatureEncoder] = SweepSplitVoxelFeatureEncoder,
+) -> PTv3SegmentationModel:
     """Return a small PTv3 segmentation model for tests."""
     return PTv3SegmentationModel(
-        encoder=build_ptv3_encoder(),
+        encoder=build_ptv3_encoder(voxel_encoder_type.out_channels),
+        voxel_encoder=voxel_encoder_type(),
         seg3d_head=build_seg_head(),
         optimizer=lambda params: torch.optim.AdamW(params, lr=1e-3),
         grid_size=1.0,
-        point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
+        point_cloud_range=list(point_cloud_range),
     )
 
 
@@ -113,7 +134,9 @@ def build_bev_neck() -> PTv3DetBEVNeck:
     )
 
 
-def build_transfusion_head() -> TransFusionHead:
+def build_transfusion_head(
+    point_cloud_range: Sequence[float] = POINT_CLOUD_RANGE,
+) -> TransFusionHead:
     """Return a lightweight TransFusion head for PTv3 tests."""
     return TransFusionHead(
         num_proposals=8,
@@ -132,10 +155,17 @@ def build_transfusion_head() -> TransFusionHead:
             "vel": (2, 2),
         },
         bbox_coder=TransFusionBBoxCoder(
-            pc_range=[0.0, 0.0],
+            pc_range=list(point_cloud_range[:2]),
             out_size_factor=1,
             voxel_size=[1.0, 1.0],
-            post_center_range=[-1.0, -1.0, -5.0, 10.0, 10.0, 5.0],
+            post_center_range=[
+                point_cloud_range[0] - 1.0,
+                point_cloud_range[1] - 1.0,
+                -5.0,
+                point_cloud_range[3] + 2.0,
+                point_cloud_range[4] + 2.0,
+                5.0,
+            ],
             code_size=10,
         ),
         assigner=HungarianAssigner3D(
@@ -143,7 +173,7 @@ def build_transfusion_head() -> TransFusionHead:
             reg_cost=BBoxBEVL1Cost(weight=0.25),
             iou_cost=IoU3DCost(weight=0.25),
         ),
-        point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
+        point_cloud_range=list(point_cloud_range),
         voxel_size=[1.0, 1.0, 4.0],
         out_size_factor=1,
         code_weights=[1.0] * 8 + [0.2, 0.2],
@@ -157,12 +187,15 @@ def build_transfusion_head() -> TransFusionHead:
 
 def build_trans_model(
     freeze_encoder: bool = False,
+    point_cloud_range: Sequence[float] = POINT_CLOUD_RANGE,
+    voxel_encoder_type: type[VoxelFeatureEncoder] = SweepSplitVoxelFeatureEncoder,
 ) -> PTv3DetectionModel:
     """Return a PTv3 + TransFusionHead detection model for tests."""
     return PTv3DetectionModel(
-        encoder=build_ptv3_encoder(),
+        encoder=build_ptv3_encoder(voxel_encoder_type.out_channels),
+        voxel_encoder=voxel_encoder_type(),
         bev_neck=build_bev_neck(),
-        bbox_head=build_transfusion_head(),
+        bbox_head=build_transfusion_head(point_cloud_range),
         export_output_names=[
             "dense_heatmap",
             "query_heatmap_score",
@@ -176,13 +209,13 @@ def build_trans_model(
         ],
         freeze_encoder=freeze_encoder,
         grid_size=1.0,
-        point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
+        point_cloud_range=list(point_cloud_range),
         optimizer=lambda params: torch.optim.AdamW(params, lr=1e-3),
     )
 
 
-def build_inputs() -> dict[str, torch.Tensor]:
-    """Return one small PTv3 detection input batch."""
+def build_points() -> torch.Tensor:
+    """Return one small point cloud laid out as (x, y, z, intensity, time_lag)."""
     coord = torch.tensor(
         [
             [0.2, 0.5, 0.0],
@@ -196,11 +229,81 @@ def build_inputs() -> dict[str, torch.Tensor]:
         ],
         dtype=torch.float32,
     )
-    feat = torch.cat([coord, torch.linspace(0.1, 0.8, steps=coord.shape[0]).unsqueeze(1)], dim=1)
-    grid_coord = coord.floor().to(dtype=torch.int32)
-    grid_coord[:, 2] += 2
-    offset = torch.tensor([coord.shape[0]], dtype=torch.long)
-    return {"coord": coord, "feat": feat, "grid_coord": grid_coord, "offset": offset}
+    intensity = torch.linspace(0.1, 0.9, steps=coord.shape[0]).unsqueeze(1)
+    time_lag = torch.zeros((coord.shape[0], 1), dtype=torch.float32)
+    # The last point is a sweep return, so the segmentation excludes it from the metrics
+    time_lag[-1] = 0.1
+    return torch.cat([coord, intensity, time_lag], dim=1)
+
+
+def build_preprocessor(
+    point_cloud_range: Sequence[float] = POINT_CLOUD_RANGE,
+) -> PointPillarPreprocessor:
+    """Return the voxelizer the PTv3 models read their encoder inputs from."""
+    return PointPillarPreprocessor(
+        voxel_size=[1.0, 1.0, 1.0],
+        point_cloud_range=list(point_cloud_range),
+        max_num_points=32,
+        max_voxels=4096,
+        eval_max_voxels=4096,
+    )
+
+
+def build_batch(with_segmentation: bool = True) -> ModelGTBatch:
+    """Return one single frame PTv3 batch with segmentation and box targets."""
+    points = build_points()
+    segment = torch.arange(points.shape[0], dtype=torch.int64) % 3
+    segment[-1] = -1
+    gt_boxes, gt_labels = build_targets()
+    return ModelGTBatch(
+        point_cloud_gt_batch=PointCloudGTBatch(
+            points=points,
+            batch_indices=torch.zeros(points.shape[0], dtype=torch.int32),
+            batch_size=1,
+            timestamp_difference_dim=4,
+        ),
+        detection3d_gt_batch=Detection3DGTBatch.collate_gt_samples(
+            detection3d_gt_bboxes_3d=[
+                LidarBBoxes3D(
+                    bbox_params=torch.cat(
+                        [gt_boxes[0], torch.zeros((gt_boxes[0].shape[0], 1))], dim=1
+                    ),
+                    bbox_labels=gt_labels[0].to(torch.int32),
+                    bbox_label_names=["car"],
+                    bbox_num_lidar_points=torch.tensor([8], dtype=torch.int32),
+                    bbox_center_coordinate_type=Box3DCenterCoordinateType.GRAVITY_CENTER,
+                )
+            ],
+            max_num_3d_gt_bboxes=4,
+        ),
+        segmentation3d_gt_batch=(
+            Segmentation3DGTBatch(
+                gt_semantic_masks=segment,
+                batch_indices=torch.zeros(points.shape[0], dtype=torch.int32),
+            )
+            if with_segmentation
+            else None
+        ),
+        image_gt_batch=None,
+    )
+
+
+def build_inputs(
+    device: torch.device | None = None, is_training: bool = True
+) -> dict[str, torch.Tensor]:
+    """Return one small PTv3 input batch, voxelized the way the runtime does it.
+
+    Args:
+      device: Device the batch moves to before voxelization, CPU when omitted.
+      is_training: Voxel budget mode of the preprocessor.
+
+    Returns:
+      dict[str, torch.Tensor]: The model inputs of the voxelized batch.
+    """
+    batch = build_batch()
+    if device is not None:
+        batch = batch.to_device(device)
+    return DataPreprocessing([build_preprocessor()])(batch, is_training=is_training)
 
 
 def build_targets() -> tuple[list[torch.Tensor], list[torch.Tensor]]:
@@ -243,7 +346,7 @@ def build_litept_encoder() -> LitePTEncoder:
     that does (1), with no base-level order at all.
     """
     return LitePTEncoder(
-        in_channels=4,
+        in_channels=SweepSplitVoxelFeatureEncoder.out_channels,
         order=("z",),
         stride=(2, 2),
         enc_depths=(1, 1, 1),
@@ -285,15 +388,19 @@ def build_litept_seg_head(num_classes: int = 3) -> PTv3SegDecoderHead:
         enable_flash=False,
         upcast_attention=False,
         upcast_softmax=False,
+        mixed_voxel_weight=0.0,
     )
 
 
-def build_litept_seg_model() -> PTv3SegmentationModel:
+def build_litept_seg_model(
+    point_cloud_range: Sequence[float] = POINT_CLOUD_RANGE,
+) -> PTv3SegmentationModel:
     """Return a LitePT segmentation model using the unchanged PTv3 task wrapper."""
     return PTv3SegmentationModel(
         encoder=build_litept_encoder(),
+        voxel_encoder=SweepSplitVoxelFeatureEncoder(),
         seg3d_head=build_litept_seg_head(),
         optimizer=lambda params: torch.optim.AdamW(params, lr=1e-3),
         grid_size=1.0,
-        point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
+        point_cloud_range=list(point_cloud_range),
     )

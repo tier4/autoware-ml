@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# TODO(vividf): adapt to new pipeline
+
 """NuScenes multiview detection dataset and datamodule.
 
 This module exposes camera-lidar detection datasets and datamodules backed by
@@ -22,8 +24,6 @@ from __future__ import annotations
 
 import os
 from typing import Any
-
-import numpy as np
 
 from autoware_ml.datamodule.base import Dataset
 from autoware_ml.datamodule.common.multiview_detection3d import (

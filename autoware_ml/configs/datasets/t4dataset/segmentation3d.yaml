@@ -4,96 +4,9 @@ defaults:
   - /datasets/t4dataset/base
   - _self_
 
-ignore_index: -1
-
-name_mapping:
-  # vehicles
-  car: car
-  forklift: car
-  kart: car
-  other_vehicle: car
-  police_car: car
-  ambulance: car
-  emergency_vehicle: car
-  truck: truck
-  trailer: truck
-  semi_trailer: truck
-  tractor_unit: truck
-  construction_vehicle: truck
-  fire_truck: truck
-  bus: bus
-  train: train
-  motorcycle: motorcycle
-  bicycle: bicycle
-  # vulnerable road users
-  pedestrian: pedestrian
-  personal_mobility: pedestrian
-  stroller: pedestrian
-  animal: animal
-  # static objects
-  barrier: barrier
-  construction_sign: barrier
-  traffic_cone: traffic_cone
-  debris: debris
-  pushable_pullable: debris
-  bicycle_rack: bicycle_rack
-  vehicle_protruding_object: vehicle_extension
-  open_door: vehicle_extension
-  vehicle_extension: vehicle_extension
-  solid_stuff: static_clutter
-  other_stuff: static_clutter
-  static_clutter: static_clutter
-  # surfaces / structure
-  drivable_surface: drivable_flat
-  drainage: drivable_flat
-  driveable_flat: drivable_flat
-  sidewalk: non_drivable_flat
-  other_flat_surface: non_drivable_flat
-  high_curb: non_drivable_flat
-  low_curb: non_drivable_flat
-  non_driveable_flat: non_drivable_flat
-  vegetation: vegetation
-  building: building
-  manmade: building
-  pole: vertical_thin
-  bollard: vertical_thin
-  traffic_light: vertical_thin
-  traffic_sign: vertical_thin
-  flag: vertical_thin
-  vertical_thin: vertical_thin
-  # spurious returns
-  noise: noise
-  ghost_point: noise
-  # ignored
-  background: null
-  ego_vehicle: null
-  out_of_sync: null
-  unpainted: null
-  ignored: null
-# Stage 2 - the trained final classes, in order (index = position).
-class_names:
-  - car
-  - truck
-  - bus
-  - train
-  - motorcycle
-  - bicycle
-  - pedestrian
-  - animal
-  - barrier
-  - traffic_cone
-  - debris
-  - bicycle_rack
-  - vehicle_extension
-  - drivable_flat
-  - non_drivable_flat
-  - vegetation
-  - building
-  - vertical_thin
-  - static_clutter
-  - noise
-num_classes: 20
-class_indices: ${seg_class_indices:${t4dataset.segmentation3d.name_mapping}, ${t4dataset.segmentation3d.class_names}, ${t4dataset.segmentation3d.ignore_index}}
+class_names: ${database.taxonomy.segmentation3d.class_names}
+num_classes: ${class_count:${database.taxonomy.segmentation3d.class_names}}
+ignore_index: ${database.taxonomy.segmentation3d.ignore_index}
 metric_ranges:
   - { _target_: autoware_ml.metrics.base.MetricRange, name: 0-50m, min_distance: 0.0, max_distance: 50.0 }
   - { _target_: autoware_ml.metrics.base.MetricRange, name: 50-90m, min_distance: 50.0, max_distance: 90.0 }
@@ -126,17 +39,7 @@ collision_filter:
   region: ${t4dataset.drivable_region}
   max_speed_mps: ${t4dataset.max_speed_mps}
   params: ${t4dataset.reachability}
-class_groups:
-  grouped_vehicle: [car, truck, bus, train, vehicle_extension]
-  grouped_two_wheeler: [motorcycle, bicycle]
-  grouped_pedestrian_animal: [pedestrian, animal]
-  grouped_static_obstacle: [barrier, traffic_cone]
-  grouped_debris: [debris]
-  grouped_static_clutter: [static_clutter]
-  grouped_flat: [drivable_flat, non_drivable_flat]
-  grouped_vegetation: [vegetation]
-  grouped_structure: [building, vertical_thin, bicycle_rack]
-  grouped_noise: [noise]
+class_groups: ${database.taxonomy.segmentation3d.class_groups}
 confusion_components:
   # Whole-scene.
   - { _target_: autoware_ml.metrics.segmentation3d.iou.IoU, stages: [val, test] }
@@ -163,7 +66,6 @@ confusion_components:
   - { _target_: autoware_ml.metrics.segmentation3d.accuracy.Accuracy, stages: [test], filter: '${t4dataset.segmentation3d.collision_filter}' }
   - { _target_: autoware_ml.metrics.segmentation3d.precision_recall_f1.PrecisionRecallF1, stages: [test], filter: '${t4dataset.segmentation3d.collision_filter}' }
   - { _target_: autoware_ml.metrics.segmentation3d.confusion_matrix.ConfusionMatrix, stages: [test], filter: '${t4dataset.segmentation3d.collision_filter}' }
-point_components_extra: []
 point_components:
   # Whole-scene.
   - { _target_: autoware_ml.metrics.segmentation3d.error_clusters.ErrorClusters, stages: [test] }
@@ -211,7 +113,7 @@ metrics:
     class_groups: ${t4dataset.segmentation3d.class_groups}
     ranges: ${t4dataset.segmentation3d.metric_ranges}
   - _target_: autoware_ml.metrics.segmentation3d.point_cloud.Segmentation3DPointCloudMetricSuite
-    components: ${merge_lists:${t4dataset.segmentation3d.point_components},${t4dataset.segmentation3d.point_components_extra}}
+    components: ${t4dataset.segmentation3d.point_components}
     grouped_components: ${t4dataset.segmentation3d.point_components}
     num_classes: ${t4dataset.segmentation3d.num_classes}
     ignore_index: ${t4dataset.segmentation3d.ignore_index}

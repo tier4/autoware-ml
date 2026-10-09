@@ -18,6 +18,7 @@ from typing import Any
 
 import torch.nn as nn
 
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.metrics.base import EvalStage, MetricSuite
 
 
@@ -71,14 +72,14 @@ class MetricEvalMixin:
         clone.bind_stage(stage)
         return clone
 
-    def build_eval_output(self, batch: Mapping[str, Any], outputs: Any) -> dict[str, Any]:
+    def build_eval_output(self, batch: ModelBatchInputs, outputs: Any) -> dict[str, Any]:
         """Map raw forward outputs and the batch to the flat dict metrics read.
 
         Override in a model that attaches metrics. The default produces nothing,
         which is correct for a model with no metrics.
 
         Args:
-            batch: Collated batch as fed to the model.
+            batch: Model inputs as fed to the model.
             outputs: Raw forward outputs.
 
         Returns:

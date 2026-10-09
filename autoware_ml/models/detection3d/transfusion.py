@@ -20,7 +20,7 @@ reusable TransFusion detection components.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import torch
@@ -28,6 +28,13 @@ import torch.nn as nn
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
+from autoware_ml.dataclasses.models.detection3d.head_outputs import (
+    Detection3DHeadOutputs,
+    TransFusionHeadOutputs,
+)
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
+from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
 from autoware_ml.models.base import BaseModel
@@ -95,15 +102,15 @@ class _TransFusionExportWrapper(nn.Module):
 
 
 def _format_transfusion_export_outputs(
-    outputs: Mapping[str, torch.Tensor],
+    outputs: TransFusionHeadOutputs,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Format TransFusion head outputs for deployment export."""
-    cls_score0 = outputs["heatmap"].sigmoid() * outputs["query_heatmap_score"]
-    bbox_pred0 = torch.cat(
-        (outputs["center"], outputs["height"], outputs["dim"], outputs["vel"]),
-        dim=1,
-    )
-    dir_cls_pred0 = outputs["rot"]
+    branches = outputs.separate_head_outputs
+    if branches.vel is None:
+        raise ValueError("TransFusion export requires a velocity branch in the detection head.")
+    cls_score0 = branches.heatmap.sigmoid() * outputs.query_heatmap_score
+    bbox_pred0 = torch.cat((branches.center, branches.height, branches.dim, branches.vel), dim=1)
+    dir_cls_pred0 = branches.rot
 
     if bbox_pred0.shape[1] != 8:
         raise ValueError(
@@ -154,9 +161,9 @@ class TransFusionDetectionModel(BaseModel):
         self.pts_neck = pts_neck
         self.bbox_head = bbox_head
 
-    def build_eval_output(self, batch: Mapping[str, Any], outputs: Any) -> dict[str, Any]:
+    def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> dict[str, Any]:
         """Decode detections and pair them with ground truth for metrics."""
-        return detection_eval_output(self.bbox_head.predict(outputs), batch)
+        return detection_eval_output(self.predict_outputs(batch, outputs), batch)
 
     def _forward_with_batch_size(
         self,
@@ -164,7 +171,7 @@ class TransFusionDetectionModel(BaseModel):
         num_points: torch.Tensor,
         voxel_coords: torch.Tensor,
         batch_size: int | None = None,
-    ) -> dict[str, torch.Tensor]:
+    ) -> TransFusionHeadOutputs:
         """Run the lidar backbone and dense head.
 
         Args:
@@ -186,7 +193,7 @@ class TransFusionDetectionModel(BaseModel):
 
     def forward(
         self, voxels: torch.Tensor, num_points: torch.Tensor, voxel_coords: torch.Tensor
-    ) -> dict[str, torch.Tensor]:
+    ) -> ModelOutputs:
         """Run the detector on voxelized lidar inputs.
 
         Args:
@@ -196,57 +203,90 @@ class TransFusionDetectionModel(BaseModel):
         Returns:
             Detection head outputs.
         """
-        return self._forward_with_batch_size(
+        head_outputs = self._forward_with_batch_size(
             voxels=voxels, num_points=num_points, voxel_coords=voxel_coords
         )
+        return ModelOutputs(
+            detection3d_head_outputs=Detection3DHeadOutputs(
+                center_head_outputs=None, transfusion_head_outputs=head_outputs
+            )
+        )
+
+    def forward_inputs(self, batch_inputs: ModelBatchInputs) -> dict[str, Any]:
+        """Pick the voxels of the batch.
+
+        Args:
+            batch_inputs: Model inputs holding the voxelized point cloud.
+
+        Returns:
+            The padded voxels, their point counts and their ``[batch, z, y, x]`` coordinates.
+
+        Raises:
+            ValueError: If the model inputs carry no voxels.
+        """
+        voxels_data = batch_inputs.voxels_data
+        if voxels_data is None:
+            raise ValueError("TransFusion needs the voxels of a PointPillarPreprocessor.")
+        return {
+            "voxels": voxels_data.voxels,
+            "num_points": voxels_data.num_points,
+            "voxel_coords": voxels_data.batch_zyx_coords(),
+        }
 
     def compute_metrics(
         self,
-        batch_inputs_dict: dict[str, Any],
-        outputs: dict[str, torch.Tensor],
+        batch_inputs: ModelBatchInputs,
+        outputs: ModelOutputs,
     ) -> dict[str, torch.Tensor]:
         """Compute training losses for one detection batch.
 
         Args:
-            batch_inputs_dict: Full batch dictionary.
+            batch_inputs: Model inputs holding the ground truth boxes.
             outputs: Raw head outputs returned by :meth:`forward`.
 
         Returns:
             Dictionary of loss terms produced by the detection head.
+
+        Raises:
+            ValueError: If the batch carries no detection ground truth.
         """
+        gt_detections = batch_inputs.multi_task_gt_batch.detection3d_gt_batch
+        if gt_detections is None:
+            raise ValueError("TransFusion losses need the 3D detection ground truth of the batch.")
         return self.bbox_head.loss(
-            outputs, batch_inputs_dict["gt_boxes"], batch_inputs_dict["gt_labels"]
+            outputs.detection3d().transfusion_head(),
+            gt_detections.valid_bboxes_3d(),
+            gt_detections.valid_labels_3d(),
         )
 
     def predict_outputs(
-        self, batch_inputs_dict: dict[str, Any], outputs: dict[str, torch.Tensor]
-    ) -> Any:
+        self, batch_inputs: ModelBatchInputs, outputs: ModelOutputs
+    ) -> ModelPredictions:
         """Decode predictions for inference.
 
         Args:
-            batch_inputs_dict: Full batch dictionary.
+            batch_inputs: Model inputs of the batch.
             outputs: Raw head outputs returned by :meth:`forward`.
 
         Returns:
             Decoded detector predictions for the current batch.
         """
-        del batch_inputs_dict
-        return self.bbox_head.predict(outputs)
+        del batch_inputs
+        return ModelPredictions(
+            detection3d_predictions=self.bbox_head.predict(outputs.detection3d().transfusion_head())
+        )
 
-    def get_log_batch_size(self, batch_inputs_dict: dict[str, Any]) -> int | None:
-        """Log the sample count instead of voxel count for lidar detection."""
-        return len(batch_inputs_dict["gt_boxes"])
-
-    def build_export_spec(self, batch_inputs_dict: dict[str, Any]) -> ExportSpec:
+    def build_export_spec(self, batch_inputs: ModelBatchInputs) -> ExportSpec:
         """Build an export specification with explicit tensor inputs.
 
         Args:
-            batch_inputs_dict: Preprocessed example batch used to derive export inputs.
+            batch_inputs: Preprocessed example batch used to derive export inputs.
 
         Returns:
             Export specification for ONNX and TensorRT deployment.
         """
-        batch_size = infer_batch_size_from_voxel_coords(batch_inputs_dict["voxel_coords"])
+        inputs = self.forward_inputs(batch_inputs)
+        batch_size = infer_batch_size_from_voxel_coords(inputs["voxel_coords"])
         pts_middle_encoder = self.pts_middle_encoder
         if hasattr(pts_middle_encoder, "prepare_for_export"):
             pts_middle_encoder = pts_middle_encoder.prepare_for_export()
@@ -259,11 +299,7 @@ class TransFusionDetectionModel(BaseModel):
                 bbox_head=self.bbox_head.prepare_for_export(),
                 batch_size=batch_size,
             ),
-            args=(
-                batch_inputs_dict["voxels"],
-                batch_inputs_dict["num_points"],
-                batch_inputs_dict["voxel_coords"],
-            ),
+            args=(inputs["voxels"], inputs["num_points"], inputs["voxel_coords"]),
             input_param_names=["voxels", "num_points", "coors"],
             output_names=["cls_score0", "bbox_pred0", "dir_cls_pred0"],
         )

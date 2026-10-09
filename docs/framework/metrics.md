@@ -945,6 +945,13 @@ the label-confusion view among detections that did match, not a recall metric.
 </svg>
 </div>
 
+### Box counts
+
+`BoxCounts` reports how many ground-truth and predicted boxes the other metrics scored, in total
+and per class. The ground truth is already filtered by the minimum point count and the class range
+of the suite, and both sides are clipped to the evaluated range, so a change of the eval filters
+shows up in the counts next to the scores.
+
 ### Occlusion-aware recall split
 
 Not a component but a suite pattern: with per-box point counts (`gt_num_points`) in the eval
@@ -1140,8 +1147,9 @@ right there.
 `PartialDetectionScore` groups segmentation points inside each small-object ground-truth box and
 rewards partial hits with a saturating credit: for a pedestrian or a cone, classifying even a few
 points correctly is far better than none, which point-averaged mIoU cannot see. A diagnostic
-metric wired in the joint detection plus segmentation configs, whose `seg_frames` carry the
-detection ground-truth boxes.
+metric of the joint detection plus segmentation suite (`datasets/<dataset>/segdet3d`), whose
+`seg_frames` carry the detection ground-truth boxes. The metric config of each taxonomy lists the
+classes it reports in `partial_detection_classes`.
 
 <div class="metrics-fig">
 <svg viewBox="0 0 660 210" width="660" height="210" role="img" aria-labelledby="fig-d3-title">
@@ -1297,18 +1305,14 @@ The same component listed once more with a filter is one more reported slice.
 
 ## What a model provides
 
-One method. It maps the raw forward outputs to the flat dict the suites read. Model-specific work
-like box decoding happens here, and per-frame metadata the dataset supplies (ego pose, scene
-token) is passed through.
+One method. It maps the typed forward outputs and model inputs to the flat dict the suites read.
+Model-specific work like box decoding happens here, and per-frame metadata the dataset supplies
+(ego pose, scene token) is passed through.
 
 ```python
 class ModelA(BaseModel):
     def build_eval_output(self, batch, outputs):
-        return {
-            "predictions": self.bbox_head.predict(outputs),
-            "gt_boxes": batch["gt_boxes"],
-            "gt_labels": batch["gt_labels"],
-        }
+        return detection_eval_output(self.predict_outputs(batch, outputs), batch)
 ```
 
 The mixin feeds this dict into every attached suite. The model never calls `update`, `compute`,

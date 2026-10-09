@@ -106,7 +106,7 @@ All concrete databases are accessed through this protocol, ensuring downstream c
 
 ### BaseDatabase
 
-`BaseDatabase` provides the shared implementation of `DatabaseInterface`. It handles initialization from version and paths, caching directory creation, Polars schema retrieval, resolving the main scenario group, and deduplicating scenario data across groups:
+`BaseDatabase` provides the shared implementation of `DatabaseInterface`. It handles initialization from version and paths, caching directory creation, Polars schema retrieval, and deduplicating scenario data across groups:
 
 ```python
 class BaseDatabase:
@@ -117,14 +117,17 @@ class BaseDatabase:
         cache_path: str,
         cache_file_prefix_name: str,
         num_workers: int,
+        taxonomy: DatabaseTaxonomy,
+        box3d_pipelines: Sequence[Box3DPipeline],
+        lidar_intensity_scale: float,
+        lidar_pointcloud_num_features: int,
     ) -> None:
         ...
 
     def get_polars_schema(self) -> pl.Schema: ...
-    def get_main_database_scenario_data(self) -> Scenarios: ...
-    def get_unique_scenario_data(self) -> Mapping[str, ScenarioData]: ...
+    def get_unique_scenario_data(self) -> MappingProxyType[str, ScenarioData]: ...
     def process_scenario_records(self) -> None:
-        raise NotImplementedError("Subclasses must implement process_scenario_records!")
+        raise NotImplementedError("Subclasses must implement process_scenario_records method!")
 ```
 
 To add a new dataset family, subclass `BaseDatabase` and implement `process_scenario_records()`. See [T4Dataset](t4dataset.md) for a concrete example.
@@ -136,24 +139,24 @@ The `scenarios` module models scenario metadata as immutable Pydantic objects. `
 ```python
 class DatasetParams(BaseModel):
     dataset_name: str
-    max_sweeps: int
+    max_past_sweeps: int
+    max_future_sweeps: int
     sample_steps: int
 
 class ScenarioData(BaseModel):
+    dataset_params: DatasetParams
     scenario_id: str
     scenario_version: str
     vehicle_type: str | None = None
     location: str | None = None
-    ...
 
 class Scenarios(BaseModel):
-    version: str
     scenario_root_path: Path
     dataset_params: Sequence[DatasetParams]
     scenario_data: Mapping[SplitType, Sequence[ScenarioData]] | None = None
 
     @model_validator(mode="after")
-    def build_scenarios(self) -> None:
+    def build_scenarios(self) -> Scenarios:
         raise NotImplementedError("Subclasses must implement build_scenarios!")
 ```
 
@@ -162,6 +165,36 @@ class Scenarios(BaseModel):
 `process_scenario_records()` — Process scenarios/samples from a database to a parquet file and save it. `BaseDatabase.get_polars_schema()` delegates to `DatasetTableSchema` so records can be serialized to Parquet via `DatasetRecord.to_dictionary()`.
 
 The schema is defined in the `autoware_ml/databases/schemas/` package and covers basic frame metadata, nested LiDAR structs, and annotation fields such as category mapping and 3D boxes. The 3D box payload is modeled by `Box3DDataModel` with its struct layout defined in `Box3DDatasetSchema`, and is stored in the top-level `boxes_3d` list column. See [Dataset Schema](schemas.md) for the full column layout, nested data models, and extension guide.
+
+### Packed LiDAR frames
+
+A scene may keep the frames of a LiDAR channel, `data/<channel>/*.pcd.bin`, as one
+`data/<channel>.pack` file (t4pack v1: every frame compressed on its own with zstd over its
+columns, plus a frame index). Packs are written by the data processing tools; autoware-ml only
+reads them.
+
+When a scene has a pack, record generation reads its index once and stores the location of every
+frame and sweep in `lidar_pointcloud_t4pack_frame`. `lidar_pointcloud_path` keeps the path of the
+loose file, so the pack is found next to it. `LoadPointsFromFile` and
+`LoadMultiSweepPointsFromFile` choose the file format with `pcd_file_format`, a
+`PCDFileFormat` from `autoware_ml.types.dataset`:
+
+| `pcd_file_format` | Reads                                                                         |
+| ----------------- | ----------------------------------------------------------------------------- |
+| `auto` (default)  | the pack when the record has a pack location, else the `.pcd.bin` file        |
+| `bin`             | the `.pcd.bin` file of every frame                                            |
+| `t4pack`          | the pack of every frame; fails on a record without a pack location            |
+
+Both formats return the same points. A pack is read one byte range per frame. In a Hydra config:
+
+```yaml
+- _target_: autoware_ml.transforms.multi_task.point_cloud.loading.LoadPointsFromFile
+  pcd_file_format:
+    _target_: autoware_ml.types.dataset.PCDFileFormat
+    _args_: [t4pack]
+```
+
+See `autoware_ml/databases/t4pack/t4pack.py`.
 
 ### Dataset Generation (Hydra Entrypoint)
 

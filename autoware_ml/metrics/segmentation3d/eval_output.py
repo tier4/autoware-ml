@@ -6,23 +6,18 @@ per-class ``scores``) plus any per-frame metadata the configured filters need
 (``ego2global``, ``scene_token``) and, for the cross-task partial detection
 metric, the frame's detection GT boxes.
 
-Metadata keys are copied from the batch when the dataset supplies them. A filter
-or metric that needs a missing key fails loud in the suite with a message naming
+Metadata is copied from the batch when the dataset supplies it. A filter or
+metric that needs a missing key fails loud in the suite with a message naming
 it, so absence is never silent.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Any
 
 import torch
 
-# Per-frame metadata passed through to each frame entry when the batch carries it.
-_FRAME_META_KEYS = ("ego2global", "scene_token", "timestamp")
-# Per-frame detection ground truth for the cross-task partial-detection metric,
-# batch key to the key it takes inside a frame entry.
-_FRAME_BOX_KEYS = {"gt_boxes": "gt_boxes", "gt_labels": "gt_box_labels"}
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 
 
 def segmentation_frames_eval_output(
@@ -32,7 +27,7 @@ def segmentation_frames_eval_output(
     scores: torch.Tensor,
     frame_ids: torch.Tensor,
     num_frames: int,
-    batch: Mapping[str, Any],
+    batch_inputs: ModelBatchInputs,
 ) -> dict[str, Any]:
     """Split batch-concatenated per-point tensors into the ``seg_frames`` list.
 
@@ -43,17 +38,26 @@ def segmentation_frames_eval_output(
         scores: ``(N, C)`` softmax probabilities per point.
         frame_ids: ``(N,)`` frame index of every point.
         num_frames: Number of frames in the batch.
-        batch: Batch dictionary, per-frame metadata and detection GT are copied
-            into each frame entry when present.
+        batch_inputs: Model inputs of the batch. The frame metadata (ego pose, scene token) and
+            the detection ground truth are copied into each frame entry when the batch carries
+            them.
 
     Returns:
         ``{"seg_frames": [...]}`` with one entry per frame.
     """
-    for key in (*_FRAME_META_KEYS, *_FRAME_BOX_KEYS):
-        if key in batch and len(batch[key]) != num_frames:
+    frame_meta: dict[str, list[Any]] = {}
+    gt_batch = batch_inputs.multi_task_gt_batch
+    if gt_batch.frame_meta_batch is not None:
+        frame_meta["ego2global"] = list(gt_batch.frame_meta_batch.ego2globals)
+        frame_meta["scene_token"] = list(gt_batch.frame_meta_batch.scene_tokens)
+    if gt_batch.detection3d_gt_batch is not None:
+        frame_meta["gt_boxes"] = gt_batch.detection3d_gt_batch.valid_bboxes_3d()
+        frame_meta["gt_box_labels"] = gt_batch.detection3d_gt_batch.valid_labels_3d()
+    for key, values in frame_meta.items():
+        if len(values) != num_frames:
             raise ValueError(
-                f"batch[{key!r}] has {len(batch[key])} entries for {num_frames} frames, "
-                "per-frame metadata must align one-to-one or points get another frame's context."
+                f"{key} has {len(values)} entries for {num_frames} frames, per-frame metadata "
+                "must align one-to-one or points get another frame's context."
             )
     for name, tensor in (
         ("coord", coord),
@@ -89,12 +93,8 @@ def segmentation_frames_eval_output(
             "target": target_split[frame_index],
             "scores": scores_split[frame_index],
         }
-        for key in _FRAME_META_KEYS:
-            if key in batch:
-                frame[key] = batch[key][frame_index]
-        for batch_key, frame_key in _FRAME_BOX_KEYS.items():
-            if batch_key in batch:
-                frame[frame_key] = batch[batch_key][frame_index]
+        for key, values in frame_meta.items():
+            frame[key] = values[frame_index]
         frames.append(frame)
     return {"seg_frames": frames}
 

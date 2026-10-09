@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# TODO(vividf): adapt to new pipeline
+
 """Shared multiview detection3d dataset utilities.
 
 This module contains reusable dataset and collation helpers for camera-lidar

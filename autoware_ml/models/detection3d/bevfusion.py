@@ -19,7 +19,7 @@ This module contains the high-level BEVFusion detector wrapper and export ABI.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from copy import deepcopy
 from typing import Any
 
@@ -29,6 +29,14 @@ import torch.nn.functional as F
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
+from autoware_ml.dataclasses.geometry.voxels import VoxelsData
+from autoware_ml.dataclasses.models.detection3d.head_outputs import (
+    Detection3DHeadOutputs,
+    TransFusionHeadOutputs,
+)
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
+from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
 from autoware_ml.models.base import BaseModel
@@ -60,7 +68,7 @@ def _runtime_coors_to_voxel_coords(coors: torch.Tensor) -> torch.Tensor:
 
 
 def _export_detection_outputs(
-    head: nn.Module, outputs: dict[str, torch.Tensor]
+    head: nn.Module, outputs: TransFusionHeadOutputs
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Pack raw head outputs into the runtime detection interface.
 
@@ -68,8 +76,8 @@ def _export_detection_outputs(
     its own parameters, so no metric-space decoding happens in the graph.
 
     Args:
-        head: TransFusion detection head producing the output dictionary.
-        outputs: Raw prediction tensors from the head forward pass.
+        head: TransFusion detection head producing the outputs.
+        outputs: Raw predictions from the head forward pass.
 
     Returns:
         Tuple of ``bbox_pred`` with the concatenated regression channels of
@@ -77,17 +85,27 @@ def _export_detection_outputs(
         and ``label_pred`` of shape ``(num_proposals,)``.
     """
     num_proposals = head.num_proposals
-    query_labels = outputs["query_labels"]
-    heatmap = outputs["heatmap"][..., -num_proposals:].sigmoid()
+    branches = outputs.separate_head_outputs
+    query_labels = outputs.query_labels
+    heatmap = branches.heatmap[..., -num_proposals:].sigmoid()
     one_hot = (
         F.one_hot(query_labels, num_classes=head.num_classes).permute(0, 2, 1).to(heatmap.dtype)
     )
-    score = (heatmap * outputs["query_heatmap_score"] * one_hot)[0].max(dim=0).values
+    score = (heatmap * outputs.query_heatmap_score * one_hot)[0].max(dim=0).values
 
-    if outputs.get("vel") is None:
+    if branches.vel is None:
         raise ValueError("BEVFusion export requires a velocity branch in the detection head.")
     bbox_pred = torch.cat(
-        [outputs[key][0, :, -num_proposals:] for key in ("center", "height", "dim", "rot", "vel")],
+        [
+            branch[0, :, -num_proposals:]
+            for branch in (
+                branches.center,
+                branches.height,
+                branches.dim,
+                branches.rot,
+                branches.vel,
+            )
+        ],
         dim=0,
     )
     return bbox_pred, score, query_labels[0]
@@ -470,7 +488,7 @@ class BEVFusionDetectionModel(BaseModel):
         ranks: torch.Tensor,
         indices: torch.Tensor,
         image_feats: torch.Tensor,
-    ) -> dict[str, torch.Tensor]:
+    ) -> TransFusionHeadOutputs:
         """Run the export-time main body with runtime-compatible inputs.
 
         Args:
@@ -523,7 +541,7 @@ class BEVFusionDetectionModel(BaseModel):
         batch_size: int | None = None,
         image_bev: torch.Tensor | None = None,
         **kwargs: Any,
-    ) -> dict[str, torch.Tensor]:
+    ) -> TransFusionHeadOutputs:
         """Run the configured BEV branches and dense head.
 
         Args:
@@ -593,7 +611,7 @@ class BEVFusionDetectionModel(BaseModel):
         camera_intrinsics: Sequence[torch.Tensor] | None = None,
         lidar2cam: Sequence[torch.Tensor] | None = None,
         **kwargs: Any,
-    ) -> dict[str, torch.Tensor]:
+    ) -> ModelOutputs:
         """Run the detector on lidar, image, or fused BEV inputs.
 
         Args:
@@ -610,7 +628,7 @@ class BEVFusionDetectionModel(BaseModel):
         Returns:
             Detection head outputs.
         """
-        return self._forward_with_batch_size(
+        head_outputs = self._forward_with_batch_size(
             voxels=voxels,
             num_points=num_points,
             voxel_coords=voxel_coords,
@@ -621,77 +639,115 @@ class BEVFusionDetectionModel(BaseModel):
             lidar2cam=lidar2cam,
             **kwargs,
         )
+        return ModelOutputs(
+            detection3d_head_outputs=Detection3DHeadOutputs(
+                center_head_outputs=None, transfusion_head_outputs=head_outputs
+            )
+        )
+
+    def forward_inputs(self, batch_inputs: ModelBatchInputs) -> dict[str, Any]:
+        """Pick the inputs of the configured lidar and camera branches.
+
+        Args:
+            batch_inputs: Model inputs holding the voxels, and for a camera branch the images
+                and the points of the batch.
+
+        Returns:
+            The voxels for the lidar branch, and the per sample images, points and camera
+            matrices for the camera branch.
+
+        Raises:
+            ValueError: If the model inputs miss the data of a configured branch.
+        """
+        inputs: dict[str, Any] = {}
+        if self.lidar_feature_extractor is not None:
+            voxels_data = batch_inputs.voxels_data
+            if voxels_data is None:
+                raise ValueError("The BEVFusion lidar branch needs the voxels of the batch.")
+            inputs["voxels"] = voxels_data.voxels
+            inputs["num_points"] = voxels_data.num_points
+            inputs["voxel_coords"] = voxels_data.batch_zyx_coords()
+        if self.view_transform is not None:
+            image_data = batch_inputs.image_data
+            point_batch = batch_inputs.multi_task_gt_batch.point_cloud_gt_batch
+            if image_data is None or point_batch is None:
+                raise ValueError("The BEVFusion camera branch needs the images and the points.")
+            inputs["img"] = list(image_data.images)
+            inputs["points"] = point_batch.split_points()
+            inputs["lidar2img"] = list(image_data.lidar2images)
+            inputs["camera_intrinsics"] = list(image_data.camera_intrinsics)
+            inputs["lidar2cam"] = list(image_data.lidar2cams)
+        return inputs
 
     def compute_metrics(
         self,
-        batch_inputs_dict: dict[str, Any],
-        outputs: dict[str, torch.Tensor],
+        batch_inputs: ModelBatchInputs,
+        outputs: ModelOutputs,
     ) -> dict[str, torch.Tensor]:
         """Compute BEVFusion training losses.
 
         Args:
-            batch_inputs_dict: Full batch dictionary.
+            batch_inputs: Model inputs holding the ground truth boxes.
             outputs: Detection head outputs.
 
         Returns:
             Loss dictionary produced by the detection head.
+
+        Raises:
+            ValueError: If the batch carries no detection ground truth.
         """
+        gt_detections = batch_inputs.multi_task_gt_batch.detection3d_gt_batch
+        if gt_detections is None:
+            raise ValueError("BEVFusion losses need the 3D detection ground truth of the batch.")
         return self.bbox_head.loss(
-            outputs, batch_inputs_dict["gt_boxes"], batch_inputs_dict["gt_labels"]
+            outputs.detection3d().transfusion_head(),
+            gt_detections.valid_bboxes_3d(),
+            gt_detections.valid_labels_3d(),
         )
 
     def predict_outputs(
-        self, batch_inputs_dict: dict[str, Any], outputs: dict[str, torch.Tensor]
-    ) -> Any:
+        self, batch_inputs: ModelBatchInputs, outputs: ModelOutputs
+    ) -> ModelPredictions:
         """Decode predictions for inference.
 
         Args:
-            batch_inputs_dict: Full batch dictionary.
+            batch_inputs: Model inputs of the batch.
             outputs: Detection head outputs.
 
         Returns:
             Decoded prediction results.
         """
-        del batch_inputs_dict
-        return self.bbox_head.predict(outputs)
+        del batch_inputs
+        return ModelPredictions(
+            detection3d_predictions=self.bbox_head.predict(outputs.detection3d().transfusion_head())
+        )
 
-    def build_eval_output(self, batch: Mapping[str, Any], outputs: Any) -> dict[str, Any]:
+    def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> dict[str, Any]:
         """Decode detections and pair them with ground truth for metrics."""
-        return detection_eval_output(self.bbox_head.predict(outputs), batch)
-
-    def get_log_batch_size(self, batch_inputs_dict: dict[str, Any]) -> int | None:
-        """Log the sample count for fusion detection batches."""
-        if "gt_boxes" in batch_inputs_dict:
-            return len(batch_inputs_dict["gt_boxes"])
-        if "img" in batch_inputs_dict:
-            return len(batch_inputs_dict["img"])
-        if "points" in batch_inputs_dict:
-            return len(batch_inputs_dict["points"])
-        return super().get_log_batch_size(batch_inputs_dict)
+        return detection_eval_output(self.predict_outputs(batch, outputs), batch)
 
     @staticmethod
     def _first_sample_voxel_inputs(
-        batch_inputs_dict: dict[str, Any],
+        voxels_data: VoxelsData,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Extract single-sample voxel export inputs in the runtime layout.
 
         The exported main body is a single-sample graph, so only voxels of
-        the first batch sample are kept. Coordinates are converted from the
-        internal ``(batch, z, y, x)`` layout to the runtime ``(z, y, x)``
-        layout without the batch column.
+        the first batch sample are kept. Coordinates are given in the runtime
+        ``(z, y, x)`` layout without the batch column.
 
         Args:
-            batch_inputs_dict: Batched model inputs used to derive export tensors.
+            voxels_data: Voxels of the batch used to derive export tensors.
 
         Returns:
             Tuple of voxels, runtime-ordered coordinates, and per-voxel point
             counts for the first sample.
         """
-        voxel_coords = batch_inputs_dict["voxel_coords"]
+        voxel_coords = voxels_data.batch_zyx_coords()
         first_sample = voxel_coords[:, 0] == 0
-        voxels = batch_inputs_dict["voxels"][first_sample]
+        voxels = voxels_data.voxels[first_sample]
         coors = voxel_coords[first_sample][:, 1:].int().contiguous()
-        num_points_per_voxel = batch_inputs_dict["num_points"][first_sample].int()
+        num_points_per_voxel = voxels_data.num_points[first_sample].int()
         return voxels, coors, num_points_per_voxel
 
     def _prepare_export_model(self) -> "BEVFusionDetectionModel":
@@ -710,7 +766,7 @@ class BEVFusionDetectionModel(BaseModel):
             model.bbox_head = model.bbox_head.prepare_for_export()
         return model
 
-    def build_export_specs(self, batch_inputs_dict: dict[str, Any]) -> dict[str, ExportSpec]:
+    def build_export_specs(self, batch_inputs: ModelBatchInputs) -> dict[str, ExportSpec]:
         """Build the ONNX export specifications for the runtime-compatible ABI.
 
         Lidar-only models export one ``bevfusion_lidar`` main body. Camera-lidar
@@ -719,12 +775,16 @@ class BEVFusionDetectionModel(BaseModel):
         those features together with precomputed BEV-pool metadata.
 
         Args:
-            batch_inputs_dict: Batched model inputs used to derive export tensors.
+            batch_inputs: Batched model inputs used to derive export tensors.
 
         Returns:
             Ordered mapping of module name to export specification.
         """
-        voxels, coors, num_points_per_voxel = self._first_sample_voxel_inputs(batch_inputs_dict)
+        if batch_inputs.voxels_data is None:
+            raise ValueError("The BEVFusion export needs the voxels of the batch.")
+        voxels, coors, num_points_per_voxel = self._first_sample_voxel_inputs(
+            batch_inputs.voxels_data
+        )
         export_model = self._prepare_export_model()
 
         if self.view_transform is None:
@@ -736,12 +796,16 @@ class BEVFusionDetectionModel(BaseModel):
                 )
             }
 
-        img = torch.stack(batch_inputs_dict["img"], dim=0).float()[:1]
-        camera_intrinsics = torch.stack(batch_inputs_dict["camera_intrinsics"], dim=0).float()[:1]
-        lidar2cam = torch.stack(batch_inputs_dict["lidar2cam"], dim=0).float()[:1]
-        lidar2img = torch.stack(batch_inputs_dict["lidar2img"], dim=0).float()[:1]
-        img_aug_matrix = torch.stack(batch_inputs_dict["img_aug_matrix"], dim=0).float()[:1]
-        points = batch_inputs_dict["points"][0].float()
+        image_data = batch_inputs.image_data
+        point_batch = batch_inputs.multi_task_gt_batch.point_cloud_gt_batch
+        if image_data is None or point_batch is None:
+            raise ValueError("The BEVFusion camera export needs the images and the points.")
+        img = image_data.images.float()[:1]
+        camera_intrinsics = image_data.camera_intrinsics.float()[:1]
+        lidar2cam = image_data.lidar2cams.float()[:1]
+        lidar2img = image_data.lidar2images.float()[:1]
+        img_aug_matrix = image_data.image_augmentation_matrices.float()[:1]
+        points = point_batch.split_points()[0].float()
 
         # The pipeline bakes the image augmentation into lidar2img; the
         # runtime provides the raw projection and augmentation separately, so

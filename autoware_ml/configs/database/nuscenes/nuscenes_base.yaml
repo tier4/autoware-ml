@@ -12,16 +12,14 @@ cache_path: ${cache_root_path}/detection3d/
 cache_file_prefix_name: nuscenes_database
 
 defaults:
-  - nuscenes/labels@class_names: detection3d/default_class_names
-  - nuscenes/labels@label_remapper: detection3d/default_label_remapper
+  - nuscenes/taxonomy@taxonomy: default_coarse
   - nuscenes/box3d_pipelines@box3d_pipelines: default_box3d_pipelines
   - nuscenes/scenarios@scenarios.db_nuscenes: detection3d/db_nuscenes
 
 # Number of features in the lidar pointcloud
 lidar_pointcloud_num_features: 5
+# Intensity of the strongest return in the stored point clouds
+lidar_intensity_scale: 255.0
 
 # Processor settings
 num_workers: 16
-
-# Label index to use for ignored labels
-ignore_label_index: -1

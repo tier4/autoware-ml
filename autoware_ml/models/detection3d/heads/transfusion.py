@@ -22,13 +22,18 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from copy import deepcopy
-from dataclasses import dataclass
 from typing import Any
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from autoware_ml.dataclasses.models.detection3d.head_outputs import (
+    TransFusionHeadOutputs,
+    TransFusionSeparateHeadOutputs,
+)
+from autoware_ml.dataclasses.models.detection3d.head_targets import TransFusionHeadTargets
+from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
 from autoware_ml.losses.detection3d.focal import SigmoidFocalLoss
 from autoware_ml.losses.detection3d.gaussian_focal import GaussianFocalLoss
 from autoware_ml.models.common.layers.conv import ConvModule
@@ -40,6 +45,9 @@ from autoware_ml.models.detection3d.task_modules.heatmap import (
     draw_heatmap_gaussian_oriented,
     gaussian_radius,
 )
+
+# Box regression branches every TransFusion head predicts, the velocity branch is optional
+REGRESSION_BRANCHES = ("center", "height", "dim", "rot")
 
 
 class LearnedPositionalEncoding(nn.Module):
@@ -305,29 +313,6 @@ class SeparateHead1D(nn.Module):
         return {name: head(x) for name, head in self.heads.items()}
 
 
-@dataclass
-class TransFusionTargets:
-    """Store assignment targets for one TransFusion training batch.
-
-    Attributes:
-        labels: Target class labels for all decoder queries.
-        label_weights: Per-query classification weights.
-        bbox_targets: Encoded box regression targets.
-        bbox_weights: Per-query box regression weights.
-        num_pos: Number of matched positive queries.
-        matched_iou: Mean IoU of matched positive queries.
-        heatmap: Dense heatmap target used for query initialization.
-    """
-
-    labels: torch.Tensor
-    label_weights: torch.Tensor
-    bbox_targets: torch.Tensor
-    bbox_weights: torch.Tensor
-    num_pos: int
-    matched_iou: float
-    heatmap: torch.Tensor
-
-
 class TransFusionHead(nn.Module):
     """Implement the native TransFusion lidar detection head.
 
@@ -484,6 +469,13 @@ class TransFusionHead(nn.Module):
                 for _ in range(num_decoder_layers)
             ]
         )
+        if set(common_heads) - {"vel"} != set(REGRESSION_BRANCHES):
+            raise ValueError(
+                f"TransFusion common_heads must hold the branches {list(REGRESSION_BRANCHES)} "
+                f"and optionally vel, got {list(common_heads)}."
+            )
+        if use_velocity and "vel" not in common_heads:
+            raise ValueError("TransFusion use_velocity requires a vel branch in common_heads.")
         prediction_heads = dict(common_heads)
         prediction_heads["heatmap"] = (num_classes, 2)
         if not use_velocity and "vel" in prediction_heads:
@@ -657,14 +649,14 @@ class TransFusionHead(nn.Module):
         grid = torch.stack([grid_x + 0.5, grid_y + 0.5], dim=-1)
         return grid.view(1, -1, 2)
 
-    def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> TransFusionHeadOutputs:
         """Predict TransFusion heatmap, queries, and box parameters.
 
         Args:
             x: BEV feature tensor.
 
         Returns:
-            Dictionary of dense heatmap and per-query predictions.
+            Dense heatmap and per-query predictions.
         """
         batch_size, _, height, width = x.shape
         features = self.shared_act(self.shared_norm(self.shared_conv(x)))
@@ -702,44 +694,53 @@ class TransFusionHead(nn.Module):
             query_pos = prediction["center"].detach().permute(0, 2, 1)
 
         if self.auxiliary:
-            outputs = {}
-            for key in predictions[0]:
-                outputs[key] = torch.cat([prediction[key] for prediction in predictions], dim=-1)
+            branches = {
+                key: torch.cat([prediction[key] for prediction in predictions], dim=-1)
+                for key in predictions[0]
+            }
         else:
-            outputs = predictions[-1]
-        outputs["dense_heatmap"] = dense_heatmap
-        outputs["query_heatmap_score"] = flat_heatmap.gather(
-            2, top_positions[:, None, :].expand(-1, flat_heatmap.shape[1], -1)
+            branches = predictions[-1]
+        return TransFusionHeadOutputs(
+            dense_heatmap=dense_heatmap,
+            query_heatmap_score=flat_heatmap.gather(
+                2, top_positions[:, None, :].expand(-1, flat_heatmap.shape[1], -1)
+            ),
+            query_labels=top_classes,
+            separate_head_outputs=TransFusionSeparateHeadOutputs(
+                heatmap=branches["heatmap"],
+                center=branches["center"],
+                height=branches["height"],
+                dim=branches["dim"],
+                rot=branches["rot"],
+                vel=branches["vel"] if self.use_velocity else None,
+            ),
         )
-        outputs["query_labels"] = top_classes
-        return outputs
 
-    def predict(self, outputs: dict[str, torch.Tensor]) -> list[dict[str, torch.Tensor]]:
+    def predict(self, outputs: TransFusionHeadOutputs) -> list[Detection3DSamplePredictions]:
         """Decode predictions into metric-space boxes.
 
         Args:
-            outputs: Raw prediction tensors produced by the head.
+            outputs: Raw predictions produced by the head.
 
         Returns:
-            List of decoded prediction dictionaries, one per batch element.
+            Typed predictions, one per sample of the batch.
         """
-        batch_score = outputs["heatmap"][..., -self.num_proposals :].sigmoid()
-        query_labels = outputs.get("query_labels")
-        if query_labels is None:
-            raise ValueError("TransFusion prediction requires query_labels from forward().")
+        # Mixed precision evaluation hands over float16 outputs, the boxes decode in float32.
+        branches = outputs.separate_head_outputs
+        batch_score = branches.heatmap[..., -self.num_proposals :].float().sigmoid()
         one_hot = (
-            F.one_hot(query_labels, num_classes=self.num_classes)
+            F.one_hot(outputs.query_labels, num_classes=self.num_classes)
             .permute(0, 2, 1)
             .to(batch_score.dtype)
         )
-        batch_score = batch_score * outputs["query_heatmap_score"] * one_hot
-        batch_center = outputs["center"][..., -self.num_proposals :]
-        batch_height = outputs["height"][..., -self.num_proposals :]
-        batch_dim = outputs["dim"][..., -self.num_proposals :]
-        batch_rot = outputs["rot"][..., -self.num_proposals :]
-        batch_vel = outputs.get("vel")
+        batch_score = batch_score * outputs.query_heatmap_score.float() * one_hot
+        batch_center = branches.center[..., -self.num_proposals :].float()
+        batch_height = branches.height[..., -self.num_proposals :].float()
+        batch_dim = branches.dim[..., -self.num_proposals :].float()
+        batch_rot = branches.rot[..., -self.num_proposals :].float()
+        batch_vel = branches.vel
         if batch_vel is not None:
-            batch_vel = batch_vel[..., -self.num_proposals :]
+            batch_vel = batch_vel[..., -self.num_proposals :].float()
 
         decoded = self.bbox_coder.decode(
             batch_score,
@@ -757,7 +758,11 @@ class TransFusionHead(nn.Module):
             scores = prediction["scores"]
             labels = prediction["labels"]
             if boxes.numel() == 0:
-                results.append({"bboxes_3d": boxes, "scores_3d": scores, "labels_3d": labels})
+                results.append(
+                    Detection3DSamplePredictions(
+                        bboxes_3d=boxes, scores_3d=scores, labels_3d=labels
+                    )
+                )
                 continue
             if self.nms_type is None:
                 kept_indices = torch.arange(scores.shape[0], device=scores.device)
@@ -768,11 +773,11 @@ class TransFusionHead(nn.Module):
                     f"Unsupported TransFusion NMS type at runtime: {self.nms_type!r}"
                 )
             results.append(
-                {
-                    "bboxes_3d": boxes[kept_indices],
-                    "scores_3d": scores[kept_indices],
-                    "labels_3d": labels[kept_indices],
-                }
+                Detection3DSamplePredictions(
+                    bboxes_3d=boxes[kept_indices],
+                    scores_3d=scores[kept_indices],
+                    labels_3d=labels[kept_indices],
+                )
             )
         return results
 
@@ -837,20 +842,21 @@ class TransFusionHead(nn.Module):
         self,
         gt_boxes: list[torch.Tensor],
         gt_labels: list[torch.Tensor],
-        outputs: dict[str, torch.Tensor],
-    ) -> TransFusionTargets:
+        outputs: TransFusionHeadOutputs,
+    ) -> TransFusionHeadTargets:
         """Build TransFusion training targets.
 
         Args:
             gt_boxes: Ground-truth boxes for each batch element.
             gt_labels: Ground-truth labels for each batch element.
-            outputs: Raw prediction tensors produced by the head.
+            outputs: Raw predictions produced by the head.
 
         Returns:
             Structured training targets for classification, boxes, and heatmaps.
         """
         batch_size = len(gt_boxes)
-        num_layers = outputs["center"].shape[-1] // self.num_proposals
+        branches = outputs.separate_head_outputs
+        num_layers = branches.center.shape[-1] // self.num_proposals
         all_labels = []
         all_label_weights = []
         all_bbox_targets = []
@@ -858,12 +864,12 @@ class TransFusionHead(nn.Module):
         num_pos = 0
         matched_ious = 0.0
 
-        score = outputs["heatmap"].detach()
-        center = outputs["center"].detach()
-        height = outputs["height"].detach()
-        dim = outputs["dim"].detach()
-        rot = outputs["rot"].detach()
-        vel = outputs.get("vel")
+        score = branches.heatmap.detach()
+        center = branches.center.detach()
+        height = branches.height.detach()
+        dim = branches.dim.detach()
+        rot = branches.rot.detach()
+        vel = branches.vel
         if vel is not None:
             vel = vel.detach()
 
@@ -894,7 +900,8 @@ class TransFusionHead(nn.Module):
                     point_cloud_range=self.point_cloud_range,
                 )
                 labels = decoded.new_full((self.num_proposals,), self.num_classes, dtype=torch.long)
-                label_weights = decoded.new_ones((self.num_proposals,))
+                # Every sample is annotated for every class, so no class is masked out
+                label_weights = decoded.new_ones((self.num_proposals, self.num_classes))
                 bbox_targets = decoded.new_zeros((self.num_proposals, self.bbox_coder.code_size))
                 bbox_weights = decoded.new_zeros((self.num_proposals, self.bbox_coder.code_size))
 
@@ -921,29 +928,30 @@ class TransFusionHead(nn.Module):
         dense_heatmap = self._build_heatmap_targets(
             gt_boxes,
             gt_labels,
-            outputs["dense_heatmap"].shape[-2:],
-            outputs["dense_heatmap"].device,
+            outputs.dense_heatmap.shape[-2:],
+            outputs.dense_heatmap.device,
         )
-        return TransFusionTargets(
+        return TransFusionHeadTargets(
             labels=torch.stack(all_labels, dim=0),
             label_weights=torch.stack(all_label_weights, dim=0),
             bbox_targets=torch.stack(all_bbox_targets, dim=0),
             bbox_weights=torch.stack(all_bbox_weights, dim=0),
             num_pos=num_pos,
             matched_iou=matched_ious / max(num_pos, 1),
-            heatmap=dense_heatmap,
+            dense_heatmaps=dense_heatmap,
+            class_weights=dense_heatmap.new_ones((batch_size, self.num_classes)),
         )
 
     def loss(
         self,
-        outputs: dict[str, torch.Tensor],
+        outputs: TransFusionHeadOutputs,
         gt_boxes: list[torch.Tensor],
         gt_labels: list[torch.Tensor],
     ) -> dict[str, torch.Tensor]:
         """Compute TransFusion losses.
 
         Args:
-            outputs: Raw prediction tensors produced by the head.
+            outputs: Raw predictions produced by the head.
             gt_boxes: Ground-truth boxes for each batch element.
             gt_labels: Ground-truth labels for each batch element.
 
@@ -952,38 +960,41 @@ class TransFusionHead(nn.Module):
         """
         targets = self.get_targets(gt_boxes, gt_labels, outputs)
         loss_dict: dict[str, torch.Tensor] = {}
-        loss_heatmap = self.loss_heatmap(outputs["dense_heatmap"], targets.heatmap)
+        loss_heatmap = self.loss_heatmap(
+            outputs.dense_heatmap,
+            targets.dense_heatmaps,
+            weights=targets.class_weights[:, :, None, None],
+        )
         loss_dict["loss_heatmap"] = self.loss_heatmap_weight * loss_heatmap
 
-        num_layers = outputs["center"].shape[-1] // self.num_proposals
+        branches = outputs.separate_head_outputs
+        num_layers = branches.center.shape[-1] // self.num_proposals
         for layer_index in range(num_layers):
             start = layer_index * self.num_proposals
             end = (layer_index + 1) * self.num_proposals
             prefix = "layer_-1" if layer_index == num_layers - 1 else f"layer_{layer_index}"
 
             layer_logits = (
-                outputs["heatmap"][..., start:end].permute(0, 2, 1).reshape(-1, self.num_classes)
+                branches.heatmap[..., start:end].permute(0, 2, 1).reshape(-1, self.num_classes)
             )
             layer_labels = targets.labels[:, start:end].reshape(-1)
             cls_targets = layer_logits.new_zeros((layer_labels.shape[0], self.num_classes))
             valid_mask = layer_labels < self.num_classes
             cls_targets[valid_mask, layer_labels[valid_mask]] = 1.0
-            layer_label_weights = targets.label_weights[:, start:end].reshape(-1)
+            layer_label_weights = targets.label_weights[:, start:end].reshape(-1, self.num_classes)
             loss_cls = self.loss_cls(
                 layer_logits, cls_targets, layer_label_weights, avg_factor=max(targets.num_pos, 1)
             )
 
             preds = torch.cat(
                 [
-                    outputs["center"][..., start:end],
-                    outputs["height"][..., start:end],
-                    outputs["dim"][..., start:end],
-                    outputs["rot"][..., start:end],
-                    outputs["vel"][..., start:end]
-                    if "vel" in outputs
-                    else outputs["center"].new_zeros(
-                        outputs["center"].shape[0], 0, self.num_proposals
-                    ),
+                    branches.center[..., start:end],
+                    branches.height[..., start:end],
+                    branches.dim[..., start:end],
+                    branches.rot[..., start:end],
+                    branches.vel[..., start:end]
+                    if branches.vel is not None
+                    else branches.center.new_zeros(branches.center.shape[0], 0, self.num_proposals),
                 ],
                 dim=1,
             ).permute(0, 2, 1)
@@ -997,7 +1008,7 @@ class TransFusionHead(nn.Module):
             loss_dict[f"{prefix}_loss_cls"] = self.loss_cls_weight * loss_cls
             loss_dict[f"{prefix}_loss_bbox"] = self.loss_bbox_weight * loss_bbox
 
-        loss_dict["matched_ious"] = outputs["dense_heatmap"].new_tensor(targets.matched_iou)
+        loss_dict["matched_ious"] = outputs.dense_heatmap.new_tensor(targets.matched_iou)
         loss_dict["loss"] = sum(value for key, value in loss_dict.items() if "loss" in key)
         return loss_dict
 

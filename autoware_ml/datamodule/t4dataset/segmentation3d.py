@@ -1,243 +1,148 @@
-# Copyright 2026 TIER IV, Inc.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-"""T4Dataset 3D semantic segmentation dataset and datamodule.
-
-This module adapts T4Dataset segmentation metadata to the shared
-Autoware-ML segmentation interface.
-"""
-
-from __future__ import annotations
-
-import logging
-import os
-import pickle
-from typing import Any
-
 import numpy as np
+import polars as pl
+import torch
 
-from autoware_ml.datamodule.base import DataModule, Dataset
-from autoware_ml.datamodule.t4dataset.frame_meta import scene_dir_fragment
-from autoware_ml.datamodule.common.serialization import SerializedSampleList
-from autoware_ml.transforms.base import TransformsCompose
-
-logger = logging.getLogger(__name__)
-
-
-def _resolve_path(base: str, path: str) -> str:
-    """Join *path* to *base* unless *path* is already absolute."""
-    return path if os.path.isabs(path) else os.path.join(base, path)
+from autoware_ml.databases.schemas.category_mapping import CategoryMappingDataModel
+from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
+from autoware_ml.databases.schemas.lidar_frames import LidarFrameDataModel
+from autoware_ml.databases.taxonomy import LabelTaxonomy
+from autoware_ml.datamodule.base_dataset_task import BaseDatasetTask
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
+from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTSample
 
 
-class T4Segmentation3DDataset(Dataset):
-    """Load T4Dataset lidar samples for point-wise semantic segmentation.
+# Data type of the raw category index stored for every point of a semantic mask
+SEMANTIC_MASK_DTYPE = np.uint8
 
-    When *lidar_sources* is provided the dataset flattens per-sensor metadata
-    so that each ``(sample, sensor)`` pair becomes a separate item.  When
-    omitted, each annotation record maps 1-to-1 to a dataset item.
-    """
+
+class T4Segmentation3DTask(BaseDatasetTask):
+    """Read the semantic labels of the current lidar frame of a record."""
 
     def __init__(
         self,
-        data_root: str,
-        ann_file: str,
-        lidar_sources: list[str] | None = None,
-        dataset_transforms: TransformsCompose | None = None,
+        database_root_path: str,
+        dataset_records_dataframe: pl.DataFrame,
+        taxonomy: LabelTaxonomy,
     ) -> None:
-        """Initialize the T4 segmentation dataset.
+        """
+        Initialize the segmentation task.
 
         Args:
-            data_root: Dataset root directory.
-            ann_file: Annotation file path.
-            lidar_sources: Ordered lidar sources exposed as separate samples.
-                When ``None`` each annotation record is one sample.
-            dataset_transforms: Optional dataset transform pipeline.
+          database_root_path: Root directory of the database.
+          dataset_records_dataframe: Records of the corpus.
+          taxonomy: Taxonomy that maps a category name to its class index.
         """
-        super().__init__(dataset_transforms=dataset_transforms)
-        self.data_root = data_root
-        self.lidar_sources = lidar_sources
-        with open(ann_file, "rb") as file:
-            data = pickle.load(file)
+        super().__init__(
+            database_root_path=database_root_path,
+            dataset_records_dataframe=dataset_records_dataframe,
+        )
+        self.taxonomy = taxonomy
 
-        self.data_infos = SerializedSampleList(
-            data["data_list"] if "data_list" in data else data["infos"]
+    def select_columns(self, dataset_records_dataframe: pl.DataFrame) -> pl.DataFrame:
+        """
+        Keep the lidar frames and the category mapping of the records.
+
+        Args:
+          dataset_records_dataframe: Records of the corpus.
+
+        Returns:
+          pl.DataFrame: The records with the columns the semantic labels are read from.
+        """
+        return dataset_records_dataframe.select(
+            [DatasetTableSchema.LIDAR_FRAMES.name, DatasetTableSchema.CATEGORY_MAPPING.name]
         )
 
-    def __len__(self) -> int:
-        """Return the number of segmentation samples.
-
-        Returns:
-            Total number of items.  When *lidar_sources* is set this equals
-            ``len(data_infos) * len(lidar_sources)``.
+    def get_data_sample(self, idx: int) -> ModelGTSample:
         """
-        if self.lidar_sources is not None:
-            return len(self.data_infos) * len(self.lidar_sources)
-        return len(self.data_infos)
+        Read the semantic labels of the current lidar frame.
 
-    def _map_index(self, index: int) -> tuple[int, str]:
-        """Map a flattened dataset index to sample and lidar source.
+        The mask stores a raw category index per point. The record maps each index to a name,
+        and the taxonomy maps each name to a class index.
 
         Args:
-            index: Flattened dataset index.
+          idx: Index of the record.
 
         Returns:
-            Tuple of sample index and lidar source name.
+          ModelGTSample: Sample holding the semantic labels of the current frame.
         """
-        if self.lidar_sources is None:
+        lidar_frame = LidarFrameDataModel.load_from_dictionary(
+            self.dataset_records_dataframe.item(idx, DatasetTableSchema.LIDAR_FRAMES.name)[0]
+        )
+        if lidar_frame.lidar_pointcloud_semantic_mask_path is None:
             raise ValueError(
-                "T4Segmentation3DDataset requires lidar_sources to be configured before indexing."
-            )
-        source_count = len(self.lidar_sources)
-        sample_index = index // source_count
-        source_name = self.lidar_sources[index % source_count]
-        return sample_index, source_name
-
-    def _get_per_sensor_info(
-        self, sample: dict[str, Any], sample_index: int, source_name: str
-    ) -> dict[str, Any]:
-        """Build metadata for one sensor of a multi-sensor sample."""
-        lidar_path = os.path.join(self.data_root, sample["lidar_points"]["lidar_path"])
-        sensor_token = sample["lidar_sources"][source_name]["sensor_token"]
-        sources_by_token = {s["sensor_token"]: s for s in sample["lidar_sources_info"]["sources"]}
-        source_info = sources_by_token[sensor_token]
-        idx_begin, length = source_info["idx_begin"], source_info["length"]
-        translation = sample["lidar_sources"][source_name]["translation"]
-        rotation = sample["lidar_sources"][source_name]["rotation"]
-
-        if length <= 0:
-            logger.warning(
-                "Sample %s source %r has no points (length=%s).",
-                sample_index,
-                source_name,
-                length,
+                f"The lidar frame {lidar_frame.lidar_frame_id} of record {idx} carries no "
+                "semantic mask, so 3D segmentation cannot be supervised on it."
             )
 
-        return {
-            "lidar_path": lidar_path,
-            "name": sample.get("token", f"{sample_index}_{source_name}"),
-            "idx_begin": idx_begin,
-            "length": length,
-            "translation": translation,
-            "rotation": rotation,
-            "num_pts_feats": sample["lidar_points"]["num_pts_feats"],
-            "pts_semantic_mask_categories": sample["pts_semantic_mask_categories"],
-            "pts_semantic_mask_path": os.path.join(
-                self.data_root, sample["pts_semantic_mask_path"]
-            ),
-        }
+        raw_labels = np.fromfile(
+            self.semantic_mask_path(lidar_frame), dtype=SEMANTIC_MASK_DTYPE
+        ).astype(np.int64)
+        category_mapping = CategoryMappingDataModel.load_from_dictionary(
+            self.dataset_records_dataframe.item(idx, DatasetTableSchema.CATEGORY_MAPPING.name)
+        )
 
-    def _get_sample_info(self, sample: dict[str, Any]) -> dict[str, Any]:
-        """Build metadata for a single-sensor sample (no per-sensor flattening)."""
-        lidar_path = os.path.join(self.data_root, sample["lidar_points"]["lidar_path"])
-        info: dict[str, Any] = {
-            "lidar_path": lidar_path,
-            "name": sample["token"],
-            "num_pts_feats": int(sample["lidar_points"].get("num_pts_feats", 5)),
-            "pts_semantic_mask_categories": sample["pts_semantic_mask_categories"],
-            "pts_semantic_mask_path": os.path.join(
-                self.data_root, sample["pts_semantic_mask_path"]
+        return ModelGTSample(
+            lidar_point_cloud_samples=None,
+            image_samples=None,
+            point_cloud_data=None,
+            camera_image_data=None,
+            detection3d_gt_bboxes_3d=None,
+            segmentation3d_gt_sample=Segmentation3DGTSample(
+                gt_semantic_mask=torch.from_numpy(
+                    self.resolve_class_indices(raw_labels, category_mapping)
+                ),
+                ignore_index=self.taxonomy.ignore_index,
             ),
-        }
-        if "images" in sample:
-            info["images"] = {
-                cam: {
-                    **cam_info,
-                    "img_path": _resolve_path(self.data_root, cam_info["img_path"])
-                    if "img_path" in cam_info
-                    else cam_info.get("img_path"),
-                }
-                for cam, cam_info in sample["images"].items()
-            }
-        return info
+        )
 
-    def get_data_info(self, index: int) -> dict[str, Any]:
-        """Build one T4 segmentation metadata record.
+    def semantic_mask_path(self, lidar_frame: LidarFrameDataModel) -> str:
+        """
+        Resolve the stored semantic mask path of a lidar frame against the database root.
 
         Args:
-            index: Dataset index (flattened when *lidar_sources* is set).
+          lidar_frame: Lidar frame carrying a semantic mask.
 
         Returns:
-            Metadata dictionary consumed by segmentation transform pipelines.
+          str: Path of the mask on this machine.
         """
-        if self.lidar_sources is not None:
-            sample_index, source_name = self._map_index(index)
-            sample = self.data_infos[sample_index]
-            info = self._get_per_sensor_info(sample, sample_index, source_name)
-        else:
-            sample = self.data_infos[index]
-            info = self._get_sample_info(sample)
-
-        info["ego2global"] = np.asarray(sample["ego2global"], dtype=np.float64)
-        info["scene_token"] = scene_dir_fragment(
-            sample["lidar_points"]["lidar_path"], self.data_root
+        return str(
+            self.database_root_path / lidar_frame.lidarseg_pointcloud_semantic_mask_relative_path
         )
-        info["timestamp"] = float(sample["timestamp"])
-        return info
 
-
-class T4Segmentation3DDataModule(DataModule):
-    """Create T4Dataset dataloaders for 3D semantic segmentation.
-
-    The datamodule configures dataset splits, transforms, and collate behavior
-    for segmentation experiments on T4Dataset.
-    """
-
-    def __init__(
+    def resolve_class_indices(
         self,
-        data_root: str,
-        train_ann_file: str,
-        val_ann_file: str,
-        test_ann_file: str,
-        lidar_sources: list[str] | None = None,
-        **kwargs: Any,
-    ) -> None:
-        """Initialize the T4 segmentation datamodule.
-
-        Args:
-            data_root: Dataset root directory.
-            train_ann_file: Training annotation file path.
-            val_ann_file: Validation annotation file path.
-            test_ann_file: Test annotation file path.
-            lidar_sources: Ordered lidar sources exposed as separate samples.
-                When ``None`` each annotation record is one sample.
-            **kwargs: Additional base datamodule configuration.
+        raw_labels: np.ndarray,
+        category_mapping: CategoryMappingDataModel,
+    ) -> np.ndarray:
         """
-        super().__init__(**kwargs)
-        self.data_root = data_root
-        self.lidar_sources = lidar_sources
-        self.ann_files = {
-            "train": _resolve_path(data_root, train_ann_file),
-            "val": _resolve_path(data_root, val_ann_file),
-            "test": _resolve_path(data_root, test_ann_file),
-            "predict": _resolve_path(data_root, test_ann_file),
-        }
-
-    def _create_dataset(
-        self, split: str, dataset_transforms: TransformsCompose | None = None
-    ) -> Dataset:
-        """Instantiate the dataset for one split.
+        Resolve the raw category index of every point to the class index of the taxonomy.
 
         Args:
-            split: Dataset split name.
-            dataset_transforms: Optional transform pipeline for the split.
+          raw_labels: Raw category index of every point of the current frame.
+          category_mapping: Category mapping of the record, naming every raw category index.
 
         Returns:
-            Instantiated dataset for the requested split.
+          np.ndarray: Class index of every point of the current frame.
         """
-        return T4Segmentation3DDataset(
-            data_root=self.data_root,
-            ann_file=self.ann_files[split],
-            lidar_sources=self.lidar_sources,
-            dataset_transforms=dataset_transforms,
+        lookup = np.full(
+            max(category_mapping.category_indices, default=-1) + 1,
+            self.taxonomy.ignore_index,
+            dtype=np.int64,
         )
+        named = np.zeros(lookup.shape[0], dtype=np.bool_)
+        for category_name, category_index in zip(
+            category_mapping.category_names, category_mapping.category_indices
+        ):
+            lookup[category_index] = self.taxonomy.resolve_index(category_name)
+            named[category_index] = True
+
+        in_range = (raw_labels >= 0) & (raw_labels < lookup.shape[0])
+        known = in_range.copy()
+        known[in_range] = named[raw_labels[in_range]]
+        if not known.all():
+            raise ValueError(
+                "The semantic mask carries the raw category indices "
+                f"{sorted(set(raw_labels[~known].tolist()))}, which the category mapping of the "
+                "record does not name."
+            )
+        return lookup[raw_labels]
