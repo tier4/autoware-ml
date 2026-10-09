@@ -11,6 +11,7 @@ import torch
 import torch.nn as nn
 
 import autoware_ml.utils.point_cloud.structures as point_structures
+from autoware_ml.utils.point_cloud.structures import pooled_sparse_shape
 from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTBatch
 from autoware_ml.dataclasses.geometry.voxels import VoxelsData
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
@@ -907,6 +908,47 @@ def test_serialized_pooling_export_mode_uses_precomputed_metadata(monkeypatch) -
     not IS_SPCONV_AVAILABLE or not torch.cuda.is_available(),
     reason="PTv3 sparse-convolution tests require CUDA spconv",
 )
+def test_pooled_sparse_shape_rounds_up_for_every_depth() -> None:
+    shape = torch.tensor([2048, 2048, 67], dtype=torch.long)
+    assert torch.equal(pooled_sparse_shape(shape, 0), shape)
+    assert torch.equal(pooled_sparse_shape(shape, 1), torch.tensor([1024, 1024, 34]))
+    assert torch.equal(pooled_sparse_shape(shape, 2), torch.tensor([512, 512, 17]))
+    assert torch.equal(pooled_sparse_shape(shape, 3), torch.tensor([256, 256, 9]))
+    assert torch.equal(pooled_sparse_shape(shape, 4), torch.tensor([128, 128, 5]))
+    # the pooled coordinate of the last cell always stays inside the pooled shape
+    for depth in range(5):
+        assert bool(((shape - 1) >> depth < pooled_sparse_shape(shape, depth)).all())
+
+
+def test_serialized_pooling_rounds_the_sparse_shape_up() -> None:
+    """Pooling keeps ceil(shape / stride) slices so the coarsest occupied slice stays inside.
+
+    Coordinate 66 pools to 33, so a stage-0 extent of 67 must become 34, not 33. With the
+    floored value the top slice lies outside the declared grid, its voxels share a spconv
+    hash key with ``(x, y + 1, 0)`` and the sub-manifold neighbour table becomes run-dependent.
+    """
+    grid_coord = torch.tensor([[0, 0, 0], [66, 66, 66], [65, 64, 66], [1, 66, 0]], dtype=torch.int32)
+    point = Point(
+        {
+            "coord": grid_coord.to(torch.float32),
+            "grid_coord": grid_coord,
+            "feat": torch.randn(grid_coord.shape[0], 6),
+            "batch": torch.zeros(grid_coord.shape[0], dtype=torch.long),
+            "offset": torch.tensor([grid_coord.shape[0]], dtype=torch.long),
+            "sparse_shape": torch.tensor([67, 67, 67], dtype=torch.long),
+        }
+    )
+    point.serialization(("z",), shuffle_orders=False, depth=torch.tensor(7))
+    module = SerializedPooling(6, 8, stride=2, shuffle_orders=False)
+    module.norm = nn.Identity()
+    module.act = nn.Identity()
+
+    pooled = module(point)
+
+    assert torch.equal(pooled.sparse_shape, torch.tensor([34, 34, 34], dtype=torch.long))
+    assert bool((pooled.grid_coord.max(dim=0).values + 1 <= pooled.sparse_shape).all())
+
+
 def test_ptv3_frozen_encoder_supports_decoder_block_backward() -> None:
     """Stage-4 regression: a frozen (eval) encoder caches spconv indice pairs
     without backward metadata; decoder blocks must not reuse them by key or
