@@ -46,7 +46,13 @@
           "bash": {
             "path": "/bin/bash"
           }
-        }
+        },
+        "python.analysis.languageServerMode": "full",
+        "python.analysis.indexing": true,
+        "python.analysis.extraPaths": [
+          "${workspaceFolder}"
+        ],
+        "python.terminal.activateEnvironment": true
       },
       "extensions": [
         "charliermarsh.ruff",
