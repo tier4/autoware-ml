@@ -428,6 +428,12 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
         cross-backend verification and per-backend evaluation run on. Models that keep
         a hand-written :meth:`build_export_specs` leave this at ``None``.
 
+        Every call builds fresh export wrappers, and a wrapper may hold a *copy* of a
+        submodule rather than a reference (CenterPoint's head is deep-copied for export).
+        Stages therefore capture the model as it is at call time: replace modules (for
+        example with quantized ones) before calling this, and call it again after any
+        later change instead of reusing earlier stages.
+
         Returns:
             The ordered stages, or ``None`` for models without a stage graph.
         """

@@ -127,7 +127,7 @@ def test_specs_are_derived_one_per_graph_stage_in_order() -> None:
     assert encoder.supported_stages == frozenset({"onnx", "tensorrt"})
 
 
-def test_trace_inputs_are_the_context_tensors_the_glue_produced() -> None:
+def test_trace_inputs_are_the_run_state_tensors_the_glue_produced() -> None:
     model = _StagedModel().eval()
     specs = model.build_export_specs(_batch())
 
@@ -144,7 +144,7 @@ def test_trace_inputs_are_the_context_tensors_the_glue_produced() -> None:
 
 def test_stage_declared_axes_land_in_the_spec_and_fallback_keeps_export_targets() -> None:
     stages = (
-        TorchStage("seed", run=lambda ctx: {"x": ctx.batch["x"]}),
+        TorchStage("seed", run=lambda state: {"x": state.batch["x"]}),
         GraphStage(
             "points",
             module=nn.Identity(),
@@ -167,6 +167,23 @@ def test_a_stage_graph_refuses_to_trace_in_training_mode() -> None:
         model.build_export_specs(_batch())
 
 
+def test_multi_input_spec_args_follow_the_declared_input_order() -> None:
+    # ONNX binds inputs by position: args, input names and the module's parameters must
+    # all follow ``inputs``, whatever order the glue produced the tensors in.
+    class _Subtract(nn.Module):
+        def forward(self, a, b):
+            return a - b
+
+    stages = (
+        TorchStage("seed", run=lambda state: {"b": torch.tensor([1.0]), "a": torch.tensor([10.0])}),
+        GraphStage("sub", module=_Subtract(), inputs=("a", "b"), outputs=("diff",)),
+    )
+    spec = build_export_specs_from_stages(stages, None, torch.device("cpu"))["sub"]
+    assert spec.input_names == ["a", "b"]
+    assert [arg.item() for arg in spec.args] == [10.0, 1.0]
+    assert torch.equal(spec.module(*spec.args), torch.tensor([9.0]))
+
+
 def test_models_without_a_stage_graph_keep_the_end_to_end_default() -> None:
     model = _PlainModel()
     assert model.build_stages() is None
@@ -177,7 +194,7 @@ def test_models_without_a_stage_graph_keep_the_end_to_end_default() -> None:
 
 def test_a_stage_reading_an_unproduced_name_fails_with_the_available_names() -> None:
     stages = (
-        TorchStage("seed", run=lambda ctx: {"x": ctx.batch["x"]}),
+        TorchStage("seed", run=lambda state: {"x": state.batch["x"]}),
         GraphStage("g", module=nn.Identity(), inputs=("typo",), outputs=("y",)),
     )
     with pytest.raises(KeyError, match="available: \\['x'\\]"):
