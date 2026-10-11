@@ -26,8 +26,9 @@ named tensors (the :class:`RunState`):
 
 From the declaration, generic code derives the export specs and their trace inputs
 (:mod:`.export_specs`) and the artifact names (:func:`artifact_path`); later consumers
-(a per-backend pipeline, verification, evaluation) read the same declaration. The final
-``GraphStage``'s ``outputs`` are the keys of the model's ``forward()`` output, so a
+(a per-backend pipeline, verification, evaluation) read the same declaration. The
+outputs of the graphs after the last glue stage that no later graph consumes
+(:func:`model_output_names`) are the keys of the model's ``forward()`` output, so a
 backend's raw outputs feed the same ``build_eval_output`` as the PyTorch forward.
 Nothing model-specific lives outside the model's own ``build_stages``.
 """
@@ -129,9 +130,9 @@ class GraphStage:
             tensors named by ``inputs``, in order.
         inputs: Run-state names fed to the module — these ARE the ONNX input names.
         outputs: Names the module's outputs are written under — the ONNX output names,
-            in the module's return order (a single tensor return maps to one name). On
-            the final graph stage these are also the keys of the model's ``forward()``
-            output dict.
+            in the module's return order (a single tensor return maps to one name). After
+            the last glue stage, the ones no later graph stage reads are keys of the
+            model's ``forward()`` output dict (:func:`model_output_names`).
         torch_fallback_backends: Backends on which this stage runs its PyTorch module
             instead of an artifact — for graphs a backend cannot execute, e.g. a
             plugin-op graph on ONNX Runtime.
@@ -169,14 +170,14 @@ def validate_stages(stages: Sequence[Stage]) -> tuple[Stage, ...]:
     the ones the declaration alone decides: the opening stage, whose run state is empty
     by construction, and the graph stages' declared outputs, which must not repeat.
 
-    Not checked: that the final ``GraphStage``'s ``outputs`` are the keys of the model's
-    ``forward()`` output. The consumers (pipeline, verification, evaluation) rely on it,
-    but only the model knows its forward keys, so each model's own tests pin it.
+    Not checked: that :func:`model_output_names` are the keys of the model's ``forward()``
+    output. The consumers (pipeline, verification, evaluation) rely on it, but only the
+    model knows its forward keys, so each model's own tests pin it.
 
     Raises:
         ValueError: On duplicate stage names, a name two graph stages both declare as an
-            output, no exportable stage, or an opening ``GraphStage`` (nothing has
-            produced its inputs yet).
+            output, no exportable stage, an opening ``GraphStage`` (nothing has produced
+            its inputs yet), or a closing ``TorchStage`` (no model outputs).
     """
     stages = tuple(stages)
     names = [stage.name for stage in stages]
@@ -195,6 +196,11 @@ def validate_stages(stages: Sequence[Stage]) -> tuple[Stage, ...]:
         )
     if not graph_stages(stages):
         raise ValueError("A stage graph needs at least one exportable GraphStage.")
+    if not model_output_names(stages):
+        raise ValueError(
+            "The declaration ends in glue, so no graph output is a model output: the "
+            "final stage has to be a GraphStage."
+        )
     return stages
 
 
@@ -203,9 +209,28 @@ def graph_stages(stages: Sequence[Stage]) -> tuple[GraphStage, ...]:
     return tuple(stage for stage in stages if isinstance(stage, GraphStage))
 
 
-def final_stage(stages: Sequence[Stage]) -> GraphStage:
-    """Return the last exportable stage — its ``outputs`` are the model's forward output keys."""
-    return graph_stages(stages)[-1]
+def model_output_names(stages: Sequence[Stage]) -> tuple[str, ...]:
+    """The model's forward output keys: what the graphs after the last glue stage produce
+    and no later graph consumes.
+
+    Stage order, then declared order. A chain (``glue -> graph -> glue -> graph``) yields
+    its last graph's outputs; several heads over one encoder (``glue -> encoder -> seg ->
+    det``) yield every head's outputs, in the order the heads are declared, and not the
+    encoder's features the heads read. Glue declares no inputs, so a ``TorchStage`` is
+    taken to consume every graph output before it: heads that glue separates are not
+    expressible, and a declaration ending in glue has no model outputs.
+    """
+    tail: list[GraphStage] = []
+    for stage in stages:
+        if isinstance(stage, TorchStage):
+            tail.clear()
+        else:
+            tail.append(stage)
+    names: list[str] = []
+    for index, stage in enumerate(tail):
+        consumed = {name for later in tail[index + 1 :] for name in later.inputs}
+        names.extend(name for name in stage.outputs if name not in consumed)
+    return tuple(names)
 
 
 #: File suffix of the artifact each backend runs; pytorch runs the modules themselves.

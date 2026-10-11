@@ -31,8 +31,8 @@ from autoware_ml.deployment.stages import (
     RunState,
     TorchStage,
     artifact_path,
-    final_stage,
     graph_stages,
+    model_output_names,
     run_stages_in_torch,
     validate_stages,
 )
@@ -69,10 +69,25 @@ def _toy_stages():
 
 
 class TestStageDeclaration:
-    def test_validate_returns_tuple_and_final_stage(self):
+    def test_validate_returns_tuple_and_a_chain_outputs_its_last_graph(self):
         stages = validate_stages(_toy_stages())
         assert [s.name for s in graph_stages(stages)] == ["encoder", "head"]
-        assert final_stage(stages).name == "head"
+        assert model_output_names(stages) == ("plus", "minus")
+
+    def test_two_heads_over_one_encoder_both_output(self):
+        stages = (
+            TorchStage("prep", run=lambda state: {"x": state.batch["x"].float()}),
+            GraphStage("encoder", module=_Double(), inputs=("x",), outputs=("y", "aux")),
+            GraphStage("seg", module=_SplitHead(), inputs=("y",), outputs=("plus", "minus")),
+            GraphStage("det", module=_Double(), inputs=("y",), outputs=("twice",)),
+        )
+        # ``y`` is consumed by the heads; ``aux`` is not, so it stays a model output.
+        assert model_output_names(validate_stages(stages)) == ("aux", "plus", "minus", "twice")
+
+    def test_closing_glue_leaves_no_model_outputs(self):
+        stages = (*_toy_stages(), TorchStage("post", run=lambda state: {}))
+        with pytest.raises(ValueError, match="ends in glue"):
+            validate_stages(stages)
 
     def test_duplicate_names_rejected(self):
         stages = list(_toy_stages())
