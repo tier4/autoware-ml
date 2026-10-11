@@ -22,38 +22,21 @@ keys (``{split}/{backend}/{metric}``).
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 
 
-class Backend(str, Enum):
-    """Inference backend identifiers used in configs, metric keys, and artifact lookups."""
+class Backend(StrEnum):
+    """Inference backend identifiers used in configs, metric keys, and artifact lookups.
+
+    A ``StrEnum`` so that ``f"{backend}"`` yields the config spelling (``onnx``), which
+    is what the metric keys are built from. Construct with ``Backend(name)``; an unknown
+    name raises a ``ValueError`` listing the supported ones.
+    """
 
     PYTORCH = "pytorch"
     ONNX = "onnx"
     TENSORRT = "tensorrt"
 
     @classmethod
-    def parse(cls, value: str | Backend) -> Backend:
-        """Parse a backend name, raising a readable error on an unknown one."""
-        if isinstance(value, cls):
-            return value
-
-        try:
-            return cls(value)
-        except ValueError as error:
-            raise ValueError(
-                f"Unknown backend {value!r}. Supported: {[b.value for b in cls]}."
-            ) from error
-
-    @property
-    def artifact_suffix(self) -> str:
-        """File suffix of the exported artifact this backend runs.
-
-        Raises:
-            ValueError: For ``PYTORCH``, which runs the model itself and has no artifact —
-                the same answer :func:`~autoware_ml.deployment.stages.artifact_path` gives
-                to the same question.
-        """
-        if self is Backend.PYTORCH:
-            raise ValueError("The pytorch backend has no exported artifact, so no suffix.")
-        return {Backend.ONNX: ".onnx", Backend.TENSORRT: ".engine"}[self]
+    def _missing_(cls, value: object) -> None:
+        raise ValueError(f"Unknown backend {value!r}. Supported: {[b.value for b in cls]}.")

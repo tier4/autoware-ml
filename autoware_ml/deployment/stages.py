@@ -37,7 +37,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import torch
 from torch import nn
@@ -208,12 +208,16 @@ def final_stage(stages: Sequence[Stage]) -> GraphStage:
     return graph_stages(stages)[-1]
 
 
+#: File suffix of the artifact each backend runs; pytorch runs the modules themselves.
+_ARTIFACT_SUFFIX: Final = {Backend.ONNX: ".onnx", Backend.TENSORRT: ".engine"}
+
+
 def artifact_path(output_dir: str | Path, stage_name: str, backend: Backend) -> Path:
     """Path of a graph stage's exported artifact: ``<output_dir>/<stage_name><suffix>``."""
-    backend = Backend.parse(backend)
-    if backend is Backend.PYTORCH:
-        raise ValueError("The pytorch backend has no exported artifact.")
-    return Path(output_dir) / f"{stage_name}{backend.artifact_suffix}"
+    suffix = _ARTIFACT_SUFFIX.get(backend)
+    if suffix is None:
+        raise ValueError(f"The {backend} backend has no exported artifact.")
+    return Path(output_dir) / f"{stage_name}{suffix}"
 
 
 def run_stages_in_torch(stages: Sequence[Stage], batch: Any, device: torch.device) -> RunState:

@@ -20,6 +20,8 @@ invariant every later deployment consumer builds on, so it is tested where it is
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import torch
 from torch import nn
@@ -160,11 +162,15 @@ class TestRunStagesInTorch:
             run_stages_in_torch(stages, {"x": torch.tensor([1.0])}, torch.device("cpu"))
 
 
-def test_backend_and_artifact_path_agree_that_pytorch_has_no_artifact() -> None:
-    with pytest.raises(ValueError, match="no exported artifact"):
-        _ = Backend.PYTORCH.artifact_suffix
+def test_artifact_path_per_backend() -> None:
+    assert artifact_path("/tmp", "s", Backend.ONNX) == Path("/tmp/s.onnx")
+    assert artifact_path("/tmp", "s", Backend.TENSORRT) == Path("/tmp/s.engine")
     with pytest.raises(ValueError, match="no exported artifact"):
         artifact_path("/tmp", "s", Backend.PYTORCH)
-    assert Backend.ONNX.artifact_suffix == ".onnx"
-    with pytest.raises(ValueError, match="Unknown backend"):
-        Backend.parse("tflite")
+
+
+def test_backend_name_formats_as_its_config_spelling() -> None:
+    assert f"{Backend.TENSORRT}" == "tensorrt"
+    assert Backend("onnx") is Backend.ONNX
+    with pytest.raises(ValueError, match="Unknown backend 'tflite'"):
+        Backend("tflite")
