@@ -90,6 +90,7 @@ def get_predict_batch(
     device: torch.device,
 ) -> ModelBatchInputs:
     """Load one prediction batch and apply transfer-time preprocessing."""
+    datamodule.prepare_data()
     datamodule.setup("predict")
     predict_dataloader = datamodule.predict_dataloader()
     # The typed batch moves its own tensors
