@@ -280,14 +280,16 @@ class CenterPointDetection3DModel(ModuleBaseModel):
             self.pts_backbone, self.pts_neck, self.bbox_head
         )
         return (
-            TorchStage("decorate", run=decorate),
+            TorchStage("decorate", run=decorate, inputs=(), outputs=("input_features",)),
             GraphStage(
                 "pts_voxel_encoder_centerpoint",
                 module=_CenterPointVoxelEncoderExportWrapper(self.pts_voxel_encoder),
                 inputs=("input_features",),
                 outputs=("pillar_features",),
             ),
-            TorchStage("scatter", run=scatter),
+            TorchStage(
+                "scatter", run=scatter, inputs=("pillar_features",), outputs=("spatial_features",)
+            ),
             GraphStage(
                 "pts_backbone_neck_head_centerpoint",
                 module=head_wrapper,

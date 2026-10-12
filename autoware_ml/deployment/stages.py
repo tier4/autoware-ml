@@ -22,15 +22,18 @@ named tensors (the :class:`RunState`):
   ``GraphStage`` is one ``deploy.onnx.modules.<name>`` entry, one ``<name>.onnx`` and
   one ``<name>.engine``.
 - :class:`TorchStage` — glue that is not exported (pillar decoration, BEV scatter, shape
-  bookkeeping ...). It always runs in PyTorch, on every backend.
+  bookkeeping ...). It always runs in PyTorch, on every backend, and declares the names
+  it reads and writes like a graph does, so the whole dataflow is static.
 
 From the declaration, generic code derives the export specs and their trace inputs
 (:mod:`.export_specs`) and the artifact names (:func:`artifact_path`); later consumers
-(a per-backend pipeline, verification, evaluation) read the same declaration. The
-outputs of the graphs after the last glue stage that no later graph consumes
-(:func:`model_output_names`) are the keys of the model's ``forward()`` output, so a
-backend's raw outputs feed the same ``build_eval_output`` as the PyTorch forward.
-Nothing model-specific lives outside the model's own ``build_stages``.
+(a per-backend pipeline, verification, evaluation) read the same declaration. The graph
+outputs no later stage consumes (:func:`model_output_names`) are the *model outputs*: what
+a backend hands to ``build_eval_output``. When ``forward()`` returns a dict under those
+names, the backend's raw outputs and the PyTorch forward feed the same code; otherwise
+(logits where the deployed head emits labels and scores, or head maps where the graph
+emits decoded boxes) ``build_eval_output`` accepts both forms. Nothing model-specific
+lives outside the model's own ``build_stages``.
 """
 
 from __future__ import annotations
@@ -66,41 +69,26 @@ class RunState:
     def __getitem__(self, name: str) -> Any:
         """Read a produced tensor by name.
 
-        This is where the graph's dataflow is actually checked. It cannot be done
-        statically in :func:`validate_stages`, because a ``TorchStage`` declares no
-        outputs — so the error here names what the run state does hold, which is the
-        information a wrong name needs.
+        :func:`validate_stages` already checked that every declared input is produced;
+        a miss here is a glue stage reading a name it did not declare (it runs on a view
+        narrowed to its declared inputs, :meth:`narrowed`), and the error says so.
         """
         try:
             return self.tensors[name]
         except KeyError as error:
             raise KeyError(
                 f"Run state has no tensor {name!r}; available: {sorted(self.tensors)}. "
-                "A stage reads a name no earlier stage produced."
+                "A stage reads a name it did not declare as an input."
             ) from error
 
-    def add(self, stage_name: str, produced: Any) -> None:
-        """Merge one stage's named results.
+    def narrowed(self, names: Sequence[str]) -> RunState:
+        """The view a glue stage runs on: the same batch and device, only ``names``."""
+        return RunState(self.batch, self.device, {name: self.tensors[name] for name in names})
 
-        Every name is written once. A stage that re-writes an earlier name would
-        silently replace what later stages — and the exported graphs' trace inputs —
-        read, so that is an error, as is a result that is not a mapping.
-
-        Raises:
-            TypeError: When ``produced`` is not a mapping.
-            ValueError: When ``produced`` names a tensor an earlier stage already wrote.
-        """
-        if not isinstance(produced, Mapping):
-            raise TypeError(
-                f"Stage {stage_name!r} returned {type(produced).__name__}; a stage's results "
-                "are a mapping of name -> value."
-            )
-        rewritten = sorted(set(produced) & set(self.tensors))
-        if rewritten:
-            raise ValueError(
-                f"Stage {stage_name!r} writes {rewritten}, which an earlier stage already "
-                "produced. Every run-state name is written by exactly one stage."
-            )
+    def add(self, produced: Mapping[str, Any]) -> None:
+        """Merge one stage's named results (already checked against its declaration when
+        the stage ran; :func:`validate_stages` made sure no two stages write the same
+        name)."""
         self.tensors.update(produced)
 
 
@@ -113,10 +101,19 @@ class TorchStage:
         run: ``fn(state) -> {name: value}``; the returned mapping is merged into the
             run state. Reads earlier results via ``state[name]`` and the raw batch via
             ``state.batch``.
+        inputs: Run-state names the stage reads (``()`` for glue that reads only the
+            batch). It runs on a view narrowed to these, so an undeclared read fails.
+        outputs: Run-state names the stage writes; ``run`` must return exactly these.
     """
 
     name: str
     run: Callable[[RunState], Mapping[str, Any]]
+    inputs: tuple[str, ...]
+    outputs: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not self.outputs:
+            raise ValueError(f"TorchStage {self.name!r} must declare outputs.")
 
 
 @dataclass(frozen=True)
@@ -130,9 +127,8 @@ class GraphStage:
             tensors named by ``inputs``, in order.
         inputs: Run-state names fed to the module — these ARE the ONNX input names.
         outputs: Names the module's outputs are written under — the ONNX output names,
-            in the module's return order (a single tensor return maps to one name). After
-            the last glue stage, the ones no later graph stage reads are keys of the
-            model's ``forward()`` output dict (:func:`model_output_names`).
+            in the module's return order (a single tensor return maps to one name). The
+            ones no later stage reads are model outputs (:func:`model_output_names`).
         torch_fallback_backends: Backends on which this stage runs its PyTorch module
             instead of an artifact — for graphs a backend cannot execute, e.g. a
             plugin-op graph on ONNX Runtime.
@@ -160,46 +156,48 @@ Stage = TorchStage | GraphStage
 
 
 def validate_stages(stages: Sequence[Stage]) -> tuple[Stage, ...]:
-    """Check a stage declaration and return it as a tuple.
+    """Check a stage declaration's dataflow and return it as a tuple.
 
-    Reads are *not* checked against writes here, and cannot be: a ``TorchStage``
-    declares no outputs, so from the first one onwards what the run state holds is only
-    knowable at run time. :meth:`RunState.__getitem__` is where a name that no stage
-    produced is caught, and its error lists what *is* available; :meth:`RunState.add`
-    is where a glue stage re-writing an earlier name is caught. The static checks are
-    the ones the declaration alone decides: the opening stage, whose run state is empty
-    by construction, and the graph stages' declared outputs, which must not repeat.
+    Every stage declares what it reads and writes, so the dataflow is checked here, once,
+    from the declaration alone: every input is produced by an earlier stage, every name
+    is written by exactly one stage, and at least one graph output is left for the model
+    to hand to ``build_eval_output``. What the run checks is the other half — that a
+    stage's module or ``run`` returns what it declares.
 
-    Not checked: that :func:`model_output_names` are the keys of the model's ``forward()``
-    output. The consumers (pipeline, verification, evaluation) rely on it, but only the
-    model knows its forward keys, so each model's own tests pin it.
+    Not checked: that :func:`model_output_names` are what the model's ``build_eval_output``
+    accepts. Only the model knows that, so each model's own tests pin it.
 
     Raises:
-        ValueError: On duplicate stage names, a name two graph stages both declare as an
-            output, no exportable stage, an opening ``GraphStage`` (nothing has produced
-            its inputs yet), or a closing ``TorchStage`` (no model outputs).
+        ValueError: On duplicate stage names, a name written by two stages, a stage
+            reading a name no earlier stage wrote, no exportable stage, or no model
+            output (every graph output consumed by later glue).
     """
     stages = tuple(stages)
     names = [stage.name for stage in stages]
     duplicates = sorted({name for name in names if names.count(name) > 1})
     if duplicates:
         raise ValueError(f"Duplicate stage names: {duplicates}.")
-    outputs = [name for stage in graph_stages(stages) for name in stage.outputs]
-    repeated = sorted({name for name in outputs if outputs.count(name) > 1})
-    if repeated:
-        raise ValueError(f"Graph-stage outputs declared more than once: {repeated}.")
-    if stages and isinstance(stages[0], GraphStage):
-        raise ValueError(
-            f"The first stage {stages[0].name!r} is a GraphStage reading "
-            f"{list(stages[0].inputs)}, but the run state starts empty. A glue "
-            "TorchStage has to put a graph stage's inputs there first."
-        )
+    written: dict[str, str] = {}
+    for stage in stages:
+        missing = [name for name in stage.inputs if name not in written]
+        if missing:
+            raise ValueError(
+                f"Stage {stage.name!r} reads {missing}, which no earlier stage writes; "
+                f"written so far: {sorted(written)}."
+            )
+        for name in stage.outputs:
+            if name in written:
+                raise ValueError(
+                    f"Stage {stage.name!r} writes {name!r}, which stage {written[name]!r} "
+                    "already writes. Every run-state name is written by exactly one stage."
+                )
+            written[name] = stage.name
     if not graph_stages(stages):
         raise ValueError("A stage graph needs at least one exportable GraphStage.")
     if not model_output_names(stages):
         raise ValueError(
-            "The declaration ends in glue, so no graph output is a model output: the "
-            "final stage has to be a GraphStage."
+            "No graph output is left as a model output: later glue consumes every one of "
+            "them. The declaration has to end with what the model hands to build_eval_output."
         )
     return stages
 
@@ -210,25 +208,19 @@ def graph_stages(stages: Sequence[Stage]) -> tuple[GraphStage, ...]:
 
 
 def model_output_names(stages: Sequence[Stage]) -> tuple[str, ...]:
-    """The model's forward output keys: what the graphs after the last glue stage produce
-    and no later graph consumes.
+    """The model outputs: the graph outputs no later stage (graph or glue) consumes.
 
     Stage order, then declared order. A chain (``glue -> graph -> glue -> graph``) yields
     its last graph's outputs; several heads over one encoder (``glue -> encoder -> seg ->
     det``) yield every head's outputs, in the order the heads are declared, and not the
-    encoder's features the heads read. Glue declares no inputs, so a ``TorchStage`` is
-    taken to consume every graph output before it: heads that glue separates are not
-    expressible, and a declaration ending in glue has no model outputs.
+    encoder's features the heads read.
     """
-    tail: list[GraphStage] = []
-    for stage in stages:
-        if isinstance(stage, TorchStage):
-            tail.clear()
-        else:
-            tail.append(stage)
+    stages = tuple(stages)
     names: list[str] = []
-    for index, stage in enumerate(tail):
-        consumed = {name for later in tail[index + 1 :] for name in later.inputs}
+    for index, stage in enumerate(stages):
+        if not isinstance(stage, GraphStage):
+            continue
+        consumed = {name for later in stages[index + 1 :] for name in later.inputs}
         names.extend(name for name in stage.outputs if name not in consumed)
     return tuple(names)
 
@@ -245,6 +237,30 @@ def artifact_path(output_dir: str | Path, stage_name: str, backend: Backend) -> 
     return Path(output_dir) / f"{stage_name}{suffix}"
 
 
+def run_torch_stage(stage: TorchStage, state: RunState) -> dict[str, Any]:
+    """Run a glue stage on the view of the run state it declared and name its results.
+
+    The one place a glue ``run`` is checked against its declaration, shared by the
+    reference run below and by every pipeline backend.
+
+    Raises:
+        TypeError: When ``run`` returns something other than a mapping.
+        ValueError: When the returned names are not exactly the declared ``outputs``.
+    """
+    produced = stage.run(state.narrowed(stage.inputs))
+    if not isinstance(produced, Mapping):
+        raise TypeError(
+            f"TorchStage {stage.name!r} returned {type(produced).__name__}; a glue stage's "
+            "results are a mapping of name -> value."
+        )
+    if set(produced) != set(stage.outputs):
+        raise ValueError(
+            f"TorchStage {stage.name!r} returned {sorted(produced)} but declares outputs "
+            f"{list(stage.outputs)}."
+        )
+    return {name: produced[name] for name in stage.outputs}
+
+
 def run_stages_in_torch(stages: Sequence[Stage], batch: Any, device: torch.device) -> RunState:
     """Run every stage with its PyTorch module and return the filled run state.
 
@@ -257,15 +273,15 @@ def run_stages_in_torch(stages: Sequence[Stage], batch: Any, device: torch.devic
     Raises:
         TypeError: When a graph stage returns a mapping (its outputs are positional), or
             a glue stage returns something other than a mapping.
-        ValueError: When a graph stage returns a different number of tensors than it
-            declares as ``outputs``, or a stage re-writes an earlier name.
+        ValueError: When a stage returns something other than what it declares as
+            ``outputs``.
     """
     stages = validate_stages(stages)
     state = RunState(batch=batch, device=device)
     with torch.no_grad():
         for stage in stages:
             if isinstance(stage, TorchStage):
-                state.add(stage.name, stage.run(state))
+                state.add(run_torch_stage(stage, state))
                 continue
             args = tuple(state[name].to(device) for name in stage.inputs)
             raw = stage.module(*args)
@@ -282,5 +298,5 @@ def run_stages_in_torch(stages: Sequence[Stage], batch: Any, device: torch.devic
                     f"GraphStage {stage.name!r} returned {len(raw)} tensor(s) but declares "
                     f"outputs {list(stage.outputs)}."
                 )
-            state.add(stage.name, dict(zip(stage.outputs, raw)))
+            state.add(dict(zip(stage.outputs, raw)))
     return state

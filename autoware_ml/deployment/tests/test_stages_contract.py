@@ -61,9 +61,16 @@ class _Subtract(nn.Module):
 
 def _toy_stages():
     return (
-        TorchStage("prep", run=lambda state: {"x": state.batch["x"].float()}),
+        TorchStage(
+            "prep", run=lambda state: {"x": state.batch["x"].float()}, inputs=(), outputs=("x",)
+        ),
         GraphStage("encoder", module=_Double(), inputs=("x",), outputs=("y",)),
-        TorchStage("glue", run=lambda state: {"z": state["y"].to(state.device) + 0.5}),
+        TorchStage(
+            "glue",
+            run=lambda state: {"z": state["y"].to(state.device) + 0.5},
+            inputs=("y",),
+            outputs=("z",),
+        ),
         GraphStage("head", module=_SplitHead(), inputs=("z",), outputs=("plus", "minus")),
     )
 
@@ -76,7 +83,9 @@ class TestStageDeclaration:
 
     def test_two_heads_over_one_encoder_both_output(self):
         stages = (
-            TorchStage("prep", run=lambda state: {"x": state.batch["x"].float()}),
+            TorchStage(
+                "prep", run=lambda state: {"x": state.batch["x"].float()}, inputs=(), outputs=("x",)
+            ),
             GraphStage("encoder", module=_Double(), inputs=("x",), outputs=("y", "aux")),
             GraphStage("seg", module=_SplitHead(), inputs=("y",), outputs=("plus", "minus")),
             GraphStage("det", module=_Double(), inputs=("y",), outputs=("twice",)),
@@ -84,14 +93,27 @@ class TestStageDeclaration:
         # ``y`` is consumed by the heads; ``aux`` is not, so it stays a model output.
         assert model_output_names(validate_stages(stages)) == ("aux", "plus", "minus", "twice")
 
-    def test_closing_glue_leaves_no_model_outputs(self):
-        stages = (*_toy_stages(), TorchStage("post", run=lambda state: {}))
-        with pytest.raises(ValueError, match="ends in glue"):
-            validate_stages(stages)
+    def test_glue_consuming_every_graph_output_leaves_no_model_outputs(self):
+        post = TorchStage(
+            "post",
+            run=lambda state: {"final": state["plus"] + state["minus"]},
+            inputs=("plus", "minus"),
+            outputs=("final",),
+        )
+        with pytest.raises(ValueError, match="No graph output is left"):
+            validate_stages((*_toy_stages(), post))
+
+    def test_a_glue_output_the_model_hands_over_is_not_a_model_output(self):
+        # Only graph outputs are model outputs: glue after the last graph that leaves a
+        # graph output unconsumed keeps that output, not its own.
+        post = TorchStage(
+            "post", run=lambda state: {"aux": state["plus"]}, inputs=("plus",), outputs=("aux",)
+        )
+        assert model_output_names((*_toy_stages(), post)) == ("minus",)
 
     def test_duplicate_names_rejected(self):
         stages = list(_toy_stages())
-        stages[2] = TorchStage("encoder", run=lambda state: {})
+        stages[2] = TorchStage("encoder", run=lambda state: {}, inputs=(), outputs=("z",))
         with pytest.raises(ValueError, match="Duplicate"):
             validate_stages(stages)
 
@@ -102,18 +124,27 @@ class TestStageDeclaration:
     def test_duplicate_graph_outputs_rejected(self):
         stages = list(_toy_stages())
         stages[3] = GraphStage("head", module=_SplitHead(), inputs=("z",), outputs=("plus", "y"))
-        with pytest.raises(ValueError, match="declared more than once: \\['y'\\]"):
+        with pytest.raises(ValueError, match="'head' writes 'y', which stage 'encoder' already"):
             validate_stages(stages)
 
     def test_no_graph_stage_rejected(self):
         with pytest.raises(ValueError, match="at least one"):
-            validate_stages([TorchStage("only", run=lambda state: {})])
+            validate_stages([TorchStage("only", run=lambda state: {}, inputs=(), outputs=("x",))])
 
     def test_opening_graph_stage_rejected(self):
         first = GraphStage("first", module=nn.Identity(), inputs=("x",), outputs=("y",))
-        with pytest.raises(ValueError, match="run state starts empty"):
+        with pytest.raises(ValueError, match="'first' reads \\['x'\\], which no earlier stage"):
             validate_stages((first,))
-        assert len(validate_stages((TorchStage("glue", run=lambda state: {}), first))) == 2
+        seed = TorchStage("seed", run=lambda state: {"x": 1}, inputs=(), outputs=("x",))
+        assert len(validate_stages((seed, first))) == 2
+
+    def test_glue_reading_an_unwritten_name_is_rejected_statically(self):
+        stages = list(_toy_stages())
+        stages[2] = TorchStage(
+            "glue", run=lambda state: {"z": state["typo"]}, inputs=("typo",), outputs=("z",)
+        )
+        with pytest.raises(ValueError, match="'glue' reads \\['typo'\\]"):
+            validate_stages(stages)
 
     def test_state_names_what_it_holds_on_a_missing_tensor(self):
         state = RunState(batch=None, device=torch.device("cpu"))
@@ -123,7 +154,7 @@ class TestStageDeclaration:
 
     def test_artifact_paths_derive_from_stage_name(self, tmp_path):
         assert artifact_path(tmp_path, "encoder", Backend.ONNX) == tmp_path / "encoder.onnx"
-        assert artifact_path(tmp_path, "encoder", "tensorrt") == tmp_path / "encoder.engine"
+        assert artifact_path(tmp_path, "encoder", Backend.TENSORRT) == tmp_path / "encoder.engine"
         with pytest.raises(ValueError):
             artifact_path(tmp_path, "encoder", Backend.PYTORCH)
 
@@ -143,7 +174,10 @@ class TestRunStagesInTorch:
         # names or the order the glue produced them in (BEVFusion's lidar graph relies on it).
         stages = (
             TorchStage(
-                "prep", run=lambda state: {"b": torch.tensor([1.0]), "a": torch.tensor([10.0])}
+                "prep",
+                run=lambda state: {"b": torch.tensor([1.0]), "a": torch.tensor([10.0])},
+                inputs=(),
+                outputs=("b", "a"),
             ),
             GraphStage("ab", module=_Subtract(), inputs=("a", "b"), outputs=("a_minus_b",)),
             GraphStage("ba", module=_Subtract(), inputs=("b", "a"), outputs=("b_minus_a",)),
@@ -160,14 +194,37 @@ class TestRunStagesInTorch:
 
     def test_torch_stage_non_mapping_rejected(self):
         stages = list(_toy_stages())
-        stages[2] = TorchStage("glue", run=lambda state: state["y"] + 0.5)
+        stages[2] = TorchStage(
+            "glue", run=lambda state: state["y"] + 0.5, inputs=("y",), outputs=("z",)
+        )
         with pytest.raises(TypeError, match="'glue' returned Tensor"):
             run_stages_in_torch(stages, {"x": torch.tensor([1.0])}, torch.device("cpu"))
 
     def test_glue_overwriting_graph_output_rejected(self):
         stages = list(_toy_stages())
-        stages[2] = TorchStage("glue", run=lambda state: {"y": state["y"], "z": state["y"]})
-        with pytest.raises(ValueError, match="'glue' writes \\['y'\\]"):
+        stages[2] = TorchStage(
+            "glue",
+            run=lambda state: {"y": state["y"], "z": state["y"]},
+            inputs=("y",),
+            outputs=("y", "z"),
+        )
+        with pytest.raises(ValueError, match="'glue' writes 'y', which stage 'encoder'"):
+            run_stages_in_torch(stages, {"x": torch.tensor([1.0])}, torch.device("cpu"))
+
+    def test_glue_returning_other_names_than_declared_is_rejected(self):
+        stages = list(_toy_stages())
+        stages[2] = TorchStage(
+            "glue", run=lambda state: {"zz": state["y"]}, inputs=("y",), outputs=("z",)
+        )
+        with pytest.raises(ValueError, match="'glue' returned \\['zz'\\] but declares"):
+            run_stages_in_torch(stages, {"x": torch.tensor([1.0])}, torch.device("cpu"))
+
+    def test_glue_runs_on_its_declared_inputs_only(self):
+        stages = list(_toy_stages())
+        stages[2] = TorchStage(
+            "glue", run=lambda state: {"z": state["x"]}, inputs=("y",), outputs=("z",)
+        )
+        with pytest.raises(KeyError, match="did not declare as an input"):
             run_stages_in_torch(stages, {"x": torch.tensor([1.0])}, torch.device("cpu"))
 
     def test_graph_stage_output_arity_is_checked(self):
@@ -189,3 +246,8 @@ def test_backend_name_formats_as_its_config_spelling() -> None:
     assert Backend("onnx") is Backend.ONNX
     with pytest.raises(ValueError, match="Unknown backend 'tflite'"):
         Backend("tflite")
+
+
+def test_glue_stage_must_declare_outputs() -> None:
+    with pytest.raises(ValueError, match="must declare outputs"):
+        TorchStage("glue", run=lambda state: {}, inputs=(), outputs=())

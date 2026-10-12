@@ -86,9 +86,9 @@ class _StagedModel(_ToyModel):
             return {"bev": state["encoded"].sum(dim=0, keepdim=True)}
 
         return (
-            TorchStage("prep", run=prep),
+            TorchStage("prep", run=prep, inputs=(), outputs=("features",)),
             GraphStage("encoder", module=self.encoder, inputs=("features",), outputs=("encoded",)),
-            TorchStage("scatter", run=scatter),
+            TorchStage("scatter", run=scatter, inputs=("encoded",), outputs=("bev",)),
             GraphStage("head", module=self.head, inputs=("bev",), outputs=("plus", "minus")),
         )
 
@@ -144,7 +144,7 @@ def test_trace_inputs_are_the_run_state_tensors_the_glue_produced() -> None:
 
 def test_stage_declared_axes_land_in_the_spec_and_fallback_keeps_export_targets() -> None:
     stages = (
-        TorchStage("seed", run=lambda state: {"x": state.batch["x"]}),
+        TorchStage("seed", run=lambda state: {"x": state.batch["x"]}, inputs=(), outputs=("x",)),
         GraphStage(
             "points",
             module=nn.Identity(),
@@ -175,7 +175,12 @@ def test_multi_input_spec_args_follow_the_declared_input_order() -> None:
             return a - b
 
     stages = (
-        TorchStage("seed", run=lambda state: {"b": torch.tensor([1.0]), "a": torch.tensor([10.0])}),
+        TorchStage(
+            "seed",
+            run=lambda state: {"b": torch.tensor([1.0]), "a": torch.tensor([10.0])},
+            inputs=(),
+            outputs=("b", "a"),
+        ),
         GraphStage("sub", module=_Subtract(), inputs=("a", "b"), outputs=("diff",)),
     )
     spec = build_export_specs_from_stages(stages, None, torch.device("cpu"))["sub"]
@@ -192,10 +197,10 @@ def test_models_without_a_stage_graph_keep_the_end_to_end_default() -> None:
     assert specs["end_to_end"].input_names == ["x"]
 
 
-def test_a_stage_reading_an_unproduced_name_fails_with_the_available_names() -> None:
+def test_a_stage_reading_an_unwritten_name_fails_before_anything_runs() -> None:
     stages = (
-        TorchStage("seed", run=lambda state: {"x": state.batch["x"]}),
+        TorchStage("seed", run=lambda state: {"x": state.batch["x"]}, inputs=(), outputs=("x",)),
         GraphStage("g", module=nn.Identity(), inputs=("typo",), outputs=("y",)),
     )
-    with pytest.raises(KeyError, match="available: \\['x'\\]"):
+    with pytest.raises(ValueError, match="'g' reads \\['typo'\\].*written so far: \\['x'\\]"):
         build_export_specs_from_stages(stages, {"x": torch.ones(1)}, torch.device("cpu"))

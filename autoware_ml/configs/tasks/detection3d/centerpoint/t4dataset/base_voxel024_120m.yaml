@@ -7,8 +7,8 @@ voxel_size: [0.24, 0.24, 8.0]
 
 deploy:
   tensorrt:
-    # Keyed by ONNX input name; one table for both exported modules. Each engine's
-    # profile is built from the entries naming its own inputs.
+    # Keyed by ONNX input name; one table for both exported modules. An entry that is
+    # not an input of the engine being built is not applied to it.
     input_shapes:
       input_features:
         # (pillars, max points per pillar, decorated channels): the pillar count is bounded by

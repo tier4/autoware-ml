@@ -49,7 +49,7 @@ def export_spec_for_stage(stage: GraphStage, state: RunState) -> ExportSpec:
 
     Returns:
         Spec whose ``input_param_names`` / ``output_names`` are the stage's declared
-        context names and whose ``dynamic_axes`` are the stage's intrinsic axes (``None``
+        run-state names and whose ``dynamic_axes`` are the stage's intrinsic axes (``None``
         when it declares none, so the module's config entry applies).
     """
     dynamic_axes = (
