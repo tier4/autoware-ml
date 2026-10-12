@@ -22,7 +22,7 @@ around the reusable PointPillars and CenterPoint detection components.
 from __future__ import annotations
 
 from types import MappingProxyType
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from jaxtyping import Float32
@@ -34,7 +34,10 @@ from torch.optim.lr_scheduler import LRScheduler
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
-from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DHeadOutputs
+from autoware_ml.dataclasses.models.detection3d.head_outputs import (
+    CenterHeadOutputs,
+    Detection3DHeadOutputs,
+)
 from autoware_ml.deployment.stages import GraphStage, RunState, Stage, TorchStage
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
@@ -294,8 +297,22 @@ class CenterPointDetection3DModel(ModuleBaseModel):
                 "pts_backbone_neck_head_centerpoint",
                 module=head_wrapper,
                 inputs=("spatial_features",),
-                # The head's ONNX outputs are the keys of forward()'s output dict, so a
-                # backend's raw outputs feed build_eval_output unchanged.
+                # The head's ONNX outputs are its CenterHeadOutputs branches under their
+                # names; build_deployed_eval_output rebuilds the typed outputs from them.
                 outputs=tuple(head_wrapper.output_names),
+            ),
+        )
+
+    def build_deployed_eval_output(
+        self, multi_task_batch_inputs: ModelBatchInputs, outputs: Mapping[str, torch.Tensor]
+    ) -> dict[str, Any]:
+        """Score the deployed head maps exactly like forward()'s."""
+        return self.build_eval_output(
+            multi_task_batch_inputs,
+            ModelOutputs(
+                detection3d_head_outputs=Detection3DHeadOutputs(
+                    center_head_outputs=CenterHeadOutputs.from_export_tensors(outputs),
+                    transfusion_head_outputs=None,
+                )
             ),
         )

@@ -29,11 +29,11 @@ From the declaration, generic code derives the export specs and their trace inpu
 (:mod:`.export_specs`) and the artifact names (:func:`artifact_path`); later consumers
 (a per-backend pipeline, verification, evaluation) read the same declaration. The graph
 outputs no later stage consumes (:func:`model_output_names`) are the *model outputs*: what
-a backend hands to ``build_eval_output``. When ``forward()`` returns a dict under those
-names, the backend's raw outputs and the PyTorch forward feed the same code; otherwise
-(logits where the deployed head emits labels and scores, or head maps where the graph
-emits decoded boxes) ``build_eval_output`` accepts both forms. Nothing model-specific
-lives outside the model's own ``build_stages``.
+a backend hands to the model's ``build_deployed_eval_output``, which turns them into the
+flat dict ``build_eval_output`` produces from ``forward()``'s typed outputs. The deployed
+graphs may emit something else than ``forward`` does (labels and scores where it returns
+logits, decoded boxes where it returns head maps), so that mapping is the model's, next to
+its ``build_stages``. Nothing model-specific lives outside the model.
 """
 
 from __future__ import annotations
@@ -161,11 +161,12 @@ def validate_stages(stages: Sequence[Stage]) -> tuple[Stage, ...]:
     Every stage declares what it reads and writes, so the dataflow is checked here, once,
     from the declaration alone: every input is produced by an earlier stage, every name
     is written by exactly one stage, and at least one graph output is left for the model
-    to hand to ``build_eval_output``. What the run checks is the other half — that a
-    stage's module or ``run`` returns what it declares.
+    to hand to ``build_deployed_eval_output``. What the run checks is the other half —
+    that a stage's module or ``run`` returns what it declares.
 
-    Not checked: that :func:`model_output_names` are what the model's ``build_eval_output``
-    accepts. Only the model knows that, so each model's own tests pin it.
+    Not checked: that :func:`model_output_names` are what the model's
+    ``build_deployed_eval_output`` accepts. Only the model knows that, so each model's own
+    tests pin it.
 
     Raises:
         ValueError: On duplicate stage names, a name written by two stages, a stage
@@ -197,7 +198,8 @@ def validate_stages(stages: Sequence[Stage]) -> tuple[Stage, ...]:
     if not model_output_names(stages):
         raise ValueError(
             "No graph output is left as a model output: later glue consumes every one of "
-            "them. The declaration has to end with what the model hands to build_eval_output."
+            "them. The declaration has to end with what the model hands to "
+            "build_deployed_eval_output."
         )
     return stages
 

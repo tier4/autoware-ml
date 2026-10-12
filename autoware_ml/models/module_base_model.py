@@ -439,6 +439,32 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
         """
         return None
 
+    def build_deployed_eval_output(
+        self, multi_task_batch_inputs: ModelBatchInputs, outputs: Mapping[str, torch.Tensor]
+    ) -> dict[str, Any]:
+        """Map the model outputs of a deployed run to the flat dict the metrics read.
+
+        A backend running the stage graph (the PyTorch modules, ONNX Runtime sessions or
+        TensorRT engines) ends with the *model outputs*: the graph outputs no later stage
+        consumes, keyed by their declared names
+        (:func:`~autoware_ml.deployment.stages.model_output_names`). This hook turns them
+        into what :meth:`build_eval_output` produces from ``forward()``'s typed outputs, so
+        every backend is scored by the same metrics. It is a hook of its own because the
+        deployed graphs may emit something else than ``forward`` does (decoded boxes, or
+        labels and scores instead of logits).
+
+        Args:
+            multi_task_batch_inputs: Model inputs the run started from.
+            outputs: The model outputs, keyed by name.
+
+        Returns:
+            Flat dict the attached metric suites read.
+
+        Raises:
+            NotImplementedError: If the model declares no deployment stage graph.
+        """
+        raise NotImplementedError(f"{type(self).__name__} declares no deployment stage graph.")
+
     def build_export_specs(
         self, multi_task_batch_inputs: ModelBatchInputs
     ) -> dict[str, ExportSpec]:

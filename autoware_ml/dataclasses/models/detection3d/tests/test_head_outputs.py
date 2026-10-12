@@ -502,3 +502,26 @@ class TestDetection3DHeadOutputs(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCenterHeadOutputsExportRoundTrip(unittest.TestCase):
+    """``from_export_tensors`` inverts ``export_tensors``; an unpredicted branch stays unset."""
+
+    def test_rebuild_from_export_tensors(self) -> None:
+        outputs = CenterHeadOutputs(
+            heatmap=torch.rand(1, 2, 4, 4),
+            reg=torch.rand(1, 2, 4, 4),
+            height=torch.rand(1, 1, 4, 4),
+            dim=torch.rand(1, 3, 4, 4),
+            rot=torch.rand(1, 2, 4, 4),
+            vel=None,
+        )
+        names = ["heatmap", "reg", "height", "dim", "rot"]
+        rebuilt = CenterHeadOutputs.from_export_tensors(
+            dict(zip(names, outputs.export_tensors(names)))
+        )
+        self.assertEqual(rebuilt, outputs)
+        with self.assertRaisesRegex(ValueError, r"no output named \['score'\]"):
+            CenterHeadOutputs.from_export_tensors({"score": torch.zeros(1)})
+        with self.assertRaises(ValueError):  # a branch every head predicts is missing
+            CenterHeadOutputs.from_export_tensors({"heatmap": outputs.heatmap})

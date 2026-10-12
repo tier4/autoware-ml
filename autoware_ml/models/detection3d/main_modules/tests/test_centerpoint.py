@@ -340,7 +340,8 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
         self.assertEqual(model_output_names(stages), tuple(names))
 
         with torch.no_grad():
-            expected = self.centerpoint(multi_task_batch_inputs).detection3d().center_head()
+            forward_outputs = self.centerpoint(multi_task_batch_inputs)
+        expected = forward_outputs.detection3d().center_head()
         state = run_stages_in_torch(stages, multi_task_batch_inputs, self.device)
         for name in names:
             # Same modules, so the only differences are kernel-selection noise: on CUDA two
@@ -348,6 +349,20 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
             # shares the GPU (the library picks kernels per call from the workspace it gets).
             # A wrong dataflow would be off by O(1).
             torch.testing.assert_close(state[name], getattr(expected, name), rtol=1e-3, atol=1e-3)
+
+        # The model outputs score exactly like forward()'s typed outputs: decoded from the
+        # same tensors (forward()'s), so the decode is compared exactly; the kernel noise
+        # gated above would otherwise flip near-tie proposals in the top-k selection.
+        deployed = self.centerpoint.build_deployed_eval_output(
+            multi_task_batch_inputs,
+            {name: getattr(expected, name) for name in model_output_names(stages)},
+        )
+        reference = self.centerpoint.build_eval_output(multi_task_batch_inputs, forward_outputs)
+        self.assertEqual(deployed.keys(), reference.keys())
+        for key in ("bboxes_3d", "scores_3d", "labels_3d"):
+            torch.testing.assert_close(
+                deployed["predictions"][0][key], reference["predictions"][0][key]
+            )
 
 
 if __name__ == "__main__":
