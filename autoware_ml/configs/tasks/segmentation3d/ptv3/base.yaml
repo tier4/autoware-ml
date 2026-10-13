@@ -2,6 +2,8 @@
 defaults:
   - /defaults/default_runtime
   - /tasks/segmentation3d/ptv3/encoder_base
+  - /tasks/segmentation3d/ptv3/voxel_encoder
+  - /tasks/segmentation3d/ptv3/data_preprocessing
   - /tasks/segmentation3d/ptv3/seg_head_base
   - _self_
 
@@ -10,18 +12,7 @@ dataset: ???
 grid_size: ???
 point_cloud_range: ???
 
-datamodule:
-  collation_map:
-    coord: concat
-    grid_coord: concat
-    segment: concat
-    inverse: index_concat
-    origin_segment: concat
-    origin_coord: concat
-    feat: concat
-    ego2global: list
-    scene_token: list
-    timestamp: list
+max_voxels: ???
 
 model:
   _target_: autoware_ml.models.segmentation3d.ptv3.PTv3SegmentationModel

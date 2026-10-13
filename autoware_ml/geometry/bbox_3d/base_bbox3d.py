@@ -40,6 +40,7 @@ class BaseBBoxes3D(ABC):
         bbox_label_names: Sequence[str],
         bbox_num_lidar_points: Int32[Tensor, " num_bboxes"],
         bbox_center_coordinate_type: Box3DCenterCoordinateType,
+        bbox_attributes: Sequence[Sequence[str]] | None = None,
     ) -> None:
         """
         Initialize the base class for 3D bounding boxes. Note that the class in only available
@@ -54,6 +55,10 @@ class BaseBBoxes3D(ABC):
             bbox_center_coordinate_type (Box3DCenterCoordinateType): The center coordinate type of the 3D bounding boxes.
                 It only support "gravity_center (center of z is in the middle)" for now.
                 We specify this to make sure users are aware of the center coordinate type being used.
+            bbox_attributes (Sequence[Sequence[str]] | None): The attributes of every 3D bounding box, where
+                the outer sequence is aligned with the bounding boxes and the inner sequence holds
+                the attribute names of the corresponding bounding box. It is optional since not every
+                dataset provides attributes. Defaults to None.
         """
 
         self._bbox_params = bbox_params
@@ -61,6 +66,7 @@ class BaseBBoxes3D(ABC):
         self._bbox_label_names = bbox_label_names
         self._bbox_num_lidar_points = bbox_num_lidar_points
         self._bbox_center_coordinate_type = bbox_center_coordinate_type
+        self._bbox_attributes = bbox_attributes
         if self._bbox_center_coordinate_type != Box3DCenterCoordinateType.GRAVITY_CENTER:
             raise ValueError(
                 f"Only gravity center coordinate type is supported for now, but got {self._bbox_center_coordinate_type}"
@@ -105,6 +111,7 @@ class BaseBBoxes3D(ABC):
             and torch.equal(self.bbox_labels, other.bbox_labels)
             and self.bbox_label_names == other.bbox_label_names
             and self.bbox_center_coordinate_type == other.bbox_center_coordinate_type
+            and self.bbox_attributes == other.bbox_attributes
         )
 
     def _verify_bbox_params(self) -> None:
@@ -125,8 +132,14 @@ class BaseBBoxes3D(ABC):
                 f"but got {self.bbox_labels.shape} for {self.bbox_params.shape[0]} bounding boxes"
             )
 
-        if not (self.dims > 0).all():
-            raise ValueError("All bounding boxes must have positive dimensions.")
+        if (
+            self.bbox_attributes is not None
+            and len(self.bbox_attributes) != self.bbox_params.shape[0]
+        ):
+            raise ValueError(
+                f"bbox_attributes must have {self.bbox_params.shape[0]} entries, one for every "
+                f"bounding box, but got {len(self.bbox_attributes)}"
+            )
 
     @property
     def bbox_params(self) -> Float32[Tensor, "num_bboxes num_Box3DFieldIndex"]:
@@ -149,6 +162,19 @@ class BaseBBoxes3D(ABC):
             Sequence[str]: The label names of the 3D bounding boxes.
         """
         return self._bbox_label_names
+
+    @property
+    def bbox_attributes(self) -> Sequence[Sequence[str]] | None:
+        """
+        Get the attributes of the 3D bounding boxes.
+
+        Returns:
+            Sequence[Sequence[str]] | None: The attributes of every 3D bounding box, where the outer
+                sequence is aligned with the bounding boxes and the inner sequence holds the
+                attribute names of the corresponding bounding box. It is None when the attributes
+                are not available.
+        """
+        return self._bbox_attributes
 
     @property
     def bbox_num_lidar_points(self) -> Int32[Tensor, " num_bboxes"]:
@@ -320,13 +346,14 @@ class BaseBBoxes3D(ABC):
         self, points: Float32[Tensor, "num_points 3"]
     ) -> Bool[Tensor, "num_bboxes num_points"]:
         """
-        Compute whether the given points are inside the 3D bounding boxes.
+        Compute the number of points inside each 3D bounding box.
 
         Args:
-            points (Float32[Tensor, "num_points 3"]): The points to check, with shape (num_points, 3).
+            points (Float32[Tensor, "num_points 3"]): The point cloud data in shape (N, 3).
 
         Returns:
-            Bool[Tensor, "num_bboxes num_points"]: A boolean tensor indicating whether each point is inside each bounding box.
+            Float32[Tensor, "num_bboxes num_points"]: A tensor mask indicating which points are
+            inside each bounding box.
         """
         raise NotImplementedError(
             "Subclasses must implement the `compute_points_in_bboxes` method."
@@ -457,6 +484,10 @@ class BaseBBoxes3D(ABC):
         self._bbox_label_names = [
             name for i, name in enumerate(self._bbox_label_names) if valid_masks[i]
         ]
+        if self._bbox_attributes is not None:
+            self._bbox_attributes = [
+                attributes for i, attributes in enumerate(self._bbox_attributes) if valid_masks[i]
+            ]
 
     def scale(self, scale_factor: float) -> None:
         """
@@ -561,6 +592,7 @@ class BaseBBoxes3D(ABC):
         bbox_label_names: Sequence[str],
         bbox_num_lidar_points: npt.NDArray[np.int32],
         bbox_center_coordinate_type: Box3DCenterCoordinateType,
+        bbox_attributes: Sequence[Sequence[str]] | None = None,
     ) -> BaseBBoxes3D:
         """
         Create a BaseBBoxes3D instance from a NumPy array.
@@ -574,6 +606,8 @@ class BaseBBoxes3D(ABC):
                 number of lidar points in each 3D bounding box.
             bbox_center_coordinate_type (Box3DCenterCoordinateType): The center coordinate type of
                 the 3D bounding boxes.
+            bbox_attributes (Sequence[Sequence[str]] | None): The attributes of every 3D bounding box.
+                Defaults to None when the attributes are not available.
         """
         bbox_params_tensor = torch.from_numpy(bbox_params).float()
         bbox_labels_tensor = torch.from_numpy(bbox_labels).int()
@@ -584,4 +618,5 @@ class BaseBBoxes3D(ABC):
             bbox_num_lidar_points=bbox_num_lidar_points_tensor,
             bbox_center_coordinate_type=bbox_center_coordinate_type,
             bbox_label_names=bbox_label_names,
+            bbox_attributes=bbox_attributes,
         )

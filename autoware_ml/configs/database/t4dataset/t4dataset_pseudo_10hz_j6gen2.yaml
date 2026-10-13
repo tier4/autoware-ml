@@ -1,0 +1,9 @@
+# 10 Hz pseudo labelled J6 gen2 and large bus databases
+defaults:
+  - t4dataset/t4dataset_common@_here_
+  - t4dataset/scenarios@scenarios.db_pseudo_10hz_j6gen2: detection3d_segmentation3d_pseudo_10hz/db_pseudo_10hz_j6gen2
+  - _self_
+
+version: T4Dataset-pseudo_10hz_j6gen2-v1.0.0
+cache_path: ${cache_root_path}/t4dataset_pseudo_10hz/
+root_path: ${data_root_path}/t4dataset/pseudo_10hz/

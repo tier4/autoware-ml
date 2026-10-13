@@ -19,11 +19,11 @@ def test_sigmoid_focal_loss_clamps_avg_factor() -> None:
     assert torch.isclose(clamped, unclamped)
 
 
-def test_sigmoid_focal_loss_broadcasts_query_weights() -> None:
+def test_sigmoid_focal_loss_applies_per_class_weights() -> None:
     loss_fn = SigmoidFocalLoss()
     logits = torch.tensor([[2.0, -1.0], [0.5, 3.0]], dtype=torch.float32)
     targets = torch.tensor([[1.0, 0.0], [0.0, 1.0]], dtype=torch.float32)
-    weights = torch.tensor([1.0, 0.0], dtype=torch.float32)
+    weights = torch.tensor([[1.0, 1.0], [0.0, 0.0]], dtype=torch.float32)
 
     weighted = loss_fn(logits, targets, weights=weights)
     expected = loss_fn(logits[:1], targets[:1])
@@ -40,3 +40,16 @@ def test_gaussian_focal_loss_handles_zero_positive_heatmap() -> None:
 
     assert torch.isfinite(loss)
     assert loss > 0
+
+
+def test_gaussian_focal_loss_drops_the_cells_of_a_zero_weighted_class() -> None:
+    loss_fn = GaussianFocalLoss()
+    prediction = torch.randn((1, 2, 3, 3))
+    target = torch.zeros_like(prediction)
+    target[0, :, 1, 1] = 1.0
+    weights = torch.tensor([1.0, 0.0])[None, :, None, None]
+
+    weighted = loss_fn(prediction, target, weights=weights)
+    first_class_only = loss_fn(prediction[:, :1], target[:, :1]) * 1 / 2
+
+    assert torch.isclose(weighted, first_class_only)

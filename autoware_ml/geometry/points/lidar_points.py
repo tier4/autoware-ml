@@ -28,6 +28,7 @@ class LiDARPoints(BasePoints):
         points: Float32[Tensor, "num_points num_point_features"],
         point_feature_names: Sequence[PointFeatureName],
         timestamp: float,
+        timestamp_difference_dim: int = -1,
     ) -> None:
         """
         Initialize the LiDARPoints instance.
@@ -36,11 +37,14 @@ class LiDARPoints(BasePoints):
             points: A tensor of shape (num_points, num_point_features) representing the point cloud data.
             point_feature_names: A sequence of PointFeatureName representing the names of the features for each point.
             timestamp: A float representing the timestamp of the point cloud data in seconds.
+            timestamp_difference_dim: Dimension index of the timestamp difference feature, ``-1``
+                when the points carry none.
         """
         super().__init__(
             points=points,
             point_feature_names=point_feature_names,
             timestamp=timestamp,
+            timestamp_difference_dim=timestamp_difference_dim,
         )
 
     def flip_bev(self, bev_direction: BEVDirection) -> None:

@@ -292,8 +292,6 @@ def complete_session_command_value(command_args: list[str], incomplete: str) -> 
             return complete_path_value(incomplete, file_suffixes=(".ckpt",))
         if root == "train" and last == "--resume-checkpoint":
             return complete_path_value(incomplete, file_suffixes=(".ckpt",))
-        if root == "create-dataset" and last in {"--root-path", "--out-dir"}:
-            return complete_path_value(incomplete, directories_only=True)
         if root == "mlflow":
             if len(command_args) >= 2 and command_args[1] == "ui" and last == "--db-path":
                 return complete_path_value(incomplete)
@@ -314,7 +312,6 @@ def complete_session_command_value(command_args: list[str], incomplete: str) -> 
         "train",
         "test",
         "deploy",
-        "create-dataset",
         "mlflow",
     ]
 
@@ -354,7 +351,6 @@ def complete_session_command_value(command_args: list[str], incomplete: str) -> 
         "train": ["--config-name", "--weights", "--resume-checkpoint"],
         "test": ["--config-name", "--weights"],
         "deploy": ["--config-name", "--weights"],
-        "create-dataset": ["--dataset", "--task", "--root-path", "--out-dir"],
         "mlflow": ["ui", "export"],
     }
     return [

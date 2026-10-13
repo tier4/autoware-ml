@@ -19,31 +19,11 @@ Runs entirely on the input tensor's device.
 """
 
 from __future__ import annotations
-from typing import NamedTuple
 
 from jaxtyping import Float32, Int32, Int64, Bool
 import torch
 
-
-class VoxelsData(NamedTuple):
-    """
-    Container for hard-voxelization results.
-
-    Attributes:
-        voxels (M, max_num_points, C): Padded point features grouped by their respective voxel,
-            where a point value is fully 0 when the voxel is padded.
-            C is either (x, y, z, intensity) or (x, y, z, time_lag) if C is 4. C is
-            (x, y, z, intensity, time_lag) when it's 5.
-        coords (M, 3): Integer voxel coordinates in (x, y, z).
-        num_points (M): Number of valid points per voxel.
-        batch_indices (M): Batch indices for each voxel.
-      M = batch_size * maximum number of voxels.
-    """
-
-    voxels: Float32[torch.Tensor, "M max_num_points C"]
-    coords: Int32[torch.Tensor, "M 3"]
-    num_points: Int32[torch.Tensor, " M"]
-    batch_indices: Int32[torch.Tensor, " M"]
+from autoware_ml.dataclasses.geometry.voxels import VoxelsData
 
 
 def hard_voxelize(
@@ -82,6 +62,8 @@ def hard_voxelize(
             - coords (M, 3): Integer voxel coordinates in XYZ order.
             - num_points (M): Number of valid points per voxel.
             - batch_indices (M): Batch indices for each voxel.
+            - point_voxel_indices (N): Voxel row of every input point, ``-1`` when unassigned.
+            - num_dropped_voxels (): Occupied voxels discarded by the ``max_voxels`` budget.
         M = batch_size * maximum number of voxels.
     """
     if points.shape[0] != points_batch_indices.shape[0]:
@@ -90,6 +72,7 @@ def hard_voxelize(
         )
     device = points.device
     channels = points.shape[1]
+    point_voxel_indices = torch.full((points.shape[0],), -1, dtype=torch.int64, device=device)
 
     lower = point_cloud_range[:3]
     upper = point_cloud_range[3:]
@@ -104,6 +87,7 @@ def hard_voxelize(
     # float rounding at the upper range boundary can otherwise yield
     # coords == grid_size, which corrupts downstream scatter indices.
     valid = ((grid_coords >= 0) & (grid_coords < grid_size)).all(dim=1)
+    valid_indices = torch.nonzero(valid, as_tuple=False).squeeze(1)
     points = points[valid]
     points_batch_indices = points_batch_indices[valid]
     grid_coords = grid_coords[valid]
@@ -114,6 +98,8 @@ def hard_voxelize(
             coords=torch.zeros((0, 3), device=points.device, dtype=torch.int32),
             num_points=torch.zeros((0,), device=points.device, dtype=torch.int32),
             batch_indices=torch.zeros((0,), device=points.device, dtype=torch.int32),
+            point_voxel_indices=point_voxel_indices,
+            num_dropped_voxels=torch.zeros((), dtype=torch.int64, device=device),
         )
 
     # Flat voxel key in (Batch, Z, Y, X) order (Z varies slowest within a batch)
@@ -194,6 +180,9 @@ def hard_voxelize(
     voxel_id_mapping = torch.full((unique_total_voxels,), -1, dtype=torch.long, device=device)
     voxel_id_mapping[kept_voxel_indices] = torch.arange(num_voxels, device=device)
 
+    # Voxel row of every point inside the range, -1 for a voxel beyond the budget
+    point_voxel_indices[valid_indices[sort_idx]] = voxel_id_mapping[voxel_id]
+
     # Keep only the grid_coords and batch indices that belong to the kept voxels.
     kept_starts = voxel_starts[kept_voxel_indices]
     unique_coords = sorted_grid_coords[kept_starts]
@@ -235,4 +224,8 @@ def hard_voxelize(
         coords=unique_coords,
         num_points=num_points,
         batch_indices=voxel_batch_indices,
+        point_voxel_indices=point_voxel_indices,
+        num_dropped_voxels=torch.tensor(
+            unique_total_voxels - num_voxels, dtype=torch.int64, device=device
+        ),
     )

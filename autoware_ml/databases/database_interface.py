@@ -15,13 +15,15 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import Mapping, Sequence, Protocol
+from typing import Sequence, Protocol
 from types import MappingProxyType
+from pathlib import Path
 
 import polars as pl
 
 from autoware_ml.databases.scenarios import Scenarios, ScenarioData
 from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord
+from autoware_ml.databases.taxonomy import DatabaseTaxonomy
 
 
 class DatabaseInterface(Protocol):
@@ -59,6 +61,18 @@ class DatabaseInterface(Protocol):
         """
 
         raise NotImplementedError("Database must define __eq__!")
+
+    @property
+    @abstractmethod
+    def root_path(self) -> Path:
+        """
+        Get the root path the annotation files of the database live under.
+
+        Returns:
+          Path: Root path of the database.
+        """
+
+        raise NotImplementedError("Database must define root_path!")
 
     @property
     @abstractmethod
@@ -119,27 +133,27 @@ class DatabaseInterface(Protocol):
 
     @property
     @abstractmethod
-    def label_remapper(self) -> Mapping[str, str] | None:
+    def taxonomy(self) -> DatabaseTaxonomy:
         """
-        Get the label remapper in the database.
+        Get the taxonomies the database labels are built with.
 
         Returns:
-          Mapping[str, str] | None: Label remapper in the database.
+          DatabaseTaxonomy: Taxonomies of the database.
         """
 
-        raise NotImplementedError("Database must define label_remapper!")
+        raise NotImplementedError("Database must define taxonomy!")
 
     @property
     @abstractmethod
-    def ignore_label_index(self) -> int:
+    def lidar_intensity_scale(self) -> float:
         """
-        Get the ignore label index in the database.
+        Get the intensity value of the strongest return in the stored point clouds.
 
         Returns:
-          int: Ignore label index in the database.
+          float: Full scale intensity of the database.
         """
 
-        raise NotImplementedError("Database must define ignore_label_index!")
+        raise NotImplementedError("Database must define lidar_intensity_scale!")
 
     @property
     @abstractmethod

@@ -31,6 +31,7 @@ from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord
 from autoware_ml.databases.nuscenes.nuscenes_records_generator import NuScenesRecordsGenerator
 from autoware_ml.databases.nuscenes.nuscenes_scenarios import NuScenesScenarios
 from autoware_ml.databases.box3d_pipelines.box3d_pipeline import Box3DPipeline
+from autoware_ml.databases.taxonomy import DatabaseTaxonomy
 
 logger = logging.getLogger(__name__)
 
@@ -45,12 +46,13 @@ class NuScenesRecordsGeneratorWorkerParams:
       database_root_path: Root path of the NuScenes database.
       scenario_data: Scenario data.
       lidar_pointcloud_num_features: Number of features in the lidar pointcloud.
+      taxonomy: Taxonomies the database labels are built with.
     """
 
     database_root_path: str
     scenario_data: ScenarioData
     lidar_pointcloud_num_features: int
-    ignore_label_index: int
+    taxonomy: DatabaseTaxonomy
     box3d_pipelines: Sequence[Box3DPipeline]
 
 
@@ -69,10 +71,8 @@ def _apply_nuscenes_records_generator(
     nuscenes_records_generator = NuScenesRecordsGenerator(
         database_root_path=worker_params.database_root_path,
         scenario_data=worker_params.scenario_data,
-        sample_steps=worker_params.scenario_data.sample_steps,
-        max_sweeps=worker_params.scenario_data.max_sweeps,
         lidar_pointcloud_num_features=worker_params.lidar_pointcloud_num_features,
-        ignore_label_index=worker_params.ignore_label_index,
+        taxonomy=worker_params.taxonomy,
         box3d_pipelines=worker_params.box3d_pipelines,
     )
     return nuscenes_records_generator.generate_dataset_records()
@@ -89,11 +89,10 @@ class NuScenesDataset(BaseDatabase):
         cache_path: str,
         cache_file_prefix_name: str,
         num_workers: int,
-        class_names: Sequence[str],
-        ignore_label_index: int,
-        label_remapper: MappingProxyType[str, str] | None,
+        taxonomy: DatabaseTaxonomy,
         lidar_pointcloud_num_features: int,
         box3d_pipelines: Sequence[Box3DPipeline],
+        lidar_intensity_scale: float,
     ) -> None:
         """
         Initialize NuScenes dataset. Please refer to the BaseDatabase class for more details.
@@ -105,11 +104,11 @@ class NuScenesDataset(BaseDatabase):
           cache_path: Path to cache the dataset records.
           cache_file_prefix_name: Prefix name of the cache file, it will be <cache_file_prefix_name>_<dataset_hash>.parquet
           num_workers: Number of workers to use for processing the dataset.
-          class_names: List of class names in the dataset, used for category mapping.
-          ignore_label_index: Index to use for ignored labels.
-          label_remapper: Mapping to remap label names, if needed.
+          taxonomy: Taxonomies the database labels are built with.
           lidar_pointcloud_num_features: Number of features in the lidar pointcloud.
           box3d_pipelines: List of box 3D pipelines to process the box 3D annotations.
+          lidar_intensity_scale: Intensity value of the strongest return in the stored point
+            clouds.
         """
 
         logger.info("Initializing NuScenes dataset...")
@@ -119,13 +118,12 @@ class NuScenesDataset(BaseDatabase):
             cache_path=cache_path,
             cache_file_prefix_name=cache_file_prefix_name,
             num_workers=num_workers,
-            class_names=class_names,
-            label_remapper=label_remapper,
+            taxonomy=taxonomy,
             box3d_pipelines=box3d_pipelines,
-            ignore_label_index=ignore_label_index,
+            lidar_intensity_scale=lidar_intensity_scale,
+            lidar_pointcloud_num_features=lidar_pointcloud_num_features,
         )
         self._scenarios = scenarios
-        self._lidar_pointcloud_num_features = lidar_pointcloud_num_features
 
     def __str__(self) -> str:
         """
@@ -140,9 +138,8 @@ class NuScenesDataset(BaseDatabase):
             f"root_path={str(self._root_path)}, "
             f"cache path={str(self._cache_path)}, "
             f"cache file prefix name={self._cache_file_prefix_name}, "
-            f"class_names={self._class_names}, "
-            f"label_remapper={self._label_remapper}, "
-            f"ignore_label_index={self._ignore_label_index}, "
+            f"taxonomy={self._taxonomy}, "
+            f"lidar_pointcloud_num_features={self._lidar_pointcloud_num_features}, "
             f"box3d_pipelines=[{', '.join([str(pipeline) for pipeline in self._box3d_pipelines])}], "
             f"{self.scenarios_string_repr}"
             f")"
@@ -218,7 +215,7 @@ class NuScenesDataset(BaseDatabase):
                 database_root_path=str(self._root_path),
                 scenario_data=scenario,
                 lidar_pointcloud_num_features=self._lidar_pointcloud_num_features,
-                ignore_label_index=self._ignore_label_index,
+                taxonomy=self._taxonomy,
                 box3d_pipelines=self._box3d_pipelines,
             )
             for scenario in scenario_data.values()

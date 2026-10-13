@@ -1,0 +1,14 @@
+# @package t4dataset
+
+defaults:
+  - base
+  - _self_
+
+segdet3d:
+  partial_detection_classes:
+    - motorcycle
+    - bicycle
+    - pedestrian.common
+    - pedestrian.personal_mobility
+    - pedestrian.stroller
+    - traffic_cone

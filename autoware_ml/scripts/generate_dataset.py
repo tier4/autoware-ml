@@ -12,61 +12,41 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Generate the record table of a database.
+
+The configured database reads the annotations of its scenarios and writes them to the
+record table named after its hash. Training generates a missing table itself, this
+entrypoint builds it ahead of time.
+"""
+
 import logging
 
 import hydra
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 
-from autoware_ml.configs.paths import CONFIGS_ROOT
 from autoware_ml.configs.resolvers import register_config_resolvers
 from autoware_ml.databases.database_interface import DatabaseInterface
+from autoware_ml.utils.runtime import get_config_path
 
 logger = logging.getLogger(__name__)
 register_config_resolvers()
-_CONFIG_PATH = str(CONFIGS_ROOT / "generators")
+_CONFIG_PATH = get_config_path()
 
 
 @hydra.main(version_base=None, config_path=_CONFIG_PATH)
-def main(cfg: DictConfig):
+def main(cfg: DictConfig) -> None:
     """
-    Script to generate records, and it will be removed in the future.
+    Generate the record table of the configured database.
 
     Args:
         cfg: Hydra configuration
     """
 
-    # Print configuration
-    logger.info("=" * 80)
-    logger.info("Configuration:")
-    logger.info("=" * 80)
-    logger.info(OmegaConf.to_yaml(cfg))
-    logger.info("=" * 80)
-
-    # Instantiate DatabaseInterface
+    logger.info(f"Configuration:\n{OmegaConf.to_yaml(cfg)}")
     database: DatabaseInterface = instantiate(cfg.database)
-
-    # TODO (Kok Seang Tan): Remove this part when we move to a proper training/testing framework.
-    # Instantiate the datamodule with the database
-    datamodule = instantiate(cfg.datamodule, database=database)
-
-    datamodule.prepare_data()
-
-    # Split/setup dataframes
-    datamodule.setup(stage="fit")
-
-    train_dataloader = datamodule.train_dataloader()
-    for batch in train_dataloader:
-        logger.info(f"Batch: {batch}")
-        logger.info(f"bboxes_array: {batch.detection3d_gt_batch.gt_bboxes_3d.shape}")
-        logger.info(f"labels_array: {batch.detection3d_gt_batch.gt_labels_3d.shape}")
-        logger.info(f"points_array: {batch.point_cloud_gt_batch.points.shape}")
-        logger.info(f"points_batches: {batch.point_cloud_gt_batch.batch_indices.shape}")
-        logger.info(
-            f"points_batches: {batch.point_cloud_gt_batch.batch_indices[:10]}, {batch.point_cloud_gt_batch.batch_indices[-10:]}"
-        )
-
-        break  # Just log the first batch for demonstration
+    database.process_scenario_records()
+    logger.info(f"Record table of {database.version}: {database.cache_file_path}")
 
 
 if __name__ == "__main__":

@@ -508,33 +508,6 @@ class TestCliCommands:
             override=False,
         )
 
-    def test_create_dataset_runs_runner(self) -> None:
-        with patch("autoware_ml.cli.cli.run_lazy_script") as run_lazy_script_mock:
-            result = self.runner.invoke(
-                app,
-                [
-                    "create-dataset",
-                    "--dataset",
-                    "nuscenes",
-                    "--task",
-                    "calibration_status",
-                    "--root-path",
-                    "/data/nuscenes",
-                    "--out-dir",
-                    "/tmp/out",
-                ],
-            )
-
-        assert result.exit_code == 0
-        run_lazy_script_mock.assert_called_once_with(
-            "autoware_ml.scripts.create_dataset",
-            "main",
-            dataset="nuscenes",
-            tasks=["calibration_status"],
-            root_path="/data/nuscenes",
-            out_dir="/tmp/out",
-        )
-
     def test_session_start_runs_script(self) -> None:
         with patch("autoware_ml.cli.cli.run_lazy_script") as run_lazy_script_mock:
             result = self.runner.invoke(

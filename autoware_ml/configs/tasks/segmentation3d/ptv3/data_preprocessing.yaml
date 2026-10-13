@@ -1,0 +1,8 @@
+# @package data_preprocessing
+pipeline:
+  - _target_: autoware_ml.preprocessing.detection3d.point_pillar.PointPillarPreprocessor
+    voxel_size: ["${grid_size}", "${grid_size}", "${grid_size}"]
+    point_cloud_range: ${point_cloud_range}
+    max_num_points: 32
+    max_voxels: ${max_voxels}
+    eval_max_voxels: ${max_voxels}

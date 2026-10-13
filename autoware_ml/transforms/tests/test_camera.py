@@ -1,4 +1,4 @@
-# Copyright 2025 TIER IV, Inc.
+# Copyright 2026 TIER IV, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,474 +12,204 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for camera transforms."""
+"""Unit tests for the camera transforms running on ``ModelGTSample``."""
 
-import cv2
-import numpy as np
-import numpy.typing as npt
-import pytest
+from __future__ import annotations
 
-from autoware_ml.transforms.camera.annotations2d import LoadAnnotations2DFromBoxes3D
+from collections.abc import Sequence
+import unittest
+
+import torch
+
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
+from autoware_ml.geometry.cameras.base_images import BaseImages
+from autoware_ml.geometry.points.lidar_points import LiDARPoints
 from autoware_ml.transforms.camera.distortion import UndistortImage
-from autoware_ml.transforms.camera.loading import LoadMultiViewImagesFromFiles
-from autoware_ml.transforms.camera.masking import GridMask
-from autoware_ml.transforms.camera.normalize import NormalizeMultiviewImage
-from autoware_ml.transforms.camera.resize import (
-    CropAndScale,
-    PadMultiViewImage,
-    ResizeCropFlipRotImage,
-)
-from autoware_ml.utils.calibration import CalibrationData
+from autoware_ml.transforms.camera.geometry import ImageAug3D
+from autoware_ml.transforms.image.image import PhotometricDistortion
+from autoware_ml.transforms.point_cloud.geometry import GlobalRotScaleTrans
+from autoware_ml.types.geometry import PointFeatureName
 
 
-class TestUndistortImage:
-    """Tests for UndistortImage transform."""
-
-    def test_instantiation(self) -> None:
-        """Test instantiation with default and custom alpha."""
-        transform = UndistortImage()
-        assert transform.alpha == 0.0
-
-        transform = UndistortImage(alpha=0.5)
-        assert transform.alpha == 0.5
-
-    def test_missing_img_key(self, sample_calibration_data: CalibrationData) -> None:
-        """Test that missing 'img' key raises KeyError."""
-        transform = UndistortImage()
-        input_dict = {"calibration_data": sample_calibration_data}
-
-        with pytest.raises(KeyError, match="Missing required key 'img'"):
-            transform(input_dict)
-
-    def test_missing_calibration_data_key(self, sample_image: npt.NDArray[np.uint8]) -> None:
-        """Test that missing 'calibration_data' key raises KeyError."""
-        transform = UndistortImage()
-        input_dict = {"img": sample_image}
-
-        with pytest.raises(KeyError, match="Missing required key 'calibration_data'"):
-            transform(input_dict)
-
-    def test_passthrough_zero_distortion(
-        self,
-        sample_image: npt.NDArray[np.uint8],
-        sample_calibration_data_no_distortion: CalibrationData,
-    ) -> None:
-        """Test that zero distortion coefficients pass through unchanged."""
-        transform = UndistortImage()
-        input_dict = {
-            "img": sample_image.copy(),
-            "calibration_data": sample_calibration_data_no_distortion,
-        }
-
-        output_dict = transform(input_dict)
-
-        # Image should be unchanged (same reference since early return)
-        assert "img" in output_dict
-        assert output_dict["img"].shape == sample_image.shape
-
-    def test_output_shape_preserved(
-        self, sample_image: npt.NDArray[np.uint8], sample_calibration_data: CalibrationData
-    ) -> None:
-        """Test that output image shape matches input shape."""
-        transform = UndistortImage()
-        input_dict = {
-            "img": sample_image.copy(),
-            "calibration_data": sample_calibration_data,
-        }
-
-        output_dict = transform(input_dict)
-
-        assert output_dict["img"].shape == sample_image.shape
-        assert output_dict["img"].dtype == sample_image.dtype
-
-    def test_new_camera_matrix_updated(
-        self, sample_image: npt.NDArray[np.uint8], sample_calibration_data: CalibrationData
-    ) -> None:
-        """Test that new_camera_matrix is updated after undistortion."""
-        transform = UndistortImage()
-
-        input_dict = {
-            "img": sample_image.copy(),
-            "calibration_data": sample_calibration_data,
-        }
-
-        output_dict = transform(input_dict)
-        output_calibration = output_dict["calibration_data"]
-
-        # new_camera_matrix should be set
-        assert output_calibration.new_camera_matrix is not None
-        # Distortion coefficients should be zeroed
-        assert np.allclose(output_calibration.distortion_coefficients, 0)
-
-    def test_calibration_data_returned(
-        self, sample_image: npt.NDArray[np.uint8], sample_calibration_data: CalibrationData
-    ) -> None:
-        """Test that calibration_data is returned in output."""
-        transform = UndistortImage()
-        input_dict = {
-            "img": sample_image.copy(),
-            "calibration_data": sample_calibration_data,
-        }
-
-        output_dict = transform(input_dict)
-
-        assert "calibration_data" in output_dict
-        assert isinstance(output_dict["calibration_data"], CalibrationData)
+def build_images(
+    height: int = 8,
+    width: int = 12,
+    num_cameras: int = 2,
+    distortion_coefficients: Sequence[float] = (),
+) -> BaseImages:
+    """Build images of the given size with a plain pinhole calibration."""
+    camera_intrinsics = torch.eye(3, dtype=torch.float32).repeat(num_cameras, 1, 1)
+    camera_intrinsics[:, 0, 0] = float(width)
+    camera_intrinsics[:, 1, 1] = float(height)
+    camera_intrinsics[:, 0, 2] = width / 2.0
+    camera_intrinsics[:, 1, 2] = height / 2.0
+    lidar2cams = torch.eye(4, dtype=torch.float32).repeat(num_cameras, 1, 1)
+    return BaseImages(
+        images=torch.rand((num_cameras, 3, height, width), dtype=torch.float32),
+        timestamps=torch.zeros(num_cameras, dtype=torch.float64),
+        camera_intrinsics=camera_intrinsics,
+        camera_names=[f"CAM_{index}" for index in range(num_cameras)],
+        lidar2images=torch.eye(4, dtype=torch.float32).repeat(num_cameras, 1, 1),
+        lidar2cams=lidar2cams,
+        distortion_models=["plumb_bob" if distortion_coefficients else ""] * num_cameras,
+        distortion_coefficients=[torch.tensor(distortion_coefficients, dtype=torch.float32)]
+        * num_cameras,
+        augmented_camera_intrinsics=camera_intrinsics.clone(),
+        image_augmentation_matrices=BaseImages.identity_image_augmentation_matrices(
+            camera_intrinsics
+        ),
+    )
 
 
-class TestCropAndScale:
-    """Tests for CropAndScale transform."""
+def build_sample(camera_image_data: BaseImages, with_points: bool = False) -> ModelGTSample:
+    """Build a sample holding images and optionally a one point cloud."""
+    point_cloud_data = (
+        LiDARPoints(
+            points=torch.tensor([[1.0, 2.0, 3.0]], dtype=torch.float32),
+            point_feature_names=[PointFeatureName.X, PointFeatureName.Y, PointFeatureName.Z],
+            timestamp=0.0,
+        )
+        if with_points
+        else None
+    )
+    return ModelGTSample(
+        lidar_point_cloud_samples=None,
+        image_samples=None,
+        point_cloud_data=point_cloud_data,
+        camera_image_data=camera_image_data,
+        detection3d_gt_bboxes_3d=None,
+        segmentation3d_gt_sample=None,
+    )
 
-    def test_instantiation(self) -> None:
-        """Test instantiation with default and custom parameters."""
-        transform = CropAndScale()
-        assert transform.p == 0.5
-        assert transform.crop_ratio == 0.8
 
-        transform = CropAndScale(p=0.9, crop_ratio=0.7)
-        assert transform.p == 0.9
-        assert transform.crop_ratio == 0.7
+class TestImageAug3D(unittest.TestCase):
+    """Resize, crop and flip of the images and of their calibration."""
 
-    def test_missing_keys(
-        self, sample_image: npt.NDArray[np.uint8], sample_calibration_data: CalibrationData
-    ) -> None:
-        """Test that missing required keys raise KeyError."""
-        transform = CropAndScale()
-
-        # Missing img
-        with pytest.raises(KeyError, match="Missing required key 'img'"):
-            transform({"calibration_data": sample_calibration_data})
-
-        # Missing calibration_data
-        with pytest.raises(KeyError, match="Missing required key 'calibration_data'"):
-            transform({"img": sample_image})
-
-    def test_never_apply(
-        self, sample_image: npt.NDArray[np.uint8], sample_calibration_data: CalibrationData
-    ) -> None:
-        """Test with p=0.0 returns input unchanged."""
-        transform = CropAndScale(p=0.0)
-        input_dict = {
-            "img": sample_image.copy(),
-            "calibration_data": sample_calibration_data,
-        }
-
-        output_dict = transform(input_dict)
-
-        # Should return same reference when not applied
-        assert output_dict["img"].shape == sample_image.shape
-
-    def test_always_apply_shape_preserved(
-        self, sample_image: npt.NDArray[np.uint8], sample_calibration_data: CalibrationData
-    ) -> None:
-        """Test with p=1.0 preserves output shape."""
-        transform = CropAndScale(p=1.0, crop_ratio=0.8)
-        input_dict = {
-            "img": sample_image.copy(),
-            "calibration_data": sample_calibration_data,
-        }
-
-        output_dict = transform(input_dict)
-
-        # Output shape should match input shape (resize back)
-        assert output_dict["img"].shape == sample_image.shape
-
-    def test_camera_matrix_updated(
-        self, sample_image: npt.NDArray[np.uint8], sample_calibration_data: CalibrationData
-    ) -> None:
-        """Test that camera matrix is updated when transform is applied."""
-        transform = CropAndScale(p=1.0, crop_ratio=0.8)
-        original_camera_matrix = sample_calibration_data.new_camera_matrix.copy()
-
-        input_dict = {
-            "img": sample_image.copy(),
-            "calibration_data": sample_calibration_data,
-        }
-
-        output_dict = transform(input_dict)
-
-        # Camera matrix should be modified
-        assert not np.allclose(
-            output_dict["calibration_data"].new_camera_matrix,
-            original_camera_matrix,
+    def test_resizes_to_the_final_dimension(self) -> None:
+        transform = ImageAug3D(
+            final_dim=[4, 6], resize_lim=[1.0, 1.0], bot_pct_lim=[0.0, 0.0], training=False
         )
 
+        sample = transform(build_sample(build_images()))
 
-def test_normalize_multiview_image_handles_chw_stack() -> None:
-    images = np.ones((2, 3, 4, 5), dtype=np.float32)
+        self.assertEqual(sample.camera_image_data.images.shape[-2:], (4, 6))
 
-    output = NormalizeMultiviewImage(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], to_rgb=False)(
-        {"img": images}
-    )
+    def test_composes_the_pixel_affine_into_the_intrinsics(self) -> None:
+        # Halving the image halves the focal length and the principal point
+        transform = ImageAug3D(
+            final_dim=[4, 6], resize_lim=[0.5, 0.5], bot_pct_lim=[0.0, 0.0], training=False
+        )
 
-    assert output["img"].shape == (2, 3, 4, 5)
-    assert np.allclose(output["img"], 1.0)
+        sample = transform(build_sample(build_images()))
 
+        augmented = sample.camera_image_data.augmented_camera_intrinsics
+        self.assertAlmostEqual(float(augmented[0, 0, 0]), 6.0, places=5)
+        self.assertAlmostEqual(float(augmented[0, 1, 1]), 4.0, places=5)
 
-def test_pad_multiview_image_handles_chw_stack() -> None:
-    images = np.ones((2, 3, 4, 5), dtype=np.float32)
+    def test_composes_onto_the_intrinsics_of_earlier_image_transforms(self) -> None:
+        # An earlier transform already halved the image, a second halving quarters it
+        images = build_images()
+        images = images.model_copy(
+            update={"augmented_camera_intrinsics": images.augmented_camera_intrinsics * 0.5}
+        )
+        transform = ImageAug3D(
+            final_dim=[2, 3], resize_lim=[0.5, 0.5], bot_pct_lim=[0.0, 0.0], training=False
+        )
 
-    output = PadMultiViewImage(size_divisor=4, pad_val=0.0)({"img": images})
+        sample = transform(build_sample(images))
 
-    assert output["img"].shape == (2, 3, 4, 8)
-    assert output["pad_shape"] == (4, 8)
+        augmented = sample.camera_image_data.augmented_camera_intrinsics
+        self.assertAlmostEqual(float(augmented[0, 0, 0]), 3.0, places=5)
 
+    def test_records_the_augmentation_matrix(self) -> None:
+        transform = ImageAug3D(
+            final_dim=[4, 6], resize_lim=[0.5, 0.5], bot_pct_lim=[0.0, 0.0], training=False
+        )
 
-def test_resize_crop_flip_rot_image_updates_chw_stack_and_aug_matrix() -> None:
-    images = np.ones((2, 3, 8, 8), dtype=np.float32)
-    intrinsics = np.tile(np.eye(4, dtype=np.float32), (2, 1, 1))
-    lidar2cam = np.tile(np.eye(4, dtype=np.float32), (2, 1, 1))
-    transform = ResizeCropFlipRotImage(
-        data_aug_conf={
-            "resize_lim": (1.0, 1.0),
-            "final_dim": (6, 6),
-            "bot_pct_lim": (0.0, 0.0),
-            "rot_lim": (0.0, 0.0),
-            "rand_flip": False,
-        },
-        training=False,
-    )
+        sample = transform(build_sample(build_images()))
 
-    output = transform({"img": images, "camera_intrinsics": intrinsics, "lidar2cam": lidar2cam})
+        affines = sample.camera_image_data.image_augmentation_pixel_affines()
+        self.assertAlmostEqual(float(affines[0, 0, 0]), 0.5, places=5)
+        self.assertAlmostEqual(float(affines[0, 1, 1]), 0.5, places=5)
 
-    assert output["img"].shape == (2, 3, 6, 6)
-    assert output["img_aug_matrix"].shape == (2, 4, 4)
-    assert output["lidar2img"].shape == (2, 4, 4)
+    def test_keeps_lidar2image_consistent_with_the_intrinsics(self) -> None:
+        transform = ImageAug3D(
+            final_dim=[4, 6], resize_lim=[0.5, 0.5], bot_pct_lim=[0.0, 0.0], training=False
+        )
 
+        sample = transform(build_sample(build_images()))
 
-def test_resize_crop_aug_matrix_matches_pixels_for_mismatched_aspect() -> None:
-    """The augmentation matrix must describe the actual pixel mapping.
-
-    Regression test: with a source aspect ratio different from final_dim, a
-    hidden second resize used to stretch the pixels without entering the
-    matrix, desynchronizing the updated intrinsics from the image.
-    """
-    image = np.zeros((930, 1440, 3), dtype=np.uint8)
-    image[450:480, 705:735] = 255  # block centered at pixel (720, 465)
-    transform = ResizeCropFlipRotImage(
-        data_aug_conf={
-            "resize_lim": 0.02,
-            "final_dim": (240, 320),
-            "bot_pct_lim": (0.0, 0.0),
-            "rot_lim": (0.0, 0.0),
-            "rand_flip": False,
-        },
-        training=False,
-    )
-
-    matrix, augmented = transform._augment_image(image)
-
-    predicted = matrix @ np.array([720.0, 465.0, 1.0, 1.0])
-    rows, cols = np.nonzero(augmented[..., 0] > 128)
-    assert augmented.shape[:2] == (240, 320)
-    assert abs(cols.mean() - predicted[0]) < 1.0
-    assert abs(rows.mean() - predicted[1]) < 1.0
+        images = sample.camera_image_data
+        expected = torch.eye(4, dtype=torch.float32).repeat(2, 1, 1)
+        expected[:, :3, :3] = images.augmented_camera_intrinsics
+        torch.testing.assert_close(images.lidar2images, expected @ images.lidar2cams)
 
 
-def test_resize_crop_aug_matrix_carries_effective_scale_after_rounding() -> None:
-    """The matrix scale must be the integer-pixel scale cv2.resize actually applied.
+class TestUndistortImage(unittest.TestCase):
+    """Undistortion of the images and of their calibration."""
 
-    ``source * resize`` is rounded to whole pixels before resizing, so the
-    effective scale per axis is ``resized / source``, not ``resize``.
-    """
-    source_height, source_width = 930, 1440
-    image = np.zeros((source_height, source_width, 3), dtype=np.uint8)
-    image[450:480, 1285:1315] = 255  # block centered at pixel (1300, 465), near the crop edge
-    transform = ResizeCropFlipRotImage(
-        data_aug_conf={
-            "resize_lim": (0.2583, 0.2583),  # 1440 * 0.2583 = 371.95, rounds to 372
-            "final_dim": (240, 320),
-            "bot_pct_lim": (0.0, 0.0),
-            "rot_lim": (0.0, 0.0),
-            "rand_flip": False,
-        },
-        training=False,
-    )
+    def test_leaves_undistorted_images_untouched(self) -> None:
+        images = build_images()
+        transform = UndistortImage()
 
-    matrix, augmented = transform._augment_image(image)
+        sample = transform(build_sample(images))
 
-    resized_width = matrix[0, 0] * source_width
-    resized_height = matrix[1, 1] * source_height
-    assert np.isclose(resized_width, round(resized_width), atol=1e-3)
-    assert np.isclose(resized_height, round(resized_height), atol=1e-3)
-    assert round(resized_width) == 372
+        torch.testing.assert_close(sample.camera_image_data.images, images.images)
 
-    predicted = matrix @ np.array([1300.0, 465.0, 1.0, 1.0])
-    rows, cols = np.nonzero(augmented[..., 0] > 128)
-    assert abs(cols.mean() - predicted[0]) < 0.5
-    assert abs(rows.mean() - predicted[1]) < 0.5
+    def test_clears_the_distortion_it_removed(self) -> None:
+        transform = UndistortImage()
+
+        sample = transform(build_sample(build_images(distortion_coefficients=(0.1, 0.0, 0.0, 0.0))))
+
+        images = sample.camera_image_data
+        self.assertEqual([len(c) for c in images.distortion_coefficients], [0, 0])
+        self.assertEqual(list(images.distortion_models), ["", ""])
 
 
-def test_grid_mask_handles_chw_stack() -> None:
-    np.random.seed(0)
-    images = np.ones((2, 3, 64, 64), dtype=np.float32)
+class TestPhotometricDistortion(unittest.TestCase):
+    """Color distortion of the images."""
 
-    output = GridMask(p=1.0, ratio=0.5, rotate=0)({"img": images})
+    def test_identity_parameters_keep_the_images(self) -> None:
+        images = build_images()
+        transform = PhotometricDistortion(probability=1.0)
 
-    assert output["img"].shape == images.shape
-    assert (output["img"] == 0).any()
+        sample = transform(build_sample(images))
 
+        torch.testing.assert_close(
+            sample.camera_image_data.images, images.images, atol=1e-5, rtol=0.0
+        )
 
-def _pinhole_setup(image_width: int = 160, image_height: int = 96) -> dict:
-    """One forward-looking pinhole camera (fx = fy = 100) in a lidar frame (x fwd, y left, z up)."""
-    cam2img = np.eye(4)
-    cam2img[0, 0] = cam2img[1, 1] = 100.0
-    cam2img[0, 2] = image_width / 2
-    cam2img[1, 2] = image_height / 2
-    lidar2cam = np.array(
-        [
-            [0.0, -1.0, 0.0, 0.0],
-            [0.0, 0.0, -1.0, 0.0],
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-        ]
-    )
-    return {
-        "img": np.zeros((1, 3, image_height, image_width), dtype=np.float32),
-        "gt_labels": np.array([0]),
-        "lidar2img": [cam2img @ lidar2cam],
-    }
+    def test_brightness_changes_the_images(self) -> None:
+        images = build_images()
+        transform = PhotometricDistortion(probability=1.0, brightness=0.5)
+
+        sample = transform(build_sample(images))
+
+        self.assertEqual(sample.camera_image_data.images.shape, images.images.shape)
+        self.assertFalse(torch.equal(sample.camera_image_data.images, images.images))
 
 
-def test_load_annotations_2d_treats_box_z_as_gravity_center() -> None:
-    """The projected 2D box and center must straddle z, not sit above it.
+class TestCameraFollowsTheLidarAugmentation(unittest.TestCase):
+    """The lidar space augmentation updates the camera calibration."""
 
-    ``gt_boxes`` stores the gravity center. Treating that z as the bottom face
-    (building corners from z upward, or adding dz/2 before projecting the
-    center) silently lifts every 2D auxiliary target by half an object height,
-    which is invisible in the loss but wrong everywhere.
-    """
-    input_dict = _pinhole_setup(image_width=100, image_height=100)
-    # One 2 m cube centered on the optical axis, 10 m ahead.
-    input_dict["gt_boxes"] = np.array(
-        [[10.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0, 0.0, 0.0]], dtype=np.float32
-    )
-    output = LoadAnnotations2DFromBoxes3D()(input_dict)
+    def test_lidar2cam_takes_the_inverse_of_the_augmentation(self) -> None:
+        # A pure scaling by two moves the points, so the cameras take the halving
+        transform = GlobalRotScaleTrans(
+            yaw_rot_range=[0.0, 0.0], scale_ratio_range=[2.0, 2.0], translation_std=None
+        )
 
-    center = output["centers_2d"][0][0]
-    x1, y1, x2, y2 = output["gt_bboxes_2d"][0][0]
-    # z = 0 is on the optical axis, so the center projects to the principal
-    # point. The bottom-face reading would put it at y = 40.
-    assert center == pytest.approx([50.0, 50.0], abs=1e-3)
-    # The cube spans 9-11 m in depth, so its near face projects largest and
-    # sets the extent: 100 * 1 / 9 either side of the principal point.
-    extent = 100.0 / 9.0
-    assert (y1, y2) == pytest.approx((50.0 - extent, 50.0 + extent), abs=1e-3)
-    assert (x1, x2) == pytest.approx((50.0 - extent, 50.0 + extent), abs=1e-3)
-    assert center[1] == pytest.approx((y1 + y2) / 2, abs=1e-3)
+        sample = transform(build_sample(build_images(), with_points=True))
 
+        lidar2cams = sample.camera_image_data.lidar2cams
+        expected = torch.eye(4, dtype=torch.float32)
+        expected[:3, :3] = torch.eye(3, dtype=torch.float32) * 0.5
+        torch.testing.assert_close(lidar2cams[0], expected, atol=1e-6, rtol=0.0)
 
-def test_load_annotations_2d_projects_box_in_front_of_camera() -> None:
-    input_dict = _pinhole_setup()
-    input_dict["gt_boxes"] = np.array(
-        [[8.0, 0.0, -1.0, 4.0, 2.0, 1.5, 0.0, 0.0, 0.0]], dtype=np.float32
-    )
-    result = LoadAnnotations2DFromBoxes3D()(input_dict)
-    assert result["gt_bboxes_2d"][0].shape == (1, 4)
-    assert result["centers_2d"][0].shape == (1, 2)
-    assert result["gt_labels_2d"][0].tolist() == [0]
-    x1, y1, x2, y2 = result["gt_bboxes_2d"][0][0]
-    assert 0 <= x1 < x2 <= 160
-    assert 0 <= y1 < y2 <= 96
+    def test_sample_without_camera_stays_without_camera(self) -> None:
+        transform = GlobalRotScaleTrans(
+            yaw_rot_range=[0.0, 0.0], scale_ratio_range=[1.0, 1.0], translation_std=None
+        )
 
+        sample = transform(build_sample(None, with_points=True))
 
-def test_load_annotations_2d_drops_box_behind_camera() -> None:
-    input_dict = _pinhole_setup()
-    input_dict["gt_boxes"] = np.array(
-        [[-10.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0, 0.0, 0.0]], dtype=np.float32
-    )
-    result = LoadAnnotations2DFromBoxes3D()(input_dict)
-    assert result["gt_bboxes_2d"][0].shape == (0, 4)
-    assert result["centers_2d"][0].shape == (0, 2)
-    assert result["gt_labels_2d"][0].shape == (0,)
-
-
-def test_load_annotations_2d_drops_box_whose_center_leaves_the_image() -> None:
-    """Corners still visible but the projected center is off-image -> dropped.
-
-    A clamped center could land outside its own clipped box and would distort
-    the center-based 2D assignment.
-    """
-    input_dict = _pinhole_setup()
-    # Wide box far to the left: some corners project inside, the center at
-    # y = 9 m projects to x = 80 - 100 * 9/10 = -10 (outside).
-    input_dict["gt_boxes"] = np.array(
-        [[10.0, 9.0, 0.0, 2.0, 6.0, 2.0, 0.0, 0.0, 0.0]], dtype=np.float32
-    )
-    result = LoadAnnotations2DFromBoxes3D()(input_dict)
-    assert result["gt_bboxes_2d"][0].shape == (0, 4)
-
-
-def test_load_annotations_2d_clips_partially_visible_box_to_the_image() -> None:
-    input_dict = _pinhole_setup()
-    # Center projects at x = 80 - 100 * 6.5/10 = 15 (inside); the near-left
-    # corners project far outside the left edge and must be clipped to 0.
-    input_dict["gt_boxes"] = np.array(
-        [[10.0, 6.5, 0.0, 2.0, 6.0, 2.0, 0.0, 0.0, 0.0]], dtype=np.float32
-    )
-    result = LoadAnnotations2DFromBoxes3D()(input_dict)
-    assert result["gt_bboxes_2d"][0].shape == (1, 4)
-    x1, y1, x2, y2 = result["gt_bboxes_2d"][0][0]
-    assert x1 == 0.0
-    assert 0 < x2 <= 160
-    center = result["centers_2d"][0][0]
-    assert 0 <= center[0] < 160
-
-
-def test_load_annotations_2d_assigns_boxes_per_camera() -> None:
-    input_dict = _pinhole_setup()
-    # Second camera looks backward (rotate lidar->cam by 180 deg around z).
-    flip_xy = np.diag([-1.0, -1.0, 1.0, 1.0])
-    input_dict["lidar2img"] = [input_dict["lidar2img"][0], input_dict["lidar2img"][0] @ flip_xy]
-    input_dict["gt_boxes"] = np.array(
-        [
-            [10.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0, 0.0, 0.0],
-            [-10.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0, 0.0, 0.0],
-        ],
-        dtype=np.float32,
-    )
-    input_dict["gt_labels"] = np.array([0, 1])
-    result = LoadAnnotations2DFromBoxes3D()(input_dict)
-    assert result["gt_labels_2d"][0].tolist() == [0]
-    assert result["gt_labels_2d"][1].tolist() == [1]
-
-
-def test_load_annotations_2d_handles_empty_gt() -> None:
-    input_dict = _pinhole_setup()
-    input_dict["gt_boxes"] = np.zeros((0, 9), dtype=np.float32)
-    input_dict["gt_labels"] = np.zeros((0,), dtype=np.int64)
-    result = LoadAnnotations2DFromBoxes3D()(input_dict)
-    assert result["gt_bboxes_2d"][0].shape == (0, 4)
-    assert result["centers_2d"][0].shape == (0, 2)
-
-
-def test_multiview_loader_shuffle_order_keeps_sample_consistent(tmp_path) -> None:
-    camera_order = [f"CAM_{i}" for i in range(5)]
-    images_meta = {}
-    for index, name in enumerate(camera_order):
-        path = tmp_path / f"{name}.png"
-        cv2.imwrite(str(path), np.full((4, 6, 3), index * 10, dtype=np.uint8))
-        images_meta[name] = {
-            "img_path": str(path),
-            "cam2img": np.eye(3, dtype=np.float32) * (index + 1),
-            "lidar2cam": np.eye(4, dtype=np.float32),
-        }
-
-    loader = LoadMultiViewImagesFromFiles(normalize_to_unit=False, shuffle_order=True)
-    np.random.seed(3)
-    shuffled_seen = False
-    for _ in range(8):
-        out = loader({"images": images_meta, "camera_order": camera_order})
-        names = out["camera_names"]
-        assert sorted(names) == sorted(camera_order)
-        shuffled_seen |= names != camera_order
-        for position, name in enumerate(names):
-            index = camera_order.index(name)
-            # Image content and intrinsics must follow the shuffled order.
-            assert float(out["img"][position].mean()) == index * 10
-            assert out["camera_intrinsics"][position][0, 0] == index + 1
-    assert shuffled_seen
-
-    fixed_loader = LoadMultiViewImagesFromFiles(normalize_to_unit=False)
-    out = fixed_loader({"images": images_meta, "camera_order": camera_order})
-    assert out["camera_names"] == camera_order
+        self.assertIsNone(sample.camera_image_data)
