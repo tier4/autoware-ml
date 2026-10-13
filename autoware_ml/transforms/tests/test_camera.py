@@ -17,18 +17,28 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+import math
+from pathlib import Path
+import tempfile
 import unittest
 
+import cv2
+import numpy as np
 import torch
 
+from autoware_ml.dataclasses.batch.detection2d import Detection2DGTSample
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
-from autoware_ml.geometry.cameras.base_images import BaseImages
+from autoware_ml.dataclasses.geometry.images import ImageSample
+from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
+from autoware_ml.geometry.cameras.base_images import BaseImages, compose_lidar2images
 from autoware_ml.geometry.points.lidar_points import LiDARPoints
+from autoware_ml.transforms.camera.annotations2d import LoadAnnotations2DFromBoxes3D
 from autoware_ml.transforms.camera.distortion import UndistortImage
-from autoware_ml.transforms.camera.geometry import ImageAug3D
+from autoware_ml.transforms.camera.geometry import CameraGlobalRotScaleTrans, ImageAug3D
+from autoware_ml.transforms.camera.loading import LoadImagesFromFile
 from autoware_ml.transforms.image.image import PhotometricDistortion
 from autoware_ml.transforms.point_cloud.geometry import GlobalRotScaleTrans
-from autoware_ml.types.geometry import PointFeatureName
+from autoware_ml.types.geometry import Box3DCenterCoordinateType, Box3DFieldIndex, PointFeatureName
 
 
 def build_images(
@@ -213,3 +223,272 @@ class TestCameraFollowsTheLidarAugmentation(unittest.TestCase):
         sample = transform(build_sample(None, with_points=True))
 
         self.assertIsNone(sample.camera_image_data)
+
+
+# A camera looking along the lidar x axis: image right is lidar -y, image down is lidar -z.
+LIDAR2CAM_FORWARD = torch.tensor(
+    [[0.0, -1.0, 0.0, 0.0], [0.0, 0.0, -1.0, 0.0], [1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
+)
+
+
+def build_pinhole_images(lidar2cams: Sequence[torch.Tensor], width: int, height: int) -> BaseImages:
+    """Images of pinhole cameras with fx = fy = 100 and the principal point at the center."""
+    num_cameras = len(lidar2cams)
+    camera_intrinsics = torch.eye(3).repeat(num_cameras, 1, 1)
+    camera_intrinsics[:, 0, 0] = camera_intrinsics[:, 1, 1] = 100.0
+    camera_intrinsics[:, 0, 2] = width / 2.0
+    camera_intrinsics[:, 1, 2] = height / 2.0
+    lidar2cams_tensor = torch.stack(list(lidar2cams))
+    return BaseImages(
+        images=torch.zeros((num_cameras, 3, height, width)),
+        timestamps=torch.zeros(num_cameras, dtype=torch.float64),
+        camera_intrinsics=camera_intrinsics,
+        camera_names=[f"CAM_{index}" for index in range(num_cameras)],
+        lidar2images=compose_lidar2images(camera_intrinsics, lidar2cams_tensor),
+        lidar2cams=lidar2cams_tensor,
+        distortion_models=[""] * num_cameras,
+        distortion_coefficients=[torch.zeros(0)] * num_cameras,
+        augmented_camera_intrinsics=camera_intrinsics.clone(),
+        image_augmentation_matrices=BaseImages.identity_image_augmentation_matrices(
+            camera_intrinsics
+        ),
+    )
+
+
+def build_boxes(rows: Sequence[Sequence[float]], labels: Sequence[int]) -> LidarBBoxes3D:
+    """Gravity-center boxes from ``[x, y, z, l, w, h, yaw]`` rows."""
+    params = np.zeros((len(rows), len(Box3DFieldIndex)), dtype=np.float32)
+    if len(rows):
+        params[:, :7] = np.asarray(rows, dtype=np.float32)
+    return LidarBBoxes3D.from_numpy(
+        bbox_params=params,
+        bbox_labels=np.asarray(labels, dtype=np.int32),
+        bbox_label_names=["car"] * len(rows),
+        bbox_num_lidar_points=np.full(len(rows), 10, dtype=np.int32),
+        bbox_center_coordinate_type=Box3DCenterCoordinateType.GRAVITY_CENTER,
+    )
+
+
+def project_annotations(
+    rows: Sequence[Sequence[float]],
+    labels: Sequence[int] | None = None,
+    lidar2cams: Sequence[torch.Tensor] = (LIDAR2CAM_FORWARD,),
+    width: int = 160,
+    height: int = 96,
+) -> Detection2DGTSample:
+    """Run LoadAnnotations2DFromBoxes3D on boxes seen by the given cameras."""
+    sample = build_sample(build_pinhole_images(lidar2cams, width, height))._replace(
+        detection3d_gt_bboxes_3d=build_boxes(rows, [0] * len(rows) if labels is None else labels)
+    )
+    return LoadAnnotations2DFromBoxes3D()(sample).detection2d_gt_sample
+
+
+class TestLoadAnnotations2DFromBoxes3D(unittest.TestCase):
+    """Projection of the 3D boxes onto every camera as auxiliary 2D targets."""
+
+    def test_treats_box_z_as_gravity_center(self) -> None:
+        # Reading z as the bottom face would lift every 2D target by half an object height,
+        # which is invisible in the loss and wrong everywhere. A 2 m cube on the optical axis,
+        # 10 m ahead, spans 9-11 m in depth, so its near face sets the extent.
+        annotations = project_annotations(
+            [[10.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0]], width=100, height=100
+        )
+
+        center = annotations.gt_centers_2d[0][0]
+        x1, y1, x2, y2 = annotations.gt_bboxes_2d[0][0].tolist()
+        torch.testing.assert_close(center, torch.tensor([50.0, 50.0]))
+        extent = 100.0 / 9.0
+        self.assertAlmostEqual(y1, 50.0 - extent, places=3)
+        self.assertAlmostEqual(y2, 50.0 + extent, places=3)
+        self.assertAlmostEqual(x1, 50.0 - extent, places=3)
+        self.assertAlmostEqual(x2, 50.0 + extent, places=3)
+
+    def test_projects_a_box_in_front_of_the_camera(self) -> None:
+        annotations = project_annotations([[8.0, 0.0, -1.0, 4.0, 2.0, 1.5, 0.0]], labels=[2])
+
+        self.assertEqual(tuple(annotations.gt_bboxes_2d[0].shape), (1, 4))
+        self.assertEqual(tuple(annotations.gt_centers_2d[0].shape), (1, 2))
+        self.assertEqual(annotations.gt_labels_2d[0].tolist(), [2])
+        self.assertEqual(annotations.gt_labels_2d[0].dtype, torch.int64)
+        x1, y1, x2, y2 = annotations.gt_bboxes_2d[0][0].tolist()
+        self.assertTrue(0 <= x1 < x2 <= 160 and 0 <= y1 < y2 <= 96)
+
+    def test_drops_a_box_behind_the_camera(self) -> None:
+        annotations = project_annotations([[-10.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0]])
+
+        self.assertEqual(tuple(annotations.gt_bboxes_2d[0].shape), (0, 4))
+        self.assertEqual(tuple(annotations.gt_centers_2d[0].shape), (0, 2))
+        self.assertEqual(tuple(annotations.gt_labels_2d[0].shape), (0,))
+
+    def test_drops_a_box_whose_center_leaves_the_image(self) -> None:
+        # Some corners project inside, but the center at y = 9 m projects to x = -10: a clamped
+        # center could land outside its own clipped box and distort the 2D assignment.
+        annotations = project_annotations([[10.0, 9.0, 0.0, 2.0, 6.0, 2.0, 0.0]])
+
+        self.assertEqual(tuple(annotations.gt_bboxes_2d[0].shape), (0, 4))
+
+    def test_clips_a_partially_visible_box_to_the_image(self) -> None:
+        # The center projects at x = 15, the near-left corners far outside the left edge.
+        annotations = project_annotations([[10.0, 6.5, 0.0, 2.0, 6.0, 2.0, 0.0]])
+
+        x1, _, x2, _ = annotations.gt_bboxes_2d[0][0].tolist()
+        self.assertEqual(x1, 0.0)
+        self.assertTrue(0 < x2 <= 160)
+        self.assertTrue(0 <= float(annotations.gt_centers_2d[0][0][0]) < 160)
+
+    def test_follows_the_box_yaw(self) -> None:
+        # A 4 m x 1 m box turned by 90 degrees shows its long side to the camera.
+        straight = project_annotations([[10.0, 0.0, 0.0, 4.0, 1.0, 1.0, 0.0]])
+        turned = project_annotations([[10.0, 0.0, 0.0, 4.0, 1.0, 1.0, math.pi / 2]])
+
+        def width(annotations: Detection2DGTSample) -> float:
+            x1, _, x2, _ = annotations.gt_bboxes_2d[0][0].tolist()
+            return x2 - x1
+
+        self.assertGreater(width(turned), 2.0 * width(straight))
+
+    def test_assigns_every_box_to_the_cameras_that_see_it(self) -> None:
+        # The second camera looks backward.
+        backward = LIDAR2CAM_FORWARD @ torch.diag(torch.tensor([-1.0, -1.0, 1.0, 1.0]))
+        annotations = project_annotations(
+            [[10.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0], [-10.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0]],
+            labels=[0, 1],
+            lidar2cams=(LIDAR2CAM_FORWARD, backward),
+        )
+
+        self.assertEqual(annotations.gt_labels_2d[0].tolist(), [0])
+        self.assertEqual(annotations.gt_labels_2d[1].tolist(), [1])
+
+    def test_handles_a_frame_without_boxes(self) -> None:
+        annotations = project_annotations([])
+
+        self.assertEqual(tuple(annotations.gt_bboxes_2d[0].shape), (0, 4))
+        self.assertEqual(tuple(annotations.gt_centers_2d[0].shape), (0, 2))
+
+    def test_needs_the_3d_boxes(self) -> None:
+        sample = build_sample(build_pinhole_images([LIDAR2CAM_FORWARD], 160, 96))
+
+        with self.assertRaises(KeyError):
+            LoadAnnotations2DFromBoxes3D()(sample)
+
+
+class TestLoadImagesFromFileShuffleOrder(unittest.TestCase):
+    """Train-time shuffling of the camera order."""
+
+    def setUp(self) -> None:
+        """Write one image per camera whose pixels and focal length name the camera."""
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.image_samples = []
+        for index in range(5):
+            path = Path(directory.name) / f"CAM_{index}.png"
+            cv2.imwrite(str(path), np.full((4, 6, 3), index * 10, dtype=np.uint8))
+            camera_intrinsic = torch.eye(3) * (index + 1)
+            camera_intrinsic[2, 2] = 1.0
+            self.image_samples.append(
+                ImageSample(
+                    image_path=str(path),
+                    camera_name=f"CAM_{index}",
+                    timestamp=float(index),
+                    camera_intrinsic=camera_intrinsic,
+                    lidar2cam=torch.eye(4),
+                    lidar2image=torch.eye(4),
+                    distortion_model="",
+                    distortion_coefficients=torch.zeros(0),
+                )
+            )
+
+    def load(self, loader: LoadImagesFromFile) -> ModelGTSample:
+        """Load the images of the five cameras through the given loader."""
+        return loader(build_sample(None)._replace(image_samples=self.image_samples))
+
+    def test_every_camera_field_follows_the_shuffled_order(self) -> None:
+        loader = LoadImagesFromFile(shuffle_order=True)
+        names = [f"CAM_{index}" for index in range(5)]
+        np.random.seed(3)
+        shuffled_seen = False
+        for _ in range(8):
+            sample = self.load(loader)
+            images = sample.camera_image_data
+            self.assertEqual(sorted(images.camera_names), names)
+            self.assertEqual(
+                [image.camera_name for image in sample.image_samples], list(images.camera_names)
+            )
+            shuffled_seen |= list(images.camera_names) != names
+            for position, name in enumerate(images.camera_names):
+                index = names.index(name)
+                self.assertAlmostEqual(
+                    float(images.images[position].mean()) * 255.0, index * 10, places=3
+                )
+                self.assertEqual(float(images.camera_intrinsics[position, 0, 0]), index + 1)
+                self.assertEqual(float(images.timestamps[position]), float(index))
+        self.assertTrue(shuffled_seen)
+
+    def test_keeps_the_record_order_by_default(self) -> None:
+        sample = self.load(LoadImagesFromFile())
+
+        self.assertEqual(
+            list(sample.camera_image_data.camera_names), [f"CAM_{index}" for index in range(5)]
+        )
+
+
+class TestCameraGlobalRotScaleTrans(unittest.TestCase):
+    """The global 3D augmentation of a camera-only sample."""
+
+    def build_camera_sample(self) -> ModelGTSample:
+        """A camera-only sample with one box in front of a forward-looking camera."""
+        return build_sample(build_pinhole_images([LIDAR2CAM_FORWARD], 160, 96))._replace(
+            detection3d_gt_bboxes_3d=build_boxes([[10.0, 1.0, 0.5, 4.0, 2.0, 1.5, 0.3]], [0])
+        )
+
+    def augment(self, sample: ModelGTSample, seed: int) -> ModelGTSample:
+        """Apply a random rotation, scale and translation."""
+        np.random.seed(seed)
+        return CameraGlobalRotScaleTrans(
+            yaw_rot_range=[-0.5, 0.5],
+            scale_ratio_range=[0.9, 1.1],
+            translation_std=[0.5, 0.5, 0.2],
+        )(sample)
+
+    def test_moves_the_boxes_and_records_the_augmentation_without_points(self) -> None:
+        sample = self.build_camera_sample()
+        raw_center = torch.cat([sample.detection3d_gt_bboxes_3d.center[0], torch.ones(1)])
+
+        augmented = self.augment(sample, seed=0)
+
+        transformation = augmented.lidar_transformation_sample.transformation_matrix
+        self.assertIsNone(augmented.point_cloud_data)
+        torch.testing.assert_close(
+            augmented.detection3d_gt_bboxes_3d.center[0], (transformation @ raw_center)[:3]
+        )
+
+    def test_the_cameras_keep_seeing_the_moved_boxes_at_the_same_pixels(self) -> None:
+        # The calibration takes the inverse of the augmentation, so a box projects onto the
+        # same pixels before and after it and the images stay valid for the moved boxes.
+        sample = self.build_camera_sample()
+        raw_center = torch.cat([sample.detection3d_gt_bboxes_3d.center[0], torch.ones(1)])
+        raw_pixel = sample.camera_image_data.lidar2images[0] @ raw_center
+
+        augmented = self.augment(sample, seed=1)
+
+        center = torch.cat([augmented.detection3d_gt_bboxes_3d.center[0], torch.ones(1)])
+        pixel = augmented.camera_image_data.lidar2images[0] @ center
+        torch.testing.assert_close(pixel[:2] / pixel[2], raw_pixel[:2] / raw_pixel[2])
+
+    def test_composes_with_an_earlier_augmentation(self) -> None:
+        transform = CameraGlobalRotScaleTrans(
+            yaw_rot_range=[0.2, 0.2], scale_ratio_range=[1.0, 1.0], translation_std=None
+        )
+
+        twice = transform(transform(self.build_camera_sample()))
+
+        matrix = twice.lidar_transformation_sample.transformation_matrix
+        self.assertAlmostEqual(float(torch.atan2(matrix[1, 0], matrix[0, 0])), 0.4, places=5)
+
+    def test_needs_the_images_loaded_first(self) -> None:
+        sample = self.build_camera_sample()._replace(camera_image_data=None)
+
+        with self.assertRaises(KeyError):
+            CameraGlobalRotScaleTrans(yaw_rot_range=[0.0, 0.0], scale_ratio_range=[1.0, 1.0])(
+                sample
+            )

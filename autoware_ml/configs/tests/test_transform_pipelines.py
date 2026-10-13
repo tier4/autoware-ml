@@ -24,6 +24,7 @@ _LIDAR_AUGMENTATIONS = (
     "point_cloud.geometry.GlobalRotScaleTrans",
     "point_cloud.geometry.GlobalBEVRandomFlip",
     "point_cloud.geometry.RandomRotateTargetAngle",
+    "camera.geometry.CameraGlobalRotScaleTrans",
 )
 
 

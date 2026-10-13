@@ -30,9 +30,16 @@ class LoadImagesFromFile(BaseTransform):
 
     _required_keys = ["image_samples"]
 
-    def __init__(self) -> None:
-        """Initialize the image loader, which serves the pixel values in [0, 1]."""
+    def __init__(self, shuffle_order: bool = False) -> None:
+        """Initialize the image loader, which serves the pixel values in [0, 1].
+
+        Args:
+            shuffle_order: Whether to load the cameras of every sample in a random order, a
+                train-time regularization for models that do not depend on the camera order.
+                Every per-camera field, and the image samples, follow the drawn order.
+        """
         super().__init__(probability=None)
+        self.shuffle_order = shuffle_order
 
     def load_image(self, image_path: str) -> torch.Tensor:
         """Read one RGB image from disk as a (num_channels, height, width) tensor.
@@ -65,6 +72,8 @@ class LoadImagesFromFile(BaseTransform):
         image_samples = model_gt_sample.image_samples  # type: ignore[reportOptionalIterable]
         if not image_samples:
             raise ValueError("No image samples found in the ModelGTSample.")
+        if self.shuffle_order:
+            image_samples = [image_samples[i] for i in np.random.permutation(len(image_samples))]
 
         images = torch.stack([self.load_image(sample.image_path) for sample in image_samples])
         camera_intrinsics = torch.stack([sample.camera_intrinsic for sample in image_samples])
@@ -84,4 +93,6 @@ class LoadImagesFromFile(BaseTransform):
                 camera_intrinsics
             ),
         )
-        return model_gt_sample._replace(camera_image_data=camera_image_data)
+        return model_gt_sample._replace(
+            image_samples=image_samples, camera_image_data=camera_image_data
+        )

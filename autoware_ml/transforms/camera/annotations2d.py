@@ -16,42 +16,27 @@
 
 The transform projects the (already augmented) 3D ground-truth boxes onto
 every camera and emits per-camera 2D boxes, projected gravity centers, and
-labels. It must therefore run after all geometric augmentations
-(``ResizeCropFlipRotImage``, ``GlobalRotScaleTrans``, ``PadMultiViewImage``)
-so the projection matrices and the pixels agree.
+labels. It must therefore run after every geometric augmentation (the image
+augmentations and the global 3D ones), so the projection matrices and the
+pixels agree.
 """
 
 from __future__ import annotations
 
-from typing import Any
-
 import numpy as np
+import numpy.typing as npt
+import torch
 
+from autoware_ml.dataclasses.batch.detection2d import Detection2DGTSample
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
+from autoware_ml.geometry.bbox_3d.base_bbox3d import BaseBBoxes3D
+from autoware_ml.geometry.cameras.base_images import BaseImages
 from autoware_ml.transforms.base import BaseTransform
-from autoware_ml.transforms.camera.utils import as_hwc_image_list
 
 
-def _boxes3d_corners(boxes: np.ndarray) -> np.ndarray:
-    """Compute the 8 corners ``(N, 8, 3)`` of gravity-center boxes ``(N, >=7)``.
-
-    A numpy sibling of the torch-based
-    :attr:`autoware_ml.geometry.bbox_3d.lidar_bbox3d.LidarBBoxes3D.corners`.
-    """
-    dims = boxes[:, 3:6]
-    signs = np.array(
-        [[dx, dy, dz] for dx in (-0.5, 0.5) for dy in (-0.5, 0.5) for dz in (-0.5, 0.5)],
-        dtype=np.float32,
-    )
-    corners = dims[:, None, :] * signs[None, :, :]
-    yaw = boxes[:, 6]
-    cos_yaw, sin_yaw = np.cos(yaw), np.sin(yaw)
-    rotated_x = corners[..., 0] * cos_yaw[:, None] - corners[..., 1] * sin_yaw[:, None]
-    rotated_y = corners[..., 0] * sin_yaw[:, None] + corners[..., 1] * cos_yaw[:, None]
-    corners = np.stack([rotated_x, rotated_y, corners[..., 2]], axis=-1)
-    return corners + boxes[:, None, :3]
-
-
-def _project_points(points: np.ndarray, lidar2img: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _project_points(
+    points: npt.NDArray, lidar2img: npt.NDArray[np.float64]
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.bool_]]:
     """Project lidar-frame points to pixels ``(N, 2)`` and an in-front-of-camera mask ``(N,)``."""
     homogeneous = np.concatenate([points, np.ones((points.shape[0], 1))], axis=1)
     projected = homogeneous @ lidar2img.T
@@ -59,7 +44,7 @@ def _project_points(points: np.ndarray, lidar2img: np.ndarray) -> tuple[np.ndarr
     return projected[:, :2] / np.maximum(depth, 1e-6), depth[:, 0] > 0
 
 
-def _empty_annotations() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _empty_annotations() -> tuple[npt.NDArray, npt.NDArray, npt.NDArray]:
     return (
         np.zeros((0, 4), dtype=np.float32),
         np.zeros((0, 2), dtype=np.float32),
@@ -68,13 +53,13 @@ def _empty_annotations() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 
 
 def _project_camera(
-    corners: np.ndarray,
-    gravity_centers: np.ndarray,
-    gt_labels: np.ndarray,
-    lidar2img: np.ndarray,
+    corners: npt.NDArray,
+    gravity_centers: npt.NDArray,
+    gt_labels: npt.NDArray,
+    lidar2img: npt.NDArray[np.float64],
     image_height: int,
     image_width: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[npt.NDArray, npt.NDArray, npt.NDArray]:
     num_boxes = corners.shape[0]
     if num_boxes == 0:
         return _empty_annotations()
@@ -119,41 +104,56 @@ def _project_camera(
 
 
 class LoadAnnotations2DFromBoxes3D(BaseTransform):
-    """Project 3D ground-truth boxes onto every camera as 2D annotations.
+    """Project the 3D ground-truth boxes onto every camera as 2D annotations.
 
-    Outputs (per camera, one entry per visible box):
-        ``gt_bboxes_2d``: ``(N, 4)`` clipped ``(x1, y1, x2, y2)`` pixel boxes.
-        ``centers_2d``: ``(N, 2)`` projected gravity centers in pixels.
-        ``gt_labels_2d``: ``(N,)`` class labels.
+    Every camera gets one entry per visible box: the clipped ``(x1, y1, x2, y2)``
+    pixel box, the projected gravity center in pixels and the class label. The
+    box centers are gravity centers, the only center the 3D boxes take.
     """
 
-    _required_keys = ["img", "gt_boxes", "gt_labels", "lidar2img"]
+    _required_keys = ["camera_image_data", "detection3d_gt_bboxes_3d"]
 
-    def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
-        """Compute per-camera 2D annotations from the 3D boxes."""
-        image_list, _ = as_hwc_image_list(input_dict["img"])
-        image_height, image_width = image_list[0].shape[:2]
-        gt_boxes = np.asarray(input_dict["gt_boxes"], dtype=np.float32)
-        gt_labels = np.asarray(input_dict["gt_labels"]).reshape(-1)
-        corners = _boxes3d_corners(gt_boxes)
-        gravity_centers = gt_boxes[:, :3]
+    def __init__(self) -> None:
+        """Initialize the transform, which projects every sample."""
+        super().__init__(probability=None)
+
+    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
+        """Compute the per-camera 2D annotations from the 3D boxes.
+
+        Args:
+            model_gt_sample: Sample holding the loaded images and the 3D boxes.
+
+        Returns:
+            The sample with its per-camera 2D annotations.
+        """
+        # These are checked in the _validate_required_keys()
+        camera_image_data: BaseImages = (
+            model_gt_sample.camera_image_data  # type: ignore[reportOptionalMemberAccess]
+        )
+        bboxes: BaseBBoxes3D = (
+            model_gt_sample.detection3d_gt_bboxes_3d  # type: ignore[reportOptionalMemberAccess]
+        )
+        image_height, image_width = camera_image_data.images.shape[-2:]
+        corners = bboxes.corners.numpy()
+        gravity_centers = bboxes.center.numpy()
+        gt_labels = bboxes.bbox_labels.numpy()
 
         all_bboxes, all_centers, all_labels = [], [], []
-        for lidar2img in input_dict["lidar2img"]:
-            bboxes, centers, labels = _project_camera(
+        for lidar2image in camera_image_data.lidar2images:
+            camera_bboxes, camera_centers, camera_labels = _project_camera(
                 corners,
                 gravity_centers,
                 gt_labels,
-                np.asarray(lidar2img, dtype=np.float64),
-                image_height,
-                image_width,
+                lidar2image.numpy().astype(np.float64),
+                int(image_height),
+                int(image_width),
             )
-            all_bboxes.append(bboxes)
-            all_centers.append(centers)
-            all_labels.append(labels)
+            all_bboxes.append(torch.from_numpy(camera_bboxes))
+            all_centers.append(torch.from_numpy(camera_centers))
+            all_labels.append(torch.from_numpy(camera_labels))
 
-        return {
-            "gt_bboxes_2d": all_bboxes,
-            "centers_2d": all_centers,
-            "gt_labels_2d": all_labels,
-        }
+        return model_gt_sample._replace(
+            detection2d_gt_sample=Detection2DGTSample(
+                gt_bboxes_2d=all_bboxes, gt_centers_2d=all_centers, gt_labels_2d=all_labels
+            )
+        )

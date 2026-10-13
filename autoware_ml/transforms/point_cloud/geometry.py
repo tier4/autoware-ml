@@ -125,21 +125,19 @@ class GlobalRotScaleTrans(BaseTransform):
 
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
         """Rotate, scale, and translate points and bboxes."""
-        # This is checked in the _validate_required_keys()
-        point_cloud_data: BasePoints = (
-            model_gt_sample.point_cloud_data  # type: ignore[reportOptionalMemberAccess]
-        )
-
         rotation_matrix = yaw_rotation_matrix(self.sample_yaw())
         scale_factor = float(
             np.random.uniform(self.scale_ratio_range[0], self.scale_ratio_range[1])
         )
         translation_vector = self.sample_translation()
 
-        # Points and boxes are rows, so they take the transposed rotation
-        point_cloud_data.rotate(rotation_matrix.T)
-        point_cloud_data.scale(scale_factor)
-        point_cloud_data.translate(translation_vector)
+        # Points and boxes are rows, so they take the transposed rotation. A camera-only
+        # sample carries no points; its boxes and cameras follow all the same.
+        point_cloud_data = model_gt_sample.point_cloud_data
+        if point_cloud_data is not None:
+            point_cloud_data.rotate(rotation_matrix.T)
+            point_cloud_data.scale(scale_factor)
+            point_cloud_data.translate(translation_vector)
 
         if model_gt_sample.detection3d_gt_bboxes_3d is not None:
             model_gt_sample.detection3d_gt_bboxes_3d.rotate(rotation_matrix.T)

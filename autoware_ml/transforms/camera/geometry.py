@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Image space geometry transforms to support ModelGTSample."""
+"""Image space geometry transforms, and the 3D augmentation of camera-only samples."""
 
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ import torch
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.cameras.base_images import BaseImages, compose_lidar2images
 from autoware_ml.transforms.base import BaseTransform
+from autoware_ml.transforms.point_cloud.geometry import GlobalRotScaleTrans
 
 
 def crop_with_zero_padding(
@@ -311,3 +312,16 @@ class CropAndScale(BaseTransform):
         pixel_affine[0, 2] = -start_w * scale_factor
         pixel_affine[1, 2] = -start_h * scale_factor
         return pixel_affine, resized
+
+
+class CameraGlobalRotScaleTrans(GlobalRotScaleTrans):
+    """Rotate, scale and translate the lidar frame of a camera-only sample.
+
+    A camera model loads no points, so the augmentation moves the 3D boxes and the
+    lidar-to-camera calibration only. The augmentation is recorded as on a lidar sample, so
+    the frame metadata of the batch maps the augmented frame to the map frame, which keeps a
+    temporal model's memory aligned while every frame draws its own augmentation. The images
+    must be loaded first, otherwise their calibration would not follow.
+    """
+
+    _required_keys = ["camera_image_data"]
