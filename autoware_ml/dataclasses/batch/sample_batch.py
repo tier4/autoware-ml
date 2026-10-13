@@ -6,6 +6,7 @@ import torch
 from jaxtyping import Bool
 from torch import Tensor
 
+from autoware_ml.dataclasses.batch.detection2d import Detection2DGTBatch, Detection2DGTSample
 from autoware_ml.dataclasses.batch.detection3d import (
     Detection3DGTBatch,
 )
@@ -59,6 +60,9 @@ class ModelGTSample(NamedTuple):
     # Assigned by the dataset once the pipeline has finished.
     io_processing_time: float = 0.0
 
+    # Per-camera 2D boxes projected from the 3D boxes, None when no transform derives them.
+    detection2d_gt_sample: Detection2DGTSample | None = None
+
     def keep_points(self, keep_mask: Bool[Tensor, " num_points"]) -> ModelGTSample:
         """
         Keep the masked points and, when the sample carries them, their semantic labels. The
@@ -103,6 +107,9 @@ class ModelGTBatch(NamedTuple):
     # Per-frame evaluation metadata, None when the samples carry none.
     frame_meta_batch: FrameMetaBatch | None = None
 
+    # Per-camera 2D boxes, None when the samples carry none.
+    detection2d_gt_batch: Detection2DGTBatch | None = None
+
     def to_device(self, device: torch.device) -> ModelGTBatch:
         """
         Move the ModelGTBatch to the specified device.
@@ -129,6 +136,9 @@ class ModelGTBatch(NamedTuple):
             io_processing_time=self.io_processing_time,
             frame_meta_batch=self.frame_meta_batch.to_device(device)
             if self.frame_meta_batch is not None
+            else None,
+            detection2d_gt_batch=self.detection2d_gt_batch.to_device(device)
+            if self.detection2d_gt_batch is not None
             else None,
         )
 
@@ -309,6 +319,35 @@ class ModelGTBatch(NamedTuple):
         return ImageGTBatch.collate_gt_samples(images_gt_samples=image_gt_samples)
 
     @staticmethod
+    def collate_detection2d_gt_samples(
+        gt_samples: Sequence[ModelGTSample],
+    ) -> Detection2DGTBatch | None:
+        """
+        Collate the per-camera 2D boxes of a sequence of ModelGTSample into a Detection2DGTBatch.
+
+        Args:
+          gt_samples: Sequence of ModelGTSample to be collated.
+
+        Returns:
+          Detection2DGTBatch: Collated 2D boxes, None when no sample carries any.
+
+        Raises:
+          ValueError: If only some of the samples carry 2D boxes.
+        """
+        detection2d_gt_samples = [
+            sample.detection2d_gt_sample
+            for sample in gt_samples
+            if sample.detection2d_gt_sample is not None
+        ]
+        if not len(detection2d_gt_samples):
+            return None
+
+        if len(detection2d_gt_samples) != len(gt_samples):
+            raise ValueError("All samples must have detection2d_gt_sample for collating.")
+
+        return Detection2DGTBatch.collate_gt_samples(detection2d_gt_samples)
+
+    @staticmethod
     def collate_frame_meta_samples(gt_samples: Sequence[ModelGTSample]) -> FrameMetaBatch | None:
         """
         Collate the frame metadata of a sequence of ModelGTSample into a FrameMetaBatch.
@@ -376,6 +415,9 @@ class ModelGTBatch(NamedTuple):
         # Collate the per-frame evaluation metadata
         frame_meta_batch = ModelGTBatch.collate_frame_meta_samples(gt_samples=gt_samples)
 
+        # Collate the per-camera 2D boxes
+        detection2d_gt_batch = ModelGTBatch.collate_detection2d_gt_samples(gt_samples=gt_samples)
+
         return ModelGTBatch(
             point_cloud_gt_batch=point_cloud_gt_batch,
             detection3d_gt_batch=detection3d_gt_batch,
@@ -383,4 +425,5 @@ class ModelGTBatch(NamedTuple):
             image_gt_batch=image_gt_batch,
             io_processing_time=sum(sample.io_processing_time for sample in gt_samples),
             frame_meta_batch=frame_meta_batch,
+            detection2d_gt_batch=detection2d_gt_batch,
         )
