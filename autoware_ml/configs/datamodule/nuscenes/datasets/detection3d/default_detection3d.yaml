@@ -1,0 +1,3 @@
+_target_: autoware_ml.datamodule.detection3d.Detection3DTask
+_convert_: all
+_partial_: true

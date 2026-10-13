@@ -8,12 +8,14 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from copy import deepcopy
-from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from autoware_ml.dataclasses.models.detection3d.head_outputs import CenterHeadOutputs
+from autoware_ml.dataclasses.models.detection3d.head_targets import CenterHeadTargets
+from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
 from autoware_ml.losses.detection3d.gaussian_focal import GaussianFocalLoss
 from autoware_ml.models.common.layers.conv import ConvModule
 from autoware_ml.models.detection3d.task_modules.heatmap import (
@@ -35,23 +37,6 @@ def _transpose_and_gather_feat(features: torch.Tensor, indices: torch.Tensor) ->
     features = features.permute(0, 2, 3, 1).contiguous()
     features = features.view(features.shape[0], -1, features.shape[-1])
     return _gather_feat(features, indices)
-
-
-@dataclass
-class CenterPointTargets:
-    """Store dense heatmap and regression targets for CenterPoint.
-
-    Attributes:
-        heatmap: Dense class heatmap targets.
-        anno_boxes: Encoded box regression targets.
-        indices: Flattened feature-map indices of positive targets.
-        mask: Mask indicating valid target slots.
-    """
-
-    heatmap: torch.Tensor
-    anno_boxes: torch.Tensor
-    indices: torch.Tensor
-    mask: torch.Tensor
 
 
 class CenterHead(nn.Module):
@@ -142,19 +127,17 @@ class CenterHead(nn.Module):
             nn.init.constant_(head[-1].bias, init_bias)
         return head
 
-    def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> CenterHeadOutputs:
         """Predict dense heatmap and regression maps."""
         shared = self.shared_conv(x)
-        outputs = {
-            "heatmap": self.heatmap(shared),
-            "reg": self.reg(shared),
-            "height": self.height(shared),
-            "dim": self.dim(shared),
-            "rot": self.rot(shared),
-        }
-        if self.vel is not None:
-            outputs["vel"] = self.vel(shared)
-        return outputs
+        return CenterHeadOutputs(
+            heatmap=self.heatmap(shared),
+            reg=self.reg(shared),
+            height=self.height(shared),
+            dim=self.dim(shared),
+            rot=self.rot(shared),
+            vel=self.vel(shared) if self.vel is not None else None,
+        )
 
     def get_targets(
         self,
@@ -162,7 +145,7 @@ class CenterHead(nn.Module):
         gt_labels: list[torch.Tensor],
         feature_map_size: tuple[int, int],
         device: torch.device,
-    ) -> CenterPointTargets:
+    ) -> CenterHeadTargets:
         """Build heatmap and regression targets for one batch."""
         batch_size = len(gt_boxes)
         feature_height, feature_width = feature_map_size
@@ -221,36 +204,42 @@ class CenterHead(nn.Module):
                     encoded_box.extend([box[7], box[8]])
                 anno_boxes[batch_index, object_index] = torch.stack(encoded_box)
 
-        return CenterPointTargets(
-            heatmap=heatmap, anno_boxes=anno_boxes, indices=indices, mask=mask
+        return CenterHeadTargets(
+            heatmaps=heatmap, reg_targets=anno_boxes, reg_indices=indices, valid_masks=mask
         )
 
     def loss(
         self,
-        outputs: dict[str, torch.Tensor],
+        outputs: CenterHeadOutputs,
         gt_boxes: list[torch.Tensor],
         gt_labels: list[torch.Tensor],
     ) -> dict[str, torch.Tensor]:
         """Compute CenterPoint heatmap and box losses."""
         targets = self.get_targets(
-            gt_boxes, gt_labels, outputs["heatmap"].shape[-2:], outputs["heatmap"].device
+            gt_boxes, gt_labels, outputs.heatmap.shape[-2:], outputs.heatmap.device
         )
-        loss_heatmap = self.loss_heatmap(outputs["heatmap"], targets.heatmap)
+        loss_heatmap = self.loss_heatmap(outputs.heatmap, targets.heatmaps)
 
-        pred_parts = [outputs["reg"], outputs["height"], outputs["dim"], outputs["rot"]]
-        if self.use_velocity:
-            pred_parts.append(outputs["vel"])
+        pred_parts = [outputs.reg, outputs.height, outputs.dim, outputs.rot]
+        if outputs.vel is not None:
+            pred_parts.append(outputs.vel)
         pred_boxes = torch.cat(pred_parts, dim=1)
-        pred_boxes = _transpose_and_gather_feat(pred_boxes, targets.indices)
-        bbox_mask = targets.mask.unsqueeze(-1).expand_as(targets.anno_boxes).float()
-        loss_bbox = self.loss_bbox(pred_boxes, targets.anno_boxes) * bbox_mask
+        pred_boxes = _transpose_and_gather_feat(pred_boxes, targets.reg_indices)
+        bbox_mask = targets.valid_masks.unsqueeze(-1).expand_as(targets.reg_targets).float()
+        loss_bbox = self.loss_bbox(pred_boxes, targets.reg_targets) * bbox_mask
         loss_bbox = loss_bbox.sum() / bbox_mask.sum().clamp_min(1.0)
         total_loss = loss_heatmap + self.loss_bbox_weight * loss_bbox
         return {"loss": total_loss, "loss_heatmap": loss_heatmap, "loss_bbox": loss_bbox}
 
-    def predict(self, outputs: dict[str, torch.Tensor]) -> list[dict[str, torch.Tensor]]:
+    def predict(self, outputs: CenterHeadOutputs) -> list[Detection3DSamplePredictions]:
         """Decode dense head outputs into 3D boxes, scores, and labels."""
-        heatmap = outputs["heatmap"].sigmoid()
+        # Mixed precision evaluation hands over float16 outputs, the boxes decode in float32.
+        reg_map = outputs.reg.float()
+        height_map = outputs.height.float()
+        dim_map = outputs.dim.float()
+        rot_map = outputs.rot.float()
+        vel_map = outputs.vel.float() if outputs.vel is not None else None
+        heatmap = outputs.heatmap.float().sigmoid()
         pooled = F.max_pool2d(heatmap, kernel_size=3, stride=1, padding=1)
         heatmap = heatmap * (pooled == heatmap)
 
@@ -270,11 +259,11 @@ class CenterHead(nn.Module):
             keep = flat_scores > self.score_threshold
             if keep.sum() == 0:
                 predictions.append(
-                    {
-                        "bboxes_3d": heatmap.new_zeros((0, 9 if self.use_velocity else 7)),
-                        "scores_3d": heatmap.new_zeros((0,)),
-                        "labels_3d": heatmap.new_zeros((0,), dtype=torch.long),
-                    }
+                    Detection3DSamplePredictions(
+                        bboxes_3d=heatmap.new_zeros((0, 9 if self.use_velocity else 7)),
+                        scores_3d=heatmap.new_zeros((0,)),
+                        labels_3d=heatmap.new_zeros((0,), dtype=torch.long),
+                    )
                 )
                 continue
 
@@ -284,12 +273,10 @@ class CenterHead(nn.Module):
             ys = torch.div(flat_indices, width, rounding_mode="floor")
             xs = flat_indices % width
 
-            reg = outputs["reg"][batch_index].permute(1, 2, 0).reshape(-1, 2)[flat_indices]
-            height_pred = (
-                outputs["height"][batch_index].permute(1, 2, 0).reshape(-1, 1)[flat_indices]
-            )
-            dim = outputs["dim"][batch_index].permute(1, 2, 0).reshape(-1, 3)[flat_indices].exp()
-            rot = outputs["rot"][batch_index].permute(1, 2, 0).reshape(-1, 2)[flat_indices]
+            reg = reg_map[batch_index].permute(1, 2, 0).reshape(-1, 2)[flat_indices]
+            height_pred = height_map[batch_index].permute(1, 2, 0).reshape(-1, 1)[flat_indices]
+            dim = dim_map[batch_index].permute(1, 2, 0).reshape(-1, 3)[flat_indices].exp()
+            rot = rot_map[batch_index].permute(1, 2, 0).reshape(-1, 2)[flat_indices]
 
             xs = (xs.to(reg.dtype) + reg[:, 0]) * self.out_size_factor * self.voxel_size[
                 0
@@ -300,8 +287,8 @@ class CenterHead(nn.Module):
             yaw = torch.atan2(rot[:, 0], rot[:, 1]).unsqueeze(1)
 
             box_parts = [xs.unsqueeze(1), ys.unsqueeze(1), height_pred, dim, yaw]
-            if self.use_velocity:
-                vel = outputs["vel"][batch_index].permute(1, 2, 0).reshape(-1, 2)[flat_indices]
+            if vel_map is not None:
+                vel = vel_map[batch_index].permute(1, 2, 0).reshape(-1, 2)[flat_indices]
                 box_parts.append(vel)
             boxes = torch.cat(box_parts, dim=1)
 
@@ -327,11 +314,11 @@ class CenterHead(nn.Module):
                 kept_indices = kept_indices[ranking]
 
             predictions.append(
-                {
-                    "bboxes_3d": boxes[kept_indices],
-                    "scores_3d": flat_scores[kept_indices],
-                    "labels_3d": flat_classes[kept_indices],
-                }
+                Detection3DSamplePredictions(
+                    bboxes_3d=boxes[kept_indices],
+                    scores_3d=flat_scores[kept_indices],
+                    labels_3d=flat_classes[kept_indices],
+                )
             )
         return predictions
 

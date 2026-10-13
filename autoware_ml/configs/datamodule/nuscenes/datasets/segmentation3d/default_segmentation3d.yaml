@@ -1,0 +1,5 @@
+_target_: autoware_ml.datamodule.nuscenes.segmentation3d.NuScenesSegmentation3DTask
+_convert_: all
+_partial_: true
+
+taxonomy: ${database.taxonomy.segmentation3d}

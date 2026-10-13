@@ -17,9 +17,12 @@
 from __future__ import annotations
 
 import math
-from typing import Any
 
 import torch
+
+from autoware_ml.dataclasses.geometry.range_view import RangeViewData
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.preprocessing.segmentation3d.range_view import project_range
 
 
 class FrustumRangePreprocessor:
@@ -53,78 +56,56 @@ class FrustumRangePreprocessor:
         self.width = int(width)
         self.fov_up = math.radians(float(fov_up))
         self.fov_down = math.radians(float(fov_down))
-        self.fov = abs(self.fov_down) + abs(self.fov_up)
         self.ignore_index = int(ignore_index)
         self.num_classes = int(num_classes)
 
-    def __call__(
-        self, batch_inputs_dict: dict[str, Any], *, is_training: bool = False
-    ) -> dict[str, Any]:
-        """Project concatenated point clouds into FRNet range-view tensors.
+    def __call__(self, batch_inputs: ModelBatchInputs, *, is_training: bool) -> ModelBatchInputs:
+        """Project the points of the batch into FRNet range-view tensors.
 
-        Reads the concatenated batch produced by :meth:`DataModule.collate_fn`,
-        derives per-point batch indices from ``offset``, projects every point
-        into a 2D range-view cell, and returns the tensors expected by FRNet's
-        voxel encoder and backbone.
-        When per-point labels are provided, a dense semantic target image is
-        computed via majority vote for each sample.
+        Every point is assigned the range-view cell of its sample. When the batch carries
+        labels, a dense semantic target image is computed by majority vote for each sample.
 
         Args:
-            batch_inputs_dict: Batch dictionary containing the concatenated
-                ``points`` tensor, the cumulative per-sample ``offset``
-                tensor, and an optional concatenated ``pts_semantic_mask``.
-            is_training: Accepted for pipeline-contract compatibility; the
-                projection is mode-independent, so the value is unused.
+            batch_inputs: Model inputs holding the point cloud and, when labelled, its labels.
+            is_training: Whether the model is in training mode. The projection is the same
+                in both modes.
 
         Returns:
-            Dictionary with:
-                * ``points``: the input point cloud, unchanged.
-                * ``coors``: per-point ``(batch_index, row, col)`` range-view
-                  coordinates.
-                * ``voxel_coors``: unique range-view coordinates.
-                * ``inverse_map``: index mapping from each point to its
-                  ``voxel_coors`` entry.
-                * ``sample_count``: number of samples in the batch.
-                * ``pts_semantic_mask`` and ``semantic_seg`` when labels were
-                  provided.
+            The model inputs with ``range_view_data`` holding the range-view cell of every
+            point, the occupied cells, the cell index of every point and, for a labelled
+            batch, the dense semantic target image of every sample.
+
+        Raises:
+            ValueError: If the batch carries no point cloud.
         """
-        points: torch.Tensor = batch_inputs_dict["points"]
-        offset: torch.Tensor = batch_inputs_dict["offset"]
-        labels: torch.Tensor | None = batch_inputs_dict.get("pts_semantic_mask")
-        device = points.device
+        del is_training
+        point_batch = batch_inputs.multi_task_gt_batch.point_cloud_gt_batch
+        if point_batch is None:
+            raise ValueError("FrustumRangePreprocessor needs the point cloud of the batch.")
+        points = point_batch.points
 
-        sample_count = int(offset.numel())
-        lengths = torch.cat([offset[:1], offset[1:] - offset[:-1]])
-        batch_index = torch.repeat_interleave(
-            torch.arange(sample_count, device=device, dtype=torch.long), lengths
-        )
-
-        depth = torch.linalg.norm(points[:, :3], dim=1).clamp_min(1e-6)
-        yaw = -torch.atan2(points[:, 1], points[:, 0])
-        pitch = torch.arcsin(torch.clamp(points[:, 2] / depth, -1.0, 1.0))
-
-        proj_x = torch.floor(0.5 * (yaw / torch.pi + 1.0) * self.width)
-        proj_y = torch.floor((1.0 - (pitch + abs(self.fov_down)) / self.fov) * self.height)
-        proj_x = proj_x.clamp(0, self.width - 1).long()
-        proj_y = proj_y.clamp(0, self.height - 1).long()
-
-        coors = torch.stack([batch_index, proj_y, proj_x], dim=1)
+        proj_y, proj_x = project_range(points, self.height, self.width, self.fov_up, self.fov_down)
+        coors = torch.stack([point_batch.batch_indices.long(), proj_y, proj_x], dim=1)
         voxel_coors, inverse_map = torch.unique(coors, return_inverse=True, dim=0)
 
-        outputs: dict[str, Any] = {
-            "points": points,
-            "coors": coors,
-            "voxel_coors": voxel_coors,
-            "inverse_map": inverse_map,
-            "sample_count": sample_count,
-        }
-
-        if labels is not None:
-            labels = labels.long()
-            outputs["pts_semantic_mask"] = labels
-            outputs["semantic_seg"] = self._range_view_targets(coors, labels, sample_count, device)
-
-        return outputs
+        label_batch = batch_inputs.multi_task_gt_batch.segmentation3d_gt_batch
+        semantic_labels = (
+            self._range_view_targets(
+                coors,
+                label_batch.gt_semantic_masks.long(),
+                point_batch.batch_size,
+                points.device,
+            )
+            if label_batch is not None
+            else None
+        )
+        range_view_data = RangeViewData(
+            coors=coors,
+            voxel_coors=voxel_coors,
+            inverse_map=inverse_map,
+            semantic_labels=semantic_labels,
+        )
+        return batch_inputs.replace(range_view_data=range_view_data)
 
     def _range_view_targets(
         self,

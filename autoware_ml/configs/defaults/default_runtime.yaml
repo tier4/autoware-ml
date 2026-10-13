@@ -3,9 +3,9 @@
 defaults:
   - modules/callbacks
   - modules/data_preprocessing
-  - modules/datamodule
   - modules/deploy
   - modules/logger
   - modules/model
+  - modules/paths
   - modules/run
   - modules/trainer

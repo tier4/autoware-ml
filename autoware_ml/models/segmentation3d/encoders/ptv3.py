@@ -35,7 +35,7 @@ from autoware_ml.ops.indexing.operators import argsort
 from autoware_ml.ops.segment.segment_csr import segment_csr
 from autoware_ml.ops.spconv.sparse_conv import SubMConv3d as ExportableSubMConv3d
 from autoware_ml.utils.point_cloud.batching import offset_to_bincount
-from autoware_ml.utils.point_cloud.structures import Point
+from autoware_ml.utils.point_cloud.structures import Point, pooled_sparse_shape
 
 
 def load_flash_attn_module() -> Any:
@@ -248,10 +248,22 @@ class PointSequential(PointModule):
             if isinstance(module, PointModule):
                 input_data = module(input_data)
             elif is_sparse_conv_module(module):
+                # spconv needs the features and the weights in one dtype, autocast leaves them
+                # apart in eval.
+                weight_dtype = module.weight.dtype
                 if isinstance(input_data, Point):
-                    input_data.sparse_conv_feat = module(input_data.sparse_conv_feat)
+                    sparse_feat = input_data.sparse_conv_feat
+                    if sparse_feat.features.dtype != weight_dtype:
+                        sparse_feat = sparse_feat.replace_feature(
+                            sparse_feat.features.to(weight_dtype)
+                        )
+                    input_data.sparse_conv_feat = module(sparse_feat)
                     input_data.feat = input_data.sparse_conv_feat.features
                 else:
+                    if input_data.features.dtype != weight_dtype:
+                        input_data = input_data.replace_feature(
+                            input_data.features.to(weight_dtype)
+                        )
                     input_data = module(input_data)
             else:
                 if isinstance(input_data, Point):
@@ -984,7 +996,10 @@ class SerializedPooling(PointModule):
             serialized_inverse=pooled_inverse,
             serialized_depth=point.serialized_depth - pooling_depth,
             batch=point.batch[head_indices],
-            sparse_shape=point.sparse_shape >> pooling_depth,
+            # Rounded up, not floored: a size that is not a multiple of the stride would
+            # otherwise leave the last occupied slice outside the declared shape and let
+            # spconv's hash keys alias (see pooled_sparse_shape).
+            sparse_shape=pooled_sparse_shape(point.sparse_shape, pooling_depth),
             pooling_inverse=cluster,
             pooling_parent=point,
             offset=(
@@ -1198,7 +1213,8 @@ class PointTransformerV3Encoder(PointModule):
         """Initialize the PTv3 encoder.
 
         Args:
-            in_channels: Input feature dimension.
+            in_channels: Input feature dimension, the width of the voxel feature
+                encoder feeding the embedding stem.
             order: Serialization orders used by the encoder.
             stride: Pooling strides between encoder stages.
             enc_depths: Number of blocks per encoder stage.
@@ -1228,6 +1244,7 @@ class PointTransformerV3Encoder(PointModule):
                 every stage or one per stage. ``None`` disables RoPE.
         """
         super().__init__()
+        self.in_channels = in_channels
         self.order = list(order)
         self.stride = list(stride)
         self.shuffle_orders = shuffle_orders
@@ -1356,7 +1373,7 @@ class LitePTEncoder(PointTransformerV3Encoder):
 
     def __init__(
         self,
-        in_channels: int = 4,
+        in_channels: int,
         order: Sequence[str] = ("z", "z-trans", "hilbert", "hilbert-trans"),
         stride: Sequence[int] = (2, 2, 2, 2),
         enc_depths: Sequence[int] = (2, 2, 2, 6, 2),
@@ -1384,7 +1401,8 @@ class LitePTEncoder(PointTransformerV3Encoder):
         """Initialize the LitePT encoder.
 
         Args:
-            in_channels: Input feature dimension.
+            in_channels: Input feature dimension, the width of the voxel feature
+                encoder feeding the embedding stem.
             order: Serialization orders used by the encoder.
             stride: Pooling strides between encoder stages.
             enc_depths: Number of blocks per encoder stage.

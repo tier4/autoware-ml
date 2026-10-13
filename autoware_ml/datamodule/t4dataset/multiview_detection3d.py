@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# TODO(vividf): adapt to new pipeline
+
 """T4Dataset multiview detection dataset and datamodule.
 
 This module contains the T4Dataset multiview adapter used by camera-lidar detectors.

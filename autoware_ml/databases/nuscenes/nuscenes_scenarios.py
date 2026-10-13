@@ -29,7 +29,7 @@ from autoware_ml.databases.scenarios import DatasetParams, ScenarioData, Scenari
 logger = logging.getLogger(__name__)
 
 # Maps a NuScenes version directory name to the nuscenes-devkit `nuscenes.utils.splits` scene-name
-# lists that apply to it. 
+# lists that apply to it.
 _VERSION_TO_SPLIT_SCENE_NAMES = {
     "v1.0-trainval": {
         SplitType.TRAIN: nuscenes_splits.train,
@@ -108,13 +108,11 @@ class NuScenesScenarios(Scenarios):
             log_record = nusc.get("log", scene["log_token"])
             scenario_splits[split].append(
                 ScenarioData(
-                    dataset_name=dataset_params.dataset_name,
+                    dataset_params=dataset_params,
                     scenario_id=scene["name"],
                     scenario_version=dataset_params.dataset_name,
                     vehicle_type=log_record.get("vehicle"),
                     location=log_record.get("location"),
-                    max_sweeps=dataset_params.max_sweeps,
-                    sample_steps=dataset_params.sample_steps,
                 )
             )
         return scenario_splits

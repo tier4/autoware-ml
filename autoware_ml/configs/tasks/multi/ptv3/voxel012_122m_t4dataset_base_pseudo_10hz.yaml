@@ -1,0 +1,55 @@
+# @package _global_
+
+# Stage 3: joint training on the 10 Hz pseudo labels
+
+defaults:
+  - /tasks/multi/ptv3/voxel012_122m_t4dataset_j6gen2
+  - /database@jpntaxi_database: t4dataset/t4dataset_pseudo_10hz_jpntaxi
+  - /database@joint_database: t4dataset/t4dataset_j6gen2_segdet3d
+  - override /database@database: t4dataset/t4dataset_pseudo_10hz_j6gen2
+  - _self_
+
+datamodule:
+  train_sources:
+    - database: ${database}
+      det3d: true
+      seg3d: true
+      repeat: 1
+    - database: ${jpntaxi_database}
+      det3d: true
+      seg3d: true
+      repeat: 1
+    - database: ${joint_database}
+      det3d: true
+      seg3d: true
+      repeat: 15
+  validation_sources:
+    - database: ${database}
+      det3d: true
+      seg3d: true
+      repeat: 1
+    - database: ${joint_database}
+      det3d: true
+      seg3d: true
+      repeat: 1
+
+model:
+  optimizer:
+    lr: 0.0001
+  optimizer_group_overrides:
+    encoder_block:
+      lr: 0.00001
+    encoder_default:
+      lr: 0.000025
+    seg3d_head:
+      lr: 0.00005
+  scheduler:
+    warmup_epochs: 2
+    decay_epochs: 8
+    max_lr_factor: 2.0
+
+trainer:
+  max_epochs: 10
+
+callbacks:
+  early_stopping: null

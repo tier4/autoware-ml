@@ -12,57 +12,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for shared datamodule base classes."""
+"""Unit tests for the dataloader configuration."""
 
 from __future__ import annotations
 
-from typing import Any
+import unittest
 
-from autoware_ml.datamodule.base import DataLoaderConfig, DataModule, Dataset
-
-
-class _DummyDataset(Dataset):
-    def __len__(self) -> int:
-        return 1
-
-    def get_data_info(self, index: int) -> dict[str, Any]:
-        return {"index": index}
+from autoware_ml.datamodule.base import DataLoaderConfig
 
 
-class _DummyDataModule(DataModule):
-    def _create_dataset(self, split: str, transforms=None) -> Dataset:
-        return _DummyDataset(dataset_transforms=transforms)
+class TestDataLoaderConfig(unittest.TestCase):
+    """Conversion of the configuration into dataloader keyword arguments."""
 
+    def test_defaults_build_a_single_sample_loader(self) -> None:
+        kwargs = DataLoaderConfig().to_dataloader_kwargs()
 
-class TestDataModuleBase:
-    def test_default_dataloader_configs_are_not_shared(self) -> None:
-        first = _DummyDataModule()
-        second = _DummyDataModule()
+        self.assertEqual(kwargs["batch_size"], 1)
+        self.assertFalse(kwargs["shuffle"])
+        self.assertFalse(kwargs["drop_last"])
 
-        assert first.train_dataloader_cfg is not second.train_dataloader_cfg
-        assert first.val_dataloader_cfg is not second.val_dataloader_cfg
-        assert first.test_dataloader_cfg is not second.test_dataloader_cfg
-        assert first.predict_dataloader_cfg is not second.predict_dataloader_cfg
+    def test_persistent_workers_need_workers(self) -> None:
+        kwargs = DataLoaderConfig(num_workers=0, persistent_workers=True).to_dataloader_kwargs()
 
-    def test_setup_none_initializes_all_splits(self) -> None:
-        datamodule = _DummyDataModule()
+        self.assertFalse(kwargs["persistent_workers"])
 
-        datamodule.setup(stage=None)
+    def test_persistent_workers_stay_on_with_workers(self) -> None:
+        kwargs = DataLoaderConfig(num_workers=4, persistent_workers=True).to_dataloader_kwargs()
 
-        assert datamodule.train_dataset is not None
-        assert datamodule.val_dataset is not None
-        assert datamodule.test_dataset is not None
-        assert datamodule.predict_dataset is not None
-
-    def test_explicit_dataloader_config_is_preserved(self) -> None:
-        dataloader_cfg = DataLoaderConfig(batch_size=4, num_workers=2)
-        datamodule = _DummyDataModule(train_dataloader_cfg=dataloader_cfg)
-
-        assert datamodule.train_dataloader_cfg is dataloader_cfg
-
-    def test_mapping_dataloader_config_is_coerced(self) -> None:
-        datamodule = _DummyDataModule(train_dataloader_cfg={"batch_size": 4, "num_workers": 2})
-
-        assert isinstance(datamodule.train_dataloader_cfg, DataLoaderConfig)
-        assert datamodule.train_dataloader_cfg.batch_size == 4
-        assert datamodule.train_dataloader_cfg.num_workers == 2
+        self.assertTrue(kwargs["persistent_workers"])

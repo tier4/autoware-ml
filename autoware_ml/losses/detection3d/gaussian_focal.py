@@ -28,12 +28,19 @@ class GaussianFocalLoss(nn.Module):
         self.alpha = alpha
         self.beta = beta
 
-    def forward(self, prediction: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        prediction: torch.Tensor,
+        target: torch.Tensor,
+        weights: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         """Compute Gaussian focal loss on dense heatmaps.
 
         Args:
             prediction: Raw heatmap logits.
             target: Gaussian heatmap targets.
+            weights: Optional weights broadcastable to the heatmap, scaling the loss of every
+                cell, for example one weight per sample and class.
 
         Returns:
             Scalar heatmap loss value.
@@ -45,4 +52,7 @@ class GaussianFocalLoss(nn.Module):
 
         pos_loss = -torch.log(prediction) * (1 - prediction).pow(self.alpha) * pos_mask
         neg_loss = -torch.log(1 - prediction) * prediction.pow(self.alpha) * neg_weights * neg_mask
+        if weights is not None:
+            pos_loss = pos_loss * weights
+            neg_loss = neg_loss * weights
         return (pos_loss.sum() + neg_loss.sum()) / pos_mask.sum().clamp_min(1)
