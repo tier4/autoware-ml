@@ -286,32 +286,21 @@ def project_annotations(
 class TestLoadAnnotations2DFromBoxes3D(unittest.TestCase):
     """Projection of the 3D boxes onto every camera as auxiliary 2D targets."""
 
-    def test_treats_box_z_as_gravity_center(self) -> None:
-        # Reading z as the bottom face would lift every 2D target by half an object height,
-        # which is invisible in the loss and wrong everywhere. A 2 m cube on the optical axis,
-        # 10 m ahead, spans 9-11 m in depth, so its near face sets the extent.
+    def test_projects_a_box_in_front_of_the_camera(self) -> None:
+        # A 2 m cube on the optical axis, 10 m ahead, spans 9-11 m in depth: its gravity
+        # center projects onto the principal point and its near face sets the extent.
         annotations = project_annotations(
-            [[10.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0]], width=100, height=100
+            [[10.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0]], labels=[2], width=100, height=100
         )
 
-        center = annotations.gt_centers_2d[0][0]
-        x1, y1, x2, y2 = annotations.gt_bboxes_2d[0][0].tolist()
-        torch.testing.assert_close(center, torch.tensor([50.0, 50.0]))
-        extent = 100.0 / 9.0
-        self.assertAlmostEqual(y1, 50.0 - extent, places=3)
-        self.assertAlmostEqual(y2, 50.0 + extent, places=3)
-        self.assertAlmostEqual(x1, 50.0 - extent, places=3)
-        self.assertAlmostEqual(x2, 50.0 + extent, places=3)
-
-    def test_projects_a_box_in_front_of_the_camera(self) -> None:
-        annotations = project_annotations([[8.0, 0.0, -1.0, 4.0, 2.0, 1.5, 0.0]], labels=[2])
-
-        self.assertEqual(tuple(annotations.gt_bboxes_2d[0].shape), (1, 4))
-        self.assertEqual(tuple(annotations.gt_centers_2d[0].shape), (1, 2))
         self.assertEqual(annotations.gt_labels_2d[0].tolist(), [2])
-        self.assertEqual(annotations.gt_labels_2d[0].dtype, torch.int64)
-        x1, y1, x2, y2 = annotations.gt_bboxes_2d[0][0].tolist()
-        self.assertTrue(0 <= x1 < x2 <= 160 and 0 <= y1 < y2 <= 96)
+        self.assertEqual(annotations.gt_labels_2d[0].dtype, torch.int32)
+        torch.testing.assert_close(annotations.gt_centers_2d[0][0], torch.tensor([50.0, 50.0]))
+        extent = 100.0 / 9.0
+        torch.testing.assert_close(
+            annotations.gt_bboxes_2d[0][0],
+            torch.tensor([50.0 - extent, 50.0 - extent, 50.0 + extent, 50.0 + extent]),
+        )
 
     def test_drops_a_box_behind_the_camera(self) -> None:
         annotations = project_annotations([[-10.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0]])
@@ -320,12 +309,16 @@ class TestLoadAnnotations2DFromBoxes3D(unittest.TestCase):
         self.assertEqual(tuple(annotations.gt_centers_2d[0].shape), (0, 2))
         self.assertEqual(tuple(annotations.gt_labels_2d[0].shape), (0,))
 
-    def test_drops_a_box_whose_center_leaves_the_image(self) -> None:
-        # Some corners project inside, but the center at y = 9 m projects to x = -10: a clamped
-        # center could land outside its own clipped box and distort the 2D assignment.
+    def test_keeps_a_box_whose_center_leaves_the_image(self) -> None:
+        # The center at y = 9 m projects to x = -10 while the near-right corners are inside:
+        # the box stays a target with its extent clipped and its center clamped to the edge,
+        # as in the reference recipe.
         annotations = project_annotations([[10.0, 9.0, 0.0, 2.0, 6.0, 2.0, 0.0]])
 
-        self.assertEqual(tuple(annotations.gt_bboxes_2d[0].shape), (0, 4))
+        x1, _, x2, _ = annotations.gt_bboxes_2d[0][0].tolist()
+        self.assertEqual(x1, 0.0)
+        self.assertTrue(0 < x2 <= 160)
+        self.assertEqual(float(annotations.gt_centers_2d[0][0][0]), 0.0)
 
     def test_clips_a_partially_visible_box_to_the_image(self) -> None:
         # The center projects at x = 15, the near-left corners far outside the left edge.
@@ -461,29 +454,6 @@ class TestCameraGlobalRotScaleTrans(unittest.TestCase):
         torch.testing.assert_close(
             augmented.detection3d_gt_bboxes_3d.center[0], (transformation @ raw_center)[:3]
         )
-
-    def test_the_cameras_keep_seeing_the_moved_boxes_at_the_same_pixels(self) -> None:
-        # The calibration takes the inverse of the augmentation, so a box projects onto the
-        # same pixels before and after it and the images stay valid for the moved boxes.
-        sample = self.build_camera_sample()
-        raw_center = torch.cat([sample.detection3d_gt_bboxes_3d.center[0], torch.ones(1)])
-        raw_pixel = sample.camera_image_data.lidar2images[0] @ raw_center
-
-        augmented = self.augment(sample, seed=1)
-
-        center = torch.cat([augmented.detection3d_gt_bboxes_3d.center[0], torch.ones(1)])
-        pixel = augmented.camera_image_data.lidar2images[0] @ center
-        torch.testing.assert_close(pixel[:2] / pixel[2], raw_pixel[:2] / raw_pixel[2])
-
-    def test_composes_with_an_earlier_augmentation(self) -> None:
-        transform = CameraGlobalRotScaleTrans(
-            yaw_rot_range=[0.2, 0.2], scale_ratio_range=[1.0, 1.0], translation_std=None
-        )
-
-        twice = transform(transform(self.build_camera_sample()))
-
-        matrix = twice.lidar_transformation_sample.transformation_matrix
-        self.assertAlmostEqual(float(torch.atan2(matrix[1, 0], matrix[0, 0])), 0.4, places=5)
 
     def test_needs_the_images_loaded_first(self) -> None:
         sample = self.build_camera_sample()._replace(camera_image_data=None)

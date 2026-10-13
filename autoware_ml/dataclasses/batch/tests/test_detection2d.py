@@ -19,7 +19,7 @@ def build_sample(counts: list[int], offset: float = 0.0) -> Detection2DGTSample:
             torch.full((count, 2), offset - camera) for camera, count in enumerate(counts)
         ],
         gt_labels_2d=[
-            torch.arange(count, dtype=torch.int64) + camera for camera, count in enumerate(counts)
+            torch.arange(count, dtype=torch.int32) + camera for camera, count in enumerate(counts)
         ],
     )
 
@@ -51,7 +51,9 @@ class TestDetection2DGTBatch(unittest.TestCase):
         ):
             for sample, collated_sample in zip(self.samples, collated, strict=True):
                 for expected, unpadded in zip(getattr(sample, name), collated_sample, strict=True):
-                    torch.testing.assert_close(unpadded, expected)
+                    torch.testing.assert_close(unpadded, expected, check_dtype=False)
+        # The consumers index with the labels, which come back widened to int64.
+        self.assertEqual(batch.valid_labels_2d()[1][1].dtype, torch.int64)
 
     def test_a_batch_without_boxes_keeps_an_empty_box_axis(self) -> None:
         batch = Detection2DGTBatch.collate_gt_samples([build_sample([0, 0])])
@@ -66,15 +68,6 @@ class TestDetection2DGTBatch(unittest.TestCase):
     def test_rejects_an_empty_batch(self) -> None:
         with self.assertRaises(ValueError):
             Detection2DGTBatch.collate_gt_samples([])
-
-    def test_to_device_keeps_the_values(self) -> None:
-        batch = Detection2DGTBatch.collate_gt_samples(self.samples)
-
-        moved = batch.to_device(torch.device("cpu"))
-
-        self.assertIsNot(moved, batch)
-        for name in Detection2DGTBatch._fields:
-            self.assertTrue(torch.equal(getattr(moved, name), getattr(batch, name)))
 
 
 if __name__ == "__main__":

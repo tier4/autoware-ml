@@ -20,7 +20,7 @@ class Detection2DGTSample(NamedTuple):
 
     gt_bboxes_2d: Sequence[Float32[Tensor, "num_boxes 4"]]
     gt_centers_2d: Sequence[Float32[Tensor, "num_boxes 2"]]
-    gt_labels_2d: Sequence[Int64[Tensor, " num_boxes"]]
+    gt_labels_2d: Sequence[Int32[Tensor, " num_boxes"]]
 
 
 class Detection2DGTBatch(NamedTuple):
@@ -35,7 +35,7 @@ class Detection2DGTBatch(NamedTuple):
 
     gt_bboxes_2d: Float32[Tensor, "batch_size num_cameras max_num_boxes 4"]
     gt_centers_2d: Float32[Tensor, "batch_size num_cameras max_num_boxes 2"]
-    gt_labels_2d: Int64[Tensor, "batch_size num_cameras max_num_boxes"]
+    gt_labels_2d: Int32[Tensor, "batch_size num_cameras max_num_boxes"]
     gt_valid_bboxes_2d: Int32[Tensor, "batch_size num_cameras"]
 
     @staticmethod
@@ -55,23 +55,21 @@ class Detection2DGTBatch(NamedTuple):
         if len(samples) == 0:
             raise ValueError("At least one 2D detection sample is required for collating.")
         num_cameras = len(samples[0].gt_bboxes_2d)
-        for index, sample in enumerate(samples):
-            counts = (len(sample.gt_bboxes_2d), len(sample.gt_centers_2d), len(sample.gt_labels_2d))
-            if counts != (num_cameras,) * 3:
-                raise ValueError(
-                    f"Every sample needs 2D boxes, centers and labels of {num_cameras} cameras, "
-                    f"sample {index} has {counts}."
-                )
-
         max_num_boxes = max(
             (boxes.shape[0] for sample in samples for boxes in sample.gt_bboxes_2d), default=0
         )
         shape = (len(samples), num_cameras, max_num_boxes)
         gt_bboxes_2d = torch.zeros((*shape, 4), dtype=torch.float32)
         gt_centers_2d = torch.zeros((*shape, 2), dtype=torch.float32)
-        gt_labels_2d = torch.full(shape, -1, dtype=torch.int64)
+        gt_labels_2d = torch.full(shape, -1, dtype=torch.int32)
         gt_valid_bboxes_2d = torch.zeros(shape[:2], dtype=torch.int32)
         for sample_index, sample in enumerate(samples):
+            if len(sample.gt_bboxes_2d) != num_cameras:
+                raise ValueError(
+                    f"Every sample needs the 2D boxes of {num_cameras} cameras, sample "
+                    f"{sample_index} has {len(sample.gt_bboxes_2d)}."
+                )
+            # ``strict`` rejects a sample whose centers or labels disagree with its boxes.
             for camera_index, (boxes, centers, labels) in enumerate(
                 zip(sample.gt_bboxes_2d, sample.gt_centers_2d, sample.gt_labels_2d, strict=True)
             ):
@@ -121,9 +119,13 @@ class Detection2DGTBatch(NamedTuple):
         Keep the labels of the valid boxes of every camera of every sample.
 
         Returns:
-          list: Labels per sample, then per camera, without the padding.
+          list: Labels per sample, then per camera, without the padding, as int64 class
+            indices.
         """
-        return self._unpad(self.gt_labels_2d)
+        return [
+            [labels.long() for labels in sample_labels]
+            for sample_labels in self._unpad(self.gt_labels_2d)
+        ]
 
     def to_device(self, device: torch.device) -> Detection2DGTBatch:
         """
