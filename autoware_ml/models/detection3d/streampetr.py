@@ -14,6 +14,11 @@ import torch.nn as nn
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
+from autoware_ml.dataclasses.batch.detection3d import Detection3DGTBatch
+from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DHeadOutputs
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
+from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.models.base import BaseModel
 from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
@@ -24,12 +29,28 @@ from autoware_ml.models.detection3d.task_modules.streaming import (
     topk_gather,
     transform_reference_points,
 )
+from autoware_ml.types.geometry import Box3DFieldIndex
 from autoware_ml.utils.deploy import ExportSpec
 
 
-def _stack(value: torch.Tensor | Sequence[torch.Tensor]) -> torch.Tensor:
-    """Stack a per-sample sequence into a batch tensor; pass a tensor through."""
-    return value if isinstance(value, torch.Tensor) else torch.stack(list(value), dim=0)
+def _homogeneous_intrinsics(camera_intrinsics: torch.Tensor) -> torch.Tensor:
+    """Pad ``(..., 3, 3)`` intrinsics to the ``(..., 4, 4)`` layout the runtime binds."""
+    homogeneous = torch.eye(4, dtype=camera_intrinsics.dtype, device=camera_intrinsics.device)
+    homogeneous = homogeneous.expand(*camera_intrinsics.shape[:-2], 4, 4).clone()
+    homogeneous[..., :3, :3] = camera_intrinsics
+    return homogeneous
+
+
+def _ground_truth(
+    gt_detections: Detection3DGTBatch,
+) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
+    """Unpad the boxes and labels of every sample into the head's box layout.
+
+    The head regresses ``[cx, cy, cz, l, w, h, yaw, vx, vy]``; the vertical
+    velocity of the collated boxes is not a target.
+    """
+    gt_boxes = [boxes[:, : Box3DFieldIndex.VELOCITY_Z] for boxes in gt_detections.valid_bboxes_3d()]
+    return gt_boxes, gt_detections.valid_labels_3d()
 
 
 class _StreamPETRPositionEmbeddingExportWrapper(nn.Module):
@@ -61,7 +82,6 @@ class _StreamPETRPositionEmbeddingExportWrapper(nn.Module):
         return self.head.position_embedding(
             shape_source,
             intrinsics,
-            lidar2cam=None,
             image_height=img_metas_pad[0],
             image_width=img_metas_pad[1],
             img2lidar=img2lidar,
@@ -191,12 +211,27 @@ class StreamPETRDetectionModel(BaseModel):
         optimizer: Callable[..., Optimizer] | None = None,
         scheduler: Callable[[Optimizer], LRScheduler] | None = None,
         optimizer_group_overrides: Mapping[str, Mapping[str, Any]] | None = None,
+        scheduler_config: Mapping[str, Any] | None = None,
         metrics: Sequence[MetricSuite] | None = None,
     ) -> None:
+        """Initialize StreamPETR.
+
+        Args:
+            img_backbone: Multiview image backbone.
+            img_neck: Image neck producing the tokens the head attends to.
+            bbox_head: StreamPETR query head.
+            optimizer: Optimizer factory.
+            scheduler: Scheduler factory.
+            optimizer_group_overrides: Optimizer overrides keyed by the groups of
+                :meth:`build_optimizer_groups`.
+            scheduler_config: Lightning scheduler metadata such as ``interval``.
+            metrics: Detection metrics accumulated during validation and test.
+        """
         super().__init__(
             optimizer=optimizer,
             scheduler=scheduler,
             optimizer_group_overrides=optimizer_group_overrides,
+            scheduler_config=scheduler_config,
             metrics=metrics,
         )
         self.image_feature_extractor = MultiviewImageFeatureExtractor(
@@ -224,9 +259,130 @@ class StreamPETRDetectionModel(BaseModel):
         self.bbox_head.reset_memory()
         return self
 
-    def build_eval_output(self, batch: Mapping[str, Any], outputs: Any) -> dict[str, Any]:
+    def forward_inputs(self, batch_inputs: ModelBatchInputs) -> dict[str, Any]:
+        """Pick the images, their calibration and the stream metadata of every frame.
+
+        Args:
+            batch_inputs: Model inputs holding the images and the frame metadata, and in
+                training the boxes that seed the denoising queries.
+
+        Returns:
+            The keyword arguments of :meth:`forward`.
+
+        Raises:
+            ValueError: If the model inputs miss the images or the frame metadata.
+        """
+        image_data = batch_inputs.image_data
+        frame_meta = batch_inputs.multi_task_gt_batch.frame_meta_batch
+        if image_data is None or frame_meta is None:
+            raise ValueError("StreamPETR needs the images and the frame metadata of the batch.")
+        inputs: dict[str, Any] = {
+            "img": image_data.images,
+            "camera_intrinsics": image_data.camera_intrinsics,
+            "lidar2img": image_data.lidar2images,
+            "timestamp": frame_meta.timestamps,
+            "scenario_ids": frame_meta.scenario_ids,
+            # The poses carry kilometer-scale translations, so they are inverted in float64.
+            "ego_pose": frame_meta.ego2globals,
+            "ego_pose_inv": torch.linalg.inv(frame_meta.ego2globals.double()).float(),
+        }
+        gt_detections = batch_inputs.multi_task_gt_batch.detection3d_gt_batch
+        if gt_detections is not None:
+            inputs["gt_boxes"], inputs["gt_labels"] = _ground_truth(gt_detections)
+        return inputs
+
+    def forward(
+        self,
+        img: torch.Tensor,
+        camera_intrinsics: torch.Tensor,
+        lidar2img: torch.Tensor,
+        timestamp: torch.Tensor,
+        scenario_ids: Sequence[str],
+        ego_pose: torch.Tensor,
+        ego_pose_inv: torch.Tensor,
+        gt_boxes: list[torch.Tensor] | None = None,
+        gt_labels: list[torch.Tensor] | None = None,
+    ) -> ModelOutputs:
+        """Run the camera backbone and StreamPETR head.
+
+        Args:
+            img: Images ``(batch, num_cams, 3, H, W)``.
+            camera_intrinsics: Augmented intrinsics ``(batch, num_cams, 3, 3)``.
+            lidar2img: Augmented lidar-to-image matrices ``(batch, num_cams, 4, 4)``.
+            timestamp: Sample time of every frame in seconds, float64.
+            scenario_ids: Scenario of every frame.
+            ego_pose: Lidar-to-global pose of every frame ``(batch, 4, 4)``.
+            ego_pose_inv: Inverse of ``ego_pose``.
+            gt_boxes: Metric boxes seeding the denoising queries in training.
+            gt_labels: Labels of ``gt_boxes``.
+
+        Returns:
+            The StreamPETR head outputs.
+        """
+        image_batch = img.float()
+        img_features = self.image_feature_extractor(image_batch)
+        head_outputs = self.bbox_head(
+            img_features=img_features,
+            image_height=int(image_batch.shape[-2]),
+            image_width=int(image_batch.shape[-1]),
+            camera_intrinsics=camera_intrinsics,
+            lidar2img=lidar2img,
+            timestamp=timestamp,
+            scenario_ids=scenario_ids,
+            ego_pose=ego_pose,
+            ego_pose_inv=ego_pose_inv,
+            gt_boxes=gt_boxes,
+            gt_labels=gt_labels,
+        )
+        return ModelOutputs(
+            detection3d_head_outputs=Detection3DHeadOutputs(
+                center_head_outputs=None,
+                transfusion_head_outputs=None,
+                streampetr_head_outputs=head_outputs,
+            )
+        )
+
+    def compute_metrics(
+        self, batch_inputs: ModelBatchInputs, outputs: ModelOutputs
+    ) -> dict[str, torch.Tensor]:
+        """Compute the head's multi-layer detection and denoising losses.
+
+        Args:
+            batch_inputs: Model inputs holding the ground truth boxes.
+            outputs: StreamPETR head outputs.
+
+        Returns:
+            Loss dictionary produced by the detection head.
+
+        Raises:
+            ValueError: If the batch carries no detection ground truth.
+        """
+        gt_detections = batch_inputs.multi_task_gt_batch.detection3d_gt_batch
+        if gt_detections is None:
+            raise ValueError("StreamPETR losses need the 3D detection ground truth of the batch.")
+        gt_boxes, gt_labels = _ground_truth(gt_detections)
+        return self.bbox_head.loss(outputs.detection3d().streampetr_head(), gt_boxes, gt_labels)
+
+    def predict_outputs(
+        self, batch_inputs: ModelBatchInputs, outputs: ModelOutputs
+    ) -> ModelPredictions:
+        """Decode the last decoder layer into per-sample detections.
+
+        Args:
+            batch_inputs: Model inputs of the batch.
+            outputs: StreamPETR head outputs.
+
+        Returns:
+            Decoded prediction results.
+        """
+        del batch_inputs
+        return ModelPredictions(
+            detection3d_predictions=self.bbox_head.predict(outputs.detection3d().streampetr_head())
+        )
+
+    def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> dict[str, Any]:
         """Decode detections and pair them with ground truth for metrics."""
-        return detection_eval_output(self.bbox_head.predict(outputs), batch)
+        return detection_eval_output(self.predict_outputs(batch, outputs), batch)
 
     def build_optimizer_groups(self) -> dict[str, list[nn.Parameter]]:
         """Split parameters into the image backbone and the remaining modules."""
@@ -239,84 +395,34 @@ class StreamPETRDetectionModel(BaseModel):
         ]
         return {"default": default_params, "img_backbone": backbone_params}
 
-    def forward(
-        self,
-        img: torch.Tensor | Sequence[torch.Tensor],
-        camera_intrinsics: torch.Tensor | Sequence[torch.Tensor],
-        lidar2cam: torch.Tensor | Sequence[torch.Tensor],
-        timestamp: torch.Tensor | Sequence[torch.Tensor],
-        prev_exists: torch.Tensor | Sequence[torch.Tensor],
-        ego_pose: torch.Tensor | Sequence[torch.Tensor],
-        ego_pose_inv: torch.Tensor | Sequence[torch.Tensor],
-        lidar2img: torch.Tensor | Sequence[torch.Tensor] | None = None,
-        gt_boxes: list[torch.Tensor] | None = None,
-        gt_labels: list[torch.Tensor] | None = None,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
-        """Run the camera backbone and StreamPETR head.
-
-        Batch metadata arrives either stacked or as per-sample sequences from the
-        collator; ``gt_boxes`` / ``gt_labels`` feed the denoising queries in training.
-        """
-        del kwargs
-        image_batch = _stack(img).float()
-        img_features = self.image_feature_extractor(image_batch)
-        return self.bbox_head(
-            img_features=img_features,
-            image_height=int(image_batch.shape[-2]),
-            image_width=int(image_batch.shape[-1]),
-            camera_intrinsics=_stack(camera_intrinsics),
-            lidar2cam=_stack(lidar2cam),
-            timestamp=_stack(timestamp),
-            prev_exists=_stack(prev_exists),
-            ego_pose=_stack(ego_pose),
-            ego_pose_inv=_stack(ego_pose_inv),
-            lidar2img=None if lidar2img is None else _stack(lidar2img),
-            gt_boxes=gt_boxes,
-            gt_labels=gt_labels,
-        )
-
-    def compute_metrics(
-        self,
-        batch_inputs_dict: dict[str, Any],
-        outputs: dict[str, Any],
-    ) -> dict[str, torch.Tensor]:
-        """Compute the head's multi-layer detection and denoising losses."""
-        return self.bbox_head.loss(
-            outputs, batch_inputs_dict["gt_boxes"], batch_inputs_dict["gt_labels"]
-        )
-
-    def predict_outputs(self, batch_inputs_dict: dict[str, Any], outputs: dict[str, Any]) -> Any:
-        """Decode the last decoder layer into per-sample detections."""
-        del batch_inputs_dict
-        return self.bbox_head.predict(outputs)
-
-    def get_log_batch_size(self, batch_inputs_dict: dict[str, Any]) -> int | None:
-        """Log the sample count for multiview detection batches."""
-        if "gt_boxes" in batch_inputs_dict:
-            return len(batch_inputs_dict["gt_boxes"])
-        if "img" in batch_inputs_dict:
-            return len(batch_inputs_dict["img"])
-        return super().get_log_batch_size(batch_inputs_dict)
-
-    def build_export_specs(self, batch_inputs_dict: dict[str, Any]) -> dict[str, ExportSpec]:
+    def build_export_specs(self, batch_inputs: ModelBatchInputs) -> dict[str, ExportSpec]:
         """Build the three-module ONNX export consumed by the runtime node.
 
         ``extract_img_feat`` encodes multiview images, ``position_embedding``
         turns static calibration into cached geometric embeddings, and
         ``pts_head_memory`` runs the recurrent detection step carrying the
         five temporal memory tensors in and out of the graph.
+
+        Args:
+            batch_inputs: Batched model inputs; the first sample traces the graphs.
+
+        Returns:
+            Ordered mapping of module name to export specification.
+
+        Raises:
+            ValueError: If the model inputs carry no images.
         """
+        image_data = batch_inputs.image_data
+        if image_data is None:
+            raise ValueError("The StreamPETR export needs the images of the batch.")
         head = self.bbox_head
         # The exported modules contain no CUDA-specific ops. Tracing on CPU
         # keeps every graph constant device-neutral, which ONNX constant
         # folding requires.
-        img = torch.stack(list(batch_inputs_dict["img"]), dim=0)[:1].float().cpu()
-        intrinsics = (
-            torch.stack(list(batch_inputs_dict["camera_intrinsics"]), dim=0)[:1].float().cpu()
-        )
-        lidar2cam = torch.stack(list(batch_inputs_dict["lidar2cam"]), dim=0)[:1].float().cpu()
-        img2lidar = torch.inverse(intrinsics @ lidar2cam)
+        img = image_data.images[:1].float().cpu()
+        # The runtime binds 4x4 intrinsics and the inverse of the augmented projection.
+        intrinsics = _homogeneous_intrinsics(image_data.camera_intrinsics[:1].float().cpu())
+        img2lidar = torch.inverse(image_data.lidar2images[:1].float().cpu())
         batch_size, num_cams = img.shape[:2]
         image_height, image_width = int(img.shape[-2]), int(img.shape[-1])
 
@@ -329,7 +435,6 @@ class StreamPETRDetectionModel(BaseModel):
             pos_embed, cone = export_head.position_embedding(
                 img_feats,
                 intrinsics,
-                lidar2cam=None,
                 image_height=image_height,
                 image_width=image_width,
                 img2lidar=img2lidar,
