@@ -346,7 +346,9 @@ We assume all datasets are stored in the same directory. You can organize paths 
                   ├── ...
 ```
 
-You can set the internal environment variable `AUTOWARE_ML_DATA_PATH` using the provided script:
+The directory is mounted read only into the container. Everything the framework writes, such
+as the record tables it generates from the datasets, goes below the workspace. You can set the
+internal environment variable `AUTOWARE_ML_DATA_PATH` using the provided script:
 
 ```bash
 cd ~/autoware-ml

@@ -85,13 +85,11 @@ class T4Scenarios(Scenarios):
             raise ValueError(f"Invalid scenario ID: {scenario_id}")
 
         return ScenarioData(
-            dataset_name=dataset_params.dataset_name,
+            dataset_params=dataset_params,
             scenario_id=scenario_id,
             scenario_version=version,
             vehicle_type=vehicle_type,
             location=city,
-            max_sweeps=dataset_params.max_sweeps,
-            sample_steps=dataset_params.sample_steps,
         )
 
     def _build_scenario_splits(

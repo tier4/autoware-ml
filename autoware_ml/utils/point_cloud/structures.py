@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 import torch
 from torch.onnx.operators import shape_as_tensor
@@ -11,6 +11,19 @@ from autoware_ml.ops.indexing.operators import argsort
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
 from autoware_ml.utils.point_cloud.batching import offset_to_batch
 from autoware_ml.utils.point_cloud.serialization.default import encode
+
+
+def pooled_sparse_shape(sparse_shape: torch.Tensor, depth: int) -> torch.Tensor:
+    """Return the sparse shape of a grid pooled by ``2 ** depth`` along every axis.
+
+    Pooling maps coordinate ``c`` to ``c >> depth``, so the pooled grid needs
+    ``ceil(size / 2 ** depth)`` cells per axis, not ``size >> depth``: with a size that
+    is not a multiple of the stride, the floored value leaves the last occupied slice
+    outside the declared shape. spconv hashes coordinates with the declared shape, so
+    such out-of-range voxels alias other voxels and the sub-manifold neighbour tables
+    become run-dependent.
+    """
+    return (sparse_shape.to(dtype=torch.long) + (1 << depth) - 1) >> depth
 
 
 def bit_length_tensor(x: torch.Tensor | int | float) -> torch.Tensor:
@@ -150,15 +163,15 @@ def invert_permutation(order: torch.Tensor) -> torch.Tensor:
 
 
 def serialize_point_cloud_batch(
-    batch: dict,
+    batch: Mapping[str, torch.Tensor],
     export_order: Sequence[str],
     serialization_depth: torch.Tensor,
 ) -> tuple[Point, tuple[torch.Tensor, ...]]:
     """Serialize a preprocessed point-cloud batch for export.
 
     Args:
-        batch: Preprocessed batch dictionary with ``coord``, ``feat``,
-            ``grid_coord``, and ``offset`` keys.
+        batch: Forward arguments of the batch, ``coord``, ``feat``, ``grid_coord`` and
+            ``offset``.
         export_order: Ordered serialization order names.
         serialization_depth: Scalar long tensor specifying the serialization depth.
 

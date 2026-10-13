@@ -54,7 +54,7 @@ print_help() {
     echo -e "${RED}Usage:${NC} container.sh (--run | --exec | --stop) [OPTIONS]"
     echo -e "Options:"
     echo -e "  ${GREEN}--help/-h${NC}            Display this help message"
-    echo -e "  ${GREEN}--data-path${NC}          Specify the path to mount data files into /workspace/data (overrides AUTOWARE_ML_DATA_PATH if set)"
+    echo -e "  ${GREEN}--data-path${NC}          Specify the path to mount data files read only into /workspace/data (overrides AUTOWARE_ML_DATA_PATH if set)"
     echo -e "  ${GREEN}--headless${NC}           Run Autoware-ML in headless mode (default: false)"
     echo -e "  ${GREEN}--detached${NC}           Start the container in detached mode, then enter it automatically"
     echo -e "  ${GREEN}--gpus${NC}               Specify GPU devices for Docker (default: all, e.g. all or device=0,1)"
@@ -159,11 +159,12 @@ container_is_running() {
 
 # Set the docker image and workspace variables
 set_variables() {
-    # Set data path
+    # The data mount is read only. Everything the framework writes, including the record
+    # tables it generates from the data, goes to the workspace mount.
     if [ "$DATA_PATH" != "" ]; then
-        DATA="--mount type=bind,source=${DATA_PATH},target=/workspace/data,bind-propagation=rshared"
+        DATA="--mount type=bind,source=${DATA_PATH},target=/workspace/data,bind-propagation=rshared,readonly"
     elif [ -n "$AUTOWARE_ML_DATA_PATH" ]; then
-        DATA="--mount type=bind,source=${AUTOWARE_ML_DATA_PATH},target=/workspace/data,bind-propagation=rshared"
+        DATA="--mount type=bind,source=${AUTOWARE_ML_DATA_PATH},target=/workspace/data,bind-propagation=rshared,readonly"
     else
         echo -e "${ORANGE}Neither --data-path nor AUTOWARE_ML_DATA_PATH is set. Not mounting any data directory.${NC}"
     fi

@@ -1,0 +1,7 @@
+defaults:
+  - t4dataset/t4dataset_common@_here_
+  - t4dataset/scenarios@scenarios.db_j6gen2_semaseg: segmentation3d/db_j6gen2_semaseg
+  - _self_
+
+version: T4Dataset-j6gen2_semaseg-v1.0.0
+cache_path: ${cache_root_path}/segmentation3d/

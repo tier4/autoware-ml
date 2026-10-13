@@ -243,6 +243,13 @@ class Detection3DMetricSuite(MetricSuite[DetectionState]):
         ):
             frame_boxes = boxes.detach().to(dtype=torch.float32)
             frame_labels = labels.detach().to(dtype=torch.long)
+            if self.class_names and bool(
+                ((frame_labels < 0) | (frame_labels >= len(self.class_names))).any()
+            ):
+                raise ValueError(
+                    f"Frame {i} carries ground truth labels outside the {len(self.class_names)} "
+                    "classes, the evaluation pipeline has to drop the boxes of ignored classes."
+                )
             num_points = (
                 gt_num_points[i].detach().to(dtype=torch.long, device=frame_boxes.device)
                 if gt_num_points is not None

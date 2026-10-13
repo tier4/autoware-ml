@@ -21,22 +21,7 @@ cd ~/autoware-ml
 ./docker/container.sh --run
 ```
 
-## 3. Generate Dataset Info Files
-
-Autoware-ML needs preprocessed info files that index the dataset:
-
-```bash
-autoware-ml create-dataset \
-    --dataset nuscenes \
-    --task segmentation3d \
-    --root-path data/nuscenes \
-    --out-dir data/nuscenes/info \
-    --version v1.0-trainval
-```
-
-This creates pickle files for train/val splits.
-
-## 4. Train the Model
+## 3. Train the Model
 
 ```bash
 autoware-ml train --config-name segmentation3d/ptv3/voxel005_51m_nuscenes
@@ -44,7 +29,7 @@ autoware-ml train --config-name segmentation3d/ptv3/voxel005_51m_nuscenes
 
 Training progress appears in your terminal. Checkpoints are saved automatically.
 
-## 5. Monitor with MLflow
+## 4. Monitor with MLflow
 
 ```bash
 autoware-ml mlflow ui --port 5000
@@ -52,7 +37,7 @@ autoware-ml mlflow ui --port 5000
 
 Open [http://localhost:5000](http://localhost:5000) to view loss curves, metrics, and hyperparameters.
 
-## 6. Export for Deployment
+## 5. Export for Deployment
 
 ```bash
 autoware-ml deploy \

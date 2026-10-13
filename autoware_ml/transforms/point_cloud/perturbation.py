@@ -12,79 +12,76 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Point-cloud perturbation transforms."""
+"""Point cloud perturbation transforms."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
 
-import numpy as np
+import torch
 
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
+from autoware_ml.geometry.points.base_points import BasePoints
 from autoware_ml.transforms.base import BaseTransform
+from autoware_ml.types.geometry import PointFeatureName
 
 
 class RandomJitter(BaseTransform):
     """Perturb point coordinates with clipped Gaussian noise."""
 
-    _required_keys = ["coord"]
+    _required_keys = ["point_cloud_data"]
 
-    def __init__(self, *, p: float | None = None, sigma: float, clip: float) -> None:
+    def __init__(self, sigma: float, clip: float, probability: float | None = None) -> None:
         """Initialize the RandomJitter transform.
 
         Args:
-            p: Probability of applying the transform (``None`` means always apply).
             sigma: Standard deviation of the Gaussian noise.
             clip: Maximum absolute jitter applied per coordinate.
+            probability: Probability of applying the transform, None to always apply it.
         """
-        self.p = p
+        super().__init__(probability=probability)
         self.sigma = sigma
         self.clip = clip
 
-    def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
-        """Perturb point coordinates with Gaussian noise.
+    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
+        """Perturb point coordinates with Gaussian noise."""
+        # This is checked in the _validate_required_keys()
+        point_cloud_data: BasePoints = (
+            model_gt_sample.point_cloud_data  # type: ignore[reportOptionalMemberAccess]
+        )
 
-        Args:
-            input_dict: Sample dictionary updated in place.
-
-        Returns:
-            Updated sample dictionary.
-        """
-        noise = np.clip(
-            self.sigma * np.random.randn(input_dict["coord"].shape[0], 3),
-            -self.clip,
-            self.clip,
-        ).astype(np.float32)
-        input_dict["coord"] = input_dict["coord"] + noise
-        return input_dict
+        noise = torch.clamp(
+            self.sigma * torch.randn_like(point_cloud_data.coords), -self.clip, self.clip
+        )
+        point_cloud_data.coords = point_cloud_data.coords + noise
+        return model_gt_sample
 
 
 class RandomStrengthJitter(BaseTransform):
     """Perturb the normalized intensity with a random gamma, scale, and shift.
 
-    Applies ``clip(strength ** gamma * scale + shift, 0, 1)`` with parameters
-    drawn uniformly per sample, emulating reflectivity-calibration differences
-    between sensors.
+    Applies ``clip(intensity ** gamma * scale + shift, 0, 1)`` with parameters drawn uniformly
+    per sample, emulating reflectivity calibration differences between sensors.
     """
 
-    _required_keys = ["strength"]
+    _required_keys = ["point_cloud_data"]
 
     def __init__(
         self,
-        *,
-        p: float | None = None,
         gamma_range: Sequence[float],
         scale_range: Sequence[float],
         shift_range: Sequence[float],
+        probability: float | None = None,
     ) -> None:
         """Initialize the RandomStrengthJitter transform.
 
         Args:
-            p: Probability of applying the transform (``None`` means always apply).
             gamma_range: Min and max exponent applied to the normalized intensity.
             scale_range: Min and max multiplicative factor.
             shift_range: Min and max additive offset.
+            probability: Probability of applying the transform, None to always apply it.
         """
+        super().__init__(probability=probability)
         for name, bounds in (
             ("gamma_range", gamma_range),
             ("scale_range", scale_range),
@@ -94,47 +91,34 @@ class RandomStrengthJitter(BaseTransform):
                 raise ValueError(f"{name} must be an ascending [min, max] pair, got {bounds}.")
         if gamma_range[0] <= 0.0:
             raise ValueError(f"gamma_range values must be positive, got {gamma_range}.")
-        self.p = p
         self.gamma_range = tuple(gamma_range)
         self.scale_range = tuple(scale_range)
         self.shift_range = tuple(shift_range)
 
-    def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
-        """Apply the sampled gamma/scale/shift to the strength channel."""
-        gamma = np.random.uniform(*self.gamma_range)
-        scale = np.random.uniform(*self.scale_range)
-        shift = np.random.uniform(*self.shift_range)
-        strength = input_dict["strength"].astype(np.float32)
-        input_dict["strength"] = np.clip(
-            np.power(strength, gamma) * scale + shift, 0.0, 1.0
-        ).astype(np.float32)
-        return input_dict
-
-
-class RandomShift(BaseTransform):
-    """Translate point coordinates by a sampled per-axis offset."""
-
-    _required_keys = ["coord"]
-
-    def __init__(self, *, p: float | None = None, shift: Sequence[float]) -> None:
-        """Initialize the RandomShift transform.
+    def sample_uniform(self, bounds: Sequence[float]) -> float:
+        """Draw one value from the given bounds.
 
         Args:
-            p: Probability of applying the transform (``None`` means always apply).
-            shift: Maximum absolute translation per axis.
-        """
-        self.p = p
-        self.shift = np.asarray(shift, dtype=np.float32)
-
-    def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
-        """Shift coordinates by a random translation.
-
-        Args:
-            input_dict: Sample dictionary updated in place.
+            bounds: Ascending min and max pair.
 
         Returns:
-            Updated sample dictionary.
+            float: Value drawn uniformly between the bounds.
         """
-        translation = np.random.uniform(-self.shift, self.shift).astype(np.float32)
-        input_dict["coord"] = input_dict["coord"] + translation
-        return input_dict
+        return float(torch.empty(()).uniform_(bounds[0], bounds[1]).item())
+
+    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
+        """Apply the sampled gamma, scale, and shift to the intensity of every point."""
+        # This is checked in the _validate_required_keys()
+        point_cloud_data: BasePoints = (
+            model_gt_sample.point_cloud_data  # type: ignore[reportOptionalMemberAccess]
+        )
+
+        gamma = self.sample_uniform(self.gamma_range)
+        scale = self.sample_uniform(self.scale_range)
+        shift = self.sample_uniform(self.shift_range)
+        intensity = point_cloud_data.feature(PointFeatureName.INTENSITY)
+        point_cloud_data.set_feature(
+            PointFeatureName.INTENSITY,
+            torch.clamp(torch.pow(intensity, gamma) * scale + shift, 0.0, 1.0),
+        )
+        return model_gt_sample

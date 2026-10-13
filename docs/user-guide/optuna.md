@@ -54,7 +54,7 @@ hydra:
     params:
       model.optimizer.lr: interval(0.0001, 0.01)
       model.optimizer.weight_decay: interval(0.001, 0.1)
-      datamodule.train_dataloader_cfg.batch_size: choice(2, 4, 8, 16)
+      datamodule.train_dataloader.batch_size: choice(2, 4, 8, 16)
       trainer.max_epochs: range(10, 50, step=10)
 ```
 
@@ -157,7 +157,7 @@ hydra:
     params:
       model.optimizer.lr: interval(1e-5, 1e-2, log=true)
       model.optimizer.weight_decay: interval(1e-4, 1e-1, log=true)
-      datamodule.train_dataloader_cfg.batch_size: choice(2, 4, 8)
+      datamodule.train_dataloader.batch_size: choice(2, 4, 8)
 
 trainer:
   max_epochs: 20  # Shorter for faster trials

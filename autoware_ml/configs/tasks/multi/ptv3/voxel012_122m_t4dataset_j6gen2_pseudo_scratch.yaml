@@ -1,0 +1,25 @@
+# @package _global_
+
+# Stage 3 without stage 2
+
+defaults:
+  - /tasks/multi/ptv3/voxel012_122m_t4dataset_j6gen2_pseudo
+  - _self_
+
+model:
+  optimizer:
+    lr: 0.0001
+  optimizer_group_overrides:
+    encoder_block:
+      lr: 0.00001
+    encoder_default:
+      lr: 0.000025
+    seg3d_head:
+      lr: 0.00005
+  scheduler:
+    warmup_epochs: 4
+    decay_epochs: 26
+    max_lr_factor: 5.0
+
+trainer:
+  max_epochs: 30

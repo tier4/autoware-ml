@@ -1,0 +1,8 @@
+# @package _global_
+
+# Root of the data mount the record paths resolve against.
+data_root_path: ${oc.env:AUTOWARE_ML_DATA_PATH}
+# Directory the record tables are written to.
+cache_root_path: ${working_dir}/.cache
+working_dir: /workspace
+t4dataset_scenario_root_path: ${working_dir}/external/perception-devops/dataset_annotation/t4dataset

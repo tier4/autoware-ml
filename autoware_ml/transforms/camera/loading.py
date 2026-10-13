@@ -1,110 +1,87 @@
-"""Camera loading transforms."""
+# Copyright 2026 TIER IV, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Camera loading transforms to support ModelGTSample."""
 
 from __future__ import annotations
 
-from typing import Any
-
 import cv2
 import numpy as np
+import torch
 
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
+from autoware_ml.geometry.cameras.base_images import BaseImages
 from autoware_ml.transforms.base import BaseTransform
 
 
-class LoadImageFromFile(BaseTransform):
-    """Load one RGB image from a metadata path."""
+class LoadImagesFromFile(BaseTransform):
+    """Load the images of every camera of the sample together with their calibration."""
 
-    _required_keys = ["img_path"]
+    _required_keys = ["image_samples"]
 
-    def __init__(self, *, to_float32: bool = False, color_type: str = "rgb") -> None:
-        """Initialize the LoadImageFromFile transform.
+    def __init__(self) -> None:
+        """Initialize the image loader, which serves the pixel values in [0, 1]."""
+        super().__init__(probability=None)
 
-        Args:
-            to_float32: Whether to cast image pixels to ``float32``.
-            color_type: Output color format, ``"rgb"`` or ``"bgr"``.
-        """
-        self.to_float32 = to_float32
-        self.color_type = color_type
-
-    def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
-        """Load an image from the configured path.
+    def load_image(self, image_path: str) -> torch.Tensor:
+        """Read one RGB image from disk as a (num_channels, height, width) tensor.
 
         Args:
-            input_dict: Sample metadata containing ``img_path``.
+            image_path: Path of the image file.
 
         Returns:
-            Updated sample dictionary with ``img``.
+            torch.Tensor: The image in channel first layout.
+
+        Raises:
+            FileNotFoundError: If the image cannot be read.
         """
-        image = cv2.imread(input_dict["img_path"], cv2.IMREAD_COLOR)
+        image = cv2.imread(image_path, cv2.IMREAD_COLOR)
         if image is None:
-            raise FileNotFoundError(f"Image not found: {input_dict['img_path']}")
-        if self.color_type.lower() == "rgb":
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        if self.to_float32:
-            image = image.astype(np.float32)
-        return {"img": image}
+            raise FileNotFoundError(f"Image not found: {image_path}")
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+        return torch.from_numpy(np.transpose(image, (2, 0, 1)).copy())
 
-
-class LoadMultiViewImagesFromFiles(BaseTransform):
-    """Load synchronized multiview images and camera matrices."""
-
-    _required_keys = ["images", "camera_order"]
-
-    def __init__(self, *, to_float32: bool = True, normalize_to_unit: bool = True) -> None:
-        """Initialize the LoadMultiViewImagesFromFiles transform.
+    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
+        """Load the images of the sample and their calibration.
 
         Args:
-            to_float32: Whether to cast images to ``float32``.
-            normalize_to_unit: Whether to divide pixel values by ``255``.
-        """
-        self.to_float32 = to_float32
-        self.normalize_to_unit = normalize_to_unit
-
-    def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
-        """Load images and camera matrices for all configured views.
-
-        Args:
-            input_dict: Sample metadata containing multiview image info.
+            model_gt_sample: ModelGTSample instance containing `image_samples`.
 
         Returns:
-            Updated sample dictionary with image and calibration tensors.
+            Updated ModelGTSample instance with loaded `camera_image_data`.
         """
-        images = []
-        intrinsics = []
-        lidar2cam = []
-        lidar2img = []
-        camera_names = []
-        for camera_name in input_dict["camera_order"]:
-            camera_info = input_dict["images"].get(camera_name)
-            if camera_info is None:
-                raise ValueError(
-                    f"Camera '{camera_name}' declared in camera_order but missing from sample."
-                )
-            if camera_info.get("img_path") is None:
-                raise ValueError(f"Camera '{camera_name}' has no img_path in sample.")
+        # This is checked in the _validate_required_keys()
+        image_samples = model_gt_sample.image_samples  # type: ignore[reportOptionalIterable]
+        if not image_samples:
+            raise ValueError("No image samples found in the ModelGTSample.")
 
-            image = cv2.imread(camera_info["img_path"], cv2.IMREAD_COLOR)
-            if image is None:
-                raise FileNotFoundError(f"Image not found: {camera_info['img_path']}")
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            if self.to_float32:
-                image = image.astype(np.float32)
-            if self.normalize_to_unit:
-                image = image / 255.0
-            images.append(np.transpose(image, (2, 0, 1)))
-
-            camera_matrix = np.eye(4, dtype=np.float32)
-            camera_matrix[:3, :3] = np.asarray(camera_info["cam2img"], dtype=np.float32)
-            intrinsics.append(camera_matrix)
-
-            camera_transform = np.asarray(camera_info["lidar2cam"], dtype=np.float32)
-            lidar2cam.append(camera_transform)
-            lidar2img.append(camera_matrix @ camera_transform)
-            camera_names.append(camera_name)
-
-        return {
-            "img": np.stack(images, axis=0),
-            "camera_intrinsics": np.stack(intrinsics, axis=0),
-            "lidar2cam": np.stack(lidar2cam, axis=0),
-            "lidar2img": np.stack(lidar2img, axis=0),
-            "camera_names": camera_names,
-        }
+        images = torch.stack([self.load_image(sample.image_path) for sample in image_samples])
+        camera_intrinsics = torch.stack([sample.camera_intrinsic for sample in image_samples])
+        camera_image_data = BaseImages(
+            images=images,
+            timestamps=torch.tensor(
+                [sample.timestamp for sample in image_samples], dtype=torch.float64
+            ),
+            camera_intrinsics=camera_intrinsics,
+            camera_names=[sample.camera_name for sample in image_samples],
+            lidar2images=torch.stack([sample.lidar2image for sample in image_samples]),
+            lidar2cams=torch.stack([sample.lidar2cam for sample in image_samples]),
+            distortion_models=[sample.distortion_model for sample in image_samples],
+            distortion_coefficients=[sample.distortion_coefficients for sample in image_samples],
+            augmented_camera_intrinsics=camera_intrinsics.clone(),
+            image_augmentation_matrices=BaseImages.identity_image_augmentation_matrices(
+                camera_intrinsics
+            ),
+        )
+        return model_gt_sample._replace(camera_image_data=camera_image_data)

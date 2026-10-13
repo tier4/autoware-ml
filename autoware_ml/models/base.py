@@ -20,22 +20,21 @@ used by task-specific model wrappers throughout the framework.
 
 from __future__ import annotations
 
-import inspect
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, final
 
 import lightning as L
-from lightning.pytorch.utilities.data import extract_batch_size
 import torch
-import torch.nn as nn
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.eval_mixin import MetricEvalMixin
 from autoware_ml.preprocessing.base import DataPreprocessing
-from autoware_ml.utils.deploy import ExportSpec, infer_export_spec
+from autoware_ml.utils.deploy import ExportSpec
 from autoware_ml.utils.optimizer import build_lightning_optimizer_config
 
 
@@ -68,7 +67,6 @@ class BaseModel(MetricEvalMixin, L.LightningModule, ABC):
                 or ``None`` logs only losses.
         """
         super().__init__(metrics=metrics)
-        self.forward_signature = inspect.signature(self.forward)
         self.optimizer_partial = optimizer
         self.scheduler_partial = scheduler
         self.optimizer_group_overrides = (
@@ -91,22 +89,36 @@ class BaseModel(MetricEvalMixin, L.LightningModule, ABC):
         """
         self._data_preprocessing = data_preprocessing
 
-    def on_after_batch_transfer(
-        self, batch_inputs_dict: dict[str, Any], dataloader_idx: int
-    ) -> dict[str, Any]:
-        """Apply runtime preprocessing after Lightning moves a batch to device.
+    def transfer_batch_to_device(
+        self, batch: ModelGTBatch, device: torch.device, dataloader_idx: int
+    ) -> ModelGTBatch:
+        """Move the typed batch to the device Lightning runs the step on.
 
         Args:
-            batch_inputs_dict: Collated batch dictionary on the target device.
+            batch: Collated typed batch from the dataloader.
+            device: Target device.
             dataloader_idx: Lightning dataloader index.
 
         Returns:
-            Batch dictionary after runtime preprocessing.
+            The batch on the target device.
         """
         del dataloader_idx
-        return self._data_preprocessing(batch_inputs_dict, is_training=self.training)
+        return batch.to_device(device)
 
-    def predict_outputs(self, batch_inputs_dict: Mapping[str, Any], outputs: Any) -> Any:
+    def on_after_batch_transfer(self, batch: ModelGTBatch, dataloader_idx: int) -> ModelBatchInputs:
+        """Apply runtime preprocessing after Lightning moves a batch to device.
+
+        Args:
+            batch: Collated typed batch on the target device.
+            dataloader_idx: Lightning dataloader index.
+
+        Returns:
+            Model inputs after runtime preprocessing.
+        """
+        del dataloader_idx
+        return self._data_preprocessing(batch, is_training=self.training)
+
+    def predict_outputs(self, batch_inputs: ModelBatchInputs, outputs: Any) -> Any:
         """Convert raw model outputs into task-level predictions.
 
         The default implementation returns the model outputs unchanged. Task
@@ -115,62 +127,14 @@ class BaseModel(MetricEvalMixin, L.LightningModule, ABC):
         and labels.
 
         Args:
-            batch_inputs_dict: Full batch dictionary after runtime preprocessing.
+            batch_inputs: Model inputs after runtime preprocessing.
             outputs: Raw outputs returned by :meth:`forward`.
 
         Returns:
             Task-level predictions.
         """
-        del batch_inputs_dict
+        del batch_inputs
         return outputs
-
-    @torch.no_grad()
-    def predict(self, *args: Any, **kwargs: Any) -> Any:
-        """Run inference and return task-level predictions.
-
-        Args:
-            *args: Positional arguments forwarded to :meth:`forward`.
-            **kwargs: Keyword arguments forwarded to :meth:`forward`.
-
-        Returns:
-            Task-level predictions produced by :meth:`predict_outputs`.
-        """
-        return self.predict_outputs(kwargs, self(*args, **kwargs))
-
-    def get_export_output_names(self) -> list[str] | None:
-        """Return output names used by the generic export wrapper.
-
-        Models that export structured prediction dictionaries should override
-        this hook and return the tensor names in the exported output order.
-
-        Returns:
-            Export output names or ``None`` when the generic wrapper should keep
-            the model outputs unnamed.
-        """
-        return None
-
-    def prepare_export_outputs(self, predictions: Any) -> Any:
-        """Convert prediction outputs into an ONNX-exportable structure.
-
-        Args:
-            predictions: Task-level predictions produced by
-                :meth:`predict_outputs`.
-
-        Returns:
-            Tensor, tuple of tensors, or another ONNX-exportable structure.
-
-        Raises:
-            ValueError: Raised when prediction outputs are a mapping but the
-                model does not define explicit export output names.
-        """
-        if isinstance(predictions, Mapping):
-            output_names = self.get_export_output_names()
-            if output_names is None:
-                raise ValueError(
-                    "Structured prediction outputs require explicit export output names."
-                )
-            return tuple(predictions[name] for name in output_names)
-        return predictions
 
     def build_optimizer_groups(self) -> Mapping[str, Sequence[torch.nn.Parameter]]:
         """Return structural optimizer groups for the model.
@@ -189,9 +153,8 @@ class BaseModel(MetricEvalMixin, L.LightningModule, ABC):
     def forward(self, **kwargs: Any) -> Any:
         """Forward pass of the model.
 
-        Subclasses can define this method with any signature. The base class
-        automatically filters batch inputs to match the method signature using
-        signature inspection.
+        Subclasses define this method with the tensor arguments the network reads, the same
+        arguments the deployment export traces.
 
         Args:
             **kwargs: Keyword arguments (subclass-specific).
@@ -202,13 +165,25 @@ class BaseModel(MetricEvalMixin, L.LightningModule, ABC):
         pass
 
     @abstractmethod
+    def forward_inputs(self, batch_inputs: ModelBatchInputs) -> dict[str, Any]:
+        """Pick the arguments of :meth:`forward` from the model inputs.
+
+        Args:
+            batch_inputs: Model inputs after runtime preprocessing.
+
+        Returns:
+            The keyword arguments of :meth:`forward`.
+        """
+        pass
+
+    @abstractmethod
     def compute_metrics(
-        self, batch_inputs_dict: Mapping[str, Any], outputs: Any
+        self, batch_inputs: ModelBatchInputs, outputs: Any
     ) -> dict[str, torch.Tensor]:
         """Compute metrics.
 
         Args:
-            batch_inputs_dict: Full batch dictionary after runtime preprocessing.
+            batch_inputs: Model inputs after runtime preprocessing.
             outputs: Model outputs from forward().
 
         Returns:
@@ -216,33 +191,24 @@ class BaseModel(MetricEvalMixin, L.LightningModule, ABC):
         """
         pass
 
-    def get_log_batch_size(self, batch_inputs_dict: Mapping[str, Any]) -> int | None:
-        """Infer the effective sample batch size for logging.
-
-        The default implementation tries Lightning's recursive batch-size
-        inference on the actual model inputs. Models with ragged point-cloud
-        batches should override this hook to provide an explicit sample count.
+    def get_log_batch_size(self, batch_inputs: ModelBatchInputs) -> int:
+        """Give the sample batch size the step metrics are logged with.
 
         Args:
-            batch_inputs_dict: Full batch dictionary from the dataloader.
+            batch_inputs: Model inputs after runtime preprocessing.
 
         Returns:
-            Sample batch size when it can be inferred, otherwise ``None``.
+            Number of samples of the batch.
         """
-        forward_inputs = {
-            key: batch_inputs_dict[key]
-            for key in self.forward_signature.parameters
-            if key in batch_inputs_dict
-        }
-        return extract_batch_size(forward_inputs)
+        return batch_inputs.batch_size()
 
     def _shared_step(
-        self, batch_inputs_dict: Mapping[str, Any], step_prefix: str, **kwargs: Any
+        self, batch_inputs: ModelBatchInputs, step_prefix: str, **kwargs: Any
     ) -> tuple[dict[str, torch.Tensor], Any]:
         """Run one forward pass, compute metrics, and log them.
 
         Args:
-            batch_inputs_dict: Dictionary with input data.
+            batch_inputs: Model inputs after runtime preprocessing.
             step_prefix: Prefix for logging (train, val, test).
             **kwargs: Keyword arguments forwarded to ``self.log_dict``.
 
@@ -250,16 +216,11 @@ class BaseModel(MetricEvalMixin, L.LightningModule, ABC):
             Tuple of the metric dictionary and the raw model outputs.
             The metric dictionary contains at least a ``"loss"`` key.
         """
-        forward_inputs = {
-            key: batch_inputs_dict[key]
-            for key in self.forward_signature.parameters
-            if key in batch_inputs_dict
-        }
-        outputs = self(**forward_inputs)
-        metrics = self.compute_metrics(batch_inputs_dict, outputs)
+        outputs = self(**self.forward_inputs(batch_inputs))
+        metrics = self.compute_metrics(batch_inputs, outputs)
         if "loss" not in metrics:
             raise ValueError("compute_metrics() must return a dict containing a 'loss' key.")
-        batch_size = self.get_log_batch_size(batch_inputs_dict)
+        batch_size = self.get_log_batch_size(batch_inputs)
         self.log_dict(
             {f"{step_prefix}/{k}": v for k, v in metrics.items()},
             batch_size=batch_size,
@@ -268,18 +229,18 @@ class BaseModel(MetricEvalMixin, L.LightningModule, ABC):
         return metrics, outputs
 
     @final
-    def training_step(self, batch_inputs_dict: Mapping[str, Any], batch_idx: int) -> torch.Tensor:
+    def training_step(self, batch_inputs: ModelBatchInputs, batch_idx: int) -> torch.Tensor:
         """Training step.
 
         Args:
-            batch_inputs_dict: Dictionary with input data.
+            batch_inputs: Model inputs after runtime preprocessing.
             batch_idx: Batch index.
 
         Returns:
             Total loss tensor required by Lightning for backpropagation.
         """
         metrics, _ = self._shared_step(
-            batch_inputs_dict,
+            batch_inputs,
             "train",
             on_step=False,
             on_epoch=True,
@@ -289,13 +250,11 @@ class BaseModel(MetricEvalMixin, L.LightningModule, ABC):
         return metrics["loss"]
 
     @final
-    def validation_step(
-        self, batch_inputs_dict: Mapping[str, Any], batch_idx: int
-    ) -> dict[str, Any]:
+    def validation_step(self, batch_inputs: ModelBatchInputs, batch_idx: int) -> dict[str, Any]:
         """Validation step.
 
         Args:
-            batch_inputs_dict: Dictionary with input data.
+            batch_inputs: Model inputs after runtime preprocessing.
             batch_idx: Batch index.
 
         Returns:
@@ -304,7 +263,7 @@ class BaseModel(MetricEvalMixin, L.LightningModule, ABC):
             to ``on_validation_batch_end`` for epoch-level metric accumulation.
         """
         metrics, outputs = self._shared_step(
-            batch_inputs_dict,
+            batch_inputs,
             "val",
             on_step=False,
             on_epoch=True,
@@ -314,11 +273,11 @@ class BaseModel(MetricEvalMixin, L.LightningModule, ABC):
         return {**metrics, "model_outputs": outputs}
 
     @final
-    def test_step(self, batch_inputs_dict: Mapping[str, Any], batch_idx: int) -> dict[str, Any]:
+    def test_step(self, batch_inputs: ModelBatchInputs, batch_idx: int) -> dict[str, Any]:
         """Test step.
 
         Args:
-            batch_inputs_dict: Dictionary with input data.
+            batch_inputs: Model inputs after runtime preprocessing.
             batch_idx: Batch index.
 
         Returns:
@@ -326,7 +285,7 @@ class BaseModel(MetricEvalMixin, L.LightningModule, ABC):
             key containing the raw forward outputs.
         """
         metrics, outputs = self._shared_step(
-            batch_inputs_dict,
+            batch_inputs,
             "test",
             on_step=False,
             on_epoch=True,
@@ -336,48 +295,35 @@ class BaseModel(MetricEvalMixin, L.LightningModule, ABC):
         return {**metrics, "model_outputs": outputs}
 
     @final
-    def predict_step(self, batch_inputs_dict: Mapping[str, Any], batch_idx: int) -> Any:
+    def predict_step(self, batch_inputs: ModelBatchInputs, batch_idx: int) -> Any:
         """Prediction step.
 
         Args:
-            batch_inputs_dict: Dictionary with input data.
+            batch_inputs: Model inputs after runtime preprocessing.
             batch_idx: Batch index.
 
         Returns:
             Predictions.
         """
         del batch_idx
-        forward_inputs = {
-            key: batch_inputs_dict[key]
-            for key in self.forward_signature.parameters
-            if key in batch_inputs_dict
-        }
-        outputs = self(**forward_inputs)
-        return self.predict_outputs(batch_inputs_dict, outputs)
+        outputs = self(**self.forward_inputs(batch_inputs))
+        return self.predict_outputs(batch_inputs, outputs)
 
-    def build_export_spec(self, batch_inputs_dict: Mapping[str, Any]) -> ExportSpec:
-        """Build the default deployment export specification for the model.
-
-        Models with tensor-only forwards can rely on this generic
-        forward-signature-based implementation. Models that need deployment
-        wrappers or export-specific input flattening should override it.
+    def build_export_spec(self, batch_inputs: ModelBatchInputs) -> ExportSpec:
+        """Build the deployment export specification of the model.
 
         Args:
-            batch_inputs_dict: Example preprocessed batch used for export.
+            batch_inputs: Example model inputs used for export.
 
         Returns:
             Export specification for deployment.
-        """
-        raw_spec = infer_export_spec(self, batch_inputs_dict)
-        return ExportSpec(
-            module=_PredictionExportWrapper(self),
-            args=raw_spec.args,
-            input_param_names=raw_spec.input_param_names,
-            output_names=self.get_export_output_names(),
-            supported_stages=raw_spec.supported_stages,
-        )
 
-    def build_export_specs(self, batch_inputs_dict: Mapping[str, Any]) -> dict[str, ExportSpec]:
+        Raises:
+            NotImplementedError: If the model defines no deployment export.
+        """
+        raise NotImplementedError(f"{type(self).__name__} defines no deployment export.")
+
+    def build_export_specs(self, batch_inputs: ModelBatchInputs) -> dict[str, ExportSpec]:
         """Build per-module deployment export specifications.
 
         The default implementation wraps :meth:`build_export_spec` as a single
@@ -385,12 +331,12 @@ class BaseModel(MetricEvalMixin, L.LightningModule, ABC):
         override this to return one spec per architectural component.
 
         Args:
-            batch_inputs_dict: Example preprocessed batch used for export.
+            batch_inputs: Example model inputs used for export.
 
         Returns:
             Ordered mapping of module name to export specification.
         """
-        return {"end_to_end": self.build_export_spec(batch_inputs_dict)}
+        return {"end_to_end": self.build_export_spec(batch_inputs)}
 
     def configure_optimizers(self) -> Optimizer | dict[str, Any]:
         """Configure optimizers and schedulers.
@@ -415,30 +361,3 @@ class BaseModel(MetricEvalMixin, L.LightningModule, ABC):
             if self._trainer is not None
             else None,
         )
-
-
-class _PredictionExportWrapper(nn.Module):
-    """Wrap a model so generic export emits task-level predictions."""
-
-    def __init__(self, model: BaseModel) -> None:
-        """Initialize the generic export wrapper.
-
-        Args:
-            model: Model instance whose forward and prediction hooks are used
-                during export.
-        """
-        super().__init__()
-        self.model = model
-
-    def forward(self, *args: Any) -> Any:
-        """Run the wrapped model and convert raw outputs into export outputs.
-
-        Args:
-            *args: Positional tensor inputs supplied to the wrapped model.
-
-        Returns:
-            ONNX-exportable prediction outputs.
-        """
-        outputs = self.model(*args)
-        predictions = self.model.predict_outputs({}, outputs)
-        return self.model.prepare_export_outputs(predictions)
