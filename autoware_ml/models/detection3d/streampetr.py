@@ -23,12 +23,8 @@ from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.models.base import BaseModel
 from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
 from autoware_ml.models.detection3d.feature_extractors import MultiviewImageFeatureExtractor
-from autoware_ml.models.detection3d.heads.streampetr import StreamPETRHead, identity_poses
-from autoware_ml.models.detection3d.task_modules.streaming import (
-    pos2posemb3d,
-    topk_gather,
-    transform_reference_points,
-)
+from autoware_ml.models.detection3d.heads.streampetr import StreamPETRHead
+from autoware_ml.models.detection3d.task_modules.streaming import transform_reference_points
 from autoware_ml.types.geometry import Box3DFieldIndex
 from autoware_ml.utils.deploy import ExportSpec
 
@@ -113,86 +109,33 @@ class _StreamPETRHeadMemoryExportWrapper(nn.Module):
         pre_memory_egopose: torch.Tensor,
         pre_memory_velo: torch.Tensor,
     ) -> tuple[torch.Tensor, ...]:
-        """Run one recurrent detection step over precomputed image tokens."""
-        head = self.head
-        memory_len = head.memory_len
+        """Run one recurrent detection step over precomputed image tokens.
 
-        memory_egopose = data_ego_pose_inv.unsqueeze(1) @ pre_memory_egopose
-        memory_reference_point = transform_reference_points(
+        The bank comes in aligned to the previous frame and dated by the runtime, so the
+        pre-update reduces to moving it into the current lidar frame; the post-update
+        emits the untruncated bank for the runtime to truncate and date.
+        """
+        head = self.head
+        head.memory_embedding = pre_memory_embedding
+        head.memory_reference_point = transform_reference_points(
             pre_memory_reference_point, data_ego_pose_inv
         )
-        head.memory_timestamp = pre_memory_timestamp[:, :memory_len]
-        head.memory_reference_point = memory_reference_point[:, :memory_len]
-        head.memory_embedding = pre_memory_embedding[:, :memory_len]
-        head.memory_egopose = memory_egopose[:, :memory_len]
-        head.memory_velo = pre_memory_velo[:, :memory_len]
+        head.memory_timestamp = pre_memory_timestamp
+        head.memory_egopose = data_ego_pose_inv.unsqueeze(1) @ pre_memory_egopose
+        head.memory_velo = pre_memory_velo
 
-        batch_size, num_cams, channels, feature_height, feature_width = x.shape
-        memory = x.permute(0, 1, 3, 4, 2).reshape(
-            batch_size, num_cams * feature_height * feature_width, channels
+        memory, pos_embed = head.embed_tokens(x, pos_embed, cone)
+        reference_points, _, _ = head.prepare_for_dn(x.shape[0], None, None)
+        all_cls_scores, all_bbox_preds, decoder_outputs = head.decode(
+            memory, pos_embed, reference_points, None, sanitize=False
         )
-        memory = head.memory_embed(memory)
-        memory = head.spatial_alignment(memory, cone)
-        pos_embed = head.featurized_pe(pos_embed, memory)
-
-        reference_points = head.reference_points.weight.unsqueeze(0).repeat(batch_size, 1, 1)
-        query_pos = head.query_embedding(pos2posemb3d(reference_points, head.hidden_dim // 2))
-        query = torch.zeros_like(query_pos)
-        query, query_pos, reference_points, temp_memory, temp_pos = head.temporal_alignment(
-            query, query_pos, reference_points
+        post_memory = head.push_memory(
+            data_ego_pose, all_cls_scores, all_bbox_preds, decoder_outputs
         )
-        rec_ego_pose = identity_poses(batch_size, query.shape[1], query.device)
-
-        outputs_classes = []
-        outputs_coords = []
-        decoder_outputs = []
-        for decoder_layer, cls_branch, reg_branch in zip(
-            head.decoder, head.cls_branches, head.reg_branches
-        ):
-            query = decoder_layer(query, memory, query_pos, pos_embed, temp_memory, temp_pos, None)
-            # Predictions and the propagated memory consume the post-normed
-            # intermediates, exactly as in the head's training forward.
-            normed_query = head.post_norm(query)
-            outputs_classes.append(cls_branch(normed_query))
-            outputs_coords.append(
-                head._decode_box_params(reg_branch(normed_query), reference_points)
-            )
-            decoder_outputs.append(normed_query)
-        all_cls_scores = torch.stack(outputs_classes)
-        all_bbox_preds = torch.stack(outputs_coords)
-
-        rec_reference_points = all_bbox_preds[-1][..., :3]
-        rec_velo = all_bbox_preds[-1][..., -2:]
-        rec_memory = decoder_outputs[-1]
-        rec_score = all_cls_scores[-1].sigmoid().amax(dim=-1, keepdim=True)
-        rec_timestamp = torch.zeros_like(rec_score)
-        _, topk_indexes = torch.topk(rec_score, head.topk_proposals, dim=1)
-        rec_timestamp = topk_gather(rec_timestamp, topk_indexes)
-        rec_reference_points = topk_gather(rec_reference_points, topk_indexes)
-        rec_memory = topk_gather(rec_memory, topk_indexes)
-        rec_ego_pose = topk_gather(rec_ego_pose, topk_indexes)
-        rec_velo = topk_gather(rec_velo, topk_indexes)
-
-        post_memory_embedding = torch.cat([rec_memory, head.memory_embedding], dim=1)
-        post_memory_timestamp = torch.cat([rec_timestamp, head.memory_timestamp], dim=1)
-        post_memory_egopose = torch.cat([rec_ego_pose, head.memory_egopose], dim=1)
-        post_memory_reference_point = torch.cat(
-            [rec_reference_points, head.memory_reference_point], dim=1
-        )
-        post_memory_velo = torch.cat([rec_velo, head.memory_velo], dim=1)
-        post_memory_reference_point = transform_reference_points(
-            post_memory_reference_point, data_ego_pose
-        )
-        post_memory_egopose = data_ego_pose.unsqueeze(1) @ post_memory_egopose
-
         return (
             all_cls_scores.flatten(0, 2).unsqueeze(0).transpose(2, 1),
             all_bbox_preds.flatten(0, 2).unsqueeze(0).transpose(2, 1),
-            post_memory_embedding,
-            post_memory_reference_point,
-            post_memory_timestamp,
-            post_memory_egopose,
-            post_memory_velo,
+            *post_memory,
         )
 
 
@@ -242,7 +185,7 @@ class StreamPETRDetectionModel(BaseModel):
     def setup(self, stage: str) -> None:
         """Require a streaming datamodule; the memory bank needs lane-contiguous batches."""
         super().setup(stage)
-        if not getattr(self.trainer.datamodule, "streaming", False):
+        if not self.trainer.datamodule.streaming:
             raise ValueError(
                 "StreamPETR carries temporal memory across batches, so the datamodule must "
                 "stream scene-contiguous frames; set datamodule.streaming to true."
@@ -281,9 +224,10 @@ class StreamPETRDetectionModel(BaseModel):
             "camera_intrinsics": image_data.camera_intrinsics,
             "lidar2img": image_data.lidar2images,
             "timestamp": frame_meta.timestamps,
-            "scenario_ids": frame_meta.scenario_ids,
-            # The poses carry kilometer-scale translations, so they are inverted in float64.
+            "scene_tokens": frame_meta.scene_tokens,
             "ego_pose": frame_meta.ego2globals,
+            # A float32 LU of a kilometer-scale pose loses the low bits of the translation
+            # (one ulp at 65 km is 4 mm); the float64 inverse is exact to the final cast.
             "ego_pose_inv": torch.linalg.inv(frame_meta.ego2globals.double()).float(),
         }
         gt_detections = batch_inputs.multi_task_gt_batch.detection3d_gt_batch
@@ -297,7 +241,7 @@ class StreamPETRDetectionModel(BaseModel):
         camera_intrinsics: torch.Tensor,
         lidar2img: torch.Tensor,
         timestamp: torch.Tensor,
-        scenario_ids: Sequence[str],
+        scene_tokens: Sequence[str],
         ego_pose: torch.Tensor,
         ego_pose_inv: torch.Tensor,
         gt_boxes: list[torch.Tensor] | None = None,
@@ -305,12 +249,16 @@ class StreamPETRDetectionModel(BaseModel):
     ) -> ModelOutputs:
         """Run the camera backbone and StreamPETR head.
 
+        The scene and the time of every frame decide per batch lane whether the head's
+        memory carries over from the previous frame, see
+        :meth:`StreamPETRHead.stream_continuity`.
+
         Args:
             img: Images ``(batch, num_cams, 3, H, W)``.
             camera_intrinsics: Augmented intrinsics ``(batch, num_cams, 3, 3)``.
             lidar2img: Augmented lidar-to-image matrices ``(batch, num_cams, 4, 4)``.
             timestamp: Sample time of every frame in seconds, float64.
-            scenario_ids: Scenario of every frame.
+            scene_tokens: Scene of every frame.
             ego_pose: Lidar-to-global pose of every frame ``(batch, 4, 4)``.
             ego_pose_inv: Inverse of ``ego_pose``.
             gt_boxes: Metric boxes seeding the denoising queries in training.
@@ -319,16 +267,15 @@ class StreamPETRDetectionModel(BaseModel):
         Returns:
             The StreamPETR head outputs.
         """
-        image_batch = img.float()
-        img_features = self.image_feature_extractor(image_batch)
+        img_features = self.image_feature_extractor(img)
         head_outputs = self.bbox_head(
             img_features=img_features,
-            image_height=int(image_batch.shape[-2]),
-            image_width=int(image_batch.shape[-1]),
+            image_height=int(img.shape[-2]),
+            image_width=int(img.shape[-1]),
             camera_intrinsics=camera_intrinsics,
             lidar2img=lidar2img,
             timestamp=timestamp,
-            scenario_ids=scenario_ids,
+            prev_exists=self.bbox_head.stream_continuity(scene_tokens, timestamp),
             ego_pose=ego_pose,
             ego_pose_inv=ego_pose_inv,
             gt_boxes=gt_boxes,
@@ -415,15 +362,14 @@ class StreamPETRDetectionModel(BaseModel):
         image_data = batch_inputs.image_data
         if image_data is None:
             raise ValueError("The StreamPETR export needs the images of the batch.")
-        head = self.bbox_head
         # The exported modules contain no CUDA-specific ops. Tracing on CPU
         # keeps every graph constant device-neutral, which ONNX constant
-        # folding requires.
-        img = image_data.images[:1].float().cpu()
+        # folding requires. The first sample of the batch traces the graphs.
+        img = image_data.images[:1].cpu()
         # The runtime binds 4x4 intrinsics and the inverse of the augmented projection.
-        intrinsics = _homogeneous_intrinsics(image_data.camera_intrinsics[:1].float().cpu())
-        img2lidar = torch.inverse(image_data.lidar2images[:1].float().cpu())
-        batch_size, num_cams = img.shape[:2]
+        intrinsics = _homogeneous_intrinsics(image_data.camera_intrinsics[:1].cpu())
+        img2lidar = torch.inverse(image_data.lidar2images[:1].cpu())
+        num_cams = img.shape[1]
         image_height, image_width = int(img.shape[-2]), int(img.shape[-1])
 
         export_model = deepcopy(self).cpu().eval()
@@ -440,17 +386,14 @@ class StreamPETRDetectionModel(BaseModel):
                 img2lidar=img2lidar,
             )
 
-        identity_pose = (
-            torch.eye(4, dtype=torch.float32, device=img.device)
-            .unsqueeze(0)
-            .repeat(batch_size, 1, 1)
-        )
+        identity_pose = torch.eye(4).unsqueeze(0)
+        memory_len, hidden_dim = export_head.memory_len, export_head.hidden_dim
         memory_args = (
-            img.new_zeros((batch_size, head.memory_len, head.hidden_dim)),
-            img.new_zeros((batch_size, head.memory_len, 3)),
-            img.new_zeros((batch_size, head.memory_len, 1)),
-            img.new_zeros((batch_size, head.memory_len, 4, 4)),
-            img.new_zeros((batch_size, head.memory_len, 2)),
+            torch.zeros(1, memory_len, hidden_dim),
+            torch.zeros(1, memory_len, 3),
+            torch.zeros(1, memory_len, 1),
+            torch.zeros(1, memory_len, 4, 4),
+            torch.zeros(1, memory_len, 2),
         )
 
         return {

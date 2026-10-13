@@ -222,7 +222,6 @@ class StreamPETRDenoisingOutputs(BaseModel):
         radius that keeps it a positive.
       known_boxes: Metric box ``[cx, cy, cz, l, w, h, yaw, vx, vy]`` every noised query was drawn
         from.
-      known_indices: Index of the source box of every noised query into the boxes of the batch.
       batch_indices: Sample of every noised query.
       slot_indices: Denoising slot of every noised query inside its sample.
     """
@@ -233,7 +232,6 @@ class StreamPETRDenoisingOutputs(BaseModel):
     bbox_preds: Float[torch.Tensor, "num_layers batch_size num_slots 10"]
     known_labels: Int64[torch.Tensor, " num_known"]
     known_boxes: Float[torch.Tensor, "num_known 9"]
-    known_indices: Int64[torch.Tensor, " num_known"]
     batch_indices: Int64[torch.Tensor, " num_known"]
     slot_indices: Int64[torch.Tensor, " num_known"]
 
@@ -248,7 +246,6 @@ class StreamPETRDenoisingOutputs(BaseModel):
         num_known = self.known_labels.shape[0]
         for name, tensor in (
             ("known_boxes", self.known_boxes),
-            ("known_indices", self.known_indices),
             ("batch_indices", self.batch_indices),
             ("slot_indices", self.slot_indices),
         ):
@@ -319,7 +316,7 @@ class Detection3DHeadOutputs(BaseModel):
 
     center_head_outputs: CenterHeadOutputs | None
     transfusion_head_outputs: TransFusionHeadOutputs | None
-    streampetr_head_outputs: StreamPETRHeadOutputs | None = None
+    streampetr_head_outputs: StreamPETRHeadOutputs | None
 
     def center_head(self) -> CenterHeadOutputs:
         """

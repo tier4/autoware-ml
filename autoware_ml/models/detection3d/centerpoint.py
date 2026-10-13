@@ -163,7 +163,9 @@ class CenterPointDetectionModel(BaseModel):
         bev_features = self.pts_neck(bev_features)
         return ModelOutputs(
             detection3d_head_outputs=Detection3DHeadOutputs(
-                center_head_outputs=self.bbox_head(bev_features), transfusion_head_outputs=None
+                center_head_outputs=self.bbox_head(bev_features),
+                transfusion_head_outputs=None,
+                streampetr_head_outputs=None,
             )
         )
 

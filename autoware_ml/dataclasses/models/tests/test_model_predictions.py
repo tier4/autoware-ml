@@ -88,7 +88,9 @@ class TestModelOutputs(unittest.TestCase):
     def test_holds_detection3d_head_outputs(self) -> None:
         """Test that the detection3d head outputs are carried through untouched."""
         head_outputs = Detection3DHeadOutputs(
-            center_head_outputs=self._build_center_head_outputs(), transfusion_head_outputs=None
+            center_head_outputs=self._build_center_head_outputs(),
+            transfusion_head_outputs=None,
+            streampetr_head_outputs=None,
         )
 
         outputs = ModelOutputs(detection3d_head_outputs=head_outputs)
@@ -136,7 +138,11 @@ class TestModelOutputAccessors(unittest.TestCase):
             rot=torch.zeros(1, 2, 4, 4),
             vel=None,
         )
-        outputs = Detection3DHeadOutputs(center_head_outputs=center, transfusion_head_outputs=None)
+        outputs = Detection3DHeadOutputs(
+            center_head_outputs=center,
+            transfusion_head_outputs=None,
+            streampetr_head_outputs=None,
+        )
 
         self.assertIs(outputs.center_head(), center)
         with self.assertRaises(ValueError):

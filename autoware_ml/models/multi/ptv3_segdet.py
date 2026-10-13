@@ -179,7 +179,9 @@ class PTv3SegDetModel(PTv3BaseModel):
         det_outputs = self.bbox_head(bev_features)
         return ModelOutputs(
             detection3d_head_outputs=Detection3DHeadOutputs(
-                center_head_outputs=None, transfusion_head_outputs=det_outputs
+                center_head_outputs=None,
+                transfusion_head_outputs=det_outputs,
+                streampetr_head_outputs=None,
             ),
             segmentation3d_head_outputs=Segmentation3DHeadOutputs(logits=seg_logits),
         )

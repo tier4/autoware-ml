@@ -202,7 +202,6 @@ class TestTypedDetectionEvalOutput(unittest.TestCase):
                 ego2globals=ego2globals,
                 scene_tokens=["db/scene_a/0", "db/scene_b/1"],
                 timestamps=torch.tensor([0.0, 0.1], dtype=torch.float64, device=self.device),
-                scenario_ids=["scenario_a", "scenario_b"],
             )
         )
         multi_task_batch_inputs = ModelBatchInputs(

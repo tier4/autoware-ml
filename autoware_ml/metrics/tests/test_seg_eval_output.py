@@ -36,7 +36,6 @@ def _batch_inputs(num_frames: int):
         ego2globals=torch.eye(4).repeat(num_frames, 1, 1),
         scene_tokens=["scene-a", "scene-b"][:num_frames],
         timestamps=torch.zeros(num_frames, dtype=torch.float64),
-        scenario_ids=["scenario-a", "scenario-b"][:num_frames],
     )
     gt_batch = batch_inputs.multi_task_gt_batch._replace(frame_meta_batch=frame_meta)
     return batch_inputs.replace(multi_task_gt_batch=gt_batch)

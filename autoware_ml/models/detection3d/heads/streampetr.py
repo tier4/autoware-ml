@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import NamedTuple
 
 import torch
 import torch.nn as nn
@@ -40,9 +40,34 @@ from autoware_ml.models.detection3d.task_modules.streaming import (
 )
 
 
+# Reference recipe constants the configs never vary: two hidden layers in the
+# classification and the regression branches, and the first depth bin at 1 m.
+_NUM_BRANCH_LAYERS = 2
+_DEPTH_START = 1.0
+
+
 def identity_poses(batch_size: int, count: int, device: torch.device) -> torch.Tensor:
     """``[batch_size, count, 4, 4]`` identity poses (read-only view of one ``eye``)."""
     return torch.eye(4, device=device).expand(batch_size, count, 4, 4)
+
+
+class DenoisingQueries(NamedTuple):
+    """Bookkeeping of the denoising queries of one training forward.
+
+    Attributes:
+        known_labels: Class of every noised query, ``num_classes`` for a query noised beyond
+            the radius that keeps it a positive.
+        known_boxes: Metric box every noised query was drawn from.
+        batch_indices: Sample of every noised query.
+        slot_indices: Denoising slot of every noised query inside its sample.
+        pad_size: Number of denoising slots leading the query set of every sample.
+    """
+
+    known_labels: torch.Tensor
+    known_boxes: torch.Tensor
+    batch_indices: torch.Tensor
+    slot_indices: torch.Tensor
+    pad_size: int
 
 
 class StreamPETRDecoderLayer(nn.Module):
@@ -88,7 +113,10 @@ class StreamPETRDecoderLayer(nn.Module):
         Self-attention keys and values extend the current queries with the
         non-propagated temporal memory; cross-attention consumes only the
         current-frame image tokens. Self-attention runs in float32 even under
-        autocast, matching the reference numerical recipe.
+        autocast, matching the reference numerical recipe (one of the head's
+        five float32 islands: this one, the position embedding and the
+        prediction branches follow the reference, the two memory updates keep
+        kilometer-scale poses exact).
         """
         query_with_pos = query + query_pos
         self_key = torch.cat([query_with_pos, temp_memory + temp_pos], dim=1)
@@ -124,7 +152,13 @@ class StreamPETRTargets:
 
 
 class StreamPETRHead(nn.Module):
-    """Native StreamPETR query head."""
+    """Native StreamPETR query head.
+
+    The constructor exposes the knobs of the reference recipe (``LID``,
+    ``with_ego_pos``, ``num_propagated``, ``with_dn``, the denoising noise) so a
+    config reads like the reference one; the shipped configs pin them to the
+    reference values.
+    """
 
     # The five-tensor temporal memory bank; ``None`` until the first frame.
     memory_embedding: torch.Tensor | None
@@ -132,8 +166,8 @@ class StreamPETRHead(nn.Module):
     memory_timestamp: torch.Tensor | None
     memory_egopose: torch.Tensor | None
     memory_velo: torch.Tensor | None
-    # Scenario and time of the previous frame of every batch lane; ``None`` until the first frame.
-    stream_scenario_ids: list[str] | None
+    # Scene and time of the previous frame of every batch lane; ``None`` until the first frame.
+    stream_scene_tokens: list[str] | None
     stream_timestamps: torch.Tensor | None
 
     def __init__(
@@ -150,7 +184,6 @@ class StreamPETRHead(nn.Module):
         point_cloud_range: list[float],
         code_weights: list[float],
         position_range: list[float],
-        num_reg_fcs: int = 2,
         memory_len: int = 1024,
         topk_proposals: int = 256,
         num_propagated: int = 256,
@@ -158,12 +191,10 @@ class StreamPETRHead(nn.Module):
         with_ego_pos: bool = True,
         depth_num: int = 64,
         LID: bool = True,
-        depth_start: float = 1.0,
         loss_cls_weight: float = 2.0,
         loss_bbox_weight: float = 0.25,
         scalar: int = 10,
         noise_scale: float = 1.0,
-        noise_trans: float = 0.0,
         dn_weight: float = 1.0,
         split: float = 0.75,
     ) -> None:
@@ -181,13 +212,11 @@ class StreamPETRHead(nn.Module):
         self.with_dn = with_dn
         self.with_ego_pos = with_ego_pos
         self.depth_num = depth_num
-        self.depth_start = depth_start
         self.LID = LID
         self.loss_cls_weight = loss_cls_weight
         self.loss_bbox_weight = loss_bbox_weight
         self.scalar = scalar
         self.bbox_noise_scale = noise_scale
-        self.bbox_noise_trans = noise_trans
         self.dn_weight = dn_weight
         self.split = split
 
@@ -230,8 +259,8 @@ class StreamPETRHead(nn.Module):
         # One classification branch and one regression branch are shared by
         # every decoder layer, following the reference StreamPETR recipe:
         # each layer's supervision updates the same prediction heads.
-        cls_branch = self._build_cls_branch(hidden_dim, num_reg_fcs)
-        reg_branch = self._build_reg_branch(hidden_dim, num_reg_fcs)
+        cls_branch = self._build_cls_branch(hidden_dim)
+        reg_branch = self._build_reg_branch(hidden_dim)
         self.cls_branches = nn.ModuleList([cls_branch for _ in range(num_decoder_layers)])
         self.reg_branches = nn.ModuleList([reg_branch for _ in range(num_decoder_layers)])
         self.loss_cls = SigmoidFocalLoss()
@@ -253,30 +282,30 @@ class StreamPETRHead(nn.Module):
         self.reset_memory()
         self.init_weights()
 
-    def _build_cls_branch(self, hidden_dim: int, num_reg_fcs: int) -> nn.Sequential:
+    def _build_cls_branch(self, hidden_dim: int) -> nn.Sequential:
         layers: list[nn.Module] = []
-        for _ in range(num_reg_fcs):
+        for _ in range(_NUM_BRANCH_LAYERS):
             layers.extend(
                 [nn.Linear(hidden_dim, hidden_dim), nn.LayerNorm(hidden_dim), nn.ReLU(inplace=True)]
             )
         layers.append(nn.Linear(hidden_dim, self.num_classes))
         return nn.Sequential(*layers)
 
-    def _build_reg_branch(self, hidden_dim: int, num_reg_fcs: int) -> nn.Sequential:
+    def _build_reg_branch(self, hidden_dim: int) -> nn.Sequential:
         layers: list[nn.Module] = []
-        for _ in range(num_reg_fcs):
+        for _ in range(_NUM_BRANCH_LAYERS):
             layers.extend([nn.Linear(hidden_dim, hidden_dim), nn.ReLU(inplace=True)])
         layers.append(nn.Linear(hidden_dim, 10))
         return nn.Sequential(*layers)
 
     def _build_depth_bins(self) -> torch.Tensor:
         index = torch.arange(self.depth_num, dtype=torch.float32)
-        depth_span = self.position_range_tensor[3] - self.depth_start
+        depth_span = self.position_range_tensor[3] - _DEPTH_START
         if self.LID:
-            return self.depth_start + depth_span / (self.depth_num * (1 + self.depth_num)) * (
+            return _DEPTH_START + depth_span / (self.depth_num * (1 + self.depth_num)) * (
                 index * (index + 1)
             )
-        return self.depth_start + depth_span / self.depth_num * index
+        return _DEPTH_START + depth_span / self.depth_num * index
 
     def _init_pseudo_reference_points(self) -> None:
         if self.num_propagated <= 0:
@@ -311,69 +340,57 @@ class StreamPETRHead(nn.Module):
         self.memory_timestamp = None
         self.memory_egopose = None
         self.memory_velo = None
-        self.stream_scenario_ids = None
+        self.stream_scene_tokens = None
         self.stream_timestamps = None
 
     def stream_continuity(
-        self, scenario_ids: Sequence[str], timestamp: torch.Tensor
+        self, scene_tokens: Sequence[str], timestamp: torch.Tensor
     ) -> torch.Tensor:
         """Tell which batch lanes continue the stream of their previous frame.
 
-        A lane continues when its frame belongs to the scenario of the lane's previous frame
-        and comes later in time. A lane without a previous frame, one that moved to another
-        scenario, and one that went back to an earlier frame of its scenario (the streaming
-        sampler pads a lane by restarting its first scene) start a new stream, so the memory
-        is reset there. The frames are remembered for the next call.
+        A lane continues when its frame belongs to the scene of the lane's previous frame and
+        comes later in time. A lane without a previous frame, one that moved to another scene,
+        and one that went back to an earlier frame of its scene (the streaming sampler pads a
+        lane by restarting its first scene) start a new stream, so the memory is reset there.
+        The frames are remembered for the next call.
 
         Args:
-            scenario_ids: Scenario of the frame of every lane.
-            timestamp: Sample time of the frame of every lane in seconds.
+            scene_tokens: Scene of the frame of every lane.
+            timestamp: Sample time of the frame of every lane in seconds, float64.
 
         Returns:
             ``prev_exists`` of every lane, 1.0 where the memory carries over and 0.0 where it
             is reset.
         """
-        previous_ids = self.stream_scenario_ids
-        previous_timestamps = self.stream_timestamps
-        timestamp = timestamp.to(dtype=torch.float64)
-        if previous_ids is None or len(previous_ids) != len(scenario_ids):
-            prev_exists = torch.zeros(len(scenario_ids), device=timestamp.device)
+        previous_tokens = self.stream_scene_tokens
+        if previous_tokens is None or len(previous_tokens) != len(scene_tokens):
+            prev_exists = torch.zeros(len(scene_tokens), device=timestamp.device)
         else:
-            same_scenario = torch.tensor(
-                [current == previous for current, previous in zip(scenario_ids, previous_ids)],
+            same_scene = torch.tensor(
+                [current == previous for current, previous in zip(scene_tokens, previous_tokens)],
                 device=timestamp.device,
             )
-            later = timestamp > previous_timestamps.to(timestamp.device)
-            prev_exists = (same_scenario & later).float()
-        self.stream_scenario_ids = list(scenario_ids)
+            prev_exists = (same_scene & (timestamp > self.stream_timestamps)).float()
+        self.stream_scene_tokens = list(scene_tokens)
         self.stream_timestamps = timestamp.detach().clone()
         return prev_exists
 
-    def _build_stream_state(
-        self,
-        device: torch.device,
-        timestamp: torch.Tensor,
-        prev_exists: torch.Tensor,
-        ego_pose: torch.Tensor,
-        ego_pose_inv: torch.Tensor,
-    ) -> dict[str, torch.Tensor]:
-        """Move the per-frame stream metadata onto the feature device in the bank's dtypes."""
-        return {
-            "timestamp": timestamp.to(device=device, dtype=torch.float64),
-            "prev_exists": prev_exists.to(device=device, dtype=torch.float32),
-            "ego_pose": ego_pose.to(device=device, dtype=torch.float32),
-            "ego_pose_inv": ego_pose_inv.to(device=device, dtype=torch.float32),
-        }
-
-    def pre_update_memory(self, data: dict[str, torch.Tensor]) -> None:
+    def pre_update_memory(
+        self, timestamp: torch.Tensor, prev_exists: torch.Tensor, ego_pose_inv: torch.Tensor
+    ) -> None:
         """Update or initialize the temporal memory before the current frame.
 
-        The memory bank stores global-frame reference points and ego poses
-        whose translations reach kilometer scale, far beyond half-precision
-        resolution, so the whole geometry path runs in float32 regardless of
-        autocast (mirroring :meth:`position_embedding`).
+        The bank moves from the global frame into the lidar frame of the current frame and
+        its entries age by the frame's time; lanes without a predecessor are cleared. The
+        bank stores global-frame reference points and ego poses whose translations reach
+        kilometer scale, far beyond half-precision resolution, so the whole geometry path runs
+        in float32 regardless of autocast (mirroring :meth:`position_embedding`).
+
+        Args:
+            timestamp: Sample time of every lane in seconds, float64.
+            prev_exists: 1.0 for every lane whose memory carries over, 0.0 where it is reset.
+            ego_pose_inv: Global-to-lidar pose of every lane ``(batch, 4, 4)``.
         """
-        prev_exists = data["prev_exists"]
         batch_size = prev_exists.size(0)
         with torch.autocast(device_type=prev_exists.device.type, enabled=False):
             if self.memory_embedding is None or self.memory_embedding.size(0) != batch_size:
@@ -387,26 +404,18 @@ class StreamPETRHead(nn.Module):
                 self.memory_egopose = prev_exists.new_zeros(batch_size, self.memory_len, 4, 4)
                 self.memory_velo = prev_exists.new_zeros(batch_size, self.memory_len, 2)
             else:
-                self.memory_timestamp += data["timestamp"].unsqueeze(-1).unsqueeze(-1)
-                self.memory_egopose = data["ego_pose_inv"].unsqueeze(1) @ self.memory_egopose
+                self.memory_timestamp += timestamp.view(batch_size, 1, 1)
+                self.memory_egopose = ego_pose_inv.unsqueeze(1) @ self.memory_egopose
                 self.memory_reference_point = transform_reference_points(
-                    self.memory_reference_point, data["ego_pose_inv"]
+                    self.memory_reference_point, ego_pose_inv
                 )
-                self.memory_timestamp = memory_refresh(
-                    self.memory_timestamp[:, : self.memory_len], prev_exists
-                )
+                self.memory_timestamp = memory_refresh(self.memory_timestamp, prev_exists)
                 self.memory_reference_point = memory_refresh(
-                    self.memory_reference_point[:, : self.memory_len], prev_exists
+                    self.memory_reference_point, prev_exists
                 )
-                self.memory_embedding = memory_refresh(
-                    self.memory_embedding[:, : self.memory_len], prev_exists
-                )
-                self.memory_egopose = memory_refresh(
-                    self.memory_egopose[:, : self.memory_len], prev_exists
-                )
-                self.memory_velo = memory_refresh(
-                    self.memory_velo[:, : self.memory_len], prev_exists
-                )
+                self.memory_embedding = memory_refresh(self.memory_embedding, prev_exists)
+                self.memory_egopose = memory_refresh(self.memory_egopose, prev_exists)
+                self.memory_velo = memory_refresh(self.memory_velo, prev_exists)
 
             if self.pseudo_reference_points is not None:
                 pseudo_reference_points = (
@@ -421,56 +430,87 @@ class StreamPETRHead(nn.Module):
                     batch_size, 1, 1, 1
                 ) * identity
 
-    def post_update_memory(
+    def push_memory(
         self,
-        data: dict[str, torch.Tensor],
-        rec_ego_pose: torch.Tensor,
+        ego_pose: torch.Tensor,
         all_cls_scores: torch.Tensor,
         all_bbox_preds: torch.Tensor,
         decoder_outputs: torch.Tensor,
-        mask_dict: dict[str, Any] | None,
+        pad_size: int = 0,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Lead the bank with the strongest current-frame proposals, in the global frame.
+
+        Returns the five bank tensors (embedding, reference points, timestamps, ego poses,
+        velocities) with the ``topk_proposals`` new entries in front of the current bank,
+        untruncated: the deployed graph emits all of them and the runtime keeps the first
+        ``memory_len``, exactly like :meth:`post_update_memory`. The new entries carry age
+        zero and the identity pose; the ego-pose alignment brings every entry back into the
+        global frame. The bank is stored in float32 and the alignment runs in a float32
+        island: kilometer-scale translations lose meter-level motion in half precision.
+
+        Args:
+            ego_pose: Lidar-to-global pose of every lane ``(batch, 4, 4)``.
+            all_cls_scores: Class logits of every decoder layer.
+            all_bbox_preds: Boxes of every decoder layer.
+            decoder_outputs: Post-normed queries of every decoder layer.
+            pad_size: Number of denoising slots leading every sample; they never enter the
+                bank.
+        """
+        with torch.autocast(device_type=all_cls_scores.device.type, enabled=False):
+            rec_reference_points = all_bbox_preds[-1, :, pad_size:, :3].float()
+            rec_velo = all_bbox_preds[-1, :, pad_size:, -2:].float()
+            rec_memory = decoder_outputs[-1, :, pad_size:].float()
+            rec_score = (
+                all_cls_scores[-1, :, pad_size:].float().sigmoid().amax(dim=-1, keepdim=True)
+            )
+            batch_size, num_queries = rec_score.shape[:2]
+
+            topk_proposals = min(self.topk_proposals, num_queries)
+            _, topk_indexes = torch.topk(rec_score, topk_proposals, dim=1)
+            rec_reference_points = topk_gather(rec_reference_points, topk_indexes).detach()
+            rec_memory = topk_gather(rec_memory, topk_indexes).detach()
+            rec_velo = topk_gather(rec_velo, topk_indexes).detach()
+            rec_timestamp = torch.zeros(
+                batch_size,
+                topk_proposals,
+                1,
+                device=ego_pose.device,
+                dtype=self.memory_timestamp.dtype,
+            )
+            rec_ego_pose = identity_poses(batch_size, topk_proposals, ego_pose.device)
+
+            embedding = torch.cat([rec_memory, self.memory_embedding], dim=1)
+            timestamp = torch.cat([rec_timestamp, self.memory_timestamp], dim=1)
+            egopose = torch.cat([rec_ego_pose, self.memory_egopose], dim=1)
+            reference_point = torch.cat([rec_reference_points, self.memory_reference_point], dim=1)
+            velo = torch.cat([rec_velo, self.memory_velo], dim=1)
+            reference_point = transform_reference_points(reference_point, ego_pose)
+            egopose = ego_pose.unsqueeze(1) @ egopose
+        return embedding, reference_point, timestamp, egopose, velo
+
+    def post_update_memory(
+        self,
+        timestamp: torch.Tensor,
+        ego_pose: torch.Tensor,
+        all_cls_scores: torch.Tensor,
+        all_bbox_preds: torch.Tensor,
+        decoder_outputs: torch.Tensor,
+        pad_size: int = 0,
     ) -> None:
         """Append the strongest current-frame proposals to the temporal memory.
 
-        The bank is stored in float32 and the global-frame alignment runs in a
-        float32 island: kilometer-scale translations lose meter-level motion in
-        half precision, so none of this may execute under autocast.
+        Keeps the first ``memory_len`` entries of :meth:`push_memory` and dates them
+        relative to the frame, so :meth:`pre_update_memory` can age them with the next
+        frame's time.
         """
-        with torch.autocast(device_type=all_cls_scores.device.type, enabled=False):
-            # Denoising queries occupy the first pad_size slots and never enter the bank.
-            start = mask_dict["pad_size"] if mask_dict else 0
-            rec_reference_points = all_bbox_preds[-1, :, start:, :3].float()
-            rec_velo = all_bbox_preds[-1, :, start:, -2:].float()
-            rec_memory = decoder_outputs[-1, :, start:].float()
-            rec_score = all_cls_scores[-1, :, start:].float().sigmoid().amax(dim=-1, keepdim=True)
-            rec_timestamp = torch.zeros_like(rec_score, dtype=torch.float64)
-
-            topk_proposals = min(self.topk_proposals, rec_score.shape[1])
-            _, topk_indexes = torch.topk(rec_score, topk_proposals, dim=1)
-            rec_timestamp = topk_gather(rec_timestamp, topk_indexes)
-            rec_reference_points = topk_gather(rec_reference_points, topk_indexes).detach()
-            rec_memory = topk_gather(rec_memory, topk_indexes).detach()
-            rec_ego_pose = topk_gather(rec_ego_pose, topk_indexes)
-            rec_velo = topk_gather(rec_velo, topk_indexes).detach()
-
-            self.memory_embedding = torch.cat([rec_memory, self.memory_embedding], dim=1)[
-                :, : self.memory_len
-            ]
-            self.memory_timestamp = torch.cat([rec_timestamp, self.memory_timestamp], dim=1)[
-                :, : self.memory_len
-            ]
-            self.memory_egopose = torch.cat([rec_ego_pose, self.memory_egopose], dim=1)[
-                :, : self.memory_len
-            ]
-            self.memory_reference_point = torch.cat(
-                [rec_reference_points, self.memory_reference_point], dim=1
-            )[:, : self.memory_len]
-            self.memory_velo = torch.cat([rec_velo, self.memory_velo], dim=1)[:, : self.memory_len]
-            self.memory_reference_point = transform_reference_points(
-                self.memory_reference_point, data["ego_pose"]
-            )
-            self.memory_timestamp -= data["timestamp"].unsqueeze(-1).unsqueeze(-1)
-            self.memory_egopose = data["ego_pose"].unsqueeze(1) @ self.memory_egopose
+        embedding, reference_point, age, egopose, velo = self.push_memory(
+            ego_pose, all_cls_scores, all_bbox_preds, decoder_outputs, pad_size
+        )
+        self.memory_embedding = embedding[:, : self.memory_len]
+        self.memory_reference_point = reference_point[:, : self.memory_len]
+        self.memory_timestamp = age[:, : self.memory_len] - timestamp.view(-1, 1, 1)
+        self.memory_egopose = egopose[:, : self.memory_len]
+        self.memory_velo = velo[:, : self.memory_len]
 
     def _build_memory_centers(
         self,
@@ -646,11 +686,22 @@ class StreamPETRHead(nn.Module):
     def prepare_for_dn(
         self,
         batch_size: int,
-        reference_points: torch.Tensor,
         gt_boxes: list[torch.Tensor] | None,
         gt_labels: list[torch.Tensor] | None,
-    ) -> tuple[torch.Tensor, torch.Tensor | None, dict[str, Any] | None]:
-        """Prepare denoising queries following the StreamPETR training recipe."""
+    ) -> tuple[torch.Tensor, torch.Tensor | None, DenoisingQueries | None]:
+        """Lead the learnable reference points with denoising queries in training.
+
+        Every ground-truth box of the batch is replicated ``scalar`` times, its center
+        noised, and the result occupies the first ``pad_size`` slots of its sample's query
+        set; the attention mask keeps the denoising groups and the detection queries from
+        seeing each other. Outside training, without denoising or without any box the
+        reference points are returned unchanged.
+
+        Returns:
+            The per-sample reference points, the self-attention mask (``None`` without
+            denoising queries) and the denoising bookkeeping (``None`` likewise).
+        """
+        reference_points = self.reference_points.weight
         if not self.training or not self.with_dn or gt_boxes is None or gt_labels is None:
             return reference_points.unsqueeze(0).repeat(batch_size, 1, 1), None, None
 
@@ -673,16 +724,13 @@ class StreamPETRHead(nn.Module):
             dim=0,
         )
 
-        known_indices = torch.arange(labels.shape[0], device=reference_points.device).repeat(
-            self.scalar
-        )
         known_labels = labels.repeat(self.scalar)
         known_batch_idx = batch_idx.repeat(self.scalar)
         known_boxes = boxes.repeat(self.scalar, 1)
         known_bbox_center = known_boxes[:, :3].clone()
 
         if self.bbox_noise_scale > 0:
-            diff = known_boxes[:, 3:6] / 2 + self.bbox_noise_trans
+            diff = known_boxes[:, 3:6] / 2
             rand_prob = torch.rand_like(known_bbox_center) * 2 - 1.0
             known_bbox_center += rand_prob * diff * self.bbox_noise_scale
             background_mask = torch.norm(rand_prob, dim=1) > self.split
@@ -734,14 +782,14 @@ class StreamPETRHead(nn.Module):
         temporal_attn_mask[pad_size:, :pad_size] = True
         attn_mask = temporal_attn_mask
 
-        mask_dict = {
-            "known_indices": known_indices,
-            "batch_idx": known_batch_idx,
-            "map_known_indice": map_known_indice,
-            "known_lbs_bboxes": (known_labels, known_boxes),
-            "pad_size": pad_size,
-        }
-        return padded_reference_points, attn_mask, mask_dict
+        denoising = DenoisingQueries(
+            known_labels=known_labels,
+            known_boxes=known_boxes,
+            batch_indices=known_batch_idx,
+            slot_indices=map_known_indice,
+            pad_size=pad_size,
+        )
+        return padded_reference_points, attn_mask, denoising
 
     def _decode_box_params(
         self, raw_box_params: torch.Tensor, reference_points: torch.Tensor
@@ -829,29 +877,19 @@ class StreamPETRHead(nn.Module):
         bbox_loss = self.loss_bbox_weight * (per_box * weight_tensor).sum() / max(total_pos, 1)
         return loss_cls, bbox_loss
 
-    def prepare_for_loss(
-        self, denoising: StreamPETRDenoisingOutputs
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, int]:
-        """Gather denoising outputs aligned with the replicated GT targets."""
-        output_known_class = denoising.cls_scores
-        output_known_coord = denoising.bbox_preds
-        batch_selection = denoising.batch_indices[denoising.known_indices]
+    @staticmethod
+    def _denoising_predictions(
+        denoising: StreamPETRDenoisingOutputs,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Pick the logits and the boxes of every noised query, per decoder layer.
 
-        if output_known_class.numel() > 0:
-            output_known_class = output_known_class.permute(1, 2, 0, 3)[
-                (batch_selection, denoising.slot_indices)
-            ].permute(1, 0, 2)
-            output_known_coord = output_known_coord.permute(1, 2, 0, 3)[
-                (batch_selection, denoising.slot_indices)
-            ].permute(1, 0, 2)
-        num_targets = denoising.known_indices.numel()
-        return (
-            denoising.known_labels,
-            denoising.known_boxes,
-            output_known_class,
-            output_known_coord,
-            num_targets,
-        )
+        Returns ``(num_layers, num_known, num_classes)`` logits and ``(num_layers,
+        num_known, 10)`` boxes in the order of ``known_labels``.
+        """
+        selection = (denoising.batch_indices, denoising.slot_indices)
+        cls_scores = denoising.cls_scores.permute(1, 2, 0, 3)[selection].permute(1, 0, 2)
+        bbox_preds = denoising.bbox_preds.permute(1, 2, 0, 3)[selection].permute(1, 0, 2)
+        return cls_scores, bbox_preds
 
     def dn_loss_single(
         self,
@@ -885,66 +923,57 @@ class StreamPETRHead(nn.Module):
         )
         return loss_cls, loss_bbox
 
-    def forward(
-        self,
-        img_features: torch.Tensor,
-        image_height: int,
-        image_width: int,
-        camera_intrinsics: torch.Tensor,
-        lidar2img: torch.Tensor,
-        timestamp: torch.Tensor,
-        scenario_ids: Sequence[str],
-        ego_pose: torch.Tensor,
-        ego_pose_inv: torch.Tensor,
-        gt_boxes: list[torch.Tensor] | None = None,
-        gt_labels: list[torch.Tensor] | None = None,
-    ) -> StreamPETRHeadOutputs:
-        """Predict StreamPETR query outputs from multiview image features.
+    def embed_tokens(
+        self, img_features: torch.Tensor, pos_embed: torch.Tensor, cone: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Turn the image features into the decoder's memory tokens and their embeddings.
 
-        Every frame carries its stream metadata: the sample time, the scenario
-        and the lidar-to-global pose with its inverse. The scenario and the
-        time decide per lane whether the memory carries over, see
-        :meth:`stream_continuity`. ``gt_boxes`` are metric
-        ``[cx, cy, cz, l, w, h, yaw, vx, vy]`` boxes that seed the denoising
-        queries in training.
+        Args:
+            img_features: Image features ``(batch, num_cams, channels, height, width)``.
+            pos_embed: Geometric position embedding of every token, see
+                :meth:`position_embedding`.
+            cone: Per-token camera cone of :meth:`position_embedding`.
+
+        Returns:
+            The memory tokens and their feature-modulated position embedding.
         """
-        device = img_features.device
-        camera_intrinsics = camera_intrinsics.to(device=device, dtype=torch.float32)
-        lidar2img = lidar2img.to(device=device, dtype=torch.float32)
-        timestamp = timestamp.to(device=device)
-
-        prev_exists = self.stream_continuity(scenario_ids, timestamp)
-        stream_state = self._build_stream_state(
-            device, timestamp, prev_exists, ego_pose, ego_pose_inv
-        )
-        self.pre_update_memory(stream_state)
-
         batch_size, num_cams, channels, feature_height, feature_width = img_features.shape
         memory = img_features.permute(0, 1, 3, 4, 2).reshape(
             batch_size, num_cams * feature_height * feature_width, channels
         )
-
-        pos_embed, cone = self.position_embedding(
-            img_features,
-            camera_intrinsics,
-            image_height,
-            image_width,
-            lidar2img=lidar2img,
-        )
         memory = self.memory_embed(memory)
         memory = self.spatial_alignment(memory, cone)
-        pos_embed = self.featurized_pe(pos_embed, memory)
+        return memory, self.featurized_pe(pos_embed, memory)
 
-        reference_points = self.reference_points.weight
-        reference_points, query_attn_mask, mask_dict = self.prepare_for_dn(
-            batch_size, reference_points, gt_boxes, gt_labels
-        )
+    def decode(
+        self,
+        memory: torch.Tensor,
+        pos_embed: torch.Tensor,
+        reference_points: torch.Tensor,
+        query_attn_mask: torch.Tensor | None,
+        sanitize: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Run the decoder over the queries of the reference points and the temporal memory.
+
+        Args:
+            memory: Memory tokens of :meth:`embed_tokens`.
+            pos_embed: Their position embedding.
+            reference_points: Normalized reference points of every query ``(batch, Q, 3)``,
+                the denoising queries first.
+            query_attn_mask: Self-attention mask of the denoising groups, ``None`` without.
+            sanitize: Replace non-finite post-normed queries like the reference does. The
+                deployed graph leaves it out: the runtime never feeds the bank non-finite
+                values and the guard costs twenty graph nodes per layer.
+
+        Returns:
+            The class logits, the boxes and the post-normed queries of every decoder layer,
+            each ``(num_layers, batch, Q + num_propagated, ...)``.
+        """
         query_pos = self.query_embedding(pos2posemb3d(reference_points, self.hidden_dim // 2))
         query = torch.zeros_like(query_pos)
         query, query_pos, reference_points, temp_memory, temp_pos = self.temporal_alignment(
             query, query_pos, reference_points
         )
-        rec_ego_pose = identity_poses(batch_size, query.shape[1], device)
 
         outputs_classes = []
         outputs_coords = []
@@ -955,9 +984,12 @@ class StreamPETRHead(nn.Module):
             query = decoder_layer(
                 query, memory, query_pos, pos_embed, temp_memory, temp_pos, query_attn_mask
             )
-            # The reference sanitizes the post-normed intermediates consumed by
-            # prediction and memory; the raw query flows to the next layer.
-            normed_query = torch.nan_to_num(self.post_norm(query))
+            # Prediction and the memory consume the post-normed intermediates; the raw
+            # query flows to the next layer.
+            normed_query = self.post_norm(query)
+            if sanitize:
+                normed_query = torch.nan_to_num(normed_query)
+            # The prediction branches run in float32 like the reference.
             with torch.autocast(device_type=query.device.type, enabled=False):
                 query_fp32 = normed_query.float()
                 cls_logits = cls_branch(query_fp32)
@@ -966,31 +998,60 @@ class StreamPETRHead(nn.Module):
             outputs_coords.append(box_params)
             decoder_outputs.append(normed_query)
 
-        all_cls_scores = torch.stack(outputs_classes, dim=0)
-        all_bbox_preds = torch.stack(outputs_coords, dim=0)
-        decoder_outputs_tensor = torch.stack(decoder_outputs, dim=0)
+        return (
+            torch.stack(outputs_classes, dim=0),
+            torch.stack(outputs_coords, dim=0),
+            torch.stack(decoder_outputs, dim=0),
+        )
 
+    def forward(
+        self,
+        img_features: torch.Tensor,
+        image_height: int,
+        image_width: int,
+        camera_intrinsics: torch.Tensor,
+        lidar2img: torch.Tensor,
+        timestamp: torch.Tensor,
+        prev_exists: torch.Tensor,
+        ego_pose: torch.Tensor,
+        ego_pose_inv: torch.Tensor,
+        gt_boxes: list[torch.Tensor] | None = None,
+        gt_labels: list[torch.Tensor] | None = None,
+    ) -> StreamPETRHeadOutputs:
+        """Predict StreamPETR query outputs from multiview image features.
+
+        Every frame carries its stream metadata: the sample time (float64 seconds),
+        ``prev_exists`` of :meth:`stream_continuity`, and the lidar-to-global pose with its
+        inverse. ``gt_boxes`` are metric ``[cx, cy, cz, l, w, h, yaw, vx, vy]`` boxes that
+        seed the denoising queries in training.
+        """
+        self.pre_update_memory(timestamp, prev_exists, ego_pose_inv)
+
+        pos_embed, cone = self.position_embedding(
+            img_features, camera_intrinsics, image_height, image_width, lidar2img=lidar2img
+        )
+        memory, pos_embed = self.embed_tokens(img_features, pos_embed, cone)
+        reference_points, query_attn_mask, denoising_queries = self.prepare_for_dn(
+            img_features.shape[0], gt_boxes, gt_labels
+        )
+        all_cls_scores, all_bbox_preds, decoder_outputs = self.decode(
+            memory, pos_embed, reference_points, query_attn_mask
+        )
+
+        pad_size = denoising_queries.pad_size if denoising_queries is not None else 0
         self.post_update_memory(
-            stream_state,
-            rec_ego_pose,
-            all_cls_scores,
-            all_bbox_preds,
-            decoder_outputs_tensor,
-            mask_dict,
+            timestamp, ego_pose, all_cls_scores, all_bbox_preds, decoder_outputs, pad_size
         )
 
         denoising = None
-        if mask_dict and mask_dict["pad_size"] > 0:
-            pad_size = mask_dict["pad_size"]
-            known_labels, known_boxes = mask_dict["known_lbs_bboxes"]
+        if denoising_queries is not None:
             denoising = StreamPETRDenoisingOutputs(
                 cls_scores=all_cls_scores[:, :, :pad_size, :],
                 bbox_preds=all_bbox_preds[:, :, :pad_size, :],
-                known_labels=known_labels,
-                known_boxes=known_boxes,
-                known_indices=mask_dict["known_indices"],
-                batch_indices=mask_dict["batch_idx"],
-                slot_indices=mask_dict["map_known_indice"],
+                known_labels=denoising_queries.known_labels,
+                known_boxes=denoising_queries.known_boxes,
+                batch_indices=denoising_queries.batch_indices,
+                slot_indices=denoising_queries.slot_indices,
             )
             all_cls_scores = all_cls_scores[:, :, pad_size:, :]
             all_bbox_preds = all_bbox_preds[:, :, pad_size:, :]
@@ -1041,14 +1102,14 @@ class StreamPETRHead(nn.Module):
                 loss_dict[f"d{layer_index}.dn_loss_bbox"] = zero.clone()
 
         if outputs.denoising is not None:
-            (known_labels, known_bboxs, output_known_class, output_known_coord, num_tgt) = (
-                self.prepare_for_loss(outputs.denoising)
-            )
+            known_labels = outputs.denoising.known_labels
+            known_bboxs = outputs.denoising.known_boxes
+            output_known_class, output_known_coord = self._denoising_predictions(outputs.denoising)
             dn_losses_cls = []
             dn_losses_bbox = []
             for cls_scores, bbox_preds in zip(output_known_class, output_known_coord):
                 dn_loss_cls, dn_loss_bbox = self.dn_loss_single(
-                    cls_scores, bbox_preds, known_bboxs, known_labels, num_tgt
+                    cls_scores, bbox_preds, known_bboxs, known_labels, known_labels.numel()
                 )
                 dn_losses_cls.append(dn_loss_cls)
                 dn_losses_bbox.append(dn_loss_bbox)

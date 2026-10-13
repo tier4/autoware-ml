@@ -325,7 +325,6 @@ def build_streampetr_denoising(
         bbox_preds=torch.zeros(num_layers, batch_size, num_slots, 10),
         known_labels=torch.zeros(num_known, dtype=torch.int64),
         known_boxes=torch.zeros(num_known, 9),
-        known_indices=torch.zeros(num_known, dtype=torch.int64),
         batch_indices=torch.zeros(num_known, dtype=torch.int64),
         slot_indices=torch.arange(num_known, dtype=torch.int64),
     )
@@ -373,17 +372,6 @@ class TestStreamPETRHeadOutputs(unittest.TestCase):
                 denoising=build_streampetr_denoising(num_layers=2),
             )
 
-    def test_every_noised_query_must_be_indexed(self) -> None:
-        """Test that a noised query without its source box index is rejected."""
-        denoising = build_streampetr_denoising()
-        with self.assertRaises(ValidationError):
-            StreamPETRDenoisingOutputs(
-                **(
-                    {name: getattr(denoising, name) for name in type(denoising).model_fields}
-                    | {"known_indices": torch.zeros(3, dtype=torch.int64)}
-                )
-            )
-
 
 class TestDetection3DHeadOutputs(unittest.TestCase):
     """Unit tests for the head-agnostic 3D detection output wrapper."""
@@ -415,10 +403,14 @@ class TestDetection3DHeadOutputs(unittest.TestCase):
     def test_holds_one_head_family_at_a_time(self) -> None:
         """Test that the wrapper exposes the head that produced the outputs and leaves the other."""
         center_outputs = Detection3DHeadOutputs(
-            center_head_outputs=self.center_head_outputs, transfusion_head_outputs=None
+            center_head_outputs=self.center_head_outputs,
+            transfusion_head_outputs=None,
+            streampetr_head_outputs=None,
         )
         transfusion_outputs = Detection3DHeadOutputs(
-            center_head_outputs=None, transfusion_head_outputs=self.transfusion_head_outputs
+            center_head_outputs=None,
+            transfusion_head_outputs=self.transfusion_head_outputs,
+            streampetr_head_outputs=None,
         )
 
         self.assertIs(center_outputs.center_head_outputs, self.center_head_outputs)
@@ -429,7 +421,11 @@ class TestDetection3DHeadOutputs(unittest.TestCase):
     def test_rejects_no_head_outputs(self) -> None:
         """Test that a wrapper carrying no head outputs is rejected."""
         with self.assertRaises(ValidationError):
-            Detection3DHeadOutputs(center_head_outputs=None, transfusion_head_outputs=None)
+            Detection3DHeadOutputs(
+                center_head_outputs=None,
+                transfusion_head_outputs=None,
+                streampetr_head_outputs=None,
+            )
 
     def test_rejects_both_head_outputs(self) -> None:
         """Test that a wrapper carrying outputs from both head families is rejected."""
@@ -437,6 +433,7 @@ class TestDetection3DHeadOutputs(unittest.TestCase):
             Detection3DHeadOutputs(
                 center_head_outputs=self.center_head_outputs,
                 transfusion_head_outputs=self.transfusion_head_outputs,
+                streampetr_head_outputs=None,
             )
 
     def test_holds_streampetr_outputs_and_names_them_to_other_readers(self) -> None:
@@ -457,7 +454,9 @@ class TestDetection3DHeadOutputs(unittest.TestCase):
             outputs.transfusion_head()
         with self.assertRaisesRegex(ValueError, "CenterHead"):
             Detection3DHeadOutputs(
-                center_head_outputs=self.center_head_outputs, transfusion_head_outputs=None
+                center_head_outputs=self.center_head_outputs,
+                transfusion_head_outputs=None,
+                streampetr_head_outputs=None,
             ).streampetr_head()
 
     def test_rejects_streampetr_next_to_another_head_family(self) -> None:

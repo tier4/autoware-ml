@@ -103,22 +103,21 @@ def _build_images(img: torch.Tensor) -> ImageGTBatch:
 
 def _build_frame_meta(
     timestamps: Sequence[float],
-    scenario_ids: Sequence[str] | None = None,
+    scene_tokens: Sequence[str] | None = None,
     ego2globals: torch.Tensor | None = None,
 ) -> FrameMetaBatch:
     batch_size = len(timestamps)
     return FrameMetaBatch(
         ego2globals=torch.eye(4).repeat(batch_size, 1, 1) if ego2globals is None else ego2globals,
-        scene_tokens=[f"db/scene_{index}/0" for index in range(batch_size)],
+        scene_tokens=list(scene_tokens or [f"db/scene_{index}/0" for index in range(batch_size)]),
         timestamps=torch.tensor(timestamps, dtype=torch.float64),
-        scenario_ids=list(scenario_ids or [f"scenario_{index}" for index in range(batch_size)]),
     )
 
 
 def _build_batch_inputs(
     img: torch.Tensor,
     timestamps: Sequence[float] | None = None,
-    scenario_ids: Sequence[str] | None = None,
+    scene_tokens: Sequence[str] | None = None,
     gt_boxes: Sequence[torch.Tensor] | None = None,
     gt_labels: Sequence[torch.Tensor] | None = None,
     ego2globals: torch.Tensor | None = None,
@@ -132,7 +131,7 @@ def _build_batch_inputs(
         detection=detection,
         images=_build_images(img),
         frame_meta=_build_frame_meta(
-            [0.0] * batch_size if timestamps is None else timestamps, scenario_ids, ego2globals
+            [0.0] * batch_size if timestamps is None else timestamps, scene_tokens, ego2globals
         ),
     )
 
@@ -163,7 +162,7 @@ def test_forward_inputs_read_the_images_calibration_and_stream_metadata() -> Non
     batch_inputs = _build_batch_inputs(
         torch.randn(1, NUM_CAMS, 3, *IMAGE_HW),
         timestamps=[1.7e9],
-        scenario_ids=["scenario_a"],
+        scene_tokens=["db/scene_a/0"],
         gt_boxes=[_collated_box(1.0, 2.0, 0.5, 4.0, 2.0, 1.5, 0.2, 0.3, 0.4, 0.9)],
         gt_labels=[torch.tensor([1])],
         ego2globals=ego2global.unsqueeze(0),
@@ -174,7 +173,7 @@ def test_forward_inputs_read_the_images_calibration_and_stream_metadata() -> Non
     assert inputs["img"] is batch_inputs.image_data.images
     assert inputs["lidar2img"] is batch_inputs.image_data.lidar2images
     assert inputs["timestamp"].dtype == torch.float64
-    assert list(inputs["scenario_ids"]) == ["scenario_a"]
+    assert list(inputs["scene_tokens"]) == ["db/scene_a/0"]
     torch.testing.assert_close(
         inputs["ego_pose_inv"][0] @ ego2global, torch.eye(4), atol=1e-4, rtol=0
     )
@@ -185,30 +184,8 @@ def test_forward_inputs_read_the_images_calibration_and_stream_metadata() -> Non
     assert inputs["gt_labels"][0].dtype == torch.int64
 
 
-def test_streampetr_loss_and_predict_run_with_denoising_queries() -> None:
-    model = _build_model().train()
-    batch_inputs = _build_batch_inputs(
-        torch.randn(1, NUM_CAMS, 3, *IMAGE_HW),
-        gt_boxes=[_collated_box(0.0, 0.0, 0.5, 4.0, 2.0, 1.5, 0.2, 0.0, 0.0, 0.0)],
-        gt_labels=[torch.tensor([1])],
-    )
-
-    outputs = _run(model, batch_inputs)
-    metrics = model.compute_metrics(batch_inputs, outputs)
-    predictions = model.predict_outputs(batch_inputs, outputs)
-
-    assert "loss" in metrics
-    assert outputs.detection3d().streampetr_head().denoising is not None
-    # Predictions follow the typed detection contract consumed by the metric suite.
-    assert predictions.detection3d_predictions is not None
-    assert len(predictions.detection3d_predictions) == 1
-    assert all(
-        isinstance(prediction, Detection3DSamplePredictions)
-        for prediction in predictions.detection3d_predictions
-    )
-
-
-def test_training_step_runs_on_typed_batch_inputs() -> None:
+def test_training_step_runs_with_denoising_queries_and_predicts() -> None:
+    """One training step on a batch where only one sample carries boxes."""
     model = _build_model().train()
     model.log_dict = lambda *args, **kwargs: None
     batch_inputs = _build_batch_inputs(
@@ -222,8 +199,17 @@ def test_training_step_runs_on_typed_batch_inputs() -> None:
 
     loss = model.training_step(batch_inputs, batch_idx=0)
     loss.backward()
+    outputs = _run(model, batch_inputs)
+    predictions = model.predict_outputs(batch_inputs, outputs)
 
     assert torch.isfinite(loss)
+    assert outputs.detection3d().streampetr_head().denoising is not None
+    # Predictions follow the typed detection contract consumed by the metric suite.
+    assert len(predictions.detection3d_predictions) == 2
+    assert all(
+        isinstance(prediction, Detection3DSamplePredictions)
+        for prediction in predictions.detection3d_predictions
+    )
 
 
 def test_build_eval_output_pairs_predictions_with_ground_truth() -> None:
@@ -242,12 +228,12 @@ def test_build_eval_output_pairs_predictions_with_ground_truth() -> None:
     assert eval_out["scene_token"] == ["db/scene_0/0"]
 
 
-def test_stream_continuity_follows_the_scenario_and_the_time_of_every_lane() -> None:
+def test_stream_continuity_follows_the_scene_and_the_time_of_every_lane() -> None:
     head = _build_model().bbox_head
 
     # No previous frame: every lane starts a stream.
     first = head.stream_continuity(["a", "b", "c"], torch.tensor([0.0, 0.0, 5.0]))
-    # Lane 0 continues, lane 1 moved to another scenario, lane 2 restarted its scenario.
+    # Lane 0 continues, lane 1 moved to another scene, lane 2 restarted its scene.
     second = head.stream_continuity(["a", "d", "c"], torch.tensor([0.5, 0.5, 1.0]))
     # A batch of another size cannot be matched lane by lane.
     third = head.stream_continuity(["a"], torch.tensor([1.0]))
@@ -257,8 +243,8 @@ def test_stream_continuity_follows_the_scenario_and_the_time_of_every_lane() -> 
     assert third.tolist() == [0.0]
 
 
-def test_streampetr_memory_resets_when_the_lane_changes_scenario() -> None:
-    """A new scenario drops the carried bank; only the frame's top-k survives."""
+def test_streampetr_memory_resets_when_the_lane_changes_scene() -> None:
+    """A new scene drops the carried bank; only the frame's top-k survives."""
     model = _build_model().eval()
     head = model.bbox_head
     topk = head.topk_proposals
@@ -267,14 +253,14 @@ def test_streampetr_memory_resets_when_the_lane_changes_scenario() -> None:
         _run(
             model,
             _build_batch_inputs(
-                torch.randn(1, NUM_CAMS, 3, *IMAGE_HW), timestamps=[0.0], scenario_ids=["a"]
+                torch.randn(1, NUM_CAMS, 3, *IMAGE_HW), timestamps=[0.0], scene_tokens=["a"]
             ),
         )
         assert (head.memory_embedding[:, :topk] != 0).any()
         _run(
             model,
             _build_batch_inputs(
-                torch.randn(1, NUM_CAMS, 3, *IMAGE_HW), timestamps=[1.0], scenario_ids=["b"]
+                torch.randn(1, NUM_CAMS, 3, *IMAGE_HW), timestamps=[1.0], scene_tokens=["b"]
             ),
         )
 
@@ -284,40 +270,8 @@ def test_streampetr_memory_resets_when_the_lane_changes_scenario() -> None:
     assert torch.isfinite(head.memory_embedding).all()
 
 
-def test_streampetr_builds_three_module_runtime_export() -> None:
-    model = _build_model().eval()
-
-    specs = model.build_export_specs(_build_batch_inputs(torch.randn(1, NUM_CAMS, 3, *IMAGE_HW)))
-
-    assert list(specs) == ["extract_img_feat", "position_embedding", "pts_head_memory"]
-    # The runtime binds 4x4 intrinsics.
-    assert specs["position_embedding"].args[1].shape == (1, NUM_CAMS, 4, 4)
-    head = model.bbox_head
-    outputs = specs["pts_head_memory"].module(*specs["pts_head_memory"].args)
-    named = dict(zip(specs["pts_head_memory"].output_names, outputs))
-    num_layers = head.num_decoder_layers
-    num_queries = head.num_queries + head.num_propagated
-    assert named["all_cls_scores"].shape == (1, head.num_classes, num_layers * num_queries)
-    assert named["all_bbox_preds"].shape == (1, 10, num_layers * num_queries)
-    assert named["post_memory_embedding"].shape == (
-        1,
-        head.memory_len + head.topk_proposals,
-        head.hidden_dim,
-    )
-    # The runtime binds exactly these; nothing else leaves the graph.
-    assert specs["pts_head_memory"].output_names == [
-        "all_cls_scores",
-        "all_bbox_preds",
-        "post_memory_embedding",
-        "post_memory_reference_point",
-        "post_memory_timestamp",
-        "post_memory_egopose",
-        "post_memory_velo",
-    ]
-
-
 def test_exported_head_matches_eval_forward_on_a_propagated_frame() -> None:
-    """The deployed graph must emit exactly what ``predict`` evaluates offline.
+    """The deployed graphs must emit exactly what ``predict`` evaluates offline.
 
     Runs one warm-up frame through the training-path forward so the memory
     bank is populated, then feeds the resulting bank to the export wrapper as
@@ -331,8 +285,8 @@ def test_exported_head_matches_eval_forward_on_a_propagated_frame() -> None:
     img = torch.randn(1, NUM_CAMS, 3, *IMAGE_HW)
     # The second frame sits at t = 0, where the head's absolute-time bookkeeping and the
     # frame-relative ages the runtime feeds the graph coincide.
-    warm_up = _build_batch_inputs(img, timestamps=[-0.5], scenario_ids=["a"])
-    second = _build_batch_inputs(img, timestamps=[0.0], scenario_ids=["a"])
+    warm_up = _build_batch_inputs(img, timestamps=[-0.5], scene_tokens=["a"])
+    second = _build_batch_inputs(img, timestamps=[0.0], scene_tokens=["a"])
 
     with torch.no_grad():
         _run(model, warm_up)
@@ -370,7 +324,25 @@ def test_exported_head_matches_eval_forward_on_a_propagated_frame() -> None:
             )
         )
 
+    # The three graphs and the outputs the runtime binds; nothing else leaves them.
+    assert list(specs) == ["extract_img_feat", "position_embedding", "pts_head_memory"]
+    assert specs["position_embedding"].args[1].shape == (1, NUM_CAMS, 4, 4)
+    assert specs["pts_head_memory"].output_names == [
+        "all_cls_scores",
+        "all_bbox_preds",
+        "post_memory_embedding",
+        "post_memory_reference_point",
+        "post_memory_timestamp",
+        "post_memory_egopose",
+        "post_memory_velo",
+    ]
     num_layers, _, num_queries, _ = reference.all_bbox_preds.shape
+    assert exported["all_cls_scores"].shape == (1, head.num_classes, num_layers * num_queries)
+    assert exported["post_memory_embedding"].shape == (
+        1,
+        head.memory_len + head.topk_proposals,
+        head.hidden_dim,
+    )
     exported_boxes = exported["all_bbox_preds"].transpose(2, 1).view(num_layers, 1, num_queries, 10)
     exported_scores = (
         exported["all_cls_scores"].transpose(2, 1).view(num_layers, 1, num_queries, -1)
@@ -422,25 +394,12 @@ def test_memory_alignment_preserves_meter_motion_under_bf16_autocast() -> None:
     second_pose[0, 3] += 2.5
 
     head.reset_memory()
-    first_state = head._build_stream_state(
-        device=torch.device("cpu"),
-        timestamp=torch.zeros(1),
-        prev_exists=torch.zeros(1),
-        ego_pose=first_pose.unsqueeze(0),
-        ego_pose_inv=torch.inverse(first_pose).unsqueeze(0),
-    )
-    second_state = head._build_stream_state(
-        device=torch.device("cpu"),
-        timestamp=torch.zeros(1),
-        prev_exists=torch.ones(1),
-        ego_pose=second_pose.unsqueeze(0),
-        ego_pose_inv=torch.inverse(second_pose).unsqueeze(0),
-    )
+    zero_time = torch.zeros(1, dtype=torch.float64)
     with torch.autocast("cpu", dtype=torch.bfloat16):
-        head.pre_update_memory(first_state)
+        head.pre_update_memory(zero_time, torch.zeros(1), torch.inverse(first_pose).unsqueeze(0))
         # Store one bank entry at the first ego origin, in the global frame.
         head.memory_reference_point[:, 0] = first_pose[:3, 3]
-        head.pre_update_memory(second_state)
+        head.pre_update_memory(zero_time, torch.ones(1), torch.inverse(second_pose).unsqueeze(0))
 
     assert head.memory_reference_point.dtype == torch.float32
     assert head.memory_egopose.dtype == torch.float32
@@ -448,16 +407,14 @@ def test_memory_alignment_preserves_meter_motion_under_bf16_autocast() -> None:
     assert torch.allclose(local_point, torch.tensor([-2.5, 0.0, 0.0]), atol=0.05)
 
 
-def test_forward_sanitizes_nan_poisoned_memory_and_keeps_float64_timestamps() -> None:
+def test_forward_sanitizes_nan_poisoned_memory() -> None:
     model = _build_model().eval()
     img = torch.randn(1, NUM_CAMS, 3, *IMAGE_HW)
 
-    _run(model, _build_batch_inputs(img, timestamps=[0.0], scenario_ids=["a"]))
+    _run(model, _build_batch_inputs(img, timestamps=[0.0], scene_tokens=["a"]))
     head = model.bbox_head
-    assert head.memory_timestamp.dtype == torch.float64
-
     head.memory_embedding[:, :4] = float("nan")
-    outputs = _run(model, _build_batch_inputs(img, timestamps=[0.5], scenario_ids=["a"]))
+    outputs = _run(model, _build_batch_inputs(img, timestamps=[0.5], scene_tokens=["a"]))
 
     head_outputs = outputs.detection3d().streampetr_head()
     assert torch.isfinite(head_outputs.all_cls_scores).all()

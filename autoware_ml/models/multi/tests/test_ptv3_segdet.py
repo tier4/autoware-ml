@@ -102,7 +102,9 @@ def _make_outputs(batch_size: int) -> ModelOutputs:
     )
     return ModelOutputs(
         detection3d_head_outputs=Detection3DHeadOutputs(
-            center_head_outputs=None, transfusion_head_outputs=det_outputs
+            center_head_outputs=None,
+            transfusion_head_outputs=det_outputs,
+            streampetr_head_outputs=None,
         ),
         segmentation3d_head_outputs=Segmentation3DHeadOutputs(
             logits=torch.randn(4, 3, requires_grad=True)

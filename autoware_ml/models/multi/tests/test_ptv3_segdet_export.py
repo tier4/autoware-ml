@@ -177,7 +177,9 @@ def test_ptv3_segdet_eval_output_scatters_segmentation_to_original_points() -> N
     )
     outputs = ModelOutputs(
         detection3d_head_outputs=Detection3DHeadOutputs(
-            center_head_outputs=None, transfusion_head_outputs=det_outputs
+            center_head_outputs=None,
+            transfusion_head_outputs=det_outputs,
+            streampetr_head_outputs=None,
         ),
         segmentation3d_head_outputs=Segmentation3DHeadOutputs(
             logits=torch.tensor([[3.0, 0.0], [0.0, 3.0]], dtype=torch.float32)
