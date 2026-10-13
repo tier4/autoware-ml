@@ -334,10 +334,17 @@ class GroupStreamingSampler(Sampler[int]):
     with one lane each, since the scenes are dealt round-robin and differ in
     length.
 
+    Both ways every rank serves the same number of rounds. DDP synchronizes
+    the gradients of every training step, and a model may synchronize inside
+    its validation step as well (an ``all_reduce`` in the loss), so a rank
+    with more steps would wait forever for the others.
+
     The sampler shards by rank itself, so the trainer must run with
-    ``use_distributed_sampler: false``:
-    Lightning would otherwise wrap it in a ``DistributedSamplerWrapper``,
-    re-striding the indices and destroying the lane/scene contiguity.
+    ``use_distributed_sampler: false``. Lightning would otherwise wrap it in a
+    ``DistributedSamplerWrapper`` that keeps every ``world_size``-th index of
+    the rank's stream: every rank would train on a fraction of its scenes and
+    every lane would skip frames, without an error. The streaming
+    ``DataModule`` refuses to build its dataloaders in that case.
     """
 
     def __init__(

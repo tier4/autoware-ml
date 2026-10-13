@@ -263,9 +263,9 @@ class DataModule(L.LightningDataModule):
                     "Set shuffle to false."
                 )
             if self._trainer_wraps_samplers():
-                # Lightning would wrap the sampler in a DistributedSamplerWrapper that
-                # re-strides the lane-interleaved indices: every lane would then see frames
-                # of other lanes and the memory would reset on nearly every step.
+                # Lightning would wrap the sampler in a DistributedSamplerWrapper that keeps
+                # every world_size-th index of this rank's stream: every rank would train on a
+                # fraction of its scenes and every lane would skip frames, without an error.
                 raise ValueError(
                     "Scene streaming shards the scenes over the ranks itself; run the trainer "
                     "with use_distributed_sampler: false."

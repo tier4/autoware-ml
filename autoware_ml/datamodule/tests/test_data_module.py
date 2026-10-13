@@ -702,8 +702,8 @@ class TestSceneStreaming(MultiSourceTestCase):
         """
         Input: a streaming datamodule attached to a two-rank trainer that keeps Lightning's
         default ``use_distributed_sampler``.
-        Expected: Lightning would wrap the scene sampler and re-stride its lanes, so the
-        loader refuses to be built; with ``use_distributed_sampler`` off it is built.
+        Expected: Lightning would wrap the scene sampler and thin out every rank's stream, so
+        the loader refuses to be built; with ``use_distributed_sampler`` off it is built.
         Check: building the training loader raises a ValueError naming the setting, then
         succeeds once the setting is off.
         """
