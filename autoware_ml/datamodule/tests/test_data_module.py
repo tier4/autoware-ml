@@ -21,6 +21,7 @@ from functools import partial
 from pathlib import Path
 import tempfile
 import unittest
+from types import SimpleNamespace
 
 import polars as pl
 
@@ -696,6 +697,30 @@ class TestSceneStreaming(MultiSourceTestCase):
 
         with self.assertRaisesRegex(ValueError, "shuffle"):
             data_module.train_dataloader()
+
+    def test_rejects_a_distributed_trainer_that_wraps_samplers(self) -> None:
+        """
+        Input: a streaming datamodule attached to a two-rank trainer that keeps Lightning's
+        default ``use_distributed_sampler``.
+        Expected: Lightning would wrap the scene sampler and re-stride its lanes, so the
+        loader refuses to be built; with ``use_distributed_sampler`` off it is built.
+        Check: building the training loader raises a ValueError naming the setting, then
+        succeeds once the setting is off.
+        """
+        data_module = self.build_data_module(
+            [{"database": self.streamed_database}],
+            train_dataloader=DataLoaderConfig(batch_size=1),
+            streaming=True,
+        )
+        data_module.setup("fit")
+        connector = SimpleNamespace(use_distributed_sampler=True)
+        data_module.trainer = SimpleNamespace(world_size=2, _accelerator_connector=connector)
+
+        with self.assertRaisesRegex(ValueError, "use_distributed_sampler"):
+            data_module.train_dataloader()
+
+        connector.use_distributed_sampler = False
+        self.assertIsInstance(data_module.train_dataloader().sampler, GroupStreamingSampler)
 
     def test_rejects_frame_sampling(self) -> None:
         """

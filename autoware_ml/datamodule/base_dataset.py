@@ -100,9 +100,7 @@ class BaseDataset(Dataset):
         groups: dict[str, list[int]] = {}
         for index, scenario_id in enumerate(scenario_ids):
             groups.setdefault(scenario_id, []).append(index)
-        return [
-            sorted(group, key=lambda index: (timestamps[index], index)) for group in groups.values()
-        ]
+        return [sorted(group, key=timestamps.__getitem__) for group in groups.values()]
 
     def __getitem__(self, index: int) -> ModelGTSample:
         """Load and transform one dataset sample.

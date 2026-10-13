@@ -50,9 +50,9 @@ class IterWarmupEpochCosineLR(LRScheduler):
         optimizer: Optimizer,
         total_steps: int,
         max_epochs: int,
-        warmup_iters: int = 500,
-        warmup_start_factor: float = 1.0 / 3.0,
-        eta_min_factor: float = 1e-4,
+        warmup_iters: int,
+        warmup_start_factor: float,
+        eta_min_factor: float,
         last_epoch: int = -1,
     ) -> None:
         if total_steps <= 0:
@@ -75,8 +75,9 @@ class IterWarmupEpochCosineLR(LRScheduler):
         else:
             warmup_factor = 1.0
 
-        # Trailing steps from total_steps % max_epochs stay at the last
-        # training epoch's factor rather than dropping to the eta_min floor.
+        # The framework's total_steps is a multiple of max_epochs; a trainer.max_steps
+        # cap leaves total_steps % max_epochs trailing steps, which stay at the last
+        # epoch's factor rather than dropping to the eta_min floor.
         epoch_index = min(step // self.steps_per_epoch, self.max_epochs - 1)
         cosine_factor = self.eta_min_factor + (1.0 - self.eta_min_factor) * 0.5 * (
             1.0 + math.cos(math.pi * epoch_index / self.max_epochs)

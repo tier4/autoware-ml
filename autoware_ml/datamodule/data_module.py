@@ -80,8 +80,9 @@ class DataModule(L.LightningDataModule):
           streaming: Whether every dataloader feeds each batch lane whole scenes, frame by
             frame, for temporal models that carry a memory across batches. The training
             split reshuffles the order of the scenes every epoch. The sampler shards the
-            scenes over the ranks itself, so the trainer runs with
-            ``use_distributed_sampler: false``.
+            scenes over the ranks itself, so a distributed trainer must run with
+            ``use_distributed_sampler: false``; the dataloaders refuse to be built
+            otherwise.
         """
         super().__init__()
 
@@ -228,6 +229,13 @@ class DataModule(L.LightningDataModule):
             database.process_scenario_records()
         logger.info("Finished preparing the record tables.")
 
+    def _trainer_wraps_samplers(self) -> bool:
+        """Whether an attached distributed trainer would wrap the dataloader samplers."""
+        trainer = self.trainer
+        if trainer is None or trainer.world_size == 1:
+            return False
+        return trainer._accelerator_connector.use_distributed_sampler
+
     def build_dataloader(self, split: SplitType, config: DataLoaderConfig | None) -> DataLoader:
         """
         Build the dataloader of one split.
@@ -253,6 +261,14 @@ class DataModule(L.LightningDataModule):
                 raise ValueError(
                     "Scene streaming owns the sample order, so the dataloader cannot shuffle. "
                     "Set shuffle to false."
+                )
+            if self._trainer_wraps_samplers():
+                # Lightning would wrap the sampler in a DistributedSamplerWrapper that
+                # re-strides the lane-interleaved indices: every lane would then see frames
+                # of other lanes and the memory would reset on nearly every step.
+                raise ValueError(
+                    "Scene streaming shards the scenes over the ranks itself; run the trainer "
+                    "with use_distributed_sampler: false."
                 )
             kwargs["sampler"] = GroupStreamingSampler(
                 dataset, batch_size=config.batch_size, shuffle=split == SplitType.TRAIN

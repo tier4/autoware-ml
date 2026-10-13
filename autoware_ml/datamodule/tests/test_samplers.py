@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from types import MappingProxyType
 
 import numpy as np
@@ -349,6 +350,26 @@ def test_ranks_agree_on_length_and_shard_disjoint_scenes() -> None:
         rank_indices.append(list(sampler))
     assert len(rank_indices[0]) == len(rank_indices[1])
     assert not set(rank_indices[0]) & set(rank_indices[1])
+
+
+def test_shuffled_ranks_serve_the_same_fixed_length_and_disjoint_scenes() -> None:
+    """Two ranks, uneven scenes, shuffle on: both serve rounds_per_epoch rounds every epoch."""
+    dataset = _FakeScenesDataset([7, 3, 5, 2, 9, 4, 6])
+    samplers = []
+    for rank in range(2):
+        sampler = GroupStreamingSampler(dataset, batch_size=2, shuffle=True, seed=0)
+        sampler.world_size = 2
+        sampler.rank = rank
+        samplers.append(sampler)
+    expected = math.ceil(dataset.total / (2 * 2)) * 2
+
+    for epoch in range(3):
+        rank_indices = []
+        for sampler in samplers:
+            sampler.set_epoch(epoch)
+            rank_indices.append(list(sampler))
+        assert [len(indices) for indices in rank_indices] == [expected, expected]
+        assert not set(rank_indices[0]) & set(rank_indices[1])
 
 
 def test_set_epoch_reshuffles_deterministically() -> None:

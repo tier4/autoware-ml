@@ -370,8 +370,8 @@ class TestIterWarmupEpochCosineLR:
         assert lrs[95] == pytest.approx(self._cosine_factor(9, 10))
 
     def test_trailing_steps_stay_at_the_last_epoch_factor(self) -> None:
-        # total_steps % max_epochs = 5 trailing steps: they must keep the last
-        # training epoch's LR instead of dropping to the eta_min floor.
+        # A trainer.max_steps cap leaves total_steps % max_epochs = 5 trailing steps:
+        # they must keep the last epoch's LR instead of dropping to the eta_min floor.
         optimizer, scheduler = self._build(total_steps=105)
         for _ in range(105):
             optimizer.step()
@@ -381,9 +381,9 @@ class TestIterWarmupEpochCosineLR:
     def test_resume_reproduces_the_original_trajectory(self) -> None:
         """A resumed scheduler must replay the original schedule.
 
-        The framework re-derives ``total_steps`` on resume (and a
-        variable-length sampler can make the estimate drift), so the restored
-        state must fully override the constructor arguments.
+        The framework re-derives ``total_steps`` on resume (a ``trainer.max_steps``
+        cap or a changed batch size can make it differ), so the restored state must
+        fully override the constructor arguments.
         """
         reference_optimizer, reference = self._build(total_steps=100)
         reference_lrs = []

@@ -327,9 +327,12 @@ class GroupStreamingSampler(Sampler[int]):
     dropping frames.
 
     Without ``shuffle`` (evaluation) the scene order is deterministic, so the
-    length is constant anyway; lanes are trimmed to the shortest one and no
-    frame is ever scored twice. Evaluation should run one lane per rank so
-    that trimming drops nothing.
+    length is constant anyway; no frame is ever scored twice, instead the
+    lanes of a rank are trimmed to its shortest lane and the ranks to the
+    shortest rank. Only one rank with one lane scores every frame: wider
+    batches trim within the rank, and several ranks trim the longer ranks even
+    with one lane each, since the scenes are dealt round-robin and differ in
+    length.
 
     The sampler shards by rank itself, so the trainer must run with
     ``use_distributed_sampler: false``:
@@ -371,9 +374,14 @@ class GroupStreamingSampler(Sampler[int]):
             self.rank = 0
             self.world_size = 1
         self.total_frames = sum(len(group) for group in self.scene_groups)
-        self.rounds_per_epoch = math.ceil(self.total_frames / (self.world_size * self.batch_size))
+
+    @property
+    def rounds_per_epoch(self) -> int:
+        """Rounds every rank serves per shuffled epoch, the ``DistributedSampler`` convention."""
+        return math.ceil(self.total_frames / (self.world_size * self.batch_size))
 
     def _scene_order(self, epoch: int) -> list[int]:
+        """Order the scenes for one epoch: as listed, or shuffled by the epoch's seed."""
         if not self.shuffle:
             return list(range(len(self.scene_groups)))
         generator = torch.Generator()
@@ -406,6 +414,8 @@ class GroupStreamingSampler(Sampler[int]):
             lanes = self._rank_lanes(scene_order, rank)
             if self.shuffle:
                 lanes = [self._fit_lane(lane, self.rounds_per_epoch) for lane in lanes]
+            # Fitted lanes all have rounds_per_epoch frames; the trimming below only
+            # acts on the evaluation path.
             rounds = min(len(lane) for lane in lanes)
             indices = [lane[round_index] for round_index in range(rounds) for lane in lanes]
             per_rank_indices.append(indices)
@@ -436,8 +446,8 @@ class GroupStreamingSampler(Sampler[int]):
         elif served < self.total_frames:
             logger.warning(
                 "GroupStreamingSampler serves %d/%d frames; %d tail frames are trimmed to keep "
-                "%d rank(s) x %d lane(s) aligned. Evaluate with one lane per rank to score "
-                "every frame.",
+                "%d rank(s) x %d lane(s) aligned. Only one rank with one lane scores every "
+                "frame.",
                 served,
                 self.total_frames,
                 self.total_frames - served,
