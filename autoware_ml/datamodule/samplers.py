@@ -310,15 +310,15 @@ class GroupStreamingSampler(Sampler[int]):
     Each of the ``batch_size`` dataloader lanes walks whole scenes frame by
     frame, so consecutive iterations feed consecutive frames of the same scene
     into the same batch position. Stateful temporal models can therefore carry
-    per-lane memory across iterations, with scene changes signalled by the
-    dataset's ``prev_exists`` metadata. Scenes are partitioned round-robin over
-    distributed ranks and each rank assigns every scene to its currently
-    shortest lane, which keeps lane lengths close to each other.
+    per-lane memory across iterations and reset it where a lane enters a new
+    scene, which the frame metadata of the batch tells them. Scenes are
+    partitioned round-robin over distributed ranks and each rank assigns every
+    scene to its currently shortest lane, which keeps lane lengths close to
+    each other.
 
     Epoch length is fixed when ``shuffle`` is true (training). Every lane is
-    padded by cycling back to its own first scene (whose first frame carries
-    ``prev_exists == 0``, so the model resets its memory as at any scene start)
-    or truncated so that every rank serves exactly
+    padded by cycling back to its own first scene (the model resets its memory
+    there as at any scene start) or truncated so that every rank serves exactly
     ``ceil(total_frames / (world_size * batch_size))`` rounds. A constant
     ``len()`` is what Lightning assumes: it derives ``val_check_batch`` and
     ``estimated_stepping_batches`` once from the first epoch, and a shorter
@@ -332,7 +332,7 @@ class GroupStreamingSampler(Sampler[int]):
     that trimming drops nothing.
 
     The sampler shards by rank itself, so the trainer must run with
-    ``use_distributed_sampler: false`` (the StreamPETR base config does):
+    ``use_distributed_sampler: false``:
     Lightning would otherwise wrap it in a ``DistributedSamplerWrapper``,
     re-striding the indices and destroying the lane/scene contiguity.
     """
@@ -347,8 +347,8 @@ class GroupStreamingSampler(Sampler[int]):
         """Initialize the streaming sampler.
 
         Args:
-            dataset: Dataset exposing ``scene_index_groups()`` with
-                scene-contiguous dataset indices.
+            dataset: Dataset exposing ``scene_index_groups()``, the indices of
+                every scene in frame order.
             batch_size: Number of dataloader lanes fed in parallel. Must match
                 the dataloader batch size.
             shuffle: Whether to shuffle the scene order every epoch. Also

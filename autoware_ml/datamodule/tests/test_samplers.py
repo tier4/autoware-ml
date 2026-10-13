@@ -409,7 +409,7 @@ class TestFixedLengthTrainingEpochs:
             for lane in _lanes(sampler):
                 for previous, current in zip(lane, lane[1:]):
                     # Either the next frame of the same scene, or the first frame
-                    # of a scene (prev_exists == 0 there resets the temporal memory).
+                    # of a scene, where the model resets its temporal memory.
                     assert current == previous + 1 or current in dataset.scene_starts
 
     def test_raises_when_scenes_cannot_fill_every_lane(self) -> None:
