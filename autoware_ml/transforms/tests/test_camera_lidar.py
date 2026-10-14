@@ -25,11 +25,13 @@ import torch
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.cameras.base_images import BaseImages
 from autoware_ml.geometry.points.lidar_points import LiDARPoints
-from autoware_ml.transforms.camera.geometry import CropAndScale
+from autoware_ml.transforms.camera.resize import CropAndScale
 from autoware_ml.transforms.camera_lidar.camera_lidar import (
     Affine,
+    AxisActivation,
     CalibrationMisalignment,
     LidarCameraFusion,
+    MagnitudeRange,
     SaveFusionPreview,
 )
 from autoware_ml.transforms.point_cloud.geometry import CropBoxInner
@@ -38,11 +40,8 @@ from autoware_ml.types.geometry import PointFeatureName
 from autoware_ml.utils.calibration import CalibrationStatus
 
 MISALIGNMENT_RANGES = {
-    "activate_yaw": True,
-    "min_yaw_neg": 4.0,
-    "max_yaw_neg": 8.0,
-    "min_yaw_pos": 4.0,
-    "max_yaw_pos": 8.0,
+    "activate": AxisActivation(yaw=True),
+    "yaw": MagnitudeRange(min_neg=4.0, max_neg=8.0, min_pos=4.0, max_pos=8.0),
 }
 
 
@@ -50,7 +49,7 @@ def build_points_with_intensity() -> LiDARPoints:
     """Build a small cloud in front of the camera carrying an intensity."""
     return LiDARPoints(
         points=torch.tensor(
-            [[0.0, 0.0, 2.0, 100.0], [0.5, 0.2, 4.0, 200.0], [-0.5, -0.2, 8.0, 50.0]],
+            [[0.0, 0.0, 2.0, 0.4], [0.5, 0.2, 4.0, 0.8], [-0.5, -0.2, 8.0, 0.2]],
             dtype=torch.float32,
         ),
         point_feature_names=[
@@ -172,22 +171,21 @@ class TestAffine(unittest.TestCase):
 class TestCropAndScale(unittest.TestCase):
     """Cropping and rescaling of the images."""
 
-    def test_moves_the_calibration_only_through_the_intrinsics(self) -> None:
-        # The intrinsics follow the crop, so no pixel affine is left for the projection to
-        # apply on top, which would move the projected points a second time
+    def test_composes_the_crop_into_the_intrinsics_and_the_augmentation_matrices(self) -> None:
+        # The pixel affine recorded in the augmentation matrices is the one the intrinsics
+        # took, so the projection through the augmented intrinsics lands on the cropped pixels
         images = build_images(height=32, width=32)
         transform = CropAndScale(probability=1.0, crop_ratio=0.6)
 
         sample = transform(build_sample(images))
 
-        torch.testing.assert_close(
-            sample.camera_image_data.image_augmentation_matrices, images.image_augmentation_matrices
+        cropped = sample.camera_image_data
+        pixel_affines = cropped.augmented_camera_intrinsics @ torch.linalg.inv(
+            images.augmented_camera_intrinsics
         )
+        torch.testing.assert_close(cropped.image_augmentation_pixel_affines(), pixel_affines)
         self.assertFalse(
-            torch.equal(
-                sample.camera_image_data.augmented_camera_intrinsics,
-                images.augmented_camera_intrinsics,
-            )
+            torch.equal(cropped.augmented_camera_intrinsics, images.augmented_camera_intrinsics)
         )
 
     def test_keeps_the_image_size_and_scales_the_intrinsics(self) -> None:
@@ -219,7 +217,7 @@ class TestCropBoxInner(unittest.TestCase):
 class TestSaveFusionPreview(unittest.TestCase):
     """Preview writing of the projected points."""
 
-    def test_writes_one_preview_per_camera(self) -> None:
+    def test_writes_a_depth_and_an_intensity_preview_per_camera(self) -> None:
         with tempfile.TemporaryDirectory() as out_dir:
             fused = LidarCameraFusion(max_depth=128.0, dilation_size=0)(
                 build_fusion_sample(build_images(height=32, width=32))
@@ -227,7 +225,8 @@ class TestSaveFusionPreview(unittest.TestCase):
 
             SaveFusionPreview(out_dir=out_dir, probability=1.0)(fused)
 
-            self.assertEqual(len(list(Path(out_dir).glob("*.png"))), 2)
+            self.assertEqual(len(list(Path(out_dir).glob("*_depth.png"))), 2)
+            self.assertEqual(len(list(Path(out_dir).glob("*_intensity.png"))), 2)
 
     def test_rejects_a_sample_without_the_projection(self) -> None:
         with tempfile.TemporaryDirectory() as out_dir:

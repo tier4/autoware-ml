@@ -12,67 +12,174 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Camera-LiDAR fusion transforms to support ModelGTSample.
+"""Camera-LiDAR fusion transforms.
 
-This module contains calibration-status augmentations and the projection of the points onto
-the images the calibration classifier reads.
+This module contains the calibration-misalignment augmentation, the projection of the lidar
+points onto the images and preview utilities for camera-LiDAR fusion inputs.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+import math
 from pathlib import Path
+from typing import Literal
 
 import cv2
+from jaxtyping import Float32, Int64
+import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
+from pydantic import BaseModel, ConfigDict, NonNegativeFloat, model_validator
 import torch
-import transforms3d
-from scipy.stats import truncnorm
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
-from autoware_ml.geometry.cameras.base_images import BaseImages, compose_lidar2images
-from autoware_ml.geometry.points.base_points import BasePoints
+from autoware_ml.geometry.cameras.base_images import BaseImages
 from autoware_ml.transforms.base import BaseTransform
-from autoware_ml.utils.calibration import CalibrationData, CalibrationStatus
+from autoware_ml.transforms.camera.resize import ImageSpaceTransform
+from autoware_ml.types.geometry import PointFeatureName
+from autoware_ml.utils.calibration import CalibrationStatus
 
 
-def camera_calibration_data(camera_image_data: BaseImages, index: int) -> CalibrationData:
-    """Bundle the calibration of one camera the way the projection math reads it.
+TranslationAxis = Literal["x", "y", "z"]
+_TRANSLATION_AXES: tuple[TranslationAxis, ...] = ("x", "y", "z")
+
+
+def _validate_ordered_range(name: str, min_value: float, max_value: float) -> None:
+    """Validate that a configured range is well ordered.
 
     Args:
-        camera_image_data: Images of the sample.
-        index: Index of the camera.
+        name: Range name without the ``min_``/``max_`` prefix, used in the error message.
+        min_value: Lower bound.
+        max_value: Upper bound.
 
-    Returns:
-        CalibrationData: Calibration of that camera.
+    Raises:
+        ValueError: If the lower bound exceeds the upper bound.
     """
-    return CalibrationData(
-        camera_matrix=camera_image_data.camera_intrinsics[index].numpy(),
-        distortion_coefficients=camera_image_data.distortion_coefficients[index].numpy(),
-        lidar_to_camera_transformation=camera_image_data.lidar2cams[index].numpy(),
-        distortion_model=camera_image_data.distortion_models[index],
-        noise=(
-            None if camera_image_data.noises is None else camera_image_data.noises[index].numpy()
-        ),
-        new_camera_matrix=camera_image_data.augmented_camera_intrinsics[index].numpy(),
-    )
+    if min_value > max_value:
+        raise ValueError(f"min_{name} ({min_value}) must be <= max_{name} ({max_value})")
+
+
+class AxisActivation(BaseModel):
+    """Which rotation and translation components the misalignment perturbs."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    roll: bool = False
+    pitch: bool = False
+    yaw: bool = False
+    x: bool = False
+    y: bool = False
+    z: bool = False
+
+
+class MagnitudeRange(BaseModel):
+    """Negative and positive magnitude ranges of a single misalignment component.
+
+    All values are non-negative magnitudes. The ``_neg`` range is negated when applied,
+    which keeps ``min < max`` intuitive in the config. Rotations are in degrees and
+    translations in meters.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    min_neg: NonNegativeFloat = 0.0
+    max_neg: NonNegativeFloat = 0.0
+    min_pos: NonNegativeFloat = 0.0
+    max_pos: NonNegativeFloat = 0.0
+
+    @model_validator(mode="after")
+    def _validate_ranges(self) -> MagnitudeRange:
+        """Ensure both the negative and the positive range are well ordered.
+
+        Returns:
+            The validated model.
+
+        Raises:
+            ValueError: If a lower bound exceeds its upper bound.
+        """
+        _validate_ordered_range("neg", self.min_neg, self.max_neg)
+        _validate_ordered_range("pos", self.min_pos, self.max_pos)
+        return self
+
+
+class TranslationRange(BaseModel):
+    """Negative and positive magnitude ranges of the x, y and z translations in meters.
+
+    All values are non-negative magnitudes. The ``_neg`` values are negated when applied.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    min_x_neg: NonNegativeFloat = 0.0
+    max_x_neg: NonNegativeFloat = 0.0
+    min_x_pos: NonNegativeFloat = 0.0
+    max_x_pos: NonNegativeFloat = 0.0
+    min_y_neg: NonNegativeFloat = 0.0
+    max_y_neg: NonNegativeFloat = 0.0
+    min_y_pos: NonNegativeFloat = 0.0
+    max_y_pos: NonNegativeFloat = 0.0
+    min_z_neg: NonNegativeFloat = 0.0
+    max_z_neg: NonNegativeFloat = 0.0
+    min_z_pos: NonNegativeFloat = 0.0
+    max_z_pos: NonNegativeFloat = 0.0
+
+    @model_validator(mode="after")
+    def _validate_ranges(self) -> TranslationRange:
+        """Ensure every per-axis negative and positive range is well ordered.
+
+        Returns:
+            The validated model.
+
+        Raises:
+            ValueError: If a lower bound exceeds its upper bound.
+        """
+        for axis in _TRANSLATION_AXES:
+            for sign in ("neg", "pos"):
+                name = f"{axis}_{sign}"
+                _validate_ordered_range(
+                    name, getattr(self, f"min_{name}"), getattr(self, f"max_{name}")
+                )
+        return self
+
+    def axis(self, axis: TranslationAxis) -> MagnitudeRange:
+        """Return the ranges of a single translation axis.
+
+        Args:
+            axis: One of ``x``, ``y`` or ``z``.
+
+        Returns:
+            The four bounds of ``axis`` as a ``MagnitudeRange``.
+        """
+        return MagnitudeRange(
+            min_neg=getattr(self, f"min_{axis}_neg"),
+            max_neg=getattr(self, f"max_{axis}_neg"),
+            min_pos=getattr(self, f"min_{axis}_pos"),
+            max_pos=getattr(self, f"max_{axis}_pos"),
+        )
 
 
 class CalibrationMisalignment(BaseTransform):
     """Calibration misalignment augmentation for camera-LiDAR calibration.
 
-    Each rotation (roll, pitch, yaw) and translation (x, y, z) component has
-    separate negative and positive ranges. During augmentation, one of the two
-    ranges is randomly selected for each component. Each component can be
-    individually activated or deactivated.
+    Each rotation (roll, pitch, yaw) and translation (x, y, z) component has separate
+    negative and positive ranges. During augmentation, one of the two ranges is randomly
+    selected for each component. Each component can be individually activated or
+    deactivated, and every camera of the sample draws its own perturbation.
 
-    All parameters are specified as positive magnitudes. The `_neg` suffix
-    indicates the value will be negated when applied. This keeps min < max
-    intuitive in the config.
+    All parameters are specified as positive magnitudes. The ``_neg`` suffix indicates the
+    value will be negated when applied. This keeps min < max intuitive in the config.
+    Parameters are grouped into the frozen pydantic models :class:`AxisActivation`,
+    :class:`MagnitudeRange` and :class:`TranslationRange`, which carry the validation. From
+    hydra, build them with nested ``_target_`` entries.
 
-    The perturbation is written onto the lidar to camera matrices of the images, together
-    with the noise it was built from and the calibration status the classifier is trained on.
+    Required keys:
+        - camera_image_data: BaseImages with ``lidar2cams`` and ``augmented_camera_intrinsics``.
+
+    Generated keys:
+        - camera_image_data.calibration_statuses: per-camera ``CalibrationStatus`` value.
+        - camera_image_data.noises: per-camera 4x4 noise transform (when applied).
+        - camera_image_data.lidar2cams / lidar2images: perturbed by the noise (when applied).
     """
 
     _required_keys = ["camera_image_data"]
@@ -81,243 +188,115 @@ class CalibrationMisalignment(BaseTransform):
         self,
         *,
         probability: float,
-        activate_roll: bool = False,
-        activate_pitch: bool = False,
-        activate_yaw: bool = False,
-        activate_x: bool = False,
-        activate_y: bool = False,
-        activate_z: bool = False,
-        min_roll_neg: float = 0.0,
-        max_roll_neg: float = 0.0,
-        min_roll_pos: float = 0.0,
-        max_roll_pos: float = 0.0,
-        min_pitch_neg: float = 0.0,
-        max_pitch_neg: float = 0.0,
-        min_pitch_pos: float = 0.0,
-        max_pitch_pos: float = 0.0,
-        min_yaw_neg: float = 0.0,
-        max_yaw_neg: float = 0.0,
-        min_yaw_pos: float = 0.0,
-        max_yaw_pos: float = 0.0,
-        min_x_neg: float = 0.0,
-        max_x_neg: float = 0.0,
-        min_x_pos: float = 0.0,
-        max_x_pos: float = 0.0,
-        min_y_neg: float = 0.0,
-        max_y_neg: float = 0.0,
-        min_y_pos: float = 0.0,
-        max_y_pos: float = 0.0,
-        min_z_neg: float = 0.0,
-        max_z_neg: float = 0.0,
-        min_z_pos: float = 0.0,
-        max_z_pos: float = 0.0,
-    ):
+        activate: AxisActivation = AxisActivation(),
+        roll: MagnitudeRange = MagnitudeRange(),
+        pitch: MagnitudeRange = MagnitudeRange(),
+        yaw: MagnitudeRange = MagnitudeRange(),
+        translation: TranslationRange = TranslationRange(),
+    ) -> None:
         """Initialize the CalibrationMisalignment transform.
+
+        The group models are frozen, so sharing the default instances between transforms is
+        safe. Validation of the magnitudes happens when the groups are constructed.
 
         Args:
             probability: Probability of applying augmentation.
-            activate_roll: Whether to apply roll miscalibration.
-            activate_pitch: Whether to apply pitch miscalibration.
-            activate_yaw: Whether to apply yaw miscalibration.
-            activate_x: Whether to apply x translation miscalibration.
-            activate_y: Whether to apply y translation miscalibration.
-            activate_z: Whether to apply z translation miscalibration.
-            min_roll_neg: Min magnitude for negative roll in degrees (applied as negative).
-            max_roll_neg: Max magnitude for negative roll in degrees (applied as negative).
-            min_roll_pos: Min magnitude for positive roll in degrees.
-            max_roll_pos: Max magnitude for positive roll in degrees.
-            min_pitch_neg: Min magnitude for negative pitch in degrees (applied as negative).
-            max_pitch_neg: Max magnitude for negative pitch in degrees (applied as negative).
-            min_pitch_pos: Min magnitude for positive pitch in degrees.
-            max_pitch_pos: Max magnitude for positive pitch in degrees.
-            min_yaw_neg: Min magnitude for negative yaw in degrees (applied as negative).
-            max_yaw_neg: Max magnitude for negative yaw in degrees (applied as negative).
-            min_yaw_pos: Min magnitude for positive yaw in degrees.
-            max_yaw_pos: Max magnitude for positive yaw in degrees.
-            min_x_neg: Min magnitude for negative x translation in meters (applied as negative).
-            max_x_neg: Max magnitude for negative x translation in meters (applied as negative).
-            min_x_pos: Min magnitude for positive x translation in meters.
-            max_x_pos: Max magnitude for positive x translation in meters.
-            min_y_neg: Min magnitude for negative y translation in meters (applied as negative).
-            max_y_neg: Max magnitude for negative y translation in meters (applied as negative).
-            min_y_pos: Min magnitude for positive y translation in meters.
-            max_y_pos: Max magnitude for positive y translation in meters.
-            min_z_neg: Min magnitude for negative z translation in meters (applied as negative).
-            max_z_neg: Max magnitude for negative z translation in meters (applied as negative).
-            min_z_pos: Min magnitude for positive z translation in meters.
-            max_z_pos: Max magnitude for positive z translation in meters.
+            activate: Which components to perturb. Defaults to none.
+            roll: Roll ranges in degrees. Defaults to zero.
+            pitch: Pitch ranges in degrees. Defaults to zero.
+            yaw: Yaw ranges in degrees. Defaults to zero.
+            translation: x, y and z ranges in meters. Defaults to zero.
         """
         super().__init__(probability=probability)
 
-        self.activate_roll = activate_roll
-        self.activate_pitch = activate_pitch
-        self.activate_yaw = activate_yaw
-        self.activate_x = activate_x
-        self.activate_y = activate_y
-        self.activate_z = activate_z
-
-        # Validate all parameters are >= 0 (magnitudes)
-        for name, value in [
-            ("min_roll_neg", min_roll_neg),
-            ("max_roll_neg", max_roll_neg),
-            ("min_roll_pos", min_roll_pos),
-            ("max_roll_pos", max_roll_pos),
-            ("min_pitch_neg", min_pitch_neg),
-            ("max_pitch_neg", max_pitch_neg),
-            ("min_pitch_pos", min_pitch_pos),
-            ("max_pitch_pos", max_pitch_pos),
-            ("min_yaw_neg", min_yaw_neg),
-            ("max_yaw_neg", max_yaw_neg),
-            ("min_yaw_pos", min_yaw_pos),
-            ("max_yaw_pos", max_yaw_pos),
-            ("min_x_neg", min_x_neg),
-            ("max_x_neg", max_x_neg),
-            ("min_x_pos", min_x_pos),
-            ("max_x_pos", max_x_pos),
-            ("min_y_neg", min_y_neg),
-            ("max_y_neg", max_y_neg),
-            ("min_y_pos", min_y_pos),
-            ("max_y_pos", max_y_pos),
-            ("min_z_neg", min_z_neg),
-            ("max_z_neg", max_z_neg),
-            ("min_z_pos", min_z_pos),
-            ("max_z_pos", max_z_pos),
-        ]:
-            self._validate_non_negative(name, value)
-
-        # Validate min <= max for each range
-        self._validate_range("roll_neg", min_roll_neg, max_roll_neg)
-        self._validate_range("roll_pos", min_roll_pos, max_roll_pos)
-        self._validate_range("pitch_neg", min_pitch_neg, max_pitch_neg)
-        self._validate_range("pitch_pos", min_pitch_pos, max_pitch_pos)
-        self._validate_range("yaw_neg", min_yaw_neg, max_yaw_neg)
-        self._validate_range("yaw_pos", min_yaw_pos, max_yaw_pos)
-        self._validate_range("x_neg", min_x_neg, max_x_neg)
-        self._validate_range("x_pos", min_x_pos, max_x_pos)
-        self._validate_range("y_neg", min_y_neg, max_y_neg)
-        self._validate_range("y_pos", min_y_pos, max_y_pos)
-        self._validate_range("z_neg", min_z_neg, max_z_neg)
-        self._validate_range("z_pos", min_z_pos, max_z_pos)
-
-        self.min_roll_neg = min_roll_neg
-        self.max_roll_neg = max_roll_neg
-        self.min_roll_pos = min_roll_pos
-        self.max_roll_pos = max_roll_pos
-        self.min_pitch_neg = min_pitch_neg
-        self.max_pitch_neg = max_pitch_neg
-        self.min_pitch_pos = min_pitch_pos
-        self.max_pitch_pos = max_pitch_pos
-        self.min_yaw_neg = min_yaw_neg
-        self.max_yaw_neg = max_yaw_neg
-        self.min_yaw_pos = min_yaw_pos
-        self.max_yaw_pos = max_yaw_pos
-        self.min_x_neg = min_x_neg
-        self.max_x_neg = max_x_neg
-        self.min_x_pos = min_x_pos
-        self.max_x_pos = max_x_pos
-        self.min_y_neg = min_y_neg
-        self.max_y_neg = max_y_neg
-        self.min_y_pos = min_y_pos
-        self.max_y_pos = max_y_pos
-        self.min_z_neg = min_z_neg
-        self.max_z_neg = max_z_neg
-        self.min_z_pos = min_z_pos
-        self.max_z_pos = max_z_pos
-
-    def _validate_non_negative(self, name: str, value: float) -> None:
-        """Validate that a parameter is non-negative.
-
-        Args:
-            name: Parameter name.
-            value: Parameter value.
-
-        Raises:
-            ValueError: If the value is negative.
-        """
-        if value < 0:
-            raise ValueError(f"{name} must be >= 0 (specify as magnitude), got {value}")
-
-    def _validate_range(self, name: str, min_val: float, max_val: float) -> None:
-        """Validate that a configured range is well ordered.
-
-        Args:
-            name: Range name.
-            min_val: Lower bound.
-            max_val: Upper bound.
-
-        Raises:
-            ValueError: If the lower bound exceeds the upper bound.
-        """
-        if min_val > max_val:
-            raise ValueError(f"min_{name} ({min_val}) must be <= max_{name} ({max_val})")
+        self.activate = activate
+        self.roll = roll
+        self.pitch = pitch
+        self.yaw = yaw
+        self.translation = translation
 
     def on_skip(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
-        """Mark every camera calibrated when the transform is skipped.
+        """Mark every camera as calibrated when the augmentation is skipped.
 
         Args:
-            model_gt_sample: ModelGTSample instance holding loaded images.
+            model_gt_sample: Sample whose ``camera_image_data`` receives the statuses.
 
         Returns:
-            Updated ModelGTSample instance with the calibration statuses set.
+            Updated ModelGTSample with all cameras flagged ``CalibrationStatus.CALIBRATED``.
         """
-        # This is checked in the _validate_required_keys()
-        camera_image_data: BaseImages = (
-            model_gt_sample.camera_image_data  # type: ignore[reportOptionalMemberAccess]
+        assert model_gt_sample.camera_image_data is not None
+        camera_image_data = model_gt_sample.camera_image_data
+        num_cameras = camera_image_data.lidar2cams.shape[0]
+        calibration_statuses = torch.full(
+            (num_cameras,), CalibrationStatus.CALIBRATED.value, dtype=torch.int64
         )
-
-        num_cameras = len(camera_image_data.camera_names)
         return model_gt_sample._replace(
             camera_image_data=BaseImages.model_validate(
-                camera_image_data.model_copy(
-                    update={
-                        "noises": torch.eye(4, dtype=torch.float32).repeat(num_cameras, 1, 1),
-                        "calibration_statuses": torch.full(
-                            (num_cameras,), CalibrationStatus.CALIBRATED.value, dtype=torch.int64
-                        ),
-                    }
-                )
+                camera_image_data.model_copy(update={"calibration_statuses": calibration_statuses})
             )
         )
 
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
-        """Perturb the lidar to camera calibration of every camera.
+        """Perturb the lidar-to-camera extrinsics of every camera.
 
         Args:
-            model_gt_sample: ModelGTSample instance holding loaded images.
+            model_gt_sample: Sample holding ``camera_image_data``.
 
         Returns:
-            Updated ModelGTSample instance with the perturbed calibration.
+            Updated ModelGTSample with perturbed ``lidar2cams`` and ``lidar2images``, the
+            per-camera noise transforms and all cameras flagged ``MISCALIBRATED``.
         """
-        # This is checked in the _validate_required_keys()
-        camera_image_data: BaseImages = (
-            model_gt_sample.camera_image_data  # type: ignore[reportOptionalMemberAccess]
+        assert model_gt_sample.camera_image_data is not None
+        camera_image_data = model_gt_sample.camera_image_data
+        lidar2cams = camera_image_data.lidar2cams
+        num_cameras = lidar2cams.shape[0]
+
+        noises = torch.stack([self.sample_noise_transform() for _ in range(num_cameras)]).to(
+            lidar2cams
+        )
+        calibration_statuses = torch.full(
+            (num_cameras,), CalibrationStatus.MISCALIBRATED.value, dtype=torch.int64
+        )
+        return model_gt_sample._replace(
+            camera_image_data=self._apply_noises(camera_image_data, noises, calibration_statuses)
         )
 
-        lidar2cams = []
-        noises = []
-        for lidar2cam in camera_image_data.lidar2cams:
-            noisy_transform, noise = self.alter_calibration(lidar2cam.numpy())
-            lidar2cams.append(torch.from_numpy(noisy_transform.astype(np.float32)))
-            noises.append(torch.from_numpy(noise.astype(np.float32)))
+    @staticmethod
+    def _apply_noises(
+        camera_image_data: BaseImages,
+        noises: Float32[torch.Tensor, "num_cameras 4 4"],
+        calibration_statuses: Int64[torch.Tensor, " num_cameras"],
+    ) -> BaseImages:
+        """Compose the noise into the extrinsics and refresh the projections.
 
-        num_cameras = len(camera_image_data.camera_names)
-        noisy_lidar2cams = torch.stack(lidar2cams)
-        return model_gt_sample._replace(
-            camera_image_data=BaseImages.model_validate(
-                camera_image_data.model_copy(
-                    update={
-                        "lidar2cams": noisy_lidar2cams,
-                        "lidar2images": compose_lidar2images(
-                            camera_image_data.augmented_camera_intrinsics, noisy_lidar2cams
-                        ),
-                        "noises": torch.stack(noises),
-                        "calibration_statuses": torch.full(
-                            (num_cameras,),
-                            CalibrationStatus.MISCALIBRATED.value,
-                            dtype=torch.int64,
-                        ),
-                    }
-                )
+        The noise acts in the camera frame, ``T_noisy = T_noise @ T_lidar2cam``, so an
+        x-translation shifts projected points along the camera's x-axis. ``lidar2images`` is
+        rebuilt from ``augmented_camera_intrinsics`` so it stays consistent with any
+        image-space augmentation that already ran.
+
+        Args:
+            camera_image_data: Container whose extrinsics are perturbed.
+            noises: Per-camera 4x4 noise transforms.
+            calibration_statuses: Per-camera status written alongside the noise.
+
+        Returns:
+            A validated copy of ``camera_image_data`` with the perturbation applied.
+        """
+        noisy_lidar2cams = noises @ camera_image_data.lidar2cams
+
+        intrinsics = camera_image_data.augmented_camera_intrinsics
+        homogeneous_intrinsics = torch.eye(4, dtype=intrinsics.dtype, device=intrinsics.device)
+        homogeneous_intrinsics = homogeneous_intrinsics.repeat(intrinsics.shape[0], 1, 1)
+        homogeneous_intrinsics[:, :3, :3] = intrinsics
+
+        return BaseImages.model_validate(
+            camera_image_data.model_copy(
+                update={
+                    "lidar2cams": noisy_lidar2cams,
+                    "lidar2images": homogeneous_intrinsics @ noisy_lidar2cams,
+                    "noises": noises,
+                    "calibration_statuses": calibration_statuses,
+                }
             )
         )
 
@@ -343,127 +322,145 @@ class CalibrationMisalignment(BaseTransform):
         if scale <= 0:
             raise ValueError(f"scale ({scale}) must be positive")
 
-        a = (min_value - center) / scale
-        b = (max_value - center) / scale
-        return truncnorm.rvs(a, b, loc=center, scale=scale)
+        sample = torch.nn.init.trunc_normal_(
+            torch.empty(1, dtype=torch.float64), mean=center, std=scale, a=min_value, b=max_value
+        )
+        return float(sample.item())
 
-    def _sample_component(
-        self, min_neg: float, max_neg: float, min_pos: float, max_pos: float
-    ) -> float:
+    def _sample_component(self, bounds: MagnitudeRange) -> float:
         """Sample a component value from either negative or positive range.
 
-        Randomly selects between negative and positive range, then samples
-        from a truncated gaussian within that range. All input values are
-        positive magnitudes; negative range values are negated after sampling.
+        Randomly selects between negative and positive range, then samples from a truncated
+        gaussian within that range. All bounds are positive magnitudes; negative range
+        values are negated after sampling.
 
         Args:
-            min_neg: Minimum magnitude for negative range (will be negated).
-            max_neg: Maximum magnitude for negative range (will be negated).
-            min_pos: Minimum magnitude for positive range.
-            max_pos: Maximum magnitude for positive range.
+            bounds: Negative and positive magnitude ranges of the component.
 
         Returns:
             Sampled value (negative if from neg range, positive if from pos range).
         """
-        use_negative = np.random.rand() > 0.5
+        use_negative = bool(torch.rand(1).item() > 0.5)
+        min_val, max_val = (
+            (bounds.min_neg, bounds.max_neg) if use_negative else (bounds.min_pos, bounds.max_pos)
+        )
+        sign = -1.0 if use_negative else 1.0
 
-        if use_negative:
-            min_val, max_val = min_neg, max_neg
-            if min_val >= max_val:
-                return -min_val  # Negate for negative range
-            value = self.bounded_gaussian(
-                center=min_val,  # center towards least extreme (threshold)
-                min_value=min_val,
-                max_value=max_val,
-                scale=(max_val - min_val) / 1.5,
-            )
-            return -value  # Negate for negative range
-        else:
-            min_val, max_val = min_pos, max_pos
-            if min_val >= max_val:
-                return min_val
-            value = self.bounded_gaussian(
-                center=min_val,  # center towards least extreme (threshold)
-                min_value=min_val,
-                max_value=max_val,
-                scale=(max_val - min_val) / 1.5,
-            )
-            return value
+        if min_val >= max_val:
+            return sign * min_val
+        # Center towards the least extreme value (the threshold).
+        value = self.bounded_gaussian(
+            center=min_val,
+            min_value=min_val,
+            max_value=max_val,
+            scale=(max_val - min_val) / 1.5,
+        )
+        return sign * value
 
-    def alter_calibration(self, transform: npt.NDArray) -> npt.NDArray:
-        """Apply random noise to a 4x4 transformation matrix.
+    @staticmethod
+    def rotation_matrix(
+        roll_rad: float, pitch_rad: float, yaw_rad: float
+    ) -> Float32[torch.Tensor, "3 3"]:
+        """Build a rotation matrix from roll, pitch and yaw about the static x, y and z axes.
 
-        The noise is applied in the camera frame so that, e.g., an x-translation
-        shifts projected points along the camera's x-axis (horizontal in image).
-        Mathematically: T_noisy = T_noise @ T_l2c, producing the pipeline
-        lidar -> camera -> miscalibration.
+        Equivalent to ``transforms3d.euler.euler2mat(roll, pitch, yaw, axes="sxyz")``:
+        ``R = Rz(yaw) @ Ry(pitch) @ Rx(roll)``.
 
-        Uses separate RPY angles and xyz translations for more precise control.
-        Each component randomly selects between its negative and positive range.
-        Only activated components are applied.
+        Args:
+            roll_rad: Rotation about x in radians.
+            pitch_rad: Rotation about y in radians.
+            yaw_rad: Rotation about z in radians.
+
+        Returns:
+            The 3x3 rotation matrix.
         """
-        if transform.shape != (4, 4):
-            raise ValueError(f"Transform must be 4x4 matrix, got shape {transform.shape}")
+        cos_r, sin_r = math.cos(roll_rad), math.sin(roll_rad)
+        cos_p, sin_p = math.cos(pitch_rad), math.sin(pitch_rad)
+        cos_y, sin_y = math.cos(yaw_rad), math.sin(yaw_rad)
+        rotation_x = torch.tensor(
+            [[1.0, 0.0, 0.0], [0.0, cos_r, -sin_r], [0.0, sin_r, cos_r]], dtype=torch.float64
+        )
+        rotation_y = torch.tensor(
+            [[cos_p, 0.0, sin_p], [0.0, 1.0, 0.0], [-sin_p, 0.0, cos_p]], dtype=torch.float64
+        )
+        rotation_z = torch.tensor(
+            [[cos_y, -sin_y, 0.0], [sin_y, cos_y, 0.0], [0.0, 0.0, 1.0]], dtype=torch.float64
+        )
+        return (rotation_z @ rotation_y @ rotation_x).to(torch.float32)
 
-        # Sample rotation angles (in degrees, then convert to radians)
-        roll = (
-            self._sample_component(
-                self.min_roll_neg, self.max_roll_neg, self.min_roll_pos, self.max_roll_pos
-            )
-            if self.activate_roll
-            else 0.0
-        )
-        pitch = (
-            self._sample_component(
-                self.min_pitch_neg, self.max_pitch_neg, self.min_pitch_pos, self.max_pitch_pos
-            )
-            if self.activate_pitch
-            else 0.0
-        )
-        yaw = (
-            self._sample_component(
-                self.min_yaw_neg, self.max_yaw_neg, self.min_yaw_pos, self.max_yaw_pos
-            )
-            if self.activate_yaw
-            else 0.0
-        )
+    def sample_noise_transform(self) -> Float32[torch.Tensor, "4 4"]:
+        """Draw one 4x4 noise transform from the configured ranges.
 
-        roll_rad = np.deg2rad(roll)
-        pitch_rad = np.deg2rad(pitch)
-        yaw_rad = np.deg2rad(yaw)
+        Each component randomly selects between its negative and positive range. Only
+        activated components are perturbed, the rest stay at zero.
 
-        # Sample translation components (in meters)
-        tx = (
-            self._sample_component(self.min_x_neg, self.max_x_neg, self.min_x_pos, self.max_x_pos)
-            if self.activate_x
+        Returns:
+            Homogeneous transform holding the sampled rotation and translation.
+        """
+        roll = self._sample_component(self.roll) if self.activate.roll else 0.0
+        pitch = self._sample_component(self.pitch) if self.activate.pitch else 0.0
+        yaw = self._sample_component(self.yaw) if self.activate.yaw else 0.0
+        translation_x, translation_y, translation_z = (
+            self._sample_component(self.translation.axis(axis))
+            if getattr(self.activate, axis)
             else 0.0
-        )
-        ty = (
-            self._sample_component(self.min_y_neg, self.max_y_neg, self.min_y_pos, self.max_y_pos)
-            if self.activate_y
-            else 0.0
-        )
-        tz = (
-            self._sample_component(self.min_z_neg, self.max_z_neg, self.min_z_pos, self.max_z_pos)
-            if self.activate_z
-            else 0.0
+            for axis in _TRANSLATION_AXES
         )
 
-        # Build rotation matrix from RPY (ZYX convention: yaw, pitch, roll)
-        rotation_matrix = transforms3d.euler.euler2mat(roll_rad, pitch_rad, yaw_rad, axes="sxyz")
+        noise_transform = torch.eye(4, dtype=torch.float32)
+        noise_transform[:3, :3] = self.rotation_matrix(
+            math.radians(roll), math.radians(pitch), math.radians(yaw)
+        )
+        noise_transform[:3, 3] = torch.tensor(
+            [translation_x, translation_y, translation_z], dtype=torch.float32
+        )
+        return noise_transform
 
-        noise_transform = np.eye(4)
-        noise_transform[0:3, 0:3] = rotation_matrix
-        noise_transform[0:3, 3] = [tx, ty, tz]
+    def alter_calibration(
+        self, transform: Float32[torch.Tensor, "4 4"]
+    ) -> tuple[Float32[torch.Tensor, "4 4"], Float32[torch.Tensor, "4 4"]]:
+        """Apply random noise to a single 4x4 lidar-to-camera transform.
 
+        Args:
+            transform: The 4x4 lidar-to-camera transform to perturb.
+
+        Returns:
+            Tuple of the perturbed transform ``T_noise @ transform`` and the noise itself.
+
+        Raises:
+            ValueError: If ``transform`` is not a 4x4 matrix.
+        """
+        if tuple(transform.shape) != (4, 4):
+            raise ValueError(f"Transform must be 4x4 matrix, got shape {tuple(transform.shape)}")
+        noise_transform = self.sample_noise_transform().to(transform)
         return noise_transform @ transform, noise_transform
 
 
 class LidarCameraFusion(BaseTransform):
-    """Project the points onto every image as a depth and an intensity channel.
+    """Project the lidar points onto every camera image as depth and intensity channels.
 
-    The classifier reads the images together with the projected channels, so a perturbed
-    calibration shows up as points landing next to the objects they belong to.
+    Projects the lidar points onto each camera and writes a depth and an intensity channel
+    next to the RGB image, in ``camera_image_data.depth_maps``. The batch stacks them onto the
+    images, so the models read five-channel RGBDI images. The projection uses the
+    ``augmented_camera_intrinsics`` and the distortion coefficients of every camera, so it
+    follows the undistortion and the image-space augmentations (crop, scale, affine) that ran
+    earlier in the pipeline. This transform must therefore run after every transform that
+    changes the image geometry, and before the consumers of the fused images.
+
+    The depth channel holds ``depth / max_depth`` and the intensity channel the intensity of
+    the point, which the point cloud loader serves in unit range, so both channels share the
+    unit pixel range of the images. Points behind the camera or beyond ``max_depth`` are
+    dropped, and when ``ego_box`` is given, points whose ray from the camera crosses the ego
+    vehicle box are dropped as occluded.
+
+    Required keys:
+        - camera_image_data: RGB images with their calibration, ``noises`` when the
+          calibration-misalignment augmentation ran.
+        - point_cloud_data: points with XYZ and intensity features.
+
+    Generated keys:
+        - camera_image_data.depth_maps: (num_cameras, 2, height, width) float32 depth and
+          intensity channels.
     """
 
     _required_keys = ["camera_image_data", "point_cloud_data"]
@@ -475,565 +472,566 @@ class LidarCameraFusion(BaseTransform):
         dilation_size: int = 1,
         ego_box: Sequence[float] | None = None,
         occlusion_adjust_margin: float = 0.01,
-    ):
+    ) -> None:
         """Initialize the LidarCameraFusion transform.
 
         Args:
-            max_depth: Maximum depth for projected LiDAR points in meters.
-            dilation_size: Size of dilation kernel for point cloud rendering.
-            ego_box: List of 6 floats [x_min, y_min, z_min, x_max, y_max, z_max].
-            occlusion_adjust_margin: Distance (meters) to leave between camera and adjusted box
-                wall.
+            max_depth: Maximum depth of the projected points in meters.
+            dilation_size: Half size of the square patch painted around every projected point.
+            ego_box: Ego vehicle box ``[x_min, y_min, z_min, x_max, y_max, z_max]`` in the lidar
+                frame used to drop occluded points, ``None`` to keep every point.
+            occlusion_adjust_margin: Distance in meters kept between a camera lying inside the
+                ego box and the box wall moved behind it.
+
+        Raises:
+            ValueError: If ``ego_box`` does not hold six values or a bound is not positive.
         """
-        super().__init__()
+        super().__init__(probability=None)
+        if ego_box is not None and len(ego_box) != 6:
+            raise ValueError(f"ego_box must hold six values, got {len(ego_box)}")
+        if max_depth <= 0.0:
+            raise ValueError(f"max_depth must be positive, got {max_depth}")
+        if dilation_size < 0:
+            raise ValueError(f"dilation_size must be >= 0, got {dilation_size}")
+
         self.max_depth = max_depth
         self.dilation_size = dilation_size
-        self.ego_box = ego_box
+        self.ego_box = None if ego_box is None else tuple(float(value) for value in ego_box)
         self.occlusion_adjust_margin = occlusion_adjust_margin
 
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
-        """Project the points onto every image of the sample.
+        """Write the projected depth and intensity channels of every camera image.
 
         Args:
-            model_gt_sample: ModelGTSample instance holding loaded images and points.
+            model_gt_sample: Sample holding ``camera_image_data`` and ``point_cloud_data``.
 
         Returns:
-            Updated ModelGTSample instance whose images carry the projected channels.
+            Updated ModelGTSample whose ``camera_image_data.depth_maps`` hold the depth and
+            intensity channels of every camera.
+
+        Raises:
+            ValueError: If the points carry no intensity feature.
         """
-        # This is checked in the _validate_required_keys()
-        camera_image_data: BaseImages = (
-            model_gt_sample.camera_image_data  # type: ignore[reportOptionalMemberAccess]
-        )
-        point_cloud_data: BasePoints = (
-            model_gt_sample.point_cloud_data  # type: ignore[reportOptionalMemberAccess]
+        assert model_gt_sample.camera_image_data is not None
+        assert model_gt_sample.point_cloud_data is not None
+        camera_image_data = model_gt_sample.camera_image_data
+        point_cloud_data = model_gt_sample.point_cloud_data
+
+        feature_names = list(point_cloud_data.point_feature_names)
+        if PointFeatureName.INTENSITY not in feature_names:
+            raise ValueError(
+                f"{self.__class__.__name__}: points must carry an intensity feature, "
+                f"got {feature_names}"
+            )
+        points = point_cloud_data.points.detach().cpu().numpy().astype(np.float32)
+        xyz = points[:, :3]
+        intensities = points[:, feature_names.index(PointFeatureName.INTENSITY)]
+
+        images = camera_image_data.images
+        num_cameras, _, height, width = images.shape
+        lidar2cams = camera_image_data.lidar2cams.cpu().numpy().astype(np.float64)
+        camera_matrices = camera_image_data.augmented_camera_intrinsics.cpu().numpy()
+        camera_matrices = camera_matrices.astype(np.float64)
+        noises = (
+            None
+            if camera_image_data.noises is None
+            else camera_image_data.noises.cpu().numpy().astype(np.float64)
         )
 
-        points = point_cloud_data.points.numpy()
-        pixel_affines = camera_image_data.image_augmentation_pixel_affines()
         depth_maps = []
-        for index, image in enumerate(camera_image_data.images):
+        for index in range(num_cameras):
+            distortion_coefficients = camera_image_data.distortion_coefficients[index]
+            depth_channel, intensity_channel = self.render_lidar_channels(
+                xyz=xyz,
+                intensities=intensities,
+                lidar2cam=lidar2cams[index],
+                noise=None if noises is None else noises[index],
+                camera_matrix=camera_matrices[index],
+                distortion_coefficients=distortion_coefficients.cpu().numpy().astype(np.float64),
+                image_size=(int(height), int(width)),
+            )
             depth_maps.append(
-                torch.from_numpy(
-                    self._create_fused_image(
-                        np.transpose(image.numpy(), (1, 2, 0)),
-                        points,
-                        camera_calibration_data(camera_image_data, index),
-                        pixel_affines[index].numpy().astype(np.float64),
-                    )
-                )
+                torch.from_numpy(np.stack([depth_channel, intensity_channel])).to(images)
             )
 
+        # model_copy does not validate what it is given, so the copy is validated explicitly.
         return model_gt_sample._replace(
             camera_image_data=BaseImages.model_validate(
-                camera_image_data.model_copy(update={"depth_maps": torch.stack(depth_maps)})
+                camera_image_data.model_copy(update={"depth_maps": torch.stack(depth_maps, dim=0)})
             )
         )
 
-    def _create_fused_image(
+    def render_lidar_channels(
         self,
-        image: npt.NDArray[np.float32],
-        points: npt.NDArray[np.float32],
-        calibration_data: CalibrationData,
-        affine_transform: npt.NDArray[np.float64],
-    ) -> npt.NDArray[np.float32]:
-        """Create the projected depth and intensity channels of one camera.
+        xyz: npt.NDArray[np.float32],
+        intensities: npt.NDArray[np.float32],
+        lidar2cam: npt.NDArray[np.float64],
+        noise: npt.NDArray[np.float64] | None,
+        camera_matrix: npt.NDArray[np.float64],
+        distortion_coefficients: npt.NDArray[np.float64],
+        image_size: tuple[int, int],
+    ) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
+        """Render the depth and intensity channels of one camera.
 
         Args:
-            image: Image in (height, width, num_channels) layout.
-            points: Point cloud with intensity values.
-            calibration_data: Camera-LiDAR calibration data.
-            affine_transform: Image affine the image augmentations applied.
+            xyz: Point coordinates in the lidar frame, shape ``(num_points, 3)``.
+            intensities: Point intensities in unit range, shape ``(num_points,)``.
+            lidar2cam: 4x4 lidar-to-camera transform, including the misalignment noise when
+                the augmentation ran.
+            noise: 4x4 misalignment noise composed into ``lidar2cam``, ``None`` when none ran.
+            camera_matrix: 3x3 intrinsics of the image plane the channels are rendered for.
+            distortion_coefficients: OpenCV distortion coefficients, empty for undistorted
+                images.
+            image_size: Height and width of the channels.
 
         Returns:
-            The depth and intensity channels in (2, height, width) layout.
+            Depth and intensity channels of shape ``(height, width)`` in unit range. Pixels
+            without a point are zero.
         """
         if self.ego_box is not None:
-            points = self._filter_occluded_points(
-                points, calibration_data, affine_transform, image.shape[:2]
-            )
+            camera_center = self.camera_center_in_lidar(lidar2cam, noise)
+            visible = ~self.ego_occlusion_mask(xyz, camera_center)
+            xyz = xyz[visible]
+            intensities = intensities[visible]
 
-        xyz = points[:, :3]
-        intensities = points[:, 3]
+        points_cam = self.transform_points_to_camera(xyz, lidar2cam)
+        in_front = points_cam[:, 2] > 0.0
+        points_cam = points_cam[in_front]
+        intensities = intensities[in_front]
 
-        point_cloud_ccs = self._transform_points_to_camera(xyz, calibration_data)
+        pixels = self.project_points_to_image(points_cam, camera_matrix, distortion_coefficients)
+        return self.rasterize_points(pixels, points_cam[:, 2], intensities, image_size)
 
-        valid_mask = point_cloud_ccs[:, 2] > 0.0
-        point_cloud_ccs = point_cloud_ccs[valid_mask]
-        intensities = intensities[valid_mask]
+    @staticmethod
+    def camera_center_in_lidar(
+        lidar2cam: npt.NDArray[np.float64], noise: npt.NDArray[np.float64] | None
+    ) -> npt.NDArray[np.float64]:
+        """Return the true camera center in the lidar frame.
 
-        point_cloud_ics = self._project_points_to_image(point_cloud_ccs, calibration_data)
-        point_cloud_ics = self._apply_affine_to_points(point_cloud_ics, affine_transform)
-
-        return self._create_lidar_images(
-            image.shape[:2], point_cloud_ics, point_cloud_ccs, intensities
-        )
-
-    def _filter_occluded_points(
-        self,
-        points: npt.NDArray[np.float32],
-        calibration_data: CalibrationData,
-        affine_transform: npt.NDArray[np.float64],
-        image_shape: tuple[int, int],
-    ) -> npt.NDArray[np.float32]:
-        """Filter out points occluded by the ego vehicle chassis using ray casting.
-
-        The rays are cast from the true camera position, so a miscalibration in
-        calibration_data.noise does not move them. Points that leave the image after the
-        affine_transform are dropped as well.
-
-        When the camera lies inside the ego box, the closest x and y walls of the box move
-        behind the camera. The z bounds stay the same.
+        The misalignment noise acts in the camera frame, ``T_noisy = T_noise @ T_lidar2cam``,
+        so it is undone before inverting the transform to keep the occlusion filtering
+        anchored at the physical camera position.
 
         Args:
-            points: Point cloud (N, 4+) [x, y, z, intensity, ...]
-            calibration_data: CalibrationData object, its noise holds the miscalibration.
-            affine_transform: 3x3 affine of the image augmentations.
-            image_shape: (height, width) of the image.
+            lidar2cam: 4x4 lidar-to-camera transform, noisy when ``noise`` is given.
+            noise: 4x4 noise composed into ``lidar2cam``, ``None`` when none was applied.
 
         Returns:
-            The points that are neither occluded nor outside the image.
+            Camera center in the lidar frame, shape ``(3,)``.
         """
-        # 1. Calculate camera center in LiDAR frame
-        # If noise exists (miscalibration), we need to use the true (original) transform
-        # to get the correct camera position for occlusion filtering
-        lidar2cam = calibration_data.lidar_to_camera_transformation
-        if calibration_data.noise is not None:
-            # Undo the noise to get the true camera position
-            # noisy_transform = noise_transform @ original_transform
-            # Therefore: original_transform = inv(noise_transform) @ noisy_transform
-            noise_inv = np.linalg.inv(calibration_data.noise)
-            lidar2cam_true = noise_inv @ lidar2cam
-            R = lidar2cam_true[:3, :3]
-            t = lidar2cam_true[:3, 3]
-        else:
-            R = lidar2cam[:3, :3]
-            t = lidar2cam[:3, 3]
+        lidar2cam_true = lidar2cam if noise is None else np.linalg.inv(noise) @ lidar2cam
+        rotation = lidar2cam_true[:3, :3]
+        translation = lidar2cam_true[:3, 3]
+        return -rotation.T @ translation
 
-        # Inverse of T_l2c: [R^T | -R^T t]
-        camera_center_lidar = -R.T @ t
+    def ego_occlusion_mask(
+        self, xyz: npt.NDArray[np.float32], camera_center: npt.NDArray[np.float64]
+    ) -> npt.NDArray[np.bool_]:
+        """Flag the points whose ray from the camera crosses the ego vehicle box.
 
-        # 2. Prepare Box Bounds
-        # Copy to avoid modifying the class attribute persistently
-        box_min = np.array(self.ego_box[:3])
-        box_max = np.array(self.ego_box[3:])
+        When the camera lies inside the ego box, the closest x and y walls are moved
+        ``occlusion_adjust_margin`` behind the camera so the box does not occlude everything.
+        The z bounds are left untouched.
 
-        # 3. Check if Camera is inside the Ego Box
-        if np.all(camera_center_lidar >= box_min) and np.all(camera_center_lidar <= box_max):
-            # Calculate distances to walls
-            d_min = camera_center_lidar - box_min
-            d_max = box_max - camera_center_lidar
+        Args:
+            xyz: Point coordinates in the lidar frame, shape ``(num_points, 3)``.
+            camera_center: Camera center in the lidar frame, shape ``(3,)``.
 
-            # Iterate over ONLY x (0) and y (1) axes. Ignore z (2).
-            for i in range(2):
-                if d_min[i] < d_max[i]:
-                    # The 'min' wall is closer
-                    # Move wall to: camera_position + margin
-                    new_val = camera_center_lidar[i] + self.occlusion_adjust_margin
-                    box_min[i] = new_val
+        Returns:
+            Boolean mask, ``True`` for occluded points.
+        """
+        assert self.ego_box is not None
+        box_min = np.array(self.ego_box[:3], dtype=np.float64)
+        box_max = np.array(self.ego_box[3:], dtype=np.float64)
+
+        if np.all(camera_center >= box_min) and np.all(camera_center <= box_max):
+            distance_to_min = camera_center - box_min
+            distance_to_max = box_max - camera_center
+            for axis in range(2):
+                if distance_to_min[axis] < distance_to_max[axis]:
+                    box_min[axis] = camera_center[axis] + self.occlusion_adjust_margin
                 else:
-                    # The 'max' wall is closer (or equal)
-                    # Move wall to: camera_position - margin
-                    new_val = camera_center_lidar[i] - self.occlusion_adjust_margin
-                    box_max[i] = new_val
+                    box_max[axis] = camera_center[axis] - self.occlusion_adjust_margin
 
-        # 4. Perform Ray Casting
-        # Slab method for ray intersection
-        ray_origins = camera_center_lidar
-        ray_directions = points[:, :3] - ray_origins
-
+        # Slab method: the ray from the camera to each point is parameterized by t in [0, 1].
+        ray_directions = xyz.astype(np.float64) - camera_center
         with np.errstate(divide="ignore", invalid="ignore"):
-            t1 = (box_min - ray_origins) / ray_directions
-            t2 = (box_max - ray_origins) / ray_directions
+            t_near = (box_min - camera_center) / ray_directions
+            t_far = (box_max - camera_center) / ray_directions
+        t_enter = np.max(np.minimum(t_near, t_far), axis=1)
+        t_exit = np.min(np.maximum(t_near, t_far), axis=1)
 
-        t_min = np.minimum(t1, t2)
-        t_max = np.maximum(t1, t2)
+        hits_box = (t_enter <= t_exit) & (t_exit >= 0.0)
+        # The ray enters the box before reaching the point.
+        return hits_box & (t_enter < 0.999)
 
-        t_enter = np.max(t_min, axis=1)
-        t_exit = np.min(t_max, axis=1)
-
-        hits_box = (t_enter <= t_exit) & (t_exit >= 0)
-
-        # Ray hits box BEFORE reaching the point (t < 0.999)
-        occluded = hits_box & (t_enter < 0.999)
-
-        # 5. Also drop the points that leave the image after the affine transform
-        # Project points to camera coordinates using the current (possibly noisy) transform
-        xyz = points[:, :3]
-        point_cloud_ccs = self._transform_points_to_camera(xyz, calibration_data)
-
-        # Filter points behind camera
-        valid_mask_3d = point_cloud_ccs[:, 2] > 0.0
-        if not np.any(valid_mask_3d):
-            return points[~occluded]
-
-        point_cloud_ccs_valid = point_cloud_ccs[valid_mask_3d]
-        occluded_valid = occluded[valid_mask_3d]
-
-        # Project to image coordinates
-        point_cloud_ics = self._project_points_to_image(point_cloud_ccs_valid, calibration_data)
-
-        # Apply affine transform to see where points would actually appear
-        point_cloud_ics_transformed = self._apply_affine_to_points(
-            point_cloud_ics, affine_transform
-        )
-
-        # Check if transformed points are within image bounds
-        h, w = image_shape
-        in_bounds = (
-            (point_cloud_ics_transformed[:, 0] >= 0)
-            & (point_cloud_ics_transformed[:, 0] < w)
-            & (point_cloud_ics_transformed[:, 1] >= 0)
-            & (point_cloud_ics_transformed[:, 1] < h)
-        )
-
-        # Combine occlusion filtering with visibility in transformed image space
-        # Points that are occluded OR outside transformed image bounds should be filtered
-        occluded_valid = occluded_valid | ~in_bounds
-
-        # Reconstruct full mask
-        full_occluded = np.zeros(len(points), dtype=bool)
-        full_occluded[valid_mask_3d] = occluded_valid
-        full_occluded[~valid_mask_3d] = True  # Points behind camera are considered occluded
-
-        return points[~full_occluded]
-
-    def _transform_points_to_camera(
-        self,
-        points: npt.NDArray[np.float32],
-        calibration_data: CalibrationData,
-    ) -> npt.NDArray[np.float32]:
-        """Transform LiDAR points to the camera coordinate system.
+    @staticmethod
+    def transform_points_to_camera(
+        xyz: npt.NDArray[np.float32], lidar2cam: npt.NDArray[np.float64]
+    ) -> npt.NDArray[np.float64]:
+        """Transform lidar points into the camera frame.
 
         Args:
-            points: Point coordinates in the LiDAR frame.
-            calibration_data: Camera-LiDAR calibration data.
+            xyz: Point coordinates in the lidar frame, shape ``(num_points, 3)``.
+            lidar2cam: 4x4 lidar-to-camera transform.
 
         Returns:
-            Point coordinates in the camera frame.
+            Point coordinates in the camera frame, shape ``(num_points, 3)``.
         """
-        num_points = points.shape[0]
-        points_hom = np.concatenate([points, np.ones((num_points, 1), dtype=points.dtype)], axis=1)
+        return xyz.astype(np.float64) @ lidar2cam[:3, :3].T + lidar2cam[:3, 3]
 
-        lidar2cam = calibration_data.lidar_to_camera_transformation
-        points_cam = (lidar2cam @ points_hom.T).T
-
-        return points_cam[:, :3]
-
-    def _project_points_to_image(
-        self,
-        point_cloud_ccs: npt.NDArray[np.float32],
-        calibration_data: CalibrationData,
-    ) -> npt.NDArray[np.float32]:
-        """Project 3D points to 2D image coordinates.
+    @staticmethod
+    def project_points_to_image(
+        points_cam: npt.NDArray[np.float64],
+        camera_matrix: npt.NDArray[np.float64],
+        distortion_coefficients: npt.NDArray[np.float64],
+    ) -> npt.NDArray[np.float64]:
+        """Project camera-frame points onto the image plane.
 
         Args:
-            point_cloud_ccs: Point coordinates in the camera frame.
-            calibration_data: Camera-LiDAR calibration data.
+            points_cam: Point coordinates in the camera frame, shape ``(num_points, 3)``.
+            camera_matrix: 3x3 camera intrinsics.
+            distortion_coefficients: OpenCV distortion coefficients, empty for none.
 
         Returns:
-            Projected image coordinates.
+            Pixel coordinates ``(u, v)``, shape ``(num_points, 2)``.
         """
-        camera_matrix = calibration_data.new_camera_matrix
-        distortion_coefficients = calibration_data.distortion_coefficients
-
-        point_cloud_ics, _ = cv2.projectPoints(
-            point_cloud_ccs,
-            np.zeros(3),
-            np.zeros(3),
-            camera_matrix,
-            distortion_coefficients,
+        if points_cam.shape[0] == 0:
+            return np.zeros((0, 2), dtype=np.float64)
+        coefficients = distortion_coefficients if distortion_coefficients.size > 0 else None
+        pixels, _ = cv2.projectPoints(
+            points_cam.reshape(-1, 1, 3), np.zeros(3), np.zeros(3), camera_matrix, coefficients
         )
-        if point_cloud_ics is None:
-            return np.zeros((0, 2), dtype=np.float32)
+        return pixels.reshape(-1, 2)
 
-        return point_cloud_ics.reshape(-1, 2)
-
-    def _apply_affine_to_points(
+    def rasterize_points(
         self,
-        points_2d: npt.NDArray[np.float32],
-        affine_matrix: npt.NDArray[np.float64],
-    ) -> npt.NDArray[np.float32]:
-        """Apply affine transformation to 2D points.
-
-        Args:
-            points_2d: 2D points in image coordinates (N, 2).
-            affine_matrix: 3x3 affine transformation matrix.
-
-        Returns:
-            Transformed 2D points (N, 2).
-        """
-        num_points = points_2d.shape[0]
-        homogeneous = np.hstack([points_2d, np.ones((num_points, 1))])
-        transformed = (affine_matrix @ homogeneous.T).T[:, :2]
-        return transformed.astype(np.float32)
-
-    def _create_lidar_images(
-        self,
-        image_shape: tuple[int, int],
-        point_cloud_ics: npt.NDArray[np.float32],
-        point_cloud_ccs: npt.NDArray[np.float32],
+        pixels: npt.NDArray[np.float64],
+        depths: npt.NDArray[np.float64],
         intensities: npt.NDArray[np.float32],
-    ) -> npt.NDArray[np.float32]:
-        """Render the projected points as a depth and an intensity channel.
+        image_size: tuple[int, int],
+    ) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
+        """Paint the projected points into depth and intensity channels.
+
+        Every point paints a ``(2 * dilation_size + 1)`` square patch. Where patches overlap,
+        the closest point wins.
 
         Args:
-            image_shape: Height and width of the image the points are rendered onto.
-            point_cloud_ics: Projected image coordinates of the points.
-            point_cloud_ccs: Camera frame coordinates of the points.
-            intensities: Intensity of every point.
+            pixels: Pixel coordinates ``(u, v)`` of the points, shape ``(num_points, 2)``.
+            depths: Depth of the points along the optical axis, shape ``(num_points,)``.
+            intensities: Intensities of the points in unit range, shape ``(num_points,)``.
+            image_size: Height and width of the channels.
 
         Returns:
-            The two channels in (2, height, width) layout, normalized to [0, 1].
+            Depth channel scaled by ``max_depth`` and intensity channel clipped to unit range,
+            both of shape ``(height, width)``.
         """
-        h, w = image_shape
-        depth_image = np.zeros((h, w), dtype=np.float32)
-        intensity_image = np.zeros((h, w), dtype=np.float32)
+        height, width = image_size
+        depth_channel = np.zeros((height, width), dtype=np.float32)
+        intensity_channel = np.zeros((height, width), dtype=np.float32)
 
-        valid_mask = (
-            (point_cloud_ics[:, 0] >= 0)
-            & (point_cloud_ics[:, 0] <= w - 1)
-            & (point_cloud_ics[:, 1] >= 0)
-            & (point_cloud_ics[:, 1] <= h - 1)
-            & (point_cloud_ccs[:, 2] > 0.0)
-            & (point_cloud_ccs[:, 2] < self.max_depth)
+        valid = (
+            (pixels[:, 0] >= 0)
+            & (pixels[:, 0] <= width - 1)
+            & (pixels[:, 1] >= 0)
+            & (pixels[:, 1] <= height - 1)
+            & (depths > 0.0)
+            & (depths < self.max_depth)
+        )
+        if not np.any(valid):
+            return depth_channel, intensity_channel
+
+        pixels = pixels[valid]
+        depths = depths[valid]
+        intensities = intensities[valid]
+
+        row_offsets, col_offsets = np.mgrid[
+            -self.dilation_size : self.dilation_size + 1,
+            -self.dilation_size : self.dilation_size + 1,
+        ]
+        patch_rows = pixels[:, 1].astype(np.int32)[:, None] + row_offsets.flatten()[None, :]
+        patch_cols = pixels[:, 0].astype(np.int32)[:, None] + col_offsets.flatten()[None, :]
+        in_bounds = (
+            (patch_rows >= 0) & (patch_rows < height) & (patch_cols >= 0) & (patch_cols < width)
         )
 
-        valid_ics = point_cloud_ics[valid_mask]
-        valid_ccs = point_cloud_ccs[valid_mask]
-        valid_intensities = intensities[valid_mask]
+        patch_depths = np.broadcast_to(depths[:, None], patch_rows.shape)[in_bounds]
+        patch_intensities = np.broadcast_to(intensities[:, None], patch_rows.shape)[in_bounds]
+        patch_rows = patch_rows[in_bounds]
+        patch_cols = patch_cols[in_bounds]
 
-        if valid_ics.size > 0:
-            y_offsets, x_offsets = np.mgrid[
-                -self.dilation_size : self.dilation_size + 1,
-                -self.dilation_size : self.dilation_size + 1,
-            ]
-            y_offsets = y_offsets.flatten()
-            x_offsets = x_offsets.flatten()
-
-            center_rows = valid_ics[:, 1].astype(np.int32)
-            center_cols = valid_ics[:, 0].astype(np.int32)
-
-            patch_rows = center_rows[:, np.newaxis] + y_offsets[np.newaxis, :]
-            patch_cols = center_cols[:, np.newaxis] + x_offsets[np.newaxis, :]
-
-            in_bounds_mask = (
-                (patch_rows >= 0) & (patch_rows < h) & (patch_cols >= 0) & (patch_cols < w)
-            )
-
-            center_depths = valid_ccs[:, 2] / self.max_depth
-
-            broadcasted_depths = np.broadcast_to(center_depths[:, np.newaxis], patch_rows.shape)
-            broadcasted_intensities = np.broadcast_to(
-                valid_intensities[:, np.newaxis], patch_rows.shape
-            )
-
-            final_rows = patch_rows[in_bounds_mask]
-            final_cols = patch_cols[in_bounds_mask]
-            final_depths = broadcasted_depths[in_bounds_mask]
-            final_intensities = broadcasted_intensities[in_bounds_mask]
-
-            sort_indices = np.argsort(final_depths)[::-1]
-            sorted_rows = final_rows[sort_indices]
-            sorted_cols = final_cols[sort_indices]
-            sorted_depths = final_depths[sort_indices]
-            sorted_intensities = final_intensities[sort_indices]
-
-            depth_image[sorted_rows, sorted_cols] = sorted_depths
-            intensity_image[sorted_rows, sorted_cols] = sorted_intensities
-
-        # Depth is scaled by the maximum depth, intensity arrives in [0, 1] from the loader
-        return np.stack([depth_image, intensity_image]).astype(np.float32)
+        # Paint far to near so the closest point ends up on top.
+        order = np.argsort(patch_depths)[::-1]
+        depth_channel[patch_rows[order], patch_cols[order]] = patch_depths[order] / self.max_depth
+        intensity_channel[patch_rows[order], patch_cols[order]] = np.clip(
+            patch_intensities[order], 0.0, 1.0
+        )
+        return depth_channel, intensity_channel
 
 
-class Affine(BaseTransform):
-    """Affine transformation augmentation for images.
+class Affine(ImageSpaceTransform):
+    """Random affine distortion of the camera images.
 
-    Applies controlled affine distortion to the image and composes the affine into the image
-    augmentation matrices, so the projection of the points follows the pixels. Automatically
-    applies zoom to ensure the transformed image covers the entire viewport without black
-    borders.
+    Displaces the three reference corners of every image by up to ``max_distortion`` of the
+    image size and warps the pixels with the resulting affine. A zoom is folded in so the
+    warped image covers the whole viewport without black borders. Every camera draws its own
+    affine. The pixel affine is composed into ``augmented_camera_intrinsics``,
+    ``image_augmentation_matrices`` and ``lidar2images`` like the other image-space
+    transforms, so the lidar projections keep following the pixels.
+
+    Required keys:
+        - camera_image_data: images with their calibration.
+
+    Generated keys:
+        - camera_image_data.images: warped images (when applied).
+        - camera_image_data.augmented_camera_intrinsics / image_augmentation_matrices /
+          lidar2images: composed with the affine (when applied).
     """
 
     _required_keys = ["camera_image_data"]
 
-    def __init__(self, probability: float = 0.5, max_distortion: float = 0.1):
+    def __init__(self, *, probability: float | None = 0.5, max_distortion: float = 0.1) -> None:
         """Initialize the Affine transform.
 
         Args:
-            probability: Probability of applying augmentation.
-            max_distortion: Maximum corner displacement as fraction of image size.
+            probability: Probability of applying the augmentation, ``None`` to always run.
+            max_distortion: Maximum corner displacement as a fraction of the image size.
         """
         super().__init__(probability=probability)
         self.max_distortion = max_distortion
 
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
-        """Warp every image of the sample by a random affine.
+        """Warp every camera image with its own random affine.
 
         Args:
-            model_gt_sample: ModelGTSample instance holding loaded images.
+            model_gt_sample: Sample holding ``camera_image_data``.
 
         Returns:
-            Updated ModelGTSample instance with warped images.
+            Updated ModelGTSample with the warped images and the composed calibration.
         """
-        # This is checked in the _validate_required_keys()
-        camera_image_data: BaseImages = (
-            model_gt_sample.camera_image_data  # type: ignore[reportOptionalMemberAccess]
-        )
+        assert model_gt_sample.camera_image_data is not None
+        camera_image_data = model_gt_sample.camera_image_data
+        images = camera_image_data.images
+        num_cameras, _, height, width = images.shape
 
-        images = []
-        pixel_affines = []
-        for image in camera_image_data.images:
-            affine_matrix, warped = self.warp_image(np.transpose(image.numpy(), (1, 2, 0)))
-            images.append(torch.from_numpy(np.transpose(warped, (2, 0, 1)).copy()))
-            pixel_affines.append(torch.from_numpy(affine_matrix.astype(np.float32)))
-
-        augmentation_matrices = BaseImages.homogeneous_image_augmentation_matrices(
-            torch.stack(pixel_affines)
+        pixel_affines = np.stack(
+            [self.sample_affine_matrix(int(height), int(width)) for _ in range(num_cameras)]
         )
+        warped_images = []
+        for index in range(num_cameras):
+            image_hwc = images[index].permute(1, 2, 0).contiguous().cpu().numpy()
+            warped_hwc = cv2.warpAffine(
+                image_hwc,
+                pixel_affines[index, :2],
+                (int(width), int(height)),
+                borderMode=cv2.BORDER_CONSTANT,
+            ).reshape(int(height), int(width), -1)
+            warped_images.append(torch.from_numpy(warped_hwc).permute(2, 0, 1))
+
         return model_gt_sample._replace(
-            camera_image_data=BaseImages.model_validate(
-                camera_image_data.model_copy(
-                    update={
-                        "images": torch.stack(images),
-                        "image_augmentation_matrices": augmentation_matrices
-                        @ camera_image_data.image_augmentation_matrices,
-                    }
-                )
+            camera_image_data=self.apply_image_space_transform(
+                camera_image_data,
+                torch.stack(warped_images, dim=0).to(images),
+                torch.from_numpy(pixel_affines).to(torch.float32),
             )
         )
 
-    def warp_image(
-        self, image: npt.NDArray[np.float32]
-    ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float32]]:
-        """Warp one image by a random affine and return the affine it was warped with.
+    def sample_affine_matrix(self, height: int, width: int) -> npt.NDArray[np.float64]:
+        """Draw one random 3x3 pixel affine covering the whole viewport.
 
         Args:
-            image: Image in (height, width, num_channels) layout.
+            height: Image height in pixels.
+            width: Image width in pixels.
 
         Returns:
-            tuple: The 3x3 affine and the warped image.
+            3x3 affine mapping a pixel of the input image onto its location in the warped
+            image.
         """
-        h, w = image.shape[:2]
+        max_offset = np.array([[self.max_distortion * width, self.max_distortion * height]] * 3)
+        source_points = np.float32([[0, 0], [width - 1, 0], [0, height - 1]])
+        target_points = source_points + np.random.uniform(-max_offset, max_offset).astype(
+            np.float32
+        )
+        affine_2x3 = cv2.getAffineTransform(source_points, target_points)
 
-        max_offset_x = self.max_distortion * w
-        max_offset_y = self.max_distortion * h
-
-        src_pts = np.float32([[0, 0], [w - 1, 0], [0, h - 1]])
-        dst_pts = src_pts + np.random.uniform(
-            low=-np.array([[max_offset_x, max_offset_y]] * 3),
-            high=np.array([[max_offset_x, max_offset_y]] * 3),
-        ).astype(np.float32)
-
-        affine_matrix_2x3 = cv2.getAffineTransform(src_pts, dst_pts)
-
-        # Calculate the inverse transform to map destination corners to source space
-        inv_affine = cv2.invertAffineTransform(affine_matrix_2x3)
-
-        # Destination corners (the full image view)
-        corners = np.array([[0, 0], [w, 0], [w, h], [0, h]], dtype=np.float32)
-        corners_hom = np.hstack([corners, np.ones((4, 1), dtype=np.float32)])
-        src_corners = (inv_affine @ corners_hom.T).T
-
-        # Calculate required zoom to ensure source corners are within image bounds
-        cx, cy = w / 2.0, h / 2.0
-        max_x = np.max(np.abs(src_corners[:, 0] - cx))
-        max_y = np.max(np.abs(src_corners[:, 1] - cy))
-        scale = max(1.0, max_x / cx, max_y / cy)
-
-        # Apply zoom to the affine transform
-        zoom_mat = np.array(
-            [[scale, 0, cx * (1 - scale)], [0, scale, cy * (1 - scale)], [0, 0, 1]],
+        # Map the viewport corners back into the source image to find the zoom that keeps
+        # them inside the image bounds.
+        inverse_affine = cv2.invertAffineTransform(affine_2x3)
+        corners = np.array([[0, 0], [width, 0], [width, height], [0, height]], dtype=np.float64)
+        source_corners = np.hstack([corners, np.ones((4, 1))]) @ inverse_affine.T
+        center_x, center_y = width / 2.0, height / 2.0
+        scale = max(
+            1.0,
+            np.max(np.abs(source_corners[:, 0] - center_x)) / center_x,
+            np.max(np.abs(source_corners[:, 1] - center_y)) / center_y,
+        )
+        zoom = np.array(
+            [[scale, 0.0, center_x * (1 - scale)], [0.0, scale, center_y * (1 - scale)], [0, 0, 1]],
             dtype=np.float64,
         )
 
-        affine_matrix_3x3 = np.eye(3, dtype=np.float64)
-        affine_matrix_3x3[:2, :3] = affine_matrix_2x3
-        affine_matrix_3x3 = affine_matrix_3x3 @ zoom_mat
-        affine_matrix_2x3 = affine_matrix_3x3[:2]
-
-        image = cv2.warpAffine(image, affine_matrix_2x3, (w, h), borderMode=cv2.BORDER_CONSTANT)
-
-        return affine_matrix_3x3, image
+        affine_3x3 = np.eye(3, dtype=np.float64)
+        affine_3x3[:2, :3] = affine_2x3
+        return affine_3x3 @ zoom
 
 
 class SaveFusionPreview(BaseTransform):
-    """Write a preview of the projected points over the image, for visual inspection."""
+    """Save preview images of the projected points over the camera images.
+
+    Writes two overlays per camera: the RGB image with the depth points and with the
+    intensity points, each colorized with a colormap. The files are named after the camera
+    and its timestamp, suffixed with the calibration status when the misalignment
+    augmentation ran.
+
+    Required keys:
+        - camera_image_data: images in unit range with the ``depth_maps`` written by
+          ``LidarCameraFusion``, ``calibration_statuses`` when the misalignment augmentation
+          ran.
+
+    Generated keys:
+        - None (pass-through transform, only writes files to disk).
+    """
 
     _required_keys = ["camera_image_data"]
 
     def __init__(
         self,
-        out_dir: str,
-        probability: float = 0.0,
+        *,
+        probability: float | None = 1.0,
+        out_dir: str | Path = "",
         max_depth: float = 128.0,
-        alpha: float = 1.0,
-        depth_colormap: str = "jet",
+        alpha: float = 0.5,
+        depth_colormap: str = "turbo",
+        intensity_colormap: str = "jet",
     ) -> None:
         """Initialize the SaveFusionPreview transform.
 
         Args:
-            out_dir: Directory the previews are written to.
-            probability: Probability of writing a preview for a sample.
-            max_depth: Depth the color map saturates at, in meters.
-            alpha: Opacity of the projected points over the image.
-            depth_colormap: Name of the OpenCV color map applied to the depth.
+            probability: Probability of saving the previews of a sample, ``None`` to always
+                save.
+            out_dir: Output directory of the preview images, created if missing.
+            max_depth: ``max_depth`` used by ``LidarCameraFusion``, to recover the depth.
+            alpha: Blending factor of the overlay (0.0 = RGB only, 1.0 = points only).
+            depth_colormap: Matplotlib colormap of the depth overlay.
+            intensity_colormap: Matplotlib colormap of the intensity overlay.
         """
         super().__init__(probability=probability)
         self.out_dir = Path(out_dir)
         self.max_depth = max_depth
         self.alpha = alpha
-        self.depth_colormap = getattr(cv2, f"COLORMAP_{depth_colormap.upper()}")
-
-    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
-        """Write one preview per camera of the sample.
-
-        Args:
-            model_gt_sample: ModelGTSample instance whose images carry the projected channels.
-
-        Returns:
-            The ModelGTSample instance unchanged.
-        """
-        # This is checked in the _validate_required_keys()
-        camera_image_data: BaseImages = (
-            model_gt_sample.camera_image_data  # type: ignore[reportOptionalMemberAccess]
-        )
-        if camera_image_data.depth_maps is None:
-            raise ValueError(
-                "SaveFusionPreview runs after the projection, the images carry no depth maps."
-            )
+        self.depth_cmap = plt.get_cmap(depth_colormap)
+        self.intensity_cmap = plt.get_cmap(intensity_colormap)
 
         self.out_dir.mkdir(parents=True, exist_ok=True)
-        for index, camera_name in enumerate(camera_image_data.camera_names):
-            overlay = self.build_overlay(
-                np.transpose(camera_image_data.images[index].numpy(), (1, 2, 0)),
-                camera_image_data.depth_maps[index, 0].numpy(),
+
+    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
+        """Save the depth and intensity previews of every camera.
+
+        Args:
+            model_gt_sample: Sample holding the ``camera_image_data`` with its depth maps.
+
+        Returns:
+            The unmodified ModelGTSample.
+
+        Raises:
+            ValueError: If the images carry no depth maps.
+        """
+        assert model_gt_sample.camera_image_data is not None
+        camera_image_data = model_gt_sample.camera_image_data
+        if camera_image_data.depth_maps is None:
+            raise ValueError(
+                f"{self.__class__.__name__} runs after LidarCameraFusion, the images carry "
+                "no depth maps"
             )
+
+        statuses = camera_image_data.calibration_statuses
+        for index, camera_name in enumerate(camera_image_data.camera_names):
             timestamp = float(camera_image_data.timestamps[index])
-            cv2.imwrite(
-                str(self.out_dir / f"{camera_name}_{timestamp:.6f}.png"),
-                cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR),
+            self.save_preview(
+                image=camera_image_data.images[index].detach().cpu().numpy(),
+                depth_map=camera_image_data.depth_maps[index].detach().cpu().numpy(),
+                base_name=f"{camera_name}_{timestamp:.6f}",
+                calibration_status=None if statuses is None else int(statuses[index].item()),
             )
         return model_gt_sample
 
-    def build_overlay(
-        self, image: npt.NDArray[np.float32], depth: npt.NDArray[np.float32]
-    ) -> npt.NDArray[np.uint8]:
-        """Color the projected depth and blend it over the image.
+    def save_preview(
+        self,
+        image: npt.NDArray[np.float32],
+        depth_map: npt.NDArray[np.float32],
+        base_name: str,
+        calibration_status: int | None,
+    ) -> None:
+        """Write the depth and intensity overlays of one camera.
 
         Args:
-            image: Image in (height, width, num_channels) layout with values in [0, 1].
-            depth: Projected depth channel with values in [0, 1].
+            image: RGB image of shape ``(3, height, width)`` in unit range.
+            depth_map: Depth and intensity channels of shape ``(2, height, width)``.
+            base_name: Filename stem of the previews.
+            calibration_status: ``CalibrationStatus`` value appended to the filename, ``None``
+                for no suffix.
+        """
+        rgb, depth, intensity = self.recover_channels(image, depth_map)
+
+        if calibration_status is None:
+            status_suffix = ""
+        elif calibration_status == CalibrationStatus.CALIBRATED.value:
+            status_suffix = "_calibrated"
+        else:
+            status_suffix = "_miscalibrated"
+
+        depth_overlay = self.create_overlay(rgb, depth, self.depth_cmap, self.alpha)
+        intensity_overlay = self.create_overlay(rgb, intensity, self.intensity_cmap, self.alpha)
+
+        depth_path = self.out_dir / f"{base_name}{status_suffix}_depth.png"
+        intensity_path = self.out_dir / f"{base_name}{status_suffix}_intensity.png"
+        # cv2.imwrite expects BGR.
+        cv2.imwrite(str(depth_path), cv2.cvtColor(depth_overlay, cv2.COLOR_RGB2BGR))
+        cv2.imwrite(str(intensity_path), cv2.cvtColor(intensity_overlay, cv2.COLOR_RGB2BGR))
+
+    def recover_channels(
+        self, image: npt.NDArray[np.float32], depth_map: npt.NDArray[np.float32]
+    ) -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.float32], npt.NDArray[np.float32]]:
+        """Recover the RGB image, the depth in meters and the intensity.
+
+        Args:
+            image: RGB image of shape ``(3, height, width)`` in unit range.
+            depth_map: Depth and intensity channels of shape ``(2, height, width)`` as
+                written by ``LidarCameraFusion``.
 
         Returns:
-            npt.NDArray[np.uint8]: The blended preview.
+            RGB image ``(height, width, 3)`` uint8, depth ``(height, width)`` in meters and
+            intensity ``(height, width)`` in unit range.
         """
-        overlay = (np.clip(image, 0.0, 1.0) * 255.0).astype(np.uint8)
-        colored = cv2.applyColorMap(
-            (np.clip(depth, 0.0, 1.0) * 255.0).astype(np.uint8),
-            self.depth_colormap,
-        )
-        points = depth > 0.0
-        overlay[points] = (
-            self.alpha * colored[points] + (1.0 - self.alpha) * overlay[points]
+        rgb = np.clip(image[:3] * 255.0, 0, 255).astype(np.uint8).transpose(1, 2, 0)
+        depth = (depth_map[0] * self.max_depth).astype(np.float32)
+        intensity = depth_map[1].astype(np.float32)
+        return np.ascontiguousarray(rgb), depth, intensity
+
+    @staticmethod
+    def create_overlay(
+        rgb: npt.NDArray[np.uint8],
+        values: npt.NDArray[np.float32],
+        cmap: plt.Colormap,
+        alpha: float,
+    ) -> npt.NDArray[np.uint8]:
+        """Blend colorized point values over an RGB image.
+
+        Args:
+            rgb: RGB image ``(height, width, 3)`` uint8.
+            values: Values ``(height, width)`` to colorize, zero where no point landed.
+            cmap: Matplotlib colormap.
+            alpha: Blending factor of the points.
+
+        Returns:
+            Blended RGB image ``(height, width, 3)`` uint8.
+        """
+        mask = values > 0
+        max_value = values.max() if values.max() > 0 else 1.0
+        colored = (cmap(values / max_value)[:, :, :3] * 255).astype(np.uint8)
+
+        result = rgb.copy()
+        result[mask] = (
+            (1 - alpha) * rgb[mask].astype(np.float32) + alpha * colored[mask].astype(np.float32)
         ).astype(np.uint8)
-        return overlay
+        return result

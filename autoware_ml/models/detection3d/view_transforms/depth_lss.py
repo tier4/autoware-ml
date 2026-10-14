@@ -20,17 +20,41 @@ detectors and fusion models.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from typing import NamedTuple, Sequence
 
+from jaxtyping import Bool, Float32, Int64
 import torch
 import torch.nn as nn
 
 from autoware_ml.ops.bev_pool.bev_pool import bev_pool
 
 
+class BEVPoolResult(NamedTuple):
+    """Precomputed BEV pooling metadata produced by `DepthLSSTransform.bev_pool_aux`.
+
+    ``num_points`` is the number of frustum points, ``batch_size * num_cams * depth_bins *
+    height * width``. ``num_kept`` is the number of those points that fall inside the BEV
+    grid, i.e. ``kept.sum()``.
+
+    Attributes:
+        geom_feats: Integer voxel coordinates ``(x_idx, y_idx, z_idx, batch_idx)`` of the kept
+            points, sorted by ``ranks``.
+        kept: Boolean mask over all frustum points; ``True`` where the point lies inside the
+            BEV grid.
+        ranks: Sorted flat BEV grid rank of each kept point.
+        indices: Permutation that sorts the kept points by rank; apply it to features after
+            masking with ``kept``.
+    """
+
+    geom_feats: Int64[torch.Tensor, "num_kept 4"]
+    kept: Bool[torch.Tensor, " num_frustum_points"]
+    ranks: Int64[torch.Tensor, " num_kept"]
+    indices: Int64[torch.Tensor, " num_kept"]
+
+
 def _gen_dx_bx(
     xbound: Sequence[float], ybound: Sequence[float], zbound: Sequence[float]
-) -> tuple[torch.Tensor, torch.Tensor, tuple[int, int, int]]:
+) -> tuple[Float32[torch.Tensor, " 3"], Float32[torch.Tensor, " 3"], tuple[int, ...]]:
     """Derive voxel sizes, voxel origins, and grid shape from bounds.
 
     Args:
@@ -81,16 +105,18 @@ class DownSampleNet(nn.Module):
         else:
             raise ValueError(f"Unsupported downsample factor: {downsample}")
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, bev_features: Float32[torch.Tensor, "batch_size num_channels height width"]
+    ) -> Float32[torch.Tensor, "batch_size num_channels height width"]:
         """Downsample BEV features.
 
         Args:
-            x: BEV feature map.
+            bev_features: BEV feature map.
 
         Returns:
-            Downsampled BEV feature map.
+            Downsampled BEV feature map, where height and width are divided by the downsampling factor.
         """
-        return self.net(x)
+        return self.net(bev_features)
 
 
 class LidarDepthImageNet(nn.Module):
@@ -123,16 +149,18 @@ class LidarDepthImageNet(nn.Module):
             nn.ReLU(inplace=True),
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, lidar_depth_maps: Float32[torch.Tensor, "batch_size num_channels height width"]
+    ) -> Float32[torch.Tensor, "batch_size num_channels height width"]:
         """Encode lidar depth maps.
 
         Args:
-            x: Depth maps of shape ``(B * N, 1, H, W)``.
+            lidar_depth_maps: Lidar depth maps of shape ``(batch_size * num_cameras, 1, H, W)``.
 
         Returns:
-            Depth features of shape ``(B * N, C, H / stride, W / stride)``.
+            Depth features of shape ``(batch_size * num_cameras, C, H / stride, W / stride)``.
         """
-        return self.net(x)
+        return self.net(lidar_depth_maps)
 
 
 class DepthLSSNet(nn.Module):
@@ -161,16 +189,18 @@ class DepthLSSNet(nn.Module):
             nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=True),
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, fused_features: Float32[torch.Tensor, "batch_size num_channels height width"]
+    ) -> Float32[torch.Tensor, "batch_size num_channels height width"]:
         """Predict depth logits and context features.
 
         Args:
-            x: Concatenated feature tensor of shape ``(B * N, C, H, W)``.
+            fused_features: Concatenated feature tensor of shape ``(batch_size * num_cameras, C, H, W)``.
 
         Returns:
-            Tensor of shape ``(B * N, depth_bins + context, H, W)``.
+            Tensor of shape ``(batch_size * num_cameras, depth_bins + context, H, W)``.
         """
-        return self.net(x)
+        return self.net(fused_features)
 
 
 class DepthLSSTransform(nn.Module):
@@ -250,11 +280,13 @@ class DepthLSSTransform(nn.Module):
         width = self.nx[0] // self.downsample
         return height, width
 
-    def _create_frustum(self) -> torch.Tensor:
+    def _create_frustum(self) -> Float32[torch.Tensor, "depth_bins feature_height feature_width 3"]:
         """Create the frustum grid used for lift-splat projection.
 
         Returns:
-            Frustum grid in image coordinates with depth bins.
+            Frustum grid in image coordinates with depth bins, where depth_bins is the number of
+            discrete depth bins. For example, 0.5m resolution from 0m to 50m would yield 100 depth
+            bins. 3 represents the (x, y, depth) coordinates in image space.
         """
         image_height, image_width = self.image_size
         feature_height, feature_width = self.feature_size
@@ -276,67 +308,104 @@ class DepthLSSTransform(nn.Module):
 
     def camera_to_lidar_geometry(
         self,
-        camera2lidar: torch.Tensor,
-        camera_intrinsics: torch.Tensor,
-        lidar_aug_matrix: torch.Tensor,
-        img_aug_matrix: torch.Tensor,
-    ) -> torch.Tensor:
-        """Project image frustum points into lidar coordinates.
+        camera2aug_lidar: Float32[torch.Tensor, "batch_size num_cameras 4 4"],
+        camera_intrinsics: Float32[torch.Tensor, "batch_size num_cameras 3 3"],
+        img_aug_matrix: Float32[torch.Tensor, "batch_size num_cameras 4 4"],
+    ) -> Float32[torch.Tensor, "batch_size num_cameras depth_bins feature_height feature_width 3"]:
+        """Project the image frustum into the lidar frame the BEV grid is built in.
+
+        The frustum lives in the coordinates of the (augmented) image the features were
+        computed on. It is first undone back to the raw image plane with ``img_aug_matrix``,
+        lifted into the camera frame with ``camera_intrinsics``, and moved into the lidar
+        frame with ``camera2aug_lidar``. The output frame must be the one the point cloud,
+        the boxes, and the BEV grid live in, so the arguments have to be kept consistent.
 
         Args:
-            camera2lidar: Camera-to-lidar extrinsics.
-            camera_intrinsics: Camera intrinsic matrices.
-            lidar_aug_matrix: Lidar augmentation matrices.
-            img_aug_matrix: Image augmentation matrices.
+            camera2aug_lidar: Camera-to-lidar extrinsics mapping the camera into the lidar
+                frame the BEV grid is built in. During training that is the augmented lidar
+                frame, so this must be the inverse of a ``lidar2cam`` into which the pipeline
+                already composed the inverse of the lidar augmentation (as
+                ``update_lidar_transformation_matrices`` does). No lidar augmentation is
+                applied here, so an extrinsic left in the raw lidar frame would put the
+                frustum in the wrong frame.
+            camera_intrinsics: Intrinsics of the camera, mapping 3D points in the camera frame to
+                2D points in the image plane. It takes the raw intrinsics and thus doesn't take
+                image augmentation into account. The frustum is in the augmented image plane,
+                so it has to be undone back to the raw image plane with ``img_aug_matrix`` before
+                applying the intrinsics.
+            img_aug_matrix: 4x4 image augmentation mapping the raw image plane described by
+                ``camera_intrinsics`` onto the image the features were computed on, with the
+                2D rotation in the top-left 2x2 block and the pixel translation in the last
+                column, see ``camera_intrinsics``.
 
         Returns:
-            Frustum points expressed in lidar coordinates.
+            Frustum points expressed in the lidar frame the BEV grid is built in.
         """
-        batch_size, num_cams = camera2lidar.shape[:2]
+        batch_size, num_cams = camera2aug_lidar.shape[:2]
 
-        camera2lidar_rots = camera2lidar[..., :3, :3]
-        camera2lidar_trans = camera2lidar[..., :3, 3]
+        camera2lidar_rots = camera2aug_lidar[..., :3, :3]
+        camera2lidar_trans = camera2aug_lidar[..., :3, 3]
         intrinsic_inverse = torch.inverse(camera_intrinsics[..., :3, :3])
         post_rot_inverse = torch.inverse(img_aug_matrix[..., :3, :3])
         post_trans = img_aug_matrix[..., :3, 3]
 
-        points = self.frustum.to(camera2lidar.device) - post_trans.view(
+        # First transform the frustum points from augmented image coordinates to raw image
+        # coordinates by subtracting the translation and applying the inverse rotation.
+        # (batch_size, num_cams, depth_bins, feature_height, feature_width, 3) - (batch_size, num_cams, 1, 1, 1, 3)
+        # = (batch_size, num_cams, depth_bins, feature_height, feature_width, 3)
+        points = self.frustum.to(camera2aug_lidar.device) - post_trans.view(
             batch_size, num_cams, 1, 1, 1, 3
         )
+        # Apply the inverse rotation to the points to get them into raw image coordinates.
+        # (batch_size, num_cams, 1, 1, 1, 3, 3) @ (batch_size, num_cams, depth_bins, feature_height, feature_width, 3, 1) =
+        # (batch_size, num_cams, depth_bins, feature_height, feature_width, 3, 1)
+        # It's now in the raw image coordinates.
         points = post_rot_inverse.view(batch_size, num_cams, 1, 1, 1, 3, 3).matmul(
             points.unsqueeze(-1)
         )
+        # Multiply x and y by z to do un-normalization, so that the points are in 3D space in raw image coordinates.
+        # Concat the z coordinate back to the points, so that we have un-normalized (x, y, z) in raw image coordinates.
+        # (batch_size, num_cams, depth_bins, feature_height, feature_width, 3)
         points = torch.cat([points[..., :2, :] * points[..., 2:3, :], points[..., 2:3, :]], dim=-2)
 
+        # Now get the rotation transformation from camera to lidar
+        # camera_to_lidar_rotation @ camera_intrinsic_inverse (from camera to image -> image to camera)
+        # (batch_size, num_cams, 3, 3) @ (batch_size, num_cams, 3, 3)
         camera_to_lidar = camera2lidar_rots.matmul(intrinsic_inverse)
+        # Now apply the camera to lidar transformation to the points.
+        # (batch_size, num_cams, 1, 1, 1, 3, 3) @ (batch_size, num_cams, depth_bins, feature_height, feature_width, 3, 1) =
+        # (batch_size, num_cams, depth_bins, feature_height, feature_width, 3, 1) -> squeeze(-1) ->
+        # (batch_size, num_cams, depth_bins, feature_height, feature_width, 3)
+        # The points are now in lidar coordinates.
         points = (
             camera_to_lidar.view(batch_size, num_cams, 1, 1, 1, 3, 3).matmul(points).squeeze(-1)
         )
+        # Add the translation from camera to lidar to the points, so that they are now in lidar coordinates.
+        # (batch_size, num_cams, depth_bins, feature_height, feature_width, 3) + (batch_size, num_cams, 1, 1, 1, 3) =
+        # (batch_size, num_cams, depth_bins, feature_height, feature_width, 3)
         points += camera2lidar_trans.view(batch_size, num_cams, 1, 1, 1, 3)
-
-        extra_rots = lidar_aug_matrix[..., :3, :3]
-        extra_trans = lidar_aug_matrix[..., :3, 3]
-        points = (
-            extra_rots.view(batch_size, 1, 1, 1, 1, 3, 3)
-            .repeat(1, num_cams, 1, 1, 1, 1, 1)
-            .matmul(points.unsqueeze(-1))
-            .squeeze(-1)
-        )
-        points += extra_trans.view(batch_size, 1, 1, 1, 1, 3).repeat(1, num_cams, 1, 1, 1, 1)
         return points
 
-    def _get_cam_feats(self, x: torch.Tensor, depth_maps: torch.Tensor) -> torch.Tensor:
+    def _get_cam_feats(
+        self,
+        image_features: Float32[
+            torch.Tensor, "batch_size num_cams channels feature_height feature_width"
+        ],
+        depth_maps: Float32[torch.Tensor, "batch_size num_cams 1 height width"],
+    ) -> Float32[
+        torch.Tensor, "batch_size num_cams depth_bins feature_height feature_width channels"
+    ]:
         """Predict per-depth camera features guided by lidar depth maps.
 
         Args:
-            x: Multiview image feature tensor of shape ``(B, N, C, fH, fW)``.
+            image_features: Multiview image feature tensor of shape ``(B, N, C, fH, fW)``.
             depth_maps: Sparse lidar depth maps of shape ``(B, N, 1, H, W)``.
 
         Returns:
             Depth-weighted camera feature tensor.
         """
-        batch_size, num_cams, channels, feature_height, feature_width = x.shape
-        x = x.view(batch_size * num_cams, channels, feature_height, feature_width)
+        batch_size, num_cams, channels, feature_height, feature_width = image_features.shape
+        x = image_features.view(batch_size * num_cams, channels, feature_height, feature_width)
         depth_features = self.dtransform(
             depth_maps.view(batch_size * num_cams, *depth_maps.shape[2:])
         )
@@ -345,98 +414,31 @@ class DepthLSSTransform(nn.Module):
         feats = depth.unsqueeze(1) * x[
             :, self.depth_bins : self.depth_bins + self.out_channels
         ].unsqueeze(2)
+        # Reshape the features to have shape
+        # (batch_size, num_cams, out_channels, depth_bins, feature_height, feature_width)
         feats = feats.view(
             batch_size, num_cams, self.out_channels, self.depth_bins, feature_height, feature_width
         )
+        # Permute the features to have shape
+        # (batch_size, num_cams, depth_bins, feature_height, feature_width, out_channels)
         return feats.permute(0, 1, 3, 4, 5, 2)
 
-    def build_depth_maps(
-        self,
-        points: Sequence[torch.Tensor],
-        lidar2image: torch.Tensor,
-        img_aug_matrix: torch.Tensor,
-    ) -> torch.Tensor:
-        """Project lidar points onto each camera into sparse depth maps.
-
-        Both matrices must map into the same image plane the depth map is
-        built for: when ``lidar2image`` already contains the image
-        augmentation (training pipeline), pass an identity ``img_aug_matrix``;
-        at deployment the runtime provides the raw projection and the
-        augmentation separately.
-
-        The per-camera scatter is vectorized so the traced graph supports a
-        dynamic number of cameras; duplicate pixel hits resolve to an
-        arbitrary point among the duplicates.
-
-        Args:
-            points: Per-sample lidar points with at least XYZ columns.
-            lidar2image: Lidar-to-image projections of shape ``(B, N, 4, 4)``.
-            img_aug_matrix: Image augmentation matrices of shape ``(B, N, 4, 4)``.
-
-        Returns:
-            Sparse depth maps of shape ``(B, N, 1, H, W)``.
-        """
-        batch_size = len(points)
-        num_cams = lidar2image.shape[1]
-        height, width = self.image_size
-        depth_maps = lidar2image.new_zeros(batch_size, num_cams, 1, height, width)
-
-        for batch_index in range(batch_size):
-            coords = points[batch_index][:, :3].transpose(0, 1)  # (3, P)
-            projected = lidar2image[batch_index][:, :3, :3].matmul(coords)
-            projected = projected + lidar2image[batch_index][:, :3, 3].reshape(-1, 3, 1)
-
-            distances = projected[:, 2, :]
-            valid_distance = distances > 0
-
-            projected = torch.cat(
-                [
-                    projected[:, :2, :] / torch.clamp(projected[:, 2:3, :], 1e-5, 1e5),
-                    projected[:, 2:3, :],
-                ],
-                dim=1,
-            )
-            projected = img_aug_matrix[batch_index][:, :3, :3].matmul(projected)
-            projected = projected + img_aug_matrix[batch_index][:, :3, 3].reshape(-1, 3, 1)
-            pixel_coords = projected[:, :2, :].transpose(1, 2)[..., [1, 0]]  # (N, P, [y, x])
-
-            on_image = (
-                (pixel_coords[..., 0] >= 0)
-                & (pixel_coords[..., 0] < height)
-                & (pixel_coords[..., 1] >= 0)
-                & (pixel_coords[..., 1] < width)
-                & valid_distance
-            )
-            hits = torch.nonzero(on_image, as_tuple=False)
-            camera_indices = hits[:, 0]
-            point_indices = hits[:, 1]
-            hit_coords = pixel_coords[camera_indices, point_indices].long()
-            hit_distances = distances[camera_indices, point_indices]
-
-            flat_indices = (
-                camera_indices * height * width + hit_coords[:, 0] * width + hit_coords[:, 1]
-            )
-            flat_depth = torch.zeros(
-                num_cams * height * width, device=depth_maps.device, dtype=depth_maps.dtype
-            )
-            flat_depth.scatter_(dim=0, index=flat_indices, src=hit_distances)
-            depth_maps[batch_index] = flat_depth.view(num_cams, 1, height, width)
-
-        return depth_maps
-
     def bev_pool_aux(
-        self, geom_feats: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        self,
+        geom_feats: Float32[torch.Tensor, "batch_size num_cams depth_bins height width 3"],
+    ) -> BEVPoolResult:
         """Precompute sorted BEV pooling metadata from projected frustum points.
 
         Args:
             geom_feats: Projected frustum coordinates in lidar space.
 
         Returns:
-            Tuple of filtered geometry features, keep mask, ranks, and sorting indices.
+            :class:`BEVPoolResult` holding the sorted integer voxel coordinates of the kept
+            points, the keep mask over all frustum points, the sorted ranks, and the sorting
+            indices.
         """
         batch_size, num_cams, depth_bins, height, width, channels = geom_feats.shape
-        geom_feats = ((geom_feats - (self.bx - self.dx / 2.0)) / self.dx).long()
+        geom_feats = ((geom_feats - (self.bx - self.dx / 2.0)) / self.dx).long()  # type: ignore
         geom_feats = geom_feats.view(batch_size * num_cams * depth_bins * height * width, channels)
         batch_indices = torch.cat(
             [
@@ -471,16 +473,16 @@ class DepthLSSTransform(nn.Module):
         indices = ranks.argsort()
         ranks = ranks[indices]
         geom_feats = geom_feats[indices]
-        return geom_feats, kept, ranks, indices
+        return BEVPoolResult(geom_feats=geom_feats, kept=kept, ranks=ranks, indices=indices)
 
     def bev_pool_precomputed(
         self,
-        feats: torch.Tensor,
-        geom_feats: torch.Tensor,
-        kept: torch.Tensor,
-        ranks: torch.Tensor,
-        indices: torch.Tensor,
-    ) -> torch.Tensor:
+        feats: Float32[torch.Tensor, "batch_size num_cams depth_bins height width channels"],
+        geom_feats: Int64[torch.Tensor, "num_frustum_points 4"],
+        kept: Bool[torch.Tensor, " num_frustum_points"],
+        ranks: Int64[torch.Tensor, " num_kept"],
+        indices: Int64[torch.Tensor, " num_kept"],
+    ) -> Float32[torch.Tensor, "batch_size channels * Z height width"]:
         """Pool camera features into BEV using precomputed geometry metadata.
 
         Args:
@@ -505,7 +507,11 @@ class DepthLSSTransform(nn.Module):
         # layout shared with the lidar branch and the detection head.
         return torch.cat(bev.unbind(dim=2), dim=1).transpose(-2, -1).contiguous()
 
-    def _bev_pool(self, feats: torch.Tensor, geom_feats: torch.Tensor) -> torch.Tensor:
+    def _bev_pool(
+        self,
+        feats: Float32[torch.Tensor, "batch_size num_cams depth_bins height width channels"],
+        geom_feats: Float32[torch.Tensor, "batch_size num_cams depth_bins height width 3"],
+    ) -> Float32[torch.Tensor, "batch_size channels * Z height width"]:
         """Pool camera features into BEV using on-the-fly metadata generation.
 
         Args:
@@ -515,78 +521,85 @@ class DepthLSSTransform(nn.Module):
         Returns:
             BEV feature map of shape ``(B, C * Z, Y, X)``.
         """
-        pooled_geom_feats, kept, ranks, indices = self.bev_pool_aux(geom_feats)
-        return self.bev_pool_precomputed(feats, pooled_geom_feats, kept, ranks, indices)
+        bev_pool_result = self.bev_pool_aux(geom_feats)
+        return self.bev_pool_precomputed(
+            feats,
+            bev_pool_result.geom_feats,
+            bev_pool_result.kept,
+            bev_pool_result.ranks,
+            bev_pool_result.indices,
+        )
 
     def forward_precomputed(
         self,
-        x: torch.Tensor,
-        points: Sequence[torch.Tensor],
-        lidar2image: torch.Tensor,
-        img_aug_matrix: torch.Tensor,
-        geom_feats: torch.Tensor,
-        kept: torch.Tensor,
-        ranks: torch.Tensor,
-        indices: torch.Tensor,
-    ) -> torch.Tensor:
+        image_features: Float32[
+            torch.Tensor, "batch_size num_cams channels feature_height feature_width"
+        ],
+        depth_maps: Float32[torch.Tensor, "batch_size num_cams 1 height width"],
+        geom_feats: Int64[torch.Tensor, "num_frustum_points 4"],
+        kept: Bool[torch.Tensor, " num_frustum_points"],
+        ranks: Int64[torch.Tensor, " num_kept"],
+        indices: Int64[torch.Tensor, " num_kept"],
+    ) -> Float32[torch.Tensor, "batch_size channels * Z height width"]:
         """Project multiview image features into BEV using precomputed pooling metadata.
 
         Args:
-            x: Multiview image feature tensor.
-            points: Per-sample lidar points used for depth guidance.
-            lidar2image: Lidar-to-image projection matrices.
-            img_aug_matrix: Image augmentation matrices.
+            image_features: Multiview image feature tensor.
+            depth_maps: Pre-computed depth maps for each camera.
             geom_feats: Filtered geometry features.
             kept: Keep mask produced by :meth:`bev_pool_aux`.
             ranks: Sorted BEV ranks.
             indices: Sorting indices aligned with ``ranks``.
 
         Returns:
-            BEV feature map.
+            BEV feature map, where height and width are divided by the downsampling factor.
         """
-        depth_maps = self.build_depth_maps(points, lidar2image, img_aug_matrix)
-        bev = self.bev_pool_precomputed(
-            self._get_cam_feats(x, depth_maps), geom_feats, kept, ranks, indices
-        )
+        feats = self._get_cam_feats(image_features, depth_maps)
+        bev = self.bev_pool_precomputed(feats, geom_feats, kept, ranks, indices)
         return self.downsample_net(bev)
 
     def forward(
         self,
-        x: torch.Tensor,
-        points: Sequence[torch.Tensor],
-        lidar2image: torch.Tensor,
-        camera_intrinsics: torch.Tensor,
-        camera2lidar: torch.Tensor,
-        img_aug_matrix: torch.Tensor,
-        lidar_aug_matrix: torch.Tensor,
-        geom_feats_precomputed: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
-        | None = None,
-    ) -> torch.Tensor:
+        image_features: Float32[
+            torch.Tensor, "batch_size num_cams channels feature_height feature_width"
+        ],
+        depth_maps: Float32[torch.Tensor, "batch_size num_cams 1 height width"],
+        camera_intrinsics: Float32[torch.Tensor, "batch_size num_cams 3 3"],
+        camera2aug_lidar: Float32[torch.Tensor, "batch_size 4 4"],
+        img_aug_matrix: Float32[torch.Tensor, "batch_size 4 4"],
+        geom_feats_precomputed: BEVPoolResult | None = None,
+    ) -> Float32[torch.Tensor, "batch_size channels * Z height width"]:
         """Project multiview image features into the BEV plane.
 
         Args:
-            x: Multiview image feature tensor.
-            points: Per-sample lidar points used for depth guidance.
-            lidar2image: Lidar-to-image projection matrices. Must map into the
-                same image plane as ``x`` (image augmentation included when the
-                pipeline bakes it into the calibration).
-            camera_intrinsics: Camera intrinsic matrices.
-            camera2lidar: Camera-to-lidar extrinsics.
-            img_aug_matrix: Image augmentation matrices.
-            lidar_aug_matrix: Lidar augmentation matrices.
+            image_features: Multiview image feature tensor.
+            depth_maps: Pre-computed depth maps for each camera.
+            camera_intrinsics: Intrinsics of the image plane ``img_aug_matrix`` maps
+                into, see :meth:`camera_to_lidar_geometry`.
+            camera2aug_lidar: Camera-to-lidar extrinsics mapping into the lidar frame
+                the BEV grid is built in, i.e. the augmented lidar frame during
+                training, see :meth:`camera_to_lidar_geometry`.
+            img_aug_matrix: 4x4 image augmentation matrices paired with
+                ``camera_intrinsics``. Also applied on top of ``lidar2image`` for the
+                depth maps, so it must be the identity when ``lidar2image`` already
+                includes the augmentation.
             geom_feats_precomputed: Optional precomputed BEV pooling metadata.
 
         Returns:
-            BEV feature map.
+            BEV feature map, where height and width are divided by the downsampling factor.
         """
-        depth_maps = self.build_depth_maps(points, lidar2image, img_aug_matrix)
-        feats = self._get_cam_feats(x, depth_maps)
+        feats = self._get_cam_feats(image_features, depth_maps)
         if geom_feats_precomputed is not None:
-            geom_feats, kept, ranks, indices = geom_feats_precomputed
-            bev = self.bev_pool_precomputed(feats, geom_feats, kept, ranks, indices)
+            bev = self.bev_pool_precomputed(
+                feats=feats,
+                geom_feats=geom_feats_precomputed.geom_feats,
+                kept=geom_feats_precomputed.kept,
+                ranks=geom_feats_precomputed.ranks,
+                indices=geom_feats_precomputed.indices,
+            )
         else:
             geom_feats = self.camera_to_lidar_geometry(
-                camera2lidar, camera_intrinsics, lidar_aug_matrix, img_aug_matrix
+                camera2aug_lidar, camera_intrinsics, img_aug_matrix
             )
             bev = self._bev_pool(feats, geom_feats)
         return self.downsample_net(bev)
