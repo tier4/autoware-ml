@@ -17,7 +17,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Sequence
 from types import MappingProxyType
 
 import polars as pl
@@ -173,15 +173,49 @@ class BaseDatabase:
         return self._version
 
     @property
-    def scenarios(self) -> Mapping[str, Scenarios]:
+    def scenarios(self) -> MappingProxyType[str, Scenarios]:
         """
         Get the scenarios for each scenario group.
 
         Returns:
-          Mapping[str, Scenarios]: Dictionary of scenario group name to scenarios.
+          MappingProxyType[str, Scenarios]: Dictionary of scenario group name to scenarios.
         """
 
         return self._scenarios
+
+    @property
+    def hash_repr(self) -> str:
+        """
+        Get the representation of the database that identifies the content of its cache.
+
+        Only the settings that change what lands in the cached records belong here. Filesystem
+        locations (``root_path``, ``cache_path``, ``cache_file_prefix_name``, and the scenario
+        root path) are deliberately left out: the cached records are re-rooted against the
+        database root path when they are read back, so the same records are valid under any
+        path, and including a path would give every node a different cache file for
+        identical content. Runtime-only settings such as ``num_workers`` are left out for the
+        same reason.
+
+        This is kept separate from :meth:`__str__`, which is a debug representation and free to
+        gain fields without invalidating every cached file in existence.
+
+        Returns:
+          str: Content representation of the database.
+        """
+
+        box3d_pipelines = ", ".join(str(pipeline) for pipeline in self._box3d_pipelines)
+        scenarios = ", ".join(
+            f"{scenario_group}: {scenarios.hash_repr}"
+            for scenario_group, scenarios in self.scenarios.items()
+        )
+        return (
+            f"{type(self).__name__}("
+            f"version={self._version}, "
+            f"taxonomy={self._taxonomy}, "
+            f"box3d_pipelines=[{box3d_pipelines}], "
+            f"scenarios=({scenarios})"
+            f")"
+        )
 
     @property
     def lidar_intensity_scale(self) -> float:
@@ -197,12 +231,12 @@ class BaseDatabase:
     @property
     def database_hash(self) -> str:
         """
-        Get a hash for the database based on its version and scenarios.
+        Get a hash for the database based on the content of its cache.
 
         Returns:
           str: Hash of the database.
         """
-        hash_str = str(self)
+        hash_str = self.hash_repr
         polars_schema = self.get_polars_schema()
         # Convert the polars schema to a string representation
         schema_str = str(polars_schema)

@@ -19,7 +19,7 @@ from typing import Sequence, Mapping, Annotated
 
 from pydantic import BaseModel, ConfigDict, BeforeValidator, Field, model_validator
 
-from autoware_ml.types.dataset import SplitType, SweepDirection
+from autoware_ml.types.dataset import SplitType
 
 
 def path_adapter(path: str | Path) -> Path:
@@ -113,6 +113,8 @@ class ScenarioData(BaseModel):
       scenario_version: Version of the scenario.
       vehicle_type: Type of the vehicle.
       location: Location of the scenario.
+      traffic_cone_barrier_bbox_status: Temporarly boolean value to mention if traffic_cone/barriers
+          are annotated in a scenario.
     """
 
     # Set model config to frozen and strict
@@ -123,6 +125,8 @@ class ScenarioData(BaseModel):
     scenario_version: str
     vehicle_type: str | None = None
     location: str | None = None
+    # This is a temporary fix for T4Dataset
+    traffic_cone_barrier_bbox_status: bool | None = None
 
     def __str__(self) -> str:
         """
@@ -154,6 +158,7 @@ class ScenarioData(BaseModel):
             and self.scenario_version == other.scenario_version
             and self.vehicle_type == other.vehicle_type
             and self.location == other.location
+            and self.traffic_cone_barrier_bbox_status == other.traffic_cone_barrier_bbox_status
         )
 
     def __hash__(self) -> int:
@@ -202,6 +207,25 @@ class Scenarios(BaseModel):
             string += f"{split}: {scenario_data}, "
         string += "))"
         return string
+
+    @property
+    def hash_repr(self) -> str:
+        """
+        Get the representation of the scenarios that identifies their content.
+
+        ``scenario_root_path`` is deliberately left out to align different nodes with the same
+        scenarios at different paths, and they must agree on this representation.
+
+        Returns:
+          str: Content representation of the scenarios.
+        """
+
+        dataset_params = ", ".join(str(dataset_param) for dataset_param in self.dataset_params)
+        scenario_data = ", ".join(
+            f"{split}: [{', '.join(str(data) for data in split_data)}]"
+            for split, split_data in self.scenario_data.items()
+        )
+        return f"Scenarios(dataset_params=({dataset_params}), scenario_data=({scenario_data}))"
 
     def __eq__(self, other: Scenarios) -> bool:
         """

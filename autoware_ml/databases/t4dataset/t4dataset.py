@@ -51,6 +51,7 @@ class T4RecordsGeneratorWorkerParams:
       box_annotation_dir: Directory of each scene with the category and instance tables to read
         box names from.
       taxonomy: Taxonomies the database labels are built with.
+      box3d_pipelines: List of box 3D pipelines to process the box 3D annotations.
     """
 
     database_root_path: str
@@ -166,6 +167,25 @@ class T4Dataset(BaseDatabase):
             f")"
         )
         return string
+
+    @property
+    def hash_repr(self) -> str:
+        """
+        Get the representation of the database that identifies the content of its cache.
+
+        Extends the base representation with the lidar and annotation settings that shape the
+        cached records.
+
+        Returns:
+          str: Content representation of the database.
+        """
+
+        return (
+            f"{super().hash_repr}"
+            f"(lidar_channel={self._lidar_channel.value}, "
+            f"lidar_pointcloud_num_features={self._lidar_pointcloud_num_features}, "
+            f"box_annotation_dir={self._box_annotation_dir})"
+        )
 
     def __eq__(self, other: DatabaseInterface) -> bool:
         """
