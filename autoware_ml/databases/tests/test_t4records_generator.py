@@ -93,9 +93,7 @@ def generator(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> T4RecordsGener
     devkit = _ChainDevkit(num_frames=4)
     monkeypatch.setattr(t4records_generator, "T4Devkit", lambda data_root, verbose: devkit)
     monkeypatch.setattr(t4records_generator, "load_table", lambda path, schema: [])
-    dataset_params = DatasetParams(
-        dataset_name=_DATASET_NAME, max_past_sweeps=2, max_future_sweeps=2, sample_steps=1
-    )
+    dataset_params = DatasetParams(dataset_name=_DATASET_NAME, sample_steps=1)
     return T4RecordsGenerator(
         database_root_path=str(tmp_path),
         scenario_data=ScenarioData(

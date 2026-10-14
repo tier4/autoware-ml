@@ -45,6 +45,8 @@ logger = logging.getLogger(__name__)
 
 # Lidar channel each nuScenes sample is keyed on
 LIDAR_CHANNEL = LidarChannel.LIDAR_TOP
+# 10 past sweeps + 1 current sweep
+_MAX_SWEEPS = 10
 
 
 class NuScenesRecordsGenerator:
@@ -143,9 +145,7 @@ class NuScenesRecordsGenerator:
         records = []
         logger.info(
             f"Generating dataset records for scenario: {self.scenario_data.scenario_id} "
-            f"with sample steps: {self.sample_steps}, "
-            f"past sweeps: {self.scenario_data.dataset_params.max_past_sweeps} and "
-            f"future sweeps: {self.scenario_data.dataset_params.max_future_sweeps}"
+            f"with sample steps: {self.sample_steps} and max sweeps: {_MAX_SWEEPS}"
         )
 
         for sample_index in range(0, len(self.sample_tokens), self.sample_steps):
@@ -412,7 +412,7 @@ class NuScenesRecordsGenerator:
         lidar_frame_data_models = []
         current_sample_data_record = self.nusc.get("sample_data", current_lidar_sample_data_token)
 
-        for _ in range(self.scenario_data.dataset_params.max_sweeps(direction)):
+        for _ in range(_MAX_SWEEPS):
             neighbour_token = current_sample_data_record[direction.link]
             if not neighbour_token:
                 break
@@ -662,7 +662,7 @@ class NuScenesRecordsGenerator:
         current_sample = sample
 
         # Camera sweeps are taken from the past only. The future window is lidar only.
-        for _ in range(self.scenario_data.dataset_params.max_past_sweeps):
+        for _ in range(_MAX_SWEEPS):
             if not current_sample["prev"]:
                 break
 

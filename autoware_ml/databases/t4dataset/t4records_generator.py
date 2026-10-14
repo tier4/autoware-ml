@@ -67,6 +67,10 @@ from autoware_ml.utils.dataset import convert_quaternion_to_matrix
 
 logger = logging.getLogger(__name__)
 
+# Max number of lidar sweeps recorded on either side of the current lidar frame, and of past
+# camera keyframes. The T4Dataset lidar runs at 10Hz, so 9 past sweeps + 1 current sweep cover
+# all the lidar scans in one second.
+_MAX_SWEEPS = 9
 # Lens distortion model of every T4 camera, the coefficients follow its parameter order
 CAMERA_DISTORTION_MODEL = "plumb_bob"
 
@@ -93,8 +97,7 @@ class T4RecordsGenerator:
 
         Args:
           database_root_path: Root path of the T4 database.
-          scenario_data: Scenario data with the dataset parameters, which set the sweep window
-            on either side of a sample and the sampling step.
+          scenario_data: Scenario data with the dataset parameters, which set the sampling step.
           lidar_channel: Lidar channel each sample is keyed on.
           lidar_pointcloud_num_features: Number of features of the lidar pointcloud.
           box_annotation_dir: Directory of each scene with the category and instance tables to
@@ -202,9 +205,7 @@ class T4RecordsGenerator:
         records = []
         logger.info(
             f"Generating dataset records for scenario: {self.scenario_data.scenario_id} with "
-            f"sample steps: {self.sample_steps}, "
-            f"past sweeps: {self.scenario_data.dataset_params.max_past_sweeps} and "
-            f"future sweeps: {self.scenario_data.dataset_params.max_future_sweeps}"
+            f"sample steps: {self.sample_steps} and max sweeps: {_MAX_SWEEPS}"
         )
 
         for sample_index in range(0, len(self.t4_devkit_dataset.sample), self.sample_steps):
@@ -546,7 +547,7 @@ class T4RecordsGenerator:
             SchemaName.SAMPLE_DATA, current_lidar_sample_data_token
         )
 
-        for _ in range(self.scenario_data.dataset_params.max_sweeps(direction)):
+        for _ in range(_MAX_SWEEPS):
             # Stop processing when the chain of lidar frames ends on this side
             neighbour_token = getattr(current_sample_data_record, direction.link)
             if not neighbour_token:
@@ -850,7 +851,7 @@ class T4RecordsGenerator:
         current_sample = sample
 
         # Camera sweeps are taken from the past only. The future window is lidar only.
-        for _ in range(self.scenario_data.dataset_params.max_past_sweeps):
+        for _ in range(_MAX_SWEEPS):
             if not current_sample.prev:
                 break
 

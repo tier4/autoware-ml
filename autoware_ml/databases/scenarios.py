@@ -44,46 +44,23 @@ PathAdapter = Annotated[Path, BeforeValidator(path_adapter)]
 
 class DatasetParams(BaseModel):
     """
-    Parameters for a dataset, for example, the sweep window and sampling steps
+    Parameters for a dataset, for example, sampling steps
     when preprocessing it.
 
     Attributes:
       dataset_name: Name of the dataset.
-      max_past_sweeps: Maximum number of past lidar frames and past camera keyframes recorded
-        with a sample.
-      max_future_sweeps: Maximum number of lidar frames captured after a sample to record
-        with it.
       sample_steps: Number of steps to sample.
     """
 
     model_config = ConfigDict(frozen=True, strict=True)
 
     dataset_name: str
-    max_past_sweeps: int = Field(ge=0)
-    max_future_sweeps: int = Field(ge=0)
     sample_steps: int = Field(ge=1)
-
-    def max_sweeps(self, direction: SweepDirection) -> int:
-        """
-        Number of sweeps recorded on one side of a sample.
-
-        Args:
-          direction: Side of the sample the sweeps are collected from.
-
-        Returns:
-          int: Maximum number of sweeps on that side.
-        """
-
-        if direction is SweepDirection.PAST:
-            return self.max_past_sweeps
-        return self.max_future_sweeps
 
     def __str__(self) -> str:
         """String representation of the database version."""
         return (
             f"DatasetParams(dataset_name={self.dataset_name}, "
-            f"max_past_sweeps={self.max_past_sweeps}, "
-            f"max_future_sweeps={self.max_future_sweeps}, "
             f"sample_steps={self.sample_steps})"
         )
 
@@ -91,8 +68,6 @@ class DatasetParams(BaseModel):
         """Compare two database versions by their version and settings."""
         return (
             self.dataset_name == other.dataset_name
-            and self.max_past_sweeps == other.max_past_sweeps
-            and self.max_future_sweeps == other.max_future_sweeps
             and self.sample_steps == other.sample_steps
         )
 
