@@ -16,11 +16,14 @@
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import polars as pl
+import pytest
 
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
-from autoware_ml.datamodule.detection3d import Detection3DTask
+from autoware_ml.datamodule.common.detection3d import Detection3DTask
 from autoware_ml.types.geometry import Box3DFieldIndex
 
 _ROOT = "/data/t4dataset"
@@ -144,3 +147,71 @@ def test_a_box_without_an_extent_or_a_finite_geometry_is_no_target() -> None:
 
     assert len(boxes) == 1
     assert boxes.bbox_params[0, Box3DFieldIndex.X] == 5.0
+
+
+def build_task_with_status(boxes: list[dict], status: bool | None) -> Detection3DTask:
+    """
+    Detection task over a single record carrying the cone and barrier annotation flag.
+
+    Args:
+      boxes: Boxes of the record, as the record table stores them.
+      status: Whether cones and barriers are annotated in the record, None when unknown.
+
+    Returns:
+      Detection3DTask: Task serving that one record.
+    """
+    schema = DatasetTableSchema.to_polars_schema()
+    columns = [
+        DatasetTableSchema.BOXES_3D.name,
+        DatasetTableSchema.TRAFFIC_CONE_BARRIER_BBOX_STATUS.name,
+    ]
+    records = pl.DataFrame(
+        {columns[0]: [boxes], columns[1]: [status]},
+        schema={column: schema[column] for column in columns},
+    )
+    return Detection3DTask(database_root_path=_ROOT, dataset_records_dataframe=records)
+
+
+def test_the_cone_and_barrier_flag_is_none_when_the_records_do_not_carry_it() -> None:
+    task = build_task([box("a", "car")])
+
+    assert task.dataset_records_dataframe.columns == [DatasetTableSchema.BOXES_3D.name]
+    assert task.get_data_sample(0).detection3d_traffic_cone_barrier_bbox_status is None
+
+
+@pytest.mark.parametrize("status", [True, False])
+def test_the_cone_and_barrier_flag_is_read_from_the_record(status: bool) -> None:
+    task = build_task_with_status([box("a", "car")], status)
+
+    assert task.get_data_sample(0).detection3d_traffic_cone_barrier_bbox_status is status
+
+
+def test_a_record_without_the_cone_and_barrier_flag_serves_none() -> None:
+    task = build_task_with_status([box("a", "car")], None)
+
+    assert task.get_data_sample(0).detection3d_traffic_cone_barrier_bbox_status is None
+
+
+def test_str_names_the_task() -> None:
+    assert str(build_task([])) == "Detection3DTask"
+
+
+def test_log_dataset_info_reports_total_and_lidar_point_counts(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    task = build_task(
+        [
+            box("a", "car"),
+            {**box("b", "car"), "box3d_num_lidar_points": 0},
+            box("c", "pedestrian"),
+        ]
+    )
+
+    with caplog.at_level(logging.INFO, logger="autoware_ml.datamodule.common.detection3d"):
+        task.log_dataset_info()
+
+    assert "Number of bboxes per class in the dataset: " in caplog.text
+    assert "Number of bboxes after filtering num_lidar_points > 0 per class: " in caplog.text
+    assert "'car': 2" in caplog.text
+    assert "'car': 1" in caplog.text
+    assert "'pedestrian': 1" in caplog.text

@@ -1,4 +1,6 @@
 import numpy as np
+import logging
+
 import polars as pl
 import torch
 
@@ -13,6 +15,9 @@ from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTSample
 
 # Data type of the raw category index stored for every point of a semantic mask
 SEMANTIC_MASK_DTYPE = np.uint8
+
+
+logger = logging.getLogger(__name__)
 
 
 class T4Segmentation3DTask(BaseDatasetTask):
@@ -37,6 +42,24 @@ class T4Segmentation3DTask(BaseDatasetTask):
             dataset_records_dataframe=dataset_records_dataframe,
         )
         self.taxonomy = taxonomy
+
+    def __str__(self) -> str:
+        """
+        String representation of the dataset type.
+
+        Returns:
+          str: String representation of the dataset type.
+        """
+        return self.__class__.__name__
+
+    def log_dataset_info(self) -> None:
+        """
+        Log the number of records the semantic labels are read from.
+        """
+        if self.dataset_records_dataframe is None:
+            logger.warning("Dataset records dataframe is not available.")
+            return
+        logger.info(f"{self}: {len(self.dataset_records_dataframe)} records with semantic labels.")
 
     def select_columns(self, dataset_records_dataframe: pl.DataFrame) -> pl.DataFrame:
         """

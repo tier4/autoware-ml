@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 import polars as pl
 
@@ -8,13 +10,15 @@ from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
 from autoware_ml.types.geometry import Box3DFieldIndex, Box3DCenterCoordinateType
 
+logger = logging.getLogger(__name__)
+
 
 class Detection3DTask(BaseDatasetTask):
-    """Read the 3D boxes of a record."""
+    """Read the 3D boxes of a record, with the cone and barrier annotation flag when stored."""
 
     def select_columns(self, dataset_records_dataframe: pl.DataFrame) -> pl.DataFrame:
         """
-        Keep the box column of the records.
+        Keep the box column of the records, and the cone and barrier flag when present.
 
         Args:
           dataset_records_dataframe: Records of the corpus.
@@ -22,7 +26,23 @@ class Detection3DTask(BaseDatasetTask):
         Returns:
           pl.DataFrame: The records with their boxes.
         """
-        return dataset_records_dataframe.select([DatasetTableSchema.BOXES_3D.name])
+        columns = [DatasetTableSchema.BOXES_3D.name]
+        # Older database caches predate the cone/barrier flag, so only keep it when present.
+        if (
+            DatasetTableSchema.TRAFFIC_CONE_BARRIER_BBOX_STATUS.name
+            in dataset_records_dataframe.columns
+        ):
+            columns.append(DatasetTableSchema.TRAFFIC_CONE_BARRIER_BBOX_STATUS.name)
+        return dataset_records_dataframe.select(columns)
+
+    def __str__(self) -> str:
+        """
+        String representation of the dataset type.
+
+        Returns:
+          str: String representation of the dataset type.
+        """
+        return "Detection3DTask"
 
     def get_data_sample(self, idx: int) -> ModelGTSample:
         """
@@ -101,4 +121,56 @@ class Detection3DTask(BaseDatasetTask):
             camera_image_data=None,
             detection3d_gt_bboxes_3d=detection3d_bboxes_3d,
             segmentation3d_gt_sample=None,
+            detection3d_traffic_cone_barrier_bbox_status=(
+                self._get_traffic_cone_barrier_bbox_status(idx)
+            ),
+        )
+
+    def _get_traffic_cone_barrier_bbox_status(self, idx: int) -> bool | None:
+        """
+        Read whether traffic cones and barriers are annotated in the given record.
+
+        Args:
+          idx: Index of the record.
+
+        Returns:
+          bool | None: The flag, or None when the database does not carry it for this record.
+        """
+        column_name = DatasetTableSchema.TRAFFIC_CONE_BARRIER_BBOX_STATUS.name
+        if column_name not in self.dataset_records_dataframe.columns:
+            return None
+        status = self.dataset_records_dataframe.item(idx, column_name)
+        return None if status is None else bool(status)
+
+    def log_dataset_info(self) -> None:
+        """
+        Log the number of boxes per class, before and after dropping the boxes without lidar
+        points.
+        """
+        if self.dataset_records_dataframe is None:
+            logger.warning("Dataset records dataframe is not available.")
+            return
+
+        class_counts = (
+            self.dataset_records_dataframe.select(DatasetTableSchema.BOXES_3D.name)
+            .explode(DatasetTableSchema.BOXES_3D.name)
+            .unnest(DatasetTableSchema.BOXES_3D.name)
+            .group_by(Box3DDatasetSchema.BOX3D_LABEL_NAME.name)
+            .agg(
+                [
+                    pl.len().alias("count"),
+                    (pl.col(Box3DDatasetSchema.BOX3D_NUM_LIDAR_POINTS.name) > 0)
+                    .sum()
+                    .alias("valid_count"),
+                ]
+            )
+            .sort("count", descending=True)
+        )
+        class_names = class_counts[Box3DDatasetSchema.BOX3D_LABEL_NAME.name].to_list()
+        total_counts = dict(zip(class_names, class_counts["count"].to_list(), strict=True))
+        valid_counts = dict(zip(class_names, class_counts["valid_count"].to_list(), strict=True))
+
+        logger.info(f"Number of bboxes per class in the dataset: {total_counts}")
+        logger.info(
+            f"Number of bboxes after filtering num_lidar_points > 0 per class: {valid_counts}"
         )

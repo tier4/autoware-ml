@@ -34,16 +34,18 @@ from autoware_ml.models.calibration_status.calibration_status import (
 from autoware_ml.models.common.backbones.resnet import ResNet18
 from autoware_ml.models.common.heads.linear_cls_head import LinearClsHead
 from autoware_ml.models.common.necks.global_average_pooling import GlobalAveragePooling
-from autoware_ml.preprocessing.base import DataPreprocessing
+from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 from autoware_ml.datamodule.tests.corpus import SCENE, write_corpus
 from autoware_ml.transforms.base import TransformsCompose
 from autoware_ml.transforms.camera.distortion import UndistortImage
-from autoware_ml.transforms.camera.geometry import CropAndScale, ImageAug3D
+from autoware_ml.transforms.camera.resize import CropAndScale, ResizeCropFlipRotImage
 from autoware_ml.transforms.camera.loading import LoadImagesFromFile
 from autoware_ml.transforms.camera_lidar.camera_lidar import (
     Affine,
+    AxisActivation,
     CalibrationMisalignment,
     LidarCameraFusion,
+    MagnitudeRange,
 )
 from autoware_ml.transforms.image.image import PhotometricDistortion
 from autoware_ml.transforms.point_cloud.geometry import CropBoxInner, GlobalRotScaleTrans
@@ -143,10 +145,10 @@ class TestCameraPipelineSmoke(unittest.TestCase):
             pipeline=[
                 LoadPointsFromFile(use_dim=(0, 1, 2, 3)),
                 LoadImagesFromFile(),
-                ImageAug3D(
-                    final_dim=[24, 32],
-                    resize_lim=[0.5, 0.5],
-                    bot_pct_lim=[0.0, 0.0],
+                ResizeCropFlipRotImage(
+                    target_size=[24, 32],
+                    resize_range=[0.5, 0.5],
+                    bottom_crop_ratio_range=[0.0, 0.0],
                     training=True,
                 ),
                 GlobalRotScaleTrans(
@@ -164,7 +166,7 @@ class TestCameraPipelineSmoke(unittest.TestCase):
         self.assertEqual(batch.image_gt_batch.images.shape, (2, len(CAMERAS), 3, 24, 32))
         self.assertEqual(int(batch.infer_batch_size()), 2)
 
-        batch_inputs = DataPreprocessing()(batch, is_training=True)
+        batch_inputs = DataPreprocessor(preprocessor_modules=[])(batch, is_training=True)
         assert batch_inputs.image_data is not None
         self.assertEqual(batch_inputs.image_data.images.shape, (2, len(CAMERAS), 3, 24, 32))
         self.assertEqual(batch_inputs.image_data.lidar2images.shape, (2, len(CAMERAS), 4, 4))
@@ -178,11 +180,8 @@ class TestCameraPipelineSmoke(unittest.TestCase):
                 UndistortImage(alpha=0.0),
                 CalibrationMisalignment(
                     probability=0.5,
-                    activate_yaw=True,
-                    min_yaw_neg=4.0,
-                    max_yaw_neg=8.0,
-                    min_yaw_pos=4.0,
-                    max_yaw_pos=8.0,
+                    activate=AxisActivation(yaw=True),
+                    yaw=MagnitudeRange(min_neg=4.0, max_neg=8.0, min_pos=4.0, max_pos=8.0),
                 ),
                 CropAndScale(probability=0.2, crop_ratio=0.8),
                 Affine(probability=0.2, max_distortion=0.05),
@@ -192,7 +191,7 @@ class TestCameraPipelineSmoke(unittest.TestCase):
         )
         dataset = build_dataset(self.root, self.records, transforms)
         batch = dataset.collate_fn([dataset[0], dataset[1]])
-        batch_inputs = DataPreprocessing()(batch, is_training=True)
+        batch_inputs = DataPreprocessor(preprocessor_modules=[])(batch, is_training=True)
 
         assert batch_inputs.image_data is not None
         assert batch_inputs.image_data.calibration_statuses is not None

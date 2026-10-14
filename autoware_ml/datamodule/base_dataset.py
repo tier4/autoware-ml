@@ -1,43 +1,65 @@
+from __future__ import annotations
+
 import bisect
+import copy
 import itertools
+import time
 from abc import abstractmethod
 from pathlib import Path
-from typing import Sequence
+from typing import TYPE_CHECKING, Self, Sequence
 
 
 import polars as pl
 from torch.utils.data import Dataset
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch, ModelGTSample
-from autoware_ml.transforms.base import TransformsCompose
+from autoware_ml.transforms.base import PipelineContext, TransformsCompose
+
+if TYPE_CHECKING:
+    from autoware_ml.metrics.geometry.lanelet import LaneletMapProvider
 
 
 class BaseDataset(Dataset):
-    """Dataset interface every database specific dataset implements."""
+    """Dataset interface every database specific dataset implements.
+
+    A dataset config names the database it reads, through the root path, and the annotations
+    of that corpus supervising the run. The datamodule declares it once, without records, and
+    binds it to the records of its dataset source in setup. Binding returns a copy serving
+    those records. A dataset built with its records directly is bound from the start.
+
+    The dataset also owns the map provider of its corpus, when the corpus ships lanelet maps.
+    The evaluation filters and collision metrics read the map of a scene through it, so the
+    provider follows the database the dataset reads instead of the task being evaluated.
+    """
 
     def __init__(
         self,
         database_root_path: str,
         *,
         max_num_3d_gt_bboxes: int | None = None,
-        dataset_records_dataframe: pl.DataFrame,
+        dataset_records_dataframe: pl.DataFrame | None = None,
         transforms: TransformsCompose | None,
-        det3d_supervised: bool,
-        seg3d_supervised: bool,
+        det3d_supervised: bool = True,
+        seg3d_supervised: bool = True,
+        map_provider: LaneletMapProvider | None = None,
     ) -> None:
         """
         Initialize the dataset.
 
         Args:
-          database_root_path: Root directory of the dataset.
+          database_root_path: Root directory of the database the dataset reads.
           max_num_3d_gt_bboxes: Number of 3D boxes every sample is padded to in a batch, extra
               boxes are dropped. Required when the samples carry 3D boxes, None otherwise.
-          dataset_records_dataframe: Polars DataFrame of the dataset records.
+          dataset_records_dataframe: Polars DataFrame of the dataset records. None until the
+              dataset is bound to the records of its source.
           transforms: Global transforms to be applied to the dataset records.
           det3d_supervised: Whether the boxes of this corpus are used. If False, every sample
               gets an empty box set.
           seg3d_supervised: Whether the semantic masks of this corpus are used. If False, every
               point gets the ignore index.
+          map_provider: Resolves a scene token of this corpus to its lanelet map. None when
+              the corpus has no maps, which leaves every map-backed metric filter without a
+              provider.
         """
         super().__init__()
         self.database_root_path = Path(database_root_path)
@@ -46,6 +68,38 @@ class BaseDataset(Dataset):
         self.dataset_records_dataframe = dataset_records_dataframe
         self.det3d_supervised = det3d_supervised
         self.seg3d_supervised = seg3d_supervised
+        self.map_provider = map_provider
+
+    @property
+    def is_bound(self) -> bool:
+        """Whether the dataset serves records."""
+        return self.dataset_records_dataframe is not None
+
+    def bind(self, dataset_records_dataframe: pl.DataFrame) -> Self:
+        """
+        Return a copy of this dataset serving the given records.
+
+        This dataset stays as declared, so the datamodule binds it to the records of every
+        split its source serves.
+
+        Args:
+          dataset_records_dataframe: Records of the database of the source in one split.
+
+        Returns:
+          Self: Bound copy of the dataset.
+        """
+        dataset = copy.copy(self)
+        dataset._serve_records(dataset_records_dataframe)
+        return dataset
+
+    def _serve_records(self, dataset_records_dataframe: pl.DataFrame) -> None:
+        """
+        Keep the records to serve. Subclasses override it to prepare their readers.
+
+        Args:
+          dataset_records_dataframe: Records of the database of the source in one split.
+        """
+        self.dataset_records_dataframe = dataset_records_dataframe
 
     @property
     def samples_per_record(self) -> int:
@@ -69,6 +123,11 @@ class BaseDataset(Dataset):
         Returns:
           int: Number of samples.
         """
+        if self.dataset_records_dataframe is None:
+            raise ValueError(
+                "The dataset is not bound to records, so it has no samples. The datamodule "
+                "binds it in setup()."
+            )
         return len(self.dataset_records_dataframe) * self.samples_per_record
 
     def __getitem__(self, index: int) -> ModelGTSample:

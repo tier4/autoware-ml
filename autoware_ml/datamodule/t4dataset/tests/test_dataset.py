@@ -63,6 +63,7 @@ def build_dataset(
     image_frames: list[list[list[dict]]],
     camera_names: list[str] | None = None,
     camera_sources: list[str] | None = None,
+    map_provider: object | None = None,
 ) -> T4Dataset:
     """
     Dataset over records that carry the given camera frames.
@@ -72,6 +73,7 @@ def build_dataset(
         frames of every camera at the sample time come first, then one list per sweep.
       camera_names: Cameras the dataset serves, None for every camera of a record.
       camera_sources: Cameras the dataset serves one by one.
+      map_provider: Map provider of the database, None when it ships no maps.
 
     Returns:
       T4Dataset: Dataset serving those records, with no task datasets attached.
@@ -91,6 +93,7 @@ def build_dataset(
         seg3d_supervised=True,
         camera_names=camera_names,
         camera_sources=camera_sources,
+        map_provider=map_provider,
     )
 
 
@@ -245,8 +248,28 @@ def test_lidar_sources_reject_detection() -> None:
             max_num_3d_gt_bboxes=0,
             dataset_records_dataframe=pl.DataFrame(),
             transforms=None,
-            dataset_tasks=MappingProxyType({"Detection3D": lambda **kwargs: None}),
+            dataset_tasks=MappingProxyType({"detection3d": lambda **kwargs: None}),
             det3d_supervised=True,
             seg3d_supervised=True,
             lidar_sources=["LIDAR_FRONT_LOWER"],
         )
+
+
+class _Provider:
+    """Stand-in map provider, the dataset only keeps it for the evaluation filters."""
+
+
+def test_the_dataset_keeps_the_map_provider_of_its_database_through_binding() -> None:
+    provider = _Provider()
+    dataset = build_dataset([[[camera_frame("CAM_FRONT")]]], map_provider=provider)
+
+    bound = dataset.bind(dataset.dataset_records_dataframe)
+
+    assert dataset.map_provider is provider
+    assert bound.map_provider is provider
+
+
+def test_a_database_without_maps_leaves_the_dataset_without_a_provider() -> None:
+    dataset = build_dataset([[[camera_frame("CAM_FRONT")]]])
+
+    assert dataset.map_provider is None

@@ -1,4 +1,4 @@
-"""Tests for the per-frame evaluation metadata helpers."""
+"""Tests for the scene directory fragment the frame metadata is keyed by."""
 
 from __future__ import annotations
 
