@@ -1,6 +1,11 @@
 # @package _global_
 
 callbacks:
+  rich_progress_bar:
+    _target_: lightning.pytorch.callbacks.RichProgressBar
+    refresh_rate: 30
+    leave: false
+
   model_checkpoint:
     _target_: lightning.pytorch.callbacks.ModelCheckpoint
     monitor: val/loss
@@ -26,3 +31,13 @@ callbacks:
   lr_monitor:
     _target_: lightning.pytorch.callbacks.LearningRateMonitor
     logging_interval: step
+
+  iteration_timer:
+    _target_: autoware_ml.callbacks.iteration_timer.IterationTimer
+    sync_cuda: false
+    warmup_iters: 1
+    log_interval: ${trainer.log_every_n_steps}
+
+  data_processing_timer:
+    _target_: autoware_ml.callbacks.data_processing_timer.DataProcessingTimer
+    log_interval: ${trainer.log_every_n_steps}
