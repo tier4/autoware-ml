@@ -444,7 +444,7 @@ class _PTv3SegDetExportModule(PTv3EncoderExportBase):
         voxels: torch.Tensor,
         num_points_per_voxel: torch.Tensor,
         grid_coord: torch.Tensor,
-        serialized_order: torch.Tensor,
+        patch_order: torch.Tensor,
         serialized_inverse: torch.Tensor,
         *serialized_pooling_inputs: torch.Tensor,
     ) -> tuple[torch.Tensor, ...]:
@@ -454,8 +454,8 @@ class _PTv3SegDetExportModule(PTv3EncoderExportBase):
             voxels: Padded voxel points.
             num_points_per_voxel: Valid point count per voxel.
             grid_coord: Input voxel coordinates.
-            serialized_order: Level-0 serialization order, one row per curve.
-            serialized_inverse: Inverse of ``serialized_order``.
+            patch_order: The level-0 serialization orders padded to whole attention windows.
+            serialized_inverse: Inverse of those orders.
             serialized_pooling_inputs: Precomputed pooling metadata tensors.
 
         Returns:
@@ -465,7 +465,7 @@ class _PTv3SegDetExportModule(PTv3EncoderExportBase):
             voxels,
             num_points_per_voxel,
             grid_coord,
-            serialized_order,
+            patch_order,
             serialized_inverse,
             *serialized_pooling_inputs,
         )
