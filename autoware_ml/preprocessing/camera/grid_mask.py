@@ -21,9 +21,10 @@ import torch
 from PIL import Image
 
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.preprocessing.data_preprocessor_modules import DataPreprocessorModule
 
 
-class BatchGridMask:
+class BatchGridMask(DataPreprocessorModule):
     """Mask a rotated regular grid out of every image in a collated batch.
 
     The mask follows the StreamPETR implementation. The layer runs after batch transfer,
