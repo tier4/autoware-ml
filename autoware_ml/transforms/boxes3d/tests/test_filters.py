@@ -26,6 +26,7 @@ from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
 from autoware_ml.transforms.boxes3d.filters import (
     BBoxesAttributeFilter,
     BBoxesLabelNameFilter,
+    BBoxesPhysicalFilter,
     BBoxesRangeFilter,
 )
 from autoware_ml.types.geometry import Box3DCenterCoordinateType, Box3DFieldIndex
@@ -171,3 +172,112 @@ def test_attribute_filter_rejects_boxes_without_attributes() -> None:
 def test_attribute_filter_rejects_a_rule_that_is_not_a_pair(rules: list) -> None:
     with pytest.raises(ValueError, match="pair"):
         BBoxesAttributeFilter(rules)
+
+
+def boxes_sample(bbox_params: Sequence[Sequence[float]]) -> ModelGTSample:
+    """
+    Sample carrying boxes with the given parameters, all labelled car.
+
+    Args:
+      bbox_params: Parameters of every box, in the order of Box3DFieldIndex.
+
+    Returns:
+      ModelGTSample: Sample whose detection boxes carry those parameters.
+    """
+    count = len(bbox_params)
+    boxes = LidarBBoxes3D(
+        bbox_params=torch.tensor(bbox_params, dtype=torch.float32).reshape(
+            -1, len(Box3DFieldIndex)
+        ),
+        bbox_labels=torch.tensor(range(count), dtype=torch.int32),
+        bbox_label_names=["car"] * count,
+        bbox_num_lidar_points=torch.full((count,), 10, dtype=torch.int32),
+        bbox_center_coordinate_type=Box3DCenterCoordinateType.GRAVITY_CENTER,
+        bbox_attributes=None,
+    )
+    return ModelGTSample(
+        lidar_point_cloud_samples=None,
+        image_samples=None,
+        point_cloud_data=None,
+        camera_image_data=None,
+        detection3d_gt_bboxes_3d=boxes,
+        segmentation3d_gt_sample=None,
+    )
+
+
+SANE_BOX = [1.0, 2.0, 3.0, 4.0, 1.5, 1.7, 0.1, 0.5, -0.1, 0.0]
+
+
+def test_physical_filter_keeps_physically_valid_boxes() -> None:
+    result = BBoxesPhysicalFilter()(boxes_sample([SANE_BOX]))
+
+    assert len(result.detection3d_gt_bboxes_3d) == 1
+
+
+def test_physical_filter_drops_boxes_holding_non_finite_parameters() -> None:
+    sample = boxes_sample([SANE_BOX, SANE_BOX, SANE_BOX])
+    sample.detection3d_gt_bboxes_3d.bbox_params[1, Box3DFieldIndex.X] = float("inf")
+    sample.detection3d_gt_bboxes_3d.bbox_params[2, Box3DFieldIndex.YAW] = float("nan")
+
+    result = BBoxesPhysicalFilter()(sample)
+
+    assert result.detection3d_gt_bboxes_3d.bbox_labels.tolist() == [0]
+
+
+def test_physical_filter_drops_boxes_holding_non_positive_dimensions() -> None:
+    # The box constructor rejects non-positive dimensions, so the corruption is injected
+    # afterwards, the way an in-place augmentation would produce it.
+    sample = boxes_sample([SANE_BOX, SANE_BOX, SANE_BOX])
+    sample.detection3d_gt_bboxes_3d.bbox_params[1, Box3DFieldIndex.WIDTH] = -0.8
+    sample.detection3d_gt_bboxes_3d.bbox_params[2, Box3DFieldIndex.HEIGHT] = 0.0
+
+    result = BBoxesPhysicalFilter()(sample)
+
+    assert result.detection3d_gt_bboxes_3d.bbox_labels.tolist() == [0]
+
+
+def test_physical_filter_bounds_the_ground_plane_speed_not_its_components() -> None:
+    result = BBoxesPhysicalFilter()(
+        boxes_sample(
+            [
+                # Norm is about 143 m/s, under the bound, even though vx alone is near it.
+                [4.0, 4.0, 0.5, 4.5, 1.9, 1.4, 0.3, 140.0, 30.0, 0.0],
+                # Both components are under the bound but the norm is about 170 m/s.
+                [1.0, 2.0, 3.0, 4.0, 1.5, 1.7, 0.1, 120.0, 120.0, 0.0],
+            ]
+        )
+    )
+
+    assert result.detection3d_gt_bboxes_3d.bbox_labels.tolist() == [0]
+
+
+def test_physical_filter_ignores_the_vertical_velocity_in_the_speed_bound() -> None:
+    result = BBoxesPhysicalFilter()(
+        boxes_sample([[1.0, 2.0, 3.0, 4.0, 1.5, 1.7, 0.1, 0.5, -0.1, 1000.0]])
+    )
+
+    assert len(result.detection3d_gt_bboxes_3d) == 1
+
+
+def test_physical_filter_keeps_a_box_sitting_exactly_on_the_speed_bound() -> None:
+    result = BBoxesPhysicalFilter(max_absolute_speed=150.0)(
+        boxes_sample([[1.0, 2.0, 3.0, 4.0, 1.5, 1.7, 0.1, 150.0, 0.0, 0.0]])
+    )
+
+    assert len(result.detection3d_gt_bboxes_3d) == 1
+
+
+def test_physical_filter_honours_a_configured_speed_bound() -> None:
+    result = BBoxesPhysicalFilter(max_absolute_speed=30.0)(
+        boxes_sample([[1.0, 2.0, 3.0, 4.0, 1.5, 1.7, 0.1, 40.0, 0.0, 0.0]])
+    )
+
+    assert len(result.detection3d_gt_bboxes_3d) == 0
+
+
+def test_physical_filter_leaves_empty_boxes_untouched() -> None:
+    sample = boxes_sample([])
+
+    result = BBoxesPhysicalFilter()(sample)
+
+    assert len(result.detection3d_gt_bboxes_3d) == 0

@@ -210,3 +210,55 @@ class BBoxesAttributeFilter(BaseTransform):
         )
         detection3d_gt_bboxes_3d.remove_bboxes(bboxes_to_keep_mask)
         return model_gt_sample
+
+
+class BBoxesPhysicalFilter(BaseTransform):
+    """Remove 3D bounding boxes that cannot become a valid training target.
+
+    A physically invalid box is not a geometry outlier, it is pipeline garbage that would
+    poison the regression losses: non-finite box parameters, non-positive dimensions (the
+    box size targets are log-encoded, so a zero or negative extent is not representable),
+    or a ground-plane speed beyond the physical bound (the velocity is never range-filtered
+    downstream, so an absurd speed silently explodes the velocity loss).
+
+    Note that the bbox parameters are already float32 here, so a float64 value that overflows
+    the float32 cast has become non-finite by this point and is still caught.
+    """
+
+    _required_keys = ["detection3d_gt_bboxes_3d"]
+
+    def __init__(
+        self,
+        max_absolute_speed: float = 150.0,  # m/s, 540 km/h
+    ) -> None:
+        """
+        Initialize the BBoxesPhysicalFilter transform.
+
+        Args:
+            max_absolute_speed (float): The maximum ground-plane speed, in m/s, that a bounding
+                box may carry before it is considered non-physical. Defaults to 150.0 m/s
+        """
+        super().__init__(probability=None)
+        self.max_absolute_speed = max_absolute_speed
+
+    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
+        """Remove non-physical 3D bounding boxes."""
+        # This is checked in the _validate_required_keys()
+        detection3d_gt_bboxes_3d: BaseBBoxes3D = model_gt_sample.detection3d_gt_bboxes_3d  # type: ignore[reportOptionalMemberAccess]
+        if not len(detection3d_gt_bboxes_3d):
+            return model_gt_sample
+
+        is_finite_mask = torch.isfinite(detection3d_gt_bboxes_3d.bbox_params).all(dim=1)
+        has_positive_dims_mask = (detection3d_gt_bboxes_3d.dims > 0.0).all(dim=1)
+        # Only the ground-plane velocity is bounded.
+        is_speed_physical_mask = (
+            torch.linalg.norm(detection3d_gt_bboxes_3d.velocity[:, :2], dim=1)
+            <= self.max_absolute_speed
+        )
+
+        keep_bboxes_mask = is_finite_mask & has_positive_dims_mask & is_speed_physical_mask
+
+        # TODO(Kok Seang): Consider to make it immutable and return a new instance
+        # instead of modifying in place.
+        detection3d_gt_bboxes_3d.remove_bboxes(keep_bboxes_mask)
+        return model_gt_sample
