@@ -605,7 +605,7 @@ class NuScenesRecordsGenerator:
             image_height=image_height,
             image_width=image_width,
             cam2img=cam2img,
-            # nuScenes stores undistorted images
+            # nuScenes publishes rectified images and no distortion in calibrated_sensor.
             image_distortion_coefficients=[],
             image_distortion_model="",
             image_sensor_to_ego_pose_matrix=image_sensor_to_ego_matrix,

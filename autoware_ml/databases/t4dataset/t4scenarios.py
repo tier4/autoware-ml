@@ -77,10 +77,13 @@ class T4Scenarios(Scenarios):
         dataset_scene_info = scenario_id.split("/")
         if len(dataset_scene_info) == 5:
             # TODO (KokSeang): Traffic cone and barrier status will be used in another version.
-            scenario_id, version, city, vehicle_type, _ = dataset_scene_info
+            scenario_id, version, city, vehicle_type, traffic_cone_barrier_bbox_status = (
+                dataset_scene_info
+            )
+            traffic_cone_barrier_bbox_status = bool(traffic_cone_barrier_bbox_status)
         elif len(dataset_scene_info) == 2:
             scenario_id, version = dataset_scene_info
-            city = vehicle_type = None
+            city = vehicle_type = traffic_cone_barrier_bbox_status = None
         else:
             raise ValueError(f"Invalid scenario ID: {scenario_id}")
 
@@ -90,6 +93,7 @@ class T4Scenarios(Scenarios):
             scenario_version=version,
             vehicle_type=vehicle_type,
             location=city,
+            traffic_cone_barrier_bbox_status=traffic_cone_barrier_bbox_status,
         )
 
     def _build_scenario_splits(
@@ -114,4 +118,4 @@ class T4Scenarios(Scenarios):
                 self._build_scenario_data(scenario_id=scenario_id, dataset_params=dataset_params)
                 for scenario_id in selected_scenarios
             ]
-        return scenario_splits
+        return MappingProxyType(scenario_splits)

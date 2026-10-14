@@ -45,7 +45,9 @@ from autoware_ml.databases.schemas.frame_basic_metadata import FrameBasicMetadat
 from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord
 from autoware_ml.databases.schemas.lidar_frames import LidarFrameDataModel
 from autoware_ml.databases.schemas.lidar_sources import LidarSourceDataModel
-from autoware_ml.databases.schemas.image_frames import ImageFrameDataModel
+from autoware_ml.databases.schemas.image_frames import (
+    ImageFrameDataModel,
+)
 from autoware_ml.databases.schemas.category_mapping import CategoryMappingDataModel
 from autoware_ml.databases.taxonomy import DatabaseTaxonomy
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDataModel, Box3DDatasetSchema
@@ -117,6 +119,7 @@ class T4RecordsGenerator:
         self.taxonomy = taxonomy
         self.box3d_pipelines = box3d_pipelines
         self.recompute_boxes3d_lidar_points_num = recompute_boxes3d_lidar_points_num
+
         # Frame index of every t4pack file of the scene, read once
         self._t4pack_indices: dict[str, Mapping[str, T4PackFrame]] = {}
 
@@ -252,6 +255,7 @@ class T4RecordsGenerator:
             vehicle_type=self.scenario_data.vehicle_type,
             timestamp_seconds=microseconds2seconds(sample.timestamp),
             scenario_name=scene_record.name,
+            traffic_cone_barrier_bbox_status=self.scenario_data.traffic_cone_barrier_bbox_status,
         )
 
     def _extract_boxes_3d_annotations(
