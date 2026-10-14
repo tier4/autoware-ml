@@ -15,28 +15,45 @@
 """Base classes and composition utilities for data transforms.
 
 This module defines the core transform protocol used across Autoware-ML data
-pipelines and provides sequential composition helpers.
+pipelines and provides sequential composition helpers. It also defines the
+:class:`PipelineContext` handed to every transform call, which lets context-aware
+transforms such as sample-mixing augmentations request secondary samples from the
+dataset without smuggling dataset references through the sample itself.
 """
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from dataclasses import dataclass, field
+import logging
+from typing import Protocol, Sequence
 
 import numpy as np
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
+
+logger = logging.getLogger(__name__)
 
 
 class BaseTransform(ABC):
     """Abstract base class for ModelGTSample data transformations.
 
     Class Attributes (override in subclasses):
-        _required_keys: Fields of the sample that must be set before the transform runs.
+        p: Probability of applying the transform (0.0=never, 1.0=always).
+           Set to None for transforms that always run.
+        _required_keys: List of keys that must exist in input_dict.
+        _optional_keys: List of keys that may be missing (triggers apply_defaults).
+
+    Subclasses should document their key contracts in the class docstring:
+        - Required keys: Keys that must exist (KeyError raised otherwise)
+        - Optional keys: Keys that are used if present (apply_defaults called if missing)
+        - Generated keys: Keys added/modified by the transform
     """
 
     _required_keys: Sequence[str] = ()
 
     def __init__(self, probability: float | None = None) -> None:
-        """Initialize the transform.
+        """Initialize the transform with required keys.
 
         Args:
             probability: Probability of applying the transform (0.0=never, 1.0=always).
@@ -44,7 +61,11 @@ class BaseTransform(ABC):
         """
         self._probability = probability
 
-    def __call__(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
+    def __call__(
+        self,
+        multi_task_gt_sample: ModelGTSample,
+        context: PipelineContext | None = None,
+    ) -> ModelGTSample:
         """Execute transform with probability and key validation.
 
         Order of operations:
@@ -53,32 +74,36 @@ class BaseTransform(ABC):
             3. Execute the actual transform
 
         Args:
-            model_gt_sample: Dataclass to hold inputs for each sample.
+            multi_task_gt_sample: Dataclass to hold inputs for each sample.
+            context: Pipeline context of the current sample. Plain transforms ignore it;
+                :class:`ContextAwareTransform` subclasses receive it in ``transform``.
 
         Returns:
             Updated ModelGTSample.
         """
+        del context
         # 1. Validate required keys (raises error if any missing)
-        self._validate_required_keys(model_gt_sample)
+        self._validate_required_keys(multi_task_gt_sample)
 
-        # 2. Check probability (skip if not triggered)
+        # 3. Check probability (skip if not triggered)
         if not self._should_apply():
-            return self.on_skip(model_gt_sample)
+            return self.on_skip(multi_task_gt_sample)
 
-        # 3. Execute the actual transform
-        return self.transform(model_gt_sample)
+        # 4. Execute the actual transform
+        return self.transform(multi_task_gt_sample)
 
-    def _validate_required_keys(self, model_gt_sample: ModelGTSample) -> None:
+    def _validate_required_keys(self, multi_task_gt_sample: ModelGTSample) -> None:
         """Raise ``KeyError`` when any required key is missing.
 
         Args:
-            model_gt_sample: ModelGTSample instance validated before transform execution.
+            multi_task_gt_sample: ModelGTSample instance validated before transform execution.
 
         Raises:
             KeyError: If a required key defined by the transform is absent.
         """
         for key in self._required_keys:
-            if getattr(model_gt_sample, key) is None:
+            required_attr = getattr(multi_task_gt_sample, key, None)
+            if required_attr is None:
                 raise KeyError(f"{self.__class__.__name__}: Missing required key '{key}'")
 
     def _should_apply(self) -> bool:
@@ -95,29 +120,30 @@ class BaseTransform(ABC):
             return True
         return np.random.rand() < self._probability
 
-    def on_skip(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
+    def on_skip(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
         """Called when transform is skipped due to probability.
 
         Override for custom behavior when transform is skipped.
         Default implementation returns input unchanged.
 
         Args:
-            model_gt_sample: The sample the transform skipped.
+            input_dict: The input dictionary.
 
         Returns:
-            The sample, unchanged by default.
+            The (possibly modified) input dictionary.
         """
-        return model_gt_sample
+        return multi_task_gt_sample
 
     @abstractmethod
-    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
-        """Transform one sample.
+    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
+        """Process input dictionary and return updated mapping.
 
         Args:
-            model_gt_sample: ModelGTSample instance with its required fields set.
+            multi_task_gt_sample: ModelGTSample instance with required keys present, optional keys
+                                   populated by apply_defaults() if they were missing.
 
         Returns:
-            Updated ModelGTSample, possibly the same instance modified in place.
+            Updated dictionary (may be the same object modified in-place).
         """
         raise NotImplementedError
 
@@ -125,31 +151,36 @@ class BaseTransform(ABC):
 class TransformsCompose:
     """Apply a sequence of transforms in order.
 
-    The composed transform forwards one sample through every configured transform
-    and returns the final result.
+    The composed transform forwards one sample dictionary through every
+    configured transform and returns the final result.
     """
 
     def __init__(self, pipeline: Sequence[BaseTransform]):
         """Initialize the transform pipeline.
 
         Args:
-            pipeline: Ordered transforms applied to each sample.
+            pipeline: Ordered transforms applied to each input dictionary.
         """
         self.pipeline = pipeline
 
-    def __call__(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
-        """Apply each transform in order.
+    def __call__(
+        self,
+        multi_task_gt_sample: ModelGTSample,
+        context: PipelineContext | None = None,
+    ) -> ModelGTSample:
+        """Apply each transform sequentially, merging updates.
 
         Args:
-            model_gt_sample: ModelGTSample instance passed through the configured transforms.
+            multi_task_gt_sample: ModelGTSample instance passed through the configured transforms.
+            context: Pipeline context of the current sample, forwarded to every transform.
 
         Returns:
             Transformed ModelGTSample instance after all pipeline stages have been applied.
         """
         for transform in self.pipeline:
-            model_gt_sample = transform(model_gt_sample)
+            multi_task_gt_sample = transform(multi_task_gt_sample, context=context)
 
-        return model_gt_sample
+        return multi_task_gt_sample
 
     def __repr__(self) -> str:
         """Return a formatted string representation of the composition.
@@ -165,3 +196,176 @@ class TransformsCompose:
             format_string.append(f"  ({i}): {transform}")
         format_string.append(")")
         return "\n".join(format_string)
+
+
+class SampleSource(Protocol):
+    """Dataset surface a :class:`PipelineContext` needs to draw secondary samples."""
+
+    def __len__(self) -> int: ...
+
+    def get_data_sample(self, index: int) -> ModelGTSample: ...
+
+    def apply_transforms(
+        self,
+        multi_task_gt_sample: ModelGTSample,
+        transforms: TransformsCompose | None,
+        context: PipelineContext,
+    ) -> ModelGTSample: ...
+
+
+def _seeded_rng() -> np.random.Generator:
+    """Derive a generator from the globally seeded NumPy state.
+
+    ``seed_everything(workers=True)`` seeds the global NumPy RNG per dataloader worker, so
+    deriving from it keeps secondary-sample draws reproducible.
+
+    Returns:
+        Generator seeded from the global NumPy RNG.
+    """
+    return np.random.default_rng(np.random.randint(2**32))
+
+
+@dataclass
+class PipelineContext:
+    """Per-sample context handed to every transform call.
+
+    The context carries the state that belongs to one ``__getitem__`` call rather than to
+    the dataset or the sample: the index being produced and a random generator. It exposes a
+    narrow dataset surface so context-aware transforms can draw and materialize secondary
+    samples without holding the dataset themselves.
+    """
+
+    dataset: SampleSource
+    index: int
+    rng: np.random.Generator = field(default_factory=_seeded_rng)
+
+    def get_data_sample(self, index: int) -> ModelGTSample:
+        """Load the raw sample for the requested dataset index.
+
+        Args:
+            index: Dataset index.
+
+        Returns:
+            Raw ModelGTSample before any transform.
+        """
+        return self.dataset.get_data_sample(index)
+
+    def sample_secondary(
+        self,
+        pre_transform: TransformsCompose | None = None,
+    ) -> ModelGTSample:
+        """Draw a secondary sample and optionally materialize it with ``pre_transform``.
+
+        The secondary index is always different from the current one when the dataset has
+        more than one sample. The pre-transform runs with its own context bound to the
+        secondary index, sharing this context's random generator.
+
+        Args:
+            pre_transform: Pipeline applied to the secondary sample, typically the loading
+                and geometric-augmentation head of the main pipeline. ``None`` returns the
+                raw sample.
+
+        Returns:
+            Secondary ModelGTSample, transformed by ``pre_transform`` when given.
+        """
+        dataset_length = len(self.dataset)
+        if dataset_length <= 1:
+            logger.warning(
+                "Dataset contains only one sample; reusing the current sample as the secondary "
+                "sample."
+            )
+            secondary_index = self.index
+        else:
+            # Draw from the remaining indices and skip past the current one.
+            secondary_index = int(self.rng.integers(0, dataset_length - 1))
+            if secondary_index >= self.index:
+                secondary_index += 1
+
+        sample = self.get_data_sample(secondary_index)
+        if pre_transform is None:
+            return sample
+
+        secondary_context = PipelineContext(
+            dataset=self.dataset, index=secondary_index, rng=self.rng
+        )
+        return self.dataset.apply_transforms(sample, pre_transform, secondary_context)
+
+
+class ContextAwareTransform(BaseTransform):
+    """Base class for transforms that need the pipeline context.
+
+    Sample-mixing augmentations subclass this to draw secondary samples. The context is
+    passed explicitly to ``transform`` instead of being stored on the instance, so a shared
+    transform never carries state from a previous sample.
+    """
+
+    def __init__(
+        self,
+        probability: float | None = None,
+        pre_transform: TransformsCompose | None = None,
+    ) -> None:
+        """Initialize the transform.
+
+        Args:
+            probability: Probability of applying the transform, ``None`` to always run.
+            pre_transform: Pipeline used to materialize secondary samples drawn through
+                :meth:`sample_secondary`. It should mirror the loading and augmentation
+                stages of the main pipeline that precede this transform.
+        """
+        super().__init__(probability=probability)
+        self.pre_transform = pre_transform
+
+    def __call__(
+        self,
+        multi_task_gt_sample: ModelGTSample,
+        context: PipelineContext | None = None,
+    ) -> ModelGTSample:
+        """Execute the transform, requiring a pipeline context.
+
+        Args:
+            multi_task_gt_sample: Dataclass to hold inputs for each sample.
+            context: Pipeline context of the current sample.
+
+        Returns:
+            Updated ModelGTSample.
+
+        Raises:
+            RuntimeError: If no context is provided.
+        """
+        if context is None:
+            raise RuntimeError(
+                f"{self.__class__.__name__} requires a PipelineContext; run it through a dataset "
+                "pipeline or pass context= explicitly."
+            )
+        self._validate_required_keys(multi_task_gt_sample)
+        if not self._should_apply():
+            return self.on_skip(multi_task_gt_sample)
+        return self.transform(multi_task_gt_sample, context)
+
+    def sample_secondary(self, context: PipelineContext) -> ModelGTSample:
+        """Draw a secondary sample materialized with this transform's ``pre_transform``.
+
+        Args:
+            context: Pipeline context of the current sample.
+
+        Returns:
+            Secondary ModelGTSample ready to be mixed with the current one.
+        """
+        return context.sample_secondary(pre_transform=self.pre_transform)
+
+    @abstractmethod
+    def transform(  # type: ignore[override]
+        self,
+        multi_task_gt_sample: ModelGTSample,
+        context: PipelineContext,
+    ) -> ModelGTSample:
+        """Process the sample with access to the pipeline context.
+
+        Args:
+            multi_task_gt_sample: ModelGTSample instance with required keys present.
+            context: Pipeline context of the current sample.
+
+        Returns:
+            Updated ModelGTSample.
+        """
+        raise NotImplementedError
