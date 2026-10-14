@@ -26,6 +26,7 @@ dependencies = [
     "mlflow==3.10.1",
     "numpy==1.26.4",
     "nuscenes-devkit==1.2.0",
+    "nvidia-ml-py==13.610.43",
     "optuna==4.8.0",
     "onnx==1.21.0",
     "onnx_graphsurgeon==0.5.8",
@@ -35,8 +36,10 @@ dependencies = [
     "opencv-python-headless==4.11.0.86",
     "optuna-dashboard==0.20.0",
     "polars>=1.38.1,<2.0.0",
+    "psutil>=7.2.2",
     "pydantic>=2.12.5,<2.13.0",
     "rerun-sdk==0.23.1",
+    "rich==14.1.0",
     "scipy==1.17.1",
     "spconv-cu120==2.3.6",
     "t4-devkit @ git+https://github.com/tier4/t4-devkit.git@v0.8.0",
@@ -84,6 +87,12 @@ index-strategy = "unsafe-best-match"
 # cuBLAS is only deterministic with a fixed workspace size; the trainer's
 # `deterministic` mode (torch.use_deterministic_algorithms) depends on it.
 CUBLAS_WORKSPACE_CONFIG = ":4096:8"
+# Polars sizes its global thread pool once, when the extension module is first
+# imported, so this has to be in the environment before Python starts; setting
+# it from Python is too late. Keep the pool single-threaded: the dataloader
+# already parallelizes across worker processes, and a multi-threaded pool
+# forked into those workers can deadlock. Mirrored in docker/Dockerfile.
+POLARS_MAX_THREADS = "1"
 
 [tool.pixi.dependencies]
 # Pixi keeps a small conda-forge base for Python and installer tooling. The

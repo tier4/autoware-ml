@@ -63,5 +63,6 @@
     "**/node_modules": true,
     "**/mlruns": true
   },
-  "yaml.schemaStore.enable": false
+  "yaml.schemaStore.enable": false,
+  "python-envs.defaultPackageManager": "ms-python.python:pip"
 }
