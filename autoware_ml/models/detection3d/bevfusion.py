@@ -641,7 +641,9 @@ class BEVFusionDetectionModel(BaseModel):
         )
         return ModelOutputs(
             detection3d_head_outputs=Detection3DHeadOutputs(
-                center_head_outputs=None, transfusion_head_outputs=head_outputs
+                center_head_outputs=None,
+                transfusion_head_outputs=head_outputs,
+                streampetr_head_outputs=None,
             )
         )
 

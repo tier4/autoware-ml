@@ -199,7 +199,9 @@ class TestTypedDetectionEvalOutput(unittest.TestCase):
         ego2globals[1, 0, 3] = 7.0
         gt_batch = self.multi_task_batch_inputs.multi_task_gt_batch._replace(
             frame_meta_batch=FrameMetaBatch(
-                ego2globals=ego2globals, scene_tokens=["db/scene_a/0", "db/scene_b/1"]
+                ego2globals=ego2globals,
+                scene_tokens=["db/scene_a/0", "db/scene_b/1"],
+                timestamps=torch.tensor([0.0, 0.1], dtype=torch.float64, device=self.device),
             )
         )
         multi_task_batch_inputs = ModelBatchInputs(

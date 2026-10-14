@@ -411,7 +411,9 @@ def forward(self, x: torch.Tensor) -> ModelOutputs:
     features = self.backbone(x)
     return ModelOutputs(
         detection3d_head_outputs=Detection3DHeadOutputs(
-            center_head_outputs=None, transfusion_head_outputs=self.bbox_head(features)
+            center_head_outputs=None,
+            transfusion_head_outputs=self.bbox_head(features),
+            streampetr_head_outputs=None,
         ),
         segmentation3d_head_outputs=Segmentation3DHeadOutputs(logits=self.seg_head(features)),
     )

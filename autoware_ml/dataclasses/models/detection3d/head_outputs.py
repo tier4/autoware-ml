@@ -206,31 +206,127 @@ class CenterHeadOutputs(BaseModel):
         return _pick_export_tensors(tensors, names)
 
 
+class StreamPETRDenoisingOutputs(BaseModel):
+    """
+    Dataclass to save the denoising queries of a StreamPETR head in training.
+
+    Every ground truth box of the batch is replicated into noised queries that lead the query
+    set of its sample. The head predicts them like the detection queries, and the loss matches
+    each one with the box it was noised from.
+
+    Attributes:
+      cls_scores: Class logits of every denoising slot, per decoder layer.
+      bbox_preds: Encoded boxes of every denoising slot, per decoder layer, in the layout of
+        ``StreamPETRHeadOutputs.all_bbox_preds``.
+      known_labels: Class of every noised query, ``num_classes`` for a query noised beyond the
+        radius that keeps it a positive.
+      known_boxes: Metric box ``[cx, cy, cz, l, w, h, yaw, vx, vy]`` every noised query was drawn
+        from.
+      batch_indices: Sample of every noised query.
+      slot_indices: Denoising slot of every noised query inside its sample.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
+
+    cls_scores: Float[torch.Tensor, "num_layers batch_size num_slots num_classes"]
+    bbox_preds: Float[torch.Tensor, "num_layers batch_size num_slots 10"]
+    known_labels: Int64[torch.Tensor, " num_known"]
+    known_boxes: Float[torch.Tensor, "num_known 9"]
+    batch_indices: Int64[torch.Tensor, " num_known"]
+    slot_indices: Int64[torch.Tensor, " num_known"]
+
+    @model_validator(mode="after")
+    def _check_layers_and_known_queries(self) -> StreamPETRDenoisingOutputs:
+        """Check that the logits and the boxes cover the same slots and every query is indexed."""
+        if self.cls_scores.shape[:3] != self.bbox_preds.shape[:3]:
+            raise ValueError(
+                "cls_scores and bbox_preds must cover the same layers, samples and slots, got "
+                f"{tuple(self.cls_scores.shape)} and {tuple(self.bbox_preds.shape)}."
+            )
+        num_known = self.known_labels.shape[0]
+        for name, tensor in (
+            ("known_boxes", self.known_boxes),
+            ("batch_indices", self.batch_indices),
+            ("slot_indices", self.slot_indices),
+        ):
+            if tensor.shape[0] != num_known:
+                raise ValueError(
+                    f"{name} must describe the {num_known} noised queries, got {tensor.shape[0]}."
+                )
+        return self
+
+
+class StreamPETRHeadOutputs(BaseModel):
+    """
+    Dataclass to save the outputs of a StreamPETR query head.
+
+    Attributes:
+      all_cls_scores: Class logits of every decoder layer for the detection queries, the
+        learnable queries followed by the ones propagated from the temporal memory.
+      all_bbox_preds: Boxes of every decoder layer, ``[cx, cy, cz, log l, log w, log h, sin,
+        cos, vx, vy]`` with metric gravity centers.
+      denoising: Outputs of the denoising queries, None outside training or when the batch
+        carries no box.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
+
+    all_cls_scores: Float[torch.Tensor, "num_layers batch_size num_queries num_classes"]
+    all_bbox_preds: Float[torch.Tensor, "num_layers batch_size num_queries 10"]
+    denoising: StreamPETRDenoisingOutputs | None
+
+    @model_validator(mode="after")
+    def _check_layers_samples_and_queries(self) -> StreamPETRHeadOutputs:
+        """Check that the logits, the boxes and the denoising queries describe one batch."""
+        if self.all_cls_scores.shape[:3] != self.all_bbox_preds.shape[:3]:
+            raise ValueError(
+                "all_cls_scores and all_bbox_preds must cover the same layers, samples and "
+                f"queries, got {tuple(self.all_cls_scores.shape)} and "
+                f"{tuple(self.all_bbox_preds.shape)}."
+            )
+        if self.denoising is not None:
+            num_layers, batch_size, _, num_classes = self.all_cls_scores.shape
+            denoising_shape = self.denoising.cls_scores.shape
+            if (denoising_shape[0], denoising_shape[1], denoising_shape[3]) != (
+                num_layers,
+                batch_size,
+                num_classes,
+            ):
+                raise ValueError(
+                    "The denoising queries must share the layers, samples and classes of the "
+                    f"detection queries, got {tuple(denoising_shape)} for "
+                    f"{tuple(self.all_cls_scores.shape)}."
+                )
+        return self
+
+
 class Detection3DHeadOutputs(BaseModel):
     """
     Dataclass to save outputs from 3D detection models.
 
-    Exactly one of the two heads must be set.
+    Exactly one of the heads must be set.
 
     Attributes:
       center_head_outputs: Outputs from a CenterHead-based 3D detection model.
       transfusion_head_outputs: Outputs from a TransFusion-based 3D detection model.
+      streampetr_head_outputs: Outputs from a StreamPETR-based 3D detection model.
     """
 
     model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
 
     center_head_outputs: CenterHeadOutputs | None
     transfusion_head_outputs: TransFusionHeadOutputs | None
+    streampetr_head_outputs: StreamPETRHeadOutputs | None
 
     def center_head(self) -> CenterHeadOutputs:
         """
         Read the outputs of a CenterHead-based model.
 
         Raises:
-            ValueError: If a TransFusion-based head produced the outputs.
+            ValueError: If another head family produced the outputs.
         """
         if self.center_head_outputs is None:
-            raise ValueError("The detection outputs come from a TransFusion head.")
+            raise ValueError(f"The detection outputs come from a {self._head_family()}.")
         return self.center_head_outputs
 
     def transfusion_head(self) -> TransFusionHeadOutputs:
@@ -238,22 +334,43 @@ class Detection3DHeadOutputs(BaseModel):
         Read the outputs of a TransFusion-based model.
 
         Raises:
-            ValueError: If a CenterHead-based head produced the outputs.
+            ValueError: If another head family produced the outputs.
         """
         if self.transfusion_head_outputs is None:
-            raise ValueError("The detection outputs come from a CenterHead.")
+            raise ValueError(f"The detection outputs come from a {self._head_family()}.")
         return self.transfusion_head_outputs
+
+    def streampetr_head(self) -> StreamPETRHeadOutputs:
+        """
+        Read the outputs of a StreamPETR-based model.
+
+        Raises:
+            ValueError: If another head family produced the outputs.
+        """
+        if self.streampetr_head_outputs is None:
+            raise ValueError(f"The detection outputs come from a {self._head_family()}.")
+        return self.streampetr_head_outputs
+
+    def _head_family(self) -> str:
+        """Name the head family that produced the outputs."""
+        if self.center_head_outputs is not None:
+            return "CenterHead"
+        if self.transfusion_head_outputs is not None:
+            return "TransFusion head"
+        return "StreamPETR head"
 
     @model_validator(mode="after")
     def _check_exactly_one_head(self) -> Detection3DHeadOutputs:
         """Check that exactly one head family produced the outputs."""
-        has_center_head = self.center_head_outputs is not None
-        has_transfusion_head = self.transfusion_head_outputs is not None
-        if has_center_head == has_transfusion_head:
+        present = {
+            "center_head_outputs": self.center_head_outputs is not None,
+            "transfusion_head_outputs": self.transfusion_head_outputs is not None,
+            "streampetr_head_outputs": self.streampetr_head_outputs is not None,
+        }
+        if sum(present.values()) != 1:
             raise ValueError(
-                "Exactly one of center_head_outputs and transfusion_head_outputs must be set, "
-                f"got center_head_outputs={has_center_head} and "
-                f"transfusion_head_outputs={has_transfusion_head}."
+                "Exactly one of center_head_outputs, transfusion_head_outputs and "
+                f"streampetr_head_outputs must be set, got {present}."
             )
         return self
 

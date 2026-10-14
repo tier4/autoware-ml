@@ -24,6 +24,8 @@ import torch
 from autoware_ml.dataclasses.models.detection3d.head_outputs import (
     CenterHeadOutputs,
     Detection3DHeadOutputs,
+    StreamPETRDenoisingOutputs,
+    StreamPETRHeadOutputs,
     TransFusionHeadOutputs,
     TransFusionSeparateHeadOutputs,
 )
@@ -314,6 +316,63 @@ class TestCenterHeadOutputs(unittest.TestCase):
             outputs.vel = None  # type: ignore[misc]
 
 
+def build_streampetr_denoising(
+    num_layers: int = 2, batch_size: int = 1, num_slots: int = 4, num_known: int = 4
+) -> StreamPETRDenoisingOutputs:
+    """Build denoising outputs whose noised queries fill the given slots of sample 0."""
+    return StreamPETRDenoisingOutputs(
+        cls_scores=torch.zeros(num_layers, batch_size, num_slots, 3),
+        bbox_preds=torch.zeros(num_layers, batch_size, num_slots, 10),
+        known_labels=torch.zeros(num_known, dtype=torch.int64),
+        known_boxes=torch.zeros(num_known, 9),
+        batch_indices=torch.zeros(num_known, dtype=torch.int64),
+        slot_indices=torch.arange(num_known, dtype=torch.int64),
+    )
+
+
+class TestStreamPETRHeadOutputs(unittest.TestCase):
+    """Unit tests for the StreamPETR query head outputs."""
+
+    def test_holds_the_decoder_outputs_and_the_denoising_queries(self) -> None:
+        """Test that the per-layer predictions and the denoising queries are kept as given."""
+        denoising = build_streampetr_denoising()
+        outputs = StreamPETRHeadOutputs(
+            all_cls_scores=torch.zeros(2, 1, 5, 3),
+            all_bbox_preds=torch.zeros(2, 1, 5, 10),
+            denoising=denoising,
+        )
+
+        self.assertEqual(tuple(outputs.all_bbox_preds.shape), (2, 1, 5, 10))
+        self.assertIs(outputs.denoising, denoising)
+
+    def test_layers_samples_and_queries_must_match(self) -> None:
+        """Test that logits and boxes describing different queries are rejected."""
+        with self.assertRaises(ValidationError):
+            StreamPETRHeadOutputs(
+                all_cls_scores=torch.zeros(2, 1, 5, 3),
+                all_bbox_preds=torch.zeros(2, 1, 6, 10),
+                denoising=None,
+            )
+
+    def test_box_code_size_is_enforced(self) -> None:
+        """Test that a box layout other than the ten regressed channels is rejected."""
+        with self.assertRaises(ValidationError):
+            StreamPETRHeadOutputs(
+                all_cls_scores=torch.zeros(2, 1, 5, 3),
+                all_bbox_preds=torch.zeros(2, 1, 5, 9),
+                denoising=None,
+            )
+
+    def test_denoising_queries_must_share_the_layers_and_classes(self) -> None:
+        """Test that denoising queries of another decoder depth are rejected."""
+        with self.assertRaises(ValidationError):
+            StreamPETRHeadOutputs(
+                all_cls_scores=torch.zeros(3, 1, 5, 3),
+                all_bbox_preds=torch.zeros(3, 1, 5, 10),
+                denoising=build_streampetr_denoising(num_layers=2),
+            )
+
+
 class TestDetection3DHeadOutputs(unittest.TestCase):
     """Unit tests for the head-agnostic 3D detection output wrapper."""
 
@@ -344,10 +403,14 @@ class TestDetection3DHeadOutputs(unittest.TestCase):
     def test_holds_one_head_family_at_a_time(self) -> None:
         """Test that the wrapper exposes the head that produced the outputs and leaves the other."""
         center_outputs = Detection3DHeadOutputs(
-            center_head_outputs=self.center_head_outputs, transfusion_head_outputs=None
+            center_head_outputs=self.center_head_outputs,
+            transfusion_head_outputs=None,
+            streampetr_head_outputs=None,
         )
         transfusion_outputs = Detection3DHeadOutputs(
-            center_head_outputs=None, transfusion_head_outputs=self.transfusion_head_outputs
+            center_head_outputs=None,
+            transfusion_head_outputs=self.transfusion_head_outputs,
+            streampetr_head_outputs=None,
         )
 
         self.assertIs(center_outputs.center_head_outputs, self.center_head_outputs)
@@ -358,7 +421,11 @@ class TestDetection3DHeadOutputs(unittest.TestCase):
     def test_rejects_no_head_outputs(self) -> None:
         """Test that a wrapper carrying no head outputs is rejected."""
         with self.assertRaises(ValidationError):
-            Detection3DHeadOutputs(center_head_outputs=None, transfusion_head_outputs=None)
+            Detection3DHeadOutputs(
+                center_head_outputs=None,
+                transfusion_head_outputs=None,
+                streampetr_head_outputs=None,
+            )
 
     def test_rejects_both_head_outputs(self) -> None:
         """Test that a wrapper carrying outputs from both head families is rejected."""
@@ -366,6 +433,43 @@ class TestDetection3DHeadOutputs(unittest.TestCase):
             Detection3DHeadOutputs(
                 center_head_outputs=self.center_head_outputs,
                 transfusion_head_outputs=self.transfusion_head_outputs,
+                streampetr_head_outputs=None,
+            )
+
+    def test_holds_streampetr_outputs_and_names_them_to_other_readers(self) -> None:
+        """Test that a StreamPETR output is read back and the other accessors name its family."""
+        streampetr_head_outputs = StreamPETRHeadOutputs(
+            all_cls_scores=torch.zeros(2, 1, 5, 3),
+            all_bbox_preds=torch.zeros(2, 1, 5, 10),
+            denoising=None,
+        )
+        outputs = Detection3DHeadOutputs(
+            center_head_outputs=None,
+            transfusion_head_outputs=None,
+            streampetr_head_outputs=streampetr_head_outputs,
+        )
+
+        self.assertIs(outputs.streampetr_head(), streampetr_head_outputs)
+        with self.assertRaisesRegex(ValueError, "StreamPETR"):
+            outputs.transfusion_head()
+        with self.assertRaisesRegex(ValueError, "CenterHead"):
+            Detection3DHeadOutputs(
+                center_head_outputs=self.center_head_outputs,
+                transfusion_head_outputs=None,
+                streampetr_head_outputs=None,
+            ).streampetr_head()
+
+    def test_rejects_streampetr_next_to_another_head_family(self) -> None:
+        """Test that StreamPETR outputs cannot share the wrapper with another head family."""
+        with self.assertRaises(ValidationError):
+            Detection3DHeadOutputs(
+                center_head_outputs=self.center_head_outputs,
+                transfusion_head_outputs=None,
+                streampetr_head_outputs=StreamPETRHeadOutputs(
+                    all_cls_scores=torch.zeros(2, 1, 5, 3),
+                    all_bbox_preds=torch.zeros(2, 1, 5, 10),
+                    denoising=None,
+                ),
             )
 
 
