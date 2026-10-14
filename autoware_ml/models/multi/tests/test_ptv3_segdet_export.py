@@ -20,6 +20,7 @@ from autoware_ml.models.tests.batch_inputs_fixtures import (
     build_point_cloud_batch,
 )
 from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
+from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.models.detection3d.tests.ptv3_detection_fixtures import (
     build_bev_neck,
     build_inputs,
@@ -66,14 +67,17 @@ JOINT_EXPORT_OUTPUT_NAMES = [
 
 
 class _DummyBBoxHead:
-    def predict(self, det_outputs: object) -> list[Detection3DSamplePredictions]:
-        return [
-            Detection3DSamplePredictions(
-                bboxes_3d=torch.zeros((0, 9), dtype=torch.float32),
-                scores_3d=torch.zeros((0,), dtype=torch.float32),
-                labels_3d=torch.zeros((0,), dtype=torch.long),
-            )
-        ]
+    def decode_outputs(self, outputs: object) -> ModelPredictions:
+        del outputs
+        return ModelPredictions(
+            detection3d_predictions=[
+                Detection3DSamplePredictions(
+                    bboxes_3d=torch.zeros((0, 9), dtype=torch.float32),
+                    scores_3d=torch.zeros((0,), dtype=torch.float32),
+                    labels_3d=torch.zeros((0,), dtype=torch.long),
+                )
+            ]
+        )
 
 
 def _save_segmentation_checkpoint(tmp_path: Path) -> Path:
@@ -318,10 +322,10 @@ def test_ptv3_segdet_detection_outputs_invariant_to_seg_head() -> None:
     forward_inputs = model.forward_inputs(batch)
 
     with torch.no_grad():
-        reference = model(**forward_inputs)
+        reference = model.forward_network(**forward_inputs)
         for parameter in model.seg3d_head.parameters():
             parameter.add_(1.0)
-        perturbed = model(**forward_inputs)
+        perturbed = model.forward_network(**forward_inputs)
 
     names = ["dense_heatmap", "query_heatmap_score", "query_labels", "heatmap", "center"]
     names += ["height", "dim", "rot", "vel"]
@@ -345,7 +349,7 @@ def test_ptv3_segdet_seg_logits_invariant_to_det_branch_pass() -> None:
     forward_inputs = model.forward_inputs(batch)
 
     with torch.no_grad():
-        joint_logits = model(**forward_inputs).segmentation3d().logits
+        joint_logits = model.forward_network(**forward_inputs).segmentation3d().logits
         point = model.encode(**forward_inputs)
         seg_only_logits = model.seg3d_head(point)
 

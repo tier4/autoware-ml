@@ -11,7 +11,8 @@ import torch.nn as nn
 from torch.onnx.operators import shape_as_tensor
 
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
-from autoware_ml.models.base import BaseModel
+from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
+from autoware_ml.models.module_base_model import ModuleBaseModel
 from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     Block,
     PointTransformerV3Encoder,
@@ -101,7 +102,7 @@ def split_block_parameters(
     return default_params, block_params
 
 
-class PTv3BaseModel(BaseModel):
+class PTv3BaseModel(ModuleBaseModel):
     """Abstract base class for all PTv3 task models.
 
     Provides shared encoder management, export geometry computation, and
@@ -132,7 +133,7 @@ class PTv3BaseModel(BaseModel):
                 x_max, y_max, z_max]`` used to derive sparse shape for export.
             freeze_encoder: When ``True``, the encoder is permanently kept
                 in eval mode with its parameters frozen.
-            **kwargs: Keyword arguments forwarded to :class:`BaseModel` (and
+            **kwargs: Keyword arguments forwarded to :class:`ModuleBaseModel` (and
                 further up the MRO chain).
         """
         super().__init__(**kwargs)
@@ -204,6 +205,39 @@ class PTv3BaseModel(BaseModel):
             "num_dropped_voxels": voxels_data.num_dropped_voxels,
             "time_lag_column": point_batch.timestamp_difference_dim,
         }
+
+    def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
+        """Run the network on the voxels of the batch.
+
+        Args:
+            multi_task_batch_inputs: Model inputs holding the point cloud and its voxels.
+
+        Returns:
+            The outputs of the task heads.
+        """
+        return self.forward_network(**self.forward_inputs(multi_task_batch_inputs))
+
+    def forward_network(
+        self,
+        voxels: torch.Tensor,
+        num_points: torch.Tensor,
+        voxel_coords: torch.Tensor,
+        num_dropped_voxels: torch.Tensor,
+        time_lag_column: int,
+    ) -> ModelOutputs:
+        """Run the network on the tensors :meth:`forward_inputs` picks from the batch.
+
+        Args:
+            voxels: Padded voxel points from the data preprocessing.
+            num_points: Valid point count per voxel.
+            voxel_coords: Voxel coordinates with a leading batch column.
+            num_dropped_voxels: Occupied voxels the voxelizer discarded.
+            time_lag_column: Point column holding the time lag.
+
+        Returns:
+            The outputs of the task heads.
+        """
+        raise NotImplementedError("PTv3 models must implement forward_network()")
 
     def build_encoder_inputs(
         self, voxels: torch.Tensor, num_points: torch.Tensor, voxel_coords: torch.Tensor

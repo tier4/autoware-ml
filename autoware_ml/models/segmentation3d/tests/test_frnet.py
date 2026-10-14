@@ -16,7 +16,7 @@ from autoware_ml.models.tests.batch_inputs_fixtures import (
     build_batch_inputs,
     build_point_cloud_batch,
 )
-from autoware_ml.preprocessing.base import DataPreprocessing
+from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 from autoware_ml.preprocessing.segmentation3d.frustum_range import FrustumRangePreprocessor
 
 
@@ -89,13 +89,14 @@ class _DecodeHead(torch.nn.Module):
         return point_logits.argmax(dim=1)
 
 
-def _make_frnet(num_classes: int = 3) -> FRNet:
+def _make_frnet(num_classes: int = 3, data_preprocessor: DataPreprocessor | None = None) -> FRNet:
     """Return a minimal FRNet using identity encoder/backbone."""
     return FRNet(
         voxel_encoder=_IdentityEncoder(),
         backbone=_IdentityBackbone(),
         decode_head=_DecodeHead(num_classes=num_classes),
         optimizer=torch.optim.AdamW,
+        data_preprocessor=data_preprocessor,
     )
 
 
@@ -127,12 +128,12 @@ def _make_batch(num_points: int = 5, num_classes: int = 3) -> ModelBatchInputs:
 
 
 def test_frnet_shared_step_returns_scalar_loss_with_grad() -> None:
-    """_shared_step should return a differentiable scalar loss tensor."""
+    """_core_step should return a differentiable scalar loss tensor."""
     model = _make_frnet()
     model.log_dict = MagicMock()
     batch = _make_batch()
 
-    metrics, _ = model._shared_step(batch, "train")
+    metrics, _ = model._core_step(batch, "train")
 
     assert "loss" in metrics
     assert metrics["loss"].shape == torch.Size([])
@@ -161,7 +162,7 @@ def test_frnet_forward_uses_explicit_sample_count() -> None:
     )
     voxel_coors, inverse_map = torch.unique(coors, return_inverse=True, dim=0)
 
-    outputs = model(points, coors, voxel_coors, inverse_map, sample_count=2)
+    outputs = model.forward_network(points, coors, voxel_coors, inverse_map, sample_count=2)
 
     point_logits = outputs.segmentation3d().logits
     assert point_logits.shape == (4, 4)
@@ -171,9 +172,7 @@ def test_frnet_forward_uses_explicit_sample_count() -> None:
 
 
 def test_frnet_with_preprocessing_runs_shared_step_end_to_end() -> None:
-    """A real preprocessor attached via set_data_preprocessing should feed FRNet."""
-    model = _make_frnet(num_classes=3)
-    model.log_dict = MagicMock()
+    """A real preprocessor handed to the model should feed FRNet."""
     preprocessor = FrustumRangePreprocessor(
         height=2,
         width=4,
@@ -182,7 +181,11 @@ def test_frnet_with_preprocessing_runs_shared_step_end_to_end() -> None:
         ignore_index=2,
         num_classes=3,
     )
-    model.set_data_preprocessing(DataPreprocessing([preprocessor]))
+    model = _make_frnet(
+        num_classes=3,
+        data_preprocessor=DataPreprocessor(preprocessor_modules=[preprocessor]),
+    )
+    model.log_dict = MagicMock()
 
     raw_batch = ModelGTBatch(
         point_cloud_gt_batch=PointCloudGTBatch(
@@ -203,7 +206,7 @@ def test_frnet_with_preprocessing_runs_shared_step_end_to_end() -> None:
     )
 
     preprocessed = model.on_after_batch_transfer(raw_batch, dataloader_idx=0)
-    metrics, _ = model._shared_step(preprocessed, "train")
+    metrics, _ = model._core_step(preprocessed, "train")
 
     assert "loss" in metrics
     assert metrics["loss"].requires_grad

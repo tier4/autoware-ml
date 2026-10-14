@@ -10,6 +10,7 @@ from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTBatch
 from autoware_ml.dataclasses.geometry.voxels import VoxelsData
 from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DHeadOutputs
 from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
+from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentation3DHeadOutputs
@@ -29,8 +30,11 @@ from autoware_ml.utils.point_cloud.structures import Point
 def _make_masking_model(recorded_calls: list) -> SimpleNamespace:
     """Build a duck-typed segdet model recording bbox_head.loss inputs."""
 
-    def bbox_loss(det_outputs, gt_boxes, gt_labels):
-        recorded_calls.append((det_outputs, gt_boxes, gt_labels))
+    def bbox_loss(
+        outputs, gt_bboxes_3d, gt_labels_3d, gt_valid_bboxes, gt_traffic_cone_barrier_bbox_status
+    ):
+        det_outputs = outputs.transfusion_head_outputs
+        recorded_calls.append((det_outputs, gt_bboxes_3d, gt_labels_3d))
         return {"loss": det_outputs.separate_head_outputs.heatmap.sum() * 0.0 + 1.0}
 
     def seg_loss(seg_logits, segment, weights):
@@ -162,19 +166,22 @@ def test_compute_metrics_keeps_det_branch_in_graph_without_supervised_frames() -
 
 
 def _make_eval_model() -> SimpleNamespace:
-    def predict(det_outputs):
+    def decode_outputs(outputs):
+        det_outputs = outputs.transfusion_head_outputs
         batch_size = det_outputs.separate_head_outputs.heatmap.shape[0]
-        return [
-            Detection3DSamplePredictions(
-                bboxes_3d=torch.full((2, 9), float(index)),
-                scores_3d=torch.full((2,), float(index)),
-                labels_3d=torch.zeros(2, dtype=torch.long),
-            )
-            for index in range(batch_size)
-        ]
+        return ModelPredictions(
+            detection3d_predictions=[
+                Detection3DSamplePredictions(
+                    bboxes_3d=torch.full((2, 9), float(index)),
+                    scores_3d=torch.full((2,), float(index)),
+                    labels_3d=torch.zeros(2, dtype=torch.long),
+                )
+                for index in range(batch_size)
+            ]
+        )
 
     return SimpleNamespace(
-        bbox_head=SimpleNamespace(predict=predict),
+        bbox_head=SimpleNamespace(decode_outputs=decode_outputs),
         _detection_gt_batch=PTv3SegDetModel._detection_gt_batch,
         _detection_frame_mask=PTv3SegDetModel._detection_frame_mask,
     )

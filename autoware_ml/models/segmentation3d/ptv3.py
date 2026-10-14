@@ -135,7 +135,7 @@ class PTv3SegmentationModel(PTv3BaseModel):
                 serialization depth.
             point_cloud_range: Point-cloud range used to derive sparse shape
                 and serialization depth.
-            **kwargs: Keyword arguments forwarded to :class:`BaseModel`.
+            **kwargs: Keyword arguments forwarded to :class:`ModuleBaseModel`.
         """
         super().__init__(
             encoder=encoder,
@@ -151,7 +151,7 @@ class PTv3SegmentationModel(PTv3BaseModel):
         default_params, block_params = split_block_parameters(self)
         return {"default": default_params, "block": block_params}
 
-    def forward(
+    def forward_network(
         self,
         voxels: torch.Tensor,
         num_points: torch.Tensor,
@@ -213,15 +213,13 @@ class PTv3SegmentationModel(PTv3BaseModel):
         """
         return segmentation_eval_output(outputs.segmentation3d().logits, batch)
 
-    def predict_outputs(
-        self,
-        batch_inputs: ModelBatchInputs,
-        outputs: ModelOutputs,
+    def decode_outputs(
+        self, multi_task_batch_inputs: ModelBatchInputs, outputs: ModelOutputs
     ) -> ModelPredictions:
         """Format PTv3 segmentation predictions for the current-frame points.
 
         Args:
-            batch_inputs: Model inputs of the prediction step.
+            multi_task_batch_inputs: Model inputs of the prediction step.
             outputs: Segmentation head outputs returned by :meth:`forward`.
 
         Returns:
@@ -229,7 +227,7 @@ class PTv3SegmentationModel(PTv3BaseModel):
         """
         return ModelPredictions(
             segmentation3d_predictions=segmentation_predict_outputs(
-                outputs.segmentation3d().logits, batch_inputs
+                outputs.segmentation3d().logits, multi_task_batch_inputs
             )
         )
 

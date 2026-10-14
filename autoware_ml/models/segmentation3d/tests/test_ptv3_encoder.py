@@ -963,7 +963,7 @@ def test_ptv3_frozen_encoder_supports_decoder_block_backward() -> None:
     ).cuda()
     batch = build_inputs(device=torch.device("cuda"))
 
-    logits = model(**model.forward_inputs(batch)).segmentation3d().logits
+    logits = model(batch).segmentation3d().logits
     logits.sum().backward()
     assert logits.shape == (batch.voxels_data.voxels.shape[0], 3)
 

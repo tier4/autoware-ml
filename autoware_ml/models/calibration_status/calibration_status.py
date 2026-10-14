@@ -16,13 +16,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
 from typing import Any
 
 import torch
 import torch.nn as nn
-from torch.optim import Optimizer
-from torch.optim.lr_scheduler import LRScheduler
 
 from autoware_ml.dataclasses.geometry.images import ImageGTBatch
 from autoware_ml.dataclasses.models.calibration_status.head_outputs import (
@@ -34,7 +31,7 @@ from autoware_ml.dataclasses.models.calibration_status.predictions import (
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
-from autoware_ml.models.base import BaseModel
+from autoware_ml.models.module_base_model import ModuleBaseModel
 from autoware_ml.utils.deploy import ExportSpec
 
 
@@ -49,7 +46,7 @@ def _image_data(batch_inputs: ModelBatchInputs) -> ImageGTBatch:
     return batch_inputs.image_data
 
 
-class CalibrationStatusClassifier(BaseModel):
+class CalibrationStatusClassifier(ModuleBaseModel):
     """Predict calibration-status labels from fused image inputs.
 
     The model combines a backbone, neck, and classification head inside the
@@ -61,10 +58,7 @@ class CalibrationStatusClassifier(BaseModel):
         backbone: nn.Module,
         neck: nn.Module,
         head: nn.Module,
-        optimizer: Callable[..., Optimizer] | None = None,
-        scheduler: Callable[[Optimizer], LRScheduler] | None = None,
-        optimizer_group_overrides: Mapping[str, Mapping[str, Any]] | None = None,
-        scheduler_config: Mapping[str, Any] | None = None,
+        **kwargs: Any,
     ) -> None:
         """Initialize the calibration-status classifier.
 
@@ -72,25 +66,27 @@ class CalibrationStatusClassifier(BaseModel):
             backbone: Feature extraction backbone for fused camera inputs.
             neck: Intermediate feature aggregation module.
             head: Classification head that computes logits, predictions, and losses.
-            optimizer: Optimizer factory forwarded to :class:`BaseModel`.
-            scheduler: Scheduler factory forwarded to :class:`BaseModel`.
-            optimizer_group_overrides: Optional optimizer overrides keyed by
-                model-defined optimizer group name.
-            scheduler_config: Optional Lightning scheduler metadata such as
-                ``interval`` or ``monitor``.
+            **kwargs: Keyword arguments forwarded to :class:`ModuleBaseModel`, such as the
+                data preprocessor, the logging configuration, the optimizer and the metrics.
         """
-        super().__init__(
-            optimizer=optimizer,
-            scheduler=scheduler,
-            optimizer_group_overrides=optimizer_group_overrides,
-            scheduler_config=scheduler_config,
-        )
+        super().__init__(**kwargs)
 
         self.backbone = backbone
         self.neck = neck
         self.head = head
 
-    def forward(self, fused_img: torch.Tensor) -> ModelOutputs:
+    def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
+        """Run the classifier on the fused images of the batch.
+
+        Args:
+            multi_task_batch_inputs: Model inputs holding the images and their depth maps.
+
+        Returns:
+            Calibration status head outputs with the classification logits of every image.
+        """
+        return self.forward_network(**self.forward_inputs(multi_task_batch_inputs))
+
+    def forward_network(self, fused_img: torch.Tensor) -> ModelOutputs:
         """Run the classifier on fused image inputs.
 
         Args:
@@ -117,11 +113,11 @@ class CalibrationStatusClassifier(BaseModel):
         """
         return {"fused_img": _image_data(batch_inputs).fused_images()}
 
-    def predict_outputs(
-        self, batch_inputs: ModelBatchInputs, outputs: ModelOutputs
+    def decode_outputs(
+        self, multi_task_batch_inputs: ModelBatchInputs, outputs: ModelOutputs
     ) -> ModelPredictions:
         """Convert logits into class probabilities."""
-        del batch_inputs
+        del multi_task_batch_inputs
         probabilities = self.head.predict(outputs.calibration_status().logits)
         return ModelPredictions(
             calibration_status_predictions=CalibrationStatusPredictions(probabilities=probabilities)
@@ -152,7 +148,7 @@ class CalibrationStatusClassifier(BaseModel):
     def build_export_spec(self, batch_inputs: ModelBatchInputs) -> ExportSpec:
         """Build a calibration-status-specific export specification.
 
-        The generic BaseModel prediction wrapper uses a variadic ``forward(*args)``
+        The generic Lightning prediction wrapper uses a variadic ``forward(*args)``
         interface around a LightningModule. PyTorch's dynamo ONNX path currently
         fails to decompose that wrapper for this model. Exporting through a plain
         ``nn.Module`` with a concrete ``forward(fused_img)`` signature avoids the

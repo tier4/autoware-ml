@@ -469,7 +469,7 @@ class PTv3DetectionModel(PTv3BaseModel):
             grid_size: Voxel grid size used to derive sparse shape.
             point_cloud_range: Point-cloud range used to derive sparse shape.
             freeze_encoder: When ``True``, keep the encoder frozen in eval mode.
-            **kwargs: Keyword arguments forwarded to :class:`BaseModel`.
+            **kwargs: Keyword arguments forwarded to :class:`ModuleBaseModel`.
         """
         super().__init__(
             encoder=encoder,
@@ -493,13 +493,13 @@ class PTv3DetectionModel(PTv3BaseModel):
         Returns:
             Flat eval output dict consumed by the detection metric.
         """
-        return detection_eval_output(self.predict_outputs(batch, outputs), batch)
+        return detection_eval_output(self.decode_outputs(batch, outputs), batch)
 
     def get_export_output_names(self) -> list[str]:
         """Return the ordered export output names."""
         return list(self.export_output_names)
 
-    def forward(
+    def forward_network(
         self,
         voxels: torch.Tensor,
         num_points: torch.Tensor,
@@ -545,27 +545,27 @@ class PTv3DetectionModel(PTv3BaseModel):
         if gt_detections is None:
             raise ValueError("PTv3 detection losses need the 3D detection ground truth.")
         return self.bbox_head.loss(
-            outputs.detection3d().transfusion_head(),
-            gt_detections.valid_bboxes_3d(),
-            gt_detections.valid_labels_3d(),
+            outputs=outputs.detection3d(),
+            gt_bboxes_3d=gt_detections.gt_bboxes_3d,
+            gt_labels_3d=gt_detections.gt_labels_3d,
+            gt_valid_bboxes=gt_detections.gt_valid_bboxes,
+            gt_traffic_cone_barrier_bbox_status=gt_detections.gt_traffic_cone_barrier_bbox_status,
         )
 
-    def predict_outputs(
-        self, batch_inputs: ModelBatchInputs, outputs: ModelOutputs
+    def decode_outputs(
+        self, multi_task_batch_inputs: ModelBatchInputs, outputs: ModelOutputs
     ) -> ModelPredictions:
         """Decode predictions for inference.
 
         Args:
-            batch_inputs: Model inputs of the prediction step, unused.
+            multi_task_batch_inputs: Model inputs of the prediction step, unused.
             outputs: Raw head outputs returned by :meth:`forward`.
 
         Returns:
             Decoded detector predictions for the current batch.
         """
-        del batch_inputs
-        return ModelPredictions(
-            detection3d_predictions=self.bbox_head.predict(outputs.detection3d().transfusion_head())
-        )
+        del multi_task_batch_inputs
+        return self.bbox_head.decode_outputs(outputs=outputs.detection3d())
 
     def build_export_spec(self, batch_inputs: ModelBatchInputs) -> ExportSpec:
         """Build the PTv3 detection ONNX export specification.

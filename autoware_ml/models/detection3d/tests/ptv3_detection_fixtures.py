@@ -11,7 +11,7 @@ from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTBatch
 from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch
 from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
-from autoware_ml.models.detection3d.heads.transfusion import TransFusionHead
+from autoware_ml.models.detection3d.heads.transfusions import TransFusionHead
 from autoware_ml.models.detection3d.ptv3 import (
     PTv3BEVEncoder,
     PTv3BEVProjection,
@@ -20,7 +20,10 @@ from autoware_ml.models.detection3d.ptv3 import (
     PTv3DetFeatureFusion,
 )
 from autoware_ml.models.detection3d.task_modules.assigners import HungarianAssigner3D
-from autoware_ml.models.detection3d.task_modules.bbox_coders import TransFusionBBoxCoder
+from autoware_ml.models.detection3d.task_modules.bbox_coders import (
+    ScoreThresholdConfig,
+    TransFusionBBoxCoder,
+)
 from autoware_ml.models.detection3d.task_modules.match_costs import (
     BBoxBEVL1Cost,
     ClassificationCost,
@@ -36,8 +39,8 @@ from autoware_ml.models.segmentation3d.encoders.voxel import (
 )
 from autoware_ml.models.segmentation3d.heads.ptv3 import PTv3SegDecoderHead
 from autoware_ml.models.segmentation3d.ptv3 import PTv3SegmentationModel
-from autoware_ml.preprocessing.base import DataPreprocessing
-from autoware_ml.preprocessing.detection3d.point_pillar import PointPillarPreprocessor
+from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
+from autoware_ml.preprocessing.detection3d.point_pillar_preprocessor import PointPillarPreprocessor
 from autoware_ml.types.geometry import Box3DCenterCoordinateType
 
 POINT_CLOUD_RANGE = [0.0, 0.0, -2.0, 8.0, 8.0, 2.0]
@@ -134,6 +137,9 @@ def build_bev_neck() -> PTv3DetBEVNeck:
     )
 
 
+CLASS_NAMES = ("car", "pedestrian")
+
+
 def build_transfusion_head(
     point_cloud_range: Sequence[float] = POINT_CLOUD_RANGE,
 ) -> TransFusionHead:
@@ -143,19 +149,20 @@ def build_transfusion_head(
         auxiliary=False,
         in_channels=64,
         hidden_channel=32,
-        num_classes=2,
+        class_names=list(CLASS_NAMES),
         num_decoder_layers=1,
         num_heads=4,
         feedforward_channels=64,
         common_heads={
-            "center": (2, 2),
-            "height": (1, 2),
-            "dim": (3, 2),
-            "rot": (2, 2),
-            "vel": (2, 2),
+            "centers": (2, 2),
+            "heights": (1, 2),
+            "dims": (3, 2),
+            "rots": (2, 2),
+            "vels": (2, 2),
         },
         bbox_coder=TransFusionBBoxCoder(
             pc_range=list(point_cloud_range[:2]),
+            score_threshold_groups=None,
             out_size_factor=1,
             voxel_size=[1.0, 1.0],
             post_center_range=[
@@ -172,6 +179,7 @@ def build_transfusion_head(
             cls_cost=ClassificationCost(weight=0.15),
             reg_cost=BBoxBEVL1Cost(weight=0.25),
             iou_cost=IoU3DCost(weight=0.25),
+            point_cloud_range=list(point_cloud_range),
         ),
         point_cloud_range=list(point_cloud_range),
         voxel_size=[1.0, 1.0, 4.0],
@@ -179,9 +187,12 @@ def build_transfusion_head(
         code_weights=[1.0] * 8 + [0.2, 0.2],
         min_radius=1,
         gaussian_overlap=0.1,
-        score_threshold=0.1,
+        score_threshold_group_configs=[
+            ScoreThresholdConfig(class_names=list(CLASS_NAMES), score_threshold=0.1)
+        ],
         post_max_size=10,
         nms_min_radius=1.0,
+        dense_heatmap_pooling_class_names=[],
     )
 
 
@@ -303,7 +314,8 @@ def build_inputs(
     batch = build_batch()
     if device is not None:
         batch = batch.to_device(device)
-    return DataPreprocessing([build_preprocessor()])(batch, is_training=is_training)
+    preprocessor = DataPreprocessor(preprocessor_modules=[build_preprocessor()])
+    return preprocessor(batch, is_training=is_training)
 
 
 def build_targets() -> tuple[list[torch.Tensor], list[torch.Tensor]]:

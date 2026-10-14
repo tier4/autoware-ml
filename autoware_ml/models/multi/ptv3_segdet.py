@@ -153,7 +153,7 @@ class PTv3SegDetModel(PTv3BaseModel):
             "det3d_branch": det3d_branch_params,
         }
 
-    def forward(
+    def forward_network(
         self,
         voxels: torch.Tensor,
         num_points: torch.Tensor,
@@ -242,10 +242,18 @@ class PTv3SegDetModel(PTv3BaseModel):
         gt_detections = self._detection_gt_batch(batch_inputs)
         det_mask = self._detection_frame_mask(gt_detections)
         if bool(det_mask.any()):
+            traffic_cone_status = gt_detections.gt_traffic_cone_barrier_bbox_status
             det_metrics = self.bbox_head.loss(
-                det_outputs.select_samples(det_mask),
-                self._mask_list(gt_detections.valid_bboxes_3d(), det_mask),
-                self._mask_list(gt_detections.valid_labels_3d(), det_mask),
+                outputs=Detection3DHeadOutputs(
+                    center_head_outputs=None,
+                    transfusion_head_outputs=det_outputs.select_samples(det_mask),
+                ),
+                gt_bboxes_3d=gt_detections.gt_bboxes_3d[det_mask],
+                gt_labels_3d=gt_detections.gt_labels_3d[det_mask],
+                gt_valid_bboxes=gt_detections.gt_valid_bboxes[det_mask],
+                gt_traffic_cone_barrier_bbox_status=(
+                    traffic_cone_status[det_mask] if traffic_cone_status is not None else None
+                ),
             )
         else:
             # Keep the detection branch in the autograd graph with zero
@@ -289,7 +297,9 @@ class PTv3SegDetModel(PTv3BaseModel):
         Empty prediction + empty ground truth is metric-neutral.
         """
         det_mask = self._detection_frame_mask(self._detection_gt_batch(batch))
-        predictions = self.bbox_head.predict(outputs.detection3d().transfusion_head())
+        predictions = list(
+            self.bbox_head.decode_outputs(outputs=outputs.detection3d()).detection3d_predictions
+        )
         predictions = [
             prediction
             if flagged
@@ -306,24 +316,24 @@ class PTv3SegDetModel(PTv3BaseModel):
         eval_out.update(segmentation_eval_output(outputs.segmentation3d().logits, batch))
         return eval_out
 
-    def predict_outputs(
-        self, batch_inputs: ModelBatchInputs, outputs: ModelOutputs
+    def decode_outputs(
+        self, multi_task_batch_inputs: ModelBatchInputs, outputs: ModelOutputs
     ) -> ModelPredictions:
         """Decode the boxes and the point labels of the batch for inference.
 
         Args:
-            batch_inputs: Model inputs holding the grid samples the logits were predicted for.
+            multi_task_batch_inputs: Model inputs holding the grid samples the logits were
+                predicted for.
             outputs: Raw outputs returned by :meth:`forward`.
 
         Returns:
             The decoded boxes of every sample and the label of every original point.
         """
+        detection_predictions = self.bbox_head.decode_outputs(outputs=outputs.detection3d())
         return ModelPredictions(
-            detection3d_predictions=self.bbox_head.predict(
-                outputs.detection3d().transfusion_head()
-            ),
+            detection3d_predictions=detection_predictions.detection3d_predictions,
             segmentation3d_predictions=segmentation_predict_outputs(
-                outputs.segmentation3d().logits, batch_inputs
+                outputs.segmentation3d().logits, multi_task_batch_inputs
             ),
         )
 
