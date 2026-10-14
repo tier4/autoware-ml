@@ -39,8 +39,9 @@ class GaussianFocalLoss(nn.Module):
         Args:
             prediction: Raw heatmap logits.
             target: Gaussian heatmap targets.
-            weights: Optional weights broadcastable to the heatmap, scaling the loss of every
-                cell, for example one weight per sample and class.
+            weights: Optional weights broadcastable to ``prediction``, for example one weight
+                per sample and class. A zero drops the cell from the loss and, if it is a peak,
+                from the positive count normalizing the loss.
 
         Returns:
             Scalar heatmap loss value.
@@ -48,11 +49,13 @@ class GaussianFocalLoss(nn.Module):
         prediction = prediction.sigmoid().clamp(min=1e-4, max=1 - 1e-4)
         pos_mask = target.eq(1).float()
         neg_mask = target.lt(1).float()
+        if weights is not None:
+            pos_mask = pos_mask * weights
+            neg_mask = neg_mask * weights
         neg_weights = (1 - target).pow(self.beta)
 
+        # The masks carry the weights, so every cell is weighted once and a zero weighted peak
+        # leaves the positive count normalizing the loss.
         pos_loss = -torch.log(prediction) * (1 - prediction).pow(self.alpha) * pos_mask
         neg_loss = -torch.log(1 - prediction) * prediction.pow(self.alpha) * neg_weights * neg_mask
-        if weights is not None:
-            pos_loss = pos_loss * weights
-            neg_loss = neg_loss * weights
         return (pos_loss.sum() + neg_loss.sum()) / pos_mask.sum().clamp_min(1)
