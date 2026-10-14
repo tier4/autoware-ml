@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from jaxtyping import Float32
 import torch
 import torch.nn as nn
 
@@ -53,7 +54,9 @@ class ConvFuser(nn.Module):
             nn.ReLU(inplace=True),
         )
 
-    def forward(self, inputs: Sequence[torch.Tensor]) -> torch.Tensor:
+    def forward(
+        self, bev_features: Sequence[Float32[torch.Tensor, "batch_size num_channels height width"]]
+    ) -> torch.Tensor:
         """Fuse BEV feature maps from multiple branches.
 
         Args:
@@ -62,4 +65,5 @@ class ConvFuser(nn.Module):
         Returns:
             Fused BEV feature map.
         """
-        return self.proj(torch.cat(list(inputs), dim=1))
+        assert len(bev_features) > 1, "Length of bev_features must be more than 1!"
+        return self.proj(torch.cat(list(bev_features), dim=1))
