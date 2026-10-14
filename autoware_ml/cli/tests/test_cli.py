@@ -46,9 +46,11 @@ from autoware_ml.utils.cli.helpers import (
 )
 from autoware_ml.utils.session import SessionCommandError
 
-SAMPLE_CONFIG_NAME = "calibration_status/calibration_status_classifier/resnet18_t4dataset_j6gen2"
+SAMPLE_CONFIG_NAME = (
+    "detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_50e_t4dataset_120m_j6gen2_base"
+)
 SAMPLE_CONFIG_PATH = f"tasks/{SAMPLE_CONFIG_NAME}"
-SAMPLE_SESSION_NAME = "calibration-status-train"
+SAMPLE_SESSION_NAME = "centerpoint-train"
 
 
 class TestParseExtraArgs:
@@ -97,15 +99,13 @@ class TestResolveConfigReference:
 
     def test_resolve_packaged_yaml_path(self) -> None:
         config_path, config_name, hydra_overrides = resolve_config_reference(
-            "autoware_ml/configs/tasks/calibration_status/calibration_status_classifier/resnet18_t4dataset_j6gen2.yaml",
+            "autoware_ml/configs/tasks/detection3d/centerpoint/t4dataset/"
+            "voxel024_second_secfpn_b16_50e_t4dataset_120m_j6gen2_base.yaml",
             "tasks",
         )
 
         assert config_path is None
-        assert (
-            config_name
-            == "tasks/calibration_status/calibration_status_classifier/resnet18_t4dataset_j6gen2"
-        )
+        assert config_name == SAMPLE_CONFIG_PATH
         assert hydra_overrides == []
 
     def test_resolve_relative_yaml_path(self, tmp_path: Path, monkeypatch) -> None:
@@ -138,18 +138,16 @@ class TestCompleteConfigValue:
     """Tests for config completion helpers."""
 
     def test_complete_bundled_configs(self, tmp_path: Path, monkeypatch) -> None:
-        config_root = tmp_path / "tasks" / "calibration_status" / "calibration_status_classifier"
+        config_root = tmp_path / "tasks" / "detection3d" / "centerpoint" / "t4dataset"
         config_root.mkdir(parents=True)
         (config_root / "base.yaml").write_text("", encoding="utf-8")
-        (config_root / "resnet18_t4dataset_j6gen2.yaml").write_text("", encoding="utf-8")
+        (config_root / f"{Path(SAMPLE_CONFIG_NAME).name}.yaml").write_text("", encoding="utf-8")
         monkeypatch.setattr(helpers, "CONFIGS_ROOT", tmp_path)
 
-        completions = complete_config_value(
-            "calibration_status/calibration_status_classifier/resnet18_t", "tasks"
-        )
+        completions = complete_config_value("detection3d/centerpoint/t4dataset/voxel024", "tasks")
 
         assert completions == [SAMPLE_CONFIG_NAME]
-        assert "calibration_status/calibration_status_classifier/base" not in completions
+        assert "detection3d/centerpoint/t4dataset/base" not in completions
 
     def test_complete_filesystem_yaml_paths(self, tmp_path: Path, monkeypatch) -> None:
         config_dir = tmp_path / "configs"
@@ -238,6 +236,33 @@ class TestCliCommands:
             new_run=False,
             config_prefix=cli.TASK_CONFIG_PREFIX,
         )
+
+    def test_train_forwards_skip_mismatched_weights(self) -> None:
+        with patch("autoware_ml.cli.cli.run_lazy_script") as run_lazy_script_mock:
+            result = self.runner.invoke(
+                app,
+                [
+                    "train",
+                    "--config-name",
+                    SAMPLE_CONFIG_NAME,
+                    "--weights",
+                    "seg.ckpt",
+                    "--skip-mismatched-weights",
+                ],
+            )
+
+        assert result.exit_code == 0
+        hydra_overrides = run_lazy_script_mock.call_args.kwargs["hydra_overrides"]
+        assert hydra_overrides == ["+weights=[seg.ckpt]", "+skip_mismatched_weights=true"]
+
+    def test_train_rejects_skip_mismatched_weights_without_weights(self) -> None:
+        result = self.runner.invoke(
+            app,
+            ["train", "--config-name", SAMPLE_CONFIG_NAME, "--skip-mismatched-weights"],
+        )
+
+        assert result.exit_code != 0
+        assert "--skip-mismatched-weights requires --weights" in result.output
 
     def test_train_runs_with_resume_checkpoint(self, tmp_path: Path) -> None:
         checkpoint_path = tmp_path / "last.ckpt"
@@ -340,6 +365,34 @@ class TestCliCommands:
             stage="deploy",
             extra_args=[],
             hydra_overrides=["+weights=[model.ckpt]"],
+            checkpoints=["model.ckpt"],
+            config_prefix=cli.TASK_CONFIG_PREFIX,
+        )
+
+    def test_deploy_forwards_release_override(self) -> None:
+        with patch("autoware_ml.cli.cli.run_lazy_script") as run_lazy_script_mock:
+            result = self.runner.invoke(
+                app,
+                [
+                    "deploy",
+                    "--config-name",
+                    SAMPLE_CONFIG_NAME,
+                    "--weights",
+                    "model.ckpt",
+                    "--release",
+                    "v1.2.3",
+                ],
+            )
+
+        assert result.exit_code == 0
+        run_lazy_script_mock.assert_called_once_with(
+            cli.CLI_RUNTIME_MODULE,
+            "run_hydra_entrypoint",
+            entrypoint_module=cli.DEPLOY_ENTRYPOINT_MODULE,
+            config_name=SAMPLE_CONFIG_NAME,
+            stage="deploy",
+            extra_args=[],
+            hydra_overrides=["+weights=[model.ckpt]", "+release=v1.2.3"],
             checkpoints=["model.ckpt"],
             config_prefix=cli.TASK_CONFIG_PREFIX,
         )
@@ -795,7 +848,7 @@ class TestSessionCompletion:
     def test_suggests_config_names_after_flag(self) -> None:
         suggestions = complete_session_command_value(
             ["train", "--config-name"],
-            "calibration_status/calibration_status_classifier/resnet18_t",
+            "detection3d/centerpoint/t4dataset/voxel024",
         )
         assert SAMPLE_CONFIG_NAME in suggestions
 
@@ -861,7 +914,7 @@ class TestSessionNameCompletion:
             "autoware_ml.utils.cli.helpers.list_tmux_session_names",
             return_value=["default", SAMPLE_SESSION_NAME],
         ):
-            assert complete_session_name_value("cal") == [SAMPLE_SESSION_NAME]
+            assert complete_session_name_value("cen") == [SAMPLE_SESSION_NAME]
 
     def test_returns_empty_when_tmux_unavailable(self) -> None:
         with patch("autoware_ml.utils.cli.helpers.shutil.which", return_value=None):

@@ -1,0 +1,266 @@
+# @package _global_
+# ResNet-18 classifier of the camera-lidar calibration status, one sample per camera. The
+# database base below names its cameras and its datamodule, the pipelines are shared.
+defaults:
+  - /tasks/default_experiment
+  - /optimizers@optimizer: default_adamw
+  - _self_
+
+database: ???
+# Channel names of the cameras served one by one, each as its own sample.
+camera_sources: ???
+
+# The classifier scores itself through its head, there are no metric suites to run.
+metrics: []
+metric_ranges: []
+
+# Ego body cut out of the point cloud before the fusion, [x_min, y_min, z_min, x_max, y_max, z_max].
+ego_box: [-1.53, -1.15, -0.1, 5.72, 1.15, 3.1]
+
+optimizer:
+  lr: 0.001
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+  eps: 1e-8
+
+trainer:
+  max_epochs: ???
+  gradient_clip_val: 10.0
+  gradient_clip_algorithm: norm
+
+callbacks:
+  # The loss is the training signal here, so validation stays per epoch.
+  dynamic_validation: null
+
+deploy:
+  onnx:
+    modules:
+      end_to_end:
+        input_names: [input]
+        output_names: [output]
+        dynamic_shapes:
+          fused_img: { 2: height, 3: width }
+  tensorrt:
+    input_shapes:
+      input:
+        min_shape: [1, 5, 1080, 1920]
+        opt_shape: [1, 5, 1860, 2880]
+        max_shape: [1, 5, 2160, 3840]
+
+model:
+  _target_: autoware_ml.models.calibration_status.calibration_status.CalibrationStatusClassifier
+  _convert_: all
+  backbone:
+    _target_: autoware_ml.models.common.backbones.resnet.ResNet18
+    in_channels: 5
+  neck:
+    _target_: autoware_ml.models.common.necks.global_average_pooling.GlobalAveragePooling
+  head:
+    _target_: autoware_ml.models.common.heads.linear_cls_head.LinearClsHead
+    num_classes: 2
+    in_channels: 512
+    loss:
+      _target_: torch.nn.CrossEntropyLoss
+    topk: [1]
+    cal_acc: true
+  optimizer: ${optimizer}
+  scheduler:
+    _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+    _partial_: true
+    T_max: ${trainer.max_epochs}
+    eta_min: 1e-8
+    last_epoch: -1
+
+datasets:
+  train:
+    camera_sources: ${camera_sources}
+    transforms:
+      _target_: autoware_ml.transforms.base.TransformsCompose
+      _convert_: all
+
+      pipeline:
+        - _target_: autoware_ml.transforms.camera.loading.LoadImagesFromFile
+          _convert_: all
+
+        - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
+          _convert_: all
+
+          use_dim: [0, 1, 2, 3] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]
+          bev_remove_radius: 0.0
+
+        - _target_: autoware_ml.transforms.point_cloud.geometry.CropBoxInner
+          _convert_: all
+
+          crop_box: ${ego_box}
+
+        - _target_: autoware_ml.transforms.camera.distortion.UndistortImage
+          _convert_: all
+
+          alpha: 0.0
+
+        - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.CalibrationMisalignment
+          _convert_: all
+
+          probability: 0.5
+          activate:
+            _target_: autoware_ml.transforms.camera_lidar.camera_lidar.AxisActivation
+            roll: true
+            pitch: true
+            yaw: true
+            x: true
+            y: true
+            z: true
+          roll:
+            _target_: autoware_ml.transforms.camera_lidar.camera_lidar.MagnitudeRange
+            min_neg: 0.2
+            max_neg: 0.4
+            min_pos: 0.2
+            max_pos: 0.4
+          pitch:
+            _target_: autoware_ml.transforms.camera_lidar.camera_lidar.MagnitudeRange
+            min_neg: 0.2
+            max_neg: 0.4
+            min_pos: 0.2
+            max_pos: 0.4
+          yaw:
+            _target_: autoware_ml.transforms.camera_lidar.camera_lidar.MagnitudeRange
+            min_neg: 4.2
+            max_neg: 8.4
+            min_pos: 4.2
+            max_pos: 8.4
+          translation:
+            _target_: autoware_ml.transforms.camera_lidar.camera_lidar.TranslationRange
+            min_x_neg: 0.22
+            max_x_neg: 0.44
+            min_x_pos: 0.22
+            max_x_pos: 0.44
+            min_y_neg: 0.12
+            max_y_neg: 0.24
+            min_y_pos: 0.06
+            max_y_pos: 0.12
+            min_z_neg: 0.24
+            max_z_neg: 0.48
+            min_z_pos: 0.54
+            max_z_pos: 1.08
+
+        - _target_: autoware_ml.transforms.camera.resize.CropAndScale
+          _convert_: all
+
+          probability: 0.2
+          crop_ratio: 0.8
+
+        - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.Affine
+          _convert_: all
+
+          probability: 0.2
+          max_distortion: 0.05
+
+        - _target_: autoware_ml.transforms.image.image.PhotometricDistortion
+          _convert_: all
+
+          probability: 0.2
+          brightness: 0.1
+          contrast: 0.1
+          saturation: 0.1
+          hue: 0.05
+
+        - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.LidarCameraFusion
+          _convert_: all
+
+          max_depth: 128.0
+          dilation_size: 1
+          ego_box: ${ego_box}
+
+        - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.SaveFusionPreview
+          _convert_: all
+
+          probability: 0.00001
+          out_dir: ${hydra:run.dir}/previews
+          max_depth: 128.0
+          alpha: 1.0
+          depth_colormap: jet
+          intensity_colormap: turbo
+
+  test:
+    camera_sources: ${camera_sources}
+    transforms:
+      _target_: autoware_ml.transforms.base.TransformsCompose
+      _convert_: all
+
+      pipeline:
+        - _target_: autoware_ml.transforms.camera.loading.LoadImagesFromFile
+          _convert_: all
+
+        - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
+          _convert_: all
+
+          use_dim: [0, 1, 2, 3] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]
+          bev_remove_radius: 0.0
+
+        - _target_: autoware_ml.transforms.point_cloud.geometry.CropBoxInner
+          _convert_: all
+
+          crop_box: ${ego_box}
+
+        - _target_: autoware_ml.transforms.camera.distortion.UndistortImage
+          _convert_: all
+
+          alpha: 0.0
+
+        - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.CalibrationMisalignment
+          _convert_: all
+
+          probability: 0.5
+          activate:
+            _target_: autoware_ml.transforms.camera_lidar.camera_lidar.AxisActivation
+            roll: true
+            pitch: true
+            yaw: true
+            x: true
+            y: true
+            z: true
+          roll:
+            _target_: autoware_ml.transforms.camera_lidar.camera_lidar.MagnitudeRange
+            min_neg: 0.2
+            max_neg: 0.4
+            min_pos: 0.2
+            max_pos: 0.4
+          pitch:
+            _target_: autoware_ml.transforms.camera_lidar.camera_lidar.MagnitudeRange
+            min_neg: 0.2
+            max_neg: 0.4
+            min_pos: 0.2
+            max_pos: 0.4
+          yaw:
+            _target_: autoware_ml.transforms.camera_lidar.camera_lidar.MagnitudeRange
+            min_neg: 4.2
+            max_neg: 8.4
+            min_pos: 4.2
+            max_pos: 8.4
+          translation:
+            _target_: autoware_ml.transforms.camera_lidar.camera_lidar.TranslationRange
+            min_x_neg: 0.22
+            max_x_neg: 0.44
+            min_x_pos: 0.22
+            max_x_pos: 0.44
+            min_y_neg: 0.12
+            max_y_neg: 0.24
+            min_y_pos: 0.06
+            max_y_pos: 0.12
+            min_z_neg: 0.24
+            max_z_neg: 0.48
+            min_z_pos: 0.54
+            max_z_pos: 1.08
+
+        - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.LidarCameraFusion
+          _convert_: all
+
+          max_depth: 128.0
+          dilation_size: 1
+          ego_box: ${ego_box}
+
+# The datamodule binds the datasets above to the splits of its sources. Validation and predict
+# read the test dataset.
+datamodule:
+  train_dataloader:
+    shuffle: true

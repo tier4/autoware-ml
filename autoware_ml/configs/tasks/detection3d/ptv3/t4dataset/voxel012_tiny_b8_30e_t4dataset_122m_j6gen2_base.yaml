@@ -1,0 +1,13 @@
+# @package _global_
+defaults:
+  - base_voxel012_122m
+  - /database@database: t4dataset/t4dataset_j6gen2_base
+  - _self_
+
+batch_size: 8
+num_workers: 8
+experiment_group_name: ptv3/${database.version}/j6gen2_base
+experiment_name: voxel012_tiny_b8_30e_t4dataset_122m
+
+trainer:
+  max_epochs: 30

@@ -1,0 +1,14 @@
+# @package _global_
+defaults:
+  - ../base_no_intensity_120m
+  - base_lidar_voxel0170_120m
+  - /database@database: t4dataset/t4dataset_gen1_base
+  - _self_
+
+batch_size: 16
+num_workers: 16
+experiment_group_name: bevfusion/${database.version}/gen1_base
+experiment_name: lidar_voxel0170_second_secfpn_b16_30e_t4dataset_120m
+
+trainer:
+  max_epochs: 30

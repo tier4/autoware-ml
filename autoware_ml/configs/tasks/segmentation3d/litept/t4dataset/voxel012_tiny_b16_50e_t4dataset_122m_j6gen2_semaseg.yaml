@@ -1,0 +1,16 @@
+# @package _global_
+# The tiny segmentation recipe on a 12 cm grid with the LitePT encoder and decoder.
+defaults:
+  - /tasks/segmentation3d/ptv3/t4dataset/base_voxel012_122m
+  - /tasks/segmentation3d/litept/encoder_tiny
+  - /tasks/segmentation3d/litept/seg_head_tiny
+  - /database@database: t4dataset/t4dataset_j6gen2_semaseg
+  - _self_
+
+batch_size: 16
+num_workers: 8
+experiment_group_name: litept_seg/${database.version}/j6gen2_semaseg
+experiment_name: voxel012_tiny_b16_50e_t4dataset_122m
+
+trainer:
+  max_epochs: 50

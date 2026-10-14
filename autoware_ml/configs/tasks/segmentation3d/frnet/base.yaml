@@ -1,19 +1,23 @@
 # @package _global_
+# FRNet range-view segmentation. The database base names the lidar's field of view and range
+# image, the model and the range-view preprocessing follow from them.
 defaults:
-  - /defaults/default_runtime
+  - /tasks/default_experiment
+  - /optimizers@optimizer: default_adamw
   - _self_
 
-dataset: ???
-
+database: ???
+# Vertical field of view of the lidar in degrees and the range image it is rasterized into.
 fov_up: ???
 fov_down: ???
 range_height: ???
 range_width: ???
+# Frustum grid the features are pooled on.
 frustum_height: ???
 frustum_width: ???
 
-data_preprocessing:
-  pipeline:
+data_preprocessor:
+  preprocessor_modules:
     - _target_: autoware_ml.preprocessing.segmentation3d.range_view.FrustumMix
       probability: 1.0
       height: ${range_height}
@@ -29,103 +33,22 @@ data_preprocessing:
       width: ${range_width}
       fov_up: ${fov_up}
       fov_down: ${fov_down}
-      ignore_index: ${dataset.segmentation3d.ignore_index}
+      ignore_index: ${database.taxonomy.segmentation3d.ignore_index}
     - _target_: autoware_ml.preprocessing.segmentation3d.frustum_range.FrustumRangePreprocessor
       height: ${frustum_height}
       width: ${frustum_width}
       fov_up: ${fov_up}
       fov_down: ${fov_down}
-      ignore_index: ${dataset.segmentation3d.ignore_index}
-      num_classes: ${dataset.segmentation3d.num_classes}
+      ignore_index: ${database.taxonomy.segmentation3d.ignore_index}
+      num_classes: ${class_count:${database.taxonomy.segmentation3d.class_names}}
 
-model:
-  _target_: autoware_ml.models.segmentation3d.frnet.FRNet
-  metrics: ${dataset.segmentation3d.metrics}
-  voxel_encoder:
-    _target_: autoware_ml.models.segmentation3d.encoders.frnet.FrustumFeatureEncoder
-    in_channels: 4
-    feat_channels: [64, 128, 256, 256]
-    with_distance: true
-    with_cluster_center: true
-    norm_eps: 0.001
-    norm_momentum: 0.01
-    with_pre_norm: true
-    feat_compression: 16
-  backbone:
-    _target_: autoware_ml.models.segmentation3d.backbones.frnet.FRNetBackbone
-    in_channels: 16
-    point_in_channels: 384
-    output_shape:
-      - ${frustum_height}
-      - ${frustum_width}
-    depth: 34
-    stem_channels: 128
-    out_channels: [128, 128, 128, 128]
-    strides: [1, 2, 2, 2]
-    dilations: [1, 1, 1, 1]
-    fuse_channels: [256, 128]
-    norm_eps: 0.001
-    norm_momentum: 0.01
-  decode_head:
-    _target_: autoware_ml.models.segmentation3d.heads.frnet.FRHead
-    in_channels: 128
-    middle_channels: [128, 256, 128, 64]
-    num_classes: ${dataset.segmentation3d.num_classes}
-    ignore_index: ${dataset.segmentation3d.ignore_index}
-    loss_ce_weight: 1.0
-    norm_eps: 0.001
-    norm_momentum: 0.01
-  auxiliary_head:
-    - _target_: autoware_ml.models.segmentation3d.heads.frnet.FrustumHead
-      channels: 128
-      num_classes: ${dataset.segmentation3d.num_classes}
-      ignore_index: ${dataset.segmentation3d.ignore_index}
-      feature_index: 1
-      loss_ce_weight: 1.0
-      loss_lovasz_weight: 1.5
-      loss_boundary_weight: 1.0
-    - _target_: autoware_ml.models.segmentation3d.heads.frnet.FrustumHead
-      channels: 128
-      num_classes: ${dataset.segmentation3d.num_classes}
-      ignore_index: ${dataset.segmentation3d.ignore_index}
-      feature_index: 2
-      loss_ce_weight: 1.0
-      loss_lovasz_weight: 1.5
-      loss_boundary_weight: 1.0
-    - _target_: autoware_ml.models.segmentation3d.heads.frnet.FrustumHead
-      channels: 128
-      num_classes: ${dataset.segmentation3d.num_classes}
-      ignore_index: ${dataset.segmentation3d.ignore_index}
-      feature_index: 3
-      loss_ce_weight: 1.0
-      loss_lovasz_weight: 1.5
-      loss_boundary_weight: 1.0
-    - _target_: autoware_ml.models.segmentation3d.heads.frnet.FrustumHead
-      channels: 128
-      num_classes: ${dataset.segmentation3d.num_classes}
-      ignore_index: ${dataset.segmentation3d.ignore_index}
-      feature_index: 4
-      loss_ce_weight: 1.0
-      loss_lovasz_weight: 1.5
-      loss_boundary_weight: 1.0
-  optimizer:
-    _target_: torch.optim.AdamW
-    _partial_: true
-    lr: 0.01
-    betas: [0.9, 0.999]
-    weight_decay: 0.01
-    eps: 1.0e-6
-  scheduler:
-    _target_: torch.optim.lr_scheduler.OneCycleLR
-    _partial_: true
-    total_steps: ${trainer.max_steps}
-    max_lr: ${model.optimizer.lr}
-    pct_start: 0.2
-    div_factor: 25.0
-    final_div_factor: 100.0
-  scheduler_config:
-    interval: step
+optimizer:
+  lr: 0.01
+  betas: [0.9, 0.999]
+  weight_decay: 0.01
+  eps: 1.0e-6
 
+# Step-based schedule: the run is bounded by steps, validated every 1500 of them.
 trainer:
   max_epochs: -1
   max_steps: 150000
@@ -139,6 +62,8 @@ callbacks:
     every_n_train_steps: 1500
     save_on_train_epoch_end: false
   early_stopping: null
+  # Validation is step based here, the epoch schedule of the root does not apply.
+  dynamic_validation: null
 
 deploy:
   onnx:
@@ -176,3 +101,93 @@ deploy:
         min_shape: [5000]
         opt_shape: [60000]
         max_shape: [160000]
+
+model:
+  _target_: autoware_ml.models.segmentation3d.frnet.FRNet
+  _convert_: all
+  metrics: ${metrics}
+  log_dict_configs:
+    _target_: autoware_ml.models.module_base_model.LogDictConfigs
+    _convert_: all
+    on_step: true
+    on_epoch: true
+    prog_bar: true
+    sync_dist: true
+  voxel_encoder:
+    _target_: autoware_ml.models.segmentation3d.encoders.frnet.FrustumFeatureEncoder
+    in_channels: 4
+    feat_channels: [64, 128, 256, 256]
+    with_distance: true
+    with_cluster_center: true
+    norm_eps: 0.001
+    norm_momentum: 0.01
+    with_pre_norm: true
+    feat_compression: 16
+  backbone:
+    _target_: autoware_ml.models.segmentation3d.backbones.frnet.FRNetBackbone
+    in_channels: 16
+    point_in_channels: 384
+    output_shape:
+      - ${frustum_height}
+      - ${frustum_width}
+    depth: 34
+    stem_channels: 128
+    out_channels: [128, 128, 128, 128]
+    strides: [1, 2, 2, 2]
+    dilations: [1, 1, 1, 1]
+    fuse_channels: [256, 128]
+    norm_eps: 0.001
+    norm_momentum: 0.01
+  decode_head:
+    _target_: autoware_ml.models.segmentation3d.heads.frnet.FRHead
+    in_channels: 128
+    middle_channels: [128, 256, 128, 64]
+    num_classes: ${class_count:${database.taxonomy.segmentation3d.class_names}}
+    ignore_index: ${database.taxonomy.segmentation3d.ignore_index}
+    loss_ce_weight: 1.0
+    norm_eps: 0.001
+    norm_momentum: 0.01
+  auxiliary_head:
+    - _target_: autoware_ml.models.segmentation3d.heads.frnet.FrustumHead
+      channels: 128
+      num_classes: ${class_count:${database.taxonomy.segmentation3d.class_names}}
+      ignore_index: ${database.taxonomy.segmentation3d.ignore_index}
+      feature_index: 1
+      loss_ce_weight: 1.0
+      loss_lovasz_weight: 1.5
+      loss_boundary_weight: 1.0
+    - _target_: autoware_ml.models.segmentation3d.heads.frnet.FrustumHead
+      channels: 128
+      num_classes: ${class_count:${database.taxonomy.segmentation3d.class_names}}
+      ignore_index: ${database.taxonomy.segmentation3d.ignore_index}
+      feature_index: 2
+      loss_ce_weight: 1.0
+      loss_lovasz_weight: 1.5
+      loss_boundary_weight: 1.0
+    - _target_: autoware_ml.models.segmentation3d.heads.frnet.FrustumHead
+      channels: 128
+      num_classes: ${class_count:${database.taxonomy.segmentation3d.class_names}}
+      ignore_index: ${database.taxonomy.segmentation3d.ignore_index}
+      feature_index: 3
+      loss_ce_weight: 1.0
+      loss_lovasz_weight: 1.5
+      loss_boundary_weight: 1.0
+    - _target_: autoware_ml.models.segmentation3d.heads.frnet.FrustumHead
+      channels: 128
+      num_classes: ${class_count:${database.taxonomy.segmentation3d.class_names}}
+      ignore_index: ${database.taxonomy.segmentation3d.ignore_index}
+      feature_index: 4
+      loss_ce_weight: 1.0
+      loss_lovasz_weight: 1.5
+      loss_boundary_weight: 1.0
+  optimizer: ${optimizer}
+  scheduler:
+    _target_: torch.optim.lr_scheduler.OneCycleLR
+    _partial_: true
+    total_steps: ${trainer.max_steps}
+    max_lr: ${optimizer.lr}
+    pct_start: 0.2
+    div_factor: 25.0
+    final_div_factor: 100.0
+  scheduler_config:
+    interval: step

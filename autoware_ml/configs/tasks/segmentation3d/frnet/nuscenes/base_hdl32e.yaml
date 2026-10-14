@@ -1,0 +1,63 @@
+# @package _global_
+# The Velodyne HDL-32E of nuScenes, one merged cloud per sample.
+defaults:
+  - ../base
+  # The metric suites, their ranges and the datamodule belong to the evaluated database, so the
+  # database base composes them. Loaded before _self_ so the overrides below win over the defaults.
+  - /metrics/nuscenes/segmentation3d@metrics: default_segmentation3d_metric_suites
+  - /metrics/nuscenes/segmentation3d@metric_ranges: default_segmentation3d_50m_metric_ranges
+  - /datamodule@datamodule: nuscenes/default_segmentation3d_datamodule
+  - _self_
+
+fov_up: 10.0
+fov_down: -30.0
+range_height: 32
+range_width: 1920
+frustum_height: 32
+frustum_width: 480
+
+datasets:
+  train:
+    transforms:
+      _target_: autoware_ml.transforms.base.TransformsCompose
+      _convert_: all
+
+      pipeline:
+        - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
+          _convert_: all
+
+          use_dim: [0, 1, 2, 3] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]
+          bev_remove_radius: 0.0
+
+        - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalBEVRandomFlip
+          _convert_: all
+
+          horizontal_flip_ratio: 0.5
+          vertical_flip_ratio: 0.5
+
+        - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
+          _convert_: all
+
+          yaw_rot_range: [-3.14159265, 3.14159265]
+          scale_ratio_range: [0.95, 1.05]
+          translation_std: [0.1, 0.1, 0.1]
+
+  test:
+    transforms:
+      _target_: autoware_ml.transforms.base.TransformsCompose
+      _convert_: all
+
+      pipeline:
+        - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
+          _convert_: all
+
+          use_dim: [0, 1, 2, 3] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]
+          bev_remove_radius: 0.0
+
+# The datamodule binds the datasets above to the splits of its sources. Validation and predict
+# read the test dataset.
+datamodule:
+  train_dataloader:
+    shuffle: true
+  predict_dataloader:
+    batch_size: 1

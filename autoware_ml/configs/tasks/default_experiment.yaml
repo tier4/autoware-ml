@@ -1,0 +1,59 @@
+# @package _global_
+# Root of every experiment config. It composes the runtime modules of the task configs and adds
+# the experiment bookkeeping on top: the experiment name, the run directory layout and the
+# callbacks every experiment shares.
+defaults:
+  - /defaults/modules/callbacks
+  - /defaults/modules/logger
+  - /defaults/modules/deploy
+  - /defaults/modules/trainer
+  - /defaults/modules/model
+  - /defaults/modules/paths
+  - /defaults/modules/run
+  - override /hydra/hydra_logging: none # Disable hydra's logging
+  - _self_
+
+hydra:
+  run:
+    dir: ${oc.env:AUTOWARE_ML_HYDRA_RUN_DIR,mlruns/${user_config_name:${hydra:job.config_name}}/artifacts/_hydra/${experiment_group_dir}}
+  sweep:
+    dir: mlruns/optuna/${user_config_name:${hydra:job.config_name}}/_hydra/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  output_subdir: code/hydra # Store hydra's config breakdown here for debugging
+  # Note: hydra.searchpath cannot be set here. Hydra only accepts it in the primary
+  # config (the one passed to --config-name), and this file is always reached through a
+  # defaults chain. The entrypoint roots config_path at autoware_ml/configs instead, so
+  # every group below it is already discoverable.
+
+# Note: The following are placeholders for the experiment configuration. They should be overridden
+# in the experiment-specific configuration files.
+batch_size: ???
+num_workers: ???
+database: ???
+datamodule: ???
+optimizer: ???
+metrics: ???
+metric_ranges: ???
+experiment_group_name: ???
+experiment_name: ???
+
+data_preprocessor:
+  _target_: autoware_ml.preprocessing.data_preprocessor.DataPreprocessor
+  preprocessor_modules: []
+
+callbacks:
+  dynamic_validation:
+    _target_: autoware_ml.callbacks.dynamic_validation.DynamicValidation
+    # [start_epoch, check_val_every_n_epoch] pairs. Validate every 5 epochs while the loss is
+    # still falling quickly, then every epoch from epoch 20 so the best checkpoint is picked at
+    # epoch resolution. The callback rewrites trainer.check_val_every_n_epoch at every epoch
+    # start; 50-epoch experiments override the second entry.
+    epoch_intervals: [[0, 5], [20, 1]]
+
+# Directory structure
+date_format: "%Y.%m.%d.%H.%M.%S"
+experiment_uid: ${now:${date_format}} # Unique Id of the experiment, default to timestamp
+# The record caches of the databases live next to the data, not under the working directory.
+cache_root_path: ${data_root_path}/cache/
+experiment_group_dir: ${experiment_group_name}/${experiment_name}
+experiment_run_dir: ${working_dir}/tasks/${experiment_group_dir}/${experiment_uid}
+log_output_dir: ${hydra:run.dir}/logs

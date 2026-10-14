@@ -1,0 +1,66 @@
+# @package _global_
+# Stage 3: joint training on the 10 Hz pseudo labels
+defaults:
+  - base_voxel012_122m
+  - /datamodule/t4dataset/datasets/segdet3d@datasets.jpntaxi_train: default_segdet3d_train_dataset
+  - /datamodule/t4dataset/datasets/segdet3d@datasets.joint_train: default_segdet3d_train_dataset
+  - /datamodule/t4dataset/datasets/segdet3d@datasets.joint_test: default_segdet3d_test_dataset
+  - /database@database: t4dataset/t4dataset_pseudo_10hz_j6gen2
+  - /database@jpntaxi_database: t4dataset/t4dataset_pseudo_10hz_jpntaxi
+  - /database@joint_database: t4dataset/t4dataset_j6gen2_segdet3d
+  - _self_
+
+batch_size: 8
+num_workers: 8
+experiment_group_name: ptv3_segdet/${database.version}/pseudo_10hz
+experiment_name: voxel012_tiny_b8_10e_t4dataset_122m_pseudo_10hz
+
+# Dataset of every extra source and split kind: a copy of the split dataset config reading
+# that source's database, with the supervision of that corpus
+datasets:
+  jpntaxi_train:
+    database_root_path: ${jpntaxi_database.root_path}
+    lidar_intensity_scale: ${jpntaxi_database.lidar_intensity_scale}
+    transforms: ${datasets.train.transforms}
+  joint_train:
+    database_root_path: ${joint_database.root_path}
+    lidar_intensity_scale: ${joint_database.lidar_intensity_scale}
+    transforms: ${datasets.train.transforms}
+  joint_test:
+    database_root_path: ${joint_database.root_path}
+    lidar_intensity_scale: ${joint_database.lidar_intensity_scale}
+    transforms: ${datasets.test.transforms}
+
+datamodule:
+  sources:
+    jpntaxi:
+      _target_: autoware_ml.datamodule.sources.DatasetSource
+      database: ${jpntaxi_database}
+      train_dataset: ${datasets.jpntaxi_train}
+    joint:
+      _target_: autoware_ml.datamodule.sources.DatasetSource
+      database: ${joint_database}
+      train_dataset: ${datasets.joint_train}
+      validation_dataset: ${datasets.joint_test}
+      test_dataset: ${datasets.joint_test}
+      predict_dataset: ${datasets.joint_test}
+      repeat: 15
+
+model:
+  optimizer_group_overrides:
+    encoder_block:
+      lr: 0.00001
+    encoder_default:
+      lr: 0.000025
+    seg3d_head:
+      lr: 0.00005
+  scheduler:
+    warmup_epochs: 2
+    decay_epochs: 8
+    max_lr_factor: 2.0
+
+trainer:
+  max_epochs: 10
+
+callbacks:
+  early_stopping: null

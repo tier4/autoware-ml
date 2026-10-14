@@ -1,0 +1,14 @@
+# @package _global_
+defaults:
+  - ../base_54m
+  - base_lidar_voxel0075_54m
+  - /database@database: nuscenes/nuscenes_base
+  - _self_
+
+batch_size: 16
+num_workers: 8
+experiment_group_name: bevfusion/${database.version}/nuscenes
+experiment_name: lidar_voxel0075_second_secfpn_b16_30e_nuscenes_54m
+
+trainer:
+  max_epochs: 30

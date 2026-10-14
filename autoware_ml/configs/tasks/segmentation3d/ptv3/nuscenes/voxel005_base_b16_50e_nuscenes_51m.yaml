@@ -1,0 +1,13 @@
+# @package _global_
+defaults:
+  - base_voxel005_51m
+  - /database@database: nuscenes/nuscenes_base
+  - _self_
+
+batch_size: 16
+num_workers: 8
+experiment_group_name: ptv3_seg/${database.version}/nuscenes
+experiment_name: voxel005_base_b16_50e_nuscenes_51m
+
+trainer:
+  max_epochs: 50

@@ -1,7 +1,7 @@
 # @package model.seg3d_head
 _target_: autoware_ml.models.segmentation3d.heads.ptv3.PTv3SegDecoderHead
-num_classes: ${dataset.segmentation3d.num_classes}
-ignore_index: ${dataset.segmentation3d.ignore_index}
+num_classes: ${class_count:${database.taxonomy.segmentation3d.class_names}}
+ignore_index: ${database.taxonomy.segmentation3d.ignore_index}
 order: ${model.encoder.order}
 enc_channels: ${model.encoder.enc_channels}
 dec_depths: [2, 2, 2, 2]

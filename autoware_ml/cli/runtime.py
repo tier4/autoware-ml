@@ -251,6 +251,7 @@ def prepare_runtime_environment(
                 "checkpoint_path": str(checkpoint_path),
                 "source_run_id": parent_run_id or "",
             }
+
         run_context = prepare_run_context(
             cfg.logger.tracking_uri,
             config_name,

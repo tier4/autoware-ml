@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Every runnable task config composes and builds its model and pipelines."""
+"""Every runnable experiment config composes and builds its model and pipelines."""
 
 from __future__ import annotations
 
@@ -27,15 +27,25 @@ from hydra.core.hydra_config import HydraConfig
 from autoware_ml.configs.resolvers import register_config_resolvers
 
 _CONFIGS = Path(__file__).resolve().parents[1]
-TASK_CONFIGS = sorted(
+# Building blocks and bases are not runnable on their own, only the leaves are.
+_BLOCKS = (
+    "base",
+    "tiny",
+    "bev_neck",
+    "encoder_",
+    "seg_head_",
+    "voxel_encoder",
+    "default_experiment",
+)
+EXPERIMENT_CONFIGS = sorted(
     path.relative_to(_CONFIGS).with_suffix("").as_posix()
     for path in (_CONFIGS / "tasks").rglob("*.yaml")
-    if path.name.endswith("_nuscenes.yaml") or "t4dataset" in path.name
+    if not path.stem.startswith(_BLOCKS)
 )
 
 
-def compose_task(config_name: str):
-    """Compose one task config with the run context the training entrypoint provides."""
+def compose_experiment(config_name: str):
+    """Compose one experiment config with the run context the training entrypoint provides."""
     register_config_resolvers()
     GlobalHydra.instance().clear()
     with initialize_config_module(version_base=None, config_module="autoware_ml.configs"):
@@ -44,10 +54,11 @@ def compose_task(config_name: str):
     return cfg
 
 
-@pytest.mark.parametrize("config_name", TASK_CONFIGS)
-def test_every_task_instantiates_its_model_and_pipeline(config_name: str) -> None:
-    cfg = compose_task(config_name)
+@pytest.mark.parametrize("config_name", EXPERIMENT_CONFIGS)
+def test_every_experiment_instantiates_its_model_and_pipelines(config_name: str) -> None:
+    cfg = compose_experiment(config_name)
 
-    hydra.utils.instantiate(cfg.data_preprocessing)
-    hydra.utils.instantiate(cfg.datamodule.train_dataset.transforms)
-    hydra.utils.instantiate(cfg.model)
+    data_preprocessor = hydra.utils.instantiate(cfg.data_preprocessor)
+    hydra.utils.instantiate(cfg.datasets.train.transforms)
+    hydra.utils.instantiate(cfg.datasets.test.transforms)
+    hydra.utils.instantiate(cfg.model, data_preprocessor=data_preprocessor)

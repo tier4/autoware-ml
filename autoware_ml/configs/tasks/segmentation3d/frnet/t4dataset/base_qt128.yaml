@@ -1,0 +1,18 @@
+# @package _global_
+# The four Hesai QT128 lidars of the J6 gen2 platform.
+defaults:
+  - base
+  - _self_
+
+fov_up: 52.6
+fov_down: -52.6
+range_height: 128
+range_width: 1024
+frustum_height: 128
+frustum_width: 256
+
+lidar_sources:
+  - LIDAR_FRONT_LOWER
+  - LIDAR_LEFT_LOWER
+  - LIDAR_RIGHT_LOWER
+  - LIDAR_REAR_LOWER

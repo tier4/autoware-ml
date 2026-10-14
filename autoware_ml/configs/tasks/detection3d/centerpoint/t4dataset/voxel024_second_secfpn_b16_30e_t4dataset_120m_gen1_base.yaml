@@ -1,0 +1,16 @@
+# @package _global_
+defaults:
+  - base_voxel024_120m
+  - /database@database: t4dataset/t4dataset_gen1_base
+  - _self_
+
+batch_size: 16
+num_workers: 16
+experiment_group_name: centerpoint/${database.version}/gen1_base
+experiment_name: voxel024_second_secfpn_b16_30e_t4dataset_120m
+
+trainer:
+  max_epochs: 30
+
+optimizer:
+  lr: 1.0e-4

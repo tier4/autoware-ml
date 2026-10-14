@@ -37,6 +37,7 @@ from autoware_ml.utils.cli.helpers import (
     run_lazy_script,
 )
 
+
 class CompletableGroup(TyperGroup, click.Group):
     """Typer group that click recognizes as a group.
 
