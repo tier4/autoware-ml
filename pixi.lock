@@ -229,7 +229,7 @@ environments:
       - pypi: https://pypi.nvidia.com/nvidia-nvjitlink-cu12/nvidia_nvjitlink_cu12-12.8.93-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl
       - pypi: https://pypi.nvidia.com/nvidia-nvshmem-cu12/nvidia_nvshmem_cu12-3.3.20-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
       - pypi: https://pypi.nvidia.com/nvidia-nvtx-cu12/nvidia_nvtx_cu12-12.8.90-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
-      - pypi: https://pypi.nvidia.com/onnx-graphsurgeon/onnx_graphsurgeon-0.5.8-py2.py3-none-any.whl
+      - pypi: https://pypi.nvidia.com/onnx-graphsurgeon/onnx_graphsurgeon-0.6.1-py2.py3-none-any.whl
       - pypi: https://pypi.nvidia.com/tensorrt-cu12-bindings/tensorrt_cu12_bindings-10.16.0.72-cp311-none-manylinux_2_28_x86_64.whl
       - pypi: https://pypi.nvidia.com/tensorrt-cu12-libs/tensorrt_cu12_libs-10.16.0.72-py3-none-manylinux_2_28_x86_64.whl
       - pypi: https://pypi.nvidia.com/tensorrt-cu12/tensorrt_cu12-10.16.0.72.tar.gz
@@ -503,7 +503,7 @@ environments:
       - pypi: https://pypi.nvidia.com/nvidia-nvjitlink-cu12/nvidia_nvjitlink_cu12-12.8.93-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl
       - pypi: https://pypi.nvidia.com/nvidia-nvshmem-cu12/nvidia_nvshmem_cu12-3.3.20-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
       - pypi: https://pypi.nvidia.com/nvidia-nvtx-cu12/nvidia_nvtx_cu12-12.8.90-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
-      - pypi: https://pypi.nvidia.com/onnx-graphsurgeon/onnx_graphsurgeon-0.5.8-py2.py3-none-any.whl
+      - pypi: https://pypi.nvidia.com/onnx-graphsurgeon/onnx_graphsurgeon-0.6.1-py2.py3-none-any.whl
       - pypi: https://pypi.nvidia.com/tensorrt-cu12-bindings/tensorrt_cu12_bindings-10.16.0.72-cp311-none-manylinux_2_28_x86_64.whl
       - pypi: https://pypi.nvidia.com/tensorrt-cu12-libs/tensorrt_cu12_libs-10.16.0.72-py3-none-manylinux_2_28_x86_64.whl
       - pypi: https://pypi.nvidia.com/tensorrt-cu12/tensorrt_cu12-10.16.0.72.tar.gz
@@ -4398,12 +4398,13 @@ packages:
   sha256: 5b17e2001cc0d751a5bc2c6ec6d26ad95913324a4adb86788c944f8ce9ba441f
   index: https://download.pytorch.org/whl/cu128
   requires_python: '>=3'
-- pypi: https://pypi.nvidia.com/onnx-graphsurgeon/onnx_graphsurgeon-0.5.8-py2.py3-none-any.whl
+- pypi: https://pypi.nvidia.com/onnx-graphsurgeon/onnx_graphsurgeon-0.6.1-py2.py3-none-any.whl
   name: onnx-graphsurgeon
-  version: 0.5.8
-  sha256: 6f611ea29a8e4740fbab1aae52bf4c40b8b9918f8459058d20b99acc79fce121
+  version: 0.6.1
+  sha256: fabc53fc60909dd032cfd889016dd5d4139ab566af4a9039002818f552c73547
   index: https://pypi.nvidia.com/
   requires_dist:
+  - ml-dtypes
   - numpy
   - onnx>=1.14.0
 - pypi: https://pypi.nvidia.com/tensorrt-cu12-bindings/tensorrt_cu12_bindings-10.16.0.72-cp311-none-manylinux_2_28_x86_64.whl
