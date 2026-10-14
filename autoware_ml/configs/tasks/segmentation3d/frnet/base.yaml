@@ -2,7 +2,7 @@
 # FRNet range-view segmentation. The database base names the lidar's field of view and range
 # image, the model and the range-view preprocessing follow from them.
 defaults:
-  - /tasks/default_experiment
+  - /tasks/default_task
   - /optimizers@optimizer: default_adamw
   - _self_
 

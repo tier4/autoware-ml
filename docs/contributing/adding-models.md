@@ -161,7 +161,7 @@ Create a task config:
 ```yaml title="configs/tasks/my_task/my_model/base.yaml"
 # @package _global_
 defaults:
-  - /tasks/default_experiment
+  - /tasks/default_task
   - /optimizers@optimizer: default_adamw
   - _self_
 
@@ -303,7 +303,7 @@ datamodule:
 
 !!! note
     The trainer, callbacks, logger, deploy and path settings come from the modules under
-    `configs/defaults/modules/`, composed by `configs/tasks/default_experiment.yaml`.
+    `configs/defaults/modules/`, composed by `configs/tasks/default_task.yaml`.
 
 Runtime preprocessing lives at the top level of the composed config and is
 attached to the model by the entrypoints.

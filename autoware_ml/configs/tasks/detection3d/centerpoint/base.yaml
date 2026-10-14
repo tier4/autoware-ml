@@ -1,6 +1,6 @@
 # @package _global_
 defaults:
-  - /tasks/default_experiment
+  - /tasks/default_task
   - /optimizers@optimizer: default_adamw
   - _self_
 

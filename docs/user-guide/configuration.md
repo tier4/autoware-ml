@@ -26,7 +26,7 @@ level. A model base composes the experiment root, which brings in the runtime mo
 ```yaml
 # @package _global_
 defaults:
-  - /tasks/default_experiment
+  - /tasks/default_task
   - _self_
 ```
 

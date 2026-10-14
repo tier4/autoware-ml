@@ -35,7 +35,7 @@ _BLOCKS = (
     "encoder_",
     "seg_head_",
     "voxel_encoder",
-    "default_experiment",
+    "default_task",
 )
 EXPERIMENT_CONFIGS = sorted(
     path.relative_to(_CONFIGS).with_suffix("").as_posix()
