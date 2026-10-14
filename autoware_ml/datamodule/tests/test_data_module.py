@@ -21,6 +21,7 @@ from functools import partial
 from pathlib import Path
 import tempfile
 import unittest
+from types import SimpleNamespace
 
 import polars as pl
 
@@ -28,10 +29,12 @@ from autoware_ml.databases.base_database import BaseDatabase
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.databases.taxonomy import DatabaseTaxonomy, DetectionTaxonomy
 from autoware_ml.datamodule.base import DataLoaderConfig
+from autoware_ml.datamodule.base_dataset import ConcatDataset
 from autoware_ml.datamodule.data_module import DataModule
 from autoware_ml.datamodule.samplers import (
     DistributedWeightedRandomSampler,
     FrameSamplingConfig,
+    GroupStreamingSampler,
 )
 from autoware_ml.datamodule.sources import DatasetSource
 from autoware_ml.datamodule.t4dataset.dataset import T4Dataset
@@ -204,6 +207,8 @@ class MultiSourceTestCase(unittest.TestCase):
         validation_sources: Sequence[Mapping[str, object]] | None = None,
         train_dataloader: DataLoaderConfig | None = None,
         train_frame_sampling: FrameSamplingConfig | None = None,
+        validation_dataloader: DataLoaderConfig | None = None,
+        streaming: bool = False,
     ) -> DataModule:
         """Build a datamodule whose validation split reads the main corpus by default."""
         factory = build_dataset_factory()
@@ -222,10 +227,11 @@ class MultiSourceTestCase(unittest.TestCase):
             test_dataset=None,
             predict_dataset=None,
             train_dataloader=train_dataloader,
-            validation_dataloader=None,
+            validation_dataloader=validation_dataloader,
             test_dataloader=None,
             predict_dataloader=None,
             train_frame_sampling=train_frame_sampling,
+            streaming=streaming,
         )
 
 
@@ -559,6 +565,175 @@ class TestFrameSampling(MultiSourceTestCase):
 
         with self.assertRaisesRegex(ValueError, "shuffle"):
             data_module.train_dataloader()
+
+
+def with_scenes(
+    records: pl.DataFrame, scenario_ids: Sequence[str], timestamps: Sequence[float]
+) -> pl.DataFrame:
+    """Give every record of a corpus a scenario and a sample time."""
+    return records.with_columns(
+        pl.Series(DatasetTableSchema.SCENARIO_ID.name, list(scenario_ids), dtype=pl.String),
+        pl.Series(DatasetTableSchema.TIMESTAMP_SECONDS.name, list(timestamps), dtype=pl.Float64),
+    )
+
+
+class TestSceneStreaming(MultiSourceTestCase):
+    """Scene-streaming dataloaders feeding temporal models whole scenes frame by frame."""
+
+    def setUp(self) -> None:
+        """Rewrite the main corpus into two scenes whose rows interleave out of time order."""
+        super().setUp()
+        self.streamed_records = with_scenes(
+            write_corpus(self.main_root, num_records=5),
+            scenario_ids=["a", "b", "a", "b", "a"],
+            timestamps=[12.0, 20.0, 11.0, 21.0, 10.0],
+        )
+        self.streamed_database = FakeDatabase(
+            self.main_root, self.streamed_records, "streamed", build_taxonomy()
+        )
+
+    def test_a_scene_is_served_in_time_order_whatever_the_row_order(self) -> None:
+        """
+        Input: five records of scenes a and b whose rows interleave, scene a backwards in time.
+        Expected: every scene groups its own records ordered by sample time, the scenes in the
+        order they first appear, so no row order of the record table breaks a stream.
+        Check: compare the groups with the expected sample indices.
+        """
+        dataset = build_dataset_factory()(
+            database_root_path=str(self.main_root),
+            dataset_records_dataframe=self.streamed_records,
+            lidar_intensity_scale=255.0,
+            det3d_supervised=True,
+            seg3d_supervised=True,
+        )
+
+        self.assertEqual(dataset.scene_index_groups(), [[4, 2, 0], [1, 3]])
+
+    def test_concatenated_sources_offset_and_repeat_their_scenes(self) -> None:
+        """
+        Input: the five-record corpus repeated twice followed by a one-record corpus.
+        Expected: every repeat serves the scenes once more at its own block of split indices,
+        and the second source follows behind both repeats.
+        Check: compare the groups with the expected split indices.
+        """
+        factory = build_dataset_factory()
+        streamed = factory(
+            database_root_path=str(self.main_root),
+            dataset_records_dataframe=self.streamed_records,
+            lidar_intensity_scale=255.0,
+            det3d_supervised=True,
+            seg3d_supervised=True,
+        )
+        single = factory(
+            database_root_path=str(self.seg3d_gt_root),
+            dataset_records_dataframe=self.seg3d_gt_records,
+            lidar_intensity_scale=255.0,
+            det3d_supervised=True,
+            seg3d_supervised=True,
+        )
+
+        groups = ConcatDataset([streamed, single], repeats=[2, 1]).scene_index_groups()
+
+        self.assertEqual(groups, [[4, 2, 0], [1, 3], [9, 7, 5], [6, 8], [10]])
+
+    def test_scene_streaming_serves_one_sample_per_record(self) -> None:
+        """
+        Input: a dataset serving two lidar sources of every record as separate samples.
+        Expected: a record would sit twice in its scene, so streaming refuses the dataset.
+        Check: a ValueError naming the sources is raised.
+        """
+        dataset = T4Dataset(
+            database_root_path=str(self.main_root),
+            dataset_records_dataframe=self.streamed_records,
+            transforms=None,
+            dataset_tasks={},
+            lidar_intensity_scale=255.0,
+            det3d_supervised=True,
+            seg3d_supervised=True,
+            lidar_sources=["LIDAR_LEFT", "LIDAR_RIGHT"],
+        )
+
+        with self.assertRaisesRegex(ValueError, "sources"):
+            dataset.scene_index_groups()
+
+    def test_every_split_streams_through_the_scene_sampler(self) -> None:
+        """
+        Input: a streaming datamodule with a two-lane training loader and a one-lane
+        validation loader.
+        Expected: both loaders draw from the scene sampler with one lane per batch position,
+        and only the training split reshuffles its scenes.
+        Check: read the sampler type, its lane count and its shuffle flag per split.
+        """
+        data_module = self.build_data_module(
+            [{"database": self.streamed_database}],
+            validation_sources=[{"database": self.streamed_database}],
+            train_dataloader=DataLoaderConfig(batch_size=2),
+            validation_dataloader=DataLoaderConfig(batch_size=1),
+            streaming=True,
+        )
+        data_module.setup("fit")
+
+        train_sampler = data_module.train_dataloader().sampler
+        validation_sampler = data_module.val_dataloader().sampler
+
+        self.assertIsInstance(train_sampler, GroupStreamingSampler)
+        self.assertIsInstance(validation_sampler, GroupStreamingSampler)
+        self.assertEqual((train_sampler.batch_size, train_sampler.shuffle), (2, True))
+        self.assertEqual((validation_sampler.batch_size, validation_sampler.shuffle), (1, False))
+        self.assertEqual(list(validation_sampler), [4, 2, 0, 1, 3])
+
+    def test_rejects_a_shuffling_loader(self) -> None:
+        """
+        Input: a streaming datamodule whose training loader asks to shuffle.
+        Expected: the scene sampler owns the order, so a shuffle would break the streams.
+        Check: building the training loader raises a ValueError naming the shuffle.
+        """
+        data_module = self.build_data_module(
+            [{"database": self.streamed_database}],
+            train_dataloader=DataLoaderConfig(batch_size=1, shuffle=True),
+            streaming=True,
+        )
+        data_module.setup("fit")
+
+        with self.assertRaisesRegex(ValueError, "shuffle"):
+            data_module.train_dataloader()
+
+    def test_rejects_a_distributed_trainer_that_wraps_samplers(self) -> None:
+        """
+        Input: a streaming datamodule attached to a two-rank trainer that keeps Lightning's
+        default ``use_distributed_sampler``.
+        Expected: Lightning would wrap the scene sampler and thin out every rank's stream, so
+        the loader refuses to be built; with ``use_distributed_sampler`` off it is built.
+        Check: building the training loader raises a ValueError naming the setting, then
+        succeeds once the setting is off.
+        """
+        data_module = self.build_data_module(
+            [{"database": self.streamed_database}],
+            train_dataloader=DataLoaderConfig(batch_size=1),
+            streaming=True,
+        )
+        data_module.setup("fit")
+        connector = SimpleNamespace(use_distributed_sampler=True)
+        data_module.trainer = SimpleNamespace(world_size=2, _accelerator_connector=connector)
+
+        with self.assertRaisesRegex(ValueError, "use_distributed_sampler"):
+            data_module.train_dataloader()
+
+        connector.use_distributed_sampler = False
+        self.assertIsInstance(data_module.train_dataloader().sampler, GroupStreamingSampler)
+
+    def test_rejects_frame_sampling(self) -> None:
+        """
+        Input: a streaming datamodule that also sets repeat factor sampling.
+        Expected: a weighted draw would tear the scenes apart, so the datamodule refuses it.
+        Check: the constructor raises a ValueError naming frame sampling.
+        """
+        with self.assertRaisesRegex(ValueError, "frame sampling"):
+            self.build_data_module(
+                [{"database": self.streamed_database}],
+                train_frame_sampling=FRAME_SAMPLING,
+                streaming=True,
+            )
 
 
 if __name__ == "__main__":

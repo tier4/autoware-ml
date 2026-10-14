@@ -18,3 +18,5 @@ validation_dataset: ${datamodule.test_dataset}
 predict_dataset: ${datamodule.test_dataset}
 
 train_frame_sampling: null
+# Scene-streaming dataloaders for temporal models.
+streaming: false

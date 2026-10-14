@@ -8,6 +8,7 @@ from typing import Sequence
 import polars as pl
 from torch.utils.data import Dataset
 
+from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch, ModelGTSample
 from autoware_ml.transforms.base import TransformsCompose
 
@@ -70,6 +71,36 @@ class BaseDataset(Dataset):
           int: Number of samples.
         """
         return len(self.dataset_records_dataframe) * self.samples_per_record
+
+    def scene_index_groups(self) -> list[list[int]]:
+        """Sample indices of every scene, each scene in time order.
+
+        Scene streaming feeds a temporal model one scene after another, frame by frame. The
+        records are grouped by their scenario and ordered by their sample time, so the row
+        order of the record table does not matter.
+
+        Returns:
+          list[list[int]]: One list of sample indices per scenario, the scenarios in the order
+            they first appear in the record table.
+
+        Raises:
+          ValueError: If every record serves several samples, one per lidar or camera source.
+        """
+        if self.samples_per_record != 1:
+            raise ValueError(
+                "Scene streaming serves one sample per record, but every record of this dataset "
+                f"serves {self.samples_per_record} sources."
+            )
+        scenario_ids = self.dataset_records_dataframe.get_column(
+            DatasetTableSchema.SCENARIO_ID.name
+        ).to_list()
+        timestamps = self.dataset_records_dataframe.get_column(
+            DatasetTableSchema.TIMESTAMP_SECONDS.name
+        ).to_list()
+        groups: dict[str, list[int]] = {}
+        for index, scenario_id in enumerate(scenario_ids):
+            groups.setdefault(scenario_id, []).append(index)
+        return [sorted(group, key=timestamps.__getitem__) for group in groups.values()]
 
     def __getitem__(self, index: int) -> ModelGTSample:
         """Load and transform one dataset sample.
@@ -169,6 +200,24 @@ class ConcatDataset(Dataset):
           int: Number of samples.
         """
         return self.ends[-1]
+
+    def scene_index_groups(self) -> list[list[int]]:
+        """Split indices of every scene of every source, each scene in time order.
+
+        Every repeat of a source serves its scenes once more, as scenes of their own.
+
+        Returns:
+          list[list[int]]: One list of split indices per scene and repeat, the sources in
+            declaration order.
+        """
+        groups: list[list[int]] = []
+        start = 0
+        for dataset, repeat in zip(self.datasets, self.repeats, strict=True):
+            source_groups = dataset.scene_index_groups()
+            for _ in range(repeat):
+                groups.extend([[start + index for index in group] for group in source_groups])
+                start += len(dataset)
+        return groups
 
     def locate(self, index: int) -> tuple[int, int]:
         """Find the source and the sample behind one index of the split.

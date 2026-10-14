@@ -11,6 +11,7 @@ from autoware_ml.datamodule.base_dataset import BaseDataset, ConcatDataset
 from autoware_ml.datamodule.samplers import (
     DistributedWeightedRandomSampler,
     FrameSamplingConfig,
+    GroupStreamingSampler,
     compute_frame_sampling_weights,
 )
 from autoware_ml.datamodule.sources import DatasetSource
@@ -54,6 +55,7 @@ class DataModule(L.LightningDataModule):
         test_dataloader: DataLoaderConfig | None,
         predict_dataloader: DataLoaderConfig | None,
         train_frame_sampling: FrameSamplingConfig | None,
+        streaming: bool,
     ) -> None:
         """
         Initialize the datamodule.
@@ -75,6 +77,12 @@ class DataModule(L.LightningDataModule):
           predict_dataloader: Dataloader settings of the predict split.
           train_frame_sampling: Repeat factor sampling of the training split, None when its
             samples are drawn uniformly.
+          streaming: Whether every dataloader feeds each batch lane whole scenes, frame by
+            frame, for temporal models that carry a memory across batches. The training
+            split reshuffles the order of the scenes every epoch. The sampler shards the
+            scenes over the ranks itself, so a distributed trainer must run with
+            ``use_distributed_sampler: false``; the dataloaders refuse to be built
+            otherwise.
         """
         super().__init__()
 
@@ -116,7 +124,13 @@ class DataModule(L.LightningDataModule):
         self.validation_dataloader_config = validation_dataloader
         self.test_dataloader_config = test_dataloader
         self.predict_dataloader_config = predict_dataloader
+        if streaming and train_frame_sampling is not None:
+            raise ValueError(
+                "Scene streaming draws whole scenes in order, so it cannot be combined with "
+                "frame sampling. Set train_frame_sampling to null."
+            )
         self.train_frame_sampling = train_frame_sampling
+        self.streaming = streaming
 
     def _validate_shared_taxonomy(self) -> None:
         """
@@ -215,6 +229,13 @@ class DataModule(L.LightningDataModule):
             database.process_scenario_records()
         logger.info("Finished preparing the record tables.")
 
+    def _trainer_wraps_samplers(self) -> bool:
+        """Whether an attached distributed trainer would wrap the dataloader samplers."""
+        trainer = self.trainer
+        if trainer is None or trainer.world_size == 1:
+            return False
+        return trainer._accelerator_connector.use_distributed_sampler
+
     def build_dataloader(self, split: SplitType, config: DataLoaderConfig | None) -> DataLoader:
         """
         Build the dataloader of one split.
@@ -235,7 +256,24 @@ class DataModule(L.LightningDataModule):
 
         dataset = self.datasets[split]
         kwargs = config.to_dataloader_kwargs()
-        if split == SplitType.TRAIN and self.train_frame_sampling is not None:
+        if self.streaming:
+            if config.shuffle:
+                raise ValueError(
+                    "Scene streaming owns the sample order, so the dataloader cannot shuffle. "
+                    "Set shuffle to false."
+                )
+            if self._trainer_wraps_samplers():
+                # Lightning would wrap the sampler in a DistributedSamplerWrapper that keeps
+                # every world_size-th index of this rank's stream: every rank would train on a
+                # fraction of its scenes and every lane would skip frames, without an error.
+                raise ValueError(
+                    "Scene streaming shards the scenes over the ranks itself; run the trainer "
+                    "with use_distributed_sampler: false."
+                )
+            kwargs["sampler"] = GroupStreamingSampler(
+                dataset, batch_size=config.batch_size, shuffle=split == SplitType.TRAIN
+            )
+        elif split == SplitType.TRAIN and self.train_frame_sampling is not None:
             if config.shuffle:
                 raise ValueError(
                     "The training dataloader cannot shuffle when frame sampling is on, the "
