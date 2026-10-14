@@ -242,7 +242,8 @@ def test_get_predict_batch_keeps_the_typed_batch_through_the_device_transfer(
 ) -> None:
     """A collated batch of the real pipeline reaches preprocessing as a ModelGTBatch.
 
-    The batch is moved with its own transfer, so preprocessing reads its named fields.
+    The record tables are prepared before setup, and the batch is moved with its own transfer,
+    so preprocessing reads its named fields.
     """
 
     dataset = build_dataset(tmp_path, write_corpus(tmp_path, num_records=2))
@@ -250,8 +251,15 @@ def test_get_predict_batch_keeps_the_typed_batch_through_the_device_transfer(
     preprocessing = DataPreprocessing()
 
     class _Datamodule:
+        def __init__(self) -> None:
+            self.prepared = False
+
+        def prepare_data(self) -> None:
+            self.prepared = True
+
         def setup(self, stage: str) -> None:
             assert stage == "predict"
+            assert self.prepared
 
         def predict_dataloader(self) -> list:
             return [batch]
