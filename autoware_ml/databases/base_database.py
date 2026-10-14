@@ -209,6 +209,16 @@ class BaseDatabase:
         hash_str += schema_str
         return hashlib.sha256(hash_str.encode("utf-8")).hexdigest()
 
+    @property
+    def cache_file_path(self) -> Path:
+        """
+        Get the path of the record table cache.
+
+        Returns:
+          Path: ``<cache_path>/<cache_file_prefix_name>_<database_hash>.parquet``.
+        """
+        return self._cache_path / f"{self._cache_file_prefix_name}_{self.database_hash}.parquet"
+
     def get_polars_schema(self) -> pl.Schema:
         """
         Get the polars schema for the database.
@@ -246,9 +256,7 @@ class BaseDatabase:
         Returns:
           pl.DataFrame: Polars dataframe of the scenario records.
         """
-        df_cache_path = (
-            self._cache_path / f"{self._cache_file_prefix_name}_{self.database_hash}.parquet"
-        )
+        df_cache_path = self.cache_file_path
         if not df_cache_path.exists():
             raise IOError(
                 f"Cache file {df_cache_path} does not exist. "
