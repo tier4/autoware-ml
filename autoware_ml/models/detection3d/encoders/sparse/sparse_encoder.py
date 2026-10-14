@@ -28,20 +28,13 @@ from __future__ import annotations
 from collections.abc import Sequence
 from copy import deepcopy
 
-import spconv.pytorch as spconv
+from jaxtyping import Float32
 import torch
 import torch.nn as nn
-from spconv.pytorch import SparseConvTensor, SparseSequential
+from spconv.pytorch import SparseConvTensor, SparseSequential, SubMConv3d, SparseConv3d
 from spconv.pytorch.modules import SparseModule
 
-from autoware_ml.ops.spconv.sparse_conv import SparseConv3d as ExportableSparseConv3d
-from autoware_ml.ops.spconv.sparse_conv import SubMConv3d as ExportableSubMConv3d
-
-# Native spconv conv layers are used for training (autograd-friendly). The
-# framework's export wrappers in autoware_ml.ops.spconv are inference-only and
-# would be swapped in at ONNX-export time.
-SubMConv3d = spconv.SubMConv3d
-SparseConv3d = spconv.SparseConv3d
+from autoware_ml.ops.spconv.sparse_conv import ExportableSparseConv3d, ExportableSubMConv3d
 
 
 def _copy_sparse_convolution_weights(
@@ -49,11 +42,11 @@ def _copy_sparse_convolution_weights(
     target: nn.Module,
 ) -> None:
     """Copy trained sparse convolution weights into an export wrapper."""
-    target.weight.data.copy_(source.weight.data)
+    target.weight.data.copy_(source.weight.data)  # type: ignore
     if source.bias is not None:
         if target.bias is None:
             raise ValueError("Cannot copy sparse convolution bias into a bias-free target.")
-        target.bias.data.copy_(source.bias.data)
+        target.bias.data.copy_(source.bias.data)  # type: ignore
 
 
 def _convert_sparse_convolution(module: nn.Module) -> nn.Module:
@@ -63,9 +56,9 @@ def _convert_sparse_convolution(module: nn.Module) -> nn.Module:
             module.in_channels,
             module.out_channels,
             kernel_size=module.kernel_size,
-            stride=module.stride,
-            padding=module.padding,
-            dilation=module.dilation,
+            stride=module.stride,  # type: ignore
+            padding=module.padding,  # type: ignore
+            dilation=module.dilation,  # type: ignore
             groups=module.groups,
             bias=module.bias is not None,
             indice_key=module.indice_key,
@@ -85,9 +78,9 @@ def _convert_sparse_convolution(module: nn.Module) -> nn.Module:
             module.in_channels,
             module.out_channels,
             kernel_size=module.kernel_size,
-            stride=module.stride,
-            padding=module.padding,
-            dilation=module.dilation,
+            stride=module.stride,  # type: ignore
+            padding=module.padding,  # type: ignore
+            dilation=module.dilation,  # type: ignore
             groups=module.groups,
             bias=module.bias is not None,
             indice_key=module.indice_key,
@@ -103,7 +96,10 @@ def _convert_sparse_convolution(module: nn.Module) -> nn.Module:
 
 
 def _replace_sparse_convolutions(module: nn.Module) -> None:
-    """Replace native sparse convolution children in-place on an export copy."""
+    """
+    Recursively replace native sparse convolution children
+    in-place on an export copy.
+    """
     for name, child in list(module.named_children()):
         converted = _convert_sparse_convolution(child)
         if converted is not child:
@@ -222,7 +218,9 @@ class SparseEncoder(nn.Module):
                             indice_key=f"spconv{stage_index + 1}",
                         )
                     )
-                    blocks.append(_norm(out_channels, norm_eps, norm_momentum))
+                    blocks.append(
+                        nn.BatchNorm1d(out_channels, eps=norm_eps, momentum=norm_momentum),
+                    )
                     blocks.append(nn.ReLU(inplace=True))
                     current_channels = out_channels
                 else:
@@ -244,7 +242,7 @@ class SparseEncoder(nn.Module):
                 current_channels,
                 output_channels,
                 kernel_size=(1, 1, 3),
-                stride=(1, 1, 2),
+                stride=(1, 1, 2),  # type: ignore
                 padding=0,
                 bias=False,
                 indice_key="spconv_down2",
@@ -253,24 +251,31 @@ class SparseEncoder(nn.Module):
             nn.ReLU(inplace=True),
         )
 
+    @property
+    def bev_output_shape(self) -> tuple[int, int]:
+        """Return the expected ``(height, width)`` of the dense BEV output."""
+        return self.dense_output_shapes[0], self.dense_output_shapes[1]
+
     def forward(
         self,
-        voxel_features: torch.Tensor,
-        coords: torch.Tensor,
+        voxel_features: Float32[torch.Tensor, "num_voxels num_voxel_channels"],
+        coords: Float32[torch.Tensor, "num_voxels 4"],
         batch_size: int,
     ) -> torch.Tensor:
         """Encode voxel features into a dense BEV map.
 
         Args:
-            voxel_features: Per-voxel features of shape ``(N, in_channels)``.
-            coords: Voxel coordinates of shape ``(N, 4)`` in ``[batch, z, y, x]``.
+            voxel_features: Per-voxel features, where num_voxel_channels can be 4
+            (without intensity) or 5 (both intensity and time_lag).
+            coords: Voxel coordinates of shape in `[batch_idx, z, y, x]`. coords must be in this
+                order to align with autoware.
             batch_size: Number of samples in the batch.
 
         Returns:
             Dense BEV feature map of shape
             ``(batch_size, output_channels * Z, Y, X)``.
         """
-        # Reorder [batch, z, y, x] -> [batch, y, x, z] to match sparse_shape (Y, X, Z).
+        # Reorder [batch_idx, z, y, x] -> [batch_idx, y, x, z] to match sparse_shape (Y, X, Z).
         coords = coords[:, [0, 2, 3, 1]].contiguous().int()
         sp_tensor = SparseConvTensor(voxel_features, coords, self.sparse_shape, batch_size)
         x = self.conv_input(sp_tensor)
@@ -293,7 +298,7 @@ class SparseEncoder(nn.Module):
         dense = dense.permute(0, 4, 3, 1, 2).contiguous()
         return dense.view(batch_size, channels * depth, height, width)
 
-    def prepare_for_export(self) -> "SparseEncoder":
+    def prepare_for_export(self) -> SparseEncoder:
         """Return an export-ready copy with sparse convolution wrappers.
 
         Returns:

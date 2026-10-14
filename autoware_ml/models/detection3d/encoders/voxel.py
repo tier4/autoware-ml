@@ -19,6 +19,7 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 
+from jaxtyping import Float32, Int64
 import torch
 import torch.nn as nn
 
@@ -64,9 +65,9 @@ class HardSimpleVoxelSinCosEncoder(nn.Module):
 
     def forward(
         self,
-        voxels: torch.Tensor,
-        num_points: torch.Tensor,
-        coords: torch.Tensor,
+        voxels: Float32[torch.Tensor, "num_voxels max_points channels"],
+        num_points: Float32[torch.Tensor, " num_voxels"],
+        coords: Int64[torch.Tensor, "num_voxels 3"],
     ) -> torch.Tensor:
         """Encode padded voxel points into Fourier voxel features.
 
@@ -79,11 +80,14 @@ class HardSimpleVoxelSinCosEncoder(nn.Module):
         Returns:
             Voxel features of shape ``(N, 2 * C ** 2)``.
         """
-        del coords
         voxel_mean = (
             voxels.sum(dim=1, keepdim=False) / num_points.type_as(voxels).clamp(min=1.0).view(-1, 1)
         ).contiguous()
         # (1, C, C) + (1, C, C) * (N, C, 1) -> (N, C, C)
-        y = torch.addcmul(self.exponent_bias, self.exponent_scale, voxel_mean.unsqueeze(-1))
+        y = torch.addcmul(
+            self.exponent_bias,  # type: ignore
+            self.exponent_scale,  # type: ignore
+            voxel_mean.unsqueeze(-1),
+        )
         y = y.reshape(-1, self.in_channels * self.in_channels)
         return torch.cat([torch.cos(y), torch.sin(y)], dim=1)
