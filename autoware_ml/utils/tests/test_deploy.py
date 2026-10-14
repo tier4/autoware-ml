@@ -24,7 +24,7 @@ import torch
 
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.datamodule.tests.corpus import build_dataset, write_corpus
-from autoware_ml.preprocessing.base import DataPreprocessing
+from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 import autoware_ml.utils.deploy as deploy
 from autoware_ml.utils.deploy import (
     ExportSpec,
@@ -247,7 +247,7 @@ def test_get_predict_batch_keeps_the_typed_batch_through_the_device_transfer(
 
     dataset = build_dataset(tmp_path, write_corpus(tmp_path, num_records=2))
     batch = dataset.collate_fn([dataset[0], dataset[1]])
-    preprocessing = DataPreprocessing()
+    preprocessing = DataPreprocessor(preprocessor_modules=[])
 
     class _Datamodule:
         def setup(self, stage: str) -> None:
