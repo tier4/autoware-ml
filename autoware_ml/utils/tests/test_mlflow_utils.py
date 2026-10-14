@@ -206,7 +206,9 @@ class TestArtifactLayout:
             tracking_uri=tracking_uri,
             run_id="abc123",
         )
-        assert hydra_dir == tmp_path / "mlruns" / SAMPLE_CONFIG_NAME / "abc123" / "hydra"
+        assert (
+            hydra_dir == tmp_path / "mlruns" / SAMPLE_CONFIG_NAME / "abc123" / "artifacts" / "hydra"
+        )
 
     def test_prepare_run_context_creates_run_under_semantic_artifact_root(
         self, tmp_path: Path
@@ -222,7 +224,7 @@ class TestArtifactLayout:
 
         expected_root = tmp_path / "mlruns" / SAMPLE_CONFIG_NAME
         assert run_context.artifact_dir == expected_root / run_context.run_id / "artifacts"
-        assert run_context.hydra_dir == expected_root / run_context.run_id / "hydra"
+        assert run_context.hydra_dir == expected_root / run_context.run_id / "artifacts" / "hydra"
         assert run_context.tags["artifact_dir"] == str(run_context.artifact_dir)
         assert run_context.tags["hydra_dir"] == str(run_context.hydra_dir)
 

@@ -437,10 +437,16 @@ def generate_hydra_run_dir(
         root_dir = REPO_ROOT / "mlruns"
     config_root = (root_dir / config_name).resolve()
     if run_id is not None:
-        return config_root / run_id / "hydra"
+        return config_root / run_id / "artifacts" / "hydra"
 
     timestamp = started_at or datetime.now().astimezone()
-    return config_root / "_hydra" / timestamp.strftime("%Y-%m-%d") / timestamp.strftime("%H-%M-%S")
+    return (
+        config_root
+        / "artifacts"
+        / "_hydra"
+        / timestamp.strftime("%Y-%m-%d")
+        / timestamp.strftime("%H-%M-%S")
+    )
 
 
 def artifact_uri_to_path(artifact_uri: str) -> Path:
@@ -489,6 +495,7 @@ def prepare_run_context(
     config_name: str,
     hydra_dir: Path | None,
     stage: str,
+    run_name: str | None = None,
     parent_run_id: str | None = None,
     experiment_name: str | None = None,
     extra_tags: dict[str, Any] | None = None,
@@ -505,7 +512,7 @@ def prepare_run_context(
         artifact_location,
     )
 
-    run_name = generate_run_name(config_name, stage, started_at)
+    run_name = run_name or generate_run_name(config_name, stage, started_at)
     provisional_hydra_dir = hydra_dir or generate_hydra_run_dir(
         config_name,
         resolved_tracking_uri,
