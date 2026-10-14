@@ -24,6 +24,7 @@ from collections.abc import Sequence
 
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 
 from autoware_ml.models.common.layers.conv import ConvModule
 
@@ -40,6 +41,7 @@ class SECONDFPN(nn.Module):
         in_channels: Sequence[int],
         out_channels: Sequence[int],
         upsample_strides: Sequence[float],
+        activation_checkpointing: bool = False,
     ) -> None:
         """Initialize the SECOND feature pyramid neck.
 
@@ -47,6 +49,7 @@ class SECONDFPN(nn.Module):
             in_channels: Input channel dimensions for each backbone stage.
             out_channels: Output channel dimensions for each upsampled stage.
             upsample_strides: Upsampling stride applied to each stage.
+            activation_checkpointing: Whether to enable activation checkpointing for memory efficiency.
         """
         super().__init__()
         blocks = []
@@ -72,6 +75,19 @@ class SECONDFPN(nn.Module):
                     )
                 )
         self.blocks = nn.ModuleList(blocks)
+        self.activation_checkpointing = activation_checkpointing
+
+    def custom_forward(self, x: list[torch.Tensor]) -> torch.Tensor:
+        """Forward pass without activation checkpointing.
+
+        Args:
+            x: Backbone feature maps ordered from high to low resolution.
+
+        Returns:
+            Concatenated BEV feature tensor.
+        """
+        upsampled = [block(feature) for block, feature in zip(self.blocks, x)]
+        return torch.cat(upsampled, dim=1)
 
     def forward(self, x: list[torch.Tensor]) -> torch.Tensor:
         """Fuse multi-scale BEV features.
@@ -82,5 +98,9 @@ class SECONDFPN(nn.Module):
         Returns:
             Concatenated BEV feature tensor.
         """
-        upsampled = [block(feature) for block, feature in zip(self.blocks, x)]
-        return torch.cat(upsampled, dim=1)
+        if self.activation_checkpointing:
+            upsampled = checkpoint(self.custom_forward, x, use_reentrant=False)
+            assert upsampled is not None, "Activation checkpointing failed to produce outputs."
+            return upsampled
+        else:
+            return self.custom_forward(x)

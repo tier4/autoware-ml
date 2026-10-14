@@ -23,6 +23,7 @@ from collections.abc import Sequence
 
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 
 from autoware_ml.models.common.layers.conv import ConvModule
 
@@ -40,6 +41,7 @@ class SECONDBackbone(nn.Module):
         out_channels: Sequence[int],
         layer_nums: Sequence[int],
         layer_strides: Sequence[int],
+        activation_checkpointing: bool = False,
     ) -> None:
         """Initialize the SECOND backbone.
 
@@ -48,6 +50,7 @@ class SECONDBackbone(nn.Module):
             out_channels: Output channel counts per stage.
             layer_nums: Number of residual layers per stage.
             layer_strides: Stride applied by each stage.
+            activation_checkpointing: Whether to enable activation checkpointing for memory efficiency.
         """
         super().__init__()
         blocks = []
@@ -58,9 +61,10 @@ class SECONDBackbone(nn.Module):
             blocks.append(nn.Sequential(*layers))
             current_channels = stage_channels
         self.blocks = nn.ModuleList(blocks)
+        self.activation_checkpointing = activation_checkpointing
 
-    def forward(self, x: torch.Tensor) -> list[torch.Tensor]:
-        """Return multi-scale BEV features.
+    def custom_forward(self, x: torch.Tensor) -> list[torch.Tensor]:
+        """Forward pass without activation checkpointing.
 
         Args:
             x: Input BEV feature map.
@@ -73,3 +77,19 @@ class SECONDBackbone(nn.Module):
             x = block(x)
             outputs.append(x)
         return outputs
+
+    def forward(self, x: torch.Tensor) -> list[torch.Tensor]:
+        """Return multi-scale BEV features.
+
+        Args:
+            x: Input BEV feature map.
+
+        Returns:
+            List of multi-scale BEV feature maps.
+        """
+        if self.activation_checkpointing:
+            outputs = checkpoint(self.custom_forward, x, use_reentrant=False)
+            assert outputs is not None, "Activation checkpointing failed to produce outputs."
+            return outputs
+        else:
+            return self.custom_forward(x)
