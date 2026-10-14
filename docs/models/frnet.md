@@ -19,25 +19,25 @@ FRNet is a LiDAR-based 3D semantic segmentation model built on frustum and range
 
 ## Available Configurations
 
-| Config Name                                   | Dataset   | Purpose                         |
-| --------------------------------------------- | --------- | ------------------------------- |
-| `segmentation3d/frnet/hdl32e_nuscenes`        | NuScenes  | Standard NuScenes configuration |
-| `segmentation3d/frnet/ot128_t4dataset_j6gen2` | T4Dataset | T4Dataset OT128 configuration   |
-| `segmentation3d/frnet/qt128_t4dataset_j6gen2` | T4Dataset | T4Dataset QT128 configuration   |
+| Config Name                                                             | Dataset   | Purpose                         |
+| ----------------------------------------------------------------------- | --------- | ------------------------------- |
+| `segmentation3d/frnet/nuscenes/hdl32e_b16_150k_nuscenes`                | NuScenes  | Standard NuScenes configuration |
+| `segmentation3d/frnet/t4dataset/ot128_b4_150k_t4dataset_j6gen2_semaseg` | T4Dataset | T4Dataset OT128 configuration   |
+| `segmentation3d/frnet/t4dataset/qt128_b8_150k_t4dataset_j6gen2_semaseg` | T4Dataset | T4Dataset QT128 configuration   |
 
 ## Training
 
 ```bash
-autoware-ml train --config-name segmentation3d/frnet/hdl32e_nuscenes
-autoware-ml train --config-name segmentation3d/frnet/ot128_t4dataset_j6gen2
-autoware-ml train --config-name segmentation3d/frnet/qt128_t4dataset_j6gen2
+autoware-ml train --config-name segmentation3d/frnet/nuscenes/hdl32e_b16_150k_nuscenes
+autoware-ml train --config-name segmentation3d/frnet/t4dataset/ot128_b4_150k_t4dataset_j6gen2_semaseg
+autoware-ml train --config-name segmentation3d/frnet/t4dataset/qt128_b8_150k_t4dataset_j6gen2_semaseg
 ```
 
 For a pipeline validation run:
 
 ```bash
 autoware-ml train \
-    --config-name segmentation3d/frnet/hdl32e_nuscenes \
+    --config-name segmentation3d/frnet/nuscenes/hdl32e_b16_150k_nuscenes \
     +trainer.fast_dev_run=true
 ```
 
@@ -45,24 +45,24 @@ autoware-ml train \
 
 ```bash
 autoware-ml test \
-    --config-name segmentation3d/frnet/hdl32e_nuscenes \
-    --weights mlruns/segmentation3d/frnet/hdl32e_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt
+    --config-name segmentation3d/frnet/nuscenes/hdl32e_b16_150k_nuscenes \
+    --weights mlruns/segmentation3d/frnet/nuscenes/hdl32e_b16_150k_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 ## Deployment
 
 ```bash
 autoware-ml deploy \
-    --config-name segmentation3d/frnet/hdl32e_nuscenes \
-    --weights mlruns/segmentation3d/frnet/hdl32e_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt
+    --config-name segmentation3d/frnet/nuscenes/hdl32e_b16_150k_nuscenes \
+    --weights mlruns/segmentation3d/frnet/nuscenes/hdl32e_b16_150k_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 To validate ONNX export without building a TensorRT engine:
 
 ```bash
 autoware-ml deploy \
-    --config-name segmentation3d/frnet/hdl32e_nuscenes \
-    --weights mlruns/segmentation3d/frnet/hdl32e_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt \
+    --config-name segmentation3d/frnet/nuscenes/hdl32e_b16_150k_nuscenes \
+    --weights mlruns/segmentation3d/frnet/nuscenes/hdl32e_b16_150k_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt \
     deploy.tensorrt.enabled=false
 ```
 
@@ -100,7 +100,7 @@ The standard FRNet training configs follow the AWML experiment contract:
 | `autoware_ml/datamodule/nuscenes/segmentation3d.py`         | Semantic masks of a nuScenes record                |
 | `autoware_ml/transforms/point_cloud/`                       | Point cloud loading and augmentation used by FRNet |
 | `autoware_ml/preprocessing/segmentation3d/frustum_range.py` | Frustum and range preprocessing                    |
-| `autoware_ml/configs/tasks/segmentation3d/frnet/`           | Task configurations                                |
+| `autoware_ml/configs/tasks/segmentation3d/frnet/`           | Experiment configurations                          |
 
 ## Acknowledgment
 

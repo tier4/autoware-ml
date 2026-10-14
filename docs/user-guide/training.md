@@ -13,7 +13,7 @@ autoware-ml train --config-name <task>/<model>/<config>
 ```
 
 Hydra scratch outputs are saved automatically under
-`mlruns/<task>/<model>/<config>/<run_id>/hydra/`.
+`mlruns/<task>/<model>/<config>/<run_id>/artifacts/hydra/`.
 MLflow-owned artifacts are saved under
 `mlruns/<task>/<model>/<config>/<run_id>/artifacts/`, including checkpoints,
 resolved config snapshots, and run metadata.
@@ -21,7 +21,7 @@ resolved config snapshots, and run metadata.
 Example:
 
 ```bash
-autoware-ml train --config-name segmentation3d/ptv3/voxel005_51m_nuscenes
+autoware-ml train --config-name segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m
 ```
 
 ## Long-Running Training
@@ -30,7 +30,7 @@ For long jobs inside Docker or remote environments, prefer managed background se
 
 ```bash
 autoware-ml session start --name ptv3-train --cwd /workspace -- \
-    train --config-name segmentation3d/ptv3/voxel005_51m_nuscenes
+    train --config-name segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m
 ```
 
 Later you can open the live viewer with `session attach`:

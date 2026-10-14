@@ -99,10 +99,10 @@ Each piece of state is registered with `add_state(name, default, dist_reduce_fx)
 function torchmetrics uses to combine that state across GPUs.
 
 | Suite                                      | `prefix`   | Required keys                          | State (`dist_reduce_fx`)                                  |
-| ------------------------------------------ | ---------- | -------------------------------------- | ---------------------------------------------------------- |
-| `Detection3DMetricSuite`                   | `det3d`    | `predictions`, `gt_boxes`, `gt_labels` | per-frame box tensors as list states (`None`)               |
-| `Segmentation3DConfusionMatrixMetricSuite` | `seg3d`    | `seg_frames`                           | one confusion tensor over (filter, range) buckets (`sum`)   |
-| `Segmentation3DPointCloudMetricSuite`      | `seg3d_pt` | `seg_frames`                           | per-frame point tensors (`None`)                            |
+| ------------------------------------------ | ---------- | -------------------------------------- | --------------------------------------------------------- |
+| `Detection3DMetricSuite`                   | `det3d`    | `predictions`, `gt_boxes`, `gt_labels` | per-frame box tensors as list states (`None`)             |
+| `Segmentation3DConfusionMatrixMetricSuite` | `seg3d`    | `seg_frames`                           | one confusion tensor over (filter, range) buckets (`sum`) |
+| `Segmentation3DPointCloudMetricSuite`      | `seg3d_pt` | `seg_frames`                           | per-frame point tensors (`None`)                          |
 
 A confusion matrix is a bounded sufficient statistic, so its counts sum across ranks. Detection
 matching is score ordered inside each frame and the point-level metrics read raw points, so those
@@ -470,22 +470,22 @@ ego's overlap. An object that cannot reach ego within the horizon has an infinit
 The model runs on the following constants. Values marked config are set in the bundled dataset
 configs and tunable there, the rest are code defaults.
 
-| Constant                               | Value                                              |
-| -------------------------------------- | -------------------------------------------------- |
-| horizon                                | 4 s (config)                                       |
-| propagation time step                  | 0.1 s (config)                                     |
-| max lateral acceleration (turn bound)  | 3.0 m/s^2 (config)                                 |
-| minimum turn radius floor              | ego: wheel base over tan max steer angle (config), objects: 3.0 m friction floor (config) |
-| arc samples per reachable set          | at least 21, raised until neighbouring sweeps overlap at their far ends |
-| ego body                               | vehicle description dimensions from the dataset config, measured from the rear axle |
-| object body                            | the object's own box length and width               |
-| wheeled speed on the map               | the lanelet speed limit at the agent's position    |
-| off-map fallback speed                 | 16.7 m/s (config)                                  |
-| living run speeds                      | pedestrian 3.0, animal 4.0, bicycle 6.0 m/s        |
-| wheeled classes                        | car, truck, bus, train, motorcycle                 |
-| living classes                         | pedestrian, animal, bicycle                        |
-| static classes (footprint only)        | barrier, traffic_cone, debris, bicycle_rack, vehicle_extension |
-| corridor width                         | 3.0 m (config)                                     |
+| Constant                              | Value                                                                                     |
+| ------------------------------------- | ----------------------------------------------------------------------------------------- |
+| horizon                               | 4 s (config)                                                                              |
+| propagation time step                 | 0.1 s (config)                                                                            |
+| max lateral acceleration (turn bound) | 3.0 m/s^2 (config)                                                                        |
+| minimum turn radius floor             | ego: wheel base over tan max steer angle (config), objects: 3.0 m friction floor (config) |
+| arc samples per reachable set         | at least 21, raised until neighbouring sweeps overlap at their far ends                   |
+| ego body                              | vehicle description dimensions from the dataset config, measured from the rear axle       |
+| object body                           | the object's own box length and width                                                     |
+| wheeled speed on the map              | the lanelet speed limit at the agent's position                                           |
+| off-map fallback speed                | 16.7 m/s (config)                                                                         |
+| living run speeds                     | pedestrian 3.0, animal 4.0, bicycle 6.0 m/s                                               |
+| wheeled classes                       | car, truck, bus, train, motorcycle                                                        |
+| living classes                        | pedestrian, animal, bicycle                                                               |
+| static classes (footprint only)       | barrier, traffic_cone, debris, bicycle_rack, vehicle_extension                            |
+| corridor width                        | 3.0 m (config)                                                                            |
 
 ### Default slices
 
@@ -1283,22 +1283,22 @@ confident error is what hides an obstacle.
 
 `model.metrics` is a list of suites, so a joint segmentation and detection model lists several.
 Each suite is given its `components`, and each component its stages and optional filter. The
-suites live in the dataset configs and read the tunable pieces (class names, ranges, filters,
-groups) from interpolation variables, because Hydra replaces a list wholesale rather than merging
+suites live in the `metrics` config groups of each database and read the tunable pieces (class
+names, ranges, filters, groups) from interpolation variables, because Hydra replaces a list wholesale rather than merging
 it, so overriding a suite directly would mean restating every field.
 
 ```yaml
 model:
   metrics:
     - _target_: autoware_ml.metrics.detection3d.suite.Detection3DMetricSuite
-      class_names: ${dataset.detection3d.class_names}
-      eval_class_range: ${dataset.detection3d.eval_class_range}
-      ranges: ${dataset.detection3d.metric_ranges}
+      class_names: ${database.taxonomy.detection3d.class_names}
+      eval_class_range: ${eval_class_range}
+      ranges: ${metric_ranges}
       components:
         - { _target_: autoware_ml.metrics.detection3d.mean_ap.MeanAP, stages: [val, test] }
         - { _target_: autoware_ml.metrics.detection3d.nds.Nds, stages: [test] }
         - { _target_: autoware_ml.metrics.detection3d.mean_ap.MeanAP, stages: [test],
-            filter: '${dataset.detection3d.region_filters.road}' }
+            filter: '${metric_params.detection3d.filters.region_filters.road}' }
 ```
 
 The same component listed once more with a filter is one more reported slice.

@@ -30,13 +30,14 @@ Bash completion is installed automatically by the Docker image build and by
 Train a model using the specified Hydra configuration.
 
 ```bash
-autoware-ml train --config-name <config_path> [--weights <path> ...] [--resume-checkpoint <path>] [--new-run] [hydra_overrides...]
+autoware-ml train --config-name <config_path> [--weights <path> ...] [--skip-mismatched-weights] [--resume-checkpoint <path>] [--new-run] [hydra_overrides...]
 ```
 
 **Arguments:**
 
 - `--config-name`: Path to config
 - `--weights`: One or more `.ckpt` paths for pretrained weight initialization (repeatable; later checkpoints overwrite earlier ones on overlapping keys). Use this for transfer learning, e.g. initializing a det3d encoder from a seg3d checkpoint. Mutually exclusive with `--resume-checkpoint`.
+- `--skip-mismatched-weights`: With `--weights`, skip checkpoint tensors whose name matches a model tensor of a different shape instead of failing. Each skipped tensor is listed in a warning and keeps the model's own initialization. Use this when the architecture drifted from the checkpoint, e.g. a first layer that now takes more input channels. Without it, a shape mismatch is an error.
 - `--resume-checkpoint`: Full Lightning checkpoint path to resume an interrupted training run from (restores model weights, optimizer state, and epoch). Training continues inside the checkpoint's source MLflow run: same run ID, metric curves, and checkpoint directory. Mutually exclusive with `--weights`.
 - `--new-run`: With `--resume-checkpoint`, fork the training state into a new MLflow run instead of continuing the source run.
 
@@ -53,6 +54,11 @@ autoware-ml train --config-name <task>/<model>/<config>
 # Initialize det3d encoder from a seg3d checkpoint
 autoware-ml train --config-name <task>/<model>/<config> \
     --weights mlruns/segmentation3d/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt
+
+# Initialize from a checkpoint whose first layer has a different input width
+autoware-ml train --config-name <task>/<model>/<config> \
+    --weights mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt \
+    --skip-mismatched-weights
 
 # Resume an interrupted run
 autoware-ml train --config-name <task>/<model>/<config> \
@@ -98,9 +104,9 @@ autoware-ml deploy \
 
 ```bash
 autoware-ml deploy \
-    --config-name detection3d/ptv3/voxel012_122m_t4dataset_j6gen2 \
-    --weights mlruns/segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt \
-    --weights mlruns/detection3d/ptv3/voxel012_122m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt
+    --config-name detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base \
+    --weights mlruns/segmentation3d/ptv3/t4dataset/voxel012_tiny_b16_50e_t4dataset_122m_j6gen2_semaseg/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 ## test
@@ -128,9 +134,9 @@ autoware-ml test \
 
 ```bash
 autoware-ml test \
-    --config-name detection3d/ptv3/voxel012_122m_t4dataset_j6gen2 \
-    --weights mlruns/segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt \
-    --weights mlruns/detection3d/ptv3/voxel012_122m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt
+    --config-name detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base \
+    --weights mlruns/segmentation3d/ptv3/t4dataset/voxel012_tiny_b16_50e_t4dataset_122m_j6gen2_semaseg/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 ## mlflow ui
@@ -177,7 +183,7 @@ running sessions, and stop the task.
 
 ```bash
 autoware-ml session start --name ptv3-train --cwd /workspace -- \
-    train --config-name segmentation3d/ptv3/voxel005_51m_nuscenes
+    train --config-name segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m
 ```
 
 Use `--raw` to run a non-`autoware-ml` command in the managed session:

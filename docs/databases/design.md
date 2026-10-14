@@ -139,8 +139,6 @@ The `scenarios` module models scenario metadata as immutable Pydantic objects. `
 ```python
 class DatasetParams(BaseModel):
     dataset_name: str
-    max_past_sweeps: int
-    max_future_sweeps: int
     sample_steps: int
 
 class ScenarioData(BaseModel):

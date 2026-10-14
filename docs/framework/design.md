@@ -104,14 +104,7 @@ class DataModule(L.LightningDataModule):
     def __init__(
         self,
         splitter: SplitterInterface,
-        train_sources: Sequence[Mapping[str, Any]] | None,
-        validation_sources: Sequence[Mapping[str, Any]] | None,
-        test_sources: Sequence[Mapping[str, Any]] | None,
-        predict_sources: Sequence[Mapping[str, Any]] | None,
-        train_dataset: Callable[..., BaseDataset] | None,
-        validation_dataset: Callable[..., BaseDataset] | None,
-        test_dataset: Callable[..., BaseDataset] | None,
-        predict_dataset: Callable[..., BaseDataset] | None,
+        sources: Mapping[str, DatasetSource],
         train_dataloader: DataLoaderConfig | None,
         validation_dataloader: DataLoaderConfig | None,
         test_dataloader: DataLoaderConfig | None,
@@ -121,15 +114,18 @@ class DataModule(L.LightningDataModule):
         ...
 ```
 
-A `DatasetSource` names one database, whether its boxes (`det3d`) and semantic masks (`seg3d`)
-supervise the run, and how many times its frames appear in one epoch (`repeat`). A split with
-several sources mixes their corpora. A source with a task turned off still serves that task,
-with an empty box set or ignored point labels, so every sample of the split collates with the
-others. All sources of a datamodule must share one taxonomy.
+A `DatasetSource` names one database, the dataset of every split it serves, and how many times
+its frames appear in one training epoch (`repeat`). A split is served by the sources declaring a
+dataset for it, concatenated in declaration order, so several sources mix their corpora. A
+dataset reads the database of its source and declares whether the boxes (`det3d_supervised`) and
+semantic masks (`seg3d_supervised`) of that corpus supervise the run. A dataset with a task
+turned off still serves that task, with an empty box set or ignored point labels, so every
+sample of the split collates with the others. All sources of a datamodule must share one
+taxonomy.
 
-The dataset factory of a split is a partial dataset config. The datamodule completes it with
-the root path, the records and the supervision of each source, and concatenates the datasets
-of a split in declaration order.
+The datasets are instantiated by Hydra without records. In `setup()` the datamodule calls
+`bind(records)` on the dataset of every source, which returns a copy serving the records of that
+database in the split, and concatenates the bound copies of a split in declaration order.
 
 ### Dataset
 

@@ -42,29 +42,29 @@ implementation so ONNX export remains supported.
 
 ## Available Configurations
 
-| Config Name                                          | Task                         | Dataset   | Head        | Range | Purpose                        |
-| ---------------------------------------------------- | ---------------------------- | --------- | ----------- | ----- | ------------------------------ |
-| `segmentation3d/ptv3/voxel005_51m_nuscenes`          | segmentation3d               | nuScenes  | Seg decoder | 51 m  | nuScenes segmentation          |
-| `segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2` | segmentation3d               | T4Dataset | Seg decoder | 122 m | T4Dataset segmentation         |
-| `detection3d/ptv3/voxel005_51m_nuscenes`             | detection3d                  | nuScenes  | TransFusion | 51 m  | nuScenes detection             |
-| `detection3d/ptv3/voxel012_122m_t4dataset_j6gen2`    | detection3d                  | T4Dataset | TransFusion | 122 m | T4Dataset detection            |
-| `multi/ptv3/voxel005_51m_nuscenes`                   | segmentation3d + detection3d | nuScenes  | TransFusion | 51 m  | Joint segmentation + detection |
-| `multi/ptv3/voxel012_122m_t4dataset_j6gen2`          | segmentation3d + detection3d | T4Dataset | TransFusion | 122 m | Joint segmentation + detection |
+| Config Name                                                                         | Task                         | Dataset   | Head        | Range | Purpose                        |
+| ----------------------------------------------------------------------------------- | ---------------------------- | --------- | ----------- | ----- | ------------------------------ |
+| `segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m`                   | segmentation3d               | nuScenes  | Seg decoder | 51 m  | nuScenes segmentation          |
+| `segmentation3d/ptv3/t4dataset/voxel012_tiny_b16_50e_t4dataset_122m_j6gen2_semaseg` | segmentation3d               | T4Dataset | Seg decoder | 122 m | T4Dataset segmentation         |
+| `detection3d/ptv3/nuscenes/voxel005_base_b16_30e_nuscenes_51m`                      | detection3d                  | nuScenes  | TransFusion | 51 m  | nuScenes detection             |
+| `detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base`        | detection3d                  | T4Dataset | TransFusion | 122 m | T4Dataset detection            |
+| `multi/ptv3/nuscenes/voxel005_base_b16_100e_nuscenes_51m`                           | segmentation3d + detection3d | nuScenes  | TransFusion | 51 m  | Joint segmentation + detection |
+| `multi/ptv3/t4dataset/voxel012_tiny_b8_100e_t4dataset_122m_j6gen2_segdet3d`         | segmentation3d + detection3d | T4Dataset | TransFusion | 122 m | Joint segmentation + detection |
 
 ## Training
 
 ```bash
-autoware-ml train --config-name segmentation3d/ptv3/voxel005_51m_nuscenes
-autoware-ml train --config-name segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2
-autoware-ml train --config-name detection3d/ptv3/voxel005_51m_nuscenes
-autoware-ml train --config-name detection3d/ptv3/voxel012_122m_t4dataset_j6gen2
+autoware-ml train --config-name segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m
+autoware-ml train --config-name segmentation3d/ptv3/t4dataset/voxel012_tiny_b16_50e_t4dataset_122m_j6gen2_semaseg
+autoware-ml train --config-name detection3d/ptv3/nuscenes/voxel005_base_b16_30e_nuscenes_51m
+autoware-ml train --config-name detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base
 ```
 
 For a pipeline validation run:
 
 ```bash
 autoware-ml train \
-    --config-name segmentation3d/ptv3/voxel005_51m_nuscenes \
+    --config-name segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m \
     +trainer.fast_dev_run=true
 ```
 
@@ -72,12 +72,12 @@ autoware-ml train \
 
 ```bash
 autoware-ml test \
-    --config-name segmentation3d/ptv3/voxel005_51m_nuscenes \
-    --weights mlruns/segmentation3d/ptv3/voxel005_51m_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt
+    --config-name segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m \
+    --weights mlruns/segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m/<run_id>/artifacts/checkpoints/best.ckpt
 
 autoware-ml test \
-    --config-name detection3d/ptv3/voxel012_122m_t4dataset_j6gen2 \
-    --weights mlruns/detection3d/ptv3/voxel012_122m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt
+    --config-name detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base \
+    --weights mlruns/detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 ## Deployment
@@ -88,13 +88,13 @@ convolution plugins.
 
 ```bash
 autoware-ml deploy \
-    --config-name segmentation3d/ptv3/voxel005_51m_nuscenes \
-    --weights mlruns/segmentation3d/ptv3/voxel005_51m_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt \
+    --config-name segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m \
+    --weights mlruns/segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m/<run_id>/artifacts/checkpoints/best.ckpt \
     deploy.tensorrt.enabled=false
 
 autoware-ml deploy \
-    --config-name detection3d/ptv3/voxel012_122m_t4dataset_j6gen2 \
-    --weights mlruns/detection3d/ptv3/voxel012_122m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt \
+    --config-name detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base \
+    --weights mlruns/detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base/<run_id>/artifacts/checkpoints/best.ckpt \
     deploy.tensorrt.enabled=false
 ```
 
@@ -123,7 +123,7 @@ the stable but slower non-fused attention path, disable both:
 
 ```bash
 autoware-ml deploy \
-    --config-name detection3d/ptv3/voxel012_122m_t4dataset_j6gen2 \
+    --config-name detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base \
     --weights <checkpoint> \
     model.bbox_head.use_bf16_cross_attention=false \
     deploy.onnx.modules.ptv3_det3d_head.precision=fp32
@@ -211,25 +211,25 @@ The split export produces one graph per `deploy.onnx.modules` entry:
 
 ## Implementation
 
-| Path                                                  | Description                                    |
-| ----------------------------------------------------- | ---------------------------------------------- |
-| `autoware_ml/models/segmentation3d/ptv3.py`           | PTv3 Lightning model wrapper                   |
-| `autoware_ml/models/segmentation3d/heads/ptv3.py`     | PTv3 segmentation decoder head                 |
-| `autoware_ml/models/detection3d/ptv3.py`              | PTv3 BEV neck and detection model wrapper      |
-| `autoware_ml/models/detection3d/heads/transfusion.py` | TransFusion detection head                     |
-| `autoware_ml/models/segmentation3d/encoders/ptv3.py`  | Reusable PTv3 encoder components               |
-| `autoware_ml/models/segmentation3d/encoders/voxel.py` | Voxel feature encoder of the frame and sweeps  |
-| `autoware_ml/utils/point_cloud/`                      | Shared point-cloud utilities and serialization |
-| `autoware_ml/ops/segment/segment_csr.py`              | Segment reduction export operator              |
-| `autoware_ml/losses/segmentation3d/`                  | Segmentation losses used by PTv3               |
-| `autoware_ml/datamodule/t4dataset/dataset.py`         | T4Dataset records as a dataset                 |
-| `autoware_ml/datamodule/nuscenes/dataset.py`          | nuScenes dataset                               |
-| `autoware_ml/datamodule/t4dataset/segmentation3d.py`  | Semantic masks of a T4Dataset record           |
-| `autoware_ml/datamodule/nuscenes/segmentation3d.py`   | Semantic masks of a nuScenes record            |
-| `autoware_ml/datamodule/detection3d.py`               | 3D boxes of a record                           |
-| `autoware_ml/transforms/point_cloud/`                 | Shared point-cloud transforms used by PTv3     |
-| `autoware_ml/configs/tasks/segmentation3d/ptv3/`      | Task configurations                            |
-| `autoware_ml/configs/tasks/detection3d/ptv3/`         | Detection task configurations                  |
+| Path                                                                    | Description                                    |
+| ----------------------------------------------------------------------- | ---------------------------------------------- |
+| `autoware_ml/models/segmentation3d/ptv3.py`                             | PTv3 Lightning model wrapper                   |
+| `autoware_ml/models/segmentation3d/heads/ptv3.py`                       | PTv3 segmentation decoder head                 |
+| `autoware_ml/models/detection3d/ptv3.py`                                | PTv3 BEV neck and detection model wrapper      |
+| `autoware_ml/models/detection3d/heads/transfusions/transfusion_head.py` | TransFusion detection head                     |
+| `autoware_ml/models/segmentation3d/encoders/ptv3.py`                    | Reusable PTv3 encoder components               |
+| `autoware_ml/models/segmentation3d/encoders/voxel.py`                   | Voxel feature encoder of the frame and sweeps  |
+| `autoware_ml/utils/point_cloud/`                                        | Shared point-cloud utilities and serialization |
+| `autoware_ml/ops/segment/segment_csr.py`                                | Segment reduction export operator              |
+| `autoware_ml/losses/segmentation3d/`                                    | Segmentation losses used by PTv3               |
+| `autoware_ml/datamodule/t4dataset/dataset.py`                           | T4Dataset records as a dataset                 |
+| `autoware_ml/datamodule/nuscenes/dataset.py`                            | nuScenes dataset                               |
+| `autoware_ml/datamodule/t4dataset/segmentation3d.py`                    | Semantic masks of a T4Dataset record           |
+| `autoware_ml/datamodule/nuscenes/segmentation3d.py`                     | Semantic masks of a nuScenes record            |
+| `autoware_ml/datamodule/common/detection3d.py`                          | 3D boxes of a record                           |
+| `autoware_ml/transforms/point_cloud/`                                   | Shared point-cloud transforms used by PTv3     |
+| `autoware_ml/configs/tasks/segmentation3d/ptv3/`                        | Segmentation experiment configurations         |
+| `autoware_ml/configs/tasks/detection3d/ptv3/`                           | Detection experiment configurations            |
 
 ## Acknowledgment
 
