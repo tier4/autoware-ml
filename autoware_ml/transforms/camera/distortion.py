@@ -18,20 +18,20 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
-import numpy.typing as npt
 import torch
 
-from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.cameras.base_images import BaseImages, compose_lidar2images
 from autoware_ml.transforms.base import BaseTransform
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 
 
 class UndistortImage(BaseTransform):
-    """Undistort every image of the sample and clear its distortion coefficients.
+    """Undistort every camera image using its distortion coefficients.
 
-    Undistortion is not an affine map of the pixels, so it is not composed into the image
-    augmentation matrices. It replaces the intrinsics of the camera, which every later
-    transform and the view transform then read.
+    The distortion coefficients are expressed in the frame of the raw image, so this
+    transform must run before any other image-space transform. Undistorted cameras have
+    their entry in `augmented_camera_intrinsics` replaced by the optimal new camera matrix
+    and their distortion coefficients zeroed, so applying the transform twice is a no-op.
     """
 
     _required_keys = ["camera_image_data"]
@@ -47,80 +47,72 @@ class UndistortImage(BaseTransform):
         self.alpha = alpha
 
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
-        """Undistort every image of the sample.
+        """Undistort every camera image and update its intrinsics.
 
         Args:
-            model_gt_sample: ModelGTSample instance holding loaded images.
+            model_gt_sample: ModelGTSample instance containing `camera_image_data`.
 
         Returns:
-            Updated ModelGTSample instance with undistorted images.
+            Updated ModelGTSample instance with an undistorted `camera_image_data`.
         """
-        # This is checked in the _validate_required_keys()
-        camera_image_data: BaseImages = (
-            model_gt_sample.camera_image_data  # type: ignore[reportOptionalMemberAccess]
-        )
+        assert model_gt_sample.camera_image_data is not None
+        camera_image_data = model_gt_sample.camera_image_data
 
-        images = []
-        camera_intrinsics = []
-        for index, image in enumerate(camera_image_data.images):
-            coefficients = camera_image_data.distortion_coefficients[index].numpy()
-            intrinsic = camera_image_data.augmented_camera_intrinsics[index].numpy()
-            if not coefficients.size:
-                images.append(image)
-                camera_intrinsics.append(camera_image_data.augmented_camera_intrinsics[index])
+        images = camera_image_data.images
+        camera_intrinsics = camera_image_data.camera_intrinsics
+        augmented_camera_intrinsics = camera_image_data.augmented_camera_intrinsics.clone()
+
+        undistorted_images = []
+        undistorted_coefficients = []
+        for index, coefficients in enumerate(camera_image_data.distortion_coefficients):
+            # Nothing to correct for pre-undistorted cameras, keep the image as it is.
+            if coefficients.numel() == 0 or not torch.any(coefficients):
+                undistorted_images.append(images[index])
+                undistorted_coefficients.append(coefficients)
                 continue
 
-            undistorted, new_intrinsic = self.undistort(
-                np.transpose(image.numpy(), (1, 2, 0)), intrinsic, coefficients
+            # OpenCV expects (height, width, num_channels) contiguous arrays.
+            image = images[index].permute(1, 2, 0).contiguous().numpy()
+            height, width = image.shape[:2]
+            camera_matrix = camera_intrinsics[index].numpy().astype(np.float64)
+            distortion_coefficients = coefficients.numpy().astype(np.float64)
+
+            new_camera_matrix, _ = cv2.getOptimalNewCameraMatrix(
+                camera_matrix,
+                distortion_coefficients,
+                (width, height),
+                self.alpha,
+                (width, height),
             )
-            images.append(torch.from_numpy(np.transpose(undistorted, (2, 0, 1)).copy()))
-            camera_intrinsics.append(torch.from_numpy(new_intrinsic))
+            image = cv2.undistort(
+                image,
+                camera_matrix,
+                distortion_coefficients,
+                newCameraMatrix=new_camera_matrix,
+            )
 
-        augmented_camera_intrinsics = torch.stack(camera_intrinsics)
-        return model_gt_sample._replace(
-            camera_image_data=BaseImages.model_validate(
-                camera_image_data.model_copy(
-                    update={
-                        "images": torch.stack(images),
-                        "augmented_camera_intrinsics": augmented_camera_intrinsics,
-                        "distortion_coefficients": [
-                            torch.zeros(0, dtype=torch.float32)
-                            for _ in camera_image_data.camera_names
-                        ],
-                        "distortion_models": ["" for _ in camera_image_data.camera_names],
-                        "lidar2images": compose_lidar2images(
-                            augmented_camera_intrinsics, camera_image_data.lidar2cams
-                        ),
-                    }
-                )
+            undistorted_images.append(torch.from_numpy(image).permute(2, 0, 1).to(images.dtype))
+            augmented_camera_intrinsics[index] = torch.from_numpy(new_camera_matrix).to(
+                augmented_camera_intrinsics.dtype
+            )
+            undistorted_coefficients.append(torch.zeros(0, dtype=coefficients.dtype))
+
+        # The undistortion is not a 2D affine, so it is carried by the intrinsics alone and
+        # leaves the composed image augmentation matrices untouched. The projections are
+        # rebuilt from the new intrinsics, and the coefficients are cleared so no later
+        # projection distorts the points onto the now pinhole images.
+        # model_copy does not validate what it is given, so the copy is validated explicitly.
+        undistorted_camera_image_data = BaseImages.model_validate(
+            camera_image_data.model_copy(
+                update={
+                    "images": torch.stack(undistorted_images, dim=0),
+                    "distortion_coefficients": undistorted_coefficients,
+                    "distortion_models": ["" for _ in camera_image_data.camera_names],
+                    "augmented_camera_intrinsics": augmented_camera_intrinsics,
+                    "lidar2images": compose_lidar2images(
+                        augmented_camera_intrinsics, camera_image_data.lidar2cams
+                    ),
+                }
             )
         )
-
-    def undistort(
-        self,
-        image: npt.NDArray[np.float32],
-        camera_intrinsic: npt.NDArray[np.float32],
-        distortion_coefficients: npt.NDArray[np.float32],
-    ) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
-        """Undistort one image and return it with the intrinsics it is expressed in.
-
-        Args:
-            image: Image in (height, width, num_channels) layout.
-            camera_intrinsic: 3x3 intrinsics of the camera.
-            distortion_coefficients: Distortion coefficients of the camera.
-
-        Returns:
-            tuple: The undistorted image and the new 3x3 intrinsics.
-        """
-        height, width = image.shape[:2]
-        new_intrinsic, _ = cv2.getOptimalNewCameraMatrix(
-            camera_intrinsic,
-            distortion_coefficients,
-            (width, height),
-            self.alpha,
-            (width, height),
-        )
-        undistorted = cv2.undistort(
-            image, camera_intrinsic, distortion_coefficients, newCameraMatrix=new_intrinsic
-        )
-        return undistorted, new_intrinsic.astype(np.float32)
+        return model_gt_sample._replace(camera_image_data=undistorted_camera_image_data)

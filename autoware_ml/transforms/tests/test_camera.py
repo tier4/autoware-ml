@@ -25,7 +25,7 @@ from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.cameras.base_images import BaseImages
 from autoware_ml.geometry.points.lidar_points import LiDARPoints
 from autoware_ml.transforms.camera.distortion import UndistortImage
-from autoware_ml.transforms.camera.geometry import ImageAug3D
+from autoware_ml.transforms.camera.resize import ResizeCropFlipRotImage
 from autoware_ml.transforms.image.image import PhotometricDistortion
 from autoware_ml.transforms.point_cloud.geometry import GlobalRotScaleTrans
 from autoware_ml.types.geometry import PointFeatureName
@@ -82,12 +82,15 @@ def build_sample(camera_image_data: BaseImages, with_points: bool = False) -> Mo
     )
 
 
-class TestImageAug3D(unittest.TestCase):
+class TestResizeCropFlipRotImage(unittest.TestCase):
     """Resize, crop and flip of the images and of their calibration."""
 
     def test_resizes_to_the_final_dimension(self) -> None:
-        transform = ImageAug3D(
-            final_dim=[4, 6], resize_lim=[1.0, 1.0], bot_pct_lim=[0.0, 0.0], training=False
+        transform = ResizeCropFlipRotImage(
+            target_size=[4, 6],
+            resize_range=[1.0, 1.0],
+            bottom_crop_ratio_range=[0.0, 0.0],
+            training=False,
         )
 
         sample = transform(build_sample(build_images()))
@@ -96,8 +99,11 @@ class TestImageAug3D(unittest.TestCase):
 
     def test_composes_the_pixel_affine_into_the_intrinsics(self) -> None:
         # Halving the image halves the focal length and the principal point
-        transform = ImageAug3D(
-            final_dim=[4, 6], resize_lim=[0.5, 0.5], bot_pct_lim=[0.0, 0.0], training=False
+        transform = ResizeCropFlipRotImage(
+            target_size=[4, 6],
+            resize_range=[0.5, 0.5],
+            bottom_crop_ratio_range=[0.0, 0.0],
+            training=False,
         )
 
         sample = transform(build_sample(build_images()))
@@ -112,8 +118,11 @@ class TestImageAug3D(unittest.TestCase):
         images = images.model_copy(
             update={"augmented_camera_intrinsics": images.augmented_camera_intrinsics * 0.5}
         )
-        transform = ImageAug3D(
-            final_dim=[2, 3], resize_lim=[0.5, 0.5], bot_pct_lim=[0.0, 0.0], training=False
+        transform = ResizeCropFlipRotImage(
+            target_size=[2, 3],
+            resize_range=[0.5, 0.5],
+            bottom_crop_ratio_range=[0.0, 0.0],
+            training=False,
         )
 
         sample = transform(build_sample(images))
@@ -122,8 +131,11 @@ class TestImageAug3D(unittest.TestCase):
         self.assertAlmostEqual(float(augmented[0, 0, 0]), 3.0, places=5)
 
     def test_records_the_augmentation_matrix(self) -> None:
-        transform = ImageAug3D(
-            final_dim=[4, 6], resize_lim=[0.5, 0.5], bot_pct_lim=[0.0, 0.0], training=False
+        transform = ResizeCropFlipRotImage(
+            target_size=[4, 6],
+            resize_range=[0.5, 0.5],
+            bottom_crop_ratio_range=[0.0, 0.0],
+            training=False,
         )
 
         sample = transform(build_sample(build_images()))
@@ -133,8 +145,11 @@ class TestImageAug3D(unittest.TestCase):
         self.assertAlmostEqual(float(affines[0, 1, 1]), 0.5, places=5)
 
     def test_keeps_lidar2image_consistent_with_the_intrinsics(self) -> None:
-        transform = ImageAug3D(
-            final_dim=[4, 6], resize_lim=[0.5, 0.5], bot_pct_lim=[0.0, 0.0], training=False
+        transform = ResizeCropFlipRotImage(
+            target_size=[4, 6],
+            resize_range=[0.5, 0.5],
+            bottom_crop_ratio_range=[0.0, 0.0],
+            training=False,
         )
 
         sample = transform(build_sample(build_images()))

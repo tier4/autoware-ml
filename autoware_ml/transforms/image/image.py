@@ -31,13 +31,23 @@ CONTRAST_PIVOT = 0.5
 
 
 class PhotometricDistortion(BaseTransform):
-    """Apply random brightness, contrast, saturation and hue to every image."""
+    """Apply random brightness, contrast, saturation and hue to every image.
+
+    Operates on the camera images (num_cameras, 3, H, W) in unit range, as served by the
+    loading transform. Every camera of the sample draws its own distortion.
+
+    Required keys:
+        - camera_image_data: (num_cameras, 3, H, W) float32 RGB images in [0, 1].
+
+    Generated keys:
+        - camera_image_data.images: the photometrically distorted images (when applied).
+    """
 
     _required_keys = ["camera_image_data"]
 
     def __init__(
         self,
-        probability: float = 0.5,
+        probability: float | None = 0.5,
         brightness: float = 0.0,
         contrast: float = 0.0,
         saturation: float = 0.0,
@@ -46,7 +56,7 @@ class PhotometricDistortion(BaseTransform):
         """Initialize the PhotometricDistortion transform.
 
         Args:
-            probability: Probability of applying the transform.
+            probability: Probability of applying the transform, None to always run.
             brightness: Max brightness deviation in [0, 1].
             contrast: Max contrast deviation in [0, 1].
             saturation: Max saturation deviation in [0, 1].
