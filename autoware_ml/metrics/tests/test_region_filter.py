@@ -555,6 +555,8 @@ def test_point_cloud_suite_region_filter_clips_boxes() -> None:
     )
     assert suite.state_for(None, region).frames[0].gt_boxes.shape[0] == 1
     assert suite.state_for(None).frames[0].gt_boxes.shape[0] == 2
+
+
 def test_load_lanelet_speeds_parses_km_h_to_mps(tmp_path) -> None:
     path = tmp_path / "map.osm"
     path.write_text(_MINI_OSM)
