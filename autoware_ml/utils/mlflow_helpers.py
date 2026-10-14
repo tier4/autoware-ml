@@ -390,7 +390,7 @@ def resolve_lineage_context(
     metadata = load_run_metadata(checkpoint_path)
     if metadata is None:
         return generate_experiment_name(config_name), None
-    return metadata["experiment_name"], metadata.get("run_id")
+    return generate_experiment_name(config_name), metadata.get("run_id")
 
 
 def resolve_tracking_uri(tracking_uri: str) -> str:

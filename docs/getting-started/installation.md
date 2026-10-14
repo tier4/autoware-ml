@@ -362,6 +362,9 @@ The following files will use this variable to locate your datasets:
 - `.devcontainer/devcontainer.json`
 - Model config files
 
+Record tables are cached in `.cache/` of the repository checkout. Set `AUTOWARE_ML_WORKING_DIR` to
+use another directory.
+
 ## Next Steps
 
 Navigate to [Quick Start](quickstart.md) to start training your first model.

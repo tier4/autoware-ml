@@ -182,6 +182,18 @@ class DatabaseInterface(Protocol):
 
         raise NotImplementedError("Database must define database_hash!")
 
+    @property
+    @abstractmethod
+    def cache_file_path(self) -> Path:
+        """
+        Get the path of the record table cache.
+
+        Returns:
+          Path: Record table cache file.
+        """
+
+        raise NotImplementedError("Database must define cache_file_path!")
+
     @abstractmethod
     def load_polars_scenario_dataframe(self) -> pl.DataFrame:
         """

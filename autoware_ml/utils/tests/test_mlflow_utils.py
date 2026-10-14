@@ -14,9 +14,11 @@
 
 """Tests for shared MLflow helpers."""
 
+import json
 from datetime import datetime
 from pathlib import Path
 
+import pytest
 from mlflow.tracking import MlflowClient
 from omegaconf import OmegaConf
 
@@ -24,12 +26,14 @@ from autoware_ml.utils.mlflow_helpers import (
     build_run_tags,
     configure_logger,
     generate_artifact_location,
+    generate_experiment_name,
     generate_hydra_run_dir,
     generate_run_name,
     load_run_context,
     load_run_metadata,
     log_config_params,
     prepare_run_context,
+    resolve_lineage_context,
     resolve_tracking_uri,
     sanitize_mlflow_param_key,
     sanitize_mlflow_param_keys,
@@ -261,3 +265,33 @@ class TestArtifactLayout:
             assert str(legacy_root) in str(exc)
         else:
             raise AssertionError("Expected RuntimeError for legacy experiment artifact root.")
+
+
+def _train_checkpoint(tmp_path: Path, config_name: str) -> Path:
+    run_dir = tmp_path / "run"
+    checkpoint_path = run_dir / "artifacts" / "checkpoints" / "best.ckpt"
+    checkpoint_path.parent.mkdir(parents=True)
+    (run_dir / "run_metadata.json").write_text(
+        json.dumps(
+            {
+                "run_id": "train-run",
+                "experiment_name": generate_experiment_name(config_name),
+                "config_name": config_name,
+                "stage": "train",
+            }
+        ),
+        encoding="utf-8",
+    )
+    return checkpoint_path
+
+
+@pytest.mark.parametrize("config_name", ["multi/ptv3/voxel012", "segmentation3d/ptv3/voxel012"])
+def test_resolve_lineage_context_stays_in_the_experiment_of_its_own_config(
+    tmp_path: Path, config_name: str
+) -> None:
+    checkpoint = _train_checkpoint(tmp_path, "multi/ptv3/voxel012")
+
+    assert resolve_lineage_context(config_name, checkpoint) == (
+        generate_experiment_name(config_name),
+        "train-run",
+    )
