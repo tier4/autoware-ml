@@ -58,6 +58,30 @@ class ImageFrameDatasetSchema(BaseFieldSchema):
     lidar2img = DatasetTableColumn("lidar2img", pl.Array(pl.Float32, shape=(4, 4)))
 
 
+def distortion_model_from_coefficients(coefficients: Sequence[float]) -> str:
+    """Name the OpenCV distortion model a coefficient vector belongs to, ROS style.
+
+    The T4 calibration stores only the coefficients ``(k1, k2, p1, p2[, k3[, k4, k5, k6, ...]])``
+    and leaves the model implicit in their count, so it is recovered here the way
+    ``sensor_msgs/CameraInfo`` names it: ``plumb_bob`` for the 4 and 5 coefficient radial and
+    tangential model, ``rational_polynomial`` for 8 and more coefficients. Images that ship
+    already rectified carry no coefficients and get the empty string the loading transforms
+    read as "pre-undistorted".
+
+    Args:
+      coefficients: Lens distortion coefficients in OpenCV order, possibly empty.
+
+    Returns:
+      str: Distortion model name, empty when there are no coefficients.
+    """
+    count = len(coefficients)
+    if count == 0:
+        return ""
+    if count <= 5:
+        return "plumb_bob"
+    return "rational_polynomial"
+
+
 class ImageFrameDataModel(BaseModel, DataModelInterface):
     """
     Image frame data model that can be shared by multiple datasets. It saves the metadata of a
@@ -221,15 +245,11 @@ class ImageFrameDataModel(BaseModel, DataModelInterface):
             image_path=data_model[ImageFrameDatasetSchema.image_path.name],
             image_height=data_model[ImageFrameDatasetSchema.image_height.name],
             image_width=data_model[ImageFrameDatasetSchema.image_width.name],
-            cam2img=np.asarray(
-                data_model[ImageFrameDatasetSchema.cam2img.name], dtype=np.float64
-            ),
+            cam2img=np.asarray(data_model[ImageFrameDatasetSchema.cam2img.name], dtype=np.float64),
             image_distortion_coefficients=list(
                 data_model[ImageFrameDatasetSchema.image_distortion_coefficients.name]
             ),
-            image_distortion_model=data_model[
-                ImageFrameDatasetSchema.image_distortion_model.name
-            ],
+            image_distortion_model=data_model[ImageFrameDatasetSchema.image_distortion_model.name],
             image_sensor_to_ego_pose_matrix=np.asarray(
                 data_model[ImageFrameDatasetSchema.image_sensor_to_ego_pose_matrix.name],
                 dtype=np.float64,
@@ -242,8 +262,6 @@ class ImageFrameDataModel(BaseModel, DataModelInterface):
                 np.asarray(raw_lidar2cam, dtype=np.float64) if raw_lidar2cam is not None else None
             ),
             lidar2img=(
-                np.asarray(raw_lidar2img, dtype=np.float64)
-                if raw_lidar2img is not None
-                else None
+                np.asarray(raw_lidar2img, dtype=np.float64) if raw_lidar2img is not None else None
             ),
         )

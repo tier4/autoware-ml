@@ -30,7 +30,7 @@ class Box3DMerger(Box3DPipeline):
         Initialize Box3DMerger.
 
         Args:
-          target_classes: Mapping of the target classes to the list of source classes.
+          target_labels: Mapping of the target labels to the list of source labels.
           proximity_distance_threshold: Proximity distance threshold to check if two boxes are
             close to each other.
           taxonomy: Taxonomy that maps a label name to its class index.
@@ -179,7 +179,7 @@ class Box3DMerger(Box3DPipeline):
         Returns:
           MappingProxyType[str, Sequence[Tuple[int, int]]]: Mapping of target labels to matched pairs of box indices.
         """
-        # {target_class: [(source_box_index, source_box_index), ...]}
+        # {target_label: [(source_box_index, source_box_index), ...]}
         matched_pairs = {target_label: [] for target_label in self.target_labels.keys()}
         for target_label, source_labels in self.target_labels.items():
             pairs = []
@@ -328,7 +328,7 @@ class Box3DExtendLongerMerger(Box3DMerger):
         Initialize Box3DExtendLongerMerger.
 
         Args:
-          target_labels: Mapping of the target classes to the list of source classes.
+          target_labels: Mapping of the target labels to the list of source labels.
           proximity_distance_threshold: Proximity distance threshold to check if two boxes are
             close to each other.
           taxonomy: Taxonomy that maps a label name to its class index.
