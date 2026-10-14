@@ -21,7 +21,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from autoware_ml.utils.onnx_modifiers import AttentionScaleToDivModifier, TopKConstantKModifier
+from autoware_ml.utils.onnx_modifiers import (
+    AttentionScaleToDivModifier,
+    CenterPointBoxEncodingModifier,
+    OutputChannelPermuteModifier,
+    TopKConstantKModifier,
+)
 
 onnx = pytest.importorskip("onnx")
 from onnx import TensorProto, helper, numpy_helper  # noqa: E402
@@ -85,6 +90,42 @@ def _write_attention_scale_graph(path: Path) -> None:
     onnx.save_model(model, path.as_posix())
 
 
+def _write_centerpoint_head_graph(path: Path) -> None:
+    """Write a stand-in for the exported CenterPoint head outputs."""
+    dim_features = helper.make_tensor_value_info("dim_features", TensorProto.FLOAT, [1, 3, 2, 2])
+    rot_features = helper.make_tensor_value_info("rot_features", TensorProto.FLOAT, [1, 2, 2, 2])
+    dim_output = helper.make_tensor_value_info("dim", TensorProto.FLOAT, [1, 3, 2, 2])
+    rot_output = helper.make_tensor_value_info("rot", TensorProto.FLOAT, [1, 2, 2, 2])
+    nodes = [
+        helper.make_node(
+            "Identity", inputs=["dim_features"], outputs=["dim"], name="/bbox_head/dim/Identity"
+        ),
+        helper.make_node(
+            "Identity", inputs=["rot_features"], outputs=["rot"], name="/bbox_head/rot/Identity"
+        ),
+    ]
+    graph = helper.make_graph(
+        nodes=nodes,
+        name="centerpoint_head_graph",
+        inputs=[dim_features, rot_features],
+        outputs=[dim_output, rot_output],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    onnx.checker.check_model(model)
+    onnx.save_model(model, path.as_posix())
+
+
+def _run_centerpoint_head_graph(
+    path: Path, dim_features: np.ndarray, rot_features: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    onnxruntime = pytest.importorskip("onnxruntime")
+    session = onnxruntime.InferenceSession(path.as_posix(), providers=["CPUExecutionProvider"])
+    dim, rot = session.run(
+        ["dim", "rot"], {"dim_features": dim_features, "rot_features": rot_features}
+    )
+    return dim, rot
+
+
 def _last_dim(value_info: onnx.ValueInfoProto) -> int:
     return value_info.type.tensor_type.shape.dim[-1].dim_value
 
@@ -138,3 +179,105 @@ def test_attention_scale_to_div_modifier_rewrites_attention_mul(tmp_path: Path) 
         numpy_helper.to_array(initializers["/bbox_head/decoder.0/self_attn/Mul_Divisor"]),
         np.array(4.0, dtype=np.float32),
     )
+
+
+def test_centerpoint_box_encoding_modifier_swaps_dim_and_rot_channels(tmp_path: Path) -> None:
+    onnx_path = tmp_path / "centerpoint_head.onnx"
+    _write_centerpoint_head_graph(onnx_path)
+    dim_features = np.arange(12, dtype=np.float32).reshape(1, 3, 2, 2)
+    rot_features = np.arange(8, dtype=np.float32).reshape(1, 2, 2, 2)
+
+    modified_path = CenterPointBoxEncodingModifier().modify(onnx_path)
+
+    assert modified_path == onnx_path
+    onnx.checker.check_model(onnx.load(modified_path.as_posix()))
+
+    dim, rot = _run_centerpoint_head_graph(modified_path, dim_features, rot_features)
+    # Length and width swap; height stays last. Sine and cosine swap.
+    np.testing.assert_array_equal(dim, dim_features[:, [1, 0, 2]])
+    np.testing.assert_array_equal(rot, rot_features[:, [1, 0]])
+
+
+def test_centerpoint_box_encoding_modifier_preserves_output_interface(tmp_path: Path) -> None:
+    onnx_path = tmp_path / "centerpoint_head.onnx"
+    _write_centerpoint_head_graph(onnx_path)
+
+    model = onnx.load(CenterPointBoxEncodingModifier().modify(onnx_path).as_posix())
+
+    outputs = {output.name: output for output in model.graph.output}
+    assert set(outputs) == {"dim", "rot"}
+    assert [dim.dim_value for dim in outputs["dim"].type.tensor_type.shape.dim] == [1, 3, 2, 2]
+    assert [dim.dim_value for dim in outputs["rot"].type.tensor_type.shape.dim] == [1, 2, 2, 2]
+
+    nodes_by_name = {node.name: node for node in model.graph.node}
+    assert nodes_by_name["/bbox_head/dim/Identity"].output[0] == "dim_PrePermute"
+    dim_gather = nodes_by_name["dim_ChannelPermute"]
+    assert dim_gather.op_type == "Gather"
+    assert list(dim_gather.input) == ["dim_PrePermute", "dim_PermuteIndices"]
+
+    initializers = {initializer.name: initializer for initializer in model.graph.initializer}
+    np.testing.assert_array_equal(
+        numpy_helper.to_array(initializers["dim_PermuteIndices"]),
+        np.array([1, 0, 2], dtype=np.int64),
+    )
+    np.testing.assert_array_equal(
+        numpy_helper.to_array(initializers["rot_PermuteIndices"]),
+        np.array([1, 0], dtype=np.int64),
+    )
+
+
+def test_centerpoint_box_encoding_modifier_is_idempotent(tmp_path: Path) -> None:
+    onnx_path = tmp_path / "centerpoint_head.onnx"
+    _write_centerpoint_head_graph(onnx_path)
+    dim_features = np.arange(12, dtype=np.float32).reshape(1, 3, 2, 2)
+    rot_features = np.arange(8, dtype=np.float32).reshape(1, 2, 2, 2)
+
+    CenterPointBoxEncodingModifier().modify(onnx_path)
+    CenterPointBoxEncodingModifier().modify(onnx_path)
+
+    dim, rot = _run_centerpoint_head_graph(onnx_path, dim_features, rot_features)
+    np.testing.assert_array_equal(dim, dim_features[:, [1, 0, 2]])
+    np.testing.assert_array_equal(rot, rot_features[:, [1, 0]])
+
+
+def test_centerpoint_box_encoding_modifier_writes_to_output_path(tmp_path: Path) -> None:
+    onnx_path = tmp_path / "centerpoint_head.onnx"
+    destination_path = tmp_path / "centerpoint_head_swapped.onnx"
+    _write_centerpoint_head_graph(onnx_path)
+    dim_features = np.arange(12, dtype=np.float32).reshape(1, 3, 2, 2)
+    rot_features = np.arange(8, dtype=np.float32).reshape(1, 2, 2, 2)
+
+    modified_path = CenterPointBoxEncodingModifier(output_path=destination_path).modify(onnx_path)
+
+    assert modified_path == destination_path
+    dim, _rot = _run_centerpoint_head_graph(onnx_path, dim_features, rot_features)
+    np.testing.assert_array_equal(dim, dim_features)
+
+
+def test_output_channel_permute_modifier_rejects_mismatched_channel_count(tmp_path: Path) -> None:
+    onnx_path = tmp_path / "centerpoint_head.onnx"
+    _write_centerpoint_head_graph(onnx_path)
+
+    with pytest.raises(ValueError, match="does not match"):
+        OutputChannelPermuteModifier(output_name="rot", permutation=(1, 0, 2)).modify(onnx_path)
+
+
+def test_output_channel_permute_modifier_rejects_invalid_permutation(tmp_path: Path) -> None:
+    onnx_path = tmp_path / "centerpoint_head.onnx"
+    _write_centerpoint_head_graph(onnx_path)
+
+    with pytest.raises(ValueError, match="must be a permutation"):
+        OutputChannelPermuteModifier(output_name="dim", permutation=(1, 1, 2)).modify(onnx_path)
+
+
+def test_output_channel_permute_modifier_missing_output_is_optional(tmp_path: Path) -> None:
+    onnx_path = tmp_path / "centerpoint_head.onnx"
+    _write_centerpoint_head_graph(onnx_path)
+
+    with pytest.raises(RuntimeError, match="Could not find graph output 'vel'"):
+        OutputChannelPermuteModifier(output_name="vel", permutation=(1, 0)).modify(onnx_path)
+
+    modified_path = OutputChannelPermuteModifier(
+        output_name="vel", permutation=(1, 0), fail_if_missing=False
+    ).modify(onnx_path)
+    assert modified_path == onnx_path

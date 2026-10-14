@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -221,6 +222,175 @@ class AttentionScaleToDivModifier:
         destination_path = Path(self.output_path) if self.output_path is not None else source_path
         onnx.save_model(model, destination_path.as_posix())
         return destination_path
+
+    __call__ = modify
+
+
+@dataclass(slots=True)
+class OutputChannelPermuteModifier:
+    """Reorder the channels of a named graph output.
+
+    The permutation is applied by renaming the tensor produced by the original
+    node and inserting a ``Gather`` node that emits the graph output under its
+    original name, so the exported interface (name, shape, dtype) is unchanged
+    and only the channel order differs.
+    """
+
+    output_name: str
+    permutation: Sequence[int]
+    axis: int = 1
+    fail_if_missing: bool = True
+    output_path: str | Path | None = None
+
+    def _validate_permutation(self) -> tuple[int, ...]:
+        permutation = tuple(int(index) for index in self.permutation)
+        if sorted(permutation) != list(range(len(permutation))):
+            raise ValueError(
+                f"Permutation for output '{self.output_name}' must be a permutation of "
+                f"range({len(permutation)}), got {list(self.permutation)}."
+            )
+        return permutation
+
+    def _graph_output(self, graph: Any) -> Any | None:
+        for output in graph.output:
+            if output.name == self.output_name:
+                return output
+        return None
+
+    def _check_channel_count(self, output: Any, permutation: tuple[int, ...]) -> None:
+        """Reject a permutation that does not match a statically known channel count."""
+        tensor_type = output.type.tensor_type
+        if not tensor_type.HasField("shape"):
+            return
+        dims = tensor_type.shape.dim
+        axis = self.axis if self.axis >= 0 else len(dims) + self.axis
+        if not 0 <= axis < len(dims):
+            raise ValueError(
+                f"Axis {self.axis} is out of range for output '{self.output_name}' "
+                f"with rank {len(dims)}."
+            )
+        channels = dims[axis].dim_value
+        if channels and channels != len(permutation):
+            raise ValueError(
+                f"Output '{self.output_name}' has {channels} channels on axis {axis}, "
+                f"which does not match the {len(permutation)}-element permutation "
+                f"{list(permutation)}."
+            )
+
+    def modify(self, onnx_path: str | Path) -> Path:
+        """Insert the channel permutation in front of the target graph output."""
+        np, onnx, TensorProto, helper, numpy_helper = _import_onnx_tooling()
+
+        permutation = self._validate_permutation()
+        source_path = Path(onnx_path)
+        model = onnx.load(source_path.as_posix())
+        graph = model.graph
+        destination_path = Path(self.output_path) if self.output_path is not None else source_path
+
+        output = self._graph_output(graph)
+        if output is None:
+            if self.fail_if_missing:
+                raise RuntimeError(
+                    f"Could not find graph output '{self.output_name}' in exported ONNX graph."
+                )
+            onnx.save_model(model, destination_path.as_posix())
+            return destination_path
+
+        self._check_channel_count(output, permutation)
+
+        gather_name = f"{self.output_name}_ChannelPermute"
+        producers = [node for node in graph.node if self.output_name in node.output]
+        if not producers:
+            raise RuntimeError(
+                f"Graph output '{self.output_name}' is not produced by any node; "
+                "it cannot be permuted."
+            )
+        if any(node.name == gather_name for node in producers):
+            # The permutation is already present; re-applying it would undo it.
+            onnx.save_model(model, destination_path.as_posix())
+            return destination_path
+
+        source_name = f"{self.output_name}_PrePermute"
+        indices_name = f"{self.output_name}_PermuteIndices"
+
+        # Rewire the original producer and every internal consumer onto the
+        # pre-permute tensor so only the exported output sees the new order.
+        for node in graph.node:
+            for index, node_output in enumerate(node.output):
+                if node_output == self.output_name:
+                    node.output[index] = source_name
+            for index, node_input in enumerate(node.input):
+                if node_input == self.output_name:
+                    node.input[index] = source_name
+
+        stale_initializer_indices = [
+            index
+            for index, initializer in enumerate(graph.initializer)
+            if initializer.name == indices_name
+        ]
+        for index in reversed(stale_initializer_indices):
+            del graph.initializer[index]
+        graph.initializer.append(
+            numpy_helper.from_array(np.array(permutation, dtype=np.int64), name=indices_name)
+        )
+        graph.value_info.append(
+            helper.make_tensor_value_info(indices_name, TensorProto.INT64, [len(permutation)])
+        )
+
+        pre_permute_info = graph.value_info.add()
+        pre_permute_info.CopyFrom(output)
+        pre_permute_info.name = source_name
+
+        # The producer precedes this node, so appending keeps the graph topologically sorted.
+        graph.node.append(
+            helper.make_node(
+                "Gather",
+                inputs=[source_name, indices_name],
+                outputs=[self.output_name],
+                name=gather_name,
+                axis=self.axis,
+            )
+        )
+
+        onnx.save_model(model, destination_path.as_posix())
+        return destination_path
+
+    __call__ = modify
+
+
+@dataclass(slots=True)
+class CenterPointBoxEncodingModifier:
+    """Swap the CenterPoint box-encoding channels the deployed runtime expects.
+
+    The training head encodes ``dim`` as ``(log length, log width, log height)``
+    and ``rot`` as ``(sin(theta), cos(theta))``. Runtimes that expect the
+    width-major dimension order and the cosine-major rotation order need those
+    channel pairs swapped, which this modifier does in the ONNX graph so the
+    trained weights stay untouched.
+    """
+
+    dim_output_name: str = "dim"
+    rot_output_name: str = "rot"
+    fail_if_missing: bool = True
+    output_path: str | Path | None = None
+
+    def modify(self, onnx_path: str | Path) -> Path:
+        """Swap length/width in ``dim`` and sin/cos in ``rot``."""
+        destination_path = (
+            Path(self.output_path) if self.output_path is not None else Path(onnx_path)
+        )
+        patched_path = OutputChannelPermuteModifier(
+            output_name=self.dim_output_name,
+            permutation=(1, 0, 2),
+            fail_if_missing=self.fail_if_missing,
+            output_path=destination_path,
+        ).modify(onnx_path)
+        return OutputChannelPermuteModifier(
+            output_name=self.rot_output_name,
+            permutation=(1, 0),
+            fail_if_missing=self.fail_if_missing,
+            output_path=destination_path,
+        ).modify(patched_path)
 
     __call__ = modify
 
