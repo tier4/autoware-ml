@@ -50,6 +50,15 @@ class VoxelsData(NamedTuple):
     point_voxel_indices: Int64[torch.Tensor, " N"]
     num_dropped_voxels: Int64[torch.Tensor, ""]
 
+    def concat_batch_indices_coords(self) -> Int32[torch.Tensor, "M 4"]:
+        """Concatenate batch indices with voxel coordinates to form a 4D tensor.
+
+        Returns:
+            Int32[torch.Tensor, "M 4"]: Concatenated tensor of shape (M, 4) where the first
+                column is the batch index and the next three columns are the voxel coordinates.
+        """
+        return torch.cat([self.batch_indices.unsqueeze(1), self.coords], dim=1)  # (M, 4)
+
     def batch_zyx_coords(self) -> Int32[torch.Tensor, "M 4"]:
         """
         Give every voxel its sample index followed by its coordinates in (z, y, x) order.
