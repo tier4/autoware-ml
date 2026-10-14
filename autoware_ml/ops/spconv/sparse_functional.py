@@ -23,7 +23,7 @@ from jaxtyping import UInt32
 from cumm import tensorview as tv
 from spconv import constants
 from spconv.algo import CONV_CPP
-from spconv.constants import SPCONV_DO_SORT, SPCONV_USE_DIRECT_TABLE, AllocKeys
+from spconv.constants import SPCONV_DO_SORT, AllocKeys
 from spconv.core import ConvAlgo
 from spconv.core_cc.csrc.sparse.all import SpconvOps
 from spconv.core_cc.csrc.sparse.convops.spops import ConvGemmOps
@@ -483,7 +483,17 @@ class GetIndicePairsImplicitGemm(Function):
         del ctx
 
         num_out_act_bound: int = -1
-        direct_table: bool = SPCONV_USE_DIRECT_TABLE
+        # Force the thrust-unique path instead of spconv's direct-table path. The
+        # direct-table path reads the active-voxel count back through
+        # ``tv::Tensor::cpu(ctx)`` (cumm tensor.h), which drops the CUDA stream and
+        # copies on the legacy default stream. PyTorch pool streams are non-blocking,
+        # so the count can be read before the counting kernel finishes: spconv then
+        # raises "Your points vanished" from C++ and the late device-to-host copy
+        # lands in freed memory, aborting the process with glibc heap corruption.
+        # Deterministically reproduced (and fixed by this flag) during BEVFusion
+        # ONNX export; the thrust path synchronizes correctly.
+        # It's only used in Pytorch tracing, and do not affect the plugin.
+        direct_table: bool = False
         do_sort = SPCONV_DO_SORT
 
         stream = _current_stream_for(indices)
