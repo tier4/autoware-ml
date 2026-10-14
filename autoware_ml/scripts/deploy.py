@@ -12,72 +12,103 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Deployment entrypoint for exporting models to ONNX and TensorRT."""
+"""Deployment entrypoint for Autoware-ML models.
+
+This script wires Hydra configuration, Lightning runtime setup, MLflow
+integration, and model deployment execution.
+"""
 
 import logging
-import os
-from pathlib import Path
+from types import MappingProxyType
 
 import hydra
-import lightning as L
-import torch
+from hydra.core.hydra_config import HydraConfig
 from mlflow.entities import RunStatus
 from mlflow.tracking import MlflowClient
 from omegaconf import DictConfig, OmegaConf
+from pathlib import Path
+import torch
 
-from autoware_ml.utils.checkpoints import apply_matching_weights
+from autoware_ml.builders.database_builder import build_datamodule
+from autoware_ml.builders.mlflow_builder import build_mlflow_run_context
+from autoware_ml.builders.model_builder import (
+    build_model,
+    build_data_preprocessor,
+    build_weight_checkpoint_paths,
+)
+from autoware_ml.builders.logger_builder import build_trainer_logger
+from autoware_ml.datamodule.data_module import DataModule
+from autoware_ml.deployment.deployment_export import DeploymentExport
+from autoware_ml.models.module_base_model import ModuleBaseModel
+from autoware_ml.utils.mlflow_helpers import resolve_deploy_lineage, log_config_params
+from autoware_ml.utils.onnx_meta import release_to_model_version
 from autoware_ml.utils.deploy import (
-    build_tensorrt_engine,
-    export_to_onnx,
-    merge_module_onnx_cfg,
-    modify_onnx_graph,
-    resolve_export_specs,
-    resolve_output_paths,
-    should_export_stage,
-    should_modify_graph,
-    supports_export_stage,
     validate_cuda_available,
-)
-from autoware_ml.utils.onnx_precision import (
-    convert_onnx_precision,
-    resolve_onnx_precision,
-    should_convert_precision,
-)
-from autoware_ml.utils.mlflow_helpers import (
-    AUTOWARE_ML_RUN_ID_ENV,
-    build_run_metadata,
-    get_git_sha,
-    get_user_config_name,
-    load_run_context,
-    log_config_params,
-    prepare_run_context,
-    resolve_deploy_lineage,
-    should_enable_logger,
-    write_run_config_artifacts,
-    write_run_metadata,
-)
-from autoware_ml.utils.onnx_meta import release_to_model_version, stamp_onnx_meta
-from autoware_ml.utils.onnx_precision import (
-    validate_module_onnx_precision,
 )
 from autoware_ml.utils.runtime import (
     configure_torch_runtime,
+    restrict_console_logging_to_rank_zero,
     get_config_path,
     log_configuration,
-    resolve_work_dir,
+    log_hyperparameters,
+    set_seed,
 )
 
 logger = logging.getLogger(__name__)
-
 _CONFIG_PATH = get_config_path()
+CONFIG_NAME_PREFIX = "tasks/"
+
+
+def deploy(
+    deploy_cfg: DictConfig,
+    output_dir: Path,
+    datamodule: DataModule,
+    model: ModuleBaseModel,
+    config_name: str,
+    release: str | None,
+    tracker: str | None = None,
+    run_id: str | None = None,
+) -> None:
+    """Deploy the trained model for inference.
+
+    Args:
+        deploy_cfg: Hydra configuration for deployment.
+        output_dir: Directory to save the exported models.
+        datamodule: Data module providing the example batch used for tracing.
+        model: The trained model to be deployed.
+        config_name: User-facing config name stamped into the ONNX metadata.
+        release: ``vMAJOR.MINOR.PATCH`` stamped into the ONNX metadata, or ``None``
+            for an unversioned export.
+        tracker: Active experiment tracker name recorded in the stamp, if any.
+        run_id: Deploy run id recorded in the stamp, if any.
+    """
+    deployment_exporter = DeploymentExport(
+        deploy_cfg=deploy_cfg,
+        output_dir=output_dir,
+        datamodule=datamodule,
+        model=model,
+        config_name=config_name,
+        release=release,
+        tracker=tracker,
+        run_id=run_id,
+    )
+    export_outputs = deployment_exporter.export()
+    logger.info("Deployment completed successfully.")
+    for path in export_outputs.onnx_exported_paths:
+        if path.exists():
+            logger.info("ONNX module: %s", path)
+    for path in export_outputs.tensorrt_exported_paths:
+        if path.exists():
+            logger.info("TensorRT engine: %s", path)
 
 
 @hydra.main(version_base=None, config_path=_CONFIG_PATH)
-def main(cfg: DictConfig) -> None:
-    """Export a configured model checkpoint for deployment."""
-    weights_arg = cfg.get("weights", None)
-    if weights_arg is None:
-        raise ValueError("--weights <path> (repeatable) must be specified.")
+def main(cfg: DictConfig):
+    """Main training function.
+
+    Args:
+        cfg: Hydra configuration
+    """
     if "deploy" not in cfg:
         raise ValueError("Config must define a 'deploy' section.")
 
@@ -91,233 +122,118 @@ def main(cfg: DictConfig) -> None:
         )
 
     log_configuration(cfg)
-    work_dir = resolve_work_dir()
-    config_name = get_user_config_name()
+    config_name = HydraConfig.get().job.config_name
+    if config_name is None:
+        raise ValueError("Hydra config name is not available.")
+    config_name = config_name.removeprefix(CONFIG_NAME_PREFIX)
 
-    weight_paths = (
-        [Path(weights_arg)]
-        if isinstance(weights_arg, str)
-        else [Path(path) for path in weights_arg]
+    # Configure weights and checkpoint paths
+    weights_path, checkpoint_path = build_weight_checkpoint_paths(cfg)
+
+    # Configure experiment name, parent_run_id and source checkpoints for MLflow
+    experiment_name, parent_run_id, source_checkpoints = resolve_deploy_lineage(
+        config_name,
+        weights_path,
     )
-    checkpoint_path = weight_paths[-1]
-    for path in weight_paths:
-        if not path.exists():
-            raise FileNotFoundError(f"Weights file not found: {path}")
+    source_run_ids = [
+        source["run_id"] for source in source_checkpoints if source["run_id"] is not None
+    ]
+    logger_enabled = cfg.get("logger") is not None
+    run_context = build_mlflow_run_context(
+        cfg,
+        stage="deploy",
+        experiment_name=experiment_name,
+        config_name=config_name,
+        experiment_uid=cfg.experiment_uid,
+        logger_enabled=logger_enabled,
+        parent_run_id=parent_run_id,
+        extra_tags=MappingProxyType(
+            {
+                "checkpoint_path": str(checkpoint_path),
+                "source_run_id": parent_run_id or "",
+                "source_checkpoint_count": str(len(source_checkpoints)),
+                "source_run_ids": ",".join(source_run_ids),
+            }
+        ),
+    )
 
-    logger_enabled = should_enable_logger(cfg)
-    mlflow_client: MlflowClient | None = None
-    deploy_run_id: str | None = None
-    experiment_name: str | None = None
-    parent_run_id: str | None = None
-    source_checkpoints: list[dict[str, str | None]] = []
-
-    if logger_enabled:
-        experiment_name, parent_run_id, source_checkpoints = resolve_deploy_lineage(
-            config_name,
-            weight_paths,
-        )
-        source_run_ids = [
-            source["run_id"] for source in source_checkpoints if source["run_id"] is not None
-        ]
-        pre_created_run_id = os.environ.get(AUTOWARE_ML_RUN_ID_ENV)
-        if pre_created_run_id is not None:
-            run_context = load_run_context(cfg.logger.tracking_uri, pre_created_run_id)
-            if work_dir != run_context.hydra_dir:
-                raise RuntimeError(
-                    f"Hydra work directory '{work_dir}' does not match the pre-created MLflow "
-                    f"run directory '{run_context.hydra_dir}'."
-                )
-        else:
-            run_context = prepare_run_context(
-                cfg.logger.tracking_uri,
-                config_name,
-                hydra_dir=work_dir,
-                stage="deploy",
-                parent_run_id=parent_run_id,
-                experiment_name=experiment_name,
-                extra_tags={
-                    "checkpoint_path": str(checkpoint_path),
-                    "source_run_id": parent_run_id or "",
-                    "source_checkpoint_count": str(len(source_checkpoints)),
-                    "source_run_ids": ",".join(source_run_ids),
-                },
-            )
+    if run_context is not None:
         mlflow_client = MlflowClient(tracking_uri=run_context.tracking_uri)
-        deploy_run_id = run_context.run_id
-        experiment_name = run_context.experiment_name
     else:
-        run_context = None
+        mlflow_client = None
 
-    try:
-        if run_context is not None:
-            write_run_config_artifacts(cfg, run_context.artifact_dir)
-            write_run_metadata(
-                run_context.artifact_dir,
-                build_run_metadata(
-                    run_context,
-                    config_name,
-                    run_context.hydra_dir,
-                    "deploy",
-                    extra_metadata={
-                        "source_run_id": parent_run_id,
-                        "checkpoint_path": str(checkpoint_path),
-                        "source_checkpoints": source_checkpoints,
-                    },
-                ),
-            )
+    validate_cuda_available()
+    configure_torch_runtime()
+    restrict_console_logging_to_rank_zero()
+    set_seed(cfg)
 
-        validate_cuda_available()
-        configure_torch_runtime()
+    device = torch.device("cuda")
+    logger.info("Using device: %s", device)
+    logger.info("CUDA device: %s", torch.cuda.get_device_name(0))
 
-        device = torch.device("cuda")
-        logger.info("Using device: %s", device)
-        logger.info("CUDA device: %s", torch.cuda.get_device_name(0))
+    output_dir = cfg.get("experiment_run_dir", None)
+    if run_context is not None:
+        output_dir = str(run_context.exports_dir)
 
-        configured_output_dir = cfg.get("output_dir", None)
-        if run_context is not None and configured_output_dir is None:
-            configured_output_dir = str(run_context.exports_dir)
-        output_dir, _, _ = resolve_output_paths(
-            checkpoint_path,
-            cfg.get("output_name", None),
-            configured_output_dir,
-        )
-        if run_context is not None and not output_dir.resolve().is_relative_to(
-            run_context.artifact_dir
-        ):
-            raise ValueError(
-                "When MLflow logging is enabled, deployment outputs must stay inside the MLflow "
-                f"artifact directory '{run_context.artifact_dir}'. "
-                "Leave output_dir unset to use the default exports directory."
-            )
-        logger.info("Output directory: %s", output_dir)
-
-        deploy_cfg = cfg.deploy
-        if mlflow_client is not None and deploy_run_id is not None:
-            log_config_params(
-                mlflow_client,
-                deploy_run_id,
-                OmegaConf.to_container(cfg, resolve=True),
-            )
-
-        logger.info("Instantiating datamodule...")
-        datamodule: L.LightningDataModule = hydra.utils.instantiate(cfg.datamodule)
-
-        logger.info("Instantiating model...")
-        model: L.LightningModule = hydra.utils.instantiate(cfg.model)
-        model.set_data_preprocessing(hydra.utils.instantiate(cfg.data_preprocessing))
-
-        logger.info(
-            "Loading matching weights from %d checkpoint(s): %s", len(weight_paths), weight_paths
-        )
-        apply_matching_weights(
-            model,
-            weight_paths,
-            map_location=device,
-            device=device,
-            set_eval=True,
-            enforce_full_coverage=True,
-            logger=logger,
+    if output_dir is None:
+        raise ValueError(
+            "Output directory must be specified in the configuration or obtained from MLflow run context."
         )
 
-        export_git_sha = get_git_sha()
-        logger.info("Preparing export inputs...")
-        export_specs = resolve_export_specs(datamodule, model, device)
-        onnx_exported_paths: list[Path] = []
-        tensorrt_exported_paths: list[Path] = []
+    logger.info("Output directory for deployment: %s", output_dir)
 
-        for module_name, export_spec in export_specs.items():
-            module_onnx_cfg = merge_module_onnx_cfg(deploy_cfg.onnx, module_name)
-            module_onnx_path = output_dir / f"{module_name}.onnx"
-            module_engine_path = output_dir / f"{module_name}.engine"
+    # Build datamodule
+    datamodule = build_datamodule(cfg)
 
-            if should_export_stage(deploy_cfg.onnx):
-                if not supports_export_stage(export_spec, "onnx"):
-                    raise RuntimeError(
-                        f"Module '{module_name}' does not support ONNX export but "
-                        "deploy.onnx.enabled=true. Disable the stage or use a supported model."
-                    )
-                else:
-                    validate_module_onnx_precision(export_spec.module, module_onnx_cfg)
-                    export_to_onnx(
-                        export_spec.module,
-                        export_spec.args,
-                        module_onnx_cfg,
-                        export_spec.input_param_names,
-                        export_spec.output_names,
-                        export_spec.dynamic_axes,
-                        module_onnx_path,
-                    )
-                    onnx_exported_paths.append(module_onnx_path)
+    # Build model
+    data_preprocessor = build_data_preprocessor(cfg)
+    model = build_model(
+        cfg,
+        data_preprocessor=data_preprocessor,
+        weights_path=weights_path,
+        resume_checkpoint_path=None,
+        device=device,
+        set_eval=True,
+        enforce_full_coverage=True,
+    )
 
-                    modify_graph_cfg = module_onnx_cfg.get("modify_graph", None)
-                    if should_modify_graph(modify_graph_cfg):
-                        module_onnx_path = modify_onnx_graph(module_onnx_path, modify_graph_cfg)
+    if mlflow_client is not None and run_context is not None:
+        log_config_params(
+            mlflow_client,
+            run_context.run_id,
+            OmegaConf.to_container(cfg, resolve=True),
+        )
+    else:
+        # Build trainer logger
+        trainer_logger = build_trainer_logger(
+            cfg,
+            ml_flow_run_context=run_context,
+            stage="deploy",
+            config_name=config_name,
+            logger_enabled=logger_enabled,
+            extra_metadata=MappingProxyType(
+                {
+                    "source_run_id": parent_run_id,
+                    "checkpoint_path": str(checkpoint_path),
+                    "source_checkpoints": source_checkpoints,
+                }
+            ),
+        )
+        log_hyperparameters(cfg, trainer_logger)
 
-                    # Precision conversion runs last so graph modifiers keep operating on the
-                    # fp32 export they were written against.
-                    if should_convert_precision(module_onnx_cfg):
-                        module_onnx_path = convert_onnx_precision(
-                            module_onnx_path, resolve_onnx_precision(module_onnx_cfg)
-                        )
-                    metainfo_cfg = module_onnx_cfg.get("metainfo", None)
-                    stamp_onnx_meta(
-                        module_onnx_path,
-                        config_name=config_name,
-                        module=module_name,
-                        release=release,
-                        export_git_sha=export_git_sha,
-                        metainfo=(
-                            OmegaConf.to_container(metainfo_cfg, resolve=True)
-                            if metainfo_cfg is not None
-                            else None
-                        ),
-                        tracker="mlflow" if mlflow_client is not None else None,
-                        run_id=deploy_run_id,
-                    )
-                    logger.info(
-                        "Stamped %s metadata: release=%s, commit=%s",
-                        module_name,
-                        release or "unversioned",
-                        export_git_sha,
-                    )
+    deploy(
+        deploy_cfg=cfg.deploy,
+        output_dir=Path(output_dir),
+        datamodule=datamodule,
+        model=model,
+        config_name=config_name,
+        release=release,
+        tracker="mlflow" if run_context is not None else None,
+        run_id=run_context.run_id if run_context is not None else None,
+    )
 
-            if should_export_stage(deploy_cfg.tensorrt):
-                if not supports_export_stage(export_spec, "tensorrt"):
-                    raise RuntimeError(
-                        f"Module '{module_name}' does not support TensorRT export but "
-                        "deploy.tensorrt.enabled=true. Disable the stage or use a supported model."
-                    )
-                else:
-                    if not module_onnx_path.exists():
-                        raise FileNotFoundError(
-                            f"ONNX file not found: {module_onnx_path}. "
-                            "TensorRT export requires a valid ONNX model."
-                        )
-                    build_tensorrt_engine(module_onnx_path, deploy_cfg, module_engine_path)
-                    tensorrt_exported_paths.append(module_engine_path)
-
-    except Exception:
-        if mlflow_client is not None and deploy_run_id is not None:
-            mlflow_client.set_terminated(
-                deploy_run_id,
-                status=RunStatus.to_string(RunStatus.FAILED),
-            )
-        raise
-
-    if mlflow_client is not None and deploy_run_id is not None:
+    if mlflow_client is not None and run_context is not None:
         mlflow_client.set_terminated(
-            deploy_run_id,
+            run_context.run_id,
             status=RunStatus.to_string(RunStatus.FINISHED),
         )
-
-    logger.info("Deployment completed successfully.")
-    for path in onnx_exported_paths:
-        if path.exists():
-            logger.info("ONNX module: %s", path)
-    for path in tensorrt_exported_paths:
-        if path.exists():
-            logger.info("TensorRT engine: %s", path)
-
-
-if __name__ == "__main__":
-    main()
