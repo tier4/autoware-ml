@@ -226,6 +226,59 @@ class AttentionScaleToDivModifier:
 
 
 @dataclass(slots=True)
+class IdentityEliminationModifier:
+    """Remove Identity nodes by wiring their consumers to their input.
+
+    The torchscript exporter emits ``Identity(initializer)`` for BatchNorm and
+    LayerNorm parameters when ``do_constant_folding=False``. TensorRT folds
+    BatchNormalization into the preceding Conv only when its parameters are
+    direct initializers, so the aliases cost latency. Identity nodes whose
+    output is a graph output are kept so the exported output names stay stable.
+    """
+
+    output_path: str | Path | None = None
+
+    def modify(self, onnx_path: str | Path) -> Path:
+        """Drop Identity nodes and rewire their consumers to the Identity input.
+
+        Args:
+            onnx_path: Path of the exported ONNX model to clean up.
+
+        Returns:
+            Path of the saved model: ``output_path`` if set, else ``onnx_path``.
+        """
+        import onnx
+        import onnx_graphsurgeon as gs
+
+        source_path = Path(onnx_path)
+        model = onnx.load(source_path.as_posix())
+        graph = gs.import_onnx(model)
+        identities = [
+            node
+            for node in graph.nodes
+            if node.op == "Identity" and node.outputs[0] not in graph.outputs
+        ]
+        if not identities:
+            return source_path
+
+        for node in identities:
+            alias, source = node.outputs[0], node.inputs[0]
+            for consumer in list(alias.outputs):
+                consumer.inputs = [source if t is alias else t for t in consumer.inputs]
+            node.outputs.clear()
+            graph.nodes.remove(node)
+        stripped = gs.export_onnx(graph)
+        stripped.metadata_props.extend(model.metadata_props)
+        onnx.checker.check_model(stripped)
+
+        destination_path = Path(self.output_path) if self.output_path is not None else source_path
+        onnx.save_model(stripped, destination_path.as_posix())
+        return destination_path
+
+    __call__ = modify
+
+
+@dataclass(slots=True)
 class TransHeadTensorRTModifier:
     """Apply the TransHead ONNX graph patches needed for TensorRT deployment."""
 
@@ -239,11 +292,12 @@ class TransHeadTensorRTModifier:
         destination_path = (
             Path(self.output_path) if self.output_path is not None else Path(onnx_path)
         )
+        patched_path = IdentityEliminationModifier(output_path=destination_path).modify(onnx_path)
         patched_path = TopKConstantKModifier(
             k=self.k,
             node_name_substring=self.topk_node_name_substring,
             output_path=destination_path,
-        ).modify(onnx_path)
+        ).modify(patched_path)
         return AttentionScaleToDivModifier(
             node_name_substring=self.attention_node_name_substring,
             fail_if_no_match=False,

@@ -249,6 +249,74 @@ def test_transfusion_build_export_spec_prepares_modules_without_mutating_model()
     )
 
 
+_EXPORT_OUTPUT_NAMES = [
+    "dense_heatmap",
+    "query_heatmap_score",
+    "query_labels",
+    "heatmap",
+    "center",
+    "height",
+    "dim",
+    "rot",
+    "vel",
+]
+
+
+class _HeadExport(torch.nn.Module):
+    """Export wrapper returning the head outputs as a tuple, like the deploy modules."""
+
+    def __init__(self, head: TransFusionHead) -> None:
+        super().__init__()
+        self.head = head
+
+    def forward(self, bev: torch.Tensor) -> tuple[torch.Tensor, ...]:
+        return self.head(bev).export_tensors(_EXPORT_OUTPUT_NAMES)
+
+
+def test_transfusion_head_export_identity_elimination(tmp_path: Path) -> None:
+    onnxruntime = pytest.importorskip("onnxruntime")
+    from autoware_ml.utils.onnx_modifiers import IdentityEliminationModifier
+
+    head = _build_head().prepare_for_export()
+    torch.manual_seed(0)
+    bev = torch.randn(1, 32, 8, 8)
+    exported_path = tmp_path / "ptv3_det3d_head.onnx"
+    torch.onnx.export(
+        _HeadExport(head),
+        (bev,),
+        exported_path,
+        input_names=["bev"],
+        output_names=_EXPORT_OUTPUT_NAMES,
+        opset_version=17,
+        dynamo=False,
+        do_constant_folding=False,
+    )
+    exported = onnx.load(exported_path)
+    identities = [node for node in exported.graph.node if node.op_type == "Identity"]
+    assert identities, "the exporter is expected to alias the normalization parameters"
+
+    stripped_path = IdentityEliminationModifier(output_path=tmp_path / "stripped.onnx").modify(
+        exported_path
+    )
+    stripped = onnx.load(stripped_path)
+    assert not any(node.op_type == "Identity" for node in stripped.graph.node)
+    assert len(stripped.graph.node) == len(exported.graph.node) - len(identities)
+    assert [o.name for o in stripped.graph.output] == _EXPORT_OUTPUT_NAMES
+
+    def run(path: Path) -> list:
+        # Without optimizations onnxruntime runs both graphs node for node, so the
+        # outputs must match exactly; with them it would fuse Conv+BN only once.
+        options = onnxruntime.SessionOptions()
+        options.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_DISABLE_ALL
+        session = onnxruntime.InferenceSession(
+            path.as_posix(), options, providers=["CPUExecutionProvider"]
+        )
+        return session.run(None, {"bev": bev.numpy()})
+
+    for before, after in zip(run(exported_path), run(stripped_path)):
+        assert (before == after).all()
+
+
 def test_transfusion_bf16_export_emits_fusion_pattern(tmp_path: Path) -> None:
     head = _build_head(use_bf16_cross_attention=True).prepare_for_export()
     self_attention = head.decoder[0].self_attn

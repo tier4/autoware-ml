@@ -59,6 +59,8 @@ deploy:
     do_constant_folding: false
     modules:
       ptv3_encoder:
+        modify_graph:
+          _target_: autoware_ml.utils.onnx_modifiers.IdentityEliminationModifier
         output_names: [point_feat_0, point_feat_1, point_feat_2, point_feat_3, point_feat_4]
         metainfo:
           point_cloud_range: ${point_cloud_range}
@@ -67,6 +69,8 @@ deploy:
           pooling_strides: ${model.encoder.stride}
           enc_channels: ${model.encoder.enc_channels}
       ptv3_seg3d_head:
+        modify_graph:
+          _target_: autoware_ml.utils.onnx_modifiers.IdentityEliminationModifier
         output_names: [pred_labels, pred_probs]
         metainfo:
           dec_depths: ${model.seg3d_head.dec_depths}
