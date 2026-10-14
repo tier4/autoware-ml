@@ -1,0 +1,6 @@
+# Lanelet map provider of the database a dataset reads. The resolver takes the root path of
+# that dataset, so a source over another database resolves the maps of its own corpus.
+_target_: autoware_ml.metrics.geometry.lanelet.LaneletMapProvider
+resolve_osm:
+  _target_: autoware_ml.metrics.geometry.lanelet.T4LaneletMapResolver
+  data_root: ${...database_root_path}

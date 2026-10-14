@@ -1,8 +1,9 @@
-_target_: autoware_ml.datamodule.base.DataLoaderConfig
+_target_: autoware_ml.datamodule.data_module.DataLoaderConfig
 _convert_: all
 
 pin_memory: true
 persistent_workers: true
 drop_last: false
 shuffle: false
-batch_size: 1
+batch_size: ${batch_size}
+num_workers: ${num_workers}

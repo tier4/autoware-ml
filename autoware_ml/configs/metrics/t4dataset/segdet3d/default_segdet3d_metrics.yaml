@@ -1,0 +1,4 @@
+# @package metric_params.segdet3d
+defaults:
+  - partial_detection_classes: default_coarse
+  - _self_
