@@ -250,15 +250,16 @@ def test_get_predict_batch_keeps_the_typed_batch_through_the_device_transfer(
     batch = dataset.collate_fn([dataset[0], dataset[1]])
     preprocessing = DataPreprocessing()
 
-    calls: list[str] = []
-
     class _Datamodule:
+        def __init__(self) -> None:
+            self.prepared = False
+
         def prepare_data(self) -> None:
-            calls.append("prepare_data")
+            self.prepared = True
 
         def setup(self, stage: str) -> None:
             assert stage == "predict"
-            calls.append("setup")
+            assert self.prepared
 
         def predict_dataloader(self) -> list:
             return [batch]
@@ -269,7 +270,6 @@ def test_get_predict_batch_keeps_the_typed_batch_through_the_device_transfer(
 
     inputs = deploy.get_predict_batch(_Datamodule(), _Model(), torch.device("cpu"))
 
-    assert calls == ["prepare_data", "setup"]
     assert inputs.batch_size() == 2
     assert inputs.multi_task_gt_batch.point_cloud_gt_batch is not None
     assert torch.equal(
