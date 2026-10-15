@@ -166,8 +166,13 @@ class _BEVFusionLidarExportWrapper(_BEVFusionExportWrapperBase):
 class _BEVFusionExportWrapper(_BEVFusionExportWrapperBase):
     """Wrap the camera-lidar main body export.
 
-    The wrapper exposes the exact tensor-only signature expected by the
-    deployment runtime and returns runtime-decodable detection outputs.
+    The wrapper exposes a tensor-only signature and returns runtime-decodable
+    detection outputs. The signature takes ``depth_maps`` where the previous
+    export took ``points``, ``lidar2image`` and ``img_aug_matrix``: the
+    ``autoware_bevfusion`` runtime node still binds the old inputs and does not
+    build depth maps, so it has to be updated before a camera-lidar model
+    exported here can be deployed. See ``docs/models/bevfusion.md``, section
+    "Runtime compatibility".
     """
 
     def forward(
@@ -320,7 +325,10 @@ class BEVFusionDetectionModel(ModuleBaseModel):
             multi_task_batch_inputs: ModelBatchInputs containing the voxelized lidar inputs.
             image_features: Precomputed image features.
             depth_maps: Precomputed depth maps.
-            bev_pool_result: Precomputed BEV-pool metadata for the camera branch.
+            geom_feats: Precomputed BEV-pool geometry features.
+            kept: Keep mask for pooled features.
+            ranks: Sorted BEV ranks.
+            indices: Sorting indices aligned with ``ranks``.
 
         Returns:
             Detection head outputs produced by the export path.
@@ -499,14 +507,17 @@ class BEVFusionDetectionModel(ModuleBaseModel):
     def build_export_specs(
         self, multi_task_batch_inputs: ModelBatchInputs
     ) -> dict[str, ExportSpec]:
-        """Build the ONNX export specifications for the runtime-compatible ABI.
+        """Build the ONNX export specifications.
 
-        Lidar-only models export one ``bevfusion_lidar`` main body. Camera-lidar
-        models export the ``bevfusion_image_backbone`` (raw ``uint8`` images to
-        neck features) and the ``bevfusion_camera_lidar`` main body consuming
-        those features together with precomputed depth maps and BEV-pool
-        metadata. All exported graphs are single-sample, so only the first
-        sample of the batch is used to derive the export tensors.
+        Lidar-only models export one ``bevfusion_lidar`` main body, which the
+        ``autoware_bevfusion`` runtime consumes unchanged. Camera-lidar models
+        export the ``bevfusion_image_backbone`` (raw ``uint8`` images to neck
+        features) and the ``bevfusion_camera_lidar`` main body consuming those
+        features together with precomputed depth maps and BEV-pool metadata;
+        the runtime does not consume this main body yet, see
+        :class:`_BEVFusionExportWrapper`. All exported graphs are
+        single-sample, so only the first sample of the batch is used to derive
+        the export tensors.
 
         Args:
             multi_task_batch_inputs: Batched model inputs used to derive export tensors.

@@ -81,23 +81,56 @@ autoware-ml deploy \
     --release v1.0.0
 ```
 
-The export produces the ONNX modules consumed by `autoware_universe/perception/autoware_bevfusion`. LiDAR-only configurations export a single `bevfusion_lidar.onnx` main body restricted to the first three inputs below. Camera-LiDAR models export two modules: `bevfusion_image_backbone.onnx` encodes raw `uint8` multiview images (the training-time `1 / 255` normalization is baked into the graph) into `image_feats`, and `bevfusion_camera_lidar.onnx` is the main body consuming those features together with precomputed `bev_pool` metadata.
+The export produces the ONNX modules for `autoware_universe/perception/autoware_bevfusion`. LiDAR-only configurations export a single `bevfusion_lidar.onnx` main body restricted to the first three inputs below; the runtime node consumes it unchanged. Camera-LiDAR models export two modules: `bevfusion_image_backbone.onnx` encodes raw `uint8` multiview images (the training-time `1 / 255` normalization is baked into the graph) into `image_feats`, and `bevfusion_camera_lidar.onnx` is the main body consuming those features together with the LiDAR depth maps and precomputed `bev_pool` metadata. **The camera-LiDAR main body is not consumed by the current runtime node**: its inputs changed and the node has not been updated yet, see [Runtime compatibility](#runtime-compatibility).
 
-| Input Tensor           | Description                                          |
-| ---------------------- | ---------------------------------------------------- |
-| `voxels`               | Voxelized LiDAR features                             |
-| `coors`                | Voxel coordinates in `(z, y, x)` order, batch-free   |
-| `num_points_per_voxel` | Point count per voxel                                |
-| `image_feats`          | Image backbone features from the image backbone ONNX |
-| `depth_maps`           | LiDAR depth maps used to guide the view transform    |
-| `geom_feats`           | Precomputed BEV pooling coordinates                  |
-| `kept`                 | Boolean mask for valid projected frustum points      |
-| `ranks`                | Sorted BEV pooling ranks                             |
-| `indices`              | Sorting indices for pooled frustum features          |
+| Input Tensor           | Description                                                                                                            |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `voxels`               | Voxelized LiDAR features                                                                                               |
+| `coors`                | Voxel coordinates in `(z, y, x)` order, batch-free                                                                     |
+| `num_points_per_voxel` | Point count per voxel                                                                                                  |
+| `image_feats`          | Image backbone features from the image backbone ONNX                                                                   |
+| `depth_maps`           | Sparse LiDAR depth maps `(num_cameras, 1, H, W)` at the network image resolution, built by `LiDARDepthSparseTransform` |
+| `geom_feats`           | Precomputed BEV pooling coordinates                                                                                    |
+| `kept`                 | Boolean mask for valid projected frustum points                                                                        |
+| `ranks`                | Sorted BEV pooling ranks                                                                                               |
+| `indices`              | Sorting indices for pooled frustum features                                                                            |
 
 Every main-body module returns the runtime detection interface: `bbox_pred` with the raw regression channels `(center, height, dim, rot, vel)` per proposal, `score` with per-proposal confidences, and `label_pred` with per-proposal class labels. Metric-space decoding happens in the runtime node. The `height` channel is the z of the box gravity center, which is how `autoware_bevfusion` reads it.
 
 Exports land in `mlruns/<config_name>/<run_id>/artifacts/exports/` of a dedicated deploy run linked to the training run. Every module is stamped with its provenance and the `--release` version; omit `--release` only for throwaway exports, which are stamped `unversioned`. TensorRT engine generation is disabled (`deploy.tensorrt.enabled=false`); the runtime builds engines itself using the custom sparse-convolution and `bev_pool` plugins.
+
+## Runtime compatibility
+
+### Breaking change: camera-LiDAR main body inputs
+
+The `bevfusion_camera_lidar.onnx` main body no longer takes `points`, `lidar2image` and `img_aug_matrix`. It takes `depth_maps` instead. Previously the graph projected the point cloud onto every camera itself; now the sparse depth maps are built outside the graph by `LiDARDepthSparseTransform` (`autoware_ml/transforms/camera_lidar/depth.py`), both in the training pipeline and in the export sample. The `kept` input is now sized by `num_frustum_points` rather than `num_kept`.
+
+| Main body input                           | Before (`main`) | Now     |
+| ----------------------------------------- | --------------- | ------- |
+| `voxels`, `coors`, `num_points_per_voxel` | yes             | yes     |
+| `image_feats`                             | yes             | yes     |
+| `points`                                  | yes             | removed |
+| `lidar2image`                             | yes             | removed |
+| `img_aug_matrix`                          | yes             | removed |
+| `depth_maps`                              | no              | **new** |
+| `geom_feats`, `kept`, `ranks`, `indices`  | yes             | yes     |
+
+`autoware_bevfusion` (`lib/bevfusion_trt.cpp`) still binds `points`, `img_aug_matrix` and `lidar2image` in fusion mode and does not build depth maps, so a camera-LiDAR model exported from this version does not load in the current node, and the camera-LiDAR ONNX published for the current node does not match this export. LiDAR-only exports are unaffected. No shipped experiment runs the camera branch yet, so nothing deployed is broken today; the runtime must change before the first camera-LiDAR model from this repository ships.
+
+A second behaviour change, outside the export ABI: a camera-only model (`lidar_network: null`) now feeds the image BEV straight into the detection head. The BEV backbone and neck (`pts_backbone` / `pts_neck`) live on the LiDAR branch and do not run without it, unlike upstream BEVFusion where every BEV map goes through them. A camera-only head therefore has to take the view-transform channels as `in_channels`. There is no camera-only export, so the runtime is not affected.
+
+### Planned runtime change (`autoware_bevfusion`)
+
+The node has to build the depth maps that the graph used to build, with the same geometry it already uses for `lidar2image` and `img_aug_matrix`.
+
+1. **Depth map kernel.** Add a CUDA kernel in `lib/preprocess/preprocess_kernel.cu` that projects the sweep points (`points_d_`, the same buffer fed to voxelization, xyz in the LiDAR frame) onto every camera and writes a `(num_cameras, 1, roi_height, roi_width)` float32 buffer. The projection must reproduce `LiDARDepthSparseTransform.build_depth_maps`:
+    - `P_c = img_aug_matrix_c @ lidar2image_c` (the two matrices the node already computes in `setIntrinsicsExtrinsics`), `q = P_c[:3, :3] p + P_c[:3, 3]`;
+    - keep `q.z > 0`; `u = q.x / clamp(q.z, 1e-5, 1e5)`, `v = q.y / clamp(q.z, 1e-5, 1e5)`; keep `0 <= v < roi_height` and `0 <= u < roi_width` on the float values, then truncate to integer pixels;
+    - write `q.z` at `(c, 0, int(v), int(u))`, every other pixel stays zero. Training resolves duplicate hits arbitrarily; the kernel can keep the nearest point (`atomicMin` on the float bits), which stays within the training distribution.
+2. **Bindings.** In `addCameraNetworkIO`, `addCameraProfileDims`, `setTensorAddress` and `configureTensorRTInputs`, replace `points`, `img_aug_matrix` and `lidar2image` with `depth_maps` (`Dims{4, {num_cameras, 1, roi_height, roi_width}}`, min = opt = max). Drop `points_d_` from the engine inputs (it stays as the voxelization buffer) and `img_aug_matrix_d_` from device memory; keep the host-side `img_aug_matrices_` and the `lidar2image` values for the kernel. Bindings are by name, so the new input order does not matter.
+3. **Pipeline.** Allocate `depth_maps_d_` (`num_cameras * roi_height * roi_width` floats) in fusion mode, clear it in `clearDeviceMemory`, and launch the kernel in `preProcess` after `generateSweepPoints` and before `configureTensorRTInputs`. No new ROS parameters are needed: `num_cameras`, `roi_height` and `roi_width` already exist in `ml_package_bevfusion_camera_lidar.param.yaml`.
+4. **ABI transition.** Either gate the fusion bindings on the input names of the loaded network (`points` present means the old graph, `depth_maps` the new one) for one release, or bump the camera-LiDAR model package version and switch outright. The node README, the parameter schema and `CHANGELOG.rst` must document the new input set.
+5. **Validation.** Export a camera-LiDAR model from this repository, dump the `depth_maps` the export sample used and compare them with the kernel output for the same frame and calibration (equal everywhere except duplicate-hit pixels), then compare `bbox_pred` / `score` / `label_pred` between the PyTorch model and the TensorRT engine on a few frames.
 
 ## Implementation
 
