@@ -1,4 +1,4 @@
-from typing import Mapping, Sequence
+from typing import Sequence
 
 from autoware_ml.databases.box3d_pipelines.box3d_pipeline import Box3DPipeline
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDataModel
@@ -7,23 +7,20 @@ from autoware_ml.databases.taxonomy import LabelTaxonomy
 
 class Box3DLabelRemapper(Box3DPipeline):
     """
-    Rename the fine label names of the 3D boxes, for example the names left by a merger. A name
-    mapped to null drops its box. A name missing from the mapping keeps its label. A name the
-    taxonomy level drops gets the ignore index.
+    Remap the class index of the 3D boxes from their fine label name through the class_mapping
+    of the taxonomy level, for example after a merger renamed boxes. The fine label name is kept
+    as it is. A fine name the taxonomy level drops gets the ignore index.
     """
 
-    def __init__(self, taxonomy: LabelTaxonomy, label_remapper: Mapping[str, str | None]):
+    def __init__(self, taxonomy: LabelTaxonomy):
         """
         Initialize Box3DLabelRemapper.
 
         Args:
-          taxonomy: Taxonomy that maps a label name to its class index.
-          label_remapper: Fine label name to the fine name it folds into, null for a name to
-            drop.
+          taxonomy: Taxonomy whose class_mapping folds a fine label name onto its class index.
         """
         super().__init__()
         self.taxonomy = taxonomy
-        self.label_remapper = dict(label_remapper)
 
     def __str__(self) -> str:
         """
@@ -32,28 +29,23 @@ class Box3DLabelRemapper(Box3DPipeline):
         Returns:
           str: String representation of the pipeline.
         """
-        return f"{self.__class__.__name__}(label_remapper={self.label_remapper})"
+        return f"{self.__class__.__name__}(taxonomy={self.taxonomy})"
 
     def __call__(self, boxes3d_data_model: Sequence[Box3DDataModel]) -> Sequence[Box3DDataModel]:
         """
-        Remap the label names of the 3D bounding boxes to another label name.
+        Remap the class index of the 3D bounding boxes from their current label name.
 
-        The current label name is remapped, not the dataset label name, so that a pipeline can
-        run several remappers in a row: every pass builds on the label name the previous pass
-        assigned, and a box no pass remaps keeps the dataset label name it started with.
+        The current label name is used, not the dataset label name, so that the pass builds on
+        the label name a previous pipeline assigned, for example the target label of a merger.
+
+        Raises:
+          KeyError: If a label name is not a fine name of the vocabulary.
         """
         new_boxes3d_data_model = []
         for box3d_data_model in boxes3d_data_model:
-            new_box3d_label_name = self.label_remapper.get(
-                box3d_data_model.box3d_label_name, box3d_data_model.box3d_label_name
-            )
-            if new_box3d_label_name is None:
-                continue
-
             new_boxes3d_data_model.append(
                 box3d_data_model.create_new_data_model(
-                    box3d_label_name=new_box3d_label_name,
-                    box3d_label_index=self.taxonomy.class_index(new_box3d_label_name),
+                    box3d_label_index=self.taxonomy.class_index(box3d_data_model.box3d_label_name),
                 )
             )
 

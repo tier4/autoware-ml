@@ -27,25 +27,40 @@ from autoware_ml.databases.taxonomy import LabelTaxonomy, LabelVocabulary
 
 _CLASS_NAMES = ("car", "truck", "bicycle")
 _IGNORE_INDEX = -1
-# Fine names the level drops, they resolve to the ignore index
-_DROPPED_FINE_NAMES = ("motorcycle", "trailer", "heavy_machine")
 _TAXONOMY = LabelTaxonomy(
-    vocabulary=LabelVocabulary({name: name for name in _CLASS_NAMES + _DROPPED_FINE_NAMES}),
+    vocabulary=LabelVocabulary(
+        {
+            "vehicle.car": "car",
+            "car": "car",
+            "truck": "truck",
+            "bicycle": "bicycle",
+            "motorcycle": "motorcycle",
+            "trailer": "trailer",
+            "heavy_machine": "heavy_machine",
+        }
+    ),
     class_names=_CLASS_NAMES,
-    class_mapping={name: name for name in _CLASS_NAMES}
-    | {name: None for name in _DROPPED_FINE_NAMES},
+    # Fine names the level folds onto a class, and one it drops.
+    class_mapping={
+        "car": "car",
+        "truck": "truck",
+        "bicycle": "bicycle",
+        "motorcycle": "bicycle",
+        "trailer": "truck",
+        "heavy_machine": None,
+    },
     ignore_index=_IGNORE_INDEX,
     class_groups={"vehicle": ["car", "truck"], "cycle": ["bicycle"]},
 )
 
 
-def _build_box(dataset_label_name: str) -> Box3DDataModel:
-    """Build a box as the records generator emits it, before any pipeline has run."""
+def _build_box(label_name: str) -> Box3DDataModel:
+    """Build a box as the resolver leaves it, named by its fine name and not yet indexed."""
     return Box3DDataModel(
         box3d_params=np.zeros(10, dtype=np.float64),
         box3d_instance_id="instance",
-        box3d_dataset_label_name=dataset_label_name,
-        box3d_label_name=dataset_label_name,
+        box3d_dataset_label_name=label_name,
+        box3d_label_name=label_name,
         box3d_label_index=_IGNORE_INDEX,
         box3d_num_lidar_points=10,
         box3d_num_radar_points=0,
@@ -63,59 +78,41 @@ def _labels(boxes: Sequence[Box3DDataModel]) -> list[tuple[str, int]]:
 class TestBox3DLabelRemapper(unittest.TestCase):
     """Unit tests for Box3DLabelRemapper."""
 
-    def _build_remapper(self, label_remapper: dict[str, str | None]) -> Box3DLabelRemapper:
-        """Build a remapper against the test taxonomy."""
-        return Box3DLabelRemapper(taxonomy=_TAXONOMY, label_remapper=label_remapper)
+    def setUp(self) -> None:
+        self.remapper = Box3DLabelRemapper(taxonomy=_TAXONOMY)
 
-    def test_remaps_name_and_index(self) -> None:
-        """Test that a remapped box gets the target name and its class index in the taxonomy."""
-        remapper = self._build_remapper({"motorcycle": "bicycle"})
+    def test_remaps_the_index_through_the_class_mapping(self) -> None:
+        """Test that a box gets the index of the class its fine name maps to, name unchanged."""
+        remapped = self.remapper([_build_box("motorcycle")])
 
-        remapped = remapper([_build_box("motorcycle")])
+        self.assertEqual(_labels(remapped), [("motorcycle", 2)])
 
-        self.assertEqual(_labels(remapped), [("bicycle", 2)])
-
-    def test_label_outside_the_classes_is_ignored(self) -> None:
-        """Test that a box remapped to a fine name the level drops gets the ignore index."""
-        remapper = self._build_remapper({"forklift": "heavy_machine"})
-
-        remapped = remapper([_build_box("forklift")])
-
-        self.assertEqual(_labels(remapped), [("heavy_machine", _IGNORE_INDEX)])
-
-    def test_null_target_drops_the_box(self) -> None:
-        """Test that a label remapped to null is removed from the boxes."""
-        remapper = self._build_remapper({"forklift": None})
-
-        remapped = remapper([_build_box("forklift"), _build_box("car")])
+    def test_a_fine_name_equal_to_its_class_gets_the_class_index(self) -> None:
+        """Test that a fine name that is also a class gets that class index."""
+        remapped = self.remapper([_build_box("car")])
 
         self.assertEqual(_labels(remapped), [("car", 0)])
 
-    def test_name_outside_the_vocabulary_raises(self) -> None:
-        """Test that a box remapped to a name the vocabulary does not list is an error."""
-        remapper = self._build_remapper({"forklift": "unlisted"})
+    def test_remaps_the_trailers_a_merger_left(self) -> None:
+        """Test that a trailer the merger did not absorb takes the index of the truck class."""
+        remapped = self.remapper([_build_box("trailer"), _build_box("truck")])
 
+        self.assertEqual(_labels(remapped), [("trailer", 1), ("truck", 1)])
+
+    def test_a_fine_name_the_level_drops_gets_the_ignore_index(self) -> None:
+        """Test that a fine name mapped to null keeps its box with the ignore index."""
+        remapped = self.remapper([_build_box("heavy_machine"), _build_box("car")])
+
+        self.assertEqual(_labels(remapped), [("heavy_machine", _IGNORE_INDEX), ("car", 0)])
+
+    def test_name_outside_the_fine_names_raises(self) -> None:
+        """Test that a box still carrying a raw name the resolver did not fold is an error."""
         with self.assertRaises(KeyError):
-            remapper([_build_box("forklift")])
-
-    def test_a_later_pass_keeps_the_earlier_remapping(self) -> None:
-        """
-        Test that chained remappers compose. The pipeline runs a second remapper to fold the
-        remaining trailers into trucks, and that pass must not undo the first remapping: a box
-        it does not name keeps the label the earlier pass gave it.
-        """
-        first = self._build_remapper({"motorcycle": "bicycle", "trailer": "trailer"})
-        second = self._build_remapper({"trailer": "truck"})
-
-        remapped = second(first([_build_box("motorcycle"), _build_box("trailer")]))
-
-        self.assertEqual(_labels(remapped), [("bicycle", 2), ("truck", 1)])
+            self.remapper([_build_box("vehicle.car")])
 
     def test_the_dataset_label_name_is_never_rewritten(self) -> None:
         """Test that remapping leaves the original dataset label name in place."""
-        remapper = self._build_remapper({"motorcycle": "bicycle"})
-
-        remapped = remapper([_build_box("motorcycle")])
+        remapped = self.remapper([_build_box("motorcycle")])
 
         self.assertEqual(remapped[0].box3d_dataset_label_name, "motorcycle")
 
