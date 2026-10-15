@@ -78,12 +78,7 @@ def build_task(boxes: list[dict]) -> Detection3DTask:
     Returns:
       Detection3DTask: Task serving that one record.
     """
-    schema = DatasetTableSchema.to_polars_schema()
-    records = pl.DataFrame(
-        {DatasetTableSchema.BOXES_3D.name: [boxes]},
-        schema={DatasetTableSchema.BOXES_3D.name: schema[DatasetTableSchema.BOXES_3D.name]},
-    )
-    return Detection3DTask(database_root_path=_ROOT, dataset_records_dataframe=records)
+    return build_task_with_status(boxes, status=None)
 
 
 def test_every_box_keeps_its_attributes_and_an_unseen_box_stays() -> None:
@@ -176,11 +171,25 @@ def build_task_with_status(boxes: list[dict], status: bool | None) -> Detection3
     return Detection3DTask(database_root_path=_ROOT, dataset_records_dataframe=records)
 
 
-def test_the_cone_and_barrier_flag_is_none_when_the_records_do_not_carry_it() -> None:
-    task = build_task([box("a", "car")])
+def test_records_without_the_cone_and_barrier_flag_column_are_rejected() -> None:
+    """
+    Every record table built by this version carries the flag column, so a table without it is
+    a stale cache and is refused rather than read as "no flag".
+    """
+    schema = DatasetTableSchema.to_polars_schema()
+    records = pl.DataFrame(
+        {DatasetTableSchema.BOXES_3D.name: [[box("a", "car")]]},
+        schema={DatasetTableSchema.BOXES_3D.name: schema[DatasetTableSchema.BOXES_3D.name]},
+    )
 
-    assert task.dataset_records_dataframe.columns == [DatasetTableSchema.BOXES_3D.name]
-    assert task.get_data_sample(0).detection3d_traffic_cone_barrier_bbox_status is None
+    with pytest.raises(ValueError, match=DatasetTableSchema.TRAFFIC_CONE_BARRIER_BBOX_STATUS.name):
+        Detection3DTask(database_root_path=_ROOT, dataset_records_dataframe=records)
+
+
+def test_select_columns_keeps_the_boxes_and_the_flag_only() -> None:
+    task = build_task_with_status([box("a", "car")], True)
+
+    assert task.dataset_records_dataframe.columns == list(Detection3DTask.COLUMNS)
 
 
 @pytest.mark.parametrize("status", [True, False])
@@ -231,9 +240,10 @@ def test_log_dataset_info_counts_across_records_and_skips_the_empty_ones(
     Check: the logged counts.
     """
     schema = DatasetTableSchema.to_polars_schema()
+    columns = list(Detection3DTask.COLUMNS)
     records = pl.DataFrame(
-        {DatasetTableSchema.BOXES_3D.name: [[box("a", "car")], [], [box("b", "car")]]},
-        schema={DatasetTableSchema.BOXES_3D.name: schema[DatasetTableSchema.BOXES_3D.name]},
+        {columns[0]: [[box("a", "car")], [], [box("b", "car")]], columns[1]: [True, None, False]},
+        schema={column: schema[column] for column in columns},
     )
     task = Detection3DTask(database_root_path=_ROOT, dataset_records_dataframe=records)
 

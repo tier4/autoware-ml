@@ -14,26 +14,36 @@ logger = logging.getLogger(__name__)
 
 
 class Detection3DTask(BaseDatasetTask):
-    """Read the 3D boxes of a record, with the cone and barrier annotation flag when stored."""
+    """Read the 3D boxes of a record and its cone and barrier annotation flag."""
+
+    COLUMNS = (
+        DatasetTableSchema.BOXES_3D.name,
+        DatasetTableSchema.TRAFFIC_CONE_BARRIER_BBOX_STATUS.name,
+    )
 
     def select_columns(self, dataset_records_dataframe: pl.DataFrame) -> pl.DataFrame:
         """
-        Keep the box column of the records, and the cone and barrier flag when present.
+        Keep the box column and the cone and barrier flag column of the records.
 
         Args:
           dataset_records_dataframe: Records of the corpus.
 
         Returns:
-          pl.DataFrame: The records with their boxes.
+          pl.DataFrame: The records with their boxes and their flag.
+
+        Raises:
+          ValueError: If a column is missing. Every record table carries both, so a table
+            without the flag was not built by this version of the database.
         """
-        columns = [DatasetTableSchema.BOXES_3D.name]
-        # Older database caches predate the cone/barrier flag, so only keep it when present.
-        if (
-            DatasetTableSchema.TRAFFIC_CONE_BARRIER_BBOX_STATUS.name
-            in dataset_records_dataframe.columns
-        ):
-            columns.append(DatasetTableSchema.TRAFFIC_CONE_BARRIER_BBOX_STATUS.name)
-        return dataset_records_dataframe.select(columns)
+        missing = [
+            column for column in self.COLUMNS if column not in dataset_records_dataframe.columns
+        ]
+        if missing:
+            raise ValueError(
+                f"{self} needs the columns {list(self.COLUMNS)} of the record table, missing "
+                f"{missing}. Rebuild the database cache with this version."
+            )
+        return dataset_records_dataframe.select(list(self.COLUMNS))
 
     def __str__(self) -> str:
         """
@@ -118,12 +128,11 @@ class Detection3DTask(BaseDatasetTask):
           idx: Index of the record.
 
         Returns:
-          bool | None: The flag, or None when the database does not carry it for this record.
+          bool | None: The flag, or None when the scenario of the record has no status.
         """
-        column_name = DatasetTableSchema.TRAFFIC_CONE_BARRIER_BBOX_STATUS.name
-        if column_name not in self.dataset_records_dataframe.columns:
-            return None
-        status = self.dataset_records_dataframe.item(idx, column_name)
+        status = self.dataset_records_dataframe.item(
+            idx, DatasetTableSchema.TRAFFIC_CONE_BARRIER_BBOX_STATUS.name
+        )
         return None if status is None else bool(status)
 
     def log_dataset_info(self) -> None:
