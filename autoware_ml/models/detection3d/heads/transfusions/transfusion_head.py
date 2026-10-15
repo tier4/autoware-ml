@@ -482,11 +482,22 @@ class TransFusionHead(nn.Module):
                     )
                 claimed_classes[class_id] = group_index
 
+            # `is None` on purpose: a radius of 0 is a valid setting that disables the
+            # suppression for the group (its boxes are only capped by score), so it must not
+            # fall back to the head default.
             resolved_groups.append(
                 NMSGroup(
                     class_ids=class_ids,
-                    nms_radius=nms_config_group.nms_radius or self.nms_min_radius,
-                    max_size=nms_config_group.max_size or self.post_max_size,
+                    nms_radius=(
+                        self.nms_min_radius
+                        if nms_config_group.nms_radius is None
+                        else nms_config_group.nms_radius
+                    ),
+                    max_size=(
+                        self.post_max_size
+                        if nms_config_group.max_size is None
+                        else nms_config_group.max_size
+                    ),
                 )
             )
         return resolved_groups
@@ -819,7 +830,9 @@ class TransFusionHead(nn.Module):
         )
         group_scores = bbox_scores.unsqueeze(1).expand(batch_size, num_groups, num_proposals)
 
-        # One radius and one cap per channel, so all groups suppress in a single call.
+        # One radius and one cap per channel, so all groups suppress in a single call. A group
+        # with a radius of 0 disables the suppression in its channel: batch_circle_nms then only
+        # keeps its highest-scoring proposals up to the cap.
         # (batch_size, num_groups, num_proposals)
         group_keep_masks = batch_circle_nms(
             bboxes_centers=group_centers,

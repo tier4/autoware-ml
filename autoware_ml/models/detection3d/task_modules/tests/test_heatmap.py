@@ -608,6 +608,40 @@ class TestBatchCircleNMS(unittest.TestCase):
         expected_keep_masks = self._expected_keep_masks([False, True, False, True])
         self.assertTrue(torch.equal(keep_masks, expected_keep_masks))
 
+    def test_batch_circle_nms_zero_radius_disables_suppression(self) -> None:
+        """
+        Test that a min_radius of 0 applies no suppression at all, not even between coincident
+        centers, and only caps the row by score. Two boxes share a center and a third sits half
+        a metre away; with a cap of 2 the two highest scores survive whatever their distance.
+        """
+        centers, scores, valid_masks = self._build_inputs(
+            centers=[[0.0, 0.0], [0.0, 0.0], [0.5, 0.0]],
+            scores=[0.9, 0.8, 0.7],
+        )
+        zero_radii = [0.0 for _ in range(self.num_classes)]
+
+        uncapped_keep_masks = batch_circle_nms(
+            bboxes_centers=centers,
+            scores=scores,
+            min_radii=zero_radii,
+            valid_bboxes_masks=valid_masks,
+            post_max_sizes=self.post_max_sizes,
+        )
+        capped_keep_masks = batch_circle_nms(
+            bboxes_centers=centers,
+            scores=scores,
+            min_radii=zero_radii,
+            valid_bboxes_masks=valid_masks,
+            post_max_sizes=[2 for _ in range(self.num_classes)],
+        )
+
+        self.assertTrue(
+            torch.equal(uncapped_keep_masks, self._expected_keep_masks([True, True, True]))
+        )
+        self.assertTrue(
+            torch.equal(capped_keep_masks, self._expected_keep_masks([True, True, False]))
+        )
+
     def test_batch_circle_nms_does_not_suppress_across_classes(self) -> None:
         """
         Test that overlapping boxes in different class rows both survive, since NMS is applied

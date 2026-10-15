@@ -1301,6 +1301,45 @@ class TestTransFusionHead(unittest.TestCase):
         self.assertAlmostEqual(float(prediction.scores_3d[0]), 0.8, places=5)
         self.assertAlmostEqual(float(prediction.bboxes_3d[0, 0]), 8.5, places=4)
 
+    def test_transfusion_nms_groups_cap_zero_radius_groups_by_score(self) -> None:
+        """
+        Test that a group with an NMS radius of 0 applies no suppression and only caps its
+        proposals by score, as on main: two cars half a metre apart both survive under a large
+        cap, and only the stronger one survives under a cap of one.
+        """
+        bboxes_3d = [
+            [8.0, 8.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+            [8.5, 8.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+        ]
+        uncapped_head = self._build_transfusion_head(
+            nms_type="circle",
+            nms_group_configs=[NMSGroupConfig(class_names=["car"], nms_radius=0.0, max_size=8)],
+        )
+        capped_head = self._build_transfusion_head(
+            nms_type="circle",
+            nms_group_configs=[NMSGroupConfig(class_names=["car"], nms_radius=0.0, max_size=1)],
+        )
+
+        uncapped = self._decode_sample_predictions(
+            uncapped_head,
+            self._build_single_sample_outputs(
+                bboxes_3d, labels=[0, 0], scores=[0.8, 0.9], transfusion_head=uncapped_head
+            ),
+        )[0]
+        capped = self._decode_sample_predictions(
+            capped_head,
+            self._build_single_sample_outputs(
+                bboxes_3d, labels=[0, 0], scores=[0.8, 0.9], transfusion_head=capped_head
+            ),
+        )[0]
+
+        # No suppression: both cars survive even though they are within any usual radius.
+        self.assertEqual(uncapped.scores_3d.shape, (2,))
+        # The cap keeps the highest score only, which is the second proposal.
+        self.assertEqual(capped.scores_3d.shape, (1,))
+        self.assertAlmostEqual(float(capped.scores_3d[0]), 0.9, places=5)
+        self.assertAlmostEqual(float(capped.bboxes_3d[0, 0]), 8.5, places=4)
+
     def test_decode_outputs_keeps_survivors_in_proposal_order(self) -> None:
         """
         Test that decode_outputs drops the rejected proposals, keeps the survivors in proposal
@@ -1376,6 +1415,21 @@ class TestTransFusionHead(unittest.TestCase):
             (groups[1].nms_radius, groups[1].max_size),
             (transfusion_head.nms_min_radius, transfusion_head.post_max_size),
         )
+
+    def test_resolve_nms_groups_keeps_a_zero_radius(self) -> None:
+        """
+        Test that an explicit nms_radius of 0 is kept rather than replaced by the head default,
+        since 0 means no suppression for the group.
+        """
+        transfusion_head = self._build_transfusion_head(
+            nms_group_configs=[NMSGroupConfig(class_names=["car"], nms_radius=0.0, max_size=5)],
+        )
+        groups = transfusion_head.nms_groups
+        assert groups is not None
+
+        # The setUp head default is 1.0, which a falsy check would have substituted.
+        self.assertGreater(transfusion_head.nms_min_radius, 0.0)
+        self.assertEqual((groups[0].nms_radius, groups[0].max_size), (0.0, 5))
 
     def test_resolve_nms_groups_rejects_a_class_in_two_groups(self) -> None:
         """

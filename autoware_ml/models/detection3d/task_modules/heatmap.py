@@ -37,7 +37,9 @@ def batch_circle_nms(
     Args:
         bboxes_centers: Decoded box centers in metric space.
         scores: Confidence scores for the boxes.
-        min_radii: Minimum center distance for suppression, one value per class.
+        min_radii: Minimum center distance for suppression, one value per class. A value of 0
+            (or below) disables the suppression for that class: its boxes are then only capped
+            by ``post_max_sizes``, highest scores first.
         valid_bboxes_masks: Boolean mask indicating which boxes are valid and should be considered for NMS.
         post_max_sizes: Maximum number of boxes kept after suppression, counted per class, one
             value per class.
@@ -77,9 +79,12 @@ def batch_circle_nms(
         compute_mode="donot_use_mm_for_euclid_dist",
     ).view(batch_size, num_classes, max_num_bboxes, max_num_bboxes)
 
-    # Keeps a box only when its center distance is strictly greater than min_radius.
+    # Keeps a box only when its center distance is strictly greater than min_radius. A radius of
+    # 0 (or below) disables the suppression for that class, so its boxes are only capped by
+    # post_max_size; without the guard, coincident centers would still match the `<=` test.
     # (batch_size, num_classes, max_num_bboxes, max_num_bboxes) <= (1, num_classes, 1, 1)
-    pairwise_suppression = pairwise_distances <= per_class_min_radii.view(1, num_classes, 1, 1)
+    per_class_min_radii = per_class_min_radii.view(1, num_classes, 1, 1)
+    pairwise_suppression = (pairwise_distances <= per_class_min_radii) & (per_class_min_radii > 0)
 
     # Only a higher scoring box may suppress a lower scoring one. After the descending sort
     # that is exactly the strict upper triangle.
