@@ -20,7 +20,7 @@ import logging
 from typing import Sequence
 
 from lightning.pytorch import LightningModule, Trainer
-from lightning.pytorch.callbacks import Callback
+from lightning.pytorch.callbacks import Callback, EarlyStopping, ModelCheckpoint
 from lightning.pytorch.utilities.exceptions import MisconfigurationException
 
 logger = logging.getLogger(__name__)
@@ -47,6 +47,15 @@ class DynamicValidation(Callback):
     cadence. It requires validation to be scheduled per epoch: ``val_check_interval`` must be
     ``1.0`` and ``check_val_every_n_epoch`` must not be ``None``, otherwise Lightning would
     validate on a step or time basis and the epoch schedule would be meaningless.
+
+    Callbacks that monitor a validation metric must run after validation, not at every train
+    epoch end, since the schedule skips validation on most epochs. ``EarlyStopping`` decides
+    this once in its ``setup`` from the trainer's initial ``check_val_every_n_epoch``: left at
+    its default of ``None`` with an initial value of 1, it checks at every train epoch end and
+    fails on the first epoch without validation. ``setup`` therefore rejects an EarlyStopping
+    that would check on train epoch end, and a monitored ``ModelCheckpoint`` with
+    ``save_on_train_epoch_end=True``. Set ``check_on_train_epoch_end=False`` and
+    ``save_on_train_epoch_end=False`` on them.
 
     Args:
         epoch_intervals: ``[start_epoch, check_val_every_n_epoch]`` pairs, sorted by strictly
@@ -138,7 +147,9 @@ class DynamicValidation(Callback):
 
         Raises:
             MisconfigurationException: If validation is driven by steps or wall time instead
-                of epochs, which the epoch schedule cannot control.
+                of epochs, which the epoch schedule cannot control, or if an EarlyStopping or
+                a monitored ModelCheckpoint would run at train epoch ends, where the monitored
+                metric is missing on the epochs the schedule skips.
         """
         if stage != "fit":
             return
@@ -160,6 +171,46 @@ class DynamicValidation(Callback):
                 "DynamicValidation schedules validation per epoch, but the trainer validates on "
                 "a wall-time interval. Use a float or integer `val_check_interval` of 1.0."
             )
+        self._check_monitoring_callbacks(trainer)
+
+    @staticmethod
+    def _check_monitoring_callbacks(trainer: Trainer) -> None:
+        """Reject callbacks that would read a validation metric at every train epoch end.
+
+        Args:
+            trainer: The trainer whose EarlyStopping and ModelCheckpoint callbacks are checked.
+
+        Raises:
+            MisconfigurationException: If an EarlyStopping checks on train epoch end, or if a
+                monitored ModelCheckpoint saves on train epoch end.
+        """
+        for early_stopping in trainer.early_stopping_callbacks:
+            # Lightning keeps the constructor value in this private attribute and, when it is
+            # None, resolves it in EarlyStopping.setup from the trainer's initial interval. That
+            # resolution is reproduced here, since the callbacks' setups run in list order and
+            # EarlyStopping may not have resolved it yet.
+            check_on_train_epoch_end = getattr(early_stopping, "_check_on_train_epoch_end", None)
+            if check_on_train_epoch_end is None:
+                check_on_train_epoch_end = trainer.check_val_every_n_epoch == 1
+            if check_on_train_epoch_end:
+                raise MisconfigurationException(
+                    f"DynamicValidation skips validation on some epochs, but {_describe(early_stopping)} "
+                    "would check its monitored metric at every train epoch end and fail on the "
+                    "first epoch without validation. Set `check_on_train_epoch_end=False` on it."
+                )
+
+        for checkpoint in trainer.checkpoint_callbacks:
+            # A ModelCheckpoint left at None re-reads the interval at every epoch end, so it
+            # follows the rewritten schedule. Only an explicit True saves on epochs without
+            # validation, where its monitored metric is missing.
+            if not isinstance(checkpoint, ModelCheckpoint) or checkpoint.monitor is None:
+                continue
+            if getattr(checkpoint, "_save_on_train_epoch_end", None) is True:
+                raise MisconfigurationException(
+                    f"DynamicValidation skips validation on some epochs, but {_describe(checkpoint)} "
+                    "saves on every train epoch end, where its monitored metric is missing. Set "
+                    "`save_on_train_epoch_end=False` on it."
+                )
 
     def on_train_epoch_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
         """Apply the interval scheduled for the epoch that is about to run.
@@ -178,3 +229,8 @@ class DynamicValidation(Callback):
                 trainer.check_val_every_n_epoch,
             )
         trainer.check_val_every_n_epoch = interval
+
+
+def _describe(callback: EarlyStopping | ModelCheckpoint) -> str:
+    """Name a monitoring callback and its metric for an error message."""
+    return f"{type(callback).__name__}(monitor={callback.monitor!r})"

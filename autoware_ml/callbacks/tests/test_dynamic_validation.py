@@ -17,11 +17,13 @@ trainer precondition, and the per-epoch update of ``check_val_every_n_epoch``.""
 
 from __future__ import annotations
 
+import tempfile
 import unittest
 from unittest.mock import MagicMock
 
+import torch
 from lightning.pytorch import LightningModule, Trainer
-from lightning.pytorch.callbacks import Callback
+from lightning.pytorch.callbacks import Callback, EarlyStopping, ModelCheckpoint
 from lightning.pytorch.demos.boring_classes import BoringModel
 from lightning.pytorch.utilities.exceptions import MisconfigurationException
 
@@ -53,6 +55,8 @@ class DynamicValidationTestCase(unittest.TestCase):
         trainer.val_check_interval = val_check_interval
         trainer.log_every_n_steps = self.LOG_EVERY_N_STEPS
         trainer._val_check_time_interval = None
+        trainer.early_stopping_callbacks = []
+        trainer.checkpoint_callbacks = []
         return trainer
 
 
@@ -231,6 +235,84 @@ class TestSetupPrecondition(DynamicValidationTestCase):
         with self.assertRaisesRegex(MisconfigurationException, "wall-time"):
             self.callback.setup(trainer, self.module, stage="fit")
 
+    def test_rejects_early_stopping_left_to_check_on_train_epoch_end(self) -> None:
+        """
+        Input: the trainer defaults, ``check_val_every_n_epoch=1``, with an EarlyStopping whose
+        ``check_on_train_epoch_end`` is left at None.
+        Expected: Lightning would resolve None to True from the initial interval of 1 and
+        then fail on the first epoch the schedule skips, so the combination is rejected.
+        Check: a MisconfigurationException mentioning ``check_on_train_epoch_end`` is raised.
+        """
+        trainer = self.make_trainer(check_val_every_n_epoch=1)
+        trainer.early_stopping_callbacks = [EarlyStopping(monitor="val/loss")]
+
+        with self.assertRaisesRegex(MisconfigurationException, "check_on_train_epoch_end"):
+            self.callback.setup(trainer, self.module, stage="fit")
+
+    def test_rejects_early_stopping_set_to_check_on_train_epoch_end(self) -> None:
+        """
+        Input: an EarlyStopping with an explicit ``check_on_train_epoch_end=True``, on a
+        trainer whose initial interval of 5 would otherwise have resolved None to False.
+        Expected: the explicit value is rejected whatever the initial interval.
+        Check: a MisconfigurationException mentioning ``check_on_train_epoch_end`` is raised.
+        """
+        trainer = self.make_trainer(check_val_every_n_epoch=5)
+        trainer.early_stopping_callbacks = [
+            EarlyStopping(monitor="val/loss", check_on_train_epoch_end=True)
+        ]
+
+        with self.assertRaisesRegex(MisconfigurationException, "check_on_train_epoch_end"):
+            self.callback.setup(trainer, self.module, stage="fit")
+
+    def test_accepts_early_stopping_checking_after_validation(self) -> None:
+        """
+        Input: an EarlyStopping with ``check_on_train_epoch_end=False`` on the trainer defaults,
+        and one left at None on a trainer with an initial interval of 5.
+        Expected: both check after validation, which the schedule controls, so both pass.
+        Check: ``setup`` returns without raising for each.
+        """
+        cases = [
+            (1, EarlyStopping(monitor="val/loss", check_on_train_epoch_end=False)),
+            (5, EarlyStopping(monitor="val/loss")),
+        ]
+        for check_val_every_n_epoch, early_stopping in cases:
+            with self.subTest(check_val_every_n_epoch=check_val_every_n_epoch):
+                trainer = self.make_trainer(check_val_every_n_epoch=check_val_every_n_epoch)
+                trainer.early_stopping_callbacks = [early_stopping]
+
+                self.callback.setup(trainer, self.module, stage="fit")
+
+    def test_rejects_monitored_checkpoint_saving_on_train_epoch_end(self) -> None:
+        """
+        Input: a ModelCheckpoint monitoring ``val/loss`` with ``save_on_train_epoch_end=True``.
+        Expected: it would save on epochs without validation, where the metric is missing.
+        Check: a MisconfigurationException mentioning ``save_on_train_epoch_end`` is raised.
+        """
+        trainer = self.make_trainer(check_val_every_n_epoch=1)
+        trainer.checkpoint_callbacks = [
+            ModelCheckpoint(monitor="val/loss", save_on_train_epoch_end=True)
+        ]
+
+        with self.assertRaisesRegex(MisconfigurationException, "save_on_train_epoch_end"):
+            self.callback.setup(trainer, self.module, stage="fit")
+
+    def test_accepts_checkpoints_that_follow_validation(self) -> None:
+        """
+        Input: a monitored ModelCheckpoint with ``save_on_train_epoch_end=False``, one left at
+        None, and an unmonitored one with ``save_on_train_epoch_end=True``.
+        Expected: the first two save after validation, and the unmonitored one needs no
+        metric, so all pass.
+        Check: ``setup`` returns without raising.
+        """
+        trainer = self.make_trainer(check_val_every_n_epoch=1)
+        trainer.checkpoint_callbacks = [
+            ModelCheckpoint(monitor="val/loss", save_on_train_epoch_end=False),
+            ModelCheckpoint(monitor="val/loss"),
+            ModelCheckpoint(save_on_train_epoch_end=True),
+        ]
+
+        self.callback.setup(trainer, self.module, stage="fit")
+
     def test_ignores_non_fit_stages(self) -> None:
         """
         Input: a step-based trainer, set up for the "test", "validate" and "predict" stages.
@@ -322,8 +404,73 @@ class _ValidationEpochRecorder(Callback):
             self.epochs.append(trainer.current_epoch)
 
 
+class _LoggingBoringModel(BoringModel):
+    """A BoringModel that logs ``val/loss``, so monitoring callbacks have a metric to read."""
+
+    def validation_step(self, batch: torch.Tensor, batch_idx: int) -> None:
+        self.log("val/loss", self.step(batch))
+
+
+def _make_trainer(
+    check_val_every_n_epoch: int, callbacks: list[Callback], default_root_dir: str
+) -> Trainer:
+    """Build a small CPU trainer over 5 epochs with the schedule ``[[0, 2], [3, 1]]``."""
+    return Trainer(
+        max_epochs=5,
+        limit_train_batches=2,
+        limit_val_batches=1,
+        num_sanity_val_steps=0,
+        check_val_every_n_epoch=check_val_every_n_epoch,
+        callbacks=[DynamicValidation([[0, 2], [3, 1]]), *callbacks],
+        accelerator="cpu",
+        devices=1,
+        logger=False,
+        default_root_dir=default_root_dir,
+        enable_progress_bar=False,
+        enable_model_summary=False,
+    )
+
+
 class TestWithLightningTrainer(unittest.TestCase):
     """End-to-end check that Lightning honours the rewritten interval."""
+
+    def test_monitoring_callbacks_run_after_validation_from_the_trainer_defaults(self) -> None:
+        """
+        Input: ``check_val_every_n_epoch=1``, the value of the trainer defaults, with an
+        EarlyStopping and a monitored ModelCheckpoint configured as the callback defaults are,
+        ``check_on_train_epoch_end=False`` and ``save_on_train_epoch_end=False``.
+        Expected: the schedule skips epochs 0 and 2, validates after epochs 1, 3 and 4, and
+        both callbacks read ``val/loss`` only on those epochs, so training completes with a
+        best score and a best checkpoint.
+        Check: the recorded validation epochs, EarlyStopping's best score and the checkpoint.
+        """
+        recorder = _ValidationEpochRecorder()
+        early_stopping = EarlyStopping(monitor="val/loss", check_on_train_epoch_end=False)
+        with tempfile.TemporaryDirectory() as root:
+            checkpoint = ModelCheckpoint(
+                monitor="val/loss", dirpath=root, save_on_train_epoch_end=False
+            )
+            trainer = _make_trainer(1, [early_stopping, checkpoint, recorder], root)
+
+            trainer.fit(_LoggingBoringModel())
+
+            self.assertEqual(recorder.epochs, [1, 3, 4])
+            self.assertTrue(torch.isfinite(early_stopping.best_score))
+            self.assertTrue(checkpoint.best_model_path)
+
+    def test_early_stopping_left_at_its_default_is_rejected_before_training(self) -> None:
+        """
+        Input: ``check_val_every_n_epoch=1`` with an EarlyStopping left at its default
+        ``check_on_train_epoch_end=None``, which Lightning resolves to True from that value.
+        Expected: without the check, Lightning fails on epoch 0 with "metric `val/loss` which
+        is not available"; the callback rejects the combination before training instead.
+        Check: ``fit`` raises a MisconfigurationException naming ``check_on_train_epoch_end``.
+        """
+        with tempfile.TemporaryDirectory() as root:
+            trainer = _make_trainer(1, [EarlyStopping(monitor="val/loss")], root)
+
+            with self.assertRaisesRegex(MisconfigurationException, "check_on_train_epoch_end"):
+                trainer.fit(_LoggingBoringModel())
 
     def test_validation_epochs_follow_schedule(self) -> None:
         """
