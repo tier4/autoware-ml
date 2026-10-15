@@ -38,9 +38,6 @@ BEV_FLIP_MATRICES = {
     BEVDirection.VERTICAL: torch.diag(torch.tensor([-1.0, 1.0, 1.0])),
 }
 
-# The modalities the global augmentations operate on, at least one of them must be present.
-MODALITY_KEYS = ("point_cloud_data", "camera_image_data")
-
 
 class RotationScaleTranslationData(BaseModel):
     """
@@ -60,23 +57,6 @@ class RotationScaleTranslationData(BaseModel):
     rotation_matrix: Float32[Tensor, "3 3"]
     scale_factor: float  # Scale factor applied
     translation_vector: Float32[Tensor, "1 3"]  # Translation vector applied
-
-
-def validate_at_least_one_modality(transform_name: str, model_gt_sample: ModelGTSample) -> None:
-    """Raise ``KeyError`` when the sample carries neither a point cloud nor camera data.
-
-    Args:
-        transform_name: Name of the transform used in the error message.
-        model_gt_sample: The sample validated before the transform runs.
-
-    Raises:
-        KeyError: If both ``point_cloud_data`` and ``camera_image_data`` are missing.
-    """
-    if all(getattr(model_gt_sample, key, None) is None for key in MODALITY_KEYS):
-        raise KeyError(
-            f"{transform_name}: Missing required key, at least one of {list(MODALITY_KEYS)} "
-            "must be available"
-        )
 
 
 def yaw_rotation_matrix(angle: float) -> Float32[Tensor, "3 3"]:
@@ -129,10 +109,11 @@ class GlobalRotScaleTrans(BaseTransform):
     """Apply global rotation, scaling, and optional translation to points, bboxes and cameras.
 
     Required keys:
-        - At least one of ``point_cloud_data`` / ``camera_image_data``.
+        - ``point_cloud_data``: rotated, scaled and translated in place. Required so that a
+          pipeline running the transform before the points are loaded fails instead of moving
+          the boxes and cameras away from the points loaded afterwards.
 
     Optional keys:
-        - ``point_cloud_data``: rotated, scaled and translated in place when available.
         - ``camera_image_data``: lidar to camera matrices updated when available.
         - ``detection3d_gt_bboxes_3d``: rotated, scaled and translated in place when available.
         - ``lidar_transformation_sample``: composed with the sampled augmentation when available.
@@ -141,8 +122,7 @@ class GlobalRotScaleTrans(BaseTransform):
         - ``lidar_transformation_sample``: the (composed) 4x4 augmentation.
     """
 
-    # Neither modality is strictly required on its own, see _validate_required_keys().
-    _required_keys = []
+    _required_keys = ["point_cloud_data"]
 
     def __init__(
         self,
@@ -167,11 +147,6 @@ class GlobalRotScaleTrans(BaseTransform):
             if translation_std is not None
             else None
         )
-
-    def _validate_required_keys(self, model_gt_sample: ModelGTSample) -> None:
-        """Raise ``KeyError`` when the sample carries neither a point cloud nor camera data."""
-        super()._validate_required_keys(model_gt_sample)
-        validate_at_least_one_modality(self.__class__.__name__, model_gt_sample)
 
     def sample_yaw(self) -> float:
         """
@@ -233,17 +208,20 @@ class GlobalRotScaleTrans(BaseTransform):
         return lidar_transformation_sample, rotation_scale_translation_data
 
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
-        """Rotate, scale, and translate the available modalities and the bboxes."""
+        """Rotate, scale, and translate the points, the bboxes and the camera matrices."""
         lidar_transformation_sample, rotation_scale_translation_data = self.sample_rot_scale_trans()
         # Points and boxes are rows, so they take the transposed rotation
         row_vector_rotation_matrix = rotation_scale_translation_data.rotation_matrix.T
         scale_factor = rotation_scale_translation_data.scale_factor
         translation_vector = rotation_scale_translation_data.translation_vector
 
-        if model_gt_sample.point_cloud_data is not None:
-            model_gt_sample.point_cloud_data.rotate(row_vector_rotation_matrix)
-            model_gt_sample.point_cloud_data.scale(scale_factor)
-            model_gt_sample.point_cloud_data.translate(translation_vector)
+        # This is checked in the _validate_required_keys()
+        point_cloud_data: BasePoints = (
+            model_gt_sample.point_cloud_data  # type: ignore[reportOptionalMemberAccess]
+        )
+        point_cloud_data.rotate(row_vector_rotation_matrix)
+        point_cloud_data.scale(scale_factor)
+        point_cloud_data.translate(translation_vector)
 
         if model_gt_sample.detection3d_gt_bboxes_3d is not None:
             model_gt_sample.detection3d_gt_bboxes_3d.rotate(row_vector_rotation_matrix)
@@ -285,10 +263,11 @@ class GlobalBEVRandomFlip(BaseTransform):
     """Globally and randomly flip points, bboxes and cameras along the BEV axes.
 
     Required keys:
-        - At least one of ``point_cloud_data`` / ``camera_image_data``.
+        - ``point_cloud_data``: flipped in place. Required so that a pipeline running the
+          transform before the points are loaded fails instead of flipping the boxes and
+          cameras away from the points loaded afterwards.
 
     Optional keys:
-        - ``point_cloud_data``: flipped in place when available.
         - ``camera_image_data``: lidar to camera matrices updated when available.
         - ``detection3d_gt_bboxes_3d``: flipped in place when available.
         - ``lidar_transformation_sample``: composed with the sampled flip when available.
@@ -297,8 +276,7 @@ class GlobalBEVRandomFlip(BaseTransform):
         - ``lidar_transformation_sample``: the (composed) 4x4 flip.
     """
 
-    # Neither modality is strictly required on its own, see _validate_required_keys().
-    _required_keys = []
+    _required_keys = ["point_cloud_data"]
 
     def __init__(
         self, horizontal_flip_ratio: float = 0.5, vertical_flip_ratio: float = 0.5
@@ -312,11 +290,6 @@ class GlobalBEVRandomFlip(BaseTransform):
         super().__init__(probability=None)
         self.horizontal_flip_ratio = horizontal_flip_ratio
         self.vertical_flip_ratio = vertical_flip_ratio
-
-    def _validate_required_keys(self, model_gt_sample: ModelGTSample) -> None:
-        """Raise ``KeyError`` when the sample carries neither a point cloud nor camera data."""
-        super()._validate_required_keys(model_gt_sample)
-        validate_at_least_one_modality(self.__class__.__name__, model_gt_sample)
 
     def sample_flip(self) -> tuple[bool, bool]:
         """
@@ -333,7 +306,7 @@ class GlobalBEVRandomFlip(BaseTransform):
         bev_flip_direction: BEVDirection,
     ) -> Float32[Tensor, "3 3"]:
         """
-        Apply the specified flip to the point cloud and bboxes, whichever are available.
+        Apply the specified flip to the point cloud and the bboxes when present.
 
         Args:
             model_gt_sample: The ModelGTSample to apply the flip to.
@@ -344,14 +317,17 @@ class GlobalBEVRandomFlip(BaseTransform):
         Returns:
             Float32[Tensor, "3 3"]: The flips applied so far followed by this one.
         """
-        if model_gt_sample.point_cloud_data is not None:
-            model_gt_sample.point_cloud_data.flip_bev(bev_direction=bev_flip_direction)
+        # This is checked in the _validate_required_keys()
+        point_cloud_data: BasePoints = (
+            model_gt_sample.point_cloud_data  # type: ignore[reportOptionalMemberAccess]
+        )
+        point_cloud_data.flip_bev(bev_direction=bev_flip_direction)
         if model_gt_sample.detection3d_gt_bboxes_3d is not None:
             model_gt_sample.detection3d_gt_bboxes_3d.flip_bev(bev_direction=bev_flip_direction)
         return BEV_FLIP_MATRICES[bev_flip_direction] @ rotation_matrix
 
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
-        """Flip the available modalities and the bboxes along the sampled axes."""
+        """Flip the points, the bboxes and the camera matrices along the sampled axes."""
         rotation_matrix = torch.eye(3, dtype=torch.float32)
         horizontal_flip, vertical_flip = self.sample_flip()
         transformation_order = []

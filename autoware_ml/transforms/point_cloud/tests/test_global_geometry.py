@@ -732,22 +732,21 @@ class TestGlobalRotScaleTrans(BaseCameraLidarGeometryTestCase):
             torch.allclose(output.point_cloud_data.points[:, :3], expected_xyz, atol=1e-5)
         )
 
-    def test_camera_only_sample(self) -> None:
-        """Test that a sample without points updates the cameras and leaves the points None."""
+    def test_camera_only_sample_is_rejected(self) -> None:
+        """
+        Test that a sample without points raises KeyError even when it carries cameras. Running
+        the transform before the points are loaded would move the boxes and the camera matrices
+        away from the points loaded afterwards, so the points are required, not optional.
+        """
         sample = self.build_multi_task_gt_sample(with_point_cloud_data=False)
-        output, expected_transformation_matrix = self.run_seeded_transform(sample)
 
-        assert output.camera_image_data is not None
-        self.assertIsNone(output.point_cloud_data)
-        self.assert_camera_matrices_follow(output.camera_image_data, expected_transformation_matrix)
-        # A point the sample would have held still projects where it did.
-        original_xyz = to_float64(self.original_points[:, :3])
-        transformed_xyz = to_float64(
-            self.apply_transformation_to_xyz(
-                self.original_points[:, :3], to_float32_tensor(expected_transformation_matrix)
-            )
+        with self.assertRaisesRegex(KeyError, "point_cloud_data"):
+            self.build_transform()(sample)
+        # Nothing was touched before the rejection.
+        assert sample.camera_image_data is not None
+        np.testing.assert_array_equal(
+            to_float64(sample.camera_image_data.lidar2cams), self.original_lidar2cams
         )
-        self.assert_projections_preserved(output.camera_image_data, original_xyz, transformed_xyz)
 
     def test_without_bboxes(self) -> None:
         """Test that a sample without bboxes is transformed."""
@@ -994,21 +993,19 @@ class TestGlobalBEVRandomFlip(BaseCameraLidarGeometryTestCase):
         self.assertTrue(torch.allclose(points[:, 0], -self.original_points[:, 0]))
         self.assertTrue(torch.allclose(points[:, 1], self.original_points[:, 1]))
 
-    def test_camera_only_sample(self) -> None:
-        """Test that a sample without points updates the cameras and leaves the points None."""
+    def test_camera_only_sample_is_rejected(self) -> None:
+        """
+        Test that a sample without points raises KeyError even when it carries cameras and
+        boxes, so a flip can never run ahead of the points it has to stay aligned with.
+        """
         sample = self.build_multi_task_gt_sample(with_point_cloud_data=False)
-        output = GlobalBEVRandomFlip(horizontal_flip_ratio=1.0, vertical_flip_ratio=1.0)(sample)
 
-        assert output.camera_image_data is not None
-        assert output.detection3d_gt_bboxes_3d is not None
-        self.assertIsNone(output.point_cloud_data)
-        self.assert_camera_matrices_follow(output.camera_image_data, self.both_flips)
+        with self.assertRaisesRegex(KeyError, "point_cloud_data"):
+            GlobalBEVRandomFlip(horizontal_flip_ratio=1.0, vertical_flip_ratio=1.0)(sample)
+        # Nothing was touched before the rejection.
+        assert sample.detection3d_gt_bboxes_3d is not None
         self.assertTrue(
-            torch.allclose(
-                output.detection3d_gt_bboxes_3d.bbox_params[:, :2],
-                -self.original_bbox_params[:, :2],
-                atol=1e-5,
-            )
+            torch.equal(sample.detection3d_gt_bboxes_3d.bbox_params, self.original_bbox_params)
         )
 
     def test_composes_with_previous_transformation(self) -> None:
