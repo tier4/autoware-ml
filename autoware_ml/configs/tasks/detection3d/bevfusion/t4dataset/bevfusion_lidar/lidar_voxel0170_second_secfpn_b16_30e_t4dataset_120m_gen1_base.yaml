@@ -13,3 +13,8 @@ experiment_name: lidar_voxel0170_second_secfpn_b16_30e_t4dataset_120m
 
 trainer:
   max_epochs: 30
+
+model:
+  scheduler:
+    warmup_epochs: 3
+    decay_epochs: 27

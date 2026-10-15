@@ -20,3 +20,8 @@ weights: ???
 # Load a lower learning rate when it loads from a pre-training weight
 optimizer:
   lr: 1.0e-4
+
+model:
+  scheduler:
+    warmup_epochs: 3
+    decay_epochs: 27

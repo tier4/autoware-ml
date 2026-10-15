@@ -24,3 +24,9 @@ weights: ???
 # Load a lower learning rate when it loads from a pre-training weight
 optimizer:
   lr: 5.0e-5
+
+# The 30-epoch warmup is kept and the cosine decay stretched to fill the 50 epochs.
+model:
+  scheduler:
+    warmup_epochs: 8
+    decay_epochs: 42

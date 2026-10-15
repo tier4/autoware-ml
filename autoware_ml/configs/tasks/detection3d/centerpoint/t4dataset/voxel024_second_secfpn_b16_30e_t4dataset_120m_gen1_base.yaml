@@ -15,3 +15,8 @@ trainer:
 
 optimizer:
   lr: 1.0e-4
+
+model:
+  scheduler:
+    warmup_epochs: 8
+    decay_epochs: 22

@@ -23,6 +23,7 @@ import pytest
 from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
+from omegaconf import OmegaConf
 
 from autoware_ml.configs.resolvers import register_config_resolvers
 
@@ -62,3 +63,20 @@ def test_every_experiment_instantiates_its_model_and_pipelines(config_name: str)
     hydra.utils.instantiate(cfg.datasets.train.transforms)
     hydra.utils.instantiate(cfg.datasets.test.transforms)
     hydra.utils.instantiate(cfg.model, data_preprocessor=data_preprocessor)
+
+
+@pytest.mark.parametrize("config_name", EXPERIMENT_CONFIGS)
+def test_every_warmup_decay_schedule_spans_the_training_epochs(config_name: str) -> None:
+    # The scheduler is a partial, so a `???` epoch count only surfaces when training starts, and
+    # a schedule shorter than the run keeps evaluating the cosine past its end and climbs back
+    # towards the peak learning rate. Every leaf therefore sets both counts to add up to
+    # trainer.max_epochs. A top-level `scheduler` key is read by nothing and is a misplaced one.
+    cfg = compose_experiment(config_name)
+    scheduler = cfg.model.get("scheduler")
+    if scheduler is None or "warmup_epochs" not in scheduler or "decay_epochs" not in scheduler:
+        return
+
+    assert not OmegaConf.is_missing(scheduler, "warmup_epochs"), "warmup_epochs is `???`"
+    assert not OmegaConf.is_missing(scheduler, "decay_epochs"), "decay_epochs is `???`"
+    assert scheduler.warmup_epochs + scheduler.decay_epochs == cfg.trainer.max_epochs
+    assert cfg.get("scheduler") is None, "a top-level `scheduler` key is read by nothing"

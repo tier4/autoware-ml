@@ -11,3 +11,8 @@ experiment_name: voxel0075_second_secfpn_b16_30e_nuscenes_54m
 
 trainer:
   max_epochs: 30
+
+model:
+  scheduler:
+    warmup_epochs: 8
+    decay_epochs: 22

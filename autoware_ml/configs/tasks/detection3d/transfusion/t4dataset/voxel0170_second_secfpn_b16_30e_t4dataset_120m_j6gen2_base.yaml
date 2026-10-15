@@ -12,3 +12,8 @@ experiment_name: voxel0170_second_secfpn_b16_30e_t4dataset_120m
 
 trainer:
   max_epochs: 30
+
+model:
+  scheduler:
+    warmup_epochs: 8
+    decay_epochs: 22
