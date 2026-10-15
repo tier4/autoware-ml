@@ -183,9 +183,6 @@ model:
     iou_loss:
       _target_: autoware_ml.losses.detection3d.rotated_iou_loss.Rotated2DIouLoss
       class_names: ${database.taxonomy.detection3d.class_names}
-      point_cloud_range: ${point_cloud_range}
-      voxel_size: ${voxel_size}
-      out_size_factor: ${out_size_factor}
       labels_to_ignore_rotation: [traffic_cone]
       loss_weight: 0.10
 

@@ -272,9 +272,9 @@ class TransFusionHead(nn.Module):
                 pooling before proposal selection.
             iou_loss: Optional rotated BEV IoU loss applied to every matched (prediction, gt)
                 pair of every decoder layer, on top of the L1 box loss. The module receives the
-                encoded predictions and targets together with the matched labels and decodes
-                them itself, so it must be built with the same grid geometry as ``bbox_coder``;
-                see :class:`~autoware_ml.losses.detection3d.rotated_iou_loss.Rotated2DIouLoss`.
+                predictions and targets decoded through ``bbox_coder`` together with the
+                matched labels; see
+                :class:`~autoware_ml.losses.detection3d.rotated_iou_loss.Rotated2DIouLoss`.
                 None disables the term and skips its computation entirely.
             class_names: Optional ordered class names used to resolve config-friendly
                 class lists.
@@ -1480,11 +1480,12 @@ class TransFusionHead(nn.Module):
         """
         Compute one decoder layer's rotated BEV IoU loss over its matched proposals.
 
-        Only the positives are decoded into corners: negatives carry arbitrary regression
-        outputs whose exponentiated sizes could overflow, and a zero weight would not stop a NaN
-        from poisoning the sum. The matched pairs of the whole batch are gathered into one
-        ``(1, num_positives)`` pseudo-batch, which is all the corner intersection needs. Like the
-        L1 box loss, the sum is normalized by the positive count over all layers.
+        Only the positives are decoded: negatives carry arbitrary regression outputs whose
+        exponentiated sizes could overflow, and a zero weight would not stop a NaN from
+        poisoning the sum. The matched pairs of the whole batch are gathered into one
+        ``(1, num_positives)`` pseudo-batch, which is all the IoU needs. Both sides are decoded
+        through ``bbox_coder`` so the loss sees metric boxes on the coder's grid. Like the L1
+        box loss, the sum is normalized by the positive count over all layers.
 
         Args:
             preds: Raw regression outputs in the encoded box layout.
@@ -1505,15 +1506,42 @@ class TransFusionHead(nn.Module):
         pos_preds = preds[pos_masks].unsqueeze(0)
         pos_targets = bbox_targets[pos_masks].unsqueeze(0)
         pos_labels = labels[pos_masks].unsqueeze(0)
-        # The loss decodes the encoded boxes into BEV corners itself, with its own grid geometry
-        # and its own list of classes compared axis-aligned.
         pair_losses = self.iou_loss(
-            prediction_bboxes=pos_preds,
-            target_bboxes=pos_targets,
+            prediction_bboxes=self._decode_encoded_boxes(pos_preds),
+            target_bboxes=self._decode_encoded_boxes(pos_targets),
             labels=pos_labels,
-            bbox_weights=torch.ones(pos_labels.shape, device=preds.device, dtype=preds.dtype),
+            bbox_weights=torch.ones(pos_labels.shape, device=preds.device, dtype=torch.float32),
         )
         return pair_losses.sum() / max(num_pos, 1)
+
+    def _decode_encoded_boxes(
+        self, encoded_bboxes: Float32[torch.Tensor, "batch_size num_bboxes code_size"]
+    ) -> Float32[torch.Tensor, "batch_size num_bboxes 7"]:
+        """Decode boxes in the encoded layout into metric boxes through the box coder.
+
+        Decoding runs in float32 with autocast disabled: under fp16 autocast the exponentiated
+        sizes overflow for log sizes above about eleven and turn the IoU into NaN.
+
+        Args:
+            encoded_bboxes: Boxes in the layout ``bbox_coder.encode`` produces, as the head
+                regresses them: BEV center, z, log sizes, (sin, cos) yaw and optional
+                velocities.
+
+        Returns:
+            Metric boxes as (x, y, z, length, width, height, yaw).
+        """
+        encoded_bboxes = encoded_bboxes.float()
+        with torch.autocast(device_type=encoded_bboxes.device.type, enabled=False):
+            # (batch_size, num_bboxes, code_size) -> (batch_size, code_size, num_bboxes), the
+            # channel-first layout decode_boxes reads.
+            channels = encoded_bboxes.permute(0, 2, 1)
+            return self.bbox_coder.decode_boxes(
+                rots=channels[:, 6:8],
+                dims=channels[:, 3:6],
+                centers=channels[:, 0:2],
+                heights=channels[:, 2:3],
+                vels=None,
+            )
 
     def prepare_for_export(self) -> TransFusionHead:
         """Return an export-ready copy with attention replaced by exportable equivalents.

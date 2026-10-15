@@ -1037,9 +1037,6 @@ class TestTransFusionHead(unittest.TestCase):
         """Build a rotated IoU loss on the fixture's grid geometry."""
         return Rotated2DIouLoss(
             class_names=self.class_names,
-            point_cloud_range=self.point_cloud_range,
-            voxel_size=self.voxel_size,
-            out_size_factor=self.out_size_factor,
             labels_to_ignore_rotation=labels_to_ignore_rotation,
             loss_weight=loss_weight,
         )
@@ -1126,6 +1123,24 @@ class TestTransFusionHead(unittest.TestCase):
             if "loss" in key and key != "loss"
         )
         self.assertAlmostEqual(float(torch.as_tensor(losses["loss"])), component_total, places=4)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "the rotated IoU op requires CUDA")
+    def test_loss_iou_under_fp16_autocast_matches_float32(self) -> None:
+        """
+        Test that the IoU term computed under fp16 autocast is finite, float32 and equal to the
+        full precision term: the boxes are decoded and intersected outside autocast.
+        """
+        head = self._build_transfusion_head(iou_loss=self._build_iou_loss())
+        outputs = self._build_head_outputs_on_gt(head, layer_center_shifts_metres=[0.5, 0.5])
+
+        expected = self._iou_terms(self._compute_losses(head, transfusion_head_outputs=outputs))
+        with torch.autocast(device_type="cuda", dtype=torch.float16):
+            actual = self._iou_terms(self._compute_losses(head, transfusion_head_outputs=outputs))
+
+        for term, reference in zip(actual, expected):
+            self.assertEqual(term.dtype, torch.float32)
+            self.assertTrue(torch.isfinite(term).all())
+            torch.testing.assert_close(term, reference, rtol=1e-3, atol=1e-4)
 
     @unittest.skipUnless(torch.cuda.is_available(), "the rotated IoU op requires CUDA")
     def test_loss_with_iou_loss_backward_reaches_the_predictions(self) -> None:
