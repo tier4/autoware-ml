@@ -1,0 +1,9 @@
+# Dynamic taxonomy of T4dataset: the coarse detection level reduced to the dynamic objects,
+# with the coarse segmentation level.
+_target_: autoware_ml.databases.taxonomy.DatabaseTaxonomy
+_convert_: all
+
+defaults:
+  - /database/t4dataset/taxonomy/detection3d@detection3d: default_dynamic
+  - /database/t4dataset/taxonomy/segmentation3d@segmentation3d: default_coarse
+  - _self_

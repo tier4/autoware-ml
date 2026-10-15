@@ -38,16 +38,13 @@ model:
     partial_ignore_labels: [traffic_cone, barrier]
     nms_type: circle
     nms_min_radius: 0.25
-    # One group per class of the coarse detection taxonomy of the T4 databases.
+    # One group per class of the dynamic detection taxonomy of the T4 databases, which the
+    # leaves select. Motorcycles train as bicycles, debris as barriers; animals are dropped.
     nms_group_configs:
       - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.NMSGroupConfig
         class_names: [car, truck, bus]
         nms_radius: 0.25
         max_size: 300
-      - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.NMSGroupConfig
-        class_names: [motorcycle]
-        nms_radius: 0.0
-        max_size: 50
       - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.NMSGroupConfig
         class_names: [bicycle]
         nms_radius: 0.0
@@ -57,10 +54,6 @@ model:
         nms_radius: 0.0
         max_size: 100
       - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.NMSGroupConfig
-        class_names: [animal]
-        nms_radius: 0.0
-        max_size: 50
-      - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.NMSGroupConfig
         class_names: [barrier]
         nms_radius: 0.0
         max_size: 50
@@ -68,10 +61,6 @@ model:
         class_names: [traffic_cone]
         nms_radius: 0.0
         max_size: 100
-      - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.NMSGroupConfig
-        class_names: [debris]
-        nms_radius: 0.0
-        max_size: 50
     score_threshold_group_configs:
       - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.ScoreThresholdConfig
         class_names: [car]
@@ -80,16 +69,10 @@ model:
         class_names: [truck, bus]
         score_threshold: 0.010
       - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.ScoreThresholdConfig
-        class_names: [motorcycle]
-        score_threshold: 0.020
-      - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.ScoreThresholdConfig
         class_names: [bicycle]
         score_threshold: 0.020
       - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.ScoreThresholdConfig
         class_names: [pedestrian]
-        score_threshold: 0.030
-      - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.ScoreThresholdConfig
-        class_names: [animal]
         score_threshold: 0.030
       - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.ScoreThresholdConfig
         class_names: [barrier]
@@ -97,9 +80,6 @@ model:
       - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.ScoreThresholdConfig
         class_names: [traffic_cone]
         score_threshold: 0.040
-      - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.ScoreThresholdConfig
-        class_names: [debris]
-        score_threshold: 0.020
     bbox_coder:
       post_center_range: [-200.0, -200.0, -10.0, 200.0, 200.0, 10.0]
 
