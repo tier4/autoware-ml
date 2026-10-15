@@ -84,6 +84,61 @@ class LearnedPositionalEncoding(nn.Module):
         return self.proj(position.transpose(1, 2)).transpose(1, 2)
 
 
+class ConstantPositionalEncoding(nn.Module):
+    """Precompute a ``LearnedPositionalEncoding`` of fixed BEV positions.
+
+    The decoder keys are the BEV cells, whose positions never change once
+    the model is deployed, so their learned embedding is computed once at
+    export and becomes an ONNX initializer. Left in the graph, the two 1x1
+    convolutions over all BEV cells would run on every frame: TensorRT does
+    not fold convolutions.
+    """
+
+    def __init__(
+        self,
+        encoding: LearnedPositionalEncoding,
+        positions: torch.Tensor,
+    ) -> None:
+        """Embed the fixed positions once with the trained encoding.
+
+        Args:
+            encoding: Trained positional encoding to evaluate.
+            positions: BEV coordinate tensor of shape ``(1, tokens, channels)``.
+        """
+        super().__init__()
+        parameter = next(encoding.parameters())
+        positions = positions.to(parameter.device, parameter.dtype)
+        with torch.no_grad():
+            embedding = encoding.eval()(positions)
+        self.register_buffer("embedding", embedding.detach().clone())
+
+    def forward(self, position: torch.Tensor) -> torch.Tensor:
+        """Return the precomputed embedding of the fixed positions.
+
+        Args:
+            position: BEV coordinate tensor of shape
+                ``(batch, tokens, channels)``; only its token count is used.
+
+        Returns:
+            Positional embeddings of shape ``(1, tokens, embed_dims)``, broadcast
+            over the batch by the consumer. Expanding them here would only add
+            traced shape nodes to the exported graph.
+
+        Raises:
+            ValueError: If ``position`` holds a different number of tokens than
+                the embedding was precomputed for. Sizes are traced during ONNX
+                export, so the check only runs eagerly.
+        """
+        tokens = self.embedding.shape[1]
+        if not torch.onnx.is_in_onnx_export() and position.shape[1] != tokens:
+            raise ValueError(
+                f"Positional encoding was frozen for {tokens} positions, got "
+                f"{position.shape[1]}: the BEV grid differs from the export "
+                "geometry."
+            )
+        return self.embedding
+
+
 class TransFusionDecoderLayer(nn.Module):
     """Refine TransFusion proposals with self- and cross-attention.
 
@@ -1012,8 +1067,17 @@ class TransFusionHead(nn.Module):
         loss_dict["loss"] = sum(value for key, value in loss_dict.items() if "loss" in key)
         return loss_dict
 
-    def prepare_for_export(self) -> "TransFusionHead":
+    def prepare_for_export(
+        self,
+        bev_shape: tuple[int, int] | None = None,
+    ) -> "TransFusionHead":
         """Return an export-ready copy with attention replaced by exportable equivalents.
+
+        Args:
+            bev_shape: Dense BEV ``(height, width)`` the head will see at
+                inference. When given, the key positional encoding of that grid
+                is precomputed once and exported as a constant; without it the
+                encoding stays a runtime computation.
 
         Returns:
             Deep copy of the head with MultiheadAttention layers replaced by
@@ -1022,7 +1086,18 @@ class TransFusionHead(nn.Module):
         head = deepcopy(self).eval()
         if not hasattr(head, "decoder"):
             return head
+        bev_pos = None
+        if bev_shape is not None:
+            height, width = bev_shape
+            device = next(head.parameters()).device
+            bev_pos = head._create_2d_grid(width, height, device)
         for decoder_layer in head.decoder:
+            if bev_pos is not None and isinstance(
+                decoder_layer.key_pos_encoding, LearnedPositionalEncoding
+            ):
+                decoder_layer.key_pos_encoding = ConstantPositionalEncoding(
+                    decoder_layer.key_pos_encoding, bev_pos
+                )
             if isinstance(decoder_layer.self_attn, nn.MultiheadAttention):
                 decoder_layer.self_attn = ExportableMultiheadAttention(
                     decoder_layer.self_attn,
@@ -1034,4 +1109,5 @@ class TransFusionHead(nn.Module):
                     fuse_attention=head.use_bf16_cross_attention,
                     use_bf16=head.use_bf16_cross_attention,
                 )
-        return head
+        # The replacement modules are constructed in training mode.
+        return head.eval()
