@@ -173,8 +173,4 @@ datamodule:
     shuffle: true
   predict_dataloader:
     batch_size: 1
-  train_frame_sampling:
-    pedestrian_class_name: pedestrian
-    class_names: ${database.taxonomy.detection3d.class_names}
-    ignore_index: ${database.taxonomy.detection3d.ignore_index}
-    filter_attributes: ${filter_attributes}
+  train_frame_sampling: null
