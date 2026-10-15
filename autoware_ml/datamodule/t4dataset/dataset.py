@@ -34,7 +34,7 @@ from autoware_ml.datamodule.base_dataset import (
 )
 from autoware_ml.datamodule.base_dataset_task import BaseDatasetTask
 from autoware_ml.datamodule.t4dataset.frame_meta import scene_dir_fragment
-from autoware_ml.transforms.base import PipelineContext, TransformsCompose
+from autoware_ml.transforms.base import TransformsCompose
 from autoware_ml.types.tasks import TaskType
 
 if TYPE_CHECKING:
@@ -309,12 +309,7 @@ class T4Dataset(BaseDataset):
             sensor_to_frame_matrix=torch.from_numpy(sensor_to_frame),
         )
 
-    def apply_transforms(
-        self,
-        model_gt_sample: ModelGTSample,
-        transforms: TransformsCompose | None = None,
-        context: PipelineContext | None = None,
-    ) -> ModelGTSample:
+    def apply_transforms(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
         """Run the transform pipeline and label the points of a corpus whose masks are unused.
 
         Every point of such a corpus gets the ignore index. The labels are written after the
@@ -322,13 +317,11 @@ class T4Dataset(BaseDataset):
 
         Args:
             model_gt_sample: ModelGTSample instance.
-            transforms: Pipeline to run. None runs the transforms of the dataset.
-            context: Pipeline context of the sample, forwarded to every transform.
 
         Returns:
             Transformed ModelGTSample instance.
         """
-        model_gt_sample = super().apply_transforms(model_gt_sample, transforms, context)
+        model_gt_sample = super().apply_transforms(model_gt_sample)
         if TaskType.SEGMENTATION3D not in self.dataset_tasks:
             return model_gt_sample
         if self.seg3d_supervised:
