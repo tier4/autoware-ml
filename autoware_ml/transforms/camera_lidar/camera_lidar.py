@@ -688,9 +688,15 @@ class LidarCameraFusion(BaseTransform):
     ) -> npt.NDArray[np.float64]:
         """Project camera-frame points onto the image plane.
 
+        The lens distortion is applied by OpenCV in normalized image coordinates, with an
+        identity camera matrix, and the full 3x3 ``camera_matrix`` is applied afterwards. The
+        augmented intrinsics carry the whole pixel affine of the image-space transforms, shear
+        and rotation included, which ``cv2.projectPoints`` would drop since it only reads
+        ``fx``, ``fy``, ``cx`` and ``cy`` of the matrix it is given.
+
         Args:
             points_cam: Point coordinates in the camera frame, shape ``(num_points, 3)``.
-            camera_matrix: 3x3 camera intrinsics.
+            camera_matrix: 3x3 camera intrinsics, possibly composed with a pixel affine.
             distortion_coefficients: OpenCV distortion coefficients, empty for none.
 
         Returns:
@@ -699,10 +705,12 @@ class LidarCameraFusion(BaseTransform):
         if points_cam.shape[0] == 0:
             return np.zeros((0, 2), dtype=np.float64)
         coefficients = distortion_coefficients if distortion_coefficients.size > 0 else None
-        pixels, _ = cv2.projectPoints(
-            points_cam.reshape(-1, 1, 3), np.zeros(3), np.zeros(3), camera_matrix, coefficients
+        normalized, _ = cv2.projectPoints(
+            points_cam.reshape(-1, 1, 3), np.zeros(3), np.zeros(3), np.eye(3), coefficients
         )
-        return pixels.reshape(-1, 2)
+        homogeneous = np.hstack([normalized.reshape(-1, 2), np.ones((points_cam.shape[0], 1))])
+        pixels = homogeneous @ camera_matrix.T
+        return pixels[:, :2] / pixels[:, 2:3]
 
     def rasterize_points(
         self,

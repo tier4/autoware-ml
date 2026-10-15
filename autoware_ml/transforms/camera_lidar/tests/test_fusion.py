@@ -19,7 +19,9 @@ from __future__ import annotations
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
+import cv2
 import numpy as np
 import torch
 
@@ -231,6 +233,48 @@ class TestLidarCameraFusion(unittest.TestCase):
         hit = torch.nonzero(output.depth_maps[0, 0] > 0)
         self.assertEqual(hit.tolist(), [[int(CENTER_Y), int(CENTER_X) - 2]])
 
+    def test_projection_applies_the_full_pixel_affine(self) -> None:
+        """
+        The augmented intrinsics carry the whole pixel affine of the image-space transforms. A
+        sheared affine composed onto the pinhole matrix must move the projection by its shear
+        term too, which cv2.projectPoints alone drops since it only reads fx, fy, cx and cy.
+        """
+        shear = np.array([[1.0, 0.6, -2.0], [0.3, 1.0, -2.0], [0.0, 0.0, 1.0]])
+        pinhole = _intrinsics(1)[0].numpy().astype(np.float64)
+        camera_matrix = shear @ pinhole
+        points_cam = np.array([[1.0, 0.5, 5.0], [-2.0, 1.5, 4.0], [0.3, -0.7, 2.0]])
+
+        pixels = LidarCameraFusion.project_points_to_image(points_cam, camera_matrix, np.zeros(0))
+
+        normalized = np.hstack([points_cam[:, :2] / points_cam[:, 2:3], np.ones((3, 1))])
+        expected = (normalized @ camera_matrix.T)[:, :2]
+        np.testing.assert_allclose(pixels, expected, atol=1e-9)
+        # The shear term is what separates the full matrix from its fx, fy, cx, cy reading.
+        dropped_shear = camera_matrix.copy()
+        dropped_shear[0, 1] = 0.0
+        dropped_shear[1, 0] = 0.0
+        self.assertGreater(np.abs(pixels - (normalized @ dropped_shear.T)[:, :2]).max(), 1.0)
+
+    def test_projection_distorts_with_the_raw_intrinsics_then_applies_the_affine(self) -> None:
+        """
+        With lens distortion the projection equals OpenCV's distorted pinhole projection followed
+        by the pixel affine, since the distortion acts in normalized coordinates.
+        """
+        shear = np.array([[1.0, 0.6, -2.0], [0.3, 1.0, -2.0], [0.0, 0.0, 1.0]])
+        pinhole = _intrinsics(1)[0].numpy().astype(np.float64)
+        coefficients = np.array([-0.2, 0.05, 0.001, -0.002, 0.0])
+        points_cam = np.array([[1.0, 0.5, 5.0], [-2.0, 1.5, 4.0], [0.3, -0.7, 2.0]])
+
+        pixels = LidarCameraFusion.project_points_to_image(
+            points_cam, shear @ pinhole, coefficients
+        )
+
+        raw_pixels, _ = cv2.projectPoints(
+            points_cam.reshape(-1, 1, 3), np.zeros(3), np.zeros(3), pinhole, coefficients
+        )
+        expected = (np.hstack([raw_pixels.reshape(-1, 2), np.ones((3, 1))]) @ shear.T)[:, :2]
+        np.testing.assert_allclose(pixels, expected, atol=1e-9)
+
     def test_perturbed_calibration_moves_the_projection(self) -> None:
         # A one metre shift of the camera along x moves a point at 5 m by FOCAL / 5 columns.
         misalignment = CalibrationMisalignment(
@@ -415,19 +459,29 @@ class TestAffine(unittest.TestCase):
         )
 
     def test_fusion_after_affine_follows_the_warped_pixels(self) -> None:
-        # The projection of a lidar point must move with the pixels it was drawn on.
+        """
+        The projection of a lidar point must move with the pixels it was drawn on. The affine is
+        fixed and sheared: the raw pixel (8, 5) lands on (9.3, 5.3) under it, while a projection
+        reading only fx, fy, cx and cy of the composed matrix would paint (8.7, 4.7), one pixel
+        off in both axes. The targets sit away from pixel boundaries so float32 intrinsics
+        cannot tip the rounding.
+        """
+        sheared_affine = np.array([[1.0, 0.6, -1.7], [0.3, 1.0, -2.1], [0.0, 0.0, 1.0]])
         point = torch.tensor([[1.0, 0.5, 5.0, 1.0]])
         sample = _build_sample(point)
         fusion = LidarCameraFusion(dilation_size=0)
 
-        warped = Affine(probability=1.0, max_distortion=0.1)(sample)
+        with patch.object(Affine, "sample_affine_matrix", return_value=sheared_affine):
+            warped = Affine(probability=1.0, max_distortion=0.1)(sample)
         fused = fusion(warped).camera_image_data
 
         affine = warped.camera_image_data.image_augmentation_pixel_affines()[0]
+        torch.testing.assert_close(affine, torch.tensor(sheared_affine, dtype=affine.dtype))
         raw_pixel = torch.tensor([_pixel_of(1.0, 5.0) + 0.0, CENTER_Y + FOCAL * 0.5 / 5.0, 1.0])
         expected = (affine @ raw_pixel)[:2]
+        self.assertEqual([int(expected[0]), int(expected[1])], [9, 5])
         hit = torch.nonzero(fused.depth_maps[0, 0] > 0)
-        self.assertEqual(hit.tolist(), [[int(expected[1]), int(expected[0])]])
+        self.assertEqual(hit.tolist(), [[5, 9]])
 
     def test_missing_camera_image_data(self) -> None:
         with self.assertRaisesRegex(KeyError, "Missing required key 'camera_image_data'"):
