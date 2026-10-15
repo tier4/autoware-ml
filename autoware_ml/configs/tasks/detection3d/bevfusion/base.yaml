@@ -178,8 +178,7 @@ model:
     nms_type: null
     nms_group_configs: null
     use_velocity: true
-    # Optional rotated BEV IoU loss on the matched proposals of every decoder layer. Disabled by
-    # default; an experiment enables it with, for example:
+    # Optional rotated BEV IoU loss on the matched proposals of every decoder layer.
     iou_loss:
       _target_: autoware_ml.losses.detection3d.rotated_iou_loss.Rotated2DIouLoss
       class_names: ${database.taxonomy.detection3d.class_names}
