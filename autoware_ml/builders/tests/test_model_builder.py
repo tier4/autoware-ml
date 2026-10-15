@@ -27,6 +27,7 @@ from autoware_ml.builders.model_builder import (
     build_data_preprocessor,
     build_model,
     build_weight_checkpoint_paths,
+    resolve_weights_paths,
 )
 from autoware_ml.models.module_base_model import ModuleBaseModel
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
@@ -376,8 +377,52 @@ class TestBuildModel:
         assert "continues at epoch 4" in caplog.text
 
 
+class TestResolveWeightsPaths:
+    """``resolve_weights_paths`` reads the optional ``cfg.weights`` of training."""
+
+    def test_absent_or_null_weights_mean_none(self) -> None:
+        """
+        Input: a config without ``weights`` and one with ``weights: null``.
+        Expected: training from scratch is allowed, so both resolve to None.
+        Check: the return value.
+        """
+        assert resolve_weights_paths(OmegaConf.create({})) is None
+        assert resolve_weights_paths(OmegaConf.create({"weights": None})) is None
+
+    def test_a_string_and_a_list_resolve_to_paths(self) -> None:
+        """
+        Input: ``weights`` as one path string and as the list the CLI builds.
+        Expected: a list of paths in the given order.
+        Check: the return values.
+        """
+        assert resolve_weights_paths(OmegaConf.create({"weights": "a.ckpt"})) == [Path("a.ckpt")]
+        assert resolve_weights_paths(OmegaConf.create({"weights": ["a.ckpt", "b.ckpt"]})) == [
+            Path("a.ckpt"),
+            Path("b.ckpt"),
+        ]
+
+    def test_mandatory_weights_left_missing_are_rejected(self) -> None:
+        """
+        Input: the ``weights: ???`` of a fine-tune config without ``--weights``.
+        Expected: ``cfg.get`` reads ``???`` as None, which would train from scratch at the
+            fine-tune learning rate, so the missing value is rejected before any model is built.
+        Check: a ValueError mentioning ``--weights`` is raised.
+        """
+        with pytest.raises(ValueError, match="--weights"):
+            resolve_weights_paths(OmegaConf.create({"weights": "???"}))
+
+
 class TestBuildWeightCheckpointPaths:
     """``build_weight_checkpoint_paths`` resolves ``cfg.weights`` for test and deploy."""
+
+    def test_mandatory_weights_left_missing_are_rejected(self) -> None:
+        """
+        Input: a config whose ``weights`` is left at ``???``.
+        Expected: rejected like an absent key, not read as None.
+        Check: a ValueError mentioning ``--weights`` is raised.
+        """
+        with pytest.raises(ValueError, match="--weights"):
+            build_weight_checkpoint_paths(OmegaConf.create({"weights": "???"}))
 
     def test_requires_the_weights_key(self) -> None:
         """

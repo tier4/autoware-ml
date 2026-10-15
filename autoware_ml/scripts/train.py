@@ -31,7 +31,11 @@ import torch
 
 from autoware_ml.builders.database_builder import build_datamodule
 from autoware_ml.builders.mlflow_builder import build_mlflow_run_context
-from autoware_ml.builders.model_builder import build_model, build_data_preprocessor
+from autoware_ml.builders.model_builder import (
+    build_model,
+    build_data_preprocessor,
+    resolve_weights_paths,
+)
 from autoware_ml.builders.logger_builder import build_trainer_logger
 from autoware_ml.datamodule.data_module import DataModule
 from autoware_ml.models.module_base_model import ModuleBaseModel
@@ -140,7 +144,9 @@ def main(cfg: DictConfig):
 
     # Build model
     data_preprocessor = build_data_preprocessor(cfg)
-    weights_path = cfg.get("weights", None)
+    # A fine-tune config leaves weights at ??? and must be given --weights, so resolve it
+    # rather than cfg.get, which reads ??? as None and would train from scratch.
+    weights_path = resolve_weights_paths(cfg)
     resume_checkpoint_path = cfg.get("resume_checkpoint", None)
     model = build_model(
         cfg,
