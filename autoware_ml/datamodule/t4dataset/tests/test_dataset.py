@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from types import MappingProxyType
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -24,6 +25,9 @@ import polars as pl
 
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.databases.schemas.image_frames import ImageFrameDataModel
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
+from autoware_ml.datamodule.base_dataset_task import BaseDatasetTask
+from autoware_ml.datamodule.t4dataset import dataset as dataset_module
 from autoware_ml.datamodule.t4dataset.dataset import T4Dataset
 
 _ROOT = "/data/t4dataset"
@@ -273,3 +277,49 @@ def test_a_database_without_maps_leaves_the_dataset_without_a_provider() -> None
     dataset = build_dataset([[[camera_frame("CAM_FRONT")]]])
 
     assert dataset.map_provider is None
+
+
+class _LoggingTask(BaseDatasetTask):
+    """A task recording every call to log_dataset_info."""
+
+    calls: list[int] = []
+
+    def select_columns(self, dataset_records_dataframe: pl.DataFrame) -> pl.DataFrame:
+        return dataset_records_dataframe
+
+    def get_data_sample(self, idx: int) -> ModelGTSample:
+        raise AssertionError("not read in this test")
+
+    def log_dataset_info(self) -> None:
+        _LoggingTask.calls.append(len(self.dataset_records_dataframe))
+
+
+@pytest.mark.parametrize("rank,expected_calls", [(0, [1]), (1, [])])
+def test_binding_summarises_the_tasks_on_rank_zero_only(
+    rank: int, expected_calls: list[int]
+) -> None:
+    """
+    Input: a dataset bound to one record on rank 0 and on rank 1.
+    Expected: every rank binds the records of every stage, so only rank zero pays for and
+        prints the task summaries.
+    Check: the summary calls the task recorded.
+    """
+    _LoggingTask.calls = []
+    records = pl.DataFrame(
+        {DatasetTableSchema.IMAGE_FRAMES.name: [[]]},
+        schema={DatasetTableSchema.IMAGE_FRAMES.name: DatasetTableSchema.IMAGE_FRAMES.dtype},
+    )
+
+    with patch.object(dataset_module.rank_zero_only, "rank", rank):
+        T4Dataset(
+            lidar_intensity_scale=255.0,
+            database_root_path=_ROOT,
+            max_num_3d_gt_bboxes=0,
+            dataset_records_dataframe=records,
+            transforms=None,
+            dataset_tasks=MappingProxyType({"detection3d": _LoggingTask}),
+            det3d_supervised=True,
+            seg3d_supervised=True,
+        )
+
+    assert _LoggingTask.calls == expected_calls

@@ -7,6 +7,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Sequence
 
 from jaxtyping import Float32
+from lightning.pytorch.utilities.rank_zero import rank_zero_only
 import polars as pl
 import numpy as np
 import torch
@@ -163,8 +164,10 @@ class T4Dataset(BaseDataset):
                 for task_type, build_task in self.task_builders.items()
             }
         )
-        for dataset_task in self.dataset_tasks.values():
-            dataset_task.log_dataset_info()
+        # Every rank binds the records of every stage, so only rank zero summarises them.
+        if rank_zero_only.rank == 0:
+            for dataset_task in self.dataset_tasks.values():
+                dataset_task.log_dataset_info()
 
     @property
     def samples_per_record(self) -> int:

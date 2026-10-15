@@ -130,30 +130,34 @@ class Detection3DTask(BaseDatasetTask):
         """
         Log the number of boxes per class, before and after dropping the boxes without lidar
         points.
-        """
-        if self.dataset_records_dataframe is None:
-            logger.warning("Dataset records dataframe is not available.")
-            return
 
+        Only the label and the lidar point count are pulled out of the box structs, so the
+        count never materialises the full box table.
+        """
+        boxes = DatasetTableSchema.BOXES_3D.name
+        label = Box3DDatasetSchema.BOX3D_LABEL_NAME.name
+        has_points = "has_lidar_points"
         class_counts = (
-            self.dataset_records_dataframe.select(DatasetTableSchema.BOXES_3D.name)
-            .explode(DatasetTableSchema.BOXES_3D.name)
-            .unnest(DatasetTableSchema.BOXES_3D.name)
-            .group_by(Box3DDatasetSchema.BOX3D_LABEL_NAME.name)
-            .agg(
-                [
-                    pl.len().alias("count"),
-                    (pl.col(Box3DDatasetSchema.BOX3D_NUM_LIDAR_POINTS.name) > 0)
-                    .sum()
-                    .alias("valid_count"),
-                ]
+            self.dataset_records_dataframe.select(
+                pl.col(boxes).list.eval(pl.element().struct.field(label)).alias(label),
+                pl.col(boxes)
+                .list.eval(
+                    pl.element().struct.field(Box3DDatasetSchema.BOX3D_NUM_LIDAR_POINTS.name) > 0
+                )
+                .alias(has_points),
             )
+            .explode(label, has_points)
+            # A record without boxes explodes to one null row, which is not a box.
+            .drop_nulls(label)
+            .group_by(label)
+            .agg(pl.len().alias("count"), pl.col(has_points).sum().alias("valid_count"))
             .sort("count", descending=True)
         )
-        class_names = class_counts[Box3DDatasetSchema.BOX3D_LABEL_NAME.name].to_list()
+        class_names = class_counts[label].to_list()
         total_counts = dict(zip(class_names, class_counts["count"].to_list(), strict=True))
         valid_counts = dict(zip(class_names, class_counts["valid_count"].to_list(), strict=True))
 
+        logger.info(f"{self}: {len(self.dataset_records_dataframe)} records.")
         logger.info(f"Number of bboxes per class in the dataset: {total_counts}")
         logger.info(
             f"Number of bboxes after filtering num_lidar_points > 0 per class: {valid_counts}"

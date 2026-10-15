@@ -219,3 +219,37 @@ def test_log_dataset_info_reports_total_and_lidar_point_counts(
     assert "'car': 2" in caplog.text
     assert "'car': 1" in caplog.text
     assert "'pedestrian': 1" in caplog.text
+
+
+def test_log_dataset_info_counts_across_records_and_skips_the_empty_ones(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    Input: three records, the middle one without boxes.
+    Expected: the counts span the records and the empty record adds no phantom class, since
+        exploding an empty box list yields a null row rather than a box.
+    Check: the logged counts.
+    """
+    schema = DatasetTableSchema.to_polars_schema()
+    records = pl.DataFrame(
+        {DatasetTableSchema.BOXES_3D.name: [[box("a", "car")], [], [box("b", "car")]]},
+        schema={DatasetTableSchema.BOXES_3D.name: schema[DatasetTableSchema.BOXES_3D.name]},
+    )
+    task = Detection3DTask(database_root_path=_ROOT, dataset_records_dataframe=records)
+
+    with caplog.at_level(logging.INFO, logger="autoware_ml.datamodule.common.detection3d"):
+        task.log_dataset_info()
+
+    assert "Detection3DTask: 3 records." in caplog.text
+    assert "Number of bboxes per class in the dataset: {'car': 2}" in caplog.text
+    assert "per class: {'car': 2}" in caplog.text
+    assert "None" not in caplog.text
+
+
+def test_log_dataset_info_on_records_without_any_box(caplog: pytest.LogCaptureFixture) -> None:
+    task = build_task([])
+
+    with caplog.at_level(logging.INFO, logger="autoware_ml.datamodule.common.detection3d"):
+        task.log_dataset_info()
+
+    assert "Number of bboxes per class in the dataset: {}" in caplog.text

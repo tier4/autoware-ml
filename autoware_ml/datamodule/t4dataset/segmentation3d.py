@@ -52,15 +52,6 @@ class T4Segmentation3DTask(BaseDatasetTask):
         """
         return self.__class__.__name__
 
-    def log_dataset_info(self) -> None:
-        """
-        Log the number of records the semantic labels are read from.
-        """
-        if self.dataset_records_dataframe is None:
-            logger.warning("Dataset records dataframe is not available.")
-            return
-        logger.info(f"{self}: {len(self.dataset_records_dataframe)} records with semantic labels.")
-
     def select_columns(self, dataset_records_dataframe: pl.DataFrame) -> pl.DataFrame:
         """
         Keep the lidar frames and the category mapping of the records.
