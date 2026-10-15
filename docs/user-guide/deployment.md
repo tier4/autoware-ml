@@ -49,23 +49,16 @@ autoware-ml deploy \
     deploy.tensorrt.enabled=false
 ```
 
-By default, deploy writes outputs into the deploy MLflow run's artifact
-directory under `exports/`. Without MLflow logging, outputs land next to the
-checkpoint.
+Deploy writes its outputs into the deploy MLflow run's artifact directory, under
+`mlruns/<experiment_group_name>/<experiment_name>/<deploy_run_id>/artifacts/exports/`.
+The same run records the resolved config and CLI overrides under `config/`, and a
+`run_metadata.json` listing the source checkpoints, so an export can always be traced
+back to the training run it came from. A deploy that fails after its run was created
+leaves the run marked `FAILED`.
 
-When MLflow logging is enabled, any custom `output_dir` must stay inside that
-run artifact directory. Leave `output_dir` unset to use the default
-`exports/` location, or disable MLflow logging if you need to export outside
-the run artifact tree.
-
-**Custom output directory inside MLflow artifacts:**
-
-```bash
-autoware-ml deploy \
-    --config-name <task>/<model>/<config> \
-    --weights mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/checkpoints/best.ckpt \
-    output_dir=mlruns/<experiment_group_name>/<experiment_name>/<deploy_run_id>/artifacts/custom_exports
-```
+Without MLflow logging (`~logger`), outputs land in the config's `experiment_run_dir`,
+`<working_dir>/tasks/<experiment_group_name>/<experiment_name>/<experiment_uid>/`.
+The output location is not configurable on its own.
 
 ## Export Modules
 
