@@ -58,7 +58,8 @@ model:
   pts_voxel_encoder:
     _target_: autoware_ml.models.detection3d.encoders.voxel.HardSimpleVoxelSinCosEncoder
     in_channels: 4
-    # Normalization ranges for (x, y, z, intensity). The dataset scales intensity to [0, 1].
+    # Normalization ranges for (x, y, z, intensity). The loaders feed the raw stored intensity
+    # (scale_intensity: false), so the encoder normalizes it by the full scale of the files.
     min_norm_values:
       - ${point_cloud_range.0}
       - ${point_cloud_range.1}
@@ -68,7 +69,7 @@ model:
       - ${point_cloud_range.3}
       - ${point_cloud_range.4}
       - ${point_cloud_range.5}
-      - 1.0
+      - 255.0
   pts_middle_encoder:
     _target_: autoware_ml.models.detection3d.encoders.sparse.sparse_encoder.SparseEncoder
     # The sin/cos encoder emits 2 * in_channels ** 2 features.
