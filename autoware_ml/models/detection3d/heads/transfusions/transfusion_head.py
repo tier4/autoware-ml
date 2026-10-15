@@ -731,9 +731,11 @@ class TransFusionHead(nn.Module):
         bev_pos = self._create_2d_grid(width, height, bev_features.device).repeat(batch_size, 1, 1)
 
         # Do not use autocast for the dense heatmap head since the precision can affect
-        # the selected proposals.
+        # the selected proposals. Under mixed precision the BEV features arrive as fp16 while
+        # the head keeps fp32 weights, so they are cast explicitly now that autocast no longer
+        # does it.
         with torch.autocast(device_type="cuda", enabled=False):
-            dense_heatmaps = self.dense_heatmap_head(bev_features)
+            dense_heatmaps = self.dense_heatmap_head(bev_features.float())
 
         suppressed_dense_heatmaps = self._suppress_dense_heatmaps(dense_heatmaps.detach().sigmoid())
         # (batch_size, num_classes, height, width) -> (batch_size, num_classes, height * width)
@@ -911,9 +913,11 @@ class TransFusionHead(nn.Module):
         if outputs.transfusion_head_outputs is None:
             raise ValueError("TransFusionHead outputs are missing from Detection3DHeadOutputs.")
 
+        # Mixed precision evaluation hands over fp16 outputs; the boxes decode in float32, as a
+        # 64 m center in fp16 only resolves about 0.06 m.
         transfusion_head_outputs = outputs.transfusion_head_outputs
         separate_head_outputs = transfusion_head_outputs.separate_head_outputs
-        batch_scores = separate_head_outputs.heatmap[..., -self.num_proposals :].sigmoid()
+        batch_scores = separate_head_outputs.heatmap[..., -self.num_proposals :].float().sigmoid()
         one_hot = (
             F.one_hot(transfusion_head_outputs.query_labels, num_classes=self.num_classes)
             .permute(
@@ -923,14 +927,14 @@ class TransFusionHead(nn.Module):
         )
         # Use proposals from the dense heatmap to calibrate the final scores, where they are only
         # valid when both of them align
-        batch_scores = batch_scores * transfusion_head_outputs.query_heatmap_score * one_hot
-        batch_centers = separate_head_outputs.center[..., -self.num_proposals :]
-        batch_heights = separate_head_outputs.height[..., -self.num_proposals :]
-        batch_dims = separate_head_outputs.dim[..., -self.num_proposals :]
-        batch_rots = separate_head_outputs.rot[..., -self.num_proposals :]
+        batch_scores = batch_scores * transfusion_head_outputs.query_heatmap_score.float() * one_hot
+        batch_centers = separate_head_outputs.center[..., -self.num_proposals :].float()
+        batch_heights = separate_head_outputs.height[..., -self.num_proposals :].float()
+        batch_dims = separate_head_outputs.dim[..., -self.num_proposals :].float()
+        batch_rots = separate_head_outputs.rot[..., -self.num_proposals :].float()
         batch_vels = separate_head_outputs.vel
         if batch_vels is not None:
-            batch_vels = batch_vels[..., -self.num_proposals :]
+            batch_vels = batch_vels[..., -self.num_proposals :].float()
 
         bbox_scores, bbox_classes = self.bbox_coder.decode_heatmaps(heatmaps=batch_scores)
         pred_bboxes = self.bbox_coder.decode_boxes(

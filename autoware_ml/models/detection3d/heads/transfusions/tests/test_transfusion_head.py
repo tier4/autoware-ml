@@ -520,6 +520,41 @@ class TestTransFusionHead(unittest.TestCase):
         self.assertEqual(separate_head_outputs.vel.shape, (self.batch_size, 2, num_queries))
         self.assertTrue(torch.isfinite(separate_head_outputs.center).all())
 
+    @unittest.skipUnless(torch.cuda.is_available(), "float16 autocast runs on CUDA")
+    def test_forward_and_decode_under_fp16_autocast_keep_fp32_heatmaps_and_boxes(self) -> None:
+        """
+        Test that half BEV features under fp16 autocast reach the fp32 dense heatmap head without
+        a dtype mismatch, and that the outputs decode into float32 boxes.
+        """
+        with torch.autocast(device_type="cuda", dtype=torch.float16):
+            outputs = self.transfusion_head(self._build_bev_features().half())
+
+        self.assertEqual(outputs.dense_heatmap.dtype, torch.float32)
+        # Mixed precision evaluation hands half outputs to decode_outputs.
+        branches = outputs.separate_head_outputs
+        half_outputs = TransFusionHeadOutputs.model_validate(
+            {
+                "dense_heatmap": outputs.dense_heatmap.half(),
+                "query_heatmap_score": outputs.query_heatmap_score.half(),
+                "query_labels": outputs.query_labels,
+                "separate_head_outputs": TransFusionSeparateHeadOutputs.model_validate(
+                    {
+                        "heatmap": branches.heatmap.half(),
+                        "center": branches.center.half(),
+                        "height": branches.height.half(),
+                        "dim": branches.dim.half(),
+                        "rot": branches.rot.half(),
+                        "vel": None if branches.vel is None else branches.vel.half(),
+                    }
+                ),
+            }
+        )
+        sample_predictions = self._decode_sample_predictions(transfusion_head_outputs=half_outputs)
+        for prediction in sample_predictions:
+            self.assertEqual(prediction.bboxes_3d.dtype, torch.float32)
+            self.assertEqual(prediction.scores_3d.dtype, torch.float32)
+            self.assertTrue(torch.isfinite(prediction.bboxes_3d).all())
+
     def test_forward_without_auxiliary_returns_only_the_last_layer(self) -> None:
         """
         Test that a head built without auxiliary supervision emits one layer's worth of queries,
