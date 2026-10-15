@@ -43,6 +43,7 @@ from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentation3DHeadOutputs
 from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
+from autoware_ml.models.detection3d.task_modules.partial_annotations import PartialAnnotations
 from autoware_ml.models.detection3d.ptv3 import PTv3DetBEVNeck, build_det_head_export_spec
 from autoware_ml.models.segmentation3d.encoders.ptv3 import PointTransformerV3Encoder
 from autoware_ml.models.segmentation3d.encoders.voxel import VoxelFeatureEncoder
@@ -91,6 +92,7 @@ class PTv3SegDetModel(PTv3BaseModel):
         scheduler: Callable[[Optimizer], LRScheduler] | None = None,
         optimizer_group_overrides: Mapping[str, Mapping[str, Any]] | None = None,
         scheduler_config: Mapping[str, Any] | None = None,
+        partial_annotations: PartialAnnotations | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the PTv3 joint segmentation and detection model.
@@ -112,6 +114,8 @@ class PTv3SegDetModel(PTv3BaseModel):
             scheduler: Scheduler factory.
             optimizer_group_overrides: Per-group optimizer overrides.
             scheduler_config: Lightning scheduler metadata.
+            partial_annotations: Maps the dataset's per-sample annotation flag to the classes
+                the head must not supervise in that sample. None supervises every class.
             **kwargs: Keyword arguments forwarded up the MRO chain.
         """
         super().__init__(
@@ -128,6 +132,7 @@ class PTv3SegDetModel(PTv3BaseModel):
         self.seg3d_head = seg3d_head
         self.bev_neck = bev_neck
         self.bbox_head = bbox_head
+        self.partial_annotations = partial_annotations
         self.segmentation_loss_weight = float(segmentation_loss_weight)
         self.detection_loss_weight = float(detection_loss_weight)
         self._export_output_names = (
@@ -251,8 +256,12 @@ class PTv3SegDetModel(PTv3BaseModel):
                 gt_bboxes_3d=gt_detections.gt_bboxes_3d[det_mask],
                 gt_labels_3d=gt_detections.gt_labels_3d[det_mask],
                 gt_valid_bboxes=gt_detections.gt_valid_bboxes[det_mask],
-                gt_traffic_cone_barrier_bbox_status=(
-                    traffic_cone_status[det_mask] if traffic_cone_status is not None else None
+                gt_annotated_class_masks=(
+                    self.partial_annotations.build_annotated_class_masks(
+                        traffic_cone_status[det_mask] if traffic_cone_status is not None else None
+                    )
+                    if self.partial_annotations is not None
+                    else None
                 ),
             )
         else:

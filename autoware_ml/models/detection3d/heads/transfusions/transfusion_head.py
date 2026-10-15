@@ -240,7 +240,6 @@ class TransFusionHead(nn.Module):
         norm_eps: float = 1e-3,
         norm_momentum: float = 0.01,
         use_bf16_cross_attention: bool = False,
-        partial_ignore_labels: Sequence[str] | None = None,
     ) -> None:
         """Initialize the TransFusion detection head.
 
@@ -307,11 +306,6 @@ class TransFusionHead(nn.Module):
                 (shared block, dense heatmap head, prediction branches).
             use_bf16_cross_attention: Whether export emits fusion-ready attention and uses bf16 for
                 the long cross-attention core. Requires ``deploy.onnx.precision=fp16``.
-            partial_ignore_labels: Class names whose annotations are missing from some frames,
-                currently the traffic cones and barriers flagged by
-                ``gt_traffic_cone_barrier_bbox_status``. In a frame flagged as not annotated
-                for them, their dense heatmap loss is skipped and the negative queries are not
-                pushed away from them, so the head is not taught that they are absent.
         """
         super().__init__()
         self.num_proposals = num_proposals
@@ -349,11 +343,6 @@ class TransFusionHead(nn.Module):
         self.nms_type = nms_type
         self.dense_heatmap_pooling_class_ids = self._resolve_class_ids(
             dense_heatmap_pooling_class_names
-        )
-        self.partial_ignore_class_ids = (
-            self._resolve_class_ids(partial_ignore_labels)
-            if partial_ignore_labels is not None
-            else None
         )
         # nms_type decides whether NMS runs at all, the groups only decide how. Groups without a
         # type would be silently ignored, which is the kind of config mistake worth refusing.
@@ -1105,7 +1094,7 @@ class TransFusionHead(nn.Module):
         gt_labels_3d: Float32[torch.Tensor, "batch_size max_num_gt_bboxes"],
         gt_valid_bboxes: Int32[torch.Tensor, " batch_size"],
         feature_map_size: tuple[int, int],
-        gt_traffic_cone_barrier_bbox_status: Bool[torch.Tensor, " batch_size"] | None = None,
+        gt_annotated_class_masks: Bool[torch.Tensor, "batch_size num_classes"] | None = None,
     ) -> TransFusionHeadTargets:
         """Build TransFusion training targets.
 
@@ -1115,8 +1104,8 @@ class TransFusionHead(nn.Module):
             gt_labels_3d: Ground-truth labels for each batch element.
             gt_valid_bboxes: Number of real boxes in each batch element.
             feature_map_size: Dense heatmap height and width.
-            gt_traffic_cone_barrier_bbox_status: Per-sample flag telling whether traffic cones
-                and barriers are annotated, None when the dataset does not carry it. See
+            gt_annotated_class_masks: Per-sample, per-class mask, True where the class is
+                annotated in the sample. None supervises every class. See
                 `_build_class_weights`.
 
         Returns:
@@ -1128,7 +1117,7 @@ class TransFusionHead(nn.Module):
         gt_valid_bboxes = gt_valid_bboxes.to(device=device)
         class_weights = self._build_class_weights(
             batch_size=batch_size,
-            gt_traffic_cone_barrier_bbox_status=gt_traffic_cone_barrier_bbox_status,
+            gt_annotated_class_masks=gt_annotated_class_masks,
             device=device,
         )
         dense_heatmap_targets = self._build_dense_heatmap_targets(
@@ -1208,41 +1197,36 @@ class TransFusionHead(nn.Module):
     def _build_class_weights(
         self,
         batch_size: int,
-        gt_traffic_cone_barrier_bbox_status: Bool[torch.Tensor, " batch_size"] | None,
+        gt_annotated_class_masks: Bool[torch.Tensor, "batch_size num_classes"] | None,
         device: torch.device,
     ) -> Float32[torch.Tensor, "batch_size num_classes"]:
         """
         Build the per-sample class weights dropping the classes a sample is not annotated for.
 
-        A frame flagged without traffic cone and barrier annotations may still contain them, so
-        the head must not learn that they are absent: the partially ignored classes get a zero
-        weight in that sample, which silences their dense heatmap loss and stops the negative
-        queries from being pushed away from them.
+        A sample may still contain objects of a class it was not annotated for, so the head must
+        not learn that they are absent: an unannotated class gets a zero weight in that sample,
+        which silences its dense heatmap loss and stops the negative queries from being pushed
+        away from it. Which classes count as unannotated is decided outside the head, see
+        :mod:`autoware_ml.models.detection3d.task_modules.partial_annotations`.
 
         Args:
             batch_size: Number of samples in the batch.
-            gt_traffic_cone_barrier_bbox_status: Per-sample flag telling whether traffic cones and
-                barriers are annotated, None when the dataset does not carry it.
+            gt_annotated_class_masks: Per-sample, per-class mask, True where the class is
+                annotated in the sample. None supervises every class.
             device: Device of the weights.
 
         Returns:
-            Weights of one, except zero for the partially ignored classes of the samples flagged
-            as not annotated for them.
+            Weights of one for the annotated classes and zero for the others.
         """
-        class_weights = torch.ones(
-            (batch_size, self.num_classes), dtype=torch.float32, device=device
-        )
-        if self.partial_ignore_class_ids is None or gt_traffic_cone_barrier_bbox_status is None:
-            return class_weights
+        if gt_annotated_class_masks is None:
+            return torch.ones((batch_size, self.num_classes), dtype=torch.float32, device=device)
 
-        # (batch_size,) samples missing the annotations.
-        unannotated_masks = ~gt_traffic_cone_barrier_bbox_status.to(device=device, dtype=torch.bool)
-        # (num_classes,) classes those annotations cover.
-        ignored_class_masks = torch.zeros(self.num_classes, dtype=torch.bool, device=device)
-        ignored_class_masks[list(self.partial_ignore_class_ids)] = True
-        # (batch_size, 1) & (1, num_classes) -> (batch_size, num_classes)
-        class_weights[unannotated_masks.unsqueeze(1) & ignored_class_masks.unsqueeze(0)] = 0.0
-        return class_weights
+        if tuple(gt_annotated_class_masks.shape) != (batch_size, self.num_classes):
+            raise ValueError(
+                "TransFusionHead gt_annotated_class_masks must have shape "
+                f"({batch_size}, {self.num_classes}), got {tuple(gt_annotated_class_masks.shape)}."
+            )
+        return gt_annotated_class_masks.to(device=device, dtype=torch.bool).to(torch.float32)
 
     def _build_layer_targets(
         self,
@@ -1339,7 +1323,7 @@ class TransFusionHead(nn.Module):
         gt_bboxes_3d: Float32[torch.Tensor, "batch_size max_num_3d_gt_bboxes num_Box3DFieldIndex"],
         gt_labels_3d: Float32[torch.Tensor, "batch_size max_num_3d_gt_bboxes"],
         gt_valid_bboxes: Int32[torch.Tensor, " batch_size"],
-        gt_traffic_cone_barrier_bbox_status: Bool[torch.Tensor, " batch_size"] | None = None,
+        gt_annotated_class_masks: Bool[torch.Tensor, "batch_size num_classes"] | None = None,
     ) -> MappingProxyType[str, Float32[torch.Tensor, " num_losses"] | float]:
         """
         Compute TransFusionHead losses. It will decode raw outputs and assign predictions to
@@ -1356,11 +1340,10 @@ class TransFusionHead(nn.Module):
           gt_bboxes_3d: Ground truth 3D bboxes.
           gt_labels_3d: Ground truth 3D bboxes label.
           gt_valid_bboxes: Number of valid ground truth 3D bboxes in each sample.
-          gt_traffic_cone_barrier_bbox_status: Per-sample flag telling whether traffic cones and
-              barriers are annotated. In a sample flagged False, the classes listed in
-              ``partial_ignore_labels`` contribute neither to the dense heatmap loss nor to the
-              classification loss of the negative queries. None when the dataset does not carry
-              the flag, in which case every class is supervised.
+          gt_annotated_class_masks: Per-sample, per-class mask, True where the class is
+              annotated in the sample. A class marked False contributes neither to the dense
+              heatmap loss nor to the classification loss of the negative queries of that sample.
+              None supervises every class.
         """
         loss_dict: dict[str, torch.Tensor | float] = {}
         transfusion_head_outputs = outputs.transfusion_head_outputs
@@ -1375,7 +1358,7 @@ class TransFusionHead(nn.Module):
             gt_valid_bboxes=gt_valid_bboxes,
             feature_map_size=(feature_map_size[0], feature_map_size[1]),
             outputs=transfusion_head_outputs,
-            gt_traffic_cone_barrier_bbox_status=gt_traffic_cone_barrier_bbox_status,
+            gt_annotated_class_masks=gt_annotated_class_masks,
         )
 
         loss_heatmap = self.loss_heatmap(

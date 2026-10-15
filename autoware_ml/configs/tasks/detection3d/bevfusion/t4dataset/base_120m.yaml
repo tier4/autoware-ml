@@ -32,10 +32,15 @@ max_num_points: 32
 max_time_lag: 0.2
 
 model:
+  # T4 scenarios flag whether their traffic cones and barriers are annotated. In a frame
+  # flagged False those classes are not supervised, so the head is not taught they are absent.
+  partial_annotations:
+    _target_: autoware_ml.models.detection3d.task_modules.partial_annotations.PartialAnnotations
+    class_names: ${database.taxonomy.detection3d.class_names}
+    partial_ignore_labels: [traffic_cone, barrier]
   bbox_head:
     num_proposals: 500
     dense_heatmap_pooling_class_names: [car, truck, bus, barrier]
-    partial_ignore_labels: [traffic_cone, barrier]
     nms_type: circle
     nms_min_radius: 0.25
     # One group per class of the dynamic detection taxonomy of the T4 databases, which the

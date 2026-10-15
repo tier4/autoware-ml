@@ -136,7 +136,6 @@ class TestTransFusionHead(unittest.TestCase):
         nms_group_configs: Sequence[NMSGroupConfig] | None = None,
         post_center_range: Sequence[float] | None = None,
         use_bf16_cross_attention: bool = False,
-        partial_ignore_labels: Sequence[str] | None = None,
         iou_loss: torch.nn.Module | None = None,
     ) -> TransFusionHead:
         """
@@ -195,7 +194,6 @@ class TestTransFusionHead(unittest.TestCase):
             nms_group_configs=nms_group_configs,
             use_velocity=use_velocity,
             use_bf16_cross_attention=use_bf16_cross_attention,
-            partial_ignore_labels=partial_ignore_labels,
             iou_loss=iou_loss,
         ).to(self.device)
 
@@ -235,7 +233,7 @@ class TestTransFusionHead(unittest.TestCase):
         self,
         transfusion_head: TransFusionHead | None = None,
         gt_valid_bboxes: Int32[torch.Tensor, " batch_size"] | None = None,
-        gt_traffic_cone_barrier_bbox_status: Bool[torch.Tensor, " batch_size"] | None = None,
+        gt_annotated_class_masks: Bool[torch.Tensor, "batch_size num_classes"] | None = None,
         transfusion_head_outputs: TransFusionHeadOutputs | None = None,
     ) -> TransFusionHeadTargets:
         """
@@ -251,14 +249,14 @@ class TestTransFusionHead(unittest.TestCase):
             gt_labels_3d=self.gt_labels_3d,
             gt_valid_bboxes=(self.gt_valid_bboxes if gt_valid_bboxes is None else gt_valid_bboxes),
             feature_map_size=self.feature_map_size,
-            gt_traffic_cone_barrier_bbox_status=gt_traffic_cone_barrier_bbox_status,
+            gt_annotated_class_masks=gt_annotated_class_masks,
         )
 
     def _compute_losses(
         self,
         transfusion_head: TransFusionHead | None = None,
         gt_valid_bboxes: Int32[torch.Tensor, " batch_size"] | None = None,
-        gt_traffic_cone_barrier_bbox_status: Bool[torch.Tensor, " batch_size"] | None = None,
+        gt_annotated_class_masks: Bool[torch.Tensor, "batch_size num_classes"] | None = None,
         transfusion_head_outputs: TransFusionHeadOutputs | None = None,
     ) -> MappingProxyType[str, torch.Tensor | float]:
         """
@@ -276,8 +274,19 @@ class TestTransFusionHead(unittest.TestCase):
             gt_bboxes_3d=self.gt_bboxes_3d,
             gt_labels_3d=self.gt_labels_3d,
             gt_valid_bboxes=(self.gt_valid_bboxes if gt_valid_bboxes is None else gt_valid_bboxes),
-            gt_traffic_cone_barrier_bbox_status=gt_traffic_cone_barrier_bbox_status,
+            gt_annotated_class_masks=gt_annotated_class_masks,
         )
+
+    def _annotated_class_masks(
+        self, unannotated: dict[int, Sequence[str]]
+    ) -> Bool[torch.Tensor, "batch_size num_classes"]:
+        """Build an all-annotated mask, except the named classes of the given sample indices."""
+        masks = torch.ones(
+            (self.batch_size, self.num_classes), dtype=torch.bool, device=self.device
+        )
+        for sample_index, class_names in unannotated.items():
+            masks[sample_index, [self.class_names.index(name) for name in class_names]] = False
+        return masks
 
     def _decode_sample_predictions(
         self,
@@ -831,42 +840,40 @@ class TestTransFusionHead(unittest.TestCase):
         self.assertTrue(bool((targets.labels == self.num_classes).all()))
         self.assertTrue(bool((targets.bbox_weights == 0.0).all()))
 
-    def test_get_targets_supervises_every_class_without_partial_ignore(self) -> None:
-        """
-        Test that a head with no partially ignored classes weighs every class of every query,
-        whatever the annotation flag says.
-        """
-        targets = self._get_targets(
-            gt_traffic_cone_barrier_bbox_status=torch.tensor([True, False], device=self.device)
-        )
+    def test_get_targets_supervises_every_class_without_annotated_masks(self) -> None:
+        """Test that without an annotated mask every class of every query is weighed."""
+        targets = self._get_targets()
 
         self.assertTrue(bool((targets.class_weights == 1.0).all()))
         self.assertTrue(bool((targets.label_weights == 1.0).all()))
 
-    def test_get_targets_supervises_every_class_without_the_annotation_flag(self) -> None:
-        """
-        Test that partially ignored classes stay supervised when the dataset carries no annotation
-        flag, since nothing then says their annotations are missing.
-        """
-        head = self._build_transfusion_head(partial_ignore_labels=["pedestrian"])
-
-        targets = self._get_targets(head)
+    def test_get_targets_supervises_every_class_of_an_all_true_mask(self) -> None:
+        """Test that an all-true annotated mask weighs every class, like no mask at all."""
+        targets = self._get_targets(gt_annotated_class_masks=self._annotated_class_masks({}))
 
         self.assertTrue(bool((targets.class_weights == 1.0).all()))
         self.assertTrue(bool((targets.label_weights == 1.0).all()))
 
-    def test_get_targets_drops_ignored_classes_of_an_unannotated_sample(self) -> None:
+    def test_get_targets_rejects_an_annotated_mask_of_the_wrong_shape(self) -> None:
+        """Test that an annotated mask not shaped (batch_size, num_classes) is rejected."""
+        with self.assertRaises(ValueError):
+            self._get_targets(
+                gt_annotated_class_masks=torch.ones(
+                    (self.batch_size,), dtype=torch.bool, device=self.device
+                )
+            )
+
+    def test_get_targets_drops_unannotated_classes_of_a_sample(self) -> None:
         """
-        Test that a sample flagged as not annotated zeroes the ignored classes in its class weights
-        and in its negative queries only, while positives and annotated samples keep full weights.
+        Test that a class marked unannotated in a sample is zeroed in that sample's class weights
+        and in its negative queries only, while positives and the other sample keep full weights.
         """
-        head = self._build_transfusion_head(partial_ignore_labels=["pedestrian"])
+        head = self.transfusion_head
         pedestrian_id = self.class_names.index("pedestrian")
         car_id = self.class_names.index("car")
 
         targets = self._get_targets(
-            head,
-            gt_traffic_cone_barrier_bbox_status=torch.tensor([True, False], device=self.device),
+            head, gt_annotated_class_masks=self._annotated_class_masks({1: ["pedestrian"]})
         )
 
         expected_class_weights = torch.ones((self.batch_size, self.num_classes), device=self.device)
@@ -1002,12 +1009,12 @@ class TestTransFusionHead(unittest.TestCase):
             self.assertTrue(torch.isfinite(torch.as_tensor(value)).all(), msg=key)
         self.assertAlmostEqual(float(losses["matched_ious"]), 0.0, places=6)
 
-    def test_loss_heatmap_skips_ignored_classes_of_unannotated_samples(self) -> None:
+    def test_loss_heatmap_skips_unannotated_classes_of_a_sample(self) -> None:
         """
-        Test that the dense heatmap of an ignored class gets no gradient in a sample flagged as not
-        annotated for it, while it still does in an annotated sample and for the other classes.
+        Test that the dense heatmap of a class gets no gradient in a sample where it is marked
+        unannotated, while it still does in the other sample and for the other classes.
         """
-        head = self._build_transfusion_head(partial_ignore_labels=["pedestrian"])
+        head = self.transfusion_head
         pedestrian_id = self.class_names.index("pedestrian")
         car_id = self.class_names.index("car")
         outputs = self._build_head_outputs(head)
@@ -1015,7 +1022,7 @@ class TestTransFusionHead(unittest.TestCase):
 
         losses = self._compute_losses(
             head,
-            gt_traffic_cone_barrier_bbox_status=torch.tensor([True, False], device=self.device),
+            gt_annotated_class_masks=self._annotated_class_masks({1: ["pedestrian"]}),
             transfusion_head_outputs=outputs,
         )
         loss_heatmap = losses["loss_heatmap"]
@@ -1033,13 +1040,13 @@ class TestTransFusionHead(unittest.TestCase):
         Test that dropping a class from every sample yields the heatmap loss of the remaining
         classes computed on their own, normalization included.
         """
-        head = self._build_transfusion_head(partial_ignore_labels=["pedestrian"])
+        head = self.transfusion_head
         car_id = self.class_names.index("car")
         outputs = self._build_head_outputs(head)
-        unannotated = torch.tensor([False, False], device=self.device)
+        unannotated = self._annotated_class_masks({0: ["pedestrian"], 1: ["pedestrian"]})
 
         losses = self._compute_losses(
-            head, gt_traffic_cone_barrier_bbox_status=unannotated, transfusion_head_outputs=outputs
+            head, gt_annotated_class_masks=unannotated, transfusion_head_outputs=outputs
         )
         targets = head.get_targets(
             outputs=outputs,
@@ -1047,7 +1054,7 @@ class TestTransFusionHead(unittest.TestCase):
             gt_labels_3d=self.gt_labels_3d,
             gt_valid_bboxes=self.gt_valid_bboxes,
             feature_map_size=self.feature_map_size,
-            gt_traffic_cone_barrier_bbox_status=unannotated,
+            gt_annotated_class_masks=unannotated,
         )
         expected = head.loss_heatmap(
             outputs.dense_heatmap[:, [car_id]], targets.dense_heatmaps[:, [car_id]]

@@ -23,6 +23,7 @@ from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
+from autoware_ml.models.detection3d.task_modules.partial_annotations import PartialAnnotations
 from autoware_ml.models.segmentation3d.encoders.ptv3 import PointTransformerV3Encoder
 from autoware_ml.models.segmentation3d.encoders.voxel import VoxelFeatureEncoder
 from autoware_ml.models.segmentation3d.ptv3_base import (
@@ -456,6 +457,7 @@ class PTv3DetectionModel(PTv3BaseModel):
         grid_size: float,
         point_cloud_range: Sequence[float],
         freeze_encoder: bool = False,
+        partial_annotations: PartialAnnotations | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the PTv3 detection model.
@@ -469,6 +471,8 @@ class PTv3DetectionModel(PTv3BaseModel):
             grid_size: Voxel grid size used to derive sparse shape.
             point_cloud_range: Point-cloud range used to derive sparse shape.
             freeze_encoder: When ``True``, keep the encoder frozen in eval mode.
+            partial_annotations: Maps the dataset's per-sample annotation flag to the classes
+                the head must not supervise in that sample. None supervises every class.
             **kwargs: Keyword arguments forwarded to :class:`ModuleBaseModel`.
         """
         super().__init__(
@@ -481,6 +485,7 @@ class PTv3DetectionModel(PTv3BaseModel):
         )
         self.bev_neck = bev_neck
         self.bbox_head = bbox_head
+        self.partial_annotations = partial_annotations
         self.export_output_names = list(export_output_names)
 
     def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> dict[str, Any]:
@@ -549,7 +554,13 @@ class PTv3DetectionModel(PTv3BaseModel):
             gt_bboxes_3d=gt_detections.gt_bboxes_3d,
             gt_labels_3d=gt_detections.gt_labels_3d,
             gt_valid_bboxes=gt_detections.gt_valid_bboxes,
-            gt_traffic_cone_barrier_bbox_status=gt_detections.gt_traffic_cone_barrier_bbox_status,
+            gt_annotated_class_masks=(
+                self.partial_annotations.build_annotated_class_masks(
+                    gt_detections.gt_traffic_cone_barrier_bbox_status
+                )
+                if self.partial_annotations is not None
+                else None
+            ),
         )
 
     def decode_outputs(

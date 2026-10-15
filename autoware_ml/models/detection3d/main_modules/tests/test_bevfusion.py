@@ -23,6 +23,8 @@ from __future__ import annotations
 
 from types import MappingProxyType
 import unittest
+from collections.abc import Sequence
+from unittest import mock
 
 from jaxtyping import Float32, Int32
 import torch
@@ -37,6 +39,7 @@ from autoware_ml.models.detection3d.backbones.second import SECONDBackbone
 from autoware_ml.models.detection3d.heads.transfusions.exportable_multi_head_attention import (
     ExportableMultiheadAttention,
 )
+from autoware_ml.models.detection3d.task_modules.partial_annotations import PartialAnnotations
 from autoware_ml.models.detection3d.heads.transfusions.transfusion_head import (
     ScoreThresholdConfig,
     TransFusionHead,
@@ -271,7 +274,10 @@ class _BEVFusionDetectionModelTestCase(unittest.TestCase):
         ).to(self.device)
 
     def _build_model(
-        self, lidar_network: BEVFusionLidar | None, camera_network: BEVFusionCamera | None
+        self,
+        lidar_network: BEVFusionLidar | None,
+        camera_network: BEVFusionCamera | None,
+        partial_annotations: PartialAnnotations | None = None,
     ) -> BEVFusionDetectionModel:
         """Build the detector around the given branches."""
         return BEVFusionDetectionModel(
@@ -280,6 +286,7 @@ class _BEVFusionDetectionModelTestCase(unittest.TestCase):
             camera_network=camera_network,
             bbox_head=self._build_head(),
             log_dict_configs=self.log_dict_configs,
+            partial_annotations=partial_annotations,
         ).to(self.device)
 
     def _build_voxels_data(self) -> VoxelsData:
@@ -581,6 +588,80 @@ class TestBEVFusionDetectionModelLidarOnly(_BEVFusionDetectionModelTestCase):
         self.assertEqual(label_pred.dtype, torch.int64)
         self.assertTrue(torch.isfinite(bbox_pred).all())
         self.assertTrue(torch.all((score >= 0.0) & (score <= 1.0)))
+
+    def _build_partial_model(self) -> BEVFusionDetectionModel:
+        """Build a lidar-only detector that ignores cyclists in frames flagged as not annotated."""
+        return self._build_model(
+            lidar_network=self._build_lidar_network(),
+            camera_network=None,
+            partial_annotations=PartialAnnotations(
+                class_names=self.class_names, partial_ignore_labels=["cyclist"]
+            ),
+        )
+
+    def _batch_inputs_with_annotation_status(
+        self, status: Sequence[bool] | None
+    ) -> ModelBatchInputs:
+        """Rebuild the batch inputs with the given per-sample annotation flag, or none."""
+        detection3d_gt_batch = self.batch_inputs.multi_task_gt_batch.detection3d_gt_batch
+        assert detection3d_gt_batch is not None
+        return self.batch_inputs.model_copy(
+            update={
+                "multi_task_gt_batch": self.batch_inputs.multi_task_gt_batch._replace(
+                    detection3d_gt_batch=detection3d_gt_batch._replace(
+                        gt_traffic_cone_barrier_bbox_status=(
+                            torch.tensor(status, dtype=torch.bool, device=self.device)
+                            if status is not None
+                            else None
+                        )
+                    )
+                )
+            }
+        )
+
+    def test_compute_metrics_hands_the_head_the_annotated_classes_of_each_sample(self) -> None:
+        """
+        Test that with a partial annotation policy the head's loss receives the per-sample,
+        per-class mask built from the batch flag: all True, except the ignored class in the
+        sample flagged False.
+        """
+        model = self._build_partial_model()
+        batch_inputs = self._batch_inputs_with_annotation_status([True, False])
+        multi_task_outputs = model(batch_inputs)
+        cyclist_id = self.class_names.index("cyclist")
+
+        with mock.patch.object(model.bbox_head, "loss", wraps=model.bbox_head.loss) as loss_spy:
+            metrics = model.compute_metrics(batch_inputs, multi_task_outputs)
+
+        self.assertTrue(torch.isfinite(metrics["loss"]).all())
+        masks = loss_spy.call_args.kwargs["gt_annotated_class_masks"]
+        expected = torch.ones((self.batch_size, self.num_classes), dtype=torch.bool)
+        expected[1, cyclist_id] = False
+        self.assertTrue(torch.equal(masks.cpu(), expected))
+
+    def test_compute_metrics_passes_no_mask_without_a_policy(self) -> None:
+        """Test that without a policy the head gets no mask, even when the batch carries a flag."""
+        batch_inputs = self._batch_inputs_with_annotation_status([True, False])
+        multi_task_outputs = self.model(batch_inputs)
+
+        with mock.patch.object(
+            self.model.bbox_head, "loss", wraps=self.model.bbox_head.loss
+        ) as loss_spy:
+            self.model.compute_metrics(batch_inputs, multi_task_outputs)
+
+        self.assertIsNone(loss_spy.call_args.kwargs["gt_annotated_class_masks"])
+
+    def test_compute_metrics_requires_the_annotation_flag_with_a_policy(self) -> None:
+        """
+        Test that a partial annotation policy rejects a batch carrying no annotation flag, rather
+        than silently supervising the ignored class.
+        """
+        model = self._build_partial_model()
+        batch_inputs = self._batch_inputs_with_annotation_status(None)
+        multi_task_outputs = model(batch_inputs)
+
+        with self.assertRaisesRegex(ValueError, "gt_traffic_cone_barrier_bbox_status"):
+            model.compute_metrics(batch_inputs, multi_task_outputs)
 
 
 class TestBEVFusionDetectionModelCameraLidar(_BEVFusionDetectionModelTestCase):

@@ -30,9 +30,7 @@ from autoware_ml.utils.point_cloud.structures import Point
 def _make_masking_model(recorded_calls: list) -> SimpleNamespace:
     """Build a duck-typed segdet model recording bbox_head.loss inputs."""
 
-    def bbox_loss(
-        outputs, gt_bboxes_3d, gt_labels_3d, gt_valid_bboxes, gt_traffic_cone_barrier_bbox_status
-    ):
+    def bbox_loss(outputs, gt_bboxes_3d, gt_labels_3d, gt_valid_bboxes, gt_annotated_class_masks):
         det_outputs = outputs.transfusion_head_outputs
         recorded_calls.append((det_outputs, gt_bboxes_3d, gt_labels_3d))
         return {"loss": det_outputs.separate_head_outputs.heatmap.sum() * 0.0 + 1.0}
@@ -46,6 +44,7 @@ def _make_masking_model(recorded_calls: list) -> SimpleNamespace:
             loss=seg_loss, ignore_index=-1, training=False, mixed_voxel_weight=0.0
         ),
         bbox_head=SimpleNamespace(loss=bbox_loss),
+        partial_annotations=None,
         segmentation_loss_weight=1.0,
         detection_loss_weight=1.0,
         _detection_gt_batch=PTv3SegDetModel._detection_gt_batch,

@@ -38,6 +38,7 @@ from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
+from autoware_ml.models.detection3d.task_modules.partial_annotations import PartialAnnotations
 from autoware_ml.models.detection3d.heads.transfusions.transfusion_head import TransFusionHead
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
@@ -139,8 +140,7 @@ def _format_transfusion_export_outputs(
 
     num_proposals = outputs.query_heatmap_score.shape[-1]
     cls_score0 = (
-        separate_head_outputs.heatmap[..., -num_proposals:].sigmoid()
-        * outputs.query_heatmap_score
+        separate_head_outputs.heatmap[..., -num_proposals:].sigmoid() * outputs.query_heatmap_score
     )
     bbox_pred0 = torch.cat(
         (
@@ -187,6 +187,7 @@ class TransFusionDetectionModel(ModuleBaseModel):
         optimizer: Callable[..., Optimizer] | None = None,
         scheduler: Callable[[Optimizer], LRScheduler] | None = None,
         metrics: Sequence[MetricSuite] | None = None,
+        partial_annotations: PartialAnnotations | None = None,
     ) -> None:
         """Initialize TransFusion.
 
@@ -201,6 +202,8 @@ class TransFusionDetectionModel(ModuleBaseModel):
             optimizer: Optimizer factory.
             scheduler: Scheduler factory.
             metrics: Detection metrics accumulated during validation and test.
+            partial_annotations: Maps the dataset's per-sample annotation flag to the classes
+                the head must not supervise in that sample. None supervises every class.
         """
         super().__init__(
             data_preprocessor=data_preprocessor,
@@ -209,6 +212,7 @@ class TransFusionDetectionModel(ModuleBaseModel):
             metrics=metrics,
             log_dict_configs=log_dict_configs,
         )
+        self.partial_annotations = partial_annotations
         self.pts_voxel_encoder = pts_voxel_encoder
         self.pts_middle_encoder = pts_middle_encoder
         self.pts_backbone = pts_backbone
@@ -309,8 +313,12 @@ class TransFusionDetectionModel(ModuleBaseModel):
             gt_bboxes_3d=detection3d_gt_batch.gt_bboxes_3d,
             gt_labels_3d=detection3d_gt_batch.gt_labels_3d,
             gt_valid_bboxes=detection3d_gt_batch.gt_valid_bboxes,
-            gt_traffic_cone_barrier_bbox_status=(
-                detection3d_gt_batch.gt_traffic_cone_barrier_bbox_status
+            gt_annotated_class_masks=(
+                self.partial_annotations.build_annotated_class_masks(
+                    detection3d_gt_batch.gt_traffic_cone_barrier_bbox_status
+                )
+                if self.partial_annotations is not None
+                else None
             ),
         )  # type: ignore[return-value]
 

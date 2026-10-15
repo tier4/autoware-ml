@@ -126,6 +126,8 @@ model:
   # Camera branch is disabled by default; camera-lidar experiments configure it together with a
   # fuser on the lidar branch.
   camera_network: null
+  # Set on a leaf whose database flags scenarios without some class annotations.
+  partial_annotations: null
 
   bbox_head:
     _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.TransFusionHead

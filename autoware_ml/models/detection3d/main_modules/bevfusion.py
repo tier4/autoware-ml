@@ -49,6 +49,7 @@ from autoware_ml.models.detection3d.main_modules.bevfusions.bevfusion_camera imp
     BEVFusionCamera,
     BEVFusionImageBackboneExportWrapper,
 )
+from autoware_ml.models.detection3d.task_modules.partial_annotations import PartialAnnotations
 from autoware_ml.models.detection3d.heads.transfusions.transfusion_head import TransFusionHead
 from autoware_ml.models.detection3d.main_modules.bevfusions.export_wrappers import (
     export_detection_outputs,
@@ -244,6 +245,7 @@ class BEVFusionDetectionModel(ModuleBaseModel):
         optimizer: Callable[..., Optimizer] | None = None,
         scheduler: Callable[[Optimizer], LRScheduler] | None = None,
         metrics: Sequence[MetricSuite] | None = None,
+        partial_annotations: PartialAnnotations | None = None,
     ) -> None:
         """Initialize BEVFusion.
 
@@ -259,6 +261,8 @@ class BEVFusionDetectionModel(ModuleBaseModel):
             optimizer: Optimizer factory.
             scheduler: Scheduler factory.
             metrics: Detection metrics accumulated during validation and test.
+            partial_annotations: Maps the dataset's per-sample annotation flag to the classes
+                the head must not supervise in that sample. None supervises every class.
         """
         super().__init__(
             data_preprocessor=data_preprocessor,
@@ -267,6 +271,7 @@ class BEVFusionDetectionModel(ModuleBaseModel):
             metrics=metrics,
             log_dict_configs=log_dict_configs,
         )
+        self.partial_annotations = partial_annotations
         self.lidar_network = lidar_network
         self.camera_network = camera_network
         self.bbox_head = bbox_head
@@ -500,8 +505,12 @@ class BEVFusionDetectionModel(ModuleBaseModel):
             gt_bboxes_3d=detection3d_gt_batch.gt_bboxes_3d,
             gt_labels_3d=detection3d_gt_batch.gt_labels_3d,
             gt_valid_bboxes=detection3d_gt_batch.gt_valid_bboxes,
-            gt_traffic_cone_barrier_bbox_status=(
-                detection3d_gt_batch.gt_traffic_cone_barrier_bbox_status
+            gt_annotated_class_masks=(
+                self.partial_annotations.build_annotated_class_masks(
+                    detection3d_gt_batch.gt_traffic_cone_barrier_bbox_status
+                )
+                if self.partial_annotations is not None
+                else None
             ),
         )  # type: ignore[return-value]
 
