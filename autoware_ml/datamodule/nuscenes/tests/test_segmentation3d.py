@@ -30,14 +30,14 @@ from autoware_ml.datamodule.t4dataset.tests.test_segmentation3d import (
 
 
 class TestNuScenesSegmentation3DTask(unittest.TestCase):
-    """The mask is read from the full path the nuScenes record stores."""
+    """The mask is read from the stored root-relative path joined onto the database root."""
 
     def test_reads_the_mask_under_roots_of_any_depth(self) -> None:
         """
         Input: nuScenes roots one and four directories deep, each holding a mask at
-        <root>/lidarseg/v1.0-trainval/a.bin, recorded with its full path.
-        Expected: the task reads the mask under both roots, rather than rebuilding the path
-        from the six trailing directories a T4 scene has.
+        <root>/lidarseg/v1.0-trainval/a.bin, recorded as lidarseg/v1.0-trainval/a.bin.
+        Expected: the task reads the mask under both roots by joining the stored path onto
+        the root, rather than rebuilding it from the six trailing directories a T4 scene has.
         Check: the resolved labels.
         """
         for depth in ("nuscenes", "workspace/data/sets/nuscenes"):
@@ -49,7 +49,7 @@ class TestNuScenesSegmentation3DTask(unittest.TestCase):
                 task = NuScenesSegmentation3DTask(
                     database_root_path=str(root),
                     dataset_records_dataframe=build_records_dataframe(
-                        str(mask_path), {"car": 0, "tree": 1}
+                        "lidarseg/v1.0-trainval/a.bin", {"car": 0, "tree": 1}
                     ),
                     taxonomy=TAXONOMY,
                 )

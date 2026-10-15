@@ -19,20 +19,21 @@ class NuScenesDataset(T4Dataset):
     """
     Dataset serving every task from the record table of a nuScenes database.
 
-    The nuScenes record generator stores every frame path as a complete path, so frame paths
-    are used as stored instead of being resolved against the database root.
+    The nuScenes record generator stores every frame path relative to the database root, so a
+    stored path is joined onto the root of this dataset. Unlike the T4 layout, the nuScenes
+    layout is too shallow to rebuild a path from a fixed number of trailing directories, so the
+    whole stored path is used.
     """
 
     def _update_frame_path(self, frame_path: str) -> str:
         """
-        Return the frame path unchanged, since NuScenesRecordsGenerator already stores
-        full, directly-usable absolute paths.
+        Resolve a stored frame path against the database root.
 
         Args:
-          frame_path: Frame path as stored in the parquet record.
+          frame_path: Frame path relative to the database root, as the record table stores it.
 
         Returns:
-          str: The same path, unmodified.
+          str: Path of the frame under the database root.
         """
 
-        return frame_path
+        return str(self.database_root_path / frame_path)

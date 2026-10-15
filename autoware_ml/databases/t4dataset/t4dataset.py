@@ -18,7 +18,7 @@ import logging
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 import time
-from typing import Sequence
+from typing import Mapping, Sequence
 from types import MappingProxyType
 
 import polars as pl
@@ -28,7 +28,7 @@ from autoware_ml.databases.base_database import BaseDatabase
 from autoware_ml.databases.database_interface import DatabaseInterface
 from autoware_ml.databases.scenarios import ScenarioData
 from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord
-from autoware_ml.databases.t4dataset.t4records_generator import T4RecordsGenerator
+from autoware_ml.databases.t4dataset.t4records_generator import MAX_SWEEPS, T4RecordsGenerator
 from autoware_ml.databases.t4dataset.t4scenarios import T4Scenarios
 from autoware_ml.databases.box3d_pipelines.box3d_pipeline import Box3DPipeline
 from autoware_ml.databases.taxonomy import DatabaseTaxonomy
@@ -169,23 +169,24 @@ class T4Dataset(BaseDatabase):
         return string
 
     @property
-    def hash_repr(self) -> str:
+    def hash_fields(self) -> Mapping[str, str]:
         """
-        Get the representation of the database that identifies the content of its cache.
+        Get the explicit content fields that identify the cached records of the database.
 
-        Extends the base representation with the lidar and annotation settings that shape the
-        cached records.
+        Extends the base fields with the lidar channel and annotation directory the records
+        are built from, and the sweep window the records generator stores per sample. The
+        root path stays out: the records store paths relative to it and are re-rooted when read.
 
         Returns:
-          str: Content representation of the database.
+          Mapping[str, str]: Field name to its content representation, in a fixed order.
         """
 
-        return (
-            f"{super().hash_repr}"
-            f"(lidar_channel={self._lidar_channel.value}, "
-            f"lidar_pointcloud_num_features={self._lidar_pointcloud_num_features}, "
-            f"box_annotation_dir={self._box_annotation_dir})"
-        )
+        return {
+            **super().hash_fields,
+            "lidar_channel": self._lidar_channel.value,
+            "box_annotation_dir": self._box_annotation_dir,
+            "max_sweeps": str(MAX_SWEEPS),
+        }
 
     def __eq__(self, other: DatabaseInterface) -> bool:
         """

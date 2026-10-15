@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 # Lidar channel each nuScenes sample is keyed on
 LIDAR_CHANNEL = LidarChannel.LIDAR_TOP
 # 10 past sweeps + 1 current sweep
-_MAX_SWEEPS = 10
+MAX_SWEEPS = 10
 
 
 class NuScenesRecordsGenerator:
@@ -134,6 +134,29 @@ class NuScenesRecordsGenerator:
             sample_token = self.nusc.get("sample", sample_token)["next"]
         return tokens
 
+    def relative_to_database_root(self, path: str | Path) -> str:
+        """
+        Store a file path relative to the database root, so the records stay valid when the
+        database is mounted under another root and the datamodule re-roots them on read.
+
+        Args:
+          path: Absolute path the nuscenes-devkit resolved under the database root.
+
+        Returns:
+          str: The path relative to the database root.
+
+        Raises:
+          ValueError: If the path does not lie under the database root.
+        """
+
+        try:
+            return str(Path(path).relative_to(self.database_root_path))
+        except ValueError as error:
+            raise ValueError(
+                f"nuScenes file {path} does not lie under the database root "
+                f"{self.database_root_path}, so it cannot be stored relative to it."
+            ) from error
+
     def generate_dataset_records(self) -> Sequence[DatasetRecord]:
         """
         Generate dataset records for this scene, in chronological order.
@@ -145,7 +168,7 @@ class NuScenesRecordsGenerator:
         records = []
         logger.info(
             f"Generating dataset records for scenario: {self.scenario_data.scenario_id} "
-            f"with sample steps: {self.sample_steps} and max sweeps: {_MAX_SWEEPS}"
+            f"with sample steps: {self.sample_steps} and max sweeps: {MAX_SWEEPS}"
         )
 
         for sample_index in range(0, len(self.sample_tokens), self.sample_steps):
@@ -279,14 +302,17 @@ class NuScenesRecordsGenerator:
           calibrated_lidar_sample_data_token: Sample data token of the lidar frame.
 
         Returns:
-          str | None: Absolute path to the lidarseg mask file, or None if not available.
+          str | None: Path of the lidarseg mask file relative to the database root, or None if
+            not available.
         """
 
         if "lidarseg" not in self.nusc.table_names:
             return None
 
         lidarseg_record = self.nusc.get("lidarseg", calibrated_lidar_sample_data_token)
-        return str(Path(self.nusc.dataroot) / lidarseg_record["filename"])
+        return self.relative_to_database_root(
+            Path(self.nusc.dataroot) / lidarseg_record["filename"]
+        )
 
     def _extract_lidar_frame(
         self, sample: Mapping[str, Any]
@@ -332,7 +358,7 @@ class NuScenesRecordsGenerator:
             lidar_sensor_id=cs_record["token"],
             lidar_sensor_channel_name=LIDAR_CHANNEL.value,
             lidar_timestamp_seconds=sd_record["timestamp"] / 1e6,
-            lidar_pointcloud_path=lidar_path,
+            lidar_pointcloud_path=self.relative_to_database_root(lidar_path),
             lidar_pointcloud_source_path=None,
             lidar_pointcloud_num_features=self.lidar_pointcloud_num_features,
             lidar_sensor_to_ego_pose_matrix=lidar_sensor_to_ego_matrix,
@@ -415,7 +441,7 @@ class NuScenesRecordsGenerator:
         lidar_frame_data_models = []
         current_sample_data_record = self.nusc.get("sample_data", current_lidar_sample_data_token)
 
-        for _ in range(_MAX_SWEEPS):
+        for _ in range(MAX_SWEEPS):
             neighbour_token = current_sample_data_record[direction.link]
             if not neighbour_token:
                 break
@@ -441,8 +467,8 @@ class NuScenesRecordsGenerator:
 
             lidar_sensor_to_lidar_sweep_matrix = np.linalg.inv(lidar_sweep_to_lidar_sensor_matrix)
 
-            lidar_sweep_pointcloud_path = self.nusc.get_sample_data_path(
-                current_sample_data_record["token"]
+            lidar_sweep_pointcloud_path = self.relative_to_database_root(
+                self.nusc.get_sample_data_path(current_sample_data_record["token"])
             )
 
             lidar_frame_data_models.append(
@@ -604,7 +630,7 @@ class NuScenesRecordsGenerator:
             image_sensor_id=cs_record["token"],
             image_sensor_channel_name=camera_channel_name,
             image_timestamp_seconds=sd_record["timestamp"] / 1e6,
-            image_path=image_path,
+            image_path=self.relative_to_database_root(image_path),
             image_height=image_height,
             image_width=image_width,
             cam2img=cam2img,
@@ -665,7 +691,7 @@ class NuScenesRecordsGenerator:
         current_sample = sample
 
         # Camera sweeps are taken from the past only. The future window is lidar only.
-        for _ in range(_MAX_SWEEPS):
+        for _ in range(MAX_SWEEPS):
             if not current_sample["prev"]:
                 break
 

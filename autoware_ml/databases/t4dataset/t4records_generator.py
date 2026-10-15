@@ -70,7 +70,7 @@ logger = logging.getLogger(__name__)
 # Max number of lidar sweeps recorded on either side of the current lidar frame, and of past
 # camera keyframes. The T4Dataset lidar runs at 10Hz, so 9 past sweeps + 1 current sweep cover
 # all the lidar scans in one second.
-_MAX_SWEEPS = 9
+MAX_SWEEPS = 9
 # Lens distortion model of every T4 camera, the coefficients follow its parameter order
 CAMERA_DISTORTION_MODEL = "plumb_bob"
 
@@ -205,7 +205,7 @@ class T4RecordsGenerator:
         records = []
         logger.info(
             f"Generating dataset records for scenario: {self.scenario_data.scenario_id} with "
-            f"sample steps: {self.sample_steps} and max sweeps: {_MAX_SWEEPS}"
+            f"sample steps: {self.sample_steps} and max sweeps: {MAX_SWEEPS}"
         )
 
         for sample_index in range(0, len(self.t4_devkit_dataset.sample), self.sample_steps):
@@ -547,7 +547,7 @@ class T4RecordsGenerator:
             SchemaName.SAMPLE_DATA, current_lidar_sample_data_token
         )
 
-        for _ in range(_MAX_SWEEPS):
+        for _ in range(MAX_SWEEPS):
             # Stop processing when the chain of lidar frames ends on this side
             neighbour_token = getattr(current_sample_data_record, direction.link)
             if not neighbour_token:
@@ -851,7 +851,7 @@ class T4RecordsGenerator:
         current_sample = sample
 
         # Camera sweeps are taken from the past only. The future window is lidar only.
-        for _ in range(_MAX_SWEEPS):
+        for _ in range(MAX_SWEEPS):
             if not current_sample.prev:
                 break
 

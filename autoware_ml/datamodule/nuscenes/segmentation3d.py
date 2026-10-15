@@ -20,18 +20,20 @@ class NuScenesSegmentation3DTask(T4Segmentation3DTask):
     """
     3D segmentation task for NuScenesDataset records.
 
-    The records store the semantic mask as a full path, like the lidar frames, because the
-    nuScenes layout is too shallow to rebuild it from a fixed number of trailing directories.
+    The records store the semantic mask path relative to the database root, like the lidar
+    frames, and the whole stored path is joined onto the root: the nuScenes layout is too
+    shallow to rebuild it from a fixed number of trailing directories as the T4 task does.
     """
 
     def semantic_mask_path(self, lidar_frame: LidarFrameDataModel) -> str:
         """
-        Return the stored semantic mask path, which is already usable as it is.
+        Resolve the stored semantic mask path against the database root.
 
         Args:
           lidar_frame: Lidar frame carrying a semantic mask.
 
         Returns:
-          str: Path of the mask as stored in the record.
+          str: Path of the mask under the database root.
         """
-        return lidar_frame.lidar_pointcloud_semantic_mask_path
+        assert lidar_frame.lidar_pointcloud_semantic_mask_path is not None
+        return str(self.database_root_path / lidar_frame.lidar_pointcloud_semantic_mask_path)

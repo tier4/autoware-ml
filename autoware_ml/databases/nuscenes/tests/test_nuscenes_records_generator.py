@@ -32,6 +32,7 @@ _SCENE_NAME = "scene-0061"
 _SCENE_TOKEN = "scene_token"
 _FIRST_SAMPLE_TOKEN = "sample0"
 _SECOND_SAMPLE_TOKEN = "sample1"
+_DATAROOT = "/data/nuscenes"
 
 
 class _SceneDevkit:
@@ -54,10 +55,22 @@ class _SceneDevkit:
             },
         }
 
+        self.dataroot = _DATAROOT
+        self.table_names = ["sample", "lidarseg"]
+        self._lidarseg = {
+            _FIRST_SAMPLE_TOKEN: {"filename": "lidarseg/v1.0-mini/first_lidar_token.bin"}
+        }
+
     def get(self, table_name: str, token: str) -> Mapping[str, Any]:
-        if table_name != "sample":
-            raise KeyError(table_name)
-        return self._samples[token]
+        if table_name == "sample":
+            return self._samples[token]
+        if table_name == "lidarseg":
+            return self._lidarseg[token]
+        raise KeyError(table_name)
+
+    def get_sample_data_path(self, token: str) -> str:
+        """Resolve a file under the dataroot, as the devkit does."""
+        return f"{self.dataroot}/samples/LIDAR_TOP/{token}.pcd.bin"
 
 
 class TestNuScenesRecordsGenerator(unittest.TestCase):
@@ -116,6 +129,28 @@ class TestNuScenesRecordsGenerator(unittest.TestCase):
                 traffic_cone_barrier_bbox_status=True,
             ),
         )
+
+    def test_stored_paths_are_relative_to_the_database_root(self) -> None:
+        """
+        Test that the paths the devkit resolves under the dataroot are stored relative to it,
+        so the records stay valid when the database is mounted under another root and the
+        datamodule joins them back onto its own root.
+        """
+        resolved = self.devkit.get_sample_data_path(_FIRST_SAMPLE_TOKEN)
+
+        self.assertEqual(
+            self.generator.relative_to_database_root(resolved),
+            f"samples/LIDAR_TOP/{_FIRST_SAMPLE_TOKEN}.pcd.bin",
+        )
+        self.assertEqual(
+            self.generator._extract_lidar_pointcloud_semantic_mask_path(_FIRST_SAMPLE_TOKEN),
+            "lidarseg/v1.0-mini/first_lidar_token.bin",
+        )
+
+    def test_a_path_outside_the_database_root_is_rejected(self) -> None:
+        """Test that a file the devkit resolves elsewhere cannot be stored relative to the root."""
+        with self.assertRaisesRegex(ValueError, "does not lie under the database root"):
+            self.generator.relative_to_database_root("/elsewhere/samples/LIDAR_TOP/x.pcd.bin")
 
     def test_unknown_scene_is_rejected(self) -> None:
         """Test that a scenario naming a scene the version does not hold is an error."""

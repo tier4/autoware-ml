@@ -59,17 +59,25 @@ class DatasetParams(BaseModel):
 
     def __str__(self) -> str:
         """String representation of the database version."""
+        return f"DatasetParams(dataset_name={self.dataset_name}, sample_steps={self.sample_steps})"
+
+    @property
+    def hash_repr(self) -> str:
+        """
+        Representation of every field that changes the records built from the dataset, used by
+        the database cache hash. Kept apart from ``__str__``, which is free to change for logging.
+
+        Returns:
+          str: Content representation of the parameters.
+        """
+
         return (
-            f"DatasetParams(dataset_name={self.dataset_name}, "
-            f"sample_steps={self.sample_steps})"
+            f"DatasetParams(dataset_name={self.dataset_name!r}, sample_steps={self.sample_steps})"
         )
 
     def __eq__(self, other: DatasetParams) -> bool:
         """Compare two database versions by their version and settings."""
-        return (
-            self.dataset_name == other.dataset_name
-            and self.sample_steps == other.sample_steps
-        )
+        return self.dataset_name == other.dataset_name and self.sample_steps == other.sample_steps
 
     def __hash__(self) -> int:
         """Hash the database version by its version and settings."""
@@ -116,7 +124,28 @@ class ScenarioData(BaseModel):
             f"scenario_id={self.scenario_id}, "
             f"scenario_version={self.scenario_version}, "
             f"vehicle_type={self.vehicle_type}, "
-            f"location={self.location})"
+            f"location={self.location}, "
+            f"traffic_cone_barrier_bbox_status={self.traffic_cone_barrier_bbox_status})"
+        )
+
+    @property
+    def hash_repr(self) -> str:
+        """
+        Representation of every field that changes the records built from the scenario, used by
+        the database cache hash. Every field is listed explicitly, including the traffic cone /
+        barrier annotation flag the records carry per frame.
+
+        Returns:
+          str: Content representation of the scenario.
+        """
+
+        return (
+            f"ScenarioData(dataset_params={self.dataset_params.hash_repr}, "
+            f"scenario_id={self.scenario_id!r}, "
+            f"scenario_version={self.scenario_version!r}, "
+            f"vehicle_type={self.vehicle_type!r}, "
+            f"location={self.location!r}, "
+            f"traffic_cone_barrier_bbox_status={self.traffic_cone_barrier_bbox_status!r})"
         )
 
     def __eq__(self, other: ScenarioData) -> bool:
@@ -195,9 +224,9 @@ class Scenarios(BaseModel):
           str: Content representation of the scenarios.
         """
 
-        dataset_params = ", ".join(str(dataset_param) for dataset_param in self.dataset_params)
+        dataset_params = ", ".join(dataset_param.hash_repr for dataset_param in self.dataset_params)
         scenario_data = ", ".join(
-            f"{split}: [{', '.join(str(data) for data in split_data)}]"
+            f"{split}: [{', '.join(data.hash_repr for data in split_data)}]"
             for split, split_data in self.scenario_data.items()
         )
         return f"Scenarios(dataset_params=({dataset_params}), scenario_data=({scenario_data}))"

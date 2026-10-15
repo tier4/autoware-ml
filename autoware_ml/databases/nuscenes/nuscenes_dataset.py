@@ -18,7 +18,7 @@ import logging
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 import time
-from typing import Sequence
+from typing import Mapping, Sequence
 from types import MappingProxyType
 
 import polars as pl
@@ -28,7 +28,10 @@ from autoware_ml.databases.base_database import BaseDatabase
 from autoware_ml.databases.database_interface import DatabaseInterface
 from autoware_ml.databases.scenarios import ScenarioData
 from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord
-from autoware_ml.databases.nuscenes.nuscenes_records_generator import NuScenesRecordsGenerator
+from autoware_ml.databases.nuscenes.nuscenes_records_generator import (
+    MAX_SWEEPS,
+    NuScenesRecordsGenerator,
+)
 from autoware_ml.databases.nuscenes.nuscenes_scenarios import NuScenesScenarios
 from autoware_ml.databases.box3d_pipelines.box3d_pipeline import Box3DPipeline
 from autoware_ml.databases.taxonomy import DatabaseTaxonomy
@@ -157,6 +160,24 @@ class NuScenesDataset(BaseDatabase):
         if not isinstance(other, NuScenesDataset):
             return False
         return str(self) == str(other)
+
+    @property
+    def hash_fields(self) -> Mapping[str, str]:
+        """
+        Get the explicit content fields that identify the cached records of the database.
+
+        Extends the base fields with the sweep window the records generator stores per sample.
+        The root path stays out: the records store every file path relative to it and the
+        datamodule joins them onto the root of the node reading them.
+
+        Returns:
+          Mapping[str, str]: Field name to its content representation, in a fixed order.
+        """
+
+        return {
+            **super().hash_fields,
+            "max_sweeps": str(MAX_SWEEPS),
+        }
 
     def process_scenario_records(self) -> None:
         """
