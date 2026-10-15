@@ -178,6 +178,9 @@ class NuScenesRecordsGenerator:
             vehicle_type=self.scenario_data.vehicle_type,
             timestamp_seconds=sample["timestamp"] / 1e6,
             scenario_name=self.scene_record["name"],
+            # nuScenes annotates traffic cones and barriers in every scene, so the flag the T4
+            # scenario IDs carry is always set here.
+            traffic_cone_barrier_bbox_status=True,
         )
 
     def _extract_boxes_3d_annotations(
