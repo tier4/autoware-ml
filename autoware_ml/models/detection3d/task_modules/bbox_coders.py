@@ -256,8 +256,9 @@ class TransFusionBBoxCoder:
             rots: Rotation channels storing sine and cosine values.
             dims: Log-space box dimensions.
             centers: Predicted BEV center offsets.
-            heights: Predicted box gravity heights, where the box center
-            is already at height + 0.5 * box_height.
+            heights: Predicted z of the box gravity center. The channel is regressed as the
+                center directly (``encode`` stores the GT gravity center), so no half-height
+                shift is applied here or in the runtime nodes.
             vels: Optional velocity channels.
 
         Returns:
@@ -273,8 +274,6 @@ class TransFusionBBoxCoder:
             centers[:, 1, :] * self.out_size_factor * self.voxel_size[1] + self.pc_range[1]
         )
         dims = dims.exp()
-        # NOTE: gt_bbox is always in gravity_center, so it doesn't need to shift
-        # heights = heights - dims[:, 2:3, :] * 0.5
         yaw = torch.atan2(rots[:, 0:1, :], rots[:, 1:2, :])
         if vels is None:
             final_boxes = torch.cat([centers, heights, dims, yaw], dim=1)

@@ -137,6 +137,13 @@ Deployment uses an explicit PTv3 export wrapper and a copied encoder, so the
 training model is not mutated when export-only sparse-convolution and
 serialization settings are applied.
 
+The `height` channel of the detection head's `bbox_pred` output is the z of the
+box gravity center. Earlier releases regressed the top face (`z + 0.5 * h`), and
+the `autoware_ptv3` node still undoes that shift with `z = height - box_h * 0.5`
+in `detection3d_postprocess.cu`. A model trained with this release therefore
+needs the node updated to `z = height` (no half-height subtraction) before it is
+deployed; models trained before this release keep working with the current node.
+
 ### ONNX Preprocessing Contract
 
 The exported PTv3 encoder ONNX expects all pooling-shape metadata to be

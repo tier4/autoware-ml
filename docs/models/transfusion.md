@@ -63,6 +63,8 @@ The model exports one ONNX main body wrapping the voxel encoder, sparse encoder,
 | `bbox_pred0`    | Output    | Per-proposal raw box regression channels |
 | `dir_cls_pred0` | Output    | Per-proposal direction classification    |
 
+The `height` channel of `bbox_pred0` is the z of the box gravity center, which is how `autoware_lidar_transfusion` reads it.
+
 Exports land in `mlruns/<config_name>/<run_id>/artifacts/exports/` of a dedicated deploy run linked to the training run. Every module is stamped with its provenance and the `--release` version; omit `--release` only for throwaway exports, which are stamped `unversioned`. The current verification scope covers ONNX export. TensorRT engine generation has not been validated yet.
 
 ## Implementation

@@ -95,7 +95,7 @@ The export produces the ONNX modules consumed by `autoware_universe/perception/a
 | `ranks`                | Sorted BEV pooling ranks                             |
 | `indices`              | Sorting indices for pooled frustum features          |
 
-Every main-body module returns the runtime detection interface: `bbox_pred` with the raw regression channels `(center, height, dim, rot, vel)` per proposal, `score` with per-proposal confidences, and `label_pred` with per-proposal class labels. Metric-space decoding happens in the runtime node.
+Every main-body module returns the runtime detection interface: `bbox_pred` with the raw regression channels `(center, height, dim, rot, vel)` per proposal, `score` with per-proposal confidences, and `label_pred` with per-proposal class labels. Metric-space decoding happens in the runtime node. The `height` channel is the z of the box gravity center, which is how `autoware_bevfusion` reads it.
 
 Exports land in `mlruns/<config_name>/<run_id>/artifacts/exports/` of a dedicated deploy run linked to the training run. Every module is stamped with its provenance and the `--release` version; omit `--release` only for throwaway exports, which are stamped `unversioned`. TensorRT engine generation is disabled (`deploy.tensorrt.enabled=false`); the runtime builds engines itself using the custom sparse-convolution and `bev_pool` plugins.
 
