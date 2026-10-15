@@ -143,8 +143,8 @@ class TestTransFusionHead(unittest.TestCase):
         Build a TransFusionHead from the setUp parameters.
 
         Only the arguments a test actually varies are exposed. Passing None for one of them keeps
-        the setUp default, except for nms_group_configs, where None is itself the default and means
-        the head runs without grouped NMS.
+        the setUp default, except for nms_type and nms_group_configs, where None is itself the
+        default: no NMS at all, and with nms_type="circle" one group per class.
         """
         return TransFusionHead(
             num_proposals=self.num_proposals,
@@ -1351,6 +1351,74 @@ class TestTransFusionHead(unittest.TestCase):
         self.assertAlmostEqual(float(prediction.scores_3d[0]), 0.8, places=5)
         self.assertAlmostEqual(float(prediction.bboxes_3d[0, 0]), 8.5, places=4)
 
+    def test_decode_outputs_nms_type_none_runs_no_nms(self) -> None:
+        """
+        Test that nms_type=None skips NMS entirely, so two overlapping cars both survive even
+        though the head default radius would suppress the weaker one.
+        """
+        bboxes_3d = [
+            [8.0, 8.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+            [8.5, 8.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+        ]
+        transfusion_head = self._build_transfusion_head(nms_type=None)
+        self.assertIsNone(transfusion_head.nms_groups)
+
+        prediction = self._decode_sample_predictions(
+            transfusion_head,
+            self._build_single_sample_outputs(
+                bboxes_3d, labels=[0, 0], scores=[0.9, 0.8], transfusion_head=transfusion_head
+            ),
+        )[0]
+
+        self.assertEqual(prediction.scores_3d.shape, (2,))
+
+    def test_decode_outputs_circle_nms_without_groups_suppresses_per_class(self) -> None:
+        """
+        Test that nms_type="circle" with no groups falls back to one group per class with the
+        head defaults, as on main: two cars inside the radius collapse to the stronger one, while
+        a car and a pedestrian at the same distance both survive.
+        """
+        bboxes_3d = [
+            [8.0, 8.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+            [8.5, 8.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+        ]
+        transfusion_head = self._build_transfusion_head(nms_type="circle")
+        groups = transfusion_head.nms_groups
+        assert groups is not None
+        self.assertEqual([list(group.class_ids) for group in groups], [[0], [1]])
+        self.assertEqual(
+            {(group.nms_radius, group.max_size) for group in groups},
+            {(transfusion_head.nms_min_radius, transfusion_head.post_max_size)},
+        )
+
+        same_class = self._decode_sample_predictions(
+            transfusion_head,
+            self._build_single_sample_outputs(
+                bboxes_3d, labels=[0, 0], scores=[0.9, 0.8], transfusion_head=transfusion_head
+            ),
+        )[0]
+        different_classes = self._decode_sample_predictions(
+            transfusion_head,
+            self._build_single_sample_outputs(
+                bboxes_3d, labels=[0, 1], scores=[0.9, 0.8], transfusion_head=transfusion_head
+            ),
+        )[0]
+
+        self.assertEqual(same_class.scores_3d.shape, (1,))
+        self.assertAlmostEqual(float(same_class.scores_3d[0]), 0.9, places=5)
+        self.assertEqual(different_classes.scores_3d.shape, (2,))
+
+    def test_nms_groups_without_nms_type_are_rejected(self) -> None:
+        """
+        Test that nms_group_configs with nms_type=None is rejected, since the groups would
+        otherwise be configured and silently never applied.
+        """
+        with self.assertRaises(ValueError):
+            self._build_transfusion_head(
+                nms_type=None,
+                nms_group_configs=[NMSGroupConfig(class_names=["car"], nms_radius=1.0, max_size=8)],
+            )
+
     def test_transfusion_nms_groups_cap_zero_radius_groups_by_score(self) -> None:
         """
         Test that a group with an NMS radius of 0 applies no suppression and only caps its
@@ -1451,10 +1519,11 @@ class TestTransFusionHead(unittest.TestCase):
     def test_resolve_nms_groups_fills_in_the_head_defaults(self) -> None:
         """Test that a group leaving nms_radius or max_size unset inherits the head's defaults."""
         transfusion_head = self._build_transfusion_head(
+            nms_type="circle",
             nms_group_configs=[
                 NMSGroupConfig(class_names=["car"], nms_radius=0.5, max_size=3),
                 NMSGroupConfig(class_names=["pedestrian"], nms_radius=None, max_size=None),
-            ]
+            ],
         )
         groups = transfusion_head.nms_groups
         assert groups is not None
@@ -1472,6 +1541,7 @@ class TestTransFusionHead(unittest.TestCase):
         since 0 means no suppression for the group.
         """
         transfusion_head = self._build_transfusion_head(
+            nms_type="circle",
             nms_group_configs=[NMSGroupConfig(class_names=["car"], nms_radius=0.0, max_size=5)],
         )
         groups = transfusion_head.nms_groups
@@ -1488,10 +1558,11 @@ class TestTransFusionHead(unittest.TestCase):
         """
         with self.assertRaises(ValueError):
             self._build_transfusion_head(
+                nms_type="circle",
                 nms_group_configs=[
                     NMSGroupConfig(class_names=["car", "pedestrian"], nms_radius=1.0, max_size=8),
                     NMSGroupConfig(class_names=["pedestrian"], nms_radius=2.0, max_size=8),
-                ]
+                ],
             )
 
     def test_resolve_score_threshold_groups_rejects_a_class_in_two_groups(self) -> None:

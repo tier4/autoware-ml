@@ -47,6 +47,7 @@ model:
     # 2.4 m window at the halved BEV cell
     nms_kernel_size: 5
     # One group per class of the fine detection taxonomy, no score thresholds.
+    nms_type: circle
     nms_group_configs:
       - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.NMSGroupConfig
         class_names: [car.common, car.emergency, car.special, truck.common, truck.emergency, truck.trailer, truck.construction, bus, train]

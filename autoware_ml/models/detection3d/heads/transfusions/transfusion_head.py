@@ -284,12 +284,15 @@ class TransFusionHead(nn.Module):
                 length and rotated by the box yaw, so elongated objects such as a
                 tractor and trailer rig get one connected positive region instead of
                 a small blob in the low-density gap at the coupling.
-            nms_type: Optional NMS type applied during prediction. Supported values
-                are ``None`` and ``"circle"``.
-            nms_group_configs: Optional grouped NMS configuration. Each entry must provide
-                ``class_names`` or ``class_ids`` and may override ``nms_radius``
-                and ``post_max_size``. A group with ``nms_radius`` of ``0`` keeps
-                its highest-scoring predictions up to ``post_max_size``.
+            nms_type: NMS applied during prediction. ``None`` runs no NMS at all and
+                ``"circle"`` runs grouped center-distance NMS. With ``"circle"`` and
+                no ``nms_group_configs``, every class forms its own group with
+                ``nms_min_radius`` and ``post_max_size``.
+            nms_group_configs: Optional grouped NMS configuration, only allowed with
+                ``nms_type="circle"``. Each entry must provide ``class_names`` and
+                may override ``nms_radius`` and ``max_size``. A group with
+                ``nms_radius`` of ``0`` keeps its highest-scoring predictions up to
+                ``max_size``.
             loss_cls_weight: Weight applied to the classification loss.
             loss_bbox_weight: Weight applied to the box regression loss.
             loss_heatmap_weight: Weight applied to the dense heatmap loss.
@@ -352,7 +355,16 @@ class TransFusionHead(nn.Module):
             if partial_ignore_labels is not None
             else None
         )
-        self.nms_groups = self._resolve_nms_groups(nms_group_configs)
+        # nms_type decides whether NMS runs at all, the groups only decide how. Groups without a
+        # type would be silently ignored, which is the kind of config mistake worth refusing.
+        if nms_type is None and nms_group_configs is not None:
+            raise ValueError(
+                "TransFusionHead nms_group_configs requires nms_type='circle', "
+                "nms_type=None runs no NMS."
+            )
+        self.nms_groups = (
+            self._resolve_nms_groups(nms_group_configs) if nms_type == "circle" else None
+        )
         # Assign score_threshold_groups
         self.bbox_coder.score_threshold_groups = self._resolve_score_threshold_groups(
             score_threshold_group_configs
@@ -458,10 +470,23 @@ class TransFusionHead(nn.Module):
 
     def _resolve_nms_groups(
         self, nms_config_groups: Sequence[NMSGroupConfig] | None
-    ) -> Sequence[NMSGroup] | None:
-        """Resolve grouped NMS configuration into class-id form."""
+    ) -> Sequence[NMSGroup]:
+        """
+        Resolve grouped NMS configuration into class-id form.
+
+        Without an explicit configuration every class becomes its own group with the head
+        defaults, so classes never suppress each other and ``nms_type="circle"`` on its own
+        behaves like plain per-class circle NMS.
+        """
         if nms_config_groups is None:
-            return None
+            return [
+                NMSGroup(
+                    class_ids=[class_id],
+                    nms_radius=self.nms_min_radius,
+                    max_size=self.post_max_size,
+                )
+                for class_id in range(self.num_classes)
+            ]
 
         resolved_groups: list[NMSGroup] = []
         # A class may appear in at most one group, otherwise it would be suppressed against two
@@ -953,9 +978,8 @@ class TransFusionHead(nn.Module):
             bbox_centers=pred_bboxes[..., Box3DFieldIndex.X : Box3DFieldIndex.Z + 1]
         )
 
-        # TODO (KokSeang): Group-based vectorization circle_nms
-        # For each batch, it groups the same classes based on nms groups ids first
-        if self.nms_groups is not None:
+        # nms_type gates the suppression, nms_groups only holds how each class is suppressed.
+        if self.nms_type == "circle":
             keep_masks = self._filter_bboxes_nms_groups(
                 bbox_centers=pred_bboxes[..., Box3DFieldIndex.X : Box3DFieldIndex.Y + 1],
                 bbox_scores=bbox_scores,
