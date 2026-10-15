@@ -161,6 +161,13 @@ datasets:
           scale_range: [0.9, 1.1]
           shift_range: [-0.02, 0.02]
 
+        # Boxes are served as stored: a non finite velocity is zeroed (unannotated, at rest)
+        # and boxes whose geometry cannot become a target are dropped.
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesPhysicalFilter
+          _convert_: all
+
+          max_absolute_speed: 150.0 # m/s, 540 km/h
+
         - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesLabelNameFilter
           _convert_: all
 
@@ -222,6 +229,13 @@ datasets:
           _convert_: all
 
           points_range: ${point_cloud_range}
+
+        # Boxes are served as stored: a non finite velocity is zeroed (unannotated, at rest)
+        # and boxes whose geometry cannot become a target are dropped.
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesPhysicalFilter
+          _convert_: all
+
+          max_absolute_speed: 150.0 # m/s, 540 km/h
 
         - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesLabelNameFilter
           _convert_: all

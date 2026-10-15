@@ -12,6 +12,7 @@ from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.points.base_points import BasePoints
 from autoware_ml.geometry.bbox_3d.base_bbox3d import BaseBBoxes3D
 from autoware_ml.transforms.base import BaseTransform
+from autoware_ml.types.geometry import Box3DFieldIndex
 
 
 def parse_exclusion_rules(rules: Sequence[Sequence[str]]) -> frozenset[tuple[str, str]]:
@@ -221,6 +222,11 @@ class BBoxesPhysicalFilter(BaseTransform):
     or a ground-plane speed beyond the physical bound (the velocity is never range-filtered
     downstream, so an absurd speed silently explodes the velocity loss).
 
+    A non-finite velocity is the exception: the records store one for a box whose velocity is
+    not annotated, which means the box stands still rather than that it is garbage. By default
+    such a velocity is set to zero and the box is kept; with ``zero_non_finite_velocity`` off,
+    it is dropped like any other non-finite parameter.
+
     Note that the bbox parameters are already float32 here, so a float64 value that overflows
     the float32 cast has become non-finite by this point and is still caught.
     """
@@ -230,6 +236,7 @@ class BBoxesPhysicalFilter(BaseTransform):
     def __init__(
         self,
         max_absolute_speed: float = 150.0,  # m/s, 540 km/h
+        zero_non_finite_velocity: bool = True,
     ) -> None:
         """
         Initialize the BBoxesPhysicalFilter transform.
@@ -237,9 +244,13 @@ class BBoxesPhysicalFilter(BaseTransform):
         Args:
             max_absolute_speed (float): The maximum ground-plane speed, in m/s, that a bounding
                 box may carry before it is considered non-physical. Defaults to 150.0 m/s
+            zero_non_finite_velocity (bool): Whether a non-finite velocity component is set to
+                0.0 before the checks, so a box without an annotated velocity is kept at rest.
+                When False, such a box is dropped as non-finite. Defaults to True.
         """
         super().__init__(probability=None)
         self.max_absolute_speed = max_absolute_speed
+        self.zero_non_finite_velocity = zero_non_finite_velocity
 
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
         """Remove non-physical 3D bounding boxes."""
@@ -247,6 +258,11 @@ class BBoxesPhysicalFilter(BaseTransform):
         detection3d_gt_bboxes_3d: BaseBBoxes3D = model_gt_sample.detection3d_gt_bboxes_3d  # type: ignore[reportOptionalMemberAccess]
         if not len(detection3d_gt_bboxes_3d):
             return model_gt_sample
+
+        if self.zero_non_finite_velocity:
+            # The velocity columns are a view of the parameters, so the write lands in the boxes.
+            velocity = detection3d_gt_bboxes_3d.bbox_params[:, Box3DFieldIndex.VELOCITY_X :]
+            velocity[~torch.isfinite(velocity)] = 0.0
 
         is_finite_mask = torch.isfinite(detection3d_gt_bboxes_3d.bbox_params).all(dim=1)
         has_positive_dims_mask = (detection3d_gt_bboxes_3d.dims > 0.0).all(dim=1)

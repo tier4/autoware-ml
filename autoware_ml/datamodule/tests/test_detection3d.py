@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 
 import numpy as np
+import torch
 import polars as pl
 import pytest
 
@@ -109,7 +110,9 @@ def test_a_record_without_boxes_carries_no_attributes() -> None:
     assert boxes.bbox_attributes == []
 
 
-def test_a_box_without_a_velocity_stands_still() -> None:
+def test_a_box_without_a_velocity_is_served_as_stored() -> None:
+    # The task serves the records as they are; BBoxesPhysicalFilter in the pipeline turns the
+    # non finite velocity of an unannotated box into a standstill.
     task = build_task(
         [
             box(
@@ -127,13 +130,14 @@ def test_a_box_without_a_velocity_stands_still() -> None:
 
     params = task.get_data_sample(0).detection3d_gt_bboxes_3d.bbox_params
 
-    assert params[:, Box3DFieldIndex.VELOCITY_X : Box3DFieldIndex.VELOCITY_Z].tolist() == [
-        [0.0, 0.0],
-        [3.0, -1.0],
-    ]
+    velocities = params[:, Box3DFieldIndex.VELOCITY_X : Box3DFieldIndex.VELOCITY_Z]
+    assert torch.isnan(velocities[0]).all()
+    assert velocities[1].tolist() == [3.0, -1.0]
 
 
-def test_a_box_without_an_extent_or_a_finite_geometry_is_no_target() -> None:
+def test_a_box_with_a_non_finite_geometry_is_served_for_the_pipeline_to_drop() -> None:
+    # Dropping the boxes that cannot become a target is the job of BBoxesPhysicalFilter in the
+    # pipeline, so the task keeps every stored box, geometry garbage included.
     task = build_task(
         [
             box("a", "car", fields={Box3DFieldIndex.WIDTH: 0.0}),
@@ -145,8 +149,8 @@ def test_a_box_without_an_extent_or_a_finite_geometry_is_no_target() -> None:
 
     boxes = task.get_data_sample(0).detection3d_gt_bboxes_3d
 
-    assert len(boxes) == 1
-    assert boxes.bbox_params[0, Box3DFieldIndex.X] == 5.0
+    assert len(boxes) == 4
+    assert boxes.bbox_params[3, Box3DFieldIndex.X] == 5.0
 
 
 def build_task_with_status(boxes: list[dict], status: bool | None) -> Detection3DTask:

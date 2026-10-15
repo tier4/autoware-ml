@@ -281,3 +281,44 @@ def test_physical_filter_leaves_empty_boxes_untouched() -> None:
     result = BBoxesPhysicalFilter()(sample)
 
     assert len(result.detection3d_gt_bboxes_3d) == 0
+
+
+def test_physical_filter_zeroes_a_non_finite_velocity_and_keeps_the_box_by_default() -> None:
+    # The records store a non finite velocity for a box whose velocity is not annotated, which
+    # means the box stands still, so it is served at rest rather than dropped.
+    sample = boxes_sample([SANE_BOX, SANE_BOX, SANE_BOX])
+    sample.detection3d_gt_bboxes_3d.bbox_params[0, Box3DFieldIndex.VELOCITY_X] = float("nan")
+    sample.detection3d_gt_bboxes_3d.bbox_params[0, Box3DFieldIndex.VELOCITY_Y] = float("nan")
+    sample.detection3d_gt_bboxes_3d.bbox_params[1, Box3DFieldIndex.VELOCITY_Z] = float("inf")
+
+    result = BBoxesPhysicalFilter()(sample)
+
+    boxes = result.detection3d_gt_bboxes_3d
+    assert boxes.bbox_labels.tolist() == [0, 1, 2]
+    assert boxes.bbox_params[0, Box3DFieldIndex.VELOCITY_X :].tolist() == [0.0, 0.0, 0.0]
+    assert boxes.bbox_params[1, Box3DFieldIndex.VELOCITY_X :].tolist() == pytest.approx(
+        [0.5, -0.1, 0.0]
+    )
+    # A finite velocity is left alone.
+    assert boxes.bbox_params[2, Box3DFieldIndex.VELOCITY_X :].tolist() == pytest.approx(
+        [0.5, -0.1, 0.0]
+    )
+
+
+def test_physical_filter_drops_a_non_finite_velocity_when_zeroing_is_off() -> None:
+    sample = boxes_sample([SANE_BOX, SANE_BOX])
+    sample.detection3d_gt_bboxes_3d.bbox_params[1, Box3DFieldIndex.VELOCITY_X] = float("nan")
+
+    result = BBoxesPhysicalFilter(zero_non_finite_velocity=False)(sample)
+
+    assert result.detection3d_gt_bboxes_3d.bbox_labels.tolist() == [0]
+
+
+def test_physical_filter_zeroing_the_velocity_does_not_rescue_a_non_finite_geometry() -> None:
+    sample = boxes_sample([SANE_BOX, SANE_BOX])
+    sample.detection3d_gt_bboxes_3d.bbox_params[1, Box3DFieldIndex.VELOCITY_X] = float("nan")
+    sample.detection3d_gt_bboxes_3d.bbox_params[1, Box3DFieldIndex.X] = float("inf")
+
+    result = BBoxesPhysicalFilter()(sample)
+
+    assert result.detection3d_gt_bboxes_3d.bbox_labels.tolist() == [0]
