@@ -92,8 +92,9 @@ class T4Dataset(BaseDataset):
           camera_sources: Channel names of the cameras to serve one by one, each camera of a
             record as its own sample. The records missing one of them at the sample time are
             left out. It replaces camera_names and cannot be combined with lidar_sources.
-          map_provider: Resolves a scene token of this database to its lanelet map, read by
-            the map-backed evaluation filters. None when the database ships no maps.
+          map_provider: Resolves a scene token of this database to its lanelet map. The
+            dataset resolves every frame's map path with it into the frame metadata the
+            map-backed evaluation filters read. None when the database ships no maps.
         """
         task_builders = {TaskType(key): build_task for key, build_task in dataset_tasks.items()}
         if lidar_sources is not None:
@@ -364,6 +365,9 @@ class T4Dataset(BaseDataset):
         sensor_to_ego = lidar_frame.lidar_sensor_to_ego_pose_matrix_fp32
         if source_view is not None:
             sensor_to_ego = sensor_to_ego @ source_view.sensor_to_frame_matrix.numpy()
+        scene_token = scene_dir_fragment(
+            lidar_frame.lidar_pointcloud_relative_path, str(self.database_root_path)
+        )
         return FrameMetaSample(
             # The boxes and the points live in the lidar sensor frame, so the map transform
             # composes the sensor mounting with the ego pose of the frame
@@ -371,8 +375,11 @@ class T4Dataset(BaseDataset):
                 lidar_frame.lidar_frame_ego_pose_to_global_matrix_fp32 @ sensor_to_ego,
                 dtype=torch.float32,
             ),
-            scene_token=scene_dir_fragment(
-                lidar_frame.lidar_pointcloud_relative_path, str(self.database_root_path)
+            scene_token=scene_token,
+            # Resolved here, against this dataset's own root, so a source over another corpus
+            # hands the metrics the map of its corpus rather than one looked up elsewhere.
+            lanelet_map_path=(
+                self.map_provider.osm_path(scene_token) if self.map_provider is not None else None
             ),
         )
 

@@ -6,18 +6,15 @@ region_filters:
     region: ${metric_params.segmentation3d.collision_models.drivable_region}
     margin: -0.2
     name: region_road
-    map_provider: ${datasets.test.map_provider}
   walkway:
     _target_: autoware_ml.metrics.filters.RegionFilter
     region: [walkway]
     margin: -0.2
-    map_provider: ${datasets.test.map_provider}
 corridor_filter:
   _target_: autoware_ml.metrics.filters.CorridorFilter
   width_m: 3.0
 collision_filter:
   _target_: autoware_ml.metrics.filters.CollisionFilter
-  map_provider: ${datasets.test.map_provider}
   vehicle: ${metric_params.segmentation3d.collision_models.vehicle}
   region: ${metric_params.segmentation3d.collision_models.drivable_region}
   max_speed_mps: ${metric_params.segmentation3d.collision_models.max_speed_mps}

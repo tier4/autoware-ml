@@ -12,11 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Shared scaffolding for the collision metric tests.
+"""Shared scaffolding for the map-backed metric tests.
 
 The collision provider needs a vehicle, a class list and a lanelet map, and every
 collision test needs the same ones. The map stub answers only what the provider
 asks of it: the drivable union and the local speed limit.
+
+A frame reaches the metrics with the path of its lanelet map, which the filters and
+the collision provider load through ``LaneletMap.from_osm``. The autouse fixture
+below stubs that loader with a registry, so a test serves a map under a path and
+hands that path over in the frame context, and a frame without a map hands ``None``.
 """
 
 from __future__ import annotations
@@ -24,6 +29,50 @@ from __future__ import annotations
 import pytest
 
 from autoware_ml.metrics.geometry.reachability import VehicleGeometry
+
+# Map path every test hands over for a frame that has a map.
+STUB_MAP_PATH = "stub://map"
+_SERVED_MAPS: dict[str, object] = {}
+
+
+@pytest.fixture(autouse=True)
+def stub_lanelet_map_loader(monkeypatch: pytest.MonkeyPatch):
+    """Load lanelet maps from the registry instead of OSM files, empty for every test.
+
+    The lanelet module needs ``lanelet2``, which the tests that read no map do without, so
+    the loader is only stubbed where it can be imported.
+    """
+    _SERVED_MAPS.clear()
+    try:
+        from autoware_ml.metrics.geometry.lanelet import LaneletMap
+    except ImportError:
+        yield
+        return
+    load_osm = LaneletMap.from_osm
+
+    def from_osm_or_served(cls, path):
+        # A served path returns its stub; any other path, an OSM file in a test's tmp_path or
+        # the None of a map-less frame, still goes through the real loader and fails as loud.
+        return _SERVED_MAPS[path] if path in _SERVED_MAPS else load_osm(path)
+
+    monkeypatch.setattr(LaneletMap, "from_osm", classmethod(from_osm_or_served))
+    yield
+    _SERVED_MAPS.clear()
+
+
+def serve_lanelet_map(lanelet_map: object, path: str = STUB_MAP_PATH) -> str:
+    """Register the map the stubbed loader returns for ``path``.
+
+    Args:
+        lanelet_map: Map, real or stub, the loader returns.
+        path: Map path a frame context names.
+
+    Returns:
+        The path, to hand over as the frame's ``lanelet_map_path``.
+    """
+    _SERVED_MAPS[path] = lanelet_map
+    return path
+
 
 # Ego body in vehicle description terms, measured from the rear axle: 2.0 m wide,
 # 3.79 m ahead of the reference point and 1.1 m behind it.
@@ -74,24 +123,6 @@ class FakeLaneletMap:
         return default
 
 
-class FakeMapProvider:
-    """Serves one :class:`FakeLaneletMap` for every scene token."""
-
-    cache_key = "fake"
-
-    def __init__(self, polygon) -> None:
-        self._map = FakeLaneletMap(polygon)
-
-    def get(self, scene_token):
-        """The stub map."""
-        return self._map
-
-    def available(self, scene_token):
-        """Every scene has the stub map."""
-        return True
-
-
-@pytest.fixture
-def fake_provider():
-    """Factory for a map provider over a caller-supplied drivable polygon."""
-    return FakeMapProvider
+def serve_fake_map(polygon, path: str = STUB_MAP_PATH) -> str:
+    """Serve a :class:`FakeLaneletMap` over ``polygon`` under ``path``."""
+    return serve_lanelet_map(FakeLaneletMap(polygon), path)

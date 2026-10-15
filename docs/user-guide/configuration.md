@@ -110,9 +110,9 @@ for it:
   (`det3d_supervised`) and semantic masks (`seg3d_supervised`) supervise the run, and carry the
   task datasets (`dataset_tasks`) and the transforms of the split. The validation and predict
   splits read the test one. A T4 dataset also carries the lanelet `map_provider` of its
-  database, resolved against its own `database_root_path`, so the map-backed evaluation
-  filters of the task configs read `${datasets.test.map_provider}` and follow whichever
-  corpus is evaluated.
+  database, resolved against its own `database_root_path`. The dataset writes every frame's
+  lanelet map path into the frame metadata, so the map-backed evaluation filters read each
+  frame's map from the corpus that served it, whichever sources a run evaluates.
 - `datamodule.sources.<name>` is a `DatasetSource` that Hydra instantiates. It names a database,
   the dataset of every split it serves (`train_dataset`, `validation_dataset`, `test_dataset`,
   `predict_dataset`, `null` for a split it stays out of), and how many times its frames appear

@@ -1,20 +1,18 @@
-# Filters
+# Filters. The map-backed ones read every frame's lanelet map path from the frame metadata,
+# which the dataset serving the frame resolved against its own corpus.
 region_filters:
   road:
     _target_: autoware_ml.metrics.filters.RegionFilter
     region: ${metric_params.detection3d.collision_models.drivable_region}
     name: region_road
-    map_provider: ${datasets.test.map_provider}
   walkway:
     _target_: autoware_ml.metrics.filters.RegionFilter
     region: [walkway]
-    map_provider: ${datasets.test.map_provider}
 corridor_filter:
   _target_: autoware_ml.metrics.filters.CorridorFilter
   width_m: 3.0
 collision_filter:
   _target_: autoware_ml.metrics.filters.CollisionFilter
-  map_provider: ${datasets.test.map_provider}
   vehicle: ${metric_params.detection3d.collision_models.vehicle}
   region: ${metric_params.detection3d.collision_models.drivable_region}
   max_speed_mps: ${metric_params.detection3d.collision_models.max_speed_mps}

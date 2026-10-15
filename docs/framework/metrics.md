@@ -112,9 +112,9 @@ frame at `update` and stored as boolean states, and DDP gathers only tensors.
 
 `seg_frames` is a list with one entry per frame carrying that frame's point coordinates,
 predicted and target labels, per-class scores, and the per-frame metadata configured filters
-need (`ego2global`, `scene_token`). `required_keys()` extends the base tuple with what the
-configuration demands: a detection suite with a collision provider also requires `ego2global`
-and `scene_token`, and a ground-truth point filter requires `gt_num_points`.
+need (`ego2global`, `lanelet_map_path`). `required_keys()` extends the base tuple with what
+the configuration demands: a detection suite with a collision provider also requires
+`ego2global` and `lanelet_map_path`, and a ground-truth point filter requires `gt_num_points`.
 
 Keys are logged as `{split}/{prefix}/{key}`. A filtered metric prefixes its filter name and a
 range window appends a distance suffix, for example `test/det3d/region_road/mAP_0m_50m`. Two
@@ -170,16 +170,16 @@ means adding a `Metric` subclass and listing it in config, never editing the sui
 The baseline metrics need nothing beyond the model's predictions and the ground truth. Each
 optional capability adds a concrete requirement, checked loud at the first batch.
 
-| Capability                                       | Eval-output keys                       | External data              |
-| ------------------------------------------------ | -------------------------------------- | -------------------------- |
-| detection metrics                                | `predictions`, `gt_boxes`, `gt_labels` | none                       |
-| segmentation metrics                             | `seg_frames`                           | none                       |
-| ground-truth point filter, occlusion split       | `gt_num_points` (per-box point count)  | none                       |
-| corridor filter (straight strip)                 | none                                   | none                       |
-| region filters and collision filter              | `ego2global`, `scene_token` per frame  | one lanelet2 map per scene |
-| collision metrics (critical FP/FN, weighted mAP) | `ego2global`, `scene_token` per frame  | one lanelet2 map per scene |
-| velocity error (TP errors, NDS)                  | boxes with velocity components         | none                       |
-| partial-detection score                          | ground-truth boxes inside `seg_frames` | none                       |
+| Capability                                       | Eval-output keys                           | External data              |
+| ------------------------------------------------ | ------------------------------------------ | -------------------------- |
+| detection metrics                                | `predictions`, `gt_boxes`, `gt_labels`     | none                       |
+| segmentation metrics                             | `seg_frames`                               | none                       |
+| ground-truth point filter, occlusion split       | `gt_num_points` (per-box point count)      | none                       |
+| corridor filter (straight strip)                 | none                                       | none                       |
+| region filters and collision filter              | `ego2global`, `lanelet_map_path` per frame | one lanelet2 map per scene |
+| collision metrics (critical FP/FN, weighted mAP) | `ego2global`, `lanelet_map_path` per frame | one lanelet2 map per scene |
+| velocity error (TP errors, NDS)                  | boxes with velocity components             | none                       |
+| partial-detection score                          | ground-truth boxes inside `seg_frames`     | none                       |
 
 The map-based features never read a map path directly. They pass the frame's `scene_token` to a
 map provider, and an injected resolver turns that identifier into the scene's `lanelet2_map.osm`.

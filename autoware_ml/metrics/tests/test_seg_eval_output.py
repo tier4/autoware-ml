@@ -35,6 +35,7 @@ def _batch_inputs(num_frames: int):
     frame_meta = FrameMetaBatch(
         ego2globals=torch.eye(4).repeat(num_frames, 1, 1),
         scene_tokens=["scene-a", "scene-b"][:num_frames],
+        lanelet_map_paths=["/maps/a.osm", None][:num_frames],
     )
     gt_batch = batch_inputs.multi_task_gt_batch._replace(frame_meta_batch=frame_meta)
     return batch_inputs.replace(multi_task_gt_batch=gt_batch)
@@ -54,6 +55,8 @@ def test_segmentation_frames_eval_output_splits_and_passes_meta() -> None:
     assert frames[1]["target"].tolist() == [0, 0]
     assert frames[0]["scene_token"] == "scene-a"
     assert frames[1]["scene_token"] == "scene-b"
+    assert frames[0]["lanelet_map_path"] == "/maps/a.osm"
+    assert frames[1]["lanelet_map_path"] is None
     assert frames[0]["gt_boxes"].shape == (1, 9)
     assert frames[1]["gt_box_labels"].shape == (0,)
 

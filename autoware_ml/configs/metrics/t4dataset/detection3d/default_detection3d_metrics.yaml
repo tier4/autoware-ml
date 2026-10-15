@@ -13,7 +13,6 @@ living_speeds: ${database.taxonomy.detection3d.living_speeds}
 collision:
   _target_: autoware_ml.metrics.detection3d.collision.CollisionTTC
   class_names: ${database.taxonomy.detection3d.class_names}
-  map_provider: ${datasets.test.map_provider}
   vehicle: ${metric_params.detection3d.collision_models.vehicle}
   kinds: ${metric_params.detection3d.collision_kinds}
   living_speeds: ${metric_params.detection3d.living_speeds}

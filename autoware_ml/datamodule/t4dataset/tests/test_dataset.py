@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import MappingProxyType
 from unittest.mock import patch
 
@@ -277,6 +278,77 @@ def test_a_database_without_maps_leaves_the_dataset_without_a_provider() -> None
     dataset = build_dataset([[[camera_frame("CAM_FRONT")]]])
 
     assert dataset.map_provider is None
+
+
+def _lidar_frame(root: Path, scene: str) -> dict:
+    """The record table entry of a keyframe lidar frame stored under ``root/scene``."""
+    return {
+        "lidar_frame_id": "frame-0",
+        "lidar_keyframe": True,
+        "lidar_sensor_id": "lidar",
+        "lidar_sensor_channel_name": "LIDAR_TOP",
+        "lidar_timestamp_seconds": 0.0,
+        "lidar_pointcloud_path": str(root / scene / "data" / "LIDAR_TOP" / "0.pcd.bin"),
+        "lidar_pointcloud_source_path": None,
+        "lidar_pointcloud_num_features": 5,
+        "lidar_sensor_to_ego_pose_matrix": np.eye(4).tolist(),
+        "lidar_frame_ego_pose_to_global_matrix": np.eye(4).tolist(),
+        "lidar_sensor_to_lidar_sweep_matrix": np.eye(4).tolist(),
+        "lidar_pointcloud_semantic_mask_path": None,
+    }
+
+
+def _dataset_over(root: Path, records: pl.DataFrame, map_provider: object | None) -> T4Dataset:
+    return T4Dataset(
+        lidar_intensity_scale=255.0,
+        database_root_path=str(root),
+        max_num_3d_gt_bboxes=0,
+        dataset_records_dataframe=records,
+        transforms=None,
+        dataset_tasks=MappingProxyType({}),
+        det3d_supervised=True,
+        seg3d_supervised=True,
+        map_provider=map_provider,
+    )
+
+
+def test_frame_meta_carries_the_map_resolved_against_the_datasets_own_root(tmp_path: Path) -> None:
+    """
+    A source over another corpus, such as the pseudo-labelled one under ``t4dataset/pseudo_large``,
+    resolves its frames' maps against its own root. Looked up against the main corpus root, as the
+    metrics used to do for every source, the same frames have no map and drop out of the map-backed
+    slices silently.
+    """
+    pytest.importorskip("lanelet2")
+    from autoware_ml.metrics.geometry.lanelet import LaneletMapProvider, T4LaneletMapResolver
+
+    main_root = tmp_path / "t4dataset"
+    pseudo_root = main_root / "pseudo_large"
+    scene = "db_pseudo/0a1b2c3d-0000-4000-8000-000000000000/0"
+    map_path = pseudo_root / scene / "map" / "lanelet2_map.osm"
+    map_path.parent.mkdir(parents=True)
+    map_path.write_text("<osm></osm>")
+    records = pl.DataFrame(
+        {DatasetTableSchema.LIDAR_FRAMES.name: [[_lidar_frame(pseudo_root, scene)]]},
+        schema={DatasetTableSchema.LIDAR_FRAMES.name: DatasetTableSchema.LIDAR_FRAMES.dtype},
+    )
+
+    own_corpus = _dataset_over(
+        pseudo_root, records, LaneletMapProvider(T4LaneletMapResolver(str(pseudo_root)))
+    )
+    sample = own_corpus.get_frame_meta_sample(0, None)
+
+    assert sample.scene_token == scene
+    assert sample.lanelet_map_path == str(map_path)
+
+    main_corpus_lookup = _dataset_over(
+        pseudo_root, records, LaneletMapProvider(T4LaneletMapResolver(str(main_root)))
+    )
+    assert main_corpus_lookup.get_frame_meta_sample(0, None).lanelet_map_path is None
+    assert (
+        _dataset_over(pseudo_root, records, None).get_frame_meta_sample(0, None).lanelet_map_path
+        is None
+    )
 
 
 class _LoggingTask(BaseDatasetTask):
