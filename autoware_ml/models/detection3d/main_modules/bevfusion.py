@@ -383,6 +383,10 @@ class BEVFusionDetectionModel(ModuleBaseModel):
 
             # Call the module rather than its forward so module hooks (model summary sizes and
             # FLOP counting) see the branch.
+            # The batch carries the raw intrinsics and, separately, the pixel affine of the
+            # image space augmentation, so the frustum is undone to the raw image plane with
+            # the augmentation matrices and lifted with the raw intrinsics. The augmented
+            # intrinsics must never be paired with the augmentation, that undoes it twice.
             image_bev = self.camera_network(
                 image_batch=image_data.images,
                 depth_maps=image_data.depth_maps,

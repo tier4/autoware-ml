@@ -39,7 +39,9 @@ class ImageGTBatch(NamedTuple):
 
     images: Float32[Tensor, "batch_size num_cameras num_channels height width"]
     depth_maps: Float32[Tensor, "batch_size num_cameras num_depth_channels height width"] | None
-    # Intrinsics after the image space augmentation, the ones lidar2images is built from
+    # Raw intrinsics of the cameras, before the image space augmentation. The augmentation is
+    # carried separately in image_augmentation_matrices, so a consumer lifting pixels of the
+    # augmented images undoes it with those matrices and then applies these intrinsics.
     camera_intrinsics: Float32[Tensor, "batch_size num_cameras 3 3"]
     image_augmentation_matrices: Float32[Tensor, "batch_size num_cameras 4 4"]
     lidar2images: Float32[Tensor, "batch_size num_cameras 4 4"]
@@ -71,9 +73,7 @@ class ImageGTBatch(NamedTuple):
         images = torch.stack([sample.images for sample in images_gt_samples])
         lidar2images = torch.stack([sample.lidar2images for sample in images_gt_samples])
         lidar2cams = torch.stack([sample.lidar2cams for sample in images_gt_samples])
-        camera_intrinsics = torch.stack(
-            [sample.augmented_camera_intrinsics for sample in images_gt_samples]
-        )
+        camera_intrinsics = torch.stack([sample.camera_intrinsics for sample in images_gt_samples])
         image_augmentation_matrices = torch.stack(
             [sample.image_augmentation_matrices for sample in images_gt_samples]
         )

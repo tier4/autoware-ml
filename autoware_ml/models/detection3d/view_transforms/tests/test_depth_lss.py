@@ -235,6 +235,51 @@ class TestDepthLSSTransform(_DepthLSSTransformTestCase):
         torch.testing.assert_close(self.transform.frustum[3, 0, 7], torch.tensor([63.0, 0.0, 4.0]))
         torch.testing.assert_close(geom[0, 0, 3, 0, 7], torch.tensor([5.0, 2.4, 16.4]))
 
+    def test_augmented_intrinsics_with_identity_aug_match_raw_intrinsics_with_aug(self) -> None:
+        """
+        Test that the two ways of describing an augmented image agree: the raw intrinsics with
+        the image augmentation, as the batch carries them, and the augmented intrinsics (the
+        pixel affine composed onto the raw ones) with an identity augmentation. Feeding the
+        augmented intrinsics together with the augmentation would undo it twice, so the frustum
+        from that pairing must differ.
+        """
+        # A resize by 0.48 followed by a crop, as the camera pipelines produce.
+        pixel_affine = torch.tensor(
+            [[0.48, 0.0, -6.0], [0.0, 0.48, -14.0], [0.0, 0.0, 1.0]], dtype=torch.float32
+        )
+        img_aug_matrix = torch.eye(4)
+        img_aug_matrix[:2, :2] = pixel_affine[:2, :2]
+        img_aug_matrix[:2, 3] = pixel_affine[:2, 2]
+        raw_intrinsics = torch.tensor(
+            [[120.0, 0.0, 64.0], [0.0, 118.0, 36.0], [0.0, 0.0, 1.0]], dtype=torch.float32
+        )
+        augmented_intrinsics = pixel_affine @ raw_intrinsics
+        camera2aug_lidar = torch.tensor(
+            [
+                [0.0, 0.0, 1.0, 1.0],
+                [-1.0, 0.0, 0.0, 2.0],
+                [0.0, -1.0, 0.0, 3.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+            dtype=torch.float32,
+        ).view(1, 1, 4, 4)
+        identity = torch.eye(4).view(1, 1, 4, 4)
+
+        from_raw = self.transform.camera_to_lidar_geometry(
+            camera2aug_lidar, raw_intrinsics.view(1, 1, 3, 3), img_aug_matrix.view(1, 1, 4, 4)
+        )
+        from_augmented = self.transform.camera_to_lidar_geometry(
+            camera2aug_lidar, augmented_intrinsics.view(1, 1, 3, 3), identity
+        )
+        twice = self.transform.camera_to_lidar_geometry(
+            camera2aug_lidar, augmented_intrinsics.view(1, 1, 3, 3), img_aug_matrix.view(1, 1, 4, 4)
+        )
+
+        torch.testing.assert_close(from_augmented, from_raw, rtol=1e-5, atol=1e-4)
+        # Applying the augmentation on top of the augmented intrinsics moves the frustum by
+        # metres, which is the double-undo a model must not do.
+        self.assertGreater((twice - from_raw).norm(dim=-1).mean().item(), 1.0)
+
     def test_bev_pool_aux_keeps_points_inside_grid_and_sorts_by_rank(self) -> None:
         """Test that out-of-grid points are dropped and the kept points are rank sorted."""
         # Grid: x in [-8, 8), y in [-4, 4), z in [-5, 3), one meter (8 m for z) voxels.

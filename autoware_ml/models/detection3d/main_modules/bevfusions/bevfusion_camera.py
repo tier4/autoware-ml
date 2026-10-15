@@ -108,13 +108,19 @@ class BEVFusionCamera(nn.Module):
         Args:
             image_batch: Multiview image tensors.
             depth_maps: Depth maps for each camera.
-            camera_intrinsics: Camera intrinsic matrices.
+            camera_intrinsics: Camera intrinsic matrices mapping the camera frame onto the image
+                plane that ``img_aug_matrix`` starts from: the raw intrinsics the batch carries
+                together with its image augmentation, or augmented intrinsics together with no
+                (identity) augmentation. Pairing augmented intrinsics with the augmentation
+                undoes it twice.
             aug_lidar2cam: Augmented lidar-to-camera extrinsics expressed in the augmented lidar frame the BEV grid
                 is built in. The pipeline composes the inverse of the lidar augmentation into
                 these, so their inverse maps the camera into the augmented lidar frame.
             geom_feats_precomputed: Optional precomputed BEV-pool metadata.
             image_feature: Optional precomputed image feature tensor.
-            img_aug_matrix: Optional image augmentation matrices.
+            img_aug_matrix: Optional image augmentation matrices mapping the image plane of
+                ``camera_intrinsics`` onto the image the features were computed on, identity
+                when omitted.
 
         Returns:
             Image BEV feature map.

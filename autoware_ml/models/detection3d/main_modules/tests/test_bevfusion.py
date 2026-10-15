@@ -629,6 +629,51 @@ class TestBEVFusionDetectionModelCameraLidar(_BEVFusionDetectionModelTestCase):
                 )
             )
 
+    def test_forward_lifts_the_frustum_with_the_raw_intrinsics_and_the_augmentation(self) -> None:
+        """
+        Test that the detector hands the camera branch the raw intrinsics of the batch together
+        with its image augmentation matrices, unchanged. The batch keeps the two apart so the
+        frustum is undone to the raw image plane once; the augmented intrinsics must never be
+        paired with the augmentation, which would undo it twice and lift the frustum metres
+        away from the lidar.
+        """
+        camera_network = self.model.camera_network
+        assert camera_network is not None
+        recorded: dict[str, object] = {}
+
+        def record_and_return_zero_bev(**kwargs: object) -> torch.Tensor:
+            recorded.update(kwargs)
+            return torch.zeros(
+                (self.batch_size, self.image_bev_channels) + tuple(self.bev_shape),
+                device=self.device,
+            )
+
+        camera_network.forward = record_and_return_zero_bev  # type: ignore[method-assign]
+        # A resize by 0.48 followed by a crop, as the camera pipelines produce.
+        pixel_affine = torch.tensor(
+            [[0.48, 0.0, -6.0], [0.0, 0.48, -14.0], [0.0, 0.0, 1.0]],
+            dtype=torch.float32,
+            device=self.device,
+        )
+        image_augmentation = torch.eye(4, device=self.device)
+        image_augmentation[:2, :2] = pixel_affine[:2, :2]
+        image_augmentation[:2, 3] = pixel_affine[:2, 2]
+        image_data = self._build_image_gt_batch()._replace(
+            image_augmentation_matrices=image_augmentation.expand(
+                self.batch_size, self.num_cams, 4, 4
+            ).contiguous(),
+        )
+
+        self.model(
+            self._build_batch_inputs(voxels_data=self._build_voxels_data(), image_data=image_data)
+        )
+
+        torch.testing.assert_close(recorded["camera_intrinsics"], image_data.camera_intrinsics)
+        torch.testing.assert_close(
+            recorded["img_aug_matrix"], image_data.image_augmentation_matrices
+        )
+        torch.testing.assert_close(recorded["aug_lidar2cam"], image_data.lidar2cams)
+
     def test_build_export_specs_exports_image_backbone_and_main_body(self) -> None:
         """
         Test that a camera-lidar model exports the image backbone and the fused main body with the
