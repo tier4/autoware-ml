@@ -68,17 +68,20 @@ def build_model(
         Pytorch-Lightning ModuleBaseModel for multi-task learning/inference.
     """
     logger.info("Building model...")
-    model = instantiate(cfg.model, data_preprocessor=data_preprocessor)
-
-    # Resume checkpoint
     if resume_checkpoint_path is not None and weights_path is not None:
         raise ValueError("'--resume-checkpoint' and '--weights' are mutually exclusive.")
+
+    # Moved before any weights are loaded so a model built without weights lands on the device
+    # too; the deploy script exports from `model.device`, so a model left on the CPU would trace
+    # on the CPU whatever device was requested.
+    model = instantiate(cfg.model, data_preprocessor=data_preprocessor).to(device)
 
     if weights_path is not None:
         apply_matching_weights(
             model,
             weights_path,
             map_location=device,
+            device=device,
             logger=logger,
             enforce_full_coverage=enforce_full_coverage,
             skip_mismatched_shapes=skip_mismatched_weights,

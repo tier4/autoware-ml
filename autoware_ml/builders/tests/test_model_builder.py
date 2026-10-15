@@ -176,6 +176,59 @@ class TestBuildModel:
         assert torch.equal(model.layer.bias, bias)
         assert not model.training
 
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device to move to")
+    def test_moves_the_model_to_the_requested_device_without_weights(self) -> None:
+        """
+        Input: the minimal config, no weights, ``device=cuda``.
+        Expected: the built model lives on the CUDA device, so the deploy entrypoint, which reads
+            ``model.device`` to place the example batch and the trace, exports on the GPU.
+        Check: every parameter's device and ``model.device``.
+        """
+        cuda = torch.device("cuda")
+        cfg = _model_cfg()
+
+        model = build_model(
+            cfg,
+            data_preprocessor=build_data_preprocessor(cfg),
+            device=cuda,
+            weights_path=None,
+            resume_checkpoint_path=None,
+        )
+
+        assert model.device.type == "cuda"
+        assert all(parameter.device.type == "cuda" for parameter in model.parameters())
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device to move to")
+    def test_moves_the_model_to_the_requested_device_with_weights(self, tmp_path: Path) -> None:
+        """
+        Input: one CPU checkpoint, ``device=cuda`` and ``set_eval=True``, as the deploy
+            entrypoint calls it.
+        Expected: the weights are loaded and the model ends up on the CUDA device in eval mode.
+        Check: the parameter devices and values, ``model.device`` and ``training``.
+        """
+        cuda = torch.device("cuda")
+        weight = torch.full((1, _HIDDEN_SIZE), 2.0)
+        bias = torch.full((1,), -1.0)
+        weights_path = _save_state_dict(
+            tmp_path / "best.ckpt", {"layer.weight": weight, "layer.bias": bias}
+        )
+        cfg = _model_cfg()
+
+        model = build_model(
+            cfg,
+            data_preprocessor=build_data_preprocessor(cfg),
+            device=cuda,
+            weights_path=weights_path,
+            resume_checkpoint_path=None,
+            set_eval=True,
+        )
+
+        assert model.device.type == "cuda"
+        assert all(parameter.device.type == "cuda" for parameter in model.parameters())
+        assert torch.equal(model.layer.weight.cpu(), weight)
+        assert torch.equal(model.layer.bias.cpu(), bias)
+        assert not model.training
+
     def test_merges_several_checkpoints_in_order(self, tmp_path: Path) -> None:
         """
         Input: two checkpoints, each covering one parameter, and ``enforce_full_coverage=True``.
