@@ -277,14 +277,12 @@ class TestBEVFusionLidar(_BEVFusionLidarTestCase):
         self.assertEqual(fuser.received_shapes, [])
         torch.testing.assert_close(bev, self._forward(self._build_lidar(), other_bev_features=None))
 
-    def test_forward_ignores_other_bev_features_without_fuser(self) -> None:
-        """Test that other-modality maps are ignored when the branch has no fuser."""
+    def test_forward_rejects_other_bev_features_without_fuser(self) -> None:
+        """Test that other-modality maps raise instead of being dropped when there is no fuser."""
         lidar = self._build_lidar()
 
-        torch.testing.assert_close(
-            self._forward(lidar, other_bev_features=[self.image_bev]),
-            self._forward(lidar, other_bev_features=None),
-        )
+        with self.assertRaisesRegex(ValueError, "fuser"):
+            self._forward(lidar, other_bev_features=[self.image_bev])
 
     def test_prepare_for_export_swaps_middle_encoder_in_place(self) -> None:
         """Test that the exportable middle encoder replaces the original and is returned."""

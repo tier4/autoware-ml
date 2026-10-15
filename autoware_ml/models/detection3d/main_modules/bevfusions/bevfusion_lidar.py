@@ -90,6 +90,9 @@ class BEVFusionLidar(nn.Module):
         Returns:
             BEV feature maps from lidar if fusion is disable, otherwise, BEV feature maps fused
             with other modalities.
+
+        Raises:
+            ValueError: If ``other_bev_features`` is given but no fuser is configured.
         """
         voxel_features = self.pts_voxel_encoder(
             voxels=voxels,
@@ -100,7 +103,12 @@ class BEVFusionLidar(nn.Module):
             voxel_features=voxel_features, coords=coords, batch_size=batch_size
         )
 
-        if other_bev_features is not None and self.fuser is not None:
+        if other_bev_features is not None:
+            if self.fuser is None:
+                raise ValueError(
+                    "A fuser must be configured on the lidar branch when BEV features from other "
+                    "modalities are given."
+                )
             concat_bev_features = [*other_bev_features, bev_features]
             bev_features = self.fuser(concat_bev_features)
 

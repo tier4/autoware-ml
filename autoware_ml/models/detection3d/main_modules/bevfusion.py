@@ -250,7 +250,8 @@ class BEVFusionDetectionModel(ModuleBaseModel):
         Args:
             data_preprocessor: Preprocessor for the model inputs.
             lidar_network: Lidar-only BEVFusion main body. It includes fusion layers to fuse both
-                lidar and camera bev features as well.
+                lidar and camera bev features as well; its fuser must be set exactly when
+                ``camera_network`` is set.
             camera_network: Camera-only BEVFusion main body. The outputs are camera-only bev
                 features after BEV transformation.
             bbox_head: Detection head.
@@ -272,7 +273,35 @@ class BEVFusionDetectionModel(ModuleBaseModel):
         assert self.lidar_network is not None or self.camera_network is not None, (
             "At least one of lidar_network or camera_network must be provided."
         )
+        self._validate_fusion_contract()
         self._validate_geometry_contract()
+
+    def _validate_fusion_contract(self) -> None:
+        """Validate that the camera branch and the lidar fuser are configured together.
+
+        A camera branch without a fuser would run every step and have its BEV map dropped,
+        which also fails DDP training with unused parameters; a fuser without a camera branch
+        never receives the second modality it expects.
+
+        Raises:
+            ValueError: If the lidar branch is configured and only one of ``camera_network``
+                and ``lidar_network.fuser`` is set.
+        """
+        if self.lidar_network is None:
+            return
+
+        has_camera = self.camera_network is not None
+        has_fuser = self.lidar_network.fuser is not None
+        if has_camera and not has_fuser:
+            raise ValueError(
+                "BEVFusion camera_network requires a fuser on lidar_network to fuse the image BEV "
+                "features; set lidar_network.fuser or remove camera_network."
+            )
+        if has_fuser and not has_camera:
+            raise ValueError(
+                "BEVFusion lidar_network.fuser requires a camera_network to provide the image BEV "
+                "features; set camera_network or remove the fuser."
+            )
 
     def _validate_geometry_contract(self) -> None:
         """Validate static geometry contracts between camera and lidar branches.

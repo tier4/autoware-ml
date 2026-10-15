@@ -602,6 +602,21 @@ class TestBEVFusionDetectionModelCameraLidar(_BEVFusionDetectionModelTestCase):
         with self.assertRaises(AssertionError):
             self._build_model(lidar_network=None, camera_network=None)
 
+    def test_camera_network_requires_a_fuser(self) -> None:
+        """Test that a camera branch without a lidar fuser is rejected at construction."""
+        with self.assertRaisesRegex(ValueError, "requires a fuser"):
+            self._build_model(
+                lidar_network=self._build_lidar_network(with_fuser=False),
+                camera_network=self._build_camera_network(),
+            )
+
+    def test_fuser_requires_a_camera_network(self) -> None:
+        """Test that a lidar fuser without a camera branch is rejected at construction."""
+        with self.assertRaisesRegex(ValueError, "requires a camera_network"):
+            self._build_model(
+                lidar_network=self._build_lidar_network(with_fuser=True), camera_network=None
+            )
+
     def test_branches_must_share_the_bev_shape(self) -> None:
         """Test that a camera grid half as deep along y as the lidar grid is rejected."""
         camera_network = self._build_camera_network(y_range=self.point_cloud_range[4] / 2)
