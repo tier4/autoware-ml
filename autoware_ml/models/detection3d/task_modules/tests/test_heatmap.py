@@ -55,7 +55,11 @@ class TestVectorizeGaussianRadii(unittest.TestCase):
 
 
 class TestVectorizeGaussian2D(unittest.TestCase):
-    """Unit tests for the _vectorize_gaussian2d function."""
+    """Unit tests for the _vectorize_gaussian2d function.
+
+    The Gaussian kernel drawing is a pure function and the only unit at which the per-box kernel
+    values can be checked: create_gaussian_heatmaps() splats and max-merges them into the map.
+    """
 
     def setUp(self) -> None:
         """Set up the same input tensors for all tests."""

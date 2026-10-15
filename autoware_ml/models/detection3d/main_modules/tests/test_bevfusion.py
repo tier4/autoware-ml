@@ -504,15 +504,14 @@ class TestBEVFusionDetectionModelLidarOnly(_BEVFusionDetectionModelTestCase):
         with self.assertRaises(ValueError):
             self.model.build_eval_output(self.batch_inputs, empty_outputs)
 
-    def test_first_sample_voxel_inputs_keeps_first_sample_in_runtime_dtypes(self) -> None:
+    def test_build_export_specs_keeps_first_sample_voxels_in_runtime_dtypes(self) -> None:
         """Test that only the voxels of batch sample 0 are exported, as ``float32`` and ``int32``."""
         voxels_data = self.batch_inputs.voxels_data
         assert voxels_data is not None
         first_sample = voxels_data.batch_indices == 0
 
-        voxels, coors, num_points_per_voxel = BEVFusionDetectionModel._first_sample_voxel_inputs(
-            self.batch_inputs
-        )
+        export_specs = self.model.build_export_specs(self.batch_inputs)
+        voxels, coors, num_points_per_voxel = export_specs["bevfusion_lidar"].args
 
         torch.testing.assert_close(voxels, voxels_data.voxels[first_sample])
         self.assertEqual(coors.dtype, torch.int32)
@@ -521,21 +520,20 @@ class TestBEVFusionDetectionModelLidarOnly(_BEVFusionDetectionModelTestCase):
         self.assertEqual(num_points_per_voxel.dtype, torch.int32)
         torch.testing.assert_close(num_points_per_voxel, voxels_data.num_points[first_sample])
 
-    def test_first_sample_voxel_inputs_requires_voxels_data(self) -> None:
-        """Test that export input extraction rejects a batch without voxel data."""
+    def test_build_export_specs_requires_voxels_data(self) -> None:
+        """Test that export spec construction rejects a batch without voxel data."""
         with self.assertRaises(ValueError):
-            BEVFusionDetectionModel._first_sample_voxel_inputs(
-                self._build_batch_inputs(voxels_data=None)
-            )
+            self.model.build_export_specs(self._build_batch_inputs(voxels_data=None))
 
-    def test_prepare_export_model_returns_exportable_eval_copy(self) -> None:
+    def test_build_export_specs_wraps_an_exportable_eval_copy(self) -> None:
         """
-        Test that the export model is a separate eval-mode copy with the exportable middle encoder
-        and attention layers, leaving the training model untouched.
+        Test that the exported wrapper holds a separate eval-mode copy of the model with the
+        exportable middle encoder and attention layers, leaving the training model untouched.
         """
         self.model.train()
 
-        export_model = self.model._prepare_export_model()
+        export_specs = self.model.build_export_specs(self.batch_inputs)
+        export_model = export_specs["bevfusion_lidar"].module.model
 
         self.assertIsNot(export_model, self.model)
         self.assertFalse(export_model.training)

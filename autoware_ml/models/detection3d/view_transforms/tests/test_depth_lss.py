@@ -26,27 +26,33 @@ from autoware_ml.models.detection3d.view_transforms.depth_lss import (
     DepthLSSTransform,
     DownSampleNet,
     LidarDepthImageNet,
-    _gen_dx_bx,
 )
 
 _CUDA_AVAILABLE = torch.cuda.is_available()
 _REQUIRES_CUDA = "BEV pooling runs through the CUDA bev_pool kernel."
 
 
-class TestGenDxBx(unittest.TestCase):
-    """Unit tests for the voxel grid helper."""
+class TestVoxelGrid(unittest.TestCase):
+    """Unit tests for the voxel grid the transform derives from its bounds."""
 
     def test_returns_voxel_size_origin_and_grid_shape(self) -> None:
         """Test that voxel size, voxel center origin and grid shape follow the bounds."""
-        dx, bx, nx = _gen_dx_bx(
-            xbound=[-8.0, 8.0, 1.0], ybound=[-4.0, 4.0, 0.5], zbound=[-5.0, 3.0, 8.0]
+        transform = DepthLSSTransform(
+            in_channels=32,
+            out_channels=8,
+            image_size=[64, 64],
+            feature_size=[8, 8],
+            xbound=[-8.0, 8.0, 1.0],
+            ybound=[-4.0, 4.0, 0.5],
+            zbound=[-5.0, 3.0, 8.0],
+            dbound=[1.0, 5.0, 1.0],
         )
 
-        self.assertEqual(dx.dtype, torch.float32)
-        self.assertEqual(bx.dtype, torch.float32)
-        torch.testing.assert_close(dx, torch.tensor([1.0, 0.5, 8.0]))
-        torch.testing.assert_close(bx, torch.tensor([-7.5, -3.75, -1.0]))
-        self.assertEqual(nx, (16, 16, 1))
+        self.assertEqual(transform.dx.dtype, torch.float32)
+        self.assertEqual(transform.bx.dtype, torch.float32)
+        torch.testing.assert_close(transform.dx, torch.tensor([1.0, 0.5, 8.0]))
+        torch.testing.assert_close(transform.bx, torch.tensor([-7.5, -3.75, -1.0]))
+        self.assertEqual(transform.nx, (16, 16, 1))
 
 
 class TestDownSampleNet(unittest.TestCase):
@@ -277,6 +283,8 @@ class TestDepthLSSTransform(_DepthLSSTransformTestCase):
         image_features = torch.randn(2, 3, 32, 8, 8)
         depth_maps = torch.rand(2, 3, 1, 64, 64)
 
+        # The lifted frustum layout is an intermediate that forward() only consumes through the
+        # CUDA bev_pool kernel, so the lift is tested on its own here.
         feats = self.transform._get_cam_feats(image_features, depth_maps)
 
         self.assertEqual(feats.shape, (2, 3, 4, 8, 8, 8))

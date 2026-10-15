@@ -29,8 +29,11 @@ from autoware_ml.geometry.cameras.base_images import BaseImages
 from autoware_ml.geometry.points.lidar_points import LiDARPoints
 from autoware_ml.transforms.camera_lidar.camera_lidar import (
     Affine,
+    AxisActivation,
+    CalibrationMisalignment,
     LidarCameraFusion,
     SaveFusionPreview,
+    TranslationRange,
 )
 from autoware_ml.types.geometry import PointFeatureName
 from autoware_ml.utils.calibration import CalibrationStatus
@@ -227,6 +230,26 @@ class TestLidarCameraFusion(unittest.TestCase):
 
         hit = torch.nonzero(output.depth_maps[0, 0] > 0)
         self.assertEqual(hit.tolist(), [[int(CENTER_Y), int(CENTER_X) - 2]])
+
+    def test_perturbed_calibration_moves_the_projection(self) -> None:
+        # A one metre shift of the camera along x moves a point at 5 m by FOCAL / 5 columns.
+        misalignment = CalibrationMisalignment(
+            probability=1.0,
+            activate=AxisActivation(x=True),
+            translation=TranslationRange(
+                min_x_neg=1.0, max_x_neg=1.0, min_x_pos=1.0, max_x_pos=1.0
+            ),
+        )
+        sample = _build_sample(torch.tensor([[0.0, 0.0, 5.0, 1.0]]))
+
+        calibrated = self.fusion(sample).camera_image_data
+        miscalibrated = self.fusion(misalignment(sample)).camera_image_data
+
+        self.assertFalse(torch.equal(calibrated.depth_maps, miscalibrated.depth_maps))
+        hit = torch.nonzero(miscalibrated.depth_maps[0, 0] > 0)
+        self.assertEqual(hit.shape[0], 1)
+        self.assertEqual(int(hit[0, 0]), int(CENTER_Y))
+        self.assertIn(int(hit[0, 1]), [_pixel_of(-1.0, 5.0), _pixel_of(1.0, 5.0)])
 
     def test_zero_distortion_coefficients_match_pinhole(self) -> None:
         points = torch.tensor([[1.0, 0.5, 5.0, 1.0], [-1.0, -0.5, 8.0, 0.4]])

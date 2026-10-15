@@ -116,8 +116,6 @@ class DeploymentExport:
                         export_spec.dynamic_axes,
                         module_onnx_path,
                     )
-                    onnx_exported_paths.append(module_onnx_path)
-
                     modify_graph_cfg = module_onnx_cfg.get("modify_graph", None)
                     if should_modify_graph(modify_graph_cfg):
                         module_onnx_path = modify_onnx_graph(module_onnx_path, modify_graph_cfg)
@@ -145,6 +143,8 @@ class DeploymentExport:
                         tracker=self.tracker,
                         run_id=self.run_id,
                     )
+                    # Recorded after the modifiers, which may write to a different path.
+                    onnx_exported_paths.append(module_onnx_path)
                     logger.info(
                         "Stamped %s metadata: release=%s, commit=%s",
                         module_name,

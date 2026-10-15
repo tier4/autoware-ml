@@ -349,6 +349,37 @@ class TestResizeCropFlipRotImage(CameraImageDataTestCase):
         self.assert_augmentation_matrices_match_intrinsics(camera_image_data)
         self.assert_projection_is_consistent(camera_image_data)
 
+    def test_composes_onto_the_intrinsics_of_earlier_image_transforms(self) -> None:
+        """Test that the resize composes onto the intrinsics an earlier transform left behind."""
+        sample = self.build_multi_task_gt_sample()
+        halved = ResizeMultiviewImages(target_size=[self.image_height // 2, self.image_width // 2])(
+            sample
+        )
+        assert halved.camera_image_data is not None
+
+        output = ResizeCropFlipRotImage(
+            target_size=[self.image_height // 4, self.image_width // 4],
+            resize_range=[0.5, 0.5],
+            bottom_crop_ratio_range=[0.0, 0.0],
+            training=False,
+        )(halved)
+
+        assert output.camera_image_data is not None
+        camera_image_data = output.camera_image_data
+        # Two halvings quarter the focal lengths and the principal point of the raw intrinsics.
+        expected_intrinsic = torch.tensor(
+            [[25.0, 0.0, 6.0], [0.0, 25.0, 4.0], [0.0, 0.0, 1.0]], dtype=torch.float32
+        )
+        self.assertTrue(
+            torch.allclose(
+                camera_image_data.augmented_camera_intrinsics,
+                expected_intrinsic.repeat(self.num_cameras, 1, 1),
+                atol=1e-5,
+            )
+        )
+        self.assert_augmentation_matrices_match_intrinsics(camera_image_data)
+        self.assert_projection_is_consistent(camera_image_data)
+
     def test_scalar_resize_range_covers_the_target_size(self) -> None:
         """Test that a scalar resize range is read as a tolerance around a covering resize."""
         transform = ResizeCropFlipRotImage(

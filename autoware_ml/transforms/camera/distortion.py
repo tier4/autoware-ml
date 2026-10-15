@@ -65,10 +65,12 @@ class UndistortImage(BaseTransform):
         undistorted_images = []
         undistorted_coefficients = []
         for index, coefficients in enumerate(camera_image_data.distortion_coefficients):
-            # Nothing to correct for pre-undistorted cameras, keep the image as it is.
+            # Nothing to correct for pre-undistorted cameras, keep the image as it is. A
+            # zero plumb_bob is a pinhole already, so its coefficients are cleared too to
+            # keep them consistent with the empty model name written below.
             if coefficients.numel() == 0 or not torch.any(coefficients):
                 undistorted_images.append(images[index])
-                undistorted_coefficients.append(coefficients)
+                undistorted_coefficients.append(torch.zeros(0, dtype=coefficients.dtype))
                 continue
 
             # OpenCV expects (height, width, num_channels) contiguous arrays.

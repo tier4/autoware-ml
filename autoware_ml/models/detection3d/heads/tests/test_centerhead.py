@@ -17,7 +17,6 @@
 import math
 import unittest
 
-from jaxtyping import Float32
 import torch
 
 from autoware_ml.models.detection3d.heads.centerhead import CenterHead
@@ -28,6 +27,7 @@ from autoware_ml.dataclasses.models.detection3d.head_outputs import (
 from autoware_ml.dataclasses.batch.detection3d import (
     Detection3DGTBatch,
 )
+from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
 
 
 class TestCenterHead(unittest.TestCase):
@@ -623,184 +623,170 @@ class TestCenterHead(unittest.TestCase):
         self.assertFalse(torch.isfinite(corrupt_losses["loss_bbox"]))
         self.assertFalse(torch.isfinite(corrupt_losses["loss"]))
 
-    def test_decode_regression_outputs_converts_grid_cells_to_physical_boxes(self) -> None:
+    def _build_suppressed_center_head_outputs(
+        self, batch_size: int, height: int, width: int, use_velocity: bool = True
+    ) -> CenterHeadOutputs:
         """
-        Test that _decode_regression_outputs turns the per-cell regression maps into physical
-        boxes, applying the grid offset, the exp on dimensions and the atan2 on rotations.
+        Build CenterHeadOutputs whose heatmap logits sit far below the score threshold everywhere,
+        so decode_outputs only keeps the cells a test raises explicitly.
+        """
+        outputs = self._build_center_head_outputs(
+            batch_size=batch_size, height=height, width=width, use_velocity=use_velocity
+        )
+        outputs.heatmap.fill_(-20.0)
+        return outputs
+
+    @staticmethod
+    def _logit(probability: float) -> float:
+        """Return the heatmap logit whose sigmoid is ``probability``."""
+        return math.log(probability / (1.0 - probability))
+
+    def _decode(
+        self, center_head: CenterHead, outputs: CenterHeadOutputs
+    ) -> list[Detection3DSamplePredictions]:
+        """Run decode_outputs on the head and return the per-sample predictions."""
+        predictions = center_head.decode_outputs(
+            Detection3DHeadOutputs(center_head_outputs=outputs, transfusion_head_outputs=None)
+        ).detection3d_predictions
+        assert predictions is not None
+        return predictions
+
+    def test_decode_outputs_converts_grid_cells_to_physical_boxes(self) -> None:
+        """
+        Test that decode_outputs turns the per-cell regression maps into physical boxes, applying
+        the grid offset, the exp on dimensions and the atan2 on rotations.
         """
         # voxel_size 0.5 with out_size_factor 2 and a zero point_cloud_range origin means the
         # metric x equals (grid x + predicted offset), which keeps the expectations readable.
-        outputs = self._build_center_head_outputs(batch_size=1, height=4, width=4)
-        # flattened index 14 -> (y=3, x=2, 3*4+2 = 14), flattened index 5 -> (y=1, x=1, 1*4+1 = 5)
+        outputs = self._build_suppressed_center_head_outputs(batch_size=1, height=4, width=4)
+        # Two class-0 peaks far enough apart that neither the heatmap pooling nor the circle NMS
+        # suppresses one of them; (y=3, x=2) scores higher so it is decoded first.
+        outputs.heatmap[0, 0, 3, 2] = 4.0
+        outputs.heatmap[0, 0, 1, 1] = 2.0
         outputs.reg[0, :, 3, 2] = torch.tensor([0.25, 0.5], device=self.device)
         outputs.reg[0, :, 1, 1] = torch.tensor([-0.5, 0.25], device=self.device)
         outputs.height[0, 0, 3, 2] = 0.2
         outputs.height[0, 0, 1, 1] = -1.0
         outputs.dim[0, :, 3, 2] = torch.tensor([4.0, 1.6, 1.5], device=self.device).log()
         outputs.dim[0, :, 1, 1] = torch.tensor([2.0, 3.0, 0.5], device=self.device).log()
-        outputs.rot[0, :, 3, 2] = torch.tensor(
-            [math.sin(0.25), math.cos(0.25)], device=self.device
-        )
-        outputs.rot[0, :, 1, 1] = torch.tensor(
-            [math.sin(-1.2), math.cos(-1.2)], device=self.device
-        )
+        outputs.rot[0, :, 3, 2] = torch.tensor([math.sin(0.25), math.cos(0.25)], device=self.device)
+        outputs.rot[0, :, 1, 1] = torch.tensor([math.sin(-1.2), math.cos(-1.2)], device=self.device)
         assert outputs.vel is not None
         outputs.vel[0, :, 3, 2] = torch.tensor([0.5, -0.1], device=self.device)
         outputs.vel[0, :, 1, 1] = torch.tensor([-2.0, 3.0], device=self.device)
 
-        flatten_indices = torch.tensor([[14, 5]], dtype=torch.int64, device=self.device)
-        bboxes_predictions = self.center_head._decode_regression_outputs(
-            center_head_outputs=outputs,
-            flatten_indices=flatten_indices,
-            width=4,
-        )
+        predictions = self._decode(self.center_head, outputs)
 
-        # (batch_size, num_indices, 9) because the head is built with use_velocity=True
-        self.assertEqual(bboxes_predictions.shape, (1, 2, 9))
+        self.assertEqual(len(predictions), 1)
+        bboxes_predictions = predictions[0].bboxes_3d
+        # (num_boxes, 9) because the head is built with use_velocity=True
+        self.assertEqual(bboxes_predictions.shape, (2, 9))
         expected_bboxes_predictions = torch.tensor(
             [
-                [
-                    [2.25, 3.5, 0.2, 4.0, 1.6, 1.5, 0.25, 0.5, -0.1],
-                    [0.5, 1.25, -1.0, 2.0, 3.0, 0.5, -1.2, -2.0, 3.0],
-                ]
+                [2.25, 3.5, 0.2, 4.0, 1.6, 1.5, 0.25, 0.5, -0.1],
+                [0.5, 1.25, -1.0, 2.0, 3.0, 0.5, -1.2, -2.0, 3.0],
             ],
             device=self.device,
         )
         self.assertTrue(torch.allclose(bboxes_predictions, expected_bboxes_predictions, atol=1e-5))
+        self.assertTrue(
+            torch.equal(predictions[0].labels_3d, torch.tensor([0, 0], device=self.device))
+        )
 
-    def test_decode_regression_outputs_gathers_per_sample_feature_maps(self) -> None:
+    def test_decode_outputs_gathers_per_sample_feature_maps(self) -> None:
         """
-        Test that _decode_regression_outputs gathers along the feature map axis of each sample
-        rather than indexing the batch axis, so samples never read each other's predictions.
+        Test that decode_outputs gathers along the feature map axis of each sample rather than
+        indexing the batch axis, so samples never read each other's predictions.
         """
-        outputs = self._build_center_head_outputs(batch_size=2, height=4, width=4)
-        # Both samples read the same flattened index but hold different values there.
+        outputs = self._build_suppressed_center_head_outputs(batch_size=2, height=4, width=4)
+        # Both samples peak at the same cell but hold different regression values there.
+        outputs.heatmap[0, 0, 3, 2] = 4.0
         outputs.height[0, 0, 3, 2] = 1.0
         outputs.dim[0, :, 3, 2] = torch.tensor([4.0, 1.6, 1.5], device=self.device).log()
+        outputs.heatmap[1, 0, 3, 2] = 4.0
         outputs.height[1, 0, 3, 2] = -3.0
         outputs.dim[1, :, 3, 2] = torch.tensor([2.0, 8.0, 0.5], device=self.device).log()
 
-        flatten_indices = torch.tensor([[14], [14]], dtype=torch.int64, device=self.device)
-        bboxes_predictions = self.center_head._decode_regression_outputs(
-            center_head_outputs=outputs,
-            flatten_indices=flatten_indices,
-            width=4,
-        )
+        predictions = self._decode(self.center_head, outputs)
 
-        self.assertEqual(bboxes_predictions.shape, (2, 1, 9))
+        self.assertEqual(len(predictions), 2)
         # Both samples decode the same grid cell, so only the regressed values differ.
+        expected_bboxes_predictions = [
+            torch.tensor([[2.0, 3.0, 1.0, 4.0, 1.6, 1.5, 0.0, 0.0, 0.0]], device=self.device),
+            torch.tensor([[2.0, 3.0, -3.0, 2.0, 8.0, 0.5, 0.0, 0.0, 0.0]], device=self.device),
+        ]
+        for sample_predictions, expected in zip(predictions, expected_bboxes_predictions):
+            self.assertEqual(sample_predictions.bboxes_3d.shape, (1, 9))
+            self.assertTrue(torch.allclose(sample_predictions.bboxes_3d, expected, atol=1e-5))
+
+    def test_decode_outputs_drops_velocity_when_disabled(self) -> None:
+        """
+        Test that decode_outputs returns 7 box parameters when the head is configured without
+        velocity.
+        """
+        center_head = self._build_center_head(class_names=["car", "bus"], use_velocity=False)
+
+        outputs = self._build_suppressed_center_head_outputs(
+            batch_size=1, height=4, width=4, use_velocity=False
+        )
+        outputs.heatmap[0, 0, 3, 2] = 4.0
+        outputs.height[0, 0, 3, 2] = 0.2
+        outputs.dim[0, :, 3, 2] = torch.tensor([4.0, 1.6, 1.5], device=self.device).log()
+
+        predictions = self._decode(center_head, outputs)
+
+        bboxes_predictions = predictions[0].bboxes_3d
+        self.assertEqual(bboxes_predictions.shape, (1, 7))
         expected_bboxes_predictions = torch.tensor(
-            [
-                [[2.0, 3.0, 1.0, 4.0, 1.6, 1.5, 0.0, 0.0, 0.0]],
-                [[2.0, 3.0, -3.0, 2.0, 8.0, 0.5, 0.0, 0.0, 0.0]],
-            ],
-            device=self.device,
+            [[2.0, 3.0, 0.2, 4.0, 1.6, 1.5, 0.0]], device=self.device
         )
         self.assertTrue(torch.allclose(bboxes_predictions, expected_bboxes_predictions, atol=1e-5))
 
-    def test_decode_regression_outputs_drops_velocity_when_disabled(self) -> None:
-        """
-        Test that _decode_regression_outputs returns 7 box parameters when the head is
-        configured without velocity.
-        """
-        center_head = CenterHead(
+    def _build_center_head(
+        self, class_names: list[str], use_velocity: bool, post_max_size: int = 10
+    ) -> CenterHead:
+        """Build a head on the same 4x4 grid as ``self.center_head`` with a different cap."""
+        return CenterHead(
             in_channels=384,
-            class_names=["car", "bus"],
+            class_names=class_names,
             shared_channels=64,
             point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
             voxel_size=[0.5, 0.5, 4.0],
             out_size_factor=2,
             min_radius=1,
             score_threshold=0.1,
-            post_max_size=10,
+            post_max_size=post_max_size,
             nms_min_radius=1.0,
-            use_velocity=False,
+            use_velocity=use_velocity,
         ).to(self.device)
 
-        outputs = self._build_center_head_outputs(
-            batch_size=1, height=4, width=4, use_velocity=False
-        )
-        outputs.height[0, 0, 3, 2] = 0.2
-        outputs.dim[0, :, 3, 2] = torch.tensor([4.0, 1.6, 1.5], device=self.device).log()
-
-        flatten_indices = torch.tensor([[14]], dtype=torch.int64, device=self.device)
-        bboxes_predictions = center_head._decode_regression_outputs(
-            center_head_outputs=outputs,
-            flatten_indices=flatten_indices,
-            width=4,
-        )
-
-        self.assertEqual(bboxes_predictions.shape, (1, 1, 7))
-        expected_bboxes_predictions = torch.tensor(
-            [[[2.0, 3.0, 0.2, 4.0, 1.6, 1.5, 0.0]]], device=self.device
-        )
-        self.assertTrue(torch.allclose(bboxes_predictions, expected_bboxes_predictions, atol=1e-5))
-
-    def _build_filter_inputs(
-        self, keep_masks: torch.Tensor
-    ) -> tuple[
-        Float32[torch.Tensor, "batch_size num_boxes box_dim"],
-        Float32[torch.Tensor, "batch_size num_boxes"],
-        Float32[torch.Tensor, "batch_size num_boxes"],
-    ]:
+    def _build_ranked_center_head_outputs(self) -> CenterHeadOutputs:
         """
-        Build the (batch_size=2, num_classes=2, max_num_bboxes=3) inputs shared by the
-        _filter_bbox_predictions tests. Each box row is stamped with its flattened slot so the
-        assertions can follow which prediction ends up where.
-        """
-        scores = torch.tensor(
-            [
-                [[0.9, 0.5, 0.2], [0.8, 0.4, 0.1]],
-                [[0.7, 0.3, 0.05], [0.6, 0.35, 0.02]],
-            ],
-            dtype=torch.float32,
-            device=self.device,
-        )
-        # class_ids[b, c, k] == c, matching how decode_outputs builds them
-        class_ids = (
-            torch.arange(2, dtype=torch.int64, device=self.device)
-            .view(1, 2, 1)
-            .expand_as(keep_masks)
-            .contiguous()
-        )
-        # flattened slot index broadcast across the 9 box parameters
-        flatten_bboxes_predictions = (
-            torch.arange(6, dtype=torch.float32, device=self.device)
-            .view(1, 6, 1)
-            .expand(2, 6, 9)
-            .contiguous()
-        )
-        return flatten_bboxes_predictions, scores, class_ids
+        Build (batch_size=2, num_classes=2, 4x4) outputs whose surviving peaks sit on distinct
+        grid columns, so the decoded x coordinate tells which peak ended up where. With zero
+        regression offsets the metric x equals the grid x.
 
-    def test_filter_bbox_predictions_keeps_survivors_ranked_across_classes(self) -> None:
+        Sample 0 raises class 0 at x=0 (0.9) and x=2 (0.2) and class 1 at x=3 (0.8); sample 1
+        raises a single class-1 peak at x=3 (0.6). Every pair of peaks is at least two cells
+        apart so neither the heatmap pooling nor the 1 m circle NMS suppresses any of them.
         """
-        Test that _filter_bbox_predictions drops suppressed boxes and ranks the survivors by
-        score across classes, carrying the matching class ids and box parameters along.
-        """
-        # flattened slots are ordered [c0k0, c0k1, c0k2, c1k0, c1k1, c1k2]
-        # (batch_size=2, num_classes=2, max_num_bboxes=3)
-        keep_masks = torch.tensor(
-            [
-                [[True, False, True], [True, False, False]],
-                [[False, False, False], [True, False, False]],
-            ],
-            device=self.device,
-        )
-        flatten_bboxes_predictions, scores, class_ids = self._build_filter_inputs(keep_masks)
+        outputs = self._build_suppressed_center_head_outputs(batch_size=2, height=4, width=4)
+        outputs.heatmap[0, 0, 0, 0] = self._logit(0.9)
+        outputs.heatmap[0, 0, 0, 2] = self._logit(0.2)
+        outputs.heatmap[0, 1, 2, 3] = self._logit(0.8)
+        outputs.heatmap[1, 1, 3, 3] = self._logit(0.6)
+        return outputs
 
-        predictions = self.center_head._filter_bbox_predictions(
-            flatten_bboxes_predictions=flatten_bboxes_predictions,
-            scores=scores,
-            class_ids=class_ids,
-            keep_masks=keep_masks,
-            max_num_bboxes=10,
-            batch_size=2,
-        ).detection3d_predictions
-        assert predictions is not None
+    def test_decode_outputs_keeps_survivors_ranked_across_classes(self) -> None:
+        """
+        Test that decode_outputs drops the cells below the score threshold and ranks the
+        survivors by score across classes, carrying the matching class ids and boxes along.
+        """
+        predictions = self._decode(self.center_head, self._build_ranked_center_head_outputs())
 
         self.assertEqual(len(predictions), 2)
 
-        # Sample 0 keeps slots 0, 2 and 3, ranked 0.9 (class 0), 0.8 (class 1), 0.2 (class 0)
+        # Sample 0 keeps x=0, x=3 and x=2, ranked 0.9 (class 0), 0.8 (class 1), 0.2 (class 0)
         self.assertTrue(
             torch.allclose(
                 predictions[0].scores_3d,
@@ -811,7 +797,7 @@ class TestCenterHead(unittest.TestCase):
             torch.equal(predictions[0].labels_3d, torch.tensor([0, 1, 0], device=self.device))
         )
         self.assertTrue(
-            torch.equal(
+            torch.allclose(
                 predictions[0].bboxes_3d[:, 0],
                 torch.tensor([0.0, 3.0, 2.0], device=self.device),
             )
@@ -825,33 +811,19 @@ class TestCenterHead(unittest.TestCase):
             torch.equal(predictions[1].labels_3d, torch.tensor([1], device=self.device))
         )
         self.assertTrue(
-            torch.equal(predictions[1].bboxes_3d[:, 0], torch.tensor([3.0], device=self.device))
+            torch.allclose(predictions[1].bboxes_3d[:, 0], torch.tensor([3.0], device=self.device))
         )
 
-    def test_filter_bbox_predictions_caps_each_sample_at_max_num_bboxes(self) -> None:
+    def test_decode_outputs_caps_each_sample_at_post_max_size(self) -> None:
         """
-        Test that _filter_bbox_predictions truncates each sample to max_num_bboxes, keeping the
-        highest scoring survivors, and that the cap counts across classes rather than per class.
+        Test that decode_outputs truncates each sample to post_max_size, keeping the highest
+        scoring survivors, and that the cap counts across classes rather than per class.
         """
-        # (batch_size=2, num_classes=2, max_num_bboxes=3)
-        keep_masks = torch.tensor(
-            [
-                [[True, False, True], [True, False, False]],
-                [[False, False, False], [True, False, False]],
-            ],
-            device=self.device,
+        center_head = self._build_center_head(
+            class_names=["car", "pedestrian"], use_velocity=True, post_max_size=2
         )
-        flatten_bboxes_predictions, scores, class_ids = self._build_filter_inputs(keep_masks)
 
-        predictions = self.center_head._filter_bbox_predictions(
-            flatten_bboxes_predictions=flatten_bboxes_predictions,
-            scores=scores,
-            class_ids=class_ids,
-            keep_masks=keep_masks,
-            max_num_bboxes=2,
-            batch_size=2,
-        ).detection3d_predictions
-        assert predictions is not None
+        predictions = self._decode(center_head, self._build_ranked_center_head_outputs())
 
         # Sample 0 has three survivors but only the top two fit under the cap
         self.assertEqual(predictions[0].scores_3d.shape, (2,))
@@ -864,25 +836,14 @@ class TestCenterHead(unittest.TestCase):
             torch.allclose(predictions[1].scores_3d, torch.tensor([0.6], device=self.device))
         )
 
-    def test_filter_bbox_predictions_returns_empty_entry_per_sample_when_all_suppressed(
-        self,
-    ) -> None:
+    def test_decode_outputs_returns_empty_entry_per_sample_when_all_suppressed(self) -> None:
         """
-        Test that _filter_bbox_predictions still returns one entry per sample when NMS
-        suppresses everything, so the predictions stay aligned with the batch.
+        Test that decode_outputs still returns one entry per sample when every cell is below the
+        score threshold, so the predictions stay aligned with the batch.
         """
-        keep_masks = torch.zeros((2, 2, 3), dtype=torch.bool, device=self.device)
-        flatten_bboxes_predictions, scores, class_ids = self._build_filter_inputs(keep_masks)
+        outputs = self._build_suppressed_center_head_outputs(batch_size=2, height=4, width=4)
 
-        predictions = self.center_head._filter_bbox_predictions(
-            flatten_bboxes_predictions=flatten_bboxes_predictions,
-            scores=scores,
-            class_ids=class_ids,
-            keep_masks=keep_masks,
-            max_num_bboxes=10,
-            batch_size=2,
-        ).detection3d_predictions
-        assert predictions is not None
+        predictions = self._decode(self.center_head, outputs)
 
         self.assertEqual(len(predictions), 2)
         for sample_predictions in predictions:

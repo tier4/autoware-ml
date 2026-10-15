@@ -21,7 +21,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Sequence
 
-from jaxtyping import Bool, Float32, Int32
+from jaxtyping import Bool, Float32, Int32, Int64
 from omegaconf import OmegaConf
 from onnx import TensorProto
 import onnx
@@ -32,6 +32,7 @@ from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSa
 from autoware_ml.dataclasses.models.detection3d.head_outputs import (
     Detection3DHeadOutputs,
     TransFusionHeadOutputs,
+    TransFusionSeparateHeadOutputs,
 )
 from autoware_ml.models.detection3d.heads.transfusions.exportable_multi_head_attention import (
     ExportableMultiheadAttention,
@@ -216,11 +217,12 @@ class TestTransFusionHead(unittest.TestCase):
         return onnx.load(output_path)
 
     def _build_bev_features(
-        self,
+        self, batch_size: int | None = None
     ) -> Float32[torch.Tensor, "batch_size channels height width"]:
-        """Build random BEV features of the shape the head expects."""
+        """Build random BEV features of the shape the head expects, for the setUp batch unless told."""
         height, width = self.feature_map_size
-        return torch.randn(self.batch_size, self.in_channels, height, width, device=self.device)
+        batch_size = self.batch_size if batch_size is None else batch_size
+        return torch.randn(batch_size, self.in_channels, height, width, device=self.device)
 
     def _build_head_outputs(
         self, transfusion_head: TransFusionHead | None = None
@@ -234,11 +236,17 @@ class TestTransFusionHead(unittest.TestCase):
         transfusion_head: TransFusionHead | None = None,
         gt_valid_bboxes: Int32[torch.Tensor, " batch_size"] | None = None,
         gt_traffic_cone_barrier_bbox_status: Bool[torch.Tensor, " batch_size"] | None = None,
+        transfusion_head_outputs: TransFusionHeadOutputs | None = None,
     ) -> TransFusionHeadTargets:
-        """Build assignment targets from a fresh forward pass and the setUp ground truth."""
+        """
+        Build assignment targets from the setUp ground truth and a forward pass, fresh unless a
+        test passes the outputs it built by hand.
+        """
         head = self.transfusion_head if transfusion_head is None else transfusion_head
+        if transfusion_head_outputs is None:
+            transfusion_head_outputs = self._build_head_outputs(head)
         return head.get_targets(
-            outputs=self._build_head_outputs(head),
+            outputs=transfusion_head_outputs,
             gt_bboxes_3d=self.gt_bboxes_3d,
             gt_labels_3d=self.gt_labels_3d,
             gt_valid_bboxes=(self.gt_valid_bboxes if gt_valid_bboxes is None else gt_valid_bboxes),
@@ -272,18 +280,50 @@ class TestTransFusionHead(unittest.TestCase):
         )
 
     def _decode_sample_predictions(
-        self, transfusion_head: TransFusionHead | None = None
+        self,
+        transfusion_head: TransFusionHead | None = None,
+        transfusion_head_outputs: TransFusionHeadOutputs | None = None,
     ) -> Sequence[Detection3DSamplePredictions]:
-        """Decode a fresh forward pass into the per-sample predictions, unwrapping the option."""
+        """
+        Decode head outputs into the per-sample predictions, unwrapping the option. The outputs
+        come from a fresh forward pass unless a test passes the ones it built by hand.
+        """
         head = self.transfusion_head if transfusion_head is None else transfusion_head
-        sample_predictions = head.decode_outputs(
-            Detection3DHeadOutputs(
-                center_head_outputs=None,
-                transfusion_head_outputs=self._build_head_outputs(head),
-            )
-        ).detection3d_predictions
+        if transfusion_head_outputs is None:
+            transfusion_head_outputs = self._build_head_outputs(head)
+        # Decoding is inference only, and the hand-built outputs carry requires_grad leaves.
+        with torch.no_grad():
+            sample_predictions = head.decode_outputs(
+                Detection3DHeadOutputs(
+                    center_head_outputs=None,
+                    transfusion_head_outputs=transfusion_head_outputs,
+                )
+            ).detection3d_predictions
         assert sample_predictions is not None
         return sample_predictions
+
+    def _dense_heatmap_targets(
+        self,
+        transfusion_head: TransFusionHead,
+        gt_bboxes_3d: Float32[torch.Tensor, "batch_size max_num_gt_bboxes 9"],
+        gt_labels_3d: Int32[torch.Tensor, "batch_size max_num_gt_bboxes"],
+        gt_valid_bboxes: Int32[torch.Tensor, " batch_size"],
+    ) -> Float32[torch.Tensor, "batch_size num_classes height width"]:
+        """
+        Build the dense heatmap targets for the given ground truth through get_targets.
+
+        The dense target depends on the ground truth and the grid only, so the forward pass it is
+        paired with just has to carry the right batch size; its proposals get assigned too, but
+        that part of the targets is not read here.
+        """
+        outputs = transfusion_head(self._build_bev_features(batch_size=gt_bboxes_3d.shape[0]))
+        return transfusion_head.get_targets(
+            outputs=outputs,
+            gt_bboxes_3d=gt_bboxes_3d,
+            gt_labels_3d=gt_labels_3d,
+            gt_valid_bboxes=gt_valid_bboxes,
+            feature_map_size=self.feature_map_size,
+        ).dense_heatmaps
 
     def _dense_heatmap_for_box(
         self,
@@ -299,47 +339,132 @@ class TestTransFusionHead(unittest.TestCase):
             dtype=torch.float32,
             device=self.device,
         )
-        heatmaps = transfusion_head._build_dense_heatmap_targets(
+        heatmaps = self._dense_heatmap_targets(
+            transfusion_head,
             gt_bboxes_3d=gt_bboxes_3d,
-            gt_labels_3d=torch.zeros((1, 1), dtype=torch.int64, device=self.device),
+            gt_labels_3d=torch.zeros((1, 1), dtype=torch.int32, device=self.device),
             gt_valid_bboxes=torch.tensor([1], dtype=torch.int32, device=self.device),
-            feature_map_size=self.feature_map_size,
-            device=self.device,
         )
         return heatmaps[0, 0]
 
-    def _build_filter_inputs(
-        self, keep_masks: Bool[torch.Tensor, "batch_size num_proposals"]
-    ) -> tuple[
-        Float32[torch.Tensor, "batch_size num_proposals box_code_size"],
-        Float32[torch.Tensor, "batch_size num_proposals"],
-        Float32[torch.Tensor, "batch_size num_proposals"],
-    ]:
+    def _build_head_outputs_from_boxes(
+        self,
+        bboxes_3d: Float32[torch.Tensor, "batch_size num_queries 9"],
+        labels: Int64[torch.Tensor, "batch_size num_queries"],
+        scores: Float32[torch.Tensor, "batch_size num_queries"],
+        transfusion_head: TransFusionHead | None = None,
+    ) -> TransFusionHeadOutputs:
         """
-        Build the (batch_size=2, num_proposals=4) inputs shared by the _filter_bbox_predictions
-        tests. Each box row is stamped with its flattened slot so the assertions can follow which
-        prediction ends up where.
+        Hand-build head outputs that decode back to the given metric boxes, labels and scores.
+
+        The boxes go through the head's own bbox coder, so the regression tensors are exactly
+        what a perfect head would emit for them, and each query's logit on its label is the
+        inverse sigmoid of its score, on a confident-background floor everywhere else. Every
+        per-query tensor is a leaf with requires_grad, so a test can check which slots a loss
+        reaches. ``num_queries`` may span several decoder layers, the way the auxiliary head
+        concatenates them along the query axis; decode_outputs reads the last ``num_proposals``
+        of them, which is the slice query_labels and query_heatmap_score describe.
         """
-        batch_size, num_proposals = keep_masks.shape
-        scores = torch.tensor(
-            [[0.1, 0.9, 0.5, 0.3], [0.7, 0.2, 0.6, 0.4]],
-            dtype=torch.float32,
-            device=self.device,
+        head = self.transfusion_head if transfusion_head is None else transfusion_head
+        batch_size, num_queries, _ = bboxes_3d.shape
+        # (batch_size, num_queries, code_size) -> (batch_size, code_size, num_queries), laid out
+        # as (center_x, center_y, z, log dims, sin, cos, velocities) like the regression branches.
+        encoded = head.bbox_coder.encode(bboxes_3d).permute(0, 2, 1)
+        background_logit = float(torch.logit(torch.tensor(0.02)))
+        heatmap = torch.full(
+            (batch_size, self.num_classes, num_queries), background_logit, device=self.device
         )
-        class_ids = (
-            torch.arange(batch_size * num_proposals, dtype=torch.int64, device=self.device).view(
-                batch_size, num_proposals
-            )
-            % self.num_classes
+        heatmap.scatter_(1, labels.unsqueeze(1), torch.logit(scores).unsqueeze(1))
+        height, width = self.feature_map_size
+        return TransFusionHeadOutputs(
+            dense_heatmap=torch.zeros(
+                (batch_size, self.num_classes, height, width), device=self.device
+            ),
+            # A unit heatmap score leaves the decoded score equal to the sigmoid of the logit.
+            query_heatmap_score=torch.ones(
+                (batch_size, self.num_classes, self.num_proposals), device=self.device
+            ),
+            query_labels=labels[:, -self.num_proposals :].contiguous(),
+            separate_head_outputs=TransFusionSeparateHeadOutputs(
+                heatmap=heatmap.requires_grad_(True),
+                center=encoded[:, 0:2].contiguous().requires_grad_(True),
+                height=encoded[:, 2:3].contiguous().requires_grad_(True),
+                dim=encoded[:, 3:6].contiguous().requires_grad_(True),
+                rot=encoded[:, 6:8].contiguous().requires_grad_(True),
+                vel=encoded[:, 8:10].contiguous().requires_grad_(True),
+            ),
         )
-        # Flattened slot index broadcast across the 9 box parameters.
-        bbox_predictions = (
-            torch.arange(batch_size * num_proposals, dtype=torch.float32, device=self.device)
-            .view(batch_size, num_proposals, 1)
-            .expand(batch_size, num_proposals, 9)
-            .contiguous()
+
+    def _build_head_outputs_on_gt(
+        self,
+        transfusion_head: TransFusionHead | None = None,
+        layer_center_shifts_metres: Sequence[float] | None = None,
+    ) -> TransFusionHeadOutputs:
+        """
+        Hand-build auxiliary head outputs whose proposals sit on the setUp ground truth.
+
+        In every decoder layer and sample, proposal ``i`` is placed exactly on that sample's real
+        gt box ``i`` with a confident score on its class, so the assigner has an unambiguous
+        positive for every real box. The proposals past the sample's real boxes are parked in the
+        far corner of the grid as confident background. ``layer_center_shifts_metres`` moves one
+        layer's on-gt proposals along x, so a test can give a layer a non-zero regression residual
+        while its proposals still overlap their boxes and stay positives.
+        """
+        head = self.transfusion_head if transfusion_head is None else transfusion_head
+        if layer_center_shifts_metres is None:
+            layer_center_shifts_metres = [0.0 for _ in range(self.num_decoder_layers)]
+        self.assertEqual(len(layer_center_shifts_metres), self.num_decoder_layers)
+        self.assertGreaterEqual(self.num_proposals, int(self.gt_valid_bboxes.max()))
+
+        num_queries = self.num_decoder_layers * self.num_proposals
+        far_box = torch.tensor(
+            [15.5, 15.5, 0.0, 0.5, 0.5, 0.5, 0.0, 0.0, 0.0], dtype=torch.float32, device=self.device
         )
-        return bbox_predictions, scores, class_ids
+        bboxes_3d = far_box.expand(self.batch_size, num_queries, 9).clone()
+        labels = torch.zeros((self.batch_size, num_queries), dtype=torch.int64, device=self.device)
+        scores = torch.full((self.batch_size, num_queries), 0.02, device=self.device)
+        for batch_index in range(self.batch_size):
+            for layer_index in range(self.num_decoder_layers):
+                for gt_index in range(int(self.gt_valid_bboxes[batch_index])):
+                    query_index = layer_index * self.num_proposals + gt_index
+                    bboxes_3d[batch_index, query_index] = self.gt_bboxes_3d[batch_index, gt_index]
+                    bboxes_3d[batch_index, query_index, 0] += layer_center_shifts_metres[
+                        layer_index
+                    ]
+                    labels[batch_index, query_index] = self.gt_labels_3d[batch_index, gt_index]
+                    scores[batch_index, query_index] = 0.98
+        return self._build_head_outputs_from_boxes(bboxes_3d, labels, scores, head)
+
+    def _build_single_sample_outputs(
+        self,
+        bboxes_3d: Sequence[Sequence[float]],
+        labels: Sequence[int],
+        scores: Sequence[float],
+        transfusion_head: TransFusionHead | None = None,
+    ) -> TransFusionHeadOutputs:
+        """
+        Hand-build single-layer outputs for one sample, padding to num_proposals with boxes far
+        outside post_center_range so the padding never survives decode_outputs.
+        """
+        padding = self.num_proposals - len(bboxes_3d)
+        self.assertGreaterEqual(padding, 0)
+        far_outside = [100.0, 100.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0]
+        return self._build_head_outputs_from_boxes(
+            bboxes_3d=torch.tensor(
+                [list(bboxes_3d) + [far_outside for _ in range(padding)]],
+                dtype=torch.float32,
+                device=self.device,
+            ),
+            labels=torch.tensor(
+                [list(labels) + [0 for _ in range(padding)]], dtype=torch.int64, device=self.device
+            ),
+            scores=torch.tensor(
+                [list(scores) + [0.02 for _ in range(padding)]],
+                dtype=torch.float32,
+                device=self.device,
+            ),
+            transfusion_head=transfusion_head,
+        )
 
     def test_transfusion_head_weight_init(self) -> None:
         """
@@ -425,18 +550,94 @@ class TestTransFusionHead(unittest.TestCase):
 
         self.assertIsNone(outputs.separate_head_outputs.vel)
 
-    def test_build_dense_heatmap_targets_peaks_at_the_box_center(self) -> None:
+    def test_forward_chains_the_decoder_layers(self) -> None:
+        """
+        Test that decoder layer 2 refines the query features decoder layer 1 produced, at the
+        centers layer 1 predicted, and that each layer's slice of the outputs is its own
+        prediction head applied to its own output. A head feeding every layer the initial proposal
+        features, or reading the wrong layer's output, passes every shape test while all but one
+        decoder layer is wasted, so the whole chain is replayed by hand from the first layer's
+        inputs with the layer modules themselves.
+        """
+        # Eval mode switches dropout off, so the manual replay below reproduces the forward pass
+        # exactly. Forward hooks only observe the calls; nothing is replaced.
+        head = self.transfusion_head.eval()
+        captured_calls: list[tuple[dict[str, torch.Tensor], torch.Tensor]] = []
+
+        def capture(
+            module: torch.nn.Module,
+            args: tuple[torch.Tensor, ...],
+            kwargs: dict[str, torch.Tensor],
+            output: torch.Tensor,
+        ) -> None:
+            captured_calls.append((kwargs, output))
+
+        handles = [
+            decoder_layer.register_forward_hook(capture, with_kwargs=True)
+            for decoder_layer in head.decoder
+        ]
+        try:
+            with torch.no_grad():
+                outputs = head(self._build_bev_features())
+        finally:
+            for handle in handles:
+                handle.remove()
+
+        self.assertEqual(len(captured_calls), self.num_decoder_layers)
+        first_inputs, first_query_feats = captured_calls[0]
+        second_inputs, second_query_feats = captured_calls[1]
+        centers = outputs.separate_head_outputs.center
+        first_layer_centers = centers[..., : self.num_proposals]
+        second_layer_centers = centers[..., self.num_proposals :]
+
+        # The first layer changes its queries, and the second layer gets exactly those, not the
+        # initial proposal features, positioned at the centers the first layer predicted.
+        self.assertFalse(torch.equal(first_query_feats, first_inputs["query"]))
+        self.assertTrue(torch.equal(second_inputs["query"], first_query_feats))
+        self.assertTrue(
+            torch.equal(second_inputs["query_pos"], first_layer_centers.permute(0, 2, 1))
+        )
+
+        # Replay both steps from the first layer's inputs with the layer modules themselves.
+        with torch.no_grad():
+            replayed_first = head.decoder[0](
+                query=first_inputs["query"],
+                key=first_inputs["key"],
+                query_pos=first_inputs["query_pos"],
+                key_pos=first_inputs["key_pos"],
+            )
+            replayed_first_prediction = head.prediction_heads[0](replayed_first)
+            replayed_first_centers = replayed_first_prediction.center + first_inputs[
+                "query_pos"
+            ].permute(0, 2, 1)
+            replayed_second = head.decoder[1](
+                query=replayed_first,
+                key=first_inputs["key"],
+                query_pos=replayed_first_centers.permute(0, 2, 1),
+                key_pos=first_inputs["key_pos"],
+            )
+            replayed_second_prediction = head.prediction_heads[1](replayed_second)
+            replayed_second_centers = replayed_second_prediction.center + replayed_first_centers
+
+        self.assertTrue(torch.allclose(second_query_feats, replayed_second, atol=1e-6))
+        self.assertTrue(torch.allclose(first_layer_centers, replayed_first_centers, atol=1e-6))
+        self.assertTrue(torch.allclose(second_layer_centers, replayed_second_centers, atol=1e-6))
+        self.assertTrue(
+            torch.allclose(
+                outputs.separate_head_outputs.heatmap[..., self.num_proposals :],
+                replayed_second_prediction.heatmap,
+                atol=1e-6,
+            )
+        )
+        # The second layer is a refinement, not a copy, of the first.
+        self.assertFalse(torch.allclose(second_layer_centers, first_layer_centers))
+
+    def test_get_targets_dense_heatmap_peaks_at_the_box_center(self) -> None:
         """
         Test that a box's dense heatmap target peaks at the cell holding its center, on that box's
         own class channel only.
         """
-        heatmaps = self.transfusion_head._build_dense_heatmap_targets(
-            gt_bboxes_3d=self.gt_bboxes_3d,
-            gt_labels_3d=self.gt_labels_3d.to(torch.int64),
-            gt_valid_bboxes=self.gt_valid_bboxes,
-            feature_map_size=self.feature_map_size,
-            device=self.device,
-        )
+        heatmaps = self._get_targets().dense_heatmaps
         height, width = self.feature_map_size
 
         self.assertEqual(heatmaps.shape, (self.batch_size, self.num_classes, height, width))
@@ -447,18 +648,12 @@ class TestTransFusionHead(unittest.TestCase):
         self.assertAlmostEqual(float(heatmaps[0, 0, 8, 8]), 0.0, places=5)
         self.assertTrue(bool(((heatmaps >= 0.0) & (heatmaps <= 1.0)).all()))
 
-    def test_build_dense_heatmap_targets_ignores_padded_boxes(self) -> None:
+    def test_get_targets_dense_heatmap_ignores_padded_boxes(self) -> None:
         """
         Test that boxes past gt_valid_bboxes contribute nothing, so the zero padding every batch
         carries is not drawn at the origin as if it were a real box.
         """
-        heatmaps = self.transfusion_head._build_dense_heatmap_targets(
-            gt_bboxes_3d=self.gt_bboxes_3d,
-            gt_labels_3d=self.gt_labels_3d.to(torch.int64),
-            gt_valid_bboxes=self.gt_valid_bboxes,
-            feature_map_size=self.feature_map_size,
-            device=self.device,
-        )
+        heatmaps = self._get_targets().dense_heatmaps
 
         # Sample 1 has a single real box at (4, 10); its two padded rows sit at the origin.
         self.assertAlmostEqual(float(heatmaps[1, 1, 10, 4]), 1.0, places=5)
@@ -509,8 +704,16 @@ class TestTransFusionHead(unittest.TestCase):
 
     def test_suppress_dense_heatmaps_keeps_only_local_maxima_of_pooled_classes(self) -> None:
         """
-        Test that the classes named for local-max pooling keep only their peak while the classes
-        left out are passed through untouched.
+        Test that the classes named for local-max pooling keep only their peak, the classes left
+        out are passed through untouched, and a head naming no class leaves the map as it is.
+
+        This is the one test that reaches into a private method. The suppression only exists
+        inside forward(), between the dense heatmap head and the top-k proposal selection, and
+        the heatmap it consumes is a network output: driving a chosen peak-and-neighbour pattern
+        through the shared block and the dense heatmap convolutions from BEV features is not
+        possible without rewriting their weights, which would test the rewrite rather than the
+        suppression. forward() exposes only the selected proposals, whose order top-k leaves
+        unspecified, so the cell-level contract is asserted on the helper directly.
         """
         transfusion_head = self._build_transfusion_head(dense_heatmap_pooling_class_names=["car"])
         height, width = self.feature_map_size
@@ -522,6 +725,7 @@ class TestTransFusionHead(unittest.TestCase):
         heatmaps[:, :, 5, 6] = 0.4
 
         suppressed = transfusion_head._suppress_dense_heatmaps(heatmaps)
+        untouched = self.transfusion_head._suppress_dense_heatmaps(heatmaps)
 
         # "car" is pooled: the peak survives and the neighbour is suppressed.
         self.assertAlmostEqual(float(suppressed[0, 0, 5, 5]), 0.9, places=5)
@@ -529,16 +733,8 @@ class TestTransFusionHead(unittest.TestCase):
         # "pedestrian" is not pooled, so both cells are kept.
         self.assertAlmostEqual(float(suppressed[0, 1, 5, 5]), 0.9, places=5)
         self.assertAlmostEqual(float(suppressed[0, 1, 5, 6]), 0.4, places=5)
-
-    def test_suppress_dense_heatmaps_is_a_no_op_without_pooling_classes(self) -> None:
-        """Test that naming no pooling classes leaves the heatmaps exactly as they are."""
-        heatmaps = torch.rand(
-            (1, self.num_classes, *self.feature_map_size), dtype=torch.float32, device=self.device
-        )
-
-        suppressed = self.transfusion_head._suppress_dense_heatmaps(heatmaps)
-
-        self.assertTrue(torch.equal(suppressed, heatmaps))
+        # The setUp head names no pooling class, so nothing is suppressed at all.
+        self.assertTrue(torch.equal(untouched, heatmaps))
 
     def test_get_targets_populates_labels_and_boxes(self) -> None:
         """Test that get_targets returns targets shaped for every decoder layer's queries."""
@@ -553,9 +749,10 @@ class TestTransFusionHead(unittest.TestCase):
         self.assertEqual(targets.class_weights.shape, (self.batch_size, self.num_classes))
         self.assertEqual(targets.bbox_targets.shape, (self.batch_size, num_queries, self.code_size))
         self.assertEqual(targets.bbox_weights.shape, (self.batch_size, num_queries, self.code_size))
+        height, width = self.feature_map_size
         self.assertEqual(
             targets.dense_heatmaps.shape,
-            (self.batch_size, self.num_classes, *self.feature_map_size),
+            (self.batch_size, self.num_classes, height, width),
         )
 
     def test_get_targets_marks_positives_consistently(self) -> None:
@@ -652,16 +849,30 @@ class TestTransFusionHead(unittest.TestCase):
         self.assertTrue(bool((targets.label_weights[1][~negative_masks] == 1.0).all()))
 
     def test_loss_returns_one_entry_per_layer_and_a_finite_total(self) -> None:
-        """Test that loss reports a heatmap term, a cls and bbox term per layer, and their sum."""
-        losses = self._compute_losses()
+        """
+        Test that loss reports a heatmap term, a cls and bbox term per layer, and their sum, on a
+        batch where the assigner finds real positives: the proposals sit on their gt boxes, half a
+        metre off along x, so every layer has matched proposals with a non-zero box residual.
+        """
+        outputs = self._build_head_outputs_on_gt(layer_center_shifts_metres=[0.5, 0.5])
 
+        targets = self._get_targets(transfusion_head_outputs=outputs)
+        losses = self._compute_losses(transfusion_head_outputs=outputs)
+
+        # Every real box of every layer is matched, so the positives are real overlaps, not the
+        # forced matches the Hungarian assigner makes between random proposals and boxes.
+        self.assertEqual(targets.num_pos, self.num_decoder_layers * int(self.gt_valid_bboxes.sum()))
+        self.assertGreater(targets.num_pos, 0)
+        self.assertGreater(float(losses["matched_ious"]), 0.5)
         self.assertIn("loss_heatmap", losses)
         self.assertIn("loss", losses)
-        self.assertIn("matched_ious", losses)
         # The last layer is logged as layer_-1, the rest by index.
         for prefix in ("layer_0", "layer_-1"):
             self.assertIn(f"{prefix}_loss_cls", losses)
-            self.assertIn(f"{prefix}_loss_bbox", losses)
+            loss_bbox = losses[f"{prefix}_loss_bbox"]
+            assert isinstance(loss_bbox, torch.Tensor)
+            self.assertGreater(float(loss_bbox.detach()), 0.0)
+            self.assertTrue(loss_bbox.requires_grad)
         for key, value in losses.items():
             self.assertTrue(torch.isfinite(torch.as_tensor(value)).all(), msg=key)
         component_total = sum(
@@ -672,14 +883,64 @@ class TestTransFusionHead(unittest.TestCase):
         total_loss = torch.as_tensor(losses["loss"]).detach()
         self.assertAlmostEqual(float(total_loss), component_total, places=4)
 
-    def test_loss_backward_reaches_the_predictions(self) -> None:
+    def test_loss_bbox_reaches_only_the_positive_proposals(self) -> None:
         """
-        Test that the reported total loss still carries a graph, since a detached total would
-        silently train nothing.
+        Test that the box loss carries gradient back to every matched proposal's regression
+        outputs and to no unmatched one, since the negatives carry a zero regression weight.
         """
-        losses = self._compute_losses()
+        outputs = self._build_head_outputs_on_gt(layer_center_shifts_metres=[0.5, 0.5])
+        targets = self._get_targets(transfusion_head_outputs=outputs)
+        losses = self._compute_losses(transfusion_head_outputs=outputs)
+        loss_bbox = sum(value for key, value in losses.items() if key.endswith("_loss_bbox"))
+        assert isinstance(loss_bbox, torch.Tensor)
+        self.assertGreater(float(loss_bbox.detach()), 0.0)
+
+        loss_bbox.backward()
+
+        # (batch_size, num_queries): True where the assigner matched the proposal to a real box.
+        positive_masks = targets.labels < self.num_classes
+        self.assertGreater(int(positive_masks.sum()), 0)
+        center_gradients = outputs.separate_head_outputs.center.grad
+        assert center_gradients is not None
+        # (batch_size, 2, num_queries) -> (batch_size, num_queries): the x residual is non-zero
+        # for every positive, so each one receives a gradient; no negative receives any.
+        gradient_masks = center_gradients.abs().sum(dim=1) > 0.0
+        self.assertTrue(bool(gradient_masks[positive_masks].all()))
+        self.assertFalse(bool(gradient_masks[~positive_masks].any()))
+
+    def test_loss_supervises_each_layer_with_its_own_slice(self) -> None:
+        """
+        Test that each layer's box loss reads that layer's slice of the auxiliary outputs: moving
+        only the second layer's proposals off their boxes raises the layer_-1 term alone, and
+        moving only the first layer's raises the layer_0 term alone.
+        """
+        second_layer_shifted = self._compute_losses(
+            transfusion_head_outputs=self._build_head_outputs_on_gt(
+                layer_center_shifts_metres=[0.0, 0.5]
+            )
+        )
+        first_layer_shifted = self._compute_losses(
+            transfusion_head_outputs=self._build_head_outputs_on_gt(
+                layer_center_shifts_metres=[0.5, 0.0]
+            )
+        )
+
+        self.assertAlmostEqual(float(second_layer_shifted["layer_0_loss_bbox"]), 0.0, places=5)
+        self.assertGreater(float(second_layer_shifted["layer_-1_loss_bbox"]), 0.0)
+        self.assertGreater(float(first_layer_shifted["layer_0_loss_bbox"]), 0.0)
+        self.assertAlmostEqual(float(first_layer_shifted["layer_-1_loss_bbox"]), 0.0, places=5)
+
+    def test_loss_backward_reaches_the_head_parameters(self) -> None:
+        """
+        Test that the total loss of a forward pass still carries a graph back to the head's
+        parameters, since a detached total would silently train nothing.
+        """
+        outputs = self._build_head_outputs()
+        targets = self._get_targets(transfusion_head_outputs=outputs)
+        losses = self._compute_losses(transfusion_head_outputs=outputs)
         total_loss = losses["loss"]
         assert isinstance(total_loss, torch.Tensor)
+        self.assertGreater(targets.num_pos, 0)
         self.assertTrue(total_loss.requires_grad)
 
         total_loss.backward()
@@ -783,80 +1044,69 @@ class TestTransFusionHead(unittest.TestCase):
             loss_weight=loss_weight,
         )
 
-    def _encoded_gt_boxes(self) -> tuple[torch.Tensor, torch.Tensor]:
-        """Encode the setUp gt boxes of the first sample, returning (encoded, labels)."""
-        encoded = self.transfusion_head.bbox_coder.encode(self.gt_bboxes_3d[:1])
-        labels = self.gt_labels_3d[:1].long()
-        return encoded, labels
+    def _iou_terms(
+        self, losses: MappingProxyType[str, torch.Tensor | float]
+    ) -> Sequence[torch.Tensor]:
+        """Pick the per-layer IoU terms out of a loss mapping, one per decoder layer."""
+        terms = [
+            value
+            for key, value in losses.items()
+            if key.endswith("_loss_iou") and isinstance(value, torch.Tensor)
+        ]
+        self.assertEqual(len(terms), self.num_decoder_layers)
+        return terms
 
-    def test_layer_iou_loss_without_positives_is_zero_but_attached(self) -> None:
-        """Test that a layer with no matched proposals contributes a zero that keeps the graph."""
+    def test_loss_iou_without_positives_is_zero_but_attached(self) -> None:
+        """
+        Test that a batch with only padded boxes, hence no matched proposals, contributes an IoU
+        term of zero per layer that still keeps the graph.
+        """
         head = self._build_transfusion_head(iou_loss=self._build_iou_loss())
-        preds = torch.randn(
-            self.batch_size,
-            self.num_proposals,
-            self.code_size,
-            device=self.device,
-            requires_grad=True,
-        )
-        pos_masks = torch.zeros(
-            self.batch_size, self.num_proposals, dtype=torch.bool, device=self.device
+
+        losses = self._compute_losses(
+            head,
+            gt_valid_bboxes=torch.zeros(self.batch_size, dtype=torch.int32, device=self.device),
+            transfusion_head_outputs=self._build_head_outputs_on_gt(head),
         )
 
-        loss_iou = head._build_layer_iou_loss(
-            preds=preds,
-            bbox_targets=torch.zeros_like(preds),
-            labels=torch.full(pos_masks.shape, self.num_classes, device=self.device),
-            pos_masks=pos_masks,
-            num_pos=0,
-        )
-
-        self.assertEqual(float(loss_iou), 0.0)
-        self.assertTrue(loss_iou.requires_grad)
+        for loss_iou in self._iou_terms(losses):
+            self.assertEqual(float(loss_iou.detach()), 0.0)
+            self.assertTrue(loss_iou.requires_grad)
 
     @unittest.skipUnless(torch.cuda.is_available(), "the rotated IoU op requires CUDA")
-    def test_layer_iou_loss_is_zero_for_perfect_predictions(self) -> None:
-        """Test that predicting the encoded target exactly gives an IoU of one and no loss."""
+    def test_loss_iou_is_zero_for_perfect_predictions(self) -> None:
+        """
+        Test that proposals sitting exactly on their gt boxes are matched with an IoU of one and
+        carry no IoU loss in any layer.
+        """
         head = self._build_transfusion_head(iou_loss=self._build_iou_loss())
-        encoded, labels = self._encoded_gt_boxes()
-        pos_masks = torch.ones(encoded.shape[:2], dtype=torch.bool, device=self.device)
+        outputs = self._build_head_outputs_on_gt(head)
 
-        loss_iou = head._build_layer_iou_loss(
-            preds=encoded.clone(),
-            bbox_targets=encoded,
-            labels=labels,
-            pos_masks=pos_masks,
-            num_pos=int(pos_masks.sum()),
-        )
+        targets = self._get_targets(head, transfusion_head_outputs=outputs)
+        losses = self._compute_losses(head, transfusion_head_outputs=outputs)
 
-        self.assertAlmostEqual(float(loss_iou), 0.0, places=4)
+        self.assertGreater(targets.num_pos, 0)
+        self.assertAlmostEqual(targets.matched_iou, 1.0, places=4)
+        for loss_iou in self._iou_terms(losses):
+            self.assertAlmostEqual(float(loss_iou.detach()), 0.0, places=4)
 
     @unittest.skipUnless(torch.cuda.is_available(), "the rotated IoU op requires CUDA")
-    def test_layer_iou_loss_grows_as_the_prediction_drifts_from_the_target(self) -> None:
-        """Test that shifting the predicted center away from the gt raises the IoU loss."""
+    def test_loss_iou_grows_as_the_prediction_drifts_from_the_target(self) -> None:
+        """Test that shifting the matched proposals away from their gt boxes raises the IoU loss."""
         head = self._build_transfusion_head(iou_loss=self._build_iou_loss())
-        encoded, labels = self._encoded_gt_boxes()
-        pos_masks = torch.ones(encoded.shape[:2], dtype=torch.bool, device=self.device)
-        num_pos = int(pos_masks.sum())
 
-        losses = []
-        for shift_cells in (0.0, 0.5, 1.0):
-            preds = encoded.clone()
-            preds[..., 0] += shift_cells
-            losses.append(
-                float(
-                    head._build_layer_iou_loss(
-                        preds=preds,
-                        bbox_targets=encoded,
-                        labels=labels,
-                        pos_masks=pos_masks,
-                        num_pos=num_pos,
-                    )
-                )
+        iou_losses = []
+        for shift_metres in (0.0, 0.5, 1.0):
+            losses = self._compute_losses(
+                head,
+                transfusion_head_outputs=self._build_head_outputs_on_gt(
+                    head, layer_center_shifts_metres=[shift_metres, shift_metres]
+                ),
             )
+            iou_losses.append(sum(float(term.detach()) for term in self._iou_terms(losses)))
 
-        self.assertLess(losses[0], losses[1])
-        self.assertLess(losses[1], losses[2])
+        self.assertLess(iou_losses[0], iou_losses[1])
+        self.assertLess(iou_losses[1], iou_losses[2])
 
     @unittest.skipUnless(torch.cuda.is_available(), "the rotated IoU op requires CUDA")
     def test_loss_with_iou_loss_reports_a_finite_iou_term_per_layer(self) -> None:
@@ -979,120 +1229,135 @@ class TestTransFusionHead(unittest.TestCase):
 
         self.assertEqual(keep_masks.tolist(), [[True, False, False]])
 
-    def test_filter_bboxes_nms_groups_suppresses_within_a_group_only(self) -> None:
+    def test_decode_outputs_nms_groups_suppress_within_a_group_only(self) -> None:
         """
         Test that two classes sharing an NMS group suppress each other, while the same pair split
         across groups both survive, which is what putting a group in one channel buys.
         """
-        bbox_centers = torch.tensor([[[8.0, 8.0], [8.5, 8.0]]], device=self.device)
-        bbox_scores = torch.tensor([[0.9, 0.8]], device=self.device)
-        bbox_classes = torch.tensor([[0, 1]], dtype=torch.int64, device=self.device)
-        keep_masks = torch.ones((1, 2), dtype=torch.bool, device=self.device)
-
-        together = self._build_transfusion_head(
+        # A car and a pedestrian half a metre apart, inside the one-metre NMS radius.
+        bboxes_3d = [
+            [8.0, 8.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+            [8.5, 8.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+        ]
+        together_head = self._build_transfusion_head(
             nms_type="circle",
             nms_group_configs=[
                 NMSGroupConfig(class_names=self.class_names, nms_radius=1.0, max_size=8)
             ],
-        )._filter_bboxes_nms_groups(bbox_centers, bbox_scores, bbox_classes, keep_masks)
-        apart = self._build_transfusion_head(
+        )
+        apart_head = self._build_transfusion_head(
             nms_type="circle",
             nms_group_configs=[
                 NMSGroupConfig(class_names=["car"], nms_radius=1.0, max_size=8),
                 NMSGroupConfig(class_names=["pedestrian"], nms_radius=1.0, max_size=8),
             ],
-        )._filter_bboxes_nms_groups(bbox_centers, bbox_scores, bbox_classes, keep_masks)
+        )
 
-        self.assertEqual(together.tolist(), [[True, False]])
-        self.assertEqual(apart.tolist(), [[True, True]])
+        together = self._decode_sample_predictions(
+            together_head,
+            self._build_single_sample_outputs(
+                bboxes_3d, labels=[0, 1], scores=[0.9, 0.8], transfusion_head=together_head
+            ),
+        )[0]
+        apart = self._decode_sample_predictions(
+            apart_head,
+            self._build_single_sample_outputs(
+                bboxes_3d, labels=[0, 1], scores=[0.9, 0.8], transfusion_head=apart_head
+            ),
+        )[0]
 
-    def test_filter_bboxes_nms_groups_never_revives_a_rejected_proposal(self) -> None:
+        # One group: the weaker pedestrian is suppressed by the car.
+        self.assertEqual(together.labels_3d.tolist(), [0])
+        self.assertAlmostEqual(float(together.scores_3d[0]), 0.9, places=5)
+        # Separate groups: both survive, in proposal order.
+        self.assertEqual(apart.labels_3d.tolist(), [0, 1])
+
+    def test_decode_outputs_nms_never_revives_a_rejected_proposal(self) -> None:
         """
-        Test that a proposal already rejected upstream stays rejected and cannot suppress a
-        survivor, since it takes no part in the NMS.
+        Test that a proposal already rejected by the center-range filter stays rejected and cannot
+        suppress a survivor, since it takes no part in the NMS.
         """
-        bbox_centers = torch.tensor([[[8.0, 8.0], [8.5, 8.0]]], device=self.device)
-        bbox_scores = torch.tensor([[0.9, 0.8]], device=self.device)
-        bbox_classes = torch.tensor([[0, 0]], dtype=torch.int64, device=self.device)
         transfusion_head = self._build_transfusion_head(
             nms_type="circle",
             nms_group_configs=[
                 NMSGroupConfig(class_names=self.class_names, nms_radius=1.0, max_size=8)
             ],
         )
+        # Two cars half a metre apart in BEV. The stronger one floats 50 m up, outside the
+        # post_center_range, so the center-range filter drops it before the NMS.
+        bboxes_3d = [
+            [8.0, 8.0, 50.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+            [8.5, 8.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+        ]
 
-        keep_masks = transfusion_head._filter_bboxes_nms_groups(
-            bbox_centers,
-            bbox_scores,
-            bbox_classes,
-            torch.tensor([[False, True]], device=self.device),
-        )
+        prediction = self._decode_sample_predictions(
+            transfusion_head,
+            self._build_single_sample_outputs(
+                bboxes_3d, labels=[0, 0], scores=[0.9, 0.8], transfusion_head=transfusion_head
+            ),
+        )[0]
 
-        self.assertEqual(keep_masks.tolist(), [[False, True]])
+        self.assertEqual(prediction.scores_3d.shape, (1,))
+        self.assertAlmostEqual(float(prediction.scores_3d[0]), 0.8, places=5)
+        self.assertAlmostEqual(float(prediction.bboxes_3d[0, 0]), 8.5, places=4)
 
-    def test_filter_bbox_predictions_keeps_survivors_in_proposal_order(self) -> None:
+    def test_decode_outputs_keeps_survivors_in_proposal_order(self) -> None:
         """
-        Test that _filter_bbox_predictions drops the masked proposals, keeps the survivors in
-        proposal order rather than by score, and carries their scores and labels along.
+        Test that decode_outputs drops the rejected proposals, keeps the survivors in proposal
+        order rather than by score, and carries their scores and labels along.
         """
-        keep_masks = torch.tensor(
-            [[False, True, True, False], [True, False, False, True]],
-            dtype=torch.bool,
+        inside = 8.0
+        # Outside post_center_range, so the center-range filter rejects the proposal.
+        outside = 100.0
+        bboxes_3d = torch.tensor(
+            [
+                [
+                    [outside, inside, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+                    [1.0, inside, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+                    [2.0, inside, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+                    [outside, inside, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+                ],
+                [
+                    [3.0, inside, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+                    [outside, inside, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+                    [outside, inside, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+                    [4.0, inside, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+                ],
+            ],
+            dtype=torch.float32,
             device=self.device,
         )
-        bbox_predictions, scores, class_ids = self._build_filter_inputs(keep_masks)
+        labels = torch.tensor([[0, 1, 0, 1], [0, 1, 0, 1]], dtype=torch.int64, device=self.device)
+        scores = torch.tensor(
+            [[0.1, 0.9, 0.5, 0.3], [0.7, 0.2, 0.6, 0.4]], dtype=torch.float32, device=self.device
+        )
 
-        predictions = self.transfusion_head._filter_bbox_predictions(
-            bbox_predictions=bbox_predictions,
-            scores=scores,
-            class_ids=class_ids,
-            keep_masks=keep_masks,
-        ).detection3d_predictions
-        assert predictions is not None
+        predictions = self._decode_sample_predictions(
+            transfusion_head_outputs=self._build_head_outputs_from_boxes(bboxes_3d, labels, scores)
+        )
 
         self.assertEqual(len(predictions), 2)
         # Slots 1 and 2 of sample 0, in proposal order, so the 0.9 and 0.5 scores, not sorted.
-        self.assertTrue(torch.equal(predictions[0].bboxes_3d[:, 0], bbox_predictions[0, 1:3, 0]))
-        self.assertTrue(torch.allclose(predictions[0].scores_3d, scores[0, 1:3]))
-        self.assertTrue(torch.equal(predictions[0].labels_3d, class_ids[0, 1:3]))
+        self.assertTrue(torch.allclose(predictions[0].bboxes_3d[:, 0], bboxes_3d[0, 1:3, 0]))
+        self.assertTrue(torch.allclose(predictions[0].scores_3d, scores[0, 1:3], atol=1e-5))
+        self.assertTrue(torch.equal(predictions[0].labels_3d, labels[0, 1:3]))
         # Slots 0 and 3 of sample 1.
-        self.assertTrue(torch.allclose(predictions[1].scores_3d, scores[1, [0, 3]]))
-        self.assertTrue(torch.equal(predictions[1].labels_3d, class_ids[1, [0, 3]]))
+        self.assertTrue(torch.allclose(predictions[1].bboxes_3d[:, 0], bboxes_3d[1, [0, 3], 0]))
+        self.assertTrue(torch.allclose(predictions[1].scores_3d, scores[1, [0, 3]], atol=1e-5))
+        self.assertTrue(torch.equal(predictions[1].labels_3d, labels[1, [0, 3]]))
 
-    def test_filter_bbox_predictions_returns_empty_entry_per_sample_when_all_suppressed(
-        self,
-    ) -> None:
-        """
-        Test that _filter_bbox_predictions still returns one entry per sample when everything is
-        suppressed, so the predictions stay aligned with the batch.
-        """
-        keep_masks = torch.zeros((2, self.num_proposals), dtype=torch.bool, device=self.device)
-        bbox_predictions, scores, class_ids = self._build_filter_inputs(keep_masks)
-
-        predictions = self.transfusion_head._filter_bbox_predictions(
-            bbox_predictions=bbox_predictions,
-            scores=scores,
-            class_ids=class_ids,
-            keep_masks=keep_masks,
-        ).detection3d_predictions
-        assert predictions is not None
-
-        self.assertEqual(len(predictions), 2)
-        for prediction in predictions:
-            self.assertEqual(prediction.bboxes_3d.shape, (0, 9))
-            self.assertEqual(prediction.scores_3d.shape, (0,))
-            self.assertEqual(prediction.labels_3d.shape, (0,))
-
-    def test_resolve_class_ids_maps_names_and_dedupes(self) -> None:
-        """Test that class names resolve to sorted, deduplicated class ids."""
-        self.assertEqual(
-            list(self.transfusion_head._resolve_class_ids(["pedestrian", "car", "car"])), [0, 1]
+    def test_class_names_resolve_to_sorted_deduplicated_ids(self) -> None:
+        """Test that class names given to the head resolve to sorted, deduplicated class ids."""
+        transfusion_head = self._build_transfusion_head(
+            dense_heatmap_pooling_class_names=["pedestrian", "car", "car"]
         )
 
-    def test_resolve_class_ids_rejects_an_unknown_name(self) -> None:
+        self.assertEqual(list(transfusion_head.dense_heatmap_pooling_class_ids), [0, 1])
+
+    def test_unknown_class_name_is_rejected(self) -> None:
         """Test that a class name outside class_names is rejected rather than silently ignored."""
         with self.assertRaises(ValueError):
-            self.transfusion_head._resolve_class_ids(["helicopter"])
+            self._build_transfusion_head(dense_heatmap_pooling_class_names=["helicopter"])
 
     def test_resolve_nms_groups_fills_in_the_head_defaults(self) -> None:
         """Test that a group leaving nms_radius or max_size unset inherits the head's defaults."""

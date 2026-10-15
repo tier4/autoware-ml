@@ -78,7 +78,11 @@ class TestT4PackFrameRecord(unittest.TestCase):
 
 
 class TestT4RecordsGeneratorT4PackFrame(unittest.TestCase):
-    """Unit tests for the pack lookup of T4RecordsGenerator."""
+    """Unit tests for the pack lookup of T4RecordsGenerator.
+
+    The lookup is pure over the scene directory and the pack index; its public caller,
+    extract_t4_sample_record(), needs a full devkit scene, so the lookup is tested on its own.
+    """
 
     def setUp(self) -> None:
         """Create a scene directory and a generator with only the pack lookup state."""

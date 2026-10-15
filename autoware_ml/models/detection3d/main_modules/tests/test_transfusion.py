@@ -44,7 +44,6 @@ from autoware_ml.models.detection3d.heads.transfusions.transfusion_head import (
 from autoware_ml.models.detection3d.main_modules.transfusion import (
     TransFusionDetectionModel,
     _TransFusionExportWrapper,
-    _format_transfusion_export_outputs,
 )
 from autoware_ml.models.detection3d.necks.second_fpn import SECONDFPN
 from autoware_ml.models.detection3d.task_modules.assigners import HungarianAssigner3D
@@ -131,8 +130,16 @@ class _TransFusionDetectionModelTestCase(unittest.TestCase):
             on_step=False, on_epoch=True, prog_bar=True, sync_dist=True
         )
 
-    def _build_head(self) -> TransFusionHead:
+    def _build_head(self, with_velocity: bool = True) -> TransFusionHead:
         """Build a small auxiliary TransFusion head on the BEV grid."""
+        common_heads = {
+            "centers": (2, 2),
+            "heights": (1, 2),
+            "dims": (3, 2),
+            "rots": (2, 2),
+        }
+        if with_velocity:
+            common_heads["vels"] = (2, 2)
         return TransFusionHead(
             num_proposals=self.num_proposals,
             auxiliary=True,
@@ -142,15 +149,7 @@ class _TransFusionDetectionModelTestCase(unittest.TestCase):
             num_decoder_layers=1,
             num_heads=2,
             feedforward_channels=16,
-            common_heads=MappingProxyType(
-                {
-                    "centers": (2, 2),
-                    "heights": (1, 2),
-                    "dims": (3, 2),
-                    "rots": (2, 2),
-                    "vels": (2, 2),
-                }
-            ),
+            common_heads=MappingProxyType(common_heads),
             bbox_coder=TransFusionBBoxCoder(
                 pc_range=self.point_cloud_range,
                 out_size_factor=self.out_size_factor,
@@ -185,6 +184,7 @@ class _TransFusionDetectionModelTestCase(unittest.TestCase):
         pts_middle_encoder: nn.Module,
         pts_backbone: nn.Module,
         pts_neck: nn.Module,
+        with_velocity: bool = True,
     ) -> TransFusionDetectionModel:
         """Build the detector around the given lidar modules and a fresh head."""
         return TransFusionDetectionModel(
@@ -193,7 +193,7 @@ class _TransFusionDetectionModelTestCase(unittest.TestCase):
             pts_middle_encoder=pts_middle_encoder,
             pts_backbone=pts_backbone,
             pts_neck=pts_neck,
-            bbox_head=self._build_head(),
+            bbox_head=self._build_head(with_velocity=with_velocity),
             log_dict_configs=self.log_dict_configs,
         ).to(self.device)
 
@@ -357,11 +357,28 @@ class _TransFusionDetectionModelTestCase(unittest.TestCase):
         self.assertTrue(torch.isfinite(bbox_pred0).all())
         self.assertTrue(torch.isfinite(dir_cls_pred0).all())
 
-        expected = _format_transfusion_export_outputs(outputs.transfusion_head_outputs)
-        for expected_tensor, exported_tensor in zip(
-            expected, (cls_score0, bbox_pred0, dir_cls_pred0)
-        ):
-            torch.testing.assert_close(exported_tensor, expected_tensor, atol=1e-4, rtol=1e-4)
+        # The deployment tensors are the last decoder layer's predictions: the class heatmap
+        # weighted by the query heatmap scores, the packed box channels and the rotation channels.
+        separate = outputs.transfusion_head_outputs.separate_head_outputs
+        assert separate.vel is not None
+        last_layer = slice(-self.num_proposals, None)
+        expected_cls_score0 = (
+            separate.heatmap[..., last_layer].sigmoid()
+            * outputs.transfusion_head_outputs.query_heatmap_score
+        )
+        expected_bbox_pred0 = torch.cat(
+            (
+                separate.center[..., last_layer],
+                separate.height[..., last_layer],
+                separate.dim[..., last_layer],
+                separate.vel[..., last_layer],
+            ),
+            dim=1,
+        )
+        expected_dir_cls_pred0 = separate.rot[..., last_layer]
+        torch.testing.assert_close(cls_score0, expected_cls_score0, atol=1e-4, rtol=1e-4)
+        torch.testing.assert_close(bbox_pred0, expected_bbox_pred0, atol=1e-4, rtol=1e-4)
+        torch.testing.assert_close(dir_cls_pred0, expected_dir_cls_pred0, atol=1e-4, rtol=1e-4)
 
 
 class TestTransFusionDetectionModel(_TransFusionDetectionModelTestCase):
@@ -466,7 +483,7 @@ class TestTransFusionDetectionModel(_TransFusionDetectionModelTestCase):
         with self.assertRaisesRegex(ValueError, "voxels_data"):
             self.model.build_export_spec(self._build_batch_inputs(voxels_data=None))
 
-    def test_format_export_outputs_keeps_only_the_last_decoder_layer(self) -> None:
+    def test_exported_module_keeps_only_the_last_decoder_layer(self) -> None:
         """
         Test that, with an auxiliary head, only the trailing ``num_proposals`` columns of the
         concatenated layer predictions reach the deployment tensors.
@@ -478,37 +495,53 @@ class TestTransFusionDetectionModel(_TransFusionDetectionModelTestCase):
         head_outputs = outputs.transfusion_head_outputs
         separate = head_outputs.separate_head_outputs
 
-        cls_score0, bbox_pred0, dir_cls_pred0 = _format_transfusion_export_outputs(head_outputs)
+        spec = self.model.build_export_spec(self.batch_inputs)
+        spec.module.eval()
+        voxels, num_points, coors = spec.args
+        with torch.no_grad():
+            cls_score0, bbox_pred0, dir_cls_pred0 = spec.module(voxels, num_points, coors)
 
+        last_layer = slice(-self.num_proposals, None)
         torch.testing.assert_close(
             cls_score0,
-            separate.heatmap[..., -self.num_proposals :].sigmoid()
-            * head_outputs.query_heatmap_score,
+            separate.heatmap[..., last_layer].sigmoid() * head_outputs.query_heatmap_score,
+            atol=1e-4,
+            rtol=1e-4,
         )
-        torch.testing.assert_close(bbox_pred0[:, :2], separate.center[..., -self.num_proposals :])
-        torch.testing.assert_close(bbox_pred0[:, 2:3], separate.height[..., -self.num_proposals :])
-        torch.testing.assert_close(bbox_pred0[:, 3:6], separate.dim[..., -self.num_proposals :])
+        torch.testing.assert_close(
+            bbox_pred0[:, :2], separate.center[..., last_layer], atol=1e-4, rtol=1e-4
+        )
+        torch.testing.assert_close(
+            bbox_pred0[:, 2:3], separate.height[..., last_layer], atol=1e-4, rtol=1e-4
+        )
+        torch.testing.assert_close(
+            bbox_pred0[:, 3:6], separate.dim[..., last_layer], atol=1e-4, rtol=1e-4
+        )
         assert separate.vel is not None
-        torch.testing.assert_close(bbox_pred0[:, 6:8], separate.vel[..., -self.num_proposals :])
-        torch.testing.assert_close(dir_cls_pred0, separate.rot[..., -self.num_proposals :])
-
-    def test_format_export_outputs_requires_velocity_branch(self) -> None:
-        """Test that a head without a velocity branch cannot be packed for deployment."""
-        self.model.eval()
-        with torch.no_grad():
-            outputs = self.model(self.batch_inputs).detection3d_head_outputs
-        assert outputs is not None and outputs.transfusion_head_outputs is not None
-        head_outputs = outputs.transfusion_head_outputs
-        without_velocity = head_outputs.model_copy(
-            update={
-                "separate_head_outputs": head_outputs.separate_head_outputs.model_copy(
-                    update={"vel": None}
-                )
-            }
+        torch.testing.assert_close(
+            bbox_pred0[:, 6:8], separate.vel[..., last_layer], atol=1e-4, rtol=1e-4
+        )
+        torch.testing.assert_close(
+            dir_cls_pred0, separate.rot[..., last_layer], atol=1e-4, rtol=1e-4
         )
 
-        with self.assertRaisesRegex(ValueError, "velocity"):
-            _format_transfusion_export_outputs(without_velocity)
+    def test_exported_module_requires_velocity_branch(self) -> None:
+        """Test that a head without a velocity branch cannot be packed for deployment."""
+        model = self._build_model(
+            pts_voxel_encoder=_StubVoxelEncoder(self.point_channels, self.middle_channels),
+            pts_middle_encoder=_StubMiddleEncoder(self.bev_shape),
+            pts_backbone=self.model.pts_backbone,
+            pts_neck=self.model.pts_neck,
+            with_velocity=False,
+        )
+        model.eval()
+
+        spec = model.build_export_spec(self.batch_inputs)
+        spec.module.eval()
+        voxels, num_points, coors = spec.args
+
+        with self.assertRaisesRegex(ValueError, "velocity"), torch.no_grad():
+            spec.module(voxels, num_points, coors)
 
 
 @unittest.skipUnless(

@@ -127,18 +127,21 @@ def _make_batch(num_points: int = 5, num_classes: int = 3) -> ModelBatchInputs:
     )
 
 
-def test_frnet_shared_step_returns_scalar_loss_with_grad() -> None:
-    """_core_step should return a differentiable scalar loss tensor."""
+def test_frnet_training_step_returns_scalar_loss_with_grad() -> None:
+    """training_step should return a differentiable scalar loss tensor and log it."""
     model = _make_frnet()
     model.log_dict = MagicMock()
     batch = _make_batch()
 
-    metrics, _ = model._core_step(batch, "train")
+    loss = model.training_step(batch, batch_idx=0)
 
-    assert "loss" in metrics
-    assert metrics["loss"].shape == torch.Size([])
-    assert metrics["loss"].requires_grad
+    assert loss.shape == torch.Size([])
+    assert loss.requires_grad
     assert model.backbone.last_sample_count == 1
+    model.log_dict.assert_called_once()
+    logged_values = model.log_dict.call_args.args[0]
+    assert "train/loss" in logged_values
+    assert logged_values["train/loss"] is loss
 
 
 def test_frnet_get_log_batch_size_uses_sample_count() -> None:
@@ -206,8 +209,8 @@ def test_frnet_with_preprocessing_runs_shared_step_end_to_end() -> None:
     )
 
     preprocessed = model.on_after_batch_transfer(raw_batch, dataloader_idx=0)
-    metrics, _ = model._core_step(preprocessed, "train")
+    loss = model.training_step(preprocessed, batch_idx=0)
 
-    assert "loss" in metrics
-    assert metrics["loss"].requires_grad
+    assert loss.requires_grad
     assert model.backbone.last_sample_count == 1
+    assert "train/loss" in model.log_dict.call_args.args[0]

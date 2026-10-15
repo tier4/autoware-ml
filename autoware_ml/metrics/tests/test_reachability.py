@@ -482,10 +482,19 @@ def test_a_hairline_map_seam_does_not_shrink_the_front() -> None:
         0.0, -1.75, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2, min_turn_radius=3.0
     )
 
-    seamed_area = EgoReachability(ego, seamed, PARAMS)._reachable_set(30).area
-    seamless_area = EgoReachability(ego, seamless, PARAMS)._reachable_set(30).area
+    seamed_area = wheeled_reachable_region(ego, PARAMS, seamed).area
+    seamless_area = wheeled_reachable_region(ego, PARAMS, seamless).area
 
     assert seamed_area == pytest.approx(seamless_area, rel=1e-6)
+    # The ego fronts clip against the same sealed surface, so the seam must not change the
+    # collision time of a car parked across it either.
+    parked = Agent.wheeled(
+        30.0, 0.0, heading=0.0, speed=0.0, front=2.4, rear=2.4, width=2, min_turn_radius=3.0
+    )
+    seamed_ttc = EgoReachability(ego, seamed, PARAMS).time_to_collision(parked)
+    seamless_ttc = EgoReachability(ego, seamless, PARAMS).time_to_collision(parked)
+    assert seamed_ttc == seamless_ttc
+    assert seamed_ttc != inf
 
 
 @pytest.mark.parametrize(

@@ -631,18 +631,25 @@ class TransFusionHead(nn.Module):
     ) -> Sequence[TransFusionSeparateHeadOutputs]:
         """Run the decoder layers and produce per-layer predictions.
 
+        The layers are chained: layer ``i + 1`` refines the query features layer ``i`` produced,
+        attending at the centers layer ``i`` predicted, and every layer's prediction head reads
+        that layer's own output. Only the first layer sees the initial proposal features.
+
         Args:
-            query_feats: Per-query feature tensor.
+            query_feats: Initial per-query feature tensor, gathered from the top proposals.
+            flatten_bev_features: Flattened BEV features every layer attends over.
+            bev_pos: BEV cell centers of the flattened features.
+            query_pos: Initial BEV positions of the proposals.
 
         Returns:
             List of per-layer prediction outputs.
         """
         predictions: list[TransFusionSeparateHeadOutputs] = []
         for decoder_layer, prediction_head in zip(self.decoder, self.prediction_heads):
-            query_feat = decoder_layer(
+            query_feats = decoder_layer(
                 query=query_feats, key=flatten_bev_features, query_pos=query_pos, key_pos=bev_pos
             )
-            prediction: TransFusionSeparateHeadOutputs = prediction_head(query_feat)
+            prediction: TransFusionSeparateHeadOutputs = prediction_head(query_feats)
             centers = prediction.center + query_pos.permute(0, 2, 1)
             prediction = prediction.model_copy(update={"center": centers})
             predictions.append(prediction)

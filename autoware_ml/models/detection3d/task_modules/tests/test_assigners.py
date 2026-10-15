@@ -33,8 +33,52 @@ from autoware_ml.models.detection3d.task_modules.match_costs import (
 from autoware_ml.types.geometry import Box3DFieldIndex
 
 
+def _expected_bev_iou(
+    boxes: Float32[torch.Tensor, "batch_size num_bboxes code_size"],
+    gt_boxes: Float32[torch.Tensor, "batch_size max_num_gt_bboxes code_size"],
+    valid_masks: Bool[torch.Tensor, "batch_size max_num_gt_bboxes"],
+) -> Float32[torch.Tensor, "batch_size num_bboxes max_num_gt_bboxes"]:
+    """Build the reference IoU with an explicit per-sample, per-pair Python loop."""
+    batch_size, num_bboxes, _ = boxes.shape
+    num_gt_bboxes = gt_boxes.shape[1]
+    ious = torch.zeros(
+        (batch_size, num_bboxes, num_gt_bboxes), dtype=torch.float32, device=boxes.device
+    )
+    for batch_index in range(batch_size):
+        for box_index in range(num_bboxes):
+            for gt_index in range(num_gt_bboxes):
+                if not bool(valid_masks[batch_index, gt_index]):
+                    continue
+                box = boxes[batch_index, box_index]
+                gt_box = gt_boxes[batch_index, gt_index]
+                box_length = max(float(box[Box3DFieldIndex.LENGTH]), 0.0)
+                box_width = max(float(box[Box3DFieldIndex.WIDTH]), 0.0)
+                gt_length = max(float(gt_box[Box3DFieldIndex.LENGTH]), 0.0)
+                gt_width = max(float(gt_box[Box3DFieldIndex.WIDTH]), 0.0)
+
+                box_x_min = float(box[Box3DFieldIndex.X]) - box_length * 0.5
+                box_x_max = float(box[Box3DFieldIndex.X]) + box_length * 0.5
+                box_y_min = float(box[Box3DFieldIndex.Y]) - box_width * 0.5
+                box_y_max = float(box[Box3DFieldIndex.Y]) + box_width * 0.5
+                gt_x_min = float(gt_box[Box3DFieldIndex.X]) - gt_length * 0.5
+                gt_x_max = float(gt_box[Box3DFieldIndex.X]) + gt_length * 0.5
+                gt_y_min = float(gt_box[Box3DFieldIndex.Y]) - gt_width * 0.5
+                gt_y_max = float(gt_box[Box3DFieldIndex.Y]) + gt_width * 0.5
+
+                inter_width = max(min(box_x_max, gt_x_max) - max(box_x_min, gt_x_min), 0.0)
+                inter_height = max(min(box_y_max, gt_y_max) - max(box_y_min, gt_y_min), 0.0)
+                inter_area = inter_width * inter_height
+                union = box_length * box_width + gt_length * gt_width - inter_area
+                ious[batch_index, box_index, gt_index] = inter_area / max(union, 1e-6)
+    return ious
+
+
 class TestBEVIoUAligned(unittest.TestCase):
-    """Unit tests for the _bev_iou_aligned function."""
+    """Unit tests for the _bev_iou_aligned function.
+
+    The pairwise IoU matrix is a pure geometric kernel that HungarianAssigner3D.assign() only
+    exposes through the matched pair of each proposal, so the kernel is tested directly here.
+    """
 
     def setUp(self) -> None:
         """Set up the same proposal boxes, gt boxes and masks for all tests."""
@@ -107,52 +151,12 @@ class TestBEVIoUAligned(unittest.TestCase):
                 box_tensor[batch_index, box_index, Box3DFieldIndex.VELOCITY_Y] = 4.0
         return box_tensor.to(self.device)
 
-    def _expected_bev_iou(
-        self,
-        boxes: Float32[torch.Tensor, "batch_size num_bboxes code_size"],
-        gt_boxes: Float32[torch.Tensor, "batch_size max_num_gt_bboxes code_size"],
-        valid_masks: Bool[torch.Tensor, "batch_size max_num_gt_bboxes"],
-    ) -> Float32[torch.Tensor, "batch_size num_bboxes max_num_gt_bboxes"]:
-        """Build the reference IoU with an explicit per-sample, per-pair Python loop."""
-        batch_size, num_bboxes, _ = boxes.shape
-        num_gt_bboxes = gt_boxes.shape[1]
-        ious = torch.zeros(
-            (batch_size, num_bboxes, num_gt_bboxes), dtype=torch.float32, device=boxes.device
-        )
-        for batch_index in range(batch_size):
-            for box_index in range(num_bboxes):
-                for gt_index in range(num_gt_bboxes):
-                    if not bool(valid_masks[batch_index, gt_index]):
-                        continue
-                    box = boxes[batch_index, box_index]
-                    gt_box = gt_boxes[batch_index, gt_index]
-                    box_length = max(float(box[Box3DFieldIndex.LENGTH]), 0.0)
-                    box_width = max(float(box[Box3DFieldIndex.WIDTH]), 0.0)
-                    gt_length = max(float(gt_box[Box3DFieldIndex.LENGTH]), 0.0)
-                    gt_width = max(float(gt_box[Box3DFieldIndex.WIDTH]), 0.0)
-
-                    box_x_min = float(box[Box3DFieldIndex.X]) - box_length * 0.5
-                    box_x_max = float(box[Box3DFieldIndex.X]) + box_length * 0.5
-                    box_y_min = float(box[Box3DFieldIndex.Y]) - box_width * 0.5
-                    box_y_max = float(box[Box3DFieldIndex.Y]) + box_width * 0.5
-                    gt_x_min = float(gt_box[Box3DFieldIndex.X]) - gt_length * 0.5
-                    gt_x_max = float(gt_box[Box3DFieldIndex.X]) + gt_length * 0.5
-                    gt_y_min = float(gt_box[Box3DFieldIndex.Y]) - gt_width * 0.5
-                    gt_y_max = float(gt_box[Box3DFieldIndex.Y]) + gt_width * 0.5
-
-                    inter_width = max(min(box_x_max, gt_x_max) - max(box_x_min, gt_x_min), 0.0)
-                    inter_height = max(min(box_y_max, gt_y_max) - max(box_y_min, gt_y_min), 0.0)
-                    inter_area = inter_width * inter_height
-                    union = box_length * box_width + gt_length * gt_width - inter_area
-                    ious[batch_index, box_index, gt_index] = inter_area / max(union, 1e-6)
-        return ious
-
     def test_bev_iou_aligned_matches_per_sample_reference(self) -> None:
         """Test that the batched IoU matches an explicit per-pair reference loop."""
         ious = _bev_iou_aligned(self.boxes, self.gt_boxes, self.valid_masks)
 
         self.assertEqual(ious.shape, (self.batch_size, self.num_bboxes, self.num_gt_bboxes))
-        expected_ious = self._expected_bev_iou(self.boxes, self.gt_boxes, self.valid_masks)
+        expected_ious = _expected_bev_iou(self.boxes, self.gt_boxes, self.valid_masks)
         self.assertTrue(torch.allclose(ious, expected_ious, atol=1e-6))
 
     def test_bev_iou_aligned_is_independent_across_batch(self) -> None:
@@ -442,7 +446,7 @@ class TestHungarianAssigner3D(unittest.TestCase):
     def test_assign_max_overlaps_are_the_matched_pair_ious(self) -> None:
         """Test that max_overlaps reports the IoU of the pair each proposal was matched to."""
         result = self._assign()
-        ious = _bev_iou_aligned(self.bboxes, self.gt_bboxes, self.valid_masks)
+        ious = _expected_bev_iou(self.bboxes, self.gt_bboxes, self.valid_masks)
 
         for batch_index in range(self.batch_size):
             for proposal_index in range(self.num_bboxes):

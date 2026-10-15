@@ -27,6 +27,36 @@ from autoware_ml.databases.scenarios import ScenarioData, Scenarios, DatasetPara
 
 logger = logging.getLogger(__name__)
 
+_TRAFFIC_CONE_BARRIER_BBOX_STATUS_TEXTS: MappingProxyType[str, bool | None] = MappingProxyType(
+    {"true": True, "false": False, "none": None}
+)
+
+
+def _parse_traffic_cone_barrier_bbox_status(status_text: str) -> bool | None:
+    """
+    Parse the traffic cone / barrier annotation status segment of a scenario ID.
+
+    Args:
+      status_text: The last segment of a fully qualified scenario ID, ``true`` when the cones
+        and barriers of the scenario are annotated, ``false`` when they are not, ``none`` when
+        it is unknown. Case-insensitive.
+
+    Returns:
+      bool | None: The annotation status, None when unknown.
+
+    Raises:
+      ValueError: If the text is none of the accepted values. ``bool(text)`` is never used,
+        since it would read ``false`` as True.
+    """
+
+    try:
+        return _TRAFFIC_CONE_BARRIER_BBOX_STATUS_TEXTS[status_text.lower()]
+    except KeyError:
+        raise ValueError(
+            f"Invalid traffic cone / barrier annotation status {status_text!r}, expected one of "
+            f"{sorted(_TRAFFIC_CONE_BARRIER_BBOX_STATUS_TEXTS)}."
+        ) from None
+
 
 class T4Scenarios(Scenarios):
     """
@@ -63,8 +93,9 @@ class T4Scenarios(Scenarios):
     @staticmethod
     def _build_scenario_data(scenario_id: str, dataset_params: DatasetParams) -> ScenarioData:
         """
-        Build scenario data from a scenario ID and a
-        database version.
+        Build scenario data from a scenario ID, either ``<scene>/<version>`` or
+        ``<scene>/<version>/<location>/<vehicle_type>/<cone_barrier_status>`` where the last
+        segment is ``true``, ``false`` or ``none`` (annotation status unknown).
 
         Args:
           scenario_id: Scenario ID.
@@ -76,11 +107,8 @@ class T4Scenarios(Scenarios):
 
         dataset_scene_info = scenario_id.split("/")
         if len(dataset_scene_info) == 5:
-            # TODO (KokSeang): Traffic cone and barrier status will be used in another version.
-            scenario_id, version, city, vehicle_type, traffic_cone_barrier_bbox_status = (
-                dataset_scene_info
-            )
-            traffic_cone_barrier_bbox_status = bool(traffic_cone_barrier_bbox_status)
+            scenario_id, version, city, vehicle_type, status_text = dataset_scene_info
+            traffic_cone_barrier_bbox_status = _parse_traffic_cone_barrier_bbox_status(status_text)
         elif len(dataset_scene_info) == 2:
             scenario_id, version = dataset_scene_info
             city = vehicle_type = traffic_cone_barrier_bbox_status = None

@@ -27,40 +27,55 @@ from autoware_ml.geometry.cameras.base_images import BaseImages
 from autoware_ml.transforms.camera.loading import LoadImagesFromFile
 from autoware_ml.types.geometry import ImageChannel
 
+# Red varies along the rows only and green along the columns only, so a vertical flip, a
+# horizontal flip, a transpose, a rotation or a swap of the color channels each changes the
+# loaded tensor. The image is wider than tall so a transposed load also changes the shape.
+# Both gradients span ``[0, 255]``, which pins the unit-range scaling at both ends.
+ROW_GRADIENT = torch.tensor([0, 85, 170, 255], dtype=torch.uint8)
+COLUMN_GRADIENT = torch.tensor([0, 51, 102, 153, 204, 255], dtype=torch.uint8)
+IMAGE_HEIGHT = ROW_GRADIENT.numel()
+IMAGE_WIDTH = COLUMN_GRADIENT.numel()
+
+
+def build_image_pixels(camera_marker: int) -> torch.Tensor:
+    """Build the rgb pixels of a test camera image.
+
+    Args:
+        camera_marker: Value filling the blue channel, distinct per camera so a test can tell
+            which camera an image was loaded from.
+
+    Returns:
+        torch.Tensor: uint8 (3, IMAGE_HEIGHT, IMAGE_WIDTH) rgb image whose red channel is a
+            vertical gradient, green channel a horizontal gradient and blue channel the marker.
+    """
+    red = ROW_GRADIENT.view(IMAGE_HEIGHT, 1).expand(IMAGE_HEIGHT, IMAGE_WIDTH)
+    green = COLUMN_GRADIENT.view(1, IMAGE_WIDTH).expand(IMAGE_HEIGHT, IMAGE_WIDTH)
+    blue = torch.full((IMAGE_HEIGHT, IMAGE_WIDTH), camera_marker, dtype=torch.uint8)
+    return torch.stack([red, green, blue])
+
 
 class TestLoadImagesFromFile(unittest.TestCase):
     """Unit tests for the LoadImagesFromFile transform."""
 
     def setUp(self) -> None:
         """Create the temporary directory the test images are written to."""
-        self.image_height = 4
-        self.image_width = 6
         self._temporary_directory = tempfile.TemporaryDirectory()
         self.image_root = Path(self._temporary_directory.name)
         self.addCleanup(self._temporary_directory.cleanup)
+        self.camera_markers = {"camera0": 10, "camera1": 20}
 
-    def build_image_sample(
-        self,
-        camera_name: str,
-        pixel_value: int,
-        timestamp: float = 1.5,
-    ) -> ImageSample:
-        """Write a uniform PNG to disk and build the sample pointing at it.
+    def build_image_sample(self, camera_name: str, timestamp: float = 1.5) -> ImageSample:
+        """Write the structured PNG of the camera to disk and build the sample pointing at it.
 
         Args:
-            camera_name: Name of the camera the sample belongs to.
-            pixel_value: Value every pixel of the written image holds, which lets a test
-                identify which camera an image was loaded from.
+            camera_name: Name of the camera the sample belongs to, one of ``camera_markers``.
             timestamp: Timestamp of the sample.
 
         Returns:
             ImageSample referencing the image written to the temporary directory.
         """
         image_path = self.image_root / f"{camera_name}.png"
-        write_png(
-            torch.full((3, self.image_height, self.image_width), pixel_value, dtype=torch.uint8),
-            str(image_path),
-        )
+        write_png(build_image_pixels(self.camera_markers[camera_name]), str(image_path))
         return ImageSample(
             image_path=str(image_path),
             camera_name=camera_name,
@@ -93,6 +108,23 @@ class TestLoadImagesFromFile(unittest.TestCase):
             segmentation3d_gt_sample=None,
         )
 
+    def expected_images(self, camera_names: list[str], normalize_to_unit: bool) -> torch.Tensor:
+        """Build the float32 tensor the loader must serve for the cameras, in the given order.
+
+        Args:
+            camera_names: Names of the cameras in loading order.
+            normalize_to_unit: Whether the loader divides the pixels by 255.
+
+        Returns:
+            torch.Tensor: float32 (num_cameras, 3, IMAGE_HEIGHT, IMAGE_WIDTH) expected images.
+        """
+        pixels = torch.stack(
+            [build_image_pixels(self.camera_markers[name]) for name in camera_names]
+        ).to(torch.float32)
+        if normalize_to_unit:
+            return pixels / 255.0
+        return pixels
+
     def test_defaults_serve_rgb_images_in_unit_range(self) -> None:
         """Test that the defaults load rgb images divided by 255 in sample order."""
         transform = LoadImagesFromFile()
@@ -114,9 +146,9 @@ class TestLoadImagesFromFile(unittest.TestCase):
             LoadImagesFromFile()(self.build_model_gt_sample([]))
 
     def test_loads_every_camera_in_sample_order(self) -> None:
-        """Test that every camera is stacked along the leading dimension."""
+        """Test that every camera is stacked along the leading dimension with exact pixels."""
         sample = self.build_model_gt_sample(
-            [self.build_image_sample("camera0", 10), self.build_image_sample("camera1", 20)]
+            [self.build_image_sample("camera0"), self.build_image_sample("camera1")]
         )
 
         output = LoadImagesFromFile(normalize_to_unit=False)(sample)
@@ -125,25 +157,49 @@ class TestLoadImagesFromFile(unittest.TestCase):
         camera_image_data = output.camera_image_data
         self.assertIsInstance(camera_image_data, BaseImages)
         self.assertEqual(camera_image_data.camera_names, ["camera0", "camera1"])
-        self.assertEqual(
-            camera_image_data.images.shape, (2, 3, self.image_height, self.image_width)
-        )
+        self.assertEqual(camera_image_data.images.shape, (2, 3, IMAGE_HEIGHT, IMAGE_WIDTH))
         self.assertEqual(camera_image_data.images.dtype, torch.float32)
-        self.assertTrue(torch.allclose(camera_image_data.images[0], torch.tensor(10.0)))
-        self.assertTrue(torch.allclose(camera_image_data.images[1], torch.tensor(20.0)))
+        self.assertTrue(
+            torch.equal(
+                camera_image_data.images,
+                self.expected_images(["camera0", "camera1"], normalize_to_unit=False),
+            )
+        )
         self.assertEqual(camera_image_data.timestamps.shape, (2,))
         self.assertEqual(camera_image_data.timestamps.dtype, torch.float64)
         self.assertEqual(camera_image_data.camera_intrinsics.shape, (2, 3, 3))
         self.assertEqual(camera_image_data.lidar2cams.shape, (2, 4, 4))
         self.assertEqual(camera_image_data.lidar2images.shape, (2, 4, 4))
-        self.assertEqual(camera_image_data.distortion_models, ["plumb_bob"] * 2)
+        self.assertEqual(camera_image_data.distortion_models, ["plumb_bob", "plumb_bob"])
         self.assertEqual(len(camera_image_data.distortion_coefficients), 2)
+
+    def test_rgb_channel_order_and_pixel_layout(self) -> None:
+        """Test that the channels are served as rgb in (channel, height, width) layout."""
+        sample = self.build_model_gt_sample([self.build_image_sample("camera0")])
+
+        output = LoadImagesFromFile(normalize_to_unit=False)(sample)
+
+        assert output.camera_image_data is not None
+        image = output.camera_image_data.images[0]
+        expected_red = ROW_GRADIENT.to(torch.float32).view(IMAGE_HEIGHT, 1)
+        expected_green = COLUMN_GRADIENT.to(torch.float32).view(1, IMAGE_WIDTH)
+        # Channel 0 is red: a vertical gradient, constant along every row.
+        self.assertTrue(torch.equal(image[0], expected_red.expand(IMAGE_HEIGHT, IMAGE_WIDTH)))
+        # Channel 1 is green: a horizontal gradient, constant along every column.
+        self.assertTrue(torch.equal(image[1], expected_green.expand(IMAGE_HEIGHT, IMAGE_WIDTH)))
+        # Channel 2 is blue: the uniform marker of camera0.
+        self.assertTrue(torch.equal(image[2], torch.full((IMAGE_HEIGHT, IMAGE_WIDTH), 10.0)))
+        # A bgr load, a flip along either axis or a transposed load would not match.
+        self.assertFalse(torch.equal(image, image.flip(0)))
+        self.assertFalse(torch.equal(image, image.flip(1)))
+        self.assertFalse(torch.equal(image, image.flip(2)))
+        self.assertNotEqual(image.shape, image.transpose(1, 2).shape)
 
     def test_images_follow_the_camera_order(self) -> None:
         """Test that the images are reordered to match the configured camera order."""
         # The metadata is given in the reverse of the requested order.
         sample = self.build_model_gt_sample(
-            [self.build_image_sample("camera1", 20), self.build_image_sample("camera0", 10)]
+            [self.build_image_sample("camera1"), self.build_image_sample("camera0")]
         )
 
         output = LoadImagesFromFile(normalize_to_unit=False, camera_order=["camera0", "camera1"])(
@@ -153,14 +209,24 @@ class TestLoadImagesFromFile(unittest.TestCase):
         assert output.camera_image_data is not None
         camera_image_data = output.camera_image_data
         self.assertEqual(camera_image_data.camera_names, ["camera0", "camera1"])
-        # Every image holds its camera's pixel value, hence the images follow the order.
-        self.assertTrue(torch.allclose(camera_image_data.images[0], torch.tensor(10.0)))
-        self.assertTrue(torch.allclose(camera_image_data.images[1], torch.tensor(20.0)))
+        self.assertTrue(
+            torch.equal(
+                camera_image_data.images,
+                self.expected_images(["camera0", "camera1"], normalize_to_unit=False),
+            )
+        )
+        # The sample order would serve the cameras swapped, which the markers tell apart.
+        self.assertFalse(
+            torch.equal(
+                camera_image_data.images,
+                self.expected_images(["camera1", "camera0"], normalize_to_unit=False),
+            )
+        )
 
     def test_loads_a_subset_of_the_cameras(self) -> None:
         """Test that only the cameras of the configured order are loaded."""
         sample = self.build_model_gt_sample(
-            [self.build_image_sample("camera0", 10), self.build_image_sample("camera1", 20)]
+            [self.build_image_sample("camera0"), self.build_image_sample("camera1")]
         )
 
         output = LoadImagesFromFile(normalize_to_unit=False, camera_order=["camera1"])(sample)
@@ -168,11 +234,17 @@ class TestLoadImagesFromFile(unittest.TestCase):
         assert output.camera_image_data is not None
         camera_image_data = output.camera_image_data
         self.assertEqual(camera_image_data.camera_names, ["camera1"])
-        self.assertTrue(torch.allclose(camera_image_data.images, torch.tensor(20.0)))
+        self.assertEqual(camera_image_data.images.shape, (1, 3, IMAGE_HEIGHT, IMAGE_WIDTH))
+        self.assertTrue(
+            torch.equal(
+                camera_image_data.images,
+                self.expected_images(["camera1"], normalize_to_unit=False),
+            )
+        )
 
     def test_missing_camera_raises(self) -> None:
         """Test that a camera of the order missing from the sample raises ValueError."""
-        sample = self.build_model_gt_sample([self.build_image_sample("camera0", 10)])
+        sample = self.build_model_gt_sample([self.build_image_sample("camera0")])
 
         with self.assertRaises(ValueError):
             LoadImagesFromFile(camera_order=["camera0", "camera1"])(sample)
@@ -180,7 +252,7 @@ class TestLoadImagesFromFile(unittest.TestCase):
     def test_normalize_to_unit(self) -> None:
         """Test that pixel values are divided by 255 only when requested."""
         sample = self.build_model_gt_sample(
-            [self.build_image_sample("camera0", 255), self.build_image_sample("camera1", 255)]
+            [self.build_image_sample("camera0"), self.build_image_sample("camera1")]
         )
 
         normalized = LoadImagesFromFile(normalize_to_unit=True)(sample)
@@ -189,12 +261,28 @@ class TestLoadImagesFromFile(unittest.TestCase):
         assert normalized.camera_image_data is not None
         assert raw.camera_image_data is not None
         self.assertEqual(normalized.camera_image_data.images.dtype, torch.float32)
-        self.assertTrue(torch.allclose(normalized.camera_image_data.images, torch.tensor(1.0)))
-        self.assertTrue(torch.allclose(raw.camera_image_data.images, torch.tensor(255.0)))
+        self.assertEqual(raw.camera_image_data.images.dtype, torch.float32)
+        self.assertTrue(
+            torch.equal(
+                normalized.camera_image_data.images,
+                self.expected_images(["camera0", "camera1"], normalize_to_unit=True),
+            )
+        )
+        self.assertTrue(
+            torch.equal(
+                raw.camera_image_data.images,
+                self.expected_images(["camera0", "camera1"], normalize_to_unit=False),
+            )
+        )
+        # The gradients span the full uint8 range, so the unit range is pinned at both ends.
+        self.assertEqual(normalized.camera_image_data.images.min().item(), 0.0)
+        self.assertEqual(normalized.camera_image_data.images.max().item(), 1.0)
+        self.assertEqual(raw.camera_image_data.images.min().item(), 0.0)
+        self.assertEqual(raw.camera_image_data.images.max().item(), 255.0)
 
     def test_metadata_carried_over(self) -> None:
         """Test that the calibration metadata of the sample is carried over."""
-        sample = self.build_model_gt_sample([self.build_image_sample("camera0", 10, timestamp=2.5)])
+        sample = self.build_model_gt_sample([self.build_image_sample("camera0", timestamp=2.5)])
         assert sample.image_samples is not None
         image_sample = sample.image_samples[0]
 

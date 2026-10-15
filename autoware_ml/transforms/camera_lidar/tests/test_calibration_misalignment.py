@@ -300,9 +300,16 @@ class TestCalibrationMisalignmentSampling(unittest.TestCase):
         self.assertEqual(float(noise[1, 3]), 0.0)
         self.assertEqual(float(noise[2, 3]), 0.0)
 
-    def test_sample_component_respects_sign_and_range(self) -> None:
-        bounds = MagnitudeRange(min_neg=1.0, max_neg=2.0, min_pos=3.0, max_pos=4.0)
-        values = [self.transform._sample_component(bounds) for _ in range(200)]
+    def test_sample_noise_transform_respects_sign_and_range(self) -> None:
+        # Only the x translation is active, so noise[0, 3] is the sampled component itself.
+        transform = CalibrationMisalignment(
+            probability=1.0,
+            activate=AxisActivation(x=True),
+            translation=TranslationRange(
+                min_x_neg=1.0, max_x_neg=2.0, min_x_pos=3.0, max_x_pos=4.0
+            ),
+        )
+        values = [float(transform.sample_noise_transform()[0, 3]) for _ in range(200)]
 
         negatives = [value for value in values if value < 0]
         positives = [value for value in values if value > 0]

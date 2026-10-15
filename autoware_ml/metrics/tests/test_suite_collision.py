@@ -129,16 +129,25 @@ def test_the_score_floor_skips_only_what_no_metric_reads() -> None:
         params=ReachabilityParams(horizon_s=4.0, dt_s=0.1),
         max_speed_mps=10.0,
     )
+    # The floor is CriticalFPFN's lowest confidence, 0.5: a score on the floor is still read.
     eval_out = {
         "predictions": [
             {
-                "bboxes_3d": torch.tensor([collision_box(10.0, 0.0), collision_box(14.0, 0.0)]),
-                "scores_3d": torch.tensor([0.9, 0.1]),
-                "labels_3d": torch.tensor([0, 0]),
+                "bboxes_3d": torch.tensor(
+                    [
+                        collision_box(10.0, 0.0),
+                        collision_box(12.0, 0.0),
+                        collision_box(14.0, 0.0),
+                        collision_box(16.0, 0.0),
+                    ]
+                ),
+                "scores_3d": torch.tensor([0.9, 0.5, 0.49, 0.1]),
+                "labels_3d": torch.tensor([0, 0, 0, 0]),
             }
         ],
-        "gt_boxes": [torch.tensor([collision_box(10.0, 0.0)])],
-        "gt_labels": [torch.tensor([0])],
+        # The on-floor prediction matches a ground truth so it is read without being a critical FP.
+        "gt_boxes": [torch.tensor([collision_box(10.0, 0.0), collision_box(12.0, 0.0)])],
+        "gt_labels": [torch.tensor([0, 0])],
         "ego2global": [np.eye(4)],
         "scene_token": ["scene"],
     }
@@ -147,12 +156,13 @@ def test_the_score_floor_skips_only_what_no_metric_reads() -> None:
     )
     suite.bind_stage(EvalStage.TEST)
 
-    assert suite._ttc_score_floor() == 0.5
     suite.update(eval_out)
     pred_ttc = suite.pred_ttc[0].numpy()
 
     assert np.isfinite(pred_ttc[0])  # confident, propagated
-    assert np.isnan(pred_ttc[1])  # below the floor, skipped
+    assert np.isfinite(pred_ttc[1])  # exactly on the floor, still propagated
+    assert np.isnan(pred_ttc[2])  # just below the floor, skipped
+    assert np.isnan(pred_ttc[3])  # below the floor, skipped
     assert suite.result(EvalStage.TEST)["critical_fp_conf0p5"] == 0.0
 
 

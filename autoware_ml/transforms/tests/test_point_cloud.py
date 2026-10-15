@@ -25,6 +25,7 @@ from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTSample
 from autoware_ml.geometry.points.lidar_points import LiDARPoints
 from autoware_ml.transforms.point_cloud.geometry import (
+    CropBoxInner,
     GlobalRotScaleTrans,
     PointsRandomShuffle,
     PointsRangeFilter,
@@ -104,6 +105,19 @@ class TestPointsRangeFilter(unittest.TestCase):
 
         self.assertEqual(sample.point_cloud_data.coords.tolist(), [[-2.0, -2.0, -2.0]])
         self.assertEqual(sample.segmentation3d_gt_sample.gt_semantic_mask.tolist(), [1])
+
+
+class TestCropBoxInner(unittest.TestCase):
+    """Removal of the points inside a box."""
+
+    def test_drops_the_points_inside_the_box(self) -> None:
+        # The first two points sit inside the box, the third is past its far face
+        points = build_points([[0.0, 0.0, 2.0], [0.5, 0.25, 4.0], [-0.5, -0.25, 8.0]])
+        transform = CropBoxInner(crop_box=[-1.0, -1.0, 1.0, 1.0, 1.0, 5.0])
+
+        sample = transform(build_sample(points))
+
+        self.assertEqual(sample.point_cloud_data.coords.tolist(), [[-0.5, -0.25, 8.0]])
 
 
 class TestPointsRandomShuffle(unittest.TestCase):
