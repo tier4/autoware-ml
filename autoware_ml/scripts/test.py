@@ -40,7 +40,7 @@ from autoware_ml.builders.model_builder import (
 from autoware_ml.builders.logger_builder import build_trainer_logger
 from autoware_ml.datamodule.data_module import DataModule
 from autoware_ml.models.module_base_model import ModuleBaseModel
-from autoware_ml.utils.mlflow_helpers import resolve_lineage_context
+from autoware_ml.utils.mlflow_helpers import resolve_parent_run_id
 from autoware_ml.utils.runtime import (
     configure_torch_runtime,
     restrict_console_logging_to_rank_zero,
@@ -104,20 +104,17 @@ def main(cfg: DictConfig):
 
     logger_enabled = cfg.get("logger") is not None
     config_name = config_name.removeprefix(CONFIG_NAME_PREFIX)
-    experiment_name = f"{cfg.experiment_group_name}/{cfg.experiment_name}"
 
     # Configure weights and checkpoint paths
     weight_paths, checkpoint_path = build_weight_checkpoint_paths(cfg)
 
     # Nest the evaluation under the MLflow run that produced the primary checkpoint, when known
-    experiment_name, parent_run_id = resolve_lineage_context(experiment_name, checkpoint_path)
+    parent_run_id = resolve_parent_run_id(checkpoint_path)
 
     run_context = build_mlflow_run_context(
         cfg,
         stage="test",
-        experiment_name=experiment_name,
         config_name=config_name,
-        experiment_uid=cfg.experiment_uid,
         logger_enabled=logger_enabled,
         parent_run_id=parent_run_id,
         extra_tags=MappingProxyType(

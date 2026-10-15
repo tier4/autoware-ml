@@ -107,14 +107,11 @@ def main(cfg: DictConfig):
 
     logger_enabled = cfg.get("logger") is not None
     config_name = config_name.removeprefix(CONFIG_NAME_PREFIX)
-    experiment_name = f"{cfg.experiment_group_name}/{cfg.experiment_name}"
 
     run_context = build_mlflow_run_context(
         cfg,
         stage="train",
-        experiment_name=experiment_name,
         config_name=config_name,
-        experiment_uid=cfg.experiment_uid,
         logger_enabled=logger_enabled,
     )
 

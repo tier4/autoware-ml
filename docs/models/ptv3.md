@@ -73,11 +73,11 @@ autoware-ml train \
 ```bash
 autoware-ml test \
     --config-name segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m \
-    --weights mlruns/segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m/<run_id>/artifacts/checkpoints/best.ckpt
+    --weights mlruns/ptv3_seg/NuScenesDataset-base-v1.0.0/nuscenes/voxel005_base_b16_50e_nuscenes_51m/<run_id>/artifacts/checkpoints/best.ckpt
 
 autoware-ml test \
     --config-name detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base \
-    --weights mlruns/detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base/<run_id>/artifacts/checkpoints/best.ckpt
+    --weights mlruns/ptv3/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base/voxel012_tiny_b8_30e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 ## Deployment
@@ -89,12 +89,12 @@ convolution plugins.
 ```bash
 autoware-ml deploy \
     --config-name segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m \
-    --weights mlruns/segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/ptv3_seg/NuScenesDataset-base-v1.0.0/nuscenes/voxel005_base_b16_50e_nuscenes_51m/<run_id>/artifacts/checkpoints/best.ckpt \
     deploy.tensorrt.enabled=false
 
 autoware-ml deploy \
     --config-name detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base \
-    --weights mlruns/detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/ptv3/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base/voxel012_tiny_b8_30e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt \
     deploy.tensorrt.enabled=false
 ```
 

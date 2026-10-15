@@ -53,16 +53,16 @@ autoware-ml train --config-name <task>/<model>/<config>
 
 # Initialize det3d encoder from a seg3d checkpoint
 autoware-ml train --config-name <task>/<model>/<config> \
-    --weights mlruns/segmentation3d/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt
+    --weights mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/checkpoints/best.ckpt
 
 # Initialize from a checkpoint whose first layer has a different input width
 autoware-ml train --config-name <task>/<model>/<config> \
-    --weights mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/checkpoints/best.ckpt \
     --skip-mismatched-weights
 
 # Resume an interrupted run
 autoware-ml train --config-name <task>/<model>/<config> \
-    --resume-checkpoint mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/last.ckpt
+    --resume-checkpoint mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/checkpoints/last.ckpt
 
 # With Hydra overrides
 autoware-ml train --config-name <task>/<model>/<config> \
@@ -97,7 +97,7 @@ autoware-ml deploy --config-name <config_path> --weights <path> [--weights <path
 ```bash
 autoware-ml deploy \
     --config-name <task>/<model>/<config> \
-    --weights mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt
+    --weights mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 **Multi-head example:**
@@ -105,8 +105,8 @@ autoware-ml deploy \
 ```bash
 autoware-ml deploy \
     --config-name detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base \
-    --weights mlruns/segmentation3d/ptv3/t4dataset/voxel012_tiny_b16_50e_t4dataset_122m_j6gen2_semaseg/<run_id>/artifacts/checkpoints/best.ckpt \
-    --weights mlruns/detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base/<run_id>/artifacts/checkpoints/best.ckpt
+    --weights mlruns/ptv3_seg/T4Dataset-j6gen2_semaseg-v1.0.0/j6gen2_semaseg/voxel012_tiny_b16_50e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/ptv3/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base/voxel012_tiny_b8_30e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 ## test
@@ -127,7 +127,7 @@ autoware-ml test --config-name <config_path> --weights <path> [--weights <path> 
 ```bash
 autoware-ml test \
     --config-name <task>/<model>/<config> \
-    --weights mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt
+    --weights mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 **Multi-head PTv3 detection example** (merge a pretrained PTv3 encoder checkpoint with a detection checkpoint):
@@ -135,8 +135,8 @@ autoware-ml test \
 ```bash
 autoware-ml test \
     --config-name detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base \
-    --weights mlruns/segmentation3d/ptv3/t4dataset/voxel012_tiny_b16_50e_t4dataset_122m_j6gen2_semaseg/<run_id>/artifacts/checkpoints/best.ckpt \
-    --weights mlruns/detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base/<run_id>/artifacts/checkpoints/best.ckpt
+    --weights mlruns/ptv3_seg/T4Dataset-j6gen2_semaseg-v1.0.0/j6gen2_semaseg/voxel012_tiny_b16_50e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/ptv3/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base/voxel012_tiny_b8_30e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 ## mlflow ui

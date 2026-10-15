@@ -130,11 +130,8 @@ def main(cfg: DictConfig):
     # Configure weights and checkpoint paths
     weights_path, checkpoint_path = build_weight_checkpoint_paths(cfg)
 
-    # Configure experiment name, parent_run_id and source checkpoints for MLflow
-    experiment_name, parent_run_id, source_checkpoints = resolve_deploy_lineage(
-        config_name,
-        weights_path,
-    )
+    # Nest the deploy run under the source training run, when there is exactly one
+    parent_run_id, source_checkpoints = resolve_deploy_lineage(weights_path)
     source_run_ids = [
         source["run_id"] for source in source_checkpoints if source["run_id"] is not None
     ]
@@ -142,9 +139,7 @@ def main(cfg: DictConfig):
     run_context = build_mlflow_run_context(
         cfg,
         stage="deploy",
-        experiment_name=experiment_name,
         config_name=config_name,
-        experiment_uid=cfg.experiment_uid,
         logger_enabled=logger_enabled,
         parent_run_id=parent_run_id,
         extra_tags=MappingProxyType(

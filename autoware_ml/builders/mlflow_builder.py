@@ -23,10 +23,11 @@ from omegaconf import DictConfig
 
 from autoware_ml.utils.mlflow_helpers import (
     AUTOWARE_ML_RUN_ID_ENV,
+    MlflowRunContext,
+    generate_run_name,
     load_run_context,
     prepare_run_context,
-    MlflowRunContext,
-    generate_experiment_name,
+    resolve_experiment_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -35,31 +36,34 @@ logger = logging.getLogger(__name__)
 def build_mlflow_run_context(
     cfg: DictConfig,
     stage: str,
-    experiment_name: str,
-    experiment_uid: str,
     config_name: str,
     logger_enabled: bool,
     parent_run_id: str | None = None,
     extra_tags: MappingProxyType[str, Any] | None = None,
-) -> MlflowRunContext:
+) -> MlflowRunContext | None:
     """
     Build an MLFlowRunContext from the Hydra configuration.
 
+    The experiment and run names come from the config through the same functions the CLI
+    uses, so a run prepared by ``aml train`` and one started by the entrypoint directly land
+    in the same experiment under the same name.
+
     Args:
-        cfg: Hydra configuration
+        cfg: Hydra configuration, carrying ``experiment_group_name``, ``experiment_name`` and
+            ``experiment_uid``.
         stage: The stage of the run, e.g., "train" or "test".
-        experiment_name: The name of the experiment.
-        experiment_uid: A unique identifier for the experiment.
         config_name: The name of the user configuration (yaml file).
         logger_enabled: Whether the logger is enabled.
+        parent_run_id: Run this one nests under, if any.
+        extra_tags: Additional tags for the run.
 
     Returns:
-        An MLFlowRunContext object containing the run ID, experiment name, and user config name.
+        An MLFlowRunContext object containing the run ID, experiment name, and user config name,
+        or None when the logger is disabled.
     """
     logger.info("Building MLflow run context...")
     work_dir = Path(HydraConfig.get().runtime.output_dir)
     logger.info(f"Hydra work directory: {work_dir}")
-    experiment_name = generate_experiment_name(experiment_name)
     if logger_enabled:
         pre_created_run_id = os.environ.get(AUTOWARE_ML_RUN_ID_ENV)
         if pre_created_run_id is not None:
@@ -70,7 +74,8 @@ def build_mlflow_run_context(
                     f"run directory '{run_context.hydra_dir}'."
                 )
         else:
-            run_name = f"{stage}_{experiment_name}_{experiment_uid}"
+            experiment_name = resolve_experiment_name(cfg)
+            run_name = generate_run_name(stage, experiment_name, str(cfg.experiment_uid))
             run_context = prepare_run_context(
                 cfg.logger.tracking_uri,
                 config_name=config_name,

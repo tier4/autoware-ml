@@ -51,6 +51,9 @@ SAMPLE_CONFIG_NAME = (
 )
 SAMPLE_CONFIG_PATH = f"tasks/{SAMPLE_CONFIG_NAME}"
 SAMPLE_SESSION_NAME = "centerpoint-train"
+SAMPLE_EXPERIMENT_GROUP_NAME = "ptv3_segdet/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base"
+SAMPLE_EXPERIMENT_NAME = f"{SAMPLE_EXPERIMENT_GROUP_NAME}/voxel012"
+SAMPLE_EXPERIMENT_UID = "2026.10.15.12.00.00"
 
 
 class TestParseExtraArgs:
@@ -639,23 +642,12 @@ class TestCliRuntime:
         tmp_path: Path,
     ) -> None:
         config_name = "multi/ptv3/voxel012"
-        experiment_name = "multi_ptv3_voxel012"
-        cfg = OmegaConf.create({"logger": {"tracking_uri": "sqlite:///mlruns/mlflow.db"}})
 
         with (
-            patch(
-                "autoware_ml.cli.runtime.resolve_config_reference",
-                return_value=(None, f"tasks/{config_name}", []),
-            ),
-            patch("autoware_ml.cli.runtime.initialize_config_module", return_value=nullcontext()),
-            patch("autoware_ml.cli.runtime.compose", return_value=cfg),
+            self._patched_logger_config(config_name),
             patch(
                 "autoware_ml.cli.runtime.resolve_deploy_lineage",
-                return_value=(
-                    experiment_name,
-                    None,
-                    [{"run_id": "seg-run"}, {"run_id": "det-run"}],
-                ),
+                return_value=(None, [{"run_id": "seg-run"}, {"run_id": "det-run"}]),
             ) as resolve_deploy_lineage_mock,
             patch(
                 "autoware_ml.cli.runtime.prepare_run_context",
@@ -669,12 +661,14 @@ class TestCliRuntime:
                 checkpoints=["seg.ckpt", "det.ckpt"],
             )
 
-        resolve_deploy_lineage_mock.assert_called_once_with(
-            config_name,
-            [Path("seg.ckpt"), Path("det.ckpt")],
-        )
+        resolve_deploy_lineage_mock.assert_called_once_with([Path("seg.ckpt"), Path("det.ckpt")])
         prepare_run_context_mock.assert_called_once()
-        assert prepare_run_context_mock.call_args.kwargs["experiment_name"] == experiment_name
+        assert prepare_run_context_mock.call_args.kwargs["experiment_name"] == (
+            SAMPLE_EXPERIMENT_NAME
+        )
+        assert prepare_run_context_mock.call_args.kwargs["run_name"] == (
+            f"deploy_voxel012_{SAMPLE_EXPERIMENT_UID}"
+        )
         assert prepare_run_context_mock.call_args.kwargs["parent_run_id"] is None
         assert prepare_run_context_mock.call_args.kwargs["extra_tags"]["source_run_ids"] == (
             "seg-run,det-run"
@@ -682,8 +676,18 @@ class TestCliRuntime:
         assert env_updates["AUTOWARE_ML_RUN_ID"] == "deploy-run"
 
     @contextmanager
-    def _patched_logger_config(self, config_name: str):
-        cfg = OmegaConf.create({"logger": {"tracking_uri": "sqlite:///mlruns/mlflow.db"}})
+    def _patched_logger_config(self, config_name: str, logger_enabled: bool = True):
+        """Compose to the experiment bookkeeping of ``default_task.yaml`` plus the logger."""
+        cfg = OmegaConf.create(
+            {
+                "experiment_group_name": SAMPLE_EXPERIMENT_GROUP_NAME,
+                "experiment_name": "voxel012",
+                "experiment_uid": SAMPLE_EXPERIMENT_UID,
+                "logger": (
+                    {"tracking_uri": "sqlite:///mlruns/mlflow.db"} if logger_enabled else None
+                ),
+            }
+        )
         with (
             patch(
                 "autoware_ml.cli.runtime.resolve_config_reference",
@@ -693,6 +697,46 @@ class TestCliRuntime:
             patch("autoware_ml.cli.runtime.compose", return_value=cfg),
         ):
             yield
+
+    def test_prepare_runtime_environment_names_the_run_like_the_entrypoint_builder(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        The CLI creates the run before the entrypoint starts. It must use the experiment and
+        run names the entrypoint's builder derives from the same config, otherwise ``aml train``
+        and ``python -m autoware_ml.scripts.train`` would name their runs differently.
+        """
+        config_name = "multi/ptv3/voxel012"
+        with (
+            self._patched_logger_config(config_name),
+            patch(
+                "autoware_ml.cli.runtime.prepare_run_context",
+                return_value=SimpleNamespace(run_id="train-run", hydra_dir=tmp_path / "hydra"),
+            ) as prepare_run_context_mock,
+        ):
+            env_updates = cli_runtime.prepare_runtime_environment(config_name, "tasks", "train")
+
+        kwargs = prepare_run_context_mock.call_args.kwargs
+        assert prepare_run_context_mock.call_args.args[1] == config_name
+        assert kwargs["experiment_name"] == SAMPLE_EXPERIMENT_NAME
+        assert kwargs["run_name"] == f"train_voxel012_{SAMPLE_EXPERIMENT_UID}"
+        assert kwargs["parent_run_id"] is None
+        assert env_updates["AUTOWARE_ML_RUN_ID"] == "train-run"
+
+    def test_prepare_runtime_environment_without_logger_keys_hydra_dir_on_the_experiment(
+        self,
+    ) -> None:
+        config_name = "multi/ptv3/voxel012"
+        with self._patched_logger_config(config_name, logger_enabled=False):
+            env_updates = cli_runtime.prepare_runtime_environment(config_name, "tasks", "train")
+
+        assert env_updates["AUTOWARE_ML_RUN_ID"] is None
+        hydra_dir = Path(env_updates["AUTOWARE_ML_HYDRA_RUN_DIR"])
+        assert hydra_dir.parent.parent.parent == (
+            Path(cli_runtime.generate_hydra_run_dir(SAMPLE_EXPERIMENT_NAME)).parent.parent.parent
+        )
+        assert SAMPLE_EXPERIMENT_NAME in hydra_dir.as_posix()
+        assert "_hydra" in hydra_dir.parts
 
     def test_prepare_runtime_environment_reuses_source_run_for_resume(self, tmp_path: Path) -> None:
         config_name = "multi/ptv3/voxel012"

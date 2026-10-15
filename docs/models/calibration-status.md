@@ -56,7 +56,7 @@ autoware-ml train \
 ```bash
 autoware-ml test \
     --config-name calibration_status/calibration_status_classifier/nuscenes/resnet18_b8_30e_nuscenes \
-    --weights mlruns/calibration_status/calibration_status_classifier/nuscenes/resnet18_b8_30e_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt
+    --weights mlruns/calibration_status/NuScenesDataset-base-v1.0.0/nuscenes/resnet18_b8_30e_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 ## Deployment
@@ -64,7 +64,7 @@ autoware-ml test \
 ```bash
 autoware-ml deploy \
     --config-name calibration_status/calibration_status_classifier/nuscenes/resnet18_b8_30e_nuscenes \
-    --weights mlruns/calibration_status/calibration_status_classifier/nuscenes/resnet18_b8_30e_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt
+    --weights mlruns/calibration_status/NuScenesDataset-base-v1.0.0/nuscenes/resnet18_b8_30e_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 The exported model keeps the original calibration-status behavior and emits a

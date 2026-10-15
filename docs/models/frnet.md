@@ -46,7 +46,7 @@ autoware-ml train \
 ```bash
 autoware-ml test \
     --config-name segmentation3d/frnet/nuscenes/hdl32e_b16_150k_nuscenes \
-    --weights mlruns/segmentation3d/frnet/nuscenes/hdl32e_b16_150k_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt
+    --weights mlruns/frnet/NuScenesDataset-base-v1.0.0/nuscenes/hdl32e_b16_150k_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 ## Deployment
@@ -54,7 +54,7 @@ autoware-ml test \
 ```bash
 autoware-ml deploy \
     --config-name segmentation3d/frnet/nuscenes/hdl32e_b16_150k_nuscenes \
-    --weights mlruns/segmentation3d/frnet/nuscenes/hdl32e_b16_150k_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt
+    --weights mlruns/frnet/NuScenesDataset-base-v1.0.0/nuscenes/hdl32e_b16_150k_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 To validate ONNX export without building a TensorRT engine:
@@ -62,7 +62,7 @@ To validate ONNX export without building a TensorRT engine:
 ```bash
 autoware-ml deploy \
     --config-name segmentation3d/frnet/nuscenes/hdl32e_b16_150k_nuscenes \
-    --weights mlruns/segmentation3d/frnet/nuscenes/hdl32e_b16_150k_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/frnet/NuScenesDataset-base-v1.0.0/nuscenes/hdl32e_b16_150k_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt \
     deploy.tensorrt.enabled=false
 ```
 

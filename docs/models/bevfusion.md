@@ -49,7 +49,7 @@ The `jpntaxi` and `j6gen2` configs declare `weights: ???`, so they must be start
 ```bash
 autoware-ml train \
     --config-name detection3d/bevfusion/t4dataset/bevfusion_lidar/lidar_voxel0170_second_secfpn_b16_50e_t4dataset_120m_j6gen2_base \
-    --weights mlruns/detection3d/bevfusion/t4dataset/bevfusion_lidar/lidar_voxel0170_second_secfpn_b16_30e_t4dataset_120m_gen1_base/<run_id>/artifacts/checkpoints/best.ckpt
+    --weights mlruns/bevfusion/T4Dataset-gen1_base-v1.0.0/gen1_base/lidar_voxel0170_second_secfpn_b16_30e_t4dataset_120m/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 For a pipeline validation run:
@@ -60,14 +60,14 @@ autoware-ml train \
     +trainer.fast_dev_run=true
 ```
 
-Checkpoints are written to `mlruns/<config_name>/<run_id>/artifacts/checkpoints/` as `best.ckpt` and `last.ckpt`. Resume an interrupted run with `--resume-checkpoint` pointing at `last.ckpt`.
+Checkpoints are written to `mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/checkpoints/` as `best.ckpt` and `last.ckpt`. Resume an interrupted run with `--resume-checkpoint` pointing at `last.ckpt`.
 
 ## Evaluation
 
 ```bash
 autoware-ml test \
     --config-name detection3d/bevfusion/t4dataset/bevfusion_lidar/lidar_voxel0170_second_secfpn_b16_50e_t4dataset_120m_j6gen2_base \
-    --weights mlruns/detection3d/bevfusion/t4dataset/bevfusion_lidar/lidar_voxel0170_second_secfpn_b16_50e_t4dataset_120m_j6gen2_base/<run_id>/artifacts/checkpoints/best.ckpt
+    --weights mlruns/bevfusion/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base/lidar_voxel0170_second_secfpn_b16_50e_t4dataset_120m/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 Evaluation runs on a single device by default so metrics are deterministic. Pass `--use-config-devices` to keep the `trainer.devices` from the config.
@@ -77,7 +77,7 @@ Evaluation runs on a single device by default so metrics are deterministic. Pass
 ```bash
 autoware-ml deploy \
     --config-name detection3d/bevfusion/t4dataset/bevfusion_lidar/lidar_voxel0170_second_secfpn_b16_50e_t4dataset_120m_j6gen2_base \
-    --weights mlruns/detection3d/bevfusion/t4dataset/bevfusion_lidar/lidar_voxel0170_second_secfpn_b16_50e_t4dataset_120m_j6gen2_base/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/bevfusion/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base/lidar_voxel0170_second_secfpn_b16_50e_t4dataset_120m/<run_id>/artifacts/checkpoints/best.ckpt \
     --release v1.0.0
 ```
 
@@ -97,7 +97,7 @@ The export produces the ONNX modules for `autoware_universe/perception/autoware_
 
 Every main-body module returns the runtime detection interface: `bbox_pred` with the raw regression channels `(center, height, dim, rot, vel)` per proposal, `score` with per-proposal confidences, and `label_pred` with per-proposal class labels. Metric-space decoding happens in the runtime node. The `height` channel is the z of the box gravity center, which is how `autoware_bevfusion` reads it.
 
-Exports land in `mlruns/<config_name>/<run_id>/artifacts/exports/` of a dedicated deploy run linked to the training run. Every module is stamped with its provenance and the `--release` version; omit `--release` only for throwaway exports, which are stamped `unversioned`. TensorRT engine generation is disabled (`deploy.tensorrt.enabled=false`); the runtime builds engines itself using the custom sparse-convolution and `bev_pool` plugins.
+Exports land in `mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/exports/` of a dedicated deploy run linked to the training run. Every module is stamped with its provenance and the `--release` version; omit `--release` only for throwaway exports, which are stamped `unversioned`. TensorRT engine generation is disabled (`deploy.tensorrt.enabled=false`); the runtime builds engines itself using the custom sparse-convolution and `bev_pool` plugins.
 
 ## Runtime compatibility
 

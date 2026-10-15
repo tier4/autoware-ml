@@ -32,13 +32,16 @@ from autoware_ml.utils.mlflow_helpers import (
     MLFLOW_PARENT_RUN_ID,
     MLFLOW_RUN_NAME,
     MlflowRunContext,
+    generate_run_name,
     prepare_run_context,
+    resolve_experiment_name,
 )
 
 CONFIG_NAME = "detection3d/tiny/tiny_b1_1e_corpus"
 EXPERIMENT_GROUP_NAME = "centerpoint/t4_v2"
 EXPERIMENT_NAME = "gen1_base"
 EXPERIMENT_UID = "2026.10.15.12.00.00"
+FULL_EXPERIMENT_NAME = f"{EXPERIMENT_GROUP_NAME}/{EXPERIMENT_NAME}"
 
 
 def _tracking_uri(tmp_path: Path) -> str:
@@ -63,29 +66,23 @@ def _run_cfg(tmp_path: Path) -> DictConfig:
     )
 
 
-def _experiment_name(cfg: DictConfig) -> str:
-    """The ``<group>/<name>`` experiment the entrypoints hand to the builder."""
-    return f"{cfg.experiment_group_name}/{cfg.experiment_name}"
-
-
 def _build(cfg: DictConfig, stage: str, logger_enabled: bool = True) -> MlflowRunContext | None:
     return build_mlflow_run_context(
         cfg,
         stage=stage,
-        experiment_name=_experiment_name(cfg),
-        experiment_uid=cfg.experiment_uid,
         config_name=CONFIG_NAME,
         logger_enabled=logger_enabled,
     )
 
 
-def test_experiment_and_run_names_follow_the_group_name_and_uid(
+def test_experiment_and_run_names_come_from_the_config_keys(
     tmp_path: Path, hydra_runtime: HydraRuntime
 ) -> None:
     """
-    Input: the ``<group>/<name>`` experiment and the experiment uid of a train run.
-    Expected: the experiment is ``<group>_<name>`` (slashes become underscores) and the run is
-        ``<stage>_<experiment>_<uid>``, both registered in the store.
+    Input: a config with ``experiment_group_name``, ``experiment_name`` and ``experiment_uid``
+        and a train run.
+    Expected: the experiment is ``<experiment_group_name>/<experiment_name>`` and the run is
+        ``<stage>_<experiment_name>_<uid>``, both registered in the store.
     Check: the context fields and the run the client reads back.
     """
     cfg = _run_cfg(tmp_path)
@@ -93,13 +90,55 @@ def test_experiment_and_run_names_follow_the_group_name_and_uid(
     context = _build(cfg, stage="train")
 
     assert context is not None
-    assert context.experiment_name == "centerpoint_t4_v2_gen1_base"
-    assert context.run_name == f"train_centerpoint_t4_v2_gen1_base_{EXPERIMENT_UID}"
+    assert context.experiment_name == FULL_EXPERIMENT_NAME
+    assert context.run_name == f"train_gen1_base_{EXPERIMENT_UID}"
     client = MlflowClient(tracking_uri=context.tracking_uri)
     run = client.get_run(context.run_id)
     assert run.info.run_name == context.run_name
     assert run.data.tags[MLFLOW_RUN_NAME] == context.run_name
     assert client.get_experiment(run.info.experiment_id).name == context.experiment_name
+
+
+def test_builder_and_cli_runs_land_in_the_same_experiment(
+    tmp_path: Path, hydra_runtime: HydraRuntime
+) -> None:
+    """
+    Input: a run prepared the way the CLI prepares it, through the shared naming functions,
+        and a run built by the entrypoint builder from the same config.
+    Expected: both runs sit in one experiment under one artifact root.
+    Check: the experiment ids and the artifact roots of the two runs.
+    """
+    cfg = _run_cfg(tmp_path)
+    experiment_name = resolve_experiment_name(cfg)
+    cli_run = prepare_run_context(
+        cfg.logger.tracking_uri,
+        config_name=CONFIG_NAME,
+        hydra_dir=None,
+        stage="train",
+        experiment_name=experiment_name,
+        run_name=generate_run_name("train", experiment_name, cfg.experiment_uid),
+    )
+
+    context = _build(cfg, stage="deploy")
+
+    assert context is not None
+    assert context.experiment_id == cli_run.experiment_id
+    assert context.artifact_dir.parent.parent == cli_run.artifact_dir.parent.parent
+    assert context.run_name == f"deploy_gen1_base_{EXPERIMENT_UID}"
+
+
+def test_builder_requires_the_experiment_keys(tmp_path: Path, hydra_runtime: HydraRuntime) -> None:
+    """
+    Input: a config without ``experiment_group_name``.
+    Expected: the experiment cannot be named, so the builder fails before touching the store.
+    Check: a ValueError naming the key is raised and no store is created.
+    """
+    cfg = _run_cfg(tmp_path)
+    del cfg["experiment_group_name"]
+
+    with pytest.raises(ValueError, match="experiment_group_name"):
+        _build(cfg, stage="train")
+    assert not (tmp_path / "mlruns" / "mlflow.db").exists()
 
 
 def test_run_context_binds_the_hydra_work_dir_and_the_artifact_layout(
@@ -108,8 +147,8 @@ def test_run_context_binds_the_hydra_work_dir_and_the_artifact_layout(
     """
     Input: a test run with the seeded Hydra runtime.
     Expected: the hydra directory is the Hydra output directory, the artifact directory lives
-        under ``<store>/<config_name>/<run_id>/artifacts`` and the tags record the stage, the
-        config name and both directories.
+        under ``<store>/<experiment_group_name>/<experiment_name>/<run_id>/artifacts`` and the
+        tags record the stage, the config name and both directories.
     Check: the context paths, their existence and the tags.
     """
     cfg = _run_cfg(tmp_path)
@@ -119,7 +158,7 @@ def test_run_context_binds_the_hydra_work_dir_and_the_artifact_layout(
     assert context is not None
     assert context.hydra_dir == hydra_runtime.work_dir
     assert context.artifact_dir == (
-        tmp_path / "mlruns" / CONFIG_NAME / context.run_id / "artifacts"
+        tmp_path / "mlruns" / FULL_EXPERIMENT_NAME / context.run_id / "artifacts"
     )
     assert context.artifact_dir.is_dir()
     assert context.checkpoints_dir == context.artifact_dir / "checkpoints"
@@ -146,8 +185,6 @@ def test_parent_run_and_extra_tags_are_recorded(
     context = build_mlflow_run_context(
         cfg,
         stage="deploy",
-        experiment_name=_experiment_name(cfg),
-        experiment_uid=cfg.experiment_uid,
         config_name=CONFIG_NAME,
         logger_enabled=True,
         parent_run_id=parent.run_id,
@@ -159,7 +196,7 @@ def test_parent_run_and_extra_tags_are_recorded(
     assert run.data.tags[MLFLOW_PARENT_RUN_ID] == parent.run_id
     assert run.data.tags["checkpoint_path"] == "/ckpt/best.ckpt"
     assert run.data.tags["count"] == "2"
-    assert context.run_name == f"deploy_centerpoint_t4_v2_gen1_base_{EXPERIMENT_UID}"
+    assert context.run_name == f"deploy_gen1_base_{EXPERIMENT_UID}"
 
 
 def test_disabled_logger_returns_no_context_and_touches_no_store(
@@ -193,8 +230,8 @@ def test_pre_created_run_is_loaded_instead_of_creating_a_new_one(
         config_name=CONFIG_NAME,
         hydra_dir=hydra_runtime.work_dir,
         stage="train",
-        experiment_name="centerpoint_t4_v2_gen1_base",
-        run_name="train_centerpoint_t4_v2_gen1_base_resumed",
+        experiment_name=FULL_EXPERIMENT_NAME,
+        run_name="train_gen1_base_resumed",
     )
     monkeypatch.setenv(AUTOWARE_ML_RUN_ID_ENV, prepared.run_id)
 
@@ -202,7 +239,7 @@ def test_pre_created_run_is_loaded_instead_of_creating_a_new_one(
 
     assert context is not None
     assert context.run_id == prepared.run_id
-    assert context.run_name == "train_centerpoint_t4_v2_gen1_base_resumed"
+    assert context.run_name == "train_gen1_base_resumed"
     assert context.hydra_dir == hydra_runtime.work_dir
     client = MlflowClient(tracking_uri=context.tracking_uri)
     assert len(client.search_runs([context.experiment_id])) == 1
@@ -224,6 +261,8 @@ def test_pre_created_run_on_another_hydra_dir_is_rejected(
         config_name=CONFIG_NAME,
         hydra_dir=other_dir,
         stage="train",
+        experiment_name=FULL_EXPERIMENT_NAME,
+        run_name="train_gen1_base_other",
     )
     monkeypatch.setenv(AUTOWARE_ML_RUN_ID_ENV, prepared.run_id)
 

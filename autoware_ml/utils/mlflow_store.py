@@ -25,8 +25,12 @@ import mlflow
 from mlflow.entities import ViewType
 from mlflow.tracking import MlflowClient
 
-from autoware_ml.utils.cli.helpers import infer_user_config_name
-from autoware_ml.utils.mlflow_helpers import MLFLOW_PARENT_RUN_ID, artifact_uri_to_path
+from autoware_ml.utils.cli.helpers import compose_config_reference
+from autoware_ml.utils.mlflow_helpers import (
+    MLFLOW_PARENT_RUN_ID,
+    artifact_uri_to_path,
+    resolve_experiment_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +40,8 @@ def normalize_experiment_name(experiment_name: str | None, config_name: str | No
 
     Args:
         experiment_name: Explicit MLflow experiment name.
-        config_name: User-facing config name used as shorthand.
+        config_name: Task config used as shorthand. The config is composed and its experiment
+            name resolved the way the CLI and the entrypoints resolve it.
 
     Returns:
         Resolved experiment name, or ``None`` when neither input is provided.
@@ -44,7 +49,7 @@ def normalize_experiment_name(experiment_name: str | None, config_name: str | No
     if experiment_name is not None and config_name is not None:
         raise ValueError("Use either --experiment-name or --config-name, not both.")
     if config_name is not None:
-        return infer_user_config_name(config_name, "tasks").replace("/", "_")
+        return resolve_experiment_name(compose_config_reference(config_name, "tasks"))
     return experiment_name
 
 

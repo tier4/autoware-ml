@@ -31,14 +31,14 @@ An experiment is trained through the standard entrypoint, with `--weights` suppl
 autoware-ml train --config-name detection3d/transfusion/t4dataset/voxel0170_second_secfpn_b16_30e_t4dataset_120m_j6gen2_base
 ```
 
-Checkpoints are written to `mlruns/<config_name>/<run_id>/artifacts/checkpoints/` as `best.ckpt` and `last.ckpt`.
+Checkpoints are written to `mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/checkpoints/` as `best.ckpt` and `last.ckpt`.
 
 ## Evaluation
 
 ```bash
 autoware-ml test \
     --config-name detection3d/transfusion/t4dataset/voxel0170_second_secfpn_b16_30e_t4dataset_120m_j6gen2_base \
-    --weights mlruns/detection3d/transfusion/t4dataset/voxel0170_second_secfpn_b16_30e_t4dataset_120m_j6gen2_base/<run_id>/artifacts/checkpoints/best.ckpt
+    --weights mlruns/transfusion/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base/voxel0170_second_secfpn_b16_30e_t4dataset_120m/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 Evaluation runs on a single device by default so metrics are deterministic. Pass `--use-config-devices` to keep the `trainer.devices` from the config.
@@ -48,7 +48,7 @@ Evaluation runs on a single device by default so metrics are deterministic. Pass
 ```bash
 autoware-ml deploy \
     --config-name detection3d/transfusion/t4dataset/voxel0170_second_secfpn_b16_30e_t4dataset_120m_j6gen2_base \
-    --weights mlruns/detection3d/transfusion/t4dataset/voxel0170_second_secfpn_b16_30e_t4dataset_120m_j6gen2_base/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/transfusion/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base/voxel0170_second_secfpn_b16_30e_t4dataset_120m/<run_id>/artifacts/checkpoints/best.ckpt \
     --release v1.0.0
 ```
 
@@ -65,7 +65,7 @@ The model exports one ONNX main body wrapping the voxel encoder, sparse encoder,
 
 The `height` channel of `bbox_pred0` is the z of the box gravity center, which is how `autoware_lidar_transfusion` reads it.
 
-Exports land in `mlruns/<config_name>/<run_id>/artifacts/exports/` of a dedicated deploy run linked to the training run. Every module is stamped with its provenance and the `--release` version; omit `--release` only for throwaway exports, which are stamped `unversioned`. The current verification scope covers ONNX export. TensorRT engine generation has not been validated yet.
+Exports land in `mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/exports/` of a dedicated deploy run linked to the training run. Every module is stamped with its provenance and the `--release` version; omit `--release` only for throwaway exports, which are stamped `unversioned`. The current verification scope covers ONNX export. TensorRT engine generation has not been validated yet.
 
 ## Implementation
 

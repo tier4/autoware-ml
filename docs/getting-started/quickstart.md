@@ -42,7 +42,7 @@ Open [http://localhost:5000](http://localhost:5000) to view loss curves, metrics
 ```bash
 autoware-ml deploy \
     --config-name segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m \
-    --weights mlruns/segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/ptv3_seg/NuScenesDataset-base-v1.0.0/nuscenes/voxel005_base_b16_50e_nuscenes_51m/<run_id>/artifacts/checkpoints/best.ckpt \
     deploy.tensorrt.enabled=false
 ```
 
@@ -53,5 +53,5 @@ To evaluate a trained checkpoint before deployment:
 ```bash
 autoware-ml test \
     --config-name segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m \
-    --weights mlruns/segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m/<run_id>/artifacts/checkpoints/best.ckpt
+    --weights mlruns/ptv3_seg/NuScenesDataset-base-v1.0.0/nuscenes/voxel005_base_b16_50e_nuscenes_51m/<run_id>/artifacts/checkpoints/best.ckpt
 ```

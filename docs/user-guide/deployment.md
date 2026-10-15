@@ -22,7 +22,7 @@ shipped file always carries its own metadata.
 ```bash
 autoware-ml deploy \
     --config-name <task>/<model>/<config> \
-    --weights mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt
+    --weights mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 `--weights` accepts one or more checkpoint paths and is the only way to supply
@@ -45,7 +45,7 @@ You can disable either stage during iteration:
 ```bash
 autoware-ml deploy \
     --config-name <task>/<model>/<config> \
-    --weights mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/checkpoints/best.ckpt \
     deploy.tensorrt.enabled=false
 ```
 
@@ -63,8 +63,8 @@ the run artifact tree.
 ```bash
 autoware-ml deploy \
     --config-name <task>/<model>/<config> \
-    --weights mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt \
-    output_dir=mlruns/<task>/<model>/<config>/<deploy_run_id>/artifacts/custom_exports
+    --weights mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/checkpoints/best.ckpt \
+    output_dir=mlruns/<experiment_group_name>/<experiment_name>/<deploy_run_id>/artifacts/custom_exports
 ```
 
 ## Export Modules
@@ -85,8 +85,8 @@ trained parts of that model into a single export:
 ```bash
 autoware-ml deploy \
     --config-name detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base \
-    --weights mlruns/segmentation3d/ptv3/t4dataset/voxel012_tiny_b16_50e_t4dataset_122m_j6gen2_semaseg/<run_id>/artifacts/checkpoints/best.ckpt \
-    --weights mlruns/detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base/<run_id>/artifacts/checkpoints/best.ckpt
+    --weights mlruns/ptv3_seg/T4Dataset-j6gen2_semaseg-v1.0.0/j6gen2_semaseg/voxel012_tiny_b16_50e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/ptv3/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base/voxel012_tiny_b8_30e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 Checkpoints are applied in the order they appear on the command line, and
@@ -235,7 +235,7 @@ Override deployment settings from CLI:
 ```bash
 autoware-ml deploy \
     --config-name <task>/<model>/<config> \
-    --weights mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/checkpoints/best.ckpt \
     deploy.tensorrt.input_shapes.input.opt_shape=[1,3,256,256] \
     deploy.tensorrt.workspace_size=8589934592
 ```

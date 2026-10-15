@@ -425,7 +425,7 @@ autoware-ml train --config-name my_task/my_model/my_config
 # Deploy
 autoware-ml deploy \
     --config-name my_task/my_model/my_config \
-    --weights mlruns/my_task/my_model/my_config/<run_id>/artifacts/checkpoints/last.ckpt
+    --weights mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/checkpoints/last.ckpt
 ```
 
 ## Common Patterns

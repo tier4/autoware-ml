@@ -54,8 +54,9 @@ Testing and deployment create separate runs in the same experiment and keep line
 
 ## Using the UI
 
-Experiments are derived from config paths with `/` replaced by `_`
-(e.g., `<task>_<model>_<config>`). Runs are named with stage and timestamp,
+Experiments are named `<experiment_group_name>/<experiment_name>` from the two keys
+of the task config, so the UI groups them by model, database version and vehicle rather
+than by config path. Runs are named `<stage>_<experiment_name>_<experiment_uid>`
 and tagged with metadata such as:
 
 - `config_name`
@@ -107,7 +108,7 @@ autoware-ml train --config-name <task>/<model>/<config> \
 import mlflow
 
 mlflow.set_tracking_uri("sqlite:///mlruns/mlflow.db")
-experiment = mlflow.get_experiment_by_name("<task>_<model>_<config>")
+experiment = mlflow.get_experiment_by_name("<experiment_group_name>/<experiment_name>")
 
 runs = mlflow.search_runs(
     experiment_ids=[experiment.experiment_id],
@@ -118,12 +119,20 @@ runs = mlflow.search_runs(
 
 ## Storage Location
 
-Autoware-ML now keeps both Hydra scratch outputs and MLflow-owned artifacts
+Every task config names its MLflow experiment through two keys,
+`experiment_group_name` and `experiment_name`, and the experiment is
+`<experiment_group_name>/<experiment_name>`. That one name keys the experiment, its
+artifact root and the Hydra directories alike, for `train`, `test` and `deploy` and
+whether a stage is launched through the CLI or its entrypoint directly. Two configs
+that set the same two keys share one experiment. Runs are named
+`<stage>_<experiment_name>_<experiment_uid>`.
+
+Autoware-ML keeps both Hydra scratch outputs and MLflow-owned artifacts
 under the same `mlruns/` root:
 
 - `mlruns/mlflow.db`: Shared SQLite backend store
-- `mlruns/<task>/<model>/<config>/<run_id>/artifacts/hydra/`: Hydra scratch directory and local command outputs
-- `mlruns/<task>/<model>/<config>/<run_id>/artifacts/`: Run-owned MLflow artifacts
-- `mlruns/<task>/<model>/<config>/<run_id>/artifacts/run_metadata.json`: Run metadata used to preserve lineage across train, test, and deploy
+- `mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/hydra/`: Hydra scratch directory and local command outputs
+- `mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/`: Run-owned MLflow artifacts
+- `mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/run_metadata.json`: Run metadata used to preserve lineage across train, test, and deploy
 
 To back up experiments completely, copy `mlruns/`.

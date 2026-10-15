@@ -17,6 +17,9 @@
 from pathlib import Path
 
 from mlflow.tracking import MlflowClient
+import pytest
+from omegaconf import OmegaConf
+from unittest.mock import patch
 
 from autoware_ml.utils.mlflow_helpers import MLFLOW_PARENT_RUN_ID
 from autoware_ml.utils.mlflow_store import (
@@ -30,7 +33,8 @@ SAMPLE_CONFIG_NAME = (
     "detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_50e_t4dataset_120m_j6gen2_base"
 )
 SAMPLE_EXPERIMENT_NAME = (
-    "detection3d_centerpoint_t4dataset_voxel024_second_secfpn_b16_50e_t4dataset_120m_j6gen2_base"
+    "centerpoint/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base/"
+    "voxel024_second_secfpn_b16_50e_t4dataset_120m"
 )
 
 
@@ -40,13 +44,31 @@ class TestNormalizeExperimentName:
     def test_uses_experiment_name_directly(self) -> None:
         assert normalize_experiment_name(SAMPLE_EXPERIMENT_NAME, None) == SAMPLE_EXPERIMENT_NAME
 
-    def test_derives_experiment_name_from_config_name(self) -> None:
+    def test_derives_experiment_name_from_the_composed_config(self) -> None:
+        """
+        ``--config-name`` composes the config and names the experiment the way the CLI and the
+        entrypoints do, so the export finds the experiment they wrote to.
+        """
+        cfg = OmegaConf.create(
+            {
+                "experiment_group_name": "centerpoint/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base",
+                "experiment_name": "voxel024_second_secfpn_b16_50e_t4dataset_120m",
+            }
+        )
+        with patch(
+            "autoware_ml.utils.mlflow_store.compose_config_reference", return_value=cfg
+        ) as compose_mock:
+            assert normalize_experiment_name(None, SAMPLE_CONFIG_NAME) == SAMPLE_EXPERIMENT_NAME
+
+        compose_mock.assert_called_once_with(SAMPLE_CONFIG_NAME, "tasks")
+
+    def test_derives_experiment_name_from_the_bundled_config(self) -> None:
+        """The real config composes to its ``<experiment_group_name>/<experiment_name>``."""
         assert normalize_experiment_name(None, SAMPLE_CONFIG_NAME) == SAMPLE_EXPERIMENT_NAME
 
-    def test_strips_experiments_prefix_from_config_name(self) -> None:
-        assert (
-            normalize_experiment_name(None, f"tasks/{SAMPLE_CONFIG_NAME}") == SAMPLE_EXPERIMENT_NAME
-        )
+    def test_rejects_both_experiment_name_and_config_name(self) -> None:
+        with pytest.raises(ValueError, match="not both"):
+            normalize_experiment_name(SAMPLE_EXPERIMENT_NAME, SAMPLE_CONFIG_NAME)
 
 
 class TestExportExperiment:
