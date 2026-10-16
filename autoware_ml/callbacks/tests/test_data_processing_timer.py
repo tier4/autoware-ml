@@ -146,45 +146,5 @@ class TestSanityCheck(unittest.TestCase):
         self.assertEqual(module.log.call_args_list, [])
 
 
-class TestLogInterval(unittest.TestCase):
-    """The batch metric is logged every ``log_interval`` batches."""
-
-    def test_only_matching_batches_are_logged(self) -> None:
-        """With an interval of two, batch 1 contributes no metric."""
-        callback = DataProcessingTimer(log_interval=2)
-        trainer, module = _trainer(), _module()
-
-        callback.on_train_batch_start(trainer, module, batch=_batch(0.5), batch_idx=1)
-
-        self.assertEqual(module.log.call_args_list, [])
-
-    def test_matching_batches_are_logged(self) -> None:
-        """Batch 2 lands on an interval of two and is logged."""
-        callback = DataProcessingTimer(log_interval=2)
-        trainer, module = _trainer(), _module()
-
-        callback.on_train_batch_start(trainer, module, batch=_batch(0.5), batch_idx=2)
-
-        self.assertAlmostEqual(_logged(module)["train/data_processing_total_time"], 0.5)
-
-    def test_skipped_batches_still_reach_the_epoch_summary(self) -> None:
-        """Accumulation is independent of the logging interval."""
-        callback = DataProcessingTimer(log_interval=10)
-        trainer, module = _trainer(), _module()
-
-        for batch_idx, io_time in enumerate((1.0, 2.0, 3.0)):
-            callback.on_train_batch_start(
-                trainer, module, batch=_batch(io_time), batch_idx=batch_idx
-            )
-        callback.on_train_epoch_end(trainer, module)
-
-        self.assertAlmostEqual(_logged(module)["train/data_processing_total_time_mean"], 2.0)
-
-    def test_non_positive_interval_is_rejected(self) -> None:
-        """A zero interval would divide by zero, so it is refused."""
-        with self.assertRaisesRegex(ValueError, "log_interval"):
-            DataProcessingTimer(log_interval=0)
-
-
 if __name__ == "__main__":
     unittest.main()

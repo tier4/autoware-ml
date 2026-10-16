@@ -43,8 +43,8 @@ class DynamicValidation(Callback):
     validation runs are counted from epoch 0, not from the segment start.
 
     The callback only touches ``trainer.check_val_every_n_epoch``. In particular it never
-    modifies ``trainer.log_every_n_steps``, which other callbacks read for their own logging
-    cadence. It requires validation to be scheduled per epoch: ``val_check_interval`` must be
+    modifies ``trainer.log_every_n_steps``, which decides how often Lightning writes out the
+    step metrics. It requires validation to be scheduled per epoch: ``val_check_interval`` must be
     ``1.0`` and ``check_val_every_n_epoch`` must not be ``None``, otherwise Lightning would
     validate on a step or time basis and the epoch schedule would be meaningless.
 

@@ -40,15 +40,15 @@ callbacks:
     _target_: lightning.pytorch.callbacks.LearningRateMonitor
     logging_interval: step
 
+  # Both timers log their step metrics on every batch; the trainer's log_every_n_steps
+  # decides which steps reach the logger.
   iteration_timer:
     _target_: autoware_ml.callbacks.iteration_timer.IterationTimer
     sync_cuda: false
     warmup_iters: 1
-    log_interval: ${trainer.log_every_n_steps}
 
   data_processing_timer:
     _target_: autoware_ml.callbacks.data_processing_timer.DataProcessingTimer
-    log_interval: ${trainer.log_every_n_steps}
 
   model_summary_example_input:
     _target_: autoware_ml.callbacks.model_summary_example_input.ModelSummaryExampleInput

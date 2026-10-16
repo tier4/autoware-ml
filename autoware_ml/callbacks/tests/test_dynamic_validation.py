@@ -380,8 +380,8 @@ class TestOnTrainEpochStart(DynamicValidationTestCase):
     def test_never_touches_log_every_n_steps(self) -> None:
         """
         Input: the trainer driven through ``setup`` and epoch starts 0, 19, 20 and 30.
-        Expected: the callback rewrites only ``check_val_every_n_epoch``. Other callbacks read
-        ``log_every_n_steps`` for their cadence, so it must be left exactly as configured.
+        Expected: the callback rewrites only ``check_val_every_n_epoch``. Lightning reads
+        ``log_every_n_steps`` to write out the step metrics, so it must be left as configured.
         Check: ``log_every_n_steps`` still equals the configured value after every hook.
         """
         self.callback.setup(self.trainer, self.module, stage="fit")

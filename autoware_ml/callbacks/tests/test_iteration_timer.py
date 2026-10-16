@@ -317,52 +317,6 @@ class TestSanityCheck(unittest.TestCase):
         self.assertEqual(module.log.call_args_list, [])
 
 
-class TestLogInterval(unittest.TestCase):
-    """The step metrics are logged every ``log_interval`` batches."""
-
-    def test_only_matching_batches_are_logged(self) -> None:
-        """With an interval of two, batch 1 contributes no step metric."""
-        callback = IterationTimer(log_interval=2)
-        trainer, module = _trainer(), _module()
-
-        with _clock([0.0, 1.0, 2.0, 3.0]):
-            _run_train_batch(callback, trainer, module, batch_idx=0)
-            module.log.reset_mock()
-            _run_train_batch(callback, trainer, module, batch_idx=1)
-
-        self.assertEqual(module.log.call_args_list, [])
-
-    def test_matching_batches_are_logged(self) -> None:
-        """Batch 2 lands on an interval of two and logs every step metric."""
-        callback = IterationTimer(log_interval=2)
-        trainer, module = _trainer(), _module()
-
-        with _clock([0.0, 1.0, 2.0, 3.0, 5.0, 6.0]):
-            _run_train_batch(callback, trainer, module, batch_idx=0)
-            _run_train_batch(callback, trainer, module, batch_idx=1)
-            module.log.reset_mock()
-            _run_train_batch(callback, trainer, module, batch_idx=2)
-
-        logged = _logged(module)
-        self.assertAlmostEqual(logged["train/data_waiting_time"], 2.0)
-        self.assertAlmostEqual(logged["train/batch_forward_time"], 1.0)
-        self.assertAlmostEqual(logged["train/total_iter_time"], 3.0)
-
-    def test_skipped_batches_still_reach_the_epoch_summary(self) -> None:
-        """Accumulation is independent of the logging interval."""
-        callback = IterationTimer(warmup_iters=0, log_interval=10)
-        trainer, module = _trainer(), _module()
-
-        with _clock(_THREE_BATCH_CLOCK):
-            for batch_idx in range(3):
-                _run_train_batch(callback, trainer, module, batch_idx=batch_idx)
-        callback.on_train_epoch_end(trainer, module)
-
-        logged = _logged(module)
-        self.assertAlmostEqual(logged["train/batch_forward_time_mean"], 2.0)
-        self.assertAlmostEqual(logged["train/total_iter_time_mean"], 4.5)
-
-
 class TestConstructorValidation(unittest.TestCase):
     """Invalid timer settings are refused at construction."""
 
@@ -370,11 +324,6 @@ class TestConstructorValidation(unittest.TestCase):
         """A negative warmup would slice from the end of the timings, so it is refused."""
         with self.assertRaisesRegex(ValueError, "warmup_iters"):
             IterationTimer(warmup_iters=-1)
-
-    def test_non_positive_interval_is_rejected(self) -> None:
-        """A zero interval would divide by zero, so it is refused."""
-        with self.assertRaisesRegex(ValueError, "log_interval"):
-            IterationTimer(log_interval=0)
 
 
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA synchronization needs a CUDA device")
