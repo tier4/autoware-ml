@@ -343,7 +343,13 @@ class TestCenterHead(unittest.TestCase):
 
         self.assertTrue(losses["loss_heatmap"].item() >= 0.0)
         self.assertTrue(losses["loss_bbox"].item() >= 0.0)
-        self.assertTrue(torch.isclose(losses["loss"], losses["loss_heatmap"] + losses["loss_bbox"]))
+        # The box loss is logged unweighted, the weight only enters the total
+        self.assertTrue(
+            torch.isclose(
+                losses["loss"],
+                losses["loss_heatmap"] + self.center_head.loss_bbox_weight * losses["loss_bbox"],
+            )
+        )
 
     def _build_zero_center_head_outputs_for_loss(
         self, batch_size: int = 1, use_velocity: bool = True
@@ -391,15 +397,14 @@ class TestCenterHead(unittest.TestCase):
         self.assertTrue(targets.valid_masks[0, 0].item())
         self.assertFalse(targets.valid_masks[0, 1].item())
 
-    def test_loss_ignores_nan_velocity_targets(self) -> None:
+    def test_loss_bbox_is_logged_before_weighting(self) -> None:
         """
-        Test that the NaN velocity channels of an otherwise valid box are dropped from the box
-        loss instead of poisoning it, and that the remaining channels are still averaged over
-        their own count.
+        Test that loss_bbox is the plain average absolute error over the valid channels, so its
+        curve compares across runs whatever loss_bbox_weight they train with, and that the weight
+        only enters the total loss.
         """
-        # Velocities are unknown for this box, everything else is a normal target
         gt_bboxes_3d = torch.tensor(
-            [[[2.2, 3.3, 0.2, 4.0, 1.6, 1.5, 0.25, math.nan, math.nan, 0.0]]],
+            [[[2.2, 3.3, 0.2, 4.0, 1.6, 1.5, 0.25, 0.5, -0.1, 0.0]]],
             device=self.device,
             dtype=torch.float32,
         )
@@ -411,12 +416,7 @@ class TestCenterHead(unittest.TestCase):
             gt_valid_bboxes=self.gt_valid_bboxes,
         )
 
-        self.assertTrue(torch.isfinite(losses["loss"]))
-        self.assertTrue(torch.isfinite(losses["loss_bbox"]))
-        self.assertTrue(torch.isfinite(losses["loss_heatmap"]))
-
-        # Predictions are all zero, so every surviving channel contributes |target|, averaged over
-        # the eight non-NaN channels only and scaled by loss_bbox_weight.
+        # Predictions are all zero, so every channel contributes |target|
         expected_abs_targets = [
             0.2,  # x offset inside the grid cell
             0.3,  # y offset inside the grid cell
@@ -426,14 +426,22 @@ class TestCenterHead(unittest.TestCase):
             math.log(1.5),
             abs(math.sin(0.25)),
             abs(math.cos(0.25)),
+            0.5,
+            0.1,
         ]
-        expected_loss_bbox = 0.25 * sum(expected_abs_targets) / len(expected_abs_targets)
+        expected_loss_bbox = sum(expected_abs_targets) / len(expected_abs_targets)
         self.assertAlmostEqual(losses["loss_bbox"].item(), expected_loss_bbox, places=5)
+        self.assertAlmostEqual(
+            losses["loss"].item(),
+            losses["loss_heatmap"].item() + 0.25 * expected_loss_bbox,
+            places=5,
+        )
 
-    def test_loss_backward_keeps_gradients_finite_with_nan_velocity_targets(self) -> None:
+    def test_loss_backward_keeps_gradients_finite_with_padded_targets(self) -> None:
         """
-        Test that a batch holding NaN velocity and padded targets still backpropagates finite
-        gradients, since a single NaN in the loss would wipe out every head parameter.
+        Test that a batch holding padded targets, whose zero dimensions encode to -inf, still
+        backpropagates finite gradients, since a single NaN in the loss would wipe out every
+        head parameter.
         """
         outputs = self._build_zero_center_head_outputs_for_loss()
         assert outputs.center_head_outputs is not None
@@ -455,7 +463,7 @@ class TestCenterHead(unittest.TestCase):
             gt_bboxes_3d=torch.tensor(
                 [
                     [
-                        [2.2, 3.3, 0.2, 4.0, 1.6, 1.5, 0.25, math.nan, math.nan, 0.0],
+                        [2.2, 3.3, 0.2, 4.0, 1.6, 1.5, 0.25, 0.5, -0.1, 0.0],
                         [0.0] * 10,
                     ]
                 ],
@@ -470,22 +478,15 @@ class TestCenterHead(unittest.TestCase):
         for prediction in predictions:
             assert prediction is not None and prediction.grad is not None
             self.assertTrue(torch.isfinite(prediction.grad).all())
-        # The velocity channels are the NaN ones, so they must receive no gradient at all
-        assert center_head_outputs.vel is not None and center_head_outputs.vel.grad is not None
-        self.assertTrue(
-            torch.equal(
-                center_head_outputs.vel.grad,
-                torch.zeros_like(center_head_outputs.vel.grad),
-            )
-        )
 
     def test_loss_is_non_finite_when_a_valid_box_has_non_finite_geometry_targets(self) -> None:
         """
-        Test that only velocity is allowed to be unknown: a NaN or infinite target on any other
-        channel of a valid box is corrupt ground truth and is left to surface as a non-finite
-        loss instead of being masked away.
+        Test that a NaN or infinite target on any channel of a valid box is corrupt ground truth
+        and is left to surface as a non-finite loss instead of being masked away. Unknown
+        velocities are zeroed by the datamodule before the batch reaches the head.
         """
         corrupt_gt_bboxes = {
+            "nan_velocity": [2.2, 3.3, 0.2, 4.0, 1.6, 1.5, 0.25, math.nan, math.nan, -0.2],
             # log(0) -> -inf on the length channel
             "zero_length": [2.2, 3.3, 0.2, 0.0, 1.6, 1.5, 0.25, 0.5, -0.1, -0.2],
             # log(negative) -> NaN on the width channel
@@ -776,6 +777,29 @@ class TestCenterHead(unittest.TestCase):
         outputs.heatmap[0, 1, 2, 3] = self._logit(0.8)
         outputs.heatmap[1, 1, 3, 3] = self._logit(0.6)
         return outputs
+
+    def test_decode_outputs_casts_half_precision_maps_to_float32(self) -> None:
+        """
+        Test that the float16 maps mixed precision evaluation hands over decode into float32
+        predictions, which the prediction dataclasses require.
+        """
+        full = self._build_ranked_center_head_outputs()
+        half_outputs = CenterHeadOutputs(
+            heatmap=full.heatmap.half(),
+            reg=full.reg.half(),
+            height=full.height.half(),
+            dim=full.dim.half(),
+            rot=full.rot.half(),
+            vel=full.vel.half() if full.vel is not None else None,
+        )
+
+        predictions = self._decode(self.center_head, half_outputs)
+
+        self.assertEqual(len(predictions), 2)
+        for sample in predictions:
+            self.assertEqual(sample.bboxes_3d.dtype, torch.float32)
+            self.assertEqual(sample.scores_3d.dtype, torch.float32)
+        self.assertEqual(predictions[0].bboxes_3d.shape[0], 3)
 
     def test_decode_outputs_keeps_survivors_ranked_across_classes(self) -> None:
         """

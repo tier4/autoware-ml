@@ -296,8 +296,10 @@ class CenterHead(nn.Module):
                 heatmap loss, and box regression loss.
 
         Raises:
-            ValueError: If the outputs hold no CenterHeadOutputs, or if a valid ground truth box
-                yields a non-finite regression target outside of the velocity channels.
+            ValueError: If the outputs hold no CenterHeadOutputs. A valid ground truth box with
+                a non-finite regression target is corrupt ground truth, the datamodule zeroes
+                unknown velocities before the batch reaches the head, and it surfaces as a
+                non-finite loss rather than being masked away.
         """
         if outputs.center_head_outputs is None:
             raise ValueError(
@@ -340,29 +342,16 @@ class CenterHead(nn.Module):
         # (batch_size, max_num_bboxes, output_channels)
         reg_targets = torch.where(targets.valid_masks.unsqueeze(-1), targets.reg_targets, 0.0)
 
-        # Only the velocity channels of a valid box are allowed to be non-finite, they are unknown
-        # for objects the annotation pipeline could not track, so they are dropped from the loss
-        # and zeroed out for the same reason. A non-finite target on any other channel is corrupt
-        # ground truth and is left to surface as a non-finite loss.
-        if self.use_velocity:
-            num_geometry_channels = self.box_code_size - 2
-            # (batch_size, max_num_bboxes, 2)
-            velocity_finite_masks = torch.isfinite(reg_targets[:, :, num_geometry_channels:])
-            bbox_valid_masks[:, :, num_geometry_channels:] *= velocity_finite_masks.float()
-            reg_targets[:, :, num_geometry_channels:] = torch.where(
-                velocity_finite_masks, reg_targets[:, :, num_geometry_channels:], 0.0
-            )
-
         bbox_losses = self.loss_bbox(flatten_bbox_predictions, reg_targets) * bbox_valid_masks
 
         # Average over the number of valid bounding boxes and avoid division by zero
-        bbox_losses = self.loss_bbox_weight * (
-            bbox_losses.sum() / bbox_valid_masks.sum().clamp_min(1.0)
-        )
-        total_loss = loss_heatmap + bbox_losses
+        loss_bbox = bbox_losses.sum() / bbox_valid_masks.sum().clamp_min(1.0)
+        # The box loss is logged before weighting so that its curve compares across runs
+        # whatever loss_bbox_weight they train with, the weight only shapes the total.
+        total_loss = loss_heatmap + self.loss_bbox_weight * loss_bbox
         # MappingProxyType is used to create a read-only dictionary for the loss outputs
         return MappingProxyType(
-            {"loss": total_loss, "loss_heatmap": loss_heatmap, "loss_bbox": bbox_losses}
+            {"loss": total_loss, "loss_heatmap": loss_heatmap, "loss_bbox": loss_bbox}
         )
 
     def _decode_regression_outputs(
@@ -515,7 +504,20 @@ class CenterHead(nn.Module):
                 "CenterHeadOutputs must be provided in Detection3DOutputs for centerhead decoding."
             )
 
-        heatmaps = self._decode_heatmap_outputs(outputs.center_head_outputs)
+        # Mixed precision evaluation hands over float16 maps, the boxes decode in float32: the
+        # prediction dataclasses require it, and the grid to metric conversion would lose
+        # precision in half.
+        center_head_outputs = outputs.center_head_outputs
+        center_head_outputs = CenterHeadOutputs(
+            heatmap=center_head_outputs.heatmap.float(),
+            reg=center_head_outputs.reg.float(),
+            height=center_head_outputs.height.float(),
+            dim=center_head_outputs.dim.float(),
+            rot=center_head_outputs.rot.float(),
+            vel=center_head_outputs.vel.float() if center_head_outputs.vel is not None else None,
+        )
+
+        heatmaps = self._decode_heatmap_outputs(center_head_outputs)
         batch_size, num_classes, height, width = heatmaps.shape
         max_num_bboxes = min(self.post_max_size, height * width)
 
@@ -539,7 +541,7 @@ class CenterHead(nn.Module):
 
         # (batch_size, num_classes*max_num_bboxes, box_code_size)
         flatten_bboxes_predictions = self._decode_regression_outputs(
-            center_head_outputs=outputs.center_head_outputs,
+            center_head_outputs=center_head_outputs,
             flatten_indices=flatten_indices,
             width=width,
         )
