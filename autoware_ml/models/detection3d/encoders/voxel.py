@@ -85,8 +85,8 @@ class HardSimpleVoxelSinCosEncoder(nn.Module):
         ).contiguous()
         # (1, C, C) + (1, C, C) * (N, C, 1) -> (N, C, C)
         y = torch.addcmul(
-            self.exponent_bias,  # type: ignore
-            self.exponent_scale,  # type: ignore
+            self.exponent_bias,
+            self.exponent_scale,
             voxel_mean.unsqueeze(-1),
         )
         y = y.reshape(-1, self.in_channels * self.in_channels)

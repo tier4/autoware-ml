@@ -18,8 +18,6 @@ import torch
 import torch.nn.functional as F
 
 
-# TODO (KokSeang): Any Exportable-based modules should be moved to the deployment folder since
-# they can be reused
 class ExportableMultiheadAttention(nn.Module):
     """ONNX/TensorRT-friendly equivalent of ``nn.MultiheadAttention``.
 

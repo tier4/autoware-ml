@@ -239,7 +239,6 @@ class BEVFusionDetectionModel(ModuleBaseModel):
         data_preprocessor: DataPreprocessor,
         lidar_network: BEVFusionLidar | None,
         camera_network: BEVFusionCamera | None,
-        # TODO (KokSeang): Consider making the head a generic DetectionHead type instead of TransFusionHead.
         bbox_head: TransFusionHead,
         log_dict_configs: LogDictConfigs,
         optimizer: Callable[..., Optimizer] | None = None,
@@ -329,12 +328,7 @@ class BEVFusionDetectionModel(ModuleBaseModel):
                 f"Got image BEV shape {image_bev_shape} and lidar BEV shape {lidar_bev_shape}."
             )
 
-    # TODO(KokSeang): This signature is temporary different from the base class,
-    # and will be refactored to match the base class signature once the detection metric is refactored
-    # to accept ModelPredictions and ModelBatchInputs directly.
-    def build_eval_output(  # type: ignore[override]
-        self, batch: ModelBatchInputs, outputs: ModelOutputs
-    ) -> dict[str, Any]:
+    def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> dict[str, Any]:
         """Decode detections and pair them with ground truth for metrics."""
         if outputs.detection3d_head_outputs is None:
             raise ValueError(
@@ -514,7 +508,7 @@ class BEVFusionDetectionModel(ModuleBaseModel):
                 if self.partial_annotations is not None
                 else None
             ),
-        )  # type: ignore[return-value]
+        )
 
     def decode_outputs(
         self, multi_task_batch_inputs: ModelBatchInputs, outputs: ModelOutputs

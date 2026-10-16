@@ -66,7 +66,7 @@ class LoadImagesFromFile(BaseTransform):
             torch.Tensor: The image in channel first layout, in unit range when
               ``normalize_to_unit`` is set and in ``[0, 255]`` otherwise.
         """
-        decoded_image = decode_image(image_path, mode=self.color_type.value).to(torch.float32)  # type: ignore[arg-type]
+        decoded_image = decode_image(image_path, mode=self.color_type.value).to(torch.float32)
         if self.normalize_to_unit:
             decoded_image = decoded_image / 255.0
         return decoded_image

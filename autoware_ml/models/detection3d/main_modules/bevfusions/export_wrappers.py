@@ -22,7 +22,6 @@ from autoware_ml.dataclasses.models.detection3d.head_outputs import (
 from autoware_ml.models.detection3d.heads.transfusions.transfusion_head import TransFusionHead
 
 
-# TODO(Kok Seang): Move this to a more appropriate location, e.g. in the head module.
 def export_detection_outputs(
     head: TransFusionHead, outputs: TransFusionHeadOutputs
 ) -> tuple[

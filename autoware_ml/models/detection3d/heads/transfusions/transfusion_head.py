@@ -163,12 +163,11 @@ class SeparateHead1D(nn.Module):
                 layers.append(nn.BatchNorm1d(hidden_channels, eps=norm_eps, momentum=norm_momentum))
                 layers.append(nn.ReLU(inplace=True))
                 current_channels = hidden_channels
-            layers.append(nn.Conv1d(current_channels, out_channels, kernel_size=1))
+            output_conv = nn.Conv1d(current_channels, out_channels, kernel_size=1)
+            if name == "heatmaps":
+                nn.init.constant_(output_conv.bias, -2.19)
+            layers.append(output_conv)
             self.heads[name] = nn.Sequential(*layers)
-
-        # nn.ModuleDict has no .get, so membership has to be tested explicitly.
-        if "heatmaps" in self.heads:
-            nn.init.constant_(self.heads["heatmaps"][-1].bias, -2.19)  # type: ignore
 
     def forward(
         self, query_feats: Float32[torch.Tensor, "batch_size num_channels num_queries"]
@@ -432,17 +431,16 @@ class TransFusionHead(nn.Module):
         Returns:
             nn.Module: Dense heatmap head.
         """
-        dense_heatmap_head = nn.Sequential(
-            ConvModule(
-                in_channels,
-                in_channels,
-                norm_eps=self.norm_eps,
-                norm_momentum=self.norm_momentum,
-            ),
-            nn.Conv2d(in_channels, self.num_classes, kernel_size=3, padding=1),
+        # Built in forward order so a seeded initialization matches the layer order.
+        conv_module = ConvModule(
+            in_channels,
+            in_channels,
+            norm_eps=self.norm_eps,
+            norm_momentum=self.norm_momentum,
         )
-        nn.init.constant_(dense_heatmap_head[-1].bias, self.heatmap_init_bias)  # type: ignore
-        return dense_heatmap_head
+        output_conv = nn.Conv2d(in_channels, self.num_classes, kernel_size=3, padding=1)
+        nn.init.constant_(output_conv.bias, self.heatmap_init_bias)
+        return nn.Sequential(conv_module, output_conv)
 
     def _resolve_class_ids(self, selected_class_names: Sequence[str]) -> Sequence[int]:
         """Resolve class names or indices into validated class ids."""

@@ -144,13 +144,12 @@ class CenterHead(nn.Module):
         self, in_channels: int, out_channels: int, init_bias: float | None = None
     ) -> nn.Sequential:
         """Build one CenterPoint prediction branch."""
-        head = nn.Sequential(
-            ConvModule(in_channels, in_channels),
-            nn.Conv2d(in_channels, out_channels, kernel_size=1),
-        )
+        # Built in forward order so a seeded initialization matches the layer order.
+        conv_module = ConvModule(in_channels, in_channels)
+        output_conv = nn.Conv2d(in_channels, out_channels, kernel_size=1)
         if init_bias is not None:
-            nn.init.constant_(head[-1].bias, init_bias)  # type: ignore
-        return head
+            nn.init.constant_(output_conv.bias, init_bias)
+        return nn.Sequential(conv_module, output_conv)
 
     def forward(
         self, x: Float32[torch.Tensor, "batch_size neck_feature_channels height width"]

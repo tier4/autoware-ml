@@ -744,7 +744,7 @@ class TestBEVFusionDetectionModelCameraLidar(_BEVFusionDetectionModelTestCase):
                 device=self.device,
             )
 
-        camera_network.forward = record_and_return_zero_bev  # type: ignore[method-assign]
+        camera_network.forward = record_and_return_zero_bev
         # A resize by 0.48 followed by a crop, as the camera pipelines produce.
         pixel_affine = torch.tensor(
             [[0.48, 0.0, -6.0], [0.0, 0.48, -14.0], [0.0, 0.0, 1.0]],

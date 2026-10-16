@@ -307,7 +307,6 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
             multi_task_batch_inputs,
             step_prefix=SplitType.VAL.value,
         )
-        # TODO (KokSeang): Return a dataclass instead of a dict for better type safety and clarity.
         return {**metrics, "model_outputs": outputs}
 
     @final
@@ -329,7 +328,6 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
             multi_task_batch_inputs,
             step_prefix=SplitType.TEST.value,
         )
-        # TODO (KokSeang): Return a dataclass instead of a dict for better type safety and clarity.
         return {**metrics, "model_outputs": outputs}
 
     @final

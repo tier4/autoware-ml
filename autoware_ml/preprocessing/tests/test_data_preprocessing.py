@@ -93,7 +93,7 @@ def test_call_requires_explicit_is_training():
     preprocessor = DataPreprocessor(preprocessor_modules=[_ModeRecorder()])
 
     with pytest.raises(TypeError):
-        preprocessor(_batch())  # type: ignore[call-arg]
+        preprocessor(_batch())
 
 
 def test_call_chains_the_modules_from_the_collated_batch():
@@ -125,7 +125,7 @@ def test_rejects_a_module_outside_the_interface():
         return batch
 
     with pytest.raises(TypeError, match="DataPreprocessorModule"):
-        DataPreprocessor(preprocessor_modules=[stage])  # type: ignore[list-item]
+        DataPreprocessor(preprocessor_modules=[stage])
 
 
 def test_repr_names_the_modules_in_order():

@@ -166,7 +166,7 @@ class TestPointPillarPreprocessor(unittest.TestCase):
         instead of silently reusing the training budget at inference.
         """
         with self.assertRaises(TypeError):
-            PointPillarPreprocessor(  # type: ignore[call-arg]
+            PointPillarPreprocessor(
                 voxel_size=[1.0, 1.0, 4.0],
                 point_cloud_range=[0.0, 0.0, -2.0, 4.0, 4.0, 2.0],
                 max_num_points=2,

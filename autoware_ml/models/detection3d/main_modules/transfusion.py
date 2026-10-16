@@ -176,12 +176,10 @@ class TransFusionDetectionModel(ModuleBaseModel):
     def __init__(
         self,
         data_preprocessor: DataPreprocessor,
-        # TODO(KokSeang): Encoder and middle_encoder should be standardized to a common interface for all voxel encoders
         pts_voxel_encoder: nn.Module,
         pts_middle_encoder: nn.Module,
         pts_backbone: nn.Module,
         pts_neck: nn.Module,
-        # TODO(KokSeang): Consider making the head a generic DetectionHead type instead of TransFusionHead.
         bbox_head: TransFusionHead,
         log_dict_configs: LogDictConfigs,
         optimizer: Callable[..., Optimizer] | None = None,
@@ -219,12 +217,7 @@ class TransFusionDetectionModel(ModuleBaseModel):
         self.pts_neck = pts_neck
         self.bbox_head = bbox_head
 
-    # TODO(KokSeang): This signature is temporary different from the base class,
-    # and will be refactored to match the base class signature once the detection metric is refactored
-    # to accept ModelPredictions and ModelBatchInputs directly.
-    def build_eval_output(  # type: ignore[override]
-        self, batch: ModelBatchInputs, outputs: ModelOutputs
-    ) -> dict[str, Any]:
+    def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> dict[str, Any]:
         """Decode detections and pair them with ground truth for metrics."""
         if outputs.detection3d_head_outputs is None:
             raise ValueError(
@@ -319,7 +312,7 @@ class TransFusionDetectionModel(ModuleBaseModel):
                 if self.partial_annotations is not None
                 else None
             ),
-        )  # type: ignore[return-value]
+        )
 
     def decode_outputs(
         self, multi_task_batch_inputs: ModelBatchInputs, outputs: ModelOutputs

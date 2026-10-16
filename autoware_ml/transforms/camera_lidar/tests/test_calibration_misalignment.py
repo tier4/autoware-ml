@@ -172,7 +172,7 @@ class TestCalibrationMisalignmentInit(unittest.TestCase):
         transform = CalibrationMisalignment(probability=0.5)
 
         with self.assertRaises(ValidationError):
-            transform.activate.roll = True  # type: ignore[misc]
+            transform.activate.roll = True
 
     def test_missing_camera_image_data(self) -> None:
         transform = CalibrationMisalignment(probability=0.5)

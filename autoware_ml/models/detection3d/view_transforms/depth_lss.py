@@ -438,7 +438,7 @@ class DepthLSSTransform(nn.Module):
             indices.
         """
         batch_size, num_cams, depth_bins, height, width, channels = geom_feats.shape
-        geom_feats = ((geom_feats - (self.bx - self.dx / 2.0)) / self.dx).long()  # type: ignore
+        geom_feats = ((geom_feats - (self.bx - self.dx / 2.0)) / self.dx).long()
         geom_feats = geom_feats.view(batch_size * num_cams * depth_bins * height * width, channels)
         batch_indices = torch.cat(
             [

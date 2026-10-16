@@ -66,7 +66,7 @@ class BEVFusionLidar(nn.Module):
                 "Please ensure that the middle encoder is properly configured to provide "
                 "the expected BEV output shape."
             )
-        return self.pts_middle_encoder.bev_output_shape  # type: ignore
+        return self.pts_middle_encoder.bev_output_shape
 
     def forward(
         self,
@@ -119,8 +119,9 @@ class BEVFusionLidar(nn.Module):
         """Swap the middle encoder for its ONNX-exportable variant, in place.
 
         Returns:
-            The exportable middle encoder that replaced the original, or None when the encoder has
-            no exportable variant.
+            The exportable middle encoder that replaced the original, or the original one when
+            it has no exportable variant.
         """
-        self.pts_middle_encoder = self.pts_middle_encoder.prepare_for_export()  # type: ignore
+        if hasattr(self.pts_middle_encoder, "prepare_for_export"):
+            self.pts_middle_encoder = self.pts_middle_encoder.prepare_for_export()
         return self.pts_middle_encoder

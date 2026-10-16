@@ -17,16 +17,18 @@ the setup hook, the misconfiguration errors, and the FLOPs the Lightning summary
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 import unittest
+from unittest.mock import MagicMock
 
 import lightning as L
+from lightning.pytorch import Trainer
 from lightning.pytorch.utilities.exceptions import MisconfigurationException
 from lightning.pytorch.utilities.model_summary import summarize
 import polars as pl
 import torch
 
 from autoware_ml.callbacks.model_summary_example_input import ModelSummaryExampleInput
+from autoware_ml.databases.base_database import BaseDatabase
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch, ModelGTSample
 from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
@@ -35,6 +37,7 @@ from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.datamodule.base_dataset import BaseDataset, ConcatDataset
 from autoware_ml.datamodule.data_module import DataModule
 from autoware_ml.datamodule.sources import DatasetSource
+from autoware_ml.datamodule.splitters.splitter_interface import SplitterInterface
 from autoware_ml.geometry.points.lidar_points import LiDARPoints
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
@@ -82,12 +85,16 @@ def _datamodule(train_dataset: BaseDataset | None) -> DataModule:
     The source declares a test dataset so it is valid without a training one, and the
     training split is bound directly instead of through ``setup``, which needs a database.
     """
-    database = SimpleNamespace(root_path="/", taxonomy="taxonomy", version="v1", database_hash="h")
+    database = MagicMock(spec=BaseDatabase)
+    database.root_path = "/"
+    database.taxonomy = "taxonomy"
+    database.version = "v1"
+    database.database_hash = "h"
     datamodule = DataModule(
-        splitter=SimpleNamespace(),  # type: ignore[arg-type]
+        splitter=MagicMock(spec=SplitterInterface),
         sources={
             "main": DatasetSource(
-                database=database,  # type: ignore[arg-type]
+                database=database,
                 train_dataset=train_dataset,
                 test_dataset=_Dataset(),
             )
@@ -103,9 +110,11 @@ def _datamodule(train_dataset: BaseDataset | None) -> DataModule:
     return datamodule
 
 
-def _trainer(datamodule: L.LightningDataModule | None) -> SimpleNamespace:
+def _trainer(datamodule: L.LightningDataModule | None) -> Trainer:
     """Build a trainer stand-in carrying only the datamodule the callback reads."""
-    return SimpleNamespace(datamodule=datamodule)
+    trainer = MagicMock(spec=Trainer)
+    trainer.datamodule = datamodule
+    return trainer
 
 
 class _Model(ModuleBaseModel):
@@ -211,7 +220,7 @@ class TestSetup(unittest.TestCase):
         Expected: the module carries the collated first sample as its example input.
         Check: the type of the example input.
         """
-        self.callback.setup(self.trainer, self.model, "fit")  # type: ignore[arg-type]
+        self.callback.setup(self.trainer, self.model, "fit")
 
         self.assertIsInstance(self.model.example_input_array, ModelGTBatch)
 
@@ -222,7 +231,7 @@ class TestSetup(unittest.TestCase):
         Check: the example input stays None for every stage.
         """
         for stage in ("validate", "test", "predict"):
-            self.callback.setup(self.trainer, self.model, stage)  # type: ignore[arg-type]
+            self.callback.setup(self.trainer, self.model, stage)
             self.assertIsNone(self.model.example_input_array, stage)
 
     def test_keeps_a_preset_example_input(self) -> None:
@@ -238,7 +247,7 @@ class TestSetup(unittest.TestCase):
         )
         self.model.example_input_array = preset
 
-        self.callback.setup(self.trainer, self.model, "fit")  # type: ignore[arg-type]
+        self.callback.setup(self.trainer, self.model, "fit")
 
         self.assertIs(self.model.example_input_array, preset)
         self.assertEqual(dataset.requested, [])
@@ -250,7 +259,7 @@ class TestSetup(unittest.TestCase):
         Check: the exception type and that no example input is set.
         """
         with self.assertRaises(MisconfigurationException):
-            self.callback.setup(_trainer(L.LightningDataModule()), self.model, "fit")  # type: ignore[arg-type]
+            self.callback.setup(_trainer(L.LightningDataModule()), self.model, "fit")
 
         self.assertIsNone(self.model.example_input_array)
 
@@ -265,7 +274,7 @@ class TestModelSummary(unittest.TestCase):
         Check: one matmul of the (2, 4) points with the (4, 8) weight, 2 * 2 * 4 * 8 FLOPs.
         """
         model = _Model()
-        ModelSummaryExampleInput().setup(_trainer(_datamodule(_Dataset())), model, "fit")  # type: ignore[arg-type]
+        ModelSummaryExampleInput().setup(_trainer(_datamodule(_Dataset())), model, "fit")
 
         summary = summarize(model, max_depth=1)
 

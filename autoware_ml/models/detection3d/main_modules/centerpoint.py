@@ -105,12 +105,10 @@ class CenterPointDetectionModel(ModuleBaseModel):
     def __init__(
         self,
         data_preprocessor: DataPreprocessor,
-        # TODO(KokSeang): Encoder and middle_encoder should be standardized to a common interface for all voxel encoders
         pts_voxel_encoder: PillarFeatureNet,
         pts_middle_encoder: PointPillarsScatter,
         pts_backbone: torch.nn.Module,
         pts_neck: torch.nn.Module,
-        # TODO(KokSeang): bbox_head should be standardized to a common interface for all detection heads
         bbox_head: CenterHead,
         log_dict_configs: LogDictConfigs,
         optimizer: Callable[..., Optimizer] | None = None,
@@ -145,12 +143,7 @@ class CenterPointDetectionModel(ModuleBaseModel):
         self.pts_neck = pts_neck
         self.bbox_head = bbox_head
 
-    # TODO(KokSeang): This signature is temporary different from the base class,
-    # and will be refactored to match the base class signature once the detection metric is refactored
-    # to accept ModelPredictions and ModelBatchInputs directly.
-    def build_eval_output(  # type: ignore[override]
-        self, batch: ModelBatchInputs, outputs: ModelOutputs
-    ) -> dict[str, Any]:
+    def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> dict[str, Any]:
         """Decode detections and pair them with ground truth for metrics."""
         if outputs.detection3d_head_outputs is None:
             raise ValueError(

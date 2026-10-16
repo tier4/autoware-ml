@@ -887,7 +887,7 @@ class TestBatchCircleNMS(unittest.TestCase):
             batch_circle_nms(
                 bboxes_centers=centers,
                 scores=scores,
-                min_radii=1.0,  # type: ignore
+                min_radii=1.0,
                 valid_bboxes_masks=valid_masks,
                 post_max_sizes=self.post_max_sizes,
             )
@@ -898,7 +898,7 @@ class TestBatchCircleNMS(unittest.TestCase):
                 scores=scores,
                 min_radii=self.min_radii,
                 valid_bboxes_masks=valid_masks,
-                post_max_sizes=2,  # type: ignore
+                post_max_sizes=2,
             )
 
     def test_batch_circle_nms_per_class_matches_per_class_scalar_calls(self) -> None:

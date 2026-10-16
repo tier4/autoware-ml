@@ -32,21 +32,22 @@ from jaxtyping import Float32
 import torch
 import torch.nn as nn
 from spconv.pytorch import SparseConvTensor, SparseSequential, SubMConv3d, SparseConv3d
+from spconv.pytorch.conv import SparseConvolution
 from spconv.pytorch.modules import SparseModule
 
 from autoware_ml.ops.spconv.sparse_conv import ExportableSparseConv3d, ExportableSubMConv3d
 
 
 def _copy_sparse_convolution_weights(
-    source: nn.Module,
-    target: nn.Module,
+    source: SparseConvolution,
+    target: SparseConvolution,
 ) -> None:
     """Copy trained sparse convolution weights into an export wrapper."""
-    target.weight.data.copy_(source.weight.data)  # type: ignore
+    target.weight.data.copy_(source.weight.data)
     if source.bias is not None:
         if target.bias is None:
             raise ValueError("Cannot copy sparse convolution bias into a bias-free target.")
-        target.bias.data.copy_(source.bias.data)  # type: ignore
+        target.bias.data.copy_(source.bias.data)
 
 
 def _convert_sparse_convolution(module: nn.Module) -> nn.Module:
@@ -56,9 +57,9 @@ def _convert_sparse_convolution(module: nn.Module) -> nn.Module:
             module.in_channels,
             module.out_channels,
             kernel_size=module.kernel_size,
-            stride=module.stride,  # type: ignore
-            padding=module.padding,  # type: ignore
-            dilation=module.dilation,  # type: ignore
+            stride=module.stride,
+            padding=module.padding,
+            dilation=module.dilation,
             groups=module.groups,
             bias=module.bias is not None,
             indice_key=module.indice_key,
@@ -78,9 +79,9 @@ def _convert_sparse_convolution(module: nn.Module) -> nn.Module:
             module.in_channels,
             module.out_channels,
             kernel_size=module.kernel_size,
-            stride=module.stride,  # type: ignore
-            padding=module.padding,  # type: ignore
-            dilation=module.dilation,  # type: ignore
+            stride=module.stride,
+            padding=module.padding,
+            dilation=module.dilation,
             groups=module.groups,
             bias=module.bias is not None,
             indice_key=module.indice_key,
@@ -242,7 +243,7 @@ class SparseEncoder(nn.Module):
                 current_channels,
                 output_channels,
                 kernel_size=(1, 1, 3),
-                stride=(1, 1, 2),  # type: ignore
+                stride=(1, 1, 2),
                 padding=0,
                 bias=False,
                 indice_key="spconv_down2",

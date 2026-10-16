@@ -166,10 +166,10 @@ class TestTransFusionDecoderLayer(unittest.TestCase):
         """
         refined_query = self._forward()
 
-        self.decoder_layer.self_attn = ExportableMultiheadAttention(  # type: ignore
+        self.decoder_layer.self_attn = ExportableMultiheadAttention(
             self.decoder_layer.self_attn
         ).eval()
-        self.decoder_layer.cross_attn = ExportableMultiheadAttention(  # type: ignore
+        self.decoder_layer.cross_attn = ExportableMultiheadAttention(
             self.decoder_layer.cross_attn
         ).eval()
         exported_query = self._forward()

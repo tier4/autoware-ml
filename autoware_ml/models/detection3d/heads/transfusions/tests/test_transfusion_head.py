@@ -496,7 +496,7 @@ class TestTransFusionHead(unittest.TestCase):
         self.assertLess(abs(float(weights.mean())), 0.1)
         self.assertLess(float(weights.std()), 0.5)
         # The last conv of the dense heatmap head carries the configured init bias.
-        dense_heatmap_bias = self.transfusion_head.dense_heatmap_head[-1].bias  # type: ignore
+        dense_heatmap_bias = self.transfusion_head.dense_heatmap_head[-1].bias
         self.assertTrue(
             torch.allclose(
                 dense_heatmap_bias.detach(),
