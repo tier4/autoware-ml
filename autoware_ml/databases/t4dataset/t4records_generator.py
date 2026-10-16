@@ -46,6 +46,7 @@ from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord
 from autoware_ml.databases.schemas.lidar_frames import LidarFrameDataModel
 from autoware_ml.databases.schemas.lidar_sources import LidarSourceDataModel
 from autoware_ml.databases.schemas.image_frames import (
+    distortion_model_from_coefficients,
     ImageFrameDataModel,
 )
 from autoware_ml.databases.schemas.category_mapping import CategoryMappingDataModel
@@ -71,8 +72,6 @@ logger = logging.getLogger(__name__)
 # camera keyframes. The T4Dataset lidar runs at 10Hz, so 9 past sweeps + 1 current sweep cover
 # all the lidar scans in one second.
 MAX_SWEEPS = 9
-# Lens distortion model of every T4 camera, the coefficients follow its parameter order
-CAMERA_DISTORTION_MODEL = "plumb_bob"
 
 
 class T4RecordsGenerator:
@@ -796,7 +795,7 @@ class T4RecordsGenerator:
             image_width=image_width,
             cam2img=cam2img,
             image_distortion_coefficients=distortion_coefficients,
-            image_distortion_model=CAMERA_DISTORTION_MODEL if distortion_coefficients else "",
+            image_distortion_model=distortion_model_from_coefficients(distortion_coefficients),
             image_sensor_to_ego_pose_matrix=image_sensor_to_ego_matrix,
             image_frame_ego_pose_to_global_matrix=image_frame_ego_pose_to_global_matrix,
             lidar2cam=lidar2cam,

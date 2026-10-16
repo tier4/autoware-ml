@@ -61,25 +61,35 @@ class ImageFrameDatasetSchema(BaseFieldSchema):
 def distortion_model_from_coefficients(coefficients: Sequence[float]) -> str:
     """Name the OpenCV distortion model a coefficient vector belongs to, ROS style.
 
-    The T4 calibration stores only the coefficients ``(k1, k2, p1, p2[, k3[, k4, k5, k6, ...]])``
+    The T4 calibration stores only the coefficients ``(k1, k2, p1, p2[, k3[, k4, k5, k6]])``
     and leaves the model implicit in their count, so it is recovered here the way
     ``sensor_msgs/CameraInfo`` names it: ``plumb_bob`` for the 4 and 5 coefficient radial and
-    tangential model, ``rational_polynomial`` for 8 and more coefficients. Images that ship
-    already rectified carry no coefficients and get the empty string the loading transforms
-    read as "pre-undistorted".
+    tangential model, ``rational_polynomial`` for the 8 coefficient one. Images that ship
+    already rectified carry no coefficients and get the empty string. The name records the
+    model of the frame; whether a camera still has to be undistorted is decided by the loading
+    transforms from the coefficients themselves.
 
     Args:
       coefficients: Lens distortion coefficients in OpenCV order, possibly empty.
 
     Returns:
       str: Distortion model name, empty when there are no coefficients.
+
+    Raises:
+      ValueError: If the count matches no model, so a truncated or padded calibration is not
+        silently written under a wrong name.
     """
     count = len(coefficients)
     if count == 0:
         return ""
-    if count <= 5:
+    if count in (4, 5):
         return "plumb_bob"
-    return "rational_polynomial"
+    if count == 8:
+        return "rational_polynomial"
+    raise ValueError(
+        f"No OpenCV distortion model has {count} coefficients, expected 4 or 5 (plumb_bob) or "
+        "8 (rational_polynomial)."
+    )
 
 
 class ImageFrameDataModel(BaseModel, DataModelInterface):
