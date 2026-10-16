@@ -33,7 +33,7 @@ from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.deployment.deployment_export import DeploymentExport, DeploymentExportOutputs
-from autoware_ml.models.module_base_model import ModuleBaseModel
+from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
 from autoware_ml.utils.deploy import ExportSpec
 from autoware_ml.utils.mlflow_helpers import get_git_sha
 from autoware_ml.utils.onnx_meta import MODEL_DOMAIN, PRODUCER_NAME
@@ -66,10 +66,27 @@ class _ExportModel(ModuleBaseModel):
     def __init__(
         self, module_names: Sequence[str] = ("head",), supported_stages: frozenset[str] = ALL_STAGES
     ) -> None:
-        super().__init__()
+        super().__init__(log_dict_configs=LogDictConfigs(prog_bar=False))
         self.head = _HeadModule()
         self.module_names = tuple(module_names)
         self.supported_stages = supported_stages
+
+    def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> torch.Tensor:
+        point_batch = multi_task_batch_inputs.multi_task_gt_batch.point_cloud_gt_batch
+        assert point_batch is not None
+        return self.head(point_batch.points, torch.tensor(2.0))
+
+    def compute_metrics(
+        self, multi_task_batch_inputs: ModelBatchInputs, multi_task_outputs: torch.Tensor
+    ) -> dict[str, torch.Tensor]:
+        del multi_task_batch_inputs
+        return {"loss": multi_task_outputs.sum()}
+
+    def decode_outputs(
+        self, multi_task_batch_inputs: ModelBatchInputs, outputs: torch.Tensor
+    ) -> torch.Tensor:
+        del multi_task_batch_inputs
+        return outputs
 
     def build_export_specs(
         self, multi_task_batch_inputs: ModelBatchInputs

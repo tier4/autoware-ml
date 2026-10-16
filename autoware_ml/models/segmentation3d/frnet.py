@@ -37,7 +37,7 @@ from autoware_ml.metrics.segmentation3d.eval_output import (
     concat_frame_ids,
     segmentation_frames_eval_output,
 )
-from autoware_ml.models.module_base_model import ModuleBaseModel
+from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
 from autoware_ml.utils.deploy import ExportSpec
 
 
@@ -137,6 +137,7 @@ class FRNet(ModuleBaseModel):
         voxel_encoder: nn.Module,
         backbone: nn.Module,
         decode_head: nn.Module,
+        log_dict_configs: LogDictConfigs,
         auxiliary_head: Sequence[nn.Module] | None = None,
         **kwargs: Any,
     ) -> None:
@@ -146,10 +147,11 @@ class FRNet(ModuleBaseModel):
             voxel_encoder: Range-view feature encoder.
             backbone: FRNet backbone.
             decode_head: Main decode head.
+            log_dict_configs: Logging configuration for training and validation.
             auxiliary_head: Optional auxiliary heads.
             **kwargs: Keyword arguments forwarded to :class:`ModuleBaseModel`.
         """
-        super().__init__(**kwargs)
+        super().__init__(log_dict_configs=log_dict_configs, **kwargs)
         self.voxel_encoder = voxel_encoder
         self.backbone = backbone
         self.decode_head = decode_head
@@ -198,25 +200,14 @@ class FRNet(ModuleBaseModel):
         )
         return point_feats_encoder, voxel_feats_pyramid, point_feats_backbone
 
-    def forward_network(
-        self,
-        feat: torch.Tensor,
-        coors: torch.Tensor,
-        voxel_coors: torch.Tensor,
-        inverse_map: torch.Tensor,
-        sample_count: int,
-    ) -> ModelOutputs:
-        """Run the segmentation model end-to-end and return decoded outputs.
+    def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
+        """Run the network on the points of the batch and their range view projection.
 
         The dynamo-traced export path uses :class:`_FRNetExportModule`, which
         is independent of this method and emits a single probability tensor.
 
         Args:
-            feat: Concatenated point tensor.
-            coors: Point-to-range-view coordinates.
-            voxel_coors: Unique range-view voxel coordinates.
-            inverse_map: Mapping from points to voxel indices.
-            sample_count: Number of samples in the batch.
+            multi_task_batch_inputs: Model inputs holding the point cloud and its range view data.
 
         Returns:
             Segmentation head outputs with the point-wise logits of shape
@@ -224,51 +215,22 @@ class FRNet(ModuleBaseModel):
             backbone voxel feature pyramid with one tensor per level. Each
             level feeds the auxiliary head whose ``feature_index`` matches it.
         """
+        range_view_data = _range_view_data(multi_task_batch_inputs)
         point_feats_encoder, voxel_feats_pyramid, point_feats_backbone = self.extract_feat(
-            feat=feat,
-            coors=coors,
-            voxel_coors=voxel_coors,
-            inverse_map=inverse_map,
-            sample_count=sample_count,
+            feat=_point_cloud_batch(multi_task_batch_inputs).points,
+            coors=range_view_data.coors,
+            voxel_coors=range_view_data.voxel_coors,
+            inverse_map=range_view_data.inverse_map,
+            sample_count=multi_task_batch_inputs.batch_size(),
         )
         point_logits = self.decode_head(
-            coors, point_feats_encoder, voxel_feats_pyramid, point_feats_backbone
+            range_view_data.coors, point_feats_encoder, voxel_feats_pyramid, point_feats_backbone
         )
         return ModelOutputs(
             segmentation3d_head_outputs=Segmentation3DHeadOutputs(
                 logits=point_logits, auxiliary_features=tuple(voxel_feats_pyramid)
             )
         )
-
-    def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
-        """Run the network on the points of the batch and their range view projection.
-
-        Args:
-            multi_task_batch_inputs: Model inputs holding the point cloud and its range view data.
-
-        Returns:
-            The segmentation head outputs.
-        """
-        return self.forward_network(**self.forward_inputs(multi_task_batch_inputs))
-
-    def forward_inputs(self, batch_inputs: ModelBatchInputs) -> dict[str, Any]:
-        """Pick the points of the batch and their range view projection.
-
-        Args:
-            batch_inputs: Model inputs holding the point cloud and its range view data.
-
-        Returns:
-            The points, the range view cell of every point, the occupied cells, the cell index
-            of every point and the sample count of the batch.
-        """
-        range_view_data = _range_view_data(batch_inputs)
-        return {
-            "feat": _point_cloud_batch(batch_inputs).points,
-            "coors": range_view_data.coors,
-            "voxel_coors": range_view_data.voxel_coors,
-            "inverse_map": range_view_data.inverse_map,
-            "sample_count": batch_inputs.batch_size(),
-        }
 
     def compute_metrics(
         self,
@@ -381,11 +343,15 @@ class FRNet(ModuleBaseModel):
         Returns:
             The export specification.
         """
-        inputs = self.forward_inputs(batch_inputs)
-        input_args = tuple(inputs[name] for name in ("feat", "coors", "voxel_coors", "inverse_map"))
+        range_view_data = _range_view_data(batch_inputs)
         return ExportSpec(
             module=_FRNetExportModule(self),
-            args=input_args,
+            args=(
+                _point_cloud_batch(batch_inputs).points,
+                range_view_data.coors,
+                range_view_data.voxel_coors,
+                range_view_data.inverse_map,
+            ),
             input_param_names=["points", "coors", "voxel_coors", "inverse_map"],
             output_names=self.get_export_output_names(),
         )

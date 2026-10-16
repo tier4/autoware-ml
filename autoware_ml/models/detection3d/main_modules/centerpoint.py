@@ -167,7 +167,7 @@ class CenterPointDetectionModel(ModuleBaseModel):
 
     # TODO(KokSeang): This signature is temporary different from the base class,
     # and will be refactored to match the base class signature once the detection metric is refactored
-    # to accept ModelPredictions and MultiTaskFeatures directly.
+    # to accept ModelPredictions and ModelBatchInputs directly.
     def build_eval_output(  # type: ignore[override]
         self, batch: ModelBatchInputs, outputs: ModelOutputs
     ) -> dict[str, Any]:

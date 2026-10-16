@@ -42,10 +42,10 @@ The base class handles the training, validation, test and predict steps, the opt
 scheduler configuration, metric logging, runtime preprocessing and the deployment export.
 `forward()` takes the typed model inputs, a `ModelBatchInputs` the `DataPreprocessor` built from
 the collated batch, and returns a `ModelOutputs` with the head outputs of every task the model
-predicts. `forward()`, `compute_metrics()`, `decode_outputs()` and `build_export_spec()` raise
-`NotImplementedError` in the base class, so a model that never predicts or deploys can leave
-the last two out. `build_eval_output()` returns an empty dict by default, which is right for a
-model without metrics.
+predicts. `forward()`, `compute_metrics()` and `decode_outputs()` are abstract, so a model
+that lacks one fails at construction. `build_export_spec()` raises `NotImplementedError` in the
+base class, so a model that never deploys can leave it out. `build_eval_output()` returns an
+empty dict by default, which is right for a model without metrics.
 
 !!! note "Extending `ModuleBaseModel`"
     Specialized models should still use `ModuleBaseModel`. When the shared step path is not
@@ -82,9 +82,10 @@ class MyModel(ModuleBaseModel):
         decoder: nn.Module,
         num_classes: int,
         ignore_index: int,
-        **kwargs: Any,  # data_preprocessor, optimizer, scheduler, metrics, log_dict_configs
+        log_dict_configs: LogDictConfigs,
+        **kwargs: Any,  # data_preprocessor, optimizer, scheduler, metrics
     ):
-        super().__init__(**kwargs)
+        super().__init__(log_dict_configs=log_dict_configs, **kwargs)
         self.encoder = encoder
         self.decoder = decoder
         self.num_classes = num_classes

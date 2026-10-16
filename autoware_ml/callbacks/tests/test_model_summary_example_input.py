@@ -31,6 +31,7 @@ from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch, ModelGTSamp
 from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
+from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.datamodule.base_dataset import BaseDataset, ConcatDataset
 from autoware_ml.datamodule.data_module import DataModule
 from autoware_ml.datamodule.sources import DatasetSource
@@ -122,6 +123,22 @@ class _Model(ModuleBaseModel):
         assert isinstance(point_cloud_gt_batch, PointCloudGTBatch)
         self.linear(point_cloud_gt_batch.points)
         return ModelOutputs(detection3d_head_outputs=None)
+
+    def compute_metrics(
+        self, multi_task_batch_inputs: ModelBatchInputs, multi_task_outputs: ModelOutputs
+    ) -> dict[str, torch.Tensor]:
+        del multi_task_batch_inputs, multi_task_outputs
+        return {"loss": torch.zeros(())}
+
+    def decode_outputs(
+        self, multi_task_batch_inputs: ModelBatchInputs, outputs: ModelOutputs
+    ) -> ModelPredictions:
+        del multi_task_batch_inputs, outputs
+        return ModelPredictions(
+            detection3d_predictions=None,
+            segmentation3d_predictions=None,
+            calibration_status_predictions=None,
+        )
 
 
 class TestBuildExampleInputBatch(unittest.TestCase):

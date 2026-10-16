@@ -31,7 +31,7 @@ from autoware_ml.dataclasses.models.calibration_status.predictions import (
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
-from autoware_ml.models.module_base_model import ModuleBaseModel
+from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
 from autoware_ml.utils.deploy import ExportSpec
 
 
@@ -58,6 +58,7 @@ class CalibrationStatusClassifier(ModuleBaseModel):
         backbone: nn.Module,
         neck: nn.Module,
         head: nn.Module,
+        log_dict_configs: LogDictConfigs,
         **kwargs: Any,
     ) -> None:
         """Initialize the calibration-status classifier.
@@ -66,17 +67,18 @@ class CalibrationStatusClassifier(ModuleBaseModel):
             backbone: Feature extraction backbone for fused camera inputs.
             neck: Intermediate feature aggregation module.
             head: Classification head that computes logits, predictions, and losses.
+            log_dict_configs: Logging configuration for training and validation.
             **kwargs: Keyword arguments forwarded to :class:`ModuleBaseModel`, such as the
-                data preprocessor, the logging configuration, the optimizer and the metrics.
+                data preprocessor, the optimizer and the metrics.
         """
-        super().__init__(**kwargs)
+        super().__init__(log_dict_configs=log_dict_configs, **kwargs)
 
         self.backbone = backbone
         self.neck = neck
         self.head = head
 
     def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
-        """Run the classifier on the fused images of the batch.
+        """Run the classifier on the fused image of every camera of the batch.
 
         Args:
             multi_task_batch_inputs: Model inputs holding the images and their depth maps.
@@ -84,34 +86,12 @@ class CalibrationStatusClassifier(ModuleBaseModel):
         Returns:
             Calibration status head outputs with the classification logits of every image.
         """
-        return self.forward_network(**self.forward_inputs(multi_task_batch_inputs))
-
-    def forward_network(self, fused_img: torch.Tensor) -> ModelOutputs:
-        """Run the classifier on fused image inputs.
-
-        Args:
-            fused_img: Batched fused image tensor.
-
-        Returns:
-            Calibration status head outputs with the classification logits of every image.
-        """
-        feats = self.backbone(fused_img)
+        feats = self.backbone(_image_data(multi_task_batch_inputs).fused_images())
         feats = self.neck(feats)
         logits = self.head(feats)
         return ModelOutputs(
             calibration_status_head_outputs=CalibrationStatusHeadOutputs(logits=logits)
         )
-
-    def forward_inputs(self, batch_inputs: ModelBatchInputs) -> dict[str, Any]:
-        """Pick the fused image of every camera of the batch.
-
-        Args:
-            batch_inputs: Model inputs holding the images and their depth maps.
-
-        Returns:
-            The fused images, one per camera of every sample.
-        """
-        return {"fused_img": _image_data(batch_inputs).fused_images()}
 
     def decode_outputs(
         self, multi_task_batch_inputs: ModelBatchInputs, outputs: ModelOutputs
@@ -166,7 +146,7 @@ class CalibrationStatusClassifier(ModuleBaseModel):
                 neck=self.neck,
                 head=self.head,
             ),
-            args=(self.forward_inputs(batch_inputs)["fused_img"],),
+            args=(_image_data(batch_inputs).fused_images(),),
             input_param_names=["fused_img"],
         )
 

@@ -11,6 +11,7 @@ from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTBatch
 from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch
 from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
+from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.detection3d.heads.transfusions import TransFusionHead
 from autoware_ml.models.detection3d.ptv3 import (
     PTv3BEVEncoder,
@@ -105,6 +106,7 @@ def build_seg_model(
 ) -> PTv3SegmentationModel:
     """Return a small PTv3 segmentation model for tests."""
     return PTv3SegmentationModel(
+        log_dict_configs=LogDictConfigs(prog_bar=False),
         encoder=build_ptv3_encoder(voxel_encoder_type.out_channels),
         voxel_encoder=voxel_encoder_type(),
         seg3d_head=build_seg_head(),
@@ -203,6 +205,7 @@ def build_trans_model(
 ) -> PTv3DetectionModel:
     """Return a PTv3 + TransFusionHead detection model for tests."""
     return PTv3DetectionModel(
+        log_dict_configs=LogDictConfigs(prog_bar=False),
         encoder=build_ptv3_encoder(voxel_encoder_type.out_channels),
         voxel_encoder=voxel_encoder_type(),
         bev_neck=build_bev_neck(),
@@ -409,6 +412,7 @@ def build_litept_seg_model(
 ) -> PTv3SegmentationModel:
     """Return a LitePT segmentation model using the unchanged PTv3 task wrapper."""
     return PTv3SegmentationModel(
+        log_dict_configs=LogDictConfigs(prog_bar=False),
         encoder=build_litept_encoder(),
         voxel_encoder=SweepSplitVoxelFeatureEncoder(),
         seg3d_head=build_litept_seg_head(),

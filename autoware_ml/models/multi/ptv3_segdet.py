@@ -53,6 +53,7 @@ from autoware_ml.models.segmentation3d.heads.ptv3 import (
     segmentation_point_loss,
     segmentation_predict_outputs,
 )
+from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.segmentation3d.ptv3_base import (
     SERIALIZED_POOLING_FIELDS,
     PTv3BaseModel,
@@ -83,6 +84,7 @@ class PTv3SegDetModel(PTv3BaseModel):
         seg3d_head: PTv3SegDecoderHead,
         bev_neck: PTv3DetBEVNeck,
         bbox_head: nn.Module,
+        log_dict_configs: LogDictConfigs,
         segmentation_loss_weight: float = 1.0,
         detection_loss_weight: float = 1.0,
         export_output_names: Sequence[str] | None = None,
@@ -104,6 +106,7 @@ class PTv3SegDetModel(PTv3BaseModel):
                 classifier.
             bev_neck: Detection BEV neck consuming the encoder pooling chain.
             bbox_head: Detection head producing the decoded predictions.
+            log_dict_configs: Logging configuration for training and validation.
             segmentation_loss_weight: Weight of the segmentation loss term.
             detection_loss_weight: Weight of the detection loss term.
             export_output_names: Ordered output names used during export.
@@ -123,6 +126,7 @@ class PTv3SegDetModel(PTv3BaseModel):
             voxel_encoder=voxel_encoder,
             grid_size=grid_size,
             point_cloud_range=point_cloud_range,
+            log_dict_configs=log_dict_configs,
             optimizer=optimizer,
             scheduler=scheduler,
             optimizer_group_overrides=optimizer_group_overrides,
@@ -158,24 +162,16 @@ class PTv3SegDetModel(PTv3BaseModel):
             "det3d_branch": det3d_branch_params,
         }
 
-    def forward_network(
-        self,
-        voxels: torch.Tensor,
-        num_points: torch.Tensor,
-        voxel_coords: torch.Tensor,
-        num_dropped_voxels: torch.Tensor,
-        time_lag_column: int,
-    ) -> ModelOutputs:
+    def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
         """Run one shared PTv3 encoder pass and branch into both heads.
 
         Args:
-            voxels: Padded voxel points from the data preprocessing.
-            num_points: Valid point count per voxel.
-            voxel_coords: Voxel coordinates with a leading batch column.
-            num_dropped_voxels: Occupied voxels the voxelizer discarded.
-            time_lag_column: Point column holding the time lag.
+            multi_task_batch_inputs: Model inputs holding the point cloud and its voxels.
+
+        Returns:
+            The outputs of the task heads.
         """
-        point = self.encode(voxels, num_points, voxel_coords, num_dropped_voxels, time_lag_column)
+        point = self.encode_batch(multi_task_batch_inputs)
         # The BEV neck must read the encoder chain before the segmentation
         # decoder: SerializedUnpooling pops the chain and overwrites parent
         # features in place.

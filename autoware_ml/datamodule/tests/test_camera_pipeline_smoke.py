@@ -28,6 +28,7 @@ import torch
 
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.datamodule.t4dataset.dataset import T4Dataset
+from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.calibration_status.calibration_status import (
     CalibrationStatusClassifier,
 )
@@ -199,6 +200,7 @@ class TestCameraPipelineSmoke(unittest.TestCase):
         self.assertEqual(batch_inputs.image_data.calibration_statuses.flatten().shape, (4,))
 
         model = CalibrationStatusClassifier(
+            log_dict_configs=LogDictConfigs(prog_bar=False),
             backbone=ResNet18(in_channels=5),
             neck=GlobalAveragePooling(),
             head=LinearClsHead(

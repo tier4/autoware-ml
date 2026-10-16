@@ -233,11 +233,11 @@ which provides a standard interface and a set of override hooks for
 task-specific behavior:
 
 ```python
-class ModuleBaseModel(MetricEvalMixin, L.LightningModule):
+class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
     def __init__(
         self,
+        log_dict_configs: LogDictConfigs,
         data_preprocessor: DataPreprocessor | None = None,
-        log_dict_configs: LogDictConfigs | None = None,
         optimizer: Callable[..., Optimizer] | None = None,
         scheduler: Callable[[Optimizer], LRScheduler] | None = None,
         optimizer_group_overrides: Mapping[str, Mapping[str, Any]] | None = None,
@@ -247,12 +247,12 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule):
         ...
 
     def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
-        ...  # required
+        ...  # abstract
 
     def compute_metrics(
         self, multi_task_batch_inputs: ModelBatchInputs, multi_task_outputs: ModelOutputs
     ) -> Mapping[str, torch.Tensor]:
-        ...  # required, returns at least "loss"
+        ...  # abstract, returns at least "loss"
 
     def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> dict[str, Any]:
         ...  # the flat dict the metric suites read, empty by default
@@ -260,7 +260,7 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule):
     def decode_outputs(
         self, multi_task_batch_inputs: ModelBatchInputs, outputs: ModelOutputs
     ) -> ModelPredictions:
-        ...  # required by the predict step
+        ...  # abstract, used by the predict step
 
     def get_log_batch_size(self, multi_task_batch_inputs: ModelBatchInputs) -> int | None:
         ...

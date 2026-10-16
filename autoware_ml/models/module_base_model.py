@@ -20,6 +20,7 @@ used by task-specific model wrappers throughout the framework.
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, NamedTuple, final
 from types import MappingProxyType
@@ -71,7 +72,7 @@ class LogDictConfigs(NamedTuple):
     rank_zero_only: bool = False
 
 
-class ModuleBaseModel(MetricEvalMixin, L.LightningModule):
+class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
     """Base Lightning Module for all Autoware-ML models.
 
     Provides common functionality for training, validation, and testing with
@@ -81,8 +82,8 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule):
 
     def __init__(
         self,
+        log_dict_configs: LogDictConfigs,
         data_preprocessor: DataPreprocessor | None = None,
-        log_dict_configs: LogDictConfigs | None = None,
         optimizer: Callable[..., Optimizer] | None = None,
         scheduler: Callable[[Optimizer], LRScheduler] | None = None,
         optimizer_group_overrides: Mapping[str, Mapping[str, Any]] | None = None,
@@ -92,10 +93,9 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule):
         """Initialize base model.
 
         Args:
+            log_dict_configs: Configuration for logging metrics in Lightning.
             data_preprocessor: Data preprocessor to preprocess input batches, an empty one when
                 omitted.
-            log_dict_configs: Configuration for logging metrics in Lightning, epoch-level
-                progress bar logging when omitted.
             optimizer: Callable that returns an optimizer when given model parameters.
             scheduler: Callable that returns a scheduler when given the optimizer.
             optimizer_group_overrides: Optional optimizer overrides keyed by
@@ -117,11 +117,7 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule):
             dict(optimizer_group_overrides) if optimizer_group_overrides else None
         )
         self.scheduler_config = dict(scheduler_config) if scheduler_config else {}
-        self.log_dict_configs = (
-            log_dict_configs
-            if log_dict_configs is not None
-            else LogDictConfigs(prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
-        )
+        self.log_dict_configs = log_dict_configs
 
     def transfer_batch_to_device(
         self, batch: ModelGTBatch, device: torch.device, dataloader_idx: int
@@ -151,14 +147,14 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule):
         """
         return self._data_preprocessor(batch, is_training=self.training)
 
+    @abstractmethod
     def decode_outputs(
         self, multi_task_batch_inputs: ModelBatchInputs, outputs: ModelOutputs
     ) -> ModelPredictions:
         """Convert raw model outputs into task-level predictions.
 
-        Task wrappers must override this when prediction-time outputs differ from
-        training-time outputs, for example to convert logits into probabilities
-        and labels.
+        Prediction-time outputs differ from training-time outputs, for example logits are
+        converted into probabilities and labels.
 
         Args:
             multi_task_batch_inputs: Batch the outputs were computed from, for predictions
@@ -168,7 +164,6 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule):
         Returns:
             Task-level predictions.
         """
-        raise NotImplementedError("Model must implement decode_outputs()")
 
     def build_optimizer_groups(self) -> Mapping[str, Sequence[torch.nn.Parameter]]:
         """Return structural optimizer groups for the model.
@@ -183,13 +178,13 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule):
             "default": [parameter for parameter in self.parameters() if parameter.requires_grad]
         }
 
+    @abstractmethod
     def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
         """Forward pass of the model.
 
         Subclasses must follow the signature of this method and return a dataclass containing
         all model outputs. Users must add new implementations to ModelBatchInputs and ModelOutputs
         when supporting new types of tasks to the multi-task model.
-        The default implementation raises a NotImplementedError.
 
         Args:
             multi_task_batch_inputs: Batch of type :class:`ModelBatchInputs` containing
@@ -198,8 +193,8 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule):
         Returns:
             Model outputs.
         """
-        raise NotImplementedError("Model must implement forward()")
 
+    @abstractmethod
     def compute_metrics(
         self, multi_task_batch_inputs: ModelBatchInputs, multi_task_outputs: ModelOutputs
     ) -> MappingProxyType[str, Float32[torch.Tensor, " num_losses"]]:
@@ -214,12 +209,11 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule):
             The ``loss`` field is required. Note that users must register metrics in
             the dictionary for proper logging and checkpointing.
         """
-        raise NotImplementedError("Model must implement compute_metrics()")
 
     def get_log_batch_size(self, multi_task_batch_inputs: ModelBatchInputs) -> int | None:
         """Infer the effective sample batch size for logging.
 
-        It searches for all available inputs in ``MultiTaskFeatures`` to infer the sample count.
+        The ground-truth batch infers the sample count from the inputs it carries.
         Models with non-standard input structures should override this hook to provide an
         explicit sample count.
 

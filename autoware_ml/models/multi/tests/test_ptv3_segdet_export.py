@@ -13,6 +13,7 @@ from autoware_ml.dataclasses.geometry.voxels import VoxelsData
 from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DHeadOutputs
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentation3DHeadOutputs
+from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.detection3d.tests.head_output_fixtures import build_transfusion_outputs
 from autoware_ml.models.tests.batch_inputs_fixtures import (
     build_batch_inputs,
@@ -260,6 +261,7 @@ def _save_detection_checkpoint(
 
 def _build_segdet_model() -> PTv3SegDetModel:
     return PTv3SegDetModel(
+        log_dict_configs=LogDictConfigs(prog_bar=False),
         encoder=build_ptv3_encoder(),
         voxel_encoder=SweepSplitVoxelFeatureEncoder(),
         seg3d_head=build_seg_head(),
@@ -319,13 +321,12 @@ def test_ptv3_segdet_detection_outputs_invariant_to_seg_head() -> None:
     torch.manual_seed(0)
     model = _build_segdet_model().cuda().eval()
     batch = build_inputs(device=torch.device("cuda"))
-    forward_inputs = model.forward_inputs(batch)
 
     with torch.no_grad():
-        reference = model.forward_network(**forward_inputs)
+        reference = model(batch)
         for parameter in model.seg3d_head.parameters():
             parameter.add_(1.0)
-        perturbed = model.forward_network(**forward_inputs)
+        perturbed = model(batch)
 
     names = ["dense_heatmap", "query_heatmap_score", "query_labels", "heatmap", "center"]
     names += ["height", "dim", "rot", "vel"]
@@ -346,11 +347,10 @@ def test_ptv3_segdet_seg_logits_invariant_to_det_branch_pass() -> None:
     torch.manual_seed(0)
     model = _build_segdet_model().cuda().eval()
     batch = build_inputs(device=torch.device("cuda"))
-    forward_inputs = model.forward_inputs(batch)
 
     with torch.no_grad():
-        joint_logits = model.forward_network(**forward_inputs).segmentation3d().logits
-        point = model.encode(**forward_inputs)
+        joint_logits = model(batch).segmentation3d().logits
+        point = model.encode_batch(batch)
         seg_only_logits = model.seg3d_head(point)
 
     torch.testing.assert_close(joint_logits, seg_only_logits)

@@ -15,6 +15,7 @@ from autoware_ml.utils.point_cloud.structures import pooled_sparse_shape
 from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTBatch
 from autoware_ml.dataclasses.geometry.voxels import VoxelsData
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.tests.batch_inputs_fixtures import (
     build_batch_inputs,
     build_point_cloud_batch,
@@ -949,6 +950,7 @@ def test_ptv3_frozen_encoder_supports_decoder_block_backward() -> None:
     without backward metadata; decoder blocks must not reuse them by key or
     their CPE backward fails with an empty-indices assert."""
     model = PTv3SegmentationModel(
+        log_dict_configs=LogDictConfigs(prog_bar=False),
         encoder=build_ptv3_encoder(),
         voxel_encoder=SweepSplitVoxelFeatureEncoder(),
         seg3d_head=build_seg_head(),
