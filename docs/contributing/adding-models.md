@@ -6,47 +6,62 @@ icon: lucide/plus-circle
 
 This guide walks you through adding a new model to Autoware-ML. You'll implement a model class, pick the data it trains on, and wire everything together with a config.
 
-## The BaseModel Interface
+## The ModuleBaseModel Interface
 
-New models should inherit from `BaseModel`. The minimal contract is three abstract methods:
+New models inherit from `ModuleBaseModel`, the Lightning module every Autoware-ML model shares.
+Two methods are required for training, and one more for each stage the model takes part in:
 
 ```python
-from autoware_ml.models.base import BaseModel
+from autoware_ml.models.module_base_model import ModuleBaseModel
 
-class MyModel(BaseModel):
-    def forward(self, **kwargs: Any) -> Any:
-        ...
-
-    def forward_inputs(self, batch_inputs: ModelBatchInputs) -> dict[str, Any]:
+class MyModel(ModuleBaseModel):
+    def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
         ...
 
     def compute_metrics(
-        self, batch_inputs: ModelBatchInputs, outputs: Any
-    ) -> dict[str, torch.Tensor]:
+        self, multi_task_batch_inputs: ModelBatchInputs, multi_task_outputs: ModelOutputs
+    ) -> Mapping[str, torch.Tensor]:
+        ...
+
+    # Validation and test metrics
+    def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> dict[str, Any]:
+        ...
+
+    # Predict step
+    def decode_outputs(
+        self, multi_task_batch_inputs: ModelBatchInputs, outputs: ModelOutputs
+    ) -> ModelPredictions:
+        ...
+
+    # Deployment
+    def build_export_spec(self, multi_task_batch_inputs: ModelBatchInputs) -> ExportSpec:
         ...
 ```
 
-The base class handles training/validation/test/predict steps, optimizer
-configuration, metric logging, prediction output conversion, runtime
-preprocessing, and deployment export integration. The `forward()` method
-takes the tensors the network reads, and `forward_inputs()` picks them from
-the typed model inputs.
+The base class handles the training, validation, test and predict steps, the optimizer and
+scheduler configuration, metric logging, runtime preprocessing and the deployment export.
+`forward()` takes the typed model inputs, a `ModelBatchInputs` the `DataPreprocessor` built from
+the collated batch, and returns a `ModelOutputs` with the head outputs of every task the model
+predicts. `forward()`, `compute_metrics()`, `decode_outputs()` and `build_export_spec()` raise
+`NotImplementedError` in the base class, so a model that never predicts or deploys can leave
+the last two out. `build_eval_output()` returns an empty dict by default, which is right for a
+model without metrics.
 
-!!! note "Extending `BaseModel`"
-    Specialized models should still use `BaseModel`. When the default
-    shared step path is not enough, prefer overriding hooks such as
-    `set_data_preprocessing()`, `predict_outputs()`, `get_log_batch_size()`,
-    or `build_export_spec()` instead of introducing a standalone
-    `LightningModule`. Output decoding (for example, voxel-to-point scatter
-    for segmentation) belongs inside the model, typically in `forward()`,
-    `compute_metrics()`, and `predict_outputs()` - not in a separate
-    framework pipeline.
+!!! note "Extending `ModuleBaseModel`"
+    Specialized models should still use `ModuleBaseModel`. When the shared step path is not
+    enough, override hooks such as `decode_outputs()`, `build_eval_output()`,
+    `get_log_batch_size()`, `build_optimizer_groups()` or `build_export_spec()` /
+    `build_export_specs()` instead of introducing a standalone `LightningModule`. Output
+    decoding (for example, the voxel-to-point scatter of segmentation) belongs inside the
+    model, in `forward()`, `compute_metrics()`, `build_eval_output()` and `decode_outputs()`,
+    not in a separate framework pipeline.
 
 ## Step 1: Implement the Model
 
 Create a new file in `autoware_ml/models/`:
 
 ```python title="autoware_ml/models/my_task/my_model.py"
+from collections.abc import Mapping
 from typing import Any
 
 import torch
@@ -54,18 +69,20 @@ import torch.nn as nn
 
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
+from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentation3DHeadOutputs
-from autoware_ml.models.base import BaseModel
+from autoware_ml.dataclasses.models.segmentation3d.predictions import Segmentation3DPredictions
+from autoware_ml.models.module_base_model import ModuleBaseModel
 
 
-class MyModel(BaseModel):
+class MyModel(ModuleBaseModel):
     def __init__(
         self,
         encoder: nn.Module,
         decoder: nn.Module,
         num_classes: int,
         ignore_index: int,
-        **kwargs: Any,  # Pass optimizer, scheduler and metrics to BaseModel
+        **kwargs: Any,  # data_preprocessor, optimizer, scheduler, metrics, log_dict_configs
     ):
         super().__init__(**kwargs)
         self.encoder = encoder
@@ -73,46 +90,64 @@ class MyModel(BaseModel):
         self.num_classes = num_classes
         self.loss_fn = nn.CrossEntropyLoss(ignore_index=ignore_index)
 
-    def forward(self, feat: torch.Tensor) -> ModelOutputs:
-        features = self.encoder(feat)
-        logits = self.decoder(features)
+    def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
+        points = multi_task_batch_inputs.multi_task_gt_batch.point_cloud_gt_batch.points
+        logits = self.decoder(self.encoder(points))
         return ModelOutputs(segmentation3d_head_outputs=Segmentation3DHeadOutputs(logits=logits))
 
-    def forward_inputs(self, batch_inputs: ModelBatchInputs) -> dict[str, Any]:
-        return {"feat": batch_inputs.multi_task_gt_batch.point_cloud_gt_batch.points}
-
     def compute_metrics(
-        self,
-        batch_inputs: ModelBatchInputs,
-        outputs: ModelOutputs,
-    ) -> dict[str, torch.Tensor]:
-        labels = batch_inputs.multi_task_gt_batch.segmentation3d_gt_batch.gt_semantic_masks
-        loss = self.loss_fn(outputs.segmentation3d().logits, labels)
+        self, multi_task_batch_inputs: ModelBatchInputs, multi_task_outputs: ModelOutputs
+    ) -> Mapping[str, torch.Tensor]:
+        gt_batch = multi_task_batch_inputs.multi_task_gt_batch
+        labels = gt_batch.segmentation3d_gt_batch.gt_semantic_masks
+        loss = self.loss_fn(multi_task_outputs.segmentation3d().logits, labels)
         return {"loss": loss}
+
+    def decode_outputs(
+        self, multi_task_batch_inputs: ModelBatchInputs, outputs: ModelOutputs
+    ) -> ModelPredictions:
+        probs = torch.softmax(outputs.segmentation3d().logits, dim=1)
+        return ModelPredictions(
+            segmentation3d_predictions=Segmentation3DPredictions(
+                pred_labels=probs.argmax(dim=1), pred_probs=probs
+            )
+        )
 ```
 
 ### Key Points
 
-1. **`forward_inputs()` picks the forward arguments** - It reads the typed model inputs, for
-   example the points of `multi_task_gt_batch.point_cloud_gt_batch` or the `voxels_data` a
-   preprocessing layer computed, and returns them keyed by the `forward()` parameter names.
+1. **`forward()` reads the typed model inputs** - A `ModelBatchInputs` holds the collated
+   `ModelGTBatch` as `multi_task_gt_batch` and one field per kind of feature the preprocessor
+   modules computed (`voxels_data`, `image_data`, `range_view_data`). Read what the network
+   needs from it, for example the points of `multi_task_gt_batch.point_cloud_gt_batch` or the
+   voxels of `voxels_data`.
 
 2. **`compute_metrics()` receives the model inputs and outputs** - The first argument is the
-   `ModelBatchInputs` of the batch, and the second is `outputs` from `forward()`. Read the
-   targets from its ground truth batches, for example the point labels of
+   `ModelBatchInputs` of the batch, and the second is the `ModelOutputs` from `forward()`. Read
+   the targets from its ground truth batches, for example the point labels of
    `segmentation3d_gt_batch`.
 
-3. **Return `'loss'`** - The metrics dict must include a `'loss'` key for backpropagation.
+3. **Return `'loss'`** - The metrics mapping must include a `'loss'` key for backpropagation.
+   Every entry is logged under the stage prefix, `train/loss`, `val/loss` and so on.
 
 4. **Typed outputs** - `forward()` returns a `ModelOutputs` with the head outputs of every task
-   the model predicts, and `predict_outputs()` returns a `ModelPredictions`. A task the model does
-   not predict stays unset.
+   the model predicts, and `decode_outputs()` returns a `ModelPredictions` for the predict
+   step. A task the model does not predict stays unset.
 
-5. **Optimizer and scheduler** - Passed as callables to `BaseModel.__init__()`. Need to be marked as `_partial_: true` in YAML configs.
+5. **Metrics read `build_eval_output()`** - At validation and test the mixin feeds the flat
+   dict it returns into every attached metric suite, see [Metrics](../framework/metrics.md).
 
-6. **Use hooks when needed** - If your model needs custom batch unpacking,
+6. **Optimizer and scheduler** - Passed as callables to `ModuleBaseModel.__init__()`, marked
+   `_partial_: true` in the YAML config. Override `build_optimizer_groups()` to expose parameter
+   groups for `optimizer_group_overrides`.
+
+7. **The data preprocessor comes from the builders** - `build_model()` instantiates the model
+   with the `data_preprocessor` of the config as a keyword argument, so forward `**kwargs` to
+   the base class.
+
+8. **Use hooks when needed** - If your model needs custom batch size inference,
    prediction formatting, or an explicit deployment wrapper, override the
-   appropriate `BaseModel` hook instead of bypassing the shared training and
+   appropriate `ModuleBaseModel` hook instead of bypassing the shared training and
    deployment flow.
 
 ## Step 2: Choose the Data
@@ -133,19 +168,20 @@ record and returns them as a `ModelGTSample`.
 ### Data Flow
 
 ```text
-get_data_sample() -> transforms -> collate_fn() -> BaseModel.on_after_batch_transfer() -> forward() -> compute_metrics()/predict_outputs()
+get_data_sample() -> transforms -> collate_fn() -> ModuleBaseModel.on_after_batch_transfer() -> forward() -> compute_metrics() / build_eval_output() / decode_outputs()
 ```
 
 1. `get_data_sample()`: return the sensor file paths, calibration and annotations of a record
    as a `ModelGTSample`
 2. `transforms`: load files and apply per sample augmentations (in the dataset)
 3. `collate_fn()`: stack the samples into a typed `ModelGTBatch`
-4. `BaseModel.on_after_batch_transfer()`: run the model's runtime preprocessing, which turns
-   the batch into the typed `ModelBatchInputs`
+4. `ModuleBaseModel.on_after_batch_transfer()`: run the `DataPreprocessor` of the model, which
+   turns the batch into the typed `ModelBatchInputs`
 5. `forward()`: model inference/training forward pass
-6. `compute_metrics()` / `predict_outputs()`: model owns any output shaping
-   (e.g., voxel-to-point scatter for segmentation) directly inside these
-   methods
+6. `compute_metrics()` returns the losses, `build_eval_output()` feeds the metric suites at
+   validation and test, and `decode_outputs()` formats the predictions of the predict step. The
+   model owns any output shaping (e.g., voxel-to-point scatter for segmentation) directly
+   inside these methods
 
 ### Supporting a New Database or Annotation
 
@@ -396,7 +432,8 @@ data_preprocessor:
     the data they change replaced.
 
 Output-side shaping (logits -> probabilities, decoder scatter, voxel-to-point mapping, etc.) belongs
-**inside the model** - in `forward()`, `compute_metrics()`, or `predict_outputs()`.
+**inside the model** - in `forward()`, `compute_metrics()`, `build_eval_output()` or
+`decode_outputs()`.
 
 ## Step 6: Train and Deploy
 
@@ -439,20 +476,24 @@ autoware-ml deploy \
 ### Multiple Inputs
 
 ```python
-def forward(self, image: torch.Tensor, lidar: torch.Tensor) -> torch.Tensor:
-    img_features = self.image_encoder(image)
-    lidar_features = self.lidar_encoder(lidar)
+def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
+    voxels_data = multi_task_batch_inputs.voxels_data
+    image_data = multi_task_batch_inputs.image_data
+    lidar_features = self.lidar_encoder(voxels_data.voxels, voxels_data.coords)
+    img_features = self.image_encoder(image_data.images)
     fused = torch.cat([img_features, lidar_features], dim=1)
     return self.head(fused)
 ```
 
-`forward_inputs()` returns both tensors, keyed `image` and `lidar`.
+Every input is a field of `ModelBatchInputs`: the voxels come from the voxelizer module of the
+`data_preprocessor`, the images from the collated `ImageGTBatch`. A field the preprocessor did
+not fill is `None`, so a model states its needs by the fields it reads.
 
 ### Multiple Tasks
 
 ```python
-def forward(self, x: torch.Tensor) -> ModelOutputs:
-    features = self.backbone(x)
+def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
+    features = self.backbone(multi_task_batch_inputs.voxels_data)
     return ModelOutputs(
         detection3d_head_outputs=Detection3DHeadOutputs(
             center_head_outputs=None, transfusion_head_outputs=self.bbox_head(features)
@@ -460,8 +501,8 @@ def forward(self, x: torch.Tensor) -> ModelOutputs:
         segmentation3d_head_outputs=Segmentation3DHeadOutputs(logits=self.seg_head(features)),
     )
 
-def compute_metrics(self, batch_inputs: ModelBatchInputs, outputs: ModelOutputs):
-    gt_batch = batch_inputs.multi_task_gt_batch
+def compute_metrics(self, multi_task_batch_inputs: ModelBatchInputs, outputs: ModelOutputs):
+    gt_batch = multi_task_batch_inputs.multi_task_gt_batch
     gt_detections = gt_batch.detection3d_gt_batch
     box_losses = self.bbox_head.loss(
         outputs.detection3d().transfusion_head(),

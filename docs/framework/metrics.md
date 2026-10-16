@@ -1310,9 +1310,9 @@ Model-specific work like box decoding happens here, and per-frame metadata the d
 (ego pose, scene token) is passed through.
 
 ```python
-class ModelA(BaseModel):
+class ModelA(ModuleBaseModel):
     def build_eval_output(self, batch, outputs):
-        return detection_eval_output(self.predict_outputs(batch, outputs), batch)
+        return detection_eval_output(self.decode_outputs(batch, outputs), batch)
 ```
 
 The mixin feeds this dict into every attached suite. The model never calls `update`, `compute`,

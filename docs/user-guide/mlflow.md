@@ -59,15 +59,11 @@ of the task config, so the UI groups them by model, database version and vehicle
 than by config path. Runs are named `<stage>_<experiment_name>_<experiment_uid>`
 and tagged with metadata such as:
 
-- `config_name`
-- `task`
-- `model`
-- `config_variant`
+- `config_name`, with `task`, `model` and `config_variant` taken from its path
 - `stage`
-- `hydra_dir`
-- `artifact_dir`
-- `checkpoint_path` for test/deploy
-- `git_sha`
+- `hydra_dir` and `artifact_dir`
+- `checkpoint_path` for test and deploy, and `param_drift` for a resumed training run
+- `git_sha` and `hostname`
 
 Click a run to view:
 
@@ -84,7 +80,10 @@ Select multiple runs and click **Compare** to view:
 
 ## Organizing Experiments
 
-Experiments are derived from config paths. Use meaningful config names for clarity.
+Experiments are named by the `experiment_group_name` and `experiment_name` keys of the task
+config, not by its path. Leaves that should sit side by side in the UI share one
+`experiment_group_name`, for example `bevfusion/${database.version}/j6gen2_base` for every
+BEVFusion variant trained on that database, and differ in `experiment_name`.
 
 Add custom tags for organization:
 

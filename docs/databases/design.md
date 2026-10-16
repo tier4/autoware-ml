@@ -12,10 +12,10 @@ The database module provides a layered architecture for describing annotation da
 classDiagram
     direction TB
 
-    class generate_dataset {
-        <<Hydra entrypoint>>
-        build_database()
-        main()
+    class DataModule {
+        <<datamodule>>
+        prepare_data()
+        setup()
     }
 
     class DatabaseInterface {
@@ -70,7 +70,7 @@ classDiagram
         predict()
     }
 
-    generate_dataset --> DatabaseInterface : instantiates via Hydra
+    DataModule --> DatabaseInterface : prepare_data() builds the record tables
 
     DatabaseInterface ..> scenarios : uses Scenarios, ScenarioData
     DatabaseInterface --> schemas : process_scenario_records()
@@ -194,27 +194,31 @@ Both formats return the same points. A pack is read one byte range per frame. In
 
 See `autoware_ml/databases/t4pack/t4pack.py`.
 
-### Dataset Generation (Hydra Entrypoint)
+### Record Generation
 
-The `generate_dataset.py` script is the Hydra-based entrypoint that wires everything together. It reads a YAML config, instantiates the configured database class, and triggers record generation:
+There is no separate generation entrypoint. A task config composes its database from
+`autoware_ml/configs/database/`, Hydra instantiates it, and the datamodule builds the record
+table of every database that has no cache yet in `prepare_data()`, which Lightning calls once
+on the main node before `setup()`:
 
 ```python
-@hydra.main(version_base=None, config_path=_CONFIG_PATH)
-def main(cfg: DictConfig):
-    database: DatabaseInterface = instantiate(cfg.database)
-    database.process_scenario_records()
+def prepare_data(self) -> None:
+    for database in self.databases():
+        database.process_scenario_records()
 ```
 
-To run dataset generation:
+So the first `train` or `test` run over a database generates its records, and later runs load
+the cached table. Override the generation parameters from the command line with Hydra syntax:
 
 ```bash
-python3 autoware_ml/scripts/generate_dataset.py \
-    --config-name default_t4dataset_generator \
-    data_root_path=<data_root_path> \
-    database.num_workers=32
+autoware-ml train --config-name <task>/<model>/<config> database.num_workers=32
 ```
 
-The record table is written below the repository checkout unless `AUTOWARE_ML_WORKING_DIR` points elsewhere. Configuration is done through YAML files under `autoware_ml/configs/generators/`. Override any parameter from the command line using Hydra syntax. See [Configuration Guide](../user-guide/configuration.md) for full details.
+The table is written under `cache_root_path`, `<working_dir>/.cache` by default where
+`working_dir` is the repository checkout or `AUTOWARE_ML_WORKING_DIR`, as
+`<cache_path>/<cache_file_prefix_name>_<database_hash>.parquet`. The hash covers the scenario
+lists and every field that changes the records, so a changed database writes a new table next
+to the old one. See [Configuration Guide](../user-guide/configuration.md) for the path keys.
 
 ## Extending the Database
 
@@ -232,5 +236,5 @@ The record table is written below the repository checkout unless `AUTOWARE_ML_WO
 | `autoware_ml/databases/scenarios.py`          | `ScenarioData`, `DatasetParams`, `Scenarios`          |
 | `autoware_ml/databases/database_interface.py` | `DatabaseInterface` protocol                          |
 | `autoware_ml/databases/base_database.py`      | Shared `BaseDatabase` implementation                  |
-| `autoware_ml/scripts/generate_dataset.py`     | Hydra entrypoint for dataset generation               |
-| `autoware_ml/configs/generators/`             | YAML configs for dataset generation                   |
+| `autoware_ml/datamodule/data_module.py`       | `prepare_data()` builds the record tables             |
+| `autoware_ml/configs/database/`               | YAML configs of every database                        |

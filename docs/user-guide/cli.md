@@ -89,8 +89,12 @@ autoware-ml deploy --config-name <config_path> --weights <path> [--weights <path
 
 **Options:**
 
-- `output_name=<name>`: Base name for output files
-- `output_dir=<path>`: Output directory
+- `--release`: `vMAJOR.MINOR.PATCH` stamped into the ONNX metadata. Without it the artifacts
+  are stamped `unversioned`.
+
+The exports are written into the deploy MLflow run, under
+`mlruns/<experiment_group_name>/<experiment_name>/<deploy_run_id>/artifacts/exports/`. The
+output location is not configurable on its own, see [Deployment](deployment.md).
 
 **Single-task example:**
 

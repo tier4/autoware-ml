@@ -147,7 +147,7 @@ data_preprocessor:
 
 Output-side shaping (logits -> probabilities, voxel-to-point scatter, etc.)
 is **not** a configurable framework pipeline - it lives inside the model's
-own `forward()`, `compute_metrics()`, and `predict_outputs()` methods.
+own `forward()`, `compute_metrics()`, `build_eval_output()` and `decode_outputs()` methods.
 
 ### `model`
 
