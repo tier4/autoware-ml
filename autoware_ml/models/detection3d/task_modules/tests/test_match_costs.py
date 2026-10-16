@@ -157,15 +157,55 @@ class TestClassificationCost(unittest.TestCase):
 
     def test_classification_cost_ignores_padded_labels(self) -> None:
         """Test that the -1 padding of invalid gt labels neither raises nor changes the cost."""
-        padded_gt_labels = self.gt_labels.clone()
-        # Out-of-range padding in both directions would make a raw gather raise.
-        padded_gt_labels[0, 2] = -1
-        padded_gt_labels[1, 1] = -7
-        padded_gt_labels[1, 2] = self.num_classes + 5
+        # A raw gather would raise on -1, and the padded columns must keep the highest cost.
+        in_range_gt_labels = self.gt_labels.clone()
+        in_range_gt_labels[0, 2] = 1
+        in_range_gt_labels[1, 1] = 0
+        in_range_gt_labels[1, 2] = 2
 
-        cost = self.cls_cost(self.cls_logits, padded_gt_labels, self.valid_masks)
-        expected_cost = self.cls_cost(self.cls_logits, self.gt_labels, self.valid_masks)
+        cost = self.cls_cost(self.cls_logits, self.gt_labels, self.valid_masks)
+        expected_cost = self.cls_cost(self.cls_logits, in_range_gt_labels, self.valid_masks)
         self.assertTrue(torch.allclose(cost, expected_cost, atol=1e-6))
+
+    def test_classification_cost_masks_padded_labels_on_valid_gt_bboxes(self) -> None:
+        """Test that a -1 label is masked out even when its valid mask is still set."""
+        valid_masks = torch.ones_like(self.valid_masks)
+
+        cost = self.cls_cost(self.cls_logits, self.gt_labels, valid_masks)
+
+        padded_columns = (self.gt_labels == -1).unsqueeze(1).expand_as(cost)
+        self.assertTrue(torch.all(cost[padded_columns] == torch.finfo(cost.dtype).max))
+        self.assertTrue(torch.all(cost[~padded_columns] < torch.finfo(cost.dtype).max))
+
+    def test_classification_cost_rejects_out_of_range_labels(self) -> None:
+        """Test that labels outside [0, num_classes - 1] other than -1 raise instead of clamping."""
+        # Clamping ``num_classes`` would silently read the last class channel; -7 would read
+        # class 0. Both are real errors, for example from a taxonomy mismatch.
+        for out_of_range_label in (self.num_classes, self.num_classes + 5, -7):
+            with self.subTest(label=out_of_range_label):
+                gt_labels = self.gt_labels.clone()
+                gt_labels[0, 1] = out_of_range_label
+
+                with self.assertRaisesRegex(ValueError, "gt_labels"):
+                    self.cls_cost(self.cls_logits, gt_labels, self.valid_masks)
+
+    def test_classification_cost_rejects_out_of_range_label_on_invalid_gt_bbox(self) -> None:
+        """Test that the label range check also covers gt bboxes the valid mask excludes."""
+        gt_labels = self.gt_labels.clone()
+        gt_labels[1, 2] = self.num_classes
+
+        with self.assertRaisesRegex(ValueError, "gt_labels"):
+            self.cls_cost(self.cls_logits, gt_labels, self.valid_masks)
+
+    def test_classification_cost_accepts_last_class_label(self) -> None:
+        """Test that ``num_classes - 1`` is still accepted, pinning the check to ``>=``."""
+        gt_labels = self.gt_labels.clone()
+        gt_labels[1, 0] = self.num_classes - 1
+
+        cost = self.cls_cost(self.cls_logits, gt_labels, self.valid_masks)
+
+        # Prediction 2 of sample 1 is the most confident about the last class.
+        self.assertEqual(int(cost[1, :, 0].argmin()), 2)
 
     def test_classification_cost_scales_with_weight(self) -> None:
         """Test that the weight scales only the valid entries of the cost."""

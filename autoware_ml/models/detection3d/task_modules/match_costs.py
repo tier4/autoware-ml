@@ -57,18 +57,28 @@ class ClassificationCost:
         pos_cost = -(probs + self.eps).log() * self.alpha * (1.0 - probs).pow(self.gamma)
 
         # Pick each gt's own class channel out of the class axis. Padded gt_labels are -1
-        # (see Detection3DGTBatch), which gather rejects, so clamp them into range the same way
-        # create_gaussian_heatmaps does. Those columns are overwritten by the masked_fill below,
-        # so the clamped value itself is irrelevant.
-        # (batch_size, num_gt_bboxes) -> (batch_size, num_queries, num_gt_bboxes)
+        # (see Detection3DGTBatch), which gather rejects, so they are masked out explicitly the
+        # same way create_gaussian_heatmaps does. Any other label outside [0, num_classes) is a
+        # real error, for example a taxonomy mismatch, and must not silently read another class.
         num_classes = cls_logits.shape[2]
+        padded_labels = gt_labels == -1
+        if bool((((gt_labels < 0) & ~padded_labels) | (gt_labels >= num_classes)).any()):
+            raise ValueError(
+                f"Found gt_labels outside [0, {num_classes - 1}] that are not the -1 padding. "
+                "Every label must index a class channel of cls_logits."
+            )
+        # Padded labels index class 0 for a legal gather; their columns are overwritten below,
+        # so the gathered value itself is irrelevant.
+        # (batch_size, num_gt_bboxes) -> (batch_size, num_queries, num_gt_bboxes)
         class_indices = (
-            gt_labels.clamp(min=0, max=num_classes - 1).unsqueeze(1).expand(-1, num_queries, -1)
+            gt_labels.masked_fill(padded_labels, 0).unsqueeze(1).expand(-1, num_queries, -1)
         )
         cost = (pos_cost.gather(2, class_indices) - neg_cost.gather(2, class_indices)) * self.weight
-        # valid_mask: (batch_size, num_gt_bboxes) -> (batch_size, 1, num_gt_bboxes)
-        # Broadcast to every column (gt_bboxes)
-        cost = cost.masked_fill(~valid_masks.unsqueeze(1), torch.finfo(cost.dtype).max)
+        # Padded or invalid gts get the highest cost so the assignment never matches them.
+        # (batch_size, num_gt_bboxes) -> (batch_size, 1, num_gt_bboxes), broadcast to every query
+        cost = cost.masked_fill(
+            (~valid_masks | padded_labels).unsqueeze(1), torch.finfo(cost.dtype).max
+        )
         return cost
 
 

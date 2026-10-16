@@ -301,6 +301,19 @@ def _splat_gaussian_kernels(
     # All x-coordinates of the kernel cells for each box in the batch, broadcast to all y-coordinates
     xx = xs.unsqueeze(-2).expand(batch_size, max_num_bboxes, max_diameter, max_diameter)
 
+    # Labels for each box, shape (B, N, 1, 1). Padded boxes carry -1 (see Detection3DGTBatch)
+    # and are masked out explicitly below. Any other label outside [0, num_classes) is a real
+    # error, for example a taxonomy mismatch, and must not be silently drawn into another class.
+    labels = gt_bboxes_labels.view(batch_size, max_num_bboxes, 1, 1)
+    padded_labels = labels == -1
+    if bool((((labels < 0) & ~padded_labels) | (labels >= num_classes)).any()):
+        raise ValueError(
+            f"Found label(s) outside [0, {num_classes - 1}] that are not the -1 padding. "
+            "Please ensure that all labels are in the range [0, num_classes - 1]."
+        )
+    # Padded labels index class 0 for a legal flat index; their cells are zeroed by in_bounds.
+    index_labels = labels.masked_fill(padded_labels, 0)
+
     # (B, max_num_bboxes, max_diameter, max_diameter)
     in_bounds = (
         (yy >= 0)
@@ -308,19 +321,15 @@ def _splat_gaussian_kernels(
         & (xx >= 0)
         & (xx < heatmap_width)
         & valid_masks.view(batch_size, max_num_bboxes, 1, 1)
+        & ~padded_labels
     )
 
     # Set invalid heatmap positions to zero
     kernel_values = torch.where(in_bounds, kernels, torch.zeros_like(kernels))
 
-    # Labels for each box, shape (B, N, 1, 1)
-    labels = gt_bboxes_labels.view(batch_size, max_num_bboxes, 1, 1)
-    # clamp invalid labels (e.g. -1 padding) so indexing stays legal;
-    clamp_labels = labels.clamp(min=0, max=num_classes - 1)
-
     # (B, max_num_bboxes, 1, 1) + (B, max_num_bboxes, max_diameter, max_diameter) -> (B, max_num_bboxes, max_diameter, max_diameter)
     flat_idx = (
-        clamp_labels * heatmap_height * heatmap_width
+        index_labels * heatmap_height * heatmap_width
         + yy.clamp(0, heatmap_height - 1) * heatmap_width
         + xx.clamp(0, heatmap_width - 1)
     )
@@ -373,9 +382,11 @@ def create_gaussian_heatmaps(
          in-heatmap remainder is still drawn.
       4. Flat indexing: each cell's target position is linearized as
          ``label * H * W + y * W + x`` into a per-sample flat buffer of size
-         ``num_classes * H * W``. Labels and coordinates are clamped into valid
-         range so indexing is always legal; clamped cells carry value zero and
-         cannot win the max.
+         ``num_classes * H * W``. Coordinates are clamped into valid range so
+         indexing is always legal; clamped cells carry value zero and cannot win
+         the max. Padded ``-1`` labels index class 0 the same way, with their
+         cells zeroed. Any other label outside ``[0, num_classes - 1]`` raises
+         ``ValueError`` rather than being drawn into a neighbouring class.
       5. Scatter: a single ``scatter_reduce_(reduce="amax", include_self=True)``
          writes all cells for the whole batch, resolving overlaps between boxes
          and with pre-existing heatmap values by maximum.
@@ -383,7 +394,8 @@ def create_gaussian_heatmaps(
     Notes:
         - Invalid boxes (``valid_masks == 0``) contribute nothing: their values
           are zeroed in step 3, and zeros never beat the (non-negative) heatmap
-          under ``amax``. Padding labels such as ``-1`` are safe via clamping.
+          under ``amax``. Only ``-1`` is accepted as a padding label; it is masked
+          out explicitly, whether or not ``valid_masks`` already excludes the box.
         - Memory scales with ``B * N * max_diameter**2``; a single large radius
           in the batch inflates the padded kernel tensor for all boxes. Only
           valid boxes count: radii of invalid (padded) boxes are normalized to
