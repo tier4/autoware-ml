@@ -21,7 +21,6 @@ used by task-specific model wrappers throughout the framework.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-import logging
 from typing import Any, NamedTuple, final
 from types import MappingProxyType
 
@@ -35,15 +34,12 @@ from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
-from autoware_ml.datamodule.data_module import DataModule
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.eval_mixin import MetricEvalMixin
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 from autoware_ml.types.dataset import SplitType
 from autoware_ml.utils.deploy import ExportSpec
 from autoware_ml.utils.optimizer import build_lightning_optimizer_config
-
-logger = logging.getLogger(__name__)
 
 
 class LogDictConfigs(NamedTuple):
@@ -126,50 +122,6 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule):
             if log_dict_configs is not None
             else LogDictConfigs(prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
         )
-
-    def setup(self, stage: str) -> None:
-        """Expose one training sample as the example input so the model summary reports FLOPs.
-
-        The summary callback runs at ``on_fit_start`` before the module hooks, so the example
-        input has to be in place by the end of ``setup``. Nothing is done when the module already
-        carries an example input or when the datamodule cannot provide a sample.
-
-        Args:
-            stage: Lightning stage, one of ``fit``, ``validate``, ``test`` or ``predict``.
-        """
-        super().setup(stage)
-        if stage != "fit" or self.example_input_array is not None:
-            return
-
-        example_input_batch = self.build_example_input_batch()
-        if example_input_batch is None:
-            logger.warning(
-                "No training sample available to build the example input, the model summary "
-                "will not report FLOPs."
-            )
-            return
-        self.example_input_array = example_input_batch
-
-    def build_example_input_batch(self) -> ModelGTBatch | None:
-        """Collate the first training sample into a single-sample batch.
-
-        Lightning's model summary reports the FLOPs of a forward pass only when the module
-        exposes an ``example_input_array``. The batch built here plays that role: the summary
-        moves it to the device and runs it through :meth:`on_after_batch_transfer` like any
-        training batch, so the reported FLOPs cover the runtime preprocessing and the model for
-        one sample.
-
-        Returns:
-            A batch holding the first training sample, or ``None`` when the trainer has no
-            :class:`DataModule` with a set-up, non-empty training dataset.
-        """
-        datamodule = self.trainer.datamodule
-        if not isinstance(datamodule, DataModule):
-            return None
-        dataset = datamodule.datasets.get(SplitType.TRAIN)
-        if dataset is None or len(dataset) == 0:
-            return None
-        return dataset.collate_fn([dataset[0]])
 
     def transfer_batch_to_device(
         self, batch: ModelGTBatch, device: torch.device, dataloader_idx: int

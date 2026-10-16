@@ -234,7 +234,10 @@ Tasks validated by steps rather than epochs, or whose loss is the only training 
 
 The root also turns on the `IterationTimer` and `DataProcessingTimer` callbacks, which log the
 step and data loading times at `trainer.log_every_n_steps`, and the `RichProgressBar`, for
-every task.
+every task. The `ModelSummaryExampleInput` callback sets the first training sample as the
+module's example input at fit start, so the model summary reports the FLOPs of one sample. The
+summary runs that forward pass once on every rank; set `model_summary_example_input: null` to
+skip it. The callback fails fit when the datamodule serves no training sample.
 
 ### `logger`
 

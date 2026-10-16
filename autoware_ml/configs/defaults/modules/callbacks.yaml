@@ -49,3 +49,6 @@ callbacks:
   data_processing_timer:
     _target_: autoware_ml.callbacks.data_processing_timer.DataProcessingTimer
     log_interval: ${trainer.log_every_n_steps}
+
+  model_summary_example_input:
+    _target_: autoware_ml.callbacks.model_summary_example_input.ModelSummaryExampleInput
