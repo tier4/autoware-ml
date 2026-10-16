@@ -136,8 +136,6 @@ class LiDARDepthSparseTransform(BaseTransform):
         Returns:
             Updated ModelGTSample instance with `depth_images` set in `camera_image_data`.
         """
-        assert multi_task_gt_sample.point_cloud_data is not None
-        assert multi_task_gt_sample.camera_image_data is not None
         point_cloud_data = multi_task_gt_sample.point_cloud_data
         camera_image_data = multi_task_gt_sample.camera_image_data
 

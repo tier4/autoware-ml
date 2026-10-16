@@ -224,7 +224,6 @@ class CalibrationMisalignment(BaseTransform):
         Returns:
             Updated ModelGTSample with all cameras flagged ``CalibrationStatus.CALIBRATED``.
         """
-        assert model_gt_sample.camera_image_data is not None
         camera_image_data = model_gt_sample.camera_image_data
         num_cameras = camera_image_data.lidar2cams.shape[0]
         calibration_statuses = torch.full(
@@ -246,7 +245,6 @@ class CalibrationMisalignment(BaseTransform):
             Updated ModelGTSample with perturbed ``lidar2cams`` and ``lidar2images``, the
             per-camera noise transforms and all cameras flagged ``MISCALIBRATED``.
         """
-        assert model_gt_sample.camera_image_data is not None
         camera_image_data = model_gt_sample.camera_image_data
         lidar2cams = camera_image_data.lidar2cams
         num_cameras = lidar2cams.shape[0]
@@ -509,8 +507,6 @@ class LidarCameraFusion(BaseTransform):
         Raises:
             ValueError: If the points carry no intensity feature.
         """
-        assert model_gt_sample.camera_image_data is not None
-        assert model_gt_sample.point_cloud_data is not None
         camera_image_data = model_gt_sample.camera_image_data
         point_cloud_data = model_gt_sample.point_cloud_data
 
@@ -637,7 +633,6 @@ class LidarCameraFusion(BaseTransform):
         Returns:
             Boolean mask, ``True`` for occluded points.
         """
-        assert self.ego_box is not None
         box_min = np.array(self.ego_box[:3], dtype=np.float64)
         box_max = np.array(self.ego_box[3:], dtype=np.float64)
 
@@ -814,7 +809,6 @@ class Affine(ImageSpaceTransform):
         Returns:
             Updated ModelGTSample with the warped images and the composed calibration.
         """
-        assert model_gt_sample.camera_image_data is not None
         camera_image_data = model_gt_sample.camera_image_data
         images = camera_image_data.images
         num_cameras, _, height, width = images.shape
@@ -939,7 +933,6 @@ class SaveFusionPreview(BaseTransform):
         Raises:
             ValueError: If the images carry no depth maps.
         """
-        assert model_gt_sample.camera_image_data is not None
         camera_image_data = model_gt_sample.camera_image_data
         if camera_image_data.depth_maps is None:
             raise ValueError(

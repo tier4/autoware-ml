@@ -119,7 +119,7 @@ class TestConvFuser(unittest.TestCase):
 
     def test_forward_rejects_single_branch(self) -> None:
         """Test that fusing a single branch is rejected, since there is nothing to fuse."""
-        with self.assertRaises(AssertionError):
+        with self.assertRaisesRegex(ValueError, "at least two"):
             self.fuser([self.bev_features[0]])
 
     def test_forward_rejects_mismatched_spatial_shapes(self) -> None:

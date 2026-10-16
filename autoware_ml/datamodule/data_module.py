@@ -195,7 +195,6 @@ class DataModule(L.LightningDataModule):
                 records = split_records[database.database_hash][_RECORD_SPLIT[split]]
                 repeat = source.repeat if split == SplitType.TRAIN else 1
                 dataset = source.dataset(split)
-                assert dataset is not None
                 bound = dataset.bind(records)
                 logger.info(
                     f"Source {name} serves {len(records)} records of database "

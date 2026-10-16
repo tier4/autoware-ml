@@ -426,10 +426,6 @@ class CenterHead(nn.Module):
         # (batch_size, num_classes*max_num_bboxes, 7 or 9)
         bboxes_predictions = torch.cat(bboxes_predictions, dim=2)
 
-        assert bboxes_predictions.shape[2] == (self.box_code_size - 1), (
-            f"Expected bboxes_predictions to have shape[2] == {self.box_code_size - 1}, "
-            f"but got {bboxes_predictions.shape[2]}"
-        )
         return bboxes_predictions
 
     def _filter_bbox_predictions(

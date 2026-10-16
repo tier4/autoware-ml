@@ -263,6 +263,10 @@ class BEVFusionDetectionModel(ModuleBaseModel):
             metrics: Detection metrics accumulated during validation and test.
             partial_annotations: Maps the dataset's per-sample annotation flag to the classes
                 the head must not supervise in that sample. None supervises every class.
+
+        Raises:
+            ValueError: If neither ``lidar_network`` nor ``camera_network`` is given, or the
+                camera branch and the lidar fuser are not configured together.
         """
         super().__init__(
             data_preprocessor=data_preprocessor,
@@ -275,9 +279,8 @@ class BEVFusionDetectionModel(ModuleBaseModel):
         self.lidar_network = lidar_network
         self.camera_network = camera_network
         self.bbox_head = bbox_head
-        assert self.lidar_network is not None or self.camera_network is not None, (
-            "At least one of lidar_network or camera_network must be provided."
-        )
+        if self.lidar_network is None and self.camera_network is None:
+            raise ValueError("At least one of lidar_network or camera_network must be provided.")
         self._validate_fusion_contract()
         self._validate_geometry_contract()
 
@@ -447,7 +450,6 @@ class BEVFusionDetectionModel(ModuleBaseModel):
                     "ModelBatchInputs must contain voxels_data for CenterPoint forward pass."
                 )
 
-            assert batch_size is not None, "Batch size must be provided for lidar forward pass."
             # The sparse middle encoder consumes ``(batch, z, y, x)`` coordinates
             batch_coords = voxels_data.batch_zyx_coords()
             other_bev_features = [image_bev] if image_bev is not None else None
@@ -607,7 +609,6 @@ class BEVFusionDetectionModel(ModuleBaseModel):
                 camera_intrinsics, lidar2cams
             )
 
-        assert export_model.camera_network is not None
         return {
             "bevfusion_image_backbone": ExportSpec(
                 module=BEVFusionImageBackboneExportWrapper(export_model.camera_network),

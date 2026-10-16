@@ -220,7 +220,6 @@ class CropAndScale(ImageSpaceTransform):
         Returns:
             Updated ModelGTSample instance with a cropped and scaled `camera_image_data`.
         """
-        assert multi_task_gt_sample.camera_image_data is not None
         camera_image_data = multi_task_gt_sample.camera_image_data
 
         images = camera_image_data.images
@@ -314,7 +313,6 @@ class ResizeMultiviewImages(ImageSpaceTransform):
         Returns:
             Updated ModelGTSample instance with a resized `camera_image_data`.
         """
-        assert multi_task_gt_sample.camera_image_data is not None
         camera_image_data = multi_task_gt_sample.camera_image_data
 
         images = camera_image_data.images
@@ -381,7 +379,6 @@ class PadMultiViewImage(ImageSpaceTransform):
         Raises:
             ValueError: If the images are larger than the size they are padded to.
         """
-        assert multi_task_gt_sample.camera_image_data is not None
         camera_image_data = multi_task_gt_sample.camera_image_data
 
         images = camera_image_data.images
@@ -420,7 +417,6 @@ class PadMultiViewImage(ImageSpaceTransform):
         """
         if self.size is not None:
             return self.size
-        assert self.size_divisor is not None
         return (
             int(np.ceil(height / self.size_divisor) * self.size_divisor),
             int(np.ceil(width / self.size_divisor) * self.size_divisor),
@@ -480,7 +476,6 @@ class ResizeCropFlipRotImage(ImageSpaceTransform):
         Returns:
             Updated ModelGTSample instance with an augmented `camera_image_data`.
         """
-        assert multi_task_gt_sample.camera_image_data is not None
         camera_image_data = multi_task_gt_sample.camera_image_data
 
         images = camera_image_data.images

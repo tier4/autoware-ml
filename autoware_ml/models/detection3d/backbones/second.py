@@ -89,7 +89,6 @@ class SECONDBackbone(nn.Module):
         """
         if self.activation_checkpointing:
             outputs = checkpoint(self.custom_forward, x, use_reentrant=False)
-            assert outputs is not None, "Activation checkpointing failed to produce outputs."
             return outputs
         else:
             return self.custom_forward(x)

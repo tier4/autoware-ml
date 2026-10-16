@@ -1474,7 +1474,6 @@ class TransFusionHead(nn.Module):
             Scalar IoU loss for this layer. Zero, but still attached to the graph, when the
             batch has no positives.
         """
-        assert self.iou_loss is not None
         if not bool(pos_masks.any()):
             return preds.sum() * 0.0
 

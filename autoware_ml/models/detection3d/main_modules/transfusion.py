@@ -262,7 +262,6 @@ class TransFusionDetectionModel(ModuleBaseModel):
 
         if batch_size is None:
             batch_size = multi_task_batch_inputs.multi_task_gt_batch.infer_batch_size()
-        assert batch_size is not None, "Batch size must be provided for lidar forward pass."
 
         batch_coords = voxels_data.batch_zyx_coords()
         voxel_features = self.pts_voxel_encoder(

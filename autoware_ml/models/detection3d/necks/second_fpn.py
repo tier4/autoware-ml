@@ -100,7 +100,6 @@ class SECONDFPN(nn.Module):
         """
         if self.activation_checkpointing:
             upsampled = checkpoint(self.custom_forward, x, use_reentrant=False)
-            assert upsampled is not None, "Activation checkpointing failed to produce outputs."
             return upsampled
         else:
             return self.custom_forward(x)

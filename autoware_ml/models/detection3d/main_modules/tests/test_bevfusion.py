@@ -680,7 +680,7 @@ class TestBEVFusionDetectionModelCameraLidar(_BEVFusionDetectionModelTestCase):
 
     def test_requires_at_least_one_branch(self) -> None:
         """Test that a detector without any BEV branch is rejected."""
-        with self.assertRaises(AssertionError):
+        with self.assertRaisesRegex(ValueError, "At least one"):
             self._build_model(lidar_network=None, camera_network=None)
 
     def test_camera_network_requires_a_fuser(self) -> None:

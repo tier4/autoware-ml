@@ -64,6 +64,12 @@ class ConvFuser(nn.Module):
 
         Returns:
             Fused BEV feature map.
+
+        Raises:
+            ValueError: If fewer than two feature maps are given, there is nothing to fuse.
         """
-        assert len(bev_features) > 1, "Length of bev_features must be more than 1!"
+        if len(bev_features) < 2:
+            raise ValueError(
+                f"The fuser needs at least two BEV feature maps, got {len(bev_features)}."
+            )
         return self.proj(torch.cat(list(bev_features), dim=1))

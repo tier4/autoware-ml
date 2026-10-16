@@ -35,5 +35,4 @@ class NuScenesSegmentation3DTask(T4Segmentation3DTask):
         Returns:
           str: Path of the mask under the database root.
         """
-        assert lidar_frame.lidar_pointcloud_semantic_mask_path is not None
         return str(self.database_root_path / lidar_frame.lidar_pointcloud_semantic_mask_path)
