@@ -82,15 +82,6 @@ class MlflowRunContext:
         return self.artifact_dir / CONFIG_ARTIFACTS_DIRNAME
 
 
-def get_user_config_name() -> str:
-    """Return the user-facing config name without the ``tasks/`` prefix.
-
-    Returns:
-        Config name shown to users in run directories and MLflow tags.
-    """
-    return HydraConfig.get().job.config_name.removeprefix("tasks/")
-
-
 def generate_experiment_name(experiment_group_name: str, experiment_name: str) -> str:
     """Generate the MLflow experiment name of a config.
 
