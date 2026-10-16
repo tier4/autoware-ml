@@ -22,9 +22,13 @@ from __future__ import annotations
 
 import unittest
 
+from spconv.pytorch import SparseConv3d as NativeSparseConv3d
+from spconv.pytorch import SubMConv3d as NativeSubMConv3d
 import torch
 
+from autoware_ml.models.detection3d.encoders.sparse.sparse_encoder import SparseEncoder
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
+from autoware_ml.ops.spconv.sparse_conv import ExportableSparseConv3d, ExportableSubMConv3d
 
 
 @unittest.skipUnless(IS_SPCONV_AVAILABLE, "SparseEncoder is built on spconv.")
@@ -33,8 +37,6 @@ class TestSparseEncoderPrepareForExport(unittest.TestCase):
 
     def setUp(self) -> None:
         """Set up a small sparse encoder on a 16x16x5 grid that collapses to a 2x2 BEV."""
-        from autoware_ml.models.detection3d.encoders.sparse.sparse_encoder import SparseEncoder
-
         torch.manual_seed(0)
         self.encoder = SparseEncoder(
             in_channels=32,
@@ -52,14 +54,6 @@ class TestSparseEncoderPrepareForExport(unittest.TestCase):
         Test that the export copy swaps every native spconv layer for the exportable wrapper,
         shares no parameters with the training encoder, and is in eval mode.
         """
-        from spconv.pytorch import SparseConv3d as NativeSparseConv3d
-        from spconv.pytorch import SubMConv3d as NativeSubMConv3d
-
-        from autoware_ml.ops.spconv.sparse_conv import (
-            ExportableSparseConv3d,
-            ExportableSubMConv3d,
-        )
-
         self.encoder.train()
 
         export_encoder = self.encoder.prepare_for_export()
@@ -109,8 +103,6 @@ class TestSparseEncoderForward(unittest.TestCase):
 
     def setUp(self) -> None:
         """Set up the full-size TransFusion grid: 1440x1440x41 voxels down to a 180x180 BEV."""
-        from autoware_ml.models.detection3d.encoders.sparse.sparse_encoder import SparseEncoder
-
         torch.manual_seed(0)
         self.device = torch.device("cuda:0")
         self.batch_size = 2

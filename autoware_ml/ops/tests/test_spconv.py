@@ -19,15 +19,13 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
+import onnx
 import pytest
+import spconv.pytorch as spconv
 import torch
 
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
-
-if IS_SPCONV_AVAILABLE:
-    import spconv.pytorch as spconv
-
-    from autoware_ml.ops.spconv.sparse_conv import ExportableSparseConv3d, ExportableSubMConv3d
+from autoware_ml.ops.spconv.sparse_conv import ExportableSparseConv3d, ExportableSubMConv3d
 
 
 pytestmark = pytest.mark.skipif(
@@ -163,8 +161,6 @@ class TestSparseConv3d:
 
     def test_onnx_export(self) -> None:
         """Sparse convolution wrapper should be exportable to ONNX."""
-        import onnx
-
         sparse_tensor = _build_sparse_tensor()
         module = SparseConvExportModule().cuda().eval()
 

@@ -4,7 +4,7 @@ import json
 import logging
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Sequence
+from typing import Sequence
 
 from jaxtyping import Float32
 from lightning.pytorch.utilities.rank_zero import rank_zero_only
@@ -35,11 +35,9 @@ from autoware_ml.datamodule.base_dataset import (
 )
 from autoware_ml.datamodule.base_dataset_task import BaseDatasetTask
 from autoware_ml.datamodule.t4dataset.frame_meta import scene_dir_fragment
+from autoware_ml.metrics.geometry.lanelet import LaneletMapProvider
 from autoware_ml.transforms.base import TransformsCompose
 from autoware_ml.types.tasks import TaskType
-
-if TYPE_CHECKING:
-    from autoware_ml.metrics.geometry.lanelet import LaneletMapProvider
 
 
 logger = logging.getLogger(__name__)

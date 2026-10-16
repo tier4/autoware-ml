@@ -6,17 +6,15 @@ import itertools
 import time
 from abc import abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, Self, Sequence
+from typing import Self, Sequence
 
 
 import polars as pl
 from torch.utils.data import Dataset
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch, ModelGTSample
+from autoware_ml.metrics.geometry.lanelet import LaneletMapProvider
 from autoware_ml.transforms.base import TransformsCompose
-
-if TYPE_CHECKING:
-    from autoware_ml.metrics.geometry.lanelet import LaneletMapProvider
 
 
 class BaseDataset(Dataset):

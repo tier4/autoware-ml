@@ -30,6 +30,7 @@ from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.datamodule.base_dataset_task import BaseDatasetTask
 from autoware_ml.datamodule.t4dataset import dataset as dataset_module
 from autoware_ml.datamodule.t4dataset.dataset import T4Dataset
+from autoware_ml.metrics.geometry.lanelet import LaneletMapProvider, T4LaneletMapResolver
 
 _ROOT = "/data/t4dataset"
 _SCENE = "db_j6gen2_v1/0a1b2c3d-0000-4000-8000-000000000000/0"
@@ -319,9 +320,6 @@ def test_frame_meta_carries_the_map_resolved_against_the_datasets_own_root(tmp_p
     metrics used to do for every source, the same frames have no map and drop out of the map-backed
     slices silently.
     """
-    pytest.importorskip("lanelet2")
-    from autoware_ml.metrics.geometry.lanelet import LaneletMapProvider, T4LaneletMapResolver
-
     main_root = tmp_path / "t4dataset"
     pseudo_root = main_root / "pseudo_large"
     scene = "db_pseudo/0a1b2c3d-0000-4000-8000-000000000000/0"

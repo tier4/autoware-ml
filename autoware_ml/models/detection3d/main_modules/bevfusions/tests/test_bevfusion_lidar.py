@@ -24,6 +24,8 @@ import torch
 import torch.nn as nn
 
 from autoware_ml.models.detection3d.backbones.second import SECONDBackbone
+from autoware_ml.models.detection3d.encoders.sparse.sparse_encoder import SparseEncoder
+from autoware_ml.models.detection3d.encoders.voxel import HardSimpleVoxelSinCosEncoder
 from autoware_ml.models.detection3d.main_modules.bevfusions.bevfusion_lidar import BEVFusionLidar
 from autoware_ml.models.detection3d.main_modules.bevfusions.fuser import ConvFuser
 from autoware_ml.models.detection3d.necks.second_fpn import SECONDFPN
@@ -314,9 +316,6 @@ class TestBEVFusionLidarWithSparseEncoder(_BEVFusionLidarTestCase):
 
     def setUp(self) -> None:
         """Set up the real lidar stack and a random two-sample voxel batch on the GPU."""
-        from autoware_ml.models.detection3d.encoders.sparse.sparse_encoder import SparseEncoder
-        from autoware_ml.models.detection3d.encoders.voxel import HardSimpleVoxelSinCosEncoder
-
         super().setUp()
         self.device = torch.device("cuda:0")
         self.point_cloud_range = [0.0, 0.0, -5.0, 8.0, 8.0, 3.0]

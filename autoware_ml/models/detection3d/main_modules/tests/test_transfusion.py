@@ -26,6 +26,8 @@ from types import MappingProxyType
 import unittest
 
 from jaxtyping import Float32, Int32
+from spconv.pytorch import SparseConv3d as NativeSparseConv3d
+from spconv.pytorch import SubMConv3d as NativeSubMConv3d
 import torch
 import torch.nn as nn
 
@@ -34,6 +36,8 @@ from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.models.detection3d.backbones.second import SECONDBackbone
+from autoware_ml.models.detection3d.encoders.sparse.sparse_encoder import SparseEncoder
+from autoware_ml.models.detection3d.encoders.voxel import HardSimpleVoxelSinCosEncoder
 from autoware_ml.models.detection3d.heads.transfusions.exportable_multi_head_attention import (
     ExportableMultiheadAttention,
 )
@@ -54,6 +58,7 @@ from autoware_ml.models.detection3d.task_modules.match_costs import (
     IoU3DCost,
 )
 from autoware_ml.models.module_base_model import LogDictConfigs
+from autoware_ml.ops.spconv.sparse_conv import ExportableSparseConv3d, ExportableSubMConv3d
 from autoware_ml.ops.voxelization.voxelization import VoxelsData
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 
@@ -558,9 +563,6 @@ class TestTransFusionDetectionModelWithSparseEncoder(_TransFusionDetectionModelT
 
     def setUp(self) -> None:
         """Set up the real lidar stack and a random two-sample voxel batch on the GPU."""
-        from autoware_ml.models.detection3d.encoders.sparse.sparse_encoder import SparseEncoder
-        from autoware_ml.models.detection3d.encoders.voxel import HardSimpleVoxelSinCosEncoder
-
         super().setUp()
         self.device = torch.device("cuda:0")
         self.point_cloud_range = [0.0, 0.0, -5.0, 8.0, 8.0, 3.0]
@@ -615,14 +617,6 @@ class TestTransFusionDetectionModelWithSparseEncoder(_TransFusionDetectionModelT
         Test that the exported wrapper carries only exportable sparse convolutions and attention
         layers, while the training model keeps its native spconv layers and attention.
         """
-        from spconv.pytorch import SparseConv3d as NativeSparseConv3d
-        from spconv.pytorch import SubMConv3d as NativeSubMConv3d
-
-        from autoware_ml.ops.spconv.sparse_conv import (
-            ExportableSparseConv3d,
-            ExportableSubMConv3d,
-        )
-
         spec = self.model.build_export_spec(self.batch_inputs)
 
         export_middle_encoder = spec.module.pts_middle_encoder

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import pytest
 
+from autoware_ml.metrics.geometry.lanelet import LaneletMap
 from autoware_ml.metrics.geometry.reachability import VehicleGeometry
 
 # Map path every test hands over for a frame that has a map.
@@ -37,17 +38,8 @@ _SERVED_MAPS: dict[str, object] = {}
 
 @pytest.fixture(autouse=True)
 def stub_lanelet_map_loader(monkeypatch: pytest.MonkeyPatch):
-    """Load lanelet maps from the registry instead of OSM files, empty for every test.
-
-    The lanelet module needs ``lanelet2``, which the tests that read no map do without, so
-    the loader is only stubbed where it can be imported.
-    """
+    """Load lanelet maps from the registry instead of OSM files, empty for every test."""
     _SERVED_MAPS.clear()
-    try:
-        from autoware_ml.metrics.geometry.lanelet import LaneletMap
-    except ImportError:
-        yield
-        return
     load_osm = LaneletMap.from_osm
 
     def from_osm_or_served(cls, path):
