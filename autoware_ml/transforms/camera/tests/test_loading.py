@@ -131,7 +131,6 @@ class TestLoadImagesFromFile(unittest.TestCase):
 
         self.assertEqual(transform.color_type, ImageChannel.RGB)
         self.assertTrue(transform.normalize_to_unit)
-        self.assertIsNone(transform.camera_order)
 
     def test_missing_image_samples_key(self) -> None:
         """Test that missing 'image_samples' raises KeyError."""
@@ -194,60 +193,6 @@ class TestLoadImagesFromFile(unittest.TestCase):
         self.assertFalse(torch.equal(image, image.flip(1)))
         self.assertFalse(torch.equal(image, image.flip(2)))
         self.assertNotEqual(image.shape, image.transpose(1, 2).shape)
-
-    def test_images_follow_the_camera_order(self) -> None:
-        """Test that the images are reordered to match the configured camera order."""
-        # The metadata is given in the reverse of the requested order.
-        sample = self.build_model_gt_sample(
-            [self.build_image_sample("camera1"), self.build_image_sample("camera0")]
-        )
-
-        output = LoadImagesFromFile(normalize_to_unit=False, camera_order=["camera0", "camera1"])(
-            sample
-        )
-
-        assert output.camera_image_data is not None
-        camera_image_data = output.camera_image_data
-        self.assertEqual(camera_image_data.camera_names, ["camera0", "camera1"])
-        self.assertTrue(
-            torch.equal(
-                camera_image_data.images,
-                self.expected_images(["camera0", "camera1"], normalize_to_unit=False),
-            )
-        )
-        # The sample order would serve the cameras swapped, which the markers tell apart.
-        self.assertFalse(
-            torch.equal(
-                camera_image_data.images,
-                self.expected_images(["camera1", "camera0"], normalize_to_unit=False),
-            )
-        )
-
-    def test_loads_a_subset_of_the_cameras(self) -> None:
-        """Test that only the cameras of the configured order are loaded."""
-        sample = self.build_model_gt_sample(
-            [self.build_image_sample("camera0"), self.build_image_sample("camera1")]
-        )
-
-        output = LoadImagesFromFile(normalize_to_unit=False, camera_order=["camera1"])(sample)
-
-        assert output.camera_image_data is not None
-        camera_image_data = output.camera_image_data
-        self.assertEqual(camera_image_data.camera_names, ["camera1"])
-        self.assertEqual(camera_image_data.images.shape, (1, 3, IMAGE_HEIGHT, IMAGE_WIDTH))
-        self.assertTrue(
-            torch.equal(
-                camera_image_data.images,
-                self.expected_images(["camera1"], normalize_to_unit=False),
-            )
-        )
-
-    def test_missing_camera_raises(self) -> None:
-        """Test that a camera of the order missing from the sample raises ValueError."""
-        sample = self.build_model_gt_sample([self.build_image_sample("camera0")])
-
-        with self.assertRaises(ValueError):
-            LoadImagesFromFile(camera_order=["camera0", "camera1"])(sample)
 
     def test_normalize_to_unit(self) -> None:
         """Test that pixel values are divided by 255 only when requested."""

@@ -16,13 +16,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-
 import torch
 from torchvision.io import decode_image
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
-from autoware_ml.dataclasses.geometry.images import ImageSample
 from autoware_ml.geometry.cameras.base_images import BaseImages
 from autoware_ml.transforms.base import BaseTransform
 from autoware_ml.types.geometry import ImageChannel
@@ -31,9 +28,9 @@ from autoware_ml.types.geometry import ImageChannel
 class LoadImagesFromFile(BaseTransform):
     """Load the images of every camera of the sample together with their calibration.
 
-    The cameras are stacked along the leading dimension in the order of ``camera_order`` when
-    given, otherwise in the order of the image samples. The pixel values are served in unit
-    range by default, which is the range the models and the camera-lidar fusion read.
+    The cameras are stacked along the leading dimension in the order of the image samples. The
+    pixel values are served in unit range by default, which is the range the models and the
+    camera-lidar fusion read.
 
     Required keys:
         - image_samples: one record per camera, with the image path and the calibration.
@@ -48,46 +45,16 @@ class LoadImagesFromFile(BaseTransform):
         self,
         color_type: ImageChannel = ImageChannel.RGB,
         normalize_to_unit: bool = True,
-        camera_order: Sequence[str] | None = None,
     ) -> None:
         """Initialize the LoadImagesFromFile transform.
 
         Args:
             color_type: Output color format, only rgb is supported now.
             normalize_to_unit: Whether to divide pixel values by ``255``.
-            camera_order: Names of the cameras to load, in loading order. ``None`` loads every
-                camera of the sample in the order of its image samples.
         """
         super().__init__(probability=None)
         self.color_type = color_type
         self.normalize_to_unit = normalize_to_unit
-        self.camera_order = list(camera_order) if camera_order is not None else None
-
-    def select_image_samples(self, image_samples: Sequence[ImageSample]) -> list[ImageSample]:
-        """Pick the image samples of the configured cameras, in loading order.
-
-        Args:
-            image_samples: Image samples of the ModelGTSample.
-
-        Returns:
-            The image samples to load, in loading order.
-
-        Raises:
-            ValueError: If a camera of ``camera_order`` is missing from the sample.
-        """
-        if self.camera_order is None:
-            return list(image_samples)
-        image_samples_by_camera_name = {
-            image_sample.camera_name: image_sample for image_sample in image_samples
-        }
-        selected = []
-        for camera_name in self.camera_order:
-            if camera_name not in image_samples_by_camera_name:
-                raise ValueError(
-                    f"Missing camera_name: {camera_name} from the sample: {list(image_samples)}"
-                )
-            selected.append(image_samples_by_camera_name[camera_name])
-        return selected
 
     def load_image(self, image_path: str) -> torch.Tensor:
         """Read one image from disk as a float32 (num_channels, height, width) tensor.
@@ -120,7 +87,6 @@ class LoadImagesFromFile(BaseTransform):
         image_samples = model_gt_sample.image_samples  # type: ignore[reportOptionalIterable]
         if not image_samples:
             raise ValueError("No image samples found in the ModelGTSample.")
-        image_samples = self.select_image_samples(image_samples)
 
         camera_intrinsics = torch.stack([sample.camera_intrinsic for sample in image_samples])
         camera_image_data = BaseImages(
