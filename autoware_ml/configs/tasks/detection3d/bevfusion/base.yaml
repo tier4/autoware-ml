@@ -78,7 +78,9 @@ model:
   log_dict_configs:
     _target_: autoware_ml.models.module_base_model.LogDictConfigs
     _convert_: all
-    on_step: true
+    # Epoch-level only: per-step logging would split every key into train/<key>_step and
+    # train/<key>_epoch and, with sync_dist, all-reduce every loss key on every step.
+    on_step: false
     on_epoch: true
     prog_bar: true
     sync_dist: true

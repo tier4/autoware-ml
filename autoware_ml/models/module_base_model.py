@@ -49,14 +49,20 @@ logger = logging.getLogger(__name__)
 class LogDictConfigs(NamedTuple):
     """Configuration for logging metrics in Lightning.
 
+    The batch size is not configurable: the base model infers it from the ground-truth batch so
+    the epoch means are weighted by the real number of samples.
+
     Attributes:
         prog_bar: Whether to log to the progress bar.
         logger: Whether to log to the logger.
-        on_step: Whether to log on each step.
+        on_step: Whether to also log on each training step. Validation and test always log per
+            epoch only, so callbacks that monitor ``val/<key>`` keep their key. With ``True``
+            Lightning logs ``train/<key>_step`` and ``train/<key>_epoch`` instead of
+            ``train/<key>``, and with ``sync_dist`` it reduces every key across ranks on every
+            step.
         on_epoch: Whether to log on each epoch.
         reduce_fx: Reduction function to apply to the logged metric.
         sync_dist: Whether to synchronize across distributed processes.
-        batch_size: Optional batch size to use for logging. If None, the batch size will be inferred.
         rank_zero_only: Whether to log only on rank zero in a distributed environment.
     """
 
@@ -66,7 +72,6 @@ class LogDictConfigs(NamedTuple):
     on_epoch: bool | None = None
     reduce_fx: str = "mean"
     sync_dist: bool = False
-    batch_size: int | None = None
     rank_zero_only: bool = False
 
 
@@ -296,9 +301,9 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule):
         if "loss" not in metrics:
             raise ValueError("compute_metrics() must return a dict containing a 'loss' key.")
         batch_size = self.get_log_batch_size(multi_task_batch_inputs)
-        # Step-level logging is training-only. Enabling it for val/test would make Lightning
-        # suffix the keys (``val/loss_step``/``val/loss_epoch``) and break callbacks that
-        # monitor ``val/loss``.
+        # Step-level logging is training-only, see LogDictConfigs.on_step. Enabling it for
+        # val/test would make Lightning suffix the keys (``val/loss_step``/``val/loss_epoch``)
+        # and break callbacks that monitor ``val/loss``.
         on_step = self.log_dict_configs.on_step if step_prefix == SplitType.TRAIN else False
         logged_values: dict[str, Any] = {f"{step_prefix}/{k}": v for k, v in metrics.items()}
         self.log_dict(

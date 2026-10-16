@@ -282,9 +282,9 @@ The base class handles:
 
 - **Unified step logic** - All models share the same training, validation, test, and predict execution path
 - **Runtime data preprocessing** - Applies the `DataPreprocessor` of the model after batch transfer
-- **Metric logging** - Logs every entry of `compute_metrics()` under the stage prefix, per step
-  during training when `log_dict_configs` asks for it, and feeds `build_eval_output()` into the
-  attached metric suites at validation and test
+- **Metric logging** - Logs every entry of `compute_metrics()` under the stage prefix per epoch,
+  additionally per training step when `log_dict_configs` asks for it, and feeds
+  `build_eval_output()` into the attached metric suites at validation and test
 - **Predict step** - Runs forward and formats predictions via `decode_outputs()`
 - **Export contract** - Every model builds its own export specification from the model inputs
 - **Example input** - Collates the first training sample as the example input so the model
