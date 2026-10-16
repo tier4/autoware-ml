@@ -17,7 +17,7 @@ reports the databases the datamodule reads."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from typing import Mapping, Sequence
 from dataclasses import dataclass
 
 from omegaconf import OmegaConf

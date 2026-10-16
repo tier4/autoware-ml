@@ -5,8 +5,8 @@ This module contains pairwise matching costs used by Hungarian assignment.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Sequence
+from dataclasses import dataclass
 
 from jaxtyping import Float32, Int64, Bool
 import torch
@@ -67,7 +67,7 @@ class ClassificationCost:
                 f"Found gt_labels outside [0, {num_classes - 1}] that are not the -1 padding. "
                 "Every label must index a class channel of cls_logits."
             )
-        # Padded labels index class 0 for a legal gather; their columns are overwritten below,
+        # Padded labels index class 0 for a legal gather. Their columns are overwritten below,
         # so the gathered value itself is irrelevant.
         # (batch_size, num_gt_bboxes) -> (batch_size, num_queries, num_gt_bboxes)
         class_indices = (

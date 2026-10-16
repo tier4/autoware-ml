@@ -14,11 +14,11 @@
 
 from __future__ import annotations
 
+from typing import Mapping, Sequence
 import logging
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 import time
-from typing import Mapping, Sequence
 from types import MappingProxyType
 
 import polars as pl

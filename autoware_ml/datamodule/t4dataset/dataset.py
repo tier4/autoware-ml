@@ -1,10 +1,9 @@
 from __future__ import annotations
 
+from typing import Callable, Mapping, Sequence
 import json
 import logging
-from collections.abc import Callable, Mapping
 from types import MappingProxyType
-from typing import Sequence
 
 from jaxtyping import Float32
 from lightning.pytorch.utilities.rank_zero import rank_zero_only

@@ -21,9 +21,9 @@ geometry contract between the branches, and the input validation run on any devi
 
 from __future__ import annotations
 
+from typing import Sequence
 from types import MappingProxyType
 import unittest
-from collections.abc import Sequence
 from unittest import mock
 
 from jaxtyping import Float32, Int32
@@ -460,8 +460,8 @@ class TestBEVFusionDetectionModelLidarOnly(_BEVFusionDetectionModelTestCase):
     def test_forward_invokes_the_branches_through_module_hooks(self) -> None:
         """
         Test that the lidar branch and the head run through ``nn.Module.__call__`` so forward
-        hooks fire. Lightning's model summary relies on them to report per-layer FLOPs and sizes;
-        calling ``.forward`` directly used to leave the lidar branch at zero FLOPs.
+        hooks fire. Lightning's model summary relies on them to report per-layer FLOPs and sizes.
+        Calling ``.forward`` directly used to leave the lidar branch at zero FLOPs.
         """
         called: list[str] = []
         handles = [
@@ -729,7 +729,7 @@ class TestBEVFusionDetectionModelCameraLidar(_BEVFusionDetectionModelTestCase):
         """
         Test that the detector hands the camera branch the raw intrinsics of the batch together
         with its image augmentation matrices, unchanged. The batch keeps the two apart so the
-        frustum is undone to the raw image plane once; the augmented intrinsics must never be
+        frustum is undone to the raw image plane once. The augmented intrinsics must never be
         paired with the augmentation, which would undo it twice and lift the frustum metres
         away from the lidar.
         """

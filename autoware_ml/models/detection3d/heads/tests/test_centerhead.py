@@ -661,7 +661,7 @@ class TestCenterHead(unittest.TestCase):
         # metric x equals (grid x + predicted offset), which keeps the expectations readable.
         outputs = self._build_suppressed_center_head_outputs(batch_size=1, height=4, width=4)
         # Two class-0 peaks far enough apart that neither the heatmap pooling nor the circle NMS
-        # suppresses one of them; (y=3, x=2) scores higher so it is decoded first.
+        # suppresses one of them. (y=3, x=2) scores higher so it is decoded first.
         outputs.heatmap[0, 0, 3, 2] = 4.0
         outputs.heatmap[0, 0, 1, 1] = 2.0
         outputs.reg[0, :, 3, 2] = torch.tensor([0.25, 0.5], device=self.device)
@@ -767,7 +767,7 @@ class TestCenterHead(unittest.TestCase):
         grid columns, so the decoded x coordinate tells which peak ended up where. With zero
         regression offsets the metric x equals the grid x.
 
-        Sample 0 raises class 0 at x=0 (0.9) and x=2 (0.2) and class 1 at x=3 (0.8); sample 1
+        Sample 0 raises class 0 at x=0 (0.9) and x=2 (0.2) and class 1 at x=3 (0.8). Sample 1
         raises a single class-1 peak at x=3 (0.6). Every pair of peaks is at least two cells
         apart so neither the heatmap pooling nor the 1 m circle NMS suppresses any of them.
         """

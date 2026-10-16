@@ -17,8 +17,8 @@ warmup exclusion, the logging interval, sanity-check suppression, and CUDA synch
 
 from __future__ import annotations
 
+from typing import Sequence, Iterator
 import unittest
-from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
@@ -46,7 +46,7 @@ def _clock(timestamps: Sequence[float]) -> Iterator[MagicMock]:
     """Replace the wall clock with one returning ``timestamps`` in order.
 
     The callback reads the clock exactly once per batch hook, so a test lists one timestamp
-    per hook it drives; an extra read raises ``StopIteration`` and fails the test.
+    per hook it drives. An extra read raises ``StopIteration`` and fails the test.
     """
     with patch("time.perf_counter", side_effect=list(timestamps)) as clock:
         yield clock
@@ -89,7 +89,7 @@ class TestStepMetrics(unittest.TestCase):
         self.assertNotIn("train/total_iter_time", logged)
 
     def test_later_iterations_log_the_fetch_and_the_total_time(self) -> None:
-        """The gap since the previous batch ended is the fetch; fetch plus forward is the total."""
+        """The gap since the previous batch ended is the fetch. Fetch plus forward is the total."""
         callback = IterationTimer()
         trainer, module = _trainer(), _module()
 
@@ -196,7 +196,7 @@ class TestEpochSummary(unittest.TestCase):
         self.assertAlmostEqual(logged["train/total_iter_time_max"], 6.0)
 
     def test_warmup_does_not_affect_the_step_metrics(self) -> None:
-        """Warmup only trims the summary; every iteration still logs its own step metric."""
+        """Warmup only trims the summary. Every iteration still logs its own step metric."""
         callback = IterationTimer(warmup_iters=2)
         trainer, module = _trainer(), _module()
 

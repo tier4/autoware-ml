@@ -32,7 +32,7 @@ def batch_circle_nms(
     Both ``min_radii`` and ``post_max_sizes`` take one value per class channel, never a scalar,
     so the per-class length is always explicit at the call site. Callers that use the class axis as
     a group axis, where each group carries its own radius and cap, therefore do the whole batch in
-    one call; callers wanting the same value everywhere pass [value] * num_classes.
+    one call. Callers wanting the same value everywhere pass [value] * num_classes.
 
     Args:
         bboxes_centers: Decoded box centers in metric space.
@@ -81,7 +81,7 @@ def batch_circle_nms(
 
     # Keeps a box only when its center distance is strictly greater than min_radius. A radius of
     # 0 (or below) disables the suppression for that class, so its boxes are only capped by
-    # post_max_size; without the guard, coincident centers would still match the `<=` test.
+    # post_max_size. Without the guard, coincident centers would still match the `<=` test.
     # (batch_size, num_classes, max_num_bboxes, max_num_bboxes) <= (1, num_classes, 1, 1)
     per_class_min_radii = per_class_min_radii.view(1, num_classes, 1, 1)
     pairwise_suppression = (pairwise_distances <= per_class_min_radii) & (per_class_min_radii > 0)
@@ -257,7 +257,7 @@ def _splat_gaussian_kernels(
     still drawn.
 
     This is the shared splat step behind :func:`create_gaussian_heatmaps` (round kernels) and
-    :func:`create_oriented_gaussian_heatmaps` (oriented elliptical kernels); only the kernel
+    :func:`create_oriented_gaussian_heatmaps` (oriented elliptical kernels). Only the kernel
     generation differs between them.
 
     Args:
@@ -311,7 +311,7 @@ def _splat_gaussian_kernels(
             f"Found label(s) outside [0, {num_classes - 1}] that are not the -1 padding. "
             "Please ensure that all labels are in the range [0, num_classes - 1]."
         )
-    # Padded labels index class 0 for a legal flat index; their cells are zeroed by in_bounds.
+    # Padded labels index class 0 for a legal flat index. Their cells are zeroed by in_bounds.
     index_labels = labels.masked_fill(padded_labels, 0)
 
     # (B, max_num_bboxes, max_diameter, max_diameter)
@@ -383,7 +383,7 @@ def create_gaussian_heatmaps(
       4. Flat indexing: each cell's target position is linearized as
          ``label * H * W + y * W + x`` into a per-sample flat buffer of size
          ``num_classes * H * W``. Coordinates are clamped into valid range so
-         indexing is always legal; clamped cells carry value zero and cannot win
+         indexing is always legal. Clamped cells carry value zero and cannot win
          the max. Padded ``-1`` labels index class 0 the same way, with their
          cells zeroed. Any other label outside ``[0, num_classes - 1]`` raises
          ``ValueError`` rather than being drawn into a neighbouring class.
@@ -394,7 +394,7 @@ def create_gaussian_heatmaps(
     Notes:
         - Invalid boxes (``valid_masks == 0``) contribute nothing: their values
           are zeroed in step 3, and zeros never beat the (non-negative) heatmap
-          under ``amax``. Only ``-1`` is accepted as a padding label; it is masked
+          under ``amax``. Only ``-1`` is accepted as a padding label. It is masked
           out explicitly, whether or not ``valid_masks`` already excludes the box.
         - Memory scales with ``B * N * max_diameter**2``; a single large radius
           in the batch inflates the padded kernel tensor for all boxes. Only
@@ -481,7 +481,7 @@ def _vectorize_oriented_gaussian2d(
     cells and invalid boxes are zero.
 
     Args:
-        radii: Kernel radius in cells for each box. Must be non-negative; callers normalize the
+        radii: Kernel radius in cells for each box. Must be non-negative. Callers normalize the
             radii of invalid boxes so they cannot drive the shared slot size.
         sigma_lengths: Gaussian sigma along the box length (long) axis, in cells.
         sigma_widths: Gaussian sigma along the box width (short) axis, in cells.

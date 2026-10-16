@@ -19,9 +19,8 @@ This module contains the high-level BEVFusion detector wrapper and export ABI.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
 from copy import deepcopy
-from typing import Any
+from typing import Any, Callable, Sequence
 from types import MappingProxyType
 
 from jaxtyping import Bool, Float32, Int32, Int64
@@ -86,7 +85,7 @@ class _BEVFusionExportWrapperBase(nn.Module):
     ) -> ModelBatchInputs:
         """Construct a single-sample ``ModelBatchInputs`` from runtime tensors.
 
-        The result carries no ground truths and no image inputs; image data is
+        The result carries no ground truths and no image inputs. Image data is
         supplied separately by wrappers that need it.
 
         Args:
@@ -251,7 +250,7 @@ class BEVFusionDetectionModel(ModuleBaseModel):
         Args:
             data_preprocessor: Preprocessor for the model inputs.
             lidar_network: Lidar-only BEVFusion main body. It includes fusion layers to fuse both
-                lidar and camera bev features as well; its fuser must be set exactly when
+                lidar and camera bev features as well. Its fuser must be set exactly when
                 ``camera_network`` is set.
             camera_network: Camera-only BEVFusion main body. The outputs are camera-only bev
                 features after BEV transformation.
@@ -287,7 +286,7 @@ class BEVFusionDetectionModel(ModuleBaseModel):
         """Validate that the camera branch and the lidar fuser are configured together.
 
         A camera branch without a fuser would run every step and have its BEV map dropped,
-        which also fails DDP training with unused parameters; a fuser without a camera branch
+        which also fails DDP training with unused parameters. A fuser without a camera branch
         never receives the second modality it expects.
 
         Raises:
@@ -547,8 +546,8 @@ class BEVFusionDetectionModel(ModuleBaseModel):
         ``autoware_bevfusion`` runtime consumes unchanged. Camera-lidar models
         export the ``bevfusion_image_backbone`` (raw ``uint8`` images to neck
         features) and the ``bevfusion_camera_lidar`` main body consuming those
-        features together with precomputed depth maps and BEV-pool metadata;
-        the runtime does not consume this main body yet, see
+        features together with precomputed depth maps and BEV-pool metadata.
+        The runtime does not consume this main body yet, see
         :class:`_BEVFusionExportWrapper`. All exported graphs are
         single-sample, so only the first sample of the batch is used to derive
         the export tensors.

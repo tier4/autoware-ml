@@ -106,7 +106,7 @@ def test_a_record_without_boxes_carries_no_attributes() -> None:
 
 
 def test_a_box_without_a_velocity_is_served_as_stored() -> None:
-    # The task serves the records as they are; BBoxesPhysicalFilter in the pipeline turns the
+    # The task serves the records as they are. BBoxesPhysicalFilter in the pipeline turns the
     # non finite velocity of an unannotated box into a standstill.
     task = build_task(
         [

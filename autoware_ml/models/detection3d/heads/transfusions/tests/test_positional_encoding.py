@@ -68,7 +68,7 @@ class TestLearnedPositionalEncoding(unittest.TestCase):
         queries (batch, num_proposals, 2) or keys (batch, height*width, 2) alike.
 
         The Conv1d stack transposes the token and channel axes internally, so the input rank is
-        fixed at three; only the token count is free.
+        fixed at three. Only the token count is free.
         """
         query_positions = torch.rand(self.batch_size, 4, self.input_channels, device=self.device)
         key_positions = torch.rand(self.batch_size, 3 * 5, self.input_channels, device=self.device)
@@ -92,7 +92,7 @@ class TestLearnedPositionalEncoding(unittest.TestCase):
         permutation equivariant, such as adding the batch mean, would survive a permutation check.
 
         This holds at inference only. The BatchNorm1d normalizes over the batch and token axes, so
-        while training every position's embedding does depend on the rest of the batch; eval mode
+        while training every position's embedding does depend on the rest of the batch. Eval mode
         swaps those batch statistics for the fixed running ones.
         """
         self.positional_encoding.eval()

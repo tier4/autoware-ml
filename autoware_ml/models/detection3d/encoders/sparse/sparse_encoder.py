@@ -25,7 +25,7 @@ The sparse grid order is ``(Y, X, Z)`` (= the``SparseEncoder`` "(H, W, D)") so t
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from typing import Sequence
 from copy import deepcopy
 
 from jaxtyping import Float32
@@ -158,9 +158,9 @@ class SparseEncoder(nn.Module):
         in_channels: Voxel feature channels (the voxel encoder's output dim).
         sparse_shape: Sparse grid shape in ``(Y, X, Z)`` order.
         base_channels: Channels after the input submanifold conv.
-        encoder_channels: Per-stage channel tuples; the last entry of each
+        encoder_channels: Per-stage channel tuples. The last entry of each
             non-final stage triggers a stride-2 downsample to that channel count.
-        encoder_paddings: Per-stage paddings; the downsample conv of stage ``i``
+        encoder_paddings: Per-stage paddings. The downsample conv of stage ``i``
             uses ``encoder_paddings[i][-1]`` (scalar or ``(Y, X, Z)`` tuple).
         output_channels: Channels of the final ``conv_out`` (before Z flatten).
         dense_output_shapes: Dense output shape ``(Y, X, Z)`` after ``conv_out``.

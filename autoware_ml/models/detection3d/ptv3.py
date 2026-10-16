@@ -10,9 +10,8 @@ segmentation head and is not part of the detection path.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from copy import deepcopy
-from typing import Any
+from typing import Any, Sequence
 
 import torch
 import torch.nn as nn

@@ -20,7 +20,7 @@ features for CenterPoint-style detectors.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from typing import Sequence
 
 import torch
 import torch.nn as nn

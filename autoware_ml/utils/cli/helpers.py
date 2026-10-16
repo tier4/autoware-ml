@@ -22,9 +22,8 @@ import re
 import shlex
 import shutil
 import subprocess
-from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from omegaconf import DictConfig
 

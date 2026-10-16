@@ -14,9 +14,9 @@
 
 """Unit tests for heatmap utilities."""
 
+from typing import Sequence
 import math
 import unittest
-from typing import Sequence
 
 from jaxtyping import Bool, Float32, Int64
 import torch
@@ -727,7 +727,7 @@ class TestBatchCircleNMS(unittest.TestCase):
         """
         Test that a min_radius of 0 applies no suppression at all, not even between coincident
         centers, and only caps the row by score. Two boxes share a center and a third sits half
-        a metre away; with a cap of 2 the two highest scores survive whatever their distance.
+        a metre away. With a cap of 2 the two highest scores survive whatever their distance.
         """
         centers, scores, valid_masks = self._build_inputs(
             centers=[[0.0, 0.0], [0.0, 0.0], [0.5, 0.0]],

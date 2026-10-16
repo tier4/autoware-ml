@@ -14,8 +14,8 @@
 
 """Unit tests for the detection3d proposal assigners."""
 
-import unittest
 from typing import Sequence
+import unittest
 
 from jaxtyping import Bool, Float32
 import torch
@@ -280,7 +280,7 @@ class TestHungarianAssigner3D(unittest.TestCase):
             point_cloud_range=self.point_cloud_range,
         )
 
-        # Sample 0 has two real gts; sample 1 has one real gt and one padded column.
+        # Sample 0 has two real gts. Sample 1 has one real gt and one padded column.
         # (batch_size, num_bboxes, code_size)
         self.bboxes = self._boxes_from_centers(
             [

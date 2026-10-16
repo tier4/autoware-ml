@@ -39,10 +39,10 @@ class BEVPoolResult(NamedTuple):
     Attributes:
         geom_feats: Integer voxel coordinates ``(x_idx, y_idx, z_idx, batch_idx)`` of the kept
             points, sorted by ``ranks``.
-        kept: Boolean mask over all frustum points; ``True`` where the point lies inside the
+        kept: Boolean mask over all frustum points. ``True`` where the point lies inside the
             BEV grid.
         ranks: Sorted flat BEV grid rank of each kept point.
-        indices: Permutation that sorts the kept points by rank; apply it to features after
+        indices: Permutation that sorts the kept points by rank. Apply it to features after
             masking with ``kept``.
     """
 

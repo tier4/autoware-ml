@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Sequence
 
+from typing import Sequence
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDataModel
 
 

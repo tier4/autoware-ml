@@ -21,9 +21,8 @@ around the reusable PointPillars and CenterPoint detection components.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Callable, Sequence
 
 from jaxtyping import Float32
 import torch
@@ -74,7 +73,7 @@ class _CenterPointBackboneNeckHeadExportWrapper(nn.Module):
         Args:
             backbone: BEV backbone.
             neck: BEV neck.
-            bbox_head: CenterPoint dense head; an export-ready copy is taken.
+            bbox_head: CenterPoint dense head. An export-ready copy is taken.
         """
         super().__init__()
         self.backbone = backbone

@@ -1,7 +1,6 @@
 import logging
-from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 import lightning as L
 from torch.utils.data import DataLoader

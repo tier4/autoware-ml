@@ -20,7 +20,7 @@ and training losses used by CenterPoint-style detectors.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from typing import Sequence
 from copy import deepcopy
 from types import MappingProxyType
 
@@ -569,7 +569,7 @@ class CenterHead(nn.Module):
             bboxes_centers=bboxes_centers,
             scores=top_scores,
             valid_bboxes_masks=valid_bboxes_masks,
-            # One radius and one cap per class channel; this head applies the same to every class.
+            # One radius and one cap per class channel. This head applies the same to every class.
             # The length comes from the channel count of the outputs being decoded, which is what
             # batch_circle_nms sees, rather than from self.num_classes.
             post_max_sizes=[self.post_max_size] * num_classes,

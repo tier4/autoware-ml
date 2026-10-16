@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence, Mapping, Any
+from typing import Any, Sequence, Mapping
 
 import polars as pl
 from pydantic import BaseModel, ConfigDict

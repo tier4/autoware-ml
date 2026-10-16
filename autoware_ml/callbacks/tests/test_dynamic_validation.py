@@ -463,7 +463,7 @@ class TestWithLightningTrainer(unittest.TestCase):
         Input: ``check_val_every_n_epoch=1`` with an EarlyStopping left at its default
         ``check_on_train_epoch_end=None``, which Lightning resolves to True from that value.
         Expected: without the check, Lightning fails on epoch 0 with "metric `val/loss` which
-        is not available"; the callback rejects the combination before training instead.
+        is not available". The callback rejects the combination before training instead.
         Check: ``fit`` raises a MisconfigurationException naming ``check_on_train_epoch_end``.
         """
         with tempfile.TemporaryDirectory() as root:

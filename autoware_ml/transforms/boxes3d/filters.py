@@ -4,8 +4,7 @@ The code is modified based on
 https://github.com/open-mmlab/mmdetection3d/blob/main/mmdet3d/datasets/transforms/transforms_3d.py.
 """
 
-from collections.abc import Sequence
-
+from typing import Sequence
 import torch
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
@@ -224,7 +223,7 @@ class BBoxesPhysicalFilter(BaseTransform):
 
     A non-finite velocity is the exception: the records store one for a box whose velocity is
     not annotated, which means the box stands still rather than that it is garbage. By default
-    such a velocity is set to zero and the box is kept; with ``zero_non_finite_velocity`` off,
+    such a velocity is set to zero and the box is kept. With ``zero_non_finite_velocity`` off,
     it is dropped like any other non-finite parameter.
 
     Note that the bbox parameters are already float32 here, so a float64 value that overflows

@@ -45,7 +45,7 @@ FULL_EXPERIMENT_NAME = f"{EXPERIMENT_GROUP_NAME}/{EXPERIMENT_NAME}"
 
 
 def _tracking_uri(tmp_path: Path) -> str:
-    """A SQLite tracking URI under ``tmp_path``; the store directory holds the artifacts."""
+    """A SQLite tracking URI under ``tmp_path``. The store directory holds the artifacts."""
     store_dir = tmp_path / "mlruns"
     store_dir.mkdir(exist_ok=True)
     return f"sqlite:///{store_dir / 'mlflow.db'}"

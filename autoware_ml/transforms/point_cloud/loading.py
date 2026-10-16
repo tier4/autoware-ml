@@ -20,9 +20,8 @@ The code is modified from mmdetection3d.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Sequence
 
 from jaxtyping import Bool
 import numpy as np
@@ -275,7 +274,7 @@ class LoadPointsFromFile(BaseTransform):
 
         points_np = points_np[:, use_dims]
         # Scaled once here by the full scale value the database declares for its files, so the
-        # model reads intensity in [0, 1]; skipped to feed the raw stored intensity instead.
+        # model reads intensity in [0, 1]. Skipped to feed the raw stored intensity instead.
         if self.scale_intensity and PointFieldIndex.INTENSITY in use_dims:
             points_np = points_np.copy()
             points_np[:, use_dims.index(PointFieldIndex.INTENSITY)] /= (

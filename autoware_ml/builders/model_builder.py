@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typing import Sequence
 import logging
 from pathlib import Path
-from typing import Sequence
 
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
@@ -72,7 +72,7 @@ def build_model(
         raise ValueError("'--resume-checkpoint' and '--weights' are mutually exclusive.")
 
     # Moved before any weights are loaded so a model built without weights lands on the device
-    # too; the deploy script exports from `model.device`, so a model left on the CPU would trace
+    # too. The deploy script exports from `model.device`, so a model left on the CPU would trace
     # on the CPU whatever device was requested.
     model = instantiate(cfg.model, data_preprocessor=data_preprocessor).to(device)
 

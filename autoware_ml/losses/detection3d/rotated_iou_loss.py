@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from typing import Sequence
 
 from jaxtyping import Bool, Float32, Int64
 import torch
@@ -113,7 +113,7 @@ class Rotated2DIouLoss(nn.Module):
         """Compute the weighted ``1 - IoU`` of every (prediction, target) pair.
 
         Args:
-            prediction_bboxes: Decoded predicted boxes in the ``Box3DFieldIndex`` layout; only
+            prediction_bboxes: Decoded predicted boxes in the ``Box3DFieldIndex`` layout. Only
                 the BEV center, length, width and yaw are read.
             target_bboxes: Decoded target boxes in the same layout, paired element-wise with
                 the predictions.

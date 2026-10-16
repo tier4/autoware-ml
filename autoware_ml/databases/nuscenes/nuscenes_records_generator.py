@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Mapping, Sequence, Tuple
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 import numpy.typing as npt
@@ -316,7 +316,7 @@ class NuScenesRecordsGenerator:
 
     def _extract_lidar_frame(
         self, sample: Mapping[str, Any]
-    ) -> Tuple[LidarFrameDataModel, Sequence[Box]]:
+    ) -> tuple[LidarFrameDataModel, Sequence[Box]]:
         """
         Extract lidar frame records from a NuScenes sample.
 
@@ -373,7 +373,7 @@ class NuScenesRecordsGenerator:
         sensor_sample_data_record: Mapping[str, Any],
         selected_sensor_to_ego_pose_matrix: npt.NDArray[np.float64],
         selected_sensor_frame_ego_pose_to_global_matrix: npt.NDArray[np.float64],
-    ) -> Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
         """
         Compute transformation matrices for a sensor.
 

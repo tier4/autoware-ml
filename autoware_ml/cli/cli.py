@@ -27,7 +27,7 @@ import typer
 from click.core import ParameterSource
 from click.shell_completion import CompletionItem
 from typer.core import TyperCommand, TyperGroup
-from typing_extensions import Annotated
+from typing import Annotated
 
 from autoware_ml.utils.cli.helpers import (
     complete_config_value,
@@ -282,7 +282,7 @@ def train(
     run unless ``--new-run`` forks it. The two options are mutually exclusive.
     ``--skip-mismatched-weights`` lets ``--weights`` initialize a model whose
     architecture drifted from the checkpoint, e.g. a first layer with more input
-    channels; the tensors that no longer fit are skipped with a warning.
+    channels. The tensors that no longer fit are skipped with a warning.
 
     Args:
         ctx: Typer context containing additional Hydra overrides.

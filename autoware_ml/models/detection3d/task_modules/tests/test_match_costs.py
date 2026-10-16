@@ -14,8 +14,8 @@
 
 """Unit tests for the Hungarian matching costs."""
 
-import unittest
 from typing import Sequence
+import unittest
 
 from jaxtyping import Bool, Float32, Int64
 import torch
@@ -179,7 +179,7 @@ class TestClassificationCost(unittest.TestCase):
 
     def test_classification_cost_rejects_out_of_range_labels(self) -> None:
         """Test that labels outside [0, num_classes - 1] other than -1 raise instead of clamping."""
-        # Clamping ``num_classes`` would silently read the last class channel; -7 would read
+        # Clamping ``num_classes`` would silently read the last class channel. -7 would read
         # class 0. Both are real errors, for example from a taxonomy mismatch.
         for out_of_range_label in (self.num_classes, self.num_classes + 5, -7):
             with self.subTest(label=out_of_range_label):

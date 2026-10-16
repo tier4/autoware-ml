@@ -158,13 +158,13 @@ class BEVFusionCamera(nn.Module):
         """Encode a single sample into a BEV feature map with precomputed BEV-pool metadata.
 
         The exported main body is a single-sample graph, so the runtime passes the camera inputs
-        without a batch dimension; they are unsqueezed back into the batched layout the view
+        without a batch dimension. They are unsqueezed back into the batched layout the view
         transform expects.
 
         Args:
             image_features: Precomputed image features for each camera.
             depth_maps: Depth maps for each camera.
-            geom_feats: Precomputed BEV-pool geometry features; cast to ``long`` here so
+            geom_feats: Precomputed BEV-pool geometry features. Cast to ``long`` here so
                 the runtime may pass them as float.
             kept: Keep mask for pooled features.
             ranks: Sorted BEV ranks.

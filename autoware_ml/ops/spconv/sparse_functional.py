@@ -14,8 +14,7 @@
 
 """Autograd bridges and ONNX symbolics for deployment-aware sparse ops."""
 
-from collections.abc import Sequence
-from typing import Any
+from typing import Any, Sequence
 
 import numpy as np
 import torch
@@ -484,7 +483,7 @@ class GetIndicePairsImplicitGemm(Function):
 
         num_out_act_bound: int = -1
         # Trace with spconv's thrust-unique pair generation rather than its direct hash
-        # table. Both yield the same indice pairs and a bit-identical dense output; only
+        # table. Both yield the same indice pairs and a bit-identical dense output. Only
         # the order of the output indices differs, and the sorted thrust order keeps the
         # traced graph independent of the SPCONV_USE_DIRECT_TABLE environment variable.
         # The flag only affects tracing, the deployed plugin builds its own tables and

@@ -14,12 +14,12 @@
 
 """Unit tests for TransFusionHead."""
 
+from typing import Sequence
 import math
 import tempfile
 import unittest
 from pathlib import Path
 from types import MappingProxyType
-from typing import Sequence
 
 from jaxtyping import Bool, Float32, Int32, Int64
 from omegaconf import OmegaConf
@@ -325,7 +325,7 @@ class TestTransFusionHead(unittest.TestCase):
         Build the dense heatmap targets for the given ground truth through get_targets.
 
         The dense target depends on the ground truth and the grid only, so the forward pass it is
-        paired with just has to carry the right batch size; its proposals get assigned too, but
+        paired with just has to carry the right batch size. Its proposals get assigned too, but
         that part of the targets is not read here.
         """
         outputs = transfusion_head(self._build_bev_features(batch_size=gt_bboxes_3d.shape[0]))
@@ -374,7 +374,7 @@ class TestTransFusionHead(unittest.TestCase):
         inverse sigmoid of its score, on a confident-background floor everywhere else. Every
         per-query tensor is a leaf with requires_grad, so a test can check which slots a loss
         reaches. ``num_queries`` may span several decoder layers, the way the auxiliary head
-        concatenates them along the query axis; decode_outputs reads the last ``num_proposals``
+        concatenates them along the query axis. decode_outputs reads the last ``num_proposals``
         of them, which is the slice query_labels and query_heatmap_score describe.
         """
         head = self.transfusion_head if transfusion_head is None else transfusion_head
@@ -492,7 +492,7 @@ class TestTransFusionHead(unittest.TestCase):
         )
 
         # Normalization layers initialize their weight to 1.0, so the mean sits slightly above
-        # zero rather than at it; the bound only has to catch a grossly wrong init.
+        # zero rather than at it. The bound only has to catch a grossly wrong init.
         self.assertLess(abs(float(weights.mean())), 0.1)
         self.assertLess(float(weights.std()), 0.5)
         # The last conv of the dense heatmap head carries the configured init bias.
@@ -607,7 +607,7 @@ class TestTransFusionHead(unittest.TestCase):
         inputs with the layer modules themselves.
         """
         # Eval mode switches dropout off, so the manual replay below reproduces the forward pass
-        # exactly. Forward hooks only observe the calls; nothing is replaced.
+        # exactly. Forward hooks only observe the calls. Nothing is replaced.
         head = self.transfusion_head.eval()
         captured_calls: list[tuple[dict[str, torch.Tensor], torch.Tensor]] = []
 
@@ -702,7 +702,7 @@ class TestTransFusionHead(unittest.TestCase):
         """
         heatmaps = self._get_targets().dense_heatmaps
 
-        # Sample 1 has a single real box at (4, 10); its two padded rows sit at the origin.
+        # Sample 1 has a single real box at (4, 10). Its two padded rows sit at the origin.
         self.assertAlmostEqual(float(heatmaps[1, 1, 10, 4]), 1.0, places=5)
         self.assertAlmostEqual(float(heatmaps[1, 0, 0, 0]), 0.0, places=5)
         self.assertAlmostEqual(float(heatmaps[1, 1, 0, 0]), 0.0, places=5)
@@ -948,7 +948,7 @@ class TestTransFusionHead(unittest.TestCase):
         center_gradients = outputs.separate_head_outputs.center.grad
         assert center_gradients is not None
         # (batch_size, 2, num_queries) -> (batch_size, num_queries): the x residual is non-zero
-        # for every positive, so each one receives a gradient; no negative receives any.
+        # for every positive, so each one receives a gradient. No negative receives any.
         gradient_masks = center_gradients.abs().sum(dim=1) > 0.0
         self.assertTrue(bool(gradient_masks[positive_masks].all()))
         self.assertFalse(bool(gradient_masks[~positive_masks].any()))

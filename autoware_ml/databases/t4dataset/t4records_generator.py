@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typing import Mapping, Sequence
 import logging
 import os
 
 from pathlib import Path
-from typing import Mapping, Sequence, Tuple
 
 import numpy as np
 import numpy.typing as npt
@@ -144,7 +144,7 @@ class T4RecordsGenerator:
             raise ValueError(f"Scene root directory {scene_root_dir_path} does not exist.")
         return scene_root_dir_path
 
-    def _index_box_categories(self) -> Tuple[Mapping[str, str], Mapping[str, str]]:
+    def _index_box_categories(self) -> tuple[Mapping[str, str], Mapping[str, str]]:
         """
         Category tables the box names are read from.
 
@@ -152,7 +152,7 @@ class T4RecordsGenerator:
         database names the directory to read.
 
         Returns:
-          Tuple[Mapping[str, str], Mapping[str, str]]: Category token of every instance token
+          tuple[Mapping[str, str], Mapping[str, str]]: Category token of every instance token
             and category name of every category token.
         """
 
@@ -393,7 +393,7 @@ class T4RecordsGenerator:
             raise ValueError(f"{pack.pack_path} has no frame {frame_name}.")
         return t4pack_frame
 
-    def _extract_lidar_frame(self, sample: Sample) -> Tuple[LidarFrameDataModel, Sequence[Box3D]]:
+    def _extract_lidar_frame(self, sample: Sample) -> tuple[LidarFrameDataModel, Sequence[Box3D]]:
         """
         Extract lidar frame records from a T4 sample.
 
@@ -471,7 +471,7 @@ class T4RecordsGenerator:
         sensor_sample_data_record: SampleData,
         selected_sensor_to_ego_pose_matrix: npt.NDArray[np.float64],
         selected_sensor_frame_ego_pose_to_global_matrix: npt.NDArray[np.float64],
-    ) -> Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
         """
         Compute transformation matrices for a sensor.
 

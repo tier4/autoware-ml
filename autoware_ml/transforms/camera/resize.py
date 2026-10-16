@@ -32,7 +32,7 @@ the transformed one. They reject camera image data that already carries depth ma
 
 from __future__ import annotations
 
-from typing import NamedTuple, Sequence, Tuple
+from typing import NamedTuple, Sequence
 
 from jaxtyping import Float32
 import numpy as np
@@ -249,7 +249,7 @@ class CropAndScale(ImageSpaceTransform):
         )
         return multi_task_gt_sample._replace(camera_image_data=cropped_camera_image_data)
 
-    def sample_crop_box(self, height: int, width: int) -> Tuple[int, int, int, int]:
+    def sample_crop_box(self, height: int, width: int) -> tuple[int, int, int, int]:
         """Sample a crop box keeping at least `crop_ratio` of the image.
 
         Args:
@@ -405,7 +405,7 @@ class PadMultiViewImage(ImageSpaceTransform):
         )
         return multi_task_gt_sample._replace(camera_image_data=padded_camera_image_data)
 
-    def resolve_padded_size(self, height: int, width: int) -> Tuple[int, ...]:
+    def resolve_padded_size(self, height: int, width: int) -> tuple[int, ...]:
         """Resolve the size the images are padded to.
 
         Args:
@@ -560,7 +560,7 @@ class ResizeCropFlipRotImage(ImageSpaceTransform):
         self,
         image: Float32[Tensor, "num_channels height width"],
         parameters: ImageAugmentationParameters,
-    ) -> Tuple[Float32[Tensor, "num_channels height width"], Float32[Tensor, "3 3"]]:
+    ) -> tuple[Float32[Tensor, "num_channels height width"], Float32[Tensor, "3 3"]]:
         """Apply the sampled augmentation to a single camera image.
 
         Args:

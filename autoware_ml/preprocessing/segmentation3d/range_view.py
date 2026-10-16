@@ -20,7 +20,7 @@ draw their second cloud from the batch instead of from a second read of the data
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from typing import Sequence
 
 import torch
 from jaxtyping import Float32, Int64

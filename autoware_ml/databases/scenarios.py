@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Sequence, Mapping, Annotated
+from typing import Annotated, Sequence, Mapping
 
 from pydantic import BaseModel, ConfigDict, BeforeValidator, Field, model_validator
 

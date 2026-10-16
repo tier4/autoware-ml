@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from typing import Sequence
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs

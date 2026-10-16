@@ -38,7 +38,7 @@ class TestHardSimpleVoxelSinCosEncoder(unittest.TestCase):
         ).to(self.device)
 
     def _coords(self, num_voxels: int) -> torch.Tensor:
-        """Build placeholder ``[batch, z, y, x]`` coordinates; the encoder ignores them."""
+        """Build placeholder ``[batch, z, y, x]`` coordinates. The encoder ignores them."""
         return torch.zeros(num_voxels, 4, dtype=torch.int64, device=self.device)
 
     def test_output_dim_and_sincos_identity(self) -> None:

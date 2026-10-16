@@ -14,10 +14,10 @@
 
 from __future__ import annotations
 
+from typing import Sequence
 import logging
 from collections import defaultdict
 import yaml
-from typing import Sequence
 from types import MappingProxyType
 
 from pydantic import model_validator

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Sequence, NamedTuple
+from typing import NamedTuple, Sequence
 
 from jaxtyping import Float32, Int64
 import torch

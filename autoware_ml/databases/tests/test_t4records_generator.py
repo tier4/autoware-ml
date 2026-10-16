@@ -125,8 +125,8 @@ def test_the_sweep_window_stops_at_the_scene_start(generator: T4RecordsGenerator
         lidar_pointcloud_semantic_mask_path=None,
     )
 
-    # The public extract_t4_sample_record() needs a full devkit scene (boxes, images, sources);
-    # the sweep window is pure over the sample_data chain and is tested on its own here.
+    # The public extract_t4_sample_record() needs a full devkit scene (boxes, images, sources).
+    # The sweep window is pure over the sample_data chain and is tested on its own here.
     frames = generator._extract_lidar_window(sample_frame)
 
     # The sample comes first, then the one past frame before the scene start, then the two

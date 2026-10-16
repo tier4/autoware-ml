@@ -23,11 +23,10 @@ import logging
 import re
 import socket
 import subprocess
-from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 from urllib.parse import unquote, urlparse
 
 from hydra.core.hydra_config import HydraConfig
@@ -400,7 +399,7 @@ def resolve_deploy_lineage(
 ) -> tuple[str | None, list[dict[str, str | None]]]:
     """Resolve the source checkpoint lineage of a deploy run.
 
-    The deploy run belongs to the experiment of its own config, like every other stage; this
+    The deploy run belongs to the experiment of its own config, like every other stage. This
     only decides which source run it nests under.
 
     Args:

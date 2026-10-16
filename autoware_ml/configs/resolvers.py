@@ -14,9 +14,8 @@
 
 """Hydra and OmegaConf resolver registration for bundled Autoware-ML configs."""
 
-from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, cast, Mapping, Iterable
 
 from omegaconf import DictConfig, ListConfig, OmegaConf
 

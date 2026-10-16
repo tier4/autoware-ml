@@ -43,7 +43,7 @@ def stub_lanelet_map_loader(monkeypatch: pytest.MonkeyPatch):
     load_osm = LaneletMap.from_osm
 
     def from_osm_or_served(cls, path):
-        # A served path returns its stub; any other path, an OSM file in a test's tmp_path or
+        # A served path returns its stub. Any other path, an OSM file in a test's tmp_path or
         # the None of a map-less frame, still goes through the real loader and fails as loud.
         return _SERVED_MAPS[path] if path in _SERVED_MAPS else load_osm(path)
 

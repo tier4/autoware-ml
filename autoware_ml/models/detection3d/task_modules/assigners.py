@@ -6,8 +6,8 @@ detection heads during training target construction.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Sequence
+from dataclasses import dataclass
 
 from jaxtyping import Float32, Bool, Int32, Int64
 import torch
@@ -102,7 +102,7 @@ class HungarianAssigner3D:
     Attributes:
         cls_cost: Classification cost term.
         reg_cost: Bounding-box regression cost term over the BEV centers. Only the batched
-            ``BBoxBEVL1Cost`` signature is supported; a model that needs the full-box
+            ``BBoxBEVL1Cost`` signature is supported. A model that needs the full-box
             ``BBox3DL1Cost`` has to give it the same batched signature first.
         iou_cost: IoU-based matching cost term.
         point_cloud_range: Detector point-cloud range used by the regression cost.
@@ -192,7 +192,7 @@ class HungarianAssigner3D:
             matched_row_inds = matched_row_inds[valid_pairs]
             matched_col_inds = matched_col_inds[valid_pairs]
 
-            # Every proposal starts as a negative (0); only matched ones carry a gt index.
+            # Every proposal starts as a negative (0). Only matched ones carry a gt index.
             assigned_gt_inds[current_batch, :] = 0
             assigned_gt_inds[current_batch, matched_row_inds] = matched_col_inds + 1
             assigned_labels[current_batch, matched_row_inds] = gt_labels[

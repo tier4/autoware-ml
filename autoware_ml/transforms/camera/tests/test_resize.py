@@ -14,7 +14,6 @@
 
 """Unit tests for the camera image resize, crop, and padding transforms."""
 
-from typing import Tuple
 import unittest
 
 from jaxtyping import Float32
@@ -585,7 +584,7 @@ class TestResizeCropFlipRotImage(CameraImageDataTestCase):
     @staticmethod
     def intensity_centroid(
         image: Float32[Tensor, "num_channels height width"],
-    ) -> Tuple[float, float]:
+    ) -> tuple[float, float]:
         """Locate the intensity-weighted centroid of an image in continuous pixel coordinates.
 
         Pixel ``(column, row)`` covers ``[column, column + 1) x [row, row + 1)``, the

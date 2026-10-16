@@ -20,9 +20,8 @@ by the native TransFusion lidar detector.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from copy import deepcopy
-from typing import NamedTuple, Mapping
+from typing import NamedTuple, Sequence, Mapping
 from types import MappingProxyType
 
 from jaxtyping import Bool, Float32, Int32, Int64
@@ -266,7 +265,7 @@ class TransFusionHead(nn.Module):
             iou_loss: Optional rotated BEV IoU loss applied to every matched (prediction, gt)
                 pair of every decoder layer, on top of the L1 box loss. The module receives the
                 predictions and targets decoded through ``bbox_coder`` together with the
-                matched labels; see
+                matched labels. See
                 :class:`~autoware_ml.losses.detection3d.rotated_iou_loss.Rotated2DIouLoss`.
                 None disables the term and skips its computation entirely.
             class_names: Optional ordered class names used to resolve config-friendly
@@ -890,7 +889,7 @@ class TransFusionHead(nn.Module):
         if outputs.transfusion_head_outputs is None:
             raise ValueError("TransFusionHead outputs are missing from Detection3DHeadOutputs.")
 
-        # Mixed precision evaluation hands over fp16 outputs; the boxes decode in float32, as a
+        # Mixed precision evaluation hands over fp16 outputs. The boxes decode in float32, as a
         # 64 m center in fp16 only resolves about 0.06 m.
         transfusion_head_outputs = outputs.transfusion_head_outputs
         separate_head_outputs = transfusion_head_outputs.separate_head_outputs
@@ -1388,7 +1387,7 @@ class TransFusionHead(nn.Module):
         )
         # (batch_size, num_proposals) -> (batch_size * num_proposals,)
         layer_labels = targets.labels[:, start:end].reshape(-1)
-        # One-hot the positives; background proposals (label == num_classes) stay all-zero rows,
+        # One-hot the positives. Background proposals (label == num_classes) stay all-zero rows,
         # which is what the focal loss expects for a negative.
         cls_targets = layer_logits.new_zeros((layer_labels.shape[0], self.num_classes))
         pos_masks = layer_labels < self.num_classes
@@ -1419,7 +1418,7 @@ class TransFusionHead(nn.Module):
             dim=1,
         ).permute(0, 2, 1)
         layer_bbox_targets = targets.bbox_targets[:, start:end, :]
-        # code_weights rescale each regression channel; negatives already carry zero weight, so
+        # code_weights rescale each regression channel. Negatives already carry zero weight, so
         # the masking and the channel weighting fold into one multiply.
         layer_bbox_weights = targets.bbox_weights[:, start:end, :] * preds.new_tensor(
             self.code_weights

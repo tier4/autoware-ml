@@ -39,9 +39,8 @@ skip the rest, which is why the provider takes the scores and that floor.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from math import inf, nan
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 

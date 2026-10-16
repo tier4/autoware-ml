@@ -119,7 +119,7 @@ def record_deploy_run(
 
     Writes the resolved config and the CLI overrides under ``config/``, the run metadata with
     the source checkpoints next to them, and logs the config as run parameters. Train and test
-    get the same records from the trainer logger builder; deploy has no trainer, so it records
+    get the same records from the trainer logger builder. Deploy has no trainer, so it records
     them here.
 
     Args:

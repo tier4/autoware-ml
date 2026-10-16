@@ -19,9 +19,8 @@ This module contains the high-level TransFusion lidar detector wrapper and expor
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Callable, Sequence
 
 from jaxtyping import Float32, Int32
 import torch

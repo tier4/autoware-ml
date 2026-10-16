@@ -311,7 +311,7 @@ def test_serialized_attention_export_padding_matches_batched_branch() -> None:
             }
         )
 
-    # `_get_padding_and_inverse` is the pure index kernel behind forward(); the padded index
+    # `_get_padding_and_inverse` is the pure index kernel behind forward(). The padded index
     # layout it is tested on here is not observable from the attention outputs.
     # Both a non-divisible count (padded last window) and a divisible one (no padding).
     for num_points in (10, 8):

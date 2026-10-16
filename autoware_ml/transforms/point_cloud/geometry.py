@@ -16,7 +16,7 @@ The code is modified based on
 https://github.com/open-mmlab/mmdetection3d/blob/main/mmdet3d/datasets/transforms/transforms_3d.py.
 """
 
-from collections.abc import Sequence
+from typing import Sequence
 import math
 
 from jaxtyping import Float32

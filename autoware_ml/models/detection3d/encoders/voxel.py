@@ -16,8 +16,8 @@
 
 from __future__ import annotations
 
+from typing import Sequence
 import math
-from collections.abc import Sequence
 
 from jaxtyping import Float32, Int64
 import torch

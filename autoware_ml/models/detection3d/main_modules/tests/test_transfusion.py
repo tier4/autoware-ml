@@ -112,7 +112,7 @@ class _TransFusionDetectionModelTestCase(unittest.TestCase):
     """Shared configuration and builders for the TransFusion detection model test cases.
 
     Subclasses set the scene geometry and channel layout declared below in their own ``setUp``
-    and build the lidar encoders; the head, ground truth and batch builders derive from them.
+    and build the lidar encoders. The head, ground truth and batch builders derive from them.
     """
 
     point_cloud_range: list[float]

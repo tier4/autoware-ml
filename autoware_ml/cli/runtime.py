@@ -19,10 +19,10 @@ completion can import the Typer app without pulling Hydra and MLflow into the
 startup path.
 """
 
+from typing import Sequence
 import __main__
 import os
 import sys
-from collections.abc import Sequence
 from contextlib import contextmanager
 from datetime import datetime
 from importlib.machinery import ModuleSpec

@@ -21,10 +21,9 @@ from __future__ import annotations
 
 import importlib
 import math
-from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Sequence
 
 import spconv.pytorch as spconv
 import torch

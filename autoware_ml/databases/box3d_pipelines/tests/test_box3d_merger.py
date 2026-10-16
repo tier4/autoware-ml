@@ -16,8 +16,8 @@
 
 from __future__ import annotations
 
-from types import MappingProxyType
 from typing import Sequence
+from types import MappingProxyType
 import unittest
 
 import numpy as np
@@ -129,7 +129,7 @@ class TestBox3DExtendLongerMerger(unittest.TestCase):
         merged = self._build_merger()(
             [
                 self._build_box([0, 0, 0, 4, 2, 2, 0], "truck"),
-                # Overlaps the truck; the merger matches on the (already remapped) label name.
+                # Overlaps the truck. The merger matches on the (already remapped) label name.
                 self._build_box(
                     [1, 0, 0, 4, 2, 2, 0], "trailer", dataset_label_name="vehicle.trailer"
                 ),

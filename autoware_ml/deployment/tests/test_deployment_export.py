@@ -18,7 +18,7 @@ and the error paths that fire before any TensorRT work."""
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from typing import Sequence
 from pathlib import Path
 from types import MappingProxyType
 
@@ -393,7 +393,7 @@ class TestMetadataStamp:
         """
         Input: a versioned export with a tracker run and a ``metainfo`` block.
         Expected: the producer, domain, version and doc string identify the module and the
-            release; the properties carry the config name, tracker, run id and every metainfo
+            release. The properties carry the config name, tracker, run id and every metainfo
             value as JSON.
         Check: the model header and the metadata properties.
         """

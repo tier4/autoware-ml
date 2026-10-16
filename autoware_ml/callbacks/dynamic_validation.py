@@ -16,8 +16,8 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Sequence
+import logging
 
 from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.callbacks import Callback, EarlyStopping, ModelCheckpoint

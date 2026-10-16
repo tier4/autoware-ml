@@ -69,12 +69,12 @@ class LiDARDepthSparseTransform(BaseTransform):
 
         Both matrices must map into the same image plane the depth map is
         built for: when ``lidar2image`` already contains the image
-        augmentation (training pipeline), pass an identity ``img_aug_matrix``;
-        at deployment the runtime provides the raw projection and the
+        augmentation (training pipeline), pass an identity ``img_aug_matrix``.
+        At deployment the runtime provides the raw projection and the
         augmentation separately.
 
         The per-camera scatter is vectorized so the traced graph supports a
-        dynamic number of cameras; duplicate pixel hits resolve to an
+        dynamic number of cameras. Duplicate pixel hits resolve to an
         arbitrary point among the duplicates.
 
         Args:

@@ -20,10 +20,9 @@ points onto the images and preview utilities for camera-LiDAR fusion inputs.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 import math
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Sequence
 
 import cv2
 from jaxtyping import Float32, Int64
@@ -326,7 +325,7 @@ class CalibrationMisalignment(BaseTransform):
         """Sample a component value from either negative or positive range.
 
         Randomly selects between negative and positive range, then samples from a truncated
-        gaussian within that range. All bounds are positive magnitudes; negative range
+        gaussian within that range. All bounds are positive magnitudes. Negative range
         values are negated after sampling.
 
         Args:

@@ -14,10 +14,10 @@
 
 from __future__ import annotations
 
+from typing import Mapping, Sequence
 import hashlib
 import logging
 from pathlib import Path
-from typing import Mapping, Sequence
 from types import MappingProxyType
 
 import polars as pl
@@ -197,7 +197,7 @@ class BaseDatabase:
         ``cache_file_prefix_name``, the scenario root path) are left out, as are runtime-only
         settings such as ``num_workers``, so the same content hashes the same on every node.
         ``root_path`` is left out only by the databases that store paths relative to it and
-        re-root them when the records are read back; a database that stores absolute paths
+        re-root them when the records are read back. A database that stores absolute paths
         must add it, since its records are only valid under that root.
 
         Returns:

@@ -97,7 +97,7 @@ def test_enabled_logger_is_an_mlflow_logger_bound_to_the_run(
     Input: ``logger_enabled=True`` on the resolved run context.
     Expected: a ``MLFlowLogger`` attached to the existing run, experiment and run name, with the
         context tags merged under the tags of the logger node.
-    Check: the logger type and its constructor state; the run itself is never started.
+    Check: the logger type and its constructor state. The run itself is never started.
     """
     context = _run_context(tmp_path, hydra_runtime)
     cfg = _cfg(context.tracking_uri)
