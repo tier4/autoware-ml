@@ -478,6 +478,37 @@ class TestTransFusionHead(unittest.TestCase):
             transfusion_head=transfusion_head,
         )
 
+    def test_common_heads_must_hold_every_regression_branch(self) -> None:
+        """Test that a missing regression branch is rejected at construction."""
+        self.common_heads = MappingProxyType(
+            {name: shape for name, shape in self.common_heads.items() if name != "rots"}
+        )
+
+        with self.assertRaisesRegex(ValueError, "must hold the branches"):
+            self._build_transfusion_head()
+
+    def test_common_heads_reject_an_unknown_branch(self) -> None:
+        """
+        Test that a misspelt or extra branch is rejected instead of becoming an unused head, so a
+        ``vel`` typo cannot leave the velocity branch silently unbuilt and the heatmaps branch
+        cannot be configured by hand.
+        """
+        for extra in ("vel", "heatmaps"):
+            with self.subTest(extra=extra):
+                self.common_heads = MappingProxyType({**self.common_heads, extra: (2, 2)})
+
+                with self.assertRaisesRegex(ValueError, "must hold the branches"):
+                    self._build_transfusion_head()
+
+    def test_use_velocity_requires_the_vels_branch(self) -> None:
+        """Test that predicting velocity without a ``vels`` branch is rejected at construction."""
+        self.common_heads = MappingProxyType(
+            {name: shape for name, shape in self.common_heads.items() if name != "vels"}
+        )
+
+        with self.assertRaisesRegex(ValueError, "requires a vels branch"):
+            self._build_transfusion_head()
+
     def test_transfusion_head_weight_init(self) -> None:
         """
         Test that the head weights are initialized around zero and that the dense heatmap head

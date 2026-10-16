@@ -155,6 +155,7 @@ class _TransFusionDetectionModelTestCase(unittest.TestCase):
             num_heads=2,
             feedforward_channels=16,
             common_heads=MappingProxyType(common_heads),
+            use_velocity=with_velocity,
             bbox_coder=TransFusionBBoxCoder(
                 pc_range=self.point_cloud_range,
                 out_size_factor=self.out_size_factor,

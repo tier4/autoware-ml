@@ -57,6 +57,12 @@ from autoware_ml.models.detection3d.heads.transfusions.exportable_multi_head_att
 from autoware_ml.types.geometry import Box3DFieldIndex
 
 
+# Regression branches every TransFusion head predicts, keyed as the configs name them, and
+# the optional velocity branch. The head adds the heatmaps branch itself.
+REGRESSION_BRANCHES = ("centers", "heights", "dims", "rots")
+VELOCITY_BRANCH = "vels"
+
+
 class NMSGroupConfig(NamedTuple):
     """
     Config for each NMS group.
@@ -186,7 +192,7 @@ class SeparateHead1D(nn.Module):
             height=branches["heights"],
             dim=branches["dims"],
             rot=branches["rots"],
-            vel=branches.get("vels"),
+            vel=branches.get(VELOCITY_BRANCH),
         )
 
 
@@ -239,14 +245,17 @@ class TransFusionHead(nn.Module):
         Args:
             num_proposals: Number of proposals selected from the dense heatmap.
             auxiliary: Whether to keep predictions from all decoder layers.
-            class_names: Sequence of class names.
             in_channels: Input BEV feature dimension.
             hidden_channel: Internal decoder feature dimension.
-            num_classes: Number of foreground classes.
+            class_names: Ordered names of the foreground classes. Their count is the number of
+                classes, and the class lists of the other arguments resolve against them.
             num_decoder_layers: Number of decoder refinement layers.
             num_heads: Number of attention heads per decoder layer.
             feedforward_channels: Hidden dimension of decoder feed-forward blocks.
-            common_heads: Prediction-branch specification shared by decoder layers.
+            common_heads: Prediction branches shared by the decoder layers, mapped from branch
+                name to ``(out_channels, num_convs)``. Must hold ``centers``, ``heights``,
+                ``dims`` and ``rots``, and ``vels`` exactly when ``use_velocity`` is set. The
+                ``heatmaps`` branch is added by the head.
             bbox_coder: Box coder used for encoding and decoding predictions. It carries the
                 score threshold groups, resolved against its own ``class_names``, which must
                 therefore be the head's.
@@ -260,16 +269,14 @@ class TransFusionHead(nn.Module):
                 Only used by the ``"round"`` heatmap target.
             post_max_size: Maximum number of predictions kept after NMS.
             nms_min_radius: Minimum center distance used by circle NMS.
-            dense_heatmap_pooling_class_names: Optional class names that should use local max
-                pooling before proposal selection.
+            dense_heatmap_pooling_class_names: Classes whose dense heatmap gets local max
+                pooling before proposal selection, empty for none.
             iou_loss: Optional rotated BEV IoU loss applied to every matched (prediction, gt)
                 pair of every decoder layer, on top of the L1 box loss. The module receives the
                 predictions and targets decoded through ``bbox_coder`` together with the
                 matched labels. See
                 :class:`~autoware_ml.losses.detection3d.rotated_iou_loss.Rotated2DIouLoss`.
                 None disables the term and skips its computation entirely.
-            class_names: Optional ordered class names used to resolve config-friendly
-                class lists.
             heatmap_target: Shape of the dense heatmap supervision. ``"round"``
                 (default) draws a circular Gaussian sized by ``gaussian_radius``.
                 ``"oriented"`` draws an elliptical Gaussian stretched along the box
@@ -290,7 +297,8 @@ class TransFusionHead(nn.Module):
             loss_heatmap_weight: Weight applied to the dense heatmap loss.
             heatmap_init_bias: Initial bias used by the dense heatmap branch.
             nms_kernel_size: Kernel size used for local-maximum suppression.
-            use_velocity: Whether the head predicts object velocity.
+            use_velocity: Whether the head predicts object velocity. Requires the ``vels``
+                branch in ``common_heads``, which is dropped when off.
             head_hidden_channels: Width of the prediction-branch hidden layers.
                 Defaults to ``hidden_channel``.
             norm_eps: Epsilon used by the head's batch-normalization layers
@@ -299,6 +307,11 @@ class TransFusionHead(nn.Module):
                 (shared block, dense heatmap head, prediction branches).
             use_bf16_cross_attention: Whether export emits fusion-ready attention and uses bf16 for
                 the long cross-attention core. Requires ``deploy.onnx.precision=fp16``.
+
+        Raises:
+            ValueError: If ``common_heads`` misses a regression branch or holds an unknown one,
+                if ``use_velocity`` is set without a ``vels`` branch, or if ``heatmap_target``,
+                ``nms_type`` or the NMS groups are unsupported.
         """
         super().__init__()
         self.num_proposals = num_proposals
@@ -324,6 +337,15 @@ class TransFusionHead(nn.Module):
         self.loss_heatmap_weight = loss_heatmap_weight
         self.heatmap_init_bias = heatmap_init_bias
         self.use_velocity = use_velocity
+        if set(common_heads) - {VELOCITY_BRANCH} != set(REGRESSION_BRANCHES):
+            raise ValueError(
+                f"TransFusionHead common_heads must hold the branches {list(REGRESSION_BRANCHES)} "
+                f"and optionally {VELOCITY_BRANCH}, got {list(common_heads)}."
+            )
+        if use_velocity and VELOCITY_BRANCH not in common_heads:
+            raise ValueError(
+                f"TransFusionHead use_velocity requires a {VELOCITY_BRANCH} branch in common_heads."
+            )
         self.head_hidden_channels = (
             head_hidden_channels if head_hidden_channels is not None else hidden_channel
         )
@@ -392,19 +414,9 @@ class TransFusionHead(nn.Module):
             prediction_head_configs: Mapping from head name to ``(out_channels, num_convs)``.
         """
         prediction_head_configs = dict(prediction_head_configs)
-        if (
-            "heatmaps" in prediction_head_configs
-            and prediction_head_configs["heatmaps"][0] != self.num_classes
-        ):
-            raise ValueError(
-                "TransFusionHead prediction heatmap head is not compatible "
-                "with the number of classes."
-            )
-        else:
-            prediction_head_configs["heatmaps"] = (self.num_classes, 2)
-
-        if not self.use_velocity and "vels" in prediction_head_configs:
-            prediction_head_configs.pop("vels")
+        prediction_head_configs["heatmaps"] = (self.num_classes, 2)
+        if not self.use_velocity:
+            prediction_head_configs.pop(VELOCITY_BRANCH, None)
 
         prediction_heads = nn.ModuleList(
             [
