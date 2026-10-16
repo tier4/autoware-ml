@@ -14,7 +14,6 @@ import torch
 from scipy.optimize import linear_sum_assignment
 
 from autoware_ml.models.detection3d.task_modules.match_costs import (
-    BBox3DL1Cost,
     BBoxBEVL1Cost,
     ClassificationCost,
     IoU3DCost,
@@ -28,16 +27,16 @@ class AssignResult:
 
     Attributes:
         num_gts: Number of ground-truth boxes used during matching.
-        gt_inds: Assigned ground-truth indices for each proposal.
-            For unassigned est bboxes, they are 0.
+        gt_inds: Assigned ground-truth indices for each proposal, offset by one.
+            Unassigned proposals carry 0.
         labels: Assigned class labels for each proposal.
         max_overlaps: Optional overlap score for each assigned proposal.
     """
 
     num_gts: Int32[torch.Tensor, " batch_size"]
     gt_inds: Int64[torch.Tensor, "batch_size num_bboxes"]
-    labels: Int64[torch.Tensor, "batch_size num_"]
-    max_overlaps: Float32[torch.Tensor, " batch_size num_bboxes"] | None
+    labels: Int64[torch.Tensor, "batch_size num_bboxes"]
+    max_overlaps: Float32[torch.Tensor, "batch_size num_bboxes"] | None
 
 
 def _bev_iou_aligned(
@@ -102,13 +101,15 @@ class HungarianAssigner3D:
 
     Attributes:
         cls_cost: Classification cost term.
-        reg_cost: Bounding-box regression cost term.
+        reg_cost: Bounding-box regression cost term over the BEV centers. Only the batched
+            ``BBoxBEVL1Cost`` signature is supported; a model that needs the full-box
+            ``BBox3DL1Cost`` has to give it the same batched signature first.
         iou_cost: IoU-based matching cost term.
         point_cloud_range: Detector point-cloud range used by the regression cost.
     """
 
     cls_cost: ClassificationCost
-    reg_cost: BBoxBEVL1Cost | BBox3DL1Cost
+    reg_cost: BBoxBEVL1Cost
     iou_cost: IoU3DCost
     point_cloud_range: Sequence[float]
 
@@ -116,7 +117,7 @@ class HungarianAssigner3D:
         self,
         bboxes: Float32[torch.Tensor, "batch_size num_bboxes code_size"],
         gt_bboxes: Float32[torch.Tensor, "batch_size max_num_gt_bboxes code_size"],
-        gt_labels: Float32[torch.Tensor, "batch_size max_num_gt_bboxes"],
+        gt_labels: Int64[torch.Tensor, "batch_size max_num_gt_bboxes"],
         cls_pred: Float32[torch.Tensor, "batch_size num_bboxes num_classes"],
         valid_masks: Bool[torch.Tensor, "batch_size max_num_gt_bboxes"],
     ) -> AssignResult:
@@ -127,10 +128,9 @@ class HungarianAssigner3D:
                 (center_x, center_y, center_z, length, width, height, yaw, velocity_x, velocity_y).
             gt_bboxes: Ground-truth boxes, where code_size is
                 (center_x, center_y, center_z, length, width, height, yaw, velocity_x, velocity_y).
-            gt_labels: Ground-truth class labels.
-            cls_pred: Classification predictions associated with ``bboxes`` in
-                ``(num_classes, num_bboxes)`` layout. The assigner transposes
-                this tensor before evaluating classification cost.
+            gt_labels: Ground-truth class labels, -1 for the padded gt boxes.
+            cls_pred: Classification logits of every proposal, one row per box in the same
+                order as ``bboxes`` and one column per class.
             valid_masks: Boolean mask to indicate if a gt box is valid.
 
         Returns:
@@ -171,7 +171,7 @@ class HungarianAssigner3D:
             .cpu()
         )
 
-        # linear sum assignment only works in sequantially
+        # linear_sum_assignment takes one cost matrix at a time, so loop over the batch.
         batch_size, num_bboxes = bboxes.shape[0], bboxes.shape[1]
         assigned_gt_inds = bboxes.new_full((batch_size, num_bboxes), -1, dtype=torch.long)
         assigned_labels = bboxes.new_full((batch_size, num_bboxes), -1, dtype=torch.long)
