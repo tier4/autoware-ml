@@ -35,6 +35,7 @@ from spconv.pytorch import SparseConvTensor, SparseSequential, SubMConv3d, Spars
 from spconv.pytorch.conv import SparseConvolution
 from spconv.pytorch.modules import SparseModule
 
+from autoware_ml.models.detection3d.encoders.bev_middle_encoder import BEVMiddleEncoder
 from autoware_ml.ops.spconv.sparse_conv import ExportableSparseConv3d, ExportableSubMConv3d
 
 
@@ -151,7 +152,7 @@ class SparseBasicBlock(SparseModule):
         return out
 
 
-class SparseEncoder(nn.Module):
+class SparseEncoder(BEVMiddleEncoder):
     """Sparse 3D voxel encoder producing a dense BEV feature map.
 
     Args:

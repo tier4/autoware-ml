@@ -38,6 +38,7 @@ from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
 from autoware_ml.models.detection3d.task_modules.partial_annotations import PartialAnnotations
+from autoware_ml.models.detection3d.encoders.bev_middle_encoder import BEVMiddleEncoder
 from autoware_ml.models.detection3d.heads.transfusions.transfusion_head import TransFusionHead
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
@@ -176,7 +177,7 @@ class TransFusionDetectionModel(ModuleBaseModel):
         self,
         data_preprocessor: DataPreprocessor,
         pts_voxel_encoder: nn.Module,
-        pts_middle_encoder: nn.Module,
+        pts_middle_encoder: BEVMiddleEncoder,
         pts_backbone: nn.Module,
         pts_neck: nn.Module,
         bbox_head: TransFusionHead,
@@ -191,7 +192,8 @@ class TransFusionDetectionModel(ModuleBaseModel):
         Args:
             data_preprocessor: Preprocessor for the model inputs.
             pts_voxel_encoder: Lidar voxel feature encoder.
-            pts_middle_encoder: Sparse 3D or pillar-scatter middle encoder.
+            pts_middle_encoder: Middle encoder producing the dense BEV map, exportable
+                through :class:`BEVMiddleEncoder`.
             pts_backbone: BEV backbone.
             pts_neck: BEV neck.
             bbox_head: TransFusion detection head.
@@ -201,6 +203,9 @@ class TransFusionDetectionModel(ModuleBaseModel):
             metrics: Detection metrics accumulated during validation and test.
             partial_annotations: Maps the dataset's per-sample annotation flag to the classes
                 the head must not supervise in that sample. None supervises every class.
+
+        Raises:
+            TypeError: If the middle encoder does not implement :class:`BEVMiddleEncoder`.
         """
         super().__init__(
             data_preprocessor=data_preprocessor,
@@ -209,6 +214,11 @@ class TransFusionDetectionModel(ModuleBaseModel):
             metrics=metrics,
             log_dict_configs=log_dict_configs,
         )
+        if not isinstance(pts_middle_encoder, BEVMiddleEncoder):
+            raise TypeError(
+                "The TransFusion middle encoder must be a BEVMiddleEncoder, got "
+                f"{type(pts_middle_encoder).__name__}."
+            )
         self.partial_annotations = partial_annotations
         self.pts_voxel_encoder = pts_voxel_encoder
         self.pts_middle_encoder = pts_middle_encoder
@@ -345,13 +355,10 @@ class TransFusionDetectionModel(ModuleBaseModel):
                 "ModelBatchInputs must contain voxels_data to build TransFusion export spec."
             )
 
-        pts_middle_encoder = self.pts_middle_encoder
-        if hasattr(pts_middle_encoder, "prepare_for_export"):
-            pts_middle_encoder = pts_middle_encoder.prepare_for_export()
         return ExportSpec(
             module=_TransFusionExportWrapper(
                 pts_voxel_encoder=self.pts_voxel_encoder,
-                pts_middle_encoder=pts_middle_encoder,
+                pts_middle_encoder=self.pts_middle_encoder.prepare_for_export(),
                 pts_backbone=self.pts_backbone,
                 pts_neck=self.pts_neck,
                 bbox_head=self.bbox_head.prepare_for_export(),

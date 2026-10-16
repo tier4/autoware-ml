@@ -144,6 +144,7 @@ class SeparateHead1D(nn.Module):
         in_channels: int,
         heads: MappingProxyType[str, tuple[int, int]],
         hidden_channels: int,
+        heatmap_init_bias: float,
         norm_eps: float = 1e-3,
         norm_momentum: float = 0.01,
     ) -> None:
@@ -153,6 +154,8 @@ class SeparateHead1D(nn.Module):
             in_channels: Input feature dimension.
             heads: Mapping from head name to ``(out_channels, num_convs)``.
             hidden_channels: Width of the intermediate branch layers.
+            heatmap_init_bias: Initial bias of the ``heatmaps`` branch output, the prior
+                probability of a proposal being an object.
             norm_eps: Epsilon used by the branch batch-normalization layers.
             norm_momentum: Momentum used by the branch batch-normalization layers.
         """
@@ -170,7 +173,7 @@ class SeparateHead1D(nn.Module):
                 current_channels = hidden_channels
             output_conv = nn.Conv1d(current_channels, out_channels, kernel_size=1)
             if name == "heatmaps":
-                nn.init.constant_(output_conv.bias, -2.19)
+                nn.init.constant_(output_conv.bias, heatmap_init_bias)
             layers.append(output_conv)
             self.heads[name] = nn.Sequential(*layers)
 
@@ -424,6 +427,7 @@ class TransFusionHead(nn.Module):
                     in_channels,
                     MappingProxyType(prediction_head_configs),
                     hidden_channels=self.head_hidden_channels,
+                    heatmap_init_bias=self.heatmap_init_bias,
                     norm_eps=self.norm_eps,
                     norm_momentum=self.norm_momentum,
                 )
@@ -1535,8 +1539,6 @@ class TransFusionHead(nn.Module):
             ExportableMultiheadAttention in all decoder layers.
         """
         head = deepcopy(self).eval()
-        if not hasattr(head, "decoder"):
-            return head
         for decoder_layer in head.decoder:
             if isinstance(decoder_layer.self_attn, nn.MultiheadAttention):
                 decoder_layer.self_attn = ExportableMultiheadAttention(

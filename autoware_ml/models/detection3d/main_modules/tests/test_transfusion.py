@@ -35,6 +35,7 @@ from autoware_ml.dataclasses.batch.detection3d import Detection3DGTBatch
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
+from autoware_ml.models.detection3d.encoders.bev_middle_encoder import BEVMiddleEncoder
 from autoware_ml.models.detection3d.backbones.second import SECONDBackbone
 from autoware_ml.models.detection3d.encoders.sparse.sparse_encoder import SparseEncoder
 from autoware_ml.models.detection3d.encoders.voxel import HardSimpleVoxelSinCosEncoder
@@ -80,17 +81,21 @@ class _StubVoxelEncoder(nn.Module):
         return self.linear(voxel_mean)
 
 
-class _StubMiddleEncoder(nn.Module):
+class _StubMiddleEncoder(BEVMiddleEncoder):
     """Scatter voxel features onto a dense ``(B, C, H, W)`` canvas at their ``(y, x)`` cells.
 
-    Coordinates arrive in the ``(batch, z, y, x)`` layout the model builds. The stub exposes the
-    ``prepare_for_export`` interface of the sparse encoder so the model can export on the CPU.
+    Coordinates arrive in the ``(batch, z, y, x)`` layout the model builds. The stub implements
+    the ``BEVMiddleEncoder`` interface of the sparse encoder so the model can export on the CPU.
     """
 
     def __init__(self, bev_shape: tuple[int, int], exportable: bool = False) -> None:
         super().__init__()
         self._bev_shape = bev_shape
         self.exportable = exportable
+
+    @property
+    def bev_output_shape(self) -> tuple[int, int]:
+        return self._bev_shape
 
     def forward(
         self,

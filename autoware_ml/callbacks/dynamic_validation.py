@@ -159,17 +159,20 @@ class DynamicValidation(Callback):
                 "`Trainer(check_val_every_n_epoch=None)` validates every `val_check_interval` "
                 "training batches. Set `check_val_every_n_epoch` to an integer."
             )
+        # A wall-time `val_check_interval` is parsed into this trainer attribute and leaves
+        # `trainer.val_check_interval` unset. Lightning exposes it nowhere else, and its own
+        # checkpoint and fit loops read it the same way.
+        if trainer._val_check_time_interval is not None:
+            raise MisconfigurationException(
+                "DynamicValidation schedules validation per epoch, but the trainer validates on "
+                "a wall-time interval. Use a float or integer `val_check_interval` of 1.0."
+            )
         val_check_interval = trainer.val_check_interval
         if not (isinstance(val_check_interval, float) and val_check_interval == 1.0):
             raise MisconfigurationException(
                 "DynamicValidation schedules validation per epoch, but "
                 f"`Trainer(val_check_interval={val_check_interval!r})` validates within an "
                 "epoch. Set `val_check_interval` to 1.0 so that validation runs at epoch ends."
-            )
-        if getattr(trainer, "_val_check_time_interval", None) is not None:
-            raise MisconfigurationException(
-                "DynamicValidation schedules validation per epoch, but the trainer validates on "
-                "a wall-time interval. Use a float or integer `val_check_interval` of 1.0."
             )
         self._check_monitoring_callbacks(trainer)
 

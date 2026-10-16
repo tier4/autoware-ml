@@ -22,6 +22,7 @@ from jaxtyping import Float32, Int32
 import torch
 import torch.nn as nn
 
+from autoware_ml.models.detection3d.encoders.bev_middle_encoder import BEVMiddleEncoder
 from autoware_ml.models.detection3d.main_modules.bevfusions.fuser import ConvFuser
 
 
@@ -36,7 +37,7 @@ class BEVFusionLidar(nn.Module):
     def __init__(
         self,
         pts_voxel_encoder: nn.Module,
-        pts_middle_encoder: nn.Module,
+        pts_middle_encoder: BEVMiddleEncoder,
         pts_backbone: nn.Module,
         pts_neck: nn.Module,
         fuser: ConvFuser | None,
@@ -49,8 +50,16 @@ class BEVFusionLidar(nn.Module):
             pts_backbone: BEV backbone applied to the encoded map.
             pts_neck: BEV neck applied after the backbone.
             fuser: Optional fuser to fuse bev features from other modality.
+
+        Raises:
+            TypeError: If the middle encoder does not implement :class:`BEVMiddleEncoder`.
         """
         super().__init__()
+        if not isinstance(pts_middle_encoder, BEVMiddleEncoder):
+            raise TypeError(
+                "The lidar middle encoder must be a BEVMiddleEncoder, got "
+                f"{type(pts_middle_encoder).__name__}."
+            )
         self.pts_voxel_encoder = pts_voxel_encoder
         self.pts_middle_encoder = pts_middle_encoder
         self.pts_backbone = pts_backbone
@@ -60,12 +69,6 @@ class BEVFusionLidar(nn.Module):
     @property
     def expected_bev_shape(self) -> tuple[int, int]:
         """Return the expected ``(height, width)`` of lidar BEV features."""
-        if not hasattr(self.pts_middle_encoder, "bev_output_shape"):
-            raise AttributeError(
-                "The lidar middle encoder does not have the attribute `bev_output_shape`. "
-                "Please ensure that the middle encoder is properly configured to provide "
-                "the expected BEV output shape."
-            )
         return self.pts_middle_encoder.bev_output_shape
 
     def forward(
@@ -115,13 +118,11 @@ class BEVFusionLidar(nn.Module):
         bev_features = self.pts_neck(self.pts_backbone(bev_features))
         return bev_features
 
-    def prepare_for_export(self) -> nn.Module:
+    def prepare_for_export(self) -> BEVMiddleEncoder:
         """Swap the middle encoder for its ONNX-exportable variant, in place.
 
         Returns:
-            The exportable middle encoder that replaced the original, or the original one when
-            it has no exportable variant.
+            The exportable middle encoder that replaced the original.
         """
-        if hasattr(self.pts_middle_encoder, "prepare_for_export"):
-            self.pts_middle_encoder = self.pts_middle_encoder.prepare_for_export()
+        self.pts_middle_encoder = self.pts_middle_encoder.prepare_for_export()
         return self.pts_middle_encoder

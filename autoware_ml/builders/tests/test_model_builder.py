@@ -409,17 +409,25 @@ class TestResolveWeightsPaths:
         assert resolve_weights_paths(OmegaConf.create({})) is None
         assert resolve_weights_paths(OmegaConf.create({"weights": None})) is None
 
-    def test_a_string_and_a_list_resolve_to_paths(self) -> None:
+    def test_a_list_resolves_to_paths(self) -> None:
         """
-        Input: ``weights`` as one path string and as the list the CLI builds.
+        Input: ``weights`` as the list the CLI builds.
         Expected: a list of paths in the given order.
-        Check: the return values.
+        Check: the return value.
         """
-        assert resolve_weights_paths(OmegaConf.create({"weights": "a.ckpt"})) == [Path("a.ckpt")]
         assert resolve_weights_paths(OmegaConf.create({"weights": ["a.ckpt", "b.ckpt"]})) == [
             Path("a.ckpt"),
             Path("b.ckpt"),
         ]
+
+    def test_a_single_string_is_rejected(self) -> None:
+        """
+        Input: ``weights`` as one path string.
+        Expected: the value has one explicit shape, a list, so a bare string is refused.
+        Check: a ValueError naming the string is raised.
+        """
+        with pytest.raises(ValueError, match="a.ckpt"):
+            resolve_weights_paths(OmegaConf.create({"weights": "a.ckpt"}))
 
     def test_mandatory_weights_left_missing_are_rejected(self) -> None:
         """
@@ -453,16 +461,16 @@ class TestBuildWeightCheckpointPaths:
         with pytest.raises(ValueError, match="--weights"):
             build_weight_checkpoint_paths(OmegaConf.create({}))
 
-    def test_single_string_is_both_the_weights_and_the_checkpoint(self, tmp_path: Path) -> None:
+    def test_single_weight_is_both_the_weights_and_the_checkpoint(self, tmp_path: Path) -> None:
         """
-        Input: ``weights`` given as one path string.
+        Input: ``weights`` given as a one-element list.
         Expected: a one-element list of paths whose last element is the lineage checkpoint.
         Check: both return values.
         """
         checkpoint = _save_state_dict(tmp_path / "best.ckpt", {})
 
         weight_paths, checkpoint_path = build_weight_checkpoint_paths(
-            OmegaConf.create({"weights": str(checkpoint)})
+            OmegaConf.create({"weights": [str(checkpoint)]})
         )
 
         assert list(weight_paths) == [checkpoint]

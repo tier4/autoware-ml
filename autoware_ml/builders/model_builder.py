@@ -109,15 +109,16 @@ def resolve_weights_paths(cfg: DictConfig) -> list[Path] | None:
     Read the pretrained weights the configuration names, if any.
 
     Args:
-        cfg: Hydra configuration. ``weights`` is one path, a list of paths, absent, or the
-            mandatory ``???`` of a fine-tune config that must be given ``--weights``.
+        cfg: Hydra configuration. ``weights`` is a list of paths, absent, or the mandatory
+            ``???`` of a fine-tune config that must be given ``--weights``.
 
     Returns:
         The weight paths, or None when the configuration names none.
 
     Raises:
-        ValueError: If ``weights`` is left at ``???``. ``cfg.get`` would read that as None and
-            a fine-tune config would silently train from scratch at its fine-tune learning rate.
+        ValueError: If ``weights`` is left at ``???``, since ``cfg.get`` would read that as
+            None and a fine-tune config would silently train from scratch at its fine-tune
+            learning rate, or if it is a single string rather than a list.
     """
     if OmegaConf.is_missing(cfg, "weights"):
         raise ValueError(
@@ -128,7 +129,10 @@ def resolve_weights_paths(cfg: DictConfig) -> list[Path] | None:
     if weights_arg is None:
         return None
     if isinstance(weights_arg, str):
-        return [Path(weights_arg)]
+        raise ValueError(
+            f"weights must be a list of paths, got the string {weights_arg!r}. Pass --weights "
+            "<path> (repeatable) or weights=[<path>]."
+        )
     return [Path(path) for path in weights_arg]
 
 

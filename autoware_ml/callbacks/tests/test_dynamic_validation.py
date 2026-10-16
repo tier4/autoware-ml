@@ -230,7 +230,9 @@ class TestSetupPrecondition(DynamicValidationTestCase):
         Check: a MisconfigurationException mentioning "wall-time" is raised.
         """
         trainer = self.make_trainer()
+        # Lightning parses the interval into this attribute and leaves val_check_interval unset.
         trainer._val_check_time_interval = 60.0
+        del trainer.val_check_interval
 
         with self.assertRaisesRegex(MisconfigurationException, "wall-time"):
             self.callback.setup(trainer, self.module, stage="fit")

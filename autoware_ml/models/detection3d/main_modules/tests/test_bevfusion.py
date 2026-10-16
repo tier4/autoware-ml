@@ -35,6 +35,7 @@ from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.batch.detection3d import Detection3DGTBatch
 from autoware_ml.dataclasses.geometry.images import ImageGTBatch
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
+from autoware_ml.models.detection3d.encoders.bev_middle_encoder import BEVMiddleEncoder
 from autoware_ml.models.detection3d.backbones.second import SECONDBackbone
 from autoware_ml.models.detection3d.heads.transfusions.exportable_multi_head_attention import (
     ExportableMultiheadAttention,
@@ -89,7 +90,7 @@ class _StubVoxelEncoder(nn.Module):
         return self.linear(voxel_mean)
 
 
-class _StubMiddleEncoder(nn.Module):
+class _StubMiddleEncoder(BEVMiddleEncoder):
     """Scatter voxel features onto a dense ``(B, C, H, W)`` canvas at their ``(y, x)`` cells.
 
     Coordinates arrive in the ``(batch, z, y, x)`` layout the model builds. The stub exposes the

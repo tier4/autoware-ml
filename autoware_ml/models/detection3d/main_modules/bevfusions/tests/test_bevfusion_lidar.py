@@ -23,6 +23,7 @@ from jaxtyping import Float32, Int32
 import torch
 import torch.nn as nn
 
+from autoware_ml.models.detection3d.encoders.bev_middle_encoder import BEVMiddleEncoder
 from autoware_ml.models.detection3d.backbones.second import SECONDBackbone
 from autoware_ml.models.detection3d.encoders.sparse.sparse_encoder import SparseEncoder
 from autoware_ml.models.detection3d.encoders.voxel import HardSimpleVoxelSinCosEncoder
@@ -48,7 +49,7 @@ class _StubVoxelEncoder(nn.Module):
         return self.linear(voxel_mean)
 
 
-class _StubMiddleEncoder(nn.Module):
+class _StubMiddleEncoder(BEVMiddleEncoder):
     """Scatter voxel features onto a dense ``(B, C, H, W)`` canvas at their ``(y, x)`` cells.
 
     Coordinates arrive in the ``(batch, z, y, x)`` layout the main model builds. The stub exposes
@@ -227,18 +228,16 @@ class TestBEVFusionLidar(_BEVFusionLidarTestCase):
         """Test that the branch reports the middle encoder's dense BEV shape."""
         self.assertEqual(self._build_lidar().expected_bev_shape, self.bev_shape)
 
-    def test_expected_bev_shape_requires_bev_output_shape(self) -> None:
-        """Test that a middle encoder without ``bev_output_shape`` is rejected."""
-        lidar = BEVFusionLidar(
-            pts_voxel_encoder=self.voxel_encoder,
-            pts_middle_encoder=nn.Identity().to(self.device),
-            pts_backbone=self.backbone,
-            pts_neck=self.neck,
-            fuser=None,
-        )
-
-        with self.assertRaises(AttributeError):
-            _ = lidar.expected_bev_shape
+    def test_requires_a_bev_middle_encoder(self) -> None:
+        """Test that a middle encoder outside the BEVMiddleEncoder interface is rejected."""
+        with self.assertRaisesRegex(TypeError, "BEVMiddleEncoder"):
+            BEVFusionLidar(
+                pts_voxel_encoder=self.voxel_encoder,
+                pts_middle_encoder=nn.Identity().to(self.device),
+                pts_backbone=self.backbone,
+                pts_neck=self.neck,
+                fuser=None,
+            )
 
     def test_forward_without_fusion_returns_neck_features(self) -> None:
         """Test that the lidar-only path produces a neck feature map on the middle encoder grid."""
