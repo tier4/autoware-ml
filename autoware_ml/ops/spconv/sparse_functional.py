@@ -483,16 +483,12 @@ class GetIndicePairsImplicitGemm(Function):
         del ctx
 
         num_out_act_bound: int = -1
-        # Force the thrust-unique path instead of spconv's direct-table path. The
-        # direct-table path reads the active-voxel count back through
-        # ``tv::Tensor::cpu(ctx)`` (cumm tensor.h), which drops the CUDA stream and
-        # copies on the legacy default stream. PyTorch pool streams are non-blocking,
-        # so the count can be read before the counting kernel finishes: spconv then
-        # raises "Your points vanished" from C++ and the late device-to-host copy
-        # lands in freed memory, aborting the process with glibc heap corruption.
-        # Deterministically reproduced (and fixed by this flag) during BEVFusion
-        # ONNX export; the thrust path synchronizes correctly.
-        # It's only used in Pytorch tracing, and do not affect the plugin.
+        # Trace with spconv's thrust-unique pair generation rather than its direct hash
+        # table. Both yield the same indice pairs and a bit-identical dense output; only
+        # the order of the output indices differs, and the sorted thrust order keeps the
+        # traced graph independent of the SPCONV_USE_DIRECT_TABLE environment variable.
+        # The flag only affects tracing, the deployed plugin builds its own tables and
+        # training uses the native spconv layers.
         direct_table: bool = False
         do_sort = SPCONV_DO_SORT
 
