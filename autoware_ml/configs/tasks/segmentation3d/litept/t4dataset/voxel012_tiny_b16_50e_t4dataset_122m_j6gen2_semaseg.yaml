@@ -17,4 +17,5 @@ trainer:
 
 callbacks:
   dynamic_validation:
-    epoch_intervals: [[0, 5], [20, 1]]
+    # Validate every 5 epochs, then every epoch over the last 10 of the 50-epoch schedule.
+    epoch_intervals: [[0, 5], [40, 1]]

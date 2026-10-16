@@ -46,11 +46,8 @@ data_preprocessor:
 callbacks:
   dynamic_validation:
     _target_: autoware_ml.callbacks.dynamic_validation.DynamicValidation
-    # [start_epoch, check_val_every_n_epoch] pairs, for example [[0, 5], [20, 1]]: validate
-    # every 5 epochs while the loss is still falling quickly, then every epoch from epoch 20 so
-    # the best checkpoint is picked at epoch resolution. The callback rewrites
-    # trainer.check_val_every_n_epoch at every epoch start. The schedule follows the epoch
-    # count, so every leaf sets it next to trainer.max_epochs.
+    # [start_epoch, check_val_every_n_epoch] pairs. The callback rewrites
+    # trainer.check_val_every_n_epoch at every epoch start.
     epoch_intervals: ???
 
 # Directory structure

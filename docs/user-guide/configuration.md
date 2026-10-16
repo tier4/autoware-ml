@@ -225,6 +225,17 @@ according to its schedule, so the validation frequency can change as training pr
 requires `trainer.val_check_interval: 1.0` and an integer `trainer.check_val_every_n_epoch`,
 which is the initial value before the first epoch. It never modifies `trainer.log_every_n_steps`.
 
+Every leaf follows one rule: validate every 5 epochs, then every epoch over the last 10 epochs
+of its schedule, so the best checkpoint is picked at epoch resolution where it matters. A
+30-epoch leaf sets `[[0, 5], [20, 1]]`, a 50-epoch leaf `[[0, 5], [40, 1]]`, a 100-epoch leaf
+`[[0, 5], [90, 1]]`, and a run of 10 epochs or fewer validates every epoch with `[[0, 1]]`.
+Tasks validated by steps rather than epochs, or whose loss is the only training signal, set
+`dynamic_validation: null` in their base config and keep Lightning's own cadence.
+
+The root also turns on the `IterationTimer` and `DataProcessingTimer` callbacks, which log the
+step and data loading times at `trainer.log_every_n_steps`, and the `RichProgressBar`, for
+every task.
+
 ### `logger`
 
 MLflow experiment tracking:
