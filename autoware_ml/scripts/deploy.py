@@ -171,6 +171,8 @@ def run_deploy(cfg: DictConfig) -> None:
     Args:
         cfg: Hydra configuration
     """
+    # First, so that every rank after rank zero stays silent from the config dump onwards.
+    restrict_console_logging_to_rank_zero()
     if "deploy" not in cfg:
         raise ValueError("Config must define a 'deploy' section.")
 
@@ -257,7 +259,6 @@ def _export(
     """
     validate_cuda_available()
     configure_torch_runtime()
-    restrict_console_logging_to_rank_zero()
     set_seed(cfg)
 
     device = torch.device("cuda")

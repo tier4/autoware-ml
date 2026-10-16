@@ -19,7 +19,6 @@ integration, and trainer execution for model training.
 """
 
 import logging
-from pathlib import Path
 
 import hydra
 from hydra.core.hydra_config import HydraConfig
@@ -47,6 +46,7 @@ from autoware_ml.utils.runtime import (
     instantiate_trainer,
     log_configuration,
     log_hyperparameters,
+    resolve_work_dir,
     set_seed,
 )
 
@@ -104,6 +104,8 @@ def main(cfg: DictConfig):
     Args:
         cfg: Hydra configuration
     """
+    # First, so that every rank after rank zero stays silent from the config dump onwards.
+    restrict_console_logging_to_rank_zero()
     log_configuration(cfg)
     config_name = HydraConfig.get().job.config_name
     if config_name is None:
@@ -120,7 +122,6 @@ def main(cfg: DictConfig):
     )
 
     configure_torch_runtime()
-    restrict_console_logging_to_rank_zero()
     set_seed(cfg)
 
     # Build trainer logger
@@ -181,7 +182,8 @@ def main(cfg: DictConfig):
 
     # Start training
     if checkpoint_dir is None:
-        checkpoint_dir = Path(cfg.experiment_run_dir) / "checkpoints"
+        # Without a run context ModelCheckpoint keeps its configured ${hydra:run.dir}/checkpoints.
+        checkpoint_dir = resolve_work_dir() / "checkpoints"
 
     score = train(
         trainer=trainer,

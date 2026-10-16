@@ -97,6 +97,8 @@ def main(cfg: DictConfig):
     Args:
         cfg: Hydra configuration
     """
+    # First, so that every rank after rank zero stays silent from the config dump onwards.
+    restrict_console_logging_to_rank_zero()
     log_configuration(cfg)
     config_name = HydraConfig.get().job.config_name
     if config_name is None:
@@ -126,7 +128,6 @@ def main(cfg: DictConfig):
     )
 
     configure_torch_runtime()
-    restrict_console_logging_to_rank_zero()
     set_seed(cfg)
 
     # Build trainer logger
