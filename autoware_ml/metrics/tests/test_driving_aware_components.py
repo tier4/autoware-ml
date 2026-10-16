@@ -60,9 +60,7 @@ def _yaw_state(yaw_err: float, match_cost: str = "center") -> DetectionState:
         gt_boxes=gt,
         gt_labels=torch.tensor([0]),
     )
-    return DetectionState(
-        samples=[sample], class_names=("car",), match_cost=match_cost
-    )
+    return DetectionState(samples=[sample], class_names=("car",), match_cost=match_cost)
 
 
 def test_heading_flip_rate_no_flip_for_small_error() -> None:
