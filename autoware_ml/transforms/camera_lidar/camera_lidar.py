@@ -34,7 +34,7 @@ from pydantic import BaseModel, ConfigDict, NonNegativeFloat, model_validator
 import torch
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
-from autoware_ml.geometry.cameras.base_images import BaseImages
+from autoware_ml.geometry.cameras.base_images import BaseImages, compose_lidar2images
 from autoware_ml.transforms.base import BaseTransform
 from autoware_ml.transforms.camera.resize import ImageSpaceTransform
 from autoware_ml.types.geometry import PointFeatureName
@@ -284,16 +284,13 @@ class CalibrationMisalignment(BaseTransform):
         """
         noisy_lidar2cams = noises @ camera_image_data.lidar2cams
 
-        intrinsics = camera_image_data.augmented_camera_intrinsics
-        homogeneous_intrinsics = torch.eye(4, dtype=intrinsics.dtype, device=intrinsics.device)
-        homogeneous_intrinsics = homogeneous_intrinsics.repeat(intrinsics.shape[0], 1, 1)
-        homogeneous_intrinsics[:, :3, :3] = intrinsics
-
         return BaseImages.model_validate(
             camera_image_data.model_copy(
                 update={
                     "lidar2cams": noisy_lidar2cams,
-                    "lidar2images": homogeneous_intrinsics @ noisy_lidar2cams,
+                    "lidar2images": compose_lidar2images(
+                        camera_image_data.augmented_camera_intrinsics, noisy_lidar2cams
+                    ),
                     "noises": noises,
                     "calibration_statuses": calibration_statuses,
                 }

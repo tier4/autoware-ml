@@ -24,6 +24,10 @@ The image-space transforms are expressed in the frame of the image they are give
 they have to be composed in the same order as the pipeline applies them. Their composition
 is kept in `image_augmentation_matrices` as 4x4 homogeneous matrices, so the pixel
 remapping the augmentation applied stays available to the models that have to undo it.
+
+The transforms leave `depth_maps` alone, so they have to run before the points are projected
+onto the images: a depth map projected onto the input image would not follow the pixels of
+the transformed one. They reject camera image data that already carries depth maps.
 """
 
 from __future__ import annotations
@@ -37,7 +41,7 @@ from torch import Tensor
 from torchvision.transforms import v2
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
-from autoware_ml.geometry.cameras.base_images import BaseImages
+from autoware_ml.geometry.cameras.base_images import BaseImages, compose_lidar2images
 from autoware_ml.transforms.base import BaseTransform
 
 
@@ -67,7 +71,20 @@ class ImageSpaceTransform(BaseTransform):
             Camera image data holding the transformed images, the augmented intrinsics and
             the image augmentation matrices composed with `image_transforms`, and the
             matching `lidar2images`.
+
+        Raises:
+            ValueError: If `camera_image_data` already holds `depth_maps`. They are projected
+                onto the input images and would not follow the pixel remapping, so the
+                transform has to run before the points are projected onto the images.
         """
+        if camera_image_data.depth_maps is not None:
+            raise ValueError(
+                "An image-space transform must run before the points are projected onto the "
+                "images, but camera_image_data already holds depth_maps that would no longer "
+                "match the transformed images. Move the resize, crop, flip, rotation or affine "
+                "ahead of the camera-lidar projection in the pipeline."
+            )
+
         image_transforms = image_transforms.to(camera_image_data.augmented_camera_intrinsics)
         augmented_camera_intrinsics = (
             image_transforms @ camera_image_data.augmented_camera_intrinsics
@@ -80,19 +97,14 @@ class ImageSpaceTransform(BaseTransform):
             @ camera_image_data.image_augmentation_matrices
         )
 
-        # (num_cameras, 4, 4), the augmented intrinsics padded to homogeneous coordinates.
-        homogeneous_intrinsics = torch.eye(
-            4, dtype=augmented_camera_intrinsics.dtype, device=augmented_camera_intrinsics.device
-        ).repeat(augmented_camera_intrinsics.shape[0], 1, 1)
-        homogeneous_intrinsics[:, :3, :3] = augmented_camera_intrinsics
-
         # model_copy does not validate what it is given, so the copy is validated explicitly.
         return BaseImages.model_validate(
             camera_image_data.model_copy(
                 update={
                     "images": images,
-                    # augmented_intrinsic @ lidar2cam -> lidar2img
-                    "lidar2images": homogeneous_intrinsics @ camera_image_data.lidar2cams,
+                    "lidar2images": compose_lidar2images(
+                        augmented_camera_intrinsics, camera_image_data.lidar2cams
+                    ),
                     "augmented_camera_intrinsics": augmented_camera_intrinsics,
                     "image_augmentation_matrices": image_augmentation_matrices,
                 }

@@ -92,6 +92,28 @@ def test_error_message_lists_every_mismatch() -> None:
         BaseImages(**fields)
 
 
+def test_depth_maps_with_the_image_size_are_accepted() -> None:
+    fields = _valid_fields()
+    fields["depth_maps"] = torch.zeros(NUM_CAMERAS, 2, 8, 8)
+    images = BaseImages.model_validate(fields)
+    assert images.depth_maps is not None
+    assert images.depth_maps.shape[-2:] == images.images.shape[-2:]
+
+
+def test_depth_maps_of_another_size_are_rejected() -> None:
+    fields = _valid_fields()
+    fields["depth_maps"] = torch.zeros(NUM_CAMERAS, 1, 4, 8)
+    with pytest.raises(ValidationError, match=r"images are \(8, 8\).*but depth_maps are \(4, 8\)"):
+        BaseImages.model_validate(fields)
+
+
+def test_model_validate_recheck_catches_resized_images_over_stale_depth_maps() -> None:
+    images = BaseImages.model_validate(_valid_fields())
+    resized = images.model_copy(update={"images": torch.zeros(NUM_CAMERAS, 3, 4, 4)})
+    with pytest.raises(ValidationError, match="depth_maps are"):
+        BaseImages.model_validate(resized)
+
+
 def test_model_validate_recheck_catches_inconsistent_model_copy() -> None:
     images = BaseImages(**_valid_fields())
     broken = images.model_copy(

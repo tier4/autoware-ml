@@ -120,6 +120,65 @@ class CameraImageDataTestCase(unittest.TestCase):
             )
         )
 
+    def build_multi_task_gt_sample_with_depth_maps(self) -> ModelGTSample:
+        """Build a sample whose camera image data already holds projected depth maps.
+
+        Returns:
+            ModelGTSample holding zero depth maps sized as the images.
+        """
+        sample = self.build_multi_task_gt_sample()
+        assert sample.camera_image_data is not None
+        camera_image_data = BaseImages.model_validate(
+            sample.camera_image_data.model_copy(
+                update={
+                    "depth_maps": torch.zeros(
+                        (self.num_cameras, 2, self.image_height, self.image_width),
+                        dtype=torch.float32,
+                    )
+                }
+            )
+        )
+        return sample._replace(camera_image_data=camera_image_data)
+
+
+class TestImageSpaceTransformWithDepthMaps(CameraImageDataTestCase):
+    """Unit tests of the rejection of camera image data that already holds depth maps."""
+
+    def test_resize_raises_when_depth_maps_already_exist(self) -> None:
+        """Test that a resize refuses depth maps projected onto the images it would shrink."""
+        sample = self.build_multi_task_gt_sample_with_depth_maps()
+
+        with self.assertRaisesRegex(ValueError, "already holds depth_maps"):
+            ResizeMultiviewImages(target_size=[self.image_height // 2, self.image_width // 2])(
+                sample
+            )
+
+    def test_crop_and_scale_raises_when_depth_maps_already_exist(self) -> None:
+        """Test that a crop refuses depth maps even though the image size is preserved."""
+        sample = self.build_multi_task_gt_sample_with_depth_maps()
+
+        with self.assertRaisesRegex(ValueError, "already holds depth_maps"):
+            CropAndScale(probability=1.0)(sample)
+
+    def test_pad_raises_when_depth_maps_already_exist(self) -> None:
+        """Test that a pad refuses depth maps, which would stay smaller than the images."""
+        sample = self.build_multi_task_gt_sample_with_depth_maps()
+
+        with self.assertRaisesRegex(ValueError, "already holds depth_maps"):
+            PadMultiViewImage(size_divisor=32)(sample)
+
+    def test_resize_crop_flip_rot_raises_when_depth_maps_already_exist(self) -> None:
+        """Test that the combined augmentation refuses depth maps."""
+        sample = self.build_multi_task_gt_sample_with_depth_maps()
+
+        with self.assertRaisesRegex(ValueError, "already holds depth_maps"):
+            ResizeCropFlipRotImage(
+                target_size=[self.image_height, self.image_width],
+                resize_range=0.0,
+                bottom_crop_ratio_range=[0.0, 0.0],
+                training=False,
+            )(sample)
+
 
 class TestCropAndScale(CameraImageDataTestCase):
     """Unit tests for the CropAndScale transform."""
