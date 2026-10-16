@@ -34,6 +34,7 @@ from autoware_ml.databases.schemas.image_frames import distortion_model_from_coe
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.cameras.base_images import BaseImages, compose_lidar2images
 from autoware_ml.transforms.camera.distortion import UndistortImage
+from autoware_ml.transforms.camera.resize import ResizeMultiviewImages
 
 
 class TestUndistortImage(unittest.TestCase):
@@ -532,6 +533,43 @@ class TestUndistortImage(unittest.TestCase):
             torch.equal(
                 camera_image_data.image_augmentation_matrices,
                 sample.camera_image_data.image_augmentation_matrices,
+            )
+        )
+
+    def test_raises_after_an_image_space_transform(self) -> None:
+        """
+        Test that undistorting an already resized image is rejected: the coefficients describe
+        the raw image, so the transform would otherwise write raw-frame intrinsics over the
+        augmented ones and report a principal point outside the resized image.
+        """
+        resized = ResizeMultiviewImages(
+            target_size=[self.image_height // 2, self.image_width // 2]
+        )(self.build_multi_task_gt_sample())
+
+        with self.assertRaisesRegex(ValueError, "before any image-space transform"):
+            UndistortImage()(resized)
+
+    def test_undistorted_cameras_pass_through_after_an_image_space_transform(self) -> None:
+        """
+        Test that the ordering check only guards cameras that still have to be undistorted,
+        so a second pass over already undistorted and then resized images stays a no-op.
+        """
+        transform = UndistortImage()
+        resized = ResizeMultiviewImages(
+            target_size=[self.image_height // 2, self.image_width // 2]
+        )(transform(self.build_multi_task_gt_sample()))
+        assert resized.camera_image_data is not None
+
+        output = transform(resized)
+
+        assert output.camera_image_data is not None
+        self.assertTrue(
+            torch.equal(output.camera_image_data.images, resized.camera_image_data.images)
+        )
+        self.assertTrue(
+            torch.equal(
+                output.camera_image_data.augmented_camera_intrinsics,
+                resized.camera_image_data.augmented_camera_intrinsics,
             )
         )
 

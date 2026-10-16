@@ -29,7 +29,8 @@ class UndistortImage(BaseTransform):
     """Undistort every camera image using its distortion coefficients.
 
     The distortion coefficients are expressed in the frame of the raw image, so this
-    transform must run before any other image-space transform. Undistorted cameras have
+    transform must run before any other image-space transform, and it raises when a camera
+    it has to undistort already carries an image augmentation. Undistorted cameras have
     their entry in `augmented_camera_intrinsics` replaced by the optimal new camera matrix
     and their distortion coefficients zeroed, so applying the transform twice is a no-op.
     """
@@ -54,6 +55,12 @@ class UndistortImage(BaseTransform):
 
         Returns:
             Updated ModelGTSample instance with an undistorted `camera_image_data`.
+
+        Raises:
+            ValueError: If a camera that still has to be undistorted already carries an image
+                augmentation. The raw intrinsics and coefficients describe the raw image, so
+                undistorting a resized, cropped or flipped image would write intrinsics of the
+                raw frame over the augmented ones.
         """
         assert model_gt_sample.camera_image_data is not None
         camera_image_data = model_gt_sample.camera_image_data
@@ -61,6 +68,10 @@ class UndistortImage(BaseTransform):
         images = camera_image_data.images
         camera_intrinsics = camera_image_data.camera_intrinsics
         augmented_camera_intrinsics = camera_image_data.augmented_camera_intrinsics.clone()
+        image_augmentation_matrices = camera_image_data.image_augmentation_matrices
+        identity = torch.eye(
+            4, dtype=image_augmentation_matrices.dtype, device=image_augmentation_matrices.device
+        )
 
         undistorted_images = []
         undistorted_coefficients = []
@@ -72,6 +83,14 @@ class UndistortImage(BaseTransform):
                 undistorted_images.append(images[index])
                 undistorted_coefficients.append(torch.zeros(0, dtype=coefficients.dtype))
                 continue
+
+            if not torch.allclose(image_augmentation_matrices[index], identity):
+                raise ValueError(
+                    f"UndistortImage must run before any image-space transform, but camera "
+                    f"{camera_image_data.camera_names[index]!r} already carries an image "
+                    "augmentation. Its distortion coefficients describe the raw image, so move "
+                    "UndistortImage ahead of the resize, crop, flip or rotation in the pipeline."
+                )
 
             # OpenCV expects (height, width, num_channels) contiguous arrays.
             image = images[index].permute(1, 2, 0).contiguous().numpy()
