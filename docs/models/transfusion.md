@@ -15,11 +15,11 @@ TransFusion is a LiDAR-based 3D object detection model integrated under the `det
 | Input        | Point cloud                                                  |
 | Output       | 3D bounding boxes and class scores                           |
 | Architecture | Sparse voxel encoder + SECOND + SECONDFPN + TransFusion head |
-| Datasets     | T4Dataset                                                    |
+| Datasets     | T4Dataset, nuScenes                                          |
 
 ## Available Configurations
 
-The LiDAR-only [BEVFusion](bevfusion.md) experiments run the same sparse-voxel encoder, `SECOND` backbone, `SECONDFPN` neck, and TransFusion head stack; the TransFusion experiments below train that stack without the BEVFusion wrapper.
+The LiDAR-only [BEVFusion](bevfusion.md) experiments run the same sparse-voxel encoder, `SECOND` backbone, `SECONDFPN` neck, and TransFusion head stack. The TransFusion experiments below train that stack without the BEVFusion wrapper.
 
 Experiment configs live under `autoware_ml/configs/tasks/detection3d/transfusion/` and follow the CenterPoint layout: a `base.yaml` with the model and export modules, a `t4dataset/base_<range>.yaml` with the range-dependent settings and transforms, a voxel-level base, and one leaf per database. The bundled leaves are `detection3d/transfusion/t4dataset/voxel0170_second_secfpn_b16_30e_t4dataset_120m_j6gen2_base` and `detection3d/transfusion/nuscenes/voxel0075_second_secfpn_b16_30e_nuscenes_54m`.
 
@@ -54,18 +54,18 @@ autoware-ml deploy \
 
 The model exports one ONNX main body wrapping the voxel encoder, sparse encoder, backbone, neck, and head.
 
-| Tensor          | Direction | Description                              |
-| --------------- | --------- | ---------------------------------------- |
-| `voxels`        | Input     | Voxelized LiDAR features                 |
-| `num_points`    | Input     | Point count per voxel                    |
-| `coors`         | Input     | Voxel coordinates with the batch index   |
-| `cls_score0`    | Output    | Per-proposal class heatmap logits        |
-| `bbox_pred0`    | Output    | Per-proposal raw box regression channels |
-| `dir_cls_pred0` | Output    | Per-proposal direction classification    |
+| Tensor          | Direction | Description                                                                               |
+| --------------- | --------- | ----------------------------------------------------------------------------------------- |
+| `voxels`        | Input     | Voxelized LiDAR features                                                                  |
+| `num_points`    | Input     | Point count per voxel                                                                     |
+| `coors`         | Input     | Voxel coordinates with the batch index                                                    |
+| `cls_score0`    | Output    | Per-proposal class scores, the sigmoid of the class heatmap times the query heatmap score |
+| `bbox_pred0`    | Output    | Per-proposal raw regression channels `(center, height, dim, vel)`                         |
+| `dir_cls_pred0` | Output    | Per-proposal yaw regression as `(sin, cos)`, decoded with `atan2`                         |
 
 The `height` channel of `bbox_pred0` is the z of the box gravity center, which is how `autoware_lidar_transfusion` reads it.
 
-Exports land in `mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/exports/` of a dedicated deploy run linked to the training run. Every module is stamped with its provenance and the `--release` version; omit `--release` only for throwaway exports, which are stamped `unversioned`. The current verification scope covers ONNX export. TensorRT engine generation has not been validated yet.
+Exports land in `mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/exports/` of a dedicated deploy run linked to the training run. Every module is stamped with its provenance and the `--release` version. Omit `--release` only for throwaway exports, which are stamped `unversioned`. The current verification scope covers ONNX export. TensorRT engine generation has not been validated yet.
 
 ## Implementation
 

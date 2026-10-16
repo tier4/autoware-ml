@@ -214,8 +214,8 @@ the cached table. Override the generation parameters from the command line with 
 autoware-ml train --config-name <task>/<model>/<config> database.num_workers=32
 ```
 
-The table is written under `cache_root_path`, `<working_dir>/.cache` by default where
-`working_dir` is the repository checkout or `AUTOWARE_ML_WORKING_DIR`, as
+The table is written under `cache_root_path`, `<data_root_path>/.cache` next to the data by
+default where `data_root_path` is `AUTOWARE_ML_DATA_PATH`, as
 `<cache_path>/<cache_file_prefix_name>_<database_hash>.parquet`. The hash covers the scenario
 lists and every field that changes the records, so a changed database writes a new table next
 to the old one. See [Configuration Guide](../user-guide/configuration.md) for the path keys.

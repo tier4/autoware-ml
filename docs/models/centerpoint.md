@@ -15,26 +15,27 @@ CenterPoint is a LiDAR-based 3D object detection model integrated under the `det
 | Input        | Point cloud                              |
 | Output       | 3D bounding boxes and class scores       |
 | Architecture | PointPillars + SECOND + SECONDFPN + head |
-| Datasets     | T4Dataset                                |
+| Datasets     | T4Dataset, nuScenes                      |
 
 ## Available Configurations
 
-Experiment configs live under `autoware_ml/configs/tasks/detection3d/centerpoint/` and are passed to the CLI as the path relative to `tasks/`.
+Experiment configs live under `autoware_ml/configs/tasks/detection3d/centerpoint/<dataset>/` and are passed to the CLI as the path relative to `tasks/`.
 
-| Config Name                                                                                    | Dataset           | Purpose                                                             |
-| ---------------------------------------------------------------------------------------------- | ----------------- | ------------------------------------------------------------------- |
-| `detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_30e_t4dataset_120m_gen1_base`    | T4Dataset gen1    | 120 m base training from scratch, 30 epochs                         |
-| `detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_30e_t4dataset_120m_jpntaxi_base` | T4Dataset jpntaxi | 120 m fine-tuning from a pretrained checkpoint, 30 epochs, lower LR |
-| `detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_50e_t4dataset_120m_j6gen2_base`  | T4Dataset j6gen2  | 120 m fine-tuning from a pretrained checkpoint, 50 epochs, lower LR |
+| Leaf                                  | Database          | Weights                                             |
+| ------------------------------------- | ----------------- | --------------------------------------------------- |
+| `t4dataset/<variant>_gen1_base`       | T4Dataset gen1    | Trained from scratch                                |
+| `t4dataset/<variant>_jpntaxi_base`    | T4Dataset jpntaxi | Fine-tuned from a checkpoint given with `--weights` |
+| `t4dataset/<variant>_j6gen2_base`     | T4Dataset j6gen2  | Fine-tuned from a checkpoint given with `--weights` |
+| `nuscenes/<variant>_nuscenes_<range>` | nuScenes          | Trained from scratch                                |
 
-The configs are layered so that each file owns one concern:
+The leaf name spells out its variant: the voxel size, the backbone and neck, the batch size, the epoch count and the detection range, so the values live in one place, the config. The configs are layered so that each file owns one concern:
 
-| File                                | Owns                                                                                            |
-| ----------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `base.yaml`                         | Model architecture, pillar preprocessor, optimizer, trainer settings, and ONNX export modules   |
-| `t4dataset/base_120m.yaml`          | 120 m point cloud range, evaluation ranges, NMS radius, dataloaders, and the transform pipeline |
-| `t4dataset/base_voxel024_120m.yaml` | 0.24 m voxel size, BEV canvas shape, backbone strides, and head output stride                   |
-| `t4dataset/voxel024_*.yaml`         | Database selection, batch size, experiment name, epochs, and optional pretrained weights        |
+| File                                  | Owns                                                                                          |
+| ------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `base.yaml`                           | Model architecture, pillar preprocessor, optimizer, trainer settings, and ONNX export modules |
+| `<dataset>/base_<range>.yaml`         | Point cloud range, evaluation ranges, NMS radius, dataloaders, and the transform pipeline     |
+| `<dataset>/base_<voxel>_<range>.yaml` | Voxel size, BEV canvas shape, backbone strides, and head output stride                        |
+| `<dataset>/<voxel>_<variant>.yaml`    | Database selection, batch size, experiment name, epochs, and optional pretrained weights      |
 
 ## Training
 
@@ -44,7 +45,7 @@ Train the base model from scratch:
 autoware-ml train --config-name detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_30e_t4dataset_120m_gen1_base
 ```
 
-The `jpntaxi` and `j6gen2` configs declare `weights: ???`, so they must be started from a pretrained checkpoint. Pass it with `--weights`; the config already lowers the learning rate for fine-tuning:
+The `jpntaxi` and `j6gen2` configs declare `weights: ???`, so they must be started from a pretrained checkpoint. Pass it with `--weights`. The config already lowers the learning rate for fine-tuning:
 
 ```bash
 autoware-ml train \
@@ -83,7 +84,7 @@ autoware-ml deploy \
 
 The export produces the two ONNX modules consumed by `autoware_universe/perception/autoware_lidar_centerpoint`: `pts_voxel_encoder_centerpoint.onnx` encodes decorated pillar features into per-pillar descriptors, and `pts_backbone_neck_head_centerpoint.onnx` predicts the raw dense detection heads (`heatmap`, `reg`, `height`, `dim`, `rot`, `vel`) from the scattered BEV canvas. Voxelization, pillar decoration, BEV scatter, and box decoding all run in the runtime node.
 
-Exports land in `mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/exports/` of a dedicated deploy run linked to the training run. Every module is stamped with its provenance and the `--release` version; omit `--release` only for throwaway exports, which are stamped `unversioned`. TensorRT engine generation is disabled in the base config (`deploy.tensorrt.enabled=false`); the runtime builds engines itself.
+Exports land in `mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/exports/` of a dedicated deploy run linked to the training run. Every module is stamped with its provenance and the `--release` version. Omit `--release` only for throwaway exports, which are stamped `unversioned`. TensorRT engine generation is disabled in the base config (`deploy.tensorrt.enabled=false`) because the runtime builds engines itself.
 
 ## Implementation
 
