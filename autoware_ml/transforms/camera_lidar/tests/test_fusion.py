@@ -537,10 +537,18 @@ class TestSaveFusionPreview(unittest.TestCase):
     def test_probability_zero_writes_nothing(self) -> None:
         SaveFusionPreview(probability=0.0, out_dir=self.out_dir)(self.fused_sample)
 
-        self.assertEqual(list(self.out_dir.iterdir()), [])
+        self.assertFalse(self.out_dir.exists())
+
+    def test_out_dir_is_created_on_transform_not_on_init(self) -> None:
+        transform = SaveFusionPreview(probability=1.0, out_dir=self.out_dir)
+        self.assertFalse(self.out_dir.exists())
+
+        transform(self.fused_sample)
+
+        self.assertTrue(self.out_dir.is_dir())
 
     def test_recover_channels_inverts_fusion_scaling(self) -> None:
-        transform = SaveFusionPreview(out_dir=self.out_dir, max_depth=128.0)
+        transform = SaveFusionPreview(probability=1.0, out_dir=self.out_dir, max_depth=128.0)
         camera_image_data = self.fused_sample.camera_image_data
 
         rgb, depth, intensity = transform.recover_channels(
@@ -554,7 +562,7 @@ class TestSaveFusionPreview(unittest.TestCase):
         self.assertAlmostEqual(float(intensity[int(CENTER_Y), int(CENTER_X)]), 0.2, places=4)
 
     def test_overlay_only_touches_pixels_with_points(self) -> None:
-        transform = SaveFusionPreview(out_dir=self.out_dir, alpha=1.0)
+        transform = SaveFusionPreview(probability=1.0, out_dir=self.out_dir, alpha=1.0)
         rgb = np.full((HEIGHT, WIDTH, 3), 7, dtype=np.uint8)
         values = np.zeros((HEIGHT, WIDTH), dtype=np.float32)
         values[2, 3] = 1.0
@@ -570,11 +578,11 @@ class TestSaveFusionPreview(unittest.TestCase):
         sample = _build_sample(torch.tensor([[0.0, 0.0, 5.0, 1.0]]))
 
         with self.assertRaisesRegex(ValueError, "no depth maps"):
-            SaveFusionPreview(out_dir=self.out_dir)(sample)
+            SaveFusionPreview(probability=1.0, out_dir=self.out_dir)(sample)
 
     def test_missing_camera_image_data(self) -> None:
         with self.assertRaisesRegex(KeyError, "Missing required key 'camera_image_data'"):
-            SaveFusionPreview(out_dir=self.out_dir)(
+            SaveFusionPreview(probability=1.0, out_dir=self.out_dir)(
                 self.fused_sample._replace(camera_image_data=None)
             )
 

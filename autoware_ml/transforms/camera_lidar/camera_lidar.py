@@ -902,8 +902,8 @@ class SaveFusionPreview(BaseTransform):
     def __init__(
         self,
         *,
-        probability: float | None = 1.0,
-        out_dir: str | Path = "",
+        probability: float | None,
+        out_dir: str | Path,
         max_depth: float = 128.0,
         alpha: float = 0.5,
         depth_colormap: str = "turbo",
@@ -914,7 +914,7 @@ class SaveFusionPreview(BaseTransform):
         Args:
             probability: Probability of saving the previews of a sample, ``None`` to always
                 save.
-            out_dir: Output directory of the preview images, created if missing.
+            out_dir: Output directory of the preview images, created on the first save.
             max_depth: ``max_depth`` used by ``LidarCameraFusion``, to recover the depth.
             alpha: Blending factor of the overlay (0.0 = RGB only, 1.0 = points only).
             depth_colormap: Matplotlib colormap of the depth overlay.
@@ -926,8 +926,6 @@ class SaveFusionPreview(BaseTransform):
         self.alpha = alpha
         self.depth_cmap = plt.get_cmap(depth_colormap)
         self.intensity_cmap = plt.get_cmap(intensity_colormap)
-
-        self.out_dir.mkdir(parents=True, exist_ok=True)
 
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
         """Save the depth and intensity previews of every camera.
@@ -949,6 +947,8 @@ class SaveFusionPreview(BaseTransform):
                 "no depth maps"
             )
 
+        # Created here rather than in __init__ so that building a config writes nothing.
+        self.out_dir.mkdir(parents=True, exist_ok=True)
         statuses = camera_image_data.calibration_statuses
         for index, camera_name in enumerate(camera_image_data.camera_names):
             timestamp = float(camera_image_data.timestamps[index])
