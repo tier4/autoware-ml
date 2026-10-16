@@ -203,7 +203,9 @@ class TestCenterPointDetectionModel(unittest.TestCase):
 
         multi_task_outputs = self.centerpoint(multi_task_batch_inputs)
         metrics = self.centerpoint.compute_metrics(multi_task_batch_inputs, multi_task_outputs)
-        multi_task_predictions = self.centerpoint.decode_outputs(multi_task_batch_inputs, multi_task_outputs)
+        multi_task_predictions = self.centerpoint.decode_outputs(
+            multi_task_batch_inputs, multi_task_outputs
+        )
 
         self.assertIsNotNone(multi_task_outputs.detection3d_head_outputs)
         assert multi_task_outputs.detection3d_head_outputs is not None
@@ -293,6 +295,7 @@ class TestCenterPointDetectionModel(unittest.TestCase):
 
     def test_build_export_specs_requires_voxels_data(self) -> None:
         """Test that export spec construction rejects a batch without voxel data."""
+        self.centerpoint.eval()
         multi_task_batch_inputs = self._build_multi_task_batch_inputs()
         multi_task_batch_inputs = ModelBatchInputs(
             multi_task_gt_batch=multi_task_batch_inputs.multi_task_gt_batch,
@@ -309,13 +312,12 @@ class TestCenterPointDetectionModel(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "build_export_specs"):
             self.centerpoint.build_export_spec(self._build_multi_task_batch_inputs())
 
-    def test_build_export_specs_keeps_training_mode(self) -> None:
-        """Test that tracing the split modules leaves a training model in training mode."""
+    def test_build_export_specs_requires_eval_mode(self) -> None:
+        """Test that export spec construction rejects a model in training mode."""
         self.centerpoint.train()
 
-        self.centerpoint.build_export_specs(self._build_multi_task_batch_inputs())
-
-        self.assertTrue(self.centerpoint.training)
+        with self.assertRaisesRegex(RuntimeError, "eval mode"):
+            self.centerpoint.build_export_specs(self._build_multi_task_batch_inputs())
 
 
 if __name__ == "__main__":

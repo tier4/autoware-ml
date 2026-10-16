@@ -50,6 +50,19 @@ class VoxelsData(NamedTuple):
     point_voxel_indices: Int64[torch.Tensor, " N"]
     num_dropped_voxels: Int64[torch.Tensor, ""]
 
+    def infer_batch_size(self) -> int:
+        """Infer the number of samples of the batch from the voxel batch indices.
+
+        Returns:
+            int: One more than the largest batch index.
+
+        Raises:
+            ValueError: If the batch holds no voxel, the sample count cannot be inferred.
+        """
+        if self.batch_indices.numel() == 0:
+            raise ValueError("The batch holds no voxel, its sample count cannot be inferred.")
+        return int(self.batch_indices.max().item()) + 1
+
     def concat_batch_indices_coords(self) -> Int32[torch.Tensor, "M 4"]:
         """Concatenate batch indices with voxel coordinates to form a 4D tensor.
 

@@ -68,18 +68,6 @@ class _CenterPointVoxelEncoderExportWrapper(nn.Module):
 class _CenterPointBackboneNeckHeadExportWrapper(nn.Module):
     """Export CenterPoint backbone, neck, and dense head from BEV features."""
 
-    # ONNX tensor name -> CenterHeadOutputs field, in the order the deployed runtime
-    # expects. Deriving `output_names` and the returned tuple from one table keeps
-    # them from drifting apart. Do not reorder.
-    _OUTPUT_FIELDS: tuple[tuple[str, str], ...] = (
-        ("heatmap", "heatmap"),
-        ("reg", "reg"),
-        ("height", "height"),
-        ("dim", "dim"),
-        ("rot", "rot"),
-    )
-    _VELOCITY_FIELD: tuple[str, str] = ("vel", "vel")
-
     def __init__(self, backbone: nn.Module, neck: nn.Module, bbox_head: CenterHead) -> None:
         """Initialize the backbone-neck-head export wrapper.
 
@@ -92,10 +80,10 @@ class _CenterPointBackboneNeckHeadExportWrapper(nn.Module):
         self.backbone = backbone
         self.neck = neck
         self.bbox_head = bbox_head.prepare_for_export()
-        self._output_fields = self._OUTPUT_FIELDS
+        # The order the deployed runtime expects, the velocity branch last. Do not reorder.
+        self.output_names = ["heatmap", "reg", "height", "dim", "rot"]
         if self.bbox_head.use_velocity:
-            self._output_fields += (self._VELOCITY_FIELD,)
-        self.output_names = [onnx_name for onnx_name, _ in self._output_fields]
+            self.output_names.append("vel")
 
     def forward(
         self,
@@ -104,15 +92,7 @@ class _CenterPointBackboneNeckHeadExportWrapper(nn.Module):
         """Run BEV feature extraction and flatten the head outputs for export."""
         bev_features = self.backbone(spatial_features)
         bev_features = self.neck(bev_features)
-        center_head_outputs = self.bbox_head(bev_features)
-
-        export_outputs: list[torch.Tensor] = []
-        for onnx_name, field_name in self._output_fields:
-            output = getattr(center_head_outputs, field_name)
-            if output is None:
-                raise ValueError(f"CenterHead produced no tensor for export output '{onnx_name}'.")
-            export_outputs.append(output)
-        return tuple(export_outputs)
+        return self.bbox_head(bev_features).export_tensors(self.output_names)
 
 
 class CenterPointDetectionModel(ModuleBaseModel):
@@ -274,37 +254,33 @@ class CenterPointDetectionModel(ModuleBaseModel):
 
         Returns:
             Ordered mapping of module name to export specification.
+
+        Raises:
+            RuntimeError: If the model is in training mode. Tracing the pillar encoder would
+                update its BatchNorm running statistics, so the caller puts the model in eval
+                mode first, as the deploy script does.
+            ValueError: If the batch carries no voxel data.
         """
+        if self.training:
+            raise RuntimeError("CenterPoint export needs the model in eval mode.")
         voxels_data = multi_task_batch_inputs.voxels_data
         if voxels_data is None:
             raise ValueError(
                 "ModelBatchInputs must contain voxels_data to build CenterPoint export specs."
             )
 
-        # The scatter canvas is indexed with the pillar batch indices, so the batch size
-        # is derived from the voxels rather than from the ground truth: a batch prepared
-        # for deployment may carry no ground truth at all.
-        batch_size = (
-            int(voxels_data.batch_indices.max().item()) + 1
-            if voxels_data.batch_indices.numel()
-            else 1
-        )
-
-        # Tracing must not update the pillar encoder's BatchNorm running statistics.
-        was_training = self.training
-        self.eval()
-        try:
-            with torch.no_grad():
-                input_features = self.pts_voxel_encoder.encode(voxels_data)
-                pillar_features = self.pts_voxel_encoder.encode_decorated(input_features).squeeze(1)
-                spatial_features = self.pts_middle_encoder(
-                    pillar_features=pillar_features,
-                    coords=voxels_data.coords,
-                    batch_indices=voxels_data.batch_indices,
-                    batch_size=batch_size,
-                )
-        finally:
-            self.train(was_training)
+        with torch.no_grad():
+            input_features = self.pts_voxel_encoder.encode(voxels_data)
+            pillar_features = self.pts_voxel_encoder.encode_decorated(input_features).squeeze(1)
+            # The scatter canvas is indexed with the pillar batch indices, so the batch size
+            # is derived from the voxels rather than from the ground truth: a batch prepared
+            # for deployment may carry no ground truth at all.
+            spatial_features = self.pts_middle_encoder(
+                pillar_features=pillar_features,
+                coords=voxels_data.coords,
+                batch_indices=voxels_data.batch_indices,
+                batch_size=voxels_data.infer_batch_size(),
+            )
 
         head_wrapper = _CenterPointBackboneNeckHeadExportWrapper(
             self.pts_backbone,

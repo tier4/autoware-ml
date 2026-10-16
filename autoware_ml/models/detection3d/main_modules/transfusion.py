@@ -354,13 +354,6 @@ class TransFusionDetectionModel(ModuleBaseModel):
                 "ModelBatchInputs must contain voxels_data to build TransFusion export spec."
             )
 
-        # The batch size is derived from the voxels rather than from the ground truth: a batch
-        # prepared for deployment may carry no ground truth at all.
-        batch_size = (
-            int(voxels_data.batch_indices.max().item()) + 1
-            if voxels_data.batch_indices.numel()
-            else 1
-        )
         pts_middle_encoder = self.pts_middle_encoder
         if hasattr(pts_middle_encoder, "prepare_for_export"):
             pts_middle_encoder = pts_middle_encoder.prepare_for_export()
@@ -371,7 +364,9 @@ class TransFusionDetectionModel(ModuleBaseModel):
                 pts_backbone=self.pts_backbone,
                 pts_neck=self.pts_neck,
                 bbox_head=self.bbox_head.prepare_for_export(),
-                batch_size=batch_size,
+                # The batch size is derived from the voxels rather than from the ground truth: a
+                # batch prepared for deployment may carry no ground truth at all.
+                batch_size=voxels_data.infer_batch_size(),
             ),
             args=(
                 voxels_data.voxels,
