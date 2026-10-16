@@ -331,7 +331,7 @@ class BEVFusionDetectionModel(ModuleBaseModel):
         """Decode detections and pair them with ground truth for metrics."""
         if outputs.detection3d_head_outputs is None:
             raise ValueError(
-                "ModelOutputs must contain detection3d_head_outputs for CenterPoint build_eval_output pass."
+                "ModelOutputs must contain detection3d_head_outputs for BEVFusion build_eval_output pass."
             )
 
         return detection_eval_output(
@@ -440,7 +440,7 @@ class BEVFusionDetectionModel(ModuleBaseModel):
             voxels_data = multi_task_batch_inputs.voxels_data
             if voxels_data is None:
                 raise ValueError(
-                    "ModelBatchInputs must contain voxels_data for CenterPoint forward pass."
+                    "ModelBatchInputs must contain voxels_data for BEVFusion forward pass."
                 )
 
             # The sparse middle encoder consumes ``(batch, z, y, x)`` coordinates
@@ -486,12 +486,12 @@ class BEVFusionDetectionModel(ModuleBaseModel):
         """Compute TransfusionHead training losses."""
         if multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch is None:
             raise ValueError(
-                "ModelBatchInputs must contain detection3d_gt_batch for CenterPoint compute_metrics pass."
+                "ModelBatchInputs must contain detection3d_gt_batch for BEVFusion compute_metrics pass."
             )
 
         if multi_task_outputs.detection3d_head_outputs is None:
             raise ValueError(
-                "ModelOutputs must contain detection3d_head_outputs for CenterPoint compute_metrics pass."
+                "ModelOutputs must contain detection3d_head_outputs for BEVFusion compute_metrics pass."
             )
 
         detection3d_gt_batch = multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch
@@ -515,7 +515,7 @@ class BEVFusionDetectionModel(ModuleBaseModel):
         """Decode predictions for inference."""
         if outputs.detection3d_head_outputs is None:
             raise ValueError(
-                "ModelOutputs must contain detection3d_head_outputs for CenterPoint decode_outputs pass."
+                "ModelOutputs must contain detection3d_head_outputs for BEVFusion decode_outputs pass."
             )
 
         multi_task_predictions = self.bbox_head.decode_outputs(
