@@ -215,7 +215,8 @@ callbacks:
   dynamic_validation:
     _target_: autoware_ml.callbacks.dynamic_validation.DynamicValidation
     # [start_epoch, check_val_every_n_epoch] pairs: validate every 5 epochs, then every epoch
-    # from epoch 20 onwards.
+    # from epoch 20 onwards. The root leaves this at ??? and every leaf sets it next to its
+    # trainer.max_epochs, since the schedule follows the epoch count.
     epoch_intervals: [[0, 5], [20, 1]]
 ```
 

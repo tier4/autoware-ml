@@ -65,4 +65,6 @@ trainer:
   max_epochs: 16
 
 callbacks:
+  dynamic_validation:
+    epoch_intervals: [[0, 5], [20, 1]]
   early_stopping: null

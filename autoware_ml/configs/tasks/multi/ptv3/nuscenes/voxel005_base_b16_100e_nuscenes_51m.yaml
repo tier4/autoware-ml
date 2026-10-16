@@ -11,3 +11,7 @@ experiment_name: voxel005_base_b16_100e_nuscenes_51m
 
 trainer:
   max_epochs: 100
+
+callbacks:
+  dynamic_validation:
+    epoch_intervals: [[0, 5], [20, 1]]

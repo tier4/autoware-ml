@@ -31,6 +31,7 @@ model:
     bev_projector:
       assume_valid_grid_coord: true
   bbox_head:
+    heatmap_target: oriented
     nms_type: circle
     nms_min_radius: 1.0
     # One group per class of the coarse detection taxonomy of the T4 databases.

@@ -14,3 +14,7 @@ experiment_name: voxel012_tiny_b16_50e_t4dataset_122m
 
 trainer:
   max_epochs: 50
+
+callbacks:
+  dynamic_validation:
+    epoch_intervals: [[0, 5], [20, 1]]

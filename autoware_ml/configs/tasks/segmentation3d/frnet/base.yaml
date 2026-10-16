@@ -3,7 +3,6 @@
 # image, the model and the range-view preprocessing follow from them.
 defaults:
   - /tasks/default_task
-  - /optimizers@optimizer: default_adamw
   - _self_
 
 database: ???
@@ -43,6 +42,8 @@ data_preprocessor:
       num_classes: ${class_count:${database.taxonomy.segmentation3d.class_names}}
 
 optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
   lr: 0.01
   betas: [0.9, 0.999]
   weight_decay: 0.01

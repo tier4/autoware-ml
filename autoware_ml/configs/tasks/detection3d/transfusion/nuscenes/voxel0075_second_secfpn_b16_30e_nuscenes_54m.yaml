@@ -12,6 +12,10 @@ experiment_name: voxel0075_second_secfpn_b16_30e_nuscenes_54m
 trainer:
   max_epochs: 30
 
+callbacks:
+  dynamic_validation:
+    epoch_intervals: [[0, 5], [20, 1]]
+
 model:
   scheduler:
     warmup_epochs: 8

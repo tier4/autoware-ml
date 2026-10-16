@@ -5,7 +5,6 @@ defaults:
   - /tasks/segmentation3d/ptv3/voxel_encoder
   - /tasks/segmentation3d/ptv3/seg_head_base
   - /tasks/detection3d/ptv3/bev_neck
-  - /optimizers@optimizer: default_adamw
   - _self_
 
 database: ???
@@ -16,6 +15,12 @@ max_voxels: ???
 # BEV cell of the detection head, in meters.
 head_voxel_size: ???
 num_proposals: ???
+
+optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
+  lr: 1.0e-4
+  weight_decay: 0.01
 
 data_preprocessor:
   preprocessor_modules:
@@ -144,8 +149,9 @@ model:
     score_threshold_group_configs: ???
     post_max_size: 100
     nms_min_radius: ???
-    nms_type: null
-    nms_group_configs: null
+    # NMS differs between the databases, the database bases set it.
+    nms_type: ???
+    nms_group_configs: ???
     loss_cls_weight: 1.0
     loss_bbox_weight: 0.25
     loss_heatmap_weight: 1.0

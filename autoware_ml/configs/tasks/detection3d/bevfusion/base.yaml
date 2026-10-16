@@ -1,7 +1,6 @@
 # @package _global_
 defaults:
   - /tasks/default_task
-  - /optimizers@optimizer: default_adamw
   - _self_
 
 database: ???
@@ -15,9 +14,12 @@ max_num_points: 32
 max_voxels: 120000
 eval_max_voxels: 160000
 
-# BEVFusion trains with a higher base learning rate than the shared AdamW default.
+# The learning rate differs between the leaves, every leaf sets its own.
 optimizer:
-  lr: 2.0e-4
+  _target_: torch.optim.AdamW
+  _partial_: true
+  lr: ???
+  weight_decay: 0.01
 
 data_preprocessor:
   preprocessor_modules:
@@ -177,8 +179,9 @@ model:
     nms_min_radius: ???
     dense_heatmap_pooling_class_names: []
     heatmap_target: oriented
-    nms_type: null
-    nms_group_configs: null
+    # NMS differs between the databases, the database bases set it.
+    nms_type: ???
+    nms_group_configs: ???
     use_velocity: true
     # Optional rotated BEV IoU loss on the matched proposals of every decoder layer.
     iou_loss:

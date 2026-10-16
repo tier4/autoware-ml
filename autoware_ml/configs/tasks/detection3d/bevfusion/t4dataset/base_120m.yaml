@@ -7,7 +7,6 @@ defaults:
   - /metrics/t4dataset/detection3d@metrics: default_detection3d_metric_suites
   - /metrics/t4dataset/detection3d@metric_ranges: default_detection3d_120m_metric_ranges
   - /datamodule@datamodule: t4dataset/default_detection3d_datamodule
-  - /datamodule/frame_sampling@datamodule.train_frame_sampling: default_frame_sampling
   - _self_
 
 point_cloud_range: [-122.4, -122.4, -3.0, 122.4, 122.4, 5.0]
@@ -240,4 +239,3 @@ datamodule:
     shuffle: true
   predict_dataloader:
     batch_size: 1
-  train_frame_sampling: null

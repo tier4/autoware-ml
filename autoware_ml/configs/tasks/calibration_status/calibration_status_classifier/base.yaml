@@ -3,7 +3,6 @@
 # database base below names its cameras and its datamodule, the pipelines are shared.
 defaults:
   - /tasks/default_task
-  - /optimizers@optimizer: default_adamw
   - _self_
 
 database: ???
@@ -18,6 +17,8 @@ metric_ranges: []
 ego_box: [-1.53, -1.15, -0.1, 5.72, 1.15, 3.1]
 
 optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
   lr: 0.001
   weight_decay: 0.01
   betas: [0.9, 0.999]

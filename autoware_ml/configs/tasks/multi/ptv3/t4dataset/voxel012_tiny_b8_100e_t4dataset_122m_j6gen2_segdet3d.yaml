@@ -11,3 +11,7 @@ experiment_name: voxel012_tiny_b8_100e_t4dataset_122m_j6gen2_segdet3d
 
 trainer:
   max_epochs: 100
+
+callbacks:
+  dynamic_validation:
+    epoch_intervals: [[0, 5], [20, 1]]

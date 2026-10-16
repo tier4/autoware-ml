@@ -21,3 +21,7 @@ model:
 
 trainer:
   max_epochs: 30
+
+callbacks:
+  dynamic_validation:
+    epoch_intervals: [[0, 5], [20, 1]]

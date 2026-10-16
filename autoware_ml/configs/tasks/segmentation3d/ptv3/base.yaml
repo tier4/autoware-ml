@@ -4,7 +4,6 @@ defaults:
   - /tasks/segmentation3d/ptv3/encoder_base
   - /tasks/segmentation3d/ptv3/voxel_encoder
   - /tasks/segmentation3d/ptv3/seg_head_base
-  - /optimizers@optimizer: default_adamw
   - _self_
 
 database: ???
@@ -23,6 +22,8 @@ data_preprocessor:
       eval_max_voxels: ${max_voxels}
 
 optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
   lr: 0.002
   weight_decay: 0.005
 

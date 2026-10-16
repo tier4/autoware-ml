@@ -25,6 +25,8 @@ model:
     nms_min_radius: 1.0
     # No per-class thresholds or NMS groups on nuScenes, the head decodes every class alike.
     score_threshold_group_configs: null
+    nms_type: null
+    nms_group_configs: null
     heatmap_target: round
 
 datasets:

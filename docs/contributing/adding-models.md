@@ -162,11 +162,17 @@ Create a task config:
 # @package _global_
 defaults:
   - /tasks/default_task
-  - /optimizers@optimizer: default_adamw
   - _self_
 
 database: ???
 point_cloud_range: ???
+
+# Every model family writes its own optimizer. Leave a value at ??? when the leaves differ.
+optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
+  lr: 0.001
+  weight_decay: 0.01
 
 model:
   _target_: autoware_ml.models.my_task.my_model.MyModel

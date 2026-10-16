@@ -13,6 +13,13 @@ experiment_name: lidar_voxel0075_second_secfpn_b16_30e_nuscenes_54m
 trainer:
   max_epochs: 30
 
+optimizer:
+  lr: 2.0e-4
+
+callbacks:
+  dynamic_validation:
+    epoch_intervals: [[0, 5], [20, 1]]
+
 model:
   scheduler:
     warmup_epochs: 3

@@ -13,6 +13,10 @@ experiment_name: voxel0170_second_secfpn_b16_30e_t4dataset_120m
 trainer:
   max_epochs: 30
 
+callbacks:
+  dynamic_validation:
+    epoch_intervals: [[0, 5], [20, 1]]
+
 model:
   scheduler:
     warmup_epochs: 8
