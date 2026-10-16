@@ -65,26 +65,26 @@ model:
         class_names: [traffic_cone]
         nms_radius: 0.0
         max_size: 100
-    score_threshold_group_configs:
-      - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.ScoreThresholdConfig
-        class_names: [car]
-        score_threshold: 0.015
-      - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.ScoreThresholdConfig
-        class_names: [truck, bus]
-        score_threshold: 0.010
-      - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.ScoreThresholdConfig
-        class_names: [bicycle]
-        score_threshold: 0.020
-      - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.ScoreThresholdConfig
-        class_names: [pedestrian]
-        score_threshold: 0.030
-      - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.ScoreThresholdConfig
-        class_names: [barrier]
-        score_threshold: 0.020
-      - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.ScoreThresholdConfig
-        class_names: [traffic_cone]
-        score_threshold: 0.040
     bbox_coder:
+      score_threshold_configs:
+        - _target_: autoware_ml.models.detection3d.task_modules.bbox_coders.ScoreThresholdConfig
+          class_names: [car]
+          score_threshold: 0.015
+        - _target_: autoware_ml.models.detection3d.task_modules.bbox_coders.ScoreThresholdConfig
+          class_names: [truck, bus]
+          score_threshold: 0.010
+        - _target_: autoware_ml.models.detection3d.task_modules.bbox_coders.ScoreThresholdConfig
+          class_names: [bicycle]
+          score_threshold: 0.020
+        - _target_: autoware_ml.models.detection3d.task_modules.bbox_coders.ScoreThresholdConfig
+          class_names: [pedestrian]
+          score_threshold: 0.030
+        - _target_: autoware_ml.models.detection3d.task_modules.bbox_coders.ScoreThresholdConfig
+          class_names: [barrier]
+          score_threshold: 0.020
+        - _target_: autoware_ml.models.detection3d.task_modules.bbox_coders.ScoreThresholdConfig
+          class_names: [traffic_cone]
+          score_threshold: 0.040
       post_center_range: [-200.0, -200.0, -10.0, 200.0, 200.0, 10.0]
 
   scheduler:

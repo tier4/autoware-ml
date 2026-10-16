@@ -118,8 +118,10 @@ model:
       pc_range: ${point_cloud_range}
       out_size_factor: ${out_size_factor}
       voxel_size: ${voxel_size}
-      # Resolved by the head from score_threshold_group_configs.
-      score_threshold_groups: null
+      class_names: ${database.taxonomy.detection3d.class_names}
+      # One ScoreThresholdConfig per class group, resolved once at construction. null keeps
+      # every proposal regardless of its score.
+      score_threshold_configs: null
       post_center_range: ???
       code_size: 10
     assigner:
@@ -142,8 +144,7 @@ model:
     code_weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2]
     min_radius: 2
     gaussian_overlap: 0.1
-    # No per-class thresholds or NMS groups, the head decodes every class alike.
-    score_threshold_group_configs: null
+    # No NMS groups, the head decodes every class alike.
     post_max_size: 100
     nms_min_radius: ???
     nms_type: null

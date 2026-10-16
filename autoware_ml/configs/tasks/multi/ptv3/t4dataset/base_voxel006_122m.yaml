@@ -93,8 +93,9 @@ model:
         class_names: [debris.pushable_pullable]
         nms_radius: 0.0
         max_size: 50
-    score_threshold_group_configs: null
     bbox_coder:
+      # No per-class thresholds, every proposal is kept regardless of its score.
+      score_threshold_configs: null
       post_center_range: [-132.88, -132.88, -5.0, 132.88, 132.88, 12.0]
 
 # Jitter scaled to the 6 cm grid. Hydra replaces lists wholesale, so the pipeline is repeated.

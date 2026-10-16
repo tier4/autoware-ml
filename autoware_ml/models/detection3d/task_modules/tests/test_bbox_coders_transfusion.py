@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for the TransFusion box coder's height convention.
+"""Unit tests for the TransFusion box coder.
 
 Ground-truth boxes in this framework are gravity center only (see ``Box3DCenterCoordinateType``),
 so ``encode`` and ``decode_boxes`` must agree on what the height channel means: the value that
@@ -26,7 +26,10 @@ import unittest
 
 import torch
 
-from autoware_ml.models.detection3d.task_modules.bbox_coders import TransFusionBBoxCoder
+from autoware_ml.models.detection3d.task_modules.bbox_coders import (
+    ScoreThresholdConfig,
+    TransFusionBBoxCoder,
+)
 from autoware_ml.types.geometry import Box3DFieldIndex
 
 
@@ -62,7 +65,8 @@ class TestTransFusionBBoxCoderHeight(unittest.TestCase):
             pc_range=self.pc_range,
             out_size_factor=self.out_size_factor,
             voxel_size=self.voxel_size,
-            score_threshold_groups=None,
+            class_names=["car", "pedestrian"],
+            score_threshold_configs=None,
             post_center_range=self.post_center_range,
             code_size=code_size,
         )
@@ -136,6 +140,83 @@ class TestTransFusionBBoxCoderHeight(unittest.TestCase):
             rtol=1e-5,
             atol=1e-5,
         )
+
+
+class TestTransFusionBBoxCoderScoreThresholds(unittest.TestCase):
+    """Check that the score threshold groups are resolved once and applied per class."""
+
+    def setUp(self) -> None:
+        """Share the scene geometry and the class names across the tests."""
+        self.class_names = ["car", "pedestrian", "bicycle"]
+        self.bbox_scores = torch.tensor([[0.1, 0.4, 0.1, 0.4, 0.0, 0.05]])
+        self.bbox_classes = torch.tensor([[0, 0, 1, 1, 2, 2]], dtype=torch.int64)
+
+    def _build_coder(
+        self, score_threshold_configs: list[ScoreThresholdConfig] | None
+    ) -> TransFusionBBoxCoder:
+        """Build a coder with the given score threshold groups."""
+        return TransFusionBBoxCoder(
+            pc_range=[-10.0, -20.0, -2.0, 10.0, 20.0, 4.0],
+            out_size_factor=2,
+            voxel_size=[0.5, 0.25, 0.2],
+            class_names=self.class_names,
+            score_threshold_configs=score_threshold_configs,
+            post_center_range=None,
+            code_size=10,
+        )
+
+    def test_resolves_one_threshold_per_class_at_construction(self) -> None:
+        """Test that the groups are flattened into class order once, unnamed classes at zero."""
+        coder = self._build_coder(
+            [
+                ScoreThresholdConfig(class_names=["pedestrian"], score_threshold=0.2),
+                ScoreThresholdConfig(class_names=["car"], score_threshold=0.3),
+            ]
+        )
+
+        self.assertEqual(coder.class_score_thresholds, (0.3, 0.2, 0.0))
+
+    def test_no_groups_keeps_every_proposal(self) -> None:
+        """Test that None disables the score filter instead of thresholding at zero."""
+        coder = self._build_coder(None)
+
+        keep_masks = coder.filter_bboxes_score(
+            bbox_scores=self.bbox_scores, bbox_classes=self.bbox_classes
+        )
+
+        self.assertIsNone(coder.class_score_thresholds)
+        self.assertEqual(keep_masks.tolist(), [[True] * 6])
+
+    def test_filter_bboxes_score_uses_the_group_of_each_class(self) -> None:
+        """Test that each class is thresholded by its own group, unnamed classes by zero."""
+        coder = self._build_coder(
+            [
+                ScoreThresholdConfig(class_names=["car"], score_threshold=0.3),
+                ScoreThresholdConfig(class_names=["pedestrian"], score_threshold=0.0),
+            ]
+        )
+
+        keep_masks = coder.filter_bboxes_score(
+            bbox_scores=self.bbox_scores, bbox_classes=self.bbox_classes
+        )
+
+        # Car needs 0.3, pedestrian and the unnamed bicycle only a positive score.
+        self.assertEqual(keep_masks.tolist(), [[False, True, True, True, False, True]])
+
+    def test_rejects_a_class_in_two_groups(self) -> None:
+        """Test that a class claimed by two groups is rejected as ambiguous, at construction."""
+        with self.assertRaisesRegex(ValueError, "ambiguous"):
+            self._build_coder(
+                [
+                    ScoreThresholdConfig(class_names=["car"], score_threshold=0.1),
+                    ScoreThresholdConfig(class_names=["car", "pedestrian"], score_threshold=0.5),
+                ]
+            )
+
+    def test_rejects_an_unknown_class_name(self) -> None:
+        """Test that a group naming a class outside class_names is rejected at construction."""
+        with self.assertRaisesRegex(ValueError, "truck"):
+            self._build_coder([ScoreThresholdConfig(class_names=["truck"], score_threshold=0.1)])
 
 
 if __name__ == "__main__":

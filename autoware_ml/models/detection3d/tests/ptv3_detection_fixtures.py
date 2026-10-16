@@ -162,7 +162,10 @@ def build_transfusion_head(
         },
         bbox_coder=TransFusionBBoxCoder(
             pc_range=list(point_cloud_range[:2]),
-            score_threshold_groups=None,
+            class_names=list(CLASS_NAMES),
+            score_threshold_configs=[
+                ScoreThresholdConfig(class_names=list(CLASS_NAMES), score_threshold=0.1)
+            ],
             out_size_factor=1,
             voxel_size=[1.0, 1.0],
             post_center_range=[
@@ -187,9 +190,6 @@ def build_transfusion_head(
         code_weights=[1.0] * 8 + [0.2, 0.2],
         min_radius=1,
         gaussian_overlap=0.1,
-        score_threshold_group_configs=[
-            ScoreThresholdConfig(class_names=list(CLASS_NAMES), score_threshold=0.1)
-        ],
         post_max_size=10,
         nms_min_radius=1.0,
         dense_heatmap_pooling_class_names=[],

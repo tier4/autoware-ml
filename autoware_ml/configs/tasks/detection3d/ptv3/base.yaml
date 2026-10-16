@@ -120,8 +120,10 @@ model:
       pc_range: ${point_cloud_range}
       voxel_size: ${head_voxel_size}
       out_size_factor: 1
-      # Resolved by the head from score_threshold_group_configs.
-      score_threshold_groups: null
+      class_names: ${database.taxonomy.detection3d.class_names}
+      # One ScoreThresholdConfig per class group, resolved once at construction. null keeps
+      # every proposal regardless of its score. The database bases set it.
+      score_threshold_configs: ???
       post_center_range: ???
       code_size: 10
     assigner:
@@ -144,7 +146,6 @@ model:
     code_weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2]
     min_radius: 2
     gaussian_overlap: 0.1
-    score_threshold_group_configs: ???
     post_max_size: 100
     nms_min_radius: ???
     # NMS and the heatmap target differ between the databases, the database bases set them.

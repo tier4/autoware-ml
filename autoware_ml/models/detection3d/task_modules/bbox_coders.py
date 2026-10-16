@@ -6,7 +6,7 @@ detection heads and deployment paths.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import NamedTuple, Sequence
 
 from jaxtyping import Bool, Float32, Int64
@@ -15,25 +15,14 @@ import torch
 
 class ScoreThresholdConfig(NamedTuple):
     """
-    Config for score threshold to each class group.
+    Config for the score threshold of one class group.
+
     Args:
-        class_names: Names of classes for this group.
-        score_threshold: Score thresold to keep bboxes in this group.
+        class_names: Names of the classes in this group.
+        score_threshold: Score threshold to keep bboxes of this group.
     """
 
     class_names: Sequence[str]
-    score_threshold: float
-
-
-class ScoreThresholdGroup(NamedTuple):
-    """
-    Resolved config for each score thresold group.
-    Args:
-        class_ids: Class indices for this group.
-        score_threshold: Score threshold to keep bboxes in this group.
-    """
-
-    class_ids: Sequence[int]
     score_threshold: float
 
 
@@ -86,20 +75,63 @@ class TransFusionBBoxCoder:
         pc_range: Point-cloud range used by the detector.
         out_size_factor: BEV downsampling factor between point space and feature space.
         voxel_size: Voxel size along each spatial axis.
+        class_names: Ordered class names of the head. The score threshold groups are resolved
+            against them, and their length is the number of classes.
+        score_threshold_configs: Score threshold groups, each naming the classes it applies to.
+            A class may appear in at most one group, classes no group names keep every score.
+            ``None`` disables the score filter altogether.
         post_center_range: Optional metric-space range used to filter predictions.
-        score_threshold: Optional score threshold applied during decoding. A
-            scalar applies to every class; a sequence provides one threshold
-            per class index.
         code_size: Number of regression channels produced by the head.
+        class_score_thresholds: One threshold per class, resolved once from
+            ``score_threshold_configs`` at construction. ``None`` when the filter is disabled.
     """
 
     pc_range: list[float]
     out_size_factor: int
     voxel_size: list[float]
-    score_threshold_groups: Sequence[ScoreThresholdGroup] | None
+    class_names: Sequence[str]
+    score_threshold_configs: Sequence[ScoreThresholdConfig] | None
     post_center_range: Sequence[float] | None = None
-    # score_threshold: float | Sequence[float] | None = None
     code_size: int = 8
+    class_score_thresholds: tuple[float, ...] | None = field(init=False, default=None)
+
+    def __post_init__(self) -> None:
+        """Resolve the score threshold groups into one threshold per class, once."""
+        self.class_score_thresholds = self._resolve_class_score_thresholds()
+
+    def _resolve_class_score_thresholds(self) -> tuple[float, ...] | None:
+        """Flatten the class-name groups into a per-class threshold vector.
+
+        Returns:
+            One threshold per class in ``class_names`` order, zero for classes no group names,
+            or ``None`` when no groups are configured.
+
+        Raises:
+            ValueError: If a group names a class that is not in ``class_names``, or a class is
+                named by two groups, which would make its threshold ambiguous.
+        """
+        if self.score_threshold_configs is None:
+            return None
+
+        class_thresholds = [0.0] * len(self.class_names)
+        # Maps each claimed class to the group that claimed it, so the error can name both.
+        claimed_classes: dict[str, int] = {}
+        for group_index, group in enumerate(self.score_threshold_configs):
+            for class_name in group.class_names:
+                if class_name not in self.class_names:
+                    raise ValueError(
+                        f"TransFusionBBoxCoder score threshold group {group_index} names class "
+                        f"{class_name!r}, which is not one of {list(self.class_names)}."
+                    )
+                if class_name in claimed_classes:
+                    raise ValueError(
+                        f"TransFusionBBoxCoder class {class_name!r} appears in score threshold "
+                        f"groups {claimed_classes[class_name]} and {group_index}, so its "
+                        "threshold is ambiguous."
+                    )
+                claimed_classes[class_name] = group_index
+                class_thresholds[self.class_names.index(class_name)] = float(group.score_threshold)
+        return tuple(class_thresholds)
 
     def encode(
         self,
@@ -201,42 +233,28 @@ class TransFusionBBoxCoder:
         self,
         bbox_scores: Float32[torch.Tensor, "batch_size num_proposals"],
         bbox_classes: Int64[torch.Tensor, "batch_size num_proposals"],
-        num_classes: int,
     ) -> Bool[torch.Tensor, "batch_size num_proposals"]:
         """
-        Build a per-proposal keep mask by comparing each score against its class group's threshold.
+        Build a per-proposal keep mask by comparing each score against its class's threshold.
 
-        The groups carry class ids, so they are first flattened into a per-class threshold vector
-        and then looked up by each proposal's predicted class. That keeps the comparison a single
-        elementwise op over the whole batch, with no loop over samples or proposals, and exports as
-        a constant Gather plus a Greater.
+        The per-class thresholds were resolved at construction, so this is a single lookup by
+        predicted class followed by one elementwise comparison over the whole batch, with no loop
+        over samples or proposals. It exports as a constant Gather plus a Greater.
 
         Args:
             bbox_scores: Confidence score for each proposal.
             bbox_classes: Predicted class id for each proposal. Must be a valid class index in
                 [0, num_classes), since it indexes the per-class threshold vector.
-            num_classes: Total number of classes.
 
         Returns:
-            True where the proposal's score clears its class threshold, False otherwise.
+            True where the proposal's score clears its class threshold, False otherwise. All True
+            when no score threshold groups are configured.
         """
-        if self.score_threshold_groups is None:
+        if self.class_score_thresholds is None:
             return torch.ones_like(bbox_scores, dtype=torch.bool)
 
-        # (num_classes,) threshold per class. Classes no group claims stay at zero.
-        class_thresholds = torch.zeros(
-            num_classes, dtype=bbox_scores.dtype, device=bbox_scores.device
-        )
-        for group_index, group in enumerate(self.score_threshold_groups):
-            for class_id in group.class_ids:
-                class_id = int(class_id)
-                if not 0 <= class_id < num_classes:
-                    raise ValueError(
-                        f"TransFusionBBoxCoder score threshold group {group_index} class id "
-                        f"{class_id} is out of range for {num_classes} classes."
-                    )
-                class_thresholds[class_id] = group.score_threshold
-
+        # (num_classes,) on the scores' device and dtype.
+        class_thresholds = bbox_scores.new_tensor(self.class_score_thresholds)
         # (num_classes,)[(batch_size, num_proposals)] -> (batch_size, num_proposals)
         return bbox_scores > class_thresholds[bbox_classes]
 

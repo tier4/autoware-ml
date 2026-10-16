@@ -42,11 +42,7 @@ from autoware_ml.losses.detection3d.focal import SigmoidFocalLoss
 from autoware_ml.losses.detection3d.gaussian_focal import GaussianFocalLoss
 from autoware_ml.models.common.layers.conv import ConvModule
 from autoware_ml.models.detection3d.task_modules.assigners import HungarianAssigner3D
-from autoware_ml.models.detection3d.task_modules.bbox_coders import (
-    TransFusionBBoxCoder,
-    ScoreThresholdGroup,
-    ScoreThresholdConfig,
-)
+from autoware_ml.models.detection3d.task_modules.bbox_coders import TransFusionBBoxCoder
 from autoware_ml.models.detection3d.task_modules.heatmap import (
     create_oriented_gaussian_heatmaps,
     vectorize_gaussian_radii,
@@ -222,7 +218,6 @@ class TransFusionHead(nn.Module):
         code_weights: list[float],
         min_radius: int,
         gaussian_overlap: float,
-        score_threshold_group_configs: Sequence[ScoreThresholdConfig] | None,
         post_max_size: int,
         nms_min_radius: float,
         dense_heatmap_pooling_class_names: Sequence[str],
@@ -254,7 +249,9 @@ class TransFusionHead(nn.Module):
             num_heads: Number of attention heads per decoder layer.
             feedforward_channels: Hidden dimension of decoder feed-forward blocks.
             common_heads: Prediction-branch specification shared by decoder layers.
-            bbox_coder: Box coder used for encoding and decoding predictions.
+            bbox_coder: Box coder used for encoding and decoding predictions. It carries the
+                score threshold groups, resolved against its own ``class_names``, which must
+                therefore be the head's.
             assigner: Proposal assigner used during training.
             point_cloud_range: Detector point-cloud range.
             voxel_size: Voxel size used by the detector.
@@ -263,8 +260,6 @@ class TransFusionHead(nn.Module):
             min_radius: Minimum heatmap Gaussian radius.
             gaussian_overlap: Required overlap for Gaussian radius computation.
                 Only used by the ``"round"`` heatmap target.
-            score_threshold_group_configs: Prediction score threshold used
-                to filter out predictions.
             post_max_size: Maximum number of predictions kept after NMS.
             nms_min_radius: Minimum center distance used by circle NMS.
             dense_heatmap_pooling_class_names: Optional class names that should use local max
@@ -354,10 +349,13 @@ class TransFusionHead(nn.Module):
         self.nms_groups = (
             self._resolve_nms_groups(nms_group_configs) if nms_type == "circle" else None
         )
-        # Assign score_threshold_groups
-        self.bbox_coder.score_threshold_groups = self._resolve_score_threshold_groups(
-            score_threshold_group_configs
-        )
+        # The coder thresholds proposals by class id against its own class names, so those
+        # have to be the head's, otherwise a class would be filtered by another class's threshold.
+        if list(bbox_coder.class_names) != list(class_names):
+            raise ValueError(
+                "TransFusionHead bbox_coder.class_names must equal the head's class_names, got "
+                f"{list(bbox_coder.class_names)} and {list(class_names)}."
+            )
         self.shared_block = nn.Sequential(
             nn.Conv2d(in_channels, hidden_channel, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(hidden_channel, eps=norm_eps, momentum=norm_momentum),
@@ -512,39 +510,6 @@ class TransFusionHead(nn.Module):
                         if nms_config_group.max_size is None
                         else nms_config_group.max_size
                     ),
-                )
-            )
-        return resolved_groups
-
-    def _resolve_score_threshold_groups(
-        self, score_threshold_config_groups: Sequence[ScoreThresholdConfig] | None
-    ) -> Sequence[ScoreThresholdGroup] | None:
-        """Resolve grouped NMS configuration into class-id form."""
-        if score_threshold_config_groups is None:
-            return None
-
-        resolved_groups: list[ScoreThresholdGroup] = []
-        # A class may appear in at most one group, otherwise its threshold is ambiguous. Maps each
-        # claimed class id to the group that claimed it, so the error can name both groups.
-        claimed_classes: dict[int, int] = {}
-        for group_index, score_threshold_config_group in enumerate(score_threshold_config_groups):
-            class_ids = self._resolve_class_ids(score_threshold_config_group.class_names)
-            if class_ids is None:
-                raise ValueError("TransFusionHead Score threshold group must define class_names.")
-
-            for class_id in class_ids:
-                if class_id in claimed_classes:
-                    raise ValueError(
-                        f"TransFusionHead class id {class_id} appears in score threshold groups "
-                        f"{claimed_classes[class_id]} and {group_index}, so its threshold is "
-                        "ambiguous."
-                    )
-                claimed_classes[class_id] = group_index
-
-            resolved_groups.append(
-                ScoreThresholdGroup(
-                    class_ids=class_ids,
-                    score_threshold=score_threshold_config_group.score_threshold,
                 )
             )
         return resolved_groups
@@ -961,7 +926,7 @@ class TransFusionHead(nn.Module):
 
         # Create keep_masks based on score_thresholds and post_center_range
         keep_masks = self.bbox_coder.filter_bboxes_score(
-            bbox_scores=bbox_scores, bbox_classes=bbox_classes, num_classes=self.num_classes
+            bbox_scores=bbox_scores, bbox_classes=bbox_classes
         )
         keep_masks &= self.bbox_coder.filter_bboxes_center_range(
             bbox_centers=pred_bboxes[..., Box3DFieldIndex.X : Box3DFieldIndex.Z + 1]

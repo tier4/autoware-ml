@@ -27,15 +27,15 @@ from autoware_ml.dataclasses.models.detection3d.head_outputs import (
     TransFusionHeadOutputs,
     TransFusionSeparateHeadOutputs,
 )
-from autoware_ml.models.detection3d.heads.transfusions.transfusion_head import (
-    ScoreThresholdConfig,
-    TransFusionHead,
-)
+from autoware_ml.models.detection3d.heads.transfusions.transfusion_head import TransFusionHead
 from autoware_ml.models.detection3d.main_modules.bevfusions.export_wrappers import (
     export_detection_outputs,
 )
 from autoware_ml.models.detection3d.task_modules.assigners import HungarianAssigner3D
-from autoware_ml.models.detection3d.task_modules.bbox_coders import TransFusionBBoxCoder
+from autoware_ml.models.detection3d.task_modules.bbox_coders import (
+    ScoreThresholdConfig,
+    TransFusionBBoxCoder,
+)
 from autoware_ml.models.detection3d.task_modules.match_costs import (
     BBoxBEVL1Cost,
     ClassificationCost,
@@ -227,7 +227,10 @@ class TestExportDetectionOutputsWithTransFusionHead(_ExportDetectionOutputsTestC
                     pc_range=self.point_cloud_range,
                     out_size_factor=self.out_size_factor,
                     voxel_size=self.voxel_size,
-                    score_threshold_groups=None,
+                    class_names=self.class_names,
+                    score_threshold_configs=[
+                        ScoreThresholdConfig(class_names=self.class_names, score_threshold=0.0)
+                    ],
                     post_center_range=[-10.0, -10.0, -10.0, 26.0, 26.0, 10.0],
                     code_size=self.num_box_channels,
                 ),
@@ -243,9 +246,6 @@ class TestExportDetectionOutputsWithTransFusionHead(_ExportDetectionOutputsTestC
                 code_weights=[1.0] * 8 + [0.2, 0.2],
                 min_radius=1,
                 gaussian_overlap=0.1,
-                score_threshold_group_configs=[
-                    ScoreThresholdConfig(class_names=self.class_names, score_threshold=0.0)
-                ],
                 post_max_size=8,
                 nms_min_radius=1.0,
                 dense_heatmap_pooling_class_names=[],

@@ -40,11 +40,13 @@ from autoware_ml.models.detection3d.heads.transfusions.exportable_multi_head_att
 from autoware_ml.losses.detection3d.rotated_iou_loss import Rotated2DIouLoss
 from autoware_ml.models.detection3d.heads.transfusions.transfusion_head import (
     NMSGroupConfig,
-    ScoreThresholdConfig,
     TransFusionHead,
 )
 from autoware_ml.models.detection3d.task_modules.assigners import HungarianAssigner3D
-from autoware_ml.models.detection3d.task_modules.bbox_coders import TransFusionBBoxCoder
+from autoware_ml.models.detection3d.task_modules.bbox_coders import (
+    ScoreThresholdConfig,
+    TransFusionBBoxCoder,
+)
 from autoware_ml.models.detection3d.task_modules.match_costs import (
     BBoxBEVL1Cost,
     ClassificationCost,
@@ -93,7 +95,7 @@ class TestTransFusionHead(unittest.TestCase):
                 "vels": (2, 2),
             }
         )
-        self.score_threshold_group_configs = [
+        self.score_threshold_configs = [
             ScoreThresholdConfig(class_names=self.class_names, score_threshold=0.0)
         ]
         # An auxiliary head concatenates every decoder layer along the query axis.
@@ -131,8 +133,9 @@ class TestTransFusionHead(unittest.TestCase):
         use_velocity: bool = True,
         heatmap_target: str = "round",
         dense_heatmap_pooling_class_names: Sequence[str] | None = None,
-        score_threshold_group_configs: Sequence[ScoreThresholdConfig] | None = None,
+        score_threshold_configs: Sequence[ScoreThresholdConfig] | None = None,
         nms_type: str | None = None,
+        coder_class_names: Sequence[str] | None = None,
         nms_group_configs: Sequence[NMSGroupConfig] | None = None,
         post_center_range: Sequence[float] | None = None,
         use_bf16_cross_attention: bool = False,
@@ -159,7 +162,12 @@ class TestTransFusionHead(unittest.TestCase):
                 pc_range=self.point_cloud_range,
                 out_size_factor=self.out_size_factor,
                 voxel_size=self.voxel_size,
-                score_threshold_groups=None,
+                class_names=self.class_names if coder_class_names is None else coder_class_names,
+                score_threshold_configs=(
+                    self.score_threshold_configs
+                    if score_threshold_configs is None
+                    else score_threshold_configs
+                ),
                 post_center_range=(
                     self.post_center_range if post_center_range is None else post_center_range
                 ),
@@ -177,11 +185,6 @@ class TestTransFusionHead(unittest.TestCase):
             code_weights=self.code_weights,
             min_radius=self.min_radius,
             gaussian_overlap=self.gaussian_overlap,
-            score_threshold_group_configs=(
-                self.score_threshold_group_configs
-                if score_threshold_group_configs is None
-                else score_threshold_group_configs
-            ),
             post_max_size=self.post_max_size,
             nms_min_radius=self.nms_min_radius,
             dense_heatmap_pooling_class_names=(
@@ -1228,7 +1231,7 @@ class TestTransFusionHead(unittest.TestCase):
     def test_decode_outputs_drops_everything_under_the_score_threshold(self) -> None:
         """Test that a score threshold above every predicted score empties every sample."""
         transfusion_head = self._build_transfusion_head(
-            score_threshold_group_configs=[
+            score_threshold_configs=[
                 ScoreThresholdConfig(class_names=self.class_names, score_threshold=1.0)
             ]
         )
@@ -1250,29 +1253,6 @@ class TestTransFusionHead(unittest.TestCase):
 
         for prediction in sample_predictions:
             self.assertEqual(prediction.bboxes_3d.shape, (0, 9))
-
-    def test_filter_bboxes_score_uses_the_group_of_each_class(self) -> None:
-        """
-        Test that each class is thresholded by its own group, so raising one group's threshold only
-        drops proposals of that group's classes.
-        """
-        bbox_scores = torch.tensor([[0.1, 0.4, 0.1, 0.4]], device=self.device)
-        bbox_classes = torch.tensor([[0, 0, 1, 1]], dtype=torch.int64, device=self.device)
-        transfusion_head = self._build_transfusion_head(
-            score_threshold_group_configs=[
-                ScoreThresholdConfig(class_names=["car"], score_threshold=0.3),
-                ScoreThresholdConfig(class_names=["pedestrian"], score_threshold=0.0),
-            ]
-        )
-
-        keep_masks = transfusion_head.bbox_coder.filter_bboxes_score(
-            bbox_scores=bbox_scores,
-            bbox_classes=bbox_classes,
-            num_classes=self.num_classes,
-        )
-
-        # Car needs 0.3, pedestrian only a positive score.
-        self.assertEqual(keep_masks.tolist(), [[False, True, True, True]])
 
     def test_filter_bboxes_center_range_keeps_only_centers_inside_the_range(self) -> None:
         """Test that the center-range filter drops boxes whose centers fall outside the range."""
@@ -1572,15 +1552,10 @@ class TestTransFusionHead(unittest.TestCase):
                 ],
             )
 
-    def test_resolve_score_threshold_groups_rejects_a_class_in_two_groups(self) -> None:
-        """Test that a class claimed by two score threshold groups is rejected as ambiguous."""
-        with self.assertRaises(ValueError):
-            self._build_transfusion_head(
-                score_threshold_group_configs=[
-                    ScoreThresholdConfig(class_names=["car"], score_threshold=0.1),
-                    ScoreThresholdConfig(class_names=["car", "pedestrian"], score_threshold=0.5),
-                ]
-            )
+    def test_rejects_a_bbox_coder_with_other_class_names(self) -> None:
+        """Test that a coder resolved against different class names is rejected at construction."""
+        with self.assertRaisesRegex(ValueError, "class_names"):
+            self._build_transfusion_head(coder_class_names=list(reversed(self.class_names)))
 
     def test_bf16_export_emits_the_fusion_pattern(self) -> None:
         """
