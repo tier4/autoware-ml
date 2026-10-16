@@ -169,8 +169,9 @@ class Detection3DTask(BaseDatasetTask):
                 )
                 .alias(has_points),
             )
-            .explode(label, has_points)
-            # A record without boxes explodes to one null row, which is not a box.
+            # A record without boxes contributes no row; a null box list explodes to one null
+            # row, which is not a box either.
+            .explode(label, has_points, empty_as_null=False)
             .drop_nulls(label)
             .group_by(label)
             .agg(pl.len().alias("count"), pl.col(has_points).sum().alias("valid_count"))
