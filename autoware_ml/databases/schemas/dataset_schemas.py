@@ -273,10 +273,9 @@ class DatasetRecord(BaseModel, DataModelInterface):
             location=data_model[DatasetTableSchema.LOCATION.name],
             vehicle_type=data_model[DatasetTableSchema.VEHICLE_TYPE.name],
             scenario_name=data_model[DatasetTableSchema.SCENARIO_NAME.name],
-            # Older database caches predate this column.
-            traffic_cone_barrier_bbox_status=data_model.get(
+            traffic_cone_barrier_bbox_status=data_model[
                 DatasetTableSchema.TRAFFIC_CONE_BARRIER_BBOX_STATUS.name
-            ),
+            ],
             lidar_frames=lidar_frames,
             lidar_sources=lidar_sources,
             image_frames=image_frames,

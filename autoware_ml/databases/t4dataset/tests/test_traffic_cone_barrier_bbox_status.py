@@ -227,15 +227,6 @@ class TestDatasetRecordTable(unittest.TestCase):
                     status,
                 )
 
-    def test_records_without_the_column_load_as_unknown(self) -> None:
-        """A cache written before the column existed loads with the flag unknown."""
-        dictionary = dict(_dataset_record(True).to_dictionary())
-        del dictionary[_COLUMN]
-
-        loaded = DatasetRecord.load_from_dictionary(dictionary)
-
-        self.assertIsNone(loaded.traffic_cone_barrier_bbox_status)
-
     def test_flag_survives_the_polars_table(self) -> None:
         """Rows written with the table schema read the flag back, nulls included."""
         rows = [_dataset_record(status).to_dictionary() for status in (True, False, None)]
