@@ -14,8 +14,7 @@
 
 """Autograd bridges and ONNX symbolics for deployment-aware sparse ops."""
 
-from collections.abc import Sequence
-from typing import Any
+from typing import Any, Sequence
 
 import numpy as np
 import torch
@@ -23,7 +22,7 @@ from jaxtyping import UInt32
 from cumm import tensorview as tv
 from spconv import constants
 from spconv.algo import CONV_CPP
-from spconv.constants import SPCONV_DO_SORT, SPCONV_USE_DIRECT_TABLE, AllocKeys
+from spconv.constants import SPCONV_DO_SORT, AllocKeys
 from spconv.core import ConvAlgo
 from spconv.core_cc.csrc.sparse.all import SpconvOps
 from spconv.core_cc.csrc.sparse.convops.spops import ConvGemmOps
@@ -483,7 +482,13 @@ class GetIndicePairsImplicitGemm(Function):
         del ctx
 
         num_out_act_bound: int = -1
-        direct_table: bool = SPCONV_USE_DIRECT_TABLE
+        # Trace with spconv's thrust-unique pair generation rather than its direct hash
+        # table. Both yield the same indice pairs and a bit-identical dense output. Only
+        # the order of the output indices differs, and the sorted thrust order keeps the
+        # traced graph independent of the SPCONV_USE_DIRECT_TABLE environment variable.
+        # The flag only affects tracing, the deployed plugin builds its own tables and
+        # training uses the native spconv layers.
+        direct_table: bool = False
         do_sort = SPCONV_DO_SORT
 
         stream = _current_stream_for(indices)

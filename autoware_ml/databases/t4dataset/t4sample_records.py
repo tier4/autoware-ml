@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Sequence
 
+from typing import Sequence
 from pydantic import BaseModel, ConfigDict
 
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDataModel
@@ -53,6 +53,7 @@ class T4SampleRecord(BaseModel):
             scenario_name=self.frame_basic_metadata.scenario_name,
             location=self.frame_basic_metadata.location,
             vehicle_type=self.frame_basic_metadata.vehicle_type,
+            traffic_cone_barrier_bbox_status=self.frame_basic_metadata.traffic_cone_barrier_bbox_status,
             lidar_frames=self.lidar_frame_data_models,
             lidar_sources=self.lidar_source_data_models,
             image_frames=self.image_frame_data_models,

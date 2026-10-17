@@ -20,13 +20,14 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 import polars as pl
 from jaxtyping import Float32, Float64
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from autoware_ml.databases.schemas.base_schemas import (
     BaseFieldSchema,
     DatasetTableColumn,
     DataModelInterface,
 )
+from autoware_ml.databases.schemas.utils import check_relative_path
 
 
 @dataclass(frozen=True)
@@ -40,7 +41,7 @@ class ImageFrameDatasetSchema(BaseFieldSchema):
     image_sensor_id = DatasetTableColumn("image_sensor_id", pl.String)
     image_sensor_channel_name = DatasetTableColumn("image_sensor_channel_name", pl.String)
     image_timestamp_seconds = DatasetTableColumn("image_timestamp_seconds", pl.Float64)
-    image_path = DatasetTableColumn("image_path", pl.String)
+    image_relative_path = DatasetTableColumn("image_relative_path", pl.String)
     image_height = DatasetTableColumn("image_height", pl.Int32)
     image_width = DatasetTableColumn("image_width", pl.Int32)
     cam2img = DatasetTableColumn("cam2img", pl.Array(pl.Float32, shape=(3, 3)))
@@ -58,6 +59,40 @@ class ImageFrameDatasetSchema(BaseFieldSchema):
     lidar2img = DatasetTableColumn("lidar2img", pl.Array(pl.Float32, shape=(4, 4)))
 
 
+def distortion_model_from_coefficients(coefficients: Sequence[float]) -> str:
+    """Name the OpenCV distortion model a coefficient vector belongs to, ROS style.
+
+    The T4 calibration stores only the coefficients ``(k1, k2, p1, p2[, k3[, k4, k5, k6]])``
+    and leaves the model implicit in their count, so it is recovered here the way
+    ``sensor_msgs/CameraInfo`` names it: ``plumb_bob`` for the 4 and 5 coefficient radial and
+    tangential model, ``rational_polynomial`` for the 8 coefficient one. Images that ship
+    already rectified carry no coefficients and get the empty string. The name records the
+    model of the frame; whether a camera still has to be undistorted is decided by the loading
+    transforms from the coefficients themselves.
+
+    Args:
+      coefficients: Lens distortion coefficients in OpenCV order, possibly empty.
+
+    Returns:
+      str: Distortion model name, empty when there are no coefficients.
+
+    Raises:
+      ValueError: If the count matches no model, so a truncated or padded calibration is not
+        silently written under a wrong name.
+    """
+    count = len(coefficients)
+    if count == 0:
+        return ""
+    if count in (4, 5):
+        return "plumb_bob"
+    if count == 8:
+        return "rational_polynomial"
+    raise ValueError(
+        f"No OpenCV distortion model has {count} coefficients, expected 4 or 5 (plumb_bob) or "
+        "8 (rational_polynomial)."
+    )
+
+
 class ImageFrameDataModel(BaseModel, DataModelInterface):
     """
     Image frame data model that can be shared by multiple datasets. It saves the metadata of a
@@ -70,7 +105,9 @@ class ImageFrameDataModel(BaseModel, DataModelInterface):
       image_sensor_id: Image sensor ID (calibrated sensor token).
       image_sensor_channel_name: Image sensor channel name, e.g. CAM_FRONT.
       image_timestamp_seconds: Image timestamp in seconds.
-      image_path: Image path.
+      image_relative_path: Image path, relative to the root of the database. Every blob path
+        of a record is stored relative to that root and joined onto the root of the dataset
+        reading it.
       image_height: Image height in pixels. Set to None if it's not available.
       image_width: Image width in pixels. Set to None if it's not available.
       cam2img: Camera intrinsic matrix (3, 3).
@@ -93,7 +130,7 @@ class ImageFrameDataModel(BaseModel, DataModelInterface):
     image_sensor_id: str
     image_sensor_channel_name: str
     image_timestamp_seconds: float
-    image_path: str
+    image_relative_path: str
     image_height: int | None
     image_width: int | None
     cam2img: Float64[np.ndarray, "3 3"]
@@ -103,6 +140,21 @@ class ImageFrameDataModel(BaseModel, DataModelInterface):
     image_frame_ego_pose_to_global_matrix: Float64[np.ndarray, "4 4"]
     lidar2cam: Float64[np.ndarray, "4 4"] | None
     lidar2img: Float64[np.ndarray, "4 4"] | None
+
+    @field_validator("image_relative_path")
+    @classmethod
+    def _check_relative_path(cls, path: str) -> str:
+        """
+        Reject an image path stored with a root, so a record never binds to one machine.
+
+        Args:
+          path: Stored image path.
+
+        Returns:
+          str: The path, unchanged.
+        """
+
+        return check_relative_path(path, "image_relative_path")
 
     @property
     def cam2img_fp32(self) -> Float32[np.ndarray, "3 3"]:
@@ -177,7 +229,7 @@ class ImageFrameDataModel(BaseModel, DataModelInterface):
             ImageFrameDatasetSchema.image_sensor_id.name: self.image_sensor_id,
             ImageFrameDatasetSchema.image_sensor_channel_name.name: self.image_sensor_channel_name,
             ImageFrameDatasetSchema.image_timestamp_seconds.name: self.image_timestamp_seconds,
-            ImageFrameDatasetSchema.image_path.name: self.image_path,
+            ImageFrameDatasetSchema.image_relative_path.name: self.image_relative_path,
             ImageFrameDatasetSchema.image_height.name: self.image_height,
             ImageFrameDatasetSchema.image_width.name: self.image_width,
             ImageFrameDatasetSchema.cam2img.name: self.cam2img_fp32,
@@ -218,18 +270,14 @@ class ImageFrameDataModel(BaseModel, DataModelInterface):
             image_timestamp_seconds=data_model[
                 ImageFrameDatasetSchema.image_timestamp_seconds.name
             ],
-            image_path=data_model[ImageFrameDatasetSchema.image_path.name],
+            image_relative_path=data_model[ImageFrameDatasetSchema.image_relative_path.name],
             image_height=data_model[ImageFrameDatasetSchema.image_height.name],
             image_width=data_model[ImageFrameDatasetSchema.image_width.name],
-            cam2img=np.asarray(
-                data_model[ImageFrameDatasetSchema.cam2img.name], dtype=np.float64
-            ),
+            cam2img=np.asarray(data_model[ImageFrameDatasetSchema.cam2img.name], dtype=np.float64),
             image_distortion_coefficients=list(
                 data_model[ImageFrameDatasetSchema.image_distortion_coefficients.name]
             ),
-            image_distortion_model=data_model[
-                ImageFrameDatasetSchema.image_distortion_model.name
-            ],
+            image_distortion_model=data_model[ImageFrameDatasetSchema.image_distortion_model.name],
             image_sensor_to_ego_pose_matrix=np.asarray(
                 data_model[ImageFrameDatasetSchema.image_sensor_to_ego_pose_matrix.name],
                 dtype=np.float64,
@@ -242,8 +290,6 @@ class ImageFrameDataModel(BaseModel, DataModelInterface):
                 np.asarray(raw_lidar2cam, dtype=np.float64) if raw_lidar2cam is not None else None
             ),
             lidar2img=(
-                np.asarray(raw_lidar2img, dtype=np.float64)
-                if raw_lidar2img is not None
-                else None
+                np.asarray(raw_lidar2img, dtype=np.float64) if raw_lidar2img is not None else None
             ),
         )

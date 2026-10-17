@@ -1,0 +1,882 @@
+# Copyright 2026 TIER IV, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Unit tests for CenterHead."""
+
+import math
+import unittest
+
+import torch
+
+from autoware_ml.models.detection3d.heads.centerhead import CenterHead
+from autoware_ml.dataclasses.models.detection3d.head_outputs import (
+    CenterHeadOutputs,
+    Detection3DHeadOutputs,
+)
+from autoware_ml.dataclasses.batch.detection3d import (
+    Detection3DGTBatch,
+)
+from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
+
+
+class TestCenterHead(unittest.TestCase):
+    """Unit tests for the CenterHead."""
+
+    def setUp(self) -> None:
+        """Set up the common classes/inputs for the tests."""
+        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        torch.manual_seed(0)
+        self.center_head = CenterHead(
+            in_channels=384,
+            class_names=["car", "pedestrian"],
+            shared_channels=64,
+            point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
+            voxel_size=[0.5, 0.5, 4.0],
+            out_size_factor=2,
+            min_radius=1,
+            score_threshold=0.1,
+            post_max_size=10,
+            nms_min_radius=1.0,
+            use_velocity=True,
+        ).to(self.device)
+
+        # Dummy inputs
+        self.gt_bboxes_3d = torch.tensor(
+            [[[2.2, 3.3, 0.2, 4.0, 1.6, 1.5, 0.25, 0.5, -0.1, -0.2]]],
+            device=self.device,
+            dtype=torch.float32,
+        )
+
+        self.gt_labels_3d = torch.tensor([0], dtype=torch.int32, device=self.device)
+        self.gt_valid_bboxes = torch.tensor([1], dtype=torch.int32, device=self.device)
+        self.gt_bboxes_num_points = torch.tensor([[100]], dtype=torch.int32, device=self.device)
+        self.detection3d_gt_batch = Detection3DGTBatch(
+            gt_bboxes_3d=self.gt_bboxes_3d,
+            gt_labels_3d=self.gt_labels_3d,
+            gt_valid_bboxes=self.gt_valid_bboxes,
+            gt_bboxes_num_points=self.gt_bboxes_num_points,
+        )
+
+    def test_centerhead_weights_mean_std(self) -> None:
+        """Test that the CenterHead weights are initialized with means of 0.0 and std < 0.1."""
+        weights = []
+        biases = []
+        for name, param in self.center_head.named_parameters():
+            if "weight" in name:
+                weights.append(param.data)
+            if "bias" in name:
+                biases.append(param.data)
+
+        weights = torch.cat([w.flatten() for w in weights])
+        biases = torch.cat([b.flatten() for b in biases])
+        weight_mean = weights.mean().item()
+        weight_std = weights.std().item()
+        bias_mean = biases.mean().item()
+        bias_std = biases.std().item()
+
+        expected_weight_mean = 0.0
+        # Biases should be almost similar since the bias for the heatmap head is initialized
+        # to a negative value and the rest are initialized to zero.
+        expected_bias_mean = -0.008480
+        expected_bias_std = 0.144860
+        self.assertAlmostEqual(weight_mean, expected_weight_mean, places=2)
+        self.assertLess(weight_std, 0.1)
+        self.assertAlmostEqual(bias_mean, expected_bias_mean, places=2)
+        self.assertAlmostEqual(bias_std, expected_bias_std, places=2)
+
+    def test_center_head_zero_forward(self) -> None:
+        """
+        Test that the CenterHead forward pass with all zero features
+        returns outputs of the expected shape.
+        """
+        # Initialize a dummy feature map with the expected input shape for the CenterHead
+        dummy_input_features = torch.zeros((1, 384, 4, 4), device=self.device, dtype=torch.float32)
+        outputs = self.center_head(dummy_input_features)
+
+        self.assertEqual(outputs.heatmap.shape, (1, 2, 4, 4))
+        self.assertEqual(outputs.reg.shape, (1, 2, 4, 4))
+        self.assertEqual(outputs.dim.shape, (1, 3, 4, 4))
+        self.assertEqual(outputs.rot.shape, (1, 2, 4, 4))
+        self.assertEqual(outputs.vel.shape, (1, 2, 4, 4))
+
+        # All values are the same since the input features are zeros and biases for heatmap heads
+        # are set to -2.19.
+        expected_heatmaps = torch.tensor(-2.1900, device=self.device).expand_as(outputs.heatmap)
+        self.assertTrue(torch.allclose(outputs.heatmap, expected_heatmaps))
+
+        expected_centers = (
+            torch.tensor([[0.0541, 0.1058]], device=self.device)
+            .view(1, 2, 1, 1)
+            .expand_as(outputs.reg)
+        )
+        self.assertTrue(torch.allclose(outputs.reg, expected_centers, atol=1e-4))
+
+        expected_dims = (
+            torch.tensor([[0.0855, -0.0303, 0.0646]], device=self.device)
+            .view(1, 3, 1, 1)
+            .expand_as(outputs.dim)
+        )
+        self.assertTrue(torch.allclose(outputs.dim, expected_dims, atol=1e-4))
+
+        expected_rots = (
+            torch.tensor([[0.1088, -0.1206]], device=self.device)
+            .view(1, 2, 1, 1)
+            .expand_as(outputs.rot)
+        )
+        self.assertTrue(torch.allclose(outputs.rot, expected_rots, atol=1e-4))
+
+        expected_vels = (
+            torch.tensor([[0.0809, 0.0154]], device=self.device)
+            .view(1, 2, 1, 1)
+            .expand_as(outputs.vel)
+        )
+        self.assertTrue(torch.allclose(outputs.vel, expected_vels, atol=1e-4))
+
+    def _build_center_head_outputs(
+        self, batch_size: int, height: int, width: int, use_velocity: bool = True
+    ) -> CenterHeadOutputs:
+        """Build all-zero CenterHeadOutputs so tests only set the cells they care about."""
+        return CenterHeadOutputs(
+            heatmap=torch.zeros((batch_size, 2, height, width), device=self.device),
+            reg=torch.zeros((batch_size, 2, height, width), device=self.device),
+            height=torch.zeros((batch_size, 1, height, width), device=self.device),
+            dim=torch.zeros((batch_size, 3, height, width), device=self.device),
+            rot=torch.zeros((batch_size, 2, height, width), device=self.device),
+            vel=(
+                torch.zeros((batch_size, 2, height, width), device=self.device)
+                if use_velocity
+                else None
+            ),
+        )
+
+    def test_build_targets_populates_heatmap_and_boxes(self) -> None:
+        """Test that build_targets populates the heatmap and boxes correctly."""
+        targets = self.center_head.get_targets(
+            gt_bboxes_3d=self.gt_bboxes_3d,
+            gt_labels_3d=self.gt_labels_3d,
+            gt_valid_bboxes=self.gt_valid_bboxes,
+            feature_map_size=(4, 4),
+            device=self.device,
+        )
+
+        self.assertEqual(targets.heatmaps.shape, (1, 2, 4, 4))
+        self.assertTrue(targets.valid_masks[0, 0].item())
+        self.assertEqual(targets.reg_indices[0, 0].item(), 14)
+        self.assertEqual(targets.heatmaps[0, 0, 3, 2].item(), 1.0)
+        self.assertEqual(targets.reg_targets.shape, (1, 1, 10))
+        expected_reg_targets = torch.cat(
+            [
+                torch.tensor([0.2, 0.3, 0.2], device=self.device),
+                torch.tensor([4.0, 1.6, 1.5], device=self.device).log(),
+                torch.tensor([math.sin(0.25), math.cos(0.25)], device=self.device),
+                torch.tensor([0.5, -0.1], device=self.device),
+            ],
+            dim=-1,
+        )
+        self.assertTrue(
+            torch.allclose(
+                targets.reg_targets,
+                expected_reg_targets.view(1, 1, -1),
+            )
+        )
+
+    def test_decode_outputs_returns_length_width_height_after_unified_dim_order(self) -> None:
+        """
+        Test that decode_outputs returns the correct length, width, and height after
+        applying the unified dimension order.
+        """
+        # Create a different CenterHead
+        center_head = CenterHead(
+            in_channels=4,
+            class_names=["car", "truck", "bus", "pedestrian", "bicycle"],
+            shared_channels=4,
+            point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
+            voxel_size=[0.5, 0.5, 4.0],
+            out_size_factor=2,
+            min_radius=1,
+            score_threshold=0.1,
+            post_max_size=10,
+            nms_min_radius=1.0,
+            use_velocity=False,
+        ).to(self.device)
+
+        # Dummy outputs from CenterHead.forward
+        dummy_outputs = self._build_center_head_outputs(
+            batch_size=1, height=4, width=4, use_velocity=False
+        )
+        dummy_outputs.heatmap[0, :, :, :] = -20.0
+        dummy_outputs.heatmap[0, 0, 3, 2] = 20.0
+        dummy_outputs.height[0, 0, 3, 2] = 0.2
+        dummy_outputs.dim[0, :, 3, 2] = torch.tensor([4.0, 1.6, 1.5], device=self.device).log()
+        dummy_outputs.rot[0, 1, 3, 2] = 1.0
+        dummy_detection3d_outputs = Detection3DHeadOutputs(
+            center_head_outputs=dummy_outputs, transfusion_head_outputs=None
+        )
+
+        decoded_outputs = center_head.decode_outputs(dummy_detection3d_outputs)
+        assert decoded_outputs.detection3d_predictions is not None
+        self.assertEqual(decoded_outputs.detection3d_predictions[0].bboxes_3d.shape, (1, 7))
+        self.assertTrue(
+            torch.allclose(
+                decoded_outputs.detection3d_predictions[0].bboxes_3d[0, 3:6],
+                torch.tensor([4.0, 1.6, 1.5], device=self.device),
+            )
+        )
+
+    def test_centerhead_uses_natural_dimension_order(self) -> None:
+        """
+        Test that feeding the regression targets straight back in as predictions round-trips to
+        the original box dimensions, so encoding and decoding agree on the axis order.
+        """
+        center_head = CenterHead(
+            in_channels=4,
+            class_names=["car", "pdestrian"],
+            shared_channels=4,
+            point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
+            voxel_size=[0.5, 0.5, 4.0],
+            out_size_factor=2,
+            min_radius=1,
+            score_threshold=0.1,
+            post_max_size=10,
+            nms_min_radius=1.0,
+            use_velocity=False,
+        ).to(self.device)
+
+        gt_bboxes_3d = torch.tensor(
+            [[[2.0, 3.0, 0.2, 4.0, 1.6, 1.5, 0.25, 0.0, 0.0, 0.0]]],
+            dtype=torch.float32,
+            device=self.device,
+        )
+        targets = center_head.get_targets(
+            gt_bboxes_3d=gt_bboxes_3d,
+            gt_labels_3d=torch.tensor([[0]], dtype=torch.int32, device=self.device),
+            gt_valid_bboxes=torch.tensor([1], dtype=torch.int32, device=self.device),
+            feature_map_size=(4, 4),
+            device=self.device,
+        )
+
+        self.assertTrue(
+            torch.allclose(
+                targets.reg_targets[0, 0, 3:6],
+                torch.tensor([4.0, 1.6, 1.5], device=self.device).log(),
+            )
+        )
+
+        # Replay the regression targets as if the head had predicted them perfectly
+        flat_index = int(targets.reg_indices[0, 0].item())
+        y_index, x_index = divmod(flat_index, 4)
+        reg_target = targets.reg_targets[0, 0]
+
+        dummy_outputs = self._build_center_head_outputs(
+            batch_size=1, height=4, width=4, use_velocity=False
+        )
+        dummy_outputs.heatmap[0, :, :, :] = -20.0
+        dummy_outputs.heatmap[0, 0, y_index, x_index] = 20.0
+        dummy_outputs.reg[0, :, y_index, x_index] = reg_target[0:2]
+        dummy_outputs.height[0, 0, y_index, x_index] = reg_target[2]
+        dummy_outputs.dim[0, :, y_index, x_index] = reg_target[3:6]
+        dummy_outputs.rot[0, :, y_index, x_index] = reg_target[6:8]
+
+        decoded_outputs = center_head.decode_outputs(
+            Detection3DHeadOutputs(center_head_outputs=dummy_outputs, transfusion_head_outputs=None)
+        )
+        predictions = decoded_outputs.detection3d_predictions
+        assert predictions is not None
+
+        self.assertTrue(
+            torch.allclose(
+                predictions[0].bboxes_3d[0, 3:6],
+                torch.tensor([4.0, 1.6, 1.5], device=self.device),
+            )
+        )
+        # The decoded centre returns to the original metric position of the ground truth box
+        self.assertTrue(
+            torch.allclose(
+                predictions[0].bboxes_3d[0, 0:2],
+                torch.tensor([2.0, 3.0], device=self.device),
+                atol=1e-5,
+            )
+        )
+
+    def test_loss_function(self) -> None:
+        """Test that the loss function computes expected and non-negative losses."""
+        # Modify dummy_outputs to have velocity values for testing
+        # Dummy outputs from CenterHead.forward
+        dummy_outputs = CenterHeadOutputs(
+            heatmap=torch.full((1, 2, 4, 4), -20.0, device=self.device),
+            reg=torch.zeros((1, 2, 4, 4), device=self.device),
+            height=torch.zeros((1, 1, 4, 4), device=self.device),
+            dim=torch.zeros((1, 3, 4, 4), device=self.device),
+            rot=torch.zeros((1, 2, 4, 4), device=self.device),
+            vel=torch.zeros((1, 2, 4, 4), device=self.device),
+        )
+        dummy_outputs.heatmap[0, 0, 3, 2] = 20.0
+        dummy_outputs.height[0, 0, 3, 2] = 0.2
+        dummy_outputs.dim[0, :, 3, 2] = torch.tensor([4.0, 1.6, 1.5], device=self.device).log()
+        dummy_outputs.rot[0, 1, 3, 2] = 1.0
+        assert dummy_outputs.vel is not None
+        dummy_outputs.vel[0, :, 3, 2] = torch.tensor([0.5, -0.1], device=self.device)
+        dummy_detection3d_outputs = Detection3DHeadOutputs(
+            center_head_outputs=dummy_outputs, transfusion_head_outputs=None
+        )
+
+        losses = self.center_head.loss(
+            outputs=dummy_detection3d_outputs,
+            gt_bboxes_3d=self.gt_bboxes_3d,
+            gt_labels_3d=self.gt_labels_3d,
+            gt_valid_bboxes=self.gt_valid_bboxes,
+        )
+        self.assertIn("loss_heatmap", losses)
+        self.assertIn("loss_bbox", losses)
+        self.assertIn("loss", losses)
+
+        self.assertTrue(losses["loss_heatmap"].item() >= 0.0)
+        self.assertTrue(losses["loss_bbox"].item() >= 0.0)
+        # The box loss is logged unweighted, the weight only enters the total
+        self.assertTrue(
+            torch.isclose(
+                losses["loss"],
+                losses["loss_heatmap"] + self.center_head.loss_bbox_weight * losses["loss_bbox"],
+            )
+        )
+
+    def _build_zero_center_head_outputs_for_loss(
+        self, batch_size: int = 1, use_velocity: bool = True
+    ) -> Detection3DHeadOutputs:
+        """
+        Build head outputs whose regression maps are all zero so the L1 loss of a target reduces
+        to its absolute value, keeping the expectations of the NaN tests readable.
+        """
+        outputs = self._build_center_head_outputs(
+            batch_size=batch_size, height=4, width=4, use_velocity=use_velocity
+        )
+        outputs.heatmap[:] = -20.0
+        return Detection3DHeadOutputs(center_head_outputs=outputs, transfusion_head_outputs=None)
+
+    def test_get_targets_produces_non_finite_targets_for_degenerate_boxes(self) -> None:
+        """
+        Test where the non-finite regression targets come from: unknown velocities stay NaN, and
+        padded rows are all zeros so their log-dimensions become -inf.
+        """
+        gt_bboxes_3d = torch.tensor(
+            [
+                [
+                    [2.2, 3.3, 0.2, 4.0, 1.6, 1.5, 0.25, math.nan, math.nan, 0.0],
+                    # Padded slot, zero dimensions turn into -inf once log-encoded
+                    [0.0] * 10,
+                ]
+            ],
+            device=self.device,
+            dtype=torch.float32,
+        )
+        targets = self.center_head.get_targets(
+            gt_bboxes_3d=gt_bboxes_3d,
+            gt_labels_3d=torch.tensor([[0, 0]], dtype=torch.int32, device=self.device),
+            gt_valid_bboxes=torch.tensor([1], dtype=torch.int32, device=self.device),
+            feature_map_size=(4, 4),
+            device=self.device,
+        )
+
+        # The valid box only carries NaN in its two velocity channels
+        self.assertTrue(torch.isnan(targets.reg_targets[0, 0, 8:10]).all())
+        self.assertTrue(torch.isfinite(targets.reg_targets[0, 0, 0:8]).all())
+        # The padded box carries -inf in its three log-dimension channels
+        self.assertTrue(torch.isneginf(targets.reg_targets[0, 1, 3:6]).all())
+        # Only the first box counts as valid, so the padded row must never reach the loss
+        self.assertTrue(targets.valid_masks[0, 0].item())
+        self.assertFalse(targets.valid_masks[0, 1].item())
+
+    def test_loss_bbox_is_logged_before_weighting(self) -> None:
+        """
+        Test that loss_bbox is the plain average absolute error over the valid channels, so its
+        curve compares across runs whatever loss_bbox_weight they train with, and that the weight
+        only enters the total loss.
+        """
+        gt_bboxes_3d = torch.tensor(
+            [[[2.2, 3.3, 0.2, 4.0, 1.6, 1.5, 0.25, 0.5, -0.1, 0.0]]],
+            device=self.device,
+            dtype=torch.float32,
+        )
+
+        losses = self.center_head.loss(
+            outputs=self._build_zero_center_head_outputs_for_loss(),
+            gt_bboxes_3d=gt_bboxes_3d,
+            gt_labels_3d=self.gt_labels_3d,
+            gt_valid_bboxes=self.gt_valid_bboxes,
+        )
+
+        # Predictions are all zero, so every channel contributes |target|
+        expected_abs_targets = [
+            0.2,  # x offset inside the grid cell
+            0.3,  # y offset inside the grid cell
+            0.2,  # height
+            math.log(4.0),
+            math.log(1.6),
+            math.log(1.5),
+            abs(math.sin(0.25)),
+            abs(math.cos(0.25)),
+            0.5,
+            0.1,
+        ]
+        expected_loss_bbox = sum(expected_abs_targets) / len(expected_abs_targets)
+        self.assertAlmostEqual(losses["loss_bbox"].item(), expected_loss_bbox, places=5)
+        self.assertAlmostEqual(
+            losses["loss"].item(),
+            losses["loss_heatmap"].item() + 0.25 * expected_loss_bbox,
+            places=5,
+        )
+
+    def test_loss_backward_keeps_gradients_finite_with_padded_targets(self) -> None:
+        """
+        Test that a batch holding padded targets, whose zero dimensions encode to -inf, still
+        backpropagates finite gradients, since a single NaN in the loss would wipe out every
+        head parameter.
+        """
+        outputs = self._build_zero_center_head_outputs_for_loss()
+        assert outputs.center_head_outputs is not None
+        center_head_outputs = outputs.center_head_outputs
+        predictions = [
+            center_head_outputs.heatmap,
+            center_head_outputs.reg,
+            center_head_outputs.height,
+            center_head_outputs.dim,
+            center_head_outputs.rot,
+            center_head_outputs.vel,
+        ]
+        for prediction in predictions:
+            assert prediction is not None
+            prediction.requires_grad_(True)
+
+        losses = self.center_head.loss(
+            outputs=outputs,
+            gt_bboxes_3d=torch.tensor(
+                [
+                    [
+                        [2.2, 3.3, 0.2, 4.0, 1.6, 1.5, 0.25, 0.5, -0.1, 0.0],
+                        [0.0] * 10,
+                    ]
+                ],
+                device=self.device,
+                dtype=torch.float32,
+            ),
+            gt_labels_3d=torch.tensor([[0, 0]], dtype=torch.int32, device=self.device),
+            gt_valid_bboxes=torch.tensor([1], dtype=torch.int32, device=self.device),
+        )
+        losses["loss"].backward()
+
+        for prediction in predictions:
+            assert prediction is not None and prediction.grad is not None
+            self.assertTrue(torch.isfinite(prediction.grad).all())
+
+    def test_loss_is_non_finite_when_a_valid_box_has_non_finite_geometry_targets(self) -> None:
+        """
+        Test that a NaN or infinite target on any channel of a valid box is corrupt ground truth
+        and is left to surface as a non-finite loss instead of being masked away. Unknown
+        velocities are zeroed by the datamodule before the batch reaches the head.
+        """
+        corrupt_gt_bboxes = {
+            "nan_velocity": [2.2, 3.3, 0.2, 4.0, 1.6, 1.5, 0.25, math.nan, math.nan, -0.2],
+            # log(0) -> -inf on the length channel
+            "zero_length": [2.2, 3.3, 0.2, 0.0, 1.6, 1.5, 0.25, 0.5, -0.1, -0.2],
+            # log(negative) -> NaN on the width channel
+            "negative_width": [2.2, 3.3, 0.2, 4.0, -1.6, 1.5, 0.25, 0.5, -0.1, -0.2],
+            "nan_height": [2.2, 3.3, 0.2, 4.0, 1.6, math.nan, 0.25, 0.5, -0.1, -0.2],
+            "nan_z": [2.2, 3.3, math.nan, 4.0, 1.6, 1.5, 0.25, 0.5, -0.1, -0.2],
+            # sin/cos of a non-finite yaw -> NaN on both heading channels
+            "inf_yaw": [2.2, 3.3, 0.2, 4.0, 1.6, 1.5, math.inf, 0.5, -0.1, -0.2],
+        }
+        for case_name, gt_bbox in corrupt_gt_bboxes.items():
+            with self.subTest(case=case_name):
+                losses = self.center_head.loss(
+                    outputs=self._build_zero_center_head_outputs_for_loss(),
+                    gt_bboxes_3d=torch.tensor([[gt_bbox]], device=self.device, dtype=torch.float32),
+                    gt_labels_3d=self.gt_labels_3d,
+                    gt_valid_bboxes=self.gt_valid_bboxes,
+                )
+                # Both the box loss and the total loss come back as NaN or Inf
+                self.assertFalse(torch.isfinite(losses["loss_bbox"]))
+                self.assertFalse(torch.isfinite(losses["loss"]))
+
+    def test_loss_stays_finite_for_non_finite_geometry_of_invalid_boxes(self) -> None:
+        """
+        Test that only the boxes that contribute to the loss can make it non-finite, so the zero
+        padding that every batch carries, whose dimensions encode to -inf, is not mistaken for
+        corrupt ground truth.
+        """
+        gt_bbox = [2.2, 3.3, 0.2, 4.0, 1.6, 1.5, 0.25, 0.5, -0.1, -0.2]
+        corrupt_gt_bbox = [2.2, 3.3, 0.2, 0.0, -1.6, math.nan, math.inf, 0.5, -0.1, -0.2]
+
+        losses = self.center_head.loss(
+            outputs=self._build_zero_center_head_outputs_for_loss(),
+            # Only the first box is valid, so the corrupt one sits in the padded tail
+            gt_bboxes_3d=torch.tensor(
+                [[gt_bbox, corrupt_gt_bbox]], device=self.device, dtype=torch.float32
+            ),
+            gt_labels_3d=torch.tensor([[0, 0]], dtype=torch.int32, device=self.device),
+            gt_valid_bboxes=torch.tensor([1], dtype=torch.int32, device=self.device),
+        )
+        self.assertTrue(torch.isfinite(losses["loss"]))
+        self.assertTrue(torch.isfinite(losses["loss_bbox"]))
+
+    def test_get_targets_keeps_out_of_map_boxes_at_gatherable_index(self) -> None:
+        """
+        Test that boxes whose centers fall outside the feature map still carry an index the loss
+        can gather with. They are excluded from the loss by their mask, but loss() gathers every
+        index before masking, so an out-of-map index reads out of bounds, which raises on CPU and
+        trips a device-side assert on CUDA.
+        """
+        feature_height, feature_width = 4, 4
+        gt_bboxes_3d = torch.tensor(
+            [
+                [
+                    [2.2, 3.3, 0.2, 4.0, 1.6, 1.5, 0.25, 0.5, -0.1, -0.2],
+                    # Past the far end of the range, its index runs beyond height * width
+                    [90.0, 90.0, 0.2, 4.0, 1.6, 1.5, 0.25, 0.5, -0.1, -0.2],
+                    # Behind the origin of the range, its index goes negative
+                    [-50.0, -50.0, 0.2, 4.0, 1.6, 1.5, 0.25, 0.5, -0.1, -0.2],
+                    # A NaN center floors to a garbage integer
+                    [math.nan, 3.3, 0.2, 4.0, 1.6, 1.5, 0.25, 0.5, -0.1, -0.2],
+                ]
+            ],
+            device=self.device,
+            dtype=torch.float32,
+        )
+        gt_labels_3d = torch.tensor([[0, 0, 0, 0]], dtype=torch.int32, device=self.device)
+        # Every box is within the valid count, so only the in-bounds check can reject them
+        gt_valid_bboxes = torch.tensor([4], dtype=torch.int32, device=self.device)
+
+        targets = self.center_head.get_targets(
+            gt_bboxes_3d=gt_bboxes_3d.clone(),
+            gt_labels_3d=gt_labels_3d,
+            gt_valid_bboxes=gt_valid_bboxes,
+            feature_map_size=(feature_height, feature_width),
+            device=self.device,
+        )
+
+        self.assertTrue(targets.valid_masks[0, 0].item())
+        self.assertFalse(targets.valid_masks[0, 1:].any().item())
+        self.assertTrue((targets.reg_indices >= 0).all().item())
+        self.assertTrue((targets.reg_indices < feature_height * feature_width).all().item())
+
+        # The gather inside loss() is what the indices have to survive
+        losses = self.center_head.loss(
+            outputs=self._build_zero_center_head_outputs_for_loss(),
+            gt_bboxes_3d=gt_bboxes_3d.clone(),
+            gt_labels_3d=gt_labels_3d,
+            gt_valid_bboxes=gt_valid_bboxes,
+        )
+        self.assertTrue(torch.isfinite(losses["loss"]))
+
+    def test_loss_without_velocity_treats_every_channel_as_geometry(self) -> None:
+        """
+        Test that a head built without velocity treats all of its channels as geometry: the
+        velocity columns of the ground truth are never encoded, so their NaNs are harmless, while
+        a corrupt geometry channel still makes the loss non-finite.
+        """
+        center_head = CenterHead(
+            in_channels=384,
+            class_names=["car", "pedestrian"],
+            shared_channels=64,
+            point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
+            voxel_size=[0.5, 0.5, 4.0],
+            out_size_factor=2,
+            min_radius=1,
+            score_threshold=0.1,
+            post_max_size=10,
+            nms_min_radius=1.0,
+            use_velocity=False,
+        ).to(self.device)
+
+        losses = center_head.loss(
+            outputs=self._build_zero_center_head_outputs_for_loss(use_velocity=False),
+            gt_bboxes_3d=torch.tensor(
+                [[[2.2, 3.3, 0.2, 4.0, 1.6, 1.5, 0.25, math.nan, math.nan, 0.0]]],
+                device=self.device,
+                dtype=torch.float32,
+            ),
+            gt_labels_3d=self.gt_labels_3d,
+            gt_valid_bboxes=self.gt_valid_bboxes,
+        )
+        self.assertTrue(torch.isfinite(losses["loss"]))
+
+        # A zero height encodes to -inf and, with no velocity channel to excuse it, poisons the loss
+        corrupt_losses = center_head.loss(
+            outputs=self._build_zero_center_head_outputs_for_loss(use_velocity=False),
+            gt_bboxes_3d=torch.tensor(
+                [[[2.2, 3.3, 0.2, 4.0, 1.6, 0.0, 0.25, 0.0, 0.0, 0.0]]],
+                device=self.device,
+                dtype=torch.float32,
+            ),
+            gt_labels_3d=self.gt_labels_3d,
+            gt_valid_bboxes=self.gt_valid_bboxes,
+        )
+        self.assertFalse(torch.isfinite(corrupt_losses["loss_bbox"]))
+        self.assertFalse(torch.isfinite(corrupt_losses["loss"]))
+
+    def _build_suppressed_center_head_outputs(
+        self, batch_size: int, height: int, width: int, use_velocity: bool = True
+    ) -> CenterHeadOutputs:
+        """
+        Build CenterHeadOutputs whose heatmap logits sit far below the score threshold everywhere,
+        so decode_outputs only keeps the cells a test raises explicitly.
+        """
+        outputs = self._build_center_head_outputs(
+            batch_size=batch_size, height=height, width=width, use_velocity=use_velocity
+        )
+        outputs.heatmap.fill_(-20.0)
+        return outputs
+
+    @staticmethod
+    def _logit(probability: float) -> float:
+        """Return the heatmap logit whose sigmoid is ``probability``."""
+        return math.log(probability / (1.0 - probability))
+
+    def _decode(
+        self, center_head: CenterHead, outputs: CenterHeadOutputs
+    ) -> list[Detection3DSamplePredictions]:
+        """Run decode_outputs on the head and return the per-sample predictions."""
+        predictions = center_head.decode_outputs(
+            Detection3DHeadOutputs(center_head_outputs=outputs, transfusion_head_outputs=None)
+        ).detection3d_predictions
+        assert predictions is not None
+        return predictions
+
+    def test_decode_outputs_converts_grid_cells_to_physical_boxes(self) -> None:
+        """
+        Test that decode_outputs turns the per-cell regression maps into physical boxes, applying
+        the grid offset, the exp on dimensions and the atan2 on rotations.
+        """
+        # voxel_size 0.5 with out_size_factor 2 and a zero point_cloud_range origin means the
+        # metric x equals (grid x + predicted offset), which keeps the expectations readable.
+        outputs = self._build_suppressed_center_head_outputs(batch_size=1, height=4, width=4)
+        # Two class-0 peaks far enough apart that neither the heatmap pooling nor the circle NMS
+        # suppresses one of them. (y=3, x=2) scores higher so it is decoded first.
+        outputs.heatmap[0, 0, 3, 2] = 4.0
+        outputs.heatmap[0, 0, 1, 1] = 2.0
+        outputs.reg[0, :, 3, 2] = torch.tensor([0.25, 0.5], device=self.device)
+        outputs.reg[0, :, 1, 1] = torch.tensor([-0.5, 0.25], device=self.device)
+        outputs.height[0, 0, 3, 2] = 0.2
+        outputs.height[0, 0, 1, 1] = -1.0
+        outputs.dim[0, :, 3, 2] = torch.tensor([4.0, 1.6, 1.5], device=self.device).log()
+        outputs.dim[0, :, 1, 1] = torch.tensor([2.0, 3.0, 0.5], device=self.device).log()
+        outputs.rot[0, :, 3, 2] = torch.tensor([math.sin(0.25), math.cos(0.25)], device=self.device)
+        outputs.rot[0, :, 1, 1] = torch.tensor([math.sin(-1.2), math.cos(-1.2)], device=self.device)
+        assert outputs.vel is not None
+        outputs.vel[0, :, 3, 2] = torch.tensor([0.5, -0.1], device=self.device)
+        outputs.vel[0, :, 1, 1] = torch.tensor([-2.0, 3.0], device=self.device)
+
+        predictions = self._decode(self.center_head, outputs)
+
+        self.assertEqual(len(predictions), 1)
+        bboxes_predictions = predictions[0].bboxes_3d
+        # (num_boxes, 9) because the head is built with use_velocity=True
+        self.assertEqual(bboxes_predictions.shape, (2, 9))
+        expected_bboxes_predictions = torch.tensor(
+            [
+                [2.25, 3.5, 0.2, 4.0, 1.6, 1.5, 0.25, 0.5, -0.1],
+                [0.5, 1.25, -1.0, 2.0, 3.0, 0.5, -1.2, -2.0, 3.0],
+            ],
+            device=self.device,
+        )
+        self.assertTrue(torch.allclose(bboxes_predictions, expected_bboxes_predictions, atol=1e-5))
+        self.assertTrue(
+            torch.equal(predictions[0].labels_3d, torch.tensor([0, 0], device=self.device))
+        )
+
+    def test_decode_outputs_gathers_per_sample_feature_maps(self) -> None:
+        """
+        Test that decode_outputs gathers along the feature map axis of each sample rather than
+        indexing the batch axis, so samples never read each other's predictions.
+        """
+        outputs = self._build_suppressed_center_head_outputs(batch_size=2, height=4, width=4)
+        # Both samples peak at the same cell but hold different regression values there.
+        outputs.heatmap[0, 0, 3, 2] = 4.0
+        outputs.height[0, 0, 3, 2] = 1.0
+        outputs.dim[0, :, 3, 2] = torch.tensor([4.0, 1.6, 1.5], device=self.device).log()
+        outputs.heatmap[1, 0, 3, 2] = 4.0
+        outputs.height[1, 0, 3, 2] = -3.0
+        outputs.dim[1, :, 3, 2] = torch.tensor([2.0, 8.0, 0.5], device=self.device).log()
+
+        predictions = self._decode(self.center_head, outputs)
+
+        self.assertEqual(len(predictions), 2)
+        # Both samples decode the same grid cell, so only the regressed values differ.
+        expected_bboxes_predictions = [
+            torch.tensor([[2.0, 3.0, 1.0, 4.0, 1.6, 1.5, 0.0, 0.0, 0.0]], device=self.device),
+            torch.tensor([[2.0, 3.0, -3.0, 2.0, 8.0, 0.5, 0.0, 0.0, 0.0]], device=self.device),
+        ]
+        for sample_predictions, expected in zip(predictions, expected_bboxes_predictions):
+            self.assertEqual(sample_predictions.bboxes_3d.shape, (1, 9))
+            self.assertTrue(torch.allclose(sample_predictions.bboxes_3d, expected, atol=1e-5))
+
+    def test_decode_outputs_drops_velocity_when_disabled(self) -> None:
+        """
+        Test that decode_outputs returns 7 box parameters when the head is configured without
+        velocity.
+        """
+        center_head = self._build_center_head(class_names=["car", "bus"], use_velocity=False)
+
+        outputs = self._build_suppressed_center_head_outputs(
+            batch_size=1, height=4, width=4, use_velocity=False
+        )
+        outputs.heatmap[0, 0, 3, 2] = 4.0
+        outputs.height[0, 0, 3, 2] = 0.2
+        outputs.dim[0, :, 3, 2] = torch.tensor([4.0, 1.6, 1.5], device=self.device).log()
+
+        predictions = self._decode(center_head, outputs)
+
+        bboxes_predictions = predictions[0].bboxes_3d
+        self.assertEqual(bboxes_predictions.shape, (1, 7))
+        expected_bboxes_predictions = torch.tensor(
+            [[2.0, 3.0, 0.2, 4.0, 1.6, 1.5, 0.0]], device=self.device
+        )
+        self.assertTrue(torch.allclose(bboxes_predictions, expected_bboxes_predictions, atol=1e-5))
+
+    def _build_center_head(
+        self, class_names: list[str], use_velocity: bool, post_max_size: int = 10
+    ) -> CenterHead:
+        """Build a head on the same 4x4 grid as ``self.center_head`` with a different cap."""
+        return CenterHead(
+            in_channels=384,
+            class_names=class_names,
+            shared_channels=64,
+            point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
+            voxel_size=[0.5, 0.5, 4.0],
+            out_size_factor=2,
+            min_radius=1,
+            score_threshold=0.1,
+            post_max_size=post_max_size,
+            nms_min_radius=1.0,
+            use_velocity=use_velocity,
+        ).to(self.device)
+
+    def _build_ranked_center_head_outputs(self) -> CenterHeadOutputs:
+        """
+        Build (batch_size=2, num_classes=2, 4x4) outputs whose surviving peaks sit on distinct
+        grid columns, so the decoded x coordinate tells which peak ended up where. With zero
+        regression offsets the metric x equals the grid x.
+
+        Sample 0 raises class 0 at x=0 (0.9) and x=2 (0.2) and class 1 at x=3 (0.8). Sample 1
+        raises a single class-1 peak at x=3 (0.6). Every pair of peaks is at least two cells
+        apart so neither the heatmap pooling nor the 1 m circle NMS suppresses any of them.
+        """
+        outputs = self._build_suppressed_center_head_outputs(batch_size=2, height=4, width=4)
+        outputs.heatmap[0, 0, 0, 0] = self._logit(0.9)
+        outputs.heatmap[0, 0, 0, 2] = self._logit(0.2)
+        outputs.heatmap[0, 1, 2, 3] = self._logit(0.8)
+        outputs.heatmap[1, 1, 3, 3] = self._logit(0.6)
+        return outputs
+
+    def test_decode_outputs_casts_half_precision_maps_to_float32(self) -> None:
+        """
+        Test that the float16 maps mixed precision evaluation hands over decode into float32
+        predictions, which the prediction dataclasses require.
+        """
+        full = self._build_ranked_center_head_outputs()
+        half_outputs = CenterHeadOutputs(
+            heatmap=full.heatmap.half(),
+            reg=full.reg.half(),
+            height=full.height.half(),
+            dim=full.dim.half(),
+            rot=full.rot.half(),
+            vel=full.vel.half() if full.vel is not None else None,
+        )
+
+        predictions = self._decode(self.center_head, half_outputs)
+
+        self.assertEqual(len(predictions), 2)
+        for sample in predictions:
+            self.assertEqual(sample.bboxes_3d.dtype, torch.float32)
+            self.assertEqual(sample.scores_3d.dtype, torch.float32)
+        self.assertEqual(predictions[0].bboxes_3d.shape[0], 3)
+
+    def test_decode_outputs_keeps_survivors_ranked_across_classes(self) -> None:
+        """
+        Test that decode_outputs drops the cells below the score threshold and ranks the
+        survivors by score across classes, carrying the matching class ids and boxes along.
+        """
+        predictions = self._decode(self.center_head, self._build_ranked_center_head_outputs())
+
+        self.assertEqual(len(predictions), 2)
+
+        # Sample 0 keeps x=0, x=3 and x=2, ranked 0.9 (class 0), 0.8 (class 1), 0.2 (class 0)
+        self.assertTrue(
+            torch.allclose(
+                predictions[0].scores_3d,
+                torch.tensor([0.9, 0.8, 0.2], device=self.device),
+            )
+        )
+        self.assertTrue(
+            torch.equal(predictions[0].labels_3d, torch.tensor([0, 1, 0], device=self.device))
+        )
+        self.assertTrue(
+            torch.allclose(
+                predictions[0].bboxes_3d[:, 0],
+                torch.tensor([0.0, 3.0, 2.0], device=self.device),
+            )
+        )
+
+        # Sample 1 keeps a single box, so its tensors are shorter than sample 0's
+        self.assertTrue(
+            torch.allclose(predictions[1].scores_3d, torch.tensor([0.6], device=self.device))
+        )
+        self.assertTrue(
+            torch.equal(predictions[1].labels_3d, torch.tensor([1], device=self.device))
+        )
+        self.assertTrue(
+            torch.allclose(predictions[1].bboxes_3d[:, 0], torch.tensor([3.0], device=self.device))
+        )
+
+    def test_decode_outputs_caps_each_sample_at_post_max_size(self) -> None:
+        """
+        Test that decode_outputs truncates each sample to post_max_size, keeping the highest
+        scoring survivors, and that the cap counts across classes rather than per class.
+        """
+        center_head = self._build_center_head(
+            class_names=["car", "pedestrian"], use_velocity=True, post_max_size=2
+        )
+
+        predictions = self._decode(center_head, self._build_ranked_center_head_outputs())
+
+        # Sample 0 has three survivors but only the top two fit under the cap
+        self.assertEqual(predictions[0].scores_3d.shape, (2,))
+        self.assertTrue(
+            torch.allclose(predictions[0].scores_3d, torch.tensor([0.9, 0.8], device=self.device))
+        )
+        # Sample 1 has fewer survivors than the cap, so the padded slots are dropped
+        self.assertEqual(predictions[1].scores_3d.shape, (1,))
+        self.assertTrue(
+            torch.allclose(predictions[1].scores_3d, torch.tensor([0.6], device=self.device))
+        )
+
+    def test_decode_outputs_returns_empty_entry_per_sample_when_all_suppressed(self) -> None:
+        """
+        Test that decode_outputs still returns one entry per sample when every cell is below the
+        score threshold, so the predictions stay aligned with the batch.
+        """
+        outputs = self._build_suppressed_center_head_outputs(batch_size=2, height=4, width=4)
+
+        predictions = self._decode(self.center_head, outputs)
+
+        self.assertEqual(len(predictions), 2)
+        for sample_predictions in predictions:
+            self.assertEqual(sample_predictions.scores_3d.shape, (0,))
+            self.assertEqual(sample_predictions.labels_3d.shape, (0,))
+            self.assertEqual(sample_predictions.bboxes_3d.shape, (0, 9))
+            # The suppressed slots are sunk to -inf internally and must not leak out
+            self.assertFalse(bool(torch.isinf(sample_predictions.scores_3d).any()))
+
+
+if __name__ == "__main__":
+    unittest.main()

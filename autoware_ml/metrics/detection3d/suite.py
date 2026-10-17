@@ -204,7 +204,7 @@ class Detection3DMetricSuite(MetricSuite[DetectionState]):
     def required_keys(self) -> tuple[str, ...]:
         """Fold in the collision provider's frame-context keys.
 
-        The collision TTC needs the ego pose and scene token exactly like the
+        The collision TTC needs the ego pose and lanelet map path exactly like the
         region filters do. Declaring them here makes a missing key fail loud at
         the first batch instead of silently reporting zero coverage.
 
@@ -213,7 +213,7 @@ class Detection3DMetricSuite(MetricSuite[DetectionState]):
         """
         keys = super().required_keys()
         if self.collision is not None:
-            keys = tuple(dict.fromkeys(keys + ("ego2global", "scene_token")))
+            keys = tuple(dict.fromkeys(keys + ("ego2global", "lanelet_map_path")))
         if self.min_num_points > 0:
             keys = tuple(dict.fromkeys(keys + ("gt_num_points",)))
         return keys
@@ -318,12 +318,12 @@ class Detection3DMetricSuite(MetricSuite[DetectionState]):
             self.collision = None
 
     def _ttc_frame_covered(self, eval_out: dict[str, Any], frame_index: int) -> bool:
-        """Whether this frame's scene has a lanelet map for TTC.
+        """Whether this frame carries a lanelet map for TTC.
 
-        The ego pose and scene token themselves are guaranteed by
+        The ego pose and map path themselves are guaranteed by
         :meth:`required_keys` at the first batch.
         """
-        return self.collision.available(eval_out["scene_token"][frame_index])
+        return self.collision.available(eval_out["lanelet_map_path"][frame_index])
 
     def _frame_ttc(
         self,
@@ -348,7 +348,7 @@ class Detection3DMetricSuite(MetricSuite[DetectionState]):
             boxes.detach().cpu().numpy().astype(np.float64),
             labels.detach().cpu().numpy().astype(np.int64),
             eval_out["ego2global"][frame_index],
-            eval_out["scene_token"][frame_index],
+            eval_out["lanelet_map_path"][frame_index],
             scores=None if scores is None else scores.cpu().numpy().astype(np.float64),
             score_floor=self._ttc_score_floor(),
         )

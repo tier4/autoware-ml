@@ -1,0 +1,61 @@
+# @package _global_
+defaults:
+  - ../base
+  # The metric suites, their ranges and the datamodule belong to the evaluated database, so the
+  # database base composes them. Loaded before _self_ so the overrides below win over the defaults.
+  - /metrics/t4dataset/segmentation3d/default_segmentation3d_metrics
+  - /metrics/t4dataset/segmentation3d@metrics: default_segmentation3d_metric_suites
+  - /metrics/t4dataset/segmentation3d@metric_ranges: default_segmentation3d_120m_metric_ranges
+  - /datamodule@datamodule: t4dataset/default_segmentation3d_datamodule
+  - _self_
+
+# Channel names of the lidars served one by one, each as its own sample in its own frame.
+lidar_sources: ???
+
+datasets:
+  train:
+    lidar_sources: ${lidar_sources}
+    transforms:
+      _target_: autoware_ml.transforms.base.TransformsCompose
+      _convert_: all
+
+      pipeline:
+        - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
+          _convert_: all
+
+          use_dim: [0, 1, 2, 3] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]
+          bev_remove_radius: 0.0
+
+        - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalBEVRandomFlip
+          _convert_: all
+
+          horizontal_flip_ratio: 0.5
+          vertical_flip_ratio: 0.5
+
+        - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
+          _convert_: all
+
+          yaw_rot_range: [-3.14159265, 3.14159265]
+          scale_ratio_range: [0.95, 1.05]
+          translation_std: [0.1, 0.1, 0.1]
+
+  test:
+    lidar_sources: ${lidar_sources}
+    transforms:
+      _target_: autoware_ml.transforms.base.TransformsCompose
+      _convert_: all
+
+      pipeline:
+        - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
+          _convert_: all
+
+          use_dim: [0, 1, 2, 3] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]
+          bev_remove_radius: 0.0
+
+# The datamodule binds the datasets above to the splits of its sources. Validation and predict
+# read the test dataset.
+datamodule:
+  train_dataloader:
+    shuffle: true
+  predict_dataloader:
+    batch_size: 1

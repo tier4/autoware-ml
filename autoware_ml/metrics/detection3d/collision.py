@@ -39,9 +39,8 @@ skip the rest, which is why the provider takes the scores and that floor.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from math import inf, nan
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 
@@ -51,7 +50,7 @@ from autoware_ml.metrics.filters import (
     ego2global_pose,
     ego_collision_agent,
 )
-from autoware_ml.metrics.geometry.lanelet import LaneletMapProvider
+from autoware_ml.metrics.geometry.lanelet import LaneletMap
 from autoware_ml.metrics.geometry.reachability import (
     Agent,
     EgoReachability,
@@ -66,7 +65,6 @@ class CollisionTTC:
 
     Args:
         class_names: Ordered final class names (label index to name).
-        map_provider: Resolves a ``scene_token`` to its lanelet map.
         vehicle: Ego body dimensions, a platform property with no default (ego has no
             detection box), measured from the rear axle the ego pose refers to.
             Object bodies come from their box.
@@ -84,7 +82,6 @@ class CollisionTTC:
     def __init__(
         self,
         class_names: tuple[str, ...] | list[str],
-        map_provider: LaneletMapProvider,
         *,
         vehicle: VehicleGeometry,
         kinds: Mapping[str, AgentKind | str],
@@ -95,7 +92,6 @@ class CollisionTTC:
     ) -> None:
         """Validate the class-to-kind mapping and the living run speeds."""
         self.class_names = tuple(class_names)
-        self.map_provider = map_provider
         self.region = tuple(region)
         self.params = params or ReachabilityParams()
         self.kinds = {name: AgentKind(kind) for name, kind in kinds.items()}
@@ -113,23 +109,24 @@ class CollisionTTC:
         if missing_living:
             raise ValueError(f"no run speed configured for living classes {missing_living}.")
 
-    def available(self, scene_token: str) -> bool:
-        """False for scenes with no lanelet map, excluded from the criticality metrics.
+    def available(self, lanelet_map_path: str | None) -> bool:
+        """False for frames with no lanelet map, excluded from the criticality metrics.
 
         Args:
-            scene_token: Scene identifier the map provider resolves.
+            lanelet_map_path: Map path of the frame, resolved by the dataset that served it,
+                ``None`` when the scene has no map.
 
         Returns:
-            Whether TTC can be evaluated for the scene.
+            Whether TTC can be evaluated for the frame.
         """
-        return self.map_provider.available(scene_token)
+        return lanelet_map_path is not None
 
     def per_box_ttc(
         self,
         boxes: np.ndarray,
         labels: np.ndarray,
         ego2global: Any,
-        scene_token: str,
+        lanelet_map_path: str,
         scores: np.ndarray | None = None,
         score_floor: float = 0.0,
     ) -> np.ndarray:
@@ -143,7 +140,7 @@ class CollisionTTC:
             boxes: Box rows ``[cx, cy, cz, dx, dy, dz, yaw, ...]`` in base_link.
             labels: Integer class labels aligned with ``boxes``.
             ego2global: 4x4 ego-to-global transform of the frame.
-            scene_token: Scene identifier resolving to the lanelet map.
+            lanelet_map_path: Path of the frame's lanelet map.
             scores: Detection scores aligned with ``boxes``, for the floor. Ground
                 truth has none, so it is always propagated.
             score_floor: Lowest score worth propagating, ``0.0`` propagates every box.
@@ -157,7 +154,7 @@ class CollisionTTC:
         if boxes.shape[0] == 0:
             return ttc
 
-        lanelet_map = self.map_provider.get(scene_token)
+        lanelet_map = LaneletMap.from_osm(lanelet_map_path)
         drivable = lanelet_map.region_union(self.region)
         ego_x, ego_y, ego_heading = ego2global_pose(ego2global)
         ego = ego_collision_agent(

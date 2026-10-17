@@ -1,0 +1,25 @@
+# @package _global_
+# Optuna sweep over the optimizer, the batch size and the schedule length of the nuScenes run.
+defaults:
+  - resnet18_b8_30e_nuscenes
+  - override /hydra/sweeper: optuna
+  - _self_
+
+experiment_name: resnet18_b8_20e_nuscenes_optuna
+
+hydra:
+  sweeper:
+    study_name: calibration_status_resnet18_nuscenes
+    direction: minimize
+    n_trials: 50
+    sampler:
+      _target_: optuna.samplers.TPESampler
+      seed: 42
+    params:
+      optimizer.lr: interval(1e-5, 1e-2)
+      optimizer.weight_decay: interval(1e-4, 1e-1)
+      batch_size: choice(4, 8, 16)
+      trainer.max_epochs: range(10, 30, step=5)
+
+trainer:
+  max_epochs: 20

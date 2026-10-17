@@ -6,47 +6,62 @@ icon: lucide/plus-circle
 
 This guide walks you through adding a new model to Autoware-ML. You'll implement a model class, pick the data it trains on, and wire everything together with a config.
 
-## The BaseModel Interface
+## The ModuleBaseModel Interface
 
-New models should inherit from `BaseModel`. The minimal contract is three abstract methods:
+New models inherit from `ModuleBaseModel`, the Lightning module every Autoware-ML model shares.
+Two methods are required for training, and one more for each stage the model takes part in:
 
 ```python
-from autoware_ml.models.base import BaseModel
+from autoware_ml.models.module_base_model import ModuleBaseModel
 
-class MyModel(BaseModel):
-    def forward(self, **kwargs: Any) -> Any:
-        ...
-
-    def forward_inputs(self, batch_inputs: ModelBatchInputs) -> dict[str, Any]:
+class MyModel(ModuleBaseModel):
+    def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
         ...
 
     def compute_metrics(
-        self, batch_inputs: ModelBatchInputs, outputs: Any
-    ) -> dict[str, torch.Tensor]:
+        self, multi_task_batch_inputs: ModelBatchInputs, multi_task_outputs: ModelOutputs
+    ) -> Mapping[str, torch.Tensor]:
+        ...
+
+    # Validation and test metrics
+    def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> dict[str, Any]:
+        ...
+
+    # Predict step
+    def decode_outputs(
+        self, multi_task_batch_inputs: ModelBatchInputs, outputs: ModelOutputs
+    ) -> ModelPredictions:
+        ...
+
+    # Deployment
+    def build_export_spec(self, multi_task_batch_inputs: ModelBatchInputs) -> ExportSpec:
         ...
 ```
 
-The base class handles training/validation/test/predict steps, optimizer
-configuration, metric logging, prediction output conversion, runtime
-preprocessing, and deployment export integration. The `forward()` method
-takes the tensors the network reads, and `forward_inputs()` picks them from
-the typed model inputs.
+The base class handles the training, validation, test and predict steps, the optimizer and
+scheduler configuration, metric logging, runtime preprocessing and the deployment export.
+`forward()` takes the typed model inputs, a `ModelBatchInputs` the `DataPreprocessor` built from
+the collated batch, and returns a `ModelOutputs` with the head outputs of every task the model
+predicts. `forward()`, `compute_metrics()` and `decode_outputs()` are abstract, so a model
+that lacks one fails at construction. `build_export_spec()` raises `NotImplementedError` in the
+base class, so a model that never deploys can leave it out. `build_eval_output()` returns an
+empty dict by default, which is right for a model without metrics.
 
-!!! note "Extending `BaseModel`"
-    Specialized models should still use `BaseModel`. When the default
-    shared step path is not enough, prefer overriding hooks such as
-    `set_data_preprocessing()`, `predict_outputs()`, `get_log_batch_size()`,
-    or `build_export_spec()` instead of introducing a standalone
-    `LightningModule`. Output decoding (for example, voxel-to-point scatter
-    for segmentation) belongs inside the model, typically in `forward()`,
-    `compute_metrics()`, and `predict_outputs()` - not in a separate
-    framework pipeline.
+!!! note "Extending `ModuleBaseModel`"
+    Specialized models should still use `ModuleBaseModel`. When the shared step path is not
+    enough, override hooks such as `decode_outputs()`, `build_eval_output()`,
+    `get_log_batch_size()`, `build_optimizer_groups()` or `build_export_spec()` /
+    `build_export_specs()` instead of introducing a standalone `LightningModule`. Output
+    decoding (for example, the voxel-to-point scatter of segmentation) belongs inside the
+    model, in `forward()`, `compute_metrics()`, `build_eval_output()` and `decode_outputs()`,
+    not in a separate framework pipeline.
 
 ## Step 1: Implement the Model
 
 Create a new file in `autoware_ml/models/`:
 
 ```python title="autoware_ml/models/my_task/my_model.py"
+from collections.abc import Mapping
 from typing import Any
 
 import torch
@@ -54,65 +69,86 @@ import torch.nn as nn
 
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
+from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentation3DHeadOutputs
-from autoware_ml.models.base import BaseModel
+from autoware_ml.dataclasses.models.segmentation3d.predictions import Segmentation3DPredictions
+from autoware_ml.models.module_base_model import ModuleBaseModel
 
 
-class MyModel(BaseModel):
+class MyModel(ModuleBaseModel):
     def __init__(
         self,
         encoder: nn.Module,
         decoder: nn.Module,
         num_classes: int,
         ignore_index: int,
-        **kwargs: Any,  # Pass optimizer, scheduler and metrics to BaseModel
+        log_dict_configs: LogDictConfigs,
+        **kwargs: Any,  # data_preprocessor, optimizer, scheduler, metrics
     ):
-        super().__init__(**kwargs)
+        super().__init__(log_dict_configs=log_dict_configs, **kwargs)
         self.encoder = encoder
         self.decoder = decoder
         self.num_classes = num_classes
         self.loss_fn = nn.CrossEntropyLoss(ignore_index=ignore_index)
 
-    def forward(self, feat: torch.Tensor) -> ModelOutputs:
-        features = self.encoder(feat)
-        logits = self.decoder(features)
+    def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
+        points = multi_task_batch_inputs.multi_task_gt_batch.point_cloud_gt_batch.points
+        logits = self.decoder(self.encoder(points))
         return ModelOutputs(segmentation3d_head_outputs=Segmentation3DHeadOutputs(logits=logits))
 
-    def forward_inputs(self, batch_inputs: ModelBatchInputs) -> dict[str, Any]:
-        return {"feat": batch_inputs.multi_task_gt_batch.point_cloud_gt_batch.points}
-
     def compute_metrics(
-        self,
-        batch_inputs: ModelBatchInputs,
-        outputs: ModelOutputs,
-    ) -> dict[str, torch.Tensor]:
-        labels = batch_inputs.multi_task_gt_batch.segmentation3d_gt_batch.gt_semantic_masks
-        loss = self.loss_fn(outputs.segmentation3d().logits, labels)
+        self, multi_task_batch_inputs: ModelBatchInputs, multi_task_outputs: ModelOutputs
+    ) -> Mapping[str, torch.Tensor]:
+        gt_batch = multi_task_batch_inputs.multi_task_gt_batch
+        labels = gt_batch.segmentation3d_gt_batch.gt_semantic_masks
+        loss = self.loss_fn(multi_task_outputs.segmentation3d().logits, labels)
         return {"loss": loss}
+
+    def decode_outputs(
+        self, multi_task_batch_inputs: ModelBatchInputs, outputs: ModelOutputs
+    ) -> ModelPredictions:
+        probs = torch.softmax(outputs.segmentation3d().logits, dim=1)
+        return ModelPredictions(
+            segmentation3d_predictions=Segmentation3DPredictions(
+                pred_labels=probs.argmax(dim=1), pred_probs=probs
+            )
+        )
 ```
 
 ### Key Points
 
-1. **`forward_inputs()` picks the forward arguments** - It reads the typed model inputs, for
-   example the points of `multi_task_gt_batch.point_cloud_gt_batch` or the `voxels_data` a
-   preprocessing layer computed, and returns them keyed by the `forward()` parameter names.
+1. **`forward()` reads the typed model inputs** - A `ModelBatchInputs` holds the collated
+   `ModelGTBatch` as `multi_task_gt_batch` and one field per kind of feature the preprocessor
+   modules computed (`voxels_data`, `image_data`, `range_view_data`). Read what the network
+   needs from it, for example the points of `multi_task_gt_batch.point_cloud_gt_batch` or the
+   voxels of `voxels_data`.
 
 2. **`compute_metrics()` receives the model inputs and outputs** - The first argument is the
-   `ModelBatchInputs` of the batch, and the second is `outputs` from `forward()`. Read the
-   targets from its ground truth batches, for example the point labels of
+   `ModelBatchInputs` of the batch, and the second is the `ModelOutputs` from `forward()`. Read
+   the targets from its ground truth batches, for example the point labels of
    `segmentation3d_gt_batch`.
 
-3. **Return `'loss'`** - The metrics dict must include a `'loss'` key for backpropagation.
+3. **Return `'loss'`** - The metrics mapping must include a `'loss'` key for backpropagation.
+   Every entry is logged under the stage prefix, `train/loss`, `val/loss` and so on.
 
 4. **Typed outputs** - `forward()` returns a `ModelOutputs` with the head outputs of every task
-   the model predicts, and `predict_outputs()` returns a `ModelPredictions`. A task the model does
-   not predict stays unset.
+   the model predicts, and `decode_outputs()` returns a `ModelPredictions` for the predict
+   step. A task the model does not predict stays unset.
 
-5. **Optimizer and scheduler** - Passed as callables to `BaseModel.__init__()`. Need to be marked as `_partial_: true` in YAML configs.
+5. **Metrics read `build_eval_output()`** - At validation and test the mixin feeds the flat
+   dict it returns into every attached metric suite, see [Metrics](../framework/metrics.md).
 
-6. **Use hooks when needed** - If your model needs custom batch unpacking,
+6. **Optimizer and scheduler** - Passed as callables to `ModuleBaseModel.__init__()`, marked
+   `_partial_: true` in the YAML config. Override `build_optimizer_groups()` to expose parameter
+   groups for `optimizer_group_overrides`.
+
+7. **The data preprocessor comes from the builders** - `build_model()` instantiates the model
+   with the `data_preprocessor` of the config as a keyword argument, so forward `**kwargs` to
+   the base class.
+
+8. **Use hooks when needed** - If your model needs custom batch size inference,
    prediction formatting, or an explicit deployment wrapper, override the
-   appropriate `BaseModel` hook instead of bypassing the shared training and
+   appropriate `ModuleBaseModel` hook instead of bypassing the shared training and
    deployment flow.
 
 ## Step 2: Choose the Data
@@ -133,19 +169,20 @@ record and returns them as a `ModelGTSample`.
 ### Data Flow
 
 ```text
-get_data_sample() -> transforms -> collate_fn() -> BaseModel.on_after_batch_transfer() -> forward() -> compute_metrics()/predict_outputs()
+get_data_sample() -> transforms -> collate_fn() -> ModuleBaseModel.on_after_batch_transfer() -> forward() -> compute_metrics() / build_eval_output() / decode_outputs()
 ```
 
 1. `get_data_sample()`: return the sensor file paths, calibration and annotations of a record
    as a `ModelGTSample`
 2. `transforms`: load files and apply per sample augmentations (in the dataset)
 3. `collate_fn()`: stack the samples into a typed `ModelGTBatch`
-4. `BaseModel.on_after_batch_transfer()`: run the model's runtime preprocessing, which turns
-   the batch into the typed `ModelBatchInputs`
+4. `ModuleBaseModel.on_after_batch_transfer()`: run the `DataPreprocessor` of the model, which
+   turns the batch into the typed `ModelBatchInputs`
 5. `forward()`: model inference/training forward pass
-6. `compute_metrics()` / `predict_outputs()`: model owns any output shaping
-   (e.g., voxel-to-point scatter for segmentation) directly inside these
-   methods
+6. `compute_metrics()` returns the losses, `build_eval_output()` feeds the metric suites at
+   validation and test, and `decode_outputs()` formats the predictions of the predict step. The
+   model owns any output shaping (e.g., voxel-to-point scatter for segmentation) directly
+   inside these methods
 
 ### Supporting a New Database or Annotation
 
@@ -161,14 +198,24 @@ Create a task config:
 ```yaml title="configs/tasks/my_task/my_model/base.yaml"
 # @package _global_
 defaults:
-  - /defaults/default_runtime
+  - /tasks/default_task
   - _self_
+
+database: ???
+point_cloud_range: ???
+
+# Every model family writes its own optimizer. Leave a value at ??? when the leaves differ.
+optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
+  lr: 0.001
+  weight_decay: 0.01
 
 model:
   _target_: autoware_ml.models.my_task.my_model.MyModel
-  num_classes: ${dataset.segmentation3d.num_classes}
-  ignore_index: ${dataset.segmentation3d.ignore_index}
-  metrics: ${dataset.segmentation3d.metrics}
+  num_classes: ${class_count:${database.taxonomy.segmentation3d.class_names}}
+  ignore_index: ${database.taxonomy.segmentation3d.ignore_index}
+  metrics: ${metrics}
 
   encoder:
     _target_: torch.nn.Linear
@@ -180,43 +227,42 @@ model:
     in_features: 64
     out_features: ${model.num_classes}
 
-  optimizer:
-    _target_: torch.optim.AdamW
-    _partial_: true
-    lr: 0.001
-    weight_decay: 0.01
-
+  optimizer: ${optimizer}
   scheduler:
     _target_: torch.optim.lr_scheduler.CosineAnnealingLR
     _partial_: true
     T_max: ${trainer.max_epochs}
 
 trainer:
-  max_epochs: 50
+  max_epochs: ???
 
-data_preprocessing:
-  _target_: autoware_ml.preprocessing.base.DataPreprocessing
-  pipeline: []
+data_preprocessor:
+  preprocessor_modules: []
 ```
 
-Create a dataset-specific config that selects the database, the datamodule and the dataloader
-settings:
+The classes come from the taxonomy of the database, the metric suites from the `metrics` group
+of the evaluated database, and the optimizer from the shared `optimizers` group. The experiment
+root declares `metrics`, `metric_ranges`, `database` and the experiment name as mandatory, so a
+leaf cannot run until it names them.
 
-```yaml title="configs/tasks/my_task/my_model/my_config.yaml"
+Create a range base per database that composes its metric suites and datamodule and writes the
+pipelines under `datasets.train` and `datasets.test`, then one leaf per database with the batch
+size, epochs and experiment name:
+
+```yaml title="configs/tasks/my_task/my_model/t4dataset/base_122m.yaml"
 # @package _global_
 defaults:
-  - /tasks/my_task/my_model/base
-  - /datasets/t4dataset/segmentation3d
-  - /datasets/t4dataset/lidar
-  - /database@database: t4dataset/t4dataset_j6gen2_semaseg
+  - ../base
+  - /metrics/t4dataset/segmentation3d/default_segmentation3d_metrics
+  - /metrics/t4dataset/segmentation3d@metrics: default_segmentation3d_metric_suites
+  - /metrics/t4dataset/segmentation3d@metric_ranges: default_segmentation3d_120m_metric_ranges
   - /datamodule@datamodule: t4dataset/default_segmentation3d_datamodule
   - _self_
 
-dataset: ${t4dataset}
 point_cloud_range: [-122.88, -122.88, -3.0, 122.88, 122.88, 5.0]
 
-datamodule:
-  train_dataset:
+datasets:
+  train:
     transforms:
       _target_: autoware_ml.transforms.base.TransformsCompose
       _convert_: all
@@ -229,7 +275,7 @@ datamodule:
           translation_std: [0.5, 0.5, 0.2]
         - _target_: autoware_ml.transforms.point_cloud.geometry.PointsRangeFilter
           points_range: ${point_cloud_range}
-  test_dataset:
+  test:
     transforms:
       _target_: autoware_ml.transforms.base.TransformsCompose
       _convert_: all
@@ -238,35 +284,69 @@ datamodule:
           use_dim: [0, 1, 2, 3]
         - _target_: autoware_ml.transforms.point_cloud.geometry.PointsRangeFilter
           points_range: ${point_cloud_range}
+
+# Batch size and workers reach every dataloader from the top level, only the exceptions go here.
+datamodule:
   train_dataloader:
-    batch_size: 8
-    num_workers: 4
     shuffle: true
-  validation_dataloader:
-    batch_size: 8
-    num_workers: 4
+  predict_dataloader:
+    batch_size: 1
 ```
 
-The dataset configs leave `transforms` required, so every task config writes the pipeline of the
-training and test datasets. Validation and predict use the test pipeline. Models never share a
-pipeline, a model that needs the same steps copies them.
+```yaml title="configs/tasks/my_task/my_model/t4dataset/my_model_b8_50e_t4dataset_122m_j6gen2_semaseg.yaml"
+# @package _global_
+defaults:
+  - base_122m
+  - /database@database: t4dataset/t4dataset_j6gen2_semaseg
+  - _self_
 
-A split can mix several corpora. Each entry of `train_sources`, `validation_sources`,
-`test_sources` or `predict_sources` names a database, whether its boxes (`det3d`) and semantic
-masks (`seg3d`) supervise the run, and how many times its frames appear in one epoch (`repeat`):
+batch_size: 8
+num_workers: 4
+experiment_group_name: my_model/${database.version}/j6gen2_semaseg
+experiment_name: my_model_b8_50e_t4dataset_122m
+
+trainer:
+  max_epochs: 50
+```
+
+The dataset configs leave `transforms` required, so every experiment writes the pipeline of the
+training and test datasets under `datasets`. Validation and predict use the test pipeline. Models
+never share a pipeline, a model that needs the same steps copies them.
+
+A run can mix several corpora. Every entry of `datamodule.sources` is a `DatasetSource` that
+Hydra instantiates. It names a database, the dataset of every split it serves, and how many
+times its frames appear in one training epoch (`repeat`). A dataset config names the database
+it reads (`database_root_path`, `lidar_intensity_scale`) and whether the boxes and semantic
+masks of that corpus supervise the run (`det3d_supervised`, `seg3d_supervised`), so a source
+over another database composes its own copy of the split dataset config with that database's
+values. The default source `main` serves every split with the composed `datasets.train` and
+`datasets.test`:
 
 ```yaml
+defaults:
+  # A copy of the training dataset config for a second database composed into the task
+  - /datamodule/t4dataset/datasets/segdet3d@datasets.extra_train: default_segdet3d_train_dataset
+
+datasets:
+  extra_train:
+    database_root_path: ${extra_database.root_path}
+    lidar_intensity_scale: ${extra_database.lidar_intensity_scale}
+    # Only the semantic masks of this corpus supervise the run
+    det3d_supervised: false
+    transforms: ${datasets.train.transforms}
+
 datamodule:
-  train_sources:
-    - database: ${database}
-    # A second database config composed into the task
-    - database: ${extra_database}
-      det3d: false
+  sources:
+    extra:
+      _target_: autoware_ml.datamodule.sources.DatasetSource
+      database: ${extra_database}
+      train_dataset: ${datasets.extra_train}
       repeat: 2
 ```
 
 !!! note
-    Some parameters are inherited from the default runtime config. Take a look at `configs/defaults/default_runtime.yaml` for more details.
+    The trainer, callbacks, logger, deploy and path settings come from the modules under
+    `configs/defaults/modules/`, composed by `configs/tasks/default_task.yaml`.
 
 Runtime preprocessing lives at the top level of the composed config and is
 attached to the model by the entrypoints.
@@ -297,11 +377,11 @@ class MyAugmentation(BaseTransform):
         return model_gt_sample._replace(point_cloud_data=point_cloud_data)
 ```
 
-Add the transform to the training pipeline in your task config:
+Add the transform to the training pipeline of your range base:
 
-```yaml title="configs/tasks/my_task/my_model/my_config.yaml"
-datamodule:
-  train_dataset:
+```yaml title="configs/tasks/my_task/my_model/t4dataset/base_122m.yaml"
+datasets:
+  train:
     transforms:
       _target_: autoware_ml.transforms.base.TransformsCompose
       _convert_: all
@@ -316,16 +396,18 @@ datamodule:
 ## Step 5: Add Runtime Data Preprocessing (Optional)
 
 Runtime preprocessing runs on the target device after batch transfer and
-before the forward pass. It is configured at the top level and attached to
-the model by the entrypoint scripts.
+before the forward pass. It is configured at the top level as `data_preprocessor`, a
+`DataPreprocessor` holding `DataPreprocessorModule` instances, and handed to the model by the
+builders.
 
 If your task needs custom preprocessing:
 
 ```python title="autoware_ml/preprocessing/my_preprocessing/my_preprocessing.py"
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.preprocessing.data_preprocessor_modules import DataPreprocessorModule
 
 
-class MyPreprocessingLayer:
+class MyPreprocessingLayer(DataPreprocessorModule):
     def __init__(self, scale: float = 1.0):
         self.scale = scale
 
@@ -339,20 +421,20 @@ class MyPreprocessingLayer:
 Add to config:
 
 ```yaml
-data_preprocessing:
-  _target_: autoware_ml.preprocessing.base.DataPreprocessing
-  pipeline:
+data_preprocessor:
+  preprocessor_modules:
     - _target_: autoware_ml.preprocessing.my_preprocessing.my_preprocessing.MyPreprocessingLayer
       scale: 1.0
 ```
 
 !!! warning
-    Preprocessing layers must be callable objects that accept `ModelBatchInputs` and the keyword
-    `is_training`, and return `ModelBatchInputs` with the features they compute added or the
-    data they change replaced.
+    Preprocessing modules derive `DataPreprocessorModule`, accept `ModelBatchInputs` and the
+    keyword `is_training`, and return `ModelBatchInputs` with the features they compute added or
+    the data they change replaced.
 
 Output-side shaping (logits -> probabilities, decoder scatter, voxel-to-point mapping, etc.) belongs
-**inside the model** - in `forward()`, `compute_metrics()`, or `predict_outputs()`.
+**inside the model** - in `forward()`, `compute_metrics()`, `build_eval_output()` or
+`decode_outputs()`.
 
 ## Step 6: Train and Deploy
 
@@ -375,9 +457,9 @@ Use these rules when creating `<variant>`:
 Examples:
 
 ```text
-segmentation3d/ptv3/voxel005_51m_nuscenes
-segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2
-my_task/my_model/my_variant_my_dataset
+segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m
+segmentation3d/ptv3/t4dataset/voxel012_tiny_b16_50e_t4dataset_122m_j6gen2_semaseg
+my_task/my_model/my_dataset/my_variant_my_dataset
 ```
 
 ```bash
@@ -387,7 +469,7 @@ autoware-ml train --config-name my_task/my_model/my_config
 # Deploy
 autoware-ml deploy \
     --config-name my_task/my_model/my_config \
-    --weights mlruns/my_task/my_model/my_config/<run_id>/artifacts/checkpoints/last.ckpt
+    --weights mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/checkpoints/last.ckpt
 ```
 
 ## Common Patterns
@@ -395,20 +477,24 @@ autoware-ml deploy \
 ### Multiple Inputs
 
 ```python
-def forward(self, image: torch.Tensor, lidar: torch.Tensor) -> torch.Tensor:
-    img_features = self.image_encoder(image)
-    lidar_features = self.lidar_encoder(lidar)
+def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
+    voxels_data = multi_task_batch_inputs.voxels_data
+    image_data = multi_task_batch_inputs.image_data
+    lidar_features = self.lidar_encoder(voxels_data.voxels, voxels_data.coords)
+    img_features = self.image_encoder(image_data.images)
     fused = torch.cat([img_features, lidar_features], dim=1)
     return self.head(fused)
 ```
 
-`forward_inputs()` returns both tensors, keyed `image` and `lidar`.
+Every input is a field of `ModelBatchInputs`: the voxels come from the voxelizer module of the
+`data_preprocessor`, the images from the collated `ImageGTBatch`. A field the preprocessor did
+not fill is `None`, so a model states its needs by the fields it reads.
 
 ### Multiple Tasks
 
 ```python
-def forward(self, x: torch.Tensor) -> ModelOutputs:
-    features = self.backbone(x)
+def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
+    features = self.backbone(multi_task_batch_inputs.voxels_data)
     return ModelOutputs(
         detection3d_head_outputs=Detection3DHeadOutputs(
             center_head_outputs=None, transfusion_head_outputs=self.bbox_head(features)
@@ -416,8 +502,8 @@ def forward(self, x: torch.Tensor) -> ModelOutputs:
         segmentation3d_head_outputs=Segmentation3DHeadOutputs(logits=self.seg_head(features)),
     )
 
-def compute_metrics(self, batch_inputs: ModelBatchInputs, outputs: ModelOutputs):
-    gt_batch = batch_inputs.multi_task_gt_batch
+def compute_metrics(self, multi_task_batch_inputs: ModelBatchInputs, outputs: ModelOutputs):
+    gt_batch = multi_task_batch_inputs.multi_task_gt_batch
     gt_detections = gt_batch.detection3d_gt_batch
     box_losses = self.bbox_head.loss(
         outputs.detection3d().transfusion_head(),

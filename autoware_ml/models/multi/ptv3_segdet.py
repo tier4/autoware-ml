@@ -26,9 +26,8 @@ pure-background detection supervision. The same class supports training
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
-from typing import Any
+from typing import Any, Callable, Mapping, Sequence
 
 import torch
 import torch.nn as nn
@@ -43,6 +42,7 @@ from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentation3DHeadOutputs
 from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
+from autoware_ml.models.detection3d.task_modules.partial_annotations import PartialAnnotations
 from autoware_ml.models.detection3d.ptv3 import PTv3DetBEVNeck, build_det_head_export_spec
 from autoware_ml.models.segmentation3d.encoders.ptv3 import PointTransformerV3Encoder
 from autoware_ml.models.segmentation3d.encoders.voxel import VoxelFeatureEncoder
@@ -52,6 +52,7 @@ from autoware_ml.models.segmentation3d.heads.ptv3 import (
     segmentation_point_loss,
     segmentation_predict_outputs,
 )
+from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.segmentation3d.ptv3_base import (
     SERIALIZED_POOLING_FIELDS,
     PTv3BaseModel,
@@ -82,6 +83,7 @@ class PTv3SegDetModel(PTv3BaseModel):
         seg3d_head: PTv3SegDecoderHead,
         bev_neck: PTv3DetBEVNeck,
         bbox_head: nn.Module,
+        log_dict_configs: LogDictConfigs,
         segmentation_loss_weight: float = 1.0,
         detection_loss_weight: float = 1.0,
         export_output_names: Sequence[str] | None = None,
@@ -91,6 +93,7 @@ class PTv3SegDetModel(PTv3BaseModel):
         scheduler: Callable[[Optimizer], LRScheduler] | None = None,
         optimizer_group_overrides: Mapping[str, Mapping[str, Any]] | None = None,
         scheduler_config: Mapping[str, Any] | None = None,
+        partial_annotations: PartialAnnotations | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the PTv3 joint segmentation and detection model.
@@ -102,6 +105,7 @@ class PTv3SegDetModel(PTv3BaseModel):
                 classifier.
             bev_neck: Detection BEV neck consuming the encoder pooling chain.
             bbox_head: Detection head producing the decoded predictions.
+            log_dict_configs: Logging configuration for training and validation.
             segmentation_loss_weight: Weight of the segmentation loss term.
             detection_loss_weight: Weight of the detection loss term.
             export_output_names: Ordered output names used during export.
@@ -112,6 +116,8 @@ class PTv3SegDetModel(PTv3BaseModel):
             scheduler: Scheduler factory.
             optimizer_group_overrides: Per-group optimizer overrides.
             scheduler_config: Lightning scheduler metadata.
+            partial_annotations: Maps the dataset's per-sample annotation flag to the classes
+                the head must not supervise in that sample. None supervises every class.
             **kwargs: Keyword arguments forwarded up the MRO chain.
         """
         super().__init__(
@@ -119,6 +125,7 @@ class PTv3SegDetModel(PTv3BaseModel):
             voxel_encoder=voxel_encoder,
             grid_size=grid_size,
             point_cloud_range=point_cloud_range,
+            log_dict_configs=log_dict_configs,
             optimizer=optimizer,
             scheduler=scheduler,
             optimizer_group_overrides=optimizer_group_overrides,
@@ -128,6 +135,7 @@ class PTv3SegDetModel(PTv3BaseModel):
         self.seg3d_head = seg3d_head
         self.bev_neck = bev_neck
         self.bbox_head = bbox_head
+        self.partial_annotations = partial_annotations
         self.segmentation_loss_weight = float(segmentation_loss_weight)
         self.detection_loss_weight = float(detection_loss_weight)
         self._export_output_names = (
@@ -153,24 +161,16 @@ class PTv3SegDetModel(PTv3BaseModel):
             "det3d_branch": det3d_branch_params,
         }
 
-    def forward(
-        self,
-        voxels: torch.Tensor,
-        num_points: torch.Tensor,
-        voxel_coords: torch.Tensor,
-        num_dropped_voxels: torch.Tensor,
-        time_lag_column: int,
-    ) -> ModelOutputs:
+    def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
         """Run one shared PTv3 encoder pass and branch into both heads.
 
         Args:
-            voxels: Padded voxel points from the data preprocessing.
-            num_points: Valid point count per voxel.
-            voxel_coords: Voxel coordinates with a leading batch column.
-            num_dropped_voxels: Occupied voxels the voxelizer discarded.
-            time_lag_column: Point column holding the time lag.
+            multi_task_batch_inputs: Model inputs holding the point cloud and its voxels.
+
+        Returns:
+            The outputs of the task heads.
         """
-        point = self.encode(voxels, num_points, voxel_coords, num_dropped_voxels, time_lag_column)
+        point = self.encode_batch(multi_task_batch_inputs)
         # The BEV neck must read the encoder chain before the segmentation
         # decoder: SerializedUnpooling pops the chain and overwrites parent
         # features in place.
@@ -242,10 +242,22 @@ class PTv3SegDetModel(PTv3BaseModel):
         gt_detections = self._detection_gt_batch(batch_inputs)
         det_mask = self._detection_frame_mask(gt_detections)
         if bool(det_mask.any()):
+            traffic_cone_status = gt_detections.gt_traffic_cone_barrier_bbox_status
             det_metrics = self.bbox_head.loss(
-                det_outputs.select_samples(det_mask),
-                self._mask_list(gt_detections.valid_bboxes_3d(), det_mask),
-                self._mask_list(gt_detections.valid_labels_3d(), det_mask),
+                outputs=Detection3DHeadOutputs(
+                    center_head_outputs=None,
+                    transfusion_head_outputs=det_outputs.select_samples(det_mask),
+                ),
+                gt_bboxes_3d=gt_detections.gt_bboxes_3d[det_mask],
+                gt_labels_3d=gt_detections.gt_labels_3d[det_mask],
+                gt_valid_bboxes=gt_detections.gt_valid_bboxes[det_mask],
+                gt_annotated_class_masks=(
+                    self.partial_annotations.build_annotated_class_masks(
+                        traffic_cone_status[det_mask] if traffic_cone_status is not None else None
+                    )
+                    if self.partial_annotations is not None
+                    else None
+                ),
             )
         else:
             # Keep the detection branch in the autograd graph with zero
@@ -289,7 +301,9 @@ class PTv3SegDetModel(PTv3BaseModel):
         Empty prediction + empty ground truth is metric-neutral.
         """
         det_mask = self._detection_frame_mask(self._detection_gt_batch(batch))
-        predictions = self.bbox_head.predict(outputs.detection3d().transfusion_head())
+        predictions = list(
+            self.bbox_head.decode_outputs(outputs=outputs.detection3d()).detection3d_predictions
+        )
         predictions = [
             prediction
             if flagged
@@ -306,24 +320,24 @@ class PTv3SegDetModel(PTv3BaseModel):
         eval_out.update(segmentation_eval_output(outputs.segmentation3d().logits, batch))
         return eval_out
 
-    def predict_outputs(
-        self, batch_inputs: ModelBatchInputs, outputs: ModelOutputs
+    def decode_outputs(
+        self, multi_task_batch_inputs: ModelBatchInputs, outputs: ModelOutputs
     ) -> ModelPredictions:
         """Decode the boxes and the point labels of the batch for inference.
 
         Args:
-            batch_inputs: Model inputs holding the grid samples the logits were predicted for.
+            multi_task_batch_inputs: Model inputs holding the grid samples the logits were
+                predicted for.
             outputs: Raw outputs returned by :meth:`forward`.
 
         Returns:
             The decoded boxes of every sample and the label of every original point.
         """
+        detection_predictions = self.bbox_head.decode_outputs(outputs=outputs.detection3d())
         return ModelPredictions(
-            detection3d_predictions=self.bbox_head.predict(
-                outputs.detection3d().transfusion_head()
-            ),
+            detection3d_predictions=detection_predictions.detection3d_predictions,
             segmentation3d_predictions=segmentation_predict_outputs(
-                outputs.segmentation3d().logits, batch_inputs
+                outputs.segmentation3d().logits, multi_task_batch_inputs
             ),
         )
 

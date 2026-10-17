@@ -19,10 +19,10 @@ completion can import the Typer app without pulling Hydra and MLflow into the
 startup path.
 """
 
+from typing import Sequence
 import __main__
 import os
 import sys
-from collections.abc import Sequence
 from contextlib import contextmanager
 from datetime import datetime
 from importlib.machinery import ModuleSpec
@@ -37,14 +37,15 @@ from autoware_ml.utils.mlflow_helpers import (
     AUTOWARE_ML_HYDRA_RUN_DIR_ENV,
     AUTOWARE_ML_RUN_ID_ENV,
     RUN_METADATA_FILENAME,
-    generate_experiment_name,
     generate_hydra_run_dir,
+    generate_run_name,
     load_run_context,
     load_run_metadata,
     mark_run_running,
     prepare_run_context,
     resolve_deploy_lineage,
-    resolve_lineage_context,
+    resolve_experiment_name,
+    resolve_parent_run_id,
     should_enable_logger,
 )
 
@@ -196,7 +197,11 @@ def prepare_runtime_environment(
     resume_checkpoint: str | None = None,
     new_run: bool = False,
 ) -> dict[str, str | None]:
-    """Prepare environment variables used by Hydra-backed runtime commands."""
+    """Prepare environment variables used by Hydra-backed runtime commands.
+
+    The MLflow run is created here, before the entrypoint starts, with the experiment and run
+    names the entrypoint would have chosen itself, so both paths name runs identically.
+    """
     if checkpoint is not None and checkpoints:
         raise ValueError("Use either checkpoint or checkpoints, not both.")
 
@@ -219,6 +224,7 @@ def prepare_runtime_environment(
         with initialize_config_dir(version_base=None, config_dir=resolved_config_path):
             cfg = compose(config_name=resolved_config_name, overrides=compose_overrides)
 
+    experiment_name = resolve_experiment_name(cfg)
     if should_enable_logger(cfg):
         if resume_checkpoint is not None and not new_run:
             return prepare_resume_environment(
@@ -226,16 +232,12 @@ def prepare_runtime_environment(
             )
         checkpoint_path = Path(checkpoint) if checkpoint is not None else None
         checkpoint_paths = [Path(path) for path in checkpoints]
-        experiment_name = generate_experiment_name(config_name)
         parent_run_id = None
         extra_tags = None
         if checkpoint_paths:
             if stage != "deploy":
                 raise ValueError("Multi-checkpoint runtime lineage is only supported for deploy.")
-            experiment_name, parent_run_id, source_checkpoints = resolve_deploy_lineage(
-                config_name,
-                checkpoint_paths,
-            )
+            parent_run_id, source_checkpoints = resolve_deploy_lineage(checkpoint_paths)
             source_run_ids = [
                 source["run_id"] for source in source_checkpoints if source["run_id"] is not None
             ]
@@ -246,18 +248,20 @@ def prepare_runtime_environment(
                 "source_run_ids": ",".join(source_run_ids),
             }
         elif checkpoint_path is not None:
-            experiment_name, parent_run_id = resolve_lineage_context(config_name, checkpoint_path)
+            parent_run_id = resolve_parent_run_id(checkpoint_path)
             extra_tags = {
                 "checkpoint_path": str(checkpoint_path),
                 "source_run_id": parent_run_id or "",
             }
+
         run_context = prepare_run_context(
             cfg.logger.tracking_uri,
             config_name,
             hydra_dir=None,
             stage=stage,
-            parent_run_id=parent_run_id,
             experiment_name=experiment_name,
+            run_name=generate_run_name(stage, experiment_name, str(cfg.experiment_uid)),
+            parent_run_id=parent_run_id,
             extra_tags=extra_tags,
             started_at=started_at,
         )
@@ -269,7 +273,7 @@ def prepare_runtime_environment(
     return {
         AUTOWARE_ML_RUN_ID_ENV: None,
         AUTOWARE_ML_HYDRA_RUN_DIR_ENV: str(
-            generate_hydra_run_dir(config_name, started_at=started_at)
+            generate_hydra_run_dir(experiment_name, started_at=started_at)
         ),
     }
 

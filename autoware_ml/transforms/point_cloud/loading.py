@@ -20,9 +20,8 @@ The code is modified from mmdetection3d.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Sequence
 
 from jaxtyping import Bool
 import numpy as np
@@ -111,6 +110,7 @@ class LoadPointsFromFile(BaseTransform):
         use_dim: Sequence[int] = (0, 1, 2, 3),
         bev_remove_radius: float = 0.0,
         pcd_file_format: PCDFileFormat = PCDFileFormat.AUTO,
+        scale_intensity: bool = True,
     ) -> None:
         """Initialize the point-cloud loader.
 
@@ -122,6 +122,9 @@ class LoadPointsFromFile(BaseTransform):
             pcd_file_format: File format to read the point clouds from: ``bin`` for the
                 ``.pcd.bin`` files, ``t4pack`` for the pack of the channel, or ``auto`` for the
                 pack when the record has a pack location and the ``.pcd.bin`` file otherwise.
+            scale_intensity: Whether to divide the intensity feature by the full scale value the
+                database declares, so the model reads it in [0, 1]. Set to False to keep the raw
+                stored intensity.
 
         Raises:
             TypeError: Raised when ``pcd_file_format`` is not a ``PCDFileFormat``.
@@ -134,6 +137,7 @@ class LoadPointsFromFile(BaseTransform):
         self.use_dim = list(use_dim)
         self.bev_remove_radius = bev_remove_radius
         self.pcd_file_format = pcd_file_format
+        self.scale_intensity = scale_intensity
 
     def far_from_origin(self, points_data: BasePoints) -> Bool[Tensor, " num_points"]:
         """Mask of the points outside the removal radius around the origin.
@@ -269,9 +273,9 @@ class LoadPointsFromFile(BaseTransform):
             )
 
         points_np = points_np[:, use_dims]
-        # Every model reads intensity in [0, 1], scaled once here by the full scale value the
-        # database declares for its files
-        if PointFieldIndex.INTENSITY in use_dims:
+        # Scaled once here by the full scale value the database declares for its files, so the
+        # model reads intensity in [0, 1]. Skipped to feed the raw stored intensity instead.
+        if self.scale_intensity and PointFieldIndex.INTENSITY in use_dims:
             points_np = points_np.copy()
             points_np[:, use_dims.index(PointFieldIndex.INTENSITY)] /= (
                 lidar_point_cloud_sample.intensity_scale
@@ -325,6 +329,7 @@ class LoadMultiSweepPointsFromFile(LoadPointsFromFile):
         use_dim: Sequence[int] = (0, 1, 2, 3),
         bev_remove_radius: float = 1.0,
         pcd_file_format: PCDFileFormat = PCDFileFormat.AUTO,
+        scale_intensity: bool = True,
     ) -> None:
         """Initialize the multi-sweep point-cloud loader.
 
@@ -340,9 +345,14 @@ class LoadMultiSweepPointsFromFile(LoadPointsFromFile):
               instance to drop the ego vehicle returns. Set to 0.0 to keep every point.
             pcd_file_format: File format to read the point clouds from, see
                 ``LoadPointsFromFile``.
+            scale_intensity: Whether to scale the intensity of the sweep points to [0, 1], see
+                ``LoadPointsFromFile``. Set it the same as for the current frame.
         """
         super().__init__(
-            use_dim=use_dim, bev_remove_radius=bev_remove_radius, pcd_file_format=pcd_file_format
+            use_dim=use_dim,
+            bev_remove_radius=bev_remove_radius,
+            pcd_file_format=pcd_file_format,
+            scale_intensity=scale_intensity,
         )
         self._check_window("past", past)
         self._check_window("future", future)

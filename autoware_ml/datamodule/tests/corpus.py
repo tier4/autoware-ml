@@ -26,7 +26,7 @@ import polars as pl
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.databases.taxonomy import LabelVocabulary, SegmentationTaxonomy
 from autoware_ml.datamodule.t4dataset.dataset import T4Dataset
-from autoware_ml.datamodule.detection3d import Detection3DTask
+from autoware_ml.datamodule.common.detection3d import Detection3DTask
 from autoware_ml.datamodule.t4dataset.segmentation3d import T4Segmentation3DTask
 from autoware_ml.transforms.base import TransformsCompose
 from autoware_ml.transforms.boxes3d.filters import BBoxesLabelNameFilter, BBoxesRangeFilter
@@ -104,9 +104,10 @@ def write_lidar_frame(
     )
     points.astype(np.float32).tofile(path)
 
-    mask_path = None
+    mask_relative = None
     if masked:
-        mask_path = root / f"{SCENE}/data/LIDARSEG/{record_index}_{frame_index}.bin"
+        mask_relative = f"{SCENE}/data/LIDARSEG/{record_index}_{frame_index}.bin"
+        mask_path = root / mask_relative
         mask_path.parent.mkdir(parents=True, exist_ok=True)
         np.zeros(NUM_POINTS, dtype=np.uint8).tofile(mask_path)
 
@@ -116,13 +117,13 @@ def write_lidar_frame(
         "lidar_sensor_id": "lidar",
         "lidar_sensor_channel_name": "LIDAR_TOP",
         "lidar_timestamp_seconds": float(record_index) - sweep_time_offset(frame_index),
-        "lidar_pointcloud_path": str(path),
-        "lidar_pointcloud_source_path": None,
+        "lidar_pointcloud_relative_path": relative,
+        "lidar_pointcloud_source_relative_path": None,
         "lidar_pointcloud_num_features": 5,
         "lidar_sensor_to_ego_pose_matrix": np.eye(4).tolist(),
         "lidar_frame_ego_pose_to_global_matrix": np.eye(4).tolist(),
         "lidar_sensor_to_lidar_sweep_matrix": np.eye(4).tolist(),
-        "lidar_pointcloud_semantic_mask_path": None if mask_path is None else str(mask_path),
+        "lidar_pointcloud_semantic_mask_relative_path": mask_relative,
     }
 
 
@@ -239,8 +240,8 @@ def build_dataset(root: Path, records: pl.DataFrame) -> T4Dataset:
         transforms=build_transforms(),
         dataset_tasks=MappingProxyType(
             {
-                "Detection3D": Detection3DTask,
-                "Segmentation3D": partial(T4Segmentation3DTask, taxonomy=SEGMENTATION_TAXONOMY),
+                "detection3d": Detection3DTask,
+                "segmentation3d": partial(T4Segmentation3DTask, taxonomy=SEGMENTATION_TAXONOMY),
             }
         ),
         det3d_supervised=True,

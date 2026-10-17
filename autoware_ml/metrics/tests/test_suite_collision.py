@@ -18,7 +18,13 @@ from autoware_ml.metrics.detection3d.matching import DetectionState
 from autoware_ml.metrics.detection3d.structures import Detection3DSample
 from autoware_ml.metrics.detection3d.suite import Detection3DMetricSuite
 from autoware_ml.metrics.geometry.reachability import ReachabilityParams
-from autoware_ml.metrics.tests.conftest import CLASS_NAMES, EGO, FakeMapProvider, collision_box
+from autoware_ml.metrics.tests.conftest import (
+    CLASS_NAMES,
+    EGO,
+    STUB_MAP_PATH,
+    collision_box,
+    serve_fake_map,
+)
 
 KINDS = {
     "car": "wheeled",
@@ -38,10 +44,15 @@ KINDS = {
 LIVING_SPEEDS = {"pedestrian": 3.0, "animal": 4.0, "bicycle": 6.0}
 
 
+@pytest.fixture(autouse=True)
+def _serve_the_road() -> None:
+    """Every frame of these tests drives on one long straight road."""
+    serve_fake_map(box(-80.0, -60.0, 500.0, 60.0))
+
+
 def test_suite_computes_ttc_and_criticality_metrics() -> None:
     collision = CollisionTTC(
         CLASS_NAMES,
-        FakeMapProvider(box(-80.0, -60.0, 500.0, 60.0)),
         vehicle=EGO,
         kinds=KINDS,
         living_speeds=LIVING_SPEEDS,
@@ -77,7 +88,7 @@ def test_suite_computes_ttc_and_criticality_metrics() -> None:
             "gt_boxes": [gt_boxes],
             "gt_labels": [gt_labels],
             "ego2global": [np.eye(4)],
-            "scene_token": ["scene-0"],
+            "lanelet_map_path": [STUB_MAP_PATH],
         }
     )
 
@@ -104,7 +115,6 @@ def test_collision_provider_declares_context_keys() -> None:
         class_names=CLASS_NAMES,
         collision=CollisionTTC(
             CLASS_NAMES,
-            FakeMapProvider(box(-80.0, -60.0, 500.0, 60.0)),
             vehicle=EGO,
             kinds=KINDS,
             living_speeds=LIVING_SPEEDS,
@@ -112,47 +122,55 @@ def test_collision_provider_declares_context_keys() -> None:
         ),
     )
     keys = suite.required_keys()
-    assert "ego2global" in keys and "scene_token" in keys
+    assert "ego2global" in keys and "lanelet_map_path" in keys
 
 
 def test_the_score_floor_skips_only_what_no_metric_reads() -> None:
     # CriticalFPFN counts nothing below its lowest confidence, so the suite may skip
     # propagating those predictions. The counts must not change, and a skipped box
     # must read nan so a metric that does look at it fails loud.
-    road = box(-80.0, -60.0, 500.0, 60.0)
     collision = CollisionTTC(
         CLASS_NAMES,
-        FakeMapProvider(road),
         vehicle=EGO,
         kinds=KINDS,
         living_speeds=LIVING_SPEEDS,
         params=ReachabilityParams(horizon_s=4.0, dt_s=0.1),
         max_speed_mps=10.0,
     )
+    # The floor is CriticalFPFN's lowest confidence, 0.5: a score on the floor is still read.
     eval_out = {
         "predictions": [
             {
-                "bboxes_3d": torch.tensor([collision_box(10.0, 0.0), collision_box(14.0, 0.0)]),
-                "scores_3d": torch.tensor([0.9, 0.1]),
-                "labels_3d": torch.tensor([0, 0]),
+                "bboxes_3d": torch.tensor(
+                    [
+                        collision_box(10.0, 0.0),
+                        collision_box(12.0, 0.0),
+                        collision_box(14.0, 0.0),
+                        collision_box(16.0, 0.0),
+                    ]
+                ),
+                "scores_3d": torch.tensor([0.9, 0.5, 0.49, 0.1]),
+                "labels_3d": torch.tensor([0, 0, 0, 0]),
             }
         ],
-        "gt_boxes": [torch.tensor([collision_box(10.0, 0.0)])],
-        "gt_labels": [torch.tensor([0])],
+        # The on-floor prediction matches a ground truth so it is read without being a critical FP.
+        "gt_boxes": [torch.tensor([collision_box(10.0, 0.0), collision_box(12.0, 0.0)])],
+        "gt_labels": [torch.tensor([0, 0])],
         "ego2global": [np.eye(4)],
-        "scene_token": ["scene"],
+        "lanelet_map_path": [STUB_MAP_PATH],
     }
     suite = Detection3DMetricSuite(
         components=[CriticalFPFN(confidences=(0.5,))], class_names=CLASS_NAMES, collision=collision
     )
     suite.bind_stage(EvalStage.TEST)
 
-    assert suite._ttc_score_floor() == 0.5
     suite.update(eval_out)
     pred_ttc = suite.pred_ttc[0].numpy()
 
     assert np.isfinite(pred_ttc[0])  # confident, propagated
-    assert np.isnan(pred_ttc[1])  # below the floor, skipped
+    assert np.isfinite(pred_ttc[1])  # exactly on the floor, still propagated
+    assert np.isnan(pred_ttc[2])  # just below the floor, skipped
+    assert np.isnan(pred_ttc[3])  # below the floor, skipped
     assert suite.result(EvalStage.TEST)["critical_fp_conf0p5"] == 0.0
 
 

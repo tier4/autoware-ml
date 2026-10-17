@@ -1,15 +1,26 @@
 """
-Point cloud geometry transforms for augmentation to both points and 3D bboxes
-(rotation/scale/translation and BEV flips).
+Point cloud geometry transforms for augmentation to the points, the 3D bboxes and the cameras
+(rotation/scale/translation, BEV flips, range filters and shuffling).
+
+The global augmentations (``GlobalRotScaleTrans``, ``RandomRotateTargetAngle`` and
+``GlobalBEVRandomFlip``) rewrite the coordinates of the scene. Each modality is processed only
+when the sample carries it, so the same transform serves lidar-only (e.g. CenterPoint),
+camera-only (e.g. StreamPETR) and fusion (e.g. BEVFusion) pipelines. The cameras are never moved
+and the images are never re-rendered, so the lidar to camera matrices take the inverse of the
+augmentation and a transformed point keeps projecting onto the same pixel. The sampled
+augmentation is saved as a 4x4 matrix in ``lidar_transformation_sample``, composed with any
+transformation applied earlier in the pipeline, so it can be reversed later.
+
 The code is modified based on
 https://github.com/open-mmlab/mmdetection3d/blob/main/mmdet3d/datasets/transforms/transforms_3d.py.
 """
 
-from collections.abc import Sequence
+from typing import Sequence
 import math
 
 from jaxtyping import Float32
 import numpy as np
+from pydantic import BaseModel, ConfigDict
 import torch
 from torch import Tensor
 
@@ -25,6 +36,26 @@ BEV_FLIP_MATRICES = {
     BEVDirection.HORIZONTAL: torch.diag(torch.tensor([1.0, -1.0, 1.0])),
     BEVDirection.VERTICAL: torch.diag(torch.tensor([-1.0, 1.0, 1.0])),
 }
+
+
+class RotationScaleTranslationData(BaseModel):
+    """
+    Data class to save rotation_matrix, scaling_factor, and translation vector.
+
+    Attributes:
+        rotation_matrix: 3x3 rotation matrix.
+        scale_factor: Scale factor applied.
+        translation_vector: 1x3 translation vector.
+    """
+
+    # Set model config to frozen
+    model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
+
+    # 3x3 rotation matrix, it's saved for column vector convention (left-multiplication), e.g.,
+    # R @ points, where points are (3, N) as a column for each dimension.
+    rotation_matrix: Float32[Tensor, "3 3"]
+    scale_factor: float  # Scale factor applied
+    translation_vector: Float32[Tensor, "1 3"]  # Translation vector applied
 
 
 def yaw_rotation_matrix(angle: float) -> Float32[Tensor, "3 3"]:
@@ -74,9 +105,18 @@ def apply_lidar_transformation(
 
 
 class GlobalRotScaleTrans(BaseTransform):
-    """Apply global rotation, scaling, and optional translation to point clouds and bboxes."""
+    """Apply global rotation, scaling, and optional translation to points, bboxes and cameras.
 
-    _required_keys = ["point_cloud_data"]
+    Optional keys:
+        - ``point_cloud_data``: rotated, scaled and translated in place when available. A
+          camera-only pipeline carries no points, so the boxes and the camera matrices are
+          augmented on their own.
+        - ``detection3d_gt_bboxes_3d``: rotated, scaled and translated in place when available.
+        - ``lidar_transformation_sample``: composed with the sampled augmentation when available.
+
+    Generated keys:
+        - ``lidar_transformation_sample``: the (composed) 4x4 augmentation.
+    """
 
     def __init__(
         self,
@@ -111,6 +151,15 @@ class GlobalRotScaleTrans(BaseTransform):
         """
         return float(np.random.uniform(self.yaw_rot_range[0], self.yaw_rot_range[1]))
 
+    def sample_scale(self) -> float:
+        """
+        Sample the scale factor applied to the sample.
+
+        Returns:
+            float: Scale factor.
+        """
+        return float(np.random.uniform(self.scale_ratio_range[0], self.scale_ratio_range[1]))
+
     def sample_translation(self) -> Float32[Tensor, "1 3"]:
         """
         Sample the translation applied to the sample.
@@ -123,42 +172,54 @@ class GlobalRotScaleTrans(BaseTransform):
         translation = np.random.normal(0.0, self.translation_std, size=(1, 3))
         return torch.tensor(translation, dtype=torch.float32)
 
+    def sample_rot_scale_trans(
+        self,
+    ) -> tuple[LiDARTransformationSample, RotationScaleTranslationData]:
+        """Sample the rotation, scale and translation applied to the sample.
+
+        The yaw, the scale and the translation are drawn in this order, so a test seeding the
+        random state replays the draw of :meth:`transform`.
+
+        Returns:
+            The sampled augmentation as a lidar transformation, rotation first, then scaling,
+            then translation, together with its raw components.
+        """
+        rotation_scale_translation_data = RotationScaleTranslationData(
+            rotation_matrix=yaw_rotation_matrix(self.sample_yaw()),
+            scale_factor=self.sample_scale(),
+            translation_vector=self.sample_translation(),
+        )
+        lidar_transformation_sample = LiDARTransformationSample.create_lidar_transformation_sample(
+            rotation_matrix=rotation_scale_translation_data.rotation_matrix,
+            scale_factor=rotation_scale_translation_data.scale_factor,
+            translation_vector=rotation_scale_translation_data.translation_vector,
+            transformation_order=[
+                TransformationName.ROTATION,
+                TransformationName.SCALING,
+                TransformationName.TRANSLATION,
+            ],
+        )
+        return lidar_transformation_sample, rotation_scale_translation_data
+
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
-        """Rotate, scale, and translate points and bboxes."""
-        # This is checked in the _validate_required_keys()
-        point_cloud_data: BasePoints = (
-            model_gt_sample.point_cloud_data  # type: ignore[reportOptionalMemberAccess]
-        )
-
-        rotation_matrix = yaw_rotation_matrix(self.sample_yaw())
-        scale_factor = float(
-            np.random.uniform(self.scale_ratio_range[0], self.scale_ratio_range[1])
-        )
-        translation_vector = self.sample_translation()
-
+        """Rotate, scale, and translate the available modalities and the bboxes."""
+        lidar_transformation_sample, rotation_scale_translation_data = self.sample_rot_scale_trans()
         # Points and boxes are rows, so they take the transposed rotation
-        point_cloud_data.rotate(rotation_matrix.T)
-        point_cloud_data.scale(scale_factor)
-        point_cloud_data.translate(translation_vector)
+        row_vector_rotation_matrix = rotation_scale_translation_data.rotation_matrix.T
+        scale_factor = rotation_scale_translation_data.scale_factor
+        translation_vector = rotation_scale_translation_data.translation_vector
+
+        if model_gt_sample.point_cloud_data is not None:
+            model_gt_sample.point_cloud_data.rotate(row_vector_rotation_matrix)
+            model_gt_sample.point_cloud_data.scale(scale_factor)
+            model_gt_sample.point_cloud_data.translate(translation_vector)
 
         if model_gt_sample.detection3d_gt_bboxes_3d is not None:
-            model_gt_sample.detection3d_gt_bboxes_3d.rotate(rotation_matrix.T)
+            model_gt_sample.detection3d_gt_bboxes_3d.rotate(row_vector_rotation_matrix)
             model_gt_sample.detection3d_gt_bboxes_3d.scale(scale_factor)
             model_gt_sample.detection3d_gt_bboxes_3d.translate(translation_vector)
 
-        return apply_lidar_transformation(
-            model_gt_sample,
-            LiDARTransformationSample.create_lidar_transformation_sample(
-                rotation_matrix=rotation_matrix,
-                scale_factor=scale_factor,
-                translation_vector=translation_vector,
-                transformation_order=[
-                    TransformationName.ROTATION,
-                    TransformationName.SCALING,
-                    TransformationName.TRANSLATION,
-                ],
-            ),
-        )
+        return apply_lidar_transformation(model_gt_sample, lidar_transformation_sample)
 
 
 class RandomRotateTargetAngle(GlobalRotScaleTrans):
@@ -190,9 +251,17 @@ class RandomRotateTargetAngle(GlobalRotScaleTrans):
 
 
 class GlobalBEVRandomFlip(BaseTransform):
-    """Globally and randomly flip point clouds and bboxes along the BEV axes."""
+    """Globally and randomly flip points, bboxes and cameras along the BEV axes.
 
-    _required_keys = ["point_cloud_data"]
+    Optional keys:
+        - ``point_cloud_data``: flipped in place when available. A camera-only pipeline carries
+          no points, so the boxes and the camera matrices are flipped on their own.
+        - ``detection3d_gt_bboxes_3d``: flipped in place when available.
+        - ``lidar_transformation_sample``: composed with the sampled flip when available.
+
+    Generated keys:
+        - ``lidar_transformation_sample``: the (composed) 4x4 flip.
+    """
 
     def __init__(
         self, horizontal_flip_ratio: float = 0.5, vertical_flip_ratio: float = 0.5
@@ -222,7 +291,7 @@ class GlobalBEVRandomFlip(BaseTransform):
         bev_flip_direction: BEVDirection,
     ) -> Float32[Tensor, "3 3"]:
         """
-        Apply the specified flip to the point cloud and bboxes.
+        Apply the specified flip to the point cloud and the bboxes, whichever are available.
 
         Args:
             model_gt_sample: The ModelGTSample to apply the flip to.
@@ -233,17 +302,14 @@ class GlobalBEVRandomFlip(BaseTransform):
         Returns:
             Float32[Tensor, "3 3"]: The flips applied so far followed by this one.
         """
-        # This is checked in the _validate_required_keys()
-        point_cloud_data: BasePoints = (
-            model_gt_sample.point_cloud_data  # type: ignore[reportOptionalMemberAccess]
-        )
-        point_cloud_data.flip_bev(bev_direction=bev_flip_direction)
+        if model_gt_sample.point_cloud_data is not None:
+            model_gt_sample.point_cloud_data.flip_bev(bev_direction=bev_flip_direction)
         if model_gt_sample.detection3d_gt_bboxes_3d is not None:
             model_gt_sample.detection3d_gt_bboxes_3d.flip_bev(bev_direction=bev_flip_direction)
         return BEV_FLIP_MATRICES[bev_flip_direction] @ rotation_matrix
 
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
-        """Flip points and bboxes along the specified axis."""
+        """Flip the available modalities and the bboxes along the sampled axes."""
         rotation_matrix = torch.eye(3, dtype=torch.float32)
         horizontal_flip, vertical_flip = self.sample_flip()
         transformation_order = []

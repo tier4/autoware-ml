@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 import torch
 import torch.nn as nn
 from torch.onnx.operators import shape_as_tensor
 
+from autoware_ml.dataclasses.geometry.voxels import VoxelsData
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
-from autoware_ml.models.base import BaseModel
+from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
 from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     Block,
     PointTransformerV3Encoder,
@@ -101,7 +101,18 @@ def split_block_parameters(
     return default_params, block_params
 
 
-class PTv3BaseModel(BaseModel):
+def _voxels_data(batch_inputs: ModelBatchInputs) -> VoxelsData:
+    """Read the voxels a voxelizer added to the model inputs.
+
+    Raises:
+        ValueError: If the model inputs carry no voxels.
+    """
+    if batch_inputs.voxels_data is None:
+        raise ValueError("PTv3 needs the voxels of a voxelizer in the model inputs.")
+    return batch_inputs.voxels_data
+
+
+class PTv3BaseModel(ModuleBaseModel):
     """Abstract base class for all PTv3 task models.
 
     Provides shared encoder management, export geometry computation, and
@@ -118,6 +129,7 @@ class PTv3BaseModel(BaseModel):
         voxel_encoder: VoxelFeatureEncoder,
         grid_size: float | None,
         point_cloud_range: Sequence[float] | None,
+        log_dict_configs: LogDictConfigs,
         freeze_encoder: bool = False,
         **kwargs: Any,
     ) -> None:
@@ -130,12 +142,13 @@ class PTv3BaseModel(BaseModel):
                 serialization depth for export.
             point_cloud_range: Six-element sequence ``[x_min, y_min, z_min,
                 x_max, y_max, z_max]`` used to derive sparse shape for export.
+            log_dict_configs: Logging configuration for training and validation.
             freeze_encoder: When ``True``, the encoder is permanently kept
                 in eval mode with its parameters frozen.
-            **kwargs: Keyword arguments forwarded to :class:`BaseModel` (and
+            **kwargs: Keyword arguments forwarded to :class:`ModuleBaseModel` (and
                 further up the MRO chain).
         """
-        super().__init__(**kwargs)
+        super().__init__(log_dict_configs=log_dict_configs, **kwargs)
         if encoder.in_channels != voxel_encoder.out_channels:
             raise ValueError(
                 f"The encoder reads {encoder.in_channels} point features but the voxel encoder "
@@ -180,30 +193,29 @@ class PTv3BaseModel(BaseModel):
             "freeze_encoder": self.freeze_encoder,
         }
 
-    def forward_inputs(self, batch_inputs: ModelBatchInputs) -> dict[str, Any]:
-        """Pick the voxels of the batch and the column of the point time lag.
+    def encode_batch(self, batch_inputs: ModelBatchInputs) -> Point:
+        """Run the voxel encoder and the PTv3 encoder on the voxels of the batch.
 
         Args:
             batch_inputs: Model inputs holding the point cloud and its voxels.
 
         Returns:
-            The padded voxels, their point counts, their ``[batch, x, y, z]`` coordinates, the
-            occupied voxels the voxelizer discarded and the time lag column of the points.
+            Deepest encoder point with the full pooling chain attached, see :meth:`encode`.
 
         Raises:
             ValueError: If the batch carries no point cloud or no voxels.
         """
         point_batch = batch_inputs.multi_task_gt_batch.point_cloud_gt_batch
-        voxels_data = batch_inputs.voxels_data
-        if point_batch is None or voxels_data is None:
-            raise ValueError("PTv3 needs the points of the batch and the voxels of a voxelizer.")
-        return {
-            "voxels": voxels_data.voxels,
-            "num_points": voxels_data.num_points,
-            "voxel_coords": voxels_data.batch_xyz_coords(),
-            "num_dropped_voxels": voxels_data.num_dropped_voxels,
-            "time_lag_column": point_batch.timestamp_difference_dim,
-        }
+        if point_batch is None:
+            raise ValueError("PTv3 needs the points of the batch.")
+        voxels_data = _voxels_data(batch_inputs)
+        return self.encode(
+            voxels=voxels_data.voxels,
+            num_points=voxels_data.num_points,
+            voxel_coords=voxels_data.batch_xyz_coords(),
+            num_dropped_voxels=voxels_data.num_dropped_voxels,
+            time_lag_column=point_batch.timestamp_difference_dim,
+        )
 
     def build_encoder_inputs(
         self, voxels: torch.Tensor, num_points: torch.Tensor, voxel_coords: torch.Tensor
@@ -271,19 +283,15 @@ class PTv3BaseModel(BaseModel):
             )
         return self.encoder(self.build_encoder_inputs(voxels, num_points, voxel_coords))
 
-    def _compute_export_geometry(
-        self, forward_inputs: Mapping[str, Any]
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    def _compute_export_geometry(self, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute sparse shape and serialization depth for export.
 
         Args:
-            forward_inputs: Forward arguments of the example batch, used for device inference.
+            device: Device of the voxels of the example batch.
 
         Returns:
-            ``(sparse_shape, serialization_depth)`` as long tensors on the
-            same device as the voxels.
+            ``(sparse_shape, serialization_depth)`` as long tensors on ``device``.
         """
-        device = forward_inputs["voxels"].device
         point_cloud_range = torch.tensor(self.point_cloud_range, dtype=torch.float32, device=device)
         axis_extents = (point_cloud_range[3:] - point_cloud_range[:3]) / self.grid_size
         serialization_depth = bit_length_tensor(torch.max(axis_extents))
@@ -601,12 +609,12 @@ def prepare_ptv3_export_inputs(
     model: "PTv3BaseModel", batch_inputs: ModelBatchInputs
 ) -> PTv3ExportInputs:
     """Serialize a preprocessed voxel batch and precompute its pooling metadata."""
-    batch = model.forward_inputs(batch_inputs)
-    sparse_shape, serialization_depth = model._compute_export_geometry(batch)
+    voxels_data = _voxels_data(batch_inputs)
+    sparse_shape, serialization_depth = model._compute_export_geometry(voxels_data.voxels.device)
     encoder_inputs = model.build_encoder_inputs(
-        batch["voxels"],
-        batch["num_points"],
-        batch["voxel_coords"],
+        voxels_data.voxels,
+        voxels_data.num_points,
+        voxels_data.batch_xyz_coords(),
     )
     point, _ = serialize_point_cloud_batch(encoder_inputs, model.EXPORT_ORDER, serialization_depth)
     pooling_metadata = build_serialized_pooling_metadata(
@@ -618,8 +626,8 @@ def prepare_ptv3_export_inputs(
     return PTv3ExportInputs(
         sparse_shape=sparse_shape,
         serialization_depth=serialization_depth,
-        voxels=batch["voxels"],
-        num_points=batch["num_points"],
+        voxels=voxels_data.voxels,
+        num_points=voxels_data.num_points,
         grid_coord=encoder_inputs["grid_coord"],
         serialized_order=point["serialized_order"],
         serialized_inverse=point["serialized_inverse"],

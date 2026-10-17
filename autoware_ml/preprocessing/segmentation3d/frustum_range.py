@@ -22,10 +22,11 @@ import torch
 
 from autoware_ml.dataclasses.geometry.range_view import RangeViewData
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.preprocessing.data_preprocessor_modules import DataPreprocessorModule
 from autoware_ml.preprocessing.segmentation3d.range_view import project_range
 
 
-class FrustumRangePreprocessor:
+class FrustumRangePreprocessor(DataPreprocessorModule):
     """Convert batched points into FRNet frustum and range-view tensors.
 
     The preprocessor projects points into range-view bins, groups them into

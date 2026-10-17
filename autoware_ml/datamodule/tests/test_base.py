@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import unittest
 
-from autoware_ml.datamodule.base import DataLoaderConfig
+from autoware_ml.datamodule.data_module import DataLoaderConfig
 
 
 class TestDataLoaderConfig(unittest.TestCase):

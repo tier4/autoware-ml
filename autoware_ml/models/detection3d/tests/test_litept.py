@@ -200,7 +200,7 @@ def test_litept_is_a_drop_in_encoder_for_the_ptv3_segmentation_model() -> None:
     batch = build_inputs(device=torch.device("cuda"))
 
     with torch.no_grad():
-        logits = model(**model.forward_inputs(batch)).segmentation3d().logits
+        logits = model(batch).segmentation3d().logits
 
     assert logits.shape == (batch.voxels_data.voxels.shape[0], 3)
     assert torch.isfinite(logits).all()

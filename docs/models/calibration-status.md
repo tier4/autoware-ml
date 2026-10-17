@@ -19,10 +19,12 @@ The Calibration Status Classifier is a camera-LiDAR binary classification model 
 
 ## Available Configurations
 
-| Config Name                                                                  | Dataset   | Purpose                         |
-| ---------------------------------------------------------------------------- | --------- | ------------------------------- |
-| `calibration_status/calibration_status_classifier/resnet18_nuscenes`         | NuScenes  | Standard training configuration |
-| `calibration_status/calibration_status_classifier/resnet18_t4dataset_j6gen2` | T4Dataset | Standard training configuration |
+Experiment configs live under `autoware_ml/configs/tasks/calibration_status/calibration_status_classifier/` and are passed to the CLI as the path relative to `tasks/`.
+
+| Config Name                                                                                        | Dataset   | Purpose                         |
+| -------------------------------------------------------------------------------------------------- | --------- | ------------------------------- |
+| `calibration_status/calibration_status_classifier/nuscenes/resnet18_b8_30e_nuscenes`               | NuScenes  | Standard training configuration |
+| `calibration_status/calibration_status_classifier/t4dataset/resnet18_b8_30e_t4dataset_j6gen2_base` | T4Dataset | Standard training configuration |
 
 ## Input Representation
 
@@ -37,15 +39,15 @@ The model consumes a fused image with five channels.
 ## Training
 
 ```bash
-autoware-ml train --config-name calibration_status/calibration_status_classifier/resnet18_nuscenes
-autoware-ml train --config-name calibration_status/calibration_status_classifier/resnet18_t4dataset_j6gen2
+autoware-ml train --config-name calibration_status/calibration_status_classifier/nuscenes/resnet18_b8_30e_nuscenes
+autoware-ml train --config-name calibration_status/calibration_status_classifier/t4dataset/resnet18_b8_30e_t4dataset_j6gen2_base
 ```
 
 For a pipeline validation run:
 
 ```bash
 autoware-ml train \
-    --config-name calibration_status/calibration_status_classifier/resnet18_nuscenes \
+    --config-name calibration_status/calibration_status_classifier/nuscenes/resnet18_b8_30e_nuscenes \
     +trainer.fast_dev_run=true
 ```
 
@@ -53,16 +55,16 @@ autoware-ml train \
 
 ```bash
 autoware-ml test \
-    --config-name calibration_status/calibration_status_classifier/resnet18_nuscenes \
-    --weights mlruns/calibration_status/calibration_status_classifier/resnet18_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt
+    --config-name calibration_status/calibration_status_classifier/nuscenes/resnet18_b8_30e_nuscenes \
+    --weights mlruns/calibration_status/NuScenesDataset-base-v1.0.0/nuscenes/resnet18_b8_30e_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 ## Deployment
 
 ```bash
 autoware-ml deploy \
-    --config-name calibration_status/calibration_status_classifier/resnet18_nuscenes \
-    --weights mlruns/calibration_status/calibration_status_classifier/resnet18_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt
+    --config-name calibration_status/calibration_status_classifier/nuscenes/resnet18_b8_30e_nuscenes \
+    --weights mlruns/calibration_status/NuScenesDataset-base-v1.0.0/nuscenes/resnet18_b8_30e_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 The exported model keeps the original calibration-status behavior and emits a
@@ -82,4 +84,4 @@ The training pipeline includes image undistortion, synthetic calibration perturb
 | `autoware_ml/datamodule/nuscenes/dataset.py`                                  | nuScenes dataset                                 |
 | `autoware_ml/transforms/camera_lidar/camera_lidar.py`                         | Calibration perturbation and LiDAR-camera fusion |
 | `autoware_ml/configs/datamodule/`                                             | Datamodule, dataset and transform configurations |
-| `autoware_ml/configs/tasks/calibration_status/calibration_status_classifier/` | Task configurations                              |
+| `autoware_ml/configs/tasks/calibration_status/calibration_status_classifier/` | Experiment configurations                        |
