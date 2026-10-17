@@ -104,23 +104,29 @@ def build_model(
     return model
 
 
-def resolve_weights_paths(cfg: DictConfig) -> list[Path] | None:
+def resolve_weights_paths(cfg: DictConfig, resuming: bool = False) -> list[Path] | None:
     """
     Read the pretrained weights the configuration names, if any.
 
     Args:
         cfg: Hydra configuration. ``weights`` is a list of paths, absent, or the mandatory
             ``???`` of a fine-tune config that must be given ``--weights``.
+        resuming: Whether the run resumes from a checkpoint. The checkpoint restores the
+            weights, and ``--weights`` is refused next to ``--resume-checkpoint``, so a
+            fine-tune config left at ``???`` resolves to no weights instead of an error.
 
     Returns:
         The weight paths, or None when the configuration names none.
 
     Raises:
-        ValueError: If ``weights`` is left at ``???``, since ``cfg.get`` would read that as
-            None and a fine-tune config would silently train from scratch at its fine-tune
-            learning rate, or if it is a single string rather than a list.
+        ValueError: If ``weights`` is left at ``???`` without a checkpoint to resume from,
+            since ``cfg.get`` would read that as None and a fine-tune config would silently
+            train from scratch at its fine-tune learning rate, or if it is a single string
+            rather than a list.
     """
     if OmegaConf.is_missing(cfg, "weights"):
+        if resuming:
+            return None
         raise ValueError(
             "This config requires pretrained weights (`weights: ???`) and none were given. "
             "Pass --weights <path> (repeatable)."

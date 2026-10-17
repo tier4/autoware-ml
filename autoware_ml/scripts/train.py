@@ -146,9 +146,10 @@ def main(cfg: DictConfig):
     # Build model
     data_preprocessor = build_data_preprocessor(cfg)
     # A fine-tune config leaves weights at ??? and must be given --weights, so resolve it
-    # rather than cfg.get, which reads ??? as None and would train from scratch.
-    weights_path = resolve_weights_paths(cfg)
+    # rather than cfg.get, which reads ??? as None and would train from scratch. A resumed
+    # run takes its weights from the checkpoint instead.
     resume_checkpoint_path = cfg.get("resume_checkpoint", None)
+    weights_path = resolve_weights_paths(cfg, resuming=resume_checkpoint_path is not None)
     model = build_model(
         cfg,
         data_preprocessor=data_preprocessor,

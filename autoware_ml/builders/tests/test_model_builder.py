@@ -439,6 +439,27 @@ class TestResolveWeightsPaths:
         with pytest.raises(ValueError, match="--weights"):
             resolve_weights_paths(OmegaConf.create({"weights": "???"}))
 
+    def test_mandatory_weights_left_missing_resolve_to_none_when_resuming(self) -> None:
+        """
+        Input: the ``weights: ???`` of a fine-tune config with a checkpoint to resume from.
+        Expected: the checkpoint restores the weights and ``--weights`` is refused next to
+            ``--resume-checkpoint``, so the missing value is not an error and no weights are
+            loaded ahead of the checkpoint.
+        Check: the return value.
+        """
+        assert resolve_weights_paths(OmegaConf.create({"weights": "???"}), resuming=True) is None
+
+    def test_given_weights_are_still_read_when_resuming(self) -> None:
+        """
+        Input: a config naming weights, resolved as a resumed run.
+        Expected: the resolver only relaxes the missing value, the builder still refuses the
+            pair, so the paths come back for the builder to reject.
+        Check: the return value.
+        """
+        assert resolve_weights_paths(OmegaConf.create({"weights": ["a.ckpt"]}), resuming=True) == [
+            Path("a.ckpt")
+        ]
+
 
 class TestBuildWeightCheckpointPaths:
     """``build_weight_checkpoint_paths`` resolves ``cfg.weights`` for test and deploy."""
