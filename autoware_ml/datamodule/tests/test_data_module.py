@@ -165,6 +165,22 @@ class SingleSplitSplitter:
         return {split: dataset_records_dataframe for split in SplitType}
 
 
+class EmptyValidationSplitter(SingleSplitSplitter):
+    """A splitter serving every record to every split but the validation one, left empty."""
+
+    def __str__(self) -> str:
+        """String representation of the splitter."""
+        return "EmptyValidationSplitter"
+
+    def split_by_polars_dataframe(
+        self, dataset_records_dataframe: pl.DataFrame, scenarios: Mapping[str, object]
+    ) -> Mapping[SplitType, pl.DataFrame]:
+        """Return the same records for every split and no record for the validation split."""
+        splits = dict(super().split_by_polars_dataframe(dataset_records_dataframe, scenarios))
+        splits[SplitType.VAL] = dataset_records_dataframe.clear()
+        return splits
+
+
 def build_dataset(database: BaseDatabase, det3d: bool = True, seg3d: bool = True) -> T4Dataset:
     """
     Return the dataset of a split as a config declares it, reading a database, bound to no
@@ -247,10 +263,11 @@ class MultiSourceTestCase(unittest.TestCase):
         sources: Mapping[str, DatasetSource],
         train_dataloader: DataLoaderConfig | None = None,
         train_frame_sampling: FrameSamplingConfig | None = None,
+        splitter: SingleSplitSplitter | None = None,
     ) -> DataModule:
         """Build a datamodule over the given sources with a splitter serving every record."""
         return DataModule(
-            splitter=SingleSplitSplitter(),
+            splitter=SingleSplitSplitter() if splitter is None else splitter,
             sources=sources,
             train_dataloader=train_dataloader,
             validation_dataloader=None,
@@ -502,6 +519,41 @@ class TestDataModuleSources(MultiSourceTestCase):
             self.build_data_module(
                 {"main": build_source(self.main_database), "other": build_source(other)}
             )
+
+    def test_a_split_the_stage_needs_without_records_stops_the_run(self) -> None:
+        """
+        Input: a source declaring a validation dataset over a database whose scenarios put no
+            scene in the validation split, as the gen1 databases do.
+        Expected: Lightning would skip validation on the empty split, and the checkpoint
+            callbacks save after validation only, so the run would train to the end without a
+            checkpoint. Setup stops the run instead and names the source and its record count.
+        Check: a ValueError naming the split, the source and the count is raised for fit, and
+            a stage that does not need the split sets up.
+        """
+        data_module = self.build_data_module(
+            {"main": build_source(self.main_database)}, splitter=EmptyValidationSplitter()
+        )
+
+        with self.assertRaisesRegex(ValueError, r"Split val .*source main serves 0 records"):
+            data_module.setup("fit")
+        data_module.setup("predict")
+
+    def test_an_empty_source_next_to_a_served_one_keeps_the_split(self) -> None:
+        """
+        Input: two sources of a split, one of them holding no record in it.
+        Expected: the split is served by the other source, only a split with no record at all
+            stops the run.
+        Check: the split serves the records of the other source.
+        """
+        data_module = self.build_data_module(
+            {
+                "main": build_source(self.main_database, validation=False),
+                "seg3d_gt": build_source(self.seg3d_gt_database),
+            }
+        )
+        data_module.setup("fit")
+
+        self.assertEqual(len(data_module.datasets[SplitType.VAL]), 1)
 
     def test_a_split_without_sources_has_no_dataloader(self) -> None:
         """

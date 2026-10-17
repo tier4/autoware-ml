@@ -165,6 +165,13 @@ class DataModule(L.LightningDataModule):
 
         Args:
             stage: Lightning stage, one of None, fit, validate, test or predict.
+
+        Raises:
+            ValueError: If a split the stage needs is served by sources but holds no record.
+                Lightning runs on an empty split without failing: an empty validation split
+                skips validation, and the checkpoint callbacks save after validation only, so
+                a training run would end without a checkpoint, and a test on an empty split
+                returns nothing. The run stops here instead, naming the sources to fix.
         """
         stage_to_splits = {
             None: (SplitType.TRAIN, SplitType.VAL, SplitType.TEST, SplitType.PREDICT),
@@ -183,6 +190,7 @@ class DataModule(L.LightningDataModule):
 
             datasets = []
             repeats = []
+            record_counts: dict[str, int] = {}
             for name, source in sources.items():
                 database = source.database
                 if database.database_hash not in split_records:
@@ -192,6 +200,7 @@ class DataModule(L.LightningDataModule):
                         scenarios=database.scenarios,
                     )
                 records = split_records[database.database_hash][_RECORD_SPLIT[split]]
+                record_counts[name] = len(records)
                 repeat = source.repeat if split == SplitType.TRAIN else 1
                 dataset = source.dataset(split)
                 bound = dataset.bind(records)
@@ -203,6 +212,16 @@ class DataModule(L.LightningDataModule):
                 datasets.append(bound)
                 repeats.append(repeat)
 
+            if sum(record_counts.values()) == 0:
+                raise ValueError(
+                    f"Split {split.value} of stage {stage} holds no record: "
+                    + ", ".join(
+                        f"source {name} serves {count} records of database "
+                        f"{sources[name].database.version}"
+                        for name, count in record_counts.items()
+                    )
+                    + ". Give the scenarios of these databases scenes in this split."
+                )
             self.datasets[split] = ConcatDataset(datasets=datasets, repeats=repeats)
             logger.info(f"Split {split} serves {len(self.datasets[split])} samples.")
 
