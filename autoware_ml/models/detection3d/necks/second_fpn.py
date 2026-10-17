@@ -24,8 +24,11 @@ from typing import Sequence
 
 import torch
 import torch.nn as nn
-from torch.utils.checkpoint import checkpoint
 
+from autoware_ml.models.common.activation_checkpointing import (
+    checkpoint_block,
+    checkpointing_active,
+)
 from autoware_ml.models.common.layers.conv import ConvModule
 
 
@@ -49,7 +52,10 @@ class SECONDFPN(nn.Module):
             in_channels: Input channel dimensions for each backbone stage.
             out_channels: Output channel dimensions for each upsampled stage.
             upsample_strides: Upsampling stride applied to each stage.
-            activation_checkpointing: Whether to enable activation checkpointing for memory efficiency.
+            activation_checkpointing: Whether to checkpoint the activations of every stage in
+                training, so a stage keeps its input and recomputes its layers in the backward
+                pass. The recomputation leaves the batch normalization statistics where the
+                forward put them, so the momentum of the model is unchanged.
         """
         super().__init__()
         blocks = []
@@ -77,29 +83,21 @@ class SECONDFPN(nn.Module):
         self.blocks = nn.ModuleList(blocks)
         self.activation_checkpointing = activation_checkpointing
 
-    def custom_forward(self, x: list[torch.Tensor]) -> torch.Tensor:
-        """Forward pass without activation checkpointing.
-
-        Args:
-            x: Backbone feature maps ordered from high to low resolution.
-
-        Returns:
-            Concatenated BEV feature tensor.
-        """
-        upsampled = [block(feature) for block, feature in zip(self.blocks, x)]
-        return torch.cat(upsampled, dim=1)
-
     def forward(self, x: list[torch.Tensor]) -> torch.Tensor:
         """Fuse multi-scale BEV features.
 
+        Every stage is its own checkpoint segment when checkpointing is active, so the backward
+        pass holds the input of one stage and the activations of that stage at a time.
+
         Args:
             x: Backbone feature maps ordered from high to low resolution.
 
         Returns:
             Concatenated BEV feature tensor.
         """
-        if self.activation_checkpointing:
-            upsampled = checkpoint(self.custom_forward, x, use_reentrant=False)
-            return upsampled
-        else:
-            return self.custom_forward(x)
+        checkpointing = checkpointing_active(self, self.activation_checkpointing)
+        upsampled = [
+            checkpoint_block(block, feature) if checkpointing else block(feature)
+            for block, feature in zip(self.blocks, x)
+        ]
+        return torch.cat(upsampled, dim=1)

@@ -23,8 +23,11 @@ from typing import Sequence
 
 import torch
 import torch.nn as nn
-from torch.utils.checkpoint import checkpoint
 
+from autoware_ml.models.common.activation_checkpointing import (
+    checkpoint_block,
+    checkpointing_active,
+)
 from autoware_ml.models.common.layers.conv import ConvModule
 
 
@@ -50,7 +53,10 @@ class SECONDBackbone(nn.Module):
             out_channels: Output channel counts per stage.
             layer_nums: Number of residual layers per stage.
             layer_strides: Stride applied by each stage.
-            activation_checkpointing: Whether to enable activation checkpointing for memory efficiency.
+            activation_checkpointing: Whether to checkpoint the activations of every stage in
+                training, so a stage keeps its input and recomputes its layers in the backward
+                pass. The recomputation leaves the batch normalization statistics where the
+                forward put them, so the momentum of the model is unchanged.
         """
         super().__init__()
         blocks = []
@@ -63,32 +69,21 @@ class SECONDBackbone(nn.Module):
         self.blocks = nn.ModuleList(blocks)
         self.activation_checkpointing = activation_checkpointing
 
-    def custom_forward(self, x: torch.Tensor) -> list[torch.Tensor]:
-        """Forward pass without activation checkpointing.
-
-        Args:
-            x: Input BEV feature map.
-
-        Returns:
-            List of multi-scale BEV feature maps.
-        """
-        outputs = []
-        for block in self.blocks:
-            x = block(x)
-            outputs.append(x)
-        return outputs
-
     def forward(self, x: torch.Tensor) -> list[torch.Tensor]:
         """Return multi-scale BEV features.
 
+        Every stage is its own checkpoint segment when checkpointing is active, so the backward
+        pass holds the input of one stage and the activations of that stage at a time.
+
         Args:
             x: Input BEV feature map.
 
         Returns:
             List of multi-scale BEV feature maps.
         """
-        if self.activation_checkpointing:
-            outputs = checkpoint(self.custom_forward, x, use_reentrant=False)
-            return outputs
-        else:
-            return self.custom_forward(x)
+        checkpointing = checkpointing_active(self, self.activation_checkpointing)
+        outputs = []
+        for block in self.blocks:
+            x = checkpoint_block(block, x) if checkpointing else block(x)
+            outputs.append(x)
+        return outputs

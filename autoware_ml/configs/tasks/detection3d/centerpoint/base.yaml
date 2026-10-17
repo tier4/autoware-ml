@@ -92,6 +92,8 @@ model:
     out_channels: [64, 128, 256]
     layer_nums: [3, 5, 5]
     layer_strides: ???
+    # Every stage recomputes its activations in the backward pass. The recomputation
+    # leaves the batch normalization statistics alone, so the momentum stays as set.
     activation_checkpointing: true
   pts_neck:
     _target_: autoware_ml.models.detection3d.necks.second_fpn.SECONDFPN

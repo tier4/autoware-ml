@@ -20,8 +20,8 @@ import unittest
 from unittest.mock import patch
 
 import torch
-from torch.utils.checkpoint import checkpoint as torch_checkpoint
 
+from autoware_ml.models.common import activation_checkpointing
 from autoware_ml.models.detection3d.necks import second_fpn
 from autoware_ml.models.detection3d.necks.second_fpn import SECONDFPN
 
@@ -160,24 +160,67 @@ class TestActivationCheckpointing(unittest.TestCase):
             self.assertIsNotNone(checkpointed_gradients[name], name)
             torch.testing.assert_close(checkpointed_gradients[name], plain_gradient, msg=name)
 
-    def test_checkpoint_is_used_when_enabled(self) -> None:
-        """The whole forward is wrapped in one non-reentrant checkpoint call."""
+    def test_batch_norm_statistics_move_once_per_step(self) -> None:
+        """
+        The recomputation in the backward pass runs every stage again in train mode. Left
+        alone, every batch normalization would update its running statistics a second time and
+        count two batches per step, doubling the momentum of the model. After one step the
+        checkpointed neck holds the statistics of the plain one.
+        """
+        plain, checkpointed = _build_neck_pair()
+        plain.train()
+        checkpointed.train()
+
+        plain(_inputs()).sum().backward()
+        checkpointed(_inputs()).sum().backward()
+
+        plain_buffers = dict(plain.named_buffers())
+        for name, buffer in checkpointed.named_buffers():
+            torch.testing.assert_close(buffer, plain_buffers[name], msg=name)
+        batch_counts = [
+            int(buffer) for name, buffer in checkpointed.named_buffers() if "num_batches" in name
+        ]
+        self.assertTrue(batch_counts)
+        self.assertEqual(set(batch_counts), {1})
+
+    def test_every_stage_is_its_own_checkpoint_segment(self) -> None:
+        """Each stage is checkpointed on its own, so one stage's activations live at a time."""
         neck = _build_neck(activation_checkpointing=True).train()
 
-        with patch.object(second_fpn, "checkpoint", wraps=torch_checkpoint) as checkpoint_call:
+        with patch.object(
+            second_fpn, "checkpoint_block", wraps=activation_checkpointing.checkpoint_block
+        ) as checkpoint_call:
             fused = neck(_inputs())
 
-        self.assertEqual(checkpoint_call.call_count, 1)
-        self.assertEqual(checkpoint_call.call_args.args[0], neck.custom_forward)
-        self.assertFalse(checkpoint_call.call_args.kwargs["use_reentrant"])
+        self.assertEqual(checkpoint_call.call_count, len(neck.blocks))
+        self.assertEqual(
+            [call.args[0] for call in checkpoint_call.call_args_list], list(neck.blocks)
+        )
         self.assertEqual(fused.shape, (_BATCH_SIZE, sum(_OUT_CHANNELS), _BEV_SIZE, _BEV_SIZE))
 
     def test_checkpoint_is_not_used_when_disabled(self) -> None:
         """The default forward never touches the checkpoint utility."""
         neck = _build_neck(activation_checkpointing=False).train()
 
-        with patch.object(second_fpn, "checkpoint", wraps=torch_checkpoint) as checkpoint_call:
+        with patch.object(
+            second_fpn, "checkpoint_block", wraps=activation_checkpointing.checkpoint_block
+        ) as checkpoint_call:
             neck(_inputs())
+
+        self.assertEqual(checkpoint_call.call_count, 0)
+
+    def test_checkpoint_is_not_used_without_a_backward_pass(self) -> None:
+        """Evaluation and inference run the stages directly, there is nothing to recompute."""
+        neck = _build_neck(activation_checkpointing=True)
+
+        with patch.object(
+            second_fpn, "checkpoint_block", wraps=activation_checkpointing.checkpoint_block
+        ) as checkpoint_call:
+            neck.eval()
+            neck(_inputs())
+            neck.train()
+            with torch.no_grad():
+                neck(_inputs())
 
         self.assertEqual(checkpoint_call.call_count, 0)
 
