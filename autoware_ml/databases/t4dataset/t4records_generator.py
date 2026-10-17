@@ -77,9 +77,6 @@ logger = logging.getLogger(__name__)
 # table is built three times over in memory before it is written (the records, their
 # dictionaries and the dataframe), about 440 KB per record against 190 KB on main, so
 # 80,000 records peaks near 36 GB and ran out of memory on a 24 GB machine.
-# Make the window a per-database setting with a small default, as main did with max_sweeps,
-# stream every scenario to parquet as it is generated instead of collecting the table, and
-# make SweepWindow raise when a pipeline asks for more sweeps than the record stores.
 MAX_SWEEPS = 9
 
 
