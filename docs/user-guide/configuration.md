@@ -236,7 +236,7 @@ The root also turns on the `IterationTimer` and `DataProcessingTimer` callbacks,
 step and data loading times on every batch, written out at `trainer.log_every_n_steps` like
 every other step metric, and the `RichProgressBar`, for every task. The `ModelSummaryExampleInput` callback sets the first training sample as the
 module's example input at fit start, so the model summary reports the FLOPs of one sample. The
-summary runs that forward pass once on every rank; set `model_summary_example_input: null` to
+summary runs that forward pass once on every rank. Set `model_summary_example_input: null` to
 skip it. The callback fails fit when the datamodule serves no training sample.
 
 ### `logger`
