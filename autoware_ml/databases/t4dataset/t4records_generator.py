@@ -72,6 +72,14 @@ logger = logging.getLogger(__name__)
 # Max number of lidar sweeps recorded on either side of the current lidar frame, and of past
 # camera keyframes. The T4Dataset lidar runs at 10Hz, so 9 past sweeps + 1 current sweep cover
 # all the lidar scans in one second.
+# TODO(KSeangTan): This window sets the size of every record: 9 past and 9 future lidar sweeps
+# plus 9 past camera keyframes, while the T4 training pipelines read one past sweep. The record
+# table is built three times over in memory before it is written (the records, their
+# dictionaries and the dataframe), about 440 KB per record against 190 KB on main, so
+# 80,000 records peaks near 36 GB and ran out of memory on a 24 GB machine.
+# Make the window a per-database setting with a small default, as main did with max_sweeps,
+# stream every scenario to parquet as it is generated instead of collecting the table, and
+# make SweepWindow raise when a pipeline asks for more sweeps than the record stores.
 MAX_SWEEPS = 9
 
 

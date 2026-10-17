@@ -47,6 +47,8 @@ logger = logging.getLogger(__name__)
 # Lidar channel each nuScenes sample is keyed on
 LIDAR_CHANNEL = LidarChannel.LIDAR_TOP
 # 10 past sweeps + 1 current sweep
+# TODO(KSeangTan): Same memory concern as MAX_SWEEPS in t4records_generator.py: the window sets
+# the size of every record and the table is collected whole before it is written.
 MAX_SWEEPS = 10
 
 
