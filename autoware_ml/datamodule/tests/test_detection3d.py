@@ -98,6 +98,35 @@ def test_every_box_keeps_its_attributes_and_an_unseen_box_stays() -> None:
     assert boxes.bbox_attributes == [["vehicle_state.parked"], ["vehicle_state.moving"], []]
 
 
+def test_the_served_boxes_do_not_share_memory_with_the_record_table() -> None:
+    """
+    Input: a record with one box, read twice, with the boxes of the first sample moved in
+        place as the global augmentations do.
+    Expected: the record table keeps the boxes as stored. The task hands the box constructor
+        a view into the table, and a tensor sharing it would write every augmentation back,
+        so a persistent worker would serve boxes that no longer match the reloaded points.
+    Check: the stored row and the boxes of the second sample.
+    """
+    task = build_task([box("a", "car", fields={Box3DFieldIndex.X: 10.0, Box3DFieldIndex.Y: 2.0})])
+
+    first = task.get_data_sample(0)
+    assert first.detection3d_gt_bboxes_3d is not None
+    first.detection3d_gt_bboxes_3d.bbox_params[:, : Box3DFieldIndex.Z] = torch.tensor([7.82, -6.55])
+
+    stored = (
+        task.dataset_records_dataframe.item(0, DatasetTableSchema.BOXES_3D.name)
+        .struct.field("box3d_params")
+        .to_numpy()
+    )
+    np.testing.assert_array_equal(stored[0, : Box3DFieldIndex.Z], [10.0, 2.0])
+    second = task.get_data_sample(0)
+    assert second.detection3d_gt_bboxes_3d is not None
+    assert torch.equal(
+        second.detection3d_gt_bboxes_3d.bbox_params[0, : Box3DFieldIndex.Z],
+        torch.tensor([10.0, 2.0]),
+    )
+
+
 def test_a_record_without_boxes_carries_no_attributes() -> None:
     boxes = build_task([]).get_data_sample(0).detection3d_gt_bboxes_3d
 
