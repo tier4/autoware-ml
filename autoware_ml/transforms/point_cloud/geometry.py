@@ -5,8 +5,7 @@ Point cloud geometry transforms for augmentation to the points, the 3D bboxes an
 The global augmentations (``GlobalRotScaleTrans``, ``RandomRotateTargetAngle`` and
 ``GlobalBEVRandomFlip``) rewrite the coordinates of the scene. Each modality is processed only
 when the sample carries it, so the same transform serves lidar-only (e.g. CenterPoint),
-camera-only (e.g. StreamPETR) and fusion (e.g. BEVFusion) pipelines. A sample with neither a
-point cloud nor camera data is a loud error, never a silent skip. The cameras are never moved
+camera-only (e.g. StreamPETR) and fusion (e.g. BEVFusion) pipelines. The cameras are never moved
 and the images are never re-rendered, so the lidar to camera matrices take the inverse of the
 augmentation and a transformed point keeps projecting onto the same pixel. The sampled
 augmentation is saved as a 4x4 matrix in ``lidar_transformation_sample``, composed with any
@@ -108,21 +107,16 @@ def apply_lidar_transformation(
 class GlobalRotScaleTrans(BaseTransform):
     """Apply global rotation, scaling, and optional translation to points, bboxes and cameras.
 
-    Required keys:
-        - ``point_cloud_data``: rotated, scaled and translated in place. Required so that a
-          pipeline running the transform before the points are loaded fails instead of moving
-          the boxes and cameras away from the points loaded afterwards.
-
     Optional keys:
-        - ``camera_image_data``: lidar to camera matrices updated when available.
+        - ``point_cloud_data``: rotated, scaled and translated in place when available. A
+          camera-only pipeline carries no points, so the boxes and the camera matrices are
+          augmented on their own.
         - ``detection3d_gt_bboxes_3d``: rotated, scaled and translated in place when available.
         - ``lidar_transformation_sample``: composed with the sampled augmentation when available.
 
     Generated keys:
         - ``lidar_transformation_sample``: the (composed) 4x4 augmentation.
     """
-
-    _required_keys = ["point_cloud_data"]
 
     def __init__(
         self,
@@ -208,20 +202,17 @@ class GlobalRotScaleTrans(BaseTransform):
         return lidar_transformation_sample, rotation_scale_translation_data
 
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
-        """Rotate, scale, and translate the points, the bboxes and the camera matrices."""
+        """Rotate, scale, and translate the available modalities and the bboxes."""
         lidar_transformation_sample, rotation_scale_translation_data = self.sample_rot_scale_trans()
         # Points and boxes are rows, so they take the transposed rotation
         row_vector_rotation_matrix = rotation_scale_translation_data.rotation_matrix.T
         scale_factor = rotation_scale_translation_data.scale_factor
         translation_vector = rotation_scale_translation_data.translation_vector
 
-        # This is checked in the _validate_required_keys()
-        point_cloud_data: BasePoints = (
-            model_gt_sample.point_cloud_data  # type: ignore[reportOptionalMemberAccess]
-        )
-        point_cloud_data.rotate(row_vector_rotation_matrix)
-        point_cloud_data.scale(scale_factor)
-        point_cloud_data.translate(translation_vector)
+        if model_gt_sample.point_cloud_data is not None:
+            model_gt_sample.point_cloud_data.rotate(row_vector_rotation_matrix)
+            model_gt_sample.point_cloud_data.scale(scale_factor)
+            model_gt_sample.point_cloud_data.translate(translation_vector)
 
         if model_gt_sample.detection3d_gt_bboxes_3d is not None:
             model_gt_sample.detection3d_gt_bboxes_3d.rotate(row_vector_rotation_matrix)
@@ -262,21 +253,15 @@ class RandomRotateTargetAngle(GlobalRotScaleTrans):
 class GlobalBEVRandomFlip(BaseTransform):
     """Globally and randomly flip points, bboxes and cameras along the BEV axes.
 
-    Required keys:
-        - ``point_cloud_data``: flipped in place. Required so that a pipeline running the
-          transform before the points are loaded fails instead of flipping the boxes and
-          cameras away from the points loaded afterwards.
-
     Optional keys:
-        - ``camera_image_data``: lidar to camera matrices updated when available.
+        - ``point_cloud_data``: flipped in place when available. A camera-only pipeline carries
+          no points, so the boxes and the camera matrices are flipped on their own.
         - ``detection3d_gt_bboxes_3d``: flipped in place when available.
         - ``lidar_transformation_sample``: composed with the sampled flip when available.
 
     Generated keys:
         - ``lidar_transformation_sample``: the (composed) 4x4 flip.
     """
-
-    _required_keys = ["point_cloud_data"]
 
     def __init__(
         self, horizontal_flip_ratio: float = 0.5, vertical_flip_ratio: float = 0.5
@@ -306,7 +291,7 @@ class GlobalBEVRandomFlip(BaseTransform):
         bev_flip_direction: BEVDirection,
     ) -> Float32[Tensor, "3 3"]:
         """
-        Apply the specified flip to the point cloud and the bboxes when present.
+        Apply the specified flip to the point cloud and the bboxes, whichever are available.
 
         Args:
             model_gt_sample: The ModelGTSample to apply the flip to.
@@ -317,17 +302,14 @@ class GlobalBEVRandomFlip(BaseTransform):
         Returns:
             Float32[Tensor, "3 3"]: The flips applied so far followed by this one.
         """
-        # This is checked in the _validate_required_keys()
-        point_cloud_data: BasePoints = (
-            model_gt_sample.point_cloud_data  # type: ignore[reportOptionalMemberAccess]
-        )
-        point_cloud_data.flip_bev(bev_direction=bev_flip_direction)
+        if model_gt_sample.point_cloud_data is not None:
+            model_gt_sample.point_cloud_data.flip_bev(bev_direction=bev_flip_direction)
         if model_gt_sample.detection3d_gt_bboxes_3d is not None:
             model_gt_sample.detection3d_gt_bboxes_3d.flip_bev(bev_direction=bev_flip_direction)
         return BEV_FLIP_MATRICES[bev_flip_direction] @ rotation_matrix
 
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
-        """Flip the points, the bboxes and the camera matrices along the sampled axes."""
+        """Flip the available modalities and the bboxes along the sampled axes."""
         rotation_matrix = torch.eye(3, dtype=torch.float32)
         horizontal_flip, vertical_flip = self.sample_flip()
         transformation_order = []

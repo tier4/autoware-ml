@@ -732,21 +732,25 @@ class TestGlobalRotScaleTrans(BaseCameraLidarGeometryTestCase):
             torch.allclose(output.point_cloud_data.points[:, :3], expected_xyz, atol=1e-5)
         )
 
-    def test_camera_only_sample_is_rejected(self) -> None:
+    def test_camera_only_sample(self) -> None:
         """
-        Test that a sample without points raises KeyError even when it carries cameras. Running
-        the transform before the points are loaded would move the boxes and the camera matrices
-        away from the points loaded afterwards, so the points are required, not optional.
+        Test that a camera-only sample, as a camera-only pipeline serves, updates the cameras
+        and leaves the points None: a point the sample would have held still projects where it
+        did.
         """
         sample = self.build_multi_task_gt_sample(with_point_cloud_data=False)
+        output, expected_transformation_matrix = self.run_seeded_transform(sample)
 
-        with self.assertRaisesRegex(KeyError, "point_cloud_data"):
-            self.build_transform()(sample)
-        # Nothing was touched before the rejection.
-        assert sample.camera_image_data is not None
-        np.testing.assert_array_equal(
-            to_float64(sample.camera_image_data.lidar2cams), self.original_lidar2cams
+        assert output.camera_image_data is not None
+        self.assertIsNone(output.point_cloud_data)
+        self.assert_camera_matrices_follow(output.camera_image_data, expected_transformation_matrix)
+        original_xyz = to_float64(self.original_points[:, :3])
+        transformed_xyz = to_float64(
+            self.apply_transformation_to_xyz(
+                self.original_points[:, :3], to_float32_tensor(expected_transformation_matrix)
+            )
         )
+        self.assert_projections_preserved(output.camera_image_data, original_xyz, transformed_xyz)
 
     def test_without_bboxes(self) -> None:
         """Test that a sample without bboxes is transformed."""
@@ -846,15 +850,29 @@ class TestGlobalRotScaleTrans(BaseCameraLidarGeometryTestCase):
             atol=1e-3,
         )
 
-    def test_missing_both_modalities(self) -> None:
-        """Test that a sample with neither points nor cameras raises KeyError."""
+    def test_sample_without_points_or_cameras_still_moves_the_boxes(self) -> None:
+        """
+        Test that a sample with neither points nor cameras is transformed: the boxes move and
+        the augmentation is recorded, so no modality is required.
+        """
         sample = self.build_multi_task_gt_sample(
             with_point_cloud_data=False, with_camera_image_data=False
         )
-        transform = GlobalRotScaleTrans(yaw_rot_range=[0.0, 0.0], scale_ratio_range=[1.0, 1.0])
+        output, expected_transformation_matrix = self.run_seeded_transform(sample)
 
-        with self.assertRaises(KeyError):
-            transform(sample)
+        self.assertIsNone(output.point_cloud_data)
+        self.assertIsNone(output.camera_image_data)
+        assert output.lidar_transformation_sample is not None
+        np.testing.assert_allclose(
+            to_float64(output.lidar_transformation_sample.transformation_matrix),
+            expected_transformation_matrix,
+            rtol=1e-5,
+            atol=1e-5,
+        )
+        assert output.detection3d_gt_bboxes_3d is not None
+        self.assertFalse(
+            torch.equal(output.detection3d_gt_bboxes_3d.bbox_params, self.original_bbox_params)
+        )
 
 
 class TestGlobalBEVRandomFlip(BaseCameraLidarGeometryTestCase):
@@ -993,19 +1011,24 @@ class TestGlobalBEVRandomFlip(BaseCameraLidarGeometryTestCase):
         self.assertTrue(torch.allclose(points[:, 0], -self.original_points[:, 0]))
         self.assertTrue(torch.allclose(points[:, 1], self.original_points[:, 1]))
 
-    def test_camera_only_sample_is_rejected(self) -> None:
+    def test_camera_only_sample(self) -> None:
         """
-        Test that a sample without points raises KeyError even when it carries cameras and
-        boxes, so a flip can never run ahead of the points it has to stay aligned with.
+        Test that a camera-only sample flips its boxes and camera matrices and leaves the
+        points None.
         """
         sample = self.build_multi_task_gt_sample(with_point_cloud_data=False)
+        output = GlobalBEVRandomFlip(horizontal_flip_ratio=1.0, vertical_flip_ratio=1.0)(sample)
 
-        with self.assertRaisesRegex(KeyError, "point_cloud_data"):
-            GlobalBEVRandomFlip(horizontal_flip_ratio=1.0, vertical_flip_ratio=1.0)(sample)
-        # Nothing was touched before the rejection.
-        assert sample.detection3d_gt_bboxes_3d is not None
+        assert output.camera_image_data is not None
+        assert output.detection3d_gt_bboxes_3d is not None
+        self.assertIsNone(output.point_cloud_data)
+        self.assert_camera_matrices_follow(output.camera_image_data, self.both_flips)
         self.assertTrue(
-            torch.equal(sample.detection3d_gt_bboxes_3d.bbox_params, self.original_bbox_params)
+            torch.allclose(
+                output.detection3d_gt_bboxes_3d.bbox_params[:, :2],
+                -self.original_bbox_params[:, :2],
+                atol=1e-5,
+            )
         )
 
     def test_composes_with_previous_transformation(self) -> None:
@@ -1067,14 +1090,26 @@ class TestGlobalBEVRandomFlip(BaseCameraLidarGeometryTestCase):
             lidar2images @ self.horizontal_flip, self.original_lidar2images, rtol=1e-6, atol=1e-4
         )
 
-    def test_missing_both_modalities(self) -> None:
-        """Test that a sample with neither points nor cameras raises KeyError."""
+    def test_sample_without_points_or_cameras_still_flips_the_boxes(self) -> None:
+        """
+        Test that a sample with neither points nor cameras is flipped: the boxes move and the
+        flip is recorded, so no modality is required.
+        """
         sample = self.build_multi_task_gt_sample(
             with_point_cloud_data=False, with_camera_image_data=False
         )
+        output = GlobalBEVRandomFlip(horizontal_flip_ratio=1.0, vertical_flip_ratio=1.0)(sample)
 
-        with self.assertRaises(KeyError):
-            GlobalBEVRandomFlip()(sample)
+        self.assertIsNone(output.point_cloud_data)
+        self.assertIsNone(output.camera_image_data)
+        assert output.detection3d_gt_bboxes_3d is not None
+        self.assertTrue(
+            torch.allclose(
+                output.detection3d_gt_bboxes_3d.bbox_params[:, :2],
+                -self.original_bbox_params[:, :2],
+                atol=1e-5,
+            )
+        )
 
 
 if __name__ == "__main__":
