@@ -592,13 +592,17 @@ class BEVFusionDetectionModel(ModuleBaseModel):
         images = image_data.images[:1].float()
         depth_maps = image_data.depth_maps[:1].float()
         camera_intrinsics = image_data.camera_intrinsics[:1].float()
+        image_augmentation_matrices = image_data.image_augmentation_matrices[:1].float()
         lidar2cams = image_data.lidar2cams[:1].float()
 
         imgs_uint8 = (images[0] * 255.0).round().clamp(0.0, 255.0).to(torch.uint8)
         with torch.no_grad():
             image_feats = self.camera_network.extract_image_features(images)[0]
+            # The raw intrinsics with the augmentation of the export sample, as the training
+            # forward lifts the frustum, so the exported geometry matches the images the
+            # runtime feeds the graph.
             geom_feats, kept, ranks, indices = self.camera_network.build_export_geometry(
-                camera_intrinsics, lidar2cams
+                camera_intrinsics, lidar2cams, image_augmentation_matrices
             )
 
         return {

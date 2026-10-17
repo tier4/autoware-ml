@@ -771,6 +771,58 @@ class TestBEVFusionDetectionModelCameraLidar(_BEVFusionDetectionModelTestCase):
         )
         torch.testing.assert_close(recorded["aug_lidar2cam"], image_data.lidar2cams)
 
+    def test_export_geometry_undoes_the_augmentation_of_the_export_sample(self) -> None:
+        """
+        Test that the pooling geometry baked into the export is built from the raw intrinsics
+        under the image augmentation the export sample records, as the training forward lifts
+        the frustum. With a resize by 0.48 and a crop, as the camera pipelines produce, the raw
+        intrinsics under an identity augmentation lift the frustum metres away from the images
+        the runtime feeds the graph, so the export must not drop the augmentation.
+        """
+        camera_network = self.model.camera_network
+        assert camera_network is not None
+        view_transform = camera_network.view_transform
+        pixel_affine = torch.tensor(
+            [[0.48, 0.0, -6.0], [0.0, 0.48, -14.0], [0.0, 0.0, 1.0]],
+            dtype=torch.float32,
+            device=self.device,
+        )
+        image_augmentation = torch.eye(4, device=self.device)
+        image_augmentation[:2, :2] = pixel_affine[:2, :2]
+        image_augmentation[:2, 3] = pixel_affine[:2, 2]
+        image_data = self._build_image_gt_batch()._replace(
+            image_augmentation_matrices=image_augmentation.expand(
+                self.batch_size, self.num_cams, 4, 4
+            ).contiguous(),
+        )
+
+        export_specs = self.model.build_export_specs(
+            self._build_batch_inputs(voxels_data=self._build_voxels_data(), image_data=image_data)
+        )
+
+        geom_feats, kept, ranks, indices = export_specs["bevfusion_camera_lidar"].args[5:9]
+        with torch.no_grad():
+            expected = view_transform.bev_pool_aux(
+                view_transform.camera_to_lidar_geometry(
+                    torch.inverse(image_data.lidar2cams[:1]),
+                    image_data.camera_intrinsics[:1],
+                    image_data.image_augmentation_matrices[:1],
+                )
+            )
+            identity = torch.eye(4, device=self.device).expand(1, self.num_cams, 4, 4)
+            without_augmentation = view_transform.bev_pool_aux(
+                view_transform.camera_to_lidar_geometry(
+                    torch.inverse(image_data.lidar2cams[:1]),
+                    image_data.camera_intrinsics[:1],
+                    identity.contiguous(),
+                )
+            )
+        torch.testing.assert_close(geom_feats.long(), expected.geom_feats)
+        torch.testing.assert_close(kept, expected.kept)
+        torch.testing.assert_close(ranks, expected.ranks)
+        torch.testing.assert_close(indices, expected.indices)
+        self.assertFalse(torch.equal(kept, without_augmentation.kept))
+
     def test_build_export_specs_exports_image_backbone_and_main_body(self) -> None:
         """
         Test that a camera-lidar model exports the image backbone and the fused main body with the

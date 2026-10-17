@@ -528,13 +528,25 @@ class TestUndistortImage(unittest.TestCase):
         self.assertTrue(
             torch.equal(camera_image_data.lidar2cams, sample.camera_image_data.lidar2cams)
         )
-        # The undistortion is not a 2D affine, it is carried by the intrinsics alone.
-        self.assertTrue(
-            torch.equal(
-                camera_image_data.image_augmentation_matrices,
-                sample.camera_image_data.image_augmentation_matrices,
+        # The change of pinhole calibration is recorded as the pixel affine from the raw
+        # intrinsics to the new ones, so the raw intrinsics undone through the augmentation
+        # matrices lift a pixel exactly as the new intrinsics do.
+        for index in range(self.num_cameras):
+            affine = torch.eye(3)
+            affine[:2, :2] = camera_image_data.image_augmentation_matrices[index, :2, :2]
+            affine[:2, 2] = camera_image_data.image_augmentation_matrices[index, :2, 3]
+            expected_affine = camera_image_data.augmented_camera_intrinsics[
+                index
+            ] @ torch.linalg.inv(camera_image_data.camera_intrinsics[index])
+            self.assertTrue(torch.allclose(affine, expected_affine, atol=1e-4))
+            pixel = torch.tensor([37.0, 11.0, 1.0])
+            through_raw = torch.linalg.inv(camera_image_data.camera_intrinsics[index]) @ (
+                torch.linalg.inv(affine) @ pixel
             )
-        )
+            through_new = (
+                torch.linalg.inv(camera_image_data.augmented_camera_intrinsics[index]) @ pixel
+            )
+            self.assertTrue(torch.allclose(through_raw, through_new, atol=1e-4))
 
     def test_raises_after_an_image_space_transform(self) -> None:
         """

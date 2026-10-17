@@ -184,17 +184,25 @@ class BEVFusionCamera(nn.Module):
 
     def build_export_geometry(
         self,
-        camera_intrinsics: Float32[torch.Tensor, "1 num_cams 4 4"],
+        camera_intrinsics: Float32[torch.Tensor, "1 num_cams 3 3"],
         aug_lidar2cam: Float32[torch.Tensor, "1 num_cams 4 4"],
+        img_aug_matrix: Float32[torch.Tensor, "1 num_cams 4 4"] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Precompute the BEV-pool metadata baked into the exported graph.
 
-        The runtime resolves the pooling geometry once from the calibration, so the export sample
-        uses an identity image augmentation to keep the metadata free of training-time augmentation.
+        The runtime resolves the pooling geometry once from the calibration, so the geometry is
+        built the way the training forward builds it: the raw intrinsics undone through the
+        image augmentation of the export sample. That sample comes out of the test pipeline,
+        whose resize, crop and undistortion are deterministic and are the ones the runtime
+        feeds the graph with, so they are part of the exported geometry. Pairing the raw
+        intrinsics with an identity augmentation instead lifts the frustum metres away from
+        the images the graph is given.
 
         Args:
-            camera_intrinsics: Single-sample camera intrinsic matrices.
+            camera_intrinsics: Single-sample raw camera intrinsic matrices.
             aug_lidar2cam: Single-sample augmented lidar-to-camera extrinsics.
+            img_aug_matrix: Single-sample image augmentation matrices mapping the raw image
+                plane onto the images the graph is given, identity when omitted.
 
         Returns:
             Tuple of geometry features, keep mask, sorted ranks, and sorting indices.
@@ -202,11 +210,12 @@ class BEVFusionCamera(nn.Module):
         device = camera_intrinsics.device
         num_cams = camera_intrinsics.shape[1]
         camera2aug_lidar = torch.inverse(aug_lidar2cam)
-        identity_img_aug = torch.eye(4, device=device).view(1, 1, 4, 4).repeat(1, num_cams, 1, 1)
+        if img_aug_matrix is None:
+            img_aug_matrix = torch.eye(4, device=device).view(1, 1, 4, 4).repeat(1, num_cams, 1, 1)
         geom = self.view_transform.camera_to_lidar_geometry(
             camera2aug_lidar,
             camera_intrinsics,
-            identity_img_aug,
+            img_aug_matrix,
         )
         return self.view_transform.bev_pool_aux(geom)
 

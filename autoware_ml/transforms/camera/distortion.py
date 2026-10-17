@@ -67,7 +67,7 @@ class UndistortImage(BaseTransform):
         images = camera_image_data.images
         camera_intrinsics = camera_image_data.camera_intrinsics
         augmented_camera_intrinsics = camera_image_data.augmented_camera_intrinsics.clone()
-        image_augmentation_matrices = camera_image_data.image_augmentation_matrices
+        image_augmentation_matrices = camera_image_data.image_augmentation_matrices.clone()
         identity = torch.eye(
             4, dtype=image_augmentation_matrices.dtype, device=image_augmentation_matrices.device
         )
@@ -115,11 +115,23 @@ class UndistortImage(BaseTransform):
             augmented_camera_intrinsics[index] = torch.from_numpy(new_camera_matrix).to(
                 augmented_camera_intrinsics.dtype
             )
+            # Both matrices are pinhole, so the pixels of the raw calibration map onto the
+            # pixels of the new one through the affine K_new @ inv(K_raw). Composed into
+            # the augmentation matrices, the raw intrinsics undone with them lift a pixel
+            # exactly as the new intrinsics do, so a consumer of that pair stays exact.
+            pixel_affine = torch.from_numpy(new_camera_matrix @ np.linalg.inv(camera_matrix))
+            image_augmentation_matrices[index] = identity.clone()
+            image_augmentation_matrices[index, :2, :2] = pixel_affine[:2, :2].to(
+                image_augmentation_matrices.dtype
+            )
+            image_augmentation_matrices[index, :2, 3] = pixel_affine[:2, 2].to(
+                image_augmentation_matrices.dtype
+            )
             undistorted_coefficients.append(torch.zeros(0, dtype=coefficients.dtype))
 
-        # The undistortion is not a 2D affine, so it is carried by the intrinsics alone and
-        # leaves the composed image augmentation matrices untouched. The projections are
-        # rebuilt from the new intrinsics, and the coefficients are cleared so no later
+        # The resampling of the pixels is not a 2D affine, but the change of pinhole
+        # calibration is, and that is what the augmentation matrices record. The projections
+        # are rebuilt from the new intrinsics, and the coefficients are cleared so no later
         # projection distorts the points onto the now pinhole images.
         # model_copy does not validate what it is given, so the copy is validated explicitly.
         undistorted_camera_image_data = BaseImages.model_validate(
@@ -129,6 +141,7 @@ class UndistortImage(BaseTransform):
                     "distortion_coefficients": undistorted_coefficients,
                     "distortion_models": ["" for _ in camera_image_data.camera_names],
                     "augmented_camera_intrinsics": augmented_camera_intrinsics,
+                    "image_augmentation_matrices": image_augmentation_matrices,
                     "lidar2images": compose_lidar2images(
                         augmented_camera_intrinsics, camera_image_data.lidar2cams
                     ),
