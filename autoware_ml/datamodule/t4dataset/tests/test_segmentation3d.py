@@ -38,7 +38,7 @@ TAXONOMY = SegmentationTaxonomy(
     {"dynamic": ("car",), "static": ("vegetation",)},
 )
 
-# The record stores the mask path six segments deep, the task resolves it against the root
+# The record stores the mask path relative to the database root, the task joins it onto the root
 MASK_RELATIVE_PATH = "db_v1/scene/dataset_v1/data/lidar_token/0.bin"
 
 
@@ -50,13 +50,13 @@ def build_records_dataframe(mask_path: str | None, categories: dict[str, int]) -
         "lidar_sensor_id": "lidar",
         "lidar_sensor_channel_name": "LIDAR_TOP",
         "lidar_timestamp_seconds": 0.0,
-        "lidar_pointcloud_path": "/absolute/" + MASK_RELATIVE_PATH,
-        "lidar_pointcloud_source_path": None,
+        "lidar_pointcloud_relative_path": "db_v1/scene/dataset_v1/data/lidar_token/0.pcd.bin",
+        "lidar_pointcloud_source_relative_path": None,
         "lidar_pointcloud_num_features": 5,
         "lidar_sensor_to_ego_pose_matrix": np.eye(4).tolist(),
         "lidar_frame_ego_pose_to_global_matrix": np.eye(4).tolist(),
         "lidar_sensor_to_lidar_sweep_matrix": np.eye(4).tolist(),
-        "lidar_pointcloud_semantic_mask_path": mask_path,
+        "lidar_pointcloud_semantic_mask_relative_path": mask_path,
     }
     return pl.DataFrame(
         {
@@ -86,7 +86,7 @@ class TestT4Segmentation3DTask(unittest.TestCase):
         np.array([0, 1, 2, 3], dtype=np.uint8).tofile(mask_path)
 
     def _build_task(
-        self, mask_path: str | None = "/absolute/" + MASK_RELATIVE_PATH, **categories: int
+        self, mask_path: str | None = MASK_RELATIVE_PATH, **categories: int
     ) -> T4Segmentation3DTask:
         """Build the task over a one row record table."""
         return T4Segmentation3DTask(

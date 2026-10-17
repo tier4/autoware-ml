@@ -172,8 +172,8 @@ columns, plus a frame index). Packs are written by the data processing tools; au
 reads them.
 
 When a scene has a pack, record generation reads its index once and stores the location of every
-frame and sweep in `lidar_pointcloud_t4pack_frame`. `lidar_pointcloud_path` keeps the path of the
-loose file, so the pack is found next to it. `LoadPointsFromFile` and
+frame and sweep in `lidar_pointcloud_t4pack_frame`. `lidar_pointcloud_relative_path` keeps the
+path of the loose file, so the pack is found next to it. `LoadPointsFromFile` and
 `LoadMultiSweepPointsFromFile` choose the file format with `pcd_file_format`, a
 `PCDFileFormat` from `autoware_ml.types.dataset`:
 

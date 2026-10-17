@@ -51,7 +51,7 @@ def test_image_frame_round_trips_distortion_through_dictionary() -> None:
         image_sensor_id="sensor",
         image_sensor_channel_name="CAM_FRONT",
         image_timestamp_seconds=1.0,
-        image_path="a.jpg",
+        image_relative_path="samples/CAM_FRONT/a.jpg",
         image_height=10,
         image_width=20,
         cam2img=np.eye(3, dtype=np.float64),
@@ -67,3 +67,26 @@ def test_image_frame_round_trips_distortion_through_dictionary() -> None:
 
     assert list(restored.image_distortion_coefficients) == [0.1, -0.2, 0.001, 0.002, 0.05]
     assert restored.image_distortion_model == "plumb_bob"
+
+
+def test_image_frame_rejects_an_absolute_path() -> None:
+    # The records store every blob path relative to the database root, so a path with a root
+    # would bind the record to the machine that generated it
+    with pytest.raises(ValueError, match="image_relative_path .* is absolute"):
+        ImageFrameDataModel(
+            image_frame_id="frame",
+            image_keyframe=True,
+            image_sensor_id="sensor",
+            image_sensor_channel_name="CAM_FRONT",
+            image_timestamp_seconds=1.0,
+            image_relative_path="/data/nuscenes/samples/CAM_FRONT/a.jpg",
+            image_height=10,
+            image_width=20,
+            cam2img=np.eye(3, dtype=np.float64),
+            image_distortion_coefficients=[],
+            image_distortion_model="",
+            image_sensor_to_ego_pose_matrix=np.eye(4, dtype=np.float64),
+            image_frame_ego_pose_to_global_matrix=np.eye(4, dtype=np.float64),
+            lidar2cam=None,
+            lidar2img=None,
+        )

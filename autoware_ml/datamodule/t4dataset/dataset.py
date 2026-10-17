@@ -362,9 +362,7 @@ class T4Dataset(BaseDataset):
         sensor_to_ego = lidar_frame.lidar_sensor_to_ego_pose_matrix_fp32
         if source_view is not None:
             sensor_to_ego = sensor_to_ego @ source_view.sensor_to_frame_matrix.numpy()
-        scene_token = scene_dir_fragment(
-            lidar_frame.lidar_pointcloud_relative_path, str(self.database_root_path)
-        )
+        scene_token = self.scene_token(idx, lidar_frame)
         return FrameMetaSample(
             # The boxes and the points live in the lidar sensor frame, so the map transform
             # composes the sensor mounting with the ego pose of the frame
@@ -379,6 +377,23 @@ class T4Dataset(BaseDataset):
                 self.map_provider.osm_path(scene_token) if self.map_provider is not None else None
             ),
         )
+
+    def scene_token(self, idx: int, lidar_frame: LidarFrameDataModel) -> str:
+        """
+        Scene token of a record, the key the map provider resolves a lanelet map by.
+
+        A T4 database keeps every scene in its own directory, so the token is the scene
+        directory the stored lidar path starts with. A database with another layout
+        overrides this.
+
+        Args:
+          idx: Index of the record.
+          lidar_frame: Keyframe lidar frame of the record.
+
+        Returns:
+          str: Scene token ``{dataset_name}/{scenario_id}/{scenario_version}``.
+        """
+        return scene_dir_fragment(lidar_frame.lidar_pointcloud_relative_path)
 
     def get_image_data_samples(self, idx: int, source_index: int) -> Sequence[ImageSample] | None:
         """
@@ -423,7 +438,7 @@ class T4Dataset(BaseDataset):
                 )
             image_samples.append(
                 ImageSample(
-                    image_path=self._update_frame_path(image_frame.image_path),
+                    image_path=self._update_frame_path(image_frame.image_relative_path),
                     camera_name=image_frame.image_sensor_channel_name,
                     timestamp=image_frame.image_timestamp_seconds,
                     camera_intrinsic=torch.tensor(image_frame.cam2img_fp32, dtype=torch.float32),
@@ -441,16 +456,16 @@ class T4Dataset(BaseDataset):
         """
         Resolve a stored frame path against the database root.
 
+        The records store every blob path relative to the root of the database that generated
+        them, so a cache built under one root serves the same database mounted under another.
+
         Args:
-          frame_path: Frame path as the record table stores it.
+          frame_path: Frame path relative to the database root, as the record table stores it.
 
         Returns:
           str: Path of the frame under the database root.
         """
-        return str(
-            self.database_root_path
-            / LidarFrameDatasetSchema.relative_to_database_root(frame_path, "frame path")
-        )
+        return str(self.database_root_path / frame_path)
 
     def get_lidar_pointcloud_data_samples(
         self, idx: int, source_view: LidarSourceView | None
@@ -485,7 +500,9 @@ class T4Dataset(BaseDataset):
                 ]
             )
             lidar_pointcloud_path = self._update_frame_path(
-                lidar_pointcloud_metadata[LidarFrameDatasetSchema.lidar_pointcloud_path.name]
+                lidar_pointcloud_metadata[
+                    LidarFrameDatasetSchema.lidar_pointcloud_relative_path.name
+                ]
             )
             if source_view is not None:
                 lidar_sensor_to_ego_pose_matrix = (

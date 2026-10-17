@@ -13,35 +13,34 @@ from __future__ import annotations
 from pathlib import PurePosixPath
 
 
-def scene_dir_fragment(lidar_path: str, data_root: str) -> str:
+def scene_dir_fragment(lidar_relative_path: str) -> str:
     """Scene directory fragment ``<db>/<uuid>/<version>`` from a stored lidar path.
 
     This is the ``scene_token`` convention the metrics use: unlike the opaque
     annotation token, it lets :class:`T4LaneletMapResolver` locate the scene's
-    lanelet map directly under ``data_root``. A stored path may be relative to
-    ``data_root``, already prefixed by it, or absolute under it, the fragment is
-    always the first three components below the root.
+    lanelet map directly under the database root. The records store every path
+    relative to that root, so the fragment is the first three components of the
+    stored path.
 
     Args:
-        lidar_path: Stored lidar file path from the annotation record.
-        data_root: Dataset root directory.
+        lidar_relative_path: Lidar file path of the record, relative to the database root.
 
     Returns:
         The ``<db>/<uuid>/<version>`` fragment below the root.
+
+    Raises:
+        ValueError: If the path is absolute or does not start at a scene directory.
     """
-    path = PurePosixPath(lidar_path)
-    root = PurePosixPath(data_root)
-    if path.is_relative_to(root):
-        path = path.relative_to(root)
+    path = PurePosixPath(lidar_relative_path)
     if path.is_absolute():
         raise ValueError(
-            f"Cannot derive a scene directory from lidar path {lidar_path!r}: an "
-            f"absolute path must live under data_root {data_root!r}."
+            f"Cannot derive a scene directory from lidar path {lidar_relative_path!r}: the "
+            "records store their paths relative to the database root."
         )
     parts = path.parts
     if len(parts) < 4:
         raise ValueError(
-            f"Cannot derive a scene directory from lidar path {lidar_path!r}; expected "
+            f"Cannot derive a scene directory from lidar path {lidar_relative_path!r}; expected "
             "'<db>/<scene_uuid>/<version>/...'."
         )
     return "/".join(parts[:3])

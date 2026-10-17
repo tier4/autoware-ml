@@ -91,7 +91,7 @@ def write_images(root: Path, records: pl.DataFrame) -> pl.DataFrame:
                     "image_sensor_id": camera,
                     "image_sensor_channel_name": camera,
                     "image_timestamp_seconds": float(record_index),
-                    "image_path": str(path),
+                    "image_relative_path": relative,
                     "image_height": IMAGE_SIZE[0],
                     "image_width": IMAGE_SIZE[1],
                     "cam2img": camera_intrinsic.tolist(),

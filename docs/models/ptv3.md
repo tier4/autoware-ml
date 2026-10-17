@@ -232,7 +232,6 @@ The split export produces one graph per `deploy.onnx.modules` entry:
 | `autoware_ml/datamodule/t4dataset/dataset.py`                           | T4Dataset records as a dataset                 |
 | `autoware_ml/datamodule/nuscenes/dataset.py`                            | nuScenes dataset                               |
 | `autoware_ml/datamodule/t4dataset/segmentation3d.py`                    | Semantic masks of a T4Dataset record           |
-| `autoware_ml/datamodule/nuscenes/segmentation3d.py`                     | Semantic masks of a nuScenes record            |
 | `autoware_ml/datamodule/common/detection3d.py`                          | 3D boxes of a record                           |
 | `autoware_ml/transforms/point_cloud/`                                   | Shared point-cloud transforms used by PTv3     |
 | `autoware_ml/configs/tasks/segmentation3d/ptv3/`                        | Segmentation experiment configurations         |

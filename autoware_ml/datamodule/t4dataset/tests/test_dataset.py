@@ -52,7 +52,7 @@ def camera_frame(channel: str) -> dict:
         image_sensor_id=f"{channel}-sensor",
         image_sensor_channel_name=channel,
         image_timestamp_seconds=0.0,
-        image_path=f"/somewhere/{_SCENE}/data/{channel}/00000.jpg",
+        image_relative_path=f"{_SCENE}/data/{channel}/00000.jpg",
         image_height=1080,
         image_width=1920,
         cam2img=np.eye(3),
@@ -281,21 +281,21 @@ def test_a_database_without_maps_leaves_the_dataset_without_a_provider() -> None
     assert dataset.map_provider is None
 
 
-def _lidar_frame(root: Path, scene: str) -> dict:
-    """The record table entry of a keyframe lidar frame stored under ``root/scene``."""
+def _lidar_frame(scene: str) -> dict:
+    """The record table entry of a keyframe lidar frame stored under the scene directory."""
     return {
         "lidar_frame_id": "frame-0",
         "lidar_keyframe": True,
         "lidar_sensor_id": "lidar",
         "lidar_sensor_channel_name": "LIDAR_TOP",
         "lidar_timestamp_seconds": 0.0,
-        "lidar_pointcloud_path": str(root / scene / "data" / "LIDAR_TOP" / "0.pcd.bin"),
-        "lidar_pointcloud_source_path": None,
+        "lidar_pointcloud_relative_path": f"{scene}/data/LIDAR_TOP/0.pcd.bin",
+        "lidar_pointcloud_source_relative_path": None,
         "lidar_pointcloud_num_features": 5,
         "lidar_sensor_to_ego_pose_matrix": np.eye(4).tolist(),
         "lidar_frame_ego_pose_to_global_matrix": np.eye(4).tolist(),
         "lidar_sensor_to_lidar_sweep_matrix": np.eye(4).tolist(),
-        "lidar_pointcloud_semantic_mask_path": None,
+        "lidar_pointcloud_semantic_mask_relative_path": None,
     }
 
 
@@ -327,7 +327,7 @@ def test_frame_meta_carries_the_map_resolved_against_the_datasets_own_root(tmp_p
     map_path.parent.mkdir(parents=True)
     map_path.write_text("<osm></osm>")
     records = pl.DataFrame(
-        {DatasetTableSchema.LIDAR_FRAMES.name: [[_lidar_frame(pseudo_root, scene)]]},
+        {DatasetTableSchema.LIDAR_FRAMES.name: [[_lidar_frame(scene)]]},
         schema={DatasetTableSchema.LIDAR_FRAMES.name: DatasetTableSchema.LIDAR_FRAMES.dtype},
     )
 

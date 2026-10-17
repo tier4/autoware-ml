@@ -97,7 +97,6 @@ The standard FRNet training configs follow the AWML experiment contract:
 | `autoware_ml/datamodule/t4dataset/dataset.py`               | T4Dataset records as a dataset                     |
 | `autoware_ml/datamodule/nuscenes/dataset.py`                | nuScenes dataset                                   |
 | `autoware_ml/datamodule/t4dataset/segmentation3d.py`        | Semantic masks of a T4Dataset record               |
-| `autoware_ml/datamodule/nuscenes/segmentation3d.py`         | Semantic masks of a nuScenes record                |
 | `autoware_ml/transforms/point_cloud/`                       | Point cloud loading and augmentation used by FRNet |
 | `autoware_ml/preprocessing/segmentation3d/frustum_range.py` | Frustum and range preprocessing                    |
 | `autoware_ml/configs/tasks/segmentation3d/frnet/`           | Experiment configurations                          |

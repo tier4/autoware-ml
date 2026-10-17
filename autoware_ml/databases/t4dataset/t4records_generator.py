@@ -45,6 +45,7 @@ from autoware_ml.databases.schemas.frame_basic_metadata import FrameBasicMetadat
 from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord
 from autoware_ml.databases.schemas.lidar_frames import LidarFrameDataModel
 from autoware_ml.databases.schemas.lidar_sources import LidarSourceDataModel
+from autoware_ml.databases.schemas.utils import relative_to_database_root
 from autoware_ml.databases.schemas.image_frames import (
     distortion_model_from_coefficients,
     ImageFrameDataModel,
@@ -142,6 +143,24 @@ class T4RecordsGenerator:
         if not scene_root_dir_path.exists():
             raise ValueError(f"Scene root directory {scene_root_dir_path} does not exist.")
         return scene_root_dir_path
+
+    def relative_to_database_root(self, path: str | Path) -> str:
+        """
+        Store a file path relative to the database root, so the records stay valid when the
+        database is mounted under another root and the dataset re-roots them on read.
+
+        Args:
+          path: Absolute path the t4-devkit resolved under the scene root.
+
+        Returns:
+          str: The path relative to the database root, which keeps the scene directory
+            ``{dataset_name}/{scenario_id}/{scenario_version}`` the frame metadata is keyed by.
+
+        Raises:
+          ValueError: If the path does not lie under the database root.
+        """
+
+        return relative_to_database_root(path, self.database_root_path)
 
     def _index_box_categories(self) -> tuple[Mapping[str, str], Mapping[str, str]]:
         """
@@ -356,15 +375,15 @@ class T4RecordsGenerator:
           calibrated_lidar_sample_data_token: Calibrated lidar sample data token.
 
         Returns:
-          str | None: Mask path, None when the frame has no mask.
+          str | None: Mask path relative to the database root, None when the frame has no mask.
         """
         lidarseg_record = self.lidarseg_by_sample_data.get(calibrated_lidar_sample_data_token)
         if lidarseg_record is None:
             return None
 
-        # The lidarseg table gives the mask path relative to the scene. Prepend the scene root,
-        # as the pointcloud path does.
-        return str(self.scene_root_path / lidarseg_record.filename)
+        # The lidarseg table gives the mask path relative to the scene. Prepend the scene
+        # directory, so the stored path starts at the database root as the pointcloud path does.
+        return self.relative_to_database_root(self.scene_root_path / lidarseg_record.filename)
 
     def _find_t4pack_frame(self, lidar_pointcloud_path: str) -> T4PackFrame | None:
         """
@@ -439,11 +458,11 @@ class T4RecordsGenerator:
             calibrated_lidar_sample_data_token=calibrated_lidar_sample_data_token
         )
 
-        # Prepend the scene root to the metainfo path as well.
-        lidar_pointcloud_source_path = (
+        # The metainfo path is relative to the scene as well, so it gets the scene directory.
+        lidar_pointcloud_source_relative_path = (
             None
             if sd_record.info_filename is None
-            else str(self.scene_root_path / sd_record.info_filename)
+            else self.relative_to_database_root(self.scene_root_path / sd_record.info_filename)
         )
 
         lidar_frame_data_model = LidarFrameDataModel(
@@ -452,15 +471,15 @@ class T4RecordsGenerator:
             lidar_sensor_id=cs_record.token,
             lidar_sensor_channel_name=self.lidar_channel.value,
             lidar_timestamp_seconds=microseconds2seconds(sd_record.timestamp),
-            lidar_pointcloud_path=lidar_path,
-            lidar_pointcloud_source_path=lidar_pointcloud_source_path,
+            lidar_pointcloud_relative_path=self.relative_to_database_root(lidar_path),
+            lidar_pointcloud_source_relative_path=lidar_pointcloud_source_relative_path,
             lidar_pointcloud_num_features=self.lidar_pointcloud_num_features,
             lidar_sensor_to_ego_pose_matrix=lidar_sensor_to_ego_matrix,
             lidar_frame_ego_pose_to_global_matrix=lidar_frame_ego_pose_to_global_matrix,
             lidar_sensor_to_lidar_sweep_matrix=np.eye(
                 4
             ),  # Always the identity matrix for the main lidar sensor
-            lidar_pointcloud_semantic_mask_path=lidar_pointcloud_semantic_mask_path,
+            lidar_pointcloud_semantic_mask_relative_path=lidar_pointcloud_semantic_mask_path,
             lidar_pointcloud_t4pack_frame=self._find_t4pack_frame(lidar_path),
         )
         return lidar_frame_data_model, box3d
@@ -591,13 +610,15 @@ class T4RecordsGenerator:
                     lidar_timestamp_seconds=microseconds2seconds(
                         current_sample_data_record.timestamp
                     ),
-                    lidar_pointcloud_path=lidar_sweep_pointcloud_path,
-                    lidar_pointcloud_source_path=None,  # Always None for lidar sweeps
+                    lidar_pointcloud_relative_path=self.relative_to_database_root(
+                        lidar_sweep_pointcloud_path
+                    ),
+                    lidar_pointcloud_source_relative_path=None,  # Always None for lidar sweeps
                     lidar_pointcloud_num_features=self.lidar_pointcloud_num_features,
                     lidar_sensor_to_ego_pose_matrix=current_lidar_sensor_to_ego_matrix,
                     lidar_frame_ego_pose_to_global_matrix=lidar_sweep_frame_ego_pose_to_global_matrix,
                     lidar_sensor_to_lidar_sweep_matrix=lidar_sensor_to_lidar_sweep_matrix,
-                    lidar_pointcloud_semantic_mask_path=None,  # Always None for lidar sweeps
+                    lidar_pointcloud_semantic_mask_relative_path=None,  # Always None for lidar sweeps
                     lidar_pointcloud_t4pack_frame=self._find_t4pack_frame(
                         lidar_sweep_pointcloud_path
                     ),
@@ -790,7 +811,7 @@ class T4RecordsGenerator:
             image_sensor_id=cs_record.token,
             image_sensor_channel_name=camera_channel_name,
             image_timestamp_seconds=microseconds2seconds(sd_record.timestamp),
-            image_path=image_path,
+            image_relative_path=self.relative_to_database_root(image_path),
             image_height=image_height,
             image_width=image_width,
             cam2img=cam2img,
@@ -958,8 +979,11 @@ class T4RecordsGenerator:
             bbox_center_coordinate_type=Box3DCenterCoordinateType.GRAVITY_CENTER,
         )
 
-        # Load pointclouds, from the pack when the scene keeps only the pack
-        lidar_pointcloud_path = lidar_frame_data_model.lidar_pointcloud_path
+        # Load pointclouds, from the pack when the scene keeps only the pack. The record stores
+        # the path relative to the database root.
+        lidar_pointcloud_path = str(
+            self.database_root_path / lidar_frame_data_model.lidar_pointcloud_relative_path
+        )
         t4pack_frame = lidar_frame_data_model.lidar_pointcloud_t4pack_frame
         if t4pack_frame is not None and not os.path.isfile(lidar_pointcloud_path):
             points = T4Pack.from_point_cloud_path(lidar_pointcloud_path).read_frame(

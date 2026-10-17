@@ -637,7 +637,7 @@ class TestSupervisionToggles(MultiSourceTestCase):
         records = self.main_records.with_columns(
             pl.col(DatasetTableSchema.LIDAR_FRAMES.name).list.eval(
                 pl.element().struct.with_fields(
-                    lidar_pointcloud_semantic_mask_path=pl.lit(None, dtype=pl.String)
+                    lidar_pointcloud_semantic_mask_relative_path=pl.lit(None, dtype=pl.String)
                 )
             )
         )

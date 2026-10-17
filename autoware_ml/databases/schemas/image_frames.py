@@ -20,13 +20,14 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 import polars as pl
 from jaxtyping import Float32, Float64
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from autoware_ml.databases.schemas.base_schemas import (
     BaseFieldSchema,
     DatasetTableColumn,
     DataModelInterface,
 )
+from autoware_ml.databases.schemas.utils import check_relative_path
 
 
 @dataclass(frozen=True)
@@ -40,7 +41,7 @@ class ImageFrameDatasetSchema(BaseFieldSchema):
     image_sensor_id = DatasetTableColumn("image_sensor_id", pl.String)
     image_sensor_channel_name = DatasetTableColumn("image_sensor_channel_name", pl.String)
     image_timestamp_seconds = DatasetTableColumn("image_timestamp_seconds", pl.Float64)
-    image_path = DatasetTableColumn("image_path", pl.String)
+    image_relative_path = DatasetTableColumn("image_relative_path", pl.String)
     image_height = DatasetTableColumn("image_height", pl.Int32)
     image_width = DatasetTableColumn("image_width", pl.Int32)
     cam2img = DatasetTableColumn("cam2img", pl.Array(pl.Float32, shape=(3, 3)))
@@ -104,7 +105,9 @@ class ImageFrameDataModel(BaseModel, DataModelInterface):
       image_sensor_id: Image sensor ID (calibrated sensor token).
       image_sensor_channel_name: Image sensor channel name, e.g. CAM_FRONT.
       image_timestamp_seconds: Image timestamp in seconds.
-      image_path: Image path.
+      image_relative_path: Image path, relative to the root of the database. Every blob path
+        of a record is stored relative to that root and joined onto the root of the dataset
+        reading it.
       image_height: Image height in pixels. Set to None if it's not available.
       image_width: Image width in pixels. Set to None if it's not available.
       cam2img: Camera intrinsic matrix (3, 3).
@@ -127,7 +130,7 @@ class ImageFrameDataModel(BaseModel, DataModelInterface):
     image_sensor_id: str
     image_sensor_channel_name: str
     image_timestamp_seconds: float
-    image_path: str
+    image_relative_path: str
     image_height: int | None
     image_width: int | None
     cam2img: Float64[np.ndarray, "3 3"]
@@ -137,6 +140,21 @@ class ImageFrameDataModel(BaseModel, DataModelInterface):
     image_frame_ego_pose_to_global_matrix: Float64[np.ndarray, "4 4"]
     lidar2cam: Float64[np.ndarray, "4 4"] | None
     lidar2img: Float64[np.ndarray, "4 4"] | None
+
+    @field_validator("image_relative_path")
+    @classmethod
+    def _check_relative_path(cls, path: str) -> str:
+        """
+        Reject an image path stored with a root, so a record never binds to one machine.
+
+        Args:
+          path: Stored image path.
+
+        Returns:
+          str: The path, unchanged.
+        """
+
+        return check_relative_path(path, "image_relative_path")
 
     @property
     def cam2img_fp32(self) -> Float32[np.ndarray, "3 3"]:
@@ -211,7 +229,7 @@ class ImageFrameDataModel(BaseModel, DataModelInterface):
             ImageFrameDatasetSchema.image_sensor_id.name: self.image_sensor_id,
             ImageFrameDatasetSchema.image_sensor_channel_name.name: self.image_sensor_channel_name,
             ImageFrameDatasetSchema.image_timestamp_seconds.name: self.image_timestamp_seconds,
-            ImageFrameDatasetSchema.image_path.name: self.image_path,
+            ImageFrameDatasetSchema.image_relative_path.name: self.image_relative_path,
             ImageFrameDatasetSchema.image_height.name: self.image_height,
             ImageFrameDatasetSchema.image_width.name: self.image_width,
             ImageFrameDatasetSchema.cam2img.name: self.cam2img_fp32,
@@ -252,7 +270,7 @@ class ImageFrameDataModel(BaseModel, DataModelInterface):
             image_timestamp_seconds=data_model[
                 ImageFrameDatasetSchema.image_timestamp_seconds.name
             ],
-            image_path=data_model[ImageFrameDatasetSchema.image_path.name],
+            image_relative_path=data_model[ImageFrameDatasetSchema.image_relative_path.name],
             image_height=data_model[ImageFrameDatasetSchema.image_height.name],
             image_width=data_model[ImageFrameDatasetSchema.image_width.name],
             cam2img=np.asarray(data_model[ImageFrameDatasetSchema.cam2img.name], dtype=np.float64),

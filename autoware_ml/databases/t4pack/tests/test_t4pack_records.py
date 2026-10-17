@@ -42,13 +42,13 @@ def _lidar_frame(t4pack_frame: T4PackFrame | None) -> LidarFrameDataModel:
         lidar_sensor_id="sensor",
         lidar_sensor_channel_name="LIDAR_CONCAT",
         lidar_timestamp_seconds=1.0,
-        lidar_pointcloud_path="/db/scene/0/data/LIDAR_CONCAT/00000.pcd.bin",
-        lidar_pointcloud_source_path=None,
+        lidar_pointcloud_relative_path="db/scene/0/data/LIDAR_CONCAT/00000.pcd.bin",
+        lidar_pointcloud_source_relative_path=None,
         lidar_pointcloud_num_features=5,
         lidar_sensor_to_ego_pose_matrix=np.eye(4),
         lidar_frame_ego_pose_to_global_matrix=np.eye(4),
         lidar_sensor_to_lidar_sweep_matrix=np.eye(4),
-        lidar_pointcloud_semantic_mask_path=None,
+        lidar_pointcloud_semantic_mask_relative_path=None,
         lidar_pointcloud_t4pack_frame=t4pack_frame,
     )
 

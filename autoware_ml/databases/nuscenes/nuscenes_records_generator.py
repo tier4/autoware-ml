@@ -32,6 +32,7 @@ from autoware_ml.databases.schemas.frame_basic_metadata import FrameBasicMetadat
 from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord
 from autoware_ml.databases.schemas.lidar_frames import LidarFrameDataModel
 from autoware_ml.databases.schemas.lidar_sources import LidarSourceDataModel
+from autoware_ml.databases.schemas.utils import relative_to_database_root
 from autoware_ml.databases.schemas.image_frames import ImageFrameDataModel
 from autoware_ml.databases.schemas.category_mapping import CategoryMappingDataModel
 from autoware_ml.databases.taxonomy import DatabaseTaxonomy
@@ -137,7 +138,7 @@ class NuScenesRecordsGenerator:
     def relative_to_database_root(self, path: str | Path) -> str:
         """
         Store a file path relative to the database root, so the records stay valid when the
-        database is mounted under another root and the datamodule re-roots them on read.
+        database is mounted under another root and the dataset re-roots them on read.
 
         Args:
           path: Absolute path the nuscenes-devkit resolved under the database root.
@@ -149,13 +150,7 @@ class NuScenesRecordsGenerator:
           ValueError: If the path does not lie under the database root.
         """
 
-        try:
-            return str(Path(path).relative_to(self.database_root_path))
-        except ValueError as error:
-            raise ValueError(
-                f"nuScenes file {path} does not lie under the database root "
-                f"{self.database_root_path}, so it cannot be stored relative to it."
-            ) from error
+        return relative_to_database_root(path, self.database_root_path)
 
     def generate_dataset_records(self) -> Sequence[DatasetRecord]:
         """
@@ -358,13 +353,13 @@ class NuScenesRecordsGenerator:
             lidar_sensor_id=cs_record["token"],
             lidar_sensor_channel_name=LIDAR_CHANNEL.value,
             lidar_timestamp_seconds=sd_record["timestamp"] / 1e6,
-            lidar_pointcloud_path=self.relative_to_database_root(lidar_path),
-            lidar_pointcloud_source_path=None,
+            lidar_pointcloud_relative_path=self.relative_to_database_root(lidar_path),
+            lidar_pointcloud_source_relative_path=None,
             lidar_pointcloud_num_features=self.lidar_pointcloud_num_features,
             lidar_sensor_to_ego_pose_matrix=lidar_sensor_to_ego_matrix,
             lidar_frame_ego_pose_to_global_matrix=lidar_frame_ego_pose_to_global_matrix,
             lidar_sensor_to_lidar_sweep_matrix=np.eye(4),
-            lidar_pointcloud_semantic_mask_path=lidar_pointcloud_semantic_mask_path,
+            lidar_pointcloud_semantic_mask_relative_path=lidar_pointcloud_semantic_mask_path,
         )
         return lidar_frame_data_model, box3d
 
@@ -478,13 +473,13 @@ class NuScenesRecordsGenerator:
                     lidar_sensor_id=current_cs_record["token"],
                     lidar_sensor_channel_name=lidar_frame_data_model.lidar_sensor_channel_name,
                     lidar_timestamp_seconds=current_sample_data_record["timestamp"] / 1e6,
-                    lidar_pointcloud_path=lidar_sweep_pointcloud_path,
-                    lidar_pointcloud_source_path=None,
+                    lidar_pointcloud_relative_path=lidar_sweep_pointcloud_path,
+                    lidar_pointcloud_source_relative_path=None,
                     lidar_pointcloud_num_features=self.lidar_pointcloud_num_features,
                     lidar_sensor_to_ego_pose_matrix=current_lidar_sensor_to_ego_matrix,
                     lidar_frame_ego_pose_to_global_matrix=lidar_sweep_frame_ego_pose_to_global_matrix,
                     lidar_sensor_to_lidar_sweep_matrix=lidar_sensor_to_lidar_sweep_matrix,
-                    lidar_pointcloud_semantic_mask_path=None,
+                    lidar_pointcloud_semantic_mask_relative_path=None,
                 )
             )
         return lidar_frame_data_models
@@ -630,7 +625,7 @@ class NuScenesRecordsGenerator:
             image_sensor_id=cs_record["token"],
             image_sensor_channel_name=camera_channel_name,
             image_timestamp_seconds=sd_record["timestamp"] / 1e6,
-            image_path=self.relative_to_database_root(image_path),
+            image_relative_path=self.relative_to_database_root(image_path),
             image_height=image_height,
             image_width=image_width,
             cam2img=cam2img,

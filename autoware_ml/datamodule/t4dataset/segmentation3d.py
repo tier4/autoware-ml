@@ -82,7 +82,7 @@ class T4Segmentation3DTask(BaseDatasetTask):
         lidar_frame = LidarFrameDataModel.load_from_dictionary(
             self.dataset_records_dataframe.item(idx, DatasetTableSchema.LIDAR_FRAMES.name)[0]
         )
-        if lidar_frame.lidar_pointcloud_semantic_mask_path is None:
+        if lidar_frame.lidar_pointcloud_semantic_mask_relative_path is None:
             raise ValueError(
                 f"The lidar frame {lidar_frame.lidar_frame_id} of record {idx} carries no "
                 "semantic mask, so 3D segmentation cannot be supervised on it."
@@ -117,10 +117,10 @@ class T4Segmentation3DTask(BaseDatasetTask):
           lidar_frame: Lidar frame carrying a semantic mask.
 
         Returns:
-          str: Path of the mask on this machine.
+          str: Path of the mask under the database root.
         """
         return str(
-            self.database_root_path / lidar_frame.lidarseg_pointcloud_semantic_mask_relative_path
+            self.database_root_path / lidar_frame.lidar_pointcloud_semantic_mask_relative_path
         )
 
     def resolve_class_indices(
