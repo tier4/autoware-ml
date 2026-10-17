@@ -25,8 +25,6 @@ import subprocess
 from pathlib import Path
 from typing import Any, Sequence
 
-from omegaconf import DictConfig
-
 from autoware_ml.configs.paths import CONFIGS_ROOT
 from autoware_ml.configs.resolvers import register_config_resolvers
 from autoware_ml.utils.session import AUTOWARE_ML_SESSION_OPTION, TMUX_BASE_COMMAND
@@ -140,34 +138,6 @@ def resolve_config_reference(config_value: str, prefix: str) -> tuple[str | None
 
     hydra_searchpath_override = "hydra.searchpath=[pkg://autoware_ml.configs]"
     return str(resolved_path.parent), resolved_path.stem, [hydra_searchpath_override]
-
-
-def compose_config_reference(
-    config_value: str, prefix: str, overrides: Sequence[str] = ()
-) -> DictConfig:
-    """Compose the config a CLI config reference points at.
-
-    Args:
-        config_value: Config value from CLI, either a bundled config path or a filesystem path.
-        prefix: Bundled config namespace prefix such as ``tasks``.
-        overrides: Hydra overrides applied on top.
-
-    Returns:
-        The composed config.
-    """
-    from hydra import compose, initialize_config_dir, initialize_config_module
-    from hydra.core.global_hydra import GlobalHydra
-
-    resolved_config_path, resolved_config_name, extra_config_overrides = resolve_config_reference(
-        config_value, prefix
-    )
-    compose_overrides = [*overrides, *extra_config_overrides]
-    GlobalHydra.instance().clear()
-    if resolved_config_path is None:
-        with initialize_config_module(version_base=None, config_module="autoware_ml.configs"):
-            return compose(config_name=resolved_config_name, overrides=compose_overrides)
-    with initialize_config_dir(version_base=None, config_dir=resolved_config_path):
-        return compose(config_name=resolved_config_name, overrides=compose_overrides)
 
 
 def infer_user_config_name(config_value: str, prefix: str) -> str:
