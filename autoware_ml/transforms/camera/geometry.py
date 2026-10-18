@@ -19,9 +19,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import cv2
+from jaxtyping import Float32
 import numpy as np
 import numpy.typing as npt
 import torch
+from torch import Tensor
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.cameras.base_images import BaseImages, compose_lidar2images
@@ -318,10 +320,26 @@ class CameraGlobalRotScaleTrans(GlobalRotScaleTrans):
     """Rotate, scale and translate the lidar frame of a camera-only sample.
 
     A camera model loads no points, so the augmentation moves the 3D boxes and the
-    lidar-to-camera calibration only. The augmentation is recorded as on a lidar sample, so
-    the frame metadata of the batch maps the augmented frame to the map frame, which keeps a
-    temporal model's memory aligned while every frame draws its own augmentation. The images
-    must be loaded first, otherwise their calibration would not follow.
+    lidar-to-camera calibration only; a sample that carries points is refused, since
+    ``GlobalRotScaleTrans`` is the transform that moves them along. The augmentation is
+    recorded as on a lidar sample, so the frame metadata of the batch maps the augmented
+    frame to the map frame, which keeps a temporal model's memory aligned while every frame
+    draws its own augmentation. The images must be loaded first, otherwise their calibration
+    would not follow.
     """
 
     _required_keys = ["camera_image_data"]
+
+    def _move_points(
+        self,
+        model_gt_sample: ModelGTSample,
+        rotation_matrix: Float32[Tensor, "3 3"],
+        scale_factor: float,
+        translation_vector: Float32[Tensor, "1 3"],
+    ) -> None:
+        """Refuse the points a camera-only augmentation would leave behind."""
+        if model_gt_sample.point_cloud_data is not None:
+            raise ValueError(
+                "CameraGlobalRotScaleTrans moves the boxes and the camera calibration only; "
+                "a sample with points needs GlobalRotScaleTrans."
+            )

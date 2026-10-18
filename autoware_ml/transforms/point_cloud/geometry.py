@@ -123,6 +123,19 @@ class GlobalRotScaleTrans(BaseTransform):
         translation = np.random.normal(0.0, self.translation_std, size=(1, 3))
         return torch.tensor(translation, dtype=torch.float32)
 
+    def _move_points(
+        self,
+        model_gt_sample: ModelGTSample,
+        rotation_matrix: Float32[Tensor, "3 3"],
+        scale_factor: float,
+        translation_vector: Float32[Tensor, "1 3"],
+    ) -> None:
+        """Move the points of the sample in place; points are rows, so they take the transposed rotation."""
+        point_cloud_data = model_gt_sample.point_cloud_data
+        point_cloud_data.rotate(rotation_matrix.T)
+        point_cloud_data.scale(scale_factor)
+        point_cloud_data.translate(translation_vector)
+
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
         """Rotate, scale, and translate points and bboxes."""
         rotation_matrix = yaw_rotation_matrix(self.sample_yaw())
@@ -131,14 +144,8 @@ class GlobalRotScaleTrans(BaseTransform):
         )
         translation_vector = self.sample_translation()
 
-        # Points and boxes are rows, so they take the transposed rotation. A camera-only
-        # sample carries no points; its boxes and cameras follow all the same.
-        point_cloud_data = model_gt_sample.point_cloud_data
-        if point_cloud_data is not None:
-            point_cloud_data.rotate(rotation_matrix.T)
-            point_cloud_data.scale(scale_factor)
-            point_cloud_data.translate(translation_vector)
-
+        self._move_points(model_gt_sample, rotation_matrix, scale_factor, translation_vector)
+        # Boxes are rows too, so they take the transposed rotation.
         if model_gt_sample.detection3d_gt_bboxes_3d is not None:
             model_gt_sample.detection3d_gt_bboxes_3d.rotate(rotation_matrix.T)
             model_gt_sample.detection3d_gt_bboxes_3d.scale(scale_factor)

@@ -191,7 +191,7 @@ class TestModelGTBatchDetection2DCollation(unittest.TestCase):
             else Detection2DGTSample(
                 gt_bboxes_2d=[torch.ones((num_boxes, 4))],
                 gt_centers_2d=[torch.ones((num_boxes, 2))],
-                gt_labels_2d=[torch.zeros(num_boxes, dtype=torch.int64)],
+                gt_labels_2d=[torch.zeros(num_boxes, dtype=torch.int32)],
             )
         )
         return ModelGTSample(
