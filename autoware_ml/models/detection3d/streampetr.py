@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
-from typing import Any
+from typing import Any, ClassVar
 
 import torch
 import torch.nn as nn
@@ -24,7 +24,10 @@ from autoware_ml.models.base import BaseModel
 from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
 from autoware_ml.models.detection3d.feature_extractors import MultiviewImageFeatureExtractor
 from autoware_ml.models.detection3d.heads.streampetr import StreamPETRHead
-from autoware_ml.models.detection3d.task_modules.streaming import transform_reference_points
+from autoware_ml.models.detection3d.task_modules.streaming import (
+    memory_refresh,
+    transform_reference_points,
+)
 from autoware_ml.types.geometry import Box3DFieldIndex
 from autoware_ml.utils.deploy import ExportSpec
 
@@ -90,6 +93,15 @@ class _StreamPETRHeadMemoryExportWrapper(nn.Module):
     The graph carries the five temporal memory tensors in and out; the runtime
     feeds the first ``memory_len`` entries of the previous frame's post-memory
     back as pre-memory and manages timestamps outside the graph.
+
+    A stream starts with an all-zero bank: the runtime wipes the five tensors
+    at start-up and on every reset. The graph recognizes a lane whose bank
+    poses are all zero (every written entry carries a pose with a unit last
+    row) and seeds it as the head does for ``prev_exists = 0``, with the pseudo
+    reference points and the identity pose in the first ``num_propagated``
+    entries, so the first frame of a stream predicts what the head predicts.
+    Without that, moving the zero bank by the inverse ego pose would put every
+    entry at the map origin as seen from the vehicle, kilometers away.
     """
 
     def __init__(self, head: StreamPETRHead) -> None:
@@ -116,13 +128,21 @@ class _StreamPETRHeadMemoryExportWrapper(nn.Module):
         emits the untruncated bank for the runtime to truncate and date.
         """
         head = self.head
-        head.memory_embedding = pre_memory_embedding
-        head.memory_reference_point = transform_reference_points(
-            pre_memory_reference_point, data_ego_pose_inv
+        # A lane with an all-zero bank starts a stream (see the class docstring): its moved
+        # bank is cleared again, so the entries sit at the lidar origin rather than at the
+        # map origin, and then seeded as the head seeds a fresh bank.
+        prev_exists = (pre_memory_egopose.flatten(1).abs().amax(dim=1) > 0).float()
+        head.memory_embedding = memory_refresh(pre_memory_embedding, prev_exists)
+        head.memory_timestamp = memory_refresh(pre_memory_timestamp, prev_exists)
+        head.memory_velo = memory_refresh(pre_memory_velo, prev_exists)
+        head.memory_reference_point, head.memory_egopose = head.reset_state(
+            prev_exists,
+            memory_refresh(
+                transform_reference_points(pre_memory_reference_point, data_ego_pose_inv),
+                prev_exists,
+            ),
+            memory_refresh(data_ego_pose_inv.unsqueeze(1) @ pre_memory_egopose, prev_exists),
         )
-        head.memory_timestamp = pre_memory_timestamp
-        head.memory_egopose = data_ego_pose_inv.unsqueeze(1) @ pre_memory_egopose
-        head.memory_velo = pre_memory_velo
 
         memory, pos_embed = head.embed_tokens(x, pos_embed, cone)
         reference_points, _, _ = head.prepare_for_dn(x.shape[0], None, None)
@@ -182,25 +202,33 @@ class StreamPETRDetectionModel(BaseModel):
         )
         self.bbox_head = bbox_head
 
-    def setup(self, stage: str) -> None:
-        """Require a streaming datamodule; the memory bank needs lane-contiguous batches."""
-        super().setup(stage)
-        if not self.trainer.datamodule.streaming:
-            raise ValueError(
-                "StreamPETR carries temporal memory across batches, so the datamodule must "
-                "stream scene-contiguous frames; set datamodule.streaming to true."
-            )
+    # The memory bank needs lane-contiguous batches.
+    requires_streaming: ClassVar[bool] = True
 
-    def train(self, mode: bool = True) -> StreamPETRDetectionModel:
-        """Reset the temporal memory whenever the train/eval phase changes.
+    def _start_streams(self) -> None:
+        """Reset the temporal memory: the lanes of a new phase or epoch start new streams.
 
-        Streams are not continuous across phase switches (sanity validation,
-        epoch-end validation), so carrying the bank over would feed stale
-        state into the next phase.
+        Lightning restores the training mode after validation by setting ``training``
+        on every module rather than calling ``train()``, so the phase hooks are the
+        place to reset, not a ``train()`` override.
         """
-        super().train(mode)
         self.bbox_head.reset_memory()
-        return self
+
+    def on_train_epoch_start(self) -> None:
+        """Start new streams for the shuffled scenes of the epoch."""
+        self._start_streams()
+
+    def on_validation_epoch_start(self) -> None:
+        """Start new streams for the validation scenes."""
+        self._start_streams()
+
+    def on_test_epoch_start(self) -> None:
+        """Start new streams for the test scenes."""
+        self._start_streams()
+
+    def on_predict_epoch_start(self) -> None:
+        """Start new streams for the predict scenes."""
+        self._start_streams()
 
     def forward_inputs(self, batch_inputs: ModelBatchInputs) -> dict[str, Any]:
         """Pick the images, their calibration and the stream metadata of every frame.
@@ -226,8 +254,9 @@ class StreamPETRDetectionModel(BaseModel):
             "timestamp": frame_meta.timestamps,
             "scene_tokens": frame_meta.scene_tokens,
             "ego_pose": frame_meta.ego2globals,
-            # A float32 LU of a kilometer-scale pose loses the low bits of the translation
-            # (one ulp at 65 km is 4 mm); the float64 inverse is exact to the final cast.
+            # The poses and the bank are float32 in the map frame, so the geometry resolves
+            # to one ulp of the translation (4 mm at 65 km) however the inverse is computed;
+            # the float64 inverse only keeps the LU from adding its own rounding on top.
             "ego_pose_inv": torch.linalg.inv(frame_meta.ego2globals.double()).float(),
         }
         gt_detections = batch_inputs.multi_task_gt_batch.detection3d_gt_batch
@@ -251,7 +280,7 @@ class StreamPETRDetectionModel(BaseModel):
 
         The scene and the time of every frame decide per batch lane whether the head's
         memory carries over from the previous frame, see
-        :meth:`StreamPETRHead.stream_continuity`.
+        :class:`~autoware_ml.models.detection3d.task_modules.streaming.StreamContinuity`.
 
         Args:
             img: Images ``(batch, num_cams, 3, H, W)``.

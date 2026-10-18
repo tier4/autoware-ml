@@ -357,7 +357,9 @@ class Detection3DHeadOutputs(BaseModel):
             return "CenterHead"
         if self.transfusion_head_outputs is not None:
             return "TransFusion head"
-        return "StreamPETR head"
+        if self.streampetr_head_outputs is not None:
+            return "StreamPETR head"
+        raise ValueError("No head family produced the detection outputs.")
 
     @model_validator(mode="after")
     def _check_exactly_one_head(self) -> Detection3DHeadOutputs:

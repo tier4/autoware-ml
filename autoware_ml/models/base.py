@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any, final
+from typing import Any, ClassVar, final
 
 import lightning as L
 import torch
@@ -44,7 +44,12 @@ class BaseModel(MetricEvalMixin, L.LightningModule, ABC):
     Provides common functionality for training, validation, and testing with
     built-in support for flexible optimizer and scheduler configuration.
     All parameters are explicitly typed for IDE support and type checking.
+
+    A temporal model that carries a memory across batches sets ``requires_streaming``,
+    and ``setup`` then requires a datamodule that streams scene-contiguous frames.
     """
+
+    requires_streaming: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -74,6 +79,27 @@ class BaseModel(MetricEvalMixin, L.LightningModule, ABC):
         )
         self.scheduler_config = dict(scheduler_config) if scheduler_config else {}
         self._data_preprocessing = DataPreprocessing()
+
+    def setup(self, stage: str) -> None:
+        """Check the datamodule against the needs of the model.
+
+        Args:
+            stage: Lightning stage being set up.
+
+        Raises:
+            ValueError: If the model requires streaming and the trainer runs without a
+                streaming datamodule.
+        """
+        super().setup(stage)
+        if not self.requires_streaming:
+            return
+        datamodule = getattr(self.trainer, "datamodule", None)
+        if datamodule is None or not getattr(datamodule, "streaming", False):
+            raise ValueError(
+                f"{type(self).__name__} carries temporal memory across batches, so the "
+                "datamodule must stream scene-contiguous frames; set datamodule.streaming "
+                "to true."
+            )
 
     def set_data_preprocessing(self, data_preprocessing: DataPreprocessing) -> None:
         """Install the runtime preprocessing pipeline.

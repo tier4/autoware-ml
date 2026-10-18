@@ -8,7 +8,6 @@ multi-layer decoder supervision, and optional denoising queries.
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import NamedTuple
 
@@ -30,6 +29,7 @@ from autoware_ml.models.detection3d.task_modules.bbox_coders import (
 from autoware_ml.models.detection3d.task_modules.streaming import (
     ModulatedLayerNorm,
     SELayerLinear,
+    StreamContinuity,
     inverse_sigmoid,
     memory_refresh,
     nerf_positional_encoding,
@@ -166,9 +166,8 @@ class StreamPETRHead(nn.Module):
     memory_timestamp: torch.Tensor | None
     memory_egopose: torch.Tensor | None
     memory_velo: torch.Tensor | None
-    # Scene and time of the previous frame of every batch lane; ``None`` until the first frame.
-    stream_scene_tokens: list[str] | None
-    stream_timestamps: torch.Tensor | None
+    # Scene and time of the previous frame of every batch lane.
+    stream_continuity: StreamContinuity
 
     def __init__(
         self,
@@ -197,8 +196,32 @@ class StreamPETRHead(nn.Module):
         noise_scale: float = 1.0,
         dn_weight: float = 1.0,
         split: float = 0.75,
+        max_stream_gap: float | None = None,
     ) -> None:
+        """Initialize the head.
+
+        Args:
+            memory_len: Entries of the temporal memory bank.
+            topk_proposals: Proposals of every frame that enter the bank.
+            num_propagated: Bank entries that extend the queries of the next frame; the
+                strongest proposals of the previous frame, so at most ``topk_proposals``.
+            max_stream_gap: Longest gap in seconds between two frames of a lane that keeps
+                the memory, ``None`` for any gap (see :class:`StreamContinuity`).
+            Other arguments follow the reference StreamPETR recipe.
+
+        Raises:
+            ValueError: If the bank is too small for the propagated entries.
+        """
         super().__init__()
+        if memory_len < num_propagated:
+            raise ValueError(
+                f"memory_len ({memory_len}) must hold the {num_propagated} propagated entries."
+            )
+        if topk_proposals < num_propagated:
+            raise ValueError(
+                f"topk_proposals ({topk_proposals}) must cover the {num_propagated} propagated "
+                "entries, which are the strongest proposals of the previous frame."
+            )
         self.num_classes = num_classes
         self.num_queries = num_queries
         self.num_decoder_layers = num_decoder_layers
@@ -279,6 +302,7 @@ class StreamPETRHead(nn.Module):
         )
         self.register_buffer("coords_d", self._build_depth_bins(), persistent=False)
         self._init_pseudo_reference_points()
+        self.stream_continuity = StreamContinuity(max_time_gap=max_stream_gap)
         self.reset_memory()
         self.init_weights()
 
@@ -312,14 +336,20 @@ class StreamPETRHead(nn.Module):
             self.register_parameter("pseudo_reference_points", None)
             return
 
+        # Cell centers of the smallest cube grid with at least num_propagated cells, picked
+        # evenly over the whole grid so the seeds cover the whole range on every axis. The
+        # reference keeps the first num_propagated cells of the grid instead, which leaves
+        # the far end of the first axis without a seed (x <= 0.79 for 256 of 343 cells);
+        # trained checkpoints carry their own points, so loading one keeps its layout.
         num_divisions = round(self.num_propagated ** (1 / 3) + 1)
         linspace = torch.linspace(0.0, 1.0, steps=num_divisions + 1)
         centers = (linspace[:-1] + linspace[1:]) / 2
         grid = torch.meshgrid(centers, centers, centers, indexing="ij")
-        points = torch.stack(grid, dim=-1).reshape(-1, 3)[: self.num_propagated]
+        cells = torch.stack(grid, dim=-1).reshape(-1, 3)
+        picked = torch.linspace(0, len(cells) - 1, steps=self.num_propagated).round().long()
         # A frozen Parameter rather than a buffer: reference checkpoints store it under
         # this key in the state dict.
-        self.pseudo_reference_points = nn.Parameter(points, requires_grad=False)
+        self.pseudo_reference_points = nn.Parameter(cells[picked], requires_grad=False)
 
     def init_weights(self) -> None:
         """Initialize reference points, decoder weights, and classification priors."""
@@ -340,40 +370,39 @@ class StreamPETRHead(nn.Module):
         self.memory_timestamp = None
         self.memory_egopose = None
         self.memory_velo = None
-        self.stream_scene_tokens = None
-        self.stream_timestamps = None
+        self.stream_continuity.reset()
 
-    def stream_continuity(
-        self, scene_tokens: Sequence[str], timestamp: torch.Tensor
-    ) -> torch.Tensor:
-        """Tell which batch lanes continue the stream of their previous frame.
+    def reset_state(
+        self, prev_exists: torch.Tensor, reference_points: torch.Tensor, egopose: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Seed the bank of every lane that starts a stream.
 
-        A lane continues when its frame belongs to the scene of the lane's previous frame and
-        comes later in time. A lane without a previous frame, one that moved to another scene,
-        and one that went back to an earlier frame of its scene (the streaming sampler pads a
-        lane by restarting its first scene) start a new stream, so the memory is reset there.
-        The frames are remembered for the next call.
+        The first ``num_propagated`` entries of a fresh bank hold the pseudo reference points
+        (in the lidar frame of the frame) and the identity pose; the others stay at zero.
 
         Args:
-            scene_tokens: Scene of the frame of every lane.
-            timestamp: Sample time of the frame of every lane in seconds, float64.
+            prev_exists: 1.0 for every lane whose memory carries over, 0.0 where it starts.
+            reference_points: Bank reference points ``(batch, memory_len, 3)``, zero where the
+                lane starts.
+            egopose: Bank poses ``(batch, memory_len, 4, 4)``, zero where the lane starts.
 
         Returns:
-            ``prev_exists`` of every lane, 1.0 where the memory carries over and 0.0 where it
-            is reset.
+            The seeded reference points and poses.
         """
-        previous_tokens = self.stream_scene_tokens
-        if previous_tokens is None or len(previous_tokens) != len(scene_tokens):
-            prev_exists = torch.zeros(len(scene_tokens), device=timestamp.device)
-        else:
-            same_scene = torch.tensor(
-                [current == previous for current, previous in zip(scene_tokens, previous_tokens)],
-                device=timestamp.device,
-            )
-            prev_exists = (same_scene & (timestamp > self.stream_timestamps)).float()
-        self.stream_scene_tokens = list(scene_tokens)
-        self.stream_timestamps = timestamp.detach().clone()
-        return prev_exists
+        if self.pseudo_reference_points is None:
+            return reference_points, egopose
+        batch_size = prev_exists.size(0)
+        starts = (1 - prev_exists).view(batch_size, 1, 1)
+        pseudo_reference_points = (
+            self.pseudo_reference_points * (self.pc_range[3:6] - self.pc_range[:3])
+            + self.pc_range[:3]
+        )
+        identity = torch.eye(4, device=prev_exists.device, dtype=torch.float32)
+        reference_points = reference_points.clone()
+        egopose = egopose.clone()
+        reference_points[:, : self.num_propagated] += starts * pseudo_reference_points
+        egopose[:, : self.num_propagated] += starts.unsqueeze(-1) * identity
+        return reference_points, egopose
 
     def pre_update_memory(
         self, timestamp: torch.Tensor, prev_exists: torch.Tensor, ego_pose_inv: torch.Tensor
@@ -417,18 +446,9 @@ class StreamPETRHead(nn.Module):
                 self.memory_egopose = memory_refresh(self.memory_egopose, prev_exists)
                 self.memory_velo = memory_refresh(self.memory_velo, prev_exists)
 
-            if self.pseudo_reference_points is not None:
-                pseudo_reference_points = (
-                    self.pseudo_reference_points * (self.pc_range[3:6] - self.pc_range[:3])
-                    + self.pc_range[:3]
-                )
-                self.memory_reference_point[:, : self.num_propagated] += (1 - prev_exists).view(
-                    batch_size, 1, 1
-                ) * pseudo_reference_points
-                identity = torch.eye(4, device=prev_exists.device, dtype=torch.float32)
-                self.memory_egopose[:, : self.num_propagated] += (1 - prev_exists).view(
-                    batch_size, 1, 1, 1
-                ) * identity
+            self.memory_reference_point, self.memory_egopose = self.reset_state(
+                prev_exists, self.memory_reference_point, self.memory_egopose
+            )
 
     def push_memory(
         self,
@@ -534,8 +554,7 @@ class StreamPETRHead(nn.Module):
         camera_intrinsics: torch.Tensor,
         image_height: int | torch.Tensor,
         image_width: int | torch.Tensor,
-        lidar2img: torch.Tensor | None = None,
-        img2lidar: torch.Tensor | None = None,
+        img2lidar: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Build geometry-aware positional embeddings for image tokens.
 
@@ -545,16 +564,12 @@ class StreamPETRHead(nn.Module):
         ``image_height`` / ``image_width`` are 0-d tensors on the export path so
         they stay graph inputs. ``camera_intrinsics`` only lends its focal
         lengths, so either the 3x3 matrix or its 4x4 homogeneous form works.
-        One of ``lidar2img`` or ``img2lidar`` must be given.
+        ``img2lidar`` is the inverse of the augmented lidar-to-image projection
+        of every camera, which the runtime binds as such.
         """
         with torch.autocast(device_type=img_features.device.type, enabled=False):
             return self._position_embedding(
-                img_features,
-                camera_intrinsics,
-                image_height,
-                image_width,
-                lidar2img,
-                img2lidar,
+                img_features, camera_intrinsics, image_height, image_width, img2lidar
             )
 
     def _position_embedding(
@@ -563,8 +578,7 @@ class StreamPETRHead(nn.Module):
         camera_intrinsics: torch.Tensor,
         image_height: int | torch.Tensor,
         image_width: int | torch.Tensor,
-        lidar2img: torch.Tensor | None,
-        img2lidar: torch.Tensor | None,
+        img2lidar: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         batch_size, num_cams, _, feature_height, feature_width = img_features.shape
         device = img_features.device
@@ -579,13 +593,11 @@ class StreamPETRHead(nn.Module):
             [camera_intrinsics[..., 0, 0], camera_intrinsics[..., 1, 1]], dim=-1
         )
         intrinsics = torch.abs(intrinsics) / 1e3
-        # Intentional, not a bug: this tiling is camera-minor while the tokens are
-        # camera-major, so a token's cone carries another camera's focal length. It
-        # reproduces the reference (AWML streampetr_head.py:421) and the checkpoints
-        # trained with it; fixing the order breaks weight compatibility.
-        intrinsics = intrinsics.repeat(1, feature_height * feature_width, 1).view(
-            batch_size, token_count, 2
-        )
+        # One focal length per token, camera-major like the tokens. The reference tiles
+        # camera-minor (``repeat`` over the token axis), so (N - 1) / N of its tokens carry
+        # another camera's focal length; checkpoints trained with it see a different cone
+        # here, which matters where the cameras differ in field of view.
+        intrinsics = intrinsics.repeat_interleave(feature_height * feature_width, dim=1)
 
         memory_centers[..., 0] *= image_width
         memory_centers[..., 1] *= image_height
@@ -597,10 +609,6 @@ class StreamPETRHead(nn.Module):
         coords[..., :2] *= torch.maximum(coords[..., 2:3], torch.full_like(coords[..., 2:3], 1e-5))
         coords = coords.unsqueeze(-1)
 
-        if img2lidar is None:
-            if lidar2img is None:
-                raise ValueError("The position embedding needs lidar2img or img2lidar.")
-            img2lidar = torch.inverse(lidar2img)
         # One matrix per token; matmul broadcasts it over the depth bins.
         img2lidar = img2lidar.view(batch_tokens, 1, 4, 4).repeat(
             1, feature_height * feature_width, 1, 1
@@ -1028,7 +1036,11 @@ class StreamPETRHead(nn.Module):
         self.pre_update_memory(timestamp, prev_exists, ego_pose_inv)
 
         pos_embed, cone = self.position_embedding(
-            img_features, camera_intrinsics, image_height, image_width, lidar2img=lidar2img
+            img_features,
+            camera_intrinsics,
+            image_height,
+            image_width,
+            img2lidar=torch.inverse(lidar2img.float()),
         )
         memory, pos_embed = self.embed_tokens(img_features, pos_embed, cone)
         reference_points, query_attn_mask, denoising_queries = self.prepare_for_dn(
