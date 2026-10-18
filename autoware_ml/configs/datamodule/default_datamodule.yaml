@@ -18,5 +18,7 @@ validation_dataset: ${datamodule.test_dataset}
 predict_dataset: ${datamodule.test_dataset}
 
 train_frame_sampling: null
-# Scene-streaming dataloaders for temporal models.
+# Scene-streaming dataloaders for temporal models; the training split reshuffles the scenes
+# every epoch from the experiment seed.
 streaming: false
+seed: ${seed}

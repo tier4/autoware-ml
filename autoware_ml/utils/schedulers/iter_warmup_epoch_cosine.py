@@ -36,8 +36,9 @@ class IterWarmupEpochCosineLR(LRScheduler):
         optimizer: Wrapped optimizer.
         total_steps: Total optimization steps of the run (auto-filled by the
             framework from ``trainer.estimated_stepping_batches``).
-        max_epochs: Total training epochs; sets both the epoch length
-            (``total_steps / max_epochs``) and the cosine period.
+        max_epochs: Total training epochs (auto-filled by the framework from
+            ``trainer.max_epochs``); sets both the epoch length
+            (``total_steps // max_epochs``) and the cosine period.
         warmup_iters: Length of the linear warmup in optimization steps.
         warmup_start_factor: Learning-rate factor at step 0.
         eta_min_factor: Cosine floor as a fraction of the base learning rate.
@@ -59,8 +60,13 @@ class IterWarmupEpochCosineLR(LRScheduler):
             raise ValueError(f"total_steps must be positive, got {total_steps}.")
         if max_epochs <= 0:
             raise ValueError(f"max_epochs must be positive, got {max_epochs}.")
+        if total_steps < max_epochs:
+            raise ValueError(
+                f"total_steps ({total_steps}) must cover at least one step per epoch "
+                f"({max_epochs} epochs)."
+            )
         self.max_epochs = max_epochs
-        self.steps_per_epoch = max(total_steps // max_epochs, 1)
+        self.steps_per_epoch = total_steps // max_epochs
         self.warmup_iters = warmup_iters
         self.warmup_start_factor = warmup_start_factor
         self.eta_min_factor = eta_min_factor

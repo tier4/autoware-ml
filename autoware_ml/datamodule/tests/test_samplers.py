@@ -9,6 +9,7 @@ from types import MappingProxyType
 import numpy as np
 import polars as pl
 import pytest
+from torch.utils.data.distributed import DistributedSampler
 
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.datamodule.base_dataset import ConcatDataset
@@ -344,9 +345,8 @@ def test_ranks_agree_on_length_and_shard_disjoint_scenes() -> None:
     rank_indices = []
     for rank in range(2):
         sampler = GroupStreamingSampler(dataset, batch_size=2, shuffle=False)
-        sampler.world_size = 2
+        sampler.num_replicas = 2
         sampler.rank = rank
-        sampler._cached_epoch = None
         rank_indices.append(list(sampler))
     assert len(rank_indices[0]) == len(rank_indices[1])
     assert not set(rank_indices[0]) & set(rank_indices[1])
@@ -358,7 +358,7 @@ def test_shuffled_ranks_serve_the_same_fixed_length_and_disjoint_scenes() -> Non
     samplers = []
     for rank in range(2):
         sampler = GroupStreamingSampler(dataset, batch_size=2, shuffle=True, seed=0)
-        sampler.world_size = 2
+        sampler.num_replicas = 2
         sampler.rank = rank
         samplers.append(sampler)
     expected = math.ceil(dataset.total / (2 * 2)) * 2
@@ -386,7 +386,24 @@ def test_set_epoch_reshuffles_deterministically() -> None:
 
 def test_raises_when_lanes_cannot_be_filled() -> None:
     with pytest.raises(ValueError, match="cannot fill"):
-        list(GroupStreamingSampler(_FakeScenesDataset([5]), batch_size=2, shuffle=False))
+        list(GroupStreamingSampler(_FakeScenesDataset([1]), batch_size=2, shuffle=False))
+
+
+def test_is_a_distributed_sampler_so_lightning_does_not_wrap_it() -> None:
+    sampler = GroupStreamingSampler(_FakeScenesDataset([4, 4]), batch_size=2, shuffle=False)
+    assert isinstance(sampler, DistributedSampler)
+    assert (sampler.num_replicas, sampler.rank) == (1, 0)
+
+
+def _ranks(dataset: _FakeScenesDataset, world_size: int, batch_size: int, shuffle: bool):
+    """The per-rank index lists of a ``world_size``-rank job, built as every rank would."""
+    samplers = []
+    for rank in range(world_size):
+        sampler = GroupStreamingSampler(dataset, batch_size=batch_size, shuffle=shuffle, seed=0)
+        sampler.num_replicas = world_size
+        sampler.rank = rank
+        samplers.append(sampler)
+    return samplers
 
 
 def _lanes(sampler: GroupStreamingSampler) -> list[list[int]]:
@@ -411,17 +428,21 @@ class TestFixedLengthTrainingEpochs:
         assert lengths[0] == sampler.rounds_per_epoch * 2
         assert lengths[0] >= dataset.total
 
-    def test_every_frame_is_served_when_lanes_balance(self) -> None:
-        # Balanced scenes: shortest-lane assignment keeps every lane at the
-        # fixed length, so padding never displaces a frame.
-        dataset = _FakeScenesDataset([10, 10, 10, 10])
-        sampler = GroupStreamingSampler(dataset, batch_size=2, shuffle=True)
+    def test_every_frame_is_served_and_fewer_than_the_lanes_repeat(self) -> None:
+        # Uneven scenes over 8 ranks x 2 lanes: the joined frames are cut into 16 lanes, so
+        # no frame is dropped and the padding repeats fewer than 16 frames per epoch.
+        dataset = _FakeScenesDataset([37, 21, 58, 13, 44, 29, 61, 18, 25, 50, 33])
+        samplers = _ranks(dataset, world_size=8, batch_size=2, shuffle=True)
 
-        for epoch in range(4):
-            sampler.set_epoch(epoch)
-            assert set(iter(sampler)) == set(range(dataset.total))
+        for epoch in range(3):
+            served = []
+            for sampler in samplers:
+                sampler.set_epoch(epoch)
+                served.extend(sampler)
+            assert set(served) == set(range(dataset.total))
+            assert len(served) - dataset.total < 16
 
-    def test_lanes_only_advance_within_a_scene_or_restart_at_a_scene_start(self) -> None:
+    def test_lanes_only_advance_within_a_scene_or_start_a_new_stream(self) -> None:
         dataset = _FakeScenesDataset([7, 5, 18, 3, 8, 9])
         sampler = GroupStreamingSampler(dataset, batch_size=3, shuffle=True)
 
@@ -429,12 +450,16 @@ class TestFixedLengthTrainingEpochs:
             sampler.set_epoch(epoch)
             for lane in _lanes(sampler):
                 for previous, current in zip(lane, lane[1:]):
-                    # Either the next frame of the same scene, or the first frame
-                    # of a scene, where the model resets its temporal memory.
-                    assert current == previous + 1 or current in dataset.scene_starts
+                    # Either the next frame of the same scene, or a new stream: the first
+                    # frame of a scene, or the lane's own first frame when it is padded.
+                    assert (
+                        current == previous + 1
+                        or current in dataset.scene_starts
+                        or current == lane[0]
+                    )
 
     def test_raises_when_scenes_cannot_fill_every_lane(self) -> None:
-        sampler = GroupStreamingSampler(_FakeScenesDataset([5, 5]), batch_size=3, shuffle=True)
+        sampler = GroupStreamingSampler(_FakeScenesDataset([1, 1]), batch_size=3, shuffle=True)
 
         with pytest.raises(ValueError, match="cannot fill"):
             len(sampler)
@@ -448,9 +473,35 @@ class TestEvaluationTrimsInsteadOfPadding:
         assert list(iter(sampler)) == list(range(dataset.total))
 
     def test_wider_batches_trim_without_repeating_frames(self) -> None:
-        dataset = _FakeScenesDataset([7, 5, 18])
+        dataset = _FakeScenesDataset([7, 5, 19])
         sampler = GroupStreamingSampler(dataset, batch_size=2, shuffle=False)
 
         indices = list(iter(sampler))
         assert len(indices) == len(set(indices))
-        assert len(indices) < dataset.total
+        assert len(indices) == dataset.total - 1
+
+    def test_several_ranks_drop_fewer_frames_than_they_have_lanes(self) -> None:
+        # 87 uneven scenes over 8 ranks x 2 lanes: dealing whole scenes round-robin would
+        # drop about a fifth of the frames; cutting the joined frames drops fewer than 16.
+        rng = np.random.default_rng(0)
+        dataset = _FakeScenesDataset(rng.integers(20, 61, size=87).tolist())
+        samplers = _ranks(dataset, world_size=8, batch_size=2, shuffle=False)
+
+        served = [index for sampler in samplers for index in sampler]
+        assert len(served) == len(set(served))
+        assert len({len(sampler) for sampler in samplers}) == 1
+        assert 0 < dataset.total - len(served) < 16
+
+    def test_a_lane_cut_inside_a_scene_continues_that_scene(self) -> None:
+        # Two lanes cut one scene of 9 frames: lane 1 starts at frame 4, mid-scene.
+        sampler = GroupStreamingSampler(_FakeScenesDataset([9]), batch_size=2, shuffle=False)
+
+        assert _lanes(sampler) == [[0, 1, 2, 3], [4, 5, 6, 7]]
+
+    def test_logs_the_trimming_once(self, caplog: pytest.LogCaptureFixture) -> None:
+        sampler = GroupStreamingSampler(_FakeScenesDataset([10, 5]), batch_size=2, shuffle=False)
+        with caplog.at_level(logging.WARNING, logger="autoware_ml.datamodule.samplers"):
+            for epoch in range(3):
+                sampler.set_epoch(epoch)
+                list(sampler)
+        assert sum("trimmed" in record.message for record in caplog.records) == 1

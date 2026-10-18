@@ -56,6 +56,7 @@ class DataModule(L.LightningDataModule):
         predict_dataloader: DataLoaderConfig | None,
         train_frame_sampling: FrameSamplingConfig | None,
         streaming: bool,
+        seed: int = 0,
     ) -> None:
         """
         Initialize the datamodule.
@@ -80,9 +81,10 @@ class DataModule(L.LightningDataModule):
           streaming: Whether every dataloader feeds each batch lane whole scenes, frame by
             frame, for temporal models that carry a memory across batches. The training
             split reshuffles the order of the scenes every epoch. The sampler shards the
-            scenes over the ranks itself, so a distributed trainer must run with
-            ``use_distributed_sampler: false``; the dataloaders refuse to be built
-            otherwise.
+            scenes over the ranks itself and Lightning leaves it alone, being a
+            ``DistributedSampler``.
+          seed: Seed of the per-epoch scene shuffle of the streaming training split; pass
+            the experiment seed so every run draws its own order.
         """
         super().__init__()
 
@@ -131,6 +133,7 @@ class DataModule(L.LightningDataModule):
             )
         self.train_frame_sampling = train_frame_sampling
         self.streaming = streaming
+        self.seed = seed
 
     def _validate_shared_taxonomy(self) -> None:
         """
@@ -229,13 +232,6 @@ class DataModule(L.LightningDataModule):
             database.process_scenario_records()
         logger.info("Finished preparing the record tables.")
 
-    def _trainer_wraps_samplers(self) -> bool:
-        """Whether an attached distributed trainer would wrap the dataloader samplers."""
-        trainer = self.trainer
-        if trainer is None or trainer.world_size == 1:
-            return False
-        return trainer._accelerator_connector.use_distributed_sampler
-
     def build_dataloader(self, split: SplitType, config: DataLoaderConfig | None) -> DataLoader:
         """
         Build the dataloader of one split.
@@ -262,16 +258,11 @@ class DataModule(L.LightningDataModule):
                     "Scene streaming owns the sample order, so the dataloader cannot shuffle. "
                     "Set shuffle to false."
                 )
-            if self._trainer_wraps_samplers():
-                # Lightning would wrap the sampler in a DistributedSamplerWrapper that keeps
-                # every world_size-th index of this rank's stream: every rank would train on a
-                # fraction of its scenes and every lane would skip frames, without an error.
-                raise ValueError(
-                    "Scene streaming shards the scenes over the ranks itself; run the trainer "
-                    "with use_distributed_sampler: false."
-                )
             kwargs["sampler"] = GroupStreamingSampler(
-                dataset, batch_size=config.batch_size, shuffle=split == SplitType.TRAIN
+                dataset,
+                batch_size=config.batch_size,
+                shuffle=split == SplitType.TRAIN,
+                seed=self.seed,
             )
         elif split == SplitType.TRAIN and self.train_frame_sampling is not None:
             if config.shuffle:

@@ -369,6 +369,10 @@ class TestIterWarmupEpochCosineLR:
         assert lrs[10] == pytest.approx(self._cosine_factor(1, 10))
         assert lrs[95] == pytest.approx(self._cosine_factor(9, 10))
 
+    def test_rejects_fewer_steps_than_epochs(self) -> None:
+        with pytest.raises(ValueError, match="at least one step per epoch"):
+            self._build(total_steps=5, max_epochs=10)
+
     def test_trailing_steps_stay_at_the_last_epoch_factor(self) -> None:
         # A trainer.max_steps cap leaves total_steps % max_epochs = 5 trailing steps:
         # they must keep the last epoch's LR instead of dropping to the eta_min floor.

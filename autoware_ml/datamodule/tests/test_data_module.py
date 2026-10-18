@@ -21,9 +21,9 @@ from functools import partial
 from pathlib import Path
 import tempfile
 import unittest
-from types import SimpleNamespace
 
 import polars as pl
+from torch.utils.data.distributed import DistributedSampler
 
 from autoware_ml.databases.base_database import BaseDatabase
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
@@ -209,6 +209,7 @@ class MultiSourceTestCase(unittest.TestCase):
         train_frame_sampling: FrameSamplingConfig | None = None,
         validation_dataloader: DataLoaderConfig | None = None,
         streaming: bool = False,
+        seed: int = 0,
     ) -> DataModule:
         """Build a datamodule whose validation split reads the main corpus by default."""
         factory = build_dataset_factory()
@@ -232,6 +233,7 @@ class MultiSourceTestCase(unittest.TestCase):
             predict_dataloader=None,
             train_frame_sampling=train_frame_sampling,
             streaming=streaming,
+            seed=seed,
         )
 
 
@@ -698,29 +700,28 @@ class TestSceneStreaming(MultiSourceTestCase):
         with self.assertRaisesRegex(ValueError, "shuffle"):
             data_module.train_dataloader()
 
-    def test_rejects_a_distributed_trainer_that_wraps_samplers(self) -> None:
+    def test_builds_a_distributed_sampler_seeded_by_the_experiment(self) -> None:
         """
-        Input: a streaming datamodule attached to a two-rank trainer that keeps Lightning's
-        default ``use_distributed_sampler``.
-        Expected: Lightning would wrap the scene sampler and thin out every rank's stream, so
-        the loader refuses to be built; with ``use_distributed_sampler`` off it is built.
-        Check: building the training loader raises a ValueError naming the setting, then
-        succeeds once the setting is off.
+        Input: a streaming datamodule with the experiment seed.
+        Expected: the scene sampler is a ``DistributedSampler``, so Lightning leaves it alone
+        whatever ``use_distributed_sampler`` says, and its shuffle draws from the seed.
+        Check: the training loader's sampler type and seed; the validation loader does not
+        shuffle.
         """
         data_module = self.build_data_module(
             [{"database": self.streamed_database}],
             train_dataloader=DataLoaderConfig(batch_size=1),
+            validation_dataloader=DataLoaderConfig(batch_size=1),
             streaming=True,
+            seed=7,
         )
         data_module.setup("fit")
-        connector = SimpleNamespace(use_distributed_sampler=True)
-        data_module.trainer = SimpleNamespace(world_size=2, _accelerator_connector=connector)
 
-        with self.assertRaisesRegex(ValueError, "use_distributed_sampler"):
-            data_module.train_dataloader()
-
-        connector.use_distributed_sampler = False
-        self.assertIsInstance(data_module.train_dataloader().sampler, GroupStreamingSampler)
+        train_sampler = data_module.train_dataloader().sampler
+        self.assertIsInstance(train_sampler, GroupStreamingSampler)
+        self.assertIsInstance(train_sampler, DistributedSampler)
+        self.assertEqual((train_sampler.seed, train_sampler.shuffle), (7, True))
+        self.assertFalse(data_module.val_dataloader().sampler.shuffle)
 
     def test_rejects_frame_sampling(self) -> None:
         """

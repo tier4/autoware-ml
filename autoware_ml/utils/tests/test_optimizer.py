@@ -10,6 +10,7 @@ import torch.nn as nn
 from omegaconf import OmegaConf
 from torch.optim.lr_scheduler import OneCycleLR
 
+from autoware_ml.utils.schedulers.iter_warmup_epoch_cosine import IterWarmupEpochCosineLR
 from autoware_ml.utils.optimizer import (
     build_lightning_optimizer_config,
     build_optimizer_param_groups,
@@ -96,6 +97,31 @@ def test_build_lightning_optimizer_config_infers_total_steps_for_scheduler() -> 
     assert [group["max_lr"] for group in optimizer.param_groups] == [1e-3, 1e-4]
     assert optimizers["lr_scheduler"]["interval"] == "step"
     assert scheduler.total_steps == 10
+
+
+def test_build_lightning_optimizer_config_infers_max_epochs_for_scheduler() -> None:
+    model = _ToyModule()
+
+    def build_scheduler(optimizer, total_steps: int, max_epochs: int):
+        return IterWarmupEpochCosineLR(
+            optimizer,
+            total_steps=total_steps,
+            max_epochs=max_epochs,
+            warmup_iters=1,
+            warmup_start_factor=0.5,
+            eta_min_factor=1e-3,
+        )
+
+    optimizers = build_lightning_optimizer_config(
+        model,
+        optimizer_factory=lambda params: torch.optim.AdamW(params, lr=1e-3),
+        scheduler_factory=build_scheduler,
+        estimated_stepping_batches=40,
+        max_epochs=4,
+    )
+
+    scheduler = optimizers["lr_scheduler"]["scheduler"]
+    assert (scheduler.max_epochs, scheduler.steps_per_epoch) == (4, 10)
 
 
 def test_build_lightning_optimizer_config_materializes_partial_omegaconf_kwargs() -> None:

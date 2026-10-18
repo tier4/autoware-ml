@@ -343,8 +343,9 @@ class BaseModel(MetricEvalMixin, L.LightningModule, ABC):
 
         Scheduler behavior such as ``interval``, ``frequency``, and ``monitor``
         is configured explicitly through ``scheduler_config``. The framework
-        only auto-fills ``total_steps`` when the configured scheduler declares
-        that argument and it was not already bound in the scheduler factory.
+        only auto-fills ``total_steps`` and ``max_epochs`` when the configured
+        scheduler declares the argument and it was not already bound in the
+        scheduler factory.
 
         Returns:
             Optimizer instance or Lightning optimizer configuration dictionary.
@@ -360,4 +361,5 @@ class BaseModel(MetricEvalMixin, L.LightningModule, ABC):
             estimated_stepping_batches=self.trainer.estimated_stepping_batches
             if self._trainer is not None
             else None,
+            max_epochs=self.trainer.max_epochs if self._trainer is not None else None,
         )
