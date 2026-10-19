@@ -62,7 +62,7 @@ autoware-ml train \
     +trainer.fast_dev_run=true
 ```
 
-Checkpoints are written to `mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/checkpoints/` as `best.ckpt` and `last.ckpt`. Resume an interrupted run with `--resume-checkpoint` pointing at `last.ckpt`.
+Checkpoints are written to `mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/checkpoints/` as `best.ckpt` and `last.ckpt`. `best.ckpt` is the validation with the highest `val/det3d/mAP`, and early stopping watches the same metric. Resume an interrupted run with `--resume-checkpoint` pointing at `last.ckpt`.
 
 ## Evaluation
 

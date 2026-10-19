@@ -203,3 +203,12 @@ model:
     decay_epochs: ???
     max_lr_factor: ???
     min_lr_factor: 0.0001
+
+callbacks:
+  model_checkpoint:
+    monitor: val/det3d/mAP
+    mode: max
+  early_stopping:
+    monitor: val/det3d/mAP
+    patience: 20
+    mode: max
