@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import math
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -1081,6 +1082,35 @@ def _export_fill(num_points: int, patch_size: int) -> torch.Tensor:
     return build_patch_order(torch.arange(num_points).unsqueeze(0), patch_size)[0]
 
 
+def _reference_training_padding(
+    offset: torch.Tensor, patch_size: int, enable_flash: bool
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    """PTv3's original per-sample slice-copy padding, kept as the training-path oracle."""
+    bincount = torch.diff(offset, prepend=offset.new_zeros(1))
+    padded_bincount = torch.where(
+        bincount > patch_size, (bincount + patch_size - 1) // patch_size * patch_size, bincount
+    )
+    starts = nn.functional.pad(offset, (1, 0))
+    padded_starts = nn.functional.pad(torch.cumsum(padded_bincount, dim=0), (1, 0))
+    pad = torch.arange(int(padded_starts[-1]))
+    unpad = torch.arange(int(starts[-1]))
+    cu_seqlens = []
+    for index in range(offset.numel()):
+        unpad[starts[index] : starts[index + 1]] += padded_starts[index] - starts[index]
+        end = padded_starts[index + 1]
+        if bincount[index] != padded_bincount[index]:
+            tail = end - patch_size + bincount[index] % patch_size
+            pad[tail:end] = pad[tail - patch_size : end - patch_size]
+        pad[padded_starts[index] : end] -= padded_starts[index] - starts[index]
+        cu_seqlens.append(
+            torch.arange(int(padded_starts[index]), int(end), step=patch_size, dtype=torch.int32)
+        )
+    if not enable_flash:
+        return pad, unpad, None
+    total = int(padded_starts[-1])
+    return pad, unpad, nn.functional.pad(torch.cat(cu_seqlens), (0, 1), value=total)
+
+
 @pytest.mark.parametrize("patch_size", [4, 16, 48])
 def test_export_fill_reproduces_the_training_fill_above_one_window(patch_size: int) -> None:
     """The cyclic fill must equal the training fill wherever training pads at all.
@@ -1090,11 +1120,30 @@ def test_export_fill_reproduces_the_training_fill_above_one_window(patch_size: i
     match that exactly, or every frame whose voxel count is not a multiple of the
     window size drifts from what the model was trained on.
     """
-    attention = _build_attention(patch_size)
     for num_points in range(patch_size + 1, 4 * patch_size + 1):
-        training_pad, _, _ = attention._get_padding_and_inverse(_identity_point(num_points))
+        training_pad, _, _ = _reference_training_padding(
+            torch.tensor([num_points]), patch_size, enable_flash=False
+        )
         export_pad = _export_fill(num_points, patch_size)
         assert torch.equal(export_pad, training_pad), f"n={num_points}, K={patch_size}"
+
+
+@pytest.mark.parametrize("enable_flash", [False, True])
+@pytest.mark.parametrize("patch_size", [1, 4, 7])
+def test_training_padding_matches_the_reference_loop(patch_size: int, enable_flash: bool) -> None:
+    """Two-sample batches with empty, sub-window, exact and padded samples."""
+    attention = _build_attention(patch_size)
+    attention.enable_flash = enable_flash  # only selects whether `cu_seqlens` is returned
+    for counts in itertools.product(range(3 * patch_size + 2), repeat=2):
+        offset = torch.tensor(list(itertools.accumulate(counts)))
+        actual = attention._get_padding_and_inverse(Point(offset=offset))
+        expected = _reference_training_padding(offset, patch_size, enable_flash)
+        for name, left, right in zip(("pad", "unpad", "cu_seqlens"), actual, expected):
+            if right is None:
+                assert left is None, f"{name}, counts={counts}"
+            else:
+                assert left.dtype == right.dtype, f"{name}, counts={counts}"
+                assert torch.equal(left, right), f"{name}, counts={counts}"
 
 
 @pytest.mark.parametrize("patch_size", [4, 16, 48])

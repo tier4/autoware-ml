@@ -592,6 +592,8 @@ class SerializedAttention(PointModule):
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         """Compute padded token indices and inverse mapping for windowed attention.
 
+        Every sample is padded on its own, so no window crosses a sample boundary.
+
         Args:
             point: Serialized point container.
 
@@ -599,53 +601,29 @@ class SerializedAttention(PointModule):
             Tuple containing padded ordering indices, inverse indices, and
             optional cumulative sequence lengths for flash attention.
         """
-        bincount = offset_to_bincount(point.offset)
-        padded_bincount = (
-            torch.maximum(
-                torch.div(bincount + self.patch_size - 1, self.patch_size, rounding_mode="trunc"),
-                torch.ones_like(bincount),
+        device = point.offset.device
+        patch_size = self.patch_size
+        pads, unpads, seqlens = [], [], []
+        start = padded_start = 0
+        for end in point.offset.tolist():
+            order = torch.arange(start, end, device=device)
+            # A sample below one window keeps its own shorter window instead of being padded.
+            padded = (
+                build_patch_order(order[None], patch_size)[0] if end - start > patch_size else order
             )
-            * self.patch_size
-        )
-        mask = bincount > self.patch_size
-        padded_bincount = (~mask).long() * bincount + mask.long() * padded_bincount
-
-        offset = nn.functional.pad(point.offset, (1, 0))
-        padded_offset = nn.functional.pad(torch.cumsum(padded_bincount, dim=0), (1, 0))
-        pad = torch.arange(padded_offset[-1], device=point.offset.device)
-        unpad = torch.arange(offset[-1], device=point.offset.device)
-        cu_seqlens = [] if self.enable_flash else None
-        for batch_index in range(point.offset.numel()):
-            unpad[offset[batch_index] : offset[batch_index + 1]] += (
-                padded_offset[batch_index] - offset[batch_index]
-            )
-            if bincount[batch_index] != padded_bincount[batch_index]:
-                pad[
-                    padded_offset[batch_index + 1]
-                    - self.patch_size
-                    + (bincount[batch_index] % self.patch_size) : padded_offset[batch_index + 1]
-                ] = pad[
-                    padded_offset[batch_index + 1]
-                    - 2 * self.patch_size
-                    + (bincount[batch_index] % self.patch_size) : padded_offset[batch_index + 1]
-                    - self.patch_size
-                ]
-            pad[padded_offset[batch_index] : padded_offset[batch_index + 1]] -= (
-                padded_offset[batch_index] - offset[batch_index]
-            )
-            if cu_seqlens is not None:
-                cu_seqlens.append(
-                    torch.arange(
-                        padded_offset[batch_index],
-                        padded_offset[batch_index + 1],
-                        step=self.patch_size,
-                        dtype=torch.int32,
-                        device=point.offset.device,
-                    )
+            pads.append(padded)
+            unpads.append(torch.arange(padded_start, padded_start + end - start, device=device))
+            seqlens.append(
+                torch.arange(
+                    padded_start, padded_start + padded.numel(), step=patch_size, device=device
                 )
-        if cu_seqlens is None:
+            )
+            start, padded_start = end, padded_start + padded.numel()
+        pad, unpad = torch.cat(pads), torch.cat(unpads)
+        if not self.enable_flash:
             return pad, unpad, None
-        return pad, unpad, nn.functional.pad(torch.cat(cu_seqlens), (0, 1), value=padded_offset[-1])
+        seqlens.append(torch.tensor([padded_start], device=device))
+        return pad, unpad, torch.cat(seqlens).to(torch.int32)
 
     @torch.no_grad()
     def disable_flash(self) -> None:
