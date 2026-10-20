@@ -305,45 +305,34 @@ class DistributedWeightedRandomSampler(DistributedSampler):
 
 
 class GroupStreamingSampler(DistributedSampler):
-    """Deal scene-contiguous frame indices over the dataloader lanes of every rank.
+    """Feed every batch position the frames of one scene after another, in time order.
 
-    Each of the ``batch_size`` dataloader lanes walks the frames in scene order,
-    so consecutive iterations feed consecutive frames of the same scene into the
-    same batch position. Stateful temporal models can therefore carry per-lane
-    memory across iterations and reset it where a lane enters a new scene, which
-    the frame metadata of the batch tells them.
+    A lane is one position of a rank's batch. Across iterations a lane walks its frames
+    one after another, so a temporal model can keep one memory per lane; it tells from
+    the frame metadata of the batch where a lane starts a new stream and resets that
+    lane's memory there.
 
-    The frames of the epoch, one scene after another, are cut into
-    ``world_size * batch_size`` lanes of equal length; rank ``r`` serves lanes
-    ``r * batch_size`` to ``(r + 1) * batch_size - 1``. A lane that begins in
-    the middle of a scene starts a new stream there, like at a scene start.
-    Cutting the joined frames rather than dealing whole scenes keeps the lanes
-    balanced whatever the scene lengths, so fewer than ``world_size * batch_size``
-    frames are padded or trimmed in total.
+    Every epoch the scenes are joined, in order or shuffled by ``seed + epoch``, and their
+    frames are cut into ``num_lanes`` (``num_replicas * batch_size``) lanes whose lengths
+    differ by at most one; rank ``r`` serves lanes ``r * batch_size`` to
+    ``(r + 1) * batch_size - 1``. A cut can fall inside a scene, and the lane after it
+    starts a new stream there.
 
-    Epoch length is fixed when ``shuffle`` is true (training): the scene order is
-    reshuffled every epoch and every lane is padded, by cycling back to its own
-    first frame, to ``ceil(total_frames / (world_size * batch_size))`` rounds.
-    No frame is dropped and fewer than ``world_size * batch_size`` frames repeat,
-    the ``DistributedSampler`` convention. A constant ``len()`` is what Lightning
-    assumes: it derives ``val_check_batch`` and ``estimated_stepping_batches``
-    once from the first epoch, and a shorter later epoch would silently skip its
-    validation.
+    Every rank serves the same number of rounds, padded or trimmed as below, so no rank
+    waits forever in a DDP collective (the gradient sync of every training step, or an
+    ``all_reduce`` a model may run in its validation loss).
 
-    Without ``shuffle`` (evaluation) the scene order is deterministic and no
-    frame is scored twice: every lane is trimmed to
-    ``floor(total_frames / (world_size * batch_size))`` rounds, so fewer than
-    ``world_size * batch_size`` tail frames are dropped. One rank with one lane
-    scores every frame.
+    - ``shuffle=True`` (training): every lane is padded to
+      ``ceil(total_frames / num_lanes)`` rounds by restarting at its own first frame. No
+      frame is dropped and fewer than ``num_lanes`` repeat. The epoch length never
+      changes: Lightning derives the validation interval and the total step count once,
+      from the first epoch, and a shorter later epoch would silently skip its validation.
+    - ``shuffle=False`` (evaluation): every lane is trimmed to
+      ``floor(total_frames / num_lanes)`` rounds. No frame is scored twice and fewer than
+      ``num_lanes`` tail frames go unscored, none with one rank and one lane.
 
-    Both ways every rank serves the same number of rounds. DDP synchronizes the
-    gradients of every training step, and a model may synchronize inside its
-    validation step as well (an ``all_reduce`` in the loss), so a rank with more
-    steps would wait forever for the others.
-
-    The sampler is a ``DistributedSampler`` and shards by rank itself, so Lightning
-    leaves it alone whatever ``use_distributed_sampler`` says: it only wraps
-    samplers that are not already distributed.
+    As a ``DistributedSampler`` it is never wrapped by Lightning, whose wrapper would keep
+    only every ``num_replicas``-th index of each rank and make its lanes skip frames.
     """
 
     def __init__(
@@ -378,7 +367,7 @@ class GroupStreamingSampler(DistributedSampler):
 
     @property
     def num_lanes(self) -> int:
-        """Lanes over every rank, ``world_size * batch_size``."""
+        """Lanes over every rank, ``num_replicas * batch_size``."""
         return self.num_replicas * self.batch_size
 
     @property
