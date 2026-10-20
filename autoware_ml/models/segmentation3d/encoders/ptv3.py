@@ -116,37 +116,32 @@ class SerializedPoolingMeta:
     serialized_inverse: torch.Tensor  # [O, M] inverse of the (unpadded) serialization order
 
 
-def padded_patch_count(count: int, patch_size: int) -> int:
-    """Number of attention slots for ``count`` tokens: the next multiple of ``patch_size``."""
-    return -(-count // patch_size) * patch_size
-
-
 def build_patch_order(serialized_order: torch.Tensor, patch_size: int) -> torch.Tensor:
     """Pad every serialization order to whole attention windows.
 
-    This is the gather order the exported attention blocks consume (``qkv[order]``): the
-    serialized order itself, extended to a multiple of ``patch_size`` by filling the trailing
-    slots of the last window with real tokens borrowed backwards along the serialization
-    (``(slot - patch_size + cycle) % count``, ``cycle`` = the smallest multiple of ``count``
-    not below ``patch_size`` so the shift stays non-negative; below one window it wraps around).
-    Every slot therefore holds a real token and attention needs no mask. It depends only on
-    the token count, the order and the window size — nothing the network computes — which is
-    why it is precomputed by the serialize stage instead of being traced into every block
-    (see ``SerializedAttention.forward``). The deployed C++ runtime rebuilds the same tensor;
-    keep the two in step.
+    The trailing slots of the last window are filled with real tokens, so attention needs no
+    mask. Values are positions in ``serialized_order``, ``|`` separates windows::
+
+        patch_size 4, count 8:  0 1 2 3 | 4 5 6 7   whole windows, nothing to fill
+        patch_size 4, count 6:  0 1 2 3 | 4 5 2 3   2 3 borrowed from the previous window
+        patch_size 8, count 3:  0 1 2 1 2 0 1 2     below one window: cycles through the sample
+
+    The deployed runtime (``autoware_ptv3``) reimplements this; its tests share the golden
+    vectors in ``test_ptv3_encoder.py``.
 
     Args:
         serialized_order: ``[num_orders, count]`` permutations.
         patch_size: Attention window of the blocks at this level.
 
     Returns:
-        ``[num_orders, padded]`` gather order, ``padded = padded_patch_count(count, patch_size)``.
+        ``[num_orders, ceil(count / patch_size) * patch_size]`` gather order.
     """
     count = int(serialized_order.shape[1])
-    padded = padded_patch_count(count, patch_size)
+    padded = math.ceil(count / patch_size) * patch_size
     if padded == count:
         return serialized_order
-    cycle = -(-patch_size // count) * count
+    # A multiple of `count` large enough to keep `slot - patch_size + cycle` non-negative.
+    cycle = math.ceil(patch_size / count) * count
     tail = (
         torch.arange(count, padded, device=serialized_order.device, dtype=serialized_order.dtype)
         - patch_size
@@ -645,7 +640,7 @@ class SerializedAttention(PointModule):
         if not self.enable_flash:
             # Export keeps the window static so no shape depends on the voxel count;
             # samples smaller than one window are handled by the cyclic fill in
-            # `_get_padding_and_inverse` rather than by shrinking the window.
+            # `build_patch_order` rather than by shrinking the window.
             self.patch_size = (
                 self.patch_size_max
                 if self.export_mode
@@ -654,11 +649,8 @@ class SerializedAttention(PointModule):
         patch_size = self.patch_size
         channel_count = self.channels
         if self.export_mode:
-            # The gather order arrives precomputed (`build_patch_order`, from the serialize
-            # stage or the deployed runtime): its padding depends only on the token count,
-            # the serialization and the window, so computing it in-graph would trace ~30
-            # integer ops per block that TensorRT then runs every frame. For one export sample
-            # `unpad` is the identity, so the inverse is the serialization's own.
+            # `patch_order` is precomputed outside the graph (`build_patch_order`). With a
+            # single export sample `unpad` is the identity, so the inverse is used as is.
             cu_seqlens = None
             order = point.patch_order[self.order_index]
             inverse = point.serialized_inverse[self.order_index]
@@ -985,6 +977,7 @@ class SerializedPooling(PointModule):
                 .expand_as(pooled_order),
             )
             grid_coord = point.grid_coord[head_indices] >> pooling_depth
+            # Export never shuffles: `prepare_point_module_for_export` clears `shuffle_orders`.
             if self.shuffle_orders:
                 permutation = torch.randperm(pooled_code.shape[0], device=pooled_code.device)
                 pooled_code = pooled_code[permutation]
@@ -1257,7 +1250,7 @@ class PointTransformerV3Encoder(PointModule):
         self.stride = list(stride)
         self.shuffle_orders = shuffle_orders
         self.enc_channels = list(enc_channels)
-        self.enc_patch_size = list(enc_patch_size)
+        self.enc_patch_sizes = list(enc_patch_size)
         stage_count = len(enc_depths)
         self.enc_conv = expand_stage_flags(enc_conv, stage_count, True, "enc_conv")
         self.enc_attn = expand_stage_flags(enc_attn, stage_count, True, "enc_attn")

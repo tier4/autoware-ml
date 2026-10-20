@@ -35,7 +35,6 @@ from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     SerializedPooling,
     build_patch_order,
     build_serialized_pooling_meta,
-    padded_patch_count,
 )
 from autoware_ml.models.segmentation3d.encoders.voxel import (
     PastFutureVoxelFeatureEncoder,
@@ -934,39 +933,34 @@ def _reference_patch_order(serialized_order: torch.Tensor, patch_size: int) -> t
 
 
 @pytest.mark.parametrize(
-    ("count", "patch_size"),
+    ("count", "patch_size", "padded"),
     [
-        (3, 4),  # below one window: wraps around
-        (4, 4),  # exactly one window: no padding
-        (8, 4),  # whole windows: no padding
-        (9, 4),  # one token into the last window: borrows three backwards
-        (13, 4),
-        (5, 512),  # deployment window, tiny sample: wraps many times
-        (1, 4),
+        (3, 4, 4),  # below one window: wraps around
+        (4, 4, 4),  # exactly one window: no padding
+        (8, 4, 8),  # whole windows: no padding
+        (9, 4, 12),  # one token into the last window: borrows three backwards
+        (13, 4, 16),
+        (5, 512, 512),  # deployment window, tiny sample: wraps many times
+        (1, 4, 4),
     ],
 )
-def test_build_patch_order_matches_the_traced_formula(count: int, patch_size: int) -> None:
-    """The precomputed gather order is exactly what the graph used to compute per block.
-
-    It is also the contract the deployed runtime reimplements, so the reference stays here
-    as the oracle for both sides. Every slot must hold a real token (no mask in attention).
-    """
+def test_build_patch_order_matches_the_traced_formula(
+    count: int, patch_size: int, padded: int
+) -> None:
+    """`build_patch_order` equals the formula the export graph used to trace per block."""
     torch.manual_seed(count)
     serialized_order = torch.stack([torch.randperm(count), torch.randperm(count)])
 
     patch_order = build_patch_order(serialized_order, patch_size)
 
     assert torch.equal(patch_order, _reference_patch_order(serialized_order, patch_size))
-    assert patch_order.shape == (2, padded_patch_count(count, patch_size))
-    assert patch_order.shape[1] % patch_size == 0
+    assert patch_order.shape == (2, padded)
     assert torch.equal(patch_order[:, :count], serialized_order)
     assert (patch_order >= 0).all() and (patch_order < count).all()
 
 
-#: Literal `patch_order` vectors, hand-derived from the contract, shared with the deployed
-#: runtime's test (autoware.universe, autoware_ptv3 `serialized_pooling_metadata_test.cpp`):
-#: two implementations of one formula in two languages must agree on the same numbers, not
-#: each on its own reimplementation of the formula. (patch_size, serialized_order, expected).
+#: (patch_size, serialized_order, expected) literals, shared with the runtime's test
+#: (autoware_universe, autoware_ptv3 `serialized_pooling_metadata_test.cpp`).
 PATCH_ORDER_GOLDEN_VECTORS = [
     # below one window: the tail wraps around (cycle = 6 for count 3)
     (4, [[0, 1, 2]], [[0, 1, 2, 2]]),
@@ -993,7 +987,7 @@ PATCH_ORDER_GOLDEN_VECTORS = [
 def test_build_patch_order_golden_vectors(
     patch_size: int, serialized_order: list[list[int]], expected: list[list[int]]
 ) -> None:
-    """The cross-language contract: fixed inputs, fixed outputs, no formula in the assertion."""
+    """Literal vectors shared with the C++ runtime's test."""
     patch_order = build_patch_order(torch.tensor(serialized_order), patch_size)
     assert patch_order.tolist() == expected
 
@@ -1004,8 +998,8 @@ def test_build_patch_order_of_an_empty_level_is_empty() -> None:
 
 def test_export_patch_sizes_rejects_an_encoder_decoder_mismatch() -> None:
     model = build_seg_model().eval()
-    assert export_patch_sizes(model) == list(model.encoder.enc_patch_size)
-    model.seg3d_head.dec_patch_size[0] += 1
+    assert export_patch_sizes(model) == list(model.encoder.enc_patch_sizes)
+    model.seg3d_head.dec_patch_sizes[0] += 1
     with pytest.raises(ValueError, match="disagree"):
         export_patch_sizes(model)
 
@@ -1061,8 +1055,7 @@ def _build_attention(patch_size: int, order_index: int = 0) -> SerializedAttenti
 def _identity_point(num_points: int, patch_size: int | None = None) -> Point:
     """Return a point whose serialization order is the identity, for readable indices.
 
-    With ``patch_size`` the point also carries the precomputed ``patch_order`` an
-    export-mode block reads (the serialize stage's job in deployment).
+    With ``patch_size`` it also carries the ``patch_order`` an export-mode block reads.
     """
     order = torch.arange(num_points).unsqueeze(0)
     point = Point(
@@ -1193,13 +1186,11 @@ def test_export_attention_is_exact_when_the_count_divides_the_window(num_points:
 def test_export_attention_matches_training_on_a_non_identity_second_order(
     num_points: int,
 ) -> None:
-    """The export wiring end to end: `patch_order[order_index]` with `serialized_inverse[order_index]`.
+    """Export wiring of `patch_order[order_index]` and `serialized_inverse[order_index]`.
 
-    Two distinct non-identity serialization rows, `order_index=1`, and a count that does not
-    divide the window, so a row mix-up or a drift in the precomputed padding changes the
-    output (the helper tests cannot see either). The training path is the oracle; it takes
-    its window from the smallest sample of the batch, so the sample under test rides along
-    with a window-sized filler sample that keeps the training window at ``patch_size``.
+    Two different non-identity orders, `order_index=1` and a count that does not divide the
+    window, checked against the training path. The training window is the smallest sample's
+    count, so a window-sized filler sample keeps it at ``patch_size``.
     """
     torch.manual_seed(1)
     patch_size = 4

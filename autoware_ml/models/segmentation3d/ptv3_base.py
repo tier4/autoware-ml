@@ -334,30 +334,41 @@ def build_serialized_pooling_metadata(
 
 
 def export_patch_sizes(model: PTv3BaseModel) -> list[int]:
-    """The attention window of every hierarchy level, as the export graphs need it.
+    """Return the attention window of every level.
 
-    One ``patch_order`` per level is the graph contract, so the encoder and the segmentation
-    decoder must agree on the window of every level they share; a disagreement is a config
-    error reported here rather than a silently mis-padded gather.
+    The encoder and decoder blocks of a level share one ``patch_order``, so their windows
+    must agree.
+
+    Args:
+        model: PTv3 model to export.
+
+    Returns:
+        One window per level, the input level first.
+
+    Raises:
+        ValueError: If the encoder and decoder windows disagree.
     """
-    patch_sizes = list(model.encoder.enc_patch_size)
+    patch_sizes = list(model.encoder.enc_patch_sizes)
     head = getattr(model, "seg3d_head", None)
-    if head is not None and list(head.dec_patch_size) != patch_sizes[: len(head.dec_patch_size)]:
+    if head is not None and list(head.dec_patch_sizes) != patch_sizes[: len(head.dec_patch_sizes)]:
         raise ValueError(
-            f"enc_patch_size {patch_sizes} and dec_patch_size {list(head.dec_patch_size)} "
+            f"enc_patch_size {patch_sizes} and dec_patch_size {list(head.dec_patch_sizes)} "
             "disagree; the deployed graphs share one patch_order per level."
         )
     return patch_sizes
 
 
 def require_single_sample_export_batch(batch: Mapping[str, torch.Tensor]) -> None:
-    """Reject a multi-sample export batch before any graph input is built from it.
+    """Reject a multi-sample export batch.
 
-    The deployed graphs describe one frame: ``patch_order`` pads the serialization as a
-    whole (training pads every sample separately so no window crosses a sample) and the
-    export encoder sets ``offset`` to the total count. Tracing a multi-sample batch through
-    them would attend across samples without any error, so the constraint is asserted
-    here, at the export boundary, rather than relied on implicitly.
+    The export graphs pad and offset a single frame; a second sample would silently share
+    attention windows with the first.
+
+    Args:
+        batch: Encoder inputs with an ``offset`` entry.
+
+    Raises:
+        ValueError: If the batch holds more than one sample.
     """
     sample_count = int(batch["offset"].numel())
     if sample_count != 1:
@@ -571,10 +582,9 @@ def _run_ptv3_encoder_export(
 ) -> Point:
     """Run the shared tensor-only PTv3 encoder export path.
 
-    Every level's serialization arrives as graph inputs, exactly like every pooled level's
-    pooling metadata does: the preprocessing pipeline has already ranked the voxels, and it
-    is also the only side that can pad that ranking to whole attention windows without
-    tracing the padding arithmetic into every block (see ``build_patch_order``).
+    Every level's serialization arrives as graph inputs, like the pooling metadata:
+    preprocessing has already sorted the voxels and pads the order to whole attention
+    windows (``build_patch_order``).
 
     Args:
         encoder: Export-prepared encoder.
