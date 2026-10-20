@@ -24,12 +24,11 @@ import torch
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTSample
 from autoware_ml.geometry.points.lidar_points import LiDARPoints
+from autoware_ml.transforms.camera_lidar.geometry import GlobalRotScaleTrans
 from autoware_ml.transforms.point_cloud.geometry import (
     CropBoxInner,
-    GlobalRotScaleTrans,
     PointsRandomShuffle,
     PointsRangeFilter,
-    RandomRotateTargetAngle,
 )
 from autoware_ml.transforms.point_cloud.perturbation import RandomJitter, RandomStrengthJitter
 from autoware_ml.transforms.point_cloud.sampling import RandomDropout
@@ -155,29 +154,6 @@ class TestGlobalRotScaleTrans(unittest.TestCase):
         self.assertEqual(sample.point_cloud_data.coords.tolist(), [[2.0, 0.0, 0.0]])
         self.assertEqual(sample.segmentation3d_gt_sample.gt_semantic_mask.tolist(), [3])
         self.assertIsNotNone(sample.lidar_transformation_sample)
-
-
-class TestRandomRotateTargetAngle(unittest.TestCase):
-    """Rotation by one of a few target yaw angles."""
-
-    def test_rotates_by_the_only_target_angle(self) -> None:
-        transform = RandomRotateTargetAngle(probability=1.0, yaw_angle_ratios=[1.0])
-
-        sample = transform(build_sample(build_points([[1.0, 0.0, 0.0]])))
-
-        torch.testing.assert_close(
-            sample.point_cloud_data.coords,
-            torch.tensor([[-1.0, 0.0, 0.0]]),
-            atol=1e-6,
-            rtol=0.0,
-        )
-
-    def test_skips_the_rotation_at_zero_probability(self) -> None:
-        transform = RandomRotateTargetAngle(probability=0.0, yaw_angle_ratios=[1.0])
-
-        sample = transform(build_sample(build_points([[1.0, 0.0, 0.0]])))
-
-        self.assertEqual(sample.point_cloud_data.coords.tolist(), [[1.0, 0.0, 0.0]])
 
 
 class TestRandomJitter(unittest.TestCase):

@@ -35,7 +35,11 @@ from autoware_ml.geometry.bbox_3d.base_bbox3d import BaseBBoxes3D
 from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
 from autoware_ml.geometry.cameras.base_images import BaseImages
 from autoware_ml.geometry.points.lidar_points import LiDARPoints
-from autoware_ml.transforms.point_cloud.geometry import GlobalBEVRandomFlip, GlobalRotScaleTrans
+from autoware_ml.transforms.camera_lidar.geometry import (
+    GlobalBEVRandomFlip,
+    GlobalRotScaleTrans,
+    RandomRotateTargetAngle,
+)
 from autoware_ml.types.geometry import (
     Box3DCenterCoordinateType,
     Box3DFieldIndex,
@@ -873,6 +877,35 @@ class TestGlobalRotScaleTrans(BaseCameraLidarGeometryTestCase):
         self.assertFalse(
             torch.equal(output.detection3d_gt_bboxes_3d.bbox_params, self.original_bbox_params)
         )
+
+
+class TestRandomRotateTargetAngle(BaseCameraLidarGeometryTestCase):
+    """Unit tests for the camera-lidar RandomRotateTargetAngle transform."""
+
+    def setUp(self) -> None:
+        """Set up a lidar-only sample for all tests."""
+        self.sample = self.build_multi_task_gt_sample(
+            with_camera_image_data=False, with_bboxes_3d=False
+        )
+        assert self.sample.point_cloud_data is not None
+        self.original_points = self.sample.point_cloud_data.points.clone()
+
+    def test_rotates_by_the_only_target_angle(self) -> None:
+        """Test that a single target of pi radians negates the x and y coordinates."""
+        output = RandomRotateTargetAngle(probability=1.0, yaw_angle_ratios=[1.0])(self.sample)
+
+        assert output.point_cloud_data is not None
+        expected = self.original_points.clone()
+        expected[:, :2] = -expected[:, :2]
+        torch.testing.assert_close(output.point_cloud_data.points, expected, atol=1e-6, rtol=0.0)
+        self.assertIsNotNone(output.lidar_transformation_sample)
+
+    def test_skips_the_rotation_at_zero_probability(self) -> None:
+        """Test that the transform leaves the points untouched when it is never applied."""
+        output = RandomRotateTargetAngle(probability=0.0, yaw_angle_ratios=[1.0])(self.sample)
+
+        assert output.point_cloud_data is not None
+        torch.testing.assert_close(output.point_cloud_data.points, self.original_points)
 
 
 class TestGlobalBEVRandomFlip(BaseCameraLidarGeometryTestCase):

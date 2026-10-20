@@ -30,12 +30,12 @@ from autoware_ml.datamodule.common.detection3d import Detection3DTask
 from autoware_ml.datamodule.t4dataset.segmentation3d import T4Segmentation3DTask
 from autoware_ml.transforms.base import TransformsCompose
 from autoware_ml.transforms.boxes3d.filters import BBoxesLabelNameFilter, BBoxesRangeFilter
-from autoware_ml.transforms.point_cloud.geometry import (
+from autoware_ml.transforms.camera_lidar.geometry import (
     GlobalBEVRandomFlip,
     GlobalRotScaleTrans,
-    PointsRangeFilter,
     RandomRotateTargetAngle,
 )
+from autoware_ml.transforms.point_cloud.geometry import PointsRangeFilter
 from autoware_ml.transforms.point_cloud.loading import (
     LoadMultiSweepPointsFromFile,
     LoadPointsFromFile,

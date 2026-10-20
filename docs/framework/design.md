@@ -190,7 +190,7 @@ dataset applies it in `__getitem__()`.
 
 Public transform targets should reference the concrete implementation module, for example
 `autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile` or
-`autoware_ml.transforms.point_cloud.geometry.GlobalBEVRandomFlip`. Avoid package-level re-export
+`autoware_ml.transforms.camera_lidar.geometry.GlobalBEVRandomFlip`. Avoid package-level re-export
 layers in `__init__.py`. Imports and Hydra `_target_` paths should point at the implementation
 module directly.
 

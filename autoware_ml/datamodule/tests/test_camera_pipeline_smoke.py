@@ -48,8 +48,9 @@ from autoware_ml.transforms.camera_lidar.camera_lidar import (
     LidarCameraFusion,
     MagnitudeRange,
 )
+from autoware_ml.transforms.camera_lidar.geometry import GlobalRotScaleTrans
 from autoware_ml.transforms.image.image import PhotometricDistortion
-from autoware_ml.transforms.point_cloud.geometry import CropBoxInner, GlobalRotScaleTrans
+from autoware_ml.transforms.point_cloud.geometry import CropBoxInner
 from autoware_ml.transforms.point_cloud.loading import LoadPointsFromFile
 
 CAMERAS = ("CAM_FRONT", "CAM_BACK")

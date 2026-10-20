@@ -269,7 +269,7 @@ datasets:
       pipeline:
         - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
           use_dim: [0, 1, 2, 3]
-        - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
+        - _target_: autoware_ml.transforms.camera_lidar.geometry.GlobalRotScaleTrans
           yaw_rot_range: [-3.14159265, 3.14159265]
           scale_ratio_range: [0.9, 1.1]
           translation_std: [0.5, 0.5, 0.2]

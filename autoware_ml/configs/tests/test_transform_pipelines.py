@@ -21,9 +21,9 @@ import yaml
 
 _EXPERIMENTS = Path(__file__).resolve().parents[1] / "tasks"
 _LIDAR_AUGMENTATIONS = (
-    "point_cloud.geometry.GlobalRotScaleTrans",
-    "point_cloud.geometry.GlobalBEVRandomFlip",
-    "point_cloud.geometry.RandomRotateTargetAngle",
+    "camera_lidar.geometry.GlobalRotScaleTrans",
+    "camera_lidar.geometry.GlobalBEVRandomFlip",
+    "camera_lidar.geometry.RandomRotateTargetAngle",
 )
 
 

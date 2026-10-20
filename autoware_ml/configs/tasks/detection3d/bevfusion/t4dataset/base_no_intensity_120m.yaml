@@ -65,7 +65,7 @@ datasets:
 
           max_absolute_speed: 150.0 # m/s, 540 km/h
 
-        - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
+        - _target_: autoware_ml.transforms.camera_lidar.geometry.GlobalRotScaleTrans
           _convert_: all
 
           # In radians, the range of rotation angles for random rotation around the Z-axis.
@@ -76,7 +76,7 @@ datasets:
           # The standard deviation for Gaussian translation noise.
           translation_std: [0.5, 0.5, 0.2]
 
-        - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalBEVRandomFlip
+        - _target_: autoware_ml.transforms.camera_lidar.geometry.GlobalBEVRandomFlip
           _convert_: all
 
           horizontal_flip_ratio: 0.5
