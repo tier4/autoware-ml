@@ -18,7 +18,7 @@
 This module contains the pillar encoders used by PointPillars-style models.
 """
 
-from typing import Sequence
+from collections.abc import Sequence
 from jaxtyping import Float32
 import torch
 from torch import nn

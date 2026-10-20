@@ -11,7 +11,8 @@ segmentation head and is not part of the detection path.
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 import torch
 import torch.nn as nn

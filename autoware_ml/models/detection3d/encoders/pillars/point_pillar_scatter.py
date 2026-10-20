@@ -14,7 +14,7 @@
 # limitations under the License.
 
 
-from typing import Sequence
+from collections.abc import Sequence
 from jaxtyping import Float32
 from torch import nn
 import torch

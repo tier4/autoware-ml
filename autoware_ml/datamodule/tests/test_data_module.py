@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from typing import Mapping
+from collections.abc import Mapping
 from functools import partial
 from pathlib import Path
 import tempfile

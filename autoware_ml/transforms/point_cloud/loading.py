@@ -21,7 +21,8 @@ The code is modified from mmdetection3d.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Annotated, Sequence
+from collections.abc import Sequence
+from typing import Annotated
 
 from jaxtyping import Bool
 import numpy as np

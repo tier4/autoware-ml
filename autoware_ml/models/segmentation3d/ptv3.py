@@ -21,7 +21,8 @@ head; losses and prediction formatting are owned by the head module.
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 import torch
 

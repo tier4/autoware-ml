@@ -18,7 +18,7 @@ and the error paths that fire before any TensorRT work."""
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 from pathlib import Path
 from types import MappingProxyType
 

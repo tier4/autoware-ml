@@ -32,7 +32,8 @@ the transformed one. They reject camera image data that already carries depth ma
 
 from __future__ import annotations
 
-from typing import NamedTuple, Sequence
+from collections.abc import Sequence
+from typing import NamedTuple
 
 from jaxtyping import Float32
 import numpy as np

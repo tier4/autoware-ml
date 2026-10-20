@@ -22,7 +22,8 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import Literal, Sequence
+from collections.abc import Sequence
+from typing import Literal
 
 import cv2
 from jaxtyping import Float32, Int64

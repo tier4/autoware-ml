@@ -6,7 +6,8 @@ import itertools
 import time
 from abc import abstractmethod
 from pathlib import Path
-from typing import Self, Sequence
+from collections.abc import Sequence
+from typing import Self
 
 
 import polars as pl

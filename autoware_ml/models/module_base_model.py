@@ -21,7 +21,8 @@ used by task-specific model wrappers throughout the framework.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, NamedTuple, final, Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any, NamedTuple, final
 from types import MappingProxyType
 
 from jaxtyping import Float32

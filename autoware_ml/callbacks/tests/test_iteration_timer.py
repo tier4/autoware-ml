@@ -17,7 +17,7 @@ warmup exclusion, the logging interval, sanity-check suppression, and CUDA synch
 
 from __future__ import annotations
 
-from typing import Sequence, Iterator
+from collections.abc import Iterator, Sequence
 import unittest
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch

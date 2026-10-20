@@ -21,7 +21,7 @@ T4 or about cones: it takes a generic ``(batch_size, num_classes)`` mask of anno
 This module is where the dataset flag is turned into that mask.
 """
 
-from typing import Sequence
+from collections.abc import Sequence
 import torch
 from jaxtyping import Bool
 

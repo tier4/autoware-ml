@@ -20,7 +20,7 @@ and training losses used by CenterPoint-style detectors.
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 from copy import deepcopy
 from types import MappingProxyType
 

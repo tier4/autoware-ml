@@ -23,7 +23,8 @@ import importlib
 import math
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 import spconv.pytorch as spconv
 import torch

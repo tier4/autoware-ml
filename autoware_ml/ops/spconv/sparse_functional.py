@@ -14,7 +14,8 @@
 
 """Autograd bridges and ONNX symbolics for deployment-aware sparse ops."""
 
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
 import torch

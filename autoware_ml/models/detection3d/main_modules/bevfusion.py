@@ -20,7 +20,8 @@ This module contains the high-level BEVFusion detector wrapper and export ABI.
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Callable, Sequence
+from collections.abc import Callable, Sequence
+from typing import Any
 from types import MappingProxyType
 
 from jaxtyping import Bool, Float32, Int32, Int64

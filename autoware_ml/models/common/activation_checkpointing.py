@@ -25,7 +25,8 @@ normalizes with the batch statistics exactly as the forward did and the statisti
 from __future__ import annotations
 
 from contextlib import contextmanager, nullcontext
-from typing import Any, Iterator
+from collections.abc import Iterator
+from typing import Any
 
 import torch
 from torch import nn

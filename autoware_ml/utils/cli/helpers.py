@@ -23,7 +23,8 @@ import shlex
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from autoware_ml.configs.paths import CONFIGS_ROOT
 from autoware_ml.configs.resolvers import register_config_resolvers

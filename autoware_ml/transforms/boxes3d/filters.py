@@ -4,7 +4,7 @@ The code is modified based on
 https://github.com/open-mmlab/mmdetection3d/blob/main/mmdet3d/datasets/transforms/transforms_3d.py.
 """
 
-from typing import Sequence
+from collections.abc import Sequence
 import torch
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample

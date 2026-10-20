@@ -20,7 +20,8 @@ This module contains the high-level FRNet Lightning wrapper and export logic.
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 import torch
 import torch.nn as nn

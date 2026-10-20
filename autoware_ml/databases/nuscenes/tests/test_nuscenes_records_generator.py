@@ -17,7 +17,8 @@
 from __future__ import annotations
 
 import unittest
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 from autoware_ml.databases.nuscenes import nuscenes_records_generator

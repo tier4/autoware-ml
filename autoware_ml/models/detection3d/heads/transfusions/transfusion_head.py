@@ -21,7 +21,8 @@ by the native TransFusion lidar detector.
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import NamedTuple, Sequence, Mapping
+from collections.abc import Mapping, Sequence
+from typing import NamedTuple
 from types import MappingProxyType
 
 from jaxtyping import Bool, Float32, Int32, Int64

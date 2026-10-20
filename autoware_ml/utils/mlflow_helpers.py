@@ -26,7 +26,8 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 from urllib.parse import unquote, urlparse
 
 from hydra.core.hydra_config import HydraConfig

@@ -27,7 +27,8 @@ pure-background detection supervision. The same class supports training
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any
 
 import torch
 import torch.nn as nn

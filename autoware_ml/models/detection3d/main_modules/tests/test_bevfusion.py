@@ -21,7 +21,7 @@ geometry contract between the branches, and the input validation run on any devi
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 from types import MappingProxyType
 import unittest
 from unittest import mock

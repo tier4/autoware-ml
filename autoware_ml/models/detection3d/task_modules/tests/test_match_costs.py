@@ -14,7 +14,7 @@
 
 """Unit tests for the Hungarian matching costs."""
 
-from typing import Sequence
+from collections.abc import Sequence
 import unittest
 
 from jaxtyping import Bool, Float32, Int64

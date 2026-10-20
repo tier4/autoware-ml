@@ -14,7 +14,7 @@
 
 """Unit tests for TransFusionHead."""
 
-from typing import Sequence
+from collections.abc import Sequence
 import math
 import tempfile
 import unittest

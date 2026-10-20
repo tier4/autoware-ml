@@ -25,7 +25,7 @@ The sparse grid order is ``(Y, X, Z)`` (= the``SparseEncoder`` "(H, W, D)") so t
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 from copy import deepcopy
 
 from jaxtyping import Float32

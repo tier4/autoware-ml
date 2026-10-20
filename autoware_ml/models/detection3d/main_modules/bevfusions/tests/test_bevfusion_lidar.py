@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 import unittest
 
 from jaxtyping import Float32, Int32
