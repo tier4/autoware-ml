@@ -254,7 +254,7 @@ class BBoxesPhysicalFilter(BaseTransform):
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
         """Remove non-physical 3D bounding boxes."""
         # This is checked in the _validate_required_keys()
-        detection3d_gt_bboxes_3d: BaseBBoxes3D = model_gt_sample.detection3d_gt_bboxes_3d  # type: ignore[reportOptionalMemberAccess]
+        detection3d_gt_bboxes_3d: BaseBBoxes3D = model_gt_sample.detection3d_gt_bboxes_3d
         if not len(detection3d_gt_bboxes_3d):
             return model_gt_sample
 
@@ -272,8 +272,5 @@ class BBoxesPhysicalFilter(BaseTransform):
         )
 
         keep_bboxes_mask = is_finite_mask & has_positive_dims_mask & is_speed_physical_mask
-
-        # TODO(Kok Seang): Consider to make it immutable and return a new instance
-        # instead of modifying in place.
         detection3d_gt_bboxes_3d.remove_bboxes(keep_bboxes_mask)
         return model_gt_sample
