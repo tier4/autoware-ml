@@ -55,6 +55,10 @@ from autoware_ml.models.detection3d.heads.transfusions.transfusion_decoder_layer
 from autoware_ml.models.detection3d.heads.transfusions.exportable_multi_head_attention import (
     ExportableMultiheadAttention,
 )
+from autoware_ml.models.detection3d.heads.transfusions.positional_encoding import (
+    ConstantPositionalEncoding,
+    LearnedPositionalEncoding,
+)
 from autoware_ml.types.geometry import Box3DFieldIndex
 
 
@@ -1532,15 +1536,30 @@ class TransFusionHead(nn.Module):
                 vels=None,
             )
 
-    def prepare_for_export(self) -> TransFusionHead:
+    def prepare_for_export(self, bev_shape: tuple[int, int] | None = None) -> TransFusionHead:
         """Return an export-ready copy with attention replaced by exportable equivalents.
+
+        Args:
+            bev_shape: Dense BEV ``(height, width)`` the head will see at inference. When
+                given, the key positional encoding of that grid is precomputed once and
+                exported as a constant. Without it the encoding stays a runtime computation.
 
         Returns:
             Deep copy of the head with MultiheadAttention layers replaced by
             ExportableMultiheadAttention in all decoder layers.
         """
         head = deepcopy(self).eval()
+        bev_pos = None
+        if bev_shape is not None:
+            height, width = bev_shape
+            bev_pos = head._create_2d_grid(width, height, next(head.parameters()).device)
         for decoder_layer in head.decoder:
+            if bev_pos is not None and isinstance(
+                decoder_layer.key_pos_encoding, LearnedPositionalEncoding
+            ):
+                decoder_layer.key_pos_encoding = ConstantPositionalEncoding(
+                    decoder_layer.key_pos_encoding, bev_pos
+                )
             if isinstance(decoder_layer.self_attn, nn.MultiheadAttention):
                 decoder_layer.self_attn = ExportableMultiheadAttention(
                     decoder_layer.self_attn,
@@ -1552,4 +1571,5 @@ class TransFusionHead(nn.Module):
                     fuse_attention=head.use_bf16_cross_attention,
                     use_bf16=head.use_bf16_cross_attention,
                 )
-        return head
+        # The replacement modules are constructed in training mode.
+        return head.eval()

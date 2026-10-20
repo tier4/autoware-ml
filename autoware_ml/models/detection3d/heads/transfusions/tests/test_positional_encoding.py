@@ -12,15 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for LearnedPositionalEncoding."""
+"""Unit tests for LearnedPositionalEncoding and ConstantPositionalEncoding."""
 
+from pathlib import Path
+import tempfile
 import unittest
 
 from jaxtyping import Float32
+import onnx
 import torch
 import torch.nn as nn
 
 from autoware_ml.models.detection3d.heads.transfusions.positional_encoding import (
+    ConstantPositionalEncoding,
     LearnedPositionalEncoding,
 )
 
@@ -165,6 +169,105 @@ class TestLearnedPositionalEncoding(unittest.TestCase):
         for parameter in self.positional_encoding.parameters():
             assert parameter.grad is not None
             self.assertTrue(torch.isfinite(parameter.grad).all())
+
+
+class TestConstantPositionalEncoding(unittest.TestCase):
+    """Unit tests for the ConstantPositionalEncoding."""
+
+    def setUp(self) -> None:
+        """Set up a trained encoding in eval mode and the fixed grid it is frozen for."""
+        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        torch.manual_seed(0)
+
+        self.input_channels = 2
+        self.embed_dims = 16
+        self.num_positions = 6
+
+        self.learned_encoding = (
+            LearnedPositionalEncoding(self.input_channels, self.embed_dims).to(self.device).eval()
+        )
+        self.positions = (
+            torch.rand(1, self.num_positions, self.input_channels, device=self.device) * 16.0
+        )
+
+    def test_rejects_an_encoding_in_training_mode(self) -> None:
+        """
+        Test that a training-mode encoding is refused: its BatchNorm would embed from the batch
+        statistics of the grid and update its running ones as a side effect.
+        """
+        with self.assertRaisesRegex(ValueError, "eval"):
+            ConstantPositionalEncoding(self.learned_encoding.train(), self.positions)
+
+    def test_embedding_matches_the_learned_encoding(self) -> None:
+        """Test that the frozen embedding is what the learned encoding gives the same grid."""
+        encoding = ConstantPositionalEncoding(self.learned_encoding, self.positions)
+
+        with torch.no_grad():
+            expected = self.learned_encoding(self.positions)
+
+        self.assertTrue(torch.equal(encoding.embedding, expected))
+        self.assertEqual(encoding.embedding.shape, (1, self.num_positions, self.embed_dims))
+
+    def test_embedding_is_a_buffer_without_parameters(self) -> None:
+        """
+        Test that the embedding is a constant: no parameter is left to train or to export as a
+        weight, and nothing requires a gradient.
+        """
+        encoding = ConstantPositionalEncoding(self.learned_encoding, self.positions)
+
+        self.assertEqual(list(encoding.parameters()), [])
+        self.assertEqual([name for name, _ in encoding.named_buffers()], ["embedding"])
+        self.assertFalse(encoding.embedding.requires_grad)
+
+    def test_forward_returns_the_embedding_for_any_batch(self) -> None:
+        """
+        Test that the forward ignores the coordinates it is given and returns the single frozen
+        embedding, which the consumer broadcasts over the batch.
+        """
+        encoding = ConstantPositionalEncoding(self.learned_encoding, self.positions)
+        other_positions = torch.rand(3, self.num_positions, self.input_channels, device=self.device)
+
+        embeddings = encoding(other_positions)
+
+        self.assertEqual(embeddings.shape, (1, self.num_positions, self.embed_dims))
+        self.assertTrue(torch.equal(embeddings, encoding.embedding))
+
+    def test_forward_rejects_a_different_token_count(self) -> None:
+        """Test that a grid of another size than the frozen one is refused eagerly."""
+        encoding = ConstantPositionalEncoding(self.learned_encoding, self.positions)
+        positions = torch.rand(1, self.num_positions + 1, self.input_channels, device=self.device)
+
+        with self.assertRaisesRegex(ValueError, f"frozen for {self.num_positions} positions"):
+            encoding(positions)
+
+    def test_export_folds_the_encoding_into_an_initializer(self) -> None:
+        """
+        Test that the ONNX graph carries the embedding as an initializer and none of the
+        convolution, normalization or activation nodes of the learned encoding.
+        """
+        encoding = ConstantPositionalEncoding(self.learned_encoding, self.positions)
+
+        with tempfile.TemporaryDirectory() as export_dir:
+            output_path = Path(export_dir) / "key_pos_encoding.onnx"
+            torch.onnx.export(
+                encoding,
+                (torch.zeros(1, self.num_positions, self.input_channels, device=self.device),),
+                output_path,
+                input_names=["key_pos"],
+                output_names=["embedding"],
+                opset_version=17,
+                dynamo=False,
+            )
+            model = onnx.load(output_path)
+
+        folded_ops = {"Conv", "BatchNormalization", "Relu"}
+        self.assertFalse(any(node.op_type in folded_ops for node in model.graph.node))
+        self.assertTrue(
+            any(
+                list(initializer.dims) == [1, self.num_positions, self.embed_dims]
+                for initializer in model.graph.initializer
+            )
+        )
 
 
 if __name__ == "__main__":

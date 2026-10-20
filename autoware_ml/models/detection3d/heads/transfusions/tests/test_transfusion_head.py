@@ -37,6 +37,10 @@ from autoware_ml.dataclasses.models.detection3d.head_outputs import (
 from autoware_ml.models.detection3d.heads.transfusions.exportable_multi_head_attention import (
     ExportableMultiheadAttention,
 )
+from autoware_ml.models.detection3d.heads.transfusions.positional_encoding import (
+    ConstantPositionalEncoding,
+    LearnedPositionalEncoding,
+)
 from autoware_ml.losses.detection3d.rotated_iou_loss import Rotated2DIouLoss
 from autoware_ml.models.detection3d.heads.transfusions.transfusion_head import (
     NMSGroupConfig,
@@ -1587,6 +1591,45 @@ class TestTransFusionHead(unittest.TestCase):
         """Test that a coder resolved against different class names is rejected at construction."""
         with self.assertRaisesRegex(ValueError, "class_names"):
             self._build_transfusion_head(coder_class_names=list(reversed(self.class_names)))
+
+    def test_export_freezes_the_key_positional_encoding_for_the_given_bev_shape(self) -> None:
+        """
+        Test that exporting with the BEV shape replaces the learned key positional encoding of
+        every decoder layer by its precomputed embedding of that grid, without changing the
+        outputs, and that exporting without a shape keeps the encoding a runtime computation.
+        """
+        transfusion_head = self._build_transfusion_head().eval()
+        height, width = self.feature_map_size
+        bev_features = self._build_bev_features(batch_size=1)
+
+        runtime_head = transfusion_head.prepare_for_export()
+        frozen_head = transfusion_head.prepare_for_export(bev_shape=(height, width))
+
+        for decoder_layer in runtime_head.decoder:
+            self.assertIsInstance(decoder_layer.key_pos_encoding, LearnedPositionalEncoding)
+        for decoder_layer in frozen_head.decoder:
+            encoding = decoder_layer.key_pos_encoding
+            self.assertIsInstance(encoding, ConstantPositionalEncoding)
+            self.assertEqual(encoding.embedding.shape, (1, height * width, self.hidden_channel))
+            # The query positions are the proposals, which move with the input, so they stay
+            # learned.
+            self.assertIsInstance(decoder_layer.query_pos_encoding, LearnedPositionalEncoding)
+        self.assertFalse(frozen_head.training)
+
+        with torch.no_grad():
+            reference = transfusion_head(bev_features)
+            frozen = frozen_head(bev_features)
+
+        self.assertTrue(torch.equal(reference.dense_heatmap, frozen.dense_heatmap))
+        self.assertTrue(
+            torch.allclose(
+                reference.separate_head_outputs.center,
+                frozen.separate_head_outputs.center,
+                atol=1e-6,
+            )
+        )
+        with self.assertRaisesRegex(ValueError, f"frozen for {height * width} positions"):
+            frozen_head(self._build_bev_features(batch_size=1)[..., : height // 2, : width // 2])
 
     def test_bf16_export_emits_the_fusion_pattern(self) -> None:
         """
