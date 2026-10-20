@@ -1,0 +1,10 @@
+# @package _global_
+# Tiny PTv3 on a 12 cm grid.
+defaults:
+  - base_122m
+  - /tasks/segmentation3d/ptv3/encoder_tiny
+  - /tasks/segmentation3d/ptv3/seg_head_tiny
+  - _self_
+
+grid_size: 0.12
+max_voxels: 524288

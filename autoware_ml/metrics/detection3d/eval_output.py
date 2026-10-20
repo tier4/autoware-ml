@@ -56,4 +56,5 @@ def detection_eval_output(
     if frame_meta_batch is not None:
         eval_out["ego2global"] = list(frame_meta_batch.ego2globals)
         eval_out["scene_token"] = list(frame_meta_batch.scene_tokens)
+        eval_out["lanelet_map_path"] = list(frame_meta_batch.lanelet_map_paths)
     return eval_out

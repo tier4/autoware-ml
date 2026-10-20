@@ -35,7 +35,7 @@ from autoware_ml.types.sensor import LidarChannel
 _DATASET_NAME = "db_test_v1"
 _SCENARIO_ID = "scene"
 _SCENARIO_VERSION = "0"
-_SCENE_DIR = f"/data/{_DATASET_NAME}/{_SCENARIO_ID}/{_SCENARIO_VERSION}"
+_SCENE_DIR = f"{_DATASET_NAME}/{_SCENARIO_ID}/{_SCENARIO_VERSION}"
 
 
 @dataclass(frozen=True)
@@ -63,7 +63,8 @@ class _Pose:
 class _ChainDevkit:
     """Devkit stub holding one chain of lidar frames named frame0, frame1 and so on."""
 
-    def __init__(self, num_frames: int) -> None:
+    def __init__(self, root: Path, num_frames: int) -> None:
+        self.root = root
         tokens = [f"frame{index}" for index in range(num_frames)]
         sample_data = {
             token: _SampleData(
@@ -84,18 +85,17 @@ class _ChainDevkit:
         return self._tables[schema][token]
 
     def get_sample_data_path(self, sample_data_token: str) -> str:
-        return f"{_SCENE_DIR}/data/LIDAR_TOP/{sample_data_token}.bin"
+        """Resolve a frame under the scene root, as the devkit does."""
+        return str(self.root / _SCENE_DIR / "data" / "LIDAR_TOP" / f"{sample_data_token}.bin")
 
 
 @pytest.fixture
 def generator(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> T4RecordsGenerator:
     (tmp_path / _DATASET_NAME / _SCENARIO_ID / _SCENARIO_VERSION / "annotation").mkdir(parents=True)
-    devkit = _ChainDevkit(num_frames=4)
+    devkit = _ChainDevkit(tmp_path, num_frames=4)
     monkeypatch.setattr(t4records_generator, "T4Devkit", lambda data_root, verbose: devkit)
     monkeypatch.setattr(t4records_generator, "load_table", lambda path, schema: [])
-    dataset_params = DatasetParams(
-        dataset_name=_DATASET_NAME, max_past_sweeps=2, max_future_sweeps=2, sample_steps=1
-    )
+    dataset_params = DatasetParams(dataset_name=_DATASET_NAME, sample_steps=1)
     return T4RecordsGenerator(
         database_root_path=str(tmp_path),
         scenario_data=ScenarioData(
@@ -118,17 +118,26 @@ def test_the_sweep_window_stops_at_the_scene_start(generator: T4RecordsGenerator
         lidar_sensor_id="sensor",
         lidar_sensor_channel_name=LidarChannel.LIDAR_TOP.value,
         lidar_timestamp_seconds=0.0,
-        lidar_pointcloud_path=generator.t4_devkit_dataset.get_sample_data_path("frame1"),
-        lidar_pointcloud_source_path=None,
+        lidar_pointcloud_relative_path=generator.relative_to_database_root(
+            generator.t4_devkit_dataset.get_sample_data_path("frame1")
+        ),
+        lidar_pointcloud_source_relative_path=None,
         lidar_pointcloud_num_features=5,
         lidar_sensor_to_ego_pose_matrix=np.eye(4),
         lidar_frame_ego_pose_to_global_matrix=np.eye(4),
         lidar_sensor_to_lidar_sweep_matrix=np.eye(4),
-        lidar_pointcloud_semantic_mask_path=None,
+        lidar_pointcloud_semantic_mask_relative_path=None,
     )
 
+    # The public extract_t4_sample_record() needs a full devkit scene (boxes, images, sources).
+    # The sweep window is pure over the sample_data chain and is tested on its own here.
     frames = generator._extract_lidar_window(sample_frame)
 
     # The sample comes first, then the one past frame before the scene start, then the two
     # future frames, each side nearest first
     assert [frame.lidar_frame_id for frame in frames] == ["frame1", "frame0", "frame2", "frame3"]
+    # Every sweep is stored relative to the database root, starting at the scene directory
+    assert [frame.lidar_pointcloud_relative_path for frame in frames] == [
+        f"{_SCENE_DIR}/data/LIDAR_TOP/{token}.bin"
+        for token in ("frame1", "frame0", "frame2", "frame3")
+    ]

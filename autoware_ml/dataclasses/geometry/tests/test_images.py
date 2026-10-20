@@ -113,6 +113,29 @@ class TestImageGTBatchFields(ImageGTBatchTestCase):
 class TestImageGTBatchCollate(ImageGTBatchTestCase):
     """ImageGTBatch.collate_gt_samples."""
 
+    def test_carries_the_raw_intrinsics_and_the_augmentation_apart(self) -> None:
+        """
+        Input: a sample whose augmented intrinsics differ from its raw ones.
+        Expected: the batch carries the raw intrinsics, with the augmentation only in
+        ``image_augmentation_matrices``, so a consumer never pairs the augmented intrinsics
+        with the augmentation and undoes it twice.
+        Check: the batch intrinsics equal the raw ones and not the augmented ones.
+        """
+        sample = self.make_images(1, fill=1.0)
+        augmented_sample = sample.model_copy(
+            update={"augmented_camera_intrinsics": sample.augmented_camera_intrinsics * 0.5}
+        )
+
+        batch = self.collate([augmented_sample])
+
+        torch.testing.assert_close(batch.camera_intrinsics[0], sample.camera_intrinsics)
+        self.assertFalse(
+            torch.allclose(batch.camera_intrinsics[0], augmented_sample.augmented_camera_intrinsics)
+        )
+        torch.testing.assert_close(
+            batch.image_augmentation_matrices[0], sample.image_augmentation_matrices
+        )
+
     def test_empty_sequence_returns_none(self) -> None:
         """
         Input: an empty sample sequence.
@@ -429,15 +452,18 @@ class TestImageSample(ImageSampleTestCase):
 
 
 class TestImageGTBatchCameraGeometry(ImageGTBatchTestCase):
-    """The collated calibration describes the augmented images."""
+    """The collated calibration describes the augmented images through the raw intrinsics and
+    the image augmentation, kept apart."""
 
     def test_intrinsics_back_project_what_lidar2images_projects(self) -> None:
         """
-        Input: one camera whose image was resized by 0.5, so its augmented intrinsics are half
-        the raw ones and lidar2images is built from the augmented ones.
-        Expected: back projecting a projected lidar point with the collated intrinsics and
-        lidar2cams recovers the point, so the camera to BEV lift and the depth guidance of a
-        model describe the same image.
+        Input: one camera whose image was resized by 0.5, so lidar2images is built from the
+        augmented intrinsics and the augmentation matrix carries the resize.
+        Expected: undoing the augmentation of a projected pixel with the collated augmentation
+        matrix and back projecting it with the collated raw intrinsics and lidar2cams recovers
+        the point, so the camera to BEV lift and the depth guidance of a model describe the
+        same image. Back projecting with the raw intrinsics alone does not, which is what a
+        consumer dropping the augmentation would do.
         Check: the round trip of the point (10, 0, 20) in camera coordinates.
         """
         sample = self.make_images(1, fill=1.0)
@@ -447,12 +473,15 @@ class TestImageGTBatchCameraGeometry(ImageGTBatchTestCase):
         lidar2cams = torch.eye(4).unsqueeze(0)
         lidar2images = torch.eye(4).unsqueeze(0)
         lidar2images[:, :3, :3] = augmented
+        image_augmentation = torch.eye(4).unsqueeze(0)
+        image_augmentation[:, :2, :2] = resize[:, :2, :2]
         sample = sample.model_copy(
             update={
                 "camera_intrinsics": raw,
                 "augmented_camera_intrinsics": augmented,
                 "lidar2cams": lidar2cams,
                 "lidar2images": lidar2images,
+                "image_augmentation_matrices": image_augmentation,
             }
         )
 
@@ -461,9 +490,16 @@ class TestImageGTBatchCameraGeometry(ImageGTBatchTestCase):
         point = torch.tensor([10.0, 0.0, 20.0, 1.0])
         pixel = batch.lidar2images[0, 0] @ point
         pixel = pixel[:3] / pixel[2]
-        ray = torch.linalg.inv(batch.camera_intrinsics[0, 0]) @ pixel
+        affine = torch.eye(3)
+        affine[:2, :2] = batch.image_augmentation_matrices[0, 0, :2, :2]
+        affine[:2, 2] = batch.image_augmentation_matrices[0, 0, :2, 3]
+        raw_pixel = torch.linalg.inv(affine) @ pixel
+        ray = torch.linalg.inv(batch.camera_intrinsics[0, 0]) @ raw_pixel
         recovered = torch.linalg.inv(batch.lidar2cams[0, 0])[:3, :3] @ (ray * point[2])
         torch.testing.assert_close(recovered, point[:3])
+
+        skipped_augmentation = torch.linalg.inv(batch.camera_intrinsics[0, 0]) @ pixel
+        self.assertFalse(torch.allclose(skipped_augmentation * point[2], point[:3]))
 
 
 if __name__ == "__main__":

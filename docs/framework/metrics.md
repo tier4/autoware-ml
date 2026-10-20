@@ -99,10 +99,10 @@ Each piece of state is registered with `add_state(name, default, dist_reduce_fx)
 function torchmetrics uses to combine that state across GPUs.
 
 | Suite                                      | `prefix`   | Required keys                          | State (`dist_reduce_fx`)                                  |
-| ------------------------------------------ | ---------- | -------------------------------------- | ---------------------------------------------------------- |
-| `Detection3DMetricSuite`                   | `det3d`    | `predictions`, `gt_boxes`, `gt_labels` | per-frame box tensors as list states (`None`)               |
-| `Segmentation3DConfusionMatrixMetricSuite` | `seg3d`    | `seg_frames`                           | one confusion tensor over (filter, range) buckets (`sum`)   |
-| `Segmentation3DPointCloudMetricSuite`      | `seg3d_pt` | `seg_frames`                           | per-frame point tensors (`None`)                            |
+| ------------------------------------------ | ---------- | -------------------------------------- | --------------------------------------------------------- |
+| `Detection3DMetricSuite`                   | `det3d`    | `predictions`, `gt_boxes`, `gt_labels` | per-frame box tensors as list states (`None`)             |
+| `Segmentation3DConfusionMatrixMetricSuite` | `seg3d`    | `seg_frames`                           | one confusion tensor over (filter, range) buckets (`sum`) |
+| `Segmentation3DPointCloudMetricSuite`      | `seg3d_pt` | `seg_frames`                           | per-frame point tensors (`None`)                          |
 
 A confusion matrix is a bounded sufficient statistic, so its counts sum across ranks. Detection
 matching is score ordered inside each frame and the point-level metrics read raw points, so those
@@ -112,9 +112,9 @@ frame at `update` and stored as boolean states, and DDP gathers only tensors.
 
 `seg_frames` is a list with one entry per frame carrying that frame's point coordinates,
 predicted and target labels, per-class scores, and the per-frame metadata configured filters
-need (`ego2global`, `scene_token`). `required_keys()` extends the base tuple with what the
-configuration demands: a detection suite with a collision provider also requires `ego2global`
-and `scene_token`, and a ground-truth point filter requires `gt_num_points`.
+need (`ego2global`, `lanelet_map_path`). `required_keys()` extends the base tuple with what
+the configuration demands: a detection suite with a collision provider also requires
+`ego2global` and `lanelet_map_path`, and a ground-truth point filter requires `gt_num_points`.
 
 Keys are logged as `{split}/{prefix}/{key}`. A filtered metric prefixes its filter name and a
 range window appends a distance suffix, for example `test/det3d/region_road/mAP_0m_50m`. Two
@@ -170,16 +170,16 @@ means adding a `Metric` subclass and listing it in config, never editing the sui
 The baseline metrics need nothing beyond the model's predictions and the ground truth. Each
 optional capability adds a concrete requirement, checked loud at the first batch.
 
-| Capability                                       | Eval-output keys                       | External data              |
-| ------------------------------------------------ | -------------------------------------- | -------------------------- |
-| detection metrics                                | `predictions`, `gt_boxes`, `gt_labels` | none                       |
-| segmentation metrics                             | `seg_frames`                           | none                       |
-| ground-truth point filter, occlusion split       | `gt_num_points` (per-box point count)  | none                       |
-| corridor filter (straight strip)                 | none                                   | none                       |
-| region filters and collision filter              | `ego2global`, `scene_token` per frame  | one lanelet2 map per scene |
-| collision metrics (critical FP/FN, weighted mAP) | `ego2global`, `scene_token` per frame  | one lanelet2 map per scene |
-| velocity error (TP errors, NDS)                  | boxes with velocity components         | none                       |
-| partial-detection score                          | ground-truth boxes inside `seg_frames` | none                       |
+| Capability                                       | Eval-output keys                           | External data              |
+| ------------------------------------------------ | ------------------------------------------ | -------------------------- |
+| detection metrics                                | `predictions`, `gt_boxes`, `gt_labels`     | none                       |
+| segmentation metrics                             | `seg_frames`                               | none                       |
+| ground-truth point filter, occlusion split       | `gt_num_points` (per-box point count)      | none                       |
+| corridor filter (straight strip)                 | none                                       | none                       |
+| region filters and collision filter              | `ego2global`, `lanelet_map_path` per frame | one lanelet2 map per scene |
+| collision metrics (critical FP/FN, weighted mAP) | `ego2global`, `lanelet_map_path` per frame | one lanelet2 map per scene |
+| velocity error (TP errors, NDS)                  | boxes with velocity components             | none                       |
+| partial-detection score                          | ground-truth boxes inside `seg_frames`     | none                       |
 
 The map-based features never read a map path directly. They pass the frame's `scene_token` to a
 map provider, and an injected resolver turns that identifier into the scene's `lanelet2_map.osm`.
@@ -470,22 +470,22 @@ ego's overlap. An object that cannot reach ego within the horizon has an infinit
 The model runs on the following constants. Values marked config are set in the bundled dataset
 configs and tunable there, the rest are code defaults.
 
-| Constant                               | Value                                              |
-| -------------------------------------- | -------------------------------------------------- |
-| horizon                                | 4 s (config)                                       |
-| propagation time step                  | 0.1 s (config)                                     |
-| max lateral acceleration (turn bound)  | 3.0 m/s^2 (config)                                 |
-| minimum turn radius floor              | ego: wheel base over tan max steer angle (config), objects: 3.0 m friction floor (config) |
-| arc samples per reachable set          | at least 21, raised until neighbouring sweeps overlap at their far ends |
-| ego body                               | vehicle description dimensions from the dataset config, measured from the rear axle |
-| object body                            | the object's own box length and width               |
-| wheeled speed on the map               | the lanelet speed limit at the agent's position    |
-| off-map fallback speed                 | 16.7 m/s (config)                                  |
-| living run speeds                      | pedestrian 3.0, animal 4.0, bicycle 6.0 m/s        |
-| wheeled classes                        | car, truck, bus, train, motorcycle                 |
-| living classes                         | pedestrian, animal, bicycle                        |
-| static classes (footprint only)        | barrier, traffic_cone, debris, bicycle_rack, vehicle_extension |
-| corridor width                         | 3.0 m (config)                                     |
+| Constant                              | Value                                                                                     |
+| ------------------------------------- | ----------------------------------------------------------------------------------------- |
+| horizon                               | 4 s (config)                                                                              |
+| propagation time step                 | 0.1 s (config)                                                                            |
+| max lateral acceleration (turn bound) | 3.0 m/s^2 (config)                                                                        |
+| minimum turn radius floor             | ego: wheel base over tan max steer angle (config), objects: 3.0 m friction floor (config) |
+| arc samples per reachable set         | at least 21, raised until neighbouring sweeps overlap at their far ends                   |
+| ego body                              | vehicle description dimensions from the dataset config, measured from the rear axle       |
+| object body                           | the object's own box length and width                                                     |
+| wheeled speed on the map              | the lanelet speed limit at the agent's position                                           |
+| off-map fallback speed                | 16.7 m/s (config)                                                                         |
+| living run speeds                     | pedestrian 3.0, animal 4.0, bicycle 6.0 m/s                                               |
+| wheeled classes                       | car, truck, bus, train, motorcycle                                                        |
+| living classes                        | pedestrian, animal, bicycle                                                               |
+| static classes (footprint only)       | barrier, traffic_cone, debris, bicycle_rack, vehicle_extension                            |
+| corridor width                        | 3.0 m (config)                                                                            |
 
 ### Default slices
 
@@ -1283,22 +1283,22 @@ confident error is what hides an obstacle.
 
 `model.metrics` is a list of suites, so a joint segmentation and detection model lists several.
 Each suite is given its `components`, and each component its stages and optional filter. The
-suites live in the dataset configs and read the tunable pieces (class names, ranges, filters,
-groups) from interpolation variables, because Hydra replaces a list wholesale rather than merging
+suites live in the `metrics` config groups of each database and read the tunable pieces (class
+names, ranges, filters, groups) from interpolation variables, because Hydra replaces a list wholesale rather than merging
 it, so overriding a suite directly would mean restating every field.
 
 ```yaml
 model:
   metrics:
     - _target_: autoware_ml.metrics.detection3d.suite.Detection3DMetricSuite
-      class_names: ${dataset.detection3d.class_names}
-      eval_class_range: ${dataset.detection3d.eval_class_range}
-      ranges: ${dataset.detection3d.metric_ranges}
+      class_names: ${database.taxonomy.detection3d.class_names}
+      eval_class_range: ${eval_class_range}
+      ranges: ${metric_ranges}
       components:
         - { _target_: autoware_ml.metrics.detection3d.mean_ap.MeanAP, stages: [val, test] }
         - { _target_: autoware_ml.metrics.detection3d.nds.Nds, stages: [test] }
         - { _target_: autoware_ml.metrics.detection3d.mean_ap.MeanAP, stages: [test],
-            filter: '${dataset.detection3d.region_filters.road}' }
+            filter: '${metric_params.detection3d.filters.region_filters.road}' }
 ```
 
 The same component listed once more with a filter is one more reported slice.
@@ -1310,9 +1310,9 @@ Model-specific work like box decoding happens here, and per-frame metadata the d
 (ego pose, scene token) is passed through.
 
 ```python
-class ModelA(BaseModel):
+class ModelA(ModuleBaseModel):
     def build_eval_output(self, batch, outputs):
-        return detection_eval_output(self.predict_outputs(batch, outputs), batch)
+        return detection_eval_output(self.decode_outputs(batch, outputs), batch)
 ```
 
 The mixin feeds this dict into every attached suite. The model never calls `update`, `compute`,

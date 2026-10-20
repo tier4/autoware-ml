@@ -1,0 +1,78 @@
+detection_components:
+  # Whole-scene.
+  - { _target_: autoware_ml.metrics.detection3d.box_counts.BoxCounts, stages: [val, test] }
+  - { _target_: autoware_ml.metrics.detection3d.mean_ap.MeanAP, stages: [val, test] }
+  - { _target_: autoware_ml.metrics.detection3d.heading_ap.HeadingAP, stages: [test] }
+  - { _target_: autoware_ml.metrics.detection3d.nds.Nds, stages: [test] }
+  - { _target_: autoware_ml.metrics.detection3d.tp_errors.TpErrors, stages: [test] }
+  - { _target_: autoware_ml.metrics.detection3d.corner_error.CornerError, stages: [test] }
+  - { _target_: autoware_ml.metrics.detection3d.heading_flip.HeadingFlipRate, stages: [test] }
+  - { _target_: autoware_ml.metrics.detection3d.nearest_surface_error.NearestSurfaceError, stages: [test] }
+  - { _target_: autoware_ml.metrics.detection3d.calibration.CalibrationError, stages: [test] }
+  - { _target_: autoware_ml.metrics.detection3d.confident_error.ConfidentErrorRate, stages: [test] }
+  - { _target_: autoware_ml.metrics.detection3d.confusion_matrix.ConfusionMatrix, stages: [test] }
+  - { _target_: autoware_ml.metrics.detection3d.critical_fp_fn.CriticalFPFN, stages: [test] }
+  - { _target_: autoware_ml.metrics.detection3d.collision_weighted_map.CollisionWeightedMeanAP, stages: [test] }
+  # Road slice (lanelet road + road_shoulder + crosswalk).
+  - { _target_: autoware_ml.metrics.detection3d.box_counts.BoxCounts, stages: [test], filter: '${metric_params.detection3d.filters.region_filters.road}'}
+  - { _target_: autoware_ml.metrics.detection3d.mean_ap.MeanAP, stages: [test], filter: '${metric_params.detection3d.filters.region_filters.road}' }
+  - { _target_: autoware_ml.metrics.detection3d.heading_ap.HeadingAP, stages: [test], filter: '${metric_params.detection3d.filters.region_filters.road}' }
+  - { _target_: autoware_ml.metrics.detection3d.nds.Nds, stages: [test], filter: '${metric_params.detection3d.filters.region_filters.road}' }
+  - { _target_: autoware_ml.metrics.detection3d.tp_errors.TpErrors, stages: [test], filter: '${metric_params.detection3d.filters.region_filters.road}' }
+  - { _target_: autoware_ml.metrics.detection3d.corner_error.CornerError, stages: [test], filter: '${metric_params.detection3d.filters.region_filters.road}' }
+  - { _target_: autoware_ml.metrics.detection3d.heading_flip.HeadingFlipRate, stages: [test], filter: '${metric_params.detection3d.filters.region_filters.road}' }
+  - { _target_: autoware_ml.metrics.detection3d.nearest_surface_error.NearestSurfaceError, stages: [test], filter: '${metric_params.detection3d.filters.region_filters.road}' }
+  - { _target_: autoware_ml.metrics.detection3d.calibration.CalibrationError, stages: [test], filter: '${metric_params.detection3d.filters.region_filters.road}' }
+  - { _target_: autoware_ml.metrics.detection3d.confident_error.ConfidentErrorRate, stages: [test], filter: '${metric_params.detection3d.filters.region_filters.road}' }
+  - { _target_: autoware_ml.metrics.detection3d.confusion_matrix.ConfusionMatrix, stages: [test], filter: '${metric_params.detection3d.filters.region_filters.road}' }
+  - { _target_: autoware_ml.metrics.detection3d.critical_fp_fn.CriticalFPFN, stages: [test], filter: '${metric_params.detection3d.filters.region_filters.road}' }
+  - { _target_: autoware_ml.metrics.detection3d.collision_weighted_map.CollisionWeightedMeanAP, stages: [test], filter: '${metric_params.detection3d.filters.region_filters.road}' }
+  # Walkway slice.
+  - { _target_: autoware_ml.metrics.detection3d.box_counts.BoxCounts, stages: [test], filter: '${metric_params.detection3d.filters.region_filters.walkway}'}
+  - { _target_: autoware_ml.metrics.detection3d.mean_ap.MeanAP, stages: [test], filter: '${metric_params.detection3d.filters.region_filters.walkway}' }
+  - { _target_: autoware_ml.metrics.detection3d.heading_ap.HeadingAP, stages: [test], filter: '${metric_params.detection3d.filters.region_filters.walkway}' }
+  - { _target_: autoware_ml.metrics.detection3d.nds.Nds, stages: [test], filter: '${metric_params.detection3d.filters.region_filters.walkway}' }
+  - { _target_: autoware_ml.metrics.detection3d.tp_errors.TpErrors, stages: [test], filter: '${metric_params.detection3d.filters.region_filters.walkway}' }
+  - { _target_: autoware_ml.metrics.detection3d.corner_error.CornerError, stages: [test], filter: '${metric_params.detection3d.filters.region_filters.walkway}' }
+  - { _target_: autoware_ml.metrics.detection3d.heading_flip.HeadingFlipRate, stages: [test], filter: '${metric_params.detection3d.filters.region_filters.walkway}' }
+  - { _target_: autoware_ml.metrics.detection3d.nearest_surface_error.NearestSurfaceError, stages: [test], filter: '${metric_params.detection3d.filters.region_filters.walkway}' }
+  - { _target_: autoware_ml.metrics.detection3d.calibration.CalibrationError, stages: [test], filter: '${metric_params.detection3d.filters.region_filters.walkway}' }
+  - { _target_: autoware_ml.metrics.detection3d.confident_error.ConfidentErrorRate, stages: [test], filter: '${metric_params.detection3d.filters.region_filters.walkway}' }
+  - { _target_: autoware_ml.metrics.detection3d.confusion_matrix.ConfusionMatrix, stages: [test], filter: '${metric_params.detection3d.filters.region_filters.walkway}' }
+  - { _target_: autoware_ml.metrics.detection3d.critical_fp_fn.CriticalFPFN, stages: [test], filter: '${metric_params.detection3d.filters.region_filters.walkway}' }
+  - { _target_: autoware_ml.metrics.detection3d.collision_weighted_map.CollisionWeightedMeanAP, stages: [test], filter: '${metric_params.detection3d.filters.region_filters.walkway}' }
+  # Straight-corridor slice.
+  - { _target_: autoware_ml.metrics.detection3d.box_counts.BoxCounts, stages: [test], filter: '${metric_params.detection3d.filters.corridor_filter}'}
+  - { _target_: autoware_ml.metrics.detection3d.mean_ap.MeanAP, stages: [test], filter: '${metric_params.detection3d.filters.corridor_filter}' }
+  - { _target_: autoware_ml.metrics.detection3d.heading_ap.HeadingAP, stages: [test], filter: '${metric_params.detection3d.filters.corridor_filter}' }
+  - { _target_: autoware_ml.metrics.detection3d.nds.Nds, stages: [test], filter: '${metric_params.detection3d.filters.corridor_filter}' }
+  - { _target_: autoware_ml.metrics.detection3d.tp_errors.TpErrors, stages: [test], filter: '${metric_params.detection3d.filters.corridor_filter}' }
+  - { _target_: autoware_ml.metrics.detection3d.corner_error.CornerError, stages: [test], filter: '${metric_params.detection3d.filters.corridor_filter}' }
+  - { _target_: autoware_ml.metrics.detection3d.heading_flip.HeadingFlipRate, stages: [test], filter: '${metric_params.detection3d.filters.corridor_filter}' }
+  - { _target_: autoware_ml.metrics.detection3d.nearest_surface_error.NearestSurfaceError, stages: [test], filter: '${metric_params.detection3d.filters.corridor_filter}' }
+  - { _target_: autoware_ml.metrics.detection3d.calibration.CalibrationError, stages: [test], filter: '${metric_params.detection3d.filters.corridor_filter}' }
+  - { _target_: autoware_ml.metrics.detection3d.confident_error.ConfidentErrorRate, stages: [test], filter: '${metric_params.detection3d.filters.corridor_filter}' }
+  - { _target_: autoware_ml.metrics.detection3d.confusion_matrix.ConfusionMatrix, stages: [test], filter: '${metric_params.detection3d.filters.corridor_filter}' }
+  - { _target_: autoware_ml.metrics.detection3d.critical_fp_fn.CriticalFPFN, stages: [test], filter: '${metric_params.detection3d.filters.corridor_filter}' }
+  - { _target_: autoware_ml.metrics.detection3d.collision_weighted_map.CollisionWeightedMeanAP, stages: [test], filter: '${metric_params.detection3d.filters.corridor_filter}' }
+  # Collision-area slice.
+  - { _target_: autoware_ml.metrics.detection3d.box_counts.BoxCounts, stages: [test], filter: '${metric_params.detection3d.filters.collision_filter}'}
+  - { _target_: autoware_ml.metrics.detection3d.mean_ap.MeanAP, stages: [test], filter: '${metric_params.detection3d.filters.collision_filter}' }
+  - { _target_: autoware_ml.metrics.detection3d.heading_ap.HeadingAP, stages: [test], filter: '${metric_params.detection3d.filters.collision_filter}' }
+  - { _target_: autoware_ml.metrics.detection3d.nds.Nds, stages: [test], filter: '${metric_params.detection3d.filters.collision_filter}' }
+  - { _target_: autoware_ml.metrics.detection3d.tp_errors.TpErrors, stages: [test], filter: '${metric_params.detection3d.filters.collision_filter}' }
+  - { _target_: autoware_ml.metrics.detection3d.corner_error.CornerError, stages: [test], filter: '${metric_params.detection3d.filters.collision_filter}' }
+  - { _target_: autoware_ml.metrics.detection3d.heading_flip.HeadingFlipRate, stages: [test], filter: '${metric_params.detection3d.filters.collision_filter}' }
+  - { _target_: autoware_ml.metrics.detection3d.nearest_surface_error.NearestSurfaceError, stages: [test], filter: '${metric_params.detection3d.filters.collision_filter}' }
+  - { _target_: autoware_ml.metrics.detection3d.calibration.CalibrationError, stages: [test], filter: '${metric_params.detection3d.filters.collision_filter}' }
+  - { _target_: autoware_ml.metrics.detection3d.confident_error.ConfidentErrorRate, stages: [test], filter: '${metric_params.detection3d.filters.collision_filter}' }
+  - { _target_: autoware_ml.metrics.detection3d.confusion_matrix.ConfusionMatrix, stages: [test], filter: '${metric_params.detection3d.filters.collision_filter}' }
+  - { _target_: autoware_ml.metrics.detection3d.critical_fp_fn.CriticalFPFN, stages: [test], filter: '${metric_params.detection3d.filters.collision_filter}' }
+  - { _target_: autoware_ml.metrics.detection3d.collision_weighted_map.CollisionWeightedMeanAP, stages: [test], filter: '${metric_params.detection3d.filters.collision_filter}' }
+
+occlusion_split_components:
+  - { _target_: autoware_ml.metrics.detection3d.mean_ap.MeanAP, stages: [test] }
+  - { _target_: autoware_ml.metrics.detection3d.mean_ap.MeanAP, stages: [test], filter: '${metric_params.detection3d.filters.region_filters.road}' }
+  - { _target_: autoware_ml.metrics.detection3d.mean_ap.MeanAP, stages: [test], filter: '${metric_params.detection3d.filters.region_filters.walkway}' }
+  - { _target_: autoware_ml.metrics.detection3d.mean_ap.MeanAP, stages: [test], filter: '${metric_params.detection3d.filters.corridor_filter}' }
+  - { _target_: autoware_ml.metrics.detection3d.mean_ap.MeanAP, stages: [test], filter: '${metric_params.detection3d.filters.collision_filter}' }

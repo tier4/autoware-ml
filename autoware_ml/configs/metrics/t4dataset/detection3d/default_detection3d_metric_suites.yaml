@@ -1,0 +1,34 @@
+# Detection metric suites, per class, then grouped, then split by occlusion.
+- _target_: autoware_ml.metrics.detection3d.suite.Detection3DMetricSuite
+  components: ${metric_params.detection3d.components.detection_components}
+  class_names: ${database.taxonomy.detection3d.class_names}
+  min_num_points: 2
+  eval_class_range: ${eval_class_range}
+  collision: ${metric_params.detection3d.collision}
+  ranges: ${metric_ranges}
+
+- _target_: autoware_ml.metrics.detection3d.suite.Detection3DMetricSuite
+  prefix: det3d_grouped
+  components: ${metric_params.detection3d.components.detection_components}
+  class_names: ${database.taxonomy.detection3d.class_names}
+  min_num_points: 2
+  eval_class_range: ${eval_class_range}
+  class_groups: ${metric_params.detection3d.class_groups}
+  collision: ${metric_params.detection3d.collision}
+  ranges: ${metric_ranges}
+
+- _target_: autoware_ml.metrics.detection3d.suite.Detection3DMetricSuite
+  prefix: det3d_visible
+  components: ${metric_params.detection3d.components.occlusion_split_components}
+  class_names: ${database.taxonomy.detection3d.class_names}
+  min_num_points: 1
+  eval_class_range: ${eval_class_range}
+  ranges: ${metric_ranges}
+
+- _target_: autoware_ml.metrics.detection3d.suite.Detection3DMetricSuite
+  prefix: det3d_overall
+  components: ${metric_params.detection3d.components.occlusion_split_components}
+  class_names: ${database.taxonomy.detection3d.class_names}
+  min_num_points: 0
+  eval_class_range: ${eval_class_range}
+  ranges: ${metric_ranges}

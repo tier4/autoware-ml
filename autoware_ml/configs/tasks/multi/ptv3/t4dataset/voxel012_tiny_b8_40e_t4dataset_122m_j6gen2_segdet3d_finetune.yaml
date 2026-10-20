@@ -1,0 +1,32 @@
+# @package _global_
+# Fine-tuning of the 100-epoch run from its checkpoint, lower learning rates.
+defaults:
+  - voxel012_tiny_b8_100e_t4dataset_122m_j6gen2_segdet3d
+  - _self_
+
+experiment_name: voxel012_tiny_b8_40e_t4dataset_122m_j6gen2_segdet3d_finetune
+
+# Include weights for pre-training
+weights: ???
+
+model:
+  optimizer_group_overrides:
+    encoder_block:
+      lr: 0.00001
+    encoder_default:
+      lr: 0.000025
+    seg3d_head:
+      lr: 0.0001
+  scheduler:
+    warmup_epochs: 2
+    decay_epochs: 38
+    max_lr_factor: 2.0
+
+trainer:
+  max_epochs: 40
+
+callbacks:
+  dynamic_validation:
+    # Validate every 5 epochs, then every epoch over the last 10 of the 40-epoch schedule.
+    epoch_intervals: [[0, 5], [30, 1]]
+  early_stopping: null

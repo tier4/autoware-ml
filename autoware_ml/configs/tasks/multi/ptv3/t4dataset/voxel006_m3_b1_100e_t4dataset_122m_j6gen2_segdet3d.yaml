@@ -1,0 +1,20 @@
+# @package _global_
+defaults:
+  - base_voxel006_122m
+  - /database@database: t4dataset/t4dataset_j6gen2_segdet3d
+  - override /database/t4dataset/taxonomy@database.taxonomy: default_fine
+  - override /database/t4dataset/box3d_pipelines@database.box3d_pipelines: trailer_class_box3d_pipelines
+  - _self_
+
+batch_size: 1
+num_workers: 8
+experiment_group_name: ptv3_segdet/${database.version}/j6gen2_segdet3d
+experiment_name: voxel006_m3_b1_100e_t4dataset_122m_j6gen2_segdet3d
+
+trainer:
+  max_epochs: 100
+
+callbacks:
+  dynamic_validation:
+    # Validate every 5 epochs, then every epoch over the last 10 of the 100-epoch schedule.
+    epoch_intervals: [[0, 5], [90, 1]]

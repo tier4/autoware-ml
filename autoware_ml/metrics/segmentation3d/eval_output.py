@@ -38,7 +38,8 @@ def segmentation_frames_eval_output(
         scores: ``(N, C)`` softmax probabilities per point.
         frame_ids: ``(N,)`` frame index of every point.
         num_frames: Number of frames in the batch.
-        batch_inputs: Model inputs of the batch. The frame metadata (ego pose, scene token) and
+        batch_inputs: Model inputs of the batch. The frame metadata (ego pose, scene token,
+            lanelet map path) and
             the detection ground truth are copied into each frame entry when the batch carries
             them.
 
@@ -50,6 +51,7 @@ def segmentation_frames_eval_output(
     if gt_batch.frame_meta_batch is not None:
         frame_meta["ego2global"] = list(gt_batch.frame_meta_batch.ego2globals)
         frame_meta["scene_token"] = list(gt_batch.frame_meta_batch.scene_tokens)
+        frame_meta["lanelet_map_path"] = list(gt_batch.frame_meta_batch.lanelet_map_paths)
     if gt_batch.detection3d_gt_batch is not None:
         frame_meta["gt_boxes"] = gt_batch.detection3d_gt_batch.valid_bboxes_3d()
         frame_meta["gt_box_labels"] = gt_batch.detection3d_gt_batch.valid_labels_3d()

@@ -1,0 +1,18 @@
+# @package _global_
+# The four Ouster OT128 lidars of the J6 gen2 platform.
+defaults:
+  - base
+  - _self_
+
+fov_up: 15.0
+fov_down: -25.0
+range_height: 128
+range_width: 4096
+frustum_height: 128
+frustum_width: 1024
+
+lidar_sources:
+  - LIDAR_FRONT_UPPER
+  - LIDAR_LEFT_UPPER
+  - LIDAR_RIGHT_UPPER
+  - LIDAR_REAR_UPPER

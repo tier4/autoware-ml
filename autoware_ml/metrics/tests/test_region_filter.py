@@ -24,6 +24,7 @@ from autoware_ml.metrics.segmentation3d.accuracy import Accuracy
 from autoware_ml.metrics.segmentation3d.error_clusters import ErrorClusters
 from autoware_ml.metrics.segmentation3d.point_cloud import Segmentation3DPointCloudMetricSuite
 from autoware_ml.metrics.segmentation3d.suite import Segmentation3DConfusionMatrixMetricSuite
+from autoware_ml.metrics.tests.conftest import STUB_MAP_PATH, serve_lanelet_map
 
 # Ego body in vehicle description terms, measured from the rear axle: 2.0 m wide,
 # 3.79 m ahead of the reference point and 1.1 m behind it.
@@ -65,32 +66,16 @@ _MINI_OSM = """<?xml version='1.0'?>
 """
 
 
-class _StubProvider:
-    """Returns one fixed LaneletMap for every scene token.
+def _region_filter(region: list[str], lanelet_map: LaneletMap, **kwargs) -> RegionFilter:
+    """A region filter over frames whose map path is ``STUB_MAP_PATH`` serving ``lanelet_map``."""
+    serve_lanelet_map(lanelet_map)
+    return RegionFilter(region, **kwargs)
 
-    ``no_map`` names scene tokens that have no lanelet map: ``available`` reports
-    them False (so the suite excludes them) and ``get`` raises if one is ever
-    loaded anyway, guarding that the suite never touches a map-less scene's map.
-    """
 
-    def __init__(
-        self, lanelet_map: LaneletMap, no_map: tuple[object, ...] = (), corpus: str = "stub"
-    ) -> None:
-        self._map = lanelet_map
-        self._no_map = set(no_map)
-        self._corpus = corpus
-
-    @property
-    def cache_key(self) -> str:
-        return self._corpus
-
-    def get(self, scene_token: object) -> LaneletMap:
-        if scene_token in self._no_map:
-            raise FileNotFoundError(f"map loaded for a scene declared map-less: {scene_token!r}")
-        return self._map
-
-    def available(self, scene_token: object) -> bool:
-        return scene_token not in self._no_map
+def _collision_filter(lanelet_map: LaneletMap, **kwargs) -> CollisionFilter:
+    """A collision filter over frames whose map path is ``STUB_MAP_PATH`` serving ``lanelet_map``."""
+    serve_lanelet_map(lanelet_map)
+    return CollisionFilter(**kwargs)
 
 
 def _road_map() -> LaneletMap:
@@ -110,9 +95,9 @@ def test_load_region_polygons_keys_lanelets_by_subtype(tmp_path) -> None:
 
 
 def test_region_filter_membership() -> None:
-    region_filter = RegionFilter(["road"], _StubProvider(_road_map()))
+    region_filter = _region_filter(["road"], _road_map())
     xyz = np.array([[10.0, 0.0, 0.0], [100.0, 0.0, 0.0]])  # inside road, off-road
-    keep = region_filter.keep(xyz, {"ego2global": np.eye(4), "scene_token": "scene"})
+    keep = region_filter.keep(xyz, {"ego2global": np.eye(4), "lanelet_map_path": STUB_MAP_PATH})
     assert keep.tolist() == [True, False]
 
 
@@ -120,8 +105,8 @@ def test_region_filter_box_footprint_any_overlap() -> None:
     # Road strip y in [-3, 3]. A box centered at y=4 (off road) but 4 m wide
     # overhangs onto the road: center-in-region drops it, footprint any-overlap
     # keeps it. A box at y=8 is fully off the road and dropped.
-    region_filter = RegionFilter(["road"], _StubProvider(_narrow_road_map()))
-    context = {"ego2global": np.eye(4), "scene_token": "scene"}
+    region_filter = _region_filter(["road"], _narrow_road_map())
+    context = {"ego2global": np.eye(4), "lanelet_map_path": STUB_MAP_PATH}
     boxes = np.array(
         [
             [10.0, 4.0, 0.0, 4.0, 4.0, 1.5, 0.0, 0.0, 0.0],  # y in [2, 6], overlaps road
@@ -140,14 +125,14 @@ def test_collision_filter_keeps_forward_reachable_on_road() -> None:
     # The collision area is the ego reachable region (curvature-bounded, clipped
     # to the road): a point ahead on the centerline is kept, one on the road but
     # past the horizon, or off the road altogether, is dropped.
-    collision_filter = CollisionFilter(
-        _StubProvider(_road_map()),
+    collision_filter = _collision_filter(
+        _road_map(),
         vehicle=EGO,
         region=["road"],
         max_speed_mps=10.0,
         params=ReachabilityParams(horizon_s=4.0, dt_s=0.1),
     )
-    context = {"ego2global": np.eye(4), "scene_token": "scene"}
+    context = {"ego2global": np.eye(4), "lanelet_map_path": STUB_MAP_PATH}
     xyz = np.array(
         [
             [10.0, 0.0, 0.0],  # ahead on the centerline, reachable -> keep
@@ -162,22 +147,22 @@ def test_collision_filter_keeps_forward_reachable_on_road() -> None:
 def test_collision_filter_curvature_bound_excludes_close_lateral() -> None:
     # At speed the ego cannot swerve far sideways over a short distance, so a point
     # 8 m to the side only 5 m ahead is not reachable within the horizon.
-    collision_filter = CollisionFilter(
-        _StubProvider(_road_map()),
+    collision_filter = _collision_filter(
+        _road_map(),
         vehicle=EGO,
         region=["road"],
         max_speed_mps=10.0,
         params=ReachabilityParams(horizon_s=4.0, dt_s=0.1),
     )
-    context = {"ego2global": np.eye(4), "scene_token": "scene"}
+    context = {"ego2global": np.eye(4), "lanelet_map_path": STUB_MAP_PATH}
     assert collision_filter.keep(np.array([[5.0, 8.0, 0.0]]), context).tolist() == [False]
 
 
 def test_collision_filter_required_keys() -> None:
-    collision_filter = CollisionFilter(_StubProvider(_road_map()), vehicle=EGO)
+    collision_filter = _collision_filter(_road_map(), vehicle=EGO)
     assert collision_filter.required_eval_keys == (
         "ego2global",
-        "scene_token",
+        "lanelet_map_path",
     )
 
 
@@ -218,17 +203,17 @@ def test_corridor_filter_keeps_overlapping_box_footprints() -> None:
 def test_filters_accept_tensor_metadata() -> None:
     # Collation + Lightning device transfer deliver the frame metadata as
     # tensors, not numpy arrays, filters must convert (cuda included).
-    region_filter = RegionFilter(["road"], _StubProvider(_road_map()))
+    region_filter = _region_filter(["road"], _road_map())
     keep = region_filter.keep(
         np.array([[10.0, 0.0, 0.0]]),
-        {"ego2global": torch.eye(4), "scene_token": "scene"},
+        {"ego2global": torch.eye(4), "lanelet_map_path": STUB_MAP_PATH},
     )
     assert keep.tolist() == [True]
 
-    collision_filter = CollisionFilter(_StubProvider(_road_map()), vehicle=EGO, region=["road"])
+    collision_filter = _collision_filter(_road_map(), vehicle=EGO, region=["road"])
     keep = collision_filter.keep(
         np.array([[10.0, 0.0, 0.0]]),
-        {"ego2global": torch.eye(4), "scene_token": "scene"},
+        {"ego2global": torch.eye(4), "lanelet_map_path": STUB_MAP_PATH},
     )
     assert keep.tolist() == [True]
 
@@ -240,9 +225,9 @@ def test_region_filter_margin_erodes_outer_border_only() -> None:
     road = Polygon([(0, -10), (50, -10), (50, 0), (0, 0)])
     walkway = Polygon([(0, 0), (50, 0), (50, 3), (0, 3)])
     lanelet_map = LaneletMap({"road": [road], "walkway": [walkway]})
-    context = {"ego2global": np.eye(4), "scene_token": "scene"}
+    context = {"ego2global": np.eye(4), "lanelet_map_path": STUB_MAP_PATH}
 
-    eroded = RegionFilter(["road"], _StubProvider(lanelet_map), margin=-0.5)
+    eroded = _region_filter(["road"], lanelet_map, margin=-0.5)
     near_internal = np.array([[10.0, -0.1, 0.0]])  # 0.1 m from the road-walkway border
     near_outer = np.array([[10.0, -9.8, 0.0]])  # 0.2 m from the outer border
     assert eroded.keep(near_internal, context).tolist() == [True]
@@ -257,9 +242,9 @@ def test_region_filter_positive_margin_grows_into_off_map_space_only() -> None:
     road = Polygon([(0, -10), (50, -10), (50, 0), (0, 0)])
     walkway = Polygon([(0, 0), (50, 0), (50, 3), (0, 3)])
     lanelet_map = LaneletMap({"road": [road], "walkway": [walkway]})
-    context = {"ego2global": np.eye(4), "scene_token": "scene"}
+    context = {"ego2global": np.eye(4), "lanelet_map_path": STUB_MAP_PATH}
 
-    expanded = RegionFilter(["road"], _StubProvider(lanelet_map), margin=0.5)
+    expanded = _region_filter(["road"], lanelet_map, margin=0.5)
     off_map_near_road = np.array([[10.0, -10.3, 0.0]])  # 0.3 m below the road's outer border
     on_walkway = np.array([[10.0, 0.2, 0.0]])  # inside the adjacent walkway
     far_off_map = np.array([[10.0, -11.0, 0.0]])  # 1.0 m below, beyond the margin
@@ -270,37 +255,37 @@ def test_region_filter_positive_margin_grows_into_off_map_space_only() -> None:
 
 
 def test_region_filter_name_and_cache_key() -> None:
-    region_filter = RegionFilter(["road", "crosswalk"], _StubProvider(_road_map()))
+    region_filter = _region_filter(["road", "crosswalk"], _road_map())
     assert region_filter.name == "region_road_crosswalk"
-    assert region_filter.required_eval_keys == ("ego2global", "scene_token")
+    assert region_filter.required_eval_keys == ("ego2global", "lanelet_map_path")
 
 
-def test_filter_cache_keys_separate_two_corpora() -> None:
-    # A suite keeps one mask set per cache key, so filters that read different
-    # maps must not collide, while equal configurations still share the work.
-    road = _road_map()
-    first = RegionFilter(["road"], _StubProvider(road, corpus="t4:/data/a"))
-    second = RegionFilter(["road"], _StubProvider(road, corpus="t4:/data/b"))
-    same = RegionFilter(["road"], _StubProvider(road, corpus="t4:/data/a"))
+def test_filter_cache_keys_follow_the_mask_parameters() -> None:
+    # A suite keeps one mask set per cache key. The map is not a parameter, it
+    # comes with every frame, so equal regions and margins share the work and a
+    # different margin does not.
+    first = RegionFilter(["road"])
+    same = RegionFilter(["road"])
+    eroded = RegionFilter(["road"], margin=-0.5)
 
-    assert first.cache_key != second.cache_key
     assert first.cache_key == same.cache_key
-    assert first.name == second.name  # the reported slice is still the same one
+    assert first.cache_key != eroded.cache_key
+    assert first.name == same.name
 
 
 def test_region_filter_rejects_unknown_tokens() -> None:
     # A typo (e.g. 'sidewalk', the lanelet2 name is 'walkway') fails loud at
     # construction, not silently as an empty slice.
     with pytest.raises(ValueError, match="Unknown lanelet2 region tokens"):
-        RegionFilter(["sidewalk"], _StubProvider(_road_map()))
+        RegionFilter(["sidewalk"])
 
 
 def test_region_absent_from_scene_is_empty_not_an_error() -> None:
     # 'walkway' is a valid token but this scene's map has none: the slice is
     # legitimately empty (membership false everywhere), the eval keeps running.
-    walkway_filter = RegionFilter(["walkway"], _StubProvider(_road_map()), margin=0.2)
+    walkway_filter = _region_filter(["walkway"], _road_map(), margin=0.2)
     keep = walkway_filter.keep(
-        np.array([[10.0, 0.0, 0.0]]), {"ego2global": np.eye(4), "scene_token": "scene"}
+        np.array([[10.0, 0.0, 0.0]]), {"ego2global": np.eye(4), "lanelet_map_path": STUB_MAP_PATH}
     )
     assert keep.tolist() == [False]
 
@@ -308,7 +293,7 @@ def test_region_absent_from_scene_is_empty_not_an_error() -> None:
 def test_confusion_suite_region_filter_buckets() -> None:
     # A correct point on the road (x=10) and a wrong point off it (x=100): the
     # whole-scene accuracy is 0.5, the road slice sees only the correct point.
-    region = RegionFilter(["road"], _StubProvider(_road_map()))
+    region = _region_filter(["road"], _road_map())
     suite = Segmentation3DConfusionMatrixMetricSuite(
         components=[
             Accuracy(stages=["test"]),
@@ -325,7 +310,7 @@ def test_confusion_suite_region_filter_buckets() -> None:
                     "target": torch.tensor([0, 0]),
                     "coord": torch.tensor([[10.0, 0.0, 0.0], [100.0, 0.0, 0.0]]),
                     "ego2global": np.eye(4),
-                    "scene_token": "scene",
+                    "lanelet_map_path": STUB_MAP_PATH,
                 }
             ]
         }
@@ -342,7 +327,7 @@ def _box(x: float) -> list[float]:
 def test_detection_suite_region_filter_restricts_gt() -> None:
     # Two GT cars, one on the road (x=10), one off-road (x=100). One prediction
     # matches the road car. The whole-scene metric sees 2 GT, the road slice 1.
-    region = RegionFilter(["road"], _StubProvider(_road_map()))
+    region = _region_filter(["road"], _road_map())
     suite = Detection3DMetricSuite(
         components=[
             MeanAP(stages=["test"]),
@@ -364,7 +349,7 @@ def test_detection_suite_region_filter_restricts_gt() -> None:
             "gt_boxes": [gt],
             "gt_labels": [torch.tensor([0, 0])],
             "ego2global": [np.eye(4)],
-            "scene_token": ["scene"],
+            "lanelet_map_path": [STUB_MAP_PATH],
         }
     )
     report = suite.result(EvalStage.TEST)
@@ -377,11 +362,23 @@ def test_detection_suite_region_filter_restricts_gt() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_region_filter_available_delegates_to_provider() -> None:
-    provider = _StubProvider(_road_map(), no_map=("s_nomap",))
-    region_filter = RegionFilter(["road"], provider)
-    assert region_filter.available({"scene_token": "s_map"}) is True
-    assert region_filter.available({"scene_token": "s_nomap"}) is False
+def test_region_filter_available_needs_the_frame_map_path() -> None:
+    # The dataset hands over None for a frame whose scene has no map.
+    region_filter = _region_filter(["road"], _road_map())
+    assert region_filter.available({"lanelet_map_path": STUB_MAP_PATH}) is True
+    assert region_filter.available({"lanelet_map_path": None}) is False
+
+
+def test_map_provider_osm_path_is_none_without_a_map(tmp_path) -> None:
+    # The dataset resolves every frame's map path with its own provider, so a
+    # source over another corpus hands the metrics the map of its root.
+    provider = LaneletMapProvider(T4LaneletMapResolver(str(tmp_path)))
+    scene = "db/uuid/0"
+    assert provider.osm_path(scene) is None
+    map_path = tmp_path / scene / "map" / "lanelet2_map.osm"
+    map_path.parent.mkdir(parents=True)
+    map_path.write_text("<osm></osm>")
+    assert provider.osm_path(scene) == str(map_path)
 
 
 def test_lanelet_resolver_available_and_call_are_distinct(tmp_path) -> None:
@@ -413,7 +410,7 @@ def test_confusion_suite_excludes_scene_without_lanelet_map() -> None:
     # accuracy sees every point, the road slice drops the map-less scene entirely
     # (never loads its map, the stub would raise), and the coverage counters
     # record 2 frames seen, 1 covered.
-    region = RegionFilter(["road"], _StubProvider(_road_map(), no_map=("s_nomap",)))
+    region = _region_filter(["road"], _road_map())
     suite = Segmentation3DConfusionMatrixMetricSuite(
         components=[Accuracy(stages=["test"]), Accuracy(stages=["test"], filter=region)],
         num_classes=2,
@@ -427,14 +424,14 @@ def test_confusion_suite_excludes_scene_without_lanelet_map() -> None:
                     "target": torch.tensor([0, 0]),
                     "coord": torch.tensor([[10.0, 0.0, 0.0], [100.0, 0.0, 0.0]]),
                     "ego2global": np.eye(4),
-                    "scene_token": "s_map",
+                    "lanelet_map_path": STUB_MAP_PATH,
                 },
                 {
                     "pred": torch.tensor([1]),
                     "target": torch.tensor([0]),
                     "coord": torch.tensor([[10.0, 0.0, 0.0]]),
                     "ego2global": np.eye(4),
-                    "scene_token": "s_nomap",
+                    "lanelet_map_path": None,
                 },
             ]
         }
@@ -450,7 +447,7 @@ def test_detection_suite_excludes_scene_without_lanelet_map() -> None:
     # Two frames, one GT car on the road each, 's_nomap' has no map. Whole-scene
     # sees both GT, the road slice keeps only the mapped scene's, and coverage
     # records 2 seen / 1 covered.
-    region = RegionFilter(["road"], _StubProvider(_road_map(), no_map=("s_nomap",)))
+    region = _region_filter(["road"], _road_map())
     suite = Detection3DMetricSuite(
         components=[MeanAP(stages=["test"]), MeanAP(stages=["test"], filter=region)],
         class_names=("car",),
@@ -473,7 +470,7 @@ def test_detection_suite_excludes_scene_without_lanelet_map() -> None:
             "gt_boxes": [torch.tensor([_box(10.0)]), torch.tensor([_box(10.0)])],
             "gt_labels": [torch.tensor([0]), torch.tensor([0])],
             "ego2global": [np.eye(4), np.eye(4)],
-            "scene_token": ["s_map", "s_nomap"],
+            "lanelet_map_path": [STUB_MAP_PATH, None],
         }
     )
     report = suite.result(EvalStage.TEST)
@@ -490,7 +487,7 @@ def test_detection_suite_excludes_scene_without_lanelet_map() -> None:
 def test_point_cloud_suite_excludes_scene_without_lanelet_map() -> None:
     # 's_nomap' (one wrong point) is excluded from the road slice, the whole-scene
     # error rate still counts it. Coverage records 2 frames seen, 1 covered.
-    region = RegionFilter(["road"], _StubProvider(_road_map(), no_map=("s_nomap",)))
+    region = _region_filter(["road"], _road_map())
     suite = Segmentation3DPointCloudMetricSuite(
         components=[ErrorClusters(stages=["test"]), ErrorClusters(stages=["test"], filter=region)],
         num_classes=2,
@@ -505,7 +502,7 @@ def test_point_cloud_suite_excludes_scene_without_lanelet_map() -> None:
                     "target": torch.tensor([0, 0]),
                     "scores": torch.full((2, 2), 0.5),
                     "ego2global": np.eye(4),
-                    "scene_token": "s_map",
+                    "lanelet_map_path": STUB_MAP_PATH,
                 },
                 {
                     "coord": torch.tensor([[10.0, 0.0, 0.0]]),
@@ -513,7 +510,7 @@ def test_point_cloud_suite_excludes_scene_without_lanelet_map() -> None:
                     "target": torch.tensor([0]),
                     "scores": torch.full((1, 2), 0.5),
                     "ego2global": np.eye(4),
-                    "scene_token": "s_nomap",
+                    "lanelet_map_path": None,
                 },
             ]
         }
@@ -528,7 +525,7 @@ def test_point_cloud_suite_excludes_scene_without_lanelet_map() -> None:
 def test_point_cloud_suite_region_filter_clips_boxes() -> None:
     # A GT box off the road region is omitted from the filtered state, box
     # membership is resolved through the same filter as the points.
-    region = RegionFilter(["road"], _StubProvider(_road_map()))
+    region = _region_filter(["road"], _road_map())
     suite = Segmentation3DPointCloudMetricSuite(
         components=[
             ErrorClusters(stages=["test"]),
@@ -546,7 +543,7 @@ def test_point_cloud_suite_region_filter_clips_boxes() -> None:
                     "target": torch.tensor([0]),
                     "scores": torch.full((1, 2), 0.5),
                     "ego2global": np.eye(4),
-                    "scene_token": "scene",
+                    "lanelet_map_path": STUB_MAP_PATH,
                     "gt_boxes": torch.tensor([_box(10.0), _box(100.0)]),
                     "gt_box_labels": torch.tensor([0, 0]),
                 }
@@ -555,6 +552,8 @@ def test_point_cloud_suite_region_filter_clips_boxes() -> None:
     )
     assert suite.state_for(None, region).frames[0].gt_boxes.shape[0] == 1
     assert suite.state_for(None).frames[0].gt_boxes.shape[0] == 2
+
+
 def test_load_lanelet_speeds_parses_km_h_to_mps(tmp_path) -> None:
     path = tmp_path / "map.osm"
     path.write_text(_MINI_OSM)

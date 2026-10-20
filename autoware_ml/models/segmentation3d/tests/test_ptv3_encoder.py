@@ -11,10 +11,12 @@ import torch
 import torch.nn as nn
 
 import autoware_ml.utils.point_cloud.structures as point_structures
+from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 from autoware_ml.utils.point_cloud.structures import pooled_sparse_shape
 from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTBatch
 from autoware_ml.dataclasses.geometry.voxels import VoxelsData
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.tests.batch_inputs_fixtures import (
     build_batch_inputs,
     build_point_cloud_batch,
@@ -43,10 +45,7 @@ from autoware_ml.models.segmentation3d.heads.ptv3 import (
     segmentation_predict_outputs,
     voxel_supervision,
 )
-from autoware_ml.models.segmentation3d.ptv3 import (
-    PTv3SegmentationModel,
-    _PTv3SegmentationExportModule,
-)
+from autoware_ml.models.segmentation3d.ptv3 import PTv3SegmentationModel
 from autoware_ml.models.segmentation3d.ptv3_base import (
     build_ptv3_encoder_dynamic_axes,
     validate_serialization_geometry,
@@ -116,7 +115,7 @@ def test_serialized_attention_uses_flash_module_when_enabled() -> None:
     assert attention.flash_attn is flash_module
 
 
-def test_build_export_module_disables_flash_attention_without_mutating_live_encoder() -> None:
+def test_prepare_for_export_disables_flash_attention_without_mutating_live_encoder() -> None:
     flash_module = SimpleNamespace(
         flash_attn_varlen_qkvpacked_func=lambda qkv,
         cu_seqlens,
@@ -163,22 +162,16 @@ def test_build_export_module_disables_flash_attention_without_mutating_live_enco
         "autoware_ml.models.segmentation3d.encoders.ptv3.replace_submconv3d_for_export",
         return_value=None,
     ):
-        export_module = _PTv3SegmentationExportModule(
-            encoder=encoder.prepare_for_export(("z", "z-trans")),
-            voxel_encoder=SweepSplitVoxelFeatureEncoder(),
-            seg3d_head=nn.Linear(4, 2),
-            sparse_shape=torch.tensor([64, 64, 64], dtype=torch.long),
-            serialized_depth=torch.tensor(6, dtype=torch.long),
-        )
+        export_encoder = encoder.prepare_for_export(("z", "z-trans"))
 
-    export_attention = export_module.encoder.attention
+    export_attention = export_encoder.attention
     assert attention.enable_flash is True
     assert attention.patch_size == 4
     assert export_attention.enable_flash is False
     assert export_attention.flash_attn is None
     assert export_attention.patch_size == 0
     assert encoder.shuffle_orders is True
-    assert export_module.encoder.shuffle_orders is False
+    assert export_encoder.shuffle_orders is False
 
 
 def test_prepare_for_export_handles_loaded_flash_attention_module() -> None:
@@ -319,6 +312,8 @@ def test_serialized_attention_export_padding_matches_batched_branch() -> None:
             }
         )
 
+    # `_get_padding_and_inverse` is the pure index kernel behind forward(). The padded index
+    # layout it is tested on here is not observable from the attention outputs.
     # Both a non-divisible count (padded last window) and a divisible one (no padding).
     for num_points in (10, 8):
         point = make_point(num_points)
@@ -927,7 +922,9 @@ def test_serialized_pooling_rounds_the_sparse_shape_up() -> None:
     floored value the top slice lies outside the declared grid, its voxels share a spconv
     hash key with ``(x, y + 1, 0)`` and the sub-manifold neighbour table becomes run-dependent.
     """
-    grid_coord = torch.tensor([[0, 0, 0], [66, 66, 66], [65, 64, 66], [1, 66, 0]], dtype=torch.int32)
+    grid_coord = torch.tensor(
+        [[0, 0, 0], [66, 66, 66], [65, 64, 66], [1, 66, 0]], dtype=torch.int32
+    )
     point = Point(
         {
             "coord": grid_coord.to(torch.float32),
@@ -954,6 +951,8 @@ def test_ptv3_frozen_encoder_supports_decoder_block_backward() -> None:
     without backward metadata; decoder blocks must not reuse them by key or
     their CPE backward fails with an empty-indices assert."""
     model = PTv3SegmentationModel(
+        log_dict_configs=LogDictConfigs(prog_bar=False),
+        data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
         encoder=build_ptv3_encoder(),
         voxel_encoder=SweepSplitVoxelFeatureEncoder(),
         seg3d_head=build_seg_head(),
@@ -963,7 +962,7 @@ def test_ptv3_frozen_encoder_supports_decoder_block_backward() -> None:
     ).cuda()
     batch = build_inputs(device=torch.device("cuda"))
 
-    logits = model(**model.forward_inputs(batch)).segmentation3d().logits
+    logits = model(batch).segmentation3d().logits
     logits.sum().backward()
     assert logits.shape == (batch.voxels_data.voxels.shape[0], 3)
 
@@ -971,6 +970,9 @@ def test_ptv3_frozen_encoder_supports_decoder_block_backward() -> None:
     assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in model.seg3d_head.parameters())
 
 
+# The tests below call `_get_padding_and_inverse` directly: it is the pure index kernel behind
+# SerializedAttention.forward(), and the fill layout it computes is not observable from the
+# attention outputs (a uniform key multiplicity cancels in the softmax).
 def _build_attention(patch_size: int) -> SerializedAttention:
     """Return a non-flash attention module with a fixed window size."""
     attention = SerializedAttention(

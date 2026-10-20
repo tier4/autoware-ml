@@ -1,0 +1,24 @@
+# Collision model and map regions shared by the evaluation filters of every task on a T4
+# database, so their consumers cannot drift apart. Ego is a platform property, it has no
+# detection box to take its body from. The recorded ego pose is base_link, the rear axle
+# centre, so the body is given the way the vehicle description of the recording platform
+# measures it from there, rounded to centimetres.
+vehicle:
+  _target_: autoware_ml.metrics.geometry.reachability.VehicleGeometry
+  wheel_base: 4.76
+  front_overhang: 0.95
+  rear_overhang: 1.53
+  wheel_tread: 1.75
+  left_overhang: 0.27
+  right_overhang: 0.27
+  max_steer_angle: 0.64
+# Off-map speed fallback for ego and wheeled agents in m/s.
+max_speed_mps: 16.7
+reachability:
+  _target_: autoware_ml.metrics.geometry.reachability.ReachabilityParams
+  horizon_s: 4.0
+  dt_s: 0.1
+  max_lateral_accel_mps2: 3.0
+# Lanelet2 tokens a vehicle may drive on: the road slice of the region filters and the
+# surface the collision area and TTC are clipped to.
+drivable_region: [road, road_shoulder, crosswalk, drivable_area, intersection_area, crosswalk_polygon]

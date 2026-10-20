@@ -1,0 +1,6 @@
+# @package metric_params.segmentation3d
+defaults:
+  - /metrics/t4dataset/collision_models@collision_models: default_collision_model
+  - filters: default_segmentation3d_filters
+  - components: default_segmentation3d_components
+  - _self_

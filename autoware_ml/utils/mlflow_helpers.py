@@ -23,10 +23,10 @@ import logging
 import re
 import socket
 import subprocess
-from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from collections.abc import Sequence
 from typing import Any
 from urllib.parse import unquote, urlparse
 
@@ -83,47 +83,75 @@ class MlflowRunContext:
         return self.artifact_dir / CONFIG_ARTIFACTS_DIRNAME
 
 
-def get_user_config_name() -> str:
-    """Return the user-facing config name without the ``tasks/`` prefix.
+def generate_experiment_name(experiment_group_name: str, experiment_name: str) -> str:
+    """Generate the MLflow experiment name of a config.
 
-    Returns:
-        Config name shown to users in run directories and MLflow tags.
-    """
-    return HydraConfig.get().job.config_name.removeprefix("tasks/")
-
-
-def generate_experiment_name(config_name: str) -> str:
-    """Generate an MLflow experiment name from the config path.
+    The experiment is ``<experiment_group_name>/<experiment_name>``, the two bookkeeping keys
+    every task config defines. It is the single key of a config's MLflow presence: the
+    experiment, its artifact root under the tracking store and the Hydra run directories all
+    derive from it, so two configs that share both keys share one experiment, and the CLI, the
+    entrypoints and deploy all land in the same place.
 
     Args:
-        config_name: User-facing config name.
+        experiment_group_name: ``experiment_group_name`` of the config, such as
+            ``centerpoint/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base``.
+        experiment_name: ``experiment_name`` of the config, the leaf naming the variant.
 
     Returns:
-        MLflow experiment name derived from the config path.
+        The ``<experiment_group_name>/<experiment_name>`` experiment name.
+
+    Raises:
+        ValueError: If either part is empty.
     """
-    return config_name.replace("/", "_")
+    group = experiment_group_name.strip("/")
+    name = experiment_name.strip("/")
+    if not group or not name:
+        raise ValueError(
+            "Both experiment_group_name and experiment_name must be non-empty, got "
+            f"{experiment_group_name!r} and {experiment_name!r}."
+        )
+    return f"{group}/{name}"
 
 
-def generate_run_name(
-    config_name: str,
-    stage: str,
-    started_at: datetime | None = None,
-) -> str:
-    """Generate a readable MLflow run name.
+def resolve_experiment_name(cfg: DictConfig) -> str:
+    """Resolve the MLflow experiment name from a composed config.
 
     Args:
-        config_name: User-facing config name.
+        cfg: Composed task config carrying ``experiment_group_name`` and ``experiment_name``.
+
+    Returns:
+        The experiment name built by :func:`generate_experiment_name`.
+
+    Raises:
+        ValueError: If the config does not define both keys, which every task config must.
+    """
+    missing = [
+        key
+        for key in ("experiment_group_name", "experiment_name")
+        if key not in cfg or OmegaConf.is_missing(cfg, key)
+    ]
+    if missing:
+        raise ValueError(
+            f"The config does not define {missing}, so its MLflow experiment cannot be named. "
+            "Every task config must set experiment_group_name and experiment_name."
+        )
+    return generate_experiment_name(str(cfg.experiment_group_name), str(cfg.experiment_name))
+
+
+def generate_run_name(stage: str, experiment_name: str, experiment_uid: str) -> str:
+    """Generate the MLflow run name of one stage run.
+
+    Args:
         stage: Pipeline stage such as ``train``, ``test``, or ``deploy``.
-        started_at: Timestamp used to derive a readable run label.
+        experiment_name: Experiment name from :func:`generate_experiment_name`.
+        experiment_uid: ``experiment_uid`` of the config, a timestamp by default.
 
     Returns:
-        Human-readable run name containing the stage, config leaf, and date.
+        ``<stage>_<experiment_name leaf>_<experiment_uid>``. The run lives inside its
+        experiment, so only the leaf of the experiment name is repeated.
     """
-    config_leaf = config_name.split("/")[-1]
-    timestamp = started_at or datetime.now().astimezone()
-    date_part = timestamp.strftime("%Y-%m-%d")
-    time_part = timestamp.strftime("%H-%M-%S")
-    return f"{stage}:{config_leaf}:{date_part}/{time_part}"
+    experiment_leaf = experiment_name.rsplit("/", 1)[-1]
+    return f"{stage}_{experiment_leaf}_{experiment_uid}"
 
 
 def build_run_tags(
@@ -359,38 +387,44 @@ def build_source_checkpoint_metadata(
 
 
 def resolve_deploy_lineage(
-    config_name: str,
     checkpoint_paths: Sequence[Path],
-) -> tuple[str, str | None, list[dict[str, str | None]]]:
-    """Resolve deploy experiment ownership and source checkpoint lineage."""
+) -> tuple[str | None, list[dict[str, str | None]]]:
+    """Resolve the source checkpoint lineage of a deploy run.
+
+    The deploy run belongs to the experiment of its own config, like every other stage. This
+    only decides which source run it nests under.
+
+    Args:
+        checkpoint_paths: Checkpoints the deploy exports from.
+
+    Returns:
+        The parent run id, which is the source run when exactly one checkpoint carries run
+        metadata and ``None`` otherwise, and the lineage metadata of every checkpoint.
+    """
     source_checkpoints = build_source_checkpoint_metadata(checkpoint_paths)
     source_run_ids = [
         source["run_id"] for source in source_checkpoints if source["run_id"] is not None
     ]
     parent_run_id = source_run_ids[0] if len(source_run_ids) == 1 else None
-    return generate_experiment_name(config_name), parent_run_id, source_checkpoints
+    return parent_run_id, source_checkpoints
 
 
-def resolve_lineage_context(
-    config_name: str,
-    checkpoint_path: Path | None,
-) -> tuple[str, str | None]:
-    """Resolve experiment lineage for follow-up stages.
+def resolve_parent_run_id(checkpoint_path: Path | None) -> str | None:
+    """Resolve the run a follow-up stage nests under.
 
     Args:
-        config_name: User-facing config name for the current command.
         checkpoint_path: Checkpoint used by the current stage, if any.
 
     Returns:
-        Tuple containing the experiment name and optional parent run ID.
+        The run id recorded next to the checkpoint, or ``None`` without a checkpoint or
+        without run metadata.
     """
     if checkpoint_path is None:
-        return generate_experiment_name(config_name), None
-
+        return None
     metadata = load_run_metadata(checkpoint_path)
     if metadata is None:
-        return generate_experiment_name(config_name), None
-    return generate_experiment_name(config_name), metadata.get("run_id")
+        return None
+    return metadata.get("run_id")
 
 
 def resolve_tracking_uri(tracking_uri: str) -> str:
@@ -418,29 +452,56 @@ def resolve_tracking_store_dir(tracking_uri: str) -> Path:
     return db_path.parent.resolve()
 
 
-def generate_artifact_location(config_name: str, tracking_uri: str) -> str:
-    """Return the semantic experiment artifact root URI for one config."""
-    artifact_root = resolve_tracking_store_dir(tracking_uri) / config_name
+def generate_artifact_location(experiment_name: str, tracking_uri: str) -> str:
+    """Return the artifact root URI of an experiment.
+
+    Args:
+        experiment_name: Experiment name from :func:`generate_experiment_name`.
+        tracking_uri: SQLite tracking URI whose directory holds the artifacts.
+
+    Returns:
+        ``<store>/<experiment_name>`` as a file URI. The root is keyed on the experiment name,
+        the same key as the experiment itself, so an experiment never meets a second root.
+    """
+    artifact_root = resolve_tracking_store_dir(tracking_uri) / experiment_name
     return artifact_root.resolve().as_uri()
 
 
 def generate_hydra_run_dir(
-    config_name: str,
+    experiment_name: str,
     tracking_uri: str | None = None,
     run_id: str | None = None,
     started_at: datetime | None = None,
 ) -> Path:
-    """Return the Hydra output directory for one command invocation."""
+    """Return the Hydra output directory for one command invocation.
+
+    Args:
+        experiment_name: Experiment name from :func:`generate_experiment_name`.
+        tracking_uri: SQLite tracking URI whose directory holds the artifacts, or ``None`` to
+            use ``mlruns/`` under the repository.
+        run_id: MLflow run owning the directory, which then lives in the run's artifacts.
+        started_at: Timestamp of a run without MLflow, which gets a dated scratch directory.
+
+    Returns:
+        ``<store>/<experiment_name>/<run_id>/artifacts/hydra`` with a run id, otherwise
+        ``<store>/<experiment_name>/artifacts/_hydra/<date>/<time>``.
+    """
     if tracking_uri is not None:
         root_dir = resolve_tracking_store_dir(tracking_uri)
     else:
         root_dir = REPO_ROOT / "mlruns"
-    config_root = (root_dir / config_name).resolve()
+    experiment_root = (root_dir / experiment_name).resolve()
     if run_id is not None:
-        return config_root / run_id / "hydra"
+        return experiment_root / run_id / "artifacts" / "hydra"
 
     timestamp = started_at or datetime.now().astimezone()
-    return config_root / "_hydra" / timestamp.strftime("%Y-%m-%d") / timestamp.strftime("%H-%M-%S")
+    return (
+        experiment_root
+        / "artifacts"
+        / "_hydra"
+        / timestamp.strftime("%Y-%m-%d")
+        / timestamp.strftime("%H-%M-%S")
+    )
 
 
 def artifact_uri_to_path(artifact_uri: str) -> Path:
@@ -489,15 +550,33 @@ def prepare_run_context(
     config_name: str,
     hydra_dir: Path | None,
     stage: str,
+    experiment_name: str,
+    run_name: str,
     parent_run_id: str | None = None,
-    experiment_name: str | None = None,
     extra_tags: dict[str, Any] | None = None,
     started_at: datetime | None = None,
 ) -> MlflowRunContext:
-    """Create an MLflow run and resolve its local artifact directory."""
+    """Create an MLflow run and resolve its local artifact directory.
+
+    Args:
+        tracking_uri: MLflow tracking URI.
+        config_name: User-facing config name, recorded in the run tags.
+        hydra_dir: Hydra output directory of the run, or ``None`` to place it in the run's
+            artifacts.
+        stage: Pipeline stage such as ``train``, ``test``, or ``deploy``.
+        experiment_name: Experiment name from :func:`generate_experiment_name`. It keys the
+            experiment, its artifact root and the Hydra directory alike.
+        run_name: Run name from :func:`generate_run_name`.
+        parent_run_id: Run this one nests under, if any.
+        extra_tags: Additional tags merged into the defaults.
+        started_at: Timestamp of the dated scratch directory used before the run exists.
+
+    Returns:
+        The context of the created run.
+    """
     resolved_tracking_uri = resolve_tracking_uri(tracking_uri)
-    resolved_experiment_name = experiment_name or generate_experiment_name(config_name)
-    artifact_location = generate_artifact_location(config_name, resolved_tracking_uri)
+    resolved_experiment_name = experiment_name
+    artifact_location = generate_artifact_location(experiment_name, resolved_tracking_uri)
     client = MlflowClient(tracking_uri=resolved_tracking_uri)
     experiment_id = ensure_experiment(
         client,
@@ -505,9 +584,8 @@ def prepare_run_context(
         artifact_location,
     )
 
-    run_name = generate_run_name(config_name, stage, started_at)
     provisional_hydra_dir = hydra_dir or generate_hydra_run_dir(
-        config_name,
+        experiment_name,
         resolved_tracking_uri,
         started_at=started_at,
     )
@@ -525,7 +603,7 @@ def prepare_run_context(
     artifact_dir = artifact_uri_to_path(artifact_uri)
     artifact_dir.mkdir(parents=True, exist_ok=True)
     resolved_hydra_dir = hydra_dir or generate_hydra_run_dir(
-        config_name,
+        experiment_name,
         resolved_tracking_uri,
         run_id=run.info.run_id,
     )

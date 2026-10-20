@@ -172,6 +172,8 @@ def test_point_suite_grouped_confidence_is_the_predicted_groups_mass() -> None:
         }
     )
     trained = suite.state_for(None)
+    # The grouped frame view is only reduced to scalars by compute(), so the per-point grouped
+    # confidence is read from the state builder directly.
     grouped = suite._grouped_state_for(None)
     assert trained.frames[0].confidence[0] == pytest.approx(0.4)
     assert grouped.frames[0].pred[0] == 0  # grouped_vehicle

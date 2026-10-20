@@ -579,6 +579,11 @@ def diff_iou_rotated_2d(
         intersection, _ = oriented_box_intersection_2d(corners1, corners2)  # (B, N)
         area1 = box1[:, :, 2] * box1[:, :, 3]
         area2 = box2[:, :, 2] * box2[:, :, 3]
+        # The intersection of two boxes fits inside the smaller one. The polygon is assembled
+        # from float-tolerance classified candidates, so bound its area here: an intersection
+        # above both areas would shrink the clamped union to EPSILON and send the IoU into the
+        # billions, which the IoU loss then rewards.
+        intersection = torch.minimum(intersection, torch.minimum(area1, area2))
         # A zero-size box with no overlap has a zero union; the clamp turns 0 / 0 into an IoU of 0
         # with a finite gradient instead of NaN. Callers must still provide non-negative sizes.
         union = (area1 + area2 - intersection).clamp(min=EPSILON)
@@ -618,6 +623,10 @@ def diff_iou_rotated_3d(
             torch.min(z1 + height1 * 0.5, z2 + height2 * 0.5)
             - torch.max(z1 - height1 * 0.5, z2 - height2 * 0.5)
         ).clamp_(min=0.0)
+        # Same bound as the 2D IoU: the BEV intersection fits inside the smaller footprint.
+        bev_area1 = box3d1[..., Box3DFieldIndex.LENGTH] * box3d1[..., Box3DFieldIndex.WIDTH]
+        bev_area2 = box3d2[..., Box3DFieldIndex.LENGTH] * box3d2[..., Box3DFieldIndex.WIDTH]
+        intersection = torch.minimum(intersection, torch.minimum(bev_area1, bev_area2))
         intersection_3d = intersection * z_overlap
         volume1 = box3d1[..., Box3DFieldIndex.LENGTH] * box3d1[..., Box3DFieldIndex.WIDTH] * height1
         volume2 = box3d2[..., Box3DFieldIndex.LENGTH] * box3d2[..., Box3DFieldIndex.WIDTH] * height2

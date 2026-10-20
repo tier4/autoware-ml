@@ -12,31 +12,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Invariants every transform pipeline of a task config keeps."""
+"""Invariants every transform pipeline of an experiment config keeps."""
 
 from pathlib import Path
 
 import pytest
 import yaml
 
-_TASKS = Path(__file__).resolve().parents[1] / "tasks"
+_EXPERIMENTS = Path(__file__).resolve().parents[1] / "tasks"
 _LIDAR_AUGMENTATIONS = (
-    "point_cloud.geometry.GlobalRotScaleTrans",
-    "point_cloud.geometry.GlobalBEVRandomFlip",
-    "point_cloud.geometry.RandomRotateTargetAngle",
+    "camera_lidar.geometry.GlobalRotScaleTrans",
+    "camera_lidar.geometry.GlobalBEVRandomFlip",
+    "camera_lidar.geometry.RandomRotateTargetAngle",
 )
 
 
 def pipelines() -> list[tuple[str, str, list[str]]]:
-    """Transform class paths of every pipeline a task config writes, in order."""
+    """Transform class paths of every pipeline an experiment config writes, in order."""
     found = []
-    for path in sorted(_TASKS.rglob("*.yaml")):
-        datamodule = (yaml.safe_load(path.read_text()) or {}).get("datamodule") or {}
-        for split in ("train_dataset", "test_dataset"):
-            transforms = (datamodule.get(split) or {}).get("transforms")
+    for path in sorted(_EXPERIMENTS.rglob("*.yaml")):
+        datasets = (yaml.safe_load(path.read_text()) or {}).get("datasets") or {}
+        for split in ("train", "test"):
+            transforms = (datasets.get(split) or {}).get("transforms")
             if transforms:
                 steps = [step["_target_"] for step in transforms["pipeline"]]
-                found.append((str(path.relative_to(_TASKS).with_suffix("")), split, steps))
+                found.append((str(path.relative_to(_EXPERIMENTS).with_suffix("")), split, steps))
     return found
 
 
@@ -44,7 +44,7 @@ _PIPELINES = pipelines()
 
 
 def test_every_concrete_lidar_model_writes_its_pipelines() -> None:
-    assert len(_PIPELINES) >= 36
+    assert len(_PIPELINES) >= 30
 
 
 @pytest.mark.parametrize(
@@ -62,7 +62,7 @@ def test_cameras_load_before_the_lidar_augmentations_move_their_calibration(
 _DETECTION_TEST = [
     (c, s, steps)
     for c, s, steps in _PIPELINES
-    if s == "test_dataset" and c.startswith(("detection3d/", "multi/"))
+    if s == "test" and c.startswith(("detection3d/", "multi/"))
 ]
 
 

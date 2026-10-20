@@ -1,0 +1,69 @@
+# @package _global_
+# Teacher stage 3: joint training on pseudo labelled J6 gen2
+defaults:
+  - base_voxel006_122m
+  - /datamodule/t4dataset/datasets/segdet3d@datasets.test_det3d_only: default_segdet3d_test_dataset
+  - /datamodule/t4dataset/datasets/segdet3d@datasets.seg3d_gt_train: default_segdet3d_train_dataset
+  - /datamodule/t4dataset/datasets/segdet3d@datasets.seg3d_gt_test: default_segdet3d_test_dataset
+  - /database@database: t4dataset/t4dataset_j6gen2_pseudo
+  - /database@seg3d_gt_database: t4dataset/t4dataset_j6gen2_semaseg
+  - override /database/t4dataset/taxonomy@database.taxonomy: default_fine
+  - override /database/t4dataset/box3d_pipelines@database.box3d_pipelines: trailer_class_box3d_pipelines
+  - override /database/t4dataset/taxonomy@seg3d_gt_database.taxonomy: default_fine
+  - override /database/t4dataset/box3d_pipelines@seg3d_gt_database.box3d_pipelines: trailer_class_box3d_pipelines
+  - _self_
+
+batch_size: 1
+num_workers: 8
+experiment_group_name: ptv3_segdet/${database.version}/j6gen2_pseudo
+experiment_name: voxel006_m3_b1_40e_t4dataset_122m_j6gen2_pseudo
+
+# Dataset of every extra source and split kind: a copy of the split dataset config reading
+# that source's database, with the supervision of that corpus
+datasets:
+  test_det3d_only:
+    seg3d_supervised: false
+    transforms: ${datasets.test.transforms}
+  seg3d_gt_train:
+    database_root_path: ${seg3d_gt_database.root_path}
+    lidar_intensity_scale: ${seg3d_gt_database.lidar_intensity_scale}
+    det3d_supervised: false
+    transforms: ${datasets.train.transforms}
+  seg3d_gt_test:
+    database_root_path: ${seg3d_gt_database.root_path}
+    lidar_intensity_scale: ${seg3d_gt_database.lidar_intensity_scale}
+    det3d_supervised: false
+    transforms: ${datasets.test.transforms}
+
+datamodule:
+  sources:
+    # Pseudo labelled J6 gen2 corpus, trained on both tasks, its boxes scored
+    main:
+      validation_dataset: ${datasets.test_det3d_only}
+      test_dataset: ${datasets.test_det3d_only}
+      predict_dataset: ${datasets.test_det3d_only}
+    # Semantic ground truth, its masks alone train and score
+    seg3d_gt:
+      _target_: autoware_ml.datamodule.sources.DatasetSource
+      database: ${seg3d_gt_database}
+      train_dataset: ${datasets.seg3d_gt_train}
+      validation_dataset: ${datasets.seg3d_gt_test}
+      test_dataset: ${datasets.seg3d_gt_test}
+      predict_dataset: ${datasets.seg3d_gt_test}
+      repeat: 6
+
+model:
+  scheduler:
+    warmup_epochs: 4
+    decay_epochs: 36
+    max_lr_factor: 5.0
+
+trainer:
+  max_epochs: 40
+
+callbacks:
+  dynamic_validation:
+    # Validate every 5 epochs, then every epoch over the last 10 of the 40-epoch schedule.
+    epoch_intervals: [[0, 5], [30, 1]]
+  early_stopping:
+    patience: 40

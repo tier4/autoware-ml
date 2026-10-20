@@ -597,6 +597,10 @@ class BaseBBoxes3D(ABC):
         """
         Create a BaseBBoxes3D instance from a NumPy array.
 
+        The arrays are copied: the boxes are moved in place by the augmentations, and a caller
+        such as the detection task hands over a view into the record table, which must keep
+        the boxes as stored.
+
         Args:
             bbox_params (npt.NDArray[np.float32], (num_bboxes, len(Box3DFieldIndex))): A NumPy array
                 representation of the 3D bounding boxes.
@@ -609,9 +613,9 @@ class BaseBBoxes3D(ABC):
             bbox_attributes (Sequence[Sequence[str]] | None): The attributes of every 3D bounding box.
                 Defaults to None when the attributes are not available.
         """
-        bbox_params_tensor = torch.from_numpy(bbox_params).float()
-        bbox_labels_tensor = torch.from_numpy(bbox_labels).int()
-        bbox_num_lidar_points_tensor = torch.from_numpy(bbox_num_lidar_points).int()
+        bbox_params_tensor = torch.tensor(bbox_params, dtype=torch.float32)
+        bbox_labels_tensor = torch.tensor(bbox_labels, dtype=torch.int32)
+        bbox_num_lidar_points_tensor = torch.tensor(bbox_num_lidar_points, dtype=torch.int32)
         return cls(
             bbox_params=bbox_params_tensor,
             bbox_labels=bbox_labels_tensor,
