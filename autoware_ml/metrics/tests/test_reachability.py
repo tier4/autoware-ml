@@ -193,7 +193,7 @@ def test_low_speed_region_stays_valid_past_pi_sweep() -> None:
     [(13.9, CAR, 60), (10.0, BUS, 24), (3.0, BUS, 24)],
     ids=["car", "bus", "bus-at-the-radius-floor"],
 )
-def test_ego_reachability_matches_bruteforce_stepping(
+def test_ego_reachability_matches_brute_force_stepping(
     speed: float, body: dict, objects: int
 ) -> None:
     # The prescreen bounds are supersets of the true sets, so the optimized

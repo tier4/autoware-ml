@@ -56,7 +56,7 @@ class TestTrafficConeBarrierBboxStatus(unittest.TestCase):
         self.assertEqual(scenario.vehicle_type, "j6gen2")
 
     def test_false_marks_the_scenario_as_not_annotated(self) -> None:
-        """``false``, the value most split yamls carry, yields ``False`` (not ``bool("false")``)."""
+        """``false``, the value most split YAML files carry, yields ``False`` (not ``bool("false")``)."""
         scenario = _parse("scene_a/0/tokyo/j6gen2/false")
 
         self.assertIs(scenario.traffic_cone_barrier_bbox_status, False)

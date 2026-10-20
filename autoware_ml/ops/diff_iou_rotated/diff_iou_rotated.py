@@ -262,26 +262,26 @@ def box_intersection(
     x1, y1, x2, y2 = line1_ext.split([1, 1, 1, 1], dim=-1)
     x3, y3, x4, y4 = line2_ext.split([1, 1, 1, 1], dim=-1)
     # math: https://en.wikipedia.org/wiki/Line%E2%80%93line_intersection
-    numerator = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
-    # numerator is |d1| * |d2| * sin(angle between the edges), so scaling by the edge lengths
+    denominator = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+    # denominator is |d1| * |d2| * sin(angle between the edges), so scaling by the edge lengths
     # turns the tolerance into a bound on that sine. Exactly parallel edges give zero here.
     edge_lengths = torch.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2) * torch.sqrt(
         (x3 - x4) ** 2 + (y3 - y4) ** 2
     )
-    parallel = numerator.abs() <= GEOMETRY_TOLERANCE * edge_lengths
-    denumerator_t = (x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)
-    t = denumerator_t / numerator
+    parallel = denominator.abs() <= GEOMETRY_TOLERANCE * edge_lengths
+    numerator_t = (x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)
+    t = numerator_t / denominator
     t[parallel] = -1.0
     # intersection strictly inside line segment 1, away from its endpoints
     mask_t = (t > GEOMETRY_TOLERANCE) & (t < 1 - GEOMETRY_TOLERANCE)
-    denumerator_u = (x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)
-    u = -denumerator_u / numerator
+    numerator_u = (x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)
+    u = -numerator_u / denominator
     u[parallel] = -1.0
     # intersection strictly inside line segment 2, away from its endpoints
     mask_u = (u > GEOMETRY_TOLERANCE) & (u < 1 - GEOMETRY_TOLERANCE)
     mask = mask_t & mask_u
     # overwrite with EPSILON. otherwise numerically unstable
-    t = denumerator_t / (numerator + EPSILON)
+    t = numerator_t / (denominator + EPSILON)
     intersections = torch.stack([x1 + t * (x2 - x1), y1 + t * (y2 - y1)], dim=-1)
     intersections = intersections * mask.float().unsqueeze(-1)
     return intersections, mask

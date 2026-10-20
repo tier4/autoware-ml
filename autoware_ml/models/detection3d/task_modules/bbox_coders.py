@@ -217,7 +217,7 @@ class TransFusionBBoxCoder:
                 f"(x_min, y_min, z_min, x_max, y_max, z_max), got {len(self.post_center_range)}."
             )
 
-        # (6,) -> (1, 1, 6) so the mins and maxs broadcast over batch and proposals.
+        # (6,) -> (1, 1, 6) so the minimums and maximums broadcast over batch and proposals.
         center_range = torch.tensor(
             self.post_center_range,
             dtype=bbox_centers.dtype,
