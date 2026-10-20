@@ -16,7 +16,9 @@ from autoware_ml.models.detection3d.encoders.sparse import SparseConv3d as Nativ
 from autoware_ml.models.detection3d.encoders.sparse import SubMConv3d as NativeSubMConv3d
 from autoware_ml.models.detection3d.encoders.voxel import HardSimpleVoxelSinCosEncoder
 from autoware_ml.models.detection3d.heads.transfusion import (
+    ConstantPositionalEncoding,
     ExportableMultiheadAttention,
+    LearnedPositionalEncoding,
     TransFusionHead,
 )
 from autoware_ml.models.detection3d.necks.second_fpn import SECONDFPN
@@ -247,6 +249,46 @@ def test_transfusion_build_export_spec_prepares_modules_without_mutating_model()
         isinstance(module, (NativeSubMConv3d, NativeSparseConv3d))
         for module in spec.module.pts_middle_encoder.modules()
     )
+
+
+def test_transfusion_export_freezes_key_positional_encoding(tmp_path: Path) -> None:
+    head = _build_head().eval()
+    runtime = head.prepare_for_export().decoder[0].key_pos_encoding
+    assert isinstance(runtime, LearnedPositionalEncoding)
+    exported = head.prepare_for_export(bev_shape=(8, 8))
+    encoding = exported.decoder[0].key_pos_encoding
+    assert isinstance(encoding, ConstantPositionalEncoding)
+    assert encoding.embedding.shape == (1, 64, 16)
+    assert not encoding.embedding.requires_grad
+    assert not list(encoding.parameters())
+
+    torch.manual_seed(0)
+    bev = torch.randn(1, 32, 8, 8)
+    with torch.no_grad():
+        reference = head(bev)
+        frozen = exported(bev)
+    assert torch.equal(reference.dense_heatmap, frozen.dense_heatmap)
+    assert torch.allclose(
+        reference.separate_head_outputs.center,
+        frozen.separate_head_outputs.center,
+        atol=1e-6,
+    )
+    with pytest.raises(ValueError, match="frozen for 64 positions"):
+        exported(torch.randn(1, 32, 4, 4))
+
+    torch.onnx.export(
+        encoding,
+        (torch.zeros(1, 64, 2),),
+        tmp_path / "key_pos_encoding.onnx",
+        input_names=["key_pos"],
+        output_names=["embedding"],
+        opset_version=17,
+        dynamo=False,
+    )
+    model = onnx.load(tmp_path / "key_pos_encoding.onnx")
+    folded_ops = {"Conv", "BatchNormalization", "Relu"}
+    assert not any(node.op_type in folded_ops for node in model.graph.node)
+    assert any(init.dims == [1, 64, 16] for init in model.graph.initializer)
 
 
 def test_transfusion_bf16_export_emits_fusion_pattern(tmp_path: Path) -> None:

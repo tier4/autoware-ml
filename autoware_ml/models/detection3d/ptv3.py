@@ -582,7 +582,9 @@ class PTv3DetectionModel(PTv3BaseModel):
             encoder=self._prepare_encoder_export(),
             voxel_encoder=self.voxel_encoder,
             bev_neck=deepcopy(self.bev_neck).eval(),
-            bbox_head=self.bbox_head.prepare_for_export(),
+            bbox_head=self.bbox_head.prepare_for_export(
+                bev_shape=self.bev_neck.bev_projector.output_shape
+            ),
             sparse_shape=inputs.sparse_shape,
             serialized_depth=inputs.serialization_depth,
             output_names=self.export_output_names,
@@ -612,7 +614,9 @@ class PTv3DetectionModel(PTv3BaseModel):
             "ptv3_det3d_head": build_det_head_export_spec(
                 context,
                 self.bev_neck,
-                self.bbox_head.prepare_for_export(),
+                self.bbox_head.prepare_for_export(
+                    bev_shape=self.bev_neck.bev_projector.output_shape
+                ),
                 self.export_output_names,
             ),
         }
