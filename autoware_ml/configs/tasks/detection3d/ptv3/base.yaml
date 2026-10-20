@@ -80,7 +80,7 @@ deploy:
     enabled: false
 
 model:
-  _target_: autoware_ml.models.detection3d.ptv3.PTv3DetectionModel
+  _target_: autoware_ml.models.detection3d.ptv3.PTv3Detection3DModel
   _convert_: all
   metrics: ${metrics}
   log_dict_configs:

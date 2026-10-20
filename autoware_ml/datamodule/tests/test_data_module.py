@@ -26,7 +26,7 @@ import polars as pl
 
 from autoware_ml.databases.base_database import BaseDatabase
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
-from autoware_ml.databases.taxonomy import DatabaseTaxonomy, DetectionTaxonomy
+from autoware_ml.databases.taxonomy import DatabaseTaxonomy, Detection3DTaxonomy
 from autoware_ml.datamodule.data_module import DataLoaderConfig
 from autoware_ml.datamodule.data_module import DataModule
 from autoware_ml.datamodule.samplers import (
@@ -38,7 +38,7 @@ from autoware_ml.datamodule.t4dataset.dataset import T4Dataset
 from autoware_ml.datamodule.common.detection3d import Detection3DTask
 from autoware_ml.datamodule.t4dataset.segmentation3d import T4Segmentation3DTask
 from autoware_ml.datamodule.tests.corpus import (
-    SEGMENTATION_TAXONOMY,
+    SEGMENTATION3D_TAXONOMY,
     VOCABULARY,
     build_transforms,
     write_corpus,
@@ -70,7 +70,7 @@ def build_taxonomy(class_name: str = "car") -> DatabaseTaxonomy:
     Returns:
       DatabaseTaxonomy: A fresh taxonomy object on every call.
     """
-    detection = DetectionTaxonomy(
+    detection = Detection3DTaxonomy(
         VOCABULARY,
         (class_name,),
         {"car": class_name},
@@ -80,7 +80,7 @@ def build_taxonomy(class_name: str = "car") -> DatabaseTaxonomy:
         collision_kinds={class_name: "wheeled"},
         living_speeds={},
     )
-    return DatabaseTaxonomy(detection3d=detection, segmentation3d=SEGMENTATION_TAXONOMY)
+    return DatabaseTaxonomy(detection3d=detection, segmentation3d=SEGMENTATION3D_TAXONOMY)
 
 
 class FakeDatabase(BaseDatabase):
@@ -200,7 +200,7 @@ def build_dataset(database: BaseDatabase, det3d: bool = True, seg3d: bool = True
         transforms=build_transforms(),
         dataset_tasks={
             "detection3d": Detection3DTask,
-            "segmentation3d": partial(T4Segmentation3DTask, taxonomy=SEGMENTATION_TAXONOMY),
+            "segmentation3d": partial(T4Segmentation3DTask, taxonomy=SEGMENTATION3D_TAXONOMY),
         },
         lidar_intensity_scale=database.lidar_intensity_scale,
         det3d_supervised=det3d,
@@ -648,7 +648,7 @@ class TestSupervisionToggles(MultiSourceTestCase):
         self.assertGreater(len(sample.detection3d_gt_bboxes_3d), 0)
         self.assertTrue(bool((sample.segmentation3d_gt_sample.gt_semantic_mask >= 0).any()))
 
-    def test_an_unsupervised_detection_source_carries_an_empty_box_set(self) -> None:
+    def test_an_unsupervised_detection3d_source_carries_an_empty_box_set(self) -> None:
         """
         Input: a source whose boxes do not supervise the run.
         Expected: the field stays so the sample still collates with the supervised corpora,
@@ -662,7 +662,7 @@ class TestSupervisionToggles(MultiSourceTestCase):
         self.assertEqual(len(sample.detection3d_gt_bboxes_3d), 0)
         self.assertTrue(bool((sample.segmentation3d_gt_sample.gt_semantic_mask >= 0).any()))
 
-    def test_an_unsupervised_segmentation_source_ignores_every_point(self) -> None:
+    def test_an_unsupervised_segmentation3d_source_ignores_every_point(self) -> None:
         """
         Input: a source whose masks do not supervise the run, as a pseudo labelled corpus
         scored on its boxes alone.
@@ -678,7 +678,7 @@ class TestSupervisionToggles(MultiSourceTestCase):
         self.assertTrue(bool((labels == sample.segmentation3d_gt_sample.ignore_index).all()))
         self.assertGreater(len(sample.detection3d_gt_bboxes_3d), 0)
 
-    def test_an_unsupervised_segmentation_source_needs_no_mask_on_disk(self) -> None:
+    def test_an_unsupervised_segmentation3d_source_needs_no_mask_on_disk(self) -> None:
         """
         Input: a corpus whose records name no semantic mask, declared without segmentation
         supervision, as a detection only pseudo corpus is.

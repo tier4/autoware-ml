@@ -51,7 +51,7 @@ SAMPLE_CONFIG_NAME = (
 )
 SAMPLE_CONFIG_PATH = f"tasks/{SAMPLE_CONFIG_NAME}"
 SAMPLE_SESSION_NAME = "centerpoint-train"
-SAMPLE_EXPERIMENT_GROUP_NAME = "ptv3_segdet/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base"
+SAMPLE_EXPERIMENT_GROUP_NAME = "ptv3_det3d_seg3d/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base"
 SAMPLE_EXPERIMENT_NAME = f"{SAMPLE_EXPERIMENT_GROUP_NAME}/voxel012"
 SAMPLE_EXPERIMENT_UID = "2026.10.15.12.00.00"
 
@@ -223,7 +223,7 @@ class TestCliCommands:
         with patch("autoware_ml.cli.cli.run_lazy_script") as run_lazy_script_mock:
             result = self.runner.invoke(
                 app,
-                ["train", "--config-name", SAMPLE_CONFIG_NAME, "--weights", "seg.ckpt"],
+                ["train", "--config-name", SAMPLE_CONFIG_NAME, "--weights", "seg3d.ckpt"],
             )
 
         assert result.exit_code == 0
@@ -234,7 +234,7 @@ class TestCliCommands:
             config_name=SAMPLE_CONFIG_NAME,
             stage="train",
             extra_args=[],
-            hydra_overrides=["+weights=[seg.ckpt]"],
+            hydra_overrides=["+weights=[seg3d.ckpt]"],
             resume_checkpoint=None,
             new_run=False,
             config_prefix=cli.TASK_CONFIG_PREFIX,
@@ -249,14 +249,14 @@ class TestCliCommands:
                     "--config-name",
                     SAMPLE_CONFIG_NAME,
                     "--weights",
-                    "seg.ckpt",
+                    "seg3d.ckpt",
                     "--skip-mismatched-weights",
                 ],
             )
 
         assert result.exit_code == 0
         hydra_overrides = run_lazy_script_mock.call_args.kwargs["hydra_overrides"]
-        assert hydra_overrides == ["+weights=[seg.ckpt]", "+skip_mismatched_weights=true"]
+        assert hydra_overrides == ["+weights=[seg3d.ckpt]", "+skip_mismatched_weights=true"]
 
     def test_train_rejects_skip_mismatched_weights_without_weights(self) -> None:
         result = self.runner.invoke(
@@ -340,7 +340,7 @@ class TestCliCommands:
                 "--config-name",
                 SAMPLE_CONFIG_NAME,
                 "--weights",
-                "seg.ckpt",
+                "seg3d.ckpt",
                 "--resume-checkpoint",
                 "last.ckpt",
             ],
@@ -409,9 +409,9 @@ class TestCliCommands:
                     "--config-name",
                     SAMPLE_CONFIG_NAME,
                     "--weights",
-                    "seg.ckpt",
+                    "seg3d.ckpt",
                     "--weights",
-                    "det.ckpt",
+                    "det3d.ckpt",
                 ],
             )
 
@@ -423,8 +423,8 @@ class TestCliCommands:
             config_name=SAMPLE_CONFIG_NAME,
             stage="deploy",
             extra_args=[],
-            hydra_overrides=["+weights=[seg.ckpt,det.ckpt]"],
-            checkpoints=["seg.ckpt", "det.ckpt"],
+            hydra_overrides=["+weights=[seg3d.ckpt,det3d.ckpt]"],
+            checkpoints=["seg3d.ckpt", "det3d.ckpt"],
             config_prefix=cli.TASK_CONFIG_PREFIX,
         )
 
@@ -442,9 +442,9 @@ class TestCliCommands:
                     "--config-name",
                     SAMPLE_CONFIG_NAME,
                     "--weights",
-                    "seg.ckpt",
+                    "seg3d.ckpt",
                     "--weights",
-                    "det.ckpt",
+                    "det3d.ckpt",
                 ],
             )
 
@@ -457,8 +457,8 @@ class TestCliCommands:
             stage="test",
             extra_args=[],
             # Test forces a single device by default.
-            hydra_overrides=["+weights=[seg.ckpt,det.ckpt]", "++trainer.devices=1"],
-            checkpoint="det.ckpt",
+            hydra_overrides=["+weights=[seg3d.ckpt,det3d.ckpt]", "++trainer.devices=1"],
+            checkpoint="det3d.ckpt",
             config_prefix=cli.TASK_CONFIG_PREFIX,
         )
 
@@ -471,7 +471,7 @@ class TestCliCommands:
                     "--config-name",
                     SAMPLE_CONFIG_NAME,
                     "--weights",
-                    "seg.ckpt",
+                    "seg3d.ckpt",
                     "trainer.devices=4",
                 ],
             )
@@ -486,8 +486,8 @@ class TestCliCommands:
             extra_args=["trainer.devices=4"],
             # The forcing override is appended after extra args, so runtime applies it last
             # and a single device wins over the user's trainer.devices=4.
-            hydra_overrides=["+weights=[seg.ckpt]", "++trainer.devices=1"],
-            checkpoint="seg.ckpt",
+            hydra_overrides=["+weights=[seg3d.ckpt]", "++trainer.devices=1"],
+            checkpoint="seg3d.ckpt",
             config_prefix=cli.TASK_CONFIG_PREFIX,
         )
 
@@ -500,7 +500,7 @@ class TestCliCommands:
                     "--config-name",
                     SAMPLE_CONFIG_NAME,
                     "--weights",
-                    "seg.ckpt",
+                    "seg3d.ckpt",
                     "--use-config-devices",
                     "trainer.devices=4",
                 ],
@@ -515,8 +515,8 @@ class TestCliCommands:
             stage="test",
             extra_args=["trainer.devices=4"],
             # No forcing override: trainer.devices from config / extra args is honored.
-            hydra_overrides=["+weights=[seg.ckpt]"],
-            checkpoint="seg.ckpt",
+            hydra_overrides=["+weights=[seg3d.ckpt]"],
+            checkpoint="seg3d.ckpt",
             config_prefix=cli.TASK_CONFIG_PREFIX,
         )
 
@@ -658,10 +658,12 @@ class TestCliRuntime:
                 config_name,
                 "tasks",
                 "deploy",
-                checkpoints=["seg.ckpt", "det.ckpt"],
+                checkpoints=["seg3d.ckpt", "det3d.ckpt"],
             )
 
-        resolve_deploy_lineage_mock.assert_called_once_with([Path("seg.ckpt"), Path("det.ckpt")])
+        resolve_deploy_lineage_mock.assert_called_once_with(
+            [Path("seg3d.ckpt"), Path("det3d.ckpt")]
+        )
         prepare_run_context_mock.assert_called_once()
         assert prepare_run_context_mock.call_args.kwargs["experiment_name"] == (
             SAMPLE_EXPERIMENT_NAME

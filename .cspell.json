@@ -57,6 +57,7 @@
     }
   ],
   "words": [
+    "3DBEV",
     "absmax",
     "accum",
     "adamw",
@@ -259,7 +260,6 @@
     "SHOWUNTRACKEDFILES",
     "SHOWUPSTREAM",
     "searchpath",
-    "segdet",
     "seqlen",
     "seqlens",
     "setsid",

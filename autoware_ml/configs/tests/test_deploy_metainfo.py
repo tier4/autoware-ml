@@ -13,8 +13,8 @@ from autoware_ml.models.segmentation3d.ptv3_base import PTv3BaseModel
 from autoware_ml.utils.deploy import merge_module_onnx_cfg
 
 PTV3_CONFIGS = [
-    "tasks/multi/ptv3/t4dataset/voxel012_tiny_b8_100e_t4dataset_122m_j6gen2_segdet3d",
-    "tasks/multi/litept/t4dataset/voxel012_tiny_b8_100e_t4dataset_122m_j6gen2_segdet3d",
+    "tasks/multi/ptv3/t4dataset/voxel012_tiny_b8_100e_t4dataset_122m_j6gen2_det3d_seg3d",
+    "tasks/multi/litept/t4dataset/voxel012_tiny_b8_100e_t4dataset_122m_j6gen2_det3d_seg3d",
     "tasks/segmentation3d/ptv3/t4dataset/voxel012_tiny_b16_50e_t4dataset_122m_j6gen2_semaseg",
     "tasks/segmentation3d/litept/t4dataset/voxel012_tiny_b16_50e_t4dataset_122m_j6gen2_semaseg",
     "tasks/detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base",
@@ -22,7 +22,7 @@ PTV3_CONFIGS = [
     "tasks/segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m",
     "tasks/detection3d/ptv3/nuscenes/voxel005_base_b16_30e_nuscenes_51m",
 ]
-DET_CONFIGS = [name for name in PTV3_CONFIGS if "segmentation3d" not in name]
+DET3D_CONFIGS = [name for name in PTV3_CONFIGS if "segmentation3d" not in name]
 
 
 def _compose(config_name: str):
@@ -56,8 +56,8 @@ def test_metainfo_interpolations_resolve_for_every_module(config_name: str) -> N
             assert len(metainfo["class_names"]) > 0
 
 
-@pytest.mark.parametrize("config_name", DET_CONFIGS)
-def test_det_head_has_twist_follows_use_velocity(config_name: str) -> None:
+@pytest.mark.parametrize("config_name", DET3D_CONFIGS)
+def test_det3d_head_has_twist_follows_use_velocity(config_name: str) -> None:
     # The runtime learns from has_twist whether a velocity output exists, so it
     # is derived from the head configuration instead of being declared twice.
     cfg = _compose(config_name)
@@ -66,8 +66,8 @@ def test_det_head_has_twist_follows_use_velocity(config_name: str) -> None:
     assert module_cfg.metainfo.has_twist == cfg.model.bbox_head.use_velocity
 
 
-@pytest.mark.parametrize("config_name", DET_CONFIGS)
-def test_det_head_exports_fused_bf16_attention(config_name: str) -> None:
+@pytest.mark.parametrize("config_name", DET3D_CONFIGS)
+def test_det3d_head_exports_fused_bf16_attention(config_name: str) -> None:
     # The fused TransHead path needs the head flag and the fp16 module precision
     # together; export refuses a mismatch, so every shipped config must pair them.
     cfg = _compose(config_name)

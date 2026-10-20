@@ -24,12 +24,12 @@ import numpy as np
 
 from autoware_ml.metrics.base import EvalStage, Metric, number_token
 from autoware_ml.metrics.detection3d.criticality import greedy_match
-from autoware_ml.metrics.detection3d.matching import DetectionState
+from autoware_ml.metrics.detection3d.matching import Detection3DState
 from autoware_ml.metrics.detection3d.naming import label_metric_name
 from autoware_ml.metrics.detection3d.structures import DEFAULT_TP_THRESHOLD
 
 
-class CriticalFPFN(Metric[DetectionState]):
+class CriticalFPFN(Metric[Detection3DState]):
     """Per-frame false positives / negatives in the ego reachable set, per confidence."""
 
     needs_ttc = True
@@ -60,7 +60,7 @@ class CriticalFPFN(Metric[DetectionState]):
         # the suite does not have to propagate them.
         self.ttc_score_floor = min(self.confidences)
 
-    def evaluate(self, state: DetectionState, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: Detection3DState, stage: EvalStage) -> dict[str, float]:
         """Count critical FP / FN (finite TTC) at each confidence threshold.
 
         Args:

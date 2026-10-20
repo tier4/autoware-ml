@@ -34,7 +34,7 @@ _BLOCKS = (
     "tiny",
     "bev_neck",
     "encoder_",
-    "seg_head_",
+    "seg3d_head_",
     "voxel_encoder",
     "default_task",
 )

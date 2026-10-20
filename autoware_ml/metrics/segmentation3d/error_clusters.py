@@ -22,14 +22,14 @@ import numpy as np
 
 from autoware_ml.metrics.base import EvalStage, Metric
 from autoware_ml.metrics.segmentation3d.point_cloud import (
-    PointCloudSegState,
+    PointCloudSeg3DState,
     class_token,
     valid_point_mask,
 )
 from autoware_ml.metrics.segmentation3d.spatial import cluster_sizes
 
 
-class ErrorClusters(Metric[PointCloudSegState]):
+class ErrorClusters(Metric[PointCloudSeg3DState]):
     """Misclassified-point rate plus the count of error clusters.
 
     The linking radius is fixed, so the cluster count is range dependent: the same
@@ -63,7 +63,7 @@ class ErrorClusters(Metric[PointCloudSegState]):
         if self.min_cluster_points < 1:
             raise ValueError("min_cluster_points must be >= 1.")
 
-    def evaluate(self, state: PointCloudSegState, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: PointCloudSeg3DState, stage: EvalStage) -> dict[str, float]:
         """Aggregate the error rate and cluster counts, whole-scene and per class.
 
         Args:

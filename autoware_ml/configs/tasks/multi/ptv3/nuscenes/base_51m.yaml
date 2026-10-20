@@ -7,7 +7,7 @@ defaults:
   - /metrics/nuscenes/detection3d@detection3d_metrics: default_detection3d_metric_suites
   - /metrics/nuscenes/segmentation3d@segmentation3d_metrics: default_segmentation3d_metric_suites
   - /metrics/nuscenes/detection3d@metric_ranges: default_detection3d_50m_metric_ranges
-  - /datamodule@datamodule: nuscenes/default_segdet3d_datamodule
+  - /datamodule@datamodule: nuscenes/default_det3d_seg3d_datamodule
   - _self_
 
 point_cloud_range: [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]

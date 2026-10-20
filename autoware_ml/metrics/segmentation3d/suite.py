@@ -6,7 +6,7 @@ matrix per (filter, range) bucket in a single stacked ``(F+1, R+1, C, C)``
 configured evaluation filters (region / corridor / collision) and range slices 1..R the
 radial windows, so memory never grows with the dataset and torchmetrics sums the
 matrices across ranks exactly. Per-point filter membership is resolved at
-``update`` from each ``seg_frames`` entry (where the ego pose lives), which is
+``update`` from each ``seg3d_frames`` entry (where the ego pose lives), which is
 what lets a bounded matrix support the filter axis at all. It knows nothing about
 which metrics run: it hands each a ``ConfusionState``.
 """
@@ -27,7 +27,7 @@ class Segmentation3DConfusionMatrixMetricSuite(MetricSuite[ConfusionState]):
     """Confusion-matrix segmentation suite over (filter, range) buckets."""
 
     prefix = "seg3d"
-    _required_keys = ("seg_frames",)
+    _required_keys = ("seg3d_frames",)
 
     def __init__(
         self,
@@ -80,7 +80,7 @@ class Segmentation3DConfusionMatrixMetricSuite(MetricSuite[ConfusionState]):
         )
 
     def required_keys(self) -> tuple[str, ...]:
-        """``seg_frames`` plus any component-declared eval-output keys.
+        """``seg3d_frames`` plus any component-declared eval-output keys.
 
         Filter context keys (ego pose, scene token) live *inside* each frame
         entry, not at the eval-output top level, so they are validated per frame in
@@ -103,10 +103,10 @@ class Segmentation3DConfusionMatrixMetricSuite(MetricSuite[ConfusionState]):
         """Fold one batch of per-frame point predictions into the matrices.
 
         Args:
-            eval_out: Flat eval-output dict with the per-frame ``seg_frames``.
+            eval_out: Flat eval-output dict with the per-frame ``seg3d_frames``.
         """
         active_filter_keys = self._stage_filter_keys()
-        for frame in eval_out["seg_frames"]:
+        for frame in eval_out["seg3d_frames"]:
             predictions = frame["pred"].detach().reshape(-1)
             targets = frame["target"].detach().reshape(-1)
             coord = frame["coord"].detach().to(dtype=torch.float32)

@@ -1,5 +1,5 @@
 # @package model.seg3d_head
-_target_: autoware_ml.models.segmentation3d.heads.ptv3.PTv3SegDecoderHead
+_target_: autoware_ml.models.segmentation3d.heads.ptv3.PTv3Seg3DDecoderHead
 num_classes: ${class_count:${database.taxonomy.segmentation3d.class_names}}
 ignore_index: ${database.taxonomy.segmentation3d.ignore_index}
 order: ${model.encoder.order}

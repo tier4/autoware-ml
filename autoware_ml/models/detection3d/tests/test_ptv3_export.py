@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from autoware_ml.models.detection3d.tests.ptv3_detection_fixtures import (
+from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
     build_inputs,
     build_trans_model,
 )
@@ -31,7 +31,7 @@ EXPECTED_PTV3_INPUT_NAMES = [
     not IS_SPCONV_AVAILABLE or not torch.cuda.is_available(),
     reason="PTv3 sparse-convolution export tests require CUDA spconv",
 )
-def test_ptv3_transhead_build_export_spec_uses_named_detection_outputs() -> None:
+def test_ptv3_transhead_build_export_spec_uses_named_detection3d_outputs() -> None:
     device = torch.device("cuda")
     model = build_trans_model().to(device)
     batch = build_inputs(device=device)

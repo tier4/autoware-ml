@@ -20,7 +20,7 @@ import numpy as np
 
 from autoware_ml.metrics.base import EvalStage, Metric
 from autoware_ml.metrics.segmentation3d.point_cloud import (
-    PointCloudSegState,
+    PointCloudSeg3DState,
     valid_point_mask,
 )
 
@@ -48,7 +48,7 @@ def binned_auroc(positive_hist: np.ndarray, negative_hist: np.ndarray) -> float:
     return (wins + 0.5 * ties) / (num_positive * num_negative)
 
 
-class UncertaintyUsefulness(Metric[PointCloudSegState]):
+class UncertaintyUsefulness(Metric[PointCloudSeg3DState]):
     """AUROC of entropy as a misclassification detector, plus mean entropy split."""
 
     def __init__(
@@ -69,7 +69,7 @@ class UncertaintyUsefulness(Metric[PointCloudSegState]):
         if self.num_bins < 2:
             raise ValueError("num_bins must be >= 2.")
 
-    def evaluate(self, state: PointCloudSegState, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: PointCloudSeg3DState, stage: EvalStage) -> dict[str, float]:
         """Accumulate per-frame entropy histograms and score the AUROC.
 
         Args:

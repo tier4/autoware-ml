@@ -3,7 +3,7 @@
 defaults:
   - base_122m
   - /tasks/segmentation3d/ptv3/encoder_tiny
-  - /tasks/segmentation3d/ptv3/seg_head_tiny
+  - /tasks/segmentation3d/ptv3/seg3d_head_tiny
   - _self_
 
 grid_size: 0.12

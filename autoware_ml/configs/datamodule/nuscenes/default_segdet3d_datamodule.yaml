@@ -1,4 +1,0 @@
-defaults:
-  - default_datamodule@_here_
-  - nuscenes/datasets@_global_.datasets.train: default_segdet3d_train_dataset
-  - nuscenes/datasets@_global_.datasets.test: default_segdet3d_test_dataset

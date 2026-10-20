@@ -35,7 +35,7 @@ from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentat
 from autoware_ml.dataclasses.models.segmentation3d.predictions import Segmentation3DPredictions
 from autoware_ml.metrics.segmentation3d.eval_output import (
     concat_frame_ids,
-    segmentation_frames_eval_output,
+    segmentation3d_frames_eval_output,
 )
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
 from autoware_ml.utils.deploy import ExportSpec
@@ -252,8 +252,8 @@ class FRNet(ModuleBaseModel):
         Raises:
             ValueError: If the batch carries no labels.
         """
-        semantic_seg = _range_view_data(batch_inputs).semantic_labels
-        if semantic_seg is None:
+        semantic_seg3d = _range_view_data(batch_inputs).semantic_labels
+        if semantic_seg3d is None:
             raise ValueError("FRNet losses need the labels of the batch.")
         point_logits = outputs.segmentation3d().logits
         voxel_feats = outputs.segmentation3d().auxiliary_features
@@ -263,7 +263,7 @@ class FRNet(ModuleBaseModel):
         metrics: dict[str, torch.Tensor] = {"loss_decode_ce": decode_losses["loss_ce"]}
 
         for head_index, head in enumerate(self.auxiliary_head):
-            head_losses = head.loss(voxel_feats[head.feature_index], semantic_seg)
+            head_losses = head.loss(voxel_feats[head.feature_index], semantic_seg3d)
             for loss_name, loss_value in head_losses.items():
                 metrics[f"aux_{head_index}_{loss_name}"] = loss_value
                 total_loss = total_loss + loss_value
@@ -283,13 +283,13 @@ class FRNet(ModuleBaseModel):
             outputs: Raw forward outputs.
 
         Returns:
-            Flat dict with the per-frame ``seg_frames`` the suites read.
+            Flat dict with the per-frame ``seg3d_frames`` the suites read.
         """
         point_logits = outputs.segmentation3d().logits
         point_batch = _point_cloud_batch(batch)
         offset = point_batch.offsets()
         point_index = torch.arange(point_logits.shape[0], device=point_logits.device)
-        return segmentation_frames_eval_output(
+        return segmentation3d_frames_eval_output(
             coord=point_batch.points[:, :3],
             pred_labels=point_logits.argmax(dim=1),
             target_labels=_point_labels(batch),

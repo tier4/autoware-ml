@@ -358,7 +358,7 @@ def _train_checkpoint(tmp_path: Path, config_name: str, with_metadata: bool = Tr
             json.dumps(
                 {
                     "run_id": "train-run",
-                    "experiment_name": "ptv3_segdet/t4_v2/j6gen2/voxel012",
+                    "experiment_name": "ptv3_det3d_seg3d/t4_v2/j6gen2/voxel012",
                     "config_name": config_name,
                     "stage": "train",
                 }

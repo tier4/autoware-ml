@@ -36,7 +36,7 @@ from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DHeadOutputs
 from autoware_ml.metrics.base import MetricSuite
-from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
+from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
 from autoware_ml.models.detection3d.encoders.pillars.pillar_feature_net import PillarFeatureNet
 from autoware_ml.models.detection3d.encoders.pillars.point_pillar_scatter import PointPillarsScatter
@@ -95,7 +95,7 @@ class _CenterPointBackboneNeckHeadExportWrapper(nn.Module):
         return self.bbox_head(bev_features).export_tensors(self.output_names)
 
 
-class CenterPointDetectionModel(ModuleBaseModel):
+class CenterPointDetection3DModel(ModuleBaseModel):
     """Compose a CenterPoint detector from reusable lidar detection modules.
 
     The wrapper wires together pillar encoding, BEV feature extraction, and the
@@ -150,7 +150,7 @@ class CenterPointDetectionModel(ModuleBaseModel):
                 "ModelOutputs must contain detection3d_head_outputs for CenterPoint build_eval_output pass."
             )
 
-        return detection_eval_output(
+        return detection3d_eval_output(
             predictions=self.bbox_head.decode_outputs(outputs.detection3d_head_outputs),
             batch_inputs=batch,
         )

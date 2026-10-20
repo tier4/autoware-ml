@@ -1,10 +1,10 @@
 # @package _global_
 # Fine-tuning of the 100-epoch run from its checkpoint, lower learning rates.
 defaults:
-  - voxel012_tiny_b8_100e_t4dataset_122m_j6gen2_segdet3d
+  - voxel012_tiny_b8_100e_t4dataset_122m_j6gen2_det3d_seg3d
   - _self_
 
-experiment_name: voxel012_tiny_b8_40e_t4dataset_122m_j6gen2_segdet3d_finetune
+experiment_name: voxel012_tiny_b8_40e_t4dataset_122m_j6gen2_det3d_seg3d_finetune
 
 # Include weights for pre-training
 weights: ???

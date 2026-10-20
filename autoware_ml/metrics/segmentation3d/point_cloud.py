@@ -69,7 +69,7 @@ class FramePoints:
 
 
 @dataclass
-class PointCloudSegState:
+class PointCloudSeg3DState:
     """Synced per-frame point cache handed to each point-level metric.
 
     In a grouped suite the cached per-point labels and uncertainty scalars are
@@ -83,7 +83,7 @@ class PointCloudSegState:
     class_names: tuple[str, ...] | None
 
 
-class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSegState]):
+class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
     """Caches raw per-point segmentation data at test and exposes it per range.
 
     Point-level metrics (error clusters, neighbourhood-tolerant error, partial
@@ -91,7 +91,7 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSegState]):
     """
 
     prefix = "seg3d_pt"
-    _required_keys = ("seg_frames",)
+    _required_keys = ("seg3d_frames",)
 
     _FRAME_FIELDS = (
         "coord",
@@ -105,7 +105,7 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSegState]):
 
     def __init__(
         self,
-        components: list[Metric[PointCloudSegState]],
+        components: list[Metric[PointCloudSeg3DState]],
         num_classes: int,
         ignore_index: int = -1,
         class_names: tuple[str, ...] | None = None,
@@ -116,7 +116,7 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSegState]):
             MetricRange("0-121m", 0.0, 121.0),
         ),
         class_groups: dict[str, list[str]] | None = None,
-        grouped_components: list[Metric[PointCloudSegState]] | None = None,
+        grouped_components: list[Metric[PointCloudSeg3DState]] | None = None,
         **kwargs: Any,
     ) -> None:
         """Validate the taxonomy setup and register the point-cache states.
@@ -171,11 +171,11 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSegState]):
             self.add_state("region_masks", default=[], dist_reduce_fx=None)
             self.add_state("box_region_masks", default=[], dist_reduce_fx=None)
 
-    def _filterable_components(self) -> list[Metric[PointCloudSegState]]:
+    def _filterable_components(self) -> list[Metric[PointCloudSeg3DState]]:
         """Both views' components: the grouped ones read the same masks."""
         return [*self.components, *self._grouped_components]
 
-    def _active_grouped_components(self) -> list[Metric[PointCloudSegState]]:
+    def _active_grouped_components(self) -> list[Metric[PointCloudSeg3DState]]:
         return [
             component for component in self._grouped_components if self._stage in component.stages
         ]
@@ -205,7 +205,7 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSegState]):
         )
 
     def required_keys(self) -> tuple[str, ...]:
-        """``seg_frames`` plus any component-declared eval-output keys.
+        """``seg3d_frames`` plus any component-declared eval-output keys.
 
         Filter context keys (ego pose, scene token) live *inside* each frame
         entry, not at the eval-output top level, so they are validated per frame
@@ -265,16 +265,16 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSegState]):
         the CPU.
 
         Args:
-            eval_out: Flat eval-output dict with the per-frame ``seg_frames``.
+            eval_out: Flat eval-output dict with the per-frame ``seg3d_frames``.
         """
         self._require_single_process()
         active = self._stage_filter_keys()
         needs_boxes = self._needs_boxes()
-        for frame in eval_out["seg_frames"]:
+        for frame in eval_out["seg3d_frames"]:
             missing = [key for key in ("coord", "pred", "target", "scores") if key not in frame]
             if missing:
                 raise ValueError(
-                    f"seg_frames entries need {missing}, the model's build_eval_output "
+                    f"seg3d_frames entries need {missing}, the model's build_eval_output "
                     "must supply them."
                 )
             coord = frame["coord"].detach().to(dtype=torch.float32)
@@ -325,7 +325,7 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSegState]):
             labels = frame.get("gt_box_labels")
             if needs_boxes and (boxes is None or labels is None):
                 raise ValueError(
-                    "a configured component reads detection ground truth, seg_frames "
+                    "a configured component reads detection ground truth, seg3d_frames "
                     "entries must carry gt_boxes and gt_box_labels (empty tensors for "
                     "a frame without objects)."
                 )
@@ -387,7 +387,7 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSegState]):
 
     def state_for(
         self, metric_range: MetricRange | None, metric_filter: MetricFilter = IDENTITY
-    ) -> PointCloudSegState:
+    ) -> PointCloudSeg3DState:
         """Build the point-cache state, clipping points/boxes to range and region.
 
         Args:
@@ -397,7 +397,7 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSegState]):
         Returns:
             The point-cache state for the bucket.
         """
-        return PointCloudSegState(
+        return PointCloudSeg3DState(
             frames=self._build_frames(self.confidence, self.entropy, metric_range, metric_filter),
             num_classes=self.num_classes,
             ignore_index=self.ignore_index,
@@ -406,13 +406,13 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSegState]):
 
     def _grouped_state_for(
         self, metric_range: MetricRange | None, metric_filter: MetricFilter = IDENTITY
-    ) -> PointCloudSegState:
+    ) -> PointCloudSeg3DState:
         """The behaviour-group view of the same cache.
 
         Labels are folded through the group LUT after slicing, and the uncertainty
         scalars come from the group-marginalized softmax reduced at update.
         """
-        return PointCloudSegState(
+        return PointCloudSeg3DState(
             frames=self._build_frames(
                 self.grouped_confidence,
                 self.grouped_entropy,
@@ -495,7 +495,7 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSegState]):
         nothing, so the frame drops out of that slice instead of leaking into it.
 
         Args:
-            frame: One ``seg_frames`` entry, the source of the filter context.
+            frame: One ``seg3d_frames`` entry, the source of the filter context.
             coord_np: ``(N, 3+)`` point coordinates of the frame.
             boxes_np: ``(M, 7+)`` detection GT boxes of the frame.
             active: Cache keys of the filters this stage reads.

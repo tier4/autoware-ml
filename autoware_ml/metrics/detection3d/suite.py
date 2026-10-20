@@ -3,7 +3,7 @@
 ``Detection3DMetricSuite`` owns the per-frame prediction and ground-truth tensors
 as list states (so torchmetrics handles cross-GPU sync) and applies the GT
 filters at ``update`` time. It knows nothing about which metrics run: it builds
-a ``DetectionState`` (overall and per range/filter) and hands it to the injected
+a ``Detection3DState`` (overall and per range/filter) and hands it to the injected
 metrics. Region and collision filters need per-frame metadata (ego pose, scene token) in the
 eval output, so their keep-masks are precomputed per frame at update and nothing needs the map
 at compute time, DDP gathers only tensors.
@@ -27,7 +27,7 @@ from autoware_ml.metrics.base import (
 )
 from autoware_ml.metrics.class_groups import fold_labels, resolve_class_groups
 from autoware_ml.metrics.detection3d.matching import (
-    DetectionState,
+    Detection3DState,
     clip_to_range,
     gt_keep_mask,
     resolve_match_cost,
@@ -51,9 +51,9 @@ def _validate_name_tokens(names: tuple[str, ...] | None) -> None:
         )
 
 
-class Detection3DMetricSuite(MetricSuite[DetectionState]):
+class Detection3DMetricSuite(MetricSuite[Detection3DState]):
     """Center-distance 3D detection suite. Accumulates per-frame samples, applies
-    GT filters at update, and exposes a ``DetectionState`` (clipped per range) to
+    GT filters at update, and exposes a ``Detection3DState`` (clipped per range) to
     the injected metrics.
     """
 
@@ -62,7 +62,7 @@ class Detection3DMetricSuite(MetricSuite[DetectionState]):
 
     def __init__(
         self,
-        components: list[Metric[DetectionState]],
+        components: list[Metric[Detection3DState]],
         class_names: tuple[str, ...] | None = None,
         ranges: tuple[MetricRange, ...] = (
             MetricRange("0-50m", 0.0, 50.0),
@@ -420,7 +420,7 @@ class Detection3DMetricSuite(MetricSuite[DetectionState]):
 
     def state_for(
         self, metric_range: MetricRange | None, metric_filter: MetricFilter = IDENTITY
-    ) -> DetectionState:
+    ) -> Detection3DState:
         """Build the detection state for the requested range and region filter.
 
         Args:
@@ -476,7 +476,7 @@ class Detection3DMetricSuite(MetricSuite[DetectionState]):
             )
         if metric_range is not None:
             samples = clip_to_range(samples, metric_range)
-        return DetectionState(
+        return Detection3DState(
             samples=samples,
             class_names=self._grouped_names if self._group_lut is not None else self.class_names,
             match_cost=self.match_cost,

@@ -1,4 +1,4 @@
-detection_components:
+detection3d_components:
   # Whole-scene.
   - { _target_: autoware_ml.metrics.detection3d.box_counts.BoxCounts, stages: [val, test] }
   - { _target_: autoware_ml.metrics.detection3d.mean_ap.MeanAP, stages: [val, test] }

@@ -1,5 +1,5 @@
 # Coarse segmentation3d taxonomy of nuScenes
-_target_: autoware_ml.databases.taxonomy.SegmentationTaxonomy
+_target_: autoware_ml.databases.taxonomy.Segmentation3DTaxonomy
 
 defaults:
   - /database/nuscenes/taxonomy/vocabulary@vocabulary: default_segmentation3d

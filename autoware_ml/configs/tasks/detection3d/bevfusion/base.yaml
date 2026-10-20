@@ -72,7 +72,7 @@ deploy:
     enabled: false
 
 model:
-  _target_: autoware_ml.models.detection3d.main_modules.bevfusion.BEVFusionDetectionModel
+  _target_: autoware_ml.models.detection3d.main_modules.bevfusion.BEVFusionDetection3DModel
   _convert_: all
   metrics: ${metrics}
   log_dict_configs:

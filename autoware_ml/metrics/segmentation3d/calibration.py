@@ -13,7 +13,7 @@ import numpy as np
 
 from autoware_ml.metrics.base import EvalStage, Metric
 from autoware_ml.metrics.segmentation3d.point_cloud import (
-    PointCloudSegState,
+    PointCloudSeg3DState,
     valid_point_mask,
 )
 
@@ -42,7 +42,7 @@ def _ece_from_bins(conf_sum: np.ndarray, correct_sum: np.ndarray, count: np.ndar
     return float(np.sum(weight * np.abs(accuracy - mean_conf)))
 
 
-class CalibrationError(Metric[PointCloudSegState]):
+class CalibrationError(Metric[PointCloudSeg3DState]):
     """Expected Calibration Error, overall and macro-averaged per class.
 
     Standard classwise ECE: the per-class rows bin by the point's **predicted**
@@ -68,7 +68,7 @@ class CalibrationError(Metric[PointCloudSegState]):
         if self.num_bins < 1:
             raise ValueError("num_bins must be >= 1.")
 
-    def evaluate(self, state: PointCloudSegState, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: PointCloudSeg3DState, stage: EvalStage) -> dict[str, float]:
         """Bin per-class confidence vs accuracy across frames and reduce to ECE.
 
         Args:

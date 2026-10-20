@@ -8,9 +8,9 @@ import pytest
 import torch
 
 from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
-from autoware_ml.models.detection3d.tests.ptv3_detection_fixtures import (
+from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
     build_inputs,
-    build_seg_model,
+    build_seg3d_model,
     build_trans_model,
 )
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
@@ -47,7 +47,7 @@ def test_ptv3_bev_projection_assume_valid_matches_guarded_path_for_valid_coords(
     not IS_SPCONV_AVAILABLE or not torch.cuda.is_available(),
     reason="PTv3 sparse-convolution tests require CUDA spconv",
 )
-def test_ptv3_transhead_detection_runs_loss_and_predict() -> None:
+def test_ptv3_transhead_detection3d_runs_loss_and_predict() -> None:
     model = build_trans_model().to(torch.device("cuda"))
     batch = build_inputs(device=torch.device("cuda"))
 
@@ -63,18 +63,18 @@ def test_ptv3_transhead_detection_runs_loss_and_predict() -> None:
     assert isinstance(predictions[0], Detection3DSamplePredictions)
 
 
-def test_ptv3_detection_loads_encoder_from_seg_checkpoint_via_matching_weights(
+def test_ptv3_detection3d_loads_encoder_from_seg3d_checkpoint_via_matching_weights(
     tmp_path: Path,
 ) -> None:
-    segmentation_model = build_seg_model()
-    checkpoint_path = tmp_path / "ptv3_segmentation.ckpt"
-    torch.save({"state_dict": segmentation_model.state_dict()}, checkpoint_path)
+    segmentation3d_model = build_seg3d_model()
+    checkpoint_path = tmp_path / "ptv3_segmentation3d.ckpt"
+    torch.save({"state_dict": segmentation3d_model.state_dict()}, checkpoint_path)
 
     model = build_trans_model(freeze_encoder=True)
     apply_matching_weights(model, (checkpoint_path,))
     model.train()
 
-    reference_state = segmentation_model.encoder.state_dict()
+    reference_state = segmentation3d_model.encoder.state_dict()
     loaded_state = model.encoder.state_dict()
     first_key = next(iter(reference_state))
 

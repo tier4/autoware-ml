@@ -22,7 +22,7 @@ from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DH
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
-from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
+from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
 from autoware_ml.models.detection3d.task_modules.partial_annotations import PartialAnnotations
 from autoware_ml.models.segmentation3d.encoders.ptv3 import PointTransformerV3Encoder
 from autoware_ml.models.segmentation3d.encoders.voxel import VoxelFeatureEncoder
@@ -43,7 +43,7 @@ from autoware_ml.utils.point_cloud.batching import offset_to_batch
 from autoware_ml.utils.point_cloud.structures import Point
 
 
-class PTv3DetFeatureFusion(nn.Module):
+class PTv3Det3DFeatureFusion(nn.Module):
     """Fuse the deepest encoder stage into the BEV-resolution encoder stage.
 
     This mirrors one decoder unpooling step (coarse projection gathered
@@ -262,17 +262,17 @@ class PTv3BEVEncoder(nn.Module):
         return self.blocks(self.stem(x))
 
 
-class PTv3DetBEVNeck(nn.Module):
+class PTv3Det3DBEVNeck(nn.Module):
     """Turn the encoder pooling chain into dense BEV features for detection.
 
     Composes the detection feature fusion, BEV projection, and BEV encoder so
-    the detection-only and joint segdet models share one detection branch
+    the detection-only and joint det3d_seg3d models share one detection branch
     implementation and state-dict layout.
     """
 
     def __init__(
         self,
-        fusion: PTv3DetFeatureFusion,
+        fusion: PTv3Det3DFeatureFusion,
         bev_projector: PTv3BEVProjection,
         bev_encoder: PTv3BEVEncoder,
     ) -> None:
@@ -302,7 +302,7 @@ class PTv3DetBEVNeck(nn.Module):
         return self.bev_encoder(bev)
 
 
-def det_head_export_input_names(stage_count: int) -> list[str]:
+def det3d_head_export_input_names(stage_count: int) -> list[str]:
     """Return the split det-head export input names for a given stage count."""
     skip_stage = stage_count - 2
     deep_stage = stage_count - 1
@@ -314,7 +314,7 @@ def det_head_export_input_names(stage_count: int) -> list[str]:
     ]
 
 
-def det_head_export_dynamic_axes(stage_count: int) -> dict[str, dict[int, str]]:
+def det3d_head_export_dynamic_axes(stage_count: int) -> dict[str, dict[int, str]]:
     """Build dynamic axes for the split det-head export graph inputs."""
     skip_stage = stage_count - 2
     deep_stage = stage_count - 1
@@ -326,9 +326,9 @@ def det_head_export_dynamic_axes(stage_count: int) -> dict[str, dict[int, str]]:
     }
 
 
-def build_det_head_export_spec(
+def build_det3d_head_export_spec(
     context: "PTv3ExportContext",
-    bev_neck: PTv3DetBEVNeck,
+    bev_neck: PTv3Det3DBEVNeck,
     bbox_head: nn.Module,
     output_names: Sequence[str],
 ) -> ExportSpec:
@@ -340,7 +340,7 @@ def build_det_head_export_spec(
         bbox_head: Export-prepared detection head copy.
         output_names: Ordered head output names.
     """
-    module = _PTv3DetHeadExportModule(
+    module = _PTv3Det3DHeadExportModule(
         bev_neck=deepcopy(bev_neck).eval(),
         bbox_head=bbox_head,
         output_names=output_names,
@@ -359,21 +359,21 @@ def build_det_head_export_spec(
             context.inputs.pooling_metadata[skip_stage].cluster,
             skip_grid_coord,
         ),
-        input_param_names=det_head_export_input_names(context.stage_count),
+        input_param_names=det3d_head_export_input_names(context.stage_count),
         output_names=list(output_names),
-        dynamic_axes=det_head_export_dynamic_axes(context.stage_count),
+        dynamic_axes=det3d_head_export_dynamic_axes(context.stage_count),
         supported_stages=PTv3BaseModel.EXPORT_SUPPORTED_STAGES,
     )
 
 
-class _PTv3DetectionExportModule(PTv3EncoderExportBase):
+class _PTv3Detection3DExportModule(PTv3EncoderExportBase):
     """Export PTv3 detection as a tensor-only ONNX graph."""
 
     def __init__(
         self,
         encoder: PointTransformerV3Encoder,
         voxel_encoder: VoxelFeatureEncoder,
-        bev_neck: PTv3DetBEVNeck,
+        bev_neck: PTv3Det3DBEVNeck,
         bbox_head: nn.Module,
         sparse_shape: torch.Tensor,
         serialized_depth: torch.Tensor,
@@ -408,12 +408,12 @@ class _PTv3DetectionExportModule(PTv3EncoderExportBase):
         return outputs.export_tensors(self.output_names)
 
 
-class _PTv3DetHeadExportModule(nn.Module):
+class _PTv3Det3DHeadExportModule(nn.Module):
     """Export-only detection head consuming the two coarsest encoder stages."""
 
     def __init__(
         self,
-        bev_neck: PTv3DetBEVNeck,
+        bev_neck: PTv3Det3DBEVNeck,
         bbox_head: nn.Module,
         output_names: Sequence[str],
     ) -> None:
@@ -445,14 +445,14 @@ class _PTv3DetHeadExportModule(nn.Module):
         return outputs.export_tensors(self.output_names)
 
 
-class PTv3DetectionModel(PTv3BaseModel):
+class PTv3Detection3DModel(PTv3BaseModel):
     """Compose the PTv3 encoder with dense BEV detection heads."""
 
     def __init__(
         self,
         encoder: PointTransformerV3Encoder,
         voxel_encoder: VoxelFeatureEncoder,
-        bev_neck: PTv3DetBEVNeck,
+        bev_neck: PTv3Det3DBEVNeck,
         bbox_head: nn.Module,
         export_output_names: Sequence[str],
         grid_size: float,
@@ -502,7 +502,7 @@ class PTv3DetectionModel(PTv3BaseModel):
         Returns:
             Flat eval output dict consumed by the detection metric.
         """
-        return detection_eval_output(self.decode_outputs(batch, outputs), batch)
+        return detection3d_eval_output(self.decode_outputs(batch, outputs), batch)
 
     def get_export_output_names(self) -> list[str]:
         """Return the ordered export output names."""
@@ -585,7 +585,7 @@ class PTv3DetectionModel(PTv3BaseModel):
         """
         inputs = prepare_ptv3_export_inputs(self, batch_inputs)
         input_args, input_param_names = inputs.encoder_args(SERIALIZED_POOLING_FIELDS)
-        export_module = _PTv3DetectionExportModule(
+        export_module = _PTv3Detection3DExportModule(
             encoder=self._prepare_encoder_export(),
             voxel_encoder=self.voxel_encoder,
             bev_neck=deepcopy(self.bev_neck).eval(),
@@ -618,7 +618,7 @@ class PTv3DetectionModel(PTv3BaseModel):
         context = build_ptv3_export_context(self, batch_inputs)
         return {
             "ptv3_encoder": build_encoder_export_spec(context),
-            "ptv3_det3d_head": build_det_head_export_spec(
+            "ptv3_det3d_head": build_det3d_head_export_spec(
                 context,
                 self.bev_neck,
                 self.bbox_head.prepare_for_export(

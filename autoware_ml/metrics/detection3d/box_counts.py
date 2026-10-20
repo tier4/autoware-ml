@@ -6,10 +6,10 @@ from collections import Counter
 
 from autoware_ml.metrics.base import EvalStage, Metric
 from autoware_ml.metrics.detection3d.naming import label_metric_name
-from autoware_ml.metrics.detection3d.matching import DetectionState
+from autoware_ml.metrics.detection3d.matching import Detection3DState
 
 
-class BoxCounts(Metric[DetectionState]):
+class BoxCounts(Metric[Detection3DState]):
     """Number of ground-truth and predicted boxes, in total and per class.
 
     The counts are taken from the state the suite hands over, so they are the
@@ -20,7 +20,7 @@ class BoxCounts(Metric[DetectionState]):
     reports its own counts.
     """
 
-    def evaluate(self, state: DetectionState, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: Detection3DState, stage: EvalStage) -> dict[str, float]:
         """Count the accumulated ground-truth and predicted boxes.
 
         Args:

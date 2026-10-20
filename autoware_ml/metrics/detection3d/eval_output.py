@@ -12,7 +12,7 @@ from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 
 
-def detection_eval_output(
+def detection3d_eval_output(
     predictions: ModelPredictions, batch_inputs: ModelBatchInputs
 ) -> dict[str, Any]:
     """Pair the typed predictions of a batch with its typed ground truth for the detection metric.

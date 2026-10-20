@@ -2,16 +2,16 @@
 # Stage 3: joint training on pseudo labelled J6 gen2
 defaults:
   - base_voxel012_122m
-  - /datamodule/t4dataset/datasets/segdet3d@datasets.test_det3d_only: default_segdet3d_test_dataset
-  - /datamodule/t4dataset/datasets/segdet3d@datasets.seg3d_gt_train: default_segdet3d_train_dataset
-  - /datamodule/t4dataset/datasets/segdet3d@datasets.seg3d_gt_test: default_segdet3d_test_dataset
+  - /datamodule/t4dataset/datasets/det3d_seg3d@datasets.test_det3d_only: default_det3d_seg3d_test_dataset
+  - /datamodule/t4dataset/datasets/det3d_seg3d@datasets.seg3d_gt_train: default_det3d_seg3d_train_dataset
+  - /datamodule/t4dataset/datasets/det3d_seg3d@datasets.seg3d_gt_test: default_det3d_seg3d_test_dataset
   - /database@database: t4dataset/t4dataset_j6gen2_pseudo
   - /database@seg3d_gt_database: t4dataset/t4dataset_j6gen2_semaseg
   - _self_
 
 batch_size: 8
 num_workers: 8
-experiment_group_name: ptv3_segdet/${database.version}/j6gen2_pseudo
+experiment_group_name: ptv3_det3d_seg3d/${database.version}/j6gen2_pseudo
 experiment_name: voxel012_tiny_b8_16e_t4dataset_122m_j6gen2_pseudo
 
 # Dataset of every extra source and split kind: a copy of the split dataset config reading

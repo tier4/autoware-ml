@@ -16,11 +16,11 @@ from autoware_ml.metrics.segmentation3d.calibration import CalibrationError
 from autoware_ml.metrics.segmentation3d.confident_error import ConfidentErrorRate
 from autoware_ml.metrics.segmentation3d.entropy_auroc import UncertaintyUsefulness
 from autoware_ml.metrics.segmentation3d.error_clusters import ErrorClusters
-from autoware_ml.metrics.segmentation3d.partial_detection import PartialDetectionScore
+from autoware_ml.metrics.segmentation3d.partial_detection3d import PartialDetection3DScore
 from autoware_ml.metrics.segmentation3d.tolerant_error import NeighbourhoodTolerantErrorRate
 from autoware_ml.metrics.segmentation3d.point_cloud import (
     FramePoints,
-    PointCloudSegState,
+    PointCloudSeg3DState,
     Segmentation3DPointCloudMetricSuite,
     confidence,
     normalized_entropy,
@@ -29,8 +29,8 @@ from autoware_ml.metrics.segmentation3d.point_cloud import (
 CLASS_NAMES = ("road", "obstacle")
 # The partial detection score joins the taxonomies by a shared prefix: one
 # detection class, and a segmentation taxonomy that starts with it.
-DET_CLASS_NAMES = ("ped",)
-SEG_CLASS_NAMES = ("ped", "road")
+DET3D_CLASS_NAMES = ("ped",)
+SEG3D_CLASS_NAMES = ("ped", "road")
 
 
 def _scores_for(pred, confidence: float, num_classes: int = 2) -> np.ndarray:
@@ -56,8 +56,8 @@ def _frame(xs, target, pred, num_classes: int = 2, scores=None) -> FramePoints:
     )
 
 
-def _state(frames, class_names=CLASS_NAMES) -> PointCloudSegState:
-    return PointCloudSegState(frames, num_classes=2, ignore_index=-1, class_names=class_names)
+def _state(frames, class_names=CLASS_NAMES) -> PointCloudSeg3DState:
+    return PointCloudSeg3DState(frames, num_classes=2, ignore_index=-1, class_names=class_names)
 
 
 def test_error_clusters_merges_nearby_errors_into_one() -> None:
@@ -101,7 +101,7 @@ def test_suite_caches_frames_and_runs_components() -> None:
     )
     suite.update(
         {
-            "seg_frames": [
+            "seg3d_frames": [
                 {
                     "coord": torch.tensor([[float(x), 0.0, 0.0] for x in range(10)]),
                     "pred": torch.tensor(target),
@@ -122,15 +122,15 @@ def test_suite_demands_boxes_for_box_reading_components() -> None:
     # component reads boxes, empty tensors are the explicit no-objects form.
     suite = Segmentation3DPointCloudMetricSuite(
         components=[
-            PartialDetectionScore(
-                det_class_names=DET_CLASS_NAMES,
-                seg_class_names=SEG_CLASS_NAMES,
+            PartialDetection3DScore(
+                det3d_class_names=DET3D_CLASS_NAMES,
+                seg3d_class_names=SEG3D_CLASS_NAMES,
                 class_names=("ped",),
                 stages=["test"],
             )
         ],
         num_classes=2,
-        class_names=SEG_CLASS_NAMES,
+        class_names=SEG3D_CLASS_NAMES,
     )
     frame = {
         "coord": torch.tensor([[0.0, 0.0, 0.0]]),
@@ -139,10 +139,10 @@ def test_suite_demands_boxes_for_box_reading_components() -> None:
         "scores": torch.full((1, 2), 0.5),
     }
     with pytest.raises(ValueError, match="gt_boxes and gt_box_labels"):
-        suite.update({"seg_frames": [dict(frame)]})
+        suite.update({"seg3d_frames": [dict(frame)]})
     frame["gt_boxes"] = torch.zeros((0, 7))
     frame["gt_box_labels"] = torch.zeros((0,), dtype=torch.long)
-    suite.update({"seg_frames": [frame]})
+    suite.update({"seg3d_frames": [frame]})
 
 
 def test_calibration_error_zero_when_confidence_matches_accuracy() -> None:
@@ -230,7 +230,7 @@ def test_error_clusters_emits_global_and_per_class() -> None:
     assert out["error_cluster_count_obstacle"] == pytest.approx(0.0)
 
 
-def test_partial_detection_credit_landmarks() -> None:
+def test_partial_detection3d_credit_landmarks() -> None:
     # One box (det class 0, the shared index) containing 4 points, 1 correct -> credit ~0.5.
     coord = np.array([[0.0, 0.0, 0.0], [0.2, 0.0, 0.0], [-0.2, 0.0, 0.0], [0.0, 0.2, 0.0]])
     scores = np.full((4, 2), 0.5)
@@ -243,15 +243,17 @@ def test_partial_detection_credit_landmarks() -> None:
         gt_boxes=np.array([[0.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0]], dtype=np.float64),
         gt_box_labels=np.array([0], dtype=np.int64),
     )
-    out = PartialDetectionScore(
-        det_class_names=DET_CLASS_NAMES, seg_class_names=SEG_CLASS_NAMES, class_names=("ped",)
-    ).evaluate(_state([frame], SEG_CLASS_NAMES), EvalStage.TEST)
+    out = PartialDetection3DScore(
+        det3d_class_names=DET3D_CLASS_NAMES,
+        seg3d_class_names=SEG3D_CLASS_NAMES,
+        class_names=("ped",),
+    ).evaluate(_state([frame], SEG3D_CLASS_NAMES), EvalStage.TEST)
     # s(1)/s(4) with h=1 -> (1/2)/(4/5) = 0.625
     assert out["pd_score_ped"] == pytest.approx(0.625)
     assert out["pd_skipped_low_point_boxes"] == pytest.approx(0.0)
 
 
-def test_partial_detection_ignores_points_outside_the_box_height() -> None:
+def test_partial_detection3d_ignores_points_outside_the_box_height() -> None:
     # A return from an object above the box shares its footprint but is not the
     # annotated object's point, so it must change neither n nor the credit.
     coord = np.array(
@@ -267,13 +269,15 @@ def test_partial_detection_ignores_points_outside_the_box_height() -> None:
         gt_boxes=np.array([[0.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0]], dtype=np.float64),
         gt_box_labels=np.array([0], dtype=np.int64),
     )
-    out = PartialDetectionScore(
-        det_class_names=DET_CLASS_NAMES, seg_class_names=SEG_CLASS_NAMES, class_names=("ped",)
-    ).evaluate(_state([frame], SEG_CLASS_NAMES), EvalStage.TEST)
+    out = PartialDetection3DScore(
+        det3d_class_names=DET3D_CLASS_NAMES,
+        seg3d_class_names=SEG3D_CLASS_NAMES,
+        class_names=("ped",),
+    ).evaluate(_state([frame], SEG3D_CLASS_NAMES), EvalStage.TEST)
     assert out["pd_score_ped"] == pytest.approx(0.625)
 
 
-def test_partial_detection_scores_only_the_objects_own_points() -> None:
+def test_partial_detection3d_scores_only_the_objects_own_points() -> None:
     # A pedestrian box reaches the ground, so ground returns share its footprint. They
     # carry the ground target, so neither the count nor the credit may see them: all
     # four pedestrian points correct is a full credit, whatever the ground does.
@@ -297,13 +301,15 @@ def test_partial_detection_scores_only_the_objects_own_points() -> None:
         gt_boxes=np.array([[0.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0]], dtype=np.float64),
         gt_box_labels=np.array([0], dtype=np.int64),
     )
-    out = PartialDetectionScore(
-        det_class_names=DET_CLASS_NAMES, seg_class_names=SEG_CLASS_NAMES, class_names=("ped",)
-    ).evaluate(_state([frame], SEG_CLASS_NAMES), EvalStage.TEST)
+    out = PartialDetection3DScore(
+        det3d_class_names=DET3D_CLASS_NAMES,
+        seg3d_class_names=SEG3D_CLASS_NAMES,
+        class_names=("ped",),
+    ).evaluate(_state([frame], SEG3D_CLASS_NAMES), EvalStage.TEST)
     assert out["pd_score_ped"] == pytest.approx(1.0)
 
 
-def test_partial_detection_does_not_credit_ground_predicted_as_the_object() -> None:
+def test_partial_detection3d_does_not_credit_ground_predicted_as_the_object() -> None:
     # None of the pedestrian's own points were found, and the ground inside the box was
     # mispredicted as pedestrian. The box scores zero, the ground cannot stand in for it.
     coord = np.array(
@@ -324,45 +330,51 @@ def test_partial_detection_does_not_credit_ground_predicted_as_the_object() -> N
         gt_boxes=np.array([[0.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0]], dtype=np.float64),
         gt_box_labels=np.array([0], dtype=np.int64),
     )
-    out = PartialDetectionScore(
-        det_class_names=DET_CLASS_NAMES, seg_class_names=SEG_CLASS_NAMES, class_names=("ped",)
-    ).evaluate(_state([frame], SEG_CLASS_NAMES), EvalStage.TEST)
+    out = PartialDetection3DScore(
+        det3d_class_names=DET3D_CLASS_NAMES,
+        seg3d_class_names=SEG3D_CLASS_NAMES,
+        class_names=("ped",),
+    ).evaluate(_state([frame], SEG3D_CLASS_NAMES), EvalStage.TEST)
     assert out["pd_score_ped"] == pytest.approx(0.0)
 
 
-def test_partial_detection_rejects_non_positive_half_saturation() -> None:
+def test_partial_detection3d_rejects_non_positive_half_saturation() -> None:
     # h = 0 divides by zero for a box without a single correct point.
     with pytest.raises(ValueError, match="half_saturation"):
-        PartialDetectionScore(
-            det_class_names=DET_CLASS_NAMES,
-            seg_class_names=SEG_CLASS_NAMES,
+        PartialDetection3DScore(
+            det3d_class_names=DET3D_CLASS_NAMES,
+            seg3d_class_names=SEG3D_CLASS_NAMES,
             class_names=("ped",),
             half_saturation=0.0,
         )
 
 
-def test_partial_detection_rejects_mismatched_class_space() -> None:
+def test_partial_detection3d_rejects_mismatched_class_space() -> None:
     # A grouped suite folds labels into another index space, the shared index
     # must refuse to score it rather than hit the wrong classes.
     frame = _frame([0, 1], target=[0, 0], pred=[0, 0])
-    metric = PartialDetectionScore(
-        det_class_names=DET_CLASS_NAMES, seg_class_names=SEG_CLASS_NAMES, class_names=("ped",)
+    metric = PartialDetection3DScore(
+        det3d_class_names=DET3D_CLASS_NAMES,
+        seg3d_class_names=SEG3D_CLASS_NAMES,
+        class_names=("ped",),
     )
     with pytest.raises(ValueError, match="index space"):
         metric.evaluate(_state([frame]), EvalStage.TEST)
 
 
-def test_partial_detection_requires_the_shared_taxonomy_prefix() -> None:
+def test_partial_detection3d_requires_the_shared_taxonomy_prefix() -> None:
     # The score relies on a detection class and its segmentation class sharing an
     # index, so a segmentation taxonomy that does not start with the detection one
     # is refused up front, and so is a scored class the detection taxonomy lacks.
     with pytest.raises(ValueError, match="must start with"):
-        PartialDetectionScore(
-            det_class_names=("ped",), seg_class_names=("road", "ped"), class_names=("ped",)
+        PartialDetection3DScore(
+            det3d_class_names=("ped",), seg3d_class_names=("road", "ped"), class_names=("ped",)
         )
     with pytest.raises(ValueError, match="not detection classes"):
-        PartialDetectionScore(
-            det_class_names=DET_CLASS_NAMES, seg_class_names=SEG_CLASS_NAMES, class_names=("car",)
+        PartialDetection3DScore(
+            det3d_class_names=DET3D_CLASS_NAMES,
+            seg3d_class_names=SEG3D_CLASS_NAMES,
+            class_names=("car",),
         )
 
 

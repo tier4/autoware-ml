@@ -37,7 +37,7 @@ from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.metrics.base import MetricSuite
-from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
+from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
 from autoware_ml.models.detection3d.task_modules.partial_annotations import PartialAnnotations
 from autoware_ml.models.detection3d.encoders.bev_middle_encoder import BEVMiddleEncoder
 from autoware_ml.models.detection3d.heads.transfusions.transfusion_head import TransFusionHead
@@ -166,7 +166,7 @@ def _format_transfusion_export_outputs(
     return cls_score0, bbox_pred0, dir_cls_pred0
 
 
-class TransFusionDetectionModel(ModuleBaseModel):
+class TransFusionDetection3DModel(ModuleBaseModel):
     """Compose a TransFusion lidar detector from reusable lidar detection modules.
 
     The wrapper wires together voxel encoding, BEV feature extraction, and the TransFusion
@@ -234,7 +234,7 @@ class TransFusionDetectionModel(ModuleBaseModel):
                 "ModelOutputs must contain detection3d_head_outputs for TransFusion build_eval_output pass."
             )
 
-        return detection_eval_output(
+        return detection3d_eval_output(
             predictions=self.bbox_head.decode_outputs(outputs.detection3d_head_outputs),
             batch_inputs=batch,
         )
@@ -288,10 +288,10 @@ class TransFusionDetectionModel(ModuleBaseModel):
         Returns:
             Detection head outputs.
         """
-        detection_head_outputs = self._forward_with_batch_size(multi_task_batch_inputs)
+        detection3d_head_outputs = self._forward_with_batch_size(multi_task_batch_inputs)
         return ModelOutputs(
             detection3d_head_outputs=Detection3DHeadOutputs(
-                center_head_outputs=None, transfusion_head_outputs=detection_head_outputs
+                center_head_outputs=None, transfusion_head_outputs=detection3d_head_outputs
             )
         )
 
