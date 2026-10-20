@@ -149,41 +149,26 @@ number of serialization orders.
 | `voxels`               | `[N_0, P, 5]` | Points of every voxel as `(x, y, z, intensity, time_lag)`, zero padded. `time_lag` is in seconds, 0 for the current frame, positive for a past sweep and negative for a future one. |
 | `num_points_per_voxel` | `[N_0]`       | Number of points every voxel holds.                                                                                                                                                 |
 | `grid_coord`           | `[N_0, 3]`    | Integer voxel coordinates.                                                                                                                                                          |
-| `patch_order`          | `[O, S_0]`    | The order padded to whole attention windows (see below).                                                                                                                           |
-| `serialized_inverse`   | `[O, N_0]`    | Inverse of the serialization order per curve (argsort of the codes).                                                                                                               |
+| `patch_order`          | `[O, Npad_0]` | The order padded to whole attention windows (see below).                                                                                                                            |
+| `serialized_inverse`   | `[O, N_0]`    | Inverse of the serialization order per curve (argsort of the codes).                                                                                                                |
 
-`S_k = ceil(N_k / patch_size_k) * patch_size_k` is the padded slot count of level `k`.
-The graph does not sort: preprocessing computes the input level's order anyway
-to derive the pooling metadata, so it hands the result over instead of the codes.
-The bare order is not an input — `patch_order` carries it in its first `N_0`
-entries, and a declared input nothing reads would only be pruned by the tracer.
-`patch_order` is the gather order the attention blocks read (`qkv[order]`): the
-serialized order extended to a multiple of the window by borrowing the trailing
-slots' tokens backwards along the serialization
-(`(slot - patch_size + cycle) % N`, `cycle` the smallest multiple of `N` not
-below `patch_size`). It depends only on the count, the order and the window, so
-it is precomputed rather than traced into every block. `build_patch_order` in
-`encoders/ptv3.py` is the reference implementation, and the deployed runtime
-(`autoware_ptv3`) reimplements it from its own `encoder.patch_sizes` parameter.
-The per-level windows are therefore part of the graph contract: the exporter
-stamps them into the encoder module's ONNX metadata as `patch_sizes` (one entry
-per level, from the deploy config's `metainfo`), and the runtime's list must
-equal it. A mismatch is not caught by shape alone — two windows can pad a count
-to the same extent while borrowing different tokens — so the runtime should
-validate its parameter against the stamped list rather than trust the rollout.
+`Npad_k = ceil(N_k / patch_size_k) * patch_size_k` is the padded length of level `k`. The
+fill is described in [Attention window fill at export](#attention-window-fill-at-export);
+the runtime must build `patch_order` with the per-level `patch_sizes` stamped into the
+encoder's ONNX metadata.
 
 For every encoder pooling stage `i`, with input voxel count `N_i` and pooled
 output voxel count `M_i`, preprocessing also provides:
 
-| Pooling metadata                          | Shape          | Meaning                                                                     |
-| ----------------------------------------- | -------------- | --------------------------------------------------------------------------- |
-| `serialized_pooling_i_indices`            | `[N_i]`        | ONNX `Gather` indices grouping features before CSR reduction.               |
-| `serialized_pooling_i_indptr`             | `[M_i + 1]`    | CSR row pointer consumed by `autoware::SegmentCSR`.                         |
-| `serialized_pooling_i_cluster`            | `[N_i]`        | Input voxel to pooled voxel id mapping for unpooling.                       |
-| `serialized_pooling_i_head_indices`       | `[M_i]`        | Representative input voxel for each pooled voxel.                           |
-| `serialized_pooling_i_grid_coord`         | `[M_i, 3]`     | Integer coordinates of pooled voxels.                                       |
-| `serialized_pooling_i_patch_order`        | `[O, S_{i+1}]` | The pooled level's (level `i + 1`) order padded to whole attention windows. |
-| `serialized_pooling_i_serialized_inverse` | `[O, M_i]`     | Inverse serialization order for pooled voxels.                              |
+| Pooling metadata                          | Shape             | Meaning                                                                     |
+| ----------------------------------------- | ----------------- | --------------------------------------------------------------------------- |
+| `serialized_pooling_i_indices`            | `[N_i]`           | ONNX `Gather` indices grouping features before CSR reduction.               |
+| `serialized_pooling_i_indptr`             | `[M_i + 1]`       | CSR row pointer consumed by `autoware::SegmentCSR`.                         |
+| `serialized_pooling_i_cluster`            | `[N_i]`           | Input voxel to pooled voxel id mapping for unpooling.                       |
+| `serialized_pooling_i_head_indices`       | `[M_i]`           | Representative input voxel for each pooled voxel.                           |
+| `serialized_pooling_i_grid_coord`         | `[M_i, 3]`        | Integer coordinates of pooled voxels.                                       |
+| `serialized_pooling_i_patch_order`        | `[O, Npad_{i+1}]` | The pooled level's (level `i + 1`) order padded to whole attention windows. |
+| `serialized_pooling_i_serialized_inverse` | `[O, M_i]`        | Inverse serialization order for pooled voxels.                              |
 
 Because preprocessing resolves every pooling shape ahead of time, the exported
 graph contains no data-dependent pooling shape discovery. Pooled feature
@@ -204,6 +189,8 @@ sample of `n` voxels needs its last window filled unless `n` is a multiple of `K
 
 Dynamic window sizes and masking are both awkward to express in TensorRT without
 a performance penalty, hence this fill.
+Preprocessing computes the fill into `patch_order` with `build_patch_order`
+(`encoders/ptv3.py`), which the deployed runtime reimplements.
 
 ### Split-export module contract
 
