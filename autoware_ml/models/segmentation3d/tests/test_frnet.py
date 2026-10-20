@@ -98,7 +98,11 @@ def _make_frnet(num_classes: int = 3, data_preprocessor: DataPreprocessor | None
         backbone=_IdentityBackbone(),
         decode_head=_DecodeHead(num_classes=num_classes),
         optimizer=torch.optim.AdamW,
-        data_preprocessor=data_preprocessor,
+        data_preprocessor=(
+            data_preprocessor
+            if data_preprocessor is not None
+            else DataPreprocessor(preprocessor_modules=[])
+        ),
     )
 
 

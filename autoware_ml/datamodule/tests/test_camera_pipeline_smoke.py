@@ -202,6 +202,7 @@ class TestCameraPipelineSmoke(unittest.TestCase):
 
         model = CalibrationStatusClassifier(
             log_dict_configs=LogDictConfigs(prog_bar=False),
+            data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
             backbone=ResNet18(in_channels=5),
             neck=GlobalAveragePooling(),
             head=LinearClsHead(

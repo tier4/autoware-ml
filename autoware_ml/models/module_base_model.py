@@ -82,7 +82,7 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
     def __init__(
         self,
         log_dict_configs: LogDictConfigs,
-        data_preprocessor: DataPreprocessor | None = None,
+        data_preprocessor: DataPreprocessor,
         optimizer: Callable[..., Optimizer] | None = None,
         scheduler: Callable[[Optimizer], LRScheduler] | None = None,
         optimizer_group_overrides: Mapping[str, Mapping[str, Any]] | None = None,
@@ -93,8 +93,7 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
 
         Args:
             log_dict_configs: Configuration for logging metrics in Lightning.
-            data_preprocessor: Data preprocessor to preprocess input batches, an empty one when
-                omitted.
+            data_preprocessor: Data preprocessor to preprocess input batches.
             optimizer: Callable that returns an optimizer when given model parameters.
             scheduler: Callable that returns a scheduler when given the optimizer.
             optimizer_group_overrides: Optional optimizer overrides keyed by
@@ -105,11 +104,7 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
                 or ``None`` logs only losses.
         """
         super().__init__(metrics=metrics)
-        self._data_preprocessor = (
-            data_preprocessor
-            if data_preprocessor is not None
-            else DataPreprocessor(preprocessor_modules=[])
-        )
+        self._data_preprocessor = data_preprocessor
         self.optimizer_partial = optimizer
         self.scheduler_partial = scheduler
         self.optimizer_group_overrides = (

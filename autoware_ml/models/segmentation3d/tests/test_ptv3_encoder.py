@@ -11,6 +11,7 @@ import torch
 import torch.nn as nn
 
 import autoware_ml.utils.point_cloud.structures as point_structures
+from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 from autoware_ml.utils.point_cloud.structures import pooled_sparse_shape
 from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTBatch
 from autoware_ml.dataclasses.geometry.voxels import VoxelsData
@@ -951,6 +952,7 @@ def test_ptv3_frozen_encoder_supports_decoder_block_backward() -> None:
     their CPE backward fails with an empty-indices assert."""
     model = PTv3SegmentationModel(
         log_dict_configs=LogDictConfigs(prog_bar=False),
+        data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
         encoder=build_ptv3_encoder(),
         voxel_encoder=SweepSplitVoxelFeatureEncoder(),
         seg3d_head=build_seg_head(),

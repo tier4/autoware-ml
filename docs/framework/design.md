@@ -237,7 +237,7 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
     def __init__(
         self,
         log_dict_configs: LogDictConfigs,
-        data_preprocessor: DataPreprocessor | None = None,
+        data_preprocessor: DataPreprocessor,
         optimizer: Callable[..., Optimizer] | None = None,
         scheduler: Callable[[Optimizer], LRScheduler] | None = None,
         optimizer_group_overrides: Mapping[str, Mapping[str, Any]] | None = None,

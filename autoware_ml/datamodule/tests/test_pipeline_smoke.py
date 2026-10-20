@@ -138,6 +138,7 @@ class TestPipelineSmoke(unittest.TestCase):
         device = torch.device("cuda")
         model = PTv3SegDetModel(
             log_dict_configs=LogDictConfigs(prog_bar=False),
+            data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
             encoder=build_ptv3_encoder(PastFutureVoxelFeatureEncoder.out_channels),
             voxel_encoder=PastFutureVoxelFeatureEncoder(),
             seg3d_head=build_seg_head(),

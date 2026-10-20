@@ -25,13 +25,17 @@ from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
+from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 
 
 class _PointSumModel(ModuleBaseModel):
     """Sum the points of the batch with one learned scale."""
 
     def __init__(self) -> None:
-        super().__init__(log_dict_configs=LogDictConfigs(prog_bar=False))
+        super().__init__(
+            log_dict_configs=LogDictConfigs(prog_bar=False),
+            data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
+        )
         self.scale = torch.nn.Parameter(torch.ones(()))
 
     def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> torch.Tensor:

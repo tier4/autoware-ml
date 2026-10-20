@@ -107,6 +107,7 @@ def build_seg_model(
     """Return a small PTv3 segmentation model for tests."""
     return PTv3SegmentationModel(
         log_dict_configs=LogDictConfigs(prog_bar=False),
+        data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
         encoder=build_ptv3_encoder(voxel_encoder_type.out_channels),
         voxel_encoder=voxel_encoder_type(),
         seg3d_head=build_seg_head(),
@@ -206,6 +207,7 @@ def build_trans_model(
     """Return a PTv3 + TransFusionHead detection model for tests."""
     return PTv3DetectionModel(
         log_dict_configs=LogDictConfigs(prog_bar=False),
+        data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
         encoder=build_ptv3_encoder(voxel_encoder_type.out_channels),
         voxel_encoder=voxel_encoder_type(),
         bev_neck=build_bev_neck(),
@@ -413,6 +415,7 @@ def build_litept_seg_model(
     """Return a LitePT segmentation model using the unchanged PTv3 task wrapper."""
     return PTv3SegmentationModel(
         log_dict_configs=LogDictConfigs(prog_bar=False),
+        data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
         encoder=build_litept_encoder(),
         voxel_encoder=SweepSplitVoxelFeatureEncoder(),
         seg3d_head=build_litept_seg_head(),

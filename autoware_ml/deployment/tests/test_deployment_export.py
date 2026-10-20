@@ -34,6 +34,7 @@ from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.deployment.deployment_export import DeploymentExport, DeploymentExportOutputs
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
+from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 from autoware_ml.utils.deploy import ExportSpec
 from autoware_ml.utils.mlflow_helpers import get_git_sha
 from autoware_ml.utils.onnx_meta import MODEL_DOMAIN, PRODUCER_NAME
@@ -66,7 +67,10 @@ class _ExportModel(ModuleBaseModel):
     def __init__(
         self, module_names: Sequence[str] = ("head",), supported_stages: frozenset[str] = ALL_STAGES
     ) -> None:
-        super().__init__(log_dict_configs=LogDictConfigs(prog_bar=False))
+        super().__init__(
+            log_dict_configs=LogDictConfigs(prog_bar=False),
+            data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
+        )
         self.head = _HeadModule()
         self.module_names = tuple(module_names)
         self.supported_stages = supported_stages

@@ -50,7 +50,7 @@ def _shifting_model(model_type: type[_ToyModel]) -> _ToyModel:
 
 
 class _ToyModel(ModuleBaseModel):
-    def __init__(self, data_preprocessor: DataPreprocessor | None = None) -> None:
+    def __init__(self, data_preprocessor: DataPreprocessor) -> None:
         super().__init__(
             log_dict_configs=LogDictConfigs(prog_bar=False), data_preprocessor=data_preprocessor
         )
@@ -101,7 +101,7 @@ def test_predict_step_runs_forward_and_formats_predictions() -> None:
 
 
 def test_core_step_requires_loss_metric() -> None:
-    model = _MissingLossModel()
+    model = _MissingLossModel(DataPreprocessor(preprocessor_modules=[]))
 
     with pytest.raises(ValueError, match="'loss' key"):
         model.training_step(ModelBatchInputs.from_gt_batch(_batch(1.0)), batch_idx=0)

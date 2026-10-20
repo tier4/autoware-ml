@@ -35,6 +35,7 @@ from autoware_ml.models.multi.ptv3_segdet import PTv3SegDetModel
 from autoware_ml.models.segmentation3d.encoders.voxel import SweepSplitVoxelFeatureEncoder
 from autoware_ml.models.segmentation3d.ptv3_base import seg_head_export_input_names
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
+from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 from autoware_ml.utils.checkpoints import apply_matching_weights
 
 EXPECTED_PTV3_INPUT_NAMES = [
@@ -262,6 +263,7 @@ def _save_detection_checkpoint(
 def _build_segdet_model() -> PTv3SegDetModel:
     return PTv3SegDetModel(
         log_dict_configs=LogDictConfigs(prog_bar=False),
+        data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
         encoder=build_ptv3_encoder(),
         voxel_encoder=SweepSplitVoxelFeatureEncoder(),
         seg3d_head=build_seg_head(),
