@@ -241,7 +241,7 @@ class TestCenterHead(unittest.TestCase):
         """
         center_head = CenterHead(
             in_channels=4,
-            class_names=["car", "pdestrian"],
+            class_names=["car", "pedestrian"],
             shared_channels=4,
             point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
             voxel_size=[0.5, 0.5, 4.0],

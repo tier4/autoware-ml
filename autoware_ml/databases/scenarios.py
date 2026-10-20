@@ -96,8 +96,8 @@ class ScenarioData(BaseModel):
       scenario_version: Version of the scenario.
       vehicle_type: Type of the vehicle.
       location: Location of the scenario.
-      traffic_cone_barrier_bbox_status: Temporarly boolean value to mention if traffic_cone/barriers
-          are annotated in a scenario.
+      traffic_cone_barrier_bbox_status: Whether traffic cones and barriers are annotated in the
+          scenario.
     """
 
     # Set model config to frozen and strict

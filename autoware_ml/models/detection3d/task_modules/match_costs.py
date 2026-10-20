@@ -35,7 +35,7 @@ class ClassificationCost:
     ) -> Float32[torch.Tensor, "batch_size num_bboxes max_num_gt_bboxes"]:
         """
         Compute pairwise classification cost between queries and labels. Since it's
-        batch-wise implemnatation, the cost is computed for invalid gt_bboxes, but the cost will be
+        batch-wise implementation, the cost is computed for invalid gt_bboxes, but the cost will be
         highest for invalid gt_bboxes, so the assignment will not match to invalid gt_bboxes.dense_
 
         Args:

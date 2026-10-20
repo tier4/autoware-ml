@@ -68,13 +68,13 @@ def test_rope_span_is_the_largest_multiple_of_six(head_dim: int, expected: int) 
     assert rope_span(head_dim) == expected
 
 
-def test_point3drope_rejects_head_dim_that_cannot_be_rotated() -> None:
+def test_point3d_rope_rejects_head_dim_that_cannot_be_rotated() -> None:
     with pytest.raises(ValueError, match="at least 6"):
         Point3DRoPE(head_dim=4, base=100.0)
 
 
 @pytest.mark.parametrize("head_dim", [12, 18, 32, 64])
-def test_point3drope_matches_explicit_split_rotate_concat(head_dim: int) -> None:
+def test_point3d_rope_matches_explicit_split_rotate_concat(head_dim: int) -> None:
     """The fused table form is exactly the textbook split/rotate/concat formulation."""
     torch.manual_seed(0)
     rope = Point3DRoPE(head_dim=head_dim, base=100.0)
@@ -91,7 +91,7 @@ def test_point3drope_matches_explicit_split_rotate_concat(head_dim: int) -> None
 
 
 @pytest.mark.parametrize("head_dim", [12, 18, 32, 64])
-def test_point3drope_preserves_norm_and_passes_the_tail_through(head_dim: int) -> None:
+def test_point3d_rope_preserves_norm_and_passes_the_tail_through(head_dim: int) -> None:
     """A correct rotation keeps norms; the unrotated tail must come back untouched."""
     torch.manual_seed(1)
     rope = Point3DRoPE(head_dim=head_dim, base=100.0)
@@ -107,7 +107,7 @@ def test_point3drope_preserves_norm_and_passes_the_tail_through(head_dim: int) -
     assert torch.equal(rotated[..., span:], query[..., span:])
 
 
-def test_point3drope_dot_product_depends_only_on_relative_position() -> None:
+def test_point3d_rope_dot_product_depends_only_on_relative_position() -> None:
     """The defining RoPE property, checked on a head dimension that rotates fully."""
     torch.manual_seed(2)
     rope = Point3DRoPE(head_dim=24, base=100.0)

@@ -330,7 +330,7 @@ def test_partial_detection_does_not_credit_ground_predicted_as_the_object() -> N
     assert out["pd_score_ped"] == pytest.approx(0.0)
 
 
-def test_partial_detection_rejects_nonpositive_half_saturation() -> None:
+def test_partial_detection_rejects_non_positive_half_saturation() -> None:
     # h = 0 divides by zero for a box without a single correct point.
     with pytest.raises(ValueError, match="half_saturation"):
         PartialDetectionScore(
@@ -366,7 +366,7 @@ def test_partial_detection_requires_the_shared_taxonomy_prefix() -> None:
         )
 
 
-def test_tolerant_error_mask_equals_bruteforce_reference() -> None:
+def test_tolerant_error_mask_equals_brute_force_reference() -> None:
     # The per-class nearest-neighbour formulation must reproduce the direct
     # definition: wrong, and no point predicted the true class within radius.
     from autoware_ml.metrics.segmentation3d.spatial import tolerant_error_mask
