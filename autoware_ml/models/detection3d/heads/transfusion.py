@@ -104,12 +104,18 @@ class ConstantPositionalEncoding(nn.Module):
         Args:
             encoding: Trained positional encoding to evaluate.
             positions: BEV coordinate tensor of shape ``(1, tokens, channels)``.
+
+        Raises:
+            ValueError: If ``encoding`` is in training mode, where its BatchNorm
+                would embed from batch statistics and update its running ones.
         """
         super().__init__()
+        if encoding.training:
+            raise ValueError("Expected `encoding` to be in `eval()` mode.")
         parameter = next(encoding.parameters())
         positions = positions.to(parameter.device, parameter.dtype)
         with torch.no_grad():
-            embedding = encoding.eval()(positions)
+            embedding = encoding(positions)
         self.register_buffer("embedding", embedding.detach().clone())
 
     def forward(self, position: torch.Tensor) -> torch.Tensor:

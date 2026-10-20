@@ -259,7 +259,8 @@ def test_transfusion_export_freezes_key_positional_encoding(tmp_path: Path) -> N
     encoding = exported.decoder[0].key_pos_encoding
     assert isinstance(encoding, ConstantPositionalEncoding)
     assert encoding.embedding.shape == (1, 64, 16)
-    assert not any(parameter.requires_grad for parameter in encoding.parameters())
+    assert not encoding.embedding.requires_grad
+    assert not list(encoding.parameters())
 
     torch.manual_seed(0)
     bev = torch.randn(1, 32, 8, 8)
