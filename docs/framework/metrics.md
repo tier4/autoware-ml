@@ -101,8 +101,8 @@ function torchmetrics uses to combine that state across GPUs.
 | Suite                                      | `prefix`   | Required keys                          | State (`dist_reduce_fx`)                                  |
 | ------------------------------------------ | ---------- | -------------------------------------- | --------------------------------------------------------- |
 | `Detection3DMetricSuite`                   | `det3d`    | `predictions`, `gt_boxes`, `gt_labels` | per-frame box tensors as list states (`None`)             |
-| `Segmentation3DConfusionMatrixMetricSuite` | `seg3d`    | `seg_frames`                           | one confusion tensor over (filter, range) buckets (`sum`) |
-| `Segmentation3DPointCloudMetricSuite`      | `seg3d_pt` | `seg_frames`                           | per-frame point tensors (`None`)                          |
+| `Segmentation3DConfusionMatrixMetricSuite` | `seg3d`    | `seg3d_frames`                           | one confusion tensor over (filter, range) buckets (`sum`) |
+| `Segmentation3DPointCloudMetricSuite`      | `seg3d_pt` | `seg3d_frames`                           | per-frame point tensors (`None`)                          |
 
 A confusion matrix is a bounded sufficient statistic, so its counts sum across ranks. Detection
 matching is score ordered inside each frame and the point-level metrics read raw points, so those
@@ -110,7 +110,7 @@ states stay per-frame list elements gathered with no reduction. Evaluation filte
 pose and the scene's lanelet map, which are not tensors, so their keep-masks are computed per
 frame at `update` and stored as boolean states, and DDP gathers only tensors.
 
-`seg_frames` is a list with one entry per frame carrying that frame's point coordinates,
+`seg3d_frames` is a list with one entry per frame carrying that frame's point coordinates,
 predicted and target labels, per-class scores, and the per-frame metadata configured filters
 need (`ego2global`, `lanelet_map_path`). `required_keys()` extends the base tuple with what
 the configuration demands: a detection suite with a collision provider also requires
@@ -173,13 +173,13 @@ optional capability adds a concrete requirement, checked loud at the first batch
 | Capability                                       | Eval-output keys                           | External data              |
 | ------------------------------------------------ | ------------------------------------------ | -------------------------- |
 | detection metrics                                | `predictions`, `gt_boxes`, `gt_labels`     | none                       |
-| segmentation metrics                             | `seg_frames`                               | none                       |
+| segmentation metrics                             | `seg3d_frames`                               | none                       |
 | ground-truth point filter, occlusion split       | `gt_num_points` (per-box point count)      | none                       |
 | corridor filter (straight strip)                 | none                                       | none                       |
 | region filters and collision filter              | `ego2global`, `lanelet_map_path` per frame | one lanelet2 map per scene |
 | collision metrics (critical FP/FN, weighted mAP) | `ego2global`, `lanelet_map_path` per frame | one lanelet2 map per scene |
 | velocity error (TP errors, NDS)                  | boxes with velocity components             | none                       |
-| partial-detection score                          | ground-truth boxes inside `seg_frames`     | none                       |
+| partial-detection score                          | ground-truth boxes inside `seg3d_frames`     | none                       |
 
 The map-based features never read a map path directly. They pass the frame's `scene_token` to a
 map provider, and an injected resolver turns that identifier into the scene's `lanelet2_map.osm`.
@@ -493,7 +493,7 @@ The bundled dataset configs attach every metric to every filter slice (whole sce
 walkway, corridor, collision area). Every key is also emitted per radial range bin and once more
 per behaviour group through the grouped twin suite. The partial-detection score is wired in the
 joint detection plus segmentation
-configs only (the detection ground truth rides in seg_frames) and is never grouped, its box to
+configs only (the detection ground truth rides in seg3d_frames) and is never grouped, its box to
 class mapping is bound to the trained label space.
 
 ## Detection metrics
@@ -1144,12 +1144,12 @@ right there.
 
 ### Small-object partial-detection score
 
-`PartialDetectionScore` groups segmentation points inside each small-object ground-truth box and
+`PartialDetection3DScore` groups segmentation points inside each small-object ground-truth box and
 rewards partial hits with a saturating credit: for a pedestrian or a cone, classifying even a few
 points correctly is far better than none, which point-averaged mIoU cannot see. A diagnostic
-metric of the joint detection plus segmentation suite (`datasets/<dataset>/segdet3d`), whose
-`seg_frames` carry the detection ground-truth boxes. The metric config of each taxonomy lists the
-classes it reports in `partial_detection_classes`.
+metric of the joint detection plus segmentation suite (`datasets/<dataset>/det3d_seg3d`), whose
+`seg3d_frames` carry the detection ground-truth boxes. The metric config of each taxonomy lists the
+classes it reports in `partial_detection3d_classes`.
 
 <div class="metrics-fig">
 <svg viewBox="0 0 660 210" width="660" height="210" role="img" aria-labelledby="fig-d3-title">
@@ -1312,7 +1312,7 @@ Model-specific work like box decoding happens here, and per-frame metadata the d
 ```python
 class ModelA(ModuleBaseModel):
     def build_eval_output(self, batch, outputs):
-        return detection_eval_output(self.decode_outputs(batch, outputs), batch)
+        return detection3d_eval_output(self.decode_outputs(batch, outputs), batch)
 ```
 
 The mixin feeds this dict into every attached suite. The model never calls `update`, `compute`,

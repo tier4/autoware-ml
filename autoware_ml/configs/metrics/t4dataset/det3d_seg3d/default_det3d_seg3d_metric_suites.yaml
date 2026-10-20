@@ -1,0 +1,32 @@
+# Joint suite of the multi-task models: how much of every detected box the semantic masks
+# cover, whole scene and per map slice.
+- _target_: autoware_ml.metrics.segmentation3d.point_cloud.Segmentation3DPointCloudMetricSuite
+  prefix: det3d_seg3d
+  components:
+    - _target_: autoware_ml.metrics.segmentation3d.partial_detection3d.PartialDetection3DScore
+      stages: [test]
+      det3d_class_names: ${database.taxonomy.detection3d.class_names}
+      seg3d_class_names: ${database.taxonomy.segmentation3d.class_names}
+      class_names: ${metric_params.det3d_seg3d.partial_detection3d_classes}
+    - _target_: autoware_ml.metrics.segmentation3d.partial_detection3d.PartialDetection3DScore
+      stages: [test]
+      det3d_class_names: ${database.taxonomy.detection3d.class_names}
+      seg3d_class_names: ${database.taxonomy.segmentation3d.class_names}
+      class_names: ${metric_params.det3d_seg3d.partial_detection3d_classes}
+      filter: ${metric_params.segmentation3d.filters.region_filters.road}
+    - _target_: autoware_ml.metrics.segmentation3d.partial_detection3d.PartialDetection3DScore
+      stages: [test]
+      det3d_class_names: ${database.taxonomy.detection3d.class_names}
+      seg3d_class_names: ${database.taxonomy.segmentation3d.class_names}
+      class_names: ${metric_params.det3d_seg3d.partial_detection3d_classes}
+      filter: ${metric_params.segmentation3d.filters.region_filters.walkway}
+    - _target_: autoware_ml.metrics.segmentation3d.partial_detection3d.PartialDetection3DScore
+      stages: [test]
+      det3d_class_names: ${database.taxonomy.detection3d.class_names}
+      seg3d_class_names: ${database.taxonomy.segmentation3d.class_names}
+      class_names: ${metric_params.det3d_seg3d.partial_detection3d_classes}
+      filter: ${metric_params.segmentation3d.filters.corridor_filter}
+  num_classes: ${class_count:${database.taxonomy.segmentation3d.class_names}}
+  ignore_index: ${database.taxonomy.segmentation3d.ignore_index}
+  class_names: ${database.taxonomy.segmentation3d.class_names}
+  ranges: ${metric_ranges}

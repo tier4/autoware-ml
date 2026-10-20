@@ -1,7 +1,7 @@
 """Unit tests for the driving-aware detection metrics (A1, A2, A3).
 
 Geometry helpers are pinned against hand-computed values, then each component is
-exercised on a hand-built ``DetectionState`` with a known true-positive pair.
+exercised on a hand-built ``Detection3DState`` with a known true-positive pair.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from autoware_ml.metrics.detection3d.geometry import (
 )
 from autoware_ml.metrics.detection3d.heading_flip import HeadingFlipRate
 from autoware_ml.metrics.detection3d.nearest_surface_error import NearestSurfaceError
-from autoware_ml.metrics.detection3d.matching import DetectionState
+from autoware_ml.metrics.detection3d.matching import Detection3DState
 from autoware_ml.metrics.detection3d.structures import Detection3DSample
 
 
@@ -49,7 +49,7 @@ def test_nearest_surface_distance_and_sign() -> None:
     assert signed_nearest_surface_error(_box(cx=11.0), _box(cx=10.0)) == pytest.approx(1.0)
 
 
-def _yaw_state(yaw_err: float, match_cost: str = "center") -> DetectionState:
+def _yaw_state(yaw_err: float, match_cost: str = "center") -> Detection3DState:
     gt = torch.tensor([[10.0, 0.0, 0.0, 4.0, 2.0, 1.5, 0.0, 0.0, 0.0]])
     pred = gt.clone()
     pred[0, 6] = yaw_err
@@ -60,7 +60,7 @@ def _yaw_state(yaw_err: float, match_cost: str = "center") -> DetectionState:
         gt_boxes=gt,
         gt_labels=torch.tensor([0]),
     )
-    return DetectionState(samples=[sample], class_names=("car",), match_cost=match_cost)
+    return Detection3DState(samples=[sample], class_names=("car",), match_cost=match_cost)
 
 
 def test_heading_flip_rate_no_flip_for_small_error() -> None:

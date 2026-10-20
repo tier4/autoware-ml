@@ -42,16 +42,16 @@ from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentation3DHeadOutputs
-from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
+from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
 from autoware_ml.models.detection3d.task_modules.partial_annotations import PartialAnnotations
-from autoware_ml.models.detection3d.ptv3 import PTv3DetBEVNeck, build_det_head_export_spec
+from autoware_ml.models.detection3d.ptv3 import PTv3Det3DBEVNeck, build_det3d_head_export_spec
 from autoware_ml.models.segmentation3d.encoders.ptv3 import PointTransformerV3Encoder
 from autoware_ml.models.segmentation3d.encoders.voxel import VoxelFeatureEncoder
 from autoware_ml.models.segmentation3d.heads.ptv3 import (
-    PTv3SegDecoderHead,
-    segmentation_eval_output,
-    segmentation_point_loss,
-    segmentation_predict_outputs,
+    PTv3Seg3DDecoderHead,
+    segmentation3d_eval_output,
+    segmentation3d_point_loss,
+    segmentation3d_predict_outputs,
 )
 from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.segmentation3d.ptv3_base import (
@@ -62,14 +62,14 @@ from autoware_ml.models.segmentation3d.ptv3_base import (
     build_point_feature_dynamic_axes,
     build_ptv3_export_context,
     build_ptv3_input_dynamic_axes,
-    build_seg_head_export_spec,
+    build_seg3d_head_export_spec,
     prepare_ptv3_export_inputs,
     split_block_parameters,
 )
 from autoware_ml.utils.deploy import ExportSpec
 
 
-class PTv3SegDetModel(PTv3BaseModel):
+class PTv3Det3DSeg3DModel(PTv3BaseModel):
     """PTv3 joint segmentation and detection model.
 
     Training: call forward() then compute_metrics().
@@ -81,12 +81,12 @@ class PTv3SegDetModel(PTv3BaseModel):
         self,
         encoder: PointTransformerV3Encoder,
         voxel_encoder: VoxelFeatureEncoder,
-        seg3d_head: PTv3SegDecoderHead,
-        bev_neck: PTv3DetBEVNeck,
+        seg3d_head: PTv3Seg3DDecoderHead,
+        bev_neck: PTv3Det3DBEVNeck,
         bbox_head: nn.Module,
         log_dict_configs: LogDictConfigs,
-        segmentation_loss_weight: float = 1.0,
-        detection_loss_weight: float = 1.0,
+        segmentation3d_loss_weight: float = 1.0,
+        detection3d_loss_weight: float = 1.0,
         export_output_names: Sequence[str] | None = None,
         grid_size: float | None = None,
         point_cloud_range: Sequence[float] | None = None,
@@ -107,8 +107,8 @@ class PTv3SegDetModel(PTv3BaseModel):
             bev_neck: Detection BEV neck consuming the encoder pooling chain.
             bbox_head: Detection head producing the decoded predictions.
             log_dict_configs: Logging configuration for training and validation.
-            segmentation_loss_weight: Weight of the segmentation loss term.
-            detection_loss_weight: Weight of the detection loss term.
+            segmentation3d_loss_weight: Weight of the segmentation loss term.
+            detection3d_loss_weight: Weight of the detection loss term.
             export_output_names: Ordered output names used during export.
             grid_size: Voxel grid size used to derive sparse shape for export.
             point_cloud_range: Point-cloud range used to derive sparse shape
@@ -137,8 +137,8 @@ class PTv3SegDetModel(PTv3BaseModel):
         self.bev_neck = bev_neck
         self.bbox_head = bbox_head
         self.partial_annotations = partial_annotations
-        self.segmentation_loss_weight = float(segmentation_loss_weight)
-        self.detection_loss_weight = float(detection_loss_weight)
+        self.segmentation3d_loss_weight = float(segmentation3d_loss_weight)
+        self.detection3d_loss_weight = float(detection3d_loss_weight)
         self._export_output_names = (
             list(export_output_names) if export_output_names is not None else None
         )
@@ -176,17 +176,17 @@ class PTv3SegDetModel(PTv3BaseModel):
         # decoder: SerializedUnpooling pops the chain and overwrites parent
         # features in place.
         bev_features = self.bev_neck(point)
-        seg_logits = self.seg3d_head(point)
-        det_outputs = self.bbox_head(bev_features)
+        seg3d_logits = self.seg3d_head(point)
+        det3d_outputs = self.bbox_head(bev_features)
         return ModelOutputs(
             detection3d_head_outputs=Detection3DHeadOutputs(
-                center_head_outputs=None, transfusion_head_outputs=det_outputs
+                center_head_outputs=None, transfusion_head_outputs=det3d_outputs
             ),
-            segmentation3d_head_outputs=Segmentation3DHeadOutputs(logits=seg_logits),
+            segmentation3d_head_outputs=Segmentation3DHeadOutputs(logits=seg3d_logits),
         )
 
     @staticmethod
-    def _detection_gt_batch(batch_inputs: ModelBatchInputs) -> Detection3DGTBatch:
+    def _detection3d_gt_batch(batch_inputs: ModelBatchInputs) -> Detection3DGTBatch:
         """Read the detection ground truth of the batch.
 
         Args:
@@ -204,7 +204,7 @@ class PTv3SegDetModel(PTv3BaseModel):
         return gt_detections
 
     @staticmethod
-    def _detection_frame_mask(gt_detections: Detection3DGTBatch) -> torch.Tensor:
+    def _detection3d_frame_mask(gt_detections: Detection3DGTBatch) -> torch.Tensor:
         """Return the per-frame detection supervision mask.
 
         Supervision is carried by the annotations themselves: a frame with no
@@ -236,25 +236,25 @@ class PTv3SegDetModel(PTv3BaseModel):
         on unlabeled frames, empty ground truth would turn every real object
         into a hard negative.
         """
-        seg_logits = outputs.segmentation3d().logits
-        det_outputs = outputs.detection3d().transfusion_head()
-        seg_metrics = segmentation_point_loss(self.seg3d_head, seg_logits, batch_inputs)
+        seg3d_logits = outputs.segmentation3d().logits
+        det3d_outputs = outputs.detection3d().transfusion_head()
+        seg3d_metrics = segmentation3d_point_loss(self.seg3d_head, seg3d_logits, batch_inputs)
 
-        gt_detections = self._detection_gt_batch(batch_inputs)
-        det_mask = self._detection_frame_mask(gt_detections)
-        if bool(det_mask.any()):
+        gt_detections = self._detection3d_gt_batch(batch_inputs)
+        det3d_mask = self._detection3d_frame_mask(gt_detections)
+        if bool(det3d_mask.any()):
             traffic_cone_status = gt_detections.gt_traffic_cone_barrier_bbox_status
-            det_metrics = self.bbox_head.loss(
+            det3d_metrics = self.bbox_head.loss(
                 outputs=Detection3DHeadOutputs(
                     center_head_outputs=None,
-                    transfusion_head_outputs=det_outputs.select_samples(det_mask),
+                    transfusion_head_outputs=det3d_outputs.select_samples(det3d_mask),
                 ),
-                gt_bboxes_3d=gt_detections.gt_bboxes_3d[det_mask],
-                gt_labels_3d=gt_detections.gt_labels_3d[det_mask],
-                gt_valid_bboxes=gt_detections.gt_valid_bboxes[det_mask],
+                gt_bboxes_3d=gt_detections.gt_bboxes_3d[det3d_mask],
+                gt_labels_3d=gt_detections.gt_labels_3d[det3d_mask],
+                gt_valid_bboxes=gt_detections.gt_valid_bboxes[det3d_mask],
                 gt_annotated_class_masks=(
                     self.partial_annotations.build_annotated_class_masks(
-                        traffic_cone_status[det_mask] if traffic_cone_status is not None else None
+                        traffic_cone_status[det3d_mask] if traffic_cone_status is not None else None
                     )
                     if self.partial_annotations is not None
                     else None
@@ -263,9 +263,9 @@ class PTv3SegDetModel(PTv3BaseModel):
         else:
             # Keep the detection branch in the autograd graph with zero
             # gradients so DDP reducers see every parameter.
-            branches = det_outputs.separate_head_outputs
+            branches = det3d_outputs.separate_head_outputs
             graph_tensors = [
-                det_outputs.dense_heatmap,
+                det3d_outputs.dense_heatmap,
                 branches.heatmap,
                 branches.center,
                 branches.height,
@@ -275,20 +275,20 @@ class PTv3SegDetModel(PTv3BaseModel):
             if branches.vel is not None:
                 graph_tensors.append(branches.vel)
             zero_loss = sum(tensor.float().sum() for tensor in graph_tensors) * 0.0
-            det_metrics = {"loss": zero_loss}
+            det3d_metrics = {"loss": zero_loss}
 
-        seg_loss = seg_metrics["loss"]
-        weighted_seg_loss = self.segmentation_loss_weight * seg_loss
-        weighted_det_loss = self.detection_loss_weight * det_metrics["loss"]
+        seg3d_loss = seg3d_metrics["loss"]
+        weighted_seg3d_loss = self.segmentation3d_loss_weight * seg3d_loss
+        weighted_det3d_loss = self.detection3d_loss_weight * det3d_metrics["loss"]
         metrics: dict[str, torch.Tensor] = {
-            "seg_loss_ce": seg_metrics["loss_ce"],
-            "seg_loss_lovasz": seg_metrics["loss_lovasz"],
-            "seg_loss": seg_loss,
-            "weighted_seg_loss": weighted_seg_loss,
-            "weighted_det_loss": weighted_det_loss,
-            "loss": weighted_det_loss + weighted_seg_loss,
+            "seg3d_loss_ce": seg3d_metrics["loss_ce"],
+            "seg3d_loss_lovasz": seg3d_metrics["loss_lovasz"],
+            "seg3d_loss": seg3d_loss,
+            "weighted_seg3d_loss": weighted_seg3d_loss,
+            "weighted_det3d_loss": weighted_det3d_loss,
+            "loss": weighted_det3d_loss + weighted_seg3d_loss,
         }
-        metrics.update({f"det_{name}": value for name, value in det_metrics.items()})
+        metrics.update({f"det3d_{name}": value for name, value in det3d_metrics.items()})
         return metrics
 
     def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> dict[str, Any]:
@@ -301,7 +301,7 @@ class PTv3SegDetModel(PTv3BaseModel):
         deadlocks under DDP when ranks see different seg/det frame mixes.
         Empty prediction + empty ground truth is metric-neutral.
         """
-        det_mask = self._detection_frame_mask(self._detection_gt_batch(batch))
+        det3d_mask = self._detection3d_frame_mask(self._detection3d_gt_batch(batch))
         predictions = list(
             self.bbox_head.decode_outputs(outputs=outputs.detection3d()).detection3d_predictions
         )
@@ -313,12 +313,12 @@ class PTv3SegDetModel(PTv3BaseModel):
                 scores_3d=prediction.scores_3d[:0],
                 labels_3d=prediction.labels_3d[:0],
             )
-            for prediction, flagged in zip(predictions, det_mask.tolist())
+            for prediction, flagged in zip(predictions, det3d_mask.tolist())
         ]
-        eval_out = detection_eval_output(
+        eval_out = detection3d_eval_output(
             ModelPredictions(detection3d_predictions=predictions), batch
         )
-        eval_out.update(segmentation_eval_output(outputs.segmentation3d().logits, batch))
+        eval_out.update(segmentation3d_eval_output(outputs.segmentation3d().logits, batch))
         return eval_out
 
     def decode_outputs(
@@ -334,10 +334,10 @@ class PTv3SegDetModel(PTv3BaseModel):
         Returns:
             The decoded boxes of every sample and the label of every original point.
         """
-        detection_predictions = self.bbox_head.decode_outputs(outputs=outputs.detection3d())
+        detection3d_predictions = self.bbox_head.decode_outputs(outputs=outputs.detection3d())
         return ModelPredictions(
-            detection3d_predictions=detection_predictions.detection3d_predictions,
-            segmentation3d_predictions=segmentation_predict_outputs(
+            detection3d_predictions=detection3d_predictions.detection3d_predictions,
+            segmentation3d_predictions=segmentation3d_predict_outputs(
                 outputs.segmentation3d().logits, multi_task_batch_inputs
             ),
         )
@@ -373,7 +373,7 @@ class PTv3SegDetModel(PTv3BaseModel):
             )
         inputs = prepare_ptv3_export_inputs(self, batch_inputs)
         export_input_args, input_param_names = inputs.encoder_args(SERIALIZED_POOLING_FIELDS)
-        export_module = _PTv3SegDetExportModule(
+        export_module = _PTv3Det3DSeg3DExportModule(
             encoder=self._prepare_encoder_export(),
             voxel_encoder=self.voxel_encoder,
             seg3d_head=self.seg3d_head.prepare_for_export(self.EXPORT_ORDER),
@@ -403,7 +403,7 @@ class PTv3SegDetModel(PTv3BaseModel):
         )
 
     def build_export_specs(self, batch_inputs: ModelBatchInputs) -> dict[str, ExportSpec]:
-        """Build split PTv3 segdet ONNX export specs for encoder, seg head, and det head.
+        """Build split PTv3 det3d_seg3d ONNX export specs for encoder, seg head, and det head.
 
         Args:
             batch_inputs: Example preprocessed batch with the voxels.
@@ -417,36 +417,36 @@ class PTv3SegDetModel(PTv3BaseModel):
                 "export."
             )
         context = build_ptv3_export_context(self, batch_inputs)
-        det_output_names = [
+        det3d_output_names = [
             n for n in self.get_export_output_names() if n not in ("pred_labels", "pred_probs")
         ]
         return {
             "ptv3_encoder": build_encoder_export_spec(context),
-            "ptv3_seg3d_head": build_seg_head_export_spec(
+            "ptv3_seg3d_head": build_seg3d_head_export_spec(
                 context,
                 self.seg3d_head.prepare_for_export(self.EXPORT_ORDER),
                 ["pred_labels", "pred_probs"],
             ),
-            "ptv3_det3d_head": build_det_head_export_spec(
+            "ptv3_det3d_head": build_det3d_head_export_spec(
                 context,
                 self.bev_neck,
                 self.bbox_head.prepare_for_export(
                     bev_shape=self.bev_neck.bev_projector.output_shape
                 ),
-                det_output_names,
+                det3d_output_names,
             ),
         }
 
 
-class _PTv3SegDetExportModule(PTv3EncoderExportBase):
+class _PTv3Det3DSeg3DExportModule(PTv3EncoderExportBase):
     """ONNX-exportable PTv3 segmentation+detection graph with baked sparse shape."""
 
     def __init__(
         self,
         encoder: PointTransformerV3Encoder,
         voxel_encoder: VoxelFeatureEncoder,
-        seg3d_head: PTv3SegDecoderHead,
-        bev_neck: PTv3DetBEVNeck,
+        seg3d_head: PTv3Seg3DDecoderHead,
+        bev_neck: PTv3Det3DBEVNeck,
         bbox_head: nn.Module,
         sparse_shape: torch.Tensor,
         serialized_depth: torch.Tensor,
@@ -491,14 +491,14 @@ class _PTv3SegDetExportModule(PTv3EncoderExportBase):
         # BEV branch first: the segmentation decoder consumes the pooling
         # chain destructively.
         bev_features = self.bev_neck(point)
-        det_outputs = self.bbox_head(bev_features)
+        det3d_outputs = self.bbox_head(bev_features)
 
-        seg_logits = self.seg3d_head(point)
-        pred_probs = torch.softmax(seg_logits, dim=1)
+        seg3d_logits = self.seg3d_head(point)
+        pred_probs = torch.softmax(seg3d_logits, dim=1)
         pred_labels = pred_probs.argmax(dim=1)
 
         segmentation = {"pred_labels": pred_labels, "pred_probs": pred_probs}
-        detection_names = [name for name in self.output_names if name not in segmentation]
-        detection = dict(zip(detection_names, det_outputs.export_tensors(detection_names)))
+        detection3d_names = [name for name in self.output_names if name not in segmentation]
+        detection = dict(zip(detection3d_names, det3d_outputs.export_tensors(detection3d_names)))
         outputs = segmentation | detection
         return tuple(outputs[name] for name in self.output_names)

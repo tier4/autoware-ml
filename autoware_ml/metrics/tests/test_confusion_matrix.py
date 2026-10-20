@@ -7,11 +7,11 @@ import torch
 
 from autoware_ml.metrics.base import EvalStage
 from autoware_ml.metrics.confusion_report import confusion_cells
-from autoware_ml.metrics.detection3d.confusion_matrix import ConfusionMatrix as DetConfusion
-from autoware_ml.metrics.detection3d.matching import DetectionState
+from autoware_ml.metrics.detection3d.confusion_matrix import ConfusionMatrix as Det3DConfusion
+from autoware_ml.metrics.detection3d.matching import Detection3DState
 from autoware_ml.metrics.detection3d.structures import Detection3DSample
 from autoware_ml.metrics.segmentation3d.confusion import ConfusionState
-from autoware_ml.metrics.segmentation3d.confusion_matrix import ConfusionMatrix as SegConfusion
+from autoware_ml.metrics.segmentation3d.confusion_matrix import ConfusionMatrix as Seg3DConfusion
 from autoware_ml.metrics.segmentation3d.suite import Segmentation3DConfusionMatrixMetricSuite
 
 
@@ -24,7 +24,7 @@ def test_confusion_cells_key_each_count_by_true_then_predicted_class() -> None:
     assert cells["confusion_obstacle__obstacle"] == 7.0
 
 
-def _det_sample(pred_xy_label, gt_xy_label) -> Detection3DSample:
+def _det3d_sample(pred_xy_label, gt_xy_label) -> Detection3DSample:
     def box(x, y):
         return [float(x), float(y), 0.0, 4.0, 2.0, 1.5, 0.0]
 
@@ -37,39 +37,39 @@ def _det_sample(pred_xy_label, gt_xy_label) -> Detection3DSample:
     )
 
 
-def test_det_confusion_counts_matched_label_pair() -> None:
+def test_det3d_confusion_counts_matched_label_pair() -> None:
     # A car prediction (label 0) sits on a truck GT (label 1) -> confusion[truck, car].
-    sample = _det_sample([(10.0, 0.0, 0)], [(10.0, 0.0, 1)])
-    state = DetectionState(samples=[sample], class_names=("car", "truck"), match_cost="center")
-    out = DetConfusion(match_threshold=2.0).evaluate(state, EvalStage.TEST)
+    sample = _det3d_sample([(10.0, 0.0, 0)], [(10.0, 0.0, 1)])
+    state = Detection3DState(samples=[sample], class_names=("car", "truck"), match_cost="center")
+    out = Det3DConfusion(match_threshold=2.0).evaluate(state, EvalStage.TEST)
     assert out["confusion_truck__car"] == 1.0
     assert out["confusion_truck__truck"] == 0.0
     assert out["confusion_car__car"] == 0.0
 
 
-def test_det_confusion_drops_unmatched() -> None:
+def test_det3d_confusion_drops_unmatched() -> None:
     # Prediction 100 m from the only GT -> no match -> empty matrix.
-    sample = _det_sample([(100.0, 0.0, 0)], [(10.0, 0.0, 0)])
-    state = DetectionState(samples=[sample], class_names=("car", "truck"), match_cost="center")
-    out = DetConfusion(match_threshold=2.0).evaluate(state, EvalStage.TEST)
+    sample = _det3d_sample([(100.0, 0.0, 0)], [(10.0, 0.0, 0)])
+    state = Detection3DState(samples=[sample], class_names=("car", "truck"), match_cost="center")
+    out = Det3DConfusion(match_threshold=2.0).evaluate(state, EvalStage.TEST)
     assert all(v == 0.0 for v in out.values())
 
 
-def test_seg_confusion_reads_state_matrix() -> None:
+def test_seg3d_confusion_reads_state_matrix() -> None:
     state = ConfusionState(
         confusion=torch.tensor([[5, 1], [2, 7]]), class_names=("road", "obstacle"), num_classes=2
     )
-    out = SegConfusion().evaluate(state, EvalStage.TEST)
+    out = Seg3DConfusion().evaluate(state, EvalStage.TEST)
     assert out["confusion_road__obstacle"] == 1.0
     assert out["confusion_obstacle__road"] == 2.0
 
 
-def test_seg_confusion_grouped_folds_intra_group_pairs() -> None:
+def test_seg3d_confusion_grouped_folds_intra_group_pairs() -> None:
     # car<->truck confusion folds into the grouped_vehicle diagonal.
     names = ("car", "truck", "road", "sidewalk")
     groups = {"grouped_vehicle": ["car", "truck"], "grouped_flat": ["road", "sidewalk"]}
     suite = Segmentation3DConfusionMatrixMetricSuite(
-        components=[SegConfusion(stages=["test"])],
+        components=[Seg3DConfusion(stages=["test"])],
         num_classes=4,
         class_names=names,
         ranges=(),
@@ -77,7 +77,7 @@ def test_seg_confusion_grouped_folds_intra_group_pairs() -> None:
     )
     suite.update(
         {
-            "seg_frames": [
+            "seg3d_frames": [
                 {
                     "pred": torch.tensor([0, 1, 2, 3]),
                     "target": torch.tensor([1, 0, 3, 2]),  # all intra-group swaps

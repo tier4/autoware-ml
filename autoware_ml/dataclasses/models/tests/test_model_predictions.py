@@ -56,7 +56,7 @@ class TestModelPredictions(unittest.TestCase):
         self.assertIsNone(predictions.detection3d_predictions)
         self.assertIsNone(predictions.calibration_status_predictions)
 
-    def test_segmentation_labels_and_probabilities_describe_the_same_points(self) -> None:
+    def test_segmentation3d_labels_and_probabilities_describe_the_same_points(self) -> None:
         """Test that labels and probabilities of different point counts are rejected."""
         with self.assertRaises(ValidationError):
             Segmentation3DPredictions(
@@ -114,20 +114,20 @@ class TestModelOutputAccessors(unittest.TestCase):
         segmentation = Segmentation3DHeadOutputs(logits=torch.zeros(4, 3))
         calibration = CalibrationStatusHeadOutputs(logits=torch.zeros(2, 2))
 
-        segmentation_outputs = ModelOutputs(segmentation3d_head_outputs=segmentation)
+        segmentation3d_outputs = ModelOutputs(segmentation3d_head_outputs=segmentation)
         calibration_outputs = ModelOutputs(calibration_status_head_outputs=calibration)
 
-        self.assertIs(segmentation_outputs.segmentation3d(), segmentation)
-        self.assertEqual(segmentation_outputs.segmentation3d().auxiliary_features, ())
+        self.assertIs(segmentation3d_outputs.segmentation3d(), segmentation)
+        self.assertEqual(segmentation3d_outputs.segmentation3d().auxiliary_features, ())
         self.assertIs(calibration_outputs.calibration_status(), calibration)
         with self.assertRaises(ValueError):
-            segmentation_outputs.detection3d()
+            segmentation3d_outputs.detection3d()
         with self.assertRaises(ValueError):
             calibration_outputs.segmentation3d()
         with self.assertRaises(ValueError):
-            segmentation_outputs.calibration_status()
+            segmentation3d_outputs.calibration_status()
 
-    def test_detection_accessors_follow_the_head_family(self) -> None:
+    def test_detection3d_accessors_follow_the_head_family(self) -> None:
         center = CenterHeadOutputs(
             heatmap=torch.zeros(1, 2, 4, 4),
             reg=torch.zeros(1, 2, 4, 4),

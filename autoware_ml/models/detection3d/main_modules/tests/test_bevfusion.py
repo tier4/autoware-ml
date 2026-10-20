@@ -43,7 +43,7 @@ from autoware_ml.models.detection3d.heads.transfusions.exportable_multi_head_att
 from autoware_ml.models.detection3d.task_modules.partial_annotations import PartialAnnotations
 from autoware_ml.models.detection3d.heads.transfusions.transfusion_head import TransFusionHead
 from autoware_ml.models.detection3d.main_modules.bevfusion import (
-    BEVFusionDetectionModel,
+    BEVFusionDetection3DModel,
     _BEVFusionExportWrapper,
     _BEVFusionLidarExportWrapper,
 )
@@ -54,7 +54,7 @@ from autoware_ml.models.detection3d.main_modules.bevfusions.bevfusion_camera imp
 from autoware_ml.models.detection3d.main_modules.bevfusions.bevfusion_lidar import BEVFusionLidar
 from autoware_ml.models.detection3d.main_modules.bevfusions.fuser import ConvFuser
 from autoware_ml.models.detection3d.main_modules.bevfusions.export_wrappers import (
-    export_detection_outputs,
+    export_detection3d_outputs,
 )
 from autoware_ml.models.detection3d.necks.second_fpn import SECONDFPN
 from autoware_ml.models.detection3d.task_modules.assigners import HungarianAssigner3D
@@ -148,7 +148,7 @@ class _StubNeck(nn.Module):
         return list(features)
 
 
-class _BEVFusionDetectionModelTestCase(unittest.TestCase):
+class _BEVFusionDetection3DModelTestCase(unittest.TestCase):
     """Shared configuration and builders for the BEVFusion detection model test cases.
 
     One BEV cell is one metre, because ``voxel_size[0] * out_size_factor`` is 1.0, so the 16 m
@@ -279,9 +279,9 @@ class _BEVFusionDetectionModelTestCase(unittest.TestCase):
         lidar_network: BEVFusionLidar | None,
         camera_network: BEVFusionCamera | None,
         partial_annotations: PartialAnnotations | None = None,
-    ) -> BEVFusionDetectionModel:
+    ) -> BEVFusionDetection3DModel:
         """Build the detector around the given branches."""
-        return BEVFusionDetectionModel(
+        return BEVFusionDetection3DModel(
             data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
             lidar_network=lidar_network,
             camera_network=camera_network,
@@ -411,7 +411,7 @@ class _BEVFusionDetectionModelTestCase(unittest.TestCase):
         )
 
 
-class TestBEVFusionDetectionModelLidarOnly(_BEVFusionDetectionModelTestCase):
+class TestBEVFusionDetection3DModelLidarOnly(_BEVFusionDetection3DModelTestCase):
     """Unit tests for the lidar-only detector, which runs end to end on the CPU."""
 
     def setUp(self) -> None:
@@ -590,7 +590,7 @@ class TestBEVFusionDetectionModelLidarOnly(_BEVFusionDetectionModelTestCase):
         self.assertTrue(torch.isfinite(bbox_pred).all())
         self.assertTrue(torch.all((score >= 0.0) & (score <= 1.0)))
 
-    def _build_partial_model(self) -> BEVFusionDetectionModel:
+    def _build_partial_model(self) -> BEVFusionDetection3DModel:
         """Build a lidar-only detector that ignores cyclists in frames flagged as not annotated."""
         return self._build_model(
             lidar_network=self._build_lidar_network(),
@@ -665,7 +665,7 @@ class TestBEVFusionDetectionModelLidarOnly(_BEVFusionDetectionModelTestCase):
             model.compute_metrics(batch_inputs, multi_task_outputs)
 
 
-class TestBEVFusionDetectionModelCameraLidar(_BEVFusionDetectionModelTestCase):
+class TestBEVFusionDetection3DModelCameraLidar(_BEVFusionDetection3DModelTestCase):
     """Unit tests for the camera-lidar detector paths that never reach the pooling kernel."""
 
     def setUp(self) -> None:
@@ -922,7 +922,7 @@ class TestBEVFusionDetectionModelCameraLidar(_BEVFusionDetectionModelTestCase):
 @unittest.skipUnless(
     torch.cuda.is_available(), "The camera branch pools through the CUDA bev_pool kernel."
 )
-class TestBEVFusionDetectionModelCameraLidarForward(_BEVFusionDetectionModelTestCase):
+class TestBEVFusionDetection3DModelCameraLidarForward(_BEVFusionDetection3DModelTestCase):
     """Unit tests for the camera-lidar detector paths that pool image features into BEV."""
 
     def setUp(self) -> None:
@@ -1020,7 +1020,7 @@ class TestBEVFusionDetectionModelCameraLidarForward(_BEVFusionDetectionModelTest
         with torch.no_grad():
             outputs = self.model(batch_inputs).detection3d_head_outputs
             assert outputs is not None and outputs.transfusion_head_outputs is not None
-            expected = export_detection_outputs(
+            expected = export_detection3d_outputs(
                 self.model.bbox_head, outputs.transfusion_head_outputs
             )
             exported = main_body_spec.module(*main_body_spec.args)

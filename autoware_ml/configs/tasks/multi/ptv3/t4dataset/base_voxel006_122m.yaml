@@ -3,7 +3,7 @@
 # the fine taxonomy and the trailer box pipelines, the joint suite follows here.
 defaults:
   - base_122m
-  - override /metrics/t4dataset/segdet3d/partial_detection_classes@metric_params.segdet3d.partial_detection_classes: default_fine
+  - override /metrics/t4dataset/det3d_seg3d/partial_detection3d_classes@metric_params.det3d_seg3d.partial_detection3d_classes: default_fine
   - _self_
 
 grid_size: 0.06

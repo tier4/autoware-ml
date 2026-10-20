@@ -246,7 +246,7 @@ def test_a_record_without_lidar_sources_cannot_serve_one() -> None:
         dataset.get_lidar_source_view(0, "LIDAR_FRONT_LOWER")
 
 
-def test_lidar_sources_reject_detection() -> None:
+def test_lidar_sources_reject_detection3d() -> None:
     with pytest.raises(ValueError, match="cannot run on single lidar sources"):
         T4Dataset(
             lidar_intensity_scale=255.0,

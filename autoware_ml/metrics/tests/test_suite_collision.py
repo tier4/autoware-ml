@@ -14,7 +14,7 @@ from autoware_ml.metrics.base import EvalStage
 from autoware_ml.metrics.detection3d.collision import CollisionTTC
 from autoware_ml.metrics.detection3d.collision_weighted_map import CollisionWeightedMeanAP
 from autoware_ml.metrics.detection3d.critical_fp_fn import CriticalFPFN
-from autoware_ml.metrics.detection3d.matching import DetectionState
+from autoware_ml.metrics.detection3d.matching import Detection3DState
 from autoware_ml.metrics.detection3d.structures import Detection3DSample
 from autoware_ml.metrics.detection3d.suite import Detection3DMetricSuite
 from autoware_ml.metrics.geometry.reachability import ReachabilityParams
@@ -179,7 +179,7 @@ def test_a_metric_reading_a_skipped_prediction_fails_loud() -> None:
     # box the suite never propagated.
     metric = CriticalFPFN(confidences=(0.5,))
     metric.ttc_score_floor = 0.9
-    state = DetectionState(
+    state = Detection3DState(
         samples=[
             Detection3DSample(
                 pred_boxes=torch.tensor([collision_box(10.0, 0.0)]),

@@ -6,7 +6,7 @@ defaults:
 
 batch_size: 16
 num_workers: 8
-experiment_group_name: ptv3_segdet/${database.version}/nuscenes
+experiment_group_name: ptv3_det3d_seg3d/${database.version}/nuscenes
 experiment_name: voxel005_base_b16_100e_nuscenes_51m
 
 trainer:

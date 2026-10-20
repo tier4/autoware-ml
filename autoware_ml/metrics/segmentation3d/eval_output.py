@@ -1,6 +1,6 @@
 """Shared eval-output builder for the 3D segmentation suites.
 
-Both segmentation suites consume one contract: ``seg_frames``, a list with one
+Both segmentation suites consume one contract: ``seg3d_frames``, a list with one
 entry per frame carrying that frame's points (``coord``, predicted/target labels,
 per-class ``scores``) plus any per-frame metadata the configured filters need
 (``ego2global``, ``scene_token``) and, for the cross-task partial detection
@@ -20,7 +20,7 @@ import torch
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 
 
-def segmentation_frames_eval_output(
+def segmentation3d_frames_eval_output(
     coord: torch.Tensor,
     pred_labels: torch.Tensor,
     target_labels: torch.Tensor,
@@ -29,7 +29,7 @@ def segmentation_frames_eval_output(
     num_frames: int,
     batch_inputs: ModelBatchInputs,
 ) -> dict[str, Any]:
-    """Split batch-concatenated per-point tensors into the ``seg_frames`` list.
+    """Split batch-concatenated per-point tensors into the ``seg3d_frames`` list.
 
     Args:
         coord: ``(N, 3+)`` point coordinates (base_link).
@@ -44,7 +44,7 @@ def segmentation_frames_eval_output(
             them.
 
     Returns:
-        ``{"seg_frames": [...]}`` with one entry per frame.
+        ``{"seg3d_frames": [...]}`` with one entry per frame.
     """
     frame_meta: dict[str, list[Any]] = {}
     gt_batch = batch_inputs.multi_task_gt_batch
@@ -98,7 +98,7 @@ def segmentation_frames_eval_output(
         for key, values in frame_meta.items():
             frame[key] = values[frame_index]
         frames.append(frame)
-    return {"seg_frames": frames}
+    return {"seg3d_frames": frames}
 
 
 def concat_frame_ids(offset: torch.Tensor, point_to_batch: torch.Tensor) -> torch.Tensor:

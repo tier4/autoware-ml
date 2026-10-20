@@ -24,7 +24,7 @@ import numpy as np
 import polars as pl
 
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
-from autoware_ml.databases.taxonomy import LabelVocabulary, SegmentationTaxonomy
+from autoware_ml.databases.taxonomy import LabelVocabulary, Segmentation3DTaxonomy
 from autoware_ml.datamodule.t4dataset.dataset import T4Dataset
 from autoware_ml.datamodule.common.detection3d import Detection3DTask
 from autoware_ml.datamodule.t4dataset.segmentation3d import T4Segmentation3DTask
@@ -54,7 +54,7 @@ POINT_CLOUD_RANGE = (-8.0, -8.0, -2.0, 8.0, 8.0, 2.0)
 SCENE = "db_v1/scene_0/dataset_v1"
 
 VOCABULARY = LabelVocabulary({"car": "car", "vehicle.car": "car", "unpainted": None})
-SEGMENTATION_TAXONOMY = SegmentationTaxonomy(
+SEGMENTATION3D_TAXONOMY = Segmentation3DTaxonomy(
     VOCABULARY, ("car",), {"car": "car"}, -1, {"vehicle": ("car",)}
 )
 
@@ -241,7 +241,7 @@ def build_dataset(root: Path, records: pl.DataFrame) -> T4Dataset:
         dataset_tasks=MappingProxyType(
             {
                 "detection3d": Detection3DTask,
-                "segmentation3d": partial(T4Segmentation3DTask, taxonomy=SEGMENTATION_TAXONOMY),
+                "segmentation3d": partial(T4Segmentation3DTask, taxonomy=SEGMENTATION3D_TAXONOMY),
             }
         ),
         det3d_supervised=True,

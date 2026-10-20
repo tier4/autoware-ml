@@ -20,12 +20,12 @@ from autoware_ml.geometry.utils import points_in_rotated_box
 from autoware_ml.metrics.base import EvalStage, Metric
 from autoware_ml.metrics.detection3d.matching import mean_valid
 from autoware_ml.metrics.segmentation3d.point_cloud import (
-    PointCloudSegState,
+    PointCloudSeg3DState,
     valid_point_mask,
 )
 
 
-class PartialDetectionScore(Metric[PointCloudSegState]):
+class PartialDetection3DScore(Metric[PointCloudSeg3DState]):
     """Saturating credit for partial segmentation of small-object detection boxes.
 
     A box is scored on its own interior points: how many of them the model segmented as
@@ -41,8 +41,8 @@ class PartialDetectionScore(Metric[PointCloudSegState]):
 
     def __init__(
         self,
-        det_class_names: Sequence[str],
-        seg_class_names: Sequence[str],
+        det3d_class_names: Sequence[str],
+        seg3d_class_names: Sequence[str],
         class_names: Sequence[str],
         half_saturation: float = 1.0,
         min_points: int = 1,
@@ -52,19 +52,19 @@ class PartialDetectionScore(Metric[PointCloudSegState]):
         """Validate the two label spaces and the scored class selection.
 
         Args:
-            det_class_names: Ordered detection class names, the label space of the boxes.
-            seg_class_names: Ordered segmentation class names the suite state must match.
-                They must start with ``det_class_names``.
+            det3d_class_names: Ordered detection class names, the label space of the boxes.
+            seg3d_class_names: Ordered segmentation class names the suite state must match.
+                They must start with ``det3d_class_names``.
             class_names: Detection class names the score is reported for, a subset of
-                ``det_class_names``.
+                ``det3d_class_names``.
             half_saturation: Correct-point count earning half the existence credit.
             min_points: Smallest interior point count a box needs to be scored.
             stages: Stage names this metric reports for, as in :class:`Metric`.
             filter: Optional selection axis, as in :class:`Metric`.
         """
         super().__init__(stages, filter=filter)
-        self.det_class_names = tuple(det_class_names)
-        self.seg_class_names = tuple(seg_class_names)
+        self.det3d_class_names = tuple(det3d_class_names)
+        self.seg3d_class_names = tuple(seg3d_class_names)
         self.class_names = tuple(class_names)
         self.half_saturation = float(half_saturation)
         self.min_points = int(min_points)
@@ -72,21 +72,21 @@ class PartialDetectionScore(Metric[PointCloudSegState]):
             raise ValueError("half_saturation must be > 0 (it is the credit's saturation point).")
         if self.min_points < 1:
             raise ValueError("min_points must be >= 1.")
-        if not self.det_class_names:
-            raise ValueError("det_class_names must not be empty.")
-        if self.seg_class_names[: len(self.det_class_names)] != self.det_class_names:
+        if not self.det3d_class_names:
+            raise ValueError("det3d_class_names must not be empty.")
+        if self.seg3d_class_names[: len(self.det3d_class_names)] != self.det3d_class_names:
             raise ValueError(
-                f"seg_class_names {self.seg_class_names} must start with det_class_names "
-                f"{self.det_class_names}, a detection class and its segmentation class share "
+                f"seg3d_class_names {self.seg3d_class_names} must start with det3d_class_names "
+                f"{self.det3d_class_names}, a detection class and its segmentation class share "
                 "one index."
             )
         if not self.class_names or len(set(self.class_names)) != len(self.class_names):
             raise ValueError("class_names must name each scored detection class once.")
-        unknown = sorted(set(self.class_names) - set(self.det_class_names))
+        unknown = sorted(set(self.class_names) - set(self.det3d_class_names))
         if unknown:
             raise ValueError(f"class_names {unknown} are not detection classes.")
         self.scored_labels: dict[int, str] = {
-            self.det_class_names.index(name): name for name in self.class_names
+            self.det3d_class_names.index(name): name for name in self.class_names
         }
 
     def _credit(self, k: int, n: int) -> float:
@@ -110,7 +110,7 @@ class PartialDetectionScore(Metric[PointCloudSegState]):
 
         return saturate(k) / saturate(n)
 
-    def evaluate(self, state: PointCloudSegState, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: PointCloudSeg3DState, stage: EvalStage) -> dict[str, float]:
         """Mean per-instance credit per detection class, over small-object boxes.
 
         Args:
@@ -120,10 +120,10 @@ class PartialDetectionScore(Metric[PointCloudSegState]):
         Returns:
             Metric keys mapped to values.
         """
-        if state.class_names != self.seg_class_names:
+        if state.class_names != self.seg3d_class_names:
             raise ValueError(
-                "PartialDetectionScore was configured for segmentation classes "
-                f"{self.seg_class_names} but the suite provides {state.class_names}, "
+                "PartialDetection3DScore was configured for segmentation classes "
+                f"{self.seg3d_class_names} but the suite provides {state.class_names}, "
                 "the shared class index would score the wrong index space."
             )
         credits: dict[int, list[float]] = {label: [] for label in self.scored_labels}

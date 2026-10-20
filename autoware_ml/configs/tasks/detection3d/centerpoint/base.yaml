@@ -61,7 +61,7 @@ deploy:
     enabled: false
 
 model:
-  _target_: autoware_ml.models.detection3d.main_modules.centerpoint.CenterPointDetectionModel
+  _target_: autoware_ml.models.detection3d.main_modules.centerpoint.CenterPointDetection3DModel
   metrics: ${metrics}
   log_dict_configs:
     _target_: autoware_ml.models.module_base_model.LogDictConfigs

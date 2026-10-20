@@ -8,10 +8,10 @@ PointTransformerV3 is a LiDAR encoder for LiDAR 3D semantic segmentation and
 3D object detection. The shared component is the hierarchical PTv3 **encoder**
 (`PointTransformerV3Encoder`); each task owns its head:
 
-- Segmentation: `PTv3SegDecoderHead` unpools the deepest encoder stage back to
+- Segmentation: `PTv3Seg3DDecoderHead` unpools the deepest encoder stage back to
   full resolution through the encoder skip chain and classifies each point.
-- Detection: `PTv3DetBEVNeck` fuses the two coarsest encoder stages
-  (`PTv3DetFeatureFusion`), scatters them onto a dense BEV canvas at the
+- Detection: `PTv3Det3DBEVNeck` fuses the two coarsest encoder stages
+  (`PTv3Det3DFeatureFusion`), scatters them onto a dense BEV canvas at the
   detection-head resolution, and feeds a `TransFusionHead`.
 
 The model reads the current lidar frame and its sweeps, and every point has a time lag. The
@@ -49,7 +49,7 @@ implementation so ONNX export remains supported.
 | `detection3d/ptv3/nuscenes/voxel005_base_b16_30e_nuscenes_51m`                      | detection3d                  | nuScenes  | TransFusion | 51 m  | nuScenes detection             |
 | `detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base`        | detection3d                  | T4Dataset | TransFusion | 122 m | T4Dataset detection            |
 | `multi/ptv3/nuscenes/voxel005_base_b16_100e_nuscenes_51m`                           | segmentation3d + detection3d | nuScenes  | TransFusion | 51 m  | Joint segmentation + detection |
-| `multi/ptv3/t4dataset/voxel012_tiny_b8_100e_t4dataset_122m_j6gen2_segdet3d`         | segmentation3d + detection3d | T4Dataset | TransFusion | 122 m | Joint segmentation + detection |
+| `multi/ptv3/t4dataset/voxel012_tiny_b8_100e_t4dataset_122m_j6gen2_det3d_seg3d`         | segmentation3d + detection3d | T4Dataset | TransFusion | 122 m | Joint segmentation + detection |
 
 ## Training
 
@@ -73,7 +73,7 @@ autoware-ml train \
 ```bash
 autoware-ml test \
     --config-name segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m \
-    --weights mlruns/ptv3_seg/NuScenesDataset-base-v1.0.0/nuscenes/voxel005_base_b16_50e_nuscenes_51m/<run_id>/artifacts/checkpoints/best.ckpt
+    --weights mlruns/ptv3_seg3d/NuScenesDataset-base-v1.0.0/nuscenes/voxel005_base_b16_50e_nuscenes_51m/<run_id>/artifacts/checkpoints/best.ckpt
 
 autoware-ml test \
     --config-name detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base \
@@ -89,7 +89,7 @@ convolution plugins.
 ```bash
 autoware-ml deploy \
     --config-name segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m \
-    --weights mlruns/ptv3_seg/NuScenesDataset-base-v1.0.0/nuscenes/voxel005_base_b16_50e_nuscenes_51m/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/ptv3_seg3d/NuScenesDataset-base-v1.0.0/nuscenes/voxel005_base_b16_50e_nuscenes_51m/<run_id>/artifacts/checkpoints/best.ckpt \
     deploy.tensorrt.enabled=false
 
 autoware-ml deploy \
@@ -210,7 +210,7 @@ The split export produces one graph per `deploy.onnx.modules` entry:
   `serialized_pooling_{i-1}_serialized_inverse`, and
   `serialized_pooling_{i-1}_grid_coord` (stage 0 takes the unprefixed base
   `serialized_order`, `serialized_inverse`, and `grid_coord`). The rule is implemented once in
-  `seg_head_export_input_names` and must be mirrored by deployment consumers
+  `seg3d_head_export_input_names` and must be mirrored by deployment consumers
   from the artifact's `dec_depths`.
 - `det3d_head` - consumes `point_feat_{S-2}`, `point_feat_{S-1}`,
   `pooling_cluster_{S-2}`, and `point_grid_coord_{S-2}` and outputs the

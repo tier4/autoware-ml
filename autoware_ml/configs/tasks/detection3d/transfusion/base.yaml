@@ -49,7 +49,7 @@ deploy:
     enabled: false
 
 model:
-  _target_: autoware_ml.models.detection3d.main_modules.transfusion.TransFusionDetectionModel
+  _target_: autoware_ml.models.detection3d.main_modules.transfusion.TransFusionDetection3DModel
   _convert_: all
   metrics: ${metrics}
   log_dict_configs:

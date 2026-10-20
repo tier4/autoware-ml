@@ -24,13 +24,13 @@ import numpy as np
 import polars as pl
 
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
-from autoware_ml.databases.taxonomy import LabelVocabulary, SegmentationTaxonomy
+from autoware_ml.databases.taxonomy import LabelVocabulary, Segmentation3DTaxonomy
 from autoware_ml.datamodule.t4dataset.segmentation3d import T4Segmentation3DTask
 
 VOCABULARY = LabelVocabulary(
     {"car": "car", "police_car": "car", "tree": "vegetation", "unpainted": None}
 )
-TAXONOMY = SegmentationTaxonomy(
+TAXONOMY = Segmentation3DTaxonomy(
     VOCABULARY,
     ("car", "vegetation"),
     {"car": "car", "vegetation": "vegetation"},

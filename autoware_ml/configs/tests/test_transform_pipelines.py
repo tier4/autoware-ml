@@ -59,7 +59,7 @@ def test_cameras_load_before_the_lidar_augmentations_move_their_calibration(
         assert camera[0] < lidar[0]
 
 
-_DETECTION_TEST = [
+_DETECTION3D_TEST = [
     (c, s, steps)
     for c, s, steps in _PIPELINES
     if s == "test" and c.startswith(("detection3d/", "multi/"))
@@ -67,9 +67,9 @@ _DETECTION_TEST = [
 
 
 @pytest.mark.parametrize(
-    "config, split, steps", _DETECTION_TEST, ids=[c for c, _, _ in _DETECTION_TEST]
+    "config, split, steps", _DETECTION3D_TEST, ids=[c for c, _, _ in _DETECTION3D_TEST]
 )
-def test_detection_evaluation_drops_the_boxes_of_ignored_classes(
+def test_detection3d_evaluation_drops_the_boxes_of_ignored_classes(
     config: str, split: str, steps: list[str]
 ) -> None:
     assert any(t.endswith("boxes3d.filters.BBoxesLabelNameFilter") for t in steps)

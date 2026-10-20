@@ -24,7 +24,7 @@ from autoware_ml.dataclasses.batch.detection3d import (
 )
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.models.detection3d.main_modules.centerpoint import (
-    CenterPointDetectionModel,
+    CenterPointDetection3DModel,
     _CenterPointBackboneNeckHeadExportWrapper,
     _CenterPointVoxelEncoderExportWrapper,
 )
@@ -39,8 +39,8 @@ from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 from autoware_ml.ops.voxelization.voxelization import VoxelsData
 
 
-class TestCenterPointDetectionModel(unittest.TestCase):
-    """Unit tests for the CenterPointDetectionModel class."""
+class TestCenterPointDetection3DModel(unittest.TestCase):
+    """Unit tests for the CenterPointDetection3DModel class."""
 
     def setUp(self) -> None:
         """Set up the common inputs for the tests."""
@@ -104,9 +104,9 @@ class TestCenterPointDetectionModel(unittest.TestCase):
             use_velocity=use_velocity,
         )
 
-    def _build_centerpoint(self, bbox_head: CenterHead) -> CenterPointDetectionModel:
+    def _build_centerpoint(self, bbox_head: CenterHead) -> CenterPointDetection3DModel:
         """Build the detector around the shared encoders, backbone and neck with the given head."""
-        return CenterPointDetectionModel(
+        return CenterPointDetection3DModel(
             data_preprocessor=self.data_preprocessor,
             pts_voxel_encoder=self.pillar_feature_net,
             pts_middle_encoder=self.middle_encoder,
@@ -118,7 +118,7 @@ class TestCenterPointDetectionModel(unittest.TestCase):
 
     def test_centerpoint_weights_mean_std(self) -> None:
         """
-        Test that the CenterPointDetectionModel weights are initialized
+        Test that the CenterPointDetection3DModel weights are initialized
         with means of 0.0 and std < 0.1.
         """
         weights = []
@@ -149,7 +149,7 @@ class TestCenterPointDetectionModel(unittest.TestCase):
     def _build_multi_task_batch_inputs(self) -> ModelBatchInputs:
         """
         Build a ModelBatchInputs batch with voxelized lidar inputs and detection ground truth
-        that the CenterPointDetectionModel can be run end to end on.
+        that the CenterPointDetection3DModel can be run end to end on.
         """
         num_pillars = 12
         voxels_data = VoxelsData(

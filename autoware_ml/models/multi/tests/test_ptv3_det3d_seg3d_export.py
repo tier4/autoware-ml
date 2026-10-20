@@ -17,23 +17,23 @@ from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.detection3d.tests.head_output_fixtures import build_transfusion_outputs
 from autoware_ml.models.tests.batch_inputs_fixtures import (
     build_batch_inputs,
-    build_detection_gt_batch,
+    build_detection3d_gt_batch,
     build_point_cloud_batch,
 )
 from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
-from autoware_ml.models.detection3d.tests.ptv3_detection_fixtures import (
+from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
     build_bev_neck,
     build_inputs,
     build_ptv3_encoder,
-    build_seg_head,
-    build_seg_model,
+    build_seg3d_head,
+    build_seg3d_model,
     build_trans_model,
     build_transfusion_head,
 )
-from autoware_ml.models.multi.ptv3_segdet import PTv3SegDetModel
+from autoware_ml.models.multi.ptv3_det3d_seg3d import PTv3Det3DSeg3DModel
 from autoware_ml.models.segmentation3d.encoders.voxel import SweepSplitVoxelFeatureEncoder
-from autoware_ml.models.segmentation3d.ptv3_base import seg_head_export_input_names
+from autoware_ml.models.segmentation3d.ptv3_base import seg3d_head_export_input_names
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 from autoware_ml.utils.checkpoints import apply_matching_weights
@@ -82,13 +82,13 @@ class _DummyBBoxHead:
         )
 
 
-def _save_segmentation_checkpoint(tmp_path: Path) -> Path:
-    checkpoint_path = tmp_path / "ptv3_segmentation.ckpt"
-    torch.save({"state_dict": build_seg_model().state_dict()}, checkpoint_path)
+def _save_segmentation3d_checkpoint(tmp_path: Path) -> Path:
+    checkpoint_path = tmp_path / "ptv3_segmentation3d.ckpt"
+    torch.save({"state_dict": build_seg3d_model().state_dict()}, checkpoint_path)
     return checkpoint_path
 
 
-def test_seg_head_export_input_names_follow_dec_depths_rule() -> None:
+def test_seg3d_head_export_input_names_follow_dec_depths_rule() -> None:
     """The split seg-head contract: base set for depths-0, per-block-stage metadata otherwise."""
     base_names = [
         "point_feat_0",
@@ -101,8 +101,8 @@ def test_seg_head_export_input_names_follow_dec_depths_rule() -> None:
         "pooling_cluster_2",
         "pooling_cluster_3",
     ]
-    assert seg_head_export_input_names(5, [0, 0, 0, 0]) == base_names
-    assert seg_head_export_input_names(5, [0, 0, 1, 1]) == base_names + [
+    assert seg3d_head_export_input_names(5, [0, 0, 0, 0]) == base_names
+    assert seg3d_head_export_input_names(5, [0, 0, 1, 1]) == base_names + [
         "serialized_pooling_1_serialized_order",
         "serialized_pooling_1_serialized_inverse",
         "serialized_pooling_1_grid_coord",
@@ -110,7 +110,7 @@ def test_seg_head_export_input_names_follow_dec_depths_rule() -> None:
         "serialized_pooling_2_serialized_inverse",
         "serialized_pooling_2_grid_coord",
     ]
-    assert seg_head_export_input_names(2, [1]) == [
+    assert seg3d_head_export_input_names(2, [1]) == [
         "point_feat_0",
         "point_feat_1",
         "pooling_cluster_0",
@@ -119,16 +119,16 @@ def test_seg_head_export_input_names_follow_dec_depths_rule() -> None:
         "grid_coord",
     ]
     with pytest.raises(ValueError, match="entries"):
-        seg_head_export_input_names(5, [0, 0, 0])
+        seg3d_head_export_input_names(5, [0, 0, 0])
 
 
 @pytest.mark.skipif(
     not IS_SPCONV_AVAILABLE or not torch.cuda.is_available(),
     reason="PTv3 sparse-convolution export tests require CUDA spconv",
 )
-def test_ptv3_seg_split_export_supports_decoder_blocks() -> None:
+def test_ptv3_seg3d_split_export_supports_decoder_blocks() -> None:
     """A blocks decoder (dec_depths (1,) at stage 0) exports and runs as a split seg head."""
-    model = build_seg_model().cuda().eval()
+    model = build_seg3d_model().cuda().eval()
     batch = build_inputs(device=torch.device("cuda"))
 
     specs = model.build_export_specs(batch)
@@ -162,14 +162,14 @@ def test_ptv3_seg_split_export_supports_decoder_blocks() -> None:
     assert pred_labels.dtype == torch.long
 
 
-def test_ptv3_segdet_eval_output_scatters_segmentation_to_original_points() -> None:
+def test_ptv3_det3d_seg3d_eval_output_scatters_segmentation3d_to_original_points() -> None:
     model = SimpleNamespace(
         bbox_head=_DummyBBoxHead(),
-        _detection_gt_batch=PTv3SegDetModel._detection_gt_batch,
-        _detection_frame_mask=PTv3SegDetModel._detection_frame_mask,
-        _mask_list=PTv3SegDetModel._mask_list,
+        _detection3d_gt_batch=PTv3Det3DSeg3DModel._detection3d_gt_batch,
+        _detection3d_frame_mask=PTv3Det3DSeg3DModel._detection3d_frame_mask,
+        _mask_list=PTv3Det3DSeg3DModel._mask_list,
     )
-    det_outputs = build_transfusion_outputs(
+    det3d_outputs = build_transfusion_outputs(
         {
             name: torch.zeros((1, channels, 8))
             for name, channels in (
@@ -183,7 +183,7 @@ def test_ptv3_segdet_eval_output_scatters_segmentation_to_original_points() -> N
     )
     outputs = ModelOutputs(
         detection3d_head_outputs=Detection3DHeadOutputs(
-            center_head_outputs=None, transfusion_head_outputs=det_outputs
+            center_head_outputs=None, transfusion_head_outputs=det3d_outputs
         ),
         segmentation3d_head_outputs=Segmentation3DHeadOutputs(
             logits=torch.tensor([[3.0, 0.0], [0.0, 3.0]], dtype=torch.float32)
@@ -202,7 +202,7 @@ def test_ptv3_segdet_eval_output_scatters_segmentation_to_original_points() -> N
     point_cloud = build_point_cloud_batch([points], timestamp_difference_dim=4)
     batch = build_batch_inputs(
         point_cloud=point_cloud,
-        detection=build_detection_gt_batch(
+        detection=build_detection3d_gt_batch(
             [torch.zeros((0, 9), dtype=torch.float32)], [torch.zeros((0,), dtype=torch.long)]
         ),
         segmentation=Segmentation3DGTBatch(
@@ -218,9 +218,9 @@ def test_ptv3_segdet_eval_output_scatters_segmentation_to_original_points() -> N
         ),
     )
 
-    eval_out = PTv3SegDetModel.build_eval_output(model, batch, outputs)
+    eval_out = PTv3Det3DSeg3DModel.build_eval_output(model, batch, outputs)
 
-    frames = eval_out["seg_frames"]
+    frames = eval_out["seg3d_frames"]
     assert len(frames) == 1
     assert frames[0]["pred"].tolist() == [0, 1, 1, 0]
     assert torch.equal(frames[0]["target"], segment)
@@ -231,7 +231,7 @@ def test_ptv3_segdet_eval_output_scatters_segmentation_to_original_points() -> N
     assert len(eval_out["gt_boxes"]) == 1
 
 
-def _save_detection_checkpoint(
+def _save_detection3d_checkpoint(
     checkpoint_path: Path,
     model: torch.nn.Module,
     *,
@@ -251,7 +251,7 @@ def _save_detection_checkpoint(
         {
             "state_dict": state_dict,
             "autoware_ml_checkpoint_recipe": {
-                "type": "ptv3_detection",
+                "type": "ptv3_detection3d",
                 "freeze_encoder": True,
             },
         },
@@ -260,13 +260,13 @@ def _save_detection_checkpoint(
     return checkpoint_path
 
 
-def _build_segdet_model() -> PTv3SegDetModel:
-    return PTv3SegDetModel(
+def _build_det3d_seg3d_model() -> PTv3Det3DSeg3DModel:
+    return PTv3Det3DSeg3DModel(
         log_dict_configs=LogDictConfigs(prog_bar=False),
         data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
         encoder=build_ptv3_encoder(),
         voxel_encoder=SweepSplitVoxelFeatureEncoder(),
-        seg3d_head=build_seg_head(),
+        seg3d_head=build_seg3d_head(),
         bev_neck=build_bev_neck(),
         bbox_head=build_transfusion_head(),
         export_output_names=JOINT_EXPORT_OUTPUT_NAMES,
@@ -279,17 +279,17 @@ def _build_segdet_model() -> PTv3SegDetModel:
     not IS_SPCONV_AVAILABLE or not torch.cuda.is_available(),
     reason="PTv3 sparse-convolution export tests require CUDA spconv",
 )
-def test_ptv3_transhead_segdet_export_uses_named_joint_outputs(tmp_path: Path) -> None:
-    segmentation_checkpoint = _save_segmentation_checkpoint(tmp_path)
-    detection_model = build_trans_model(freeze_encoder=True)
-    apply_matching_weights(detection_model, (segmentation_checkpoint,))
-    detection_checkpoint = tmp_path / "ptv3_trans_detection.ckpt"
-    _save_detection_checkpoint(detection_checkpoint, detection_model)
+def test_ptv3_transhead_det3d_seg3d_export_uses_named_joint_outputs(tmp_path: Path) -> None:
+    segmentation3d_checkpoint = _save_segmentation3d_checkpoint(tmp_path)
+    detection3d_model = build_trans_model(freeze_encoder=True)
+    apply_matching_weights(detection3d_model, (segmentation3d_checkpoint,))
+    detection3d_checkpoint = tmp_path / "ptv3_trans_detection3d.ckpt"
+    _save_detection3d_checkpoint(detection3d_checkpoint, detection3d_model)
 
-    model = _build_segdet_model().cuda()
+    model = _build_det3d_seg3d_model().cuda()
     apply_matching_weights(
         model,
-        (detection_checkpoint, segmentation_checkpoint),
+        (detection3d_checkpoint, segmentation3d_checkpoint),
         map_location=torch.device("cuda"),
         device=torch.device("cuda"),
         set_eval=True,
@@ -317,11 +317,11 @@ def test_ptv3_transhead_segdet_export_uses_named_joint_outputs(tmp_path: Path) -
     not IS_SPCONV_AVAILABLE or not torch.cuda.is_available(),
     reason="PTv3 sparse-convolution tests require CUDA spconv",
 )
-def test_ptv3_segdet_detection_outputs_invariant_to_seg_head() -> None:
+def test_ptv3_det3d_seg3d_detection3d_outputs_invariant_to_seg3d_head() -> None:
     """The core stage-4 guarantee: with a fixed encoder, changing the seg head
     must not change detection outputs (the det branch taps the encoder only)."""
     torch.manual_seed(0)
-    model = _build_segdet_model().cuda().eval()
+    model = _build_det3d_seg3d_model().cuda().eval()
     batch = build_inputs(device=torch.device("cuda"))
 
     with torch.no_grad():
@@ -343,16 +343,16 @@ def test_ptv3_segdet_detection_outputs_invariant_to_seg_head() -> None:
     not IS_SPCONV_AVAILABLE or not torch.cuda.is_available(),
     reason="PTv3 sparse-convolution tests require CUDA spconv",
 )
-def test_ptv3_segdet_seg_logits_invariant_to_det_branch_pass() -> None:
+def test_ptv3_det3d_seg3d_seg3d_logits_invariant_to_det3d_branch_pass() -> None:
     """The BEV neck must read the encoder chain non-destructively: seg logits
     are identical whether or not the detection branch ran first."""
     torch.manual_seed(0)
-    model = _build_segdet_model().cuda().eval()
+    model = _build_det3d_seg3d_model().cuda().eval()
     batch = build_inputs(device=torch.device("cuda"))
 
     with torch.no_grad():
         joint_logits = model(batch).segmentation3d().logits
         point = model.encode_batch(batch)
-        seg_only_logits = model.seg3d_head(point)
+        seg3d_only_logits = model.seg3d_head(point)
 
-    torch.testing.assert_close(joint_logits, seg_only_logits)
+    torch.testing.assert_close(joint_logits, seg3d_only_logits)

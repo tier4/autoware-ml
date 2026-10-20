@@ -31,9 +31,9 @@ from autoware_ml.databases.t4dataset.t4dataset import T4Dataset
 from autoware_ml.databases.t4dataset.t4scenarios import T4Scenarios
 from autoware_ml.databases.taxonomy import (
     DatabaseTaxonomy,
-    DetectionTaxonomy,
+    Detection3DTaxonomy,
     LabelVocabulary,
-    SegmentationTaxonomy,
+    Segmentation3DTaxonomy,
 )
 from autoware_ml.types.metrics import AgentKind
 
@@ -49,7 +49,7 @@ def _build_taxonomy(class_names: tuple[str, ...]) -> DatabaseTaxonomy:
     class_mapping = {name: name for name in class_names} | {"bus": "car"}
     class_groups = {"all": list(class_names)}
     return DatabaseTaxonomy(
-        detection3d=DetectionTaxonomy(
+        detection3d=Detection3DTaxonomy(
             vocabulary=vocabulary,
             class_names=class_names,
             class_mapping=class_mapping,
@@ -59,7 +59,7 @@ def _build_taxonomy(class_names: tuple[str, ...]) -> DatabaseTaxonomy:
             collision_kinds={name: AgentKind.WHEELED for name in class_names},
             living_speeds={},
         ),
-        segmentation3d=SegmentationTaxonomy(
+        segmentation3d=Segmentation3DTaxonomy(
             vocabulary=vocabulary,
             class_names=class_names,
             class_mapping=class_mapping,

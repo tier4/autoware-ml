@@ -26,11 +26,11 @@ from autoware_ml.dataclasses.batch.detection3d import (
 )
 from autoware_ml.dataclasses.batch.frame_meta import FrameMetaBatch
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
-from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
+from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
 
 
-class TestTypedDetectionEvalOutput(unittest.TestCase):
-    """Unit tests for the detection_eval_output function."""
+class TestTypedDetection3DEvalOutput(unittest.TestCase):
+    """Unit tests for the detection3d_eval_output function."""
 
     def setUp(self) -> None:
         """Set up the common inputs for the tests."""
@@ -100,7 +100,7 @@ class TestTypedDetectionEvalOutput(unittest.TestCase):
         )
 
     def test_detection3d_gt_batch_assertion(self):
-        """Test that detection_eval_output raises ValueError when detection3d_gt_batch is None."""
+        """Test that detection3d_eval_output raises ValueError when detection3d_gt_batch is None."""
 
         multi_task_batch_inputs = ModelBatchInputs(
             multi_task_gt_batch=ModelGTBatch(
@@ -114,25 +114,25 @@ class TestTypedDetectionEvalOutput(unittest.TestCase):
             range_view_data=None,
         )
         with self.assertRaises(ValueError):
-            detection_eval_output(
+            detection3d_eval_output(
                 batch_inputs=multi_task_batch_inputs,
                 predictions=self.multi_task_predictions,
             )
 
     def test_detection3d_predictions_assertion(self):
-        """Test that detection_eval_output raises ValueError when detection3d_predictions is None."""
+        """Test that detection3d_eval_output raises ValueError when detection3d_predictions is None."""
 
         multi_task_predictions = ModelPredictions(detection3d_predictions=None)
         with self.assertRaises(ValueError):
-            detection_eval_output(
+            detection3d_eval_output(
                 batch_inputs=self.multi_task_batch_inputs,
                 predictions=multi_task_predictions,
             )
 
     def test_eval_outputs(self):
-        """Test that detection_eval_output correctly pairs predictions with ground truth."""
+        """Test that detection3d_eval_output correctly pairs predictions with ground truth."""
 
-        eval_outputs = detection_eval_output(
+        eval_outputs = detection3d_eval_output(
             batch_inputs=self.multi_task_batch_inputs,
             predictions=self.multi_task_predictions,
         )
@@ -208,7 +208,7 @@ class TestTypedDetectionEvalOutput(unittest.TestCase):
             multi_task_gt_batch=gt_batch, voxels_data=None, image_data=None, range_view_data=None
         )
 
-        eval_outputs = detection_eval_output(
+        eval_outputs = detection3d_eval_output(
             batch_inputs=multi_task_batch_inputs,
             predictions=self.multi_task_predictions,
         )
@@ -220,7 +220,7 @@ class TestTypedDetectionEvalOutput(unittest.TestCase):
 
     def test_frame_meta_keys_absent_without_frame_meta_batch(self):
         """Test that the metadata keys are left out when the batch carries none."""
-        eval_outputs = detection_eval_output(
+        eval_outputs = detection3d_eval_output(
             batch_inputs=self.multi_task_batch_inputs,
             predictions=self.multi_task_predictions,
         )

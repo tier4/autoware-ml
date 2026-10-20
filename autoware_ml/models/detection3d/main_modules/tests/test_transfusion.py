@@ -44,7 +44,7 @@ from autoware_ml.models.detection3d.heads.transfusions.exportable_multi_head_att
 )
 from autoware_ml.models.detection3d.heads.transfusions.transfusion_head import TransFusionHead
 from autoware_ml.models.detection3d.main_modules.transfusion import (
-    TransFusionDetectionModel,
+    TransFusionDetection3DModel,
     _TransFusionExportWrapper,
 )
 from autoware_ml.models.detection3d.necks.second_fpn import SECONDFPN
@@ -113,7 +113,7 @@ class _StubMiddleEncoder(BEVMiddleEncoder):
         return _StubMiddleEncoder(self._bev_shape, exportable=True)
 
 
-class _TransFusionDetectionModelTestCase(unittest.TestCase):
+class _TransFusionDetection3DModelTestCase(unittest.TestCase):
     """Shared configuration and builders for the TransFusion detection model test cases.
 
     Subclasses set the scene geometry and channel layout declared below in their own ``setUp``
@@ -196,9 +196,9 @@ class _TransFusionDetectionModelTestCase(unittest.TestCase):
         pts_backbone: nn.Module,
         pts_neck: nn.Module,
         with_velocity: bool = True,
-    ) -> TransFusionDetectionModel:
+    ) -> TransFusionDetection3DModel:
         """Build the detector around the given lidar modules and a fresh head."""
-        return TransFusionDetectionModel(
+        return TransFusionDetection3DModel(
             data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
             pts_voxel_encoder=pts_voxel_encoder,
             pts_middle_encoder=pts_middle_encoder,
@@ -289,7 +289,7 @@ class _TransFusionDetectionModelTestCase(unittest.TestCase):
         )
 
     def _assert_forward_compute_metrics_and_decode_run(
-        self, model: TransFusionDetectionModel, batch_inputs: ModelBatchInputs
+        self, model: TransFusionDetection3DModel, batch_inputs: ModelBatchInputs
     ) -> None:
         """
         Assert that the model runs end to end over voxelized inputs, producing head outputs on the
@@ -332,7 +332,7 @@ class _TransFusionDetectionModelTestCase(unittest.TestCase):
             )
 
     def _assert_export_spec_uses_deployment_io_contract(
-        self, model: TransFusionDetectionModel, batch_inputs: ModelBatchInputs
+        self, model: TransFusionDetection3DModel, batch_inputs: ModelBatchInputs
     ) -> None:
         """
         Assert that the export spec exposes the batched voxel tensors as inputs and that the
@@ -392,7 +392,7 @@ class _TransFusionDetectionModelTestCase(unittest.TestCase):
         torch.testing.assert_close(dir_cls_pred0, expected_dir_cls_pred0, atol=1e-4, rtol=1e-4)
 
 
-class TestTransFusionDetectionModel(_TransFusionDetectionModelTestCase):
+class TestTransFusionDetection3DModel(_TransFusionDetection3DModelTestCase):
     """Unit tests for the detector built from stub encoders, which run on any device.
 
     One BEV cell is one metre, because ``voxel_size[0] * out_size_factor`` is 1.0, so the 16 m
@@ -558,7 +558,7 @@ class TestTransFusionDetectionModel(_TransFusionDetectionModelTestCase):
 @unittest.skipUnless(
     torch.cuda.is_available(), "The sparse middle encoder runs through spconv CUDA kernels."
 )
-class TestTransFusionDetectionModelWithSparseEncoder(_TransFusionDetectionModelTestCase):
+class TestTransFusionDetection3DModelWithSparseEncoder(_TransFusionDetection3DModelTestCase):
     """Integration tests for the detector built from the real TransFusion lidar stack.
 
     Scaled-down mirror of ``tasks/detection3d/transfusion/base.yaml``: an 8 m range with 0.25 m

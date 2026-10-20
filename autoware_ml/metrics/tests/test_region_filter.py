@@ -304,7 +304,7 @@ def test_confusion_suite_region_filter_buckets() -> None:
     )
     suite.update(
         {
-            "seg_frames": [
+            "seg3d_frames": [
                 {
                     "pred": torch.tensor([0, 1]),
                     "target": torch.tensor([0, 0]),
@@ -324,7 +324,7 @@ def _box(x: float) -> list[float]:
     return [x, 0.0, 0.0, 4.0, 2.0, 1.5, 0.0, 0.0, 0.0]
 
 
-def test_detection_suite_region_filter_restricts_gt() -> None:
+def test_detection3d_suite_region_filter_restricts_gt() -> None:
     # Two GT cars, one on the road (x=10), one off-road (x=100). One prediction
     # matches the road car. The whole-scene metric sees 2 GT, the road slice 1.
     region = _region_filter(["road"], _road_map())
@@ -418,7 +418,7 @@ def test_confusion_suite_excludes_scene_without_lanelet_map() -> None:
     )
     suite.update(
         {
-            "seg_frames": [
+            "seg3d_frames": [
                 {
                     "pred": torch.tensor([0, 1]),
                     "target": torch.tensor([0, 0]),
@@ -443,7 +443,7 @@ def test_confusion_suite_excludes_scene_without_lanelet_map() -> None:
     assert suite.region_frames_covered.tolist() == [1]
 
 
-def test_detection_suite_excludes_scene_without_lanelet_map() -> None:
+def test_detection3d_suite_excludes_scene_without_lanelet_map() -> None:
     # Two frames, one GT car on the road each, 's_nomap' has no map. Whole-scene
     # sees both GT, the road slice keeps only the mapped scene's, and coverage
     # records 2 seen / 1 covered.
@@ -495,7 +495,7 @@ def test_point_cloud_suite_excludes_scene_without_lanelet_map() -> None:
     )
     suite.update(
         {
-            "seg_frames": [
+            "seg3d_frames": [
                 {
                     "coord": torch.tensor([[10.0, 0.0, 0.0], [20.0, 0.0, 0.0]]),
                     "pred": torch.tensor([0, 0]),
@@ -536,7 +536,7 @@ def test_point_cloud_suite_region_filter_clips_boxes() -> None:
     )
     suite.update(
         {
-            "seg_frames": [
+            "seg3d_frames": [
                 {
                     "coord": torch.tensor([[10.0, 0.0, 0.0]]),
                     "pred": torch.tensor([0]),

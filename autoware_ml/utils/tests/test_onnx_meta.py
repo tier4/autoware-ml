@@ -96,7 +96,7 @@ def test_stamp_release_export_with_metainfo(tmp_path) -> None:
     _tiny_model(path)
     stamp_onnx_meta(
         path,
-        config_name="multi/ptv3/t4dataset/voxel012_tiny_b8_100e_t4dataset_122m_j6gen2_segdet3d",
+        config_name="multi/ptv3/t4dataset/voxel012_tiny_b8_100e_t4dataset_122m_j6gen2_det3d_seg3d",
         module="ptv3_det3d_head",
         release="v0.0.1",
         export_git_sha="be5b967",

@@ -693,7 +693,7 @@ def build_encoder_export_spec(context: PTv3ExportContext) -> "ExportSpec":
     )
 
 
-def build_seg_head_export_spec(
+def build_seg3d_head_export_spec(
     context: PTv3ExportContext, seg3d_head: nn.Module, output_names: Sequence[str]
 ) -> "ExportSpec":
     """Build the segmentation-head export spec for any decoder configuration.
@@ -703,15 +703,15 @@ def build_seg_head_export_spec(
         seg3d_head: Export-prepared decoder head copy.
         output_names: Ordered head output names.
     """
-    module = _PTv3SegHeadExportModule(
+    module = _PTv3Seg3DHeadExportModule(
         seg3d_head, context.stage_count, context.inputs.sparse_shape, context.strides
     ).eval()
-    input_names = seg_head_export_input_names(context.stage_count, seg3d_head.dec_depths)
-    dynamic_axes = build_seg_head_input_dynamic_axes(context.stage_count, seg3d_head.dec_depths)
+    input_names = seg3d_head_export_input_names(context.stage_count, seg3d_head.dec_depths)
+    dynamic_axes = build_seg3d_head_input_dynamic_axes(context.stage_count, seg3d_head.dec_depths)
     dynamic_axes.update(build_point_feature_dynamic_axes(output_names))
     return ExportSpec(
         module=module,
-        args=build_seg_head_export_args(
+        args=build_seg3d_head_export_args(
             context.stage_feats,
             context.inputs.pooling_metadata,
             context.inputs.serialized_order,
@@ -821,7 +821,7 @@ def _block_stage_indices(dec_depths: Sequence[int]) -> list[int]:
     return [stage for stage, depth in enumerate(dec_depths) if depth > 0]
 
 
-def seg_head_export_input_names(stage_count: int, dec_depths: Sequence[int]) -> list[str]:
+def seg3d_head_export_input_names(stage_count: int, dec_depths: Sequence[int]) -> list[str]:
     """Return the split seg-head export input names for a decoder configuration.
 
     The rule is the deployment contract: per-stage features and pooling
@@ -845,7 +845,7 @@ def seg_head_export_input_names(stage_count: int, dec_depths: Sequence[int]) -> 
     return names
 
 
-def build_seg_head_export_args(
+def build_seg3d_head_export_args(
     stage_feats: Sequence[torch.Tensor],
     pooling_metadata: Sequence[SerializedPoolingMeta],
     serialized_order: torch.Tensor,
@@ -869,7 +869,7 @@ def build_seg_head_export_args(
     return tuple(args)
 
 
-def build_seg_head_input_dynamic_axes(
+def build_seg3d_head_input_dynamic_axes(
     stage_count: int, dec_depths: Sequence[int]
 ) -> dict[str, dict[int, str]]:
     """Build dynamic axes for the split seg-head export inputs."""
@@ -887,7 +887,7 @@ def build_seg_head_input_dynamic_axes(
     return dynamic_axes
 
 
-class _PTv3SegHeadExportModule(nn.Module):
+class _PTv3Seg3DHeadExportModule(nn.Module):
     """Export-only segmentation head decoding per-stage encoder features."""
 
     def __init__(
@@ -930,7 +930,7 @@ class _PTv3SegHeadExportModule(nn.Module):
             tensors: ``stage_count`` per-stage feature tensors, then
                 ``stage_count - 1`` pooling cluster tensors, then the
                 per-block-stage serialization tensors in the order defined by
-                :func:`seg_head_export_input_names`.
+                :func:`seg3d_head_export_input_names`.
         """
         stage_feats = tensors[: self.stage_count]
         clusters = tensors[self.stage_count : 2 * self.stage_count - 1]

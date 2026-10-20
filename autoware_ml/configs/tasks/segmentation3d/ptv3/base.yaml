@@ -3,7 +3,7 @@ defaults:
   - /tasks/default_task
   - /tasks/segmentation3d/ptv3/encoder_base
   - /tasks/segmentation3d/ptv3/voxel_encoder
-  - /tasks/segmentation3d/ptv3/seg_head_base
+  - /tasks/segmentation3d/ptv3/seg3d_head_base
   - _self_
 
 database: ???
@@ -66,7 +66,7 @@ deploy:
     enabled: false
 
 model:
-  _target_: autoware_ml.models.segmentation3d.ptv3.PTv3SegmentationModel
+  _target_: autoware_ml.models.segmentation3d.ptv3.PTv3Segmentation3DModel
   _convert_: all
   metrics: ${metrics}
   log_dict_configs:

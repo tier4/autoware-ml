@@ -2,17 +2,17 @@
 # Stage 3: joint training on the 10 Hz pseudo labels
 defaults:
   - base_voxel012_122m
-  - /datamodule/t4dataset/datasets/segdet3d@datasets.jpntaxi_train: default_segdet3d_train_dataset
-  - /datamodule/t4dataset/datasets/segdet3d@datasets.joint_train: default_segdet3d_train_dataset
-  - /datamodule/t4dataset/datasets/segdet3d@datasets.joint_test: default_segdet3d_test_dataset
+  - /datamodule/t4dataset/datasets/det3d_seg3d@datasets.jpntaxi_train: default_det3d_seg3d_train_dataset
+  - /datamodule/t4dataset/datasets/det3d_seg3d@datasets.joint_train: default_det3d_seg3d_train_dataset
+  - /datamodule/t4dataset/datasets/det3d_seg3d@datasets.joint_test: default_det3d_seg3d_test_dataset
   - /database@database: t4dataset/t4dataset_pseudo_10hz_j6gen2
   - /database@jpntaxi_database: t4dataset/t4dataset_pseudo_10hz_jpntaxi
-  - /database@joint_database: t4dataset/t4dataset_j6gen2_segdet3d
+  - /database@joint_database: t4dataset/t4dataset_j6gen2_det3d_seg3d
   - _self_
 
 batch_size: 8
 num_workers: 8
-experiment_group_name: ptv3_segdet/${database.version}/pseudo_10hz
+experiment_group_name: ptv3_det3d_seg3d/${database.version}/pseudo_10hz
 experiment_name: voxel012_tiny_b8_10e_t4dataset_122m_pseudo_10hz
 
 # Dataset of every extra source and split kind: a copy of the split dataset config reading

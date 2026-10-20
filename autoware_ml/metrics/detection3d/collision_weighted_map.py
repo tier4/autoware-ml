@@ -26,13 +26,13 @@ from autoware_ml.metrics.detection3d.criticality import (
     greedy_match_thresholds,
     weighted_average_precision,
 )
-from autoware_ml.metrics.detection3d.matching import DetectionState, mean_valid
+from autoware_ml.metrics.detection3d.matching import Detection3DState, mean_valid
 from autoware_ml.metrics.detection3d.naming import label_metric_name
 from autoware_ml.metrics.detection3d.structures import DEFAULT_MATCH_THRESHOLDS
 from autoware_ml.metrics.geometry.reachability import collision_weights
 
 
-class CollisionWeightedMeanAP(Metric[DetectionState]):
+class CollisionWeightedMeanAP(Metric[Detection3DState]):
     """Class-mean AP with each object weighted by its reachability collision risk."""
 
     needs_ttc = True
@@ -61,7 +61,7 @@ class CollisionWeightedMeanAP(Metric[DetectionState]):
         if not isfinite(self.decay) or self.decay < 0.0:
             raise ValueError("decay must be a finite value >= 0.")
 
-    def evaluate(self, state: DetectionState, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: Detection3DState, stage: EvalStage) -> dict[str, float]:
         """Weighted AP per class, averaged over thresholds, then over classes.
 
         One pass over the frames: tensors are converted and TTC-weighted once per

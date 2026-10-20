@@ -1,13 +1,13 @@
 # @package _global_
 defaults:
   - base_voxel012_122m
-  - /database@database: t4dataset/t4dataset_j6gen2_segdet3d
+  - /database@database: t4dataset/t4dataset_j6gen2_det3d_seg3d
   - _self_
 
 batch_size: 8
 num_workers: 8
-experiment_group_name: ptv3_segdet/${database.version}/j6gen2_segdet3d
-experiment_name: voxel012_tiny_b8_100e_t4dataset_122m_j6gen2_segdet3d
+experiment_group_name: ptv3_det3d_seg3d/${database.version}/j6gen2_det3d_seg3d
+experiment_name: voxel012_tiny_b8_100e_t4dataset_122m_j6gen2_det3d_seg3d
 
 trainer:
   max_epochs: 100

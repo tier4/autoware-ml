@@ -29,7 +29,7 @@ from autoware_ml.dataclasses.models.detection3d.head_outputs import (
 )
 from autoware_ml.models.detection3d.heads.transfusions.transfusion_head import TransFusionHead
 from autoware_ml.models.detection3d.main_modules.bevfusions.export_wrappers import (
-    export_detection_outputs,
+    export_detection3d_outputs,
 )
 from autoware_ml.models.detection3d.task_modules.assigners import HungarianAssigner3D
 from autoware_ml.models.detection3d.task_modules.bbox_coders import (
@@ -52,7 +52,7 @@ class _FakeHead(nn.Module):
         self.num_classes = num_classes
 
 
-class _ExportDetectionOutputsTestCase(unittest.TestCase):
+class _ExportDetection3DOutputsTestCase(unittest.TestCase):
     """Shared proposal layout and helpers for the export packing test cases."""
 
     def setUp(self) -> None:
@@ -128,8 +128,8 @@ class _ExportDetectionOutputsTestCase(unittest.TestCase):
         return class_scores.gather(0, outputs.query_labels[:1])[0]
 
 
-class TestExportDetectionOutputs(_ExportDetectionOutputsTestCase):
-    """Unit tests for ``export_detection_outputs`` on hand-built head outputs."""
+class TestExportDetection3DOutputs(_ExportDetection3DOutputsTestCase):
+    """Unit tests for ``export_detection3d_outputs`` on hand-built head outputs."""
 
     def setUp(self) -> None:
         """Set up a fake head with the shared proposal layout."""
@@ -147,7 +147,7 @@ class TestExportDetectionOutputs(_ExportDetectionOutputsTestCase):
             with self.subTest(num_decoder_layers=num_decoder_layers):
                 outputs = self._build_outputs(batch_size=1, num_decoder_layers=num_decoder_layers)
 
-                bbox_pred, score, label_pred = export_detection_outputs(self.head, outputs)
+                bbox_pred, score, label_pred = export_detection3d_outputs(self.head, outputs)
 
                 self.assertEqual(bbox_pred.shape, (self.num_box_channels, self.num_proposals))
                 torch.testing.assert_close(
@@ -166,7 +166,7 @@ class TestExportDetectionOutputs(_ExportDetectionOutputsTestCase):
                     batch_size=1, num_decoder_layers=2, heatmap_size=heatmap_size
                 )
 
-                _, score, _ = export_detection_outputs(self.head, outputs)
+                _, score, _ = export_detection3d_outputs(self.head, outputs)
 
                 self.assertEqual(score.shape, (self.num_proposals,))
 
@@ -174,7 +174,7 @@ class TestExportDetectionOutputs(_ExportDetectionOutputsTestCase):
         """Test that a batched input exports the first sample."""
         outputs = self._build_outputs(batch_size=2, num_decoder_layers=1)
 
-        bbox_pred, score, label_pred = export_detection_outputs(self.head, outputs)
+        bbox_pred, score, label_pred = export_detection3d_outputs(self.head, outputs)
 
         self.assertEqual(bbox_pred.shape, (self.num_box_channels, self.num_proposals))
         self.assertEqual(score.shape, (self.num_proposals,))
@@ -189,10 +189,10 @@ class TestExportDetectionOutputs(_ExportDetectionOutputsTestCase):
         outputs = self._build_outputs(batch_size=1, num_decoder_layers=1, with_velocity=False)
 
         with self.assertRaisesRegex(ValueError, "velocity branch"):
-            export_detection_outputs(self.head, outputs)
+            export_detection3d_outputs(self.head, outputs)
 
 
-class TestExportDetectionOutputsWithTransFusionHead(_ExportDetectionOutputsTestCase):
+class TestExportDetection3DOutputsWithTransFusionHead(_ExportDetection3DOutputsTestCase):
     """Integration tests packing the outputs of a real, small TransFusion head."""
 
     def setUp(self) -> None:
@@ -261,7 +261,7 @@ class TestExportDetectionOutputsWithTransFusionHead(_ExportDetectionOutputsTestC
         """Test that outputs of the auxiliary head export as single-sample runtime tensors."""
         with torch.no_grad():
             outputs = self.head(self.bev_features)
-            bbox_pred, score, label_pred = export_detection_outputs(self.head, outputs)
+            bbox_pred, score, label_pred = export_detection3d_outputs(self.head, outputs)
 
         self.assertEqual(
             outputs.separate_head_outputs.heatmap.shape[-1],

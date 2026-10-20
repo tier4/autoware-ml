@@ -6,7 +6,7 @@ defaults:
 
 batch_size: 16
 num_workers: 8
-experiment_group_name: ptv3_seg/${database.version}/j6gen2_semaseg
+experiment_group_name: ptv3_seg3d/${database.version}/j6gen2_semaseg
 experiment_name: voxel012_tiny_b16_50e_t4dataset_122m
 
 trainer:

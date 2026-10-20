@@ -55,30 +55,30 @@ def _write_checkpoint_metadata(
 def test_resolve_deploy_lineage_has_no_parent_for_a_multi_checkpoint_export(
     tmp_path: Path,
 ) -> None:
-    detection_checkpoint = _write_checkpoint_metadata(
+    detection3d_checkpoint = _write_checkpoint_metadata(
         tmp_path,
         "detection",
         run_id="det-run",
         experiment_name="ptv3/t4_v2/j6gen2/voxel012",
         config_name="detection3d/ptv3/voxel012",
     )
-    segmentation_checkpoint = _write_checkpoint_metadata(
+    segmentation3d_checkpoint = _write_checkpoint_metadata(
         tmp_path,
         "segmentation",
         run_id="seg-run",
-        experiment_name="ptv3_seg/t4_v2/j6gen2/voxel012",
+        experiment_name="ptv3_seg3d/t4_v2/j6gen2/voxel012",
         config_name="segmentation3d/ptv3/voxel012",
     )
 
     parent_run_id, source_checkpoints = resolve_deploy_lineage(
-        [detection_checkpoint, segmentation_checkpoint]
+        [detection3d_checkpoint, segmentation3d_checkpoint]
     )
 
     assert parent_run_id is None
     assert [source["run_id"] for source in source_checkpoints] == ["det-run", "seg-run"]
     assert [source["checkpoint_path"] for source in source_checkpoints] == [
-        str(detection_checkpoint),
-        str(segmentation_checkpoint),
+        str(detection3d_checkpoint),
+        str(segmentation3d_checkpoint),
     ]
 
 

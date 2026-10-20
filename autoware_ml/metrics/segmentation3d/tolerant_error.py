@@ -17,14 +17,14 @@ from __future__ import annotations
 
 from autoware_ml.metrics.base import EvalStage, Metric
 from autoware_ml.metrics.segmentation3d.point_cloud import (
-    PointCloudSegState,
+    PointCloudSeg3DState,
     class_token,
     valid_point_mask,
 )
 from autoware_ml.metrics.segmentation3d.spatial import tolerant_error_mask
 
 
-class NeighbourhoodTolerantErrorRate(Metric[PointCloudSegState]):
+class NeighbourhoodTolerantErrorRate(Metric[PointCloudSeg3DState]):
     """Fraction of valid points that are wrong with no correct-class neighbour."""
 
     def __init__(
@@ -46,7 +46,7 @@ class NeighbourhoodTolerantErrorRate(Metric[PointCloudSegState]):
         if self.radius < 0.0:
             raise ValueError("radius must be >= 0, zero disables the tolerance.")
 
-    def evaluate(self, state: PointCloudSegState, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: PointCloudSeg3DState, stage: EvalStage) -> dict[str, float]:
         """Report the tolerant error rate, whole-scene and per class.
 
         Args:

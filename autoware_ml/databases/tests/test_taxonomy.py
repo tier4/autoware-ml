@@ -20,10 +20,10 @@ import pytest
 
 from autoware_ml.databases.taxonomy import (
     DatabaseTaxonomy,
-    DetectionTaxonomy,
+    Detection3DTaxonomy,
     LabelTaxonomy,
     LabelVocabulary,
-    SegmentationTaxonomy,
+    Segmentation3DTaxonomy,
 )
 from autoware_ml.types.metrics import AgentKind
 
@@ -57,12 +57,12 @@ def _fine() -> LabelTaxonomy:
     return LabelTaxonomy(VOCABULARY, OFFLINE_CLASSES, OFFLINE_COARSENING, -1, OFFLINE_GROUPS)
 
 
-def _detection(
+def _detection3d(
     eval_range: dict[str, float] | None = None,
     collision_kinds: dict[str, str] | None = None,
     living_speeds: dict[str, float] | None = None,
-) -> DetectionTaxonomy:
-    return DetectionTaxonomy(
+) -> Detection3DTaxonomy:
+    return Detection3DTaxonomy(
         VOCABULARY,
         ONLINE_CLASSES,
         ONLINE_COARSENING,
@@ -76,8 +76,10 @@ def _detection(
     )
 
 
-def _segmentation() -> SegmentationTaxonomy:
-    return SegmentationTaxonomy(VOCABULARY, OFFLINE_CLASSES, OFFLINE_COARSENING, -1, OFFLINE_GROUPS)
+def _segmentation3d() -> Segmentation3DTaxonomy:
+    return Segmentation3DTaxonomy(
+        VOCABULARY, OFFLINE_CLASSES, OFFLINE_COARSENING, -1, OFFLINE_GROUPS
+    )
 
 
 def test_vocabulary_resolves_fine_names_and_rejects_unlisted_raw_names() -> None:
@@ -199,51 +201,51 @@ def test_the_mappings_cannot_be_mutated_after_construction() -> None:
         taxonomy.class_groups["grouped_vehicle"] = ()
 
 
-def test_detection_taxonomy_carries_typed_evaluation_tables() -> None:
-    taxonomy = _detection()
+def test_detection3d_taxonomy_carries_typed_evaluation_tables() -> None:
+    taxonomy = _detection3d()
 
     assert taxonomy.eval_range == {"car": 121.0, "truck": 121.0}
     assert taxonomy.collision_kinds == {"car": AgentKind.WHEELED, "truck": AgentKind.LIVING}
     assert taxonomy.living_speeds == {"truck": 6.0}
 
 
-def test_detection_taxonomy_rejects_tables_that_do_not_match_the_classes() -> None:
+def test_detection3d_taxonomy_rejects_tables_that_do_not_match_the_classes() -> None:
     with pytest.raises(ValueError, match="eval_range must have one entry per class"):
-        _detection(eval_range={"car": 121.0})
+        _detection3d(eval_range={"car": 121.0})
     with pytest.raises(ValueError, match="collision_kinds must have one entry per class"):
-        _detection(collision_kinds={"car": "wheeled", "truck": "wheeled", "bus": "wheeled"})
+        _detection3d(collision_kinds={"car": "wheeled", "truck": "wheeled", "bus": "wheeled"})
     with pytest.raises(ValueError, match="Unknown collision kinds \\['hovercraft'\\]"):
-        _detection(collision_kinds={"car": "hovercraft", "truck": "living"})
+        _detection3d(collision_kinds={"car": "hovercraft", "truck": "living"})
     with pytest.raises(ValueError, match="missing \\['truck'\\]"):
-        _detection(living_speeds={})
+        _detection3d(living_speeds={})
     with pytest.raises(ValueError, match="unknown \\['car'\\]"):
-        _detection(living_speeds={"car": 3.0, "truck": 6.0})
+        _detection3d(living_speeds={"car": 3.0, "truck": 6.0})
 
 
 def test_evaluation_tables_stay_out_of_the_string_form() -> None:
-    assert _detection() == _detection(eval_range={"car": 50.0, "truck": 50.0})
-    assert str(_detection()) == str(
-        _detection(collision_kinds={"car": "static", "truck": "static"}, living_speeds={})
+    assert _detection3d() == _detection3d(eval_range={"car": 50.0, "truck": 50.0})
+    assert str(_detection3d()) == str(
+        _detection3d(collision_kinds={"car": "static", "truck": "static"}, living_speeds={})
     )
 
 
 def test_database_taxonomy_compares_both_levels() -> None:
-    first = DatabaseTaxonomy(detection3d=_detection(), segmentation3d=_segmentation())
-    second = DatabaseTaxonomy(detection3d=_detection(), segmentation3d=_segmentation())
+    first = DatabaseTaxonomy(detection3d=_detection3d(), segmentation3d=_segmentation3d())
+    second = DatabaseTaxonomy(detection3d=_detection3d(), segmentation3d=_segmentation3d())
     other = DatabaseTaxonomy(
-        detection3d=_detection(),
-        segmentation3d=SegmentationTaxonomy(
+        detection3d=_detection3d(),
+        segmentation3d=Segmentation3DTaxonomy(
             VOCABULARY, ONLINE_CLASSES, ONLINE_COARSENING, -1, ONLINE_GROUPS
         ),
     )
 
     assert first == second
     assert first != other
-    assert str(first).startswith("DatabaseTaxonomy(detection3d=DetectionTaxonomy(")
+    assert str(first).startswith("DatabaseTaxonomy(detection3d=Detection3DTaxonomy(")
 
 
 def test_database_taxonomy_rejects_untyped_levels() -> None:
-    with pytest.raises(TypeError, match="detection3d must be a DetectionTaxonomy"):
-        DatabaseTaxonomy(detection3d=_coarse(), segmentation3d=_segmentation())
-    with pytest.raises(TypeError, match="segmentation3d must be a SegmentationTaxonomy"):
-        DatabaseTaxonomy(detection3d=_detection(), segmentation3d=_detection())
+    with pytest.raises(TypeError, match="detection3d must be a Detection3DTaxonomy"):
+        DatabaseTaxonomy(detection3d=_coarse(), segmentation3d=_segmentation3d())
+    with pytest.raises(TypeError, match="segmentation3d must be a Segmentation3DTaxonomy"):
+        DatabaseTaxonomy(detection3d=_detection3d(), segmentation3d=_detection3d())

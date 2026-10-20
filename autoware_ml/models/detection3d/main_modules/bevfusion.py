@@ -41,7 +41,7 @@ from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.metrics.base import MetricSuite
-from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
+from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
 from autoware_ml.models.detection3d.main_modules.bevfusions.bevfusion_lidar import (
     BEVFusionLidar,
 )
@@ -52,7 +52,7 @@ from autoware_ml.models.detection3d.main_modules.bevfusions.bevfusion_camera imp
 from autoware_ml.models.detection3d.task_modules.partial_annotations import PartialAnnotations
 from autoware_ml.models.detection3d.heads.transfusions.transfusion_head import TransFusionHead
 from autoware_ml.models.detection3d.main_modules.bevfusions.export_wrappers import (
-    export_detection_outputs,
+    export_detection3d_outputs,
 )
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
@@ -69,7 +69,7 @@ class _BEVFusionExportWrapperBase(nn.Module):
     tensor signature expected by their export target.
     """
 
-    def __init__(self, model: BEVFusionDetectionModel) -> None:
+    def __init__(self, model: BEVFusionDetection3DModel) -> None:
         """Initialize the export wrapper.
 
         Args:
@@ -161,7 +161,7 @@ class _BEVFusionLidarExportWrapper(_BEVFusionExportWrapperBase):
             batch_size=1,
             image_bev=None,  # No image BEV since this is lidar-only
         )
-        return export_detection_outputs(self.model.bbox_head, outputs)
+        return export_detection3d_outputs(self.model.bbox_head, outputs)
 
 
 class _BEVFusionExportWrapper(_BEVFusionExportWrapperBase):
@@ -224,10 +224,10 @@ class _BEVFusionExportWrapper(_BEVFusionExportWrapperBase):
             ranks=ranks,
             indices=indices,
         )
-        return export_detection_outputs(self.model.bbox_head, outputs)
+        return export_detection3d_outputs(self.model.bbox_head, outputs)
 
 
-class BEVFusionDetectionModel(ModuleBaseModel):
+class BEVFusionDetection3DModel(ModuleBaseModel):
     """Compose a BEVFusion detector with camera and lidar branches.
 
     The model fuses image and lidar features in BEV space and exposes the
@@ -335,7 +335,7 @@ class BEVFusionDetectionModel(ModuleBaseModel):
                 "ModelOutputs must contain detection3d_head_outputs for BEVFusion build_eval_output pass."
             )
 
-        return detection_eval_output(
+        return detection3d_eval_output(
             predictions=self.bbox_head.decode_outputs(outputs.detection3d_head_outputs),
             batch_inputs=batch,
         )
@@ -474,10 +474,10 @@ class BEVFusionDetectionModel(ModuleBaseModel):
         Returns:
             Detection head outputs.
         """
-        detection_head_outputs = self._forward_with_batch_size(multi_task_batch_inputs)
+        detection3d_head_outputs = self._forward_with_batch_size(multi_task_batch_inputs)
         return ModelOutputs(
             detection3d_head_outputs=Detection3DHeadOutputs(
-                center_head_outputs=None, transfusion_head_outputs=detection_head_outputs
+                center_head_outputs=None, transfusion_head_outputs=detection3d_head_outputs
             )
         )
 
@@ -524,7 +524,7 @@ class BEVFusionDetectionModel(ModuleBaseModel):
         )
         return multi_task_predictions
 
-    def _prepare_export_model(self) -> "BEVFusionDetectionModel":
+    def _prepare_export_model(self) -> "BEVFusionDetection3DModel":
         """Return an export-ready model copy with exportable submodules.
 
         Returns:

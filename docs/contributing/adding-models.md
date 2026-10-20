@@ -325,7 +325,7 @@ values. The default source `main` serves every split with the composed `datasets
 ```yaml
 defaults:
   # A copy of the training dataset config for a second database composed into the task
-  - /datamodule/t4dataset/datasets/segdet3d@datasets.extra_train: default_segdet3d_train_dataset
+  - /datamodule/t4dataset/datasets/det3d_seg3d@datasets.extra_train: default_det3d_seg3d_train_dataset
 
 datasets:
   extra_train:
@@ -499,7 +499,7 @@ def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
         detection3d_head_outputs=Detection3DHeadOutputs(
             center_head_outputs=None, transfusion_head_outputs=self.bbox_head(features)
         ),
-        segmentation3d_head_outputs=Segmentation3DHeadOutputs(logits=self.seg_head(features)),
+        segmentation3d_head_outputs=Segmentation3DHeadOutputs(logits=self.seg3d_head(features)),
     )
 
 def compute_metrics(self, multi_task_batch_inputs: ModelBatchInputs, outputs: ModelOutputs):
@@ -510,8 +510,8 @@ def compute_metrics(self, multi_task_batch_inputs: ModelBatchInputs, outputs: Mo
         gt_detections.valid_bboxes_3d(),
         gt_detections.valid_labels_3d(),
     )
-    seg_loss = self.seg_loss(
+    seg3d_loss = self.seg3d_loss(
         outputs.segmentation3d().logits, gt_batch.segmentation3d_gt_batch.gt_semantic_masks
     )
-    return {"loss": box_losses["loss"] + seg_loss, "seg_loss": seg_loss}
+    return {"loss": box_losses["loss"] + seg3d_loss, "seg3d_loss": seg3d_loss}
 ```
