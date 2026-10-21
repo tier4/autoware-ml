@@ -16,7 +16,8 @@
 
 from __future__ import annotations
 
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, ClassVar
 
 import pytest
 import torch
@@ -54,6 +55,17 @@ class _PointSumModel(ModuleBaseModel):
         return outputs
 
 
+class _StreamingModel(_PointSumModel):
+    """A model whose memory needs scene-contiguous batches."""
+
+    requires_streaming: ClassVar[bool] = True
+
+
+def _attach_trainer(model: ModuleBaseModel, datamodule: object | None) -> None:
+    """Attach a stand-in trainer carrying the given datamodule."""
+    model.trainer = SimpleNamespace(datamodule=datamodule)
+
+
 def _batch_inputs() -> ModelBatchInputs:
     points = PointCloudGTBatch(
         points=torch.ones(3, 4),
@@ -85,3 +97,37 @@ def test_step_runs_forward_on_the_batch_and_logs_the_sample_count() -> None:
 def test_model_without_an_export_fails_loudly() -> None:
     with pytest.raises(NotImplementedError, match="build_export_spec"):
         _PointSumModel().build_export_specs(_batch_inputs())
+
+
+def test_setup_accepts_a_streaming_datamodule_for_a_streaming_model() -> None:
+    model = _StreamingModel()
+    _attach_trainer(model, SimpleNamespace(streaming=True, train_frame_sampling=None))
+
+    model.setup("fit")
+
+
+def test_setup_rejects_a_streaming_model_without_a_streaming_datamodule() -> None:
+    model = _StreamingModel()
+
+    _attach_trainer(model, SimpleNamespace(streaming=False, train_frame_sampling=None))
+    with pytest.raises(ValueError, match="datamodule.streaming"):
+        model.setup("fit")
+    # A datamodule that does not know about streaming at all cannot stream either.
+    _attach_trainer(model, SimpleNamespace(train_frame_sampling=None))
+    with pytest.raises(ValueError, match="datamodule.streaming"):
+        model.setup("fit")
+
+
+def test_setup_rejects_streaming_combined_with_frame_sampling() -> None:
+    model = _StreamingModel()
+    _attach_trainer(model, SimpleNamespace(streaming=True, train_frame_sampling=object()))
+
+    with pytest.raises(ValueError, match="train_frame_sampling"):
+        model.setup("fit")
+
+
+def test_setup_ignores_the_datamodule_for_a_model_without_memory() -> None:
+    model = _PointSumModel()
+    _attach_trainer(model, SimpleNamespace(streaming=False, train_frame_sampling=object()))
+
+    model.setup("fit")

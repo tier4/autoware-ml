@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any, NamedTuple, final
+from typing import Any, ClassVar, NamedTuple, final
 from types import MappingProxyType
 
 from jaxtyping import Float32
@@ -78,7 +78,12 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
     Provides common functionality for training, validation, and testing with
     built-in support for flexible optimizer and scheduler configuration.
     All parameters are explicitly typed for IDE support and type checking.
+
+    A temporal model that carries a memory across batches sets ``requires_streaming``, and
+    :meth:`setup` then requires a datamodule that streams scene-contiguous frames.
     """
+
+    requires_streaming: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -113,6 +118,33 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
         )
         self.scheduler_config = dict(scheduler_config) if scheduler_config else {}
         self.log_dict_configs = log_dict_configs
+
+    def setup(self, stage: str) -> None:
+        """Check the datamodule against the needs of the model.
+
+        Args:
+            stage: Lightning stage being set up.
+
+        Raises:
+            ValueError: If the model requires streaming and the trainer runs without a
+                streaming datamodule, or the streaming datamodule also resamples the
+                training frames, which would break the scene order the memory relies on.
+        """
+        super().setup(stage)
+        if not self.requires_streaming:
+            return
+        datamodule = getattr(self._trainer, "datamodule", None)
+        if datamodule is None or not getattr(datamodule, "streaming", False):
+            raise ValueError(
+                f"{type(self).__name__} carries temporal memory across batches, so the "
+                "datamodule must stream scene-contiguous frames; set datamodule.streaming "
+                "to true."
+            )
+        if getattr(datamodule, "train_frame_sampling", None) is not None:
+            raise ValueError(
+                f"{type(self).__name__} streams scene-contiguous frames, which "
+                "datamodule.train_frame_sampling would reorder; set one of the two."
+            )
 
     def transfer_batch_to_device(
         self, batch: ModelGTBatch, device: torch.device, dataloader_idx: int
