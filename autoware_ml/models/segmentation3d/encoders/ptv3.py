@@ -116,7 +116,24 @@ class SerializedPoolingMeta:
     serialized_inverse: torch.Tensor  # [O, M] inverse of the (unpadded) serialization order
 
 
-def build_patch_order(serialized_order: torch.Tensor, patch_size: int) -> torch.Tensor:
+def _borrowed_position(
+    slot: torch.Tensor, count: torch.Tensor | int, patch_size: int
+) -> torch.Tensor:
+    """Position in a sample read by ``slot``.
+
+    A slot below ``count`` reads its own token. A padding slot reads the token one window
+    back, so the last window is a full sliding window over the sample's final tokens; below
+    one window there is nothing to borrow from, so it wraps around the sample instead.
+    """
+    divisor = torch.clamp(count, min=1) if torch.is_tensor(count) else max(count, 1)
+    # A multiple of `count` large enough to keep `slot - patch_size + cycle` non-negative.
+    cycle = (patch_size + divisor - 1) // divisor * divisor
+    return torch.where(slot < count, slot, (slot - patch_size + cycle) % divisor)
+
+
+def build_patch_order(
+    serialized_order: torch.Tensor, patch_size: int, offset: torch.Tensor | None = None
+) -> torch.Tensor:
     """Pad every serialization order to whole attention windows.
 
     The trailing slots of the last window are filled with real tokens, so attention needs no
@@ -126,28 +143,67 @@ def build_patch_order(serialized_order: torch.Tensor, patch_size: int) -> torch.
         patch_size 4, count 6:  0 1 2 3 | 4 5 2 3   2 3 borrowed from the previous window
         patch_size 8, count 3:  0 1 2 1 2 0 1 2     below one window: cycles through the sample
 
-    The deployed runtime (``autoware_ptv3``) reimplements this; its tests share the golden
-    vectors in ``test_ptv3_encoder.py``.
+    With ``offset`` the orders hold a batch of samples laid out back to back. Each sample is
+    then padded on its own, so no window crosses a sample boundary, and a sample of at most
+    one window is left whole: training shrinks the window to the smallest sample, so such a
+    sample already is one window.
+
+    The deployed runtime (``autoware_ptv3``) reimplements the single-sample case; its tests
+    share the golden vectors in ``test_ptv3_encoder.py``.
 
     Args:
         serialized_order: ``[num_orders, count]`` permutations.
         patch_size: Attention window of the blocks at this level.
+        offset: Cumulative sample sizes of a batch, or ``None`` for a single sample.
 
     Returns:
-        ``[num_orders, ceil(count / patch_size) * patch_size]`` gather order.
+        ``[num_orders, padded count]`` gather order.
     """
+    if offset is not None:
+        return serialized_order[:, build_patch_layout(offset, patch_size)[0]]
     count = int(serialized_order.shape[1])
     padded = math.ceil(count / patch_size) * patch_size
     if padded == count:
         return serialized_order
-    # A multiple of `count` large enough to keep `slot - patch_size + cycle` non-negative.
-    cycle = math.ceil(patch_size / count) * count
-    tail = (
-        torch.arange(count, padded, device=serialized_order.device, dtype=serialized_order.dtype)
-        - patch_size
-        + cycle
-    ) % count
-    return torch.cat([serialized_order, serialized_order[:, tail]], dim=1)
+    tail = torch.arange(count, padded, device=serialized_order.device, dtype=serialized_order.dtype)
+    return torch.cat(
+        [serialized_order, serialized_order[:, _borrowed_position(tail, count, patch_size)]], dim=1
+    )
+
+
+def build_patch_layout(
+    offset: torch.Tensor, patch_size: int
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Lay the samples of a batch out in whole attention windows, as ``build_patch_order`` does.
+
+    Args:
+        offset: Cumulative sample sizes of the batch.
+        patch_size: Attention window of the blocks at this level.
+
+    Returns:
+        ``pad``, the token every slot of the padded layout reads; ``unpad``, the slot of every
+        token; and ``cu_seqlens``, the start of every window followed by the slot count, in
+        the int32 form flash attention takes.
+    """
+    device = offset.device
+    count = offset_to_bincount(offset)
+    padded_count = torch.where(
+        count > patch_size, (count + patch_size - 1) // patch_size * patch_size, count
+    )
+    start = nn.functional.pad(offset, (1, 0))[:-1]
+    padded_offset = nn.functional.pad(torch.cumsum(padded_count, dim=0), (1, 0))
+    padded_start = padded_offset[:-1]
+    # The two totals are the only values the host needs; one synchronisation reads both.
+    total, padded_total = torch.stack([offset[-1], padded_offset[-1]]).tolist()
+    slot = torch.arange(padded_total, device=device)
+    token = torch.arange(total, device=device)
+    slot_sample = torch.searchsorted(padded_offset[1:], slot, right=True)
+    token_sample = torch.searchsorted(offset, token, right=True)
+    local = slot - padded_start[slot_sample]
+    pad = start[slot_sample] + _borrowed_position(local, count[slot_sample], patch_size)
+    unpad = token + (padded_start - start)[token_sample]
+    cu_seqlens = torch.cat([slot[local % patch_size == 0], padded_offset[-1:]]).to(torch.int32)
+    return pad, unpad, cu_seqlens
 
 
 def expand_stage_flags(
@@ -596,35 +652,27 @@ class SerializedAttention(PointModule):
             Tuple containing padded ordering indices, inverse indices, and
             optional cumulative sequence lengths for flash attention.
         """
-        patch_size = self.patch_size
-        device = point.offset.device
-        bincount = offset_to_bincount(point.offset)
-        padded_bincount = (
-            torch.div(bincount + patch_size - 1, patch_size, rounding_mode="trunc") * patch_size
+        pad, unpad, cu_seqlens = build_patch_layout(point.offset, self.patch_size)
+        return pad, unpad, cu_seqlens if self.enable_flash else None
+
+    def _get_stage_padding(
+        self, point: Point
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+        """Padding of ``point`` for this block's window, computed once per stage.
+
+        Every block of a stage sees the same offsets, so the first block stores the result on
+        the point and the others read it back. A new ``Point`` is built at every pooling,
+        which invalidates it.
+        """
+        pad_key, unpad_key, seqlens_key = (
+            f"{name}_{self.patch_size}" for name in ("pad", "unpad", "cu_seqlens")
         )
-        # A sample below one window keeps its own shorter window instead of being padded.
-        padded_bincount = torch.where(bincount > patch_size, padded_bincount, bincount)
-        offset = nn.functional.pad(point.offset, (1, 0))
-        padded_offset = nn.functional.pad(torch.cumsum(padded_bincount, dim=0), (1, 0))
-        # Build the padded token grid for the whole batch at once. This minimizes
-        # the amount of host synchronizations needed.
-        slot = torch.arange(padded_offset[-1], device=device)
-        # The token count is a shape when features are present, which avoids a device sync.
-        num_tokens = point.feat.shape[0] if "feat" in point else int(point.offset[-1])
-        token = torch.arange(num_tokens, device=device)
-        slot_batch = torch.searchsorted(padded_offset[1:], slot, right=True)
-        token_batch = torch.searchsorted(offset[1:], token, right=True)
-        shift = padded_offset[:-1] - offset[:-1]
-        unpad = token + shift[token_batch]
-        local = slot - padded_offset[slot_batch]
-        # The padding slots at the tail of a sample borrow the tokens one window
-        # back, so the last window is a full sliding window over the final tokens.
-        borrowed = torch.where(local < bincount[slot_batch], local, local - patch_size)
-        pad = offset[:-1][slot_batch] + borrowed
-        if not self.enable_flash:
-            return pad, unpad, None
-        window_start = slot[local % patch_size == 0]
-        return pad, unpad, torch.cat([window_start, padded_offset[-1:]]).to(torch.int32)
+        if pad_key not in point:
+            pad, unpad, cu_seqlens = self._get_padding_and_inverse(point)
+            point[pad_key], point[unpad_key] = pad, unpad
+            if cu_seqlens is not None:
+                point[seqlens_key] = cu_seqlens
+        return point[pad_key], point[unpad_key], point.get(seqlens_key)
 
     @torch.no_grad()
     def disable_flash(self) -> None:
@@ -661,20 +709,7 @@ class SerializedAttention(PointModule):
             order = point.patch_order[self.order_index]
             inverse = point.serialized_inverse[self.order_index]
         else:
-            # Every block of a stage sees the same offsets, so the padding is computed
-            # once per stage and cached on the point (a new Point is built at every
-            # pooling, which invalidates it).
-            pad_key, unpad_key, seq_key = (
-                f"{k}_{patch_size}" for k in ("pad", "unpad", "cu_seqlens")
-            )
-            if pad_key in point:
-                pad, unpad = point[pad_key], point[unpad_key]
-                cu_seqlens = point.get(seq_key)
-            else:
-                pad, unpad, cu_seqlens = self._get_padding_and_inverse(point)
-                point[pad_key], point[unpad_key] = pad, unpad
-                if cu_seqlens is not None:
-                    point[seq_key] = cu_seqlens
+            pad, unpad, cu_seqlens = self._get_stage_padding(point)
             order = point.serialized_order[self.order_index][pad]
             inverse = unpad[point.serialized_inverse[self.order_index]]
         qkv = self.qkv(point.feat)[order]

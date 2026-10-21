@@ -1392,3 +1392,28 @@ def test_attention_blocks_of_a_stage_share_one_padding() -> None:
         attention(point)
         _build_attention(4)(point)
         assert spy.call_count == 1
+
+
+@pytest.mark.parametrize("patch_size", [4, 16])
+@pytest.mark.parametrize("seed", range(4))
+def test_build_patch_order_of_a_batch_pads_every_sample_on_its_own(
+    patch_size: int, seed: int
+) -> None:
+    """The batch form equals the single-sample form applied to every sample above one
+    window, and leaves the samples of at most one window as they are."""
+    generator = torch.Generator().manual_seed(seed)
+    counts = torch.randint(0, 5 * patch_size, (5,), generator=generator)
+    counts[1] = patch_size  # one window: left as is
+    counts[2] = 0  # an empty sample
+    offset = torch.cumsum(counts, dim=0)
+    serialized_order = torch.randperm(int(offset[-1]), generator=generator).unsqueeze(0)
+
+    per_sample = []
+    for start, end in zip([0] + offset[:-1].tolist(), offset.tolist()):
+        sample = serialized_order[:, start:end]
+        per_sample.append(
+            build_patch_order(sample, patch_size) if end - start > patch_size else sample
+        )
+
+    batched = build_patch_order(serialized_order, patch_size, offset)
+    assert torch.equal(batched, torch.cat(per_sample, dim=1))
