@@ -18,6 +18,7 @@ logging options."""
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import math
 import unittest
 from unittest.mock import MagicMock
@@ -28,54 +29,59 @@ from torch.optim import SGD
 from autoware_ml.callbacks.grad_norm_monitor import GradNormMonitor, GradNormType
 
 
-def _module() -> MagicMock:
-    """Build a stand-in LightningModule that records ``log()`` calls."""
-    module = MagicMock()
-    module.log = MagicMock()
-    return module
+class _GradNormMonitorTestCase(unittest.TestCase):
+    """Shared helpers for the GradNormMonitor test cases."""
+
+    @staticmethod
+    def _module() -> MagicMock:
+        """Build a stand-in LightningModule that records ``log()`` calls."""
+        module = MagicMock()
+        module.log = MagicMock()
+        return module
+
+    @staticmethod
+    def _param(grad: Sequence[float] | None) -> torch.nn.Parameter:
+        """Build a parameter whose gradient is ``grad``, or has no gradient when ``None``."""
+        size = len(grad) if grad is not None else 2
+        param = torch.nn.Parameter(torch.zeros(size))
+        if grad is not None:
+            param.grad = torch.tensor(grad)
+        return param
+
+    def _logged_value(self, module: MagicMock, key: str = "train/grad_norm_l2") -> torch.Tensor:
+        """Return the single value the callback logged under ``key``."""
+        calls = [call for call in module.log.call_args_list if call.args[0] == key]
+        self.assertEqual(len(calls), 1, module.log.call_args_list)
+        return calls[0].args[1]
 
 
-def _param(grad: list[float] | None) -> torch.nn.Parameter:
-    """Build a parameter whose gradient is ``grad``, or has no gradient when ``None``."""
-    size = len(grad) if grad is not None else 2
-    param = torch.nn.Parameter(torch.zeros(size))
-    if grad is not None:
-        param.grad = torch.tensor(grad)
-    return param
-
-
-def _logged_value(module: MagicMock, key: str = "train/grad_norm_l2") -> torch.Tensor:
-    """Return the single value the callback logged under ``key``."""
-    calls = [call for call in module.log.call_args_list if call.args[0] == key]
-    assert len(calls) == 1, module.log.call_args_list
-    return calls[0].args[1]
-
-
-class TestTotalNorm(unittest.TestCase):
+class TestTotalNorm(_GradNormMonitorTestCase):
     """The logged norm spans the gradients of every parameter the optimizer steps."""
 
     def test_logs_the_euclidean_norm_over_every_param_group(self) -> None:
         """Two groups with gradients (3, 4) and (12,) give the norm 13."""
-        optimizer = SGD([{"params": [_param([3.0, 4.0])]}, {"params": [_param([12.0])]}], lr=0.1)
-        module = _module()
+        optimizer = SGD(
+            [{"params": [self._param([3.0, 4.0])]}, {"params": [self._param([12.0])]}], lr=0.1
+        )
+        module = self._module()
 
         GradNormMonitor().on_before_optimizer_step(MagicMock(), module, optimizer)
 
-        self.assertAlmostEqual(_logged_value(module).item(), 13.0, places=5)
+        self.assertAlmostEqual(self._logged_value(module).item(), 13.0, places=5)
 
     def test_skips_parameters_without_gradients(self) -> None:
         """A frozen parameter contributes nothing to the norm."""
-        optimizer = SGD([_param([3.0, 4.0]), _param(None)], lr=0.1)
-        module = _module()
+        optimizer = SGD([self._param([3.0, 4.0]), self._param(None)], lr=0.1)
+        module = self._module()
 
         GradNormMonitor().on_before_optimizer_step(MagicMock(), module, optimizer)
 
-        self.assertAlmostEqual(_logged_value(module).item(), 5.0, places=5)
+        self.assertAlmostEqual(self._logged_value(module).item(), 5.0, places=5)
 
     def test_logs_nothing_when_no_parameter_has_a_gradient(self) -> None:
         """A step without any gradient logs no metric instead of a misleading zero."""
-        optimizer = SGD([_param(None)], lr=0.1)
-        module = _module()
+        optimizer = SGD([self._param(None)], lr=0.1)
+        module = self._module()
 
         GradNormMonitor().on_before_optimizer_step(MagicMock(), module, optimizer)
 
@@ -83,23 +89,27 @@ class TestTotalNorm(unittest.TestCase):
 
     def test_infinity_norm_logs_the_largest_gradient_entry_under_its_own_key(self) -> None:
         """With ``norm_type="inf"`` the largest absolute entry is logged as grad_norm_inf."""
-        optimizer = SGD([_param([-7.0, 4.0]), _param([2.0])], lr=0.1)
-        module = _module()
+        optimizer = SGD([self._param([-7.0, 4.0]), self._param([2.0])], lr=0.1)
+        module = self._module()
 
         callback = GradNormMonitor(norm_type="inf")
         callback.on_before_optimizer_step(MagicMock(), module, optimizer)
 
-        self.assertAlmostEqual(_logged_value(module, "train/grad_norm_inf").item(), 7.0, places=5)
+        self.assertAlmostEqual(
+            self._logged_value(module, "train/grad_norm_inf").item(), 7.0, places=5
+        )
 
     def test_l1_norm_sums_the_absolute_entries_under_its_own_key(self) -> None:
         """With ``norm_type=GradNormType.L1`` the sum of absolute entries is logged as grad_norm_l1."""
-        optimizer = SGD([_param([-7.0, 4.0]), _param([2.0])], lr=0.1)
-        module = _module()
+        optimizer = SGD([self._param([-7.0, 4.0]), self._param([2.0])], lr=0.1)
+        module = self._module()
 
         callback = GradNormMonitor(norm_type=GradNormType.L1)
         callback.on_before_optimizer_step(MagicMock(), module, optimizer)
 
-        self.assertAlmostEqual(_logged_value(module, "train/grad_norm_l1").item(), 13.0, places=5)
+        self.assertAlmostEqual(
+            self._logged_value(module, "train/grad_norm_l1").item(), 13.0, places=5
+        )
 
     def test_unknown_norm_type_is_rejected(self) -> None:
         """A string outside the enum fails at construction, not on the first optimizer step."""
@@ -108,25 +118,25 @@ class TestTotalNorm(unittest.TestCase):
 
     def test_non_finite_gradients_log_without_raising(self) -> None:
         """An overflowing gradient is reported as a non-finite norm, not an exception."""
-        optimizer = SGD([_param([1.0, float("inf")])], lr=0.1)
-        module = _module()
+        optimizer = SGD([self._param([1.0, float("inf")])], lr=0.1)
+        module = self._module()
 
         GradNormMonitor().on_before_optimizer_step(MagicMock(), module, optimizer)
 
-        self.assertFalse(math.isfinite(_logged_value(module).item()))
+        self.assertFalse(math.isfinite(self._logged_value(module).item()))
 
 
-class TestLoggingOptions(unittest.TestCase):
+class TestLoggingOptions(_GradNormMonitorTestCase):
     """The norm is a per-step training metric."""
 
     def test_logs_a_tensor_on_step_only_with_unit_batch_size(self) -> None:
         """The value stays a tensor and is logged per step, not per epoch, weighted by one."""
-        optimizer = SGD([_param([3.0, 4.0])], lr=0.1)
-        module = _module()
+        optimizer = SGD([self._param([3.0, 4.0])], lr=0.1)
+        module = self._module()
 
         GradNormMonitor().on_before_optimizer_step(MagicMock(), module, optimizer)
 
-        self.assertIsInstance(_logged_value(module), torch.Tensor)
+        self.assertIsInstance(self._logged_value(module), torch.Tensor)
         kwargs = module.log.call_args.kwargs
         self.assertTrue(kwargs["on_step"])
         self.assertFalse(kwargs["on_epoch"])
