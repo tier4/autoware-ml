@@ -86,7 +86,7 @@ class DataModule(L.LightningDataModule):
         predict_dataloader: DataLoaderConfig | None,
         train_frame_sampling: FrameSamplingConfig | None,
         streaming: bool,
-        seed: int = 0,
+        seed: int,
     ) -> None:
         """
         Initialize the datamodule.
@@ -107,6 +107,10 @@ class DataModule(L.LightningDataModule):
             ``DistributedSampler``.
           seed: Seed of the per-epoch scene shuffle of the streaming training split; pass
             the experiment seed so every run draws its own order.
+
+        Raises:
+          ValueError: If scene streaming is combined with frame sampling, which would draw
+            the frames of a scene apart.
         """
         super().__init__()
 
@@ -266,8 +270,8 @@ class DataModule(L.LightningDataModule):
           DataLoader: Dataloader over the concatenated sources of the split.
 
         Raises:
-          ValueError: If the split has no dataset or no dataloader settings, or if frame
-            sampling is on while the training dataloader shuffles.
+          ValueError: If the split has no dataset or no dataloader settings, or if the
+            dataloader shuffles while scene streaming or frame sampling owns the order.
         """
         dataset = self.datasets.get(split)
         if dataset is None:

@@ -110,6 +110,8 @@ class DataModule(L.LightningDataModule):
         test_dataloader: DataLoaderConfig | None,
         predict_dataloader: DataLoaderConfig | None,
         train_frame_sampling: FrameSamplingConfig | None,
+        streaming: bool,
+        seed: int,
     ) -> None:
         ...
 ```
@@ -126,6 +128,12 @@ taxonomy.
 The datasets are instantiated by Hydra without records. In `setup()` the datamodule calls
 `bind(records)` on the dataset of every source, which returns a copy serving the records of that
 database in the split, and concatenates the bound copies of a split in declaration order.
+
+With `streaming` on, every dataloader draws from a `GroupStreamingSampler` that feeds each batch
+lane whole scenes frame by frame, for temporal models that carry a memory across batches; the
+training split reshuffles the scenes every epoch from `seed`, the experiment seed. The sampler is
+a `DistributedSampler`, so it shards the scenes itself and Lightning leaves it alone. Streaming
+cannot be combined with frame sampling or a shuffling dataloader.
 
 ### Dataset
 
