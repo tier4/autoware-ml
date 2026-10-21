@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
+from enum import StrEnum, auto
 
 from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.callbacks import Callback
@@ -33,9 +33,9 @@ class GradNormType(StrEnum):
         INF: Largest absolute gradient entry.
     """
 
-    L1 = "l1"
-    L2 = "l2"
-    INF = "inf"
+    L1 = auto()
+    L2 = auto()
+    INF = auto()
 
     @property
     def order(self) -> float:
