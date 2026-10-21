@@ -1,4 +1,4 @@
-"""Framework prediction-step contracts for BaseModel."""
+"""Framework prediction-step contracts for ModuleBaseModel."""
 
 from __future__ import annotations
 
@@ -10,12 +10,13 @@ import torch
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
-from autoware_ml.models.base import BaseModel
-from autoware_ml.preprocessing.base import DataPreprocessing
+from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
+from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
+from autoware_ml.preprocessing.data_preprocessor_modules import DataPreprocessorModule
 
 
-class _ShiftPoints:
-    """Preprocessing layer shifting the points of the batch by one."""
+class _ShiftPoints(DataPreprocessorModule):
+    """Preprocessing module shifting the points of the batch by one."""
 
     def __call__(self, batch_inputs: ModelBatchInputs, *, is_training: bool) -> ModelBatchInputs:
         del is_training
@@ -43,32 +44,44 @@ def _batch(value: float) -> ModelGTBatch:
     )
 
 
-class _ToyModel(BaseModel):
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x * 2.0
+def _shifting_model(model_type: type[_ToyModel]) -> _ToyModel:
+    """Build a toy model whose preprocessing shifts the points by one."""
+    return model_type(data_preprocessor=DataPreprocessor(preprocessor_modules=[_ShiftPoints()]))
 
-    def forward_inputs(self, batch_inputs: ModelBatchInputs) -> dict[str, Any]:
-        points = batch_inputs.multi_task_gt_batch.point_cloud_gt_batch
+
+class _ToyModel(ModuleBaseModel):
+    def __init__(self, data_preprocessor: DataPreprocessor) -> None:
+        super().__init__(
+            log_dict_configs=LogDictConfigs(prog_bar=False), data_preprocessor=data_preprocessor
+        )
+
+    def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> torch.Tensor:
+        points = multi_task_batch_inputs.multi_task_gt_batch.point_cloud_gt_batch
         assert points is not None
-        return {"x": points.points[:, 0]}
+        return points.points[:, 0] * 2.0
 
-    def compute_metrics(self, batch_inputs: ModelBatchInputs, outputs: Any) -> dict[str, Any]:
-        del batch_inputs
-        return {"loss": outputs.sum()}
+    def compute_metrics(
+        self, multi_task_batch_inputs: ModelBatchInputs, multi_task_outputs: Any
+    ) -> dict[str, Any]:
+        del multi_task_batch_inputs
+        return {"loss": multi_task_outputs.sum()}
 
-    def predict_outputs(self, batch_inputs: ModelBatchInputs, outputs: Any) -> dict[str, Any]:
-        return {"prediction": outputs, "batch_size": batch_inputs.batch_size()}
+    def decode_outputs(
+        self, multi_task_batch_inputs: ModelBatchInputs, outputs: Any
+    ) -> dict[str, Any]:
+        return {"prediction": outputs, "batch_size": multi_task_batch_inputs.batch_size()}
 
 
 class _MissingLossModel(_ToyModel):
-    def compute_metrics(self, batch_inputs: ModelBatchInputs, outputs: Any) -> dict[str, Any]:
-        del batch_inputs, outputs
+    def compute_metrics(
+        self, multi_task_batch_inputs: ModelBatchInputs, multi_task_outputs: Any
+    ) -> dict[str, Any]:
+        del multi_task_batch_inputs, multi_task_outputs
         return {"accuracy": torch.tensor(1.0)}
 
 
 def test_on_after_batch_transfer_applies_preprocessing_pipeline() -> None:
-    model = _ToyModel()
-    model.set_data_preprocessing(DataPreprocessing([_ShiftPoints()]))
+    model = _shifting_model(_ToyModel)
 
     batch = model.on_after_batch_transfer(_batch(1.0), dataloader_idx=0)
 
@@ -78,18 +91,17 @@ def test_on_after_batch_transfer_applies_preprocessing_pipeline() -> None:
 
 
 def test_predict_step_runs_forward_and_formats_predictions() -> None:
-    model = _ToyModel()
-    model.set_data_preprocessing(DataPreprocessing([_ShiftPoints()]))
-
+    model = _shifting_model(_ToyModel)
     batch = model.on_after_batch_transfer(_batch(1.0), dataloader_idx=0)
+
     predictions = model.predict_step(batch, batch_idx=0)
 
     assert torch.equal(predictions["prediction"], torch.tensor([4.0]))
     assert predictions["batch_size"] == 1
 
 
-def test_shared_step_requires_loss_metric() -> None:
-    model = _MissingLossModel()
+def test_core_step_requires_loss_metric() -> None:
+    model = _MissingLossModel(DataPreprocessor(preprocessor_modules=[]))
 
     with pytest.raises(ValueError, match="'loss' key"):
         model.training_step(ModelBatchInputs.from_gt_batch(_batch(1.0)), batch_idx=0)

@@ -1,10 +1,12 @@
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping, Sequence
 import json
 import logging
-from collections.abc import Callable, Mapping
 from types import MappingProxyType
-from typing import Sequence
 
 from jaxtyping import Float32
+from lightning.pytorch.utilities.rank_zero import rank_zero_only
 import polars as pl
 import numpy as np
 import torch
@@ -32,6 +34,7 @@ from autoware_ml.datamodule.base_dataset import (
 )
 from autoware_ml.datamodule.base_dataset_task import BaseDatasetTask
 from autoware_ml.datamodule.t4dataset.frame_meta import scene_dir_fragment
+from autoware_ml.metrics.geometry.lanelet import LaneletMapProvider
 from autoware_ml.transforms.base import TransformsCompose
 from autoware_ml.types.tasks import TaskType
 
@@ -47,27 +50,31 @@ class T4Dataset(BaseDataset):
         database_root_path: str,
         *,
         max_num_3d_gt_bboxes: int | None = None,
-        dataset_records_dataframe: pl.DataFrame,
+        dataset_records_dataframe: pl.DataFrame | None = None,
         transforms: TransformsCompose | None,
-        dataset_tasks: Mapping[str, Callable[..., BaseDatasetTask]],
+        dataset_tasks: Mapping[TaskType | str, Callable[..., BaseDatasetTask]],
         lidar_intensity_scale: float,
-        det3d_supervised: bool,
-        seg3d_supervised: bool,
+        det3d_supervised: bool = True,
+        seg3d_supervised: bool = True,
         lidar_sources: Sequence[str] | None = None,
         camera_names: Sequence[str] | None = None,
         camera_sources: Sequence[str] | None = None,
+        map_provider: LaneletMapProvider | None = None,
     ) -> None:
         """
         Initialize the T4Dataset class.
 
+        The records are given here only when the dataset serves one corpus directly, without a
+        datamodule. The datamodule binds the declared dataset to the records of its source.
+
         Args:
-          database_root_path: Root directory of the database.
+          database_root_path: Root directory of the database the dataset reads.
           max_num_3d_gt_bboxes: Number of 3D boxes every sample is padded to in a batch, extra
             boxes are dropped. Required when the samples carry 3D boxes, None otherwise.
-          dataset_records_dataframe: Records of the corpus.
+          dataset_records_dataframe: Records of the corpus. None until bound to records.
           transforms: Global transforms to be applied to the dataset records.
           dataset_tasks: Factory of every task dataset, mapped by task type name. Each one is
-            called with the root path and the records of this corpus.
+            called with the root path and the records of the bound corpus.
           lidar_intensity_scale: Intensity of the strongest return in the point clouds of the
             database, every loaded intensity is divided by it.
           det3d_supervised: Whether the boxes of this corpus are used.
@@ -82,6 +89,9 @@ class T4Dataset(BaseDataset):
           camera_sources: Channel names of the cameras to serve one by one, each camera of a
             record as its own sample. The records missing one of them at the sample time are
             left out. It replaces camera_names and cannot be combined with lidar_sources.
+          map_provider: Resolves a scene token of this database to its lanelet map. The
+            dataset resolves every frame's map path with it into the frame metadata the
+            map-backed evaluation filters read. None when the database ships no maps.
         """
         task_builders = {TaskType(key): build_task for key, build_task in dataset_tasks.items()}
         if lidar_sources is not None:
@@ -104,36 +114,58 @@ class T4Dataset(BaseDataset):
                 raise ValueError(
                     f"The served cameras must be distinct, got {list(served_cameras)}."
                 )
-            dataset_records_dataframe = select_records_with_cameras(
-                dataset_records_dataframe, served_cameras
-            )
         super().__init__(
             database_root_path=database_root_path,
             max_num_3d_gt_bboxes=max_num_3d_gt_bboxes,
-            dataset_records_dataframe=dataset_records_dataframe,
+            dataset_records_dataframe=None,
             transforms=transforms,
             det3d_supervised=det3d_supervised,
             seg3d_supervised=seg3d_supervised,
+            map_provider=map_provider,
+        )
+        self.task_builders: MappingProxyType[TaskType, Callable[..., BaseDatasetTask]] = (
+            MappingProxyType(task_builders)
         )
         self.lidar_intensity_scale = lidar_intensity_scale
         self.lidar_sources = None if lidar_sources is None else tuple(lidar_sources)
         self.camera_names = None if camera_names is None else tuple(camera_names)
         self.camera_sources = None if camera_sources is None else tuple(camera_sources)
-
-        self.dataset_tasks: MappingProxyType[TaskType, BaseDatasetTask] = MappingProxyType(
-            {
-                task_type: build_task(
-                    database_root_path=database_root_path,
-                    dataset_records_dataframe=dataset_records_dataframe,
-                )
-                for task_type, build_task in task_builders.items()
-            }
-        )
+        self.served_cameras = None if served_cameras is None else tuple(served_cameras)
+        self.dataset_tasks: MappingProxyType[TaskType, BaseDatasetTask] = MappingProxyType({})
+        if dataset_records_dataframe is not None:
+            self._serve_records(dataset_records_dataframe)
         logger.info(
-            f"Initialized T4Dataset with {len(self.dataset_tasks)} "
-            f"task datasets: {list(self.dataset_tasks.keys())} "
+            f"Initialized T4Dataset with {len(self.task_builders)} "
+            f"task datasets: {list(self.task_builders.keys())} "
             f"transforms: {self.transforms} and max_num_3d_gt_bboxes: {self.max_num_3d_gt_bboxes}"
         )
+
+    def _serve_records(self, dataset_records_dataframe: pl.DataFrame) -> None:
+        """
+        Keep the records to serve and build the task datasets reading them.
+
+        Args:
+          dataset_records_dataframe: Records of the corpus. Records missing a served camera
+            are left out.
+        """
+        if self.served_cameras is not None:
+            dataset_records_dataframe = select_records_with_cameras(
+                dataset_records_dataframe, self.served_cameras
+            )
+        self.dataset_records_dataframe = dataset_records_dataframe
+        self.dataset_tasks = MappingProxyType(
+            {
+                task_type: build_task(
+                    database_root_path=str(self.database_root_path),
+                    dataset_records_dataframe=dataset_records_dataframe,
+                )
+                for task_type, build_task in self.task_builders.items()
+            }
+        )
+        # Every rank binds the records of every stage, so only rank zero summarises them.
+        if rank_zero_only.rank == 0:
+            for dataset_task in self.dataset_tasks.values():
+                dataset_task.log_dataset_info()
 
     @property
     def samples_per_record(self) -> int:
@@ -177,6 +209,11 @@ class T4Dataset(BaseDataset):
             if TaskType.DETECTION3D in data_samples
             else None
         )
+        detection3d_traffic_cone_barrier_bbox_status = (
+            data_samples[TaskType.DETECTION3D].detection3d_traffic_cone_barrier_bbox_status
+            if TaskType.DETECTION3D in data_samples
+            else None
+        )
         segmentation3d_gt_sample = (
             data_samples[TaskType.SEGMENTATION3D].segmentation3d_gt_sample
             if TaskType.SEGMENTATION3D in data_samples
@@ -211,6 +248,9 @@ class T4Dataset(BaseDataset):
             detection3d_gt_bboxes_3d=detection3d_gt_bboxes_3d,
             segmentation3d_gt_sample=segmentation3d_gt_sample,
             frame_meta=self.get_frame_meta_sample(record_index, source_view),
+            detection3d_traffic_cone_barrier_bbox_status=(
+                detection3d_traffic_cone_barrier_bbox_status
+            ),
         )
 
     def get_lidar_source_view(self, idx: int, channel_name: str) -> LidarSourceView:
@@ -323,6 +363,7 @@ class T4Dataset(BaseDataset):
         sensor_to_ego = lidar_frame.lidar_sensor_to_ego_pose_matrix_fp32
         if source_view is not None:
             sensor_to_ego = sensor_to_ego @ source_view.sensor_to_frame_matrix.numpy()
+        scene_token = self.scene_token(idx, lidar_frame)
         return FrameMetaSample(
             # The boxes and the points live in the lidar sensor frame, so the map transform
             # composes the sensor mounting with the ego pose of the frame
@@ -330,13 +371,33 @@ class T4Dataset(BaseDataset):
                 lidar_frame.lidar_frame_ego_pose_to_global_matrix_fp32 @ sensor_to_ego,
                 dtype=torch.float32,
             ),
-            scene_token=scene_dir_fragment(
-                lidar_frame.lidar_pointcloud_relative_path, str(self.database_root_path)
+            scene_token=scene_token,
+            # Resolved here, against this dataset's own root, so a source over another corpus
+            # hands the metrics the map of its corpus rather than one looked up elsewhere.
+            lanelet_map_path=(
+                self.map_provider.osm_path(scene_token) if self.map_provider is not None else None
             ),
             timestamp=float(
                 self.dataset_records_dataframe.item(idx, DatasetTableSchema.TIMESTAMP_SECONDS.name)
             ),
         )
+
+    def scene_token(self, idx: int, lidar_frame: LidarFrameDataModel) -> str:
+        """
+        Scene token of a record, the key the map provider resolves a lanelet map by.
+
+        A T4 database keeps every scene in its own directory, so the token is the scene
+        directory the stored lidar path starts with. A database with another layout
+        overrides this.
+
+        Args:
+          idx: Index of the record.
+          lidar_frame: Keyframe lidar frame of the record.
+
+        Returns:
+          str: Scene token ``{dataset_name}/{scenario_id}/{scenario_version}``.
+        """
+        return scene_dir_fragment(lidar_frame.lidar_pointcloud_relative_path)
 
     def get_image_data_samples(self, idx: int, source_index: int) -> Sequence[ImageSample] | None:
         """
@@ -381,7 +442,7 @@ class T4Dataset(BaseDataset):
                 )
             image_samples.append(
                 ImageSample(
-                    image_path=self._update_frame_path(image_frame.image_path),
+                    image_path=self._update_frame_path(image_frame.image_relative_path),
                     camera_name=image_frame.image_sensor_channel_name,
                     timestamp=image_frame.image_timestamp_seconds,
                     camera_intrinsic=torch.tensor(image_frame.cam2img_fp32, dtype=torch.float32),
@@ -399,16 +460,16 @@ class T4Dataset(BaseDataset):
         """
         Resolve a stored frame path against the database root.
 
+        The records store every blob path relative to the root of the database that generated
+        them, so a cache built under one root serves the same database mounted under another.
+
         Args:
-          frame_path: Frame path as the record table stores it.
+          frame_path: Frame path relative to the database root, as the record table stores it.
 
         Returns:
           str: Path of the frame under the database root.
         """
-        return str(
-            self.database_root_path
-            / LidarFrameDatasetSchema.relative_to_database_root(frame_path, "frame path")
-        )
+        return str(self.database_root_path / frame_path)
 
     def get_lidar_pointcloud_data_samples(
         self, idx: int, source_view: LidarSourceView | None
@@ -443,7 +504,9 @@ class T4Dataset(BaseDataset):
                 ]
             )
             lidar_pointcloud_path = self._update_frame_path(
-                lidar_pointcloud_metadata[LidarFrameDatasetSchema.lidar_pointcloud_path.name]
+                lidar_pointcloud_metadata[
+                    LidarFrameDatasetSchema.lidar_pointcloud_relative_path.name
+                ]
             )
             if source_view is not None:
                 lidar_sensor_to_ego_pose_matrix = (

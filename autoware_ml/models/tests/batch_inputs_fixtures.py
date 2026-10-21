@@ -30,7 +30,7 @@ from autoware_ml.dataclasses.geometry.voxels import VoxelsData
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 
 
-def build_detection_gt_batch(
+def build_detection3d_gt_batch(
     gt_boxes: Sequence[torch.Tensor], gt_labels: Sequence[torch.Tensor]
 ) -> Detection3DGTBatch:
     """Pad the boxes and labels of every sample into a detection ground truth batch.

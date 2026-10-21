@@ -17,13 +17,12 @@
   proximity_distance_threshold: 1.0
   taxonomy: ${...taxonomy.detection3d}
 
-# Second remapping, to remap remaining trailers to trucks
+# Second remapping, to remap the class index of the remaining boxes (for example the trailers
+# left by the merger) through the class_mapping of the taxonomy level.
 - _target_: autoware_ml.databases.box3d_pipelines.box3d_label_remapper.Box3DLabelRemapper
   _convert_: all
 
   taxonomy: ${...taxonomy.detection3d}
-  label_remapper:
-    trailer: truck
 
 - _target_: autoware_ml.databases.box3d_pipelines.box3d_velocity_clip.Box3DVelocityNormClip
   _convert_: all

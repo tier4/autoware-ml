@@ -21,9 +21,9 @@ from __future__ import annotations
 
 import importlib
 import math
-from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass
+from collections.abc import Sequence
 from typing import Any
 
 import spconv.pytorch as spconv
@@ -33,7 +33,7 @@ from torch.onnx.operators import shape_as_tensor
 
 from autoware_ml.ops.indexing.operators import argsort
 from autoware_ml.ops.segment.segment_csr import segment_csr
-from autoware_ml.ops.spconv.sparse_conv import SubMConv3d as ExportableSubMConv3d
+from autoware_ml.ops.spconv.sparse_conv import ExportableSubMConv3d
 from autoware_ml.utils.point_cloud.batching import offset_to_bincount
 from autoware_ml.utils.point_cloud.structures import Point, pooled_sparse_shape
 

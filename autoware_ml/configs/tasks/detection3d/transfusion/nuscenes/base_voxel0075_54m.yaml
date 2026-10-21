@@ -1,0 +1,15 @@
+# @package _global_
+defaults:
+  - base_54m
+  - _self_
+
+voxel_size: [0.075, 0.075, 0.2]
+# 108 m / 0.075 m = 1440 voxels per BEV axis, reduced to 180 by the three stride-2 stages of the
+# sparse encoder, so the head works on a 180x180 grid at out_size_factor 8.
+out_size_factor: 8
+
+model:
+  pts_middle_encoder:
+    # (Y, X, Z) voxel grid and dense (Y, X, Z) output of the sparse encoder.
+    sparse_shape: [1440, 1440, 41]
+    dense_output_shapes: [180, 180, 2]

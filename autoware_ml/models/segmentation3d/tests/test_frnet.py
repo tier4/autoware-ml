@@ -11,12 +11,13 @@ from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTBatch
 from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch
 from autoware_ml.dataclasses.geometry.range_view import RangeViewData
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.segmentation3d.frnet import FRNet
 from autoware_ml.models.tests.batch_inputs_fixtures import (
     build_batch_inputs,
     build_point_cloud_batch,
 )
-from autoware_ml.preprocessing.base import DataPreprocessing
+from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 from autoware_ml.preprocessing.segmentation3d.frustum_range import FrustumRangePreprocessor
 
 
@@ -89,29 +90,44 @@ class _DecodeHead(torch.nn.Module):
         return point_logits.argmax(dim=1)
 
 
-def _make_frnet(num_classes: int = 3) -> FRNet:
+def _make_frnet(num_classes: int = 3, data_preprocessor: DataPreprocessor | None = None) -> FRNet:
     """Return a minimal FRNet using identity encoder/backbone."""
     return FRNet(
+        log_dict_configs=LogDictConfigs(prog_bar=False),
         voxel_encoder=_IdentityEncoder(),
         backbone=_IdentityBackbone(),
         decode_head=_DecodeHead(num_classes=num_classes),
         optimizer=torch.optim.AdamW,
+        data_preprocessor=(
+            data_preprocessor
+            if data_preprocessor is not None
+            else DataPreprocessor(preprocessor_modules=[])
+        ),
     )
 
 
-def _make_batch(num_points: int = 5, num_classes: int = 3) -> ModelBatchInputs:
-    """Return minimal preprocessed model inputs compatible with the test model."""
+def _make_batch(
+    num_points: int = 5, num_classes: int = 3, num_samples: int = 1
+) -> ModelBatchInputs:
+    """Return minimal preprocessed model inputs compatible with the test model.
+
+    The points are split evenly over the samples, and the range view cell of every point
+    carries the index of its sample.
+    """
     points = torch.rand(num_points, 4)
+    sample_indices = torch.arange(num_points, dtype=torch.long) * num_samples // num_points
     coors = torch.stack(
         [
-            torch.zeros(num_points, dtype=torch.long),
+            sample_indices,
             torch.arange(num_points, dtype=torch.long) % 2,
             torch.arange(num_points, dtype=torch.long) % 2,
         ],
         dim=1,
     )
     voxel_coors, inverse_map = torch.unique(coors, return_inverse=True, dim=0)
-    point_cloud = build_point_cloud_batch([points])
+    point_cloud = build_point_cloud_batch(
+        [points[sample_indices == index] for index in range(num_samples)]
+    )
     labels = Segmentation3DGTBatch(
         gt_semantic_masks=torch.randint(0, num_classes - 1, (num_points,)),
         batch_indices=point_cloud.batch_indices,
@@ -121,23 +137,26 @@ def _make_batch(num_points: int = 5, num_classes: int = 3) -> ModelBatchInputs:
             coors=coors,
             voxel_coors=voxel_coors,
             inverse_map=inverse_map,
-            semantic_labels=torch.zeros(1, 2, 2, dtype=torch.long),
+            semantic_labels=torch.zeros(num_samples, 2, 2, dtype=torch.long),
         )
     )
 
 
-def test_frnet_shared_step_returns_scalar_loss_with_grad() -> None:
-    """_shared_step should return a differentiable scalar loss tensor."""
+def test_frnet_training_step_returns_scalar_loss_with_grad() -> None:
+    """training_step should return a differentiable scalar loss tensor and log it."""
     model = _make_frnet()
     model.log_dict = MagicMock()
     batch = _make_batch()
 
-    metrics, _ = model._shared_step(batch, "train")
+    loss = model.training_step(batch, batch_idx=0)
 
-    assert "loss" in metrics
-    assert metrics["loss"].shape == torch.Size([])
-    assert metrics["loss"].requires_grad
+    assert loss.shape == torch.Size([])
+    assert loss.requires_grad
     assert model.backbone.last_sample_count == 1
+    model.log_dict.assert_called_once()
+    logged_values = model.log_dict.call_args.args[0]
+    assert "train/loss" in logged_values
+    assert logged_values["train/loss"] is loss
 
 
 def test_frnet_get_log_batch_size_uses_sample_count() -> None:
@@ -149,19 +168,9 @@ def test_frnet_get_log_batch_size_uses_sample_count() -> None:
 
 def test_frnet_forward_uses_explicit_sample_count() -> None:
     model = _make_frnet(num_classes=4)
-    points = torch.rand(4, 4)
-    coors = torch.tensor(
-        [
-            [0, 0, 0],
-            [0, 1, 0],
-            [1, 0, 0],
-            [1, 1, 0],
-        ],
-        dtype=torch.long,
-    )
-    voxel_coors, inverse_map = torch.unique(coors, return_inverse=True, dim=0)
+    batch = _make_batch(num_points=4, num_classes=4, num_samples=2)
 
-    outputs = model(points, coors, voxel_coors, inverse_map, sample_count=2)
+    outputs = model(batch)
 
     point_logits = outputs.segmentation3d().logits
     assert point_logits.shape == (4, 4)
@@ -171,9 +180,7 @@ def test_frnet_forward_uses_explicit_sample_count() -> None:
 
 
 def test_frnet_with_preprocessing_runs_shared_step_end_to_end() -> None:
-    """A real preprocessor attached via set_data_preprocessing should feed FRNet."""
-    model = _make_frnet(num_classes=3)
-    model.log_dict = MagicMock()
+    """A real preprocessor handed to the model should feed FRNet."""
     preprocessor = FrustumRangePreprocessor(
         height=2,
         width=4,
@@ -182,7 +189,11 @@ def test_frnet_with_preprocessing_runs_shared_step_end_to_end() -> None:
         ignore_index=2,
         num_classes=3,
     )
-    model.set_data_preprocessing(DataPreprocessing([preprocessor]))
+    model = _make_frnet(
+        num_classes=3,
+        data_preprocessor=DataPreprocessor(preprocessor_modules=[preprocessor]),
+    )
+    model.log_dict = MagicMock()
 
     raw_batch = ModelGTBatch(
         point_cloud_gt_batch=PointCloudGTBatch(
@@ -203,8 +214,8 @@ def test_frnet_with_preprocessing_runs_shared_step_end_to_end() -> None:
     )
 
     preprocessed = model.on_after_batch_transfer(raw_batch, dataloader_idx=0)
-    metrics, _ = model._shared_step(preprocessed, "train")
+    loss = model.training_step(preprocessed, batch_idx=0)
 
-    assert "loss" in metrics
-    assert metrics["loss"].requires_grad
+    assert loss.requires_grad
     assert model.backbone.last_sample_count == 1
+    assert "train/loss" in model.log_dict.call_args.args[0]

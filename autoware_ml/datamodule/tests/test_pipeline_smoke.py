@@ -35,18 +35,19 @@ from autoware_ml.datamodule.tests.corpus import (
     build_dataset,
     write_corpus,
 )
-from autoware_ml.models.detection3d.tests.ptv3_detection_fixtures import (
+from autoware_ml.models.module_base_model import LogDictConfigs
+from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
     build_bev_neck,
     build_preprocessor,
     build_ptv3_encoder,
-    build_seg_head,
-    build_seg_model,
+    build_seg3d_head,
+    build_seg3d_model,
     build_trans_model,
     build_transfusion_head,
 )
-from autoware_ml.models.multi.ptv3_segdet import PTv3SegDetModel
+from autoware_ml.models.multi.ptv3_det3d_seg3d import PTv3Det3DSeg3DModel
 from autoware_ml.models.segmentation3d.encoders.voxel import PastFutureVoxelFeatureEncoder
-from autoware_ml.preprocessing.base import DataPreprocessing
+from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 
 
 class TestPipelineSmoke(unittest.TestCase):
@@ -99,13 +100,13 @@ class TestPipelineSmoke(unittest.TestCase):
         self.assertTrue(bool((segment_batch.gt_semantic_masks[time_lag == 0] >= 0).all()))
 
     @unittest.skipUnless(torch.cuda.is_available(), "the PTv3 stem runs on CUDA only")
-    def test_ptv3_segmentation_runs_a_training_step(self) -> None:
+    def test_ptv3_segmentation3d_runs_a_training_step(self) -> None:
         device = torch.device("cuda")
-        model = build_seg_model(POINT_CLOUD_RANGE, PastFutureVoxelFeatureEncoder).to(device)
+        model = build_seg3d_model(POINT_CLOUD_RANGE, PastFutureVoxelFeatureEncoder).to(device)
         model.log_dict = lambda *args, **kwargs: None
-        batch_inputs = DataPreprocessing([build_preprocessor(POINT_CLOUD_RANGE)])(
-            self.batch.to_device(device), is_training=True
-        )
+        batch_inputs = DataPreprocessor(
+            preprocessor_modules=[build_preprocessor(POINT_CLOUD_RANGE)]
+        )(self.batch.to_device(device), is_training=True)
 
         loss = model.training_step(batch_inputs, batch_idx=0)
         loss.backward()
@@ -119,15 +120,15 @@ class TestPipelineSmoke(unittest.TestCase):
         )
 
     @unittest.skipUnless(torch.cuda.is_available(), "the PTv3 stem runs on CUDA only")
-    def test_ptv3_detection_runs_a_training_step(self) -> None:
+    def test_ptv3_detection3d_runs_a_training_step(self) -> None:
         device = torch.device("cuda")
         model = build_trans_model(
             point_cloud_range=POINT_CLOUD_RANGE, voxel_encoder_type=PastFutureVoxelFeatureEncoder
         ).to(device)
         model.log_dict = lambda *args, **kwargs: None
-        batch_inputs = DataPreprocessing([build_preprocessor(POINT_CLOUD_RANGE)])(
-            self.batch.to_device(device), is_training=True
-        )
+        batch_inputs = DataPreprocessor(
+            preprocessor_modules=[build_preprocessor(POINT_CLOUD_RANGE)]
+        )(self.batch.to_device(device), is_training=True)
 
         loss = model.training_step(batch_inputs, batch_idx=0)
         loss.backward()
@@ -135,12 +136,14 @@ class TestPipelineSmoke(unittest.TestCase):
         self.assertTrue(torch.isfinite(loss))
 
     @unittest.skipUnless(torch.cuda.is_available(), "the PTv3 stem runs on CUDA only")
-    def test_ptv3_segdet_runs_a_training_step(self) -> None:
+    def test_ptv3_det3d_seg3d_runs_a_training_step(self) -> None:
         device = torch.device("cuda")
-        model = PTv3SegDetModel(
+        model = PTv3Det3DSeg3DModel(
+            log_dict_configs=LogDictConfigs(prog_bar=False),
+            data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
             encoder=build_ptv3_encoder(PastFutureVoxelFeatureEncoder.out_channels),
             voxel_encoder=PastFutureVoxelFeatureEncoder(),
-            seg3d_head=build_seg_head(),
+            seg3d_head=build_seg3d_head(),
             bev_neck=build_bev_neck(),
             bbox_head=build_transfusion_head(POINT_CLOUD_RANGE),
             export_output_names=["pred_labels", "pred_probs"],
@@ -149,9 +152,9 @@ class TestPipelineSmoke(unittest.TestCase):
             point_cloud_range=list(POINT_CLOUD_RANGE),
         ).to(device)
         model.log_dict = lambda *args, **kwargs: None
-        batch_inputs = DataPreprocessing([build_preprocessor(POINT_CLOUD_RANGE)])(
-            self.batch.to_device(device), is_training=True
-        )
+        batch_inputs = DataPreprocessor(
+            preprocessor_modules=[build_preprocessor(POINT_CLOUD_RANGE)]
+        )(self.batch.to_device(device), is_training=True)
 
         loss = model.training_step(batch_inputs, batch_idx=0)
         loss.backward()
@@ -160,20 +163,20 @@ class TestPipelineSmoke(unittest.TestCase):
 
     @unittest.skipUnless(torch.cuda.is_available(), "the PTv3 stem runs on CUDA only")
     def test_evaluation_step_builds_the_metric_frames(self) -> None:
-        model = build_seg_model(POINT_CLOUD_RANGE, PastFutureVoxelFeatureEncoder).to(
+        model = build_seg3d_model(POINT_CLOUD_RANGE, PastFutureVoxelFeatureEncoder).to(
             torch.device("cuda")
         )
         device = next(model.parameters()).device
         model.log_dict = lambda *args, **kwargs: None
-        batch_inputs = DataPreprocessing([build_preprocessor(POINT_CLOUD_RANGE)])(
-            self.batch.to_device(device), is_training=False
-        )
+        batch_inputs = DataPreprocessor(
+            preprocessor_modules=[build_preprocessor(POINT_CLOUD_RANGE)]
+        )(self.batch.to_device(device), is_training=False)
 
         with torch.no_grad():
-            outputs = model(**model.forward_inputs(batch_inputs))
+            outputs = model(batch_inputs)
             eval_output = model.build_eval_output(batch_inputs, outputs)
 
-        frames = eval_output["seg_frames"]
+        frames = eval_output["seg3d_frames"]
         self.assertEqual(len(frames), 2)
         for frame in frames:
             self.assertEqual(frame["coord"].shape[0], frame["pred"].shape[0])

@@ -1,5 +1,0 @@
-# @package nuscenes.lidar
-
-defaults:
-  - /datasets/nuscenes/base
-  - _self_

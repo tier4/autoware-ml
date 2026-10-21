@@ -1,13 +1,19 @@
 _target_: autoware_ml.datamodule.nuscenes.dataset.NuScenesDataset
 _convert_: all
-_partial_: true
 
 defaults:
-  - detection3d@dataset_tasks.Detection3D: default_detection3d
+  - detection3d@dataset_tasks.detection3d: default_detection3d
 
 # When number of 3D GT bboxes in a scenario exceeds this number, we will select the first
 # `max_num_3d_gt_bboxes` bboxes and ignore the rest. 500 is usually a
 # common number of bboxes to include all 3D GT bboxes in a scenario.
 max_num_3d_gt_bboxes: 500
+
+# Database the dataset reads and the annotations of that corpus supervising the run. A source
+# over another database composes its own copy of this config with that database's values.
+database_root_path: ${database.root_path}
+lidar_intensity_scale: ${database.lidar_intensity_scale}
+det3d_supervised: true
+seg3d_supervised: true
 
 transforms: ???

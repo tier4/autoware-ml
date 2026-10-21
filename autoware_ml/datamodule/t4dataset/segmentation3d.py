@@ -1,4 +1,6 @@
 import numpy as np
+import logging
+
 import polars as pl
 import torch
 
@@ -13,6 +15,9 @@ from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTSample
 
 # Data type of the raw category index stored for every point of a semantic mask
 SEMANTIC_MASK_DTYPE = np.uint8
+
+
+logger = logging.getLogger(__name__)
 
 
 class T4Segmentation3DTask(BaseDatasetTask):
@@ -37,6 +42,15 @@ class T4Segmentation3DTask(BaseDatasetTask):
             dataset_records_dataframe=dataset_records_dataframe,
         )
         self.taxonomy = taxonomy
+
+    def __str__(self) -> str:
+        """
+        String representation of the dataset type.
+
+        Returns:
+          str: String representation of the dataset type.
+        """
+        return self.__class__.__name__
 
     def select_columns(self, dataset_records_dataframe: pl.DataFrame) -> pl.DataFrame:
         """
@@ -68,7 +82,7 @@ class T4Segmentation3DTask(BaseDatasetTask):
         lidar_frame = LidarFrameDataModel.load_from_dictionary(
             self.dataset_records_dataframe.item(idx, DatasetTableSchema.LIDAR_FRAMES.name)[0]
         )
-        if lidar_frame.lidar_pointcloud_semantic_mask_path is None:
+        if lidar_frame.lidar_pointcloud_semantic_mask_relative_path is None:
             raise ValueError(
                 f"The lidar frame {lidar_frame.lidar_frame_id} of record {idx} carries no "
                 "semantic mask, so 3D segmentation cannot be supervised on it."
@@ -103,10 +117,10 @@ class T4Segmentation3DTask(BaseDatasetTask):
           lidar_frame: Lidar frame carrying a semantic mask.
 
         Returns:
-          str: Path of the mask on this machine.
+          str: Path of the mask under the database root.
         """
         return str(
-            self.database_root_path / lidar_frame.lidarseg_pointcloud_semantic_mask_relative_path
+            self.database_root_path / lidar_frame.lidar_pointcloud_semantic_mask_relative_path
         )
 
     def resolve_class_indices(

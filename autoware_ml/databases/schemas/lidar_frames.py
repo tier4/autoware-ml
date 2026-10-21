@@ -6,13 +6,14 @@ from typing import Mapping, Any
 import numpy as np
 import polars as pl
 from jaxtyping import Float32, Float64
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationInfo, field_validator
 
 from autoware_ml.databases.schemas.base_schemas import (
     BaseFieldSchema,
     DatasetTableColumn,
     DataModelInterface,
 )
+from autoware_ml.databases.schemas.utils import check_relative_path
 from autoware_ml.databases.t4pack.t4pack_frame import T4PackFrame, T4PackFrameDatasetSchema
 
 
@@ -27,8 +28,10 @@ class LidarFrameDatasetSchema(BaseFieldSchema):
     lidar_sensor_id = DatasetTableColumn("lidar_sensor_id", pl.String)
     lidar_timestamp_seconds = DatasetTableColumn("lidar_timestamp_seconds", pl.Float64)
     lidar_sensor_channel_name = DatasetTableColumn("lidar_sensor_channel_name", pl.String)
-    lidar_pointcloud_path = DatasetTableColumn("lidar_pointcloud_path", pl.String)
-    lidar_pointcloud_source_path = DatasetTableColumn("lidar_pointcloud_source_path", pl.String)
+    lidar_pointcloud_relative_path = DatasetTableColumn("lidar_pointcloud_relative_path", pl.String)
+    lidar_pointcloud_source_relative_path = DatasetTableColumn(
+        "lidar_pointcloud_source_relative_path", pl.String
+    )
     lidar_pointcloud_num_features = DatasetTableColumn("lidar_pointcloud_num_features", pl.Int32)
     lidar_sensor_to_ego_pose_matrix = DatasetTableColumn(
         "lidar_sensor_to_ego_pose_matrix", pl.Array(pl.Float32, shape=(4, 4))
@@ -39,43 +42,13 @@ class LidarFrameDatasetSchema(BaseFieldSchema):
     lidar_sensor_to_lidar_sweep_matrix = DatasetTableColumn(
         "lidar_sensor_to_lidar_sweep_matrix", pl.Array(pl.Float32, shape=(4, 4))
     )
-    lidar_pointcloud_semantic_mask_path = DatasetTableColumn(
-        "lidar_pointcloud_semantic_mask_path", pl.String
+    lidar_pointcloud_semantic_mask_relative_path = DatasetTableColumn(
+        "lidar_pointcloud_semantic_mask_relative_path", pl.String
     )
     lidar_pointcloud_t4pack_frame = DatasetTableColumn(
         "lidar_pointcloud_t4pack_frame",
         pl.Struct(T4PackFrameDatasetSchema.to_polars_field_schema()),
     )
-
-    # A blob path is stored with the database root of the machine that generated the corpus. The
-    # dataset keeps the last components and resolves them against its own database root. They are
-    # {database_version}/{scene_id}/{dataset_version}/{blob_dir}/{sub_dir}/{file}.
-    DATABASE_ROOTED_PART_COUNT = 6
-
-    @staticmethod
-    def relative_to_database_root(path: str, field_name: str) -> str:
-        """
-        Part of a stored blob path below the database root.
-
-        Args:
-          path: Stored blob path.
-          field_name: Name of the field with the path, used in the error message.
-
-        Returns:
-          str: Path relative to the database root.
-
-        Raises:
-          ValueError: If the path does not start at the scene directory.
-        """
-        part_count = LidarFrameDatasetSchema.DATABASE_ROOTED_PART_COUNT
-        parts = path.split("/")
-        if len(parts) < part_count:
-            raise ValueError(
-                f"{field_name} '{path}' has {len(parts)} path components, expected at least "
-                f"{part_count}. Store the path starting at the scene directory."
-            )
-
-        return "/".join(parts[-part_count:])
 
 
 class LidarFrameDataModel(BaseModel, DataModelInterface):
@@ -91,9 +64,12 @@ class LidarFrameDataModel(BaseModel, DataModelInterface):
       lidar_sensor_id: Lidar sensor ID.
       lidar_sensor_channel_name: Lidar sensor channel name.
       lidar_timestamp_seconds: Lidar timestamp in seconds.
-      lidar_pointcloud_path: Lidar pointcloud path.
-      lidar_pointcloud_source_path: Lidar pointcloud source path, which is the path to the
-        information for each lidar pointcloud. Set to None if it's not available.
+      lidar_pointcloud_relative_path: Lidar pointcloud path, relative to the root of the
+        database. Every blob path of a record is stored relative to that root and joined
+        onto the root of the dataset reading it.
+      lidar_pointcloud_source_relative_path: Path of the index file naming the points each
+        lidar source contributes to the pointcloud, relative to the root of the database.
+        Set to None if it's not available.
       lidar_pointcloud_num_features: Lidar pointcloud num features.
       lidar_sensor_to_ego_pose_matrix: Transformation matrix from the lidar sensor of this frame to
         the ego pose of this lidar frame.
@@ -101,8 +77,8 @@ class LidarFrameDataModel(BaseModel, DataModelInterface):
         frame to the global frame.
       lidar_sensor_to_lidar_sweep_matrix: Transformation matrix from the main lidar sensor
         to other lidar sweeps at this frame.
-      lidar_pointcloud_semantic_mask_path: Lidar pointcloud semantic mask path. Set to None if it's
-        not available.
+      lidar_pointcloud_semantic_mask_relative_path: Lidar pointcloud semantic mask path,
+        relative to the root of the database. Set to None if it's not available.
       lidar_pointcloud_t4pack_frame: Location of the frame in the t4pack file of its channel,
         ``data/<channel>.pack``. Set to None if the scene has no pack.
     """
@@ -114,59 +90,38 @@ class LidarFrameDataModel(BaseModel, DataModelInterface):
     lidar_sensor_id: str
     lidar_sensor_channel_name: str
     lidar_timestamp_seconds: float
-    lidar_pointcloud_path: str
-    lidar_pointcloud_source_path: str | None
+    lidar_pointcloud_relative_path: str
+    lidar_pointcloud_source_relative_path: str | None
     lidar_pointcloud_num_features: int
     lidar_sensor_to_ego_pose_matrix: Float64[np.ndarray, "4 4"]
     # Transformation matrix from the ego pose of this lidar frame to the global frame.
     lidar_frame_ego_pose_to_global_matrix: Float64[np.ndarray, "4 4"]
     # Transformation matrices from the main lidar sensor to other lidar sweeps at this frame.
     lidar_sensor_to_lidar_sweep_matrix: Float64[np.ndarray, "4 4"]
-    lidar_pointcloud_semantic_mask_path: str | None
+    lidar_pointcloud_semantic_mask_relative_path: str | None
     lidar_pointcloud_t4pack_frame: T4PackFrame | None = None
 
-    @property
-    def lidar_pointcloud_relative_path(self) -> str:
+    @field_validator(
+        "lidar_pointcloud_relative_path",
+        "lidar_pointcloud_source_relative_path",
+        "lidar_pointcloud_semantic_mask_relative_path",
+    )
+    @classmethod
+    def _check_relative_path(cls, path: str | None, info: ValidationInfo) -> str | None:
         """
-        Parse lidar pointcloud path to {database_version}/{scene_id}/
-        {dataset_version}/data/{lidar_token}/{frame}.bin from path.
+        Reject a blob path stored with a root, so a record never binds to one machine.
+
+        Args:
+          path: Stored blob path, None when the frame has none.
+          info: Validation context naming the field.
 
         Returns:
-          str: Lidar pointcloud relative path.
+          str | None: The path, unchanged.
         """
 
-        return LidarFrameDatasetSchema.relative_to_database_root(
-            self.lidar_pointcloud_path, "lidar_pointcloud_path"
-        )
-
-    @property
-    def lidar_pointcloud_source_relative_path(self) -> str | None:
-        """
-        Parse lidar pointcloud source path to {database_version}/{scene_id}/
-        {dataset_version}/data/{lidar_token}/{frame}.bin from path.
-
-        Returns:
-          str | None: Lidar pointcloud source relative path.
-        """
-        if self.lidar_pointcloud_source_path is None:
+        if path is None:
             return None
-
-        return LidarFrameDatasetSchema.relative_to_database_root(
-            self.lidar_pointcloud_source_path, "lidar_pointcloud_source_path"
-        )
-
-    @property
-    def lidarseg_pointcloud_semantic_mask_relative_path(self) -> str | None:
-        """
-        Parse lidarseg pts semantic mask path to {database_version}/{scene_id}/
-        {dataset_version}/data/{lidar_token}/{frame}.bin from path.
-        """
-        if self.lidar_pointcloud_semantic_mask_path is None:
-            return None
-
-        return LidarFrameDatasetSchema.relative_to_database_root(
-            self.lidar_pointcloud_semantic_mask_path, "lidar_pointcloud_semantic_mask_path"
-        )
+        return check_relative_path(path, info.field_name)
 
     @property
     def lidar_sensor_to_ego_pose_matrix_fp32(self) -> Float32[np.ndarray, "4 4"]:
@@ -218,13 +173,13 @@ class LidarFrameDataModel(BaseModel, DataModelInterface):
             LidarFrameDatasetSchema.lidar_sensor_id.name: self.lidar_sensor_id,
             LidarFrameDatasetSchema.lidar_timestamp_seconds.name: self.lidar_timestamp_seconds,
             LidarFrameDatasetSchema.lidar_sensor_channel_name.name: self.lidar_sensor_channel_name,
-            LidarFrameDatasetSchema.lidar_pointcloud_path.name: self.lidar_pointcloud_path,
-            LidarFrameDatasetSchema.lidar_pointcloud_source_path.name: self.lidar_pointcloud_source_path,
+            LidarFrameDatasetSchema.lidar_pointcloud_relative_path.name: self.lidar_pointcloud_relative_path,
+            LidarFrameDatasetSchema.lidar_pointcloud_source_relative_path.name: self.lidar_pointcloud_source_relative_path,
             LidarFrameDatasetSchema.lidar_pointcloud_num_features.name: self.lidar_pointcloud_num_features,
             LidarFrameDatasetSchema.lidar_sensor_to_ego_pose_matrix.name: self.lidar_sensor_to_ego_pose_matrix_fp32,
             LidarFrameDatasetSchema.lidar_frame_ego_pose_to_global_matrix.name: self.lidar_frame_ego_pose_to_global_matrix_fp32,
             LidarFrameDatasetSchema.lidar_sensor_to_lidar_sweep_matrix.name: self.lidar_sensor_to_lidar_sweep_matrix_fp32,
-            LidarFrameDatasetSchema.lidar_pointcloud_semantic_mask_path.name: self.lidar_pointcloud_semantic_mask_path,
+            LidarFrameDatasetSchema.lidar_pointcloud_semantic_mask_relative_path.name: self.lidar_pointcloud_semantic_mask_relative_path,
             LidarFrameDatasetSchema.lidar_pointcloud_t4pack_frame.name: (
                 None
                 if self.lidar_pointcloud_t4pack_frame is None
@@ -256,9 +211,11 @@ class LidarFrameDataModel(BaseModel, DataModelInterface):
             lidar_sensor_channel_name=data_model[
                 LidarFrameDatasetSchema.lidar_sensor_channel_name.name
             ],
-            lidar_pointcloud_path=data_model[LidarFrameDatasetSchema.lidar_pointcloud_path.name],
-            lidar_pointcloud_source_path=data_model[
-                LidarFrameDatasetSchema.lidar_pointcloud_source_path.name
+            lidar_pointcloud_relative_path=data_model[
+                LidarFrameDatasetSchema.lidar_pointcloud_relative_path.name
+            ],
+            lidar_pointcloud_source_relative_path=data_model[
+                LidarFrameDatasetSchema.lidar_pointcloud_source_relative_path.name
             ],
             lidar_pointcloud_num_features=data_model[
                 LidarFrameDatasetSchema.lidar_pointcloud_num_features.name
@@ -275,8 +232,8 @@ class LidarFrameDataModel(BaseModel, DataModelInterface):
                 data_model[LidarFrameDatasetSchema.lidar_sensor_to_lidar_sweep_matrix.name],
                 dtype=np.float64,
             ),
-            lidar_pointcloud_semantic_mask_path=data_model[
-                LidarFrameDatasetSchema.lidar_pointcloud_semantic_mask_path.name
+            lidar_pointcloud_semantic_mask_relative_path=data_model[
+                LidarFrameDatasetSchema.lidar_pointcloud_semantic_mask_relative_path.name
             ],
             lidar_pointcloud_t4pack_frame=cls.load_t4pack_frame(
                 data_model.get(LidarFrameDatasetSchema.lidar_pointcloud_t4pack_frame.name)

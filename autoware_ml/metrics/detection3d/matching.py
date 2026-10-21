@@ -1,6 +1,6 @@
 """Matching math and the memoizing detection state shared by the metrics.
 
-Metrics ask a :class:`DetectionState` for match curves and turn them into AP,
+Metrics ask a :class:`Detection3DState` for match curves and turn them into AP,
 APH, NDS, or TP errors. The state memoizes per class and threshold, so the
 expensive matching runs once and is shared across every metric. Matching is
 greedy and score-ordered with a configurable cost: nuScenes-style BEV center
@@ -204,7 +204,7 @@ class PreparedLabel:
 
     Everything threshold-independent is done once here (masking, tensor to
     NumPy conversion, the per-frame cost matrices, and the global score sort),
-    so :class:`DetectionState` builds this once per label and matches every
+    so :class:`Detection3DState` builds this once per label and matches every
     threshold against it. Per-frame boxes are concatenated in frame order and
     stably sorted by descending score. Greedy claims never cross frames, so
     the flat order matches per-frame greedy matching exactly.
@@ -387,7 +387,7 @@ def _validate_box_tensor(boxes: torch.Tensor, name: str) -> None:
 def curve_metrics(curve: MatchCurve) -> CurveMetrics:
     """AP, APH, max-F1 and the optimal-confidence operating point for a curve.
 
-    Callers holding a :class:`DetectionState` should use its memoized
+    Callers holding a :class:`Detection3DState` should use its memoized
     ``curve_metrics(label, threshold)`` instead of calling this repeatedly.
 
     Args:
@@ -605,7 +605,7 @@ def mean_valid(values: list[float] | tuple[float, ...]) -> float:
 
 
 @dataclass
-class DetectionState:
+class Detection3DState:
     """Synced detection state the suite hands to each metric.
 
     Attributes:

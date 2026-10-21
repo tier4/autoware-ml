@@ -1,4 +1,4 @@
-from typing import Sequence
+from collections.abc import Sequence
 
 from autoware_ml.databases.box3d_pipelines.box3d_pipeline import Box3DPipeline
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDataModel

@@ -1,4 +1,4 @@
 defaults:
   - default_datamodule@_here_
-  - t4dataset/datasets@train_dataset: default_calibration_status_train_dataset
-  - t4dataset/datasets@test_dataset: default_calibration_status_test_dataset
+  - t4dataset/datasets/calibration_status@_global_.datasets.train: default_calibration_status_train_dataset
+  - t4dataset/datasets/calibration_status@_global_.datasets.test: default_calibration_status_test_dataset

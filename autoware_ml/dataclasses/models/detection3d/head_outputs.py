@@ -304,7 +304,8 @@ class Detection3DHeadOutputs(BaseModel):
     """
     Dataclass to save outputs from 3D detection models.
 
-    Exactly one of the heads must be set.
+    Exactly one of the heads must be set; the others default to ``None`` so a model names only
+    the head family it produces.
 
     Attributes:
       center_head_outputs: Outputs from a CenterHead-based 3D detection model.
@@ -314,9 +315,9 @@ class Detection3DHeadOutputs(BaseModel):
 
     model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
 
-    center_head_outputs: CenterHeadOutputs | None
-    transfusion_head_outputs: TransFusionHeadOutputs | None
-    streampetr_head_outputs: StreamPETRHeadOutputs | None
+    center_head_outputs: CenterHeadOutputs | None = None
+    transfusion_head_outputs: TransFusionHeadOutputs | None = None
+    streampetr_head_outputs: StreamPETRHeadOutputs | None = None
 
     def center_head(self) -> CenterHeadOutputs:
         """

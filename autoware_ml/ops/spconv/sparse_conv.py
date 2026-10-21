@@ -638,7 +638,7 @@ class SparseConvolution(SparseConvolutionBase):
         )
 
 
-class SparseConv3d(SparseConvolution):
+class ExportableSparseConv3d(SparseConvolution):
     """Implement a 3D sparse convolution backed by the exportable wrapper.
 
     This layer mirrors ``spconv.SparseConv3d`` while keeping export-compatible
@@ -701,7 +701,7 @@ class SparseConv3d(SparseConvolution):
         )
 
 
-class SubMConv3d(SparseConvolution):
+class ExportableSubMConv3d(SparseConvolution):
     """Implement a 3D submanifold sparse convolution with export support.
 
     This layer mirrors ``spconv.SubMConv3d`` while preserving deployment-aware

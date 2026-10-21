@@ -29,14 +29,19 @@ class FrameMetaSample(NamedTuple):
         ego2global: 4x4 transform from the frame the points and boxes are expressed in (the
             main lidar frame) to the map frame. It is named after the ``ego2global`` key the
             metrics read; the lidar mounting is already composed in.
-        scene_token: Scene identifier the lanelet map provider resolves to the scene's map.
+        scene_token: Scene identifier of the frame.
         timestamp: Sample time of the frame in seconds. Epoch seconds exceed the float32
             resolution (128 s steps at 1.7e9 s), so it stays a Python float.
+        lanelet_map_path: Path of the scene's lanelet map, resolved by the dataset that serves
+            the frame against its own corpus, so frames of different sources carry the maps of
+            their own roots. ``None`` when the scene or the corpus has no map, which keeps the
+            frame out of the map-backed metric slices.
     """
 
     ego2global: Float32[Tensor, "4 4"]
     scene_token: str
     timestamp: float
+    lanelet_map_path: str | None = None
 
 
 class FrameMetaBatch(NamedTuple):
@@ -45,11 +50,13 @@ class FrameMetaBatch(NamedTuple):
     Attributes:
         ego2globals: Per-frame 4x4 transforms from the (augmented) lidar frame to the map frame.
         scene_tokens: Per-frame scene identifiers.
+        lanelet_map_paths: Per-frame lanelet map paths, ``None`` for frames without a map.
         timestamps: Per-frame sample times in seconds, in float64.
     """
 
     ego2globals: Float32[Tensor, "batch_size 4 4"]
     scene_tokens: Sequence[str]
+    lanelet_map_paths: Sequence[str | None]
     timestamps: Float64[Tensor, " batch_size"]
 
     @staticmethod
@@ -96,6 +103,7 @@ class FrameMetaBatch(NamedTuple):
         return FrameMetaBatch(
             ego2globals=torch.stack(ego2globals, dim=0),
             scene_tokens=[frame_meta.scene_token for frame_meta in frame_meta_samples],
+            lanelet_map_paths=[frame_meta.lanelet_map_path for frame_meta in frame_meta_samples],
             timestamps=torch.tensor(
                 [frame_meta.timestamp for frame_meta in frame_meta_samples], dtype=torch.float64
             ),
@@ -113,5 +121,6 @@ class FrameMetaBatch(NamedTuple):
         return FrameMetaBatch(
             ego2globals=self.ego2globals.to(device),
             scene_tokens=self.scene_tokens,
+            lanelet_map_paths=self.lanelet_map_paths,
             timestamps=self.timestamps.to(device),
         )

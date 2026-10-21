@@ -11,19 +11,21 @@ import torch
 import torch.nn as nn
 
 import autoware_ml.utils.point_cloud.structures as point_structures
+from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 from autoware_ml.utils.point_cloud.structures import pooled_sparse_shape
 from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTBatch
 from autoware_ml.dataclasses.geometry.voxels import VoxelsData
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.tests.batch_inputs_fixtures import (
     build_batch_inputs,
     build_point_cloud_batch,
 )
-from autoware_ml.models.detection3d.tests.ptv3_detection_fixtures import (
+from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
     build_inputs,
     build_ptv3_encoder,
-    build_seg_head,
-    build_seg_model,
+    build_seg3d_head,
+    build_seg3d_model,
 )
 from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     Point,
@@ -38,15 +40,12 @@ from autoware_ml.models.segmentation3d.encoders.voxel import (
     SweepSplitVoxelFeatureEncoder,
 )
 from autoware_ml.models.segmentation3d.heads.ptv3 import (
-    segmentation_eval_output,
-    segmentation_point_loss,
-    segmentation_predict_outputs,
+    segmentation3d_eval_output,
+    segmentation3d_point_loss,
+    segmentation3d_predict_outputs,
     voxel_supervision,
 )
-from autoware_ml.models.segmentation3d.ptv3 import (
-    PTv3SegmentationModel,
-    _PTv3SegmentationExportModule,
-)
+from autoware_ml.models.segmentation3d.ptv3 import PTv3Segmentation3DModel
 from autoware_ml.models.segmentation3d.ptv3_base import (
     build_ptv3_encoder_dynamic_axes,
     validate_serialization_geometry,
@@ -116,7 +115,7 @@ def test_serialized_attention_uses_flash_module_when_enabled() -> None:
     assert attention.flash_attn is flash_module
 
 
-def test_build_export_module_disables_flash_attention_without_mutating_live_encoder() -> None:
+def test_prepare_for_export_disables_flash_attention_without_mutating_live_encoder() -> None:
     flash_module = SimpleNamespace(
         flash_attn_varlen_qkvpacked_func=lambda qkv,
         cu_seqlens,
@@ -163,22 +162,16 @@ def test_build_export_module_disables_flash_attention_without_mutating_live_enco
         "autoware_ml.models.segmentation3d.encoders.ptv3.replace_submconv3d_for_export",
         return_value=None,
     ):
-        export_module = _PTv3SegmentationExportModule(
-            encoder=encoder.prepare_for_export(("z", "z-trans")),
-            voxel_encoder=SweepSplitVoxelFeatureEncoder(),
-            seg3d_head=nn.Linear(4, 2),
-            sparse_shape=torch.tensor([64, 64, 64], dtype=torch.long),
-            serialized_depth=torch.tensor(6, dtype=torch.long),
-        )
+        export_encoder = encoder.prepare_for_export(("z", "z-trans"))
 
-    export_attention = export_module.encoder.attention
+    export_attention = export_encoder.attention
     assert attention.enable_flash is True
     assert attention.patch_size == 4
     assert export_attention.enable_flash is False
     assert export_attention.flash_attn is None
     assert export_attention.patch_size == 0
     assert encoder.shuffle_orders is True
-    assert export_module.encoder.shuffle_orders is False
+    assert export_encoder.shuffle_orders is False
 
 
 def test_prepare_for_export_handles_loaded_flash_attention_module() -> None:
@@ -319,6 +312,8 @@ def test_serialized_attention_export_padding_matches_batched_branch() -> None:
             }
         )
 
+    # `_get_padding_and_inverse` is the pure index kernel behind forward(). The padded index
+    # layout it is tested on here is not observable from the attention outputs.
     # Both a non-divisible count (padded last window) and a divisible one (no padding).
     for num_points in (10, 8):
         point = make_point(num_points)
@@ -353,7 +348,7 @@ def test_point_sequential_skips_dense_module_on_empty_sparse_tensor() -> None:
     assert output.features.shape == (0, 4)
 
 
-def _seg_processed(
+def _seg3d_processed(
     point_frames: list[torch.Tensor],
     point_voxel_indices: torch.Tensor,
     segment_frames: list[torch.Tensor] | None = None,
@@ -521,7 +516,7 @@ def test_voxel_encoder_rejects_a_point_layout_without_the_time_lag() -> None:
 
 def test_model_rejects_future_points_its_voxel_encoder_does_not_read() -> None:
     voxels, num_points = _split_voxels()
-    model = build_seg_model()
+    model = build_seg3d_model()
 
     with pytest.raises(ValueError, match="future"):
         model.encode(
@@ -535,7 +530,7 @@ def test_model_rejects_future_points_its_voxel_encoder_does_not_read() -> None:
 
 def test_point_loss_and_eval_output_work_at_the_point_level() -> None:
     """The loss runs on the voxel labels and eval keeps the current-frame points only."""
-    head = build_seg_head(num_classes=3, dec_depths=(0,))
+    head = build_seg3d_head(num_classes=3, dec_depths=(0,))
 
     voxel_logits = torch.tensor(
         [
@@ -554,19 +549,19 @@ def test_point_loss_and_eval_output_work_at_the_point_level() -> None:
         ],
         dtype=torch.float32,
     )
-    batch = _seg_processed(
+    batch = _seg3d_processed(
         [points],
         torch.tensor([0, 1, 1], dtype=torch.long),
         segment_frames=[torch.tensor([0, 1, -1], dtype=torch.long)],
     )
 
-    metrics = segmentation_point_loss(head, voxel_logits, batch)
+    metrics = segmentation3d_point_loss(head, voxel_logits, batch)
 
     assert set(metrics) == {"loss", "loss_ce", "loss_lovasz"}
     assert metrics["loss"] > 0
 
-    eval_out = segmentation_eval_output(voxel_logits, batch)
-    (frame,) = eval_out["seg_frames"]
+    eval_out = segmentation3d_eval_output(voxel_logits, batch)
+    (frame,) = eval_out["seg3d_frames"]
     assert torch.equal(frame["pred"], torch.tensor([0, 1]))
     assert torch.equal(frame["target"], torch.tensor([0, 1]))
     assert torch.equal(frame["coord"], points[:2, :3])
@@ -667,27 +662,27 @@ def test_voxel_supervision_draws_from_the_voxel_distribution_in_training() -> No
 
 def test_points_of_a_voxel_do_not_weight_the_loss() -> None:
     """Repeating a label inside a voxel leaves the loss unchanged."""
-    head = build_seg_head(num_classes=3, dec_depths=(0,)).eval()
+    head = build_seg3d_head(num_classes=3, dec_depths=(0,)).eval()
     voxel_logits = torch.tensor([[3.0, 0.1, 0.2], [0.2, 2.5, 0.1]], dtype=torch.float32)
-    dense = _seg_processed(
+    dense = _seg3d_processed(
         [torch.zeros((5, 5), dtype=torch.float32)],
         torch.tensor([0, 0, 0, 0, 1], dtype=torch.long),
         segment_frames=[torch.tensor([0, 0, 0, 0, 1], dtype=torch.long)],
     )
-    sparse = _seg_processed(
+    sparse = _seg3d_processed(
         [torch.zeros((2, 5), dtype=torch.float32)],
         torch.tensor([0, 1], dtype=torch.long),
         segment_frames=[torch.tensor([0, 1], dtype=torch.long)],
     )
 
     assert torch.allclose(
-        segmentation_point_loss(head, voxel_logits, dense)["loss"],
-        segmentation_point_loss(head, voxel_logits, sparse)["loss"],
+        segmentation3d_point_loss(head, voxel_logits, dense)["loss"],
+        segmentation3d_point_loss(head, voxel_logits, sparse)["loss"],
     )
 
 
 def test_encode_rejects_dropped_voxels_and_a_misplaced_time_lag() -> None:
-    model = build_seg_model()
+    model = build_seg3d_model()
     voxels = torch.zeros((1, 1, 5))
     num_points = torch.ones(1, dtype=torch.int32)
     voxel_coords = torch.zeros((1, 4), dtype=torch.int32)
@@ -700,25 +695,25 @@ def test_encode_rejects_dropped_voxels_and_a_misplaced_time_lag() -> None:
 
 def test_points_outside_the_voxel_grid_are_excluded_from_loss_and_eval() -> None:
     """A point without a voxel (outside the grid) neither supervises nor gets scored."""
-    head = build_seg_head(num_classes=3, dec_depths=(0,))
+    head = build_seg3d_head(num_classes=3, dec_depths=(0,))
     voxel_logits = torch.tensor([[3.0, 0.1, 0.2], [0.2, 2.5, 0.1]], dtype=torch.float32)
     points = torch.zeros((3, 5), dtype=torch.float32)
-    batch = _seg_processed(
+    batch = _seg3d_processed(
         [points],
         torch.tensor([0, -1, 1], dtype=torch.long),
         segment_frames=[torch.tensor([0, 2, 1], dtype=torch.long)],
     )
-    reference = _seg_processed(
+    reference = _seg3d_processed(
         [points[[0, 2]]],
         torch.tensor([0, 1], dtype=torch.long),
         segment_frames=[torch.tensor([0, 1], dtype=torch.long)],
     )
 
-    metrics = segmentation_point_loss(head, voxel_logits, batch)
-    expected = segmentation_point_loss(head, voxel_logits, reference)
+    metrics = segmentation3d_point_loss(head, voxel_logits, batch)
+    expected = segmentation3d_point_loss(head, voxel_logits, reference)
     assert torch.allclose(metrics["loss"], expected["loss"])
 
-    (frame,) = segmentation_eval_output(voxel_logits, batch)["seg_frames"]
+    (frame,) = segmentation3d_eval_output(voxel_logits, batch)["seg3d_frames"]
     assert torch.equal(frame["pred"], torch.tensor([0, 1]))
     assert torch.equal(frame["target"], torch.tensor([0, 1]))
 
@@ -731,9 +726,9 @@ def test_predict_outputs_reconstructs_current_frame_point_predictions() -> None:
     # the last point comes from an earlier sweep and gets no prediction
     points[3, 4] = 0.1
 
-    predictions = segmentation_predict_outputs(
+    predictions = segmentation3d_predict_outputs(
         voxel_logits,
-        _seg_processed([points[:2], points[2:]], point_voxel_indices),
+        _seg3d_processed([points[:2], points[2:]], point_voxel_indices),
     )
 
     assert torch.equal(predictions.pred_labels, torch.tensor([0, 1, 0]))
@@ -927,7 +922,9 @@ def test_serialized_pooling_rounds_the_sparse_shape_up() -> None:
     floored value the top slice lies outside the declared grid, its voxels share a spconv
     hash key with ``(x, y + 1, 0)`` and the sub-manifold neighbour table becomes run-dependent.
     """
-    grid_coord = torch.tensor([[0, 0, 0], [66, 66, 66], [65, 64, 66], [1, 66, 0]], dtype=torch.int32)
+    grid_coord = torch.tensor(
+        [[0, 0, 0], [66, 66, 66], [65, 64, 66], [1, 66, 0]], dtype=torch.int32
+    )
     point = Point(
         {
             "coord": grid_coord.to(torch.float32),
@@ -953,17 +950,19 @@ def test_ptv3_frozen_encoder_supports_decoder_block_backward() -> None:
     """Stage-4 regression: a frozen (eval) encoder caches spconv indice pairs
     without backward metadata; decoder blocks must not reuse them by key or
     their CPE backward fails with an empty-indices assert."""
-    model = PTv3SegmentationModel(
+    model = PTv3Segmentation3DModel(
+        log_dict_configs=LogDictConfigs(prog_bar=False),
+        data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
         encoder=build_ptv3_encoder(),
         voxel_encoder=SweepSplitVoxelFeatureEncoder(),
-        seg3d_head=build_seg_head(),
+        seg3d_head=build_seg3d_head(),
         freeze_encoder=True,
         grid_size=1.0,
         point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
     ).cuda()
     batch = build_inputs(device=torch.device("cuda"))
 
-    logits = model(**model.forward_inputs(batch)).segmentation3d().logits
+    logits = model(batch).segmentation3d().logits
     logits.sum().backward()
     assert logits.shape == (batch.voxels_data.voxels.shape[0], 3)
 
@@ -971,6 +970,9 @@ def test_ptv3_frozen_encoder_supports_decoder_block_backward() -> None:
     assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in model.seg3d_head.parameters())
 
 
+# The tests below call `_get_padding_and_inverse` directly: it is the pure index kernel behind
+# SerializedAttention.forward(), and the fill layout it computes is not observable from the
+# attention outputs (a uniform key multiplicity cancels in the softmax).
 def _build_attention(patch_size: int) -> SerializedAttention:
     """Return a non-flash attention module with a fixed window size."""
     attention = SerializedAttention(

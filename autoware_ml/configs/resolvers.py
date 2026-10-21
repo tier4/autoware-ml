@@ -14,10 +14,18 @@
 
 """Hydra and OmegaConf resolver registration for bundled Autoware-ML configs."""
 
+from pathlib import Path
 from collections.abc import Iterable, Mapping
 from typing import Any, cast
 
 from omegaconf import DictConfig, ListConfig, OmegaConf
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def project_root() -> str:
+    """Return the repository checkout the ``autoware_ml`` package is imported from."""
+    return str(PROJECT_ROOT)
 
 
 def strip_tasks_prefix(config_name: str) -> str:
@@ -39,7 +47,7 @@ def merge_lists(*lists: Iterable[Any]) -> ListConfig:
     needs the union of several lists requests it explicitly::
 
         model:
-          metrics: ${merge_lists:${det.metrics},${seg.metrics}}
+          metrics: ${merge_lists:${det3d.metrics},${seg3d.metrics}}
 
     Every element is fully resolved while its source node is still attached to
     the config tree, so the result carries plain values only.
@@ -112,6 +120,7 @@ def class_count(class_names: Iterable[Any]) -> int:
 def register_config_resolvers() -> None:
     """Register all custom OmegaConf resolvers required by bundled configs."""
     OmegaConf.register_new_resolver("user_config_name", strip_tasks_prefix, replace=True)
-    OmegaConf.register_new_resolver("seg_class_indices", raw_name_to_train_index, replace=True)
+    OmegaConf.register_new_resolver("seg3d_class_mapping", raw_name_to_train_index, replace=True)
     OmegaConf.register_new_resolver("merge_lists", merge_lists, replace=True)
     OmegaConf.register_new_resolver("class_count", class_count, replace=True)
+    OmegaConf.register_new_resolver("project_root", project_root, replace=True)
