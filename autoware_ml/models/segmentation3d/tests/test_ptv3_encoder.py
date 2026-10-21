@@ -916,6 +916,14 @@ def test_serialized_pooling_export_mode_uses_precomputed_metadata(monkeypatch) -
     assert "serialized_code" not in export_out
 
 
+def test_serialized_pooling_export_mode_rejects_shuffle_orders() -> None:
+    """Export feeds fixed orders, so an export-mode pooling with shuffling on fails loudly."""
+    pooling = SerializedPooling(6, 8, stride=2, shuffle_orders=True, export_stage_index=0)
+    pooling.export_mode = True
+    with pytest.raises(ValueError, match="shuffle_orders"):
+        pooling(Point())
+
+
 def _reference_patch_order(serialized_order: torch.Tensor, patch_size: int) -> torch.Tensor:
     """The formula the exported attention block used to trace, kept as the oracle."""
     n = serialized_order.shape[1]

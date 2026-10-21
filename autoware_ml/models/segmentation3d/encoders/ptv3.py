@@ -942,6 +942,8 @@ class SerializedPooling(PointModule):
             pooling_depth = 0
 
         if self.export_mode:
+            if self.shuffle_orders:
+                raise ValueError("export_mode requires shuffle_orders=False.")
             if self.export_stage_index is None:
                 raise ValueError("export_mode requires an export_stage_index.")
             if "serialized_pooling" not in point:
@@ -977,7 +979,6 @@ class SerializedPooling(PointModule):
                 .expand_as(pooled_order),
             )
             grid_coord = point.grid_coord[head_indices] >> pooling_depth
-            # Export never shuffles: `prepare_point_module_for_export` clears `shuffle_orders`.
             if self.shuffle_orders:
                 permutation = torch.randperm(pooled_code.shape[0], device=pooled_code.device)
                 pooled_code = pooled_code[permutation]
