@@ -272,11 +272,13 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
         self._start_streams()
 
     def on_validation_epoch_start(self) -> None:
-        """Start new streams for the validation scenes."""
+        """Start new streams for the validation scenes, after the metrics are reset."""
+        super().on_validation_epoch_start()
         self._start_streams()
 
     def on_test_epoch_start(self) -> None:
-        """Start new streams for the test scenes."""
+        """Start new streams for the test scenes, after the metrics are reset."""
+        super().on_test_epoch_start()
         self._start_streams()
 
     def on_predict_epoch_start(self) -> None:

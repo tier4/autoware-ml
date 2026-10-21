@@ -13,6 +13,7 @@ from autoware_ml.dataclasses.batch.frame_meta import FrameMetaBatch
 from autoware_ml.dataclasses.geometry.images import ImageGTBatch
 from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.metrics.base import EvalStage, MetricSuite
 from autoware_ml.models.common.necks.lss_fpn import GeneralizedLSSFPN
 from autoware_ml.models.detection3d.heads.streampetr import StreamPETRHead
 from autoware_ml.models.detection3d.streampetr import StreamPETRDetection3DModel, _ground_truth
@@ -49,13 +50,38 @@ class _TinyMultiScaleBackbone(torch.nn.Module):
         return c3, c4, c5
 
 
-def _build_model() -> StreamPETRDetection3DModel:
+class _ResetCountingSuite(MetricSuite[None]):
+    """A stateless suite that only counts how often it is reset."""
+
+    prefix = "fake"
+
+    def __init__(self) -> None:
+        super().__init__(components=[])
+        self.resets = 0
+
+    def runs_at(self, stage: EvalStage) -> bool:
+        del stage
+        return True
+
+    def reset(self) -> None:
+        super().reset()
+        self.resets += 1
+
+    def update(self, eval_out: dict) -> None:
+        del eval_out
+
+    def state_for(self, metric_range, metric_filter) -> None:
+        del metric_range, metric_filter
+
+
+def _build_model(metrics: Sequence[MetricSuite] | None = None) -> StreamPETRDetection3DModel:
     return StreamPETRDetection3DModel(
         data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
         img_backbone=_TinyMultiScaleBackbone(),
         img_neck=GeneralizedLSSFPN(in_channels=[128, 256, 512], out_channels=128),
         bbox_head=_build_head(),
         log_dict_configs=LogDictConfigs(prog_bar=False),
+        metrics=metrics,
     )
 
 
@@ -497,6 +523,25 @@ def test_phase_hooks_start_new_streams() -> None:
     model.on_validation_epoch_start()
 
     assert model.bbox_head.memory_embedding is None
+    assert model.bbox_head.stream_continuity.scene_tokens is None
+
+
+def test_phase_hooks_reset_the_metrics_before_starting_new_streams() -> None:
+    """Regression test: the stream hooks used to hide the metric reset of the eval mixin.
+
+    Without the reset, the detection metric accumulated across validation epochs and the
+    monitored mAP, hence the checkpoint selection, drifted with the history of the run.
+    """
+    model = _build_model(metrics=[_ResetCountingSuite()])
+    val_suite = model._stage_metrics(EvalStage.VAL)[0]
+    test_suite = model._stage_metrics(EvalStage.TEST)[0]
+    resets_after_construction = (val_suite.resets, test_suite.resets)
+
+    model.on_validation_epoch_start()
+    model.on_test_epoch_start()
+
+    assert val_suite.resets == resets_after_construction[0] + 1
+    assert test_suite.resets == resets_after_construction[1] + 1
     assert model.bbox_head.stream_continuity.scene_tokens is None
 
 
