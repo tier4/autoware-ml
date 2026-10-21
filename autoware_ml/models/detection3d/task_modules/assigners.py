@@ -14,6 +14,7 @@ import torch
 from scipy.optimize import linear_sum_assignment
 
 from autoware_ml.models.detection3d.task_modules.match_costs import (
+    BBox3DL1Cost,
     BBoxBEVL1Cost,
     ClassificationCost,
     IoU3DCost,
@@ -101,15 +102,14 @@ class HungarianAssigner3D:
 
     Attributes:
         cls_cost: Classification cost term.
-        reg_cost: Bounding-box regression cost term over the BEV centers. Only the batched
-            ``BBoxBEVL1Cost`` signature is supported. A model that needs the full-box
-            ``BBox3DL1Cost`` has to give it the same batched signature first.
+        reg_cost: Bounding-box regression cost term. ``BBoxBEVL1Cost`` sees only the BEV
+            centers of the boxes, ``BBox3DL1Cost`` the whole box encoding.
         iou_cost: IoU-based matching cost term.
         point_cloud_range: Detector point-cloud range used by the regression cost.
     """
 
     cls_cost: ClassificationCost
-    reg_cost: BBoxBEVL1Cost
+    reg_cost: BBoxBEVL1Cost | BBox3DL1Cost
     iou_cost: IoU3DCost
     point_cloud_range: Sequence[float]
 
@@ -155,12 +155,20 @@ class HungarianAssigner3D:
             )
 
         cls_cost = self.cls_cost(gt_labels=gt_labels, cls_logits=cls_pred, valid_masks=valid_masks)
-        reg_cost = self.reg_cost(
-            bboxes_centers=bboxes[:, :, Box3DFieldIndex.X : Box3DFieldIndex.Y + 1],
-            gt_bboxes_centers=gt_bboxes[:, :, Box3DFieldIndex.X : Box3DFieldIndex.Y + 1],
-            valid_masks=valid_masks,
-            point_cloud_range=self.point_cloud_range,
-        )
+        if isinstance(self.reg_cost, BBox3DL1Cost):
+            reg_cost = self.reg_cost(
+                bboxes=bboxes,
+                gt_bboxes=gt_bboxes,
+                valid_masks=valid_masks,
+                point_cloud_range=self.point_cloud_range,
+            )
+        else:
+            reg_cost = self.reg_cost(
+                bboxes_centers=bboxes[:, :, Box3DFieldIndex.X : Box3DFieldIndex.Y + 1],
+                gt_bboxes_centers=gt_bboxes[:, :, Box3DFieldIndex.X : Box3DFieldIndex.Y + 1],
+                valid_masks=valid_masks,
+                point_cloud_range=self.point_cloud_range,
+            )
 
         iou = _bev_iou_aligned(bboxes, gt_bboxes, valid_masks=valid_masks)
         iou_cost = self.iou_cost(iou)

@@ -17,7 +17,8 @@
 from collections.abc import Sequence
 import unittest
 
-from jaxtyping import Bool, Float32
+from jaxtyping import Bool, Float32, Int64
+from scipy.optimize import linear_sum_assignment
 import torch
 
 from autoware_ml.models.detection3d.task_modules.assigners import (
@@ -25,7 +26,9 @@ from autoware_ml.models.detection3d.task_modules.assigners import (
     HungarianAssigner3D,
     _bev_iou_aligned,
 )
+from autoware_ml.models.detection3d.task_modules.bbox_coders import normalize_boxes3d
 from autoware_ml.models.detection3d.task_modules.match_costs import (
+    BBox3DL1Cost,
     BBoxBEVL1Cost,
     ClassificationCost,
     IoU3DCost,
@@ -511,3 +514,121 @@ class TestHungarianAssigner3D(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _per_sample_full_box_assignment(
+    bboxes: Float32[torch.Tensor, "num_bboxes code_size"],
+    gt_bboxes: Float32[torch.Tensor, "num_gt_bboxes code_size"],
+    gt_labels: Int64[torch.Tensor, " num_gt_bboxes"],
+    cls_logits: Float32[torch.Tensor, "num_bboxes num_classes"],
+    cls_weight: float,
+    reg_weight: float,
+    code_weights: Sequence[float],
+    iou_weight: float,
+) -> Int64[torch.Tensor, " num_bboxes"]:
+    """Match one sample the way the unbatched full-box assigner did, without any padding.
+
+    The classification term is the focal cost, the regression term the weighted L1 distance in
+    the normalized box encoding and the IoU term the negated axis-aligned BEV IoU.
+    """
+    probs = cls_logits.sigmoid().clamp(min=1e-12, max=1.0 - 1e-12)
+    neg_cost = -(1.0 - probs + 1e-12).log() * 0.75 * probs.pow(2.0)
+    pos_cost = -(probs + 1e-12).log() * 0.25 * (1.0 - probs).pow(2.0)
+    cls_cost = (pos_cost[:, gt_labels] - neg_cost[:, gt_labels]) * cls_weight
+    weights = bboxes.new_tensor(code_weights)
+    reg_cost = (
+        torch.cdist(
+            normalize_boxes3d(bboxes) * weights, normalize_boxes3d(gt_bboxes) * weights, p=1
+        )
+        * reg_weight
+    )
+    iou = _expected_bev_iou(
+        bboxes.unsqueeze(0),
+        gt_bboxes.unsqueeze(0),
+        torch.ones_like(gt_labels, dtype=torch.bool).unsqueeze(0),
+    )[0]
+    cost = (cls_cost + reg_cost - iou * iou_weight).detach().cpu()
+    rows, cols = linear_sum_assignment(cost)
+    gt_inds = torch.zeros(bboxes.shape[0], dtype=torch.int64, device=bboxes.device)
+    gt_inds[torch.from_numpy(rows).to(bboxes.device)] = torch.from_numpy(cols).to(bboxes.device) + 1
+    return gt_inds
+
+
+class TestHungarianAssigner3DFullBoxCost(unittest.TestCase):
+    """The batched assigner with the full-box cost reproduces the per-sample matching."""
+
+    def setUp(self) -> None:
+        """Set up the StreamPETR matching recipe over random batches with padded gts."""
+        self.device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+        self.cls_weight, self.reg_weight, self.iou_weight = 2.0, 0.25, 0.1
+        self.code_weights = (2.0, 2.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0)
+        self.assigner = HungarianAssigner3D(
+            cls_cost=ClassificationCost(weight=self.cls_weight),
+            reg_cost=BBox3DL1Cost(weight=self.reg_weight, code_weights=self.code_weights),
+            iou_cost=IoU3DCost(weight=self.iou_weight),
+            point_cloud_range=[-10.0, -10.0, -5.0, 10.0, 10.0, 5.0],
+        )
+
+    def _random_boxes(self, num_boxes: int) -> Float32[torch.Tensor, "num_boxes code_size"]:
+        """Draw metric boxes with positive sizes around the origin."""
+        boxes = torch.zeros((num_boxes, 9), device=self.device)
+        boxes[:, :3] = torch.rand((num_boxes, 3), device=self.device) * 16.0 - 8.0
+        boxes[:, 3:6] = torch.rand((num_boxes, 3), device=self.device) * 3.0 + 0.5
+        boxes[:, 6] = torch.rand(num_boxes, device=self.device) * 6.0 - 3.0
+        boxes[:, 7:9] = torch.randn((num_boxes, 2), device=self.device)
+        return boxes
+
+    def test_batched_assignment_matches_the_per_sample_assignment(self) -> None:
+        """Test that every sample of a padded batch is matched as if it were assigned alone.
+
+        Hungarian matching also pairs the padded columns, so this checks that padding with the
+        sentinel cost and dropping those pairs leaves the matching of the real gts unchanged,
+        including for samples without any gt.
+        """
+        generator = torch.Generator().manual_seed(0)
+        num_classes, num_queries = 3, 12
+        for _ in range(50):
+            batch_size = int(torch.randint(1, 4, (1,), generator=generator))
+            counts = [
+                int(torch.randint(0, 6, (1,), generator=generator)) for _ in range(batch_size)
+            ]
+            max_count = max(counts)
+            bboxes = torch.stack([self._random_boxes(num_queries) for _ in range(batch_size)])
+            cls_logits = torch.randn((batch_size, num_queries, num_classes), device=self.device)
+            gt_bboxes = torch.zeros((batch_size, max_count, 9), device=self.device)
+            gt_labels = torch.full(
+                (batch_size, max_count), -1, dtype=torch.int64, device=self.device
+            )
+            valid_masks = torch.zeros((batch_size, max_count), dtype=torch.bool, device=self.device)
+            for index, count in enumerate(counts):
+                gt_bboxes[index, :count] = self._random_boxes(count)
+                gt_labels[index, :count] = torch.randint(
+                    0, num_classes, (count,), device=self.device
+                )
+                valid_masks[index, :count] = True
+
+            result = self.assigner.assign(
+                bboxes=bboxes,
+                gt_bboxes=gt_bboxes,
+                gt_labels=gt_labels,
+                cls_pred=cls_logits,
+                valid_masks=valid_masks,
+            )
+
+            for index, count in enumerate(counts):
+                expected = (
+                    _per_sample_full_box_assignment(
+                        bboxes[index],
+                        gt_bboxes[index, :count],
+                        gt_labels[index, :count],
+                        cls_logits[index],
+                        self.cls_weight,
+                        self.reg_weight,
+                        self.code_weights,
+                        self.iou_weight,
+                    )
+                    if count > 0
+                    else torch.zeros(num_queries, dtype=torch.int64, device=self.device)
+                )
+                self.assertEqual(result.gt_inds[index].tolist(), expected.tolist())
+                self.assertEqual(int(result.num_gts[index]), count)

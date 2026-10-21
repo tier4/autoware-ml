@@ -20,7 +20,9 @@ import unittest
 from jaxtyping import Bool, Float32, Int64
 import torch
 
+from autoware_ml.models.detection3d.task_modules.bbox_coders import normalize_boxes3d
 from autoware_ml.models.detection3d.task_modules.match_costs import (
+    BBox3DL1Cost,
     BBoxBEVL1Cost,
     ClassificationCost,
     IoU3DCost,
@@ -421,6 +423,82 @@ class TestBBoxBEVL1Cost(unittest.TestCase):
         self.assertTrue(
             torch.allclose(scaled_cost[valid_columns], unit_cost[valid_columns] * 0.25, atol=1e-6)
         )
+
+
+class TestBBox3DL1Cost(unittest.TestCase):
+    """Unit tests for the batched full-box BBox3DL1Cost function."""
+
+    def setUp(self) -> None:
+        """Set up a two-sample batch whose second sample carries one padded gt box."""
+        torch.manual_seed(0)
+        self.device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+        self.code_weights = (2.0, 2.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0)
+        self.reg_cost = BBox3DL1Cost(weight=0.25, code_weights=self.code_weights)
+        self.point_cloud_range = [-10.0, -10.0, -5.0, 10.0, 10.0, 5.0]
+        self.bboxes = self._random_boxes(batch_size=2, num_boxes=5)
+        self.gt_bboxes = self._random_boxes(batch_size=2, num_boxes=3)
+        # The padded gt box of sample 1 is all zeros, as Detection3DGTBatch emits.
+        self.gt_bboxes[1, 2] = 0.0
+        self.valid_masks = torch.tensor(
+            [[True, True, True], [True, True, False]], device=self.device
+        )
+
+    def _random_boxes(
+        self, batch_size: int, num_boxes: int
+    ) -> Float32[torch.Tensor, "batch_size num_boxes 9"]:
+        """Draw metric boxes with positive sizes inside the detector range."""
+        boxes = torch.zeros((batch_size, num_boxes, 9), device=self.device)
+        boxes[..., :3] = torch.rand((batch_size, num_boxes, 3), device=self.device) * 16.0 - 8.0
+        boxes[..., 3:6] = torch.rand((batch_size, num_boxes, 3), device=self.device) * 3.0 + 0.5
+        boxes[..., 6] = torch.rand((batch_size, num_boxes), device=self.device) * 6.0 - 3.0
+        boxes[..., 7:9] = torch.randn((batch_size, num_boxes, 2), device=self.device)
+        return boxes
+
+    def _expected_cost(
+        self, batch_index: int
+    ) -> Float32[torch.Tensor, "num_boxes num_valid_gt_bboxes"]:
+        """Build the per-sample reference cost over the valid gt boxes only."""
+        weights = torch.tensor(self.code_weights, device=self.device)
+        gt_bboxes = self.gt_bboxes[batch_index][self.valid_masks[batch_index]]
+        norm_bboxes = normalize_boxes3d(self.bboxes[batch_index]) * weights
+        norm_gt_bboxes = normalize_boxes3d(gt_bboxes) * weights
+        return torch.cdist(norm_bboxes, norm_gt_bboxes, p=1) * 0.25
+
+    def test_bbox_3d_l1_cost_matches_per_sample_reference(self) -> None:
+        """Test that the valid columns equal the unbatched full-box cost of every sample."""
+        cost = self.reg_cost(self.bboxes, self.gt_bboxes, self.valid_masks, self.point_cloud_range)
+
+        self.assertEqual(cost.shape, (2, 5, 3))
+        for batch_index in range(2):
+            valid = self.valid_masks[batch_index]
+            self.assertTrue(
+                torch.allclose(cost[batch_index][:, valid], self._expected_cost(batch_index))
+            )
+
+    def test_bbox_3d_l1_cost_masks_padded_gt_bboxes_without_nan(self) -> None:
+        """Test that the all-zero padded box gets the sentinel cost and poisons no other column.
+
+        The encoding takes the log of the sizes, which is -inf for a padded box; without the
+        guard the whole distance row would turn into inf or nan.
+        """
+        cost = self.reg_cost(self.bboxes, self.gt_bboxes, self.valid_masks, self.point_cloud_range)
+
+        self.assertTrue(torch.isfinite(cost).all())
+        self.assertTrue((cost[1][:, 2] == torch.finfo(cost.dtype).max).all())
+        self.assertTrue((cost[1][:, :2] < 1e3).all())
+
+    def test_bbox_3d_l1_cost_scales_with_weight(self) -> None:
+        """Test that the weight scales the valid costs and leaves the sentinel at finfo.max."""
+        unit_cost = BBox3DL1Cost(weight=1.0, code_weights=self.code_weights)(
+            self.bboxes, self.gt_bboxes, self.valid_masks, self.point_cloud_range
+        )
+        scaled_cost = self.reg_cost(
+            self.bboxes, self.gt_bboxes, self.valid_masks, self.point_cloud_range
+        )
+
+        valid = self.valid_masks.unsqueeze(1).expand_as(unit_cost)
+        self.assertTrue(torch.allclose(scaled_cost[valid], unit_cost[valid] * 0.25))
+        self.assertTrue((scaled_cost[~valid] == torch.finfo(scaled_cost.dtype).max).all())
 
 
 class TestIoU3DCost(unittest.TestCase):

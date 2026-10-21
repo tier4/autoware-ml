@@ -226,7 +226,6 @@ class StreamPETRHead(nn.Module):
         self.num_queries = num_queries
         self.num_decoder_layers = num_decoder_layers
         self.hidden_dim = hidden_dim
-        self.point_cloud_range = point_cloud_range
         self.assigner = assigner
         self.bbox_coder = bbox_coder
         self.memory_len = memory_len
@@ -821,26 +820,43 @@ class StreamPETRHead(nn.Module):
         gt_boxes: list[torch.Tensor],
         gt_labels: list[torch.Tensor],
     ) -> list[StreamPETRTargets]:
-        targets: list[StreamPETRTargets] = []
-        for sample_logits, sample_boxes, sample_gt_boxes, sample_gt_labels in zip(
-            cls_logits, box_params, gt_boxes, gt_labels
-        ):
-            num_queries = sample_logits.shape[0]
-            labels = sample_gt_labels.new_full((num_queries,), -1)
-            bbox_targets = sample_boxes.new_zeros((num_queries, 9))
+        """Match the queries of one decoder layer to the ground truth of every sample.
 
-            assigned = self.assigner.assign(
-                bboxes=denormalize_boxes3d(sample_boxes),
-                gt_bboxes=sample_gt_boxes,
-                gt_labels=sample_gt_labels,
-                cls_pred=sample_logits.transpose(0, 1),
-                point_cloud_range=self.point_cloud_range,
-            )
-            pos_inds = torch.nonzero(assigned.gt_inds > 0, as_tuple=False).squeeze(-1)
+        The assigner works on the padded ``[batch, max_num_gts]`` layout, so the per-sample
+        lists are padded for one call per layer and the matches are read back per sample.
+        """
+        batch_size, num_queries = cls_logits.shape[:2]
+        max_num_gts = max(boxes.shape[0] for boxes in gt_boxes)
+        padded_boxes = box_params.new_zeros((batch_size, max_num_gts, 9))
+        padded_labels = torch.full(
+            (batch_size, max_num_gts), -1, dtype=torch.long, device=cls_logits.device
+        )
+        valid_masks = torch.zeros(
+            (batch_size, max_num_gts), dtype=torch.bool, device=cls_logits.device
+        )
+        for index, (sample_gt_boxes, sample_gt_labels) in enumerate(zip(gt_boxes, gt_labels)):
+            count = sample_gt_boxes.shape[0]
+            padded_boxes[index, :count] = sample_gt_boxes
+            padded_labels[index, :count] = sample_gt_labels
+            valid_masks[index, :count] = True
+
+        assigned = self.assigner.assign(
+            bboxes=denormalize_boxes3d(box_params),
+            gt_bboxes=padded_boxes,
+            gt_labels=padded_labels,
+            cls_pred=cls_logits,
+            valid_masks=valid_masks,
+        )
+
+        targets: list[StreamPETRTargets] = []
+        for index in range(batch_size):
+            labels = padded_labels.new_full((num_queries,), -1)
+            bbox_targets = box_params.new_zeros((num_queries, 9))
+            pos_inds = torch.nonzero(assigned.gt_inds[index] > 0, as_tuple=False).squeeze(-1)
             if pos_inds.numel() > 0:
-                matched_gt_inds = assigned.gt_inds[pos_inds] - 1
-                labels[pos_inds] = sample_gt_labels[matched_gt_inds]
-                bbox_targets[pos_inds] = sample_gt_boxes[matched_gt_inds]
+                matched_gt_inds = assigned.gt_inds[index, pos_inds] - 1
+                labels[pos_inds] = padded_labels[index, matched_gt_inds]
+                bbox_targets[pos_inds] = padded_boxes[index, matched_gt_inds]
             targets.append(StreamPETRTargets(labels=labels, bbox_targets=bbox_targets))
         return targets
 

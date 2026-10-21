@@ -12,6 +12,7 @@ from jaxtyping import Float32, Int64, Bool
 import torch
 
 from autoware_ml.models.detection3d.task_modules.bbox_coders import normalize_boxes3d
+from autoware_ml.types.geometry import Box3DFieldIndex
 
 
 @dataclass(frozen=True)
@@ -151,23 +152,42 @@ class BBox3DL1Cost:
     code_weights: tuple[float, ...] = (1.0,) * 10
 
     def __call__(
-        self, bboxes: torch.Tensor, gt_bboxes: torch.Tensor, point_cloud_range: list[float]
-    ) -> torch.Tensor:
+        self,
+        bboxes: Float32[torch.Tensor, "batch_size num_bboxes code_size"],
+        gt_bboxes: Float32[torch.Tensor, "batch_size max_num_gt_bboxes code_size"],
+        valid_masks: Bool[torch.Tensor, "batch_size max_num_gt_bboxes"],
+        point_cloud_range: Sequence[float],
+    ) -> Float32[torch.Tensor, "batch_size num_bboxes max_num_gt_bboxes"]:
         """Compute pairwise weighted L1 cost in the normalized box encoding.
+
+        Like the other costs, this is a batch-wise implementation: the columns of the padded
+        gt boxes are filled with the highest possible cost so the assignment never matches them.
 
         Args:
             bboxes: Predicted metric boxes ``[cx, cy, cz, dx, dy, dz, yaw, vx, vy]``.
-            gt_bboxes: Ground-truth metric boxes in the same layout.
+            gt_bboxes: Ground-truth metric boxes in the same layout, zeros where padded.
+            valid_masks: Mask indicating valid ground-truth boxes.
             point_cloud_range: Unused; kept for the shared assigner interface.
 
         Returns:
-            Pairwise weighted L1 cost matrix.
+            Pairwise weighted L1 cost matrix, one (num_bboxes, num_gt_bboxes) block per
+            batch element.
         """
         del point_cloud_range
         channel_weights = bboxes.new_tensor(self.code_weights)
+        # The encoding takes the log of the sizes, which is -inf for the all-zero padded boxes
+        # and would spread as inf or nan over the whole distance row. The padded rows are
+        # encoded as unit boxes instead; their columns are overwritten with the sentinel below.
+        unit_box = gt_bboxes.new_zeros(gt_bboxes.shape[-1])
+        unit_box[Box3DFieldIndex.LENGTH : Box3DFieldIndex.HEIGHT + 1] = 1.0
+        safe_gt_bboxes = torch.where(valid_masks.unsqueeze(-1), gt_bboxes, unit_box)
+        # (batch_size, num_bboxes, 10) and (batch_size, max_num_gt_bboxes, 10)
         norm_bboxes = normalize_boxes3d(bboxes) * channel_weights
-        norm_gt_bboxes = normalize_boxes3d(gt_bboxes) * channel_weights
-        return torch.cdist(norm_bboxes, norm_gt_bboxes, p=1) * self.weight
+        norm_gt_bboxes = normalize_boxes3d(safe_gt_bboxes) * channel_weights
+        # (batch_size, num_bboxes, max_num_gt_bboxes); the weight is applied before the
+        # sentinel so the sentinel stays exactly finfo.max.
+        cost = torch.cdist(norm_bboxes, norm_gt_bboxes, p=1) * self.weight
+        return cost.masked_fill(~valid_masks.unsqueeze(1), torch.finfo(cost.dtype).max)
 
 
 @dataclass(frozen=True)
