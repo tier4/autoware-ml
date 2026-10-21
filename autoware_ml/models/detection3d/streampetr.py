@@ -450,6 +450,13 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
             torch.zeros(1, memory_len, 2),
         )
 
+        # A fresh wrapper is in training mode; the exporter restores that mode onto the shared
+        # head after tracing, which would leave the decoder dropout active in the wrappers
+        # that are run after the export (the export verification). Build them in eval mode.
+        position_embedding_wrapper = _StreamPETRPositionEmbeddingExportWrapper(
+            export_head, num_cams, feature_hw
+        ).eval()
+        head_memory_wrapper = _StreamPETRHeadMemoryExportWrapper(export_head).eval()
         return {
             "extract_img_feat": ExportSpec(
                 module=export_model.image_feature_extractor,
@@ -458,13 +465,13 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
                 output_names=["img_feats"],
             ),
             "position_embedding": ExportSpec(
-                module=_StreamPETRPositionEmbeddingExportWrapper(export_head, num_cams, feature_hw),
+                module=position_embedding_wrapper,
                 args=(img_metas_pad, intrinsics, img2lidar),
                 input_param_names=["img_metas_pad", "intrinsics", "img2lidar"],
                 output_names=["pos_embed", "cone"],
             ),
             "pts_head_memory": ExportSpec(
-                module=_StreamPETRHeadMemoryExportWrapper(export_head),
+                module=head_memory_wrapper,
                 args=(img_feats, pos_embed, cone, identity_pose, identity_pose, *memory_args),
                 input_param_names=[
                     "x",

@@ -510,6 +510,25 @@ def test_exported_head_matches_eval_forward_on_the_first_frame_of_a_stream() -> 
     )
 
 
+def test_export_wrappers_are_built_in_eval_mode() -> None:
+    """The exporter restores the wrapper's mode onto the shared head after tracing.
+
+    A wrapper left in training mode would switch the decoder dropout on in the head for
+    every run after the export, so the export verification would compare the graph against
+    a stochastic reference.
+    """
+    model = _build_model().eval()
+    batch_inputs = _build_batch_inputs(torch.randn(1, NUM_CAMS, 3, *IMAGE_HW))
+
+    with torch.no_grad():
+        specs = model.build_export_specs(batch_inputs)
+
+    for name in ("position_embedding", "pts_head_memory"):
+        assert not specs[name].module.training
+        assert not specs[name].module.head.training
+    assert specs["position_embedding"].module.head is specs["pts_head_memory"].module.head
+
+
 def test_pseudo_reference_points_cover_the_whole_range_on_every_axis() -> None:
     points = _build_model().bbox_head.pseudo_reference_points
     assert points.shape == (8, 3)
