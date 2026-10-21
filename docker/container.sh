@@ -173,9 +173,7 @@ set_variables() {
         LOCALTIME_MOUNT="--mount type=bind,source=/etc/localtime,target=/etc/localtime,readonly"
     fi
 
-    # The spconv-free variant of the image (docker/build.sh --rulebook) is
-    # selected with the IMAGE environment variable.
-    IMAGE="${IMAGE:-ghcr.io/tier4/autoware-ml:latest}"
+    IMAGE="ghcr.io/tier4/autoware-ml:latest"
     WORKSPACE="--mount type=bind,source=${WORKSPACE_ROOT},target=/workspace"
     MEMORY_CONFIG="--ipc=host --ulimit memlock=-1 --ulimit stack=67108864" # 64MB
 
