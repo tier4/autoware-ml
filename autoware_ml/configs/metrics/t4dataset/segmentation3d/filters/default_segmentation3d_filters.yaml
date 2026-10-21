@@ -1,0 +1,21 @@
+# Filters of the segmentation slices. The region filters shrink the lanelet polygons by 20 cm
+# so the points on a kerb are not scored as road.
+region_filters:
+  road:
+    _target_: autoware_ml.metrics.filters.RegionFilter
+    region: ${metric_params.segmentation3d.collision_models.drivable_region}
+    margin: -0.2
+    name: region_road
+  walkway:
+    _target_: autoware_ml.metrics.filters.RegionFilter
+    region: [walkway]
+    margin: -0.2
+corridor_filter:
+  _target_: autoware_ml.metrics.filters.CorridorFilter
+  width_m: 3.0
+collision_filter:
+  _target_: autoware_ml.metrics.filters.CollisionFilter
+  vehicle: ${metric_params.segmentation3d.collision_models.vehicle}
+  region: ${metric_params.segmentation3d.collision_models.drivable_region}
+  max_speed_mps: ${metric_params.segmentation3d.collision_models.max_speed_mps}
+  params: ${metric_params.segmentation3d.collision_models.reachability}

@@ -13,7 +13,7 @@ from __future__ import annotations
 import numpy as np
 
 from autoware_ml.metrics.base import EvalStage, Metric
-from autoware_ml.metrics.detection3d.matching import DetectionState, mean_valid
+from autoware_ml.metrics.detection3d.matching import Detection3DState, mean_valid
 from autoware_ml.metrics.detection3d.structures import DEFAULT_TP_THRESHOLD
 
 
@@ -36,7 +36,7 @@ def _expected_calibration_error(scores: np.ndarray, correct: np.ndarray, num_bin
     return float(np.sum(count[nonempty] / total * gaps))
 
 
-class CalibrationError(Metric[DetectionState]):
+class CalibrationError(Metric[Detection3DState]):
     """Expected calibration error of the detection score against precision.
 
     ``ece`` pools every prediction and ``ece_macro`` averages the per-class ECE so a
@@ -66,7 +66,7 @@ class CalibrationError(Metric[DetectionState]):
         if self.num_bins < 1:
             raise ValueError("num_bins must be >= 1.")
 
-    def evaluate(self, state: DetectionState, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: Detection3DState, stage: EvalStage) -> dict[str, float]:
         """Report overall and macro calibration error at the TP threshold.
 
         Args:

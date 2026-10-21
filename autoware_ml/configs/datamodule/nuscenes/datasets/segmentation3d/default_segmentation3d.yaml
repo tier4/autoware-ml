@@ -1,4 +1,4 @@
-_target_: autoware_ml.datamodule.nuscenes.segmentation3d.NuScenesSegmentation3DTask
+_target_: autoware_ml.datamodule.t4dataset.segmentation3d.T4Segmentation3DTask
 _convert_: all
 _partial_: true
 

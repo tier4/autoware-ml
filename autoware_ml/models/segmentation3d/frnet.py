@@ -19,8 +19,8 @@ This module contains the high-level FRNet Lightning wrapper and export logic.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from copy import deepcopy
+from collections.abc import Sequence
 from typing import Any
 
 import torch
@@ -35,9 +35,9 @@ from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentat
 from autoware_ml.dataclasses.models.segmentation3d.predictions import Segmentation3DPredictions
 from autoware_ml.metrics.segmentation3d.eval_output import (
     concat_frame_ids,
-    segmentation_frames_eval_output,
+    segmentation3d_frames_eval_output,
 )
-from autoware_ml.models.base import BaseModel
+from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
 from autoware_ml.utils.deploy import ExportSpec
 
 
@@ -125,7 +125,7 @@ def _range_view_data(batch_inputs: ModelBatchInputs) -> RangeViewData:
     return batch_inputs.range_view_data
 
 
-class FRNet(BaseModel):
+class FRNet(ModuleBaseModel):
     """Implement FRNet for point-wise semantic segmentation.
 
     The wrapper combines frustum encoding, backbone execution, decode heads,
@@ -137,6 +137,7 @@ class FRNet(BaseModel):
         voxel_encoder: nn.Module,
         backbone: nn.Module,
         decode_head: nn.Module,
+        log_dict_configs: LogDictConfigs,
         auxiliary_head: Sequence[nn.Module] | None = None,
         **kwargs: Any,
     ) -> None:
@@ -146,10 +147,11 @@ class FRNet(BaseModel):
             voxel_encoder: Range-view feature encoder.
             backbone: FRNet backbone.
             decode_head: Main decode head.
+            log_dict_configs: Logging configuration for training and validation.
             auxiliary_head: Optional auxiliary heads.
-            **kwargs: Keyword arguments forwarded to :class:`BaseModel`.
+            **kwargs: Keyword arguments forwarded to :class:`ModuleBaseModel`.
         """
-        super().__init__(**kwargs)
+        super().__init__(log_dict_configs=log_dict_configs, **kwargs)
         self.voxel_encoder = voxel_encoder
         self.backbone = backbone
         self.decode_head = decode_head
@@ -198,25 +200,14 @@ class FRNet(BaseModel):
         )
         return point_feats_encoder, voxel_feats_pyramid, point_feats_backbone
 
-    def forward(
-        self,
-        feat: torch.Tensor,
-        coors: torch.Tensor,
-        voxel_coors: torch.Tensor,
-        inverse_map: torch.Tensor,
-        sample_count: int,
-    ) -> ModelOutputs:
-        """Run the segmentation model end-to-end and return decoded outputs.
+    def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
+        """Run the network on the points of the batch and their range view projection.
 
         The dynamo-traced export path uses :class:`_FRNetExportModule`, which
         is independent of this method and emits a single probability tensor.
 
         Args:
-            feat: Concatenated point tensor.
-            coors: Point-to-range-view coordinates.
-            voxel_coors: Unique range-view voxel coordinates.
-            inverse_map: Mapping from points to voxel indices.
-            sample_count: Number of samples in the batch.
+            multi_task_batch_inputs: Model inputs holding the point cloud and its range view data.
 
         Returns:
             Segmentation head outputs with the point-wise logits of shape
@@ -224,40 +215,22 @@ class FRNet(BaseModel):
             backbone voxel feature pyramid with one tensor per level. Each
             level feeds the auxiliary head whose ``feature_index`` matches it.
         """
+        range_view_data = _range_view_data(multi_task_batch_inputs)
         point_feats_encoder, voxel_feats_pyramid, point_feats_backbone = self.extract_feat(
-            feat=feat,
-            coors=coors,
-            voxel_coors=voxel_coors,
-            inverse_map=inverse_map,
-            sample_count=sample_count,
+            feat=_point_cloud_batch(multi_task_batch_inputs).points,
+            coors=range_view_data.coors,
+            voxel_coors=range_view_data.voxel_coors,
+            inverse_map=range_view_data.inverse_map,
+            sample_count=multi_task_batch_inputs.batch_size(),
         )
         point_logits = self.decode_head(
-            coors, point_feats_encoder, voxel_feats_pyramid, point_feats_backbone
+            range_view_data.coors, point_feats_encoder, voxel_feats_pyramid, point_feats_backbone
         )
         return ModelOutputs(
             segmentation3d_head_outputs=Segmentation3DHeadOutputs(
                 logits=point_logits, auxiliary_features=tuple(voxel_feats_pyramid)
             )
         )
-
-    def forward_inputs(self, batch_inputs: ModelBatchInputs) -> dict[str, Any]:
-        """Pick the points of the batch and their range view projection.
-
-        Args:
-            batch_inputs: Model inputs holding the point cloud and its range view data.
-
-        Returns:
-            The points, the range view cell of every point, the occupied cells, the cell index
-            of every point and the sample count of the batch.
-        """
-        range_view_data = _range_view_data(batch_inputs)
-        return {
-            "feat": _point_cloud_batch(batch_inputs).points,
-            "coors": range_view_data.coors,
-            "voxel_coors": range_view_data.voxel_coors,
-            "inverse_map": range_view_data.inverse_map,
-            "sample_count": batch_inputs.batch_size(),
-        }
 
     def compute_metrics(
         self,
@@ -279,8 +252,8 @@ class FRNet(BaseModel):
         Raises:
             ValueError: If the batch carries no labels.
         """
-        semantic_seg = _range_view_data(batch_inputs).semantic_labels
-        if semantic_seg is None:
+        semantic_seg3d = _range_view_data(batch_inputs).semantic_labels
+        if semantic_seg3d is None:
             raise ValueError("FRNet losses need the labels of the batch.")
         point_logits = outputs.segmentation3d().logits
         voxel_feats = outputs.segmentation3d().auxiliary_features
@@ -290,7 +263,7 @@ class FRNet(BaseModel):
         metrics: dict[str, torch.Tensor] = {"loss_decode_ce": decode_losses["loss_ce"]}
 
         for head_index, head in enumerate(self.auxiliary_head):
-            head_losses = head.loss(voxel_feats[head.feature_index], semantic_seg)
+            head_losses = head.loss(voxel_feats[head.feature_index], semantic_seg3d)
             for loss_name, loss_value in head_losses.items():
                 metrics[f"aux_{head_index}_{loss_name}"] = loss_value
                 total_loss = total_loss + loss_value
@@ -310,13 +283,13 @@ class FRNet(BaseModel):
             outputs: Raw forward outputs.
 
         Returns:
-            Flat dict with the per-frame ``seg_frames`` the suites read.
+            Flat dict with the per-frame ``seg3d_frames`` the suites read.
         """
         point_logits = outputs.segmentation3d().logits
         point_batch = _point_cloud_batch(batch)
         offset = point_batch.offsets()
         point_index = torch.arange(point_logits.shape[0], device=point_logits.device)
-        return segmentation_frames_eval_output(
+        return segmentation3d_frames_eval_output(
             coord=point_batch.points[:, :3],
             pred_labels=point_logits.argmax(dim=1),
             target_labels=_point_labels(batch),
@@ -326,10 +299,8 @@ class FRNet(BaseModel):
             batch_inputs=batch,
         )
 
-    def predict_outputs(
-        self,
-        batch_inputs: ModelBatchInputs,
-        outputs: ModelOutputs,
+    def decode_outputs(
+        self, multi_task_batch_inputs: ModelBatchInputs, outputs: ModelOutputs
     ) -> ModelPredictions:
         """Format FRNet segmentation predictions at the point level.
 
@@ -337,14 +308,14 @@ class FRNet(BaseModel):
         ``inverse_map``, so no voxel-to-point scatter is needed here.
 
         Args:
-            batch_inputs: Model inputs of the batch, unused because FRNet's logits are
-                already at point level.
+            multi_task_batch_inputs: Model inputs of the batch, unused because FRNet's logits
+                are already at point level.
             outputs: Segmentation head outputs returned by :meth:`forward`.
 
         Returns:
             The predicted class and the class probabilities of every point.
         """
-        del batch_inputs
+        del multi_task_batch_inputs
         pred_probs = torch.softmax(outputs.segmentation3d().logits, dim=1)
         return ModelPredictions(
             segmentation3d_predictions=Segmentation3DPredictions(
@@ -372,11 +343,15 @@ class FRNet(BaseModel):
         Returns:
             The export specification.
         """
-        inputs = self.forward_inputs(batch_inputs)
-        input_args = tuple(inputs[name] for name in ("feat", "coors", "voxel_coors", "inverse_map"))
+        range_view_data = _range_view_data(batch_inputs)
         return ExportSpec(
             module=_FRNetExportModule(self),
-            args=input_args,
+            args=(
+                _point_cloud_batch(batch_inputs).points,
+                range_view_data.coors,
+                range_view_data.voxel_coors,
+                range_view_data.inverse_map,
+            ),
             input_param_names=["points", "coors", "voxel_coors", "inverse_map"],
             output_names=self.get_export_output_names(),
         )

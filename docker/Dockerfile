@@ -13,6 +13,7 @@ ENV AUTOWARE_ML_DATA_PATH="/workspace/data" \
   FORCE_CUDA="1" \
   LC_ALL=C.UTF-8 \
   PIXI_HOME="/opt/pixi" \
+  POLARS_MAX_THREADS="1" \
   PYTHONPATH=/workspace \
   SHELL=/bin/bash \
   PATH="/opt/pixi/bin:${PATH}" \

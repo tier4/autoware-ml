@@ -19,15 +19,13 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
+import onnx
 import pytest
+import spconv.pytorch as spconv
 import torch
 
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
-
-if IS_SPCONV_AVAILABLE:
-    import spconv.pytorch as spconv
-
-    from autoware_ml.ops.spconv.sparse_conv import SparseConv3d, SubMConv3d
+from autoware_ml.ops.spconv.sparse_conv import ExportableSparseConv3d, ExportableSubMConv3d
 
 
 pytestmark = pytest.mark.skipif(
@@ -82,7 +80,7 @@ class SparseConvExportModule(torch.nn.Module):
 
     def __init__(self) -> None:
         super().__init__()
-        self.conv = SubMConv3d(2, 3, kernel_size=3, padding=1, bias=False)
+        self.conv = ExportableSubMConv3d(2, 3, kernel_size=3, padding=1, bias=False)
 
     def forward(self, features: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
         sparse_tensor = spconv.SparseConvTensor(
@@ -111,7 +109,7 @@ class TestSparseConv3d:
         """Submanifold wrapper should match native spconv output."""
         sparse_tensor = _build_sparse_tensor()
         reference = spconv.SubMConv3d(2, 3, kernel_size=3, padding=1, bias=False).cuda().eval()
-        module = SubMConv3d(2, 3, kernel_size=3, padding=1, bias=False).cuda().eval()
+        module = ExportableSubMConv3d(2, 3, kernel_size=3, padding=1, bias=False).cuda().eval()
         _copy_sparse_weights(reference, module)
 
         reference_output = reference(sparse_tensor)
@@ -128,7 +126,11 @@ class TestSparseConv3d:
         reference = (
             spconv.SparseConv3d(2, 3, kernel_size=3, stride=1, padding=1, bias=False).cuda().eval()
         )
-        module = SparseConv3d(2, 3, kernel_size=3, stride=1, padding=1, bias=False).cuda().eval()
+        module = (
+            ExportableSparseConv3d(2, 3, kernel_size=3, stride=1, padding=1, bias=False)
+            .cuda()
+            .eval()
+        )
         _copy_sparse_weights(reference, module)
 
         reference_output = reference(sparse_tensor)
@@ -145,7 +147,7 @@ class TestSparseConv3d:
         """Shared submanifold indice keys should behave like native spconv."""
         sparse_tensor = _build_sparse_tensor()
         reference = SharedIndiceKeyModule(spconv.SubMConv3d).cuda().eval()
-        module = SharedIndiceKeyModule(SubMConv3d).cuda().eval()
+        module = SharedIndiceKeyModule(ExportableSubMConv3d).cuda().eval()
         _copy_sparse_weights(reference.conv1, module.conv1)
         _copy_sparse_weights(reference.conv2, module.conv2)
 
@@ -159,8 +161,6 @@ class TestSparseConv3d:
 
     def test_onnx_export(self) -> None:
         """Sparse convolution wrapper should be exportable to ONNX."""
-        import onnx
-
         sparse_tensor = _build_sparse_tensor()
         module = SparseConvExportModule().cuda().eval()
 

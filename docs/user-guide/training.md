@@ -13,15 +13,15 @@ autoware-ml train --config-name <task>/<model>/<config>
 ```
 
 Hydra scratch outputs are saved automatically under
-`mlruns/<task>/<model>/<config>/<run_id>/hydra/`.
+`mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/hydra/`.
 MLflow-owned artifacts are saved under
-`mlruns/<task>/<model>/<config>/<run_id>/artifacts/`, including checkpoints,
+`mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/`, including checkpoints,
 resolved config snapshots, and run metadata.
 
 Example:
 
 ```bash
-autoware-ml train --config-name segmentation3d/ptv3/voxel005_51m_nuscenes
+autoware-ml train --config-name segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m
 ```
 
 ## Long-Running Training
@@ -30,7 +30,7 @@ For long jobs inside Docker or remote environments, prefer managed background se
 
 ```bash
 autoware-ml session start --name ptv3-train --cwd /workspace -- \
-    train --config-name segmentation3d/ptv3/voxel005_51m_nuscenes
+    train --config-name segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m
 ```
 
 Later you can open the live viewer with `session attach`:
@@ -53,7 +53,7 @@ Continue from a checkpoint:
 
 ```bash
 autoware-ml train --config-name <task>/<model>/<config> \
-    --resume-checkpoint mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/last.ckpt
+    --resume-checkpoint mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/checkpoints/last.ckpt
 ```
 
 ## Testing
@@ -62,7 +62,7 @@ Evaluate a trained checkpoint with the same task config:
 
 ```bash
 autoware-ml test --config-name <task>/<model>/<config> \
-    --weights mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt
+    --weights mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 The test command creates a dedicated MLflow run linked to the source training run.

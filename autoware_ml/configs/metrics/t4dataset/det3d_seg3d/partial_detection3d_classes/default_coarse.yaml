@@ -1,0 +1,3 @@
+# Detection classes whose boxes the partial-detection score checks against the semantic
+# masks, coarse taxonomy.
+[motorcycle, bicycle, pedestrian, traffic_cone]

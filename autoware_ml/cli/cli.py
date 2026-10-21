@@ -27,7 +27,7 @@ import typer
 from click.core import ParameterSource
 from click.shell_completion import CompletionItem
 from typer.core import TyperCommand, TyperGroup
-from typing_extensions import Annotated
+from typing import Annotated
 
 from autoware_ml.utils.cli.helpers import (
     complete_config_value,
@@ -36,6 +36,7 @@ from autoware_ml.utils.cli.helpers import (
     complete_session_name_value,
     run_lazy_script,
 )
+
 
 class CompletableGroup(TyperGroup, click.Group):
     """Typer group that click recognizes as a group.
@@ -262,6 +263,15 @@ def train(
             "MLflow run instead of the checkpoint's source run.",
         ),
     ] = False,
+    skip_mismatched_weights: Annotated[
+        bool,
+        typer.Option(
+            "--skip-mismatched-weights",
+            help="With --weights: skip, with a warning, checkpoint tensors whose name "
+            "matches a model tensor of a different shape instead of failing. The model "
+            "keeps its own initialization for them.",
+        ),
+    ] = False,
 ) -> None:
     """Run model training through the Hydra-backed training entrypoint.
 
@@ -270,6 +280,9 @@ def train(
     into a det3d model). Pass ``--resume-checkpoint`` to resume an interrupted training
     run from its full saved state; it continues inside the checkpoint's source MLflow
     run unless ``--new-run`` forks it. The two options are mutually exclusive.
+    ``--skip-mismatched-weights`` lets ``--weights`` initialize a model whose
+    architecture drifted from the checkpoint, e.g. a first layer with more input
+    channels. The tensors that no longer fit are skipped with a warning.
 
     Args:
         ctx: Typer context containing additional Hydra overrides.
@@ -277,16 +290,22 @@ def train(
         weights: One or more checkpoint paths for pretrained weight initialization.
         resume_checkpoint: Full Lightning checkpoint path to resume training from.
         new_run: Whether to fork the resumed training into a new MLflow run.
+        skip_mismatched_weights: Whether to skip shape-mismatched weight tensors instead
+            of failing.
     """
     if weights and resume_checkpoint:
         raise typer.BadParameter("--weights and --resume-checkpoint are mutually exclusive.")
     if new_run and not resume_checkpoint:
         raise typer.BadParameter("--new-run requires --resume-checkpoint.")
+    if skip_mismatched_weights and not weights:
+        raise typer.BadParameter("--skip-mismatched-weights requires --weights.")
 
     hydra_overrides: list[str] = []
     if weights:
         weights_list = "[" + ",".join(weights) + "]"
         hydra_overrides.append(f"+weights={weights_list}")
+    if skip_mismatched_weights:
+        hydra_overrides.append("+skip_mismatched_weights=true")
     if resume_checkpoint:
         resume_path = Path(resume_checkpoint).expanduser().resolve()
         if not resume_path.is_file():

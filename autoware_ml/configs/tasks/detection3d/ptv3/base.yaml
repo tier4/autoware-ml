@@ -1,44 +1,40 @@
 # @package _global_
-
 defaults:
-  - /defaults/default_runtime
+  - /tasks/default_task
   - /tasks/segmentation3d/ptv3/encoder_base
   - /tasks/segmentation3d/ptv3/voxel_encoder
-  - /tasks/segmentation3d/ptv3/data_preprocessing
   - /tasks/detection3d/ptv3/bev_neck
   - _self_
 
-dataset: ???
-
-grid_size: ???
+database: ???
 point_cloud_range: ???
-
+# Edge of the cubic voxels the encoder serializes, in meters.
+grid_size: ???
 max_voxels: ???
+# BEV cell of the detection head, in meters.
+head_voxel_size: ???
+num_proposals: ???
 
-model:
-  _target_: autoware_ml.models.detection3d.ptv3.PTv3DetectionModel
-  export_output_names: ???
-  freeze_encoder: false
-  grid_size: ${grid_size}
-  point_cloud_range: ${point_cloud_range}
-  metrics: ${dataset.detection3d.metrics}
-  bbox_head: ???
-  optimizer:
-    _target_: torch.optim.AdamW
-    _partial_: true
-    lr: 0.0001
-    weight_decay: 0.01
-  scheduler:
-    _target_: autoware_ml.utils.schedulers.cyclic_cosine_annealing.CyclicCosineAnnealingLR
-    _partial_: true
-    warmup_epochs: 8
-    decay_epochs: 22
-    max_lr_factor: 10.0
-    min_lr_factor: 0.0001
+optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
+  lr: 1.0e-4
+  weight_decay: 0.01
+
+data_preprocessor:
+  preprocessor_modules:
+    - _target_: autoware_ml.preprocessing.detection3d.point_pillar_preprocessor.PointPillarPreprocessor
+      voxel_size: ["${grid_size}", "${grid_size}", "${grid_size}"]
+      point_cloud_range: ${point_cloud_range}
+      max_num_points: 32
+      max_voxels: ${max_voxels}
+      eval_max_voxels: ${max_voxels}
 
 trainer:
-  max_epochs: 30
+  max_epochs: ???
   precision: 32-true
+  # Initial value only, the dynamic_validation callback of the root rewrites it per epoch.
+  check_val_every_n_epoch: 5
   gradient_clip_val: 5.0
   gradient_clip_algorithm: norm
 
@@ -68,12 +64,109 @@ deploy:
           enc_channels: ${model.encoder.enc_channels}
           patch_sizes: ${model.encoder.enc_patch_size}
       ptv3_det3d_head:
+        precision: fp16
         output_names: ${model.export_output_names}
         metainfo:
           bbox_voxel_size: ${model.bbox_head.bbox_coder.voxel_size}
           has_twist: ${model.bbox_head.use_velocity}
           num_proposals: ${model.bbox_head.num_proposals}
           post_center_range: ${model.bbox_head.bbox_coder.post_center_range}
-          class_names: ${dataset.detection3d.class_names}
+          class_names: ${database.taxonomy.detection3d.class_names}
+        modify_graph:
+          _target_: autoware_ml.utils.onnx_modifiers.TransHeadTensorRTModifier
+          k: ${num_proposals}
+          topk_node_name_substring: /bbox_head/TopK
+          attention_node_name_substring: /bbox_head/decoder
   tensorrt:
     enabled: false
+
+model:
+  _target_: autoware_ml.models.detection3d.ptv3.PTv3Detection3DModel
+  _convert_: all
+  metrics: ${metrics}
+  log_dict_configs:
+    _target_: autoware_ml.models.module_base_model.LogDictConfigs
+    _convert_: all
+    # Epoch-level only: per-step logging would split every key into train/<key>_step and
+    # train/<key>_epoch and, with sync_dist, all-reduce every loss key on every step.
+    on_step: false
+    on_epoch: true
+    prog_bar: true
+    sync_dist: true
+  export_output_names:
+    [dense_heatmap, query_heatmap_score, query_labels, heatmap, center, height, dim, rot, vel]
+  freeze_encoder: false
+  grid_size: ${grid_size}
+  point_cloud_range: ${point_cloud_range}
+
+  bbox_head:
+    _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.TransFusionHead
+    num_proposals: ${num_proposals}
+    auxiliary: true
+    in_channels: 128
+    hidden_channel: 128
+    class_names: ${database.taxonomy.detection3d.class_names}
+    dense_heatmap_pooling_class_names: [car, truck, bus]
+    num_decoder_layers: 1
+    num_heads: 8
+    feedforward_channels: 256
+    # Fused bf16 cross attention, needs fp16 precision and SM80+
+    use_bf16_cross_attention: true
+    common_heads:
+      centers: [2, 2]
+      heights: [1, 2]
+      dims: [3, 2]
+      rots: [2, 2]
+      vels: [2, 2]
+    bbox_coder:
+      _target_: autoware_ml.models.detection3d.task_modules.bbox_coders.TransFusionBBoxCoder
+      pc_range: ${point_cloud_range}
+      voxel_size: ${head_voxel_size}
+      out_size_factor: 1
+      class_names: ${database.taxonomy.detection3d.class_names}
+      # One ScoreThresholdConfig per class group, resolved once at construction. null keeps
+      # every proposal regardless of its score. The database bases set it.
+      score_threshold_configs: ???
+      post_center_range: ???
+      code_size: 10
+    assigner:
+      _target_: autoware_ml.models.detection3d.task_modules.assigners.HungarianAssigner3D
+      cls_cost:
+        _target_: autoware_ml.models.detection3d.task_modules.match_costs.ClassificationCost
+        weight: 0.15
+        alpha: 0.25
+        gamma: 2.0
+      reg_cost:
+        _target_: autoware_ml.models.detection3d.task_modules.match_costs.BBoxBEVL1Cost
+        weight: 0.25
+      iou_cost:
+        _target_: autoware_ml.models.detection3d.task_modules.match_costs.IoU3DCost
+        weight: 0.25
+      point_cloud_range: ${point_cloud_range}
+    point_cloud_range: ${point_cloud_range}
+    voxel_size: ${head_voxel_size}
+    out_size_factor: 1
+    code_weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2]
+    min_radius: 2
+    gaussian_overlap: 0.1
+    post_max_size: 100
+    nms_min_radius: ???
+    # NMS and the heatmap target differ between the databases, the database bases set them.
+    nms_type: ???
+    nms_group_configs: ???
+    loss_cls_weight: 1.0
+    loss_bbox_weight: 0.25
+    loss_heatmap_weight: 1.0
+    heatmap_target: ???
+    heatmap_init_bias: -2.19
+    nms_kernel_size: 3
+    use_velocity: true
+
+  optimizer: ${optimizer}
+  scheduler:
+    _target_: autoware_ml.utils.schedulers.cyclic_cosine_annealing.CyclicCosineAnnealingLR
+    _partial_: true
+    warmup_epochs: 8
+    decay_epochs: 22
+    max_lr_factor: 10.0
+    min_lr_factor: 0.0001

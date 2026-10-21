@@ -1,0 +1,10 @@
+# @package _global_
+defaults:
+  - base_hdl32e
+  - /database@database: nuscenes/nuscenes_base
+  - _self_
+
+batch_size: 16
+num_workers: 8
+experiment_group_name: frnet/${database.version}/nuscenes
+experiment_name: hdl32e_b16_150k_nuscenes

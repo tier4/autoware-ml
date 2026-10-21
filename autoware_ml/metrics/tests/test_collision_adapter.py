@@ -9,7 +9,13 @@ from shapely.geometry import box
 
 from autoware_ml.metrics.detection3d.collision import CollisionTTC
 from autoware_ml.metrics.geometry.reachability import ReachabilityParams
-from autoware_ml.metrics.tests.conftest import CLASS_NAMES, EGO, FakeMapProvider, collision_box
+from autoware_ml.metrics.tests.conftest import (
+    CLASS_NAMES,
+    EGO,
+    STUB_MAP_PATH,
+    collision_box,
+    serve_fake_map,
+)
 from autoware_ml.types.metrics import AgentKind
 
 KINDS = {
@@ -31,10 +37,9 @@ LIVING_SPEEDS = {"pedestrian": 3.0, "animal": 4.0, "bicycle": 6.0}
 
 
 def _adapter():
-    road = box(-80.0, -60.0, 500.0, 60.0)
+    serve_fake_map(box(-80.0, -60.0, 500.0, 60.0))
     return CollisionTTC(
         CLASS_NAMES,
-        FakeMapProvider(road),
         vehicle=EGO,
         kinds=KINDS,
         living_speeds=LIVING_SPEEDS,
@@ -58,7 +63,7 @@ def test_adapter_class_dispatch_and_key_cases() -> None:
     )
     labels = np.array([0, 8, 1, 0])  # car, barrier, truck, car
     boxes[2, 6] = np.pi  # truck heading -x (oncoming)
-    ttc = adapter.per_box_ttc(boxes, labels, IDENTITY, "scene-0")
+    ttc = adapter.per_box_ttc(boxes, labels, IDENTITY, STUB_MAP_PATH)
 
     assert ttc.shape == (4,)
     assert ttc[0] != inf and ttc[0] <= 4.0  # the lead can brake, ego cannot know
@@ -69,16 +74,14 @@ def test_adapter_class_dispatch_and_key_cases() -> None:
 
 def test_adapter_empty_frame() -> None:
     adapter = _adapter()
-    ttc = adapter.per_box_ttc(np.zeros((0, 7)), np.zeros((0,), dtype=int), IDENTITY, "scene-0")
+    ttc = adapter.per_box_ttc(np.zeros((0, 7)), np.zeros((0,), dtype=int), IDENTITY, STUB_MAP_PATH)
     assert ttc.shape == (0,)
 
 
 def test_adapter_rejects_unmapped_class() -> None:
-    road = box(-10.0, -10.0, 10.0, 10.0)
     try:
         CollisionTTC(
             ("car", "spaceship"),
-            FakeMapProvider(road),
             vehicle=EGO,
             kinds={"car": "wheeled"},
             living_speeds={},
@@ -90,11 +93,9 @@ def test_adapter_rejects_unmapped_class() -> None:
 
 
 def test_adapter_rejects_living_class_without_run_speed() -> None:
-    road = box(-10.0, -10.0, 10.0, 10.0)
     try:
         CollisionTTC(
             ("car", "wheelchair"),
-            FakeMapProvider(road),
             vehicle=EGO,
             kinds={"car": "wheeled", "wheelchair": "living"},
             living_speeds={},
@@ -106,19 +107,14 @@ def test_adapter_rejects_living_class_without_run_speed() -> None:
 
 
 def test_adapter_reads_kind_names_into_the_enum() -> None:
-    road = box(-10.0, -10.0, 10.0, 10.0)
-    adapter = CollisionTTC(
-        ("car",), FakeMapProvider(road), vehicle=EGO, kinds={"car": "wheeled"}, living_speeds={}
-    )
+    adapter = CollisionTTC(("car",), vehicle=EGO, kinds={"car": "wheeled"}, living_speeds={})
     assert adapter.kinds["car"] is AgentKind.WHEELED
 
 
 def test_adapter_rejects_unknown_kind_value() -> None:
-    road = box(-10.0, -10.0, 10.0, 10.0)
     try:
         CollisionTTC(
             ("car",),
-            FakeMapProvider(road),
             vehicle=EGO,
             kinds={"car": "hovercraft"},
             living_speeds={},

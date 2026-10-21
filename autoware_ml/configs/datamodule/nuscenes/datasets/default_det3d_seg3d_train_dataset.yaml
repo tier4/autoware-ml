@@ -1,0 +1,17 @@
+_target_: autoware_ml.datamodule.nuscenes.dataset.NuScenesDataset
+_convert_: all
+
+defaults:
+  - detection3d@dataset_tasks.detection3d: default_detection3d
+  - segmentation3d@dataset_tasks.segmentation3d: default_segmentation3d
+
+max_num_3d_gt_bboxes: 500
+
+# Database the dataset reads and the annotations of that corpus supervising the run. A source
+# over another database composes its own copy of this config with that database's values.
+database_root_path: ${database.root_path}
+lidar_intensity_scale: ${database.lidar_intensity_scale}
+det3d_supervised: true
+seg3d_supervised: true
+
+transforms: ???

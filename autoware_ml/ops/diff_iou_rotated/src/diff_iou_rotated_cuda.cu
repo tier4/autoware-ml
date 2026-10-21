@@ -53,6 +53,28 @@ constexpr float kEpsilon = 1e-8f;
 constexpr int kThreadsPerBlock = 256;
 
 /**
+ * @brief Pseudo-angle of a vertex normalized around the polygon mean.
+ *
+ * Increases monotonically with the counter-clockwise angle from the positive x axis, from 0
+ * on that axis to 4 just below it, without evaluating a trigonometric function. The key is
+ * ``sign(x) * cos^2(theta)`` folded per half plane. Vertices exactly on the x axis belong to
+ * angle 0 (x >= 0) or pi (x < 0): the previous comparator only handled ``y > 0`` and
+ * ``y < 0`` and considered such a vertex ordered neither before nor after any other, which
+ * made the order non-transitive and misplaced it in the polygon.
+ */
+__device__ float pseudo_angle(float x, float y)
+{
+  const float key = fabsf(x) * x / (x * x + y * y + kEpsilon);  // sign(x) * cos^2(theta)
+  if (y > 0.0f || (y == 0.0f && x < 0.0f)) {
+    return 1.0f - key;  // (0, 2]: upper half plane, pi included
+  }
+  if (y < 0.0f) {
+    return 3.0f + key;  // (2, 4): lower half plane
+  }
+  return 0.0f;  // on the positive x axis, or the mean itself
+}
+
+/**
  * @brief Compare two vertices normalized around the polygon mean.
  *
  * Order: the minimum lies on the positive x axis and values grow counter-clockwise.
@@ -64,21 +86,7 @@ __device__ bool compare_vertices(float x1, float y1, float x2, float y2)
   if (fabsf(x1 - x2) < kEpsilon && fabsf(y2 - y1) < kEpsilon) {
     return false;  // equal vertices never sort before each other
   }
-
-  if (y1 > 0 && y2 < 0) return true;
-  if (y1 < 0 && y2 > 0) return false;
-
-  const float n1 = x1 * x1 + y1 * y1 + kEpsilon;
-  const float n2 = x2 * x2 + y2 * y2 + kEpsilon;
-  const float diff = fabsf(x1) * x1 / n1 - fabsf(x2) * x2 / n2;
-
-  if (y1 > 0 && y2 > 0) {
-    return diff > kEpsilon;
-  }
-  if (y1 < 0 && y2 < 0) {
-    return diff < kEpsilon;
-  }
-  return false;
+  return pseudo_angle(x1, y1) + kEpsilon < pseudo_angle(x2, y2);
 }
 
 /**
@@ -123,31 +131,29 @@ __global__ void diff_iou_rotated_sort_vertices_forward_cuda_kernel(
         idx[i * row + j] = pad;
       }
     } else {
-      // sort the valid vertices
+      // Selection sort over the valid vertices. Every slot takes the smallest vertex not yet
+      // taken, so each valid vertex is emitted exactly once and no masked (zeroed) candidate
+      // can enter the polygon. The previous formulation searched for a vertex ordered after
+      // the one just emitted and fell back to index 0 when the tolerance-based comparison
+      // found none, which put the origin into the polygon and inflated the intersection.
+      unsigned int taken = 0u;  // bit k set once candidate k has been emitted, m <= 32
       for (int j = 0; j < n_valid; ++j) {
-        // initialize with a "big" value
-        float x_min = 1;
-        float y_min = -kEpsilon;
-        int i_take = 0;
-        int i2 = 0;
-        float x2 = 0.0f;
-        float y2 = 0.0f;
-        if (j != 0) {
-          i2 = idx[i * row + j - 1];
-          x2 = vertices[i * m * 2 + i2 * 2 + 0];
-          y2 = vertices[i * m * 2 + i2 * 2 + 1];
-        }
+        int i_take = -1;
+        float x_min = 0.0f;
+        float y_min = 0.0f;
         for (int k = 0; k < m; ++k) {
+          if (!mask[i * m + k] || (taken & (1u << k))) {
+            continue;
+          }
           const float x = vertices[i * m * 2 + k * 2 + 0];
           const float y = vertices[i * m * 2 + k * 2 + 1];
-          if (mask[i * m + k] && compare_vertices(x, y, x_min, y_min)) {
-            if ((j == 0) || (j != 0 && compare_vertices(x2, y2, x, y))) {
-              x_min = x;
-              y_min = y;
-              i_take = k;
-            }
+          if (i_take < 0 || compare_vertices(x, y, x_min, y_min)) {
+            x_min = x;
+            y_min = y;
+            i_take = k;
           }
         }
+        taken |= 1u << i_take;
         idx[i * row + j] = i_take;
       }
       // duplicate the first index to close the polygon

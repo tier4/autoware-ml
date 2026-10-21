@@ -16,11 +16,15 @@
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
+import torch
 import polars as pl
+import pytest
 
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
-from autoware_ml.datamodule.detection3d import Detection3DTask
+from autoware_ml.datamodule.common.detection3d import Detection3DTask
 from autoware_ml.types.geometry import Box3DFieldIndex
 
 _ROOT = "/data/t4dataset"
@@ -74,12 +78,7 @@ def build_task(boxes: list[dict]) -> Detection3DTask:
     Returns:
       Detection3DTask: Task serving that one record.
     """
-    schema = DatasetTableSchema.to_polars_schema()
-    records = pl.DataFrame(
-        {DatasetTableSchema.BOXES_3D.name: [boxes]},
-        schema={DatasetTableSchema.BOXES_3D.name: schema[DatasetTableSchema.BOXES_3D.name]},
-    )
-    return Detection3DTask(database_root_path=_ROOT, dataset_records_dataframe=records)
+    return build_task_with_status(boxes, status=None)
 
 
 def test_every_box_keeps_its_attributes_and_an_unseen_box_stays() -> None:
@@ -99,6 +98,35 @@ def test_every_box_keeps_its_attributes_and_an_unseen_box_stays() -> None:
     assert boxes.bbox_attributes == [["vehicle_state.parked"], ["vehicle_state.moving"], []]
 
 
+def test_the_served_boxes_do_not_share_memory_with_the_record_table() -> None:
+    """
+    Input: a record with one box, read twice, with the boxes of the first sample moved in
+        place as the global augmentations do.
+    Expected: the record table keeps the boxes as stored. The task hands the box constructor
+        a view into the table, and a tensor sharing it would write every augmentation back,
+        so a persistent worker would serve boxes that no longer match the reloaded points.
+    Check: the stored row and the boxes of the second sample.
+    """
+    task = build_task([box("a", "car", fields={Box3DFieldIndex.X: 10.0, Box3DFieldIndex.Y: 2.0})])
+
+    first = task.get_data_sample(0)
+    assert first.detection3d_gt_bboxes_3d is not None
+    first.detection3d_gt_bboxes_3d.bbox_params[:, : Box3DFieldIndex.Z] = torch.tensor([7.82, -6.55])
+
+    stored = (
+        task.dataset_records_dataframe.item(0, DatasetTableSchema.BOXES_3D.name)
+        .struct.field("box3d_params")
+        .to_numpy()
+    )
+    np.testing.assert_array_equal(stored[0, : Box3DFieldIndex.Z], [10.0, 2.0])
+    second = task.get_data_sample(0)
+    assert second.detection3d_gt_bboxes_3d is not None
+    assert torch.equal(
+        second.detection3d_gt_bboxes_3d.bbox_params[0, : Box3DFieldIndex.Z],
+        torch.tensor([10.0, 2.0]),
+    )
+
+
 def test_a_record_without_boxes_carries_no_attributes() -> None:
     boxes = build_task([]).get_data_sample(0).detection3d_gt_bboxes_3d
 
@@ -106,7 +134,9 @@ def test_a_record_without_boxes_carries_no_attributes() -> None:
     assert boxes.bbox_attributes == []
 
 
-def test_a_box_without_a_velocity_stands_still() -> None:
+def test_a_box_without_a_velocity_is_served_as_stored() -> None:
+    # The task serves the records as they are. BBoxesPhysicalFilter in the pipeline turns the
+    # non finite velocity of an unannotated box into a standstill.
     task = build_task(
         [
             box(
@@ -124,13 +154,14 @@ def test_a_box_without_a_velocity_stands_still() -> None:
 
     params = task.get_data_sample(0).detection3d_gt_bboxes_3d.bbox_params
 
-    assert params[:, Box3DFieldIndex.VELOCITY_X : Box3DFieldIndex.VELOCITY_Z].tolist() == [
-        [0.0, 0.0],
-        [3.0, -1.0],
-    ]
+    velocities = params[:, Box3DFieldIndex.VELOCITY_X : Box3DFieldIndex.VELOCITY_Z]
+    assert torch.isnan(velocities[0]).all()
+    assert velocities[1].tolist() == [3.0, -1.0]
 
 
-def test_a_box_without_an_extent_or_a_finite_geometry_is_no_target() -> None:
+def test_a_box_with_a_non_finite_geometry_is_served_for_the_pipeline_to_drop() -> None:
+    # Dropping the boxes that cannot become a target is the job of BBoxesPhysicalFilter in the
+    # pipeline, so the task keeps every stored box, geometry garbage included.
     task = build_task(
         [
             box("a", "car", fields={Box3DFieldIndex.WIDTH: 0.0}),
@@ -142,5 +173,122 @@ def test_a_box_without_an_extent_or_a_finite_geometry_is_no_target() -> None:
 
     boxes = task.get_data_sample(0).detection3d_gt_bboxes_3d
 
-    assert len(boxes) == 1
-    assert boxes.bbox_params[0, Box3DFieldIndex.X] == 5.0
+    assert len(boxes) == 4
+    assert boxes.bbox_params[3, Box3DFieldIndex.X] == 5.0
+
+
+def build_task_with_status(boxes: list[dict], status: bool | None) -> Detection3DTask:
+    """
+    Detection task over a single record carrying the cone and barrier annotation flag.
+
+    Args:
+      boxes: Boxes of the record, as the record table stores them.
+      status: Whether cones and barriers are annotated in the record, None when unknown.
+
+    Returns:
+      Detection3DTask: Task serving that one record.
+    """
+    schema = DatasetTableSchema.to_polars_schema()
+    columns = [
+        DatasetTableSchema.BOXES_3D.name,
+        DatasetTableSchema.TRAFFIC_CONE_BARRIER_BBOX_STATUS.name,
+    ]
+    records = pl.DataFrame(
+        {columns[0]: [boxes], columns[1]: [status]},
+        schema={column: schema[column] for column in columns},
+    )
+    return Detection3DTask(database_root_path=_ROOT, dataset_records_dataframe=records)
+
+
+def test_records_without_the_cone_and_barrier_flag_column_are_rejected() -> None:
+    """
+    Every record table built by this version carries the flag column, so a table without it is
+    a stale cache and is refused rather than read as "no flag".
+    """
+    schema = DatasetTableSchema.to_polars_schema()
+    records = pl.DataFrame(
+        {DatasetTableSchema.BOXES_3D.name: [[box("a", "car")]]},
+        schema={DatasetTableSchema.BOXES_3D.name: schema[DatasetTableSchema.BOXES_3D.name]},
+    )
+
+    with pytest.raises(ValueError, match=DatasetTableSchema.TRAFFIC_CONE_BARRIER_BBOX_STATUS.name):
+        Detection3DTask(database_root_path=_ROOT, dataset_records_dataframe=records)
+
+
+def test_select_columns_keeps_the_boxes_and_the_flag_only() -> None:
+    task = build_task_with_status([box("a", "car")], True)
+
+    assert task.dataset_records_dataframe.columns == list(Detection3DTask.COLUMNS)
+
+
+@pytest.mark.parametrize("status", [True, False])
+def test_the_cone_and_barrier_flag_is_read_from_the_record(status: bool) -> None:
+    task = build_task_with_status([box("a", "car")], status)
+
+    assert task.get_data_sample(0).detection3d_traffic_cone_barrier_bbox_status is status
+
+
+def test_a_record_without_the_cone_and_barrier_flag_serves_none() -> None:
+    task = build_task_with_status([box("a", "car")], None)
+
+    assert task.get_data_sample(0).detection3d_traffic_cone_barrier_bbox_status is None
+
+
+def test_str_names_the_task() -> None:
+    assert str(build_task([])) == "Detection3DTask"
+
+
+def test_log_dataset_info_reports_total_and_lidar_point_counts(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    task = build_task(
+        [
+            box("a", "car"),
+            {**box("b", "car"), "box3d_num_lidar_points": 0},
+            box("c", "pedestrian"),
+        ]
+    )
+
+    with caplog.at_level(logging.INFO, logger="autoware_ml.datamodule.common.detection3d"):
+        task.log_dataset_info()
+
+    assert "Number of bboxes per class in the dataset: " in caplog.text
+    assert "Number of bboxes after filtering num_lidar_points > 0 per class: " in caplog.text
+    assert "'car': 2" in caplog.text
+    assert "'car': 1" in caplog.text
+    assert "'pedestrian': 1" in caplog.text
+
+
+def test_log_dataset_info_counts_across_records_and_skips_the_empty_ones(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    Input: three records, the middle one without boxes.
+    Expected: the counts span the records and the empty record adds no phantom class, since
+        exploding an empty box list yields a null row rather than a box.
+    Check: the logged counts.
+    """
+    schema = DatasetTableSchema.to_polars_schema()
+    columns = list(Detection3DTask.COLUMNS)
+    records = pl.DataFrame(
+        {columns[0]: [[box("a", "car")], [], [box("b", "car")]], columns[1]: [True, None, False]},
+        schema={column: schema[column] for column in columns},
+    )
+    task = Detection3DTask(database_root_path=_ROOT, dataset_records_dataframe=records)
+
+    with caplog.at_level(logging.INFO, logger="autoware_ml.datamodule.common.detection3d"):
+        task.log_dataset_info()
+
+    assert "Detection3DTask: 3 records." in caplog.text
+    assert "Number of bboxes per class in the dataset: {'car': 2}" in caplog.text
+    assert "per class: {'car': 2}" in caplog.text
+    assert "None" not in caplog.text
+
+
+def test_log_dataset_info_on_records_without_any_box(caplog: pytest.LogCaptureFixture) -> None:
+    task = build_task([])
+
+    with caplog.at_level(logging.INFO, logger="autoware_ml.datamodule.common.detection3d"):
+        task.log_dataset_info()
+
+    assert "Number of bboxes per class in the dataset: {}" in caplog.text

@@ -75,7 +75,7 @@ def _update_confusion(suite) -> None:
     # car/truck confused with each other, road/sidewalk confused with each other.
     suite.update(
         {
-            "seg_frames": [
+            "seg3d_frames": [
                 {
                     "pred": torch.tensor([0, 1, 2, 3]),
                     "target": torch.tensor([1, 0, 3, 2]),
@@ -117,7 +117,7 @@ def test_point_suite_serves_both_taxonomies_from_one_cache() -> None:
     )
     suite.update(
         {
-            "seg_frames": [
+            "seg3d_frames": [
                 {
                     "coord": torch.tensor([[0.0, 0, 0], [10.0, 0, 0], [20.0, 0, 0], [30.0, 0, 0]]),
                     "target": torch.tensor([0, 1, 2, 3]),  # car, truck, road, sidewalk
@@ -161,7 +161,7 @@ def test_point_suite_grouped_confidence_is_the_predicted_groups_mass() -> None:
     # grouped confidence must be 0.4, never the 0.6 max.
     suite.update(
         {
-            "seg_frames": [
+            "seg3d_frames": [
                 {
                     "coord": torch.zeros((1, 3)),
                     "pred": torch.tensor([0]),
@@ -172,6 +172,8 @@ def test_point_suite_grouped_confidence_is_the_predicted_groups_mass() -> None:
         }
     )
     trained = suite.state_for(None)
+    # The grouped frame view is only reduced to scalars by compute(), so the per-point grouped
+    # confidence is read from the state builder directly.
     grouped = suite._grouped_state_for(None)
     assert trained.frames[0].confidence[0] == pytest.approx(0.4)
     assert grouped.frames[0].pred[0] == 0  # grouped_vehicle

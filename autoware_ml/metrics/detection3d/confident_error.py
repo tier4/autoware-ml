@@ -13,11 +13,11 @@ from __future__ import annotations
 import numpy as np
 
 from autoware_ml.metrics.base import EvalStage, Metric
-from autoware_ml.metrics.detection3d.matching import DetectionState
+from autoware_ml.metrics.detection3d.matching import Detection3DState
 from autoware_ml.metrics.detection3d.structures import DEFAULT_TP_THRESHOLD
 
 
-class ConfidentErrorRate(Metric[DetectionState]):
+class ConfidentErrorRate(Metric[Detection3DState]):
     """Confident-FP rate: of the false positives above ``min_score`` (the
     reporting floor), the fraction scored at or above ``score_threshold``."""
 
@@ -48,7 +48,7 @@ class ConfidentErrorRate(Metric[DetectionState]):
         if not 0.0 <= self.min_score <= self.score_threshold <= 1.0:
             raise ValueError("expected 0 <= min_score <= score_threshold <= 1.")
 
-    def evaluate(self, state: DetectionState, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: Detection3DState, stage: EvalStage) -> dict[str, float]:
         """Report the confident false-positive rate over all classes.
 
         Args:

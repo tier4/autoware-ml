@@ -14,11 +14,11 @@
 
 from __future__ import annotations
 
+from typing import Mapping, Sequence
 import logging
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 import time
-from typing import Sequence
 from types import MappingProxyType
 
 import polars as pl
@@ -28,7 +28,7 @@ from autoware_ml.databases.base_database import BaseDatabase
 from autoware_ml.databases.database_interface import DatabaseInterface
 from autoware_ml.databases.scenarios import ScenarioData
 from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord
-from autoware_ml.databases.t4dataset.t4records_generator import T4RecordsGenerator
+from autoware_ml.databases.t4dataset.t4records_generator import MAX_SWEEPS, T4RecordsGenerator
 from autoware_ml.databases.t4dataset.t4scenarios import T4Scenarios
 from autoware_ml.databases.box3d_pipelines.box3d_pipeline import Box3DPipeline
 from autoware_ml.databases.taxonomy import DatabaseTaxonomy
@@ -51,6 +51,7 @@ class T4RecordsGeneratorWorkerParams:
       box_annotation_dir: Directory of each scene with the category and instance tables to read
         box names from.
       taxonomy: Taxonomies the database labels are built with.
+      box3d_pipelines: List of box 3D pipelines to process the box 3D annotations.
     """
 
     database_root_path: str
@@ -167,6 +168,26 @@ class T4Dataset(BaseDatabase):
         )
         return string
 
+    @property
+    def hash_fields(self) -> Mapping[str, str]:
+        """
+        Get the explicit content fields that identify the cached records of the database.
+
+        Extends the base fields with the lidar channel and annotation directory the records
+        are built from, and the sweep window the records generator stores per sample. The
+        root path stays out: the records store paths relative to it and are re-rooted when read.
+
+        Returns:
+          Mapping[str, str]: Field name to its content representation, in a fixed order.
+        """
+
+        return {
+            **super().hash_fields,
+            "lidar_channel": self._lidar_channel.value,
+            "box_annotation_dir": self._box_annotation_dir,
+            "max_sweeps": str(MAX_SWEEPS),
+        }
+
     def __eq__(self, other: DatabaseInterface) -> bool:
         """
         Compare two databases by their version and scenario IDs.
@@ -195,7 +216,7 @@ class T4Dataset(BaseDatabase):
         logger.info(f"Parquet schema: {polars_schema}")
 
         df_hash = self.database_hash
-        df_cache_path = self._cache_path / f"{self._cache_file_prefix_name}_{df_hash}.parquet"
+        df_cache_path = self.cache_file_path
         if df_cache_path.exists():
             logger.info(f"Cache file {df_cache_path} already exists, skip generating the caches")
             return

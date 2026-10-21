@@ -1,5 +1,5 @@
 # Coarse detection3d taxonomy of T4dataset
-_target_: autoware_ml.databases.taxonomy.DetectionTaxonomy
+_target_: autoware_ml.databases.taxonomy.Detection3DTaxonomy
 
 defaults:
   - /database/t4dataset/taxonomy/vocabulary@vocabulary: default_detection3d

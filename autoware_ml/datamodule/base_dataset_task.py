@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+import logging
 from pathlib import Path
 
 import polars as pl
@@ -6,8 +7,14 @@ import polars as pl
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 
 
+logger = logging.getLogger(__name__)
+
+
 class BaseDatasetTask(ABC):
-    """Read the annotations of one task from the record table of a corpus."""
+    """
+    Abstract interface for dataset tasks that defines how a task-specific dataset should be
+    implemented when retrieving data.
+    """
 
     def __init__(self, database_root_path: str, dataset_records_dataframe: pl.DataFrame) -> None:
         """
@@ -43,3 +50,22 @@ class BaseDatasetTask(ABC):
         Returns:
           ModelGTSample: Sample holding the annotations of the task.
         """
+
+    def __str__(self) -> str:
+        """
+        Name of the task, its class name unless a task overrides it.
+
+        Returns:
+          str: Name of the task.
+        """
+        return type(self).__name__
+
+    def log_dataset_info(self) -> None:
+        """
+        Log one line on the records the task reads.
+
+        The dataset calls this on rank zero every time it is bound to records, so it must stay
+        cheap: the default reports the record count, and a task overriding it should only touch
+        the columns it summarises.
+        """
+        logger.info(f"{self}: {len(self.dataset_records_dataframe)} records.")

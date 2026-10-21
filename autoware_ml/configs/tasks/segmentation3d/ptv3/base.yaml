@@ -1,45 +1,36 @@
 # @package _global_
 defaults:
-  - /defaults/default_runtime
+  - /tasks/default_task
   - /tasks/segmentation3d/ptv3/encoder_base
   - /tasks/segmentation3d/ptv3/voxel_encoder
-  - /tasks/segmentation3d/ptv3/data_preprocessing
-  - /tasks/segmentation3d/ptv3/seg_head_base
+  - /tasks/segmentation3d/ptv3/seg3d_head_base
   - _self_
 
-dataset: ???
-
-grid_size: ???
+database: ???
 point_cloud_range: ???
-
+# Edge of the cubic voxels the encoder serializes, in meters.
+grid_size: ???
 max_voxels: ???
 
-model:
-  _target_: autoware_ml.models.segmentation3d.ptv3.PTv3SegmentationModel
-  metrics: ${dataset.segmentation3d.metrics}
-  grid_size: ${grid_size}
-  point_cloud_range: ${point_cloud_range}
-  optimizer:
-    _target_: torch.optim.AdamW
-    _partial_: true
-    lr: 0.002
-    weight_decay: 0.005
-  optimizer_group_overrides:
-    block:
-      lr: 0.0002
-  scheduler:
-    _target_: torch.optim.lr_scheduler.OneCycleLR
-    _partial_: true
-    max_lr: [0.002, 0.0002]
-    pct_start: 0.04
-    anneal_strategy: cos
-    div_factor: 10.0
-    final_div_factor: 100.0
-  scheduler_config:
-    interval: step
+data_preprocessor:
+  preprocessor_modules:
+    - _target_: autoware_ml.preprocessing.detection3d.point_pillar_preprocessor.PointPillarPreprocessor
+      voxel_size: ["${grid_size}", "${grid_size}", "${grid_size}"]
+      point_cloud_range: ${point_cloud_range}
+      max_num_points: 32
+      max_voxels: ${max_voxels}
+      eval_max_voxels: ${max_voxels}
+
+optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
+  lr: 0.002
+  weight_decay: 0.005
 
 trainer:
-  max_epochs: 50
+  max_epochs: ???
+  # Initial value only, the dynamic_validation callback of the root rewrites it per epoch.
+  check_val_every_n_epoch: 5
   gradient_clip_val: 10.0
 
 callbacks:
@@ -71,6 +62,36 @@ deploy:
         output_names: [pred_labels, pred_probs]
         metainfo:
           dec_depths: ${model.seg3d_head.dec_depths}
-          class_names: ${dataset.segmentation3d.class_names}
+          class_names: ${database.taxonomy.segmentation3d.class_names}
   tensorrt:
     enabled: false
+
+model:
+  _target_: autoware_ml.models.segmentation3d.ptv3.PTv3Segmentation3DModel
+  _convert_: all
+  metrics: ${metrics}
+  log_dict_configs:
+    _target_: autoware_ml.models.module_base_model.LogDictConfigs
+    _convert_: all
+    # Epoch-level only: per-step logging would split every key into train/<key>_step and
+    # train/<key>_epoch and, with sync_dist, all-reduce every loss key on every step.
+    on_step: false
+    on_epoch: true
+    prog_bar: true
+    sync_dist: true
+  grid_size: ${grid_size}
+  point_cloud_range: ${point_cloud_range}
+  optimizer: ${optimizer}
+  optimizer_group_overrides:
+    block:
+      lr: 0.0002
+  scheduler:
+    _target_: torch.optim.lr_scheduler.OneCycleLR
+    _partial_: true
+    max_lr: [0.002, 0.0002]
+    pct_start: 0.04
+    anneal_strategy: cos
+    div_factor: 10.0
+    final_div_factor: 100.0
+  scheduler_config:
+    interval: step

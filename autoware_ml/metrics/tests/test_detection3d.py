@@ -91,7 +91,7 @@ def _update(
     metric.update(eval_out)
 
 
-class _DummyDetectionModel(MetricEvalMixin):
+class _DummyDetection3DModel(MetricEvalMixin):
     """Minimal model exercising the metric lifecycle through the mixin."""
 
     def __init__(self, metrics: list[Detection3DMetricSuite]) -> None:
@@ -261,7 +261,7 @@ def test_center_distance_ap_reports_imperfect_precision_recall_curve() -> None:
     assert 0.0 < metrics["mAP"] < 1.0
 
 
-def test_non_integer_detection_range_suffixes_do_not_collide() -> None:
+def test_non_integer_detection3d_range_suffixes_do_not_collide() -> None:
     metric = _suite(
         thresholds=(0.5,),
         ranges=(
@@ -283,7 +283,7 @@ def test_non_integer_detection_range_suffixes_do_not_collide() -> None:
 
 
 def test_metric_eval_mixin_logs_test_map() -> None:
-    model = _DummyDetectionModel(metrics=[_suite(thresholds=(0.5,))])
+    model = _DummyDetection3DModel(metrics=[_suite(thresholds=(0.5,))])
     model.on_test_epoch_start()
     model.on_test_batch_end(
         {"model_outputs": [_prediction([(0.0, 0.0)], [0.9], [0])]},
@@ -299,7 +299,7 @@ def test_metric_eval_mixin_logs_test_map() -> None:
 
 
 def test_metric_eval_mixin_logs_val_map() -> None:
-    model = _DummyDetectionModel(metrics=[_suite(thresholds=(0.5,))])
+    model = _DummyDetection3DModel(metrics=[_suite(thresholds=(0.5,))])
     model.on_validation_epoch_start()
     model.on_validation_batch_end(
         {"model_outputs": [_prediction([(0.0, 0.0)], [0.9], [0])]},
@@ -315,7 +315,7 @@ def test_metric_eval_mixin_logs_val_map() -> None:
 
 
 def test_metric_eval_mixin_rejects_missing_required_keys() -> None:
-    class _BadModel(_DummyDetectionModel):
+    class _BadModel(_DummyDetection3DModel):
         def build_eval_output(self, batch: dict[str, Any], outputs: Any) -> dict[str, Any]:
             return {"gt_boxes": batch["gt_boxes"]}  # missing predictions / gt_labels
 

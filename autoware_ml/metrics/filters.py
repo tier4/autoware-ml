@@ -23,11 +23,7 @@ import torch
 
 from autoware_ml.metrics.base import MetricFilter, number_token
 from autoware_ml.metrics.detection3d.geometry import bev_corners_batch
-from autoware_ml.metrics.geometry.lanelet import (
-    KNOWN_REGION_TOKENS,
-    LaneletMap,
-    LaneletMapProvider,
-)
+from autoware_ml.metrics.geometry.lanelet import KNOWN_REGION_TOKENS, LaneletMap
 from autoware_ml.metrics.geometry.reachability import (
     Agent,
     ReachabilityParams,
@@ -203,7 +199,6 @@ class RegionFilter(MetricFilter):
         region: List of literal lanelet2 tokens (lanelet ``subtype`` or area
             ``type``), e.g. ``[road, road_shoulder, crosswalk]`` for the
             drivable region or ``[walkway]`` for the pedestrian-only region.
-        map_provider: Resolves a scene token to its :class:`LaneletMap`.
         margin: Border shift in meters. Negative erodes, so outer-border points
             stop counting while internal borders between adjacent regions stay
             intact. Positive dilates, so the region additionally claims off-map
@@ -213,11 +208,12 @@ class RegionFilter(MetricFilter):
     """
 
     region: tuple[str, ...]
-    map_provider: LaneletMapProvider
     margin: float = 0.0
     name: str = ""
 
-    required_eval_keys = ("ego2global", "scene_token")
+    # The map comes with the frame: the dataset that served it resolved the path against its
+    # own corpus, so frames of different sources read different maps through one filter.
+    required_eval_keys = ("ego2global", "lanelet_map_path")
 
     def __post_init__(self) -> None:
         """Validate the region tokens and derive the display name."""
@@ -231,11 +227,11 @@ class RegionFilter(MetricFilter):
     def cache_key(self) -> str:
         """Every parameter that shapes the mask, equal keys must mean equal masks.
 
-        The provider is part of that: a suite keeps one mask set per key, so two
-        filters that read different maps must not share it.
+        The map is not a parameter: it comes per frame with the context, so two
+        filters with the same region and margin mask every frame alike.
         """
         region = ",".join(sorted(self.region))
-        return f"region:{region}:{self.margin:g}:{self.map_provider.cache_key}"
+        return f"region:{region}:{self.margin:g}"
 
     def keep(self, xyz: np.ndarray, context: dict[str, Any]) -> np.ndarray:
         """Mask of elements in the region.
@@ -247,7 +243,7 @@ class RegionFilter(MetricFilter):
 
         Args:
             xyz: Points ``(N, 3)`` or box rows ``(N, 7+)`` in base_link.
-            context: Per-frame values with the ego pose and scene token.
+            context: Per-frame values with the ego pose and lanelet map path.
 
         Returns:
             Boolean mask of elements in the region.
@@ -255,7 +251,7 @@ class RegionFilter(MetricFilter):
         xyz = np.asarray(xyz, dtype=np.float64)
         if xyz.shape[0] == 0:
             return np.zeros((0,), dtype=bool)
-        lanelet_map = self.map_provider.get(context["scene_token"])
+        lanelet_map = LaneletMap.from_osm(context["lanelet_map_path"])
         if _is_boxes(xyz):
             footprints = box_footprints_map(xyz, context["ego2global"])
             return lanelet_map.intersects(self.region, footprints, self.margin)
@@ -263,15 +259,15 @@ class RegionFilter(MetricFilter):
         return lanelet_map.contains(self.region, map_xy, self.margin)
 
     def available(self, context: dict[str, Any]) -> bool:
-        """False for scenes with no lanelet map, so the suite excludes them.
+        """False for frames without a lanelet map, so the suite excludes them.
 
         Args:
-            context: Per-frame values with the scene token.
+            context: Per-frame values with the lanelet map path.
 
         Returns:
-            Whether the scene has a lanelet map.
+            Whether the frame carries a lanelet map.
         """
-        return self.map_provider.available(context["scene_token"])
+        return context["lanelet_map_path"] is not None
 
 
 @dataclass(frozen=True)
@@ -350,7 +346,6 @@ class CollisionFilter(MetricFilter):
     area that is simply wrong.
 
     Attributes:
-        map_provider: Resolves a scene token to its :class:`LaneletMap`.
         vehicle: Ego body dimensions, measured from the rear axle the pose refers to.
         region: Road lanelet tokens the collision area is clipped to.
         params: Ego propagation parameters.
@@ -358,14 +353,13 @@ class CollisionFilter(MetricFilter):
         name: Display name prefixing the metric keys.
     """
 
-    map_provider: LaneletMapProvider
     vehicle: VehicleGeometry = field(kw_only=True)
     region: tuple[str, ...] = field(default=DEFAULT_DRIVABLE_REGION, kw_only=True)
     params: ReachabilityParams = field(default_factory=ReachabilityParams, kw_only=True)
     max_speed_mps: float = field(default=16.7, kw_only=True)
     name: str = field(default="collision", kw_only=True)
 
-    required_eval_keys = ("ego2global", "scene_token")
+    required_eval_keys = ("ego2global", "lanelet_map_path")
 
     def __post_init__(self) -> None:
         """Validate the road region tokens and the ego speed fallback."""
@@ -385,18 +379,17 @@ class CollisionFilter(MetricFilter):
             f"r{self.vehicle.min_turn_radius:g}"
             f":h{params.horizon_s:g},{params.dt_s:g},{params.max_lateral_accel_mps2:g}"
             f",{params.min_radius_m:g},{params.arc_samples}:{region}"
-            f":{self.map_provider.cache_key}"
         )
 
     @lru_cache(maxsize=1)
-    def _region_for_pose(self, scene_token: str, x: float, y: float, heading: float):
+    def _region_for_pose(self, lanelet_map_path: str, x: float, y: float, heading: float):
         """The ego collision area in the map frame for one ego pose.
 
         The suite calls :meth:`keep` for the ground truth and the predictions of
-        the same frame in sequence and the area depends only on the pose, so one
-        cached entry serves both calls.
+        the same frame in sequence and the area depends only on the map and the
+        pose, so one cached entry serves both calls.
         """
-        lanelet_map = self.map_provider.get(scene_token)
+        lanelet_map = LaneletMap.from_osm(lanelet_map_path)
         ego = ego_collision_agent(lanelet_map, x, y, heading, self.max_speed_mps, self.vehicle)
         # The scene's whole drivable union is orders of magnitude larger than one
         # ego pose can touch, and sealing it dominates the cost, so clip first.
@@ -409,7 +402,7 @@ class CollisionFilter(MetricFilter):
     def _ego_region(self, context: dict[str, Any]):
         """The ego collision area in the map frame for this frame."""
         return self._region_for_pose(
-            str(context["scene_token"]), *ego2global_pose(context["ego2global"])
+            str(context["lanelet_map_path"]), *ego2global_pose(context["ego2global"])
         )
 
     def keep(self, xyz: np.ndarray, context: dict[str, Any]) -> np.ndarray:
@@ -417,7 +410,7 @@ class CollisionFilter(MetricFilter):
 
         Args:
             xyz: Points ``(N, 3)`` or box rows ``(N, 7+)`` in base_link.
-            context: Per-frame values with the ego pose and scene token.
+            context: Per-frame values with the ego pose and lanelet map path.
 
         Returns:
             Boolean mask of elements inside the collision area.
@@ -444,11 +437,11 @@ class CollisionFilter(MetricFilter):
         missed object can never be counted because nothing is in path at all.
 
         Args:
-            context: Per-frame values with the ego pose and scene token.
+            context: Per-frame values with the ego pose and lanelet map path.
 
         Returns:
             Whether the frame has a collision area to evaluate against.
         """
-        if not self.map_provider.available(context["scene_token"]):
+        if context["lanelet_map_path"] is None:
             return False
         return not self._ego_region(context).is_empty

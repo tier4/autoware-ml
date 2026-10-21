@@ -1,0 +1,10 @@
+# @package _global_
+defaults:
+  - base_ot128
+  - /database@database: t4dataset/t4dataset_j6gen2_semaseg
+  - _self_
+
+batch_size: 4
+num_workers: 8
+experiment_group_name: frnet/${database.version}/j6gen2_semaseg
+experiment_name: ot128_b4_150k_t4dataset

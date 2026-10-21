@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
+from autoware_ml.configs.paths import CONFIGS_ROOT
 from autoware_ml.configs.resolvers import (
+    PROJECT_ROOT,
     merge_lists,
     raw_name_to_train_index,
     register_config_resolvers,
@@ -43,7 +46,7 @@ def test_raw_name_to_train_index_sends_null_and_unknown_finals_to_ignore() -> No
     assert mapping["some_future_category"] == -1
 
 
-def test_seg_class_indices_resolver_in_interpolation() -> None:
+def test_seg3d_class_mapping_resolver_in_interpolation() -> None:
     register_config_resolvers()
     cfg = OmegaConf.create(
         {
@@ -51,7 +54,7 @@ def test_seg_class_indices_resolver_in_interpolation() -> None:
             "name_mapping": dict(_NAME_MAPPING),
             "class_names": list(_CLASS_NAMES),
             "class_indices": (
-                "${seg_class_indices:${name_mapping}, ${class_names}, ${ignore_index}}"
+                "${seg3d_class_mapping:${name_mapping}, ${class_names}, ${ignore_index}}"
             ),
         }
     )
@@ -115,3 +118,24 @@ def test_merge_lists_resolver_preserves_hydra_recursive_instantiation() -> None:
     assert [type(metric) for metric in model.metrics] == [SimpleNamespace, SimpleNamespace]
     assert [metric.name for metric in model.metrics] == ["map", "iou"]
     assert model.metrics[0].classes == ["car", "truck"]
+
+
+def test_project_root_is_the_checkout_holding_the_package() -> None:
+    assert PROJECT_ROOT.is_absolute()
+    assert (PROJECT_ROOT / "autoware_ml" / "configs").resolve() == CONFIGS_ROOT
+
+
+def _working_dir() -> str:
+    register_config_resolvers()
+    paths = OmegaConf.load(CONFIGS_ROOT / "defaults" / "modules" / "paths.yaml")
+    return paths.working_dir
+
+
+def test_working_dir_defaults_to_the_project_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AUTOWARE_ML_WORKING_DIR", raising=False)
+    assert _working_dir() == str(PROJECT_ROOT)
+
+
+def test_working_dir_follows_the_environment_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AUTOWARE_ML_WORKING_DIR", "/scratch/autoware-ml")
+    assert _working_dir() == "/scratch/autoware-ml"

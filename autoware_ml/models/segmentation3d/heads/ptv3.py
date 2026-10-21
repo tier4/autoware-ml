@@ -35,7 +35,7 @@ from autoware_ml.dataclasses.geometry.voxels import VoxelsData
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.segmentation3d.predictions import Segmentation3DPredictions
 from autoware_ml.losses.segmentation3d.lovasz import LovaszLoss
-from autoware_ml.metrics.segmentation3d.eval_output import segmentation_frames_eval_output
+from autoware_ml.metrics.segmentation3d.eval_output import segmentation3d_frames_eval_output
 from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     Block,
     PointSequential,
@@ -49,7 +49,7 @@ from autoware_ml.models.segmentation3d.encoders.voxel import TIME_LAG_COLUMN
 from autoware_ml.utils.point_cloud.structures import Point
 
 
-class PTv3SegDecoderHead(nn.Module):
+class PTv3Seg3DDecoderHead(nn.Module):
     """Decode PTv3 encoder stages into point-wise segmentation logits.
 
     The head mirrors the original PTv3 decoder (serialized unpooling with
@@ -202,7 +202,7 @@ class PTv3SegDecoderHead(nn.Module):
         return self.classifier(decoded.feat)
 
     def loss(
-        self, seg_logits: torch.Tensor, segment: torch.Tensor, weights: torch.Tensor
+        self, seg3d_logits: torch.Tensor, segment: torch.Tensor, weights: torch.Tensor
     ) -> dict[str, torch.Tensor]:
         """Compute segmentation losses against the targets of every row.
 
@@ -211,7 +211,7 @@ class PTv3SegDecoderHead(nn.Module):
         so it takes the targets alone.
 
         Args:
-            seg_logits: Row-wise segmentation logits.
+            seg3d_logits: Row-wise segmentation logits.
             segment: Target of every row.
             weights: Weight of every row, zero where the row carries no supervision.
 
@@ -220,10 +220,10 @@ class PTv3SegDecoderHead(nn.Module):
         """
         # Dividing the weighted sum by the summed weights gives the weighted mean over the
         # supervised rows, and zero instead of nan when a batch has no supervision.
-        loss_ce = (self.cross_entropy(seg_logits, segment) * weights).sum() / weights.sum().clamp(
+        loss_ce = (self.cross_entropy(seg3d_logits, segment) * weights).sum() / weights.sum().clamp(
             min=1e-6
         )
-        loss_lovasz = self.lovasz(seg_logits, segment)
+        loss_lovasz = self.lovasz(seg3d_logits, segment)
         return {
             "loss_ce": loss_ce,
             "loss_lovasz": loss_lovasz,
@@ -239,7 +239,7 @@ class PTv3SegDecoderHead(nn.Module):
         self.order = list(order)
         set_block_serialization_order(self.dec, len(self.order))
 
-    def prepare_for_export(self, order: Sequence[str]) -> PTv3SegDecoderHead:
+    def prepare_for_export(self, order: Sequence[str]) -> PTv3Seg3DDecoderHead:
         """Return an isolated head copy configured for ONNX export.
 
         Args:
@@ -280,19 +280,19 @@ def assigned_point_mask(point_voxel_indices: torch.Tensor) -> torch.Tensor:
 
 
 def gather_point_logits(
-    seg_logits: torch.Tensor, point_voxel_indices: torch.Tensor, mask: torch.Tensor
+    seg3d_logits: torch.Tensor, point_voxel_indices: torch.Tensor, mask: torch.Tensor
 ) -> torch.Tensor:
     """Gather the voxel logits of the selected points through their voxel row.
 
     Args:
-        seg_logits: Voxel-level logits of shape ``(num_voxels, num_classes)``.
+        seg3d_logits: Voxel-level logits of shape ``(num_voxels, num_classes)``.
         point_voxel_indices: Voxel row of every point.
         mask: Points to gather, all of which must have a voxel.
 
     Returns:
         Point-level logits of shape ``(mask.sum(), num_classes)``.
     """
-    return seg_logits[point_voxel_indices[mask]]
+    return seg3d_logits[point_voxel_indices[mask]]
 
 
 def voxelized_points(
@@ -384,8 +384,8 @@ def voxel_supervision(
     return labels, weights
 
 
-def segmentation_point_loss(
-    head: PTv3SegDecoderHead, seg_logits: torch.Tensor, batch_inputs: ModelBatchInputs
+def segmentation3d_point_loss(
+    head: PTv3Seg3DDecoderHead, seg3d_logits: torch.Tensor, batch_inputs: ModelBatchInputs
 ) -> dict[str, torch.Tensor]:
     """Compute the segmentation losses with one term per voxel.
 
@@ -394,7 +394,7 @@ def segmentation_point_loss(
 
     Args:
         head: Segmentation head owning the losses.
-        seg_logits: Voxel-level segmentation logits.
+        seg3d_logits: Voxel-level segmentation logits.
         batch_inputs: Model inputs with the voxels and the point labels.
 
     Returns:
@@ -404,40 +404,40 @@ def segmentation_point_loss(
     labels, weights = voxel_supervision(
         voxels_data.point_voxel_indices,
         _point_labels(label_batch),
-        num_voxels=seg_logits.shape[0],
-        num_classes=seg_logits.shape[1],
+        num_voxels=seg3d_logits.shape[0],
+        num_classes=seg3d_logits.shape[1],
         ignore_index=head.ignore_index,
         sample=head.training,
         mixed_weight=head.mixed_voxel_weight,
     )
-    return head.loss(seg_logits, labels, weights)
+    return head.loss(seg3d_logits, labels, weights)
 
 
-def segmentation_eval_output(
-    seg_logits: torch.Tensor, batch_inputs: ModelBatchInputs
+def segmentation3d_eval_output(
+    seg3d_logits: torch.Tensor, batch_inputs: ModelBatchInputs
 ) -> dict[str, Any]:
     """Gather the voxel predictions of the current frame points, per frame.
 
-    Produces the ``seg_frames`` entries both segmentation suites read: one entry
+    Produces the ``seg3d_frames`` entries both segmentation suites read: one entry
     per frame with the coordinates, predicted and target labels and per class
     softmax scores of the current frame points inside the voxel grid. Sweep points
     only shape the voxel features. They are found by their time lag and left out.
 
     Args:
-        seg_logits: Voxel-level segmentation logits.
+        seg3d_logits: Voxel-level segmentation logits.
         batch_inputs: Model inputs with the points, the voxels and the point labels. Per
             frame metadata (ego pose, scene token) is passed through when the dataset supplies
             it.
 
     Returns:
-        ``{"seg_frames": [...]}`` keyed for the segmentation suites.
+        ``{"seg3d_frames": [...]}`` keyed for the segmentation suites.
     """
     point_batch, voxels_data, label_batch = voxelized_points(batch_inputs)
     points = point_batch.points
     point_voxel_indices = voxels_data.point_voxel_indices
     scored = current_frame_mask(points) & assigned_point_mask(point_voxel_indices)
-    point_logits = gather_point_logits(seg_logits, point_voxel_indices, scored)
-    return segmentation_frames_eval_output(
+    point_logits = gather_point_logits(seg3d_logits, point_voxel_indices, scored)
+    return segmentation3d_frames_eval_output(
         coord=points[scored, :3],
         pred_labels=point_logits.argmax(dim=1),
         target_labels=_point_labels(label_batch).long()[scored],
@@ -448,13 +448,13 @@ def segmentation_eval_output(
     )
 
 
-def segmentation_predict_outputs(
-    seg_logits: torch.Tensor, batch_inputs: ModelBatchInputs
+def segmentation3d_predict_outputs(
+    seg3d_logits: torch.Tensor, batch_inputs: ModelBatchInputs
 ) -> Segmentation3DPredictions:
     """Format segmentation predictions for the current-frame points.
 
     Args:
-        seg_logits: Voxel-level segmentation logits.
+        seg3d_logits: Voxel-level segmentation logits.
         batch_inputs: Model inputs with the points and their voxels.
 
     Returns:
@@ -464,5 +464,7 @@ def segmentation_predict_outputs(
     point_batch, voxels_data, _ = voxelized_points(batch_inputs)
     point_voxel_indices = voxels_data.point_voxel_indices
     scored = current_frame_mask(point_batch.points) & assigned_point_mask(point_voxel_indices)
-    point_probs = torch.softmax(gather_point_logits(seg_logits, point_voxel_indices, scored), dim=1)
+    point_probs = torch.softmax(
+        gather_point_logits(seg3d_logits, point_voxel_indices, scored), dim=1
+    )
     return Segmentation3DPredictions(pred_labels=point_probs.argmax(dim=1), pred_probs=point_probs)

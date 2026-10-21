@@ -21,9 +21,9 @@ from __future__ import annotations
 
 import importlib
 import math
-from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass
+from collections.abc import Sequence
 from typing import Any
 
 import spconv.pytorch as spconv
@@ -33,9 +33,9 @@ from torch.onnx.operators import shape_as_tensor
 
 from autoware_ml.ops.indexing.operators import argsort
 from autoware_ml.ops.segment.segment_csr import segment_csr
-from autoware_ml.ops.spconv.sparse_conv import SubMConv3d as ExportableSubMConv3d
+from autoware_ml.ops.spconv.sparse_conv import ExportableSubMConv3d
 from autoware_ml.utils.point_cloud.batching import offset_to_bincount
-from autoware_ml.utils.point_cloud.structures import Point
+from autoware_ml.utils.point_cloud.structures import Point, pooled_sparse_shape
 
 
 def load_flash_attn_module() -> Any:
@@ -996,7 +996,10 @@ class SerializedPooling(PointModule):
             serialized_inverse=pooled_inverse,
             serialized_depth=point.serialized_depth - pooling_depth,
             batch=point.batch[head_indices],
-            sparse_shape=point.sparse_shape >> pooling_depth,
+            # Rounded up, not floored: a size that is not a multiple of the stride would
+            # otherwise leave the last occupied slice outside the declared shape and let
+            # spconv's hash keys alias (see pooled_sparse_shape).
+            sparse_shape=pooled_sparse_shape(point.sparse_shape, pooling_depth),
             pooling_inverse=cluster,
             pooling_parent=point,
             offset=(
