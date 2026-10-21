@@ -1162,7 +1162,7 @@ class StreamPETRHead(nn.Module):
         """Decode final detections from the last decoder layer.
 
         Returns one typed prediction per sample, consumed by
-        ``detection_eval_output`` and the metric suite. Box centers are
+        ``detection3d_eval_output`` and the metric suite. Box centers are
         gravity centers end to end: the annotations store them, the head
         regresses them, and the exported graph emits them. Nothing here may
         re-center the boxes, or the deployed output would silently diverge
