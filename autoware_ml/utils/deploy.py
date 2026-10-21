@@ -69,27 +69,13 @@ def validate_cuda_available() -> None:
         )
 
 
-def resolve_output_paths(
-    checkpoint_path: Path,
-    output_name: str | None,
-    output_dir: str | None,
-) -> tuple[Path, Path, Path]:
-    """Resolve the output directory and export artifact paths."""
-    base_name = output_name if output_name else checkpoint_path.stem
-    output_directory = Path(output_dir) if output_dir else checkpoint_path.parent
-    output_directory.mkdir(parents=True, exist_ok=True)
-
-    onnx_path = output_directory / f"{base_name}.onnx"
-    engine_path = output_directory / f"{base_name}.engine"
-    return output_directory, onnx_path, engine_path
-
-
 def get_predict_batch(
     datamodule: L.LightningDataModule,
     model: L.LightningModule,
     device: torch.device,
 ) -> ModelBatchInputs:
     """Load one prediction batch and apply transfer-time preprocessing."""
+    datamodule.prepare_data()
     datamodule.setup("predict")
     predict_dataloader = datamodule.predict_dataloader()
     # The typed batch moves its own tensors

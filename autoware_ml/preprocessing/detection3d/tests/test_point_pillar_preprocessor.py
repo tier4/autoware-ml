@@ -23,7 +23,7 @@ import torch
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
-from autoware_ml.preprocessing.detection3d.point_pillar import PointPillarPreprocessor
+from autoware_ml.preprocessing.detection3d.point_pillar_preprocessor import PointPillarPreprocessor
 
 
 def _inputs(samples: list[torch.Tensor]) -> ModelBatchInputs:
@@ -55,13 +55,15 @@ class TestPointPillarPreprocessor(unittest.TestCase):
         """Set up the same PointPillarPreprocessor instance for all tests. Note that this class will
         be called in each test case.
         """
+        torch.manual_seed(0)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.point_pillar_preprocessor = PointPillarPreprocessor(
             voxel_size=[1.0, 1.0, 4.0],
             point_cloud_range=[0.0, 0.0, -2.0, 4.0, 4.0, 2.0],
             max_num_points=2,
             max_voxels=8,
+            eval_max_voxels=8,
         )
-        torch.manual_seed(0)
 
     def test_forward_builds_padded_pillars(self) -> None:
         """
@@ -158,27 +160,18 @@ class TestPointPillarPreprocessor(unittest.TestCase):
         self.assertEqual(train_voxels.voxels.shape[0], 1)
         self.assertEqual(eval_voxels.voxels.shape[0], 3)
 
-    def test_eval_mode_without_eval_max_voxels_raises(self) -> None:
+    def test_requires_an_explicit_eval_max_voxels(self) -> None:
         """
-        Test that running in evaluation mode without an explicit ``eval_max_voxels`` raises
-        instead of silently reusing the training budget.
+        Test that the evaluation voxel budget must be stated when the preprocessor is built,
+        instead of silently reusing the training budget at inference.
         """
-        inputs = _inputs([torch.tensor([[0.5, 0.5, 0.0, 1.0]], dtype=torch.float32)])
-
-        with self.assertRaises(ValueError):
-            self.point_pillar_preprocessor(inputs, is_training=False)
-
-    def test_train_mode_does_not_require_eval_max_voxels(self) -> None:
-        """
-        Test that training-mode forward keeps working when ``eval_max_voxels`` is not set,
-        so existing training configs stay valid.
-        """
-        batch = _inputs([torch.tensor([[0.5, 0.5, 0.0, 1.0]], dtype=torch.float32)])
-
-        outputs = self.point_pillar_preprocessor(batch, is_training=True)
-
-        assert outputs.voxels_data is not None
-        self.assertEqual(outputs.voxels_data.voxels.shape[0], 1)
+        with self.assertRaises(TypeError):
+            PointPillarPreprocessor(
+                voxel_size=[1.0, 1.0, 4.0],
+                point_cloud_range=[0.0, 0.0, -2.0, 4.0, 4.0, 2.0],
+                max_num_points=2,
+                max_voxels=8,
+            )
 
     def test_batch_without_point_cloud_raises(self) -> None:
         """

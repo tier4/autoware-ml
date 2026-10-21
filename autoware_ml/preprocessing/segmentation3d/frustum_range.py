@@ -22,10 +22,11 @@ import torch
 
 from autoware_ml.dataclasses.geometry.range_view import RangeViewData
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.preprocessing.data_preprocessor_modules import DataPreprocessorModule
 from autoware_ml.preprocessing.segmentation3d.range_view import project_range
 
 
-class FrustumRangePreprocessor:
+class FrustumRangePreprocessor(DataPreprocessorModule):
     """Convert batched points into FRNet frustum and range-view tensors.
 
     The preprocessor projects points into range-view bins, groups them into
@@ -132,7 +133,7 @@ class FrustumRangePreprocessor:
             A tensor of shape ``(sample_count, height, width)`` containing
             the dense range-view semantic targets.
         """
-        seg_label = torch.full(
+        seg3d_label = torch.full(
             (sample_count, self.height, self.width),
             fill_value=self.ignore_index,
             dtype=torch.long,
@@ -141,7 +142,7 @@ class FrustumRangePreprocessor:
 
         valid = labels != self.ignore_index
         if not valid.any():
-            return seg_label
+            return seg3d_label
 
         valid_batch = coors[valid, 0]
         valid_row = coors[valid, 1]
@@ -161,5 +162,5 @@ class FrustumRangePreprocessor:
 
         has_vote = counts.sum(dim=-1) > 0
         majority = counts.argmax(dim=-1)
-        seg_label[has_vote] = majority[has_vote]
-        return seg_label
+        seg3d_label[has_vote] = majority[has_vote]
+        return seg3d_label

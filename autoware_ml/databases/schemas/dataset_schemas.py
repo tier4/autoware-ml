@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence, Mapping, Any
+from typing import Any, Sequence, Mapping
 
 import polars as pl
 from pydantic import BaseModel, ConfigDict
@@ -68,6 +68,9 @@ class DatasetTableSchema:
     LOCATION = DatasetTableColumn("location", pl.String)
     VEHICLE_TYPE = DatasetTableColumn("vehicle_type", pl.String)
     SCENARIO_NAME = DatasetTableColumn("scenario_name", pl.String)
+    TRAFFIC_CONE_BARRIER_BBOX_STATUS = DatasetTableColumn(
+        "traffic_cone_barrier_bbox_status", pl.Boolean
+    )
 
     # LiDAR Frames Schema
     LIDAR_FRAMES = DatasetTableColumn(
@@ -125,6 +128,8 @@ class DatasetRecord(BaseModel, DataModelInterface):
       sample_index: Sample index.
       location: Location of the vehicle.
       vehicle_type: Type of the vehicle.
+      traffic_cone_barrier_bbox_status: Temporary boolean to indicate if traffic cones/barriers are
+        annotated in the frame. None when unknown.
 
       # LiDAR frame data
       lidar_frames: List of lidar frame data models, including multi-sweep lidar frames.
@@ -151,6 +156,7 @@ class DatasetRecord(BaseModel, DataModelInterface):
     location: str | None
     vehicle_type: str | None
     scenario_name: str
+    traffic_cone_barrier_bbox_status: bool | None = None
 
     lidar_frames: Sequence[LidarFrameDataModel]
     lidar_sources: Sequence[LidarSourceDataModel] | None
@@ -173,6 +179,7 @@ class DatasetRecord(BaseModel, DataModelInterface):
             DatasetTableSchema.LOCATION.name: self.location,
             DatasetTableSchema.VEHICLE_TYPE.name: self.vehicle_type,
             DatasetTableSchema.SCENARIO_NAME.name: self.scenario_name,
+            DatasetTableSchema.TRAFFIC_CONE_BARRIER_BBOX_STATUS.name: self.traffic_cone_barrier_bbox_status,
         }
         data_model[DatasetTableSchema.LIDAR_FRAMES.name] = [
             lidar_frame.to_dictionary() for lidar_frame in self.lidar_frames
@@ -266,6 +273,9 @@ class DatasetRecord(BaseModel, DataModelInterface):
             location=data_model[DatasetTableSchema.LOCATION.name],
             vehicle_type=data_model[DatasetTableSchema.VEHICLE_TYPE.name],
             scenario_name=data_model[DatasetTableSchema.SCENARIO_NAME.name],
+            traffic_cone_barrier_bbox_status=data_model[
+                DatasetTableSchema.TRAFFIC_CONE_BARRIER_BBOX_STATUS.name
+            ],
             lidar_frames=lidar_frames,
             lidar_sources=lidar_sources,
             image_frames=image_frames,

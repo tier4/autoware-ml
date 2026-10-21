@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import Sequence, Protocol
+from typing import Protocol, Sequence
 from types import MappingProxyType
 from pathlib import Path
 
@@ -133,6 +133,21 @@ class DatabaseInterface(Protocol):
 
     @property
     @abstractmethod
+    def hash_repr(self) -> str:
+        """
+        Get the representation of the database that identifies the content of its cache.
+
+        Implementations must cover every setting that changes what lands in the cache and must
+        exclude filesystem locations, so that the same content hashes the same on any nodes.
+
+        Returns:
+          str: Content representation of the database.
+        """
+
+        raise NotImplementedError("Database must define hash_repr!")
+
+    @property
+    @abstractmethod
     def taxonomy(self) -> DatabaseTaxonomy:
         """
         Get the taxonomies the database labels are built with.
@@ -159,13 +174,25 @@ class DatabaseInterface(Protocol):
     @abstractmethod
     def database_hash(self) -> str:
         """
-        Get a hash for the database based on its version and scenarios.
+        Get a hash for the database based on the content of its cache.
 
         Returns:
           str: Hash of the database.
         """
 
         raise NotImplementedError("Database must define database_hash!")
+
+    @property
+    @abstractmethod
+    def cache_file_path(self) -> Path:
+        """
+        Get the path of the record table cache.
+
+        Returns:
+          Path: Record table cache file.
+        """
+
+        raise NotImplementedError("Database must define cache_file_path!")
 
     @abstractmethod
     def load_polars_scenario_dataframe(self) -> pl.DataFrame:

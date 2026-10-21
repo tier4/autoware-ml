@@ -104,14 +104,7 @@ class DataModule(L.LightningDataModule):
     def __init__(
         self,
         splitter: SplitterInterface,
-        train_sources: Sequence[Mapping[str, Any]] | None,
-        validation_sources: Sequence[Mapping[str, Any]] | None,
-        test_sources: Sequence[Mapping[str, Any]] | None,
-        predict_sources: Sequence[Mapping[str, Any]] | None,
-        train_dataset: Callable[..., BaseDataset] | None,
-        validation_dataset: Callable[..., BaseDataset] | None,
-        test_dataset: Callable[..., BaseDataset] | None,
-        predict_dataset: Callable[..., BaseDataset] | None,
+        sources: Mapping[str, DatasetSource],
         train_dataloader: DataLoaderConfig | None,
         validation_dataloader: DataLoaderConfig | None,
         test_dataloader: DataLoaderConfig | None,
@@ -121,15 +114,18 @@ class DataModule(L.LightningDataModule):
         ...
 ```
 
-A `DatasetSource` names one database, whether its boxes (`det3d`) and semantic masks (`seg3d`)
-supervise the run, and how many times its frames appear in one epoch (`repeat`). A split with
-several sources mixes their corpora. A source with a task turned off still serves that task,
-with an empty box set or ignored point labels, so every sample of the split collates with the
-others. All sources of a datamodule must share one taxonomy.
+A `DatasetSource` names one database, the dataset of every split it serves, and how many times
+its frames appear in one training epoch (`repeat`). A split is served by the sources declaring a
+dataset for it, concatenated in declaration order, so several sources mix their corpora. A
+dataset reads the database of its source and declares whether the boxes (`det3d_supervised`) and
+semantic masks (`seg3d_supervised`) of that corpus supervise the run. A dataset with a task
+turned off still serves that task, with an empty box set or ignored point labels, so every
+sample of the split collates with the others. All sources of a datamodule must share one
+taxonomy.
 
-The dataset factory of a split is a partial dataset config. The datamodule completes it with
-the root path, the records and the supervision of each source, and concatenates the datasets
-of a split in declaration order.
+The datasets are instantiated by Hydra without records. In `setup()` the datamodule calls
+`bind(records)` on the dataset of every source, which returns a copy serving the records of that
+database in the split, and concatenates the bound copies of a split in declaration order.
 
 ### Dataset
 
@@ -194,50 +190,54 @@ dataset applies it in `__getitem__()`.
 
 Public transform targets should reference the concrete implementation module, for example
 `autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile` or
-`autoware_ml.transforms.point_cloud.geometry.GlobalBEVRandomFlip`. Avoid package-level re-export
+`autoware_ml.transforms.camera_lidar.geometry.GlobalBEVRandomFlip`. Avoid package-level re-export
 layers in `__init__.py`. Imports and Hydra `_target_` paths should point at the implementation
 module directly.
 
 ### Runtime Data Preprocessing
 
-Runtime preprocessing is a model-owned pipeline attached through
-`BaseModel.set_data_preprocessing(...)`. It runs on the target device after
-Lightning moves the batch over, and before the model's `forward()`.
+Runtime preprocessing is a `DataPreprocessor` the model owns. The task config declares it at
+the top level as `data_preprocessor`, the builders instantiate it and pass it to the model's
+constructor. It runs on the target device after Lightning moves the batch over, and before the
+model's `forward()`.
 
 ```python
-class DataPreprocessing:
-    def __init__(self, pipeline: Sequence[Any] = ()) -> None:
-        self.pipeline = list(pipeline)
+class DataPreprocessor:
+    def __init__(self, preprocessor_modules: Sequence[DataPreprocessorModule]) -> None:
+        self.preprocessor_modules = tuple(preprocessor_modules)
 
     def __call__(self, batch: ModelGTBatch, *, is_training: bool) -> ModelBatchInputs:
         batch_inputs = ModelBatchInputs.from_gt_batch(batch)
-        for layer in self.pipeline:
-            batch_inputs = layer(batch_inputs, is_training=is_training)
+        for module in self.preprocessor_modules:
+            batch_inputs = module(batch_inputs, is_training=is_training)
         return batch_inputs
 ```
 
-The model inputs are a typed `ModelBatchInputs`. It holds the collated `ModelGTBatch` and one
-field for each kind of preprocessed feature, such as `voxels_data`,
-`range_view_data` and `image_data`. Every layer returns the inputs with the features it
-computes added or the data it changes replaced.
+Every module implements `DataPreprocessorModule`: it takes a `ModelBatchInputs` and the keyword
+`is_training`, and returns the inputs with the features it computes added or the data it
+changes replaced. The model inputs are a typed `ModelBatchInputs`. It holds the collated
+`ModelGTBatch` and one field for each kind of preprocessed feature, such as `voxels_data`,
+`range_view_data` and `image_data`.
 
-`BaseModel.on_after_batch_transfer()` applies the pipeline. Output-side
+`ModuleBaseModel.on_after_batch_transfer()` applies the preprocessor. Output-side
 shaping (e.g., logits -> probabilities, voxel-to-point scatter) lives
 **inside the model**, not in a framework pipeline: each model handles it in
-its own `forward()`, `compute_metrics()`, and `predict_outputs()`. Keeping
-this logic in the model class avoids invisible load-bearing dependencies
+its own `forward()`, `compute_metrics()`, `build_eval_output()` and `decode_outputs()`.
+Keeping this logic in the model class avoids invisible load-bearing dependencies
 between config composition and metric correctness.
 
 ### Model
 
-All supported models inherit from `BaseModel` (extending `LightningModule`),
+All supported models inherit from `ModuleBaseModel` (extending `LightningModule`),
 which provides a standard interface and a set of override hooks for
 task-specific behavior:
 
 ```python
-class BaseModel(MetricEvalMixin, L.LightningModule, ABC):
+class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
     def __init__(
         self,
+        log_dict_configs: LogDictConfigs,
+        data_preprocessor: DataPreprocessor,
         optimizer: Callable[..., Optimizer] | None = None,
         scheduler: Callable[[Optimizer], LRScheduler] | None = None,
         optimizer_group_overrides: Mapping[str, Mapping[str, Any]] | None = None,
@@ -246,31 +246,33 @@ class BaseModel(MetricEvalMixin, L.LightningModule, ABC):
     ):
         ...
 
-    @abstractmethod
-    def forward(self, **kwargs: Any) -> Any:
-        ...
+    def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
+        ...  # abstract
 
-    @abstractmethod
-    def forward_inputs(self, batch_inputs: ModelBatchInputs) -> dict[str, Any]:
-        ...
-
-    @abstractmethod
     def compute_metrics(
-        self, batch_inputs: ModelBatchInputs, outputs: Any
-    ) -> dict[str, torch.Tensor]:
+        self, multi_task_batch_inputs: ModelBatchInputs, multi_task_outputs: ModelOutputs
+    ) -> Mapping[str, torch.Tensor]:
+        ...  # abstract, returns at least "loss"
+
+    def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> dict[str, Any]:
+        ...  # the flat dict the metric suites read, empty by default
+
+    def decode_outputs(
+        self, multi_task_batch_inputs: ModelBatchInputs, outputs: ModelOutputs
+    ) -> ModelPredictions:
+        ...  # abstract, used by the predict step
+
+    def get_log_batch_size(self, multi_task_batch_inputs: ModelBatchInputs) -> int | None:
         ...
 
-    def set_data_preprocessing(self, data_preprocessing: DataPreprocessing) -> None:
+    def build_optimizer_groups(self) -> Mapping[str, Sequence[torch.nn.Parameter]]:
         ...
 
-    def predict_outputs(self, batch_inputs: ModelBatchInputs, outputs: Any) -> Any:
-        ...
+    def build_export_spec(self, multi_task_batch_inputs: ModelBatchInputs) -> ExportSpec:
+        ...  # required by deploy
 
-    def get_log_batch_size(self, batch_inputs: ModelBatchInputs) -> int:
-        ...
-
-    def build_export_spec(self, batch_inputs: ModelBatchInputs) -> ExportSpec:
-        ...
+    def build_export_specs(self, multi_task_batch_inputs: ModelBatchInputs) -> dict[str, ExportSpec]:
+        ...  # one spec per deployable module, "end_to_end" by default
 
     def configure_optimizers(self) -> Optimizer | dict[str, Any]:
         ...
@@ -279,21 +281,23 @@ class BaseModel(MetricEvalMixin, L.LightningModule, ABC):
 The base class handles:
 
 - **Unified step logic** - All models share the same training, validation, test, and predict execution path
-- **Explicit forward inputs** - `forward_inputs()` picks the tensors `forward()` reads from the typed model inputs
-- **Runtime data preprocessing** - Applies the model-owned preprocessing pipeline after batch transfer
-- **Metric logging** - Logs metrics to Lightning's logger with proper prefixes
-- **Predict step** - Runs forward and formats predictions via `predict_outputs()`
+- **Runtime data preprocessing** - Applies the `DataPreprocessor` of the model after batch transfer
+- **Metric logging** - Logs every entry of `compute_metrics()` under the stage prefix per epoch,
+  additionally per training step when `log_dict_configs` asks for it, and feeds
+  `build_eval_output()` into the attached metric suites at validation and test
+- **Predict step** - Runs forward and formats predictions via `decode_outputs()`
 - **Export contract** - Every model builds its own export specification from the model inputs
+- **Example input** - Collates the first training sample as the example input so the model
+  summary reports FLOPs
 
-Models can have **any internal architecture**. `forward()` takes the plain tensors the network
-reads, the same tensors the deployment export traces, and returns a typed `ModelOutputs` with the
-head outputs of every task the model predicts. `predict_outputs()` decodes them into a typed
-`ModelPredictions`. Both hold one optional field per task, so a single task model fills one field
-and a multi task model fills several. `forward_inputs()` maps the typed model
-inputs to those tensors, so the model states every input it needs and a missing one raises.
-Specialized models can override hooks such as `predict_outputs()`, `get_log_batch_size()`,
-`set_data_preprocessing()`, or `build_export_spec()` without leaving the shared framework
-contract.
+Models can have **any internal architecture**. `forward()` takes the typed `ModelBatchInputs`
+and returns a typed `ModelOutputs` with the head outputs of every task the model predicts.
+`decode_outputs()` decodes them into a typed `ModelPredictions`. Both hold one optional field
+per task, so a single task model fills one field and a multi task model fills several. The
+deployment export cannot trace those dataclasses, so `build_export_spec()` flattens the batch
+into the tensor arguments of the exported graph. Specialized models can override hooks such as
+`decode_outputs()`, `build_eval_output()`, `get_log_batch_size()`, `build_optimizer_groups()`
+or `build_export_spec()` without leaving the shared framework contract.
 
 ### Deployment Pipeline
 
@@ -338,7 +342,7 @@ Configuration is done through the `deploy` section in task configs.
 
 | Extension Point | How                                                                                           |
 | --------------- | --------------------------------------------------------------------------------------------- |
-| New model       | Subclass `BaseModel`, implement `forward()` and `compute_metrics()`, override hooks as needed |
+| New model       | Subclass `ModuleBaseModel`, implement `forward()` and `compute_metrics()`, override hooks     |
 | New dataset     | Subclass `BaseDatabase` and `BaseDataset`, add task datasets deriving `BaseDatasetTask`       |
 | New transform   | Subclass `BaseTransform`, implement `transform()`                                             |
 | New task        | Create config in `configs/tasks/`                                                             |

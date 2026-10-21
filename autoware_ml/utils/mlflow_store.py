@@ -20,15 +20,48 @@ import socket
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Sequence
 
+from hydra import compose, initialize_config_dir, initialize_config_module
+from hydra.core.global_hydra import GlobalHydra
 import mlflow
 from mlflow.entities import ViewType
 from mlflow.tracking import MlflowClient
+from omegaconf import DictConfig
 
-from autoware_ml.utils.cli.helpers import infer_user_config_name
-from autoware_ml.utils.mlflow_helpers import MLFLOW_PARENT_RUN_ID, artifact_uri_to_path
+from autoware_ml.utils.cli.helpers import resolve_config_reference
+from autoware_ml.utils.mlflow_helpers import (
+    MLFLOW_PARENT_RUN_ID,
+    artifact_uri_to_path,
+    resolve_experiment_name,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def compose_config_reference(
+    config_value: str, prefix: str, overrides: Sequence[str] = ()
+) -> DictConfig:
+    """Compose the config a CLI config reference points at.
+
+    Args:
+        config_value: Config value from CLI, either a bundled config path or a filesystem path.
+        prefix: Bundled config namespace prefix such as ``tasks``.
+        overrides: Hydra overrides applied on top.
+
+    Returns:
+        The composed config.
+    """
+    resolved_config_path, resolved_config_name, extra_config_overrides = resolve_config_reference(
+        config_value, prefix
+    )
+    compose_overrides = [*overrides, *extra_config_overrides]
+    GlobalHydra.instance().clear()
+    if resolved_config_path is None:
+        with initialize_config_module(version_base=None, config_module="autoware_ml.configs"):
+            return compose(config_name=resolved_config_name, overrides=compose_overrides)
+    with initialize_config_dir(version_base=None, config_dir=resolved_config_path):
+        return compose(config_name=resolved_config_name, overrides=compose_overrides)
 
 
 def normalize_experiment_name(experiment_name: str | None, config_name: str | None) -> str | None:
@@ -36,7 +69,8 @@ def normalize_experiment_name(experiment_name: str | None, config_name: str | No
 
     Args:
         experiment_name: Explicit MLflow experiment name.
-        config_name: User-facing config name used as shorthand.
+        config_name: Task config used as shorthand. The config is composed and its experiment
+            name resolved the way the CLI and the entrypoints resolve it.
 
     Returns:
         Resolved experiment name, or ``None`` when neither input is provided.
@@ -44,7 +78,7 @@ def normalize_experiment_name(experiment_name: str | None, config_name: str | No
     if experiment_name is not None and config_name is not None:
         raise ValueError("Use either --experiment-name or --config-name, not both.")
     if config_name is not None:
-        return infer_user_config_name(config_name, "tasks").replace("/", "_")
+        return resolve_experiment_name(compose_config_reference(config_name, "tasks"))
     return experiment_name
 
 

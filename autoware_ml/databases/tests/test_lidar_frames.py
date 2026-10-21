@@ -20,6 +20,7 @@ import numpy as np
 import pytest
 
 from autoware_ml.databases.schemas.lidar_frames import LidarFrameDataModel
+from autoware_ml.databases.schemas.utils import relative_to_database_root
 
 _SCENE = "db_j6gen2_v4/00fa6989-549a-4ab2-b5ea-aa07f416d821/0"
 _POINTCLOUD_TAIL = "data/LIDAR_CONCAT/00000.pcd.bin"
@@ -48,49 +49,81 @@ def build_lidar_frame(
         lidar_sensor_id="sensor",
         lidar_sensor_channel_name="LIDAR_CONCAT",
         lidar_timestamp_seconds=0.0,
-        lidar_pointcloud_path=pointcloud_path,
-        lidar_pointcloud_source_path=source_path,
+        lidar_pointcloud_relative_path=pointcloud_path,
+        lidar_pointcloud_source_relative_path=source_path,
         lidar_pointcloud_num_features=5,
         lidar_sensor_to_ego_pose_matrix=np.eye(4),
         lidar_frame_ego_pose_to_global_matrix=np.eye(4),
         lidar_sensor_to_lidar_sweep_matrix=np.eye(4),
-        lidar_pointcloud_semantic_mask_path=semantic_mask_path,
+        lidar_pointcloud_semantic_mask_relative_path=semantic_mask_path,
     )
 
 
-def test_relative_paths_keep_the_scene_whatever_root_generated_them() -> None:
+def test_relative_paths_round_trip_through_the_record_table() -> None:
     frame = build_lidar_frame(
-        pointcloud_path=f"/mnt/some_other_host/t4dataset/{_SCENE}/{_POINTCLOUD_TAIL}",
-        source_path=f"/mnt/some_other_host/t4dataset/{_SCENE}/{_POINTCLOUD_TAIL}",
-        semantic_mask_path=f"/workspace/data/t4dataset/pseudo_large/{_SCENE}/{_MASK_TAIL}",
+        pointcloud_path=f"{_SCENE}/{_POINTCLOUD_TAIL}",
+        source_path=f"{_SCENE}/{_POINTCLOUD_TAIL}",
+        semantic_mask_path=f"{_SCENE}/{_MASK_TAIL}",
     )
-    # Only the part below the database root is kept. It includes the scene, so files with the
-    # same name in two scenes stay apart.
-    assert frame.lidar_pointcloud_relative_path == f"{_SCENE}/{_POINTCLOUD_TAIL}"
-    assert frame.lidar_pointcloud_source_relative_path == f"{_SCENE}/{_POINTCLOUD_TAIL}"
-    assert frame.lidarseg_pointcloud_semantic_mask_relative_path == f"{_SCENE}/{_MASK_TAIL}"
+
+    restored = LidarFrameDataModel.load_from_dictionary(frame.to_dictionary())
+
+    assert restored.lidar_pointcloud_relative_path == f"{_SCENE}/{_POINTCLOUD_TAIL}"
+    assert restored.lidar_pointcloud_source_relative_path == f"{_SCENE}/{_POINTCLOUD_TAIL}"
+    assert restored.lidar_pointcloud_semantic_mask_relative_path == f"{_SCENE}/{_MASK_TAIL}"
 
 
 def test_optional_paths_stay_absent() -> None:
-    frame = build_lidar_frame(
-        pointcloud_path=f"/workspace/data/t4dataset/pseudo_large/{_SCENE}/{_POINTCLOUD_TAIL}"
-    )
+    frame = build_lidar_frame(pointcloud_path=f"{_SCENE}/{_POINTCLOUD_TAIL}")
     assert frame.lidar_pointcloud_source_relative_path is None
-    assert frame.lidarseg_pointcloud_semantic_mask_relative_path is None
+    assert frame.lidar_pointcloud_semantic_mask_relative_path is None
 
 
-def test_a_scene_relative_mask_path_is_rejected() -> None:
-    # A mask path relative to the scene loses the scene, so the dataset would read the mask of
-    # another scene. The record must be rejected.
-    frame = build_lidar_frame(
-        pointcloud_path=f"/workspace/data/t4dataset/pseudo_large/{_SCENE}/{_POINTCLOUD_TAIL}",
-        semantic_mask_path=_MASK_TAIL,
-    )
-    with pytest.raises(ValueError, match="lidar_pointcloud_semantic_mask_path"):
-        frame.lidarseg_pointcloud_semantic_mask_relative_path
+@pytest.mark.parametrize(
+    "field_name, paths",
+    [
+        (
+            "lidar_pointcloud_relative_path",
+            {"pointcloud_path": f"/mnt/host/{_SCENE}/{_POINTCLOUD_TAIL}"},
+        ),
+        (
+            "lidar_pointcloud_source_relative_path",
+            {
+                "pointcloud_path": f"{_SCENE}/{_POINTCLOUD_TAIL}",
+                "source_path": f"/mnt/host/{_SCENE}/{_POINTCLOUD_TAIL}",
+            },
+        ),
+        (
+            "lidar_pointcloud_semantic_mask_relative_path",
+            {
+                "pointcloud_path": f"{_SCENE}/{_POINTCLOUD_TAIL}",
+                "semantic_mask_path": f"/workspace/data/t4dataset/{_SCENE}/{_MASK_TAIL}",
+            },
+        ),
+    ],
+)
+def test_an_absolute_path_is_rejected(field_name: str, paths: dict[str, str]) -> None:
+    # A path stored with the root of the generating machine is only valid on that machine, so
+    # the record is rejected instead of binding the cache to one root
+    with pytest.raises(ValueError, match=f"{field_name} .* is absolute"):
+        build_lidar_frame(**paths)
 
 
-def test_a_scene_relative_pointcloud_path_is_rejected() -> None:
-    frame = build_lidar_frame(pointcloud_path=_POINTCLOUD_TAIL)
-    with pytest.raises(ValueError, match="lidar_pointcloud_path"):
-        frame.lidar_pointcloud_relative_path
+def test_an_empty_path_is_rejected() -> None:
+    with pytest.raises(ValueError, match="lidar_pointcloud_relative_path is empty"):
+        build_lidar_frame(pointcloud_path="")
+
+
+def test_the_generators_strip_their_own_root() -> None:
+    # Whatever root a generator ran under, the stored path starts below it, so a record keeps
+    # the scene directory and resolves under any root the database is mounted at later
+    for root in ("/mnt/some_other_host/t4dataset", "/workspace/data/t4dataset/pseudo_large"):
+        assert (
+            relative_to_database_root(f"{root}/{_SCENE}/{_POINTCLOUD_TAIL}", root)
+            == f"{_SCENE}/{_POINTCLOUD_TAIL}"
+        )
+
+
+def test_a_file_outside_the_root_cannot_be_stored() -> None:
+    with pytest.raises(ValueError, match="does not lie under the database root"):
+        relative_to_database_root("/elsewhere/samples/LIDAR_TOP/x.pcd.bin", "/data/nuscenes")

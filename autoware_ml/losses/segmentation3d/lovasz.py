@@ -36,8 +36,10 @@ def _lovasz_grad(sorted_ground_truth: torch.Tensor) -> torch.Tensor:
     """
     point_count = len(sorted_ground_truth)
     foreground_total = sorted_ground_truth.sum()
-    intersection = foreground_total - sorted_ground_truth.float().cumsum(0)
-    union = foreground_total + (1 - sorted_ground_truth).float().cumsum(0)
+    # Keep the caller's floating dtype rather than forcing float32, so the loss
+    # also runs in float64 (gradcheck) and mixed precision without a dtype clash.
+    intersection = foreground_total - sorted_ground_truth.cumsum(0)
+    union = foreground_total + (1 - sorted_ground_truth).cumsum(0)
     jaccard = 1.0 - intersection / union
     if point_count > 1:
         jaccard[1:point_count] = jaccard[1:point_count] - jaccard[0:-1]
@@ -134,10 +136,9 @@ class LovaszLoss(_Loss):
             return (probabilities * 0.0).sum()
 
         losses = []
-        for class_index in labels.unique():
+        # `.tolist()` synchronized once. Omitting it would sync per iteration.
+        for class_index in labels.unique().tolist():
             foreground = (labels == class_index).type_as(probabilities)
-            if foreground.sum() == 0:
-                continue
             class_errors = (foreground - probabilities[:, class_index]).abs()
             class_errors, permutation = torch.sort(class_errors, descending=True)
             foreground = foreground[permutation]

@@ -380,6 +380,62 @@ class TestLoadPointsFromFile(SweepLoadingTestCase):
         self.assertAlmostEqual(float(points[0, PointFieldIndex.INTENSITY]), 1.0, places=6)
         self.assertAlmostEqual(float(points[0, PointFieldIndex.X]), 255.0, places=4)
 
+    def test_scaling_is_on_by_default(self) -> None:
+        """The loader scales the intensity unless told otherwise."""
+        self.assertTrue(LoadPointsFromFile().scale_intensity)
+        self.assertTrue(LoadMultiSweepPointsFromFile(past=self.window(num=1)).scale_intensity)
+
+    def test_keeps_the_raw_intensity_when_scaling_is_off(self) -> None:
+        """
+        Input: a frame whose every stored feature holds the full scale the database declares,
+            read with ``scale_intensity=False`` as the Autoware runtime feeds it.
+        Expected: the intensity column keeps its stored value.
+        Check: intensity reads 255.0, like the untouched coordinate.
+        """
+        frames = [self.write_frame(255, time_offset=0.0)]
+        sample = ModelGTSample(
+            lidar_point_cloud_samples=frames,
+            image_samples=None,
+            point_cloud_data=None,
+            camera_image_data=None,
+            detection3d_gt_bboxes_3d=None,
+            segmentation3d_gt_sample=None,
+        )
+
+        loaded = LoadPointsFromFile(use_dim=(0, 1, 2, 3), scale_intensity=False)(sample)
+
+        assert loaded.point_cloud_data is not None
+        points = loaded.point_cloud_data.points
+        self.assertAlmostEqual(float(points[0, PointFieldIndex.INTENSITY]), 255.0, places=4)
+        self.assertAlmostEqual(float(points[0, PointFieldIndex.X]), 255.0, places=4)
+
+    def test_multi_sweep_loader_keeps_the_raw_sweep_intensity_when_scaling_is_off(self) -> None:
+        """
+        Input: a current frame and one past sweep both storing the full scale intensity, loaded
+            with scaling off on both loaders.
+        Expected: the appended sweep points keep the raw intensity like the current frame.
+        Check: every intensity reads 255.0.
+        """
+        frames = [self.write_frame(255, time_offset=0.0), self.write_frame(255, time_offset=0.1)]
+        sample = ModelGTSample(
+            lidar_point_cloud_samples=frames,
+            image_samples=None,
+            point_cloud_data=None,
+            camera_image_data=None,
+            detection3d_gt_bboxes_3d=None,
+            segmentation3d_gt_sample=None,
+        )
+        current = LoadPointsFromFile(use_dim=(0, 1, 2, 3), scale_intensity=False)(sample)
+
+        loaded = LoadMultiSweepPointsFromFile(
+            past=self.window(num=1), use_dim=(0, 1, 2, 3), scale_intensity=False
+        )(current)
+
+        assert loaded.point_cloud_data is not None
+        intensities = loaded.point_cloud_data.points[:, PointFieldIndex.INTENSITY]
+        self.assertEqual(len(intensities), 2 * NUM_POINTS)
+        self.assertTrue(torch.allclose(intensities, torch.full_like(intensities, 255.0)))
+
     def test_the_labels_leave_with_the_points_removed_around_the_origin(self) -> None:
         """
         Input: a labeled frame with one point inside the removal radius and two outside it.

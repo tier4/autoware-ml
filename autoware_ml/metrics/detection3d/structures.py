@@ -2,7 +2,7 @@
 
 ``Detection3DSample`` is the per-frame input. ``MatchCurve`` carries one
 class's score-ordered matching results and ``CurveMetrics`` its AP-style
-summary. The memoizing ``DetectionState`` that orchestrates the matching lives
+summary. The memoizing ``Detection3DState`` that orchestrates the matching lives
 in :mod:`autoware_ml.metrics.detection3d.matching`.
 """
 

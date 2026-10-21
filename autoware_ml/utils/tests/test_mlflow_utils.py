@@ -14,9 +14,11 @@
 
 """Tests for shared MLflow helpers."""
 
+import json
 from datetime import datetime
 from pathlib import Path
 
+import pytest
 from mlflow.tracking import MlflowClient
 from omegaconf import OmegaConf
 
@@ -24,12 +26,15 @@ from autoware_ml.utils.mlflow_helpers import (
     build_run_tags,
     configure_logger,
     generate_artifact_location,
+    generate_experiment_name,
     generate_hydra_run_dir,
     generate_run_name,
     load_run_context,
     load_run_metadata,
     log_config_params,
     prepare_run_context,
+    resolve_experiment_name,
+    resolve_parent_run_id,
     resolve_tracking_uri,
     sanitize_mlflow_param_key,
     sanitize_mlflow_param_keys,
@@ -37,22 +42,72 @@ from autoware_ml.utils.mlflow_helpers import (
 )
 
 SAMPLE_CONFIG_NAME = "calibration_status/calibration_status_classifier/resnet18_t4dataset_j6gen2"
-SAMPLE_EXPERIMENT_NAME = (
-    "calibration_status_calibration_status_classifier_resnet18_t4dataset_j6gen2"
-)
+SAMPLE_EXPERIMENT_GROUP_NAME = "calibration_status/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base"
+SAMPLE_EXPERIMENT_LEAF = "resnet18_t4dataset_j6gen2"
+SAMPLE_EXPERIMENT_NAME = f"{SAMPLE_EXPERIMENT_GROUP_NAME}/{SAMPLE_EXPERIMENT_LEAF}"
+SAMPLE_EXPERIMENT_UID = "2026.03.17.09.00.00"
+SAMPLE_RUN_NAME = f"train_{SAMPLE_EXPERIMENT_LEAF}_{SAMPLE_EXPERIMENT_UID}"
 
 
-class TestRunNaming:
-    """Tests for MLflow run naming."""
+def _prepare(tracking_uri: str, config_name: str = SAMPLE_CONFIG_NAME, stage: str = "train"):
+    """Prepare a run the way the CLI and the builder do, with the shared naming functions."""
+    return prepare_run_context(
+        tracking_uri,
+        config_name,
+        hydra_dir=None,
+        stage=stage,
+        experiment_name=SAMPLE_EXPERIMENT_NAME,
+        run_name=generate_run_name(stage, SAMPLE_EXPERIMENT_NAME, SAMPLE_EXPERIMENT_UID),
+        started_at=datetime(2026, 3, 17, 9, 0, 0),
+    )
 
-    def test_generate_run_name(self) -> None:
-        run_name = generate_run_name(
-            SAMPLE_CONFIG_NAME,
-            "train",
-            datetime(2026, 3, 17, 9, 0, 0),
+
+class TestExperimentNaming:
+    """Tests for the single experiment and run naming functions."""
+
+    def test_generate_experiment_name_joins_group_and_name(self) -> None:
+        name = generate_experiment_name(SAMPLE_EXPERIMENT_GROUP_NAME, SAMPLE_EXPERIMENT_LEAF)
+
+        assert name == SAMPLE_EXPERIMENT_NAME
+
+    def test_generate_experiment_name_keeps_slashes_and_trims_edges(self) -> None:
+        name = generate_experiment_name("centerpoint/t4_v2/", "/gen1_base")
+
+        assert name == "centerpoint/t4_v2/gen1_base"
+
+    @pytest.mark.parametrize(
+        "group,name", [("", "gen1_base"), ("centerpoint/t4_v2", ""), ("/", "x")]
+    )
+    def test_generate_experiment_name_rejects_empty_parts(self, group: str, name: str) -> None:
+        with pytest.raises(ValueError, match="non-empty"):
+            generate_experiment_name(group, name)
+
+    def test_resolve_experiment_name_reads_the_config_keys(self) -> None:
+        cfg = OmegaConf.create(
+            {
+                "experiment_group_name": SAMPLE_EXPERIMENT_GROUP_NAME,
+                "experiment_name": SAMPLE_EXPERIMENT_LEAF,
+            }
         )
 
-        assert run_name == "train:resnet18_t4dataset_j6gen2:2026-03-17/09-00-00"
+        assert resolve_experiment_name(cfg) == SAMPLE_EXPERIMENT_NAME
+
+    @pytest.mark.parametrize(
+        "cfg",
+        [
+            {"experiment_name": "gen1_base"},
+            {"experiment_group_name": "???", "experiment_name": "gen1_base"},
+            {"experiment_group_name": "centerpoint", "experiment_name": "???"},
+        ],
+    )
+    def test_resolve_experiment_name_rejects_a_config_without_both_keys(self, cfg: dict) -> None:
+        with pytest.raises(ValueError, match="experiment_group_name"):
+            resolve_experiment_name(OmegaConf.create(cfg))
+
+    def test_generate_run_name_uses_stage_leaf_and_uid(self) -> None:
+        run_name = generate_run_name("train", SAMPLE_EXPERIMENT_NAME, SAMPLE_EXPERIMENT_UID)
+
+        assert run_name == SAMPLE_RUN_NAME
 
 
 class TestRunMetadata:
@@ -111,12 +166,12 @@ class TestRunTags:
         configure_logger(
             logger_cfg,
             experiment_name=SAMPLE_EXPERIMENT_NAME,
-            run_name="train:resnet18_t4dataset_j6gen2:2026-03-17/09-00-00",
+            run_name=SAMPLE_RUN_NAME,
             tags={"stage": "train"},
         )
 
         assert logger_cfg.experiment_name == SAMPLE_EXPERIMENT_NAME
-        assert logger_cfg.run_name == "train:resnet18_t4dataset_j6gen2:2026-03-17/09-00-00"
+        assert logger_cfg.run_name == SAMPLE_RUN_NAME
         assert logger_cfg.tags == {"stage": "train", "owner": "alice"}
         assert logger_cfg.tracking_uri.startswith("sqlite:///")
 
@@ -194,37 +249,59 @@ class TestArtifactLayout:
         resolved = resolve_tracking_uri("sqlite:///mlruns/mlflow.db")
         assert resolved == f"sqlite:///{(work_dir / 'mlruns' / 'mlflow.db').resolve()}"
 
-    def test_generate_artifact_location_uses_semantic_config_path(self, tmp_path: Path) -> None:
+    def test_generate_artifact_location_is_keyed_on_the_experiment_name(
+        self, tmp_path: Path
+    ) -> None:
         tracking_uri = f"sqlite:///{tmp_path / 'mlruns' / 'mlflow.db'}"
-        artifact_location = generate_artifact_location(SAMPLE_CONFIG_NAME, tracking_uri)
-        assert artifact_location == ((tmp_path / "mlruns" / SAMPLE_CONFIG_NAME).resolve().as_uri())
+        artifact_location = generate_artifact_location(SAMPLE_EXPERIMENT_NAME, tracking_uri)
+        assert artifact_location == (
+            (tmp_path / "mlruns" / SAMPLE_EXPERIMENT_NAME).resolve().as_uri()
+        )
 
     def test_generate_hydra_run_dir_uses_run_id_when_available(self, tmp_path: Path) -> None:
         tracking_uri = f"sqlite:///{tmp_path / 'mlruns' / 'mlflow.db'}"
         hydra_dir = generate_hydra_run_dir(
-            SAMPLE_CONFIG_NAME,
+            SAMPLE_EXPERIMENT_NAME,
             tracking_uri=tracking_uri,
             run_id="abc123",
         )
-        assert hydra_dir == tmp_path / "mlruns" / SAMPLE_CONFIG_NAME / "abc123" / "hydra"
+        assert hydra_dir == (
+            tmp_path / "mlruns" / SAMPLE_EXPERIMENT_NAME / "abc123" / "artifacts" / "hydra"
+        )
 
-    def test_prepare_run_context_creates_run_under_semantic_artifact_root(
+    def test_generate_hydra_run_dir_without_a_run_is_dated_under_the_experiment(
         self, tmp_path: Path
     ) -> None:
         tracking_uri = f"sqlite:///{tmp_path / 'mlruns' / 'mlflow.db'}"
-        run_context = prepare_run_context(
-            tracking_uri,
-            SAMPLE_CONFIG_NAME,
-            hydra_dir=None,
-            stage="train",
+        hydra_dir = generate_hydra_run_dir(
+            SAMPLE_EXPERIMENT_NAME,
+            tracking_uri=tracking_uri,
             started_at=datetime(2026, 3, 17, 9, 0, 0),
         )
+        assert hydra_dir == (
+            tmp_path
+            / "mlruns"
+            / SAMPLE_EXPERIMENT_NAME
+            / "artifacts"
+            / "_hydra"
+            / "2026-03-17"
+            / "09-00-00"
+        )
 
-        expected_root = tmp_path / "mlruns" / SAMPLE_CONFIG_NAME
+    def test_prepare_run_context_keys_experiment_and_artifact_root_on_the_experiment_name(
+        self, tmp_path: Path
+    ) -> None:
+        tracking_uri = f"sqlite:///{tmp_path / 'mlruns' / 'mlflow.db'}"
+        run_context = _prepare(tracking_uri)
+
+        expected_root = tmp_path / "mlruns" / SAMPLE_EXPERIMENT_NAME
+        assert run_context.experiment_name == SAMPLE_EXPERIMENT_NAME
+        assert run_context.run_name == SAMPLE_RUN_NAME
         assert run_context.artifact_dir == expected_root / run_context.run_id / "artifacts"
-        assert run_context.hydra_dir == expected_root / run_context.run_id / "hydra"
+        assert run_context.hydra_dir == expected_root / run_context.run_id / "artifacts" / "hydra"
         assert run_context.tags["artifact_dir"] == str(run_context.artifact_dir)
         assert run_context.tags["hydra_dir"] == str(run_context.hydra_dir)
+        assert run_context.tags["config_name"] == SAMPLE_CONFIG_NAME
 
         client = MlflowClient(tracking_uri=tracking_uri)
         experiment = client.get_experiment_by_name(SAMPLE_EXPERIMENT_NAME)
@@ -232,6 +309,23 @@ class TestArtifactLayout:
         assert experiment.artifact_location == expected_root.resolve().as_uri()
         loaded_context = load_run_context(tracking_uri, run_context.run_id)
         assert loaded_context.hydra_dir == run_context.hydra_dir
+
+    def test_two_configs_with_the_same_experiment_share_one_experiment_and_root(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        Two config files that set the same experiment_group_name and experiment_name are one
+        experiment. Keying the artifact root on the config path used to make the second config
+        fail with "already exists with artifact root".
+        """
+        tracking_uri = f"sqlite:///{tmp_path / 'mlruns' / 'mlflow.db'}"
+
+        first = _prepare(tracking_uri, config_name="calibration_status/classifier/variant_a")
+        second = _prepare(tracking_uri, config_name="calibration_status/classifier/variant_b")
+
+        assert first.experiment_id == second.experiment_id
+        assert first.artifact_dir.parent.parent == second.artifact_dir.parent.parent
+        assert first.tags["config_name"] != second.tags["config_name"]
 
     def test_prepare_run_context_rejects_legacy_artifact_root(self, tmp_path: Path) -> None:
         tracking_uri = f"sqlite:///{tmp_path / 'mlruns' / 'mlflow.db'}"
@@ -247,15 +341,47 @@ class TestArtifactLayout:
         (legacy_artifact_dir / "note.txt").write_text("legacy", encoding="utf-8")
 
         try:
-            prepare_run_context(
-                tracking_uri,
-                SAMPLE_CONFIG_NAME,
-                hydra_dir=None,
-                stage="train",
-                started_at=datetime(2026, 3, 17, 9, 0, 0),
-            )
+            _prepare(tracking_uri)
         except RuntimeError as exc:
             assert SAMPLE_EXPERIMENT_NAME in str(exc)
             assert str(legacy_root) in str(exc)
         else:
             raise AssertionError("Expected RuntimeError for legacy experiment artifact root.")
+
+
+def _train_checkpoint(tmp_path: Path, config_name: str, with_metadata: bool = True) -> Path:
+    run_dir = tmp_path / "run"
+    checkpoint_path = run_dir / "artifacts" / "checkpoints" / "best.ckpt"
+    checkpoint_path.parent.mkdir(parents=True)
+    if with_metadata:
+        (run_dir / "run_metadata.json").write_text(
+            json.dumps(
+                {
+                    "run_id": "train-run",
+                    "experiment_name": "ptv3_det3d_seg3d/t4_v2/j6gen2/voxel012",
+                    "config_name": config_name,
+                    "stage": "train",
+                }
+            ),
+            encoding="utf-8",
+        )
+    return checkpoint_path
+
+
+class TestParentRun:
+    """Tests for the parent run a follow-up stage nests under."""
+
+    def test_resolve_parent_run_id_reads_the_run_next_to_the_checkpoint(
+        self, tmp_path: Path
+    ) -> None:
+        checkpoint = _train_checkpoint(tmp_path, "multi/ptv3/voxel012")
+
+        assert resolve_parent_run_id(checkpoint) == "train-run"
+
+    def test_resolve_parent_run_id_is_none_without_checkpoint_or_metadata(
+        self, tmp_path: Path
+    ) -> None:
+        checkpoint = _train_checkpoint(tmp_path, "multi/ptv3/voxel012", with_metadata=False)
+
+        assert resolve_parent_run_id(None) is None
+        assert resolve_parent_run_id(checkpoint) is None

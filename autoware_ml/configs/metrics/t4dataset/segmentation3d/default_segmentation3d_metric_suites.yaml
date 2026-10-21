@@ -1,0 +1,25 @@
+# Segmentation metric suites, per class, then grouped, then the point-cloud suite.
+- _target_: autoware_ml.metrics.segmentation3d.suite.Segmentation3DConfusionMatrixMetricSuite
+  components: ${metric_params.segmentation3d.components.confusion_components}
+  num_classes: ${class_count:${database.taxonomy.segmentation3d.class_names}}
+  ignore_index: ${database.taxonomy.segmentation3d.ignore_index}
+  class_names: ${database.taxonomy.segmentation3d.class_names}
+  ranges: ${metric_ranges}
+
+- _target_: autoware_ml.metrics.segmentation3d.suite.Segmentation3DConfusionMatrixMetricSuite
+  prefix: seg3d_grouped
+  components: ${metric_params.segmentation3d.components.confusion_components}
+  num_classes: ${class_count:${database.taxonomy.segmentation3d.class_names}}
+  ignore_index: ${database.taxonomy.segmentation3d.ignore_index}
+  class_names: ${database.taxonomy.segmentation3d.class_names}
+  class_groups: ${database.taxonomy.segmentation3d.class_groups}
+  ranges: ${metric_ranges}
+
+- _target_: autoware_ml.metrics.segmentation3d.point_cloud.Segmentation3DPointCloudMetricSuite
+  components: ${metric_params.segmentation3d.components.point_components}
+  grouped_components: ${metric_params.segmentation3d.components.point_components}
+  num_classes: ${class_count:${database.taxonomy.segmentation3d.class_names}}
+  ignore_index: ${database.taxonomy.segmentation3d.ignore_index}
+  class_names: ${database.taxonomy.segmentation3d.class_names}
+  class_groups: ${database.taxonomy.segmentation3d.class_groups}
+  ranges: ${metric_ranges}

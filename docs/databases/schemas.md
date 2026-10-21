@@ -76,21 +76,28 @@ class DatasetRecord(BaseModel, DataModelInterface):
 
 Each list entry is a `LidarFrameDataModel` covering one keyframe or sweep:
 
-| Field                                   | Polars type           | Description                                                |
-| --------------------------------------- | --------------------- | ---------------------------------------------------------- |
-| `lidar_frame_id`                        | `String`              | Sample-data token for this frame                           |
-| `lidar_keyframe`                        | `Boolean`             | `True` for the main keyframe, `False` for sweeps           |
-| `lidar_sensor_id`                       | `String`              | Calibrated-sensor token                                    |
-| `lidar_sensor_channel_name`             | `String`              | LiDAR channel name (e.g. `LIDAR_TOP`)                      |
-| `lidar_timestamp_seconds`               | `Float64`             | Frame timestamp in seconds                                 |
-| `lidar_pointcloud_path`                 | `String`              | Absolute path to the point cloud file                      |
-| `lidar_pointcloud_source_path`          | `String`              | Path to per-point metadata (or null)                       |
-| `lidar_pointcloud_num_features`         | `Int32`               | Number of features per point (configured on the database)  |
-| `lidar_sensor_to_ego_pose_matrix`       | `Array(Float32, 4x4)` | Sensor-to-ego transform                                    |
-| `lidar_frame_ego_pose_to_global_matrix` | `Array(Float32, 4x4)` | Ego-to-global transform for this frame                     |
-| `lidar_sensor_to_lidar_sweep_matrices`  | `Array(Float32, 4x4)` | Sensor-to-sweep transform                                  |
-| `lidar_pointcloud_semantic_mask_path`   | `String`              | LiDAR segmentation mask path (or null)                     |
-| `lidar_pointcloud_t4pack_frame`         | `Struct`              | Location in its t4pack file (or null), see below           |
+| Field                                          | Polars type           | Description                                                  |
+| ---------------------------------------------- | --------------------- | ------------------------------------------------------------ |
+| `lidar_frame_id`                               | `String`              | Sample-data token for this frame                             |
+| `lidar_keyframe`                               | `Boolean`             | `True` for the main keyframe, `False` for sweeps             |
+| `lidar_sensor_id`                              | `String`              | Calibrated-sensor token                                      |
+| `lidar_sensor_channel_name`                    | `String`              | LiDAR channel name (e.g. `LIDAR_TOP`)                        |
+| `lidar_timestamp_seconds`                      | `Float64`             | Frame timestamp in seconds                                   |
+| `lidar_pointcloud_relative_path`               | `String`              | Point cloud file path, relative to the database root         |
+| `lidar_pointcloud_source_relative_path`        | `String`              | Per-point source index path, relative to the root (or null)  |
+| `lidar_pointcloud_num_features`                | `Int32`               | Number of features per point (configured on the database)    |
+| `lidar_sensor_to_ego_pose_matrix`              | `Array(Float32, 4x4)` | Sensor-to-ego transform                                      |
+| `lidar_frame_ego_pose_to_global_matrix`        | `Array(Float32, 4x4)` | Ego-to-global transform for this frame                       |
+| `lidar_sensor_to_lidar_sweep_matrices`         | `Array(Float32, 4x4)` | Sensor-to-sweep transform                                    |
+| `lidar_pointcloud_semantic_mask_relative_path` | `String`              | LiDAR segmentation mask path, relative to the root (or null) |
+| `lidar_pointcloud_t4pack_frame`                | `Struct`              | Location in its t4pack file (or null), see below             |
+
+Every blob path of a record (point clouds, source indexes, semantic masks and the
+`image_relative_path` of the image frames) is stored relative to the root of the database that
+generated the records. Each records generator strips its own root, so a T4 path starts at the
+scene directory, `<db>/<scene_uuid>/<version>/data/...`, and a nuScenes path at `samples/` or
+`sweeps/`. The dataset joins the stored path onto its own `database_root_path` when it reads
+the record, so a cached table stays valid when the database is mounted under another root.
 
 `lidar_pointcloud_t4pack_frame` holds `offset` and `size` (`Int64`, the byte range of the
 compressed frame), `num_points` (`Int64`) and `dtypes` (`List(String)`, the t4pack type of every

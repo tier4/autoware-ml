@@ -25,11 +25,16 @@ class FrameMetaSample(NamedTuple):
         ego2global: 4x4 transform from the frame the points and boxes are expressed in (the
             main lidar frame) to the map frame. It is named after the ``ego2global`` key the
             metrics read; the lidar mounting is already composed in.
-        scene_token: Scene identifier the lanelet map provider resolves to the scene's map.
+        scene_token: Scene identifier of the frame.
+        lanelet_map_path: Path of the scene's lanelet map, resolved by the dataset that serves
+            the frame against its own corpus, so frames of different sources carry the maps of
+            their own roots. ``None`` when the scene or the corpus has no map, which keeps the
+            frame out of the map-backed metric slices.
     """
 
     ego2global: Float32[Tensor, "4 4"]
     scene_token: str
+    lanelet_map_path: str | None = None
 
 
 class FrameMetaBatch(NamedTuple):
@@ -38,10 +43,12 @@ class FrameMetaBatch(NamedTuple):
     Attributes:
         ego2globals: Per-frame 4x4 transforms from the (augmented) lidar frame to the map frame.
         scene_tokens: Per-frame scene identifiers.
+        lanelet_map_paths: Per-frame lanelet map paths, ``None`` for frames without a map.
     """
 
     ego2globals: Float32[Tensor, "batch_size 4 4"]
     scene_tokens: Sequence[str]
+    lanelet_map_paths: Sequence[str | None]
 
     @staticmethod
     def collate_gt_samples(
@@ -87,6 +94,7 @@ class FrameMetaBatch(NamedTuple):
         return FrameMetaBatch(
             ego2globals=torch.stack(ego2globals, dim=0),
             scene_tokens=[frame_meta.scene_token for frame_meta in frame_meta_samples],
+            lanelet_map_paths=[frame_meta.lanelet_map_path for frame_meta in frame_meta_samples],
         )
 
     def to_device(self, device: torch.device) -> FrameMetaBatch:
@@ -99,5 +107,7 @@ class FrameMetaBatch(NamedTuple):
             The batch with its transforms on ``device``.
         """
         return FrameMetaBatch(
-            ego2globals=self.ego2globals.to(device), scene_tokens=self.scene_tokens
+            ego2globals=self.ego2globals.to(device),
+            scene_tokens=self.scene_tokens,
+            lanelet_map_paths=self.lanelet_map_paths,
         )

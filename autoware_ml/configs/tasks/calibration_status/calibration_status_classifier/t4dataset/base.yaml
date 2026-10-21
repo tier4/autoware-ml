@@ -1,0 +1,13 @@
+# @package _global_
+defaults:
+  - ../base
+  - /datamodule@datamodule: t4dataset/default_calibration_status_datamodule
+  - _self_
+
+# Cameras of the T4 recording platforms, one sample each.
+camera_sources:
+  - CAM_FRONT
+  - CAM_FRONT_LEFT
+  - CAM_BACK_LEFT
+  - CAM_FRONT_RIGHT
+  - CAM_BACK_RIGHT

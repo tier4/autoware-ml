@@ -1,7 +1,7 @@
 # @package model.bev_neck
-_target_: autoware_ml.models.detection3d.ptv3.PTv3DetBEVNeck
+_target_: autoware_ml.models.detection3d.ptv3.PTv3Det3DBEVNeck
 fusion:
-  _target_: autoware_ml.models.detection3d.ptv3.PTv3DetFeatureFusion
+  _target_: autoware_ml.models.detection3d.ptv3.PTv3Det3DFeatureFusion
   in_channels: ${model.encoder.enc_channels[4]}
   skip_channels: ${model.encoder.enc_channels[3]}
   out_channels: 256

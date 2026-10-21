@@ -1,0 +1,7 @@
+# @package metric_params.detection3d
+defaults:
+  - components: default_detection3d_components
+  - _self_
+
+# Grouped classes for evaluation, from the detection taxonomy of the database.
+class_groups: ${database.taxonomy.detection3d.class_groups}
