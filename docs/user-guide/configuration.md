@@ -238,7 +238,8 @@ every other step metric, and the `RichProgressBar`, for every task. The `GradNor
 callback logs `train/grad_norm_l2`, the norm of the gradients on every optimizer step, taken after
 AMP unscaling and before `trainer.gradient_clip_val` clips them, so the curve shows how often
 clipping is active; `grad_norm_monitor.norm_type` picks the order, `l1`, `l2` or `inf`, and names
-the logged key. The `ModelSummaryExampleInput` callback sets the first training sample as the
+the logged key. The norm is local to each rank, so the callback fails fit at start under the
+sharded strategies (FSDP, DeepSpeed, model parallel); set `grad_norm_monitor: null` there. The `ModelSummaryExampleInput` callback sets the first training sample as the
 module's example input at fit start, so the model summary reports the FLOPs of one sample. The
 summary runs that forward pass once on every rank. Set `model_summary_example_input: null` to
 skip it. The callback fails fit when the datamodule serves no training sample.

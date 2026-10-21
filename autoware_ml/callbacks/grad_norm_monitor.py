@@ -20,6 +20,8 @@ from enum import StrEnum, auto
 
 from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.callbacks import Callback
+from lightning.pytorch.strategies import DeepSpeedStrategy, FSDPStrategy, ModelParallelStrategy
+from lightning.pytorch.utilities.exceptions import MisconfigurationException
 from torch.nn.utils import get_total_norm
 from torch.optim import Optimizer
 
@@ -56,6 +58,9 @@ class GradNormType(StrEnum):
         return f"train/grad_norm_{self.value}"
 
 
+_SHARDED_STRATEGIES = (DeepSpeedStrategy, FSDPStrategy, ModelParallelStrategy)
+
+
 class GradNormMonitor(Callback):
     """Log the total gradient norm of every optimizer step as ``train/grad_norm_<norm_type>``.
 
@@ -69,7 +74,8 @@ class GradNormMonitor(Callback):
 
     The norm is local to each rank. Under DDP the gradients are already averaged across ranks
     when the hook runs, so every rank sees the same norm. Sharded strategies hold only a
-    shard of the gradients per rank and are not supported.
+    shard of the gradients per rank, so the local norm would be wrong: fit fails at start under
+    FSDP, DeepSpeed and the model-parallel strategy.
 
     The metric is a step metric: it is logged on every optimizer step, and the trainer's
     ``log_every_n_steps`` decides which steps reach the logger.
@@ -85,6 +91,20 @@ class GradNormMonitor(Callback):
         """
         super().__init__()
         self.norm_type = GradNormType(norm_type)
+
+    def on_fit_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        """Reject the strategies that shard the gradients across ranks.
+
+        Raises:
+            MisconfigurationException: When the trainer runs FSDP, DeepSpeed or the
+                model-parallel strategy.
+        """
+        if isinstance(trainer.strategy, _SHARDED_STRATEGIES):
+            raise MisconfigurationException(
+                f"{GradNormMonitor.__name__} takes the norm of the gradients held by each rank, "
+                f"which is only a shard of them under {trainer.strategy.__class__.__name__}. Use a "
+                "non-sharded strategy such as DDP, or set grad_norm_monitor: null."
+            )
 
     def on_before_optimizer_step(
         self, trainer: Trainer, pl_module: LightningModule, optimizer: Optimizer
