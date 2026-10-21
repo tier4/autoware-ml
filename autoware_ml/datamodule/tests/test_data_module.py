@@ -846,6 +846,15 @@ class TestSceneStreaming(MultiSourceTestCase):
 
         self.assertEqual(groups, [[4, 2, 0], [1, 3], [9, 7, 5], [6, 8], [10]])
 
+    def test_an_unbound_dataset_has_no_scenes(self) -> None:
+        """
+        Input: a dataset instantiated without records, as Hydra builds it before setup().
+        Expected: like its length, its scenes exist only once the datamodule binds it.
+        Check: a ValueError naming the binding is raised.
+        """
+        with self.assertRaisesRegex(ValueError, "not bound"):
+            build_dataset(self.streamed_database).scene_index_groups()
+
     def test_scene_streaming_serves_one_sample_per_record(self) -> None:
         """
         Input: a dataset serving two lidar sources of every record as separate samples.

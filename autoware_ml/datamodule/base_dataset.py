@@ -142,8 +142,14 @@ class BaseDataset(Dataset):
             they first appear in the record table.
 
         Raises:
-          ValueError: If every record serves several samples, one per lidar or camera source.
+          ValueError: If the dataset is not bound to records, or if every record serves
+            several samples, one per lidar or camera source.
         """
+        if self.dataset_records_dataframe is None:
+            raise ValueError(
+                "The dataset is not bound to records, so it has no scenes. The datamodule "
+                "binds it in setup()."
+            )
         if self.samples_per_record != 1:
             raise ValueError(
                 "Scene streaming serves one sample per record, but every record of this dataset "
