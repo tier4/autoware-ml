@@ -15,7 +15,7 @@ from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSa
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.models.common.necks.lss_fpn import GeneralizedLSSFPN
 from autoware_ml.models.detection3d.heads.streampetr import StreamPETRHead
-from autoware_ml.models.detection3d.streampetr import StreamPETRDetectionModel
+from autoware_ml.models.detection3d.streampetr import StreamPETRDetection3DModel, _ground_truth
 from autoware_ml.models.detection3d.task_modules.assigners import HungarianAssigner3D
 from autoware_ml.models.detection3d.task_modules.bbox_coders import NMSFreeBBoxCoder3D
 from autoware_ml.models.detection3d.task_modules.streaming import StreamContinuity
@@ -24,10 +24,12 @@ from autoware_ml.models.detection3d.task_modules.match_costs import (
     ClassificationCost,
     IoU3DCost,
 )
+from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.tests.batch_inputs_fixtures import (
     build_batch_inputs,
-    build_detection_gt_batch,
+    build_detection3d_gt_batch,
 )
+from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 
 NUM_CAMS = 6
 IMAGE_HW = (96, 160)
@@ -47,17 +49,19 @@ class _TinyMultiScaleBackbone(torch.nn.Module):
         return c3, c4, c5
 
 
-def _build_model() -> StreamPETRDetectionModel:
-    return StreamPETRDetectionModel(
+def _build_model() -> StreamPETRDetection3DModel:
+    return StreamPETRDetection3DModel(
+        data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
         img_backbone=_TinyMultiScaleBackbone(),
         img_neck=GeneralizedLSSFPN(in_channels=[128, 256, 512], out_channels=128),
         bbox_head=_build_head(),
+        log_dict_configs=LogDictConfigs(prog_bar=False),
     )
 
 
 def _build_head(memory_len: int = 32, topk_proposals: int = 8, num_propagated: int = 8):
     return StreamPETRHead(
-        num_classes=3,
+        class_names=["car", "truck", "bus"],
         in_channels=128,
         hidden_dim=128,
         num_queries=32,
@@ -88,6 +92,7 @@ def _build_head(memory_len: int = 32, topk_proposals: int = 8, num_propagated: i
                 weight=0.25, code_weights=(2.0, 2.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0)
             ),
             iou_cost=IoU3DCost(weight=0.0),
+            point_cloud_range=[-10.0, -10.0, -5.0, 10.0, 10.0, 5.0],
         ),
         point_cloud_range=[-10.0, -10.0, -5.0, 10.0, 10.0, 5.0],
         code_weights=[2.0, 2.0] + [1.0] * 8,
@@ -118,6 +123,7 @@ def _build_frame_meta(
     return FrameMetaBatch(
         ego2globals=torch.eye(4).repeat(batch_size, 1, 1) if ego2globals is None else ego2globals,
         scene_tokens=list(scene_tokens or [f"db/scene_{index}/0" for index in range(batch_size)]),
+        lanelet_map_paths=[None] * batch_size,
         timestamps=torch.tensor(timestamps, dtype=torch.float64),
     )
 
@@ -134,7 +140,7 @@ def _build_batch_inputs(
     batch_size = img.shape[0]
     detection = None
     if gt_boxes is not None and gt_labels is not None:
-        detection = build_detection_gt_batch(gt_boxes, gt_labels)
+        detection = build_detection3d_gt_batch(gt_boxes, gt_labels)
     return build_batch_inputs(
         detection=detection,
         images=_build_images(img),
@@ -149,8 +155,8 @@ def _collated_box(*values: float) -> torch.Tensor:
     return torch.tensor([values], dtype=torch.float32)
 
 
-def _run(model: StreamPETRDetectionModel, batch_inputs: ModelBatchInputs):
-    return model(**model.forward_inputs(batch_inputs))
+def _run(model: StreamPETRDetection3DModel, batch_inputs: ModelBatchInputs):
+    return model(batch_inputs)
 
 
 def test_streampetr_forward_returns_per_layer_decoder_outputs() -> None:
@@ -163,33 +169,50 @@ def test_streampetr_forward_returns_per_layer_decoder_outputs() -> None:
     assert head_outputs.all_bbox_preds.shape == (3, 2, 40, 10)
 
 
-def test_forward_inputs_read_the_images_calibration_and_stream_metadata() -> None:
-    model = _build_model()
+def test_forward_reads_the_calibration_and_the_stream_metadata_of_the_batch() -> None:
+    """The lane memory follows the scene tokens and the poses the batch carries."""
+    model = _build_model().eval()
+    head = model.bbox_head
     ego2global = torch.eye(4)
     ego2global[:3, 3] = torch.tensor([65460.2, 675.7, 715.4])
-    batch_inputs = _build_batch_inputs(
-        torch.randn(1, NUM_CAMS, 3, *IMAGE_HW),
-        timestamps=[1.7e9],
-        scene_tokens=["db/scene_a/0"],
-        gt_boxes=[_collated_box(1.0, 2.0, 0.5, 4.0, 2.0, 1.5, 0.2, 0.3, 0.4, 0.9)],
-        gt_labels=[torch.tensor([1])],
-        ego2globals=ego2global.unsqueeze(0),
+    img = torch.randn(1, NUM_CAMS, 3, *IMAGE_HW)
+
+    with torch.no_grad():
+        _run(model, _build_batch_inputs(img, timestamps=[1.7e9], scene_tokens=["db/scene_a/0"]))
+        _run(
+            model,
+            _build_batch_inputs(
+                img,
+                timestamps=[1.7e9 + 0.1],
+                scene_tokens=["db/scene_a/0"],
+                ego2globals=ego2global.unsqueeze(0),
+            ),
+        )
+
+    assert head.stream_continuity.scene_tokens == ["db/scene_a/0"]
+    assert head.stream_continuity.timestamps.dtype == torch.float64
+    # The bank is stored in the map frame, so the stored pose is the frame's pose.
+    torch.testing.assert_close(head.memory_egopose[0, 0], ego2global)
+
+
+def test_forward_rejects_a_batch_without_images_or_frame_meta() -> None:
+    model = _build_model()
+    with pytest.raises(ValueError, match="images and the frame metadata"):
+        model(build_batch_inputs(images=_build_images(torch.randn(1, NUM_CAMS, 3, *IMAGE_HW))))
+
+
+def test_ground_truth_drops_the_vertical_velocity() -> None:
+    gt_detections = build_detection3d_gt_batch(
+        [_collated_box(1.0, 2.0, 0.5, 4.0, 2.0, 1.5, 0.2, 0.3, 0.4, 0.9)], [torch.tensor([1])]
     )
 
-    inputs = model.forward_inputs(batch_inputs)
+    gt_boxes, gt_labels = _ground_truth(gt_detections)
 
-    assert inputs["img"] is batch_inputs.image_data.images
-    assert inputs["lidar2img"] is batch_inputs.image_data.lidar2images
-    assert inputs["timestamp"].dtype == torch.float64
-    assert list(inputs["scene_tokens"]) == ["db/scene_a/0"]
-    torch.testing.assert_close(
-        inputs["ego_pose_inv"][0] @ ego2global, torch.eye(4), atol=1e-4, rtol=0
-    )
     # The head regresses [x, y, z, l, w, h, yaw, vx, vy]; the vertical velocity is dropped.
     torch.testing.assert_close(
-        inputs["gt_boxes"][0], torch.tensor([[1.0, 2.0, 0.5, 4.0, 2.0, 1.5, 0.2, 0.3, 0.4]])
+        gt_boxes[0], torch.tensor([[1.0, 2.0, 0.5, 4.0, 2.0, 1.5, 0.2, 0.3, 0.4]])
     )
-    assert inputs["gt_labels"][0].dtype == torch.int64
+    assert gt_labels[0].dtype == torch.int64
 
 
 def test_training_step_runs_with_denoising_queries_and_predicts() -> None:
@@ -208,7 +231,7 @@ def test_training_step_runs_with_denoising_queries_and_predicts() -> None:
     loss = model.training_step(batch_inputs, batch_idx=0)
     loss.backward()
     outputs = _run(model, batch_inputs)
-    predictions = model.predict_outputs(batch_inputs, outputs)
+    predictions = model.decode_outputs(batch_inputs, outputs)
 
     assert torch.isfinite(loss)
     assert outputs.detection3d().streampetr_head().denoising is not None
@@ -287,7 +310,7 @@ def _far_pose(x: float, y: float, yaw: float) -> torch.Tensor:
 
 
 def _exported_head_outputs(
-    model: StreamPETRDetectionModel,
+    model: StreamPETRDetection3DModel,
     batch_inputs: ModelBatchInputs,
     pose: torch.Tensor,
     pre_memory: tuple[torch.Tensor, ...],
@@ -304,7 +327,7 @@ def _exported_head_outputs(
     )
     specs = model.build_export_specs(batch_inputs)
     assert list(specs) == ["extract_img_feat", "position_embedding", "pts_head_memory"]
-    # The runtime binds the inverse pose; computed in float64 like forward_inputs does, a
+    # The runtime binds the inverse pose; computed in float64 like forward does, a
     # float32 LU at kilometer scale would move the bank by 1e-4 m and fail the bit-exact
     # comparison for a reason that has nothing to do with the graphs.
     outputs = specs["pts_head_memory"].module(

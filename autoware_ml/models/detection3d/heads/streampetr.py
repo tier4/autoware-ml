@@ -8,6 +8,7 @@ multi-layer decoder supervision, and optional denoising queries.
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import NamedTuple
 
@@ -171,7 +172,7 @@ class StreamPETRHead(nn.Module):
 
     def __init__(
         self,
-        num_classes: int,
+        class_names: Sequence[str],
         in_channels: int,
         hidden_dim: int,
         num_queries: int,
@@ -201,6 +202,8 @@ class StreamPETRHead(nn.Module):
         """Initialize the head.
 
         Args:
+            class_names: Ordered names of the foreground classes. Their count is the number
+                of classification channels.
             memory_len: Entries of the temporal memory bank.
             topk_proposals: Proposals of every frame that enter the bank.
             num_propagated: Bank entries that extend the queries of the next frame; the
@@ -222,7 +225,8 @@ class StreamPETRHead(nn.Module):
                 f"topk_proposals ({topk_proposals}) must cover the {num_propagated} propagated "
                 "entries, which are the strongest proposals of the previous frame."
             )
-        self.num_classes = num_classes
+        self.class_names = list(class_names)
+        self.num_classes = len(self.class_names)
         self.num_queries = num_queries
         self.num_decoder_layers = num_decoder_layers
         self.hidden_dim = hidden_dim

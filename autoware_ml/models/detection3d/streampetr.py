@@ -20,14 +20,14 @@ from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.metrics.base import MetricSuite
-from autoware_ml.models.base import BaseModel
-from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
-from autoware_ml.models.detection3d.feature_extractors import MultiviewImageFeatureExtractor
+from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
 from autoware_ml.models.detection3d.heads.streampetr import StreamPETRHead
 from autoware_ml.models.detection3d.task_modules.streaming import (
     memory_refresh,
     transform_reference_points,
 )
+from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
+from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 from autoware_ml.types.geometry import Box3DFieldIndex
 from autoware_ml.utils.deploy import ExportSpec
 
@@ -50,6 +50,53 @@ def _ground_truth(
     """
     gt_boxes = [boxes[:, : Box3DFieldIndex.VELOCITY_Z] for boxes in gt_detections.valid_bboxes_3d()]
     return gt_boxes, gt_detections.valid_labels_3d()
+
+
+class MultiviewImageFeatureExtractor(nn.Module):
+    """Encode multiview image batches into the neck features the head attends to.
+
+    The submodules keep the ``img_backbone`` / ``img_neck`` names: the checkpoint keys and
+    the AWML converter prefixes are ``image_feature_extractor.img_backbone.*`` and
+    ``image_feature_extractor.img_neck.*``.
+    """
+
+    def __init__(self, img_backbone: nn.Module, img_neck: nn.Module) -> None:
+        """Initialize the multiview image feature extractor.
+
+        Args:
+            img_backbone: Backbone run on every camera image.
+            img_neck: Neck fusing the backbone's scales; its first output feeds the head.
+        """
+        super().__init__()
+        self.img_backbone = img_backbone
+        self.img_neck = img_neck
+
+    def forward(self, image_batch: torch.Tensor) -> torch.Tensor:
+        """Encode multiview image batches into neck features.
+
+        Args:
+            image_batch: Multiview images ``(B, N, C, H, W)``.
+
+        Returns:
+            Primary image neck feature tensor with shape ``(B, N, C, H, W)``.
+
+        Raises:
+            ValueError: If the images are not a ``(B, N, C, H, W)`` tensor.
+        """
+        if image_batch.dim() != 5:
+            raise ValueError(
+                f"Expected image batch with shape (B, N, C, H, W), got {tuple(image_batch.shape)}"
+            )
+        batch_size, num_cams = image_batch.shape[:2]
+        flat_images = image_batch.float().view(batch_size * num_cams, *image_batch.shape[2:])
+        image_features = self.img_backbone(flat_images)
+        if isinstance(image_features, torch.Tensor):
+            image_features = (image_features,)
+        image_features = self.img_neck(image_features)
+        primary_feature = (
+            image_features[0] if isinstance(image_features, (list, tuple)) else image_features
+        )
+        return primary_feature.view(batch_size, num_cams, *primary_feature.shape[1:])
 
 
 class _StreamPETRPositionEmbeddingExportWrapper(nn.Module):
@@ -159,7 +206,7 @@ class _StreamPETRHeadMemoryExportWrapper(nn.Module):
         )
 
 
-class StreamPETRDetectionModel(BaseModel):
+class StreamPETRDetection3DModel(ModuleBaseModel):
     """Compose a camera-based query detector for 3D object detection.
 
     The model wraps the image backbone, image neck, and StreamPETR head inside
@@ -168,9 +215,11 @@ class StreamPETRDetectionModel(BaseModel):
 
     def __init__(
         self,
+        data_preprocessor: DataPreprocessor,
         img_backbone: nn.Module,
         img_neck: nn.Module,
         bbox_head: StreamPETRHead,
+        log_dict_configs: LogDictConfigs,
         optimizer: Callable[..., Optimizer] | None = None,
         scheduler: Callable[[Optimizer], LRScheduler] | None = None,
         optimizer_group_overrides: Mapping[str, Mapping[str, Any]] | None = None,
@@ -180,9 +229,11 @@ class StreamPETRDetectionModel(BaseModel):
         """Initialize StreamPETR.
 
         Args:
+            data_preprocessor: Preprocessor for the model inputs.
             img_backbone: Multiview image backbone.
             img_neck: Image neck producing the tokens the head attends to.
             bbox_head: StreamPETR query head.
+            log_dict_configs: Logging configuration for training and validation.
             optimizer: Optimizer factory.
             scheduler: Scheduler factory.
             optimizer_group_overrides: Optimizer overrides keyed by the groups of
@@ -191,6 +242,8 @@ class StreamPETRDetectionModel(BaseModel):
             metrics: Detection metrics accumulated during validation and test.
         """
         super().__init__(
+            data_preprocessor=data_preprocessor,
+            log_dict_configs=log_dict_configs,
             optimizer=optimizer,
             scheduler=scheduler,
             optimizer_group_overrides=optimizer_group_overrides,
@@ -230,102 +283,65 @@ class StreamPETRDetectionModel(BaseModel):
         """Start new streams for the predict scenes."""
         self._start_streams()
 
-    def forward_inputs(self, batch_inputs: ModelBatchInputs) -> dict[str, Any]:
-        """Pick the images, their calibration and the stream metadata of every frame.
-
-        Args:
-            batch_inputs: Model inputs holding the images and the frame metadata, and in
-                training the boxes that seed the denoising queries.
-
-        Returns:
-            The keyword arguments of :meth:`forward`.
-
-        Raises:
-            ValueError: If the model inputs miss the images or the frame metadata.
-        """
-        image_data = batch_inputs.image_data
-        frame_meta = batch_inputs.multi_task_gt_batch.frame_meta_batch
-        if image_data is None or frame_meta is None:
-            raise ValueError("StreamPETR needs the images and the frame metadata of the batch.")
-        inputs: dict[str, Any] = {
-            "img": image_data.images,
-            "camera_intrinsics": image_data.camera_intrinsics,
-            "lidar2img": image_data.lidar2images,
-            "timestamp": frame_meta.timestamps,
-            "scene_tokens": frame_meta.scene_tokens,
-            "ego_pose": frame_meta.ego2globals,
-            # The poses and the bank are float32 in the map frame, so the geometry resolves
-            # to one ulp of the translation (4 mm at 65 km) however the inverse is computed;
-            # the float64 inverse only keeps the LU from adding its own rounding on top.
-            "ego_pose_inv": torch.linalg.inv(frame_meta.ego2globals.double()).float(),
-        }
-        gt_detections = batch_inputs.multi_task_gt_batch.detection3d_gt_batch
-        if gt_detections is not None:
-            inputs["gt_boxes"], inputs["gt_labels"] = _ground_truth(gt_detections)
-        return inputs
-
-    def forward(
-        self,
-        img: torch.Tensor,
-        camera_intrinsics: torch.Tensor,
-        lidar2img: torch.Tensor,
-        timestamp: torch.Tensor,
-        scene_tokens: Sequence[str],
-        ego_pose: torch.Tensor,
-        ego_pose_inv: torch.Tensor,
-        gt_boxes: list[torch.Tensor] | None = None,
-        gt_labels: list[torch.Tensor] | None = None,
-    ) -> ModelOutputs:
-        """Run the camera backbone and StreamPETR head.
+    def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
+        """Run the camera backbone and StreamPETR head on the images of the batch.
 
         The scene and the time of every frame decide per batch lane whether the head's
         memory carries over from the previous frame, see
         :class:`~autoware_ml.models.detection3d.task_modules.streaming.StreamContinuity`.
+        In training the ground truth boxes of the batch seed the denoising queries.
 
         Args:
-            img: Images ``(batch, num_cams, 3, H, W)``.
-            camera_intrinsics: Augmented intrinsics ``(batch, num_cams, 3, 3)``.
-            lidar2img: Augmented lidar-to-image matrices ``(batch, num_cams, 4, 4)``.
-            timestamp: Sample time of every frame in seconds, float64.
-            scene_tokens: Scene of every frame.
-            ego_pose: Lidar-to-global pose of every frame ``(batch, 4, 4)``.
-            ego_pose_inv: Inverse of ``ego_pose``.
-            gt_boxes: Metric boxes seeding the denoising queries in training.
-            gt_labels: Labels of ``gt_boxes``.
+            multi_task_batch_inputs: Model inputs holding the images, their calibration and
+                the frame metadata of every lane.
 
         Returns:
             The StreamPETR head outputs.
+
+        Raises:
+            ValueError: If the model inputs miss the images or the frame metadata.
         """
+        image_data = multi_task_batch_inputs.image_data
+        frame_meta = multi_task_batch_inputs.multi_task_gt_batch.frame_meta_batch
+        if image_data is None or frame_meta is None:
+            raise ValueError("StreamPETR needs the images and the frame metadata of the batch.")
+        gt_boxes = gt_labels = None
+        gt_detections = multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch
+        if gt_detections is not None:
+            gt_boxes, gt_labels = _ground_truth(gt_detections)
+
+        img = image_data.images
         img_features = self.image_feature_extractor(img)
         head_outputs = self.bbox_head(
             img_features=img_features,
             image_height=int(img.shape[-2]),
             image_width=int(img.shape[-1]),
-            camera_intrinsics=camera_intrinsics,
-            lidar2img=lidar2img,
-            timestamp=timestamp,
-            prev_exists=self.bbox_head.stream_continuity(scene_tokens, timestamp),
-            ego_pose=ego_pose,
-            ego_pose_inv=ego_pose_inv,
+            camera_intrinsics=image_data.camera_intrinsics,
+            lidar2img=image_data.lidar2images,
+            timestamp=frame_meta.timestamps,
+            prev_exists=self.bbox_head.stream_continuity(
+                frame_meta.scene_tokens, frame_meta.timestamps
+            ),
+            ego_pose=frame_meta.ego2globals,
+            # The poses and the bank are float32 in the map frame, so the geometry resolves
+            # to one ulp of the translation (4 mm at 65 km) however the inverse is computed;
+            # the float64 inverse only keeps the LU from adding its own rounding on top.
+            ego_pose_inv=torch.linalg.inv(frame_meta.ego2globals.double()).float(),
             gt_boxes=gt_boxes,
             gt_labels=gt_labels,
         )
         return ModelOutputs(
-            detection3d_head_outputs=Detection3DHeadOutputs(
-                center_head_outputs=None,
-                transfusion_head_outputs=None,
-                streampetr_head_outputs=head_outputs,
-            )
+            detection3d_head_outputs=Detection3DHeadOutputs(streampetr_head_outputs=head_outputs)
         )
 
     def compute_metrics(
-        self, batch_inputs: ModelBatchInputs, outputs: ModelOutputs
+        self, multi_task_batch_inputs: ModelBatchInputs, multi_task_outputs: ModelOutputs
     ) -> dict[str, torch.Tensor]:
         """Compute the head's multi-layer detection and denoising losses.
 
         Args:
-            batch_inputs: Model inputs holding the ground truth boxes.
-            outputs: StreamPETR head outputs.
+            multi_task_batch_inputs: Model inputs holding the ground truth boxes.
+            multi_task_outputs: StreamPETR head outputs.
 
         Returns:
             Loss dictionary produced by the detection head.
@@ -333,32 +349,36 @@ class StreamPETRDetectionModel(BaseModel):
         Raises:
             ValueError: If the batch carries no detection ground truth.
         """
-        gt_detections = batch_inputs.multi_task_gt_batch.detection3d_gt_batch
+        gt_detections = multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch
         if gt_detections is None:
             raise ValueError("StreamPETR losses need the 3D detection ground truth of the batch.")
         gt_boxes, gt_labels = _ground_truth(gt_detections)
-        return self.bbox_head.loss(outputs.detection3d().streampetr_head(), gt_boxes, gt_labels)
+        return self.bbox_head.loss(
+            multi_task_outputs.detection3d().streampetr_head(), gt_boxes, gt_labels
+        )
 
-    def predict_outputs(
-        self, batch_inputs: ModelBatchInputs, outputs: ModelOutputs
+    def decode_outputs(
+        self, multi_task_batch_inputs: ModelBatchInputs, outputs: ModelOutputs
     ) -> ModelPredictions:
         """Decode the last decoder layer into per-sample detections.
 
         Args:
-            batch_inputs: Model inputs of the batch.
+            multi_task_batch_inputs: Model inputs of the batch.
             outputs: StreamPETR head outputs.
 
         Returns:
             Decoded prediction results.
         """
-        del batch_inputs
+        del multi_task_batch_inputs
         return ModelPredictions(
             detection3d_predictions=self.bbox_head.predict(outputs.detection3d().streampetr_head())
         )
 
     def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> dict[str, Any]:
         """Decode detections and pair them with ground truth for metrics."""
-        return detection_eval_output(self.predict_outputs(batch, outputs), batch)
+        return detection3d_eval_output(
+            predictions=self.decode_outputs(batch, outputs), batch_inputs=batch
+        )
 
     def build_optimizer_groups(self) -> dict[str, list[nn.Parameter]]:
         """Split parameters into the image backbone and the remaining modules."""
