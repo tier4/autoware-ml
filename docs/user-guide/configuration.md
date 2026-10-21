@@ -234,7 +234,11 @@ Tasks validated by steps rather than epochs, or whose loss is the only training 
 
 The root also turns on the `IterationTimer` and `DataProcessingTimer` callbacks, which log the
 step and data loading times on every batch, written out at `trainer.log_every_n_steps` like
-every other step metric, and the `RichProgressBar`, for every task. The `ModelSummaryExampleInput` callback sets the first training sample as the
+every other step metric, and the `RichProgressBar`, for every task. The `GradNormMonitor`
+callback logs `train/grad_norm_l2`, the norm of the gradients on every optimizer step, taken after
+AMP unscaling and before `trainer.gradient_clip_val` clips them, so the curve shows how often
+clipping is active; `grad_norm_monitor.norm_type` picks the order, `l1`, `l2` or `inf`, and names
+the logged key. The `ModelSummaryExampleInput` callback sets the first training sample as the
 module's example input at fit start, so the model summary reports the FLOPs of one sample. The
 summary runs that forward pass once on every rank. Set `model_summary_example_input: null` to
 skip it. The callback fails fit when the datamodule serves no training sample.
