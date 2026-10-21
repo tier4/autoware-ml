@@ -327,6 +327,21 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
         pixi shell --environment dev
         ```
 
+    === "Contributor + rulebook"
+
+        The `dev` environment plus `rulebook_torch`, the sparse convolution
+        library PTv3 trains on under mixed precision (see
+        [PointTransformerV3](../models/ptv3.md#mixed-precision)). Pixi builds it
+        from the pinned commit of its repository, which is private for now, so
+        this environment needs read access to `tier4/spconv-replacement` over
+        SSH. Nothing else differs: the other environments run PTv3 on `spconv`.
+
+        ```bash
+        pixi install --locked --environment rulebook
+        pixi run --environment rulebook setup-project
+        pixi shell --environment rulebook
+        ```
+
     The separate `docs` environment is reserved for documentation-only
     workflows and CI - you do not need to install it manually.
 

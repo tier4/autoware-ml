@@ -68,6 +68,30 @@ autoware-ml train \
     +trainer.fast_dev_run=true
 ```
 
+### Mixed precision
+
+The submanifold convolutions come from `autoware_ml/ops/submanifold_conv.py`,
+which runs them on `spconv` or, when the `rulebook_torch` package is installed
+(the `rulebook` pixi environment, see
+[Installation](../getting-started/installation.md)), on rulebook. The choice is
+made per call: rulebook under autocast and for 16-bit features, `spconv`
+for fp32 operands outside autocast and on the CPU. `spconv` has no autocast
+support of its own, so under `trainer.precision=16-mixed` it runs the
+convolutions in fp32 with autocast disabled, while rulebook runs 16-bit kernels
+with fp32 accumulation and hands the fp32 master weights fp32 gradients. In
+practice:
+
+- `trainer.precision=32-true` (the default) trains on `spconv` in both
+  environments, exactly as before.
+- `trainer.precision=16-mixed` in the `rulebook` environment trains the
+  convolutions on rulebook. Checkpoints are interchangeable between the two
+  libraries, and export always goes through `spconv`.
+- Both libraries cache their index structure under the layer's `indice_key`, and
+  neither reads the other's, so the layers sharing a key must run on one library
+  within a forward pass. Wrap whole stages in `torch.autocast("cuda",
+  enabled=False)` if a stage must stay in fp32, never part of one; a split stage
+  fails at the first affected layer with a `TypeError` that says so.
+
 ## Evaluation
 
 ```bash
