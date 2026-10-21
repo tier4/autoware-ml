@@ -18,6 +18,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
+import numpy as np
 import torch
 from torchvision.io import write_png
 
@@ -257,6 +258,75 @@ class TestLoadImagesFromFile(unittest.TestCase):
                 camera_image_data.image_augmentation_matrices,
                 torch.eye(4, dtype=torch.float32).repeat(1, 1, 1),
             )
+        )
+
+
+class TestLoadImagesFromFileShuffleOrder(unittest.TestCase):
+    """Train-time shuffling of the camera order."""
+
+    def setUp(self) -> None:
+        """Write one image per camera whose pixels and focal length name the camera."""
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.image_samples = []
+        for index in range(5):
+            path = Path(directory.name) / f"CAM_{index}.png"
+            write_png(torch.full((3, 4, 6), index * 10, dtype=torch.uint8), str(path))
+            camera_intrinsic = torch.eye(3) * (index + 1)
+            camera_intrinsic[2, 2] = 1.0
+            self.image_samples.append(
+                ImageSample(
+                    image_path=str(path),
+                    camera_name=f"CAM_{index}",
+                    timestamp=float(index),
+                    camera_intrinsic=camera_intrinsic,
+                    lidar2cam=torch.eye(4),
+                    lidar2image=torch.eye(4),
+                    distortion_model="",
+                    distortion_coefficients=torch.zeros(0),
+                )
+            )
+
+    def load(self, loader: LoadImagesFromFile) -> ModelGTSample:
+        """Load the images of the five cameras through the given loader."""
+        return loader(
+            ModelGTSample(
+                lidar_point_cloud_samples=None,
+                image_samples=self.image_samples,
+                point_cloud_data=None,
+                camera_image_data=None,
+                detection3d_gt_bboxes_3d=None,
+                segmentation3d_gt_sample=None,
+            )
+        )
+
+    def test_every_camera_field_follows_the_shuffled_order(self) -> None:
+        loader = LoadImagesFromFile(shuffle_order=True)
+        names = [f"CAM_{index}" for index in range(5)]
+        np.random.seed(3)
+        shuffled_seen = False
+        for _ in range(8):
+            sample = self.load(loader)
+            images = sample.camera_image_data
+            self.assertEqual(sorted(images.camera_names), names)
+            self.assertEqual(
+                [image.camera_name for image in sample.image_samples], list(images.camera_names)
+            )
+            shuffled_seen |= list(images.camera_names) != names
+            for position, name in enumerate(images.camera_names):
+                index = names.index(name)
+                self.assertAlmostEqual(
+                    float(images.images[position].mean()) * 255.0, index * 10, places=3
+                )
+                self.assertEqual(float(images.camera_intrinsics[position, 0, 0]), index + 1)
+                self.assertEqual(float(images.timestamps[position]), float(index))
+        self.assertTrue(shuffled_seen)
+
+    def test_keeps_the_record_order_by_default(self) -> None:
+        sample = self.load(LoadImagesFromFile())
+
+        self.assertEqual(
+            list(sample.camera_image_data.camera_names), [f"CAM_{index}" for index in range(5)]
         )
 
 
