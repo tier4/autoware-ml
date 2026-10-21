@@ -1297,3 +1297,98 @@ def test_export_input_builders_reject_a_multi_sample_batch() -> None:
     for builder in (prepare_ptv3_export_inputs, build_ptv3_export_context):
         with pytest.raises(ValueError, match="single-sample"):
             builder(model, double)
+
+
+def _batch_point(counts: torch.Tensor) -> Point:
+    """Return a batch whose serialization order is the identity, for readable indices."""
+    num_points = int(counts.sum())
+    order = torch.arange(num_points).unsqueeze(0)
+    return Point(
+        feat=torch.zeros(num_points, 32),
+        grid_coord=torch.zeros(num_points, 3, dtype=torch.long),
+        offset=torch.cumsum(counts, dim=0),
+        serialized_order=order,
+        serialized_inverse=order.clone(),
+    )
+
+
+def test_batched_padding_on_a_hand_computed_batch() -> None:
+    """Window 4, samples of 6, 2, 0 and 8 tokens.
+
+    A sample above one window is padded to a multiple of it and its padding slots
+    borrow the tokens one window back, so the final window is a full sliding
+    window over the last 4 tokens. Samples of at most one window are not padded.
+
+    | sample | tokens | slots  | pad (token per slot)  |
+    | ------ | ------ | ------ | --------------------- |
+    | 0      | 0..5   | 0..7   | 0 1 2 3 4 5 2 3       |
+    | 1      | 6..7   | 8..9   | 6 7                   |
+    | 2      | -      | -      |                       |
+    | 3      | 8..15  | 10..17 | 8 9 10 11 12 13 14 15 |
+    """
+    attention = _build_attention(4)
+    attention.enable_flash = True
+    pad, unpad, cu_seqlens = attention._get_padding_and_inverse(
+        _batch_point(torch.tensor([6, 2, 0, 8]))
+    )
+
+    assert pad.tolist() == [0, 1, 2, 3, 4, 5, 2, 3, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    assert unpad.tolist() == [0, 1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+    assert cu_seqlens.tolist() == [0, 4, 8, 10, 14, 18]
+    assert cu_seqlens.dtype == torch.int32
+
+
+@pytest.mark.parametrize("patch_size", [4, 16, 48])
+@pytest.mark.parametrize("seed", range(8))
+def test_batched_padding_satisfies_its_definition(patch_size: int, seed: int) -> None:
+    """Checked per sample on random batches that contain an exact multiple of the
+    window, a sample below one window and an empty sample."""
+    generator = torch.Generator().manual_seed(seed)
+    counts = torch.randint(0, 5 * patch_size, (6,), generator=generator)
+    counts[1] = patch_size * 2  # an exact multiple: no padding at all
+    counts[2] = patch_size // 2  # below one window: left as is
+    counts[3] = 0  # an empty sample
+    attention = _build_attention(patch_size)
+    attention.enable_flash = True
+    pad, unpad, cu_seqlens = attention._get_padding_and_inverse(_batch_point(counts))
+
+    # Every token has a slot, and the slot holds that token.
+    assert unpad.numel() == int(counts.sum())
+    assert torch.equal(pad[unpad], torch.arange(unpad.numel()))
+
+    token_start, slot_start = 0, 0
+    expected_window_starts = []
+    for count in counts.tolist():
+        padded = count if count <= patch_size else math.ceil(count / patch_size) * patch_size
+        sample_tokens = torch.arange(token_start, token_start + count)
+        sample_slots = pad[slot_start : slot_start + padded]
+        # The real tokens come first, in order; every slot holds a token of this sample.
+        assert torch.equal(sample_slots[:count], sample_tokens)
+        assert torch.equal(
+            unpad[token_start : token_start + count], torch.arange(slot_start, slot_start + count)
+        )
+        if padded > count:
+            # The last window holds exactly the final `patch_size` tokens (rotated: the
+            # real tail comes first, the borrowed tokens after it).
+            assert torch.equal(
+                sample_slots[-patch_size:].sort().values, sample_tokens[-patch_size:]
+            )
+        expected_window_starts += range(slot_start, slot_start + padded, patch_size)
+        token_start += count
+        slot_start += padded
+
+    assert pad.numel() == slot_start
+    assert cu_seqlens.tolist() == expected_window_starts + [slot_start]
+    assert cu_seqlens.dtype == torch.int32
+
+
+def test_attention_blocks_of_a_stage_share_one_padding() -> None:
+    """Two blocks over the same point compute the padding once."""
+    attention = _build_attention(4)
+    point = _batch_point(torch.tensor([6, 2, 8]))
+    with patch.object(
+        SerializedAttention, "_get_padding_and_inverse", wraps=attention._get_padding_and_inverse
+    ) as spy:
+        attention(point)
+        _build_attention(4)(point)
+        assert spy.call_count == 1
