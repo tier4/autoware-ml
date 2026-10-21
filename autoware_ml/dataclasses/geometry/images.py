@@ -95,6 +95,30 @@ class ImageGTBatch(NamedTuple):
             calibration_statuses=calibration_statuses,
         )
 
+    def augmented_camera_intrinsics(self) -> Float32[Tensor, "batch_size num_cameras 3 3"]:
+        """
+        Compose the intrinsics of the augmented images, the batched counterpart of
+        ``BaseImages.augmented_camera_intrinsics``.
+
+        The image-space augmentation acts on the pixels, so it is applied after the raw
+        intrinsics: ``K_aug = A @ K`` with ``A`` the 3x3 pixel affine read back from
+        ``image_augmentation_matrices`` (see ``BaseImages.image_augmentation_pixel_affines``).
+        The translation of a crop sits in the last column of the 4x4 matrix, so the top-left
+        3x3 block alone would lose it. ``lidar2images`` is composed from these intrinsics.
+
+        Returns:
+          Float32[Tensor, "batch_size num_cameras 3 3"]: The intrinsics of ``images``.
+        """
+        matrices = self.image_augmentation_matrices
+        pixel_affines = (
+            torch.eye(3, dtype=matrices.dtype, device=matrices.device)
+            .expand(*matrices.shape[:-2], 3, 3)
+            .clone()
+        )
+        pixel_affines[..., :2, :2] = matrices[..., :2, :2]
+        pixel_affines[..., :2, 2] = matrices[..., :2, 3]
+        return pixel_affines @ self.camera_intrinsics
+
     def fused_images(
         self,
     ) -> Float32[Tensor, "batch_size*num_cameras num_fused_channels height width"]:

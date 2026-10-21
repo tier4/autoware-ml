@@ -125,19 +125,54 @@ def _build_head(memory_len: int = 32, topk_proposals: int = 8, num_propagated: i
     )
 
 
-def _build_images(img: torch.Tensor) -> ImageGTBatch:
-    """Image batch with identity calibration for the given ``(B, N, 3, H, W)`` images."""
+def _build_images(
+    img: torch.Tensor,
+    camera_intrinsics: torch.Tensor | None = None,
+    pixel_affines: torch.Tensor | None = None,
+    lidar2cams: torch.Tensor | None = None,
+) -> ImageGTBatch:
+    """Image batch for the given ``(B, N, 3, H, W)`` images, identity calibration by default.
+
+    ``pixel_affines`` ``(B, N, 3, 3)`` are the image-space augmentations applied to the raw
+    pixels; ``lidar2images`` is composed from the augmented intrinsics as the loaders do.
+    """
     batch_size, num_cams = img.shape[:2]
     identity_4x4 = torch.eye(4).expand(batch_size, num_cams, 4, 4).clone()
+    if camera_intrinsics is None:
+        camera_intrinsics = torch.eye(3).expand(batch_size, num_cams, 3, 3).clone()
+    if pixel_affines is None:
+        pixel_affines = torch.eye(3).expand(batch_size, num_cams, 3, 3).clone()
+    if lidar2cams is None:
+        lidar2cams = identity_4x4.clone()
+    augmentation_matrices = identity_4x4.clone()
+    augmentation_matrices[..., :2, :2] = pixel_affines[..., :2, :2]
+    augmentation_matrices[..., :2, 3] = pixel_affines[..., :2, 2]
+    augmented_intrinsics = pixel_affines @ camera_intrinsics
+    homogeneous_intrinsics = identity_4x4.clone()
+    homogeneous_intrinsics[..., :3, :3] = augmented_intrinsics
     return ImageGTBatch(
         images=img,
         depth_maps=None,
-        camera_intrinsics=torch.eye(3).expand(batch_size, num_cams, 3, 3).clone(),
-        image_augmentation_matrices=identity_4x4.clone(),
-        lidar2images=identity_4x4.clone(),
-        lidar2cams=identity_4x4.clone(),
+        camera_intrinsics=camera_intrinsics,
+        image_augmentation_matrices=augmentation_matrices,
+        lidar2images=homogeneous_intrinsics @ lidar2cams,
+        lidar2cams=lidar2cams,
         calibration_statuses=None,
     )
+
+
+def _resize_crop_flip_affines(batch_size: int) -> torch.Tensor:
+    """Per-camera pixel affines of a resize, a bottom crop and a flip of every other camera."""
+    affines = torch.eye(3).repeat(batch_size, NUM_CAMS, 1, 1)
+    for index in range(NUM_CAMS):
+        scale = 0.5 + 0.01 * index
+        affines[:, index, 0, 0] = scale
+        affines[:, index, 1, 1] = scale
+        affines[:, index, 1, 2] = -20.0 - index
+        if index % 2 == 1:
+            flip = torch.tensor([[-1.0, 0.0, IMAGE_HW[1] - 1.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+            affines[:, index] = flip @ affines[:, index]
+    return affines
 
 
 def _build_frame_meta(
@@ -347,7 +382,7 @@ def _exported_head_outputs(
     img_features = model.image_feature_extractor(img)
     pos_embed, cone = head.position_embedding(
         img_features,
-        batch_inputs.image_data.camera_intrinsics,
+        batch_inputs.image_data.augmented_camera_intrinsics(),
         *IMAGE_HW,
         img2lidar=torch.inverse(batch_inputs.image_data.lidar2images),
     )
@@ -512,6 +547,59 @@ def test_every_token_carries_the_focal_length_of_its_own_camera() -> None:
     expected = (focal_lengths / 1e3).repeat_interleave(tokens_per_camera)
     torch.testing.assert_close(cone[0, :, 0], expected)
     torch.testing.assert_close(cone[0, :, 1], expected)
+
+
+def test_position_embedding_and_export_see_the_intrinsics_of_the_augmented_images() -> None:
+    """The batch carries the raw intrinsics; the head and the graph need the augmented ones.
+
+    Regression test: with the raw intrinsics the cone focal input is off by the resize factor
+    (3.9x on the production recipe) and the exported ``intrinsics`` no longer match what the
+    runtime binds, which composes the resize into the intrinsics it hands the graph.
+    """
+    model = _build_model().eval()
+    head = model.bbox_head
+    batch_size = 2
+    raw_intrinsics = torch.eye(3).repeat(batch_size, NUM_CAMS, 1, 1)
+    raw_intrinsics[..., 0, 0] = 1000.0
+    raw_intrinsics[..., 1, 1] = 1100.0
+    raw_intrinsics[..., 0, 2] = IMAGE_HW[1]
+    raw_intrinsics[..., 1, 2] = IMAGE_HW[0]
+    lidar2cams = torch.eye(4).repeat(batch_size, NUM_CAMS, 1, 1)
+    lidar2cams[..., :3, 3] = torch.randn(batch_size, NUM_CAMS, 3)
+    image_data = _build_images(
+        torch.randn(batch_size, NUM_CAMS, 3, *IMAGE_HW),
+        camera_intrinsics=raw_intrinsics,
+        pixel_affines=_resize_crop_flip_affines(batch_size),
+        lidar2cams=lidar2cams,
+    )
+    batch_inputs = build_batch_inputs(images=image_data, frame_meta=_build_frame_meta([0.0, 0.0]))
+    expected = image_data.augmented_camera_intrinsics()
+    # The augmented intrinsics are what lidar2images carries on top of the extrinsics.
+    torch.testing.assert_close(
+        (image_data.lidar2images @ torch.inverse(image_data.lidar2cams))[..., :3, :3],
+        expected,
+        atol=1e-3,
+        rtol=1e-5,
+    )
+    assert not torch.allclose(expected, raw_intrinsics)
+
+    seen: dict[str, torch.Tensor] = {}
+    original = head.position_embedding
+
+    def spy(img_features, camera_intrinsics, *args, **kwargs):
+        seen["intrinsics"] = camera_intrinsics
+        return original(img_features, camera_intrinsics, *args, **kwargs)
+
+    head.position_embedding = spy
+    with torch.no_grad():
+        _run(model, batch_inputs)
+    head.position_embedding = original
+    torch.testing.assert_close(seen["intrinsics"], expected)
+
+    with torch.no_grad():
+        specs = model.build_export_specs(batch_inputs)
+    # The export binds the first sample's augmented intrinsics, padded to 4x4.
+    torch.testing.assert_close(specs["position_embedding"].args[1][..., :3, :3], expected[:1])
 
 
 def test_phase_hooks_start_new_streams() -> None:

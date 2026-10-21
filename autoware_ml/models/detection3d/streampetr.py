@@ -318,7 +318,9 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
             img_features=img_features,
             image_height=int(img.shape[-2]),
             image_width=int(img.shape[-1]),
-            camera_intrinsics=image_data.camera_intrinsics,
+            # The batch carries the raw intrinsics and the image augmentation apart; the head
+            # and the deployed graph both see the intrinsics of the augmented images.
+            camera_intrinsics=image_data.augmented_camera_intrinsics(),
             lidar2img=image_data.lidar2images,
             timestamp=frame_meta.timestamps,
             prev_exists=self.bbox_head.stream_continuity(
@@ -417,8 +419,9 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
         # keeps every graph constant device-neutral, which ONNX constant
         # folding requires. The first sample of the batch traces the graphs.
         img = image_data.images[:1].cpu()
-        # The runtime binds 4x4 intrinsics and the inverse of the augmented projection.
-        intrinsics = _homogeneous_intrinsics(image_data.camera_intrinsics[:1].cpu())
+        # The runtime binds the 4x4 intrinsics of the resized images and the inverse of the
+        # augmented projection, so both come from the augmented calibration.
+        intrinsics = _homogeneous_intrinsics(image_data.augmented_camera_intrinsics()[:1].cpu())
         img2lidar = torch.inverse(image_data.lidar2images[:1].cpu())
         num_cams = img.shape[1]
         image_height, image_width = int(img.shape[-2]), int(img.shape[-1])
