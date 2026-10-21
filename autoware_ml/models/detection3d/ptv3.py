@@ -390,7 +390,7 @@ class _PTv3Detection3DExportModule(PTv3EncoderExportBase):
         voxels: torch.Tensor,
         num_points_per_voxel: torch.Tensor,
         grid_coord: torch.Tensor,
-        serialized_order: torch.Tensor,
+        patch_order: torch.Tensor,
         serialized_inverse: torch.Tensor,
         *serialized_pooling_inputs: torch.Tensor,
     ) -> tuple[torch.Tensor, ...]:
@@ -399,7 +399,7 @@ class _PTv3Detection3DExportModule(PTv3EncoderExportBase):
             voxels,
             num_points_per_voxel,
             grid_coord,
-            serialized_order,
+            patch_order,
             serialized_inverse,
             *serialized_pooling_inputs,
         )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import math
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -23,6 +24,8 @@ from autoware_ml.models.tests.batch_inputs_fixtures import (
 )
 from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
     build_inputs,
+    build_points,
+    build_preprocessor,
     build_ptv3_encoder,
     build_seg3d_head,
     build_seg3d_model,
@@ -33,6 +36,7 @@ from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     PointTransformerV3Encoder,
     SerializedAttention,
     SerializedPooling,
+    build_patch_order,
     build_serialized_pooling_meta,
 )
 from autoware_ml.models.segmentation3d.encoders.voxel import (
@@ -48,6 +52,10 @@ from autoware_ml.models.segmentation3d.heads.ptv3 import (
 from autoware_ml.models.segmentation3d.ptv3 import PTv3Segmentation3DModel
 from autoware_ml.models.segmentation3d.ptv3_base import (
     build_ptv3_encoder_dynamic_axes,
+    build_ptv3_export_context,
+    export_patch_sizes,
+    prepare_ptv3_export_inputs,
+    require_single_sample_export_batch,
     validate_serialization_geometry,
 )
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
@@ -235,12 +243,14 @@ def test_serialized_attention_export_mode_keeps_a_static_window_below_capacity()
     )
     attention.disable_flash()
     attention.export_mode = True
+    serialized_order = torch.arange(3).reshape(1, 3)
     point = Point(
         {
             "feat": torch.randn(3, 32),
             "grid_coord": torch.randint(0, 8, (3, 3), dtype=torch.int32),
-            "serialized_order": torch.arange(3).reshape(1, 3),
+            "serialized_order": serialized_order,
             "serialized_inverse": torch.arange(3).reshape(1, 3),
+            "patch_order": build_patch_order(serialized_order, patch_size=4),
             "offset": torch.tensor([3], dtype=torch.long),
         }
     )
@@ -761,14 +771,14 @@ def test_ptv3_encoder_dynamic_axes_follow_generated_pooling_inputs() -> None:
         "voxels",
         "num_points_per_voxel",
         "grid_coord",
-        "serialized_order",
+        "patch_order",
         "serialized_inverse",
+        "serialized_pooling_0_patch_order",
         "serialized_pooling_0_indices",
         "serialized_pooling_0_indptr",
         "serialized_pooling_0_cluster",
         "serialized_pooling_0_head_indices",
         "serialized_pooling_0_grid_coord",
-        "serialized_pooling_0_serialized_order",
         "serialized_pooling_0_serialized_inverse",
         "serialized_pooling_1_grid_coord",
     ]
@@ -778,8 +788,12 @@ def test_ptv3_encoder_dynamic_axes_follow_generated_pooling_inputs() -> None:
     assert dynamic_axes["voxels"] == {0: "num_voxels"}
     assert dynamic_axes["num_points_per_voxel"] == {0: "num_voxels"}
     assert dynamic_axes["grid_coord"] == {0: "num_voxels"}
-    assert dynamic_axes["serialized_order"] == {1: "num_voxels"}
     assert dynamic_axes["serialized_inverse"] == {1: "num_voxels"}
+    # Padded to whole attention windows, so its extent is its own axis, not the voxel count.
+    assert dynamic_axes["patch_order"] == {1: "padded_voxels"}
+    assert dynamic_axes["serialized_pooling_0_patch_order"] == {
+        1: "serialized_pooling_0_padded_voxels"
+    }
     assert dynamic_axes["serialized_pooling_0_indices"] == {0: "serialized_pooling_0_in_voxels"}
     assert dynamic_axes["serialized_pooling_0_indptr"] == {
         0: "serialized_pooling_0_out_voxels_plus_one"
@@ -789,9 +803,6 @@ def test_ptv3_encoder_dynamic_axes_follow_generated_pooling_inputs() -> None:
         0: "serialized_pooling_0_out_voxels"
     }
     assert dynamic_axes["serialized_pooling_0_grid_coord"] == {0: "serialized_pooling_0_out_voxels"}
-    assert dynamic_axes["serialized_pooling_0_serialized_order"] == {
-        1: "serialized_pooling_0_out_voxels"
-    }
     assert dynamic_axes["serialized_pooling_0_serialized_inverse"] == {
         1: "serialized_pooling_0_out_voxels"
     }
@@ -873,11 +884,12 @@ def test_serialized_pooling_export_mode_uses_precomputed_metadata(monkeypatch) -
 
     train_out = train_module(make_point())
     export_point = make_point()
-    meta, _ = build_serialized_pooling_meta(
+    meta, _, _ = build_serialized_pooling_meta(
         export_point.grid_coord,
         export_point.serialized_code,
         export_point.serialized_order,
         stride=2,
+        patch_size=4,
     )
     export_point["serialized_pooling"] = [meta]
     export_out = export_module(export_point)
@@ -885,7 +897,6 @@ def test_serialized_pooling_export_mode_uses_precomputed_metadata(monkeypatch) -
     for key in (
         "feat",
         "grid_coord",
-        "serialized_order",
         "serialized_inverse",
         "batch",
         "sparse_shape",
@@ -897,6 +908,103 @@ def test_serialized_pooling_export_mode_uses_precomputed_metadata(monkeypatch) -
             torch.testing.assert_close(left, right, msg=f"Mismatch for {key}")
         else:
             assert torch.equal(left, right), f"Mismatch for {key}"
+    # The pooled level hands its blocks the precomputed gather order instead of the bare order.
+    assert torch.equal(
+        export_out["patch_order"], build_patch_order(train_out["serialized_order"], 4)
+    )
+    assert "serialized_order" not in export_out
+    assert "serialized_code" not in export_out
+
+
+def test_serialized_pooling_export_mode_rejects_shuffle_orders() -> None:
+    """Export feeds fixed orders, so an export-mode pooling with shuffling on fails loudly."""
+    pooling = SerializedPooling(6, 8, stride=2, shuffle_orders=True, export_stage_index=0)
+    pooling.export_mode = True
+    with pytest.raises(ValueError, match="shuffle_orders"):
+        pooling(Point())
+
+
+def _reference_patch_order(serialized_order: torch.Tensor, patch_size: int) -> torch.Tensor:
+    """The formula the exported attention block used to trace, kept as the oracle."""
+    n = serialized_order.shape[1]
+    padded_n = ((n + patch_size - 1) // patch_size) * patch_size
+    divisor = max(n, 1)
+    cycle = ((patch_size + divisor - 1) // divisor) * divisor
+    index = torch.arange(padded_n)
+    pad = torch.where(index < n, index, (index - patch_size + cycle) % divisor)
+    return serialized_order[:, pad]
+
+
+@pytest.mark.parametrize(
+    ("count", "patch_size", "padded"),
+    [
+        (3, 4, 4),  # below one window: wraps around
+        (4, 4, 4),  # exactly one window: no padding
+        (8, 4, 8),  # whole windows: no padding
+        (9, 4, 12),  # one token into the last window: borrows three backwards
+        (13, 4, 16),
+        (5, 512, 512),  # deployment window, tiny sample: wraps many times
+        (1, 4, 4),
+    ],
+)
+def test_build_patch_order_matches_the_traced_formula(
+    count: int, patch_size: int, padded: int
+) -> None:
+    """`build_patch_order` equals the formula the export graph used to trace per block."""
+    torch.manual_seed(count)
+    serialized_order = torch.stack([torch.randperm(count), torch.randperm(count)])
+
+    patch_order = build_patch_order(serialized_order, patch_size)
+
+    assert torch.equal(patch_order, _reference_patch_order(serialized_order, patch_size))
+    assert patch_order.shape == (2, padded)
+    assert torch.equal(patch_order[:, :count], serialized_order)
+    assert (patch_order >= 0).all() and (patch_order < count).all()
+
+
+#: (patch_size, serialized_order, expected) literals, shared with the runtime's test
+#: (autoware_universe, autoware_ptv3 `serialized_pooling_metadata_test.cpp`).
+PATCH_ORDER_GOLDEN_VECTORS = [
+    # below one window: the tail wraps around (cycle = 6 for count 3)
+    (4, [[0, 1, 2]], [[0, 1, 2, 2]]),
+    (4, [[2, 0, 1]], [[2, 0, 1, 1]]),
+    # exactly one window and whole windows: nothing to pad
+    (4, [[3, 0, 2, 1]], [[3, 0, 2, 1]]),
+    (4, [[7, 0, 6, 1, 5, 2, 4, 3]], [[7, 0, 6, 1, 5, 2, 4, 3]]),
+    # one token into the last window (k * K + 1): borrows three backwards
+    (4, [[4, 0, 3, 1, 2]], [[4, 0, 3, 1, 2, 0, 3, 1]]),
+    # a partial last window: borrows the two before it
+    (4, [[5, 2, 7, 1, 0, 3]], [[5, 2, 7, 1, 0, 3, 7, 1]]),
+    # two distinct rows are padded independently, from their own entries
+    (
+        4,
+        [[0, 5, 2, 1, 4, 3], [3, 1, 5, 0, 2, 4]],
+        [[0, 5, 2, 1, 4, 3, 2, 1], [3, 1, 5, 0, 2, 4, 5, 0]],
+    ),
+    # the deployed window on a tiny sample: 507 tail slots cycle through the 5 tokens
+    (512, [[4, 0, 3, 1, 2]], [[4, 0, 3, 1, 2] + [1, 2, 4, 0, 3] * 101 + [1, 2]]),
+]
+
+
+@pytest.mark.parametrize(("patch_size", "serialized_order", "expected"), PATCH_ORDER_GOLDEN_VECTORS)
+def test_build_patch_order_golden_vectors(
+    patch_size: int, serialized_order: list[list[int]], expected: list[list[int]]
+) -> None:
+    """Literal vectors shared with the C++ runtime's test."""
+    patch_order = build_patch_order(torch.tensor(serialized_order), patch_size)
+    assert patch_order.tolist() == expected
+
+
+def test_build_patch_order_of_an_empty_level_is_empty() -> None:
+    assert build_patch_order(torch.empty(2, 0, dtype=torch.long), 4).shape == (2, 0)
+
+
+def test_export_patch_sizes_rejects_an_encoder_decoder_mismatch() -> None:
+    model = build_seg3d_model().eval()
+    assert export_patch_sizes(model) == list(model.encoder.enc_patch_sizes)
+    model.seg3d_head.dec_patch_sizes[0] += 1
+    with pytest.raises(ValueError, match="disagree"):
+        export_patch_sizes(model)
 
 
 @pytest.mark.skipif(
@@ -970,10 +1078,10 @@ def test_ptv3_frozen_encoder_supports_decoder_block_backward() -> None:
     assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in model.seg3d_head.parameters())
 
 
-# The tests below call `_get_padding_and_inverse` directly: it is the pure index kernel behind
-# SerializedAttention.forward(), and the fill layout it computes is not observable from the
-# attention outputs (a uniform key multiplicity cancels in the softmax).
-def _build_attention(patch_size: int) -> SerializedAttention:
+# The tests below check the padding index kernels (`build_patch_order`,
+# `_get_padding_and_inverse`) directly: the fill layout they compute is not observable from
+# the attention outputs (a uniform key multiplicity cancels in the softmax).
+def _build_attention(patch_size: int, order_index: int = 0) -> SerializedAttention:
     """Return a non-flash attention module with a fixed window size."""
     attention = SerializedAttention(
         channels=32,
@@ -983,28 +1091,68 @@ def _build_attention(patch_size: int) -> SerializedAttention:
         qk_scale=None,
         attn_drop=0.0,
         proj_drop=0.0,
-        order_index=0,
+        order_index=order_index,
         enable_rpe=False,
         enable_flash=False,
         upcast_attention=False,
         upcast_softmax=False,
     ).eval()
-    # `__init__` zeroes `patch_size` when flash is off, and `forward` - which these
-    # tests bypass to reach `_get_padding_and_inverse` - is what normally sets it.
+    # `__init__` zeroes `patch_size` when flash is off, and `forward` - which the fill tests
+    # bypass to reach `_get_padding_and_inverse` - is what normally sets it.
     attention.patch_size = patch_size
     return attention
 
 
-def _identity_point(num_points: int) -> Point:
-    """Return a point whose serialization order is the identity, for readable indices."""
+def _identity_point(num_points: int, patch_size: int | None = None) -> Point:
+    """Return a point whose serialization order is the identity, for readable indices.
+
+    With ``patch_size`` it also carries the ``patch_order`` an export-mode block reads.
+    """
     order = torch.arange(num_points).unsqueeze(0)
-    return Point(
+    point = Point(
         feat=torch.zeros(num_points, 32),
         grid_coord=torch.zeros(num_points, 3, dtype=torch.long),
         offset=torch.tensor([num_points]),
         serialized_order=order,
         serialized_inverse=order.clone(),
     )
+    if patch_size is not None:
+        point["patch_order"] = build_patch_order(order, patch_size)
+    return point
+
+
+def _export_fill(num_points: int, patch_size: int) -> torch.Tensor:
+    """The exported gather order over an identity serialization: the fill itself."""
+    return build_patch_order(torch.arange(num_points).unsqueeze(0), patch_size)[0]
+
+
+def _reference_training_padding(
+    offset: torch.Tensor, patch_size: int, enable_flash: bool
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    """PTv3's original per-sample slice-copy padding, kept as the training-path oracle."""
+    bincount = torch.diff(offset, prepend=offset.new_zeros(1))
+    padded_bincount = torch.where(
+        bincount > patch_size, (bincount + patch_size - 1) // patch_size * patch_size, bincount
+    )
+    starts = nn.functional.pad(offset, (1, 0))
+    padded_starts = nn.functional.pad(torch.cumsum(padded_bincount, dim=0), (1, 0))
+    pad = torch.arange(int(padded_starts[-1]))
+    unpad = torch.arange(int(starts[-1]))
+    cu_seqlens = []
+    for index in range(offset.numel()):
+        unpad[starts[index] : starts[index + 1]] += padded_starts[index] - starts[index]
+        end = padded_starts[index + 1]
+        if bincount[index] != padded_bincount[index]:
+            tail = end - patch_size + bincount[index] % patch_size
+            pad[tail:end] = pad[tail - patch_size : end - patch_size]
+        pad[padded_starts[index] : end] -= padded_starts[index] - starts[index]
+        cu_seqlens.append(
+            torch.arange(int(padded_starts[index]), int(end), step=patch_size, dtype=torch.int32)
+        )
+    if not enable_flash:
+        return pad, unpad, None
+    total = int(padded_starts[-1])
+    return pad, unpad, nn.functional.pad(torch.cat(cu_seqlens), (0, 1), value=total)
 
 
 @pytest.mark.parametrize("patch_size", [4, 16, 48])
@@ -1016,33 +1164,45 @@ def test_export_fill_reproduces_the_training_fill_above_one_window(patch_size: i
     match that exactly, or every frame whose voxel count is not a multiple of the
     window size drifts from what the model was trained on.
     """
-    attention = _build_attention(patch_size)
     for num_points in range(patch_size + 1, 4 * patch_size + 1):
-        attention.export_mode = False
-        training_pad, _, _ = attention._get_padding_and_inverse(_identity_point(num_points))
-        attention.export_mode = True
-        export_pad, _, _ = attention._get_padding_and_inverse(_identity_point(num_points))
+        training_pad, _, _ = _reference_training_padding(
+            torch.tensor([num_points]), patch_size, enable_flash=False
+        )
+        export_pad = _export_fill(num_points, patch_size)
         assert torch.equal(export_pad, training_pad), f"n={num_points}, K={patch_size}"
+
+
+@pytest.mark.parametrize("enable_flash", [False, True])
+@pytest.mark.parametrize("patch_size", [1, 4, 7])
+def test_training_padding_matches_the_reference_loop(patch_size: int, enable_flash: bool) -> None:
+    """Two-sample batches with empty, sub-window, exact and padded samples."""
+    attention = _build_attention(patch_size)
+    attention.enable_flash = enable_flash  # only selects whether `cu_seqlens` is returned
+    for counts in itertools.product(range(3 * patch_size + 2), repeat=2):
+        offset = torch.tensor(list(itertools.accumulate(counts)))
+        actual = attention._get_padding_and_inverse(Point(offset=offset))
+        expected = _reference_training_padding(offset, patch_size, enable_flash)
+        for name, left, right in zip(("pad", "unpad", "cu_seqlens"), actual, expected):
+            if right is None:
+                assert left is None, f"{name}, counts={counts}"
+            else:
+                assert left.dtype == right.dtype, f"{name}, counts={counts}"
+                assert torch.equal(left, right), f"{name}, counts={counts}"
 
 
 @pytest.mark.parametrize("patch_size", [4, 16, 48])
 def test_export_fill_only_ever_indexes_real_tokens(patch_size: int) -> None:
     """No slot may fall outside ``[0, n)``: every padded slot holds a real token."""
-    attention = _build_attention(patch_size)
-    attention.export_mode = True
     for num_points in range(1, 4 * patch_size + 1):
-        pad, unpad, _ = attention._get_padding_and_inverse(_identity_point(num_points))
+        pad = _export_fill(num_points, patch_size)
         assert int(pad.min()) >= 0, f"n={num_points}"
         assert int(pad.max()) < num_points, f"n={num_points}"
         assert pad.numel() % patch_size == 0, f"n={num_points}"
-        assert unpad.numel() == num_points
 
 
 def test_export_fill_wraps_instead_of_repeating_one_token() -> None:
     """Below one window the fill cycles, so no single key dominates the softmax."""
-    attention = _build_attention(16)
-    attention.export_mode = True
-    pad, _, _ = attention._get_padding_and_inverse(_identity_point(5))
+    pad = _export_fill(5, 16)
 
     _, counts = torch.unique(pad, return_counts=True)
     # Cycling keeps every multiplicity within one of every other; repeating the
@@ -1065,9 +1225,75 @@ def test_export_attention_is_exact_when_the_count_divides_the_window(num_points:
     padded.load_state_dict(reference.state_dict())
 
     def run(attention: SerializedAttention) -> torch.Tensor:
-        point = _identity_point(num_points)
+        point = _identity_point(num_points, patch_size if attention.export_mode else None)
         point.feat = feat.clone()
         with torch.no_grad():
             return attention(point).feat
 
     assert torch.allclose(run(padded), run(reference), atol=1e-5)
+
+
+@pytest.mark.parametrize("num_points", [6, 9])
+def test_export_attention_matches_training_on_a_non_identity_second_order(
+    num_points: int,
+) -> None:
+    """Export wiring of `patch_order[order_index]` and `serialized_inverse[order_index]`.
+
+    Two different non-identity orders, `order_index=1` and a count that does not divide the
+    window, checked against the training path. The training window is the smallest sample's
+    count, so a window-sized filler sample keeps it at ``patch_size``.
+    """
+    torch.manual_seed(1)
+    patch_size = 4
+    feat = torch.randn(num_points, 32)
+    orders = torch.stack([torch.randperm(num_points), torch.randperm(num_points)])
+    assert not torch.equal(orders[0], orders[1])
+
+    export = _build_attention(patch_size, order_index=1)
+    export.export_mode = True
+    reference = _build_attention(patch_size, order_index=1)
+    reference.load_state_dict(export.state_dict())
+
+    export_point = Point(
+        feat=feat.clone(),
+        grid_coord=torch.zeros(num_points, 3, dtype=torch.long),
+        offset=torch.tensor([num_points]),
+        serialized_order=orders,
+        serialized_inverse=torch.argsort(orders, dim=1),
+        patch_order=build_patch_order(orders, patch_size),
+    )
+    filler_orders = torch.stack([torch.randperm(patch_size), torch.randperm(patch_size)])
+    batch_orders = torch.cat([filler_orders, orders + patch_size], dim=1)
+    training_point = Point(
+        feat=torch.cat([torch.randn(patch_size, 32), feat]),
+        grid_coord=torch.zeros(patch_size + num_points, 3, dtype=torch.long),
+        offset=torch.tensor([patch_size, patch_size + num_points]),
+        serialized_order=batch_orders,
+        serialized_inverse=torch.argsort(batch_orders, dim=1),
+    )
+
+    with torch.no_grad():
+        export_feat = export(export_point).feat
+        training_feat = reference(training_point).feat[patch_size:]
+    assert reference.patch_size == patch_size
+    torch.testing.assert_close(export_feat, training_feat, atol=1e-5, rtol=1e-5)
+
+
+def test_export_input_builders_reject_a_multi_sample_batch() -> None:
+    """The graphs pad and offset one frame; a second sample fails here, not by attending across."""
+    model = build_seg3d_model().eval()
+    single = build_inputs().voxels_data
+    require_single_sample_export_batch(
+        model.build_encoder_inputs(single.voxels, single.num_points, single.batch_xyz_coords())
+    )
+
+    points = build_points()
+    double = DataPreprocessor(preprocessor_modules=[build_preprocessor()])(
+        build_batch_inputs(
+            point_cloud=build_point_cloud_batch([points, points], timestamp_difference_dim=4)
+        ).multi_task_gt_batch,
+        is_training=True,
+    )
+    for builder in (prepare_ptv3_export_inputs, build_ptv3_export_context):
+        with pytest.raises(ValueError, match="single-sample"):
+            builder(model, double)

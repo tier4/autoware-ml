@@ -112,8 +112,42 @@ class SerializedPoolingMeta:
     cluster: torch.Tensor  # [N] input voxel -> pooled voxel id, used by unpooling
     head_indices: torch.Tensor  # [M] representative input voxel per pooled voxel
     grid_coord: torch.Tensor  # [M, 3] integer voxel coordinates of pooled voxels
-    serialized_order: torch.Tensor  # [O, M] space-filling-curve order of pooled voxels, per curve
-    serialized_inverse: torch.Tensor  # [O, M] inverse of `serialized_order`
+    patch_order: torch.Tensor  # [O, padded M] serialization order padded to whole attention windows
+    serialized_inverse: torch.Tensor  # [O, M] inverse of the (unpadded) serialization order
+
+
+def build_patch_order(serialized_order: torch.Tensor, patch_size: int) -> torch.Tensor:
+    """Pad every serialization order to whole attention windows.
+
+    The trailing slots of the last window are filled with real tokens, so attention needs no
+    mask. Values are positions in ``serialized_order``, ``|`` separates windows::
+
+        patch_size 4, count 8:  0 1 2 3 | 4 5 6 7   whole windows, nothing to fill
+        patch_size 4, count 6:  0 1 2 3 | 4 5 2 3   2 3 borrowed from the previous window
+        patch_size 8, count 3:  0 1 2 1 2 0 1 2     below one window: cycles through the sample
+
+    The deployed runtime (``autoware_ptv3``) reimplements this; its tests share the golden
+    vectors in ``test_ptv3_encoder.py``.
+
+    Args:
+        serialized_order: ``[num_orders, count]`` permutations.
+        patch_size: Attention window of the blocks at this level.
+
+    Returns:
+        ``[num_orders, ceil(count / patch_size) * patch_size]`` gather order.
+    """
+    count = int(serialized_order.shape[1])
+    padded = math.ceil(count / patch_size) * patch_size
+    if padded == count:
+        return serialized_order
+    # A multiple of `count` large enough to keep `slot - patch_size + cycle` non-negative.
+    cycle = math.ceil(patch_size / count) * count
+    tail = (
+        torch.arange(count, padded, device=serialized_order.device, dtype=serialized_order.dtype)
+        - patch_size
+        + cycle
+    ) % count
+    return torch.cat([serialized_order, serialized_order[:, tail]], dim=1)
 
 
 def expand_stage_flags(
@@ -159,8 +193,20 @@ def build_serialized_pooling_meta(
     serialized_code: torch.Tensor,
     serialized_order: torch.Tensor,
     stride: int,
-) -> tuple[SerializedPoolingMeta, torch.Tensor]:
-    """Build ONNX-facing serialized-pooling metadata for one encoder stage."""
+    patch_size: int,
+) -> tuple[SerializedPoolingMeta, torch.Tensor, torch.Tensor]:
+    """Build ONNX-facing serialized-pooling metadata for one encoder stage.
+
+    Args:
+        grid_coord: Input-level voxel coordinates.
+        serialized_code: Input-level codes, ``[num_orders, count]``.
+        serialized_order: Input-level orders, ``[num_orders, count]``.
+        stride: Pooling stride of this stage.
+        patch_size: Attention window of the pooled level's blocks; sizes its ``patch_order``.
+
+    Returns:
+        The stage's metadata, then the pooled level's codes and orders for the next stage.
+    """
     depth = _pooling_depth(stride)
     pooled_code = serialized_code >> (depth * 3)
 
@@ -202,10 +248,11 @@ def build_serialized_pooling_meta(
             cluster=cluster,
             head_indices=head_indices,
             grid_coord=next_grid_coord,
-            serialized_order=next_serialized_order,
+            patch_order=build_patch_order(next_serialized_order, patch_size),
             serialized_inverse=next_serialized_inverse,
         ),
         next_serialized_code,
+        next_serialized_order,
     )
 
 
@@ -540,6 +587,8 @@ class SerializedAttention(PointModule):
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         """Compute padded token indices and inverse mapping for windowed attention.
 
+        Every sample is padded on its own, so no window crosses a sample boundary.
+
         Args:
             point: Serialized point container.
 
@@ -547,82 +596,29 @@ class SerializedAttention(PointModule):
             Tuple containing padded ordering indices, inverse indices, and
             optional cumulative sequence lengths for flash attention.
         """
-        bincount = offset_to_bincount(point.offset)
-        padded_bincount = (
-            torch.maximum(
-                torch.div(bincount + self.patch_size - 1, self.patch_size, rounding_mode="trunc"),
-                torch.ones_like(bincount),
+        device = point.offset.device
+        patch_size = self.patch_size
+        pads, unpads, seqlens = [], [], []
+        start = padded_start = 0
+        for end in point.offset.tolist():
+            order = torch.arange(start, end, device=device)
+            # A sample below one window keeps its own shorter window instead of being padded.
+            padded = (
+                build_patch_order(order[None], patch_size)[0] if end - start > patch_size else order
             )
-            * self.patch_size
-        )
-        mask = bincount > self.patch_size
-        padded_bincount = (~mask).long() * bincount + mask.long() * padded_bincount
-
-        if self.export_mode:
-            if point.offset.numel() != 1:
-                raise ValueError("PTv3 export mode supports only single-sample export batches.")
-            n = shape_as_tensor(point.feat)[0].to(device=point.offset.device)
-            padded_n = ((n + self.patch_size - 1) // self.patch_size) * self.patch_size
-            unpad = torch.arange(n, device=point.offset.device)
-            # Fill the trailing slots of the last window by cycling backwards through
-            # the serialization, so every slot holds a real token. For `n > patch_size`
-            # this is exactly the backward borrow training performs; below one window
-            # there is nothing to borrow from, so it wraps around instead. `cycle` keeps
-            # the shifted index non-negative, so the modulo needs no particular sign
-            # convention from the runtime.
-            divisor = torch.clamp(n, min=1)
-            cycle = ((self.patch_size + divisor - 1) // divisor) * divisor
-            index = torch.arange(padded_n, device=point.offset.device)
-            pad = torch.where(index < n, index, (index - self.patch_size + cycle) % divisor)
-            if not self.enable_flash:
-                return pad, unpad, None
-            # arange(0, padded_n+1, patch_size) gives [0, ps, 2*ps, ..., padded_n]
-            # since padded_n is always a multiple of patch_size.
-            cu_seqlens = torch.arange(
-                0,
-                padded_n + 1,
-                step=self.patch_size,
-                dtype=torch.int32,
-                device=point.offset.device,
-            )
-            return pad, unpad, cu_seqlens
-
-        offset = nn.functional.pad(point.offset, (1, 0))
-        padded_offset = nn.functional.pad(torch.cumsum(padded_bincount, dim=0), (1, 0))
-        pad = torch.arange(padded_offset[-1], device=point.offset.device)
-        unpad = torch.arange(offset[-1], device=point.offset.device)
-        cu_seqlens = [] if self.enable_flash else None
-        for batch_index in range(point.offset.numel()):
-            unpad[offset[batch_index] : offset[batch_index + 1]] += (
-                padded_offset[batch_index] - offset[batch_index]
-            )
-            if bincount[batch_index] != padded_bincount[batch_index]:
-                pad[
-                    padded_offset[batch_index + 1]
-                    - self.patch_size
-                    + (bincount[batch_index] % self.patch_size) : padded_offset[batch_index + 1]
-                ] = pad[
-                    padded_offset[batch_index + 1]
-                    - 2 * self.patch_size
-                    + (bincount[batch_index] % self.patch_size) : padded_offset[batch_index + 1]
-                    - self.patch_size
-                ]
-            pad[padded_offset[batch_index] : padded_offset[batch_index + 1]] -= (
-                padded_offset[batch_index] - offset[batch_index]
-            )
-            if cu_seqlens is not None:
-                cu_seqlens.append(
-                    torch.arange(
-                        padded_offset[batch_index],
-                        padded_offset[batch_index + 1],
-                        step=self.patch_size,
-                        dtype=torch.int32,
-                        device=point.offset.device,
-                    )
+            pads.append(padded)
+            unpads.append(torch.arange(padded_start, padded_start + end - start, device=device))
+            seqlens.append(
+                torch.arange(
+                    padded_start, padded_start + padded.numel(), step=patch_size, device=device
                 )
-        if cu_seqlens is None:
+            )
+            start, padded_start = end, padded_start + padded.numel()
+        pad, unpad = torch.cat(pads), torch.cat(unpads)
+        if not self.enable_flash:
             return pad, unpad, None
-        return pad, unpad, nn.functional.pad(torch.cat(cu_seqlens), (0, 1), value=padded_offset[-1])
+        seqlens.append(torch.tensor([padded_start], device=device))
+        return pad, unpad, torch.cat(seqlens).to(torch.int32)
 
     @torch.no_grad()
     def disable_flash(self) -> None:
@@ -644,7 +640,7 @@ class SerializedAttention(PointModule):
         if not self.enable_flash:
             # Export keeps the window static so no shape depends on the voxel count;
             # samples smaller than one window are handled by the cyclic fill in
-            # `_get_padding_and_inverse` rather than by shrinking the window.
+            # `build_patch_order` rather than by shrinking the window.
             self.patch_size = (
                 self.patch_size_max
                 if self.export_mode
@@ -652,9 +648,16 @@ class SerializedAttention(PointModule):
             )
         patch_size = self.patch_size
         channel_count = self.channels
-        pad, unpad, cu_seqlens = self._get_padding_and_inverse(point)
-        order = point.serialized_order[self.order_index][pad]
-        inverse = unpad[point.serialized_inverse[self.order_index]]
+        if self.export_mode:
+            # `patch_order` is precomputed outside the graph (`build_patch_order`). With a
+            # single export sample `unpad` is the identity, so the inverse is used as is.
+            cu_seqlens = None
+            order = point.patch_order[self.order_index]
+            inverse = point.serialized_inverse[self.order_index]
+        else:
+            pad, unpad, cu_seqlens = self._get_padding_and_inverse(point)
+            order = point.serialized_order[self.order_index][pad]
+            inverse = unpad[point.serialized_inverse[self.order_index]]
         qkv = self.qkv(point.feat)[order]
         head_dim = channel_count // head_count
 
@@ -939,6 +942,8 @@ class SerializedPooling(PointModule):
             pooling_depth = 0
 
         if self.export_mode:
+            if self.shuffle_orders:
+                raise ValueError("export_mode requires shuffle_orders=False.")
             if self.export_stage_index is None:
                 raise ValueError("export_mode requires an export_stage_index.")
             if "serialized_pooling" not in point:
@@ -959,8 +964,6 @@ class SerializedPooling(PointModule):
             idx_ptr = torch.cat([counts.new_zeros(1), torch.cumsum(counts, dim=0)])
         if self.export_mode:
             head_indices = metadata.head_indices
-            pooled_code = torch.zeros_like(metadata.serialized_order)
-            pooled_order = metadata.serialized_order
             pooled_inverse = metadata.serialized_inverse
             grid_coord = metadata.grid_coord
         else:
@@ -976,11 +979,11 @@ class SerializedPooling(PointModule):
                 .expand_as(pooled_order),
             )
             grid_coord = point.grid_coord[head_indices] >> pooling_depth
-        if self.shuffle_orders:
-            permutation = torch.randperm(pooled_code.shape[0], device=pooled_code.device)
-            pooled_code = pooled_code[permutation]
-            pooled_order = pooled_order[permutation]
-            pooled_inverse = pooled_inverse[permutation]
+            if self.shuffle_orders:
+                permutation = torch.randperm(pooled_code.shape[0], device=pooled_code.device)
+                pooled_code = pooled_code[permutation]
+                pooled_order = pooled_order[permutation]
+                pooled_inverse = pooled_inverse[permutation]
 
         scatter_feat = segment_csr(self.proj(point.feat)[indices], idx_ptr, "max")
         if self.export_mode:
@@ -991,8 +994,6 @@ class SerializedPooling(PointModule):
             feat=scatter_feat,
             coord=scatter_coord,
             grid_coord=grid_coord,
-            serialized_code=pooled_code,
-            serialized_order=pooled_order,
             serialized_inverse=pooled_inverse,
             serialized_depth=point.serialized_depth - pooling_depth,
             batch=point.batch[head_indices],
@@ -1011,6 +1012,10 @@ class SerializedPooling(PointModule):
         )
         if self.export_mode:
             pooled["serialized_pooling"] = point.serialized_pooling
+            pooled["patch_order"] = metadata.patch_order
+        else:
+            pooled["serialized_code"] = pooled_code
+            pooled["serialized_order"] = pooled_order
         pooled = self.norm(pooled)
         pooled = self.act(pooled)
         pooled.sparsify()
@@ -1249,6 +1254,7 @@ class PointTransformerV3Encoder(PointModule):
         self.stride = list(stride)
         self.shuffle_orders = shuffle_orders
         self.enc_channels = list(enc_channels)
+        self.enc_patch_sizes = list(enc_patch_size)
         stage_count = len(enc_depths)
         self.enc_conv = expand_stage_flags(enc_conv, stage_count, True, "enc_conv")
         self.enc_attn = expand_stage_flags(enc_attn, stage_count, True, "enc_attn")
@@ -1349,7 +1355,7 @@ class PointTransformerV3Encoder(PointModule):
         """
         point = Point(data_dict)
         point["serialized_depth"] = data_dict["serialized_depth"]
-        point["serialized_order"] = data_dict["serialized_order"]
+        point["patch_order"] = data_dict["patch_order"]
         point["serialized_inverse"] = data_dict["serialized_inverse"]
         if "serialized_pooling" in data_dict:
             point["serialized_pooling"] = data_dict["serialized_pooling"]
