@@ -15,7 +15,7 @@ from autoware_ml.metrics.base import EvalStage
 from autoware_ml.metrics.detection3d.collision_weighted_map import CollisionWeightedMeanAP
 from autoware_ml.metrics.detection3d.criticality import greedy_match, weighted_average_precision
 from autoware_ml.metrics.detection3d.critical_fp_fn import CriticalFPFN
-from autoware_ml.metrics.detection3d.matching import DetectionState
+from autoware_ml.metrics.detection3d.matching import Detection3DState
 from autoware_ml.metrics.detection3d.structures import Detection3DSample
 from autoware_ml.metrics.tests.conftest import collision_box
 
@@ -56,7 +56,7 @@ def test_weighted_ap_all_true_positive_is_one() -> None:
 
 
 def test_critical_fp_fn_counts_phantoms_and_misses() -> None:
-    state = DetectionState(
+    state = Detection3DState(
         samples=[
             _sample([collision_box(10.0)], [0.9], [0], [collision_box(10.0)], [0]),
             _sample(
@@ -80,7 +80,7 @@ def test_critical_fp_fn_counts_phantoms_and_misses() -> None:
 def test_critical_fp_fn_excludes_unreachable() -> None:
     # A phantom and a miss that are NOT reachable within the horizon (TTC = inf) are
     # not critical, neither is counted.
-    state = DetectionState(
+    state = Detection3DState(
         samples=[
             _sample([collision_box(30.0)], [0.9], [0], [], [], pred_ttc=[inf]),  # unreachable FP
             _sample([], [], [], [collision_box(30.0)], [0], gt_ttc=[inf]),  # unreachable FN
@@ -110,7 +110,7 @@ def test_critical_fp_fn_excludes_uncovered_frames() -> None:
         ),
         ttc_covered=False,
     )
-    state = DetectionState(samples=[covered_fp, uncovered], class_names=("car",))
+    state = Detection3DState(samples=[covered_fp, uncovered], class_names=("car",))
     out = CriticalFPFN(confidences=(0.5,), match_threshold=2.0).evaluate(state, EvalStage.TEST)
     # Denominator is 1 (the covered frame), not 2.
     assert out["critical_fp_conf0p5"] == pytest.approx(1.0)
@@ -125,13 +125,13 @@ def test_critical_fp_fn_no_coverage_is_nan() -> None:
     frame = replace(
         _sample([collision_box(10.0)], [0.9], [0], [collision_box(10.0)], [0]), ttc_covered=False
     )
-    state = DetectionState(samples=[frame], class_names=("car",))
+    state = Detection3DState(samples=[frame], class_names=("car",))
     out = CriticalFPFN(confidences=(0.5,)).evaluate(state, EvalStage.TEST)
     assert isnan(out["critical_fp_conf0p5"])  # no basis, never a fake zero
 
 
 def test_critical_fp_fn_confidence_gate() -> None:
-    state = DetectionState(
+    state = Detection3DState(
         samples=[_sample([collision_box(30.0)], [0.4], [0], [], [])],
         class_names=("car",),
     )
@@ -139,8 +139,8 @@ def test_critical_fp_fn_confidence_gate() -> None:
     assert out["critical_fp_conf0p5"] == pytest.approx(0.0)
 
 
-def test_collision_weighted_map_perfect_detection() -> None:
-    state = DetectionState(
+def test_collision_weighted_map_perfect_detection3d() -> None:
+    state = Detection3DState(
         samples=[_sample([collision_box(10.0)], [0.9], [0], [collision_box(10.0)], [0])],
         class_names=("car",),
     )
@@ -151,7 +151,7 @@ def test_collision_weighted_map_perfect_detection() -> None:
 
 def test_collision_weighted_map_unreachable_gt_has_no_weight() -> None:
     # All GT unreachable (TTC inf) -> total GT weight 0 -> AP is NaN (nothing to score).
-    state = DetectionState(
+    state = Detection3DState(
         samples=[
             _sample(
                 [collision_box(10.0)],

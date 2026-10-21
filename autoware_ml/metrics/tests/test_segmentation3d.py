@@ -21,8 +21,8 @@ def _suite(**kwargs):
 
 
 def _eval_out(pred, target, coord):
-    """One-frame seg_frames payload (the contract both seg suites consume)."""
-    return {"seg_frames": [{"pred": pred, "target": target, "coord": coord}]}
+    """One-frame seg3d_frames payload (the contract both seg suites consume)."""
+    return {"seg3d_frames": [{"pred": pred, "target": target, "coord": coord}]}
 
 
 def _coord(num_points: int) -> torch.Tensor:

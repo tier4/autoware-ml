@@ -20,7 +20,7 @@ class FrameMetaTestCase(unittest.TestCase):
         self.device = torch.device("cpu")
         self.samples = [
             FrameMetaSample(self.make_ego2global(1.0), "db/scene_a/0"),
-            FrameMetaSample(self.make_ego2global(2.0), "db/scene_b/1"),
+            FrameMetaSample(self.make_ego2global(2.0), "db/scene_b/1", "/maps/scene_b.osm"),
         ]
 
     def make_ego2global(self, x: float, yaw_rad: float = 0.0) -> torch.Tensor:
@@ -67,11 +67,12 @@ class TestFrameMetaSample(FrameMetaTestCase):
     def test_field_order(self) -> None:
         """
         Input: the class itself.
-        Expected: the tuple exposes ``ego2global`` then ``scene_token``, since the dataset
-        builds it positionally.
-        Check: compare ``_fields`` against the expected names.
+        Expected: the tuple exposes ``ego2global``, ``scene_token`` and the optional
+        ``lanelet_map_path``, which defaults to None for a frame without a map.
+        Check: compare ``_fields`` against the expected names and the default.
         """
-        self.assertEqual(FrameMetaSample._fields, ("ego2global", "scene_token"))
+        self.assertEqual(FrameMetaSample._fields, ("ego2global", "scene_token", "lanelet_map_path"))
+        self.assertIsNone(FrameMetaSample(self.make_ego2global(0.0), "db/s/0").lanelet_map_path)
 
     def test_holds_given_fields(self) -> None:
         """
@@ -83,6 +84,8 @@ class TestFrameMetaSample(FrameMetaTestCase):
 
         self.assertTrue(torch.equal(sample.ego2global, self.make_ego2global(1.0)))
         self.assertEqual(sample.scene_token, "db/scene_a/0")
+        self.assertIsNone(sample.lanelet_map_path)
+        self.assertEqual(self.samples[1].lanelet_map_path, "/maps/scene_b.osm")
 
     def test_is_immutable(self) -> None:
         """
@@ -100,10 +103,12 @@ class TestFrameMetaBatchFields(FrameMetaTestCase):
     def test_field_order(self) -> None:
         """
         Input: the class itself.
-        Expected: the tuple exposes ``ego2globals`` then ``scene_tokens``.
+        Expected: the tuple exposes ``ego2globals``, ``scene_tokens`` and ``lanelet_map_paths``.
         Check: compare ``_fields`` against the expected names.
         """
-        self.assertEqual(FrameMetaBatch._fields, ("ego2globals", "scene_tokens"))
+        self.assertEqual(
+            FrameMetaBatch._fields, ("ego2globals", "scene_tokens", "lanelet_map_paths")
+        )
 
     def test_is_immutable(self) -> None:
         """
@@ -133,6 +138,7 @@ class TestFrameMetaBatchCollate(FrameMetaTestCase):
         self.assertTrue(torch.equal(batch.ego2globals[0], self.samples[0].ego2global))
         self.assertTrue(torch.equal(batch.ego2globals[1], self.samples[1].ego2global))
         self.assertEqual(list(batch.scene_tokens), ["db/scene_a/0", "db/scene_b/1"])
+        self.assertEqual(list(batch.lanelet_map_paths), [None, "/maps/scene_b.osm"])
 
     def test_output_dtype(self) -> None:
         """
@@ -266,6 +272,7 @@ class TestFrameMetaBatchLidarAugmentation(FrameMetaTestCase):
         torch.testing.assert_close(batch.ego2globals[0], expected_first)
         self.assertTrue(torch.equal(batch.ego2globals[1], self.samples[1].ego2global))
         self.assertEqual(list(batch.scene_tokens), ["db/scene_a/0", "db/scene_b/1"])
+        self.assertEqual(list(batch.lanelet_map_paths), [None, "/maps/scene_b.osm"])
 
     def test_composed_augmentation_matches_sequential_inverse(self) -> None:
         """

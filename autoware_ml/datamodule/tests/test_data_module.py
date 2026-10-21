@@ -27,9 +27,9 @@ from torch.utils.data.distributed import DistributedSampler
 
 from autoware_ml.databases.base_database import BaseDatabase
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
-from autoware_ml.databases.taxonomy import DatabaseTaxonomy, DetectionTaxonomy
-from autoware_ml.datamodule.base import DataLoaderConfig
+from autoware_ml.databases.taxonomy import DatabaseTaxonomy, Detection3DTaxonomy
 from autoware_ml.datamodule.base_dataset import ConcatDataset
+from autoware_ml.datamodule.data_module import DataLoaderConfig
 from autoware_ml.datamodule.data_module import DataModule
 from autoware_ml.datamodule.samplers import (
     DistributedWeightedRandomSampler,
@@ -38,10 +38,10 @@ from autoware_ml.datamodule.samplers import (
 )
 from autoware_ml.datamodule.sources import DatasetSource
 from autoware_ml.datamodule.t4dataset.dataset import T4Dataset
-from autoware_ml.datamodule.detection3d import Detection3DTask
+from autoware_ml.datamodule.common.detection3d import Detection3DTask
 from autoware_ml.datamodule.t4dataset.segmentation3d import T4Segmentation3DTask
 from autoware_ml.datamodule.tests.corpus import (
-    SEGMENTATION_TAXONOMY,
+    SEGMENTATION3D_TAXONOMY,
     VOCABULARY,
     build_transforms,
     write_corpus,
@@ -73,7 +73,7 @@ def build_taxonomy(class_name: str = "car") -> DatabaseTaxonomy:
     Returns:
       DatabaseTaxonomy: A fresh taxonomy object on every call.
     """
-    detection = DetectionTaxonomy(
+    detection = Detection3DTaxonomy(
         VOCABULARY,
         (class_name,),
         {"car": class_name},
@@ -83,7 +83,7 @@ def build_taxonomy(class_name: str = "car") -> DatabaseTaxonomy:
         collision_kinds={class_name: "wheeled"},
         living_speeds={},
     )
-    return DatabaseTaxonomy(detection3d=detection, segmentation3d=SEGMENTATION_TAXONOMY)
+    return DatabaseTaxonomy(detection3d=detection, segmentation3d=SEGMENTATION3D_TAXONOMY)
 
 
 class FakeDatabase(BaseDatabase):
@@ -168,16 +168,76 @@ class SingleSplitSplitter:
         return {split: dataset_records_dataframe for split in SplitType}
 
 
-def build_dataset_factory():
-    """Return the dataset factory the datamodule calls once per source."""
-    return partial(
-        T4Dataset,
+class EmptyValidationSplitter(SingleSplitSplitter):
+    """A splitter serving every record to every split but the validation one, left empty."""
+
+    def __str__(self) -> str:
+        """String representation of the splitter."""
+        return "EmptyValidationSplitter"
+
+    def split_by_polars_dataframe(
+        self, dataset_records_dataframe: pl.DataFrame, scenarios: Mapping[str, object]
+    ) -> Mapping[SplitType, pl.DataFrame]:
+        """Return the same records for every split and no record for the validation split."""
+        splits = dict(super().split_by_polars_dataframe(dataset_records_dataframe, scenarios))
+        splits[SplitType.VAL] = dataset_records_dataframe.clear()
+        return splits
+
+
+def build_dataset(database: BaseDatabase, det3d: bool = True, seg3d: bool = True) -> T4Dataset:
+    """
+    Return the dataset of a split as a config declares it, reading a database, bound to no
+    records yet.
+
+    Args:
+      database: Database the dataset reads, as a config names it through the root path.
+      det3d: Whether the boxes of the corpus supervise the run.
+      seg3d: Whether the semantic masks of the corpus supervise the run.
+
+    Returns:
+      T4Dataset: The declared dataset.
+    """
+    return T4Dataset(
+        database_root_path=str(database.root_path),
         max_num_3d_gt_bboxes=8,
         transforms=build_transforms(),
         dataset_tasks={
-            "Detection3D": Detection3DTask,
-            "Segmentation3D": partial(T4Segmentation3DTask, taxonomy=SEGMENTATION_TAXONOMY),
+            "detection3d": Detection3DTask,
+            "segmentation3d": partial(T4Segmentation3DTask, taxonomy=SEGMENTATION3D_TAXONOMY),
         },
+        lidar_intensity_scale=database.lidar_intensity_scale,
+        det3d_supervised=det3d,
+        seg3d_supervised=seg3d,
+    )
+
+
+def build_source(
+    database: BaseDatabase,
+    det3d: bool = True,
+    seg3d: bool = True,
+    repeat: int = 1,
+    train: bool = True,
+    validation: bool = True,
+) -> DatasetSource:
+    """
+    Declare a source over a database with a fresh dataset for every split it serves.
+
+    Args:
+      database: Database of the source, read by every dataset of the source.
+      det3d: Whether the boxes of its datasets supervise the run.
+      seg3d: Whether the semantic masks of its datasets supervise the run.
+      repeat: Share of the training epoch.
+      train: Whether the source serves the training split.
+      validation: Whether the source serves the validation split.
+
+    Returns:
+      DatasetSource: The declared source.
+    """
+    return DatasetSource(
+        database=database,
+        train_dataset=build_dataset(database, det3d, seg3d) if train else None,
+        validation_dataset=build_dataset(database, det3d, seg3d) if validation else None,
+        repeat=repeat,
     )
 
 
@@ -203,30 +263,18 @@ class MultiSourceTestCase(unittest.TestCase):
 
     def build_data_module(
         self,
-        train_sources: Sequence[Mapping[str, object]],
-        validation_sources: Sequence[Mapping[str, object]] | None = None,
+        sources: Mapping[str, DatasetSource],
         train_dataloader: DataLoaderConfig | None = None,
         train_frame_sampling: FrameSamplingConfig | None = None,
+        splitter: SingleSplitSplitter | None = None,
         validation_dataloader: DataLoaderConfig | None = None,
         streaming: bool = False,
         seed: int = 0,
     ) -> DataModule:
-        """Build a datamodule whose validation split reads the main corpus by default."""
-        factory = build_dataset_factory()
+        """Build a datamodule over the given sources with a splitter serving every record."""
         return DataModule(
-            splitter=SingleSplitSplitter(),
-            train_sources=train_sources,
-            validation_sources=(
-                [{"database": self.main_database}]
-                if validation_sources is None
-                else validation_sources
-            ),
-            test_sources=None,
-            predict_sources=None,
-            train_dataset=factory,
-            validation_dataset=factory,
-            test_dataset=None,
-            predict_dataset=None,
+            splitter=SingleSplitSplitter() if splitter is None else splitter,
+            sources=sources,
             train_dataloader=train_dataloader,
             validation_dataloader=validation_dataloader,
             test_dataloader=None,
@@ -240,78 +288,131 @@ class MultiSourceTestCase(unittest.TestCase):
 class TestDatasetSource(unittest.TestCase):
     """The declaration of one dataset source."""
 
+    def setUp(self) -> None:
+        """Build a database the sources can name."""
+        self.database = FakeDatabase(Path("/"), pl.DataFrame(), "v", build_taxonomy())
+
     def test_rejects_a_repeat_below_one(self) -> None:
         """
         Input: a source asking to appear zero times per epoch.
         Expected: a source that contributes nothing is a mistake, not a way to disable it.
         Check: a ValueError naming the repeat is raised.
         """
-        database = FakeDatabase(Path("/"), pl.DataFrame(), "v", build_taxonomy())
-
         with self.assertRaisesRegex(ValueError, "repeat must be at least 1"):
-            DatasetSource(database=database, repeat=0)
+            DatasetSource(
+                database=self.database, train_dataset=build_dataset(self.database), repeat=0
+            )
 
-    def test_rejects_a_source_without_a_database(self) -> None:
+    def test_rejects_a_source_without_a_dataset(self) -> None:
         """
-        Input: a source naming something other than a database.
-        Expected: the records of a source come from a database, so anything else is rejected
-        at declaration rather than at the first read.
-        Check: a TypeError is raised.
+        Input: a source declaring no dataset for any split.
+        Expected: a source serves the splits it declares a dataset for, so one without any
+        would serve nothing.
+        Check: a ValueError naming the splits is raised.
         """
-        with self.assertRaisesRegex(TypeError, "needs a database"):
-            DatasetSource(database="db_j6gen2")
+        with self.assertRaisesRegex(ValueError, "at least one split"):
+            DatasetSource(database=self.database)
+
+    def test_rejects_a_repeat_without_a_training_dataset(self) -> None:
+        """
+        Input: a repeated source that stays out of the training split.
+        Expected: repeats only balance the training epoch, a repeated frame would count twice
+        in the metrics, so the repeat would have no effect.
+        Check: a ValueError naming the training split is raised.
+        """
+        with self.assertRaisesRegex(ValueError, "training"):
+            DatasetSource(
+                database=self.database, test_dataset=build_dataset(self.database), repeat=2
+            )
+
+    def test_rejects_a_dataset_reading_another_database(self) -> None:
+        """
+        Input: a source whose dataset config names the root path of another database.
+        Expected: a dataset reads the database of its source, a dataset node shared across
+        sources would silently read the wrong corpus, so the mismatch is rejected at
+        declaration.
+        Check: a ValueError naming both root paths is raised.
+        """
+        other = FakeDatabase(Path("/elsewhere"), pl.DataFrame(), "other", build_taxonomy())
+
+        with self.assertRaisesRegex(ValueError, "reads /elsewhere"):
+            DatasetSource(database=self.database, train_dataset=build_dataset(other))
+
+    def test_maps_the_declared_datasets_to_their_splits(self) -> None:
+        """
+        Input: a source declaring a training and a test dataset.
+        Expected: the source serves exactly those two splits.
+        Check: the dataset of each split is the declared one, the others are None.
+        """
+        train_dataset = build_dataset(self.database)
+        test_dataset = build_dataset(self.database)
+
+        source = DatasetSource(
+            database=self.database, train_dataset=train_dataset, test_dataset=test_dataset
+        )
+
+        self.assertEqual(set(source.datasets), {SplitType.TRAIN, SplitType.TEST})
+        self.assertIs(source.dataset(SplitType.TRAIN), train_dataset)
+        self.assertIs(source.dataset(SplitType.TEST), test_dataset)
+        self.assertIsNone(source.dataset(SplitType.VAL))
+        self.assertIsNone(source.dataset(SplitType.PREDICT))
 
 
 class TestDataModuleSources(MultiSourceTestCase):
-    """Assembling a split from several corpora."""
+    """Assembling the splits from several corpora."""
 
-    def test_builds_the_sources_from_their_mappings(self) -> None:
+    def test_keeps_the_declared_sources(self) -> None:
         """
-        Input: a training source declared as a plain mapping, as a config composes it.
-        Expected: the datamodule builds a DatasetSource from every mapping.
-        Check: the built source carries the declared database, supervision and repeat.
+        Input: a source instantiated by the config.
+        Expected: the datamodule keeps the sources as declared, by name.
+        Check: the kept source is the declared one with its database, datasets and repeat.
         """
-        data_module = self.build_data_module(
-            [{"database": self.main_database, "seg3d": False, "repeat": 3}]
-        )
+        source = build_source(self.main_database, seg3d=False, repeat=3)
 
-        (source,) = data_module.sources[SplitType.TRAIN]
-        self.assertIsInstance(source, DatasetSource)
+        data_module = self.build_data_module({"main": source})
+
+        self.assertEqual(data_module.sources, {"main": source})
         self.assertIs(source.database, self.main_database)
-        self.assertTrue(source.det3d)
-        self.assertFalse(source.seg3d)
+        assert source.train_dataset is not None
+        self.assertTrue(source.train_dataset.det3d_supervised)
+        self.assertFalse(source.train_dataset.seg3d_supervised)
         self.assertEqual(source.repeat, 3)
 
-    def test_rejects_a_split_without_sources(self) -> None:
+    def test_rejects_a_datamodule_without_sources(self) -> None:
         """
-        Input: an empty source list for the training split.
-        Expected: a declared split must read at least one source.
+        Input: no source at all.
+        Expected: a datamodule must read at least one source.
         Check: a ValueError is raised at construction.
         """
         with self.assertRaisesRegex(ValueError, "at least one dataset source"):
-            self.build_data_module([])
+            self.build_data_module({})
 
-    def test_rejects_a_repeated_source_outside_training(self) -> None:
+    def test_a_split_is_served_by_the_sources_declaring_its_dataset(self) -> None:
         """
-        Input: a validation source repeated twice.
-        Expected: repeats only balance the training epoch, a repeated frame would count twice
-        in the metrics.
-        Check: a ValueError naming the split is raised at construction.
+        Input: a source serving training and validation beside one serving training only.
+        Expected: a split reads the sources declaring a dataset for it, in declaration order,
+        and a split no source declares is empty.
+        Check: the names of the sources of every split.
         """
-        with self.assertRaisesRegex(ValueError, "Only the training split can repeat"):
-            self.build_data_module(
-                [{"database": self.main_database}],
-                validation_sources=[{"database": self.main_database, "repeat": 2}],
-            )
+        data_module = self.build_data_module(
+            {
+                "main": build_source(self.main_database),
+                "seg3d_gt": build_source(self.seg3d_gt_database, validation=False),
+            }
+        )
+
+        self.assertEqual(list(data_module.split_sources(SplitType.TRAIN)), ["main", "seg3d_gt"])
+        self.assertEqual(list(data_module.split_sources(SplitType.VAL)), ["main"])
+        self.assertEqual(dict(data_module.split_sources(SplitType.TEST)), {})
 
     def test_a_single_source_serves_its_own_records(self) -> None:
         """
         Input: one source over a three frame corpus.
-        Expected: the ordinary single corpus run is a split naming one source, so the split
-        holds exactly the records of that corpus.
+        Expected: the ordinary single corpus run is one source, so the split holds exactly
+        the records of that corpus.
         Check: read the length of the training split.
         """
-        data_module = self.build_data_module([{"database": self.main_database}])
+        data_module = self.build_data_module({"main": build_source(self.main_database)})
 
         data_module.setup("fit")
 
@@ -320,17 +421,25 @@ class TestDataModuleSources(MultiSourceTestCase):
     def test_sources_are_concatenated_in_declaration_order(self) -> None:
         """
         Input: a three frame corpus followed by a one frame corpus.
-        Expected: the split serves every record of every source, so mixing corpora needs no
-        change to the datasets themselves.
-        Check: the split holds the records of both corpora.
+        Expected: the split serves every record of every source in declaration order, so
+        mixing corpora needs no change to the datasets themselves.
+        Check: the split holds the records of both corpora, the main one first.
         """
         data_module = self.build_data_module(
-            [{"database": self.main_database}, {"database": self.seg3d_gt_database}]
+            {
+                "main": build_source(self.main_database),
+                "seg3d_gt": build_source(self.seg3d_gt_database),
+            }
         )
 
         data_module.setup("fit")
 
-        self.assertEqual(len(data_module.datasets[SplitType.TRAIN]), 4)
+        split = data_module.datasets[SplitType.TRAIN]
+        self.assertEqual(len(split), 4)
+        self.assertEqual(
+            [dataset.database_root_path for dataset in split.datasets],
+            [self.main_root, self.seg3d_gt_root],
+        )
 
     def test_a_repeated_source_takes_a_larger_share_of_the_epoch(self) -> None:
         """
@@ -340,12 +449,33 @@ class TestDataModuleSources(MultiSourceTestCase):
         Check: the split holds three plus six samples.
         """
         data_module = self.build_data_module(
-            [{"database": self.main_database}, {"database": self.seg3d_gt_database, "repeat": 6}]
+            {
+                "main": build_source(self.main_database),
+                "seg3d_gt": build_source(self.seg3d_gt_database, repeat=6),
+            }
         )
 
         data_module.setup("fit")
 
         self.assertEqual(len(data_module.datasets[SplitType.TRAIN]), 9)
+
+    def test_a_repeat_only_balances_the_training_split(self) -> None:
+        """
+        Input: a repeated source that also serves the validation split.
+        Expected: a repeated frame would count twice in the metrics, so the validation split
+        reads every source once.
+        Check: the validation split holds three plus one samples.
+        """
+        data_module = self.build_data_module(
+            {
+                "main": build_source(self.main_database),
+                "seg3d_gt": build_source(self.seg3d_gt_database, repeat=6),
+            }
+        )
+
+        data_module.setup("fit")
+
+        self.assertEqual(len(data_module.datasets[SplitType.VAL]), 4)
 
     def test_every_database_is_prepared_once(self) -> None:
         """
@@ -355,7 +485,10 @@ class TestDataModuleSources(MultiSourceTestCase):
         Check: the database counted one preparation call.
         """
         data_module = self.build_data_module(
-            [{"database": self.main_database}, {"database": self.main_database, "det3d": False}]
+            {
+                "main": build_source(self.main_database),
+                "main_boxless": build_source(self.main_database, det3d=False),
+            }
         )
 
         data_module.prepare_data()
@@ -366,15 +499,18 @@ class TestDataModuleSources(MultiSourceTestCase):
         """
         Input: two corpora whose taxonomies are separate but equal objects.
         Expected: taxonomies are compared by their definition, not by identity.
-        Check: the datamodule builds and serves both corpora.
+        Check: the datamodule builds and keeps both sources.
         """
         self.assertIsNot(self.main_database.taxonomy, self.seg3d_gt_database.taxonomy)
 
         data_module = self.build_data_module(
-            [{"database": self.main_database}, {"database": self.seg3d_gt_database}]
+            {
+                "main": build_source(self.main_database),
+                "seg3d_gt": build_source(self.seg3d_gt_database),
+            }
         )
 
-        self.assertEqual(len(data_module.sources[SplitType.TRAIN]), 2)
+        self.assertEqual(len(data_module.sources), 2)
 
     def test_rejects_sources_whose_taxonomies_disagree(self) -> None:
         """
@@ -388,19 +524,112 @@ class TestDataModuleSources(MultiSourceTestCase):
         )
 
         with self.assertRaisesRegex(ValueError, "same taxonomy"):
-            self.build_data_module([{"database": self.main_database}, {"database": other}])
+            self.build_data_module(
+                {"main": build_source(self.main_database), "other": build_source(other)}
+            )
+
+    def test_a_split_the_stage_needs_without_records_stops_the_run(self) -> None:
+        """
+        Input: a source declaring a validation dataset over a database whose scenarios put no
+            scene in the validation split, as the gen1 databases do.
+        Expected: Lightning would skip validation on the empty split, and the checkpoint
+            callbacks save after validation only, so the run would train to the end without a
+            checkpoint. Setup stops the run instead and names the source and its record count.
+        Check: a ValueError naming the split, the source and the count is raised for fit, and
+            a stage that does not need the split sets up.
+        """
+        data_module = self.build_data_module(
+            {"main": build_source(self.main_database)}, splitter=EmptyValidationSplitter()
+        )
+
+        with self.assertRaisesRegex(ValueError, r"Split val .*source main serves 0 records"):
+            data_module.setup("fit")
+        data_module.setup("predict")
+
+    def test_an_empty_source_next_to_a_served_one_keeps_the_split(self) -> None:
+        """
+        Input: two sources of a split, one of them holding no record in it.
+        Expected: the split is served by the other source, only a split with no record at all
+            stops the run.
+        Check: the split serves the records of the other source.
+        """
+        data_module = self.build_data_module(
+            {
+                "main": build_source(self.main_database, validation=False),
+                "seg3d_gt": build_source(self.seg3d_gt_database),
+            }
+        )
+        data_module.setup("fit")
+
+        self.assertEqual(len(data_module.datasets[SplitType.VAL]), 1)
 
     def test_a_split_without_sources_has_no_dataloader(self) -> None:
         """
-        Input: a datamodule whose test split declares no source.
+        Input: a datamodule whose sources declare no test dataset.
         Expected: an undeclared split is absent rather than silently empty.
         Check: asking for the test dataloader raises.
         """
-        data_module = self.build_data_module([{"database": self.main_database}])
+        data_module = self.build_data_module({"main": build_source(self.main_database)})
         data_module.setup(None)
 
         with self.assertRaisesRegex(ValueError, "has no dataset"):
             data_module.test_dataloader()
+
+
+class TestDatasetBinding(MultiSourceTestCase):
+    """Binding the dataset of a source to its records."""
+
+    def test_a_declared_dataset_has_no_samples(self) -> None:
+        """
+        Input: a dataset as a config declares it, without records.
+        Expected: it serves nothing until the datamodule binds it to records.
+        Check: asking for its length raises a ValueError naming the binding.
+        """
+        dataset = build_dataset(self.main_database)
+
+        self.assertFalse(dataset.is_bound)
+        with self.assertRaisesRegex(ValueError, "not bound"):
+            len(dataset)
+
+    def test_bind_returns_a_copy_serving_the_records(self) -> None:
+        """
+        Input: a declared dataset whose masks are unused and the records of its database.
+        Expected: the copy serves the records with the root path, the intensity scale and the
+        supervision the dataset was declared with, while the declared dataset stays unbound.
+        Check: compare the copy and the declared dataset.
+        """
+        dataset = build_dataset(self.main_database, seg3d=False)
+
+        bound = dataset.bind(self.main_records)
+
+        self.assertIsNot(bound, dataset)
+        self.assertEqual(bound.database_root_path, self.main_database.root_path)
+        self.assertEqual(bound.lidar_intensity_scale, self.main_database.lidar_intensity_scale)
+        self.assertTrue(bound.det3d_supervised)
+        self.assertFalse(bound.seg3d_supervised)
+        self.assertEqual(len(bound), 3)
+        self.assertFalse(dataset.is_bound)
+
+    def test_every_source_binds_its_dataset_to_its_own_records(self) -> None:
+        """
+        Input: two sources over different corpora, each with a dataset reading its database.
+        Expected: the bound dataset of every source reads the root path of that database and
+        serves its records, and the declared datasets stay unbound.
+        Check: the bound datasets of the split and the declared ones.
+        """
+        main = build_source(self.main_database)
+        seg3d_gt = build_source(self.seg3d_gt_database)
+        data_module = self.build_data_module({"main": main, "seg3d_gt": seg3d_gt})
+
+        data_module.setup("fit")
+
+        bound_main, bound_seg3d_gt = data_module.datasets[SplitType.TRAIN].datasets
+        self.assertEqual(bound_main.database_root_path, self.main_database.root_path)
+        self.assertEqual(bound_seg3d_gt.database_root_path, self.seg3d_gt_database.root_path)
+        assert main.train_dataset is not None
+        assert seg3d_gt.train_dataset is not None
+        self.assertFalse(main.train_dataset.is_bound)
+        self.assertFalse(seg3d_gt.train_dataset.is_bound)
 
 
 class TestSupervisionToggles(MultiSourceTestCase):
@@ -409,7 +638,7 @@ class TestSupervisionToggles(MultiSourceTestCase):
     def build_sample(self, det3d: bool = True, seg3d: bool = True):
         """Build the first training sample of a source with the given supervision."""
         data_module = self.build_data_module(
-            [{"database": self.main_database, "det3d": det3d, "seg3d": seg3d}]
+            {"main": build_source(self.main_database, det3d=det3d, seg3d=seg3d)}
         )
         data_module.setup("fit")
         return data_module.datasets[SplitType.TRAIN][0]
@@ -427,7 +656,7 @@ class TestSupervisionToggles(MultiSourceTestCase):
         self.assertGreater(len(sample.detection3d_gt_bboxes_3d), 0)
         self.assertTrue(bool((sample.segmentation3d_gt_sample.gt_semantic_mask >= 0).any()))
 
-    def test_an_unsupervised_detection_source_carries_an_empty_box_set(self) -> None:
+    def test_an_unsupervised_detection3d_source_carries_an_empty_box_set(self) -> None:
         """
         Input: a source whose boxes do not supervise the run.
         Expected: the field stays so the sample still collates with the supervised corpora,
@@ -441,7 +670,7 @@ class TestSupervisionToggles(MultiSourceTestCase):
         self.assertEqual(len(sample.detection3d_gt_bboxes_3d), 0)
         self.assertTrue(bool((sample.segmentation3d_gt_sample.gt_semantic_mask >= 0).any()))
 
-    def test_an_unsupervised_segmentation_source_ignores_every_point(self) -> None:
+    def test_an_unsupervised_segmentation3d_source_ignores_every_point(self) -> None:
         """
         Input: a source whose masks do not supervise the run, as a pseudo labelled corpus
         scored on its boxes alone.
@@ -457,7 +686,7 @@ class TestSupervisionToggles(MultiSourceTestCase):
         self.assertTrue(bool((labels == sample.segmentation3d_gt_sample.ignore_index).all()))
         self.assertGreater(len(sample.detection3d_gt_bboxes_3d), 0)
 
-    def test_an_unsupervised_segmentation_source_needs_no_mask_on_disk(self) -> None:
+    def test_an_unsupervised_segmentation3d_source_needs_no_mask_on_disk(self) -> None:
         """
         Input: a corpus whose records name no semantic mask, declared without segmentation
         supervision, as a detection only pseudo corpus is.
@@ -468,12 +697,12 @@ class TestSupervisionToggles(MultiSourceTestCase):
         records = self.main_records.with_columns(
             pl.col(DatasetTableSchema.LIDAR_FRAMES.name).list.eval(
                 pl.element().struct.with_fields(
-                    lidar_pointcloud_semantic_mask_path=pl.lit(None, dtype=pl.String)
+                    lidar_pointcloud_semantic_mask_relative_path=pl.lit(None, dtype=pl.String)
                 )
             )
         )
         database = FakeDatabase(self.main_root, records, "maskless", build_taxonomy())
-        data_module = self.build_data_module([{"database": database, "seg3d": False}])
+        data_module = self.build_data_module({"main": build_source(database, seg3d=False)})
         data_module.setup("fit")
 
         sample = data_module.datasets[SplitType.TRAIN][0]
@@ -492,7 +721,10 @@ class TestSupervisionToggles(MultiSourceTestCase):
         Check: the collated batch carries both the boxes and the labels.
         """
         data_module = self.build_data_module(
-            [{"database": self.main_database, "seg3d": False}, {"database": self.seg3d_gt_database}]
+            {
+                "main": build_source(self.main_database, seg3d=False),
+                "seg3d_gt": build_source(self.seg3d_gt_database),
+            }
         )
         data_module.setup("fit")
         split = data_module.datasets[SplitType.TRAIN]
@@ -518,13 +750,8 @@ class TestFramesWithoutMasks(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         root = Path(directory.name)
         records = write_corpus(root, num_records=2, unmasked_records=frozenset({1}))
-        dataset = build_dataset_factory()(
-            database_root_path=str(root),
-            dataset_records_dataframe=records,
-            lidar_intensity_scale=255.0,
-            det3d_supervised=True,
-            seg3d_supervised=True,
-        )
+        database = FakeDatabase(root, records, "unmasked", build_taxonomy())
+        dataset = build_dataset(database).bind(records)
 
         self.assertIsNotNone(dataset[0].segmentation3d_gt_sample)
         with self.assertRaisesRegex(ValueError, "carries no semantic mask"):
@@ -541,7 +768,7 @@ class TestFrameSampling(MultiSourceTestCase):
         Check: the sampler is the weighted one and draws one epoch of the split.
         """
         data_module = self.build_data_module(
-            [{"database": self.main_database}],
+            {"main": build_source(self.main_database)},
             train_dataloader=DataLoaderConfig(batch_size=1),
             train_frame_sampling=FRAME_SAMPLING,
         )
@@ -559,7 +786,7 @@ class TestFrameSampling(MultiSourceTestCase):
         Check: building the training loader raises a ValueError naming the shuffle.
         """
         data_module = self.build_data_module(
-            [{"database": self.main_database}],
+            {"main": build_source(self.main_database)},
             train_dataloader=DataLoaderConfig(batch_size=1, shuffle=True),
             train_frame_sampling=FRAME_SAMPLING,
         )
@@ -601,13 +828,7 @@ class TestSceneStreaming(MultiSourceTestCase):
         order they first appear, so no row order of the record table breaks a stream.
         Check: compare the groups with the expected sample indices.
         """
-        dataset = build_dataset_factory()(
-            database_root_path=str(self.main_root),
-            dataset_records_dataframe=self.streamed_records,
-            lidar_intensity_scale=255.0,
-            det3d_supervised=True,
-            seg3d_supervised=True,
-        )
+        dataset = build_dataset(self.streamed_database).bind(self.streamed_records)
 
         self.assertEqual(dataset.scene_index_groups(), [[4, 2, 0], [1, 3]])
 
@@ -618,21 +839,8 @@ class TestSceneStreaming(MultiSourceTestCase):
         and the second source follows behind both repeats.
         Check: compare the groups with the expected split indices.
         """
-        factory = build_dataset_factory()
-        streamed = factory(
-            database_root_path=str(self.main_root),
-            dataset_records_dataframe=self.streamed_records,
-            lidar_intensity_scale=255.0,
-            det3d_supervised=True,
-            seg3d_supervised=True,
-        )
-        single = factory(
-            database_root_path=str(self.seg3d_gt_root),
-            dataset_records_dataframe=self.seg3d_gt_records,
-            lidar_intensity_scale=255.0,
-            det3d_supervised=True,
-            seg3d_supervised=True,
-        )
+        streamed = build_dataset(self.streamed_database).bind(self.streamed_records)
+        single = build_dataset(self.seg3d_gt_database).bind(self.seg3d_gt_records)
 
         groups = ConcatDataset([streamed, single], repeats=[2, 1]).scene_index_groups()
 
@@ -667,8 +875,7 @@ class TestSceneStreaming(MultiSourceTestCase):
         Check: read the sampler type, its lane count and its shuffle flag per split.
         """
         data_module = self.build_data_module(
-            [{"database": self.streamed_database}],
-            validation_sources=[{"database": self.streamed_database}],
+            {"main": build_source(self.streamed_database)},
             train_dataloader=DataLoaderConfig(batch_size=2),
             validation_dataloader=DataLoaderConfig(batch_size=1),
             streaming=True,
@@ -691,7 +898,7 @@ class TestSceneStreaming(MultiSourceTestCase):
         Check: building the training loader raises a ValueError naming the shuffle.
         """
         data_module = self.build_data_module(
-            [{"database": self.streamed_database}],
+            {"main": build_source(self.streamed_database)},
             train_dataloader=DataLoaderConfig(batch_size=1, shuffle=True),
             streaming=True,
         )
@@ -709,7 +916,7 @@ class TestSceneStreaming(MultiSourceTestCase):
         shuffle.
         """
         data_module = self.build_data_module(
-            [{"database": self.streamed_database}],
+            {"main": build_source(self.streamed_database)},
             train_dataloader=DataLoaderConfig(batch_size=1),
             validation_dataloader=DataLoaderConfig(batch_size=1),
             streaming=True,
@@ -731,7 +938,7 @@ class TestSceneStreaming(MultiSourceTestCase):
         """
         with self.assertRaisesRegex(ValueError, "frame sampling"):
             self.build_data_module(
-                [{"database": self.streamed_database}],
+                {"main": build_source(self.streamed_database)},
                 train_frame_sampling=FRAME_SAMPLING,
                 streaming=True,
             )

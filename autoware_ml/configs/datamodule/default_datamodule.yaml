@@ -8,14 +8,18 @@ defaults:
   - dataloader@test_dataloader: default_dataloader
   - dataloader@predict_dataloader: default_dataloader
 
-train_sources:
-  - database: ${database}
-validation_sources: ${datamodule.train_sources}
-test_sources: ${datamodule.validation_sources}
-predict_sources: ${datamodule.test_sources}
-
-validation_dataset: ${datamodule.test_dataset}
-predict_dataset: ${datamodule.test_dataset}
+# Dataset sources by name. A source serves the splits it declares a dataset for, and the
+# sources of a split are concatenated in declaration order. The datasets of the training and
+# test splits are composed at the top level `datasets` key by the database specific datamodule
+# configs, the validation and predict splits read the test one.
+sources:
+  main:
+    _target_: autoware_ml.datamodule.sources.DatasetSource
+    database: ${database}
+    train_dataset: ${datasets.train}
+    validation_dataset: ${datasets.test}
+    test_dataset: ${datasets.test}
+    predict_dataset: ${datasets.test}
 
 train_frame_sampling: null
 # Scene-streaming dataloaders for temporal models; the training split reshuffles the scenes

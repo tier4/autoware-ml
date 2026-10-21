@@ -13,19 +13,20 @@ All configs live in `autoware_ml/configs/`:
 ```text
 configs/
 ├── defaults/          # Base settings and module defaults
-└── tasks/             # Task-specific configs
+└── tasks/       # Experiment configs, one tree per task and model
 ```
 
 ## Hydra Syntax
 
 ### `# @package _global_`
 
-Always include this directive at the top of task configs to merge contents at the root level:
+Always include this directive at the top of experiment configs to merge contents at the root
+level. A model base composes the experiment root, which brings in the runtime modules:
 
 ```yaml
 # @package _global_
 defaults:
-  - /defaults/default_runtime
+  - /tasks/default_task
   - _self_
 ```
 
@@ -74,17 +75,12 @@ defaults:
   - /datamodule@datamodule: t4dataset/default_segmentation3d_datamodule
   - _self_
 
-datamodule:
-  # Dataset sources of the training split, several sources mix their corpora
-  train_sources:
-    - database: ${database}
-      det3d: false
-      seg3d: true
-      repeat: 1
-
-  # Arguments of the dataset of the training split
-  train_dataset:
+# Datasets of the training and test splits, the validation and predict splits read the test one
+datasets:
+  train:
     max_num_3d_gt_bboxes: 0
+    # Only the semantic masks of the corpus supervise the run
+    det3d_supervised: false
     # Transform pipeline of the training split
     transforms:
       _target_: autoware_ml.transforms.base.TransformsCompose
@@ -93,24 +89,40 @@ datamodule:
         - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
           use_dim: [0, 1, 2, 3]
 
+datamodule:
+  # Dataset sources by name, several sources mix their corpora
+  sources:
+    main:
+      repeat: 1
+
   train_dataloader:
     batch_size: 8
     num_workers: 4
     shuffle: true
 ```
 
-Every split (`train`, `validation`, `test`, `predict`) has the same three keys:
+A split (`train`, `validation`, `test`, `predict`) is served by the sources declaring a dataset
+for it:
 
-- `<split>_sources` lists the databases the split reads. `det3d` and `seg3d` decide whether the
-  boxes and semantic masks of a source supervise the run, and `repeat` how many times its frames
-  appear in one epoch.
-- `<split>_dataset` is a partial dataset config. The datamodule completes it for every source
-  with the root path and the records of that source. It carries the task datasets
-  (`dataset_tasks`) and the transforms of the split.
+- `datasets.train` and `datasets.test` are the dataset configs the datamodule config composes at
+  the top level, instantiated without records. They name the database they read
+  (`database_root_path`, `lidar_intensity_scale`, both from `${database}`), whether its boxes
+  (`det3d_supervised`) and semantic masks (`seg3d_supervised`) supervise the run, and carry the
+  task datasets (`dataset_tasks`) and the transforms of the split. The validation and predict
+  splits read the test one. A T4 dataset also carries the lanelet `map_provider` of its
+  database, resolved against its own `database_root_path`. The dataset writes every frame's
+  lanelet map path into the frame metadata, so the map-backed evaluation filters read each
+  frame's map from the corpus that served it, whichever sources a run evaluates.
+- `datamodule.sources.<name>` is a `DatasetSource` that Hydra instantiates. It names a database,
+  the dataset of every split it serves (`train_dataset`, `validation_dataset`, `test_dataset`,
+  `predict_dataset`, `null` for a split it stays out of), and how many times its frames appear
+  in one training epoch (`repeat`). Every dataset of a source must read the database of that
+  source, so a source over a second database composes its own copy of the split dataset config.
+  The default source `main` reads `${database}` with `${datasets.train}` for training and
+  `${datasets.test}` for the other splits. In `setup()` the datamodule binds a copy of each
+  dataset to the records of its database and concatenates the sources of a split in declaration
+  order.
 - `<split>_dataloader` holds the dataloader settings (batch size, workers, shuffling, pin_memory).
-
-By default the validation and predict splits use the test dataset config, and every split reads
-the training sources.
 
 The dataset configs leave `transforms` required. Every model writes the pipeline of the training
 and test datasets in its own task config, so two models never share a pipeline and a fine tuning
@@ -120,23 +132,22 @@ For custom components, point `_target_` at the concrete implementation module,
 for example `autoware_ml.transforms.my_transforms.my_transform.MyTransform` or
 `autoware_ml.models.common.backbones.my_backbone.MyBackbone`.
 
-### `data_preprocessing`
+### `data_preprocessor`
 
 Defines runtime preprocessing that runs after batch transfer and before
-`forward()`. This section is instantiated by the entrypoint and attached to the
-model through `BaseModel.set_data_preprocessing(...)`:
+`forward()`. The experiment root declares an empty `DataPreprocessor`, a model base lists the
+modules it needs, and the builders hand the instance to the model:
 
 ```yaml
-data_preprocessing:
-  _target_: autoware_ml.preprocessing.base.DataPreprocessing
-  pipeline:
+data_preprocessor:
+  preprocessor_modules:
     - _target_: autoware_ml.preprocessing.my_preprocessing.my_preprocessing.MyPreprocessingLayer
       param: value
 ```
 
 Output-side shaping (logits -> probabilities, voxel-to-point scatter, etc.)
 is **not** a configurable framework pipeline - it lives inside the model's
-own `forward()`, `compute_metrics()`, and `predict_outputs()` methods.
+own `forward()`, `compute_metrics()`, `build_eval_output()` and `decode_outputs()` methods.
 
 ### `model`
 
@@ -200,7 +211,33 @@ callbacks:
     monitor: val/loss
     patience: 10
     mode: min
+
+  dynamic_validation:
+    _target_: autoware_ml.callbacks.dynamic_validation.DynamicValidation
+    # [start_epoch, check_val_every_n_epoch] pairs: validate every 5 epochs, then every epoch
+    # from epoch 20 onwards. The root leaves this at ??? and every leaf sets it next to its
+    # trainer.max_epochs, since the schedule follows the epoch count.
+    epoch_intervals: [[0, 5], [20, 1]]
 ```
+
+`DynamicValidation` rewrites `trainer.check_val_every_n_epoch` at the start of every epoch
+according to its schedule, so the validation frequency can change as training progresses. It
+requires `trainer.val_check_interval: 1.0` and an integer `trainer.check_val_every_n_epoch`,
+which is the initial value before the first epoch. It never modifies `trainer.log_every_n_steps`.
+
+Every leaf follows one rule: validate every 5 epochs, then every epoch over the last 10 epochs
+of its schedule, so the best checkpoint is picked at epoch resolution where it matters. A
+30-epoch leaf sets `[[0, 5], [20, 1]]`, a 50-epoch leaf `[[0, 5], [40, 1]]`, a 100-epoch leaf
+`[[0, 5], [90, 1]]`, and a run of 10 epochs or fewer validates every epoch with `[[0, 1]]`.
+Tasks validated by steps rather than epochs, or whose loss is the only training signal, set
+`dynamic_validation: null` in their base config and keep Lightning's own cadence.
+
+The root also turns on the `IterationTimer` and `DataProcessingTimer` callbacks, which log the
+step and data loading times on every batch, written out at `trainer.log_every_n_steps` like
+every other step metric, and the `RichProgressBar`, for every task. The `ModelSummaryExampleInput` callback sets the first training sample as the
+module's example input at fit start, so the model summary reports the FLOPs of one sample. The
+summary runs that forward pass once on every rank. Set `model_summary_example_input: null` to
+skip it. The callback fails fit when the datamodule serves no training sample.
 
 ### `logger`
 

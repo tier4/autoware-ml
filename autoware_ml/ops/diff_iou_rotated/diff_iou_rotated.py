@@ -262,26 +262,26 @@ def box_intersection(
     x1, y1, x2, y2 = line1_ext.split([1, 1, 1, 1], dim=-1)
     x3, y3, x4, y4 = line2_ext.split([1, 1, 1, 1], dim=-1)
     # math: https://en.wikipedia.org/wiki/Line%E2%80%93line_intersection
-    numerator = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
-    # numerator is |d1| * |d2| * sin(angle between the edges), so scaling by the edge lengths
+    denominator = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+    # denominator is |d1| * |d2| * sin(angle between the edges), so scaling by the edge lengths
     # turns the tolerance into a bound on that sine. Exactly parallel edges give zero here.
     edge_lengths = torch.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2) * torch.sqrt(
         (x3 - x4) ** 2 + (y3 - y4) ** 2
     )
-    parallel = numerator.abs() <= GEOMETRY_TOLERANCE * edge_lengths
-    denumerator_t = (x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)
-    t = denumerator_t / numerator
+    parallel = denominator.abs() <= GEOMETRY_TOLERANCE * edge_lengths
+    numerator_t = (x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)
+    t = numerator_t / denominator
     t[parallel] = -1.0
     # intersection strictly inside line segment 1, away from its endpoints
     mask_t = (t > GEOMETRY_TOLERANCE) & (t < 1 - GEOMETRY_TOLERANCE)
-    denumerator_u = (x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)
-    u = -denumerator_u / numerator
+    numerator_u = (x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)
+    u = -numerator_u / denominator
     u[parallel] = -1.0
     # intersection strictly inside line segment 2, away from its endpoints
     mask_u = (u > GEOMETRY_TOLERANCE) & (u < 1 - GEOMETRY_TOLERANCE)
     mask = mask_t & mask_u
     # overwrite with EPSILON. otherwise numerically unstable
-    t = denumerator_t / (numerator + EPSILON)
+    t = numerator_t / (denominator + EPSILON)
     intersections = torch.stack([x1 + t * (x2 - x1), y1 + t * (y2 - y1)], dim=-1)
     intersections = intersections * mask.float().unsqueeze(-1)
     return intersections, mask
@@ -579,6 +579,11 @@ def diff_iou_rotated_2d(
         intersection, _ = oriented_box_intersection_2d(corners1, corners2)  # (B, N)
         area1 = box1[:, :, 2] * box1[:, :, 3]
         area2 = box2[:, :, 2] * box2[:, :, 3]
+        # The intersection of two boxes fits inside the smaller one. The polygon is assembled
+        # from float-tolerance classified candidates, so bound its area here: an intersection
+        # above both areas would shrink the clamped union to EPSILON and send the IoU into the
+        # billions, which the IoU loss then rewards.
+        intersection = torch.minimum(intersection, torch.minimum(area1, area2))
         # A zero-size box with no overlap has a zero union; the clamp turns 0 / 0 into an IoU of 0
         # with a finite gradient instead of NaN. Callers must still provide non-negative sizes.
         union = (area1 + area2 - intersection).clamp(min=EPSILON)
@@ -618,6 +623,10 @@ def diff_iou_rotated_3d(
             torch.min(z1 + height1 * 0.5, z2 + height2 * 0.5)
             - torch.max(z1 - height1 * 0.5, z2 - height2 * 0.5)
         ).clamp_(min=0.0)
+        # Same bound as the 2D IoU: the BEV intersection fits inside the smaller footprint.
+        bev_area1 = box3d1[..., Box3DFieldIndex.LENGTH] * box3d1[..., Box3DFieldIndex.WIDTH]
+        bev_area2 = box3d2[..., Box3DFieldIndex.LENGTH] * box3d2[..., Box3DFieldIndex.WIDTH]
+        intersection = torch.minimum(intersection, torch.minimum(bev_area1, bev_area2))
         intersection_3d = intersection * z_overlap
         volume1 = box3d1[..., Box3DFieldIndex.LENGTH] * box3d1[..., Box3DFieldIndex.WIDTH] * height1
         volume2 = box3d2[..., Box3DFieldIndex.LENGTH] * box3d2[..., Box3DFieldIndex.WIDTH] * height2

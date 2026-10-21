@@ -73,8 +73,29 @@ def test_resolver_rejects_a_raw_name_the_vocabulary_does_not_list() -> None:
         Box3DLabelResolver(TAXONOMY)([_box("vehicle.bus")])
 
 
-def test_remapper_folds_the_listed_names_and_keeps_the_others() -> None:
-    boxes = Box3DLabelRemapper(TAXONOMY, {"trailer": "truck"})([_box("trailer"), _box("car")])
+FOLDING_TAXONOMY = LabelTaxonomy(
+    VOCABULARY,
+    ["car", "truck"],
+    {"car": "car", "truck": "truck", "trailer": "truck"},
+    -1,
+    {"grouped_vehicle": ["car", "truck"]},
+)
 
-    assert [box.box3d_label_name for box in boxes] == ["truck", "car"]
+
+def test_remapper_sets_the_class_index_of_the_fine_names_and_keeps_the_names() -> None:
+    boxes = Box3DLabelRemapper(FOLDING_TAXONOMY)([_box("trailer"), _box("car")])
+
+    assert [box.box3d_label_name for box in boxes] == ["trailer", "car"]
     assert [box.box3d_label_index for box in boxes] == [1, 0]
+
+
+def test_remapper_gives_a_fine_name_the_level_drops_the_ignore_index() -> None:
+    boxes = Box3DLabelRemapper(TAXONOMY)([_box("trailer")])
+
+    assert [box.box3d_label_name for box in boxes] == ["trailer"]
+    assert [box.box3d_label_index for box in boxes] == [-1]
+
+
+def test_remapper_rejects_a_name_that_is_not_a_fine_name() -> None:
+    with pytest.raises(KeyError):
+        Box3DLabelRemapper(TAXONOMY)([_box("vehicle.car")])

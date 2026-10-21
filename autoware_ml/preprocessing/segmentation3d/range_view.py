@@ -28,6 +28,7 @@ from torch import Tensor
 
 from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTBatch
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.preprocessing.data_preprocessor_modules import DataPreprocessorModule
 
 
 def project_range(
@@ -140,7 +141,7 @@ def nearest_point_per_pixel(
     return by_pixel[torch.cumsum(counts, dim=0) - counts]
 
 
-class RangeInterpolation:
+class RangeInterpolation(DataPreprocessorModule):
     """Fill the empty range image pixels of every sample with horizontal interpolation."""
 
     def __init__(
@@ -246,7 +247,7 @@ class RangeInterpolation:
         return new_points, new_labels
 
 
-class FrustumMix:
+class FrustumMix(DataPreprocessorModule):
     """Mix every sample of the batch with the next one along frustum aligned stripes."""
 
     def __init__(
@@ -384,7 +385,7 @@ class FrustumMix:
         )
 
 
-class InstanceCopy:
+class InstanceCopy(DataPreprocessorModule):
     """Copy the points of selected classes from the next sample of the batch."""
 
     def __init__(self, instance_classes: Sequence[int], probability: float = 1.0) -> None:

@@ -1,4 +1,0 @@
-# @package nuscenes
-
-segdet3d:
-  metrics: ${merge_lists:${nuscenes.detection3d.metrics},${nuscenes.segmentation3d.metrics}}

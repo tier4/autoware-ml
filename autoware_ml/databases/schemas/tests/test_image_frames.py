@@ -1,0 +1,92 @@
+# Copyright 2026 TIER IV, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Tests for the image frame schema."""
+
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+from autoware_ml.databases.schemas.image_frames import (
+    ImageFrameDataModel,
+    distortion_model_from_coefficients,
+)
+
+
+@pytest.mark.parametrize(
+    ("coefficients", "expected"),
+    [
+        ([], ""),
+        ([0.1, -0.2, 0.001, 0.002], "plumb_bob"),
+        ([0.1, -0.2, 0.001, 0.002, 0.05], "plumb_bob"),
+        ([0.1, -0.2, 0.001, 0.002, 0.05, 0.0, 0.0, 0.0], "rational_polynomial"),
+    ],
+)
+def test_distortion_model_from_coefficients(coefficients: list[float], expected: str) -> None:
+    assert distortion_model_from_coefficients(coefficients) == expected
+
+
+@pytest.mark.parametrize("count", [1, 3, 6, 7, 12, 14])
+def test_distortion_model_rejects_counts_of_no_model(count: int) -> None:
+    with pytest.raises(ValueError, match=f"{count} coefficients"):
+        distortion_model_from_coefficients([0.1] * count)
+
+
+def test_image_frame_round_trips_distortion_through_dictionary() -> None:
+    frame = ImageFrameDataModel(
+        image_frame_id="frame",
+        image_keyframe=True,
+        image_sensor_id="sensor",
+        image_sensor_channel_name="CAM_FRONT",
+        image_timestamp_seconds=1.0,
+        image_relative_path="samples/CAM_FRONT/a.jpg",
+        image_height=10,
+        image_width=20,
+        cam2img=np.eye(3, dtype=np.float64),
+        image_distortion_coefficients=[0.1, -0.2, 0.001, 0.002, 0.05],
+        image_distortion_model="plumb_bob",
+        image_sensor_to_ego_pose_matrix=np.eye(4, dtype=np.float64),
+        image_frame_ego_pose_to_global_matrix=np.eye(4, dtype=np.float64),
+        lidar2cam=None,
+        lidar2img=None,
+    )
+
+    restored = ImageFrameDataModel.load_from_dictionary(frame.to_dictionary())
+
+    assert list(restored.image_distortion_coefficients) == [0.1, -0.2, 0.001, 0.002, 0.05]
+    assert restored.image_distortion_model == "plumb_bob"
+
+
+def test_image_frame_rejects_an_absolute_path() -> None:
+    # The records store every blob path relative to the database root, so a path with a root
+    # would bind the record to the machine that generated it
+    with pytest.raises(ValueError, match="image_relative_path .* is absolute"):
+        ImageFrameDataModel(
+            image_frame_id="frame",
+            image_keyframe=True,
+            image_sensor_id="sensor",
+            image_sensor_channel_name="CAM_FRONT",
+            image_timestamp_seconds=1.0,
+            image_relative_path="/data/nuscenes/samples/CAM_FRONT/a.jpg",
+            image_height=10,
+            image_width=20,
+            cam2img=np.eye(3, dtype=np.float64),
+            image_distortion_coefficients=[],
+            image_distortion_model="",
+            image_sensor_to_ego_pose_matrix=np.eye(4, dtype=np.float64),
+            image_frame_ego_pose_to_global_matrix=np.eye(4, dtype=np.float64),
+            lidar2cam=None,
+            lidar2img=None,
+        )

@@ -1,4 +1,4 @@
 defaults:
   - default_datamodule@_here_
-  - t4dataset/datasets@train_dataset: default_detection3d_train_dataset
-  - t4dataset/datasets@test_dataset: default_detection3d_test_dataset
+  - t4dataset/datasets/detection3d@_global_.datasets.train: default_detection3d_train_dataset
+  - t4dataset/datasets/detection3d@_global_.datasets.test: default_detection3d_test_dataset

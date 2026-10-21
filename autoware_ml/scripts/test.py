@@ -12,149 +12,177 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Evaluation script for Autoware-ML models.
+"""Evaluation entrypoint for Autoware-ML models.
 
-This module implements the framework test entrypoint used to evaluate trained
-checkpoints on configured datamodules.
+This script wires Hydra configuration, Lightning runtime setup, MLflow
+integration, and trainer execution for evaluating trained checkpoints.
 """
 
 import logging
-import os
 from pathlib import Path
+from types import MappingProxyType
+from typing import Any, Sequence
+
 
 import hydra
+from hydra.core.hydra_config import HydraConfig
 import lightning as L
 from omegaconf import DictConfig
+import torch
 
-from autoware_ml.utils.checkpoints import apply_matching_weights
-from autoware_ml.utils.mlflow_helpers import (
-    AUTOWARE_ML_RUN_ID_ENV,
-    build_run_metadata,
-    configure_logger,
-    get_user_config_name,
-    load_run_context,
-    prepare_run_context,
-    resolve_lineage_context,
-    should_enable_logger,
-    write_run_config_artifacts,
-    write_run_metadata,
+from autoware_ml.builders.database_builder import build_datamodule
+from autoware_ml.builders.mlflow_builder import build_mlflow_run_context
+from autoware_ml.builders.model_builder import (
+    build_model,
+    build_data_preprocessor,
+    build_weight_checkpoint_paths,
 )
+from autoware_ml.builders.logger_builder import build_trainer_logger
+from autoware_ml.datamodule.data_module import DataModule
+from autoware_ml.models.module_base_model import ModuleBaseModel
+from autoware_ml.utils.mlflow_helpers import resolve_parent_run_id
 from autoware_ml.utils.runtime import (
     configure_torch_runtime,
+    restrict_console_logging_to_rank_zero,
     get_config_path,
     instantiate_callbacks,
     instantiate_trainer,
     log_configuration,
     log_hyperparameters,
-    resolve_work_dir,
     set_seed,
 )
 
 logger = logging.getLogger(__name__)
 _CONFIG_PATH = get_config_path()
+CONFIG_NAME_PREFIX = "tasks/"
+
+
+def test(
+    trainer: L.Trainer,
+    cfg: DictConfig,
+    model: ModuleBaseModel,
+    datamodule: DataModule,
+    weight_paths: Sequence[str | Path],
+) -> list[dict[str, Any]]:
+    """
+    Start an evaluation loop.
+
+    Args:
+        trainer: Lightning trainer
+        cfg: Hydra configuration
+        model: Multi-task base model
+        datamodule: Multi-task data module
+        weight_paths: Checkpoint paths already loaded into the model
+
+    Returns:
+        Per-dataloader metric dictionaries reported by the trainer.
+    """
+
+    logger.info("Starting evaluation...")
+    logger.info(f"Weights: {[str(path) for path in weight_paths]}")
+    logger.info(f"Accelerator: {cfg.trainer.get('accelerator', 'auto')}")
+    logger.info(f"Devices: {cfg.trainer.get('devices', 'auto')}")
+
+    # Weights are applied by the model builder, so the trainer must not reload a checkpoint.
+    metrics = trainer.test(model, datamodule=datamodule, ckpt_path=None)
+    logger.info("Evaluation completed!")
+
+    return metrics
 
 
 @hydra.main(version_base=None, config_path=_CONFIG_PATH)
 def main(cfg: DictConfig):
-    """Run the model evaluation entrypoint.
+    """Main evaluation function.
 
     Args:
-        cfg: Fully composed Hydra configuration for evaluation.
+        cfg: Hydra configuration
     """
+    # First, so that every rank after rank zero stays silent from the config dump onwards.
+    restrict_console_logging_to_rank_zero()
     log_configuration(cfg)
-    work_dir = resolve_work_dir()
-    logger.info(f"Working directory: {work_dir}")
-    config_name = get_user_config_name()
-    logger_enabled = should_enable_logger(cfg)
+    config_name = HydraConfig.get().job.config_name
+    if config_name is None:
+        raise ValueError("Hydra config name is not available.")
+
+    logger_enabled = cfg.get("logger") is not None
+    config_name = config_name.removeprefix(CONFIG_NAME_PREFIX)
+
+    # Configure weights and checkpoint paths
+    weight_paths, checkpoint_path = build_weight_checkpoint_paths(cfg)
+
+    # Nest the evaluation under the MLflow run that produced the primary checkpoint, when known
+    parent_run_id = resolve_parent_run_id(checkpoint_path)
+
+    run_context = build_mlflow_run_context(
+        cfg,
+        stage="test",
+        config_name=config_name,
+        logger_enabled=logger_enabled,
+        parent_run_id=parent_run_id,
+        extra_tags=MappingProxyType(
+            {
+                "checkpoint_path": str(checkpoint_path),
+                "source_run_id": parent_run_id or "",
+            }
+        ),
+    )
 
     configure_torch_runtime()
     set_seed(cfg)
 
-    logger.info("Instantiating datamodule...")
-    datamodule: L.LightningDataModule = hydra.utils.instantiate(cfg.datamodule)
+    # Build trainer logger
+    trainer_logger = build_trainer_logger(
+        cfg,
+        ml_flow_run_context=run_context,
+        stage="test",
+        config_name=config_name,
+        logger_enabled=logger_enabled,
+        extra_metadata=MappingProxyType(
+            {
+                "source_run_id": parent_run_id,
+                "checkpoint_path": str(checkpoint_path),
+            }
+        ),
+    )
 
-    logger.info("Instantiating model...")
-    model: L.LightningModule = hydra.utils.instantiate(cfg.model)
-    model.set_data_preprocessing(hydra.utils.instantiate(cfg.data_preprocessing))
+    # Build datamodule
+    datamodule = build_datamodule(cfg)
+
+    # Build model
+    data_preprocessor = build_data_preprocessor(cfg)
+    model = build_model(
+        cfg,
+        data_preprocessor=data_preprocessor,
+        weights_path=weight_paths,
+        resume_checkpoint_path=None,
+        device=torch.device("cpu"),
+        set_eval=True,
+        enforce_full_coverage=True,
+    )
 
     logger.info("Instantiating callbacks...")
     callbacks = instantiate_callbacks(cfg, logger_enabled=logger_enabled)
 
-    weights_arg = cfg.get("weights", None)
-    if weights_arg is None:
-        raise ValueError("--weights <path> (repeatable) must be specified.")
-    weight_paths = [weights_arg] if isinstance(weights_arg, str) else list(weights_arg)
-    checkpoint_path = Path(weight_paths[-1])
-    experiment_name, parent_run_id = resolve_lineage_context(config_name, checkpoint_path)
-    run_context = None
-    if logger_enabled:
-        pre_created_run_id = os.environ.get(AUTOWARE_ML_RUN_ID_ENV)
-        if pre_created_run_id is not None:
-            run_context = load_run_context(cfg.logger.tracking_uri, pre_created_run_id)
-            if work_dir != run_context.hydra_dir:
-                raise RuntimeError(
-                    f"Hydra work directory '{work_dir}' does not match the pre-created MLflow "
-                    f"run directory '{run_context.hydra_dir}'."
-                )
-        else:
-            run_context = prepare_run_context(
-                cfg.logger.tracking_uri,
-                config_name,
-                hydra_dir=work_dir,
-                stage="test",
-                parent_run_id=parent_run_id,
-                experiment_name=experiment_name,
-                extra_tags={
-                    "checkpoint_path": str(checkpoint_path),
-                    "source_run_id": parent_run_id or "",
-                },
-            )
-
-    logger.info("Instantiating loggers...")
-    trainer_logger = None
-    if logger_enabled:
-        write_run_config_artifacts(cfg, run_context.artifact_dir)
-        write_run_metadata(
-            run_context.artifact_dir,
-            build_run_metadata(
-                run_context,
-                config_name,
-                run_context.hydra_dir,
-                "test",
-                extra_metadata={
-                    "source_run_id": parent_run_id,
-                    "checkpoint_path": str(checkpoint_path),
-                },
-            ),
-        )
-        configure_logger(
-            cfg.logger,
-            run_context.experiment_name,
-            run_context.run_name,
-            run_context.tags,
-            run_id=run_context.run_id,
-        )
-        trainer_logger = hydra.utils.instantiate(cfg.logger)
-
     logger.info("Instantiating trainer...")
+    trainer_root_dir = (
+        run_context.artifact_dir if run_context is not None else cfg.experiment_run_dir
+    )
     trainer: L.Trainer = instantiate_trainer(
         cfg,
         callbacks,
         trainer_logger,
-        run_context.artifact_dir if run_context is not None else work_dir,
+        trainer_root_dir,
     )
-
     log_hyperparameters(cfg, trainer_logger)
 
-    logger.info("Starting evaluation...")
-    logger.info(f"Weights: {weight_paths}")
-    logger.info(f"Accelerator: {cfg.trainer.get('accelerator', 'auto')}")
-    logger.info(f"Devices: {cfg.trainer.get('devices', 'auto')}")
-
-    apply_matching_weights(model, weight_paths, map_location="cpu", set_eval=True, logger=logger)
-    trainer.test(model, datamodule=datamodule, ckpt_path=None)
-
-    logger.info("Evaluation completed!")
+    # Start evaluation
+    return test(
+        trainer=trainer,
+        cfg=cfg,
+        model=model,
+        datamodule=datamodule,
+        weight_paths=weight_paths,
+    )
 
 
 if __name__ == "__main__":

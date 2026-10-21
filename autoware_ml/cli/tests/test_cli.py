@@ -46,9 +46,14 @@ from autoware_ml.utils.cli.helpers import (
 )
 from autoware_ml.utils.session import SessionCommandError
 
-SAMPLE_CONFIG_NAME = "calibration_status/calibration_status_classifier/resnet18_t4dataset_j6gen2"
+SAMPLE_CONFIG_NAME = (
+    "detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_50e_t4dataset_120m_j6gen2_base"
+)
 SAMPLE_CONFIG_PATH = f"tasks/{SAMPLE_CONFIG_NAME}"
-SAMPLE_SESSION_NAME = "calibration-status-train"
+SAMPLE_SESSION_NAME = "centerpoint-train"
+SAMPLE_EXPERIMENT_GROUP_NAME = "ptv3_det3d_seg3d/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base"
+SAMPLE_EXPERIMENT_NAME = f"{SAMPLE_EXPERIMENT_GROUP_NAME}/voxel012"
+SAMPLE_EXPERIMENT_UID = "2026.10.15.12.00.00"
 
 
 class TestParseExtraArgs:
@@ -97,15 +102,13 @@ class TestResolveConfigReference:
 
     def test_resolve_packaged_yaml_path(self) -> None:
         config_path, config_name, hydra_overrides = resolve_config_reference(
-            "autoware_ml/configs/tasks/calibration_status/calibration_status_classifier/resnet18_t4dataset_j6gen2.yaml",
+            "autoware_ml/configs/tasks/detection3d/centerpoint/t4dataset/"
+            "voxel024_second_secfpn_b16_50e_t4dataset_120m_j6gen2_base.yaml",
             "tasks",
         )
 
         assert config_path is None
-        assert (
-            config_name
-            == "tasks/calibration_status/calibration_status_classifier/resnet18_t4dataset_j6gen2"
-        )
+        assert config_name == SAMPLE_CONFIG_PATH
         assert hydra_overrides == []
 
     def test_resolve_relative_yaml_path(self, tmp_path: Path, monkeypatch) -> None:
@@ -138,18 +141,16 @@ class TestCompleteConfigValue:
     """Tests for config completion helpers."""
 
     def test_complete_bundled_configs(self, tmp_path: Path, monkeypatch) -> None:
-        config_root = tmp_path / "tasks" / "calibration_status" / "calibration_status_classifier"
+        config_root = tmp_path / "tasks" / "detection3d" / "centerpoint" / "t4dataset"
         config_root.mkdir(parents=True)
         (config_root / "base.yaml").write_text("", encoding="utf-8")
-        (config_root / "resnet18_t4dataset_j6gen2.yaml").write_text("", encoding="utf-8")
+        (config_root / f"{Path(SAMPLE_CONFIG_NAME).name}.yaml").write_text("", encoding="utf-8")
         monkeypatch.setattr(helpers, "CONFIGS_ROOT", tmp_path)
 
-        completions = complete_config_value(
-            "calibration_status/calibration_status_classifier/resnet18_t", "tasks"
-        )
+        completions = complete_config_value("detection3d/centerpoint/t4dataset/voxel024", "tasks")
 
         assert completions == [SAMPLE_CONFIG_NAME]
-        assert "calibration_status/calibration_status_classifier/base" not in completions
+        assert "detection3d/centerpoint/t4dataset/base" not in completions
 
     def test_complete_filesystem_yaml_paths(self, tmp_path: Path, monkeypatch) -> None:
         config_dir = tmp_path / "configs"
@@ -222,7 +223,7 @@ class TestCliCommands:
         with patch("autoware_ml.cli.cli.run_lazy_script") as run_lazy_script_mock:
             result = self.runner.invoke(
                 app,
-                ["train", "--config-name", SAMPLE_CONFIG_NAME, "--weights", "seg.ckpt"],
+                ["train", "--config-name", SAMPLE_CONFIG_NAME, "--weights", "seg3d.ckpt"],
             )
 
         assert result.exit_code == 0
@@ -233,11 +234,38 @@ class TestCliCommands:
             config_name=SAMPLE_CONFIG_NAME,
             stage="train",
             extra_args=[],
-            hydra_overrides=["+weights=[seg.ckpt]"],
+            hydra_overrides=["+weights=[seg3d.ckpt]"],
             resume_checkpoint=None,
             new_run=False,
             config_prefix=cli.TASK_CONFIG_PREFIX,
         )
+
+    def test_train_forwards_skip_mismatched_weights(self) -> None:
+        with patch("autoware_ml.cli.cli.run_lazy_script") as run_lazy_script_mock:
+            result = self.runner.invoke(
+                app,
+                [
+                    "train",
+                    "--config-name",
+                    SAMPLE_CONFIG_NAME,
+                    "--weights",
+                    "seg3d.ckpt",
+                    "--skip-mismatched-weights",
+                ],
+            )
+
+        assert result.exit_code == 0
+        hydra_overrides = run_lazy_script_mock.call_args.kwargs["hydra_overrides"]
+        assert hydra_overrides == ["+weights=[seg3d.ckpt]", "+skip_mismatched_weights=true"]
+
+    def test_train_rejects_skip_mismatched_weights_without_weights(self) -> None:
+        result = self.runner.invoke(
+            app,
+            ["train", "--config-name", SAMPLE_CONFIG_NAME, "--skip-mismatched-weights"],
+        )
+
+        assert result.exit_code != 0
+        assert "--skip-mismatched-weights requires --weights" in result.output
 
     def test_train_runs_with_resume_checkpoint(self, tmp_path: Path) -> None:
         checkpoint_path = tmp_path / "last.ckpt"
@@ -312,7 +340,7 @@ class TestCliCommands:
                 "--config-name",
                 SAMPLE_CONFIG_NAME,
                 "--weights",
-                "seg.ckpt",
+                "seg3d.ckpt",
                 "--resume-checkpoint",
                 "last.ckpt",
             ],
@@ -344,7 +372,7 @@ class TestCliCommands:
             config_prefix=cli.TASK_CONFIG_PREFIX,
         )
 
-    def test_deploy_runs_with_multiple_weights(self) -> None:
+    def test_deploy_forwards_release_override(self) -> None:
         with patch("autoware_ml.cli.cli.run_lazy_script") as run_lazy_script_mock:
             result = self.runner.invoke(
                 app,
@@ -353,9 +381,9 @@ class TestCliCommands:
                     "--config-name",
                     SAMPLE_CONFIG_NAME,
                     "--weights",
-                    "seg.ckpt",
-                    "--weights",
-                    "det.ckpt",
+                    "model.ckpt",
+                    "--release",
+                    "v1.2.3",
                 ],
             )
 
@@ -367,8 +395,36 @@ class TestCliCommands:
             config_name=SAMPLE_CONFIG_NAME,
             stage="deploy",
             extra_args=[],
-            hydra_overrides=["+weights=[seg.ckpt,det.ckpt]"],
-            checkpoints=["seg.ckpt", "det.ckpt"],
+            hydra_overrides=["+weights=[model.ckpt]", "+release=v1.2.3"],
+            checkpoints=["model.ckpt"],
+            config_prefix=cli.TASK_CONFIG_PREFIX,
+        )
+
+    def test_deploy_runs_with_multiple_weights(self) -> None:
+        with patch("autoware_ml.cli.cli.run_lazy_script") as run_lazy_script_mock:
+            result = self.runner.invoke(
+                app,
+                [
+                    "deploy",
+                    "--config-name",
+                    SAMPLE_CONFIG_NAME,
+                    "--weights",
+                    "seg3d.ckpt",
+                    "--weights",
+                    "det3d.ckpt",
+                ],
+            )
+
+        assert result.exit_code == 0
+        run_lazy_script_mock.assert_called_once_with(
+            cli.CLI_RUNTIME_MODULE,
+            "run_hydra_entrypoint",
+            entrypoint_module=cli.DEPLOY_ENTRYPOINT_MODULE,
+            config_name=SAMPLE_CONFIG_NAME,
+            stage="deploy",
+            extra_args=[],
+            hydra_overrides=["+weights=[seg3d.ckpt,det3d.ckpt]"],
+            checkpoints=["seg3d.ckpt", "det3d.ckpt"],
             config_prefix=cli.TASK_CONFIG_PREFIX,
         )
 
@@ -386,9 +442,9 @@ class TestCliCommands:
                     "--config-name",
                     SAMPLE_CONFIG_NAME,
                     "--weights",
-                    "seg.ckpt",
+                    "seg3d.ckpt",
                     "--weights",
-                    "det.ckpt",
+                    "det3d.ckpt",
                 ],
             )
 
@@ -401,8 +457,8 @@ class TestCliCommands:
             stage="test",
             extra_args=[],
             # Test forces a single device by default.
-            hydra_overrides=["+weights=[seg.ckpt,det.ckpt]", "++trainer.devices=1"],
-            checkpoint="det.ckpt",
+            hydra_overrides=["+weights=[seg3d.ckpt,det3d.ckpt]", "++trainer.devices=1"],
+            checkpoint="det3d.ckpt",
             config_prefix=cli.TASK_CONFIG_PREFIX,
         )
 
@@ -415,7 +471,7 @@ class TestCliCommands:
                     "--config-name",
                     SAMPLE_CONFIG_NAME,
                     "--weights",
-                    "seg.ckpt",
+                    "seg3d.ckpt",
                     "trainer.devices=4",
                 ],
             )
@@ -430,8 +486,8 @@ class TestCliCommands:
             extra_args=["trainer.devices=4"],
             # The forcing override is appended after extra args, so runtime applies it last
             # and a single device wins over the user's trainer.devices=4.
-            hydra_overrides=["+weights=[seg.ckpt]", "++trainer.devices=1"],
-            checkpoint="seg.ckpt",
+            hydra_overrides=["+weights=[seg3d.ckpt]", "++trainer.devices=1"],
+            checkpoint="seg3d.ckpt",
             config_prefix=cli.TASK_CONFIG_PREFIX,
         )
 
@@ -444,7 +500,7 @@ class TestCliCommands:
                     "--config-name",
                     SAMPLE_CONFIG_NAME,
                     "--weights",
-                    "seg.ckpt",
+                    "seg3d.ckpt",
                     "--use-config-devices",
                     "trainer.devices=4",
                 ],
@@ -459,8 +515,8 @@ class TestCliCommands:
             stage="test",
             extra_args=["trainer.devices=4"],
             # No forcing override: trainer.devices from config / extra args is honored.
-            hydra_overrides=["+weights=[seg.ckpt]"],
-            checkpoint="seg.ckpt",
+            hydra_overrides=["+weights=[seg3d.ckpt]"],
+            checkpoint="seg3d.ckpt",
             config_prefix=cli.TASK_CONFIG_PREFIX,
         )
 
@@ -586,23 +642,12 @@ class TestCliRuntime:
         tmp_path: Path,
     ) -> None:
         config_name = "multi/ptv3/voxel012"
-        experiment_name = "multi_ptv3_voxel012"
-        cfg = OmegaConf.create({"logger": {"tracking_uri": "sqlite:///mlruns/mlflow.db"}})
 
         with (
-            patch(
-                "autoware_ml.cli.runtime.resolve_config_reference",
-                return_value=(None, f"tasks/{config_name}", []),
-            ),
-            patch("autoware_ml.cli.runtime.initialize_config_module", return_value=nullcontext()),
-            patch("autoware_ml.cli.runtime.compose", return_value=cfg),
+            self._patched_logger_config(config_name),
             patch(
                 "autoware_ml.cli.runtime.resolve_deploy_lineage",
-                return_value=(
-                    experiment_name,
-                    None,
-                    [{"run_id": "seg-run"}, {"run_id": "det-run"}],
-                ),
+                return_value=(None, [{"run_id": "seg-run"}, {"run_id": "det-run"}]),
             ) as resolve_deploy_lineage_mock,
             patch(
                 "autoware_ml.cli.runtime.prepare_run_context",
@@ -613,15 +658,19 @@ class TestCliRuntime:
                 config_name,
                 "tasks",
                 "deploy",
-                checkpoints=["seg.ckpt", "det.ckpt"],
+                checkpoints=["seg3d.ckpt", "det3d.ckpt"],
             )
 
         resolve_deploy_lineage_mock.assert_called_once_with(
-            config_name,
-            [Path("seg.ckpt"), Path("det.ckpt")],
+            [Path("seg3d.ckpt"), Path("det3d.ckpt")]
         )
         prepare_run_context_mock.assert_called_once()
-        assert prepare_run_context_mock.call_args.kwargs["experiment_name"] == experiment_name
+        assert prepare_run_context_mock.call_args.kwargs["experiment_name"] == (
+            SAMPLE_EXPERIMENT_NAME
+        )
+        assert prepare_run_context_mock.call_args.kwargs["run_name"] == (
+            f"deploy_voxel012_{SAMPLE_EXPERIMENT_UID}"
+        )
         assert prepare_run_context_mock.call_args.kwargs["parent_run_id"] is None
         assert prepare_run_context_mock.call_args.kwargs["extra_tags"]["source_run_ids"] == (
             "seg-run,det-run"
@@ -629,8 +678,18 @@ class TestCliRuntime:
         assert env_updates["AUTOWARE_ML_RUN_ID"] == "deploy-run"
 
     @contextmanager
-    def _patched_logger_config(self, config_name: str):
-        cfg = OmegaConf.create({"logger": {"tracking_uri": "sqlite:///mlruns/mlflow.db"}})
+    def _patched_logger_config(self, config_name: str, logger_enabled: bool = True):
+        """Compose to the experiment bookkeeping of ``default_task.yaml`` plus the logger."""
+        cfg = OmegaConf.create(
+            {
+                "experiment_group_name": SAMPLE_EXPERIMENT_GROUP_NAME,
+                "experiment_name": "voxel012",
+                "experiment_uid": SAMPLE_EXPERIMENT_UID,
+                "logger": (
+                    {"tracking_uri": "sqlite:///mlruns/mlflow.db"} if logger_enabled else None
+                ),
+            }
+        )
         with (
             patch(
                 "autoware_ml.cli.runtime.resolve_config_reference",
@@ -640,6 +699,46 @@ class TestCliRuntime:
             patch("autoware_ml.cli.runtime.compose", return_value=cfg),
         ):
             yield
+
+    def test_prepare_runtime_environment_names_the_run_like_the_entrypoint_builder(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        The CLI creates the run before the entrypoint starts. It must use the experiment and
+        run names the entrypoint's builder derives from the same config, otherwise ``aml train``
+        and ``python -m autoware_ml.scripts.train`` would name their runs differently.
+        """
+        config_name = "multi/ptv3/voxel012"
+        with (
+            self._patched_logger_config(config_name),
+            patch(
+                "autoware_ml.cli.runtime.prepare_run_context",
+                return_value=SimpleNamespace(run_id="train-run", hydra_dir=tmp_path / "hydra"),
+            ) as prepare_run_context_mock,
+        ):
+            env_updates = cli_runtime.prepare_runtime_environment(config_name, "tasks", "train")
+
+        kwargs = prepare_run_context_mock.call_args.kwargs
+        assert prepare_run_context_mock.call_args.args[1] == config_name
+        assert kwargs["experiment_name"] == SAMPLE_EXPERIMENT_NAME
+        assert kwargs["run_name"] == f"train_voxel012_{SAMPLE_EXPERIMENT_UID}"
+        assert kwargs["parent_run_id"] is None
+        assert env_updates["AUTOWARE_ML_RUN_ID"] == "train-run"
+
+    def test_prepare_runtime_environment_without_logger_keys_hydra_dir_on_the_experiment(
+        self,
+    ) -> None:
+        config_name = "multi/ptv3/voxel012"
+        with self._patched_logger_config(config_name, logger_enabled=False):
+            env_updates = cli_runtime.prepare_runtime_environment(config_name, "tasks", "train")
+
+        assert env_updates["AUTOWARE_ML_RUN_ID"] is None
+        hydra_dir = Path(env_updates["AUTOWARE_ML_HYDRA_RUN_DIR"])
+        assert hydra_dir.parent.parent.parent == (
+            Path(cli_runtime.generate_hydra_run_dir(SAMPLE_EXPERIMENT_NAME)).parent.parent.parent
+        )
+        assert SAMPLE_EXPERIMENT_NAME in hydra_dir.as_posix()
+        assert "_hydra" in hydra_dir.parts
 
     def test_prepare_runtime_environment_reuses_source_run_for_resume(self, tmp_path: Path) -> None:
         config_name = "multi/ptv3/voxel012"
@@ -795,7 +894,7 @@ class TestSessionCompletion:
     def test_suggests_config_names_after_flag(self) -> None:
         suggestions = complete_session_command_value(
             ["train", "--config-name"],
-            "calibration_status/calibration_status_classifier/resnet18_t",
+            "detection3d/centerpoint/t4dataset/voxel024",
         )
         assert SAMPLE_CONFIG_NAME in suggestions
 
@@ -861,7 +960,7 @@ class TestSessionNameCompletion:
             "autoware_ml.utils.cli.helpers.list_tmux_session_names",
             return_value=["default", SAMPLE_SESSION_NAME],
         ):
-            assert complete_session_name_value("cal") == [SAMPLE_SESSION_NAME]
+            assert complete_session_name_value("cen") == [SAMPLE_SESSION_NAME]
 
     def test_returns_empty_when_tmux_unavailable(self) -> None:
         with patch("autoware_ml.utils.cli.helpers.shutil.which", return_value=None):

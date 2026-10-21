@@ -2,7 +2,7 @@
 This script defines classes to merge 3D bounding boxes based on the different implementations.
 """
 
-from typing import Sequence, Tuple, Set
+from typing import Sequence
 from types import MappingProxyType
 
 import numpy as np
@@ -30,7 +30,7 @@ class Box3DMerger(Box3DPipeline):
         Initialize Box3DMerger.
 
         Args:
-          target_classes: Mapping of the target classes to the list of source classes.
+          target_labels: Mapping of the target labels to the list of source labels.
           proximity_distance_threshold: Proximity distance threshold to check if two boxes are
             close to each other.
           taxonomy: Taxonomy that maps a label name to its class index.
@@ -168,7 +168,7 @@ class Box3DMerger(Box3DPipeline):
 
     def match_boxes_3d(
         self, boxes3d_params: npt.NDArray[np.float32], boxes3d_label_names: Sequence[str]
-    ) -> MappingProxyType[str, Sequence[Tuple[int, int]]]:
+    ) -> MappingProxyType[str, Sequence[tuple[int, int]]]:
         """
         Match 3D bounding boxes based on the target labels and source labels.
 
@@ -177,9 +177,9 @@ class Box3DMerger(Box3DPipeline):
           boxes3d_label_names (N, ): 3D bounding box label names.
 
         Returns:
-          MappingProxyType[str, Sequence[Tuple[int, int]]]: Mapping of target labels to matched pairs of box indices.
+          MappingProxyType[str, Sequence[tuple[int, int]]]: Mapping of target labels to matched pairs of box indices.
         """
-        # {target_class: [(source_box_index, source_box_index), ...]}
+        # {target_label: [(source_box_index, source_box_index), ...]}
         matched_pairs = {target_label: [] for target_label in self.target_labels.keys()}
         for target_label, source_labels in self.target_labels.items():
             pairs = []
@@ -214,7 +214,7 @@ class Box3DMerger(Box3DPipeline):
     def merge(
         self,
         boxes3d_data_model: Sequence[Box3DDataModel],
-    ) -> Tuple[Sequence[Box3DDataModel], Set[int]]:
+    ) -> tuple[Sequence[Box3DDataModel], set[int]]:
         """
         Merge 3D bounding boxes based on the target labels and source labels by following the steps:
           1) Match boxes based on the target labels and source labels
@@ -328,7 +328,7 @@ class Box3DExtendLongerMerger(Box3DMerger):
         Initialize Box3DExtendLongerMerger.
 
         Args:
-          target_labels: Mapping of the target classes to the list of source classes.
+          target_labels: Mapping of the target labels to the list of source labels.
           proximity_distance_threshold: Proximity distance threshold to check if two boxes are
             close to each other.
           taxonomy: Taxonomy that maps a label name to its class index.
@@ -356,7 +356,7 @@ class Box3DExtendLongerMerger(Box3DMerger):
     @staticmethod
     def _get_box_faces(
         box: npt.NDArray[np.float32],
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, float, float]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, float]:
         """
         Get the faces of a 3D bounding box.
 
@@ -364,7 +364,7 @@ class Box3DExtendLongerMerger(Box3DMerger):
           box (len(Box3DFieldIndex), ): Bounding box, please check Box3DFieldIndex for the field indices.
 
         Returns:
-          Tuple[np.ndarray, np.ndarray, np.ndarray, float, float]: Center, face1 center, face2 center, length, width.
+          tuple[np.ndarray, np.ndarray, np.ndarray, float, float]: Center, face1 center, face2 center, length, width.
         """
 
         x, y, length, width, yaw = (

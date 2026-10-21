@@ -42,13 +42,13 @@ def _lidar_frame(t4pack_frame: T4PackFrame | None) -> LidarFrameDataModel:
         lidar_sensor_id="sensor",
         lidar_sensor_channel_name="LIDAR_CONCAT",
         lidar_timestamp_seconds=1.0,
-        lidar_pointcloud_path="/db/scene/0/data/LIDAR_CONCAT/00000.pcd.bin",
-        lidar_pointcloud_source_path=None,
+        lidar_pointcloud_relative_path="db/scene/0/data/LIDAR_CONCAT/00000.pcd.bin",
+        lidar_pointcloud_source_relative_path=None,
         lidar_pointcloud_num_features=5,
         lidar_sensor_to_ego_pose_matrix=np.eye(4),
         lidar_frame_ego_pose_to_global_matrix=np.eye(4),
         lidar_sensor_to_lidar_sweep_matrix=np.eye(4),
-        lidar_pointcloud_semantic_mask_path=None,
+        lidar_pointcloud_semantic_mask_relative_path=None,
         lidar_pointcloud_t4pack_frame=t4pack_frame,
     )
 
@@ -78,7 +78,11 @@ class TestT4PackFrameRecord(unittest.TestCase):
 
 
 class TestT4RecordsGeneratorT4PackFrame(unittest.TestCase):
-    """Unit tests for the pack lookup of T4RecordsGenerator."""
+    """Unit tests for the pack lookup of T4RecordsGenerator.
+
+    The lookup is pure over the scene directory and the pack index. Its public caller,
+    extract_t4_sample_record(), needs a full devkit scene, so the lookup is tested on its own.
+    """
 
     def setUp(self) -> None:
         """Create a scene directory and a generator with only the pack lookup state."""

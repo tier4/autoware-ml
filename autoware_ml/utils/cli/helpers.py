@@ -22,8 +22,8 @@ import re
 import shlex
 import shutil
 import subprocess
-from collections.abc import Sequence
 from pathlib import Path
+from collections.abc import Sequence
 from typing import Any
 
 from autoware_ml.configs.paths import CONFIGS_ROOT

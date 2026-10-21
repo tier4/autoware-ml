@@ -362,6 +362,9 @@ The following files will use this variable to locate your datasets:
 - `.devcontainer/devcontainer.json`
 - Model config files
 
+Record tables are cached in `.cache/` of the data mount, `AUTOWARE_ML_DATA_PATH`, next to the data
+they are built from. Override `cache_root_path` to use another directory.
+
 ## Next Steps
 
 Navigate to [Quick Start](quickstart.md) to start training your first model.

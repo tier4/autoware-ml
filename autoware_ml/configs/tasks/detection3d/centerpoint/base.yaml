@@ -1,72 +1,38 @@
 # @package _global_
 defaults:
-  - /defaults/default_runtime
+  - /tasks/default_task
   - _self_
 
-dataset: ???
-
+database: ???
 point_cloud_range: ???
 voxel_size: ???
+max_num_points: 32
+max_voxels: 96000
+eval_max_voxels: 96000
 
-model:
-  _target_: autoware_ml.models.detection3d.centerpoint.CenterPointDetectionModel
-  metrics: ${dataset.detection3d.metrics}
-  pts_voxel_encoder:
-    _target_: autoware_ml.models.detection3d.encoders.pillar.PillarFeatureNet
-    in_channels: 5
-    feat_channels: [32, 32]
-    voxel_size: ${voxel_size}
-    point_cloud_range: ${point_cloud_range}
-    with_distance: false
-    with_cluster_center: true
-    with_voxel_center: true
-  pts_middle_encoder:
-    _target_: autoware_ml.models.detection3d.encoders.pillar.PointPillarsScatter
-    in_channels: 32
-    output_shape: ???
-  pts_backbone:
-    _target_: autoware_ml.models.detection3d.backbones.second.SECONDBackbone
-    in_channels: 32
-    out_channels: [64, 128, 256]
-    layer_nums: [3, 5, 5]
-    layer_strides: ???
-  pts_neck:
-    _target_: autoware_ml.models.detection3d.necks.second_fpn.SECONDFPN
-    in_channels: [64, 128, 256]
-    out_channels: [128, 128, 128]
-    upsample_strides: [0.5, 1, 2]
-  bbox_head:
-    _target_: autoware_ml.models.detection3d.heads.centerpoint.CenterHead
-    in_channels: 384
-    num_classes: ${dataset.detection3d.num_classes}
-    class_names: ${dataset.detection3d.class_names}
-    shared_channels: 64
-    point_cloud_range: ${point_cloud_range}
-    voxel_size: ${voxel_size}
-    out_size_factor: ???
-    max_objs: 500
-    min_radius: 2
-    score_threshold: 0.0
-    post_max_size: 100
-    nms_min_radius: ???
-    use_velocity: true
-  optimizer:
-    _target_: torch.optim.AdamW
-    _partial_: true
-    lr: 0.0001
-    weight_decay: 0.01
-  scheduler:
-    _target_: autoware_ml.utils.schedulers.cyclic_cosine_annealing.CyclicCosineAnnealingLR
-    _partial_: true
-    warmup_epochs: 8
-    decay_epochs: 22
-    max_lr_factor: ???
-    min_lr_factor: 0.0001
+# The learning rate differs between the leaves, every leaf sets its own.
+optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
+  lr: ???
+  weight_decay: 0.01
+
+data_preprocessor:
+  preprocessor_modules:
+    - _target_: autoware_ml.preprocessing.detection3d.point_pillar_preprocessor.PointPillarPreprocessor
+      voxel_size: ${voxel_size}
+      point_cloud_range: ${point_cloud_range}
+      max_num_points: ${max_num_points}
+      max_voxels: ${max_voxels}
+      eval_max_voxels: ${eval_max_voxels}
 
 trainer:
-  max_epochs: 30
+  max_epochs: ???
+  # Initial value only, the dynamic_validation callback below rewrites it per epoch.
+  check_val_every_n_epoch: 5
   gradient_clip_val: 5.0
   gradient_clip_algorithm: norm
+  sync_batchnorm: true
 
 deploy:
   onnx:
@@ -94,11 +60,67 @@ deploy:
   tensorrt:
     enabled: false
 
-data_preprocessing:
-  pipeline:
-    - _target_: autoware_ml.preprocessing.detection3d.point_pillar.PointPillarPreprocessor
-      voxel_size: ${voxel_size}
-      point_cloud_range: ${point_cloud_range}
-      max_num_points: 32
-      max_voxels: 120000
-      eval_max_voxels: 160000
+model:
+  _target_: autoware_ml.models.detection3d.main_modules.centerpoint.CenterPointDetection3DModel
+  metrics: ${metrics}
+  log_dict_configs:
+    _target_: autoware_ml.models.module_base_model.LogDictConfigs
+    _convert_: all
+    # Epoch-level only: per-step logging would split every key into train/<key>_step and
+    # train/<key>_epoch and, with sync_dist, all-reduce every loss key on every step.
+    on_step: false
+    on_epoch: true
+    prog_bar: true
+    sync_dist: true
+
+  pts_voxel_encoder:
+    _target_: autoware_ml.models.detection3d.encoders.pillars.pillar_feature_net.PillarFeatureNet
+    in_channels: 5
+    feat_channels: [32, 32]
+    voxel_size: ${voxel_size}
+    point_cloud_range: ${point_cloud_range}
+    with_distance: false
+    with_cluster_center: true
+    with_voxel_center: true
+  pts_middle_encoder:
+    _target_: autoware_ml.models.detection3d.encoders.pillars.point_pillar_scatter.PointPillarsScatter
+    in_channels: 32
+    output_shape: ???
+  pts_backbone:
+    _target_: autoware_ml.models.detection3d.backbones.second.SECONDBackbone
+    in_channels: 32
+    out_channels: [64, 128, 256]
+    layer_nums: [3, 5, 5]
+    layer_strides: ???
+    # Every stage recomputes its activations in the backward pass. The recomputation
+    # leaves the batch normalization statistics alone, so the momentum stays as set.
+    activation_checkpointing: true
+  pts_neck:
+    _target_: autoware_ml.models.detection3d.necks.second_fpn.SECONDFPN
+    in_channels: [64, 128, 256]
+    out_channels: [128, 128, 128]
+    upsample_strides: [0.5, 1, 2]
+    activation_checkpointing: true
+  bbox_head:
+    _target_: autoware_ml.models.detection3d.heads.centerhead.CenterHead
+    in_channels: 384
+    class_names: ${database.taxonomy.detection3d.class_names}
+    shared_channels: 64
+    point_cloud_range: ${point_cloud_range}
+    voxel_size: ${voxel_size}
+    out_size_factor: ???
+    min_radius: 2
+    score_threshold: 0.0
+    post_max_size: 100
+    nms_min_radius: ???
+    use_velocity: true
+  optimizer: ${optimizer}
+  scheduler:
+    _target_: autoware_ml.utils.schedulers.cyclic_cosine_annealing.CyclicCosineAnnealingLR
+    _partial_: true
+    # Set by every leaf next to trainer.max_epochs, which they must add up to: the cosine keeps
+    # being evaluated past decay_epochs and climbs back towards the peak.
+    warmup_epochs: ???
+    decay_epochs: ???
+    max_lr_factor: ???
+    min_lr_factor: 0.0001

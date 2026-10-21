@@ -1,0 +1,17 @@
+# @package _global_
+defaults:
+  - base_51m
+  - _self_
+
+voxel_size: [0.2, 0.2, 8.0]
+
+model:
+  pts_middle_encoder:
+    # 102.4 m / 0.2 m = 512 pillars per BEV axis.
+    output_shape: [512, 512]
+  pts_backbone:
+    # Three stride-2 stages; the neck upsamples every stage back to one quarter resolution, so
+    # the head works on a 128x128 grid at out_size_factor 4.
+    layer_strides: [2, 2, 2]
+  bbox_head:
+    out_size_factor: 4

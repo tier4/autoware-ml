@@ -19,18 +19,6 @@ from __future__ import annotations
 import torch
 
 
-def infer_batch_size_from_voxel_coords(voxel_coords: torch.Tensor) -> int:
-    """Infer batch size from batched voxel coordinates.
-
-    Args:
-        voxel_coords: Voxel coordinates with the batch index in column 0.
-
-    Returns:
-        Number of samples represented by the voxel coordinate tensor.
-    """
-    return int(voxel_coords[:, 0].max().item()) + 1 if voxel_coords.numel() > 0 else 1
-
-
 @torch.inference_mode()
 def offset_to_bincount(offset: torch.Tensor) -> torch.Tensor:
     """Convert cumulative offsets into per-batch counts.

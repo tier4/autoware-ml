@@ -148,6 +148,33 @@ class BaseImages(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def check_depth_maps_size(self) -> BaseImages:
+        """
+        Check that ``depth_maps`` has the height and width of ``images``.
+
+        The depth maps are the points projected onto the images, so they only make sense
+        pixel-aligned with them. An image-space transform run after the projection would
+        leave them at the size the images had before it, which this validator rejects.
+
+        Returns:
+            The validated instance.
+
+        Raises:
+            ValueError: If ``depth_maps`` is set and its height or width differs from the
+                ones of ``images``.
+        """
+        if self.depth_maps is None:
+            return self
+        image_size = tuple(self.images.shape[-2:])
+        depth_map_size = tuple(self.depth_maps.shape[-2:])
+        if depth_map_size != image_size:
+            raise ValueError(
+                f"Inconsistent image size: images are {image_size} (height, width) but "
+                f"depth_maps are {depth_map_size}."
+            )
+        return self
+
     @staticmethod
     def identity_image_augmentation_matrices(
         camera_intrinsics: Float32[torch.Tensor, "num_cameras 3 3"],

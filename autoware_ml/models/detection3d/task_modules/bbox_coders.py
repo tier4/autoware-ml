@@ -6,13 +6,28 @@ detection heads and deployment paths.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from collections.abc import Sequence
-from dataclasses import dataclass
+from typing import NamedTuple
 
+from jaxtyping import Bool, Float32, Int64
 import torch
 
 
-def normalize_boxes3d(boxes: torch.Tensor) -> torch.Tensor:
+class ScoreThresholdConfig(NamedTuple):
+    """
+    Config for the score threshold of one class group.
+
+    Args:
+        class_names: Names of the classes in this group.
+        score_threshold: Score threshold to keep bboxes of this group.
+    """
+
+    class_names: Sequence[str]
+    score_threshold: float
+
+
+def normalize_boxes3d(boxes: Float32[torch.Tensor, " 9"]) -> torch.Tensor:
     """Encode metric 3D boxes into the query-regression space.
 
     Args:
@@ -33,7 +48,7 @@ def normalize_boxes3d(boxes: torch.Tensor) -> torch.Tensor:
     )
 
 
-def denormalize_boxes3d(boxes: torch.Tensor) -> torch.Tensor:
+def denormalize_boxes3d(boxes: Float32[torch.Tensor, " 10"]) -> torch.Tensor:
     """Decode query-regression boxes back into the metric space.
 
     Args:
@@ -61,131 +76,229 @@ class TransFusionBBoxCoder:
         pc_range: Point-cloud range used by the detector.
         out_size_factor: BEV downsampling factor between point space and feature space.
         voxel_size: Voxel size along each spatial axis.
+        class_names: Ordered class names of the head. The score threshold groups are resolved
+            against them, and their length is the number of classes.
+        score_threshold_configs: Score threshold groups, each naming the classes it applies to.
+            A class may appear in at most one group, classes no group names keep every score.
+            ``None`` disables the score filter altogether.
         post_center_range: Optional metric-space range used to filter predictions.
-        score_threshold: Optional score threshold applied during decoding. A
-            scalar applies to every class; a sequence provides one threshold
-            per class index.
         code_size: Number of regression channels produced by the head.
+        class_score_thresholds: One threshold per class, resolved once from
+            ``score_threshold_configs`` at construction. ``None`` when the filter is disabled.
     """
 
     pc_range: list[float]
     out_size_factor: int
     voxel_size: list[float]
-    post_center_range: list[float] | None = None
-    score_threshold: float | Sequence[float] | None = None
+    class_names: Sequence[str]
+    score_threshold_configs: Sequence[ScoreThresholdConfig] | None
+    post_center_range: Sequence[float] | None = None
     code_size: int = 8
+    class_score_thresholds: tuple[float, ...] | None = field(init=False, default=None)
 
-    def encode(self, dst_boxes: torch.Tensor) -> torch.Tensor:
+    def __post_init__(self) -> None:
+        """Resolve the score threshold groups into one threshold per class, once."""
+        self.class_score_thresholds = self._resolve_class_score_thresholds()
+
+    def _resolve_class_score_thresholds(self) -> tuple[float, ...] | None:
+        """Flatten the class-name groups into a per-class threshold vector.
+
+        Returns:
+            One threshold per class in ``class_names`` order, zero for classes no group names,
+            or ``None`` when no groups are configured.
+
+        Raises:
+            ValueError: If a group names a class that is not in ``class_names``, or a class is
+                named by two groups, which would make its threshold ambiguous.
+        """
+        if self.score_threshold_configs is None:
+            return None
+
+        class_thresholds = [0.0] * len(self.class_names)
+        # Maps each claimed class to the group that claimed it, so the error can name both.
+        claimed_classes: dict[str, int] = {}
+        for group_index, group in enumerate(self.score_threshold_configs):
+            for class_name in group.class_names:
+                if class_name not in self.class_names:
+                    raise ValueError(
+                        f"TransFusionBBoxCoder score threshold group {group_index} names class "
+                        f"{class_name!r}, which is not one of {list(self.class_names)}."
+                    )
+                if class_name in claimed_classes:
+                    raise ValueError(
+                        f"TransFusionBBoxCoder class {class_name!r} appears in score threshold "
+                        f"groups {claimed_classes[class_name]} and {group_index}, so its "
+                        "threshold is ambiguous."
+                    )
+                claimed_classes[class_name] = group_index
+                class_thresholds[self.class_names.index(class_name)] = float(group.score_threshold)
+        return tuple(class_thresholds)
+
+    def encode(
+        self,
+        gt_boxes: Float32[torch.Tensor, "batch_size max_num_boxes 9"],
+    ) -> Float32[torch.Tensor, "batch_size max_num_boxes code_size"]:
         """Encode metric-space boxes into normalized regression targets.
 
         Args:
-            dst_boxes: Ground-truth boxes in metric coordinates.
+            gt_boxes: Ground-truth boxes in metric coordinates, where each box is represented as
+                (center_x, center_y, center_z, length, width, height, yaw, velocity_x, velocity_y).
+                Note that it will also encode invalid boxes (e.g., zero-padded boxes) into
+                regression targets, so the caller should mask out invalid boxes if necessary.
 
         Returns:
             Encoded regression targets aligned with the TransFusion head layout.
         """
+        batch_size, max_num_boxes, _ = gt_boxes.shape
         targets = torch.zeros(
-            (dst_boxes.shape[0], self.code_size), device=dst_boxes.device, dtype=dst_boxes.dtype
+            (batch_size, max_num_boxes, self.code_size),
+            device=gt_boxes.device,
+            dtype=gt_boxes.dtype,
         )
-        targets[:, 0] = (dst_boxes[:, 0] - self.pc_range[0]) / (
+        targets[:, :, 0] = (gt_boxes[:, :, 0] - self.pc_range[0]) / (
             self.out_size_factor * self.voxel_size[0]
         )
-        targets[:, 1] = (dst_boxes[:, 1] - self.pc_range[1]) / (
+        targets[:, :, 1] = (gt_boxes[:, :, 1] - self.pc_range[1]) / (
             self.out_size_factor * self.voxel_size[1]
         )
-        dims = dst_boxes[:, 3:6]
+        dims = gt_boxes[:, :, 3:6]
         log_dims = dims.log()
-        targets[:, 3] = log_dims[:, 0]
-        targets[:, 4] = log_dims[:, 1]
-        targets[:, 5] = log_dims[:, 2]
-        targets[:, 2] = dst_boxes[:, 2] + dst_boxes[:, 5] * 0.5
-        targets[:, 6] = torch.sin(dst_boxes[:, 6])
-        targets[:, 7] = torch.cos(dst_boxes[:, 6])
+        targets[:, :, 3] = log_dims[:, :, 0]
+        targets[:, :, 4] = log_dims[:, :, 1]
+        targets[:, :, 5] = log_dims[:, :, 2]
+        # NOTE: gt_bbox is always in gravity center, so it doesn't need to shift
+        targets[:, :, 2] = gt_boxes[:, :, 2]
+        targets[:, :, 6] = torch.sin(gt_boxes[:, :, 6])
+        targets[:, :, 7] = torch.cos(gt_boxes[:, :, 6])
         if self.code_size == 10:
-            targets[:, 8:10] = dst_boxes[:, 7:9]
+            targets[:, :, 8:10] = gt_boxes[:, :, 7:9]
         return targets
 
-    def decode(
+    def decode_heatmaps(
         self,
-        heatmap: torch.Tensor,
-        rot: torch.Tensor,
-        dim: torch.Tensor,
-        center: torch.Tensor,
-        height: torch.Tensor,
-        vel: torch.Tensor | None,
-        filter_predictions: bool = False,
-    ) -> list[dict[str, torch.Tensor]]:
-        """Decode head outputs into metric-space 3D boxes.
+        heatmaps: Float32[torch.Tensor, "batch_size num_classes num_proposals"],
+    ) -> tuple[
+        Float32[torch.Tensor, "batch_size num_proposals"],
+        Float32[torch.Tensor, "batch_size num_proposals"],
+    ]:
+        """Decode heatmaps into class predictions and scores.
 
         Args:
-            heatmap: Class confidence heatmap.
-            rot: Rotation channels storing sine and cosine values.
-            dim: Log-space box dimensions.
-            center: Predicted BEV center offsets.
-            height: Predicted box bottom heights.
-            vel: Optional velocity channels.
-            filter_predictions: Whether to apply score and range filtering.
+            heatmaps: Class confidence heatmap.
+        """
+        final_scores, final_preds = heatmaps.max(dim=1)
+        return final_scores, final_preds
+
+    def filter_bboxes_center_range(
+        self,
+        bbox_centers: Float32[torch.Tensor, "batch_size num_proposals 3"],
+    ) -> Bool[torch.Tensor, "batch_size num_proposals"]:
+        """
+        Build a per-proposal keep mask from the detector's post-processing center range.
+
+        The test is axis aligned rather than a distance: a proposal is kept when its center lies
+        inside the (x_min, y_min, z_min, x_max, y_max, z_max) box, inclusive at both ends.
+
+        Args:
+            bbox_centers: Box centers as (center_x, center_y, center_z).
 
         Returns:
-            Per-sample prediction dictionaries with boxes, scores, and labels.
+            True where the proposal's center is inside post_center_range, False otherwise. All
+            True when no range is configured.
         """
-        final_scores, final_preds = heatmap.max(dim=1)
-
-        center = center.clone()
-        dim = dim.clone()
-        height = height.clone()
-        center[:, 0, :] = (
-            center[:, 0, :] * self.out_size_factor * self.voxel_size[0] + self.pc_range[0]
-        )
-        center[:, 1, :] = (
-            center[:, 1, :] * self.out_size_factor * self.voxel_size[1] + self.pc_range[1]
-        )
-        dim = dim.exp()
-        height = height - dim[:, 2:3, :] * 0.5
-        yaw = torch.atan2(rot[:, 0:1, :], rot[:, 1:2, :])
-
-        if vel is None:
-            final_boxes = torch.cat([center, height, dim, yaw], dim=1).permute(0, 2, 1)
-        else:
-            final_boxes = torch.cat([center, height, dim, yaw, vel], dim=1).permute(0, 2, 1)
-
-        predictions = []
-        if self.score_threshold is None:
-            threshold_mask = None
-        elif isinstance(self.score_threshold, (int, float)):
-            threshold_mask = final_scores > self.score_threshold
-        else:
-            thresholds = torch.tensor(
-                list(self.score_threshold), device=heatmap.device, dtype=final_scores.dtype
+        batch_size, num_bboxes, _ = bbox_centers.shape
+        if self.post_center_range is None:
+            return torch.ones(
+                (batch_size, num_bboxes), device=bbox_centers.device, dtype=torch.bool
             )
-            if thresholds.shape[0] != heatmap.shape[1]:
-                raise ValueError(
-                    "Per-class score_threshold must provide one value per class: "
-                    f"got {thresholds.shape[0]} thresholds for {heatmap.shape[1]} classes."
-                )
-            threshold_mask = final_scores > thresholds[final_preds]
-        center_range = None
-        if self.post_center_range is not None:
-            center_range = torch.tensor(
-                self.post_center_range, device=heatmap.device, dtype=final_boxes.dtype
+        if len(self.post_center_range) != 6:
+            raise ValueError(
+                "TransFusionBBoxCoder post_center_range must hold 6 values "
+                f"(x_min, y_min, z_min, x_max, y_max, z_max), got {len(self.post_center_range)}."
             )
 
-        for batch_index in range(heatmap.shape[0]):
-            boxes = final_boxes[batch_index]
-            scores = final_scores[batch_index]
-            labels = final_preds[batch_index]
-            if filter_predictions:
-                mask = torch.ones(scores.shape[0], device=scores.device, dtype=torch.bool)
-                if threshold_mask is not None:
-                    mask &= threshold_mask[batch_index]
-                if center_range is not None:
-                    mask &= (boxes[:, :3] >= center_range[:3]).all(dim=1)
-                    mask &= (boxes[:, :3] <= center_range[3:]).all(dim=1)
-                boxes = boxes[mask]
-                scores = scores[mask]
-                labels = labels[mask]
-            predictions.append({"bboxes": boxes, "scores": scores, "labels": labels})
-        return predictions
+        # (6,) -> (1, 1, 6) so the minimums and maximums broadcast over batch and proposals.
+        center_range = torch.tensor(
+            self.post_center_range,
+            dtype=bbox_centers.dtype,
+            device=bbox_centers.device,
+        ).view(1, 1, 6)
+
+        # Reduce over the trailing coordinate axis: x, y and z must all be inside.
+        # (batch_size, num_proposals, 3) -> (batch_size, num_proposals)
+        keep_masks = (bbox_centers >= center_range[..., :3]).all(dim=-1)
+        keep_masks &= (bbox_centers <= center_range[..., 3:]).all(dim=-1)
+        return keep_masks
+
+    def filter_bboxes_score(
+        self,
+        bbox_scores: Float32[torch.Tensor, "batch_size num_proposals"],
+        bbox_classes: Int64[torch.Tensor, "batch_size num_proposals"],
+    ) -> Bool[torch.Tensor, "batch_size num_proposals"]:
+        """
+        Build a per-proposal keep mask by comparing each score against its class's threshold.
+
+        The per-class thresholds were resolved at construction, so this is a single lookup by
+        predicted class followed by one elementwise comparison over the whole batch, with no loop
+        over samples or proposals. It exports as a constant Gather plus a Greater.
+
+        Args:
+            bbox_scores: Confidence score for each proposal.
+            bbox_classes: Predicted class id for each proposal. Must be a valid class index in
+                [0, num_classes), since it indexes the per-class threshold vector.
+
+        Returns:
+            True where the proposal's score clears its class threshold, False otherwise. All True
+            when no score threshold groups are configured.
+        """
+        if self.class_score_thresholds is None:
+            return torch.ones_like(bbox_scores, dtype=torch.bool)
+
+        # (num_classes,) on the scores' device and dtype.
+        class_thresholds = bbox_scores.new_tensor(self.class_score_thresholds)
+        # (num_classes,)[(batch_size, num_proposals)] -> (batch_size, num_proposals)
+        return bbox_scores > class_thresholds[bbox_classes]
+
+    def decode_boxes(
+        self,
+        rots: Float32[torch.Tensor, "batch_size 2 num_proposals"],
+        dims: Float32[torch.Tensor, "batch_size 3 num_proposals"],
+        centers: Float32[torch.Tensor, "batch_size 2 num_proposals"],
+        heights: Float32[torch.Tensor, "batch_size 1 num_proposals"],
+        vels: Float32[torch.Tensor, "batch_size 2 num_proposals"] | None,
+    ) -> Float32[torch.Tensor, "batch_size num_proposals code_size"]:
+        """
+        Decode regression channels into metric-space boxes, where each box is represented as
+        (center_x, center_y, center_z, length, width, height, yaw,  velocity_x, velocity_y).
+
+        Args:
+            rots: Rotation channels storing sine and cosine values.
+            dims: Log-space box dimensions.
+            centers: Predicted BEV center offsets.
+            heights: Predicted z of the box gravity center. The channel is regressed as the
+                center directly (``encode`` stores the GT gravity center), so no half-height
+                shift is applied here or in the runtime nodes.
+            vels: Optional velocity channels.
+
+        Returns:
+            Decoded boxes in metric coordinates.
+        """
+        centers = centers.clone()
+        dims = dims.clone()
+        heights = heights.clone()
+        centers[:, 0, :] = (
+            centers[:, 0, :] * self.out_size_factor * self.voxel_size[0] + self.pc_range[0]
+        )
+        centers[:, 1, :] = (
+            centers[:, 1, :] * self.out_size_factor * self.voxel_size[1] + self.pc_range[1]
+        )
+        dims = dims.exp()
+        yaw = torch.atan2(rots[:, 0:1, :], rots[:, 1:2, :])
+        if vels is None:
+            final_boxes = torch.cat([centers, heights, dims, yaw], dim=1)
+        else:
+            final_boxes = torch.cat([centers, heights, dims, yaw, vels], dim=1)
+        return final_boxes.permute(0, 2, 1).contiguous()
 
 
 @dataclass

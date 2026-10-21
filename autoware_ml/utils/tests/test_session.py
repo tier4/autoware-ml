@@ -18,16 +18,13 @@ from io import StringIO
 import os
 from pathlib import Path
 from subprocess import CompletedProcess
-from unittest.mock import call, patch
+from unittest.mock import ANY, call, patch
 
 import pytest
 
 from autoware_ml.utils.session import (
     AUTOWARE_ML_CHILD_PGID_OPTION,
     SessionCommandError,
-    _build_session_command,
-    _kill_session_if_present,
-    _build_raw_session_command,
     attach_session,
     detach_session,
     list_sessions,
@@ -68,14 +65,23 @@ class TestListSessions:
         assert output == ""
 
 
+def _started_session_command(run_tmux_mock) -> str:
+    """Return the shell command ``start_session`` handed to ``tmux new-session``."""
+    new_session_args = run_tmux_mock.call_args_list[0].args[0]
+    assert new_session_args[:2] == ["new-session", "-d"]
+    return new_session_args[-1]
+
+
 class TestStartSession:
     def test_builds_managed_shell_command(self) -> None:
-        command = _build_session_command(
-            Path("/workspace"),
-            "default",
-            ["train", "--config-name", SAMPLE_CONFIG_NAME],
-        )
+        with patch("autoware_ml.utils.session._run_tmux") as run_tmux_mock:
+            start_session(
+                name="default",
+                command_args=["train", "--config-name", SAMPLE_CONFIG_NAME],
+                cwd="/workspace",
+            )
 
+        command = _started_session_command(run_tmux_mock)
         assert command.startswith("bash -lc ")
         assert "cd /workspace || exit 1" in command
         assert "AUTOWARE_ML_SESSION_NAME=default" in command
@@ -95,27 +101,27 @@ class TestStartSession:
                 cwd="/workspace",
             )
 
-        expected_command = _build_session_command(
-            Path("/workspace"),
-            "default",
-            ["train", "--config-name", SAMPLE_CONFIG_NAME],
-        )
         run_tmux_mock.assert_has_calls(
             [
-                call(["new-session", "-d", "-s", "default", expected_command]),
+                call(["new-session", "-d", "-s", "default", ANY]),
                 call(["set-option", "-t", "default", "-q", "status", "off"]),
                 call(["set-option", "-t", "default", "-q", "@autoware_ml_managed", "1"]),
             ]
         )
+        assert "exec autoware-ml train" in _started_session_command(run_tmux_mock)
 
     def test_builds_managed_raw_command(self) -> None:
-        command = _build_raw_session_command(
-            Path("/workspace"),
-            "docs",
-            ["zensical", "serve"],
-        )
+        with patch("autoware_ml.utils.session._run_tmux") as run_tmux_mock:
+            start_session(
+                name="docs",
+                command_args=["zensical", "serve"],
+                cwd="/workspace",
+                raw=True,
+            )
 
+        command = _started_session_command(run_tmux_mock)
         assert command.startswith("bash -lc ")
+        assert "cd /workspace || exit 1" in command
         assert "exec zensical serve" in command
         assert "AUTOWARE_ML_SESSION_NAME=docs" in command
 
@@ -128,18 +134,14 @@ class TestStartSession:
                 raw=True,
             )
 
-        expected_command = _build_raw_session_command(
-            Path("/workspace"),
-            "docs",
-            ["zensical", "serve"],
-        )
         run_tmux_mock.assert_has_calls(
             [
-                call(["new-session", "-d", "-s", "docs", expected_command]),
+                call(["new-session", "-d", "-s", "docs", ANY]),
                 call(["set-option", "-t", "docs", "-q", "status", "off"]),
                 call(["set-option", "-t", "docs", "-q", "@autoware_ml_managed", "1"]),
             ]
         )
+        assert "exec zensical serve" in _started_session_command(run_tmux_mock)
 
     def test_filters_unmanaged_sessions_from_listing(self) -> None:
         with patch(
@@ -326,20 +328,34 @@ class TestStopSession:
         )
 
 
-class TestKillSessionIfPresent:
-    def test_ignores_missing_session(self) -> None:
-        with patch(
-            "autoware_ml.utils.session._run_tmux",
-            side_effect=SessionCommandError("can't find session: default"),
-        ):
-            _kill_session_if_present("default")
+class TestStopSessionKillsIfPresent:
+    """stop_session closes the session last, tolerating one that already disappeared."""
 
-    def test_raises_unexpected_tmux_errors(self) -> None:
+    def test_ignores_session_missing_at_kill_time(self) -> None:
         with (
-            patch(
-                "autoware_ml.utils.session._run_tmux",
-                side_effect=SessionCommandError("permission denied"),
-            ),
+            patch("autoware_ml.utils.session._run_tmux") as run_tmux_mock,
+            patch("autoware_ml.utils.session._stop_child_process_group"),
+        ):
+            run_tmux_mock.side_effect = [
+                CompletedProcess(args=["tmux"], returncode=0, stdout="", stderr=""),
+                CompletedProcess(args=["tmux"], returncode=0, stdout="12345\n", stderr=""),
+                SessionCommandError("can't find session: default"),
+            ]
+
+            stop_session("default")
+
+        run_tmux_mock.assert_has_calls([call(["kill-session", "-t", "default"])])
+
+    def test_raises_unexpected_tmux_errors_at_kill_time(self) -> None:
+        with (
+            patch("autoware_ml.utils.session._run_tmux") as run_tmux_mock,
+            patch("autoware_ml.utils.session._stop_child_process_group"),
             pytest.raises(SessionCommandError, match="permission denied"),
         ):
-            _kill_session_if_present("default")
+            run_tmux_mock.side_effect = [
+                CompletedProcess(args=["tmux"], returncode=0, stdout="", stderr=""),
+                CompletedProcess(args=["tmux"], returncode=0, stdout="12345\n", stderr=""),
+                SessionCommandError("permission denied"),
+            ]
+
+            stop_session("default")

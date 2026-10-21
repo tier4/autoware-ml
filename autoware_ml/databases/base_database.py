@@ -14,10 +14,10 @@
 
 from __future__ import annotations
 
+from typing import Mapping, Sequence
 import hashlib
 import logging
 from pathlib import Path
-from typing import Mapping, Sequence
 from types import MappingProxyType
 
 import polars as pl
@@ -173,15 +173,65 @@ class BaseDatabase:
         return self._version
 
     @property
-    def scenarios(self) -> Mapping[str, Scenarios]:
+    def scenarios(self) -> MappingProxyType[str, Scenarios]:
         """
         Get the scenarios for each scenario group.
 
         Returns:
-          Mapping[str, Scenarios]: Dictionary of scenario group name to scenarios.
+          MappingProxyType[str, Scenarios]: Dictionary of scenario group name to scenarios.
         """
 
         return self._scenarios
+
+    @property
+    def hash_fields(self) -> Mapping[str, str]:
+        """
+        Get the explicit content fields that identify the cached records of the database.
+
+        Every setting that changes what lands in the cached records is listed here by name, so
+        that a field added to a logging ``__str__`` can neither leak into nor go missing from
+        the cache key. Subclasses extend the mapping with their own settings, including the
+        constants of their records generator such as the sweep window it stores.
+
+        Filesystem locations that the cached records do not depend on (``cache_path``,
+        ``cache_file_prefix_name``, the scenario root path) are left out, as are runtime-only
+        settings such as ``num_workers``, so the same content hashes the same on every node.
+        ``root_path`` is left out only by the databases that store paths relative to it and
+        re-root them when the records are read back. A database that stores absolute paths
+        must add it, since its records are only valid under that root.
+
+        Returns:
+          Mapping[str, str]: Field name to its content representation, in a fixed order.
+        """
+
+        return {
+            "database": type(self).__name__,
+            "version": self._version,
+            "taxonomy": str(self._taxonomy),
+            "box3d_pipelines": "[" + ", ".join(map(str, self._box3d_pipelines)) + "]",
+            "lidar_pointcloud_num_features": str(self._lidar_pointcloud_num_features),
+            "scenarios": "("
+            + ", ".join(
+                f"{scenario_group}: {scenarios.hash_repr}"
+                for scenario_group, scenarios in self.scenarios.items()
+            )
+            + ")",
+        }
+
+    @property
+    def hash_repr(self) -> str:
+        """
+        Get the representation of the database that identifies the content of its cache.
+
+        Rendered from :attr:`hash_fields`. This is kept separate from :meth:`__str__`, which is
+        a debug representation and free to gain fields without invalidating every cached file.
+
+        Returns:
+          str: Content representation of the database.
+        """
+
+        fields = ", ".join(f"{name}={value}" for name, value in self.hash_fields.items())
+        return f"{type(self).__name__}({fields})"
 
     @property
     def lidar_intensity_scale(self) -> float:
@@ -197,17 +247,27 @@ class BaseDatabase:
     @property
     def database_hash(self) -> str:
         """
-        Get a hash for the database based on its version and scenarios.
+        Get a hash for the database based on the content of its cache.
 
         Returns:
           str: Hash of the database.
         """
-        hash_str = str(self)
+        hash_str = self.hash_repr
         polars_schema = self.get_polars_schema()
         # Convert the polars schema to a string representation
         schema_str = str(polars_schema)
         hash_str += schema_str
         return hashlib.sha256(hash_str.encode("utf-8")).hexdigest()
+
+    @property
+    def cache_file_path(self) -> Path:
+        """
+        Get the path of the record table cache.
+
+        Returns:
+          Path: ``<cache_path>/<cache_file_prefix_name>_<database_hash>.parquet``.
+        """
+        return self._cache_path / f"{self._cache_file_prefix_name}_{self.database_hash}.parquet"
 
     def get_polars_schema(self) -> pl.Schema:
         """
@@ -246,9 +306,7 @@ class BaseDatabase:
         Returns:
           pl.DataFrame: Polars dataframe of the scenario records.
         """
-        df_cache_path = (
-            self._cache_path / f"{self._cache_file_prefix_name}_{self.database_hash}.parquet"
-        )
+        df_cache_path = self.cache_file_path
         if not df_cache_path.exists():
             raise IOError(
                 f"Cache file {df_cache_path} does not exist. "

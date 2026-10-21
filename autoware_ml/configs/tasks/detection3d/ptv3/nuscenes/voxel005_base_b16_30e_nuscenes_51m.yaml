@@ -1,0 +1,18 @@
+# @package _global_
+defaults:
+  - base_voxel005_51m
+  - /database@database: nuscenes/nuscenes_base
+  - _self_
+
+batch_size: 16
+num_workers: 8
+experiment_group_name: ptv3/${database.version}/nuscenes
+experiment_name: voxel005_base_b16_30e_nuscenes_51m
+
+trainer:
+  max_epochs: 30
+
+callbacks:
+  dynamic_validation:
+    # Validate every 5 epochs, then every epoch over the last 10 of the 30-epoch schedule.
+    epoch_intervals: [[0, 5], [20, 1]]
