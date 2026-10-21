@@ -131,7 +131,6 @@ def build_lightning_optimizer_config(
     optimizer_group_overrides: Mapping[str, Mapping[str, Any]] | None = None,
     scheduler_config: Mapping[str, Any] | None = None,
     estimated_stepping_batches: int | None = None,
-    max_epochs: int | None = None,
 ) -> Optimizer | dict[str, Any]:
     """Build the Lightning optimizer configuration for a model.
 
@@ -146,9 +145,6 @@ def build_lightning_optimizer_config(
         estimated_stepping_batches: Total number of optimizer steps, used to
             auto-fill scheduler ``total_steps`` when the parameter is declared
             but not already bound in the factory.
-        max_epochs: Training epochs of the trainer, used to auto-fill scheduler
-            ``max_epochs`` the same way, so an epoch-based schedule follows the
-            trainer rather than a second copy of the number.
 
     Returns:
         Optimizer instance or a Lightning optimizer configuration dictionary.
@@ -168,12 +164,6 @@ def build_lightning_optimizer_config(
         and "total_steps" not in bound_kwargs
     ):
         scheduler_kwargs["total_steps"] = estimated_stepping_batches
-    if (
-        max_epochs is not None
-        and "max_epochs" in sig.parameters
-        and "max_epochs" not in bound_kwargs
-    ):
-        scheduler_kwargs["max_epochs"] = max_epochs
 
     scheduler = call_configured_factory(scheduler_factory, **scheduler_kwargs)
     lr_scheduler_config = {

@@ -36,8 +36,8 @@ class IterWarmupEpochCosineLR(LRScheduler):
         optimizer: Wrapped optimizer.
         total_steps: Total optimization steps of the run (auto-filled by the
             framework from ``trainer.estimated_stepping_batches``).
-        max_epochs: Total training epochs (auto-filled by the framework from
-            ``trainer.max_epochs``); sets both the epoch length
+        max_epochs: Total training epochs; bind it to the trainer in the config
+            (``max_epochs: ${trainer.max_epochs}``). Sets both the epoch length
             (``total_steps // max_epochs``) and the cosine period.
         warmup_iters: Length of the linear warmup in optimization steps.
         warmup_start_factor: Learning-rate factor at step 0.

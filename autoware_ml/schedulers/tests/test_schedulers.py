@@ -15,10 +15,12 @@
 """Unit tests for learning rate schedulers."""
 
 import math
+from functools import partial
 
 import pytest
 import torch
 
+from autoware_ml.utils.optimizer import build_lightning_optimizer_config
 from autoware_ml.utils.schedulers.cosine_annealing import CosineAnnealingLR
 from autoware_ml.utils.schedulers.cyclic_cosine_annealing import CyclicCosineAnnealingLR
 from autoware_ml.utils.schedulers.cyclic_momentum import CyclicMomentumScheduler
@@ -412,3 +414,30 @@ class TestIterWarmupEpochCosineLR:
             resumed_lrs.append(optimizer_b.param_groups[0]["lr"])
 
         assert resumed_lrs == reference_lrs[15:]
+
+    def test_builds_from_the_framework_with_max_epochs_bound_in_the_config(self) -> None:
+        """
+        Input: a scheduler factory binding ``max_epochs`` the way a config does with
+        ``${trainer.max_epochs}``, built through the framework optimizer helper.
+        Expected: the framework fills ``total_steps`` from the trainer estimate and leaves the
+        bound ``max_epochs`` alone, so the epoch length follows both.
+        Check: the built scheduler reports the bound epochs and the derived steps per epoch.
+        """
+        model = torch.nn.Linear(2, 2)
+
+        optimizers = build_lightning_optimizer_config(
+            model,
+            optimizer_factory=lambda params: torch.optim.SGD(params, lr=1.0),
+            scheduler_factory=partial(
+                IterWarmupEpochCosineLR,
+                max_epochs=4,
+                warmup_iters=1,
+                warmup_start_factor=0.5,
+                eta_min_factor=1e-3,
+            ),
+            scheduler_config={"interval": "step"},
+            estimated_stepping_batches=40,
+        )
+
+        scheduler = optimizers["lr_scheduler"]["scheduler"]
+        assert (scheduler.max_epochs, scheduler.steps_per_epoch) == (4, 10)
