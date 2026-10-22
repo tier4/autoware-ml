@@ -27,6 +27,7 @@ import polars as pl
 import pytest
 import torch
 
+from autoware_ml.dataclasses.batch.frame_meta import FrameMetaSample
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch, ModelGTSample
 from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTSample
 from autoware_ml.dataclasses.geometry.images import ImageSample
@@ -104,8 +105,10 @@ def _boxes(num_boxes: int) -> LidarBBoxes3D:
     )
 
 
-def _lidar_frame(path: str, timestamp: float) -> LiDARPointCloudSample:
-    """Describe the current lidar frame of a sample."""
+def _lidar_frame(
+    path: str, timestamp: float, to_frame: torch.Tensor | None = None
+) -> LiDARPointCloudSample:
+    """Describe one stored lidar frame, mapped from the record's frame by ``to_frame``."""
     return LiDARPointCloudSample(
         point_cloud_path=path,
         timestamp=timestamp,
@@ -113,8 +116,15 @@ def _lidar_frame(path: str, timestamp: float) -> LiDARPointCloudSample:
         intensity_scale=255.0,
         sensor_to_ego_pose_matrix=torch.eye(4),
         lidar_to_ego_pose_to_global_matrix=torch.eye(4),
-        lidar_sensor_to_lidar_sweep_matrix=torch.eye(4),
+        lidar_sensor_to_lidar_sweep_matrix=to_frame if to_frame is not None else torch.eye(4),
     )
+
+
+def _translation(x: float) -> torch.Tensor:
+    """Build a transform that shifts points along x."""
+    matrix = torch.eye(4)
+    matrix[0, 3] = x
+    return matrix
 
 
 def _camera(image_path: Path) -> ImageSample:
@@ -144,11 +154,16 @@ def _sample(
     segmentation: bool = False,
     image_samples: Sequence[ImageSample] | None = None,
     timestamp: float = 1.0,
+    stored_frames: Sequence[LiDARPointCloudSample] = (),
+    scene_token: str | None = None,
 ) -> ModelGTSample:
-    """Build a transformed sample with the requested ground truth."""
+    """Build a transformed sample with the requested ground truth and stored lidar frames."""
     points = _points(time_lags)
     return ModelGTSample(
-        lidar_point_cloud_samples=[_lidar_frame("/data/scene/lidar/00010.pcd.bin", timestamp)],
+        lidar_point_cloud_samples=[
+            _lidar_frame("/data/scene/lidar/00010.pcd.bin", timestamp),
+            *stored_frames,
+        ],
         image_samples=image_samples,
         point_cloud_data=points,
         camera_image_data=None,
@@ -159,6 +174,11 @@ def _sample(
                 ignore_index=_IGNORE_INDEX,
             )
             if segmentation
+            else None
+        ),
+        frame_meta=(
+            FrameMetaSample(ego2global=torch.eye(4), scene_token=scene_token, timestamp=timestamp)
+            if scene_token is not None
             else None
         ),
     )
@@ -208,10 +228,16 @@ class _SampleDataset(BaseDataset):
             seg3d_supervised=seg3d_supervised,
         )
         self.samples = list(samples)
+        self.transformed: list[ModelGTSample] = []
 
     def get_data_sample(self, index: int) -> ModelGTSample:
         """Return the sample of one index."""
         return self.samples[index]
+
+    def apply_transforms(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
+        """Record every sample the pipeline receives and return it unchanged."""
+        self.transformed.append(model_gt_sample)
+        return model_gt_sample
 
 
 class _PreviewDataModule:
@@ -582,3 +608,96 @@ def test_noop_session_runs_a_full_preview() -> None:
     assert count == 1
     assert datamodule.prepared
     assert datamodule.stages == ["test"]
+
+
+def _keyframe_with_stored_frames(timestamp: float, scene_token: str = "scene-a") -> ModelGTSample:
+    """Build a 1 Hz keyframe whose record stores a past frame and future frames at 10 Hz."""
+    return _sample(
+        segmentation=True,
+        timestamp=timestamp,
+        scene_token=scene_token,
+        stored_frames=[
+            _lidar_frame("past.bin", timestamp - 0.1, _translation(-1.0)),
+            _lidar_frame("next1.bin", timestamp + 0.1, _translation(1.0)),
+            _lidar_frame("next2.bin", timestamp + 0.2, _translation(2.0)),
+            # Lands on the step of next2 and must not replace it.
+            _lidar_frame("next2b.bin", timestamp + 0.24, _translation(2.4)),
+            _lidar_frame("late.bin", timestamp + 1.1, _translation(11.0)),
+        ],
+    )
+
+
+def test_prediction_frequency_needs_predictions(
+    run_preview: Callable[..., RecordingBackend],
+) -> None:
+    with pytest.raises(ValueError, match="needs the predictions mode"):
+        run_preview(_SampleDataset([_sample(segmentation=True)]), prediction_frequency_hz=10.0)
+
+
+def test_frames_between_samples_are_predicted_on_their_own_steps(
+    run_preview: Callable[..., RecordingBackend],
+) -> None:
+    """Stored frames fill the steps up to the next sample of the same scene."""
+    dataset = _SampleDataset([_keyframe_with_stored_frames(1.0), _keyframe_with_stored_frames(2.0)])
+    model = _PreviewModel(lambda inputs: _segmentation_predictions(4))
+    backend = run_preview(dataset, model, max_samples=1, prediction_frequency_hz=10.0)
+
+    assert backend.steps == [0, 1, 2]
+    assert backend.timestamps == pytest.approx([1.0, 1.1, 1.2])
+    # The keyframe is the only frame with ground truth.
+    assert backend.paths_of(PointCloud3DEvent).count("scene/ground_truth/segmentation") == 1
+    assert backend.paths_of(PointCloud3DEvent).count("scene/prediction/segmentation") == 3
+
+
+def test_last_sample_of_a_scene_keeps_its_stored_frames_within_one_stride(
+    run_preview: Callable[..., RecordingBackend],
+) -> None:
+    dataset = _SampleDataset(
+        [_keyframe_with_stored_frames(1.0), _keyframe_with_stored_frames(2.0, "scene-b")]
+    )
+    model = _PreviewModel(lambda inputs: _segmentation_predictions(4))
+    backend = run_preview(dataset, model, max_samples=2, prediction_frequency_hz=10.0)
+
+    # The frame 1.1 s after the first keyframe would land on the next sample's step.
+    assert backend.steps == [0, 1, 2, 10, 11, 12]
+
+
+def test_samples_one_frame_apart_have_no_intermediate_frames(
+    run_preview: Callable[..., RecordingBackend],
+) -> None:
+    """A database serving every lidar frame as a sample already shows every frame."""
+    dataset = _SampleDataset([_keyframe_with_stored_frames(1.0), _keyframe_with_stored_frames(1.1)])
+    model = _PreviewModel(lambda inputs: _segmentation_predictions(4))
+    backend = run_preview(dataset, model, max_samples=1, prediction_frequency_hz=10.0)
+
+    assert backend.steps == [0]
+
+
+def test_intermediate_frames_are_reanchored_and_unlabeled(
+    run_preview: Callable[..., RecordingBackend],
+) -> None:
+    dataset = _SampleDataset([_keyframe_with_stored_frames(1.0)])
+    dataset.samples[0] = dataset.samples[0]._replace(detection3d_gt_bboxes_3d=_boxes(2))
+    model = _PreviewModel(lambda inputs: _segmentation_predictions(4))
+    run_preview(dataset, model, max_samples=1, prediction_frequency_hz=10.0)
+
+    # The keyframe goes through the pipeline first, then the frame 0.1 s after it.
+    intermediate = dataset.transformed[1]
+    frames = intermediate.lidar_point_cloud_samples
+    assert [frame.point_cloud_path for frame in frames] == [
+        "next1.bin",
+        "/data/scene/lidar/00010.pcd.bin",
+        "past.bin",
+        "next2.bin",
+        "next2b.bin",
+        "late.bin",
+    ]
+    shifts = [float(frame.lidar_sensor_to_lidar_sweep_matrix[0, 3]) for frame in frames]
+    assert shifts == pytest.approx([0.0, -1.0, -2.0, 1.0, 1.4, 10.0])
+    assert intermediate.segmentation3d_gt_sample is None
+    assert intermediate.image_samples is None
+    assert intermediate.frame_meta.scene_token == "scene-a"
+    assert intermediate.frame_meta.timestamp == pytest.approx(1.1)
+    assert len(intermediate.detection3d_gt_bboxes_3d) == 0
+    # The record itself keeps its annotations.
+    assert len(dataset.samples[0].detection3d_gt_bboxes_3d) == 2

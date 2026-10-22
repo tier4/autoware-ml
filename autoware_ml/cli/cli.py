@@ -523,6 +523,13 @@ def visualize(
         int,
         typer.Option("--max-samples", help="Number of consecutive samples to preview"),
     ] = 1,
+    prediction_frequency_hz: Annotated[
+        float | None,
+        typer.Option(
+            "--prediction-frequency-hz",
+            help="Also predict the stored lidar frames between two samples at this rate",
+        ),
+    ] = None,
     backend: Annotated[
         VisualizationBackendChoice,
         typer.Option("--backend", help="Visualization backend: rerun or noop"),
@@ -585,6 +592,8 @@ def visualize(
         split: Dataset split to preview.
         sample_index: First dataset sample index to visualize.
         max_samples: Number of consecutive samples to visualize.
+        prediction_frequency_hz: Rate of the prediction-only frames rebuilt from the stored
+            lidar frames between two samples, None to show the samples only.
         backend: Visualization backend name.
         device: Preview execution device.
         point_labels: Whether to log per-point label text.
@@ -613,6 +622,8 @@ def visualize(
         f"+visualization.sync_views={str(sync_views).lower()}",
         f"+visualization.sync_port={sync_port}",
     ]
+    if prediction_frequency_hz is not None:
+        hydra_overrides.append(f"+visualization.prediction_frequency_hz={prediction_frequency_hz}")
     if weights:
         hydra_overrides.append("+weights=[" + ",".join(weights) + "]")
     if recording_id is not None:

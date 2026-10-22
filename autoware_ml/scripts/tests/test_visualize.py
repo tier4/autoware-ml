@@ -49,6 +49,7 @@ def test_build_preview_config_defaults_to_an_automatic_rerun_preview() -> None:
     assert config.split == "test"
     assert config.sample_index == 0
     assert config.max_samples == 1
+    assert config.prediction_frequency_hz is None
     assert config.device == "auto"
     assert config.point_labels is False
     assert config.session.backend == "rerun"
@@ -68,6 +69,7 @@ def test_build_preview_config_maps_every_visualization_override() -> None:
                     "split": "val",
                     "sample_index": 4,
                     "max_samples": 8,
+                    "prediction_frequency_hz": 5.0,
                     "device": "cpu",
                     "point_labels": True,
                     "backend": "noop",
@@ -92,6 +94,7 @@ def test_build_preview_config_maps_every_visualization_override() -> None:
     assert config.split == "val"
     assert config.sample_index == 4
     assert config.max_samples == 8
+    assert config.prediction_frequency_hz == 5.0
     assert config.device == "cpu"
     assert config.point_labels is True
     assert config.segmentation_class_names == ("road", "car")

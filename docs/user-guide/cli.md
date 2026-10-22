@@ -157,6 +157,7 @@ autoware-ml visualize \
     [--split test|predict|val|train] \
     [--sample-index N] \
     [--max-samples N] \
+    [--prediction-frequency-hz HZ] \
     [--backend rerun|noop] \
     [--device cpu|cuda|auto] \
     [--point-labels/--no-point-labels] \
@@ -181,6 +182,7 @@ autoware-ml visualize \
 - `--split`: Dataset split to preview. Its transform pipeline and collation run as in training or evaluation, and with weights the model's own preprocessing and decoding produce the predictions (default: `test`)
 - `--sample-index`: First sample index to preview (default: `0`)
 - `--max-samples`: Number of consecutive samples to preview (default: `1`)
+- `--prediction-frequency-hz`: Also predict the lidar frames each record stores between two samples, at this rate. Prediction mode only; unset shows the samples alone (default: unset)
 - `--backend`: Visualization backend (default: `rerun`)
 - `--device`: Execution device for preview inference (default: `auto`, which uses CUDA when available)
 - `--point-labels` / `--no-point-labels`: Log per-point text labels. Disabled by default because large semantic point clouds become slow when every point has text.
@@ -225,7 +227,8 @@ autoware-ml visualize \
     --config-name multi/ptv3/t4dataset/voxel012_tiny_b8_100e_t4dataset_122m_j6gen2_det3d_seg3d \
     --weights mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/checkpoints/best.ckpt \
     --split test \
-    --max-samples 3 \
+    --max-samples 2 \
+    --prediction-frequency-hz 10 \
     --sync-views \
     --sync-port 9091
 ```
@@ -239,6 +242,24 @@ autoware-ml visualize \
     --device cpu \
     --split train
 ```
+
+**Frames between samples:**
+
+`--prediction-frequency-hz 10` turns 1 Hz annotated samples into a 10 Hz
+recording: each sample is logged at step `10 * i` and the nine lidar frames its
+record stores after it fill the steps in between, with predictions only. GT is
+logged on the samples and is never interpolated or held, and the frames in
+between show no cameras because the record lists them for its own frame only.
+
+`--max-samples` still counts samples, so three samples at 10 Hz are 30 frames.
+The browser-side Rerun viewer has its own heap limit of roughly 2.3 GiB, which
+is independent of `server_memory_limit`. A recording that exceeds it reports
+`Reached memory limit of 2.3 GiB, dropping oldest data`, discards the start of
+the stream, and then never becomes active, so the synced page waits forever on
+`connecting the left viewer`. With six cameras and dense point clouds the
+practical ceiling is about 20 frames. Prefer `--max-samples 2
+--prediction-frequency-hz 10`, or lower the frequency to keep more samples in
+the same budget, as in `--max-samples 3 --prediction-frequency-hz 5`.
 
 **Opening the viewer:**
 
@@ -261,7 +282,7 @@ Current visualization coverage:
 - calibration status: camera image, projected lidar overlay, fused depth and intensity image, status labels, and confidence summary
 - segmentation3d: GT/PD point clouds, semantic/intensity/solid coloring, and pointwise entropy computed from the predicted class probabilities
 - detection3d: GT/PD boxes overlaid on point clouds with class and score labels, and line-and-point plots of same-class yaw-aware 3D IoU and pre-threshold best-overlap signals
-- multi-task: combined segmentation and detection comparisons with optional calibrated camera frustums
+- multi-task: combined segmentation and detection comparisons with optional calibrated camera frustums, and prediction-only frames between annotated samples
 
 ## mlflow ui
 

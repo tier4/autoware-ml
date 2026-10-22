@@ -303,6 +303,46 @@ The detection adapter reads the `bboxes_3d` / `scores_3d` / `labels_3d` fields
 of `Detection3DSamplePredictions`, and also accepts the `bboxes` / `scores` /
 `labels` key set.
 
+### Frames between samples
+
+With `--prediction-frequency-hz`, a prediction preview also predicts the lidar
+frames recorded between two samples. Every record of the database stores up to
+nine lidar frames after its own, so the frames between two 1 Hz annotated
+samples are read from the first one:
+
+1. Each stored frame after the sample is rounded onto the timeline at the
+   requested frequency. A frame is kept when it lands before the next sample of
+   the same scene, one frame per step. A sample owns `round(hz)` timeline
+   steps, so with 1 Hz samples at 10 Hz sample `i` is logged at step `10 * i`
+   and its nine stored frames at the steps after it.
+2. The kept frame becomes the current frame of a new sample. Every stored
+   frame's `lidar_sensor_to_lidar_sweep_matrix` maps the record's own frame to
+   that stored frame, so each one is re-expressed from the new current frame as
+   `M_X @ inv(M_F)`. The sweep loader then picks past and future sweeps around
+   the new current frame exactly as it does for an annotated sample.
+3. The annotations belong to the record's frame, so the new sample has empty
+   boxes and no semantic mask, the path an unsupervised corpus takes through the
+   pipelines. Its frame metadata takes the pose and the time of the new current
+   frame.
+4. The sample runs through the transforms of its source and the model like any
+   other.
+
+The record lists the cameras of its own frame only, so the frames in between
+show the point cloud and the predictions without cameras, and without ground
+truth: GT is neither interpolated nor held from the previous sample. A database
+that serves every lidar frame as a sample has its next sample one frame later,
+so no frame is added there.
+
+Because `--max-samples` counts samples, the option multiplies the recording:
+three 1 Hz samples at 10 Hz are 30 frames. The browser-side viewer keeps the
+whole recording in a heap of roughly 2.3 GiB, independently of the
+`server_memory_limit` that bounds the sending side. A recording past that limit
+logs `Reached memory limit of 2.3 GiB, dropping oldest data` in the viewer,
+drops the head of the stream including the store info, and therefore never
+activates a recording, which leaves the synced page waiting on its handle. With
+six cameras and dense point clouds the practical ceiling is about twenty
+frames.
+
 ## Current Integration
 
 Visualization is wired into a dedicated CLI preview command:

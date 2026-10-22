@@ -54,6 +54,12 @@ def _class_names(visualization_cfg: DictConfig, key: str) -> tuple[str, ...] | N
     return tuple(str(name) for name in names) if names else None
 
 
+def _optional_float(visualization_cfg: DictConfig, key: str) -> float | None:
+    """Read an optional float, None when the key is unset."""
+    value = visualization_cfg.get(key, None)
+    return None if value is None else float(value)
+
+
 def _build_preview_config(cfg: DictConfig) -> VisualizationPreviewConfig:
     """Normalize optional visualization config values."""
     visualization_cfg = cfg.get("visualization", {})
@@ -62,6 +68,7 @@ def _build_preview_config(cfg: DictConfig) -> VisualizationPreviewConfig:
         split=str(visualization_cfg.get("split", "test")),
         sample_index=int(visualization_cfg.get("sample_index", 0)),
         max_samples=int(visualization_cfg.get("max_samples", 1)),
+        prediction_frequency_hz=_optional_float(visualization_cfg, "prediction_frequency_hz"),
         device=str(visualization_cfg.get("device", "auto")),
         point_labels=bool(visualization_cfg.get("point_labels", False)),
         point_color_mode=str(visualization_cfg.get("point_color_mode", "semantic")),
@@ -117,7 +124,9 @@ def main(cfg: DictConfig) -> None:
     logger.info(
         f"Starting visualization preview: mode={preview_config.mode} "
         f"split={preview_config.split} sample_index={preview_config.sample_index} "
-        f"max_samples={preview_config.max_samples} device={preview_config.device} "
+        f"max_samples={preview_config.max_samples} "
+        f"prediction_frequency_hz={preview_config.prediction_frequency_hz} "
+        f"device={preview_config.device} "
         f"backend={preview_config.session.backend} web_port={preview_config.session.web_port} "
         f"grpc_port={preview_config.session.grpc_port} wait={preview_config.session.wait}"
     )

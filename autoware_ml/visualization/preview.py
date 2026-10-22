@@ -17,7 +17,9 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+import copy
 from dataclasses import dataclass, field
+import math
 from pathlib import Path
 from typing import Literal, Protocol
 
@@ -78,6 +80,7 @@ class VisualizationPreviewConfig:
     split: str = SplitType.TEST.value
     sample_index: int = 0
     max_samples: int = 1
+    prediction_frequency_hz: float | None = None
     device: str = "auto"
     point_labels: bool = False
     class_names: tuple[str, ...] | None = None
@@ -96,6 +99,8 @@ class VisualizationPreviewConfig:
             raise ValueError("sample_index must not be negative")
         if self.max_samples <= 0:
             raise ValueError("max_samples must be greater than zero")
+        if self.prediction_frequency_hz is not None and self.prediction_frequency_hz <= 0:
+            raise ValueError("prediction_frequency_hz must be greater than zero")
         if self.point_color_mode not in {"semantic", "intensity", "solid"}:
             raise ValueError("point color mode must be 'semantic', 'intensity', or 'solid'")
         resolve_preview_device(self.device)
@@ -157,6 +162,11 @@ def run_visualization_preview(
     mode = _resolve_preview_mode(config.mode, model)
     if mode == "predictions" and model is None:
         raise ValueError("Model must be provided when visualization mode is 'predictions'.")
+    if mode == "data" and config.prediction_frequency_hz is not None:
+        raise ValueError(
+            "prediction_frequency_hz adds prediction-only frames between the samples, so it "
+            "needs the predictions mode and weights."
+        )
 
     split = SplitType(config.split)
     dataset = _setup_split(datamodule, split)
@@ -176,20 +186,43 @@ def run_visualization_preview(
     indices = range(
         config.sample_index, min(len(dataset), config.sample_index + config.max_samples)
     )
+    # A sample owns the timeline steps up to the next one, its intermediate frames fill them.
+    stride = (
+        max(1, round(config.prediction_frequency_hz))
+        if config.prediction_frequency_hz is not None
+        else 1
+    )
+    frame_count = 0
     with torch.no_grad():
-        for batch_index, dataset_index in enumerate(indices):
+        for dataset_index in indices:
             sample = _load_sample(
                 dataset,
                 dataset_index,
                 model=model if mode == "predictions" else None,
                 device=device,
-                batch_index=batch_index,
+                batch_index=frame_count,
             )
-            session.begin_frame(dataset_index, timestamp=_sample_timestamp(sample.metadata))
+            keyframe_step = dataset_index * stride
+            session.begin_frame(keyframe_step, timestamp=_sample_timestamp(sample.metadata))
             _log_preview_sample(session, sample, labels, config, dataset_index)
+            frame_count += 1
+            if config.prediction_frequency_hz is None or model is None:
+                continue
+
+            for step_offset, intermediate in _intermediate_frames(
+                dataset, dataset_index, config.prediction_frequency_hz, stride
+            ):
+                sample = _predict_intermediate_frame(
+                    dataset, dataset_index, intermediate, model, device, frame_count
+                )
+                session.begin_frame(
+                    keyframe_step + step_offset, timestamp=_sample_timestamp(sample.metadata)
+                )
+                _log_preview_sample(session, sample, labels, config, dataset_index)
+                frame_count += 1
 
     session.backend.wait_until_interrupted()
-    return len(indices)
+    return frame_count
 
 
 def _resolve_preview_mode(
@@ -260,6 +293,129 @@ def _load_sample(
         metadata=source.get_data_sample(sample_index),
         det3d_supervised=source.det3d_supervised,
         seg3d_supervised=source.seg3d_supervised,
+    )
+
+
+def _intermediate_frames(
+    dataset: ConcatDataset, dataset_index: int, frequency_hz: float, stride: int
+) -> list[tuple[int, ModelGTSample]]:
+    """Rebuild the unlabeled lidar frames recorded between a sample and the next one.
+
+    Every record stores the lidar frames that follow its own, so the frames between two
+    annotated samples are read from the first one. A frame is kept when it lands on a step of
+    the requested frequency before the next sample of the same scene, one frame per step.
+
+    Args:
+        dataset: Dataset of the split.
+        dataset_index: Index of the sample the frames follow.
+        frequency_hz: Rate at which the frames are taken.
+        stride: Timeline steps between two samples.
+
+    Returns:
+        The step offset after the sample and the re-anchored, unlabeled sample of every frame.
+    """
+    source_index, sample_index = dataset.locate(dataset_index)
+    metadata = dataset.datasets[source_index].get_data_sample(sample_index)
+    frames = metadata.lidar_point_cloud_samples
+    if not frames:
+        return []
+
+    next_timestamp = math.inf
+    if dataset_index + 1 < len(dataset):
+        next_source_index, next_sample_index = dataset.locate(dataset_index + 1)
+        following = dataset.datasets[next_source_index].get_data_sample(next_sample_index)
+        if _same_scene(metadata, following) and following.lidar_point_cloud_samples:
+            next_timestamp = following.lidar_point_cloud_samples[0].timestamp
+
+    frame_by_step: dict[int, int] = {}
+    for frame_index, frame in enumerate(frames[1:], start=1):
+        offset = frame.timestamp - frames[0].timestamp
+        if offset <= 0 or frame.timestamp >= next_timestamp:
+            continue
+        step_offset = round(offset * frequency_hz)
+        if 1 <= step_offset < stride:
+            frame_by_step.setdefault(step_offset, frame_index)
+    return [
+        (step_offset, _reanchor_on_frame(metadata, frame_by_step[step_offset]))
+        for step_offset in sorted(frame_by_step)
+    ]
+
+
+def _same_scene(sample: ModelGTSample, other: ModelGTSample) -> bool:
+    """Return whether two samples belong to one scene, False when either names none."""
+    if sample.frame_meta is None or other.frame_meta is None:
+        return False
+    return sample.frame_meta.scene_token == other.frame_meta.scene_token
+
+
+def _reanchor_on_frame(metadata: ModelGTSample, frame_index: int) -> ModelGTSample:
+    """Make one stored lidar frame of a record the current frame of an unlabeled sample.
+
+    The stored frames carry their transform from the record's own frame, so every one is
+    re-expressed from the new current frame: a point maps to frame ``X`` through
+    ``M_X @ inv(M_F)`` when ``M`` maps the record's frame to each stored one. The sweep
+    loader then splits the frames into past and future around the new current frame, and the
+    frame metadata takes the pose and the time of the new current frame. Annotations belong
+    to the record's frame, so the boxes are emptied and the semantic mask is dropped, and the
+    cameras, which the record lists for its own frame only, are left out.
+    """
+    frames = metadata.lidar_point_cloud_samples
+    anchor = frames[frame_index]
+    from_anchor = torch.linalg.inv(anchor.lidar_sensor_to_lidar_sweep_matrix)
+    reanchored = [
+        anchor._replace(
+            lidar_sensor_to_lidar_sweep_matrix=torch.eye(
+                4, dtype=anchor.lidar_sensor_to_lidar_sweep_matrix.dtype
+            )
+        )
+    ] + [
+        frame._replace(
+            lidar_sensor_to_lidar_sweep_matrix=frame.lidar_sensor_to_lidar_sweep_matrix
+            @ from_anchor
+        )
+        for index, frame in enumerate(frames)
+        if index != frame_index
+    ]
+    boxes = metadata.detection3d_gt_bboxes_3d
+    if boxes is not None:
+        boxes = copy.deepcopy(boxes)
+        boxes.remove_bboxes(torch.zeros(len(boxes), dtype=torch.bool))
+    frame_meta = metadata.frame_meta
+    if frame_meta is not None:
+        frame_meta = frame_meta._replace(
+            ego2global=anchor.lidar_to_ego_pose_to_global_matrix @ anchor.sensor_to_ego_pose_matrix,
+            timestamp=float(anchor.timestamp),
+        )
+    return metadata._replace(
+        lidar_point_cloud_samples=reanchored,
+        image_samples=None,
+        detection3d_gt_bboxes_3d=boxes,
+        segmentation3d_gt_sample=None,
+        frame_meta=frame_meta,
+        detection3d_traffic_cone_barrier_bbox_status=None,
+    )
+
+
+def _predict_intermediate_frame(
+    dataset: ConcatDataset,
+    dataset_index: int,
+    metadata: ModelGTSample,
+    model: PreviewModel,
+    device: torch.device,
+    batch_index: int,
+) -> _PreviewSample:
+    """Transform, collate and predict one rebuilt frame with the pipeline of its source."""
+    source_index, _ = dataset.locate(dataset_index)
+    source: BaseDataset = dataset.datasets[source_index]
+    batch = dataset.collate_fn([source.apply_transforms(metadata)])
+    inputs = model.on_after_batch_transfer(model.transfer_batch_to_device(batch, device, 0), 0)
+    return _PreviewSample(
+        batch=batch,
+        inputs=inputs,
+        predictions=model.predict_step(inputs, batch_index),
+        metadata=metadata,
+        det3d_supervised=False,
+        seg3d_supervised=False,
     )
 
 
