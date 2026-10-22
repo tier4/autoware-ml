@@ -102,8 +102,9 @@ class HungarianAssigner3D:
 
     Attributes:
         cls_cost: Classification cost term.
-        reg_cost: Bounding-box regression cost term. ``BBoxBEVL1Cost`` sees only the BEV
-            centers of the boxes, ``BBox3DL1Cost`` the whole box encoding.
+        reg_cost: Bounding-box regression cost term, called with the whole boxes either way.
+            ``BBoxBEVL1Cost`` reads only their BEV centers, ``BBox3DL1Cost`` the whole box
+            encoding.
         iou_cost: IoU-based matching cost term.
         point_cloud_range: Detector point-cloud range used by the regression cost.
     """
@@ -155,20 +156,12 @@ class HungarianAssigner3D:
             )
 
         cls_cost = self.cls_cost(gt_labels=gt_labels, cls_logits=cls_pred, valid_masks=valid_masks)
-        if isinstance(self.reg_cost, BBox3DL1Cost):
-            reg_cost = self.reg_cost(
-                bboxes=bboxes,
-                gt_bboxes=gt_bboxes,
-                valid_masks=valid_masks,
-                point_cloud_range=self.point_cloud_range,
-            )
-        else:
-            reg_cost = self.reg_cost(
-                bboxes_centers=bboxes[:, :, Box3DFieldIndex.X : Box3DFieldIndex.Y + 1],
-                gt_bboxes_centers=gt_bboxes[:, :, Box3DFieldIndex.X : Box3DFieldIndex.Y + 1],
-                valid_masks=valid_masks,
-                point_cloud_range=self.point_cloud_range,
-            )
+        reg_cost = self.reg_cost(
+            bboxes=bboxes,
+            gt_bboxes=gt_bboxes,
+            valid_masks=valid_masks,
+            point_cloud_range=self.point_cloud_range,
+        )
 
         iou = _bev_iou_aligned(bboxes, gt_bboxes, valid_masks=valid_masks)
         iou_cost = self.iou_cost(iou)

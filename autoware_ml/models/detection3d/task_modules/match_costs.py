@@ -87,15 +87,16 @@ class ClassificationCost:
 class BBoxBEVL1Cost:
     """Compute normalized BEV L1 cost between proposal and target boxes.
 
-    The cost operates on BEV box centers normalized by the detector range.
+    The cost operates on BEV box centers normalized by the detector range. It takes the whole
+    boxes like :class:`BBox3DL1Cost`, so an assigner calls either cost the same way.
     """
 
     weight: float = 1.0
 
     def __call__(
         self,
-        bboxes_centers: Float32[torch.Tensor, "batch_size num_bboxes 2"],
-        gt_bboxes_centers: Float32[torch.Tensor, "batch_size max_num_gt_bboxes 2"],
+        bboxes: Float32[torch.Tensor, "batch_size num_bboxes code_size"],
+        gt_bboxes: Float32[torch.Tensor, "batch_size max_num_gt_bboxes code_size"],
         valid_masks: Bool[torch.Tensor, "batch_size max_num_gt_bboxes"],
         point_cloud_range: Sequence[float],
     ) -> Float32[torch.Tensor, "batch_size num_bboxes max_num_gt_bboxes"]:
@@ -106,8 +107,9 @@ class BBoxBEVL1Cost:
         assignment never matches them.
 
         Args:
-            bboxes_centers: Predicted BEV box centers as (x, y).
-            gt_bboxes_centers: Ground-truth BEV box centers as (x, y).
+            bboxes: Predicted metric boxes, ``(x, y)`` centers first; only the BEV centers enter
+                the cost.
+            gt_bboxes: Ground-truth metric boxes in the same layout.
             valid_masks: Mask indicating valid ground-truth boxes.
             point_cloud_range: Detector point-cloud range.
 
@@ -115,11 +117,14 @@ class BBoxBEVL1Cost:
             Pairwise BEV L1 cost matrix, one (num_predictions, num_gt_bboxes) block per
             batch element.
         """
+        # (batch_size, num_predictions, 2) and (batch_size, num_gt_bboxes, 2)
+        bboxes_centers = bboxes[..., Box3DFieldIndex.X : Box3DFieldIndex.Y + 1]
+        gt_bboxes_centers = gt_bboxes[..., Box3DFieldIndex.X : Box3DFieldIndex.Y + 1]
         # (2,) BEV origin and extent used to normalize both center sets into [0, 1].
         pc_start = bboxes_centers.new_tensor(point_cloud_range[0:2])
         pc_extent = bboxes_centers.new_tensor(point_cloud_range[3:5]) - pc_start
-        # Both inputs are already BEV centers, so the trailing dim is the (x, y) axis and the
-        # normalization broadcasts over batch and box axes.
+        # Both center sets end in the (x, y) axis, so the normalization broadcasts over batch
+        # and box axes.
         # (batch_size, num_predictions, 2) and (batch_size, num_gt_bboxes, 2)
         norm_bboxes = (bboxes_centers - pc_start) / pc_extent
         norm_gt_bboxes = (gt_bboxes_centers - pc_start) / pc_extent

@@ -27,6 +27,7 @@ from autoware_ml.models.detection3d.task_modules.match_costs import (
     ClassificationCost,
     IoU3DCost,
 )
+from autoware_ml.types.geometry import Box3DFieldIndex
 
 
 class TestClassificationCost(unittest.TestCase):
@@ -259,6 +260,20 @@ class TestBBoxBEVL1Cost(unittest.TestCase):
         self.valid_masks = torch.tensor(
             [[True, True, False], [True, True, True]], device=self.device
         )
+        # The cost takes whole boxes like the other regression costs and reads their centers.
+        self.bboxes = self._boxes_from_centers(self.bboxes_centers)
+        self.gt_bboxes = self._boxes_from_centers(self.gt_bboxes_centers)
+
+    def _boxes_from_centers(
+        self, centers: Float32[torch.Tensor, "batch_size num_bboxes 2"]
+    ) -> Float32[torch.Tensor, "batch_size num_bboxes code_size"]:
+        """Embed BEV centers into whole boxes whose other fields the cost must ignore."""
+        generator = torch.Generator().manual_seed(0)
+        code_size = int(Box3DFieldIndex.VELOCITY_Y) + 1
+        boxes = torch.randn((*centers.shape[:-1], code_size), generator=generator) * 10.0
+        boxes = boxes.to(self.device)
+        boxes[..., Box3DFieldIndex.X : Box3DFieldIndex.Y + 1] = centers
+        return boxes
 
     def _expected_bbox_bev_l1_cost(
         self,
@@ -298,8 +313,8 @@ class TestBBoxBEVL1Cost(unittest.TestCase):
     def test_bbox_bev_l1_cost_matches_per_sample_reference(self) -> None:
         """Test that the batched cost matches an explicit per-pair reference loop."""
         cost = self.reg_cost(
-            self.bboxes_centers,
-            self.gt_bboxes_centers,
+            self.bboxes,
+            self.gt_bboxes,
             self.valid_masks,
             self.point_cloud_range,
         )
@@ -318,16 +333,16 @@ class TestBBoxBEVL1Cost(unittest.TestCase):
     def test_bbox_bev_l1_cost_is_independent_across_batch(self) -> None:
         """Test that each sample's cost block only depends on that sample's inputs."""
         batched_cost = self.reg_cost(
-            self.bboxes_centers,
-            self.gt_bboxes_centers,
+            self.bboxes,
+            self.gt_bboxes,
             self.valid_masks,
             self.point_cloud_range,
         )
 
         for batch_index in range(self.batch_size):
             single_cost = self.reg_cost(
-                self.bboxes_centers[batch_index : batch_index + 1],
-                self.gt_bboxes_centers[batch_index : batch_index + 1],
+                self.bboxes[batch_index : batch_index + 1],
+                self.gt_bboxes[batch_index : batch_index + 1],
                 self.valid_masks[batch_index : batch_index + 1],
                 self.point_cloud_range,
             )
@@ -336,11 +351,30 @@ class TestBBoxBEVL1Cost(unittest.TestCase):
                 msg=f"batch element {batch_index} depends on the rest of the batch",
             )
 
+    def test_bbox_bev_l1_cost_reads_only_the_bev_centers(self) -> None:
+        """Test that the whole boxes cost exactly what their (x, y) centers alone cost."""
+        cost = self.reg_cost(self.bboxes, self.gt_bboxes, self.valid_masks, self.point_cloud_range)
+
+        center_cost = self.reg_cost(
+            self.bboxes[..., Box3DFieldIndex.X : Box3DFieldIndex.Y + 1],
+            self.gt_bboxes[..., Box3DFieldIndex.X : Box3DFieldIndex.Y + 1],
+            self.valid_masks,
+            self.point_cloud_range,
+        )
+        moved_bboxes = self.bboxes.clone()
+        moved_bboxes[..., Box3DFieldIndex.Z :] += 3.0
+        moved_cost = self.reg_cost(
+            moved_bboxes, self.gt_bboxes, self.valid_masks, self.point_cloud_range
+        )
+
+        self.assertTrue(torch.equal(cost, center_cost))
+        self.assertTrue(torch.equal(cost, moved_cost))
+
     def test_bbox_bev_l1_cost_prefers_the_nearest_center(self) -> None:
         """Test that the cheapest prediction for each gt is the closest one in BEV."""
         cost = self.reg_cost(
-            self.bboxes_centers,
-            self.gt_bboxes_centers,
+            self.bboxes,
+            self.gt_bboxes,
             self.valid_masks,
             self.point_cloud_range,
         )
@@ -356,8 +390,8 @@ class TestBBoxBEVL1Cost(unittest.TestCase):
     def test_bbox_bev_l1_cost_masks_invalid_gt_bboxes(self) -> None:
         """Test that padded gt columns are filled with the highest possible cost."""
         cost = self.reg_cost(
-            self.bboxes_centers,
-            self.gt_bboxes_centers,
+            self.bboxes,
+            self.gt_bboxes,
             self.valid_masks,
             self.point_cloud_range,
         )
@@ -368,18 +402,20 @@ class TestBBoxBEVL1Cost(unittest.TestCase):
 
     def test_bbox_bev_l1_cost_ignores_padded_centers(self) -> None:
         """Test that the geometry of invalid gt boxes cannot change the valid costs."""
-        padded_gt_bboxes_centers = self.gt_bboxes_centers.clone()
-        padded_gt_bboxes_centers[0, 2] = torch.tensor([1e6, -1e6], device=self.device)
+        padded_gt_bboxes = self.gt_bboxes.clone()
+        padded_gt_bboxes[0, 2, Box3DFieldIndex.X : Box3DFieldIndex.Y + 1] = torch.tensor(
+            [1e6, -1e6], device=self.device
+        )
 
         cost = self.reg_cost(
-            self.bboxes_centers,
-            padded_gt_bboxes_centers,
+            self.bboxes,
+            padded_gt_bboxes,
             self.valid_masks,
             self.point_cloud_range,
         )
         expected_cost = self.reg_cost(
-            self.bboxes_centers,
-            self.gt_bboxes_centers,
+            self.bboxes,
+            self.gt_bboxes,
             self.valid_masks,
             self.point_cloud_range,
         )
@@ -387,34 +423,34 @@ class TestBBoxBEVL1Cost(unittest.TestCase):
 
     def test_bbox_bev_l1_cost_normalizes_by_the_detector_range(self) -> None:
         """Test that the cost is the range-normalized L1 distance, not the metric one."""
-        bboxes_centers = torch.tensor([[[0.0, 0.0]]], dtype=torch.float32, device=self.device)
-        gt_bboxes_centers = torch.tensor([[[8.0, 0.0]]], dtype=torch.float32, device=self.device)
+        bboxes = self._boxes_from_centers(
+            torch.tensor([[[0.0, 0.0]]], dtype=torch.float32, device=self.device)
+        )
+        gt_bboxes = self._boxes_from_centers(
+            torch.tensor([[[8.0, 0.0]]], dtype=torch.float32, device=self.device)
+        )
         valid_masks = torch.ones((1, 1), dtype=torch.bool, device=self.device)
 
-        cost = BBoxBEVL1Cost(weight=1.0)(
-            bboxes_centers, gt_bboxes_centers, valid_masks, self.point_cloud_range
-        )
+        cost = BBoxBEVL1Cost(weight=1.0)(bboxes, gt_bboxes, valid_masks, self.point_cloud_range)
 
         # 8 m over an 80 m x extent is 0.1 in normalized coordinates.
         self.assertAlmostEqual(float(cost[0, 0, 0]), 0.1, places=6)
         # Halving the extent doubles the normalized distance.
         narrow_range = [-20.0, -40.0, -3.0, 20.0, 40.0, 5.0]
-        narrow_cost = BBoxBEVL1Cost(weight=1.0)(
-            bboxes_centers, gt_bboxes_centers, valid_masks, narrow_range
-        )
+        narrow_cost = BBoxBEVL1Cost(weight=1.0)(bboxes, gt_bboxes, valid_masks, narrow_range)
         self.assertAlmostEqual(float(narrow_cost[0, 0, 0]), 0.2, places=6)
 
     def test_bbox_bev_l1_cost_scales_with_weight(self) -> None:
         """Test that the weight scales only the valid entries of the cost."""
         unit_cost = BBoxBEVL1Cost(weight=1.0)(
-            self.bboxes_centers,
-            self.gt_bboxes_centers,
+            self.bboxes,
+            self.gt_bboxes,
             self.valid_masks,
             self.point_cloud_range,
         )
         scaled_cost = BBoxBEVL1Cost(weight=0.25)(
-            self.bboxes_centers,
-            self.gt_bboxes_centers,
+            self.bboxes,
+            self.gt_bboxes,
             self.valid_masks,
             self.point_cloud_range,
         )
