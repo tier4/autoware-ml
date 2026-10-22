@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import ClassVar
 
 from torch.utils.data import DataLoader
 
@@ -50,9 +49,6 @@ class StreamingDataModule(DataModule):
     and ``trainer.overfit_batches``, for which Lightning swaps the sampler of the training and
     validation loaders for a sequential one.
     """
-
-    # A model carrying a memory across batches reads it from the datamodule of its trainer.
-    streaming: ClassVar[bool] = True
 
     def __init__(
         self,

@@ -1006,20 +1006,6 @@ class TestStreamingDataModule(StreamedCorpusTestCase):
             seed=seed,
         )
 
-    def test_tells_a_temporal_model_that_it_streams(self) -> None:
-        """
-        Input: a streaming datamodule and a plain one over the same source.
-        Expected: a model carrying a memory across batches reads ``streaming`` from the
-        datamodule of its trainer, False when the datamodule does not define it, so only the
-        streaming datamodule passes its check.
-        Check: the ``streaming`` flag each datamodule shows to such a model.
-        """
-        streaming_data_module = self.build_streaming_data_module()
-        data_module = self.build_data_module({"main": build_source(self.streamed_database)})
-
-        self.assertTrue(getattr(streaming_data_module, "streaming", False))
-        self.assertFalse(getattr(data_module, "streaming", False))
-
     def test_every_split_streams_through_the_scene_sampler(self) -> None:
         """
         Input: a streaming datamodule with a two-lane training loader and a one-lane
