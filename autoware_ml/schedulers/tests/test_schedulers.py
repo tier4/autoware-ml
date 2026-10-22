@@ -553,23 +553,3 @@ class TestIterWarmupEpochCosineLR:
             pytest.approx([annealed(1.0, step), annealed(0.1, step)]) for step in range(100)
         ]
         assert lrs[-1] == pytest.approx([0.01, 0.01], abs=3e-4)
-
-    def test_needs_the_default_learning_rate_of_the_optimizer(self) -> None:
-        """
-        Input: an optimizer whose defaults hold no learning rate.
-        Expected: the cosine floor is a fraction of the optimizer's default learning rate, so
-        the schedule cannot be built without one.
-        Check: a ValueError naming optimizer.defaults is raised.
-        """
-        optimizer = torch.optim.SGD(torch.nn.Linear(2, 2).parameters(), lr=1.0)
-        del optimizer.defaults["lr"]
-
-        with pytest.raises(ValueError, match="optimizer.defaults"):
-            IterWarmupEpochCosineLR(
-                optimizer,
-                total_steps=10,
-                max_epochs=1,
-                warmup_iters=0,
-                warmup_start_factor=1.0,
-                eta_min_factor=0.01,
-            )

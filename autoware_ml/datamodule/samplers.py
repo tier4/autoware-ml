@@ -18,7 +18,8 @@ A detection corpus is dominated by cars, and a frame that carries a rare class i
 often as one that does not. Repeat factor sampling gives every frame a weight from the
 rarest category it carries, so frames with rare objects come up more often within an epoch
 of the same length. The weights come straight from the record table, before any transform.
-The scene streaming sampler feeds temporal models whole scenes frame by frame.
+The scene streaming sampler feeds temporal models scenes frame by frame, one stream per batch
+position.
 """
 
 from __future__ import annotations
@@ -324,16 +325,9 @@ class GroupStreamingSampler(DistributedSampler):
     model may run in its validation loss), and the epoch length never changes (Lightning
     derives the validation interval and the total step count once, from the first epoch). A
     lane one frame shorter than the others ends with a ``PaddingSlot`` holding the index of
-    its last frame: the dataset serves that frame again flagged ``is_padding``, and the batch
-    flags it in ``ModelGTBatch.padding_mask``. Fewer than ``num_lanes`` slots of an epoch are
-    padding, and no frame is dropped or served twice as a real sample, in training,
-    evaluation and prediction alike.
-
-    A model streaming from this sampler gives padded samples no loss and no metric and
-    leaves them out of the logged batch size (``ModelGTBatch.num_real_samples``), and a
-    prediction writer skips them. A padding slot repeats the frame before it, in the same
-    scene and with no time gap, so a model that keeps a stream only while time moves forward
-    starts a new stream there, at the end of the lane.
+    its last frame, which the batch flags in ``ModelGTBatch.padding_mask``. Fewer than
+    ``num_lanes`` slots of an epoch are padding, and no frame is dropped or served twice as a
+    real sample, in training, evaluation and prediction alike.
 
     As a ``DistributedSampler`` it is never wrapped by Lightning, whose wrapper would keep
     only every ``num_replicas``-th index of each rank and make its lanes skip frames.
@@ -364,9 +358,8 @@ class GroupStreamingSampler(DistributedSampler):
         if not self.scene_groups:
             raise ValueError("GroupStreamingSampler requires at least one scene group.")
         self.batch_size = batch_size
-        self._cached_epoch: int | None = None
-        self._cached_indices: Sequence[Sequence[int]] = ()
         self.total_frames = sum(len(group) for group in self.scene_groups)
+        self._validate_lanes()
 
     @property
     def num_lanes(self) -> int:
@@ -403,13 +396,8 @@ class GroupStreamingSampler(DistributedSampler):
 
     @staticmethod
     def _pad_lane(lane: Sequence[int], rounds: int) -> Sequence[int]:
-        """End a lane with padding slots holding its last frame, up to ``rounds`` slots."""
+        """End a lane with padding slots holding its last frame, up to a length of ``rounds``."""
         return [*lane, *[PaddingSlot(lane[-1])] * (rounds - len(lane))]
-
-    def _rank_indices(self, lanes: Sequence[Sequence[int]], rank: int) -> Sequence[int]:
-        """Interleave the lanes of one rank round by round, one frame of every lane a round."""
-        rank_lanes = lanes[rank * self.batch_size : (rank + 1) * self.batch_size]
-        return [index for round_frames in zip(*rank_lanes) for index in round_frames]
 
     def _log_epoch(self, epoch: int) -> None:
         """Log the padding slots that keep the lanes of an epoch aligned."""
@@ -424,24 +412,17 @@ class GroupStreamingSampler(DistributedSampler):
             self.rounds_per_epoch * self.num_lanes - self.total_frames,
         )
 
-    def _epoch_indices(self, epoch: int) -> Sequence[Sequence[int]]:
-        """Build, or reuse, the interleaved indices of every rank for one epoch."""
-        if epoch == self._cached_epoch:
-            return self._cached_indices
-        self._validate_lanes()
-        lanes = self._cut_lanes(self._scene_order(epoch))
-        padded_lanes = [self._pad_lane(lane, self.rounds_per_epoch) for lane in lanes]
-        self._cached_indices = [
-            self._rank_indices(padded_lanes, rank) for rank in range(self.num_replicas)
-        ]
-        self._cached_epoch = epoch
-        self._log_epoch(epoch)
-        return self._cached_indices
-
     def __iter__(self):
-        """Yield this rank's interleaved indices for the current epoch."""
-        return iter(self._epoch_indices(self.epoch)[self.rank])
+        """Yield this rank's lanes for the current epoch, one frame of every lane a round."""
+        lanes = self._cut_lanes(self._scene_order(self.epoch))
+        first_lane = self.rank * self.batch_size
+        rank_lanes = [
+            self._pad_lane(lane, self.rounds_per_epoch)
+            for lane in lanes[first_lane : first_lane + self.batch_size]
+        ]
+        self._log_epoch(self.epoch)
+        return iter([index for round_frames in zip(*rank_lanes) for index in round_frames])
 
     def __len__(self) -> int:
         """Return the per-rank sample count, the same in every epoch and every split."""
-        return len(self._epoch_indices(self.epoch)[self.rank])
+        return self.rounds_per_epoch * self.batch_size

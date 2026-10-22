@@ -59,9 +59,8 @@ class ModelGTSample(NamedTuple):
     # Assigned by the dataset once the pipeline has finished.
     io_processing_time: float = 0.0
 
-    # Whether the sample fills a padding slot of a streaming lane instead of serving a frame
-    # of the split: a repeat of the lane's last frame that only keeps every rank at the same
-    # number of batches. Assigned by the dataset, see ModelGTBatch.padding_mask.
+    # Whether the sample only pads a streaming lane, repeating the lane's last frame. Assigned by
+    # the dataset, see ModelGTBatch.padding_mask.
     is_padding: bool = False
 
     def keep_points(self, keep_mask: Bool[Tensor, " num_points"]) -> ModelGTSample:
@@ -108,11 +107,11 @@ class ModelGTBatch(NamedTuple):
     # Per-frame evaluation metadata, None when the samples carry none.
     frame_meta_batch: FrameMetaBatch | None = None
 
-    # Which samples fill padding slots of streaming lanes rather than serving frames of the
-    # split. Every collated batch carries it, all False when no sample is padding; it is None
-    # only on a batch assembled by hand, which holds no padding slot. A model fed by a
-    # StreamingDataModule gives the flagged samples no loss and no metric and leaves them out
-    # of the logged batch size (num_real_samples), and a prediction writer skips them.
+    # Samples that only pad a streaming lane (see GroupStreamingSampler). A model gives them no
+    # loss and no metric and leaves them out of the logged batch size (num_real_samples); on a
+    # batch of padding only it still returns a loss, which DDP needs from every rank. Whoever
+    # consumes predictions drops them by this mask. All False when no sample pads, None only on
+    # a batch assembled by hand.
     padding_mask: Bool[Tensor, " batch_size"] | None = None
 
     def to_device(self, device: torch.device) -> ModelGTBatch:

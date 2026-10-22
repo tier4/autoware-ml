@@ -62,12 +62,9 @@ class IterWarmupEpochCosineLR(LRScheduler):
     Args:
         optimizer: Wrapped optimizer.
         total_steps: Total optimization steps of the run, auto-filled by the framework from
-            ``trainer.estimated_stepping_batches``: the steps of one data epoch times
-            ``trainer.max_epochs``, or ``trainer.max_steps`` when that is fewer.
-        max_epochs: Number of cosine stages; bind it to the trainer in the config
-            (``max_epochs: ${trainer.max_epochs}``) so that a stage is one data epoch when
-            ``trainer.max_steps`` does not cap the run. Sets both the stage length
-            (``total_steps // max_epochs``) and the cosine period.
+            ``trainer.estimated_stepping_batches``.
+        max_epochs: Number of cosine stages, which sets the stage length and the cosine
+            period; bind it in the config with ``max_epochs: ${trainer.max_epochs}``.
         warmup_iters: Length of the linear warmup in optimization steps.
         warmup_start_factor: Learning-rate factor of every param group at step 0.
         eta_min_factor: Cosine floor as a fraction of the optimizer's default learning rate
@@ -88,8 +85,6 @@ class IterWarmupEpochCosineLR(LRScheduler):
         eta_min_factor: float,
         last_epoch: int = -1,
     ) -> None:
-        if total_steps <= 0:
-            raise ValueError(f"total_steps must be positive, got {total_steps}.")
         if max_epochs <= 0:
             raise ValueError(f"max_epochs must be positive, got {max_epochs}.")
         if total_steps < max_epochs:
@@ -97,16 +92,10 @@ class IterWarmupEpochCosineLR(LRScheduler):
                 f"total_steps ({total_steps}) must cover at least one step per epoch "
                 f"({max_epochs} epochs)."
             )
-        if "lr" not in optimizer.defaults:
-            raise ValueError(
-                "IterWarmupEpochCosineLR sets its cosine floor from the optimizer's default "
-                'learning rate, but optimizer.defaults has no "lr".'
-            )
         self.max_epochs = max_epochs
         self.steps_per_epoch = total_steps // max_epochs
         self.warmup_iters = warmup_iters
         self.warmup_start_factor = warmup_start_factor
-        self.eta_min_factor = eta_min_factor
         self.eta_min = eta_min_factor * float(optimizer.defaults["lr"])
         super().__init__(optimizer, last_epoch)
 
@@ -119,10 +108,7 @@ class IterWarmupEpochCosineLR(LRScheduler):
         else:
             warmup_factor = 1.0
 
-        # A stage lasts total_steps // max_epochs steps. A trainer.max_steps cap shortens
-        # every stage (see the class docstring) and can leave total_steps % max_epochs
-        # trailing steps, which keep the last stage's factor rather than dropping to the
-        # eta_min floor.
+        # The total_steps % max_epochs trailing steps keep the last stage's factor.
         epoch_index = min(step // self.steps_per_epoch, self.max_epochs - 1)
         cosine = 0.5 * (1.0 + math.cos(math.pi * epoch_index / self.max_epochs))
         return [

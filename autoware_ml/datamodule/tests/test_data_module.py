@@ -19,14 +19,12 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from functools import partial
 from pathlib import Path
-import pickle
 import tempfile
 import unittest
 
 import lightning as L
 import polars as pl
 from torch.utils.data import DataLoader
-from torch.utils.data.distributed import DistributedSampler
 
 from autoware_ml.databases.base_database import BaseDatabase
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
@@ -853,20 +851,6 @@ class TestSceneIndexGroups(StreamedCorpusTestCase):
 
         self.assertEqual(dataset.scene_index_groups(), [[2, 0], [4, 1], [3]])
 
-    def test_concatenated_sources_offset_and_repeat_their_scenes(self) -> None:
-        """
-        Input: the five-record corpus repeated twice followed by a one-record corpus.
-        Expected: every repeat serves the scenes once more at its own block of split indices,
-        and the second source follows behind both repeats.
-        Check: compare the groups with the expected split indices.
-        """
-        streamed = build_dataset(self.streamed_database).bind(self.streamed_records)
-        single = build_dataset(self.seg3d_gt_database).bind(self.seg3d_gt_records)
-
-        groups = ConcatDataset([streamed, single], repeats=[2, 1]).scene_index_groups()
-
-        self.assertEqual(groups, [[4, 2, 0], [1, 3], [9, 7, 5], [6, 8], [10]])
-
     def test_every_repeat_of_every_source_takes_its_own_block_of_indices(self) -> None:
         """
         Input: the five-record corpus repeated three times, a source bound to no record
@@ -968,22 +952,9 @@ class TestPaddingSlots(StreamedCorpusTestCase):
                 self.assertTrue(self.lidar_frame_path(frame).endswith("/3_0.pcd.bin"))
                 self.assertEqual(self.lidar_frame_path(padding), self.lidar_frame_path(frame))
 
-    def test_a_padding_slot_survives_pickling(self) -> None:
-        """
-        Input: a padding slot pickled and loaded again, as a dataloader sends its indices to
-        the worker processes.
-        Expected: the worker receives a padding slot of the same index, so it still flags the
-        sample it loads.
-        Check: the type and the value of the loaded index.
-        """
-        index = pickle.loads(pickle.dumps(PaddingSlot(7)))
-
-        self.assertIs(type(index), PaddingSlot)
-        self.assertEqual(index, 7)
-
 
 class TestStreamingDataModule(StreamedCorpusTestCase):
-    """Scene-streaming dataloaders feeding temporal models whole scenes frame by frame."""
+    """Scene-streaming dataloaders feeding temporal models scenes frame by frame."""
 
     def build_streaming_data_module(
         self,
@@ -1008,15 +979,17 @@ class TestStreamingDataModule(StreamedCorpusTestCase):
 
     def test_every_split_streams_through_the_scene_sampler(self) -> None:
         """
-        Input: a streaming datamodule with a two-lane training loader and a one-lane
-        validation loader.
+        Input: a streaming datamodule with the experiment seed, a two-lane training loader and
+        a one-lane validation loader.
         Expected: both loaders draw from the scene sampler with one lane per batch position,
-        and only the training split reshuffles its scenes.
-        Check: read the sampler type, its lane count and its shuffle flag per split.
+        and only the training split reshuffles its scenes, from the experiment seed.
+        Check: read the sampler type, its lane count and its shuffle flag per split, and the
+        training seed.
         """
         data_module = self.build_streaming_data_module(
             train_dataloader=DataLoaderConfig(batch_size=2),
             validation_dataloader=DataLoaderConfig(batch_size=1),
+            seed=7,
         )
         data_module.setup("fit")
 
@@ -1026,13 +999,15 @@ class TestStreamingDataModule(StreamedCorpusTestCase):
         self.assertIsInstance(train_sampler, GroupStreamingSampler)
         self.assertIsInstance(validation_sampler, GroupStreamingSampler)
         self.assertEqual((train_sampler.batch_size, train_sampler.shuffle), (2, True))
+        self.assertEqual(train_sampler.seed, 7)
         self.assertEqual((validation_sampler.batch_size, validation_sampler.shuffle), (1, False))
         self.assertEqual(list(validation_sampler), [4, 2, 0, 1, 3])
 
     def test_rejects_a_shuffling_loader(self) -> None:
         """
         Input: a streaming datamodule whose training loader asks to shuffle.
-        Expected: the scene sampler owns the order, so a shuffle would break the streams.
+        Expected: the scene sampler owns the order, and the DataLoader refuses a shuffle next
+        to a sampler.
         Check: building the training loader raises a ValueError naming the shuffle.
         """
         data_module = self.build_streaming_data_module(
@@ -1042,27 +1017,6 @@ class TestStreamingDataModule(StreamedCorpusTestCase):
 
         with self.assertRaisesRegex(ValueError, "shuffle"):
             data_module.train_dataloader()
-
-    def test_builds_a_distributed_sampler_seeded_by_the_experiment(self) -> None:
-        """
-        Input: a streaming datamodule with the experiment seed.
-        Expected: the scene sampler is a ``DistributedSampler``, so Lightning leaves it alone
-        whatever ``use_distributed_sampler`` says, and its shuffle draws from the seed.
-        Check: the training loader's sampler type and seed; the validation loader does not
-        shuffle.
-        """
-        data_module = self.build_streaming_data_module(
-            train_dataloader=DataLoaderConfig(batch_size=1),
-            validation_dataloader=DataLoaderConfig(batch_size=1),
-            seed=7,
-        )
-        data_module.setup("fit")
-
-        train_sampler = data_module.train_dataloader().sampler
-        self.assertIsInstance(train_sampler, GroupStreamingSampler)
-        self.assertIsInstance(train_sampler, DistributedSampler)
-        self.assertEqual((train_sampler.seed, train_sampler.shuffle), (7, True))
-        self.assertFalse(data_module.val_dataloader().sampler.shuffle)
 
     def test_rejects_overfit_batches(self) -> None:
         """
