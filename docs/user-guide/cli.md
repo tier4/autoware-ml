@@ -12,18 +12,19 @@ Bash completion is installed automatically by the Docker image build and by
 
 ## Commands
 
-| Command            | Purpose                                            |
-| ------------------ | -------------------------------------------------- |
-| `train`            | Train models using PyTorch Lightning               |
-| `test`             | Evaluate models from a checkpoint                  |
-| `deploy`           | Export models to ONNX and TensorRT                 |
-| `mlflow ui`        | Launch the MLflow tracking UI                      |
-| `mlflow export`    | Export one experiment into its own MLflow store    |
-| `session start`    | Start a managed background task                    |
-| `session attach`   | View live terminal output from a background task   |
-| `session detach`   | Disconnect raw tmux clients from a managed session |
-| `session ls`       | List managed background tasks                      |
-| `session stop`     | Stop a managed background task                     |
+| Command          | Purpose                                                   |
+| ---------------- | --------------------------------------------------------- |
+| `train`          | Train models using PyTorch Lightning                      |
+| `test`           | Evaluate models from a checkpoint                         |
+| `visualize`      | Preview data and predictions in the visualization backend |
+| `deploy`         | Export models to ONNX and TensorRT                        |
+| `mlflow ui`      | Launch the MLflow tracking UI                             |
+| `mlflow export`  | Export one experiment into its own MLflow store           |
+| `session start`  | Start a managed background task                           |
+| `session attach` | View live terminal output from a background task          |
+| `session detach` | Disconnect raw tmux clients from a managed session        |
+| `session ls`     | List managed background tasks                             |
+| `session stop`   | Stop a managed background task                            |
 
 ## train
 
@@ -142,6 +143,92 @@ autoware-ml test \
     --weights mlruns/ptv3_seg3d/T4Dataset-j6gen2_semaseg-v1.0.0/j6gen2_semaseg/voxel012_tiny_b16_50e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt \
     --weights mlruns/ptv3/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base/voxel012_tiny_b8_30e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt
 ```
+
+## visualize
+
+Preview consecutive samples of a dataset split, and the predictions of a model,
+in the visualization backend.
+
+```bash
+autoware-ml visualize \
+    --config-name <config_path> \
+    [--weights <path> ...] \
+    [--mode auto|predictions|data] \
+    [--split test|predict|val|train] \
+    [--sample-index N] \
+    [--max-samples N] \
+    [--backend rerun|noop] \
+    [--device cpu|cuda|auto] \
+    [--point-labels/--no-point-labels] \
+    [--point-color-mode semantic|intensity|solid] \
+    [--camera-frustums/--no-camera-frustums] \
+    [--web-port PORT] \
+    [--grpc-port PORT] \
+    [--wait/--no-wait] \
+    [hydra_overrides...]
+```
+
+**Arguments:**
+
+- `--config-name`: Path to config (same as used for training)
+- `--weights`: Optional `.ckpt` paths whose parameters are merged into the model, as for `test` (repeatable). Every parameter must be covered by at least one checkpoint.
+
+**Common options:**
+
+- `--mode`: Preview mode. `auto` shows predictions when weights are given and the transformed data otherwise (default: `auto`)
+- `--split`: Dataset split to preview. Its transform pipeline and collation run as in training or evaluation, and with weights the model's own preprocessing and decoding produce the predictions (default: `test`)
+- `--sample-index`: First sample index to preview (default: `0`)
+- `--max-samples`: Number of consecutive samples to preview (default: `1`)
+- `--backend`: Visualization backend (default: `rerun`)
+- `--device`: Execution device for preview inference (default: `auto`, which uses CUDA when available)
+- `--point-labels` / `--no-point-labels`: Log per-point text labels. Disabled by default because large semantic point clouds become slow when every point has text.
+- `--point-color-mode`: Initially active point-cloud tab: semantic class, normalized LiDAR intensity, or solid geometry color (default: `semantic`). All available modes remain selectable in Rerun.
+- `--camera-frustums` / `--no-camera-frustums`: Initial visibility of camera frustums and projected image planes in 3D views (default: hidden). When cameras are available, use the **Camera projections OFF** / **Camera projections ON** switch inside a 3D comparison to change them dynamically.
+- `--web-port`: Rerun web viewer HTTP port (default: `9090`)
+- `--grpc-port`: Rerun SDK gRPC port used by the web viewer proxy (default: `9876`)
+- `--wait` / `--no-wait`: Keep the Rerun web server alive after logging (default: `--wait`)
+- `--recording-id`: Optional explicit recording ID
+
+Backend modes:
+
+- `rerun`: serves the Rerun web viewer and logs the browser URL. Forward both `--web-port` and `--grpc-port` when running in Docker.
+- `noop`: runs the preview path and drops all visualization events. Use this for smoke tests and CI.
+
+Each sample is logged on the `frame` timeline at its dataset index, with its
+lidar timestamp on `sensor_time`. Only the points of the current lidar frame are
+shown: past sweeps merged in by the pipeline carry no annotation of their own.
+Class names come from the taxonomy of the database; set
+`+visualization.segmentation3d_class_names=[...]` or
+`+visualization.detection3d_class_names=[...]` to override them.
+
+**Examples:**
+
+Compare the predictions of a multi-task checkpoint with the ground truth:
+
+```bash
+autoware-ml visualize \
+    --config-name multi/ptv3/t4dataset/voxel012_tiny_b8_100e_t4dataset_122m_j6gen2_det3d_seg3d \
+    --weights mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/checkpoints/best.ckpt \
+    --split test \
+    --max-samples 3
+```
+
+Preview the transformed data only, without weights:
+
+```bash
+autoware-ml visualize \
+    --config-name segmentation3d/ptv3/t4dataset/voxel012_tiny_b16_50e_t4dataset_122m_j6gen2_semaseg \
+    --mode data \
+    --device cpu \
+    --split train
+```
+
+Current visualization coverage:
+
+- calibration status: camera image, projected lidar overlay, fused depth and intensity image, status labels, and confidence summary
+- segmentation3d: GT/PD point clouds, semantic/intensity/solid coloring, and pointwise entropy computed from the predicted class probabilities
+- detection3d: GT/PD boxes overlaid on point clouds with class and score labels, and line-and-point plots of same-class yaw-aware 3D IoU and pre-threshold best-overlap signals
+- multi-task: combined segmentation and detection comparisons with optional calibrated camera frustums
 
 ## mlflow ui
 

@@ -102,6 +102,20 @@ raises if it still serializes empty, so an incompatible dependency bump fails
 loudly instead of quietly dropping every legend. Remove the patch once the
 repository moves to NumPy 2.x or a Rerun release that fixes the conversion.
 
+### Class name resolution
+
+Legends and per-instance labels read as class names rather than integer ids
+because the preview takes them from the taxonomy of the database the split
+reads: `taxonomy.segmentation3d.class_names` for point labels, with its
+`ignore_index` drawn as unlabelled, and `taxonomy.detection3d.class_names` for
+boxes. Every source of a split shares one taxonomy, so one lookup covers the
+whole split. `visualization.segmentation3d_class_names`,
+`visualization.detection3d_class_names` and `visualization.class_names`
+override it.
+
+When no names reach an adapter, `format_class_label` falls back to the
+stringified class id.
+
 ## Task Coverage
 
 ### Calibration Status
@@ -235,6 +249,48 @@ the shared scalar heatmap.
 The detection adapter reads the `bboxes_3d` / `scores_3d` / `labels_3d` fields
 of `Detection3DSamplePredictions`, and also accepts the `bboxes` / `scores` /
 `labels` key set.
+
+## Current Integration
+
+Visualization is wired into a dedicated CLI preview command:
+
+```bash
+autoware-ml visualize \
+    --config-name <task>/<model>/<database>/<config> \
+    --weights <path/to/model.ckpt> \
+    --mode predictions \
+    --split test \
+    --sample-index 0 \
+    --max-samples 1 \
+    --point-color-mode semantic
+```
+
+`autoware_ml/visualization/preview.py` drives it:
+
+1. Builds the datamodule from the config, prepares the record tables when they
+   are missing, and sets up the selected split.
+2. With `--weights`, builds the model like `autoware-ml test` and loads the
+   checkpoints into it.
+3. For every sample, locates it in the split, collates the transformed
+   `ModelGTSample` with the dataset's own `collate_fn`, and keeps the
+   untransformed sample for its camera files and timestamps.
+4. With a model, moves the batch through `transfer_batch_to_device`,
+   `on_after_batch_transfer` and `predict_step`, so the predictions come from
+   the model's own preprocessing and decoding. Every 3D layer of a prediction
+   preview reads the preprocessed batch, which is the one the predictions are
+   aligned with.
+5. Logs the tasks the sample carries through `VisualizationSession`.
+
+Segmentation predictions are aligned with the points by the head that made
+them: a voxel head labels the current-frame points that fall inside the voxel
+grid, and a point head labels every point. The preview picks whichever matches
+the number of predicted labels and refuses a sample where neither does.
+Ground truth is shown only for the tasks the source is supervised on
+(`det3d_supervised`, `seg3d_supervised`), so an unsupervised corpus never shows
+its placeholder labels.
+
+When no weights are provided, the same command previews the transformed data of
+the split without running prediction.
 
 ## Recommended Usage Pattern
 
