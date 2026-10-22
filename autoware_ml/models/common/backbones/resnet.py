@@ -97,7 +97,7 @@ class _ResNetStages(nn.Module):
         self, x: Float32[Tensor, "batch_size in_channels height width"]
     ) -> Float32[Tensor, "batch_size 64 steam_height steam_width"]:
         """Run the stem convolution, normalization, activation and max pooling.
-        Steam_height and steam_width will be height/4 and width/4 when the input is a 
+        Steam_height and steam_width will be height/4 and width/4 when the input is a
         multiple of 32, respectively.
 
         Args:
@@ -136,8 +136,10 @@ class ResNet18(_ResNetStages):
 
     def forward(
         self, x: Float32[Tensor, "batch_size in_channels height width"]
-    ) -> Float32[Tensor, "batch_size 512 height/32 width/32"]:
+    ) -> Float32[Tensor, "batch_size 512 c5_height c5_width"]:
         """Extract spatial feature maps from input.
+        c5_height and c5_width will be height/32 and width/32 when the input is a multiple of 32,
+        respectively.
 
         Args:
             x: Input tensor.
