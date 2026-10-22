@@ -42,12 +42,14 @@ class IterWarmupEpochCosineLR(LRScheduler):
 
     Differences from ``LinearWarmupCosineAnnealingLR``:
 
-    - Factors of every param group. The warmup starts at ``warmup_start_factor`` times the
-      base learning rate of every param group and the cosine floor is ``eta_min_factor``
-      times it, where ``LinearWarmupCosineAnnealingLR`` takes an absolute ``warmup_start_lr``
-      and ``eta_min`` shared by every group. StreamPETR trains its image backbone at a tenth
-      of the learning rate of the rest, and no absolute start is a third of both: a start
-      above the backbone's own learning rate would warm it down.
+    - A warmup start relative to every param group. The warmup starts at
+      ``warmup_start_factor`` times the base learning rate of every param group, as mmengine's
+      ``LinearLR`` does, where ``LinearWarmupCosineAnnealingLR`` starts every group at one
+      absolute ``warmup_start_lr``. StreamPETR trains its image backbone at a tenth of the
+      learning rate of the rest, and no absolute start is a third of both: a start above the
+      backbone's own learning rate would warm it down. The cosine floor is one absolute
+      learning rate shared by every group in both classes, here ``eta_min_factor`` times the
+      optimizer's default learning rate.
     - The warmup overlaps the cosine. Both factors run from step 0 and multiply, as mmengine's
       ``LinearLR(by_epoch=False)`` chained with ``CosineAnnealingLR(by_epoch=True)`` does,
       where ``LinearWarmupCosineAnnealingLR`` starts its cosine once the warmup has ended,
@@ -67,8 +69,11 @@ class IterWarmupEpochCosineLR(LRScheduler):
             ``trainer.max_steps`` does not cap the run. Sets both the stage length
             (``total_steps // max_epochs``) and the cosine period.
         warmup_iters: Length of the linear warmup in optimization steps.
-        warmup_start_factor: Learning-rate factor at step 0.
-        eta_min_factor: Cosine floor as a fraction of the base learning rate.
+        warmup_start_factor: Learning-rate factor of every param group at step 0.
+        eta_min_factor: Cosine floor as a fraction of the optimizer's default learning rate
+            (``optimizer.defaults["lr"]``). The floor is one absolute learning rate shared
+            by every param group, as the reference recipe's ``eta_min = lr * 1e-4``, so a
+            group trained at a fraction of the default rate anneals towards the same floor.
         last_epoch: Index of the last step (scheduler steps once per
             optimization step).
     """
@@ -92,11 +97,17 @@ class IterWarmupEpochCosineLR(LRScheduler):
                 f"total_steps ({total_steps}) must cover at least one step per epoch "
                 f"({max_epochs} epochs)."
             )
+        if "lr" not in optimizer.defaults:
+            raise ValueError(
+                "IterWarmupEpochCosineLR sets its cosine floor from the optimizer's default "
+                'learning rate, but optimizer.defaults has no "lr".'
+            )
         self.max_epochs = max_epochs
         self.steps_per_epoch = total_steps // max_epochs
         self.warmup_iters = warmup_iters
         self.warmup_start_factor = warmup_start_factor
         self.eta_min_factor = eta_min_factor
+        self.eta_min = eta_min_factor * float(optimizer.defaults["lr"])
         super().__init__(optimizer, last_epoch)
 
     def get_lr(self) -> list[float]:
@@ -113,7 +124,8 @@ class IterWarmupEpochCosineLR(LRScheduler):
         # trailing steps, which keep the last stage's factor rather than dropping to the
         # eta_min floor.
         epoch_index = min(step // self.steps_per_epoch, self.max_epochs - 1)
-        cosine_factor = self.eta_min_factor + (1.0 - self.eta_min_factor) * 0.5 * (
-            1.0 + math.cos(math.pi * epoch_index / self.max_epochs)
-        )
-        return [base_lr * warmup_factor * cosine_factor for base_lr in self.base_lrs]
+        cosine = 0.5 * (1.0 + math.cos(math.pi * epoch_index / self.max_epochs))
+        return [
+            warmup_factor * (self.eta_min + (base_lr - self.eta_min) * cosine)
+            for base_lr in self.base_lrs
+        ]
