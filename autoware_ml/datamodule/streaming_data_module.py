@@ -31,19 +31,9 @@ class StreamingDataModule(DataModule):
     """DataModule feeding every batch position the frames of one scene after another.
 
     A temporal model carries a memory across batches, one per batch position, so every
-    dataloader draws from a ``GroupStreamingSampler``. Every epoch the sampler joins the
-    scenes, the training split reshuffling their order from ``seed``, and cuts their frames,
-    each scene in time order, into one lane per batch position of every rank; a cut can fall
-    inside a scene, and the lane after it starts a new stream there. The sampler is a
-    ``DistributedSampler``, so it splits the lanes over the ranks itself and Lightning leaves
-    it alone.
-
-    The lanes differ by at most one frame, and a shorter lane ends with a padding slot that
-    repeats its last frame, so every rank serves the same number of batches and every split,
-    prediction included, serves every frame exactly once as a real sample. The batch flags
-    the padded samples in ``ModelGTBatch.padding_mask``: a model fed by this datamodule gives
-    them no loss and no metric and leaves them out of the logged batch size
-    (``ModelGTBatch.num_real_samples``), and a prediction writer skips them.
+    dataloader draws from a ``GroupStreamingSampler``, which lays out the lanes and
+    reshuffles the scenes of the training split every epoch from ``seed``. The samples it adds
+    only to pad a lane are flagged in ``ModelGTBatch.padding_mask``.
 
     Whatever else would reorder the frames is refused: frame sampling, a shuffling dataloader
     and ``trainer.overfit_batches``, for which Lightning swaps the sampler of the training and
