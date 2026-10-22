@@ -6,6 +6,7 @@ import itertools
 import time
 from abc import abstractmethod
 from pathlib import Path
+from collections import defaultdict
 from collections.abc import Sequence
 from typing import Self
 
@@ -13,6 +14,7 @@ from typing import Self
 import polars as pl
 from torch.utils.data import Dataset
 
+from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch, ModelGTSample
 from autoware_ml.metrics.geometry.lanelet import LaneletMapProvider
 from autoware_ml.transforms.base import TransformsCompose
@@ -129,6 +131,42 @@ class BaseDataset(Dataset):
             )
         return len(self.dataset_records_dataframe) * self.samples_per_record
 
+    def scene_index_groups(self) -> list[list[int]]:
+        """Sample indices of every scene, each scene in time order.
+
+        Scene streaming feeds a temporal model one scene after another, frame by frame. The
+        records are grouped by their scenario and ordered by their sample time, so the row
+        order of the record table does not matter.
+
+        Returns:
+          list[list[int]]: One list of sample indices per scenario, the scenarios in the order
+            they first appear in the record table.
+
+        Raises:
+          ValueError: If the dataset is not bound to records, or if every record serves
+            several samples, one per lidar or camera source.
+        """
+        if self.dataset_records_dataframe is None:
+            raise ValueError(
+                "The dataset is not bound to records, so it has no scenes. The datamodule "
+                "binds it in setup()."
+            )
+        if self.samples_per_record != 1:
+            raise ValueError(
+                "Scene streaming serves one sample per record, but every record of this dataset "
+                f"serves {self.samples_per_record} sources."
+            )
+        scenario_ids = self.dataset_records_dataframe.get_column(
+            DatasetTableSchema.SCENARIO_ID.name
+        ).to_list()
+        timestamps = self.dataset_records_dataframe.get_column(
+            DatasetTableSchema.TIMESTAMP_SECONDS.name
+        ).to_list()
+        groups: defaultdict[str, list[int]] = defaultdict(list)
+        for index, scenario_id in enumerate(scenario_ids):
+            groups[scenario_id].append(index)
+        return [sorted(group, key=timestamps.__getitem__) for group in groups.values()]
+
     def __getitem__(self, index: int) -> ModelGTSample:
         """Load and transform one dataset sample.
 
@@ -226,6 +264,41 @@ class ConcatDataset(Dataset):
           int: Number of samples.
         """
         return self.ends[-1]
+
+    def scene_index_groups(self) -> list[list[int]]:
+        """Split indices of every scene of every source, each scene in time order.
+
+        Every repeat of a source serves its scenes once more, as scenes of their own.
+
+        Returns:
+          list[list[int]]: One list of split indices per scene and repeat, the sources in
+            declaration order.
+        """
+        groups: list[list[int]] = []
+        starts = (0, *self.ends[:-1])
+        for dataset, repeat, start in zip(self.datasets, self.repeats, starts, strict=True):
+            groups.extend(self._repeated_scene_index_groups(dataset, repeat, start))
+        return groups
+
+    @staticmethod
+    def _repeated_scene_index_groups(
+        dataset: BaseDataset, repeat: int, start: int
+    ) -> list[list[int]]:
+        """Split indices of every scene of every repeat of one source.
+
+        Args:
+          dataset: Dataset of the source.
+          repeat: How many times the source serves its scenes.
+          start: Split index of the first sample of the source.
+
+        Returns:
+          list[list[int]]: One list of split indices per scene, repeat after repeat.
+        """
+        offsets = [start + repeat_index * len(dataset) for repeat_index in range(repeat)]
+        return [
+            [offset + index for index in group]
+            for offset, group in itertools.product(offsets, dataset.scene_index_groups())
+        ]
 
     def locate(self, index: int) -> tuple[int, int]:
         """Find the source and the sample behind one index of the split.
