@@ -101,9 +101,14 @@ def transform_reference_points(
     reference_points: torch.Tensor,
     ego_pose: torch.Tensor,
 ) -> torch.Tensor:
-    """Transform 3D reference points between ego frames."""
+    """Transform 3D reference points between ego frames.
+
+    The bank keeps its reference points in the map frame, so like :func:`compose_poses` this is a
+    sum of elementwise products rather than a matmul, which would follow the global float32 matmul
+    precision.
+    """
     homogeneous = torch.cat([reference_points, torch.ones_like(reference_points[..., :1])], dim=-1)
-    return (ego_pose.unsqueeze(1) @ homogeneous.unsqueeze(-1)).squeeze(-1)[..., :3]
+    return (ego_pose.unsqueeze(1) * homogeneous.unsqueeze(-2)).sum(-1)[..., :3]
 
 
 def compose_poses(lhs: torch.Tensor, rhs: torch.Tensor) -> torch.Tensor:

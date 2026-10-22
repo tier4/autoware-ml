@@ -812,8 +812,8 @@ def test_memory_alignment_keeps_millimeters_under_the_cli_matmul_precision() -> 
     relative = (torch.linalg.inv(second_pose.double()) @ first_pose.double())[0]
     pushed_poses = head.memory_egopose[0, : head.topk_proposals].double()
     assert (pushed_poses[:, :3, 3] - relative[:3, 3]).norm(dim=-1).max() < 0.01
-    # The reference points move by a matrix-vector product, which cuBLAS does not run in TF32;
-    # checking them as well keeps it that way.
+    # The reference points the bank stores are map-frame too and move by elementwise products
+    # as well, so they hold the same precision.
     pushed_centers = head.memory_reference_point[0, : head.topk_proposals].double()
     expected_center = relative[:3, :3] @ local_center.double() + relative[:3, 3]
     assert (pushed_centers - expected_center).norm(dim=-1).max() < 0.01
