@@ -27,6 +27,7 @@ from typing import Literal
 
 import cv2
 from jaxtyping import Float32, Int64
+from matplotlib.colors import Colormap
 import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
@@ -224,7 +225,7 @@ class CalibrationMisalignment(BaseTransform):
         Returns:
             Updated ModelGTSample with all cameras flagged ``CalibrationStatus.CALIBRATED``.
         """
-        camera_image_data = model_gt_sample.camera_image_data
+        camera_image_data = self.required_camera_image_data(model_gt_sample)
         num_cameras = camera_image_data.lidar2cams.shape[0]
         calibration_statuses = torch.full(
             (num_cameras,), CalibrationStatus.CALIBRATED.value, dtype=torch.int64
@@ -245,7 +246,7 @@ class CalibrationMisalignment(BaseTransform):
             Updated ModelGTSample with perturbed ``lidar2cams`` and ``lidar2images``, the
             per-camera noise transforms and all cameras flagged ``MISCALIBRATED``.
         """
-        camera_image_data = model_gt_sample.camera_image_data
+        camera_image_data = self.required_camera_image_data(model_gt_sample)
         lidar2cams = camera_image_data.lidar2cams
         num_cameras = lidar2cams.shape[0]
 
@@ -507,8 +508,8 @@ class LidarCameraFusion(BaseTransform):
         Raises:
             ValueError: If the points carry no intensity feature.
         """
-        camera_image_data = model_gt_sample.camera_image_data
-        point_cloud_data = model_gt_sample.point_cloud_data
+        camera_image_data = self.required_camera_image_data(model_gt_sample)
+        point_cloud_data = self.required_point_cloud_data(model_gt_sample)
 
         feature_names = list(point_cloud_data.point_feature_names)
         if PointFeatureName.INTENSITY not in feature_names:
@@ -632,9 +633,15 @@ class LidarCameraFusion(BaseTransform):
 
         Returns:
             Boolean mask, ``True`` for occluded points.
+
+        Raises:
+            ValueError: If no ``ego_box`` was configured, there is no box to test against.
         """
-        box_min = np.array(self.ego_box[:3], dtype=np.float64)
-        box_max = np.array(self.ego_box[3:], dtype=np.float64)
+        ego_box = self.ego_box
+        if ego_box is None:
+            raise ValueError(f"{self.__class__.__name__}: ego_box is not set, nothing to occlude")
+        box_min = np.array(ego_box[:3], dtype=np.float64)
+        box_max = np.array(ego_box[3:], dtype=np.float64)
 
         if np.all(camera_center >= box_min) and np.all(camera_center <= box_max):
             distance_to_min = camera_center - box_min
@@ -696,9 +703,13 @@ class LidarCameraFusion(BaseTransform):
         """
         if points_cam.shape[0] == 0:
             return np.zeros((0, 2), dtype=np.float64)
-        coefficients = distortion_coefficients if distortion_coefficients.size > 0 else None
+        # OpenCV reads empty coefficients as no distortion.
         normalized, _ = cv2.projectPoints(
-            points_cam.reshape(-1, 1, 3), np.zeros(3), np.zeros(3), np.eye(3), coefficients
+            points_cam.reshape(-1, 1, 3),
+            np.zeros(3),
+            np.zeros(3),
+            np.eye(3),
+            distortion_coefficients,
         )
         homogeneous = np.hstack([normalized.reshape(-1, 2), np.ones((points_cam.shape[0], 1))])
         pixels = homogeneous @ camera_matrix.T
@@ -809,7 +820,7 @@ class Affine(ImageSpaceTransform):
         Returns:
             Updated ModelGTSample with the warped images and the composed calibration.
         """
-        camera_image_data = model_gt_sample.camera_image_data
+        camera_image_data = self.required_camera_image_data(model_gt_sample)
         images = camera_image_data.images
         num_cameras, _, height, width = images.shape
 
@@ -847,7 +858,7 @@ class Affine(ImageSpaceTransform):
             image.
         """
         max_offset = np.array([[self.max_distortion * width, self.max_distortion * height]] * 3)
-        source_points = np.float32([[0, 0], [width - 1, 0], [0, height - 1]])
+        source_points = np.array([[0, 0], [width - 1, 0], [0, height - 1]], dtype=np.float32)
         target_points = source_points + np.random.uniform(-max_offset, max_offset).astype(
             np.float32
         )
@@ -933,7 +944,7 @@ class SaveFusionPreview(BaseTransform):
         Raises:
             ValueError: If the images carry no depth maps.
         """
-        camera_image_data = model_gt_sample.camera_image_data
+        camera_image_data = self.required_camera_image_data(model_gt_sample)
         if camera_image_data.depth_maps is None:
             raise ValueError(
                 f"{self.__class__.__name__} runs after LidarCameraFusion, the images carry "
@@ -1010,7 +1021,7 @@ class SaveFusionPreview(BaseTransform):
     def create_overlay(
         rgb: npt.NDArray[np.uint8],
         values: npt.NDArray[np.float32],
-        cmap: plt.Colormap,
+        cmap: Colormap,
         alpha: float,
     ) -> npt.NDArray[np.uint8]:
         """Blend colorized point values over an RGB image.

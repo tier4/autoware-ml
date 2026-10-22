@@ -126,18 +126,18 @@ class LiDARDepthSparseTransform(BaseTransform):
         flat_depth.scatter_(dim=0, index=flat_indices, src=hit_distances)
         return flat_depth.view(num_cams, height, width)
 
-    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
+    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
         """Build the sparse depth maps of every camera from the lidar points.
 
         Args:
-            multi_task_gt_sample: ModelGTSample instance containing `point_cloud_data` and
+            model_gt_sample: ModelGTSample instance containing `point_cloud_data` and
                 `camera_image_data`.
 
         Returns:
             Updated ModelGTSample instance with `depth_images` set in `camera_image_data`.
         """
-        point_cloud_data = multi_task_gt_sample.point_cloud_data
-        camera_image_data = multi_task_gt_sample.camera_image_data
+        point_cloud_data = self.required_point_cloud_data(model_gt_sample)
+        camera_image_data = self.required_camera_image_data(model_gt_sample)
 
         lidar2images = camera_image_data.lidar2images
         height, width = camera_image_data.images.shape[-2:]
@@ -157,4 +157,4 @@ class LiDARDepthSparseTransform(BaseTransform):
         camera_image_data_with_depth = BaseImages.model_validate(
             camera_image_data.model_copy(update={"depth_maps": depth_images})
         )
-        return multi_task_gt_sample._replace(camera_image_data=camera_image_data_with_depth)
+        return model_gt_sample._replace(camera_image_data=camera_image_data_with_depth)

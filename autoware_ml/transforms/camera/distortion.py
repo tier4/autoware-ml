@@ -62,7 +62,7 @@ class UndistortImage(BaseTransform):
                 undistorting a resized, cropped or flipped image would write intrinsics of the
                 raw frame over the augmented ones.
         """
-        camera_image_data = model_gt_sample.camera_image_data
+        camera_image_data = self.required_camera_image_data(model_gt_sample)
 
         images = camera_image_data.images
         camera_intrinsics = camera_image_data.camera_intrinsics
