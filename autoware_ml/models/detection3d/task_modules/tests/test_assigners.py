@@ -512,10 +512,6 @@ class TestHungarianAssigner3D(unittest.TestCase):
         self.assertEqual(result.num_gts.tolist(), [0, 0])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 def _per_sample_full_box_assignment(
     bboxes: Float32[torch.Tensor, "num_bboxes code_size"],
     gt_bboxes: Float32[torch.Tensor, "num_gt_bboxes code_size"],
@@ -761,3 +757,7 @@ class TestHungarianAssigner3DBEVCost(unittest.TestCase):
                 )
                 self.assertEqual(result.gt_inds[index].tolist(), expected.tolist())
                 self.assertEqual(int(result.num_gts[index]), count)
+
+
+if __name__ == "__main__":
+    unittest.main()
