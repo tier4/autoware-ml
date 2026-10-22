@@ -1114,13 +1114,15 @@ class TestStreamingDataModule(StreamedCorpusTestCase):
         self.assertIsInstance(data_module.train_dataloader().sampler, GroupStreamingSampler)
         self.assertIsInstance(data_module.val_dataloader().sampler, GroupStreamingSampler)
 
-    def test_rejects_a_prediction_that_would_skip_frames(self) -> None:
+    def test_a_prediction_serves_every_frame_once_through_padded_lanes(self) -> None:
         """
         Input: a streaming predict split of five frames, read through two lanes and through one.
-        Expected: two lanes would trim the split to four frames, and a prediction has to serve
-        every frame, so the datamodule refuses it; one lane serves all five.
-        Check: the two-lane loader raises a ValueError naming the skipped frame, the one-lane
-        loader serves every frame, each scene in time order.
+        Expected: the two lanes hold two and three frames, so the shorter one ends with a
+        padding slot repeating its last frame; the loader serves every frame once as a real
+        sample and flags the slot in the padding mask of its last batch. One lane needs no
+        padding and serves the five frames, each scene in time order.
+        Check: the indices of both samplers, padding slots told apart, and the padding mask of
+        every batch the two-lane loader collates through its worker process.
         """
 
         def predict_loader(batch_size: int) -> DataLoader:
@@ -1135,8 +1137,16 @@ class TestStreamingDataModule(StreamedCorpusTestCase):
             data_module.setup("predict")
             return data_module.predict_dataloader()
 
-        with self.assertRaisesRegex(ValueError, "skip 1 of 5 frames"):
-            predict_loader(batch_size=2)
+        two_lanes = predict_loader(batch_size=2)
+
+        self.assertEqual(
+            [(isinstance(index, PaddingSlot), index) for index in two_lanes.sampler],
+            [(False, 4), (False, 0), (False, 2), (False, 1), (True, 2), (False, 3)],
+        )
+        self.assertEqual(
+            [batch.padding_mask.tolist() for batch in two_lanes],
+            [[False, False], [False, False], [True, False]],
+        )
         self.assertEqual(list(predict_loader(batch_size=1).sampler), [4, 2, 0, 1, 3])
 
     def test_rejects_frame_sampling(self) -> None:
