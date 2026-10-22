@@ -142,6 +142,16 @@ class _StreamPETRHeadMemoryExportWrapper(nn.Module):
     feeds the first ``memory_len`` entries of the previous frame's post-memory
     back as pre-memory and manages timestamps outside the graph.
 
+    ``all_cls_scores`` and ``all_bbox_preds`` hold the predictions of the last
+    decoder layer only, the layer :meth:`StreamPETRHead.predict` decodes offline:
+    ``(1, num_classes, Q)`` logits and ``(1, 10, Q)`` boxes for the
+    ``Q = num_queries + num_propagated`` queries, ``(1, 7, 900)`` and
+    ``(1, 10, 900)`` for the seven T4 classes and the 644 + 256 queries of the
+    reference recipe. The runtime decodes every row of them, so its
+    ``num_proposals`` parameter must be ``Q`` (900) for graphs exported from
+    this version; earlier exports stacked every decoder layer (5400 rows with
+    six layers), and the runtime published boxes of the intermediate layers too.
+
     A stream starts with an all-zero bank: the runtime wipes the five tensors
     at start-up and on every reset. The graph recognizes a lane whose bank
     poses are all zero (every written entry carries a pose with a unit last
@@ -202,9 +212,10 @@ class _StreamPETRHeadMemoryExportWrapper(nn.Module):
         post_memory = head.push_memory(
             data_ego_pose, all_cls_scores, all_bbox_preds, decoder_outputs
         )
+        # Only the last decoder layer leaves the graph (see the class docstring).
         return (
-            all_cls_scores.flatten(0, 2).unsqueeze(0).transpose(2, 1),
-            all_bbox_preds.flatten(0, 2).unsqueeze(0).transpose(2, 1),
+            all_cls_scores[-1:].flatten(0, 2).unsqueeze(0).transpose(2, 1),
+            all_bbox_preds[-1:].flatten(0, 2).unsqueeze(0).transpose(2, 1),
             *post_memory,
         )
 
@@ -406,7 +417,8 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
         ``extract_img_feat`` encodes multiview images, ``position_embedding``
         turns static calibration into cached geometric embeddings, and
         ``pts_head_memory`` runs the recurrent detection step carrying the
-        five temporal memory tensors in and out of the graph.
+        five temporal memory tensors in and out of the graph and emitting the
+        predictions of the last decoder layer.
 
         Args:
             batch_inputs: Batched model inputs; the first sample traces the graphs.

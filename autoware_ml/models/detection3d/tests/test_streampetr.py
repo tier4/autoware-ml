@@ -453,19 +453,19 @@ def test_exported_head_matches_eval_forward_on_a_propagated_frame() -> None:
         "post_memory_egopose",
         "post_memory_velo",
     ]
-    num_layers, _, num_queries, _ = reference.all_bbox_preds.shape
-    assert exported["all_cls_scores"].shape == (1, head.num_classes, num_layers * num_queries)
+    # Only the last decoder layer leaves the graph, the one predict() decodes: the runtime
+    # decodes every row of the two outputs, so nothing else may be there.
+    num_queries = reference.all_bbox_preds.shape[2]
+    assert num_queries == head.num_queries + head.num_propagated
+    assert exported["all_cls_scores"].shape == (1, head.num_classes, num_queries)
+    assert exported["all_bbox_preds"].shape == (1, 10, num_queries)
     assert exported["post_memory_embedding"].shape == (
         1,
         head.memory_len + head.topk_proposals,
         head.hidden_dim,
     )
-    exported_boxes = exported["all_bbox_preds"].transpose(2, 1).view(num_layers, 1, num_queries, 10)
-    exported_scores = (
-        exported["all_cls_scores"].transpose(2, 1).view(num_layers, 1, num_queries, -1)
-    )
-    torch.testing.assert_close(exported_boxes, reference.all_bbox_preds)
-    torch.testing.assert_close(exported_scores, reference.all_cls_scores)
+    torch.testing.assert_close(exported["all_bbox_preds"][0].T, reference.all_bbox_preds[-1, 0])
+    torch.testing.assert_close(exported["all_cls_scores"][0].T, reference.all_cls_scores[-1, 0])
     # The graph emits the concatenated bank; the head keeps the first memory_len entries.
     for name, expected in zip(
         ("embedding", "reference_point", "timestamp", "egopose", "velo"), reference_memory
@@ -502,9 +502,7 @@ def test_exported_head_matches_eval_forward_on_the_first_frame_of_a_stream() -> 
         reference_points = head.memory_reference_point
         exported = _exported_head_outputs(model, first, pose, zero_bank)
 
-    num_layers, _, num_queries, _ = reference.all_bbox_preds.shape
-    exported_boxes = exported["all_bbox_preds"].transpose(2, 1).view(num_layers, 1, num_queries, 10)
-    torch.testing.assert_close(exported_boxes, reference.all_bbox_preds)
+    torch.testing.assert_close(exported["all_bbox_preds"][0].T, reference.all_bbox_preds[-1, 0])
     torch.testing.assert_close(
         exported["post_memory_reference_point"][:, : head.memory_len], reference_points
     )
