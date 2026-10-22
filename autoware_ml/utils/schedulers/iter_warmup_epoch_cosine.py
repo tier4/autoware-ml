@@ -40,6 +40,23 @@ class IterWarmupEpochCosineLR(LRScheduler):
     100-batch epochs with ``max_epochs=10`` changes the factor every 30 steps and reaches
     the last stage in the third data epoch.
 
+    Differences from ``LinearWarmupCosineAnnealingLR``:
+
+    - Factors of every param group. The warmup starts at ``warmup_start_factor`` times the
+      base learning rate of every param group and the cosine floor is ``eta_min_factor``
+      times it, where ``LinearWarmupCosineAnnealingLR`` takes an absolute ``warmup_start_lr``
+      and ``eta_min`` shared by every group. StreamPETR trains its image backbone at a tenth
+      of the learning rate of the rest, and no absolute start is a third of both: a start
+      above the backbone's own learning rate would warm it down.
+    - The warmup overlaps the cosine. Both factors run from step 0 and multiply, as mmengine's
+      ``LinearLR(by_epoch=False)`` chained with ``CosineAnnealingLR(by_epoch=True)`` does,
+      where ``LinearWarmupCosineAnnealingLR`` starts its cosine once the warmup has ended,
+      shifted and shortened by it.
+    - A per-epoch staircase stepped every iteration. The cosine factor holds for a whole stage
+      while the warmup advances every step. ``LinearWarmupCosineAnnealingLR`` counts both
+      phases in the one unit it is stepped in: stepped every iteration its cosine is smooth,
+      stepped every epoch its warmup advances once an epoch.
+
     Args:
         optimizer: Wrapped optimizer.
         total_steps: Total optimization steps of the run, auto-filled by the framework from
