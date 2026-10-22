@@ -206,7 +206,10 @@ class StreamPETRHead(nn.Module):
             class_names: Ordered names of the foreground classes. Their count is the number
                 of classification channels.
             memory_len: Entries of the temporal memory bank.
-            topk_proposals: Proposals of every frame that enter the bank.
+            topk_proposals: Proposals of every frame that enter the bank, at most the
+                ``num_queries + num_propagated`` queries of a frame. The deployed graph emits
+                a bank of ``memory_len + topk_proposals`` entries, which the runtime reads
+                without checking.
             num_propagated: Bank entries that extend the queries of the next frame; the
                 strongest proposals of the previous frame, so at most ``topk_proposals``.
             max_stream_gap: Longest gap in seconds between two frames of a lane that keeps
@@ -214,7 +217,8 @@ class StreamPETRHead(nn.Module):
             Other arguments follow the reference StreamPETR recipe.
 
         Raises:
-            ValueError: If the bank is too small for the propagated entries.
+            ValueError: If the bank is too small for the propagated entries, or a frame has
+                fewer queries than ``topk_proposals``.
         """
         super().__init__()
         if memory_len < num_propagated:
@@ -225,6 +229,11 @@ class StreamPETRHead(nn.Module):
             raise ValueError(
                 f"topk_proposals ({topk_proposals}) must cover the {num_propagated} propagated "
                 "entries, which are the strongest proposals of the previous frame."
+            )
+        if topk_proposals > num_queries + num_propagated:
+            raise ValueError(
+                f"topk_proposals ({topk_proposals}) exceeds the {num_queries + num_propagated} "
+                "queries of a frame (num_queries + num_propagated) that can enter the bank."
             )
         self.class_names = list(class_names)
         self.num_classes = len(self.class_names)
@@ -490,21 +499,20 @@ class StreamPETRHead(nn.Module):
             rec_score = (
                 all_cls_scores[-1, :, pad_size:].float().sigmoid().amax(dim=-1, keepdim=True)
             )
-            batch_size, num_queries = rec_score.shape[:2]
+            batch_size = rec_score.shape[0]
 
-            topk_proposals = min(self.topk_proposals, num_queries)
-            _, topk_indexes = torch.topk(rec_score, topk_proposals, dim=1)
+            _, topk_indexes = torch.topk(rec_score, self.topk_proposals, dim=1)
             rec_reference_points = topk_gather(rec_reference_points, topk_indexes).detach()
             rec_memory = topk_gather(rec_memory, topk_indexes).detach()
             rec_velo = topk_gather(rec_velo, topk_indexes).detach()
             rec_timestamp = torch.zeros(
                 batch_size,
-                topk_proposals,
+                self.topk_proposals,
                 1,
                 device=ego_pose.device,
                 dtype=self.memory_timestamp.dtype,
             )
-            rec_ego_pose = identity_poses(batch_size, topk_proposals, ego_pose.device)
+            rec_ego_pose = identity_poses(batch_size, self.topk_proposals, ego_pose.device)
 
             embedding = torch.cat([rec_memory, self.memory_embedding], dim=1)
             timestamp = torch.cat([rec_timestamp, self.memory_timestamp], dim=1)

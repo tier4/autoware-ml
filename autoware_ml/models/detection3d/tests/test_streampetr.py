@@ -549,6 +549,29 @@ def test_rejects_a_bank_too_small_for_the_propagated_entries() -> None:
         _build_head(memory_len=32, topk_proposals=4, num_propagated=8)
 
 
+def test_rejects_a_top_k_larger_than_the_queries_of_a_frame() -> None:
+    """A frame has 32 + 8 queries; asking for more would shorten the bank the graph emits.
+
+    The runtime reads ``memory_len + topk_proposals`` post-bank entries without checking, so
+    a silently clipped top-k would make it read past the end of the graph's output.
+    """
+    with pytest.raises(ValueError, match="exceeds the 40 queries"):
+        _build_head(memory_len=64, topk_proposals=41, num_propagated=8)
+    head = _build_head(memory_len=64, topk_proposals=40, num_propagated=8)
+    num_layers, num_slots = head.num_decoder_layers, head.num_queries + head.num_propagated
+    pose = torch.eye(4).unsqueeze(0)
+    head.pre_update_memory(torch.zeros(1, dtype=torch.float64), torch.zeros(1), pose)
+
+    bank = head.push_memory(
+        pose,
+        torch.randn(num_layers, 1, num_slots, head.num_classes),
+        torch.randn(num_layers, 1, num_slots, 10),
+        torch.randn(num_layers, 1, num_slots, head.hidden_dim),
+    )
+
+    assert all(tensor.shape[1] == head.memory_len + 40 for tensor in bank)
+
+
 def test_every_token_carries_the_focal_length_of_its_own_camera() -> None:
     head = _build_model().bbox_head
     intrinsics = torch.eye(3).repeat(1, NUM_CAMS, 1, 1)
