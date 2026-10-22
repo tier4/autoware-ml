@@ -256,6 +256,20 @@ def test_forward_reads_the_calibration_and_the_stream_metadata_of_the_batch() ->
     torch.testing.assert_close(head.memory_egopose[0, 0], ego2global)
 
 
+def test_checkpoint_keys_keep_the_image_encoder_prefixes() -> None:
+    """Trained checkpoints and the AWML converter name the image weights by these prefixes."""
+    keys = _build_model().state_dict()
+
+    encoder_prefixes = {
+        ".".join(key.split(".")[:2]) for key in keys if not key.startswith("bbox_head.")
+    }
+
+    assert encoder_prefixes == {
+        "image_feature_extractor.img_backbone",
+        "image_feature_extractor.img_neck",
+    }
+
+
 def test_forward_rejects_a_batch_without_images_or_frame_meta() -> None:
     model = _build_model()
     with pytest.raises(ValueError, match="images and the frame metadata"):

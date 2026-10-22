@@ -21,6 +21,7 @@ from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
+from autoware_ml.models.common.multiview_image_encoder import MultiviewImageEncoder
 from autoware_ml.models.detection3d.heads.streampetr import StreamPETRHead
 from autoware_ml.models.detection3d.task_modules.streaming import (
     compose_poses,
@@ -51,53 +52,6 @@ def _ground_truth(
     """
     gt_boxes = [boxes[:, : Box3DFieldIndex.VELOCITY_Z] for boxes in gt_detections.valid_bboxes_3d()]
     return gt_boxes, gt_detections.valid_labels_3d()
-
-
-class MultiviewImageFeatureExtractor(nn.Module):
-    """Encode multiview image batches into the neck features the head attends to.
-
-    The submodules keep the ``img_backbone`` / ``img_neck`` names: the checkpoint keys and
-    the AWML converter prefixes are ``image_feature_extractor.img_backbone.*`` and
-    ``image_feature_extractor.img_neck.*``.
-    """
-
-    def __init__(self, img_backbone: nn.Module, img_neck: nn.Module) -> None:
-        """Initialize the multiview image feature extractor.
-
-        Args:
-            img_backbone: Backbone run on every camera image.
-            img_neck: Neck fusing the backbone's scales; its first output feeds the head.
-        """
-        super().__init__()
-        self.img_backbone = img_backbone
-        self.img_neck = img_neck
-
-    def forward(self, image_batch: torch.Tensor) -> torch.Tensor:
-        """Encode multiview image batches into neck features.
-
-        Args:
-            image_batch: Multiview images ``(B, N, C, H, W)``.
-
-        Returns:
-            Primary image neck feature tensor with shape ``(B, N, C, H, W)``.
-
-        Raises:
-            ValueError: If the images are not a ``(B, N, C, H, W)`` tensor.
-        """
-        if image_batch.dim() != 5:
-            raise ValueError(
-                f"Expected image batch with shape (B, N, C, H, W), got {tuple(image_batch.shape)}"
-            )
-        batch_size, num_cams = image_batch.shape[:2]
-        flat_images = image_batch.float().view(batch_size * num_cams, *image_batch.shape[2:])
-        image_features = self.img_backbone(flat_images)
-        if isinstance(image_features, torch.Tensor):
-            image_features = (image_features,)
-        image_features = self.img_neck(image_features)
-        primary_feature = (
-            image_features[0] if isinstance(image_features, (list, tuple)) else image_features
-        )
-        return primary_feature.view(batch_size, num_cams, *primary_feature.shape[1:])
 
 
 class _StreamPETRPositionEmbeddingExportWrapper(nn.Module):
@@ -264,7 +218,9 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
             scheduler_config=scheduler_config,
             metrics=metrics,
         )
-        self.image_feature_extractor = MultiviewImageFeatureExtractor(
+        # The attribute keeps the checkpoint keys and the AWML converter prefixes,
+        # image_feature_extractor.img_backbone.* and image_feature_extractor.img_neck.*.
+        self.image_feature_extractor = MultiviewImageEncoder(
             img_backbone=img_backbone, img_neck=img_neck
         )
         self.bbox_head = bbox_head
