@@ -28,7 +28,8 @@ class _ResNetStages(nn.Module):
 
     The stages are built by torchvision and taken over as attributes of this module, so the
     parameter names (``conv1``, ``bn1``, ``layer1`` to ``layer4``) match a plain torchvision
-    ResNet and its checkpoints, while the average pooling and the classifier are never created.
+    ResNet and its checkpoints (with ``in_channels=3``), while the average pooling and the
+    classifier, built on a temporary torchvision ResNet, are never registered on this module.
 
     The ``block`` type decides how each residual block is built and how wide every stage is.
     Both blocks add their input back through a skip connection before the final ReLU, and
