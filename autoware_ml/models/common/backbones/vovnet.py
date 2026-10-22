@@ -340,7 +340,10 @@ class VoVNetMultiScale(nn.Module):
                     depthwise=depthwise,
                 ),
             )
-        self._freeze_stages()
+        # Lightning never calls train() during fit: around validation it captures and restores
+        # the training flag of every module. The frozen stages and norm_eval therefore have to
+        # hold from construction on, not only after a train() call.
+        self.train(self.training)
 
     def _freeze_stages(self) -> None:
         """Freeze the configured early stages."""

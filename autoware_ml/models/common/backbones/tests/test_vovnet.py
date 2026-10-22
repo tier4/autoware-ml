@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from lightning.pytorch.utilities.model_helpers import _ModuleMode
 import pytest
 import torch
 
@@ -25,16 +26,63 @@ def test_out_features_selects_and_orders_outputs() -> None:
     assert stage5.shape[1] == 1024
 
 
-def test_norm_eval_keeps_batchnorm_in_eval_mode_while_training() -> None:
-    backbone = VoVNet99MultiScale(norm_eval=True).train()
+def _batch_norms(backbone: torch.nn.Module) -> list[torch.nn.BatchNorm2d]:
+    return [module for module in backbone.modules() if isinstance(module, torch.nn.BatchNorm2d)]
 
-    norm_layers = [m for m in backbone.modules() if isinstance(m, torch.nn.BatchNorm2d)]
+
+def _running_stats(backbone: torch.nn.Module) -> list[torch.Tensor]:
+    return [
+        stat.clone()
+        for layer in _batch_norms(backbone)
+        for stat in (layer.running_mean, layer.running_var)
+    ]
+
+
+def test_norm_eval_holds_through_a_lightning_fit_without_a_train_call() -> None:
+    """norm_eval must hold from construction on, not only after ``train()``.
+
+    Lightning 2.x never calls ``train()`` during fit: around validation it captures the
+    ``training`` flag of every module and restores the flags afterwards. A norm_eval applied
+    only by the ``train()`` override therefore never ran, and every BatchNorm layer updated
+    its statistics in the training steps.
+    """
+    backbone = VoVNet99MultiScale(norm_eval=True)
+    norm_layers = _batch_norms(backbone)
     assert norm_layers
-    assert all(not layer.training for layer in norm_layers)
+    assert backbone.training
+    assert not any(layer.training for layer in norm_layers)
 
-    trainable = VoVNet99MultiScale(norm_eval=False).train()
+    # The mode round trip of a validation run inside fit.
+    mode = _ModuleMode()
+    mode.capture(backbone)
+    backbone.eval()
+    mode.restore(backbone)
+    assert backbone.training
+    assert not any(layer.training for layer in norm_layers)
+
+    # A training forward leaves the statistics alone.
+    running_stats = _running_stats(backbone)
+    backbone(torch.randn(2, 3, 64, 64))
     assert all(
-        layer.training for layer in trainable.modules() if isinstance(layer, torch.nn.BatchNorm2d)
+        torch.equal(before, after)
+        for before, after in zip(running_stats, _running_stats(backbone), strict=True)
+    )
+
+    # An explicit train() keeps norm_eval as well.
+    backbone.train()
+    assert not any(layer.training for layer in norm_layers)
+
+
+def test_batchnorm_updates_its_statistics_without_norm_eval() -> None:
+    backbone = VoVNet99MultiScale(norm_eval=False)
+    assert all(layer.training for layer in _batch_norms(backbone))
+
+    running_stats = _running_stats(backbone)
+    backbone(torch.randn(2, 3, 64, 64))
+
+    assert not any(
+        torch.equal(before, after)
+        for before, after in zip(running_stats, _running_stats(backbone), strict=True)
     )
 
 
@@ -45,6 +93,9 @@ def test_frozen_stages_disable_gradients_from_construction() -> None:
     assert all(not p.requires_grad for p in backbone.stem.parameters())
     assert all(not p.requires_grad for p in backbone.stage2.parameters())
     assert any(p.requires_grad for p in backbone.stage3.parameters())
+    # The frozen stages also run in eval mode, without a train() call.
+    assert not backbone.stem.training and not backbone.stage2.training
+    assert backbone.stage3.training
 
     # Nothing is frozen by default.
     assert all(p.requires_grad for p in VoVNet99MultiScale().parameters())
