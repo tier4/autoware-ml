@@ -73,7 +73,7 @@ class TestPipelineSmoke(unittest.TestCase):
         self.assertEqual(int(self.batch.infer_batch_size()), 2)
         self.assertEqual(list(self.batch.frame_meta_batch.scene_tokens), [SCENE, SCENE])
         # The sample time of every record places its frame in the stream of its scene
-        self.assertEqual(self.batch.frame_meta_batch.timestamps.tolist(), [0.0, 1.0])
+        self.assertEqual(self.batch.frame_meta_batch.timestamps_seconds.tolist(), [0.0, 1.0])
 
     def test_every_point_keeps_its_semantic_label_through_the_pipeline(self) -> None:
         point_batch = self.batch.point_cloud_gt_batch

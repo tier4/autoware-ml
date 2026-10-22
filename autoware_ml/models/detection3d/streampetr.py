@@ -292,9 +292,9 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
             # and the deployed graph both see the intrinsics of the augmented images.
             camera_intrinsics=image_data.augmented_camera_intrinsics(),
             lidar2img=image_data.lidar2images,
-            timestamp=frame_meta.timestamps,
+            timestamp=frame_meta.timestamps_seconds,
             prev_exists=self.bbox_head.stream_continuity(
-                frame_meta.scene_tokens, frame_meta.timestamps
+                frame_meta.scene_tokens, frame_meta.timestamps_seconds
             ),
             ego_pose=frame_meta.ego2globals,
             # The poses and the bank are float32 in the map frame: a stored translation at 65 km

@@ -342,7 +342,7 @@ def test_frame_meta_carries_the_map_resolved_against_the_datasets_own_root(tmp_p
         pseudo_root, records, LaneletMapProvider(T4LaneletMapResolver(str(pseudo_root)))
     )
     sample = own_corpus.get_frame_meta_sample(0, None)
-    assert sample.timestamp == 12.5
+    assert sample.timestamp_seconds == 12.5
 
     assert sample.scene_token == scene
     assert sample.lanelet_map_path == str(map_path)
