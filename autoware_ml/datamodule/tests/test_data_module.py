@@ -19,6 +19,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from functools import partial
 from pathlib import Path
+import pickle
 import tempfile
 import unittest
 
@@ -30,7 +31,8 @@ from torch.utils.data.distributed import DistributedSampler
 from autoware_ml.databases.base_database import BaseDatabase
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.databases.taxonomy import DatabaseTaxonomy, Detection3DTaxonomy
-from autoware_ml.datamodule.base_dataset import ConcatDataset
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
+from autoware_ml.datamodule.base_dataset import ConcatDataset, PaddingSlot
 from autoware_ml.datamodule.data_module import DataLoaderConfig
 from autoware_ml.datamodule.data_module import DataModule
 from autoware_ml.datamodule.samplers import (
@@ -936,6 +938,50 @@ class TestSceneIndexGroups(StreamedCorpusTestCase):
             dataset.scene_index_groups()
 
 
+class TestPaddingSlots(StreamedCorpusTestCase):
+    """The samples a dataset serves for the padding slots of streaming lanes."""
+
+    @staticmethod
+    def lidar_frame_path(sample: ModelGTSample) -> str:
+        """Point file of the frame a sample was loaded from."""
+        assert sample.lidar_point_cloud_samples is not None
+        return sample.lidar_point_cloud_samples[0].point_cloud_path
+
+    def test_a_padding_slot_serves_its_frame_flagged_as_padding(self) -> None:
+        """
+        Input: frame 3 and the padding slot holding it, read from the bound dataset and from a
+        split repeating the dataset twice, there at index 8 of the second copy.
+        Expected: a padding slot loads the frame it holds, so its tensors are real data, and
+        the dataset flags it as padding, while the frame itself stays unflagged.
+        Check: the flag and the point file of each sample.
+        """
+        dataset = build_dataset(self.streamed_database).bind(self.streamed_records)
+        split = ConcatDataset([dataset], repeats=[2])
+
+        for source, index in ((dataset, 3), (split, 8)):
+            with self.subTest(dataset=type(source).__name__):
+                frame = source[index]
+                padding = source[PaddingSlot(index)]
+
+                self.assertFalse(frame.is_padding)
+                self.assertTrue(padding.is_padding)
+                self.assertTrue(self.lidar_frame_path(frame).endswith("/3_0.pcd.bin"))
+                self.assertEqual(self.lidar_frame_path(padding), self.lidar_frame_path(frame))
+
+    def test_a_padding_slot_survives_pickling(self) -> None:
+        """
+        Input: a padding slot pickled and loaded again, as a dataloader sends its indices to
+        the worker processes.
+        Expected: the worker receives a padding slot of the same index, so it still flags the
+        sample it loads.
+        Check: the type and the value of the loaded index.
+        """
+        index = pickle.loads(pickle.dumps(PaddingSlot(7)))
+
+        self.assertIs(type(index), PaddingSlot)
+        self.assertEqual(index, 7)
+
+
 class TestStreamingDataModule(StreamedCorpusTestCase):
     """Scene-streaming dataloaders feeding temporal models whole scenes frame by frame."""
 
@@ -959,20 +1005,6 @@ class TestStreamingDataModule(StreamedCorpusTestCase):
             train_frame_sampling=train_frame_sampling,
             seed=seed,
         )
-
-    def test_tells_a_temporal_model_that_it_streams(self) -> None:
-        """
-        Input: a streaming datamodule and a plain one over the same source.
-        Expected: a model carrying a memory across batches reads ``streaming`` from the
-        datamodule of its trainer, False when the datamodule does not define it, so only the
-        streaming datamodule passes its check.
-        Check: the ``streaming`` flag each datamodule shows to such a model.
-        """
-        streaming_data_module = self.build_streaming_data_module()
-        data_module = self.build_data_module({"main": build_source(self.streamed_database)})
-
-        self.assertTrue(getattr(streaming_data_module, "streaming", False))
-        self.assertFalse(getattr(data_module, "streaming", False))
 
     def test_every_split_streams_through_the_scene_sampler(self) -> None:
         """
@@ -1068,13 +1100,15 @@ class TestStreamingDataModule(StreamedCorpusTestCase):
         self.assertIsInstance(data_module.train_dataloader().sampler, GroupStreamingSampler)
         self.assertIsInstance(data_module.val_dataloader().sampler, GroupStreamingSampler)
 
-    def test_rejects_a_prediction_that_would_skip_frames(self) -> None:
+    def test_a_prediction_serves_every_frame_once_through_padded_lanes(self) -> None:
         """
         Input: a streaming predict split of five frames, read through two lanes and through one.
-        Expected: two lanes would trim the split to four frames, and a prediction has to serve
-        every frame, so the datamodule refuses it; one lane serves all five.
-        Check: the two-lane loader raises a ValueError naming the skipped frame, the one-lane
-        loader serves every frame, each scene in time order.
+        Expected: the two lanes hold two and three frames, so the shorter one ends with a
+        padding slot repeating its last frame; the loader serves every frame once as a real
+        sample and flags the slot in the padding mask of its last batch. One lane needs no
+        padding and serves the five frames, each scene in time order.
+        Check: the indices of both samplers, padding slots told apart, and the padding mask of
+        every batch the two-lane loader collates through its worker process.
         """
 
         def predict_loader(batch_size: int) -> DataLoader:
@@ -1089,8 +1123,16 @@ class TestStreamingDataModule(StreamedCorpusTestCase):
             data_module.setup("predict")
             return data_module.predict_dataloader()
 
-        with self.assertRaisesRegex(ValueError, "skip 1 of 5 frames"):
-            predict_loader(batch_size=2)
+        two_lanes = predict_loader(batch_size=2)
+
+        self.assertEqual(
+            [(isinstance(index, PaddingSlot), index) for index in two_lanes.sampler],
+            [(False, 4), (False, 0), (False, 2), (False, 1), (True, 2), (False, 3)],
+        )
+        self.assertEqual(
+            [batch.padding_mask.tolist() for batch in two_lanes],
+            [[False, False], [False, False], [True, False]],
+        )
         self.assertEqual(list(predict_loader(batch_size=1).sampler), [4, 2, 0, 1, 3])
 
     def test_rejects_frame_sampling(self) -> None:

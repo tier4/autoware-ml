@@ -36,7 +36,7 @@ from torch.utils.data.distributed import DistributedSampler
 
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDatasetSchema
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
-from autoware_ml.datamodule.base_dataset import BaseDataset, ConcatDataset
+from autoware_ml.datamodule.base_dataset import BaseDataset, ConcatDataset, PaddingSlot
 from autoware_ml.transforms.boxes3d.filters import parse_exclusion_rules
 from autoware_ml.types.geometry import Box3DFieldIndex
 
@@ -318,25 +318,22 @@ class GroupStreamingSampler(DistributedSampler):
     ``(r + 1) * batch_size - 1``. A cut can fall inside a scene, and the lane after it
     starts a new stream there.
 
-    Every rank serves the same number of rounds, padded or trimmed as below, so no rank
-    waits forever in a DDP collective (the gradient sync of every training step, or an
-    ``all_reduce`` a model may run in its validation loss).
+    Every lane is padded to ``rounds_per_epoch``, ``ceil(total_frames / num_lanes)`` rounds,
+    in every split. Every rank then serves the same number of batches, so none waits forever
+    in a DDP collective (the gradient sync of every training step, or an ``all_reduce`` a
+    model may run in its validation loss), and the epoch length never changes (Lightning
+    derives the validation interval and the total step count once, from the first epoch). A
+    lane one frame shorter than the others ends with a ``PaddingSlot`` holding the index of
+    its last frame: the dataset serves that frame again flagged ``is_padding``, and the batch
+    flags it in ``ModelGTBatch.padding_mask``. Fewer than ``num_lanes`` slots of an epoch are
+    padding, and no frame is dropped or served twice as a real sample, in training,
+    evaluation and prediction alike.
 
-    - ``shuffle=True`` (training): every lane is padded to
-      ``ceil(total_frames / num_lanes)`` rounds by restarting at its own first frame. No
-      frame is dropped and fewer than ``num_lanes`` repeat. The epoch length never
-      changes: Lightning derives the validation interval and the total step count once,
-      from the first epoch, and a shorter later epoch would silently skip its validation.
-      Rarely, with a repeated source, a padded lane starts inside one copy of a scene and
-      ends at an earlier frame of another copy; its restart then moves forward within that
-      scene, so a model that resets only on a change of scene or a step back in time
-      (``StreamContinuity``) keeps its memory across the jump.
-    - ``shuffle=False`` (evaluation): every lane is trimmed to
-      ``floor(total_frames / num_lanes)`` rounds. No frame is scored twice; the
-      ``total_frames % num_lanes`` lanes one frame longer than the others lose their last
-      frame, so up to ``num_lanes - 1`` frames spread over the split go unscored, none with
-      one rank and one lane. A prediction has to serve every frame, so the datamodule
-      refuses one that would trim a frame.
+    A model streaming from this sampler gives padded samples no loss and no metric and
+    leaves them out of the logged batch size (``ModelGTBatch.num_real_samples``), and a
+    prediction writer skips them. A padding slot repeats the frame before it, in the same
+    scene and with no time gap, so a model that keeps a stream only while time moves forward
+    starts a new stream there, at the end of the lane.
 
     As a ``DistributedSampler`` it is never wrapped by Lightning, whose wrapper would keep
     only every ``num_replicas``-th index of each rank and make its lanes skip frames.
@@ -357,8 +354,7 @@ class GroupStreamingSampler(DistributedSampler):
                 every scene in frame order.
             batch_size: Number of dataloader lanes fed in parallel. Must match
                 the dataloader batch size.
-            shuffle: Whether to shuffle the scene order every epoch. Also
-                selects the fixed-length (padded) epoch described above.
+            shuffle: Whether to shuffle the scene order every epoch.
             seed: Base seed for the per-epoch scene shuffle, the experiment seed.
         """
         num_replicas = dist.get_world_size() if dist.is_available() and dist.is_initialized() else 1
@@ -370,7 +366,6 @@ class GroupStreamingSampler(DistributedSampler):
         self.batch_size = batch_size
         self._cached_epoch: int | None = None
         self._cached_indices: Sequence[Sequence[int]] = ()
-        self._trimming_warned = False
         self.total_frames = sum(len(group) for group in self.scene_groups)
 
     @property
@@ -380,7 +375,7 @@ class GroupStreamingSampler(DistributedSampler):
 
     @property
     def rounds_per_epoch(self) -> int:
-        """Rounds every rank serves per shuffled epoch, the ``DistributedSampler`` convention."""
+        """Rounds every rank serves per epoch in every split, the longest lane's length."""
         return math.ceil(self.total_frames / self.num_lanes)
 
     def _validate_lanes(self) -> None:
@@ -391,10 +386,6 @@ class GroupStreamingSampler(DistributedSampler):
                 f"{self.batch_size} lane(s) from {self.total_frames} frame(s); "
                 "reduce batch_size or world size."
             )
-
-    def _rounds(self) -> int:
-        """Rounds every rank serves per epoch: padded up when shuffling, trimmed otherwise."""
-        return self.rounds_per_epoch if self.shuffle else self.total_frames // self.num_lanes
 
     def _scene_order(self, epoch: int) -> Sequence[int]:
         """Order the scenes for one epoch: as listed, or shuffled by the epoch's seed."""
@@ -411,57 +402,40 @@ class GroupStreamingSampler(DistributedSampler):
         return [frames[start:end] for start, end in zip(bounds[:-1], bounds[1:])]
 
     @staticmethod
-    def _fit_lane(lane: Sequence[int], rounds: int) -> Sequence[int]:
-        """Cycle a lane back to its own start, or cut it, to exactly ``rounds`` frames."""
-        return [lane[round_index % len(lane)] for round_index in range(rounds)]
+    def _pad_lane(lane: Sequence[int], rounds: int) -> Sequence[int]:
+        """End a lane with padding slots holding its last frame, up to ``rounds`` slots."""
+        return [*lane, *[PaddingSlot(lane[-1])] * (rounds - len(lane))]
 
     def _rank_indices(self, lanes: Sequence[Sequence[int]], rank: int) -> Sequence[int]:
         """Interleave the lanes of one rank round by round, one frame of every lane a round."""
         rank_lanes = lanes[rank * self.batch_size : (rank + 1) * self.batch_size]
         return [index for round_frames in zip(*rank_lanes) for index in round_frames]
 
-    def _log_epoch(self, epoch: int, rounds: int) -> None:
-        """Log the frames a training epoch repeats, or once, the frames evaluation trims."""
-        served = rounds * self.num_lanes
-        if self.shuffle:
-            logger.info(
-                "GroupStreamingSampler epoch %d: %d frames, %d repeated to keep %d rank(s) x "
-                "%d lane(s) at a fixed %d rounds.",
-                epoch,
-                self.total_frames,
-                served - self.total_frames,
-                self.num_replicas,
-                self.batch_size,
-                rounds,
-            )
-        elif served < self.total_frames and not self._trimming_warned:
-            # Lightning sets the epoch on the evaluation samplers too, which rebuilds the
-            # indices at every validation; the frames trimmed never change, so say it once.
-            self._trimming_warned = True
-            logger.warning(
-                "GroupStreamingSampler serves %d/%d frames: to keep %d rank(s) x %d lane(s) "
-                "aligned, %d lane(s) spread over the split are trimmed of their last frame. "
-                "Only one rank with one lane scores every frame.",
-                served,
-                self.total_frames,
-                self.num_replicas,
-                self.batch_size,
-                self.total_frames - served,
-            )
+    def _log_epoch(self, epoch: int) -> None:
+        """Log the padding slots that keep the lanes of an epoch aligned."""
+        logger.info(
+            "GroupStreamingSampler epoch %d: %d frames in %d rank(s) x %d lane(s) of %d "
+            "rounds, %d padding slot(s).",
+            epoch,
+            self.total_frames,
+            self.num_replicas,
+            self.batch_size,
+            self.rounds_per_epoch,
+            self.rounds_per_epoch * self.num_lanes - self.total_frames,
+        )
 
     def _epoch_indices(self, epoch: int) -> Sequence[Sequence[int]]:
         """Build, or reuse, the interleaved indices of every rank for one epoch."""
         if epoch == self._cached_epoch:
             return self._cached_indices
         self._validate_lanes()
-        rounds = self._rounds()
         lanes = self._cut_lanes(self._scene_order(epoch))
-        fitted_lanes = [self._fit_lane(lane, rounds) for lane in lanes]
+        padded_lanes = [self._pad_lane(lane, self.rounds_per_epoch) for lane in lanes]
         self._cached_indices = [
-            self._rank_indices(fitted_lanes, rank) for rank in range(self.num_replicas)
+            self._rank_indices(padded_lanes, rank) for rank in range(self.num_replicas)
         ]
         self._cached_epoch = epoch
-        self._log_epoch(epoch, rounds)
+        self._log_epoch(epoch)
         return self._cached_indices
 
     def __iter__(self):
@@ -469,5 +443,5 @@ class GroupStreamingSampler(DistributedSampler):
         return iter(self._epoch_indices(self.epoch)[self.rank])
 
     def __len__(self) -> int:
-        """Return the per-rank sample count; constant across epochs when shuffling."""
+        """Return the per-rank sample count, the same in every epoch and every split."""
         return len(self._epoch_indices(self.epoch)[self.rank])

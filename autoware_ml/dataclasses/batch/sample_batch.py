@@ -59,6 +59,11 @@ class ModelGTSample(NamedTuple):
     # Assigned by the dataset once the pipeline has finished.
     io_processing_time: float = 0.0
 
+    # Whether the sample fills a padding slot of a streaming lane instead of serving a frame
+    # of the split: a repeat of the lane's last frame that only keeps every rank at the same
+    # number of batches. Assigned by the dataset, see ModelGTBatch.padding_mask.
+    is_padding: bool = False
+
     def keep_points(self, keep_mask: Bool[Tensor, " num_points"]) -> ModelGTSample:
         """
         Keep the masked points and, when the sample carries them, their semantic labels. The
@@ -103,6 +108,13 @@ class ModelGTBatch(NamedTuple):
     # Per-frame evaluation metadata, None when the samples carry none.
     frame_meta_batch: FrameMetaBatch | None = None
 
+    # Which samples fill padding slots of streaming lanes rather than serving frames of the
+    # split. Every collated batch carries it, all False when no sample is padding; it is None
+    # only on a batch assembled by hand, which holds no padding slot. A model fed by a
+    # StreamingDataModule gives the flagged samples no loss and no metric and leaves them out
+    # of the logged batch size (num_real_samples), and a prediction writer skips them.
+    padding_mask: Bool[Tensor, " batch_size"] | None = None
+
     def to_device(self, device: torch.device) -> ModelGTBatch:
         """
         Move the ModelGTBatch to the specified device.
@@ -130,6 +142,7 @@ class ModelGTBatch(NamedTuple):
             frame_meta_batch=self.frame_meta_batch.to_device(device)
             if self.frame_meta_batch is not None
             else None,
+            padding_mask=self.padding_mask.to(device) if self.padding_mask is not None else None,
         )
 
     def infer_batch_size(self) -> int:
@@ -147,6 +160,17 @@ class ModelGTBatch(NamedTuple):
             return self.image_gt_batch.images.shape[0]
         else:
             raise ValueError("Cannot infer batch size from an empty ModelGTBatch.")
+
+    def num_real_samples(self) -> int:
+        """
+        Count the samples that serve frames of the split rather than padding slots.
+
+        Returns:
+          int: The batch size less the padding slots, zero for a batch of padding slots only.
+        """
+        if self.padding_mask is None:
+            return self.infer_batch_size()
+        return int(self.padding_mask.numel() - self.padding_mask.sum().item())
 
     @staticmethod
     def collate_pointcloud_gt_samples(
@@ -355,7 +379,8 @@ class ModelGTBatch(NamedTuple):
           gt_samples: Sequence of ModelGTSample to be collated.
 
         Returns:
-          ModelGTBatch: Collated multi-task GT batch.
+          ModelGTBatch: Collated multi-task GT batch, flagging the padding samples in its
+            padding_mask.
         """
         # Collate point cloud GT batch
         point_cloud_gt_batch = ModelGTBatch.collate_pointcloud_gt_samples(gt_samples)
@@ -383,4 +408,7 @@ class ModelGTBatch(NamedTuple):
             image_gt_batch=image_gt_batch,
             io_processing_time=sum(sample.io_processing_time for sample in gt_samples),
             frame_meta_batch=frame_meta_batch,
+            padding_mask=torch.tensor(
+                [sample.is_padding for sample in gt_samples], dtype=torch.bool
+            ),
         )

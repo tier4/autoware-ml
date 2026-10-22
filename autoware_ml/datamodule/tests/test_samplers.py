@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Sequence
 from types import MappingProxyType
 
 import numpy as np
@@ -12,7 +13,7 @@ import pytest
 from torch.utils.data.distributed import DistributedSampler
 
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
-from autoware_ml.datamodule.base_dataset import ConcatDataset
+from autoware_ml.datamodule.base_dataset import ConcatDataset, PaddingSlot
 from autoware_ml.datamodule.samplers import (
     LOW_PEDESTRIAN_CATEGORY,
     DistributedWeightedRandomSampler,
@@ -345,19 +346,19 @@ def test_per_rank_length_is_a_whole_number_of_batches() -> None:
     assert len(indices) % 3 == 0
 
 
-def test_trimming_logs_a_warning(caplog: pytest.LogCaptureFixture) -> None:
+def test_logs_the_padding_slots_of_an_epoch(caplog: pytest.LogCaptureFixture) -> None:
     """
     Input: scenes of 10 and 5 frames served in order through two lanes.
-    Expected: the longer lane loses its last frame to keep the two aligned, and the sampler
-    says so.
-    Check: a warning naming the trimming is logged.
+    Expected: the 15 frames make lanes of 7 and 8 frames, so the shorter lane ends with one
+    padding slot, and the sampler says how many slots the epoch pads.
+    Check: an info record names the one padding slot.
     """
     sampler = GroupStreamingSampler(
         _FakeScenesDataset([10, 5]), batch_size=2, shuffle=False, seed=0
     )
-    with caplog.at_level(logging.WARNING, logger="autoware_ml.datamodule.samplers"):
+    with caplog.at_level(logging.INFO, logger="autoware_ml.datamodule.samplers"):
         list(sampler)
-    assert any("trimmed" in record.message for record in caplog.records)
+    assert any("1 padding slot" in record.message for record in caplog.records)
 
 
 def test_ranks_agree_on_length_and_serve_disjoint_frames() -> None:
@@ -482,14 +483,14 @@ class TestFixedLengthTrainingEpochs:
         assert lengths[0] == sampler.rounds_per_epoch * 2
         assert lengths[0] >= dataset.total
 
-    def test_every_frame_is_served_and_fewer_than_the_lanes_repeat(self) -> None:
+    def test_every_frame_is_served_once_and_fewer_slots_than_lanes_pad(self) -> None:
         """
         Input: eleven uneven scenes shuffled over three epochs for eight ranks of two lanes
         each.
-        Expected: the joined frames are cut into 16 lanes, so no frame is dropped and the
-        padding repeats fewer frames than there are lanes.
-        Check: the indices of all ranks cover every frame, with fewer than 16 more indices
-        than frames.
+        Expected: the joined frames are cut into 16 lanes, so every frame is served once as
+        a real sample and fewer slots than there are lanes are padding.
+        Check: the real indices of all ranks are every frame once, and fewer than 16
+        indices are padding slots.
         """
         dataset = _FakeScenesDataset([37, 21, 58, 13, 44, 29, 61, 18, 25, 50, 33])
         samplers = _ranks(dataset, world_size=8, batch_size=2, shuffle=True)
@@ -499,15 +500,16 @@ class TestFixedLengthTrainingEpochs:
             for sampler in samplers:
                 sampler.set_epoch(epoch)
                 served.extend(sampler)
-            assert set(served) == set(range(dataset.total))
-            assert len(served) - dataset.total < 16
+            real = [index for index in served if not isinstance(index, PaddingSlot)]
+            assert sorted(real) == list(range(dataset.total))
+            assert len(served) - len(real) < 16
 
     def test_lanes_only_advance_within_a_scene_or_start_a_new_stream(self) -> None:
         """
         Input: scenes of 7, 5, 18, 3, 8 and 9 frames shuffled through three lanes over four
         epochs.
-        Expected: a lane moves on to the next frame of its scene, or starts a new stream at
-        the first frame of a scene or, when padded, at its own first frame.
+        Expected: a lane moves on to the next frame of its scene or starts a new stream at the
+        first frame of a scene, and a padded lane then repeats its last frame.
         Check: every pair of consecutive frames of every lane.
         """
         dataset = _FakeScenesDataset([7, 5, 18, 3, 8, 9])
@@ -517,12 +519,12 @@ class TestFixedLengthTrainingEpochs:
             sampler.set_epoch(epoch)
             for lane in _lanes(sampler):
                 for previous, current in zip(lane, lane[1:]):
-                    # Either the next frame of the same scene, or a new stream: the first
-                    # frame of a scene, or the lane's own first frame when it is padded.
+                    # Either the next frame of the same scene, a new stream at the first
+                    # frame of a scene, or the padding slot repeating the lane's last frame.
                     assert (
                         current == previous + 1
                         or current in dataset.scene_starts
-                        or current == lane[0]
+                        or (isinstance(current, PaddingSlot) and current == previous)
                     )
 
     def test_raises_when_scenes_cannot_fill_every_lane(self) -> None:
@@ -540,13 +542,13 @@ class TestFixedLengthTrainingEpochs:
             len(sampler)
 
 
-class TestEvaluationTrimsInsteadOfPadding:
-    """With ``shuffle=False`` every lane is trimmed instead, so no frame is scored twice."""
+class TestEvaluationServesEveryFrame:
+    """With ``shuffle=False`` the lanes keep the record order and serve every frame once."""
 
     def test_single_lane_serves_every_frame_exactly_once_in_file_order(self) -> None:
         """
         Input: scenes of 7, 5 and 18 frames served in order through one lane.
-        Expected: one lane on one rank needs no trimming, so it serves every frame once, the
+        Expected: one lane on one rank needs no padding, so it serves every frame once, the
         scenes in the order of the record table.
         Check: the indices are every frame, in order.
         """
@@ -555,71 +557,100 @@ class TestEvaluationTrimsInsteadOfPadding:
 
         assert list(iter(sampler)) == list(range(dataset.total))
 
-    def test_wider_batches_trim_without_repeating_frames(self) -> None:
+    def test_wider_batches_pad_without_repeating_frames(self) -> None:
         """
         Input: scenes of 7, 5 and 19 frames, 31 in all, served in order through two lanes.
-        Expected: the longer lane loses its last frame to keep the two aligned, and no frame is
-        served twice.
-        Check: the indices are distinct and one fewer than the frames.
+        Expected: the lanes hold 15 and 16 frames, so the shorter one ends with a padding slot
+        and every frame is served once as a real sample.
+        Check: the real indices are every frame once, and one index is a padding slot.
         """
         dataset = _FakeScenesDataset([7, 5, 19])
         sampler = GroupStreamingSampler(dataset, batch_size=2, shuffle=False, seed=0)
 
         indices = list(iter(sampler))
-        assert len(indices) == len(set(indices))
-        assert len(indices) == dataset.total - 1
+        real = [index for index in indices if not isinstance(index, PaddingSlot)]
+        assert sorted(real) == list(range(dataset.total))
+        assert len(indices) - len(real) == 1
 
-    def test_several_ranks_drop_fewer_frames_than_they_have_lanes(self) -> None:
+    def test_several_ranks_serve_every_frame_once_with_fewer_slots_than_lanes(self) -> None:
         """
         Input: 87 scenes of 20 to 60 frames served in order by eight ranks of two lanes each.
-        Expected: cutting the joined frames into 16 lanes drops fewer frames than there are
-        lanes, where dealing whole scenes round-robin would drop about a fifth of them, and
-        every rank serves the same number of batches and no frame twice.
-        Check: the indices of all ranks are distinct, the ranks have one length, and 1 to 15
-        frames go unserved.
+        Expected: the joined frames are cut into 16 lanes and the shorter lanes padded, so
+        every rank serves the same number of batches, every frame is served once as a real
+        sample, and fewer slots than there are lanes are padding.
+        Check: the real indices of all ranks are every frame once, the ranks have one length,
+        and 1 to 15 indices are padding slots.
         """
         rng = np.random.default_rng(0)
         dataset = _FakeScenesDataset(rng.integers(20, 61, size=87).tolist())
         samplers = _ranks(dataset, world_size=8, batch_size=2, shuffle=False)
 
         served = [index for sampler in samplers for index in sampler]
-        assert len(served) == len(set(served))
+        real = [index for index in served if not isinstance(index, PaddingSlot)]
+        assert sorted(real) == list(range(dataset.total))
         assert len({len(sampler) for sampler in samplers}) == 1
-        assert 0 < dataset.total - len(served) < 16
+        assert 0 < len(served) - len(real) < 16
 
     def test_a_lane_cut_inside_a_scene_continues_that_scene(self) -> None:
         """
         Input: one scene of nine frames served in order through two lanes.
-        Expected: the cut falls inside the scene, so lane 1 starts at frame 4 and walks on
-        through the scene, and the last frame is trimmed to keep the lanes aligned.
-        Check: the frames of each lane.
+        Expected: the cut falls inside the scene, so lane 1 starts at frame 4 and walks on to
+        the end of the scene, while lane 0, a frame shorter, ends with a padding slot
+        repeating frame 3.
+        Check: the frames of each lane and which of them is a padding slot.
         """
         sampler = GroupStreamingSampler(
             _FakeScenesDataset([9]), batch_size=2, shuffle=False, seed=0
         )
 
-        assert _lanes(sampler) == [[0, 1, 2, 3], [4, 5, 6, 7]]
+        lanes = _lanes(sampler)
+        assert lanes == [[0, 1, 2, 3, 3], [4, 5, 6, 7, 8]]
+        assert [isinstance(index, PaddingSlot) for index in lanes[0]] == [False] * 4 + [True]
 
-    def test_logs_the_trimming_once(self, caplog: pytest.LogCaptureFixture) -> None:
-        """
-        Input: scenes of 10 and 5 frames served in order through two lanes over three epochs.
-        Expected: Lightning rebuilds the evaluation indices at every validation, but the
-        trimmed frames never change, so the sampler warns about them once.
-        Check: one warning naming the trimming is logged.
-        """
-        sampler = GroupStreamingSampler(
-            _FakeScenesDataset([10, 5]), batch_size=2, shuffle=False, seed=0
-        )
-        with caplog.at_level(logging.WARNING, logger="autoware_ml.datamodule.samplers"):
-            for epoch in range(3):
-                sampler.set_epoch(epoch)
-                list(sampler)
-        assert sum("trimmed" in record.message for record in caplog.records) == 1
+
+def slot(index: int) -> PaddingSlot:
+    """Padding slot holding ``index``, short for the tables below."""
+    return PaddingSlot(index)
+
+
+def _typed(indices: Sequence[int]) -> list[tuple[bool, int]]:
+    """Every index with whether it is a padding slot, which ``==`` on ints cannot tell."""
+    return [(isinstance(index, PaddingSlot), index) for index in indices]
 
 
 # Indices of every rank over scenes of 5, 3, 4 and 2 frames:
 # (world_size, batch_size, shuffle, seed, epoch, indices of every rank).
 PINNED_EPOCHS = [
+    (1, 2, True, 0, 0, [[0, 7, 1, 12, 2, 13, 3, 8, 4, 9, 5, 10, 6, 11]]),
+    (2, 2, True, 0, 1, [[5, 12, 6, 13, 7, 8, slot(7), 9], [10, 1, 11, 2, 0, 3, slot(0), 4]]),
+    (
+        3,
+        2,
+        True,
+        7,
+        2,
+        [[8, 10, 9, 11, slot(9), slot(11)], [0, 3, 1, 4, 2, slot(4)], [5, 7, 6, 12, slot(6), 13]],
+    ),
+    (
+        4,
+        3,
+        True,
+        1,
+        0,
+        [
+            [5, 6, 7, slot(5), slot(6), slot(7)],
+            [12, 13, 8, slot(12), slot(13), 9],
+            [10, 11, 0, slot(10), slot(11), slot(0)],
+            [1, 2, 3, slot(1), slot(2), 4],
+        ],
+    ),
+    (2, 2, False, 0, 0, [[0, 3, 1, 4, 2, 5, slot(2), 6], [7, 10, 8, 11, 9, 12, slot(9), 13]]),
+    (3, 1, False, 0, 3, [[0, 1, 2, 3, slot(3)], [4, 5, 6, 7, 8], [9, 10, 11, 12, 13]]),
+]
+
+# The same cases as served before the lanes were padded: a shuffled lane cycled back to its
+# own first frame, a lane in order was trimmed to the shortest one.
+PREVIOUS_EPOCHS = [
     (1, 2, True, 0, 0, [[0, 7, 1, 12, 2, 13, 3, 8, 4, 9, 5, 10, 6, 11]]),
     (2, 2, True, 0, 1, [[5, 12, 6, 13, 7, 8, 5, 9], [10, 1, 11, 2, 0, 3, 10, 4]]),
     (3, 2, True, 7, 2, [[8, 10, 9, 11, 8, 10], [0, 3, 1, 4, 2, 3], [5, 7, 6, 12, 5, 13]]),
@@ -636,6 +667,18 @@ PINNED_EPOCHS = [
 ]
 
 
+def _served(
+    world_size: int, batch_size: int, shuffle: bool, seed: int, epoch: int
+) -> list[list[int]]:
+    """The indices every rank serves over scenes of 5, 3, 4 and 2 frames."""
+    samplers = _ranks(
+        _FakeScenesDataset([5, 3, 4, 2]), world_size, batch_size, shuffle=shuffle, seed=seed
+    )
+    for sampler in samplers:
+        sampler.set_epoch(epoch)
+    return [list(sampler) for sampler in samplers]
+
+
 @pytest.mark.parametrize(
     ("world_size", "batch_size", "shuffle", "seed", "epoch", "expected"), PINNED_EPOCHS
 )
@@ -650,16 +693,114 @@ def test_serves_the_pinned_indices_of_every_rank(
     """
     Input: scenes of 5, 3, 4 and 2 frames served by several world sizes, lane counts, seeds
     and epochs, shuffled for training and in order for evaluation.
-    Expected: every rank serves the pinned indices, its padded lanes restarting at their own
-    first frame and its trimmed lanes losing their last one, so a change to how the sampler
-    is built cannot silently change the order a run trains or evaluates on.
-    Check: compare the indices of every rank with the pinned lists.
+    Expected: every rank serves the pinned indices, the shorter lanes ending with a padding
+    slot that holds their last frame, so a change to how the sampler is built cannot
+    silently change the order a run trains or evaluates on.
+    Check: compare the indices of every rank, padding slots told apart, with the pinned lists.
     """
-    samplers = _ranks(
-        _FakeScenesDataset([5, 3, 4, 2]), world_size, batch_size, shuffle=shuffle, seed=seed
-    )
+    served = _served(world_size, batch_size, shuffle, seed, epoch)
 
-    for sampler in samplers:
-        sampler.set_epoch(epoch)
+    assert [_typed(indices) for indices in served] == [_typed(indices) for indices in expected]
 
-    assert [list(sampler) for sampler in samplers] == expected
+
+@pytest.mark.parametrize(
+    ("world_size", "batch_size", "shuffle", "seed", "epoch", "previous"), PREVIOUS_EPOCHS
+)
+def test_keeps_the_real_frame_order_of_the_previous_sampler(
+    world_size: int,
+    batch_size: int,
+    shuffle: bool,
+    seed: int,
+    epoch: int,
+    previous: list[list[int]],
+) -> None:
+    """
+    Input: the cases of the pinned epochs, with the indices every rank served before the lanes
+    were padded, when a shuffled lane cycled back to its first frame and a lane in order was
+    trimmed to the shortest one.
+    Expected: padding changes only the end of a lane: a shuffled lane serves the frames it
+    served before up to its restart, and a lane in order serves the frames it served before
+    and at most the one frame its trimming dropped.
+    Check: the real frames of every lane against the lane the previous sampler served.
+    """
+    served = _served(world_size, batch_size, shuffle, seed, epoch)
+
+    for rank_indices, previous_indices in zip(served, previous, strict=True):
+        for lane in range(batch_size):
+            real = [
+                index
+                for index in rank_indices[lane::batch_size]
+                if not isinstance(index, PaddingSlot)
+            ]
+            previous_lane = previous_indices[lane::batch_size]
+            if shuffle:
+                assert previous_lane[: len(real)] == real
+                assert previous_lane[len(real) :] == real[: len(previous_lane) - len(real)]
+            else:
+                assert real[: len(previous_lane)] == previous_lane
+                assert len(real) - len(previous_lane) <= 1
+
+
+# (world_size, batch_size, shuffle) of the lane layouts every property below holds for.
+LANE_LAYOUTS = [
+    (1, 1, False),
+    (1, 3, True),
+    (2, 1, False),
+    (2, 2, False),
+    (2, 3, True),
+    (3, 2, False),
+    (4, 3, True),
+    (8, 2, False),
+]
+UNEVEN_SCENES = [17, 4, 9, 23, 1, 12, 6, 30, 2, 11, 8]
+
+
+@pytest.mark.parametrize(("world_size", "batch_size", "shuffle"), LANE_LAYOUTS)
+def test_every_frame_is_served_once_across_ranks(
+    world_size: int, batch_size: int, shuffle: bool
+) -> None:
+    """
+    Input: eleven uneven scenes of 123 frames over three epochs, for several world sizes and
+    lane counts, shuffled and in order.
+    Expected: whatever the layout, every rank serves rounds_per_epoch rounds, and the real
+    samples of all ranks are every frame of the split exactly once, so evaluation scores
+    every frame once and training sees every frame once per epoch.
+    Check: the length of every rank and the sorted real indices of all ranks.
+    """
+    dataset = _FakeScenesDataset(UNEVEN_SCENES)
+    samplers = _ranks(dataset, world_size, batch_size, shuffle=shuffle)
+
+    for epoch in range(3):
+        served = []
+        for sampler in samplers:
+            sampler.set_epoch(epoch)
+            indices = list(sampler)
+            assert len(indices) == sampler.rounds_per_epoch * batch_size
+            served.extend(indices)
+        real = [index for index in served if not isinstance(index, PaddingSlot)]
+        assert sorted(real) == list(range(dataset.total))
+
+
+@pytest.mark.parametrize(("world_size", "batch_size", "shuffle"), LANE_LAYOUTS)
+def test_a_lane_ends_with_at_most_one_padding_slot_holding_its_last_frame(
+    world_size: int, batch_size: int, shuffle: bool
+) -> None:
+    """
+    Input: eleven uneven scenes of 123 frames over three epochs, for several world sizes and
+    lane counts, shuffled and in order.
+    Expected: the lanes differ by at most one frame, so a lane is padded with at most one
+    slot, at its end, holding the index of its last frame.
+    Check: the padding slots of every lane of every rank: their number, their position and
+    their value.
+    """
+    samplers = _ranks(_FakeScenesDataset(UNEVEN_SCENES), world_size, batch_size, shuffle=shuffle)
+
+    for epoch in range(3):
+        for sampler in samplers:
+            sampler.set_epoch(epoch)
+            for lane in _lanes(sampler):
+                padded = [isinstance(index, PaddingSlot) for index in lane]
+                assert sum(padded) <= 1
+                assert not any(padded[:-1])
+                if padded[-1]:
+                    assert lane[-1] == lane[-2]

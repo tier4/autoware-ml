@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import ClassVar
 
 from torch.utils.data import DataLoader
 
@@ -39,15 +38,17 @@ class StreamingDataModule(DataModule):
     ``DistributedSampler``, so it splits the lanes over the ranks itself and Lightning leaves
     it alone.
 
+    The lanes differ by at most one frame, and a shorter lane ends with a padding slot that
+    repeats its last frame, so every rank serves the same number of batches and every split,
+    prediction included, serves every frame exactly once as a real sample. The batch flags
+    the padded samples in ``ModelGTBatch.padding_mask``: a model fed by this datamodule gives
+    them no loss and no metric and leaves them out of the logged batch size
+    (``ModelGTBatch.num_real_samples``), and a prediction writer skips them.
+
     Whatever else would reorder the frames is refused: frame sampling, a shuffling dataloader
     and ``trainer.overfit_batches``, for which Lightning swaps the sampler of the training and
-    validation loaders for a sequential one. To keep the lanes aligned, an evaluation loader
-    leaves out the last frame of the longer lanes, fewer frames than there are lanes, so a
-    prediction that would leave a frame out is refused.
+    validation loaders for a sequential one.
     """
-
-    # A model carrying a memory across batches reads it from the datamodule of its trainer.
-    streaming: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -108,8 +109,8 @@ class StreamingDataModule(DataModule):
             ``GroupStreamingSampler`` that reshuffles the scenes of the training split only.
 
         Raises:
-          ValueError: If the split has no dataset or no dataloader settings, if the
-            dataloader would reorder the frames, or if a prediction would leave frames out.
+          ValueError: If the split has no dataset or no dataloader settings, or if the
+            dataloader would reorder the frames.
         """
         dataset = self.datasets.get(split)
         if dataset is None:
@@ -126,8 +127,6 @@ class StreamingDataModule(DataModule):
             shuffle=split == SplitType.TRAIN,
             seed=self.seed,
         )
-        if split == SplitType.PREDICT:
-            self._validate_every_frame_is_predicted(sampler)
         return DataLoader(
             dataset=dataset,
             collate_fn=dataset.collate_fn,
@@ -163,26 +162,4 @@ class StreamingDataModule(DataModule):
                 "training and validation loaders for a sequential one, which feeds every "
                 "lane each batch_size-th sample as if it were one stream. Shorten a "
                 "streaming run with limit_train_batches / limit_val_batches instead."
-            )
-
-    @staticmethod
-    def _validate_every_frame_is_predicted(sampler: GroupStreamingSampler) -> None:
-        """
-        Reject a prediction whose lanes would leave frames out.
-
-        Like evaluation, prediction trims the longer lanes to keep them aligned. A frame it
-        left out could pass for a frame without objects, in pseudo labels for example.
-
-        Args:
-          sampler: Scene sampler of the predict split.
-
-        Raises:
-          ValueError: If the frames of the split do not fill every lane equally.
-        """
-        skipped = sampler.total_frames % sampler.num_lanes
-        if skipped:
-            raise ValueError(
-                f"Streaming prediction over {sampler.num_lanes} lane(s) would skip "
-                f"{skipped} of {sampler.total_frames} frames to keep the lanes aligned. "
-                "Predict on one device with batch_size 1 to serve every frame."
             )
