@@ -129,16 +129,18 @@ The datasets are instantiated by Hydra without records. In `setup()` the datamod
 `bind(records)` on the dataset of every source, which returns a copy serving the records of that
 database in the split, and concatenates the bound copies of a split in declaration order.
 
-With `streaming` on, every dataloader draws from a `GroupStreamingSampler` that feeds each batch
-lane whole scenes frame by frame, for temporal models that carry a memory across batches; the
-training split reshuffles the scenes every epoch from `seed`, the experiment seed. The sampler is
-a `DistributedSampler`, so it shards the scenes itself and Lightning leaves it alone. Streaming
-cannot be combined with frame sampling, a shuffling dataloader or `trainer.overfit_batches`, for
-which Lightning swaps the sampler of the training and validation loaders for a sequential one;
-shorten a streaming run with `limit_train_batches` / `limit_val_batches` instead. To keep the
-lanes aligned, an evaluation loader leaves out the last frame of the longer lanes, fewer frames
-than there are lanes. A prediction has to serve every frame, so a streaming prediction that would
-leave one out is refused; predict on one device with batch size 1.
+With `streaming` on, every dataloader draws from a `GroupStreamingSampler`, for temporal models that
+carry a memory across batches. Every epoch the sampler joins the scenes, the training split
+reshuffling their order from `seed`, the experiment seed, and cuts their frames, each scene in time
+order, into one lane per batch position of every rank; a cut can fall inside a scene, and the lane
+after it starts a new stream there. The sampler is a `DistributedSampler`, so it splits the lanes
+over the ranks itself and Lightning leaves it alone. Streaming cannot be combined with frame
+sampling, a shuffling dataloader or `trainer.overfit_batches`, for which Lightning swaps the sampler
+of the training and validation loaders for a sequential one; shorten a streaming run with
+`limit_train_batches` / `limit_val_batches` instead. To keep the lanes aligned, an evaluation loader
+leaves out the last frame of the longer lanes, fewer frames than there are lanes. A prediction has
+to serve every frame, so a streaming prediction that would leave one out is refused; predict on one
+device with batch size 1.
 
 ### Dataset
 

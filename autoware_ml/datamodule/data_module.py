@@ -100,11 +100,12 @@ class DataModule(L.LightningDataModule):
           predict_dataloader: Dataloader settings of the predict split.
           train_frame_sampling: Repeat factor sampling of the training split, None when its
             samples are drawn uniformly.
-          streaming: Whether every dataloader feeds each batch lane whole scenes, frame by
-            frame, for temporal models that carry a memory across batches. The training
-            split reshuffles the order of the scenes every epoch. The sampler shards the
-            scenes over the ranks itself and Lightning leaves it alone, being a
-            ``DistributedSampler``.
+          streaming: Whether every dataloader streams the frames of its scenes in time
+            order, for temporal models that carry a memory across batches. The sampler joins
+            the scenes, the training split reshuffling their order every epoch, and cuts
+            their frames into one lane per batch position of every rank; a cut can fall
+            inside a scene. The sampler splits the lanes over the ranks itself and Lightning
+            leaves it alone, being a ``DistributedSampler``.
           seed: Seed of the per-epoch scene shuffle of the streaming training split; pass
             the experiment seed so every run draws its own order.
 

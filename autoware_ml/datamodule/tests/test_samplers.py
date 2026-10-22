@@ -317,10 +317,9 @@ class _FakeScenesDataset:
 
 
 def test_lanes_stay_scene_contiguous_across_batches() -> None:
-    # Scenes 0-9, 10-14, 15-19; two lanes. Each scene goes to the currently
-    # shortest lane: lane0 gets scene 0, lane1 gets scenes 1 and 2, so both
-    # lanes hold 10 frames and batch position k always continues the same
-    # scene across consecutive batches.
+    # Scenes 0-9, 10-14, 15-19; two lanes. The joined 20 frames are cut in half: lane 0
+    # gets scene 0 and lane 1 scenes 1 and 2, so both lanes hold 10 frames and batch
+    # position k walks lane k frame by frame across consecutive batches.
     sampler = GroupStreamingSampler(
         _FakeScenesDataset([10, 5, 5]), batch_size=2, shuffle=False, seed=0
     )
@@ -346,7 +345,7 @@ def test_trimming_logs_a_warning(caplog: pytest.LogCaptureFixture) -> None:
     assert any("trimmed" in record.message for record in caplog.records)
 
 
-def test_ranks_agree_on_length_and_shard_disjoint_scenes() -> None:
+def test_ranks_agree_on_length_and_serve_disjoint_frames() -> None:
     dataset = _FakeScenesDataset([6, 6, 6, 6, 6, 6])
     rank_indices = []
     for rank in range(2):
@@ -358,7 +357,7 @@ def test_ranks_agree_on_length_and_shard_disjoint_scenes() -> None:
     assert not set(rank_indices[0]) & set(rank_indices[1])
 
 
-def test_shuffled_ranks_serve_the_same_fixed_length_and_disjoint_scenes() -> None:
+def test_shuffled_ranks_serve_the_same_fixed_length_and_disjoint_frames() -> None:
     """Two ranks, uneven scenes, shuffle on: both serve rounds_per_epoch rounds every epoch."""
     dataset = _FakeScenesDataset([7, 3, 5, 2, 9, 4, 6])
     samplers = []
