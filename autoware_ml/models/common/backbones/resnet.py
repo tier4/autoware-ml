@@ -32,9 +32,9 @@ class _ResNetStages(nn.Module):
     classifier, built on a temporary torchvision ResNet, are never registered on this module.
 
     The ``block`` type decides how each residual block is built and how wide every stage is.
-    Both blocks add their input back through a skip connection before the final ReLU, and
-    both downsample on the first block of a stage. ``width`` is the internal width torchvision
-    assigns to the stage, 64, 128, 256 and 512 for ``layer1`` to ``layer4``::
+    Both blocks add their input back through a skip connection before the final ReLU, and the
+    first block of ``layer2`` to ``layer4`` halves the resolution. ``width`` is the internal
+    width torchvision assigns to the stage, 64, 128, 256 and 512 for ``layer1`` to ``layer4``::
 
         BasicBlock (ResNet-18/34)              Bottleneck (ResNet-50/101/152)
         expansion = 1                          expansion = 4
