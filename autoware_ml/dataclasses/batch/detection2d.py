@@ -15,7 +15,11 @@ logger = logging.getLogger(__name__)
 
 
 class Detection2DGTSample(NamedTuple):
-    """2D boxes of one sample, one entry per camera, in the pixels of the served images.
+    """2D detection ground truth of one sample, one entry per camera.
+
+    The boxes can come from any source: projected from the 3D boxes of the sample, as
+    LoadAnnotations2DFromBoxes3D does, or annotated in 2D. Either way they are in pixels of the
+    images the sample serves, after every image-space augmentation.
 
     Attributes:
         gt_bboxes_2d: Boxes of every camera, one row per box laid out by Box2DFieldIndex:

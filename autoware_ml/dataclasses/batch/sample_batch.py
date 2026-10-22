@@ -60,7 +60,9 @@ class ModelGTSample(NamedTuple):
     # Assigned by the dataset once the pipeline has finished.
     io_processing_time: float = 0.0
 
-    # Per-camera 2D boxes projected from the 3D boxes, None when no transform derives them.
+    # 2D detection ground truth of every camera, from any source: boxes projected from the 3D
+    # boxes (LoadAnnotations2DFromBoxes3D) or boxes annotated in 2D. None when the sample
+    # carries none.
     detection2d_gt_sample: Detection2DGTSample | None = None
 
     def keep_points(self, keep_mask: Bool[Tensor, " num_points"]) -> ModelGTSample:
@@ -107,7 +109,8 @@ class ModelGTBatch(NamedTuple):
     # Per-frame evaluation metadata, None when the samples carry none.
     frame_meta_batch: FrameMetaBatch | None = None
 
-    # Per-camera 2D boxes, None when the samples carry none.
+    # 2D detection ground truth of every camera of every sample, None when the samples carry
+    # none.
     detection2d_gt_batch: Detection2DGTBatch | None = None
 
     def to_device(self, device: torch.device) -> ModelGTBatch:
