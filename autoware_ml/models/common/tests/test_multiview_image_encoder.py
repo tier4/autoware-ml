@@ -51,6 +51,14 @@ class _ProjectionNeck(nn.Module):
 
 
 def test_encodes_every_camera_and_keeps_the_first_neck_output() -> None:
+    """
+    Input: two samples of three 32 x 48 camera images, a two-scale backbone and a neck that
+    projects both maps to four channels.
+    Expected: every camera is encoded on its own, and its slot holds the first neck output of
+    exactly that image, the stride-4 primary feature.
+    Check: the shape is ``(2, 3, 4, 8, 12)``, and slot ``(1, 2)`` equals the first neck output
+    of that image encoded alone.
+    """
     torch.manual_seed(0)
     encoder = MultiviewImageEncoder(_TwoScaleBackbone(), _ProjectionNeck())
     images = torch.randn(2, 3, 3, 32, 48)
@@ -78,7 +86,13 @@ class _TupleNeck(nn.Module):
 
 
 def test_a_single_tensor_from_the_backbone_or_the_neck_is_accepted() -> None:
-    """Stub modules may return one map instead of a tuple; both forms give the same feature."""
+    """
+    Input: a bare convolution as the backbone, which returns one tensor, with a neck that
+    returns the first map as a bare tensor and with one that returns the maps as a tuple.
+    Expected: one tensor from the backbone reaches the neck as a one-map tuple, and a bare
+    tensor from the neck is the primary feature itself, so both forms give the same feature.
+    Check: compare the shape and the two features.
+    """
     torch.manual_seed(0)
     # A bare convolution returns one tensor, which reaches the neck as a one-map tuple.
     backbone = nn.Conv2d(3, 8, kernel_size=4, stride=4)
@@ -92,6 +106,12 @@ def test_a_single_tensor_from_the_backbone_or_the_neck_is_accepted() -> None:
 
 
 def test_rejects_a_batch_without_the_camera_axis() -> None:
+    """
+    Input: a ``(B, C, H, W)`` image batch without the camera axis.
+    Expected: the encoder folds the cameras into the batch and back, so it needs the
+    ``(B, N, C, H, W)`` layout and refuses another one instead of misreading the axes.
+    Check: a ValueError naming the expected layout is raised.
+    """
     encoder = MultiviewImageEncoder(_TwoScaleBackbone(), _ProjectionNeck())
 
     with pytest.raises(ValueError, match=r"\(B, N, C, H, W\)"):
@@ -99,6 +119,12 @@ def test_rejects_a_batch_without_the_camera_axis() -> None:
 
 
 def test_checkpoint_keys_name_the_backbone_and_the_neck() -> None:
+    """
+    Input: the state dict of an encoder.
+    Expected: the submodules keep the ``img_backbone`` and ``img_neck`` names, so the models
+    holding the encoder keep the checkpoint keys they had before it was shared.
+    Check: the top-level key prefixes are exactly ``img_backbone`` and ``img_neck``.
+    """
     encoder = MultiviewImageEncoder(_TwoScaleBackbone(), _ProjectionNeck())
 
     prefixes = {key.split(".")[0] for key in encoder.state_dict()}

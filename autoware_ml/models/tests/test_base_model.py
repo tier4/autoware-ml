@@ -105,6 +105,12 @@ def test_model_without_an_export_fails_loudly() -> None:
 
 
 def test_setup_accepts_a_streaming_datamodule_for_a_streaming_model() -> None:
+    """
+    Input: a streaming model set up with a datamodule whose ``streaming`` attribute is true.
+    Expected: a datamodule that says it streams serves scene-contiguous frames, which is all the
+    memory of the model needs.
+    Check: ``setup`` returns without raising.
+    """
     model = _StreamingModel()
     _attach_trainer(model, SimpleNamespace(streaming=True))
 
@@ -123,6 +129,15 @@ def test_setup_accepts_a_streaming_datamodule_for_a_streaming_model() -> None:
 def test_setup_rejects_a_streaming_model_without_a_streaming_datamodule(
     datamodule: object | None, found: str
 ) -> None:
+    """
+    Input: a streaming model set up with a datamodule that has no ``streaming`` attribute, as
+    the plain DataModule, with one whose attribute is false, and without a datamodule, as when
+    fitting on bare dataloaders.
+    Expected: none of them streams scene-contiguous frames, so the memory would carry over
+    between unrelated frames; ``setup`` refuses before any batch runs, and a missing attribute
+    counts as not streaming instead of failing the attribute lookup.
+    Check: a ValueError naming StreamingDataModule and what the trainer runs with is raised.
+    """
     model = _StreamingModel()
     _attach_trainer(model, datamodule)
 
@@ -131,6 +146,12 @@ def test_setup_rejects_a_streaming_model_without_a_streaming_datamodule(
 
 
 def test_setup_ignores_the_datamodule_for_a_model_without_memory() -> None:
+    """
+    Input: a model without memory set up without a datamodule.
+    Expected: only a model that sets ``requires_streaming`` needs a streaming datamodule, so the
+    check is skipped.
+    Check: ``setup`` returns without raising.
+    """
     model = _PointSumModel()
     _attach_trainer(model, None)
 

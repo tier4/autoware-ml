@@ -39,12 +39,16 @@ def _running_stats(backbone: torch.nn.Module) -> list[torch.Tensor]:
 
 
 def test_norm_eval_holds_through_a_lightning_fit_without_a_train_call() -> None:
-    """norm_eval must hold from construction on, not only after ``train()``.
-
-    Lightning 2.x never calls ``train()`` during fit: around validation it captures the
-    ``training`` flag of every module and restores the flags afterwards. A norm_eval applied
-    only by the ``train()`` override therefore never ran, and every BatchNorm layer updated
-    its statistics in the training steps.
+    """
+    Input: a VoVNet built with ``norm_eval``, put through the mode round trip of a validation
+    run inside a Lightning fit, a training forward and an explicit ``train()``.
+    Expected: ``norm_eval`` holds from construction on, not only after ``train()``:
+    Lightning 2.x never calls ``train()`` during fit, it captures the ``training`` flag of every
+    module around validation and restores the flags afterwards, so a ``norm_eval`` applied only
+    by the ``train()`` override never ran and every BatchNorm layer updated its statistics.
+    Check: the backbone trains while every BatchNorm layer stays in eval mode after
+    construction, after the round trip and after ``train()``, and the forward leaves the running
+    statistics unchanged.
     """
     backbone = VoVNet99MultiScale(norm_eval=True)
     norm_layers = _batch_norms(backbone)
@@ -74,6 +78,12 @@ def test_norm_eval_holds_through_a_lightning_fit_without_a_train_call() -> None:
 
 
 def test_batchnorm_updates_its_statistics_without_norm_eval() -> None:
+    """
+    Input: a VoVNet built without ``norm_eval`` and one training forward.
+    Expected: without ``norm_eval`` the BatchNorm layers train from construction on, so the
+    forward moves their running statistics.
+    Check: every BatchNorm layer is in training mode, and every running statistic changed.
+    """
     backbone = VoVNet99MultiScale(norm_eval=False)
     assert all(layer.training for layer in _batch_norms(backbone))
 
@@ -87,6 +97,14 @@ def test_batchnorm_updates_its_statistics_without_norm_eval() -> None:
 
 
 def test_frozen_stages_disable_gradients_from_construction() -> None:
+    """
+    Input: a VoVNet built with ``frozen_stages=1``, and one built with the defaults.
+    Expected: ``frozen_stages=1`` freezes the stem and stage2 from construction on, as the
+    reference does: their parameters take no gradient and they run in eval mode without a
+    ``train()`` call, while stage3 trains; nothing is frozen by default.
+    Check: read ``requires_grad`` of the stage parameters and the ``training`` flag of the
+    stages.
+    """
     # frozen_stages=1 freezes the stem and stage2, matching the reference.
     backbone = VoVNet99MultiScale(frozen_stages=1)
 

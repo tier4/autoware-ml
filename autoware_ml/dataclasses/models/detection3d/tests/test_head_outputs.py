@@ -334,7 +334,13 @@ class TestStreamPETRHeadOutputs(unittest.TestCase):
     """Unit tests for the StreamPETR query head outputs."""
 
     def test_holds_the_decoder_outputs_and_the_denoising_queries(self) -> None:
-        """Test that the per-layer predictions and the denoising queries are kept as given."""
+        """
+        Input: logits and boxes of two decoder layers, one sample and five queries, with
+        denoising outputs.
+        Expected: the outputs keep the predictions of every layer and the denoising queries as
+        given.
+        Check: read the box shape back and compare the denoising outputs by identity.
+        """
         denoising = build_streampetr_denoising()
         outputs = StreamPETRHeadOutputs(
             all_cls_scores=torch.zeros(2, 1, 5, 3),
@@ -346,7 +352,12 @@ class TestStreamPETRHeadOutputs(unittest.TestCase):
         self.assertIs(outputs.denoising, denoising)
 
     def test_layers_samples_and_queries_must_match(self) -> None:
-        """Test that logits and boxes describing different queries are rejected."""
+        """
+        Input: logits of five queries next to boxes of six.
+        Expected: logits and boxes that describe different queries cannot be decoded together,
+        so the outputs are rejected at construction.
+        Check: a ValidationError is raised.
+        """
         with self.assertRaises(ValidationError):
             StreamPETRHeadOutputs(
                 all_cls_scores=torch.zeros(2, 1, 5, 3),
@@ -355,7 +366,13 @@ class TestStreamPETRHeadOutputs(unittest.TestCase):
             )
 
     def test_box_code_size_is_enforced(self) -> None:
-        """Test that a box layout other than the ten regressed channels is rejected."""
+        """
+        Input: boxes of nine channels.
+        Expected: the head regresses ten channels per box,
+        ``[cx, cy, cz, log l, log w, log h, sin, cos, vx, vy]``, so any other layout is
+        rejected.
+        Check: a ValidationError is raised.
+        """
         with self.assertRaises(ValidationError):
             StreamPETRHeadOutputs(
                 all_cls_scores=torch.zeros(2, 1, 5, 3),
@@ -364,7 +381,12 @@ class TestStreamPETRHeadOutputs(unittest.TestCase):
             )
 
     def test_denoising_queries_must_share_the_layers_and_classes(self) -> None:
-        """Test that denoising queries of another decoder depth are rejected."""
+        """
+        Input: detection queries of three decoder layers next to denoising queries of two.
+        Expected: the denoising queries run through the same decoder as the detection queries,
+        so outputs of another depth are rejected.
+        Check: a ValidationError is raised.
+        """
         with self.assertRaises(ValidationError):
             StreamPETRHeadOutputs(
                 all_cls_scores=torch.zeros(3, 1, 5, 3),
@@ -415,7 +437,12 @@ class TestDetection3DHeadOutputs(unittest.TestCase):
         self.assertIsNone(transfusion_outputs.center_head_outputs)
 
     def test_rejects_no_head_outputs(self) -> None:
-        """Test that a wrapper carrying no head outputs is rejected, naming every head field."""
+        """
+        Input: a wrapper with no head outputs set.
+        Expected: exactly one head family produces the outputs, so an empty wrapper is rejected,
+        and the error names every head field, the StreamPETR one included.
+        Check: a ValidationError listing the three head fields and the empty set is raised.
+        """
         with self.assertRaisesRegex(
             ValidationError,
             "Exactly one of center_head_outputs, transfusion_head_outputs, "
@@ -432,7 +459,13 @@ class TestDetection3DHeadOutputs(unittest.TestCase):
             )
 
     def test_holds_streampetr_outputs_and_names_them_to_other_readers(self) -> None:
-        """Test that a StreamPETR output is read back and the other accessors name its family."""
+        """
+        Input: a wrapper holding StreamPETR outputs, and one holding CenterHead outputs.
+        Expected: the StreamPETR reader returns the outputs as given, and reading another head
+        family names the field that is set and the one requested.
+        Check: compare by identity, and match the ValueError of the TransFusion reader on the
+        StreamPETR outputs and of the StreamPETR reader on the CenterHead outputs.
+        """
         streampetr_head_outputs = StreamPETRHeadOutputs(
             all_cls_scores=torch.zeros(2, 1, 5, 3),
             all_bbox_preds=torch.zeros(2, 1, 5, 10),
@@ -451,7 +484,11 @@ class TestDetection3DHeadOutputs(unittest.TestCase):
             Detection3DHeadOutputs(center_head_outputs=self.center_head_outputs).streampetr_head()
 
     def test_rejects_streampetr_next_to_another_head_family(self) -> None:
-        """Test that StreamPETR outputs cannot share the wrapper with another head family."""
+        """
+        Input: a wrapper holding CenterHead and StreamPETR outputs together.
+        Expected: exactly one head family produces the outputs, so a second family is rejected.
+        Check: a ValidationError is raised.
+        """
         with self.assertRaises(ValidationError):
             Detection3DHeadOutputs(
                 center_head_outputs=self.center_head_outputs,

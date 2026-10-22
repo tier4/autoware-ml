@@ -221,6 +221,13 @@ def _run(model: StreamPETRDetection3DModel, batch_inputs: ModelBatchInputs):
 
 
 def test_streampetr_forward_returns_per_layer_decoder_outputs() -> None:
+    """
+    Input: two samples of six random camera images, each the first frame of its own scene.
+    Expected: the head returns the class logits and the boxes of every decoder layer for the 32
+    learnable queries and the 8 propagated from the temporal memory, ``(3, 2, 40, 3)`` and
+    ``(3, 2, 40, 10)`` with the three-layer test head.
+    Check: compare the shapes of the two head outputs.
+    """
     model = _build_model()
     outputs = _run(model, _build_batch_inputs(torch.randn(2, NUM_CAMS, 3, *IMAGE_HW)))
 
@@ -231,7 +238,16 @@ def test_streampetr_forward_returns_per_layer_decoder_outputs() -> None:
 
 
 def test_forward_reads_the_calibration_and_the_stream_metadata_of_the_batch() -> None:
-    """The lane memory follows the scene tokens and the poses the batch carries."""
+    """
+    Input: two frames of one lane in the same scene, 0.1 s apart at an epoch time of 1.7e9 s,
+    the second one at a pose 65 km from the map origin.
+    Expected: the lane memory follows the scene tokens, the times and the poses the batch
+    carries: the head remembers the scene token and the float64 time of the last frame, and the
+    bank is stored in the map frame, so the entry the second frame leads it with carries the
+    pose of that frame.
+    Check: read the remembered scene tokens and the dtype of the remembered times, and compare
+    the first bank pose with the pose of the second frame.
+    """
     model = _build_model().eval()
     head = model.bbox_head
     ego2global = torch.eye(4)
@@ -257,7 +273,13 @@ def test_forward_reads_the_calibration_and_the_stream_metadata_of_the_batch() ->
 
 
 def test_checkpoint_keys_keep_the_image_encoder_prefixes() -> None:
-    """Trained checkpoints and the AWML converter name the image weights by these prefixes."""
+    """
+    Input: the state dict of the test model.
+    Expected: every weight outside the head lives under ``image_feature_extractor.img_backbone``
+    or ``image_feature_extractor.img_neck``, the prefixes by which trained checkpoints and the
+    AWML converter name the image weights.
+    Check: the two-level prefixes of the keys outside ``bbox_head`` are exactly those two.
+    """
     keys = _build_model().state_dict()
 
     encoder_prefixes = {
@@ -271,12 +293,24 @@ def test_checkpoint_keys_keep_the_image_encoder_prefixes() -> None:
 
 
 def test_forward_rejects_a_batch_without_images_or_frame_meta() -> None:
+    """
+    Input: a batch that carries the images but no frame metadata.
+    Expected: without the scene and the time of every frame the memory cannot tell a continuing
+    stream from a new one, so the forward refuses the batch instead of guessing.
+    Check: a ValueError naming the images and the frame metadata is raised.
+    """
     model = _build_model()
     with pytest.raises(ValueError, match="images and the frame metadata"):
         model(build_batch_inputs(images=_build_images(torch.randn(1, NUM_CAMS, 3, *IMAGE_HW))))
 
 
 def test_ground_truth_drops_the_vertical_velocity() -> None:
+    """
+    Input: one collated ground truth box ``[x, y, z, l, w, h, yaw, vx, vy, vz]`` with label 1.
+    Expected: the head regresses ``[x, y, z, l, w, h, yaw, vx, vy]``, so the conversion drops
+    the vertical velocity, keeps the other fields in order and hands the labels over as int64.
+    Check: compare the converted box and read the dtype of the labels.
+    """
     gt_detections = build_detection3d_gt_batch(
         [_collated_box(1.0, 2.0, 0.5, 4.0, 2.0, 1.5, 0.2, 0.3, 0.4, 0.9)], [torch.tensor([1])]
     )
@@ -291,7 +325,14 @@ def test_ground_truth_drops_the_vertical_velocity() -> None:
 
 
 def test_training_step_runs_with_denoising_queries_and_predicts() -> None:
-    """One training step on a batch where only one sample carries boxes."""
+    """
+    Input: a training batch of two samples of which only the first carries a box.
+    Expected: the training step seeds the denoising queries with that box and returns a finite
+    loss that backpropagates, and the decode returns one typed prediction per sample, the
+    contract the metric suite consumes.
+    Check: the loss is finite, the outputs carry denoising queries, and the decode returns two
+    ``Detection3DSamplePredictions``.
+    """
     model = _build_model().train()
     model.log_dict = lambda *args, **kwargs: None
     batch_inputs = _build_batch_inputs(
@@ -319,6 +360,13 @@ def test_training_step_runs_with_denoising_queries_and_predicts() -> None:
 
 
 def test_build_eval_output_pairs_predictions_with_ground_truth() -> None:
+    """
+    Input: one eval frame with one ground truth box.
+    Expected: the eval output pairs the predictions of the frame with its ground truth boxes, in
+    the 10-wide collated layout, and with its scene token.
+    Check: count the predictions and read the shape of the ground truth boxes and the scene
+    tokens.
+    """
     model = _build_model().eval()
     batch_inputs = _build_batch_inputs(
         torch.randn(1, NUM_CAMS, 3, *IMAGE_HW),
@@ -335,6 +383,14 @@ def test_build_eval_output_pairs_predictions_with_ground_truth() -> None:
 
 
 def test_stream_continuity_follows_the_scene_and_the_time_of_every_lane() -> None:
+    """
+    Input: three lanes without a previous frame; then lane 0 later in its scene, lane 1 in
+    another scene and lane 2 back at an earlier time of its scene; then a batch of one lane.
+    Expected: only a lane that stays in its scene and moves forward in time continues its
+    stream; a lane without a previous frame, a scene change and a restart start a new one, and a
+    batch of another size cannot be matched lane by lane, so it starts anew.
+    Check: compare the ``prev_exists`` flags of the three calls.
+    """
     head = _build_model().bbox_head
 
     # No previous frame: every lane starts a stream.
@@ -350,7 +406,14 @@ def test_stream_continuity_follows_the_scene_and_the_time_of_every_lane() -> Non
 
 
 def test_streampetr_memory_resets_when_the_lane_changes_scene() -> None:
-    """A new scene drops the carried bank; only the frame's top-k survives."""
+    """
+    Input: two frames of one lane, the first in scene ``a`` and the second in scene ``b``.
+    Expected: the scene change starts a new stream, so the bank of the first frame is dropped
+    and only the top-k proposals of the second frame survive, at the front of the bank.
+    Check: the first frame filled the first top-k slots; after the second frame the slots behind
+    them, where the proposals of the first frame would have moved, are zero, the first top-k
+    slots are not, and the bank is finite.
+    """
     model = _build_model().eval()
     head = model.bbox_head
     topk = head.topk_proposals
@@ -412,16 +475,18 @@ def _exported_head_outputs(
 
 
 def test_exported_head_matches_eval_forward_on_a_propagated_frame() -> None:
-    """The deployed graphs must emit exactly what ``predict`` evaluates offline.
-
-    Runs one warm-up frame through the training-path forward so the memory
-    bank is populated, then feeds the resulting bank to the export wrapper as
-    its ``pre_memory_*`` inputs and to the head as a stream-continuous second
-    frame. Every prediction and every ``post_memory_*`` tensor has to agree
-    element-wise; any re-centering, dtype island or ordering difference between
-    the two code paths shows up here instead of on the vehicle. The frames sit
-    kilometers from the map origin with a yaw, so a swapped ``data_ego_pose``
-    and ``data_ego_pose_inv`` would show up too.
+    """
+    Input: a warm-up frame and a second frame of the same scene 0.5 s later, kilometers from the
+    map origin with a yaw; the bank the warm-up frame leaves goes both into the export wrapper,
+    as its ``pre_memory_*`` inputs, and into the head, which continues the stream.
+    Expected: the deployed graphs emit exactly what ``predict`` evaluates offline, so a
+    re-centering, a dtype island or an ordering difference between the two paths, or a swapped
+    ``data_ego_pose`` and ``data_ego_pose_inv``, shows up here instead of on the vehicle; only
+    the seven outputs the runtime binds leave the graph, with the predictions of the last
+    decoder layer.
+    Check: compare the output names and shapes, the last-layer predictions and the first
+    ``memory_len`` entries of every ``post_memory_*`` tensor with the eval forward, and that the
+    decoded centers are raw centers of the predicted boxes.
     """
     model = _build_model().eval()
     head = model.bbox_head
@@ -492,11 +557,15 @@ def test_exported_head_matches_eval_forward_on_a_propagated_frame() -> None:
 
 
 def test_exported_head_matches_eval_forward_on_the_first_frame_of_a_stream() -> None:
-    """A wiped (all-zero) bank, which the runtime must feed first, is the head's reset state.
-
-    The eval head seeds the first ``num_propagated`` entries of a fresh bank with the
-    pseudo reference points in the lidar frame; the graph has no ``prev_exists`` input and
-    must recognize the zero bank itself, otherwise its entries land at the map origin.
+    """
+    Input: the first frame of a stream, kilometers from the map origin, and the all-zero bank
+    the runtime must feed first.
+    Expected: the zero bank is the reset state of the head: the eval head seeds the first
+    ``num_propagated`` entries of a fresh bank with the pseudo reference points in the lidar
+    frame, and the graph, which has no ``prev_exists`` input, has to recognize the zero bank
+    itself, otherwise its entries land at the map origin.
+    Check: compare the last-layer boxes and the first ``memory_len`` post-memory reference
+    points of the graph with the eval forward.
     """
     model = _build_model().eval()
     head = model.bbox_head
@@ -523,11 +592,13 @@ def test_exported_head_matches_eval_forward_on_the_first_frame_of_a_stream() -> 
 
 
 def test_export_wrappers_are_built_in_eval_mode() -> None:
-    """The exporter restores the wrapper's mode onto the shared head after tracing.
-
-    A wrapper left in training mode would switch the decoder dropout on in the head for
-    every run after the export, so the export verification would compare the graph against
-    a stochastic reference.
+    """
+    Input: the export specs of an eval-mode model.
+    Expected: the exporter restores the mode of a wrapper onto the shared head after tracing, so
+    both wrappers are built in eval mode; one left in training mode would switch the decoder
+    dropout on for every run after the export, and the export verification would compare the
+    graph against a stochastic reference.
+    Check: neither wrapper nor its head is training, and both wrappers share one head.
     """
     model = _build_model().eval()
     batch_inputs = _build_batch_inputs(torch.randn(1, NUM_CAMS, 3, *IMAGE_HW))
@@ -542,6 +613,14 @@ def test_export_wrappers_are_built_in_eval_mode() -> None:
 
 
 def test_pseudo_reference_points_cover_the_whole_range_on_every_axis() -> None:
+    """
+    Input: the test head with 8 propagated queries, and a bare head with the 256 of the
+    production recipe.
+    Expected: the pseudo reference points are frozen, and the 256 are picked evenly from a
+    7 x 7 x 7 grid, so they reach both ends of every axis; the first 256 cells, which the
+    reference keeps, never reach x > 0.79.
+    Check: the shapes, the frozen flag, and a per-axis minimum below 0.1 and maximum above 0.9.
+    """
     points = _build_model().bbox_head.pseudo_reference_points
     assert points.shape == (8, 3)
     assert not points.requires_grad
@@ -557,6 +636,13 @@ def test_pseudo_reference_points_cover_the_whole_range_on_every_axis() -> None:
 
 
 def test_rejects_a_bank_too_small_for_the_propagated_entries() -> None:
+    """
+    Input: a bank of 4 entries for 8 propagated ones, and a top-k of 4 for 8 propagated ones.
+    Expected: the bank has to hold the propagated entries, and the top-k has to cover them
+    because they are the strongest proposals of the previous frame, so both heads are rejected
+    at construction.
+    Check: a ValueError naming ``memory_len`` and one naming ``topk_proposals`` are raised.
+    """
     with pytest.raises(ValueError, match="memory_len"):
         _build_head(memory_len=4, topk_proposals=8, num_propagated=8)
     with pytest.raises(ValueError, match="topk_proposals"):
@@ -564,10 +650,14 @@ def test_rejects_a_bank_too_small_for_the_propagated_entries() -> None:
 
 
 def test_rejects_a_top_k_larger_than_the_queries_of_a_frame() -> None:
-    """A frame has 32 + 8 queries; asking for more would shorten the bank the graph emits.
-
-    The runtime reads ``memory_len + topk_proposals`` post-bank entries without checking, so
-    a silently clipped top-k would make it read past the end of the graph's output.
+    """
+    Input: a top-k of 41 for a frame of 32 + 8 queries, and the largest accepted top-k, 40.
+    Expected: a larger top-k would shorten the bank the graph emits, and the runtime reads
+    ``memory_len + topk_proposals`` post-bank entries without checking, so a silently clipped
+    top-k would make it read past the end of the output; 41 is rejected at construction and 40
+    fills the bank exactly.
+    Check: a ValueError naming the 40 queries is raised, and every tensor ``push_memory``
+    returns at a top-k of 40 holds ``memory_len + 40`` entries.
     """
     with pytest.raises(ValueError, match="exceeds the 40 queries"):
         _build_head(memory_len=64, topk_proposals=41, num_propagated=8)
@@ -587,6 +677,13 @@ def test_rejects_a_top_k_larger_than_the_queries_of_a_frame() -> None:
 
 
 def test_every_token_carries_the_focal_length_of_its_own_camera() -> None:
+    """
+    Input: six cameras with focal lengths of 1000 to 6000 pixels and 3 x 5 feature maps.
+    Expected: the tokens are camera-major, so the cone of every token carries the focal lengths
+    of its own camera, in thousands of pixels; the reference tiles them camera-minor, which
+    gives most tokens the focal length of another camera.
+    Check: compare both focal channels of the cone with the focal lengths repeated per token.
+    """
     head = _build_model().bbox_head
     intrinsics = torch.eye(3).repeat(1, NUM_CAMS, 1, 1)
     focal_lengths = 1000.0 * torch.arange(1, NUM_CAMS + 1, dtype=torch.float32)
@@ -604,11 +701,16 @@ def test_every_token_carries_the_focal_length_of_its_own_camera() -> None:
 
 
 def test_position_embedding_and_export_see_the_intrinsics_of_the_augmented_images() -> None:
-    """The batch carries the raw intrinsics; the head and the graph need the augmented ones.
-
-    Regression test: with the raw intrinsics the cone focal input is off by the resize factor
-    (3.9x on the production recipe) and the exported ``intrinsics`` no longer match what the
+    """
+    Input: two samples of six cameras, resized, bottom-cropped and every other one flipped, with
+    random lidar-to-camera translations.
+    Expected: the batch carries the raw intrinsics, but the head and the graph need those of the
+    augmented images; with the raw ones the focal input of the cone is off by the resize factor
+    (3.9x on the production recipe), and the exported ``intrinsics`` no longer match what the
     runtime binds, which composes the resize into the intrinsics it hands the graph.
+    Check: the augmented intrinsics reproduce ``lidar2images`` and differ from the raw ones, a
+    spy on ``position_embedding`` sees them in the forward, and the export binds those of the
+    first sample, padded to 4 x 4.
     """
     model = _build_model().eval()
     head = model.bbox_head
@@ -657,6 +759,12 @@ def test_position_embedding_and_export_see_the_intrinsics_of_the_augmented_image
 
 
 def test_phase_hooks_start_new_streams() -> None:
+    """
+    Input: an eval model that ran one frame, then the start of a validation epoch.
+    Expected: the validation scenes start new streams, so the hook clears the bank and the
+    previous frame of every lane.
+    Check: the bank and the remembered scene tokens are None.
+    """
     model = _build_model().eval()
     with torch.no_grad():
         _run(model, _build_batch_inputs(torch.randn(1, NUM_CAMS, 3, *IMAGE_HW)))
@@ -669,10 +777,14 @@ def test_phase_hooks_start_new_streams() -> None:
 
 
 def test_phase_hooks_reset_the_metrics_before_starting_new_streams() -> None:
-    """Regression test: the stream hooks used to hide the metric reset of the eval mixin.
-
-    Without the reset, the detection metric accumulated across validation epochs and the
-    monitored mAP, hence the checkpoint selection, drifted with the history of the run.
+    """
+    Input: a model whose metric suite counts its resets, at the start of a validation and of a
+    test epoch.
+    Expected: the stream hooks keep the metric reset of the eval mixin; they used to hide it,
+    and the detection metric then accumulated across validation epochs, so the monitored mAP,
+    hence the checkpoint selection, drifted with the history of the run.
+    Check: the validation and the test suite were each reset once more, and the streams were
+    reset as well.
     """
     model = _build_model(metrics=[_ResetCountingSuite()])
     val_suite = model._stage_metrics(EvalStage.VAL)[0]
@@ -697,7 +809,13 @@ def test_phase_hooks_reset_the_metrics_before_starting_new_streams() -> None:
     ],
 )
 def test_every_phase_hook_runs_the_base_hook(hook: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The stream reset must not hide a base hook, as it once hid the metric reset."""
+    """
+    Input: each of the four epoch-start hooks, with the hook of the base model replaced by a
+    recorder.
+    Expected: the stream reset does not hide the base hook, as it once hid the metric reset, so
+    every hook calls the base hook once and starts new streams.
+    Check: the recorder saw exactly that hook, and the remembered scene tokens are None.
+    """
     calls: list[str] = []
     monkeypatch.setattr(ModuleBaseModel, hook, lambda self: calls.append(hook))
     model = _build_model()
@@ -709,6 +827,13 @@ def test_every_phase_hook_runs_the_base_hook(hook: str, monkeypatch: pytest.Monk
 
 
 def test_stream_continuity_breaks_over_a_long_gap() -> None:
+    """
+    Input: two lanes whose next frames come 0.5 s and 1.5 s after their previous ones, with a
+    longest stream gap of 1 s.
+    Expected: the lane whose gap exceeds the limit starts a new stream, and the other one
+    continues.
+    Check: compare the ``prev_exists`` flags of the second call.
+    """
     continuity = StreamContinuity(max_stream_gap=1.0)
     continuity(["a", "b"], torch.tensor([0.0, 0.0]))
 
@@ -716,6 +841,14 @@ def test_stream_continuity_breaks_over_a_long_gap() -> None:
 
 
 def test_loss_keys_and_graph_are_uniform_without_ground_truth() -> None:
+    """
+    Input: a training batch of one sample without any box.
+    Expected: every rank emits the same loss keys and reaches the same parameters whatever its
+    batch holds, so the denoising losses are present and every regression branch gets a gradient
+    even without ground truth.
+    Check: the two denoising loss keys exist, and after backward every parameter of the
+    regression branches has a gradient.
+    """
     model = _build_model().train()
     batch_inputs = _build_batch_inputs(
         torch.randn(1, NUM_CAMS, 3, *IMAGE_HW),
@@ -736,11 +869,14 @@ def test_loss_keys_and_graph_are_uniform_without_ground_truth() -> None:
 
 
 def test_memory_alignment_preserves_meter_motion_under_bf16_autocast() -> None:
-    """Kilometer-scale global poses must not lose meter-level ego motion.
-
-    Regression test: the memory alignment matrix products previously ran under
-    autocast, quantizing global-frame reference points (~6.5e4 m) to 256 m
-    bf16 steps and destroying the propagated queries.
+    """
+    Input: a bank entry stored at an ego origin 65 km from the map origin, aligned under bf16
+    autocast to the next frame, 2.5 m further along x.
+    Expected: kilometer-scale poses keep meter-level ego motion because the alignment runs in
+    float32 regardless of autocast; it used to run under autocast, which quantized the map-frame
+    reference points (about 6.5e4 m) to 256 m bf16 steps and destroyed the propagated queries.
+    Check: the bank stays float32, and the entry lands at (-2.5, 0, 0) in the new frame within
+    5 cm.
     """
     head = _build_model().bbox_head
     first_pose = torch.eye(4)
@@ -776,12 +912,15 @@ def cli_matmul_precision() -> Iterator[None]:
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="TF32 matmuls run on CUDA only")
 @pytest.mark.usefixtures("cli_matmul_precision")
 def test_memory_alignment_keeps_millimeters_under_the_cli_matmul_precision() -> None:
-    """The bank's geometry must not depend on the global float32 matmul precision.
-
-    Regression test: the CLI runtime calls ``torch.set_float32_matmul_precision("medium")``,
-    TF32 on CUDA, and at batch size 1 the bank's pose products ran as TF32 GEMMs, which left
-    16 m of error in the relative pose of every entry here, 65 km from the map origin. In IEEE
-    float32 a stored translation there resolves to 4 mm.
+    """
+    Input: on CUDA, under the ``"medium"`` float32 matmul precision the CLI runtime sets, two
+    consecutive rotated poses 65 km from the map origin, every query of the first frame
+    predicting the same center.
+    Expected: the geometry of the bank does not depend on the global matmul precision; at batch
+    size 1 the pose products used to run as TF32 GEMMs, which left 16 m of error in the relative
+    pose of every entry here, where IEEE float32 resolves a stored translation to 4 mm.
+    Check: the translations of the pushed poses and the pushed reference points are within 1 cm
+    of the float64 relative pose and center.
     """
     device = torch.device("cuda")
     head = _build_head().to(device).eval()
@@ -820,6 +959,12 @@ def test_memory_alignment_keeps_millimeters_under_the_cli_matmul_precision() -> 
 
 
 def test_forward_sanitizes_nan_poisoned_memory() -> None:
+    """
+    Input: the second frame of a stream whose bank holds four NaN embeddings.
+    Expected: the forward replaces non-finite post-normed queries like the reference does, so a
+    poisoned bank cannot turn the predictions into NaN.
+    Check: every class score and box of the outputs is finite.
+    """
     model = _build_model().eval()
     img = torch.randn(1, NUM_CAMS, 3, *IMAGE_HW)
 

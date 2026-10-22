@@ -101,7 +101,14 @@ class TestTemporalMemoryHelpers(unittest.TestCase):
         torch.testing.assert_close(moved, torch.tensor([[[11.0, -3.0, 3.5]]]))
 
     def test_compose_poses_is_the_matrix_product_broadcast_over_the_bank(self) -> None:
-        """One pose per sample composes with every pose of the sample's bank, ``lhs @ rhs``."""
+        """
+        Input: one random pose per sample of two samples, and a bank of five random poses per
+        sample.
+        Expected: the elementwise composition is the matrix product ``lhs @ rhs`` broadcast over
+        the bank, so it can replace the matmul that the float32 matmul precision setting would
+        round.
+        Check: compare the shape and the values with the float64 matrix product.
+        """
         generator = torch.Generator().manual_seed(0)
         lhs = torch.randn(2, 1, 4, 4, generator=generator)
         rhs = torch.randn(2, 5, 4, 4, generator=generator)
