@@ -376,13 +376,33 @@ class TestIterWarmupEpochCosineLR:
             self._build(total_steps=5, max_epochs=10)
 
     def test_trailing_steps_stay_at_the_last_epoch_factor(self) -> None:
-        # A trainer.max_steps cap leaves total_steps % max_epochs = 5 trailing steps:
-        # they must keep the last epoch's LR instead of dropping to the eta_min floor.
+        # total_steps = 105, as a trainer.max_steps cap can make it: ten stages of 10 steps
+        # and 5 trailing steps, which must keep the last stage's LR instead of dropping to
+        # the eta_min floor.
         optimizer, scheduler = self._build(total_steps=105)
         for _ in range(105):
             optimizer.step()
             scheduler.step()
         assert optimizer.param_groups[0]["lr"] == pytest.approx(self._cosine_factor(9, 10))
+
+    def test_a_max_steps_cap_runs_the_whole_cosine_inside_the_cap(self) -> None:
+        """
+        Input: total_steps = 300 and max_epochs = 10, as the framework fills them when
+        trainer.max_steps = 300 caps a run of ten 100-batch epochs.
+        Expected: a stage is total_steps // max_epochs = 30 steps rather than a data epoch,
+        so all ten stages of the cosine run inside the 300 capped steps.
+        Check: the learning rate changes every 30 steps and is at the last stage from step 270.
+        """
+        optimizer, scheduler = self._build(total_steps=300, warmup_iters=0)
+        lrs = []
+        for _ in range(300):
+            lrs.append(optimizer.param_groups[0]["lr"])
+            optimizer.step()
+            scheduler.step()
+
+        changes = [step for step in range(1, 300) if lrs[step] != lrs[step - 1]]
+        assert changes == list(range(30, 300, 30))
+        assert lrs[270] == pytest.approx(self._cosine_factor(9, 10))
 
     def test_resume_reproduces_the_original_trajectory(self) -> None:
         """A resumed scheduler must replay the original schedule.

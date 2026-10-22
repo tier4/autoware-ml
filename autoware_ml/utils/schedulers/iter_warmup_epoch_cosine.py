@@ -32,12 +32,22 @@ from torch.optim.lr_scheduler import LRScheduler
 class IterWarmupEpochCosineLR(LRScheduler):
     """Linear per-iteration warmup multiplied by per-epoch cosine annealing.
 
+    The cosine factor holds for a stage of ``total_steps // max_epochs`` optimization steps
+    (``steps_per_epoch``), ``max_epochs`` stages in all. A stage is one data epoch only when
+    ``trainer.max_steps`` does not cap the run. Under a cap, ``total_steps`` is the cap and
+    the whole cosine runs inside it, as a step-bounded ``OneCycleLR`` with
+    ``total_steps: ${trainer.max_steps}`` spans the run. For example, ``max_steps=300`` over
+    100-batch epochs with ``max_epochs=10`` changes the factor every 30 steps and reaches
+    the last stage in the third data epoch.
+
     Args:
         optimizer: Wrapped optimizer.
-        total_steps: Total optimization steps of the run (auto-filled by the
-            framework from ``trainer.estimated_stepping_batches``).
-        max_epochs: Total training epochs; bind it to the trainer in the config
-            (``max_epochs: ${trainer.max_epochs}``). Sets both the epoch length
+        total_steps: Total optimization steps of the run, auto-filled by the framework from
+            ``trainer.estimated_stepping_batches``: the steps of one data epoch times
+            ``trainer.max_epochs``, or ``trainer.max_steps`` when that is fewer.
+        max_epochs: Number of cosine stages; bind it to the trainer in the config
+            (``max_epochs: ${trainer.max_epochs}``) so that a stage is one data epoch when
+            ``trainer.max_steps`` does not cap the run. Sets both the stage length
             (``total_steps // max_epochs``) and the cosine period.
         warmup_iters: Length of the linear warmup in optimization steps.
         warmup_start_factor: Learning-rate factor at step 0.
@@ -81,9 +91,10 @@ class IterWarmupEpochCosineLR(LRScheduler):
         else:
             warmup_factor = 1.0
 
-        # The framework's total_steps is a multiple of max_epochs; a trainer.max_steps
-        # cap leaves total_steps % max_epochs trailing steps, which stay at the last
-        # epoch's factor rather than dropping to the eta_min floor.
+        # A stage lasts total_steps // max_epochs steps. A trainer.max_steps cap shortens
+        # every stage (see the class docstring) and can leave total_steps % max_epochs
+        # trailing steps, which keep the last stage's factor rather than dropping to the
+        # eta_min floor.
         epoch_index = min(step // self.steps_per_epoch, self.max_epochs - 1)
         cosine_factor = self.eta_min_factor + (1.0 - self.eta_min_factor) * 0.5 * (
             1.0 + math.cos(math.pi * epoch_index / self.max_epochs)
