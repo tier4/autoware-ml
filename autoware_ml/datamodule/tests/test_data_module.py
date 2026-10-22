@@ -19,6 +19,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from functools import partial
 from pathlib import Path
+import pickle
 import tempfile
 import unittest
 
@@ -30,7 +31,8 @@ from torch.utils.data.distributed import DistributedSampler
 from autoware_ml.databases.base_database import BaseDatabase
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.databases.taxonomy import DatabaseTaxonomy, Detection3DTaxonomy
-from autoware_ml.datamodule.base_dataset import ConcatDataset
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
+from autoware_ml.datamodule.base_dataset import ConcatDataset, PaddingSlot
 from autoware_ml.datamodule.data_module import DataLoaderConfig
 from autoware_ml.datamodule.data_module import DataModule
 from autoware_ml.datamodule.samplers import (
@@ -934,6 +936,50 @@ class TestSceneIndexGroups(StreamedCorpusTestCase):
 
         with self.assertRaisesRegex(ValueError, "sources"):
             dataset.scene_index_groups()
+
+
+class TestPaddingSlots(StreamedCorpusTestCase):
+    """The samples a dataset serves for the padding slots of streaming lanes."""
+
+    @staticmethod
+    def lidar_frame_path(sample: ModelGTSample) -> str:
+        """Point file of the frame a sample was loaded from."""
+        assert sample.lidar_point_cloud_samples is not None
+        return sample.lidar_point_cloud_samples[0].point_cloud_path
+
+    def test_a_padding_slot_serves_its_frame_flagged_as_padding(self) -> None:
+        """
+        Input: frame 3 and the padding slot holding it, read from the bound dataset and from a
+        split repeating the dataset twice, there at index 8 of the second copy.
+        Expected: a padding slot loads the frame it holds, so its tensors are real data, and
+        the dataset flags it as padding, while the frame itself stays unflagged.
+        Check: the flag and the point file of each sample.
+        """
+        dataset = build_dataset(self.streamed_database).bind(self.streamed_records)
+        split = ConcatDataset([dataset], repeats=[2])
+
+        for source, index in ((dataset, 3), (split, 8)):
+            with self.subTest(dataset=type(source).__name__):
+                frame = source[index]
+                padding = source[PaddingSlot(index)]
+
+                self.assertFalse(frame.is_padding)
+                self.assertTrue(padding.is_padding)
+                self.assertTrue(self.lidar_frame_path(frame).endswith("/3_0.pcd.bin"))
+                self.assertEqual(self.lidar_frame_path(padding), self.lidar_frame_path(frame))
+
+    def test_a_padding_slot_survives_pickling(self) -> None:
+        """
+        Input: a padding slot pickled and loaded again, as a dataloader sends its indices to
+        the worker processes.
+        Expected: the worker receives a padding slot of the same index, so it still flags the
+        sample it loads.
+        Check: the type and the value of the loaded index.
+        """
+        index = pickle.loads(pickle.dumps(PaddingSlot(7)))
+
+        self.assertIs(type(index), PaddingSlot)
+        self.assertEqual(index, 7)
 
 
 class TestStreamingDataModule(StreamedCorpusTestCase):

@@ -20,6 +20,23 @@ from autoware_ml.metrics.geometry.lanelet import LaneletMapProvider
 from autoware_ml.transforms.base import TransformsCompose
 
 
+class PaddingSlot(int):
+    """Sample index of a padding slot, holding the index of the frame the slot repeats.
+
+    The streaming sampler ends its shorter lanes with one, so every rank serves the same
+    number of batches. A dataset loads the frame behind the index as usual and flags the
+    sample ``is_padding``, so the slot carries real tensors that a model leaves out of its
+    loss and metrics. Being an ``int``, the index passes through the dataloader workers and
+    Lightning's batch index bookkeeping unchanged.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        """Show the index as a padding slot."""
+        return f"PaddingSlot({int(self)})"
+
+
 class BaseDataset(Dataset):
     """Dataset interface every database specific dataset implements.
 
@@ -171,15 +188,19 @@ class BaseDataset(Dataset):
         """Load and transform one dataset sample.
 
         Args:
-            index: Sample index.
+            index: Sample index, a ``PaddingSlot`` for a padding slot of a streaming lane.
 
         Returns:
-            Transformed ModelGTSample instance, stamped with its loading time.
+            Transformed ModelGTSample instance, stamped with its loading time and whether it
+            fills a padding slot.
         """
         start_time = time.perf_counter()
-        model_gt_sample = self.get_data_sample(index)
+        model_gt_sample = self.get_data_sample(int(index))
         transformed_gt_sample = self.apply_transforms(model_gt_sample)
-        return transformed_gt_sample._replace(io_processing_time=time.perf_counter() - start_time)
+        return transformed_gt_sample._replace(
+            io_processing_time=time.perf_counter() - start_time,
+            is_padding=isinstance(index, PaddingSlot),
+        )
 
     @abstractmethod
     def get_data_sample(self, index: int) -> ModelGTSample:
@@ -319,12 +340,14 @@ class ConcatDataset(Dataset):
         """Load and transform the sample behind one index of the split.
 
         Args:
-            index: Sample index.
+            index: Sample index, a ``PaddingSlot`` for a padding slot of a streaming lane.
 
         Returns:
-            Transformed ModelGTSample instance.
+            Transformed ModelGTSample instance, flagged as padding for a padding slot.
         """
         source_index, sample_index = self.locate(index)
+        if isinstance(index, PaddingSlot):
+            sample_index = PaddingSlot(sample_index)
         return self.datasets[source_index][sample_index]
 
     def collate_fn(self, batch: Sequence[ModelGTSample]) -> ModelGTBatch:
