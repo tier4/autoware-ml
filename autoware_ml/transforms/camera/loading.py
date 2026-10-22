@@ -52,10 +52,7 @@ class LoadImagesFromFile(BaseTransform):
 
         Args:
             color_type: Output color format, only rgb is supported now.
-            normalize_to_unit: Whether to divide pixel values by ``255``. The models, the
-                camera-lidar fusion and the ``BatchNormalizeImages`` mean / std read unit-range
-                pixels, so ``False`` only serves a pipeline that normalizes on its own: a
-                unit-range mean / std applied to ``[0, 255]`` pixels fails silently.
+            normalize_to_unit: Whether to divide pixel values by ``255``.
             shuffle_order: Whether to load the cameras of every sample in a random order, a
                 train-time regularization for models that do not depend on the camera order.
                 Every per-camera field, and the image samples, follow the drawn order.
