@@ -369,7 +369,7 @@ class GroupStreamingSampler(DistributedSampler):
             raise ValueError("GroupStreamingSampler requires at least one scene group.")
         self.batch_size = batch_size
         self._cached_epoch: int | None = None
-        self._cached_indices: list[list[int]] = []
+        self._cached_indices: Sequence[Sequence[int]] = ()
         self._trimming_warned = False
         self.total_frames = sum(len(group) for group in self.scene_groups)
 
@@ -383,48 +383,45 @@ class GroupStreamingSampler(DistributedSampler):
         """Rounds every rank serves per shuffled epoch, the ``DistributedSampler`` convention."""
         return math.ceil(self.total_frames / self.num_lanes)
 
-    def _scene_order(self, epoch: int) -> list[int]:
+    def _validate_lanes(self) -> None:
+        """Reject a split with fewer frames than lanes, which would leave a lane empty."""
+        if self.total_frames < self.num_lanes:
+            raise ValueError(
+                f"GroupStreamingSampler cannot fill {self.num_replicas} rank(s) x "
+                f"{self.batch_size} lane(s) from {self.total_frames} frame(s); "
+                "reduce batch_size or world size."
+            )
+
+    def _rounds(self) -> int:
+        """Rounds every rank serves per epoch: padded up when shuffling, trimmed otherwise."""
+        return self.rounds_per_epoch if self.shuffle else self.total_frames // self.num_lanes
+
+    def _scene_order(self, epoch: int) -> Sequence[int]:
         """Order the scenes for one epoch: as listed, or shuffled by the epoch's seed."""
         if not self.shuffle:
-            return list(range(len(self.scene_groups)))
+            return range(len(self.scene_groups))
         generator = torch.Generator()
         generator.manual_seed(self.seed + epoch)
         return torch.randperm(len(self.scene_groups), generator=generator).tolist()
 
-    def _lanes(self, scene_order: list[int]) -> list[list[int]]:
+    def _cut_lanes(self, scene_order: Sequence[int]) -> Sequence[Sequence[int]]:
         """Cut the joined frames of the epoch into ``num_lanes`` lanes of (almost) equal length."""
         frames = [index for scene_index in scene_order for index in self.scene_groups[scene_index]]
         bounds = [lane * len(frames) // self.num_lanes for lane in range(self.num_lanes + 1)]
         return [frames[start:end] for start, end in zip(bounds[:-1], bounds[1:])]
 
     @staticmethod
-    def _fit_lane(lane: list[int], rounds: int) -> list[int]:
+    def _fit_lane(lane: Sequence[int], rounds: int) -> Sequence[int]:
         """Cycle a lane back to its own start, or cut it, to exactly ``rounds`` frames."""
-        repeats = math.ceil(rounds / len(lane))
-        return (lane * repeats)[:rounds]
+        return [lane[round_index % len(lane)] for round_index in range(rounds)]
 
-    def _epoch_indices(self, epoch: int) -> list[list[int]]:
-        """Build (or reuse) the per-rank interleaved index lists for one epoch."""
-        if epoch == self._cached_epoch:
-            return self._cached_indices
-        lanes = self._lanes(self._scene_order(epoch))
-        if any(not lane for lane in lanes):
-            raise ValueError(
-                f"GroupStreamingSampler cannot fill {self.num_replicas} rank(s) x "
-                f"{self.batch_size} lane(s) from {self.total_frames} frame(s); "
-                "reduce batch_size or world size."
-            )
-        rounds = self.rounds_per_epoch if self.shuffle else self.total_frames // self.num_lanes
-        lanes = [self._fit_lane(lane, rounds) for lane in lanes]
+    def _rank_indices(self, lanes: Sequence[Sequence[int]], rank: int) -> Sequence[int]:
+        """Interleave the lanes of one rank round by round, one frame of every lane a round."""
+        rank_lanes = lanes[rank * self.batch_size : (rank + 1) * self.batch_size]
+        return [index for round_frames in zip(*rank_lanes) for index in round_frames]
 
-        self._cached_epoch = epoch
-        self._cached_indices = [
-            [lane[round_index] for round_index in range(rounds) for lane in rank_lanes]
-            for rank_lanes in (
-                lanes[rank * self.batch_size : (rank + 1) * self.batch_size]
-                for rank in range(self.num_replicas)
-            )
-        ]
+    def _log_epoch(self, epoch: int, rounds: int) -> None:
+        """Log the frames a training epoch repeats, or once, the frames evaluation trims."""
         served = rounds * self.num_lanes
         if self.shuffle:
             logger.info(
@@ -451,6 +448,20 @@ class GroupStreamingSampler(DistributedSampler):
                 self.batch_size,
                 self.total_frames - served,
             )
+
+    def _epoch_indices(self, epoch: int) -> Sequence[Sequence[int]]:
+        """Build, or reuse, the interleaved indices of every rank for one epoch."""
+        if epoch == self._cached_epoch:
+            return self._cached_indices
+        self._validate_lanes()
+        rounds = self._rounds()
+        lanes = self._cut_lanes(self._scene_order(epoch))
+        fitted_lanes = [self._fit_lane(lane, rounds) for lane in lanes]
+        self._cached_indices = [
+            self._rank_indices(fitted_lanes, rank) for rank in range(self.num_replicas)
+        ]
+        self._cached_epoch = epoch
+        self._log_epoch(epoch, rounds)
         return self._cached_indices
 
     def __iter__(self):

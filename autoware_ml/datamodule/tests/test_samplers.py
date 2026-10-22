@@ -400,11 +400,13 @@ def test_is_a_distributed_sampler_so_lightning_does_not_wrap_it() -> None:
     assert (sampler.num_replicas, sampler.rank) == (1, 0)
 
 
-def _ranks(dataset: _FakeScenesDataset, world_size: int, batch_size: int, shuffle: bool):
-    """The per-rank index lists of a ``world_size``-rank job, built as every rank would."""
+def _ranks(
+    dataset: _FakeScenesDataset, world_size: int, batch_size: int, shuffle: bool, seed: int = 0
+):
+    """The sampler of every rank of a ``world_size``-rank job, built as every rank would."""
     samplers = []
     for rank in range(world_size):
-        sampler = GroupStreamingSampler(dataset, batch_size=batch_size, shuffle=shuffle, seed=0)
+        sampler = GroupStreamingSampler(dataset, batch_size=batch_size, shuffle=shuffle, seed=seed)
         sampler.num_replicas = world_size
         sampler.rank = rank
         samplers.append(sampler)
@@ -516,3 +518,51 @@ class TestEvaluationTrimsInsteadOfPadding:
                 sampler.set_epoch(epoch)
                 list(sampler)
         assert sum("trimmed" in record.message for record in caplog.records) == 1
+
+
+# Indices of every rank over scenes of 5, 3, 4 and 2 frames:
+# (world_size, batch_size, shuffle, seed, epoch, indices of every rank).
+PINNED_EPOCHS = [
+    (1, 2, True, 0, 0, [[0, 7, 1, 12, 2, 13, 3, 8, 4, 9, 5, 10, 6, 11]]),
+    (2, 2, True, 0, 1, [[5, 12, 6, 13, 7, 8, 5, 9], [10, 1, 11, 2, 0, 3, 10, 4]]),
+    (3, 2, True, 7, 2, [[8, 10, 9, 11, 8, 10], [0, 3, 1, 4, 2, 3], [5, 7, 6, 12, 5, 13]]),
+    (
+        4,
+        3,
+        True,
+        1,
+        0,
+        [[5, 6, 7, 5, 6, 7], [12, 13, 8, 12, 13, 9], [10, 11, 0, 10, 11, 0], [1, 2, 3, 1, 2, 4]],
+    ),
+    (2, 2, False, 0, 0, [[0, 3, 1, 4, 2, 5], [7, 10, 8, 11, 9, 12]]),
+    (3, 1, False, 0, 3, [[0, 1, 2, 3], [4, 5, 6, 7], [9, 10, 11, 12]]),
+]
+
+
+@pytest.mark.parametrize(
+    ("world_size", "batch_size", "shuffle", "seed", "epoch", "expected"), PINNED_EPOCHS
+)
+def test_serves_the_pinned_indices_of_every_rank(
+    world_size: int,
+    batch_size: int,
+    shuffle: bool,
+    seed: int,
+    epoch: int,
+    expected: list[list[int]],
+) -> None:
+    """
+    Input: scenes of 5, 3, 4 and 2 frames served by several world sizes, lane counts, seeds
+    and epochs, shuffled for training and in order for evaluation.
+    Expected: every rank serves the pinned indices, its padded lanes restarting at their own
+    first frame and its trimmed lanes losing their last one, so a change to how the sampler
+    is built cannot silently change the order a run trains or evaluates on.
+    Check: compare the indices of every rank with the pinned lists.
+    """
+    samplers = _ranks(
+        _FakeScenesDataset([5, 3, 4, 2]), world_size, batch_size, shuffle=shuffle, seed=seed
+    )
+
+    for sampler in samplers:
+        sampler.set_epoch(epoch)
+
+    assert [list(sampler) for sampler in samplers] == expected
