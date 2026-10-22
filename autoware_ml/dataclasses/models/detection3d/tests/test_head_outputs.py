@@ -415,8 +415,12 @@ class TestDetection3DHeadOutputs(unittest.TestCase):
         self.assertIsNone(transfusion_outputs.center_head_outputs)
 
     def test_rejects_no_head_outputs(self) -> None:
-        """Test that a wrapper carrying no head outputs is rejected."""
-        with self.assertRaises(ValidationError):
+        """Test that a wrapper carrying no head outputs is rejected, naming every head field."""
+        with self.assertRaisesRegex(
+            ValidationError,
+            "Exactly one of center_head_outputs, transfusion_head_outputs, "
+            r"streampetr_head_outputs must be set, got \[\]",
+        ):
             Detection3DHeadOutputs(center_head_outputs=None, transfusion_head_outputs=None)
 
     def test_rejects_both_head_outputs(self) -> None:
@@ -437,9 +441,13 @@ class TestDetection3DHeadOutputs(unittest.TestCase):
         outputs = Detection3DHeadOutputs(streampetr_head_outputs=streampetr_head_outputs)
 
         self.assertIs(outputs.streampetr_head(), streampetr_head_outputs)
-        with self.assertRaisesRegex(ValueError, "StreamPETR"):
+        with self.assertRaisesRegex(
+            ValueError, "in streampetr_head_outputs, not in transfusion_head_outputs"
+        ):
             outputs.transfusion_head()
-        with self.assertRaisesRegex(ValueError, "CenterHead"):
+        with self.assertRaisesRegex(
+            ValueError, "in center_head_outputs, not in streampetr_head_outputs"
+        ):
             Detection3DHeadOutputs(center_head_outputs=self.center_head_outputs).streampetr_head()
 
     def test_rejects_streampetr_next_to_another_head_family(self) -> None:

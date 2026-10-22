@@ -25,7 +25,7 @@ from autoware_ml.models.detection3d.task_modules.match_costs import (
     ClassificationCost,
     IoU3DCost,
 )
-from autoware_ml.models.module_base_model import LogDictConfigs
+from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
 from autoware_ml.models.tests.batch_inputs_fixtures import (
     build_batch_inputs,
     build_detection3d_gt_batch,
@@ -687,8 +687,29 @@ def test_phase_hooks_reset_the_metrics_before_starting_new_streams() -> None:
     assert model.bbox_head.stream_continuity.scene_tokens is None
 
 
+@pytest.mark.parametrize(
+    "hook",
+    [
+        "on_train_epoch_start",
+        "on_validation_epoch_start",
+        "on_test_epoch_start",
+        "on_predict_epoch_start",
+    ],
+)
+def test_every_phase_hook_runs_the_base_hook(hook: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The stream reset must not hide a base hook, as it once hid the metric reset."""
+    calls: list[str] = []
+    monkeypatch.setattr(ModuleBaseModel, hook, lambda self: calls.append(hook))
+    model = _build_model()
+
+    getattr(model, hook)()
+
+    assert calls == [hook]
+    assert model.bbox_head.stream_continuity.scene_tokens is None
+
+
 def test_stream_continuity_breaks_over_a_long_gap() -> None:
-    continuity = StreamContinuity(max_time_gap=1.0)
+    continuity = StreamContinuity(max_stream_gap=1.0)
     continuity(["a", "b"], torch.tensor([0.0, 0.0]))
 
     assert continuity(["a", "b"], torch.tensor([0.5, 1.5])).tolist() == [1.0, 0.0]

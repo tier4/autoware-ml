@@ -153,9 +153,9 @@ class MyModel(ModuleBaseModel):
    `requires_streaming` class variable to `True`; `ModuleBaseModel.setup()` then refuses a
    trainer without a datamodule or with one that does not stream scene-contiguous frames
    (`datamodule.streaming`), and the `DataModule` itself refuses streaming combined with
-   `train_frame_sampling`. Models that override the epoch-start hooks
-   (`on_validation_epoch_start`, `on_test_epoch_start`) must call `super()`, which resets
-   the metric suites.
+   `train_frame_sampling`. Models that override an epoch-start hook (`on_train_epoch_start`,
+   `on_validation_epoch_start`, `on_test_epoch_start`, `on_predict_epoch_start`) call
+   `super()` first; the validation and test hooks of the base model reset the metric suites.
 
 ## Step 2: Choose the Data
 

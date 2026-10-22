@@ -158,8 +158,8 @@ class StreamPETRHead(nn.Module):
 
     The constructor exposes the knobs of the reference recipe (``LID``,
     ``with_ego_pos``, ``num_propagated``, ``with_dn``, the denoising noise) so a
-    config reads like the reference one; the shipped configs pin them to the
-    reference values.
+    config reads like the reference one; their defaults are the reference
+    values.
     """
 
     # The five-tensor temporal memory bank; ``None`` until the first frame.
@@ -315,7 +315,7 @@ class StreamPETRHead(nn.Module):
         )
         self.register_buffer("coords_d", self._build_depth_bins(), persistent=False)
         self._init_pseudo_reference_points()
-        self.stream_continuity = StreamContinuity(max_time_gap=max_stream_gap)
+        self.stream_continuity = StreamContinuity(max_stream_gap=max_stream_gap)
         self.reset_memory()
         self.init_weights()
 
@@ -821,8 +821,12 @@ class StreamPETRHead(nn.Module):
 
         Boxes are ``[cx, cy, cz, log_l, log_w, log_h, sin, cos, vx, vy]`` with
         metric centers: the regression space used by the losses and the
-        deployment interface alike. Sizes stay in log space so no exp/log
-        round trip can produce non-finite values.
+        deployment interface alike. The losses compare the sizes in log space,
+        but the matching goes through an exp / log round trip
+        (:func:`denormalize_boxes3d`, then the full-box cost encodes the boxes
+        again): a log size beyond the float32 range of exp gives an infinite
+        cost, which :meth:`HungarianAssigner3D.assign` bounds with
+        ``nan_to_num``, so the assignment stays valid.
         """
         reference = inverse_sigmoid(reference_points.clone())
         normalized_centers = (raw_box_params[..., :3] + reference[..., :3]).sigmoid()
@@ -1061,9 +1065,9 @@ class StreamPETRHead(nn.Module):
         """Predict StreamPETR query outputs from multiview image features.
 
         Every frame carries its stream metadata: the sample time (float64 seconds),
-        ``prev_exists`` of :meth:`stream_continuity`, and the lidar-to-global pose with its
-        inverse. ``gt_boxes`` are metric ``[cx, cy, cz, l, w, h, yaw, vx, vy]`` boxes that
-        seed the denoising queries in training.
+        ``prev_exists`` from :attr:`stream_continuity` (a callable :class:`StreamContinuity`),
+        and the lidar-to-global pose with its inverse. ``gt_boxes`` are metric
+        ``[cx, cy, cz, l, w, h, yaw, vx, vy]`` boxes that seed the denoising queries in training.
         """
         self.pre_update_memory(timestamp, prev_exists, ego_pose_inv)
 

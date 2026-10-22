@@ -239,6 +239,7 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
 
     def on_train_epoch_start(self) -> None:
         """Start new streams for the shuffled scenes of the epoch."""
+        super().on_train_epoch_start()
         self._start_streams()
 
     def on_validation_epoch_start(self) -> None:
@@ -253,6 +254,7 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
 
     def on_predict_epoch_start(self) -> None:
         """Start new streams for the predict scenes."""
+        super().on_predict_epoch_start()
         self._start_streams()
 
     def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:

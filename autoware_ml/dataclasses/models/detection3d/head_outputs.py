@@ -327,7 +327,7 @@ class Detection3DHeadOutputs(BaseModel):
             ValueError: If another head family produced the outputs.
         """
         if self.center_head_outputs is None:
-            raise ValueError(f"The detection outputs come from a {self._head_family()}.")
+            raise self._other_head_error("center_head_outputs")
         return self.center_head_outputs
 
     def transfusion_head(self) -> TransFusionHeadOutputs:
@@ -338,7 +338,7 @@ class Detection3DHeadOutputs(BaseModel):
             ValueError: If another head family produced the outputs.
         """
         if self.transfusion_head_outputs is None:
-            raise ValueError(f"The detection outputs come from a {self._head_family()}.")
+            raise self._other_head_error("transfusion_head_outputs")
         return self.transfusion_head_outputs
 
     def streampetr_head(self) -> StreamPETRHeadOutputs:
@@ -349,31 +349,27 @@ class Detection3DHeadOutputs(BaseModel):
             ValueError: If another head family produced the outputs.
         """
         if self.streampetr_head_outputs is None:
-            raise ValueError(f"The detection outputs come from a {self._head_family()}.")
+            raise self._other_head_error("streampetr_head_outputs")
         return self.streampetr_head_outputs
 
-    def _head_family(self) -> str:
-        """Name the head family that produced the outputs."""
-        if self.center_head_outputs is not None:
-            return "CenterHead"
-        if self.transfusion_head_outputs is not None:
-            return "TransFusion head"
-        if self.streampetr_head_outputs is not None:
-            return "StreamPETR head"
-        raise ValueError("No head family produced the detection outputs.")
+    def _set_head_fields(self) -> list[str]:
+        """Name the set fields; every field of the wrapper holds the outputs of one head family."""
+        return [name for name in type(self).model_fields if getattr(self, name) is not None]
+
+    def _other_head_error(self, requested: str) -> ValueError:
+        """Describe a read of ``requested`` when another head family produced the outputs."""
+        return ValueError(
+            f"The detection outputs are in {self._set_head_fields()[0]}, not in {requested}."
+        )
 
     @model_validator(mode="after")
     def _check_exactly_one_head(self) -> Detection3DHeadOutputs:
         """Check that exactly one head family produced the outputs."""
-        present = {
-            "center_head_outputs": self.center_head_outputs is not None,
-            "transfusion_head_outputs": self.transfusion_head_outputs is not None,
-            "streampetr_head_outputs": self.streampetr_head_outputs is not None,
-        }
-        if sum(present.values()) != 1:
+        set_fields = self._set_head_fields()
+        if len(set_fields) != 1:
             raise ValueError(
-                "Exactly one of center_head_outputs, transfusion_head_outputs and "
-                f"streampetr_head_outputs must be set, got {present}."
+                f"Exactly one of {', '.join(type(self).model_fields)} must be set, "
+                f"got {set_fields}."
             )
         return self
 
