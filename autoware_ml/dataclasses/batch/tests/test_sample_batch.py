@@ -206,11 +206,14 @@ class TestModelGTBatchDetection2DCollation(unittest.TestCase):
 
     def test_collates_and_moves_the_2d_boxes(self) -> None:
         batch = ModelGTBatch.collate_gt_samples(
-            [self._build_sample(2), self._build_sample(1)], max_num_3d_gt_bboxes=0
+            [self._build_sample(2), self._build_sample(1)],
+            max_num_3d_gt_bboxes=0,
+            max_num_2d_gt_bboxes=3,
         )
 
         assert batch.detection2d_gt_batch is not None
         self.assertEqual(batch.detection2d_gt_batch.gt_valid_bboxes_2d.tolist(), [[2], [1]])
+        self.assertEqual(batch.detection2d_gt_batch.gt_labels_2d.shape, (2, 1, 3))
         moved = batch.to_device(torch.device("cpu"))
         assert moved.detection2d_gt_batch is not None
         self.assertTrue(
@@ -229,7 +232,21 @@ class TestModelGTBatchDetection2DCollation(unittest.TestCase):
     def test_rejects_2d_boxes_on_only_some_samples(self) -> None:
         with self.assertRaisesRegex(ValueError, "detection2d_gt_sample"):
             ModelGTBatch.collate_gt_samples(
-                [self._build_sample(1), self._build_sample(None)], max_num_3d_gt_bboxes=0
+                [self._build_sample(1), self._build_sample(None)],
+                max_num_3d_gt_bboxes=0,
+                max_num_2d_gt_bboxes=3,
+            )
+
+    def test_rejects_2d_boxes_without_max_num_2d_gt_bboxes(self) -> None:
+        """
+        Input: samples carrying 2D boxes, collated without max_num_2d_gt_bboxes.
+        Expected: the 2D boxes are padded to a fixed size the dataset sets, as the 3D boxes
+        are, so a dataset serving 2D boxes without one is a configuration error.
+        Check: a ValueError naming max_num_2d_gt_bboxes is raised.
+        """
+        with self.assertRaisesRegex(ValueError, "max_num_2d_gt_bboxes"):
+            ModelGTBatch.collate_gt_samples(
+                [self._build_sample(2), self._build_sample(1)], max_num_3d_gt_bboxes=0
             )
 
 

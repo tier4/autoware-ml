@@ -320,19 +320,22 @@ class ModelGTBatch(NamedTuple):
 
     @staticmethod
     def collate_detection2d_gt_samples(
-        gt_samples: Sequence[ModelGTSample],
+        gt_samples: Sequence[ModelGTSample], max_num_2d_gt_bboxes: int | None
     ) -> Detection2DGTBatch | None:
         """
         Collate the per-camera 2D boxes of a sequence of ModelGTSample into a Detection2DGTBatch.
 
         Args:
           gt_samples: Sequence of ModelGTSample to be collated.
+          max_num_2d_gt_bboxes: Number of 2D boxes every camera of every sample is padded to.
+            Required when the samples carry 2D boxes.
 
         Returns:
           Detection2DGTBatch: Collated 2D boxes, None when no sample carries any.
 
         Raises:
-          ValueError: If only some of the samples carry 2D boxes.
+          ValueError: If only some of the samples carry 2D boxes, or the samples carry 2D boxes
+            without a padding size.
         """
         detection2d_gt_samples = [
             sample.detection2d_gt_sample
@@ -345,7 +348,14 @@ class ModelGTBatch(NamedTuple):
         if len(detection2d_gt_samples) != len(gt_samples):
             raise ValueError("All samples must have detection2d_gt_sample for collating.")
 
-        return Detection2DGTBatch.collate_gt_samples(detection2d_gt_samples)
+        if max_num_2d_gt_bboxes is None:
+            raise ValueError(
+                "The samples carry 2D boxes, so the dataset needs max_num_2d_gt_bboxes."
+            )
+
+        return Detection2DGTBatch.collate_gt_samples(
+            detection2d_gt_samples, max_num_2d_gt_bboxes=max_num_2d_gt_bboxes
+        )
 
     @staticmethod
     def collate_frame_meta_samples(gt_samples: Sequence[ModelGTSample]) -> FrameMetaBatch | None:
@@ -385,13 +395,19 @@ class ModelGTBatch(NamedTuple):
 
     @staticmethod
     def collate_gt_samples(
-        gt_samples: Sequence[ModelGTSample], max_num_3d_gt_bboxes: int | None
+        gt_samples: Sequence[ModelGTSample],
+        max_num_3d_gt_bboxes: int | None,
+        max_num_2d_gt_bboxes: int | None = None,
     ) -> ModelGTBatch:
         """
         Collate a sequence of ModelGTSample into a ModelGTBatch.
 
         Args:
           gt_samples: Sequence of ModelGTSample to be collated.
+          max_num_3d_gt_bboxes: Number of 3D boxes every sample is padded to. Required when the
+            samples carry 3D boxes.
+          max_num_2d_gt_bboxes: Number of 2D boxes every camera of every sample is padded to.
+            Required when the samples carry 2D boxes.
 
         Returns:
           ModelGTBatch: Collated multi-task GT batch.
@@ -416,7 +432,9 @@ class ModelGTBatch(NamedTuple):
         frame_meta_batch = ModelGTBatch.collate_frame_meta_samples(gt_samples=gt_samples)
 
         # Collate the per-camera 2D boxes
-        detection2d_gt_batch = ModelGTBatch.collate_detection2d_gt_samples(gt_samples=gt_samples)
+        detection2d_gt_batch = ModelGTBatch.collate_detection2d_gt_samples(
+            gt_samples=gt_samples, max_num_2d_gt_bboxes=max_num_2d_gt_bboxes
+        )
 
         return ModelGTBatch(
             point_cloud_gt_batch=point_cloud_gt_batch,
