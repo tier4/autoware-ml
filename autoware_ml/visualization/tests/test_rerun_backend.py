@@ -16,7 +16,12 @@
 
 from __future__ import annotations
 
+import json
+import socket
+import tempfile
+import urllib.request
 import warnings
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -120,14 +125,24 @@ def _build_fake_rerun(calls: dict[str, Any]) -> Any:
         def flush(*, blocking: bool) -> None:
             calls["flushes"].append(blocking)
 
+    class _Part(dict):
+        """A recorded blueprint part that also accepts attributes such as ``id``."""
+
+    class _FakeBlueprint(_Part):
+        """A recorded blueprint that can also be saved to a file."""
+
+        def save(self, application_id: str, path: str) -> None:
+            Path(path).write_bytes(f"blueprint:{application_id}".encode())
+            calls.setdefault("saved_blueprints", []).append((application_id, path, self))
+
     class _FakeBlueprintModule:
         @staticmethod
         def _part(kind: str, *args: Any, **kwargs: Any) -> dict[str, Any]:
-            return {"kind": kind, "args": args, **kwargs}
+            return _Part(kind=kind, args=args, **kwargs)
 
-        @classmethod
-        def Blueprint(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
-            return cls._part("Blueprint", *args, **kwargs)
+        @staticmethod
+        def Blueprint(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            return _FakeBlueprint(kind="Blueprint", args=args, **kwargs)
 
         @classmethod
         def Spatial3DView(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -453,66 +468,76 @@ def test_backend_compresses_images_for_remote_streaming(
     assert encoded[1]["image"] is image
 
 
+def _free_port() -> int:
+    """Return a TCP port that is free right now."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+def _multitask_scene_events() -> list[Any]:
+    """Return the events of one complete multitask frame with cameras and metrics."""
+    return [
+        PointCloud3DEvent(
+            path="scene/prediction/segmentation",
+            positions=np.zeros((2, 3), dtype=np.float32),
+        ),
+        PointCloud3DEvent(
+            path="scene/ground_truth/segmentation",
+            positions=np.zeros((2, 3), dtype=np.float32),
+        ),
+        PointCloud3DEvent(
+            path="scene/lidar/intensity",
+            positions=np.zeros((2, 3), dtype=np.float32),
+        ),
+        PointCloud3DEvent(
+            path="scene/prediction/entropy",
+            positions=np.zeros((2, 3), dtype=np.float32),
+        ),
+        PointCloud3DEvent(
+            path="scene/prediction/probability",
+            positions=np.zeros((2, 3), dtype=np.float32),
+        ),
+        PinholeEvent(
+            path="scene/cameras/front",
+            image_from_camera=np.eye(3, dtype=np.float32),
+            resolution=(64, 36),
+        ),
+        Points2DEvent(
+            path="scene/cameras/front/projected/ground_truth/segmentation",
+            positions=np.zeros((2, 2), np.float32),
+        ),
+        LineStrips2DEvent(
+            path="scene/cameras/front/projected/prediction/detections",
+            strips=[np.zeros((2, 2), np.float32)],
+        ),
+        Boxes3DEvent(
+            path="scene/prediction/detections",
+            centers=np.zeros((1, 3), dtype=np.float32),
+            sizes=np.ones((1, 3), dtype=np.float32),
+            yaws=np.zeros((1,), dtype=np.float32),
+        ),
+        Boxes3DEvent(
+            path="scene/ground_truth/detections",
+            centers=np.zeros((1, 3), dtype=np.float32),
+            sizes=np.ones((1, 3), dtype=np.float32),
+            yaws=np.zeros((1,), dtype=np.float32),
+        ),
+        ScalarEvent(path="scene/metrics/detection/precision", value=1.0),
+        ScalarEvent(path="scene/metrics/detection/recall", value=1.0),
+        ScalarEvent(path="scene/metrics/detection/mean_best_iou", value=1.0),
+        ScalarEvent(path="scene/metrics/detection/max_iou", value=1.0),
+        ScalarEvent(path="scene/metrics/detection/mean_matched_iou", value=1.0),
+        ScalarEvent(path="scene/metrics/detection/true_positives", value=20.0),
+        ScalarEvent(path="scene/metrics/detection/false_positives", value=12.0),
+        ScalarEvent(path="scene/metrics/detection/false_negatives", value=8.0),
+    ]
+
+
 def test_backend_builds_named_comparison_views_without_root_origins(
     backend: RerunVisualizationBackend, rerun_calls: dict[str, Any]
 ) -> None:
-    backend.log_events(
-        [
-            PointCloud3DEvent(
-                path="scene/prediction/segmentation",
-                positions=np.zeros((2, 3), dtype=np.float32),
-            ),
-            PointCloud3DEvent(
-                path="scene/ground_truth/segmentation",
-                positions=np.zeros((2, 3), dtype=np.float32),
-            ),
-            PointCloud3DEvent(
-                path="scene/lidar/intensity",
-                positions=np.zeros((2, 3), dtype=np.float32),
-            ),
-            PointCloud3DEvent(
-                path="scene/prediction/entropy",
-                positions=np.zeros((2, 3), dtype=np.float32),
-            ),
-            PointCloud3DEvent(
-                path="scene/prediction/probability",
-                positions=np.zeros((2, 3), dtype=np.float32),
-            ),
-            PinholeEvent(
-                path="scene/cameras/front",
-                image_from_camera=np.eye(3, dtype=np.float32),
-                resolution=(64, 36),
-            ),
-            Points2DEvent(
-                path="scene/cameras/front/projected/ground_truth/segmentation",
-                positions=np.zeros((2, 2), np.float32),
-            ),
-            LineStrips2DEvent(
-                path="scene/cameras/front/projected/prediction/detections",
-                strips=[np.zeros((2, 2), np.float32)],
-            ),
-            Boxes3DEvent(
-                path="scene/prediction/detections",
-                centers=np.zeros((1, 3), dtype=np.float32),
-                sizes=np.ones((1, 3), dtype=np.float32),
-                yaws=np.zeros((1,), dtype=np.float32),
-            ),
-            Boxes3DEvent(
-                path="scene/ground_truth/detections",
-                centers=np.zeros((1, 3), dtype=np.float32),
-                sizes=np.ones((1, 3), dtype=np.float32),
-                yaws=np.zeros((1,), dtype=np.float32),
-            ),
-            ScalarEvent(path="scene/metrics/detection/precision", value=1.0),
-            ScalarEvent(path="scene/metrics/detection/recall", value=1.0),
-            ScalarEvent(path="scene/metrics/detection/mean_best_iou", value=1.0),
-            ScalarEvent(path="scene/metrics/detection/max_iou", value=1.0),
-            ScalarEvent(path="scene/metrics/detection/mean_matched_iou", value=1.0),
-            ScalarEvent(path="scene/metrics/detection/true_positives", value=20.0),
-            ScalarEvent(path="scene/metrics/detection/false_positives", value=12.0),
-            ScalarEvent(path="scene/metrics/detection/false_negatives", value=8.0),
-        ]
-    )
+    backend.log_events(_multitask_scene_events())
 
     blueprint, options = rerun_calls["blueprints"][-1]
     serialized = repr(blueprint)
@@ -790,3 +815,98 @@ def test_installed_rerun_serializes_cursor_relative_time_ranges() -> None:
         )
 
     assert view is not None
+
+
+def _scene_view_ids(part: Any) -> list[Any]:
+    """Collect the ids of the 3D views nested in one recorded blueprint part."""
+    if not isinstance(part, dict):
+        return []
+    ids = [part.id] if part.get("kind") == "Spatial3DView" else []
+    for child in part.get("args", ()):
+        ids.extend(_scene_view_ids(child))
+    return ids
+
+
+def test_backend_publishes_synced_layouts_when_enabled(
+    rerun_calls: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(tempfile, "mkdtemp", lambda prefix: str(tmp_path))
+    sync_port = _free_port()
+    backend = RerunVisualizationBackend(
+        VisualizationSessionConfig(
+            web_port=9091,
+            grpc_port=9877,
+            wait=False,
+            sync_views=True,
+            sync_port=sync_port,
+        )
+    )
+    try:
+        backend.log_events(_multitask_scene_events())
+
+        saved = rerun_calls["saved_blueprints"]
+        names = sorted(Path(path).name for _, path, _ in saved)
+        assert names == sorted(
+            ["left-off.rbl.partial", "left-on.rbl.partial"]
+            + [
+                f"right-{key}-{state}.rbl.partial"
+                for key in ("gt", "intensity", "entropy", "probability")
+                for state in ("off", "on")
+            ]
+        )
+        assert sorted(path.name for path in tmp_path.iterdir()) == sorted(
+            name.removesuffix(".partial") for name in names
+        )
+        assert all(application_id == "autoware-ml" for application_id, _, _ in saved)
+
+        left_ids = {
+            view_id
+            for _, path, part in saved
+            if "left-" in path
+            for view_id in _scene_view_ids(part)
+        }
+        right_ids = {
+            view_id
+            for _, path, part in saved
+            if "right-" in path
+            for view_id in _scene_view_ids(part)
+        }
+        assert len(left_ids) == 1, "both camera states of the left side keep one view id"
+        assert len(right_ids) == 1, "every comparison of the right side keeps one view id"
+        assert left_ids != right_ids
+
+        # The streamed blueprint of the plain viewer page is unchanged.
+        assert len(rerun_calls["blueprints"]) == 1
+
+        with urllib.request.urlopen(f"http://127.0.0.1:{sync_port}/config.json") as response:
+            config = json.load(response)
+        assert config["version"] == 1
+        assert config["timeline"] == "frame"
+        assert config["grpc_port"] == 9877
+        assert config["camera_states"] == ["off", "on"]
+        assert config["initial_comparison"] == "gt"
+        assert config["initial_camera_state"] == "off"
+        assert [comparison["key"] for comparison in config["comparisons"]] == [
+            "gt",
+            "intensity",
+            "entropy",
+            "probability",
+        ]
+        assert config["left"] == {"off": "left-off.rbl", "on": "left-on.rbl"}
+        assert config["right"]["gt"] == {"off": "right-gt-off.rbl", "on": "right-gt-on.rbl"}
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{sync_port}/blueprints/right-gt-on.rbl?v=1"
+        ) as response:
+            assert response.read() == b"blueprint:autoware-ml"
+    finally:
+        assert backend._synced_server is not None
+        backend._synced_server.close()
+
+
+def test_backend_keeps_the_synced_page_off_by_default(
+    backend: RerunVisualizationBackend, rerun_calls: dict[str, Any]
+) -> None:
+    backend.log_events(_multitask_scene_events())
+
+    assert backend._synced_server is None
+    assert "saved_blueprints" not in rerun_calls

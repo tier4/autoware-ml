@@ -73,11 +73,21 @@ def test_create_visualization_backend_rejects_unknown_backends() -> None:
         {"timeline": ""},
         {"server_memory_limit": ""},
         {"point_color_mode": "rainbow"},
+        {"sync_views": True, "sync_port": 0},
+        {"sync_views": True, "sync_port": 9090},
+        {"sync_views": True, "grpc_port": 9091},
     ],
 )
 def test_session_config_rejects_invalid_values(kwargs: dict[str, Any]) -> None:
     with pytest.raises(ValueError):
         VisualizationSessionConfig(**kwargs)
+
+
+def test_session_config_ignores_the_sync_port_while_the_page_is_disabled() -> None:
+    config = VisualizationSessionConfig(sync_port=9090)
+
+    assert config.sync_views is False
+    assert config.sync_port == 9090
 
 
 def test_noop_backend_does_not_require_the_rerun_sdk(

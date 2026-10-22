@@ -17,9 +17,13 @@
 from __future__ import annotations
 
 import logging
+import os
+import tempfile
 import time
+import uuid
 from collections.abc import Iterable
 from importlib import import_module
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -48,7 +52,9 @@ from autoware_ml.visualization.events import (
 from autoware_ml.visualization.layouts import (
     build_calibration_blueprint,
     build_scene_blueprint,
+    build_synced_scene_layouts,
 )
+from autoware_ml.visualization.synced_viewer import SyncedViewerManifest, SyncedViewerServer
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +137,16 @@ def _verify_annotation_context_support(rerun_module: Any) -> None:
     )
 
 
+def _stable_view_id(identity: str) -> uuid.UUID:
+    """Derive the Rerun view id of a layout identity.
+
+    Rerun keys the per-view viewer state, including the eye of a 3D view, by
+    the view id. Deriving it from the identity lets re-published layouts keep
+    that state instead of resetting it with a fresh random id.
+    """
+    return uuid.uuid5(uuid.NAMESPACE_URL, f"autoware-ml/visualization/{identity}")
+
+
 def _yaw_to_quaternions(yaws: np.ndarray) -> np.ndarray:
     """Convert z-axis yaw angles to quaternions in xyzw order."""
     half_angles = yaws * 0.5
@@ -164,6 +180,8 @@ class _RerunVisualizationBackendBase:
         self._camera_paths: set[str] = set()
         self._scene_blueprint_signature: frozenset[str] = frozenset()
         self._explicit_blueprint_received = False
+        self.application_id = config.application_id
+        self._synced_server: SyncedViewerServer | None = None
 
     def wait_until_interrupted(self) -> None:
         """Return immediately because no viewer is served by default."""
@@ -362,14 +380,14 @@ class _RerunVisualizationBackendBase:
         if overrides:
             kwargs["overrides"] = overrides
         if layout.kind == "spatial3d":
-            return self.rr.blueprint.Spatial3DView(**kwargs)
-        if layout.kind == "spatial2d":
-            return self.rr.blueprint.Spatial2DView(**kwargs)
-        if layout.kind == "text_log":
-            return self.rr.blueprint.TextLogView(**kwargs)
-        if layout.kind == "text_document":
-            return self.rr.blueprint.TextDocumentView(**kwargs)
-        if layout.kind == "time_series":
+            view = self.rr.blueprint.Spatial3DView(**kwargs)
+        elif layout.kind == "spatial2d":
+            view = self.rr.blueprint.Spatial2DView(**kwargs)
+        elif layout.kind == "text_log":
+            view = self.rr.blueprint.TextLogView(**kwargs)
+        elif layout.kind == "text_document":
+            view = self.rr.blueprint.TextDocumentView(**kwargs)
+        elif layout.kind == "time_series":
             if layout.y_range is not None:
                 kwargs["axis_y"] = self.rr.blueprint.ScalarAxis(
                     range=layout.y_range,
@@ -384,8 +402,12 @@ class _RerunVisualizationBackendBase:
                         end=self.rr.blueprint.TimeRangeBoundary.cursor_relative(seq=end),
                     )
                 ]
-            return self.rr.blueprint.TimeSeriesView(**kwargs)
-        raise ValueError(f"Unknown view kind: {layout.kind}")
+            view = self.rr.blueprint.TimeSeriesView(**kwargs)
+        else:
+            raise ValueError(f"Unknown view kind: {layout.kind}")
+        if layout.identity is not None:
+            view.id = _stable_view_id(layout.identity)
+        return view
 
     def _send_blueprint(self, event: BlueprintEvent) -> None:
         """Translate and publish one backend-neutral blueprint request."""
@@ -440,6 +462,64 @@ class _RerunVisualizationBackendBase:
             return
         self._send_blueprint(blueprint)
         self._scene_blueprint_signature = signature
+        self._publish_synced_layouts(scene_paths)
+
+    def _publish_synced_layouts(self, scene_paths: frozenset[str]) -> None:
+        """Save the per-side blueprints of the synced comparison page."""
+        if self._synced_server is None:
+            return
+        layouts = build_synced_scene_layouts(
+            scene_paths,
+            self._camera_paths,
+            point_color_mode=self.point_color_mode,
+            camera_frustums_visible=self.camera_frustums_visible,
+            timeline=self.timeline,
+        )
+        if layouts is None:
+            return
+        left = {
+            state: self._save_synced_blueprint(f"left-{state}.rbl", layout)
+            for state, layout in layouts.left.items()
+        }
+        right = {
+            key: {
+                state: self._save_synced_blueprint(f"right-{key}-{state}.rbl", layout)
+                for state, layout in states.items()
+            }
+            for key, states in layouts.right.items()
+        }
+        version = self._synced_server.publish(
+            SyncedViewerManifest(
+                comparisons=tuple(
+                    {"key": comparison.key, "label": comparison.label}
+                    for comparison in layouts.comparisons
+                ),
+                camera_states=layouts.camera_states,
+                initial_comparison=layouts.initial_comparison,
+                initial_camera_state=layouts.initial_camera_state,
+                left=left,
+                right=right,
+            )
+        )
+        logger.info("Synced comparison layouts published (version %s)", version)
+
+    def _save_synced_blueprint(self, file_name: str, layout: ViewSpec | LayoutGroup) -> str:
+        """Write one side layout as a blueprint file and return its file name."""
+        assert self._synced_server is not None
+        blueprint = self.rr.blueprint.Blueprint(
+            self._convert_layout(layout),
+            self.rr.blueprint.BlueprintPanel(expanded=False),
+            self.rr.blueprint.SelectionPanel(expanded=False),
+            self.rr.blueprint.TimePanel(expanded=False),
+            auto_views=False,
+            auto_layout=False,
+        )
+        path = self._synced_server.blueprint_dir / file_name
+        partial = path.with_name(path.name + ".partial")
+        blueprint.save(self.application_id, str(partial))
+        # The page may fetch a file while it is being rewritten.
+        os.replace(partial, path)
+        return file_name
 
     def log_events(self, events: Iterable[VisualizationEvent]) -> None:
         """Log multiple visualization events."""
@@ -474,6 +554,16 @@ class RerunVisualizationBackend(_RerunVisualizationBackendBase):
         )
         self.wait = config.wait
         logger.info("Rerun web viewer: %s", self.web_url)
+        if config.sync_views:
+            self._synced_server = SyncedViewerServer(
+                port=config.sync_port,
+                web_port=config.web_port,
+                grpc_port=config.grpc_port,
+                timeline=config.timeline,
+                blueprint_dir=Path(tempfile.mkdtemp(prefix="autoware-ml-synced-viewer-")),
+            )
+            self._synced_server.start()
+            logger.info("Synced comparison page: %s", self._synced_server.url)
 
     def wait_until_interrupted(self) -> None:
         """Flush all logged data, then keep the web viewer alive if requested."""

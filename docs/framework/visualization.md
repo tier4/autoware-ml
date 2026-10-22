@@ -179,6 +179,49 @@ without the shared extent the GT and prediction views would start from slightly
 different eyes whenever only one of them shows a box that sticks out of the
 point cloud.
 
+### Synced comparison page
+
+Rerun keeps one eye per 3D view and offers no way to link two views, so the
+prediction and comparison views of the layout above drift apart as soon as one
+of them is rotated. `--sync-views` therefore serves a second page, by default
+on port `9091`, that keeps both sides on one eye:
+
+- The page embeds two complete Rerun web viewers in two same-origin frames,
+  served through `visualization/synced_viewer.py`, which proxies the viewer
+  bundle from the Rerun web server and exposes the viewer handle on its page.
+  Both frames connect to the same gRPC stream as the regular page.
+- `build_synced_scene_layouts` derives one full-size scene view per side and
+  variant from the same entity paths as the regular layout: the prediction on
+  the left, and GT, intensity, entropy, or probability on the right, each with
+  camera projections off or on. The backend saves every variant as a blueprint
+  file and publishes a manifest; the page loads the selected variant into each
+  frame through the viewer handle.
+- All variants of a side share one `ViewSpec.identity`, which the Rerun backend
+  turns into a stable view id. Rerun keys the viewer state, including the eye,
+  by that id, so switching the comparison or the camera projections keeps the
+  current viewpoint instead of resetting it.
+- The page mirrors pointer, wheel, and keyboard events from either frame into
+  the other. Because both sides have the same structure, the same statistics
+  row, and the same shared extent, identical input produces identical eyes.
+- The page hides the viewer panels and drives the frame cursor and playback of
+  both viewers from its own toolbar. The viewer's graphics switches, such as
+  `?renderer=webgl`, are passed from the page address to both embedded viewers.
+- A poll follows the viewers so that scrubbing inside one of them moves the
+  page too. Because `set_time_for_timeline` is applied asynchronously, the poll
+  that follows a write still reports the previous frame, so the page keeps a
+  short grace period after every write and additionally requires both viewers
+  to report the same new frame on two consecutive polls before it follows them.
+  Without that, a manual step read its own stale frame back and jumped forward
+  again. Stepping by hand also pauses playback, so a viewer that is still
+  following an incoming recording cannot pull the timeline along.
+
+Selection and double-click focus act on whatever entity is under the cursor on
+each side, so they are the one interaction that can differ between the sides;
+the toolbar's **Reload layout** button reapplies the layouts, and the time
+controls resynchronize the frame cursor. The page depends on the line of the
+Rerun 0.23.1 viewer page that creates the viewer handle; the proxy fails with
+HTTP 502 and a log message if a different viewer bundle no longer contains it.
+
 ### Detection 3D
 
 The detection adapter can log:
@@ -195,12 +238,22 @@ The detection adapter can log:
   matched-IoU scalars
 - threshold-independent mean-best-GT and frame-maximum IoU scalars, so near
   misses remain visible even when no prediction reaches the matching threshold
+- predicted and ground-truth boxes projected onto every camera image as
+  class-colored wireframes, with edges behind the image plane dropped
 
 Detection and segmentation use sibling `scene/prediction` and
 `scene/ground_truth` entities. A frame with no detection annotations remains a
 segmentation-only preview; no synthetic detection objects are created.
 
 ### Camera and timing behavior
+
+Cameras are read from the untransformed sample of the dataset, whose
+`image_samples` list the image file and the calibration of every camera of the
+record at the sample time. Availability is therefore a property of the record
+table, not of the task: the segmentation and detection adapters project their
+own layers onto every camera in both data and prediction mode, segmentation as
+class-colored points and detection as box wireframes, each for ground truth and
+prediction.
 
 Each available camera is logged as a transform, pinhole calibration, and image.
 The Rerun blueprint places the camera frustums in the same 3D scene as the

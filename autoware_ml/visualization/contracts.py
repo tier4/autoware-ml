@@ -37,16 +37,22 @@ class VisualizationSessionConfig:
     timeline: str = "frame"
     point_color_mode: Literal["semantic", "intensity", "solid"] = "semantic"
     camera_frustums_visible: bool = False
+    #: Serve the synced comparison page, which keeps two 3D views on one eye.
+    sync_views: bool = False
+    sync_port: int = 9091
 
     def __post_init__(self) -> None:
         """Reject invalid backend settings before any server is started."""
         if self.backend not in {"rerun", "noop"}:
             raise ValueError(f"Unknown visualization backend: {self.backend}")
-        for name, port in (("web_port", self.web_port), ("grpc_port", self.grpc_port)):
+        ports = [("web_port", self.web_port), ("grpc_port", self.grpc_port)]
+        if self.sync_views:
+            ports.append(("sync_port", self.sync_port))
+        for name, port in ports:
             if not 1 <= port <= 65535:
                 raise ValueError(f"{name} must be between 1 and 65535")
-        if self.web_port == self.grpc_port:
-            raise ValueError("web_port and grpc_port must be different")
+        if len({port for _, port in ports}) != len(ports):
+            raise ValueError("web_port, grpc_port, and sync_port must be different")
         if not self.application_id.strip():
             raise ValueError("application_id must not be empty")
         if not self.timeline.strip():

@@ -22,6 +22,7 @@ does not require importing or modifying a backend SDK integration.
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass, replace
 
 from autoware_ml.visualization.events import (
     BlueprintEvent,
@@ -36,6 +37,10 @@ from autoware_ml.visualization.events import (
 #: Invisible corner points spanning every drawn entity of a frame, shared by
 #: all scene views so they fit the same initial eye.
 SCENE_EXTENT_PATH = "scene/meta/extent"
+#: Stable identities of the two 3D views of the synced comparison page. Every
+#: variant of a side reuses its identity, so switching variants keeps the eye.
+SYNCED_LEFT_IDENTITY = "synced/left"
+SYNCED_RIGHT_IDENTITY = "synced/right"
 
 _DETECTION_METRIC_LABELS = {
     "precision": "Precision",
@@ -281,6 +286,31 @@ def _detection_statistics_views(observed_paths: set[str], timeline: str) -> list
     return views
 
 
+@dataclass(frozen=True)
+class SyncedComparison:
+    """Describe one selectable comparison of the synced page."""
+
+    key: str
+    label: str
+
+
+@dataclass(frozen=True)
+class SyncedSceneLayouts:
+    """Per-side layouts of the synced comparison page.
+
+    ``left`` maps a camera state to the prediction layout and ``right`` maps a
+    comparison key and a camera state to the comparison layout. Both sides have
+    the same structure, so mirrored input lands on the same regions.
+    """
+
+    left: dict[str, ViewSpec | LayoutGroup]
+    right: dict[str, dict[str, ViewSpec | LayoutGroup]]
+    comparisons: tuple[SyncedComparison, ...]
+    camera_states: tuple[str, ...]
+    initial_comparison: str
+    initial_camera_state: str
+
+
 def _scene_task_name(observed_paths: set[str]) -> str:
     """Infer the display name of the task represented by one scene."""
     has_segmentation = any(path.endswith("/segmentation") for path in observed_paths)
@@ -457,6 +487,152 @@ def _task_comparison(
         ),
         name=f"{task_name} comparison",
         shares=(2.0, 1.0),
+    )
+
+
+def _scene_comparisons(
+    observed_paths: set[str], task_name: str
+) -> list[tuple[SyncedComparison, str | None, str | None]]:
+    """List the selectable comparisons with their point and detection paths."""
+    ground_truth_points = (
+        "scene/ground_truth/segmentation"
+        if "scene/ground_truth/segmentation" in observed_paths
+        else "scene/lidar/solid"
+    )
+    comparisons: list[tuple[SyncedComparison, str | None, str | None]] = []
+    if any(
+        path in observed_paths
+        for path in ("scene/ground_truth/segmentation", "scene/ground_truth/detections")
+    ):
+        comparisons.append(
+            (
+                SyncedComparison("gt", f"GT · {task_name}"),
+                ground_truth_points,
+                "scene/ground_truth/detections",
+            )
+        )
+    if "scene/lidar/intensity" in observed_paths:
+        comparisons.append(
+            (SyncedComparison("intensity", "Intensity"), "scene/lidar/intensity", None)
+        )
+    if "scene/prediction/entropy" in observed_paths:
+        comparisons.append(
+            (SyncedComparison("entropy", "Normalized entropy"), "scene/prediction/entropy", None)
+        )
+    if "scene/prediction/probability" in observed_paths:
+        comparisons.append(
+            (SyncedComparison("probability", "Probability"), "scene/prediction/probability", None)
+        )
+    return comparisons
+
+
+def build_synced_scene_layouts(
+    observed_paths: Iterable[str],
+    camera_paths: Iterable[str],
+    *,
+    point_color_mode: str,
+    camera_frustums_visible: bool,
+    timeline: str,
+) -> SyncedSceneLayouts | None:
+    """Build the per-side layouts of the synced comparison page.
+
+    The page shows the prediction on the left and one selectable comparison on
+    the right in two separate viewers whose eyes it keeps aligned. Each side
+    therefore gets one full-size scene view per variant instead of the tabbed
+    comparison of :func:`build_scene_blueprint`. All variants of a side share
+    one view identity so that switching the comparison or the camera state does
+    not reset the eye.
+    """
+    paths = set(observed_paths)
+    cameras = sorted(camera_paths)
+    scene_paths = {path for path in paths if path == "scene" or path.startswith("scene/")}
+    if not any(path.endswith(("/segmentation", "/detections")) for path in scene_paths):
+        return None
+    task_name = _scene_task_name(scene_paths)
+    comparisons = _scene_comparisons(paths, task_name)
+    prediction_available = any(
+        path in paths for path in ("scene/prediction/segmentation", "scene/prediction/detections")
+    )
+    if prediction_available:
+        left_name = f"Prediction · {task_name}"
+        left_points = (
+            "scene/prediction/segmentation"
+            if "scene/prediction/segmentation" in paths
+            else "scene/lidar/solid"
+        )
+        left_detections = "scene/prediction/detections"
+    else:
+        # A data preview has no prediction, so the ground truth anchors the
+        # left side and leaves the selectable comparisons to the other variants.
+        ground_truth = [item for item in comparisons if item[0].key == "gt"]
+        if not ground_truth:
+            return None
+        _, left_points, left_detections = ground_truth[0]
+        left_name = f"GT · {task_name}"
+        comparisons = [item for item in comparisons if item[0].key != "gt"]
+    if not comparisons:
+        return None
+    camera_states = ("off", "on") if cameras else ("off",)
+    statistics = _statistics_views(paths, timeline)
+
+    def side_layout(view: ViewSpec, identity: str) -> ViewSpec | LayoutGroup:
+        view = replace(view, identity=identity)
+        if not statistics:
+            return view
+        plots = tuple(
+            replace(plot, identity=f"{identity}/statistics/{index}")
+            for index, plot in enumerate(statistics)
+        )
+        return LayoutGroup(
+            kind="vertical",
+            children=(
+                view,
+                LayoutGroup(kind="horizontal", children=plots, name="Statistics"),
+            ),
+            name=view.name,
+            shares=(2.0, 1.0),
+        )
+
+    left = {
+        state: side_layout(
+            _scene_view(
+                paths,
+                cameras,
+                name=left_name,
+                point_path=left_points,
+                detection_path=left_detections,
+                camera_frustums_visible=state == "on",
+            ),
+            SYNCED_LEFT_IDENTITY,
+        )
+        for state in camera_states
+    }
+    right = {
+        comparison.key: {
+            state: side_layout(
+                _scene_view(
+                    paths,
+                    cameras,
+                    name=comparison.label,
+                    point_path=point_path,
+                    detection_path=detection_path,
+                    camera_frustums_visible=state == "on",
+                ),
+                SYNCED_RIGHT_IDENTITY,
+            )
+            for state in camera_states
+        }
+        for comparison, point_path, detection_path in comparisons
+    }
+    keys = [comparison.key for comparison, _, _ in comparisons]
+    preferred = "intensity" if point_color_mode == "intensity" else "gt"
+    return SyncedSceneLayouts(
+        left=left,
+        right=right,
+        comparisons=tuple(comparison for comparison, _, _ in comparisons),
+        camera_states=camera_states,
+        initial_comparison=preferred if preferred in keys else keys[0],
+        initial_camera_state="on" if cameras and camera_frustums_visible else "off",
     )
 
 

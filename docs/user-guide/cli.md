@@ -165,6 +165,8 @@ autoware-ml visualize \
     [--web-port PORT] \
     [--grpc-port PORT] \
     [--wait/--no-wait] \
+    [--sync-views/--no-sync-views] \
+    [--sync-port PORT] \
     [hydra_overrides...]
 ```
 
@@ -188,6 +190,8 @@ autoware-ml visualize \
 - `--grpc-port`: Rerun SDK gRPC port used by the web viewer proxy (default: `9876`)
 - `--wait` / `--no-wait`: Keep the Rerun web server alive after logging (default: `--wait`)
 - `--recording-id`: Optional explicit recording ID
+- `--sync-views` / `--no-sync-views`: Also serve the synced comparison page, which shows the prediction and one selectable comparison in two viewers that share one eye: rotating, panning, zooming, or flying in either side moves both (default: `--no-sync-views`)
+- `--sync-port`: HTTP port of the synced comparison page (default: `9091`)
 
 Backend modes:
 
@@ -201,16 +205,29 @@ Class names come from the taxonomy of the database; set
 `+visualization.segmentation3d_class_names=[...]` or
 `+visualization.detection3d_class_names=[...]` to override them.
 
+The 3D views of the regular Rerun page each keep their own eye. To compare the
+prediction with GT, intensity, entropy, or probability from exactly the same
+viewpoint, add `--sync-views` and open `http://localhost:<sync-port>/`. The
+page embeds two viewers side by side, mirrors the mouse and keyboard input of
+one into the other, and offers the comparison, the camera projections, and the
+frame cursor in its toolbar. Forward `--sync-port` together with the other two
+ports when running in Docker; the page connects to `--grpc-port` directly, so
+keep that port reachable from the browser. See
+[Visualization Design](../framework/visualization.md#synced-comparison-page).
+
 **Examples:**
 
-Compare the predictions of a multi-task checkpoint with the ground truth:
+Compare the predictions of a multi-task checkpoint with the ground truth from
+one shared viewpoint:
 
 ```bash
 autoware-ml visualize \
     --config-name multi/ptv3/t4dataset/voxel012_tiny_b8_100e_t4dataset_122m_j6gen2_det3d_seg3d \
     --weights mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/checkpoints/best.ckpt \
     --split test \
-    --max-samples 3
+    --max-samples 3 \
+    --sync-views \
+    --sync-port 9091
 ```
 
 Preview the transformed data only, without weights:
@@ -222,6 +239,22 @@ autoware-ml visualize \
     --device cpu \
     --split train
 ```
+
+**Opening the viewer:**
+
+The regular Rerun page is logged on startup as
+`http://localhost:<web-port>/?url=rerun%2Bhttp%3A%2F%2Flocalhost%3A<grpc-port>%2Fproxy`.
+With `--sync-views`, the synced comparison page is served at
+`http://localhost:<sync-port>/`. Append `?renderer=webgl` to either URL when
+the default renderer misbehaves in the browser.
+
+Both pages replay the whole recording when they connect, so a recording of
+twenty camera-equipped frames can take a few minutes before the synced page
+reports `synced` and its toolbar becomes usable. That wait is normal and is not
+a failure.
+
+Use the toolbar arrows, the frame slider, or the Rerun time panel to step
+between frames one at a time.
 
 Current visualization coverage:
 
