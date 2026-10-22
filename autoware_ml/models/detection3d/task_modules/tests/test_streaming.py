@@ -22,6 +22,7 @@ import unittest
 import torch
 
 from autoware_ml.models.detection3d.task_modules.streaming import (
+    compose_poses,
     inverse_sigmoid,
     memory_refresh,
     pos2posemb1d,
@@ -98,6 +99,17 @@ class TestTemporalMemoryHelpers(unittest.TestCase):
         moved = transform_reference_points(points, pose)
 
         torch.testing.assert_close(moved, torch.tensor([[[11.0, -3.0, 3.5]]]))
+
+    def test_compose_poses_is_the_matrix_product_broadcast_over_the_bank(self) -> None:
+        """One pose per sample composes with every pose of the sample's bank, ``lhs @ rhs``."""
+        generator = torch.Generator().manual_seed(0)
+        lhs = torch.randn(2, 1, 4, 4, generator=generator)
+        rhs = torch.randn(2, 5, 4, 4, generator=generator)
+
+        composed = compose_poses(lhs, rhs)
+
+        self.assertEqual(composed.shape, (2, 5, 4, 4))
+        torch.testing.assert_close(composed, (lhs.double() @ rhs.double()).float())
 
 
 class TestInverseSigmoid(unittest.TestCase):

@@ -31,6 +31,7 @@ from autoware_ml.models.detection3d.task_modules.streaming import (
     ModulatedLayerNorm,
     SELayerLinear,
     StreamContinuity,
+    compose_poses,
     inverse_sigmoid,
     memory_refresh,
     nerf_positional_encoding,
@@ -416,7 +417,9 @@ class StreamPETRHead(nn.Module):
         its entries age by the frame's time; lanes without a predecessor are cleared. The
         bank stores global-frame reference points and ego poses whose translations reach
         kilometer scale, far beyond half-precision resolution, so the whole geometry path runs
-        in float32 regardless of autocast (mirroring :meth:`position_embedding`).
+        in float32 regardless of autocast (mirroring :meth:`position_embedding`), and the pose
+        product goes through :func:`compose_poses`, which the float32 matmul precision setting
+        cannot reduce to TF32.
 
         Args:
             timestamp: Sample time of every lane in seconds, float64.
@@ -437,7 +440,7 @@ class StreamPETRHead(nn.Module):
                 self.memory_velo = prev_exists.new_zeros(batch_size, self.memory_len, 2)
             else:
                 self.memory_timestamp += timestamp.view(batch_size, 1, 1)
-                self.memory_egopose = ego_pose_inv.unsqueeze(1) @ self.memory_egopose
+                self.memory_egopose = compose_poses(ego_pose_inv.unsqueeze(1), self.memory_egopose)
                 self.memory_reference_point = transform_reference_points(
                     self.memory_reference_point, ego_pose_inv
                 )
@@ -469,7 +472,8 @@ class StreamPETRHead(nn.Module):
         ``memory_len``, exactly like :meth:`post_update_memory`. The new entries carry age
         zero and the identity pose; the ego-pose alignment brings every entry back into the
         global frame. The bank is stored in float32 and the alignment runs in a float32
-        island: kilometer-scale translations lose meter-level motion in half precision.
+        island: kilometer-scale translations lose meter-level motion in half precision, and
+        in TF32 too, which the elementwise :func:`compose_poses` keeps out of the pose product.
 
         Args:
             ego_pose: Lidar-to-global pose of every lane ``(batch, 4, 4)``.
@@ -508,7 +512,7 @@ class StreamPETRHead(nn.Module):
             reference_point = torch.cat([rec_reference_points, self.memory_reference_point], dim=1)
             velo = torch.cat([rec_velo, self.memory_velo], dim=1)
             reference_point = transform_reference_points(reference_point, ego_pose)
-            egopose = ego_pose.unsqueeze(1) @ egopose
+            egopose = compose_poses(ego_pose.unsqueeze(1), egopose)
         return embedding, reference_point, timestamp, egopose, velo
 
     def post_update_memory(

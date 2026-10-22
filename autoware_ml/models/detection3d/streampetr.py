@@ -23,6 +23,7 @@ from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
 from autoware_ml.models.detection3d.heads.streampetr import StreamPETRHead
 from autoware_ml.models.detection3d.task_modules.streaming import (
+    compose_poses,
     memory_refresh,
     transform_reference_points,
 )
@@ -188,7 +189,9 @@ class _StreamPETRHeadMemoryExportWrapper(nn.Module):
                 transform_reference_points(pre_memory_reference_point, data_ego_pose_inv),
                 prev_exists,
             ),
-            memory_refresh(data_ego_pose_inv.unsqueeze(1) @ pre_memory_egopose, prev_exists),
+            memory_refresh(
+                compose_poses(data_ego_pose_inv.unsqueeze(1), pre_memory_egopose), prev_exists
+            ),
         )
 
         memory, pos_embed = head.embed_tokens(x, pos_embed, cone)
@@ -327,9 +330,11 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
                 frame_meta.scene_tokens, frame_meta.timestamps
             ),
             ego_pose=frame_meta.ego2globals,
-            # The poses and the bank are float32 in the map frame, so the geometry resolves
-            # to one ulp of the translation (4 mm at 65 km) however the inverse is computed;
-            # the float64 inverse only keeps the LU from adding its own rounding on top.
+            # The poses and the bank are float32 in the map frame: a stored translation at 65 km
+            # resolves to one ulp (4 mm), and the head keeps the geometry at that resolution
+            # only because it composes the poses elementwise, in IEEE float32 under any matmul
+            # precision (a TF32 GEMM loses tens of meters there). The float64 inverse keeps the
+            # LU from adding its own rounding on top.
             ego_pose_inv=torch.linalg.inv(frame_meta.ego2globals.double()).float(),
             gt_boxes=gt_boxes,
             gt_labels=gt_labels,

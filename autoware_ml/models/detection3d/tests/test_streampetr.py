@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 import math
 
 import pytest
@@ -704,6 +704,63 @@ def test_memory_alignment_preserves_meter_motion_under_bf16_autocast() -> None:
     assert head.memory_egopose.dtype == torch.float32
     local_point = head.memory_reference_point[0, 0]
     assert torch.allclose(local_point, torch.tensor([-2.5, 0.0, 0.0]), atol=0.05)
+
+
+@pytest.fixture
+def cli_matmul_precision() -> Iterator[None]:
+    """Run a test under the float32 matmul precision the CLI runtime sets, then restore it."""
+    previous = torch.get_float32_matmul_precision()
+    torch.set_float32_matmul_precision("medium")
+    try:
+        yield
+    finally:
+        torch.set_float32_matmul_precision(previous)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="TF32 matmuls run on CUDA only")
+@pytest.mark.usefixtures("cli_matmul_precision")
+def test_memory_alignment_keeps_millimeters_under_the_cli_matmul_precision() -> None:
+    """The bank's geometry must not depend on the global float32 matmul precision.
+
+    Regression test: the CLI runtime calls ``torch.set_float32_matmul_precision("medium")``,
+    TF32 on CUDA, and at batch size 1 the bank's pose products ran as TF32 GEMMs, which left
+    16 m of error in the relative pose of every entry here, 65 km from the map origin. In IEEE
+    float32 a stored translation there resolves to 4 mm.
+    """
+    device = torch.device("cuda")
+    head = _build_head().to(device).eval()
+    first_pose = _far_pose(65460.2, 675.7, 0.4).to(device)
+    second_pose = _far_pose(65461.4, 676.5, 0.41).to(device)
+    num_layers, num_slots = head.num_decoder_layers, head.num_queries + head.num_propagated
+    # Every query predicts the same center, so every entry pushed to the bank carries it.
+    local_center = torch.tensor([12.3, -4.5, 0.7], device=device)
+    boxes = torch.zeros(num_layers, 1, num_slots, 10, device=device)
+    boxes[..., :3] = local_center
+    zero_time = torch.zeros(1, dtype=torch.float64, device=device)
+
+    head.reset_memory()
+    head.pre_update_memory(
+        zero_time, torch.zeros(1, device=device), torch.linalg.inv(first_pose.double()).float()
+    )
+    head.post_update_memory(
+        zero_time,
+        first_pose,
+        torch.randn(num_layers, 1, num_slots, head.num_classes, device=device),
+        boxes,
+        torch.randn(num_layers, 1, num_slots, head.hidden_dim, device=device),
+    )
+    head.pre_update_memory(
+        zero_time, torch.ones(1, device=device), torch.linalg.inv(second_pose.double()).float()
+    )
+
+    relative = (torch.linalg.inv(second_pose.double()) @ first_pose.double())[0]
+    pushed_poses = head.memory_egopose[0, : head.topk_proposals].double()
+    assert (pushed_poses[:, :3, 3] - relative[:3, 3]).norm(dim=-1).max() < 0.01
+    # The reference points move by a matrix-vector product, which cuBLAS does not run in TF32;
+    # checking them as well keeps it that way.
+    pushed_centers = head.memory_reference_point[0, : head.topk_proposals].double()
+    expected_center = relative[:3, :3] @ local_center.double() + relative[:3, 3]
+    assert (pushed_centers - expected_center).norm(dim=-1).max() < 0.01
 
 
 def test_forward_sanitizes_nan_poisoned_memory() -> None:

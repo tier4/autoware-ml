@@ -106,6 +106,26 @@ def transform_reference_points(
     return (ego_pose.unsqueeze(1) @ homogeneous.unsqueeze(-1)).squeeze(-1)[..., :3]
 
 
+def compose_poses(lhs: torch.Tensor, rhs: torch.Tensor) -> torch.Tensor:
+    """Compose batches of 4x4 poses, ``lhs @ rhs``, as a sum of elementwise products.
+
+    A float32 ``@`` follows the global matmul precision. The CLI runtime sets
+    ``torch.set_float32_matmul_precision("medium")``, which is TF32 on CUDA: a GEMM then rounds
+    its operands to a 10-bit mantissa, and a translation 65 km from the map origin loses tens of
+    meters (at batch size 1 a bank-sized pose product runs as one GEMM). Elementwise products
+    and their sum are not matmuls, so they stay in IEEE float32 under every precision setting;
+    they export as Mul and ReduceSum.
+
+    Args:
+        lhs: Left poses ``(..., 4, 4)``.
+        rhs: Right poses ``(..., 4, 4)``, broadcast against ``lhs``.
+
+    Returns:
+        The composed poses ``(..., 4, 4)``.
+    """
+    return (lhs.unsqueeze(-1) * rhs.unsqueeze(-3)).sum(-2)
+
+
 def _sincos_posemb(component: torch.Tensor, num_pos_feats: int, temperature: int) -> torch.Tensor:
     """Embed one scaled position component with interleaved sine/cosine pairs."""
     dim_t = torch.arange(num_pos_feats, dtype=torch.float32, device=component.device)
