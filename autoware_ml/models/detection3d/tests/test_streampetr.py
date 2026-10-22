@@ -492,7 +492,7 @@ def test_exported_head_matches_eval_forward_on_a_propagated_frame() -> None:
 
 
 def test_exported_head_matches_eval_forward_on_the_first_frame_of_a_stream() -> None:
-    """A wiped (all-zero) bank, as the runtime feeds at start-up, is the head's reset state.
+    """A wiped (all-zero) bank, which the runtime must feed first, is the head's reset state.
 
     The eval head seeds the first ``num_propagated`` entries of a fresh bank with the
     pseudo reference points in the lidar frame; the graph has no ``prev_exists`` input and

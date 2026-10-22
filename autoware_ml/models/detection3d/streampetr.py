@@ -106,14 +106,18 @@ class _StreamPETRHeadMemoryExportWrapper(nn.Module):
     this version; earlier exports stacked every decoder layer (5400 rows with
     six layers), and the runtime published boxes of the intermediate layers too.
 
-    A stream starts with an all-zero bank: the runtime wipes the five tensors
-    at start-up and on every reset. The graph recognizes a lane whose bank
-    poses are all zero (every written entry carries a pose with a unit last
-    row) and seeds it as the head does for ``prev_exists = 0``, with the pseudo
-    reference points and the identity pose in the first ``num_propagated``
-    entries, so the first frame of a stream predicts what the head predicts.
-    Without that, moving the zero bank by the inverse ego pose would put every
-    entry at the map origin as seen from the vehicle, kilometers away.
+    A stream starts with an all-zero bank, so the runtime must clear the five
+    tensors when it allocates them, before the first frame, and on every
+    reset: device allocations are not zeroed, leftover values would read as a
+    continuing stream, and a leftover NaN or infinity survives the reset of
+    the entries, which multiplies them by zero. The graph recognizes a lane
+    whose bank poses are all zero (every written entry carries a pose with a
+    unit last row) and seeds it as the head does for ``prev_exists = 0``,
+    with the pseudo reference points and the identity pose in the first
+    ``num_propagated`` entries, so the first frame of a stream predicts what
+    the head predicts. Without that, moving the zero bank by the inverse ego
+    pose would put every entry at the map origin as seen from the vehicle,
+    kilometers away.
     """
 
     def __init__(self, head: StreamPETRHead) -> None:
