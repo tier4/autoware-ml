@@ -834,6 +834,23 @@ class TestSceneIndexGroups(StreamedCorpusTestCase):
 
         self.assertEqual(dataset.scene_index_groups(), [[4, 2, 0], [1, 3]])
 
+    def test_scenes_keep_the_order_they_first_appear_in(self) -> None:
+        """
+        Input: five records of scenes b, a and c, which first appear in that order, not in the
+        order their ids sort to.
+        Expected: the scenes are listed in the order they first appear in the record table,
+        each scene in time order.
+        Check: compare the groups with the expected sample indices.
+        """
+        records = with_scenes(
+            self.streamed_records,
+            scenario_ids=["b", "a", "b", "c", "a"],
+            timestamps=[2.0, 9.0, 1.0, 5.0, 8.0],
+        )
+        dataset = build_dataset(self.streamed_database).bind(records)
+
+        self.assertEqual(dataset.scene_index_groups(), [[2, 0], [4, 1], [3]])
+
     def test_concatenated_sources_offset_and_repeat_their_scenes(self) -> None:
         """
         Input: the five-record corpus repeated twice followed by a one-record corpus.
@@ -847,6 +864,47 @@ class TestSceneIndexGroups(StreamedCorpusTestCase):
         groups = ConcatDataset([streamed, single], repeats=[2, 1]).scene_index_groups()
 
         self.assertEqual(groups, [[4, 2, 0], [1, 3], [9, 7, 5], [6, 8], [10]])
+
+    def test_every_repeat_of_every_source_takes_its_own_block_of_indices(self) -> None:
+        """
+        Input: the five-record corpus repeated three times, a source bound to no record
+        repeated twice, the five records split into three scenes, and the one-record corpus
+        repeated twice.
+        Expected: every repeat of a source serves its scenes at its own block of split
+        indices, behind every repeat of the sources before it, and a source without records
+        takes no block and serves no scene.
+        Check: compare the groups with the expected split indices.
+        """
+        three_scenes = with_scenes(
+            self.streamed_records,
+            scenario_ids=["b", "a", "b", "c", "a"],
+            timestamps=[2.0, 9.0, 1.0, 5.0, 8.0],
+        )
+        datasets = [
+            build_dataset(self.streamed_database).bind(self.streamed_records),
+            build_dataset(self.streamed_database).bind(self.streamed_records.clear()),
+            build_dataset(self.streamed_database).bind(three_scenes),
+            build_dataset(self.seg3d_gt_database).bind(self.seg3d_gt_records),
+        ]
+
+        groups = ConcatDataset(datasets, repeats=[3, 2, 1, 2]).scene_index_groups()
+
+        self.assertEqual(
+            groups,
+            [
+                [4, 2, 0],
+                [1, 3],
+                [9, 7, 5],
+                [6, 8],
+                [14, 12, 10],
+                [11, 13],
+                [17, 15],
+                [19, 16],
+                [18],
+                [20],
+                [21],
+            ],
+        )
 
     def test_an_unbound_dataset_has_no_scenes(self) -> None:
         """

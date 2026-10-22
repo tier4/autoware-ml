@@ -6,6 +6,7 @@ import itertools
 import time
 from abc import abstractmethod
 from pathlib import Path
+from collections import defaultdict
 from collections.abc import Sequence
 from typing import Self
 
@@ -161,9 +162,9 @@ class BaseDataset(Dataset):
         timestamps = self.dataset_records_dataframe.get_column(
             DatasetTableSchema.TIMESTAMP_SECONDS.name
         ).to_list()
-        groups: dict[str, list[int]] = {}
+        groups: defaultdict[str, list[int]] = defaultdict(list)
         for index, scenario_id in enumerate(scenario_ids):
-            groups.setdefault(scenario_id, []).append(index)
+            groups[scenario_id].append(index)
         return [sorted(group, key=timestamps.__getitem__) for group in groups.values()]
 
     def __getitem__(self, index: int) -> ModelGTSample:
@@ -274,13 +275,30 @@ class ConcatDataset(Dataset):
             declaration order.
         """
         groups: list[list[int]] = []
-        start = 0
-        for dataset, repeat in zip(self.datasets, self.repeats, strict=True):
-            source_groups = dataset.scene_index_groups()
-            for _ in range(repeat):
-                groups.extend([[start + index for index in group] for group in source_groups])
-                start += len(dataset)
+        starts = (0, *self.ends[:-1])
+        for dataset, repeat, start in zip(self.datasets, self.repeats, starts, strict=True):
+            groups.extend(self._repeated_scene_index_groups(dataset, repeat, start))
         return groups
+
+    @staticmethod
+    def _repeated_scene_index_groups(
+        dataset: BaseDataset, repeat: int, start: int
+    ) -> list[list[int]]:
+        """Split indices of every scene of every repeat of one source.
+
+        Args:
+          dataset: Dataset of the source.
+          repeat: How many times the source serves its scenes.
+          start: Split index of the first sample of the source.
+
+        Returns:
+          list[list[int]]: One list of split indices per scene, repeat after repeat.
+        """
+        offsets = [start + repeat_index * len(dataset) for repeat_index in range(repeat)]
+        return [
+            [offset + index for index in group]
+            for offset, group in itertools.product(offsets, dataset.scene_index_groups())
+        ]
 
     def locate(self, index: int) -> tuple[int, int]:
         """Find the source and the sample behind one index of the split.
