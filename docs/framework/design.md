@@ -133,7 +133,9 @@ With `streaming` on, every dataloader draws from a `GroupStreamingSampler` that 
 lane whole scenes frame by frame, for temporal models that carry a memory across batches; the
 training split reshuffles the scenes every epoch from `seed`, the experiment seed. The sampler is
 a `DistributedSampler`, so it shards the scenes itself and Lightning leaves it alone. Streaming
-cannot be combined with frame sampling or a shuffling dataloader.
+cannot be combined with frame sampling, a shuffling dataloader or `trainer.overfit_batches`, for
+which Lightning swaps the sampler of the training and validation loaders for a sequential one;
+shorten a streaming run with `limit_train_batches` / `limit_val_batches` instead.
 
 ### Dataset
 

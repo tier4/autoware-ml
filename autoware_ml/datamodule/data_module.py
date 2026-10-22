@@ -270,8 +270,11 @@ class DataModule(L.LightningDataModule):
           DataLoader: Dataloader over the concatenated sources of the split.
 
         Raises:
-          ValueError: If the split has no dataset or no dataloader settings, or if the
-            dataloader shuffles while scene streaming or frame sampling owns the order.
+          ValueError: If the split has no dataset or no dataloader settings, if the
+            dataloader shuffles while scene streaming or frame sampling owns the order, or if
+            a streaming training or validation loader serves a trainer with
+            ``overfit_batches``, for which Lightning swaps the scene sampler for a
+            sequential one.
         """
         dataset = self.datasets.get(split)
         if dataset is None:
@@ -287,6 +290,17 @@ class DataModule(L.LightningDataModule):
                 raise ValueError(
                     "Scene streaming owns the sample order, so the dataloader cannot shuffle. "
                     "Set shuffle to false."
+                )
+            if (
+                split in (SplitType.TRAIN, SplitType.VAL)
+                and self.trainer is not None
+                and self.trainer.overfit_batches > 0
+            ):
+                raise ValueError(
+                    "trainer.overfit_batches makes Lightning swap the scene sampler of the "
+                    "training and validation loaders for a sequential one, which feeds every "
+                    "lane each batch_size-th sample as if it were one stream. Shorten a "
+                    "streaming run with limit_train_batches / limit_val_batches instead."
                 )
             kwargs["sampler"] = GroupStreamingSampler(
                 dataset,

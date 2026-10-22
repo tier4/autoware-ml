@@ -22,6 +22,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
+import lightning as L
 import polars as pl
 from torch.utils.data.distributed import DistributedSampler
 
@@ -938,6 +939,46 @@ class TestSceneStreaming(MultiSourceTestCase):
         self.assertIsInstance(train_sampler, DistributedSampler)
         self.assertEqual((train_sampler.seed, train_sampler.shuffle), (7, True))
         self.assertFalse(data_module.val_dataloader().sampler.shuffle)
+
+    def test_rejects_overfit_batches(self) -> None:
+        """
+        Input: a streaming datamodule attached to a trainer with ``overfit_batches=2``.
+        Expected: Lightning would swap the scene sampler of the training and validation
+        loaders for a sequential one, which feeds every lane each batch_size-th sample as one
+        stream, so the datamodule refuses to build them.
+        Check: both loaders raise a ValueError naming overfit_batches.
+        """
+        data_module = self.build_data_module(
+            {"main": build_source(self.streamed_database)},
+            train_dataloader=DataLoaderConfig(batch_size=2),
+            validation_dataloader=DataLoaderConfig(batch_size=1),
+            streaming=True,
+        )
+        data_module.setup("fit")
+        data_module.trainer = L.Trainer(overfit_batches=2, accelerator="cpu", logger=False)
+
+        for build_loader in (data_module.train_dataloader, data_module.val_dataloader):
+            with self.subTest(loader=build_loader.__name__):
+                with self.assertRaisesRegex(ValueError, "overfit_batches"):
+                    build_loader()
+
+    def test_a_trainer_without_overfit_batches_keeps_the_scene_sampler(self) -> None:
+        """
+        Input: the same streaming datamodule attached to a trainer without overfit_batches.
+        Expected: Lightning leaves the sampler alone, so the loaders stream as before.
+        Check: both loaders draw from the scene sampler.
+        """
+        data_module = self.build_data_module(
+            {"main": build_source(self.streamed_database)},
+            train_dataloader=DataLoaderConfig(batch_size=2),
+            validation_dataloader=DataLoaderConfig(batch_size=1),
+            streaming=True,
+        )
+        data_module.setup("fit")
+        data_module.trainer = L.Trainer(accelerator="cpu", logger=False)
+
+        self.assertIsInstance(data_module.train_dataloader().sampler, GroupStreamingSampler)
+        self.assertIsInstance(data_module.val_dataloader().sampler, GroupStreamingSampler)
 
     def test_rejects_frame_sampling(self) -> None:
         """
