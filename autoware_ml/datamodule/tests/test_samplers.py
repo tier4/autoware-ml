@@ -317,9 +317,12 @@ class _FakeScenesDataset:
 
 
 def test_lanes_stay_scene_contiguous_across_batches() -> None:
-    # Scenes 0-9, 10-14, 15-19; two lanes. The joined 20 frames are cut in half: lane 0
-    # gets scene 0 and lane 1 scenes 1 and 2, so both lanes hold 10 frames and batch
-    # position k walks lane k frame by frame across consecutive batches.
+    """
+    Input: scenes of 10, 5 and 5 frames served in order through two lanes on one rank.
+    Expected: the joined 20 frames are cut in half, lane 0 holding scene 0 and lane 1 scenes
+    1 and 2, and batch position k walks lane k frame by frame across consecutive batches.
+    Check: the indices alternate between the two lanes, each lane in frame order.
+    """
     sampler = GroupStreamingSampler(
         _FakeScenesDataset([10, 5, 5]), batch_size=2, shuffle=False, seed=0
     )
@@ -328,6 +331,12 @@ def test_lanes_stay_scene_contiguous_across_batches() -> None:
 
 
 def test_per_rank_length_is_a_whole_number_of_batches() -> None:
+    """
+    Input: scenes of 7, 3, 5 and 2 frames served in order through three lanes.
+    Expected: every lane serves the same number of rounds, so the rank serves whole batches
+    and its length is the number of indices it yields.
+    Check: the indices yielded against the length, and their count against the batch size.
+    """
     sampler = GroupStreamingSampler(
         _FakeScenesDataset([7, 3, 5, 2]), batch_size=3, shuffle=False, seed=0
     )
@@ -337,6 +346,12 @@ def test_per_rank_length_is_a_whole_number_of_batches() -> None:
 
 
 def test_trimming_logs_a_warning(caplog: pytest.LogCaptureFixture) -> None:
+    """
+    Input: scenes of 10 and 5 frames served in order through two lanes.
+    Expected: the longer lane loses its last frame to keep the two aligned, and the sampler
+    says so.
+    Check: a warning naming the trimming is logged.
+    """
     sampler = GroupStreamingSampler(
         _FakeScenesDataset([10, 5]), batch_size=2, shuffle=False, seed=0
     )
@@ -346,6 +361,12 @@ def test_trimming_logs_a_warning(caplog: pytest.LogCaptureFixture) -> None:
 
 
 def test_ranks_agree_on_length_and_serve_disjoint_frames() -> None:
+    """
+    Input: six scenes of six frames served in order by two ranks of two lanes each.
+    Expected: both ranks serve the same number of batches, so neither waits for the other in
+    a collective, and no frame is served by both.
+    Check: the two ranks yield as many indices and share none.
+    """
     dataset = _FakeScenesDataset([6, 6, 6, 6, 6, 6])
     rank_indices = []
     for rank in range(2):
@@ -358,7 +379,13 @@ def test_ranks_agree_on_length_and_serve_disjoint_frames() -> None:
 
 
 def test_shuffled_ranks_serve_the_same_fixed_length_and_disjoint_frames() -> None:
-    """Two ranks, uneven scenes, shuffle on: both serve rounds_per_epoch rounds every epoch."""
+    """
+    Input: scenes of 7, 3, 5, 2, 9, 4 and 6 frames shuffled over three epochs for two ranks
+    of two lanes each.
+    Expected: every epoch both ranks serve ``rounds_per_epoch`` rounds of two frames, and the
+    reshuffled lanes never hand a frame to both ranks.
+    Check: the number of indices of each rank every epoch, and that the ranks share none.
+    """
     dataset = _FakeScenesDataset([7, 3, 5, 2, 9, 4, 6])
     samplers = []
     for rank in range(2):
@@ -390,11 +417,24 @@ def test_set_epoch_reshuffles_deterministically() -> None:
 
 
 def test_raises_when_lanes_cannot_be_filled() -> None:
+    """
+    Input: one single-frame scene for two lanes.
+    Expected: a lane without frames would leave its batch position empty, so the sampler
+    refuses to build the epoch.
+    Check: iterating raises a ValueError naming the lanes it cannot fill.
+    """
     with pytest.raises(ValueError, match="cannot fill"):
         list(GroupStreamingSampler(_FakeScenesDataset([1]), batch_size=2, shuffle=False, seed=0))
 
 
 def test_is_a_distributed_sampler_so_lightning_does_not_wrap_it() -> None:
+    """
+    Input: a sampler built outside a distributed run.
+    Expected: it is a ``DistributedSampler``, which Lightning leaves alone instead of wrapping
+    it into one that keeps every ``num_replicas``-th index, and without a process group it
+    serves the whole split as the only rank.
+    Check: its type, its number of replicas and its rank.
+    """
     sampler = GroupStreamingSampler(_FakeScenesDataset([4, 4]), batch_size=2, shuffle=False, seed=0)
     assert isinstance(sampler, DistributedSampler)
     assert (sampler.num_replicas, sampler.rank) == (1, 0)
@@ -422,6 +462,13 @@ class TestFixedLengthTrainingEpochs:
     """With ``shuffle=True`` every epoch has the same length (Lightning assumes it)."""
 
     def test_length_is_constant_across_epochs(self) -> None:
+        """
+        Input: scenes of 7, 5, 18, 3, 8 and 9 frames shuffled through two lanes over six
+        epochs.
+        Expected: Lightning derives the epoch length once, so whatever the scene order every
+        epoch serves ``rounds_per_epoch`` rounds of two frames, at least every frame.
+        Check: the length and the number of indices yielded every epoch.
+        """
         dataset = _FakeScenesDataset([7, 5, 18, 3, 8, 9])
         sampler = GroupStreamingSampler(dataset, batch_size=2, shuffle=True, seed=0)
 
@@ -436,8 +483,14 @@ class TestFixedLengthTrainingEpochs:
         assert lengths[0] >= dataset.total
 
     def test_every_frame_is_served_and_fewer_than_the_lanes_repeat(self) -> None:
-        # Uneven scenes over 8 ranks x 2 lanes: the joined frames are cut into 16 lanes, so
-        # no frame is dropped and the padding repeats fewer than 16 frames per epoch.
+        """
+        Input: eleven uneven scenes shuffled over three epochs for eight ranks of two lanes
+        each.
+        Expected: the joined frames are cut into 16 lanes, so no frame is dropped and the
+        padding repeats fewer frames than there are lanes.
+        Check: the indices of all ranks cover every frame, with fewer than 16 more indices
+        than frames.
+        """
         dataset = _FakeScenesDataset([37, 21, 58, 13, 44, 29, 61, 18, 25, 50, 33])
         samplers = _ranks(dataset, world_size=8, batch_size=2, shuffle=True)
 
@@ -450,6 +503,13 @@ class TestFixedLengthTrainingEpochs:
             assert len(served) - dataset.total < 16
 
     def test_lanes_only_advance_within_a_scene_or_start_a_new_stream(self) -> None:
+        """
+        Input: scenes of 7, 5, 18, 3, 8 and 9 frames shuffled through three lanes over four
+        epochs.
+        Expected: a lane moves on to the next frame of its scene, or starts a new stream at
+        the first frame of a scene or, when padded, at its own first frame.
+        Check: every pair of consecutive frames of every lane.
+        """
         dataset = _FakeScenesDataset([7, 5, 18, 3, 8, 9])
         sampler = GroupStreamingSampler(dataset, batch_size=3, shuffle=True, seed=0)
 
@@ -466,6 +526,12 @@ class TestFixedLengthTrainingEpochs:
                     )
 
     def test_raises_when_scenes_cannot_fill_every_lane(self) -> None:
+        """
+        Input: two single-frame scenes shuffled for three lanes.
+        Expected: padding cannot fill a lane that gets no frame at all, so the sampler refuses
+        to build the epoch.
+        Check: asking for the length raises a ValueError naming the lanes it cannot fill.
+        """
         sampler = GroupStreamingSampler(
             _FakeScenesDataset([1, 1]), batch_size=3, shuffle=True, seed=0
         )
@@ -475,13 +541,27 @@ class TestFixedLengthTrainingEpochs:
 
 
 class TestEvaluationTrimsInsteadOfPadding:
+    """With ``shuffle=False`` every lane is trimmed instead, so no frame is scored twice."""
+
     def test_single_lane_serves_every_frame_exactly_once_in_file_order(self) -> None:
+        """
+        Input: scenes of 7, 5 and 18 frames served in order through one lane.
+        Expected: one lane on one rank needs no trimming, so it serves every frame once, the
+        scenes in the order of the record table.
+        Check: the indices are every frame, in order.
+        """
         dataset = _FakeScenesDataset([7, 5, 18])
         sampler = GroupStreamingSampler(dataset, batch_size=1, shuffle=False, seed=0)
 
         assert list(iter(sampler)) == list(range(dataset.total))
 
     def test_wider_batches_trim_without_repeating_frames(self) -> None:
+        """
+        Input: scenes of 7, 5 and 19 frames, 31 in all, served in order through two lanes.
+        Expected: the longer lane loses its last frame to keep the two aligned, and no frame is
+        served twice.
+        Check: the indices are distinct and one fewer than the frames.
+        """
         dataset = _FakeScenesDataset([7, 5, 19])
         sampler = GroupStreamingSampler(dataset, batch_size=2, shuffle=False, seed=0)
 
@@ -490,8 +570,14 @@ class TestEvaluationTrimsInsteadOfPadding:
         assert len(indices) == dataset.total - 1
 
     def test_several_ranks_drop_fewer_frames_than_they_have_lanes(self) -> None:
-        # 87 uneven scenes over 8 ranks x 2 lanes: dealing whole scenes round-robin would
-        # drop about a fifth of the frames; cutting the joined frames drops fewer than 16.
+        """
+        Input: 87 scenes of 20 to 60 frames served in order by eight ranks of two lanes each.
+        Expected: cutting the joined frames into 16 lanes drops fewer frames than there are
+        lanes, where dealing whole scenes round-robin would drop about a fifth of them, and
+        every rank serves the same number of batches and no frame twice.
+        Check: the indices of all ranks are distinct, the ranks have one length, and 1 to 15
+        frames go unserved.
+        """
         rng = np.random.default_rng(0)
         dataset = _FakeScenesDataset(rng.integers(20, 61, size=87).tolist())
         samplers = _ranks(dataset, world_size=8, batch_size=2, shuffle=False)
@@ -502,7 +588,12 @@ class TestEvaluationTrimsInsteadOfPadding:
         assert 0 < dataset.total - len(served) < 16
 
     def test_a_lane_cut_inside_a_scene_continues_that_scene(self) -> None:
-        # Two lanes cut one scene of 9 frames: lane 1 starts at frame 4, mid-scene.
+        """
+        Input: one scene of nine frames served in order through two lanes.
+        Expected: the cut falls inside the scene, so lane 1 starts at frame 4 and walks on
+        through the scene, and the last frame is trimmed to keep the lanes aligned.
+        Check: the frames of each lane.
+        """
         sampler = GroupStreamingSampler(
             _FakeScenesDataset([9]), batch_size=2, shuffle=False, seed=0
         )
@@ -510,6 +601,12 @@ class TestEvaluationTrimsInsteadOfPadding:
         assert _lanes(sampler) == [[0, 1, 2, 3], [4, 5, 6, 7]]
 
     def test_logs_the_trimming_once(self, caplog: pytest.LogCaptureFixture) -> None:
+        """
+        Input: scenes of 10 and 5 frames served in order through two lanes over three epochs.
+        Expected: Lightning rebuilds the evaluation indices at every validation, but the
+        trimmed frames never change, so the sampler warns about them once.
+        Check: one warning naming the trimming is logged.
+        """
         sampler = GroupStreamingSampler(
             _FakeScenesDataset([10, 5]), batch_size=2, shuffle=False, seed=0
         )
