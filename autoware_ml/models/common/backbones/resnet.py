@@ -17,6 +17,8 @@
 This module contains reusable ResNet backbones for image-based models.
 """
 
+from collections.abc import Sequence
+
 from jaxtyping import Float32
 import torch.nn as nn
 from torch import Tensor
@@ -158,34 +160,79 @@ class ResNet18(_ResNetStages):
 class _ResNetMultiScale(_ResNetStages):
     """Expose a torchvision ResNet as a reusable multi-scale backbone.
 
-    The wrapper returns intermediate feature maps from every residual stage instead
-    of only the final classification features.
+    The wrapper returns intermediate feature maps from the residual stages selected by
+    ``out_indices`` instead of only the final classification features. Index ``i`` selects
+    ``layer{i + 1}``, so ``0`` to ``3`` are the stage outputs ``c2`` to ``c5`` at strides 4, 8,
+    16 and 32. The default ``(1, 2, 3)`` returns ``(c3, c4, c5)``; ``(0, 1, 2, 3)`` adds the
+    stride-4 level in front.
     """
+
+    def __init__(
+        self,
+        block: type[BasicBlock] | type[Bottleneck],
+        layers: list[int],
+        in_channels: int,
+        out_indices: Sequence[int] = (1, 2, 3),
+    ) -> None:
+        """Initialize the multi-scale ResNet backbone.
+
+        Args:
+            block: Residual block type.
+            layers: Number of residual blocks per stage.
+            in_channels: Number of channels in the input tensor.
+            out_indices: Strictly increasing stage indices in ``0`` to ``3`` whose outputs are
+                returned, where index ``i`` selects ``layer{i + 1}``.
+
+        Raises:
+            ValueError: If ``out_indices`` is empty, holds an index outside ``0`` to ``3``, or
+                is not strictly increasing.
+        """
+        super().__init__(block=block, layers=layers, in_channels=in_channels)
+        self.out_indices = self._validate_out_indices(out_indices)
+
+    @staticmethod
+    def _validate_out_indices(out_indices: Sequence[int]) -> tuple[int, ...]:
+        """Check that the stage indices are strictly increasing and select existing stages.
+
+        Args:
+            out_indices: Requested stage indices.
+
+        Returns:
+            The indices as a tuple.
+
+        Raises:
+            ValueError: If ``out_indices`` is empty, holds an index outside ``0`` to ``3``, or
+                is not strictly increasing.
+        """
+        indices = tuple(int(i) for i in out_indices)
+        if len(indices) == 0:
+            raise ValueError("out_indices must select at least one stage.")
+        if any(i < 0 or i > 3 for i in indices):
+            raise ValueError(f"out_indices must lie in [0, 3], got {indices}.")
+        if any(later <= earlier for earlier, later in zip(indices, indices[1:])):
+            raise ValueError(f"out_indices must be strictly increasing, got {indices}.")
+        return indices
 
     def forward(
         self, x: Float32[Tensor, "batch_size in_channels height width"]
-    ) -> tuple[
-        Float32[Tensor, "batch_size c2_channels c2_height c2_width"],
-        Float32[Tensor, "batch_size c3_channels c3_height c4_width"],
-        Float32[Tensor, "batch_size c4_channels c4_height c4_width"],
-        Float32[Tensor, "batch_size c5_channels c5_height c5_width"],
-    ]:
-        """Extract feature maps from ``layer1`` through ``layer4``.
+    ) -> tuple[Float32[Tensor, "batch_size channels height width"], ...]:
+        """Extract the feature maps of the stages selected by ``out_indices``.
 
         Args:
             x: Input tensor.
 
         Returns:
-            Tuple of multi-scale feature maps ``(c2, c3, c4, c5)`` at strides 4, 8, 16 and 32.
-            The channel widths depend on the block type, 64 to 512 for basic blocks and
-            256 to 2048 for bottlenecks.
+            Tuple with one feature map per entry of ``out_indices``, in increasing stage order.
+            Stage ``i`` is at stride ``4 * 2**i``; the channel widths depend on the block type,
+            64 to 512 for basic blocks and 256 to 2048 for bottlenecks.
         """
         x = self.forward_stem(x)
         c2 = self.layer1(x)
         c3 = self.layer2(c2)
         c4 = self.layer3(c3)
         c5 = self.layer4(c4)
-        return c2, c3, c4, c5
+        stages = (c2, c3, c4, c5)
+        return tuple(stages[i] for i in self.out_indices)
 
 
 class ResNet18MultiScale(_ResNetMultiScale):
@@ -195,13 +242,20 @@ class ResNet18MultiScale(_ResNetMultiScale):
     pyramids rather than ImageNet classification logits.
     """
 
-    def __init__(self, in_channels: int) -> None:
+    def __init__(self, in_channels: int, out_indices: Sequence[int] = (1, 2, 3)) -> None:
         """Initialize the multi-scale ResNet18 backbone.
 
         Args:
             in_channels: Number of channels in the input tensor.
+            out_indices: Strictly increasing stage indices in ``0`` to ``3`` whose outputs are
+                returned, where index ``i`` selects ``layer{i + 1}``.
         """
-        super().__init__(block=BasicBlock, layers=[2, 2, 2, 2], in_channels=in_channels)
+        super().__init__(
+            block=BasicBlock,
+            layers=[2, 2, 2, 2],
+            in_channels=in_channels,
+            out_indices=out_indices,
+        )
 
 
 class ResNet50MultiScale(_ResNetMultiScale):
@@ -211,10 +265,17 @@ class ResNet50MultiScale(_ResNetMultiScale):
     pyramids rather than ImageNet classification logits.
     """
 
-    def __init__(self, in_channels: int) -> None:
+    def __init__(self, in_channels: int, out_indices: Sequence[int] = (1, 2, 3)) -> None:
         """Initialize the multi-scale ResNet50 backbone.
 
         Args:
             in_channels: Number of channels in the input tensor.
+            out_indices: Strictly increasing stage indices in ``0`` to ``3`` whose outputs are
+                returned, where index ``i`` selects ``layer{i + 1}``.
         """
-        super().__init__(block=Bottleneck, layers=[3, 4, 6, 3], in_channels=in_channels)
+        super().__init__(
+            block=Bottleneck,
+            layers=[3, 4, 6, 3],
+            in_channels=in_channels,
+            out_indices=out_indices,
+        )

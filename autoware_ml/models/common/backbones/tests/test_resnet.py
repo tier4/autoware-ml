@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for the ResNet backbones: the single-scale ResNet-18, the four-level feature
-pyramids of the multi-scale variants, the stem rebuilt for other input widths, and the parameter
-names shared with torchvision."""
+"""Unit tests for the ResNet backbones: the single-scale ResNet-18, the stage selection of the
+multi-scale variants, the stem rebuilt for other input widths, and the parameter names shared
+with torchvision."""
 
 from __future__ import annotations
 
@@ -47,21 +47,85 @@ class _ResNetTestCase(unittest.TestCase):
 class TestResNetMultiScale(_ResNetTestCase):
     """Unit tests for the multi-scale ResNet feature pyramids."""
 
-    def test_resnet18_returns_four_feature_levels(self) -> None:
-        """Test that ResNet-18 returns ``layer1`` to ``layer4`` at strides 4, 8, 16 and 32."""
+    def test_resnet18_returns_three_feature_levels_by_default(self) -> None:
+        """Test that ResNet-18 returns ``layer2`` to ``layer4`` at strides 8, 16 and 32 by default."""
         backbone = ResNet18MultiScale(in_channels=3).to(self.device).eval()
 
         with torch.no_grad():
-            c2, c3, c4, c5 = backbone(self.images)
+            features = backbone(self.images)
 
+        self.assertEqual(backbone.out_indices, (1, 2, 3))
+        self.assertEqual(len(features), 3)
+        c3, c4, c5 = features
+        self.assertEqual(c3.shape, (self.batch_size, 128, 16, 16))
+        self.assertEqual(c4.shape, (self.batch_size, 256, 8, 8))
+        self.assertEqual(c5.shape, (self.batch_size, 512, 4, 4))
+
+    def test_resnet18_returns_four_feature_levels_when_requested(self) -> None:
+        """Test that ``out_indices=[0, 1, 2, 3]`` adds the ``layer1`` output at stride 4."""
+        backbone = (
+            ResNet18MultiScale(in_channels=3, out_indices=[0, 1, 2, 3]).to(self.device).eval()
+        )
+
+        with torch.no_grad():
+            features = backbone(self.images)
+
+        self.assertEqual(backbone.out_indices, (0, 1, 2, 3))
+        self.assertEqual(len(features), 4)
+        c2, c3, c4, c5 = features
         self.assertEqual(c2.shape, (self.batch_size, 64, 32, 32))
         self.assertEqual(c3.shape, (self.batch_size, 128, 16, 16))
         self.assertEqual(c4.shape, (self.batch_size, 256, 8, 8))
         self.assertEqual(c5.shape, (self.batch_size, 512, 4, 4))
 
+    def test_out_indices_selects_a_subset_of_stages(self) -> None:
+        """Test that a sparse selection returns only the chosen stages in increasing order."""
+        backbone = ResNet18MultiScale(in_channels=3, out_indices=(0, 3)).to(self.device).eval()
+
+        with torch.no_grad():
+            features = backbone(self.images)
+
+        self.assertEqual(len(features), 2)
+        self.assertEqual(features[0].shape, (self.batch_size, 64, 32, 32))
+        self.assertEqual(features[1].shape, (self.batch_size, 512, 4, 4))
+
+    def test_out_indices_matches_the_four_level_pyramid(self) -> None:
+        """Test that a selected stage equals the same stage of the full pyramid."""
+        full = ResNet18MultiScale(in_channels=3, out_indices=[0, 1, 2, 3]).to(self.device).eval()
+        subset = ResNet18MultiScale(in_channels=3, out_indices=[1, 3]).to(self.device).eval()
+        subset.load_state_dict(full.state_dict())
+
+        with torch.no_grad():
+            full_features = full(self.images)
+            subset_features = subset(self.images)
+
+        torch.testing.assert_close(subset_features[0], full_features[1])
+        torch.testing.assert_close(subset_features[1], full_features[3])
+
+    def test_out_indices_rejects_an_empty_selection(self) -> None:
+        """Test that at least one stage must be selected."""
+        with self.assertRaises(ValueError):
+            ResNet18MultiScale(in_channels=3, out_indices=[])
+
+    def test_out_indices_rejects_an_index_out_of_range(self) -> None:
+        """Test that indices outside the four stages are rejected."""
+        with self.assertRaises(ValueError):
+            ResNet18MultiScale(in_channels=3, out_indices=[1, 4])
+        with self.assertRaises(ValueError):
+            ResNet50MultiScale(in_channels=3, out_indices=[-1, 0])
+
+    def test_out_indices_rejects_a_non_increasing_selection(self) -> None:
+        """Test that duplicated or descending indices are rejected."""
+        with self.assertRaises(ValueError):
+            ResNet18MultiScale(in_channels=3, out_indices=[1, 1, 2])
+        with self.assertRaises(ValueError):
+            ResNet18MultiScale(in_channels=3, out_indices=[3, 2, 1])
+
     def test_resnet50_returns_bottleneck_channels(self) -> None:
         """Test that ResNet-50 returns the four-times wider bottleneck channels at the same strides."""
-        backbone = ResNet50MultiScale(in_channels=3).to(self.device).eval()
+        backbone = (
+            ResNet50MultiScale(in_channels=3, out_indices=[0, 1, 2, 3]).to(self.device).eval()
+        )
 
         with torch.no_grad():
             c2, c3, c4, c5 = backbone(self.images)
@@ -73,13 +137,13 @@ class TestResNetMultiScale(_ResNetTestCase):
 
     def test_in_channels_rebuilds_the_stem(self) -> None:
         """Test that a non-RGB input width is accepted by the stem convolution."""
-        backbone = ResNet18MultiScale(in_channels=1).to(self.device).eval()
+        backbone = ResNet18MultiScale(in_channels=1, out_indices=[0]).to(self.device).eval()
         images = torch.randn(
             self.batch_size, 1, self.image_size, self.image_size, device=self.device
         )
 
         with torch.no_grad():
-            c2, _, _, _ = backbone(images)
+            (c2,) = backbone(images)
 
         self.assertEqual(backbone.conv1.in_channels, 1)
         self.assertEqual(c2.shape, (self.batch_size, 64, 32, 32))
@@ -103,7 +167,7 @@ class TestResNet18(_ResNetTestCase):
 
         with torch.no_grad():
             features = backbone(self.images)
-            _, _, _, c5 = pyramid(self.images)
+            c5 = pyramid(self.images)[-1]
 
         self.assertEqual(features.shape, (self.batch_size, 512, 4, 4))
         torch.testing.assert_close(features, c5)
