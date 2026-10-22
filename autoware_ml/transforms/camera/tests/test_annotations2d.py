@@ -59,8 +59,15 @@ class TestLoadAnnotations2DFromBoxes3D(PinholeCameraTestCase):
         return LoadAnnotations2DFromBoxes3D()(sample).detection2d_gt_sample
 
     def test_projects_a_box_in_front_of_the_camera(self) -> None:
-        # A 2 m cube on the optical axis, 10 m ahead, spans 9-11 m in depth: its gravity
-        # center projects onto the principal point and its near face sets the extent.
+        """
+        Input: a 2 m cube of class 2 on the optical axis of a 100 x 100 pixel forward camera,
+        10 m ahead.
+        Expected: the cube spans 9-11 m in depth, so its near face sets the extent, 100 / 9
+        pixels around the principal point, and its gravity center projects onto the principal
+        point; the label keeps its int32 class index.
+        Check: compare every Box2DFieldIndex column of the box with its expected value, and the
+        label and its dtype.
+        """
         annotations = self.project_annotations(
             [[10.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0]], labels=[2], width=100, height=100
         )
@@ -82,15 +89,24 @@ class TestLoadAnnotations2DFromBoxes3D(PinholeCameraTestCase):
         )
 
     def test_drops_a_box_behind_the_camera(self) -> None:
+        """
+        Input: a box 10 m behind the forward camera.
+        Expected: no corner of the box is in front of the camera, so it is no target.
+        Check: the camera holds no box and no label.
+        """
         annotations = self.project_annotations([[-10.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0]])
 
         self.assertEqual(tuple(annotations.gt_bboxes_2d[0].shape), (0, len(Box2DFieldIndex)))
         self.assertEqual(tuple(annotations.gt_labels_2d[0].shape), (0,))
 
     def test_keeps_a_box_whose_center_leaves_the_image(self) -> None:
-        # The center at y = 9 m projects to x = -10 while the near-right corners are inside:
-        # the box stays a target with its extent clipped and its center clamped to the edge,
-        # as in the reference recipe.
+        """
+        Input: a 6 m wide box 10 m ahead and 9 m to the left, whose center projects to x = -10
+        while its near right corners are inside the image.
+        Expected: the box stays a target, as in the reference recipe, with its extent clipped
+        to the image and its center clamped to the left edge.
+        Check: x_min and center_x are 0 and x_max lies inside the image.
+        """
         annotations = self.project_annotations([[10.0, 9.0, 0.0, 2.0, 6.0, 2.0, 0.0]])
 
         box = annotations.gt_bboxes_2d[0][0]
@@ -99,7 +115,13 @@ class TestLoadAnnotations2DFromBoxes3D(PinholeCameraTestCase):
         self.assertEqual(float(box[Box2DFieldIndex.CENTER_X]), 0.0)
 
     def test_clips_a_partially_visible_box_to_the_image(self) -> None:
-        # The center projects at x = 15, the near-left corners far outside the left edge.
+        """
+        Input: a 6 m wide box 10 m ahead and 6.5 m to the left, whose center projects to x = 15
+        while its near left corners fall far outside the left edge.
+        Expected: the extent is clipped to the image, and the center, inside the image, stays
+        where it projects.
+        Check: x_min is 0, and x_max and center_x lie inside the image.
+        """
         annotations = self.project_annotations([[10.0, 6.5, 0.0, 2.0, 6.0, 2.0, 0.0]])
 
         box = annotations.gt_bboxes_2d[0][0]
@@ -108,7 +130,12 @@ class TestLoadAnnotations2DFromBoxes3D(PinholeCameraTestCase):
         self.assertTrue(0 <= float(box[Box2DFieldIndex.CENTER_X]) < 160)
 
     def test_follows_the_box_yaw(self) -> None:
-        # A 4 m x 1 m box turned by 90 degrees shows its long side to the camera.
+        """
+        Input: a 4 m x 1 m box 10 m ahead, along the optical axis and turned by 90 degrees.
+        Expected: turned, the box shows its long side to the camera, so its 2D box is more than
+        twice as wide.
+        Check: compare the widths x_max - x_min of the two boxes.
+        """
         straight = self.project_annotations([[10.0, 0.0, 0.0, 4.0, 1.0, 1.0, 0.0]])
         turned = self.project_annotations([[10.0, 0.0, 0.0, 4.0, 1.0, 1.0, math.pi / 2]])
 
@@ -119,6 +146,12 @@ class TestLoadAnnotations2DFromBoxes3D(PinholeCameraTestCase):
         self.assertGreater(width(turned), 2.0 * width(straight))
 
     def test_assigns_every_box_to_the_cameras_that_see_it(self) -> None:
+        """
+        Input: a box of class 0 ahead and a box of class 1 behind, seen by a forward and a
+        backward camera.
+        Expected: every camera gets the boxes in front of it only.
+        Check: the forward camera holds label 0 and the backward camera label 1.
+        """
         # The second camera looks backward.
         backward = self.LIDAR2CAM_FORWARD @ torch.diag(torch.tensor([-1.0, -1.0, 1.0, 1.0]))
         annotations = self.project_annotations(
@@ -131,12 +164,23 @@ class TestLoadAnnotations2DFromBoxes3D(PinholeCameraTestCase):
         self.assertEqual(annotations.gt_labels_2d[1].tolist(), [1])
 
     def test_handles_a_frame_without_boxes(self) -> None:
+        """
+        Input: a frame without any 3D box.
+        Expected: the camera gets an empty box set laid out by Box2DFieldIndex, not an error.
+        Check: the boxes have shape (0, 6) and the labels (0,).
+        """
         annotations = self.project_annotations([])
 
         self.assertEqual(tuple(annotations.gt_bboxes_2d[0].shape), (0, len(Box2DFieldIndex)))
         self.assertEqual(tuple(annotations.gt_labels_2d[0].shape), (0,))
 
     def test_needs_the_3d_boxes(self) -> None:
+        """
+        Input: a sample holding images but no 3D boxes.
+        Expected: the 2D targets are projected from the 3D boxes, so the transform requires
+        them.
+        Check: a KeyError is raised.
+        """
         sample = self.build_sample(self.build_pinhole_images([self.LIDAR2CAM_FORWARD], 160, 96))
 
         with self.assertRaises(KeyError):

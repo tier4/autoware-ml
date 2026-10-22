@@ -86,6 +86,12 @@ class TestDetection2DGTBatch(unittest.TestCase):
         self.assertIn("Sample 0, camera 1 holds 3 2D boxes", logs.output[0])
 
     def test_unpads_back_to_every_camera_of_every_sample(self) -> None:
+        """
+        Input: two samples of two cameras holding 2, 0 and 1, 3 boxes, collated and unpadded.
+        Expected: valid_bboxes_2d and valid_labels_2d give back every camera of every sample as
+        the sample listed it, the labels widened to int64 since the consumers index with them.
+        Check: compare every unpadded camera with the input one, and the label dtype.
+        """
         batch = self.collate(self.samples)
 
         for name, collated in (
@@ -95,13 +101,12 @@ class TestDetection2DGTBatch(unittest.TestCase):
             for sample, collated_sample in zip(self.samples, collated, strict=True):
                 for expected, unpadded in zip(getattr(sample, name), collated_sample, strict=True):
                     torch.testing.assert_close(unpadded, expected, check_dtype=False)
-        # The consumers index with the labels, which come back widened to int64.
         self.assertEqual(batch.valid_labels_2d()[1][1].dtype, torch.int64)
 
     def test_a_batch_without_boxes_keeps_the_fixed_size(self) -> None:
         """
         Input: one sample of two cameras holding no box.
-        Expected: the batch keeps its fixed size, every row is padding, and unpadding gives
+        Expected: the batch keeps its fixed size, every row is padding, and valid_bboxes_2d gives
         every camera an empty box set.
         Check: the box shape, the valid counts and the unpadded box shape.
         """
@@ -112,12 +117,22 @@ class TestDetection2DGTBatch(unittest.TestCase):
         self.assertEqual(batch.valid_bboxes_2d()[0][1].shape, (0, len(Box2DFieldIndex)))
 
     def test_rejects_samples_with_different_cameras(self) -> None:
+        """
+        Input: a sample of two cameras next to a sample of one.
+        Expected: every camera takes one slot of the camera axis of the batch, so the samples
+        must agree on the camera count.
+        Check: a ValueError naming the cameras is raised.
+        """
         with self.assertRaisesRegex(ValueError, "cameras"):
             self.collate([build_sample([1, 1]), build_sample([1])])
 
     def test_rejects_a_camera_whose_labels_differ_from_its_boxes(self) -> None:
-        # Camera 1 of sample 1 holds 2 boxes. A single label used to broadcast over both of
-        # them, and 3 labels failed on the copy without naming the sample or camera.
+        """
+        Input: camera 1 of sample 1 holding 2 boxes with 1 label, then with 3 labels.
+        Expected: a single label would broadcast over both boxes and 3 labels would fail on the
+        copy without naming the camera, so both are refused before any copy.
+        Check: a ValueError naming the sample, the camera and both counts is raised.
+        """
         for num_labels in (1, 3):
             with self.subTest(labels=num_labels):
                 sample = build_sample([1, 2])
@@ -154,6 +169,12 @@ class TestDetection2DGTBatch(unittest.TestCase):
                     self.collate([build_sample([1, 1]), sample])
 
     def test_rejects_an_empty_batch(self) -> None:
+        """
+        Input: no sample.
+        Expected: an empty batch has no camera count to collate; ModelGTBatch returns None
+        instead of calling this collation when no sample carries 2D boxes.
+        Check: a ValueError is raised.
+        """
         with self.assertRaises(ValueError):
             self.collate([])
 

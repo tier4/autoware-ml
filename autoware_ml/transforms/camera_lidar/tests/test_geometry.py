@@ -908,6 +908,14 @@ class TestGlobalRotScaleTransCameraOnly(PinholeCameraTestCase):
         )(sample)
 
     def test_moves_the_boxes_and_records_the_augmentation_without_points(self) -> None:
+        """
+        Input: a camera-only sample (images, calibration and one box, no points) through a
+        random rotation, scale and translation.
+        Expected: without points the augmentation still moves the box and records its matrix,
+        which the frame metadata folds into the ego pose.
+        Check: the sample holds no points, the recorded matrix is not the identity, and the box
+        center is the raw center moved by that matrix.
+        """
         sample = self.build_camera_sample()
         raw_center = torch.cat([sample.detection3d_gt_bboxes_3d.center[0], torch.ones(1)])
 
@@ -921,20 +929,31 @@ class TestGlobalRotScaleTransCameraOnly(PinholeCameraTestCase):
         )
 
     def test_keeps_the_2d_targets(self) -> None:
-        # The boxes and the calibration move together, so the projection does not change.
+        """
+        Input: the 2D targets projected from a camera-only sample before and after a random
+        rotation, scale and translation.
+        Expected: the boxes and the calibration move together, so the projection, box edges
+        and projected center alike, does not change.
+        Check: the labels are equal and the box rows agree within 1e-3 pixels.
+        """
         sample = self.build_camera_sample()
         before = LoadAnnotations2DFromBoxes3D()(sample).detection2d_gt_sample
 
         after = LoadAnnotations2DFromBoxes3D()(self.augment(sample, seed=1)).detection2d_gt_sample
 
         self.assertEqual(before.gt_labels_2d[0].tolist(), after.gt_labels_2d[0].tolist())
-        # The rows carry the box edges and the projected center alike.
         torch.testing.assert_close(before.gt_bboxes_2d[0], after.gt_bboxes_2d[0], atol=1e-3, rtol=0)
 
     def test_frames_augmented_on_their_own_stay_aligned_through_the_folded_poses(self) -> None:
-        # One parked car seen from two ego poses. Every frame draws its own augmentation,
-        # and the frame metadata folds it into the pose, so a temporal model maps the box of
-        # the previous frame onto the box of the current one through the folded poses alone.
+        """
+        Input: one parked car seen from two ego poses, every frame augmented with its own
+        random rotation, scale and translation.
+        Expected: the frame metadata folds every augmentation into its pose, so a temporal
+        model maps the box of the previous frame onto the box of the current one through the
+        folded poses alone.
+        Check: the previous box center mapped through both folded poses lands on the current
+        box center within 1 cm.
+        """
         global_box = torch.tensor([3012.0, -1180.0, 0.5, 1.0])
         poses = []
         for translation, yaw in (([3000.0, -1200.0, 0.0], 0.3), ([3002.0, -1198.5, 0.0], 0.35)):

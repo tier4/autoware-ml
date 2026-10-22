@@ -56,7 +56,7 @@ class _Dataset(BaseDataset):
         )
 
 
-class TestMaxNum2DGTBBoxes(unittest.TestCase):
+class TestMaxNum2DGtBboxes(unittest.TestCase):
     """The number of 2D boxes every camera is padded to in a batch."""
 
     def test_a_dataset_pads_every_camera_to_its_max_num_2d_gt_bboxes(self) -> None:

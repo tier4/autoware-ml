@@ -205,6 +205,13 @@ class TestModelGTBatchDetection2DCollation(unittest.TestCase):
         )
 
     def test_collates_and_moves_the_2d_boxes(self) -> None:
+        """
+        Input: two samples of one camera holding 2 and 1 boxes, collated with
+        max_num_2d_gt_bboxes 3, then moved to the CPU.
+        Expected: the batch carries the 2D boxes padded to the given size in
+        detection2d_gt_batch, and to_device moves them with the rest of the batch.
+        Check: the valid counts, the label shape, and the moved boxes equal the collated ones.
+        """
         batch = ModelGTBatch.collate_gt_samples(
             [self._build_sample(2), self._build_sample(1)],
             max_num_3d_gt_bboxes=0,
@@ -223,6 +230,11 @@ class TestModelGTBatchDetection2DCollation(unittest.TestCase):
         )
 
     def test_samples_without_2d_boxes_collate_to_none(self) -> None:
+        """
+        Input: two samples without 2D boxes, collated without max_num_2d_gt_bboxes.
+        Expected: the 2D part of the batch is absent, so it needs no padding size.
+        Check: detection2d_gt_batch is None.
+        """
         batch = ModelGTBatch.collate_gt_samples(
             [self._build_sample(None), self._build_sample(None)], max_num_3d_gt_bboxes=0
         )
@@ -230,6 +242,11 @@ class TestModelGTBatchDetection2DCollation(unittest.TestCase):
         self.assertIsNone(batch.detection2d_gt_batch)
 
     def test_rejects_2d_boxes_on_only_some_samples(self) -> None:
+        """
+        Input: a sample carrying 2D boxes next to a sample carrying none.
+        Expected: the batch cannot hold 2D boxes for only some of its samples.
+        Check: a ValueError naming detection2d_gt_sample is raised.
+        """
         with self.assertRaisesRegex(ValueError, "detection2d_gt_sample"):
             ModelGTBatch.collate_gt_samples(
                 [self._build_sample(1), self._build_sample(None)],
