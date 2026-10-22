@@ -421,11 +421,11 @@ def test_raises_when_lanes_cannot_be_filled() -> None:
     """
     Input: one single-frame scene for two lanes.
     Expected: a lane without frames would leave its batch position empty, so the sampler
-    refuses to build the epoch.
-    Check: iterating raises a ValueError naming the lanes it cannot fill.
+    refuses the layout.
+    Check: building the sampler raises a ValueError naming the lanes it cannot fill.
     """
     with pytest.raises(ValueError, match="cannot fill"):
-        list(GroupStreamingSampler(_FakeScenesDataset([1]), batch_size=2, shuffle=False, seed=0))
+        GroupStreamingSampler(_FakeScenesDataset([1]), batch_size=2, shuffle=False, seed=0)
 
 
 def test_is_a_distributed_sampler_so_lightning_does_not_wrap_it() -> None:
@@ -532,14 +532,10 @@ class TestFixedLengthTrainingEpochs:
         Input: two single-frame scenes shuffled for three lanes.
         Expected: padding cannot fill a lane that gets no frame at all, so the sampler refuses
         to build the epoch.
-        Check: asking for the length raises a ValueError naming the lanes it cannot fill.
+        Check: building the sampler raises a ValueError naming the lanes it cannot fill.
         """
-        sampler = GroupStreamingSampler(
-            _FakeScenesDataset([1, 1]), batch_size=3, shuffle=True, seed=0
-        )
-
         with pytest.raises(ValueError, match="cannot fill"):
-            len(sampler)
+            GroupStreamingSampler(_FakeScenesDataset([1, 1]), batch_size=3, shuffle=True, seed=0)
 
 
 class TestEvaluationServesEveryFrame:
@@ -762,10 +758,11 @@ def test_every_frame_is_served_once_across_ranks(
     """
     Input: eleven uneven scenes of 123 frames over three epochs, for several world sizes and
     lane counts, shuffled and in order.
-    Expected: whatever the layout, every rank serves rounds_per_epoch rounds, and the real
-    samples of all ranks are every frame of the split exactly once, so evaluation scores
-    every frame once and training sees every frame once per epoch.
-    Check: the length of every rank and the sorted real indices of all ranks.
+    Expected: whatever the layout, every rank serves the length it reports, rounds_per_epoch
+    rounds, the real samples of all ranks are every frame of the split exactly once, and fewer
+    slots than there are lanes are padding.
+    Check: the indices of every rank against its length, the sorted real indices of all
+    ranks, and the number of padding slots.
     """
     dataset = _FakeScenesDataset(UNEVEN_SCENES)
     samplers = _ranks(dataset, world_size, batch_size, shuffle=shuffle)
@@ -775,10 +772,11 @@ def test_every_frame_is_served_once_across_ranks(
         for sampler in samplers:
             sampler.set_epoch(epoch)
             indices = list(sampler)
-            assert len(indices) == sampler.rounds_per_epoch * batch_size
+            assert len(indices) == len(sampler) == sampler.rounds_per_epoch * batch_size
             served.extend(indices)
         real = [index for index in served if not isinstance(index, PaddingSlot)]
         assert sorted(real) == list(range(dataset.total))
+        assert len(served) - len(real) < world_size * batch_size
 
 
 @pytest.mark.parametrize(("world_size", "batch_size", "shuffle"), LANE_LAYOUTS)
