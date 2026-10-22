@@ -50,7 +50,8 @@ class Detection2DGTBatch(NamedTuple):
           Detection2DGTBatch: The padded batch.
 
         Raises:
-          ValueError: If the batch is empty or its samples disagree on the camera count.
+          ValueError: If the batch is empty, its samples disagree on the camera count, or the
+            boxes, centers and labels of a camera differ in count.
         """
         if len(samples) == 0:
             raise ValueError("At least one 2D detection sample is required for collating.")
@@ -69,11 +70,19 @@ class Detection2DGTBatch(NamedTuple):
                     f"Every sample needs the 2D boxes of {num_cameras} cameras, sample "
                     f"{sample_index} has {len(sample.gt_bboxes_2d)}."
                 )
-            # ``strict`` rejects a sample whose centers or labels disagree with its boxes.
+            # ``strict`` rejects centers or labels given for another number of cameras.
             for camera_index, (boxes, centers, labels) in enumerate(
                 zip(sample.gt_bboxes_2d, sample.gt_centers_2d, sample.gt_labels_2d, strict=True)
             ):
                 count = boxes.shape[0]
+                # The copies below would broadcast a single center or label over every box,
+                # and fail on other mismatches without naming the sample.
+                if centers.shape[0] != count or labels.shape[0] != count:
+                    raise ValueError(
+                        f"The 2D boxes, centers and labels of sample {sample_index}, camera "
+                        f"{camera_index} differ in count: {count}, {centers.shape[0]} and "
+                        f"{labels.shape[0]}."
+                    )
                 gt_bboxes_2d[sample_index, camera_index, :count] = boxes
                 gt_centers_2d[sample_index, camera_index, :count] = centers
                 gt_labels_2d[sample_index, camera_index, :count] = labels

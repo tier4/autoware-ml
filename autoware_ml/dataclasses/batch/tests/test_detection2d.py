@@ -65,6 +65,26 @@ class TestDetection2DGTBatch(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "cameras"):
             Detection2DGTBatch.collate_gt_samples([build_sample([1, 1]), build_sample([1])])
 
+    def test_rejects_a_camera_whose_centers_or_labels_differ_from_its_boxes(self) -> None:
+        # Camera 1 of sample 1 holds 2 boxes. A single center or label used to broadcast over
+        # both of them, and 3 centers failed on the copy without naming the sample or camera.
+        for num_centers, num_labels in ((1, 2), (2, 1), (3, 2)):
+            with self.subTest(centers=num_centers, labels=num_labels):
+                sample = build_sample([1, 2])
+                sample = sample._replace(
+                    gt_centers_2d=[sample.gt_centers_2d[0], torch.zeros(num_centers, 2)],
+                    gt_labels_2d=[
+                        sample.gt_labels_2d[0],
+                        torch.zeros(num_labels, dtype=torch.int32),
+                    ],
+                )
+
+                with self.assertRaisesRegex(
+                    ValueError,
+                    f"sample 1, camera 1 differ in count: 2, {num_centers} and {num_labels}",
+                ):
+                    Detection2DGTBatch.collate_gt_samples([build_sample([1, 1]), sample])
+
     def test_rejects_an_empty_batch(self) -> None:
         with self.assertRaises(ValueError):
             Detection2DGTBatch.collate_gt_samples([])
