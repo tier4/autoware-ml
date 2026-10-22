@@ -19,11 +19,11 @@ class StreamContinuity:
 
     A lane continues when its frame belongs to the scene of the lane's previous frame and
     comes later in time, within ``max_stream_gap`` seconds when one is set. A lane without a
-    previous frame, one that moved to another scene, one that went back to an earlier frame
-    of its scene (the streaming sampler pads a lane by restarting its first frames) and one
-    that jumped over too long a gap start a new stream, so a temporal model resets its
-    memory there. Every temporal head that carries a memory across batches makes this same
-    check; the frames are remembered for the next call.
+    previous frame, one that moved to another scene, one whose frame is not later than the
+    previous one (the streaming sampler ends a shorter lane with a padding slot that repeats
+    its last frame) and one that jumped over too long a gap start a new stream, so a
+    temporal model resets its memory there. Every temporal head that carries a memory across
+    batches makes this same check; the frames are remembered for the next call.
 
     Args:
         max_stream_gap: Longest gap in seconds a stream survives, ``None`` for any gap.
