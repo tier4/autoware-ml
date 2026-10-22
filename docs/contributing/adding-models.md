@@ -151,10 +151,11 @@ class MyModel(ModuleBaseModel):
    appropriate `ModuleBaseModel` hook instead of bypassing the shared training and
    deployment flow. A temporal model that carries a memory across batches sets the
    `requires_streaming` class variable to `True`; `ModuleBaseModel.setup()` then refuses a
-   datamodule that does not stream scene-contiguous frames (`datamodule.streaming`) or that
-   combines streaming with `train_frame_sampling`. Models that override the epoch-start
-   hooks (`on_validation_epoch_start`, `on_test_epoch_start`) must call `super()`, which
-   resets the metric suites.
+   trainer without a datamodule or with one that does not stream scene-contiguous frames
+   (`datamodule.streaming`), and the `DataModule` itself refuses streaming combined with
+   `train_frame_sampling`. Models that override the epoch-start hooks
+   (`on_validation_epoch_start`, `on_test_epoch_start`) must call `super()`, which resets
+   the metric suites.
 
 ## Step 2: Choose the Data
 

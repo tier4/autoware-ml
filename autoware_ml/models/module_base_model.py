@@ -122,28 +122,26 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
     def setup(self, stage: str) -> None:
         """Check the datamodule against the needs of the model.
 
+        A streaming model reads ``datamodule.streaming``, which the DataModule always
+        carries. The DataModule itself refuses streaming combined with frame sampling, which
+        would draw the frames of a scene apart.
+
         Args:
             stage: Lightning stage being set up.
 
         Raises:
             ValueError: If the model requires streaming and the trainer runs without a
-                streaming datamodule, or the streaming datamodule also resamples the
-                training frames, which would break the scene order the memory relies on.
+                datamodule, or with one that does not stream.
         """
         super().setup(stage)
         if not self.requires_streaming:
             return
-        datamodule = getattr(self._trainer, "datamodule", None)
-        if datamodule is None or not getattr(datamodule, "streaming", False):
+        datamodule = self.trainer.datamodule
+        if datamodule is None or not datamodule.streaming:
             raise ValueError(
                 f"{type(self).__name__} carries temporal memory across batches, so the "
                 "datamodule must stream scene-contiguous frames; set datamodule.streaming "
                 "to true."
-            )
-        if getattr(datamodule, "train_frame_sampling", None) is not None:
-            raise ValueError(
-                f"{type(self).__name__} streams scene-contiguous frames, which "
-                "datamodule.train_frame_sampling would reorder; set one of the two."
             )
 
     def transfer_batch_to_device(

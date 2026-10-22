@@ -101,7 +101,7 @@ def test_model_without_an_export_fails_loudly() -> None:
 
 def test_setup_accepts_a_streaming_datamodule_for_a_streaming_model() -> None:
     model = _StreamingModel()
-    _attach_trainer(model, SimpleNamespace(streaming=True, train_frame_sampling=None))
+    _attach_trainer(model, SimpleNamespace(streaming=True))
 
     model.setup("fit")
 
@@ -109,25 +109,17 @@ def test_setup_accepts_a_streaming_datamodule_for_a_streaming_model() -> None:
 def test_setup_rejects_a_streaming_model_without_a_streaming_datamodule() -> None:
     model = _StreamingModel()
 
-    _attach_trainer(model, SimpleNamespace(streaming=False, train_frame_sampling=None))
+    _attach_trainer(model, SimpleNamespace(streaming=False))
     with pytest.raises(ValueError, match="datamodule.streaming"):
         model.setup("fit")
-    # A datamodule that does not know about streaming at all cannot stream either.
-    _attach_trainer(model, SimpleNamespace(train_frame_sampling=None))
+    # Fitting on bare dataloaders leaves the trainer without a datamodule.
+    _attach_trainer(model, None)
     with pytest.raises(ValueError, match="datamodule.streaming"):
-        model.setup("fit")
-
-
-def test_setup_rejects_streaming_combined_with_frame_sampling() -> None:
-    model = _StreamingModel()
-    _attach_trainer(model, SimpleNamespace(streaming=True, train_frame_sampling=object()))
-
-    with pytest.raises(ValueError, match="train_frame_sampling"):
         model.setup("fit")
 
 
 def test_setup_ignores_the_datamodule_for_a_model_without_memory() -> None:
     model = _PointSumModel()
-    _attach_trainer(model, SimpleNamespace(streaming=False, train_frame_sampling=object()))
+    _attach_trainer(model, None)
 
     model.setup("fit")
