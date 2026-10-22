@@ -95,8 +95,10 @@ class _ResNetStages(nn.Module):
 
     def forward_stem(
         self, x: Float32[Tensor, "batch_size in_channels height width"]
-    ) -> Float32[Tensor, "batch_size 64 height/4 width/4"]:
+    ) -> Float32[Tensor, "batch_size 64 steam_height steam_width"]:
         """Run the stem convolution, normalization, activation and max pooling.
+        Steam_height and steam_width will be height/4 and width/4 when the input is a 
+        multiple of 32, respectively.
 
         Args:
             x: Input tensor.
