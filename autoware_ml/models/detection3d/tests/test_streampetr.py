@@ -1117,7 +1117,7 @@ def test_the_eval_output_leaves_the_padding_samples_out() -> None:
     assert len(eval_out["predictions"]) == 2
     assert len(eval_out["gt_boxes"]) == len(eval_out["gt_labels"]) == 2
     assert eval_out["scene_token"] == ["db/a/0", "db/c/0"]
-    # Predictions stay aligned with the batch; a writer skips the padding slot.
+    # Predictions stay aligned with the batch; their consumer drops the padding slot.
     assert len(predictions.detection3d_predictions) == 3
 
 

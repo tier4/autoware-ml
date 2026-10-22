@@ -396,8 +396,8 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
         """Decode the last decoder layer into per-sample detections.
 
         Every sample keeps its prediction, padding samples included, so the predictions stay
-        aligned with Lightning's batch indices. A padding sample repeats the index of a real
-        frame, so a prediction writer skips the samples ``padding_mask`` flags.
+        aligned with Lightning's batch indices. A padding sample repeats a real frame, so
+        whoever consumes the predictions drops the samples ``padding_mask`` flags.
 
         Args:
             multi_task_batch_inputs: Model inputs of the batch.
