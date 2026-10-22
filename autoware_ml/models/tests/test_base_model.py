@@ -26,6 +26,8 @@ import torch
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.datamodule.data_module import DataModule
+from autoware_ml.datamodule.streaming_data_module import StreamingDataModule
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 
@@ -62,8 +64,15 @@ class _StreamingModel(_PointSumModel):
     requires_streaming: ClassVar[bool] = True
 
 
-class _PlainDataModule(L.LightningDataModule):
-    """A datamodule with no notion of streaming, like the plain DataModule."""
+class _ForeignDataModule(L.LightningDataModule):
+    """A Lightning datamodule from outside the framework that claims to stream."""
+
+    streaming = True
+
+
+def _without_sources(datamodule_type: type[DataModule]) -> DataModule:
+    """An instance of a framework datamodule built without sources, which ``setup`` never reads."""
+    return datamodule_type.__new__(datamodule_type)
 
 
 def _attach_trainer(model: ModuleBaseModel, datamodule: object | None) -> None:
@@ -106,13 +115,13 @@ def test_model_without_an_export_fails_loudly() -> None:
 
 def test_setup_accepts_a_streaming_datamodule_for_a_streaming_model() -> None:
     """
-    Input: a streaming model set up with a datamodule whose ``streaming`` attribute is true.
-    Expected: a datamodule that says it streams serves scene-contiguous frames, which is all the
-    memory of the model needs.
+    Input: a streaming model set up with a StreamingDataModule.
+    Expected: the StreamingDataModule serves the frames of every scene in time order to each
+    batch position, which is all the memory of the model needs.
     Check: ``setup`` returns without raising.
     """
     model = _StreamingModel()
-    _attach_trainer(model, SimpleNamespace(streaming=True))
+    _attach_trainer(model, _without_sources(StreamingDataModule))
 
     model.setup("fit")
 
@@ -120,28 +129,29 @@ def test_setup_accepts_a_streaming_datamodule_for_a_streaming_model() -> None:
 @pytest.mark.parametrize(
     ("datamodule", "found"),
     [
-        (_PlainDataModule(), "_PlainDataModule"),
-        (SimpleNamespace(streaming=False), "SimpleNamespace"),
+        (_without_sources(DataModule), "DataModule"),
+        (_ForeignDataModule(), "_ForeignDataModule"),
         (None, "no datamodule"),
     ],
-    ids=["without-streaming-attribute", "streaming-false", "bare-dataloaders"],
+    ids=["plain-datamodule", "foreign-datamodule", "bare-dataloaders"],
 )
 def test_setup_rejects_a_streaming_model_without_a_streaming_datamodule(
     datamodule: object | None, found: str
 ) -> None:
     """
-    Input: a streaming model set up with a datamodule that has no ``streaming`` attribute, as
-    the plain DataModule, with one whose attribute is false, and without a datamodule, as when
+    Input: a streaming model set up with the plain DataModule, with a Lightning datamodule from
+    outside the framework that sets ``streaming = True``, and without a datamodule, as when
     fitting on bare dataloaders.
-    Expected: none of them streams scene-contiguous frames, so the memory would carry over
-    between unrelated frames; ``setup`` refuses before any batch runs, and a missing attribute
-    counts as not streaming instead of failing the attribute lookup.
-    Check: a ValueError naming StreamingDataModule and what the trainer runs with is raised.
+    Expected: only a StreamingDataModule serves scene-contiguous frames, so the memory would
+    carry over between unrelated frames with any of these; ``setup`` refuses before any batch
+    runs, and the type decides, not a ``streaming`` attribute.
+    Check: a ValueError asking for a StreamingDataModule and naming what the trainer runs with
+    is raised.
     """
     model = _StreamingModel()
     _attach_trainer(model, datamodule)
 
-    with pytest.raises(ValueError, match=f"such as StreamingDataModule, got {found}"):
+    with pytest.raises(ValueError, match=f"use a StreamingDataModule, got {found}"):
         model.setup("fit")
 
 

@@ -35,6 +35,7 @@ from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
+from autoware_ml.datamodule.streaming_data_module import StreamingDataModule
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.eval_mixin import MetricEvalMixin
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
@@ -80,8 +81,8 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
     All parameters are explicitly typed for IDE support and type checking.
 
     A temporal model that carries a memory across batches sets ``requires_streaming``, and
-    :meth:`setup` then requires a datamodule whose ``streaming`` attribute says that it
-    streams scene-contiguous frames.
+    :meth:`setup` then requires a :class:`StreamingDataModule`, which streams scene-contiguous
+    frames.
     """
 
     requires_streaming: ClassVar[bool] = False
@@ -123,28 +124,27 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
     def setup(self, stage: str) -> None:
         """Check the datamodule against the needs of the model.
 
-        A streaming model asks the datamodule whether it streams scene-contiguous frames
-        through its ``streaming`` attribute. The plain DataModule has no notion of streaming,
-        so a datamodule without the attribute does not stream; a streaming datamodule such as
-        ``StreamingDataModule`` sets it to ``True``.
+        A streaming model needs a :class:`StreamingDataModule`, which serves the frames of
+        every scene in time order to each batch position. The plain DataModule and fitting on
+        bare dataloaders give no such order.
 
         Args:
             stage: Lightning stage being set up.
 
         Raises:
             ValueError: If the model requires streaming and the trainer runs without a
-                datamodule, or with one that does not stream.
+                datamodule, or with one that is not a StreamingDataModule.
         """
         super().setup(stage)
         if not self.requires_streaming:
             return
         datamodule = self.trainer.datamodule
-        if datamodule is None or not getattr(datamodule, "streaming", False):
+        if not isinstance(datamodule, StreamingDataModule):
             found = "no datamodule" if datamodule is None else type(datamodule).__name__
             raise ValueError(
                 f"{type(self).__name__} carries temporal memory across batches, so the "
-                "datamodule must stream scene-contiguous frames; use a streaming datamodule "
-                f"such as StreamingDataModule, got {found}."
+                "datamodule must stream scene-contiguous frames; use a StreamingDataModule, "
+                f"got {found}."
             )
 
     def transfer_batch_to_device(

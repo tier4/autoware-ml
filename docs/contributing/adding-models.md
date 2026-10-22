@@ -150,11 +150,13 @@ class MyModel(ModuleBaseModel):
    prediction formatting, or an explicit deployment wrapper, override the
    appropriate `ModuleBaseModel` hook instead of bypassing the shared training and
    deployment flow. A temporal model that carries a memory across batches sets the
-   `requires_streaming` class variable to `True`; `ModuleBaseModel.setup()` then asks the
-   trainer's datamodule whether it streams scene-contiguous frames (its `streaming`
-   attribute, which the plain `DataModule` does not have) and refuses a trainer without a
-   datamodule or with one that does not stream. Train such a model with a streaming
-   datamodule such as `StreamingDataModule`. Models that override an epoch-start hook
+   `requires_streaming` class variable to `True`; `ModuleBaseModel.setup()` then refuses a
+   trainer whose datamodule is not a `StreamingDataModule`
+   (`autoware_ml.datamodule.streaming_data_module`), the datamodule that serves the frames
+   of every scene in time order to each batch position. The plain `DataModule` and bare
+   dataloaders give no such order. The model config composes
+   `/datamodule/streaming@datamodule: default_streaming_datamodule` after its database
+   datamodule to get one. Models that override an epoch-start hook
    (`on_train_epoch_start`, `on_validation_epoch_start`, `on_test_epoch_start`,
    `on_predict_epoch_start`) call `super()` first; the validation and test hooks of the base
    model reset the metric suites.
