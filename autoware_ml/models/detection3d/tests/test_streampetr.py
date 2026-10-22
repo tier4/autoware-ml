@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
+from copy import deepcopy
 import math
 
 import pytest
@@ -976,3 +977,211 @@ def test_forward_sanitizes_nan_poisoned_memory() -> None:
     head_outputs = outputs.detection3d().streampetr_head()
     assert torch.isfinite(head_outputs.all_cls_scores).all()
     assert torch.isfinite(head_outputs.all_bbox_preds).all()
+
+
+def _with_padding(batch_inputs: ModelBatchInputs, padding: Sequence[bool]) -> ModelBatchInputs:
+    """Flag the given samples as padding slots, as a streaming batch collates them."""
+    gt_batch = batch_inputs.multi_task_gt_batch._replace(padding_mask=torch.tensor(padding))
+    return batch_inputs.replace(multi_task_gt_batch=gt_batch)
+
+
+def _independent_samples(model: StreamPETRDetection3DModel) -> StreamPETRDetection3DModel:
+    """Keep the training mode but switch off what couples or randomizes the samples.
+
+    BatchNorm in training mode mixes the samples through its batch statistics (StreamPETR's
+    VoVNet runs with ``norm_eval`` and its neck has no normalization, but the test neck has
+    BatchNorm), and dropout draws its masks over the whole batch.
+    """
+    for module in model.modules():
+        if isinstance(module, nn.BatchNorm2d):
+            module.eval()
+        elif isinstance(module, nn.Dropout):
+            module.p = 0.0
+        elif isinstance(module, nn.MultiheadAttention):
+            module.dropout = 0.0
+    return model
+
+
+def _two_samples_with_boxes() -> tuple[torch.Tensor, list[torch.Tensor], list[torch.Tensor]]:
+    """Images of two samples and one box of class 1 for each."""
+    images = torch.randn(2, NUM_CAMS, 3, *IMAGE_HW)
+    boxes = [
+        _collated_box(1.0, 0.5, 0.5, 4.0, 2.0, 1.5, 0.2, 0.0, 0.0, 0.0),
+        _collated_box(-2.0, 3.0, 0.4, 3.5, 1.8, 1.4, -0.4, 0.5, 0.0, 0.0),
+    ]
+    return images, boxes, [torch.tensor([1]), torch.tensor([1])]
+
+
+def test_a_padding_sample_takes_no_part_in_the_loss() -> None:
+    """
+    Input: two real training samples with one box each, once alone and once followed by a
+    padding sample that carries a box too, with the images of every sample requiring a
+    gradient.
+    Expected: a padding sample only keeps the ranks in step, so it seeds no denoising query,
+    matches no query and gives its queries no classification weight; the loss of the padded
+    batch is the loss of the real samples alone, and nothing of it flows back into the
+    padding sample's images.
+    Check: compare every loss term of the two batches, the denoising queries per sample, and
+    the image gradients of the padding sample (zero) and of the real ones (not zero).
+    """
+    torch.manual_seed(0)
+    model = _independent_samples(_build_model().train())
+    images, boxes, labels = _two_samples_with_boxes()
+    padded_images = torch.cat([images, images[:1]]).requires_grad_()
+    real_batch = _build_batch_inputs(images, gt_boxes=boxes, gt_labels=labels)
+    padded_batch = _with_padding(
+        _build_batch_inputs(
+            padded_images, gt_boxes=[*boxes, boxes[0]], gt_labels=[*labels, labels[0]]
+        ),
+        [False, False, True],
+    )
+
+    torch.manual_seed(1)
+    real_outputs = _run(model, real_batch)
+    real_losses = model.compute_metrics(real_batch, real_outputs)
+    model.bbox_head.reset_memory()
+    torch.manual_seed(1)
+    padded_outputs = _run(model, padded_batch)
+    padded_losses = model.compute_metrics(padded_batch, padded_outputs)
+    padded_losses["loss"].backward()
+
+    assert padded_losses.keys() == real_losses.keys()
+    for key, value in real_losses.items():
+        torch.testing.assert_close(padded_losses[key], value, msg=key)
+    denoising = padded_outputs.detection3d().streampetr_head().denoising
+    assert denoising is not None
+    assert 2 not in denoising.batch_indices.tolist()
+    assert denoising.batch_indices.numel() == (
+        real_outputs.detection3d().streampetr_head().denoising.batch_indices.numel()
+    )
+    assert padded_images.grad is not None
+    assert torch.count_nonzero(padded_images.grad[2]) == 0
+    assert torch.count_nonzero(padded_images.grad[0]) > 0
+    assert torch.count_nonzero(padded_images.grad[1]) > 0
+
+
+def test_a_batch_of_padding_alone_gives_a_zero_loss_over_the_whole_graph() -> None:
+    """
+    Input: a training batch whose two samples are both padding slots carrying boxes, as the
+    last batch of a rank whose lanes all ended early can be.
+    Expected: the batch still runs through the model, so every rank takes the same steps and
+    its collectives line up, but it supervises nothing; the loss is a finite zero that keeps
+    the whole graph, so backward reaches every branch like on any other rank.
+    Check: the loss is zero and requires a gradient, the batch seeds no denoising query, the
+    loss keys are those of a batch without boxes, and after backward every parameter of the
+    classification and regression branches has a gradient.
+    """
+    model = _build_model().train()
+    images, boxes, labels = _two_samples_with_boxes()
+    batch_inputs = _with_padding(
+        _build_batch_inputs(images, gt_boxes=boxes, gt_labels=labels), [True, True]
+    )
+
+    outputs = _run(model, batch_inputs)
+    losses = model.compute_metrics(batch_inputs, outputs)
+    losses["loss"].backward()
+
+    assert outputs.detection3d().streampetr_head().denoising is None
+    assert float(losses["loss"].detach()) == 0.0
+    assert losses["loss"].requires_grad
+    assert "dn_loss_cls" in losses and "dn_loss_bbox" in losses
+    for branches in (model.bbox_head.cls_branches, model.bbox_head.reg_branches):
+        assert all(parameter.grad is not None for parameter in branches.parameters())
+
+
+def test_the_eval_output_leaves_the_padding_samples_out() -> None:
+    """
+    Input: an eval batch of three frames with one box each, the middle one a padding slot.
+    Expected: a padding slot repeats a frame that is scored elsewhere, so the metrics get the
+    two real frames only, every per-frame entry in batch order.
+    Check: the number of predictions and of ground truth entries, and the scene tokens.
+    """
+    model = _build_model().eval()
+    images = torch.randn(3, NUM_CAMS, 3, *IMAGE_HW)
+    box = _collated_box(0.0, 0.0, 0.5, 4.0, 2.0, 1.5, 0.2, 0.0, 0.0, 0.0)
+    batch_inputs = _with_padding(
+        _build_batch_inputs(
+            images,
+            scene_tokens=["db/a/0", "db/b/0", "db/c/0"],
+            gt_boxes=[box, box, box],
+            gt_labels=[torch.tensor([1])] * 3,
+        ),
+        [False, True, False],
+    )
+
+    with torch.no_grad():
+        outputs = _run(model, batch_inputs)
+        eval_out = model.build_eval_output(batch_inputs, outputs)
+        predictions = model.decode_outputs(batch_inputs, outputs)
+
+    assert len(eval_out["predictions"]) == 2
+    assert len(eval_out["gt_boxes"]) == len(eval_out["gt_labels"]) == 2
+    assert eval_out["scene_token"] == ["db/a/0", "db/c/0"]
+    # Predictions stay aligned with the batch; a writer skips the padding slot.
+    assert len(predictions.detection3d_predictions) == 3
+
+
+def test_the_logged_batch_size_counts_the_real_samples() -> None:
+    """
+    Input: a training batch of three samples with one padding slot, a batch of padding
+    alone, and a batch assembled by hand without a padding mask.
+    Expected: the epoch means weigh every step by its real samples, so a padding slot adds
+    no weight, a batch of padding alone adds none at all, and a batch without a mask counts
+    every sample.
+    Check: the batch size the training step logs, and the sizes of the other two batches.
+    """
+    model = _build_model().train()
+    logged: dict[str, int] = {}
+    model.log_dict = lambda values, batch_size, **kwargs: logged.update(batch_size=batch_size)
+    batch_inputs = _build_batch_inputs(
+        torch.randn(3, NUM_CAMS, 3, *IMAGE_HW),
+        gt_boxes=[torch.zeros(0, 10)] * 3,
+        gt_labels=[torch.zeros(0, dtype=torch.int64)] * 3,
+    )
+
+    model.training_step(_with_padding(batch_inputs, [False, False, True]), batch_idx=0)
+
+    assert logged["batch_size"] == 2
+    assert model.get_log_batch_size(_with_padding(batch_inputs, [True, True, True])) == 0
+    assert model.get_log_batch_size(batch_inputs) == 3
+
+
+def test_a_padding_slot_starts_a_new_stream_and_leaves_the_next_epoch_alone() -> None:
+    """
+    Input: a lane that ends on a frame of scene ``a`` and pads the epoch with a slot repeating
+    that frame (same scene, same time), followed by the first frame of the next epoch.
+    Expected: a stream continues only forward in time, so the slot starts a new stream and
+    sees the reset bank of a first frame; the next epoch starts new streams anyway, so its
+    first frame does not see the slot at all.
+    Check: the continuity flag of the repeated frame, and the outputs of the slot and of the
+    next epoch's first frame against a model with the same weights that saw neither.
+    """
+    continuity = StreamContinuity()
+    last_time = torch.tensor([4.0], dtype=torch.float64)
+    continuity(["a"], last_time)
+    assert continuity(["a"], last_time).tolist() == [0.0]
+
+    model = _build_model().eval()
+    fresh = deepcopy(model)
+    earlier, last, next_first = (torch.randn(1, NUM_CAMS, 3, *IMAGE_HW) for _ in range(3))
+    with torch.no_grad():
+        _run(model, _build_batch_inputs(earlier, timestamps=[3.5], scene_tokens=["a"]))
+        _run(model, _build_batch_inputs(last, timestamps=[4.0], scene_tokens=["a"]))
+        slot = _run(
+            model,
+            _with_padding(_build_batch_inputs(last, timestamps=[4.0], scene_tokens=["a"]), [True]),
+        )
+        model.on_train_epoch_start()
+        after_slot = _run(
+            model, _build_batch_inputs(next_first, timestamps=[0.0], scene_tokens=["b"])
+        )
+
+        first_frame = _run(fresh, _build_batch_inputs(last, timestamps=[4.0], scene_tokens=["a"]))
+        fresh.on_train_epoch_start()
+        alone = _run(fresh, _build_batch_inputs(next_first, timestamps=[0.0], scene_tokens=["b"]))
+
+    for observed, expected in ((slot, first_frame), (after_slot, alone)):
+        observed_head = observed.detection3d().streampetr_head()
+        expected_head = expected.detection3d().streampetr_head()
+        torch.testing.assert_close(observed_head.all_cls_scores, expected_head.all_cls_scores)
+        torch.testing.assert_close(observed_head.all_bbox_preds, expected_head.all_bbox_preds)

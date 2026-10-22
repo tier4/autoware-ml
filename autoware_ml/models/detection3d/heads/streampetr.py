@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import NamedTuple
 
+from jaxtyping import Bool
 import torch
 import torch.nn as nn
 
@@ -886,6 +887,7 @@ class StreamPETRHead(nn.Module):
         bbox_preds: torch.Tensor,
         gt_boxes: list[torch.Tensor],
         gt_labels: list[torch.Tensor],
+        label_weights: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         targets = self._get_targets(cls_scores, bbox_preds, gt_boxes, gt_labels)
 
@@ -901,7 +903,7 @@ class StreamPETRHead(nn.Module):
         # One device sync per decoder layer instead of one per sample.
         total_pos = int(torch.stack(positive_counts).sum().item())
         loss_cls = self.loss_cls_weight * self.loss_cls(
-            cls_scores, target_labels_tensor, avg_factor=max(total_pos, 1)
+            cls_scores, target_labels_tensor, weights=label_weights, avg_factor=max(total_pos, 1)
         )
 
         # The regression loss runs over every query with 0/1 positive weights so
@@ -1113,19 +1115,31 @@ class StreamPETRHead(nn.Module):
         outputs: StreamPETRHeadOutputs,
         gt_boxes: list[torch.Tensor],
         gt_labels: list[torch.Tensor],
+        padding_mask: Bool[torch.Tensor, " batch_size"] | None = None,
     ) -> dict[str, torch.Tensor]:
         """Compute multi-layer StreamPETR losses.
 
         ``gt_boxes`` are metric ``[cx, cy, cz, l, w, h, yaw, vx, vy]`` boxes and
         ``gt_labels`` their int64 class indices, one tensor per sample.
+        ``padding_mask`` flags the padding samples of a streaming batch (see
+        ``ModelGTBatch.padding_mask``), which take no part in the loss: every query of such
+        a sample gets a zero classification weight. They come without boxes, so they give no
+        regression target, no positive and no denoising query either. None means every
+        sample is real. The weights only scale the loss terms, so a batch of padding alone
+        still yields a zero loss over the whole graph.
         """
         all_cls_scores = outputs.all_cls_scores
         all_bbox_preds = outputs.all_bbox_preds
+        label_weights = None
+        if padding_mask is not None:
+            label_weights = (~padding_mask).to(all_cls_scores.dtype).view(-1, 1, 1)
 
         losses_cls = []
         losses_bbox = []
         for cls_scores, bbox_preds in zip(all_cls_scores, all_bbox_preds):
-            loss_cls, loss_bbox = self._loss_single(cls_scores, bbox_preds, gt_boxes, gt_labels)
+            loss_cls, loss_bbox = self._loss_single(
+                cls_scores, bbox_preds, gt_boxes, gt_labels, label_weights
+            )
             losses_cls.append(loss_cls)
             losses_bbox.append(loss_bbox)
 
