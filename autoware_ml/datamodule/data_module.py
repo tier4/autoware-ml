@@ -11,7 +11,6 @@ from autoware_ml.datamodule.base_dataset import ConcatDataset
 from autoware_ml.datamodule.samplers import (
     DistributedWeightedRandomSampler,
     FrameSamplingConfig,
-    GroupStreamingSampler,
     compute_frame_sampling_weights,
 )
 from autoware_ml.datamodule.sources import DatasetSource
@@ -85,8 +84,6 @@ class DataModule(L.LightningDataModule):
         test_dataloader: DataLoaderConfig | None,
         predict_dataloader: DataLoaderConfig | None,
         train_frame_sampling: FrameSamplingConfig | None,
-        streaming: bool,
-        seed: int,
     ) -> None:
         """
         Initialize the datamodule.
@@ -100,18 +97,6 @@ class DataModule(L.LightningDataModule):
           predict_dataloader: Dataloader settings of the predict split.
           train_frame_sampling: Repeat factor sampling of the training split, None when its
             samples are drawn uniformly.
-          streaming: Whether every dataloader streams the frames of its scenes in time
-            order, for temporal models that carry a memory across batches. The sampler joins
-            the scenes, the training split reshuffling their order every epoch, and cuts
-            their frames into one lane per batch position of every rank; a cut can fall
-            inside a scene. The sampler splits the lanes over the ranks itself and Lightning
-            leaves it alone, being a ``DistributedSampler``.
-          seed: Seed of the per-epoch scene shuffle of the streaming training split; pass
-            the experiment seed so every run draws its own order.
-
-        Raises:
-          ValueError: If scene streaming is combined with frame sampling, which would draw
-            the frames of a scene apart.
         """
         super().__init__()
 
@@ -126,14 +111,7 @@ class DataModule(L.LightningDataModule):
         self.validation_dataloader_config = validation_dataloader
         self.test_dataloader_config = test_dataloader
         self.predict_dataloader_config = predict_dataloader
-        if streaming and train_frame_sampling is not None:
-            raise ValueError(
-                "Scene streaming draws whole scenes in order, so it cannot be combined with "
-                "frame sampling. Set train_frame_sampling to null."
-            )
         self.train_frame_sampling = train_frame_sampling
-        self.streaming = streaming
-        self.seed = seed
 
     def _validate_shared_taxonomy(self) -> None:
         """
@@ -271,12 +249,8 @@ class DataModule(L.LightningDataModule):
           DataLoader: Dataloader over the concatenated sources of the split.
 
         Raises:
-          ValueError: If the split has no dataset or no dataloader settings, if the
-            dataloader shuffles while scene streaming or frame sampling owns the order, if
-            a streaming training or validation loader serves a trainer with
-            ``overfit_batches``, for which Lightning swaps the scene sampler for a
-            sequential one, or if a streaming prediction would skip frames to keep its lanes
-            aligned.
+          ValueError: If the split has no dataset or no dataloader settings, or if frame
+            sampling is on while the training dataloader shuffles.
         """
         dataset = self.datasets.get(split)
         if dataset is None:
@@ -287,41 +261,7 @@ class DataModule(L.LightningDataModule):
             raise ValueError(f"Split {split} has no dataloader settings.")
 
         kwargs = config.to_dataloader_kwargs()
-        if self.streaming:
-            if config.shuffle:
-                raise ValueError(
-                    "Scene streaming owns the sample order, so the dataloader cannot shuffle. "
-                    "Set shuffle to false."
-                )
-            if (
-                split in (SplitType.TRAIN, SplitType.VAL)
-                and self.trainer is not None
-                and self.trainer.overfit_batches > 0
-            ):
-                raise ValueError(
-                    "trainer.overfit_batches makes Lightning swap the scene sampler of the "
-                    "training and validation loaders for a sequential one, which feeds every "
-                    "lane each batch_size-th sample as if it were one stream. Shorten a "
-                    "streaming run with limit_train_batches / limit_val_batches instead."
-                )
-            sampler = GroupStreamingSampler(
-                dataset,
-                batch_size=config.batch_size,
-                shuffle=split == SplitType.TRAIN,
-                seed=self.seed,
-            )
-            if split == SplitType.PREDICT:
-                # Like evaluation, prediction trims every lane to the shortest one. A frame it
-                # leaves out can pass for a frame without objects, in pseudo labels for example.
-                skipped = sampler.total_frames % sampler.num_lanes
-                if skipped:
-                    raise ValueError(
-                        f"Streaming prediction over {sampler.num_lanes} lane(s) would skip "
-                        f"{skipped} of {sampler.total_frames} frames to keep the lanes aligned. "
-                        "Predict on one device with batch_size 1 to serve every frame."
-                    )
-            kwargs["sampler"] = sampler
-        elif split == SplitType.TRAIN and self.train_frame_sampling is not None:
+        if split == SplitType.TRAIN and self.train_frame_sampling is not None:
             if config.shuffle:
                 raise ValueError(
                     "The training dataloader cannot shuffle when frame sampling is on, the "

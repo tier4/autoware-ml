@@ -104,8 +104,6 @@ def _datamodule(train_dataset: BaseDataset | None) -> DataModule:
         test_dataloader=None,
         predict_dataloader=None,
         train_frame_sampling=None,
-        streaming=False,
-        seed=0,
     )
     if train_dataset is not None:
         datamodule.datasets[SplitType.TRAIN] = ConcatDataset(datasets=[train_dataset], repeats=[1])

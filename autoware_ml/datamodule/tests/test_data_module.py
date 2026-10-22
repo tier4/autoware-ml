@@ -39,6 +39,7 @@ from autoware_ml.datamodule.samplers import (
     GroupStreamingSampler,
 )
 from autoware_ml.datamodule.sources import DatasetSource
+from autoware_ml.datamodule.streaming_data_module import StreamingDataModule
 from autoware_ml.datamodule.t4dataset.dataset import T4Dataset
 from autoware_ml.datamodule.common.detection3d import Detection3DTask
 from autoware_ml.datamodule.t4dataset.segmentation3d import T4Segmentation3DTask
@@ -269,22 +270,16 @@ class MultiSourceTestCase(unittest.TestCase):
         train_dataloader: DataLoaderConfig | None = None,
         train_frame_sampling: FrameSamplingConfig | None = None,
         splitter: SingleSplitSplitter | None = None,
-        validation_dataloader: DataLoaderConfig | None = None,
-        streaming: bool = False,
-        seed: int = 0,
-        predict_dataloader: DataLoaderConfig | None = None,
     ) -> DataModule:
         """Build a datamodule over the given sources with a splitter serving every record."""
         return DataModule(
             splitter=SingleSplitSplitter() if splitter is None else splitter,
             sources=sources,
             train_dataloader=train_dataloader,
-            validation_dataloader=validation_dataloader,
+            validation_dataloader=None,
             test_dataloader=None,
-            predict_dataloader=predict_dataloader,
+            predict_dataloader=None,
             train_frame_sampling=train_frame_sampling,
-            streaming=streaming,
-            seed=seed,
         )
 
 
@@ -809,8 +804,8 @@ def with_scenes(
     )
 
 
-class TestSceneStreaming(MultiSourceTestCase):
-    """Scene-streaming dataloaders feeding temporal models whole scenes frame by frame."""
+class StreamedCorpusTestCase(MultiSourceTestCase):
+    """Shared fixtures rewriting the main corpus into two scenes recorded out of time order."""
 
     def setUp(self) -> None:
         """Rewrite the main corpus into two scenes whose rows interleave out of time order."""
@@ -823,6 +818,10 @@ class TestSceneStreaming(MultiSourceTestCase):
         self.streamed_database = FakeDatabase(
             self.main_root, self.streamed_records, "streamed", build_taxonomy()
         )
+
+
+class TestSceneIndexGroups(StreamedCorpusTestCase):
+    """The samples of a split grouped by scene, each scene in time order."""
 
     def test_a_scene_is_served_in_time_order_whatever_the_row_order(self) -> None:
         """
@@ -878,6 +877,45 @@ class TestSceneStreaming(MultiSourceTestCase):
         with self.assertRaisesRegex(ValueError, "sources"):
             dataset.scene_index_groups()
 
+
+class TestStreamingDataModule(StreamedCorpusTestCase):
+    """Scene-streaming dataloaders feeding temporal models whole scenes frame by frame."""
+
+    def build_streaming_data_module(
+        self,
+        sources: Mapping[str, DatasetSource] | None = None,
+        train_dataloader: DataLoaderConfig | None = None,
+        validation_dataloader: DataLoaderConfig | None = None,
+        predict_dataloader: DataLoaderConfig | None = None,
+        train_frame_sampling: FrameSamplingConfig | None = None,
+        seed: int = 0,
+    ) -> StreamingDataModule:
+        """Build a streaming datamodule, by default over the two-scene corpus as one source."""
+        return StreamingDataModule(
+            splitter=SingleSplitSplitter(),
+            sources={"main": build_source(self.streamed_database)} if sources is None else sources,
+            train_dataloader=train_dataloader,
+            validation_dataloader=validation_dataloader,
+            test_dataloader=None,
+            predict_dataloader=predict_dataloader,
+            train_frame_sampling=train_frame_sampling,
+            seed=seed,
+        )
+
+    def test_tells_a_temporal_model_that_it_streams(self) -> None:
+        """
+        Input: a streaming datamodule and a plain one over the same source.
+        Expected: a model carrying a memory across batches reads ``streaming`` from the
+        datamodule of its trainer, False when the datamodule does not define it, so only the
+        streaming datamodule passes its check.
+        Check: the ``streaming`` flag each datamodule shows to such a model.
+        """
+        streaming_data_module = self.build_streaming_data_module()
+        data_module = self.build_data_module({"main": build_source(self.streamed_database)})
+
+        self.assertTrue(getattr(streaming_data_module, "streaming", False))
+        self.assertFalse(getattr(data_module, "streaming", False))
+
     def test_every_split_streams_through_the_scene_sampler(self) -> None:
         """
         Input: a streaming datamodule with a two-lane training loader and a one-lane
@@ -886,11 +924,9 @@ class TestSceneStreaming(MultiSourceTestCase):
         and only the training split reshuffles its scenes.
         Check: read the sampler type, its lane count and its shuffle flag per split.
         """
-        data_module = self.build_data_module(
-            {"main": build_source(self.streamed_database)},
+        data_module = self.build_streaming_data_module(
             train_dataloader=DataLoaderConfig(batch_size=2),
             validation_dataloader=DataLoaderConfig(batch_size=1),
-            streaming=True,
         )
         data_module.setup("fit")
 
@@ -909,10 +945,8 @@ class TestSceneStreaming(MultiSourceTestCase):
         Expected: the scene sampler owns the order, so a shuffle would break the streams.
         Check: building the training loader raises a ValueError naming the shuffle.
         """
-        data_module = self.build_data_module(
-            {"main": build_source(self.streamed_database)},
+        data_module = self.build_streaming_data_module(
             train_dataloader=DataLoaderConfig(batch_size=1, shuffle=True),
-            streaming=True,
         )
         data_module.setup("fit")
 
@@ -927,11 +961,9 @@ class TestSceneStreaming(MultiSourceTestCase):
         Check: the training loader's sampler type and seed; the validation loader does not
         shuffle.
         """
-        data_module = self.build_data_module(
-            {"main": build_source(self.streamed_database)},
+        data_module = self.build_streaming_data_module(
             train_dataloader=DataLoaderConfig(batch_size=1),
             validation_dataloader=DataLoaderConfig(batch_size=1),
-            streaming=True,
             seed=7,
         )
         data_module.setup("fit")
@@ -950,11 +982,9 @@ class TestSceneStreaming(MultiSourceTestCase):
         stream, so the datamodule refuses to build them.
         Check: both loaders raise a ValueError naming overfit_batches.
         """
-        data_module = self.build_data_module(
-            {"main": build_source(self.streamed_database)},
+        data_module = self.build_streaming_data_module(
             train_dataloader=DataLoaderConfig(batch_size=2),
             validation_dataloader=DataLoaderConfig(batch_size=1),
-            streaming=True,
         )
         data_module.setup("fit")
         data_module.trainer = L.Trainer(overfit_batches=2, accelerator="cpu", logger=False)
@@ -970,11 +1000,9 @@ class TestSceneStreaming(MultiSourceTestCase):
         Expected: Lightning leaves the sampler alone, so the loaders stream as before.
         Check: both loaders draw from the scene sampler.
         """
-        data_module = self.build_data_module(
-            {"main": build_source(self.streamed_database)},
+        data_module = self.build_streaming_data_module(
             train_dataloader=DataLoaderConfig(batch_size=2),
             validation_dataloader=DataLoaderConfig(batch_size=1),
-            streaming=True,
         )
         data_module.setup("fit")
         data_module.trainer = L.Trainer(accelerator="cpu", logger=False)
@@ -996,10 +1024,9 @@ class TestSceneStreaming(MultiSourceTestCase):
                 database=self.streamed_database,
                 predict_dataset=build_dataset(self.streamed_database),
             )
-            data_module = self.build_data_module(
+            data_module = self.build_streaming_data_module(
                 {"main": source},
                 predict_dataloader=DataLoaderConfig(batch_size=batch_size),
-                streaming=True,
             )
             data_module.setup("predict")
             return data_module.predict_dataloader()
@@ -1015,11 +1042,7 @@ class TestSceneStreaming(MultiSourceTestCase):
         Check: the constructor raises a ValueError naming frame sampling.
         """
         with self.assertRaisesRegex(ValueError, "frame sampling"):
-            self.build_data_module(
-                {"main": build_source(self.streamed_database)},
-                train_frame_sampling=FRAME_SAMPLING,
-                streaming=True,
-            )
+            self.build_streaming_data_module(train_frame_sampling=FRAME_SAMPLING)
 
 
 if __name__ == "__main__":
