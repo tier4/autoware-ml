@@ -165,10 +165,10 @@ class _ResNetMultiScale(_ResNetStages):
     def forward(
         self, x: Float32[Tensor, "batch_size in_channels height width"]
     ) -> tuple[
-        Float32[Tensor, "batch_size c2_channels height/4 width/4"],
-        Float32[Tensor, "batch_size c3_channels height/8 width/8"],
-        Float32[Tensor, "batch_size c4_channels height/16 width/16"],
-        Float32[Tensor, "batch_size c5_channels height/32 width/32"],
+        Float32[Tensor, "batch_size c2_channels c2_height c2_width"],
+        Float32[Tensor, "batch_size c3_channels c3_height c4_width"],
+        Float32[Tensor, "batch_size c4_channels c4_height c4_width"],
+        Float32[Tensor, "batch_size c5_channels c5_height c5_width"],
     ]:
         """Extract feature maps from ``layer1`` through ``layer4``.
 
