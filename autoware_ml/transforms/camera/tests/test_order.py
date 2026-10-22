@@ -29,12 +29,7 @@ from autoware_ml.geometry.cameras.base_images import BaseImages
 from autoware_ml.transforms.camera.annotations2d import LoadAnnotations2DFromBoxes3D
 from autoware_ml.transforms.camera.order import ShuffleCameraOrder
 from autoware_ml.transforms.camera.resize import ResizeMultiviewImages
-from autoware_ml.transforms.camera.tests.pinhole_fixtures import (
-    LIDAR2CAM_FORWARD,
-    build_boxes,
-    build_pinhole_images,
-    build_sample,
-)
+from autoware_ml.transforms.camera.tests.pinhole_camera_test_case import PinholeCameraTestCase
 from autoware_ml.types.geometry import Box2DFieldIndex
 
 NUM_CAMERAS = 5
@@ -67,7 +62,7 @@ def per_camera_fields(sample: ModelGTSample) -> dict[str, Any]:
     return fields
 
 
-class TestShuffleCameraOrder(unittest.TestCase):
+class TestShuffleCameraOrder(PinholeCameraTestCase):
     """Train-time shuffling of the camera order of a sample."""
 
     def build_tagged_sample(self, with_depth_maps: bool = True) -> ModelGTSample:
@@ -113,7 +108,7 @@ class TestShuffleCameraOrder(unittest.TestCase):
                 for camera in range(NUM_CAMERAS)
             ],
         )
-        return build_sample(camera_image_data)._replace(
+        return self.build_sample(camera_image_data)._replace(
             image_samples=image_samples, detection2d_gt_sample=detection2d_gt_sample
         )
 
@@ -250,12 +245,12 @@ class TestShuffleCameraOrder(unittest.TestCase):
             [[0.0, 1.0, 0.0, 0.0], [-1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0, 0, 0, 1.0]]
         )
         lidar2cams = [
-            LIDAR2CAM_FORWARD,
-            LIDAR2CAM_FORWARD @ torch.diag(torch.tensor([-1.0, -1.0, 1.0, 1.0])),
-            LIDAR2CAM_FORWARD @ turn_left,
-            LIDAR2CAM_FORWARD @ turn_left.T,
+            self.LIDAR2CAM_FORWARD,
+            self.LIDAR2CAM_FORWARD @ torch.diag(torch.tensor([-1.0, -1.0, 1.0, 1.0])),
+            self.LIDAR2CAM_FORWARD @ turn_left,
+            self.LIDAR2CAM_FORWARD @ turn_left.T,
         ]
-        boxes = build_boxes(
+        boxes = self.build_boxes(
             [
                 [10.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0],
                 [-10.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0],
@@ -264,7 +259,7 @@ class TestShuffleCameraOrder(unittest.TestCase):
             ],
             [0, 1, 2, 3],
         )
-        sample = build_sample(build_pinhole_images(lidar2cams, 160, 96))._replace(
+        sample = self.build_sample(self.build_pinhole_images(lidar2cams, 160, 96))._replace(
             detection3d_gt_bboxes_3d=boxes
         )
         project = LoadAnnotations2DFromBoxes3D()

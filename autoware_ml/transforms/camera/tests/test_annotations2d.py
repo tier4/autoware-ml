@@ -24,36 +24,44 @@ import torch
 
 from autoware_ml.dataclasses.batch.detection2d import Detection2DGTSample
 from autoware_ml.transforms.camera.annotations2d import LoadAnnotations2DFromBoxes3D
-from autoware_ml.transforms.camera.tests.pinhole_fixtures import (
-    LIDAR2CAM_FORWARD,
-    build_boxes,
-    build_pinhole_images,
-    build_sample,
-)
+from autoware_ml.transforms.camera.tests.pinhole_camera_test_case import PinholeCameraTestCase
 from autoware_ml.types.geometry import Box2DFieldIndex
 
 
-def project_annotations(
-    rows: Sequence[Sequence[float]],
-    labels: Sequence[int] | None = None,
-    lidar2cams: Sequence[torch.Tensor] = (LIDAR2CAM_FORWARD,),
-    width: int = 160,
-    height: int = 96,
-) -> Detection2DGTSample:
-    """Run LoadAnnotations2DFromBoxes3D on boxes seen by the given cameras."""
-    sample = build_sample(build_pinhole_images(lidar2cams, width, height))._replace(
-        detection3d_gt_bboxes_3d=build_boxes(rows, [0] * len(rows) if labels is None else labels)
-    )
-    return LoadAnnotations2DFromBoxes3D()(sample).detection2d_gt_sample
-
-
-class TestLoadAnnotations2DFromBoxes3D(unittest.TestCase):
+class TestLoadAnnotations2DFromBoxes3D(PinholeCameraTestCase):
     """Projection of the 3D boxes onto every camera as auxiliary 2D targets."""
+
+    def project_annotations(
+        self,
+        rows: Sequence[Sequence[float]],
+        labels: Sequence[int] | None = None,
+        lidar2cams: Sequence[torch.Tensor] | None = None,
+        width: int = 160,
+        height: int = 96,
+    ) -> Detection2DGTSample:
+        """Run LoadAnnotations2DFromBoxes3D on boxes seen by the given cameras.
+
+        Args:
+            rows: ``[x, y, z, l, w, h, yaw]`` of every gravity-center box.
+            labels: Class index of every box, 0 for all when None.
+            lidar2cams: Pose of every camera, the forward camera alone when None.
+            width: Width of the images, in pixels.
+            height: Height of the images, in pixels.
+
+        Returns:
+            Detection2DGTSample: The 2D ground truth the transform derives.
+        """
+        if lidar2cams is None:
+            lidar2cams = (self.LIDAR2CAM_FORWARD,)
+        images = self.build_pinhole_images(lidar2cams, width, height)
+        boxes = self.build_boxes(rows, [0] * len(rows) if labels is None else labels)
+        sample = self.build_sample(images)._replace(detection3d_gt_bboxes_3d=boxes)
+        return LoadAnnotations2DFromBoxes3D()(sample).detection2d_gt_sample
 
     def test_projects_a_box_in_front_of_the_camera(self) -> None:
         # A 2 m cube on the optical axis, 10 m ahead, spans 9-11 m in depth: its gravity
         # center projects onto the principal point and its near face sets the extent.
-        annotations = project_annotations(
+        annotations = self.project_annotations(
             [[10.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0]], labels=[2], width=100, height=100
         )
 
@@ -74,7 +82,7 @@ class TestLoadAnnotations2DFromBoxes3D(unittest.TestCase):
         )
 
     def test_drops_a_box_behind_the_camera(self) -> None:
-        annotations = project_annotations([[-10.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0]])
+        annotations = self.project_annotations([[-10.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0]])
 
         self.assertEqual(tuple(annotations.gt_bboxes_2d[0].shape), (0, len(Box2DFieldIndex)))
         self.assertEqual(tuple(annotations.gt_labels_2d[0].shape), (0,))
@@ -83,7 +91,7 @@ class TestLoadAnnotations2DFromBoxes3D(unittest.TestCase):
         # The center at y = 9 m projects to x = -10 while the near-right corners are inside:
         # the box stays a target with its extent clipped and its center clamped to the edge,
         # as in the reference recipe.
-        annotations = project_annotations([[10.0, 9.0, 0.0, 2.0, 6.0, 2.0, 0.0]])
+        annotations = self.project_annotations([[10.0, 9.0, 0.0, 2.0, 6.0, 2.0, 0.0]])
 
         box = annotations.gt_bboxes_2d[0][0]
         self.assertEqual(float(box[Box2DFieldIndex.X_MIN]), 0.0)
@@ -92,7 +100,7 @@ class TestLoadAnnotations2DFromBoxes3D(unittest.TestCase):
 
     def test_clips_a_partially_visible_box_to_the_image(self) -> None:
         # The center projects at x = 15, the near-left corners far outside the left edge.
-        annotations = project_annotations([[10.0, 6.5, 0.0, 2.0, 6.0, 2.0, 0.0]])
+        annotations = self.project_annotations([[10.0, 6.5, 0.0, 2.0, 6.0, 2.0, 0.0]])
 
         box = annotations.gt_bboxes_2d[0][0]
         self.assertEqual(float(box[Box2DFieldIndex.X_MIN]), 0.0)
@@ -101,8 +109,8 @@ class TestLoadAnnotations2DFromBoxes3D(unittest.TestCase):
 
     def test_follows_the_box_yaw(self) -> None:
         # A 4 m x 1 m box turned by 90 degrees shows its long side to the camera.
-        straight = project_annotations([[10.0, 0.0, 0.0, 4.0, 1.0, 1.0, 0.0]])
-        turned = project_annotations([[10.0, 0.0, 0.0, 4.0, 1.0, 1.0, math.pi / 2]])
+        straight = self.project_annotations([[10.0, 0.0, 0.0, 4.0, 1.0, 1.0, 0.0]])
+        turned = self.project_annotations([[10.0, 0.0, 0.0, 4.0, 1.0, 1.0, math.pi / 2]])
 
         def width(annotations: Detection2DGTSample) -> float:
             box = annotations.gt_bboxes_2d[0][0]
@@ -112,24 +120,24 @@ class TestLoadAnnotations2DFromBoxes3D(unittest.TestCase):
 
     def test_assigns_every_box_to_the_cameras_that_see_it(self) -> None:
         # The second camera looks backward.
-        backward = LIDAR2CAM_FORWARD @ torch.diag(torch.tensor([-1.0, -1.0, 1.0, 1.0]))
-        annotations = project_annotations(
+        backward = self.LIDAR2CAM_FORWARD @ torch.diag(torch.tensor([-1.0, -1.0, 1.0, 1.0]))
+        annotations = self.project_annotations(
             [[10.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0], [-10.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0]],
             labels=[0, 1],
-            lidar2cams=(LIDAR2CAM_FORWARD, backward),
+            lidar2cams=(self.LIDAR2CAM_FORWARD, backward),
         )
 
         self.assertEqual(annotations.gt_labels_2d[0].tolist(), [0])
         self.assertEqual(annotations.gt_labels_2d[1].tolist(), [1])
 
     def test_handles_a_frame_without_boxes(self) -> None:
-        annotations = project_annotations([])
+        annotations = self.project_annotations([])
 
         self.assertEqual(tuple(annotations.gt_bboxes_2d[0].shape), (0, len(Box2DFieldIndex)))
         self.assertEqual(tuple(annotations.gt_labels_2d[0].shape), (0,))
 
     def test_needs_the_3d_boxes(self) -> None:
-        sample = build_sample(build_pinhole_images([LIDAR2CAM_FORWARD], 160, 96))
+        sample = self.build_sample(self.build_pinhole_images([self.LIDAR2CAM_FORWARD], 160, 96))
 
         with self.assertRaises(KeyError):
             LoadAnnotations2DFromBoxes3D()(sample)

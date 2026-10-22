@@ -37,12 +37,7 @@ from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
 from autoware_ml.geometry.cameras.base_images import BaseImages
 from autoware_ml.geometry.points.lidar_points import LiDARPoints
 from autoware_ml.transforms.camera.annotations2d import LoadAnnotations2DFromBoxes3D
-from autoware_ml.transforms.camera.tests.pinhole_fixtures import (
-    LIDAR2CAM_FORWARD,
-    build_boxes,
-    build_pinhole_images,
-    build_sample,
-)
+from autoware_ml.transforms.camera.tests.pinhole_camera_test_case import PinholeCameraTestCase
 from autoware_ml.transforms.camera_lidar.geometry import (
     GlobalBEVRandomFlip,
     GlobalRotScaleTrans,
@@ -887,7 +882,7 @@ class TestGlobalRotScaleTrans(BaseCameraLidarGeometryTestCase):
         )
 
 
-class TestGlobalRotScaleTransCameraOnly(unittest.TestCase):
+class TestGlobalRotScaleTransCameraOnly(PinholeCameraTestCase):
     """The global 3D augmentation of a camera-only sample, as a camera-only pipeline serves.
 
     The sample holds the images, their calibration and the boxes but no points, which
@@ -898,8 +893,9 @@ class TestGlobalRotScaleTransCameraOnly(unittest.TestCase):
 
     def build_camera_sample(self) -> ModelGTSample:
         """A camera-only sample with one box in front of a forward-looking camera."""
-        return build_sample(build_pinhole_images([LIDAR2CAM_FORWARD], 160, 96))._replace(
-            detection3d_gt_bboxes_3d=build_boxes([[10.0, 1.0, 0.5, 4.0, 2.0, 1.5, 0.3]], [0])
+        images = self.build_pinhole_images([self.LIDAR2CAM_FORWARD], 160, 96)
+        return self.build_sample(images)._replace(
+            detection3d_gt_bboxes_3d=self.build_boxes([[10.0, 1.0, 0.5, 4.0, 2.0, 1.5, 0.3]], [0])
         )
 
     def augment(self, sample: ModelGTSample, seed: int) -> ModelGTSample:
@@ -951,8 +947,9 @@ class TestGlobalRotScaleTransCameraOnly(unittest.TestCase):
         augmented = []
         for seed, pose in enumerate(poses):
             local_box = (torch.linalg.inv(pose) @ global_box)[:3]
-            sample = build_sample(build_pinhole_images([LIDAR2CAM_FORWARD], 160, 96))._replace(
-                detection3d_gt_bboxes_3d=build_boxes(
+            images = self.build_pinhole_images([self.LIDAR2CAM_FORWARD], 160, 96)
+            sample = self.build_sample(images)._replace(
+                detection3d_gt_bboxes_3d=self.build_boxes(
                     [[*local_box.tolist(), 4.0, 2.0, 1.5, 0.0]], [0]
                 ),
                 frame_meta=FrameMetaSample(ego2global=pose, scene_token="scene"),
