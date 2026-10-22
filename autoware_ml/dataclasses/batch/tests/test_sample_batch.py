@@ -33,6 +33,7 @@ from autoware_ml.dataclasses.geometry.transformation import LiDARTransformationS
 from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
 from autoware_ml.geometry.points.lidar_points import LiDARPoints
 from autoware_ml.types.geometry import (
+    Box2DFieldIndex,
     Box3DCenterCoordinateType,
     Box3DFieldIndex,
     PointFeatureName,
@@ -189,8 +190,7 @@ class TestModelGTBatchDetection2DCollation(unittest.TestCase):
             None
             if num_boxes is None
             else Detection2DGTSample(
-                gt_bboxes_2d=[torch.ones((num_boxes, 4))],
-                gt_centers_2d=[torch.ones((num_boxes, 2))],
+                gt_bboxes_2d=[torch.ones((num_boxes, len(Box2DFieldIndex)))],
                 gt_labels_2d=[torch.zeros(num_boxes, dtype=torch.int32)],
             )
         )

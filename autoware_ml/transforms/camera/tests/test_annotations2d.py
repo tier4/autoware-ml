@@ -30,6 +30,7 @@ from autoware_ml.transforms.camera.tests.pinhole_fixtures import (
     build_pinhole_images,
     build_sample,
 )
+from autoware_ml.types.geometry import Box2DFieldIndex
 
 
 def project_annotations(
@@ -58,18 +59,24 @@ class TestLoadAnnotations2DFromBoxes3D(unittest.TestCase):
 
         self.assertEqual(annotations.gt_labels_2d[0].tolist(), [2])
         self.assertEqual(annotations.gt_labels_2d[0].dtype, torch.int32)
-        torch.testing.assert_close(annotations.gt_centers_2d[0][0], torch.tensor([50.0, 50.0]))
         extent = 100.0 / 9.0
+        expected = {
+            Box2DFieldIndex.X_MIN: 50.0 - extent,
+            Box2DFieldIndex.Y_MIN: 50.0 - extent,
+            Box2DFieldIndex.X_MAX: 50.0 + extent,
+            Box2DFieldIndex.Y_MAX: 50.0 + extent,
+            Box2DFieldIndex.CENTER_X: 50.0,
+            Box2DFieldIndex.CENTER_Y: 50.0,
+        }
         torch.testing.assert_close(
             annotations.gt_bboxes_2d[0][0],
-            torch.tensor([50.0 - extent, 50.0 - extent, 50.0 + extent, 50.0 + extent]),
+            torch.tensor([expected[field] for field in Box2DFieldIndex]),
         )
 
     def test_drops_a_box_behind_the_camera(self) -> None:
         annotations = project_annotations([[-10.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0]])
 
-        self.assertEqual(tuple(annotations.gt_bboxes_2d[0].shape), (0, 4))
-        self.assertEqual(tuple(annotations.gt_centers_2d[0].shape), (0, 2))
+        self.assertEqual(tuple(annotations.gt_bboxes_2d[0].shape), (0, len(Box2DFieldIndex)))
         self.assertEqual(tuple(annotations.gt_labels_2d[0].shape), (0,))
 
     def test_keeps_a_box_whose_center_leaves_the_image(self) -> None:
@@ -78,19 +85,19 @@ class TestLoadAnnotations2DFromBoxes3D(unittest.TestCase):
         # as in the reference recipe.
         annotations = project_annotations([[10.0, 9.0, 0.0, 2.0, 6.0, 2.0, 0.0]])
 
-        x1, _, x2, _ = annotations.gt_bboxes_2d[0][0].tolist()
-        self.assertEqual(x1, 0.0)
-        self.assertTrue(0 < x2 <= 160)
-        self.assertEqual(float(annotations.gt_centers_2d[0][0][0]), 0.0)
+        box = annotations.gt_bboxes_2d[0][0]
+        self.assertEqual(float(box[Box2DFieldIndex.X_MIN]), 0.0)
+        self.assertTrue(0 < float(box[Box2DFieldIndex.X_MAX]) <= 160)
+        self.assertEqual(float(box[Box2DFieldIndex.CENTER_X]), 0.0)
 
     def test_clips_a_partially_visible_box_to_the_image(self) -> None:
         # The center projects at x = 15, the near-left corners far outside the left edge.
         annotations = project_annotations([[10.0, 6.5, 0.0, 2.0, 6.0, 2.0, 0.0]])
 
-        x1, _, x2, _ = annotations.gt_bboxes_2d[0][0].tolist()
-        self.assertEqual(x1, 0.0)
-        self.assertTrue(0 < x2 <= 160)
-        self.assertTrue(0 <= float(annotations.gt_centers_2d[0][0][0]) < 160)
+        box = annotations.gt_bboxes_2d[0][0]
+        self.assertEqual(float(box[Box2DFieldIndex.X_MIN]), 0.0)
+        self.assertTrue(0 < float(box[Box2DFieldIndex.X_MAX]) <= 160)
+        self.assertTrue(0 <= float(box[Box2DFieldIndex.CENTER_X]) < 160)
 
     def test_follows_the_box_yaw(self) -> None:
         # A 4 m x 1 m box turned by 90 degrees shows its long side to the camera.
@@ -98,8 +105,8 @@ class TestLoadAnnotations2DFromBoxes3D(unittest.TestCase):
         turned = project_annotations([[10.0, 0.0, 0.0, 4.0, 1.0, 1.0, math.pi / 2]])
 
         def width(annotations: Detection2DGTSample) -> float:
-            x1, _, x2, _ = annotations.gt_bboxes_2d[0][0].tolist()
-            return x2 - x1
+            box = annotations.gt_bboxes_2d[0][0]
+            return float(box[Box2DFieldIndex.X_MAX] - box[Box2DFieldIndex.X_MIN])
 
         self.assertGreater(width(turned), 2.0 * width(straight))
 
@@ -118,8 +125,8 @@ class TestLoadAnnotations2DFromBoxes3D(unittest.TestCase):
     def test_handles_a_frame_without_boxes(self) -> None:
         annotations = project_annotations([])
 
-        self.assertEqual(tuple(annotations.gt_bboxes_2d[0].shape), (0, 4))
-        self.assertEqual(tuple(annotations.gt_centers_2d[0].shape), (0, 2))
+        self.assertEqual(tuple(annotations.gt_bboxes_2d[0].shape), (0, len(Box2DFieldIndex)))
+        self.assertEqual(tuple(annotations.gt_labels_2d[0].shape), (0,))
 
     def test_needs_the_3d_boxes(self) -> None:
         sample = build_sample(build_pinhole_images([LIDAR2CAM_FORWARD], 160, 96))

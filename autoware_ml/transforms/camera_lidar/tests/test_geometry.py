@@ -932,10 +932,8 @@ class TestGlobalRotScaleTransCameraOnly(unittest.TestCase):
         after = LoadAnnotations2DFromBoxes3D()(self.augment(sample, seed=1)).detection2d_gt_sample
 
         self.assertEqual(before.gt_labels_2d[0].tolist(), after.gt_labels_2d[0].tolist())
+        # The rows carry the box edges and the projected center alike.
         torch.testing.assert_close(before.gt_bboxes_2d[0], after.gt_bboxes_2d[0], atol=1e-3, rtol=0)
-        torch.testing.assert_close(
-            before.gt_centers_2d[0], after.gt_centers_2d[0], atol=1e-3, rtol=0
-        )
 
     def test_frames_augmented_on_their_own_stay_aligned_through_the_folded_poses(self) -> None:
         # One parked car seen from two ego poses. Every frame draws its own augmentation,

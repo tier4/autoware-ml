@@ -15,10 +15,10 @@
 """Derive per-camera 2D annotations from 3D boxes for auxiliary supervision.
 
 The transform projects the (already augmented) 3D ground-truth boxes onto
-every camera and emits per-camera 2D boxes, projected gravity centers, and
-labels. It must therefore run after every geometric augmentation (the image
-augmentations and the global 3D ones), so the projection matrices and the
-pixels agree.
+every camera and emits per-camera 2D boxes, each carrying its projected
+gravity center, and labels. It must therefore run after every geometric
+augmentation (the image augmentations and the global 3D ones), so the
+projection matrices and the pixels agree.
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.bbox_3d.base_bbox3d import BaseBBoxes3D
 from autoware_ml.geometry.cameras.base_images import BaseImages
 from autoware_ml.transforms.base import BaseTransform
+from autoware_ml.types.geometry import Box2DFieldIndex
 
 
 def _project_camera(
@@ -38,7 +39,7 @@ def _project_camera(
     gt_labels: torch.Tensor,
     lidar2image: torch.Tensor,
     image_size: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Project the boxes onto one camera, following the reference StreamPETR recipe.
 
     A box is kept when at least one of its corners is in front of the camera and its
@@ -54,8 +55,9 @@ def _project_camera(
         image_size: ``[width, height]`` of the served images, in pixels.
 
     Returns:
-        The clipped ``(x1, y1, x2, y2)`` boxes, the clamped centers and the labels of the
-        kept boxes.
+        The kept boxes, one row per box laid out by Box2DFieldIndex: the clipped x_min,
+        y_min, x_max, y_max, then the clamped center_x, center_y of the projected gravity
+        center; and the labels of the kept boxes.
     """
     num_boxes = corners.shape[0]
     points = torch.cat([corners.reshape(-1, 3), gravity_centers], dim=0)
@@ -70,14 +72,24 @@ def _project_camera(
     low, high = torch.minimum(low, image_size), torch.minimum(high, image_size)
     centers = torch.minimum(pixels[num_boxes * 8 :].clamp(min=0.0), image_size)
     keep = corner_front.any(dim=1).squeeze(1) & (low < high).all(dim=1)
-    return torch.cat([low[keep], high[keep]], dim=1), centers[keep], gt_labels[keep]
+    columns = {
+        Box2DFieldIndex.X_MIN: low[:, 0],
+        Box2DFieldIndex.Y_MIN: low[:, 1],
+        Box2DFieldIndex.X_MAX: high[:, 0],
+        Box2DFieldIndex.Y_MAX: high[:, 1],
+        Box2DFieldIndex.CENTER_X: centers[:, 0],
+        Box2DFieldIndex.CENTER_Y: centers[:, 1],
+    }
+    boxes = torch.stack([columns[field] for field in Box2DFieldIndex], dim=1)
+    return boxes[keep], gt_labels[keep]
 
 
 class LoadAnnotations2DFromBoxes3D(BaseTransform):
     """Project the 3D ground-truth boxes onto every camera as 2D annotations.
 
-    Every camera gets one entry per visible box: the clipped ``(x1, y1, x2, y2)``
-    pixel box, the projected gravity center clamped into the image and the class
+    Every camera gets one entry per visible box: a row laid out by Box2DFieldIndex
+    holding the clipped pixel box (x_min, y_min, x_max, y_max) and the projected
+    gravity center clamped into the image (center_x, center_y), and the class
     label, exactly the targets of the reference StreamPETR recipe. The box
     centers are gravity centers, the only center the 3D boxes take.
     """
@@ -107,17 +119,16 @@ class LoadAnnotations2DFromBoxes3D(BaseTransform):
         image_height, image_width = camera_image_data.images.shape[-2:]
         image_size = torch.tensor([image_width, image_height], dtype=torch.float32)
 
-        all_bboxes, all_centers, all_labels = [], [], []
+        all_bboxes, all_labels = [], []
         for lidar2image in camera_image_data.lidar2images:
-            camera_bboxes, camera_centers, camera_labels = _project_camera(
+            camera_bboxes, camera_labels = _project_camera(
                 bboxes.corners, bboxes.center, bboxes.bbox_labels, lidar2image, image_size
             )
             all_bboxes.append(camera_bboxes)
-            all_centers.append(camera_centers)
             all_labels.append(camera_labels)
 
         return model_gt_sample._replace(
             detection2d_gt_sample=Detection2DGTSample(
-                gt_bboxes_2d=all_bboxes, gt_centers_2d=all_centers, gt_labels_2d=all_labels
+                gt_bboxes_2d=all_bboxes, gt_labels_2d=all_labels
             )
         )
