@@ -340,8 +340,9 @@ class GroupStreamingSampler(DistributedSampler):
         self,
         dataset: Dataset,
         batch_size: int,
-        shuffle: bool = True,
-        seed: int = 0,
+        *,
+        shuffle: bool,
+        seed: int,
     ) -> None:
         """Initialize the streaming sampler.
 
@@ -352,7 +353,7 @@ class GroupStreamingSampler(DistributedSampler):
                 the dataloader batch size.
             shuffle: Whether to shuffle the scene order every epoch. Also
                 selects the fixed-length (padded) epoch described above.
-            seed: Base seed for the per-epoch scene shuffle.
+            seed: Base seed for the per-epoch scene shuffle, the experiment seed.
         """
         num_replicas = dist.get_world_size() if dist.is_available() and dist.is_initialized() else 1
         rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0

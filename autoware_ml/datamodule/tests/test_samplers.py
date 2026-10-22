@@ -321,20 +321,26 @@ def test_lanes_stay_scene_contiguous_across_batches() -> None:
     # shortest lane: lane0 gets scene 0, lane1 gets scenes 1 and 2, so both
     # lanes hold 10 frames and batch position k always continues the same
     # scene across consecutive batches.
-    sampler = GroupStreamingSampler(_FakeScenesDataset([10, 5, 5]), batch_size=2, shuffle=False)
+    sampler = GroupStreamingSampler(
+        _FakeScenesDataset([10, 5, 5]), batch_size=2, shuffle=False, seed=0
+    )
     expected = [index for pair in zip(range(0, 10), range(10, 20)) for index in pair]
     assert list(sampler) == expected
 
 
 def test_per_rank_length_is_a_whole_number_of_batches() -> None:
-    sampler = GroupStreamingSampler(_FakeScenesDataset([7, 3, 5, 2]), batch_size=3, shuffle=False)
+    sampler = GroupStreamingSampler(
+        _FakeScenesDataset([7, 3, 5, 2]), batch_size=3, shuffle=False, seed=0
+    )
     indices = list(sampler)
     assert len(indices) == len(sampler)
     assert len(indices) % 3 == 0
 
 
 def test_trimming_logs_a_warning(caplog: pytest.LogCaptureFixture) -> None:
-    sampler = GroupStreamingSampler(_FakeScenesDataset([10, 5]), batch_size=2, shuffle=False)
+    sampler = GroupStreamingSampler(
+        _FakeScenesDataset([10, 5]), batch_size=2, shuffle=False, seed=0
+    )
     with caplog.at_level(logging.WARNING, logger="autoware_ml.datamodule.samplers"):
         list(sampler)
     assert any("trimmed" in record.message for record in caplog.records)
@@ -344,7 +350,7 @@ def test_ranks_agree_on_length_and_shard_disjoint_scenes() -> None:
     dataset = _FakeScenesDataset([6, 6, 6, 6, 6, 6])
     rank_indices = []
     for rank in range(2):
-        sampler = GroupStreamingSampler(dataset, batch_size=2, shuffle=False)
+        sampler = GroupStreamingSampler(dataset, batch_size=2, shuffle=False, seed=0)
         sampler.num_replicas = 2
         sampler.rank = rank
         rank_indices.append(list(sampler))
@@ -386,11 +392,11 @@ def test_set_epoch_reshuffles_deterministically() -> None:
 
 def test_raises_when_lanes_cannot_be_filled() -> None:
     with pytest.raises(ValueError, match="cannot fill"):
-        list(GroupStreamingSampler(_FakeScenesDataset([1]), batch_size=2, shuffle=False))
+        list(GroupStreamingSampler(_FakeScenesDataset([1]), batch_size=2, shuffle=False, seed=0))
 
 
 def test_is_a_distributed_sampler_so_lightning_does_not_wrap_it() -> None:
-    sampler = GroupStreamingSampler(_FakeScenesDataset([4, 4]), batch_size=2, shuffle=False)
+    sampler = GroupStreamingSampler(_FakeScenesDataset([4, 4]), batch_size=2, shuffle=False, seed=0)
     assert isinstance(sampler, DistributedSampler)
     assert (sampler.num_replicas, sampler.rank) == (1, 0)
 
@@ -416,7 +422,7 @@ class TestFixedLengthTrainingEpochs:
 
     def test_length_is_constant_across_epochs(self) -> None:
         dataset = _FakeScenesDataset([7, 5, 18, 3, 8, 9])
-        sampler = GroupStreamingSampler(dataset, batch_size=2, shuffle=True)
+        sampler = GroupStreamingSampler(dataset, batch_size=2, shuffle=True, seed=0)
 
         lengths = []
         for epoch in range(6):
@@ -444,7 +450,7 @@ class TestFixedLengthTrainingEpochs:
 
     def test_lanes_only_advance_within_a_scene_or_start_a_new_stream(self) -> None:
         dataset = _FakeScenesDataset([7, 5, 18, 3, 8, 9])
-        sampler = GroupStreamingSampler(dataset, batch_size=3, shuffle=True)
+        sampler = GroupStreamingSampler(dataset, batch_size=3, shuffle=True, seed=0)
 
         for epoch in range(4):
             sampler.set_epoch(epoch)
@@ -459,7 +465,9 @@ class TestFixedLengthTrainingEpochs:
                     )
 
     def test_raises_when_scenes_cannot_fill_every_lane(self) -> None:
-        sampler = GroupStreamingSampler(_FakeScenesDataset([1, 1]), batch_size=3, shuffle=True)
+        sampler = GroupStreamingSampler(
+            _FakeScenesDataset([1, 1]), batch_size=3, shuffle=True, seed=0
+        )
 
         with pytest.raises(ValueError, match="cannot fill"):
             len(sampler)
@@ -468,13 +476,13 @@ class TestFixedLengthTrainingEpochs:
 class TestEvaluationTrimsInsteadOfPadding:
     def test_single_lane_serves_every_frame_exactly_once_in_file_order(self) -> None:
         dataset = _FakeScenesDataset([7, 5, 18])
-        sampler = GroupStreamingSampler(dataset, batch_size=1, shuffle=False)
+        sampler = GroupStreamingSampler(dataset, batch_size=1, shuffle=False, seed=0)
 
         assert list(iter(sampler)) == list(range(dataset.total))
 
     def test_wider_batches_trim_without_repeating_frames(self) -> None:
         dataset = _FakeScenesDataset([7, 5, 19])
-        sampler = GroupStreamingSampler(dataset, batch_size=2, shuffle=False)
+        sampler = GroupStreamingSampler(dataset, batch_size=2, shuffle=False, seed=0)
 
         indices = list(iter(sampler))
         assert len(indices) == len(set(indices))
@@ -494,12 +502,16 @@ class TestEvaluationTrimsInsteadOfPadding:
 
     def test_a_lane_cut_inside_a_scene_continues_that_scene(self) -> None:
         # Two lanes cut one scene of 9 frames: lane 1 starts at frame 4, mid-scene.
-        sampler = GroupStreamingSampler(_FakeScenesDataset([9]), batch_size=2, shuffle=False)
+        sampler = GroupStreamingSampler(
+            _FakeScenesDataset([9]), batch_size=2, shuffle=False, seed=0
+        )
 
         assert _lanes(sampler) == [[0, 1, 2, 3], [4, 5, 6, 7]]
 
     def test_logs_the_trimming_once(self, caplog: pytest.LogCaptureFixture) -> None:
-        sampler = GroupStreamingSampler(_FakeScenesDataset([10, 5]), batch_size=2, shuffle=False)
+        sampler = GroupStreamingSampler(
+            _FakeScenesDataset([10, 5]), batch_size=2, shuffle=False, seed=0
+        )
         with caplog.at_level(logging.WARNING, logger="autoware_ml.datamodule.samplers"):
             for epoch in range(3):
                 sampler.set_epoch(epoch)
