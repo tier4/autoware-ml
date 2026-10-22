@@ -329,7 +329,8 @@ class GroupStreamingSampler(DistributedSampler):
       from the first epoch, and a shorter later epoch would silently skip its validation.
     - ``shuffle=False`` (evaluation): every lane is trimmed to
       ``floor(total_frames / num_lanes)`` rounds. No frame is scored twice and fewer than
-      ``num_lanes`` tail frames go unscored, none with one rank and one lane.
+      ``num_lanes`` tail frames go unscored, none with one rank and one lane. A prediction
+      has to serve every frame, so the datamodule refuses one that would trim a frame.
 
     As a ``DistributedSampler`` it is never wrapped by Lightning, whose wrapper would keep
     only every ``num_replicas``-th index of each rank and make its lanes skip frames.

@@ -271,10 +271,11 @@ class DataModule(L.LightningDataModule):
 
         Raises:
           ValueError: If the split has no dataset or no dataloader settings, if the
-            dataloader shuffles while scene streaming or frame sampling owns the order, or if
+            dataloader shuffles while scene streaming or frame sampling owns the order, if
             a streaming training or validation loader serves a trainer with
             ``overfit_batches``, for which Lightning swaps the scene sampler for a
-            sequential one.
+            sequential one, or if a streaming prediction would skip frames to keep its lanes
+            aligned.
         """
         dataset = self.datasets.get(split)
         if dataset is None:
@@ -302,12 +303,23 @@ class DataModule(L.LightningDataModule):
                     "lane each batch_size-th sample as if it were one stream. Shorten a "
                     "streaming run with limit_train_batches / limit_val_batches instead."
                 )
-            kwargs["sampler"] = GroupStreamingSampler(
+            sampler = GroupStreamingSampler(
                 dataset,
                 batch_size=config.batch_size,
                 shuffle=split == SplitType.TRAIN,
                 seed=self.seed,
             )
+            if split == SplitType.PREDICT:
+                # Like evaluation, prediction trims every lane to the shortest one. A frame it
+                # leaves out can pass for a frame without objects, in pseudo labels for example.
+                skipped = sampler.total_frames % sampler.num_lanes
+                if skipped:
+                    raise ValueError(
+                        f"Streaming prediction over {sampler.num_lanes} lane(s) would skip "
+                        f"{skipped} of {sampler.total_frames} frames to keep the lanes aligned. "
+                        "Predict on one device with batch_size 1 to serve every frame."
+                    )
+            kwargs["sampler"] = sampler
         elif split == SplitType.TRAIN and self.train_frame_sampling is not None:
             if config.shuffle:
                 raise ValueError(

@@ -135,7 +135,10 @@ training split reshuffles the scenes every epoch from `seed`, the experiment see
 a `DistributedSampler`, so it shards the scenes itself and Lightning leaves it alone. Streaming
 cannot be combined with frame sampling, a shuffling dataloader or `trainer.overfit_batches`, for
 which Lightning swaps the sampler of the training and validation loaders for a sequential one;
-shorten a streaming run with `limit_train_batches` / `limit_val_batches` instead.
+shorten a streaming run with `limit_train_batches` / `limit_val_batches` instead. To keep the
+lanes aligned, an evaluation loader leaves out the last frame of the longer lanes, fewer frames
+than there are lanes. A prediction has to serve every frame, so a streaming prediction that would
+leave one out is refused; predict on one device with batch size 1.
 
 ### Dataset
 

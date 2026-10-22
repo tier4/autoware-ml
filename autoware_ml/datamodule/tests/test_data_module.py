@@ -24,6 +24,7 @@ import unittest
 
 import lightning as L
 import polars as pl
+from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
 from autoware_ml.databases.base_database import BaseDatabase
@@ -271,6 +272,7 @@ class MultiSourceTestCase(unittest.TestCase):
         validation_dataloader: DataLoaderConfig | None = None,
         streaming: bool = False,
         seed: int = 0,
+        predict_dataloader: DataLoaderConfig | None = None,
     ) -> DataModule:
         """Build a datamodule over the given sources with a splitter serving every record."""
         return DataModule(
@@ -279,7 +281,7 @@ class MultiSourceTestCase(unittest.TestCase):
             train_dataloader=train_dataloader,
             validation_dataloader=validation_dataloader,
             test_dataloader=None,
-            predict_dataloader=None,
+            predict_dataloader=predict_dataloader,
             train_frame_sampling=train_frame_sampling,
             streaming=streaming,
             seed=seed,
@@ -979,6 +981,32 @@ class TestSceneStreaming(MultiSourceTestCase):
 
         self.assertIsInstance(data_module.train_dataloader().sampler, GroupStreamingSampler)
         self.assertIsInstance(data_module.val_dataloader().sampler, GroupStreamingSampler)
+
+    def test_rejects_a_prediction_that_would_skip_frames(self) -> None:
+        """
+        Input: a streaming predict split of five frames, read through two lanes and through one.
+        Expected: two lanes would trim the split to four frames, and a prediction has to serve
+        every frame, so the datamodule refuses it; one lane serves all five.
+        Check: the two-lane loader raises a ValueError naming the skipped frame, the one-lane
+        loader serves every frame, each scene in time order.
+        """
+
+        def predict_loader(batch_size: int) -> DataLoader:
+            source = DatasetSource(
+                database=self.streamed_database,
+                predict_dataset=build_dataset(self.streamed_database),
+            )
+            data_module = self.build_data_module(
+                {"main": source},
+                predict_dataloader=DataLoaderConfig(batch_size=batch_size),
+                streaming=True,
+            )
+            data_module.setup("predict")
+            return data_module.predict_dataloader()
+
+        with self.assertRaisesRegex(ValueError, "skip 1 of 5 frames"):
+            predict_loader(batch_size=2)
+        self.assertEqual(list(predict_loader(batch_size=1).sampler), [4, 2, 0, 1, 3])
 
     def test_rejects_frame_sampling(self) -> None:
         """
