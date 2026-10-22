@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-import numpy as np
 import torch
 from torchvision.io import decode_image
 
@@ -46,21 +45,16 @@ class LoadImagesFromFile(BaseTransform):
         self,
         color_type: ImageChannel = ImageChannel.RGB,
         normalize_to_unit: bool = True,
-        shuffle_order: bool = False,
     ) -> None:
         """Initialize the LoadImagesFromFile transform.
 
         Args:
             color_type: Output color format, only rgb is supported now.
             normalize_to_unit: Whether to divide pixel values by ``255``.
-            shuffle_order: Whether to load the cameras of every sample in a random order, a
-                train-time regularization for models that do not depend on the camera order.
-                Every per-camera field, and the image samples, follow the drawn order.
         """
         super().__init__(probability=None)
         self.color_type = color_type
         self.normalize_to_unit = normalize_to_unit
-        self.shuffle_order = shuffle_order
 
     def load_image(self, image_path: str) -> torch.Tensor:
         """Read one image from disk as a float32 (num_channels, height, width) tensor.
@@ -93,8 +87,6 @@ class LoadImagesFromFile(BaseTransform):
         image_samples = model_gt_sample.image_samples  # type: ignore[reportOptionalIterable]
         if not image_samples:
             raise ValueError("No image samples found in the ModelGTSample.")
-        if self.shuffle_order:
-            image_samples = [image_samples[i] for i in np.random.permutation(len(image_samples))]
 
         camera_intrinsics = torch.stack([sample.camera_intrinsic for sample in image_samples])
         camera_image_data = BaseImages(
@@ -117,6 +109,4 @@ class LoadImagesFromFile(BaseTransform):
             ),
             noises=None,  # Set once the misalignment augmentation has run
         )
-        return model_gt_sample._replace(
-            image_samples=image_samples, camera_image_data=camera_image_data
-        )
+        return model_gt_sample._replace(camera_image_data=camera_image_data)
