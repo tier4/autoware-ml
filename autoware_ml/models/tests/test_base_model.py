@@ -19,6 +19,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any, ClassVar
 
+import lightning as L
 import pytest
 import torch
 
@@ -59,6 +60,10 @@ class _StreamingModel(_PointSumModel):
     """A model whose memory needs scene-contiguous batches."""
 
     requires_streaming: ClassVar[bool] = True
+
+
+class _PlainDataModule(L.LightningDataModule):
+    """A datamodule with no notion of streaming, like the plain DataModule."""
 
 
 def _attach_trainer(model: ModuleBaseModel, datamodule: object | None) -> None:
@@ -106,15 +111,22 @@ def test_setup_accepts_a_streaming_datamodule_for_a_streaming_model() -> None:
     model.setup("fit")
 
 
-def test_setup_rejects_a_streaming_model_without_a_streaming_datamodule() -> None:
+@pytest.mark.parametrize(
+    ("datamodule", "found"),
+    [
+        (_PlainDataModule(), "_PlainDataModule"),
+        (SimpleNamespace(streaming=False), "SimpleNamespace"),
+        (None, "no datamodule"),
+    ],
+    ids=["without-streaming-attribute", "streaming-false", "bare-dataloaders"],
+)
+def test_setup_rejects_a_streaming_model_without_a_streaming_datamodule(
+    datamodule: object | None, found: str
+) -> None:
     model = _StreamingModel()
+    _attach_trainer(model, datamodule)
 
-    _attach_trainer(model, SimpleNamespace(streaming=False))
-    with pytest.raises(ValueError, match="datamodule.streaming"):
-        model.setup("fit")
-    # Fitting on bare dataloaders leaves the trainer without a datamodule.
-    _attach_trainer(model, None)
-    with pytest.raises(ValueError, match="datamodule.streaming"):
+    with pytest.raises(ValueError, match=f"such as StreamingDataModule, got {found}"):
         model.setup("fit")
 
 

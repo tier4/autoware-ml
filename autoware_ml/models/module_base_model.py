@@ -80,7 +80,8 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
     All parameters are explicitly typed for IDE support and type checking.
 
     A temporal model that carries a memory across batches sets ``requires_streaming``, and
-    :meth:`setup` then requires a datamodule that streams scene-contiguous frames.
+    :meth:`setup` then requires a datamodule whose ``streaming`` attribute says that it
+    streams scene-contiguous frames.
     """
 
     requires_streaming: ClassVar[bool] = False
@@ -122,9 +123,10 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
     def setup(self, stage: str) -> None:
         """Check the datamodule against the needs of the model.
 
-        A streaming model reads ``datamodule.streaming``, which the DataModule always
-        carries. The DataModule itself refuses streaming combined with frame sampling, which
-        would draw the frames of a scene apart.
+        A streaming model asks the datamodule whether it streams scene-contiguous frames
+        through its ``streaming`` attribute. The plain DataModule has no notion of streaming,
+        so a datamodule without the attribute does not stream; a streaming datamodule such as
+        ``StreamingDataModule`` sets it to ``True``.
 
         Args:
             stage: Lightning stage being set up.
@@ -137,11 +139,12 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
         if not self.requires_streaming:
             return
         datamodule = self.trainer.datamodule
-        if datamodule is None or not datamodule.streaming:
+        if datamodule is None or not getattr(datamodule, "streaming", False):
+            found = "no datamodule" if datamodule is None else type(datamodule).__name__
             raise ValueError(
                 f"{type(self).__name__} carries temporal memory across batches, so the "
-                "datamodule must stream scene-contiguous frames; set datamodule.streaming "
-                "to true."
+                "datamodule must stream scene-contiguous frames; use a streaming datamodule "
+                f"such as StreamingDataModule, got {found}."
             )
 
     def transfer_batch_to_device(

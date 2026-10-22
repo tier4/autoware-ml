@@ -150,12 +150,14 @@ class MyModel(ModuleBaseModel):
    prediction formatting, or an explicit deployment wrapper, override the
    appropriate `ModuleBaseModel` hook instead of bypassing the shared training and
    deployment flow. A temporal model that carries a memory across batches sets the
-   `requires_streaming` class variable to `True`; `ModuleBaseModel.setup()` then refuses a
-   trainer without a datamodule or with one that does not stream scene-contiguous frames
-   (`datamodule.streaming`), and the `DataModule` itself refuses streaming combined with
-   `train_frame_sampling`. Models that override an epoch-start hook (`on_train_epoch_start`,
-   `on_validation_epoch_start`, `on_test_epoch_start`, `on_predict_epoch_start`) call
-   `super()` first; the validation and test hooks of the base model reset the metric suites.
+   `requires_streaming` class variable to `True`; `ModuleBaseModel.setup()` then asks the
+   trainer's datamodule whether it streams scene-contiguous frames (its `streaming`
+   attribute, which the plain `DataModule` does not have) and refuses a trainer without a
+   datamodule or with one that does not stream. Train such a model with a streaming
+   datamodule such as `StreamingDataModule`. Models that override an epoch-start hook
+   (`on_train_epoch_start`, `on_validation_epoch_start`, `on_test_epoch_start`,
+   `on_predict_epoch_start`) call `super()` first; the validation and test hooks of the base
+   model reset the metric suites.
 
 ## Step 2: Choose the Data
 
