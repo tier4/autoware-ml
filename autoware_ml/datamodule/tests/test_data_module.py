@@ -1032,7 +1032,8 @@ class TestStreamingDataModule(StreamedCorpusTestCase):
     def test_rejects_a_shuffling_loader(self) -> None:
         """
         Input: a streaming datamodule whose training loader asks to shuffle.
-        Expected: the scene sampler owns the order, so a shuffle would break the streams.
+        Expected: the scene sampler owns the order, and the DataLoader refuses a shuffle next
+        to a sampler.
         Check: building the training loader raises a ValueError naming the shuffle.
         """
         data_module = self.build_streaming_data_module(

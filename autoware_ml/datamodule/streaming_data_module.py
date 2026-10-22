@@ -36,8 +36,9 @@ class StreamingDataModule(DataModule):
     only to pad a lane are flagged in ``ModelGTBatch.padding_mask``.
 
     Whatever else would reorder the frames is refused: frame sampling, a shuffling dataloader
-    and ``trainer.overfit_batches``, for which Lightning swaps the sampler of the training and
-    validation loaders for a sequential one.
+    (which ``DataLoader`` itself refuses next to a sampler) and ``trainer.overfit_batches``, for
+    which Lightning swaps the sampler of the training and validation loaders for a sequential
+    one.
     """
 
     def __init__(
@@ -99,8 +100,8 @@ class StreamingDataModule(DataModule):
             ``GroupStreamingSampler`` that reshuffles the scenes of the training split only.
 
         Raises:
-          ValueError: If the split has no dataset or no dataloader settings, or if the
-            dataloader would reorder the frames.
+          ValueError: If the split has no dataset or no dataloader settings, if the dataloader
+            shuffles, or if Lightning would swap the sampler for ``trainer.overfit_batches``.
         """
         dataset = self.datasets.get(split)
         if dataset is None:
@@ -109,7 +110,7 @@ class StreamingDataModule(DataModule):
             )
         if config is None:
             raise ValueError(f"Split {split} has no dataloader settings.")
-        self._validate_frame_order(split, config)
+        self._validate_frame_order(split)
 
         sampler = GroupStreamingSampler(
             dataset,
@@ -124,24 +125,18 @@ class StreamingDataModule(DataModule):
             **config.to_dataloader_kwargs(),
         )
 
-    def _validate_frame_order(self, split: SplitType, config: DataLoaderConfig) -> None:
+    def _validate_frame_order(self, split: SplitType) -> None:
         """
         Reject a dataloader whose frames would not reach the lanes in the sampler's order.
 
         Args:
           split: Split the dataloader serves.
-          config: Dataloader settings of the split.
 
         Raises:
-          ValueError: If the dataloader shuffles, or if a training or validation loader
-            serves a trainer with ``overfit_batches``, for which Lightning swaps the scene
-            sampler for a sequential one.
+          ValueError: If a training or validation loader serves a trainer with
+            ``overfit_batches``, for which Lightning swaps the scene sampler for a sequential
+            one.
         """
-        if config.shuffle:
-            raise ValueError(
-                "Scene streaming owns the sample order, so the dataloader cannot shuffle. "
-                "Set shuffle to false."
-            )
         if (
             split in (SplitType.TRAIN, SplitType.VAL)
             and self.trainer is not None
