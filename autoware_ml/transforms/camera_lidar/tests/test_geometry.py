@@ -907,27 +907,6 @@ class TestGlobalRotScaleTransCameraOnly(PinholeCameraTestCase):
             translation_std=[0.5, 0.5, 0.2],
         )(sample)
 
-    def test_moves_the_boxes_and_records_the_augmentation_without_points(self) -> None:
-        """
-        Input: a camera-only sample (images, calibration and one box, no points) through a
-        random rotation, scale and translation.
-        Expected: without points the augmentation still moves the box and records its matrix,
-        which the frame metadata folds into the ego pose.
-        Check: the sample holds no points, the recorded matrix is not the identity, and the box
-        center is the raw center moved by that matrix.
-        """
-        sample = self.build_camera_sample()
-        raw_center = torch.cat([sample.detection3d_gt_bboxes_3d.center[0], torch.ones(1)])
-
-        augmented = self.augment(sample, seed=0)
-
-        transformation = augmented.lidar_transformation_sample.transformation_matrix
-        self.assertIsNone(augmented.point_cloud_data)
-        self.assertFalse(torch.allclose(transformation, torch.eye(4), atol=1e-3))
-        torch.testing.assert_close(
-            augmented.detection3d_gt_bboxes_3d.center[0], (transformation @ raw_center)[:3]
-        )
-
     def test_keeps_the_2d_targets(self) -> None:
         """
         Input: the 2D targets projected from a camera-only sample before and after a random
@@ -948,11 +927,12 @@ class TestGlobalRotScaleTransCameraOnly(PinholeCameraTestCase):
         """
         Input: one parked car seen from two ego poses, every frame augmented with its own
         random rotation, scale and translation.
-        Expected: the frame metadata folds every augmentation into its pose, so a temporal
-        model maps the box of the previous frame onto the box of the current one through the
-        folded poses alone.
-        Check: the previous box center mapped through both folded poses lands on the current
-        box center within 1 cm.
+        Expected: the augmentation moves the boxes of a sample without points and is recorded,
+        and the frame metadata folds it into the pose, so a temporal model maps the box of the
+        previous frame onto the box of the current one through the folded poses alone.
+        Check: every folded pose differs from the raw one, so the alignment is not that of
+        unaugmented frames, and the previous box center mapped through both folded poses lands
+        on the current box center within 1 cm.
         """
         global_box = torch.tensor([3012.0, -1180.0, 0.5, 1.0])
         poses = []
@@ -978,6 +958,8 @@ class TestGlobalRotScaleTransCameraOnly(PinholeCameraTestCase):
             [sample.frame_meta for sample in augmented],
             [sample.lidar_transformation_sample for sample in augmented],
         ).ego2globals
+        for raw, folded_pose in zip(poses, folded, strict=True):
+            self.assertFalse(torch.allclose(folded_pose, raw, atol=1e-3))
 
         previous_center = torch.cat(
             [augmented[0].detection3d_gt_bboxes_3d.center[0], torch.ones(1)]

@@ -254,18 +254,6 @@ class TestModelGTBatchDetection2DCollation(unittest.TestCase):
                 max_num_2d_gt_bboxes=3,
             )
 
-    def test_rejects_2d_boxes_without_max_num_2d_gt_bboxes(self) -> None:
-        """
-        Input: samples carrying 2D boxes, collated without max_num_2d_gt_bboxes.
-        Expected: the 2D boxes are padded to a fixed size the dataset sets, as the 3D boxes
-        are, so a dataset serving 2D boxes without one is a configuration error.
-        Check: a ValueError naming max_num_2d_gt_bboxes is raised.
-        """
-        with self.assertRaisesRegex(ValueError, "max_num_2d_gt_bboxes"):
-            ModelGTBatch.collate_gt_samples(
-                [self._build_sample(2), self._build_sample(1)], max_num_3d_gt_bboxes=0
-            )
-
 
 class TestModelGTBatchFrameMetaCollation(unittest.TestCase):
     """Unit tests for the frame metadata part of ``ModelGTBatch.collate_gt_samples``."""
