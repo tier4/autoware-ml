@@ -36,6 +36,7 @@ import torch
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.cameras.base_images import BaseImages, compose_lidar2images
+from autoware_ml.geometry.points.base_points import BasePoints
 from autoware_ml.transforms.base import BaseTransform
 from autoware_ml.transforms.camera.resize import ImageSpaceTransform
 from autoware_ml.types.geometry import PointFeatureName
@@ -225,7 +226,10 @@ class CalibrationMisalignment(BaseTransform):
         Returns:
             Updated ModelGTSample with all cameras flagged ``CalibrationStatus.CALIBRATED``.
         """
-        camera_image_data = self.required_camera_image_data(model_gt_sample)
+        # This is checked in the _validate_required_keys()
+        camera_image_data: BaseImages = (
+            model_gt_sample.camera_image_data  # type: ignore[reportOptionalMemberAccess]
+        )
         num_cameras = camera_image_data.lidar2cams.shape[0]
         calibration_statuses = torch.full(
             (num_cameras,), CalibrationStatus.CALIBRATED.value, dtype=torch.int64
@@ -246,7 +250,10 @@ class CalibrationMisalignment(BaseTransform):
             Updated ModelGTSample with perturbed ``lidar2cams`` and ``lidar2images``, the
             per-camera noise transforms and all cameras flagged ``MISCALIBRATED``.
         """
-        camera_image_data = self.required_camera_image_data(model_gt_sample)
+        # This is checked in the _validate_required_keys()
+        camera_image_data: BaseImages = (
+            model_gt_sample.camera_image_data  # type: ignore[reportOptionalMemberAccess]
+        )
         lidar2cams = camera_image_data.lidar2cams
         num_cameras = lidar2cams.shape[0]
 
@@ -508,8 +515,13 @@ class LidarCameraFusion(BaseTransform):
         Raises:
             ValueError: If the points carry no intensity feature.
         """
-        camera_image_data = self.required_camera_image_data(model_gt_sample)
-        point_cloud_data = self.required_point_cloud_data(model_gt_sample)
+        # This is checked in the _validate_required_keys()
+        camera_image_data: BaseImages = (
+            model_gt_sample.camera_image_data  # type: ignore[reportOptionalMemberAccess]
+        )
+        point_cloud_data: BasePoints = (
+            model_gt_sample.point_cloud_data  # type: ignore[reportOptionalMemberAccess]
+        )
 
         feature_names = list(point_cloud_data.point_feature_names)
         if PointFeatureName.INTENSITY not in feature_names:
@@ -820,7 +832,10 @@ class Affine(ImageSpaceTransform):
         Returns:
             Updated ModelGTSample with the warped images and the composed calibration.
         """
-        camera_image_data = self.required_camera_image_data(model_gt_sample)
+        # This is checked in the _validate_required_keys()
+        camera_image_data: BaseImages = (
+            model_gt_sample.camera_image_data  # type: ignore[reportOptionalMemberAccess]
+        )
         images = camera_image_data.images
         num_cameras, _, height, width = images.shape
 
@@ -944,7 +959,10 @@ class SaveFusionPreview(BaseTransform):
         Raises:
             ValueError: If the images carry no depth maps.
         """
-        camera_image_data = self.required_camera_image_data(model_gt_sample)
+        # This is checked in the _validate_required_keys()
+        camera_image_data: BaseImages = (
+            model_gt_sample.camera_image_data  # type: ignore[reportOptionalMemberAccess]
+        )
         if camera_image_data.depth_maps is None:
             raise ValueError(
                 f"{self.__class__.__name__} runs after LidarCameraFusion, the images carry "

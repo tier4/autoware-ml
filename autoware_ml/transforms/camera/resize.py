@@ -221,7 +221,10 @@ class CropAndScale(ImageSpaceTransform):
         Returns:
             Updated ModelGTSample instance with a cropped and scaled `camera_image_data`.
         """
-        camera_image_data = self.required_camera_image_data(model_gt_sample)
+        # This is checked in the _validate_required_keys()
+        camera_image_data: BaseImages = (
+            model_gt_sample.camera_image_data  # type: ignore[reportOptionalMemberAccess]
+        )
 
         images = camera_image_data.images
         height, width = images.shape[-2:]
@@ -314,7 +317,10 @@ class ResizeMultiviewImages(ImageSpaceTransform):
         Returns:
             Updated ModelGTSample instance with a resized `camera_image_data`.
         """
-        camera_image_data = self.required_camera_image_data(model_gt_sample)
+        # This is checked in the _validate_required_keys()
+        camera_image_data: BaseImages = (
+            model_gt_sample.camera_image_data  # type: ignore[reportOptionalMemberAccess]
+        )
 
         images = camera_image_data.images
         source_height, source_width = images.shape[-2:]
@@ -380,7 +386,10 @@ class PadMultiViewImage(ImageSpaceTransform):
         Raises:
             ValueError: If the images are larger than the size they are padded to.
         """
-        camera_image_data = self.required_camera_image_data(model_gt_sample)
+        # This is checked in the _validate_required_keys()
+        camera_image_data: BaseImages = (
+            model_gt_sample.camera_image_data  # type: ignore[reportOptionalMemberAccess]
+        )
 
         images = camera_image_data.images
         height, width = images.shape[-2:]
@@ -484,7 +493,10 @@ class ResizeCropFlipRotImage(ImageSpaceTransform):
         Returns:
             Updated ModelGTSample instance with an augmented `camera_image_data`.
         """
-        camera_image_data = self.required_camera_image_data(model_gt_sample)
+        # This is checked in the _validate_required_keys()
+        camera_image_data: BaseImages = (
+            model_gt_sample.camera_image_data  # type: ignore[reportOptionalMemberAccess]
+        )
 
         images = camera_image_data.images
         source_height, source_width = images.shape[-2:]

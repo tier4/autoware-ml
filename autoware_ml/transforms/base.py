@@ -24,8 +24,6 @@ from collections.abc import Sequence
 import numpy as np
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
-from autoware_ml.geometry.cameras.base_images import BaseImages
-from autoware_ml.geometry.points.base_points import BasePoints
 
 
 class BaseTransform(ABC):
@@ -82,44 +80,6 @@ class BaseTransform(ABC):
         for key in self._required_keys:
             if getattr(model_gt_sample, key) is None:
                 raise KeyError(f"{self.__class__.__name__}: Missing required key '{key}'")
-
-    def required_camera_image_data(self, model_gt_sample: ModelGTSample) -> BaseImages:
-        """Return the camera image data the transform runs on.
-
-        Args:
-            model_gt_sample: ModelGTSample instance containing `camera_image_data`.
-
-        Returns:
-            The camera image data held by `model_gt_sample`.
-
-        Raises:
-            KeyError: If `model_gt_sample` holds no camera image data. `__call__` already
-                rejects it for the transforms listing the key, so this only guards a direct
-                `transform` call.
-        """
-        camera_image_data = model_gt_sample.camera_image_data
-        if camera_image_data is None:
-            raise KeyError(f"{self.__class__.__name__}: Missing required key 'camera_image_data'")
-        return camera_image_data
-
-    def required_point_cloud_data(self, model_gt_sample: ModelGTSample) -> BasePoints:
-        """Return the point cloud data the transform runs on.
-
-        Args:
-            model_gt_sample: ModelGTSample instance containing `point_cloud_data`.
-
-        Returns:
-            The point cloud data held by `model_gt_sample`.
-
-        Raises:
-            KeyError: If `model_gt_sample` holds no point cloud data. `__call__` already
-                rejects it for the transforms listing the key, so this only guards a direct
-                `transform` call.
-        """
-        point_cloud_data = model_gt_sample.point_cloud_data
-        if point_cloud_data is None:
-            raise KeyError(f"{self.__class__.__name__}: Missing required key 'point_cloud_data'")
-        return point_cloud_data
 
     def _should_apply(self) -> bool:
         """Determine if transform should be applied based on probability.

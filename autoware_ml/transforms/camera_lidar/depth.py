@@ -26,6 +26,7 @@ from torch import Tensor
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.cameras.base_images import BaseImages
+from autoware_ml.geometry.points.base_points import BasePoints
 from autoware_ml.transforms.base import BaseTransform
 
 
@@ -136,8 +137,13 @@ class LiDARDepthSparseTransform(BaseTransform):
         Returns:
             Updated ModelGTSample instance with `depth_images` set in `camera_image_data`.
         """
-        point_cloud_data = self.required_point_cloud_data(model_gt_sample)
-        camera_image_data = self.required_camera_image_data(model_gt_sample)
+        # This is checked in the _validate_required_keys()
+        point_cloud_data: BasePoints = (
+            model_gt_sample.point_cloud_data  # type: ignore[reportOptionalMemberAccess]
+        )
+        camera_image_data: BaseImages = (
+            model_gt_sample.camera_image_data  # type: ignore[reportOptionalMemberAccess]
+        )
 
         lidar2images = camera_image_data.lidar2images
         height, width = camera_image_data.images.shape[-2:]
