@@ -12,14 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Iteration-warmup, epoch-cosine learning-rate schedule.
-
-This reproduces the common mmengine recipe of chaining an iteration-based
-``LinearLR`` warmup with an epoch-based ``CosineAnnealingLR``: the two factors
-multiply, warmup resolving per optimization step while the cosine decay
-resolves per epoch. Step it every optimization step
-(``scheduler_config: {interval: step}``).
-"""
+"""Iteration-warmup, epoch-cosine learning-rate scheduler."""
 
 from __future__ import annotations
 
@@ -30,49 +23,23 @@ from torch.optim.lr_scheduler import LRScheduler
 
 
 class IterWarmupEpochCosineLR(LRScheduler):
-    """Linear per-iteration warmup multiplied by per-epoch cosine annealing.
+    """Linear warmup per optimization step multiplied by a cosine decay per epoch.
 
-    The cosine factor holds for a stage of ``total_steps // max_epochs`` optimization steps
-    (``steps_per_epoch``), ``max_epochs`` stages in all. A stage is one data epoch only when
-    ``trainer.max_steps`` does not cap the run. Under a cap, ``total_steps`` is the cap and
-    the whole cosine runs inside it, as a step-bounded ``OneCycleLR`` with
-    ``total_steps: ${trainer.max_steps}`` spans the run. For example, ``max_steps=300`` over
-    100-batch epochs with ``max_epochs=10`` changes the factor every 30 steps and reaches
-    the last stage in the third data epoch.
-
-    Differences from ``LinearWarmupCosineAnnealingLR``:
-
-    - A warmup start relative to every param group. The warmup starts at
-      ``warmup_start_factor`` times the base learning rate of every param group, as mmengine's
-      ``LinearLR`` does, where ``LinearWarmupCosineAnnealingLR`` starts every group at one
-      absolute ``warmup_start_lr``. StreamPETR trains its image backbone at a tenth of the
-      learning rate of the rest, and no absolute start is a third of both: a start above the
-      backbone's own learning rate would warm it down. The cosine floor is one absolute
-      learning rate shared by every group in both classes, here ``eta_min_factor`` times the
-      optimizer's default learning rate.
-    - The warmup overlaps the cosine. Both factors run from step 0 and multiply, as mmengine's
-      ``LinearLR(by_epoch=False)`` chained with ``CosineAnnealingLR(by_epoch=True)`` does,
-      where ``LinearWarmupCosineAnnealingLR`` starts its cosine once the warmup has ended,
-      shifted and shortened by it.
-    - A per-epoch staircase stepped every iteration. The cosine factor holds for a whole stage
-      while the warmup advances every step. ``LinearWarmupCosineAnnealingLR`` counts both
-      phases in the one unit it is stepped in: stepped every iteration its cosine is smooth,
-      stepped every epoch its warmup advances once an epoch.
+    Every param group starts at ``warmup_start_factor`` times its own learning rate and warms up
+    linearly over ``warmup_iters`` steps. The cosine factor changes once per epoch of
+    ``total_steps // max_epochs`` steps and decays towards ``eta_min_factor`` times the
+    optimizer's default learning rate, one floor for every group. Under a
+    ``trainer.max_steps`` cap the whole cosine runs inside the cap. Step it every optimization
+    step (``scheduler_config: {interval: step}``).
 
     Args:
         optimizer: Wrapped optimizer.
-        total_steps: Total optimization steps of the run, auto-filled by the framework from
-            ``trainer.estimated_stepping_batches``.
-        max_epochs: Number of cosine stages, which sets the stage length and the cosine
-            period; bind it in the config with ``max_epochs: ${trainer.max_epochs}``.
-        warmup_iters: Length of the linear warmup in optimization steps.
+        total_steps: Total optimization steps of the run, filled in by the framework.
+        max_epochs: Number of epochs of the cosine; bind it to ``${trainer.max_epochs}``.
+        warmup_iters: Number of warmup steps.
         warmup_start_factor: Learning-rate factor of every param group at step 0.
-        eta_min_factor: Cosine floor as a fraction of the optimizer's default learning rate
-            (``optimizer.defaults["lr"]``). The floor is one absolute learning rate shared
-            by every param group, as the reference recipe's ``eta_min = lr * 1e-4``, so a
-            group trained at a fraction of the default rate anneals towards the same floor.
-        last_epoch: Index of the last step (scheduler steps once per
-            optimization step).
+        eta_min_factor: Cosine floor as a fraction of the optimizer's default learning rate.
+        last_epoch: Index of the last step.
     """
 
     def __init__(

@@ -487,9 +487,8 @@ class TestIterWarmupEpochCosineLR:
         Input: param groups at learning rates 1.0 and 0.1, four cosine stages of 10 steps, and
         a 15-step warmup from half the learning rate that reaches into the second stage.
         Expected: every group runs at its own learning rate times the warmup factor of the
-        step and the cosine factor of the step's stage. The cosine starts at step 0 instead of
-        after the warmup, the two factors multiply where they overlap, and the cosine holds
-        for a whole stage while the warmup advances every step.
+        step and the cosine factor of the step's stage; the cosine holds for a whole stage
+        while the warmup advances every step.
         Check: the learning rates of all 40 steps against that product, and the one at step
         12, inside the warmup and the second stage, against its value.
         """
@@ -522,10 +521,9 @@ class TestIterWarmupEpochCosineLR:
         """
         Input: an optimizer whose default learning rate is 1.0, with a backbone group at 0.1,
         stepped through 100 one-step cosine stages without warmup and a floor factor of 0.01.
-        Expected: the floor is one absolute learning rate, 0.01 times the default one, shared
-        by both groups as the reference recipe's eta_min = lr * 1e-4 is, so every group
-        anneals from its own learning rate towards that floor, and the backbone ends at the
-        same floor as the default group instead of at a hundredth of its own rate.
+        Expected: the floor is one absolute learning rate, 0.01 times the default one, so
+        every group anneals from its own learning rate towards that floor and the backbone
+        ends at the same floor as the default group.
         Check: the learning rates of both groups at every step against the floor plus the
         stage's cosine share of the gap to their own rate, and both last learning rates
         against the floor.
