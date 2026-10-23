@@ -10,38 +10,46 @@ from autoware_ml.dataclasses.batch.detection2d import Detection2DGTBatch, Detect
 from autoware_ml.types.geometry import Box2DFieldIndex
 
 
-def build_sample(counts: list[int], offset: float = 0.0) -> Detection2DGTSample:
-    """2D ground truth with the given number of boxes per camera, values tagged by ``offset``.
-
-    The box edges of camera ``c`` hold ``offset + c`` and its centers ``offset - c``.
-    """
-    boxes = []
-    for camera, count in enumerate(counts):
-        camera_boxes = torch.full((count, len(Box2DFieldIndex)), offset + camera)
-        camera_boxes[:, Box2DFieldIndex.CENTER_X :] = offset - camera
-        boxes.append(camera_boxes)
-    return Detection2DGTSample(
-        gt_bboxes_2d=boxes,
-        gt_labels_2d=[
-            torch.arange(count, dtype=torch.int32) + camera for camera, count in enumerate(counts)
-        ],
-    )
-
-
-class TestDetection2DGTBatch(unittest.TestCase):
-    """Collation of the per-camera 2D boxes of a batch."""
+class Detection2DGTBatchTestCase(unittest.TestCase):
+    """Shared fixtures for the Detection2DGTBatch tests."""
 
     MAX_NUM_2D_GT_BBOXES = 4
 
     def setUp(self) -> None:
         """Two samples of two cameras holding 2, 0 and 1, 3 boxes."""
-        self.samples = [build_sample([2, 0], offset=10.0), build_sample([1, 3], offset=20.0)]
+        self.samples = [
+            self.build_sample([2, 0], offset=10.0),
+            self.build_sample([1, 3], offset=20.0),
+        ]
+
+    @staticmethod
+    def build_sample(counts: list[int], offset: float = 0.0) -> Detection2DGTSample:
+        """2D ground truth with the given number of boxes per camera, values tagged by ``offset``.
+
+        The box edges of camera ``c`` hold ``offset + c`` and its centers ``offset - c``.
+        """
+        boxes = []
+        for camera, count in enumerate(counts):
+            camera_boxes = torch.full((count, len(Box2DFieldIndex)), offset + camera)
+            camera_boxes[:, Box2DFieldIndex.CENTER_X :] = offset - camera
+            boxes.append(camera_boxes)
+        return Detection2DGTSample(
+            gt_bboxes_2d=boxes,
+            gt_labels_2d=[
+                torch.arange(count, dtype=torch.int32) + camera
+                for camera, count in enumerate(counts)
+            ],
+        )
 
     def collate(self, samples: list[Detection2DGTSample]) -> Detection2DGTBatch:
         """Collate the samples with the padding size of the tests."""
         return Detection2DGTBatch.collate_gt_samples(
             samples, max_num_2d_gt_bboxes=self.MAX_NUM_2D_GT_BBOXES
         )
+
+
+class TestDetection2DGTBatch(Detection2DGTBatchTestCase):
+    """Collation of the per-camera 2D boxes of a batch."""
 
     def test_pads_every_camera_to_max_num_2d_gt_bboxes(self) -> None:
         """
@@ -69,7 +77,7 @@ class TestDetection2DGTBatch(unittest.TestCase):
         them, the third is left out of the batch, and the cut is logged.
         Check: the valid count, the kept boxes and labels, and the log naming the camera.
         """
-        sample = build_sample([1, 3], offset=20.0)
+        sample = self.build_sample([1, 3], offset=20.0)
         sample = sample._replace(
             gt_bboxes_2d=[
                 sample.gt_bboxes_2d[0],
@@ -110,7 +118,7 @@ class TestDetection2DGTBatch(unittest.TestCase):
         every camera an empty box set.
         Check: the box shape, the valid counts and the unpadded box shape.
         """
-        batch = self.collate([build_sample([0, 0])])
+        batch = self.collate([self.build_sample([0, 0])])
 
         self.assertEqual(tuple(batch.gt_bboxes_2d.shape), (1, 2, 4, len(Box2DFieldIndex)))
         self.assertEqual(batch.gt_valid_bboxes_2d.tolist(), [[0, 0]])
@@ -124,7 +132,7 @@ class TestDetection2DGTBatch(unittest.TestCase):
         Check: a ValueError naming the cameras is raised.
         """
         with self.assertRaisesRegex(ValueError, "cameras"):
-            self.collate([build_sample([1, 1]), build_sample([1])])
+            self.collate([self.build_sample([1, 1]), self.build_sample([1])])
 
     def test_rejects_a_camera_whose_labels_differ_from_its_boxes(self) -> None:
         """
@@ -135,7 +143,7 @@ class TestDetection2DGTBatch(unittest.TestCase):
         """
         for num_labels in (1, 3):
             with self.subTest(labels=num_labels):
-                sample = build_sample([1, 2])
+                sample = self.build_sample([1, 2])
                 sample = sample._replace(
                     gt_labels_2d=[
                         sample.gt_labels_2d[0],
@@ -146,7 +154,7 @@ class TestDetection2DGTBatch(unittest.TestCase):
                 with self.assertRaisesRegex(
                     ValueError, f"sample 1, camera 1 differ in count: 2 and {num_labels}"
                 ):
-                    self.collate([build_sample([1, 1]), sample])
+                    self.collate([self.build_sample([1, 1]), sample])
 
     def test_rejects_boxes_not_laid_out_by_box2d_field_index(self) -> None:
         """
@@ -158,7 +166,7 @@ class TestDetection2DGTBatch(unittest.TestCase):
         """
         for num_columns in (4, 1):
             with self.subTest(columns=num_columns):
-                sample = build_sample([1, 2])
+                sample = self.build_sample([1, 2])
                 sample = sample._replace(
                     gt_bboxes_2d=[sample.gt_bboxes_2d[0], torch.zeros(2, num_columns)]
                 )
@@ -166,7 +174,7 @@ class TestDetection2DGTBatch(unittest.TestCase):
                 with self.assertRaisesRegex(
                     ValueError, rf"sample 1, camera 1 have shape \(2, {num_columns}\)"
                 ):
-                    self.collate([build_sample([1, 1]), sample])
+                    self.collate([self.build_sample([1, 1]), sample])
 
     def test_rejects_an_empty_batch(self) -> None:
         """
