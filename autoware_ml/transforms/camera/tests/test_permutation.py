@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for the camera order augmentation."""
+"""Unit tests for the camera permutation augmentation."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.dataclasses.geometry.images import ImageSample
 from autoware_ml.geometry.cameras.base_images import BaseImages
 from autoware_ml.transforms.camera.annotations2d import LoadAnnotations2DFromBoxes3D
-from autoware_ml.transforms.camera.order import ShuffleCameraOrder
+from autoware_ml.transforms.camera.permutation import ShuffleCameraOrder
 from autoware_ml.transforms.camera.resize import ResizeMultiviewImages
 from autoware_ml.transforms.camera.tests.pinhole_camera_test_case import PinholeCameraTestCase
 from autoware_ml.types.geometry import Box2DFieldIndex
