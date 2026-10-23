@@ -51,12 +51,8 @@ class BaseDataset(Dataset):
           max_num_3d_gt_bboxes: Number of 3D boxes every sample is padded to in a batch, extra
               boxes are dropped. Required when the samples carry 3D boxes, None otherwise.
           max_num_2d_gt_bboxes: Number of 2D boxes every camera of a sample is padded to in a
-              batch, extra boxes are dropped. Required when the samples carry per-camera 2D
-              boxes, None otherwise. LoadAnnotations2DFromBoxes3D projects every 3D box onto a
-              camera at most once, so a camera never holds more 2D boxes than its sample held
-              3D boxes at the projection, and a config can set this to max_num_3d_gt_bboxes: a
-              camera is then cut only when its sample held more 3D boxes than that at the
-              projection.
+              batch, extra boxes are dropped. Required when the samples carry 2D boxes, None
+              otherwise.
           dataset_records_dataframe: Polars DataFrame of the dataset records. None until the
               dataset is bound to the records of its source.
           transforms: Global transforms to be applied to the dataset records.

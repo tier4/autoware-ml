@@ -12,13 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Derive per-camera 2D annotations from 3D boxes for auxiliary supervision.
+"""Per-camera 2D annotations projected from the 3D boxes, for auxiliary 2D supervision.
 
-The transform projects the (already augmented) 3D ground-truth boxes onto
-every camera and emits per-camera 2D boxes, each carrying its projected
-gravity center, and labels. It must therefore run after every geometric
-augmentation (the image augmentations and the global 3D ones), so the
-projection matrices and the pixels agree.
+The projection reads the calibration and the image size of the sample as they are when it
+runs, so the transform must run after every geometric augmentation, the image-space ones and
+the global 3D ones alike.
 """
 
 from __future__ import annotations
@@ -40,12 +38,14 @@ def _project_camera(
     lidar2image: torch.Tensor,
     image_size: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Project the boxes onto one camera, following the reference StreamPETR recipe.
+    """Project the boxes onto one camera by the rule of the reference recipe.
 
-    A box is kept when at least one of its corners is in front of the camera and its
-    extent, clipped to the image, has a non-zero area; the corners behind the camera have
-    no meaningful projection and are left out of the extent. The projected gravity center
-    is clamped into the image, so a box whose center leaves the image is still a target.
+    The rule is that of the reference's ``compute_bbox_and_centers``: a box is kept when at
+    least one of its corners is in front of the camera and its extent, clipped to the image,
+    has a non-zero area; the corners behind the camera have no meaningful projection and are
+    left out of the extent. The projected gravity center is clamped into the image, so a box
+    whose center leaves the image is still a target. A center behind the camera is divided by
+    its negative depth and clamped all the same, as in the reference.
 
     Args:
         corners: Box corners ``(N, 8, 3)`` in the lidar frame.
@@ -87,11 +87,9 @@ def _project_camera(
 class LoadAnnotations2DFromBoxes3D(BaseTransform):
     """Project the 3D ground-truth boxes onto every camera as 2D annotations.
 
-    Every camera gets one entry per visible box: a row laid out by Box2DFieldIndex
-    holding the clipped pixel box (x_min, y_min, x_max, y_max) and the projected
-    gravity center clamped into the image (center_x, center_y), and the class
-    label, exactly the targets of the reference StreamPETR recipe. The box
-    centers are gravity centers, the only center the 3D boxes take.
+    The sample's Detection2DGTSample gets, for every camera, one Box2DFieldIndex row and one
+    label per box the camera sees, by the rule of ``_project_camera``. The center columns hold
+    the projected gravity center, the only center the 3D boxes take.
     """
 
     _required_keys = ["camera_image_data", "detection3d_gt_bboxes_3d"]

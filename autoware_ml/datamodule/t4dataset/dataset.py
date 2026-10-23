@@ -73,9 +73,8 @@ class T4Dataset(BaseDataset):
           max_num_3d_gt_bboxes: Number of 3D boxes every sample is padded to in a batch, extra
             boxes are dropped. Required when the samples carry 3D boxes, None otherwise.
           max_num_2d_gt_bboxes: Number of 2D boxes every camera of a sample is padded to in a
-            batch, extra boxes are dropped. Required when the samples carry per-camera 2D
-            boxes, None otherwise. A camera never holds more 2D boxes projected from the 3D
-            boxes than its sample held 3D boxes, so a config can reuse max_num_3d_gt_bboxes.
+            batch, extra boxes are dropped. Required when the samples carry 2D boxes, None
+            otherwise.
           dataset_records_dataframe: Records of the corpus. None until bound to records.
           transforms: Global transforms to be applied to the dataset records.
           dataset_tasks: Factory of every task dataset, mapped by task type name. Each one is
