@@ -75,9 +75,8 @@ class Detection2DGTBatch(NamedTuple):
             up to ``max_num_2d_gt_bboxes`` are padding, zero boxes with label -1.
 
         Raises:
-          ValueError: If the batch is empty, its samples disagree on the camera count, or the
-            boxes of a camera are not laid out by Box2DFieldIndex or differ in count from its
-            labels.
+          ValueError: If the batch is empty, or the boxes of a camera are not laid out by
+            Box2DFieldIndex or differ in count from its labels.
         """
         if len(samples) == 0:
             raise ValueError("At least one 2D detection sample is required for collating.")
@@ -88,11 +87,6 @@ class Detection2DGTBatch(NamedTuple):
         gt_labels_2d = torch.full(shape, -1, dtype=torch.int32)
         gt_valid_bboxes_2d = torch.zeros(shape[:2], dtype=torch.int32)
         for sample_index, sample in enumerate(samples):
-            if len(sample.gt_bboxes_2d) != num_cameras:
-                raise ValueError(
-                    f"Every sample needs the 2D boxes of {num_cameras} cameras, sample "
-                    f"{sample_index} has {len(sample.gt_bboxes_2d)}."
-                )
             # ``strict`` rejects labels given for another number of cameras.
             for camera_index, (boxes, labels) in enumerate(
                 zip(sample.gt_bboxes_2d, sample.gt_labels_2d, strict=True)

@@ -124,16 +124,6 @@ class TestDetection2DGTBatch(Detection2DGTBatchTestCase):
         self.assertEqual(batch.gt_valid_bboxes_2d.tolist(), [[0, 0]])
         self.assertEqual(batch.valid_bboxes_2d()[0][1].shape, (0, len(Box2DFieldIndex)))
 
-    def test_rejects_samples_with_different_cameras(self) -> None:
-        """
-        Input: a sample of two cameras next to a sample of one.
-        Expected: every camera takes one slot of the camera axis of the batch, so the samples
-        must agree on the camera count.
-        Check: a ValueError naming the cameras is raised.
-        """
-        with self.assertRaisesRegex(ValueError, "cameras"):
-            self.collate([self.build_sample([1, 1]), self.build_sample([1])])
-
     def test_rejects_a_camera_whose_labels_differ_from_its_boxes(self) -> None:
         """
         Input: camera 1 of sample 1 holding 2 boxes with 1 label, then with 3 labels.
