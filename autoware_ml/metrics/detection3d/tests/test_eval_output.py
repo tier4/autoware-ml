@@ -201,6 +201,9 @@ class TestTypedDetection3DEvalOutput(unittest.TestCase):
             frame_meta_batch=FrameMetaBatch(
                 ego2globals=ego2globals,
                 scene_tokens=["db/scene_a/0", "db/scene_b/1"],
+                timestamps_seconds=torch.tensor(
+                    [0.0, 0.1], dtype=torch.float64, device=self.device
+                ),
                 lanelet_map_paths=["/maps/scene_a.osm", None],
             )
         )

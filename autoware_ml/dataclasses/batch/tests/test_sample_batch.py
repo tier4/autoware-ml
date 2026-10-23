@@ -212,8 +212,8 @@ class TestModelGTBatchFrameMetaCollation(unittest.TestCase):
 
     def test_collate_stacks_poses_and_scene_tokens_in_batch_order(self) -> None:
         samples = [
-            self._build_sample(FrameMetaSample(self._build_ego2global(1.0), "db/scene_a/0")),
-            self._build_sample(FrameMetaSample(self._build_ego2global(2.0), "db/scene_b/1")),
+            self._build_sample(FrameMetaSample(self._build_ego2global(1.0), "db/scene_a/0", 0.0)),
+            self._build_sample(FrameMetaSample(self._build_ego2global(2.0), "db/scene_b/1", 0.0)),
         ]
 
         frame_meta_batch = self._collate(samples)
@@ -229,7 +229,7 @@ class TestModelGTBatchFrameMetaCollation(unittest.TestCase):
         augmentation = torch.eye(4, dtype=torch.float32)
         augmentation[0, 3] = 5.0
         sample = self._build_sample(
-            FrameMetaSample(self._build_ego2global(1.0), "db/scene/0"),
+            FrameMetaSample(self._build_ego2global(1.0), "db/scene/0", 0.0),
             LiDARTransformationSample(transformation_matrix=augmentation, transformation_order=[]),
         )
 
@@ -246,7 +246,7 @@ class TestModelGTBatchFrameMetaCollation(unittest.TestCase):
         self.assertIsNone(self._collate([self._build_sample(None), self._build_sample(None)]))
 
     def test_collate_rejects_partial_frame_meta(self) -> None:
-        with_meta = self._build_sample(FrameMetaSample(self._build_ego2global(0.0), "db/s/0"))
+        with_meta = self._build_sample(FrameMetaSample(self._build_ego2global(0.0), "db/s/0", 0.0))
         without_meta = self._build_sample(None)
 
         with self.assertRaisesRegex(ValueError, "frame_meta"):
@@ -256,7 +256,7 @@ class TestModelGTBatchFrameMetaCollation(unittest.TestCase):
 
     def test_to_device_moves_poses_and_keeps_tokens(self) -> None:
         batch = ModelGTBatch.collate_gt_samples(
-            [self._build_sample(FrameMetaSample(self._build_ego2global(3.0), "db/s/0"))],
+            [self._build_sample(FrameMetaSample(self._build_ego2global(3.0), "db/s/0", 0.0))],
             max_num_3d_gt_bboxes=0,
         )
 
@@ -375,3 +375,112 @@ class TestModelGTBatchSegmentation3DCollation(unittest.TestCase):
 
         self.assertEqual(moved.gt_semantic_masks.device.type, "cpu")
         self.assertEqual(moved.batch_indices.device.type, "cpu")
+
+
+class TestModelGTBatchPaddingMask(unittest.TestCase):
+    """Unit tests for the padding flags of ``ModelGTBatch.collate_gt_samples``."""
+
+    def _build_sample(self, is_padding: bool) -> ModelGTSample:
+        """Build a sample holding one 3D box, flagged as padding or not."""
+        bbox_params = torch.zeros((1, len(Box3DFieldIndex)), dtype=torch.float32)
+        bbox_params[:, Box3DFieldIndex.LENGTH : Box3DFieldIndex.HEIGHT + 1] = 1.0
+        return ModelGTSample(
+            lidar_point_cloud_samples=None,
+            image_samples=None,
+            point_cloud_data=None,
+            camera_image_data=None,
+            detection3d_gt_bboxes_3d=LidarBBoxes3D(
+                bbox_params=bbox_params,
+                bbox_labels=torch.zeros(1, dtype=torch.int32),
+                bbox_label_names=["car"],
+                bbox_num_lidar_points=torch.full((1,), 5, dtype=torch.int32),
+                bbox_center_coordinate_type=Box3DCenterCoordinateType.GRAVITY_CENTER,
+            ),
+            segmentation3d_gt_sample=None,
+            is_padding=is_padding,
+        )
+
+    def _collate(self, flags: Sequence[bool]) -> ModelGTBatch:
+        """Collate one sample per flag, in order."""
+        return ModelGTBatch.collate_gt_samples(
+            [self._build_sample(is_padding) for is_padding in flags], max_num_3d_gt_bboxes=2
+        )
+
+    def test_sample_defaults_to_a_frame_of_the_split(self) -> None:
+        """
+        Input: a sample built without the padding flag.
+        Expected: only the dataset stamps a sample as padding, so a sample serves a frame of
+        the split by default.
+        Check: the flag is False.
+        """
+        sample = ModelGTSample(
+            lidar_point_cloud_samples=None,
+            image_samples=None,
+            point_cloud_data=None,
+            camera_image_data=None,
+            detection3d_gt_bboxes_3d=None,
+            segmentation3d_gt_sample=None,
+        )
+
+        self.assertFalse(sample.is_padding)
+
+    def test_collate_flags_the_padding_samples_in_batch_order(self) -> None:
+        """
+        Input: three samples, the middle one padding.
+        Expected: the batch flags each sample at its position, so a model can drop the
+        padded one from its loss and metrics, and counts the other two as real.
+        Check: the padding mask and the number of real samples.
+        """
+        batch = self._collate([False, True, False])
+
+        assert batch.padding_mask is not None
+        self.assertEqual(batch.padding_mask.dtype, torch.bool)
+        self.assertEqual(batch.padding_mask.tolist(), [False, True, False])
+        self.assertEqual(batch.num_real_samples(), 2)
+
+    def test_collate_without_padding_gives_an_all_false_mask(self) -> None:
+        """
+        Input: two samples, neither of them padding.
+        Expected: every collated batch carries a mask, so a model never has to tell a
+        missing mask from an unpadded batch.
+        Check: the mask is a tensor of two False values and both samples count as real.
+        """
+        batch = self._collate([False, False])
+
+        assert batch.padding_mask is not None
+        self.assertEqual(batch.padding_mask.tolist(), [False, False])
+        self.assertEqual(batch.num_real_samples(), 2)
+
+    def test_a_batch_of_padding_slots_has_no_real_sample(self) -> None:
+        """
+        Input: two samples, both padding, as the last batch of a rank whose lanes all end
+        early can be.
+        Expected: such a batch still runs through the model, every rank keeping the same
+        number of steps, but it holds no real sample.
+        Check: the number of real samples is zero.
+        """
+        self.assertEqual(self._collate([True, True]).num_real_samples(), 0)
+
+    def test_a_batch_without_a_mask_counts_every_sample_as_real(self) -> None:
+        """
+        Input: a collated batch whose mask is removed, as on a batch assembled by hand.
+        Expected: only collation stamps padding, so a batch without a mask holds none.
+        Check: the number of real samples is the batch size.
+        """
+        batch = self._collate([False, False, False])._replace(padding_mask=None)
+
+        self.assertEqual(batch.num_real_samples(), 3)
+
+    def test_to_device_moves_the_padding_mask(self) -> None:
+        """
+        Input: a collated batch with one padding sample, moved to a device.
+        Expected: the mask travels with the batch, so the model reads it on its own device.
+        Check: the device and the values of the moved mask.
+        """
+        device = torch.device("cpu")
+
+        moved = self._collate([True, False]).to_device(device)
+
+        assert moved.padding_mask is not None
+        self.assertEqual(moved.padding_mask.device, device)
+        self.assertEqual(moved.padding_mask.tolist(), [True, False])

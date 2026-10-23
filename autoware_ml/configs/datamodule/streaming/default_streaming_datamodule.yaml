@@ -1,0 +1,8 @@
+# Turns the datamodule composed before it into a StreamingDataModule, for temporal models that
+# carry a memory across batches. A model config composes it after its database datamodule:
+#   - /datamodule@datamodule: t4dataset/default_detection3d_datamodule
+#   - /datamodule/streaming@datamodule: default_streaming_datamodule
+_target_: autoware_ml.datamodule.streaming_data_module.StreamingDataModule
+
+# The training split reshuffles its scenes every epoch from the experiment seed.
+seed: ${seed}
