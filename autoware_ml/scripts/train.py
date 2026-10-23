@@ -38,6 +38,7 @@ from autoware_ml.builders.model_builder import (
 from autoware_ml.builders.logger_builder import build_trainer_logger
 from autoware_ml.datamodule.data_module import DataModule
 from autoware_ml.models.module_base_model import ModuleBaseModel
+from autoware_ml.resume.checkpoint_locator import RunPointer
 from autoware_ml.utils.runtime import (
     configure_torch_runtime,
     restrict_console_logging_to_rank_zero,
@@ -120,6 +121,12 @@ def main(cfg: DictConfig):
         config_name=config_name,
         logger_enabled=logger_enabled,
     )
+
+    run_pointer = RunPointer.from_env()
+    if run_context is not None and run_pointer is not None:
+        # A relaunch of a preempted job finds its own run through this pointer, see
+        # `autoware-ml train --resume-latest`.
+        run_pointer.write(run_context.checkpoints_dir)
 
     configure_torch_runtime()
     set_seed(cfg)

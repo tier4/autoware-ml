@@ -1,0 +1,17 @@
+# Segmentation vocabulary of the foundation level: the default vocabulary, with the raw names
+# whose meaning depends on the corpus kept apart under fine names of their own.
+defaults:
+  - default_segmentation3d
+  - _self_
+
+class_renaming:
+  # A corpus labelled 'vertical_thin' (the old specification, the pseudo labels) does not say
+  # whether the point is a pole, a sign or a light; the fine name keeps that open
+  vertical_thin: vertical_thin_unspecified
+  # Names the scenario configs substitute (DatasetParams.category_aliases) for raw names of the
+  # old J6 gen2 specification, which labelled poles, signs, lights and barriers 'manmade',
+  # folded the curbs into the flat surfaces and the ghost points into 'noise'
+  legacy_manmade: legacy_manmade
+  legacy_sidewalk: legacy_sidewalk
+  legacy_other_flat_surface: legacy_other_flat_surface
+  legacy_noise: legacy_noise

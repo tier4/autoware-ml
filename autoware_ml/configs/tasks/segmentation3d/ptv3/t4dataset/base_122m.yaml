@@ -32,6 +32,8 @@ datasets:
             num: 1
             time_lag_range: [0.05, 0.25]
             selection: random
+          # Frames after the current one, none unless the task sets a window (offline models)
+          future: ${oc.select:train_future_sweeps,null}
           bev_remove_radius: 1.0
           use_timestamp_difference: true
           use_dim: [0, 1, 2, 3] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]
@@ -59,8 +61,9 @@ datasets:
         - _target_: autoware_ml.transforms.point_cloud.perturbation.RandomJitter
           _convert_: all
 
-          sigma: 0.012
-          clip: 0.05
+          # A task on a finer grid scales the jitter through these two root keys
+          sigma: ${oc.select:train_jitter_sigma,0.012}
+          clip: ${oc.select:train_jitter_clip,0.05}
 
         - _target_: autoware_ml.transforms.point_cloud.geometry.PointsRangeFilter
           _convert_: all
@@ -100,6 +103,8 @@ datasets:
             num: 1
             time_lag_range: [0.05, 0.25]
             selection: nearest
+          # Frames after the current one, none unless the task sets a window (offline models)
+          future: ${oc.select:test_future_sweeps,null}
           bev_remove_radius: 1.0
           use_timestamp_difference: true
           use_dim: [0, 1, 2, 3] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]

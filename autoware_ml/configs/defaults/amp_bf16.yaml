@@ -1,0 +1,19 @@
+# @package _global_
+# bf16 mixed precision training of the PTv3 family. The submanifold convolutions run on spconv
+# under autocast; with the rulebook library installed they run on its fp32-accumulating
+# kernels instead (#168). bf16 needs no loss scaler; the guard stops a run that goes
+# non-finite. Accuracy options that cost speed (model.encoder.fp32_sublayers,
+# model.encoder.activation_checkpointing) stay with the task config.
+#
+# Include it from a task config with `- /defaults/amp_bf16`.
+
+trainer:
+  precision: bf16-mixed
+
+callbacks:
+  # A 16-bit run that overflows does not crash: the epoch runs on with skipped steps and ends
+  # on NaN. Abort after 20 consecutive non-finite losses (or a dead loss scaler) instead.
+  non_finite_guard:
+    _target_: autoware_ml.callbacks.non_finite_guard.NonFiniteGuard
+    max_consecutive: 20
+    min_scale: 1.0

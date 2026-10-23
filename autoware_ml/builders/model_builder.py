@@ -89,17 +89,7 @@ def build_model(
         )
 
     if resume_checkpoint_path is not None:
-        progress = torch.load(
-            resume_checkpoint_path, map_location=device, weights_only=False, mmap=True
-        )
-        logger.info(
-            "Resuming from '%s': checkpoint saved at epoch %d (global step %d), "
-            "training continues at epoch %d.",
-            resume_checkpoint_path,
-            progress["epoch"],
-            progress["global_step"],
-            progress["epoch"] + 1,
-        )
+        _log_resume_position(resume_checkpoint_path)
     logger.info(f"Model built successfully with {model}.")
     return model
 
@@ -163,3 +153,39 @@ def build_weight_checkpoint_paths(cfg: DictConfig) -> tuple[Sequence[Path], Path
             raise FileNotFoundError(f"Weights file not found: {path}")
 
     return weight_paths, checkpoint_path
+
+
+def _log_resume_position(checkpoint_path: str) -> None:
+    """Log where in training a resumed run continues.
+
+    A checkpoint written after the last batch of an epoch continues with the next
+    epoch; one written mid-epoch continues the same epoch after its last trained batch.
+
+    Args:
+        checkpoint_path: Full Lightning checkpoint the run resumes from.
+    """
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False, mmap=True)
+    epoch, global_step = checkpoint["epoch"], checkpoint["global_step"]
+    fit_loop = checkpoint.get("loops", {}).get("fit_loop", {})
+    batch_progress = fit_loop.get("epoch_loop.batch_progress", {})
+    if batch_progress.get("is_last_batch", True):
+        logger.info(
+            "Resuming from '%s': checkpoint saved at the end of epoch %d (global step %d), "
+            "training continues at epoch %d.",
+            checkpoint_path,
+            epoch,
+            global_step,
+            epoch + 1,
+        )
+        return
+    batches_done = batch_progress.get("current", {}).get("processed", 0)
+    logger.info(
+        "Resuming from '%s': checkpoint saved in epoch %d after batch %d (global step %d), "
+        "training continues epoch %d with batch %d.",
+        checkpoint_path,
+        epoch,
+        batches_done,
+        global_step,
+        epoch,
+        batches_done + 1,
+    )
