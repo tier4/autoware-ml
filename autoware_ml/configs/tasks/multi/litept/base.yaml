@@ -1,6 +1,7 @@
 # @package _global_
+# LitePT encoder and decoder on the multi-task PTv3 recipe.
 defaults:
   - /tasks/multi/ptv3/base
   - /tasks/segmentation3d/litept/encoder_base
-  - /tasks/segmentation3d/litept/seg_head_base
+  - /tasks/segmentation3d/litept/seg3d_head_base
   - _self_

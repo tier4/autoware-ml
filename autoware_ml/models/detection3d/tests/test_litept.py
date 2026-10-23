@@ -26,12 +26,12 @@ from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     rope_span,
 )
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
-from autoware_ml.models.detection3d.tests.ptv3_detection_fixtures import (
+from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
     build_litept_encoder,
-    build_litept_seg_model,
+    build_litept_seg3d_model,
     build_inputs,
     build_ptv3_encoder,
-    build_seg_model,
+    build_seg3d_model,
 )
 
 REQUIRES_SPARSE_CUDA = pytest.mark.skipif(
@@ -68,13 +68,13 @@ def test_rope_span_is_the_largest_multiple_of_six(head_dim: int, expected: int) 
     assert rope_span(head_dim) == expected
 
 
-def test_point3drope_rejects_head_dim_that_cannot_be_rotated() -> None:
+def test_point3d_rope_rejects_head_dim_that_cannot_be_rotated() -> None:
     with pytest.raises(ValueError, match="at least 6"):
         Point3DRoPE(head_dim=4, base=100.0)
 
 
 @pytest.mark.parametrize("head_dim", [12, 18, 32, 64])
-def test_point3drope_matches_explicit_split_rotate_concat(head_dim: int) -> None:
+def test_point3d_rope_matches_explicit_split_rotate_concat(head_dim: int) -> None:
     """The fused table form is exactly the textbook split/rotate/concat formulation."""
     torch.manual_seed(0)
     rope = Point3DRoPE(head_dim=head_dim, base=100.0)
@@ -91,7 +91,7 @@ def test_point3drope_matches_explicit_split_rotate_concat(head_dim: int) -> None
 
 
 @pytest.mark.parametrize("head_dim", [12, 18, 32, 64])
-def test_point3drope_preserves_norm_and_passes_the_tail_through(head_dim: int) -> None:
+def test_point3d_rope_preserves_norm_and_passes_the_tail_through(head_dim: int) -> None:
     """A correct rotation keeps norms; the unrotated tail must come back untouched."""
     torch.manual_seed(1)
     rope = Point3DRoPE(head_dim=head_dim, base=100.0)
@@ -107,7 +107,7 @@ def test_point3drope_preserves_norm_and_passes_the_tail_through(head_dim: int) -
     assert torch.equal(rotated[..., span:], query[..., span:])
 
 
-def test_point3drope_dot_product_depends_only_on_relative_position() -> None:
+def test_point3d_rope_dot_product_depends_only_on_relative_position() -> None:
     """The defining RoPE property, checked on a head dimension that rotates fully."""
     torch.manual_seed(2)
     rope = Point3DRoPE(head_dim=24, base=100.0)
@@ -194,13 +194,13 @@ def test_expand_stage_flags_rejects_a_wrong_length_sequence() -> None:
 
 
 @REQUIRES_SPARSE_CUDA
-def test_litept_is_a_drop_in_encoder_for_the_ptv3_segmentation_model() -> None:
+def test_litept_is_a_drop_in_encoder_for_the_ptv3_segmentation3d_model() -> None:
     """The unmodified PTv3 task model trains and predicts with a LitePT encoder."""
-    model = build_litept_seg_model().cuda().eval()
+    model = build_litept_seg3d_model().cuda().eval()
     batch = build_inputs(device=torch.device("cuda"))
 
     with torch.no_grad():
-        logits = model(**model.forward_inputs(batch)).segmentation3d().logits
+        logits = model(batch).segmentation3d().logits
 
     assert logits.shape == (batch.voxels_data.voxels.shape[0], 3)
     assert torch.isfinite(logits).all()
@@ -213,17 +213,18 @@ def test_litept_split_export_declares_and_consumes_the_ptv3_contract() -> None:
     The unread tensors stay declared - the deployed runtime binds them by name -
     so the only difference from PTv3 is which of them the graph consumes.
     """
-    model = build_litept_seg_model().cuda().eval()
+    model = build_litept_seg3d_model().cuda().eval()
     batch = build_inputs(device=torch.device("cuda"))
 
     specs = model.build_export_specs(batch)
     encoder_spec = specs["ptv3_encoder"]
 
-    assert "serialized_order" in encoder_spec.input_param_names
     assert "serialized_inverse" in encoder_spec.input_param_names
+    assert "patch_order" in encoder_spec.input_param_names
+    assert "serialized_code" not in encoder_spec.input_param_names
     assert not any("_cluster" in name for name in encoder_spec.input_param_names)
-    assert "serialized_pooling_0_serialized_order" in encoder_spec.input_param_names
-    assert "serialized_pooling_1_serialized_order" in encoder_spec.input_param_names
+    assert "serialized_pooling_0_serialized_inverse" in encoder_spec.input_param_names
+    assert "serialized_pooling_1_serialized_inverse" in encoder_spec.input_param_names
     assert len(encoder_spec.args) == len(encoder_spec.input_param_names)
 
     with torch.no_grad():
@@ -248,15 +249,14 @@ def test_litept_split_export_declares_and_consumes_the_ptv3_contract() -> None:
 @REQUIRES_SPARSE_CUDA
 def test_litept_monolithic_export_runs_on_its_declared_inputs() -> None:
     """The single-graph export adds clusters and otherwise matches PTv3 too."""
-    model = build_litept_seg_model().cuda().eval()
+    model = build_litept_seg3d_model().cuda().eval()
     batch = build_inputs(device=torch.device("cuda"))
 
     spec = model.build_export_spec(batch)
 
-    assert "serialized_order" in spec.input_param_names
-    assert "serialized_inverse" in spec.input_param_names
+    assert "patch_order" in spec.input_param_names
     assert "serialized_pooling_0_cluster" in spec.input_param_names
-    assert "serialized_pooling_0_serialized_order" in spec.input_param_names
+    assert "serialized_pooling_0_serialized_inverse" in spec.input_param_names
     assert len(spec.args) == len(spec.input_param_names)
 
     with torch.no_grad():
@@ -268,7 +268,7 @@ def test_litept_monolithic_export_runs_on_its_declared_inputs() -> None:
 @REQUIRES_SPARSE_CUDA
 def test_ptv3_monolithic_export_contract_still_lists_every_tensor() -> None:
     """Regression guard: the PTv3 single-graph contract is byte-for-byte what it was."""
-    model = build_seg_model().cuda().eval()
+    model = build_seg3d_model().cuda().eval()
     batch = build_inputs(device=torch.device("cuda"))
 
     spec = model.build_export_spec(batch)
@@ -277,14 +277,14 @@ def test_ptv3_monolithic_export_contract_still_lists_every_tensor() -> None:
         "voxels",
         "num_points_per_voxel",
         "grid_coord",
-        "serialized_order",
+        "patch_order",
         "serialized_inverse",
         "serialized_pooling_0_indices",
         "serialized_pooling_0_indptr",
         "serialized_pooling_0_cluster",
         "serialized_pooling_0_head_indices",
         "serialized_pooling_0_grid_coord",
-        "serialized_pooling_0_serialized_order",
+        "serialized_pooling_0_patch_order",
         "serialized_pooling_0_serialized_inverse",
     ]
 
@@ -307,7 +307,7 @@ def test_exported_encoder_graph_declares_a_subset_of_the_contract(tmp_path) -> N
         {"opset_version": 17, "dynamo": False, "do_constant_folding": False}
     )
 
-    for tag, model in (("litept", build_litept_seg_model()), ("ptv3", build_seg_model())):
+    for tag, model in (("litept", build_litept_seg3d_model()), ("ptv3", build_seg3d_model())):
         model = model.cuda().eval()
         batch = build_inputs(device=torch.device("cuda"))
         spec = model.build_export_specs(batch)["ptv3_encoder"]
@@ -335,12 +335,11 @@ def test_litept_encoder_contract_matches_ptv3_field_for_field() -> None:
     """A gated model declares the same per-stage tensors PTv3 does, so it drops in.
 
     The deployed runtime declares its encoder IO statically - every pooling field for
-    every stage, plus the level-0 ``serialized_order`` and ``serialized_inverse`` - and
-    rejects an engine missing any of them.
+    every stage, plus the input level's serialization - and rejects an engine missing any.
     """
     batch = build_inputs(device=torch.device("cuda"))
-    litept = build_litept_seg_model().cuda().eval().build_export_specs(batch)["ptv3_encoder"]
-    ptv3 = build_seg_model().cuda().eval().build_export_specs(batch)["ptv3_encoder"]
+    litept = build_litept_seg3d_model().cuda().eval().build_export_specs(batch)["ptv3_encoder"]
+    ptv3 = build_seg3d_model().cuda().eval().build_export_specs(batch)["ptv3_encoder"]
 
     def stage_fields(names: list[str]) -> set[str]:
         return {name.split("_", 3)[3] for name in names if name.startswith("serialized_pooling_")}
@@ -350,7 +349,7 @@ def test_litept_encoder_contract_matches_ptv3_field_for_field() -> None:
         "voxels",
         "num_points_per_voxel",
         "grid_coord",
-        "serialized_order",
+        "patch_order",
         "serialized_inverse",
     ]
     assert stage_fields(litept.input_param_names) == stage_fields(ptv3.input_param_names)

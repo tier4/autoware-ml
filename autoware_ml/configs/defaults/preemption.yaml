@@ -5,8 +5,7 @@
 # `autoware-ml train --resume-latest <checkpoints dir>` continues the interrupted
 # epoch with the batch after the last saved one.
 #
-# Include it from a task config with `- /defaults/preemption` after
-# `/defaults/default_runtime`.
+# Include it from a task config with `- /defaults/preemption` after its base task.
 
 callbacks:
   periodic_checkpoint:

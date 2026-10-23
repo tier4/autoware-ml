@@ -1,6 +1,6 @@
 """Unit tests for the single-responsibility metrics.
 
-Each metric is exercised directly against a hand-built state (a ``DetectionState``
+Each metric is exercised directly against a hand-built state (a ``Detection3DState``
 or a ``ConfusionState``), independent of the suites. This pins the stage gating
 and the exact key slice each metric owns. A final test checks the suite-level
 stage filtering driven by each metric's ``stages``.
@@ -17,7 +17,7 @@ from autoware_ml.metrics.detection3d.confident_error import ConfidentErrorRate
 from autoware_ml.metrics.detection3d.heading_ap import HeadingAP
 from autoware_ml.metrics.detection3d.mean_ap import MeanAP
 from autoware_ml.metrics.detection3d.nds import Nds
-from autoware_ml.metrics.detection3d.matching import DetectionState
+from autoware_ml.metrics.detection3d.matching import Detection3DState
 from autoware_ml.metrics.detection3d.structures import Detection3DSample
 from autoware_ml.metrics.detection3d.suite import Detection3DMetricSuite
 from autoware_ml.metrics.detection3d.tp_errors import TpErrors
@@ -27,7 +27,7 @@ from autoware_ml.metrics.segmentation3d.iou import IoU
 from autoware_ml.metrics.segmentation3d.precision_recall_f1 import PrecisionRecallF1
 
 
-def _det_state(class_names=("car",)) -> DetectionState:
+def _det3d_state(class_names=("car",)) -> Detection3DState:
     box = torch.tensor([[0.0, 0.0, 0.0, 4.0, 2.0, 1.5, 0.0, 0.0, 0.0]])
     sample = Detection3DSample(
         pred_boxes=box.clone(),
@@ -36,35 +36,35 @@ def _det_state(class_names=("car",)) -> DetectionState:
         gt_boxes=box.clone(),
         gt_labels=torch.tensor([0]),
     )
-    return DetectionState(samples=[sample], class_names=class_names)
+    return Detection3DState(samples=[sample], class_names=class_names)
 
 
 def test_mean_ap_validation_emits_only_map_keys() -> None:
-    out = MeanAP().evaluate(_det_state(), EvalStage.VAL)
+    out = MeanAP().evaluate(_det3d_state(), EvalStage.VAL)
     assert set(out) == {"mAP", "mAP_car"}
     assert out["mAP"] == pytest.approx(1.0)
 
 
 def test_mean_ap_test_adds_curve_details() -> None:
-    out = MeanAP().evaluate(_det_state(), EvalStage.TEST)
+    out = MeanAP().evaluate(_det3d_state(), EvalStage.TEST)
     assert {"mAP", "mAP_car", "gt_count_car", "AP_car_0p5m", "num_match_car_0p5m"} <= set(out)
     assert out["num_match_car_0p5m"] == pytest.approx(1.0)
 
 
 def test_heading_ap_is_test_only() -> None:
     assert HeadingAP().stages == frozenset({EvalStage.TEST})
-    out = HeadingAP().evaluate(_det_state(), EvalStage.TEST)
+    out = HeadingAP().evaluate(_det3d_state(), EvalStage.TEST)
     assert out["mAPH"] == pytest.approx(1.0)
 
 
 def test_nds_is_test_only_and_combines_ap_with_errors() -> None:
     assert Nds().stages == frozenset({EvalStage.TEST})
-    out = Nds().evaluate(_det_state(), EvalStage.TEST)
+    out = Nds().evaluate(_det3d_state(), EvalStage.TEST)
     assert set(out) == {"map_based_nds", "mapH_based_nds"}
 
 
 def test_tp_errors_emits_mean_and_per_class() -> None:
-    out = TpErrors().evaluate(_det_state(), EvalStage.TEST)
+    out = TpErrors().evaluate(_det3d_state(), EvalStage.TEST)
     assert "mATE_default" in out
     assert "ATE_car_default_0p5m" in out
 
@@ -80,7 +80,7 @@ def test_tp_error_means_ignore_classes_without_true_positives() -> None:
         gt_boxes=boxes.clone(),
         gt_labels=torch.zeros(10, dtype=torch.long),
     )
-    state = DetectionState(samples=[sample], class_names=("car", "truck"))
+    state = Detection3DState(samples=[sample], class_names=("car", "truck"))
 
     nds_out = Nds().evaluate(state, EvalStage.TEST)
     assert nds_out["map_based_nds"] == pytest.approx(0.9)  # 0.7 if the absent truck leaked in
@@ -90,7 +90,7 @@ def test_tp_error_means_ignore_classes_without_true_positives() -> None:
     assert tp_out["mAAE_default"] == pytest.approx(1.0)
 
 
-def _det_state_tp_fp() -> DetectionState:
+def _det3d_state_tp_fp() -> Detection3DState:
     # One prediction on the GT (true positive, score 0.9) and one far away with no
     # GT (false positive, score 0.8).
     gt = torch.tensor([[0.0, 0.0, 0.0, 4.0, 2.0, 1.5, 0.0, 0.0, 0.0]])
@@ -107,21 +107,21 @@ def _det_state_tp_fp() -> DetectionState:
         gt_boxes=gt,
         gt_labels=torch.tensor([0]),
     )
-    return DetectionState(samples=[sample], class_names=("car",))
+    return Detection3DState(samples=[sample], class_names=("car",))
 
 
-def test_det_confident_error_flags_high_score_false_positive() -> None:
-    out = ConfidentErrorRate(score_threshold=0.5).evaluate(_det_state_tp_fp(), EvalStage.TEST)
+def test_det3d_confident_error_flags_high_score_false_positive() -> None:
+    out = ConfidentErrorRate(score_threshold=0.5).evaluate(_det3d_state_tp_fp(), EvalStage.TEST)
     assert out["confident_error_rate"] == pytest.approx(1.0)  # the one FP (0.8) is confident
     assert out["confident_error_count"] == pytest.approx(1.0)
-    lifted = ConfidentErrorRate(score_threshold=0.9).evaluate(_det_state_tp_fp(), EvalStage.TEST)
+    lifted = ConfidentErrorRate(score_threshold=0.9).evaluate(_det3d_state_tp_fp(), EvalStage.TEST)
     assert lifted["confident_error_rate"] == pytest.approx(0.0)  # 0.8 < 0.9
 
 
-def test_det_calibration_matches_hand_computed_ece() -> None:
+def test_det3d_calibration_matches_hand_computed_ece() -> None:
     # TP score 0.9 (correct) -> bin 13, gap |1-0.9|=0.1. FP score 0.8 (wrong) -> bin 12,
     # gap |0-0.8|=0.8. Each bin weight 1/2 -> ECE = 0.5*0.1 + 0.5*0.8 = 0.45.
-    out = CalibrationError(num_bins=15).evaluate(_det_state_tp_fp(), EvalStage.TEST)
+    out = CalibrationError(num_bins=15).evaluate(_det3d_state_tp_fp(), EvalStage.TEST)
     assert out["ece"] == pytest.approx(0.45)
     assert "ece_macro" in out
 

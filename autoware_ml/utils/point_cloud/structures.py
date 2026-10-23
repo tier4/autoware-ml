@@ -8,9 +8,22 @@ import torch
 from torch.onnx.operators import shape_as_tensor
 
 from autoware_ml.ops.indexing.operators import argsort
-from autoware_ml.ops.sparse_conv.tensor import sparse_conv_tensor
+from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
 from autoware_ml.utils.point_cloud.batching import offset_to_batch
 from autoware_ml.utils.point_cloud.serialization.default import encode
+
+
+def pooled_sparse_shape(sparse_shape: torch.Tensor, depth: int) -> torch.Tensor:
+    """Return the sparse shape of a grid pooled by ``2 ** depth`` along every axis.
+
+    Pooling maps coordinate ``c`` to ``c >> depth``, so the pooled grid needs
+    ``ceil(size / 2 ** depth)`` cells per axis, not ``size >> depth``: with a size that
+    is not a multiple of the stride, the floored value leaves the last occupied slice
+    outside the declared shape. spconv hashes coordinates with the declared shape, so
+    such out-of-range voxels alias other voxels and the sub-manifold neighbour tables
+    become run-dependent.
+    """
+    return (sparse_shape.to(dtype=torch.long) + (1 << depth) - 1) >> depth
 
 
 def bit_length_tensor(x: torch.Tensor | int | float) -> torch.Tensor:
@@ -102,12 +115,16 @@ class Point(dict[str, torch.Tensor]):
     def sparsify(self, pad: int = 96) -> None:
         """Populate the sparse-convolution view of the point container.
 
-        The container type follows the installed sparse convolution backends, see
-        :func:`autoware_ml.ops.sparse_conv.tensor.sparse_conv_tensor`.
-
         Args:
             pad: Spatial padding added to the sparse tensor shape.
         """
+        if not IS_SPCONV_AVAILABLE:
+            raise ModuleNotFoundError(
+                "spconv is required for Point.sparsify() but is not installed."
+            )
+
+        import spconv.pytorch as spconv
+
         if "batch" not in self:
             self["batch"] = offset_to_batch(self["offset"], self["coord"])
         if "sparse_shape" in self:
@@ -115,7 +132,7 @@ class Point(dict[str, torch.Tensor]):
         else:
             sparse_shape = torch.max(self["grid_coord"], dim=0).values + pad
             self["sparse_shape"] = sparse_shape
-        self["sparse_conv_feat"] = sparse_conv_tensor(
+        self["sparse_conv_feat"] = spconv.SparseConvTensor(
             features=self["feat"],
             indices=torch.cat(
                 [self["batch"].unsqueeze(-1).int(), self["grid_coord"].int()], dim=1

@@ -1,0 +1,17 @@
+_target_: autoware_ml.databases.t4dataset.t4scenarios.T4Scenarios
+_convert_: all
+
+# Root path where the scenario yaml files are stored
+scenario_root_path: ${t4dataset_scenario_root_path}/detection3d_segmentation3d/
+
+# List of dataset parameters, and dataset_name is the yaml file name in T4Dataset,
+# which consists of train/val/test splits
+dataset_params:
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
+    _convert_: all
+    dataset_name: semseg_batch1_fixed_v1
+    sample_steps: 10
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
+    _convert_: all
+    dataset_name: semseg_batch3_fixed_v1
+    sample_steps: 10

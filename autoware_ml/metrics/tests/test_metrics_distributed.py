@@ -33,7 +33,7 @@ from autoware_ml.metrics.segmentation3d.precision_recall_f1 import PrecisionReca
 from autoware_ml.metrics.segmentation3d.suite import Segmentation3DConfusionMatrixMetricSuite
 
 
-def _det_suite(thresholds=(0.5, 1.0, 2.0, 4.0), **kwargs):
+def _det3d_suite(thresholds=(0.5, 1.0, 2.0, 4.0), **kwargs):
     return Detection3DMetricSuite(
         components=[
             MeanAP(thresholds=thresholds),
@@ -45,7 +45,7 @@ def _det_suite(thresholds=(0.5, 1.0, 2.0, 4.0), **kwargs):
     )
 
 
-def _seg_suite(**kwargs):
+def _seg3d_suite(**kwargs):
     return Segmentation3DConfusionMatrixMetricSuite(
         components=[IoU(), Accuracy(), PrecisionRecallF1()], **kwargs
     )
@@ -57,13 +57,13 @@ pytestmark = pytest.mark.skipif(
 )
 
 _WORLD_SIZES = [2, 8]
-_SEG_RANGES = (MetricRange("0-50m", 0.0, 50.0), MetricRange("50-90m", 50.0, 90.0))
+_SEG3D_RANGES = (MetricRange("0-50m", 0.0, 50.0), MetricRange("50-90m", 50.0, 90.0))
 
 
-def _seg_shard(rank: int) -> dict[str, object]:
+def _seg3d_shard(rank: int) -> dict[str, object]:
     """Deterministic per-rank points, two near (10 m) and one far (60 m)."""
     return {
-        "seg_frames": [
+        "seg3d_frames": [
             {
                 "pred": torch.tensor([0, 1, rank % 2]),
                 "target": torch.tensor([0, 1, 0]),
@@ -73,7 +73,7 @@ def _seg_shard(rank: int) -> dict[str, object]:
     }
 
 
-def _det_shard(rank: int) -> dict[str, object]:
+def _det3d_shard(rank: int) -> dict[str, object]:
     """One frame per rank with a single matching prediction at x = rank."""
     boxes = torch.zeros((1, 7), dtype=torch.float32)
     boxes[0, 0] = float(rank)
@@ -99,37 +99,37 @@ def _assert_reports_equal(actual: dict[str, float], expected: dict[str, float]) 
             assert abs(actual_value - expected_value) < 1e-6, (key, actual_value, expected_value)
 
 
-def _seg_worker(rank: int, world_size: int, init_file: str) -> None:
+def _seg3d_worker(rank: int, world_size: int, init_file: str) -> None:
     dist.init_process_group(
         "gloo", init_method=f"file://{init_file}", rank=rank, world_size=world_size
     )
     try:
-        metric = _seg_suite(num_classes=2, ranges=_SEG_RANGES)
-        metric.update(_seg_shard(rank))
+        metric = _seg3d_suite(num_classes=2, ranges=_SEG3D_RANGES)
+        metric.update(_seg3d_shard(rank))
         report = metric.result(EvalStage.TEST)  # all_reduce inside compute, then build report
 
         if rank == 0:
-            reference = _seg_suite(num_classes=2, ranges=_SEG_RANGES, sync_on_compute=False)
+            reference = _seg3d_suite(num_classes=2, ranges=_SEG3D_RANGES, sync_on_compute=False)
             for other in range(world_size):
-                reference.update(_seg_shard(other))
+                reference.update(_seg3d_shard(other))
             _assert_reports_equal(report, reference.result(EvalStage.TEST))
     finally:
         dist.destroy_process_group()
 
 
-def _det_worker(rank: int, world_size: int, init_file: str) -> None:
+def _det3d_worker(rank: int, world_size: int, init_file: str) -> None:
     dist.init_process_group(
         "gloo", init_method=f"file://{init_file}", rank=rank, world_size=world_size
     )
     try:
-        metric = _det_suite(thresholds=(0.5,))
-        metric.update(_det_shard(rank))
+        metric = _det3d_suite(thresholds=(0.5,))
+        metric.update(_det3d_shard(rank))
         report = metric.result(EvalStage.VAL)  # list-state gather inside compute, then build report
 
         if rank == 0:
-            reference = _det_suite(thresholds=(0.5,), sync_on_compute=False)
+            reference = _det3d_suite(thresholds=(0.5,), sync_on_compute=False)
             for other in range(world_size):
-                reference.update(_det_shard(other))
+                reference.update(_det3d_shard(other))
             _assert_reports_equal(report, reference.result(EvalStage.VAL))
     finally:
         dist.destroy_process_group()
@@ -147,10 +147,10 @@ def _spawn(worker, world_size: int) -> None:
 
 
 @pytest.mark.parametrize("world_size", _WORLD_SIZES)
-def test_seg_metric_sync_matches_single_process(world_size: int) -> None:
-    _spawn(_seg_worker, world_size)
+def test_seg3d_metric_sync_matches_single_process(world_size: int) -> None:
+    _spawn(_seg3d_worker, world_size)
 
 
 @pytest.mark.parametrize("world_size", _WORLD_SIZES)
-def test_det_metric_sync_matches_single_process(world_size: int) -> None:
-    _spawn(_det_worker, world_size)
+def test_det3d_metric_sync_matches_single_process(world_size: int) -> None:
+    _spawn(_det3d_worker, world_size)

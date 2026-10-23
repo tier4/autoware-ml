@@ -18,26 +18,26 @@ import unittest
 
 import torch
 
-from autoware_ml.models.detection3d.tests.ptv3_detection_fixtures import build_seg_head
-from autoware_ml.models.segmentation3d.heads.ptv3 import PTv3SegDecoderHead, voxel_supervision
+from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import build_seg3d_head
+from autoware_ml.models.segmentation3d.heads.ptv3 import PTv3Seg3DDecoderHead, voxel_supervision
 
 _CLASSES = ["car", "pole", "sign", "light"]
 _SETS = {"thin_or_sign": ["pole", "sign", "light"], "any": ["car", "pole", "sign", "light"]}
 
 
-def _head_with_sets() -> PTv3SegDecoderHead:
+def _head_with_sets() -> PTv3Seg3DDecoderHead:
     """Small segmentation head over the test classes with the test label sets."""
-    head = build_seg_head(num_classes=4)
-    head.set_membership = PTv3SegDecoderHead.build_set_membership(4, _CLASSES, _SETS)
+    head = build_seg3d_head(num_classes=4)
+    head.set_membership = PTv3Seg3DDecoderHead.build_set_membership(4, _CLASSES, _SETS)
     return head
 
 
 class TestSetMembership(unittest.TestCase):
-    """Unit tests for PTv3SegDecoderHead.build_set_membership."""
+    """Unit tests for PTv3Seg3DDecoderHead.build_set_membership."""
 
     def test_membership_table_marks_the_classes_of_every_set(self) -> None:
         """Test that row k of the table marks the classes of set k."""
-        membership = PTv3SegDecoderHead.build_set_membership(4, _CLASSES, _SETS)
+        membership = PTv3Seg3DDecoderHead.build_set_membership(4, _CLASSES, _SETS)
 
         self.assertIsNotNone(membership)
         self.assertEqual(membership.tolist(), [[False, True, True, True], [True, True, True, True]])
@@ -46,18 +46,20 @@ class TestSetMembership(unittest.TestCase):
         """Test that a level without label sets has no membership table."""
         for class_sets in (None, {}):
             with self.subTest(class_sets=class_sets):
-                self.assertIsNone(PTv3SegDecoderHead.build_set_membership(4, _CLASSES, class_sets))
+                self.assertIsNone(
+                    PTv3Seg3DDecoderHead.build_set_membership(4, _CLASSES, class_sets)
+                )
 
     def test_unresolvable_sets_are_rejected(self) -> None:
         """Test that sets without class names or with unknown classes raise."""
         with self.assertRaisesRegex(ValueError, "class_names"):
-            PTv3SegDecoderHead.build_set_membership(4, None, _SETS)
+            PTv3Seg3DDecoderHead.build_set_membership(4, None, _SETS)
         with self.assertRaisesRegex(ValueError, "unknown classes"):
-            PTv3SegDecoderHead.build_set_membership(4, _CLASSES, {"bad": ["car", "flag"]})
+            PTv3Seg3DDecoderHead.build_set_membership(4, _CLASSES, {"bad": ["car", "flag"]})
 
 
 class TestSetTargetLoss(unittest.TestCase):
-    """Unit tests for the loss of PTv3SegDecoderHead on class and label set targets."""
+    """Unit tests for the loss of PTv3Seg3DDecoderHead on class and label set targets."""
 
     def test_set_targets_train_the_summed_probability_of_the_set(self) -> None:
         """Test that a set target scores the logsumexp of its classes' log probabilities."""
@@ -87,7 +89,7 @@ class TestSetTargetLoss(unittest.TestCase):
 
     def test_set_targets_without_sets_configured_are_rejected(self) -> None:
         """Test that a head built without sets rejects targets naming a set."""
-        head = build_seg_head(num_classes=4)
+        head = build_seg3d_head(num_classes=4)
         logits = torch.randn(2, 4)
 
         with self.assertRaisesRegex(ValueError, "class_sets"):
@@ -99,7 +101,7 @@ class TestSetTargetLoss(unittest.TestCase):
         logits = torch.randn(5, 4)
         targets = torch.tensor([0, 1, 2, 3, -1])
         weights = torch.tensor([1.0, 1.0, 1.0, 1.0, 0.0])
-        for name, head in (("with_sets", _head_with_sets()), ("plain", build_seg_head(4))):
+        for name, head in (("with_sets", _head_with_sets()), ("plain", build_seg3d_head(4))):
             with self.subTest(head=name):
                 losses = head.loss(logits, targets, weights)
                 expected = head.cross_entropy(logits, targets).sum() / 4

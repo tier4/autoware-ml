@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from autoware_ml.models.detection3d.tests.ptv3_detection_fixtures import (
+from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
     build_inputs,
     build_trans_model,
 )
@@ -15,14 +15,14 @@ EXPECTED_PTV3_INPUT_NAMES = [
     "voxels",
     "num_points_per_voxel",
     "grid_coord",
-    "serialized_order",
+    "patch_order",
     "serialized_inverse",
     "serialized_pooling_0_indices",
     "serialized_pooling_0_indptr",
     "serialized_pooling_0_cluster",
     "serialized_pooling_0_head_indices",
     "serialized_pooling_0_grid_coord",
-    "serialized_pooling_0_serialized_order",
+    "serialized_pooling_0_patch_order",
     "serialized_pooling_0_serialized_inverse",
 ]
 
@@ -31,7 +31,7 @@ EXPECTED_PTV3_INPUT_NAMES = [
     not IS_SPCONV_AVAILABLE or not torch.cuda.is_available(),
     reason="PTv3 sparse-convolution export tests require CUDA spconv",
 )
-def test_ptv3_transhead_build_export_spec_uses_named_detection_outputs() -> None:
+def test_ptv3_transhead_build_export_spec_uses_named_detection3d_outputs() -> None:
     device = torch.device("cuda")
     model = build_trans_model().to(device)
     batch = build_inputs(device=device)
@@ -41,7 +41,7 @@ def test_ptv3_transhead_build_export_spec_uses_named_detection_outputs() -> None
 
     assert spec.input_param_names == EXPECTED_PTV3_INPUT_NAMES
     assert spec.dynamic_axes is not None
-    assert spec.dynamic_axes["serialized_pooling_0_serialized_order"] == {
+    assert spec.dynamic_axes["serialized_pooling_0_serialized_inverse"] == {
         1: "serialized_pooling_0_out_voxels"
     }
     assert spec.output_names == [

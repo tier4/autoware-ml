@@ -113,7 +113,9 @@ def test_speed_at_takes_the_highest_limit_of_overlapping_lanelets() -> None:
 
 def test_the_margin_sign_picks_the_direction() -> None:
     """Negative erodes the mapped border, positive claims off-map space."""
-    lanelet_map = LaneletMap({"road": [Polygon([(0.0, 0.0), (10.0, 0.0), (10.0, 4.0), (0.0, 4.0)])]})
+    lanelet_map = LaneletMap(
+        {"road": [Polygon([(0.0, 0.0), (10.0, 0.0), (10.0, 4.0), (0.0, 4.0)])]}
+    )
     near_border = np.array([[5.0, 0.2]])  # inside, 0.2 m from the outer border
     off_map = np.array([[5.0, -0.3]])  # outside, 0.3 m from the border
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import math
 from types import SimpleNamespace
 from typing import Any
@@ -12,18 +13,23 @@ import torch
 import torch.nn as nn
 
 import autoware_ml.utils.point_cloud.structures as point_structures
+from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
+from autoware_ml.utils.point_cloud.structures import pooled_sparse_shape
 from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTBatch
 from autoware_ml.dataclasses.geometry.voxels import VoxelsData
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.tests.batch_inputs_fixtures import (
     build_batch_inputs,
     build_point_cloud_batch,
 )
-from autoware_ml.models.detection3d.tests.ptv3_detection_fixtures import (
+from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
     build_inputs,
+    build_points,
+    build_preprocessor,
     build_ptv3_encoder,
-    build_seg_head,
-    build_seg_model,
+    build_seg3d_head,
+    build_seg3d_model,
 )
 from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     Block,
@@ -33,6 +39,7 @@ from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     PointTransformerV3Encoder,
     SerializedAttention,
     SerializedPooling,
+    build_patch_order,
     build_serialized_pooling_meta,
 )
 from autoware_ml.models.segmentation3d.encoders.voxel import (
@@ -40,17 +47,18 @@ from autoware_ml.models.segmentation3d.encoders.voxel import (
     SweepSplitVoxelFeatureEncoder,
 )
 from autoware_ml.models.segmentation3d.heads.ptv3 import (
-    segmentation_eval_output,
-    segmentation_point_loss,
-    segmentation_predict_outputs,
+    segmentation3d_eval_output,
+    segmentation3d_point_loss,
+    segmentation3d_predict_outputs,
     voxel_supervision,
 )
-from autoware_ml.models.segmentation3d.ptv3 import (
-    PTv3SegmentationModel,
-    _PTv3SegmentationExportModule,
-)
+from autoware_ml.models.segmentation3d.ptv3 import PTv3Segmentation3DModel
 from autoware_ml.models.segmentation3d.ptv3_base import (
     build_ptv3_encoder_dynamic_axes,
+    build_ptv3_export_context,
+    export_patch_sizes,
+    prepare_ptv3_export_inputs,
+    require_single_sample_export_batch,
     validate_serialization_geometry,
 )
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
@@ -118,7 +126,7 @@ def test_serialized_attention_uses_flash_module_when_enabled() -> None:
     assert attention.flash_attn is flash_module
 
 
-def test_build_export_module_disables_flash_attention_without_mutating_live_encoder() -> None:
+def test_prepare_for_export_disables_flash_attention_without_mutating_live_encoder() -> None:
     flash_module = SimpleNamespace(
         flash_attn_varlen_qkvpacked_func=lambda qkv,
         cu_seqlens,
@@ -165,22 +173,16 @@ def test_build_export_module_disables_flash_attention_without_mutating_live_enco
         "autoware_ml.models.segmentation3d.encoders.ptv3.replace_submconv3d_for_export",
         return_value=None,
     ):
-        export_module = _PTv3SegmentationExportModule(
-            encoder=encoder.prepare_for_export(("z", "z-trans")),
-            voxel_encoder=SweepSplitVoxelFeatureEncoder(),
-            seg3d_head=nn.Linear(4, 2),
-            sparse_shape=torch.tensor([64, 64, 64], dtype=torch.long),
-            serialized_depth=torch.tensor(6, dtype=torch.long),
-        )
+        export_encoder = encoder.prepare_for_export(("z", "z-trans"))
 
-    export_attention = export_module.encoder.attention
+    export_attention = export_encoder.attention
     assert attention.enable_flash is True
     assert attention.patch_size == 4
     assert export_attention.enable_flash is False
     assert export_attention.flash_attn is None
     assert export_attention.patch_size == 0
     assert encoder.shuffle_orders is True
-    assert export_module.encoder.shuffle_orders is False
+    assert export_encoder.shuffle_orders is False
 
 
 def test_prepare_for_export_handles_loaded_flash_attention_module() -> None:
@@ -244,12 +246,14 @@ def test_serialized_attention_export_mode_keeps_a_static_window_below_capacity()
     )
     attention.disable_flash()
     attention.export_mode = True
+    serialized_order = torch.arange(3).reshape(1, 3)
     point = Point(
         {
             "feat": torch.randn(3, 32),
             "grid_coord": torch.randint(0, 8, (3, 3), dtype=torch.int32),
-            "serialized_order": torch.arange(3).reshape(1, 3),
+            "serialized_order": serialized_order,
             "serialized_inverse": torch.arange(3).reshape(1, 3),
+            "patch_order": build_patch_order(serialized_order, patch_size=4),
             "offset": torch.tensor([3], dtype=torch.long),
         }
     )
@@ -321,6 +325,8 @@ def test_serialized_attention_export_padding_matches_batched_branch() -> None:
             }
         )
 
+    # `_get_padding_and_inverse` is the pure index kernel behind forward(). The padded index
+    # layout it is tested on here is not observable from the attention outputs.
     # Both a non-divisible count (padded last window) and a divisible one (no padding).
     for num_points in (10, 8):
         point = make_point(num_points)
@@ -355,7 +361,7 @@ def test_point_sequential_skips_dense_module_on_empty_sparse_tensor() -> None:
     assert output.features.shape == (0, 4)
 
 
-def _seg_processed(
+def _seg3d_processed(
     point_frames: list[torch.Tensor],
     point_voxel_indices: torch.Tensor,
     segment_frames: list[torch.Tensor] | None = None,
@@ -523,7 +529,7 @@ def test_voxel_encoder_rejects_a_point_layout_without_the_time_lag() -> None:
 
 def test_model_rejects_future_points_its_voxel_encoder_does_not_read() -> None:
     voxels, num_points = _split_voxels()
-    model = build_seg_model()
+    model = build_seg3d_model()
 
     with pytest.raises(ValueError, match="future"):
         model.encode(
@@ -537,7 +543,7 @@ def test_model_rejects_future_points_its_voxel_encoder_does_not_read() -> None:
 
 def test_point_loss_and_eval_output_work_at_the_point_level() -> None:
     """The loss runs on the voxel labels and eval keeps the current-frame points only."""
-    head = build_seg_head(num_classes=3, dec_depths=(0,))
+    head = build_seg3d_head(num_classes=3, dec_depths=(0,))
 
     voxel_logits = torch.tensor(
         [
@@ -556,19 +562,19 @@ def test_point_loss_and_eval_output_work_at_the_point_level() -> None:
         ],
         dtype=torch.float32,
     )
-    batch = _seg_processed(
+    batch = _seg3d_processed(
         [points],
         torch.tensor([0, 1, 1], dtype=torch.long),
         segment_frames=[torch.tensor([0, 1, -1], dtype=torch.long)],
     )
 
-    metrics = segmentation_point_loss(head, voxel_logits, batch)
+    metrics = segmentation3d_point_loss(head, voxel_logits, batch)
 
     assert set(metrics) == {"loss", "loss_ce", "loss_lovasz"}
     assert metrics["loss"] > 0
 
-    eval_out = segmentation_eval_output(voxel_logits, batch)
-    (frame,) = eval_out["seg_frames"]
+    eval_out = segmentation3d_eval_output(voxel_logits, batch)
+    (frame,) = eval_out["seg3d_frames"]
     assert torch.equal(frame["pred"], torch.tensor([0, 1]))
     assert torch.equal(frame["target"], torch.tensor([0, 1]))
     assert torch.equal(frame["coord"], points[:2, :3])
@@ -669,27 +675,27 @@ def test_voxel_supervision_draws_from_the_voxel_distribution_in_training() -> No
 
 def test_points_of_a_voxel_do_not_weight_the_loss() -> None:
     """Repeating a label inside a voxel leaves the loss unchanged."""
-    head = build_seg_head(num_classes=3, dec_depths=(0,)).eval()
+    head = build_seg3d_head(num_classes=3, dec_depths=(0,)).eval()
     voxel_logits = torch.tensor([[3.0, 0.1, 0.2], [0.2, 2.5, 0.1]], dtype=torch.float32)
-    dense = _seg_processed(
+    dense = _seg3d_processed(
         [torch.zeros((5, 5), dtype=torch.float32)],
         torch.tensor([0, 0, 0, 0, 1], dtype=torch.long),
         segment_frames=[torch.tensor([0, 0, 0, 0, 1], dtype=torch.long)],
     )
-    sparse = _seg_processed(
+    sparse = _seg3d_processed(
         [torch.zeros((2, 5), dtype=torch.float32)],
         torch.tensor([0, 1], dtype=torch.long),
         segment_frames=[torch.tensor([0, 1], dtype=torch.long)],
     )
 
     assert torch.allclose(
-        segmentation_point_loss(head, voxel_logits, dense)["loss"],
-        segmentation_point_loss(head, voxel_logits, sparse)["loss"],
+        segmentation3d_point_loss(head, voxel_logits, dense)["loss"],
+        segmentation3d_point_loss(head, voxel_logits, sparse)["loss"],
     )
 
 
 def test_encode_rejects_dropped_voxels_and_a_misplaced_time_lag() -> None:
-    model = build_seg_model()
+    model = build_seg3d_model()
     voxels = torch.zeros((1, 1, 5))
     num_points = torch.ones(1, dtype=torch.int32)
     voxel_coords = torch.zeros((1, 4), dtype=torch.int32)
@@ -702,25 +708,25 @@ def test_encode_rejects_dropped_voxels_and_a_misplaced_time_lag() -> None:
 
 def test_points_outside_the_voxel_grid_are_excluded_from_loss_and_eval() -> None:
     """A point without a voxel (outside the grid) neither supervises nor gets scored."""
-    head = build_seg_head(num_classes=3, dec_depths=(0,))
+    head = build_seg3d_head(num_classes=3, dec_depths=(0,))
     voxel_logits = torch.tensor([[3.0, 0.1, 0.2], [0.2, 2.5, 0.1]], dtype=torch.float32)
     points = torch.zeros((3, 5), dtype=torch.float32)
-    batch = _seg_processed(
+    batch = _seg3d_processed(
         [points],
         torch.tensor([0, -1, 1], dtype=torch.long),
         segment_frames=[torch.tensor([0, 2, 1], dtype=torch.long)],
     )
-    reference = _seg_processed(
+    reference = _seg3d_processed(
         [points[[0, 2]]],
         torch.tensor([0, 1], dtype=torch.long),
         segment_frames=[torch.tensor([0, 1], dtype=torch.long)],
     )
 
-    metrics = segmentation_point_loss(head, voxel_logits, batch)
-    expected = segmentation_point_loss(head, voxel_logits, reference)
+    metrics = segmentation3d_point_loss(head, voxel_logits, batch)
+    expected = segmentation3d_point_loss(head, voxel_logits, reference)
     assert torch.allclose(metrics["loss"], expected["loss"])
 
-    (frame,) = segmentation_eval_output(voxel_logits, batch)["seg_frames"]
+    (frame,) = segmentation3d_eval_output(voxel_logits, batch)["seg3d_frames"]
     assert torch.equal(frame["pred"], torch.tensor([0, 1]))
     assert torch.equal(frame["target"], torch.tensor([0, 1]))
 
@@ -733,9 +739,9 @@ def test_predict_outputs_reconstructs_current_frame_point_predictions() -> None:
     # the last point comes from an earlier sweep and gets no prediction
     points[3, 4] = 0.1
 
-    predictions = segmentation_predict_outputs(
+    predictions = segmentation3d_predict_outputs(
         voxel_logits,
-        _seg_processed([points[:2], points[2:]], point_voxel_indices),
+        _seg3d_processed([points[:2], points[2:]], point_voxel_indices),
     )
 
     assert torch.equal(predictions.pred_labels, torch.tensor([0, 1, 0]))
@@ -768,14 +774,14 @@ def test_ptv3_encoder_dynamic_axes_follow_generated_pooling_inputs() -> None:
         "voxels",
         "num_points_per_voxel",
         "grid_coord",
-        "serialized_order",
+        "patch_order",
         "serialized_inverse",
+        "serialized_pooling_0_patch_order",
         "serialized_pooling_0_indices",
         "serialized_pooling_0_indptr",
         "serialized_pooling_0_cluster",
         "serialized_pooling_0_head_indices",
         "serialized_pooling_0_grid_coord",
-        "serialized_pooling_0_serialized_order",
         "serialized_pooling_0_serialized_inverse",
         "serialized_pooling_1_grid_coord",
     ]
@@ -785,8 +791,12 @@ def test_ptv3_encoder_dynamic_axes_follow_generated_pooling_inputs() -> None:
     assert dynamic_axes["voxels"] == {0: "num_voxels"}
     assert dynamic_axes["num_points_per_voxel"] == {0: "num_voxels"}
     assert dynamic_axes["grid_coord"] == {0: "num_voxels"}
-    assert dynamic_axes["serialized_order"] == {1: "num_voxels"}
     assert dynamic_axes["serialized_inverse"] == {1: "num_voxels"}
+    # Padded to whole attention windows, so its extent is its own axis, not the voxel count.
+    assert dynamic_axes["patch_order"] == {1: "padded_voxels"}
+    assert dynamic_axes["serialized_pooling_0_patch_order"] == {
+        1: "serialized_pooling_0_padded_voxels"
+    }
     assert dynamic_axes["serialized_pooling_0_indices"] == {0: "serialized_pooling_0_in_voxels"}
     assert dynamic_axes["serialized_pooling_0_indptr"] == {
         0: "serialized_pooling_0_out_voxels_plus_one"
@@ -796,9 +806,6 @@ def test_ptv3_encoder_dynamic_axes_follow_generated_pooling_inputs() -> None:
         0: "serialized_pooling_0_out_voxels"
     }
     assert dynamic_axes["serialized_pooling_0_grid_coord"] == {0: "serialized_pooling_0_out_voxels"}
-    assert dynamic_axes["serialized_pooling_0_serialized_order"] == {
-        1: "serialized_pooling_0_out_voxels"
-    }
     assert dynamic_axes["serialized_pooling_0_serialized_inverse"] == {
         1: "serialized_pooling_0_out_voxels"
     }
@@ -880,11 +887,12 @@ def test_serialized_pooling_export_mode_uses_precomputed_metadata(monkeypatch) -
 
     train_out = train_module(make_point())
     export_point = make_point()
-    meta, _ = build_serialized_pooling_meta(
+    meta, _, _ = build_serialized_pooling_meta(
         export_point.grid_coord,
         export_point.serialized_code,
         export_point.serialized_order,
         stride=2,
+        patch_size=4,
     )
     export_point["serialized_pooling"] = [meta]
     export_out = export_module(export_point)
@@ -892,7 +900,6 @@ def test_serialized_pooling_export_mode_uses_precomputed_metadata(monkeypatch) -
     for key in (
         "feat",
         "grid_coord",
-        "serialized_order",
         "serialized_inverse",
         "batch",
         "sparse_shape",
@@ -904,27 +911,169 @@ def test_serialized_pooling_export_mode_uses_precomputed_metadata(monkeypatch) -
             torch.testing.assert_close(left, right, msg=f"Mismatch for {key}")
         else:
             assert torch.equal(left, right), f"Mismatch for {key}"
+    # The pooled level hands its blocks the precomputed gather order instead of the bare order.
+    assert torch.equal(
+        export_out["patch_order"], build_patch_order(train_out["serialized_order"], 4)
+    )
+    assert "serialized_order" not in export_out
+    assert "serialized_code" not in export_out
+
+
+def test_serialized_pooling_export_mode_rejects_shuffle_orders() -> None:
+    """Export feeds fixed orders, so an export-mode pooling with shuffling on fails loudly."""
+    pooling = SerializedPooling(6, 8, stride=2, shuffle_orders=True, export_stage_index=0)
+    pooling.export_mode = True
+    with pytest.raises(ValueError, match="shuffle_orders"):
+        pooling(Point())
+
+
+def _reference_patch_order(serialized_order: torch.Tensor, patch_size: int) -> torch.Tensor:
+    """The formula the exported attention block used to trace, kept as the oracle."""
+    n = serialized_order.shape[1]
+    padded_n = ((n + patch_size - 1) // patch_size) * patch_size
+    divisor = max(n, 1)
+    cycle = ((patch_size + divisor - 1) // divisor) * divisor
+    index = torch.arange(padded_n)
+    pad = torch.where(index < n, index, (index - patch_size + cycle) % divisor)
+    return serialized_order[:, pad]
+
+
+@pytest.mark.parametrize(
+    ("count", "patch_size", "padded"),
+    [
+        (3, 4, 4),  # below one window: wraps around
+        (4, 4, 4),  # exactly one window: no padding
+        (8, 4, 8),  # whole windows: no padding
+        (9, 4, 12),  # one token into the last window: borrows three backwards
+        (13, 4, 16),
+        (5, 512, 512),  # deployment window, tiny sample: wraps many times
+        (1, 4, 4),
+    ],
+)
+def test_build_patch_order_matches_the_traced_formula(
+    count: int, patch_size: int, padded: int
+) -> None:
+    """`build_patch_order` equals the formula the export graph used to trace per block."""
+    torch.manual_seed(count)
+    serialized_order = torch.stack([torch.randperm(count), torch.randperm(count)])
+
+    patch_order = build_patch_order(serialized_order, patch_size)
+
+    assert torch.equal(patch_order, _reference_patch_order(serialized_order, patch_size))
+    assert patch_order.shape == (2, padded)
+    assert torch.equal(patch_order[:, :count], serialized_order)
+    assert (patch_order >= 0).all() and (patch_order < count).all()
+
+
+#: (patch_size, serialized_order, expected) literals, shared with the runtime's test
+#: (autoware_universe, autoware_ptv3 `serialized_pooling_metadata_test.cpp`).
+PATCH_ORDER_GOLDEN_VECTORS = [
+    # below one window: the tail wraps around (cycle = 6 for count 3)
+    (4, [[0, 1, 2]], [[0, 1, 2, 2]]),
+    (4, [[2, 0, 1]], [[2, 0, 1, 1]]),
+    # exactly one window and whole windows: nothing to pad
+    (4, [[3, 0, 2, 1]], [[3, 0, 2, 1]]),
+    (4, [[7, 0, 6, 1, 5, 2, 4, 3]], [[7, 0, 6, 1, 5, 2, 4, 3]]),
+    # one token into the last window (k * K + 1): borrows three backwards
+    (4, [[4, 0, 3, 1, 2]], [[4, 0, 3, 1, 2, 0, 3, 1]]),
+    # a partial last window: borrows the two before it
+    (4, [[5, 2, 7, 1, 0, 3]], [[5, 2, 7, 1, 0, 3, 7, 1]]),
+    # two distinct rows are padded independently, from their own entries
+    (
+        4,
+        [[0, 5, 2, 1, 4, 3], [3, 1, 5, 0, 2, 4]],
+        [[0, 5, 2, 1, 4, 3, 2, 1], [3, 1, 5, 0, 2, 4, 5, 0]],
+    ),
+    # the deployed window on a tiny sample: 507 tail slots cycle through the 5 tokens
+    (512, [[4, 0, 3, 1, 2]], [[4, 0, 3, 1, 2] + [1, 2, 4, 0, 3] * 101 + [1, 2]]),
+]
+
+
+@pytest.mark.parametrize(("patch_size", "serialized_order", "expected"), PATCH_ORDER_GOLDEN_VECTORS)
+def test_build_patch_order_golden_vectors(
+    patch_size: int, serialized_order: list[list[int]], expected: list[list[int]]
+) -> None:
+    """Literal vectors shared with the C++ runtime's test."""
+    patch_order = build_patch_order(torch.tensor(serialized_order), patch_size)
+    assert patch_order.tolist() == expected
+
+
+def test_build_patch_order_of_an_empty_level_is_empty() -> None:
+    assert build_patch_order(torch.empty(2, 0, dtype=torch.long), 4).shape == (2, 0)
+
+
+def test_export_patch_sizes_rejects_an_encoder_decoder_mismatch() -> None:
+    model = build_seg3d_model().eval()
+    assert export_patch_sizes(model) == list(model.encoder.enc_patch_sizes)
+    model.seg3d_head.dec_patch_sizes[0] += 1
+    with pytest.raises(ValueError, match="disagree"):
+        export_patch_sizes(model)
 
 
 @pytest.mark.skipif(
     not IS_SPCONV_AVAILABLE or not torch.cuda.is_available(),
     reason="PTv3 sparse-convolution tests require CUDA spconv",
 )
+def test_pooled_sparse_shape_rounds_up_for_every_depth() -> None:
+    shape = torch.tensor([2048, 2048, 67], dtype=torch.long)
+    assert torch.equal(pooled_sparse_shape(shape, 0), shape)
+    assert torch.equal(pooled_sparse_shape(shape, 1), torch.tensor([1024, 1024, 34]))
+    assert torch.equal(pooled_sparse_shape(shape, 2), torch.tensor([512, 512, 17]))
+    assert torch.equal(pooled_sparse_shape(shape, 3), torch.tensor([256, 256, 9]))
+    assert torch.equal(pooled_sparse_shape(shape, 4), torch.tensor([128, 128, 5]))
+    # the pooled coordinate of the last cell always stays inside the pooled shape
+    for depth in range(5):
+        assert bool(((shape - 1) >> depth < pooled_sparse_shape(shape, depth)).all())
+
+
+def test_serialized_pooling_rounds_the_sparse_shape_up() -> None:
+    """Pooling keeps ceil(shape / stride) slices so the coarsest occupied slice stays inside.
+
+    Coordinate 66 pools to 33, so a stage-0 extent of 67 must become 34, not 33. With the
+    floored value the top slice lies outside the declared grid, its voxels share a spconv
+    hash key with ``(x, y + 1, 0)`` and the sub-manifold neighbour table becomes run-dependent.
+    """
+    grid_coord = torch.tensor(
+        [[0, 0, 0], [66, 66, 66], [65, 64, 66], [1, 66, 0]], dtype=torch.int32
+    )
+    point = Point(
+        {
+            "coord": grid_coord.to(torch.float32),
+            "grid_coord": grid_coord,
+            "feat": torch.randn(grid_coord.shape[0], 6),
+            "batch": torch.zeros(grid_coord.shape[0], dtype=torch.long),
+            "offset": torch.tensor([grid_coord.shape[0]], dtype=torch.long),
+            "sparse_shape": torch.tensor([67, 67, 67], dtype=torch.long),
+        }
+    )
+    point.serialization(("z",), shuffle_orders=False, depth=torch.tensor(7))
+    module = SerializedPooling(6, 8, stride=2, shuffle_orders=False)
+    module.norm = nn.Identity()
+    module.act = nn.Identity()
+
+    pooled = module(point)
+
+    assert torch.equal(pooled.sparse_shape, torch.tensor([34, 34, 34], dtype=torch.long))
+    assert bool((pooled.grid_coord.max(dim=0).values + 1 <= pooled.sparse_shape).all())
+
+
 def test_ptv3_frozen_encoder_supports_decoder_block_backward() -> None:
     """Stage-4 regression: a frozen (eval) encoder caches spconv indice pairs
     without backward metadata; decoder blocks must not reuse them by key or
     their CPE backward fails with an empty-indices assert."""
-    model = PTv3SegmentationModel(
+    model = PTv3Segmentation3DModel(
+        log_dict_configs=LogDictConfigs(prog_bar=False),
+        data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
         encoder=build_ptv3_encoder(),
         voxel_encoder=SweepSplitVoxelFeatureEncoder(),
-        seg3d_head=build_seg_head(),
+        seg3d_head=build_seg3d_head(),
         freeze_encoder=True,
         grid_size=1.0,
         point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
     ).cuda()
     batch = build_inputs(device=torch.device("cuda"))
 
-    logits = model(**model.forward_inputs(batch)).segmentation3d().logits
+    logits = model(batch).segmentation3d().logits
     logits.sum().backward()
     assert logits.shape == (batch.voxels_data.voxels.shape[0], 3)
 
@@ -932,7 +1081,10 @@ def test_ptv3_frozen_encoder_supports_decoder_block_backward() -> None:
     assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in model.seg3d_head.parameters())
 
 
-def _build_attention(patch_size: int) -> SerializedAttention:
+# The tests below check the padding index kernels (`build_patch_order`,
+# `_get_padding_and_inverse`) directly: the fill layout they compute is not observable from
+# the attention outputs (a uniform key multiplicity cancels in the softmax).
+def _build_attention(patch_size: int, order_index: int = 0) -> SerializedAttention:
     """Return a non-flash attention module with a fixed window size."""
     attention = SerializedAttention(
         channels=32,
@@ -942,28 +1094,68 @@ def _build_attention(patch_size: int) -> SerializedAttention:
         qk_scale=None,
         attn_drop=0.0,
         proj_drop=0.0,
-        order_index=0,
+        order_index=order_index,
         enable_rpe=False,
         enable_flash=False,
         upcast_attention=False,
         upcast_softmax=False,
     ).eval()
-    # `__init__` zeroes `patch_size` when flash is off, and `forward` - which these
-    # tests bypass to reach `_get_padding_and_inverse` - is what normally sets it.
+    # `__init__` zeroes `patch_size` when flash is off, and `forward` - which the fill tests
+    # bypass to reach `_get_padding_and_inverse` - is what normally sets it.
     attention.patch_size = patch_size
     return attention
 
 
-def _identity_point(num_points: int) -> Point:
-    """Return a point whose serialization order is the identity, for readable indices."""
+def _identity_point(num_points: int, patch_size: int | None = None) -> Point:
+    """Return a point whose serialization order is the identity, for readable indices.
+
+    With ``patch_size`` it also carries the ``patch_order`` an export-mode block reads.
+    """
     order = torch.arange(num_points).unsqueeze(0)
-    return Point(
+    point = Point(
         feat=torch.zeros(num_points, 32),
         grid_coord=torch.zeros(num_points, 3, dtype=torch.long),
         offset=torch.tensor([num_points]),
         serialized_order=order,
         serialized_inverse=order.clone(),
     )
+    if patch_size is not None:
+        point["patch_order"] = build_patch_order(order, patch_size)
+    return point
+
+
+def _export_fill(num_points: int, patch_size: int) -> torch.Tensor:
+    """The exported gather order over an identity serialization: the fill itself."""
+    return build_patch_order(torch.arange(num_points).unsqueeze(0), patch_size)[0]
+
+
+def _reference_training_padding(
+    offset: torch.Tensor, patch_size: int, enable_flash: bool
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    """PTv3's original per-sample slice-copy padding, kept as the training-path oracle."""
+    bincount = torch.diff(offset, prepend=offset.new_zeros(1))
+    padded_bincount = torch.where(
+        bincount > patch_size, (bincount + patch_size - 1) // patch_size * patch_size, bincount
+    )
+    starts = nn.functional.pad(offset, (1, 0))
+    padded_starts = nn.functional.pad(torch.cumsum(padded_bincount, dim=0), (1, 0))
+    pad = torch.arange(int(padded_starts[-1]))
+    unpad = torch.arange(int(starts[-1]))
+    cu_seqlens = []
+    for index in range(offset.numel()):
+        unpad[starts[index] : starts[index + 1]] += padded_starts[index] - starts[index]
+        end = padded_starts[index + 1]
+        if bincount[index] != padded_bincount[index]:
+            tail = end - patch_size + bincount[index] % patch_size
+            pad[tail:end] = pad[tail - patch_size : end - patch_size]
+        pad[padded_starts[index] : end] -= padded_starts[index] - starts[index]
+        cu_seqlens.append(
+            torch.arange(int(padded_starts[index]), int(end), step=patch_size, dtype=torch.int32)
+        )
+    if not enable_flash:
+        return pad, unpad, None
+    total = int(padded_starts[-1])
+    return pad, unpad, nn.functional.pad(torch.cat(cu_seqlens), (0, 1), value=total)
 
 
 @pytest.mark.parametrize("patch_size", [4, 16, 48])
@@ -975,33 +1167,45 @@ def test_export_fill_reproduces_the_training_fill_above_one_window(patch_size: i
     match that exactly, or every frame whose voxel count is not a multiple of the
     window size drifts from what the model was trained on.
     """
-    attention = _build_attention(patch_size)
     for num_points in range(patch_size + 1, 4 * patch_size + 1):
-        attention.export_mode = False
-        training_pad, _, _ = attention._get_padding_and_inverse(_identity_point(num_points))
-        attention.export_mode = True
-        export_pad, _, _ = attention._get_padding_and_inverse(_identity_point(num_points))
+        training_pad, _, _ = _reference_training_padding(
+            torch.tensor([num_points]), patch_size, enable_flash=False
+        )
+        export_pad = _export_fill(num_points, patch_size)
         assert torch.equal(export_pad, training_pad), f"n={num_points}, K={patch_size}"
+
+
+@pytest.mark.parametrize("enable_flash", [False, True])
+@pytest.mark.parametrize("patch_size", [1, 4, 7])
+def test_training_padding_matches_the_reference_loop(patch_size: int, enable_flash: bool) -> None:
+    """Two-sample batches with empty, sub-window, exact and padded samples."""
+    attention = _build_attention(patch_size)
+    attention.enable_flash = enable_flash  # only selects whether `cu_seqlens` is returned
+    for counts in itertools.product(range(3 * patch_size + 2), repeat=2):
+        offset = torch.tensor(list(itertools.accumulate(counts)))
+        actual = attention._get_padding_and_inverse(Point(offset=offset))
+        expected = _reference_training_padding(offset, patch_size, enable_flash)
+        for name, left, right in zip(("pad", "unpad", "cu_seqlens"), actual, expected):
+            if right is None:
+                assert left is None, f"{name}, counts={counts}"
+            else:
+                assert left.dtype == right.dtype, f"{name}, counts={counts}"
+                assert torch.equal(left, right), f"{name}, counts={counts}"
 
 
 @pytest.mark.parametrize("patch_size", [4, 16, 48])
 def test_export_fill_only_ever_indexes_real_tokens(patch_size: int) -> None:
     """No slot may fall outside ``[0, n)``: every padded slot holds a real token."""
-    attention = _build_attention(patch_size)
-    attention.export_mode = True
     for num_points in range(1, 4 * patch_size + 1):
-        pad, unpad, _ = attention._get_padding_and_inverse(_identity_point(num_points))
+        pad = _export_fill(num_points, patch_size)
         assert int(pad.min()) >= 0, f"n={num_points}"
         assert int(pad.max()) < num_points, f"n={num_points}"
         assert pad.numel() % patch_size == 0, f"n={num_points}"
-        assert unpad.numel() == num_points
 
 
 def test_export_fill_wraps_instead_of_repeating_one_token() -> None:
     """Below one window the fill cycles, so no single key dominates the softmax."""
-    attention = _build_attention(16)
-    attention.export_mode = True
-    pad, _, _ = attention._get_padding_and_inverse(_identity_point(5))
+    pad = _export_fill(5, 16)
 
     _, counts = torch.unique(pad, return_counts=True)
     # Cycling keeps every multiplicity within one of every other; repeating the
@@ -1024,12 +1228,78 @@ def test_export_attention_is_exact_when_the_count_divides_the_window(num_points:
     padded.load_state_dict(reference.state_dict())
 
     def run(attention: SerializedAttention) -> torch.Tensor:
-        point = _identity_point(num_points)
+        point = _identity_point(num_points, patch_size if attention.export_mode else None)
         point.feat = feat.clone()
         with torch.no_grad():
             return attention(point).feat
 
     assert torch.allclose(run(padded), run(reference), atol=1e-5)
+
+
+@pytest.mark.parametrize("num_points", [6, 9])
+def test_export_attention_matches_training_on_a_non_identity_second_order(
+    num_points: int,
+) -> None:
+    """Export wiring of `patch_order[order_index]` and `serialized_inverse[order_index]`.
+
+    Two different non-identity orders, `order_index=1` and a count that does not divide the
+    window, checked against the training path. The training window is the smallest sample's
+    count, so a window-sized filler sample keeps it at ``patch_size``.
+    """
+    torch.manual_seed(1)
+    patch_size = 4
+    feat = torch.randn(num_points, 32)
+    orders = torch.stack([torch.randperm(num_points), torch.randperm(num_points)])
+    assert not torch.equal(orders[0], orders[1])
+
+    export = _build_attention(patch_size, order_index=1)
+    export.export_mode = True
+    reference = _build_attention(patch_size, order_index=1)
+    reference.load_state_dict(export.state_dict())
+
+    export_point = Point(
+        feat=feat.clone(),
+        grid_coord=torch.zeros(num_points, 3, dtype=torch.long),
+        offset=torch.tensor([num_points]),
+        serialized_order=orders,
+        serialized_inverse=torch.argsort(orders, dim=1),
+        patch_order=build_patch_order(orders, patch_size),
+    )
+    filler_orders = torch.stack([torch.randperm(patch_size), torch.randperm(patch_size)])
+    batch_orders = torch.cat([filler_orders, orders + patch_size], dim=1)
+    training_point = Point(
+        feat=torch.cat([torch.randn(patch_size, 32), feat]),
+        grid_coord=torch.zeros(patch_size + num_points, 3, dtype=torch.long),
+        offset=torch.tensor([patch_size, patch_size + num_points]),
+        serialized_order=batch_orders,
+        serialized_inverse=torch.argsort(batch_orders, dim=1),
+    )
+
+    with torch.no_grad():
+        export_feat = export(export_point).feat
+        training_feat = reference(training_point).feat[patch_size:]
+    assert reference.patch_size == patch_size
+    torch.testing.assert_close(export_feat, training_feat, atol=1e-5, rtol=1e-5)
+
+
+def test_export_input_builders_reject_a_multi_sample_batch() -> None:
+    """The graphs pad and offset one frame; a second sample fails here, not by attending across."""
+    model = build_seg3d_model().eval()
+    single = build_inputs().voxels_data
+    require_single_sample_export_batch(
+        model.build_encoder_inputs(single.voxels, single.num_points, single.batch_xyz_coords())
+    )
+
+    points = build_points()
+    double = DataPreprocessor(preprocessor_modules=[build_preprocessor()])(
+        build_batch_inputs(
+            point_cloud=build_point_cloud_batch([points, points], timestamp_difference_dim=4)
+        ).multi_task_gt_batch,
+        is_training=True,
+    )
+    for builder in (prepare_ptv3_export_inputs, build_ptv3_export_context):
+        with pytest.raises(ValueError, match="single-sample"):
+            builder(model, double)
 
 
 def _attention_only_encoder(fp32_sublayers: Any) -> PointTransformerV3Encoder:

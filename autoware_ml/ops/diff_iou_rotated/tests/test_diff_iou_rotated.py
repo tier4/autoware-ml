@@ -268,6 +268,73 @@ class TestDiffIoURotated(unittest.TestCase):
         expected = torch.tensor([[1.0, 0.5, 0.5]], device=self.device)
         torch.testing.assert_close(ious, expected, rtol=0.0, atol=1e-3)
 
+    def test_sorted_polygon_only_holds_valid_vertices(self) -> None:
+        """The sorting kernel never emits a masked candidate, and the IoU stays within [0, 1].
+
+        The kernel used to pick each polygon vertex as the smallest candidate ordered after
+        the one just emitted and fell back to index 0 when the tolerance-based comparison
+        found none. For this pair, two corners of each box plus two crossings are valid, the
+        fallback put the zeroed corner 0 (the origin, 60 m away) into the polygon, the
+        intersection came out as 179 m^2 against footprints of 17 and 22 m^2, the union
+        clamped to EPSILON and the IoU reached 1.8e10. The polygon-clipping reference IoU of
+        the pair is 0.6127.
+        """
+        boxes1 = torch.tensor(
+            [[[-54.224285, 33.940681, 6.3381834, 2.6198013, -1.7385328]]], device=self.device
+        )
+        boxes2 = torch.tensor(
+            [[[-53.807571, 34.326897, 6.3197589, 3.4731305, -1.4712861]]], device=self.device
+        )
+
+        corners1 = box2corners(boxes1)
+        corners2 = box2corners(boxes2)
+        intersections, valid_mask = box_intersection(corners1, corners2)
+        c12, c21 = box_in_box(corners1, corners2)
+        vertices, mask = build_vertices(corners1, corners2, c12, c21, intersections, valid_mask)
+        mask = drop_duplicate_vertices(vertices, mask)
+        sorted_indices = sort_indices(vertices * mask.unsqueeze(-1), mask)
+        num_valid = int(mask.sum())
+        polygon_indices = sorted_indices[0, 0, :num_valid]
+
+        # Every polygon slot holds a distinct valid candidate.
+        self.assertTrue(bool(mask[0, 0, polygon_indices].all()), sorted_indices[0, 0].tolist())
+        self.assertEqual(len(set(polygon_indices.tolist())), num_valid)
+        ious = diff_iou_rotated_2d(boxes1, boxes2)
+        torch.testing.assert_close(
+            ious, torch.tensor([[0.6127]], device=self.device), rtol=0.0, atol=1e-3
+        )
+
+    def test_random_matched_pairs_stay_within_unit_iou(self) -> None:
+        """Noisy matched pairs, as the IoU loss sees them, never exceed an IoU of 1.
+
+        Before the kernel fix about 6 in a million such pairs returned an IoU in the billions.
+        The intersection bound in ``diff_iou_rotated_2d`` keeps the ratio within [0, 1] even
+        if the polygon area is wrong, so this also covers the backstop.
+        """
+        generator = torch.Generator(device=self.device).manual_seed(1)
+        num_pairs = 500_000
+        targets = torch.empty(1, num_pairs, 5, device=self.device)
+        targets[..., 0:2].uniform_(-120.0, 120.0, generator=generator)
+        targets[..., 2].uniform_(0.3, 20.0, generator=generator)
+        targets[..., 3].uniform_(0.3, 4.0, generator=generator)
+        targets[..., 4].uniform_(-math.pi, math.pi, generator=generator)
+        predictions = targets.clone()
+        predictions[..., 0:2] += 0.5 * torch.randn(
+            1, num_pairs, 2, device=self.device, generator=generator
+        )
+        predictions[..., 2:4] *= torch.exp(
+            0.3 * torch.randn(1, num_pairs, 2, device=self.device, generator=generator)
+        )
+        predictions[..., 4] += 0.3 * torch.randn(
+            1, num_pairs, device=self.device, generator=generator
+        )
+
+        ious = diff_iou_rotated_2d(predictions, targets)
+
+        self.assertTrue(bool(torch.isfinite(ious).all()))
+        self.assertLessEqual(float(ious.max()), 1.0 + 1e-4)
+        self.assertGreaterEqual(float(ious.min()), 0.0)
+
     def test_deduplicated_crossing_does_not_leak_into_the_padding(self) -> None:
         """A crossing dropped as a duplicate must not feed the padding of the polygon row.
 

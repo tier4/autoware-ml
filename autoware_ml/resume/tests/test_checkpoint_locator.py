@@ -74,7 +74,7 @@ class TestCheckpointLocator(unittest.TestCase):
         self.assertEqual(CheckpointLocator(self.root).find_latest(), good.resolve())
 
     def test_is_loadable(self) -> None:
-        """Test the loadability check on complete, incomplete and broken files."""
+        """Test whether complete, incomplete and broken files count as loadable."""
         cases = (
             ("complete.ckpt", _COMPLETE_STATE, True),
             ("incomplete.ckpt", {"state_dict": {}, "loops": {}}, False),

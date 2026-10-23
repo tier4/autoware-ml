@@ -1,0 +1,4 @@
+# @package metric_params.det3d_seg3d
+defaults:
+  - partial_detection3d_classes: default_coarse
+  - _self_

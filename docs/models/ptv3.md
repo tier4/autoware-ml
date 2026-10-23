@@ -8,10 +8,10 @@ PointTransformerV3 is a LiDAR encoder for LiDAR 3D semantic segmentation and
 3D object detection. The shared component is the hierarchical PTv3 **encoder**
 (`PointTransformerV3Encoder`); each task owns its head:
 
-- Segmentation: `PTv3SegDecoderHead` unpools the deepest encoder stage back to
+- Segmentation: `PTv3Seg3DDecoderHead` unpools the deepest encoder stage back to
   full resolution through the encoder skip chain and classifies each point.
-- Detection: `PTv3DetBEVNeck` fuses the two coarsest encoder stages
-  (`PTv3DetFeatureFusion`), scatters them onto a dense BEV canvas at the
+- Detection: `PTv3Det3DBEVNeck` fuses the two coarsest encoder stages
+  (`PTv3Det3DFeatureFusion`), scatters them onto a dense BEV canvas at the
   detection-head resolution, and feeds a `TransFusionHead`.
 
 The model reads the current lidar frame and its sweeps, and every point has a time lag. The
@@ -42,29 +42,29 @@ implementation so ONNX export remains supported.
 
 ## Available Configurations
 
-| Config Name                                          | Task                         | Dataset   | Head        | Range | Purpose                        |
-| ---------------------------------------------------- | ---------------------------- | --------- | ----------- | ----- | ------------------------------ |
-| `segmentation3d/ptv3/voxel005_51m_nuscenes`          | segmentation3d               | nuScenes  | Seg decoder | 51 m  | nuScenes segmentation          |
-| `segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2` | segmentation3d               | T4Dataset | Seg decoder | 122 m | T4Dataset segmentation         |
-| `detection3d/ptv3/voxel005_51m_nuscenes`             | detection3d                  | nuScenes  | TransFusion | 51 m  | nuScenes detection             |
-| `detection3d/ptv3/voxel012_122m_t4dataset_j6gen2`    | detection3d                  | T4Dataset | TransFusion | 122 m | T4Dataset detection            |
-| `multi/ptv3/voxel005_51m_nuscenes`                   | segmentation3d + detection3d | nuScenes  | TransFusion | 51 m  | Joint segmentation + detection |
-| `multi/ptv3/voxel012_122m_t4dataset_j6gen2`          | segmentation3d + detection3d | T4Dataset | TransFusion | 122 m | Joint segmentation + detection |
+| Config Name                                                                         | Task                         | Dataset   | Head        | Range | Purpose                        |
+| ----------------------------------------------------------------------------------- | ---------------------------- | --------- | ----------- | ----- | ------------------------------ |
+| `segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m`                   | segmentation3d               | nuScenes  | Seg decoder | 51 m  | nuScenes segmentation          |
+| `segmentation3d/ptv3/t4dataset/voxel012_tiny_b16_50e_t4dataset_122m_j6gen2_semaseg` | segmentation3d               | T4Dataset | Seg decoder | 122 m | T4Dataset segmentation         |
+| `detection3d/ptv3/nuscenes/voxel005_base_b16_30e_nuscenes_51m`                      | detection3d                  | nuScenes  | TransFusion | 51 m  | nuScenes detection             |
+| `detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base`        | detection3d                  | T4Dataset | TransFusion | 122 m | T4Dataset detection            |
+| `multi/ptv3/nuscenes/voxel005_base_b16_100e_nuscenes_51m`                           | segmentation3d + detection3d | nuScenes  | TransFusion | 51 m  | Joint segmentation + detection |
+| `multi/ptv3/t4dataset/voxel012_tiny_b8_100e_t4dataset_122m_j6gen2_det3d_seg3d`         | segmentation3d + detection3d | T4Dataset | TransFusion | 122 m | Joint segmentation + detection |
 
 ## Training
 
 ```bash
-autoware-ml train --config-name segmentation3d/ptv3/voxel005_51m_nuscenes
-autoware-ml train --config-name segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2
-autoware-ml train --config-name detection3d/ptv3/voxel005_51m_nuscenes
-autoware-ml train --config-name detection3d/ptv3/voxel012_122m_t4dataset_j6gen2
+autoware-ml train --config-name segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m
+autoware-ml train --config-name segmentation3d/ptv3/t4dataset/voxel012_tiny_b16_50e_t4dataset_122m_j6gen2_semaseg
+autoware-ml train --config-name detection3d/ptv3/nuscenes/voxel005_base_b16_30e_nuscenes_51m
+autoware-ml train --config-name detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base
 ```
 
 For a pipeline validation run:
 
 ```bash
 autoware-ml train \
-    --config-name segmentation3d/ptv3/voxel005_51m_nuscenes \
+    --config-name segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m \
     +trainer.fast_dev_run=true
 ```
 
@@ -72,12 +72,12 @@ autoware-ml train \
 
 ```bash
 autoware-ml test \
-    --config-name segmentation3d/ptv3/voxel005_51m_nuscenes \
-    --weights mlruns/segmentation3d/ptv3/voxel005_51m_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt
+    --config-name segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m \
+    --weights mlruns/ptv3_seg3d/NuScenesDataset-base-v1.0.0/nuscenes/voxel005_base_b16_50e_nuscenes_51m/<run_id>/artifacts/checkpoints/best.ckpt
 
 autoware-ml test \
-    --config-name detection3d/ptv3/voxel012_122m_t4dataset_j6gen2 \
-    --weights mlruns/detection3d/ptv3/voxel012_122m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt
+    --config-name detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base \
+    --weights mlruns/ptv3/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base/voxel012_tiny_b8_30e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 ## Deployment
@@ -88,13 +88,13 @@ convolution plugins.
 
 ```bash
 autoware-ml deploy \
-    --config-name segmentation3d/ptv3/voxel005_51m_nuscenes \
-    --weights mlruns/segmentation3d/ptv3/voxel005_51m_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt \
+    --config-name segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m \
+    --weights mlruns/ptv3_seg3d/NuScenesDataset-base-v1.0.0/nuscenes/voxel005_base_b16_50e_nuscenes_51m/<run_id>/artifacts/checkpoints/best.ckpt \
     deploy.tensorrt.enabled=false
 
 autoware-ml deploy \
-    --config-name detection3d/ptv3/voxel012_122m_t4dataset_j6gen2 \
-    --weights mlruns/detection3d/ptv3/voxel012_122m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt \
+    --config-name detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base \
+    --weights mlruns/ptv3/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base/voxel012_tiny_b8_30e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt \
     deploy.tensorrt.enabled=false
 ```
 
@@ -123,7 +123,7 @@ the stable but slower non-fused attention path, disable both:
 
 ```bash
 autoware-ml deploy \
-    --config-name detection3d/ptv3/voxel012_122m_t4dataset_j6gen2 \
+    --config-name detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base \
     --weights <checkpoint> \
     model.bbox_head.use_bf16_cross_attention=false \
     deploy.onnx.modules.ptv3_det3d_head.precision=fp32
@@ -137,6 +137,13 @@ Deployment uses an explicit PTv3 export wrapper and a copied encoder, so the
 training model is not mutated when export-only sparse-convolution and
 serialization settings are applied.
 
+The `height` channel of the detection head's `bbox_pred` output is the z of the
+box gravity center. Earlier releases regressed the top face (`z + 0.5 * h`), and
+the `autoware_ptv3` node still undoes that shift with `z = height - box_h * 0.5`
+in `detection3d_postprocess.cu`. A model trained with this release therefore
+needs the node updated to `z = height` (no half-height subtraction) before it is
+deployed. Models trained before this release keep working with the current node.
+
 ### ONNX Preprocessing Contract
 
 The exported PTv3 encoder ONNX expects all pooling-shape metadata to be
@@ -149,21 +156,26 @@ number of serialization orders.
 | `voxels`               | `[N_0, P, 5]` | Points of every voxel as `(x, y, z, intensity, time_lag)`, zero padded. `time_lag` is in seconds, 0 for the current frame, positive for a past sweep and negative for a future one. |
 | `num_points_per_voxel` | `[N_0]`       | Number of points every voxel holds.                                                                                                                                                 |
 | `grid_coord`           | `[N_0, 3]`    | Integer voxel coordinates.                                                                                                                                                          |
-| `serialized_order`     | `[O, N_0]`    | Serialization order of the input voxels.                                                                                                                                            |
-| `serialized_inverse`   | `[O, N_0]`    | Inverse of `serialized_order`.                                                                                                                                                      |
+| `patch_order`          | `[O, Npad_0]` | The order padded to whole attention windows (see below).                                                                                                                            |
+| `serialized_inverse`   | `[O, N_0]`    | Inverse of the serialization order per curve (argsort of the codes).                                                                                                                |
+
+`Npad_k = ceil(N_k / patch_size_k) * patch_size_k` is the padded length of level `k`. The
+fill is described in [Attention window fill at export](#attention-window-fill-at-export);
+the runtime must build `patch_order` with the per-level `patch_sizes` stamped into the
+encoder's ONNX metadata.
 
 For every encoder pooling stage `i`, with input voxel count `N_i` and pooled
 output voxel count `M_i`, preprocessing also provides:
 
-| Pooling metadata                          | Shape       | Meaning                                                       |
-| ----------------------------------------- | ----------- | ------------------------------------------------------------- |
-| `serialized_pooling_i_indices`            | `[N_i]`     | ONNX `Gather` indices grouping features before CSR reduction. |
-| `serialized_pooling_i_indptr`             | `[M_i + 1]` | CSR row pointer consumed by `autoware::SegmentCSR`.           |
-| `serialized_pooling_i_cluster`            | `[N_i]`     | Input voxel to pooled voxel id mapping for unpooling.         |
-| `serialized_pooling_i_head_indices`       | `[M_i]`     | Representative input voxel for each pooled voxel.             |
-| `serialized_pooling_i_grid_coord`         | `[M_i, 3]`  | Integer coordinates of pooled voxels.                         |
-| `serialized_pooling_i_serialized_order`   | `[O, M_i]`  | Serialization order for pooled voxels.                        |
-| `serialized_pooling_i_serialized_inverse` | `[O, M_i]`  | Inverse serialization order for pooled voxels.                |
+| Pooling metadata                          | Shape             | Meaning                                                                     |
+| ----------------------------------------- | ----------------- | --------------------------------------------------------------------------- |
+| `serialized_pooling_i_indices`            | `[N_i]`           | ONNX `Gather` indices grouping features before CSR reduction.               |
+| `serialized_pooling_i_indptr`             | `[M_i + 1]`       | CSR row pointer consumed by `autoware::SegmentCSR`.                         |
+| `serialized_pooling_i_cluster`            | `[N_i]`           | Input voxel to pooled voxel id mapping for unpooling.                       |
+| `serialized_pooling_i_head_indices`       | `[M_i]`           | Representative input voxel for each pooled voxel.                           |
+| `serialized_pooling_i_grid_coord`         | `[M_i, 3]`        | Integer coordinates of pooled voxels.                                       |
+| `serialized_pooling_i_patch_order`        | `[O, Npad_{i+1}]` | The pooled level's (level `i + 1`) order padded to whole attention windows. |
+| `serialized_pooling_i_serialized_inverse` | `[O, M_i]`        | Inverse serialization order for pooled voxels.                              |
 
 Because preprocessing resolves every pooling shape ahead of time, the exported
 graph contains no data-dependent pooling shape discovery. Pooled feature
@@ -184,6 +196,8 @@ sample of `n` voxels needs its last window filled unless `n` is a multiple of `K
 
 Dynamic window sizes and masking are both awkward to express in TensorRT without
 a performance penalty, hence this fill.
+Preprocessing computes the fill into `patch_order` with `build_patch_order`
+(`encoders/ptv3.py`), which the deployed runtime reimplements.
 
 ### Split-export module contract
 
@@ -199,11 +213,11 @@ The split export produces one graph per `deploy.onnx.modules` entry:
   and outputs `pred_labels`/`pred_probs`. For every decoder stage `i` with
   attention blocks (`dec_depths[i] > 0`) the graph additionally consumes that
   stage's serialization metadata, under the same names as the encoder
-  inputs: `serialized_pooling_{i-1}_serialized_order`,
-  `serialized_pooling_{i-1}_serialized_inverse`, and
-  `serialized_pooling_{i-1}_grid_coord` (stage 0 takes the unprefixed base
-  `serialized_order`, `serialized_inverse`, and `grid_coord`). The rule is implemented once in
-  `seg_head_export_input_names` and must be mirrored by deployment consumers
+  inputs: `serialized_pooling_{i-1}_patch_order`,
+  `serialized_pooling_{i-1}_serialized_inverse` and
+  `serialized_pooling_{i-1}_grid_coord` (stage 0 instead takes the base
+  `patch_order`, `serialized_inverse` and `grid_coord`). The rule is implemented once in
+  `seg3d_head_export_input_names` and must be mirrored by deployment consumers
   from the artifact's `dec_depths`.
 - `det3d_head` - consumes `point_feat_{S-2}`, `point_feat_{S-1}`,
   `pooling_cluster_{S-2}`, and `point_grid_coord_{S-2}` and outputs the
@@ -211,25 +225,24 @@ The split export produces one graph per `deploy.onnx.modules` entry:
 
 ## Implementation
 
-| Path                                                  | Description                                    |
-| ----------------------------------------------------- | ---------------------------------------------- |
-| `autoware_ml/models/segmentation3d/ptv3.py`           | PTv3 Lightning model wrapper                   |
-| `autoware_ml/models/segmentation3d/heads/ptv3.py`     | PTv3 segmentation decoder head                 |
-| `autoware_ml/models/detection3d/ptv3.py`              | PTv3 BEV neck and detection model wrapper      |
-| `autoware_ml/models/detection3d/heads/transfusion.py` | TransFusion detection head                     |
-| `autoware_ml/models/segmentation3d/encoders/ptv3.py`  | Reusable PTv3 encoder components               |
-| `autoware_ml/models/segmentation3d/encoders/voxel.py` | Voxel feature encoder of the frame and sweeps  |
-| `autoware_ml/utils/point_cloud/`                      | Shared point-cloud utilities and serialization |
-| `autoware_ml/ops/segment/segment_csr.py`              | Segment reduction export operator              |
-| `autoware_ml/losses/segmentation3d/`                  | Segmentation losses used by PTv3               |
-| `autoware_ml/datamodule/t4dataset/dataset.py`         | T4Dataset records as a dataset                 |
-| `autoware_ml/datamodule/nuscenes/dataset.py`          | nuScenes dataset                               |
-| `autoware_ml/datamodule/t4dataset/segmentation3d.py`  | Semantic masks of a T4Dataset record           |
-| `autoware_ml/datamodule/nuscenes/segmentation3d.py`   | Semantic masks of a nuScenes record            |
-| `autoware_ml/datamodule/detection3d.py`               | 3D boxes of a record                           |
-| `autoware_ml/transforms/point_cloud/`                 | Shared point-cloud transforms used by PTv3     |
-| `autoware_ml/configs/tasks/segmentation3d/ptv3/`      | Task configurations                            |
-| `autoware_ml/configs/tasks/detection3d/ptv3/`         | Detection task configurations                  |
+| Path                                                                    | Description                                    |
+| ----------------------------------------------------------------------- | ---------------------------------------------- |
+| `autoware_ml/models/segmentation3d/ptv3.py`                             | PTv3 Lightning model wrapper                   |
+| `autoware_ml/models/segmentation3d/heads/ptv3.py`                       | PTv3 segmentation decoder head                 |
+| `autoware_ml/models/detection3d/ptv3.py`                                | PTv3 BEV neck and detection model wrapper      |
+| `autoware_ml/models/detection3d/heads/transfusions/transfusion_head.py` | TransFusion detection head                     |
+| `autoware_ml/models/segmentation3d/encoders/ptv3.py`                    | Reusable PTv3 encoder components               |
+| `autoware_ml/models/segmentation3d/encoders/voxel.py`                   | Voxel feature encoder of the frame and sweeps  |
+| `autoware_ml/utils/point_cloud/`                                        | Shared point-cloud utilities and serialization |
+| `autoware_ml/ops/segment/segment_csr.py`                                | Segment reduction export operator              |
+| `autoware_ml/losses/segmentation3d/`                                    | Segmentation losses used by PTv3               |
+| `autoware_ml/datamodule/t4dataset/dataset.py`                           | T4Dataset records as a dataset                 |
+| `autoware_ml/datamodule/nuscenes/dataset.py`                            | nuScenes dataset                               |
+| `autoware_ml/datamodule/t4dataset/segmentation3d.py`                    | Semantic masks of a T4Dataset record           |
+| `autoware_ml/datamodule/common/detection3d.py`                          | 3D boxes of a record                           |
+| `autoware_ml/transforms/point_cloud/`                                   | Shared point-cloud transforms used by PTv3     |
+| `autoware_ml/configs/tasks/segmentation3d/ptv3/`                        | Segmentation experiment configurations         |
+| `autoware_ml/configs/tasks/detection3d/ptv3/`                           | Detection experiment configurations            |
 
 ## Acknowledgment
 

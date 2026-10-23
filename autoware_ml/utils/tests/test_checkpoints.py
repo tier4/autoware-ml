@@ -66,6 +66,44 @@ def test_load_matching_weights_raises_on_shape_mismatch(tmp_path: Path) -> None:
         load_matching_weights(model, checkpoint_path)
 
 
+def test_load_matching_weights_skips_shape_mismatch_with_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level("WARNING")
+    model = _TinyModel()
+    original_bias = model.layer.bias.detach().clone()
+    checkpoint_path = tmp_path / "weights.ckpt"
+    torch.save(
+        {
+            "state_dict": {
+                "layer.weight": torch.full_like(model.layer.weight, 3.0),
+                "layer.bias": torch.ones(2),
+            }
+        },
+        checkpoint_path,
+    )
+
+    report = load_matching_weights(model, checkpoint_path, skip_mismatched_shapes=True)
+
+    assert report.loaded_keys == ("layer.weight",)
+    assert report.shape_mismatched_keys == ("layer.bias",)
+    assert report.not_loaded_model_keys == ("layer.bias",)
+    assert torch.equal(model.layer.weight, torch.full_like(model.layer.weight, 3.0))
+    assert torch.equal(model.layer.bias, original_bias)
+    warnings = [record for record in caplog.records if record.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "layer.bias: checkpoint(2,) != model(1,)" in warnings[0].getMessage()
+
+
+def test_load_matching_weights_skip_still_needs_one_matching_tensor(tmp_path: Path) -> None:
+    model = _TinyModel()
+    checkpoint_path = tmp_path / "weights.ckpt"
+    torch.save({"state_dict": {"layer.bias": torch.ones(2)}}, checkpoint_path)
+
+    with pytest.raises(ValueError, match="does not contain any tensors matching"):
+        load_matching_weights(model, checkpoint_path, skip_mismatched_shapes=True)
+
+
 def test_load_matching_weights_rejects_checkpoints_without_matching_tensors(
     tmp_path: Path,
 ) -> None:
@@ -135,6 +173,32 @@ def test_apply_matching_weights_full_coverage_passes_when_union_complete(
     assert len(reports) == 2
     assert torch.equal(model.layer.weight, torch.full_like(model.layer.weight, 2.0))
     assert torch.equal(model.layer.bias, torch.full_like(model.layer.bias, 7.0))
+
+
+def test_apply_matching_weights_forwards_skip_mismatched_shapes(tmp_path: Path) -> None:
+    model = _TinyModel()
+    checkpoint_path = tmp_path / "weights.ckpt"
+    torch.save(
+        {
+            "state_dict": {
+                "layer.weight": torch.full_like(model.layer.weight, 3.0),
+                "layer.bias": torch.ones(2),
+            }
+        },
+        checkpoint_path,
+    )
+
+    with pytest.raises(ValueError, match="incompatible shapes"):
+        apply_matching_weights(model, checkpoint_path)
+
+    reports = apply_matching_weights(model, checkpoint_path, skip_mismatched_shapes=True)
+
+    assert reports[0].shape_mismatched_keys == ("layer.bias",)
+    # A skipped tensor is not covered, so deploy-style full coverage still refuses it.
+    with pytest.raises(RuntimeError, match="layer.bias"):
+        apply_matching_weights(
+            model, checkpoint_path, skip_mismatched_shapes=True, enforce_full_coverage=True
+        )
 
 
 def test_apply_matching_weights_full_coverage_raises_when_keys_missing(

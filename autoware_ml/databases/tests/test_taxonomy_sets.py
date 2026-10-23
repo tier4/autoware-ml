@@ -64,9 +64,7 @@ def _taxonomy(
 
 def _dataset_params(**options: object) -> DatasetParams:
     """Dataset parameters of a small test corpus with the given record options."""
-    return DatasetParams(
-        dataset_name="db", max_past_sweeps=2, max_future_sweeps=0, sample_steps=1, **options
-    )
+    return DatasetParams(dataset_name="db", sample_steps=1, **options)
 
 
 class TestLabelSets(unittest.TestCase):
@@ -142,18 +140,17 @@ class TestDatasetParams(unittest.TestCase):
     """Unit tests for the record options of DatasetParams and their scenario data."""
 
     def test_default_options_keep_the_string_form(self) -> None:
-        """Test that options at their default stay out of the string form and so the hash."""
+        """Test that options at their default stay out of the hash input."""
         plain = _dataset_params()
 
         self.assertEqual(plain.category_aliases, {})
         self.assertEqual(
-            str(plain),
-            "DatasetParams(dataset_name=db, max_past_sweeps=2, max_future_sweeps=0, "
-            "sample_steps=1)",
+            plain.hash_repr,
+            "DatasetParams(dataset_name='db', sample_steps=1)",
         )
 
     def test_set_options_enter_the_string_form(self) -> None:
-        """Test the exact string form of every record option, the input of the hash."""
+        """Test the exact hash input of every record option."""
         params = _dataset_params(
             semantic_masks=True,
             category_aliases={"manmade": "legacy_manmade"},
@@ -161,23 +158,22 @@ class TestDatasetParams(unittest.TestCase):
         )
 
         self.assertEqual(
-            str(params),
-            "DatasetParams(dataset_name=db, max_past_sweeps=2, max_future_sweeps=0, "
-            "sample_steps=1, semantic_masks=True, "
+            params.hash_repr,
+            "DatasetParams(dataset_name='db', sample_steps=1, semantic_masks=True, "
             "category_aliases=[('manmade', 'legacy_manmade')], camera_frames=False)",
         )
 
     def test_category_aliases_reach_the_scenario(self) -> None:
-        """Test that the aliases are carried into the scenario data and its string form."""
+        """Test that the aliases are carried into the scenario data and its hash input."""
         aliased = _dataset_params(
             semantic_masks=True, category_aliases={"manmade": "legacy_manmade"}
         )
 
         self.assertNotEqual(aliased, _dataset_params())
-        self.assertIn("legacy_manmade", str(aliased))
+        self.assertIn("legacy_manmade", aliased.hash_repr)
         scenario = T4Scenarios._build_scenario_data("scene/0", aliased)
         self.assertEqual(scenario.dataset_params.category_aliases, {"manmade": "legacy_manmade"})
-        self.assertIn("legacy_manmade", str(scenario))
+        self.assertIn("legacy_manmade", scenario.hash_repr)
         self.assertTrue(scenario.dataset_params.camera_frames)
 
     def test_camera_frames_option_reaches_the_scenario(self) -> None:

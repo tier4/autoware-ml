@@ -31,6 +31,7 @@ from lightning.fabric.utilities.logger import _convert_params, _flatten_dict
 from lightning.pytorch.loggers import Logger, MLFlowLogger
 from lightning.pytorch.utilities.rank_zero import rank_zero_only
 from omegaconf import DictConfig, OmegaConf, open_dict
+import polars as pl
 
 from autoware_ml.configs.paths import CONFIGS_ROOT
 from autoware_ml.configs.resolvers import register_config_resolvers
@@ -39,6 +40,41 @@ from autoware_ml.utils.mlflow_helpers import sanitize_mlflow_param_keys
 logger = logging.getLogger(__name__)
 
 register_config_resolvers()
+
+
+class RankZeroConsoleFilter(logging.Filter):
+    """Drop console records on every rank but global rank zero.
+
+    The rank is read when the record is emitted rather than when the filter is
+    installed, so it stays correct after the Lightning strategy replaces the
+    environment-derived rank with the true global rank.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Return whether the record may reach the console.
+
+        Args:
+            record: Record about to be emitted.
+
+        Returns:
+            ``True`` on global rank zero, ``False`` elsewhere.
+        """
+        return rank_zero_only.rank == 0
+
+
+def restrict_console_logging_to_rank_zero() -> None:
+    """Keep worker ranks out of the console without touching their log files.
+
+    Hydra's default job logging attaches a stdout ``StreamHandler`` and a
+    ``FileHandler`` to the root logger. Filtering only the stream handler leaves
+    every rank writing its own complete log file, while the console carries a
+    single unduplicated stream from rank zero.
+    """
+    for handler in logging.getLogger().handlers:
+        if isinstance(handler, logging.FileHandler):
+            continue
+        if isinstance(handler, logging.StreamHandler):
+            handler.addFilter(RankZeroConsoleFilter())
 
 
 def get_config_path() -> str:
@@ -61,6 +97,8 @@ def log_configuration(cfg: DictConfig) -> None:
     logger.info("=" * 80)
     logger.info(OmegaConf.to_yaml(cfg))
     logger.info("=" * 80)
+    # Log polars number of threads
+    logger.info(f"POLARS_MAX_THREADS: {pl.thread_pool_size()}")
 
 
 def resolve_work_dir() -> Path:

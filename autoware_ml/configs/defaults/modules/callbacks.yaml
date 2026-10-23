@@ -1,6 +1,11 @@
 # @package _global_
 
 callbacks:
+  rich_progress_bar:
+    _target_: lightning.pytorch.callbacks.RichProgressBar
+    refresh_rate: 30
+    leave: false
+
   model_checkpoint:
     _target_: lightning.pytorch.callbacks.ModelCheckpoint
     monitor: val/loss
@@ -9,6 +14,9 @@ callbacks:
     save_top_k: 1
     mode: min
     verbose: true
+    # Save after validation, where val/loss is fresh: the dynamic_validation callback skips
+    # validation on most epochs, so a train-epoch-end save would find no metric.
+    save_on_train_epoch_end: false
 
   model_checkpoint_last:
     _target_: lightning.pytorch.callbacks.ModelCheckpoint
@@ -16,13 +24,37 @@ callbacks:
     filename: last
     save_top_k: 1
     enable_version_counter: false
+    save_on_train_epoch_end: false
 
   early_stopping:
     _target_: autoware_ml.callbacks.early_stopping.EarlyStopping
     monitor: val/loss
     patience: 20
     mode: min
+    # Check after validation, not at every train epoch end. Left unset, Lightning decides from
+    # the trainer's initial check_val_every_n_epoch of 1 and then fails on the first epoch the
+    # dynamic_validation callback skips.
+    check_on_train_epoch_end: false
 
   lr_monitor:
     _target_: lightning.pytorch.callbacks.LearningRateMonitor
     logging_interval: step
+
+  # Both timers log their step metrics on every batch; the trainer's log_every_n_steps
+  # decides which steps reach the logger.
+  iteration_timer:
+    _target_: autoware_ml.callbacks.iteration_timer.IterationTimer
+    sync_cuda: false
+    warmup_iters: 1
+
+  data_processing_timer:
+    _target_: autoware_ml.callbacks.data_processing_timer.DataProcessingTimer
+
+  # Logs train/grad_norm_<norm_type>, the norm of the accumulated gradients on every optimizer
+  # step, measured before trainer.gradient_clip_val clips them. norm_type is l1, l2 or inf.
+  grad_norm_monitor:
+    _target_: autoware_ml.callbacks.grad_norm_monitor.GradNormMonitor
+    norm_type: l2
+
+  model_summary_example_input:
+    _target_: autoware_ml.callbacks.model_summary_example_input.ModelSummaryExampleInput

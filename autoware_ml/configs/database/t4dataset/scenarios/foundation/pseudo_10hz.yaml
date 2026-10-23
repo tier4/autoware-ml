@@ -26,8 +26,6 @@ dataset_params:
     _target_: autoware_ml.databases.scenarios.DatasetParams
     _convert_: all
     dataset_name: db_j6gen2_v1
-    max_past_sweeps: 2
-    max_future_sweeps: 1
     # Every n-th frame, from the root-level `pseudo_10hz_sample_steps` of the task config
     # (1 when unset, pre-training); the fine-tuning stage sets 10 to rehearse at 1 Hz
     sample_steps: ${oc.select:pseudo_10hz_sample_steps,1}

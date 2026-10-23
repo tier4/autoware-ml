@@ -33,11 +33,12 @@ from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentat
 from autoware_ml.models.segmentation3d.encoders.ptv3 import PointTransformerV3Encoder
 from autoware_ml.models.segmentation3d.encoders.voxel import VoxelFeatureEncoder
 from autoware_ml.models.segmentation3d.heads.ptv3 import (
-    PTv3SegDecoderHead,
-    segmentation_eval_output,
-    segmentation_point_loss,
-    segmentation_predict_outputs,
+    PTv3Seg3DDecoderHead,
+    segmentation3d_eval_output,
+    segmentation3d_point_loss,
+    segmentation3d_predict_outputs,
 )
+from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.segmentation3d.ptv3_base import (
     SERIALIZED_POOLING_FIELDS,
     PTv3BaseModel,
@@ -46,21 +47,21 @@ from autoware_ml.models.segmentation3d.ptv3_base import (
     build_point_feature_dynamic_axes,
     build_ptv3_export_context,
     build_ptv3_input_dynamic_axes,
-    build_seg_head_export_spec,
+    build_seg3d_head_export_spec,
     prepare_ptv3_export_inputs,
     split_block_parameters,
 )
 from autoware_ml.utils.deploy import ExportSpec
 
 
-class _PTv3SegmentationExportModule(PTv3EncoderExportBase):
+class _PTv3Segmentation3DExportModule(PTv3EncoderExportBase):
     """Expose a deployment-oriented PTv3 export graph without mutating the model."""
 
     def __init__(
         self,
         encoder: PointTransformerV3Encoder,
         voxel_encoder: VoxelFeatureEncoder,
-        seg3d_head: PTv3SegDecoderHead,
+        seg3d_head: PTv3Seg3DDecoderHead,
         sparse_shape: torch.Tensor,
         serialized_depth: torch.Tensor,
     ) -> None:
@@ -81,7 +82,7 @@ class _PTv3SegmentationExportModule(PTv3EncoderExportBase):
         voxels: torch.Tensor,
         num_points_per_voxel: torch.Tensor,
         grid_coord: torch.Tensor,
-        serialized_order: torch.Tensor,
+        patch_order: torch.Tensor,
         serialized_inverse: torch.Tensor,
         *serialized_pooling_inputs: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -91,8 +92,8 @@ class _PTv3SegmentationExportModule(PTv3EncoderExportBase):
             voxels: Padded voxel points.
             num_points_per_voxel: Valid point count per voxel.
             grid_coord: Integer voxel coordinates.
-            serialized_order: Level-0 serialization order, one row per curve.
-            serialized_inverse: Inverse of ``serialized_order``.
+            patch_order: The level-0 serialization orders padded to whole attention windows.
+            serialized_inverse: Inverse of those orders.
             serialized_pooling_inputs: Precomputed pooling metadata tensors.
 
         Returns:
@@ -102,7 +103,7 @@ class _PTv3SegmentationExportModule(PTv3EncoderExportBase):
             voxels,
             num_points_per_voxel,
             grid_coord,
-            serialized_order,
+            patch_order,
             serialized_inverse,
             *serialized_pooling_inputs,
         )
@@ -112,16 +113,17 @@ class _PTv3SegmentationExportModule(PTv3EncoderExportBase):
         return pred_labels, pred_probs
 
 
-class PTv3SegmentationModel(PTv3BaseModel):
+class PTv3Segmentation3DModel(PTv3BaseModel):
     """Wrap PTv3 semantic segmentation in the shared training interface."""
 
     def __init__(
         self,
         encoder: PointTransformerV3Encoder,
         voxel_encoder: VoxelFeatureEncoder,
-        seg3d_head: PTv3SegDecoderHead,
+        seg3d_head: PTv3Seg3DDecoderHead,
         grid_size: float,
         point_cloud_range: Sequence[float],
+        log_dict_configs: LogDictConfigs,
         **kwargs: Any,
     ) -> None:
         """Initialize the PTv3 segmentation model.
@@ -135,13 +137,15 @@ class PTv3SegmentationModel(PTv3BaseModel):
                 serialization depth.
             point_cloud_range: Point-cloud range used to derive sparse shape
                 and serialization depth.
-            **kwargs: Keyword arguments forwarded to :class:`BaseModel`.
+            log_dict_configs: Logging configuration for training and validation.
+            **kwargs: Keyword arguments forwarded to :class:`ModuleBaseModel`.
         """
         super().__init__(
             encoder=encoder,
             voxel_encoder=voxel_encoder,
             grid_size=grid_size,
             point_cloud_range=point_cloud_range,
+            log_dict_configs=log_dict_configs,
             **kwargs,
         )
         self.seg3d_head = seg3d_head
@@ -151,30 +155,17 @@ class PTv3SegmentationModel(PTv3BaseModel):
         default_params, block_params = split_block_parameters(self)
         return {"default": default_params, "block": block_params}
 
-    def forward(
-        self,
-        voxels: torch.Tensor,
-        num_points: torch.Tensor,
-        voxel_coords: torch.Tensor,
-        num_dropped_voxels: torch.Tensor,
-        time_lag_column: int,
-    ) -> ModelOutputs:
+    def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
         """Run the voxel encoder, the PTv3 encoder and the segmentation decoder head.
 
         Args:
-            voxels: Padded voxel points from the data preprocessing.
-            num_points: Valid point count per voxel.
-            voxel_coords: Voxel coordinates with a leading batch column.
-            num_dropped_voxels: Occupied voxels the voxelizer discarded.
-            time_lag_column: Point column holding the time lag.
+            multi_task_batch_inputs: Model inputs holding the point cloud and its voxels.
 
         Returns:
             Segmentation head outputs with the voxel-level logits of shape
             ``(num_voxels, num_classes)``.
         """
-        logits = self.seg3d_head(
-            self.encode(voxels, num_points, voxel_coords, num_dropped_voxels, time_lag_column)
-        )
+        logits = self.seg3d_head(self.encode_batch(multi_task_batch_inputs))
         return ModelOutputs(segmentation3d_head_outputs=Segmentation3DHeadOutputs(logits=logits))
 
     def compute_metrics(
@@ -195,7 +186,7 @@ class PTv3SegmentationModel(PTv3BaseModel):
         Returns:
             Dictionary with the segmentation losses.
         """
-        return segmentation_point_loss(
+        return segmentation3d_point_loss(
             self.seg3d_head, outputs.segmentation3d().logits, batch_inputs
         )
 
@@ -209,27 +200,25 @@ class PTv3SegmentationModel(PTv3BaseModel):
             outputs: Segmentation head outputs returned by :meth:`forward`.
 
         Returns:
-            The seg_frames eval output the segmentation suites consume.
+            The seg3d_frames eval output the segmentation suites consume.
         """
-        return segmentation_eval_output(outputs.segmentation3d().logits, batch)
+        return segmentation3d_eval_output(outputs.segmentation3d().logits, batch)
 
-    def predict_outputs(
-        self,
-        batch_inputs: ModelBatchInputs,
-        outputs: ModelOutputs,
+    def decode_outputs(
+        self, multi_task_batch_inputs: ModelBatchInputs, outputs: ModelOutputs
     ) -> ModelPredictions:
         """Format PTv3 segmentation predictions for the current-frame points.
 
         Args:
-            batch_inputs: Model inputs of the prediction step.
+            multi_task_batch_inputs: Model inputs of the prediction step.
             outputs: Segmentation head outputs returned by :meth:`forward`.
 
         Returns:
             The predicted labels and probabilities.
         """
         return ModelPredictions(
-            segmentation3d_predictions=segmentation_predict_outputs(
-                outputs.segmentation3d().logits, batch_inputs
+            segmentation3d_predictions=segmentation3d_predict_outputs(
+                outputs.segmentation3d().logits, multi_task_batch_inputs
             )
         )
 
@@ -248,7 +237,7 @@ class PTv3SegmentationModel(PTv3BaseModel):
         """
         inputs = prepare_ptv3_export_inputs(self, batch_inputs)
         input_args, input_param_names = inputs.encoder_args(SERIALIZED_POOLING_FIELDS)
-        export_module = _PTv3SegmentationExportModule(
+        export_module = _PTv3Segmentation3DExportModule(
             self._prepare_encoder_export(),
             self.voxel_encoder,
             self.seg3d_head.prepare_for_export(self.EXPORT_ORDER),
@@ -279,7 +268,7 @@ class PTv3SegmentationModel(PTv3BaseModel):
         context = build_ptv3_export_context(self, batch_inputs)
         return {
             "ptv3_encoder": build_encoder_export_spec(context),
-            "ptv3_seg3d_head": build_seg_head_export_spec(
+            "ptv3_seg3d_head": build_seg3d_head_export_spec(
                 context,
                 self.seg3d_head.prepare_for_export(self.EXPORT_ORDER),
                 self.get_export_output_names(),

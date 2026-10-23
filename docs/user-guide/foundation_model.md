@@ -8,22 +8,23 @@ latency budget. This page lists the training stages, the data they read and how 
 Everything specific to it lives in its own config namespace and is opt-in, so the PTv3
 tasks are unchanged:
 
-- `configs/tasks/multi/ptv3/foundation_*.yaml`: `foundation_common.yaml` (what the stages share)
-  and one file per stage;
+- `configs/tasks/multi/ptv3/t4dataset/base_foundation.yaml` (what the stages share) and one
+  leaf per stage, named after the corpus with a `foundation_` prefix;
 - `configs/database/t4dataset/foundation/` and `configs/database/t4dataset/scenarios/foundation/`:
   the three corpora as the foundation level reads them;
 - `configs/database/t4dataset/taxonomy/**/foundation*.yaml`: the foundation level.
 
-The generic features it uses (rulebook backend, bf16, preemption-safe checkpoints, label
-sets, the future sweep window) are switched on by these configs and available to any task.
+The generic features it uses (bf16 with fp32 feed-forward layers, activation checkpointing,
+preemption-safe checkpoints, label sets, the future sweep window) are switched on by these
+configs and available to any task.
 
 ## Stages
 
 | stage | config | data | init |
 | --- | --- | --- | --- |
-| 1 | `multi/ptv3/foundation_stage1_voxel006_122m_t4dataset_j6gen2` | J6 gen2 semantic segmentation v1 (old specification, about 3.2k training frames) | scratch |
-| 2 | `multi/ptv3/foundation_stage2_voxel006_122m_t4dataset_pseudo_10hz` | 10 Hz pseudo label corpus (about 181k frames, 15 databases) and the stage 1 data rehearsed | stage 1 |
-| 3 | `multi/ptv3/foundation_stage3_voxel006_122m_t4dataset_kognic` | Kognic corpus of the new specification (about 4.4k training frames, repeated 4 times) and the pseudo corpus at 1 Hz | stage 2 |
+| 1 | `segmentation3d/ptv3/t4dataset/voxel006_m3_b1_12e_t4dataset_122m_foundation_j6gen2_semaseg` | J6 gen2 semantic segmentation v1 (old specification, about 3.2k training frames) | scratch |
+| 2 | `multi/ptv3/t4dataset/voxel006_m3_b1_30e_t4dataset_122m_foundation_pseudo_10hz` | 10 Hz pseudo label corpus (about 181k frames, 15 databases) and the stage 1 data rehearsed | stage 1 |
+| 3 | `multi/ptv3/t4dataset/voxel006_m3_b1_10e_t4dataset_122m_foundation_kognic_fused` | Kognic corpus of the new specification (about 4.4k training frames, repeated 4 times) and the pseudo corpus at 1 Hz | stage 2 |
 
 Every stage is bound to the `foundation` taxonomy level
 (`configs/database/t4dataset/taxonomy/foundation.yaml`): the 33 classes of the fine level,
@@ -34,23 +35,23 @@ trains the summed probability of the set's classes and is not scored. See
 resolves to; only the Kognic corpus supervises `vertical_thin`, the curbs,
 `manmade.solid_stuff`, `noise.ghost_point`, `ego_vehicle` and the two sign classes one by one.
 
-Shared by the three stages (`multi/ptv3/foundation_common.yaml`):
+Shared by the three stages (`multi/ptv3/t4dataset/base_foundation.yaml`):
 
-- Input: the current frame, one past and one future sweep (the default pipelines read the
-  future window from `t4dataset.lidar.{train,test}_future_sweeps`, null by default),
-  described per voxel by the sweep-split voxel encoder (17 features).
+- Input: the current frame, one past and one future sweep (the PTv3 pipelines read the
+  future window from the root keys `train_future_sweeps` and `test_future_sweeps`, null by
+  default), described per voxel by the past/future voxel encoder (17 features).
 - Model: PT-v3m3 depths with hardware-aligned widths (encoder
   64/128/256/448/576, heads of 32 channels), 171M parameters with the segmentation head, 180M
   with the detection branch.
-- Precision: `bf16-mixed` (`/defaults/amp_rulebook`) with the feed-forward layers in fp32
+- Precision: `bf16-mixed` (`/defaults/amp_bf16`) with the feed-forward layers in fp32
   (`Fp32Sublayer.MLP` in `model.encoder.fp32_sublayers`). In an ablation on stage 1 (same frames, 12 x 100 batches)
   plain bf16 lost 10 % relative mIoU against fp32 and fp32 feed-forward layers recovered it
   (mIoU 0.225 vs 0.226) at 1.7 times the step rate of the fp32 spconv run. fp16 overflowed in the deep encoder
   stages during stage 2.
-- Sparse convolutions: `rulebook_torch`, the spconv replacement developed by Max Schmeller
-  (repository `spconv-replacement`), selected with `SparseConvBackend.RULEBOOK` (`model.encoder.sparse_conv_backend`). spconv
-  cannot train under autocast. Its kernels exist for channel widths that are multiples of 32;
-  `PaddedSubMConv3d` pads other widths, which the aligned widths avoid altogether.
+- Sparse convolutions: spconv under autocast, or `rulebook_torch`, the spconv replacement
+  developed by Max Schmeller (repository `spconv-replacement`), once it is installed: its
+  kernels accumulate in fp32, and the submanifold convolution of the PTv3 family picks it
+  automatically under autocast (#168). The measurements above ran on rulebook.
 - Activation checkpointing in every block, one frame per GPU, global batch 32 (eight GPUs,
   four accumulation steps).
 - Preemption-safe checkpoints (`/defaults/preemption`, see
@@ -95,14 +96,14 @@ table schema changed. See [Packed LiDAR frames](../databases/design.md#packed-li
 
 ```bash
 # Stage 1
-autoware-ml train --config-name multi/ptv3/foundation_stage1_voxel006_122m_t4dataset_j6gen2
+autoware-ml train --config-name segmentation3d/ptv3/t4dataset/voxel006_m3_b1_12e_t4dataset_122m_foundation_j6gen2_semaseg
 
 # Stage 2, from the stage 1 checkpoint
-autoware-ml train --config-name multi/ptv3/foundation_stage2_voxel006_122m_t4dataset_pseudo_10hz \
+autoware-ml train --config-name multi/ptv3/t4dataset/voxel006_m3_b1_30e_t4dataset_122m_foundation_pseudo_10hz \
     --weights <stage 1 run>/artifacts/checkpoints/best.ckpt
 
 # Stage 3, from the last stage 2 checkpoint (fully annealed)
-autoware-ml train --config-name multi/ptv3/foundation_stage3_voxel006_122m_t4dataset_kognic \
+autoware-ml train --config-name multi/ptv3/t4dataset/voxel006_m3_b1_10e_t4dataset_122m_foundation_kognic_fused \
     --weights <stage 2 run>/artifacts/checkpoints/last.ckpt
 ```
 

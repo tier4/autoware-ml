@@ -1,0 +1,13 @@
+_target_: autoware_ml.datamodule.t4dataset.dataset.T4Dataset
+_convert_: all
+
+dataset_tasks: {}
+
+# Database the dataset reads and the annotations of that corpus supervising the run. A source
+# over another database composes its own copy of this config with that database's values.
+database_root_path: ${database.root_path}
+lidar_intensity_scale: ${database.lidar_intensity_scale}
+det3d_supervised: true
+seg3d_supervised: true
+
+transforms: ???

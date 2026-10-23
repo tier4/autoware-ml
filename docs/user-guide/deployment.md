@@ -22,7 +22,7 @@ shipped file always carries its own metadata.
 ```bash
 autoware-ml deploy \
     --config-name <task>/<model>/<config> \
-    --weights mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt
+    --weights mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 `--weights` accepts one or more checkpoint paths and is the only way to supply
@@ -45,27 +45,20 @@ You can disable either stage during iteration:
 ```bash
 autoware-ml deploy \
     --config-name <task>/<model>/<config> \
-    --weights mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/checkpoints/best.ckpt \
     deploy.tensorrt.enabled=false
 ```
 
-By default, deploy writes outputs into the deploy MLflow run's artifact
-directory under `exports/`. Without MLflow logging, outputs land next to the
-checkpoint.
+Deploy writes its outputs into the deploy MLflow run's artifact directory, under
+`mlruns/<experiment_group_name>/<experiment_name>/<deploy_run_id>/artifacts/exports/`.
+The same run records the resolved config and CLI overrides under `config/`, and a
+`run_metadata.json` listing the source checkpoints, so an export can always be traced
+back to the training run it came from. A deploy that fails after its run was created
+leaves the run marked `FAILED`.
 
-When MLflow logging is enabled, any custom `output_dir` must stay inside that
-run artifact directory. Leave `output_dir` unset to use the default
-`exports/` location, or disable MLflow logging if you need to export outside
-the run artifact tree.
-
-**Custom output directory inside MLflow artifacts:**
-
-```bash
-autoware-ml deploy \
-    --config-name <task>/<model>/<config> \
-    --weights mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt \
-    output_dir=mlruns/<task>/<model>/<config>/<deploy_run_id>/artifacts/custom_exports
-```
+Without MLflow logging (`~logger`), outputs land in the config's `experiment_run_dir`,
+`<working_dir>/tasks/<experiment_group_name>/<experiment_name>/<experiment_uid>/`.
+The output location is not configurable on its own.
 
 ## Export Modules
 
@@ -84,9 +77,9 @@ trained parts of that model into a single export:
 
 ```bash
 autoware-ml deploy \
-    --config-name detection3d/ptv3/voxel012_122m_t4dataset_j6gen2 \
-    --weights mlruns/segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt \
-    --weights mlruns/detection3d/ptv3/voxel012_122m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt
+    --config-name detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base \
+    --weights mlruns/ptv3_seg3d/T4Dataset-j6gen2_semaseg-v1.0.0/j6gen2_semaseg/voxel012_tiny_b16_50e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/ptv3/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base/voxel012_tiny_b8_30e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 Checkpoints are applied in the order they appear on the command line, and
@@ -119,7 +112,7 @@ deploy:
     modules:
       <module>:
         metainfo:
-          class_names: ${dataset.detection3d.class_names}
+          class_names: ${database.taxonomy.detection3d.class_names}
 ```
 
 Each `metainfo` value is stamped as one compact JSON document (scalars,
@@ -235,7 +228,7 @@ Override deployment settings from CLI:
 ```bash
 autoware-ml deploy \
     --config-name <task>/<model>/<config> \
-    --weights mlruns/<task>/<model>/<config>/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/checkpoints/best.ckpt \
     deploy.tensorrt.input_shapes.input.opt_shape=[1,3,256,256] \
     deploy.tensorrt.workspace_size=8589934592
 ```

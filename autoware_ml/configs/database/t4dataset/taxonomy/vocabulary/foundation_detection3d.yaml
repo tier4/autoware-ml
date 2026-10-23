@@ -22,7 +22,7 @@ class_renaming:
   noise.ghost_point: null
   ego_vehicle: null
   ignored: null
-  # Segmentation classes and annotation artefacts of the Kognic (new specification) exports,
+  # Segmentation classes and annotation artifacts of the Kognic (new specification) exports,
   # a cuboid carrying one of them is not a detection target
   background: null
   bollard: null

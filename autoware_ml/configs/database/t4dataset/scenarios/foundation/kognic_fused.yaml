@@ -13,8 +13,6 @@ dataset_params:
   - _target_: autoware_ml.databases.scenarios.DatasetParams
     _convert_: all
     dataset_name: db_j6gen2_semseg_kognic_fused_v1
-    max_past_sweeps: 2
-    max_future_sweeps: 1
     sample_steps: 1
     semantic_masks: true
     camera_frames: false

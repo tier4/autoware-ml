@@ -552,8 +552,8 @@ class LaneletMapProvider:
     def available(self, scene_token: object) -> bool:
         """Whether a lanelet map exists for the scene (no parse, no exception).
 
-        An existence check the region filters use to exclude map-less scenes from
-        their slice. It never masks a genuine error: a scene reported available
+        An existence check that excludes map-less scenes from the map-backed
+        slices. It never masks a genuine error: a scene reported available
         whose OSM is later unreadable still raises in :meth:`get`.
 
         Args:
@@ -564,17 +564,34 @@ class LaneletMapProvider:
         """
         return self.resolve_osm.available(scene_token)
 
+    def osm_path(self, scene_token: object) -> str | None:
+        """The scene's map path, or ``None`` when the scene has no map.
+
+        The dataset that serves a frame calls this with its own provider and hands
+        the path over in the frame metadata, so the metrics read every frame's map
+        from the corpus it came from and never need a provider of their own.
+
+        Args:
+            scene_token: Scene identifier.
+
+        Returns:
+            Path of the scene's ``lanelet2_map.osm``, or ``None`` without a map.
+        """
+        if not self.resolve_osm.available(scene_token):
+            return None
+        return self.resolve_osm(scene_token)
+
 
 @dataclass(frozen=True)
 class T4LaneletMapResolver:
     """Resolves a T4 scene-directory token to its ``lanelet2_map.osm`` path.
 
-    The token surfaced to metrics as ``scene_token`` must be the scene directory
-    fragment relative to ``data_root`` (``<db_name>/<scene_uuid>/<version>``),
-    which the dataset derives from the frame's lidar path. Older DBs ship no
-    ``map/`` directory. :meth:`available` reports that up front so the region
-    filters can exclude the scene, while :meth:`__call__` still raises if a map a
-    caller expected to resolve is absent.
+    The scene token is the scene directory fragment relative to ``data_root``
+    (``<db_name>/<scene_uuid>/<version>``), which the dataset derives from the
+    frame's lidar path. Older DBs ship no ``map/`` directory. :meth:`available`
+    reports that up front so the dataset hands the metrics no map path for the
+    scene, while :meth:`__call__` still raises if a map a caller expected to
+    resolve is absent.
 
     Attributes:
         data_root: Dataset root the scene tokens are relative to.

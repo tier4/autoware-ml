@@ -1,5 +1,5 @@
 # Coarse detection3d taxonomy of nuScenes
-_target_: autoware_ml.databases.taxonomy.DetectionTaxonomy
+_target_: autoware_ml.databases.taxonomy.Detection3DTaxonomy
 
 defaults:
   - /database/nuscenes/taxonomy/vocabulary@vocabulary: default_detection3d

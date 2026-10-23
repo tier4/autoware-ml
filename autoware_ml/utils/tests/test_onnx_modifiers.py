@@ -21,7 +21,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from autoware_ml.utils.onnx_modifiers import AttentionScaleToDivModifier, TopKConstantKModifier
+from autoware_ml.utils.onnx_modifiers import (
+    AttentionScaleToDivModifier,
+    TopKConstantKModifier,
+)
 
 onnx = pytest.importorskip("onnx")
 from onnx import TensorProto, helper, numpy_helper  # noqa: E402

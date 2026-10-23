@@ -12,12 +12,12 @@ from __future__ import annotations
 
 from autoware_ml.metrics.base import EvalStage, Metric
 from autoware_ml.metrics.segmentation3d.point_cloud import (
-    PointCloudSegState,
+    PointCloudSeg3DState,
     valid_point_mask,
 )
 
 
-class ConfidentErrorRate(Metric[PointCloudSegState]):
+class ConfidentErrorRate(Metric[PointCloudSeg3DState]):
     """Fraction of misclassified points made at high confidence (low entropy)."""
 
     def __init__(
@@ -39,7 +39,7 @@ class ConfidentErrorRate(Metric[PointCloudSegState]):
         if not 0.0 <= self.entropy_threshold <= 1.0:
             raise ValueError("entropy_threshold must be in [0, 1], the entropy is normalized.")
 
-    def evaluate(self, state: PointCloudSegState, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: PointCloudSeg3DState, stage: EvalStage) -> dict[str, float]:
         """Split misclassified points by confidence across frames.
 
         Args:

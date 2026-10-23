@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from autoware_ml.metrics.base import EvalStage, Metric
 from autoware_ml.metrics.detection3d.matching import (
-    DetectionState,
+    Detection3DState,
     mean_tp_errors,
     mean_valid,
     nds,
@@ -17,7 +17,7 @@ from autoware_ml.metrics.detection3d.structures import (
 )
 
 
-class Nds(Metric[DetectionState]):
+class Nds(Metric[Detection3DState]):
     """Combines mean AP (and mean APH) with the TP errors at a recall target into
     the NDS-style summary scores. Self-contained: it computes its own matching and
     errors rather than reading other metrics' outputs.
@@ -57,7 +57,7 @@ class Nds(Metric[DetectionState]):
                 "the aggregate operating point must be an explicitly configured threshold."
             )
 
-    def evaluate(self, state: DetectionState, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: Detection3DState, stage: EvalStage) -> dict[str, float]:
         """Compute NDS-style summary scores from detection match curves.
 
         Args:

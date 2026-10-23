@@ -378,7 +378,7 @@ class LabelTaxonomy:
         return hash(str(self))
 
 
-class DetectionTaxonomy(LabelTaxonomy):
+class Detection3DTaxonomy(LabelTaxonomy):
     """
     Detection classes of one level together with the class keyed evaluation tables of the
     detection metrics. The tables are validated against the class list here and read by the
@@ -448,7 +448,7 @@ class DetectionTaxonomy(LabelTaxonomy):
         return MappingProxyType(self._living_speeds)
 
 
-class SegmentationTaxonomy(LabelTaxonomy):
+class Segmentation3DTaxonomy(LabelTaxonomy):
     """Segmentation classes of one level together with the behaviour groups of the metrics."""
 
 
@@ -456,7 +456,7 @@ class DatabaseTaxonomy:
     """Taxonomies of the label spaces a database describes."""
 
     def __init__(
-        self, detection3d: DetectionTaxonomy, segmentation3d: SegmentationTaxonomy
+        self, detection3d: Detection3DTaxonomy, segmentation3d: Segmentation3DTaxonomy
     ) -> None:
         """
         Initialize the database taxonomy.
@@ -466,25 +466,25 @@ class DatabaseTaxonomy:
           segmentation3d: Taxonomy the semantic mask categories are resolved with.
         """
 
-        if not isinstance(detection3d, DetectionTaxonomy):
+        if not isinstance(detection3d, Detection3DTaxonomy):
             raise TypeError(
-                f"detection3d must be a DetectionTaxonomy, got {type(detection3d).__name__}."
+                f"detection3d must be a Detection3DTaxonomy, got {type(detection3d).__name__}."
             )
-        if not isinstance(segmentation3d, SegmentationTaxonomy):
+        if not isinstance(segmentation3d, Segmentation3DTaxonomy):
             raise TypeError(
-                "segmentation3d must be a SegmentationTaxonomy, got "
+                "segmentation3d must be a Segmentation3DTaxonomy, got "
                 f"{type(segmentation3d).__name__}."
             )
         self._detection3d = detection3d
         self._segmentation3d = segmentation3d
 
     @property
-    def detection3d(self) -> DetectionTaxonomy:
+    def detection3d(self) -> Detection3DTaxonomy:
         """Taxonomy the box labels are baked with."""
         return self._detection3d
 
     @property
-    def segmentation3d(self) -> SegmentationTaxonomy:
+    def segmentation3d(self) -> Segmentation3DTaxonomy:
         """Taxonomy the semantic mask categories are resolved with."""
         return self._segmentation3d
 

@@ -1,0 +1,123 @@
+# @package _global_
+defaults:
+  - ../base
+  # The metric suites, their ranges and the datamodule belong to the evaluated database, so the
+  # range base composes them. Loaded before _self_ so the overrides below win over the defaults.
+  - /metrics/t4dataset/segmentation3d/default_segmentation3d_metrics
+  - /metrics/t4dataset/segmentation3d@metrics: default_segmentation3d_metric_suites
+  - /metrics/t4dataset/segmentation3d@metric_ranges: default_segmentation3d_120m_metric_ranges
+  - /datamodule@datamodule: t4dataset/default_segmentation3d_datamodule
+  - _self_
+
+point_cloud_range: [-122.88, -122.88, -3.0, 122.88, 122.88, 5.0]
+
+datasets:
+  train:
+    transforms:
+      _target_: autoware_ml.transforms.base.TransformsCompose
+      _convert_: all
+
+      pipeline:
+        - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
+          _convert_: all
+
+          use_dim: [0, 1, 2, 3] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]
+          bev_remove_radius: 0.0
+
+        - _target_: autoware_ml.transforms.point_cloud.loading.LoadMultiSweepPointsFromFile
+          _convert_: all
+
+          past:
+            _target_: autoware_ml.transforms.point_cloud.loading.SweepWindow
+            num: 1
+            time_lag_range: [0.05, 0.25]
+            selection: random
+          # Frames after the current one, none unless the task sets a window (offline models)
+          future: ${oc.select:train_future_sweeps,null}
+          bev_remove_radius: 1.0
+          use_timestamp_difference: true
+          use_dim: [0, 1, 2, 3] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]
+
+        - _target_: autoware_ml.transforms.camera_lidar.geometry.RandomRotateTargetAngle
+          _convert_: all
+
+          probability: 0.75
+          # Multiples of pi
+          yaw_angle_ratios: [0.5, 1.0, 1.5]
+
+        - _target_: autoware_ml.transforms.camera_lidar.geometry.GlobalRotScaleTrans
+          _convert_: all
+
+          yaw_rot_range: [-3.14159265, 3.14159265]
+          scale_ratio_range: [0.9, 1.1]
+          translation_std: [0.5, 0.5, 0.2]
+
+        - _target_: autoware_ml.transforms.camera_lidar.geometry.GlobalBEVRandomFlip
+          _convert_: all
+
+          horizontal_flip_ratio: 0.5
+          vertical_flip_ratio: 0.5
+
+        - _target_: autoware_ml.transforms.point_cloud.perturbation.RandomJitter
+          _convert_: all
+
+          # A task on a finer grid scales the jitter through these two root keys
+          sigma: ${oc.select:train_jitter_sigma,0.012}
+          clip: ${oc.select:train_jitter_clip,0.05}
+
+        - _target_: autoware_ml.transforms.point_cloud.geometry.PointsRangeFilter
+          _convert_: all
+
+          points_range: ${point_cloud_range}
+
+        - _target_: autoware_ml.transforms.point_cloud.sampling.RandomDropout
+          _convert_: all
+
+          probability: 0.5
+          dropout_ratio: 0.2
+
+        - _target_: autoware_ml.transforms.point_cloud.perturbation.RandomStrengthJitter
+          _convert_: all
+
+          gamma_range: [0.8, 1.25]
+          scale_range: [0.9, 1.1]
+          shift_range: [-0.02, 0.02]
+
+  test:
+    transforms:
+      _target_: autoware_ml.transforms.base.TransformsCompose
+      _convert_: all
+
+      pipeline:
+        - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
+          _convert_: all
+
+          use_dim: [0, 1, 2, 3] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]
+          bev_remove_radius: 0.0
+
+        - _target_: autoware_ml.transforms.point_cloud.loading.LoadMultiSweepPointsFromFile
+          _convert_: all
+
+          past:
+            _target_: autoware_ml.transforms.point_cloud.loading.SweepWindow
+            num: 1
+            time_lag_range: [0.05, 0.25]
+            selection: nearest
+          # Frames after the current one, none unless the task sets a window (offline models)
+          future: ${oc.select:test_future_sweeps,null}
+          bev_remove_radius: 1.0
+          use_timestamp_difference: true
+          use_dim: [0, 1, 2, 3] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]
+
+        - _target_: autoware_ml.transforms.point_cloud.geometry.PointsRangeFilter
+          _convert_: all
+
+          points_range: ${point_cloud_range}
+
+# The datamodule binds the datasets above to the splits of its sources. Validation and predict
+# read the test dataset.
+datamodule:
+  train_dataloader:
+    shuffle: true
+  predict_dataloader:
+    batch_size: 1

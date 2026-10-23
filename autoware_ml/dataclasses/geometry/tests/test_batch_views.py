@@ -114,5 +114,28 @@ class TestVoxelsDataCoords(unittest.TestCase):
         self.assertEqual(zyx.dtype, torch.int32)
 
 
+class TestVoxelsDataBatchSize(unittest.TestCase):
+    """The sample count a voxel batch infers from its batch indices."""
+
+    @staticmethod
+    def _voxels(batch_indices: list[int]) -> VoxelsData:
+        num_voxels = len(batch_indices)
+        return VoxelsData(
+            voxels=torch.zeros(num_voxels, 1, 4),
+            coords=torch.zeros(num_voxels, 3, dtype=torch.int32),
+            num_points=torch.ones(num_voxels, dtype=torch.int32),
+            batch_indices=torch.tensor(batch_indices, dtype=torch.int32),
+            point_voxel_indices=torch.arange(num_voxels),
+            num_dropped_voxels=torch.tensor(0),
+        )
+
+    def test_counts_one_past_the_largest_index(self) -> None:
+        self.assertEqual(self._voxels([0, 0, 2, 1]).infer_batch_size(), 3)
+
+    def test_rejects_a_batch_without_voxels(self) -> None:
+        with self.assertRaisesRegex(ValueError, "no voxel"):
+            self._voxels([]).infer_batch_size()
+
+
 if __name__ == "__main__":
     unittest.main()

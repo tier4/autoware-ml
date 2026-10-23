@@ -1,0 +1,4 @@
+defaults:
+  - default_datamodule@_here_
+  - t4dataset/datasets/det3d_seg3d@_global_.datasets.train: default_det3d_seg3d_train_dataset
+  - t4dataset/datasets/det3d_seg3d@_global_.datasets.test: default_det3d_seg3d_test_dataset

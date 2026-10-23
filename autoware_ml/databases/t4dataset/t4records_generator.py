@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typing import Mapping, Sequence
 import logging
 import os
 
 from pathlib import Path
-from typing import Mapping, Sequence, Tuple
 
 import numpy as np
 import numpy.typing as npt
@@ -45,7 +45,11 @@ from autoware_ml.databases.schemas.frame_basic_metadata import FrameBasicMetadat
 from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord
 from autoware_ml.databases.schemas.lidar_frames import LidarFrameDataModel
 from autoware_ml.databases.schemas.lidar_sources import LidarSourceDataModel
-from autoware_ml.databases.schemas.image_frames import ImageFrameDataModel
+from autoware_ml.databases.schemas.utils import relative_to_database_root
+from autoware_ml.databases.schemas.image_frames import (
+    distortion_model_from_coefficients,
+    ImageFrameDataModel,
+)
 from autoware_ml.databases.schemas.category_mapping import CategoryMappingDataModel
 from autoware_ml.databases.taxonomy import DatabaseTaxonomy
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDataModel, Box3DDatasetSchema
@@ -65,8 +69,15 @@ from autoware_ml.utils.dataset import convert_quaternion_to_matrix
 
 logger = logging.getLogger(__name__)
 
-# Lens distortion model of every T4 camera, the coefficients follow its parameter order
-CAMERA_DISTORTION_MODEL = "plumb_bob"
+# Max number of lidar sweeps recorded on either side of the current lidar frame, and of past
+# camera keyframes. The T4Dataset lidar runs at 10Hz, so 9 past sweeps + 1 current sweep cover
+# all the lidar scans in one second.
+# TODO(KSeangTan): This window sets the size of every record: 9 past and 9 future lidar sweeps
+# plus 9 past camera keyframes, while the T4 training pipelines read one past sweep. The record
+# table is built three times over in memory before it is written (the records, their
+# dictionaries and the dataframe), about 440 KB per record against 190 KB on main, so
+# 80,000 records peaks near 36 GB and ran out of memory on a 24 GB machine.
+MAX_SWEEPS = 9
 
 
 class T4RecordsGenerator:
@@ -91,8 +102,7 @@ class T4RecordsGenerator:
 
         Args:
           database_root_path: Root path of the T4 database.
-          scenario_data: Scenario data with the dataset parameters, which set the sweep window
-            on either side of a sample and the sampling step.
+          scenario_data: Scenario data with the dataset parameters, which set the sampling step.
           lidar_channel: Lidar channel each sample is keyed on.
           lidar_pointcloud_num_features: Number of features of the lidar pointcloud.
           box_annotation_dir: Directory of each scene with the category and instance tables to
@@ -117,6 +127,7 @@ class T4RecordsGenerator:
         self.taxonomy = taxonomy
         self.box3d_pipelines = box3d_pipelines
         self.recompute_boxes3d_lidar_points_num = recompute_boxes3d_lidar_points_num
+
         # Frame index of every t4pack file of the scene, read once
         self._t4pack_indices: dict[str, Mapping[str, T4PackFrame]] = {}
 
@@ -138,7 +149,25 @@ class T4RecordsGenerator:
             raise ValueError(f"Scene root directory {scene_root_dir_path} does not exist.")
         return scene_root_dir_path
 
-    def _index_box_categories(self) -> Tuple[Mapping[str, str], Mapping[str, str]]:
+    def relative_to_database_root(self, path: str | Path) -> str:
+        """
+        Store a file path relative to the database root, so the records stay valid when the
+        database is mounted under another root and the dataset re-roots them on read.
+
+        Args:
+          path: Absolute path the t4-devkit resolved under the scene root.
+
+        Returns:
+          str: The path relative to the database root, which keeps the scene directory
+            ``{dataset_name}/{scenario_id}/{scenario_version}`` the frame metadata is keyed by.
+
+        Raises:
+          ValueError: If the path does not lie under the database root.
+        """
+
+        return relative_to_database_root(path, self.database_root_path)
+
+    def _index_box_categories(self) -> tuple[Mapping[str, str], Mapping[str, str]]:
         """
         Category tables the box names are read from.
 
@@ -146,7 +175,7 @@ class T4RecordsGenerator:
         database names the directory to read.
 
         Returns:
-          Tuple[Mapping[str, str], Mapping[str, str]]: Category token of every instance token
+          tuple[Mapping[str, str], Mapping[str, str]]: Category token of every instance token
             and category name of every category token.
         """
 
@@ -199,9 +228,7 @@ class T4RecordsGenerator:
         records = []
         logger.info(
             f"Generating dataset records for scenario: {self.scenario_data.scenario_id} with "
-            f"sample steps: {self.sample_steps}, "
-            f"past sweeps: {self.scenario_data.dataset_params.max_past_sweeps} and "
-            f"future sweeps: {self.scenario_data.dataset_params.max_future_sweeps}"
+            f"sample steps: {self.sample_steps} and max sweeps: {MAX_SWEEPS}"
         )
 
         # A corpus labelled at a lower rate than it was recorded keeps its labelled samples only
@@ -271,6 +298,7 @@ class T4RecordsGenerator:
             vehicle_type=self.scenario_data.vehicle_type,
             timestamp_seconds=microseconds2seconds(sample.timestamp),
             scenario_name=scene_record.name,
+            traffic_cone_barrier_bbox_status=self.scenario_data.traffic_cone_barrier_bbox_status,
         )
 
     def _extract_boxes_3d_annotations(
@@ -371,15 +399,15 @@ class T4RecordsGenerator:
           calibrated_lidar_sample_data_token: Calibrated lidar sample data token.
 
         Returns:
-          str | None: Mask path, None when the frame has no mask.
+          str | None: Mask path relative to the database root, None when the frame has no mask.
         """
         lidarseg_record = self.lidarseg_by_sample_data.get(calibrated_lidar_sample_data_token)
         if lidarseg_record is None:
             return None
 
-        # The lidarseg table gives the mask path relative to the scene. Prepend the scene root,
-        # as the pointcloud path does.
-        return str(self.scene_root_path / lidarseg_record.filename)
+        # The lidarseg table gives the mask path relative to the scene. Prepend the scene
+        # directory, so the stored path starts at the database root as the pointcloud path does.
+        return self.relative_to_database_root(self.scene_root_path / lidarseg_record.filename)
 
     def _find_t4pack_frame(self, lidar_pointcloud_path: str) -> T4PackFrame | None:
         """
@@ -407,7 +435,7 @@ class T4RecordsGenerator:
             raise ValueError(f"{pack.pack_path} has no frame {frame_name}.")
         return t4pack_frame
 
-    def _extract_lidar_frame(self, sample: Sample) -> Tuple[LidarFrameDataModel, Sequence[Box3D]]:
+    def _extract_lidar_frame(self, sample: Sample) -> tuple[LidarFrameDataModel, Sequence[Box3D]]:
         """
         Extract lidar frame records from a T4 sample.
 
@@ -454,11 +482,11 @@ class T4RecordsGenerator:
             calibrated_lidar_sample_data_token=calibrated_lidar_sample_data_token
         )
 
-        # Prepend the scene root to the metainfo path as well.
-        lidar_pointcloud_source_path = (
+        # The metainfo path is relative to the scene as well, so it gets the scene directory.
+        lidar_pointcloud_source_relative_path = (
             None
             if sd_record.info_filename is None
-            else str(self.scene_root_path / sd_record.info_filename)
+            else self.relative_to_database_root(self.scene_root_path / sd_record.info_filename)
         )
 
         lidar_frame_data_model = LidarFrameDataModel(
@@ -467,15 +495,15 @@ class T4RecordsGenerator:
             lidar_sensor_id=cs_record.token,
             lidar_sensor_channel_name=self.lidar_channel.value,
             lidar_timestamp_seconds=microseconds2seconds(sd_record.timestamp),
-            lidar_pointcloud_path=lidar_path,
-            lidar_pointcloud_source_path=lidar_pointcloud_source_path,
+            lidar_pointcloud_relative_path=self.relative_to_database_root(lidar_path),
+            lidar_pointcloud_source_relative_path=lidar_pointcloud_source_relative_path,
             lidar_pointcloud_num_features=self.lidar_pointcloud_num_features,
             lidar_sensor_to_ego_pose_matrix=lidar_sensor_to_ego_matrix,
             lidar_frame_ego_pose_to_global_matrix=lidar_frame_ego_pose_to_global_matrix,
             lidar_sensor_to_lidar_sweep_matrix=np.eye(
                 4
             ),  # Always the identity matrix for the main lidar sensor
-            lidar_pointcloud_semantic_mask_path=lidar_pointcloud_semantic_mask_path,
+            lidar_pointcloud_semantic_mask_relative_path=lidar_pointcloud_semantic_mask_path,
             lidar_pointcloud_t4pack_frame=self._find_t4pack_frame(lidar_path),
         )
         return lidar_frame_data_model, box3d
@@ -485,7 +513,7 @@ class T4RecordsGenerator:
         sensor_sample_data_record: SampleData,
         selected_sensor_to_ego_pose_matrix: npt.NDArray[np.float64],
         selected_sensor_frame_ego_pose_to_global_matrix: npt.NDArray[np.float64],
-    ) -> Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
         """
         Compute transformation matrices for a sensor.
 
@@ -561,7 +589,7 @@ class T4RecordsGenerator:
             SchemaName.SAMPLE_DATA, current_lidar_sample_data_token
         )
 
-        for _ in range(self.scenario_data.dataset_params.max_sweeps(direction)):
+        for _ in range(MAX_SWEEPS):
             # Stop processing when the chain of lidar frames ends on this side
             neighbour_token = getattr(current_sample_data_record, direction.link)
             if not neighbour_token:
@@ -606,13 +634,15 @@ class T4RecordsGenerator:
                     lidar_timestamp_seconds=microseconds2seconds(
                         current_sample_data_record.timestamp
                     ),
-                    lidar_pointcloud_path=lidar_sweep_pointcloud_path,
-                    lidar_pointcloud_source_path=None,  # Always None for lidar sweeps
+                    lidar_pointcloud_relative_path=self.relative_to_database_root(
+                        lidar_sweep_pointcloud_path
+                    ),
+                    lidar_pointcloud_source_relative_path=None,  # Always None for lidar sweeps
                     lidar_pointcloud_num_features=self.lidar_pointcloud_num_features,
                     lidar_sensor_to_ego_pose_matrix=current_lidar_sensor_to_ego_matrix,
                     lidar_frame_ego_pose_to_global_matrix=lidar_sweep_frame_ego_pose_to_global_matrix,
                     lidar_sensor_to_lidar_sweep_matrix=lidar_sensor_to_lidar_sweep_matrix,
-                    lidar_pointcloud_semantic_mask_path=None,  # Always None for lidar sweeps
+                    lidar_pointcloud_semantic_mask_relative_path=None,  # Always None for lidar sweeps
                     lidar_pointcloud_t4pack_frame=self._find_t4pack_frame(
                         lidar_sweep_pointcloud_path
                     ),
@@ -808,12 +838,12 @@ class T4RecordsGenerator:
             image_sensor_id=cs_record.token,
             image_sensor_channel_name=camera_channel_name,
             image_timestamp_seconds=microseconds2seconds(sd_record.timestamp),
-            image_path=image_path,
+            image_relative_path=self.relative_to_database_root(image_path),
             image_height=image_height,
             image_width=image_width,
             cam2img=cam2img,
             image_distortion_coefficients=distortion_coefficients,
-            image_distortion_model=CAMERA_DISTORTION_MODEL if distortion_coefficients else "",
+            image_distortion_model=distortion_model_from_coefficients(distortion_coefficients),
             image_sensor_to_ego_pose_matrix=image_sensor_to_ego_matrix,
             image_frame_ego_pose_to_global_matrix=image_frame_ego_pose_to_global_matrix,
             lidar2cam=lidar2cam,
@@ -868,7 +898,7 @@ class T4RecordsGenerator:
         current_sample = sample
 
         # Camera sweeps are taken from the past only. The future window is lidar only.
-        for _ in range(self.scenario_data.dataset_params.max_past_sweeps):
+        for _ in range(MAX_SWEEPS):
             if not current_sample.prev:
                 break
 
@@ -979,8 +1009,11 @@ class T4RecordsGenerator:
             bbox_center_coordinate_type=Box3DCenterCoordinateType.GRAVITY_CENTER,
         )
 
-        # Load pointclouds, from the pack when the scene keeps only the pack
-        lidar_pointcloud_path = lidar_frame_data_model.lidar_pointcloud_path
+        # Load pointclouds, from the pack when the scene keeps only the pack. The record stores
+        # the path relative to the database root.
+        lidar_pointcloud_path = str(
+            self.database_root_path / lidar_frame_data_model.lidar_pointcloud_relative_path
+        )
         t4pack_frame = lidar_frame_data_model.lidar_pointcloud_t4pack_frame
         if t4pack_frame is not None and not os.path.isfile(lidar_pointcloud_path):
             points = T4Pack.from_point_cloud_path(lidar_pointcloud_path).read_frame(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
+from hydra.core.hydra_config import HydraConfig
 from omegaconf import OmegaConf
 
 from autoware_ml.configs.resolvers import register_config_resolvers
@@ -12,23 +13,25 @@ from autoware_ml.models.segmentation3d.ptv3_base import PTv3BaseModel
 from autoware_ml.utils.deploy import merge_module_onnx_cfg
 
 PTV3_CONFIGS = [
-    "tasks/multi/ptv3/voxel012_122m_t4dataset_j6gen2",
-    "tasks/multi/litept/voxel012_122m_t4dataset_j6gen2",
-    "tasks/segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2",
-    "tasks/segmentation3d/litept/voxel012_122m_t4dataset_j6gen2",
-    "tasks/detection3d/ptv3/voxel012_122m_t4dataset_j6gen2",
-    "tasks/multi/ptv3/voxel005_51m_nuscenes",
-    "tasks/segmentation3d/ptv3/voxel005_51m_nuscenes",
-    "tasks/detection3d/ptv3/voxel005_51m_nuscenes",
+    "tasks/multi/ptv3/t4dataset/voxel012_tiny_b8_100e_t4dataset_122m_j6gen2_det3d_seg3d",
+    "tasks/multi/litept/t4dataset/voxel012_tiny_b8_100e_t4dataset_122m_j6gen2_det3d_seg3d",
+    "tasks/segmentation3d/ptv3/t4dataset/voxel012_tiny_b16_50e_t4dataset_122m_j6gen2_semaseg",
+    "tasks/segmentation3d/litept/t4dataset/voxel012_tiny_b16_50e_t4dataset_122m_j6gen2_semaseg",
+    "tasks/detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base",
+    "tasks/multi/ptv3/nuscenes/voxel005_base_b16_100e_nuscenes_51m",
+    "tasks/segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m",
+    "tasks/detection3d/ptv3/nuscenes/voxel005_base_b16_30e_nuscenes_51m",
 ]
-DET_CONFIGS = [name for name in PTV3_CONFIGS if "segmentation3d" not in name]
+DET3D_CONFIGS = [name for name in PTV3_CONFIGS if "segmentation3d" not in name]
 
 
 def _compose(config_name: str):
     register_config_resolvers()
     GlobalHydra.instance().clear()
     with initialize_config_module(version_base=None, config_module="autoware_ml.configs"):
-        return compose(config_name=config_name)
+        cfg = compose(config_name=config_name, return_hydra_config=True)
+    HydraConfig.instance().set_config(cfg)
+    return cfg
 
 
 @pytest.mark.parametrize("config_name", PTV3_CONFIGS)
@@ -53,8 +56,8 @@ def test_metainfo_interpolations_resolve_for_every_module(config_name: str) -> N
             assert len(metainfo["class_names"]) > 0
 
 
-@pytest.mark.parametrize("config_name", DET_CONFIGS)
-def test_det_head_has_twist_follows_use_velocity(config_name: str) -> None:
+@pytest.mark.parametrize("config_name", DET3D_CONFIGS)
+def test_det3d_head_has_twist_follows_use_velocity(config_name: str) -> None:
     # The runtime learns from has_twist whether a velocity output exists, so it
     # is derived from the head configuration instead of being declared twice.
     cfg = _compose(config_name)
@@ -63,11 +66,24 @@ def test_det_head_has_twist_follows_use_velocity(config_name: str) -> None:
     assert module_cfg.metainfo.has_twist == cfg.model.bbox_head.use_velocity
 
 
-@pytest.mark.parametrize("config_name", DET_CONFIGS)
-def test_det_head_exports_fused_bf16_attention(config_name: str) -> None:
+@pytest.mark.parametrize("config_name", DET3D_CONFIGS)
+def test_det3d_head_exports_fused_bf16_attention(config_name: str) -> None:
     # The fused TransHead path needs the head flag and the fp16 module precision
     # together; export refuses a mismatch, so every shipped config must pair them.
     cfg = _compose(config_name)
     module_cfg = merge_module_onnx_cfg(cfg.deploy.onnx, "ptv3_det3d_head")
     assert cfg.model.bbox_head.use_bf16_cross_attention is True
     assert module_cfg.precision == "fp16"
+
+
+@pytest.mark.parametrize("config_name", PTV3_CONFIGS)
+def test_encoder_metainfo_stamps_the_attention_windows(config_name: str) -> None:
+    # `patch_order` is built from the per-level attention window on both sides of the
+    # deployment boundary (exporter and runtime), so the artifact records the windows it
+    # was exported with: one per level, straight from the encoder config, never retyped.
+    cfg = _compose(config_name)
+    module_cfg = merge_module_onnx_cfg(cfg.deploy.onnx, "ptv3_encoder")
+    patch_sizes = OmegaConf.to_container(module_cfg.metainfo.patch_sizes, resolve=True)
+    assert patch_sizes == list(cfg.model.encoder.enc_patch_size)
+    assert len(patch_sizes) == len(cfg.model.encoder.stride) + 1
+    assert all(isinstance(size, int) and size > 0 for size in patch_sizes)
