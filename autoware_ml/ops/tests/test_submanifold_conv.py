@@ -34,7 +34,7 @@ from autoware_ml.ops.submanifold_conv import SpconvSubMConv3d, SubMConv3d
 from autoware_ml.utils.point_cloud.structures import Point
 
 CUDA = torch.cuda.is_available()
-RULEBOOK_ON_CUDA = CUDA and submanifold_conv.IS_RULEBOOK_AVAILABLE
+T4SPARSE_ON_CUDA = CUDA and submanifold_conv.IS_T4SPARSE_AVAILABLE
 
 
 def make_sparse_tensor(
@@ -120,9 +120,9 @@ class TestSpconvLayer(unittest.TestCase):
         torch.testing.assert_close(self.layer(self.x).features, plain(self.x).features)
 
 
-@unittest.skipUnless(RULEBOOK_ON_CUDA, "needs rulebook_torch and a CUDA device")
-class TestRulebookLayer(unittest.TestCase):
-    """The rulebook flavour dispatches per call and keeps one library per indice_key."""
+@unittest.skipUnless(T4SPARSE_ON_CUDA, "needs t4sparse.torch and a CUDA device")
+class TestT4SparseLayer(unittest.TestCase):
+    """The t4sparse flavour dispatches per call and keeps one library per indice_key."""
 
     def setUp(self) -> None:
         torch.manual_seed(0)
@@ -130,30 +130,30 @@ class TestRulebookLayer(unittest.TestCase):
         self.layer = SubMConv3d(32, 32, kernel_size=3, indice_key="k").to(self.device)
         self.x = make_sparse_tensor(3000, 32, self.device)
 
-    def test_is_the_rulebook_flavour(self) -> None:
-        import rulebook_torch
+    def test_is_the_t4sparse_flavour(self) -> None:
+        import t4sparse.torch
 
-        self.assertIs(SubMConv3d, submanifold_conv.RulebookSubMConv3d)
-        self.assertIsInstance(self.layer, rulebook_torch.SubMConv3d)
+        self.assertIs(SubMConv3d, submanifold_conv.T4SparseSubMConv3d)
+        self.assertIsInstance(self.layer, t4sparse.torch.SubMConv3d)
 
-    def test_autocast_runs_on_rulebook_with_fp32_gradients(self) -> None:
-        import rulebook_torch
+    def test_autocast_runs_on_t4sparse_with_fp32_gradients(self) -> None:
+        import t4sparse.torch
 
         with torch.autocast("cuda", dtype=torch.float16):
             y = self.layer(self.x)
         self.assertEqual(y.features.dtype, torch.float16)
-        self.assertIsInstance(y.indice_dict["k"], rulebook_torch.Rulebook)
+        self.assertIsInstance(y.indice_dict["k"], t4sparse.torch.Rulebook)
         y.features.float().square().sum().backward()
         self.assertEqual(self.layer.weight.grad.dtype, torch.float32)
         self.assertTrue(torch.isfinite(self.layer.weight.grad).all())
 
-    def test_half_features_outside_autocast_run_on_rulebook(self) -> None:
-        import rulebook_torch
+    def test_half_features_outside_autocast_run_on_t4sparse(self) -> None:
+        import t4sparse.torch
 
         layer = SubMConv3d(32, 32, kernel_size=3, indice_key="k").to(self.device).half()
         y = layer(self.x.replace_feature(self.x.features.half()))
         self.assertEqual(y.features.dtype, torch.float16)
-        self.assertIsInstance(y.indice_dict["k"], rulebook_torch.Rulebook)
+        self.assertIsInstance(y.indice_dict["k"], t4sparse.torch.Rulebook)
 
     def test_fp32_outside_autocast_runs_on_spconv_without_warnings(self) -> None:
         with warnings.catch_warnings():
@@ -162,15 +162,15 @@ class TestRulebookLayer(unittest.TestCase):
         self.assertEqual(y.features.dtype, torch.float32)
         self.assertNotIsInstance(y.indice_dict["k"], type(None))
         self.assertFalse(
-            SubMConv3d.runs_on_rulebook(self.x.features), "fp32 outside autocast is spconv's"
+            SubMConv3d.runs_on_t4sparse(self.x.features), "fp32 outside autocast is spconv's"
         )
         twin = self.layer._spconv()
         self.assertIsInstance(twin, spconv.SubMConv3d)
         self.assertIsInstance(y.indice_dict["k"], type(twin(self.x).indice_dict["k"]))
 
-    def test_cpu_tensors_never_run_on_rulebook(self) -> None:
+    def test_cpu_tensors_never_run_on_t4sparse(self) -> None:
         for dtype in (torch.float32, torch.float16):
-            self.assertFalse(SubMConv3d.runs_on_rulebook(torch.zeros(1, 32, dtype=dtype)))
+            self.assertFalse(SubMConv3d.runs_on_t4sparse(torch.zeros(1, 32, dtype=dtype)))
 
     def test_the_two_paths_agree(self) -> None:
         reference = self.layer(self.x).features
@@ -229,27 +229,27 @@ class TestModelIntegration(unittest.TestCase):
         self.assertTrue(torch.equal(cpe_conv(block).weight.detach(), weight))
         self.assertFalse(any(isinstance(module, SubMConv3d) for module in block.modules()))
 
-    @unittest.skipUnless(RULEBOOK_ON_CUDA, "needs rulebook_torch and a CUDA device")
-    def test_rulebook_block_matches_the_spconv_flavour_under_autocast(self) -> None:
+    @unittest.skipUnless(T4SPARSE_ON_CUDA, "needs t4sparse.torch and a CUDA device")
+    def test_t4sparse_block_matches_the_spconv_flavour_under_autocast(self) -> None:
         device = torch.device("cuda")
-        rulebook_block = conv_only_block(32).to(device)
+        t4sparse_block = conv_only_block(32).to(device)
         spconv_block = conv_only_block(32).to(device)
         spconv_block.cpe._modules["0"] = SpconvSubMConv3d(
             32, 32, kernel_size=3, bias=True, indice_key="stage0"
         ).to(device)
-        spconv_block.load_state_dict(rulebook_block.state_dict())
+        spconv_block.load_state_dict(t4sparse_block.state_dict())
 
         reference_point = make_point(3000, 32, device)
         candidate_point = make_point(3000, 32, device)
         with torch.autocast("cuda", dtype=torch.float16):
             reference = spconv_block(reference_point).feat
-            candidate = rulebook_block(candidate_point).feat
+            candidate = t4sparse_block(candidate_point).feat
         torch.testing.assert_close(candidate.float(), reference.float(), rtol=2e-2, atol=2e-2)
 
         reference.float().square().sum().backward()
         candidate.float().square().sum().backward()
         reference_grad = cpe_conv(spconv_block).weight.grad
-        candidate_grad = cpe_conv(rulebook_block).weight.grad
+        candidate_grad = cpe_conv(t4sparse_block).weight.grad
         self.assertEqual(candidate_grad.dtype, torch.float32)
         torch.testing.assert_close(
             candidate_grad,

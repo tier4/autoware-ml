@@ -22,7 +22,7 @@ other unchanged:
 * ``spconv``, the required dependency. Its kernels are not registered with
   autocast and need features and weights in one dtype, so the layer runs them
   with autocast disabled in the dtype of its weights: fp32 under mixed precision.
-* ``rulebook_torch``, optional until it is published. Every kernel accumulates in
+* ``t4sparse.torch``, optional until it is published. Every kernel accumulates in
   fp32 and the autograd function casts inside, so under autocast a layer runs
   16-bit kernels against fp32 master weights and hands back fp32 gradients. It
   has fp16 and bf16 kernels on CUDA and nothing else.
@@ -32,8 +32,8 @@ libraries, decided once when this module is imported. A model picks the library
 by importing the class from here; a model that needs what only spconv has, such
 as a strided convolution, imports spconv directly.
 
-With ``rulebook_torch`` installed, the choice between the libraries is made per
-call, on the operands: rulebook wherever it has a kernel, spconv for fp32
+With ``t4sparse.torch`` installed, the choice between the libraries is made per
+call, on the operands: t4sparse wherever it has a kernel, spconv for fp32
 operands outside autocast and for CPU tensors. A run under ``32-true``
 precision therefore trains on spconv exactly as before, and a stage wrapped in
 ``torch.autocast("cuda", enabled=False)`` inside a mixed-precision run stays on
@@ -49,11 +49,11 @@ import torch
 from spconv.pytorch.core import SparseConvTensor
 from torch import nn
 
-__all__ = ["IS_RULEBOOK_AVAILABLE", "SpconvSubMConv3d", "SubMConv3d"]
+__all__ = ["IS_T4SPARSE_AVAILABLE", "SpconvSubMConv3d", "SubMConv3d"]
 
-IS_RULEBOOK_AVAILABLE = find_spec("rulebook_torch") is not None
+IS_T4SPARSE_AVAILABLE = find_spec("t4sparse.torch") is not None
 
-_RULEBOOK_DTYPES = (torch.float16, torch.bfloat16)
+_T4SPARSE_DTYPES = (torch.float16, torch.bfloat16)
 
 
 def _with_features_as(x: SparseConvTensor, dtype: torch.dtype) -> SparseConvTensor:
@@ -86,16 +86,16 @@ class SpconvSubMConv3d(spconv.SubMConv3d):
             return super().forward(_with_features_as(x, self.weight.dtype))
 
 
-if IS_RULEBOOK_AVAILABLE:
-    import rulebook_torch
-    from rulebook_torch.compat import to_spconv_layer
+if IS_T4SPARSE_AVAILABLE:
+    import t4sparse.torch
+    from t4sparse.torch.compat import to_spconv_layer
 
-    class RulebookSubMConv3d(rulebook_torch.SubMConv3d):
-        """rulebook's submanifold convolution, with spconv where rulebook has no kernel.
+    class T4SparseSubMConv3d(t4sparse.torch.SubMConv3d):
+        """t4sparse's submanifold convolution, with spconv where t4sparse has no kernel.
 
-        rulebook casts inside its own autograd function and accumulates in fp32,
+        t4sparse casts inside its own autograd function and accumulates in fp32,
         so under autocast and for 16-bit features the layer runs as it is. fp32
-        features outside autocast and CPU tensors have no rulebook kernel; instead
+        features outside autocast and CPU tensors have no t4sparse kernel; instead
         of the library's slow reference path, the layer runs an spconv twin that
         shares its parameters, autocast disabled, exactly like
         :class:`SpconvSubMConv3d`. The twin is not a submodule, so the state dict
@@ -115,8 +115,8 @@ if IS_RULEBOOK_AVAILABLE:
             self.__dict__["_spconv_twin"] = None
 
         @staticmethod
-        def runs_on_rulebook(features: torch.Tensor) -> bool:
-            """Return whether rulebook has a kernel for a call on ``features``.
+        def runs_on_t4sparse(features: torch.Tensor) -> bool:
+            """Return whether t4sparse has a kernel for a call on ``features``.
 
             Args:
                 features: The input features of the call.
@@ -125,11 +125,11 @@ if IS_RULEBOOK_AVAILABLE:
                 ``True`` on CUDA under autocast or for 16-bit features.
             """
             return features.is_cuda and (
-                torch.is_autocast_enabled("cuda") or features.dtype in _RULEBOOK_DTYPES
+                torch.is_autocast_enabled("cuda") or features.dtype in _T4SPARSE_DTYPES
             )
 
         def forward(self, x: SparseConvTensor) -> SparseConvTensor:
-            """Convolve ``x`` on rulebook, or on spconv where rulebook has no kernel.
+            """Convolve ``x`` on t4sparse, or on spconv where t4sparse has no kernel.
 
             Args:
                 x: Sparse tensor holding the input features.
@@ -141,13 +141,13 @@ if IS_RULEBOOK_AVAILABLE:
                 TypeError: Raised when the ``indice_key`` slot on ``x`` holds the other
                     library's index structure, see the class docstring.
             """
-            if self.runs_on_rulebook(x.features):
+            if self.runs_on_t4sparse(x.features):
                 return super().forward(x)
             return self._forward_spconv(x)
 
         def _forward_spconv(self, x: SparseConvTensor) -> SparseConvTensor:
             cached = x.indice_dict.get(self.indice_key) if self.indice_key is not None else None
-            if isinstance(cached, rulebook_torch.Rulebook):
+            if isinstance(cached, t4sparse.torch.Rulebook):
                 raise TypeError(
                     f"indice_key {self.indice_key!r} holds a rulebook built under autocast, but "
                     "this call runs on spconv (fp32 outside autocast); the layers that share an "
@@ -165,7 +165,7 @@ if IS_RULEBOOK_AVAILABLE:
                 self.__dict__["_spconv_twin"] = twin
             return twin
 
-    SubMConv3d = RulebookSubMConv3d
+    SubMConv3d = T4SparseSubMConv3d
     """The submanifold convolution layer of the PTv3 family."""
 else:
     SubMConv3d = SpconvSubMConv3d

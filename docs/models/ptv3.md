@@ -71,20 +71,20 @@ autoware-ml train \
 ### Mixed precision
 
 The submanifold convolutions come from `autoware_ml/ops/submanifold_conv.py`,
-which runs them on `spconv` or, when the `rulebook_torch` package is installed
-(the `rulebook` pixi environment, see
-[Installation](../getting-started/installation.md)), on rulebook. The choice is
-made per call: rulebook under autocast and for 16-bit features, `spconv`
+which runs them on `spconv` or, when the `t4sparse` package is installed
+(the `t4sparse` pixi environment, see
+[Installation](../getting-started/installation.md)), on t4sparse. The choice is
+made per call: t4sparse under autocast and for 16-bit features, `spconv`
 for fp32 operands outside autocast and on the CPU. `spconv` has no autocast
 support of its own, so under `trainer.precision=16-mixed` it runs the
-convolutions in fp32 with autocast disabled, while rulebook runs 16-bit kernels
+convolutions in fp32 with autocast disabled, while t4sparse runs 16-bit kernels
 with fp32 accumulation and hands the fp32 master weights fp32 gradients. In
 practice:
 
 - `trainer.precision=32-true` (the default) trains on `spconv` in both
   environments, exactly as before.
-- `trainer.precision=16-mixed` in the `rulebook` environment trains the
-  convolutions on rulebook. Checkpoints are interchangeable between the two
+- `trainer.precision=16-mixed` in the `t4sparse` environment trains the
+  convolutions on t4sparse. Checkpoints are interchangeable between the two
   libraries, and export always goes through `spconv`.
 - Both libraries cache their index structure under the layer's `indice_key`, and
   neither reads the other's, so the layers sharing a key must run on one library

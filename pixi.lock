@@ -549,7 +549,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/de/1f/77fa3081e4f66ca3576c896ae5d31c3002ac6607f9747d2e3aa49227e464/markdown-3.10.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f4/7e/a72dd26f3b0f4f2bf1dd8923c85f7ceb43172af56d63c7383eb62b332364/pygments-2.20.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f7/27/a2fc51a4a122dfd1015e921ae9d22fee3d20b0b8080d9a704578bf9deece/pymdown_extensions-10.21.2-py3-none-any.whl
-  rulebook:
+  t4sparse:
     channels:
     - url: https://conda.anaconda.org/conda-forge/
     indexes:
@@ -636,7 +636,7 @@ environments:
       - pypi: direct+https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.9.0/flash_attn-2.8.3+cu128torch2.9-cp311-cp311-linux_x86_64.whl#sha256=d4c842693349ef3e8b3b1396056003ecb9d21e94493dd1ea9ad6a2b3c6ce5c73
       - pypi: git+https://github.com/dahlem/hydra.git?subdirectory=plugins%2Fhydra_optuna_sweeper&rev=feature%2Fupgrade-optuna-4.2.1#28ce32fc39783237274a2e888aae5d57a93c1c2d
       - pypi: git+https://github.com/tier4/t4-devkit.git?rev=v0.8.0#f49f47829c83acb751e1dec1141b075bc7f9b51d
-      - pypi: git+ssh://git@github.com/tier4/spconv-replacement.git?tag=v0.1.0#977d0877f58d4da07c6ae0c7ea8235c37f37483c
+      - pypi: git+ssh://git@github.com/tier4/t4sparse.git?tag=v0.2.0#2c49e1cb78f6edee49f47798e18d9908567a729a
       - pypi: https://download-r2.pytorch.org/whl/cu128/torch-2.9.1%2Bcu128-cp311-cp311-manylinux_2_28_x86_64.whl
       - pypi: https://download-r2.pytorch.org/whl/cu128/torchvision-0.24.1%2Bcu128-cp311-cp311-manylinux_2_28_x86_64.whl
       - pypi: https://download-r2.pytorch.org/whl/triton-3.5.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
@@ -1790,11 +1790,11 @@ packages:
   - pyarrow<24.0.0
   - pypcd4>=1.4.3,<2
   requires_python: '>=3.10,<3.13'
-- pypi: git+ssh://git@github.com/tier4/spconv-replacement.git?tag=v0.1.0#977d0877f58d4da07c6ae0c7ea8235c37f37483c
-  name: rulebook-torch
-  version: 0.1.0
+- pypi: git+ssh://git@github.com/tier4/t4sparse.git?tag=v0.2.0#2c49e1cb78f6edee49f47798e18d9908567a729a
+  name: t4sparse
+  version: 0.2.0
   requires_dist:
-  - torch
+  - torch ; extra == 'torch'
   requires_python: '>=3.10'
 - pypi: https://download-r2.pytorch.org/whl/cu128/torch-2.9.1%2Bcu128-cp311-cp311-manylinux_2_28_x86_64.whl
   name: torch

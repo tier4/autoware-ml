@@ -70,7 +70,7 @@ def replace_submconv3d_for_export(module: nn.Module) -> None:
 
     :class:`SubMConv3d` of either library is converted: both carry spconv's
     constructor attributes and the KRSC weight layout, so the parameters move over
-    unchanged. Export runs on spconv even when training ran on rulebook.
+    unchanged. Export runs on spconv even when training ran on t4sparse.
 
     Args:
         module: Module hierarchy traversed in-place.
