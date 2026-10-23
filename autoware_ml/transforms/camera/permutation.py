@@ -60,13 +60,13 @@ class ShuffleCameraOrder(BaseTransform):
 
     A train-time regularization for models whose output does not depend on the order of the
     cameras, such as StreamPETR, whose reference recipe shuffles the cameras of every training
-    frame. One permutation is drawn per sample from ``np.random``, like the other
-    augmentations, and every per-camera field of the sample follows it: every field of the
-    camera image data (``PER_CAMERA_FIELDS``), the image records, and the per-camera 2D ground
-    truth when the sample already carries it. A camera therefore keeps its pixels, its
-    calibration, its augmentation and its 2D boxes, so the transform can run anywhere after
-    the images are loaded, before or after the image-space augmentations and the projection of
-    the 2D annotations.
+    frame; every sample is shuffled unless a ``probability`` is given. One permutation is drawn
+    per sample from ``np.random``, like the other augmentations, and every per-camera field of
+    the sample follows it: every field of the camera image data (``PER_CAMERA_FIELDS``), the
+    image records, and the per-camera 2D ground truth when the sample already carries it. A
+    camera therefore keeps its pixels, its calibration, its augmentation and its 2D boxes, so
+    the transform can run anywhere after the images are loaded, before or after the
+    image-space augmentations and the projection of the 2D annotations.
 
     Required keys:
         - camera_image_data: the loaded images of every camera and their calibration.
@@ -90,15 +90,6 @@ class ShuffleCameraOrder(BaseTransform):
         "noises",
         "calibration_statuses",
     )
-
-    def __init__(self, probability: float | None = None) -> None:
-        """Initialize the ShuffleCameraOrder transform.
-
-        Args:
-            probability: Probability of shuffling the cameras of a sample, None to shuffle
-                every sample.
-        """
-        super().__init__(probability=probability)
 
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
         """Reorder every per-camera field of the sample by one random permutation.
