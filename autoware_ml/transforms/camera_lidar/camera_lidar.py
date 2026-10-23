@@ -596,7 +596,7 @@ class LidarCameraFusion(BaseTransform):
         """
         if self.ego_box is not None:
             camera_center = self.camera_center_in_lidar(lidar2cam, noise)
-            visible = ~self.ego_occlusion_mask(xyz, camera_center)
+            visible = ~self.ego_occlusion_mask(xyz, camera_center, self.ego_box)
             xyz = xyz[visible]
             intensities = intensities[visible]
 
@@ -631,7 +631,10 @@ class LidarCameraFusion(BaseTransform):
         return -rotation.T @ translation
 
     def ego_occlusion_mask(
-        self, xyz: npt.NDArray[np.float32], camera_center: npt.NDArray[np.float64]
+        self,
+        xyz: npt.NDArray[np.float32],
+        camera_center: npt.NDArray[np.float64],
+        ego_box: Sequence[float],
     ) -> npt.NDArray[np.bool_]:
         """Flag the points whose ray from the camera crosses the ego vehicle box.
 
@@ -642,16 +645,12 @@ class LidarCameraFusion(BaseTransform):
         Args:
             xyz: Point coordinates in the lidar frame, shape ``(num_points, 3)``.
             camera_center: Camera center in the lidar frame, shape ``(3,)``.
+            ego_box: Ego vehicle box ``[x_min, y_min, z_min, x_max, y_max, z_max]`` in the
+                lidar frame.
 
         Returns:
             Boolean mask, ``True`` for occluded points.
-
-        Raises:
-            ValueError: If no ``ego_box`` was configured, there is no box to test against.
         """
-        ego_box = self.ego_box
-        if ego_box is None:
-            raise ValueError(f"{self.__class__.__name__}: ego_box is not set, nothing to occlude")
         box_min = np.array(ego_box[:3], dtype=np.float64)
         box_max = np.array(ego_box[3:], dtype=np.float64)
 
