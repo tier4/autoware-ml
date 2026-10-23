@@ -137,11 +137,21 @@ zensical = "*"
 [tool.pixi.feature.docs.tasks]
 docs = "zensical build --clean"
 
+# The t4sparse sparse convolution library (tier4/t4sparse) for PTv3 training under
+# mixed precision; see autoware_ml/ops/submanifold_conv.py. Pixi builds it from the pinned
+# commit when it installs the environment, with the same system CUDA toolkit (nvcc on PATH)
+# the Autoware-ML ops are built with. The repository is private, so this is an opt-in
+# environment: the default and dev environments neither need nor fetch it.
+[tool.pixi.feature.t4sparse.pypi-dependencies]
+t4sparse = { git = "ssh://git@github.com/tier4/t4sparse.git", tag = "v0.2.0", extras = ["torch"] }
+
 [tool.pixi.environments]
 # Default env is the non-dev "use" environment.
 default = { solve-group = "default" }
 # Dev env extends the default stack with contributor and docs tooling.
 dev = { features = ["dev"], solve-group = "default" }
+# Dev env plus the t4sparse sparse convolution library (needs access to its repository).
+t4sparse = { features = ["dev", "t4sparse"], solve-group = "default" }
 # Docs env is intentionally isolated from the default CUDA/ML stack.
 docs = { features = ["docs"], solve-group = "docs", no-default-feature = true }
 
