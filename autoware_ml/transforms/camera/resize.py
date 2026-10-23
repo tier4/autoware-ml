@@ -32,7 +32,8 @@ the transformed one. They reject camera image data that already carries depth ma
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from functools import partial
 from typing import NamedTuple
 
 from jaxtyping import Float32
@@ -367,11 +368,15 @@ class PadMultiViewImage(ImageSpaceTransform):
         Raises:
             ValueError: If none or both of `size` and `size_divisor` are given.
         """
-        if (size is None) == (size_divisor is None):
-            raise ValueError("Exactly one of size or size_divisor must be provided.")
         super().__init__(probability=None)
-        self.size = tuple(size) if size is not None else None
-        self.size_divisor = size_divisor
+        self._resolve_padded_size: Callable[[int, int], tuple[int, int]]
+        if size is not None and size_divisor is None:
+            fixed_height, fixed_width = size
+            self._resolve_padded_size = partial(self._fixed_size, fixed_height, fixed_width)
+        elif size_divisor is not None and size is None:
+            self._resolve_padded_size = partial(self._divisible_size, size_divisor)
+        else:
+            raise ValueError("Exactly one of size or size_divisor must be provided.")
         self.pad_value = pad_value
 
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
@@ -415,7 +420,7 @@ class PadMultiViewImage(ImageSpaceTransform):
         )
         return model_gt_sample._replace(camera_image_data=padded_camera_image_data)
 
-    def resolve_padded_size(self, height: int, width: int) -> tuple[int, ...]:
+    def resolve_padded_size(self, height: int, width: int) -> tuple[int, int]:
         """Resolve the size the images are padded to.
 
         Args:
@@ -424,16 +429,38 @@ class PadMultiViewImage(ImageSpaceTransform):
 
         Returns:
             Padded image size as ``(height, width)``.
-
-        Raises:
-            ValueError: If neither `size` nor `size_divisor` is set, which `__init__`
-                already rejects.
         """
-        if self.size is not None:
-            return self.size
-        size_divisor = self.size_divisor
-        if size_divisor is None:
-            raise ValueError("Exactly one of size or size_divisor must be provided.")
+        return self._resolve_padded_size(height, width)
+
+    @staticmethod
+    def _fixed_size(
+        fixed_height: int, fixed_width: int, height: int, width: int
+    ) -> tuple[int, int]:
+        """Return the fixed size the images are padded to, whatever their size.
+
+        Args:
+            fixed_height: Height the images are padded to.
+            fixed_width: Width the images are padded to.
+            height: Height of the images before padding, unused.
+            width: Width of the images before padding, unused.
+
+        Returns:
+            Padded image size as ``(height, width)``.
+        """
+        return fixed_height, fixed_width
+
+    @staticmethod
+    def _divisible_size(size_divisor: int, height: int, width: int) -> tuple[int, int]:
+        """Round the image size upward to a multiple of the size divisor.
+
+        Args:
+            size_divisor: Divisor the image dimensions are rounded upward to.
+            height: Height of the images before padding.
+            width: Width of the images before padding.
+
+        Returns:
+            Padded image size as ``(height, width)``.
+        """
         return (
             int(np.ceil(height / size_divisor) * size_divisor),
             int(np.ceil(width / size_divisor) * size_divisor),
