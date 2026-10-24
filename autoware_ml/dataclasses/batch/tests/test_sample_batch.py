@@ -78,13 +78,17 @@ class TestModelGTBatchDetection3DCollation(unittest.TestCase):
         """Collating 3D boxes without a padding size fails instead of dropping them."""
         with self.assertRaises(ValueError):
             ModelGTBatch.collate_gt_samples(
-                gt_samples=[self._build_sample(2, None)], max_num_3d_gt_bboxes=None
+                gt_samples=[self._build_sample(2, None)],
+                max_num_3d_gt_bboxes=None,
+                max_num_2d_gt_bboxes=None,
             )
 
     def _collate(self, samples: Sequence[ModelGTSample]) -> Detection3DGTBatch:
         """Collate the samples and return the 3D detection batch, which must exist."""
         batch = ModelGTBatch.collate_gt_samples(
-            gt_samples=samples, max_num_3d_gt_bboxes=self.max_num_3d_gt_bboxes
+            gt_samples=samples,
+            max_num_3d_gt_bboxes=self.max_num_3d_gt_bboxes,
+            max_num_2d_gt_bboxes=None,
         )
         assert batch.detection3d_gt_batch is not None
         return batch.detection3d_gt_batch
@@ -236,7 +240,9 @@ class TestModelGTBatchDetection2DCollation(unittest.TestCase):
         Check: detection2d_gt_batch is None.
         """
         batch = ModelGTBatch.collate_gt_samples(
-            [self._build_sample(None), self._build_sample(None)], max_num_3d_gt_bboxes=0
+            [self._build_sample(None), self._build_sample(None)],
+            max_num_3d_gt_bboxes=0,
+            max_num_2d_gt_bboxes=None,
         )
 
         self.assertIsNone(batch.detection2d_gt_batch)
@@ -281,7 +287,9 @@ class TestModelGTBatchFrameMetaCollation(unittest.TestCase):
         )
 
     def _collate(self, samples: Sequence[ModelGTSample]) -> FrameMetaBatch | None:
-        return ModelGTBatch.collate_gt_samples(samples, max_num_3d_gt_bboxes=0).frame_meta_batch
+        return ModelGTBatch.collate_gt_samples(
+            samples, max_num_3d_gt_bboxes=0, max_num_2d_gt_bboxes=None
+        ).frame_meta_batch
 
     def test_sample_defaults_to_no_frame_meta(self) -> None:
         self.assertIsNone(self._build_sample(frame_meta=None).frame_meta)
@@ -334,6 +342,7 @@ class TestModelGTBatchFrameMetaCollation(unittest.TestCase):
         batch = ModelGTBatch.collate_gt_samples(
             [self._build_sample(FrameMetaSample(self._build_ego2global(3.0), "db/s/0"))],
             max_num_3d_gt_bboxes=0,
+            max_num_2d_gt_bboxes=None,
         )
 
         moved = batch.to_device(torch.device("cpu"))
@@ -390,7 +399,9 @@ class TestModelGTBatchSegmentation3DCollation(unittest.TestCase):
     def _collate(self, samples: Sequence[ModelGTSample]) -> Segmentation3DGTBatch | None:
         """Collate the samples and return the segmentation batch."""
         batch = ModelGTBatch.collate_gt_samples(
-            gt_samples=samples, max_num_3d_gt_bboxes=self.max_num_3d_gt_bboxes
+            gt_samples=samples,
+            max_num_3d_gt_bboxes=self.max_num_3d_gt_bboxes,
+            max_num_2d_gt_bboxes=None,
         )
         return batch.segmentation3d_gt_batch
 

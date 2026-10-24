@@ -400,7 +400,7 @@ class ModelGTBatch(NamedTuple):
     def collate_gt_samples(
         gt_samples: Sequence[ModelGTSample],
         max_num_3d_gt_bboxes: int | None,
-        max_num_2d_gt_bboxes: int | None = None,
+        max_num_2d_gt_bboxes: int | None,
     ) -> ModelGTBatch:
         """
         Collate a sequence of ModelGTSample into a ModelGTBatch.
