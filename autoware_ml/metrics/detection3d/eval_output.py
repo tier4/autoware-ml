@@ -51,6 +51,15 @@ def detection3d_eval_output(
         "gt_labels": gt_detections.valid_labels_3d(),
         "gt_num_points": gt_detections.valid_bboxes_num_points(),
     }
+    # A sample padding a streaming lane stays in the per-frame lists as an empty frame, which adds
+    # no detection and no ground truth: the metrics gather those lists across the GPUs entry by
+    # entry, so every rank has to hold as many.
+    for index in batch_inputs.multi_task_gt_batch.padding_mask.nonzero().flatten().tolist():
+        eval_out["predictions"][index] = {
+            key: value[:0] for key, value in eval_out["predictions"][index].items()
+        }
+        for key in ("gt_boxes", "gt_labels", "gt_num_points"):
+            eval_out[key][index] = eval_out[key][index][:0]
     # Per frame metadata for the region and collision filters, when the dataset attached it.
     frame_meta_batch = batch_inputs.multi_task_gt_batch.frame_meta_batch
     if frame_meta_batch is not None:

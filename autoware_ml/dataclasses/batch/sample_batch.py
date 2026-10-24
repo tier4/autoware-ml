@@ -102,9 +102,10 @@ class ModelGTBatch(NamedTuple):
     image_gt_batch: ImageGTBatch | None
 
     # Samples that only pad a streaming lane (see GroupStreamingSampler), all False when no
-    # sample pads. A model gives them no loss and no metric and leaves them out of the logged
-    # batch size (num_real_samples); on a batch of padding only it still returns a loss, which
-    # DDP needs from every rank. Whoever consumes predictions drops them by this mask.
+    # sample pads. A model leaves them out of its loss but still returns one on a batch of
+    # padding only, as DDP needs a loss from every rank. The logged batch size (num_real_samples)
+    # and the detection eval output (an empty frame each) leave them out; a prediction writer
+    # gets this mask with the batch.
     padding_mask: Bool[Tensor, " batch_size"]
 
     # Summed io_processing_time of every sample collated into this batch.

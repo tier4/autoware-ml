@@ -127,15 +127,16 @@ The datasets are instantiated by Hydra without records. In `setup()` the datamod
 `bind(records)` on the dataset of every source, which returns a copy serving the records of that
 database in the split, and concatenates the bound copies of a split in declaration order.
 
-Temporal models that carry a memory across batches train on a `StreamingDataModule`, a
-`DataModule` that also takes the experiment `seed`. Every dataloader draws from a
-`GroupStreamingSampler`, which joins the scenes, the training split reshuffling them every epoch
-from `seed`, and cuts their frames, each scene in time order, into one lane per batch position of
-every rank. The lanes differ by at most one frame, and a shorter lane ends with a padding slot that
-repeats its last frame, so every rank runs the same number of batches and every split serves every
-frame exactly once. The batch flags those samples in `ModelGTBatch.padding_mask`: a model gives them
-no loss and no metric and leaves them out of the logged batch size (`num_real_samples()`), and
-whoever consumes the predictions drops them by the same mask. Anything that would reorder the
+Temporal models that carry a memory across batches train on a `StreamingDataModule`, a `DataModule`
+that also takes the experiment `seed`. Every dataloader draws from a `GroupStreamingSampler`, which
+joins the scenes, the training split reshuffling them every epoch from `seed`, and cuts their
+frames, each scene in time order, into one lane per batch position of every rank. The lanes differ
+by at most one frame, and a shorter lane ends with a padding slot that repeats its last frame, so
+every rank runs the same number of batches and every split serves every frame exactly once as a real
+sample. The batch flags the padding slots in `ModelGTBatch.padding_mask`: a model leaves them out of
+its loss, the logged batch size (`num_real_samples()`) leaves them out, and the detection eval
+output keeps each as an empty frame, so every GPU gathers as many frames for the metrics. A
+prediction writer drops them by the mask it gets with the batch. Anything that would reorder the
 frames is refused: frame sampling, a shuffling dataloader and `trainer.overfit_batches` (shorten a
 run with `limit_train_batches` / `limit_val_batches` instead). A model config switches to it by
 composing `/datamodule/streaming@datamodule: default_streaming_datamodule` after its database
