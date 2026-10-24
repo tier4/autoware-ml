@@ -427,13 +427,12 @@ class TestModelGTBatchPaddingMask(unittest.TestCase):
     def test_collate_flags_the_padding_samples_in_batch_order(self) -> None:
         """
         Input: three samples, the middle one padding.
-        Expected: the batch flags each sample at its position, so a model can drop the
-        padded one from its loss and metrics, and counts the other two as real.
+        Expected: the batch flags each sample at its position, so the loss, the metrics and the
+        logged batch size can leave the padded one out, and counts the other two as real.
         Check: the padding mask and the number of real samples.
         """
         batch = self._collate([False, True, False])
 
-        assert batch.padding_mask is not None
         self.assertEqual(batch.padding_mask.dtype, torch.bool)
         self.assertEqual(batch.padding_mask.tolist(), [False, True, False])
         self.assertEqual(batch.num_real_samples(), 2)
@@ -441,13 +440,12 @@ class TestModelGTBatchPaddingMask(unittest.TestCase):
     def test_collate_without_padding_gives_an_all_false_mask(self) -> None:
         """
         Input: two samples, neither of them padding.
-        Expected: every collated batch carries a mask, so a model never has to tell a
-        missing mask from an unpadded batch.
+        Expected: a batch without padding carries an all-False mask, the one way a batch says
+        that none of its samples pads.
         Check: the mask is a tensor of two False values and both samples count as real.
         """
         batch = self._collate([False, False])
 
-        assert batch.padding_mask is not None
         self.assertEqual(batch.padding_mask.tolist(), [False, False])
         self.assertEqual(batch.num_real_samples(), 2)
 
@@ -471,6 +469,5 @@ class TestModelGTBatchPaddingMask(unittest.TestCase):
 
         moved = self._collate([True, False]).to_device(device)
 
-        assert moved.padding_mask is not None
         self.assertEqual(moved.padding_mask.device, device)
         self.assertEqual(moved.padding_mask.tolist(), [True, False])
