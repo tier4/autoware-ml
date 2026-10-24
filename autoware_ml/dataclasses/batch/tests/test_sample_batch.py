@@ -461,16 +461,6 @@ class TestModelGTBatchPaddingMask(unittest.TestCase):
         """
         self.assertEqual(self._collate([True, True]).num_real_samples(), 0)
 
-    def test_a_batch_without_a_mask_counts_every_sample_as_real(self) -> None:
-        """
-        Input: a collated batch whose mask is removed, as on a batch assembled by hand.
-        Expected: only collation stamps padding, so a batch without a mask holds none.
-        Check: the number of real samples is the batch size.
-        """
-        batch = self._collate([False, False, False])._replace(padding_mask=None)
-
-        self.assertEqual(batch.num_real_samples(), 3)
-
     def test_to_device_moves_the_padding_mask(self) -> None:
         """
         Input: a collated batch with one padding sample, moved to a device.

@@ -211,6 +211,7 @@ def test_frnet_with_preprocessing_runs_shared_step_end_to_end() -> None:
             batch_indices=torch.zeros(3, dtype=torch.int32),
         ),
         image_gt_batch=None,
+        padding_mask=torch.zeros(1, dtype=torch.bool),
     )
 
     preprocessed = model.on_after_batch_transfer(raw_batch, dataloader_idx=0)

@@ -150,6 +150,7 @@ def _point_batch() -> ModelGTBatch:
         detection3d_gt_batch=None,
         segmentation3d_gt_batch=None,
         image_gt_batch=None,
+        padding_mask=torch.zeros(1, dtype=torch.bool),
     )
 
 

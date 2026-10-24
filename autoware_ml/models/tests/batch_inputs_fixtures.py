@@ -128,10 +128,17 @@ def build_batch_inputs(
     Returns:
         The model inputs.
     """
+    if point_cloud is not None:
+        batch_size = point_cloud.batch_size
+    elif detection is not None:
+        batch_size = detection.gt_bboxes_3d.shape[0]
+    else:
+        batch_size = images.images.shape[0] if images is not None else 1
     batch = ModelGTBatch(
         point_cloud_gt_batch=point_cloud,
         detection3d_gt_batch=detection,
         segmentation3d_gt_batch=segmentation,
         image_gt_batch=images,
+        padding_mask=torch.zeros(batch_size, dtype=torch.bool),
     )
     return ModelBatchInputs.from_gt_batch(batch).replace(voxels_data=voxels)
