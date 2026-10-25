@@ -329,6 +329,11 @@ def test_lanes_stay_scene_contiguous_across_batches() -> None:
 
 
 def test_set_epoch_reshuffles_deterministically() -> None:
+    """
+    Input: a shuffling sampler over eight scenes, built anew for epochs 0, 0 and 1.
+    Expected: the scene order depends only on the seed and the epoch.
+    Check: the same epoch serves the same indices, another epoch other ones.
+    """
     dataset = _FakeScenesDataset([4] * 8)
 
     def epoch_indices(epoch: int) -> list[int]:
@@ -354,9 +359,9 @@ def test_raises_when_lanes_cannot_be_filled() -> None:
 def test_is_a_distributed_sampler_so_lightning_does_not_wrap_it() -> None:
     """
     Input: a sampler built outside a distributed run.
-    Expected: it is a ``DistributedSampler``, which Lightning leaves alone instead of wrapping
-    it into one that keeps every ``num_replicas``-th index, and without a process group it
-    serves the whole split as the only rank.
+    Expected: it is a ``DistributedSampler``, the type Lightning does not wrap into one that
+    keeps every ``num_replicas``-th index, and without a process group it serves the whole
+    split as the only rank.
     Check: its type, its number of replicas and its rank.
     """
     sampler = GroupStreamingSampler(_FakeScenesDataset([4, 4]), batch_size=2, shuffle=False, seed=0)
@@ -378,6 +383,7 @@ def _ranks(
 
 
 def _lanes(sampler: GroupStreamingSampler) -> list[list[int]]:
+    """Split the indices of one epoch into the lanes they feed, batch position by position."""
     indices = list(iter(sampler))
     return [indices[lane :: sampler.batch_size] for lane in range(sampler.batch_size)]
 

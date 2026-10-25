@@ -1041,7 +1041,8 @@ class TestStreamingDataModule(StreamedCorpusTestCase):
     def test_a_trainer_without_overfit_batches_keeps_the_scene_sampler(self) -> None:
         """
         Input: the same streaming datamodule attached to a trainer without overfit_batches.
-        Expected: Lightning leaves the sampler alone, so the loaders stream as before.
+        Expected: only overfit_batches is refused, so the loaders are built and keep the scene
+        sampler.
         Check: both loaders draw from the scene sampler.
         """
         data_module = self.build_streaming_data_module(
