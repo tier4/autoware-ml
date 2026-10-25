@@ -231,14 +231,13 @@ class TestTypedDetection3DEvalOutput(unittest.TestCase):
         self.assertNotIn("scene_token", eval_outputs)
         self.assertNotIn("lanelet_map_path", eval_outputs)
 
-    def test_a_padding_sample_is_an_empty_frame(self):
+    def test_the_eval_output_flags_the_padding_samples(self):
         """
         Input: the two-sample batch with its second sample flagged as padding.
-        Expected: the padding sample keeps its place in every per-frame list, which every GPU
-        has to hold as many entries of for the metrics, but as a frame without predictions and
-        without ground truth; the first sample is left as it is.
-        Check: the lengths of the per-frame lists, the empty entries of the second frame and the
-        boxes of the first.
+        Expected: the padding sample keeps its entry in every per-frame list, which every GPU
+        has to hold as many entries of for the metrics, and the eval output flags it for the
+        metric to leave out.
+        Check: the lengths of the per-frame lists and the per-frame padding flags.
         """
         gt_batch = self.multi_task_batch_inputs.multi_task_gt_batch._replace(
             padding_mask=torch.tensor([False, True], device=self.device)
@@ -254,14 +253,7 @@ class TestTypedDetection3DEvalOutput(unittest.TestCase):
 
         for key in ("predictions", "gt_boxes", "gt_labels", "gt_num_points"):
             self.assertEqual(len(eval_outputs[key]), 2)
-        self.assertEqual(
-            {key: value.shape[0] for key, value in eval_outputs["predictions"][1].items()},
-            {"bboxes_3d": 0, "scores_3d": 0, "labels_3d": 0},
-        )
-        for key in ("gt_boxes", "gt_labels", "gt_num_points"):
-            self.assertEqual(eval_outputs[key][1].shape[0], 0)
-        self.assertEqual(eval_outputs["predictions"][0]["bboxes_3d"].shape[0], 2)
-        self.assertEqual(eval_outputs["gt_boxes"][0].shape[0], 2)
+        self.assertEqual(eval_outputs["padding_mask"], [False, True])
 
 
 if __name__ == "__main__":

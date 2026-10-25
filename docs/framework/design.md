@@ -134,8 +134,8 @@ frames, each scene in time order, into one lane per batch position of every rank
 by at most one frame, and a shorter lane ends with a padding slot that repeats its last frame, so
 every rank runs the same number of batches and every split serves every frame exactly once as a real
 sample. The batch flags the padding slots in `ModelGTBatch.padding_mask`: a model leaves them out of
-its loss, the logged batch size (`num_real_samples()`) leaves them out, and the detection eval
-output keeps each as an empty frame, so every GPU gathers as many frames for the metrics. A
+its loss, and the logged batch size (`num_real_samples()`) and the detection metrics leave them
+out; the detection eval output still lists them, flagged, so every GPU gathers as many frames. A
 prediction writer drops them by the mask it gets with the batch. Anything that would reorder the
 frames is refused: frame sampling, a shuffling dataloader and `trainer.overfit_batches` (shorten a
 run with `limit_train_batches` / `limit_val_batches` instead). A model config switches to it by
