@@ -16,7 +16,8 @@
 
 The projection reads the calibration and the image size of the sample as they are when it
 runs, so the transform must run after every geometric augmentation, the image-space ones and
-the global 3D ones alike.
+the global 3D ones alike. It is a pinhole projection through ``lidar2images`` that ignores the
+distortion coefficients, as the reference recipe does, so the images must be undistorted.
 """
 
 from __future__ import annotations
@@ -117,10 +118,11 @@ class LoadAnnotations2DFromBoxes3D(BaseTransform):
         image_height, image_width = camera_image_data.images.shape[-2:]
         image_size = torch.tensor([image_width, image_height], dtype=torch.float32)
 
+        corners, centers, labels = bboxes.corners, bboxes.center, bboxes.bbox_labels
         all_bboxes, all_labels = [], []
         for lidar2image in camera_image_data.lidar2images:
             camera_bboxes, camera_labels = _project_camera(
-                bboxes.corners, bboxes.center, bboxes.bbox_labels, lidar2image, image_size
+                corners, centers, labels, lidar2image, image_size
             )
             all_bboxes.append(camera_bboxes)
             all_labels.append(camera_labels)
