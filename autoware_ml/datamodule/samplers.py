@@ -250,6 +250,13 @@ def _center_in_range(params: Sequence[float], bev_range: Sequence[float]) -> boo
     return bev_range[0] <= x <= bev_range[2] and bev_range[1] <= y <= bev_range[3]
 
 
+def _world_size_and_rank() -> tuple[int, int]:
+    """Return the world size and the rank of this process, (1, 0) outside a process group."""
+    if dist.is_available() and dist.is_initialized():
+        return dist.get_world_size(), dist.get_rank()
+    return 1, 0
+
+
 class DistributedWeightedRandomSampler(DistributedSampler):
     """Weighted random sampler that partitions one sampled epoch across ranks."""
 
@@ -274,8 +281,7 @@ class DistributedWeightedRandomSampler(DistributedSampler):
         """
         if len(weights) != len(dataset):
             raise ValueError(f"Expected {len(dataset)} sampler weights, got {len(weights)}.")
-        num_replicas = dist.get_world_size() if dist.is_available() and dist.is_initialized() else 1
-        rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
+        num_replicas, rank = _world_size_and_rank()
         super().__init__(
             dataset,
             num_replicas=num_replicas,
@@ -351,8 +357,9 @@ class GroupStreamingSampler(DistributedSampler):
             shuffle: Whether to shuffle the scene order every epoch.
             seed: Base seed for the per-epoch scene shuffle, the experiment seed.
         """
-        num_replicas = dist.get_world_size() if dist.is_available() and dist.is_initialized() else 1
-        rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
+        num_replicas, rank = _world_size_and_rank()
+        # The parent's num_samples and total_size count the dataset, not the lanes; __len__ and
+        # __iter__ below replace them.
         super().__init__(dataset, num_replicas=num_replicas, rank=rank, shuffle=shuffle, seed=seed)
         self.scene_groups = dataset.scene_index_groups()
         if not self.scene_groups:
