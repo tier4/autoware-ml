@@ -25,8 +25,7 @@ import torch
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
 from autoware_ml.geometry.cameras.base_images import BaseImages, compose_lidar2images
-from autoware_ml.geometry.points.lidar_points import LiDARPoints
-from autoware_ml.types.geometry import Box3DCenterCoordinateType, Box3DFieldIndex, PointFeatureName
+from autoware_ml.types.geometry import Box3DCenterCoordinateType, Box3DFieldIndex
 
 
 class PinholeCameraTestCase(unittest.TestCase):
@@ -34,7 +33,7 @@ class PinholeCameraTestCase(unittest.TestCase):
 
     The 2D annotation, camera order and camera-only augmentation tests inherit them: a camera
     looking along the lidar x axis with a known focal length, gravity-center boxes in front of
-    it and a sample that carries the images (and optionally one point) but nothing else.
+    it and a sample that carries the images but nothing else.
     """
 
     # A camera looking along the lidar x axis: image right is lidar -y, image down is lidar -z.
@@ -42,23 +41,12 @@ class PinholeCameraTestCase(unittest.TestCase):
         [[0.0, -1.0, 0.0, 0.0], [0.0, 0.0, -1.0, 0.0], [1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
     )
 
-    def build_sample(
-        self, camera_image_data: BaseImages | None, with_points: bool = False
-    ) -> ModelGTSample:
-        """Build a sample holding images and optionally a one point cloud."""
-        point_cloud_data = (
-            LiDARPoints(
-                points=torch.tensor([[1.0, 2.0, 3.0]], dtype=torch.float32),
-                point_feature_names=[PointFeatureName.X, PointFeatureName.Y, PointFeatureName.Z],
-                timestamp=0.0,
-            )
-            if with_points
-            else None
-        )
+    def build_sample(self, camera_image_data: BaseImages | None) -> ModelGTSample:
+        """Build a sample holding only the images."""
         return ModelGTSample(
             lidar_point_cloud_samples=None,
             image_samples=None,
-            point_cloud_data=point_cloud_data,
+            point_cloud_data=None,
             camera_image_data=camera_image_data,
             detection3d_gt_bboxes_3d=None,
             segmentation3d_gt_sample=None,
