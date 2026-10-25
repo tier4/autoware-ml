@@ -80,6 +80,7 @@ class Detection2DGTBatch(NamedTuple):
         """
         if len(samples) == 0:
             raise ValueError("At least one 2D detection sample is required for collating.")
+        # ModelGTBatch collates the images first, which refuses samples of other camera counts.
         num_cameras = len(samples[0].gt_bboxes_2d)
         num_fields = len(Box2DFieldIndex)
         shape = (len(samples), num_cameras, max_num_2d_gt_bboxes)
