@@ -157,14 +157,11 @@ def test_setup_rejects_a_streaming_model_without_a_streaming_datamodule(
     datamodule: object | None, found: str
 ) -> None:
     """
-    Input: a streaming model set up with the plain DataModule, with a Lightning datamodule from
-    outside the framework that sets ``streaming = True``, and without a datamodule, as when
-    fitting on bare dataloaders.
-    Expected: only a StreamingDataModule serves scene-contiguous frames, so the memory would
-    carry over between unrelated frames with any of these; ``setup`` refuses before any batch
-    runs, and the type decides, not a ``streaming`` attribute.
-    Check: a ValueError asking for a StreamingDataModule and naming what the trainer runs with
-    is raised.
+    Input: a streaming model set up with the plain DataModule, with an outside Lightning
+    datamodule that sets ``streaming = True``, and without a datamodule.
+    Expected: ``setup`` refuses all three before any batch runs: only the StreamingDataModule
+    type serves scene-contiguous frames, an attribute does not count.
+    Check: a ValueError asking for a StreamingDataModule and naming what the trainer runs with.
     """
     model = _StreamingModel()
     _attach_trainer(model, datamodule)

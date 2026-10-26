@@ -40,15 +40,12 @@ def _running_stats(backbone: torch.nn.Module) -> list[torch.Tensor]:
 
 def test_norm_eval_holds_through_a_lightning_fit_without_a_train_call() -> None:
     """
-    Input: a VoVNet built with ``norm_eval``, put through the mode round trip of a validation
-    run inside a Lightning fit, a training forward and an explicit ``train()``.
-    Expected: ``norm_eval`` holds from construction on, not only after ``train()``:
-    Lightning 2.x never calls ``train()`` during fit, it captures the ``training`` flag of every
-    module around validation and restores the flags afterwards, so a ``norm_eval`` applied only
-    by the ``train()`` override never ran and every BatchNorm layer updated its statistics.
-    Check: the backbone trains while every BatchNorm layer stays in eval mode after
-    construction, after the round trip and after ``train()``, and the forward leaves the running
-    statistics unchanged.
+    Input: a VoVNet built with ``norm_eval``, through a Lightning validation round trip, a
+    training forward and an explicit ``train()``.
+    Expected: ``norm_eval`` holds from construction on, since Lightning restores the module
+    flags around validation without calling ``train()``.
+    Check: every BatchNorm layer stays in eval mode at each step while the backbone trains, and
+    the forward leaves the running statistics unchanged.
     """
     backbone = VoVNet99MultiScale(norm_eval=True)
     norm_layers = _batch_norms(backbone)

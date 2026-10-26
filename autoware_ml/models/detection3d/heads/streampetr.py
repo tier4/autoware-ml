@@ -116,10 +116,7 @@ class StreamPETRDecoderLayer(nn.Module):
         Self-attention keys and values extend the current queries with the
         non-propagated temporal memory; cross-attention consumes only the
         current-frame image tokens. Self-attention runs in float32 even under
-        autocast, matching the reference numerical recipe (one of the head's
-        five float32 islands: this one, the position embedding and the
-        prediction branches follow the reference, the two memory updates keep
-        kilometer-scale poses exact).
+        autocast, as in the reference.
         """
         query_with_pos = query + query_pos
         self_key = torch.cat([query_with_pos, temp_memory + temp_pos], dim=1)
@@ -425,11 +422,8 @@ class StreamPETRHead(nn.Module):
 
         The bank moves from the global frame into the lidar frame of the current frame and
         its entries age by the frame's time; lanes without a predecessor are cleared. The
-        bank stores global-frame reference points and ego poses whose translations reach
-        kilometer scale, far beyond half-precision resolution, so the whole geometry path runs
-        in float32 regardless of autocast (mirroring :meth:`position_embedding`), and the pose
-        product goes through :func:`compose_poses`, which the float32 matmul precision setting
-        cannot reduce to TF32.
+        kilometer-scale poses stay in float32 regardless of autocast and go through
+        :func:`compose_poses`, which the TF32 matmul setting cannot round.
 
         Args:
             timestamp: Sample time of every lane in seconds, float64.
@@ -481,9 +475,7 @@ class StreamPETRHead(nn.Module):
         untruncated: the deployed graph emits all of them and the runtime keeps the first
         ``memory_len``, exactly like :meth:`post_update_memory`. The new entries carry age
         zero and the identity pose; the ego-pose alignment brings every entry back into the
-        global frame. The bank is stored in float32 and the alignment runs in a float32
-        island: kilometer-scale translations lose meter-level motion in half precision, and
-        in TF32 too, which the elementwise :func:`compose_poses` keeps out of the pose product.
+        global frame, in float32 like :meth:`pre_update_memory`.
 
         Args:
             ego_pose: Lidar-to-global pose of every lane ``(batch, 4, 4)``.
@@ -821,13 +813,12 @@ class StreamPETRHead(nn.Module):
         """Decode regression outputs into the shared box parameterization.
 
         Boxes are ``[cx, cy, cz, log_l, log_w, log_h, sin, cos, vx, vy]`` with
-        metric centers: the regression space used by the losses and the
-        deployment interface alike. The losses compare the sizes in log space,
-        but the matching goes through an exp / log round trip
-        (:func:`denormalize_boxes3d`, then the full-box cost encodes the boxes
-        again): a log size beyond the float32 range of exp gives an infinite
-        cost, which :meth:`HungarianAssigner3D.assign` bounds with
-        ``nan_to_num``, so the assignment stays valid.
+        metric centers, for the losses and the deployed graph alike. The matching
+        decodes them to metric boxes and the full-box cost encodes them again: an
+        overflowing log size gives an infinite cost, which
+        :meth:`HungarianAssigner3D.assign` bounds with ``nan_to_num``, and the yaw
+        passes through ``atan2``, so the cost compares a unit ``(sin, cos)`` where
+        the reference compares the raw regression.
         """
         reference = inverse_sigmoid(reference_points.clone())
         normalized_centers = (raw_box_params[..., :3] + reference[..., :3]).sigmoid()

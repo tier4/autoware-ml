@@ -577,14 +577,11 @@ class TestHungarianAssigner3DFullBoxCost(unittest.TestCase):
     def test_batched_assignment_matches_the_per_sample_assignment(self) -> None:
         """
         Input: 50 random batches of one to three samples with zero to five ground truth boxes
-        each, padded to the largest count and matched with the full-box cost of the StreamPETR
-        recipe.
-        Expected: every sample is matched as if it were assigned alone; the Hungarian matching
-        also pairs the padded columns, so padding them with the sentinel cost and dropping those
-        pairs must leave the matching of the real boxes unchanged, samples without any box
-        included.
-        Check: the batched ``gt_inds`` and ground truth counts equal those of an unpadded
-        per-sample reference matching.
+        each, padded to the largest count, with the full-box cost of the StreamPETR recipe.
+        Expected: every sample is matched as if it were assigned alone; the padded columns,
+        which the Hungarian matching also pairs, are dropped.
+        Check: the batched ``gt_inds`` and ground truth counts against an unpadded per-sample
+        matching.
         """
         generator = torch.Generator().manual_seed(0)
         num_classes, num_queries = 3, 12
@@ -702,13 +699,11 @@ class TestHungarianAssigner3DBEVCost(unittest.TestCase):
     def test_batched_assignment_matches_the_per_sample_assignment(self) -> None:
         """
         Input: 50 random batches of one to three samples with zero to five ground truth boxes
-        each, padded to the largest count and matched with the BEV center cost of the
-        TransFusion recipe.
-        Expected: the assigner hands the whole boxes to the BEV cost, which reads only their
-        centers, so every sample is matched as its centers alone would match it if it were
-        assigned alone.
-        Check: the batched ``gt_inds`` and ground truth counts equal those of an unpadded
-        per-sample reference matching on the BEV centers.
+        each, padded to the largest count, with the BEV center cost of the TransFusion recipe.
+        Expected: the BEV cost reads only the centers of the whole boxes it gets, so every sample
+        is matched as its centers alone would match it.
+        Check: the batched ``gt_inds`` and ground truth counts against an unpadded per-sample
+        matching on the BEV centers.
         """
         generator = torch.Generator().manual_seed(0)
         num_classes, num_queries = 3, 12

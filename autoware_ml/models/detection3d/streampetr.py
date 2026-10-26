@@ -101,32 +101,25 @@ class _StreamPETRPositionEmbeddingExportWrapper(nn.Module):
 class _StreamPETRHeadMemoryExportWrapper(nn.Module):
     """Export the memory-recurrent detection head.
 
-    The graph carries the five temporal memory tensors in and out; the runtime
-    feeds the first ``memory_len`` entries of the previous frame's post-memory
-    back as pre-memory and manages timestamps outside the graph.
+    The graph carries the five temporal memory tensors in and out; the runtime feeds the first
+    ``memory_len`` entries of the previous frame's post-memory back as pre-memory and keeps the
+    timestamps outside the graph. ``all_cls_scores`` and ``all_bbox_preds`` hold the last
+    decoder layer only, the one :meth:`StreamPETRHead.predict` decodes: ``(1, num_classes, Q)``
+    and ``(1, 10, Q)`` for ``Q = num_queries + num_propagated``, so the runtime's
+    ``num_proposals`` must be ``Q`` (900 for the reference recipe).
 
-    ``all_cls_scores`` and ``all_bbox_preds`` hold the predictions of the last
-    decoder layer only, the layer :meth:`StreamPETRHead.predict` decodes offline:
-    ``(1, num_classes, Q)`` logits and ``(1, 10, Q)`` boxes for the
-    ``Q = num_queries + num_propagated`` queries, ``(1, 7, 900)`` and
-    ``(1, 10, 900)`` for the seven T4 classes and the 644 + 256 queries of the
-    reference recipe. The runtime decodes every row of them, so its
-    ``num_proposals`` parameter must be ``Q`` (900) for graphs exported from
-    this version; earlier exports stacked every decoder layer (5400 rows with
-    six layers), and the runtime published boxes of the intermediate layers too.
+    A stream starts with an all-zero bank, so the runtime clears the five tensors when it
+    allocates them and on every reset; the reset of the entries multiplies them by zero, which
+    keeps a leftover NaN. The graph treats a lane whose bank poses are all zero as a new stream
+    and seeds it as the head does for ``prev_exists = 0``; moving the zero bank by the inverse
+    pose would otherwise put every entry at the map origin.
 
-    A stream starts with an all-zero bank, so the runtime must clear the five
-    tensors when it allocates them, before the first frame, and on every
-    reset: device allocations are not zeroed, leftover values would read as a
-    continuing stream, and a leftover NaN or infinity survives the reset of
-    the entries, which multiplies them by zero. The graph recognizes a lane
-    whose bank poses are all zero (every written entry carries a pose with a
-    unit last row) and seeds it as the head does for ``prev_exists = 0``,
-    with the pseudo reference points and the identity pose in the first
-    ``num_propagated`` entries, so the first frame of a stream predicts what
-    the head predicts. Without that, moving the zero bank by the inverse ego
-    pose would put every entry at the map origin as seen from the vehicle,
-    kilometers away.
+    The graph moves the bank by ``data_ego_pose_inv`` and stores it by ``data_ego_pose``. Bound to
+    map-frame poses, it cancels translations as large as the distance from the pose origin, which
+    FP16 cannot (meters off a few kilometers out). The runtime should therefore bind the identity
+    and the motion since the previous frame, ``inv(pose) @ previous_pose`` in float64 (the
+    identity on a stream's first frame): the bank then stays in the previous vehicle frame, every
+    number within the perception range, and the result is the same.
     """
 
     def __init__(self, head: StreamPETRHead) -> None:
@@ -316,11 +309,8 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
                 frame_meta.scene_tokens, frame_meta.timestamps_seconds
             ),
             ego_pose=frame_meta.ego2globals,
-            # The poses and the bank are float32 in the map frame: a stored translation at 65 km
-            # resolves to one ulp (4 mm), and the head keeps the geometry at that resolution
-            # only because it composes the poses elementwise, in IEEE float32 under any matmul
-            # precision (a TF32 GEMM loses tens of meters there). The float64 inverse keeps the
-            # LU from adding its own rounding on top.
+            # Inverted in float64 so that the inversion adds no rounding to the map-frame pose;
+            # the head composes the poses elementwise (see compose_poses).
             ego_pose_inv=torch.linalg.inv(frame_meta.ego2globals.double()).float(),
             gt_boxes=gt_boxes,
             gt_labels=gt_labels,

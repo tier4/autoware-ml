@@ -114,12 +114,10 @@ def transform_reference_points(
 def compose_poses(lhs: torch.Tensor, rhs: torch.Tensor) -> torch.Tensor:
     """Compose batches of 4x4 poses, ``lhs @ rhs``, as a sum of elementwise products.
 
-    A float32 ``@`` follows the global matmul precision. The CLI runtime sets
-    ``torch.set_float32_matmul_precision("medium")``, which is TF32 on CUDA: a GEMM then rounds
-    its operands to a 10-bit mantissa, and a translation 65 km from the map origin loses tens of
-    meters (at batch size 1 a bank-sized pose product runs as one GEMM). Elementwise products
-    and their sum are not matmuls, so they stay in IEEE float32 under every precision setting;
-    they export as Mul and ReduceSum.
+    A float32 ``@`` follows the global matmul precision, which the CLI runtime sets to
+    ``"medium"``: TF32 on CUDA, which rounds a translation 65 km from the map origin by tens of
+    meters. Elementwise products and their sum stay in IEEE float32 under every precision
+    setting; they export as Mul and ReduceSum.
 
     Args:
         lhs: Left poses ``(..., 4, 4)``.

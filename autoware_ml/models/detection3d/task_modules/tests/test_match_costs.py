@@ -567,9 +567,8 @@ class TestBBox3DL1Cost(unittest.TestCase):
         """
         Input: the two-sample batch, whose padded ground truth box is all zeros as
         ``Detection3DGTBatch`` emits it.
-        Expected: the encoding takes the log of the sizes, which is -inf for the padded box, so
-        the padded column gets the sentinel cost instead and poisons no other column; without
-        that guard the whole distance row would turn into inf or nan.
+        Expected: the log of the padded box's zero sizes does not spread: its column gets the
+        sentinel cost and the other columns stay finite.
         Check: the cost is finite, the padded column is ``finfo.max`` and the valid columns of
         that sample stay small.
         """
