@@ -39,6 +39,8 @@ deploy:
     dynamo: false
     opset_version: 17
     do_constant_folding: false
+    # The stages of CenterPointDetection3DModel.build_stages() name every module's inputs
+    # and outputs; an input_names entry here would override the declared names.
     modules:
       pts_voxel_encoder_centerpoint:
         dynamic_axes:

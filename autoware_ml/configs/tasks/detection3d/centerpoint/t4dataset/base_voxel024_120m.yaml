@@ -16,11 +16,23 @@ deploy:
         min_shape: [1, "${max_num_points}", 11]
         opt_shape: [20000, "${max_num_points}", 11]
         max_shape: ["${eval_max_voxels}", "${max_num_points}", 11]
-      # Static BEV canvas: (batch, pfn_channels, *pts_middle_encoder.output_shape).
+      # Static BEV canvas of one frame: (1, scatter channels, *pts_middle_encoder.output_shape).
       spatial_features:
-        min_shape: [1, 32, 1020, 1020]
-        opt_shape: [1, 32, 1020, 1020]
-        max_shape: [1, 32, 1020, 1020]
+        min_shape:
+          - 1
+          - ${model.pts_middle_encoder.in_channels}
+          - ${model.pts_middle_encoder.output_shape[0]}
+          - ${model.pts_middle_encoder.output_shape[1]}
+        opt_shape:
+          - 1
+          - ${model.pts_middle_encoder.in_channels}
+          - ${model.pts_middle_encoder.output_shape[0]}
+          - ${model.pts_middle_encoder.output_shape[1]}
+        max_shape:
+          - 1
+          - ${model.pts_middle_encoder.in_channels}
+          - ${model.pts_middle_encoder.output_shape[0]}
+          - ${model.pts_middle_encoder.output_shape[1]}
 
 model:
   pts_middle_encoder:
