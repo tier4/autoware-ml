@@ -9,6 +9,7 @@ import torch
 from shapely.geometry import Point, Polygon
 
 from autoware_ml.metrics.base import EvalStage
+from autoware_ml.metrics.detection3d.frame_count import FrameCount as Det3DFrameCount
 from autoware_ml.metrics.detection3d.mean_ap import MeanAP
 from autoware_ml.metrics.detection3d.suite import Detection3DMetricSuite
 from autoware_ml.metrics.filters import CollisionFilter, CorridorFilter, RegionFilter
@@ -513,6 +514,44 @@ def test_point_cloud_suite_frame_count_follows_filter_coverage() -> None:
     assert report["num_frames"] == 2.0
     assert report["region_road/num_frames"] == 1.0
     assert len(suite.state_for(None, region).frames) == 1
+
+
+def test_detection3d_suite_frame_count_follows_filter_coverage() -> None:
+    # Two frames, 's_nomap' without a map: the whole-scene count sees both, the
+    # road slice only the mapped frame, matching the coverage counters.
+    region = _region_filter(["road"], _road_map())
+    suite = Detection3DMetricSuite(
+        components=[
+            Det3DFrameCount(stages=["test"]),
+            Det3DFrameCount(stages=["test"], filter=region),
+        ],
+        class_names=("car",),
+        ranges=(),
+    )
+    suite.update(
+        {
+            "predictions": [
+                {
+                    "bboxes_3d": torch.tensor([_box(10.0)]),
+                    "scores_3d": torch.tensor([0.9]),
+                    "labels_3d": torch.tensor([0]),
+                },
+                {
+                    "bboxes_3d": torch.zeros((0, 9)),
+                    "scores_3d": torch.zeros((0,)),
+                    "labels_3d": torch.zeros((0,), dtype=torch.long),
+                },
+            ],
+            "gt_boxes": [torch.tensor([_box(10.0)]), torch.tensor([_box(10.0)])],
+            "gt_labels": [torch.tensor([0]), torch.tensor([0])],
+            "ego2global": [np.eye(4), np.eye(4)],
+            "lanelet_map_path": [STUB_MAP_PATH, None],
+        }
+    )
+    report = suite.result(EvalStage.TEST)
+    assert report["num_frames"] == 2.0
+    assert report["region_road/num_frames"] == 1.0
+    assert suite.region_frames_covered.tolist() == [1]
 
 
 def test_detection3d_suite_excludes_scene_without_lanelet_map() -> None:
