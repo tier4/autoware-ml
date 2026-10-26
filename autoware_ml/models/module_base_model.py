@@ -419,40 +419,26 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
         raise NotImplementedError("Model must implement build_export_spec()")
 
     def build_stages(self) -> Sequence[Stage] | None:
-        """Declare the model's deployment stage graph, or ``None`` when it has none.
+        """Declare the deployment stage graph, or return ``None`` for a model without one.
 
-        A stage graph (:mod:`autoware_ml.deployment.stages`) states once how inference
-        splits into exportable graphs and the PyTorch glue between them. Declaring it
-        gives the model its :meth:`build_export_specs` for free — one spec per
-        ``GraphStage``, traced with the tensors the glue produces — and states the
-        deployed inference in a form any backend can run, whose model outputs
-        :meth:`build_deployed_eval_output` scores. Models that keep a hand-written
-        :meth:`build_export_specs` leave this at ``None``.
-
-        Every call builds fresh export wrappers, and a wrapper may hold a *copy* of a
-        submodule rather than a reference (CenterPoint's head is deep-copied for export).
-        Stages therefore capture the model as it is at call time: replace modules (for
-        example with quantized ones) before calling this, and call it again after any
-        later change instead of reusing earlier stages.
+        When declared, :meth:`build_export_specs` derives from it. Each call builds fresh
+        export wrappers, some holding copies of submodules (CenterPoint's head), so call it
+        after replacing modules (e.g. with quantized ones) instead of reusing earlier stages.
 
         Returns:
-            The ordered stages, or ``None`` for models without a stage graph.
+            The ordered stages, or ``None``.
         """
         return None
 
     def build_deployed_eval_output(
         self, multi_task_batch_inputs: ModelBatchInputs, outputs: Mapping[str, torch.Tensor]
     ) -> dict[str, Any]:
-        """Map the model outputs of a deployed run to the flat dict the metrics read.
+        """Map a deployed run's model outputs to what :meth:`build_eval_output` returns.
 
-        A backend running the stage graph (the PyTorch modules, ONNX Runtime sessions or
-        TensorRT engines) ends with the *model outputs*: the graph outputs no later stage
-        consumes, keyed by their declared names
-        (:func:`~autoware_ml.deployment.stages.model_output_names`). This hook turns them
-        into what :meth:`build_eval_output` produces from ``forward()``'s typed outputs, so
-        every backend is scored by the same metrics. It is a hook of its own because the
-        deployed graphs may emit something else than ``forward`` does (decoded boxes, or
-        labels and scores instead of logits).
+        The model outputs are the stage graph's unconsumed graph outputs
+        (:func:`~autoware_ml.deployment.stages.model_output_names`). They can differ from
+        ``forward()``'s (decoded boxes, or labels and scores instead of logits), so each
+        model maps them itself.
 
         Args:
             multi_task_batch_inputs: Model inputs the run started from.
@@ -460,10 +446,6 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
 
         Returns:
             Flat dict the attached metric suites read.
-
-        Raises:
-            NotImplementedError: If the model does not implement this mapping; a model
-                without a stage graph has none.
         """
         raise NotImplementedError(
             f"{type(self).__name__} does not implement build_deployed_eval_output(), so the "
@@ -475,13 +457,10 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
     ) -> dict[str, ExportSpec]:
         """Build per-module deployment export specifications.
 
-        When the model declares :meth:`build_stages`, the specs are derived from that
-        declaration (:func:`~autoware_ml.deployment.export_specs.build_export_specs_from_stages`):
-        the stage graph runs once on the example batch and every ``GraphStage`` becomes
-        one module keyed by its stage name. Otherwise the default wraps
-        :meth:`build_export_spec` as a single ``end_to_end`` module; models with
-        separate exportable sub-graphs and no stage graph override this to return one
-        spec per architectural component.
+        A model that declares :meth:`build_stages` gets one spec per ``GraphStage``, keyed
+        by stage name. Otherwise the default implementation wraps :meth:`build_export_spec`
+        as a single ``end_to_end`` module. Models with separate exportable sub-graphs
+        override this to return one spec per architectural component.
 
         Args:
             multi_task_batch_inputs: Example preprocessed batch used for export.
@@ -490,14 +469,12 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
             Ordered mapping of module name to export specification.
 
         Raises:
-            RuntimeError: If the model declares a stage graph but it, or any of its
-                submodules, is in training mode; tracing the graphs would update the
-                BatchNorm running statistics.
+            RuntimeError: If a stage-graph model or any submodule is in training mode:
+                tracing would update the BatchNorm running statistics.
         """
         stages = self.build_stages()
         if stages is not None:
-            # Every submodule, not only the model's own flag: a submodule can be left in
-            # training mode under a model in eval mode.
+            # A submodule can be in training mode under a model in eval mode.
             in_training = [
                 name or "<model>" for name, module in self.named_modules() if module.training
             ]

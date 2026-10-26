@@ -12,11 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Stage-declaration contract: ``stages.py`` and ``types/backend.py`` alone, on toy stages.
-
-Everything here is checkable with no export, pipeline, or backend module — it is the
-invariant every later deployment consumer builds on, so it is tested where it is declared.
-"""
+"""Unit tests for the stage declaration in ``stages.py`` and ``types/backend.py``."""
 
 from __future__ import annotations
 
@@ -114,8 +110,6 @@ class TestStageDeclaration:
             validate_stages((*_toy_stages(), post))
 
     def test_a_glue_output_the_model_hands_over_is_not_a_model_output(self):
-        # Only graph outputs are model outputs: glue after the last graph that leaves a
-        # graph output unconsumed keeps that output, not its own.
         post = TorchStage(
             "post", run=lambda state: {"aux": state["plus"]}, inputs=("plus",), outputs=("aux",)
         )
@@ -132,7 +126,6 @@ class TestStageDeclaration:
             GraphStage("h", module=_Double(), inputs=(), outputs=("y",))
 
     def test_graph_stage_names_each_onnx_tensor_once(self):
-        # The exporter would rename the repeated input to ``x.1``, away from the declaration.
         with pytest.raises(ValueError, match=r"\['x'\] more than once in its inputs"):
             GraphStage("sub", module=_Subtract(), inputs=("x", "x"), outputs=("y",))
         with pytest.raises(ValueError, match=r"\['y'\] more than once in its outputs"):
@@ -143,7 +136,6 @@ class TestStageDeclaration:
             validate_stages((*_toy_stages(), {"name": "post"}))
 
     def test_names_are_declared_as_tuples_not_strings(self):
-        # A str would be iterated into one-letter names.
         with pytest.raises(TypeError, match=r"declares its outputs as the string 'x'"):
             TorchStage("seed", run=lambda state: {"x": 1}, inputs=(), outputs="x")
         with pytest.raises(TypeError, match=r"declares its inputs as the string 'xy'"):
@@ -192,8 +184,7 @@ class TestRunStagesInTorch:
         assert set(state.tensors) == {"x", "y", "z", "plus", "minus"}
 
     def test_multi_input_graph_stage_positional_order(self):
-        # The module's positional arguments follow ``inputs``, not the module's parameter
-        # names or the order the glue produced them in (every multi-input graph relies on it).
+        # Arguments follow ``inputs``, not the parameter names or the glue's output order.
         stages = (
             TorchStage(
                 "prep",
@@ -256,7 +247,6 @@ class TestRunStagesInTorch:
             run_stages_in_torch(stages, {"x": torch.tensor([1.0])}, torch.device("cpu"))
 
     def test_graph_stage_outputs_are_tensors(self):
-        # The exporter would flatten the nested tuple into three outputs and drop the int.
         for module, other in ((_NestedHead(), "tuple"), (_ScalarHead(), "int")):
             stages = list(_toy_stages())
             stages[3] = GraphStage("head", module=module, inputs=("z",), outputs=("plus", "minus"))

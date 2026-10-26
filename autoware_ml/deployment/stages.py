@@ -14,26 +14,10 @@
 
 """Stage graph: one declaration of how a model splits into deployable graphs.
 
-A model describes its inference as an ordered list of *stages* over a shared bag of
-named tensors (the :class:`RunState`):
-
-- :class:`GraphStage` — an exportable sub-graph: an ``nn.Module`` plus the run-state
-  names it reads (its ONNX input names) and writes (its ONNX output names). One
-  ``GraphStage`` is one ``deploy.onnx.modules.<name>`` entry, one ``<name>.onnx`` and
-  one ``<name>.engine``.
-- :class:`TorchStage` — glue that is not exported (pillar decoration, BEV scatter, shape
-  bookkeeping ...). It always runs in PyTorch, on every backend, and declares the names
-  it reads and writes like a graph does, so the whole dataflow is static.
-
-From the declaration, generic code derives the export specs and their trace inputs
-(:mod:`.export_specs`) and the artifact names (:func:`artifact_path`); later consumers
-(a per-backend pipeline, verification, evaluation) read the same declaration. The graph
-outputs no later stage consumes (:func:`model_output_names`) are the *model outputs*: what
-a backend hands to the model's ``build_deployed_eval_output``, which turns them into the
-flat dict ``build_eval_output`` produces from ``forward()``'s typed outputs. The deployed
-graphs may emit something else than ``forward`` does (labels and scores where it returns
-logits, decoded boxes where it returns head maps), so that mapping is the model's, next to
-its ``build_stages``. Nothing model-specific lives outside the model.
+Inference is an ordered list of stages over named tensors (:class:`RunState`): a
+:class:`GraphStage` is one exported ONNX / TensorRT graph, a :class:`TorchStage` is glue
+that runs in PyTorch on every backend. Each stage declares the names it reads and writes,
+so the dataflow is checked from the declaration and the export specs derive from it.
 """
 
 from __future__ import annotations
@@ -51,15 +35,12 @@ from autoware_ml.types.backend import Backend
 
 @dataclass
 class RunState:
-    """The dataflow state of one stage-graph run: the named tensors stages read and write.
+    """Named tensors of one stage-graph run.
 
     Attributes:
-        batch: The preprocessed batch the run started from (the ``ModelBatchInputs`` the
-            model's ``on_after_batch_transfer`` produced). Only glue reads it; the graph
-            stages see run-state tensors.
-        device: Device exportable stages execute on; glue stages place their outputs
-            here so the next graph stage finds its inputs in place.
-        tensors: Name -> value produced so far (graph inputs/outputs and glue results).
+        batch: The preprocessed batch the run started from; only glue reads it.
+        device: Device the graph stages run on.
+        tensors: Tensors produced so far, by name.
     """
 
     batch: Any
@@ -67,12 +48,7 @@ class RunState:
     tensors: dict[str, Any] = field(default_factory=dict)
 
     def __getitem__(self, name: str) -> Any:
-        """Read a produced tensor by name.
-
-        :func:`validate_stages` already checked that every declared input is produced;
-        a miss here is a glue stage reading a name it did not declare (it runs on a view
-        narrowed to its declared inputs, :meth:`narrowed`), and the error says so.
-        """
+        """Return a produced tensor; a miss means a stage read a name it did not declare."""
         try:
             return self.tensors[name]
         except KeyError as error:
@@ -86,9 +62,7 @@ class RunState:
         return RunState(self.batch, self.device, {name: self.tensors[name] for name in names})
 
     def add(self, produced: Mapping[str, Any]) -> None:
-        """Merge one stage's named results (already checked against its declaration when
-        the stage ran; :func:`validate_stages` made sure no two stages write the same
-        name)."""
+        """Merge one stage's named results."""
         self.tensors.update(produced)
 
 
@@ -103,17 +77,15 @@ def _reject_bare_string(stage: Stage, kind: str, names: Sequence[str]) -> None:
 
 @dataclass(frozen=True)
 class TorchStage:
-    """A non-exportable glue stage that always runs in PyTorch.
+    """Glue that is not exported and runs in PyTorch on every backend.
 
     Attributes:
-        name: Unique stage name (latency breakdown key).
-        run: ``fn(state) -> {name: value}``; the returned mapping is merged into the
-            run state. Reads earlier results via ``state[name]`` and the raw batch via
-            ``state.batch``, and must not modify them in place: they are the same
-            tensors the earlier graphs were traced with.
-        inputs: Run-state names the stage reads (``()`` for glue that reads only the
-            batch). It runs on a view narrowed to these, so an undeclared read fails.
-        outputs: Run-state names the stage writes; ``run`` must return exactly these.
+        name: Unique stage name.
+        run: ``fn(state) -> {name: value}`` returning exactly ``outputs``. It must not
+            modify what it reads in place: earlier graphs were traced with those tensors.
+        inputs: Run-state names the stage reads (``()`` when it reads only
+            ``state.batch``); it runs on a view holding only these.
+        outputs: Run-state names the stage writes.
     """
 
     name: str
@@ -130,26 +102,19 @@ class TorchStage:
 
 @dataclass(frozen=True)
 class GraphStage:
-    """An exportable sub-graph: one ONNX / TensorRT artifact.
+    """One exported ONNX / TensorRT graph.
 
     Attributes:
-        name: Unique stage name; also the ``deploy.onnx.modules`` key and the artifact
-            stem (``<name>.onnx``).
-        module: The traced module. Its positional forward arguments are the run-state
-            tensors named by ``inputs``, in order.
-        inputs: Run-state names fed to the module — these ARE the ONNX input names.
-        outputs: Names the module's outputs are written under — the ONNX output names,
-            in the module's return order (a single tensor return maps to one name). The
-            ones no later stage reads are model outputs (:func:`model_output_names`).
-        torch_fallback_backends: Backends on which this stage runs its PyTorch module
-            instead of an artifact — for graphs a backend cannot execute, e.g. a
-            plugin-op graph on ONNX Runtime.
-        onnx_dynamic_axes: Axes this graph makes dynamic *by construction*
-            (``{tensor_name: {dim_index: dim_name}}``), for graphs whose dynamic axes are
-            a property of the declaration rather than a per-config choice — a point
-            model where every tensor is indexed by a point count, say. Becomes the
-            derived spec's ``dynamic_axes``; a ``dynamic_axes`` under
-            ``deploy.onnx.modules.<name>`` applies when the stage declares none.
+        name: Unique stage name, also the ``deploy.onnx.modules`` key and the artifact stem.
+        module: The traced module; its positional arguments are the ``inputs`` tensors.
+        inputs: Run-state names fed to the module, in order; they are the ONNX input names.
+        outputs: ONNX output names, in the module's return order. Those no later stage
+            reads are the model outputs (:func:`model_output_names`).
+        torch_fallback_backends: Backends that run the PyTorch module instead of the
+            artifact, for graphs they cannot execute (plugin ops on ONNX Runtime).
+        onnx_dynamic_axes: Axes dynamic by construction, ``{tensor: {dim: name}}``. They
+            become the spec's ``dynamic_axes``; the module's config ``dynamic_axes`` apply
+            only when the stage declares none.
     """
 
     name: str
@@ -164,8 +129,8 @@ class GraphStage:
         _reject_bare_string(self, "outputs", self.outputs)
         if not self.inputs or not self.outputs:
             raise ValueError(f"GraphStage {self.name!r} must declare inputs and outputs.")
-        # ONNX names every graph input and output once; the exporter would rename a repeat
-        # (``x`` -> ``x.1``) and the artifact would no longer carry the declared names.
+        # The exporter renames a repeated name (``x`` -> ``x.1``), so the artifact would not
+        # carry the declared names.
         for kind, names in (("inputs", self.inputs), ("outputs", self.outputs)):
             repeated = sorted({name for name in names if names.count(name) > 1})
             if repeated:
@@ -181,21 +146,14 @@ Stage = TorchStage | GraphStage
 def validate_stages(stages: Sequence[Stage]) -> tuple[Stage, ...]:
     """Check a stage declaration's dataflow and return it as a tuple.
 
-    Every stage declares what it reads and writes, so the dataflow is checked here, once,
-    from the declaration alone: every input is produced by an earlier stage, every name
-    is written by exactly one stage, and at least one graph output is left for the model
-    to hand to ``build_deployed_eval_output``. What the run checks is the other half —
-    that a stage's module or ``run`` returns what it declares.
-
-    Not checked: that :func:`model_output_names` are what the model's
-    ``build_deployed_eval_output`` accepts. Only the model knows that, so each model's own
-    tests pin it.
+    Every input must be written by an earlier stage, every name by exactly one stage, and at
+    least one graph output must be left as a model output. Whether a stage returns what it
+    declares is checked when it runs; whether the model outputs are what
+    ``build_deployed_eval_output`` reads is left to each model's tests.
 
     Raises:
-        TypeError: On an entry that is neither a ``TorchStage`` nor a ``GraphStage``.
-        ValueError: On duplicate stage names, a name written by two stages, a stage
-            reading a name no earlier stage wrote, no exportable stage, or no model
-            output (every graph output consumed by later glue).
+        TypeError: On an entry that is not a stage.
+        ValueError: On a dataflow violation.
     """
     stages = tuple(stages)
     others = [type(stage).__name__ for stage in stages if not isinstance(stage, Stage)]
@@ -237,12 +195,10 @@ def graph_stages(stages: Sequence[Stage]) -> tuple[GraphStage, ...]:
 
 
 def model_output_names(stages: Sequence[Stage]) -> tuple[str, ...]:
-    """The model outputs: the graph outputs no later stage (graph or glue) consumes.
+    """Return the graph outputs no later stage reads, in stage and declaration order.
 
-    Stage order, then declared order. A chain (``glue -> graph -> glue -> graph``) yields
-    its last graph's outputs; several heads over one encoder (``glue -> encoder -> seg ->
-    det``) yield every head's outputs, in the order the heads are declared, and not the
-    encoder's features the heads read.
+    These are the model outputs: the last graph's outputs for a chain, every head's outputs
+    for several heads over one encoder.
     """
     stages = tuple(stages)
     names: list[str] = []
@@ -267,10 +223,9 @@ def artifact_path(output_dir: str | Path, stage_name: str, backend: Backend) -> 
 
 
 def run_torch_stage(stage: TorchStage, state: RunState) -> dict[str, Any]:
-    """Run a glue stage on the view of the run state it declared and name its results.
+    """Run a glue stage on its declared inputs and check its results against ``outputs``.
 
-    The one place a glue ``run`` is checked against its declaration; whatever runs a
-    stage graph runs its glue through it.
+    Every runner of a stage graph runs its glue through here.
 
     Raises:
         TypeError: When ``run`` returns something other than a mapping.
@@ -291,19 +246,17 @@ def run_torch_stage(stage: TorchStage, state: RunState) -> dict[str, Any]:
 
 
 def run_stages_in_torch(stages: Sequence[Stage], batch: Any, device: torch.device) -> RunState:
-    """Run every stage with its PyTorch module and return the filled run state.
+    """Run every stage in PyTorch and return the filled run state.
 
-    This is the reference execution of a stage graph: what export uses to obtain each
-    graph stage's trace inputs. Graph stages receive the run-state tensors named by their
-    ``inputs`` (moved to ``device``) as positional arguments, in ``inputs`` order, and
-    must return one tensor per declared output, in ``outputs`` order. The modules run in
-    the mode they are in; export puts them in eval mode first.
+    Export takes its trace inputs from this run. A graph stage gets its ``inputs`` as
+    positional arguments and returns one tensor per ``outputs`` name, in order. Modules run
+    in their current mode; export switches them to eval first.
 
     Raises:
-        TypeError: When a graph stage returns a mapping (its outputs are positional) or
-            anything but tensors, or a glue stage returns something other than a mapping.
-        ValueError: When a stage returns something other than what it declares as
-            ``outputs``.
+        TypeError: When a graph stage returns a mapping or a non-tensor, or a glue stage
+            returns something other than a mapping.
+        ValueError: When a stage returns other names, or another number of tensors, than
+            it declares.
     """
     stages = validate_stages(stages)
     state = RunState(batch=batch, device=device)
@@ -327,8 +280,8 @@ def run_stages_in_torch(stages: Sequence[Stage], batch: Any, device: torch.devic
                     f"GraphStage {stage.name!r} returned {len(raw)} tensor(s) but declares "
                     f"outputs {list(stage.outputs)}."
                 )
-            # One tensor per ONNX output: the exporter flattens a nested tuple into more
-            # outputs than declared and drops a Python value, so neither matches the names.
+            # The exporter flattens a nested tuple into extra outputs and drops Python values,
+            # so neither would match the declared names.
             others = sorted({type(value).__name__ for value in raw if not torch.is_tensor(value)})
             if others:
                 raise TypeError(

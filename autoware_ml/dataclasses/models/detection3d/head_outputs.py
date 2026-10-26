@@ -208,10 +208,10 @@ class CenterHeadOutputs(BaseModel):
     @classmethod
     def from_export_tensors(cls, tensors: Mapping[str, torch.Tensor]) -> CenterHeadOutputs:
         """
-        Rebuild the head outputs from the tensors a deployed graph emitted under their names.
+        Rebuild the head outputs from exported tensors keyed by name.
 
-        The inverse of :meth:`export_tensors`: a branch the head does not predict (``vel``)
-        is absent from ``tensors`` and stays unset.
+        The inverse of :meth:`export_tensors`; a branch the head does not predict (``vel``)
+        stays unset.
 
         Args:
             tensors: The exported tensors keyed by output name.
@@ -220,8 +220,7 @@ class CenterHeadOutputs(BaseModel):
             The head outputs.
 
         Raises:
-            ValueError: If a name is not an output of the head, or a branch every head
-                predicts is missing.
+            ValueError: If a name is not a head output, or a required branch is missing.
         """
         return cls(**_export_tensors_by_branch(cls.model_fields, tensors))
 
@@ -397,19 +396,7 @@ class Detection3DHeadOutputs(BaseModel):
 def _export_tensors_by_branch(
     branches: Mapping[str, object], tensors: Mapping[str, torch.Tensor]
 ) -> dict[str, torch.Tensor | None]:
-    """
-    Key exported tensors by head branch, unset branches as None.
-
-    Args:
-        branches: The branches of the head (its pydantic fields).
-        tensors: The exported tensors keyed by output name.
-
-    Returns:
-        One entry per branch.
-
-    Raises:
-        ValueError: If a name is not a branch of the head.
-    """
+    """Key exported tensors by head branch, ``None`` for a branch not exported."""
     unknown = sorted(set(tensors) - set(branches))
     if unknown:
         raise ValueError(f"The head has no output named {unknown}, it has {list(branches)}.")

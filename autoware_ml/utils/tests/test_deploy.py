@@ -207,8 +207,7 @@ def test_normalize_dynamic_shapes_wraps_varargs_forward() -> None:
 
 
 def test_export_to_onnx_refuses_declared_axes_under_dynamo(tmp_path: Path) -> None:
-    # A stage graph's onnx_dynamic_axes only reach the legacy exporter; silently exporting
-    # a static graph under dynamo=true is the failure this guards against.
+    # Under dynamo=true these axes would silently be exported static.
     with pytest.raises(ValueError, match="dynamo=false"):
         export_to_onnx(
             ExportSpec(

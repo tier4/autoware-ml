@@ -77,8 +77,7 @@ class _ExportModel(ModuleBaseModel):
         self.head = _HeadModule()
         self.module_names = tuple(module_names)
         self.supported_stages = supported_stages
-        # A spec's dynamic_axes only reach the legacy (dynamo=False) exporter; a spec that
-        # declares them under dynamo=True is refused, so only the legacy tests ask for them.
+        # dynamo=True refuses a spec's dynamic_axes, so only the legacy-exporter tests set them.
         self.legacy_dynamic_axes = legacy_dynamic_axes
 
     def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> torch.Tensor:

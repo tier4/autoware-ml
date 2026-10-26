@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""``build_stages()`` derives ``build_export_specs()``; models without stages are untouched."""
+"""Unit tests for export specs derived from a stage graph."""
 
 from __future__ import annotations
 
@@ -50,8 +50,6 @@ class _Head(nn.Module):
 
 
 class _ToyModel(ModuleBaseModel):
-    """The toy models take a plain dict batch; the base class only needs the two ctor args."""
-
     def __init__(self) -> None:
         super().__init__(
             log_dict_configs=LogDictConfigs(prog_bar=False),
@@ -64,8 +62,6 @@ class _ToyModel(ModuleBaseModel):
 
 
 class _StagedModel(_ToyModel):
-    """Two exported graphs with glue between them, declared once as a stage graph."""
-
     def __init__(self) -> None:
         super().__init__()
         self.encoder = _Encoder()
@@ -138,7 +134,6 @@ def test_trace_inputs_are_the_run_state_tensors_the_glue_produced() -> None:
     (bev,) = specs["head"].args
     # encoder doubles, scatter sums the rows: [[2,4],[6,8]] -> [[8,12]]
     assert torch.equal(bev, torch.tensor([[8.0, 12.0]]))
-    # Running the exported modules on their own trace inputs reproduces forward().
     plus, minus = specs["head"].module(*specs["head"].args)
     forward = model(_batch())
     assert torch.equal(plus, forward["plus"]) and torch.equal(minus, forward["minus"])
@@ -159,7 +154,7 @@ def test_stage_declared_axes_land_in_the_spec_and_fallback_keeps_export_targets(
     specs = build_export_specs_from_stages(stages, {"x": torch.ones(3, 2)}, torch.device("cpu"))
     spec = specs["points"]
     assert spec.dynamic_axes == {"x": {0: "num_points"}, "y": {0: "num_points"}}
-    # A runtime fallback says where the artifact is *run*, not whether it is exported.
+    # A fallback changes where the graph runs, not whether it is exported.
     assert spec.supported_stages == frozenset({"onnx", "tensorrt"})
 
 
@@ -170,7 +165,6 @@ def test_a_stage_graph_refuses_to_trace_in_training_mode() -> None:
 
 
 def test_a_stage_graph_refuses_to_trace_with_a_submodule_in_training_mode() -> None:
-    # The model's own flag says eval, one of its submodules says training.
     model = _StagedModel().eval()
     model.encoder.train()
     with pytest.raises(RuntimeError, match=r"eval mode.*\['encoder', 'encoder.linear'\]"):
@@ -178,8 +172,6 @@ def test_a_stage_graph_refuses_to_trace_with_a_submodule_in_training_mode() -> N
 
 
 class _Wrapper(nn.Module):
-    """An export wrapper around a model submodule; it starts in nn.Module's training mode."""
-
     def __init__(self, inner: nn.Module) -> None:
         super().__init__()
         self.inner = inner
@@ -202,14 +194,14 @@ def test_export_leaves_the_submodules_a_wrapper_shares_in_eval_mode(tmp_path: Pa
     export_to_onnx(
         spec, OmegaConf.create({"dynamo": False, "opset_version": 17}), tmp_path / "wrapped.onnx"
     )
-    # The exporter hands the wrapper its own mode back, recursively: a wrapper left in
-    # training mode would have put the shared BatchNorm in training mode as well.
+    # torch.onnx.export restores the wrapper's mode recursively; a wrapper left in training
+    # mode would have switched the shared BatchNorm to training mode.
     assert not any(module.training for module in shared.modules())
 
 
 def test_multi_input_spec_args_follow_the_declared_input_order() -> None:
-    # ONNX binds inputs by position: args, input names and the module's parameters must
-    # all follow ``inputs``, whatever order the glue produced the tensors in.
+    # ONNX binds inputs by position: args and names follow ``inputs``, not the order the glue
+    # produced the tensors in.
     class _Subtract(nn.Module):
         def forward(self, a, b):
             return a - b
@@ -243,7 +235,7 @@ def test_scoring_deployed_outputs_needs_the_model_mapping() -> None:
 
 
 def test_stages_passed_as_a_generator_export_every_graph() -> None:
-    # The declaration is read once: a one-shot iterable still yields its graph specs.
+    # The stages must be read once: a generator is empty on a second pass.
     def stages():
         yield TorchStage("seed", run=lambda state: {"x": torch.ones(2)}, inputs=(), outputs=("x",))
         yield GraphStage("g", module=nn.Identity(), inputs=("x",), outputs=("y",))

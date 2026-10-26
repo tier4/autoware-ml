@@ -7,16 +7,14 @@ voxel_size: [0.24, 0.24, 8.0]
 
 deploy:
   tensorrt:
-    # Keyed by ONNX input name; one table for both exported modules. An entry that is
-    # not an input of the engine being built is not applied to it.
+    # One table for both engines, keyed by ONNX input name; each engine takes its own inputs.
     input_shapes:
       input_features:
-        # (pillars, max points per pillar, decorated channels): the pillar count is bounded by
-        # the evaluation voxel limit, the channels are [x, y, z, i, t] + cluster and center offsets.
+        # (pillars, points per pillar, 11 = x, y, z, i, t + cluster and center offsets).
         min_shape: [1, "${max_num_points}", 11]
         opt_shape: [20000, "${max_num_points}", 11]
         max_shape: ["${eval_max_voxels}", "${max_num_points}", 11]
-      # Static BEV canvas of one frame: (1, scatter channels, *pts_middle_encoder.output_shape).
+      # Static: one frame's BEV canvas.
       spatial_features:
         min_shape:
           - 1

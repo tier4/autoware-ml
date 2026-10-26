@@ -12,15 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Build the per-module export specs from a stage graph.
-
-:func:`build_export_specs_from_stages` is what :meth:`ModuleBaseModel.build_export_specs`
-returns for a model that declares ``build_stages()``: the stage graph runs once in PyTorch
-on the example batch, and every :class:`~autoware_ml.deployment.stages.GraphStage` becomes
-one :class:`~autoware_ml.utils.deploy.ExportSpec` whose trace inputs are the run-state
-tensors it declares as inputs. :meth:`DeploymentExport.export` consumes the result exactly
-like a hand-written mapping.
-"""
+"""Export specs derived from a stage graph."""
 
 from __future__ import annotations
 
@@ -41,17 +33,10 @@ from autoware_ml.utils.deploy import ExportSpec
 
 
 def export_spec_for_stage(stage: GraphStage, state: RunState) -> ExportSpec:
-    """Build one graph stage's :class:`ExportSpec` from a filled run state.
+    """Build one graph stage's spec from a completed run of the stage graph.
 
-    Args:
-        stage: The exportable stage.
-        state: Run state of a completed PyTorch run of the whole stage graph; the
-            stage's ``inputs`` are read from it as the trace arguments.
-
-    Returns:
-        Spec whose ``input_param_names`` / ``output_names`` are the stage's declared
-        run-state names and whose ``dynamic_axes`` are the stage's intrinsic axes (``None``
-        when it declares none, so the module's config entry applies).
+    The spec takes the stage's declared input and output names. Its ``dynamic_axes`` are the
+    stage's ``onnx_dynamic_axes``, or ``None`` so that the module's config entry applies.
     """
     dynamic_axes = (
         {name: dict(axes) for name, axes in stage.onnx_dynamic_axes.items()}
@@ -70,22 +55,17 @@ def export_spec_for_stage(stage: GraphStage, state: RunState) -> ExportSpec:
 def build_export_specs_from_stages(
     stages: Sequence[Stage], batch: Any, device: torch.device
 ) -> dict[str, ExportSpec]:
-    """Run the stage graph once and return one export spec per graph stage, in order.
+    """Run the stage graph once and return ``{stage name: ExportSpec}`` per graph stage.
 
-    Every graph stage's module is put in eval mode first, the mode it is traced and exported
-    in. An export wrapper starts in training mode (``nn.Module``'s default), and
-    ``torch.onnx.export`` hands the exported module its own mode back when it is done,
-    recursively: a wrapper left in training mode would put the model submodules it shares
-    in training mode too, and their BatchNorm layers would keep training after the export.
+    The graph modules are switched to eval first. An export wrapper starts in training
+    mode, and ``torch.onnx.export`` restores the module's mode recursively when it is done:
+    a wrapper left in training mode would switch the submodules it shares with the model,
+    BatchNorm included, to training mode.
 
     Args:
-        stages: The model's stage declaration (``model.build_stages()``).
-        batch: One preprocessed example batch (what ``on_after_batch_transfer`` returns).
-        device: Device the tracing run executes on.
-
-    Returns:
-        Ordered mapping ``{stage.name: ExportSpec}`` — the same shape a hand-written
-        ``build_export_specs`` returns.
+        stages: The model's ``build_stages()``.
+        batch: One preprocessed example batch.
+        device: Device of the tracing run.
     """
     stages = validate_stages(stages)
     for stage in graph_stages(stages):

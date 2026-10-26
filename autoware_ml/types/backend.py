@@ -12,13 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Inference backend names.
-
-A *backend* is whatever runs the model's forward: the PyTorch modules themselves,
-an ONNX Runtime session, or a TensorRT engine. PyTorch is a backend like any other
-so that ``trainer.test`` and deployment evaluation report under the same metric
-keys (``{split}/{backend}/{metric}``).
-"""
+"""Inference backend names."""
 
 from __future__ import annotations
 
@@ -26,12 +20,7 @@ from enum import StrEnum
 
 
 class Backend(StrEnum):
-    """Inference backend identifiers used in configs, metric keys, and artifact lookups.
-
-    A ``StrEnum`` so that ``f"{backend}"`` yields the config spelling (``onnx``), which
-    is what the metric keys are built from. Construct with ``Backend(name)``; an unknown
-    name raises a ``ValueError`` listing the supported ones.
-    """
+    """Inference backend; formats as its config spelling (``f"{Backend.ONNX}" == "onnx"``)."""
 
     PYTORCH = "pytorch"
     ONNX = "onnx"

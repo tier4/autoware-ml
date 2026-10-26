@@ -241,18 +241,13 @@ class CenterPointDetection3DModel(ModuleBaseModel):
         )
 
     def build_stages(self) -> Sequence[Stage]:
-        """Declare the deployed CenterPoint: two exported graphs with PyTorch glue between.
-
-        The split is the one the Autoware runtime expects and the module names are the
-        artifact names it loads::
+        """Declare the split the Autoware runtime loads; stage names match its artifact names::
 
             decorate (torch) -> pts_voxel_encoder_centerpoint (graph)
                 -> scatter (torch) -> pts_backbone_neck_head_centerpoint (graph)
 
-        Pillar decoration and the BEV scatter are pure tensor bookkeeping without learned
-        parameters and stay outside the graphs. The export specs are derived from this
-        declaration, and running it reproduces forward() up to the head maps, which
-        :meth:`build_deployed_eval_output` scores.
+        Pillar decoration and the BEV scatter have no learned parameters and stay out of the
+        graphs.
         """
 
         def voxels_data(state: RunState) -> VoxelsData:
@@ -298,8 +293,8 @@ class CenterPointDetection3DModel(ModuleBaseModel):
                 "pts_backbone_neck_head_centerpoint",
                 module=head_wrapper,
                 inputs=("spatial_features",),
-                # The head's ONNX outputs are its CenterHeadOutputs branches under their
-                # names; build_deployed_eval_output rebuilds the typed outputs from them.
+                # Named after the CenterHeadOutputs fields; build_deployed_eval_output
+                # rebuilds the typed outputs by name.
                 outputs=tuple(head_wrapper.output_names),
             ),
         )

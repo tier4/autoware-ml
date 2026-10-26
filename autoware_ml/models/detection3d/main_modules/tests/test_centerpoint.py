@@ -328,13 +328,12 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
 
     def test_exported_graphs_keep_the_runtime_names_and_the_model_in_eval_mode(self) -> None:
         """
-        Test that the exported ONNX graphs carry the input and output names, in the order the
-        runtime binds them, and that exporting them leaves every submodule of the model in
-        eval mode: the export wrappers share the voxel encoder, backbone and neck with it.
+        Test that the exported graphs carry the runtime's input and output names in binding
+        order, and that exporting leaves the submodules the wrappers share in eval mode.
         """
         self.centerpoint.eval()
         specs = self.centerpoint.build_export_specs(self._build_multi_task_batch_inputs())
-        # CenterPoint's exporter settings (deploy.onnx in the task base config).
+        # deploy.onnx of the CenterPoint base config.
         onnx_cfg = OmegaConf.create(
             {"dynamo": False, "opset_version": 17, "do_constant_folding": False}
         )
@@ -361,7 +360,7 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
         )
 
     def test_stage_graph_reproduces_forward_and_names_the_deployed_modules(self) -> None:
-        """The declared stages are the deployed split of forward(): same outputs, same names."""
+        """Test that the stages reproduce forward() and carry the deployed module names."""
         self.centerpoint.eval()
         multi_task_batch_inputs = self._build_multi_task_batch_inputs()
         stages = self.centerpoint.build_stages()
@@ -383,15 +382,12 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
         expected = forward_outputs.detection3d().center_head()
         state = run_stages_in_torch(stages, multi_task_batch_inputs, self.device)
         for name in names:
-            # Same modules, so the only differences are kernel-selection noise: on CUDA two
-            # forward() calls of this model already differ by up to 1.3e-4 when another job
-            # shares the GPU (the library picks kernels per call from the workspace it gets).
-            # A wrong dataflow would be off by O(1).
+            # Same modules, so only CUDA kernel-selection noise remains: two forward() calls
+            # differ by up to 1.3e-4 on a shared GPU. A wrong dataflow would be off by O(1).
             torch.testing.assert_close(state[name], getattr(expected, name), rtol=1e-3, atol=1e-3)
 
-        # The model outputs score exactly like forward()'s typed outputs: decoded from the
-        # same tensors (forward()'s), so the decode is compared exactly; the kernel noise
-        # gated above would otherwise flip near-tie proposals in the top-k selection.
+        # Decode forward()'s own tensors so the comparison is exact: the noise allowed above
+        # could flip near-tie proposals in the top-k selection.
         deployed = self.centerpoint.build_deployed_eval_output(
             multi_task_batch_inputs,
             {name: getattr(expected, name) for name in model_output_names(stages)},
@@ -432,8 +428,8 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
 
     def test_stage_graph_keeps_a_canvas_for_a_sample_without_voxels(self) -> None:
         """
-        Test that the stage graph scores every sample like forward() does, including one without
-        any voxel: the last sample of a batch, or the only sample of one.
+        Test that the stage graph matches forward() for a sample without voxels, whether it is
+        the last sample of a batch or the only one.
         """
         self.centerpoint.eval()
         stages = self.centerpoint.build_stages()
