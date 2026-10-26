@@ -82,6 +82,11 @@ class PointCloudSeg3DState:
     ignore_index: int
     class_names: tuple[str, ...] | None
 
+    @property
+    def num_frames(self) -> int:
+        """Number of cached frames in this bucket."""
+        return len(self.frames)
+
 
 class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
     """Caches raw per-point segmentation data at test and exposes it per range.

@@ -5,7 +5,8 @@ matrix per (filter, range) bucket in a single stacked ``(F+1, R+1, C, C)``
 ``"sum"`` state, where slice ``[0, 0]`` is whole-scene, filter slices 1..F are the
 configured evaluation filters (region / corridor / collision) and range slices 1..R the
 radial windows, so memory never grows with the dataset and torchmetrics sums the
-matrices across ranks exactly. Per-point filter membership is resolved at
+matrices across ranks exactly. A ``(F+1,)`` frame counter per filter slice is
+summed alongside, so the frame count survives the same reduction. Per-point filter membership is resolved at
 ``update`` from each ``seg3d_frames`` entry (where the ego pose lives), which is
 what lets a bounded matrix support the filter axis at all. It knows nothing about
 which metrics run: it hands each a ``ConfusionState``.
@@ -78,6 +79,13 @@ class Segmentation3DConfusionMatrixMetricSuite(MetricSuite[ConfusionState]):
             ),
             dist_reduce_fx="sum",
         )
+        # Frames folded into each filter slice. Bucket 0 sees every frame, a
+        # filter bucket only the frames whose scene it could cover.
+        self.add_state(
+            "num_frames",
+            default=torch.zeros(len(self._component_filters) + 1, dtype=torch.long),
+            dist_reduce_fx="sum",
+        )
 
     def required_keys(self) -> tuple[str, ...]:
         """``seg3d_frames`` plus any component-declared eval-output keys.
@@ -121,6 +129,7 @@ class Segmentation3DConfusionMatrixMetricSuite(MetricSuite[ConfusionState]):
             predictions = predictions[valid].long()
             coord = coord[valid]
 
+            self.num_frames[0] += 1
             self._accumulate(0, predictions, targets, coord)
             if not active_filter_keys:
                 # No region filter is active at this stage (they are test-only):
@@ -133,6 +142,7 @@ class Segmentation3DConfusionMatrixMetricSuite(MetricSuite[ConfusionState]):
                 context = self._frame_filter_context(index, metric_filter, frame)
                 if context is None:
                     continue  # scene without a lanelet map, excluded from this slice
+                self.num_frames[index + 1] += 1
                 keep = torch.from_numpy(
                     np.asarray(metric_filter.keep(coord_np, context), dtype=bool)
                 ).to(predictions.device)
@@ -180,15 +190,18 @@ class Segmentation3DConfusionMatrixMetricSuite(MetricSuite[ConfusionState]):
         filter_bucket = 0 if index is None else index + 1
         range_bucket = 0 if metric_range is None else self.ranges.index(metric_range) + 1
         confusion = self.confusion[filter_bucket, range_bucket]
+        num_frames = int(self.num_frames[filter_bucket].item())
         if self._group_lut is not None:
             num_grouped = len(self._grouped_names)
             return ConfusionState(
                 confusion=fold_confusion(confusion, self._group_lut, num_grouped),
                 class_names=self._grouped_names,
                 num_classes=num_grouped,
+                num_frames=num_frames,
             )
         return ConfusionState(
             confusion=confusion,
             class_names=self.class_names,
             num_classes=self.num_classes,
+            num_frames=num_frames,
         )

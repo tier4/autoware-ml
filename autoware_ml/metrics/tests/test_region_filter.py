@@ -22,6 +22,7 @@ from autoware_ml.metrics.geometry.lanelet import (
 from autoware_ml.metrics.geometry.reachability import ReachabilityParams, VehicleGeometry
 from autoware_ml.metrics.segmentation3d.accuracy import Accuracy
 from autoware_ml.metrics.segmentation3d.error_clusters import ErrorClusters
+from autoware_ml.metrics.segmentation3d.frame_count import FrameCount
 from autoware_ml.metrics.segmentation3d.point_cloud import Segmentation3DPointCloudMetricSuite
 from autoware_ml.metrics.segmentation3d.suite import Segmentation3DConfusionMatrixMetricSuite
 from autoware_ml.metrics.tests.conftest import STUB_MAP_PATH, serve_lanelet_map
@@ -441,6 +442,40 @@ def test_confusion_suite_excludes_scene_without_lanelet_map() -> None:
     assert report["region_road/acc"] == pytest.approx(1.0)  # only s_map's road point
     assert suite.region_frames_seen.tolist() == [2]
     assert suite.region_frames_covered.tolist() == [1]
+
+
+def test_confusion_suite_frame_count_follows_filter_coverage() -> None:
+    # Same two scenes: the whole-scene count sees both frames, the road slice
+    # only the mapped one, so the slice's denominator is visible next to its scores.
+    region = _region_filter(["road"], _road_map())
+    suite = Segmentation3DConfusionMatrixMetricSuite(
+        components=[FrameCount(stages=["test"]), FrameCount(stages=["test"], filter=region)],
+        num_classes=2,
+        ranges=(),
+    )
+    suite.update(
+        {
+            "seg3d_frames": [
+                {
+                    "pred": torch.tensor([0]),
+                    "target": torch.tensor([0]),
+                    "coord": torch.tensor([[10.0, 0.0, 0.0]]),
+                    "ego2global": np.eye(4),
+                    "lanelet_map_path": STUB_MAP_PATH,
+                },
+                {
+                    "pred": torch.tensor([1]),
+                    "target": torch.tensor([0]),
+                    "coord": torch.tensor([[10.0, 0.0, 0.0]]),
+                    "ego2global": np.eye(4),
+                    "lanelet_map_path": None,
+                },
+            ]
+        }
+    )
+    report = suite.result(EvalStage.TEST)
+    assert report["num_frames"] == 2.0
+    assert report["region_road/num_frames"] == 1.0
 
 
 def test_detection3d_suite_excludes_scene_without_lanelet_map() -> None:
