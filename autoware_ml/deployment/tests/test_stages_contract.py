@@ -96,7 +96,7 @@ class TestStageDeclaration:
             TorchStage(
                 "prep", run=lambda state: {"x": state.batch["x"].float()}, inputs=(), outputs=("x",)
             ),
-            GraphStage("encoder", module=_Double(), inputs=("x",), outputs=("y", "aux")),
+            GraphStage("encoder", module=_SplitHead(), inputs=("x",), outputs=("y", "aux")),
             GraphStage("seg", module=_SplitHead(), inputs=("y",), outputs=("plus", "minus")),
             GraphStage("det", module=_Double(), inputs=("y",), outputs=("twice",)),
         )
@@ -193,7 +193,7 @@ class TestRunStagesInTorch:
 
     def test_multi_input_graph_stage_positional_order(self):
         # The module's positional arguments follow ``inputs``, not the module's parameter
-        # names or the order the glue produced them in (BEVFusion's lidar graph relies on it).
+        # names or the order the glue produced them in (every multi-input graph relies on it).
         stages = (
             TorchStage(
                 "prep",

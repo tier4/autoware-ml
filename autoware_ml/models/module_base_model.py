@@ -424,9 +424,10 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
         A stage graph (:mod:`autoware_ml.deployment.stages`) states once how inference
         splits into exportable graphs and the PyTorch glue between them. Declaring it
         gives the model its :meth:`build_export_specs` for free — one spec per
-        ``GraphStage``, traced with the tensors the glue produces — and is what
-        cross-backend verification and per-backend evaluation run on. Models that keep
-        a hand-written :meth:`build_export_specs` leave this at ``None``.
+        ``GraphStage``, traced with the tensors the glue produces — and states the
+        deployed inference in a form any backend can run, whose model outputs
+        :meth:`build_deployed_eval_output` scores. Models that keep a hand-written
+        :meth:`build_export_specs` leave this at ``None``.
 
         Every call builds fresh export wrappers, and a wrapper may hold a *copy* of a
         submodule rather than a reference (CenterPoint's head is deep-copied for export).
