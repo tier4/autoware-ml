@@ -59,7 +59,7 @@ class ConfusionState:
     confusion: torch.Tensor
     class_names: tuple[str, ...] | None
     num_classes: int
-    num_frames: int = 0
+    num_frames: int
 
     @cached_property
     def _double(self) -> torch.Tensor:

@@ -57,7 +57,10 @@ def test_det3d_confusion_drops_unmatched() -> None:
 
 def test_seg3d_confusion_reads_state_matrix() -> None:
     state = ConfusionState(
-        confusion=torch.tensor([[5, 1], [2, 7]]), class_names=("road", "obstacle"), num_classes=2
+        confusion=torch.tensor([[5, 1], [2, 7]]),
+        class_names=("road", "obstacle"),
+        num_classes=2,
+        num_frames=1,
     )
     out = Seg3DConfusion().evaluate(state, EvalStage.TEST)
     assert out["confusion_road__obstacle"] == 1.0

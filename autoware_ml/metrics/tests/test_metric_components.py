@@ -147,7 +147,9 @@ def test_suite_prefix_override_for_side_by_side_suites() -> None:
 def _conf_state(num_classes: int = 2) -> ConfusionState:
     # Class 0: TP=1, FN=1; class 1: TP=1, FP=1.
     confusion = torch.tensor([[1, 1], [0, 1]], dtype=torch.long)
-    return ConfusionState(confusion=confusion, class_names=("car", "road"), num_classes=num_classes)
+    return ConfusionState(
+        confusion=confusion, class_names=("car", "road"), num_classes=num_classes, num_frames=1
+    )
 
 
 def test_iou_validation_emits_only_miou() -> None:
