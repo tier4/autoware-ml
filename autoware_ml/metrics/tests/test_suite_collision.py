@@ -107,6 +107,47 @@ def test_suite_computes_ttc_and_criticality_metrics() -> None:
     assert not np.isnan(b2["cw_mAP"])  # the reachable barrier carries the weight
 
 
+def test_a_padding_frame_takes_no_part_in_the_metrics() -> None:
+    """
+    Input: two identical frames, the second flagged in padding_mask as a streaming padding slot.
+    Expected: the padding frame is gathered like the other (the ranks must hold as many entries)
+    but counts nowhere: not in the frames the metrics see, not in the TTC coverage.
+    Check: the per-frame state length, the samples of the state and the TTC frame counters.
+    """
+    suite = Detection3DMetricSuite(
+        components=[CriticalFPFN(confidences=(0.5,), match_threshold=2.0)],
+        class_names=CLASS_NAMES,
+        collision=CollisionTTC(
+            CLASS_NAMES,
+            vehicle=EGO,
+            kinds=KINDS,
+            living_speeds=LIVING_SPEEDS,
+            params=ReachabilityParams(horizon_s=4.0, dt_s=0.1),
+        ),
+    )
+    gt_boxes = torch.tensor([collision_box(25.0, 0.0)], dtype=torch.float32)
+    preds = {
+        "bboxes_3d": gt_boxes.clone(),
+        "scores_3d": torch.tensor([0.9], dtype=torch.float32),
+        "labels_3d": torch.tensor([0], dtype=torch.long),
+    }
+    suite.update(
+        {
+            "predictions": [preds, preds],
+            "gt_boxes": [gt_boxes, gt_boxes],
+            "gt_labels": [torch.tensor([0]), torch.tensor([0])],
+            "ego2global": [np.eye(4), np.eye(4)],
+            "lanelet_map_path": [STUB_MAP_PATH, STUB_MAP_PATH],
+            "padding_mask": [False, True],
+        }
+    )
+
+    assert len(suite.gt_boxes) == 2
+    assert len(suite.state_for(None).samples) == 1
+    assert int(suite.ttc_frames_seen) == 1
+    assert int(suite.ttc_frames_covered) == 1
+
+
 def test_collision_provider_declares_context_keys() -> None:
     # The provider's frame context is part of the fail-loud required-keys chain,
     # exactly like the region filters' keys.
