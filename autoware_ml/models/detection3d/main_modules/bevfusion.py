@@ -111,6 +111,7 @@ class _BEVFusionExportWrapperBase(nn.Module):
             point_cloud_gt_batch=None,
             detection3d_gt_batch=None,
             image_gt_batch=None,
+            padding_mask=torch.zeros(1, dtype=torch.bool, device=coors.device),
             io_processing_time=0.0,
             segmentation3d_gt_batch=None,
         )

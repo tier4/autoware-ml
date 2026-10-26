@@ -124,6 +124,9 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
         self.add_state("pred_labels", default=[], dist_reduce_fx=None)
         self.add_state("gt_boxes", default=[], dist_reduce_fx=None)
         self.add_state("gt_labels", default=[], dist_reduce_fx=None)
+        # Per-frame flag: does the frame only pad a streaming lane? It is gathered like every
+        # other frame, so the ranks hold as many entries, and left out of every metric.
+        self.add_state("padding", default=[], dist_reduce_fx=None)
         if self.collision is not None:
             self.add_state("gt_ttc", default=[], dist_reduce_fx=None)
             self.add_state("pred_ttc", default=[], dist_reduce_fx=None)
@@ -228,6 +231,7 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
         gt_boxes = eval_out["gt_boxes"]
         gt_labels = eval_out["gt_labels"]
         gt_num_points = eval_out.get("gt_num_points")
+        padding_mask = eval_out.get("padding_mask")
         if len(predictions) != len(gt_boxes) or len(predictions) != len(gt_labels):
             raise ValueError(
                 "Detection metric expects equal numbers of predictions, gt_boxes, and gt_labels."
@@ -270,12 +274,15 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
             self.pred_labels.append(prediction["labels_3d"].detach().to(dtype=torch.long))
             self.gt_boxes.append(frame_boxes[keep])
             self.gt_labels.append(frame_labels[keep])
+            is_padding = bool(padding_mask[i]) if padding_mask is not None else False
+            self.padding.append(torch.tensor([is_padding], device=frame_boxes.device))
 
             if self.collision is not None:
                 covered = self._ttc_frame_covered(eval_out, i)
                 self.ttc_covered.append(torch.tensor([covered], device=frame_boxes.device))
-                self.ttc_frames_seen += 1
-                self.ttc_frames_covered += int(covered)
+                if not is_padding:
+                    self.ttc_frames_seen += 1
+                    self.ttc_frames_covered += int(covered)
                 self.gt_ttc.append(
                     self._frame_ttc(frame_boxes[keep], frame_labels[keep], eval_out, i, covered)
                 )
@@ -430,7 +437,8 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
                 keep-mask computed for it at update time. Frames where the
                 filter was unavailable (e.g. a scene without a lanelet map) are
                 omitted from the slice entirely, so per-frame denominators only
-                count covered frames.
+                count covered frames. Frames that only pad a streaming lane are
+                always omitted.
 
         Returns:
             Detection state consumed by the configured metric components.
@@ -439,6 +447,8 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
 
         samples = []
         for index in range(len(self.gt_boxes)):
+            if bool(self.padding[index].item()):
+                continue
             if column is not None and not bool(self.region_available[index][column]):
                 continue
             pred_boxes = self.pred_boxes[index].cpu()

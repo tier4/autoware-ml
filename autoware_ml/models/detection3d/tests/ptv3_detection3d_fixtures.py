@@ -303,6 +303,7 @@ def build_batch(with_segmentation3d: bool = True) -> ModelGTBatch:
             else None
         ),
         image_gt_batch=None,
+        padding_mask=torch.zeros(1, dtype=torch.bool),
     )
 
 

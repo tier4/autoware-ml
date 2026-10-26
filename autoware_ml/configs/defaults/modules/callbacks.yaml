@@ -50,5 +50,11 @@ callbacks:
   data_processing_timer:
     _target_: autoware_ml.callbacks.data_processing_timer.DataProcessingTimer
 
+  # Logs train/grad_norm_<norm_type>, the norm of the accumulated gradients on every optimizer
+  # step, measured before trainer.gradient_clip_val clips them. norm_type is l1, l2 or inf.
+  grad_norm_monitor:
+    _target_: autoware_ml.callbacks.grad_norm_monitor.GradNormMonitor
+    norm_type: l2
+
   model_summary_example_input:
     _target_: autoware_ml.callbacks.model_summary_example_input.ModelSummaryExampleInput

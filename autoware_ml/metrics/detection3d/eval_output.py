@@ -50,6 +50,9 @@ def detection3d_eval_output(
         "gt_boxes": gt_boxes,
         "gt_labels": gt_detections.valid_labels_3d(),
         "gt_num_points": gt_detections.valid_bboxes_num_points(),
+        # A sample padding a streaming lane keeps its entry in every per-frame list, since the
+        # metrics gather those lists across the GPUs entry by entry; the metric leaves it out.
+        "padding_mask": batch_inputs.multi_task_gt_batch.padding_mask.tolist(),
     }
     # Per frame metadata for the region and collision filters, when the dataset attached it.
     frame_meta_batch = batch_inputs.multi_task_gt_batch.frame_meta_batch

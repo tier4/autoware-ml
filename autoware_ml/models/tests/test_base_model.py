@@ -67,6 +67,7 @@ def _batch_inputs() -> ModelBatchInputs:
             detection3d_gt_batch=None,
             segmentation3d_gt_batch=None,
             image_gt_batch=None,
+            padding_mask=torch.zeros(2, dtype=torch.bool),
         )
     )
 
@@ -80,6 +81,23 @@ def test_step_runs_forward_on_the_batch_and_logs_the_sample_count() -> None:
 
     assert float(loss) == 12.0
     assert logged["batch_size"] == 2
+
+
+def test_the_logged_batch_size_leaves_out_the_padding_samples() -> None:
+    """
+    Input: the two-sample batch with its second sample flagged as padding.
+    Expected: a padding sample only keeps the ranks in step, so the step logs one sample.
+    Check: the batch size handed to the logger.
+    """
+    model = _PointSumModel()
+    logged: dict[str, Any] = {}
+    model.log_dict = lambda values, batch_size, **kwargs: logged.update(batch_size=batch_size)
+    batch = _batch_inputs()
+    gt_batch = batch.multi_task_gt_batch._replace(padding_mask=torch.tensor([False, True]))
+
+    model.training_step(ModelBatchInputs.from_gt_batch(gt_batch), batch_idx=0)
+
+    assert logged["batch_size"] == 1
 
 
 def test_model_without_an_export_fails_loudly() -> None:

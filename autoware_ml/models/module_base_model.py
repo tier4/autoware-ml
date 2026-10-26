@@ -208,9 +208,9 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
     def get_log_batch_size(self, multi_task_batch_inputs: ModelBatchInputs) -> int | None:
         """Infer the effective sample batch size for logging.
 
-        The ground-truth batch infers the sample count from the inputs it carries.
-        Models with non-standard input structures should override this hook to provide an
-        explicit sample count.
+        The ground-truth batch counts its samples, leaving out those that only pad a streaming
+        lane. Models with non-standard input structures should override this hook to provide
+        an explicit sample count.
 
         Args:
             multi_task_batch_inputs: Full batch dictionary from the dataloader.
@@ -218,7 +218,7 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
         Returns:
             Sample batch size when it can be inferred, otherwise ``None``.
         """
-        return multi_task_batch_inputs.multi_task_gt_batch.infer_batch_size()
+        return multi_task_batch_inputs.multi_task_gt_batch.num_real_samples()
 
     def _core_step(
         self,

@@ -93,6 +93,7 @@ class TestTypedDetection3DEvalOutput(unittest.TestCase):
                 detection3d_gt_batch=detection3d_gt_batch,
                 segmentation3d_gt_batch=None,
                 image_gt_batch=None,
+                padding_mask=torch.zeros(2, dtype=torch.bool, device=self.device),
             ),
             voxels_data=None,
             image_data=None,
@@ -108,6 +109,7 @@ class TestTypedDetection3DEvalOutput(unittest.TestCase):
                 detection3d_gt_batch=None,
                 segmentation3d_gt_batch=None,
                 image_gt_batch=None,
+                padding_mask=torch.zeros(1, dtype=torch.bool),
             ),
             voxels_data=None,
             image_data=None,
@@ -228,6 +230,30 @@ class TestTypedDetection3DEvalOutput(unittest.TestCase):
         self.assertNotIn("ego2global", eval_outputs)
         self.assertNotIn("scene_token", eval_outputs)
         self.assertNotIn("lanelet_map_path", eval_outputs)
+
+    def test_the_eval_output_flags_the_padding_samples(self):
+        """
+        Input: the two-sample batch with its second sample flagged as padding.
+        Expected: the padding sample keeps its entry in every per-frame list, which every GPU
+        has to hold as many entries of for the metrics, and the eval output flags it for the
+        metric to leave out.
+        Check: the lengths of the per-frame lists and the per-frame padding flags.
+        """
+        gt_batch = self.multi_task_batch_inputs.multi_task_gt_batch._replace(
+            padding_mask=torch.tensor([False, True], device=self.device)
+        )
+        multi_task_batch_inputs = ModelBatchInputs(
+            multi_task_gt_batch=gt_batch, voxels_data=None, image_data=None, range_view_data=None
+        )
+
+        eval_outputs = detection3d_eval_output(
+            batch_inputs=multi_task_batch_inputs,
+            predictions=self.multi_task_predictions,
+        )
+
+        for key in ("predictions", "gt_boxes", "gt_labels", "gt_num_points"):
+            self.assertEqual(len(eval_outputs[key]), 2)
+        self.assertEqual(eval_outputs["padding_mask"], [False, True])
 
 
 if __name__ == "__main__":
