@@ -237,6 +237,11 @@ def test_models_without_a_stage_graph_keep_the_end_to_end_default() -> None:
     assert specs["end_to_end"].input_names == ["x"]
 
 
+def test_scoring_deployed_outputs_needs_the_model_mapping() -> None:
+    with pytest.raises(NotImplementedError, match="_PlainModel does not implement"):
+        _PlainModel().build_deployed_eval_output({}, {})
+
+
 def test_a_stage_reading_an_unwritten_name_fails_before_anything_runs() -> None:
     stages = (
         TorchStage("seed", run=lambda state: {"x": state.batch["x"]}, inputs=(), outputs=("x",)),

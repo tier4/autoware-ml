@@ -461,9 +461,13 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
             Flat dict the attached metric suites read.
 
         Raises:
-            NotImplementedError: If the model declares no deployment stage graph.
+            NotImplementedError: If the model does not implement this mapping; a model
+                without a stage graph has none.
         """
-        raise NotImplementedError(f"{type(self).__name__} declares no deployment stage graph.")
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement build_deployed_eval_output(), so the "
+            "outputs of its deployed graphs cannot be scored."
+        )
 
     def build_export_specs(
         self, multi_task_batch_inputs: ModelBatchInputs
