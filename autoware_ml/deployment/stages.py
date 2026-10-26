@@ -92,6 +92,15 @@ class RunState:
         self.tensors.update(produced)
 
 
+def _reject_bare_string(stage: Stage, kind: str, names: Sequence[str]) -> None:
+    """Refuse a ``str`` for a tuple of names: iterated, it would declare one-letter names."""
+    if isinstance(names, str):
+        raise TypeError(
+            f"{type(stage).__name__} {stage.name!r} declares its {kind} as the string "
+            f"{names!r}; declare a tuple of names, e.g. ({names!r},)."
+        )
+
+
 @dataclass(frozen=True)
 class TorchStage:
     """A non-exportable glue stage that always runs in PyTorch.
@@ -100,7 +109,8 @@ class TorchStage:
         name: Unique stage name (latency breakdown key).
         run: ``fn(state) -> {name: value}``; the returned mapping is merged into the
             run state. Reads earlier results via ``state[name]`` and the raw batch via
-            ``state.batch``.
+            ``state.batch``, and must not modify them in place: they are the same
+            tensors the earlier graphs were traced with.
         inputs: Run-state names the stage reads (``()`` for glue that reads only the
             batch). It runs on a view narrowed to these, so an undeclared read fails.
         outputs: Run-state names the stage writes; ``run`` must return exactly these.
@@ -112,6 +122,8 @@ class TorchStage:
     outputs: tuple[str, ...]
 
     def __post_init__(self) -> None:
+        _reject_bare_string(self, "inputs", self.inputs)
+        _reject_bare_string(self, "outputs", self.outputs)
         if not self.outputs:
             raise ValueError(f"TorchStage {self.name!r} must declare outputs.")
 
@@ -148,6 +160,8 @@ class GraphStage:
     onnx_dynamic_axes: Mapping[str, Mapping[int, str]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        _reject_bare_string(self, "inputs", self.inputs)
+        _reject_bare_string(self, "outputs", self.outputs)
         if not self.inputs or not self.outputs:
             raise ValueError(f"GraphStage {self.name!r} must declare inputs and outputs.")
         # ONNX names every graph input and output once; the exporter would rename a repeat
@@ -255,8 +269,8 @@ def artifact_path(output_dir: str | Path, stage_name: str, backend: Backend) -> 
 def run_torch_stage(stage: TorchStage, state: RunState) -> dict[str, Any]:
     """Run a glue stage on the view of the run state it declared and name its results.
 
-    The one place a glue ``run`` is checked against its declaration, shared by the
-    reference run below and by every pipeline backend.
+    The one place a glue ``run`` is checked against its declaration; whatever runs a
+    stage graph runs its glue through it.
 
     Raises:
         TypeError: When ``run`` returns something other than a mapping.
@@ -279,15 +293,15 @@ def run_torch_stage(stage: TorchStage, state: RunState) -> dict[str, Any]:
 def run_stages_in_torch(stages: Sequence[Stage], batch: Any, device: torch.device) -> RunState:
     """Run every stage with its PyTorch module and return the filled run state.
 
-    This is the reference execution of a stage graph — what export uses to obtain each
-    graph stage's trace inputs, and what the ``pytorch`` backend of the inference
-    pipeline runs. Graph stages receive the run-state tensors named by their ``inputs``
-    (moved to ``device``) as positional arguments, in ``inputs`` order, and must return
-    one tensor per declared output, in ``outputs`` order.
+    This is the reference execution of a stage graph: what export uses to obtain each
+    graph stage's trace inputs. Graph stages receive the run-state tensors named by their
+    ``inputs`` (moved to ``device``) as positional arguments, in ``inputs`` order, and
+    must return one tensor per declared output, in ``outputs`` order. The modules run in
+    the mode they are in; export puts them in eval mode first.
 
     Raises:
-        TypeError: When a graph stage returns a mapping (its outputs are positional), or
-            a glue stage returns something other than a mapping.
+        TypeError: When a graph stage returns a mapping (its outputs are positional) or
+            anything but tensors, or a glue stage returns something other than a mapping.
         ValueError: When a stage returns something other than what it declares as
             ``outputs``.
     """
@@ -312,6 +326,14 @@ def run_stages_in_torch(stages: Sequence[Stage], batch: Any, device: torch.devic
                 raise ValueError(
                     f"GraphStage {stage.name!r} returned {len(raw)} tensor(s) but declares "
                     f"outputs {list(stage.outputs)}."
+                )
+            # One tensor per ONNX output: the exporter flattens a nested tuple into more
+            # outputs than declared and drops a Python value, so neither matches the names.
+            others = sorted({type(value).__name__ for value in raw if not torch.is_tensor(value)})
+            if others:
+                raise TypeError(
+                    f"GraphStage {stage.name!r} returned {others} among its outputs; a graph "
+                    f"stage returns one tensor per declared output {list(stage.outputs)}."
                 )
             state.add(dict(zip(stage.outputs, raw)))
     return state

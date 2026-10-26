@@ -59,6 +59,16 @@ class _Subtract(nn.Module):
         return a - b
 
 
+class _NestedHead(nn.Module):
+    def forward(self, x):
+        return x + 1, (x - 1, x * 2)
+
+
+class _ScalarHead(nn.Module):
+    def forward(self, x):
+        return x + 1, 3
+
+
 def _toy_stages():
     return (
         TorchStage(
@@ -131,6 +141,13 @@ class TestStageDeclaration:
     def test_entries_other_than_stages_rejected(self):
         with pytest.raises(TypeError, match=r"got \['dict'\]"):
             validate_stages((*_toy_stages(), {"name": "post"}))
+
+    def test_names_are_declared_as_tuples_not_strings(self):
+        # A str would be iterated into one-letter names.
+        with pytest.raises(TypeError, match=r"declares its outputs as the string 'x'"):
+            TorchStage("seed", run=lambda state: {"x": 1}, inputs=(), outputs="x")
+        with pytest.raises(TypeError, match=r"declares its inputs as the string 'xy'"):
+            GraphStage("g", module=_Double(), inputs="xy", outputs=("y",))
 
     def test_duplicate_graph_outputs_rejected(self):
         stages = list(_toy_stages())
@@ -237,6 +254,14 @@ class TestRunStagesInTorch:
         stages[3] = GraphStage("head", module=_Double(), inputs=("z",), outputs=("plus", "minus"))
         with pytest.raises(ValueError, match="returned 1 tensor"):
             run_stages_in_torch(stages, {"x": torch.tensor([1.0])}, torch.device("cpu"))
+
+    def test_graph_stage_outputs_are_tensors(self):
+        # The exporter would flatten the nested tuple into three outputs and drop the int.
+        for module, other in ((_NestedHead(), "tuple"), (_ScalarHead(), "int")):
+            stages = list(_toy_stages())
+            stages[3] = GraphStage("head", module=module, inputs=("z",), outputs=("plus", "minus"))
+            with pytest.raises(TypeError, match=rf"'head' returned \['{other}'\] among"):
+                run_stages_in_torch(stages, {"x": torch.tensor([1.0])}, torch.device("cpu"))
 
 
 def test_artifact_path_per_backend() -> None:
