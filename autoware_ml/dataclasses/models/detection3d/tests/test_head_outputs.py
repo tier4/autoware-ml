@@ -308,6 +308,34 @@ class TestCenterHeadOutputs(unittest.TestCase):
         for name, tensor in zip(("heatmap", "reg", "height", "dim", "rot", "vel"), exported):
             self.assertIs(tensor, tensors[name])
 
+    def test_from_export_tensors_inverts_export_tensors(self) -> None:
+        """Test that the named exported tensors rebuild the outputs, an unexported branch unset."""
+        for names in (
+            ["heatmap", "reg", "height", "dim", "rot", "vel"],
+            ["heatmap", "reg", "height", "dim", "rot"],
+        ):
+            with self.subTest(names=names):
+                tensors = self._build_tensors()
+                if "vel" not in names:
+                    tensors["vel"] = None
+                outputs = CenterHeadOutputs.model_validate(tensors)
+
+                rebuilt = CenterHeadOutputs.from_export_tensors(
+                    dict(zip(names, outputs.export_tensors(names)))
+                )
+
+                for name, tensor in tensors.items():
+                    self.assertIs(getattr(rebuilt, name), tensor)
+
+    def test_from_export_tensors_rejects_an_unknown_or_missing_branch(self) -> None:
+        """Test that a name the head does not output, or a missing required branch, is rejected."""
+        tensors = self._build_tensors()
+
+        with self.assertRaisesRegex(ValueError, r"no output named \['score'\]"):
+            CenterHeadOutputs.from_export_tensors({**tensors, "score": torch.zeros(1)})
+        with self.assertRaises(ValidationError):
+            CenterHeadOutputs.from_export_tensors({"heatmap": tensors["heatmap"]})
+
     def test_is_frozen(self) -> None:
         """Test that the outputs cannot be mutated after construction."""
         outputs = CenterHeadOutputs.model_validate(self._build_tensors())
@@ -502,26 +530,3 @@ class TestDetection3DHeadOutputs(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-class TestCenterHeadOutputsExportRoundTrip(unittest.TestCase):
-    """``from_export_tensors`` inverts ``export_tensors``; an unpredicted branch stays unset."""
-
-    def test_rebuild_from_export_tensors(self) -> None:
-        outputs = CenterHeadOutputs(
-            heatmap=torch.rand(1, 2, 4, 4),
-            reg=torch.rand(1, 2, 4, 4),
-            height=torch.rand(1, 1, 4, 4),
-            dim=torch.rand(1, 3, 4, 4),
-            rot=torch.rand(1, 2, 4, 4),
-            vel=None,
-        )
-        names = ["heatmap", "reg", "height", "dim", "rot"]
-        rebuilt = CenterHeadOutputs.from_export_tensors(
-            dict(zip(names, outputs.export_tensors(names)))
-        )
-        self.assertEqual(rebuilt, outputs)
-        with self.assertRaisesRegex(ValueError, r"no output named \['score'\]"):
-            CenterHeadOutputs.from_export_tensors({"score": torch.zeros(1)})
-        with self.assertRaises(ValueError):  # a branch every head predicts is missing
-            CenterHeadOutputs.from_export_tensors({"heatmap": outputs.heatmap})
