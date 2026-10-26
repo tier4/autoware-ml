@@ -296,8 +296,8 @@ class TestModelGTBatchFrameMetaCollation(unittest.TestCase):
 
     def test_collate_stacks_poses_and_scene_tokens_in_batch_order(self) -> None:
         samples = [
-            self._build_sample(FrameMetaSample(self._build_ego2global(1.0), "db/scene_a/0")),
-            self._build_sample(FrameMetaSample(self._build_ego2global(2.0), "db/scene_b/1")),
+            self._build_sample(FrameMetaSample(self._build_ego2global(1.0), "db/scene_a/0", 0.0)),
+            self._build_sample(FrameMetaSample(self._build_ego2global(2.0), "db/scene_b/1", 0.0)),
         ]
 
         frame_meta_batch = self._collate(samples)
@@ -313,7 +313,7 @@ class TestModelGTBatchFrameMetaCollation(unittest.TestCase):
         augmentation = torch.eye(4, dtype=torch.float32)
         augmentation[0, 3] = 5.0
         sample = self._build_sample(
-            FrameMetaSample(self._build_ego2global(1.0), "db/scene/0"),
+            FrameMetaSample(self._build_ego2global(1.0), "db/scene/0", 0.0),
             LiDARTransformationSample(transformation_matrix=augmentation, transformation_order=[]),
         )
 
@@ -330,7 +330,7 @@ class TestModelGTBatchFrameMetaCollation(unittest.TestCase):
         self.assertIsNone(self._collate([self._build_sample(None), self._build_sample(None)]))
 
     def test_collate_rejects_partial_frame_meta(self) -> None:
-        with_meta = self._build_sample(FrameMetaSample(self._build_ego2global(0.0), "db/s/0"))
+        with_meta = self._build_sample(FrameMetaSample(self._build_ego2global(0.0), "db/s/0", 0.0))
         without_meta = self._build_sample(None)
 
         with self.assertRaisesRegex(ValueError, "frame_meta"):
@@ -340,7 +340,7 @@ class TestModelGTBatchFrameMetaCollation(unittest.TestCase):
 
     def test_to_device_moves_poses_and_keeps_tokens(self) -> None:
         batch = ModelGTBatch.collate_gt_samples(
-            [self._build_sample(FrameMetaSample(self._build_ego2global(3.0), "db/s/0"))],
+            [self._build_sample(FrameMetaSample(self._build_ego2global(3.0), "db/s/0", 0.0))],
             max_num_3d_gt_bboxes=0,
             max_num_2d_gt_bboxes=None,
         )

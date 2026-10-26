@@ -315,10 +315,15 @@ def _dataset_over(root: Path, records: pl.DataFrame, map_provider: object | None
 
 def test_frame_meta_carries_the_map_resolved_against_the_datasets_own_root(tmp_path: Path) -> None:
     """
-    A source over another corpus, such as the pseudo-labelled one under ``t4dataset/pseudo_large``,
-    resolves its frames' maps against its own root. Looked up against the main corpus root, as the
-    metrics used to do for every source, the same frames have no map and drop out of the map-backed
-    slices silently.
+    Input: a source over the pseudo-labelled corpus under ``t4dataset/pseudo_large`` whose
+    record carries a map and a sample time, with its maps resolved against its own root, against
+    the main corpus root and without a map provider.
+    Expected: a source over another corpus resolves the maps of its frames against its own root;
+    looked up against the main corpus root, as the metrics used to do for every source, the same
+    frames have no map and drop out of the map-backed slices silently. The frame meta also
+    carries the sample time of the record.
+    Check: the frame meta of the own-root lookup holds the time, the scene token and the map
+    path, and the other two lookups have no map.
     """
     main_root = tmp_path / "t4dataset"
     pseudo_root = main_root / "pseudo_large"
@@ -326,15 +331,23 @@ def test_frame_meta_carries_the_map_resolved_against_the_datasets_own_root(tmp_p
     map_path = pseudo_root / scene / "map" / "lanelet2_map.osm"
     map_path.parent.mkdir(parents=True)
     map_path.write_text("<osm></osm>")
+    # The frame meta also reads the sample time of the record, so the table carries it.
     records = pl.DataFrame(
-        {DatasetTableSchema.LIDAR_FRAMES.name: [[_lidar_frame(scene)]]},
-        schema={DatasetTableSchema.LIDAR_FRAMES.name: DatasetTableSchema.LIDAR_FRAMES.dtype},
+        {
+            DatasetTableSchema.LIDAR_FRAMES.name: [[_lidar_frame(scene)]],
+            DatasetTableSchema.TIMESTAMP_SECONDS.name: [12.5],
+        },
+        schema={
+            DatasetTableSchema.LIDAR_FRAMES.name: DatasetTableSchema.LIDAR_FRAMES.dtype,
+            DatasetTableSchema.TIMESTAMP_SECONDS.name: DatasetTableSchema.TIMESTAMP_SECONDS.dtype,
+        },
     )
 
     own_corpus = _dataset_over(
         pseudo_root, records, LaneletMapProvider(T4LaneletMapResolver(str(pseudo_root)))
     )
     sample = own_corpus.get_frame_meta_sample(0, None)
+    assert sample.timestamp_seconds == 12.5
 
     assert sample.scene_token == scene
     assert sample.lanelet_map_path == str(map_path)

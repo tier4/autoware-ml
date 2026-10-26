@@ -352,7 +352,8 @@ class T4Dataset(BaseDataset):
     ) -> FrameMetaSample:
         """
         Return the map pose and the scene id of the keyframe lidar frame. The evaluation uses
-        them to find the lanelet map of the scene.
+        them to find the lanelet map of the scene; temporal models read the scene and the
+        sample time of the record to place the frame in its stream.
 
         Args:
           idx: Index of the specific record to be processed.
@@ -380,6 +381,9 @@ class T4Dataset(BaseDataset):
             # hands the metrics the map of its corpus rather than one looked up elsewhere.
             lanelet_map_path=(
                 self.map_provider.osm_path(scene_token) if self.map_provider is not None else None
+            ),
+            timestamp_seconds=float(
+                self.dataset_records_dataframe.item(idx, DatasetTableSchema.TIMESTAMP_SECONDS.name)
             ),
         )
 

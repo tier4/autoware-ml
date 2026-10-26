@@ -19,8 +19,8 @@ class FrameMetaTestCase(unittest.TestCase):
         """Build two frames whose map poses are translations of 1 and 2 along x."""
         self.device = torch.device("cpu")
         self.samples = [
-            FrameMetaSample(self.make_ego2global(1.0), "db/scene_a/0"),
-            FrameMetaSample(self.make_ego2global(2.0), "db/scene_b/1", "/maps/scene_b.osm"),
+            FrameMetaSample(self.make_ego2global(1.0), "db/scene_a/0", 10.0),
+            FrameMetaSample(self.make_ego2global(2.0), "db/scene_b/1", 20.5, "/maps/scene_b.osm"),
         ]
 
     def make_ego2global(self, x: float, yaw_rad: float = 0.0) -> torch.Tensor:
@@ -67,23 +67,29 @@ class TestFrameMetaSample(FrameMetaTestCase):
     def test_field_order(self) -> None:
         """
         Input: the class itself.
-        Expected: the tuple exposes ``ego2global``, ``scene_token`` and the optional
-        ``lanelet_map_path``, which defaults to None for a frame without a map.
+        Expected: the tuple exposes ``ego2global``, ``scene_token``, ``timestamp_seconds`` and the
+        optional ``lanelet_map_path``, which defaults to None for a frame without a map.
         Check: compare ``_fields`` against the expected names and the default.
         """
-        self.assertEqual(FrameMetaSample._fields, ("ego2global", "scene_token", "lanelet_map_path"))
-        self.assertIsNone(FrameMetaSample(self.make_ego2global(0.0), "db/s/0").lanelet_map_path)
+        self.assertEqual(
+            FrameMetaSample._fields,
+            ("ego2global", "scene_token", "timestamp_seconds", "lanelet_map_path"),
+        )
+        self.assertIsNone(
+            FrameMetaSample(self.make_ego2global(0.0), "db/s/0", 0.0).lanelet_map_path
+        )
 
     def test_holds_given_fields(self) -> None:
         """
         Input: the first fixture sample.
-        Expected: the pose and scene token are stored as given.
-        Check: compare the pose with ``torch.equal`` and read the token back.
+        Expected: the pose, scene token and timestamp are stored as given.
+        Check: compare the pose with ``torch.equal`` and read the other fields back.
         """
         sample = self.samples[0]
 
         self.assertTrue(torch.equal(sample.ego2global, self.make_ego2global(1.0)))
         self.assertEqual(sample.scene_token, "db/scene_a/0")
+        self.assertEqual(sample.timestamp_seconds, 10.0)
         self.assertIsNone(sample.lanelet_map_path)
         self.assertEqual(self.samples[1].lanelet_map_path, "/maps/scene_b.osm")
 
@@ -103,11 +109,13 @@ class TestFrameMetaBatchFields(FrameMetaTestCase):
     def test_field_order(self) -> None:
         """
         Input: the class itself.
-        Expected: the tuple exposes ``ego2globals``, ``scene_tokens`` and ``lanelet_map_paths``.
+        Expected: the tuple exposes ``ego2globals``, ``scene_tokens``, ``timestamps_seconds``
+        and ``lanelet_map_paths``, the order of the sample's fields.
         Check: compare ``_fields`` against the expected names.
         """
         self.assertEqual(
-            FrameMetaBatch._fields, ("ego2globals", "scene_tokens", "lanelet_map_paths")
+            FrameMetaBatch._fields,
+            ("ego2globals", "scene_tokens", "timestamps_seconds", "lanelet_map_paths"),
         )
 
     def test_is_immutable(self) -> None:
@@ -128,9 +136,11 @@ class TestFrameMetaBatchCollate(FrameMetaTestCase):
     def test_stacks_poses_and_tokens_in_batch_order(self) -> None:
         """
         Input: the two fixture samples, neither augmented.
-        Expected: the poses are stacked into ``(2, 4, 4)`` unchanged and the tokens are listed
-        in the same order, so row ``i`` of both fields describes sample ``i``.
-        Check: compare the shape, each pose with ``torch.equal`` and the token list.
+        Expected: the poses are stacked into ``(2, 4, 4)`` unchanged, the tokens are listed in
+        the same order and the timestamps are stacked in float64 (epoch seconds round to
+        128 s steps in float32), so row ``i`` of every field describes sample ``i``.
+        Check: compare the shape, each pose with ``torch.equal``, the token list and the
+        timestamps with their dtype.
         """
         batch = FrameMetaBatch.collate_gt_samples(self.samples, [None, None])
 
@@ -138,6 +148,10 @@ class TestFrameMetaBatchCollate(FrameMetaTestCase):
         self.assertTrue(torch.equal(batch.ego2globals[0], self.samples[0].ego2global))
         self.assertTrue(torch.equal(batch.ego2globals[1], self.samples[1].ego2global))
         self.assertEqual(list(batch.scene_tokens), ["db/scene_a/0", "db/scene_b/1"])
+        self.assertEqual(batch.timestamps_seconds.dtype, torch.float64)
+        torch.testing.assert_close(
+            batch.timestamps_seconds, torch.tensor([10.0, 20.5], dtype=torch.float64)
+        )
         self.assertEqual(list(batch.lanelet_map_paths), [None, "/maps/scene_b.osm"])
 
     def test_output_dtype(self) -> None:
@@ -209,7 +223,7 @@ class TestFrameMetaBatchLidarAugmentation(FrameMetaTestCase):
         expected = ego2global @ torch.linalg.inv(augmentation.transformation_matrix)
 
         batch = FrameMetaBatch.collate_gt_samples(
-            [FrameMetaSample(ego2global, "db/scene/0")], [augmentation]
+            [FrameMetaSample(ego2global, "db/scene/0", 0.0)], [augmentation]
         )
 
         torch.testing.assert_close(batch.ego2globals[0], expected)
@@ -231,7 +245,7 @@ class TestFrameMetaBatchLidarAugmentation(FrameMetaTestCase):
         augmented_point = self.apply(augmentation.transformation_matrix, raw_point)
 
         batch = FrameMetaBatch.collate_gt_samples(
-            [FrameMetaSample(ego2global, "db/scene/0")], [augmentation]
+            [FrameMetaSample(ego2global, "db/scene/0", 0.0)], [augmentation]
         )
 
         expected_map_point = self.apply(ego2global, raw_point)
@@ -328,15 +342,16 @@ class TestFrameMetaBatchToDevice(FrameMetaTestCase):
     def test_returns_new_batch_with_equal_fields(self) -> None:
         """
         Input: the fixture batch, moved to the CPU it already lives on.
-        Expected: a new FrameMetaBatch is returned rather than the same object, the poses hold
-        the same values, and the scene tokens are passed through untouched.
-        Check: assert the identity differs, compare the poses and the token list.
+        Expected: a new FrameMetaBatch is returned rather than the same object, the poses and
+        timestamps hold the same values, and the scene tokens are passed through untouched.
+        Check: assert the identity differs, compare the tensors and the token list.
         """
         moved = self.batch.to_device(self.device)
 
         self.assertIsInstance(moved, FrameMetaBatch)
         self.assertIsNot(moved, self.batch)
         self.assertTrue(torch.equal(moved.ego2globals, self.batch.ego2globals))
+        self.assertTrue(torch.equal(moved.timestamps_seconds, self.batch.timestamps_seconds))
         self.assertEqual(list(moved.scene_tokens), list(self.batch.scene_tokens))
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required to move tensors to GPU")
@@ -350,6 +365,7 @@ class TestFrameMetaBatchToDevice(FrameMetaTestCase):
         moved = self.batch.to_device(torch.device("cuda"))
 
         self.assertEqual(moved.ego2globals.device.type, "cuda")
+        self.assertEqual(moved.timestamps_seconds.device.type, "cuda")
         self.assertEqual(self.batch.ego2globals.device.type, "cpu")
         self.assertEqual(list(moved.scene_tokens), list(self.batch.scene_tokens))
 
