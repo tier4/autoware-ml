@@ -150,8 +150,8 @@ def test_autoware_seg3d_frame_count_sums_frames_across_batches() -> None:
     val = metric.result(EvalStage.VAL)
 
     assert val["num_frames"] == 3.0
-    # Range windows clip points, never frames, so the bucket repeats the count.
-    assert val["num_frames_0m_50m"] == 3.0
+    # Range windows clip points, never frames, so the count is reported once, not per window.
+    assert "num_frames_0m_50m" not in val
 
 
 def test_autoware_seg3d_frame_count_resets_with_the_suite() -> None:

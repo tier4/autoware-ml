@@ -76,8 +76,8 @@ class TestFrameCount(unittest.TestCase):
 
         self.assertEqual(report["num_frames"], 3.0)
 
-    def test_range_buckets_keep_the_frame_count(self) -> None:
-        """Test that range clipping drops boxes, not frames, so every bucket counts all frames."""
+    def test_range_buckets_do_not_repeat_the_frame_count(self) -> None:
+        """Test that the range-invariant count is reported once, not per range window."""
         suite = self._build_suite()
         suite.update(
             {
@@ -93,8 +93,8 @@ class TestFrameCount(unittest.TestCase):
         report = suite.result(EvalStage.TEST)
 
         self.assertEqual(report["num_frames"], 2.0)
-        self.assertEqual(report["num_frames_0m_50m"], 2.0)
-        self.assertEqual(report["num_frames_50m_100m"], 2.0)
+        self.assertNotIn("num_frames_0m_50m", report)
+        self.assertNotIn("num_frames_50m_100m", report)
 
     def test_reset_drops_the_frames_of_the_previous_epoch(self) -> None:
         """Test that the count starts over after the suite is reset."""

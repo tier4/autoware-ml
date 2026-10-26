@@ -191,13 +191,16 @@ class Metric(ABC, Generic[StateT]):
     it. The default reads every prediction, so a metric that does not think
     about the floor stays correct. ``needs_boxes`` declares that the metric reads
     per-frame detection ground truth, so a suite can demand those annotations
-    instead of caching empty placeholders.
+    instead of caching empty placeholders. ``range_invariant`` declares that the
+    metric's values do not depend on the radial window (a frame count, say), so
+    the suite reports it once per filter slice instead of once per range.
     """
 
     required_eval_keys: tuple[str, ...] = ()
     needs_ttc: bool = False
     ttc_score_floor: float = 0.0
     needs_boxes: bool = False
+    range_invariant: bool = False
 
     def __init__(
         self,
@@ -560,6 +563,8 @@ class MetricSuite(torchmetrics.Metric, ABC, Generic[StateT]):
             state = state_builder(metric_range, metric_filter)
             for component in components:
                 if self._stage not in component.stages:
+                    continue
+                if metric_range is not None and component.range_invariant:
                     continue
                 for name, value in component.evaluate(state, self._stage).items():
                     # Key names come from the component's OWN filter: filters are

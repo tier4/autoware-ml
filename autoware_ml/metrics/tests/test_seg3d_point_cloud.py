@@ -138,8 +138,8 @@ def test_suite_frame_count_reads_the_cache_length() -> None:
     report = suite.result(EvalStage.TEST)
 
     assert report["num_frames"] == 3.0
-    # The 50-90 m window holds none of the points, the frames still count.
-    assert report["num_frames_50m_90m"] == 3.0
+    # The count is range-invariant: reported once per slice, not per window.
+    assert "num_frames_50m_90m" not in report
 
 
 def test_suite_demands_boxes_for_box_reading_components() -> None:

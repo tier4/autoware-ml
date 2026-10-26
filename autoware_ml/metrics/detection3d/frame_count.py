@@ -12,9 +12,11 @@ class FrameCount(Metric[Detection3DState]):
     The count is taken from the state the suite hands over, so a region-filtered
     component reports only the frames its filter covered (a scene without a
     lanelet map is omitted from that slice). Range clipping removes boxes, never
-    frames, so every range bucket reports the same number: an empty frame still
-    counts, it is a frame the model was evaluated on.
+    frames, so the count is range-invariant and reported once per slice: an
+    empty frame still counts, it is a frame the model was evaluated on.
     """
+
+    range_invariant = True
 
     def evaluate(self, state: Detection3DState, stage: EvalStage) -> dict[str, float]:
         """Count the accumulated frames.
