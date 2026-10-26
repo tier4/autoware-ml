@@ -7,6 +7,7 @@ import pytest
 
 from autoware_ml.metrics.base import EvalStage, MetricRange
 from autoware_ml.metrics.segmentation3d.accuracy import Accuracy
+from autoware_ml.metrics.segmentation3d.frame_count import FrameCount
 from autoware_ml.metrics.segmentation3d.iou import IoU
 from autoware_ml.metrics.segmentation3d.precision_recall_f1 import PrecisionRecallF1
 from autoware_ml.metrics.segmentation3d.suite import Segmentation3DConfusionMatrixMetricSuite
@@ -126,3 +127,40 @@ def test_autoware_seg3d_metric_range_buckets_are_exact() -> None:
     # Per-class-per-range keys are emitted.
     assert "iou_class_0_0m_50m" in test
     assert test["iou_class_0_0m_50m"] == pytest.approx(1.0)
+
+
+def test_autoware_seg3d_frame_count_sums_frames_across_batches() -> None:
+    metric = Segmentation3DConfusionMatrixMetricSuite(
+        components=[FrameCount()],
+        num_classes=2,
+        ignore_index=-1,
+        ranges=(MetricRange("0-50m", 0.0, 50.0),),
+    )
+    metric.update(
+        {
+            "seg3d_frames": [
+                {"pred": torch.tensor([0, 1]), "target": torch.tensor([0, 1]), "coord": _coord(2)},
+                {"pred": torch.tensor([1]), "target": torch.tensor([0]), "coord": _coord(1)},
+            ]
+        }
+    )
+    # A frame whose points are all ignored adds nothing to the matrix but is still a frame.
+    metric.update(_eval_out(torch.tensor([0]), torch.tensor([-1]), _coord(1)))
+
+    val = metric.result(EvalStage.VAL)
+
+    assert val["num_frames"] == 3.0
+    # Range windows clip points, never frames, so the count is reported once, not per window.
+    assert "num_frames_0m_50m" not in val
+
+
+def test_autoware_seg3d_frame_count_resets_with_the_suite() -> None:
+    metric = Segmentation3DConfusionMatrixMetricSuite(
+        components=[FrameCount()], num_classes=2, ignore_index=-1, ranges=()
+    )
+    metric.update(_eval_out(torch.tensor([0]), torch.tensor([0]), _coord(1)))
+    metric.update(_eval_out(torch.tensor([0]), torch.tensor([0]), _coord(1)))
+    metric.reset()
+    metric.update(_eval_out(torch.tensor([0]), torch.tensor([0]), _coord(1)))
+
+    assert metric.result(EvalStage.TEST)["num_frames"] == 1.0

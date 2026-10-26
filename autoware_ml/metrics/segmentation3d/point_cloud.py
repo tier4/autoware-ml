@@ -74,13 +74,16 @@ class PointCloudSeg3DState:
 
     In a grouped suite the cached per-point labels and uncertainty scalars are
     already folded onto the behaviour taxonomy, so ``class_names`` are the
-    grouped names and metrics read the frames unchanged.
+    grouped names and metrics read the frames unchanged. ``num_frames`` is the
+    suite's frame count for the bucket's filter, which equals ``len(frames)``
+    because an uncovered frame is left out of the slice.
     """
 
     frames: list[FramePoints]
     num_classes: int
     ignore_index: int
     class_names: tuple[str, ...] | None
+    num_frames: int
 
 
 class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
@@ -170,6 +173,11 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
         if self._component_filters:
             self.add_state("region_masks", default=[], dist_reduce_fx=None)
             self.add_state("box_region_masks", default=[], dist_reduce_fx=None)
+            # Per frame, per filter: did the filter cover this frame? An uncovered
+            # frame (scene without a lanelet map) is omitted from the slice
+            # entirely, not kept with an empty mask, so per-frame counts over a
+            # slice only see the frames it could use.
+            self.add_state("region_available", default=[], dist_reduce_fx=None)
 
     def _filterable_components(self) -> list[Metric[PointCloudSeg3DState]]:
         """Both views' components: the grouped ones read the same masks."""
@@ -309,6 +317,7 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
                 if target_min < -(2**15) or target_max >= 2**15:
                     raise ValueError("target labels exceed the int16 cache range.")
             confidence_values, entropy = _reduce_scores(scores, pred)
+            self._note_frame()
             coord_cpu = coord.cpu()
             self.coord.append(coord_cpu)
             self.pred.append(pred.to(torch.int16).cpu())
@@ -341,11 +350,12 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
             )
             if self._component_filters and active:
                 # filters convert the coordinates to float64 themselves
-                point_masks, box_masks = self._filter_masks(
+                point_masks, box_masks, available = self._filter_masks(
                     frame, coord_cpu.numpy(), self.gt_boxes[-1].numpy(), active
                 )
                 self.region_masks.append(point_masks)
                 self.box_region_masks.append(box_masks)
+                self.region_available.append(torch.tensor(available, dtype=torch.bool))
 
     def _build_frames(
         self,
@@ -357,6 +367,10 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
     ) -> list[FramePoints]:
         """Slice every cached frame for one bucket, on one view of the taxonomy.
 
+        A frame the bucket's filter could not cover (a scene without a lanelet
+        map) is left out of the slice, so the slice holds exactly the frames
+        its filter ran on.
+
         Args:
             confidences: Per-frame confidence vectors of the view being built.
             entropies: Per-frame entropy vectors of the view being built.
@@ -365,7 +379,7 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
             fold_lut: Trained-index to grouped-index LUT, or ``None`` per class.
 
         Returns:
-            One sliced :class:`FramePoints` per cached frame.
+            One sliced :class:`FramePoints` per cached frame the filter covered.
         """
         column = self._filter_index(metric_filter)
         return [
@@ -383,6 +397,7 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
                 fold_lut=fold_lut,
             )
             for index in range(len(self.coord))
+            if column is None or bool(self.region_available[index][column])
         ]
 
     def state_for(
@@ -402,6 +417,7 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
             num_classes=self.num_classes,
             ignore_index=self.ignore_index,
             class_names=self.class_names,
+            num_frames=self.frame_count(metric_filter),
         )
 
     def _grouped_state_for(
@@ -423,6 +439,7 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
             num_classes=len(self._grouped_names),
             ignore_index=self.ignore_index,
             class_names=self._grouped_names,
+            num_frames=self.frame_count(metric_filter),
         )
 
     def _frame(
@@ -488,11 +505,12 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
         coord_np: np.ndarray,
         boxes_np: np.ndarray,
         active: Any,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, list[bool]]:
         """Resolve every configured filter to one keep-mask column, for points and boxes.
 
         A filter the stage does not read, and a scene the filter has no map for, keep
-        nothing, so the frame drops out of that slice instead of leaking into it.
+        nothing and are flagged unavailable, so the frame drops out of that slice
+        instead of leaking into it.
 
         Args:
             frame: One ``seg3d_frames`` entry, the source of the filter context.
@@ -501,16 +519,19 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
             active: Cache keys of the filters this stage reads.
 
         Returns:
-            The ``(N, F)`` point mask and the ``(M, F)`` box mask, one column per filter.
+            The ``(N, F)`` point mask, the ``(M, F)`` box mask, one column per filter,
+            and per filter whether it covered this frame.
         """
         columns = []
         box_columns = []
+        available = []
         for index, metric_filter in enumerate(self._component_filters):
             context = (
                 self._frame_filter_context(index, metric_filter, frame)
                 if metric_filter.cache_key in active
                 else None
             )
+            available.append(context is not None)
             if context is None:
                 columns.append(np.zeros(coord_np.shape[0], dtype=bool))
                 box_columns.append(np.zeros(boxes_np.shape[0], dtype=bool))
@@ -523,6 +544,7 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
         return (
             self._stack_masks(columns, coord_np.shape[0]),
             self._stack_masks(box_columns, boxes_np.shape[0]),
+            available,
         )
 
     def _stack_masks(self, columns: list[np.ndarray], num_rows: int) -> torch.Tensor:

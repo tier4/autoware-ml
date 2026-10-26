@@ -1,6 +1,7 @@
 # nuScenes ships no lanelet maps, so only the whole-scene components run: no region, corridor
 # or collision slices and no collision metrics.
 detection3d_components:
+  - { _target_: autoware_ml.metrics.detection3d.frame_count.FrameCount, stages: [val, test] }
   - { _target_: autoware_ml.metrics.detection3d.box_counts.BoxCounts, stages: [val, test] }
   - { _target_: autoware_ml.metrics.detection3d.mean_ap.MeanAP, stages: [val, test] }
   - { _target_: autoware_ml.metrics.detection3d.heading_ap.HeadingAP, stages: [test] }

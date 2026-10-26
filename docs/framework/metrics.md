@@ -945,7 +945,15 @@ the label-confusion view among detections that did match, not a recall metric.
 </svg>
 </div>
 
-### Box counts
+### Frame and box counts
+
+`FrameCount` reports how many frames the other metrics scored, as `num_frames`. A region-filtered
+component counts only the frames its filter covered, so a slice reported over fewer scenes than the
+whole-scene metrics shows it next to its scores. Range clipping removes boxes, never frames, so the
+component declares itself `range_invariant` and the suite reports it once per slice instead of once
+per range window. The segmentation suites ship the same component under
+`autoware_ml.metrics.segmentation3d.frame_count`, reading the frame count every suite keeps in its
+base class: one whole-scene counter, and the coverage counter for each filter slice.
 
 `BoxCounts` reports how many ground-truth and predicted boxes the other metrics scored, in total
 and per class. The ground truth is already filtered by the minimum point count and the class range

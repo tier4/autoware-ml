@@ -16,6 +16,7 @@ from autoware_ml.metrics.segmentation3d.calibration import CalibrationError
 from autoware_ml.metrics.segmentation3d.confident_error import ConfidentErrorRate
 from autoware_ml.metrics.segmentation3d.entropy_auroc import UncertaintyUsefulness
 from autoware_ml.metrics.segmentation3d.error_clusters import ErrorClusters
+from autoware_ml.metrics.segmentation3d.frame_count import FrameCount
 from autoware_ml.metrics.segmentation3d.partial_detection3d import PartialDetection3DScore
 from autoware_ml.metrics.segmentation3d.tolerant_error import NeighbourhoodTolerantErrorRate
 from autoware_ml.metrics.segmentation3d.point_cloud import (
@@ -57,7 +58,9 @@ def _frame(xs, target, pred, num_classes: int = 2, scores=None) -> FramePoints:
 
 
 def _state(frames, class_names=CLASS_NAMES) -> PointCloudSeg3DState:
-    return PointCloudSeg3DState(frames, num_classes=2, ignore_index=-1, class_names=class_names)
+    return PointCloudSeg3DState(
+        frames, num_classes=2, ignore_index=-1, class_names=class_names, num_frames=len(frames)
+    )
 
 
 def test_error_clusters_merges_nearby_errors_into_one() -> None:
@@ -115,6 +118,28 @@ def test_suite_caches_frames_and_runs_components() -> None:
     assert "error_rate" in report
     assert "tolerant_error_rate" in report
     assert report["error_rate"] == pytest.approx(0.0)
+
+
+def test_suite_frame_count_reads_the_cache_length() -> None:
+    suite = Segmentation3DPointCloudMetricSuite(
+        components=[FrameCount(stages=["test"])],
+        num_classes=2,
+        class_names=CLASS_NAMES,
+    )
+    frame = {
+        "coord": torch.tensor([[1.0, 0.0, 0.0]]),
+        "pred": torch.tensor([0]),
+        "target": torch.tensor([0]),
+        "scores": torch.full((1, 2), 0.5),
+    }
+    suite.update({"seg3d_frames": [frame, frame]})
+    suite.update({"seg3d_frames": [frame]})
+
+    report = suite.result(EvalStage.TEST)
+
+    assert report["num_frames"] == 3.0
+    # The count is range-invariant: reported once per slice, not per window.
+    assert "num_frames_50m_90m" not in report
 
 
 def test_suite_demands_boxes_for_box_reading_components() -> None:

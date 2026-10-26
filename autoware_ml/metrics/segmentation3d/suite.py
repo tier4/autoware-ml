@@ -5,10 +5,10 @@ matrix per (filter, range) bucket in a single stacked ``(F+1, R+1, C, C)``
 ``"sum"`` state, where slice ``[0, 0]`` is whole-scene, filter slices 1..F are the
 configured evaluation filters (region / corridor / collision) and range slices 1..R the
 radial windows, so memory never grows with the dataset and torchmetrics sums the
-matrices across ranks exactly. Per-point filter membership is resolved at
-``update`` from each ``seg3d_frames`` entry (where the ego pose lives), which is
-what lets a bounded matrix support the filter axis at all. It knows nothing about
-which metrics run: it hands each a ``ConfusionState``.
+matrices across ranks exactly. The frame count comes from the base suite's counters.
+Per-point filter membership is resolved at ``update`` from each ``seg3d_frames`` entry
+(where the ego pose lives), which is what lets a bounded matrix support the filter axis
+at all. It knows nothing about which metrics run: it hands each a ``ConfusionState``.
 """
 
 from __future__ import annotations
@@ -121,6 +121,7 @@ class Segmentation3DConfusionMatrixMetricSuite(MetricSuite[ConfusionState]):
             predictions = predictions[valid].long()
             coord = coord[valid]
 
+            self._note_frame()
             self._accumulate(0, predictions, targets, coord)
             if not active_filter_keys:
                 # No region filter is active at this stage (they are test-only):
@@ -180,15 +181,18 @@ class Segmentation3DConfusionMatrixMetricSuite(MetricSuite[ConfusionState]):
         filter_bucket = 0 if index is None else index + 1
         range_bucket = 0 if metric_range is None else self.ranges.index(metric_range) + 1
         confusion = self.confusion[filter_bucket, range_bucket]
+        num_frames = self.frame_count(metric_filter)
         if self._group_lut is not None:
             num_grouped = len(self._grouped_names)
             return ConfusionState(
                 confusion=fold_confusion(confusion, self._group_lut, num_grouped),
                 class_names=self._grouped_names,
                 num_classes=num_grouped,
+                num_frames=num_frames,
             )
         return ConfusionState(
             confusion=confusion,
             class_names=self.class_names,
             num_classes=self.num_classes,
+            num_frames=num_frames,
         )

@@ -1,6 +1,7 @@
 # Segmentation metric suite on nuScenes, whole scene only since it ships no lanelet maps.
 - _target_: autoware_ml.metrics.segmentation3d.suite.Segmentation3DConfusionMatrixMetricSuite
   components:
+    - { _target_: autoware_ml.metrics.segmentation3d.frame_count.FrameCount, stages: [val, test] }
     - { _target_: autoware_ml.metrics.segmentation3d.iou.IoU, stages: [val, test] }
     - { _target_: autoware_ml.metrics.segmentation3d.accuracy.Accuracy, stages: [val, test] }
     - { _target_: autoware_ml.metrics.segmentation3d.precision_recall_f1.PrecisionRecallF1, stages: [val, test] }

@@ -191,13 +191,16 @@ class Metric(ABC, Generic[StateT]):
     it. The default reads every prediction, so a metric that does not think
     about the floor stays correct. ``needs_boxes`` declares that the metric reads
     per-frame detection ground truth, so a suite can demand those annotations
-    instead of caching empty placeholders.
+    instead of caching empty placeholders. ``range_invariant`` declares that the
+    metric's values do not depend on the radial window (a frame count, say), so
+    the suite reports it once per filter slice instead of once per range.
     """
 
     required_eval_keys: tuple[str, ...] = ()
     needs_ttc: bool = False
     ttc_score_floor: float = 0.0
     needs_boxes: bool = False
+    range_invariant: bool = False
 
     def __init__(
         self,
@@ -276,6 +279,11 @@ class MetricSuite(torchmetrics.Metric, ABC, Generic[StateT]):
         # Availability-gated filters (lanelet region / collision area) register here so
         # the base can log per-filter frame coverage, empty means nothing to gate.
         self._coverage_filters: list[MetricFilter] = []
+        # Frames accumulated by this suite, DDP-summed. The whole-scene source of
+        # ``frame_count``: filter slices read ``region_frames_covered`` instead.
+        self.add_state(
+            "frames_seen", default=torch.zeros((), dtype=torch.long), dist_reduce_fx="sum"
+        )
         if not self.components:
             logger.warning(
                 "%s was constructed with no components, so it will log nothing.",
@@ -444,6 +452,28 @@ class MetricSuite(torchmetrics.Metric, ABC, Generic[StateT]):
                 report[key] = value
         return report
 
+    def _note_frame(self) -> None:
+        """Tally one accumulated frame. Subclasses call this once per frame in ``update``."""
+        self.frames_seen += 1
+
+    def frame_count(self, metric_filter: MetricFilter) -> int:
+        """Frames the given filter's slice holds, after the DDP sync.
+
+        The identity filter sees every accumulated frame. A registered filter sees
+        the frames it covered, read from the coverage counter the suite already
+        keeps, so a slice's frame count and its coverage log never disagree.
+
+        Args:
+            metric_filter: Filter whose slice is being built.
+
+        Returns:
+            The number of frames in the slice.
+        """
+        index = self._filter_index(metric_filter)
+        if index is None:
+            return int(self.frames_seen.item())
+        return int(self.region_frames_covered[index].item())
+
     def _note_frame_coverage(self, index: int, available: bool) -> None:
         """Tally one frame for an availability-gated filter.
 
@@ -533,6 +563,8 @@ class MetricSuite(torchmetrics.Metric, ABC, Generic[StateT]):
             state = state_builder(metric_range, metric_filter)
             for component in components:
                 if self._stage not in component.stages:
+                    continue
+                if metric_range is not None and component.range_invariant:
                     continue
                 for name, value in component.evaluate(state, self._stage).items():
                     # Key names come from the component's OWN filter: filters are

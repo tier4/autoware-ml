@@ -52,12 +52,14 @@ class ConfusionState:
 
     In a grouped suite the matrix is already folded onto the behaviour taxonomy,
     so ``class_names`` are the grouped names and every metric reads it exactly as
-    it reads the per-class matrix.
+    it reads the per-class matrix. ``num_frames`` is how many frames the suite
+    folded into this bucket's filter slice, the same for every range window.
     """
 
     confusion: torch.Tensor
     class_names: tuple[str, ...] | None
     num_classes: int
+    num_frames: int
 
     @cached_property
     def _double(self) -> torch.Tensor:
