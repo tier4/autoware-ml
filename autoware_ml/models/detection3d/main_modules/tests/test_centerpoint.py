@@ -398,10 +398,95 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
         )
         reference = self.centerpoint.build_eval_output(multi_task_batch_inputs, forward_outputs)
         self.assertEqual(deployed.keys(), reference.keys())
-        for key in ("bboxes_3d", "scores_3d", "labels_3d"):
-            torch.testing.assert_close(
-                deployed["predictions"][0][key], reference["predictions"][0][key]
-            )
+        self.assertEqual(len(deployed["predictions"]), self.batch_size)
+        for deployed_sample, reference_sample in zip(
+            deployed["predictions"], reference["predictions"], strict=True
+        ):
+            for key in ("bboxes_3d", "scores_3d", "labels_3d"):
+                torch.testing.assert_close(deployed_sample[key], reference_sample[key])
+
+    def test_stage_graph_runs_on_deployment_inputs_without_ground_truth(self) -> None:
+        """Test that voxels with an empty GT batch, as a runtime feeds them, trace both graphs."""
+        self.centerpoint.eval()
+        batch_inputs = self._build_multi_task_batch_inputs()
+        voxels_data = batch_inputs.voxels_data
+        assert voxels_data is not None
+        inputs = ModelBatchInputs(
+            multi_task_gt_batch=ModelGTBatch(
+                point_cloud_gt_batch=None,
+                detection3d_gt_batch=None,
+                segmentation3d_gt_batch=None,
+                image_gt_batch=None,
+                io_processing_time=0.0,
+                padding_mask=torch.zeros(self.batch_size, dtype=torch.bool, device=self.device),
+            ),
+            voxels_data=voxels_data,
+            image_data=None,
+            range_view_data=None,
+        )
+
+        specs = self.centerpoint.build_export_specs(inputs)
+
+        (spatial_features,) = specs["pts_backbone_neck_head_centerpoint"].args
+        self.assertEqual(spatial_features.shape[0], self.batch_size)
+
+    def test_stage_graph_keeps_a_canvas_for_a_sample_without_voxels(self) -> None:
+        """
+        Test that the stage graph scores every sample like forward() does, including one without
+        any voxel: the last sample of a batch, or the only sample of one.
+        """
+        self.centerpoint.eval()
+        stages = self.centerpoint.build_stages()
+        batch_inputs = self._build_multi_task_batch_inputs()
+        voxels_data = batch_inputs.voxels_data
+        gt_batch = batch_inputs.multi_task_gt_batch
+        gt_boxes = gt_batch.detection3d_gt_batch
+        assert voxels_data is not None and gt_boxes is not None
+        first_sample_boxes = gt_boxes._replace(
+            **{name: value[:1] for name, value in gt_boxes._asdict().items() if value is not None}
+        )
+        cases = {
+            # Every voxel belongs to the first sample; the second has only its ground truth.
+            "last sample": ModelBatchInputs(
+                multi_task_gt_batch=gt_batch,
+                voxels_data=voxels_data._replace(
+                    batch_indices=torch.zeros_like(voxels_data.batch_indices)
+                ),
+                image_data=None,
+                range_view_data=None,
+            ),
+            "only sample": ModelBatchInputs(
+                multi_task_gt_batch=gt_batch._replace(
+                    detection3d_gt_batch=first_sample_boxes,
+                    padding_mask=gt_batch.padding_mask[:1],
+                ),
+                voxels_data=voxels_data._replace(
+                    voxels=voxels_data.voxels[:0],
+                    coords=voxels_data.coords[:0],
+                    num_points=voxels_data.num_points[:0],
+                    batch_indices=voxels_data.batch_indices[:0],
+                ),
+                image_data=None,
+                range_view_data=None,
+            ),
+        }
+        for case, inputs in cases.items():
+            with self.subTest(case=case):
+                with torch.no_grad():
+                    forward_outputs = self.centerpoint(inputs)
+                state = run_stages_in_torch(stages, inputs, self.device)
+
+                torch.testing.assert_close(
+                    state["heatmap"],
+                    forward_outputs.detection3d().center_head().heatmap,
+                    rtol=1e-3,
+                    atol=1e-3,
+                )
+                deployed = self.centerpoint.build_deployed_eval_output(
+                    inputs, {name: state[name] for name in model_output_names(stages)}
+                )
+                reference = self.centerpoint.build_eval_output(inputs, forward_outputs)
+                self.assertEqual(len(deployed["predictions"]), len(reference["predictions"]))
 
 
 if __name__ == "__main__":

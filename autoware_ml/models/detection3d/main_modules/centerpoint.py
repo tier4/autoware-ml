@@ -34,6 +34,7 @@ from torch.optim.lr_scheduler import LRScheduler
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
+from autoware_ml.dataclasses.geometry.voxels import VoxelsData
 from autoware_ml.dataclasses.models.detection3d.head_outputs import (
     CenterHeadOutputs,
     Detection3DHeadOutputs,
@@ -249,12 +250,12 @@ class CenterPointDetection3DModel(ModuleBaseModel):
                 -> scatter (torch) -> pts_backbone_neck_head_centerpoint (graph)
 
         Pillar decoration and the BEV scatter are pure tensor bookkeeping without learned
-        parameters and stay outside the graphs. The export specs, the per-backend
-        inference pipeline, verification and evaluation are all derived from this
-        declaration.
+        parameters and stay outside the graphs. The export specs are derived from this
+        declaration, and running it reproduces forward() up to the head maps, which
+        :meth:`build_deployed_eval_output` scores.
         """
 
-        def voxels_data(state: RunState):
+        def voxels_data(state: RunState) -> VoxelsData:
             voxels_data = state.batch.voxels_data
             if voxels_data is None:
                 raise ValueError(
