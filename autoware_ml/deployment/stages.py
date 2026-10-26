@@ -150,6 +150,15 @@ class GraphStage:
     def __post_init__(self) -> None:
         if not self.inputs or not self.outputs:
             raise ValueError(f"GraphStage {self.name!r} must declare inputs and outputs.")
+        # ONNX names every graph input and output once; the exporter would rename a repeat
+        # (``x`` -> ``x.1``) and the artifact would no longer carry the declared names.
+        for kind, names in (("inputs", self.inputs), ("outputs", self.outputs)):
+            repeated = sorted({name for name in names if names.count(name) > 1})
+            if repeated:
+                raise ValueError(
+                    f"GraphStage {self.name!r} lists {repeated} more than once in its {kind}; "
+                    "each is one ONNX tensor name."
+                )
 
 
 Stage = TorchStage | GraphStage
@@ -169,11 +178,15 @@ def validate_stages(stages: Sequence[Stage]) -> tuple[Stage, ...]:
     tests pin it.
 
     Raises:
+        TypeError: On an entry that is neither a ``TorchStage`` nor a ``GraphStage``.
         ValueError: On duplicate stage names, a name written by two stages, a stage
             reading a name no earlier stage wrote, no exportable stage, or no model
             output (every graph output consumed by later glue).
     """
     stages = tuple(stages)
+    others = [type(stage).__name__ for stage in stages if not isinstance(stage, Stage)]
+    if others:
+        raise TypeError(f"A stage graph holds TorchStage and GraphStage entries, got {others}.")
     names = [stage.name for stage in stages]
     duplicates = sorted({name for name in names if names.count(name) > 1})
     if duplicates:

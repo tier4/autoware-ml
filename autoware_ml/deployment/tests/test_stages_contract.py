@@ -121,6 +121,17 @@ class TestStageDeclaration:
         with pytest.raises(ValueError, match="must declare inputs and outputs"):
             GraphStage("h", module=_Double(), inputs=(), outputs=("y",))
 
+    def test_graph_stage_names_each_onnx_tensor_once(self):
+        # The exporter would rename the repeated input to ``x.1``, away from the declaration.
+        with pytest.raises(ValueError, match=r"\['x'\] more than once in its inputs"):
+            GraphStage("sub", module=_Subtract(), inputs=("x", "x"), outputs=("y",))
+        with pytest.raises(ValueError, match=r"\['y'\] more than once in its outputs"):
+            GraphStage("head", module=_SplitHead(), inputs=("x",), outputs=("y", "y"))
+
+    def test_entries_other_than_stages_rejected(self):
+        with pytest.raises(TypeError, match=r"got \['dict'\]"):
+            validate_stages((*_toy_stages(), {"name": "post"}))
+
     def test_duplicate_graph_outputs_rejected(self):
         stages = list(_toy_stages())
         stages[3] = GraphStage("head", module=_SplitHead(), inputs=("z",), outputs=("plus", "y"))
