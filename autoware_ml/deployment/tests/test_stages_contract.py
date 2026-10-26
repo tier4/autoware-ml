@@ -163,12 +163,6 @@ class TestStageDeclaration:
         with pytest.raises(KeyError, match="available: \\['mid'\\]"):
             state["typo"]
 
-    def test_artifact_paths_derive_from_stage_name(self, tmp_path):
-        assert artifact_path(tmp_path, "encoder", Backend.ONNX) == tmp_path / "encoder.onnx"
-        assert artifact_path(tmp_path, "encoder", Backend.TENSORRT) == tmp_path / "encoder.engine"
-        with pytest.raises(ValueError):
-            artifact_path(tmp_path, "encoder", Backend.PYTORCH)
-
 
 class TestRunStagesInTorch:
     def test_runs_all_stages_in_order(self):
@@ -255,8 +249,8 @@ def test_artifact_path_per_backend() -> None:
 def test_backend_name_formats_as_its_config_spelling() -> None:
     assert f"{Backend.TENSORRT}" == "tensorrt"
     assert Backend("onnx") is Backend.ONNX
-    with pytest.raises(ValueError, match="Unknown backend 'tflite'"):
-        Backend("tflite")
+    with pytest.raises(ValueError, match="Unknown backend 'tensorflow'"):
+        Backend("tensorflow")
 
 
 def test_glue_stage_must_declare_outputs() -> None:
