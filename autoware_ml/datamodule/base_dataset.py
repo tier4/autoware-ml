@@ -55,6 +55,7 @@ class BaseDataset(Dataset):
         database_root_path: str,
         *,
         max_num_3d_gt_bboxes: int | None = None,
+        max_num_2d_gt_bboxes: int | None = None,
         dataset_records_dataframe: pl.DataFrame | None = None,
         transforms: TransformsCompose | None,
         det3d_supervised: bool = True,
@@ -68,6 +69,9 @@ class BaseDataset(Dataset):
           database_root_path: Root directory of the database the dataset reads.
           max_num_3d_gt_bboxes: Number of 3D boxes every sample is padded to in a batch, extra
               boxes are dropped. Required when the samples carry 3D boxes, None otherwise.
+          max_num_2d_gt_bboxes: Number of 2D boxes every camera of a sample is padded to in a
+              batch, extra boxes are dropped. Required when the samples carry 2D boxes, None
+              otherwise.
           dataset_records_dataframe: Polars DataFrame of the dataset records. None until the
               dataset is bound to the records of its source.
           transforms: Global transforms to be applied to the dataset records.
@@ -82,6 +86,7 @@ class BaseDataset(Dataset):
         super().__init__()
         self.database_root_path = Path(database_root_path)
         self.max_num_3d_gt_bboxes = max_num_3d_gt_bboxes
+        self.max_num_2d_gt_bboxes = max_num_2d_gt_bboxes
         self.transforms = transforms
         self.dataset_records_dataframe = dataset_records_dataframe
         self.det3d_supervised = det3d_supervised
@@ -237,7 +242,9 @@ class BaseDataset(Dataset):
           ModelGTBatch: Collated GT batch.
         """
         return ModelGTBatch.collate_gt_samples(
-            gt_samples=batch, max_num_3d_gt_bboxes=self.max_num_3d_gt_bboxes
+            gt_samples=batch,
+            max_num_3d_gt_bboxes=self.max_num_3d_gt_bboxes,
+            max_num_2d_gt_bboxes=self.max_num_2d_gt_bboxes,
         )
 
 
@@ -275,6 +282,11 @@ class ConcatDataset(Dataset):
         # Padding size of the 3D boxes, the largest one a source sets
         self.max_num_3d_gt_bboxes = max(
             (d.max_num_3d_gt_bboxes for d in self.datasets if d.max_num_3d_gt_bboxes is not None),
+            default=None,
+        )
+        # Padding size of the 2D boxes of every camera, the largest one a source sets
+        self.max_num_2d_gt_bboxes = max(
+            (d.max_num_2d_gt_bboxes for d in self.datasets if d.max_num_2d_gt_bboxes is not None),
             default=None,
         )
 
@@ -364,5 +376,7 @@ class ConcatDataset(Dataset):
           ModelGTBatch: Collated GT batch.
         """
         return ModelGTBatch.collate_gt_samples(
-            gt_samples=batch, max_num_3d_gt_bboxes=self.max_num_3d_gt_bboxes
+            gt_samples=batch,
+            max_num_3d_gt_bboxes=self.max_num_3d_gt_bboxes,
+            max_num_2d_gt_bboxes=self.max_num_2d_gt_bboxes,
         )

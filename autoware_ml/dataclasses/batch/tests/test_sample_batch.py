@@ -21,6 +21,7 @@ import unittest
 
 import torch
 
+from autoware_ml.dataclasses.batch.detection2d import Detection2DGTSample
 from autoware_ml.dataclasses.batch.detection3d import Detection3DGTBatch
 from autoware_ml.dataclasses.batch.frame_meta import FrameMetaBatch, FrameMetaSample
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch, ModelGTSample
@@ -32,6 +33,7 @@ from autoware_ml.dataclasses.geometry.transformation import LiDARTransformationS
 from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
 from autoware_ml.geometry.points.lidar_points import LiDARPoints
 from autoware_ml.types.geometry import (
+    Box2DFieldIndex,
     Box3DCenterCoordinateType,
     Box3DFieldIndex,
     PointFeatureName,
@@ -76,13 +78,17 @@ class TestModelGTBatchDetection3DCollation(unittest.TestCase):
         """Collating 3D boxes without a padding size fails instead of dropping them."""
         with self.assertRaises(ValueError):
             ModelGTBatch.collate_gt_samples(
-                gt_samples=[self._build_sample(2, None)], max_num_3d_gt_bboxes=None
+                gt_samples=[self._build_sample(2, None)],
+                max_num_3d_gt_bboxes=None,
+                max_num_2d_gt_bboxes=None,
             )
 
     def _collate(self, samples: Sequence[ModelGTSample]) -> Detection3DGTBatch:
         """Collate the samples and return the 3D detection batch, which must exist."""
         batch = ModelGTBatch.collate_gt_samples(
-            gt_samples=samples, max_num_3d_gt_bboxes=self.max_num_3d_gt_bboxes
+            gt_samples=samples,
+            max_num_3d_gt_bboxes=self.max_num_3d_gt_bboxes,
+            max_num_2d_gt_bboxes=None,
         )
         assert batch.detection3d_gt_batch is not None
         return batch.detection3d_gt_batch
@@ -179,6 +185,82 @@ class TestModelGTBatchDetection3DCollation(unittest.TestCase):
         self.assertIsNone(moved_without_status.gt_traffic_cone_barrier_bbox_status)
 
 
+class TestModelGTBatchDetection2DCollation(unittest.TestCase):
+    """Unit tests for the 2D detection part of ``ModelGTBatch.collate_gt_samples``."""
+
+    def _build_sample(self, num_boxes: int | None) -> ModelGTSample:
+        """Build a sample of one camera holding ``num_boxes`` 2D boxes, or none at all."""
+        detection2d_gt_sample = (
+            None
+            if num_boxes is None
+            else Detection2DGTSample(
+                gt_bboxes_2d=[torch.ones((num_boxes, len(Box2DFieldIndex)))],
+                gt_labels_2d=[torch.zeros(num_boxes, dtype=torch.int32)],
+            )
+        )
+        return ModelGTSample(
+            lidar_point_cloud_samples=None,
+            image_samples=None,
+            point_cloud_data=None,
+            camera_image_data=None,
+            detection3d_gt_bboxes_3d=None,
+            segmentation3d_gt_sample=None,
+            detection2d_gt_sample=detection2d_gt_sample,
+        )
+
+    def test_collates_and_moves_the_2d_boxes(self) -> None:
+        """
+        Input: two samples of one camera holding 2 and 1 boxes, collated with
+        max_num_2d_gt_bboxes 3, then moved to the CPU.
+        Expected: the batch carries the 2D boxes padded to the given size in
+        detection2d_gt_batch, and to_device moves them with the rest of the batch.
+        Check: the valid counts, the label shape, and the moved boxes equal the collated ones.
+        """
+        batch = ModelGTBatch.collate_gt_samples(
+            [self._build_sample(2), self._build_sample(1)],
+            max_num_3d_gt_bboxes=0,
+            max_num_2d_gt_bboxes=3,
+        )
+
+        assert batch.detection2d_gt_batch is not None
+        self.assertEqual(batch.detection2d_gt_batch.gt_valid_bboxes_2d.tolist(), [[2], [1]])
+        self.assertEqual(batch.detection2d_gt_batch.gt_labels_2d.shape, (2, 1, 3))
+        moved = batch.to_device(torch.device("cpu"))
+        assert moved.detection2d_gt_batch is not None
+        self.assertTrue(
+            torch.equal(
+                moved.detection2d_gt_batch.gt_bboxes_2d, batch.detection2d_gt_batch.gt_bboxes_2d
+            )
+        )
+
+    def test_samples_without_2d_boxes_collate_to_none(self) -> None:
+        """
+        Input: two samples without 2D boxes, collated without max_num_2d_gt_bboxes.
+        Expected: the 2D part of the batch is absent, so it needs no padding size.
+        Check: detection2d_gt_batch is None.
+        """
+        batch = ModelGTBatch.collate_gt_samples(
+            [self._build_sample(None), self._build_sample(None)],
+            max_num_3d_gt_bboxes=0,
+            max_num_2d_gt_bboxes=None,
+        )
+
+        self.assertIsNone(batch.detection2d_gt_batch)
+
+    def test_rejects_2d_boxes_on_only_some_samples(self) -> None:
+        """
+        Input: a sample carrying 2D boxes next to a sample carrying none.
+        Expected: the batch cannot hold 2D boxes for only some of its samples.
+        Check: a ValueError naming detection2d_gt_sample is raised.
+        """
+        with self.assertRaisesRegex(ValueError, "detection2d_gt_sample"):
+            ModelGTBatch.collate_gt_samples(
+                [self._build_sample(1), self._build_sample(None)],
+                max_num_3d_gt_bboxes=0,
+                max_num_2d_gt_bboxes=3,
+            )
+
+
 class TestModelGTBatchFrameMetaCollation(unittest.TestCase):
     """Unit tests for the frame metadata part of ``ModelGTBatch.collate_gt_samples``."""
 
@@ -205,7 +287,9 @@ class TestModelGTBatchFrameMetaCollation(unittest.TestCase):
         )
 
     def _collate(self, samples: Sequence[ModelGTSample]) -> FrameMetaBatch | None:
-        return ModelGTBatch.collate_gt_samples(samples, max_num_3d_gt_bboxes=0).frame_meta_batch
+        return ModelGTBatch.collate_gt_samples(
+            samples, max_num_3d_gt_bboxes=0, max_num_2d_gt_bboxes=None
+        ).frame_meta_batch
 
     def test_sample_defaults_to_no_frame_meta(self) -> None:
         self.assertIsNone(self._build_sample(frame_meta=None).frame_meta)
@@ -258,6 +342,7 @@ class TestModelGTBatchFrameMetaCollation(unittest.TestCase):
         batch = ModelGTBatch.collate_gt_samples(
             [self._build_sample(FrameMetaSample(self._build_ego2global(3.0), "db/s/0"))],
             max_num_3d_gt_bboxes=0,
+            max_num_2d_gt_bboxes=None,
         )
 
         moved = batch.to_device(torch.device("cpu"))
@@ -314,7 +399,9 @@ class TestModelGTBatchSegmentation3DCollation(unittest.TestCase):
     def _collate(self, samples: Sequence[ModelGTSample]) -> Segmentation3DGTBatch | None:
         """Collate the samples and return the segmentation batch."""
         batch = ModelGTBatch.collate_gt_samples(
-            gt_samples=samples, max_num_3d_gt_bboxes=self.max_num_3d_gt_bboxes
+            gt_samples=samples,
+            max_num_3d_gt_bboxes=self.max_num_3d_gt_bboxes,
+            max_num_2d_gt_bboxes=None,
         )
         return batch.segmentation3d_gt_batch
 
@@ -403,7 +490,9 @@ class TestModelGTBatchPaddingMask(unittest.TestCase):
     def _collate(self, flags: Sequence[bool]) -> ModelGTBatch:
         """Collate one sample per flag, in order."""
         return ModelGTBatch.collate_gt_samples(
-            [self._build_sample(is_padding) for is_padding in flags], max_num_3d_gt_bboxes=2
+            [self._build_sample(is_padding) for is_padding in flags],
+            max_num_3d_gt_bboxes=2,
+            max_num_2d_gt_bboxes=None,
         )
 
     def test_sample_defaults_to_a_frame_of_the_split(self) -> None:
