@@ -74,18 +74,16 @@ class PointCloudSeg3DState:
 
     In a grouped suite the cached per-point labels and uncertainty scalars are
     already folded onto the behaviour taxonomy, so ``class_names`` are the
-    grouped names and metrics read the frames unchanged.
+    grouped names and metrics read the frames unchanged. ``num_frames`` is the
+    suite's frame count for the bucket's filter, which equals ``len(frames)``
+    because an uncovered frame is left out of the slice.
     """
 
     frames: list[FramePoints]
     num_classes: int
     ignore_index: int
     class_names: tuple[str, ...] | None
-
-    @property
-    def num_frames(self) -> int:
-        """Number of cached frames in this bucket."""
-        return len(self.frames)
+    num_frames: int
 
 
 class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
@@ -319,6 +317,7 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
                 if target_min < -(2**15) or target_max >= 2**15:
                     raise ValueError("target labels exceed the int16 cache range.")
             confidence_values, entropy = _reduce_scores(scores, pred)
+            self._note_frame()
             coord_cpu = coord.cpu()
             self.coord.append(coord_cpu)
             self.pred.append(pred.to(torch.int16).cpu())
@@ -418,6 +417,7 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
             num_classes=self.num_classes,
             ignore_index=self.ignore_index,
             class_names=self.class_names,
+            num_frames=self.frame_count(metric_filter),
         )
 
     def _grouped_state_for(
@@ -439,6 +439,7 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
             num_classes=len(self._grouped_names),
             ignore_index=self.ignore_index,
             class_names=self._grouped_names,
+            num_frames=self.frame_count(metric_filter),
         )
 
     def _frame(

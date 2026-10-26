@@ -58,7 +58,9 @@ def _frame(xs, target, pred, num_classes: int = 2, scores=None) -> FramePoints:
 
 
 def _state(frames, class_names=CLASS_NAMES) -> PointCloudSeg3DState:
-    return PointCloudSeg3DState(frames, num_classes=2, ignore_index=-1, class_names=class_names)
+    return PointCloudSeg3DState(
+        frames, num_classes=2, ignore_index=-1, class_names=class_names, num_frames=len(frames)
+    )
 
 
 def test_error_clusters_merges_nearby_errors_into_one() -> None:

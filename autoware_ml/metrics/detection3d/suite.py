@@ -268,6 +268,7 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
                 self.min_num_points,
             )
 
+            self._note_frame()
             pred_boxes = prediction["bboxes_3d"].detach().to(dtype=torch.float32)
             self.pred_boxes.append(pred_boxes)
             self.pred_scores.append(prediction["scores_3d"].detach().to(dtype=torch.float32))
