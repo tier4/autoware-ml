@@ -242,6 +242,15 @@ def test_scoring_deployed_outputs_needs_the_model_mapping() -> None:
         _PlainModel().build_deployed_eval_output({}, {})
 
 
+def test_stages_passed_as_a_generator_export_every_graph() -> None:
+    # The declaration is read once: a one-shot iterable still yields its graph specs.
+    def stages():
+        yield TorchStage("seed", run=lambda state: {"x": torch.ones(2)}, inputs=(), outputs=("x",))
+        yield GraphStage("g", module=nn.Identity(), inputs=("x",), outputs=("y",))
+
+    assert list(build_export_specs_from_stages(stages(), None, torch.device("cpu"))) == ["g"]
+
+
 def test_a_stage_reading_an_unwritten_name_fails_before_anything_runs() -> None:
     stages = (
         TorchStage("seed", run=lambda state: {"x": state.batch["x"]}, inputs=(), outputs=("x",)),
