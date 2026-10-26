@@ -17,8 +17,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
+from omegaconf import OmegaConf
 import pytest
 import torch
 from torch import nn
@@ -27,7 +29,7 @@ from autoware_ml.deployment.export_specs import build_export_specs_from_stages
 from autoware_ml.deployment.stages import GraphStage, Stage, TorchStage
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
-from autoware_ml.utils.deploy import ExportSpec
+from autoware_ml.utils.deploy import ExportSpec, export_to_onnx
 from autoware_ml.types.backend import Backend
 
 
@@ -165,6 +167,44 @@ def test_a_stage_graph_refuses_to_trace_in_training_mode() -> None:
     model = _StagedModel().train()
     with pytest.raises(RuntimeError, match="eval mode"):
         model.build_export_specs(_batch())
+
+
+def test_a_stage_graph_refuses_to_trace_with_a_submodule_in_training_mode() -> None:
+    # The model's own flag says eval, one of its submodules says training.
+    model = _StagedModel().eval()
+    model.encoder.train()
+    with pytest.raises(RuntimeError, match=r"eval mode.*\['encoder', 'encoder.linear'\]"):
+        model.build_export_specs(_batch())
+
+
+class _Wrapper(nn.Module):
+    """An export wrapper around a model submodule; it starts in nn.Module's training mode."""
+
+    def __init__(self, inner: nn.Module) -> None:
+        super().__init__()
+        self.inner = inner
+
+    def forward(self, x):
+        return self.inner(x)
+
+
+def test_export_leaves_the_submodules_a_wrapper_shares_in_eval_mode(tmp_path: Path) -> None:
+    shared = nn.Sequential(nn.Linear(2, 2), nn.BatchNorm1d(2)).eval()
+    stages = (
+        TorchStage("seed", run=lambda state: {"x": state.batch["x"]}, inputs=(), outputs=("x",)),
+        GraphStage("wrapped", module=_Wrapper(shared), inputs=("x",), outputs=("y",)),
+    )
+    spec = build_export_specs_from_stages(stages, {"x": torch.rand(4, 2)}, torch.device("cpu"))[
+        "wrapped"
+    ]
+    assert not spec.module.training
+
+    export_to_onnx(
+        spec, OmegaConf.create({"dynamo": False, "opset_version": 17}), tmp_path / "wrapped.onnx"
+    )
+    # The exporter hands the wrapper its own mode back, recursively: a wrapper left in
+    # training mode would have put the shared BatchNorm in training mode as well.
+    assert not any(module.training for module in shared.modules())
 
 
 def test_multi_input_spec_args_follow_the_declared_input_order() -> None:

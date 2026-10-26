@@ -35,6 +35,7 @@ from autoware_ml.deployment.stages import (
     Stage,
     graph_stages,
     run_stages_in_torch,
+    validate_stages,
 )
 from autoware_ml.utils.deploy import ExportSpec
 
@@ -71,6 +72,12 @@ def build_export_specs_from_stages(
 ) -> dict[str, ExportSpec]:
     """Run the stage graph once and return one export spec per graph stage, in order.
 
+    Every graph stage's module is put in eval mode first, the mode it is traced and exported
+    in. An export wrapper starts in training mode (``nn.Module``'s default), and
+    ``torch.onnx.export`` hands the exported module its own mode back when it is done,
+    recursively: a wrapper left in training mode would put the model submodules it shares
+    in training mode too, and their BatchNorm layers would keep training after the export.
+
     Args:
         stages: The model's stage declaration (``model.build_stages()``).
         batch: One preprocessed example batch (what ``on_after_batch_transfer`` returns).
@@ -80,5 +87,8 @@ def build_export_specs_from_stages(
         Ordered mapping ``{stage.name: ExportSpec}`` — the same shape a hand-written
         ``build_export_specs`` returns.
     """
+    stages = validate_stages(stages)
+    for stage in graph_stages(stages):
+        stage.module.eval()
     state = run_stages_in_torch(stages, batch, device)
     return {stage.name: export_spec_for_stage(stage, state) for stage in graph_stages(stages)}

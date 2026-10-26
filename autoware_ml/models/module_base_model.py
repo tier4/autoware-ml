@@ -485,16 +485,23 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
             Ordered mapping of module name to export specification.
 
         Raises:
-            RuntimeError: If the model declares a stage graph but is in training mode;
-                tracing the graphs would update the BatchNorm running statistics.
+            RuntimeError: If the model declares a stage graph but it, or any of its
+                submodules, is in training mode; tracing the graphs would update the
+                BatchNorm running statistics.
         """
         stages = self.build_stages()
         if stages is not None:
-            if self.training:
+            # Every submodule, not only the model's own flag: a submodule can be left in
+            # training mode under a model in eval mode.
+            in_training = [
+                name or "<model>" for name, module in self.named_modules() if module.training
+            ]
+            if in_training:
                 raise RuntimeError(
                     f"{type(self).__name__}.build_export_specs() needs the model in eval "
                     "mode: tracing the stage graph in training mode would update the "
-                    "BatchNorm running statistics."
+                    f"BatchNorm running statistics. In training mode: {in_training[:3]}"
+                    f"{' ...' if len(in_training) > 3 else ''}."
                 )
             return build_export_specs_from_stages(stages, multi_task_batch_inputs, self.device)
         return {"end_to_end": self.build_export_spec(multi_task_batch_inputs)}

@@ -14,8 +14,12 @@
 
 """Unit tests for CenterPoint detection model."""
 
+from pathlib import Path
+import tempfile
 import unittest
 
+from omegaconf import OmegaConf
+import onnx
 import torch
 
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
@@ -38,6 +42,7 @@ from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.preprocessing.detection3d.point_pillar_preprocessor import PointPillarPreprocessor
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 from autoware_ml.ops.voxelization.voxelization import VoxelsData
+from autoware_ml.utils.deploy import export_to_onnx
 
 
 class TestCenterPointDetection3DModel(unittest.TestCase):
@@ -320,6 +325,40 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "eval mode"):
             self.centerpoint.build_export_specs(self._build_multi_task_batch_inputs())
+
+    def test_exported_graphs_keep_the_runtime_names_and_the_model_in_eval_mode(self) -> None:
+        """
+        Test that the exported ONNX graphs carry the input and output names, in the order the
+        runtime binds them, and that exporting them leaves every submodule of the model in
+        eval mode: the export wrappers share the voxel encoder, backbone and neck with it.
+        """
+        self.centerpoint.eval()
+        specs = self.centerpoint.build_export_specs(self._build_multi_task_batch_inputs())
+        # CenterPoint's exporter settings (deploy.onnx in the task base config).
+        onnx_cfg = OmegaConf.create(
+            {"dynamo": False, "opset_version": 17, "do_constant_folding": False}
+        )
+        expected_names = {
+            "pts_voxel_encoder_centerpoint": (["input_features"], ["pillar_features"]),
+            "pts_backbone_neck_head_centerpoint": (
+                ["spatial_features"],
+                ["heatmap", "reg", "height", "dim", "rot", "vel"],
+            ),
+        }
+
+        with tempfile.TemporaryDirectory() as output_dir:
+            for name, spec in specs.items():
+                onnx_path = Path(output_dir) / f"{name}.onnx"
+                export_to_onnx(spec, onnx_cfg, onnx_path)
+                graph = onnx.load(str(onnx_path)).graph
+                self.assertEqual(
+                    ([value.name for value in graph.input], [value.name for value in graph.output]),
+                    expected_names[name],
+                )
+
+        self.assertEqual(
+            [name for name, module in self.centerpoint.named_modules() if module.training], []
+        )
 
     def test_stage_graph_reproduces_forward_and_names_the_deployed_modules(self) -> None:
         """The declared stages are the deployed split of forward(): same outputs, same names."""
