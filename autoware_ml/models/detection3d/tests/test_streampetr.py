@@ -5,7 +5,11 @@ from __future__ import annotations
 from collections.abc import Iterator, Sequence
 from copy import deepcopy
 import math
+from pathlib import Path
 
+import numpy as np
+from omegaconf import OmegaConf
+import onnxruntime
 import pytest
 import torch
 import torch.nn as nn
@@ -32,6 +36,7 @@ from autoware_ml.models.tests.batch_inputs_fixtures import (
     build_detection3d_gt_batch,
 )
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
+from autoware_ml.utils.deploy import ExportSpec, export_to_onnx
 
 NUM_CAMS = 6
 IMAGE_HW = (96, 160)
@@ -606,6 +611,155 @@ def test_export_wrappers_are_built_in_eval_mode() -> None:
         assert not specs[name].module.training
         assert not specs[name].module.head.training
     assert specs["position_embedding"].module.head is specs["pts_head_memory"].module.head
+
+
+def _onnx_sessions(
+    model: StreamPETRDetection3DModel, batch_inputs: ModelBatchInputs, directory: Path
+) -> tuple[dict[str, ExportSpec], dict[str, onnxruntime.InferenceSession]]:
+    """Export the three graphs with the settings of the deploy config and open them."""
+    specs = model.build_export_specs(batch_inputs)
+    onnx_cfg = OmegaConf.create({"opset_version": 17, "dynamo": False, "do_constant_folding": True})
+    sessions = {}
+    for name, spec in specs.items():
+        path = directory / f"{name}.onnx"
+        export_to_onnx(
+            model=spec.module,
+            input_sample=spec.args,
+            onnx_cfg=onnx_cfg,
+            input_param_names=spec.input_param_names,
+            output_names_override=spec.output_names,
+            dynamic_axes_override=spec.dynamic_axes,
+            output_path=path,
+        )
+        sessions[name] = onnxruntime.InferenceSession(str(path), providers=["CPUExecutionProvider"])
+    return specs, sessions
+
+
+@pytest.mark.parametrize("feeding", ["map_frame", "ego_relative"])
+def test_onnx_graphs_match_the_eval_forward_over_a_stream(tmp_path: Path, feeding: str) -> None:
+    """
+    Input: three frames of one scene kilometers from the map origin, turning, seen by six
+    differently calibrated cameras; the exported graphs run in ONNX Runtime the way the node
+    runs them: a zero bank first, then the previous post bank with its ages dated. The poses
+    bound are the map-frame ones, or the identity and the motion since the previous frame.
+    Expected: the ONNX graphs predict what the eval forward predicts on every frame, either way.
+    Check: the last-layer logits and boxes, and the post-bank reference points and poses in the
+    vehicle frame.
+    """
+    torch.manual_seed(0)
+    model = _build_model().eval()
+    head = model.bbox_head
+    # Spread the logits around zero: the 1 % prior of an untrained head puts every score in the
+    # sigmoid tail, where ONNX Runtime rounds them into ties that would decide the top-k order.
+    with torch.no_grad():
+        nn.init.normal_(head.cls_branches[0][-1].weight, std=0.15)
+        nn.init.zeros_(head.cls_branches[0][-1].bias)
+    intrinsics = torch.eye(3).repeat(1, NUM_CAMS, 1, 1)
+    intrinsics[0, :, 0, 0] = 100.0 + 40.0 * torch.arange(NUM_CAMS)
+    intrinsics[0, :, 1, 1] = 1.05 * intrinsics[0, :, 0, 0]
+    intrinsics[0, :, 0, 2] = IMAGE_HW[1] / 2
+    intrinsics[0, :, 1, 2] = IMAGE_HW[0] / 2
+    lidar2cams = torch.eye(4).repeat(1, NUM_CAMS, 1, 1)
+    # Optical axes along the lidar x axis turned by each camera's heading.
+    lidar_to_optical = torch.tensor([[0.0, -1.0, 0.0], [0.0, 0.0, -1.0], [1.0, 0.0, 0.0]])
+    for index in range(NUM_CAMS):
+        heading = _far_pose(0.0, 0.0, 2 * math.pi * index / NUM_CAMS)[0, :3, :3]
+        rotation = lidar_to_optical @ heading.T
+        lidar2cams[0, index, :3, :3] = rotation
+        lidar2cams[0, index, :3, 3] = -rotation @ torch.tensor([0.3 * index, 0.1, 1.6])
+    images = [torch.randn(1, NUM_CAMS, 3, *IMAGE_HW) for _ in range(3)]
+    poses = [
+        _far_pose(3000.0 + 1.2 * index, -1200.0 + 0.4 * index, 0.3 + 0.02 * index)
+        for index in range(3)
+    ]
+
+    def frame_inputs(index: int) -> ModelBatchInputs:
+        return build_batch_inputs(
+            images=_build_images(
+                images[index], camera_intrinsics=intrinsics, lidar2cams=lidar2cams
+            ),
+            frame_meta=_build_frame_meta([0.5 * index], ["a"], poses[index]),
+        )
+
+    with torch.no_grad():
+        specs, sessions = _onnx_sessions(model, frame_inputs(0), tmp_path)
+    calibration = specs["position_embedding"]
+    pos_embed, cone = sessions["position_embedding"].run(
+        None,
+        {name: arg.numpy() for name, arg in zip(calibration.input_param_names, calibration.args)},
+    )
+    head_spec = specs["pts_head_memory"]
+    # The bank the runtime clears at start-up, and the date of every entry it keeps between frames.
+    bank = {
+        name: arg.numpy() for name, arg in zip(head_spec.input_param_names[5:], head_spec.args[5:])
+    }
+    dates = np.zeros_like(bank["pre_memory_timestamp"])
+
+    def in_vehicle_frame(points: torch.Tensor, to_vehicle: torch.Tensor) -> torch.Tensor:
+        return points.double() @ to_vehicle[:3, :3].T + to_vehicle[:3, 3]
+
+    for index, pose in enumerate(poses):
+        frame_time = np.float32(0.5 * index)
+        if feeding == "map_frame":
+            ego_pose = pose.double()
+            ego_pose_inv = torch.linalg.inv(ego_pose)
+        else:
+            # The bank stays in the previous vehicle frame; the motion is computed in float64.
+            ego_pose = torch.eye(4, dtype=torch.float64).unsqueeze(0)
+            ego_pose_inv = torch.linalg.inv(pose.double()) @ poses[max(index - 1, 0)].double()
+        with torch.no_grad():
+            expected = model(frame_inputs(index)).detection3d().streampetr_head()
+        img_feats = sessions["extract_img_feat"].run(None, {"img": images[index].numpy()})[0]
+        feeds = {
+            **bank,
+            "x": img_feats,
+            "pos_embed": pos_embed,
+            "cone": cone,
+            "data_ego_pose": ego_pose.float().numpy(),
+            "data_ego_pose_inv": ego_pose_inv.float().numpy(),
+            "pre_memory_timestamp": dates + frame_time,
+        }
+        outputs = dict(zip(head_spec.output_names, sessions["pts_head_memory"].run(None, feeds)))
+
+        # The float32 map-frame bank has a 0.24 mm ulp at 3 km and ONNX Runtime sums in another
+        # order, so the boxes are compared to 1 mm.
+        torch.testing.assert_close(
+            torch.from_numpy(outputs["all_cls_scores"][0].T),
+            expected.all_cls_scores[-1, 0],
+            atol=1e-4,
+            rtol=1e-4,
+        )
+        torch.testing.assert_close(
+            torch.from_numpy(outputs["all_bbox_preds"][0].T),
+            expected.all_bbox_preds[-1, 0],
+            atol=1e-3,
+            rtol=1e-4,
+        )
+        # The banks are compared in the vehicle frame, where the eval head's float32 map-frame bank
+        # rounds to a fraction of a millimeter at 3 km.
+        graph_to_vehicle = torch.linalg.inv(ego_pose)[0]
+        head_to_vehicle = torch.linalg.inv(pose.double())[0]
+        torch.testing.assert_close(
+            in_vehicle_frame(
+                torch.from_numpy(outputs["post_memory_reference_point"][0, : head.memory_len]),
+                graph_to_vehicle,
+            ),
+            in_vehicle_frame(head.memory_reference_point[0], head_to_vehicle),
+            atol=2e-3,
+            rtol=0.0,
+        )
+        torch.testing.assert_close(
+            graph_to_vehicle
+            @ torch.from_numpy(outputs["post_memory_egopose"][0, : head.memory_len]).double(),
+            head_to_vehicle @ head.memory_egopose[0].double(),
+            atol=2e-3,
+            rtol=0.0,
+        )
+        bank = {
+            f"pre_memory_{name}": outputs[f"post_memory_{name}"][:, : head.memory_len]
+            for name in ("embedding", "reference_point", "egopose", "velo")
+        }
+        dates = outputs["post_memory_timestamp"][:, : head.memory_len] - frame_time
 
 
 def test_pseudo_reference_points_cover_the_whole_range_on_every_axis() -> None:
