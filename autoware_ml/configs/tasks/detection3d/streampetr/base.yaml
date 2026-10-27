@@ -1,0 +1,174 @@
+# @package _global_
+defaults:
+  - /tasks/default_task
+  - _self_
+
+# The accepted runs were seeded with 0; the streaming datamodule draws its scene order from it.
+seed: 0
+database: ???
+point_cloud_range: ???
+post_center_range: ???
+# Network input size [height, width] every camera image is resized and cropped to.
+image_size: ???
+# Cameras in the order the model takes them, read by the datasets and bound by the runtime.
+camera_names: ???
+
+# The loader serves RGB images in [0, 1]. These are the ImageNet statistics in that range,
+# the 0-255 constants the runtime normalizes the camera images with divided by 255.
+img_norm_cfg:
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+
+# The learning rate differs between the stages, every leaf sets its own; the image backbone
+# always trains at a tenth of it (model.optimizer_group_overrides).
+optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
+  lr: ???
+  weight_decay: 0.01
+
+# Image normalization, then the train-only grid-mask augmentation of the reference StreamPETR
+# recipe, which masks the normalized images. Both are GPU preprocessing modules rather than
+# part of the model, so the deployed graphs never see them: the runtime normalizes the images
+# itself before extract_img_feat.
+data_preprocessor:
+  preprocessor_modules:
+    - _target_: autoware_ml.preprocessing.camera.normalize.BatchNormalizeImages
+      mean: ${img_norm_cfg.mean}
+      std: ${img_norm_cfg.std}
+    - _target_: autoware_ml.preprocessing.camera.grid_mask.BatchGridMask
+
+trainer:
+  max_epochs: ???
+  # Initial value only, the dynamic_validation callback rewrites it per epoch.
+  check_val_every_n_epoch: 5
+  precision: bf16-mixed
+  gradient_clip_val: 1.0
+  gradient_clip_algorithm: norm
+
+deploy:
+  onnx:
+    dynamo: false
+    opset_version: 17
+    do_constant_folding: true
+    # The export specs name the outputs the runtime binds; these restate them.
+    modules:
+      extract_img_feat:
+        output_names: [img_feats]
+      position_embedding:
+        output_names: [pos_embed, cone]
+      pts_head_memory:
+        output_names:
+          [
+            all_cls_scores,
+            all_bbox_preds,
+            post_memory_embedding,
+            post_memory_reference_point,
+            post_memory_timestamp,
+            post_memory_egopose,
+            post_memory_velo,
+          ]
+  tensorrt:
+    enabled: false
+
+model:
+  _target_: autoware_ml.models.detection3d.streampetr.StreamPETRDetection3DModel
+  _convert_: all
+  metrics: ${metrics}
+  log_dict_configs:
+    _target_: autoware_ml.models.module_base_model.LogDictConfigs
+    _convert_: all
+    # Epoch-level only: per-step logging would split every key into train/<key>_step and
+    # train/<key>_epoch and, with sync_dist, all-reduce every loss key on every step.
+    on_step: false
+    on_epoch: true
+    prog_bar: true
+    sync_dist: true
+
+  img_backbone:
+    _target_: autoware_ml.models.common.backbones.vovnet.VoVNet99MultiScale
+    input_ch: 3
+    out_features: [stage4, stage5]
+    frozen_stages: -1
+    norm_eval: true
+  # CPFPN is the reference StreamPETR neck; its first output feeds the head.
+  img_neck:
+    _target_: autoware_ml.models.common.necks.cp_fpn.CPFPN
+    in_channels: [768, 1024]
+    out_channels: 256
+  # The auxiliary 2D head that supervises the image features in training (focal2d_head.yaml);
+  # the leaves that train it compose the block.
+  img_roi_head: null
+  # Set on a leaf whose database flags scenarios without some class annotations.
+  partial_annotations: null
+
+  bbox_head:
+    _target_: autoware_ml.models.detection3d.heads.streampetr.StreamPETRHead
+    class_names: ${database.taxonomy.detection3d.class_names}
+    in_channels: 256
+    hidden_dim: 256
+    num_queries: 644
+    num_decoder_layers: 6
+    num_heads: 8
+    feedforward_channels: 2048
+    memory_len: 1024
+    topk_proposals: 256
+    num_propagated: 256
+    with_ego_pos: true
+    with_dn: true
+    loss_cls_weight: 2.0
+    loss_bbox_weight: 0.25
+    depth_num: 64
+    LID: true
+    position_range: ${post_center_range}
+    scalar: 10
+    noise_scale: 1.0
+    dn_weight: 1.0
+    split: 0.75
+    bbox_coder:
+      _target_: autoware_ml.models.detection3d.task_modules.bbox_coders.NMSFreeBBoxCoder3D
+      pc_range: ${point_cloud_range}
+      post_center_range: ${post_center_range}
+      score_threshold: 0.0
+      max_num: 300
+    assigner:
+      _target_: autoware_ml.models.detection3d.task_modules.assigners.HungarianAssigner3D
+      cls_cost:
+        _target_: autoware_ml.models.detection3d.task_modules.match_costs.ClassificationCost
+        weight: 2.0
+      reg_cost:
+        _target_: autoware_ml.models.detection3d.task_modules.match_costs.BBox3DL1Cost
+        weight: 0.25
+        # Velocity channels are excluded from matching (match_with_velo=False
+        # in the reference recipe).
+        code_weights: [2.0, 2.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0]
+      iou_cost:
+        _target_: autoware_ml.models.detection3d.task_modules.match_costs.IoU3DCost
+        weight: 0.0
+      point_cloud_range: ${point_cloud_range}
+    point_cloud_range: ${point_cloud_range}
+    code_weights: [2.0, 2.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+
+  optimizer: ${optimizer}
+  optimizer_group_overrides:
+    img_backbone:
+      lr: ???
+  # StreamPETR LR schedule: 500-iteration linear warmup (start factor 1/3) into a per-epoch
+  # cosine decay, stepped every iteration. The framework fills total_steps from the trainer.
+  scheduler:
+    _target_: autoware_ml.utils.schedulers.iter_warmup_epoch_cosine.IterWarmupEpochCosineLR
+    _partial_: true
+    max_epochs: ${trainer.max_epochs}
+    warmup_iters: 500
+    warmup_start_factor: 0.3333333333333333
+    eta_min_factor: 1.0e-4
+  scheduler_config:
+    interval: step
+
+callbacks:
+  # The best checkpoint is selected by detection mAP, not validation loss, and the run always
+  # trains the configured number of epochs.
+  model_checkpoint:
+    monitor: val/det3d/mAP
+    mode: max
+  early_stopping: null

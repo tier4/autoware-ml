@@ -1,0 +1,132 @@
+# @package _global_
+defaults:
+  - ../base
+  # The metric suites, their ranges and the datamodule belong to the evaluated database, so the
+  # range base composes them. Loaded before _self_ so the overrides below win over the defaults.
+  - /metrics/nuscenes/detection3d/default_detection3d_metrics
+  - /metrics/nuscenes/detection3d@metrics: default_detection3d_metric_suites
+  - /metrics/nuscenes/detection3d@metric_ranges: default_detection3d_50m_metric_ranges
+  - /datamodule@datamodule: nuscenes/default_detection3d_datamodule
+  # The temporal memory needs the scenes streamed, so the datamodule is a StreamingDataModule.
+  - /datamodule/streaming@datamodule: default_streaming_datamodule
+  - _self_
+
+# The range of the reference nuScenes recipe and of the T4 stages: the head normalizes its
+# learned reference points by it, so they carry over from this stage to the next.
+point_cloud_range: [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
+post_center_range: [-61.2, -61.2, -10.0, 61.2, 61.2, 10.0]
+image_size: [320, 800]
+camera_names: [CAM_FRONT, CAM_FRONT_RIGHT, CAM_FRONT_LEFT, CAM_BACK, CAM_BACK_LEFT, CAM_BACK_RIGHT]
+
+# Largest GT distance of every class, from the detection taxonomy of the database.
+eval_class_range: ${database.taxonomy.detection3d.eval_range}
+
+# nuScenes boxes carry no attributes the pipelines filter on.
+filter_attributes: []
+
+datasets:
+  train:
+    camera_names: ${camera_names}
+    # LoadAnnotations2DFromBoxes3D projects every 3D box of a frame onto a camera at most once,
+    # so a camera cannot see more 2D boxes than the frame has 3D boxes, and the 3D maximum of
+    # the dataset (max_num_3d_gt_bboxes: 500) bounds every camera too.
+    max_num_2d_gt_bboxes: 500
+    transforms:
+      _target_: autoware_ml.transforms.base.TransformsCompose
+      _convert_: all
+
+      pipeline:
+        # First, before the boxes reach any geometry: a non-finite velocity or a zero extent
+        # would turn the losses NaN or infinite.
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesPhysicalFilter
+          _convert_: all
+
+          max_absolute_speed: 150.0 # m/s, 540 km/h
+
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesLabelNameFilter
+          _convert_: all
+
+          label_names_to_keep: ${database.taxonomy.detection3d.class_names}
+          class_names: ${database.taxonomy.detection3d.class_names}
+
+        - _target_: autoware_ml.transforms.camera.loading.LoadImagesFromFile
+          _convert_: all
+
+        # The reference nuScenes recipe: resize by 0.47-0.625 into 320x800 with a random flip.
+        - _target_: autoware_ml.transforms.camera.resize.ResizeCropFlipRotImage
+          _convert_: all
+
+          target_size: ${image_size}
+          resize_range: [0.47, 0.625]
+          bottom_crop_ratio_range: [0.0, 0.0]
+          random_horizontal_flip: true
+          training: true
+
+        # Camera-only global augmentation: the boxes and the camera poses move together and
+        # the frame pose folds the augmentation, so the temporal memory sees one world.
+        - _target_: autoware_ml.transforms.camera_lidar.geometry.GlobalRotScaleTrans
+          _convert_: all
+
+          yaw_rot_range: [-0.3925, 0.3925]
+          scale_ratio_range: [0.95, 1.05]
+
+        # 2D annotations are projected from the augmented 3D boxes BEFORE the range filter: the
+        # auxiliary 2D head supervises every visible object, as the 2D targets of the reference
+        # do, even outside the 3D detection range.
+        - _target_: autoware_ml.transforms.camera.annotations2d.LoadAnnotations2DFromBoxes3D
+          _convert_: all
+
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesRangeFilter
+          _convert_: all
+
+          point_cloud_range: ${point_cloud_range}
+
+  test:
+    camera_names: ${camera_names}
+    transforms:
+      _target_: autoware_ml.transforms.base.TransformsCompose
+      _convert_: all
+
+      pipeline:
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesPhysicalFilter
+          _convert_: all
+
+          max_absolute_speed: 150.0 # m/s, 540 km/h
+
+        - _target_: autoware_ml.transforms.camera.loading.LoadImagesFromFile
+          _convert_: all
+
+        - _target_: autoware_ml.transforms.camera.resize.ResizeCropFlipRotImage
+          _convert_: all
+
+          target_size: ${image_size}
+          resize_range: [0.47, 0.625]
+          bottom_crop_ratio_range: [0.0, 0.0]
+          training: false
+
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesLabelNameFilter
+          _convert_: all
+
+          label_names_to_keep: ${database.taxonomy.detection3d.class_names}
+          class_names: ${database.taxonomy.detection3d.class_names}
+
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesRangeFilter
+          _convert_: all
+
+          point_cloud_range: ${point_cloud_range}
+
+# StreamPETR carries a temporal memory across batches, so every dataloader streams the frames
+# of its scenes in time order: the sampler joins the scenes and cuts their frames into one lane
+# per batch position of every rank, and a cut can fall inside a scene. A shorter lane ends with
+# a padding slot that the model leaves out of the loss and the metrics, so every split serves
+# every frame exactly once on any number of GPUs. Every lane starts its stream with an empty
+# memory, so evaluation and prediction run one lane per rank to keep the cuts few.
+datamodule:
+  train_dataloader:
+    shuffle: false
+  validation_dataloader:
+    batch_size: 1
+  test_dataloader:
+    batch_size: 1
+  predict_dataloader:
+    batch_size: 1

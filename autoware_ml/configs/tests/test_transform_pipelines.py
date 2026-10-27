@@ -59,6 +59,31 @@ def test_cameras_load_before_the_lidar_augmentations_move_their_calibration(
         assert camera[0] < lidar[0]
 
 
+_GEOMETRIC_AUGMENTATIONS = _LIDAR_AUGMENTATIONS + ("camera.resize.ResizeCropFlipRotImage",)
+_ANNOTATIONS_2D = "camera.annotations2d.LoadAnnotations2DFromBoxes3D"
+
+
+@pytest.mark.parametrize(
+    "config, split, steps", _PIPELINES, ids=[f"{c}:{s}" for c, s, _ in _PIPELINES]
+)
+def test_2d_annotations_are_projected_after_every_geometric_augmentation(
+    config: str, split: str, steps: list[str]
+) -> None:
+    """
+    Input: every pipeline an experiment config writes.
+    Expected: the 2D projection reads the augmented boxes and calibration, so every geometric
+    augmentation, of the images and of the global 3D frame, runs before it; a later one would
+    leave the 2D targets silently wrong. Where the range filter goes is a recipe choice (see
+    test_streampetr_configs.py).
+    Check: in a pipeline that projects 2D boxes, every geometric augmentation comes before
+    LoadAnnotations2DFromBoxes3D.
+    """
+    annotations = [i for i, t in enumerate(steps) if t.endswith(_ANNOTATIONS_2D)]
+    geometric = [i for i, t in enumerate(steps) if t.endswith(_GEOMETRIC_AUGMENTATIONS)]
+    if annotations:
+        assert all(i < annotations[0] for i in geometric)
+
+
 _DETECTION3D_TEST = [
     (c, s, steps)
     for c, s, steps in _PIPELINES
