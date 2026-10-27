@@ -20,7 +20,9 @@ from collections.abc import Iterator, Sequence
 from copy import deepcopy
 import math
 from pathlib import Path
+from unittest import mock
 
+from jaxtyping import Float32
 import numpy as np
 from omegaconf import OmegaConf
 import onnxruntime
@@ -28,6 +30,7 @@ import pytest
 import torch
 import torch.nn as nn
 
+from autoware_ml.dataclasses.batch.detection2d import Detection2DGTBatch, Detection2DGTSample
 from autoware_ml.dataclasses.batch.frame_meta import FrameMetaBatch
 from autoware_ml.dataclasses.geometry.images import ImageGTBatch
 from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
@@ -35,6 +38,7 @@ from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.metrics.base import EvalStage, MetricSuite
 from autoware_ml.metrics.eval_output import EvalOutput, MetricRequirements
 from autoware_ml.models.common.necks.lss_fpn import GeneralizedLSSFPN
+from autoware_ml.models.detection3d.heads.focal2d import FocalHead2D
 from autoware_ml.models.detection3d.heads.streampetr import StreamPETRHead
 from autoware_ml.models.detection3d.streampetr import StreamPETRDetection3DModel, _ground_truth
 from autoware_ml.models.detection3d.task_modules.assigners import HungarianAssigner3D
@@ -52,6 +56,7 @@ from autoware_ml.models.tests.batch_inputs_fixtures import (
     build_detection3d_gt_batch,
 )
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
+from autoware_ml.types.geometry import Box2DFieldIndex
 from autoware_ml.utils.deploy import ExportSpec, export_to_onnx
 
 NUM_CAMS = 6
@@ -102,6 +107,7 @@ class _ResetCountingSuite(MetricSuite[None]):
 
 def _build_model(
     metrics: Sequence[MetricSuite] | None = None,
+    img_roi_head: FocalHead2D | None = None,
     partial_annotations: PartialAnnotations | None = None,
 ) -> StreamPETRDetection3DModel:
     return StreamPETRDetection3DModel(
@@ -110,6 +116,7 @@ def _build_model(
         img_neck=GeneralizedLSSFPN(in_channels=[128, 256, 512], out_channels=128),
         bbox_head=_build_head(),
         log_dict_configs=LogDictConfigs(prog_bar=False),
+        img_roi_head=img_roi_head,
         metrics=metrics,
         partial_annotations=partial_annotations,
     )
@@ -1170,28 +1177,67 @@ def _two_samples_with_boxes() -> tuple[torch.Tensor, list[torch.Tensor], list[to
     return images, boxes, [torch.tensor([1]), torch.tensor([1])]
 
 
+ROI_LOSS_KEYS = ("loss_cls2d", "loss_bbox2d", "loss_iou2d", "loss_centers2d", "loss_centerness2d")
+
+
+def _build_focal_head(class_names: Sequence[str] = CLASS_NAMES) -> FocalHead2D:
+    # The tiny neck emits its tokens at stride 8.
+    return FocalHead2D(class_names=class_names, in_channels=128, embed_dims=32, stride=8)
+
+
+def _with_2d_boxes(
+    batch_inputs: ModelBatchInputs,
+    rows: Float32[torch.Tensor, "num_rows num_Box2DFieldIndex"] | None = None,
+) -> ModelBatchInputs:
+    """Give every camera of every sample the 2D rows, of class 0, the last camera none.
+
+    The rows are laid out by Box2DFieldIndex; by default one box with its center in the middle.
+    """
+    if rows is None:
+        rows = torch.tensor([[10.0, 10.0, 60.0, 60.0, 35.0, 35.0]])
+    num_samples = batch_inputs.batch_size()
+    samples = [
+        Detection2DGTSample(
+            gt_bboxes_2d=[rows] * (NUM_CAMS - 1) + [torch.zeros(0, len(Box2DFieldIndex))],
+            gt_labels_2d=[torch.zeros(len(rows), dtype=torch.int32)] * (NUM_CAMS - 1)
+            + [torch.zeros(0, dtype=torch.int32)],
+        )
+        for _ in range(num_samples)
+    ]
+    gt_batch = batch_inputs.multi_task_gt_batch._replace(
+        detection2d_gt_batch=Detection2DGTBatch.collate_gt_samples(samples, max_num_2d_gt_bboxes=4)
+    )
+    return batch_inputs.replace(multi_task_gt_batch=gt_batch)
+
+
+@pytest.mark.parametrize("with_2d_head", [False, True], ids=["3d_head", "with_2d_head"])
 @pytest.mark.parametrize(
     "cone_barrier_status",
     [None, [True, False, True]],
     ids=["without_partial_annotations", "with_partial_annotations"],
 )
 def test_a_padding_sample_takes_no_part_in_the_loss(
-    cone_barrier_status: list[bool] | None,
+    cone_barrier_status: list[bool] | None, with_2d_head: bool
 ) -> None:
     """
     Input: two real training samples with one box each, once alone and once followed by a
     padding sample that carries a box too, every image requiring a gradient; without partial
     annotations, and with them, the second sample annotated without traffic cones and barriers
-    and the padding sample flagged as annotated with them.
+    and the padding sample flagged as annotated with them; without and with the auxiliary
+    FocalHead2D, every sample then carrying 2D rows too.
     Expected: the padding sample seeds no denoising query, matches no query and gets no
-    classification weight whatever its flag says, so the loss is that of the real samples and
-    none of it reaches the padding sample's images.
-    Check: the loss terms of the two batches, the denoising queries, and the image gradients
-    (zero only for the padding sample).
+    classification weight whatever its flag says, and the 2D head leaves out its 2D boxes and
+    the classification and centerness of its image tokens, so the loss is that of the real
+    samples and none of it reaches the padding sample's images.
+    Check: the loss terms of the two batches, the five 2D terms among them with the 2D head,
+    the denoising queries, and the image gradients (zero only for the padding sample).
     """
     torch.manual_seed(0)
     partial_annotations = None if cone_barrier_status is None else _cone_barrier_annotations()
-    model = _independent_samples(_build_model(partial_annotations=partial_annotations).train())
+    img_roi_head = _build_focal_head() if with_2d_head else None
+    model = _independent_samples(
+        _build_model(img_roi_head=img_roi_head, partial_annotations=partial_annotations).train()
+    )
     images, boxes, labels = _two_samples_with_boxes()
     padded_images = torch.cat([images, images[:1]]).requires_grad_()
     real_batch = _build_batch_inputs(images, gt_boxes=boxes, gt_labels=labels)
@@ -1201,6 +1247,9 @@ def test_a_padding_sample_takes_no_part_in_the_loss(
         ),
         [False, False, True],
     )
+    if with_2d_head:
+        real_batch = _with_2d_boxes(real_batch)
+        padded_batch = _with_2d_boxes(padded_batch)
     if cone_barrier_status is not None:
         real_batch = _with_cone_barrier_status(real_batch, cone_barrier_status[:2])
         padded_batch = _with_cone_barrier_status(padded_batch, cone_barrier_status)
@@ -1215,6 +1264,8 @@ def test_a_padding_sample_takes_no_part_in_the_loss(
     padded_losses["loss"].backward()
 
     assert padded_losses.keys() == real_losses.keys()
+    if with_2d_head:
+        assert set(ROI_LOSS_KEYS) <= real_losses.keys()
     for key, value in real_losses.items():
         torch.testing.assert_close(padded_losses[key], value, msg=key)
     denoising = padded_outputs.detection3d().streampetr_head().denoising
@@ -1329,33 +1380,164 @@ def test_a_padding_slot_starts_a_new_stream_and_leaves_the_next_epoch_alone() ->
         torch.testing.assert_close(observed_head.all_bbox_preds, expected_head.all_bbox_preds)
 
 
-def _one_box_batch() -> ModelBatchInputs:
-    """One frame with one car."""
+def _one_box_batch(batch_size: int = 1) -> ModelBatchInputs:
+    """Frames with one car each."""
     return _build_batch_inputs(
-        torch.randn(1, NUM_CAMS, 3, *IMAGE_HW),
-        gt_boxes=[_collated_box(0.0, 0.0, 0.5, 4.0, 2.0, 1.5, 0.2, 0.0, 0.0, 0.0)],
-        gt_labels=[torch.tensor([0])],
+        torch.randn(batch_size, NUM_CAMS, 3, *IMAGE_HW),
+        gt_boxes=[_collated_box(0.0, 0.0, 0.5, 4.0, 2.0, 1.5, 0.2, 0.0, 0.0, 0.0)] * batch_size,
+        gt_labels=[torch.tensor([0])] * batch_size,
     )
+
+
+def test_auxiliary_2d_head_trains_on_the_2d_boxes_of_the_batch() -> None:
+    """
+    Input: a training batch of two samples with one 3D box each and one 2D box on every camera
+    but the last, through a StreamPETR model with the auxiliary FocalHead2D.
+    Expected: the 2D head predicts on every camera image of the batch and adds its five losses,
+    all finite, to the detection loss, and its classification layer is trained.
+    Check: the number of 2D predictions, the five 2D losses finite, the total against the
+    detection loss plus the five 2D terms, and the gradients of the 2D classification layer
+    after backward.
+    """
+    model = _build_model(img_roi_head=_build_focal_head()).train()
+    batch_inputs = _with_2d_boxes(_one_box_batch(batch_size=2))
+
+    outputs = model(batch_inputs)
+    losses = model.compute_metrics(batch_inputs, outputs)
+
+    auxiliary = outputs.detection3d().streampetr_head().auxiliary_2d
+    assert auxiliary is not None
+    assert auxiliary.cls_scores.shape[0] == 2 * NUM_CAMS
+    assert all(torch.isfinite(losses[key]) for key in ROI_LOSS_KEYS)
+    gt_detections = batch_inputs.multi_task_gt_batch.detection3d_gt_batch
+    padding_mask = batch_inputs.multi_task_gt_batch.padding_mask
+    without_roi = model.bbox_head.loss(
+        outputs.detection3d().streampetr_head(),
+        *_ground_truth(gt_detections, padding_mask),
+        padding_mask=padding_mask,
+    )
+    torch.testing.assert_close(
+        losses["loss"], without_roi["loss"] + sum(losses[key] for key in ROI_LOSS_KEYS)
+    )
+    losses["loss"].backward()
+    assert all(parameter.grad is not None for parameter in model.img_roi_head.cls.parameters())
+
+
+def test_auxiliary_2d_head_takes_the_box_edges_and_the_object_centers_apart() -> None:
+    """
+    Input: a training batch whose cameras hold two 2D rows each, laid out by Box2DFieldIndex,
+    with the object centers off the box middles, and a last camera without boxes.
+    Expected: FocalHead2D takes the box edges and the object centers as separate tensors and
+    reshapes the boxes to four columns, so the model splits every row; whole six-column rows
+    would be reshaped into three wrong boxes per camera without an error.
+    Check: the boxes, centers and labels the 2D loss receives equal the first four columns,
+    the last two columns and the labels of the rows, camera by camera.
+    """
+    model = _build_model(img_roi_head=_build_focal_head()).train()
+    rows = torch.tensor(
+        [[10.0, 10.0, 60.0, 60.0, 30.0, 40.0], [70.0, 20.0, 110.0, 80.0, 95.0, 45.0]]
+    )
+    batch_inputs = _with_2d_boxes(_one_box_batch(), rows)
+    outputs = model(batch_inputs)
+
+    with mock.patch.object(model.img_roi_head, "loss", wraps=model.img_roi_head.loss) as loss:
+        model.compute_metrics(batch_inputs, outputs)
+
+    received = loss.call_args.kwargs
+    for camera_index in range(NUM_CAMS):
+        visible = camera_index < NUM_CAMS - 1
+        torch.testing.assert_close(
+            received["gt_bboxes_2d"][0][camera_index], rows[:, :4] if visible else rows[:0, :4]
+        )
+        torch.testing.assert_close(
+            received["centers_2d"][0][camera_index], rows[:, 4:] if visible else rows[:0, 4:]
+        )
+        assert received["gt_labels_2d"][0][camera_index].tolist() == ([0, 0] if visible else [])
+
+
+def test_auxiliary_2d_head_needs_the_2d_boxes_in_training() -> None:
+    """
+    Input: a training batch without 2D ground truth, through a model with the auxiliary 2D head.
+    Expected: the 2D head cannot train without 2D boxes, and skipping it would silently train
+    the model without its auxiliary supervision, so the loss is refused and names the transform
+    that adds the boxes.
+    Check: a ValueError naming LoadAnnotations2DFromBoxes3D is raised.
+    """
+    model = _build_model(img_roi_head=_build_focal_head()).train()
+    batch_inputs = _one_box_batch()
+
+    outputs = model(batch_inputs)
+
+    with pytest.raises(ValueError, match="LoadAnnotations2DFromBoxes3D"):
+        model.compute_metrics(batch_inputs, outputs)
+
+
+def test_evaluation_skips_the_auxiliary_2d_head() -> None:
+    """
+    Input: a batch without 2D ground truth, through a model with the auxiliary 2D head in
+    evaluation mode.
+    Expected: the 2D head only supervises the image features in training, so evaluation neither
+    runs it nor needs 2D boxes.
+    Check: the outputs carry no auxiliary predictions and the losses no 2D term.
+    """
+    model = _build_model(img_roi_head=_build_focal_head()).eval()
+    batch_inputs = _one_box_batch()
+
+    with torch.no_grad():
+        outputs = model(batch_inputs)
+        losses = model.compute_metrics(batch_inputs, outputs)
+
+    assert outputs.detection3d().streampetr_head().auxiliary_2d is None
+    assert "loss_cls2d" not in losses
+
+
+def test_a_batch_of_padding_alone_gives_a_zero_auxiliary_2d_loss() -> None:
+    """
+    Input: a training batch whose two samples are both padding slots carrying 3D boxes and 2D
+    rows, through a model with the auxiliary FocalHead2D.
+    Expected: the batch runs through both heads so every rank takes the same steps, but it
+    supervises nothing: every 2D term and the total are a finite zero that keeps the graph,
+    so backward reaches every parameter of the 2D head like on any other rank.
+    Check: the five 2D terms and the total are zero, the total requires a gradient, and
+    after backward every parameter of the 2D head has a gradient.
+    """
+    model = _build_model(img_roi_head=_build_focal_head()).train()
+    images, boxes, labels = _two_samples_with_boxes()
+    batch_inputs = _with_padding(
+        _with_2d_boxes(_build_batch_inputs(images, gt_boxes=boxes, gt_labels=labels)),
+        [True, True],
+    )
+
+    outputs = model(batch_inputs)
+    losses = model.compute_metrics(batch_inputs, outputs)
+    losses["loss"].backward()
+
+    assert all(float(losses[key].detach()) == 0.0 for key in ROI_LOSS_KEYS)
+    assert float(losses["loss"].detach()) == 0.0
+    assert losses["loss"].requires_grad
+    assert all(parameter.grad is not None for parameter in model.img_roi_head.parameters())
 
 
 def test_partial_annotations_mask_the_cone_barrier_terms_of_unannotated_frames() -> None:
     """
-    Input: one training frame with one car through a model with partial annotations, scored
-    with its traffic-cone and barrier status True, then False, then without the status, and
-    once more with partial annotations removed.
+    Input: one training frame with one car and 2D boxes through a model with partial
+    annotations and the auxiliary 2D head, scored with its traffic-cone and barrier status
+    True, then False, then without the status, and once more with partial annotations removed.
     Expected: a frame annotated with traffic cones and barriers is scored exactly as without
-    partial annotations. A frame annotated without them does not teach the head that they are
-    absent: dropping their background terms lowers only the classification losses of the
-    matched and the denoising queries. The status is required as soon as partial annotations
-    are configured.
+    partial annotations. A frame annotated without them does not teach either head that they
+    are absent: dropping their background terms lowers only the classification losses, of the
+    matched and the denoising queries of the 3D head and of the 2D head. The status is
+    required as soon as partial annotations are configured.
     Check: every loss term of the annotated frame against those without partial annotations,
-    both classification losses are lower without the cones and barriers, both regression
-    losses are unchanged, and the batch without the status raises a ValueError naming
+    the three classification losses are lower without the cones and barriers, every other
+    loss is unchanged, and the batch without the status raises a ValueError naming
     gt_traffic_cone_barrier_bbox_status.
     """
     torch.manual_seed(0)
-    model = _build_model(partial_annotations=_cone_barrier_annotations()).train()
-    batch_inputs = _one_box_batch()
+    model = _build_model(
+        img_roi_head=_build_focal_head(), partial_annotations=_cone_barrier_annotations()
+    ).train()
+    batch_inputs = _with_2d_boxes(_one_box_batch())
     outputs = model(batch_inputs)
 
     annotated = model.compute_metrics(_with_cone_barrier_status(batch_inputs, [True]), outputs)
@@ -1370,7 +1552,8 @@ def test_partial_annotations_mask_the_cone_barrier_terms_of_unannotated_frames()
         assert torch.equal(annotated[key], value), key
     assert ignored["loss_cls"] < annotated["loss_cls"]
     assert ignored["dn_loss_cls"] < annotated["dn_loss_cls"]
-    for key in ("loss_bbox", "dn_loss_bbox"):
+    assert ignored["loss_cls2d"] < annotated["loss_cls2d"]
+    for key in ("loss_bbox", "dn_loss_bbox", *ROI_LOSS_KEYS[1:]):
         assert torch.equal(ignored[key], annotated[key]), key
 
 
@@ -1397,3 +1580,14 @@ def test_partial_annotations_must_list_the_classes_of_the_head_in_order(
     """
     with pytest.raises(ValueError, match=r"bbox_head\.class_names in the same order"):
         _build_model(partial_annotations=_cone_barrier_annotations(class_names))
+
+
+def test_the_auxiliary_2d_head_must_list_the_classes_of_the_3d_head_in_order() -> None:
+    """
+    Input: an auxiliary 2D head over the classes of the 3D head in another order.
+    Expected: the 2D labels are those of the projected 3D boxes and the 2D head reads the same
+    annotated class masks, both by position, so the model refuses the head when it is built.
+    Check: the ValueError naming img_roi_head.class_names.
+    """
+    with pytest.raises(ValueError, match=r"img_roi_head\.class_names"):
+        _build_model(img_roi_head=_build_focal_head(["traffic_cone", "car", "barrier"]))

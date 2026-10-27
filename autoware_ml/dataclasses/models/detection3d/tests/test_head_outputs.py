@@ -409,6 +409,24 @@ class TestFocalHead2DOutputs(unittest.TestCase):
             image_width=160,
         )
 
+    def test_rides_along_the_streampetr_outputs(self) -> None:
+        """
+        Input: the dense outputs of the auxiliary 2D head of a training step, given to the
+        StreamPETR head outputs.
+        Expected: the StreamPETR outputs carry the auxiliary outputs as they are, so the 2D loss
+        reads what the 2D head predicted.
+        Check: auxiliary_2d is the same object.
+        """
+        auxiliary = self.build()
+        outputs = StreamPETRHeadOutputs(
+            all_cls_scores=torch.zeros(2, 1, 5, 3),
+            all_bbox_preds=torch.zeros(2, 1, 5, 10),
+            denoising=None,
+            auxiliary_2d=auxiliary,
+        )
+
+        self.assertIs(outputs.auxiliary_2d, auxiliary)
+
     def test_every_prediction_covers_the_same_tokens(self) -> None:
         """
         Input: 2D head outputs whose boxes cover 5 tokens of every image while the logits,
