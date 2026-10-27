@@ -161,11 +161,7 @@ def _sharding_invariance_worker(rank: int, world_size: int, init_file: str) -> N
 
         cls_scores, bbox_preds, gt_boxes, gt_labels = frames[rank]
         loss_cls, loss_bbox = head._loss_single(
-            cls_scores.unsqueeze(0),
-            bbox_preds.unsqueeze(0),
-            [gt_boxes],
-            [gt_labels],
-            label_weights=torch.ones(1, 1, 1),
+            cls_scores.unsqueeze(0), bbox_preds.unsqueeze(0), [gt_boxes], [gt_labels]
         )
         sharded = torch.stack([loss_cls.detach(), loss_bbox.detach()])
         gathered = [torch.zeros_like(sharded) for _ in range(world_size)]
@@ -178,7 +174,6 @@ def _sharding_invariance_worker(rank: int, world_size: int, init_file: str) -> N
             torch.stack([frames[0][1], frames[1][1]]),
             [frames[0][2], frames[1][2]],
             [frames[0][3], frames[1][3]],
-            label_weights=torch.ones(2, 1, 1),
         )
 
         torch.testing.assert_close(ddp_averaged[0], combined_cls.detach(), rtol=1e-5, atol=1e-6)
