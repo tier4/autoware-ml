@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict
 from omegaconf import DictConfig, OmegaConf
 
 from autoware_ml.datamodule.data_module import DataModule
+from autoware_ml.deployment.stages import artifact_path
 from autoware_ml.models.module_base_model import ModuleBaseModel
 from autoware_ml.utils.deploy import (
     resolve_export_specs,
@@ -32,6 +33,7 @@ from autoware_ml.utils.deploy import (
     modify_onnx_graph,
     build_tensorrt_engine,
 )
+from autoware_ml.types.backend import Backend
 from autoware_ml.utils.mlflow_helpers import get_git_sha
 from autoware_ml.utils.onnx_meta import stamp_onnx_meta
 from autoware_ml.utils.onnx_precision import (
@@ -110,8 +112,8 @@ class DeploymentExport:
 
         for module_name, export_spec in export_specs.items():
             module_onnx_cfg = merge_module_onnx_cfg(self.deploy_cfg.onnx, module_name)
-            module_onnx_path = self.output_dir / f"{module_name}.onnx"
-            module_engine_path = self.output_dir / f"{module_name}.engine"
+            module_onnx_path = artifact_path(self.output_dir, module_name, Backend.ONNX)
+            module_engine_path = artifact_path(self.output_dir, module_name, Backend.TENSORRT)
 
             if should_export_stage(self.deploy_cfg.onnx):
                 if not supports_export_stage(export_spec, "onnx"):
