@@ -16,8 +16,8 @@
 
 They spawn gloo process groups on CPU so the collectives of ``reduce_mean_count`` run. The
 property under test: sharding a batch over the ranks gives the DDP-averaged loss and gradients
-of the whole batch on one process, and a rank without ground truth still joins the denoising
-collective.
+of the whole batch on one process, for the 3D head and the auxiliary 2D head, and a rank
+without ground truth still joins the denoising collective.
 """
 
 from __future__ import annotations
@@ -37,6 +37,7 @@ from autoware_ml.dataclasses.models.detection3d.head_outputs import (
     StreamPETRDenoisingOutputs,
     StreamPETRHeadOutputs,
 )
+from autoware_ml.models.detection3d.heads.focal2d import FocalHead2D
 from autoware_ml.models.detection3d.heads.streampetr import StreamPETRHead
 from autoware_ml.models.detection3d.task_modules.assigners import HungarianAssigner3D
 from autoware_ml.models.detection3d.task_modules.bbox_coders import NMSFreeBBoxCoder3D
@@ -322,6 +323,58 @@ def _ddp_gradient_worker(
         dist.destroy_process_group()
 
 
+def _image_2d(num_boxes: int, seed: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Neck features of one 96 x 160 camera image with its 2D boxes and labels."""
+    generator = torch.Generator().manual_seed(seed)
+    features = torch.randn(1, 1, 32, 6, 10, generator=generator)
+    corners = torch.rand(num_boxes, 2, generator=generator) * torch.tensor([100.0, 50.0])
+    boxes = torch.cat([corners, corners + 30.0], dim=1)
+    return features, boxes, torch.arange(num_boxes) % _NUM_CLASSES
+
+
+def _head_2d_loss(
+    head: torch.nn.Module, images: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]
+) -> torch.Tensor:
+    """Sum of the auxiliary 2D losses of one camera image per sample."""
+    outputs = head(torch.cat([features for features, _, _ in images]), 96, 160)
+    module = head.module if isinstance(head, DistributedDataParallel) else head
+    losses = module.loss(
+        outputs,
+        gt_bboxes_2d=[[boxes] for _, boxes, _ in images],
+        gt_labels_2d=[[labels] for *_, labels in images],
+        centers_2d=[[boxes[:, :2] + 15.0] for _, boxes, _ in images],
+        padding_mask=torch.zeros(len(images), dtype=torch.bool),
+    )
+    return sum(losses.values())
+
+
+def _head_2d_gradient_worker(
+    rank: int, world_size: int, init_file: str, box_counts: tuple[int, ...]
+) -> None:
+    images = [_image_2d(count, seed=90 + index) for index, count in enumerate(box_counts)]
+    torch.manual_seed(0)
+    head = FocalHead2D(class_names=_CLASS_NAMES, in_channels=32, embed_dims=32, stride=16)
+    whole_batch_head = copy.deepcopy(head)
+    # The reference runs before the process group exists, so its count is floored as on one
+    # device.
+    _head_2d_loss(whole_batch_head, images).backward()
+
+    dist.init_process_group(
+        "gloo", init_method=f"file://{init_file}", rank=rank, world_size=world_size
+    )
+    try:
+        # The wrapper must outlive the backward pass, which its hooks average over the ranks.
+        ddp_head = DistributedDataParallel(head)
+        _head_2d_loss(ddp_head, [images[rank]]).backward()
+
+        # The convolutions sum their gradients in another order on one process, which leaves
+        # about 1e-7 on the gradients near zero.
+        for sharded, whole in zip(head.parameters(), whole_batch_head.parameters()):
+            torch.testing.assert_close(sharded.grad, whole.grad, rtol=1e-5, atol=1e-6)
+    finally:
+        dist.destroy_process_group()
+
+
 def test_reduce_mean_count_is_identity_without_process_group() -> None:
     """Without a process group the count comes back as float, floored at 1."""
     assert reduce_mean_count(torch.tensor(3.0)).item() == pytest.approx(3.0)
@@ -356,3 +409,15 @@ def test_ddp_gradients_match_the_whole_batch_on_one_process(box_counts: tuple[in
     of the sum would halve the gradient of the single positive, or of the negatives.
     """
     _spawn(_ddp_gradient_worker, box_counts)
+
+
+@pytest.mark.parametrize("box_counts", [(3, 5), (1, 0), (0, 0)], ids=["3-5", "1-0", "0-0"])
+def test_2d_head_ddp_gradients_match_the_whole_batch_on_one_process(
+    box_counts: tuple[int, int],
+) -> None:
+    """The auxiliary 2D head normalizes its losses like the 3D head.
+
+    With one positive in the step, or none, a floor of the averaged count on every rank, in the
+    head or in the losses, would halve the gradients of the step.
+    """
+    _spawn(_head_2d_gradient_worker, box_counts)
