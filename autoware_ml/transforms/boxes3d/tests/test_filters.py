@@ -26,6 +26,7 @@ from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
 from autoware_ml.transforms.boxes3d.filters import (
     BBoxesAttributeFilter,
     BBoxesLabelNameFilter,
+    BBoxesMinRecordedPointsFilter,
     BBoxesPhysicalFilter,
     BBoxesRangeFilter,
 )
@@ -41,6 +42,7 @@ def sample(
     labels: Sequence[int] | None = None,
     centers: Sequence[Sequence[float]] | None = None,
     attributes: Sequence[Sequence[str]] | None = None,
+    num_lidar_points: Sequence[int] | None = None,
 ) -> ModelGTSample:
     """
     Sample carrying one unit box per label name.
@@ -50,6 +52,7 @@ def sample(
       labels: Label index of every box, the box position when omitted.
       centers: Gravity center (x, y, z) of every box, the box position along x when omitted.
       attributes: Attribute names of every box, None when the dataset carries none.
+      num_lidar_points: Recorded lidar point count of every box, 10 when omitted.
 
     Returns:
       ModelGTSample: Sample whose detection boxes carry those labels, centers and attributes.
@@ -66,7 +69,11 @@ def sample(
         bbox_params=bbox_params,
         bbox_labels=torch.tensor(range(count) if labels is None else labels, dtype=torch.int32),
         bbox_label_names=list(label_names),
-        bbox_num_lidar_points=torch.full((count,), 10, dtype=torch.int32),
+        bbox_num_lidar_points=(
+            torch.full((count,), 10, dtype=torch.int32)
+            if num_lidar_points is None
+            else torch.tensor(num_lidar_points, dtype=torch.int32)
+        ),
         bbox_center_coordinate_type=Box3DCenterCoordinateType.GRAVITY_CENTER,
         bbox_attributes=attributes,
     )
@@ -97,6 +104,25 @@ def test_drops_the_boxes_outside_every_axis_of_the_range() -> None:
     )
 
     assert result.detection3d_gt_bboxes_3d.bbox_label_names == ["box_0", "box_4"]
+
+
+def test_recorded_points_filter_drops_the_boxes_below_the_count_without_a_point_cloud() -> None:
+    """
+    Input: four boxes recorded with 0, 1, 2 and 7 lidar points, in a sample that loads no point
+    cloud.
+    Expected: the filter reads the point counts recorded with the boxes, so it works in the
+    camera pipelines, and keeps the boxes with at least ``min_points`` (2) points.
+    Check: the sample still has no point cloud, and the names and point counts of the kept
+    boxes.
+    """
+    result = BBoxesMinRecordedPointsFilter(min_points=2)(
+        sample(["box_0", "box_1", "box_2", "box_3"], num_lidar_points=[0, 1, 2, 7])
+    )
+
+    boxes = result.detection3d_gt_bboxes_3d
+    assert result.point_cloud_data is None
+    assert boxes.bbox_label_names == ["box_2", "box_3"]
+    assert boxes.bbox_num_lidar_points.tolist() == [2, 7]
 
 
 def test_label_name_filter_keeps_fine_names_mapped_to_kept_classes() -> None:
