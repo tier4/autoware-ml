@@ -309,6 +309,8 @@ class StreamPETRHeadOutputs(BaseModel):
         cos, vx, vy]`` with metric gravity centers.
       denoising: Outputs of the denoising queries, None outside training or when the batch
         carries no box.
+      auxiliary_2d: Outputs of the auxiliary 2D head that supervises the image features in
+        training, None when the model has no such head or does not train.
     """
 
     model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
@@ -316,6 +318,7 @@ class StreamPETRHeadOutputs(BaseModel):
     all_cls_scores: Float[torch.Tensor, "num_layers batch_size num_queries num_classes"]
     all_bbox_preds: Float[torch.Tensor, "num_layers batch_size num_queries 10"]
     denoising: StreamPETRDenoisingOutputs | None
+    auxiliary_2d: FocalHead2DOutputs | None = None
 
     @model_validator(mode="after")
     def _check_layers_samples_and_queries(self) -> StreamPETRHeadOutputs:
