@@ -21,6 +21,7 @@ from collections.abc import Sequence
 import torch
 
 from autoware_ml.dataclasses.batch.detection3d import Detection3DGTBatch
+from autoware_ml.dataclasses.batch.frame_meta import FrameMetaBatch
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTBatch
 from autoware_ml.dataclasses.geometry.images import ImageGTBatch
@@ -115,6 +116,7 @@ def build_batch_inputs(
     segmentation: Segmentation3DGTBatch | None = None,
     images: ImageGTBatch | None = None,
     voxels: VoxelsData | None = None,
+    frame_meta: FrameMetaBatch | None = None,
 ) -> ModelBatchInputs:
     """Build model inputs from the batches a test needs.
 
@@ -124,6 +126,7 @@ def build_batch_inputs(
         segmentation: Segmentation ground truth batch.
         images: Image batch.
         voxels: Voxels a preprocessing layer would add.
+        frame_meta: Per-frame metadata of the batch.
 
     Returns:
         The model inputs.
@@ -140,5 +143,6 @@ def build_batch_inputs(
         segmentation3d_gt_batch=segmentation,
         image_gt_batch=images,
         padding_mask=torch.zeros(batch_size, dtype=torch.bool),
+        frame_meta_batch=frame_meta,
     )
     return ModelBatchInputs.from_gt_batch(batch).replace(voxels_data=voxels)
