@@ -4,7 +4,7 @@ Modules to save raw outputs from a detection3d head.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 
 from jaxtyping import Bool, Float, Int64
 from pydantic import BaseModel, ConfigDict, model_validator
@@ -222,7 +222,7 @@ class CenterHeadOutputs(BaseModel):
         Raises:
             ValueError: If a name is not a head output, or a required branch is missing.
         """
-        return cls(**_export_tensors_by_branch(cls.model_fields, tensors))
+        return cls(**_tensors_per_field(cls.model_fields, tensors))
 
 
 class StreamPETRDenoisingOutputs(BaseModel):
@@ -393,14 +393,15 @@ class Detection3DHeadOutputs(BaseModel):
         return self
 
 
-def _export_tensors_by_branch(
-    branches: Mapping[str, object], tensors: Mapping[str, torch.Tensor]
+def _tensors_per_field(
+    field_names: Iterable[str], tensors: Mapping[str, torch.Tensor]
 ) -> dict[str, torch.Tensor | None]:
-    """Key exported tensors by head branch, ``None`` for a branch not exported."""
-    unknown = sorted(set(tensors) - set(branches))
+    """One entry per head field: the exported tensor of that name, None when none was exported."""
+    field_names = list(field_names)
+    unknown = sorted(set(tensors) - set(field_names))
     if unknown:
-        raise ValueError(f"The head has no output named {unknown}, it has {list(branches)}.")
-    return {name: tensors.get(name) for name in branches}
+        raise ValueError(f"The head has no output named {unknown}, it has {field_names}.")
+    return {name: tensors.get(name) for name in field_names}
 
 
 def _pick_export_tensors(
