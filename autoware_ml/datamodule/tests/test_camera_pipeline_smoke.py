@@ -36,7 +36,7 @@ from autoware_ml.models.common.backbones.resnet import ResNet18
 from autoware_ml.models.common.heads.linear_cls_head import LinearClsHead
 from autoware_ml.models.common.necks.global_average_pooling import GlobalAveragePooling
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
-from autoware_ml.datamodule.tests.corpus import SCENE, write_corpus
+from autoware_ml.datamodule.tests.corpus import SCENE, image_frame, write_corpus
 from autoware_ml.transforms.base import TransformsCompose
 from autoware_ml.transforms.camera.distortion import UndistortImage
 from autoware_ml.transforms.camera.resize import CropAndScale, ResizeCropFlipRotImage
@@ -63,7 +63,7 @@ def write_images(root: Path, records: pl.DataFrame) -> pl.DataFrame:
     image_frames_column = []
     for record_index in range(records.height):
         camera_frames = []
-        for camera_index, camera in enumerate(CAMERAS):
+        for camera in CAMERAS:
             relative = f"{SCENE}/data/{camera}/{record_index}.jpg"
             path = root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -83,26 +83,16 @@ def write_images(root: Path, records: pl.DataFrame) -> pl.DataFrame:
                 [[0.0, -1.0, 0.0, 0.0], [0.0, 0.0, -1.0, 0.0], [1.0, 0.0, 0.0, 0.0], [0, 0, 0, 1]],
                 dtype=np.float32,
             )
-            camera_matrix = np.eye(4, dtype=np.float32)
-            camera_matrix[:3, :3] = camera_intrinsic
             camera_frames.append(
-                {
-                    "image_frame_id": f"image-{record_index}-{camera_index}",
-                    "image_keyframe": True,
-                    "image_sensor_id": camera,
-                    "image_sensor_channel_name": camera,
-                    "image_timestamp_seconds": float(record_index),
-                    "image_relative_path": relative,
-                    "image_height": IMAGE_SIZE[0],
-                    "image_width": IMAGE_SIZE[1],
-                    "cam2img": camera_intrinsic.tolist(),
-                    "image_distortion_coefficients": [0.0, 0.0, 0.0, 0.0, 0.0],
-                    "image_distortion_model": "plumb_bob",
-                    "image_sensor_to_ego_pose_matrix": np.eye(4).tolist(),
-                    "image_frame_ego_pose_to_global_matrix": np.eye(4).tolist(),
-                    "lidar2cam": lidar2cam.tolist(),
-                    "lidar2img": (camera_matrix @ lidar2cam).tolist(),
-                }
+                image_frame(
+                    record_index,
+                    camera,
+                    relative,
+                    float(record_index),
+                    IMAGE_SIZE,
+                    camera_intrinsic,
+                    lidar2cam,
+                )
             )
         # The frames of every camera at the sample time, the records carry no camera sweep
         image_frames_column.append([camera_frames])
