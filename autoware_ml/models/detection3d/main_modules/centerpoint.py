@@ -232,6 +232,7 @@ class CenterPointDetection3DModel(ModuleBaseModel):
         )
         return multi_task_predictions
 
+    # TODO(vividf): Remove together with ModuleBaseModel.build_export_spec().
     def build_export_spec(self, multi_task_batch_inputs: ModelBatchInputs) -> ExportSpec:
         """Reject single-module CenterPoint deployment export."""
         del multi_task_batch_inputs

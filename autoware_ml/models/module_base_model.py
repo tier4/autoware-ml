@@ -401,6 +401,8 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
             else None,
         )
 
+    # TODO(vividf): Remove once TransFusion, FRNet, CalibrationStatus and camera-lidar BEVFusion
+    # declare build_stages().
     def build_export_spec(self, multi_task_batch_inputs: ModelBatchInputs) -> ExportSpec:
         """Build the single-module deployment export specification.
 
@@ -486,4 +488,6 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
                     f"{' ...' if len(in_training) > 3 else ''}."
                 )
             return build_export_specs_from_stages(stages, multi_task_batch_inputs, self.device)
+        # TODO(vividf): Drop this fallback with build_export_spec(). Once every model declares
+        # build_stages(), this method only derives the specs and is no longer overridden.
         return {"end_to_end": self.build_export_spec(multi_task_batch_inputs)}
