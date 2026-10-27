@@ -155,6 +155,7 @@
     "hsigmoid",
     "hyperparams",
     "iinfo",
+    "imagenet",
     "indice",
     "indptr",
     "inds",
