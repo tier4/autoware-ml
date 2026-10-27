@@ -35,8 +35,9 @@ from autoware_ml.utils.deploy import ExportSpec
 def export_spec_for_stage(stage: GraphStage, state: RunState) -> ExportSpec:
     """Build one graph stage's spec from a completed run of the stage graph.
 
-    The spec takes the stage's declared input and output names. Its ``dynamic_axes`` are the
-    stage's ``onnx_dynamic_axes``, or ``None`` so that the module's config entry applies.
+    The trace inputs are the tensors the stage ran on (``state.graph_inputs``). The spec takes
+    the stage's declared input and output names. Its ``dynamic_axes`` are the stage's
+    ``onnx_dynamic_axes``, or ``None`` so that the module's config entry applies.
     """
     dynamic_axes = (
         {name: dict(axes) for name, axes in stage.onnx_dynamic_axes.items()}

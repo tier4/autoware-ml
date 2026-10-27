@@ -171,6 +171,15 @@ class TestStageDeclaration:
         state.tensors["mid"] = torch.ones(1)
         with pytest.raises(KeyError, match="available: \\['mid'\\]"):
             state["typo"]
+        with pytest.raises(KeyError, match="available: \\['mid'\\]"):
+            state.narrowed(("typo",))
+
+    def test_state_refuses_to_overwrite_a_name(self):
+        state = RunState(batch=None, device=torch.device("cpu"))
+        state.add({"x": torch.ones(1)})
+        with pytest.raises(ValueError, match="already holds \\['x'\\]"):
+            state.add({"x": torch.zeros(1), "y": torch.zeros(1)})
+        assert state["x"].item() == 1.0
 
 
 class TestRunStagesInTorch:
@@ -245,6 +254,26 @@ class TestRunStagesInTorch:
         stages[3] = GraphStage("head", module=_Double(), inputs=("z",), outputs=("plus", "minus"))
         with pytest.raises(ValueError, match="returned 1 tensor"):
             run_stages_in_torch(stages, {"x": torch.tensor([1.0])}, torch.device("cpu"))
+
+    def test_graph_stage_inputs_are_tensors(self):
+        stages = list(_toy_stages())
+        stages[2] = TorchStage(
+            "glue", run=lambda state: {"z": [state["y"]]}, inputs=("y",), outputs=("z",)
+        )
+        with pytest.raises(TypeError, match="'head' input 'z' is a list"):
+            run_stages_in_torch(stages, {"x": torch.tensor([1.0])}, torch.device("cpu"))
+
+    def test_graph_inputs_are_kept_as_the_graph_saw_them(self):
+        # Later glue may reuse a graph output in place; the recorded inputs do not follow.
+        stages = list(_toy_stages())
+        stages[2] = TorchStage(
+            "glue", run=lambda state: {"z": state["y"].add_(100.0)}, inputs=("y",), outputs=("z",)
+        )
+        state = run_stages_in_torch(stages, {"x": torch.tensor([1.0])}, torch.device("cpu"))
+        (encoder_input,) = state.graph_inputs["encoder"]
+        (head_input,) = state.graph_inputs["head"]
+        assert torch.equal(encoder_input, torch.tensor([1.0]))
+        assert torch.equal(head_input, torch.tensor([102.0]))
 
     def test_graph_stage_outputs_are_tensors(self):
         for module, other in ((_NestedHead(), "tuple"), (_ScalarHead(), "int")):

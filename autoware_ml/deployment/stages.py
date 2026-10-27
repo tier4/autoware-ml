@@ -41,11 +41,14 @@ class RunState:
         batch: The preprocessed batch the run started from; only glue reads it.
         device: Device the graph stages run on.
         tensors: Tensors produced so far, by name.
+        graph_inputs: The positional inputs each graph stage ran on, by stage name, copied
+            when the stage ran: later glue cannot change what export traces.
     """
 
     batch: Any
     device: torch.device
     tensors: dict[str, Any] = field(default_factory=dict)
+    graph_inputs: dict[str, tuple[torch.Tensor, ...]] = field(default_factory=dict)
 
     def __getitem__(self, name: str) -> Any:
         """Return a produced tensor; a miss means a stage read a name it did not declare."""
@@ -59,10 +62,19 @@ class RunState:
 
     def narrowed(self, names: Sequence[str]) -> RunState:
         """The view a glue stage runs on: the same batch and device, only ``names``."""
-        return RunState(self.batch, self.device, {name: self.tensors[name] for name in names})
+        return RunState(self.batch, self.device, {name: self[name] for name in names})
 
     def add(self, produced: Mapping[str, Any]) -> None:
-        """Merge one stage's named results."""
+        """Merge one stage's named results; a name is written once per run.
+
+        Raises:
+            ValueError: On a name the run already holds.
+        """
+        repeated = sorted(set(produced) & set(self.tensors))
+        if repeated:
+            raise ValueError(
+                f"Run state already holds {repeated}; every name is written by one stage."
+            )
         self.tensors.update(produced)
 
 
@@ -222,6 +234,26 @@ def artifact_path(output_dir: str | Path, stage_name: str, backend: Backend) -> 
     return Path(output_dir) / f"{stage_name}{suffix}"
 
 
+def graph_input_tensors(stage: GraphStage, state: RunState) -> tuple[torch.Tensor, ...]:
+    """Return the stage's positional inputs on the run device, in declaration order.
+
+    Every runner of a stage graph takes a graph's inputs through here.
+
+    Raises:
+        TypeError: When an input is not a tensor; a graph binds tensors only.
+    """
+    tensors = []
+    for name in stage.inputs:
+        value = state[name]
+        if not torch.is_tensor(value):
+            raise TypeError(
+                f"GraphStage {stage.name!r} input {name!r} is a {type(value).__name__}; a graph "
+                "stage binds tensors only, so the glue that writes it has to produce a tensor."
+            )
+        tensors.append(value.to(state.device))
+    return tuple(tensors)
+
+
 def run_torch_stage(stage: TorchStage, state: RunState) -> dict[str, Any]:
     """Run a glue stage on its declared inputs and check its results against ``outputs``.
 
@@ -248,13 +280,13 @@ def run_torch_stage(stage: TorchStage, state: RunState) -> dict[str, Any]:
 def run_stages_in_torch(stages: Sequence[Stage], batch: Any, device: torch.device) -> RunState:
     """Run every stage in PyTorch and return the filled run state.
 
-    Export takes its trace inputs from this run. A graph stage gets its ``inputs`` as
-    positional arguments and returns one tensor per ``outputs`` name, in order. Modules run
-    in their current mode; export switches them to eval first.
+    Export takes its trace inputs from ``RunState.graph_inputs``, filled by this run. A graph
+    stage gets its ``inputs`` as positional arguments and returns one tensor per ``outputs``
+    name, in order. Modules run in their current mode; export switches them to eval first.
 
     Raises:
-        TypeError: When a graph stage returns a mapping or a non-tensor, or a glue stage
-            returns something other than a mapping.
+        TypeError: When a graph stage gets a non-tensor input or returns a mapping or a
+            non-tensor, or a glue stage returns something other than a mapping.
         ValueError: When a stage returns other names, or another number of tensors, than
             it declares.
     """
@@ -265,7 +297,8 @@ def run_stages_in_torch(stages: Sequence[Stage], batch: Any, device: torch.devic
             if isinstance(stage, TorchStage):
                 state.add(run_torch_stage(stage, state))
                 continue
-            args = tuple(state[name].to(device) for name in stage.inputs)
+            args = graph_input_tensors(stage, state)
+            state.graph_inputs[stage.name] = tuple(arg.detach().clone() for arg in args)
             raw = stage.module(*args)
             if isinstance(raw, Mapping):
                 # len() and zip() would accept a dict and name the outputs by its keys.
