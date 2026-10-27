@@ -38,6 +38,7 @@ from autoware_ml.models.detection3d.task_modules.streaming import (
     nerf_positional_encoding,
     pos2posemb1d,
     pos2posemb3d,
+    reduce_mean_count,
     topk_gather,
     transform_reference_points,
 )
@@ -891,10 +892,14 @@ class StreamPETRHead(nn.Module):
             one_hot[pos_mask, sample_targets.labels[pos_mask]] = 1.0
             target_labels.append(one_hot)
         target_labels_tensor = torch.stack(target_labels, dim=0)
-        # One device sync per decoder layer instead of one per sample.
-        total_pos = int(torch.stack(positive_counts).sum().item())
+        # The positive count averaged over the ranks (see reduce_mean_count), one collective and
+        # one device sync per decoder layer. Every rank runs every layer, so the collectives
+        # stay in step.
+        total_pos = torch.clamp(
+            reduce_mean_count(torch.stack(positive_counts).sum()), min=1.0
+        ).item()
         loss_cls = self.loss_cls_weight * self.loss_cls(
-            cls_scores, target_labels_tensor, weights=label_weights, avg_factor=max(total_pos, 1)
+            cls_scores, target_labels_tensor, weights=label_weights, avg_factor=total_pos
         )
 
         # The regression loss runs over every query with 0/1 positive weights so
@@ -911,7 +916,7 @@ class StreamPETRHead(nn.Module):
         target_tensor = torch.stack(target_encodings, dim=0)
         weight_tensor = torch.stack(positive_weights, dim=0).unsqueeze(-1)
         per_box = self.loss_bbox(bbox_preds, target_tensor) * self.code_weights
-        bbox_loss = self.loss_bbox_weight * (per_box * weight_tensor).sum() / max(total_pos, 1)
+        bbox_loss = self.loss_bbox_weight * (per_box * weight_tensor).sum() / total_pos
         return loss_cls, bbox_loss
 
     @staticmethod
@@ -934,9 +939,13 @@ class StreamPETRHead(nn.Module):
         bbox_preds: torch.Tensor,
         known_bboxs: torch.Tensor,
         known_labels: torch.Tensor,
-        num_total_pos: int,
+        num_total_pos: float,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Compute denoising-query supervision for one decoder layer."""
+        """Compute denoising-query supervision for one decoder layer.
+
+        ``num_total_pos`` is the denoising target count averaged over the ranks and clamped to
+        at least 1, which :meth:`loss` computes once per step.
+        """
         class_targets = cls_scores.new_zeros((known_labels.shape[0], self.num_classes))
         foreground = known_labels < self.num_classes
         if foreground.any():
@@ -956,7 +965,7 @@ class StreamPETRHead(nn.Module):
             self.dn_weight
             * self.loss_bbox_weight
             * (self.loss_bbox(bbox_preds, target_encoding) * self.code_weights).sum()
-            / max(num_total_pos, 1)
+            / max(num_total_pos, 1.0)
         )
         return loss_cls, loss_bbox
 
@@ -1152,6 +1161,18 @@ class StreamPETRHead(nn.Module):
                 loss_dict[f"d{layer_index}.dn_loss_cls"] = zero.clone()
                 loss_dict[f"d{layer_index}.dn_loss_bbox"] = zero.clone()
 
+        num_targets = 0 if outputs.denoising is None else outputs.denoising.known_labels.numel()
+        if self.with_dn and self.training:
+            # The denoising target count averaged over the ranks. The collective is gated on
+            # flags every rank shares, never on the ground truth of this rank: a rank without
+            # boxes still joins it with a count of 0, and its zero denoising loss above is its
+            # share of the per-object mean.
+            dn_avg_factor = torch.clamp(
+                reduce_mean_count(all_cls_scores.new_tensor(float(num_targets))), min=1.0
+            ).item()
+        else:
+            dn_avg_factor = max(float(num_targets), 1.0)
+
         if outputs.denoising is not None:
             known_labels = outputs.denoising.known_labels
             known_bboxs = outputs.denoising.known_boxes
@@ -1160,7 +1181,7 @@ class StreamPETRHead(nn.Module):
             dn_losses_bbox = []
             for cls_scores, bbox_preds in zip(output_known_class, output_known_coord):
                 dn_loss_cls, dn_loss_bbox = self.dn_loss_single(
-                    cls_scores, bbox_preds, known_bboxs, known_labels, known_labels.numel()
+                    cls_scores, bbox_preds, known_bboxs, known_labels, dn_avg_factor
                 )
                 dn_losses_cls.append(dn_loss_cls)
                 dn_losses_bbox.append(dn_loss_bbox)
