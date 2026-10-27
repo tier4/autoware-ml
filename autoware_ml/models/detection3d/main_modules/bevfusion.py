@@ -574,6 +574,7 @@ class BEVFusionDetection3DModel(ModuleBaseModel):
                     module=_BEVFusionLidarExportWrapper(export_model),
                     args=(voxels, coors, num_points_per_voxel),
                     input_param_names=["voxels", "coors", "num_points_per_voxel"],
+                    output_names=["bbox_pred", "score", "label_pred"],
                 )
             }
 
@@ -612,6 +613,7 @@ class BEVFusionDetection3DModel(ModuleBaseModel):
                 module=BEVFusionImageBackboneExportWrapper(export_model.camera_network),
                 args=(imgs_uint8,),
                 input_param_names=["imgs"],
+                output_names=["image_feats"],
             ),
             "bevfusion_camera_lidar": ExportSpec(
                 module=_BEVFusionExportWrapper(export_model),
@@ -637,6 +639,7 @@ class BEVFusionDetection3DModel(ModuleBaseModel):
                     "ranks",
                     "indices",
                 ],
+                output_names=["bbox_pred", "score", "label_pred"],
             ),
         }
 

@@ -46,7 +46,7 @@ class ExportSpec:
         module: Module instance exported to ONNX.
         args: Example positional inputs supplied during export.
         input_param_names: Names associated with the positional input tensors.
-        output_names: Optional names associated with exported output tensors.
+        output_names: Names of the exported output tensors, in order.
         dynamic_axes: Optional legacy ONNX dynamic-axis mapping generated with
             the export arguments. Used only when exporting with ``dynamo=False``.
         supported_stages: Export stages supported by this specification.
@@ -55,7 +55,7 @@ class ExportSpec:
     module: torch.nn.Module
     args: tuple[Any, ...]
     input_param_names: list[str]
-    output_names: list[str] | None = None
+    output_names: list[str]
     dynamic_axes: dict[str, dict[int, str]] | None = None
     supported_stages: frozenset[str] = frozenset({"onnx", "tensorrt"})
 
@@ -259,7 +259,7 @@ def export_to_onnx(
     input_sample: tuple[Any, ...],
     onnx_cfg: DictConfig,
     input_param_names: list[str],
-    output_names_override: list[str] | None,
+    output_names: list[str],
     dynamic_axes_override: dict[str, dict[int, str]] | None,
     output_path: Path,
 ) -> None:
@@ -275,8 +275,14 @@ def export_to_onnx(
     dynamic_axes = None
     if not dynamo:
         dynamic_axes = dynamic_axes_override or build_dynamic_axes(onnx_cfg)
-    input_names = list(onnx_cfg.get("input_names", input_param_names))
-    output_names = list(output_names_override or onnx_cfg.get("output_names", ["output"]))
+    configured_names = [key for key in ("input_names", "output_names") if key in onnx_cfg]
+    if configured_names:
+        raise ValueError(
+            f"deploy.onnx {configured_names} is not read: the export spec names the graph "
+            f"inputs {list(input_param_names)} and outputs {list(output_names)}. Remove the entry."
+        )
+    input_names = list(input_param_names)
+    output_names = list(output_names)
 
     logger.info("Dynamic shapes: %s", dynamic_shapes)
     logger.info("Dynamic axes: %s", dynamic_axes)

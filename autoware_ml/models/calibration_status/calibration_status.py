@@ -147,7 +147,9 @@ class CalibrationStatusClassifier(ModuleBaseModel):
                 head=self.head,
             ),
             args=(_image_data(batch_inputs).fused_images(),),
-            input_param_names=["fused_img"],
+            # The tensor names the autoware_calibration_status_classifier node binds.
+            input_param_names=["input"],
+            output_names=["output"],
         )
 
 
@@ -161,9 +163,9 @@ class _CalibrationStatusExportModule(nn.Module):
         self.neck = neck
         self.head = head
 
-    def forward(self, fused_img: torch.Tensor) -> torch.Tensor:
+    def forward(self, input: torch.Tensor) -> torch.Tensor:  # named as the ONNX input
         """Export the calibration-status model as a single probability tensor."""
-        feats = self.backbone(fused_img)
+        feats = self.backbone(input)
         feats = self.neck(feats)
         logits = self.head(feats)
         return self.head.predict(logits)

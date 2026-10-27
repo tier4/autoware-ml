@@ -612,7 +612,7 @@ def _onnx_sessions(
             input_sample=spec.args,
             onnx_cfg=onnx_cfg,
             input_param_names=spec.input_param_names,
-            output_names_override=spec.output_names,
+            output_names=spec.output_names,
             dynamic_axes_override=spec.dynamic_axes,
             output_path=path,
         )

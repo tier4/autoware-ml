@@ -318,7 +318,7 @@ def test_exported_encoder_graph_declares_a_subset_of_the_contract(tmp_path) -> N
             input_sample=spec.args,
             onnx_cfg=onnx_cfg,
             input_param_names=list(spec.input_param_names),
-            output_names_override=list(spec.output_names),
+            output_names=list(spec.output_names),
             dynamic_axes_override=spec.dynamic_axes,
             output_path=path,
         )

@@ -114,7 +114,11 @@ class _NoInputsModel(_ExportModel):
     def build_export_specs(
         self, multi_task_batch_inputs: ModelBatchInputs
     ) -> dict[str, ExportSpec]:
-        return {"head": ExportSpec(module=self.head, args=(), input_param_names=[])}
+        return {
+            "head": ExportSpec(
+                module=self.head, args=(), input_param_names=[], output_names=["feat"]
+            )
+        }
 
 
 class _PredictDatamodule:

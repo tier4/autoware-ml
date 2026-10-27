@@ -19,6 +19,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from omegaconf import OmegaConf
+import onnx
 import pytest
 import torch
 
@@ -44,33 +45,36 @@ class _DummyModel(torch.nn.Module):
         return voxels + num_points.unsqueeze(-1)
 
 
-def test_export_to_onnx_prefers_export_spec_output_names(tmp_path: Path) -> None:
-    class _SingleOutput(torch.nn.Module):
-        def forward(self, x: torch.Tensor) -> torch.Tensor:
-            return x + 1
-
+def test_export_to_onnx_names_the_tensors_after_the_spec(tmp_path: Path) -> None:
+    """The ONNX inputs and outputs carry the spec's names, config entries are refused."""
     output_path = tmp_path / "model.onnx"
-    onnx_cfg = OmegaConf.create(
-        {
-            "opset_version": 17,
-            "dynamo": False,
-            "do_constant_folding": True,
-            "input_names": ["input"],
-            "output_names": ["configured_output"],
-        }
-    )
+    onnx_cfg = OmegaConf.create({"opset_version": 17, "dynamo": False})
 
     export_to_onnx(
-        model=_SingleOutput(),
+        model=torch.nn.Identity(),
         input_sample=(torch.ones(2, 3),),
         onnx_cfg=onnx_cfg,
-        input_param_names=["input"],
-        output_names_override=["exported_output"],
+        input_param_names=["spec_input"],
+        output_names=["spec_output"],
         dynamic_axes_override=None,
         output_path=output_path,
     )
 
-    assert output_path.exists()
+    graph = onnx.load(str(output_path)).graph
+    assert [tensor.name for tensor in graph.input] == ["spec_input"]
+    assert [tensor.name for tensor in graph.output] == ["spec_output"]
+
+    for key in ("input_names", "output_names"):
+        with pytest.raises(ValueError, match=f"{key}.*is not read"):
+            export_to_onnx(
+                torch.nn.Identity(),
+                (torch.ones(2, 3),),
+                OmegaConf.create({"opset_version": 17, "dynamo": False, key: ["renamed"]}),
+                ["spec_input"],
+                ["spec_output"],
+                None,
+                tmp_path / "renamed.onnx",
+            )
 
 
 def test_export_to_onnx_prefers_export_spec_dynamic_axes(
@@ -98,7 +102,7 @@ def test_export_to_onnx_prefers_export_spec_dynamic_axes(
         input_sample=(torch.ones(2, 3),),
         onnx_cfg=onnx_cfg,
         input_param_names=["input"],
-        output_names_override=None,
+        output_names=["output"],
         dynamic_axes_override=dynamic_axes_override,
         output_path=tmp_path / "model.onnx",
     )
@@ -111,6 +115,7 @@ def test_supports_export_stage_uses_export_spec_capabilities() -> None:
         module=_DummyModel(),
         args=(torch.ones(1, 1), torch.ones(1)),
         input_param_names=["voxels", "num_points"],
+        output_names=["out"],
         supported_stages=frozenset({"onnx"}),
     )
 
