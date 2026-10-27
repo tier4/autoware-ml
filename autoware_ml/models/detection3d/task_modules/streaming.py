@@ -14,6 +14,27 @@ import torch
 import torch.nn as nn
 
 
+def reduce_mean_count(value: torch.Tensor) -> torch.Tensor:
+    """Average a count across the DDP ranks, as mmdetection's ``reduce_mean`` does.
+
+    DDP averages the gradients of the ranks, so a summed loss normalized by this mean count is
+    the per-object mean over the whole effective batch, whichever rank holds each object. Every
+    rank of the default process group has to call it the same number of times per step.
+
+    Args:
+        value: Scalar count of this rank.
+
+    Returns:
+        The mean count over the ranks as float. Without a process group, the count of this rank
+        cast to float. The input is never modified.
+    """
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        value = value.float().clone()
+        torch.distributed.all_reduce(value.div_(torch.distributed.get_world_size()))
+        return value
+    return value.float()
+
+
 class StreamContinuity:
     """Tell which batch lanes continue the stream of their previous frame.
 
