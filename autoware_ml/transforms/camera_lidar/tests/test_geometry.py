@@ -944,7 +944,7 @@ class TestGlobalRotScaleTransCameraOnly(PinholeCameraTestCase):
             pose[:3, 3] = torch.tensor(translation)
             poses.append(pose)
         augmented = []
-        for seed, (pose, timestamp_seconds) in enumerate(zip(poses, (10.0, 10.1), strict=True)):
+        for seed, (pose, timestamp) in enumerate(zip(poses, (10.0, 10.1), strict=True)):
             local_box = (torch.linalg.inv(pose) @ global_box)[:3]
             images = self.build_pinhole_images([self.LIDAR2CAM_FORWARD], 160, 96)
             sample = self.build_sample(images)._replace(
@@ -952,7 +952,7 @@ class TestGlobalRotScaleTransCameraOnly(PinholeCameraTestCase):
                     [[*local_box.tolist(), 4.0, 2.0, 1.5, 0.0]], [0]
                 ),
                 frame_meta=FrameMetaSample(
-                    ego2global=pose, scene_token="scene", timestamp_seconds=timestamp_seconds
+                    ego2global=pose, scene_token="scene", timestamp=timestamp
                 ),
             )
             augmented.append(self.augment(sample, seed=seed))

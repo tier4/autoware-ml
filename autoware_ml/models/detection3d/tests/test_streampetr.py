@@ -190,7 +190,7 @@ def _build_frame_meta(
     return FrameMetaBatch(
         ego2globals=torch.eye(4).repeat(batch_size, 1, 1) if ego2globals is None else ego2globals,
         scene_tokens=list(scene_tokens or [f"db/scene_{index}/0" for index in range(batch_size)]),
-        timestamps_seconds=torch.tensor(timestamps, dtype=torch.float64),
+        timestamps=torch.tensor(timestamps, dtype=torch.float64),
         lanelet_map_paths=[None] * batch_size,
     )
 

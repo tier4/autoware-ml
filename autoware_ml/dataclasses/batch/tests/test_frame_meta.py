@@ -67,13 +67,13 @@ class TestFrameMetaSample(FrameMetaTestCase):
     def test_field_order(self) -> None:
         """
         Input: the class itself.
-        Expected: the tuple exposes ``ego2global``, ``scene_token``, ``timestamp_seconds`` and the
+        Expected: the tuple exposes ``ego2global``, ``scene_token``, ``timestamp`` and the
         optional ``lanelet_map_path``, which defaults to None for a frame without a map.
         Check: compare ``_fields`` against the expected names and the default.
         """
         self.assertEqual(
             FrameMetaSample._fields,
-            ("ego2global", "scene_token", "timestamp_seconds", "lanelet_map_path"),
+            ("ego2global", "scene_token", "timestamp", "lanelet_map_path"),
         )
         self.assertIsNone(
             FrameMetaSample(self.make_ego2global(0.0), "db/s/0", 0.0).lanelet_map_path
@@ -89,7 +89,7 @@ class TestFrameMetaSample(FrameMetaTestCase):
 
         self.assertTrue(torch.equal(sample.ego2global, self.make_ego2global(1.0)))
         self.assertEqual(sample.scene_token, "db/scene_a/0")
-        self.assertEqual(sample.timestamp_seconds, 10.0)
+        self.assertEqual(sample.timestamp, 10.0)
         self.assertIsNone(sample.lanelet_map_path)
         self.assertEqual(self.samples[1].lanelet_map_path, "/maps/scene_b.osm")
 
@@ -109,13 +109,13 @@ class TestFrameMetaBatchFields(FrameMetaTestCase):
     def test_field_order(self) -> None:
         """
         Input: the class itself.
-        Expected: the tuple exposes ``ego2globals``, ``scene_tokens``, ``timestamps_seconds``
+        Expected: the tuple exposes ``ego2globals``, ``scene_tokens``, ``timestamps``
         and ``lanelet_map_paths``, the order of the sample's fields.
         Check: compare ``_fields`` against the expected names.
         """
         self.assertEqual(
             FrameMetaBatch._fields,
-            ("ego2globals", "scene_tokens", "timestamps_seconds", "lanelet_map_paths"),
+            ("ego2globals", "scene_tokens", "timestamps", "lanelet_map_paths"),
         )
 
     def test_is_immutable(self) -> None:
@@ -148,9 +148,9 @@ class TestFrameMetaBatchCollate(FrameMetaTestCase):
         self.assertTrue(torch.equal(batch.ego2globals[0], self.samples[0].ego2global))
         self.assertTrue(torch.equal(batch.ego2globals[1], self.samples[1].ego2global))
         self.assertEqual(list(batch.scene_tokens), ["db/scene_a/0", "db/scene_b/1"])
-        self.assertEqual(batch.timestamps_seconds.dtype, torch.float64)
+        self.assertEqual(batch.timestamps.dtype, torch.float64)
         torch.testing.assert_close(
-            batch.timestamps_seconds, torch.tensor([10.0, 20.5], dtype=torch.float64)
+            batch.timestamps, torch.tensor([10.0, 20.5], dtype=torch.float64)
         )
         self.assertEqual(list(batch.lanelet_map_paths), [None, "/maps/scene_b.osm"])
 
@@ -351,7 +351,7 @@ class TestFrameMetaBatchToDevice(FrameMetaTestCase):
         self.assertIsInstance(moved, FrameMetaBatch)
         self.assertIsNot(moved, self.batch)
         self.assertTrue(torch.equal(moved.ego2globals, self.batch.ego2globals))
-        self.assertTrue(torch.equal(moved.timestamps_seconds, self.batch.timestamps_seconds))
+        self.assertTrue(torch.equal(moved.timestamps, self.batch.timestamps))
         self.assertEqual(list(moved.scene_tokens), list(self.batch.scene_tokens))
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required to move tensors to GPU")
@@ -365,7 +365,7 @@ class TestFrameMetaBatchToDevice(FrameMetaTestCase):
         moved = self.batch.to_device(torch.device("cuda"))
 
         self.assertEqual(moved.ego2globals.device.type, "cuda")
-        self.assertEqual(moved.timestamps_seconds.device.type, "cuda")
+        self.assertEqual(moved.timestamps.device.type, "cuda")
         self.assertEqual(self.batch.ego2globals.device.type, "cpu")
         self.assertEqual(list(moved.scene_tokens), list(self.batch.scene_tokens))
 

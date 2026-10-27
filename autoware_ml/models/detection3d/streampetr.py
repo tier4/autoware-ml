@@ -304,9 +304,9 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
             # and the deployed graph both see the intrinsics of the augmented images.
             camera_intrinsics=image_data.augmented_camera_intrinsics(),
             lidar2img=image_data.lidar2images,
-            timestamp=frame_meta.timestamps_seconds,
+            timestamp=frame_meta.timestamps,
             prev_exists=self.bbox_head.stream_continuity(
-                frame_meta.scene_tokens, frame_meta.timestamps_seconds
+                frame_meta.scene_tokens, frame_meta.timestamps
             ),
             ego_pose=frame_meta.ego2globals,
             # Inverted in float64 so that the inversion adds no rounding to the map-frame pose;

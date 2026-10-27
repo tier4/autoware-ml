@@ -382,7 +382,7 @@ class T4Dataset(BaseDataset):
             lanelet_map_path=(
                 self.map_provider.osm_path(scene_token) if self.map_provider is not None else None
             ),
-            timestamp_seconds=float(
+            timestamp=float(
                 self.dataset_records_dataframe.item(idx, DatasetTableSchema.TIMESTAMP_SECONDS.name)
             ),
         )
