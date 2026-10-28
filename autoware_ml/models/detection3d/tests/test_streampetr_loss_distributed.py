@@ -127,11 +127,11 @@ def _sample(
     return cls_scores, bbox_preds, gt_boxes, gt_labels
 
 
-def _spawn(worker, world_size: int = _WORLD_SIZE, timeout: float = 120.0) -> None:
+def _spawn(worker, *args, world_size: int = _WORLD_SIZE, timeout: float = 120.0) -> None:
     with tempfile.TemporaryDirectory() as directory:
         context = mp.spawn(
             worker,
-            args=(world_size, os.path.join(directory, "store")),
+            args=(world_size, os.path.join(directory, "store"), *args),
             nprocs=world_size,
             join=False,
         )
@@ -157,6 +157,13 @@ def _reduce_mean_count_worker(rank: int, world_size: int, init_file: str) -> Non
         assert reduced.item() == pytest.approx(5.0)
         # The input must not be mutated in place.
         assert local_count.item() == pytest.approx(2.0 if rank == 0 else 8.0)
+        # The floor applies to the count of all ranks: 1 and 0 positives are 1 over 2 ranks,
+        # 0 and 0 are floored to 1 over 2 ranks; the mean itself is not floored.
+        assert reduce_mean_count(torch.tensor(float(1 - rank))).item() == pytest.approx(0.5)
+        assert reduce_mean_count(torch.tensor(0.0)).item() == pytest.approx(0.5)
+        # Several counts reduce in one collective, floored one by one.
+        pair = reduce_mean_count(torch.tensor([float(1 - rank), 4.0]))
+        assert pair.tolist() == pytest.approx([0.5, 4.0])
     finally:
         dist.destroy_process_group()
 
@@ -284,16 +291,22 @@ def _layer_loss(
         dim=1,
     )
     queries = torch.stack([out[:, :_NUM_QUERIES] for out in per_frame], dim=1)
-    denoising = StreamPETRDenoisingOutputs(
-        cls_scores=known_outputs[..., :_NUM_CLASSES],
-        bbox_preds=known_outputs[..., _NUM_CLASSES:],
-        known_labels=torch.cat([labels.repeat(_SCALAR) for *_, labels in frames]),
-        known_boxes=torch.cat([boxes.repeat(_SCALAR, 1) for _, _, boxes, _ in frames]),
-        batch_indices=torch.cat(
-            [torch.full((count,), index, dtype=torch.long) for index, count in enumerate(num_known)]
-        ),
-        slot_indices=torch.cat([torch.arange(count) for count in num_known]),
-    )
+    # The head makes no denoising queries without boxes.
+    denoising = None
+    if sum(num_known) > 0:
+        denoising = StreamPETRDenoisingOutputs(
+            cls_scores=known_outputs[..., :_NUM_CLASSES],
+            bbox_preds=known_outputs[..., _NUM_CLASSES:],
+            known_labels=torch.cat([labels.repeat(_SCALAR) for *_, labels in frames]),
+            known_boxes=torch.cat([boxes.repeat(_SCALAR, 1) for _, _, boxes, _ in frames]),
+            batch_indices=torch.cat(
+                [
+                    torch.full((count,), index, dtype=torch.long)
+                    for index, count in enumerate(num_known)
+                ]
+            ),
+            slot_indices=torch.cat([torch.arange(count) for count in num_known]),
+        )
     head_outputs = StreamPETRHeadOutputs(
         all_cls_scores=queries[..., :_NUM_CLASSES],
         all_bbox_preds=queries[..., _NUM_CLASSES:],
@@ -307,25 +320,25 @@ def _layer_loss(
     )["loss"]
 
 
-def _ddp_gradient_worker(rank: int, world_size: int, init_file: str) -> None:
+def _ddp_gradient_worker(
+    rank: int, world_size: int, init_file: str, box_counts: tuple[int, ...]
+) -> None:
+    head = _build_head().train()
+    frames = [_frame(count, seed=70 + 10 * index) for index, count in enumerate(box_counts)]
+    torch.manual_seed(0)
+    layer = torch.nn.Linear(_FEATURES, _NUM_CLASSES + 10)
+    whole_batch_layer = copy.deepcopy(layer)
+    # The reference runs before the process group exists: the whole batch on one process, its
+    # counts floored as on one device.
+    _layer_loss(head, whole_batch_layer, frames).backward()
+
     dist.init_process_group(
         "gloo", init_method=f"file://{init_file}", rank=rank, world_size=world_size
     )
     try:
-        head = _build_head().train()
-        # 10 and 30 boxes: 40 denoising targets per rank on average keep the scaled
-        # classification factor (40 * pi / 6 * 0.5 ** 3 = 2.6) above its floor of 1.
-        frames = [_frame(10, seed=70), _frame(30, seed=80)]
-        torch.manual_seed(0)
-        layer = torch.nn.Linear(_FEATURES, _NUM_CLASSES + 10)
-        whole_batch_layer = copy.deepcopy(layer)
-
         # The wrapper must outlive the backward pass, which its hooks average over the ranks.
         ddp_layer = DistributedDataParallel(layer)
         _layer_loss(head, ddp_layer, [frames[rank]]).backward()
-        # The whole batch on every rank: the collectives average identical counts, so this is
-        # the loss of the whole batch on one process.
-        _layer_loss(head, whole_batch_layer, frames).backward()
 
         for sharded, whole in zip(layer.parameters(), whole_batch_layer.parameters()):
             torch.testing.assert_close(sharded.grad, whole.grad, rtol=1e-5, atol=1e-7)
@@ -340,9 +353,9 @@ def test_reduce_mean_count_is_identity_without_process_group() -> None:
     unchanged and the integer one is cast to float, as the distributed path casts it.
     Check: the float count is the same tensor, and the integer one comes back as float32.
     """
-    value = torch.tensor(3.0)
-    assert reduce_mean_count(value) is value
+    assert reduce_mean_count(torch.tensor(3.0)).item() == pytest.approx(3.0)
     assert reduce_mean_count(torch.tensor(3)).dtype == torch.float32
+    assert reduce_mean_count(torch.tensor(0.0)).item() == pytest.approx(1.0)
 
 
 def test_reduce_mean_count_averages_counts_across_ranks() -> None:
@@ -380,14 +393,17 @@ def test_dn_collective_survives_rank_without_ground_truth() -> None:
     _spawn(_dn_mixed_gt_worker)
 
 
-def test_ddp_gradients_match_the_whole_batch_on_one_process() -> None:
+@pytest.mark.parametrize("box_counts", [(10, 30), (1, 0), (0, 0)], ids=["10-30", "1-0", "0-0"])
+def test_ddp_gradients_match_the_whole_batch_on_one_process(box_counts: tuple[int, int]) -> None:
     """
-    Input: two CPU gloo ranks, rank 0 holding a frame with 10 boxes and rank 1 one with 30,
-    every logit and box of the matching and the denoising queries made by one linear layer
-    wrapped in DDP; and the same two frames as one batch through a copy of the layer.
+    Input: two CPU gloo ranks, each holding a frame with the given number of boxes, every logit
+    and box of the matching and the denoising queries made by one linear layer wrapped in DDP;
+    and the same two frames as one batch through a copy of the layer on one process.
     Expected: DDP averages the gradients of the ranks, so normalizing by the counts averaged
     over the ranks gives the gradients of the whole batch on one process, for the matching and
-    the denoising losses alike; rank-local counts would weight the two ranks equally.
+    the denoising losses alike; rank-local counts would weight the two ranks equally. With one
+    positive in the step, or none, the floor of the count applies to the whole batch: a floor
+    of the mean would halve the gradient of the single positive, or of the negatives.
     Check: the DDP-averaged gradient of every parameter against the whole-batch gradient.
     """
-    _spawn(_ddp_gradient_worker)
+    _spawn(_ddp_gradient_worker, box_counts)
