@@ -14,25 +14,30 @@ import torch
 import torch.nn as nn
 
 
-def reduce_mean_count(value: torch.Tensor) -> torch.Tensor:
-    """Average a count across the DDP ranks, as mmdetection's ``reduce_mean`` does.
+def reduce_mean_count(value: torch.Tensor, min_total: float = 1.0) -> torch.Tensor:
+    """Average a count over the DDP ranks, flooring the count summed over the ranks.
 
-    DDP averages the gradients of the ranks, so a summed loss normalized by this mean count is
-    the per-object mean over the whole effective batch, whichever rank holds each object. Every
-    rank of the default process group has to call it the same number of times per step.
+    DDP averages the gradients of the ranks, so a summed loss divided by this mean is the
+    per-object mean over the whole batch of the step, as if that batch were on one device. The
+    floor applies to the count of the whole batch for the same reason: mmdetection's
+    ``reduce_mean`` floors the mean instead, which halves the weight of the only positive of a
+    two-rank step. Every rank of the default process group has to call it the same number of
+    times per step.
 
     Args:
-        value: Scalar count of this rank.
+        value: Count or counts of this rank, reduced element by element.
+        min_total: Floor of the count summed over the ranks.
 
     Returns:
-        The mean count over the ranks as float. Without a process group, the count of this rank
-        cast to float. The input is never modified.
+        The floored count averaged over the ranks, as float; without a process group the
+        floored count of this rank. The input is never modified.
     """
+    total = value.float()
     if torch.distributed.is_available() and torch.distributed.is_initialized():
-        value = value.float().clone()
-        torch.distributed.all_reduce(value.div_(torch.distributed.get_world_size()))
-        return value
-    return value.float()
+        total = total.clone()
+        torch.distributed.all_reduce(total)
+        return total.clamp_(min=min_total).div_(torch.distributed.get_world_size())
+    return total.clamp(min=min_total)
 
 
 class StreamContinuity:
