@@ -327,13 +327,10 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
         pixi shell --environment dev
         ```
 
-    === "Contributor + t4sparse"
+    === "Contributor (with t4sparse)"
 
-        The `dev` environment plus `t4sparse`, the sparse convolution library
-        PTv3 trains on under mixed precision (see
-        [PointTransformerV3](../models/ptv3.md#mixed-precision)). Pixi builds it
-        from the private `tier4/t4sparse` repository, so this needs SSH read
-        access to it.
+        The `dev` environment plus `t4sparse` (see
+        [PointTransformerV3](../models/ptv3.md#mixed-precision)). Currently only available to TIER IV members.
 
         ```bash
         pixi install --locked --environment t4sparse

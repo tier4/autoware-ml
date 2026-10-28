@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The submanifold sparse convolution layer of the PTv3 family.
+"""Submanifold sparse convolution on spconv or t4sparse.
 
 :class:`SubMConv3d` is spconv's layer or, when ``t4sparse.torch`` is installed,
 t4sparse's. Both share the constructor, the KRSC weight layout and the parameter
@@ -71,7 +71,7 @@ if IS_T4SPARSE_AVAILABLE:
     from t4sparse.torch.compat import to_spconv_layer
 
     class T4SparseSubMConv3d(t4sparse.torch.SubMConv3d):
-        """t4sparse's submanifold convolution, with spconv where t4sparse has no kernel.
+        """t4sparse's submanifold convolution, falling back to spconv where t4sparse has no kernel.
 
         fp32 features outside autocast and CPU tensors run on an spconv twin that
         shares this layer's parameters, like :class:`SpconvSubMConv3d`. The twin is
@@ -120,11 +120,7 @@ if IS_T4SPARSE_AVAILABLE:
             return self._forward_spconv(x)
 
         def _forward_spconv(self, x: SparseConvTensor) -> SparseConvTensor:
-            cached = (
-                x.indice_dict.get(self.indice_key)
-                if self.indice_key is not None
-                else None
-            )
+            cached = x.indice_dict.get(self.indice_key) if self.indice_key is not None else None
             if isinstance(cached, t4sparse.torch.Rulebook):
                 raise TypeError(
                     f"indice_key {self.indice_key!r} holds a rulebook built under autocast, but "
@@ -138,17 +134,13 @@ if IS_T4SPARSE_AVAILABLE:
         def _spconv(self) -> nn.Module:
             """The spconv twin, rebuilt when the layer's parameters were replaced."""
             twin = self.__dict__["_spconv_twin"]
-            if (
-                twin is None
-                or twin.weight is not self.weight
-                or twin.bias is not self.bias
-            ):
+            if twin is None or twin.weight is not self.weight or twin.bias is not self.bias:
                 twin = to_spconv_layer(self)
                 self.__dict__["_spconv_twin"] = twin
             return twin
 
     SubMConv3d = T4SparseSubMConv3d
-    """The submanifold convolution layer of the PTv3 family."""
+    """The submanifold convolution layer: t4sparse when installed, spconv otherwise."""
 else:
     SubMConv3d = SpconvSubMConv3d
-    """The submanifold convolution layer of the PTv3 family."""
+    """The submanifold convolution layer: t4sparse when installed, spconv otherwise."""
