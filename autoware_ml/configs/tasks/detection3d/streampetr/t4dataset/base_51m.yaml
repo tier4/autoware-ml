@@ -1,0 +1,179 @@
+# @package _global_
+defaults:
+  - ../base
+  - ../focal2d_head
+  # The metric suites, their ranges and the datamodule belong to the evaluated database, so the
+  # range base composes them. Loaded before _self_ so the overrides below win over the defaults.
+  - /metrics/t4dataset/detection3d/default_detection3d_metrics
+  - /metrics/t4dataset/detection3d@metrics: default_detection3d_metric_suites
+  - /metrics/t4dataset/detection3d@metric_ranges: default_detection3d_120m_metric_ranges
+  - /datamodule@datamodule: t4dataset/default_detection3d_datamodule
+  # The temporal memory needs the scenes streamed, so the datamodule is a StreamingDataModule.
+  - /datamodule/streaming@datamodule: default_streaming_datamodule
+  - _self_
+
+point_cloud_range: [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
+post_center_range: [-61.2, -61.2, -10.0, 61.2, 61.2, 10.0]
+image_size: [480, 640]
+camera_names: [CAM_FRONT, CAM_FRONT_LEFT, CAM_BACK_LEFT, CAM_FRONT_RIGHT, CAM_BACK_RIGHT]
+
+# Largest GT distance of every class, from the detection taxonomy of the database. The GT of
+# the training and the evaluation pipelines is limited to the +-51.2 m pc_range SQUARE by
+# BBoxesRangeFilter, and the dynamic taxonomy evaluates every class up to 121 m, a no-op
+# inside the square. A radial cap at the pc_range would remove the square's corners from the
+# GT while corner predictions stayed and became guaranteed FPs, a semantics AWML's T4MetricV2
+# (bev buckets, radial on both GT and predictions) cannot reproduce. The headline 0-121m mAP
+# is therefore directly comparable to T4MetricV2's bev_center_0.0-121.0 evaluator.
+eval_class_range: ${database.taxonomy.detection3d.eval_range}
+
+# Boxes carrying one of these (class, attribute) pairs are dropped from training and
+# evaluation alike.
+filter_attributes:
+  - [bicycle, vehicle_state.parked]
+  - [bicycle, two_wheel_vehicle_state.without_rider]
+  - [bicycle, cycle_state.without_rider]
+  - [motorcycle, vehicle_state.parked]
+  - [motorcycle, two_wheel_vehicle_state.without_rider]
+  - [motorcycle, cycle_state.without_rider]
+  - [motorcycle, motorcycle_state.without_rider]
+
+model:
+  # T4 scenarios flag whether their traffic cones and barriers are annotated. In a frame
+  # flagged False those classes are not supervised by either head, so the detector is not
+  # taught they are absent (the accepted recipe).
+  partial_annotations:
+    _target_: autoware_ml.models.detection3d.task_modules.partial_annotations.PartialAnnotations
+    class_names: ${database.taxonomy.detection3d.class_names}
+    partial_ignore_labels: [traffic_cone, barrier]
+
+datasets:
+  train:
+    camera_names: ${camera_names}
+    # LoadAnnotations2DFromBoxes3D projects every 3D box of a frame onto a camera at most once,
+    # so a camera cannot see more 2D boxes than the frame has 3D boxes, and the 3D maximum of
+    # the dataset (max_num_3d_gt_bboxes: 500) bounds every camera too.
+    max_num_2d_gt_bboxes: 500
+    transforms:
+      _target_: autoware_ml.transforms.base.TransformsCompose
+      _convert_: all
+
+      pipeline:
+        # First, before the boxes reach any geometry: a non-finite velocity or a zero extent
+        # would turn the losses NaN or infinite.
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesPhysicalFilter
+          _convert_: all
+
+          max_absolute_speed: 150.0 # m/s, 540 km/h
+
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesLabelNameFilter
+          _convert_: all
+
+          label_names_to_keep: ${database.taxonomy.detection3d.class_names}
+          class_names: ${database.taxonomy.detection3d.class_names}
+
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesAttributeFilter
+          _convert_: all
+
+          filter_attributes: ${filter_attributes}
+
+        - _target_: autoware_ml.transforms.camera.loading.LoadImagesFromFile
+          _convert_: all
+
+        # The reference recipe shuffles the camera order every training frame
+        # (StreamPETRDataset shuffle_cameras=True); train-time only.
+        - _target_: autoware_ml.transforms.camera.permutation.ShuffleCameraOrder
+          _convert_: all
+
+        # +-0.02 around the factor at which every camera covers 480x640, so the cameras of
+        # every vehicle keep the same framing whatever their resolution.
+        - _target_: autoware_ml.transforms.camera.resize.ResizeCropFlipRotImage
+          _convert_: all
+
+          target_size: ${image_size}
+          resize_range: 0.02
+          bottom_crop_ratio_range: [0.0, 0.0]
+          random_horizontal_flip: true
+          training: true
+
+        # Camera-only global augmentation: the boxes and the camera poses move together and
+        # the frame pose folds the augmentation, so the temporal memory sees one world.
+        - _target_: autoware_ml.transforms.camera_lidar.geometry.GlobalRotScaleTrans
+          _convert_: all
+
+          yaw_rot_range: [-0.3925, 0.3925]
+          scale_ratio_range: [0.95, 1.05]
+
+        # 2D annotations are projected from the augmented 3D boxes BEFORE the range filter
+        # (matching the reference): the auxiliary 2D head supervises every visible object
+        # even outside the 3D detection range.
+        - _target_: autoware_ml.transforms.camera.annotations2d.LoadAnnotations2DFromBoxes3D
+          _convert_: all
+
+        # Boxes recorded with fewer than two lidar points are no 3D targets, as the evaluation
+        # drops them (min_num_points: 2) and the other T4 detectors train. They leave after the
+        # projection, so they stay 2D targets: a camera can see an object the lidar barely
+        # hits, and the accepted AWML run filters no box by its point count.
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesMinRecordedPointsFilter
+          _convert_: all
+
+          min_points: 2
+
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesRangeFilter
+          _convert_: all
+
+          point_cloud_range: ${point_cloud_range}
+
+  test:
+    camera_names: ${camera_names}
+    transforms:
+      _target_: autoware_ml.transforms.base.TransformsCompose
+      _convert_: all
+
+      pipeline:
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesPhysicalFilter
+          _convert_: all
+
+          max_absolute_speed: 150.0 # m/s, 540 km/h
+
+        - _target_: autoware_ml.transforms.camera.loading.LoadImagesFromFile
+          _convert_: all
+
+        - _target_: autoware_ml.transforms.camera.resize.ResizeCropFlipRotImage
+          _convert_: all
+
+          target_size: ${image_size}
+          resize_range: 0.02
+          bottom_crop_ratio_range: [0.0, 0.0]
+          training: false
+
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesLabelNameFilter
+          _convert_: all
+
+          label_names_to_keep: ${database.taxonomy.detection3d.class_names}
+          class_names: ${database.taxonomy.detection3d.class_names}
+
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesAttributeFilter
+          _convert_: all
+
+          filter_attributes: ${filter_attributes}
+
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesRangeFilter
+          _convert_: all
+
+          point_cloud_range: ${point_cloud_range}
+
+# StreamPETR carries a temporal memory across batches, so every dataloader streams the frames
+# of its scenes in time order: the sampler joins the scenes and cuts their frames into one lane
+# per batch position of every rank, and a cut can fall inside a scene. A shorter lane ends with
+# a padding slot that the model leaves out of the loss and the metrics, so every split serves
+# every frame exactly once on any number of GPUs. Every lane starts its stream with an empty
+# memory, so evaluation and prediction run one lane per rank to keep the cuts few.
+datamodule:
+  train_dataloader:
+    shuffle: false
+  validation_dataloader:
+    batch_size: 1
+  test_dataloader:
+    batch_size: 1
+  predict_dataloader:
+    batch_size: 1
