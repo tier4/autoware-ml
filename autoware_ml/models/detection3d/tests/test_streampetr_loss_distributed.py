@@ -12,23 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Distributed (multi-rank) tests for the StreamPETR loss normalization.
+"""Multi-rank tests of the StreamPETR loss normalization.
 
-These spawn real CPU process groups with the gloo backend so the actual
-``reduce_mean_count`` collectives run.
-
-The correctness property checked is the invariant that global (cross-rank)
-normalization provides and rank-local normalization violates: **sharding a
-batch across ranks must produce the same DDP-averaged loss as computing the
-whole batch on one rank**. Rank-local counting fails this whenever ranks hold
-different object counts (each GPU gets an equal vote regardless of load, an
-upward-biased mean of per-rank means), which also made results silently depend
-on the GPU count.
-
-The DN test additionally pins the collective-uniformity contract: a rank whose
-batch has no ground truth must still reach the DN count collective, otherwise
-mixed-GT steps deadlock. Workers are joined with a timeout so a regression
-shows up as a test failure rather than a hung pytest.
+They spawn gloo process groups on CPU so the collectives of ``reduce_mean_count`` run. The
+property under test: sharding a batch over the ranks gives the DDP-averaged loss and gradients
+of the whole batch on one process, and a rank without ground truth still joins the denoising
+collective.
 """
 
 from __future__ import annotations
@@ -135,9 +124,8 @@ def _spawn(worker, *args, world_size: int = _WORLD_SIZE, timeout: float = 120.0)
             nprocs=world_size,
             join=False,
         )
-        # A finite join converts a collective-uniformity regression (deadlock)
-        # into a test failure instead of a hung pytest process. join(timeout)
-        # returns after a single wait pass, so poll until the deadline.
+        # join(timeout) returns after one wait pass; poll so a deadlocked collective fails the
+        # test instead of hanging pytest.
         deadline = time.monotonic() + timeout
         while not context.join(timeout=5.0):
             if time.monotonic() > deadline:
@@ -151,17 +139,12 @@ def _reduce_mean_count_worker(rank: int, world_size: int, init_file: str) -> Non
         "gloo", init_method=f"file://{init_file}", rank=rank, world_size=world_size
     )
     try:
-        # Rank counts 2 and 8: the mean is 5.
         local_count = torch.tensor(float(2 if rank == 0 else 8))
-        reduced = reduce_mean_count(local_count)
-        assert reduced.item() == pytest.approx(5.0)
-        # The input must not be mutated in place.
+        assert reduce_mean_count(local_count).item() == pytest.approx(5.0)
         assert local_count.item() == pytest.approx(2.0 if rank == 0 else 8.0)
-        # The floor applies to the count of all ranks: 1 and 0 positives are 1 over 2 ranks,
-        # 0 and 0 are floored to 1 over 2 ranks; the mean itself is not floored.
+        # The floor applies to the sum over the ranks, not to the mean.
         assert reduce_mean_count(torch.tensor(float(1 - rank))).item() == pytest.approx(0.5)
         assert reduce_mean_count(torch.tensor(0.0)).item() == pytest.approx(0.5)
-        # Several counts reduce in one collective, floored one by one.
         pair = reduce_mean_count(torch.tensor([float(1 - rank), 4.0]))
         assert pair.tolist() == pytest.approx([0.5, 4.0])
     finally:
@@ -174,10 +157,8 @@ def _sharding_invariance_worker(rank: int, world_size: int, init_file: str) -> N
     )
     try:
         head = _build_head().train()
-        # Rank 0 holds the sparse frame (2 boxes), rank 1 the dense one (8).
         frames = [_sample(2, seed=10), _sample(8, seed=20)]
 
-        # Sharded pass: each rank sees only its own frame.
         cls_scores, bbox_preds, gt_boxes, gt_labels = frames[rank]
         loss_cls, loss_bbox = head._loss_single(
             cls_scores.unsqueeze(0),
@@ -191,9 +172,7 @@ def _sharding_invariance_worker(rank: int, world_size: int, init_file: str) -> N
         dist.all_gather(gathered, sharded)
         ddp_averaged = torch.stack(gathered).mean(dim=0)
 
-        # Combined pass: the same two frames as one batch on every rank.
-        # reduce_mean_count then averages identical counts, so this equals the
-        # true per-object mean over the union.
+        # The whole batch on every rank: identical counts reduce to themselves.
         combined_cls, combined_bbox = head._loss_single(
             torch.stack([frames[0][0], frames[1][0]]),
             torch.stack([frames[0][1], frames[1][1]]),
@@ -220,10 +199,8 @@ def _dn_mixed_gt_worker(rank: int, world_size: int, init_file: str) -> None:
             gt_boxes = torch.zeros(0, 9)
             gt_labels = torch.zeros(0, dtype=torch.long)
 
-        # Minimal outputs contract for StreamPETRHead.loss: per-layer scores /
-        # box params plus the denoising queries. The GT-less rank gets
-        # denoising=None (what the head returns without boxes) and must
-        # still reach the DN count collective inside loss().
+        # The rank without boxes gets ``denoising=None``, as from the head, and must still
+        # reach the denoising count collective.
         num_layers = head.num_decoder_layers
         generator = torch.Generator().manual_seed(40)
         all_cls_scores = torch.randn(num_layers, 1, _NUM_QUERIES, _NUM_CLASSES, generator=generator)
@@ -249,7 +226,6 @@ def _dn_mixed_gt_worker(rank: int, world_size: int, init_file: str) -> None:
             outputs, [gt_boxes], [gt_labels], padding_mask=torch.zeros(1, dtype=torch.bool)
         )
 
-        # Both ranks completed (no deadlock) with a uniform key set.
         assert "dn_loss_cls" in losses and "dn_loss_bbox" in losses
         if rank == 1:
             assert losses["dn_loss_cls"].item() == 0.0
@@ -328,8 +304,8 @@ def _ddp_gradient_worker(
     torch.manual_seed(0)
     layer = torch.nn.Linear(_FEATURES, _NUM_CLASSES + 10)
     whole_batch_layer = copy.deepcopy(layer)
-    # The reference runs before the process group exists: the whole batch on one process, its
-    # counts floored as on one device.
+    # The reference runs before the process group exists, so its counts are floored as on one
+    # device.
     _layer_loss(head, whole_batch_layer, frames).backward()
 
     dist.init_process_group(
@@ -347,63 +323,36 @@ def _ddp_gradient_worker(
 
 
 def test_reduce_mean_count_is_identity_without_process_group() -> None:
-    """
-    Input: a float and an integer count, without a process group.
-    Expected: on one device the local count is the global count, so the float count comes back
-    unchanged and the integer one is cast to float, as the distributed path casts it.
-    Check: the float count is the same tensor, and the integer one comes back as float32.
-    """
+    """Without a process group the count comes back as float, floored at 1."""
     assert reduce_mean_count(torch.tensor(3.0)).item() == pytest.approx(3.0)
     assert reduce_mean_count(torch.tensor(3)).dtype == torch.float32
     assert reduce_mean_count(torch.tensor(0.0)).item() == pytest.approx(1.0)
 
 
 def test_reduce_mean_count_averages_counts_across_ranks() -> None:
-    """
-    Input: two CPU gloo ranks holding the counts 2 and 8.
-    Expected: every rank gets the mean count, 5, and its own count is not modified in place.
-    Check: the reduced count and the local count on every rank.
-    """
+    """Two ranks get the mean of their counts, floored over the sum, without in-place changes."""
     _spawn(_reduce_mean_count_worker)
 
 
 def test_sharded_loss_matches_single_batch_equivalent() -> None:
-    """
-    Input: two CPU gloo ranks, rank 0 holding a frame with 2 boxes and rank 1 a frame with 8,
-    and the same two frames as one batch on every rank.
-    Expected: the losses are normalized by the object count averaged across the ranks, so the
-    DDP average of the sharded losses is the loss of the whole batch on one device; rank-local
-    counts would give every rank an equal vote whatever its object count.
-    Check: the classification and regression losses averaged over the ranks against those of the
-    combined batch, within a relative tolerance of 1e-5.
+    """The rank-averaged losses of frames with 2 and 8 boxes equal the losses of the whole batch.
+
+    Rank-local counts would give every rank an equal vote whatever its object count.
     """
     _spawn(_sharding_invariance_worker)
 
 
 def test_dn_collective_survives_rank_without_ground_truth() -> None:
-    """
-    Input: two CPU gloo ranks, rank 0 with four ground-truth boxes and their denoising queries,
-    rank 1 without ground truth and without denoising queries.
-    Expected: a rank without ground truth still reaches the collective that counts the denoising
-    queries, so a step mixing both does not deadlock, and it returns zero denoising losses under
-    the same keys.
-    Check: both ranks finish within the timeout with both denoising losses, which are zero on
-    rank 1.
-    """
+    """A rank without ground truth joins the denoising count collective and logs zero losses."""
     _spawn(_dn_mixed_gt_worker)
 
 
 @pytest.mark.parametrize("box_counts", [(10, 30), (1, 0), (0, 0)], ids=["10-30", "1-0", "0-0"])
 def test_ddp_gradients_match_the_whole_batch_on_one_process(box_counts: tuple[int, int]) -> None:
-    """
-    Input: two CPU gloo ranks, each holding a frame with the given number of boxes, every logit
-    and box of the matching and the denoising queries made by one linear layer wrapped in DDP;
-    and the same two frames as one batch through a copy of the layer on one process.
-    Expected: DDP averages the gradients of the ranks, so normalizing by the counts averaged
-    over the ranks gives the gradients of the whole batch on one process, for the matching and
-    the denoising losses alike; rank-local counts would weight the two ranks equally. With one
-    positive in the step, or none, the floor of the count applies to the whole batch: a floor
-    of the mean would halve the gradient of the single positive, or of the negatives.
-    Check: the DDP-averaged gradient of every parameter against the whole-batch gradient.
+    """The DDP-averaged gradients of one frame per rank equal those of the whole batch.
+
+    Every logit and box comes from one linear layer, so the matching and the denoising losses
+    are both covered. With one positive in the step, or none, flooring the mean count instead
+    of the sum would halve the gradient of the single positive, or of the negatives.
     """
     _spawn(_ddp_gradient_worker, box_counts)
