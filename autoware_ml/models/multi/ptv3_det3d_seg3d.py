@@ -372,7 +372,7 @@ class PTv3Det3DSeg3DModel(PTv3BaseModel):
                 "export."
             )
         inputs = prepare_ptv3_export_inputs(self, batch_inputs)
-        export_input_args, input_param_names = inputs.encoder_args(SERIALIZED_POOLING_FIELDS)
+        export_input_args, input_names = inputs.encoder_args(SERIALIZED_POOLING_FIELDS)
         export_module = _PTv3Det3DSeg3DExportModule(
             encoder=self._prepare_encoder_export(),
             voxel_encoder=self.voxel_encoder,
@@ -387,7 +387,7 @@ class PTv3Det3DSeg3DModel(PTv3BaseModel):
         )
         export_module.eval()
         output_names = self.get_export_output_names()
-        dynamic_axes = build_ptv3_input_dynamic_axes(input_param_names)
+        dynamic_axes = build_ptv3_input_dynamic_axes(input_names)
         dynamic_axes.update(
             build_point_feature_dynamic_axes(
                 tuple(name for name in output_names if name in {"pred_labels", "pred_probs"})
@@ -396,7 +396,7 @@ class PTv3Det3DSeg3DModel(PTv3BaseModel):
         return ExportSpec(
             module=export_module,
             args=export_input_args,
-            input_param_names=input_param_names,
+            input_names=input_names,
             output_names=output_names,
             dynamic_axes=dynamic_axes,
             supported_stages=self.EXPORT_SUPPORTED_STAGES,

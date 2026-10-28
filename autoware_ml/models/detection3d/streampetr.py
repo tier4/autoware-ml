@@ -454,19 +454,19 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
             "extract_img_feat": ExportSpec(
                 module=export_model.image_feature_extractor,
                 args=(img,),
-                input_param_names=["img"],
+                input_names=["img"],
                 output_names=["img_feats"],
             ),
             "position_embedding": ExportSpec(
                 module=position_embedding_wrapper,
                 args=(img_metas_pad, intrinsics, img2lidar),
-                input_param_names=["img_metas_pad", "intrinsics", "img2lidar"],
+                input_names=["img_metas_pad", "intrinsics", "img2lidar"],
                 output_names=["pos_embed", "cone"],
             ),
             "pts_head_memory": ExportSpec(
                 module=head_memory_wrapper,
                 args=(img_feats, pos_embed, cone, identity_pose, identity_pose, *memory_args),
-                input_param_names=[
+                input_names=[
                     "x",
                     "pos_embed",
                     "cone",

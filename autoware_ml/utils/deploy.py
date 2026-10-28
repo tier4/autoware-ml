@@ -45,7 +45,8 @@ class ExportSpec:
     Attributes:
         module: Module instance exported to ONNX.
         args: Example positional inputs supplied during export.
-        input_param_names: Names associated with the positional input tensors.
+        input_names: ONNX input names, one per entry of ``args`` in order; the keys the
+            config's ``dynamic_shapes`` / ``dynamic_axes`` tables and the runtime use.
         output_names: Names of the exported output tensors, in order.
         dynamic_axes: Optional legacy ONNX dynamic-axis mapping generated with
             the export arguments. Used only when exporting with ``dynamo=False``.
@@ -54,7 +55,7 @@ class ExportSpec:
 
     module: torch.nn.Module
     args: tuple[Any, ...]
-    input_param_names: list[str]
+    input_names: list[str]
     output_names: list[str]
     dynamic_axes: dict[str, dict[int, str]] | None = None
     supported_stages: frozenset[str] = frozenset({"onnx", "tensorrt"})
@@ -254,49 +255,70 @@ def merge_onnx_external_data(onnx_path: Path) -> None:
     onnx.save_model(onnx_model, str(onnx_path))
 
 
-def export_to_onnx(
-    model: torch.nn.Module,
-    input_sample: tuple[Any, ...],
-    onnx_cfg: DictConfig,
-    input_param_names: list[str],
-    output_names: list[str],
-    dynamic_axes_override: dict[str, dict[int, str]] | None,
-    output_path: Path,
-) -> None:
-    """Export a model to ONNX."""
+def validate_onnx_names_not_configured(onnx_cfg: DictConfig) -> None:
+    """Refuse ``input_names`` / ``output_names`` in ``deploy.onnx``: the export specs name the tensors.
+
+    Checked once when the deploy config is read, before any model loads or graph exports.
+
+    Args:
+        onnx_cfg: ``deploy.onnx``, with its optional ``modules`` overrides.
+
+    Raises:
+        ValueError: If the shared settings or a module's settings carry either key.
+    """
+    scopes = {"deploy.onnx": onnx_cfg}
+    for module_name, module_cfg in (onnx_cfg.get("modules") or {}).items():
+        scopes[f"deploy.onnx.modules.{module_name}"] = module_cfg
+    configured = [
+        f"{scope}.{key}"
+        for scope, cfg in scopes.items()
+        for key in ("input_names", "output_names")
+        if cfg is not None and key in cfg
+    ]
+    if configured:
+        raise ValueError(
+            f"{configured} are not read: the export spec names the graph inputs and outputs. "
+            "Remove the entries."
+        )
+
+
+def export_to_onnx(spec: ExportSpec, onnx_cfg: DictConfig, output_path: Path) -> None:
+    """Export a spec's module to ONNX under the spec's input and output names.
+
+    Args:
+        spec: The module, its example inputs and the tensor names.
+        onnx_cfg: The module's merged ``deploy.onnx`` settings.
+        output_path: Where the ``.onnx`` file goes.
+    """
     logger.info("Exporting model to ONNX...")
 
-    if not input_param_names:
-        raise ValueError("Model forward signature has no parameters.")
+    if not spec.input_names:
+        raise ValueError("The export spec names no inputs.")
 
     dynamo = onnx_cfg.get("dynamo", True)
-    dynamic_shapes = build_dynamic_shapes(onnx_cfg, input_param_names) if dynamo else None
-    dynamic_shapes = normalize_dynamic_shapes_for_model(model, dynamic_shapes) if dynamo else None
+    dynamic_shapes = build_dynamic_shapes(onnx_cfg, spec.input_names) if dynamo else None
+    dynamic_shapes = (
+        normalize_dynamic_shapes_for_model(spec.module, dynamic_shapes) if dynamo else None
+    )
     dynamic_axes = None
     if not dynamo:
-        dynamic_axes = dynamic_axes_override or build_dynamic_axes(onnx_cfg)
-    configured_names = [key for key in ("input_names", "output_names") if key in onnx_cfg]
-    if configured_names:
-        raise ValueError(
-            f"deploy.onnx {configured_names} is not read: the export spec names the graph "
-            f"inputs {list(input_param_names)} and outputs {list(output_names)}. Remove the entry."
-        )
-    input_names = list(input_param_names)
-    output_names = list(output_names)
+        dynamic_axes = spec.dynamic_axes or build_dynamic_axes(onnx_cfg)
+    input_names = list(spec.input_names)
+    output_names = list(spec.output_names)
 
     logger.info("Dynamic shapes: %s", dynamic_shapes)
     logger.info("Dynamic axes: %s", dynamic_axes)
     logger.info("ONNX opset version: %s", onnx_cfg.opset_version)
     logger.info("Input names: %s", input_names)
     logger.info("Output names: %s", output_names)
-    log_export_inputs(input_sample, input_param_names)
+    log_export_inputs(spec.args, input_names)
 
     # Register shared ONNX symbolics needed by export-aware ops packages.
     register_scatter_reduce_onnx_symbolic(opset_version=int(onnx_cfg.opset_version))
 
     export_kwargs = {
-        "model": model,
-        "args": input_sample,
+        "model": spec.module,
+        "args": spec.args,
         "f": str(output_path),
         "input_names": input_names,
         "output_names": output_names,

@@ -29,6 +29,7 @@ from autoware_ml.utils.deploy import (
     supports_export_stage,
     export_to_onnx,
     should_modify_graph,
+    validate_onnx_names_not_configured,
     modify_onnx_graph,
     build_tensorrt_engine,
 )
@@ -80,6 +81,7 @@ class DeploymentExport:
             tracker: Active experiment tracker name recorded in the stamp, if any.
             run_id: Deploy run id recorded in the stamp, if any.
         """
+        validate_onnx_names_not_configured(deploy_cfg.onnx)
         self.deploy_cfg = deploy_cfg
         self.output_dir = output_dir
         self.datamodule = datamodule
@@ -121,15 +123,7 @@ class DeploymentExport:
                     )
                 else:
                     validate_module_onnx_precision(export_spec.module, module_onnx_cfg)
-                    export_to_onnx(
-                        export_spec.module,
-                        export_spec.args,
-                        module_onnx_cfg,
-                        export_spec.input_param_names,
-                        export_spec.output_names,
-                        export_spec.dynamic_axes,
-                        module_onnx_path,
-                    )
+                    export_to_onnx(export_spec, module_onnx_cfg, module_onnx_path)
                     modify_graph_cfg = module_onnx_cfg.get("modify_graph", None)
                     if should_modify_graph(modify_graph_cfg):
                         module_onnx_path = modify_onnx_graph(module_onnx_path, modify_graph_cfg)

@@ -284,13 +284,13 @@ class CenterPointDetection3DModel(ModuleBaseModel):
             "pts_voxel_encoder_centerpoint": ExportSpec(
                 module=_CenterPointVoxelEncoderExportWrapper(self.pts_voxel_encoder),
                 args=(input_features,),
-                input_param_names=["input_features"],
+                input_names=["input_features"],
                 output_names=["pillar_features"],
             ),
             "pts_backbone_neck_head_centerpoint": ExportSpec(
                 module=head_wrapper,
                 args=(spatial_features,),
-                input_param_names=["spatial_features"],
+                input_names=["spatial_features"],
                 output_names=head_wrapper.output_names,
             ),
         }

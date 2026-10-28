@@ -372,6 +372,6 @@ class TransFusionDetection3DModel(ModuleBaseModel):
                 voxels_data.num_points,
                 voxels_data.batch_zyx_coords(),
             ),
-            input_param_names=["voxels", "num_points", "coors"],
+            input_names=["voxels", "num_points", "coors"],
             output_names=["cls_score0", "bbox_pred0", "dir_cls_pred0"],
         )

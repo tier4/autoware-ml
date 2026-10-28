@@ -359,7 +359,7 @@ def build_det3d_head_export_spec(
             context.inputs.pooling_metadata[skip_stage].cluster,
             skip_grid_coord,
         ),
-        input_param_names=det3d_head_export_input_names(context.stage_count),
+        input_names=det3d_head_export_input_names(context.stage_count),
         output_names=list(output_names),
         dynamic_axes=det3d_head_export_dynamic_axes(context.stage_count),
         supported_stages=PTv3BaseModel.EXPORT_SUPPORTED_STAGES,
@@ -584,7 +584,7 @@ class PTv3Detection3DModel(PTv3BaseModel):
             Deployment export specification for the PTv3 detector.
         """
         inputs = prepare_ptv3_export_inputs(self, batch_inputs)
-        input_args, input_param_names = inputs.encoder_args(SERIALIZED_POOLING_FIELDS)
+        input_args, input_names = inputs.encoder_args(SERIALIZED_POOLING_FIELDS)
         export_module = _PTv3Detection3DExportModule(
             encoder=self._prepare_encoder_export(),
             voxel_encoder=self.voxel_encoder,
@@ -600,9 +600,9 @@ class PTv3Detection3DModel(PTv3BaseModel):
         return ExportSpec(
             module=export_module,
             args=input_args,
-            input_param_names=input_param_names,
+            input_names=input_names,
             output_names=self.get_export_output_names(),
-            dynamic_axes=build_ptv3_input_dynamic_axes(input_param_names),
+            dynamic_axes=build_ptv3_input_dynamic_axes(input_names),
             supported_stages=self.EXPORT_SUPPORTED_STAGES,
         )
 

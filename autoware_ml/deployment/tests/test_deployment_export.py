@@ -100,7 +100,7 @@ class _ExportModel(ModuleBaseModel):
         spec = ExportSpec(
             module=self.head,
             args=(point_batch.points, torch.tensor(2.0)),
-            input_param_names=["points", "scale"],
+            input_names=["points", "scale"],
             output_names=["feat"],
             dynamic_axes={"points": {0: "num_points"}, "feat": {0: "num_points"}},
             supported_stages=self.supported_stages,
@@ -115,9 +115,7 @@ class _NoInputsModel(_ExportModel):
         self, multi_task_batch_inputs: ModelBatchInputs
     ) -> dict[str, ExportSpec]:
         return {
-            "head": ExportSpec(
-                module=self.head, args=(), input_param_names=[], output_names=["feat"]
-            )
+            "head": ExportSpec(module=self.head, args=(), input_names=[], output_names=["feat"])
         }
 
 
@@ -288,7 +286,7 @@ class TestExportSpecs:
         assert isinstance(specs, MappingProxyType)
         assert list(specs) == ["head"]
         assert specs["head"].module is model.head
-        assert specs["head"].input_param_names == ["points", "scale"]
+        assert specs["head"].input_names == ["points", "scale"]
         assert torch.equal(specs["head"].args[0], batch.point_cloud_gt_batch.points)
 
 
@@ -515,8 +513,18 @@ class TestErrorPaths:
         """
         exporter = _exporter(tmp_path, _deploy_cfg({"head": {}}), model=_NoInputsModel())
 
-        with pytest.raises(ValueError, match="no parameters"):
+        with pytest.raises(ValueError, match="names no inputs"):
             exporter.export()
+
+    def test_configured_tensor_names_fail_before_anything_runs(self, tmp_path: Path) -> None:
+        """
+        Input: a deploy config whose module entry names the outputs.
+        Expected: the exporter refuses the config when it is built, before a model is loaded
+        or a graph exported, naming the entry.
+        Check: the constructor raises.
+        """
+        with pytest.raises(ValueError, match="deploy.onnx.modules.head.output_names"):
+            _exporter(tmp_path, _deploy_cfg({"head": {"output_names": ["feat"]}}))
 
     def test_empty_predict_split_has_no_example_batch(self, tmp_path: Path) -> None:
         """
