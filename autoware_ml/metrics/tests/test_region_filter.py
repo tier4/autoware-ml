@@ -9,6 +9,7 @@ import torch
 from shapely.geometry import Point, Polygon
 
 from autoware_ml.metrics.base import EvalStage
+from autoware_ml.metrics.detection3d.frame_count import FrameCount as Det3DFrameCount
 from autoware_ml.metrics.detection3d.mean_ap import MeanAP
 from autoware_ml.metrics.detection3d.suite import Detection3DMetricSuite
 from autoware_ml.metrics.filters import CollisionFilter, CorridorFilter, RegionFilter
@@ -22,6 +23,7 @@ from autoware_ml.metrics.geometry.lanelet import (
 from autoware_ml.metrics.geometry.reachability import ReachabilityParams, VehicleGeometry
 from autoware_ml.metrics.segmentation3d.accuracy import Accuracy
 from autoware_ml.metrics.segmentation3d.error_clusters import ErrorClusters
+from autoware_ml.metrics.segmentation3d.frame_count import FrameCount
 from autoware_ml.metrics.segmentation3d.point_cloud import Segmentation3DPointCloudMetricSuite
 from autoware_ml.metrics.segmentation3d.suite import Segmentation3DConfusionMatrixMetricSuite
 from autoware_ml.metrics.tests.conftest import STUB_MAP_PATH, serve_lanelet_map
@@ -440,6 +442,115 @@ def test_confusion_suite_excludes_scene_without_lanelet_map() -> None:
     assert report["acc"] == pytest.approx(1.0 / 3.0)  # 1 of 3 points correct, all scenes
     assert report["region_road/acc"] == pytest.approx(1.0)  # only s_map's road point
     assert suite.region_frames_seen.tolist() == [2]
+    assert suite.region_frames_covered.tolist() == [1]
+
+
+def test_confusion_suite_frame_count_follows_filter_coverage() -> None:
+    # Same two scenes: the whole-scene count sees both frames, the road slice
+    # only the mapped one, so the slice's denominator is visible next to its scores.
+    region = _region_filter(["road"], _road_map())
+    suite = Segmentation3DConfusionMatrixMetricSuite(
+        components=[FrameCount(stages=["test"]), FrameCount(stages=["test"], filter=region)],
+        num_classes=2,
+        ranges=(),
+    )
+    suite.update(
+        {
+            "seg3d_frames": [
+                {
+                    "pred": torch.tensor([0]),
+                    "target": torch.tensor([0]),
+                    "coord": torch.tensor([[10.0, 0.0, 0.0]]),
+                    "ego2global": np.eye(4),
+                    "lanelet_map_path": STUB_MAP_PATH,
+                },
+                {
+                    "pred": torch.tensor([1]),
+                    "target": torch.tensor([0]),
+                    "coord": torch.tensor([[10.0, 0.0, 0.0]]),
+                    "ego2global": np.eye(4),
+                    "lanelet_map_path": None,
+                },
+            ]
+        }
+    )
+    report = suite.result(EvalStage.TEST)
+    assert report["num_frames"] == 2.0
+    assert report["region_road/num_frames"] == 1.0
+
+
+def test_point_cloud_suite_frame_count_follows_filter_coverage() -> None:
+    # The point cache keeps every frame, but a filtered slice omits the frames
+    # its filter could not cover, so its count matches the confusion suite's.
+    region = _region_filter(["road"], _road_map())
+    suite = Segmentation3DPointCloudMetricSuite(
+        components=[FrameCount(stages=["test"]), FrameCount(stages=["test"], filter=region)],
+        num_classes=2,
+        ranges=(),
+    )
+    suite.update(
+        {
+            "seg3d_frames": [
+                {
+                    "pred": torch.tensor([0]),
+                    "target": torch.tensor([0]),
+                    "coord": torch.tensor([[10.0, 0.0, 0.0]]),
+                    "scores": torch.tensor([[1.0, 0.0]]),
+                    "ego2global": np.eye(4),
+                    "lanelet_map_path": STUB_MAP_PATH,
+                },
+                {
+                    "pred": torch.tensor([1]),
+                    "target": torch.tensor([0]),
+                    "coord": torch.tensor([[10.0, 0.0, 0.0]]),
+                    "scores": torch.tensor([[0.0, 1.0]]),
+                    "ego2global": np.eye(4),
+                    "lanelet_map_path": None,
+                },
+            ]
+        }
+    )
+    report = suite.result(EvalStage.TEST)
+    assert report["num_frames"] == 2.0
+    assert report["region_road/num_frames"] == 1.0
+    assert len(suite.state_for(None, region).frames) == 1
+
+
+def test_detection3d_suite_frame_count_follows_filter_coverage() -> None:
+    # Two frames, 's_nomap' without a map: the whole-scene count sees both, the
+    # road slice only the mapped frame, matching the coverage counters.
+    region = _region_filter(["road"], _road_map())
+    suite = Detection3DMetricSuite(
+        components=[
+            Det3DFrameCount(stages=["test"]),
+            Det3DFrameCount(stages=["test"], filter=region),
+        ],
+        class_names=("car",),
+        ranges=(),
+    )
+    suite.update(
+        {
+            "predictions": [
+                {
+                    "bboxes_3d": torch.tensor([_box(10.0)]),
+                    "scores_3d": torch.tensor([0.9]),
+                    "labels_3d": torch.tensor([0]),
+                },
+                {
+                    "bboxes_3d": torch.zeros((0, 9)),
+                    "scores_3d": torch.zeros((0,)),
+                    "labels_3d": torch.zeros((0,), dtype=torch.long),
+                },
+            ],
+            "gt_boxes": [torch.tensor([_box(10.0)]), torch.tensor([_box(10.0)])],
+            "gt_labels": [torch.tensor([0]), torch.tensor([0])],
+            "ego2global": [np.eye(4), np.eye(4)],
+            "lanelet_map_path": [STUB_MAP_PATH, None],
+        }
+    )
+    report = suite.result(EvalStage.TEST)
+    assert report["num_frames"] == 2.0
+    assert report["region_road/num_frames"] == 1.0
     assert suite.region_frames_covered.tolist() == [1]
 
 

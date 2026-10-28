@@ -65,6 +65,14 @@ class TestPipelineSmoke(unittest.TestCase):
         self.batch = self.dataset.collate_fn([self.dataset[0], self.dataset[1]])
 
     def test_dataset_serves_a_collated_batch_of_every_task(self) -> None:
+        """
+        Input: a batch collated from the two frames of the synthetic corpus.
+        Expected: the dataset serves the points, the boxes, the semantic masks and the frame
+        metadata of both frames in one batch, and the frame metadata carry the scene and the
+        sample time of every record, which place its frame in the stream of its scene.
+        Check: every task batch is present and the batch size is two; read the scene tokens and
+        the sample times.
+        """
         assert isinstance(self.batch, ModelGTBatch)
         assert self.batch.point_cloud_gt_batch is not None
         assert self.batch.detection3d_gt_batch is not None
@@ -72,6 +80,8 @@ class TestPipelineSmoke(unittest.TestCase):
         assert self.batch.frame_meta_batch is not None
         self.assertEqual(int(self.batch.infer_batch_size()), 2)
         self.assertEqual(list(self.batch.frame_meta_batch.scene_tokens), [SCENE, SCENE])
+        # The sample time of every record places its frame in the stream of its scene
+        self.assertEqual(self.batch.frame_meta_batch.timestamps.tolist(), [0.0, 1.0])
 
     def test_every_point_keeps_its_semantic_label_through_the_pipeline(self) -> None:
         point_batch = self.batch.point_cloud_gt_batch

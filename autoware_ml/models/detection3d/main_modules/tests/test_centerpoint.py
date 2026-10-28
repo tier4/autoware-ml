@@ -187,6 +187,7 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
                 point_cloud_gt_batch=None,
                 detection3d_gt_batch=detection3d_gt_batch,
                 image_gt_batch=None,
+                padding_mask=torch.zeros(2, dtype=torch.bool, device=self.device),
                 segmentation3d_gt_batch=None,
             ),
             voxels_data=voxels_data,

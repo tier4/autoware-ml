@@ -6,6 +6,7 @@ import torch
 from jaxtyping import Bool
 from torch import Tensor
 
+from autoware_ml.dataclasses.batch.detection2d import Detection2DGTBatch, Detection2DGTSample
 from autoware_ml.dataclasses.batch.detection3d import (
     Detection3DGTBatch,
 )
@@ -59,6 +60,15 @@ class ModelGTSample(NamedTuple):
     # Assigned by the dataset once the pipeline has finished.
     io_processing_time: float = 0.0
 
+    # 2D detection ground truth of every camera, from any source: boxes projected from the 3D
+    # boxes (LoadAnnotations2DFromBoxes3D) or boxes annotated in 2D. None when the sample
+    # carries none.
+    detection2d_gt_sample: Detection2DGTSample | None = None
+
+    # Whether the sample only pads a streaming lane, repeating the lane's last frame. Assigned by
+    # the dataset, see ModelGTBatch.padding_mask.
+    is_padding: bool = False
+
     def keep_points(self, keep_mask: Bool[Tensor, " num_points"]) -> ModelGTSample:
         """
         Keep the masked points and, when the sample carries them, their semantic labels. The
@@ -97,11 +107,21 @@ class ModelGTBatch(NamedTuple):
     # Images
     image_gt_batch: ImageGTBatch | None
 
+    # Samples that only pad a streaming lane (see GroupStreamingSampler), all False when no
+    # sample pads. A model leaves them out of its loss but still returns one on a batch of
+    # padding only, as DDP needs a loss from every rank. The logged batch size (num_real_samples)
+    # and the detection metrics leave them out; a prediction writer gets this mask with the batch.
+    padding_mask: Bool[Tensor, " batch_size"]
+
     # Summed io_processing_time of every sample collated into this batch.
     io_processing_time: float = 0.0
 
     # Per-frame evaluation metadata, None when the samples carry none.
     frame_meta_batch: FrameMetaBatch | None = None
+
+    # 2D detection ground truth of every camera of every sample, None when the samples carry
+    # none.
+    detection2d_gt_batch: Detection2DGTBatch | None = None
 
     def to_device(self, device: torch.device) -> ModelGTBatch:
         """
@@ -130,6 +150,10 @@ class ModelGTBatch(NamedTuple):
             frame_meta_batch=self.frame_meta_batch.to_device(device)
             if self.frame_meta_batch is not None
             else None,
+            detection2d_gt_batch=self.detection2d_gt_batch.to_device(device)
+            if self.detection2d_gt_batch is not None
+            else None,
+            padding_mask=self.padding_mask.to(device),
         )
 
     def infer_batch_size(self) -> int:
@@ -147,6 +171,15 @@ class ModelGTBatch(NamedTuple):
             return self.image_gt_batch.images.shape[0]
         else:
             raise ValueError("Cannot infer batch size from an empty ModelGTBatch.")
+
+    def num_real_samples(self) -> int:
+        """
+        Count the samples that serve frames of the split rather than padding slots.
+
+        Returns:
+          int: The batch size less the padding slots, zero for a batch of padding slots only.
+        """
+        return int((~self.padding_mask).sum().item())
 
     @staticmethod
     def collate_pointcloud_gt_samples(
@@ -309,6 +342,45 @@ class ModelGTBatch(NamedTuple):
         return ImageGTBatch.collate_gt_samples(images_gt_samples=image_gt_samples)
 
     @staticmethod
+    def collate_detection2d_gt_samples(
+        gt_samples: Sequence[ModelGTSample], max_num_2d_gt_bboxes: int | None
+    ) -> Detection2DGTBatch | None:
+        """
+        Collate the per-camera 2D boxes of a sequence of ModelGTSample into a Detection2DGTBatch.
+
+        Args:
+          gt_samples: Sequence of ModelGTSample to be collated.
+          max_num_2d_gt_bboxes: Number of 2D boxes every camera of every sample is padded to.
+            Required when the samples carry 2D boxes.
+
+        Returns:
+          Detection2DGTBatch: Collated 2D boxes, None when no sample carries any.
+
+        Raises:
+          ValueError: If only some of the samples carry 2D boxes, or the samples carry 2D boxes
+            without a padding size.
+        """
+        detection2d_gt_samples = [
+            sample.detection2d_gt_sample
+            for sample in gt_samples
+            if sample.detection2d_gt_sample is not None
+        ]
+        if not len(detection2d_gt_samples):
+            return None
+
+        if len(detection2d_gt_samples) != len(gt_samples):
+            raise ValueError("All samples must have detection2d_gt_sample for collating.")
+
+        if max_num_2d_gt_bboxes is None:
+            raise ValueError(
+                "The samples carry 2D boxes, so the dataset needs max_num_2d_gt_bboxes."
+            )
+
+        return Detection2DGTBatch.collate_gt_samples(
+            detection2d_gt_samples, max_num_2d_gt_bboxes=max_num_2d_gt_bboxes
+        )
+
+    @staticmethod
     def collate_frame_meta_samples(gt_samples: Sequence[ModelGTSample]) -> FrameMetaBatch | None:
         """
         Collate the frame metadata of a sequence of ModelGTSample into a FrameMetaBatch.
@@ -346,16 +418,23 @@ class ModelGTBatch(NamedTuple):
 
     @staticmethod
     def collate_gt_samples(
-        gt_samples: Sequence[ModelGTSample], max_num_3d_gt_bboxes: int | None
+        gt_samples: Sequence[ModelGTSample],
+        max_num_3d_gt_bboxes: int | None,
+        max_num_2d_gt_bboxes: int | None,
     ) -> ModelGTBatch:
         """
         Collate a sequence of ModelGTSample into a ModelGTBatch.
 
         Args:
           gt_samples: Sequence of ModelGTSample to be collated.
+          max_num_3d_gt_bboxes: Number of 3D boxes every sample is padded to. Required when the
+            samples carry 3D boxes.
+          max_num_2d_gt_bboxes: Number of 2D boxes every camera of every sample is padded to.
+            Required when the samples carry 2D boxes.
 
         Returns:
-          ModelGTBatch: Collated multi-task GT batch.
+          ModelGTBatch: Collated multi-task GT batch, flagging the padding samples in its
+            padding_mask.
         """
         # Collate point cloud GT batch
         point_cloud_gt_batch = ModelGTBatch.collate_pointcloud_gt_samples(gt_samples)
@@ -376,6 +455,11 @@ class ModelGTBatch(NamedTuple):
         # Collate the per-frame evaluation metadata
         frame_meta_batch = ModelGTBatch.collate_frame_meta_samples(gt_samples=gt_samples)
 
+        # Collate the per-camera 2D boxes
+        detection2d_gt_batch = ModelGTBatch.collate_detection2d_gt_samples(
+            gt_samples=gt_samples, max_num_2d_gt_bboxes=max_num_2d_gt_bboxes
+        )
+
         return ModelGTBatch(
             point_cloud_gt_batch=point_cloud_gt_batch,
             detection3d_gt_batch=detection3d_gt_batch,
@@ -383,4 +467,8 @@ class ModelGTBatch(NamedTuple):
             image_gt_batch=image_gt_batch,
             io_processing_time=sum(sample.io_processing_time for sample in gt_samples),
             frame_meta_batch=frame_meta_batch,
+            detection2d_gt_batch=detection2d_gt_batch,
+            padding_mask=torch.tensor(
+                [sample.is_padding for sample in gt_samples], dtype=torch.bool
+            ),
         )

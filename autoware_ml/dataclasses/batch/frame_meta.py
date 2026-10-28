@@ -1,17 +1,21 @@
-"""Per-frame evaluation metadata carried next to the model inputs.
+"""Per-frame metadata carried next to the model inputs.
 
 The region and collision evaluation filters need two things the model inputs do not
 carry: the pose of the frame in the map and a scene identifier the lanelet map provider
 resolves to the scene's map. The dataset attaches them to every sample, the collation
 stacks them, and the detection eval-output builders hand them to the metrics as
 ``ego2global`` and ``scene_token``.
+
+Temporal models read the same pose and scene together with the time of the frame, which
+tell them how far the ego moved since the previous frame and whether that frame is a
+predecessor at all.
 """
 
 from __future__ import annotations
 
 from typing import NamedTuple, Sequence
 
-from jaxtyping import Float32
+from jaxtyping import Float32, Float64
 import torch
 from torch import Tensor
 
@@ -19,13 +23,15 @@ from autoware_ml.dataclasses.geometry.transformation import LiDARTransformationS
 
 
 class FrameMetaSample(NamedTuple):
-    """Evaluation metadata of one frame.
+    """Metadata of one frame.
 
     Attributes:
         ego2global: 4x4 transform from the frame the points and boxes are expressed in (the
             main lidar frame) to the map frame. It is named after the ``ego2global`` key the
             metrics read; the lidar mounting is already composed in.
         scene_token: Scene identifier of the frame.
+        timestamp: Sample time of the frame in seconds. Epoch seconds exceed the float32
+            resolution (128 s steps at 1.7e9 s), so it stays a Python float.
         lanelet_map_path: Path of the scene's lanelet map, resolved by the dataset that serves
             the frame against its own corpus, so frames of different sources carry the maps of
             their own roots. ``None`` when the scene or the corpus has no map, which keeps the
@@ -34,20 +40,24 @@ class FrameMetaSample(NamedTuple):
 
     ego2global: Float32[Tensor, "4 4"]
     scene_token: str
+    timestamp: float
     lanelet_map_path: str | None = None
 
 
 class FrameMetaBatch(NamedTuple):
-    """Evaluation metadata of every frame of a batch.
+    """Metadata of every frame of a batch.
 
     Attributes:
         ego2globals: Per-frame 4x4 transforms from the (augmented) lidar frame to the map frame.
         scene_tokens: Per-frame scene identifiers.
+        timestamps: Per-frame sample times in seconds, in float64 because float32 cannot
+            resolve epoch seconds.
         lanelet_map_paths: Per-frame lanelet map paths, ``None`` for frames without a map.
     """
 
     ego2globals: Float32[Tensor, "batch_size 4 4"]
     scene_tokens: Sequence[str]
+    timestamps: Float64[Tensor, " batch_size"]
     lanelet_map_paths: Sequence[str | None]
 
     @staticmethod
@@ -94,20 +104,25 @@ class FrameMetaBatch(NamedTuple):
         return FrameMetaBatch(
             ego2globals=torch.stack(ego2globals, dim=0),
             scene_tokens=[frame_meta.scene_token for frame_meta in frame_meta_samples],
+            timestamps=torch.tensor(
+                [frame_meta.timestamp for frame_meta in frame_meta_samples],
+                dtype=torch.float64,
+            ),
             lanelet_map_paths=[frame_meta.lanelet_map_path for frame_meta in frame_meta_samples],
         )
 
     def to_device(self, device: torch.device) -> FrameMetaBatch:
-        """Move the transforms to ``device``.
+        """Move the transforms and the timestamps to ``device``.
 
         Args:
             device: Target device.
 
         Returns:
-            The batch with its transforms on ``device``.
+            The batch with its tensors on ``device``.
         """
         return FrameMetaBatch(
             ego2globals=self.ego2globals.to(device),
             scene_tokens=self.scene_tokens,
+            timestamps=self.timestamps.to(device),
             lanelet_map_paths=self.lanelet_map_paths,
         )

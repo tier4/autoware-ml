@@ -6,6 +6,7 @@ import itertools
 import time
 from abc import abstractmethod
 from pathlib import Path
+from collections import defaultdict
 from collections.abc import Sequence
 from typing import Self
 
@@ -13,9 +14,27 @@ from typing import Self
 import polars as pl
 from torch.utils.data import Dataset
 
+from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch, ModelGTSample
 from autoware_ml.metrics.geometry.lanelet import LaneletMapProvider
 from autoware_ml.transforms.base import TransformsCompose
+
+
+class PaddingSlot(int):
+    """Sample index of a padding slot, holding the index of the frame the slot repeats.
+
+    The streaming sampler ends its shorter lanes with one, so every rank serves the same
+    number of batches. A dataset loads the frame behind the index as usual and flags the
+    sample ``is_padding``, so the slot carries real tensors that a model leaves out of its
+    loss and metrics. Being an ``int``, the index passes through the dataloader workers and
+    Lightning's batch index bookkeeping unchanged.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        """Show the index as a padding slot."""
+        return f"PaddingSlot({int(self)})"
 
 
 class BaseDataset(Dataset):
@@ -36,6 +55,7 @@ class BaseDataset(Dataset):
         database_root_path: str,
         *,
         max_num_3d_gt_bboxes: int | None = None,
+        max_num_2d_gt_bboxes: int | None = None,
         dataset_records_dataframe: pl.DataFrame | None = None,
         transforms: TransformsCompose | None,
         det3d_supervised: bool = True,
@@ -49,6 +69,9 @@ class BaseDataset(Dataset):
           database_root_path: Root directory of the database the dataset reads.
           max_num_3d_gt_bboxes: Number of 3D boxes every sample is padded to in a batch, extra
               boxes are dropped. Required when the samples carry 3D boxes, None otherwise.
+          max_num_2d_gt_bboxes: Number of 2D boxes every camera of a sample is padded to in a
+              batch, extra boxes are dropped. Required when the samples carry 2D boxes, None
+              otherwise.
           dataset_records_dataframe: Polars DataFrame of the dataset records. None until the
               dataset is bound to the records of its source.
           transforms: Global transforms to be applied to the dataset records.
@@ -63,6 +86,7 @@ class BaseDataset(Dataset):
         super().__init__()
         self.database_root_path = Path(database_root_path)
         self.max_num_3d_gt_bboxes = max_num_3d_gt_bboxes
+        self.max_num_2d_gt_bboxes = max_num_2d_gt_bboxes
         self.transforms = transforms
         self.dataset_records_dataframe = dataset_records_dataframe
         self.det3d_supervised = det3d_supervised
@@ -129,19 +153,59 @@ class BaseDataset(Dataset):
             )
         return len(self.dataset_records_dataframe) * self.samples_per_record
 
+    def scene_index_groups(self) -> list[list[int]]:
+        """Sample indices of every scene, each scene in time order.
+
+        Scene streaming feeds a temporal model one scene after another, frame by frame. The
+        records are grouped by their scenario and ordered by their sample time, so the row
+        order of the record table does not matter.
+
+        Returns:
+          list[list[int]]: One list of sample indices per scenario, the scenarios in the order
+            they first appear in the record table.
+
+        Raises:
+          ValueError: If the dataset is not bound to records, or if every record serves
+            several samples, one per lidar or camera source.
+        """
+        if self.dataset_records_dataframe is None:
+            raise ValueError(
+                "The dataset is not bound to records, so it has no scenes. The datamodule "
+                "binds it in setup()."
+            )
+        if self.samples_per_record != 1:
+            raise ValueError(
+                "Scene streaming serves one sample per record, but every record of this dataset "
+                f"serves {self.samples_per_record} sources."
+            )
+        scenario_ids = self.dataset_records_dataframe.get_column(
+            DatasetTableSchema.SCENARIO_ID.name
+        ).to_list()
+        timestamps = self.dataset_records_dataframe.get_column(
+            DatasetTableSchema.TIMESTAMP_SECONDS.name
+        ).to_list()
+        groups: defaultdict[str, list[int]] = defaultdict(list)
+        for index, scenario_id in enumerate(scenario_ids):
+            groups[scenario_id].append(index)
+        return [sorted(group, key=timestamps.__getitem__) for group in groups.values()]
+
     def __getitem__(self, index: int) -> ModelGTSample:
         """Load and transform one dataset sample.
 
         Args:
-            index: Sample index.
+            index: Sample index, a ``PaddingSlot`` for a padding slot of a streaming lane.
 
         Returns:
-            Transformed ModelGTSample instance, stamped with its loading time.
+            Transformed ModelGTSample instance, stamped with its loading time and whether it
+            fills a padding slot.
         """
         start_time = time.perf_counter()
-        model_gt_sample = self.get_data_sample(index)
+        model_gt_sample = self.get_data_sample(int(index))
         transformed_gt_sample = self.apply_transforms(model_gt_sample)
-        return transformed_gt_sample._replace(io_processing_time=time.perf_counter() - start_time)
+        return transformed_gt_sample._replace(
+            io_processing_time=time.perf_counter() - start_time,
+            is_padding=isinstance(index, PaddingSlot),
+        )
 
     @abstractmethod
     def get_data_sample(self, index: int) -> ModelGTSample:
@@ -178,7 +242,9 @@ class BaseDataset(Dataset):
           ModelGTBatch: Collated GT batch.
         """
         return ModelGTBatch.collate_gt_samples(
-            gt_samples=batch, max_num_3d_gt_bboxes=self.max_num_3d_gt_bboxes
+            gt_samples=batch,
+            max_num_3d_gt_bboxes=self.max_num_3d_gt_bboxes,
+            max_num_2d_gt_bboxes=self.max_num_2d_gt_bboxes,
         )
 
 
@@ -218,6 +284,11 @@ class ConcatDataset(Dataset):
             (d.max_num_3d_gt_bboxes for d in self.datasets if d.max_num_3d_gt_bboxes is not None),
             default=None,
         )
+        # Padding size of the 2D boxes of every camera, the largest one a source sets
+        self.max_num_2d_gt_bboxes = max(
+            (d.max_num_2d_gt_bboxes for d in self.datasets if d.max_num_2d_gt_bboxes is not None),
+            default=None,
+        )
 
     def __len__(self) -> int:
         """Return the number of samples of the split, repeated sources included.
@@ -226,6 +297,41 @@ class ConcatDataset(Dataset):
           int: Number of samples.
         """
         return self.ends[-1]
+
+    def scene_index_groups(self) -> list[list[int]]:
+        """Split indices of every scene of every source, each scene in time order.
+
+        Every repeat of a source serves its scenes once more, as scenes of their own.
+
+        Returns:
+          list[list[int]]: One list of split indices per scene and repeat, the sources in
+            declaration order.
+        """
+        groups: list[list[int]] = []
+        starts = (0, *self.ends[:-1])
+        for dataset, repeat, start in zip(self.datasets, self.repeats, starts, strict=True):
+            groups.extend(self._repeated_scene_index_groups(dataset, repeat, start))
+        return groups
+
+    @staticmethod
+    def _repeated_scene_index_groups(
+        dataset: BaseDataset, repeat: int, start: int
+    ) -> list[list[int]]:
+        """Split indices of every scene of every repeat of one source.
+
+        Args:
+          dataset: Dataset of the source.
+          repeat: How many times the source serves its scenes.
+          start: Split index of the first sample of the source.
+
+        Returns:
+          list[list[int]]: One list of split indices per scene, repeat after repeat.
+        """
+        offsets = [start + repeat_index * len(dataset) for repeat_index in range(repeat)]
+        return [
+            [offset + index for index in group]
+            for offset, group in itertools.product(offsets, dataset.scene_index_groups())
+        ]
 
     def locate(self, index: int) -> tuple[int, int]:
         """Find the source and the sample behind one index of the split.
@@ -246,12 +352,14 @@ class ConcatDataset(Dataset):
         """Load and transform the sample behind one index of the split.
 
         Args:
-            index: Sample index.
+            index: Sample index, a ``PaddingSlot`` for a padding slot of a streaming lane.
 
         Returns:
-            Transformed ModelGTSample instance.
+            Transformed ModelGTSample instance, flagged as padding for a padding slot.
         """
         source_index, sample_index = self.locate(index)
+        if isinstance(index, PaddingSlot):
+            sample_index = PaddingSlot(sample_index)
         return self.datasets[source_index][sample_index]
 
     def collate_fn(self, batch: Sequence[ModelGTSample]) -> ModelGTBatch:
@@ -268,5 +376,7 @@ class ConcatDataset(Dataset):
           ModelGTBatch: Collated GT batch.
         """
         return ModelGTBatch.collate_gt_samples(
-            gt_samples=batch, max_num_3d_gt_bboxes=self.max_num_3d_gt_bboxes
+            gt_samples=batch,
+            max_num_3d_gt_bboxes=self.max_num_3d_gt_bboxes,
+            max_num_2d_gt_bboxes=self.max_num_2d_gt_bboxes,
         )

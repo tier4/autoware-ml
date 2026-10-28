@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 import torch
-from torchvision.io import decode_image
+from torchvision.io import ImageReadMode, decode_image
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.cameras.base_images import BaseImages
@@ -66,7 +66,9 @@ class LoadImagesFromFile(BaseTransform):
             torch.Tensor: The image in channel first layout, in unit range when
               ``normalize_to_unit`` is set and in ``[0, 255]`` otherwise.
         """
-        decoded_image = decode_image(image_path, mode=self.color_type.value).to(torch.float32)
+        # The channel orders are named after torchvision's read modes.
+        read_mode = ImageReadMode[self.color_type.name]
+        decoded_image = decode_image(image_path, mode=read_mode).to(torch.float32)
         if self.normalize_to_unit:
             decoded_image = decoded_image / 255.0
         return decoded_image
