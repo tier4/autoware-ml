@@ -14,30 +14,10 @@
 
 """The submanifold sparse convolution layer of the PTv3 family.
 
-Two libraries implement ``SubMConv3d`` behind one constructor, one KRSC weight
-layout ``[out, k, k, k, in]``, the parameter names ``weight``/``bias`` and the
-``indice_key`` cache on the sparse tensor, so a checkpoint of one loads on the
-other unchanged:
-
-* ``spconv``, the required dependency. Its kernels are not registered with
-  autocast and need features and weights in one dtype, so the layer runs them
-  with autocast disabled in the dtype of its weights: fp32 under mixed precision.
-* ``t4sparse.torch``, optional until it is published. Every kernel accumulates in
-  fp32 and the autograd function casts inside, so under autocast a layer runs
-  16-bit kernels against fp32 master weights and hands back fp32 gradients. It
-  has fp16 and bf16 kernels on CUDA and nothing else.
-
-:class:`SubMConv3d` is whichever of the two classes below fits the installed
-libraries, decided once when this module is imported. A model picks the library
-by importing the class from here; a model that needs what only spconv has, such
-as a strided convolution, imports spconv directly.
-
-With ``t4sparse.torch`` installed, the choice between the libraries is made per
-call, on the operands: t4sparse wherever it has a kernel, spconv for fp32
-operands outside autocast and for CPU tensors. A run under ``32-true``
-precision therefore trains on spconv exactly as before, and a stage wrapped in
-``torch.autocast("cuda", enabled=False)`` inside a mixed-precision run stays on
-spconv in fp32.
+:class:`SubMConv3d` is spconv's layer or, when ``t4sparse.torch`` is installed,
+t4sparse's. Both share the constructor, the KRSC weight layout and the parameter
+names, so checkpoints are interchangeable. t4sparse runs under autocast and for
+16-bit features on CUDA; spconv runs everything else, in the dtype of its weights.
 """
 
 from __future__ import annotations
@@ -51,7 +31,10 @@ from torch import nn
 
 __all__ = ["IS_T4SPARSE_AVAILABLE", "SpconvSubMConv3d", "SubMConv3d"]
 
-IS_T4SPARSE_AVAILABLE = find_spec("t4sparse.torch") is not None
+# find_spec on a dotted name imports the parent package, which raises when it is absent.
+IS_T4SPARSE_AVAILABLE = (
+    find_spec("t4sparse") is not None and find_spec("t4sparse.torch") is not None
+)
 
 _T4SPARSE_DTYPES = (torch.float16, torch.bfloat16)
 
@@ -64,13 +47,10 @@ def _with_features_as(x: SparseConvTensor, dtype: torch.dtype) -> SparseConvTens
 
 
 class SpconvSubMConv3d(spconv.SubMConv3d):
-    """spconv's submanifold convolution, run with autocast disabled.
+    """spconv's submanifold convolution, run outside autocast in the dtype of its weights.
 
-    spconv's kernels need features and weights in one dtype and autocast does
-    not cast for them: in eval it leaves halved features against fp32 weights,
-    which aborts spconv's kernel tuner. The layer runs spconv outside autocast in
-    the dtype of its weights, fp32 under mixed precision, which costs an fp32
-    convolution and gives fp32 partial sums.
+    spconv's kernels need features and weights in one dtype, and autocast does
+    not cast for them.
     """
 
     def forward(self, x: SparseConvTensor) -> SparseConvTensor:
@@ -93,19 +73,13 @@ if IS_T4SPARSE_AVAILABLE:
     class T4SparseSubMConv3d(t4sparse.torch.SubMConv3d):
         """t4sparse's submanifold convolution, with spconv where t4sparse has no kernel.
 
-        t4sparse casts inside its own autograd function and accumulates in fp32,
-        so under autocast and for 16-bit features the layer runs as it is. fp32
-        features outside autocast and CPU tensors have no t4sparse kernel; instead
-        of the library's slow reference path, the layer runs an spconv twin that
-        shares its parameters, autocast disabled, exactly like
-        :class:`SpconvSubMConv3d`. The twin is not a submodule, so the state dict
-        is the plain layer's.
+        fp32 features outside autocast and CPU tensors run on an spconv twin that
+        shares this layer's parameters, like :class:`SpconvSubMConv3d`. The twin is
+        not a submodule, so the state dict is unchanged.
 
-        Both libraries cache their index structure under the ``indice_key`` on
-        the sparse tensor and neither can read the other's entry, so the layers
-        sharing a key must all run on one library within a forward pass. Disable
-        autocast around whole stages (every layer of one key), never around part
-        of one; a mixed stage raises ``TypeError`` at the first affected layer.
+        The two libraries' ``indice_key`` caches are incompatible, so the layers
+        sharing a key must run on one library within a forward pass: disable
+        autocast around whole stages, never around part of one.
         """
 
         def __init__(self, *args, **kwargs) -> None:
@@ -146,7 +120,11 @@ if IS_T4SPARSE_AVAILABLE:
             return self._forward_spconv(x)
 
         def _forward_spconv(self, x: SparseConvTensor) -> SparseConvTensor:
-            cached = x.indice_dict.get(self.indice_key) if self.indice_key is not None else None
+            cached = (
+                x.indice_dict.get(self.indice_key)
+                if self.indice_key is not None
+                else None
+            )
             if isinstance(cached, t4sparse.torch.Rulebook):
                 raise TypeError(
                     f"indice_key {self.indice_key!r} holds a rulebook built under autocast, but "
@@ -160,7 +138,11 @@ if IS_T4SPARSE_AVAILABLE:
         def _spconv(self) -> nn.Module:
             """The spconv twin, rebuilt when the layer's parameters were replaced."""
             twin = self.__dict__["_spconv_twin"]
-            if twin is None or twin.weight is not self.weight or twin.bias is not self.bias:
+            if (
+                twin is None
+                or twin.weight is not self.weight
+                or twin.bias is not self.bias
+            ):
                 twin = to_spconv_layer(self)
                 self.__dict__["_spconv_twin"] = twin
             return twin
