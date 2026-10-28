@@ -108,12 +108,24 @@ def _build_model(
     metrics: Sequence[MetricSuite] | None = None,
     auxiliary_2d_head: FocalHead2D | None = None,
     partial_annotations: PartialAnnotations | None = None,
+    class_names: Sequence[str] = CLASS_NAMES,
 ) -> StreamPETRDetection3DModel:
+    """Build a small StreamPETR on the tiny backbone, without preprocessing.
+
+    Args:
+        metrics: Metric suites the model evaluates, if any.
+        auxiliary_2d_head: The auxiliary 2D head, ``None`` to train without it.
+        partial_annotations: The partially annotated classes, ``None`` to supervise every class.
+        class_names: Classes of the detection head.
+
+    Returns:
+        The model.
+    """
     return StreamPETRDetection3DModel(
         data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
         img_backbone=_TinyMultiScaleBackbone(),
         img_neck=GeneralizedLSSFPN(in_channels=[128, 256, 512], out_channels=128),
-        bbox_head=_build_head(),
+        bbox_head=_build_head(class_names=class_names),
         log_dict_configs=LogDictConfigs(prog_bar=False),
         auxiliary_2d_head=auxiliary_2d_head,
         metrics=metrics,
@@ -126,9 +138,25 @@ def _cone_barrier_annotations(class_names: Sequence[str] = CLASS_NAMES) -> Parti
     return PartialAnnotations(class_names, ["traffic_cone", "barrier"])
 
 
-def _build_head(memory_len: int = 32, topk_proposals: int = 8, num_propagated: int = 8):
+def _build_head(
+    memory_len: int = 32,
+    topk_proposals: int = 8,
+    num_propagated: int = 8,
+    class_names: Sequence[str] = CLASS_NAMES,
+) -> StreamPETRHead:
+    """Build a small StreamPETR head with denoising queries on the +-10 m range.
+
+    Args:
+        memory_len: Entries of the temporal memory bank.
+        topk_proposals: Proposals of every frame that enter the bank.
+        num_propagated: Bank entries that extend the queries of the next frame.
+        class_names: Classes of the head.
+
+    Returns:
+        The head.
+    """
     return StreamPETRHead(
-        class_names=CLASS_NAMES,
+        class_names=class_names,
         in_channels=128,
         hidden_dim=128,
         num_queries=32,
