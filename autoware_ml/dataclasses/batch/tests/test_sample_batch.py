@@ -560,3 +560,17 @@ class TestModelGTBatchPaddingMask(unittest.TestCase):
 
         self.assertEqual(moved.padding_mask.device, device)
         self.assertEqual(moved.padding_mask.tolist(), [True, False])
+
+
+class TestModelGTBatchBatchSize(TestModelGTBatchPaddingMask):
+    def test_counts_every_collated_sample_padding_included(self) -> None:
+        """
+        Input: three samples, one of them padding.
+        Expected: the batch size is the number of collated samples, the padding slot
+        included, as the model shapes its outputs per slot.
+        Check: batch_size against the sample count, before and after a device move.
+        """
+        batch = self._collate([False, True, False])
+
+        self.assertEqual(batch.batch_size, 3)
+        self.assertEqual(batch.to_device(torch.device("cpu")).batch_size, 3)

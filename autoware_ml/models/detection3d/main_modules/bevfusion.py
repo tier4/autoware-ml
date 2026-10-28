@@ -402,7 +402,7 @@ class BEVFusionDetection3DModel(ModuleBaseModel):
             TransFusion-based detection head outputs for the configured branches.
         """
         if batch_size is None:
-            batch_size = multi_task_batch_inputs.multi_task_gt_batch.infer_batch_size()
+            batch_size = multi_task_batch_inputs.multi_task_gt_batch.batch_size
 
         # Run camera branch if image BEV is not provided and camera network is configured
         # Camera must run before the lidar branch because the lidar branch requires image BEV for
