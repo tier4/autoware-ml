@@ -561,8 +561,6 @@ class TestModelGTBatchPaddingMask(unittest.TestCase):
         self.assertEqual(moved.padding_mask.device, device)
         self.assertEqual(moved.padding_mask.tolist(), [True, False])
 
-
-class TestModelGTBatchBatchSize(TestModelGTBatchPaddingMask):
     def test_counts_every_collated_sample_padding_included(self) -> None:
         """
         Input: three samples, one of them padding.
