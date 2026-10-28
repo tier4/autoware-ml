@@ -15,22 +15,20 @@ import torch.nn as nn
 
 
 def reduce_mean_count(value: torch.Tensor, min_total: float = 1.0) -> torch.Tensor:
-    """Average a count over the DDP ranks, flooring the count summed over the ranks.
+    """Average a count over the DDP ranks, flooring the sum before the division.
 
-    DDP averages the gradients of the ranks, so a summed loss divided by this mean is the
-    per-object mean over the whole batch of the step, as if that batch were on one device. The
-    floor applies to the count of the whole batch for the same reason: mmdetection's
-    ``reduce_mean`` floors the mean instead, which halves the weight of the only positive of a
-    two-rank step. Every rank of the default process group has to call it the same number of
-    times per step.
+    DDP averages the gradients of the ranks, so a summed loss divided by this is the
+    per-object mean over the whole batch of the step, floored as on one device. (mmdetection's
+    ``reduce_mean`` floors the mean instead, which halves the only positive of a two-rank
+    step.) Every rank has to call it the same number of times per step.
 
     Args:
         value: Count or counts of this rank, reduced element by element.
         min_total: Floor of the count summed over the ranks.
 
     Returns:
-        The floored count averaged over the ranks, as float; without a process group the
-        floored count of this rank. The input is never modified.
+        The floored mean count as float; without a process group, the floored count of this
+        rank.
     """
     total = value.float()
     if torch.distributed.is_available() and torch.distributed.is_initialized():
