@@ -27,6 +27,9 @@ from autoware_ml.utils.config.tests.test_task_configs import EXPERIMENT_CONFIGS
 from autoware_ml.datamodule.streaming_data_module import StreamingDataModule
 
 STAGES = [config for config in EXPERIMENT_CONFIGS if "/streampetr/" in config]
+# The nuScenes taxonomy and the dynamic T4 taxonomy are the same seven classes with the last
+# two swapped. Stage 1 -> 2 therefore crosses taxonomies: `--weights` loads by shape, so the
+# classification rows of the stage-1 checkpoint are permuted first (docs/models/streampetr.md).
 NUSCENES_CLASSES = [
     "car",
     "truck",
@@ -36,17 +39,21 @@ NUSCENES_CLASSES = [
     "traffic_cone",
     "barrier",
 ]
+T4_CLASSES = ["car", "truck", "bus", "bicycle", "pedestrian", "barrier", "traffic_cone"]
 
 
 def test_the_stages_are_bundled() -> None:
     """
-    Input: the experiment configs bundled under tasks/detection3d/streampetr.
-    Expected: the nuScenes pretrain stage is bundled as one leaf config and no other.
+    Input: the experiment configs of both config roots under tasks/detection3d/streampetr.
+    Expected: the nuScenes pretrain is bundled as one leaf config, and the T4Dataset base of the
+    test config root composes the bundled T4 base, as the T4 stages of the external config root
+    do; no other leaf.
     Check: the leaf names of the StreamPETR experiments, in the order the experiment configs are
     listed.
     """
     assert [stage.rsplit("/", 1)[1] for stage in STAGES] == [
         "vov99_flrfpn_320x800_b8_30e_nuscenes_51m_pretrain",
+        "vov99_flrfpn_480x640_b16_35e_t4dataset_51m",
     ]
 
 
@@ -56,9 +63,12 @@ def test_every_stage_streams_the_seven_classes_of_its_taxonomy(
 ) -> None:
     """
     Input: the composed config of every stage.
-    Expected: every stage trains the seven classes in the order of its taxonomy in both heads. The head carries a temporal memory across batches, so the streaming overlay makes the
-    datamodule a StreamingDataModule seeded by the experiment, whose loaders do not shuffle and
-    whose evaluation runs one lane per rank. The schedule is bound to the trainer, and only the
+    Expected: every stage trains the seven classes in the order of its taxonomy in both heads:
+    the nuScenes order in stage 1, the dynamic T4 order, the one the other T4 detectors train
+    and the deployed node decodes, in the T4 stages. The
+    head carries a temporal memory across batches, so the streaming overlay makes the datamodule
+    a StreamingDataModule seeded by the experiment, whose loaders do not shuffle and whose
+    evaluation runs one lane per rank. The schedule is bound to the trainer, and only the
     initial weights are left for the command line.
     Check: the class names of the taxonomy and of both heads, the datamodule class, its seed
     and its keys against the arguments of StreamingDataModule, the dataloader settings, the
@@ -66,7 +76,7 @@ def test_every_stage_streams_the_seven_classes_of_its_taxonomy(
     """
     cfg = compose_task(config_name)
 
-    expected = NUSCENES_CLASSES
+    expected = T4_CLASSES if "/t4dataset/" in config_name else NUSCENES_CLASSES
     taxonomy = hydra.utils.instantiate(cfg.taxonomy.detection3d)
     assert list(taxonomy.class_names) == expected
     assert list(OmegaConf.to_container(cfg.model.bbox_head.class_names)) == expected
@@ -147,6 +157,28 @@ def test_every_stage_projects_the_2d_boxes_before_the_range_filter(
     assert steps.index("LoadAnnotations2DFromBoxes3D") < steps.index("BBoxesRangeFilter")
 
 
+@pytest.mark.parametrize("config_name", [stage for stage in STAGES if "/t4dataset/" in stage])
+def test_t4_stages_drop_the_low_point_boxes_after_the_2d_projection(
+    config_name: str,
+) -> None:
+    """The boxes recorded with too few lidar points leave the 3D targets but stay 2D targets.
+
+    The evaluation drops these boxes, so the 3D head does not train on them, while a camera can
+    still see them. Every T4 training dataset therefore runs
+    BBoxesMinPointsFilter after LoadAnnotations2DFromBoxes3D, reading the recorded counts, as
+    the pipeline loads no point cloud.
+    """
+    cfg = compose_task(config_name)
+    training = [name for name in cfg.datasets if name.endswith("train")]
+    assert "train" in training
+    for name in training:
+        pipeline = cfg.datasets[name].transforms.pipeline
+        steps = [step["_target_"].rsplit(".", 1)[1] for step in pipeline]
+        index = steps.index("BBoxesMinPointsFilter")
+        assert steps.index("LoadAnnotations2DFromBoxes3D") < index, name
+        assert pipeline[index].use_bbox_num_lidar_points is True, name
+
+
 @pytest.mark.parametrize("config_name", STAGES)
 def test_only_the_t4_training_pipelines_shuffle_the_loaded_cameras(
     config_name: str,
@@ -167,6 +199,26 @@ def test_only_the_t4_training_pipelines_shuffle_the_loaded_cameras(
         loading = steps.index("LoadImagesFromFile")
         assert (steps[loading + 1] == "ShuffleCameraOrder") == shuffles, split
         assert ("ShuffleCameraOrder" in steps) == shuffles, split
+
+
+@pytest.mark.parametrize("config_name", [stage for stage in STAGES if "/t4dataset/" in stage])
+def test_t4_stages_ignore_the_cones_and_barriers_of_the_scenes_without_them(
+    config_name: str,
+) -> None:
+    """
+    Input: the partial annotations of the T4 stages, instantiated from their configs.
+    Expected: the T4 scenarios flag whether their traffic cones and barriers are annotated, and
+    where they are not, those two classes are not supervised; the pair resolves by name,
+    whichever order the taxonomy lists it in.
+    Check: the class ids the partial annotations ignore, and the class names at those ids.
+    """
+    cfg = compose_task(config_name)
+    partial_annotations = hydra.utils.instantiate(cfg.model.partial_annotations)
+    assert list(partial_annotations.partial_ignore_class_ids) == [5, 6]
+    assert {T4_CLASSES[index] for index in partial_annotations.partial_ignore_class_ids} == {
+        "traffic_cone",
+        "barrier",
+    }
 
 
 def test_the_nuscenes_stage_supervises_every_class() -> None:

@@ -109,12 +109,13 @@ def _build_model(
     metrics: Sequence[MetricSuite] | None = None,
     img_roi_head: FocalHead2D | None = None,
     partial_annotations: PartialAnnotations | None = None,
+    class_names: Sequence[str] = CLASS_NAMES,
 ) -> StreamPETRDetection3DModel:
     return StreamPETRDetection3DModel(
         data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
         img_backbone=_TinyMultiScaleBackbone(),
         img_neck=GeneralizedLSSFPN(in_channels=[128, 256, 512], out_channels=128),
-        bbox_head=_build_head(),
+        bbox_head=_build_head(class_names=class_names),
         log_dict_configs=LogDictConfigs(prog_bar=False),
         img_roi_head=img_roi_head,
         metrics=metrics,
@@ -127,9 +128,14 @@ def _cone_barrier_annotations(class_names: Sequence[str] = CLASS_NAMES) -> Parti
     return PartialAnnotations(class_names, ["traffic_cone", "barrier"])
 
 
-def _build_head(memory_len: int = 32, topk_proposals: int = 8, num_propagated: int = 8):
+def _build_head(
+    memory_len: int = 32,
+    topk_proposals: int = 8,
+    num_propagated: int = 8,
+    class_names: Sequence[str] = CLASS_NAMES,
+) -> StreamPETRHead:
     return StreamPETRHead(
-        class_names=CLASS_NAMES,
+        class_names=class_names,
         in_channels=128,
         hidden_dim=128,
         num_queries=32,
