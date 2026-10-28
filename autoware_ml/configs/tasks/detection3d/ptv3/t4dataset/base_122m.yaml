@@ -10,7 +10,8 @@ defaults:
   - /datamodule/frame_sampling@datamodule.train_frame_sampling: default_frame_sampling
   - _self_
 
-point_cloud_range: [-122.88, -122.88, -3.0, 122.88, 122.88, 5.0]
+point_cloud_range: [-122.88, -122.88, -2.30, 122.88, 122.88, 5.38]
+point_cloud_height: 7.68
 
 # Largest GT distance of every class, from the detection taxonomy of the database.
 eval_class_range: ${database.taxonomy.detection3d.eval_range}
@@ -107,18 +108,6 @@ datasets:
           use_dim: [0, 1, 2, 3] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]
           bev_remove_radius: 0.0
 
-        - _target_: autoware_ml.transforms.point_cloud.loading.LoadMultiSweepPointsFromFile
-          _convert_: all
-
-          past:
-            _target_: autoware_ml.transforms.point_cloud.loading.SweepWindow
-            num: 1
-            time_lag_range: [0.05, 0.25]
-            selection: random
-          bev_remove_radius: 1.0
-          use_timestamp_difference: true
-          use_dim: [0, 1, 2, 3] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]
-
         - _target_: autoware_ml.transforms.camera_lidar.geometry.RandomRotateTargetAngle
           _convert_: all
 
@@ -214,18 +203,6 @@ datasets:
 
           use_dim: [0, 1, 2, 3] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]
           bev_remove_radius: 0.0
-
-        - _target_: autoware_ml.transforms.point_cloud.loading.LoadMultiSweepPointsFromFile
-          _convert_: all
-
-          past:
-            _target_: autoware_ml.transforms.point_cloud.loading.SweepWindow
-            num: 1
-            time_lag_range: [0.05, 0.25]
-            selection: nearest
-          bev_remove_radius: 1.0
-          use_timestamp_difference: true
-          use_dim: [0, 1, 2, 3] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]
 
         - _target_: autoware_ml.transforms.point_cloud.geometry.PointsRangeFilter
           _convert_: all

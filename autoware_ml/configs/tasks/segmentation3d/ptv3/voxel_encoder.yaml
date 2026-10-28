@@ -1,2 +1,2 @@
 # @package model.voxel_encoder
-_target_: autoware_ml.models.segmentation3d.encoders.voxel.SweepSplitVoxelFeatureEncoder
+_target_: autoware_ml.models.segmentation3d.encoders.voxel.MeanVoxelFeatureEncoder
