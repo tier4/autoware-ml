@@ -892,10 +892,8 @@ class StreamPETRHead(nn.Module):
             one_hot[pos_mask, sample_targets.labels[pos_mask]] = 1.0
             target_labels.append(one_hot)
         target_labels_tensor = torch.stack(target_labels, dim=0)
-        # One collective and one device sync per decoder layer; every rank runs every layer, so
-        # the collectives stay in step. The losses divide by the count themselves: the
-        # ``avg_factor`` of the focal loss is floored on every rank, the count already is over
-        # the whole batch.
+        # One collective per decoder layer, which every rank runs, so the ranks stay in step.
+        # The division is explicit because the focal loss floors ``avg_factor`` per rank.
         total_pos = reduce_mean_count(torch.stack(positive_counts).sum()).item()
         loss_cls = (
             self.loss_cls_weight
@@ -945,9 +943,8 @@ class StreamPETRHead(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute denoising-query supervision for one decoder layer.
 
-        The average factors are the denoising target counts of the step that :meth:`loss`
-        computes once, the classification one scaled by the expected positive rate of the
-        noised queries.
+        The average factors are the denoising target counts of the step, reduced once by
+        :meth:`loss`.
         """
         class_targets = cls_scores.new_zeros((known_labels.shape[0], self.num_classes))
         foreground = known_labels < self.num_classes
@@ -1162,17 +1159,14 @@ class StreamPETRHead(nn.Module):
                 loss_dict[f"d{layer_index}.dn_loss_bbox"] = zero.clone()
 
         num_targets = 0 if outputs.denoising is None else outputs.denoising.known_labels.numel()
-        # The classification count scales the target count by the expected positive rate of the
-        # noised queries (reference recipe): a ball of radius ``split`` inside the unit noise
-        # cube.
+        # The classification count is scaled by the expected positive rate of the noised queries
+        # (reference recipe): a ball of radius ``split`` inside the unit noise cube.
         dn_counts = all_cls_scores.new_tensor(
             [num_targets * math.pi / 6 * self.split**3, float(num_targets)]
         )
         if self.with_dn and self.training:
-            # The denoising target counts averaged over the ranks. The collective is gated on
-            # flags every rank shares, never on the ground truth of this rank: a rank without
-            # boxes still joins it with counts of 0, and its zero denoising loss above is its
-            # share of the per-object mean.
+            # Gated on flags every rank shares, not on this rank's ground truth: a rank
+            # without boxes joins the collective with counts of 0.
             dn_counts = reduce_mean_count(dn_counts)
         else:
             dn_counts = dn_counts.clamp(min=1.0)
