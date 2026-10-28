@@ -156,21 +156,16 @@ class ModelGTBatch(NamedTuple):
             padding_mask=self.padding_mask.to(device),
         )
 
-    def infer_batch_size(self) -> int:
+    @property
+    def batch_size(self) -> int:
         """
-        Infer the batch size from the collated multi-task GT batch.
+        Number of collated samples, padding slots included.
 
-        Returns:
-            Batch size if it can be inferred, otherwise raises ValueError.
+        ``padding_mask`` is the one per-sample tensor every batch carries, one flag per
+        collated sample, so its length is the batch dimension; a batch of deployment inputs
+        without ground truth has it too.
         """
-        if self.point_cloud_gt_batch is not None:
-            return self.point_cloud_gt_batch.batch_size
-        elif self.detection3d_gt_batch is not None:
-            return self.detection3d_gt_batch.gt_bboxes_3d.shape[0]
-        elif self.image_gt_batch is not None:
-            return self.image_gt_batch.images.shape[0]
-        else:
-            raise ValueError("Cannot infer batch size from an empty ModelGTBatch.")
+        return int(self.padding_mask.shape[0])
 
     def num_real_samples(self) -> int:
         """

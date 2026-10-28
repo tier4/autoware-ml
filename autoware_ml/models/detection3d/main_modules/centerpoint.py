@@ -169,7 +169,7 @@ class CenterPointDetection3DModel(ModuleBaseModel):
                 "ModelBatchInputs must contain voxels_data for CenterPoint forward pass."
             )
 
-        batch_size = multi_task_batch_inputs.multi_task_gt_batch.infer_batch_size()
+        batch_size = multi_task_batch_inputs.multi_task_gt_batch.batch_size
         pillar_features = self.pts_voxel_encoder(multi_task_batch_inputs.voxels_data)
         bev_features = self.pts_middle_encoder(
             pillar_features=pillar_features,
@@ -265,14 +265,13 @@ class CenterPointDetection3DModel(ModuleBaseModel):
         with torch.no_grad():
             input_features = self.pts_voxel_encoder.encode(voxels_data)
             pillar_features = self.pts_voxel_encoder.encode_decorated(input_features).squeeze(1)
-            # The scatter canvas is indexed with the pillar batch indices, so the batch size
-            # is derived from the voxels rather than from the ground truth: a batch prepared
-            # for deployment may carry no ground truth at all.
+            # Sized by the batch, as in forward(): the voxel batch indices miss a sample
+            # without voxels.
             spatial_features = self.pts_middle_encoder(
                 pillar_features=pillar_features,
                 coords=voxels_data.coords,
                 batch_indices=voxels_data.batch_indices,
-                batch_size=voxels_data.infer_batch_size(),
+                batch_size=multi_task_batch_inputs.batch_size(),
             )
 
         head_wrapper = _CenterPointBackboneNeckHeadExportWrapper(
