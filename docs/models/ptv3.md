@@ -71,7 +71,9 @@ autoware-ml train \
 ### Mixed precision
 
 `spconv` has no autocast support, so under `trainer.precision=16-mixed` its
-convolutions run in fp32. If `t4sparse` is installed (see [Installation](../getting-started/installation.md)), sparse convolutions run 16-bit t4sparse kernels under autocast instead. Checkpoints are interchangeable.
+convolutions run in fp32. If `t4sparse` is installed (see
+[Installation](../getting-started/installation.md)), sparse convolutions run
+16-bit t4sparse kernels under autocast instead. Checkpoints are interchangeable.
 The two libraries' `indice_key` caches are incompatible, so disable autocast
 around whole stages only.
 
