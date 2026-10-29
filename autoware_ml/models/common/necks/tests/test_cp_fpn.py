@@ -34,25 +34,13 @@ def test_cpfpn_outputs_match_input_levels_and_channels() -> None:
     assert outputs[1].shape == (2, 16, 6, 10)
 
 
-def test_cpfpn_parameter_names_follow_the_reference_checkpoints() -> None:
-    """The parameter names are the reference neck's, so its checkpoints load without a key map.
-
-    One 1x1 lateral convolution per level and a single 3x3 output convolution, each under a
-    ``conv`` attribute as in mmcv's ConvModule.
-    """
+def test_cpfpn_has_one_lateral_per_level_and_one_output_convolution() -> None:
+    """A 1x1 lateral convolution per level and a single 3x3 convolution for the finest level."""
     neck = CPFPN(in_channels=[24, 40], out_channels=16)
-    state = neck.state_dict()
 
-    assert sorted(state) == [
-        "fpn_convs.0.conv.bias",
-        "fpn_convs.0.conv.weight",
-        "lateral_convs.0.conv.bias",
-        "lateral_convs.0.conv.weight",
-        "lateral_convs.1.conv.bias",
-        "lateral_convs.1.conv.weight",
-    ]
-    assert state["lateral_convs.1.conv.weight"].shape == (16, 40, 1, 1)
-    assert state["fpn_convs.0.conv.weight"].shape == (16, 16, 3, 3)
+    assert [conv.kernel_size for conv in neck.lateral_convs] == [(1, 1), (1, 1)]
+    assert neck.lateral_convs[1].weight.shape == (16, 40, 1, 1)
+    assert neck.fpn_conv.weight.shape == (16, 16, 3, 3)
 
 
 def test_cpfpn_adds_the_coarse_level_and_refines_the_finest_level_only() -> None:
@@ -64,12 +52,12 @@ def test_cpfpn_adds_the_coarse_level_and_refines_the_finest_level_only() -> None
     # Unit laterals, the coarse one adding 0.5, and a 3x3 convolution passing its center tap.
     with torch.no_grad():
         for lateral in neck.lateral_convs:
-            lateral.conv.weight.fill_(1.0)
-            lateral.conv.bias.zero_()
-        neck.fpn_convs[0].conv.weight.zero_()
-        neck.fpn_convs[0].conv.weight[0, 0, 1, 1] = 1.0
-        neck.fpn_convs[0].conv.bias.zero_()
-        neck.lateral_convs[1].conv.bias.fill_(0.5)
+            lateral.weight.fill_(1.0)
+            lateral.bias.zero_()
+        neck.fpn_conv.weight.zero_()
+        neck.fpn_conv.weight[0, 0, 1, 1] = 1.0
+        neck.fpn_conv.bias.zero_()
+        neck.lateral_convs[1].bias.fill_(0.5)
     high = torch.randn(1, 1, 4, 6)
     low = torch.randn(1, 1, 2, 3)
 
