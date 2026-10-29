@@ -18,9 +18,9 @@ def reduce_mean_count(value: torch.Tensor, min_total: float = 1.0) -> torch.Tens
     """Average a count over the DDP ranks, flooring the sum before the division.
 
     DDP averages the gradients of the ranks, so a summed loss divided by this is the
-    per-object mean over the whole batch of the step, floored as on one device. (mmdetection's
-    ``reduce_mean`` floors the mean instead, which halves the only positive of a two-rank
-    step.) Every rank has to call it the same number of times per step.
+    per-object mean over the whole batch of the step, floored as on one device. (The mmdetection
+    heads floor the mean of ``reduce_mean`` instead, which halves the only positive of a
+    two-rank step.) Every rank has to call it the same number of times per step.
 
     Args:
         value: Count or counts of this rank, reduced element by element.
