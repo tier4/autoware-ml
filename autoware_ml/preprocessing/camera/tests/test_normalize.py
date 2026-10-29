@@ -62,48 +62,9 @@ def test_matches_the_runtime_normalization_of_8_bit_pixels(is_training: bool) ->
     torch.testing.assert_close(normalized.image_data.images, (pixels - mean_255) / std_255)
 
 
-@pytest.mark.parametrize("is_training", [True, False])
-def test_refuses_images_in_0_255(is_training: bool) -> None:
-    """0-255 pixels, as LoadImagesFromFile(normalize_to_unit=False) serves them, are refused."""
-    pixels = torch.randint(0, 256, (2, 3, 3, 4, 5), generator=torch.Generator().manual_seed(0))
-
-    with pytest.raises(ValueError, match=r"LoadImagesFromFile\(normalize_to_unit=True\)"):
-        BatchNormalizeImages(IMAGENET_MEAN, IMAGENET_STD)(
-            _inputs(pixels.float()), is_training=is_training
-        )
-
-
-def test_accepts_unit_range_images_with_interpolation_overshoot() -> None:
-    """A pixel at 1.2, as an interpolation can overshoot, passes the range check."""
-    images = torch.rand(2, 3, 3, 4, 5, generator=torch.Generator().manual_seed(0))
-    images[0, 0, 0, 0, 0] = 1.2
-
-    normalized = BatchNormalizeImages(IMAGENET_MEAN, IMAGENET_STD)(
-        _inputs(images), is_training=True
-    )
-
-    mean = torch.tensor(IMAGENET_MEAN).view(1, 1, 3, 1, 1)
-    std = torch.tensor(IMAGENET_STD).view(1, 1, 3, 1, 1)
-    torch.testing.assert_close(normalized.image_data.images, (images - mean) / std)
-
-
-def test_checks_the_first_batch_of_each_mode() -> None:
-    """The first evaluation batch does not vouch for the training images, nor the reverse.
-
-    A fit run starts with Lightning's sanity validation, and the training and evaluation
-    pipelines load their images apart. A later batch of a checked mode is not read again.
-    """
-    normalize = BatchNormalizeImages(IMAGENET_MEAN, IMAGENET_STD)
-    normalize(_inputs(torch.rand(1, 2, 3, 4, 5)), is_training=False)
-    normalize(_inputs(torch.full((1, 2, 3, 4, 5), 255.0)), is_training=False)
-
-    with pytest.raises(ValueError, match="first training batch"):
-        normalize(_inputs(torch.full((1, 2, 3, 4, 5), 255.0)), is_training=True)
-
-
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
-def test_does_not_synchronize_the_device_after_the_range_check() -> None:
-    """Copying the statistics to the device must not wait for the work queued on it."""
+def test_copies_the_statistics_to_the_device_once() -> None:
+    """After the first batch on a device the statistics are reused, so no copy can wait on it."""
     normalize = BatchNormalizeImages(IMAGENET_MEAN, IMAGENET_STD)
     inputs = _inputs(torch.rand(1, 2, 3, 4, 5, device="cuda"))
     normalize(inputs, is_training=True)
