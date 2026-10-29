@@ -21,7 +21,7 @@ from jaxtyping import Bool, Float32, Int64
 import torch
 import torch.nn as nn
 
-from autoware_ml.models.common.multiview_image_encoder import encode_multiview_images
+from autoware_ml.models.common.multiview_image_encoder import MultiviewImageEncoder
 from autoware_ml.models.detection3d.view_transforms.depth_lss import (
     BEVPoolResult,
     DepthLSSTransform,
@@ -71,7 +71,9 @@ class BEVFusionCamera(nn.Module):
         Returns:
             Neck feature tensor consumed by the view transform.
         """
-        return encode_multiview_images(self.img_backbone, self.img_neck, image_batch)
+        return MultiviewImageEncoder.encode_pyramid(self.img_backbone, self.img_neck, image_batch)[
+            0
+        ]
 
     def forward(
         self,

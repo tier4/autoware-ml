@@ -20,10 +20,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from autoware_ml.models.common.multiview_image_encoder import (
-    MultiviewImageEncoder,
-    encode_multiview_images,
-)
+from autoware_ml.models.common.multiview_image_encoder import MultiviewImageEncoder
 
 
 class _TwoScaleBackbone(nn.Module):
@@ -98,8 +95,8 @@ def test_a_single_tensor_from_the_backbone_or_the_neck_is_accepted() -> None:
     backbone = nn.Conv2d(3, 8, kernel_size=4, stride=4)
     images = torch.randn(1, 2, 3, 16, 16)
 
-    from_tensor = encode_multiview_images(backbone, _FirstMapNeck(), images)
-    from_tuple = encode_multiview_images(backbone, _TupleNeck(), images)
+    from_tensor = MultiviewImageEncoder(backbone, _FirstMapNeck())(images)
+    from_tuple = MultiviewImageEncoder(backbone, _TupleNeck())(images)
 
     assert from_tensor.shape == (1, 2, 8, 4, 4)
     torch.testing.assert_close(from_tensor, from_tuple)
@@ -130,3 +127,46 @@ def test_checkpoint_keys_name_the_backbone_and_the_neck() -> None:
     prefixes = {key.split(".")[0] for key in encoder.state_dict()}
 
     assert prefixes == {"img_backbone", "img_neck"}
+
+
+def test_return_all_levels_folds_every_neck_output_per_camera() -> None:
+    """
+    Input: the two-scale backbone and the projection neck on two samples of three 32 x 48
+    images, with ``return_all_levels``.
+    Expected: both neck levels come back per camera, the stride-4 and the stride-8 one, and
+    every slot holds the levels of exactly that image.
+    Check: two levels of shapes ``(2, 3, 4, 8, 12)`` and ``(2, 3, 4, 4, 6)``, and slot
+    ``(1, 2)`` of the second level equals that image's second neck output.
+    """
+    torch.manual_seed(0)
+    encoder = MultiviewImageEncoder(_TwoScaleBackbone(), _ProjectionNeck(), return_all_levels=True)
+    images = torch.randn(2, 3, 3, 32, 48)
+
+    levels = encoder(images)
+
+    assert isinstance(levels, tuple)
+    assert len(levels) == 2
+    assert levels[0].shape == (2, 3, 4, 8, 12)
+    assert levels[1].shape == (2, 3, 4, 4, 6)
+    expected = encoder.img_neck(encoder.img_backbone(images[1, 2:3]))[1][0]
+    torch.testing.assert_close(levels[1][1, 2], expected)
+
+
+def test_pyramid_and_primary_feature_agree() -> None:
+    """
+    Input: the same backbone, neck and images through the static pyramid encoding and the
+    encoder without ``return_all_levels``.
+    Expected: the encoder's feature is the first level of the pyramid, and a single-tensor
+    neck gives a one-level pyramid.
+    Check: equality of the first level, and the pyramid length with the single-tensor neck.
+    """
+    torch.manual_seed(0)
+    backbone = _TwoScaleBackbone()
+    neck = _ProjectionNeck()
+    images = torch.randn(1, 2, 3, 32, 48)
+
+    pyramid = MultiviewImageEncoder.encode_pyramid(backbone, neck, images)
+    primary = MultiviewImageEncoder(backbone, neck)(images)
+
+    torch.testing.assert_close(pyramid[0], primary)
+    assert len(MultiviewImageEncoder.encode_pyramid(backbone, _FirstMapNeck(), images)) == 1

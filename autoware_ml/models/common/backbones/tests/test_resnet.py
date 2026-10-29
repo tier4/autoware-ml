@@ -18,10 +18,12 @@ with torchvision."""
 
 from __future__ import annotations
 
+from pathlib import Path
+import tempfile
 import unittest
 
 import torch
-from torchvision.models import resnet18, resnet50
+from torchvision.models import ResNet50_Weights, resnet18, resnet50
 
 from autoware_ml.models.common.backbones.resnet import (
     ResNet18,
@@ -194,6 +196,71 @@ class TestTorchvisionCompatibility(unittest.TestCase):
         weights = {k: v for k, v in resnet18().state_dict().items() if not k.startswith("fc.")}
 
         ResNet18MultiScale(in_channels=3).load_state_dict(weights, strict=True)
+
+
+class TestTorchvisionWeights(unittest.TestCase):
+    """The backbones start from torchvision weights when asked."""
+
+    def setUp(self) -> None:
+        """Save a torchvision ResNet-18 state dict, classifier included, to a temporary file."""
+        torch.manual_seed(0)
+        self.reference = resnet18()
+        self.directory = tempfile.TemporaryDirectory()
+        self.path = Path(self.directory.name) / "resnet18.pth"
+        torch.save(self.reference.state_dict(), self.path)
+
+    def tearDown(self) -> None:
+        """Remove the temporary file."""
+        self.directory.cleanup()
+
+    def test_state_dict_file_loads_the_stages_and_drops_the_classifier(self) -> None:
+        """
+        Input: a state dict file of a torchvision ResNet-18 with its classifier.
+        Expected: every stage tensor equals the file's, and the classifier is ignored.
+        Check: the stem and a deep stage weight match the reference.
+        """
+        backbone = ResNet18MultiScale(in_channels=3, weights=self.path)
+
+        torch.testing.assert_close(backbone.conv1.weight, self.reference.conv1.weight)
+        torch.testing.assert_close(
+            backbone.layer4[1].conv2.weight, self.reference.layer4[1].conv2.weight
+        )
+        self.assertFalse(hasattr(backbone, "fc"))
+
+    def test_other_input_width_keeps_its_own_stem(self) -> None:
+        """
+        Input: the same file into a five-channel backbone.
+        Expected: the stages load but the three-channel stem is skipped.
+        Check: a stage weight matches and the stem keeps five input channels.
+        """
+        backbone = ResNet18(in_channels=5, weights=self.path)
+
+        torch.testing.assert_close(
+            backbone.layer1[0].conv1.weight, self.reference.layer1[0].conv1.weight
+        )
+        self.assertEqual(backbone.conv1.weight.shape[1], 5)
+
+    def test_weight_set_names_resolve_through_torchvision(self) -> None:
+        """
+        Input: an unknown weight set name, and the ImageNet names of ResNet-50.
+        Expected: the unknown name is refused with the available names, and the ImageNet
+            names exist in torchvision (not downloaded here).
+        Check: ValueError naming IMAGENET1K_V1, and the enum members.
+        """
+        with self.assertRaisesRegex(ValueError, "IMAGENET1K_V1"):
+            ResNet50MultiScale(in_channels=3, weights="NOT_A_WEIGHT_SET")
+        self.assertIn("IMAGENET1K_V1", ResNet50_Weights.__members__)
+        self.assertIn("IMAGENET1K_V2", ResNet50_Weights.__members__)
+
+    def test_load_without_weights_is_unchanged(self) -> None:
+        """
+        Input: a backbone without weights.
+        Expected: the stem keeps its own draw, which differs from the saved reference.
+        Check: the stem weights differ.
+        """
+        backbone = ResNet18MultiScale(in_channels=3)
+
+        self.assertFalse(torch.equal(backbone.conv1.weight, self.reference.conv1.weight))
 
 
 if __name__ == "__main__":
