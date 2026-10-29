@@ -39,13 +39,10 @@ def _proposals_at(centers: list[tuple[float, float]], num_classes: int = 3):
 
 
 def test_matches_every_ground_truth_box_to_the_proposal_on_top_of_it() -> None:
-    """
-    Input: three 20 x 20 px proposals of one image, two of them centered on the two ground-truth
-    boxes and confident about their classes, the third away from both.
-    Expected: the Hungarian assignment pairs every ground-truth box with the proposal on top of
-    it and leaves the third proposal to the background.
-    Check: the number of ground-truth boxes, and the 1-based ground-truth index (0 for the
-    background) and the label (-1 for the background) of every proposal.
+    """Every box goes to the confident proposal on top of it.
+
+    The third proposal, away from both, is background: box index 0 (the indices are 1-based)
+    and label -1.
     """
     bbox_pred, cls_pred, centers = _proposals_at([(30.0, 30.0), (150.0, 60.0), (100.0, 80.0)])
     # Proposal 1 is confident about class 2, proposal 0 about class 0.
@@ -72,12 +69,7 @@ def test_matches_every_ground_truth_box_to_the_proposal_on_top_of_it() -> None:
 
 
 def test_an_image_without_ground_truth_assigns_every_proposal_to_background() -> None:
-    """
-    Input: two proposals of an image without ground-truth boxes.
-    Expected: with nothing to match, every proposal is assigned to the background.
-    Check: zero ground-truth boxes, and the ground-truth index 0 and the label -1 of every
-    proposal.
-    """
+    """With no box to match, every proposal is background."""
     bbox_pred, cls_pred, centers = _proposals_at([(30.0, 30.0), (150.0, 60.0)])
 
     result = HungarianAssigner2D().assign(
