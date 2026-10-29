@@ -327,6 +327,17 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
         pixi shell --environment dev
         ```
 
+    === "Contributor (with t4sparse)"
+
+        The `dev` environment plus `t4sparse` (see
+        [PointTransformerV3](../models/ptv3.md#mixed-precision)). Currently only available to TIER IV members.
+
+        ```bash
+        pixi install --locked --environment t4sparse
+        pixi run --environment t4sparse setup-project
+        pixi shell --environment t4sparse
+        ```
+
     The separate `docs` environment is reserved for documentation-only
     workflows and CI - you do not need to install it manually.
 
