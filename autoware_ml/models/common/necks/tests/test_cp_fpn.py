@@ -24,12 +24,7 @@ from autoware_ml.models.common.necks.cp_fpn import CPFPN
 
 
 def test_cpfpn_outputs_match_input_levels_and_channels() -> None:
-    """
-    Input: two feature levels of 24 and 40 channels, 12 x 20 and 6 x 10, for a batch of two.
-    Expected: the CPFPN neck returns one map per input level, each with ``out_channels`` (16)
-    channels at the resolution of its level.
-    Check: the number of outputs and their shapes.
-    """
+    """One map of ``out_channels`` per input level, at the resolution of that level."""
     neck = CPFPN(in_channels=[24, 40], out_channels=16)
     high = torch.randn(2, 24, 12, 20)
     low = torch.randn(2, 40, 6, 10)
@@ -40,12 +35,10 @@ def test_cpfpn_outputs_match_input_levels_and_channels() -> None:
 
 
 def test_cpfpn_parameter_names_follow_the_reference_checkpoints() -> None:
-    """
-    Input: a CPFPN neck over two levels.
-    Expected: the parameters carry the names of the reference neck, one 1x1 lateral convolution
-    per level and a single 3x3 output convolution, each under a ``conv`` attribute, so the
-    reference StreamPETR checkpoints load without a key mapping.
-    Check: the state dict keys and the kernel sizes.
+    """The parameter names are the reference neck's, so its checkpoints load without a key map.
+
+    One 1x1 lateral convolution per level and a single 3x3 output convolution, each under a
+    ``conv`` attribute as in mmcv's ConvModule.
     """
     neck = CPFPN(in_channels=[24, 40], out_channels=16)
     state = neck.state_dict()
@@ -63,14 +56,12 @@ def test_cpfpn_parameter_names_follow_the_reference_checkpoints() -> None:
 
 
 def test_cpfpn_adds_the_coarse_level_and_refines_the_finest_level_only() -> None:
-    """
-    Input: one-channel levels of 4 x 6 and 2 x 3, with unit lateral convolutions (the coarse one
-    adding 0.5) and a 3x3 output convolution that only passes its center tap.
-    Expected: the finest output is its input plus the nearest-upsampled coarse lateral, and the
-    coarse output is its lateral alone, without the 3x3 convolution.
-    Check: both outputs against the hand-computed sums.
+    """The finest output adds the nearest-upsampled coarse lateral; the coarse one is left as is.
+
+    Only the finest level passes the 3x3 convolution.
     """
     neck = CPFPN(in_channels=[1, 1], out_channels=1)
+    # Unit laterals, the coarse one adding 0.5, and a 3x3 convolution passing its center tap.
     with torch.no_grad():
         for lateral in neck.lateral_convs:
             lateral.conv.weight.fill_(1.0)
@@ -89,11 +80,7 @@ def test_cpfpn_adds_the_coarse_level_and_refines_the_finest_level_only() -> None
 
 
 def test_cpfpn_rejects_another_number_of_levels() -> None:
-    """
-    Input: a neck built for two levels, given one feature map.
-    Expected: every level needs its own lateral convolution, so the neck refuses the input.
-    Check: a ValueError naming the expected count is raised.
-    """
+    """Every level has its own lateral convolution, so another number of levels is refused."""
     neck = CPFPN(in_channels=[24, 40], out_channels=16)
 
     with pytest.raises(ValueError, match="Expected 2 input feature maps"):
