@@ -157,3 +157,27 @@ def test_the_nuscenes_stage_supervises_every_class() -> None:
     """
     cfg = compose_experiment([stage for stage in STAGES if "/nuscenes/" in stage][0])
     assert cfg.model.partial_annotations is None
+
+
+@pytest.mark.parametrize("config_name", STAGES)
+def test_every_pipeline_loads_unit_range_images_for_the_normalization(config_name: str) -> None:
+    """BatchNormalizeImages trusts its input, so the loaders keep the unit-range default.
+
+    The statistics are unit-range and the layer does not check the images: 0-255 pixels would
+    train without an error. It is the first preprocessing module, and every pipeline loads its
+    images with LoadImagesFromFile(normalize_to_unit=True).
+    """
+    cfg = compose_experiment(config_name)
+    modules = [
+        module["_target_"].rsplit(".", 1)[1]
+        for module in cfg.data_preprocessor.preprocessor_modules
+    ]
+    assert modules[0] == "BatchNormalizeImages"
+    for split in ("train", "test"):
+        loaders = [
+            step
+            for step in cfg.datasets[split].transforms.pipeline
+            if step["_target_"].endswith("LoadImagesFromFile")
+        ]
+        assert len(loaders) == 1, split
+        assert loaders[0].get("normalize_to_unit", True) is True, split
