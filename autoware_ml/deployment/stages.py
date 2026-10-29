@@ -122,8 +122,6 @@ class GraphStage:
         inputs: Run-state names fed to the module, in order; they are the ONNX input names.
         outputs: ONNX output names, in the module's return order. Those no later stage
             reads are the model outputs (:func:`model_output_names`).
-        torch_fallback_backends: Backends that run the PyTorch module instead of the
-            artifact, for graphs they cannot execute (plugin ops on ONNX Runtime).
         onnx_dynamic_axes: Axes dynamic by construction, ``{tensor: {dim: name}}``. They
             become the spec's ``dynamic_axes``; the module's config ``dynamic_axes`` apply
             only when the stage declares none.
@@ -133,7 +131,6 @@ class GraphStage:
     module: nn.Module
     inputs: tuple[str, ...]
     outputs: tuple[str, ...]
-    torch_fallback_backends: tuple[Backend, ...] = ()
     onnx_dynamic_axes: Mapping[str, Mapping[int, str]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:

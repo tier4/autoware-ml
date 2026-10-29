@@ -30,7 +30,6 @@ from autoware_ml.deployment.stages import GraphStage, Stage, TorchStage
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 from autoware_ml.utils.deploy import ExportSpec, export_to_onnx
-from autoware_ml.types.backend import Backend
 
 
 class _Encoder(nn.Module):
@@ -139,7 +138,7 @@ def test_trace_inputs_are_the_run_state_tensors_the_glue_produced() -> None:
     assert torch.equal(plus, forward["plus"]) and torch.equal(minus, forward["minus"])
 
 
-def test_stage_declared_axes_land_in_the_spec_and_fallback_keeps_export_targets() -> None:
+def test_stage_declared_axes_land_in_the_spec() -> None:
     stages = (
         TorchStage("seed", run=lambda state: {"x": state.batch["x"]}, inputs=(), outputs=("x",)),
         GraphStage(
@@ -148,14 +147,10 @@ def test_stage_declared_axes_land_in_the_spec_and_fallback_keeps_export_targets(
             inputs=("x",),
             outputs=("y",),
             onnx_dynamic_axes={"x": {0: "num_points"}, "y": {0: "num_points"}},
-            torch_fallback_backends=(Backend.ONNX,),
         ),
     )
     specs = build_export_specs_from_stages(stages, {"x": torch.ones(3, 2)}, torch.device("cpu"))
-    spec = specs["points"]
-    assert spec.dynamic_axes == {"x": {0: "num_points"}, "y": {0: "num_points"}}
-    # A fallback changes where the graph runs, not whether it is exported.
-    assert spec.supported_stages == frozenset({"onnx", "tensorrt"})
+    assert specs["points"].dynamic_axes == {"x": {0: "num_points"}, "y": {0: "num_points"}}
 
 
 def test_a_stage_graph_refuses_to_trace_in_training_mode() -> None:
