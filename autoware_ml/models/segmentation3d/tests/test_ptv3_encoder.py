@@ -541,7 +541,17 @@ def test_mean_voxel_encoder_averages_the_valid_points_and_ignores_the_padding() 
 
 def test_mean_voxel_encoder_rejects_points_with_a_time_lag() -> None:
     with pytest.raises(ValueError, match="got 5 channels"):
-        MeanVoxelFeatureEncoder()(torch.zeros(2, 3, 5), torch.tensor([1, 1], dtype=torch.int32))
+        MeanVoxelFeatureEncoder().check_points(torch.zeros(2, 3, 5), -1)
+
+
+@pytest.mark.parametrize(
+    "encoder_type", [SweepSplitVoxelFeatureEncoder, PastFutureVoxelFeatureEncoder]
+)
+def test_sweep_voxel_encoders_reject_points_without_the_time_lag_channel(
+    encoder_type: type[SweepSplitVoxelFeatureEncoder | PastFutureVoxelFeatureEncoder],
+) -> None:
+    with pytest.raises(ValueError, match="got 4 channels"):
+        encoder_type().check_points(torch.zeros(2, 3, 4), 4)
 
 
 def test_mean_voxel_encoder_takes_single_frames_without_a_time_lag_column() -> None:
