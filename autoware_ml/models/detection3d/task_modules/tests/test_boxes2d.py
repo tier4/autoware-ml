@@ -35,12 +35,7 @@ def _random_boxes(count: int, seed: int) -> torch.Tensor:
 
 
 def test_box_formats_convert_back_and_forth() -> None:
-    """
-    Input: the box (10, 20) - (30, 60) in corner form, and random boxes.
-    Expected: the center form of the box is (20, 40, 20, 40), and converting any box to the
-    center form and back gives the box again.
-    Check: the converted box, and the round trip of the random boxes.
-    """
+    """The center form of (10, 20) - (30, 60) is (20, 40, 20, 40); boxes survive a round trip."""
     box = torch.tensor([[10.0, 20.0, 30.0, 60.0]])
     boxes = _random_boxes(16, seed=0)
 
@@ -49,13 +44,9 @@ def test_box_formats_convert_back_and_forth() -> None:
 
 
 def test_overlaps_of_two_boxes_by_hand() -> None:
-    """
-    Input: the boxes (0, 0) - (2, 2) and (1, 1) - (3, 3), and a third box (5, 5) - (6, 6) apart
-    from the first.
-    Expected: the first two share an area of 1 over a union of 7, inside an enclosing box of 9,
-    so their IoU is 1/7 and their GIoU 1/7 - 2/9. The first and the third do not overlap, so
-    their IoU is 0 and their GIoU is negative: 0 - (36 - 5) / 36.
-    Check: the IoU and GIoU of both pairs.
+    """Two boxes sharing 1 of a union of 7, enclosed by 9, have IoU 1/7 and GIoU 1/7 - 2/9.
+
+    A disjoint pair has IoU 0 and the negative GIoU 0 - (36 - 5) / 36.
     """
     first = torch.tensor([[0.0, 0.0, 2.0, 2.0]])
     others = torch.tensor([[1.0, 1.0, 3.0, 3.0], [5.0, 5.0, 6.0, 6.0]])
@@ -70,13 +61,7 @@ def test_overlaps_of_two_boxes_by_hand() -> None:
     "mode, reference", [("iou", box_iou), ("giou", generalized_box_iou)], ids=["iou", "giou"]
 )
 def test_overlaps_match_torchvision(mode: str, reference) -> None:
-    """
-    Input: 12 and 9 random boxes, compared pairwise, and 12 against 12 element by element.
-    Expected: the pairwise overlaps are those of torchvision, and the aligned overlaps are the
-    diagonal of the pairwise ones.
-    Check: the (12, 9) pairwise overlaps against torchvision, and the (12,) aligned overlaps
-    against the diagonal of torchvision's (12, 12) result.
-    """
+    """Pairwise overlaps are torchvision's, and the aligned ones the diagonal of its result."""
     boxes1 = _random_boxes(12, seed=1)
     boxes2 = _random_boxes(9, seed=2)
     boxes3 = _random_boxes(12, seed=3)
@@ -89,11 +74,7 @@ def test_overlaps_match_torchvision(mode: str, reference) -> None:
 
 
 def test_overlaps_reject_an_unknown_mode() -> None:
-    """
-    Input: the overlap mode "distance", which is not implemented.
-    Expected: only IoU and GIoU are supported, so the mode is refused.
-    Check: a ValueError naming the mode is raised.
-    """
+    """Only "iou" and "giou" are supported."""
     box = torch.tensor([[0.0, 0.0, 1.0, 1.0]])
 
     with pytest.raises(ValueError, match="distance"):
