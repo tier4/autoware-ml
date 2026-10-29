@@ -24,27 +24,14 @@ from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.preprocessing.data_preprocessor_modules import DataPreprocessorModule
 
 
-# Largest pixel value accepted in unit-range images. Unit-range images exceed 1 only by the
-# overshoot of an image interpolation, while [0, 255] images exceed it by far.
-_UNIT_RANGE_LIMIT = 1.5
-
-
 class BatchNormalizeImages(DataPreprocessorModule):
-    """Standardize every channel of every image of a collated batch.
+    """Standardize every channel of the collated ``(B, N, C, H, W)`` images.
 
-    The images arrive in [0, 1], as ``LoadImagesFromFile`` serves them with
-    ``normalize_to_unit=True``, and so do the statistics, for example the ImageNet mean
-    ``[0.485, 0.456, 0.406]`` and standard deviation ``[0.229, 0.224, 0.225]`` of RGB images.
-    Statistics or pixels in [0, 255] would be standardized without an error into values far from
-    the ones the models read, so the layer refuses both: statistics outside the unit range when
-    it is built, and a pixel above 1.5 (room for the overshoot of an interpolation) in its first
-    training batch and its first evaluation batch, one host synchronization each. The training
-    and evaluation pipelines load their images apart, and a fit run starts with validation.
-
-    A model whose deployed graph takes normalized images, normalized by the runtime outside the
-    graph, normalizes here, before any image augmentation of the preprocessing pipeline, so the
-    layers after it see what the runtime feeds the graph. The normalization runs in training and
-    in evaluation alike.
+    The images and the statistics are in [0, 1], as ``LoadImagesFromFile(normalize_to_unit=True)``
+    serves the images; the ImageNet statistics in that range are ``[0.485, 0.456, 0.406]`` and
+    ``[0.229, 0.224, 0.225]``. The layer normalizes in training and in evaluation alike. Placed
+    first in ``data_preprocessor.preprocessor_modules``, it shows the later modules what the
+    runtime feeds a deployed graph that takes normalized images.
     """
 
     def __init__(self, mean: Sequence[float], std: Sequence[float]) -> None:
@@ -56,7 +43,8 @@ class BatchNormalizeImages(DataPreprocessorModule):
 
         Raises:
             ValueError: If the statistics disagree on the channel count, or a mean lies outside
-                [0, 1] or a standard deviation outside (0, 1].
+                [0, 1] or a standard deviation outside (0, 1], as the 0-255 statistics of the
+                mmdetection configs do.
         """
         if len(mean) != len(std):
             raise ValueError(f"mean and std must describe the same channels, got {mean}, {std}.")
@@ -67,26 +55,36 @@ class BatchNormalizeImages(DataPreprocessorModule):
                 "The statistics describe unit-range images: every mean must lie in [0, 1] and "
                 f"every standard deviation in (0, 1], got {mean}, {std}."
             )
-        self.mean = torch.tensor(mean, dtype=torch.float32)
-        self.std = torch.tensor(std, dtype=torch.float32)
-        # The is_training values whose first batch passed the range check.
-        self._checked_modes: set[bool] = set()
+        self.mean = torch.tensor(mean, dtype=torch.float32).view(1, 1, -1, 1, 1)
+        self.std = torch.tensor(std, dtype=torch.float32).view(1, 1, -1, 1, 1)
+        self._statistics: dict[
+            tuple[torch.device, torch.dtype], tuple[torch.Tensor, torch.Tensor]
+        ] = {}
+
+    def _statistics_like(self, images: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return the statistics on the device and in the dtype of the images, copied once."""
+        key = (images.device, images.dtype)
+        if key not in self._statistics:
+            self._statistics[key] = (
+                self.mean.to(device=images.device, dtype=images.dtype),
+                self.std.to(device=images.device, dtype=images.dtype),
+            )
+        return self._statistics[key]
 
     def __call__(self, batch_inputs: ModelBatchInputs, *, is_training: bool) -> ModelBatchInputs:
         """Normalize the images of the batch.
 
         Args:
             batch_inputs: Model inputs holding the ``(B, N, C, H, W)`` images of the batch.
-            is_training: Whether the owning model runs in training mode. The images are
-                normalized in both modes; the first batch of each is range-checked.
+            is_training: Whether the owning model runs in training mode. Unused: the images are
+                normalized in both modes.
 
         Returns:
             The model inputs with the normalized images.
 
         Raises:
-            ValueError: If the model inputs carry no images, images of another channel count
-                than the statistics, or, in the first batch of a mode, images that are not
-                unit-range.
+            ValueError: If the model inputs carry no images, or images of another channel count
+                than the statistics.
         """
         image_data = batch_inputs.image_data
         if image_data is None:
@@ -97,19 +95,5 @@ class BatchNormalizeImages(DataPreprocessorModule):
                 f"The statistics describe {self.mean.numel()} channels, the images have "
                 f"{images.shape[2]}."
             )
-        if is_training not in self._checked_modes:
-            # One reduction and one host synchronization per mode, see the class docstring.
-            max_pixel = float(images.amax())
-            if max_pixel > _UNIT_RANGE_LIMIT:
-                mode = "training" if is_training else "evaluation"
-                raise ValueError(
-                    "BatchNormalizeImages takes unit-range images and statistics, but the first "
-                    f"{mode} batch holds a pixel of {max_pixel:g}. Load the images with "
-                    "LoadImagesFromFile(normalize_to_unit=True)."
-                )
-            self._checked_modes.add(is_training)
-        shape = (1, 1, -1, 1, 1)
-        # A blocking copy to the device would wait for the work queued on it, every step.
-        mean = self.mean.to(device=images.device, dtype=images.dtype, non_blocking=True).view(shape)
-        std = self.std.to(device=images.device, dtype=images.dtype, non_blocking=True).view(shape)
+        mean, std = self._statistics_like(images)
         return batch_inputs.replace(image_data=image_data._replace(images=(images - mean) / std))
