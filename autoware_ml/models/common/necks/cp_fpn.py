@@ -1,4 +1,3 @@
-# Copyright 2021 megvii-model. All Rights Reserved.
 # Copyright 2026 TIER IV, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,13 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Checkpoint-friendly FPN used by the StreamPETR reference recipe.
+"""The FPN of the StreamPETR reference recipe.
 
 This is a native port of the StreamPETR ``CPFPN`` neck: plain 1x1 lateral
 convolutions (no norm, no activation), a nearest-neighbor top-down pathway,
 and a single 3x3 output convolution on the highest-resolution level only.
-Unlike :class:`GeneralizedLSSFPN` it is weight-compatible with reference
-StreamPETR checkpoints (parameter names mirror the mm ``ConvModule`` layout).
 """
 
 from __future__ import annotations
@@ -29,18 +26,6 @@ from collections.abc import Sequence
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-
-class _ConvUnit(nn.Module):
-    """Hold one convolution under a ``conv`` attribute (mm ConvModule layout)."""
-
-    def __init__(self, conv: nn.Conv2d) -> None:
-        super().__init__()
-        self.conv = conv
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply the wrapped convolution."""
-        return self.conv(x)
 
 
 class CPFPN(nn.Module):
@@ -60,17 +45,12 @@ class CPFPN(nn.Module):
             out_channels: Unified output channel dimension.
         """
         super().__init__()
-        self.in_channels = list(in_channels)
+        self.in_channels = tuple(in_channels)
         self.out_channels = out_channels
         self.lateral_convs = nn.ModuleList(
-            [
-                _ConvUnit(nn.Conv2d(channels, out_channels, kernel_size=1))
-                for channels in self.in_channels
-            ]
+            [nn.Conv2d(channels, out_channels, kernel_size=1) for channels in self.in_channels]
         )
-        self.fpn_convs = nn.ModuleList(
-            [_ConvUnit(nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1))]
-        )
+        self.fpn_conv = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
         self.init_weights()
 
     def init_weights(self) -> None:
@@ -101,8 +81,4 @@ class CPFPN(nn.Module):
             laterals[level - 1] = laterals[level - 1] + F.interpolate(
                 laterals[level], size=laterals[level - 1].shape[2:], mode="nearest"
             )
-        outputs = [
-            self.fpn_convs[0](laterals[0]) if level == 0 else laterals[level]
-            for level in range(len(laterals))
-        ]
-        return tuple(outputs)
+        return (self.fpn_conv(laterals[0]), *laterals[1:])
