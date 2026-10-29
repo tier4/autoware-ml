@@ -607,15 +607,7 @@ def _onnx_sessions(
     sessions = {}
     for name, spec in specs.items():
         path = directory / f"{name}.onnx"
-        export_to_onnx(
-            model=spec.module,
-            input_sample=spec.args,
-            onnx_cfg=onnx_cfg,
-            input_param_names=spec.input_param_names,
-            output_names_override=spec.output_names,
-            dynamic_axes_override=spec.dynamic_axes,
-            output_path=path,
-        )
+        export_to_onnx(spec, onnx_cfg, path)
         sessions[name] = onnxruntime.InferenceSession(str(path), providers=["CPUExecutionProvider"])
     return specs, sessions
 
@@ -671,13 +663,11 @@ def test_onnx_graphs_match_the_eval_forward_over_a_stream(tmp_path: Path, feedin
     calibration = specs["position_embedding"]
     pos_embed, cone = sessions["position_embedding"].run(
         None,
-        {name: arg.numpy() for name, arg in zip(calibration.input_param_names, calibration.args)},
+        {name: arg.numpy() for name, arg in zip(calibration.input_names, calibration.args)},
     )
     head_spec = specs["pts_head_memory"]
     # The bank the runtime clears at start-up, and the date of every entry it keeps between frames.
-    bank = {
-        name: arg.numpy() for name, arg in zip(head_spec.input_param_names[5:], head_spec.args[5:])
-    }
+    bank = {name: arg.numpy() for name, arg in zip(head_spec.input_names[5:], head_spec.args[5:])}
     dates = np.zeros_like(bank["pre_memory_timestamp"])
 
     def in_vehicle_frame(points: torch.Tensor, to_vehicle: torch.Tensor) -> torch.Tensor:

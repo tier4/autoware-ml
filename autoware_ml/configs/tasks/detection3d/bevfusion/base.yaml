@@ -47,17 +47,14 @@ deploy:
     do_constant_folding: false
     modules:
       bevfusion_lidar:
-        output_names: [bbox_pred, score, label_pred]
         dynamic_axes:
           voxels: { 0: voxels_num }
           coors: { 0: voxels_num }
           num_points_per_voxel: { 0: voxels_num }
       bevfusion_image_backbone:
-        output_names: [image_feats]
         dynamic_axes:
           imgs: { 0: num_imgs }
       bevfusion_camera_lidar:
-        output_names: [bbox_pred, score, label_pred]
         dynamic_axes:
           voxels: { 0: voxels_num }
           coors: { 0: voxels_num }

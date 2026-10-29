@@ -350,7 +350,7 @@ class _TransFusionDetection3DModelTestCase(unittest.TestCase):
 
         self.assertIsInstance(spec.module, _TransFusionExportWrapper)
         self.assertEqual(spec.module.batch_size, self.batch_size)
-        self.assertEqual(spec.input_param_names, ["voxels", "num_points", "coors"])
+        self.assertEqual(spec.input_names, ["voxels", "num_points", "coors"])
         self.assertEqual(spec.output_names, ["cls_score0", "bbox_pred0", "dir_cls_pred0"])
         voxels, num_points, coors = spec.args
         torch.testing.assert_close(voxels, voxels_data.voxels)

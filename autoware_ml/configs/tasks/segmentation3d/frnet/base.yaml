@@ -72,7 +72,6 @@ deploy:
     opset_version: 16
     modules:
       end_to_end:
-        output_names: [pred_probs]
         dynamic_axes:
           points: { 0: num_points }
           coors: { 0: num_points }
