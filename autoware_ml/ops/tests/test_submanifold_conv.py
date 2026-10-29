@@ -33,6 +33,9 @@ from autoware_ml.ops.spconv.sparse_conv import ExportableSubMConv3d
 from autoware_ml.ops.submanifold_conv import SpconvSubMConv3d, SubMConv3d
 from autoware_ml.utils.point_cloud.structures import Point
 
+if submanifold_conv.IS_T4SPARSE_AVAILABLE:
+    import t4sparse.torch
+
 CUDA = torch.cuda.is_available()
 T4SPARSE_ON_CUDA = CUDA and submanifold_conv.IS_T4SPARSE_AVAILABLE
 
@@ -97,17 +100,20 @@ class TestSpconvLayer(unittest.TestCase):
     """The spconv flavour runs outside autocast, in the dtype of its weights."""
 
     def setUp(self) -> None:
+        """Build an spconv layer and a random sparse tensor on the GPU."""
         torch.manual_seed(0)
         self.device = torch.device("cuda")
         self.layer = SpconvSubMConv3d(32, 32, kernel_size=3, indice_key="k").to(self.device)
         self.x = make_sparse_tensor(3000, 32, self.device)
 
     def test_runs_in_fp32_under_autocast(self) -> None:
+        """Under fp16 autocast the layer still produces fp32 features."""
         with torch.autocast("cuda", dtype=torch.float16):
             y = self.layer(self.x)
         self.assertEqual(y.features.dtype, torch.float32)
 
     def test_casts_halved_features_to_the_weight_dtype(self) -> None:
+        """fp16 features against fp32 weights are cast up instead of aborting spconv."""
         halved = self.x.replace_feature(self.x.features.half())
         self.layer.eval()
         with torch.no_grad():
@@ -115,6 +121,7 @@ class TestSpconvLayer(unittest.TestCase):
         self.assertEqual(y.features.dtype, torch.float32)
 
     def test_matches_plain_spconv(self) -> None:
+        """The wrapped layer computes exactly what plain spconv computes."""
         plain = spconv.SubMConv3d(32, 32, kernel_size=3, indice_key="k").to(self.device)
         plain.load_state_dict(self.layer.state_dict())
         torch.testing.assert_close(self.layer(self.x).features, plain(self.x).features)
@@ -125,20 +132,19 @@ class TestT4SparseLayer(unittest.TestCase):
     """The t4sparse flavour dispatches per call and keeps one library per indice_key."""
 
     def setUp(self) -> None:
+        """Build a t4sparse layer and a random sparse tensor on the GPU."""
         torch.manual_seed(0)
         self.device = torch.device("cuda")
         self.layer = SubMConv3d(32, 32, kernel_size=3, indice_key="k").to(self.device)
         self.x = make_sparse_tensor(3000, 32, self.device)
 
     def test_is_the_t4sparse_flavour(self) -> None:
-        import t4sparse.torch
-
+        """With t4sparse installed, SubMConv3d is the t4sparse subclass."""
         self.assertIs(SubMConv3d, submanifold_conv.T4SparseSubMConv3d)
         self.assertIsInstance(self.layer, t4sparse.torch.SubMConv3d)
 
     def test_autocast_runs_on_t4sparse_with_fp32_gradients(self) -> None:
-        import t4sparse.torch
-
+        """Under autocast the layer runs t4sparse kernels and hands back fp32 gradients."""
         with torch.autocast("cuda", dtype=torch.float16):
             y = self.layer(self.x)
         self.assertEqual(y.features.dtype, torch.float16)
@@ -148,14 +154,14 @@ class TestT4SparseLayer(unittest.TestCase):
         self.assertTrue(torch.isfinite(self.layer.weight.grad).all())
 
     def test_half_features_outside_autocast_run_on_t4sparse(self) -> None:
-        import t4sparse.torch
-
+        """fp16 features outside autocast run on t4sparse too."""
         layer = SubMConv3d(32, 32, kernel_size=3, indice_key="k").to(self.device).half()
         y = layer(self.x.replace_feature(self.x.features.half()))
         self.assertEqual(y.features.dtype, torch.float16)
         self.assertIsInstance(y.indice_dict["k"], t4sparse.torch.Rulebook)
 
     def test_fp32_outside_autocast_runs_on_spconv_without_warnings(self) -> None:
+        """fp32 features outside autocast run on the spconv twin and emit no warning."""
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             y = self.layer(self.x)
@@ -169,16 +175,19 @@ class TestT4SparseLayer(unittest.TestCase):
         self.assertIsInstance(y.indice_dict["k"], type(twin(self.x).indice_dict["k"]))
 
     def test_cpu_tensors_never_run_on_t4sparse(self) -> None:
+        """CPU tensors of any dtype are never dispatched to t4sparse."""
         for dtype in (torch.float32, torch.float16):
             self.assertFalse(SubMConv3d.runs_on_t4sparse(torch.zeros(1, 32, dtype=dtype)))
 
     def test_the_two_paths_agree(self) -> None:
+        """The t4sparse and spconv paths agree to fp16 tolerance."""
         reference = self.layer(self.x).features
         with torch.autocast("cuda", dtype=torch.float16):
             candidate = self.layer(make_sparse_tensor(3000, 32, self.device)).features
         torch.testing.assert_close(candidate.float(), reference, rtol=2e-2, atol=2e-2)
 
     def test_twin_shares_parameters_and_stays_out_of_the_state_dict(self) -> None:
+        """The spconv twin shares the parameters and is neither a submodule nor in the state dict."""
         twin = self.layer._spconv()
         self.assertIs(twin.weight, self.layer.weight)
         self.assertIs(twin.bias, self.layer.bias)
@@ -186,6 +195,7 @@ class TestT4SparseLayer(unittest.TestCase):
         self.assertEqual(dict(self.layer.named_modules()), {"": self.layer})
 
     def test_twin_follows_a_replaced_parameter(self) -> None:
+        """Replacing a parameter rebuilds the twin around the new one."""
         before = self.layer._spconv()
         self.layer.weight = torch.nn.Parameter(self.layer.weight.detach().clone())
         after = self.layer._spconv()
@@ -193,12 +203,14 @@ class TestT4SparseLayer(unittest.TestCase):
         self.assertIs(after.weight, self.layer.weight)
 
     def test_a_key_filled_under_autocast_refuses_an_fp32_call(self) -> None:
+        """A rulebook cached under a key makes a later spconv call on that key raise."""
         with torch.autocast("cuda", dtype=torch.float16):
             y = self.layer(self.x)
         with self.assertRaisesRegex(TypeError, "indice_key 'k' holds a rulebook"):
             self.layer(y.replace_feature(y.features.float()))
 
     def test_a_key_filled_by_spconv_refuses_an_autocast_call(self) -> None:
+        """spconv index pairs cached under a key make a later t4sparse call on that key raise."""
         y = self.layer(self.x)
         with (
             self.assertRaisesRegex(TypeError, "indice_key 'k' holds a"),
@@ -207,6 +219,7 @@ class TestT4SparseLayer(unittest.TestCase):
             self.layer(y)
 
     def test_loads_a_plain_spconv_checkpoint(self) -> None:
+        """A plain spconv state dict loads into the t4sparse layer unchanged."""
         plain = spconv.SubMConv3d(32, 32, kernel_size=3, indice_key="k").to(self.device)
         self.layer.load_state_dict(plain.state_dict())
         torch.testing.assert_close(self.layer.weight, plain.weight)
@@ -216,11 +229,13 @@ class TestModelIntegration(unittest.TestCase):
     """PTv3 builds its convolutions from this module and still exports through spconv."""
 
     def test_block_builds_the_layer_from_this_module(self) -> None:
+        """A PTv3 block builds its positional-encoding convolution from SubMConv3d."""
         block = conv_only_block(32)
         self.assertIsInstance(cpe_conv(block), SubMConv3d)
         self.assertTrue(is_sparse_conv_module(cpe_conv(block)))
 
     def test_export_replacement_converts_the_layer(self) -> None:
+        """Export replacement swaps SubMConv3d for the exportable spconv wrapper, weights intact."""
         block = conv_only_block(32)
         weight = cpe_conv(block).weight.detach().clone()
         replace_submconv3d_for_export(block)
@@ -231,6 +246,7 @@ class TestModelIntegration(unittest.TestCase):
 
     @unittest.skipUnless(T4SPARSE_ON_CUDA, "needs t4sparse.torch and a CUDA device")
     def test_t4sparse_block_matches_the_spconv_flavour_under_autocast(self) -> None:
+        """A block on t4sparse matches the same block on spconv under autocast, forward and backward."""
         device = torch.device("cuda")
         t4sparse_block = conv_only_block(32).to(device)
         spconv_block = conv_only_block(32).to(device)
