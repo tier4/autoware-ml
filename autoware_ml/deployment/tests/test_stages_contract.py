@@ -131,6 +131,16 @@ class TestStageDeclaration:
         with pytest.raises(ValueError, match=r"\['y'\] more than once in its outputs"):
             GraphStage("head", module=_SplitHead(), inputs=("x",), outputs=("y", "y"))
 
+    def test_dynamic_axes_name_the_stage_tensors_only(self):
+        with pytest.raises(ValueError, match=r"onnx_dynamic_axes for \['xs'\], which are not"):
+            GraphStage(
+                "g",
+                module=_Double(),
+                inputs=("x",),
+                outputs=("y",),
+                onnx_dynamic_axes={"xs": {0: "n"}, "y": {0: "n"}},
+            )
+
     def test_entries_other_than_stages_rejected(self):
         with pytest.raises(TypeError, match=r"got \['dict'\]"):
             validate_stages((*_toy_stages(), {"name": "post"}))
