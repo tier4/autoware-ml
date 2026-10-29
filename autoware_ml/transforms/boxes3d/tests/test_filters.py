@@ -107,13 +107,9 @@ def test_drops_the_boxes_outside_every_axis_of_the_range() -> None:
 
 
 def test_recorded_points_filter_drops_the_boxes_below_the_count_without_a_point_cloud() -> None:
-    """
-    Input: four boxes recorded with 0, 1, 2 and 7 lidar points, in a sample that loads no point
-    cloud.
-    Expected: the filter reads the point counts recorded with the boxes, so it works in the
-    camera pipelines, and keeps the boxes with at least ``min_points`` (2) points.
-    Check: the sample still has no point cloud, and the names and point counts of the kept
-    boxes.
+    """Boxes recorded with fewer than ``min_points`` (2) points go, with no point cloud loaded.
+
+    The recorded counts are all the filter reads, so it serves the camera pipelines.
     """
     result = BBoxesMinRecordedPointsFilter(min_points=2)(
         sample(["box_0", "box_1", "box_2", "box_3"], num_lidar_points=[0, 1, 2, 7])
