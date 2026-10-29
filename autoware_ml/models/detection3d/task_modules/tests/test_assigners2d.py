@@ -94,3 +94,29 @@ def test_an_image_without_ground_truth_assigns_every_proposal_to_background() ->
     assert result.num_gts == 0
     assert result.gt_inds.tolist() == [0, 0]
     assert result.labels.tolist() == [-1, -1]
+
+
+def test_bfloat16_logits_are_matched_like_their_float32_values() -> None:
+    """Two proposals on top of two boxes of classes 0 and 1, so the classes decide the match.
+
+    Autocast gives the logits in bfloat16, where the sigmoid of both rounds to 1 and the
+    classification cost could no longer tell the proposals apart.
+    """
+    bbox_pred, _, centers = _proposals_at([(100.0, 50.0), (100.0, 50.0)], num_classes=2)
+    # Proposal 0 is the more confident about class 1, proposal 1 about class 0.
+    logits = torch.tensor([[7.0, 8.0], [8.0, 7.0]])
+    gt_bboxes = torch.tensor([[90.0, 40.0, 110.0, 60.0], [90.0, 40.0, 110.0, 60.0]])
+
+    for cls_pred in (logits, logits.bfloat16()):
+        result = HungarianAssigner2D().assign(
+            bbox_pred,
+            cls_pred,
+            centers,
+            gt_bboxes,
+            torch.tensor([0, 1]),
+            gt_bboxes[:, :2] + 10.0,
+            IMAGE_HEIGHT,
+            IMAGE_WIDTH,
+        )
+
+        assert result.gt_inds.tolist() == [2, 1], cls_pred.dtype

@@ -148,9 +148,13 @@ class HungarianAssigner2D:
 
         factor = gt_bboxes.new_tensor([image_width, image_height, image_width, image_height])
         # The classification cost is batched over padded ground truth; one image is a batch
-        # of one whose ground truth is all valid.
+        # of one whose ground truth is all valid. It reads float32 logits, like the other costs:
+        # in bfloat16, as autocast gives them, the sigmoid of every logit above about 6.2 rounds
+        # to 1, which gives all confident proposals one cost, far below their float32 costs.
         valid_masks = torch.ones((1, num_gts), dtype=torch.bool, device=gt_labels.device)
-        cls_cost = self.cls_cost(cls_pred.unsqueeze(0), gt_labels.unsqueeze(0), valid_masks)[0]
+        cls_cost = self.cls_cost(
+            cls_pred.float().unsqueeze(0), gt_labels.unsqueeze(0), valid_masks
+        )[0]
         cost = (
             cls_cost
             + self.reg_cost(bbox_pred, gt_bboxes / factor)
