@@ -90,7 +90,6 @@ class TestBuildPreviewConfig(unittest.TestCase):
         self.assertIsInstance(config.prediction_frequency_hz, float)
         self.assertEqual(config.device, "cpu")
         self.assertTrue(config.point_labels)
-        self.assertEqual(config.point_color_mode, "intensity")
         self.assertEqual(config.class_names, ("unknown",))
         self.assertEqual(config.segmentation_class_names, ("road", "car"))
         self.assertEqual(config.detection_class_names, ("car",))

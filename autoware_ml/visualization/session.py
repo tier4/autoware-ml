@@ -17,49 +17,87 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Any
 
-from autoware_ml.visualization.viewers.backends import create_visualization_backend
-from autoware_ml.visualization.tasks.calibration_status import build_calibration_status_events
+from jaxtyping import Float32, Int64, Shaped
+import numpy as np
+
+from autoware_ml.visualization.common import build_scene_extent_event
+from autoware_ml.visualization.entity_paths import (
+    CALIBRATION_STATUS_PATH,
+    CAMERAS_PATH,
+    GROUND_TRUTH_PATH,
+    LIDAR_PATH,
+    META_PATH,
+    PREDICTION_PATH,
+    SCENE_PATH,
+)
 from autoware_ml.visualization.sensors.camera import (
     CameraBoxProjection,
+    CameraCalibration,
     CameraPointProjection,
     build_camera_events,
 )
-from autoware_ml.visualization.viewers.contracts import (
-    VisualizationBackend,
-    VisualizationSessionConfig,
-)
+from autoware_ml.visualization.tasks.calibration_status import build_calibration_status_events
 from autoware_ml.visualization.tasks.detection3d import (
     build_detection3d_data_events,
     build_detection3d_events,
 )
-from autoware_ml.visualization.common import build_scene_extent_event
-from autoware_ml.visualization.viewers.events import ClearEvent, VisualizationEvent
 from autoware_ml.visualization.tasks.segmentation3d import (
     build_segmentation3d_data_events,
     build_segmentation3d_events,
 )
+from autoware_ml.visualization.viewers.backends import create_visualization_backend
+from autoware_ml.visualization.viewers.contracts import (
+    VisualizationBackend,
+    VisualizationSessionConfig,
+)
+from autoware_ml.visualization.viewers.events import ClearEvent, VisualizationEvent
+
+#: Scene entities that hold the geometry of one frame and are cleared before the next one.
+FRAME_ENTITY_PATHS = (LIDAR_PATH, PREDICTION_PATH, GROUND_TRUTH_PATH, CAMERAS_PATH, META_PATH)
 
 
 class VisualizationSession:
     """Wrap one backend and expose task-oriented logging helpers."""
 
     def __init__(self, backend: VisualizationBackend) -> None:
-        """Initialize the visualization session from a backend instance."""
+        """
+        Initialize the visualization session.
+
+        Args:
+            backend: Backend every event is logged to.
+        """
         self.backend = backend
 
     @classmethod
     def from_config(cls, config: VisualizationSessionConfig) -> VisualizationSession:
-        """Construct a session from configuration."""
+        """
+        Construct a session with the backend its configuration names.
+
+        Args:
+            config: Session configuration.
+
+        Returns:
+            VisualizationSession: The session.
+        """
         return cls(create_visualization_backend(config))
 
     def set_step(self, step: int) -> None:
-        """Advance the visualization timeline."""
+        """
+        Advance the visualization timeline.
+
+        Args:
+            step: Timeline step of the next events.
+        """
         self.backend.set_step(step)
 
     def log_events(self, events: Iterable[VisualizationEvent]) -> None:
-        """Log events from an external task adapter through the neutral API."""
+        """
+        Log events from an external task adapter through the neutral API.
+
+        Args:
+            events: Events to log.
+        """
         self.backend.log_events(events)
 
     def begin_frame(self, step: int, *, timestamp: float | None = None) -> None:
@@ -74,24 +112,23 @@ class VisualizationSession:
         self.backend.set_step(step)
         if timestamp is not None:
             self.backend.set_timestamp(timestamp)
-        self.backend.log_events(
-            [
-                ClearEvent("scene/lidar"),
-                ClearEvent("scene/prediction"),
-                ClearEvent("scene/ground_truth"),
-                ClearEvent("scene/cameras"),
-                ClearEvent("scene/meta"),
-            ]
-        )
+        self.backend.log_events([ClearEvent(path) for path in FRAME_ENTITY_PATHS])
 
     def log_scene_extent(
         self,
-        points: Any | None,
+        points: Float32[np.ndarray, "num_points num_features"] | None,
         *,
-        boxes: Sequence[Any | None] = (),
-        root_path: str = "scene",
+        boxes: Sequence[Float32[np.ndarray, "num_boxes box_params"]],
+        root_path: str = SCENE_PATH,
     ) -> None:
-        """Log the invisible frame extent that keeps sibling 3D views aligned."""
+        """
+        Log the invisible frame extent that keeps sibling 3D views aligned.
+
+        Args:
+            points: Points of the frame, None when it has none.
+            boxes: Every box set the frame draws.
+            root_path: Entity path of the scene.
+        """
         event = build_scene_extent_event(points, boxes, root_path=root_path)
         if event is not None:
             self.backend.log_events([event])
@@ -99,18 +136,22 @@ class VisualizationSession:
     def log_calibration_status(
         self,
         *,
-        lidar_to_camera: Any,
-        image_from_camera: Any,
-        points: Any | None = None,
-        image: Any | None = None,
-        fused_image: Any | None = None,
+        lidar_to_camera: Float32[np.ndarray, "4 4"],
+        image_from_camera: Float32[np.ndarray, "3 3"],
+        points: Float32[np.ndarray, "num_points num_features"] | None = None,
+        image: Shaped[np.ndarray, "dim_0 dim_1 dim_2"] | None = None,
+        fused_image: Float32[np.ndarray, "dim_0 dim_1 dim_2"] | None = None,
         gt_status: int | None = None,
         pred_status: int | None = None,
         pred_score: float | None = None,
         sample_name: str | None = None,
-        root_path: str = "calibration_status",
+        root_path: str = CALIBRATION_STATUS_PATH,
     ) -> None:
-        """Log one calibration-status sample."""
+        """
+        Log one calibration-status sample.
+
+        See :func:`build_calibration_status_events` for the arguments.
+        """
         self.backend.log_events(
             build_calibration_status_events(
                 lidar_to_camera=lidar_to_camera,
@@ -128,21 +169,23 @@ class VisualizationSession:
 
     def log_segmentation3d(
         self,
-        points: Any,
-        pred_labels: Any,
+        points: Float32[np.ndarray, "num_points num_features"],
+        pred_labels: Int64[np.ndarray, " num_points"],
         *,
-        pred_probs: Any | None = None,
-        gt_labels: Any | None = None,
+        pred_probs: Float32[np.ndarray, "num_points num_classes"] | None = None,
+        gt_labels: Int64[np.ndarray, " num_points"] | None = None,
         class_names: Sequence[str] | None = None,
         ignore_index: int | None = None,
-        root_path: str = "scene",
+        root_path: str = SCENE_PATH,
         point_radius: float = 0.04,
         point_labels: bool = False,
         sample_name: str | None = None,
-        point_color_mode: str = "semantic",
-        pred_logits: Any | None = None,
     ) -> None:
-        """Log one 3D segmentation sample."""
+        """
+        Log one 3D segmentation sample with predictions.
+
+        See :func:`build_segmentation3d_events` for the arguments.
+        """
         self.backend.log_events(
             build_segmentation3d_events(
                 points,
@@ -155,25 +198,26 @@ class VisualizationSession:
                 point_radius=point_radius,
                 point_labels=point_labels,
                 sample_name=sample_name,
-                point_color_mode=point_color_mode,
-                pred_logits=pred_logits,
             )
         )
 
     def log_segmentation3d_data(
         self,
-        points: Any,
-        labels: Any,
+        points: Float32[np.ndarray, "num_points num_features"],
+        labels: Int64[np.ndarray, " num_points"],
         *,
         class_names: Sequence[str] | None = None,
         ignore_index: int | None = None,
-        root_path: str = "scene",
+        root_path: str = SCENE_PATH,
         point_radius: float = 0.04,
         point_labels: bool = False,
         sample_name: str | None = None,
-        point_color_mode: str = "semantic",
     ) -> None:
-        """Log one transformed 3D segmentation sample without predictions."""
+        """
+        Log one 3D segmentation sample without predictions.
+
+        See :func:`build_segmentation3d_data_events` for the arguments.
+        """
         self.backend.log_events(
             build_segmentation3d_data_events(
                 points,
@@ -184,27 +228,33 @@ class VisualizationSession:
                 point_radius=point_radius,
                 point_labels=point_labels,
                 sample_name=sample_name,
-                point_color_mode=point_color_mode,
             )
         )
 
     def log_detection3d(
         self,
-        predictions: Mapping[str, Any],
         *,
-        points: Any | None = None,
-        gt_boxes: Any | None = None,
-        gt_labels: Any | None = None,
+        pred_boxes: Float32[np.ndarray, "num_predictions box_params"],
+        pred_scores: Float32[np.ndarray, " num_predictions"],
+        pred_labels: Int64[np.ndarray, " num_predictions"],
+        points: Float32[np.ndarray, "num_points num_features"] | None,
+        gt_boxes: Float32[np.ndarray, "num_boxes box_params"] | None = None,
+        gt_labels: Int64[np.ndarray, " num_boxes"] | None = None,
         class_names: Sequence[str] | None = None,
-        root_path: str = "scene",
+        root_path: str = SCENE_PATH,
         point_radius: float = 0.04,
         sample_name: str | None = None,
-        point_color_mode: str = "semantic",
     ) -> None:
-        """Log one 3D detection sample."""
+        """
+        Log one 3D detection sample with predictions.
+
+        See :func:`build_detection3d_events` for the arguments.
+        """
         self.backend.log_events(
             build_detection3d_events(
-                predictions,
+                pred_boxes=pred_boxes,
+                pred_scores=pred_scores,
+                pred_labels=pred_labels,
                 points=points,
                 gt_boxes=gt_boxes,
                 gt_labels=gt_labels,
@@ -212,43 +262,25 @@ class VisualizationSession:
                 root_path=root_path,
                 point_radius=point_radius,
                 sample_name=sample_name,
-                point_color_mode=point_color_mode,
-            )
-        )
-
-    def log_cameras(
-        self,
-        images: dict[str, Any],
-        *,
-        root_path: str = "scene/cameras",
-        point_layers: Mapping[str, CameraPointProjection] | None = None,
-        box_layers: Mapping[str, CameraBoxProjection] | None = None,
-        max_projected_points: int = 10_000,
-    ) -> None:
-        """Log camera images and persistent projected LiDAR/task overlays."""
-        self.backend.log_events(
-            build_camera_events(
-                images,
-                root_path=root_path,
-                point_layers=point_layers,
-                box_layers=box_layers,
-                max_projected_points=max_projected_points,
             )
         )
 
     def log_detection3d_data(
         self,
         *,
-        points: Any | None = None,
-        gt_boxes: Any,
-        gt_labels: Any,
+        points: Float32[np.ndarray, "num_points num_features"] | None,
+        gt_boxes: Float32[np.ndarray, "num_boxes box_params"],
+        gt_labels: Int64[np.ndarray, " num_boxes"],
         class_names: Sequence[str] | None = None,
-        root_path: str = "scene",
+        root_path: str = SCENE_PATH,
         point_radius: float = 0.04,
         sample_name: str | None = None,
-        point_color_mode: str = "semantic",
     ) -> None:
-        """Log one transformed 3D detection sample without predictions."""
+        """
+        Log one 3D detection sample without predictions.
+
+        See :func:`build_detection3d_data_events` for the arguments.
+        """
         self.backend.log_events(
             build_detection3d_data_events(
                 points=points,
@@ -258,6 +290,29 @@ class VisualizationSession:
                 root_path=root_path,
                 point_radius=point_radius,
                 sample_name=sample_name,
-                point_color_mode=point_color_mode,
+            )
+        )
+
+    def log_cameras(
+        self,
+        cameras: Mapping[str, CameraCalibration],
+        *,
+        root_path: str = CAMERAS_PATH,
+        point_layers: Mapping[str, CameraPointProjection] | None = None,
+        box_layers: Mapping[str, CameraBoxProjection] | None = None,
+        max_projected_points: int = 10_000,
+    ) -> None:
+        """
+        Log camera images and their persistent projected layers.
+
+        See :func:`build_camera_events` for the arguments.
+        """
+        self.backend.log_events(
+            build_camera_events(
+                cameras,
+                root_path=root_path,
+                point_layers=point_layers,
+                box_layers=box_layers,
+                max_projected_points=max_projected_points,
             )
         )

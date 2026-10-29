@@ -16,15 +16,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
+import tempfile
 from types import SimpleNamespace
-from typing import Any
+import unittest
+from unittest.mock import patch
 
 import cv2
 import numpy as np
 import polars as pl
-import pytest
 import torch
 
 from autoware_ml.dataclasses.batch.frame_meta import FrameMetaSample
@@ -266,7 +267,7 @@ class _PreviewDataModule:
         self.stages.append(stage)
         self.datasets[SplitType.TEST] = ConcatDataset(datasets=[self.dataset], repeats=[1])
 
-    def split_sources(self, split: SplitType) -> dict[str, Any]:
+    def split_sources(self, split: SplitType) -> Mapping[str, SimpleNamespace]:
         """Return the single source of every split."""
         del split
         return {"preview": self.source}
@@ -311,27 +312,32 @@ class _PreviewModel:
             inputs = inputs.replace(voxels_data=self.voxels(batch))
         return inputs
 
-    def predict_step(self, multi_task_batch_inputs: ModelBatchInputs, batch_idx: int) -> Any:
+    def predict_step(
+        self, multi_task_batch_inputs: ModelBatchInputs, batch_idx: int
+    ) -> ModelPredictions:
         """Return the fixed predictions."""
         del batch_idx
         return self.predict(multi_task_batch_inputs)
 
 
-def _voxels(point_voxel_indices: Sequence[int]) -> Callable[[ModelGTBatch], VoxelsData]:
-    """Build a voxelizer that assigns the points the given voxel rows."""
+class _FixedVoxelizer:
+    """Voxelize any batch into one voxel that assigns the points fixed voxel rows."""
 
-    def voxelize(batch: ModelGTBatch) -> VoxelsData:
+    def __init__(self, point_voxel_indices: Sequence[int]) -> None:
+        """Initialize the voxelizer from the voxel row of every point, -1 for a dropped point."""
+        self.point_voxel_indices = point_voxel_indices
+
+    def __call__(self, batch: ModelGTBatch) -> VoxelsData:
+        """Return the fixed voxels, whatever the batch."""
         del batch
         return VoxelsData(
             voxels=torch.zeros((1, 1, 5)),
             coords=torch.zeros((1, 3), dtype=torch.int32),
             num_points=torch.ones(1, dtype=torch.int32),
             batch_indices=torch.zeros(1, dtype=torch.int32),
-            point_voxel_indices=torch.tensor(point_voxel_indices, dtype=torch.int64),
+            point_voxel_indices=torch.tensor(self.point_voxel_indices, dtype=torch.int64),
             num_dropped_voxels=torch.tensor(0),
         )
-
-    return voxelize
 
 
 def _segmentation_predictions(num_points: int) -> ModelPredictions:
@@ -358,256 +364,23 @@ def _detection_predictions() -> ModelPredictions:
     )
 
 
-@pytest.fixture
-def run_preview(
-    recording_backend: RecordingBackend, monkeypatch: pytest.MonkeyPatch
-) -> Callable[..., RecordingBackend]:
-    """Run a preview into the recording backend and return the backend."""
-    monkeypatch.setattr(
-        VisualizationSession,
-        "from_config",
-        classmethod(lambda cls, config: cls(recording_backend)),
+def _multitask_predictions(inputs: ModelBatchInputs) -> ModelPredictions:
+    """Predict one car and the segmentation of the three current-frame points."""
+    del inputs
+    return ModelPredictions(
+        detection3d_predictions=_detection_predictions().detection3d_predictions,
+        segmentation3d_predictions=_segmentation_predictions(3).segmentation3d_predictions,
     )
 
-    def run(
-        dataset: _SampleDataset,
-        model: _PreviewModel | None = None,
-        **config: Any,
-    ) -> RecordingBackend:
-        preview.run_visualization_preview(
-            model, _PreviewDataModule(dataset), VisualizationPreviewConfig(device="cpu", **config)
-        )
-        return recording_backend
 
-    return run
-
-
-def _legend_labels(backend: RecordingBackend) -> set[str]:
-    """Return every class label of the logged legends."""
-    return {
-        annotation.label
-        for event in backend.events
-        if isinstance(event, AnnotationContextEvent)
-        for annotation in event.annotations
-    }
-
-
-def _point_cloud(backend: RecordingBackend, path: str) -> PointCloud3DEvent:
-    """Return the last point cloud logged at one entity path."""
-    return [e for e in backend.events if isinstance(e, PointCloud3DEvent) and e.path == path][-1]
-
-
-def test_config_rejects_unknown_split() -> None:
-    with pytest.raises(ValueError, match="split"):
-        VisualizationPreviewConfig(split="validation")
-
-
-def test_prediction_mode_requires_a_model(run_preview: Callable[..., RecordingBackend]) -> None:
-    with pytest.raises(ValueError, match="Model must be provided"):
-        run_preview(_SampleDataset([_sample(segmentation=True)]), mode="predictions")
-
-
-def test_sample_index_out_of_range_names_the_split_size(
-    run_preview: Callable[..., RecordingBackend],
-) -> None:
-    with pytest.raises(IndexError, match="with 1 samples"):
-        run_preview(_SampleDataset([_sample(segmentation=True)]), sample_index=3)
-
-
-def test_data_preview_shows_the_current_frame_ground_truth(
-    run_preview: Callable[..., RecordingBackend],
-) -> None:
-    """Sweep points carry no annotation of their own, so they stay out of the preview."""
-    backend = run_preview(_SampleDataset([_sample(segmentation=True)]))
-
-    ground_truth = _point_cloud(backend, "scene/ground_truth/segmentation")
-    assert ground_truth.positions.shape == (3, 3)
-    assert ground_truth.class_ids.tolist() == [0, 1, 0]
-    assert backend.steps == [0]
-    assert backend.timestamps == [1.0]
-    assert backend.waited
-
-
-def test_preview_labels_classes_from_the_database_taxonomy(
-    run_preview: Callable[..., RecordingBackend],
-) -> None:
-    backend = run_preview(_SampleDataset([_sample(segmentation=True)]))
-
-    assert set(_SEGMENTATION_CLASSES) <= _legend_labels(backend)
-
-
-def test_configured_class_names_override_the_taxonomy(
-    run_preview: Callable[..., RecordingBackend],
-) -> None:
-    backend = run_preview(
-        _SampleDataset([_sample(segmentation=True)]),
-        segmentation_class_names=("ground", "vehicle"),
-    )
-
-    labels = _legend_labels(backend)
-    assert {"ground", "vehicle"} <= labels
-    assert "road" not in labels
-
-
-def test_voxel_predictions_align_with_the_scored_points(
-    run_preview: Callable[..., RecordingBackend],
-) -> None:
-    """A voxel head labels the current-frame points inside the grid, in point order."""
-    # Point 1 falls outside the grid and point 3 belongs to a past sweep.
-    model = _PreviewModel(
-        lambda inputs: _segmentation_predictions(2), voxels=_voxels([0, -1, 0, 0])
-    )
-    backend = run_preview(_SampleDataset([_sample(segmentation=True)]), model)
-
-    prediction = _point_cloud(backend, "scene/prediction/segmentation")
-    ground_truth = _point_cloud(backend, "scene/ground_truth/segmentation")
-    assert prediction.positions[:, 0].tolist() == [5.0, 7.0]
-    assert ground_truth.class_ids.tolist() == [0, 0]
-    assert any(e.path == "scene/prediction/entropy" for e in backend.events)
-    assert model.evaluating
-
-
-def test_point_level_predictions_cover_every_point(
-    run_preview: Callable[..., RecordingBackend],
-) -> None:
-    model = _PreviewModel(lambda inputs: _segmentation_predictions(4))
-    backend = run_preview(_SampleDataset([_sample(segmentation=True)]), model)
-
-    assert _point_cloud(backend, "scene/prediction/segmentation").positions.shape == (4, 3)
-
-
-def test_misaligned_segmentation_predictions_are_reported(
-    run_preview: Callable[..., RecordingBackend],
-) -> None:
-    model = _PreviewModel(lambda inputs: _segmentation_predictions(1))
-
-    with pytest.raises(ValueError, match="Cannot align 1 segmentation predictions"):
-        run_preview(_SampleDataset([_sample(segmentation=True)]), model)
-
-
-def test_unsupervised_segmentation_shows_no_ground_truth(
-    run_preview: Callable[..., RecordingBackend],
-) -> None:
-    model = _PreviewModel(lambda inputs: _segmentation_predictions(4))
-    backend = run_preview(
-        _SampleDataset([_sample(segmentation=True)], seg3d_supervised=False), model
-    )
-
-    assert "scene/ground_truth/segmentation" not in backend.paths_of(PointCloud3DEvent)
-
-
-def test_detection_preview_draws_predicted_and_ground_truth_boxes(
-    run_preview: Callable[..., RecordingBackend],
-) -> None:
-    model = _PreviewModel(lambda inputs: _detection_predictions())
-    backend = run_preview(_SampleDataset([_sample(num_boxes=2)]), model)
-
-    boxes = {e.path: e for e in backend.events if isinstance(e, Boxes3DEvent)}
-    assert boxes["scene/prediction/detections"].centers.shape == (1, 3)
-    assert boxes["scene/ground_truth/detections"].centers.shape == (2, 3)
-
-
-def test_unsupervised_detection_shows_only_predictions(
-    run_preview: Callable[..., RecordingBackend],
-) -> None:
-    model = _PreviewModel(lambda inputs: _detection_predictions())
-    backend = run_preview(_SampleDataset([_sample(num_boxes=2)], det3d_supervised=False), model)
-
-    assert backend.paths_of(Boxes3DEvent) == ["scene/prediction/detections"]
-
-
-def test_multitask_data_preview_shows_both_ground_truths(
-    run_preview: Callable[..., RecordingBackend],
-) -> None:
-    backend = run_preview(_SampleDataset([_sample(num_boxes=1, segmentation=True)]))
-
-    assert "scene/ground_truth/segmentation" in backend.paths_of(PointCloud3DEvent)
-    assert backend.paths_of(Boxes3DEvent) == ["scene/ground_truth/detections"]
-
-
-def test_multitask_prediction_preview_decodes_both_tasks(
-    run_preview: Callable[..., RecordingBackend],
-) -> None:
-    def predict(inputs: ModelBatchInputs) -> ModelPredictions:
-        del inputs
-        return ModelPredictions(
-            detection3d_predictions=_detection_predictions().detection3d_predictions,
-            segmentation3d_predictions=_segmentation_predictions(3).segmentation3d_predictions,
-        )
-
-    model = _PreviewModel(predict, voxels=_voxels([0, 0, 0, 0]))
-    backend = run_preview(_SampleDataset([_sample(num_boxes=1, segmentation=True)]), model)
-
-    assert "scene/prediction/segmentation" in backend.paths_of(PointCloud3DEvent)
-    assert set(backend.paths_of(Boxes3DEvent)) == {
-        "scene/prediction/detections",
-        "scene/ground_truth/detections",
-    }
-
-
-def test_cameras_are_drawn_from_the_untransformed_sample(
-    run_preview: Callable[..., RecordingBackend], tmp_path: Path
-) -> None:
-    image_path = tmp_path / "front.jpg"
-    cv2.imwrite(str(image_path), np.zeros((36, 64, 3), dtype=np.uint8))
-    sample = _sample(segmentation=True, image_samples=[_camera(image_path)])
-    backend = run_preview(_SampleDataset([sample]))
-
-    assert "scene/cameras/CAM_FRONT" in backend.paths_of(Transform3DEvent)
-    assert "scene/cameras/CAM_FRONT" in backend.paths_of(ImageEvent)
-
-
-def test_consecutive_samples_are_logged_on_their_dataset_index(
-    run_preview: Callable[..., RecordingBackend],
-) -> None:
-    samples = [_sample(segmentation=True, timestamp=float(index)) for index in range(4)]
-    backend = run_preview(_SampleDataset(samples), sample_index=1, max_samples=2)
-
-    assert backend.steps == [1, 2]
-    assert backend.timestamps == [1.0, 2.0]
-
-
-def test_calibration_preview_logs_the_status_verdict(
-    run_preview: Callable[..., RecordingBackend],
-) -> None:
-    model = _PreviewModel(
-        lambda inputs: ModelPredictions(
-            calibration_status_predictions=CalibrationStatusPredictions(
-                probabilities=torch.tensor([[0.2, 0.8]])
-            )
+def _calibration_predictions(inputs: ModelBatchInputs) -> ModelPredictions:
+    """Predict a matching calibration with high confidence."""
+    del inputs
+    return ModelPredictions(
+        calibration_status_predictions=CalibrationStatusPredictions(
+            probabilities=torch.tensor([[0.2, 0.8]])
         )
     )
-    backend = run_preview(_SampleDataset([_calibration_sample(status=1)]), model)
-
-    verdict = next(e for e in backend.events if isinstance(e, TextDocumentEvent))
-    assert verdict.path == "calibration_status/status/verdict"
-    assert verdict.text.splitlines()[0] == "# MATCH"
-    assert "calibration_status/camera/fused" in backend.paths_of(ImageEvent)
-
-
-def test_calibration_data_preview_is_logged_under_the_dataset_root(
-    run_preview: Callable[..., RecordingBackend],
-) -> None:
-    backend = run_preview(_SampleDataset([_calibration_sample(status=0)]))
-
-    assert backend.paths_of(Transform3DEvent) == ["dataset/calibration_status/camera"]
-
-
-def test_noop_session_runs_a_full_preview() -> None:
-    """The noop backend lets the whole pipeline run without the Rerun SDK."""
-    datamodule = _PreviewDataModule(_SampleDataset([_sample(segmentation=True)]))
-
-    count = preview.run_visualization_preview(
-        None,
-        datamodule,
-        VisualizationPreviewConfig(
-            device="cpu", session=VisualizationSessionConfig(backend="noop")
-        ),
-    )
-
-    assert count == 1
-    assert datamodule.prepared
-    assert datamodule.stages == ["test"]
 
 
 def _keyframe_with_stored_frames(timestamp: float, scene_token: str = "scene-a") -> ModelGTSample:
@@ -627,77 +400,327 @@ def _keyframe_with_stored_frames(timestamp: float, scene_token: str = "scene-a")
     )
 
 
-def test_prediction_frequency_needs_predictions(
-    run_preview: Callable[..., RecordingBackend],
-) -> None:
-    with pytest.raises(ValueError, match="needs the predictions mode"):
-        run_preview(_SampleDataset([_sample(segmentation=True)]), prediction_frequency_hz=10.0)
+def _legend_labels(backend: RecordingBackend) -> set[str]:
+    """Return every class label of the logged legends."""
+    return {
+        annotation.label
+        for event in backend.events
+        if isinstance(event, AnnotationContextEvent)
+        for annotation in event.annotations
+    }
 
 
-def test_frames_between_samples_are_predicted_on_their_own_steps(
-    run_preview: Callable[..., RecordingBackend],
-) -> None:
-    """Stored frames fill the steps up to the next sample of the same scene."""
-    dataset = _SampleDataset([_keyframe_with_stored_frames(1.0), _keyframe_with_stored_frames(2.0)])
-    model = _PreviewModel(lambda inputs: _segmentation_predictions(4))
-    backend = run_preview(dataset, model, max_samples=1, prediction_frequency_hz=10.0)
-
-    assert backend.steps == [0, 1, 2]
-    assert backend.timestamps == pytest.approx([1.0, 1.1, 1.2])
-    # The keyframe is the only frame with ground truth.
-    assert backend.paths_of(PointCloud3DEvent).count("scene/ground_truth/segmentation") == 1
-    assert backend.paths_of(PointCloud3DEvent).count("scene/prediction/segmentation") == 3
+def _point_cloud(backend: RecordingBackend, path: str) -> PointCloud3DEvent:
+    """Return the last point cloud logged at one entity path."""
+    return [e for e in backend.events if isinstance(e, PointCloud3DEvent) and e.path == path][-1]
 
 
-def test_last_sample_of_a_scene_keeps_its_stored_frames_within_one_stride(
-    run_preview: Callable[..., RecordingBackend],
-) -> None:
-    dataset = _SampleDataset(
-        [_keyframe_with_stored_frames(1.0), _keyframe_with_stored_frames(2.0, "scene-b")]
-    )
-    model = _PreviewModel(lambda inputs: _segmentation_predictions(4))
-    backend = run_preview(dataset, model, max_samples=2, prediction_frequency_hz=10.0)
+class _PreviewTestCase(unittest.TestCase):
+    """Run previews into a fresh recording backend instead of a configured one."""
 
-    # The frame 1.1 s after the first keyframe would land on the next sample's step.
-    assert backend.steps == [0, 1, 2, 10, 11, 12]
+    def setUp(self) -> None:
+        """Route every session the preview opens to a new recording backend."""
+        self.backend = RecordingBackend()
+        self.enterContext(
+            patch.object(
+                VisualizationSession,
+                "from_config",
+                return_value=VisualizationSession(self.backend),
+            )
+        )
+
+    def run_preview(
+        self,
+        dataset: _SampleDataset,
+        model: _PreviewModel | None = None,
+        **config: object,
+    ) -> RecordingBackend:
+        """Run a CPU preview of the dataset and return the recording backend."""
+        preview.run_visualization_preview(
+            model, _PreviewDataModule(dataset), VisualizationPreviewConfig(device="cpu", **config)
+        )
+        return self.backend
 
 
-def test_samples_one_frame_apart_have_no_intermediate_frames(
-    run_preview: Callable[..., RecordingBackend],
-) -> None:
-    """A database serving every lidar frame as a sample already shows every frame."""
-    dataset = _SampleDataset([_keyframe_with_stored_frames(1.0), _keyframe_with_stored_frames(1.1)])
-    model = _PreviewModel(lambda inputs: _segmentation_predictions(4))
-    backend = run_preview(dataset, model, max_samples=1, prediction_frequency_hz=10.0)
+class TestPreviewConfiguration(_PreviewTestCase):
+    """Invalid preview settings are rejected with a message naming the problem."""
 
-    assert backend.steps == [0]
+    def test_config_rejects_unknown_split(self) -> None:
+        """A split name outside the known splits is rejected by the configuration."""
+        with self.assertRaisesRegex(ValueError, "split"):
+            VisualizationPreviewConfig(split="validation")
+
+    def test_prediction_mode_requires_a_model(self) -> None:
+        """The predictions mode cannot run without a model."""
+        with self.assertRaisesRegex(ValueError, "Model must be provided"):
+            self.run_preview(_SampleDataset([_sample(segmentation=True)]), mode="predictions")
+
+    def test_sample_index_out_of_range_names_the_split_size(self) -> None:
+        """An out-of-range sample index reports how many samples the split has."""
+        with self.assertRaisesRegex(IndexError, "with 1 samples"):
+            self.run_preview(_SampleDataset([_sample(segmentation=True)]), sample_index=3)
+
+    def test_prediction_frequency_needs_predictions(self) -> None:
+        """Intermediate frames carry predictions only, so the data mode rejects them."""
+        with self.assertRaisesRegex(ValueError, "needs the predictions mode"):
+            self.run_preview(
+                _SampleDataset([_sample(segmentation=True)]), prediction_frequency_hz=10.0
+            )
 
 
-def test_intermediate_frames_are_reanchored_and_unlabeled(
-    run_preview: Callable[..., RecordingBackend],
-) -> None:
-    dataset = _SampleDataset([_keyframe_with_stored_frames(1.0)])
-    dataset.samples[0] = dataset.samples[0]._replace(detection3d_gt_bboxes_3d=_boxes(2))
-    model = _PreviewModel(lambda inputs: _segmentation_predictions(4))
-    run_preview(dataset, model, max_samples=1, prediction_frequency_hz=10.0)
+class TestDataPreview(_PreviewTestCase):
+    """A preview without a model shows the ground truth labeled with the split's classes."""
 
-    # The keyframe goes through the pipeline first, then the frame 0.1 s after it.
-    intermediate = dataset.transformed[1]
-    frames = intermediate.lidar_point_cloud_samples
-    assert [frame.point_cloud_path for frame in frames] == [
-        "next1.bin",
-        "/data/scene/lidar/00010.pcd.bin",
-        "past.bin",
-        "next2.bin",
-        "next2b.bin",
-        "late.bin",
-    ]
-    shifts = [float(frame.lidar_sensor_to_lidar_sweep_matrix[0, 3]) for frame in frames]
-    assert shifts == pytest.approx([0.0, -1.0, -2.0, 1.0, 1.4, 10.0])
-    assert intermediate.segmentation3d_gt_sample is None
-    assert intermediate.image_samples is None
-    assert intermediate.frame_meta.scene_token == "scene-a"
-    assert intermediate.frame_meta.timestamp == pytest.approx(1.1)
-    assert len(intermediate.detection3d_gt_bboxes_3d) == 0
-    # The record itself keeps its annotations.
-    assert len(dataset.samples[0].detection3d_gt_bboxes_3d) == 2
+    def test_data_preview_shows_the_current_frame_ground_truth(self) -> None:
+        """Sweep points carry no annotation of their own, so they stay out of the preview."""
+        backend = self.run_preview(_SampleDataset([_sample(segmentation=True)]))
+
+        ground_truth = _point_cloud(backend, "scene/ground_truth/segmentation")
+        self.assertEqual(ground_truth.positions.shape, (3, 3))
+        self.assertEqual(ground_truth.class_ids.tolist(), [0, 1, 0])
+        self.assertEqual(backend.steps, [0])
+        self.assertEqual(backend.timestamps, [1.0])
+        self.assertTrue(backend.waited)
+
+    def test_preview_labels_classes_from_the_database_taxonomy(self) -> None:
+        """Without configured class names the legend uses the database taxonomy."""
+        backend = self.run_preview(_SampleDataset([_sample(segmentation=True)]))
+
+        self.assertLessEqual(set(_SEGMENTATION_CLASSES), _legend_labels(backend))
+
+    def test_configured_class_names_override_the_taxonomy(self) -> None:
+        """Configured segmentation class names replace the taxonomy in the legend."""
+        backend = self.run_preview(
+            _SampleDataset([_sample(segmentation=True)]),
+            segmentation_class_names=("ground", "vehicle"),
+        )
+
+        labels = _legend_labels(backend)
+        self.assertLessEqual({"ground", "vehicle"}, labels)
+        self.assertNotIn("road", labels)
+
+
+class TestSegmentationPredictions(_PreviewTestCase):
+    """Segmentation predictions are aligned with the points the model scored."""
+
+    def test_voxel_predictions_align_with_the_scored_points(self) -> None:
+        """A voxel head labels the current-frame points inside the grid, in point order."""
+        # Point 1 falls outside the grid and point 3 belongs to a past sweep.
+        model = _PreviewModel(
+            lambda inputs: _segmentation_predictions(2), voxels=_FixedVoxelizer([0, -1, 0, 0])
+        )
+        backend = self.run_preview(_SampleDataset([_sample(segmentation=True)]), model)
+
+        prediction = _point_cloud(backend, "scene/prediction/segmentation")
+        ground_truth = _point_cloud(backend, "scene/ground_truth/segmentation")
+        self.assertEqual(prediction.positions[:, 0].tolist(), [5.0, 7.0])
+        self.assertEqual(ground_truth.class_ids.tolist(), [0, 0])
+        self.assertTrue(any(e.path == "scene/prediction/entropy" for e in backend.events))
+        self.assertTrue(model.evaluating)
+
+    def test_point_level_predictions_cover_every_point(self) -> None:
+        """A point head without voxels labels every point of the batch."""
+        model = _PreviewModel(lambda inputs: _segmentation_predictions(4))
+        backend = self.run_preview(_SampleDataset([_sample(segmentation=True)]), model)
+
+        self.assertEqual(
+            _point_cloud(backend, "scene/prediction/segmentation").positions.shape, (4, 3)
+        )
+
+    def test_misaligned_segmentation_predictions_are_reported(self) -> None:
+        """Predictions matching neither the points nor the voxels raise an error."""
+        model = _PreviewModel(lambda inputs: _segmentation_predictions(1))
+
+        with self.assertRaisesRegex(ValueError, "Cannot align 1 segmentation predictions"):
+            self.run_preview(_SampleDataset([_sample(segmentation=True)]), model)
+
+    def test_unsupervised_segmentation_shows_no_ground_truth(self) -> None:
+        """A dataset without segmentation supervision logs no segmentation ground truth."""
+        model = _PreviewModel(lambda inputs: _segmentation_predictions(4))
+        backend = self.run_preview(
+            _SampleDataset([_sample(segmentation=True)], seg3d_supervised=False), model
+        )
+
+        self.assertNotIn("scene/ground_truth/segmentation", backend.paths_of(PointCloud3DEvent))
+
+
+class TestDetectionPredictions(_PreviewTestCase):
+    """Detection previews draw predicted boxes next to the supervised ground truth."""
+
+    def test_detection_preview_draws_predicted_and_ground_truth_boxes(self) -> None:
+        """Predicted and ground-truth boxes are logged on separate entities."""
+        model = _PreviewModel(lambda inputs: _detection_predictions())
+        backend = self.run_preview(_SampleDataset([_sample(num_boxes=2)]), model)
+
+        boxes = {e.path: e for e in backend.events if isinstance(e, Boxes3DEvent)}
+        self.assertEqual(boxes["scene/prediction/detections"].centers.shape, (1, 3))
+        self.assertEqual(boxes["scene/ground_truth/detections"].centers.shape, (2, 3))
+
+    def test_unsupervised_detection_shows_only_predictions(self) -> None:
+        """A dataset without detection supervision logs only the predicted boxes."""
+        model = _PreviewModel(lambda inputs: _detection_predictions())
+        backend = self.run_preview(
+            _SampleDataset([_sample(num_boxes=2)], det3d_supervised=False), model
+        )
+
+        self.assertEqual(backend.paths_of(Boxes3DEvent), ["scene/prediction/detections"])
+
+
+class TestMultiTask(_PreviewTestCase):
+    """A sample carrying both 3D tasks shows both of them."""
+
+    def test_multitask_data_preview_shows_both_ground_truths(self) -> None:
+        """The data preview logs the segmentation and detection ground truth."""
+        backend = self.run_preview(_SampleDataset([_sample(num_boxes=1, segmentation=True)]))
+
+        self.assertIn("scene/ground_truth/segmentation", backend.paths_of(PointCloud3DEvent))
+        self.assertEqual(backend.paths_of(Boxes3DEvent), ["scene/ground_truth/detections"])
+
+    def test_multitask_prediction_preview_decodes_both_tasks(self) -> None:
+        """The prediction preview logs the predictions of both heads."""
+        model = _PreviewModel(_multitask_predictions, voxels=_FixedVoxelizer([0, 0, 0, 0]))
+        backend = self.run_preview(_SampleDataset([_sample(num_boxes=1, segmentation=True)]), model)
+
+        self.assertIn("scene/prediction/segmentation", backend.paths_of(PointCloud3DEvent))
+        self.assertEqual(
+            set(backend.paths_of(Boxes3DEvent)),
+            {"scene/prediction/detections", "scene/ground_truth/detections"},
+        )
+
+
+class TestCamerasAndTimeline(_PreviewTestCase):
+    """Cameras come from the source sample and samples land on their dataset index."""
+
+    def test_cameras_are_drawn_from_the_untransformed_sample(self) -> None:
+        """The cameras of the source sample are logged even though transforms drop them."""
+        tmp_path = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        image_path = tmp_path / "front.jpg"
+        cv2.imwrite(str(image_path), np.zeros((36, 64, 3), dtype=np.uint8))
+        sample = _sample(segmentation=True, image_samples=[_camera(image_path)])
+        backend = self.run_preview(_SampleDataset([sample]))
+
+        self.assertIn("scene/cameras/CAM_FRONT", backend.paths_of(Transform3DEvent))
+        self.assertIn("scene/cameras/CAM_FRONT", backend.paths_of(ImageEvent))
+
+    def test_consecutive_samples_are_logged_on_their_dataset_index(self) -> None:
+        """Each sample is logged on the step of its dataset index and its own timestamp."""
+        samples = [_sample(segmentation=True, timestamp=float(index)) for index in range(4)]
+        backend = self.run_preview(_SampleDataset(samples), sample_index=1, max_samples=2)
+
+        self.assertEqual(backend.steps, [1, 2])
+        self.assertEqual(backend.timestamps, [1.0, 2.0])
+
+
+class TestCalibrationStatus(_PreviewTestCase):
+    """Calibration-status samples are previewed by the calibration adapter."""
+
+    def test_calibration_preview_logs_the_status_verdict(self) -> None:
+        """A calibration prediction logs the verdict document and the fused camera image."""
+        model = _PreviewModel(_calibration_predictions)
+        backend = self.run_preview(_SampleDataset([_calibration_sample(status=1)]), model)
+
+        verdict = next(e for e in backend.events if isinstance(e, TextDocumentEvent))
+        self.assertEqual(verdict.path, "calibration_status/status/verdict")
+        self.assertEqual(verdict.text.splitlines()[0], "# MATCH")
+        self.assertIn("calibration_status/camera/fused", backend.paths_of(ImageEvent))
+
+    def test_calibration_data_preview_is_logged_under_the_dataset_root(self) -> None:
+        """A calibration data preview logs its camera under the dataset entity root."""
+        backend = self.run_preview(_SampleDataset([_calibration_sample(status=0)]))
+
+        self.assertEqual(backend.paths_of(Transform3DEvent), ["dataset/calibration_status/camera"])
+
+
+class TestNoopSession(unittest.TestCase):
+    """The configured session backend drives a complete preview."""
+
+    def test_noop_session_runs_a_full_preview(self) -> None:
+        """The noop backend lets the whole pipeline run without the Rerun SDK."""
+        datamodule = _PreviewDataModule(_SampleDataset([_sample(segmentation=True)]))
+
+        count = preview.run_visualization_preview(
+            None,
+            datamodule,
+            VisualizationPreviewConfig(
+                device="cpu", session=VisualizationSessionConfig(backend="noop")
+            ),
+        )
+
+        self.assertEqual(count, 1)
+        self.assertTrue(datamodule.prepared)
+        self.assertEqual(datamodule.stages, ["test"])
+
+
+class TestIntermediateFrames(_PreviewTestCase):
+    """Stored lidar frames between two samples are predicted at the requested frequency."""
+
+    def test_frames_between_samples_are_predicted_on_their_own_steps(self) -> None:
+        """Stored frames fill the steps up to the next sample of the same scene."""
+        dataset = _SampleDataset(
+            [_keyframe_with_stored_frames(1.0), _keyframe_with_stored_frames(2.0)]
+        )
+        model = _PreviewModel(lambda inputs: _segmentation_predictions(4))
+        backend = self.run_preview(dataset, model, max_samples=1, prediction_frequency_hz=10.0)
+
+        self.assertEqual(backend.steps, [0, 1, 2])
+        np.testing.assert_allclose(backend.timestamps, [1.0, 1.1, 1.2], rtol=1e-6)
+        # The keyframe is the only frame with ground truth.
+        point_cloud_paths = list(backend.paths_of(PointCloud3DEvent))
+        self.assertEqual(point_cloud_paths.count("scene/ground_truth/segmentation"), 1)
+        self.assertEqual(point_cloud_paths.count("scene/prediction/segmentation"), 3)
+
+    def test_last_sample_of_a_scene_keeps_its_stored_frames_within_one_stride(self) -> None:
+        """Without a following sample of its scene a sample keeps the frames of one stride."""
+        dataset = _SampleDataset(
+            [_keyframe_with_stored_frames(1.0), _keyframe_with_stored_frames(2.0, "scene-b")]
+        )
+        model = _PreviewModel(lambda inputs: _segmentation_predictions(4))
+        backend = self.run_preview(dataset, model, max_samples=2, prediction_frequency_hz=10.0)
+
+        # The frame 1.1 s after the first keyframe would land on the next sample's step.
+        self.assertEqual(backend.steps, [0, 1, 2, 10, 11, 12])
+
+    def test_samples_one_frame_apart_have_no_intermediate_frames(self) -> None:
+        """A database serving every lidar frame as a sample already shows every frame."""
+        dataset = _SampleDataset(
+            [_keyframe_with_stored_frames(1.0), _keyframe_with_stored_frames(1.1)]
+        )
+        model = _PreviewModel(lambda inputs: _segmentation_predictions(4))
+        backend = self.run_preview(dataset, model, max_samples=1, prediction_frequency_hz=10.0)
+
+        self.assertEqual(backend.steps, [0])
+
+    def test_intermediate_frames_are_reanchored_and_unlabeled(self) -> None:
+        """An intermediate frame becomes the current frame and drops the record's annotations."""
+        dataset = _SampleDataset([_keyframe_with_stored_frames(1.0)])
+        dataset.samples[0] = dataset.samples[0]._replace(detection3d_gt_bboxes_3d=_boxes(2))
+        model = _PreviewModel(lambda inputs: _segmentation_predictions(4))
+        self.run_preview(dataset, model, max_samples=1, prediction_frequency_hz=10.0)
+
+        # The keyframe goes through the pipeline first, then the frame 0.1 s after it.
+        intermediate = dataset.transformed[1]
+        frames = intermediate.lidar_point_cloud_samples
+        self.assertEqual(
+            [frame.point_cloud_path for frame in frames],
+            [
+                "next1.bin",
+                "/data/scene/lidar/00010.pcd.bin",
+                "past.bin",
+                "next2.bin",
+                "next2b.bin",
+                "late.bin",
+            ],
+        )
+        shifts = [float(frame.lidar_sensor_to_lidar_sweep_matrix[0, 3]) for frame in frames]
+        np.testing.assert_allclose(shifts, [0.0, -1.0, -2.0, 1.0, 1.4, 10.0], rtol=1e-6, atol=1e-6)
+        self.assertIsNone(intermediate.segmentation3d_gt_sample)
+        self.assertIsNone(intermediate.image_samples)
+        self.assertEqual(intermediate.frame_meta.scene_token, "scene-a")
+        self.assertAlmostEqual(intermediate.frame_meta.timestamp, 1.1)
+        self.assertEqual(len(intermediate.detection3d_gt_bboxes_3d), 0)
+        # The record itself keeps its annotations.
+        self.assertEqual(len(dataset.samples[0].detection3d_gt_bboxes_3d), 2)
+
+
+if __name__ == "__main__":
+    unittest.main()

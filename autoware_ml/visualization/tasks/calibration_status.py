@@ -16,14 +16,14 @@
 
 from __future__ import annotations
 
-from typing import Any
-
+from collections.abc import Sequence
+from jaxtyping import Float32, Shaped, UInt8
 import numpy as np
 
 from autoware_ml.utils.calibration import CalibrationStatus
 from autoware_ml.visualization.colors import depths_to_colors, scalar_to_heatmap_colors
+from autoware_ml.visualization.entity_paths import CALIBRATION_STATUS_PATH
 from autoware_ml.visualization.common import (
-    as_numpy,
     build_sample_metadata_events,
     ensure_image_uint8,
     ensure_xyz,
@@ -46,9 +46,11 @@ _STATUS_TEXT = {
 }
 
 
-def _fused_channel_points(fused_image: Any, channel: int) -> tuple[np.ndarray, np.ndarray]:
+def _fused_channel_points(
+    fused_image: Float32[np.ndarray, "dim_0 dim_1 dim_2"], channel: int
+) -> tuple[Float32[np.ndarray, "num_pixels 2"], UInt8[np.ndarray, "num_pixels 4"]]:
     """Extract nonzero normalized BGRDI pixels as a 2D heatmap point overlay."""
-    array = as_numpy(fused_image)
+    array = np.asarray(fused_image)
     if array.ndim != 3:
         raise ValueError(f"fused_image must have shape (H, W, 5) or (5, H, W), got {array.shape}")
     if array.shape[0] <= 8 and array.shape[1] > 8 and array.shape[2] > 8:
@@ -64,13 +66,13 @@ def _fused_channel_points(fused_image: Any, channel: int) -> tuple[np.ndarray, n
 
 
 def _project_points_to_image(
-    points: np.ndarray,
-    lidar_to_camera: np.ndarray,
-    image_from_camera: np.ndarray,
+    points: Float32[np.ndarray, "num_points num_features"],
+    lidar_to_camera: Float32[np.ndarray, "4 4"],
+    image_from_camera: Float32[np.ndarray, "3 3"],
     image_shape: tuple[int, int],
     *,
     max_points: int = 5000,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[Float32[np.ndarray, "num_projected 2"], Float32[np.ndarray, " num_projected"]]:
     """Project lidar points into the current image plane.
 
     The calibration pipelines undistort the images before anything else touches them, so a
@@ -163,17 +165,17 @@ def _build_status_verdict_document(
 
 def build_calibration_status_events(
     *,
-    lidar_to_camera: Any,
-    image_from_camera: Any,
-    points: np.ndarray | None = None,
-    image: np.ndarray | None = None,
-    fused_image: np.ndarray | None = None,
+    lidar_to_camera: Float32[np.ndarray, "4 4"],
+    image_from_camera: Float32[np.ndarray, "3 3"],
+    points: Float32[np.ndarray, "num_points num_features"] | None = None,
+    image: Shaped[np.ndarray, "dim_0 dim_1 dim_2"] | None = None,
+    fused_image: Float32[np.ndarray, "dim_0 dim_1 dim_2"] | None = None,
     gt_status: int | None = None,
     pred_status: int | None = None,
     pred_score: float | None = None,
     sample_name: str | None = None,
-    root_path: str = "calibration_status",
-) -> list[VisualizationEvent]:
+    root_path: str = CALIBRATION_STATUS_PATH,
+) -> Sequence[VisualizationEvent]:
     """Build backend-neutral calibration visualization events for one sample.
 
     Args:
@@ -192,10 +194,10 @@ def build_calibration_status_events(
     Returns:
         The events of the sample.
     """
-    events: list[VisualizationEvent] = build_sample_metadata_events(root_path, sample_name)
+    events: list[VisualizationEvent] = [*build_sample_metadata_events(root_path, sample_name)]
 
-    transform = as_numpy(lidar_to_camera, np.float32)
-    intrinsics = as_numpy(image_from_camera, np.float32)
+    transform = np.asarray(lidar_to_camera, dtype=np.float32)
+    intrinsics = np.asarray(image_from_camera, dtype=np.float32)
     events.append(
         Transform3DEvent(
             path=f"{root_path}/camera",

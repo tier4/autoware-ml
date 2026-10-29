@@ -21,7 +21,7 @@ does not require importing or modifying a backend SDK integration.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from autoware_ml.visualization.viewers.events import (
@@ -161,7 +161,7 @@ def _scene_view(
     )
 
 
-def _series_overrides(paths: list[str], labels: dict[str, str]) -> tuple[ViewOverride, ...]:
+def _series_overrides(paths: Sequence[str], labels: Mapping[str, str]) -> tuple[ViewOverride, ...]:
     """Name and size the series of one statistics plot."""
     return tuple(
         ViewOverride(
@@ -173,7 +173,7 @@ def _series_overrides(paths: list[str], labels: dict[str, str]) -> tuple[ViewOve
     )
 
 
-def _segmentation_statistics_views(observed_paths: set[str], timeline: str) -> list[ViewSpec]:
+def _segmentation_statistics_views(observed_paths: set[str], timeline: str) -> Sequence[ViewSpec]:
     """Build the per-frame segmentation plots: confidence and point count."""
     metrics_root = "scene/metrics/segmentation"
     confidence_paths = [
@@ -213,18 +213,19 @@ def _segmentation_statistics_views(observed_paths: set[str], timeline: str) -> l
     return views
 
 
-def _statistics_views(observed_paths: set[str], timeline: str) -> list[ViewSpec]:
+def _statistics_views(observed_paths: set[str], timeline: str) -> Sequence[ViewSpec]:
     """Build every per-frame statistics plot the observed entities support.
 
     Detection plots come first because they carry the match quality; the
     segmentation plots follow so a multi-task preview shows both rows' worth.
     """
-    return _detection_statistics_views(observed_paths, timeline) + _segmentation_statistics_views(
-        observed_paths, timeline
+    return (
+        *_detection_statistics_views(observed_paths, timeline),
+        *_segmentation_statistics_views(observed_paths, timeline),
     )
 
 
-def _detection_statistics_views(observed_paths: set[str], timeline: str) -> list[ViewSpec]:
+def _detection_statistics_views(observed_paths: set[str], timeline: str) -> Sequence[ViewSpec]:
     """Build compact IoU quality and match-count plot specifications.
 
     Without predictions only the ground-truth box count exists, so the count
@@ -254,7 +255,7 @@ def _detection_statistics_views(observed_paths: set[str], timeline: str) -> list
         if f"{metrics_root}/{name}" in observed_paths
     ]
 
-    def series_overrides(paths: list[str]) -> tuple[ViewOverride, ...]:
+    def series_overrides(paths: Sequence[str]) -> tuple[ViewOverride, ...]:
         return _series_overrides(paths, _DETECTION_METRIC_LABELS)
 
     views = []
@@ -303,8 +304,8 @@ class SyncedSceneLayouts:
     the same structure, so mirrored input lands on the same regions.
     """
 
-    left: dict[str, ViewSpec | LayoutGroup]
-    right: dict[str, dict[str, ViewSpec | LayoutGroup]]
+    left: Mapping[str, ViewSpec | LayoutGroup]
+    right: Mapping[str, Mapping[str, ViewSpec | LayoutGroup]]
     comparisons: tuple[SyncedComparison, ...]
     camera_states: tuple[str, ...]
     initial_comparison: str
@@ -492,7 +493,7 @@ def _task_comparison(
 
 def _scene_comparisons(
     observed_paths: set[str], task_name: str
-) -> list[tuple[SyncedComparison, str | None, str | None]]:
+) -> Sequence[tuple[SyncedComparison, str | None, str | None]]:
     """List the selectable comparisons with their point and detection paths."""
     ground_truth_points = (
         "scene/ground_truth/segmentation"

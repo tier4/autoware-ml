@@ -22,11 +22,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
 
 import cv2
+from jaxtyping import Float32, Int64, UInt8
 import numpy as np
-import numpy.typing as npt
 
 from autoware_ml.visualization.colors import (
     build_label_palette,
@@ -34,11 +34,11 @@ from autoware_ml.visualization.colors import (
     labels_to_colors,
 )
 from autoware_ml.visualization.common import (
-    as_numpy,
     build_class_annotation_context,
     ensure_xyz,
     resolve_palette_size,
 )
+from autoware_ml.visualization.entity_paths import CAMERAS_PATH
 from autoware_ml.visualization.viewers.events import (
     AnnotationContextEvent,
     ImageEvent,
@@ -66,35 +66,69 @@ _BOX_EDGES = (
 
 
 @dataclass(frozen=True)
-class CameraPointProjection:
-    """Describe one LiDAR point layer projected into every camera image."""
+class CameraCalibration:
+    """
+    Image file and calibration of one camera of a sample.
 
-    points: Any
-    labels: Any | None = None
+    Attributes:
+        image_path: Path of the camera image.
+        intrinsics: Pinhole intrinsics of the image.
+        lidar_to_camera: Homogeneous transform from the LiDAR frame to the camera frame.
+    """
+
+    image_path: str
+    intrinsics: Float32[np.ndarray, "3 3"]
+    lidar_to_camera: Float32[np.ndarray, "4 4"]
+
+
+@dataclass(frozen=True)
+class CameraPointProjection:
+    """
+    One LiDAR point layer projected into every camera image.
+
+    Attributes:
+        points: Points of the layer.
+        labels: Class of every point, None to color the points by depth or by ``colors``.
+        class_names: Class names by index, None to show the indices.
+        ignore_index: Label drawn as unlabelled.
+        colors: RGBA color of every point, used when the points carry no labels.
+        radius: Radius of every projected point in pixels.
+    """
+
+    points: Float32[np.ndarray, "num_points num_features"]
+    labels: Int64[np.ndarray, " num_points"] | None = None
     class_names: Sequence[str] | None = None
     ignore_index: int | None = None
-    colors: Any | None = None
+    colors: UInt8[np.ndarray, "num_points 4"] | None = None
     radius: float = 1.5
 
 
 @dataclass(frozen=True)
 class CameraBoxProjection:
-    """Describe one 3D box layer projected into every camera image."""
+    """
+    One 3D box layer projected into every camera image as wireframes.
 
-    boxes: Any
-    labels: Any
+    Attributes:
+        boxes: Boxes, centre, size and yaw in the first seven columns.
+        labels: Class of every box.
+        class_names: Class names by index, None to show the indices.
+        radius: Line radius of the wireframes in pixels.
+    """
+
+    boxes: Float32[np.ndarray, "num_boxes box_params"]
+    labels: Int64[np.ndarray, " num_boxes"]
     class_names: Sequence[str] | None = None
     radius: float = 1.5
 
 
 def build_camera_events(
-    images: dict[str, Any],
+    cameras: Mapping[str, CameraCalibration],
     *,
-    root_path: str = "scene/cameras",
+    root_path: str = CAMERAS_PATH,
     point_layers: Mapping[str, CameraPointProjection] | None = None,
     box_layers: Mapping[str, CameraBoxProjection] | None = None,
     max_projected_points: int = 10_000,
-) -> list[VisualizationEvent]:
+) -> Sequence[VisualizationEvent]:
     """Build visualization events for all cameras in one sample.
 
     Each camera gets a ``Transform3D`` (lidar-to-camera extrinsic expressed as
@@ -103,30 +137,28 @@ def build_camera_events(
     enable automatic point-to-image projection when hovering over 3D points.
 
     Args:
-        images: Per-camera dict from a T4Dataset batch entry.  Each value must
-            contain ``img_path`` (str), ``cam2img`` (3×3 array-like), and
-            ``lidar2cam`` (4×4 array-like).
+        cameras: Image file and calibration of every camera, by camera name.
         root_path: Entity path prefix for all camera entities.
         point_layers: Named LiDAR layers to project persistently onto each image.
         box_layers: Named 3D box layers to render as projected wireframes.
         max_projected_points: Maximum points retained per layer and camera.
 
     Returns:
-        List of ``Transform3DEvent``, ``PinholeEvent``, and ``ImageEvent``
-        objects, one triplet per camera.
+        Sequence[VisualizationEvent]: A ``Transform3DEvent``, ``PinholeEvent`` and
+            ``ImageEvent`` triplet per camera, followed by its projected layers.
 
     Raises:
-        ValueError: If a camera entry is missing calibration keys.
+        ValueError: If ``max_projected_points`` is not positive.
         FileNotFoundError: If a camera image cannot be read from disk.
     """
     if max_projected_points <= 0:
         raise ValueError("max_projected_points must be greater than zero")
 
     events: list[VisualizationEvent] = []
-    for cam_name, cam_info in images.items():
+    for cam_name, camera in cameras.items():
         cam_path = f"{root_path}/{cam_name}"
         camera_events, intrinsic, extrinsic, resolution = _build_single_camera_events(
-            cam_info, cam_path, cam_name
+            camera, cam_path
         )
         events.extend(camera_events)
         for layer_name, layer in (point_layers or {}).items():
@@ -154,30 +186,34 @@ def build_camera_events(
 
 
 def _build_single_camera_events(
-    cam_info: dict[str, Any],
+    camera: CameraCalibration,
     cam_path: str,
-    cam_name: str,
-) -> tuple[list[VisualizationEvent], np.ndarray, np.ndarray, tuple[int, int]]:
-    """Build the three visualization events for one camera."""
-    missing = [key for key in ("img_path", "cam2img", "lidar2cam") if cam_info.get(key) is None]
-    if missing:
-        raise ValueError(
-            f"Camera {cam_name!r} is missing required calibration keys: {', '.join(missing)}."
-        )
+) -> tuple[
+    Sequence[VisualizationEvent],
+    Float32[np.ndarray, "3 3"],
+    Float32[np.ndarray, "4 4"],
+    tuple[int, int],
+]:
+    """
+    Build the transform, pinhole and image events of one camera.
 
-    img_path = cam_info["img_path"]
-    cam2img = cam_info["cam2img"]
-    lidar2cam = cam_info["lidar2cam"]
+    Args:
+        camera: Image file and calibration of the camera.
+        cam_path: Entity path of the camera.
 
-    image_array = _load_image(str(img_path))
+    Returns:
+        tuple: The three events, the intrinsics, the LiDAR-to-camera transform and the image
+            resolution as width and height.
+    """
+    image_array = _load_image(camera.image_path)
     height, width = image_array.shape[:2]
 
-    intrinsic = np.asarray(cam2img, dtype=np.float32).reshape(3, 3)
-    extrinsic = np.asarray(lidar2cam, dtype=np.float32).reshape(4, 4)
+    intrinsic = np.asarray(camera.intrinsics, dtype=np.float32).reshape(3, 3)
+    extrinsic = np.asarray(camera.lidar_to_camera, dtype=np.float32).reshape(4, 4)
 
     resolution = (width, height)
     return (
-        [
+        (
             Transform3DEvent(
                 path=cam_path,
                 translation=extrinsic[:3, 3],
@@ -192,7 +228,7 @@ def _build_single_camera_events(
                 path=cam_path,
                 image=image_array,
             ),
-        ],
+        ),
         intrinsic,
         extrinsic,
         resolution,
@@ -200,13 +236,17 @@ def _build_single_camera_events(
 
 
 def _project_points(
-    points: Any,
-    intrinsic: np.ndarray,
-    extrinsic: np.ndarray,
+    points: Float32[np.ndarray, "num_points 3"],
+    intrinsic: Float32[np.ndarray, "3 3"],
+    extrinsic: Float32[np.ndarray, "4 4"],
     resolution: tuple[int, int],
     *,
     max_points: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[
+    Float32[np.ndarray, "num_projected 2"],
+    Int64[np.ndarray, " num_projected"],
+    Float32[np.ndarray, " num_projected"],
+]:
     """Project LiDAR points and return pixels, source indices, and depths."""
     positions = ensure_xyz(points)
     homogeneous = np.concatenate(
@@ -247,17 +287,19 @@ def _build_projected_point_events(
     layer: CameraPointProjection,
     *,
     path: str,
-    intrinsic: np.ndarray,
-    extrinsic: np.ndarray,
+    intrinsic: Float32[np.ndarray, "3 3"],
+    extrinsic: Float32[np.ndarray, "4 4"],
     resolution: tuple[int, int],
     max_points: int,
-) -> list[VisualizationEvent]:
+) -> Sequence[VisualizationEvent]:
     """Build one persistent point overlay for a camera image."""
     positions = ensure_xyz(layer.points)
-    labels = as_numpy(layer.labels, np.int64).reshape(-1) if layer.labels is not None else None
+    labels = (
+        np.asarray(layer.labels, dtype=np.int64).reshape(-1) if layer.labels is not None else None
+    )
     if labels is not None and labels.shape[0] != positions.shape[0]:
         raise ValueError(f"Camera point layer {path!r} labels must align with points")
-    colors = as_numpy(layer.colors, np.uint8) if layer.colors is not None else None
+    colors = np.asarray(layer.colors, dtype=np.uint8) if layer.colors is not None else None
     if colors is not None and (colors.ndim != 2 or colors.shape[0] != positions.shape[0]):
         raise ValueError(f"Camera point layer {path!r} colors must align with points")
 
@@ -300,7 +342,7 @@ def _build_projected_point_events(
     return events
 
 
-def _box_corners(box: np.ndarray) -> np.ndarray:
+def _box_corners(box: Float32[np.ndarray, " box_params"]) -> Float32[np.ndarray, "8 3"]:
     """Return eight corners for one yaw-only box in LiDAR coordinates."""
     half = box[3:6] * 0.5
     corners = np.array(
@@ -322,14 +364,14 @@ def _box_corners(box: np.ndarray) -> np.ndarray:
 
 
 def _project_box_edges(
-    boxes: np.ndarray,
-    intrinsic: np.ndarray,
-    extrinsic: np.ndarray,
+    boxes: Float32[np.ndarray, "num_boxes box_params"],
+    intrinsic: Float32[np.ndarray, "3 3"],
+    extrinsic: Float32[np.ndarray, "4 4"],
     resolution: tuple[int, int],
-) -> tuple[list[np.ndarray], np.ndarray]:
+) -> tuple[Sequence[Float32[np.ndarray, "2 2"]], Int64[np.ndarray, " num_strips"]]:
     """Project visible edges and return their source box indices."""
     width, height = resolution
-    strips: list[np.ndarray] = []
+    strips: list[Float32[np.ndarray, "2 2"]] = []
     box_indices: list[int] = []
     for box_index, box in enumerate(boxes):
         corners = _box_corners(box)
@@ -358,13 +400,13 @@ def _build_projected_box_events(
     layer: CameraBoxProjection,
     *,
     path: str,
-    intrinsic: np.ndarray,
-    extrinsic: np.ndarray,
+    intrinsic: Float32[np.ndarray, "3 3"],
+    extrinsic: Float32[np.ndarray, "4 4"],
     resolution: tuple[int, int],
-) -> list[VisualizationEvent]:
+) -> Sequence[VisualizationEvent]:
     """Build class-colored projected 3D box wireframes for one camera."""
-    boxes = as_numpy(layer.boxes, np.float32)
-    labels = as_numpy(layer.labels, np.int64).reshape(-1)
+    boxes = np.asarray(layer.boxes, dtype=np.float32)
+    labels = np.asarray(layer.labels, dtype=np.int64).reshape(-1)
     if boxes.ndim != 2 or boxes.shape[1] < 7:
         raise ValueError(f"Camera box layer {path!r} boxes must have shape (N, >=7)")
     if boxes.shape[0] != labels.shape[0]:
@@ -393,9 +435,10 @@ def _build_projected_box_events(
     return events
 
 
-def _load_image(img_path: str) -> npt.NDArray[np.uint8]:
+def _load_image(img_path: str) -> UInt8[np.ndarray, "height width 3"]:
     """Load an RGB image from disk using cv2."""
-    image = cv2.imread(img_path, cv2.IMREAD_COLOR)
+    # cv2.imread only warns on stderr for a missing file, so check it first.
+    image = cv2.imread(img_path, cv2.IMREAD_COLOR) if Path(img_path).is_file() else None
     if image is None:
         raise FileNotFoundError(f"Image not found: {img_path}")
     return cv2.cvtColor(image, cv2.COLOR_BGR2RGB).astype(np.uint8)

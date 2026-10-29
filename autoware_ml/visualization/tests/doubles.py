@@ -16,9 +16,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-from typing import Any
+from collections.abc import Iterable, Mapping, Sequence
 
+from jaxtyping import Float32
+import numpy as np
 
 from autoware_ml.visualization.viewers.events import VisualizationEvent
 
@@ -30,7 +31,7 @@ class RecordingBackend:
         """Initialize empty step and event logs."""
         self.steps: list[int] = []
         self.timestamps: list[float] = []
-        self.events: list[Any] = []
+        self.events: list[VisualizationEvent] = []
         self.waited = False
 
     def set_step(self, step: int) -> None:
@@ -53,6 +54,25 @@ class RecordingBackend:
         """Record that the preview asked the backend to wait."""
         self.waited = True
 
-    def paths_of(self, event_type: type) -> list[str]:
+    def paths_of(self, event_type: type[VisualizationEvent]) -> Sequence[str]:
         """Return the entity paths of every recorded event of one type."""
         return [event.path for event in self.events if isinstance(event, event_type)]
+
+
+def calibration_matrices() -> Mapping[str, Float32[np.ndarray, "..."]]:
+    """Return the camera matrices of a calibration sample with an identity-rotation extrinsic."""
+    return {
+        "image_from_camera": np.array(
+            [[1000.0, 0.0, 640.0], [0.0, 1000.0, 360.0], [0.0, 0.0, 1.0]],
+            dtype=np.float32,
+        ),
+        "lidar_to_camera": np.array(
+            [
+                [1.0, 0.0, 0.0, 1.0],
+                [0.0, 1.0, 0.0, 2.0],
+                [0.0, 0.0, 1.0, 3.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+            dtype=np.float32,
+        ),
+    }

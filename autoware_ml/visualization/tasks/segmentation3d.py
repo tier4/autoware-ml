@@ -17,8 +17,8 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
 
+from jaxtyping import Float32, Int64
 import numpy as np
 
 from autoware_ml.visualization.colors import (
@@ -27,15 +27,14 @@ from autoware_ml.visualization.colors import (
     scalar_to_heatmap_colors,
 )
 from autoware_ml.visualization.common import (
-    as_numpy,
     build_class_annotation_context,
     build_sample_metadata_events,
     ensure_xyz,
     format_class_label,
     resolve_palette_size,
 )
+from autoware_ml.visualization.entity_paths import SCENE_PATH
 from autoware_ml.visualization.sensors.lidar import build_lidar_reference_events
-
 from autoware_ml.visualization.viewers.events import (
     PointCloud3DEvent,
     ScalarEvent,
@@ -44,27 +43,44 @@ from autoware_ml.visualization.viewers.events import (
 
 
 def build_segmentation3d_data_events(
-    points: Any,
-    labels: Any,
+    points: Float32[np.ndarray, "num_points num_features"],
+    labels: Int64[np.ndarray, " num_points"],
     *,
     class_names: Sequence[str] | None = None,
     ignore_index: int | None = None,
-    root_path: str = "scene",
+    root_path: str = SCENE_PATH,
     point_radius: float = 0.04,
     point_labels: bool = False,
     sample_name: str | None = None,
-    point_color_mode: str = "semantic",
-) -> list[VisualizationEvent]:
-    """Build backend-neutral events for transformed segmentation data only."""
+) -> Sequence[VisualizationEvent]:
+    """
+    Build the events of a segmentation sample previewed without predictions.
+
+    Args:
+        points: Points of the sample.
+        labels: Ground-truth class of every point.
+        class_names: Class names by index, None to show the indices.
+        ignore_index: Label drawn as unlabelled.
+        root_path: Entity path of the scene.
+        point_radius: Radius of every point.
+        point_labels: Whether to attach the class name to every point.
+        sample_name: Name of the sample, None to log none.
+
+    Returns:
+        Sequence[VisualizationEvent]: The legend, the LiDAR layers, the ground-truth points and
+            the point count.
+
+    Raises:
+        ValueError: If the labels and the points differ in length.
+    """
     point_positions = ensure_xyz(points)
-    labels_np = as_numpy(labels, np.int64).reshape(-1)
+    labels_np = np.asarray(labels, dtype=np.int64).reshape(-1)
     if labels_np.shape[0] != point_positions.shape[0]:
         raise ValueError("labels must have the same length as points")
 
     palette = build_label_palette(resolve_palette_size([labels_np], class_names))
     radius = float(point_radius)
-    label_text = _build_point_labels(labels_np, class_names, point_labels)
-    events: list[VisualizationEvent] = build_sample_metadata_events(root_path, sample_name)
+    events: list[VisualizationEvent] = [*build_sample_metadata_events(root_path, sample_name)]
     semantic_path = f"{root_path}/ground_truth/segmentation"
     annotation_context = build_class_annotation_context(semantic_path, palette, class_names)
     if annotation_context is not None:
@@ -77,7 +93,7 @@ def build_segmentation3d_data_events(
             path=semantic_path,
             positions=point_positions,
             colors=labels_to_colors(labels_np, palette, ignore_index=ignore_index),
-            labels=label_text,
+            labels=_build_point_labels(labels_np, class_names, point_labels),
             radii=radius,
             class_ids=labels_np,
         )
@@ -92,37 +108,57 @@ def build_segmentation3d_data_events(
 
 
 def build_segmentation3d_events(
-    points: Any,
-    pred_labels: Any,
+    points: Float32[np.ndarray, "num_points num_features"],
+    pred_labels: Int64[np.ndarray, " num_points"],
     *,
-    pred_probs: Any | None = None,
-    gt_labels: Any | None = None,
+    pred_probs: Float32[np.ndarray, "num_points num_classes"] | None = None,
+    gt_labels: Int64[np.ndarray, " num_points"] | None = None,
     class_names: Sequence[str] | None = None,
     ignore_index: int | None = None,
-    root_path: str = "scene",
+    root_path: str = SCENE_PATH,
     point_radius: float = 0.04,
     point_labels: bool = False,
     sample_name: str | None = None,
-    point_color_mode: str = "semantic",
-    pred_logits: Any | None = None,
-) -> list[VisualizationEvent]:
-    """Build backend-neutral segmentation visualization events for one sample."""
+) -> Sequence[VisualizationEvent]:
+    """
+    Build the events of a segmentation sample with predictions.
+
+    With class probabilities, the confidence and the normalized entropy,
+    ``-sum(p * log(p)) / log(num_classes)``, are logged per point and averaged per frame.
+
+    Args:
+        points: Points the predictions label.
+        pred_labels: Predicted class of every point.
+        pred_probs: Class probabilities of every point, None to skip the uncertainty layers.
+        gt_labels: Ground-truth class of every point, None when unlabelled.
+        class_names: Class names by index, None to show the indices.
+        ignore_index: Label drawn as unlabelled.
+        root_path: Entity path of the scene.
+        point_radius: Radius of every point.
+        point_labels: Whether to attach the class name to every point.
+        sample_name: Name of the sample, None to log none.
+
+    Returns:
+        Sequence[VisualizationEvent]: The legends, the LiDAR layers, the predicted and
+            ground-truth points, the uncertainty layers and the frame scalars.
+
+    Raises:
+        ValueError: If a label or probability array does not match the points.
+    """
     point_positions = ensure_xyz(points)
-    pred_labels_np = as_numpy(pred_labels, np.int64).reshape(-1)
+    pred_labels_np = np.asarray(pred_labels, dtype=np.int64).reshape(-1)
     if pred_labels_np.shape[0] != point_positions.shape[0]:
         raise ValueError("predicted labels must have the same length as points")
 
+    gt_labels_np = None
     if gt_labels is not None:
-        gt_labels_np = as_numpy(gt_labels, np.int64).reshape(-1)
+        gt_labels_np = np.asarray(gt_labels, dtype=np.int64).reshape(-1)
         if gt_labels_np.shape[0] != point_positions.shape[0]:
             raise ValueError("ground-truth labels must have the same length as points")
-    else:
-        gt_labels_np = None
 
     palette = build_label_palette(resolve_palette_size([pred_labels_np, gt_labels_np], class_names))
     radius = float(point_radius)
-    pred_label_text = _build_point_labels(pred_labels_np, class_names, point_labels)
-    events: list[VisualizationEvent] = build_sample_metadata_events(root_path, sample_name)
+    events: list[VisualizationEvent] = [*build_sample_metadata_events(root_path, sample_name)]
     prediction_path = f"{root_path}/prediction/segmentation"
     ground_truth_path = f"{root_path}/ground_truth/segmentation"
     for semantic_path in (prediction_path, ground_truth_path):
@@ -137,91 +173,113 @@ def build_segmentation3d_events(
             path=prediction_path,
             positions=point_positions,
             colors=labels_to_colors(pred_labels_np, palette, ignore_index=ignore_index),
-            labels=pred_label_text,
+            labels=_build_point_labels(pred_labels_np, class_names, point_labels),
             radii=radius,
             class_ids=pred_labels_np,
         )
     )
-
     if gt_labels_np is not None:
-        gt_label_text = _build_point_labels(gt_labels_np, class_names, point_labels)
         events.append(
             PointCloud3DEvent(
                 path=ground_truth_path,
                 positions=point_positions,
                 colors=labels_to_colors(gt_labels_np, palette, ignore_index=ignore_index),
-                labels=gt_label_text,
+                labels=_build_point_labels(gt_labels_np, class_names, point_labels),
                 radii=radius,
                 class_ids=gt_labels_np,
             )
         )
-
     events.append(
         ScalarEvent(
             f"{root_path}/metrics/segmentation/num_points",
             float(pred_labels_np.shape[0]),
         )
     )
-    probabilities: np.ndarray | None = None
-    if pred_logits is not None:
-        logits_np = as_numpy(pred_logits, np.float32)
-        if logits_np.ndim != 2 or logits_np.shape[0] != pred_labels_np.shape[0]:
-            raise ValueError("pred_logits must have shape (N, C) aligned with points")
-        if logits_np.shape[1] == 0:
-            raise ValueError("pred_logits must contain at least one class")
-        shifted = logits_np - logits_np.max(axis=1, keepdims=True)
-        probabilities = np.exp(shifted)
-        probabilities /= probabilities.sum(axis=1, keepdims=True)
-    elif pred_probs is not None:
-        probabilities = as_numpy(pred_probs, np.float32)
-        if probabilities.ndim != 2 or probabilities.shape[0] != pred_labels_np.shape[0]:
-            raise ValueError("pred_probs must have shape (N, C) aligned with points")
-        if probabilities.shape[1] == 0:
-            raise ValueError("pred_probs must contain at least one class")
-
-    if probabilities is not None:
-        confidence = probabilities.max(axis=1).astype(np.float32)
-        if probabilities.shape[1] == 1:
-            entropy_norm = np.zeros(probabilities.shape[0], dtype=np.float32)
-        else:
-            entropy = -(probabilities * np.log(np.clip(probabilities, 1e-8, 1.0))).sum(axis=1)
-            entropy_norm = np.clip(entropy / np.log(probabilities.shape[1]), 0.0, 1.0).astype(
-                np.float32
-            )
+    if pred_probs is not None:
         events.extend(
-            [
-                ScalarEvent(
-                    path=f"{root_path}/metrics/segmentation/mean_confidence",
-                    value=float(confidence.mean()),
-                ),
-                ScalarEvent(
-                    path=f"{root_path}/metrics/segmentation/mean_entropy",
-                    value=float(entropy_norm.mean()),
-                ),
-                PointCloud3DEvent(
-                    path=f"{root_path}/prediction/entropy",
-                    positions=point_positions,
-                    colors=scalar_to_heatmap_colors(entropy_norm),
-                    radii=radius,
-                ),
-                PointCloud3DEvent(
-                    path=f"{root_path}/prediction/probability",
-                    positions=point_positions,
-                    colors=scalar_to_heatmap_colors(confidence),
-                    radii=radius,
-                ),
-            ]
+            _build_uncertainty_events(
+                pred_probs, point_positions, root_path=root_path, radius=radius
+            )
         )
-
     return events
 
 
+def _build_uncertainty_events(
+    pred_probs: Float32[np.ndarray, "num_points num_classes"],
+    point_positions: Float32[np.ndarray, "num_points 3"],
+    *,
+    root_path: str,
+    radius: float,
+) -> Sequence[VisualizationEvent]:
+    """
+    Build the confidence and normalized entropy layers and their frame means.
+
+    Args:
+        pred_probs: Class probabilities of every point.
+        point_positions: Positions of the points.
+        root_path: Entity path of the scene.
+        radius: Radius of every point.
+
+    Returns:
+        Sequence[VisualizationEvent]: The two frame means and the two per-point layers.
+
+    Raises:
+        ValueError: If the probabilities do not hold one row per point and one class at least.
+    """
+    probabilities = np.asarray(pred_probs, dtype=np.float32)
+    if probabilities.ndim != 2 or probabilities.shape[0] != point_positions.shape[0]:
+        raise ValueError("pred_probs must have shape (N, C) aligned with points")
+    if probabilities.shape[1] == 0:
+        raise ValueError("pred_probs must contain at least one class")
+
+    confidence = probabilities.max(axis=1).astype(np.float32)
+    if probabilities.shape[1] == 1:
+        entropy_norm = np.zeros(probabilities.shape[0], dtype=np.float32)
+    else:
+        entropy = -(probabilities * np.log(np.clip(probabilities, 1e-8, 1.0))).sum(axis=1)
+        entropy_norm = np.clip(entropy / np.log(probabilities.shape[1]), 0.0, 1.0).astype(
+            np.float32
+        )
+    return (
+        ScalarEvent(
+            path=f"{root_path}/metrics/segmentation/mean_confidence",
+            value=float(confidence.mean()),
+        ),
+        ScalarEvent(
+            path=f"{root_path}/metrics/segmentation/mean_entropy",
+            value=float(entropy_norm.mean()),
+        ),
+        PointCloud3DEvent(
+            path=f"{root_path}/prediction/entropy",
+            positions=point_positions,
+            colors=scalar_to_heatmap_colors(entropy_norm),
+            radii=radius,
+        ),
+        PointCloud3DEvent(
+            path=f"{root_path}/prediction/probability",
+            positions=point_positions,
+            colors=scalar_to_heatmap_colors(confidence),
+            radii=radius,
+        ),
+    )
+
+
 def _build_point_labels(
-    labels: np.ndarray,
+    labels: Int64[np.ndarray, " num_points"],
     class_names: Sequence[str] | None,
     enabled: bool,
-) -> list[str] | None:
-    """Build optional per-point label text."""
+) -> Sequence[str] | None:
+    """
+    Build the optional class name text of every point.
+
+    Args:
+        labels: Class of every point.
+        class_names: Class names by index, None to show the indices.
+        enabled: Whether point labels are wanted.
+
+    Returns:
+        Sequence[str] | None: One label per point, None when disabled.
+    """
     if not enabled:
         return None
     return [format_class_label(int(label), class_names) for label in labels]

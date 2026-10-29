@@ -21,12 +21,18 @@ import os
 import tempfile
 import time
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from importlib import import_module
 from pathlib import Path
-from typing import Any
+from types import ModuleType
+from typing import TYPE_CHECKING
 
+from jaxtyping import Float32
 import numpy as np
+
+if TYPE_CHECKING:
+    import rerun as rr
+    import rerun.blueprint as rrb
 
 from autoware_ml.visualization.viewers.contracts import VisualizationSessionConfig
 from autoware_ml.visualization.sensors.lidar import POINT_COLOR_MODES
@@ -59,7 +65,7 @@ from autoware_ml.visualization.viewers.synced_viewer import SyncedViewerManifest
 logger = logging.getLogger(__name__)
 
 
-def _load_rerun_module() -> Any:
+def _load_rerun_module() -> ModuleType:
     """Load the optional rerun dependency lazily."""
     return import_module("rerun")
 
@@ -82,7 +88,9 @@ def _patch_class_id_array_protocol() -> None:
     class_id_module = import_module("rerun.datatypes.class_id")
     class_id_type = class_id_module.ClassId
 
-    def __array__(self: Any, dtype: Any = None, copy: bool | None = None) -> np.ndarray:
+    def __array__(
+        self: object, dtype: np.dtype | None = None, copy: bool | None = None
+    ) -> np.ndarray:
         """Convert one class id to a NumPy array across NumPy 1.x and 2.x."""
         if copy is None:
             return np.asarray(self.id, dtype=dtype)
@@ -102,7 +110,9 @@ def _patch_time_int_array_protocol() -> None:
     time_int_module = import_module("rerun.datatypes.time_int")
     time_int_type = time_int_module.TimeInt
 
-    def __array__(self: Any, dtype: Any = None, copy: bool | None = None) -> np.ndarray:
+    def __array__(
+        self: object, dtype: np.dtype | None = None, copy: bool | None = None
+    ) -> np.ndarray:
         """Convert one time integer to a NumPy array across NumPy 1.x and 2.x."""
         if copy is None:
             return np.asarray(self.value, dtype=dtype)
@@ -111,7 +121,7 @@ def _patch_time_int_array_protocol() -> None:
     time_int_type.__array__ = __array__
 
 
-def _verify_annotation_context_support(rerun_module: Any) -> None:
+def _verify_annotation_context_support(rerun_module: ModuleType) -> None:
     """Fail loudly when semantic legends cannot reach the viewer.
 
     Rerun reports serialization problems as warnings rather than exceptions, so
@@ -147,7 +157,9 @@ def _stable_view_id(identity: str) -> uuid.UUID:
     return uuid.uuid5(uuid.NAMESPACE_URL, f"autoware-ml/visualization/{identity}")
 
 
-def _yaw_to_quaternions(yaws: np.ndarray) -> np.ndarray:
+def _yaw_to_quaternions(
+    yaws: Float32[np.ndarray, " num_boxes"],
+) -> Float32[np.ndarray, "num_boxes 4"]:
     """Convert z-axis yaw angles to quaternions in xyzw order."""
     half_angles = yaws * 0.5
     quaternions = np.zeros((yaws.shape[0], 4), dtype=np.float32)
@@ -327,7 +339,11 @@ class _RerunVisualizationBackendBase:
 
         raise TypeError(f"Unsupported visualization event: {type(event)!r}")
 
-    def _convert_view_override(self, override: ViewOverride) -> Any:
+    def _convert_view_override(
+        self, override: ViewOverride
+    ) -> (
+        rr.AsComponents | rr.ComponentBatchLike | Sequence[rr.AsComponents | rr.ComponentBatchLike]
+    ):
         """Translate one neutral entity override into Rerun components."""
         components = []
         if override.visible is not None:
@@ -348,11 +364,11 @@ class _RerunVisualizationBackendBase:
             raise ValueError(f"View override for {override.path!r} has no behavior")
         return components[0] if len(components) == 1 else components
 
-    def _convert_layout(self, layout: ViewSpec | LayoutGroup) -> Any:
+    def _convert_layout(self, layout: ViewSpec | LayoutGroup) -> rrb.Container | rrb.View:
         """Translate a backend-neutral recursive layout into Rerun blueprint parts."""
         if isinstance(layout, LayoutGroup):
             children = [self._convert_layout(child) for child in layout.children]
-            kwargs: dict[str, Any] = {}
+            kwargs: dict[str, object] = {}
             if layout.name is not None:
                 kwargs["name"] = layout.name
             if layout.kind == "horizontal":
@@ -418,7 +434,7 @@ class _RerunVisualizationBackendBase:
             parts.append(self.rr.blueprint.SelectionPanel(expanded=event.selection_panel_expanded))
         if event.time_panel_expanded is not None:
             parts.append(self.rr.blueprint.TimePanel(expanded=event.time_panel_expanded))
-        blueprint_options: dict[str, Any] = {"auto_views": event.auto_views}
+        blueprint_options: dict[str, bool] = {"auto_views": event.auto_views}
         if event.auto_layout is not None:
             blueprint_options["auto_layout"] = event.auto_layout
         send_options = {}
@@ -431,7 +447,7 @@ class _RerunVisualizationBackendBase:
             **send_options,
         )
 
-    def _send_fused_blueprint_if_needed(self, events: list[VisualizationEvent]) -> None:
+    def _send_fused_blueprint_if_needed(self, events: Sequence[VisualizationEvent]) -> None:
         """Publish the neutral calibration layout once its images arrive."""
         if self._fused_blueprint_sent:
             return

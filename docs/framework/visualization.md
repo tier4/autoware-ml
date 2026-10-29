@@ -86,7 +86,9 @@ The shared event layer in `visualization/viewers/events.py` defines primitives s
 - `ScalarEvent`
 - `TextEvent`
 
-This is the isolation boundary between task code and any concrete backend.
+Every event derives from the `VisualizationEvent` base class, and every array
+field is a NumPy array with its shape annotated through `jaxtyping`. This is the
+isolation boundary between task code and any concrete backend.
 
 ### 4. Backend
 
@@ -311,9 +313,15 @@ The point color mode accepts `semantic` (default), `intensity`, or `solid`. For
 `intensity`, the fourth point feature is normalized per frame and rendered with
 the shared scalar heatmap.
 
-The detection adapter reads the `bboxes_3d` / `scores_3d` / `labels_3d` fields
-of `Detection3DSamplePredictions`, and also accepts the `bboxes` / `scores` /
-`labels` key set.
+The detection adapter takes the boxes, scores and labels of one sample as three
+arrays, the `bboxes_3d`, `scores_3d` and `labels_3d` fields of
+`Detection3DSamplePredictions`.
+
+Every adapter takes NumPy arrays, annotated with their shapes through
+`jaxtyping`. The preview is the only place that handles torch tensors: it
+copies the batch and the predictions to host arrays before logging them, and
+describes each camera with a `CameraCalibration` (image file, intrinsics and
+LiDAR-to-camera transform).
 
 ### Frames between samples
 

@@ -17,66 +17,63 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any
 
+from jaxtyping import Float32, Int64
 import numpy as np
 
 from autoware_ml.visualization.colors import build_label_palette, labels_to_colors
 from autoware_ml.visualization.common import (
-    as_numpy,
     build_class_annotation_context,
     build_sample_metadata_events,
     format_class_label,
     resolve_palette_size,
 )
+from autoware_ml.visualization.entity_paths import SCENE_PATH
 from autoware_ml.visualization.sensors.lidar import build_lidar_reference_events
-
 from autoware_ml.visualization.viewers.events import (
     Boxes3DEvent,
     ScalarEvent,
     VisualizationEvent,
 )
 
-#: Key sets that identify decoded 3D detection predictions. Shared with the
-#: preview task matcher so both stay in sync.
-DETECTION_PREDICTION_KEY_SETS: tuple[frozenset[str], ...] = (
-    frozenset({"bboxes_3d", "scores_3d", "labels_3d"}),
-    frozenset({"bboxes", "scores", "labels"}),
-)
-
 
 def build_detection3d_data_events(
     *,
-    points: Any | None = None,
-    gt_boxes: Any,
-    gt_labels: Any,
+    points: Float32[np.ndarray, "num_points num_features"] | None,
+    gt_boxes: Float32[np.ndarray, "num_boxes box_params"],
+    gt_labels: Int64[np.ndarray, " num_boxes"],
     class_names: Sequence[str] | None = None,
-    root_path: str = "scene",
+    root_path: str = SCENE_PATH,
     point_radius: float = 0.04,
     sample_name: str | None = None,
-    point_color_mode: str = "semantic",
-) -> list[VisualizationEvent]:
-    """Build backend-neutral 3D detection events for transformed data only."""
-    gt_boxes_np = as_numpy(gt_boxes, np.float32)
-    gt_labels_np = as_numpy(gt_labels, np.int64).reshape(-1)
-    if gt_boxes_np.ndim != 2 or gt_boxes_np.shape[1] < 7:
-        raise ValueError(f"ground-truth boxes must have shape (N, >=7), got {gt_boxes_np.shape}")
-    if gt_boxes_np.shape[0] != gt_labels_np.shape[0]:
-        raise ValueError("ground-truth boxes and labels must have the same length")
+) -> Sequence[VisualizationEvent]:
+    """
+    Build the events of a detection sample previewed without predictions.
 
+    Args:
+        points: Points of the sample, None to draw the boxes alone.
+        gt_boxes: Ground-truth boxes, centre, size and yaw in the first seven columns.
+        gt_labels: Class of every ground-truth box.
+        class_names: Class names by index, None to show the indices.
+        root_path: Entity path of the scene.
+        point_radius: Radius of every point.
+        sample_name: Name of the sample, None to log none.
+
+    Returns:
+        Sequence[VisualizationEvent]: The legend, the LiDAR layers, the ground-truth boxes and
+            their count.
+    """
+    gt_boxes_np, gt_labels_np = _validated_boxes(gt_boxes, gt_labels, "ground-truth")
     palette = build_label_palette(resolve_palette_size([gt_labels_np], class_names))
-    events: list[VisualizationEvent] = build_sample_metadata_events(root_path, sample_name)
+    events: list[VisualizationEvent] = [*build_sample_metadata_events(root_path, sample_name)]
     ground_truth_path = f"{root_path}/ground_truth/detections"
     annotation_context = build_class_annotation_context(ground_truth_path, palette, class_names)
     if annotation_context is not None:
         events.insert(0, annotation_context)
-
     if points is not None:
         events.extend(
             build_lidar_reference_events(points, root_path=root_path, point_radius=point_radius)
         )
-
-    gt_label_text = [format_class_label(int(label), class_names) for label in gt_labels_np]
     events.append(
         Boxes3DEvent(
             path=ground_truth_path,
@@ -84,7 +81,7 @@ def build_detection3d_data_events(
             sizes=gt_boxes_np[:, 3:6],
             yaws=gt_boxes_np[:, 6],
             colors=labels_to_colors(gt_labels_np, palette),
-            labels=gt_label_text,
+            labels=[format_class_label(int(label), class_names) for label in gt_labels_np],
             class_ids=gt_labels_np,
         )
     )
@@ -94,111 +91,102 @@ def build_detection3d_data_events(
             value=float(gt_boxes_np.shape[0]),
         )
     )
-
     return events
 
 
-def normalize_detection_predictions(
-    predictions: Mapping[str, Any],
-) -> dict[str, np.ndarray]:
-    """Normalize decoded 3D predictions into one shared visualization contract."""
-    if DETECTION_PREDICTION_KEY_SETS[0] <= predictions.keys():
-        boxes = as_numpy(predictions["bboxes_3d"], np.float32)
-        scores = as_numpy(predictions["scores_3d"], np.float32).reshape(-1)
-        labels = as_numpy(predictions["labels_3d"], np.int64).reshape(-1)
-    elif DETECTION_PREDICTION_KEY_SETS[1] <= predictions.keys():
-        boxes = as_numpy(predictions["bboxes"], np.float32)
-        scores = as_numpy(predictions["scores"], np.float32).reshape(-1)
-        labels = as_numpy(predictions["labels"], np.int64).reshape(-1)
-    else:
-        raise KeyError(
-            "Expected decoded predictions with either "
-            "('bboxes_3d', 'scores_3d', 'labels_3d') or ('bboxes', 'scores', 'labels')."
-        )
-
-    if boxes.ndim != 2 or boxes.shape[1] < 7:
-        raise ValueError(f"decoded boxes must have shape (N, >=7), got {boxes.shape}")
-    if boxes.shape[0] != scores.shape[0] or boxes.shape[0] != labels.shape[0]:
-        raise ValueError("decoded boxes, scores, and labels must have the same length")
-    return {"boxes": boxes, "scores": scores, "labels": labels}
-
-
 def build_detection3d_events(
-    predictions: Mapping[str, Any],
     *,
-    points: Any | None = None,
-    gt_boxes: Any | None = None,
-    gt_labels: Any | None = None,
+    pred_boxes: Float32[np.ndarray, "num_predictions box_params"],
+    pred_scores: Float32[np.ndarray, " num_predictions"],
+    pred_labels: Int64[np.ndarray, " num_predictions"],
+    points: Float32[np.ndarray, "num_points num_features"] | None,
+    gt_boxes: Float32[np.ndarray, "num_boxes box_params"] | None = None,
+    gt_labels: Int64[np.ndarray, " num_boxes"] | None = None,
     class_names: Sequence[str] | None = None,
-    root_path: str = "scene",
+    root_path: str = SCENE_PATH,
     point_radius: float = 0.04,
     sample_name: str | None = None,
-    point_color_mode: str = "semantic",
-) -> list[VisualizationEvent]:
-    """Build backend-neutral 3D detection visualization events for one sample."""
+) -> Sequence[VisualizationEvent]:
+    """
+    Build the events of a detection sample with predictions.
+
+    With ground truth, the boxes are matched by class at a 3D IoU of 0.5 and the frame
+    statistics of :func:`detection_iou_statistics` are logged.
+
+    Args:
+        pred_boxes: Predicted boxes, centre, size and yaw in the first seven columns.
+        pred_scores: Score of every predicted box.
+        pred_labels: Class of every predicted box.
+        points: Points of the sample, None to draw the boxes alone.
+        gt_boxes: Ground-truth boxes, None when the sample is unlabelled.
+        gt_labels: Class of every ground-truth box, None when the sample is unlabelled.
+        class_names: Class names by index, None to show the indices.
+        root_path: Entity path of the scene.
+        point_radius: Radius of every point.
+        sample_name: Name of the sample, None to log none.
+
+    Returns:
+        Sequence[VisualizationEvent]: The legends, the LiDAR layers, the predicted and
+            ground-truth boxes, and the frame statistics.
+
+    Raises:
+        ValueError: If only one of the ground-truth boxes and labels is given, or the boxes,
+            scores and labels of a set differ in length.
+    """
     if (gt_boxes is None) != (gt_labels is None):
         raise ValueError(
             "ground-truth boxes and labels must either both be provided or both omitted"
         )
-    normalized_predictions = normalize_detection_predictions(predictions)
-    pred_boxes = normalized_predictions["boxes"]
-    pred_scores = normalized_predictions["scores"]
-    pred_labels = normalized_predictions["labels"]
+    boxes, labels = _validated_boxes(pred_boxes, pred_labels, "predicted")
+    scores = np.asarray(pred_scores, dtype=np.float32).reshape(-1)
+    if scores.shape[0] != boxes.shape[0]:
+        raise ValueError("decoded boxes, scores, and labels must have the same length")
+    gt_boxes_np = gt_labels_np = None
+    if gt_boxes is not None and gt_labels is not None:
+        gt_boxes_np, gt_labels_np = _validated_boxes(gt_boxes, gt_labels, "ground-truth")
 
-    gt_labels_np = as_numpy(gt_labels, np.int64).reshape(-1) if gt_labels is not None else None
-    palette = build_label_palette(resolve_palette_size([pred_labels, gt_labels_np], class_names))
-    events: list[VisualizationEvent] = build_sample_metadata_events(root_path, sample_name)
+    palette = build_label_palette(resolve_palette_size([labels, gt_labels_np], class_names))
+    events: list[VisualizationEvent] = [*build_sample_metadata_events(root_path, sample_name)]
     prediction_path = f"{root_path}/prediction/detections"
     ground_truth_path = f"{root_path}/ground_truth/detections"
     for detections_path in (prediction_path, ground_truth_path):
         annotation_context = build_class_annotation_context(detections_path, palette, class_names)
         if annotation_context is not None:
             events.append(annotation_context)
-
     if points is not None:
         events.extend(
             build_lidar_reference_events(points, root_path=root_path, point_radius=point_radius)
         )
 
-    pred_colors = labels_to_colors(pred_labels, palette) if pred_labels.size > 0 else None
-    pred_label_text = [
-        format_class_label(int(label), class_names, float(score))
-        for label, score in zip(pred_labels, pred_scores, strict=False)
-    ]
     events.append(
         Boxes3DEvent(
             path=prediction_path,
-            centers=pred_boxes[:, :3],
-            sizes=pred_boxes[:, 3:6],
-            yaws=pred_boxes[:, 6],
-            colors=pred_colors,
-            labels=pred_label_text,
-            class_ids=pred_labels,
+            centers=boxes[:, :3],
+            sizes=boxes[:, 3:6],
+            yaws=boxes[:, 6],
+            colors=labels_to_colors(labels, palette) if labels.size > 0 else None,
+            labels=[
+                format_class_label(int(label), class_names, float(score))
+                for label, score in zip(labels, scores, strict=True)
+            ],
+            class_ids=labels,
         )
     )
     events.append(
         ScalarEvent(
             path=f"{root_path}/metrics/detection/num_predictions",
-            value=float(pred_boxes.shape[0]),
+            value=float(boxes.shape[0]),
         )
     )
-    if pred_scores.size > 0:
+    if scores.size > 0:
         events.append(
             ScalarEvent(
                 path=f"{root_path}/metrics/detection/mean_score",
-                value=float(pred_scores.mean()),
+                value=float(scores.mean()),
             )
         )
 
-    if gt_boxes is not None and gt_labels_np is not None:
-        gt_boxes_np = as_numpy(gt_boxes, np.float32)
-        if gt_boxes_np.ndim != 2 or gt_boxes_np.shape[1] < 7:
-            raise ValueError(
-                f"ground-truth boxes must have shape (N, >=7), got {gt_boxes_np.shape}"
-            )
-        if gt_boxes_np.shape[0] != gt_labels_np.shape[0]:
-            raise ValueError("ground-truth boxes and labels must have the same length")
-        gt_label_text = [format_class_label(int(label), class_names) for label in gt_labels_np]
+    if gt_boxes_np is not None and gt_labels_np is not None:
         events.append(
             Boxes3DEvent(
                 path=ground_truth_path,
@@ -206,7 +194,7 @@ def build_detection3d_events(
                 sizes=gt_boxes_np[:, 3:6],
                 yaws=gt_boxes_np[:, 6],
                 colors=labels_to_colors(gt_labels_np, palette),
-                labels=gt_label_text,
+                labels=[format_class_label(int(label), class_names) for label in gt_labels_np],
                 class_ids=gt_labels_np,
             )
         )
@@ -217,14 +205,41 @@ def build_detection3d_events(
             )
         )
         for metric_name, metric_value in detection_iou_statistics(
-            pred_boxes, pred_labels, gt_boxes_np, gt_labels_np
+            boxes, labels, gt_boxes_np, gt_labels_np
         ).items():
             events.append(ScalarEvent(f"{root_path}/metrics/detection/{metric_name}", metric_value))
-
     return events
 
 
-def _rectangle_corners(box: np.ndarray) -> np.ndarray:
+def _validated_boxes(
+    boxes: Float32[np.ndarray, "num_boxes box_params"],
+    labels: Int64[np.ndarray, " num_boxes"],
+    kind: str,
+) -> tuple[Float32[np.ndarray, "num_boxes box_params"], Int64[np.ndarray, " num_boxes"]]:
+    """
+    Check that a box set holds centre, size and yaw and one label per box.
+
+    Args:
+        boxes: Boxes, centre, size and yaw in the first seven columns.
+        labels: Class of every box.
+        kind: Name of the box set for the error message.
+
+    Returns:
+        tuple: The boxes as float32 and the labels as a flat int64 array.
+
+    Raises:
+        ValueError: If the boxes have fewer than seven columns or the counts differ.
+    """
+    boxes_np = np.asarray(boxes, dtype=np.float32)
+    labels_np = np.asarray(labels, dtype=np.int64).reshape(-1)
+    if boxes_np.ndim != 2 or boxes_np.shape[1] < 7:
+        raise ValueError(f"{kind} boxes must have shape (N, >=7), got {boxes_np.shape}")
+    if boxes_np.shape[0] != labels_np.shape[0]:
+        raise ValueError(f"{kind} boxes and labels must have the same length")
+    return boxes_np, labels_np
+
+
+def _rectangle_corners(box: Float32[np.ndarray, " box_params"]) -> Float32[np.ndarray, "4 2"]:
     """Return the four bird's-eye-view corners of a yaw-only box."""
     half_width, half_length = box[3] * 0.5, box[4] * 0.5
     corners = np.array(
@@ -240,7 +255,8 @@ def _rectangle_corners(box: np.ndarray) -> np.ndarray:
     return corners @ np.array([[cosine, sine], [-sine, cosine]], dtype=np.float32) + box[:2]
 
 
-def _polygon_area(polygon: np.ndarray) -> float:
+def _polygon_area(polygon: Float32[np.ndarray, "num_vertices 2"]) -> float:
+    """Return the area of a simple polygon by the shoelace formula."""
     if len(polygon) < 3:
         return 0.0
     return float(
@@ -252,18 +268,29 @@ def _polygon_area(polygon: np.ndarray) -> float:
     )
 
 
-def _cross_2d(first: np.ndarray, second: np.ndarray) -> float:
+def _cross_2d(first: Float32[np.ndarray, " 2"], second: Float32[np.ndarray, " 2"]) -> float:
     """Return the scalar cross product for two 2D vectors."""
     return float(first[0] * second[1] - first[1] * second[0])
 
 
-def _inside(point: np.ndarray, edge_start: np.ndarray, edge_end: np.ndarray) -> bool:
+def _inside(
+    point: Float32[np.ndarray, " 2"],
+    edge_start: Float32[np.ndarray, " 2"],
+    edge_end: Float32[np.ndarray, " 2"],
+) -> bool:
+    """Return whether a point lies on the inner side of a directed clip edge."""
     # The corner order is clockwise in the usual x-right/y-up plane; the
     # interior is on the positive side of each directed edge in this layout.
     return _cross_2d(edge_end - edge_start, point - edge_start) >= -1e-6
 
 
-def _intersection(a: np.ndarray, b: np.ndarray, start: np.ndarray, end: np.ndarray) -> np.ndarray:
+def _intersection(
+    a: Float32[np.ndarray, " 2"],
+    b: Float32[np.ndarray, " 2"],
+    start: Float32[np.ndarray, " 2"],
+    end: Float32[np.ndarray, " 2"],
+) -> Float32[np.ndarray, " 2"]:
+    """Return where segment ``a``-``b`` crosses the line through ``start`` and ``end``."""
     direction, edge = b - a, end - start
     denominator = _cross_2d(direction, edge)
     if abs(denominator) < 1e-8:
@@ -271,13 +298,17 @@ def _intersection(a: np.ndarray, b: np.ndarray, start: np.ndarray, end: np.ndarr
     return a + (_cross_2d(start - a, edge) / denominator) * direction
 
 
-def _convex_intersection(subject: np.ndarray, clip: np.ndarray) -> np.ndarray:
+def _convex_intersection(
+    subject: Float32[np.ndarray, "num_subject_vertices 2"],
+    clip: Float32[np.ndarray, "num_clip_vertices 2"],
+) -> Float32[np.ndarray, "num_vertices 2"]:
+    """Clip one convex polygon by another (Sutherland-Hodgman)."""
     output = subject
     for index, start in enumerate(clip):
         if len(output) == 0:
             break
         end, input_polygon = clip[(index + 1) % len(clip)], output
-        points: list[np.ndarray] = []
+        points: list[Float32[np.ndarray, " 2"]] = []
         previous = input_polygon[-1]
         for current in input_polygon:
             current_inside = _inside(current, start, end)
@@ -291,8 +322,19 @@ def _convex_intersection(subject: np.ndarray, clip: np.ndarray) -> np.ndarray:
     return output
 
 
-def oriented_box_iou_3d(first: np.ndarray, second: np.ndarray) -> float:
-    """Compute IoU for boxes represented as ``x,y,z,w,l,h,yaw``."""
+def oriented_box_iou_3d(
+    first: Float32[np.ndarray, " box_params"], second: Float32[np.ndarray, " box_params"]
+) -> float:
+    """
+    Compute the 3D IoU of two yaw-only boxes.
+
+    Args:
+        first: Box as ``x, y, z, length, width, height, yaw``.
+        second: Box as ``x, y, z, length, width, height, yaw``.
+
+    Returns:
+        float: Intersection over union of the two boxes.
+    """
     bev = _polygon_area(_convex_intersection(_rectangle_corners(first), _rectangle_corners(second)))
     z_overlap = max(
         0.0,
@@ -309,13 +351,13 @@ def oriented_box_iou_3d(first: np.ndarray, second: np.ndarray) -> float:
 
 
 def detection_iou_statistics(
-    pred_boxes: np.ndarray,
-    pred_labels: np.ndarray,
-    gt_boxes: np.ndarray,
-    gt_labels: np.ndarray,
+    pred_boxes: Float32[np.ndarray, "num_predictions box_params"],
+    pred_labels: Int64[np.ndarray, " num_predictions"],
+    gt_boxes: Float32[np.ndarray, "num_boxes box_params"],
+    gt_labels: Int64[np.ndarray, " num_boxes"],
     *,
     iou_threshold: float = 0.5,
-) -> dict[str, float]:
+) -> Mapping[str, float]:
     """Greedily match same-class boxes and return frame-level statistics.
 
     Besides threshold-qualified detection metrics, report the best overlap for

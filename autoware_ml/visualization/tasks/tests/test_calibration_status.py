@@ -16,10 +16,13 @@
 
 from __future__ import annotations
 
+import unittest
+
 import numpy as np
 
 from autoware_ml.utils.calibration import CalibrationStatus
 from autoware_ml.visualization.tasks.calibration_status import build_calibration_status_events
+from autoware_ml.visualization.tests.doubles import calibration_matrices
 from autoware_ml.visualization.viewers.events import (
     ImageEvent,
     PinholeEvent,
@@ -37,156 +40,171 @@ _FUSED_IMAGE[100, 100, 3] = 0.5
 _FUSED_IMAGE[200, 200, 4] = 0.8
 
 
-def test_build_calibration_status_events_includes_frames_and_status(
-    preview_calibration: dict[str, np.ndarray],
-) -> None:
-    events = build_calibration_status_events(
-        **preview_calibration,
-        points=_IN_FRONT_OF_CAMERA,
-        image=np.zeros((720, 1280, 3), dtype=np.uint8),
-        fused_image=_FUSED_IMAGE,
-        gt_status=CalibrationStatus.CALIBRATED.value,
-        pred_status=CalibrationStatus.MISCALIBRATED.value,
-        pred_score=0.9,
-        sample_name="sample-1",
-    )
-    paths = {event.path for event in events}
+class TestCalibrationStatusLayers(unittest.TestCase):
+    """The adapter logs the camera frame, the images, the overlays and the lidar points."""
 
-    assert "calibration_status/camera" in paths
-    assert "calibration_status/lidar/points" in paths
-    assert "calibration_status/status/gt_label" in paths
-    assert "calibration_status/status/pred_label" in paths
-    assert "calibration_status/camera/fused" in paths
-    assert "calibration_status/camera/fused/depth" in paths
-    assert "calibration_status/camera/fused/intensity" in paths
-    fused_overlays = {
-        event.path: event
-        for event in events
-        if isinstance(event, Points2DEvent)
-        and event.path.startswith("calibration_status/camera/fused/")
-    }
-    assert fused_overlays["calibration_status/camera/fused/depth"].positions.shape == (1, 2)
-    assert fused_overlays["calibration_status/camera/fused/intensity"].positions.shape == (1, 2)
-    assert any(
-        isinstance(event, Points2DEvent)
-        and event.path == "calibration_status/camera/image/projected_points"
-        for event in events
-    )
-    assert any(
-        isinstance(event, ScalarEvent) and event.path == "calibration_status/status/pred_score"
-        for event in events
-    )
+    def test_includes_frames_and_status(self) -> None:
+        """A full sample logs the camera, the lidar, both statuses and the fused overlays."""
+        events = build_calibration_status_events(
+            **calibration_matrices(),
+            points=_IN_FRONT_OF_CAMERA,
+            image=np.zeros((720, 1280, 3), dtype=np.uint8),
+            fused_image=_FUSED_IMAGE,
+            gt_status=CalibrationStatus.CALIBRATED.value,
+            pred_status=CalibrationStatus.MISCALIBRATED.value,
+            pred_score=0.9,
+            sample_name="sample-1",
+        )
+        paths = {event.path for event in events}
 
+        for path in (
+            "calibration_status/camera",
+            "calibration_status/lidar/points",
+            "calibration_status/status/gt_label",
+            "calibration_status/status/pred_label",
+            "calibration_status/camera/fused",
+            "calibration_status/camera/fused/depth",
+            "calibration_status/camera/fused/intensity",
+        ):
+            with self.subTest(path=path):
+                self.assertIn(path, paths)
+        fused_overlays = {
+            event.path: event
+            for event in events
+            if isinstance(event, Points2DEvent)
+            and event.path.startswith("calibration_status/camera/fused/")
+        }
+        self.assertEqual(
+            fused_overlays["calibration_status/camera/fused/depth"].positions.shape, (1, 2)
+        )
+        self.assertEqual(
+            fused_overlays["calibration_status/camera/fused/intensity"].positions.shape, (1, 2)
+        )
+        self.assertTrue(
+            any(
+                isinstance(event, Points2DEvent)
+                and event.path == "calibration_status/camera/image/projected_points"
+                for event in events
+            )
+        )
+        self.assertTrue(
+            any(
+                isinstance(event, ScalarEvent)
+                and event.path == "calibration_status/status/pred_score"
+                for event in events
+            )
+        )
 
-def test_build_calibration_status_events_summarizes_prediction_and_ground_truth(
-    preview_calibration: dict[str, np.ndarray],
-) -> None:
-    events = build_calibration_status_events(
-        **preview_calibration,
-        gt_status=CalibrationStatus.CALIBRATED.value,
-        pred_status=CalibrationStatus.MISCALIBRATED.value,
-        pred_score=0.9,
-    )
+    def test_logs_camera_geometry_with_an_image(self) -> None:
+        """An image adds the pinhole of its resolution, the image and the camera transform."""
+        events = build_calibration_status_events(
+            **calibration_matrices(),
+            image=np.zeros((36, 64, 3), dtype=np.uint8),
+        )
 
-    summary = next(
-        event
-        for event in events
-        if isinstance(event, TextEvent) and event.path == "calibration_status/status/summary"
-    )
-    assert summary.text == "pred: miscalibrated (0.90) | gt: calibrated"
+        pinhole = next(event for event in events if isinstance(event, PinholeEvent))
+        self.assertEqual(pinhole.resolution, (64, 36))
+        self.assertTrue(
+            any(
+                isinstance(event, ImageEvent) and event.path == "calibration_status/camera/image"
+                for event in events
+            )
+        )
+        self.assertTrue(any(isinstance(event, Transform3DEvent) for event in events))
 
+    def test_needs_only_the_camera_matrices(self) -> None:
+        """Without points or images the adapter still logs the camera frame."""
+        events = build_calibration_status_events(**calibration_matrices())
 
-def test_build_calibration_status_events_states_the_verdict_as_a_document(
-    preview_calibration: dict[str, np.ndarray],
-) -> None:
-    """The verdict repeats both statuses as headings and says whether they agree."""
-    events = build_calibration_status_events(
-        **preview_calibration,
-        fused_image=_FUSED_IMAGE,
-        gt_status=CalibrationStatus.CALIBRATED.value,
-        pred_status=CalibrationStatus.MISCALIBRATED.value,
-        pred_score=0.9,
-    )
+        self.assertEqual([event.path for event in events], ["calibration_status/camera"])
+        self.assertIsInstance(events[0], Transform3DEvent)
 
-    verdict = next(
-        event
-        for event in events
-        if isinstance(event, TextDocumentEvent)
-        and event.path == "calibration_status/status/verdict"
-    )
-    assert verdict.markdown
-    assert verdict.text.splitlines()[0] == "# MISMATCH"
-    assert verdict.text.rstrip().endswith(
-        "## Prediction: MISCALIBRATED (0.90) \u00b7 Ground truth: CALIBRATED"
-    )
+    def test_skips_projection_behind_the_camera(self) -> None:
+        """Points with non-positive depth produce no image overlay."""
+        events = build_calibration_status_events(
+            **calibration_matrices(),
+            points=np.array([[0.0, 0.0, -50.0, 0.4]], dtype=np.float32),
+            image=np.zeros((36, 64, 3), dtype=np.uint8),
+        )
 
+        self.assertFalse(any(isinstance(event, Points2DEvent) for event in events))
+        self.assertTrue(
+            any(
+                isinstance(event, PointCloud3DEvent)
+                and event.path == "calibration_status/lidar/points"
+                for event in events
+            )
+        )
 
-def test_build_calibration_status_events_reports_a_match(
-    preview_calibration: dict[str, np.ndarray],
-) -> None:
-    events = build_calibration_status_events(
-        **preview_calibration,
-        fused_image=_FUSED_IMAGE,
-        gt_status=CalibrationStatus.CALIBRATED.value,
-        pred_status=CalibrationStatus.CALIBRATED.value,
-        pred_score=0.75,
-    )
+    def test_honors_the_root_path(self) -> None:
+        """Every event is logged under the requested root path."""
+        events = build_calibration_status_events(
+            **calibration_matrices(),
+            sample_name="sample-1",
+            root_path="dataset/calibration_status",
+        )
 
-    verdict = next(event for event in events if isinstance(event, TextDocumentEvent))
-    assert verdict.text.splitlines()[0] == "# MATCH"
-
-
-def test_build_calibration_status_events_logs_camera_geometry_with_an_image(
-    preview_calibration: dict[str, np.ndarray],
-) -> None:
-    events = build_calibration_status_events(
-        **preview_calibration,
-        image=np.zeros((36, 64, 3), dtype=np.uint8),
-    )
-
-    pinhole = next(event for event in events if isinstance(event, PinholeEvent))
-    assert pinhole.resolution == (64, 36)
-    assert any(
-        isinstance(event, ImageEvent) and event.path == "calibration_status/camera/image"
-        for event in events
-    )
-    assert any(isinstance(event, Transform3DEvent) for event in events)
+        for event in events:
+            with self.subTest(path=event.path):
+                self.assertTrue(event.path.startswith("dataset/calibration_status"))
 
 
-def test_build_calibration_status_events_needs_only_the_camera_matrices(
-    preview_calibration: dict[str, np.ndarray],
-) -> None:
-    """Without points or images the adapter still logs the camera frame."""
-    events = build_calibration_status_events(**preview_calibration)
+class TestCalibrationStatusVerdict(unittest.TestCase):
+    """The adapter summarizes the predicted and ground-truth statuses as text."""
 
-    assert [event.path for event in events] == ["calibration_status/camera"]
-    assert isinstance(events[0], Transform3DEvent)
+    def test_summarizes_prediction_and_ground_truth(self) -> None:
+        """The one-line summary names the prediction with its score and the ground truth."""
+        events = build_calibration_status_events(
+            **calibration_matrices(),
+            gt_status=CalibrationStatus.CALIBRATED.value,
+            pred_status=CalibrationStatus.MISCALIBRATED.value,
+            pred_score=0.9,
+        )
+
+        summary = next(
+            event
+            for event in events
+            if isinstance(event, TextEvent) and event.path == "calibration_status/status/summary"
+        )
+        self.assertEqual(summary.text, "pred: miscalibrated (0.90) | gt: calibrated")
+
+    def test_states_the_verdict_as_a_document(self) -> None:
+        """The verdict repeats both statuses as headings and says whether they agree."""
+        events = build_calibration_status_events(
+            **calibration_matrices(),
+            fused_image=_FUSED_IMAGE,
+            gt_status=CalibrationStatus.CALIBRATED.value,
+            pred_status=CalibrationStatus.MISCALIBRATED.value,
+            pred_score=0.9,
+        )
+
+        verdict = next(
+            event
+            for event in events
+            if isinstance(event, TextDocumentEvent)
+            and event.path == "calibration_status/status/verdict"
+        )
+        self.assertTrue(verdict.markdown)
+        self.assertEqual(verdict.text.splitlines()[0], "# MISMATCH")
+        self.assertTrue(
+            verdict.text.rstrip().endswith(
+                "## Prediction: MISCALIBRATED (0.90) · Ground truth: CALIBRATED"
+            )
+        )
+
+    def test_reports_a_match(self) -> None:
+        """Agreeing statuses make the verdict headline a match."""
+        events = build_calibration_status_events(
+            **calibration_matrices(),
+            fused_image=_FUSED_IMAGE,
+            gt_status=CalibrationStatus.CALIBRATED.value,
+            pred_status=CalibrationStatus.CALIBRATED.value,
+            pred_score=0.75,
+        )
+
+        verdict = next(event for event in events if isinstance(event, TextDocumentEvent))
+        self.assertEqual(verdict.text.splitlines()[0], "# MATCH")
 
 
-def test_build_calibration_status_events_skips_projection_behind_the_camera(
-    preview_calibration: dict[str, np.ndarray],
-) -> None:
-    """Points with non-positive depth produce no image overlay."""
-    events = build_calibration_status_events(
-        **preview_calibration,
-        points=np.array([[0.0, 0.0, -50.0, 0.4]], dtype=np.float32),
-        image=np.zeros((36, 64, 3), dtype=np.uint8),
-    )
-
-    assert not any(isinstance(event, Points2DEvent) for event in events)
-    assert any(
-        isinstance(event, PointCloud3DEvent) and event.path == "calibration_status/lidar/points"
-        for event in events
-    )
-
-
-def test_build_calibration_status_events_honors_the_root_path(
-    preview_calibration: dict[str, np.ndarray],
-) -> None:
-    events = build_calibration_status_events(
-        **preview_calibration,
-        sample_name="sample-1",
-        root_path="dataset/calibration_status",
-    )
-
-    assert all(event.path.startswith("dataset/calibration_status") for event in events)
+if __name__ == "__main__":
+    unittest.main()

@@ -50,7 +50,6 @@ def build_preview_config(cfg: DictConfig) -> VisualizationPreviewConfig:
         ),
         device=str(visualization_cfg.get("device", "auto")),
         point_labels=bool(visualization_cfg.get("point_labels", False)),
-        point_color_mode=str(visualization_cfg.get("point_color_mode", "semantic")),
         class_names=tuple(map(str, class_names)) if class_names else None,
         segmentation_class_names=(
             tuple(map(str, segmentation_class_names)) if segmentation_class_names else None

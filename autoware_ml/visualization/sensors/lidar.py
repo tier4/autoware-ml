@@ -16,29 +16,47 @@
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Sequence
 
+from jaxtyping import Float32, UInt8
 import numpy as np
 
 from autoware_ml.visualization.colors import scalar_to_heatmap_colors
-from autoware_ml.visualization.common import as_numpy, ensure_xyz
+from autoware_ml.visualization.common import ensure_xyz
 from autoware_ml.visualization.viewers.events import PointCloud3DEvent
 
 POINT_COLOR_MODES = frozenset({"semantic", "intensity", "solid"})
+# Neutral geometry color of the solid point layer.
+SOLID_POINT_COLOR = (220, 230, 240, 255)
 
 
-def point_cloud_colors(points: Any, mode: str = "semantic") -> np.ndarray | None:
-    """Build optional RGBA point colors, including per-frame LiDAR intensity."""
+def point_cloud_colors(
+    points: Float32[np.ndarray, "num_points num_features"], mode: str = "semantic"
+) -> UInt8[np.ndarray, "num_points 4"] | None:
+    """
+    Build the RGBA point colors of one color mode, with the intensity normalized per frame.
+
+    Args:
+        points: Points with x, y, z and, for the intensity mode, the intensity column.
+        mode: ``semantic``, ``intensity`` or ``solid``.
+
+    Returns:
+        UInt8[np.ndarray, "num_points 4"] | None: The colors, None for the semantic mode,
+            whose colors come from the class of every point.
+
+    Raises:
+        ValueError: If the mode is unknown, or the points lack the columns it needs.
+    """
     if mode not in POINT_COLOR_MODES:
         raise ValueError("point color mode must be 'semantic', 'intensity', or 'solid'")
     if mode == "semantic":
         return None
-    array = as_numpy(points, np.float32)
+    array = np.asarray(points, dtype=np.float32)
     if array.ndim != 2 or array.shape[1] < 3:
         raise ValueError(f"points must have shape (N, >=3), got {array.shape}")
     if mode == "solid":
         colors = np.empty((array.shape[0], 4), dtype=np.uint8)
-        colors[:] = (220, 230, 240, 255)
+        colors[:] = SOLID_POINT_COLOR
         return colors
     if array.shape[1] < 4:
         raise ValueError("intensity coloring requires points with an intensity column")
@@ -51,20 +69,29 @@ def point_cloud_colors(points: Any, mode: str = "semantic") -> np.ndarray | None
 
 
 def build_lidar_reference_events(
-    points: Any,
+    points: Float32[np.ndarray, "num_points num_features"],
     *,
     root_path: str,
     point_radius: float,
-) -> list[PointCloud3DEvent]:
-    """Build solid and, when available, intensity LiDAR scene layers.
+) -> Sequence[PointCloud3DEvent]:
+    """
+    Build the solid and, when available, the intensity LiDAR scene layers.
 
-    Both layers are logged so the viewer can switch coloring modes without
-    rerunning inference. Semantic layers remain task-specific because they
-    carry class ids and annotation contexts.
+    Both layers are logged so the viewer can switch coloring modes without rerunning inference.
+    Semantic layers remain task-specific because they carry class ids and annotation contexts.
+
+    Args:
+        points: Points of the frame.
+        root_path: Entity path of the scene.
+        point_radius: Radius of every point.
+
+    Returns:
+        Sequence[PointCloud3DEvent]: The solid layer, then the intensity layer when the points
+            carry an intensity column.
     """
     positions = ensure_xyz(points)
-    # Rerun broadcasts a scalar radius to every point. Keeping this scalar
-    # avoids serializing an identical float once per point and per color mode.
+    # Rerun broadcasts a scalar radius to every point. Keeping this scalar avoids serializing
+    # an identical float once per point and per color mode.
     radius = float(point_radius)
     events = [
         PointCloud3DEvent(
@@ -74,8 +101,7 @@ def build_lidar_reference_events(
             radii=radius,
         )
     ]
-    points_array = as_numpy(points)
-    if points_array.ndim == 2 and points_array.shape[1] >= 4:
+    if points.ndim == 2 and points.shape[1] >= 4:
         events.append(
             PointCloud3DEvent(
                 path=f"{root_path}/lidar/intensity",

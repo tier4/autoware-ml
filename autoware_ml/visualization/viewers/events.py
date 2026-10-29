@@ -20,17 +20,17 @@ backends such as Rerun translate them into backend-specific logging calls.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal, TypeAlias
+from typing import Literal
 
+from jaxtyping import Float32, Int64, UInt8
 import numpy as np
-import numpy.typing as npt
 
-FloatArray: TypeAlias = npt.NDArray[np.float32]
-IntArray: TypeAlias = npt.NDArray[np.int64]
-ColorArray: TypeAlias = npt.NDArray[np.uint8]
-ImageArray: TypeAlias = npt.NDArray[np.uint8] | npt.NDArray[np.float32]
-Radius: TypeAlias = FloatArray | float
+
+@dataclass(frozen=True)
+class VisualizationEvent:
+    """Base of every event a task adapter emits and a backend logs."""
 
 
 @dataclass(frozen=True)
@@ -43,91 +43,91 @@ class AnnotationInfo:
 
 
 @dataclass(frozen=True)
-class AnnotationContextEvent:
+class AnnotationContextEvent(VisualizationEvent):
     """Log a semantic annotation context for descendant entities."""
 
     path: str
-    annotations: list[AnnotationInfo]
+    annotations: Sequence[AnnotationInfo]
 
 
 @dataclass(frozen=True)
-class ImageEvent:
+class ImageEvent(VisualizationEvent):
     """Log a 2D image."""
 
     path: str
-    image: ImageArray
+    image: UInt8[np.ndarray, "height width channels"]
 
 
 @dataclass(frozen=True)
-class PointCloud3DEvent:
+class PointCloud3DEvent(VisualizationEvent):
     """Log a 3D point cloud."""
 
     path: str
-    positions: FloatArray
-    colors: ColorArray | None = None
-    labels: list[str] | None = None
-    radii: Radius | None = None
-    class_ids: IntArray | None = None
+    positions: Float32[np.ndarray, "num_points 3"]
+    colors: UInt8[np.ndarray, "num_points 4"] | None = None
+    labels: Sequence[str] | None = None
+    radii: Float32[np.ndarray, " num_points"] | float | None = None
+    class_ids: Int64[np.ndarray, " num_points"] | None = None
 
 
 @dataclass(frozen=True)
-class Points2DEvent:
+class Points2DEvent(VisualizationEvent):
     """Log 2D points, typically as image overlays."""
 
     path: str
-    positions: FloatArray
-    colors: ColorArray | None = None
-    labels: list[str] | None = None
-    radii: Radius | None = None
-    class_ids: IntArray | None = None
+    positions: Float32[np.ndarray, "num_points 2"]
+    colors: UInt8[np.ndarray, "num_points 4"] | None = None
+    labels: Sequence[str] | None = None
+    radii: Float32[np.ndarray, " num_points"] | float | None = None
+    class_ids: Int64[np.ndarray, " num_points"] | None = None
 
 
 @dataclass(frozen=True)
-class LineStrips2DEvent:
+class LineStrips2DEvent(VisualizationEvent):
     """Log one or more 2D polylines, typically projected 3D box edges."""
 
     path: str
-    strips: list[FloatArray]
-    colors: ColorArray | None = None
-    labels: list[str] | None = None
-    radii: Radius | None = None
-    class_ids: IntArray | None = None
+    strips: Sequence[Float32[np.ndarray, "num_vertices 2"]]
+    colors: UInt8[np.ndarray, "num_strips 4"] | None = None
+    labels: Sequence[str] | None = None
+    radii: Float32[np.ndarray, " num_strips"] | float | None = None
+    class_ids: Int64[np.ndarray, " num_strips"] | None = None
 
 
 @dataclass(frozen=True)
-class Boxes3DEvent:
+class Boxes3DEvent(VisualizationEvent):
     """Log 3D boxes in metric space."""
 
     path: str
-    centers: FloatArray
-    sizes: FloatArray
-    yaws: FloatArray
-    colors: ColorArray | None = None
-    labels: list[str] | None = None
-    radii: Radius | None = None
-    class_ids: IntArray | None = None
+    centers: Float32[np.ndarray, "num_boxes 3"]
+    sizes: Float32[np.ndarray, "num_boxes 3"]
+    yaws: Float32[np.ndarray, " num_boxes"]
+    colors: UInt8[np.ndarray, "num_boxes 4"] | None = None
+    labels: Sequence[str] | None = None
+    radii: Float32[np.ndarray, " num_boxes"] | float | None = None
+    class_ids: Int64[np.ndarray, " num_boxes"] | None = None
 
 
 @dataclass(frozen=True)
-class Transform3DEvent:
+class Transform3DEvent(VisualizationEvent):
     """Log a rigid child-from-parent transform."""
 
     path: str
-    translation: FloatArray
-    rotation_matrix: FloatArray
+    translation: Float32[np.ndarray, " 3"]
+    rotation_matrix: Float32[np.ndarray, "3 3"]
 
 
 @dataclass(frozen=True)
-class PinholeEvent:
+class PinholeEvent(VisualizationEvent):
     """Log pinhole camera intrinsics."""
 
     path: str
-    image_from_camera: FloatArray
+    image_from_camera: Float32[np.ndarray, "3 3"]
     resolution: tuple[int, int]
 
 
 @dataclass(frozen=True)
-class ScalarEvent:
+class ScalarEvent(VisualizationEvent):
     """Log a scalar value."""
 
     path: str
@@ -135,7 +135,7 @@ class ScalarEvent:
 
 
 @dataclass(frozen=True)
-class TextEvent:
+class TextEvent(VisualizationEvent):
     """Log human-readable text."""
 
     path: str
@@ -144,7 +144,7 @@ class TextEvent:
 
 
 @dataclass(frozen=True)
-class TextDocumentEvent:
+class TextDocumentEvent(VisualizationEvent):
     """Log a standalone document for a dedicated text view.
 
     Unlike :class:`TextEvent`, which lands in the viewer's log stream, a
@@ -158,7 +158,7 @@ class TextDocumentEvent:
 
 
 @dataclass(frozen=True)
-class ClearEvent:
+class ClearEvent(VisualizationEvent):
     """Clear current and historical components from an entity path."""
 
     path: str
@@ -205,7 +205,7 @@ class LayoutGroup:
 
 
 @dataclass(frozen=True)
-class BlueprintEvent:
+class BlueprintEvent(VisualizationEvent):
     """Request a viewer layout without exposing a concrete backend SDK."""
 
     layout: ViewSpec | LayoutGroup
@@ -216,19 +216,3 @@ class BlueprintEvent:
     auto_views: bool = False
     make_active: bool | None = None
     make_default: bool | None = None
-
-
-VisualizationEvent: TypeAlias = (
-    AnnotationContextEvent
-    | ImageEvent
-    | PointCloud3DEvent
-    | Points2DEvent
-    | LineStrips2DEvent
-    | Boxes3DEvent
-    | Transform3DEvent
-    | PinholeEvent
-    | ScalarEvent
-    | TextEvent
-    | ClearEvent
-    | BlueprintEvent
-)

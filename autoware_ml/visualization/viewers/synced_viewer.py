@@ -46,6 +46,7 @@ VIEWER_PREFIX = "/viewer/"
 BLUEPRINT_PREFIX = "/blueprints/"
 _FORWARDED_HEADERS = ("Content-Type", "Content-Encoding", "rerun-final-length")
 
+
 @dataclass(frozen=True)
 class SyncedViewerManifest:
     """Describe the blueprint files the synced page can load."""

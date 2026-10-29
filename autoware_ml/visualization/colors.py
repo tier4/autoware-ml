@@ -18,11 +18,11 @@ from __future__ import annotations
 
 import colorsys
 
+from jaxtyping import Float32, Int64, UInt8
 import numpy as np
-import numpy.typing as npt
 
 
-def build_label_palette(num_classes: int, alpha: int = 255) -> npt.NDArray[np.uint8]:
+def build_label_palette(num_classes: int, alpha: int = 255) -> UInt8[np.ndarray, "num_classes 4"]:
     """Build a deterministic RGBA palette for semantic and detection labels."""
     if num_classes <= 0:
         return np.zeros((0, 4), dtype=np.uint8)
@@ -39,11 +39,11 @@ def build_label_palette(num_classes: int, alpha: int = 255) -> npt.NDArray[np.ui
 
 
 def labels_to_colors(
-    labels: npt.NDArray[np.int64],
-    palette: npt.NDArray[np.uint8],
+    labels: Int64[np.ndarray, " num_labels"],
+    palette: UInt8[np.ndarray, "num_classes 4"],
     ignore_index: int | None = None,
     ignore_color: tuple[int, int, int, int] = (128, 128, 128, 255),
-) -> npt.NDArray[np.uint8]:
+) -> UInt8[np.ndarray, "num_labels 4"]:
     """Map integer labels to RGBA colors."""
     if labels.ndim != 1:
         raise ValueError(f"labels must be 1D, got shape {labels.shape}")
@@ -69,8 +69,8 @@ def labels_to_colors(
 
 
 def scalar_to_heatmap_colors(
-    values: npt.NDArray[np.float32], alpha: int = 255
-) -> npt.NDArray[np.uint8]:
+    values: Float32[np.ndarray, " num_values"], alpha: int = 255
+) -> UInt8[np.ndarray, "num_values 4"]:
     """Map scalar values in [0, 1] to RGBA, blue (low) -> cyan -> green -> yellow -> red (high)."""
     if values.ndim != 1:
         raise ValueError(f"values must be 1D, got shape {values.shape}")
@@ -99,7 +99,9 @@ def scalar_to_heatmap_colors(
     return colors
 
 
-def depths_to_colors(depths: npt.NDArray[np.float32], alpha: int = 255) -> npt.NDArray[np.uint8]:
+def depths_to_colors(
+    depths: Float32[np.ndarray, " num_depths"], alpha: int = 255
+) -> UInt8[np.ndarray, "num_depths 4"]:
     """Map depth values to a deterministic near-to-far RGBA gradient."""
     if depths.ndim != 1:
         raise ValueError(f"depths must be 1D, got shape {depths.shape}")

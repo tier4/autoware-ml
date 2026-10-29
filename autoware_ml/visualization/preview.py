@@ -16,13 +16,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 import copy
 from dataclasses import dataclass, field
 import math
 from pathlib import Path
 from typing import Literal, Protocol
 
+from jaxtyping import Float32
+import numpy as np
 import torch
 
 from autoware_ml.databases.taxonomy import DatabaseTaxonomy
@@ -34,11 +36,17 @@ from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.datamodule.base_dataset import BaseDataset, ConcatDataset
 from autoware_ml.datamodule.data_module import DataModule
 from autoware_ml.types.dataset import SplitType
-from autoware_ml.visualization.sensors.camera import CameraBoxProjection, CameraPointProjection
+from autoware_ml.visualization.entity_paths import (
+    CALIBRATION_STATUS_PATH,
+    DATA_CALIBRATION_STATUS_PATH,
+)
+from autoware_ml.visualization.sensors.camera import (
+    CameraBoxProjection,
+    CameraCalibration,
+    CameraPointProjection,
+)
 from autoware_ml.visualization.viewers.contracts import VisualizationSessionConfig
 from autoware_ml.visualization.session import VisualizationSession
-
-PreviewMode = Literal["auto", "predictions", "data"]
 
 #: Lightning stage that builds the dataset of each split.
 _SPLIT_STAGES: dict[SplitType, str] = {
@@ -76,7 +84,7 @@ class PreviewModel(Protocol):
 class VisualizationPreviewConfig:
     """Configure one visualization preview run."""
 
-    mode: PreviewMode = "auto"
+    mode: Literal["auto", "predictions", "data"] = "auto"
     split: str = SplitType.TEST.value
     sample_index: int = 0
     max_samples: int = 1
@@ -87,7 +95,6 @@ class VisualizationPreviewConfig:
     segmentation_class_names: tuple[str, ...] | None = None
     detection_class_names: tuple[str, ...] | None = None
     session: VisualizationSessionConfig = field(default_factory=VisualizationSessionConfig)
-    point_color_mode: Literal["semantic", "intensity", "solid"] = "semantic"
 
     def __post_init__(self) -> None:
         """Reject invalid preview settings before dataset or model setup."""
@@ -101,8 +108,6 @@ class VisualizationPreviewConfig:
             raise ValueError("max_samples must be greater than zero")
         if self.prediction_frequency_hz is not None and self.prediction_frequency_hz <= 0:
             raise ValueError("prediction_frequency_hz must be greater than zero")
-        if self.point_color_mode not in {"semantic", "intensity", "solid"}:
-            raise ValueError("point color mode must be 'semantic', 'intensity', or 'solid'")
         resolve_preview_device(self.device)
 
 
@@ -226,7 +231,7 @@ def run_visualization_preview(
 
 
 def _resolve_preview_mode(
-    mode: PreviewMode, model: PreviewModel | None
+    mode: Literal["auto", "predictions", "data"], model: PreviewModel | None
 ) -> Literal["predictions", "data"]:
     """Resolve automatic preview mode selection."""
     if mode == "auto":
@@ -298,7 +303,7 @@ def _load_sample(
 
 def _intermediate_frames(
     dataset: ConcatDataset, dataset_index: int, frequency_hz: float, stride: int
-) -> list[tuple[int, ModelGTSample]]:
+) -> Sequence[tuple[int, ModelGTSample]]:
     """Rebuild the unlabeled lidar frames recorded between a sample and the next one.
 
     Every record stores the lidar frames that follow its own, so the frames between two
@@ -449,9 +454,10 @@ def _log_preview_sample(
             "predictions, so there is nothing to visualize."
         )
 
-    points = _current_frame_points(scored_batch)
+    current_points = _current_frame_points(scored_batch)
+    points = _to_numpy(current_points) if current_points is not None else None
     extent_points = points
-    extent_boxes: list[torch.Tensor] = []
+    extent_boxes: Sequence[Float32[np.ndarray, "num_boxes box_params"]] = ()
     point_layers: dict[str, CameraPointProjection] = {}
     box_layers: dict[str, CameraBoxProjection] = {}
 
@@ -469,8 +475,8 @@ def _log_preview_sample(
         point_layers["lidar"] = CameraPointProjection(points=points)
 
     # One union extent for both tasks, so sibling views share their initial eye.
-    session.log_scene_extent(extent_points, boxes=tuple(extent_boxes))
-    cameras = _camera_metadata(sample.metadata.image_samples)
+    session.log_scene_extent(extent_points, boxes=extent_boxes)
+    cameras = _camera_calibrations(sample.metadata.image_samples)
     if cameras:
         session.log_cameras(cameras, point_layers=point_layers, box_layers=box_layers)
 
@@ -482,7 +488,7 @@ def _log_segmentation(
     config: VisualizationPreviewConfig,
     sample_name: str,
     point_layers: dict[str, CameraPointProjection],
-) -> torch.Tensor | None:
+) -> Float32[np.ndarray, "num_points num_features"] | None:
     """Log the segmentation layers of one sample and return the points they cover."""
     batch = sample.scored_batch
     ground_truth = None
@@ -497,8 +503,8 @@ def _log_segmentation(
         if ground_truth is None:
             return None
         mask = _current_frame_mask(batch)
-        points = _point_batch(batch).points[mask]
-        gt_labels = ground_truth[mask]
+        points = _to_numpy(_point_batch(batch).points[mask])
+        gt_labels = _to_numpy(ground_truth[mask])
         session.log_segmentation3d_data(
             points,
             gt_labels,
@@ -506,8 +512,6 @@ def _log_segmentation(
             ignore_index=labels.segmentation_ignore_index,
             point_labels=config.point_labels,
             sample_name=sample_name,
-            point_color_mode=config.point_color_mode,
-            root_path="scene",
         )
         point_layers["ground_truth/segmentation"] = CameraPointProjection(
             points=points,
@@ -518,22 +522,21 @@ def _log_segmentation(
         return points
 
     mask = _scored_point_mask(sample, predictions.pred_labels.shape[0])
-    points = _point_batch(batch).points[mask]
-    gt_labels = ground_truth[mask] if ground_truth is not None else None
+    points = _to_numpy(_point_batch(batch).points[mask])
+    gt_labels = _to_numpy(ground_truth[mask]) if ground_truth is not None else None
+    pred_labels = _to_numpy(predictions.pred_labels)
     session.log_segmentation3d(
         points,
-        predictions.pred_labels,
-        pred_probs=predictions.pred_probs,
+        pred_labels,
+        pred_probs=_to_numpy(predictions.pred_probs),
         gt_labels=gt_labels,
         class_names=class_names,
         ignore_index=labels.segmentation_ignore_index,
         point_labels=config.point_labels,
         sample_name=sample_name,
-        point_color_mode=config.point_color_mode,
-        root_path="scene",
     )
     point_layers["prediction/segmentation"] = CameraPointProjection(
-        points=points, labels=predictions.pred_labels, class_names=class_names
+        points=points, labels=pred_labels, class_names=class_names
     )
     if gt_labels is not None:
         point_layers["ground_truth/segmentation"] = CameraPointProjection(
@@ -548,24 +551,24 @@ def _log_segmentation(
 def _log_detection(
     session: VisualizationSession,
     sample: _PreviewSample,
-    points: torch.Tensor | None,
+    points: Float32[np.ndarray, "num_points num_features"] | None,
     labels: _PreviewLabels,
     config: VisualizationPreviewConfig,
     sample_name: str,
     box_layers: dict[str, CameraBoxProjection],
-) -> list[torch.Tensor]:
+) -> Sequence[Float32[np.ndarray, "num_boxes box_params"]]:
     """Log the detection layers of one sample and return the boxes they draw."""
     batch = sample.scored_batch
     gt_boxes = None
     gt_labels = None
     if sample.det3d_supervised and batch.detection3d_gt_batch is not None:
-        gt_boxes = batch.detection3d_gt_batch.valid_bboxes_3d()[0]
-        gt_labels = batch.detection3d_gt_batch.valid_labels_3d()[0]
+        gt_boxes = _to_numpy(batch.detection3d_gt_batch.valid_bboxes_3d()[0])
+        gt_labels = _to_numpy(batch.detection3d_gt_batch.valid_labels_3d()[0])
     class_names = labels.detection_class_names
     predictions = (
         sample.predictions.detection3d_predictions if sample.predictions is not None else None
     )
-    drawn_boxes: list[torch.Tensor] = []
+    drawn_boxes: list[Float32[np.ndarray, "num_boxes box_params"]] = []
 
     if predictions is None:
         if gt_boxes is None:
@@ -576,33 +579,28 @@ def _log_detection(
             gt_labels=gt_labels,
             class_names=class_names,
             sample_name=sample_name,
-            point_color_mode=config.point_color_mode,
-            root_path="scene",
         )
     else:
         if len(predictions) != 1:
             raise ValueError(
                 f"A preview batch holds one sample, got detections of {len(predictions)}."
             )
-        prediction = predictions[0]
+        pred_boxes = _to_numpy(predictions[0].bboxes_3d)
+        pred_labels = _to_numpy(predictions[0].labels_3d)
         session.log_detection3d(
-            {
-                "bboxes_3d": prediction.bboxes_3d,
-                "scores_3d": prediction.scores_3d,
-                "labels_3d": prediction.labels_3d,
-            },
+            pred_boxes=pred_boxes,
+            pred_scores=_to_numpy(predictions[0].scores_3d),
+            pred_labels=pred_labels,
             points=points,
             gt_boxes=gt_boxes,
             gt_labels=gt_labels,
             class_names=class_names,
             sample_name=sample_name,
-            point_color_mode=config.point_color_mode,
-            root_path="scene",
         )
         box_layers["prediction/detections"] = CameraBoxProjection(
-            boxes=prediction.bboxes_3d, labels=prediction.labels_3d, class_names=class_names
+            boxes=pred_boxes, labels=pred_labels, class_names=class_names
         )
-        drawn_boxes.append(prediction.bboxes_3d)
+        drawn_boxes.append(pred_boxes)
 
     if gt_boxes is not None:
         box_layers["ground_truth/detections"] = CameraBoxProjection(
@@ -644,16 +642,18 @@ def _log_calibration_preview(
 
     point_batch = sample.batch.point_cloud_gt_batch
     session.log_calibration_status(
-        lidar_to_camera=lidar_to_camera,
-        image_from_camera=image_from_camera,
-        points=point_batch.points if point_batch is not None else None,
-        image=image,
-        fused_image=fused_image,
+        lidar_to_camera=_to_numpy(lidar_to_camera),
+        image_from_camera=_to_numpy(image_from_camera),
+        points=_to_numpy(point_batch.points) if point_batch is not None else None,
+        image=_to_numpy(image),
+        fused_image=_to_numpy(fused_image) if fused_image is not None else None,
         gt_status=gt_status,
         pred_status=pred_status,
         pred_score=pred_score,
         sample_name=sample_name,
-        root_path="calibration_status" if predictions is not None else "dataset/calibration_status",
+        root_path=(
+            CALIBRATION_STATUS_PATH if predictions is not None else DATA_CALIBRATION_STATUS_PATH
+        ),
     )
 
 
@@ -704,16 +704,23 @@ def _scored_point_mask(sample: _PreviewSample, num_predictions: int) -> torch.Te
     )
 
 
-def _camera_metadata(image_samples: Sequence[ImageSample] | None) -> dict[str, dict[str, object]]:
+def _camera_calibrations(
+    image_samples: Sequence[ImageSample] | None,
+) -> Mapping[str, CameraCalibration]:
     """Describe every camera of a sample by its image file and calibration."""
     return {
-        image_sample.camera_name: {
-            "img_path": image_sample.image_path,
-            "cam2img": image_sample.camera_intrinsic,
-            "lidar2cam": image_sample.lidar2cam,
-        }
+        image_sample.camera_name: CameraCalibration(
+            image_path=image_sample.image_path,
+            intrinsics=_to_numpy(image_sample.camera_intrinsic),
+            lidar_to_camera=_to_numpy(image_sample.lidar2cam),
+        )
         for image_sample in image_samples or ()
     }
+
+
+def _to_numpy(tensor: torch.Tensor) -> np.ndarray:
+    """Copy a tensor to a host NumPy array, the input every visualization adapter takes."""
+    return tensor.detach().cpu().numpy()
 
 
 def _sample_timestamp(metadata: ModelGTSample) -> float | None:
