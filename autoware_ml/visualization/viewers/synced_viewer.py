@@ -30,10 +30,10 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from importlib import resources
 from pathlib import Path
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -46,21 +46,18 @@ VIEWER_PREFIX = "/viewer/"
 BLUEPRINT_PREFIX = "/blueprints/"
 _FORWARDED_HEADERS = ("Content-Type", "Content-Encoding", "rerun-final-length")
 
-Response = tuple[int, dict[str, str], bytes]
-
-
 @dataclass(frozen=True)
 class SyncedViewerManifest:
     """Describe the blueprint files the synced page can load."""
 
-    comparisons: tuple[dict[str, str], ...] = ()
+    comparisons: tuple[Mapping[str, str], ...] = ()
     camera_states: tuple[str, ...] = ()
     initial_comparison: str = ""
     initial_camera_state: str = "off"
     #: Camera state to blueprint file name.
-    left: dict[str, str] = field(default_factory=dict)
+    left: Mapping[str, str] = field(default_factory=dict)
     #: Comparison key to camera state to blueprint file name.
-    right: dict[str, dict[str, str]] = field(default_factory=dict)
+    right: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
 
 
 def load_page() -> bytes:
@@ -91,7 +88,7 @@ class SyncedViewerServer:
         self._lock = threading.Lock()
         self._version = 0
         self._manifest = SyncedViewerManifest()
-        self._server: http.server.ThreadingHTTPServer | None = None
+        self._server: _SyncedViewerHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
     @property
@@ -108,8 +105,7 @@ class SyncedViewerServer:
         """Bind the port and serve from a daemon thread."""
         if self._server is not None:
             return
-        server = http.server.ThreadingHTTPServer((self.host, self.port), self._handler_class())
-        server.daemon_threads = True
+        server = _SyncedViewerHTTPServer((self.host, self.port), self)
         self._server = server
         self._thread = threading.Thread(
             target=server.serve_forever, name="autoware-ml-synced-viewer", daemon=True
@@ -132,7 +128,7 @@ class SyncedViewerServer:
             self._manifest = manifest
             return self._version
 
-    def config(self) -> dict[str, Any]:
+    def config(self) -> Mapping[str, object]:
         """Return what the page needs to connect and to load its blueprints."""
         with self._lock:
             manifest = asdict(self._manifest)
@@ -154,7 +150,7 @@ class SyncedViewerServer:
             return None
         return path.read_bytes()
 
-    def respond(self, raw_path: str) -> Response:
+    def respond(self, raw_path: str) -> tuple[int, Mapping[str, str], bytes]:
         """Route one GET request path to its response."""
         path = urllib.parse.urlsplit(raw_path).path
         if path == "/":
@@ -170,7 +166,7 @@ class SyncedViewerServer:
             return self.fetch_viewer_asset(path[len(VIEWER_PREFIX) :])
         return 404, {"Content-Type": "text/plain"}, b"not found"
 
-    def fetch_viewer_asset(self, asset: str) -> Response:
+    def fetch_viewer_asset(self, asset: str) -> tuple[int, Mapping[str, str], bytes]:
         """Proxy one file of the Rerun web viewer, exposing the handle on its page."""
         is_page = asset in ("", "index.html")
         upstream = self.viewer_url + ("" if is_page else asset)
@@ -203,24 +199,40 @@ class SyncedViewerServer:
         headers.setdefault("Content-Type", "application/octet-stream")
         return 200, headers, body
 
-    def _handler_class(self) -> type[http.server.BaseHTTPRequestHandler]:
-        """Build the request handler bound to this server."""
-        server = self
 
-        class Handler(http.server.BaseHTTPRequestHandler):
-            """Translate GET requests into :meth:`SyncedViewerServer.respond`."""
+class _SyncedViewerRequestHandler(http.server.BaseHTTPRequestHandler):
+    """Translate GET requests into :meth:`SyncedViewerServer.respond`."""
 
-            def do_GET(self) -> None:
-                status, headers, body = server.respond(self.path)
-                self.send_response(status)
-                headers = {"Cache-Control": "no-store", **headers}
-                for name, value in headers.items():
-                    self.send_header(name, value)
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+    server: _SyncedViewerHTTPServer
 
-            def log_message(self, format: str, *args: Any) -> None:
-                logger.debug("synced viewer: " + format, *args)
+    def do_GET(self) -> None:
+        """Answer one GET request with the response of the synced viewer server."""
+        status, headers, body = self.server.viewer.respond(self.path)
+        self.send_response(status)
+        headers = {"Cache-Control": "no-store", **headers}
+        for name, value in headers.items():
+            self.send_header(name, value)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
-        return Handler
+    def log_message(self, format: str, *args: object) -> None:
+        """Route the request log to the module logger at debug level."""
+        logger.debug("synced viewer: " + format, *args)
+
+
+class _SyncedViewerHTTPServer(http.server.ThreadingHTTPServer):
+    """HTTP server that answers every request through one synced viewer server."""
+
+    daemon_threads = True
+
+    def __init__(self, address: tuple[str, int], viewer: SyncedViewerServer) -> None:
+        """
+        Initialize the HTTP server.
+
+        Args:
+            address: Host and port to listen on.
+            viewer: Synced viewer server producing the responses.
+        """
+        self.viewer = viewer
+        super().__init__(address, _SyncedViewerRequestHandler)
