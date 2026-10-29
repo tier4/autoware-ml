@@ -31,14 +31,18 @@ IMAGENET_STD = [0.229, 0.224, 0.225]
 
 def _inputs(images: torch.Tensor) -> ModelBatchInputs:
     batch_size, num_cams = images.shape[:2]
+
+    def identity(size: int) -> torch.Tensor:
+        return torch.eye(size, device=images.device).expand(batch_size, num_cams, size, size)
+
     return build_batch_inputs(
         images=ImageGTBatch(
             images=images,
             depth_maps=None,
-            camera_intrinsics=torch.eye(3).expand(batch_size, num_cams, 3, 3),
-            image_augmentation_matrices=torch.eye(4).expand(batch_size, num_cams, 4, 4),
-            lidar2images=torch.eye(4).expand(batch_size, num_cams, 4, 4),
-            lidar2cams=torch.eye(4).expand(batch_size, num_cams, 4, 4),
+            camera_intrinsics=identity(3),
+            image_augmentation_matrices=identity(4),
+            lidar2images=identity(4),
+            lidar2cams=identity(4),
             calibration_statuses=None,
         )
     )
@@ -100,17 +104,39 @@ def test_accepts_unit_range_images_with_interpolation_overshoot() -> None:
     torch.testing.assert_close(normalized.image_data.images, (images - mean) / std)
 
 
-def test_checks_only_the_first_batch() -> None:
-    """
-    Input: a unit-range batch, then a batch of 255 pixels, through the same layer.
-    Expected: the layer reads the pixel range of the first batch only, one reduction and one
-    host synchronization per run, so it does not check a later batch.
-    Check: the second batch is normalized without an error.
+def test_checks_the_first_batch_of_each_mode() -> None:
+    """The first evaluation batch does not vouch for the training images, nor the reverse.
+
+    A fit run starts with Lightning's sanity validation, and the training and evaluation
+    pipelines load their images apart. A later batch of a checked mode is not read again.
     """
     normalize = BatchNormalizeImages(IMAGENET_MEAN, IMAGENET_STD)
-    normalize(_inputs(torch.rand(1, 2, 3, 4, 5)), is_training=True)
+    normalize(_inputs(torch.rand(1, 2, 3, 4, 5)), is_training=False)
+    normalize(_inputs(torch.full((1, 2, 3, 4, 5), 255.0)), is_training=False)
 
-    normalize(_inputs(torch.full((1, 2, 3, 4, 5), 255.0)), is_training=True)
+    with pytest.raises(ValueError, match="first training batch"):
+        normalize(_inputs(torch.full((1, 2, 3, 4, 5), 255.0)), is_training=True)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
+def test_does_not_synchronize_the_device_after_the_range_check() -> None:
+    """Copying the statistics to the device must not wait for the work queued on it."""
+    normalize = BatchNormalizeImages(IMAGENET_MEAN, IMAGENET_STD)
+    inputs = _inputs(torch.rand(1, 2, 3, 4, 5, device="cuda"))
+    normalize(inputs, is_training=True)
+    torch.cuda.synchronize()
+
+    torch.cuda.set_sync_debug_mode("error")
+    try:
+        normalized = normalize(inputs, is_training=True)
+    finally:
+        torch.cuda.set_sync_debug_mode("default")
+
+    mean = torch.tensor(IMAGENET_MEAN, device="cuda").view(1, 1, 3, 1, 1)
+    std = torch.tensor(IMAGENET_STD, device="cuda").view(1, 1, 3, 1, 1)
+    torch.testing.assert_close(
+        normalized.image_data.images, (inputs.image_data.images - mean) / std
+    )
 
 
 def test_keeps_the_calibration() -> None:
@@ -139,19 +165,25 @@ def test_rejects_images_of_another_channel_count() -> None:
         )
 
 
-def test_rejects_inconsistent_statistics() -> None:
-    """
-    Input: a mean of two channels with a standard deviation of three, and a standard deviation
-    of zero.
-    Expected: statistics that disagree on the channel count, or that would divide by a
-    non-positive deviation, cannot standardize the images, so the layer refuses them when it is
-    built.
-    Check: a ValueError is raised for each.
-    """
+@pytest.mark.parametrize(
+    "mean, std",
+    [
+        ([0.5, 0.5], IMAGENET_STD),
+        # The 0-255 ImageNet statistics of the mmdetection configs would turn unit-range images
+        # into a near-constant -2.
+        ([123.675, 116.28, 103.53], [58.395, 57.12, 57.375]),
+        (IMAGENET_MEAN, [0.2, 0.0, 0.2]),
+        (IMAGENET_MEAN, [0.2, float("nan"), 0.2]),
+        ([0.5, float("inf"), 0.5], IMAGENET_STD),
+    ],
+    ids=["channel-count", "0-255", "zero-std", "nan-std", "inf-mean"],
+)
+def test_rejects_statistics_that_cannot_standardize_unit_range_images(
+    mean: list[float], std: list[float]
+) -> None:
+    """Statistics are refused when the layer is built, not found out by a failed training."""
     with pytest.raises(ValueError):
-        BatchNormalizeImages([0.5, 0.5], IMAGENET_STD)
-    with pytest.raises(ValueError):
-        BatchNormalizeImages(IMAGENET_MEAN, [0.2, 0.0, 0.2])
+        BatchNormalizeImages(mean, std)
 
 
 def test_runs_inside_the_data_preprocessor() -> None:
