@@ -20,7 +20,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
-from autoware_ml.visualization.events import VisualizationEvent
+from autoware_ml.visualization.viewers.events import VisualizationEvent
 
 
 @dataclass(frozen=True)

@@ -65,7 +65,7 @@ class SyncedViewerManifest:
 
 def load_page() -> bytes:
     """Return the synced comparison page."""
-    return resources.files("autoware_ml.visualization").joinpath(PAGE_RESOURCE).read_bytes()
+    return resources.files("autoware_ml.visualization.viewers").joinpath(PAGE_RESOURCE).read_bytes()
 
 
 class SyncedViewerServer:

@@ -20,12 +20,12 @@ import numpy as np
 import pytest
 
 from autoware_ml.visualization.colors import scalar_to_heatmap_colors
-from autoware_ml.visualization.events import (
+from autoware_ml.visualization.viewers.events import (
     AnnotationContextEvent,
     PointCloud3DEvent,
     ScalarEvent,
 )
-from autoware_ml.visualization.segmentation3d import (
+from autoware_ml.visualization.tasks.segmentation3d import (
     build_segmentation3d_data_events,
     build_segmentation3d_events,
 )

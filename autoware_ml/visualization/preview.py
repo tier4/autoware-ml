@@ -34,8 +34,8 @@ from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.datamodule.base_dataset import BaseDataset, ConcatDataset
 from autoware_ml.datamodule.data_module import DataModule
 from autoware_ml.types.dataset import SplitType
-from autoware_ml.visualization.cameras import CameraBoxProjection, CameraPointProjection
-from autoware_ml.visualization.contracts import VisualizationSessionConfig
+from autoware_ml.visualization.sensors.camera import CameraBoxProjection, CameraPointProjection
+from autoware_ml.visualization.viewers.contracts import VisualizationSessionConfig
 from autoware_ml.visualization.session import VisualizationSession
 
 PreviewMode = Literal["auto", "predictions", "data"]

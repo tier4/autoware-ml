@@ -21,12 +21,12 @@ from typing import Any
 
 import pytest
 
-from autoware_ml.visualization.backends import (
+from autoware_ml.visualization.viewers.backends import (
     NoOpVisualizationBackend,
     create_visualization_backend,
 )
-from autoware_ml.visualization.contracts import VisualizationSessionConfig
-from autoware_ml.visualization.events import ScalarEvent
+from autoware_ml.visualization.viewers.contracts import VisualizationSessionConfig
+from autoware_ml.visualization.viewers.events import ScalarEvent
 
 
 def test_create_visualization_backend_returns_the_noop_backend() -> None:

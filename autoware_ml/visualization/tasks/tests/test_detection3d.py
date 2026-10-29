@@ -19,14 +19,14 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from autoware_ml.visualization.detection3d import (
+from autoware_ml.visualization.tasks.detection3d import (
     build_detection3d_data_events,
     build_detection3d_events,
     detection_iou_statistics,
     normalize_detection_predictions,
     oriented_box_iou_3d,
 )
-from autoware_ml.visualization.events import (
+from autoware_ml.visualization.viewers.events import (
     AnnotationContextEvent,
     Boxes3DEvent,
     PointCloud3DEvent,

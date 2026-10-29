@@ -51,8 +51,8 @@ from autoware_ml.types.geometry import (
     PointFeatureName,
 )
 from autoware_ml.visualization import preview
-from autoware_ml.visualization.contracts import VisualizationSessionConfig
-from autoware_ml.visualization.events import (
+from autoware_ml.visualization.viewers.contracts import VisualizationSessionConfig
+from autoware_ml.visualization.viewers.events import (
     AnnotationContextEvent,
     Boxes3DEvent,
     ImageEvent,
@@ -62,7 +62,7 @@ from autoware_ml.visualization.events import (
 )
 from autoware_ml.visualization.preview import VisualizationPreviewConfig
 from autoware_ml.visualization.session import VisualizationSession
-from autoware_ml.visualization.tests.conftest import RecordingBackend
+from autoware_ml.visualization.tests.doubles import RecordingBackend
 
 _SEGMENTATION_CLASSES = ("road", "car")
 _DETECTION_CLASSES = ("car", "pedestrian")

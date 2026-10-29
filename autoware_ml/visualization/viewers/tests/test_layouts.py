@@ -18,8 +18,13 @@ from __future__ import annotations
 
 import numpy as np
 
-from autoware_ml.visualization.events import ImageEvent, LayoutGroup, TextDocumentEvent, ViewSpec
-from autoware_ml.visualization.layouts import (
+from autoware_ml.visualization.viewers.events import (
+    ImageEvent,
+    LayoutGroup,
+    TextDocumentEvent,
+    ViewSpec,
+)
+from autoware_ml.visualization.viewers.layouts import (
     SCENE_EXTENT_PATH,
     SYNCED_LEFT_IDENTITY,
     SYNCED_RIGHT_IDENTITY,

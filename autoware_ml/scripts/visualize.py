@@ -37,7 +37,7 @@ from autoware_ml.utils.runtime import (
     log_configuration,
     set_seed,
 )
-from autoware_ml.visualization.contracts import VisualizationSessionConfig
+from autoware_ml.visualization.viewers.contracts import VisualizationSessionConfig
 from autoware_ml.visualization.preview import (
     VisualizationPreviewConfig,
     resolve_preview_device,

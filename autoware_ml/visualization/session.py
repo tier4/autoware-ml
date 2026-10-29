@@ -19,24 +19,24 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
-from autoware_ml.visualization.backends import create_visualization_backend
-from autoware_ml.visualization.calibration_status import build_calibration_status_events
-from autoware_ml.visualization.cameras import (
+from autoware_ml.visualization.viewers.backends import create_visualization_backend
+from autoware_ml.visualization.tasks.calibration_status import build_calibration_status_events
+from autoware_ml.visualization.sensors.camera import (
     CameraBoxProjection,
     CameraPointProjection,
     build_camera_events,
 )
-from autoware_ml.visualization.contracts import (
+from autoware_ml.visualization.viewers.contracts import (
     VisualizationBackend,
     VisualizationSessionConfig,
 )
-from autoware_ml.visualization.detection3d import (
+from autoware_ml.visualization.tasks.detection3d import (
     build_detection3d_data_events,
     build_detection3d_events,
 )
 from autoware_ml.visualization.common import build_scene_extent_event
-from autoware_ml.visualization.events import ClearEvent, VisualizationEvent
-from autoware_ml.visualization.segmentation3d import (
+from autoware_ml.visualization.viewers.events import ClearEvent, VisualizationEvent
+from autoware_ml.visualization.tasks.segmentation3d import (
     build_segmentation3d_data_events,
     build_segmentation3d_events,
 )

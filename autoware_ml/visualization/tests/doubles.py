@@ -12,17 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Shared fixtures and doubles for the visualization test suite."""
+"""Test doubles shared by the visualization test suites."""
 
 from __future__ import annotations
 
 from collections.abc import Iterable
 from typing import Any
 
-import numpy as np
-import pytest
 
-from autoware_ml.visualization.events import VisualizationEvent
+from autoware_ml.visualization.viewers.events import VisualizationEvent
 
 
 class RecordingBackend:
@@ -58,29 +56,3 @@ class RecordingBackend:
     def paths_of(self, event_type: type) -> list[str]:
         """Return the entity paths of every recorded event of one type."""
         return [event.path for event in self.events if isinstance(event, event_type)]
-
-
-@pytest.fixture
-def recording_backend() -> RecordingBackend:
-    """Return a fresh recording backend."""
-    return RecordingBackend()
-
-
-@pytest.fixture
-def preview_calibration() -> dict[str, np.ndarray]:
-    """Return the camera matrices of a calibration sample with an identity-rotation extrinsic."""
-    return dict(
-        image_from_camera=np.array(
-            [[1000.0, 0.0, 640.0], [0.0, 1000.0, 360.0], [0.0, 0.0, 1.0]],
-            dtype=np.float32,
-        ),
-        lidar_to_camera=np.array(
-            [
-                [1.0, 0.0, 0.0, 1.0],
-                [0.0, 1.0, 0.0, 2.0],
-                [0.0, 0.0, 1.0, 3.0],
-                [0.0, 0.0, 0.0, 1.0],
-            ],
-            dtype=np.float32,
-        ),
-    )

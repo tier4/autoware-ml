@@ -27,9 +27,9 @@ from autoware_ml.visualization.common import (
     ensure_image_uint8,
     ensure_xyz,
     format_class_label,
-    point_cloud_colors,
     resolve_palette_size,
 )
+from autoware_ml.visualization.sensors.lidar import point_cloud_colors
 
 
 def test_resolve_palette_size_covers_observed_labels() -> None:

@@ -27,7 +27,7 @@ from typing import Any
 
 import pytest
 
-from autoware_ml.visualization.synced_viewer import (
+from autoware_ml.visualization.viewers.synced_viewer import (
     HANDLE_EXPOSURE,
     HANDLE_MARKER,
     SyncedViewerManifest,

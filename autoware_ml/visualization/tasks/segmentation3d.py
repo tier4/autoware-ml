@@ -29,13 +29,14 @@ from autoware_ml.visualization.colors import (
 from autoware_ml.visualization.common import (
     as_numpy,
     build_class_annotation_context,
-    build_lidar_reference_events,
     build_sample_metadata_events,
     ensure_xyz,
     format_class_label,
     resolve_palette_size,
 )
-from autoware_ml.visualization.events import (
+from autoware_ml.visualization.sensors.lidar import build_lidar_reference_events
+
+from autoware_ml.visualization.viewers.events import (
     PointCloud3DEvent,
     ScalarEvent,
     VisualizationEvent,

@@ -19,8 +19,8 @@ from __future__ import annotations
 import numpy as np
 
 from autoware_ml.utils.calibration import CalibrationStatus
-from autoware_ml.visualization.calibration_status import build_calibration_status_events
-from autoware_ml.visualization.events import (
+from autoware_ml.visualization.tasks.calibration_status import build_calibration_status_events
+from autoware_ml.visualization.viewers.events import (
     ImageEvent,
     PinholeEvent,
     PointCloud3DEvent,

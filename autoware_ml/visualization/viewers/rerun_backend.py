@@ -28,9 +28,9 @@ from typing import Any
 
 import numpy as np
 
-from autoware_ml.visualization.contracts import VisualizationSessionConfig
-from autoware_ml.visualization.common import POINT_COLOR_MODES
-from autoware_ml.visualization.events import (
+from autoware_ml.visualization.viewers.contracts import VisualizationSessionConfig
+from autoware_ml.visualization.sensors.lidar import POINT_COLOR_MODES
+from autoware_ml.visualization.viewers.events import (
     AnnotationContextEvent,
     BlueprintEvent,
     Boxes3DEvent,
@@ -49,12 +49,12 @@ from autoware_ml.visualization.events import (
     ViewSpec,
     VisualizationEvent,
 )
-from autoware_ml.visualization.layouts import (
+from autoware_ml.visualization.viewers.layouts import (
     build_calibration_blueprint,
     build_scene_blueprint,
     build_synced_scene_layouts,
 )
-from autoware_ml.visualization.synced_viewer import SyncedViewerManifest, SyncedViewerServer
+from autoware_ml.visualization.viewers.synced_viewer import SyncedViewerManifest, SyncedViewerServer
 
 logger = logging.getLogger(__name__)
 

@@ -23,12 +23,12 @@ import cv2
 import numpy as np
 import pytest
 
-from autoware_ml.visualization.cameras import (
+from autoware_ml.visualization.sensors.camera import (
     CameraBoxProjection,
     CameraPointProjection,
     build_camera_events,
 )
-from autoware_ml.visualization.events import (
+from autoware_ml.visualization.viewers.events import (
     ImageEvent,
     LineStrips2DEvent,
     PinholeEvent,

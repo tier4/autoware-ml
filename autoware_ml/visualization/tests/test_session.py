@@ -21,10 +21,10 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from autoware_ml.visualization.tests.conftest import RecordingBackend
-from autoware_ml.visualization.cameras import CameraPointProjection
-from autoware_ml.visualization.contracts import VisualizationSessionConfig
-from autoware_ml.visualization.events import (
+from autoware_ml.visualization.tests.doubles import RecordingBackend
+from autoware_ml.visualization.sensors.camera import CameraPointProjection
+from autoware_ml.visualization.viewers.contracts import VisualizationSessionConfig
+from autoware_ml.visualization.viewers.events import (
     Boxes3DEvent,
     BlueprintEvent,
     ClearEvent,

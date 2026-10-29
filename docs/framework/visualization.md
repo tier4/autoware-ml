@@ -30,6 +30,18 @@ flowchart LR
     Backend --> Rerun[Rerun SDK]
 ```
 
+The package is grouped by responsibility:
+
+- `visualization/session.py` and `visualization/preview.py`: the public session
+  and the preview that drives it from a datamodule and a model
+- `visualization/tasks/`: the calibration status, 3D detection and 3D
+  segmentation adapters
+- `visualization/sensors/`: the camera and LiDAR layers every task shares
+- `visualization/viewers/`: the event layer, the layouts, the backends, and the
+  synced comparison page
+- `visualization/common.py` and `visualization/colors.py`: array conversion,
+  labels and palettes
+
 ### 1. Visualization Session
 
 `autoware_ml.visualization.session.VisualizationSession` is the public entrypoint. It
@@ -48,9 +60,9 @@ into the rest of the framework.
 
 Task adapters turn native Autoware-ML data into neutral scene events:
 
-- `visualization/calibration_status.py`
-- `visualization/segmentation3d.py`
-- `visualization/detection3d.py`
+- `visualization/tasks/calibration_status.py`
+- `visualization/tasks/segmentation3d.py`
+- `visualization/tasks/detection3d.py`
 
 These adapters understand task semantics, for example:
 
@@ -62,7 +74,7 @@ These adapters understand task semantics, for example:
 
 ### 3. Visualization Events
 
-The shared event layer in `visualization/events.py` defines primitives such as:
+The shared event layer in `visualization/viewers/events.py` defines primitives such as:
 
 - `AnnotationContextEvent`
 - `ImageEvent`
@@ -78,7 +90,7 @@ This is the isolation boundary between task code and any concrete backend.
 
 ### 4. Backend
 
-`visualization/rerun_backend.py` is the only place that knows the Rerun SDK.
+`visualization/viewers/rerun_backend.py` is the only place that knows the Rerun SDK.
 It converts the neutral events into `rerun.Image`, `rerun.Points3D`,
 `rerun.Boxes3D`, `rerun.Transform3D`, and related entities.
 
@@ -187,7 +199,7 @@ of them is rotated. `--sync-views` therefore serves a second page, by default
 on port `9091`, that keeps both sides on one eye:
 
 - The page embeds two complete Rerun web viewers in two same-origin frames,
-  served through `visualization/synced_viewer.py`, which proxies the viewer
+  served through `visualization/viewers/synced_viewer.py`, which proxies the viewer
   bundle from the Rerun web server and exposes the viewer handle on its page.
   Both frames connect to the same gRPC stream as the regular page.
 - `build_synced_scene_layouts` derives one full-size scene view per side and
@@ -390,7 +402,7 @@ the split without running prediction.
 A call site builds a session from its config and logs one frame at a time:
 
 ```python
-from autoware_ml.visualization.contracts import VisualizationSessionConfig
+from autoware_ml.visualization.viewers.contracts import VisualizationSessionConfig
 from autoware_ml.visualization.session import VisualizationSession
 
 session = VisualizationSession.from_config(

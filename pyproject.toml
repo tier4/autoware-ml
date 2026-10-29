@@ -72,7 +72,7 @@ where = ["."]
 include = ["autoware_ml*"]
 
 [tool.setuptools.package-data]
-"autoware_ml.visualization" = ["synced_viewer.html"]
+"autoware_ml.visualization.viewers" = ["synced_viewer.html"]
 
 [tool.pixi.workspace]
 channels = ["conda-forge"]

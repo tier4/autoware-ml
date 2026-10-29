@@ -28,7 +28,7 @@ from autoware_ml.visualization.common import (
     ensure_image_uint8,
     ensure_xyz,
 )
-from autoware_ml.visualization.events import (
+from autoware_ml.visualization.viewers.events import (
     ImageEvent,
     PinholeEvent,
     PointCloud3DEvent,

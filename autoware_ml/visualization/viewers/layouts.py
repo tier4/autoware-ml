@@ -24,7 +24,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
 
-from autoware_ml.visualization.events import (
+from autoware_ml.visualization.viewers.events import (
     BlueprintEvent,
     ImageEvent,
     LayoutGroup,

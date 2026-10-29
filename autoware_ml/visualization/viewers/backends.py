@@ -18,11 +18,11 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from autoware_ml.visualization.contracts import (
+from autoware_ml.visualization.viewers.contracts import (
     VisualizationBackend,
     VisualizationSessionConfig,
 )
-from autoware_ml.visualization.events import VisualizationEvent
+from autoware_ml.visualization.viewers.events import VisualizationEvent
 
 
 class NoOpVisualizationBackend:
@@ -60,7 +60,7 @@ def create_visualization_backend(
     if config.backend == "noop":
         return NoOpVisualizationBackend()
     if config.backend == "rerun":
-        from autoware_ml.visualization.rerun_backend import RerunVisualizationBackend
+        from autoware_ml.visualization.viewers.rerun_backend import RerunVisualizationBackend
 
         return RerunVisualizationBackend(config)
     raise ValueError(f"Unknown visualization backend: {config.backend}")

@@ -25,12 +25,13 @@ from autoware_ml.visualization.colors import build_label_palette, labels_to_colo
 from autoware_ml.visualization.common import (
     as_numpy,
     build_class_annotation_context,
-    build_lidar_reference_events,
     build_sample_metadata_events,
     format_class_label,
     resolve_palette_size,
 )
-from autoware_ml.visualization.events import (
+from autoware_ml.visualization.sensors.lidar import build_lidar_reference_events
+
+from autoware_ml.visualization.viewers.events import (
     Boxes3DEvent,
     ScalarEvent,
     VisualizationEvent,

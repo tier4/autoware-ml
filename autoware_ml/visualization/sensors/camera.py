@@ -39,7 +39,7 @@ from autoware_ml.visualization.common import (
     ensure_xyz,
     resolve_palette_size,
 )
-from autoware_ml.visualization.events import (
+from autoware_ml.visualization.viewers.events import (
     AnnotationContextEvent,
     ImageEvent,
     LineStrips2DEvent,

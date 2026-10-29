@@ -27,8 +27,8 @@ from typing import Any
 import numpy as np
 import pytest
 
-from autoware_ml.visualization.contracts import VisualizationSessionConfig
-from autoware_ml.visualization.events import (
+from autoware_ml.visualization.viewers.contracts import VisualizationSessionConfig
+from autoware_ml.visualization.viewers.events import (
     AnnotationContextEvent,
     AnnotationInfo,
     BlueprintEvent,
@@ -46,7 +46,7 @@ from autoware_ml.visualization.events import (
     Transform3DEvent,
     ViewSpec,
 )
-from autoware_ml.visualization.rerun_backend import (
+from autoware_ml.visualization.viewers.rerun_backend import (
     RerunVisualizationBackend,
     _patch_class_id_array_protocol,
     _patch_time_int_array_protocol,
@@ -316,7 +316,7 @@ def rerun_calls(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         "flushes": [],
     }
     monkeypatch.setattr(
-        "autoware_ml.visualization.rerun_backend._load_rerun_module",
+        "autoware_ml.visualization.viewers.rerun_backend._load_rerun_module",
         lambda: _build_fake_rerun(calls),
     )
     return calls
