@@ -18,9 +18,11 @@ from __future__ import annotations
 
 import t4sparse.torch
 import torch
+from jaxtyping import Float
+from spconv.core import ConvAlgo
 from spconv.pytorch.core import SparseConvTensor
 from t4sparse.torch.compat import to_spconv_layer
-from torch import nn
+from torch import Tensor, nn
 
 from autoware_ml.ops.submanifold_conv_spconv import with_features_as
 
@@ -42,14 +44,60 @@ class T4SparseSubMConv3d(t4sparse.torch.SubMConv3d):
     autocast around whole stages, never around part of one.
     """
 
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int | tuple[int, int, int] = 3,
+        stride: int | tuple[int, int, int] = 1,
+        padding: int | tuple[int, int, int] = 0,
+        dilation: int | tuple[int, int, int] = 1,
+        groups: int = 1,
+        bias: bool = True,
+        indice_key: str | None = None,
+        algo: ConvAlgo | None = None,
+        fp32_accum: bool | None = None,
+        large_kernel_fast_algo: bool = False,
+        name: str | None = None,
+    ) -> None:
+        """Build the layer with ``spconv.SubMConv3d``'s signature.
+
+        Args:
+            in_channels: Number of input feature channels.
+            out_channels: Number of output feature channels.
+            kernel_size: Extent of the kernel per axis.
+            stride: Stride per axis; t4sparse implements 1 only.
+            padding: Padding per axis; t4sparse implements 0 only.
+            dilation: Dilation per axis; t4sparse implements 1 only.
+            groups: Number of channel groups; t4sparse implements 1 only.
+            bias: Whether the layer carries a bias.
+            indice_key: Key under which the index structure is cached on the sparse tensor.
+            algo: spconv's kernel choice; kept as an attribute, no effect on t4sparse.
+            fp32_accum: spconv's accumulation hint; t4sparse always accumulates in fp32.
+            large_kernel_fast_algo: spconv's tuning hint; no effect on t4sparse.
+            name: spconv's layer name; kept as an attribute.
+        """
+        super().__init__(
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            groups,
+            bias,
+            indice_key,
+            algo,
+            fp32_accum,
+            large_kernel_fast_algo,
+            name,
+        )
         # Bypasses nn.Module's registration: the twin shares this layer's parameters and
         # must not appear in the state dict.
         self.__dict__["_spconv_twin"] = None
 
     @staticmethod
-    def runs_on_t4sparse(features: torch.Tensor) -> bool:
+    def runs_on_t4sparse(features: Float[Tensor, "num_points channels"]) -> bool:
         """Return whether t4sparse has a kernel for a call on ``features``.
 
         Args:
