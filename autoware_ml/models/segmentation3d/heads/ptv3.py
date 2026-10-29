@@ -23,7 +23,7 @@ encoder guarantees the detection branch is untouched.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import torch
@@ -38,6 +38,7 @@ from autoware_ml.losses.segmentation3d.lovasz import LovaszLoss
 from autoware_ml.metrics.segmentation3d.eval_output import segmentation3d_frames_eval_output
 from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     Block,
+    Fp32Sublayer,
     PointSequential,
     SerializedUnpooling,
     deepcopy_without_flash,
@@ -89,6 +90,10 @@ class PTv3Seg3DDecoderHead(nn.Module):
         dec_conv: Sequence[bool] | bool = True,
         dec_attn: Sequence[bool] | bool = True,
         dec_rope_base: Sequence[float | None] | float | None = None,
+        class_names: Sequence[str] | None = None,
+        class_sets: Mapping[str, Sequence[str]] | None = None,
+        activation_checkpointing: bool = False,
+        fp32_sublayers: Sequence[Fp32Sublayer] = (),
     ) -> None:
         """Initialize the PTv3 segmentation decoder head.
 
@@ -121,11 +126,26 @@ class PTv3Seg3DDecoderHead(nn.Module):
                 blocks, or one flag for every stage.
             dec_rope_base: Rotary-embedding frequency base, either one value for
                 every stage or one per stage. ``None`` disables RoPE.
+            class_names: Class names in index order, needed to resolve ``class_sets``.
+            class_sets: Label sets of the taxonomy, set name to member class names, in the
+                order the taxonomy indexes them. A target ``num_classes + k`` names a point
+                that belongs to one of the classes of set ``k``; such targets are trained on
+                the summed probability of the set (see :meth:`loss`).
+            activation_checkpointing: Recompute the attention and MLP activations of the
+                decoder blocks in the backward pass, see the encoder ``Block``.
+            fp32_sublayers: Sublayers computed in fp32 under autocast, see the encoder
+                ``Fp32Sublayer``. Empty by default.
         """
         super().__init__()
         self.order = list(order)
         self.num_classes = int(num_classes)
         self.ignore_index = int(ignore_index)
+        self.set_membership: torch.Tensor | None
+        self.register_buffer(
+            "set_membership",
+            self.build_set_membership(self.num_classes, class_names, class_sets),
+            persistent=False,
+        )
         self.dec_depths = list(dec_depths)
         self.dec_patch_sizes = list(dec_patch_size)
         stage_count = len(enc_channels)
@@ -178,6 +198,8 @@ class PTv3Seg3DDecoderHead(nn.Module):
                         enable_conv=self.dec_conv[stage_index],
                         enable_attn=self.dec_attn[stage_index],
                         rope_base=self.dec_rope_base[stage_index],
+                        activation_checkpointing=activation_checkpointing,
+                        fp32_sublayers=fp32_sublayers,
                     ),
                     name=f"block{block_index}",
                 )
@@ -187,6 +209,11 @@ class PTv3Seg3DDecoderHead(nn.Module):
         self.cross_entropy = nn.CrossEntropyLoss(ignore_index=self.ignore_index, reduction="none")
         self.lovasz = LovaszLoss(ignore_index=self.ignore_index, loss_weight=lovasz_weight)
         self.mixed_voxel_weight = float(mixed_voxel_weight)
+
+    @property
+    def num_sets(self) -> int:
+        """Number of label sets the targets may name after the classes."""
+        return 0 if self.set_membership is None else int(self.set_membership.shape[0])
 
     def forward(self, point: Point) -> torch.Tensor:
         """Decode the deepest encoder stage into point-wise logits.
@@ -210,6 +237,12 @@ class PTv3Seg3DDecoderHead(nn.Module):
         the intersection over union of a whole set of rows and has no per row term to weigh,
         so it takes the targets alone.
 
+        A target in ``[0, num_classes)`` is a class; ``num_classes + k`` names label set ``k``
+        of the taxonomy, a row known to belong to one of the set's classes. Such a row
+        contributes the cross entropy of the summed probability of its set, so a corpus
+        annotated at a coarser specification supervises exactly what it knows; it takes no
+        part in the Lovasz term, which needs one class per row.
+
         Args:
             seg3d_logits: Row-wise segmentation logits.
             segment: Target of every row.
@@ -218,17 +251,120 @@ class PTv3Seg3DDecoderHead(nn.Module):
         Returns:
             Dictionary with ``loss_ce``, ``loss_lovasz``, and their sum ``loss``.
         """
+        is_set = segment >= self.num_classes
+        if self.set_membership is None and bool(is_set.any()):
+            raise ValueError(
+                "The segmentation targets name label sets, but the head was built without "
+                "class_sets; pass the taxonomy's class_names and class_sets to the head."
+            )
+        row_losses, class_targets = self._row_losses(seg3d_logits, segment, is_set)
         # Dividing the weighted sum by the summed weights gives the weighted mean over the
         # supervised rows, and zero instead of nan when a batch has no supervision.
-        loss_ce = (self.cross_entropy(seg3d_logits, segment) * weights).sum() / weights.sum().clamp(
-            min=1e-6
-        )
-        loss_lovasz = self.lovasz(seg3d_logits, segment)
+        loss_ce = (row_losses * weights).sum() / weights.sum().clamp(min=1e-6)
+        loss_lovasz = self.lovasz(seg3d_logits, class_targets)
         return {
             "loss_ce": loss_ce,
             "loss_lovasz": loss_lovasz,
             "loss": loss_ce + loss_lovasz,
         }
+
+    def _row_losses(
+        self, seg3d_logits: torch.Tensor, segment: torch.Tensor, is_set: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Compute the unweighted cross entropy of every row and the targets of the Lovasz term.
+
+        Args:
+            seg3d_logits: Row-wise segmentation logits.
+            segment: Target of every row.
+            is_set: Whether the target of every row names a label set.
+
+        Returns:
+            Cross entropy of every row and the class target of every row, the ignore index
+            where the row names a label set.
+        """
+        if self.set_membership is None:
+            return self._plain_row_losses(seg3d_logits, segment)
+        return self._set_row_losses(seg3d_logits, segment, is_set)
+
+    def _plain_row_losses(
+        self, seg3d_logits: torch.Tensor, segment: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Compute the row losses of a head without label sets, every target being a class.
+
+        Args:
+            seg3d_logits: Row-wise segmentation logits.
+            segment: Class target of every row.
+
+        Returns:
+            Cross entropy of every row and the unchanged targets.
+        """
+        return self.cross_entropy(seg3d_logits, segment), segment
+
+    def _set_row_losses(
+        self, seg3d_logits: torch.Tensor, segment: torch.Tensor, is_set: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Compute the row losses of a head with label sets.
+
+        The log probability of every set is the logsumexp of the log probabilities of its
+        classes, so one negative log likelihood scores class and set targets alike.
+
+        Args:
+            seg3d_logits: Row-wise segmentation logits.
+            segment: Class or label set target of every row.
+            is_set: Whether the target of every row names a label set.
+
+        Returns:
+            Negative log likelihood of every row and the class targets, the ignore index where
+            the row names a label set.
+        """
+        log_probs = torch.log_softmax(seg3d_logits.float(), dim=1)
+        set_log_probs = torch.logsumexp(
+            log_probs.unsqueeze(1).masked_fill(~self.set_membership, float("-inf")), dim=2
+        )
+        row_losses = nn.functional.nll_loss(
+            torch.cat([log_probs, set_log_probs], dim=1),
+            segment,
+            ignore_index=self.ignore_index,
+            reduction="none",
+        )
+        class_targets = torch.where(is_set, torch.full_like(segment, self.ignore_index), segment)
+        return row_losses, class_targets
+
+    @staticmethod
+    def build_set_membership(
+        num_classes: int,
+        class_names: Sequence[str] | None,
+        class_sets: Mapping[str, Sequence[str]] | None,
+    ) -> torch.Tensor | None:
+        """Build the ``[num_sets, num_classes]`` membership table of the label sets.
+
+        Args:
+            num_classes: Number of classes of the level.
+            class_names: Class names in index order.
+            class_sets: Set name to member class names, in set index order.
+
+        Returns:
+            Boolean table with row ``k`` marking the classes of set ``k``, or ``None`` when the
+            taxonomy has no label sets.
+
+        Raises:
+            ValueError: Raised when sets are given without class names, or name unknown classes.
+        """
+        if not class_sets:
+            return None
+        if class_names is None or len(class_names) != num_classes:
+            raise ValueError(
+                "class_sets need the class_names of the level to resolve their members, got "
+                f"{None if class_names is None else len(class_names)} names for {num_classes} classes."
+            )
+        indices = {name: index for index, name in enumerate(class_names)}
+        membership = torch.zeros(len(class_sets), num_classes, dtype=torch.bool)
+        for row, (set_name, members) in enumerate(class_sets.items()):
+            unknown = [member for member in members if member not in indices]
+            if unknown:
+                raise ValueError(f"Label set {set_name!r} names unknown classes {unknown}.")
+            membership[row, [indices[member] for member in members]] = True
+        return membership
 
     def set_serialization_order(self, order: Sequence[str]) -> None:
         """Update serialization order and reassign block order indices.
@@ -355,7 +491,8 @@ def voxel_supervision(
         point_voxel_indices: Voxel row of every point.
         segment: Segmentation label of every point.
         num_voxels: Number of voxels of the batch.
-        num_classes: Number of classes the head predicts.
+        num_classes: Number of labels a point can carry: the classes the head predicts plus
+            the label sets of the taxonomy, which take the indices after the classes.
         ignore_index: Label of the points that carry no supervision.
         sample: Whether to draw the label instead of taking the majority.
         mixed_weight: Weight a voxel gains when its points disagree completely.
@@ -405,7 +542,7 @@ def segmentation3d_point_loss(
         voxels_data.point_voxel_indices,
         _point_labels(label_batch),
         num_voxels=seg3d_logits.shape[0],
-        num_classes=seg3d_logits.shape[1],
+        num_classes=seg3d_logits.shape[1] + head.num_sets,
         ignore_index=head.ignore_index,
         sample=head.training,
         mixed_weight=head.mixed_voxel_weight,

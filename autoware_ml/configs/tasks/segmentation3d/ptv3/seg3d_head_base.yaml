@@ -21,3 +21,8 @@ upcast_attention: ${model.encoder.upcast_attention}
 upcast_softmax: ${model.encoder.upcast_softmax}
 lovasz_weight: 1.0
 mixed_voxel_weight: 1.0
+# Label sets of the taxonomy level, null when it has none; the class names resolve them.
+class_names: ${database.taxonomy.segmentation3d.class_names}
+class_sets: ${oc.select:database.taxonomy.segmentation3d.class_sets,null}
+activation_checkpointing: ${model.encoder.activation_checkpointing}
+fp32_sublayers: ${model.encoder.fp32_sublayers}

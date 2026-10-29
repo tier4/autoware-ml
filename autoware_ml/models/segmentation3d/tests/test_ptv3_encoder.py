@@ -5,6 +5,7 @@ from __future__ import annotations
 import itertools
 import math
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -31,6 +32,8 @@ from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
     build_seg3d_model,
 )
 from autoware_ml.models.segmentation3d.encoders.ptv3 import (
+    Block,
+    Fp32Sublayer,
     Point,
     PointSequential,
     PointTransformerV3Encoder,
@@ -1297,3 +1300,64 @@ def test_export_input_builders_reject_a_multi_sample_batch() -> None:
     for builder in (prepare_ptv3_export_inputs, build_ptv3_export_context):
         with pytest.raises(ValueError, match="single-sample"):
             builder(model, double)
+
+
+def _attention_only_encoder(fp32_sublayers: Any) -> PointTransformerV3Encoder:
+    torch.manual_seed(0)
+    return PointTransformerV3Encoder(
+        in_channels=5,
+        order=("z",),
+        stride=(),
+        enc_depths=(1,),
+        enc_channels=(16,),
+        enc_num_head=(2,),
+        enc_patch_size=(8,),
+        mlp_ratio=2.0,
+        qkv_bias=True,
+        qk_scale=None,
+        attn_drop=0.0,
+        proj_drop=0.0,
+        drop_path=0.0,
+        pre_norm=True,
+        shuffle_orders=False,
+        enable_rpe=False,
+        enable_flash=False,
+        upcast_attention=False,
+        upcast_softmax=False,
+        enc_conv=False,
+        fp32_sublayers=fp32_sublayers,
+    )
+
+
+@pytest.mark.parametrize("fp32_sublayers", [("mlp",), ("attn",), "mlp"])
+def test_fp32_sublayers_rejects_entries_that_are_not_fp32_sublayer(fp32_sublayers: Any) -> None:
+    with pytest.raises(TypeError, match="fp32_sublayers"):
+        _attention_only_encoder(fp32_sublayers)
+
+
+def test_fp32_sublayers_reach_every_block() -> None:
+    encoder = _attention_only_encoder((Fp32Sublayer.MLP,))
+    blocks = [module for module in encoder.modules() if isinstance(module, Block)]
+    assert blocks
+    assert all(block.fp32_sublayers == {Fp32Sublayer.MLP} for block in blocks)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA autocast required")
+def test_fp32_mlp_runs_the_feed_forward_network_in_fp32_under_autocast() -> None:
+    encoder = _attention_only_encoder((Fp32Sublayer.MLP,)).cuda()
+    mlp_dtypes = []
+    for module in encoder.modules():
+        if isinstance(module, Block) and module.mlp is not None:
+            module.mlp.register_forward_hook(lambda _m, _i, out: mlp_dtypes.append(out.feat.dtype))
+    count = 64
+    inputs = {
+        "feat": torch.randn(count, 5, device="cuda"),
+        "coord": torch.rand(count, 3, device="cuda"),
+        "grid_coord": torch.randint(0, 16, (count, 3), device="cuda"),
+        "offset": torch.tensor([count], device="cuda"),
+        "grid_size": torch.tensor(0.1, device="cuda"),
+    }
+    with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+        point = encoder(inputs)
+    assert mlp_dtypes and all(dtype == torch.float32 for dtype in mlp_dtypes)
+    assert torch.isfinite(point.feat).all()

@@ -1,0 +1,61 @@
+# @package _global_
+# Stage 3 of the offline foundation model: fine-tune the stage 2 model on the fixed Kognic
+# corpus (new specification labels of every foundation class, about 4.4k training frames at the
+# density of the vehicle sensing filter), repeated four times so it makes up about half of the
+# epoch, while rehearsing the 10 Hz pseudo corpus at 1 Hz (about 17k frames, label sets where
+# the old specification is coarser). Kognic alone validates and tests, the first ground truth
+# scoring every class. Start from the stage 2 checkpoint with `--weights`.
+#
+# The root-level `pseudo_10hz_sample_steps` sets the sample step of every database of the
+# pseudo corpus (scenarios/foundation/pseudo_10hz.yaml, 1 when unset).
+defaults:
+  - base_voxel006_122m
+  - base_foundation
+  - /datamodule/t4dataset/datasets/det3d_seg3d@datasets.pseudo_train: default_det3d_seg3d_train_dataset
+  - /database@database: t4dataset/foundation/kognic_fused
+  - /database@pseudo_database: t4dataset/foundation/pseudo_10hz
+  - _self_
+
+batch_size: 1
+experiment_group_name: ptv3_det3d_seg3d/${database.version}/foundation_kognic_fused
+experiment_name: voxel006_m3_b1_10e_t4dataset_122m_foundation_kognic_fused
+
+# Rehearse the pseudo corpus at 1 Hz
+pseudo_10hz_sample_steps: 10
+# Kognic frames seen per epoch relative to their count; 4 gives about half the epoch
+kognic_repeat: 4
+
+# A dropped voxel is an error, the budget keeps a margin over the densest Kognic frames
+max_voxels: 1572864
+
+# The pseudo corpus trains both tasks; the old segmentation ground truth of the earlier stages
+# is left out
+datasets:
+  pseudo_train:
+    database_root_path: ${pseudo_database.root_path}
+    lidar_intensity_scale: ${pseudo_database.lidar_intensity_scale}
+    transforms: ${datasets.train.transforms}
+
+datamodule:
+  sources:
+    # Kognic trains, validates and tests both tasks
+    main:
+      repeat: ${kognic_repeat}
+    pseudo:
+      _target_: autoware_ml.datamodule.sources.DatasetSource
+      database: ${pseudo_database}
+      train_dataset: ${datasets.pseudo_train}
+
+model:
+  scheduler:
+    # One warm-up epoch and cosine decay over the rest
+    warmup_epochs: 1
+    decay_epochs: 9
+    max_lr_factor: 3.0
+
+trainer:
+  max_epochs: 10
+
+callbacks:
+  early_stopping:
+    patience: 10

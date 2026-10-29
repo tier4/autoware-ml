@@ -50,12 +50,29 @@ class DatasetParams(BaseModel):
     Attributes:
       dataset_name: Name of the dataset.
       sample_steps: Number of steps to sample.
+      semantic_masks: Whether to keep only the samples whose lidar frame has a semantic
+        segmentation mask, dropping every other sample from the record table. For a corpus
+        labelled at a lower rate than it was recorded, so it trains on its labelled samples
+        only. Not a switch for loading the masks: the masks of the kept samples are recorded
+        either way.
+      category_aliases: Raw mask category name to the name the vocabulary resolves it
+        under, for a corpus whose category names mean something else than the same names
+        elsewhere (an older annotation specification whose ``sidewalk`` still contains the
+        curbs, a pseudo label corpus written at a coarser level). Applied when the record
+        table is generated, so the records carry the aliased names.
+      camera_frames: Whether the records carry the camera frames of every sample. Off for
+        a LiDAR only corpus, or a mirror that lacks the images: the record generation then
+        neither reads nor requires them.
     """
 
     model_config = ConfigDict(frozen=True, strict=True)
 
     dataset_name: str
     sample_steps: int = Field(ge=1)
+    # Keeps only the samples that have a semantic mask; the name is part of the database hash
+    semantic_masks: bool = False
+    category_aliases: dict[str, str] = Field(default_factory=dict)
+    camera_frames: bool = True
 
     def __str__(self) -> str:
         """String representation of the database version."""
@@ -72,16 +89,41 @@ class DatasetParams(BaseModel):
         """
 
         return (
-            f"DatasetParams(dataset_name={self.dataset_name!r}, sample_steps={self.sample_steps})"
+            f"DatasetParams(dataset_name={self.dataset_name!r}, sample_steps={self.sample_steps}"
+            f"{self._record_options_str()})"
         )
 
     def __eq__(self, other: DatasetParams) -> bool:
         """Compare two database versions by their version and settings."""
-        return self.dataset_name == other.dataset_name and self.sample_steps == other.sample_steps
+        return (
+            self.dataset_name == other.dataset_name
+            and self.sample_steps == other.sample_steps
+            and self._record_options_str() == other._record_options_str()
+        )
 
     def __hash__(self) -> int:
         """Hash the database version by its version and settings."""
         return hash(str(self))
+
+    def _record_options_str(self) -> str:
+        """
+        String form of the record options that differ from their defaults.
+
+        Only the options a corpus sets are named, so the record tables of every corpus that
+        keeps the defaults keep their hash.
+
+        Returns:
+          str: The options as ``, name=value`` items, empty when all are at their default.
+        """
+
+        options = []
+        if self.semantic_masks:
+            options.append(f", semantic_masks={self.semantic_masks}")
+        if self.category_aliases:
+            options.append(f", category_aliases={sorted(self.category_aliases.items())}")
+        if not self.camera_frames:
+            options.append(f", camera_frames={self.camera_frames}")
+        return "".join(options)
 
 
 class ScenarioData(BaseModel):

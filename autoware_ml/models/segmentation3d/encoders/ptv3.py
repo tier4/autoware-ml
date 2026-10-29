@@ -24,12 +24,15 @@ import math
 from copy import deepcopy
 from dataclasses import dataclass
 from collections.abc import Sequence
+from enum import StrEnum, auto
+from functools import partial
 from typing import Any
 
 import spconv.pytorch as spconv
 import torch
 import torch.nn as nn
 from torch.onnx.operators import shape_as_tensor
+from torch.utils.checkpoint import checkpoint
 
 from autoware_ml.ops.indexing.operators import argsort
 from autoware_ml.ops.segment.segment_csr import segment_csr
@@ -749,6 +752,17 @@ class MLP(nn.Module):
         return self.drop(self.fc2(self.drop(self.act(self.fc1(x)))))
 
 
+class Fp32Sublayer(StrEnum):
+    """
+    Block sublayer that can be computed in fp32 under autocast.
+
+    Attributes:
+      MLP: The feed-forward network, which recovers the accuracy bf16 loses there.
+    """
+
+    MLP = auto()
+
+
 class Block(PointModule):
     """Compose positional encoding, attention, and MLP for one PTv3 block.
 
@@ -777,6 +791,8 @@ class Block(PointModule):
         enable_conv: bool = True,
         enable_attn: bool = True,
         rope_base: float | None = None,
+        activation_checkpointing: bool = False,
+        fp32_sublayers: Sequence[Fp32Sublayer] = (),
     ) -> None:
         """Initialize one PTv3 attention block.
 
@@ -806,14 +822,27 @@ class Block(PointModule):
                 stages.
             rope_base: Frequency base for axis-split 3D rotary embedding, or
                 ``None`` to disable it.
+            activation_checkpointing: Recompute the attention and MLP activations of the
+                block in the backward pass instead of keeping them, trading roughly a third
+                more compute for most of the block's activation memory. Training only.
+            fp32_sublayers: Sublayers computed in fp32 under autocast, see
+                :class:`Fp32Sublayer`. Empty by default.
 
         Raises:
             ValueError: Raised when the block would carry no operation at all.
+            TypeError: Raised when an entry of ``fp32_sublayers`` is not a ``Fp32Sublayer``.
         """
         super().__init__()
         if not enable_conv and not enable_attn:
             raise ValueError("A block must enable at least one of convolution or attention.")
+        for sublayer in fp32_sublayers:
+            if not isinstance(sublayer, Fp32Sublayer):
+                raise TypeError(
+                    f"fp32_sublayers entries must be Fp32Sublayer, got {type(sublayer).__name__}."
+                )
         self.pre_norm = pre_norm
+        self.activation_checkpointing = bool(activation_checkpointing)
+        self.fp32_sublayers = frozenset(fp32_sublayers)
         self.enable_conv = bool(enable_conv)
         self.enable_attn = bool(enable_attn)
 
@@ -875,22 +904,78 @@ class Block(PointModule):
             point = self.norm0(point)
 
         if self.enable_attn:
-            shortcut = point.feat
-            if self.pre_norm:
-                point = self.norm1(point)
-            point = self.drop_path(self.attn(point))
-            point.feat = shortcut + point.feat
-            if not self.pre_norm:
-                point = self.norm1(point)
-
-            shortcut = point.feat
-            if self.pre_norm:
-                point = self.norm2(point)
-            point = self.drop_path(self.mlp(point))
-            point.feat = shortcut + point.feat
-            if not self.pre_norm:
-                point = self.norm2(point)
+            if self.activation_checkpointing and self.training and torch.is_grad_enabled():
+                # The window metadata of the point is read from the closure and stays as it
+                # is; only the features are differentiable inputs, so the recomputation in
+                # the backward pass reproduces the forward exactly (dropout RNG included).
+                # The recomputation rewrites `point.feat` of this stage's container while the
+                # backward runs; nothing reads the container then.
+                point.feat = checkpoint(
+                    partial(self._attention_and_mlp, point), point.feat, use_reentrant=False
+                )
+            else:
+                point.feat = self._attention_and_mlp(point, point.feat)
         point.sparse_conv_feat = point.sparse_conv_feat.replace_feature(point.feat)
+        return point
+
+    def _attention_and_mlp(self, point: Point, feat: torch.Tensor) -> torch.Tensor:
+        """Run the attention and MLP sublayers on ``feat`` and return the new features.
+
+        Args:
+            point: Point container carrying the serialization and window metadata.
+            feat: Input features of the sublayers.
+
+        Returns:
+            Features after both residual sublayers.
+        """
+        point.feat = feat
+        point = self._attention_sublayer(point)
+        point = self._mlp_sublayer(point)
+        return point.feat
+
+    def _attention_sublayer(self, point: Point) -> Point:
+        """Apply the residual serialized attention sublayer.
+
+        Args:
+            point: Point container carrying the serialization and window metadata.
+
+        Returns:
+            Point container with the attention residual added to its features.
+        """
+        shortcut = point.feat
+        if self.pre_norm:
+            point = self.norm1(point)
+        point = self.drop_path(self.attn(point))
+        point.feat = shortcut + point.feat
+        if not self.pre_norm:
+            point = self.norm1(point)
+        return point
+
+    def _mlp_sublayer(self, point: Point) -> Point:
+        """Apply the residual MLP sublayer, in fp32 under CUDA autocast when configured.
+
+        Args:
+            point: Point container processed by the sublayer.
+
+        Returns:
+            Point container with the MLP residual added to its features.
+        """
+        shortcut = point.feat
+        if self.pre_norm:
+            point = self.norm2(point)
+        if (
+            Fp32Sublayer.MLP in self.fp32_sublayers
+            and point.feat.is_cuda
+            and torch.is_autocast_enabled("cuda")
+        ):
+            with torch.autocast("cuda", enabled=False):
+                point.feat = point.feat.float()
+                point = self.drop_path(self.mlp(point))
+        else:
+            point = self.drop_path(self.mlp(point))
+        point.feat = shortcut + point.feat
+        if not self.pre_norm:
+            point = self.norm2(point)
         return point
 
 
@@ -1214,6 +1299,8 @@ class PointTransformerV3Encoder(PointModule):
         enc_conv: Sequence[bool] | bool = True,
         enc_attn: Sequence[bool] | bool = True,
         enc_rope_base: Sequence[float | None] | float | None = None,
+        activation_checkpointing: bool = False,
+        fp32_sublayers: Sequence[Fp32Sublayer] = (),
     ) -> None:
         """Initialize the PTv3 encoder.
 
@@ -1247,6 +1334,10 @@ class PointTransformerV3Encoder(PointModule):
                 every stage.
             enc_rope_base: Rotary-embedding frequency base, either one value for
                 every stage or one per stage. ``None`` disables RoPE.
+            activation_checkpointing: Recompute the attention and MLP activations of every
+                block in the backward pass, see :class:`Block`.
+            fp32_sublayers: Sublayers computed in fp32 under autocast, see
+                :class:`Fp32Sublayer`. Empty by default.
         """
         super().__init__()
         self.in_channels = in_channels
@@ -1299,6 +1390,8 @@ class PointTransformerV3Encoder(PointModule):
                         enable_conv=self.enc_conv[stage_index],
                         enable_attn=self.enc_attn[stage_index],
                         rope_base=self.enc_rope_base[stage_index],
+                        activation_checkpointing=activation_checkpointing,
+                        fp32_sublayers=fp32_sublayers,
                     ),
                     name=f"block{block_index}",
                 )
@@ -1403,6 +1496,8 @@ class LitePTEncoder(PointTransformerV3Encoder):
         enc_conv: Sequence[bool] = (True, True, True, False, False),
         enc_attn: Sequence[bool] = (False, False, False, True, True),
         enc_rope_base: Sequence[float | None] | float | None = 100.0,
+        activation_checkpointing: bool = False,
+        fp32_sublayers: Sequence[Fp32Sublayer] = (),
     ) -> None:
         """Initialize the LitePT encoder.
 
@@ -1435,6 +1530,9 @@ class LitePTEncoder(PointTransformerV3Encoder):
             enc_conv: Per-stage convolution flags.
             enc_attn: Per-stage attention flags.
             enc_rope_base: Rotary-embedding frequency base per stage.
+            activation_checkpointing: See :class:`PointTransformerV3Encoder`.
+            fp32_sublayers: Sublayers computed in fp32 under autocast, see
+                :class:`Fp32Sublayer`. Empty by default.
         """
         super().__init__(
             in_channels=in_channels,
@@ -1461,6 +1559,8 @@ class LitePTEncoder(PointTransformerV3Encoder):
             enc_conv=enc_conv,
             enc_attn=enc_attn,
             enc_rope_base=enc_rope_base,
+            activation_checkpointing=activation_checkpointing,
+            fp32_sublayers=fp32_sublayers,
         )
 
 
