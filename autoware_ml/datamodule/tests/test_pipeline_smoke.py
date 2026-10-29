@@ -78,7 +78,7 @@ class TestPipelineSmoke(unittest.TestCase):
         assert self.batch.detection3d_gt_batch is not None
         assert self.batch.segmentation3d_gt_batch is not None
         assert self.batch.frame_meta_batch is not None
-        self.assertEqual(int(self.batch.infer_batch_size()), 2)
+        self.assertEqual(self.batch.batch_size, 2)
         self.assertEqual(list(self.batch.frame_meta_batch.scene_tokens), [SCENE, SCENE])
         # The sample time of every record places its frame in the stream of its scene
         self.assertEqual(self.batch.frame_meta_batch.timestamps.tolist(), [0.0, 1.0])

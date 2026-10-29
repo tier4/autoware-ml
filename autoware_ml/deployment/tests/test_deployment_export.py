@@ -100,7 +100,7 @@ class _ExportModel(ModuleBaseModel):
         spec = ExportSpec(
             module=self.head,
             args=(point_batch.points, torch.tensor(2.0)),
-            input_param_names=["points", "scale"],
+            input_names=["points", "scale"],
             output_names=["feat"],
             dynamic_axes={"points": {0: "num_points"}, "feat": {0: "num_points"}},
             supported_stages=self.supported_stages,
@@ -114,7 +114,9 @@ class _NoInputsModel(_ExportModel):
     def build_export_specs(
         self, multi_task_batch_inputs: ModelBatchInputs
     ) -> dict[str, ExportSpec]:
-        return {"head": ExportSpec(module=self.head, args=(), input_param_names=[])}
+        return {
+            "head": ExportSpec(module=self.head, args=(), input_names=[], output_names=["feat"])
+        }
 
 
 class _PredictDatamodule:
@@ -284,7 +286,7 @@ class TestExportSpecs:
         assert isinstance(specs, MappingProxyType)
         assert list(specs) == ["head"]
         assert specs["head"].module is model.head
-        assert specs["head"].input_param_names == ["points", "scale"]
+        assert specs["head"].input_names == ["points", "scale"]
         assert torch.equal(specs["head"].args[0], batch.point_cloud_gt_batch.points)
 
 
@@ -506,12 +508,12 @@ class TestErrorPaths:
     def test_spec_without_example_inputs_is_rejected(self, tmp_path: Path) -> None:
         """
         Input: an export spec carrying no example inputs and no input names.
-        Expected: the ONNX export has nothing to trace with.
-        Check: a ValueError mentioning the missing parameters is raised.
+        Expected: the spec is refused when the model builds it, so nothing is traced.
+        Check: a ValueError counting the names and the args is raised.
         """
         exporter = _exporter(tmp_path, _deploy_cfg({"head": {}}), model=_NoInputsModel())
 
-        with pytest.raises(ValueError, match="no parameters"):
+        with pytest.raises(ValueError, match="names 0 inputs for 0 args"):
             exporter.export()
 
     def test_empty_predict_split_has_no_example_batch(self, tmp_path: Path) -> None:

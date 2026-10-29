@@ -41,14 +41,10 @@ deploy:
     do_constant_folding: false
     modules:
       pts_voxel_encoder_centerpoint:
-        input_names: [input_features]
-        output_names: [pillar_features]
         dynamic_axes:
           input_features: { 0: num_voxels, 1: num_max_points }
           pillar_features: { 0: num_voxels }
       pts_backbone_neck_head_centerpoint:
-        input_names: [spatial_features]
-        output_names: [heatmap, reg, height, dim, rot, vel]
         dynamic_axes:
           spatial_features: { 0: batch_size, 2: H, 3: W }
           heatmap: { 0: batch_size, 2: H, 3: W }

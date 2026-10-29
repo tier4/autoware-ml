@@ -39,7 +39,7 @@ def test_ptv3_transhead_build_export_spec_uses_named_detection3d_outputs() -> No
     spec = model.build_export_spec(batch)
     outputs = spec.module(*spec.args)
 
-    assert spec.input_param_names == EXPECTED_PTV3_INPUT_NAMES
+    assert spec.input_names == EXPECTED_PTV3_INPUT_NAMES
     assert spec.dynamic_axes is not None
     assert spec.dynamic_axes["serialized_pooling_0_serialized_inverse"] == {
         1: "serialized_pooling_0_out_voxels"

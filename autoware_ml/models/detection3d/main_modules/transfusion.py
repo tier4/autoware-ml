@@ -264,7 +264,7 @@ class TransFusionDetection3DModel(ModuleBaseModel):
             )
 
         if batch_size is None:
-            batch_size = multi_task_batch_inputs.multi_task_gt_batch.infer_batch_size()
+            batch_size = multi_task_batch_inputs.multi_task_gt_batch.batch_size
 
         batch_coords = voxels_data.batch_zyx_coords()
         voxel_features = self.pts_voxel_encoder(
@@ -363,15 +363,13 @@ class TransFusionDetection3DModel(ModuleBaseModel):
                 pts_backbone=self.pts_backbone,
                 pts_neck=self.pts_neck,
                 bbox_head=self.bbox_head.prepare_for_export(),
-                # The batch size is derived from the voxels rather than from the ground truth: a
-                # batch prepared for deployment may carry no ground truth at all.
-                batch_size=voxels_data.infer_batch_size(),
+                batch_size=multi_task_batch_inputs.batch_size(),
             ),
             args=(
                 voxels_data.voxels,
                 voxels_data.num_points,
                 voxels_data.batch_zyx_coords(),
             ),
-            input_param_names=["voxels", "num_points", "coors"],
+            input_names=["voxels", "num_points", "coors"],
             output_names=["cls_score0", "bbox_pred0", "dir_cls_pred0"],
         )

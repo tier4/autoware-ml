@@ -135,13 +135,13 @@ def test_ptv3_seg3d_split_export_supports_decoder_blocks() -> None:
 
     # The encoder-only encoder graph never consumes pooling clusters; the
     # tracer would prune them, so the declared interface must not list them.
-    assert not any("_cluster" in name for name in specs["ptv3_encoder"].input_param_names)
+    assert not any("_cluster" in name for name in specs["ptv3_encoder"].input_names)
     with torch.no_grad():
         encoder_outputs = specs["ptv3_encoder"].module(*specs["ptv3_encoder"].args)
     assert len(encoder_outputs) == 2
 
     spec = specs["ptv3_seg3d_head"]
-    assert spec.input_param_names == [
+    assert spec.input_names == [
         "point_feat_0",
         "point_feat_1",
         "pooling_cluster_0",
@@ -299,7 +299,7 @@ def test_ptv3_transhead_det3d_seg3d_export_uses_named_joint_outputs(tmp_path: Pa
     spec = model.build_export_spec(batch)
     outputs = spec.module(*spec.args)
 
-    assert spec.input_param_names == EXPECTED_PTV3_INPUT_NAMES
+    assert spec.input_names == EXPECTED_PTV3_INPUT_NAMES
     assert spec.dynamic_axes is not None
     assert spec.dynamic_axes["pred_probs"] == {0: "num_voxels"}
     assert spec.dynamic_axes["serialized_pooling_0_serialized_inverse"] == {

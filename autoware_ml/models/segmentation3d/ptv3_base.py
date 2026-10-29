@@ -754,7 +754,7 @@ def build_encoder_export_spec(context: PTv3ExportContext) -> "ExportSpec":
     return ExportSpec(
         module=context.encoder_module,
         args=context.encoder_input_args,
-        input_param_names=input_names,
+        input_names=input_names,
         output_names=stage_feature_names(context.stage_count),
         dynamic_axes=build_ptv3_encoder_dynamic_axes(input_names, context.stage_count),
         supported_stages=PTv3BaseModel.EXPORT_SUPPORTED_STAGES,
@@ -787,7 +787,7 @@ def build_seg3d_head_export_spec(
             context.inputs.grid_coord,
             seg3d_head.dec_depths,
         ),
-        input_param_names=input_names,
+        input_names=input_names,
         output_names=list(output_names),
         dynamic_axes=dynamic_axes,
         supported_stages=PTv3BaseModel.EXPORT_SUPPORTED_STAGES,

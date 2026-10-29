@@ -55,7 +55,6 @@ deploy:
     do_constant_folding: false
     modules:
       ptv3_encoder:
-        output_names: [point_feat_0, point_feat_1, point_feat_2, point_feat_3, point_feat_4]
         metainfo:
           point_cloud_range: ${point_cloud_range}
           voxel_size: ["${grid_size}", "${grid_size}", "${grid_size}"]
@@ -65,7 +64,6 @@ deploy:
           patch_sizes: ${model.encoder.enc_patch_size}
       ptv3_det3d_head:
         precision: fp16
-        output_names: ${model.export_output_names}
         metainfo:
           bbox_voxel_size: ${model.bbox_head.bbox_coder.voxel_size}
           has_twist: ${model.bbox_head.use_velocity}

@@ -37,10 +37,8 @@ deploy:
   onnx:
     modules:
       end_to_end:
-        input_names: [input]
-        output_names: [output]
         dynamic_shapes:
-          fused_img: { 2: height, 3: width }
+          input: { 2: height, 3: width }
   tensorrt:
     input_shapes:
       input:

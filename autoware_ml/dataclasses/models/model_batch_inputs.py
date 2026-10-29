@@ -73,4 +73,4 @@ class ModelBatchInputs(BaseModel):
         Returns:
             The sample count of the collated batch.
         """
-        return int(self.multi_task_gt_batch.infer_batch_size())
+        return self.multi_task_gt_batch.batch_size
