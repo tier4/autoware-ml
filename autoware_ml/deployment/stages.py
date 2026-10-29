@@ -41,8 +41,9 @@ class RunState:
         batch: The preprocessed batch the run started from; only glue reads it.
         device: Device the graph stages run on.
         tensors: Tensors produced so far, by name.
-        graph_inputs: The positional inputs each graph stage ran on, by stage name, copied
-            when the stage ran: later glue cannot change what export traces.
+        graph_inputs: The positional inputs each graph stage ran on, by stage name. They
+            are the run-state tensors themselves: no stage modifies what it reads in place
+            (:func:`check_inputs_unmodified`), so they stay what the graph saw.
     """
 
     batch: Any
@@ -94,7 +95,8 @@ class TorchStage:
     Attributes:
         name: Unique stage name.
         run: ``fn(state) -> {name: value}`` returning exactly ``outputs``. It must not
-            modify what it reads in place: earlier graphs were traced with those tensors.
+            modify what it reads in place; other stages read the same tensors and export
+            traces them. A modified input is rejected after the stage ran.
         inputs: Run-state names the stage reads (``()`` when it reads only
             ``state.batch``); it runs on a view holding only these.
         outputs: Run-state names the stage writes.
@@ -259,6 +261,33 @@ def graph_input_tensors(stage: GraphStage, state: RunState) -> tuple[torch.Tenso
     return tuple(tensors)
 
 
+def check_inputs_unmodified(
+    stage: Stage, inputs: Mapping[str, Any], versions: Mapping[str, int]
+) -> None:
+    """Reject a stage that modified an input tensor in place.
+
+    ``versions`` are the tensors' ``_version`` counters before the stage ran; every in-place
+    operation increments the counter. Other stages read the same tensors, and export traces
+    a graph on the tensors it ran on, so no stage may modify what it reads.
+
+    Raises:
+        ValueError: Naming the stage and the modified inputs.
+    """
+    modified = sorted(
+        name for name, version in versions.items() if inputs[name]._version != version
+    )
+    if modified:
+        raise ValueError(
+            f"{type(stage).__name__} {stage.name!r} modified its inputs {modified} in place; a "
+            "stage reads its inputs and returns new tensors, since other stages read the same "
+            "tensors and export traces them."
+        )
+
+
+def _tensor_versions(inputs: Mapping[str, Any]) -> dict[str, int]:
+    return {name: value._version for name, value in inputs.items() if torch.is_tensor(value)}
+
+
 def run_torch_stage(stage: TorchStage, state: RunState) -> dict[str, Any]:
     """Run a glue stage on its declared inputs and check its results against ``outputs``.
 
@@ -266,9 +295,13 @@ def run_torch_stage(stage: TorchStage, state: RunState) -> dict[str, Any]:
 
     Raises:
         TypeError: When ``run`` returns something other than a mapping.
-        ValueError: When the returned names are not exactly the declared ``outputs``.
+        ValueError: When the returned names are not exactly the declared ``outputs``, or an
+            input was modified in place.
     """
-    produced = stage.run(state.narrowed(stage.inputs))
+    view = state.narrowed(stage.inputs)
+    versions = _tensor_versions(view.tensors)
+    produced = stage.run(view)
+    check_inputs_unmodified(stage, view.tensors, versions)
     if not isinstance(produced, Mapping):
         raise TypeError(
             f"TorchStage {stage.name!r} returned {type(produced).__name__}; a glue stage's "
@@ -293,7 +326,7 @@ def run_stages_in_torch(stages: Sequence[Stage], batch: Any, device: torch.devic
         TypeError: When a graph stage gets a non-tensor input or returns a mapping or a
             non-tensor, or a glue stage returns something other than a mapping.
         ValueError: When a stage returns other names, or another number of tensors, than
-            it declares.
+            it declares, or modifies an input in place.
     """
     stages = validate_stages(stages)
     state = RunState(batch=batch, device=device)
@@ -303,8 +336,11 @@ def run_stages_in_torch(stages: Sequence[Stage], batch: Any, device: torch.devic
                 state.add(run_torch_stage(stage, state))
                 continue
             args = graph_input_tensors(stage, state)
-            state.graph_inputs[stage.name] = tuple(arg.detach().clone() for arg in args)
+            state.graph_inputs[stage.name] = args
+            inputs = dict(zip(stage.inputs, args))
+            versions = _tensor_versions(inputs)
             raw = stage.module(*args)
+            check_inputs_unmodified(stage, inputs, versions)
             if isinstance(raw, Mapping):
                 # len() and zip() would accept a dict and name the outputs by its keys.
                 raise TypeError(

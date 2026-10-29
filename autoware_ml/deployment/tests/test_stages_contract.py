@@ -40,6 +40,11 @@ class _Double(nn.Module):
         return x * 2
 
 
+class _DoubleInPlace(nn.Module):
+    def forward(self, x):
+        return x.mul_(2)
+
+
 class _SplitHead(nn.Module):
     def forward(self, x):
         return x + 1, x - 1
@@ -273,17 +278,24 @@ class TestRunStagesInTorch:
         with pytest.raises(TypeError, match="'head' input 'z' is a list"):
             run_stages_in_torch(stages, {"x": torch.tensor([1.0])}, torch.device("cpu"))
 
-    def test_graph_inputs_are_kept_as_the_graph_saw_them(self):
-        # Later glue may reuse a graph output in place; the recorded inputs do not follow.
+    def test_glue_modifying_an_input_in_place_is_rejected(self):
         stages = list(_toy_stages())
         stages[2] = TorchStage(
             "glue", run=lambda state: {"z": state["y"].add_(100.0)}, inputs=("y",), outputs=("z",)
         )
-        state = run_stages_in_torch(stages, {"x": torch.tensor([1.0])}, torch.device("cpu"))
-        (encoder_input,) = state.graph_inputs["encoder"]
+        with pytest.raises(ValueError, match=r"TorchStage 'glue' modified its inputs \['y'\]"):
+            run_stages_in_torch(stages, {"x": torch.tensor([1.0])}, torch.device("cpu"))
+
+    def test_graph_module_modifying_its_input_in_place_is_rejected(self):
+        stages = list(_toy_stages())
+        stages[1] = GraphStage("encoder", module=_DoubleInPlace(), inputs=("x",), outputs=("y",))
+        with pytest.raises(ValueError, match=r"GraphStage 'encoder' modified its inputs"):
+            run_stages_in_torch(stages, {"x": torch.tensor([1.0])}, torch.device("cpu"))
+
+    def test_graph_inputs_are_the_tensors_the_graph_ran_on(self):
+        state = run_stages_in_torch(_toy_stages(), {"x": torch.tensor([1.0])}, torch.device("cpu"))
         (head_input,) = state.graph_inputs["head"]
-        assert torch.equal(encoder_input, torch.tensor([1.0]))
-        assert torch.equal(head_input, torch.tensor([102.0]))
+        assert head_input is state["z"]
 
     def test_graph_stage_outputs_are_tensors(self):
         for module, other in ((_NestedHead(), "tuple"), (_ScalarHead(), "int")):

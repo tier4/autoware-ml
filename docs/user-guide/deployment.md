@@ -218,7 +218,9 @@ between them can declare that split once instead, by overriding
 after the stage, with the tensor names it reads and writes) and `TorchStage`
 (glue that is not exported). `build_export_specs()` then checks the dataflow,
 runs the stages once on the example batch in eval mode, and returns one export
-spec per `GraphStage`, traced on the tensors the glue produced. The model
+spec per `GraphStage`, traced on the tensors the glue produced. No stage may
+modify an input in place, since other stages read the same tensors; a run
+rejects a stage that does. The model
 outputs are the graph outputs no later stage reads, so a declaration ends with
 a `GraphStage`; PyTorch post-processing of the deployed outputs belongs in
 `build_deployed_eval_output()`. CenterPoint declares its two modules this way.

@@ -247,7 +247,8 @@ def test_a_stage_reading_an_unwritten_name_fails_before_anything_runs() -> None:
         build_export_specs_from_stages(stages, {"x": torch.ones(1)}, torch.device("cpu"))
 
 
-def test_trace_inputs_survive_in_place_reuse_by_later_glue() -> None:
+def test_glue_reusing_a_graph_output_in_place_is_rejected() -> None:
+    # nn.Identity returns the tensor it got: in place, the glue would rewrite g's trace input.
     stages = (
         TorchStage("seed", run=lambda state: {"x": torch.ones(2)}, inputs=(), outputs=("x",)),
         GraphStage("g", module=nn.Identity(), inputs=("x",), outputs=("y",)),
@@ -256,7 +257,5 @@ def test_trace_inputs_survive_in_place_reuse_by_later_glue() -> None:
         ),
         GraphStage("h", module=nn.Identity(), inputs=("z",), outputs=("w",)),
     )
-    specs = build_export_specs_from_stages(stages, None, torch.device("cpu"))
-    # nn.Identity returns the tensor it got, so without the copy g's trace input would read 3.
-    assert torch.equal(specs["g"].args[0], torch.ones(2))
-    assert torch.equal(specs["h"].args[0], torch.full((2,), 3.0))
+    with pytest.raises(ValueError, match=r"'reuse' modified its inputs \['y'\] in place"):
+        build_export_specs_from_stages(stages, None, torch.device("cpu"))
