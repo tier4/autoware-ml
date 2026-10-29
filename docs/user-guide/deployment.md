@@ -145,11 +145,13 @@ deploy:
 **Tensor names**: the export spec names the graph inputs and outputs, either
 the names a stage graph declares (see
 [Model-Owned Export Wrappers](#model-owned-export-wrappers)) or the names a
-hand-written spec lists; the export log prints them. `deploy.onnx` carries no
-`input_names` or `output_names`; an entry fails the export. The keys of
-`dynamic_shapes`, `dynamic_axes` and `deploy.tensorrt.input_shapes` are these
-names. A model that lets a config choose its names exposes them as a model
-parameter, as PTv3's `export_output_names`.
+hand-written spec lists; the export log prints them. A spec names every one of
+its inputs and at least one output, or it is refused when built. `deploy.onnx`
+carries no `input_names` or `output_names`; an entry fails the deploy before its
+MLflow run is created or the model loads. The keys of `dynamic_shapes`,
+`dynamic_axes` and `deploy.tensorrt.input_shapes` are these names. A model that
+lets a config choose its names exposes them as a model parameter, as PTv3's
+`export_output_names`.
 
 **precision**: `fp32` exports the model unchanged. `fp16` halves the weights and
 internal tensors but keeps graph inputs and outputs fp32, so consumers keep their

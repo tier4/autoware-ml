@@ -508,23 +508,13 @@ class TestErrorPaths:
     def test_spec_without_example_inputs_is_rejected(self, tmp_path: Path) -> None:
         """
         Input: an export spec carrying no example inputs and no input names.
-        Expected: the ONNX export has nothing to trace with.
-        Check: a ValueError mentioning the missing parameters is raised.
+        Expected: the spec is refused when the model builds it, so nothing is traced.
+        Check: a ValueError counting the names and the args is raised.
         """
         exporter = _exporter(tmp_path, _deploy_cfg({"head": {}}), model=_NoInputsModel())
 
-        with pytest.raises(ValueError, match="names no inputs"):
+        with pytest.raises(ValueError, match="names 0 inputs for 0 args"):
             exporter.export()
-
-    def test_configured_tensor_names_fail_before_anything_runs(self, tmp_path: Path) -> None:
-        """
-        Input: a deploy config whose module entry names the outputs.
-        Expected: the exporter refuses the config when it is built, before a model is loaded
-        or a graph exported, naming the entry.
-        Check: the constructor raises.
-        """
-        with pytest.raises(ValueError, match="deploy.onnx.modules.head.output_names"):
-            _exporter(tmp_path, _deploy_cfg({"head": {"output_names": ["feat"]}}))
 
     def test_empty_predict_split_has_no_example_batch(self, tmp_path: Path) -> None:
         """

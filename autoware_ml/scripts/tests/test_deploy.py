@@ -193,6 +193,31 @@ def test_record_deploy_run_writes_config_overrides_metadata_and_params(
     assert run.data.params["experiment_name"] == "gen1_base"
 
 
+def test_run_deploy_refuses_configured_tensor_names_before_the_run_exists(
+    tmp_path: Path,
+) -> None:
+    """
+    Input: MLflow enabled and a deploy config whose module entry names the outputs.
+    Expected: the deploy fails naming the entry before the checkpoints are resolved, the
+        MLflow run is created or the model is built.
+    Check: the raised error, that nothing after the config checks ran, and the absence of the
+        SQLite store.
+    """
+    cfg = _deploy_cfg(tmp_path)
+    cfg.deploy.onnx.modules.head = {"output_names": ["feat"]}
+
+    with (
+        patch.object(deploy_script, "build_weight_checkpoint_paths") as checkpoint_paths_mock,
+        patch.object(deploy_script, "_export") as export_mock,
+        pytest.raises(ValueError, match="deploy.onnx.modules.head.output_names"),
+    ):
+        deploy_script.run_deploy(cfg)
+
+    checkpoint_paths_mock.assert_not_called()
+    export_mock.assert_not_called()
+    assert not (tmp_path / "mlruns" / "mlflow.db").exists()
+
+
 def test_run_deploy_marks_the_run_failed_when_the_export_raises(
     tmp_path: Path, hydra_runtime: HydraRuntime
 ) -> None:

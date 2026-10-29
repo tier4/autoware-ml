@@ -110,6 +110,23 @@ def test_export_to_onnx_prefers_export_spec_dynamic_axes(
     assert captured_kwargs["dynamic_axes"] == dynamic_axes_override
 
 
+def test_export_spec_names_every_input_and_some_output() -> None:
+    """A spec that leaves an input or every output unnamed is refused when it is built."""
+    args = (torch.ones(1, 1), torch.ones(1))
+    for input_names, output_names, message in (
+        (["voxels"], ["out"], "names 1 inputs for 2 args"),
+        (["voxels", "num_points", "extra"], ["out"], "names 3 inputs for 2 args"),
+        (["voxels", "num_points"], [], "names no outputs"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            ExportSpec(
+                module=_DummyModel(),
+                args=args,
+                input_names=input_names,
+                output_names=output_names,
+            )
+
+
 def test_supports_export_stage_uses_export_spec_capabilities() -> None:
     spec = ExportSpec(
         module=_DummyModel(),

@@ -29,7 +29,6 @@ from autoware_ml.utils.deploy import (
     supports_export_stage,
     export_to_onnx,
     should_modify_graph,
-    validate_onnx_names_not_configured,
     modify_onnx_graph,
     build_tensorrt_engine,
 )
@@ -81,7 +80,6 @@ class DeploymentExport:
             tracker: Active experiment tracker name recorded in the stamp, if any.
             run_id: Deploy run id recorded in the stamp, if any.
         """
-        validate_onnx_names_not_configured(deploy_cfg.onnx)
         self.deploy_cfg = deploy_cfg
         self.output_dir = output_dir
         self.datamodule = datamodule

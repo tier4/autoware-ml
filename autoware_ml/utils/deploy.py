@@ -60,6 +60,22 @@ class ExportSpec:
     dynamic_axes: dict[str, dict[int, str]] | None = None
     supported_stages: frozenset[str] = frozenset({"onnx", "tensorrt"})
 
+    def __post_init__(self) -> None:
+        """Refuse a spec that leaves an input or every output unnamed.
+
+        Checked when the spec is built, so a model fails before any of its modules exports.
+
+        Raises:
+            ValueError: If ``input_names`` is empty or not one name per entry of ``args``,
+                or ``output_names`` is empty.
+        """
+        if not self.input_names or len(self.input_names) != len(self.args):
+            raise ValueError(
+                f"The export spec names {len(self.input_names)} inputs for {len(self.args)} args."
+            )
+        if not self.output_names:
+            raise ValueError("The export spec names no outputs.")
+
 
 def validate_cuda_available() -> None:
     """Ensure CUDA is available for deployment export."""
@@ -258,7 +274,7 @@ def merge_onnx_external_data(onnx_path: Path) -> None:
 def validate_onnx_names_not_configured(onnx_cfg: DictConfig) -> None:
     """Refuse ``input_names`` / ``output_names`` in ``deploy.onnx``: the export specs name the tensors.
 
-    Checked once when the deploy config is read, before any model loads or graph exports.
+    ``run_deploy`` checks it before the MLflow run is created or the model loads.
 
     Args:
         onnx_cfg: ``deploy.onnx``, with its optional ``modules`` overrides.
@@ -292,9 +308,6 @@ def export_to_onnx(spec: ExportSpec, onnx_cfg: DictConfig, output_path: Path) ->
     """
     logger.info("Exporting model to ONNX...")
 
-    if not spec.input_names:
-        raise ValueError("The export spec names no inputs.")
-
     dynamo = onnx_cfg.get("dynamo", True)
     dynamic_shapes = build_dynamic_shapes(onnx_cfg, spec.input_names) if dynamo else None
     dynamic_shapes = (
@@ -303,15 +316,13 @@ def export_to_onnx(spec: ExportSpec, onnx_cfg: DictConfig, output_path: Path) ->
     dynamic_axes = None
     if not dynamo:
         dynamic_axes = spec.dynamic_axes or build_dynamic_axes(onnx_cfg)
-    input_names = list(spec.input_names)
-    output_names = list(spec.output_names)
 
     logger.info("Dynamic shapes: %s", dynamic_shapes)
     logger.info("Dynamic axes: %s", dynamic_axes)
     logger.info("ONNX opset version: %s", onnx_cfg.opset_version)
-    logger.info("Input names: %s", input_names)
-    logger.info("Output names: %s", output_names)
-    log_export_inputs(spec.args, input_names)
+    logger.info("Input names: %s", spec.input_names)
+    logger.info("Output names: %s", spec.output_names)
+    log_export_inputs(spec.args, spec.input_names)
 
     # Register shared ONNX symbolics needed by export-aware ops packages.
     register_scatter_reduce_onnx_symbolic(opset_version=int(onnx_cfg.opset_version))
@@ -320,8 +331,8 @@ def export_to_onnx(spec: ExportSpec, onnx_cfg: DictConfig, output_path: Path) ->
         "model": spec.module,
         "args": spec.args,
         "f": str(output_path),
-        "input_names": input_names,
-        "output_names": output_names,
+        "input_names": spec.input_names,
+        "output_names": spec.output_names,
         "opset_version": onnx_cfg.opset_version,
         "dynamo": dynamo,
         "do_constant_folding": onnx_cfg.get("do_constant_folding", True),
