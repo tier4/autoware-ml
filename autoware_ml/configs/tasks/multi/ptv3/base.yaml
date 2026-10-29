@@ -13,7 +13,7 @@ point_cloud_range: ???
 grid_size: ???
 max_voxels: ???
 # BEV cell of the detection head, in meters.
-head_voxel_size: ???
+head_grid_size: ???
 num_proposals: ???
 
 optimizer:
@@ -65,7 +65,7 @@ deploy:
       ptv3_det3d_head:
         precision: fp16
         metainfo:
-          bbox_voxel_size: ${model.bbox_head.bbox_coder.voxel_size}
+          head_grid_size: ${head_grid_size}
           has_twist: ${model.bbox_head.use_velocity}
           num_proposals: ${model.bbox_head.num_proposals}
           post_center_range: ${model.bbox_head.bbox_coder.post_center_range}
@@ -119,7 +119,7 @@ model:
     bbox_coder:
       _target_: autoware_ml.models.detection3d.task_modules.bbox_coders.TransFusionBBoxCoder
       pc_range: ${point_cloud_range}
-      voxel_size: ${head_voxel_size}
+      voxel_size: ${head_grid_size}
       out_size_factor: 1
       class_names: ${database.taxonomy.detection3d.class_names}
       # One ScoreThresholdConfig per class group, resolved once at construction. null keeps
@@ -142,7 +142,7 @@ model:
         weight: 0.25
       point_cloud_range: ${point_cloud_range}
     point_cloud_range: ${point_cloud_range}
-    voxel_size: ${head_voxel_size}
+    voxel_size: ${head_grid_size}
     out_size_factor: 1
     code_weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
     min_radius: 2

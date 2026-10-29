@@ -11,7 +11,6 @@ defaults:
   - _self_
 
 point_cloud_range: [-122.88, -122.88, -2.30, 122.88, 122.88, 5.38]
-point_cloud_height: 7.68
 
 # Largest GT distance of every class, from the detection taxonomy of the database.
 eval_class_range: ${database.taxonomy.detection3d.eval_range}
