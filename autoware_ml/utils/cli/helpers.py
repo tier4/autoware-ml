@@ -118,11 +118,13 @@ def resolve_config_reference(config_value: str, prefix: str) -> tuple[str | None
         ``config_path`` is ``None`` for bundled configs.
     """
     expanded_path = Path(config_value).expanduser()
+    # A config is a file. A directory that happens to carry a bundled config's
+    # name, such as an MLflow artifact tree, must not hijack the reference.
     is_filesystem_path = (
         expanded_path.is_absolute()
         or config_value.startswith(("./", "../", "~/"))
         or expanded_path.suffix in {".yaml", ".yml"}
-        or expanded_path.exists()
+        or expanded_path.is_file()
     )
 
     if not is_filesystem_path:
