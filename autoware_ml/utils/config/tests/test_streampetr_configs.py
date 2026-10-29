@@ -27,7 +27,15 @@ from autoware_ml.utils.config.tests.test_task_configs import EXPERIMENT_CONFIGS
 from autoware_ml.datamodule.streaming_data_module import StreamingDataModule
 
 STAGES = [config for config in EXPERIMENT_CONFIGS if "/streampetr/" in config]
-NUSCENES_CLASSES = ["car", "truck", "bus", "bicycle", "pedestrian", "traffic_cone", "barrier"]
+NUSCENES_CLASSES = [
+    "car",
+    "truck",
+    "bus",
+    "bicycle",
+    "pedestrian",
+    "traffic_cone",
+    "barrier",
+]
 
 
 def test_the_stages_are_bundled() -> None:
@@ -43,7 +51,9 @@ def test_the_stages_are_bundled() -> None:
 
 
 @pytest.mark.parametrize("config_name", STAGES)
-def test_every_stage_streams_the_seven_classes_of_its_taxonomy(config_name: str) -> None:
+def test_every_stage_streams_the_seven_classes_of_its_taxonomy(
+    config_name: str,
+) -> None:
     """
     Input: the composed config of every stage.
     Expected: every stage trains the seven classes in the order of its taxonomy in both heads. The head carries a temporal memory across batches, so the streaming overlay makes the
@@ -75,7 +85,9 @@ def test_every_stage_streams_the_seven_classes_of_its_taxonomy(config_name: str)
 
 
 @pytest.mark.parametrize("config_name", STAGES)
-def test_every_pipeline_filters_the_physical_boxes_before_anything_else(config_name: str) -> None:
+def test_every_pipeline_filters_the_physical_boxes_before_anything_else(
+    config_name: str,
+) -> None:
     """
     Input: the training and test pipelines of every stage.
     Expected: a non-finite velocity or a zero extent would turn the losses NaN or infinite, so
@@ -85,11 +97,16 @@ def test_every_pipeline_filters_the_physical_boxes_before_anything_else(config_n
     cfg = compose_task(config_name)
     for split in ("train", "test"):
         steps = [step["_target_"] for step in cfg.datasets[split].transforms.pipeline]
-        assert steps[0].endswith("boxes3d.filters.BBoxesPhysicalFilter"), (config_name, split)
+        assert steps[0].endswith("boxes3d.filters.BBoxesPhysicalFilter"), (
+            config_name,
+            split,
+        )
 
 
 @pytest.mark.parametrize("config_name", STAGES)
-def test_every_dataset_projecting_2d_boxes_pads_them_to_its_3d_maximum(config_name: str) -> None:
+def test_every_dataset_projecting_2d_boxes_pads_them_to_its_3d_maximum(
+    config_name: str,
+) -> None:
     """
     Input: the composed datasets of every stage.
     Expected: a dataset whose pipeline projects the 3D boxes onto the cameras collates its 2D
@@ -114,7 +131,9 @@ def test_every_dataset_projecting_2d_boxes_pads_them_to_its_3d_maximum(config_na
 
 
 @pytest.mark.parametrize("config_name", STAGES)
-def test_every_stage_projects_the_2d_boxes_before_the_range_filter(config_name: str) -> None:
+def test_every_stage_projects_the_2d_boxes_before_the_range_filter(
+    config_name: str,
+) -> None:
     """
     Input: the training pipeline of every stage.
     Expected: the 2D targets of the reference recipes keep the objects outside the 3D range, so
@@ -129,7 +148,9 @@ def test_every_stage_projects_the_2d_boxes_before_the_range_filter(config_name: 
 
 
 @pytest.mark.parametrize("config_name", STAGES)
-def test_only_the_t4_training_pipelines_shuffle_the_loaded_cameras(config_name: str) -> None:
+def test_only_the_t4_training_pipelines_shuffle_the_loaded_cameras(
+    config_name: str,
+) -> None:
     """
     Input: the training and test pipelines of every stage.
     Expected: the T4 reference recipe shuffles the camera order of every training frame, and
@@ -157,3 +178,29 @@ def test_the_nuscenes_stage_supervises_every_class() -> None:
     """
     cfg = compose_task([stage for stage in STAGES if "/nuscenes/" in stage][0])
     assert cfg.model.partial_annotations is None
+
+
+@pytest.mark.parametrize("config_name", STAGES)
+def test_every_pipeline_loads_unit_range_images_for_the_normalization(
+    config_name: str,
+) -> None:
+    """BatchNormalizeImages trusts its input, so the loaders keep the unit-range default.
+
+    The statistics are unit-range and the layer does not check the images: 0-255 pixels would
+    train without an error. It is the first preprocessing module, and every pipeline loads its
+    images with LoadImagesFromFile(normalize_to_unit=True).
+    """
+    cfg = compose_task(config_name)
+    modules = [
+        module["_target_"].rsplit(".", 1)[1]
+        for module in cfg.data_preprocessor.preprocessor_modules
+    ]
+    assert modules[0] == "BatchNormalizeImages"
+    for split in ("train", "test"):
+        loaders = [
+            step
+            for step in cfg.datasets[split].transforms.pipeline
+            if step["_target_"].endswith("LoadImagesFromFile")
+        ]
+        assert len(loaders) == 1, split
+        assert loaders[0].get("normalize_to_unit", True) is True, split
