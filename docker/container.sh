@@ -35,7 +35,7 @@ option_run=false
 option_exec=false
 option_stop=false
 GPU_SPEC="all"
-DATA_PATH=""
+SETTINGS_MOUNTS=()
 WORKSPACE=""
 MEMORY_CONFIG=""
 MODE=""
@@ -54,7 +54,6 @@ print_help() {
     echo -e "${RED}Usage:${NC} container.sh (--run | --exec | --stop) [OPTIONS]"
     echo -e "Options:"
     echo -e "  ${GREEN}--help/-h${NC}            Display this help message"
-    echo -e "  ${GREEN}--data-path${NC}          Specify the path to mount data files read only into /workspace/data (overrides AUTOWARE_ML_DATA_PATH if set)"
     echo -e "  ${GREEN}--headless${NC}           Run Autoware-ML in headless mode (default: false)"
     echo -e "  ${GREEN}--detached${NC}           Start the container in detached mode, then enter it automatically"
     echo -e "  ${GREEN}--gpus${NC}               Specify GPU devices for Docker (default: all, e.g. all or device=0,1)"
@@ -63,6 +62,8 @@ print_help() {
     echo -e "  ${GREEN}--exec${NC}               Enter an existing running container"
     echo -e "  ${GREEN}--stop${NC}               Stop a running container"
     echo -e "  ${GREEN}--cmd${NC}                Command to run inside the container (default: bash, an interactive shell). Example: --cmd \"pytest autoware_ml/tests\""
+    echo ""
+    echo -e "Every path of .env is mounted at the same path inside the container."
     echo ""
 }
 
@@ -96,11 +97,6 @@ parse_arguments() {
             ;;
         --stop)
             option_stop=true
-            ;;
-        --data-path)
-            validate_option_value "--data-path" "$2"
-            DATA_PATH="$2"
-            shift
             ;;
         --cmd)
             validate_option_value "--cmd" "$2"
@@ -159,16 +155,6 @@ container_is_running() {
 
 # Set the docker image and workspace variables
 set_variables() {
-    # The data mount is read only. Everything the framework writes, including the record
-    # tables it generates from the data, goes to the workspace mount.
-    if [ "$DATA_PATH" != "" ]; then
-        DATA="--mount type=bind,source=${DATA_PATH},target=/workspace/data,bind-propagation=rshared,readonly"
-    elif [ -n "$AUTOWARE_ML_DATA_PATH" ]; then
-        DATA="--mount type=bind,source=${AUTOWARE_ML_DATA_PATH},target=/workspace/data,bind-propagation=rshared,readonly"
-    else
-        echo -e "${ORANGE}Neither --data-path nor AUTOWARE_ML_DATA_PATH is set. Not mounting any data directory.${NC}"
-    fi
-
     if [ -f /etc/localtime ]; then
         LOCALTIME_MOUNT="--mount type=bind,source=/etc/localtime,target=/etc/localtime,readonly"
     fi
@@ -184,6 +170,40 @@ set_variables() {
         CONTAINER_NAME="autoware-ml"
     fi
     CONTAINER="--name ${CONTAINER_NAME}"
+}
+
+# Mount the path of a .env setting at the same path inside the container, nothing when it is not
+# set. Shared propagation lets automounted network shares mount again inside the container after
+# they expire on the host.
+add_same_path_mount() {
+    local name="$1"
+    local options="$2"
+    local path="${!name}"
+
+    if [ -z "$path" ]; then
+        return
+    fi
+    if [[ $path != /* ]]; then
+        echo -e "${RED}Error: ${name} in .env must be an absolute path, got ${path}.${NC}"
+        exit 1
+    fi
+    SETTINGS_MOUNTS+=(--mount "type=bind,source=${path},target=${path},bind-propagation=rshared${options}")
+}
+
+# Mount the paths of the .env settings, the dataset root read only
+set_settings_mounts() {
+    local settings_file="${WORKSPACE_ROOT}/.env"
+
+    if [ ! -f "$settings_file" ]; then
+        echo -e "${RED}Error: ${settings_file} is missing.${NC}"
+        exit 1
+    fi
+    # shellcheck disable=SC1090
+    source "$settings_file"
+
+    add_same_path_mount AUTOWARE_ML_DATA_PATH ",readonly"
+    add_same_path_mount AUTOWARE_ML_SCENARIOS_PATH ""
+    add_same_path_mount AUTOWARE_ML_WORKING_DIR ""
 }
 
 # Set X display variables
@@ -294,11 +314,12 @@ print_run_command() {
         -e XAUTHORITY="${XAUTHORITY}" -e NVIDIA_DRIVER_CAPABILITIES=all \
         -e TZ="$(cat /etc/timezone)" \
         ${USER_ENV} \
-        ${LOCALTIME_MOUNT} ${WORKSPACE} ${DATA} ${CONTAINER} ${IMAGE} "${RUN_TAIL[@]}"
+        ${LOCALTIME_MOUNT} ${WORKSPACE} "${SETTINGS_MOUNTS[@]}" ${CONTAINER} ${IMAGE} "${RUN_TAIL[@]}"
 }
 
 # Run a new container
 run() {
+    set_settings_mounts
     set_x_display
     set_detached_mode
     set_user_config
@@ -318,7 +339,7 @@ run() {
         -e XAUTHORITY=${XAUTHORITY} -e NVIDIA_DRIVER_CAPABILITIES=all \
         -e TZ="$(cat /etc/timezone)" \
         ${USER_ENV} \
-        ${LOCALTIME_MOUNT} ${WORKSPACE} ${DATA} ${CONTAINER} ${IMAGE} "${RUN_TAIL[@]}"
+        ${LOCALTIME_MOUNT} ${WORKSPACE} "${SETTINGS_MOUNTS[@]}" ${CONTAINER} ${IMAGE} "${RUN_TAIL[@]}"
 
     if [ "$option_detached" = "true" ]; then
         wait_for_container

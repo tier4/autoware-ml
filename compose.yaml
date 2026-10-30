@@ -1,0 +1,51 @@
+# Devcontainer of autoware-ml. Compose reads the settings from .env next to this file and mounts
+# every path setting at the same path, the dataset root read only. An optional setting that is not
+# set falls back to the workspace mount, and compose merges the two identical mounts into one.
+x-same-path-mount: &same-path-mount
+  type: bind
+  bind:
+    propagation: rshared
+    create_host_path: false
+
+services:
+  autoware-ml:
+    build:
+      context: .
+      dockerfile: .devcontainer/Dockerfile
+      args:
+        BASE_IMAGE: ghcr.io/tier4/autoware-ml:latest
+      network: host
+    container_name: autoware-ml-${USER}-dev
+    user: autoware-ml
+    privileged: true
+    network_mode: host
+    pid: host
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    gpus: all
+    environment:
+      XDG_RUNTIME_DIR: /tmp/xdg
+      DISPLAY: ${DISPLAY}
+      XAUTHORITY: ${XAUTHORITY}
+      NVIDIA_DRIVER_CAPABILITIES: all
+    volumes:
+      - <<: *same-path-mount
+        source: .
+        target: /workspace
+      - /tmp/.X11-unix:/tmp/.X11-unix
+      - /etc/localtime:/etc/localtime:ro
+      - /dev/dri:/dev/dri:ro
+      - ${HOME}/.ssh:/home/autoware-ml/.ssh
+      - <<: *same-path-mount
+        source: ${AUTOWARE_ML_DATA_PATH:?set AUTOWARE_ML_DATA_PATH in .env}
+        target: ${AUTOWARE_ML_DATA_PATH}
+        read_only: true
+      - <<: *same-path-mount
+        source: ${AUTOWARE_ML_SCENARIOS_PATH:-.}
+        target: ${AUTOWARE_ML_SCENARIOS_PATH:-/workspace}
+      - <<: *same-path-mount
+        source: ${AUTOWARE_ML_WORKING_DIR:-.}
+        target: ${AUTOWARE_ML_WORKING_DIR:-/workspace}
+    command: sleep infinity

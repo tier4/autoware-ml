@@ -60,7 +60,7 @@
       "detail": "Run Python tests.",
       "type": "shell",
       "command": "bash",
-      "args": ["-c", "pytest autoware_ml/tests -v"],
+      "args": ["-c", "pytest autoware_ml -v"],
       "problemMatcher": []
     }
   ],
