@@ -88,6 +88,7 @@ class PTv3Seg3DDecoderHead(nn.Module):
         dec_conv: Sequence[bool] | bool = True,
         dec_attn: Sequence[bool] | bool = True,
         dec_rope_base: Sequence[float | None] | float | None = None,
+        fp32_sublayers: Sequence[str] = (),
     ) -> None:
         """Initialize the PTv3 segmentation decoder head.
 
@@ -120,8 +121,12 @@ class PTv3Seg3DDecoderHead(nn.Module):
                 blocks, or one flag for every stage.
             dec_rope_base: Rotary-embedding frequency base, either one value for
                 every stage or one per stage. ``None`` disables RoPE.
+            fp32_sublayers: Sublayers of the decoder blocks computed in fp32 under
+                autocast, see
+                :class:`~autoware_ml.models.segmentation3d.encoders.ptv3.PointTransformerV3Encoder`.
         """
         super().__init__()
+        self.fp32_sublayers = tuple(fp32_sublayers)
         self.order = list(order)
         self.num_classes = int(num_classes)
         self.ignore_index = int(ignore_index)
@@ -177,6 +182,7 @@ class PTv3Seg3DDecoderHead(nn.Module):
                         enable_conv=self.dec_conv[stage_index],
                         enable_attn=self.dec_attn[stage_index],
                         rope_base=self.dec_rope_base[stage_index],
+                        fp32_sublayers=self.fp32_sublayers,
                     ),
                     name=f"block{block_index}",
                 )

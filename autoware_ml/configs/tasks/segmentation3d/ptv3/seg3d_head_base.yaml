@@ -21,3 +21,4 @@ upcast_attention: ${model.encoder.upcast_attention}
 upcast_softmax: ${model.encoder.upcast_softmax}
 lovasz_weight: 1.0
 mixed_voxel_weight: 1.0
+fp32_sublayers: ${model.encoder.fp32_sublayers}
