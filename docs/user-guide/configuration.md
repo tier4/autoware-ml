@@ -8,7 +8,7 @@ Autoware-ML uses [Hydra](https://hydra.cc/) for configuration management. This g
 
 ## Config Structure
 
-All configs live in `autoware_ml/configs/`:
+Bundled configs live in `autoware_ml/configs/`:
 
 ```text
 configs/
@@ -358,6 +358,40 @@ Run with your config:
 ```bash
 autoware-ml train --config-name my_task/my_model/my_experiment
 ```
+
+## External Configs and Scenario Lists
+
+Configs that do not ship with the package and the scenario lists of the databases live outside
+the repository. Point two settings of `.env` at them, see
+[Settings](../getting-started/installation.md#settings):
+
+```bash
+# External configs, laid out like autoware_ml/configs/.
+AUTOWARE_ML_CONFIGS_PATH=/path/to/configs
+
+# Root of the scenario lists of custom databases.
+AUTOWARE_ML_SCENARIOS_PATH=/path/to/scenarios
+```
+
+The external configs only add configs. They use the bundled ones by the same names, relative
+defaults included, and run by name like a bundled config. A config path that exists in both is an
+error.
+
+```yaml title="/path/to/configs/tasks/my_task/my_model/t4dataset/my_experiment.yaml"
+# @package _global_
+defaults:
+  - base_122m
+  - _self_
+
+trainer:
+  max_epochs: 50
+```
+
+```bash
+autoware-ml train --config-name my_task/my_model/t4dataset/my_experiment
+```
+
+A config file path given to `--config-name` must lie inside the bundled or the external configs.
 
 ## Debugging Configs
 

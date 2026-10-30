@@ -22,11 +22,12 @@ import re
 import shlex
 import shutil
 import subprocess
+from collections import Counter
 from pathlib import Path
 from collections.abc import Sequence
 from typing import Any
 
-from autoware_ml.configs.paths import CONFIGS_ROOT
+from autoware_ml.configs.paths import CONFIGS_ROOT, configs_path
 from autoware_ml.configs.resolvers import register_config_resolvers
 from autoware_ml.utils.session import AUTOWARE_ML_SESSION_OPTION, TMUX_BASE_COMMAND
 
@@ -106,17 +107,80 @@ def expand_config_path(config_path: str, prefix: str) -> str:
     return f"{prefix}/{config_path}"
 
 
-def resolve_config_reference(config_value: str, prefix: str) -> tuple[str | None, str, list[str]]:
-    """Resolve a CLI config value into Hydra config-path/config-name parts.
+def config_roots() -> list[Path]:
+    """Return the bundled config root followed by the external one.
+
+    The external config root named by ``AUTOWARE_ML_CONFIGS_PATH`` of ``.env`` is laid out like
+    the bundled one and adds configs to it. A config file path exists in one root only, so no
+    root shadows a config of another. Without the setting the bundled root is the only one.
+
+    Returns:
+        Config roots, the bundled one first.
+
+    Raises:
+        NotADirectoryError: If the external config root is not a directory.
+        ValueError: If a config file path exists in both roots.
+    """
+    external_root = configs_path()
+    external_roots = [] if external_root is None else [external_root]
+    missing_roots = [str(root) for root in external_roots if not root.is_dir()]
+    if missing_roots:
+        raise NotADirectoryError(
+            f"AUTOWARE_ML_CONFIGS_PATH of .env is no directory: {missing_roots}"
+        )
+
+    roots = [CONFIGS_ROOT, *external_roots]
+    config_files = Counter(
+        config_file.relative_to(root).as_posix()
+        for root in roots
+        for config_file in root.rglob("*.yaml")
+    )
+    shared_files = sorted(name for name, count in config_files.items() if count > 1)
+    if shared_files:
+        raise ValueError(f"Config files exist in more than one config root: {shared_files}")
+    return roots
+
+
+def _config_name_of_file(config_file: Path, roots: Sequence[Path]) -> str:
+    """Return the config name of a config file inside one of the config roots.
 
     Args:
-        config_value: Config value from CLI, either a task shorthand or a filesystem path.
-        prefix: Prefix for bundled configs (e.g. ``tasks``).
+        config_file: Absolute path of the config file.
+        roots: Config roots.
+
+    Returns:
+        Config path relative to its root without the YAML suffix.
+
+    Raises:
+        ValueError: If the file is inside no config root.
+    """
+    containing_roots = [root for root in roots if config_file.is_relative_to(root)]
+    if not containing_roots:
+        raise ValueError(
+            f"Config file '{config_file}' is inside no config root. Run it from the bundled "
+            "configs or from AUTOWARE_ML_CONFIGS_PATH of .env."
+        )
+    return config_file.relative_to(containing_roots[0]).with_suffix("").as_posix()
+
+
+def resolve_config_reference(config_value: str, prefix: str) -> tuple[str, str, list[str]]:
+    """Resolve a CLI config value into Hydra config-path/config-name parts.
+
+    Hydra loads the primary config from the config path only, so the config root holding the
+    config becomes the config path and every other config root joins the search path.
+
+    Args:
+        config_value: Config value from CLI, either a task shorthand or the path of a config
+            file inside a config root.
+        prefix: Prefix of the task configs (e.g. ``tasks``).
 
     Returns:
         Tuple of (config_path, config_name, hydra_overrides).
-        ``config_path`` is ``None`` for bundled configs.
+
+    Raises:
+        FileNotFoundError: If no config root holds the config.
     """
+    roots = config_roots()
     expanded_path = Path(config_value).expanduser()
     is_filesystem_path = (
         expanded_path.is_absolute()
@@ -124,56 +188,54 @@ def resolve_config_reference(config_value: str, prefix: str) -> tuple[str | None
         or expanded_path.suffix in {".yaml", ".yml"}
         or expanded_path.exists()
     )
+    config_name = (
+        _config_name_of_file(expanded_path.resolve(), roots)
+        if is_filesystem_path
+        else expand_config_path(config_value, prefix)
+    )
 
-    if not is_filesystem_path:
-        return None, expand_config_path(config_value, prefix), []
-
-    resolved_path = expanded_path.resolve()
-    try:
-        relative_to_configs = resolved_path.relative_to(CONFIGS_ROOT)
-    except ValueError:
-        relative_to_configs = None
-
-    if relative_to_configs is not None:
-        return None, relative_to_configs.with_suffix("").as_posix(), []
-
-    hydra_searchpath_override = "hydra.searchpath=[pkg://autoware_ml.configs]"
-    return str(resolved_path.parent), resolved_path.stem, [hydra_searchpath_override]
+    config_root = next((root for root in roots if (root / f"{config_name}.yaml").is_file()), None)
+    if config_root is None:
+        raise FileNotFoundError(
+            f"No config root holds '{config_name}.yaml': {[str(root) for root in roots]}"
+        )
+    searchpath = ",".join(f"file://{root}" for root in roots if root != config_root)
+    return str(config_root), config_name, [f"hydra.searchpath=[{searchpath}]"]
 
 
 def infer_user_config_name(config_value: str, prefix: str) -> str:
     """Infer the user-facing config name from a CLI config reference.
 
     Args:
-        config_value: Config value from CLI, either a bundled config path or a filesystem path.
-        prefix: Bundled config namespace prefix such as ``tasks``.
+        config_value: Config value from CLI, either a config name or a config file path.
+        prefix: Config namespace prefix such as ``tasks``.
 
     Returns:
-        User-facing config name without the bundled namespace prefix.
+        User-facing config name without the namespace prefix.
     """
     _, resolved_config_name, _ = resolve_config_reference(config_value, prefix)
     return resolved_config_name.removeprefix(f"{prefix}/")
 
 
 def list_config_names(prefix: str) -> list[str]:
-    """List bundled config names without YAML suffixes for shell completion.
+    """List the config names of every config root without YAML suffixes for shell completion.
 
     Args:
         prefix: Config namespace prefix such as ``tasks``.
 
     Returns:
-        Sorted list of bundled config names.
+        Sorted list of config names.
     """
-    config_root = CONFIGS_ROOT / prefix
     return sorted(
-        config_file.relative_to(config_root).with_suffix("").as_posix()
-        for config_file in config_root.rglob("*.yaml")
+        config_file.relative_to(root / prefix).with_suffix("").as_posix()
+        for root in config_roots()
+        for config_file in (root / prefix).rglob("*.yaml")
         if config_file.stem != "base"
     )
 
 
 def complete_config_value(incomplete: str, prefix: str) -> list[str]:
-    """Complete bundled config names and filesystem config paths.
+    """Complete config names of every config root and filesystem config paths.
 
     Args:
         incomplete: Current completion prefix entered by the user.

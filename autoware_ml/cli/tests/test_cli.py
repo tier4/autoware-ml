@@ -34,6 +34,8 @@ import autoware_ml.cli.cli as cli
 import autoware_ml.cli.runtime as cli_runtime
 import autoware_ml.utils.cli.helpers as helpers
 from autoware_ml.cli.cli import app
+from autoware_ml.configs.paths import CONFIGS_ROOT
+from autoware_ml.configs.tests.settings import write_settings
 from autoware_ml.utils.cli.helpers import (
     adjust_argv,
     complete_config_value,
@@ -44,6 +46,7 @@ from autoware_ml.utils.cli.helpers import (
     parse_extra_args,
     resolve_config_reference,
 )
+from autoware_ml.utils.mlflow_store import compose_config_reference
 from autoware_ml.utils.session import SessionCommandError
 
 SAMPLE_CONFIG_NAME = (
@@ -54,6 +57,16 @@ SAMPLE_SESSION_NAME = "centerpoint-train"
 SAMPLE_EXPERIMENT_GROUP_NAME = "ptv3_det3d_seg3d/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base"
 SAMPLE_EXPERIMENT_NAME = f"{SAMPLE_EXPERIMENT_GROUP_NAME}/voxel012"
 SAMPLE_EXPERIMENT_UID = "2026.10.15.12.00.00"
+
+
+def _write_external_root(tmp_path: Path, monkeypatch, config_name: str, content: str) -> Path:
+    """Write one config into an external config root and register the root."""
+    root = tmp_path / "configs"
+    config_file = root / f"{config_name}.yaml"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text(content, encoding="utf-8")
+    write_settings(tmp_path, monkeypatch, AUTOWARE_ML_CONFIGS_PATH=str(root))
+    return root
 
 
 class TestParseExtraArgs:
@@ -96,9 +109,9 @@ class TestResolveConfigReference:
         config_path, config_name, hydra_overrides = resolve_config_reference(
             SAMPLE_CONFIG_NAME, "tasks"
         )
-        assert config_path is None
+        assert config_path == str(CONFIGS_ROOT)
         assert config_name == SAMPLE_CONFIG_PATH
-        assert hydra_overrides == []
+        assert hydra_overrides == ["hydra.searchpath=[]"]
 
     def test_resolve_packaged_yaml_path(self) -> None:
         config_path, config_name, hydra_overrides = resolve_config_reference(
@@ -107,34 +120,86 @@ class TestResolveConfigReference:
             "tasks",
         )
 
-        assert config_path is None
+        assert config_path == str(CONFIGS_ROOT)
         assert config_name == SAMPLE_CONFIG_PATH
-        assert hydra_overrides == []
+        assert hydra_overrides == ["hydra.searchpath=[]"]
 
-    def test_resolve_relative_yaml_path(self, tmp_path: Path, monkeypatch) -> None:
-        config_file = tmp_path / "custom_train.yaml"
-        config_file.write_text("trainer:\n  max_epochs: 1\n", encoding="utf-8")
-        monkeypatch.chdir(tmp_path)
+    def test_resolve_external_config_name(self, tmp_path: Path, monkeypatch) -> None:
+        root = _write_external_root(tmp_path, monkeypatch, "tasks/custom/train", "")
 
         config_path, config_name, hydra_overrides = resolve_config_reference(
-            "./custom_train.yaml", "tasks"
+            "custom/train", "tasks"
         )
 
-        assert config_path == str(tmp_path)
-        assert config_name == "custom_train"
-        assert hydra_overrides == ["hydra.searchpath=[pkg://autoware_ml.configs]"]
+        assert config_path == str(root)
+        assert config_name == "tasks/custom/train"
+        assert hydra_overrides == [f"hydra.searchpath=[file://{CONFIGS_ROOT}]"]
 
-    def test_resolve_absolute_yaml_path(self, tmp_path: Path) -> None:
+    def test_resolve_external_yaml_path(self, tmp_path: Path, monkeypatch) -> None:
+        root = _write_external_root(tmp_path, monkeypatch, "tasks/custom/train", "")
+        monkeypatch.chdir(root)
+
+        config_path, config_name, hydra_overrides = resolve_config_reference(
+            "./tasks/custom/train.yaml", "tasks"
+        )
+
+        assert config_path == str(root)
+        assert config_name == "tasks/custom/train"
+        assert hydra_overrides == [f"hydra.searchpath=[file://{CONFIGS_ROOT}]"]
+
+    def test_bundled_config_searches_external_roots(self, tmp_path: Path, monkeypatch) -> None:
+        root = _write_external_root(tmp_path, monkeypatch, "tasks/custom/train", "")
+
+        _, _, hydra_overrides = resolve_config_reference(SAMPLE_CONFIG_NAME, "tasks")
+
+        assert hydra_overrides == [f"hydra.searchpath=[file://{root}]"]
+
+    def test_reject_yaml_outside_config_roots(self, tmp_path: Path) -> None:
         config_file = tmp_path / "custom_train.yaml"
         config_file.write_text("trainer:\n  max_epochs: 1\n", encoding="utf-8")
 
-        config_path, config_name, hydra_overrides = resolve_config_reference(
-            str(config_file), "tasks"
+        with pytest.raises(ValueError, match="inside no config root"):
+            resolve_config_reference(str(config_file), "tasks")
+
+    def test_reject_missing_config(self) -> None:
+        with pytest.raises(FileNotFoundError, match="tasks/custom/missing.yaml"):
+            resolve_config_reference("custom/missing", "tasks")
+
+    def test_reject_a_missing_external_config_root(self, tmp_path: Path, monkeypatch) -> None:
+        write_settings(tmp_path, monkeypatch, AUTOWARE_ML_CONFIGS_PATH=str(tmp_path / "missing"))
+
+        with pytest.raises(NotADirectoryError, match="is no directory"):
+            resolve_config_reference(SAMPLE_CONFIG_NAME, "tasks")
+
+    def test_reject_external_config_shadowing_a_bundled_one(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        _write_external_root(tmp_path, monkeypatch, SAMPLE_CONFIG_PATH, "")
+
+        with pytest.raises(ValueError, match="more than one config root"):
+            resolve_config_reference(SAMPLE_CONFIG_NAME, "tasks")
+
+    def test_compose_external_config_on_bundled_defaults(self, tmp_path: Path, monkeypatch) -> None:
+        bundled_cfg = compose_config_reference(SAMPLE_CONFIG_NAME, "tasks")
+        _write_external_root(
+            tmp_path,
+            monkeypatch,
+            "tasks/detection3d/centerpoint/t4dataset/custom_t4dataset",
+            "# @package _global_\n"
+            "defaults:\n"
+            f"  - {Path(SAMPLE_CONFIG_NAME).name}\n"
+            "  - _self_\n"
+            "\n"
+            "trainer:\n"
+            "  max_epochs: 3\n",
         )
 
-        assert config_path == str(tmp_path)
-        assert config_name == "custom_train"
-        assert hydra_overrides == ["hydra.searchpath=[pkg://autoware_ml.configs]"]
+        cfg = compose_config_reference(
+            "detection3d/centerpoint/t4dataset/custom_t4dataset", "tasks"
+        )
+
+        assert cfg.trainer.max_epochs == 3
+        assert cfg.model == bundled_cfg.model
 
 
 class TestCompleteConfigValue:
@@ -151,6 +216,13 @@ class TestCompleteConfigValue:
 
         assert completions == [SAMPLE_CONFIG_NAME]
         assert "detection3d/centerpoint/t4dataset/base" not in completions
+
+    def test_complete_external_root_configs(self, tmp_path: Path, monkeypatch) -> None:
+        _write_external_root(tmp_path, monkeypatch, "tasks/custom/train", "")
+
+        completions = complete_config_value("custom/tr", "tasks")
+
+        assert completions == ["custom/train"]
 
     def test_complete_filesystem_yaml_paths(self, tmp_path: Path, monkeypatch) -> None:
         config_dir = tmp_path / "configs"
@@ -741,9 +813,9 @@ class TestCliRuntime:
         with (
             patch(
                 "autoware_ml.cli.runtime.resolve_config_reference",
-                return_value=(None, f"tasks/{config_name}", []),
+                return_value=(str(CONFIGS_ROOT), f"tasks/{config_name}", ["hydra.searchpath=[]"]),
             ),
-            patch("autoware_ml.cli.runtime.initialize_config_module", return_value=nullcontext()),
+            patch("autoware_ml.cli.runtime.initialize_config_dir", return_value=nullcontext()),
             patch("autoware_ml.cli.runtime.compose", return_value=cfg),
         ):
             yield
@@ -897,32 +969,28 @@ class TestResolveHydraArgv:
         hydra_argv = cli_runtime.resolve_hydra_argv(SAMPLE_CONFIG_NAME, "tasks")
         assert not any(arg.startswith("run_config_name=") for arg in hydra_argv)
 
-    def test_adds_config_path_for_external_yaml(self, tmp_path: Path) -> None:
-        config_file = tmp_path / "custom_train.yaml"
-        config_file.write_text("trainer:\n  max_epochs: 1\n", encoding="utf-8")
+    def test_adds_config_path_of_external_root(self, tmp_path: Path, monkeypatch) -> None:
+        root = _write_external_root(tmp_path, monkeypatch, "tasks/custom/train", "")
 
-        hydra_argv = cli_runtime.resolve_hydra_argv(str(config_file), "tasks")
+        hydra_argv = cli_runtime.resolve_hydra_argv("custom/train", "tasks")
 
-        assert hydra_argv[:4] == [
+        assert hydra_argv == [
             "--config-name",
-            "custom_train",
+            "tasks/custom/train",
             "--config-path",
-            str(tmp_path),
+            str(root),
+            f"hydra.searchpath=[file://{CONFIGS_ROOT}]",
         ]
-        assert "hydra.searchpath=[pkg://autoware_ml.configs]" in hydra_argv
 
-    def test_preserves_explicit_hydra_searchpath_override(self, tmp_path: Path) -> None:
-        config_file = tmp_path / "custom_train.yaml"
-        config_file.write_text("trainer:\n  max_epochs: 1\n", encoding="utf-8")
-
+    def test_preserves_explicit_hydra_searchpath_override(self) -> None:
         hydra_argv = cli_runtime.resolve_hydra_argv(
-            str(config_file),
+            SAMPLE_CONFIG_NAME,
             "tasks",
             extra_args=["hydra.searchpath=[file:///tmp/custom]"],
         )
 
         assert hydra_argv.count("hydra.searchpath=[file:///tmp/custom]") == 1
-        assert "hydra.searchpath=[pkg://autoware_ml.configs]" not in hydra_argv
+        assert "hydra.searchpath=[]" not in hydra_argv
 
     def test_resolves_runtime_entrypoint_script_path(self) -> None:
         runtime_argv = cli_runtime.resolve_hydra_entrypoint_argv(
