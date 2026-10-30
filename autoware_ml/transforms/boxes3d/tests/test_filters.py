@@ -107,10 +107,7 @@ def test_drops_the_boxes_outside_every_axis_of_the_range() -> None:
 
 
 def test_recorded_points_filter_drops_the_boxes_below_the_count_without_a_point_cloud() -> None:
-    """Boxes recorded with fewer than ``min_points`` (2) points go, with no point cloud loaded.
-
-    The recorded counts are all the filter reads, so it serves the camera pipelines.
-    """
+    # box_2 sits on the threshold and stays.
     result = BBoxesMinRecordedPointsFilter(min_points=2)(
         sample(["box_0", "box_1", "box_2", "box_3"], num_lidar_points=[0, 1, 2, 7])
     )
@@ -119,6 +116,19 @@ def test_recorded_points_filter_drops_the_boxes_below_the_count_without_a_point_
     assert result.point_cloud_data is None
     assert boxes.bbox_label_names == ["box_2", "box_3"]
     assert boxes.bbox_num_lidar_points.tolist() == [2, 7]
+
+
+def test_recorded_points_filter_can_drop_every_box() -> None:
+    result = BBoxesMinRecordedPointsFilter(min_points=2)(
+        sample(["box_0", "box_1"], num_lidar_points=[0, 1])
+    )
+
+    boxes = result.detection3d_gt_bboxes_3d
+    assert len(boxes) == 0
+    assert boxes.bbox_params.shape == (0, len(Box3DFieldIndex))
+    assert boxes.bbox_labels.shape == (0,)
+    assert boxes.bbox_label_names == []
+    assert boxes.bbox_num_lidar_points.shape == (0,)
 
 
 def test_label_name_filter_keeps_fine_names_mapped_to_kept_classes() -> None:
