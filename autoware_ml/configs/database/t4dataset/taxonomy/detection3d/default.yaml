@@ -1,4 +1,4 @@
-# Coarse detection3d taxonomy of T4dataset
+# Detection3d taxonomy of T4dataset
 _target_: autoware_ml.databases.taxonomy.Detection3DTaxonomy
 
 defaults:
@@ -57,7 +57,6 @@ class_mapping:
   other_vehicle: car
   police_car: car
   ambulance: car
-  emergency_vehicle: car
   forklift: truck
   truck: truck
   fire_truck: truck
@@ -79,6 +78,5 @@ class_mapping:
   debris: debris
   pushable_pullable: debris
   bicycle_rack: null
-  other_stuff: null
   open_door: null
   vehicle_protruding_object: null

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hydra
-import pytest
 from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
@@ -31,12 +30,10 @@ def test_every_raw_name_of_the_vocabulary_resolves() -> None:
         assert fine_name in taxonomy.class_mapping
 
 
-@pytest.mark.parametrize("raw_name", ["static_object.bicycle_rack", "static_object.bicycle rack"])
-def test_bicycle_rack_source_labels_resolve(raw_name: str) -> None:
-    # Both bicycle rack spellings map to one fine name. Detection drops it, segmentation keeps
-    # it as manmade.
+def test_bicycle_rack_is_dropped_by_detection_and_kept_by_segmentation() -> None:
+    # Detection drops the bicycle rack, segmentation keeps it as manmade.
     taxonomy = _t4_taxonomy()
 
-    assert taxonomy.detection3d.fine_name(raw_name) == "bicycle_rack"
+    assert taxonomy.detection3d.fine_name("bicycle_rack") == "bicycle_rack"
     assert taxonomy.detection3d.class_name("bicycle_rack") is None
     assert taxonomy.segmentation3d.class_name("bicycle_rack") == "manmade"

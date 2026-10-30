@@ -34,7 +34,7 @@ model:
     heatmap_target: oriented
     nms_type: circle
     nms_min_radius: 1.0
-    # One group per class of the coarse detection taxonomy of the T4 databases.
+    # One group per class of the detection taxonomy of the database.
     nms_group_configs:
       - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.NMSGroupConfig
         class_names: [car, truck, bus]

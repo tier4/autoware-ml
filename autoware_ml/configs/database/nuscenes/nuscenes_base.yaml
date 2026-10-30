@@ -12,7 +12,7 @@ cache_path: ${cache_root_path}/detection3d/
 cache_file_prefix_name: nuscenes_database
 
 defaults:
-  - nuscenes/taxonomy@taxonomy: default_coarse
+  - nuscenes/taxonomy@taxonomy: default
   - nuscenes/box3d_pipelines@box3d_pipelines: default_box3d_pipelines
   - nuscenes/scenarios@scenarios.db_nuscenes: detection3d/db_nuscenes
 
