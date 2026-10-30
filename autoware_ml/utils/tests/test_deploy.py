@@ -29,7 +29,10 @@ from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.datamodule.tests.corpus import build_dataset, write_corpus
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 import autoware_ml.utils.deploy as deploy
+from types import SimpleNamespace
+
 from autoware_ml.utils.deploy import (
+    create_optimization_profile,
     ExportSpec,
     build_dynamic_shapes,
     build_dynamic_axes,
@@ -206,6 +209,22 @@ def test_normalize_dynamic_shapes_wraps_varargs_forward() -> None:
     assert normalize_dynamic_shapes_for_model(_VarArgsModel(), dynamic_shapes) == (dynamic_shapes,)
 
 
+def test_export_to_onnx_refuses_declared_axes_under_dynamo(tmp_path: Path) -> None:
+    # Under dynamo=true these axes would silently be exported static.
+    with pytest.raises(ValueError, match="dynamo=false"):
+        export_to_onnx(
+            ExportSpec(
+                module=torch.nn.Identity(),
+                args=(torch.ones(2, 3),),
+                input_names=["x"],
+                output_names=["y"],
+                dynamic_axes={"x": {0: "n"}},
+            ),
+            OmegaConf.create({"dynamo": True}),
+            tmp_path / "static.onnx",
+        )
+
+
 def test_should_modify_graph_handles_none_and_config() -> None:
     assert should_modify_graph(None) is False
     assert should_modify_graph(OmegaConf.create({"_target_": "pkg.Modifier"})) is True
@@ -298,3 +317,65 @@ def test_get_predict_batch_keeps_the_typed_batch_through_the_device_transfer(
         inputs.multi_task_gt_batch.point_cloud_gt_batch.points,
         batch.point_cloud_gt_batch.points,
     )
+
+
+class _FakeProfile:
+    def __init__(self) -> None:
+        self.shapes: dict[str, tuple[list[int], list[int], list[int]]] = {}
+
+    def set_shape(self, name: str, min: list[int], opt: list[int], max: list[int]) -> None:
+        self.shapes[name] = (min, opt, max)
+
+
+class _FakeBuilder:
+    def create_optimization_profile(self) -> _FakeProfile:
+        return _FakeProfile()
+
+
+class _FakeNetwork:
+    def __init__(self, names: list[str]) -> None:
+        self._names = names
+
+    @property
+    def num_inputs(self) -> int:
+        return len(self._names)
+
+    def get_input(self, index: int) -> SimpleNamespace:
+        return SimpleNamespace(name=self._names[index])
+
+
+def test_create_optimization_profile_resolves_the_table_for_the_network_inputs() -> None:
+    cfg = OmegaConf.create(
+        {
+            "max_voxels": 96000,
+            "tensorrt": {
+                "input_shapes": {
+                    "input_features": {
+                        "min_shape": [1, 32, 11],
+                        "opt_shape": [20000, 32, 11],
+                        "max_shape": ["${max_voxels}", 32, 11],
+                    },
+                    "spatial_features": {
+                        "min_shape": [1, 32, 8, 8],
+                        "opt_shape": [1, 32, 8, 8],
+                        "max_shape": [1, 32, 8, 8],
+                    },
+                }
+            },
+        }
+    )
+    profile = create_optimization_profile(
+        _FakeBuilder(), cfg.tensorrt, _FakeNetwork(["input_features"])
+    )
+    assert profile.shapes == {"input_features": ([1, 32, 11], [20000, 32, 11], [96000, 32, 11])}
+    assert all(isinstance(dim, int) for dim in profile.shapes["input_features"][2])
+    # A network whose inputs have no entry gets no profile at all.
+    assert (
+        create_optimization_profile(_FakeBuilder(), cfg.tensorrt, _FakeNetwork(["other"])) is None
+    )
+    with pytest.raises(ValueError, match="incomplete"):
+        create_optimization_profile(
+            _FakeBuilder(),
+            OmegaConf.create({"input_shapes": {"x": {"min_shape": [1]}}}),
+            _FakeNetwork(["x"]),
+        )
