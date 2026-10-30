@@ -1,13 +1,13 @@
 # @package _global_
 defaults:
   - base_voxel0170_120m
-  - /database@database: t4dataset/t4dataset_j6gen2_base
+  - /database@database: t4dataset/t4dataset_base
   - override /database/t4dataset/taxonomy@database.taxonomy: default_dynamic
   - _self_
 
 batch_size: 16
 num_workers: 8
-experiment_group_name: transfusion/${database.version}/j6gen2_base
+experiment_group_name: transfusion/${database.version}/t4dataset
 experiment_name: voxel0170_second_secfpn_b16_30e_t4dataset_120m
 
 trainer:

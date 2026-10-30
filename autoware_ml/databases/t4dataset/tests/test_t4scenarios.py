@@ -47,33 +47,35 @@ class TestTrafficConeBarrierBboxStatus(unittest.TestCase):
 
     def test_true_marks_the_scenario_as_annotated(self) -> None:
         """``true`` yields the boolean flag alongside the location and vehicle type."""
-        scenario = _parse("scene_a/0/tokyo/j6gen2/true")
+        scenario = _parse("scene_a/0/city_a/vehicle_a/true")
 
         self.assertIs(scenario.traffic_cone_barrier_bbox_status, True)
         self.assertEqual(scenario.scenario_id, "scene_a")
         self.assertEqual(scenario.scenario_version, "0")
-        self.assertEqual(scenario.location, "tokyo")
-        self.assertEqual(scenario.vehicle_type, "j6gen2")
+        self.assertEqual(scenario.location, "city_a")
+        self.assertEqual(scenario.vehicle_type, "vehicle_a")
 
     def test_false_marks_the_scenario_as_not_annotated(self) -> None:
         """``false``, the value most split YAML files carry, yields ``False`` (not ``bool("false")``)."""
-        scenario = _parse("scene_a/0/tokyo/j6gen2/false")
+        scenario = _parse("scene_a/0/city_a/vehicle_a/false")
 
         self.assertIs(scenario.traffic_cone_barrier_bbox_status, False)
 
     def test_none_marks_the_status_as_unknown(self) -> None:
         """``none`` keeps the location and vehicle type but leaves the flag unknown."""
-        scenario = _parse("scene_a/0/tokyo/j6gen2/none")
+        scenario = _parse("scene_a/0/city_a/vehicle_a/none")
 
         self.assertIsNone(scenario.traffic_cone_barrier_bbox_status)
-        self.assertEqual(scenario.location, "tokyo")
-        self.assertEqual(scenario.vehicle_type, "j6gen2")
+        self.assertEqual(scenario.location, "city_a")
+        self.assertEqual(scenario.vehicle_type, "vehicle_a")
 
     def test_flag_text_is_case_insensitive(self) -> None:
         """``True`` / ``FALSE`` spellings parse like their lowercase forms."""
-        self.assertIs(_parse("scene_a/0/tokyo/j6gen2/True").traffic_cone_barrier_bbox_status, True)
         self.assertIs(
-            _parse("scene_a/0/tokyo/j6gen2/FALSE").traffic_cone_barrier_bbox_status, False
+            _parse("scene_a/0/city_a/vehicle_a/True").traffic_cone_barrier_bbox_status, True
+        )
+        self.assertIs(
+            _parse("scene_a/0/city_a/vehicle_a/FALSE").traffic_cone_barrier_bbox_status, False
         )
 
     def test_absent_flag_defaults_to_unknown(self) -> None:
@@ -91,11 +93,11 @@ class TestTrafficConeBarrierBboxStatus(unittest.TestCase):
         for value in ("maybe", "yes", "1", ""):
             with self.subTest(value=value):
                 with self.assertRaisesRegex(ValueError, "traffic cone"):
-                    _parse(f"scene_a/0/tokyo/j6gen2/{value}")
+                    _parse(f"scene_a/0/city_a/vehicle_a/{value}")
 
     def test_other_segment_counts_are_rejected(self) -> None:
         """Only the bare and the fully qualified forms are scenario IDs."""
-        for scenario_id in ("scene_a", "scene_a/0/tokyo", "scene_a/0/tokyo/j6gen2/true/extra"):
+        for scenario_id in ("scene_a", "scene_a/0/city_a", "scene_a/0/city_a/vehicle_a/true/extra"):
             with self.subTest(scenario_id=scenario_id):
                 with self.assertRaisesRegex(ValueError, "Invalid scenario ID"):
                     _parse(scenario_id)
@@ -110,8 +112,8 @@ class TestScenarioYaml(unittest.TestCase):
         self.addCleanup(self._tmp_dir.cleanup)
         self.scenario_root_path = Path(self._tmp_dir.name)
         splits = {
-            "train": ["scene_a/0/tokyo/j6gen2/true", "scene_b/1"],
-            "val": ["scene_c/2/odaiba/jpntaxi/true"],
+            "train": ["scene_a/0/city_a/vehicle_a/true", "scene_b/1"],
+            "val": ["scene_c/2/city_b/vehicle_b/true"],
             "test": [],
         }
         with open(self.scenario_root_path / f"{_DATASET_NAME}.yaml", "w") as f:
@@ -130,18 +132,18 @@ class TestScenarioYaml(unittest.TestCase):
         self.assertIsNone(train[1].traffic_cone_barrier_bbox_status)
         self.assertEqual(len(val), 1)
         self.assertIs(val[0].traffic_cone_barrier_bbox_status, True)
-        self.assertEqual(val[0].location, "odaiba")
+        self.assertEqual(val[0].location, "city_b")
         self.assertEqual(scenarios.scenario_data[SplitType.TEST], [])
 
     def test_flag_takes_part_in_scenario_equality(self) -> None:
         """Two scenarios differing only in the flag are different scenarios."""
-        annotated = _parse("scene_a/0/tokyo/j6gen2/true")
+        annotated = _parse("scene_a/0/city_a/vehicle_a/true")
         unknown = ScenarioData(
             dataset_params=_dataset_params(),
             scenario_id="scene_a",
             scenario_version="0",
-            vehicle_type="j6gen2",
-            location="tokyo",
+            vehicle_type="vehicle_a",
+            location="city_a",
             traffic_cone_barrier_bbox_status=None,
         )
 

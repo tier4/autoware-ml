@@ -1,0 +1,14 @@
+_target_: autoware_ml.databases.t4dataset.t4scenarios.T4Scenarios
+_convert_: all
+
+# The scenario lists live below AUTOWARE_ML_SCENARIOS_PATH of .env
+scenario_root_path: ${scenarios_path:t4dataset/detection3d_segmentation3d}
+
+dataset_params:
+  # Boxes and semantic masks are annotated on every 10th frame of the 10 Hz scenes
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
+    _convert_: all
+    dataset_name: db_default
+    max_past_sweeps: 2
+    max_future_sweeps: 0
+    sample_steps: 10

@@ -32,7 +32,7 @@ from autoware_ml.utils.session import (
     stop_session,
 )
 
-SAMPLE_CONFIG_NAME = "calibration_status/calibration_status_classifier/resnet18_t4dataset_j6gen2"
+SAMPLE_CONFIG_NAME = "calibration_status/calibration_status_classifier/resnet18_t4dataset"
 SAMPLE_SESSION_NAME = "calibration-status-train"
 
 

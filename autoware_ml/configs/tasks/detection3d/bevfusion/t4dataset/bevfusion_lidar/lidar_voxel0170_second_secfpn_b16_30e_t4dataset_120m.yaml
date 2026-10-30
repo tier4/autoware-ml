@@ -1,14 +1,14 @@
 # @package _global_
 defaults:
-  - ../base_no_intensity_120m
+  - ../base_120m
   - base_lidar_voxel0170_120m
-  - /database@database: t4dataset/t4dataset_gen1_base
+  - /database@database: t4dataset/t4dataset_base
   - override /database/t4dataset/taxonomy@database.taxonomy: default_dynamic
   - _self_
 
 batch_size: 16
 num_workers: 16
-experiment_group_name: bevfusion/${database.version}/gen1_base
+experiment_group_name: bevfusion/${database.version}/t4dataset
 experiment_name: lidar_voxel0170_second_secfpn_b16_30e_t4dataset_120m
 
 trainer:
@@ -23,6 +23,8 @@ callbacks:
     epoch_intervals: [[0, 5], [20, 1]]
 
 model:
+  # The base database annotates traffic cones and barriers in every scene.
+  partial_annotations: null
   scheduler:
     warmup_epochs: 3
     decay_epochs: 27

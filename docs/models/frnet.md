@@ -19,18 +19,18 @@ FRNet is a LiDAR-based 3D semantic segmentation model built on frustum and range
 
 ## Available Configurations
 
-| Config Name                                                             | Dataset   | Purpose                         |
-| ----------------------------------------------------------------------- | --------- | ------------------------------- |
-| `segmentation3d/frnet/nuscenes/hdl32e_b16_150k_nuscenes`                | NuScenes  | Standard NuScenes configuration |
-| `segmentation3d/frnet/t4dataset/ot128_b4_150k_t4dataset_j6gen2_semaseg` | T4Dataset | T4Dataset OT128 configuration   |
-| `segmentation3d/frnet/t4dataset/qt128_b8_150k_t4dataset_j6gen2_semaseg` | T4Dataset | T4Dataset QT128 configuration   |
+| Config Name                                              | Dataset   | Purpose                         |
+| -------------------------------------------------------- | --------- | ------------------------------- |
+| `segmentation3d/frnet/nuscenes/hdl32e_b16_150k_nuscenes` | NuScenes  | Standard NuScenes configuration |
+| `segmentation3d/frnet/t4dataset/ot128_b4_150k_t4dataset` | T4Dataset | T4Dataset OT128 configuration   |
+| `segmentation3d/frnet/t4dataset/qt128_b8_150k_t4dataset` | T4Dataset | T4Dataset QT128 configuration   |
 
 ## Training
 
 ```bash
 autoware-ml train --config-name segmentation3d/frnet/nuscenes/hdl32e_b16_150k_nuscenes
-autoware-ml train --config-name segmentation3d/frnet/t4dataset/ot128_b4_150k_t4dataset_j6gen2_semaseg
-autoware-ml train --config-name segmentation3d/frnet/t4dataset/qt128_b8_150k_t4dataset_j6gen2_semaseg
+autoware-ml train --config-name segmentation3d/frnet/t4dataset/ot128_b4_150k_t4dataset
+autoware-ml train --config-name segmentation3d/frnet/t4dataset/qt128_b8_150k_t4dataset
 ```
 
 For a pipeline validation run:

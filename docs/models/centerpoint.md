@@ -21,12 +21,10 @@ CenterPoint is a LiDAR-based 3D object detection model integrated under the `det
 
 Experiment configs live under `autoware_ml/configs/tasks/detection3d/centerpoint/<dataset>/` and are passed to the CLI as the path relative to `tasks/`.
 
-| Leaf                                  | Database          | Weights                                             |
-| ------------------------------------- | ----------------- | --------------------------------------------------- |
-| `t4dataset/<variant>_gen1_base`       | T4Dataset gen1    | Trained from scratch                                |
-| `t4dataset/<variant>_jpntaxi_base`    | T4Dataset jpntaxi | Fine-tuned from a checkpoint given with `--weights` |
-| `t4dataset/<variant>_j6gen2_base`     | T4Dataset j6gen2  | Fine-tuned from a checkpoint given with `--weights` |
-| `nuscenes/<variant>_nuscenes_<range>` | nuScenes          | Trained from scratch                                |
+| Leaf                                    | Database  | Weights              |
+| --------------------------------------- | --------- | -------------------- |
+| `t4dataset/<variant>_t4dataset_<range>` | T4Dataset | Trained from scratch |
+| `nuscenes/<variant>_nuscenes_<range>`   | nuScenes  | Trained from scratch |
 
 The leaf name spells out its variant: the voxel size, the backbone and neck, the batch size, the epoch count and the detection range, so the values live in one place, the config. The configs are layered so that each file owns one concern:
 
@@ -39,25 +37,17 @@ The leaf name spells out its variant: the voxel size, the backbone and neck, the
 
 ## Training
 
-Train the base model from scratch:
+The T4Dataset config trains from scratch on the `t4dataset` database:
 
 ```bash
-autoware-ml train --config-name detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_30e_t4dataset_120m_gen1_base
-```
-
-The `jpntaxi` and `j6gen2` configs declare `weights: ???`, so they must be started from a pretrained checkpoint. Pass it with `--weights`. The config already lowers the learning rate for fine-tuning:
-
-```bash
-autoware-ml train \
-    --config-name detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_50e_t4dataset_120m_j6gen2_base \
-    --weights mlruns/centerpoint/T4Dataset-gen1_base-v1.0.0/gen1_base/voxel024_second_secfpn_b16_30e_t4dataset_120m/<run_id>/artifacts/checkpoints/best.ckpt
+autoware-ml train --config-name detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_30e_t4dataset_120m
 ```
 
 For a pipeline validation run:
 
 ```bash
 autoware-ml train \
-    --config-name detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_30e_t4dataset_120m_gen1_base \
+    --config-name detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_30e_t4dataset_120m \
     +trainer.fast_dev_run=true
 ```
 
@@ -67,8 +57,8 @@ Checkpoints are written to `mlruns/<experiment_group_name>/<experiment_name>/<ru
 
 ```bash
 autoware-ml test \
-    --config-name detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_50e_t4dataset_120m_j6gen2_base \
-    --weights mlruns/centerpoint/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base/voxel024_second_secfpn_b16_50e_t4dataset_120m/<run_id>/artifacts/checkpoints/best.ckpt
+    --config-name detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_30e_t4dataset_120m \
+    --weights mlruns/centerpoint/T4Dataset-base-v1.0.0/t4dataset/voxel024_second_secfpn_b16_30e_t4dataset_120m/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 Evaluation runs on a single device by default so metrics are deterministic. Pass `--use-config-devices` to keep the `trainer.devices` from the config.
@@ -77,8 +67,8 @@ Evaluation runs on a single device by default so metrics are deterministic. Pass
 
 ```bash
 autoware-ml deploy \
-    --config-name detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_50e_t4dataset_120m_j6gen2_base \
-    --weights mlruns/centerpoint/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base/voxel024_second_secfpn_b16_50e_t4dataset_120m/<run_id>/artifacts/checkpoints/best.ckpt \
+    --config-name detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_30e_t4dataset_120m \
+    --weights mlruns/centerpoint/T4Dataset-base-v1.0.0/t4dataset/voxel024_second_secfpn_b16_30e_t4dataset_120m/<run_id>/artifacts/checkpoints/best.ckpt \
     --release v1.0.0
 ```
 

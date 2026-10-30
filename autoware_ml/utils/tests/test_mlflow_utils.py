@@ -41,9 +41,9 @@ from autoware_ml.utils.mlflow_helpers import (
     write_run_metadata,
 )
 
-SAMPLE_CONFIG_NAME = "calibration_status/calibration_status_classifier/resnet18_t4dataset_j6gen2"
-SAMPLE_EXPERIMENT_GROUP_NAME = "calibration_status/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base"
-SAMPLE_EXPERIMENT_LEAF = "resnet18_t4dataset_j6gen2"
+SAMPLE_CONFIG_NAME = "calibration_status/calibration_status_classifier/resnet18_t4dataset"
+SAMPLE_EXPERIMENT_GROUP_NAME = "calibration_status/T4Dataset-base-v1.0.0/t4dataset"
+SAMPLE_EXPERIMENT_LEAF = "resnet18_t4dataset"
 SAMPLE_EXPERIMENT_NAME = f"{SAMPLE_EXPERIMENT_GROUP_NAME}/{SAMPLE_EXPERIMENT_LEAF}"
 SAMPLE_EXPERIMENT_UID = "2026.03.17.09.00.00"
 SAMPLE_RUN_NAME = f"train_{SAMPLE_EXPERIMENT_LEAF}_{SAMPLE_EXPERIMENT_UID}"
@@ -71,13 +71,11 @@ class TestExperimentNaming:
         assert name == SAMPLE_EXPERIMENT_NAME
 
     def test_generate_experiment_name_keeps_slashes_and_trims_edges(self) -> None:
-        name = generate_experiment_name("centerpoint/t4_v2/", "/gen1_base")
+        name = generate_experiment_name("centerpoint/t4_v2/", "/base")
 
-        assert name == "centerpoint/t4_v2/gen1_base"
+        assert name == "centerpoint/t4_v2/base"
 
-    @pytest.mark.parametrize(
-        "group,name", [("", "gen1_base"), ("centerpoint/t4_v2", ""), ("/", "x")]
-    )
+    @pytest.mark.parametrize("group,name", [("", "base"), ("centerpoint/t4_v2", ""), ("/", "x")])
     def test_generate_experiment_name_rejects_empty_parts(self, group: str, name: str) -> None:
         with pytest.raises(ValueError, match="non-empty"):
             generate_experiment_name(group, name)
@@ -95,8 +93,8 @@ class TestExperimentNaming:
     @pytest.mark.parametrize(
         "cfg",
         [
-            {"experiment_name": "gen1_base"},
-            {"experiment_group_name": "???", "experiment_name": "gen1_base"},
+            {"experiment_name": "base"},
+            {"experiment_group_name": "???", "experiment_name": "base"},
             {"experiment_group_name": "centerpoint", "experiment_name": "???"},
         ],
     )
@@ -135,7 +133,7 @@ class TestRunTags:
             / "mlruns"
             / "calibration_status"
             / "calibration_status_classifier"
-            / "resnet18_t4dataset_j6gen2"
+            / "resnet18_t4dataset"
             / "2026-03-17"
             / "09-00-00"
         )
@@ -151,7 +149,7 @@ class TestRunTags:
         assert tags["config_name"] == SAMPLE_CONFIG_NAME
         assert tags["task"] == "calibration_status"
         assert tags["model"] == "calibration_status_classifier"
-        assert tags["config_variant"] == "resnet18_t4dataset_j6gen2"
+        assert tags["config_variant"] == "resnet18_t4dataset"
         assert tags["stage"] == "deploy"
         assert tags["hydra_dir"] == str(work_dir)
         assert tags["checkpoint_path"] == "/tmp/model.ckpt"
@@ -358,7 +356,7 @@ def _train_checkpoint(tmp_path: Path, config_name: str, with_metadata: bool = Tr
             json.dumps(
                 {
                     "run_id": "train-run",
-                    "experiment_name": "ptv3_det3d_seg3d/t4_v2/j6gen2/voxel012",
+                    "experiment_name": "ptv3_det3d_seg3d/t4_v2/base/voxel012",
                     "config_name": config_name,
                     "stage": "train",
                 }

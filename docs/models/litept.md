@@ -49,10 +49,10 @@ operator calls `rope_freq`. This is a hyperparameter and needs tuning.
 
 ## Available Configurations
 
-| Config Name                                                                      | Task                         | Dataset   | Head        | Range | Purpose                        |
-| -------------------------------------------------------------------------------- | ---------------------------- | --------- | ----------- | ----- | ------------------------------ |
-| `segmentation3d/litept/t4dataset/voxel012_b16_50e_t4dataset_122m_j6gen2_semaseg` | segmentation3d               | T4Dataset | Seg decoder | 122 m | T4Dataset segmentation         |
-| `multi/litept/t4dataset/voxel012_b8_100e_t4dataset_122m_j6gen2_det3d_seg3d`      | segmentation3d + detection3d | T4Dataset | TransFusion | 122 m | Joint segmentation + detection |
+| Config Name                                                       | Task                         | Dataset   | Head        | Range | Purpose                        |
+| ----------------------------------------------------------------- | ---------------------------- | --------- | ----------- | ----- | ------------------------------ |
+| `segmentation3d/litept/t4dataset/voxel012_b16_50e_t4dataset_122m` | segmentation3d               | T4Dataset | Seg decoder | 122 m | T4Dataset segmentation         |
+| `multi/litept/t4dataset/voxel012_b8_100e_t4dataset_122m`          | segmentation3d + detection3d | T4Dataset | TransFusion | 122 m | Joint segmentation + detection |
 
 Each inherits dataset, transforms, optimizer and deploy settings from the PTv3
 config of the same name and swaps only the encoder and the decoder head.
@@ -62,7 +62,7 @@ the two stay directly comparable. The decoder keeps the PTv3 blocks and runs the
 LitePT's rule.
 
 ```bash
-autoware-ml train --config-name segmentation3d/litept/t4dataset/voxel012_b16_50e_t4dataset_122m_j6gen2_semaseg
+autoware-ml train --config-name segmentation3d/litept/t4dataset/voxel012_b16_50e_t4dataset_122m
 ```
 
 ## Export contract

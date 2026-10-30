@@ -38,8 +38,8 @@ from autoware_ml.databases.taxonomy import (
 from autoware_ml.types.metrics import AgentKind
 
 _SCENARIOS = {
-    "train": ["db_scenario_a/0/tokyo/j6gen2/true", "db_scenario_b/1/tokyo/j6gen2/true"],
-    "val": ["db_scenario_c/0/tokyo/j6gen2/true"],
+    "train": ["db_scenario_a/0/city_a/vehicle_a/true", "db_scenario_b/1/city_a/vehicle_a/true"],
+    "val": ["db_scenario_c/0/city_a/vehicle_a/true"],
 }
 
 
@@ -77,8 +77,8 @@ class TestScenarioDataHashRepr(unittest.TestCase):
             dataset_params=DatasetParams(dataset_name="db_test", sample_steps=2),
             scenario_id="scene_a",
             scenario_version="0",
-            vehicle_type="j6gen2",
-            location="tokyo",
+            vehicle_type="vehicle_a",
+            location="city_a",
             traffic_cone_barrier_bbox_status=status,
         )
 
@@ -92,8 +92,8 @@ class TestScenarioDataHashRepr(unittest.TestCase):
             "sample_steps=2",
             "scenario_id='scene_a'",
             "scenario_version='0'",
-            "vehicle_type='j6gen2'",
-            "location='tokyo'",
+            "vehicle_type='vehicle_a'",
+            "location='city_a'",
             "traffic_cone_barrier_bbox_status=True",
         ):
             with self.subTest(field=field):
