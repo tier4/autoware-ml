@@ -84,12 +84,11 @@ class BBoxesMinPointsFilter(BaseTransform):
 
 
 class BBoxesMinRecordedPointsFilter(BaseTransform):
-    """Filter 3D bounding boxes by the number of lidar points recorded with every box.
+    """Filter 3D bounding boxes by the lidar point count the database stores with every box.
 
-    Unlike :class:`BBoxesMinPointsFilter` it counts nothing: it reads the lidar point count
-    the database recorded for every box, so it serves pipelines that load no point cloud
-    (camera-only models). The detection metrics drop boxes by the same count
-    (``min_num_points``).
+    The detection metrics filter by the same count (``min_num_points``).
+    :class:`BBoxesMinPointsFilter` counts the points of the loaded point cloud instead, so this
+    filter is the one for camera-only pipelines.
     """
 
     _required_keys = ["detection3d_gt_bboxes_3d"]
