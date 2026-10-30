@@ -6,7 +6,6 @@
     - source: .github/workflows/github-release.yaml
     - source: .github/workflows/pre-commit-optional-autoupdate.yaml
     - source: .github/workflows/pre-commit-autoupdate.yaml
-    - source: .github/workflows/semantic-pull-request.yaml
     - source: .github/workflows/spell-check-differential.yaml
       pre-commands: |
         sd "        with:\n" "        with:\n          local-cspell-json: .cspell.json\n" {source}
