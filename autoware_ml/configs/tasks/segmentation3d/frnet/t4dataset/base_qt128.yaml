@@ -1,5 +1,5 @@
 # @package _global_
-# The four Hesai QT128 lidars of the J6 gen2 platform.
+# Four Hesai QT128 lidars, one range image per lidar.
 defaults:
   - base
   - _self_

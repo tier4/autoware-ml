@@ -22,9 +22,9 @@ import pytest
 from autoware_ml.databases.schemas.lidar_frames import LidarFrameDataModel
 from autoware_ml.databases.schemas.utils import relative_to_database_root
 
-_SCENE = "db_j6gen2_v4/00fa6989-549a-4ab2-b5ea-aa07f416d821/0"
+_SCENE = "db_default/0a1b2c3d-0000-4000-8000-000000000001/0"
 _POINTCLOUD_TAIL = "data/LIDAR_CONCAT/00000.pcd.bin"
-_MASK_TAIL = "lidarseg_auto/annotation/747de21bbb6b0e58f22e58231067fa5f.bin"
+_MASK_TAIL = "lidarseg_auto/annotation/0123456789abcdef0123456789abcdef.bin"
 
 
 def build_lidar_frame(
@@ -84,20 +84,20 @@ def test_optional_paths_stay_absent() -> None:
     [
         (
             "lidar_pointcloud_relative_path",
-            {"pointcloud_path": f"/mnt/host/{_SCENE}/{_POINTCLOUD_TAIL}"},
+            {"pointcloud_path": f"/data/t4dataset/{_SCENE}/{_POINTCLOUD_TAIL}"},
         ),
         (
             "lidar_pointcloud_source_relative_path",
             {
                 "pointcloud_path": f"{_SCENE}/{_POINTCLOUD_TAIL}",
-                "source_path": f"/mnt/host/{_SCENE}/{_POINTCLOUD_TAIL}",
+                "source_path": f"/data/t4dataset/{_SCENE}/{_POINTCLOUD_TAIL}",
             },
         ),
         (
             "lidar_pointcloud_semantic_mask_relative_path",
             {
                 "pointcloud_path": f"{_SCENE}/{_POINTCLOUD_TAIL}",
-                "semantic_mask_path": f"/workspace/data/t4dataset/{_SCENE}/{_MASK_TAIL}",
+                "semantic_mask_path": f"/data/t4dataset/{_SCENE}/{_MASK_TAIL}",
             },
         ),
     ],
@@ -117,7 +117,7 @@ def test_an_empty_path_is_rejected() -> None:
 def test_the_generators_strip_their_own_root() -> None:
     # Whatever root a generator ran under, the stored path starts below it, so a record keeps
     # the scene directory and resolves under any root the database is mounted at later
-    for root in ("/mnt/some_other_host/t4dataset", "/workspace/data/t4dataset/pseudo_large"):
+    for root in ("/data/t4dataset", "/mnt/other_host/data/t4dataset"):
         assert (
             relative_to_database_root(f"{root}/{_SCENE}/{_POINTCLOUD_TAIL}", root)
             == f"{_SCENE}/{_POINTCLOUD_TAIL}"

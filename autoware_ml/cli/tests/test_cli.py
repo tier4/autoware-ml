@@ -50,11 +50,11 @@ from autoware_ml.utils.mlflow_store import compose_config_reference
 from autoware_ml.utils.session import SessionCommandError
 
 SAMPLE_CONFIG_NAME = (
-    "detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_50e_t4dataset_120m_j6gen2_base"
+    "detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_30e_t4dataset_120m"
 )
 SAMPLE_CONFIG_PATH = f"tasks/{SAMPLE_CONFIG_NAME}"
 SAMPLE_SESSION_NAME = "centerpoint-train"
-SAMPLE_EXPERIMENT_GROUP_NAME = "ptv3_det3d_seg3d/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base"
+SAMPLE_EXPERIMENT_GROUP_NAME = "ptv3_det3d_seg3d/T4Dataset-base-v1.0.0/t4dataset"
 SAMPLE_EXPERIMENT_NAME = f"{SAMPLE_EXPERIMENT_GROUP_NAME}/voxel012"
 SAMPLE_EXPERIMENT_UID = "2026.10.15.12.00.00"
 
@@ -116,7 +116,7 @@ class TestResolveConfigReference:
     def test_resolve_packaged_yaml_path(self) -> None:
         config_path, config_name, hydra_overrides = resolve_config_reference(
             "autoware_ml/configs/tasks/detection3d/centerpoint/t4dataset/"
-            "voxel024_second_secfpn_b16_50e_t4dataset_120m_j6gen2_base.yaml",
+            "voxel024_second_secfpn_b16_30e_t4dataset_120m.yaml",
             "tasks",
         )
 

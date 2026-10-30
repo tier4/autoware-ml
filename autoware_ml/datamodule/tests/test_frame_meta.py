@@ -8,15 +8,15 @@ from autoware_ml.datamodule.t4dataset.frame_meta import scene_dir_fragment
 
 
 def test_scene_dir_fragment() -> None:
-    path = "db_j6gen2_v2/13cabeac-a81b/0/data/LIDAR_CONCAT/00000.pcd.bin"
-    assert scene_dir_fragment(path) == "db_j6gen2_v2/13cabeac-a81b/0"
+    path = "db_test_v2/0a1b2c3d-0000/0/data/LIDAR_CONCAT/00000.pcd.bin"
+    assert scene_dir_fragment(path) == "db_test_v2/0a1b2c3d-0000/0"
 
 
 def test_scene_dir_fragment_rejects_absolute_paths() -> None:
     # The records store their paths relative to the database root, so a rooted path was not
     # written by this version of the generators
     with pytest.raises(ValueError, match="relative to the database root"):
-        scene_dir_fragment("/data/t4/db_j6gen2_v2/13cabeac-a81b/0/data/LIDAR_CONCAT/00000.pcd.bin")
+        scene_dir_fragment("/data/t4/db_test_v2/0a1b2c3d-0000/0/data/LIDAR_CONCAT/00000.pcd.bin")
 
 
 def test_scene_dir_fragment_rejects_short_paths() -> None:
