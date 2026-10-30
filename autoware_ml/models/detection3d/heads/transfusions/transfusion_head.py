@@ -354,10 +354,16 @@ class TransFusionHead(nn.Module):
                 f"TransFusionHead common_heads must hold the branches {list(REGRESSION_BRANCHES)} "
                 f"and optionally {VELOCITY_BRANCH}, got {list(common_heads)}."
             )
-        if use_velocity != (VELOCITY_BRANCH in common_heads):
+        has_velocity_branch = VELOCITY_BRANCH in common_heads
+        if use_velocity and not has_velocity_branch:
             raise ValueError(
-                f"TransFusionHead common_heads must hold a {VELOCITY_BRANCH} branch exactly when "
-                f"use_velocity is set, got use_velocity={use_velocity} and {list(common_heads)}."
+                f"TransFusionHead use_velocity=True requires a {VELOCITY_BRANCH!r} branch "
+                "in common_heads."
+            )
+        if has_velocity_branch and not use_velocity:
+            raise ValueError(
+                f"TransFusionHead common_heads has a {VELOCITY_BRANCH!r} branch "
+                "but use_velocity=False."
             )
         code_size = VELOCITY_BOX_CODE_SIZE if use_velocity else BOX_CODE_SIZE
         if bbox_coder.code_size != code_size or len(code_weights) != code_size:

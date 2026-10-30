@@ -518,7 +518,7 @@ class TestTransFusionHead(unittest.TestCase):
             {name: shape for name, shape in self.common_heads.items() if name != "vels"}
         )
 
-        with self.assertRaisesRegex(ValueError, "exactly when use_velocity is set"):
+        with self.assertRaisesRegex(ValueError, "use_velocity=True requires a 'vels' branch"):
             self._build_transfusion_head()
 
     def test_vels_branch_requires_use_velocity(self) -> None:
@@ -526,7 +526,7 @@ class TestTransFusionHead(unittest.TestCase):
         self.code_size = 8
         self.code_weights = self.code_weights[:8]
 
-        with self.assertRaisesRegex(ValueError, "exactly when use_velocity is set"):
+        with self.assertRaisesRegex(ValueError, "'vels' branch but use_velocity=False"):
             self._build_transfusion_head(use_velocity=False)
 
     def test_code_size_and_code_weights_must_match_the_box_channels(self) -> None:
