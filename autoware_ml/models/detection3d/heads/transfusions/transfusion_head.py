@@ -66,6 +66,9 @@ from autoware_ml.types.geometry import Box3DFieldIndex
 # the optional velocity branch. The head adds the heatmaps branch itself.
 REGRESSION_BRANCHES = ("centers", "heights", "dims", "rots")
 VELOCITY_BRANCH = "vels"
+# Regression channels of a box without and with its velocity.
+BOX_CODE_SIZE = 8
+VELOCITY_BOX_CODE_SIZE = 10
 
 
 class NMSGroupConfig(NamedTuple):
@@ -271,7 +274,7 @@ class TransFusionHead(nn.Module):
             point_cloud_range: Detector point-cloud range.
             voxel_size: Voxel size used by the detector.
             out_size_factor: BEV downsampling factor between point and feature space.
-            code_weights: Weights applied to each regression channel.
+            code_weights: Weights applied to each regression channel, one per channel.
             min_radius: Minimum heatmap Gaussian radius.
             gaussian_overlap: Required overlap for Gaussian radius computation.
                 Only used by the ``"round"`` heatmap target.
@@ -306,7 +309,7 @@ class TransFusionHead(nn.Module):
             heatmap_init_bias: Initial bias used by the dense heatmap branch.
             nms_kernel_size: Kernel size used for local-maximum suppression.
             use_velocity: Whether the head predicts object velocity. Requires the ``vels``
-                branch in ``common_heads``, which is dropped when off.
+                branch in ``common_heads`` and a box coder of 10 channels, 8 when off.
             head_hidden_channels: Width of the prediction-branch hidden layers.
                 Defaults to ``hidden_channel``.
             norm_eps: Epsilon used by the head's batch-normalization layers
@@ -318,8 +321,9 @@ class TransFusionHead(nn.Module):
 
         Raises:
             ValueError: If ``common_heads`` misses a regression branch or holds an unknown one,
-                if ``use_velocity`` is set without a ``vels`` branch, or if ``heatmap_target``,
-                ``nms_type`` or the NMS groups are unsupported.
+                if it holds a ``vels`` branch without ``use_velocity`` or the reverse, if the box
+                coder or ``code_weights`` do not match the channels of the box, or if
+                ``heatmap_target``, ``nms_type`` or the NMS groups are unsupported.
         """
         super().__init__()
         self.num_proposals = num_proposals
@@ -350,9 +354,23 @@ class TransFusionHead(nn.Module):
                 f"TransFusionHead common_heads must hold the branches {list(REGRESSION_BRANCHES)} "
                 f"and optionally {VELOCITY_BRANCH}, got {list(common_heads)}."
             )
-        if use_velocity and VELOCITY_BRANCH not in common_heads:
+        has_velocity_branch = VELOCITY_BRANCH in common_heads
+        if use_velocity and not has_velocity_branch:
             raise ValueError(
-                f"TransFusionHead use_velocity requires a {VELOCITY_BRANCH} branch in common_heads."
+                f"TransFusionHead use_velocity=True requires a {VELOCITY_BRANCH!r} branch "
+                "in common_heads."
+            )
+        if has_velocity_branch and not use_velocity:
+            raise ValueError(
+                f"TransFusionHead common_heads has a {VELOCITY_BRANCH!r} branch "
+                "but use_velocity=False."
+            )
+        code_size = VELOCITY_BOX_CODE_SIZE if use_velocity else BOX_CODE_SIZE
+        if bbox_coder.code_size != code_size or len(code_weights) != code_size:
+            raise ValueError(
+                f"TransFusionHead with use_velocity={use_velocity} regresses {code_size} channels, "
+                f"got a bbox_coder code_size of {bbox_coder.code_size} and "
+                f"{len(code_weights)} code_weights."
             )
         self.head_hidden_channels = (
             head_hidden_channels if head_hidden_channels is not None else hidden_channel
@@ -423,8 +441,6 @@ class TransFusionHead(nn.Module):
         """
         prediction_head_configs = dict(prediction_head_configs)
         prediction_head_configs["heatmaps"] = (self.num_classes, 2)
-        if not self.use_velocity:
-            prediction_head_configs.pop(VELOCITY_BRANCH, None)
 
         prediction_heads = nn.ModuleList(
             [

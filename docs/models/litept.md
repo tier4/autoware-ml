@@ -19,7 +19,7 @@ PTv3's defaults leave both off. Everything not listed below is identical to
 | ------------ | --------------------------------------------------------------- |
 | Task         | 3D semantic segmentation, 3D object detection                   |
 | Modality     | LiDAR                                                           |
-| Input        | Current point cloud and its sweeps, every point with a time lag |
+| Input        | Single point cloud of x, y, z and intensity                     |
 | Output       | Point-wise semantic labels or 3D boxes/scores/classes           |
 | Architecture | PTv3 hierarchy with per-stage conv/attention gating and 3D RoPE |
 | Datasets     | T4Dataset                                                       |
@@ -53,7 +53,7 @@ operator calls `rope_freq`. This is a hyperparameter and needs tuning.
 | Config Name                                                                           | Task                         | Dataset   | Head        | Range | Purpose                        |
 | ------------------------------------------------------------------------------------- | ---------------------------- | --------- | ----------- | ----- | ------------------------------ |
 | `segmentation3d/litept/t4dataset/voxel012_tiny_b16_50e_t4dataset_122m_j6gen2_semaseg` | segmentation3d               | T4Dataset | Seg decoder | 122 m | T4Dataset segmentation         |
-| `multi/litept/t4dataset/voxel012_tiny_b8_100e_t4dataset_122m_j6gen2_det3d_seg3d`         | segmentation3d + detection3d | T4Dataset | TransFusion | 122 m | Joint segmentation + detection |
+| `multi/litept/t4dataset/voxel012_tiny_b8_100e_t4dataset_122m_j6gen2_det3d_seg3d`      | segmentation3d + detection3d | T4Dataset | TransFusion | 122 m | Joint segmentation + detection |
 
 Each inherits dataset, transforms, optimizer and deploy settings from the PTv3
 config of the same name and swaps only the encoder and the decoder head.

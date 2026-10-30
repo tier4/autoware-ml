@@ -504,14 +504,40 @@ class TestTransFusionHead(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "must hold the branches"):
                     self._build_transfusion_head()
 
+    def _drop_velocity(self) -> None:
+        """Strip the vels branch and the velocity channels from the setUp head parameters."""
+        self.common_heads = MappingProxyType(
+            {name: shape for name, shape in self.common_heads.items() if name != "vels"}
+        )
+        self.code_size = 8
+        self.code_weights = self.code_weights[:8]
+
     def test_use_velocity_requires_the_vels_branch(self) -> None:
         """Test that predicting velocity without a ``vels`` branch is rejected at construction."""
         self.common_heads = MappingProxyType(
             {name: shape for name, shape in self.common_heads.items() if name != "vels"}
         )
 
-        with self.assertRaisesRegex(ValueError, "requires a vels branch"):
+        with self.assertRaisesRegex(ValueError, "use_velocity=True requires a 'vels' branch"):
             self._build_transfusion_head()
+
+    def test_vels_branch_requires_use_velocity(self) -> None:
+        """Test that a ``vels`` branch on a head without velocity is rejected at construction."""
+        self.code_size = 8
+        self.code_weights = self.code_weights[:8]
+
+        with self.assertRaisesRegex(ValueError, "'vels' branch but use_velocity=False"):
+            self._build_transfusion_head(use_velocity=False)
+
+    def test_code_size_and_code_weights_must_match_the_box_channels(self) -> None:
+        """Test that the coder and the code weights must carry 10 channels with velocity."""
+        for code_size, code_weights in ((8, self.code_weights), (10, self.code_weights[:8])):
+            with self.subTest(code_size=code_size, num_code_weights=len(code_weights)):
+                self.code_size = code_size
+                self.code_weights = code_weights
+
+                with self.assertRaisesRegex(ValueError, "regresses 10 channels"):
+                    self._build_transfusion_head()
 
     def test_transfusion_head_weight_init(self) -> None:
         """
@@ -624,8 +650,9 @@ class TestTransFusionHead(unittest.TestCase):
         self.assertTrue(bool((outputs.query_labels >= 0).all()))
         self.assertTrue(bool((outputs.query_labels < self.num_classes).all()))
 
-    def test_forward_without_velocity_drops_the_velocity_branch(self) -> None:
+    def test_forward_without_velocity_emits_no_velocity(self) -> None:
         """Test that a head built without velocity emits no velocity channels."""
+        self._drop_velocity()
         transfusion_head = self._build_transfusion_head(use_velocity=False)
 
         outputs = self._build_head_outputs(transfusion_head)
