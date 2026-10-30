@@ -16,8 +16,12 @@
 
 from __future__ import annotations
 
-from omegaconf import DictConfig
+from collections.abc import Sequence
+from pathlib import Path
 
+from omegaconf import DictConfig, OmegaConf
+
+from autoware_ml.builders.model_builder import resolve_weights_paths
 from autoware_ml.visualization.preview import VisualizationPreviewConfig
 from autoware_ml.visualization.viewers.contracts import VisualizationSessionConfig
 
@@ -72,3 +76,26 @@ def build_preview_config(cfg: DictConfig) -> VisualizationPreviewConfig:
             sync_port=int(visualization_cfg.get("sync_port", 9091)),
         ),
     )
+
+
+def resolve_preview_weights(cfg: DictConfig, mode: str) -> Sequence[Path] | None:
+    """
+    Read the checkpoints of a preview, only when the preview builds a model.
+
+    A data preview builds no model, so a configuration whose weights are mandatory (``???``),
+    such as a fine-tuning one, must not fail on them there. In the automatic mode such a
+    configuration without weights previews the data.
+
+    Args:
+        cfg: Hydra configuration.
+        mode: Preview mode, ``auto``, ``predictions`` or ``data``.
+
+    Returns:
+        Sequence[Path] | None: The checkpoints to load, None for a preview without a model.
+
+    Raises:
+        ValueError: If a prediction preview has no weights, or they are not a list.
+    """
+    if mode == "data" or (mode == "auto" and OmegaConf.is_missing(cfg, "weights")):
+        return None
+    return resolve_weights_paths(cfg)

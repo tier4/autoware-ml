@@ -25,6 +25,7 @@ from autoware_ml.visualization.common import build_scene_extent_event
 from autoware_ml.visualization.entity_paths import (
     CALIBRATION_STATUS_PATH,
     CAMERAS_PATH,
+    DATA_CALIBRATION_STATUS_PATH,
     GROUND_TRUTH_PATH,
     LIDAR_PATH,
     META_PATH,
@@ -53,8 +54,23 @@ from autoware_ml.visualization.viewers.contracts import (
 )
 from autoware_ml.visualization.viewers.events import ClearEvent, VisualizationEvent
 
-#: Scene entities that hold the geometry of one frame and are cleared before the next one.
-FRAME_ENTITY_PATHS = (LIDAR_PATH, PREDICTION_PATH, GROUND_TRUTH_PATH, CAMERAS_PATH, META_PATH)
+#: Entities that hold the geometry of one frame and are cleared before the next one: the scene
+#: layers, and the image, LiDAR and sample name of a calibration-status sample under both of its
+#: roots. Calibration overlays are only logged when they hold points, so without the clear an
+#: empty overlay would leave the previous frame's points over the new image. The metric and status
+#: scalars are kept for their plots.
+FRAME_ENTITY_PATHS = (
+    LIDAR_PATH,
+    PREDICTION_PATH,
+    GROUND_TRUTH_PATH,
+    CAMERAS_PATH,
+    META_PATH,
+    *(
+        f"{root}/{entity}"
+        for root in (CALIBRATION_STATUS_PATH, DATA_CALIBRATION_STATUS_PATH)
+        for entity in ("camera", "lidar", "meta")
+    ),
+)
 
 
 class VisualizationSession:

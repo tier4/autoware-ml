@@ -26,12 +26,11 @@ import hydra
 from omegaconf import DictConfig
 
 from autoware_ml.builders.database_builder import build_datamodule
-from autoware_ml.builders.model_builder import (
-    build_data_preprocessor,
-    build_model,
-    resolve_weights_paths,
+from autoware_ml.builders.model_builder import build_data_preprocessor, build_model
+from autoware_ml.builders.visualization_builder import (
+    build_preview_config,
+    resolve_preview_weights,
 )
-from autoware_ml.builders.visualization_builder import build_preview_config
 from autoware_ml.utils.runtime import (
     configure_torch_runtime,
     get_config_path,
@@ -56,7 +55,7 @@ def main(cfg: DictConfig) -> None:
     set_seed(cfg)
 
     preview_config = build_preview_config(cfg)
-    weight_paths = resolve_weights_paths(cfg)
+    weight_paths = resolve_preview_weights(cfg, preview_config.mode)
     if preview_config.mode == "predictions" and weight_paths is None:
         raise ValueError("Prediction visualization needs --weights <path> (repeatable).")
 

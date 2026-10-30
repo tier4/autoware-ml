@@ -20,7 +20,12 @@ import unittest
 
 from omegaconf import OmegaConf
 
-from autoware_ml.builders.visualization_builder import build_preview_config
+from pathlib import Path
+
+from autoware_ml.builders.visualization_builder import (
+    build_preview_config,
+    resolve_preview_weights,
+)
 
 
 class TestBuildPreviewConfig(unittest.TestCase):
@@ -127,6 +132,56 @@ class TestBuildPreviewConfig(unittest.TestCase):
         )
 
         self.assertIsNone(config.segmentation_class_names)
+
+
+class TestResolvePreviewWeights(unittest.TestCase):
+    """The checkpoints are read only when the preview builds a model."""
+
+    def test_data_preview_ignores_mandatory_weights(self) -> None:
+        """
+        Input: a config whose weights are mandatory (``???``) and the data mode.
+        Expected: no weights are resolved, so the data preview does not fail on them.
+        Check: the result is None.
+        """
+        cfg = OmegaConf.create({"weights": "???"})
+
+        self.assertIsNone(resolve_preview_weights(cfg, "data"))
+
+    def test_automatic_preview_without_mandatory_weights_previews_the_data(self) -> None:
+        """
+        Input: a config whose weights are mandatory (``???``) and the automatic mode.
+        Expected: the missing weights select the data preview instead of raising.
+        Check: the result is None.
+        """
+        cfg = OmegaConf.create({"weights": "???"})
+
+        self.assertIsNone(resolve_preview_weights(cfg, "auto"))
+
+    def test_prediction_preview_requires_the_mandatory_weights(self) -> None:
+        """
+        Input: a config whose weights are mandatory (``???``) and the predictions mode.
+        Expected: the missing weights are reported, since the preview needs a model.
+        Check: a ValueError naming ``--weights`` is raised.
+        """
+        cfg = OmegaConf.create({"weights": "???"})
+
+        with self.assertRaisesRegex(ValueError, "--weights"):
+            resolve_preview_weights(cfg, "predictions")
+
+    def test_given_weights_are_resolved_for_a_model(self) -> None:
+        """
+        Input: a config with two checkpoints, in the automatic and in the predictions mode.
+        Expected: both checkpoints are returned in order for the model to load.
+        Check: the resolved paths of each mode.
+        """
+        cfg = OmegaConf.create({"weights": ["seg3d.ckpt", "det3d.ckpt"]})
+
+        for mode in ("auto", "predictions"):
+            with self.subTest(mode=mode):
+                self.assertEqual(
+                    list(resolve_preview_weights(cfg, mode)),
+                    [Path("seg3d.ckpt"), Path("det3d.ckpt")],
+                )
 
 
 if __name__ == "__main__":

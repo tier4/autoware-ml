@@ -178,7 +178,7 @@ autoware-ml visualize \
 
 **Common options:**
 
-- `--mode`: Preview mode. `auto` shows predictions when weights are given and the transformed data otherwise (default: `auto`)
+- `--mode`: Preview mode. `auto` shows predictions when weights are given and the transformed data otherwise (default: `auto`). The data mode reads no weights, so it also previews configs whose weights are mandatory, such as fine-tuning ones.
 - `--split`: Dataset split to preview. Its transform pipeline and collation run as in training or evaluation, and with weights the model's own preprocessing and decoding produce the predictions (default: `test`)
 - `--sample-index`: First sample index to preview (default: `0`)
 - `--max-samples`: Number of consecutive samples to preview (default: `1`)

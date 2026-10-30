@@ -383,6 +383,30 @@
           slider.max = range.max;
         }
         const times = SIDES.map(currentTime).filter((time) => time !== null);
+        let playing = false;
+        try {
+          playing = handles.left.get_playing(stores.left);
+        } catch (error) {
+          // The viewer may not have a time control yet.
+        }
+        playButton.textContent = playing ? "Pause" : "Play";
+        if (playing) {
+          // During playback both viewers advance on their own, so the frame they report
+          // changes between polls and never passes the two-poll check below. The toolbar
+          // follows the left viewer instead, without writing the time back, so the slider,
+          // the frame label, and Previous and Next all start from the frame on screen. A step
+          // pauses the viewers asynchronously, so a viewer may still report the old frame as
+          // playing right after a write; the grace period keeps that reading from being shown.
+          if (
+            performance.now() >= graceUntil &&
+            times.length > 0 &&
+            times[0] !== shownTime
+          ) {
+            showTime(times[0]);
+          }
+          candidateTime = null;
+          return;
+        }
         const settled = times.length > 0 && times.every((time) => time === shownTime);
         if (settled) {
           graceUntil = 0;
@@ -400,11 +424,6 @@
           } else {
             candidateTime = agreed;
           }
-        }
-        try {
-          playButton.textContent = handles.left.get_playing(stores.left) ? "Pause" : "Play";
-        } catch (error) {
-          // The viewer may not have a time control yet.
         }
       }, 250);
       slider.oninput = () => stepTo(Number(slider.value));

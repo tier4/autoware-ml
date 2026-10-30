@@ -228,6 +228,9 @@ on port `9091`, that keeps both sides on one eye:
   Without that, a manual step read its own stale frame back and jumped forward
   again. Stepping by hand also pauses playback, so a viewer that is still
   following an incoming recording cannot pull the timeline along.
+- During playback the viewers advance between polls, so the two-poll check
+  never applies; the toolbar then simply follows the left viewer's frame without
+  writing it back, and Previous and Next step from the frame on screen.
 
 Selection and double-click focus act on whatever entity is under the cursor on
 each side, so they are the one interaction that can differ between the sides;
@@ -269,6 +272,12 @@ own layers onto every camera in both data and prediction mode, segmentation as
 class-colored points and detection as box wireframes, each for ground truth and
 prediction.
 
+The calibration refers to the untransformed LiDAR frame, while the points and
+boxes are logged after the transforms. A training split whose transforms rotate,
+scale, translate or flip the points records that augmentation as a 4x4 matrix in
+the sample, so the preview composes its inverse into every camera extrinsic and
+the overlays stay on the objects in the images.
+
 Each available camera is logged as a transform, pinhole calibration, and image.
 The Rerun blueprint places the camera frustums in the same 3D scene as the
 LiDAR points and boxes, enabling live 3D camera views and projection inspection.
@@ -306,8 +315,10 @@ republishing the blueprint or resetting interactive camera visibility.
 
 Before each timeline step, the dynamic LiDAR, prediction, ground-truth, camera,
 and metadata entities are cleared recursively, so points from previous frames
-cannot accumulate. Detection metrics retain their timestamped history for the
-plots.
+cannot accumulate. The same holds for the camera, LiDAR and metadata entities of
+a calibration-status sample, whose overlays are only logged when they hold
+points. Detection metrics and calibration status scalars retain their
+timestamped history for the plots.
 
 The point color mode accepts `semantic` (default), `intensity`, or `solid`. For
 `intensity`, the fourth point feature is normalized per frame and rendered with

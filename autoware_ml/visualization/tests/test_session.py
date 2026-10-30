@@ -99,7 +99,7 @@ class TestSessionTimeline(unittest.TestCase):
         self.assertEqual(self.backend.events, [blueprint])
 
     def test_begins_replacement_frame_and_forwards_timestamp(self) -> None:
-        """A new frame sets the step and timestamp and recursively clears the scene layers."""
+        """A new frame sets the step and timestamp and recursively clears the frame layers."""
         self.session.begin_frame(70, timestamp=12.5)
 
         self.assertEqual(self.backend.steps, [70])
@@ -112,9 +112,43 @@ class TestSessionTimeline(unittest.TestCase):
                 "scene/ground_truth",
                 "scene/cameras",
                 "scene/meta",
+                "calibration_status/camera",
+                "calibration_status/lidar",
+                "calibration_status/meta",
+                "dataset/calibration_status/camera",
+                "dataset/calibration_status/lidar",
+                "dataset/calibration_status/meta",
             ],
         )
         self.assertTrue(all(event.recursive for event in self.backend.events))
+
+    def test_new_frame_drops_a_stale_calibration_overlay(self) -> None:
+        """A calibration frame whose points miss the image keeps no overlay of the frame before."""
+        image = np.zeros((720, 1280, 3), dtype=np.uint8)
+        self.session.begin_frame(0)
+        self.session.log_calibration_status(
+            **calibration_matrices(),
+            points=np.array([[0.0, 0.0, 10.0, 0.4]], dtype=np.float32),
+            image=image,
+        )
+        self.session.begin_frame(1)
+        self.session.log_calibration_status(
+            **calibration_matrices(),
+            points=np.array([[0.0, 0.0, -10.0, 0.4]], dtype=np.float32),
+            image=image,
+        )
+
+        overlay = "calibration_status/camera/image/projected_points"
+        logged = [event.path for event in self.backend.events]
+        # The second frame logs no overlay, and the camera clear between the frames removes
+        # the first one from the viewer.
+        self.assertEqual(logged.count(overlay), 1)
+        clears_after_overlay = [
+            event.path
+            for event in self.backend.events[logged.index(overlay) :]
+            if isinstance(event, ClearEvent)
+        ]
+        self.assertIn("calibration_status/camera", clears_after_overlay)
 
     def test_logs_the_scene_extent_only_when_there_is_geometry(self) -> None:
         """A frame with geometry logs its extent and an empty frame logs nothing."""

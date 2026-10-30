@@ -130,6 +130,9 @@ class _PreviewSample:
     metadata: ModelGTSample
     det3d_supervised: bool
     seg3d_supervised: bool
+    #: Augmentation the transforms applied to the points and boxes, mapping the frame of the
+    #: untransformed sample to the frame of the batch. None when nothing moved them.
+    lidar_augmentation: Float32[torch.Tensor, "4 4"] | None = None
 
     @property
     def scored_batch(self) -> ModelGTBatch:
@@ -285,7 +288,8 @@ def _load_sample(
     """
     source_index, sample_index = dataset.locate(dataset_index)
     source: BaseDataset = dataset.datasets[source_index]
-    batch = dataset.collate_fn([dataset[dataset_index]])
+    transformed = dataset[dataset_index]
+    batch = dataset.collate_fn([transformed])
     inputs = None
     predictions = None
     if model is not None:
@@ -298,6 +302,7 @@ def _load_sample(
         metadata=source.get_data_sample(sample_index),
         det3d_supervised=source.det3d_supervised,
         seg3d_supervised=source.seg3d_supervised,
+        lidar_augmentation=_lidar_augmentation(transformed),
     )
 
 
@@ -412,7 +417,8 @@ def _predict_intermediate_frame(
     """Transform, collate and predict one rebuilt frame with the pipeline of its source."""
     source_index, _ = dataset.locate(dataset_index)
     source: BaseDataset = dataset.datasets[source_index]
-    batch = dataset.collate_fn([source.apply_transforms(metadata)])
+    transformed = source.apply_transforms(metadata)
+    batch = dataset.collate_fn([transformed])
     inputs = model.on_after_batch_transfer(model.transfer_batch_to_device(batch, device, 0), 0)
     return _PreviewSample(
         batch=batch,
@@ -421,6 +427,7 @@ def _predict_intermediate_frame(
         metadata=metadata,
         det3d_supervised=False,
         seg3d_supervised=False,
+        lidar_augmentation=_lidar_augmentation(transformed),
     )
 
 
@@ -476,7 +483,7 @@ def _log_preview_sample(
 
     # One union extent for both tasks, so sibling views share their initial eye.
     session.log_scene_extent(extent_points, boxes=extent_boxes)
-    cameras = _camera_calibrations(sample.metadata.image_samples)
+    cameras = _camera_calibrations(sample.metadata.image_samples, sample.lidar_augmentation)
     if cameras:
         session.log_cameras(cameras, point_layers=point_layers, box_layers=box_layers)
 
@@ -704,18 +711,61 @@ def _scored_point_mask(sample: _PreviewSample, num_predictions: int) -> torch.Te
     )
 
 
+def _lidar_augmentation(transformed: ModelGTSample) -> Float32[torch.Tensor, "4 4"] | None:
+    """
+    Return the augmentation the transforms applied to the points and boxes of a sample.
+
+    The geometric augmentations (rotation, scaling, translation and flips) record their
+    composed 4x4 matrix in the sample, which maps the untransformed frame to the batch frame.
+
+    Args:
+        transformed: Sample after the transform pipeline.
+
+    Returns:
+        Float32[torch.Tensor, "4 4"] | None: The matrix, None when no augmentation ran.
+    """
+    if transformed.lidar_transformation_sample is None:
+        return None
+    return transformed.lidar_transformation_sample.transformation_matrix
+
+
 def _camera_calibrations(
     image_samples: Sequence[ImageSample] | None,
+    lidar_augmentation: Float32[torch.Tensor, "4 4"] | None,
 ) -> Mapping[str, CameraCalibration]:
-    """Describe every camera of a sample by its image file and calibration."""
-    return {
-        image_sample.camera_name: CameraCalibration(
+    """
+    Describe every camera of a sample by its image file and calibration.
+
+    The calibration refers to the untransformed LiDAR frame, while the logged points and boxes
+    are in the augmented one, so the inverse augmentation is composed into every extrinsic.
+    Without it, an augmented training sample would project its overlays away from the objects
+    in the images.
+
+    Args:
+        image_samples: Camera records of the untransformed sample, None when it has none.
+        lidar_augmentation: Augmentation applied to the points and boxes, None for none.
+
+    Returns:
+        Mapping[str, CameraCalibration]: Calibration of every camera, by camera name.
+    """
+    from_batch_frame = (
+        torch.linalg.inv(lidar_augmentation.to(torch.float64))
+        if lidar_augmentation is not None
+        else None
+    )
+    cameras: dict[str, CameraCalibration] = {}
+    for image_sample in image_samples or ():
+        lidar_to_camera = image_sample.lidar2cam
+        if from_batch_frame is not None:
+            lidar_to_camera = (lidar_to_camera.to(torch.float64) @ from_batch_frame).to(
+                torch.float32
+            )
+        cameras[image_sample.camera_name] = CameraCalibration(
             image_path=image_sample.image_path,
             intrinsics=_to_numpy(image_sample.camera_intrinsic),
-            lidar_to_camera=_to_numpy(image_sample.lidar2cam),
+            lidar_to_camera=_to_numpy(lidar_to_camera),
         )
-        for image_sample in image_samples or ()
-    }
+    return cameras
 
 
 def _to_numpy(tensor: torch.Tensor) -> np.ndarray:

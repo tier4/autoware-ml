@@ -33,6 +33,7 @@ from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch, ModelGTSamp
 from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTSample
 from autoware_ml.dataclasses.geometry.images import ImageSample
 from autoware_ml.dataclasses.geometry.point_clouds import LiDARPointCloudSample
+from autoware_ml.dataclasses.geometry.transformation import LiDARTransformationSample
 from autoware_ml.dataclasses.geometry.voxels import VoxelsData
 from autoware_ml.dataclasses.models.calibration_status.predictions import (
     CalibrationStatusPredictions,
@@ -50,6 +51,7 @@ from autoware_ml.types.geometry import (
     Box3DCenterCoordinateType,
     Box3DFieldIndex,
     PointFeatureName,
+    TransformationName,
 )
 from autoware_ml.visualization import preview
 from autoware_ml.visualization.viewers.contracts import VisualizationSessionConfig
@@ -601,6 +603,41 @@ class TestCamerasAndTimeline(_PreviewTestCase):
 
         self.assertIn("scene/cameras/CAM_FRONT", backend.paths_of(Transform3DEvent))
         self.assertIn("scene/cameras/CAM_FRONT", backend.paths_of(ImageEvent))
+
+    def test_cameras_follow_the_lidar_augmentation_of_the_sample(self) -> None:
+        """
+        Input: a sample whose transforms flipped the points laterally and shifted them along x.
+        Expected: the camera extrinsic is composed with the inverse augmentation, so the
+            augmented points and boxes project where the untransformed ones did.
+        Check: the logged camera transform equals the calibration times the inverse
+            augmentation.
+        """
+        tmp_path = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        image_path = tmp_path / "front.jpg"
+        cv2.imwrite(str(image_path), np.zeros((36, 64, 3), dtype=np.uint8))
+        camera = _camera(image_path)
+        augmentation = torch.eye(4)
+        augmentation[1, 1] = -1.0
+        augmentation[0, 3] = 2.0
+        sample = _sample(segmentation=True, image_samples=[camera])._replace(
+            lidar_transformation_sample=LiDARTransformationSample(
+                transformation_matrix=augmentation,
+                transformation_order=[
+                    TransformationName.HORIZONTAL_FLIP,
+                    TransformationName.TRANSLATION,
+                ],
+            )
+        )
+        backend = self.run_preview(_SampleDataset([sample]))
+
+        expected = (camera.lidar2cam @ torch.linalg.inv(augmentation)).numpy()
+        transform = next(
+            event
+            for event in backend.events
+            if isinstance(event, Transform3DEvent) and event.path == "scene/cameras/CAM_FRONT"
+        )
+        np.testing.assert_allclose(transform.rotation_matrix, expected[:3, :3], atol=1e-6)
+        np.testing.assert_allclose(transform.translation, expected[:3, 3], atol=1e-6)
 
     def test_consecutive_samples_are_logged_on_their_dataset_index(self) -> None:
         """Each sample is logged on the step of its dataset index and its own timestamp."""
