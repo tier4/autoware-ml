@@ -4,10 +4,10 @@ num_classes: ${class_count:${database.taxonomy.segmentation3d.class_names}}
 ignore_index: ${database.taxonomy.segmentation3d.ignore_index}
 order: ${model.encoder.order}
 enc_channels: ${model.encoder.enc_channels}
-dec_depths: [2, 2, 2, 2]
+dec_depths: [0, 0, 1, 1]
 dec_channels: [64, 64, 128, 256]
 dec_num_head: [4, 4, 8, 16]
-dec_patch_size: [1024, 1024, 1024, 1024]
+dec_patch_size: [512, 512, 512, 512]
 mlp_ratio: ${model.encoder.mlp_ratio}
 qkv_bias: ${model.encoder.qkv_bias}
 qk_scale: ${model.encoder.qk_scale}

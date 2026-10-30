@@ -467,8 +467,8 @@ Use these rules when creating `<variant>`:
 Examples:
 
 ```text
-segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m
-segmentation3d/ptv3/t4dataset/voxel012_tiny_b16_50e_t4dataset_122m_j6gen2_semaseg
+segmentation3d/ptv3/nuscenes/voxel005_b16_50e_nuscenes_51m
+segmentation3d/ptv3/t4dataset/voxel012_b16_50e_t4dataset_122m_j6gen2_semaseg
 my_task/my_model/my_dataset/my_variant_my_dataset
 ```
 

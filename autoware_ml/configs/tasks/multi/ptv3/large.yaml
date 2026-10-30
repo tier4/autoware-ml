@@ -1,0 +1,6 @@
+# @package _global_
+defaults:
+  - base
+  - /tasks/segmentation3d/ptv3/encoder_large
+  - /tasks/segmentation3d/ptv3/seg3d_head_large
+  - _self_

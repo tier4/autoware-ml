@@ -13,14 +13,14 @@ from autoware_ml.models.segmentation3d.ptv3_base import PTv3BaseModel
 from autoware_ml.utils.deploy import merge_module_onnx_cfg
 
 PTV3_CONFIGS = [
-    "tasks/multi/ptv3/t4dataset/voxel012_tiny_b8_100e_t4dataset_122m_j6gen2_det3d_seg3d",
-    "tasks/multi/litept/t4dataset/voxel012_tiny_b8_100e_t4dataset_122m_j6gen2_det3d_seg3d",
-    "tasks/segmentation3d/ptv3/t4dataset/voxel012_tiny_b16_50e_t4dataset_122m_j6gen2_semaseg",
-    "tasks/segmentation3d/litept/t4dataset/voxel012_tiny_b16_50e_t4dataset_122m_j6gen2_semaseg",
-    "tasks/detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base",
-    "tasks/multi/ptv3/nuscenes/voxel005_base_b16_100e_nuscenes_51m",
-    "tasks/segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m",
-    "tasks/detection3d/ptv3/nuscenes/voxel005_base_b16_30e_nuscenes_51m",
+    "tasks/multi/ptv3/t4dataset/voxel012_b8_100e_t4dataset_122m_j6gen2_det3d_seg3d",
+    "tasks/multi/litept/t4dataset/voxel012_b8_100e_t4dataset_122m_j6gen2_det3d_seg3d",
+    "tasks/segmentation3d/ptv3/t4dataset/voxel012_b16_50e_t4dataset_122m_j6gen2_semaseg",
+    "tasks/segmentation3d/litept/t4dataset/voxel012_b16_50e_t4dataset_122m_j6gen2_semaseg",
+    "tasks/detection3d/ptv3/t4dataset/voxel012_b8_30e_t4dataset_122m_j6gen2_base",
+    "tasks/multi/ptv3/nuscenes/voxel005_b16_100e_nuscenes_51m",
+    "tasks/segmentation3d/ptv3/nuscenes/voxel005_b16_50e_nuscenes_51m",
+    "tasks/detection3d/ptv3/nuscenes/voxel005_b16_30e_nuscenes_51m",
 ]
 DET3D_CONFIGS = [name for name in PTV3_CONFIGS if "segmentation3d" not in name]
 
