@@ -24,6 +24,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+ExtraConvsSource = Literal["on_input", "on_lateral", "on_output"]
+"""Where the extra levels of the pyramid are convolved from."""
+
+EXTRA_CONVS_SOURCES: tuple[ExtraConvsSource, ...] = ("on_input", "on_lateral", "on_output")
+
 
 class FPN(nn.Module):
     """Feature pyramid network.
@@ -44,7 +49,7 @@ class FPN(nn.Module):
         num_outs: int | None = None,
         start_level: int = 0,
         end_level: int = -1,
-        add_extra_convs: Literal[False, "on_input", "on_lateral", "on_output"] = False,
+        add_extra_convs: bool | ExtraConvsSource = False,
         relu_before_extra_convs: bool = False,
         upsample_mode: str = "nearest",
     ) -> None:
@@ -57,15 +62,23 @@ class FPN(nn.Module):
             start_level: Index of the first input level used.
             end_level: Index after the last input level used, ``-1`` for all.
             add_extra_convs: Where the extra levels are convolved from, ``False`` for max
-                pooling.
+                pooling. ``True`` selects ``"on_input"`` as mmdetection does.
             relu_before_extra_convs: Whether a ReLU precedes every extra convolution but the
                 first.
             upsample_mode: Interpolation of the top-down pathway.
 
         Raises:
-            ValueError: If the levels do not fit the inputs or ``num_outs`` is too small.
+            ValueError: If the levels do not fit the inputs, ``num_outs`` is too small or
+                ``add_extra_convs`` is not a bool or one of the three sources.
         """
         super().__init__()
+        if add_extra_convs is True:
+            add_extra_convs = "on_input"
+        elif add_extra_convs is not False and add_extra_convs not in EXTRA_CONVS_SOURCES:
+            raise ValueError(
+                f"add_extra_convs={add_extra_convs!r} must be a bool or one of "
+                f"{EXTRA_CONVS_SOURCES}."
+            )
         self.in_channels = list(in_channels)
         self.out_channels = out_channels
         num_ins = len(self.in_channels)
@@ -87,7 +100,7 @@ class FPN(nn.Module):
         self.start_level = start_level
         self.end_level = end_level
         self.num_outs = num_outs
-        self.add_extra_convs = add_extra_convs
+        self.add_extra_convs: Literal[False] | ExtraConvsSource = add_extra_convs
         self.relu_before_extra_convs = relu_before_extra_convs
         self.upsample_mode = upsample_mode
 
@@ -155,7 +168,7 @@ class FPN(nn.Module):
                 extra_source = inputs[self.end_level - 1]
             elif self.add_extra_convs == "on_lateral":
                 extra_source = laterals[-1]
-            else:
+            else:  # "on_output", the only source left after the __init__ check.
                 extra_source = outputs[-1]
             outputs.append(self.fpn_convs[len(laterals)](extra_source))
             for extra in range(1, num_extra):

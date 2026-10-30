@@ -161,6 +161,31 @@ class TestFPN(unittest.TestCase):
         self.assertEqual(neck.fpn_convs[4].in_channels, 64)
         torch.testing.assert_close(outputs[4], neck.fpn_convs[4](pyramid[3]))
 
+    def test_true_selects_the_extra_conv_on_input(self) -> None:
+        """
+        Input: ``num_outs=5`` with ``add_extra_convs=True``, as mmdetection configs write it.
+        Expected: the same neck as ``"on_input"``: the extra conv reads the 64 channels of
+            the last input and the fifth level is that conv on the last input.
+        Check: the stored source, the conv's input width and the fifth level.
+        """
+        neck = FPN(IN_CHANNELS, OUT_CHANNELS, num_outs=5, add_extra_convs=True).eval()
+        pyramid = _pyramid()
+
+        outputs = neck(pyramid)
+
+        self.assertEqual(neck.add_extra_convs, "on_input")
+        self.assertEqual(neck.fpn_convs[4].in_channels, 64)
+        torch.testing.assert_close(outputs[4], neck.fpn_convs[4](pyramid[3]))
+
+    def test_rejects_an_unknown_extra_conv_source(self) -> None:
+        """
+        Input: a misspelled extra conv source.
+        Expected: refused at construction instead of silently convolving the last output.
+        Check: ValueError naming the value.
+        """
+        with self.assertRaisesRegex(ValueError, "on_inputs"):
+            FPN(IN_CHANNELS, OUT_CHANNELS, num_outs=5, add_extra_convs="on_inputs")
+
     def test_weights_start_from_xavier_with_zero_bias(self) -> None:
         """
         Input: a fresh neck.
