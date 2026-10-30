@@ -236,7 +236,7 @@ class PTv3Segmentation3DModel(PTv3BaseModel):
             Deployment export specification for PTv3.
         """
         inputs = prepare_ptv3_export_inputs(self, batch_inputs)
-        input_args, input_param_names = inputs.encoder_args(SERIALIZED_POOLING_FIELDS)
+        input_args, input_names = inputs.encoder_args(SERIALIZED_POOLING_FIELDS)
         export_module = _PTv3Segmentation3DExportModule(
             self._prepare_encoder_export(),
             self.voxel_encoder,
@@ -245,12 +245,12 @@ class PTv3Segmentation3DModel(PTv3BaseModel):
             inputs.serialization_depth,
         ).eval()
         output_names = self.get_export_output_names()
-        dynamic_axes = build_ptv3_input_dynamic_axes(input_param_names)
+        dynamic_axes = build_ptv3_input_dynamic_axes(input_names)
         dynamic_axes.update(build_point_feature_dynamic_axes(output_names))
         return ExportSpec(
             module=export_module,
             args=input_args,
-            input_param_names=input_param_names,
+            input_names=input_names,
             output_names=output_names,
             dynamic_axes=dynamic_axes,
             supported_stages=self.EXPORT_SUPPORTED_STAGES,

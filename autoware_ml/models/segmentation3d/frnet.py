@@ -352,6 +352,6 @@ class FRNet(ModuleBaseModel):
                 range_view_data.voxel_coors,
                 range_view_data.inverse_map,
             ),
-            input_param_names=["points", "coors", "voxel_coors", "inverse_map"],
+            input_names=["points", "coors", "voxel_coors", "inverse_map"],
             output_names=self.get_export_output_names(),
         )

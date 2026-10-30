@@ -264,10 +264,8 @@ ONNX and TensorRT export settings:
 deploy:
   onnx:
     opset_version: 21
-    input_names: [input]
-    output_names: [output]
     dynamic_shapes:
-      fused_img: { 2: height, 3: width }
+      input: { 2: height, 3: width }
     modify_graph: null  # Optional graph modifier
 
   tensorrt:
