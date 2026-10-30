@@ -256,6 +256,48 @@ class StreamPETRDenoisingOutputs(BaseModel):
         return self
 
 
+class FocalHead2DOutputs(BaseModel):
+    """
+    Dataclass to save the dense outputs of an auxiliary 2D head over the image tokens.
+
+    Every camera image of every sample gets one prediction per feature map token, the images
+    ordered sample by sample.
+
+    Attributes:
+      cls_scores: Class logits of every token.
+      bbox_preds: Box ``(cx, cy, w, h)`` of every token, normalized by the image size.
+      centers_2d: Projected 3D center of every token, normalized by the image size.
+      centerness: Centerness logit of every token.
+      image_height: Height in pixels of the images the predictions are normalized by.
+      image_width: Width in pixels of the images the predictions are normalized by.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
+
+    cls_scores: Float[torch.Tensor, "num_images num_tokens num_classes"]
+    bbox_preds: Float[torch.Tensor, "num_images num_tokens 4"]
+    centers_2d: Float[torch.Tensor, "num_images num_tokens 2"]
+    centerness: Float[torch.Tensor, "num_images num_tokens 1"]
+    image_height: int
+    image_width: int
+
+    @model_validator(mode="after")
+    def _check_images_and_tokens(self) -> FocalHead2DOutputs:
+        """Check that every prediction covers the same images and tokens."""
+        images_and_tokens = self.cls_scores.shape[:2]
+        for name, tensor in (
+            ("bbox_preds", self.bbox_preds),
+            ("centers_2d", self.centers_2d),
+            ("centerness", self.centerness),
+        ):
+            if tensor.shape[:2] != images_and_tokens:
+                raise ValueError(
+                    f"{name} must cover {tuple(images_and_tokens)} images and tokens, got "
+                    f"{tuple(tensor.shape)}."
+                )
+        return self
+
+
 class StreamPETRHeadOutputs(BaseModel):
     """
     Dataclass to save the outputs of a StreamPETR query head.
@@ -267,6 +309,8 @@ class StreamPETRHeadOutputs(BaseModel):
         cos, vx, vy]`` with metric gravity centers.
       denoising: Outputs of the denoising queries, None outside training or when the batch
         carries no box.
+      auxiliary_2d: Outputs of the auxiliary 2D head that supervises the image features in
+        training, None when the model has no such head or does not train.
     """
 
     model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
@@ -274,6 +318,7 @@ class StreamPETRHeadOutputs(BaseModel):
     all_cls_scores: Float[torch.Tensor, "num_layers batch_size num_queries num_classes"]
     all_bbox_preds: Float[torch.Tensor, "num_layers batch_size num_queries 10"]
     denoising: StreamPETRDenoisingOutputs | None
+    auxiliary_2d: FocalHead2DOutputs | None = None
 
     @model_validator(mode="after")
     def _check_layers_samples_and_queries(self) -> StreamPETRHeadOutputs:
