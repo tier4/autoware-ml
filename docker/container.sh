@@ -202,6 +202,7 @@ set_settings_mounts() {
     source "$settings_file"
 
     add_same_path_mount AUTOWARE_ML_DATA_PATH ",readonly"
+    add_same_path_mount AUTOWARE_ML_CONFIGS_PATH ""
     add_same_path_mount AUTOWARE_ML_SCENARIOS_PATH ""
     add_same_path_mount AUTOWARE_ML_WORKING_DIR ""
 }

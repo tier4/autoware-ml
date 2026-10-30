@@ -43,6 +43,9 @@ services:
         target: ${AUTOWARE_ML_DATA_PATH}
         read_only: true
       - <<: *same-path-mount
+        source: ${AUTOWARE_ML_CONFIGS_PATH:-.}
+        target: ${AUTOWARE_ML_CONFIGS_PATH:-/workspace}
+      - <<: *same-path-mount
         source: ${AUTOWARE_ML_SCENARIOS_PATH:-.}
         target: ${AUTOWARE_ML_SCENARIOS_PATH:-/workspace}
       - <<: *same-path-mount
