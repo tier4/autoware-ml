@@ -38,6 +38,7 @@ from autoware_ml.models.detection3d.task_modules.streaming import (
     nerf_positional_encoding,
     pos2posemb1d,
     pos2posemb3d,
+    reduce_mean_count,
     topk_gather,
     transform_reference_points,
 )
@@ -891,10 +892,13 @@ class StreamPETRHead(nn.Module):
             one_hot[pos_mask, sample_targets.labels[pos_mask]] = 1.0
             target_labels.append(one_hot)
         target_labels_tensor = torch.stack(target_labels, dim=0)
-        # One device sync per decoder layer instead of one per sample.
-        total_pos = int(torch.stack(positive_counts).sum().item())
-        loss_cls = self.loss_cls_weight * self.loss_cls(
-            cls_scores, target_labels_tensor, weights=label_weights, avg_factor=max(total_pos, 1)
+        # One collective per decoder layer, which every rank runs, so the ranks stay in step.
+        # The division is explicit because the focal loss floors ``avg_factor`` per rank.
+        total_pos = reduce_mean_count(torch.stack(positive_counts).sum()).item()
+        loss_cls = (
+            self.loss_cls_weight
+            * self.loss_cls(cls_scores, target_labels_tensor, weights=label_weights)
+            / total_pos
         )
 
         # The regression loss runs over every query with 0/1 positive weights so
@@ -911,7 +915,7 @@ class StreamPETRHead(nn.Module):
         target_tensor = torch.stack(target_encodings, dim=0)
         weight_tensor = torch.stack(positive_weights, dim=0).unsqueeze(-1)
         per_box = self.loss_bbox(bbox_preds, target_tensor) * self.code_weights
-        bbox_loss = self.loss_bbox_weight * (per_box * weight_tensor).sum() / max(total_pos, 1)
+        bbox_loss = self.loss_bbox_weight * (per_box * weight_tensor).sum() / total_pos
         return loss_cls, bbox_loss
 
     @staticmethod
@@ -934,21 +938,23 @@ class StreamPETRHead(nn.Module):
         bbox_preds: torch.Tensor,
         known_bboxs: torch.Tensor,
         known_labels: torch.Tensor,
-        num_total_pos: int,
+        cls_avg_factor: float,
+        bbox_avg_factor: float,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Compute denoising-query supervision for one decoder layer."""
+        """Compute denoising-query supervision for one decoder layer.
+
+        The average factors are the denoising target counts of the step, reduced once by
+        :meth:`loss`.
+        """
         class_targets = cls_scores.new_zeros((known_labels.shape[0], self.num_classes))
         foreground = known_labels < self.num_classes
         if foreground.any():
             class_targets[foreground, known_labels[foreground]] = 1.0
-        # The classification average factor scales the target count by the
-        # expected positive rate of the noised queries (reference recipe):
-        # a ball of radius ``split`` inside the unit noise cube.
-        cls_avg_factor = num_total_pos * math.pi / 6 * self.split**3
         loss_cls = (
             self.dn_weight
             * self.loss_cls_weight
-            * self.loss_cls(cls_scores, class_targets, avg_factor=cls_avg_factor)
+            * self.loss_cls(cls_scores, class_targets)
+            / cls_avg_factor
         )
 
         target_encoding = normalize_boxes3d(known_bboxs)
@@ -956,7 +962,7 @@ class StreamPETRHead(nn.Module):
             self.dn_weight
             * self.loss_bbox_weight
             * (self.loss_bbox(bbox_preds, target_encoding) * self.code_weights).sum()
-            / max(num_total_pos, 1)
+            / bbox_avg_factor
         )
         return loss_cls, loss_bbox
 
@@ -1152,6 +1158,20 @@ class StreamPETRHead(nn.Module):
                 loss_dict[f"d{layer_index}.dn_loss_cls"] = zero.clone()
                 loss_dict[f"d{layer_index}.dn_loss_bbox"] = zero.clone()
 
+        num_targets = 0 if outputs.denoising is None else outputs.denoising.known_labels.numel()
+        # The classification count is scaled by the expected positive rate of the noised queries
+        # (reference recipe): a ball of radius ``split`` inside the unit noise cube.
+        dn_counts = all_cls_scores.new_tensor(
+            [num_targets * math.pi / 6 * self.split**3, float(num_targets)]
+        )
+        if self.with_dn and self.training:
+            # Gated on flags every rank shares, not on this rank's ground truth: a rank
+            # without boxes joins the collective with counts of 0.
+            dn_counts = reduce_mean_count(dn_counts)
+        else:
+            dn_counts = dn_counts.clamp(min=1.0)
+        dn_cls_avg_factor, dn_bbox_avg_factor = dn_counts.tolist()
+
         if outputs.denoising is not None:
             known_labels = outputs.denoising.known_labels
             known_bboxs = outputs.denoising.known_boxes
@@ -1160,7 +1180,12 @@ class StreamPETRHead(nn.Module):
             dn_losses_bbox = []
             for cls_scores, bbox_preds in zip(output_known_class, output_known_coord):
                 dn_loss_cls, dn_loss_bbox = self.dn_loss_single(
-                    cls_scores, bbox_preds, known_bboxs, known_labels, known_labels.numel()
+                    cls_scores,
+                    bbox_preds,
+                    known_bboxs,
+                    known_labels,
+                    dn_cls_avg_factor,
+                    dn_bbox_avg_factor,
                 )
                 dn_losses_cls.append(dn_loss_cls)
                 dn_losses_bbox.append(dn_loss_bbox)

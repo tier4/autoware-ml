@@ -88,6 +88,33 @@ class TestGaussianFocalLoss(unittest.TestCase):
         self.assertTrue(torch.equal(self.prediction, prediction))
         self.assertTrue(torch.equal(self.target, target))
 
+    def test_avg_factor_replaces_the_peak_count(self) -> None:
+        """A given average factor divides the summed loss instead of the peak count, as given."""
+        # Two cells sit at the peak value, so the default normalization divides by 2.
+        summed = self.loss_fn(self.prediction, self.target) * 2.0
+
+        self.assertTrue(
+            torch.isclose(self.loss_fn(self.prediction, self.target, avg_factor=4.0), summed / 4.0)
+        )
+        self.assertTrue(
+            torch.isclose(self.loss_fn(self.prediction, self.target, avg_factor=0.5), summed * 2.0)
+        )
+
+    def test_bfloat16_logits_give_the_float32_loss(self) -> None:
+        """Confident bfloat16 logits keep a finite loss and gradient: the loss runs in float32."""
+        # bfloat16 rounds the sigmoid of 7 and the 1 - 1e-4 clamp bound to 1, so log(1 - p)
+        # would be infinite on the negative cell and NaN on the peak.
+        prediction = torch.full((1, 1, 1, 2), 7.0)
+        target = torch.tensor([[[[0.5, 1.0]]]])
+        logits = prediction.bfloat16().requires_grad_()
+
+        loss = self.loss_fn(logits, target)
+        loss.backward()
+
+        self.assertTrue(torch.isfinite(loss))
+        self.assertTrue(torch.isclose(loss, self.loss_fn(prediction, target)))
+        self.assertTrue(torch.isfinite(logits.grad).all())
+
 
 if __name__ == "__main__":
     unittest.main()

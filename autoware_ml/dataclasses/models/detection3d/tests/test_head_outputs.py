@@ -24,6 +24,7 @@ import torch
 from autoware_ml.dataclasses.models.detection3d.head_outputs import (
     CenterHeadOutputs,
     Detection3DHeadOutputs,
+    FocalHead2DOutputs,
     StreamPETRDenoisingOutputs,
     StreamPETRHeadOutputs,
     TransFusionHeadOutputs,
@@ -393,6 +394,31 @@ class TestStreamPETRHeadOutputs(unittest.TestCase):
                 all_bbox_preds=torch.zeros(3, 1, 5, 10),
                 denoising=build_streampetr_denoising(num_layers=2),
             )
+
+
+class TestFocalHead2DOutputs(unittest.TestCase):
+    """Unit tests for the dense outputs of the auxiliary 2D head."""
+
+    def build(self, num_tokens_of_boxes: int = 6) -> FocalHead2DOutputs:
+        return FocalHead2DOutputs(
+            cls_scores=torch.zeros(4, 6, 3),
+            bbox_preds=torch.zeros(4, num_tokens_of_boxes, 4),
+            centers_2d=torch.zeros(4, 6, 2),
+            centerness=torch.zeros(4, 6, 1),
+            image_height=96,
+            image_width=160,
+        )
+
+    def test_every_prediction_covers_the_same_tokens(self) -> None:
+        """
+        Input: 2D head outputs whose boxes cover 5 tokens of every image while the logits,
+        centers and centerness cover 6.
+        Expected: the predictions of a token are read at the same index of every tensor, so
+        outputs covering other tokens are rejected when they are built.
+        Check: a ValidationError is raised.
+        """
+        with self.assertRaises(ValidationError):
+            self.build(num_tokens_of_boxes=5)
 
 
 class TestDetection3DHeadOutputs(unittest.TestCase):
