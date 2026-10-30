@@ -1,4 +1,4 @@
-# Coarse segmentation3d taxonomy of T4dataset
+# Segmentation3d taxonomy of T4dataset
 _target_: autoware_ml.databases.taxonomy.Segmentation3DTaxonomy
 
 defaults:
@@ -35,7 +35,6 @@ class_names:
   - noise
 class_mapping:
   car: car
-  emergency_vehicle: car
   forklift: truck
   other_vehicle: car
   fire_truck: truck

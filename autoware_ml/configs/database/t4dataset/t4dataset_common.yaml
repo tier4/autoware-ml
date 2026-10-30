@@ -2,7 +2,7 @@ _target_: autoware_ml.databases.t4dataset.t4dataset.T4Dataset
 _convert_: all
 
 defaults:
-  - taxonomy@taxonomy: default_coarse
+  - taxonomy@taxonomy: default
   - box3d_pipelines@box3d_pipelines: default_box3d_pipelines
 
 root_path: ${data_root_path}/t4dataset/

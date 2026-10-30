@@ -2,7 +2,6 @@
 defaults:
   - base_voxel024_120m
   - /database@database: t4dataset/t4dataset_base
-  - override /database/t4dataset/taxonomy@database.taxonomy: default_dynamic
   - _self_
 
 batch_size: 16
