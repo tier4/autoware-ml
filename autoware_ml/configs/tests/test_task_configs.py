@@ -35,6 +35,7 @@ _BLOCKS = (
     "bev_neck",
     "encoder_",
     "seg3d_head_",
+    "focal2d_head",
     "voxel_encoder",
     "default_task",
 )
