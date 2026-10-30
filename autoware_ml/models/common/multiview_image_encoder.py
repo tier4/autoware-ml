@@ -110,7 +110,7 @@ class MultiviewImageEncoder(nn.Module):
 
         Returns:
             The primary neck feature of every camera, ``(B, N, C', H', W')``, which is the
-            first neck level, or every neck level with ``return_all_levels``.
+            first neck level, or every neck level with :attr:`return_all_levels`.
         """
         levels = self.encode_pyramid(self.img_backbone, self.img_neck, image_batch)
         return levels if self.return_all_levels else levels[0]
