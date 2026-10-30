@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
+from omegaconf.errors import InterpolationResolutionError
 
-from autoware_ml.configs.paths import CONFIGS_ROOT
+from autoware_ml.configs.paths import CONFIGS_ROOT, PROJECT_ROOT
 from autoware_ml.configs.resolvers import (
-    PROJECT_ROOT,
     merge_lists,
     raw_name_to_train_index,
     register_config_resolvers,
 )
+from autoware_ml.configs.tests.settings import write_settings
 
 _NAME_MAPPING = {
     "car": "car",
@@ -120,22 +122,60 @@ def test_merge_lists_resolver_preserves_hydra_recursive_instantiation() -> None:
     assert model.metrics[0].classes == ["car", "truck"]
 
 
-def test_project_root_is_the_checkout_holding_the_package() -> None:
-    assert PROJECT_ROOT.is_absolute()
-    assert (PROJECT_ROOT / "autoware_ml" / "configs").resolve() == CONFIGS_ROOT
-
-
-def _working_dir() -> str:
+def _paths() -> dict[str, str]:
     register_config_resolvers()
     paths = OmegaConf.load(CONFIGS_ROOT / "defaults" / "modules" / "paths.yaml")
-    return paths.working_dir
+    return {key: paths[key] for key in ("data_root_path", "cache_root_path", "working_dir")}
 
 
-def test_working_dir_defaults_to_the_project_root(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("AUTOWARE_ML_WORKING_DIR", raising=False)
-    assert _working_dir() == str(PROJECT_ROOT)
+def test_paths_follow_the_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    write_settings(
+        tmp_path,
+        monkeypatch,
+        AUTOWARE_ML_DATA_PATH=str(tmp_path / "data"),
+        AUTOWARE_ML_WORKING_DIR=str(tmp_path / "outputs"),
+    )
+
+    assert _paths() == {
+        "data_root_path": str(tmp_path / "data"),
+        "cache_root_path": str(tmp_path / "outputs" / ".cache"),
+        "working_dir": str(tmp_path / "outputs"),
+    }
 
 
-def test_working_dir_follows_the_environment_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("AUTOWARE_ML_WORKING_DIR", "/scratch/autoware-ml")
-    assert _working_dir() == "/scratch/autoware-ml"
+def test_working_dir_defaults_to_the_project_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_settings(tmp_path, monkeypatch, AUTOWARE_ML_DATA_PATH=str(tmp_path))
+
+    assert _paths()["working_dir"] == str(PROJECT_ROOT)
+
+
+def test_data_root_path_requires_the_setting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_settings(tmp_path, monkeypatch)
+
+    with pytest.raises(InterpolationResolutionError, match="AUTOWARE_ML_DATA_PATH is not set"):
+        _paths()
+
+
+def test_scenarios_path_resolves_below_the_scenarios_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register_config_resolvers()
+    write_settings(tmp_path, monkeypatch, AUTOWARE_ML_SCENARIOS_PATH=str(tmp_path))
+    cfg = OmegaConf.create({"lists": "${scenarios_path:t4dataset/segmentation3d}"})
+
+    assert cfg.lists == str(tmp_path / "t4dataset" / "segmentation3d")
+
+
+def test_scenarios_path_requires_the_setting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register_config_resolvers()
+    write_settings(tmp_path, monkeypatch)
+    cfg = OmegaConf.create({"lists": "${scenarios_path:t4dataset}"})
+
+    with pytest.raises(InterpolationResolutionError, match="AUTOWARE_ML_SCENARIOS_PATH is not set"):
+        _ = cfg.lists

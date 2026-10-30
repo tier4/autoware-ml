@@ -12,7 +12,7 @@ This guide gets you from zero to a trained model. We'll train a PTv3 3D semantic
 ## 1. Setup Dataset
 
 Download the NuScenes full dataset (v1.0) from the [official website](https://www.nuscenes.org/nuscenes) after registration.
-After the download, confirm that the dataset is located at `$AUTOWARE_ML_DATA_PATH/nuscenes`.
+After the download, confirm that the dataset is located at `nuscenes/` of the dataset root, `AUTOWARE_ML_DATA_PATH` in `.env`.
 
 ## 2. Launch the Container
 
