@@ -15,7 +15,7 @@ defaults:
 batch_size: 8
 num_workers: 8
 experiment_group_name: ptv3_det3d_seg3d/${database.version}/base_pseudo
-experiment_name: voxel012_tiny_b8_24e_t4dataset_122m_base_pseudo
+experiment_name: voxel012_b8_24e_t4dataset_122m_base_pseudo
 
 # Dataset of every extra source and split kind: a copy of the split dataset config reading
 # that source's database, with the supervision of that corpus

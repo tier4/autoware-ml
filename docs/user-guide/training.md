@@ -21,7 +21,7 @@ resolved config snapshots, and run metadata.
 Example:
 
 ```bash
-autoware-ml train --config-name segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m
+autoware-ml train --config-name segmentation3d/ptv3/nuscenes/voxel005_b16_50e_nuscenes_51m
 ```
 
 ## Long-Running Training
@@ -30,7 +30,7 @@ For long jobs inside Docker or remote environments, prefer managed background se
 
 ```bash
 autoware-ml session start --name ptv3-train --cwd /workspace -- \
-    train --config-name segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m
+    train --config-name segmentation3d/ptv3/nuscenes/voxel005_b16_50e_nuscenes_51m
 ```
 
 Later you can open the live viewer with `session attach`:

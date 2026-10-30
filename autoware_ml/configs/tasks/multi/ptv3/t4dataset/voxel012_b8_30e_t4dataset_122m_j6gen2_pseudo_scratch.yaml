@@ -1,10 +1,10 @@
 # @package _global_
 # Stage 3 without stage 2
 defaults:
-  - voxel012_tiny_b8_16e_t4dataset_122m_j6gen2_pseudo
+  - voxel012_b8_16e_t4dataset_122m_j6gen2_pseudo
   - _self_
 
-experiment_name: voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_pseudo_scratch
+experiment_name: voxel012_b8_30e_t4dataset_122m_j6gen2_pseudo_scratch
 
 model:
   optimizer_group_overrides:

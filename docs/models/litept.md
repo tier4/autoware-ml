@@ -30,8 +30,8 @@ PTv3's defaults leave both off. Everything not listed below is identical to
 | ------------------- | ----------------------------------- | --------------------------------------------------- |
 | Block composition   | Every block: conv + attention + MLP | Stages 0-2 conv only, stages 3-4 attention only     |
 | Positional encoding | Submanifold conv per block          | Conv early; axis-split 3D RoPE on `grid_coord` late |
-| Decoder             | `dec_depths` blocks per stage       | Unpooling only at `base`; gated blocks at `tiny`    |
-| Encoder blocks      | 14 conv + 14 attention              | 6 conv + 8 attention at `base`                      |
+| Decoder             | `dec_depths` blocks per stage       | The PTv3 blocks under LitePT's gating               |
+| Encoder blocks      | 10 conv + 10 attention              | 6 conv + 4 attention                                |
 | Serialization       | Every stage sorts for attention     | Only the two coarsest stages read an order          |
 
 ## Rotary position embedding
@@ -41,32 +41,28 @@ rotates each with a shared frequency ladder over integer `grid_coord` positions.
 Each chunk pairs dimension `i` with `i + chunk // 2` as the two components one
 shared `(cos, sin)` rotates together, so the rotated span must be a multiple of
 six: `rope_span` returns the largest one that fits and any trailing dimensions
-pass through unrotated. `base` sizes every stage at 18 channels per head and so
-rotates the whole head; `tiny` inherits PTv3-tiny's head counts for a `head_dim`
-of 16, rotating 12 dimensions and passing 4 through.
+pass through unrotated. LitePT inherits the PTv3 head counts for a `head_dim` of 16,
+rotating 12 dimensions and passing 4 through.
 
 The default `enc_rope_base` of 100.0 mirrors what LitePT's reference CUDA
 operator calls `rope_freq`. This is a hyperparameter and needs tuning.
 
 ## Available Configurations
 
-| Config Name                                                                           | Task                         | Dataset   | Head        | Range | Purpose                        |
-| ------------------------------------------------------------------------------------- | ---------------------------- | --------- | ----------- | ----- | ------------------------------ |
-| `segmentation3d/litept/t4dataset/voxel012_tiny_b16_50e_t4dataset_122m_j6gen2_semaseg` | segmentation3d               | T4Dataset | Seg decoder | 122 m | T4Dataset segmentation         |
-| `multi/litept/t4dataset/voxel012_tiny_b8_100e_t4dataset_122m_j6gen2_det3d_seg3d`      | segmentation3d + detection3d | T4Dataset | TransFusion | 122 m | Joint segmentation + detection |
+| Config Name                                                                      | Task                         | Dataset   | Head        | Range | Purpose                        |
+| -------------------------------------------------------------------------------- | ---------------------------- | --------- | ----------- | ----- | ------------------------------ |
+| `segmentation3d/litept/t4dataset/voxel012_b16_50e_t4dataset_122m_j6gen2_semaseg` | segmentation3d               | T4Dataset | Seg decoder | 122 m | T4Dataset segmentation         |
+| `multi/litept/t4dataset/voxel012_b8_100e_t4dataset_122m_j6gen2_det3d_seg3d`      | segmentation3d + detection3d | T4Dataset | TransFusion | 122 m | Joint segmentation + detection |
 
 Each inherits dataset, transforms, optimizer and deploy settings from the PTv3
 config of the same name and swaps only the encoder and the decoder head.
 
-Both come in the two scales [PTv3](ptv3.md) uses. `base` is the published LitePT
-parametrization: 18 channels per attention head and a decoder that only unpools.
-`tiny` is PTv3-tiny with the gating applied and nothing else changed, so the two
-stay directly comparable - its decoder keeps PTv3-tiny's blocks and runs them
-under LitePT's rule. The configs above are at `tiny` scale, following the PTv3
-configs they inherit from.
+Both are the [PTv3](ptv3.md) model with the gating applied and nothing else changed, so
+the two stay directly comparable. The decoder keeps the PTv3 blocks and runs them under
+LitePT's rule.
 
 ```bash
-autoware-ml train --config-name segmentation3d/litept/t4dataset/voxel012_tiny_b16_50e_t4dataset_122m_j6gen2_semaseg
+autoware-ml train --config-name segmentation3d/litept/t4dataset/voxel012_b16_50e_t4dataset_122m_j6gen2_semaseg
 ```
 
 ## Export contract

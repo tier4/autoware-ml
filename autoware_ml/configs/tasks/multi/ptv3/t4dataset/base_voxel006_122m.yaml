@@ -1,8 +1,10 @@
 # @package _global_
-# PT-v3m3 teacher on a 6 cm grid with the fine taxonomy. The leaves switch their databases to
+# Large PTv3 teacher on a 6 cm grid with the fine taxonomy. The leaves switch their databases to
 # the fine taxonomy and the trailer box pipelines, the joint suite follows here.
 defaults:
   - base_122m
+  - /tasks/segmentation3d/ptv3/encoder_large
+  - /tasks/segmentation3d/ptv3/seg3d_head_large
   - override /metrics/t4dataset/det3d_seg3d/partial_detection3d_classes@metric_params.det3d_seg3d.partial_detection3d_classes: default_fine
   - _self_
 
@@ -18,18 +20,8 @@ model:
     _target_: autoware_ml.models.segmentation3d.encoders.voxel.PastFutureVoxelFeatureEncoder
   export_output_names:
     [pred_labels, pred_probs, dense_heatmap, query_heatmap_score, query_labels, heatmap, center, height, dim, rot, vel]
-  # PT-v3m3 encoder and decoder
   encoder:
     in_channels: 17
-    enc_depths: [3, 3, 3, 12, 3]
-    enc_channels: [54, 108, 216, 432, 576]
-    enc_num_head: [3, 6, 12, 24, 32]
-    enc_patch_size: [1024, 1024, 1024, 1024, 1024]
-  seg3d_head:
-    dec_depths: [2, 2, 2, 2]
-    dec_channels: [54, 108, 216, 432]
-    dec_num_head: [3, 6, 12, 24]
-    dec_patch_size: [1024, 1024, 1024, 1024]
   bev_neck:
     fusion:
       out_channels: 512
