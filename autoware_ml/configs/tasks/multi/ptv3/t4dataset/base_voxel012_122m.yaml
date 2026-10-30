@@ -9,7 +9,7 @@ defaults:
 grid_size: 0.12
 max_voxels: 524288
 # 245.76 m / 0.96 m = 256 BEV cells per axis.
-head_voxel_size: [0.96, 0.96, 8.0]
+head_grid_size: [0.96, 0.96]
 num_proposals: 500
 
 model:
