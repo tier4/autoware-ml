@@ -18,11 +18,23 @@ This module contains reusable ResNet backbones for image-based models.
 """
 
 from collections.abc import Sequence
+import logging
+from pathlib import Path
 
 from jaxtyping import Float32
+import torch
 import torch.nn as nn
 from torch import Tensor
-from torchvision.models.resnet import BasicBlock, Bottleneck, ResNet
+from torchvision.models._api import WeightsEnum
+from torchvision.models.resnet import (
+    BasicBlock,
+    Bottleneck,
+    ResNet,
+    ResNet18_Weights,
+    ResNet50_Weights,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class _ResNetStages(nn.Module):
@@ -66,7 +78,12 @@ class _ResNetStages(nn.Module):
     """
 
     def __init__(
-        self, block: type[BasicBlock] | type[Bottleneck], layers: list[int], in_channels: int
+        self,
+        block: type[BasicBlock] | type[Bottleneck],
+        layers: list[int],
+        in_channels: int,
+        weights: str | Path | None = None,
+        weights_enum: type[WeightsEnum] | None = None,
     ) -> None:
         """Initialize the ResNet stages.
 
@@ -74,6 +91,12 @@ class _ResNetStages(nn.Module):
             block: Residual block type.
             layers: Number of residual blocks per stage.
             in_channels: Number of channels in the input tensor.
+            weights: Pretrained weights to start from: the name of a torchvision weight set
+                of this architecture, such as ``IMAGENET1K_V1`` or ``DEFAULT``, which is
+                downloaded into the torch hub cache, or the path of a torchvision state dict
+                file. ``None`` starts from the random initialization.
+            weights_enum: The torchvision weight sets of this architecture, which resolve a
+                weight set name.
         """
         super().__init__()
         resnet = ResNet(block=block, layers=layers)
@@ -94,6 +117,65 @@ class _ResNetStages(nn.Module):
         self.layer2 = resnet.layer2
         self.layer3 = resnet.layer3
         self.layer4 = resnet.layer4
+        if weights is not None:
+            self.load_torchvision_weights(weights, weights_enum)
+
+    def load_torchvision_weights(
+        self, weights: str | Path, weights_enum: type[WeightsEnum] | None = None
+    ) -> None:
+        """Load a torchvision ResNet state dict into the stages.
+
+        The classifier of the state dict is dropped, and the stem convolution is skipped
+        when the backbone reads another number of channels than the three of the state dict.
+
+        Args:
+            weights: Name of a torchvision weight set, resolved through ``weights_enum``, or
+                the path of a torchvision state dict file.
+            weights_enum: The torchvision weight sets of this architecture.
+
+        Raises:
+            ValueError: If a weight set name is given without the enum, or the state dict
+                does not hold exactly the stage parameters besides the classifier.
+        """
+        path = Path(weights)
+        if path.is_file():
+            state_dict = torch.load(path, map_location="cpu", weights_only=True)
+            source = str(path)
+        else:
+            if weights_enum is None:
+                raise ValueError(
+                    f"weights={weights!r} is not a file and this backbone has no torchvision "
+                    "weight sets to resolve it with."
+                )
+            try:
+                weight_set = weights_enum[str(weights)]
+            except KeyError as error:
+                names = [member.name for member in weights_enum]
+                raise ValueError(
+                    f"weights={weights!r} is neither a state dict file nor one of the "
+                    f"torchvision weight sets {names}."
+                ) from error
+            state_dict = weight_set.get_state_dict(progress=False)
+            source = f"torchvision {weights_enum.__name__}.{weights}"
+        state_dict = {key: value for key, value in state_dict.items() if not key.startswith("fc.")}
+        checkpoint_stem = state_dict.get("conv1.weight")
+        if checkpoint_stem is not None and checkpoint_stem.shape != self.conv1.weight.shape:
+            logger.warning(
+                "Skipping the stem convolution of %s: it reads %d channels while this backbone "
+                "reads %d.",
+                source,
+                checkpoint_stem.shape[1],
+                self.conv1.weight.shape[1],
+            )
+            # Keep the backbone's own stem, so a strict load still checks every other key.
+            state_dict["conv1.weight"] = self.conv1.weight.detach().clone()
+        try:
+            self.load_state_dict(state_dict, strict=True)
+        except RuntimeError as error:
+            raise ValueError(
+                f"{source} does not hold the stage parameters of this backbone: {error}"
+            ) from error
+        logger.info("Loaded %d tensors of %s.", len(state_dict), source)
 
     def forward_stem(
         self, x: Float32[Tensor, "batch_size in_channels height width"]
@@ -128,13 +210,21 @@ class ResNet18(_ResNetStages):
         ```
     """
 
-    def __init__(self, in_channels: int) -> None:
+    def __init__(self, in_channels: int, weights: str | Path | None = None) -> None:
         """Initialize ResNet18 backbone.
 
         Args:
             in_channels: Number of channels in the input tensor.
+            weights: Torchvision weight set name or state dict path, see
+                :meth:`_ResNetStages.load_torchvision_weights`.
         """
-        super().__init__(block=BasicBlock, layers=[2, 2, 2, 2], in_channels=in_channels)
+        super().__init__(
+            block=BasicBlock,
+            layers=[2, 2, 2, 2],
+            in_channels=in_channels,
+            weights=weights,
+            weights_enum=ResNet18_Weights,
+        )
 
     def forward(
         self, x: Float32[Tensor, "batch_size in_channels height width"]
@@ -173,6 +263,8 @@ class _ResNetMultiScale(_ResNetStages):
         layers: list[int],
         in_channels: int,
         out_indices: Sequence[int] = (1, 2, 3),
+        weights: str | Path | None = None,
+        weights_enum: type[WeightsEnum] | None = None,
     ) -> None:
         """Initialize the multi-scale ResNet backbone.
 
@@ -182,12 +274,21 @@ class _ResNetMultiScale(_ResNetStages):
             in_channels: Number of channels in the input tensor.
             out_indices: Strictly increasing stage indices in ``0`` to ``3`` whose outputs are
                 returned, where index ``i`` selects ``layer{i + 1}``.
+            weights: Torchvision weight set name or state dict path, see
+                :meth:`_ResNetStages.load_torchvision_weights`.
+            weights_enum: The torchvision weight sets of this architecture.
 
         Raises:
             ValueError: If ``out_indices`` is empty, holds an index outside ``0`` to ``3``, or
                 is not strictly increasing.
         """
-        super().__init__(block=block, layers=layers, in_channels=in_channels)
+        super().__init__(
+            block=block,
+            layers=layers,
+            in_channels=in_channels,
+            weights=weights,
+            weights_enum=weights_enum,
+        )
         self.out_indices = self._validate_out_indices(out_indices)
 
     @staticmethod
@@ -242,19 +343,28 @@ class ResNet18MultiScale(_ResNetMultiScale):
     pyramids rather than ImageNet classification logits.
     """
 
-    def __init__(self, in_channels: int, out_indices: Sequence[int] = (1, 2, 3)) -> None:
+    def __init__(
+        self,
+        in_channels: int,
+        out_indices: Sequence[int] = (1, 2, 3),
+        weights: str | Path | None = None,
+    ) -> None:
         """Initialize the multi-scale ResNet18 backbone.
 
         Args:
             in_channels: Number of channels in the input tensor.
             out_indices: Strictly increasing stage indices in ``0`` to ``3`` whose outputs are
                 returned, where index ``i`` selects ``layer{i + 1}``.
+            weights: Torchvision weight set name or state dict path, see
+                :meth:`_ResNetStages.load_torchvision_weights`.
         """
         super().__init__(
             block=BasicBlock,
             layers=[2, 2, 2, 2],
             in_channels=in_channels,
             out_indices=out_indices,
+            weights=weights,
+            weights_enum=ResNet18_Weights,
         )
 
 
@@ -265,17 +375,27 @@ class ResNet50MultiScale(_ResNetMultiScale):
     pyramids rather than ImageNet classification logits.
     """
 
-    def __init__(self, in_channels: int, out_indices: Sequence[int] = (1, 2, 3)) -> None:
+    def __init__(
+        self,
+        in_channels: int,
+        out_indices: Sequence[int] = (1, 2, 3),
+        weights: str | Path | None = None,
+    ) -> None:
         """Initialize the multi-scale ResNet50 backbone.
 
         Args:
             in_channels: Number of channels in the input tensor.
             out_indices: Strictly increasing stage indices in ``0`` to ``3`` whose outputs are
                 returned, where index ``i`` selects ``layer{i + 1}``.
+            weights: Torchvision weight set name or state dict path, see
+                :meth:`_ResNetStages.load_torchvision_weights`; ``IMAGENET1K_V1`` gives the
+                ImageNet weights the Sparse4D reference starts from.
         """
         super().__init__(
             block=Bottleneck,
             layers=[3, 4, 6, 3],
             in_channels=in_channels,
             out_indices=out_indices,
+            weights=weights,
+            weights_enum=ResNet50_Weights,
         )

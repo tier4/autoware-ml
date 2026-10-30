@@ -15,7 +15,8 @@
 """Multiview image encoder shared by the camera detectors.
 
 The camera branch of BEVFusion and StreamPETR run one image backbone and neck on every camera
-of a ``(B, N, C, H, W)`` batch and keep the first neck output of every camera.
+of a ``(B, N, C, H, W)`` batch and keep the first neck output of every camera; Sparse4D keeps
+every level of the neck's pyramid.
 """
 
 from __future__ import annotations
@@ -24,26 +25,36 @@ from jaxtyping import Float32
 import torch
 import torch.nn as nn
 
+MultiviewFeatures = Float32[
+    torch.Tensor, "batch_size num_cams channels feature_height feature_width"
+]
+"""One feature map of every camera, ``(B, N, C', H', W')``."""
 
-def encode_multiview_images(
+MultiviewPyramid = tuple[MultiviewFeatures, ...]
+"""Every neck level of every camera, from the first."""
+
+
+def encode_multiview_pyramid(
     img_backbone: nn.Module,
     img_neck: nn.Module,
     image_batch: Float32[torch.Tensor, "batch_size num_cams 3 height width"],
-) -> Float32[torch.Tensor, "batch_size num_cams channels feature_height feature_width"]:
-    """Encode every camera image and fold the primary neck feature back per camera.
+) -> MultiviewPyramid:
+    """Encode every camera image and fold every neck level back per camera.
 
-    The backbones and necks of the shipped configs return tuples of feature maps. A backbone
-    that returns one tensor is handed to the neck as a one-map tuple, and a neck that returns
-    one tensor provides the primary feature itself.
+    The backbones and necks of the shipped configs return tuples of feature maps. A
+    backbone that returns one tensor is handed to the neck as a one-map tuple, and a
+    neck that returns one tensor provides a one-level pyramid. A module that holds its
+    backbone and neck under its own names, as the BEVFusion camera branch does for its
+    checkpoint keys, calls this directly instead of wrapping them in a
+    :class:`MultiviewImageEncoder`.
 
     Args:
         img_backbone: Backbone run on every camera image.
-        img_neck: Neck fusing the backbone's feature maps; its first output is the primary
-            feature.
+        img_neck: Neck fusing the backbone's feature maps.
         image_batch: Multiview images ``(B, N, C, H, W)``.
 
     Returns:
-        The primary neck feature of every camera, ``(B, N, C', H', W')``.
+        Every neck level, from the first, as ``(B, N, C', H', W')`` tensors.
 
     Raises:
         ValueError: If the images are not a ``(B, N, C, H, W)`` tensor.
@@ -58,12 +69,11 @@ def encode_multiview_images(
     if isinstance(image_features, torch.Tensor):
         image_features = (image_features,)
     image_features = img_neck(image_features)
-    primary_feature = (
-        image_features[0] if isinstance(image_features, (list, tuple)) else image_features
-    )
-    _, feature_channels, feature_height, feature_width = primary_feature.shape
-    return primary_feature.view(
-        batch_size, num_cams, feature_channels, feature_height, feature_width
+    if isinstance(image_features, torch.Tensor):
+        image_features = (image_features,)
+    return tuple(
+        level.view(batch_size, num_cams, level.shape[1], level.shape[2], level.shape[3])
+        for level in image_features
     )
 
 
@@ -75,27 +85,34 @@ class MultiviewImageEncoder(nn.Module):
     ``<attribute>.img_neck.*``.
     """
 
-    def __init__(self, img_backbone: nn.Module, img_neck: nn.Module) -> None:
+    def __init__(
+        self, img_backbone: nn.Module, img_neck: nn.Module, return_all_levels: bool = False
+    ) -> None:
         """Initialize the multiview image encoder.
 
         Args:
             img_backbone: Backbone run on every camera image.
             img_neck: Neck fusing the backbone's feature maps; its first output is the primary
                 feature.
+            return_all_levels: Whether the encoder returns every level of the neck instead
+                of the primary feature alone.
         """
         super().__init__()
         self.img_backbone = img_backbone
         self.img_neck = img_neck
+        self.return_all_levels = return_all_levels
 
     def forward(
         self, image_batch: Float32[torch.Tensor, "batch_size num_cams 3 height width"]
-    ) -> Float32[torch.Tensor, "batch_size num_cams channels feature_height feature_width"]:
-        """Encode multiview images, see :func:`encode_multiview_images`.
+    ) -> MultiviewFeatures | MultiviewPyramid:
+        """Encode multiview images, see :func:`encode_multiview_pyramid`.
 
         Args:
             image_batch: Multiview images ``(B, N, C, H, W)``.
 
         Returns:
-            The primary neck feature of every camera, ``(B, N, C', H', W')``.
+            The primary neck feature of every camera, ``(B, N, C', H', W')``, which is the
+            first neck level, or every neck level with :attr:`return_all_levels`.
         """
-        return encode_multiview_images(self.img_backbone, self.img_neck, image_batch)
+        levels = encode_multiview_pyramid(self.img_backbone, self.img_neck, image_batch)
+        return levels if self.return_all_levels else levels[0]
