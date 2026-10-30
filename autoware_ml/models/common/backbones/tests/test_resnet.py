@@ -240,6 +240,52 @@ class TestTorchvisionWeights(unittest.TestCase):
         )
         self.assertEqual(backbone.conv1.weight.shape[1], 5)
 
+    def test_truncated_state_dict_is_refused(self) -> None:
+        """
+        Input: the reference state dict without its third and fourth stages, saved to a file.
+        Expected: refused instead of leaving those stages at their random draw.
+        Check: ValueError naming the file and a missing key.
+        """
+        truncated = {
+            key: value
+            for key, value in self.reference.state_dict().items()
+            if not key.startswith(("layer3.", "layer4."))
+        }
+        path = Path(self.directory.name) / "truncated.pth"
+        torch.save(truncated, path)
+
+        with self.assertRaisesRegex(ValueError, "(?s)truncated.pth.*layer3.0.conv1.weight"):
+            ResNet18MultiScale(in_channels=3, weights=path)
+
+    def test_truncated_state_dict_is_refused_when_the_stem_is_skipped(self) -> None:
+        """
+        Input: the truncated file into a five-channel backbone, whose stem is skipped.
+        Expected: still refused, the skipped stem does not loosen the check.
+        Check: ValueError naming a missing key.
+        """
+        truncated = {
+            key: value
+            for key, value in self.reference.state_dict().items()
+            if not key.startswith("layer4.")
+        }
+        path = Path(self.directory.name) / "truncated.pth"
+        torch.save(truncated, path)
+
+        with self.assertRaisesRegex(ValueError, "layer4.0.conv1.weight"):
+            ResNet18(in_channels=5, weights=path)
+
+    def test_wrapped_state_dict_is_refused_with_the_file_name(self) -> None:
+        """
+        Input: a Lightning-style file wrapping the state dict under ``state_dict``.
+        Expected: refused with the file name instead of a bare KeyError.
+        Check: ValueError naming the file and the stray key.
+        """
+        path = Path(self.directory.name) / "wrapped.ckpt"
+        torch.save({"state_dict": self.reference.state_dict()}, path)
+
+        with self.assertRaisesRegex(ValueError, "(?s)wrapped.ckpt.*state_dict"):
+            ResNet18MultiScale(in_channels=3, weights=path)
+
     def test_weight_set_names_resolve_through_torchvision(self) -> None:
         """
         Input: an unknown weight set name, and the ImageNet names of ResNet-50.

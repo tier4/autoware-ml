@@ -134,8 +134,8 @@ class _ResNetStages(nn.Module):
             weights_enum: The torchvision weight sets of this architecture.
 
         Raises:
-            ValueError: If a weight set name is given without the enum, or a key of the
-                state dict is neither a stage parameter nor the classifier.
+            ValueError: If a weight set name is given without the enum, or the state dict
+                does not hold exactly the stage parameters besides the classifier.
         """
         path = Path(weights)
         if path.is_file():
@@ -158,20 +158,23 @@ class _ResNetStages(nn.Module):
             state_dict = weight_set.get_state_dict(progress=False)
             source = f"torchvision {weights_enum.__name__}.{weights}"
         state_dict = {key: value for key, value in state_dict.items() if not key.startswith("fc.")}
-        if state_dict["conv1.weight"].shape != self.conv1.weight.shape:
+        checkpoint_stem = state_dict.get("conv1.weight")
+        if checkpoint_stem is not None and checkpoint_stem.shape != self.conv1.weight.shape:
             logger.warning(
                 "Skipping the stem convolution of %s: it reads %d channels while this backbone "
                 "reads %d.",
                 source,
-                state_dict["conv1.weight"].shape[1],
+                checkpoint_stem.shape[1],
                 self.conv1.weight.shape[1],
             )
-            del state_dict["conv1.weight"]
-        incompatible = self.load_state_dict(state_dict, strict=False)
-        if incompatible.unexpected_keys:
+            # Keep the backbone's own stem, so a strict load still checks every other key.
+            state_dict["conv1.weight"] = self.conv1.weight.detach().clone()
+        try:
+            self.load_state_dict(state_dict, strict=True)
+        except RuntimeError as error:
             raise ValueError(
-                f"{source} holds keys that are not ResNet stages: {incompatible.unexpected_keys}."
-            )
+                f"{source} does not hold the stage parameters of this backbone: {error}"
+            ) from error
         logger.info("Loaded %d tensors of %s.", len(state_dict), source)
 
     def forward_stem(
