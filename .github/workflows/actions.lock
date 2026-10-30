@@ -43,8 +43,8 @@ workflows:
         - 'autowarefoundation/autoware-github-actions@v1.69.1'
     '.github/workflows/pre-commit.yaml':
         - 'actions/checkout@v6.1.0'
-        - 'autowarefoundation/autoware-github-actions@v1.69.1'
-        - 'tibdex/github-app-token@v2.1.0'
+        - 'actions/setup-python@v5.6.0'
+        - 'pre-commit/action@v3.0.1'
     '.github/workflows/require-build-and-test-label.yml': []
     '.github/workflows/semantic-pull-request.yaml':
         - 'amannn/action-semantic-pull-request@v6.1.1'
