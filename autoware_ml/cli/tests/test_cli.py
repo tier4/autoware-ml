@@ -429,6 +429,12 @@ class TestCliCommands:
         )
 
     def test_visualize_previews_data_without_weights(self) -> None:
+        """
+        Input: ``visualize`` with a config name and the noop backend but no weights.
+        Expected: the CLI runs the visualize entrypoint without a runtime stage and passes the
+            backend override, and no weights override.
+        Check: the entrypoint module, the stage and the Hydra overrides of the dispatched call.
+        """
         with patch("autoware_ml.cli.cli.run_lazy_script") as run_lazy_script_mock:
             result = self.runner.invoke(
                 app,
@@ -443,6 +449,12 @@ class TestCliCommands:
         assert not any(override.startswith("+weights=") for override in kwargs["hydra_overrides"])
 
     def test_visualize_merges_repeated_weights(self) -> None:
+        """
+        Input: ``visualize`` with two ``--weights`` options and ``--split val``.
+        Expected: the two checkpoints are merged into one weights list override, like for
+            ``test``, and the split reaches the visualization group.
+        Check: the weights and split Hydra overrides of the dispatched call.
+        """
         with patch("autoware_ml.cli.cli.run_lazy_script") as run_lazy_script_mock:
             result = self.runner.invoke(
                 app,

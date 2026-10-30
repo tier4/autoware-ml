@@ -27,7 +27,12 @@ class TestBuildPreviewConfig(unittest.TestCase):
     """The ``visualization`` group maps onto the preview and the viewer session settings."""
 
     def test_empty_group_gives_an_automatic_rerun_preview(self) -> None:
-        """Without a ``visualization`` group every setting takes its default."""
+        """
+        Input: a config without a ``visualization`` group.
+        Expected: every preview and session setting takes its default, an automatic Rerun
+            preview of the test split without intermediate frames or class name overrides.
+        Check: each field of the preview and session settings.
+        """
         config = build_preview_config(OmegaConf.create({}))
 
         self.assertEqual(config.mode, "auto")
@@ -50,7 +55,12 @@ class TestBuildPreviewConfig(unittest.TestCase):
         self.assertEqual(config.session.sync_port, 9091)
 
     def test_every_override_reaches_its_setting(self) -> None:
-        """Each key of the group sets the preview or session field of the same meaning."""
+        """
+        Input: a ``visualization`` group that sets every key the builder reads.
+        Expected: each key reaches the preview or session field of the same meaning, converted
+            to its type (the frequency to a float, the class name lists to tuples).
+        Check: each field of the preview and session settings, and the frequency type.
+        """
         config = build_preview_config(
             OmegaConf.create(
                 {
@@ -107,7 +117,11 @@ class TestBuildPreviewConfig(unittest.TestCase):
         self.assertEqual(config.session.sync_port, 9095)
 
     def test_empty_class_name_lists_keep_the_taxonomy(self) -> None:
-        """An empty override is treated as unset, so the database taxonomy names stay."""
+        """
+        Input: a ``visualization`` group with an empty ``segmentation3d_class_names`` list.
+        Expected: the empty list is treated as unset, so the database taxonomy names are kept.
+        Check: the segmentation class names are None.
+        """
         config = build_preview_config(
             OmegaConf.create({"visualization": {"segmentation3d_class_names": []}})
         )

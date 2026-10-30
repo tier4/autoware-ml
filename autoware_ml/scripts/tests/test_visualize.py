@@ -26,7 +26,12 @@ class TestEntrypointModules(unittest.TestCase):
     """Every module the CLI dispatches to imports."""
 
     def test_cli_entrypoint_modules_are_importable(self) -> None:
-        """A broken import of an entrypoint fails here rather than at the first CLI call."""
+        """
+        Input: the module name of every entrypoint the CLI dispatches to.
+        Expected: every module imports, so a broken import fails here rather than at the first
+            CLI call.
+        Check: importing each module raises nothing.
+        """
         for constant_name in (
             "TRAIN_ENTRYPOINT_MODULE",
             "DEPLOY_ENTRYPOINT_MODULE",
