@@ -23,6 +23,7 @@ SETTINGS_FILE = PROJECT_ROOT / ".env"
 SETTINGS_KEYS = frozenset(
     {
         "AUTOWARE_ML_DATA_PATH",
+        "AUTOWARE_ML_CONFIGS_PATH",
         "AUTOWARE_ML_SCENARIOS_PATH",
         "AUTOWARE_ML_WORKING_DIR",
     }
@@ -76,6 +77,18 @@ def data_path() -> Path:
     if not value:
         raise ValueError(f"AUTOWARE_ML_DATA_PATH is not set in {SETTINGS_FILE}.")
     return Path(value)
+
+
+def configs_path() -> Path | None:
+    """Return the external config root named by ``AUTOWARE_ML_CONFIGS_PATH``.
+
+    The directory is laid out like the bundled ``autoware_ml/configs/``.
+
+    Returns:
+        Absolute external config root, ``None`` when the setting is not set.
+    """
+    value = read_settings()["AUTOWARE_ML_CONFIGS_PATH"]
+    return Path(value) if value else None
 
 
 def scenarios_path() -> Path | None:

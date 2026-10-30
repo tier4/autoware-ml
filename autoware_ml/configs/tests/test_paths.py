@@ -24,6 +24,7 @@ from autoware_ml.configs.paths import (
     PROJECT_ROOT,
     SETTINGS_KEYS,
     data_path,
+    configs_path,
     read_settings,
     scenarios_path,
     working_dir,
@@ -50,6 +51,7 @@ def test_read_settings_skips_comments_and_keeps_equal_signs_in_values(
         "# Dataset root\n"
         "AUTOWARE_ML_DATA_PATH=/data/a=b\n"
         "\n"
+        "AUTOWARE_ML_CONFIGS_PATH=\n"
         "AUTOWARE_ML_SCENARIOS_PATH=\n"
         "AUTOWARE_ML_WORKING_DIR=\n",
         encoding="utf-8",
@@ -59,17 +61,17 @@ def test_read_settings_skips_comments_and_keeps_equal_signs_in_values(
     settings = read_settings()
 
     assert settings["AUTOWARE_ML_DATA_PATH"] == "/data/a=b"
-    assert settings["AUTOWARE_ML_SCENARIOS_PATH"] == ""
+    assert settings["AUTOWARE_ML_CONFIGS_PATH"] == ""
 
 
 @pytest.mark.parametrize(
     "content",
     [
-        "AUTOWARE_ML_DATA_PATH=\nAUTOWARE_ML_SCENARIOS_PATH=\n",
-        "AUTOWARE_ML_DATA_PATH=\nAUTOWARE_ML_SCENARIOS_PATH=\nAUTOWARE_ML_WORKING_DIR=\n"
-        "AUTOWARE_ML_CUSTOM_MOUNTS=\n",
-        "AUTOWARE_ML_DATA_PATH=/a\nAUTOWARE_ML_DATA_PATH=/b\nAUTOWARE_ML_SCENARIOS_PATH=\n"
-        "AUTOWARE_ML_WORKING_DIR=\n",
+        "AUTOWARE_ML_DATA_PATH=\nAUTOWARE_ML_CONFIGS_PATH=\nAUTOWARE_ML_SCENARIOS_PATH=\n",
+        "AUTOWARE_ML_DATA_PATH=\nAUTOWARE_ML_CONFIGS_PATH=\nAUTOWARE_ML_SCENARIOS_PATH=\n"
+        "AUTOWARE_ML_WORKING_DIR=\nAUTOWARE_ML_CUSTOM_MOUNTS=\n",
+        "AUTOWARE_ML_DATA_PATH=/a\nAUTOWARE_ML_DATA_PATH=/b\nAUTOWARE_ML_CONFIGS_PATH=\n"
+        "AUTOWARE_ML_SCENARIOS_PATH=\nAUTOWARE_ML_WORKING_DIR=\n",
     ],
     ids=["missing", "unknown", "repeated"],
 )
@@ -102,11 +104,11 @@ def test_data_path_requires_the_setting(tmp_path: Path, monkeypatch: pytest.Monk
         data_path()
 
 
-@pytest.mark.parametrize("value", ["external/scenarios", "~/scenarios"], ids=["relative", "home"])
+@pytest.mark.parametrize("value", ["external/configs", "~/configs"], ids=["relative", "home"])
 def test_read_settings_rejects_paths_that_are_not_absolute(
     value: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    write_settings(tmp_path, monkeypatch, AUTOWARE_ML_SCENARIOS_PATH=value)
+    write_settings(tmp_path, monkeypatch, AUTOWARE_ML_CONFIGS_PATH=value)
 
     with pytest.raises(ValueError, match="not absolute"):
         read_settings()
@@ -117,19 +119,22 @@ def test_paths_are_the_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         tmp_path,
         monkeypatch,
         AUTOWARE_ML_DATA_PATH=str(tmp_path / "data"),
+        AUTOWARE_ML_CONFIGS_PATH=str(tmp_path / "configs"),
         AUTOWARE_ML_SCENARIOS_PATH=str(tmp_path / "scenarios"),
         AUTOWARE_ML_WORKING_DIR=str(tmp_path / "outputs"),
     )
 
     assert data_path() == tmp_path / "data"
+    assert configs_path() == tmp_path / "configs"
     assert scenarios_path() == tmp_path / "scenarios"
     assert working_dir() == tmp_path / "outputs"
 
 
-def test_unset_paths_mean_no_scenarios_root_and_the_project_root(
+def test_unset_paths_mean_no_external_roots_and_the_project_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     write_settings(tmp_path, monkeypatch)
 
+    assert configs_path() is None
     assert scenarios_path() is None
     assert working_dir() == PROJECT_ROOT
