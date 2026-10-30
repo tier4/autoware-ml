@@ -82,7 +82,7 @@ Select multiple runs and click **Compare** to view:
 
 Experiments are named by the `experiment_group_name` and `experiment_name` keys of the task
 config, not by its path. Leaves that should sit side by side in the UI share one
-`experiment_group_name`, for example `bevfusion/${database.version}/j6gen2_base` for every
+`experiment_group_name`, for example `bevfusion/${database.version}/t4dataset` for every
 BEVFusion variant trained on that database, and differ in `experiment_name`.
 
 Add custom tags for organization:

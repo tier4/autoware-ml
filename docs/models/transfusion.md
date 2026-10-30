@@ -21,14 +21,14 @@ TransFusion is a LiDAR-based 3D object detection model integrated under the `det
 
 The LiDAR-only [BEVFusion](bevfusion.md) experiments run the same sparse-voxel encoder, `SECOND` backbone, `SECONDFPN` neck, and TransFusion head stack. The TransFusion experiments below train that stack without the BEVFusion wrapper.
 
-Experiment configs live under `autoware_ml/configs/tasks/detection3d/transfusion/` and follow the CenterPoint layout: a `base.yaml` with the model and export modules, a `t4dataset/base_<range>.yaml` with the range-dependent settings and transforms, a voxel-level base, and one leaf per database. The bundled leaves are `detection3d/transfusion/t4dataset/voxel0170_second_secfpn_b16_30e_t4dataset_120m_j6gen2_base` and `detection3d/transfusion/nuscenes/voxel0075_second_secfpn_b16_30e_nuscenes_54m`.
+Experiment configs live under `autoware_ml/configs/tasks/detection3d/transfusion/` and follow the CenterPoint layout: a `base.yaml` with the model and export modules, a `t4dataset/base_<range>.yaml` with the range-dependent settings and transforms, a voxel-level base, and one leaf per database. The bundled leaves are `detection3d/transfusion/t4dataset/voxel0170_second_secfpn_b16_30e_t4dataset_120m` and `detection3d/transfusion/nuscenes/voxel0075_second_secfpn_b16_30e_nuscenes_54m`.
 
 ## Training
 
 An experiment is trained through the standard entrypoint, with `--weights` supplying a pretrained checkpoint when the config declares `weights: ???`:
 
 ```bash
-autoware-ml train --config-name detection3d/transfusion/t4dataset/voxel0170_second_secfpn_b16_30e_t4dataset_120m_j6gen2_base
+autoware-ml train --config-name detection3d/transfusion/t4dataset/voxel0170_second_secfpn_b16_30e_t4dataset_120m
 ```
 
 Checkpoints are written to `mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/checkpoints/` as `best.ckpt` and `last.ckpt`.
@@ -37,8 +37,8 @@ Checkpoints are written to `mlruns/<experiment_group_name>/<experiment_name>/<ru
 
 ```bash
 autoware-ml test \
-    --config-name detection3d/transfusion/t4dataset/voxel0170_second_secfpn_b16_30e_t4dataset_120m_j6gen2_base \
-    --weights mlruns/transfusion/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base/voxel0170_second_secfpn_b16_30e_t4dataset_120m/<run_id>/artifacts/checkpoints/best.ckpt
+    --config-name detection3d/transfusion/t4dataset/voxel0170_second_secfpn_b16_30e_t4dataset_120m \
+    --weights mlruns/transfusion/T4Dataset-base-v1.0.0/t4dataset/voxel0170_second_secfpn_b16_30e_t4dataset_120m/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 Evaluation runs on a single device by default so metrics are deterministic. Pass `--use-config-devices` to keep the `trainer.devices` from the config.
@@ -47,8 +47,8 @@ Evaluation runs on a single device by default so metrics are deterministic. Pass
 
 ```bash
 autoware-ml deploy \
-    --config-name detection3d/transfusion/t4dataset/voxel0170_second_secfpn_b16_30e_t4dataset_120m_j6gen2_base \
-    --weights mlruns/transfusion/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base/voxel0170_second_secfpn_b16_30e_t4dataset_120m/<run_id>/artifacts/checkpoints/best.ckpt \
+    --config-name detection3d/transfusion/t4dataset/voxel0170_second_secfpn_b16_30e_t4dataset_120m \
+    --weights mlruns/transfusion/T4Dataset-base-v1.0.0/t4dataset/voxel0170_second_secfpn_b16_30e_t4dataset_120m/<run_id>/artifacts/checkpoints/best.ckpt \
     --release v1.0.0
 ```
 

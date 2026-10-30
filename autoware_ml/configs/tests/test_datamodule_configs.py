@@ -30,10 +30,7 @@ from autoware_ml.configs.resolvers import register_config_resolvers
 from autoware_ml.datamodule.streaming_data_module import StreamingDataModule
 
 # An experiment composing a database datamodule, which does not stream.
-EXPERIMENT = (
-    "tasks/detection3d/centerpoint/t4dataset/"
-    "voxel024_second_secfpn_b16_50e_t4dataset_120m_j6gen2_base"
-)
+EXPERIMENT = "tasks/detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_30e_t4dataset_120m"
 
 
 def compose_streaming_experiment(experiment: str) -> DictConfig:

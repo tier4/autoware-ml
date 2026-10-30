@@ -1,12 +1,12 @@
 # @package _global_
 defaults:
   - base
-  - /database@database: t4dataset/t4dataset_j6gen2_base
+  - /database@database: t4dataset/t4dataset_base
   - _self_
 
 batch_size: 8
 num_workers: 8
-experiment_group_name: calibration_status/${database.version}/j6gen2_base
+experiment_group_name: calibration_status/${database.version}/t4dataset
 experiment_name: resnet18_b8_30e_t4dataset
 
 trainer:

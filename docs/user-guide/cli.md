@@ -109,9 +109,9 @@ autoware-ml deploy \
 
 ```bash
 autoware-ml deploy \
-    --config-name detection3d/ptv3/t4dataset/voxel012_b8_30e_t4dataset_122m_j6gen2_base \
-    --weights mlruns/ptv3_seg3d/T4Dataset-j6gen2_semaseg-v1.0.0/j6gen2_semaseg/voxel012_b16_50e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt \
-    --weights mlruns/ptv3/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base/voxel012_b8_30e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt
+    --config-name detection3d/ptv3/t4dataset/voxel012_b8_30e_t4dataset_122m \
+    --weights mlruns/ptv3_seg3d/T4Dataset-base-v1.0.0/t4dataset/voxel012_b16_50e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/ptv3/T4Dataset-base-v1.0.0/t4dataset/voxel012_b8_30e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 ## test
@@ -139,9 +139,9 @@ autoware-ml test \
 
 ```bash
 autoware-ml test \
-    --config-name detection3d/ptv3/t4dataset/voxel012_b8_30e_t4dataset_122m_j6gen2_base \
-    --weights mlruns/ptv3_seg3d/T4Dataset-j6gen2_semaseg-v1.0.0/j6gen2_semaseg/voxel012_b16_50e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt \
-    --weights mlruns/ptv3/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base/voxel012_b8_30e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt
+    --config-name detection3d/ptv3/t4dataset/voxel012_b8_30e_t4dataset_122m \
+    --weights mlruns/ptv3_seg3d/T4Dataset-base-v1.0.0/t4dataset/voxel012_b16_50e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/ptv3/T4Dataset-base-v1.0.0/t4dataset/voxel012_b8_30e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 ## visualize
@@ -224,7 +224,7 @@ one shared viewpoint:
 
 ```bash
 autoware-ml visualize \
-    --config-name multi/ptv3/t4dataset/voxel012_b8_100e_t4dataset_122m_j6gen2_det3d_seg3d \
+    --config-name multi/ptv3/t4dataset/voxel012_b8_100e_t4dataset_122m \
     --weights mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/checkpoints/best.ckpt \
     --split test \
     --max-samples 2 \
@@ -237,7 +237,7 @@ Preview the transformed data only, without weights:
 
 ```bash
 autoware-ml visualize \
-    --config-name segmentation3d/ptv3/t4dataset/voxel012_b16_50e_t4dataset_122m_j6gen2_semaseg \
+    --config-name segmentation3d/ptv3/t4dataset/voxel012_b16_50e_t4dataset_122m \
     --mode data \
     --device cpu \
     --split train

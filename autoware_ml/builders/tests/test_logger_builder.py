@@ -30,8 +30,8 @@ from autoware_ml.builders.tests.conftest import HydraRuntime
 from autoware_ml.utils.mlflow_helpers import MlflowRunContext
 
 CONFIG_NAME = "detection3d/tiny/tiny_b1_1e_corpus"
-EXPERIMENT_NAME = "centerpoint_t4_v2_gen1_base"
-RUN_NAME = "train_centerpoint_t4_v2_gen1_base_2026.10.15.12.00.00"
+EXPERIMENT_NAME = "centerpoint_t4_v2_base"
+RUN_NAME = "train_centerpoint_t4_v2_base_2026.10.15.12.00.00"
 RUN_ID = "0123456789abcdef0123456789abcdef"
 
 
