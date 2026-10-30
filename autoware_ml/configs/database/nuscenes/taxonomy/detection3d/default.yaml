@@ -1,4 +1,4 @@
-# Coarse detection3d taxonomy of nuScenes
+# Detection3d taxonomy of nuScenes
 _target_: autoware_ml.databases.taxonomy.Detection3DTaxonomy
 
 defaults:

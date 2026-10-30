@@ -3,7 +3,6 @@ defaults:
   - ../base_120m
   - base_lidar_voxel0170_120m
   - /database@database: t4dataset/t4dataset_base
-  - override /database/t4dataset/taxonomy@database.taxonomy: default_dynamic
   - _self_
 
 batch_size: 16
