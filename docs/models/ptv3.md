@@ -44,29 +44,29 @@ implementation so ONNX export remains supported.
 
 ## Available Configurations
 
-| Config Name                                                                         | Task                         | Dataset   | Head        | Range | Purpose                        |
-| ----------------------------------------------------------------------------------- | ---------------------------- | --------- | ----------- | ----- | ------------------------------ |
-| `segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m`                   | segmentation3d               | nuScenes  | Seg decoder | 51 m  | nuScenes segmentation          |
-| `segmentation3d/ptv3/t4dataset/voxel012_tiny_b16_50e_t4dataset_122m_j6gen2_semaseg` | segmentation3d               | T4Dataset | Seg decoder | 122 m | T4Dataset segmentation         |
-| `detection3d/ptv3/nuscenes/voxel005_base_b16_30e_nuscenes_51m`                      | detection3d                  | nuScenes  | TransFusion | 51 m  | nuScenes detection             |
-| `detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base`        | detection3d                  | T4Dataset | TransFusion | 122 m | T4Dataset detection            |
-| `multi/ptv3/nuscenes/voxel005_base_b16_100e_nuscenes_51m`                           | segmentation3d + detection3d | nuScenes  | TransFusion | 51 m  | Joint segmentation + detection |
-| `multi/ptv3/t4dataset/voxel012_tiny_b8_100e_t4dataset_122m_j6gen2_det3d_seg3d`      | segmentation3d + detection3d | T4Dataset | TransFusion | 122 m | Joint segmentation + detection |
+| Config Name                                                                    | Task                         | Dataset   | Head        | Range | Purpose                        |
+| ------------------------------------------------------------------------------ | ---------------------------- | --------- | ----------- | ----- | ------------------------------ |
+| `segmentation3d/ptv3/nuscenes/voxel005_b16_50e_nuscenes_51m`                   | segmentation3d               | nuScenes  | Seg decoder | 51 m  | nuScenes segmentation          |
+| `segmentation3d/ptv3/t4dataset/voxel012_b16_50e_t4dataset_122m_j6gen2_semaseg` | segmentation3d               | T4Dataset | Seg decoder | 122 m | T4Dataset segmentation         |
+| `detection3d/ptv3/nuscenes/voxel005_b16_30e_nuscenes_51m`                      | detection3d                  | nuScenes  | TransFusion | 51 m  | nuScenes detection             |
+| `detection3d/ptv3/t4dataset/voxel012_b8_30e_t4dataset_122m_j6gen2_base`        | detection3d                  | T4Dataset | TransFusion | 122 m | T4Dataset detection            |
+| `multi/ptv3/nuscenes/voxel005_b16_100e_nuscenes_51m`                           | segmentation3d + detection3d | nuScenes  | TransFusion | 51 m  | Joint segmentation + detection |
+| `multi/ptv3/t4dataset/voxel012_b8_100e_t4dataset_122m_j6gen2_det3d_seg3d`      | segmentation3d + detection3d | T4Dataset | TransFusion | 122 m | Joint segmentation + detection |
 
 ## Training
 
 ```bash
-autoware-ml train --config-name segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m
-autoware-ml train --config-name segmentation3d/ptv3/t4dataset/voxel012_tiny_b16_50e_t4dataset_122m_j6gen2_semaseg
-autoware-ml train --config-name detection3d/ptv3/nuscenes/voxel005_base_b16_30e_nuscenes_51m
-autoware-ml train --config-name detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base
+autoware-ml train --config-name segmentation3d/ptv3/nuscenes/voxel005_b16_50e_nuscenes_51m
+autoware-ml train --config-name segmentation3d/ptv3/t4dataset/voxel012_b16_50e_t4dataset_122m_j6gen2_semaseg
+autoware-ml train --config-name detection3d/ptv3/nuscenes/voxel005_b16_30e_nuscenes_51m
+autoware-ml train --config-name detection3d/ptv3/t4dataset/voxel012_b8_30e_t4dataset_122m_j6gen2_base
 ```
 
 For a pipeline validation run:
 
 ```bash
 autoware-ml train \
-    --config-name segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m \
+    --config-name segmentation3d/ptv3/nuscenes/voxel005_b16_50e_nuscenes_51m \
     +trainer.fast_dev_run=true
 ```
 
@@ -83,12 +83,12 @@ around whole stages only.
 
 ```bash
 autoware-ml test \
-    --config-name segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m \
-    --weights mlruns/ptv3_seg3d/NuScenesDataset-base-v1.0.0/nuscenes/voxel005_base_b16_50e_nuscenes_51m/<run_id>/artifacts/checkpoints/best.ckpt
+    --config-name segmentation3d/ptv3/nuscenes/voxel005_b16_50e_nuscenes_51m \
+    --weights mlruns/ptv3_seg3d/NuScenesDataset-base-v1.0.0/nuscenes/voxel005_b16_50e_nuscenes_51m/<run_id>/artifacts/checkpoints/best.ckpt
 
 autoware-ml test \
-    --config-name detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base \
-    --weights mlruns/ptv3/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base/voxel012_tiny_b8_30e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt
+    --config-name detection3d/ptv3/t4dataset/voxel012_b8_30e_t4dataset_122m_j6gen2_base \
+    --weights mlruns/ptv3/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base/voxel012_b8_30e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 ## Deployment
@@ -99,13 +99,13 @@ convolution plugins.
 
 ```bash
 autoware-ml deploy \
-    --config-name segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m \
-    --weights mlruns/ptv3_seg3d/NuScenesDataset-base-v1.0.0/nuscenes/voxel005_base_b16_50e_nuscenes_51m/<run_id>/artifacts/checkpoints/best.ckpt \
+    --config-name segmentation3d/ptv3/nuscenes/voxel005_b16_50e_nuscenes_51m \
+    --weights mlruns/ptv3_seg3d/NuScenesDataset-base-v1.0.0/nuscenes/voxel005_b16_50e_nuscenes_51m/<run_id>/artifacts/checkpoints/best.ckpt \
     deploy.tensorrt.enabled=false
 
 autoware-ml deploy \
-    --config-name detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base \
-    --weights mlruns/ptv3/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base/voxel012_tiny_b8_30e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt \
+    --config-name detection3d/ptv3/t4dataset/voxel012_b8_30e_t4dataset_122m_j6gen2_base \
+    --weights mlruns/ptv3/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base/voxel012_b8_30e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt \
     deploy.tensorrt.enabled=false
 ```
 
@@ -134,7 +134,7 @@ the stable but slower non-fused attention path, disable both:
 
 ```bash
 autoware-ml deploy \
-    --config-name detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base \
+    --config-name detection3d/ptv3/t4dataset/voxel012_b8_30e_t4dataset_122m_j6gen2_base \
     --weights <checkpoint> \
     model.bbox_head.use_bf16_cross_attention=false \
     deploy.onnx.modules.ptv3_det3d_head.precision=fp32
