@@ -40,6 +40,7 @@ from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     build_serialized_pooling_meta,
 )
 from autoware_ml.models.segmentation3d.encoders.voxel import (
+    MeanVoxelFeatureEncoder,
     PastFutureVoxelFeatureEncoder,
     SweepSplitVoxelFeatureEncoder,
 )
@@ -521,6 +522,58 @@ def test_voxel_encoder_rejects_a_point_layout_without_the_time_lag() -> None:
     with pytest.raises(ValueError, match="time_lag"):
         PastFutureVoxelFeatureEncoder()(
             torch.zeros(2, 3, 4), torch.tensor([1, 1], dtype=torch.int32)
+        )
+
+
+def test_mean_voxel_encoder_averages_the_valid_points_and_ignores_the_padding() -> None:
+    """A voxel is the mean x, y, z and intensity of its valid points."""
+    voxels = torch.zeros(2, 3, 4)
+    voxels[0, 0] = torch.tensor([1.0, 0.0, 0.0, 0.2])
+    voxels[0, 1] = torch.tensor([3.0, 2.0, 1.0, 0.6])
+    # A padded slot past the valid points
+    voxels[0, 2] = torch.tensor([9.0, 9.0, 9.0, 9.0])
+    voxels[1, 0] = torch.tensor([5.0, 1.0, 0.0, 0.4])
+
+    features = MeanVoxelFeatureEncoder()(voxels, torch.tensor([2, 1], dtype=torch.int32))
+
+    assert torch.allclose(features, torch.tensor([[2.0, 1.0, 0.5, 0.4], [5.0, 1.0, 0.0, 0.4]]))
+
+
+def test_mean_voxel_encoder_rejects_points_with_a_time_lag() -> None:
+    with pytest.raises(ValueError, match="got 5 channels"):
+        MeanVoxelFeatureEncoder().check_points(torch.zeros(2, 3, 5), -1)
+
+
+@pytest.mark.parametrize(
+    "encoder_type", [SweepSplitVoxelFeatureEncoder, PastFutureVoxelFeatureEncoder]
+)
+def test_sweep_voxel_encoders_reject_points_without_the_time_lag_channel(
+    encoder_type: type[SweepSplitVoxelFeatureEncoder | PastFutureVoxelFeatureEncoder],
+) -> None:
+    with pytest.raises(ValueError, match="got 4 channels"):
+        encoder_type().check_points(torch.zeros(2, 3, 4), 4)
+
+
+def test_mean_voxel_encoder_takes_single_frames_without_a_time_lag_column() -> None:
+    """Points without a time lag column pass the layout check, a time lag column is rejected."""
+    encoder = MeanVoxelFeatureEncoder()
+    voxels = torch.zeros((1, 1, 4))
+
+    encoder.check_points(voxels, -1)
+    with pytest.raises(ValueError, match="single frames"):
+        encoder.check_points(voxels, 4)
+
+
+def test_encode_checks_the_points_against_the_voxel_encoder() -> None:
+    model = build_seg3d_model(voxel_encoder_type=MeanVoxelFeatureEncoder)
+
+    with pytest.raises(ValueError, match="single frames"):
+        model.encode(
+            voxels=torch.zeros((1, 1, 4)),
+            num_points=torch.ones(1, dtype=torch.int32),
+            voxel_coords=torch.zeros((1, 4), dtype=torch.int32),
+            num_dropped_voxels=torch.tensor(0),
+            time_lag_column=4,
         )
 
 
