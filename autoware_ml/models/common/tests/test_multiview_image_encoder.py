@@ -20,7 +20,10 @@ import pytest
 import torch
 import torch.nn as nn
 
-from autoware_ml.models.common.multiview_image_encoder import MultiviewImageEncoder
+from autoware_ml.models.common.multiview_image_encoder import (
+    MultiviewImageEncoder,
+    encode_multiview_pyramid,
+)
 
 
 class _TwoScaleBackbone(nn.Module):
@@ -154,7 +157,7 @@ def test_return_all_levels_folds_every_neck_output_per_camera() -> None:
 
 def test_pyramid_and_primary_feature_agree() -> None:
     """
-    Input: the same backbone, neck and images through the static pyramid encoding and the
+    Input: the same backbone, neck and images through the pyramid encoding function and the
     encoder without ``return_all_levels``.
     Expected: the encoder's feature is the first level of the pyramid, and a single-tensor
     neck gives a one-level pyramid.
@@ -165,8 +168,8 @@ def test_pyramid_and_primary_feature_agree() -> None:
     neck = _ProjectionNeck()
     images = torch.randn(1, 2, 3, 32, 48)
 
-    pyramid = MultiviewImageEncoder.encode_pyramid(backbone, neck, images)
+    pyramid = encode_multiview_pyramid(backbone, neck, images)
     primary = MultiviewImageEncoder(backbone, neck)(images)
 
     torch.testing.assert_close(pyramid[0], primary)
-    assert len(MultiviewImageEncoder.encode_pyramid(backbone, _FirstMapNeck(), images)) == 1
+    assert len(encode_multiview_pyramid(backbone, _FirstMapNeck(), images)) == 1
