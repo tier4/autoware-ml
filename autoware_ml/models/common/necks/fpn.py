@@ -48,7 +48,6 @@ class FPN(nn.Module):
         out_channels: int,
         num_outs: int | None = None,
         start_level: int = 0,
-        end_level: int = -1,
         add_extra_convs: bool | ExtraConvsSource = False,
         relu_before_extra_convs: bool = False,
         upsample_mode: str = "nearest",
@@ -59,8 +58,7 @@ class FPN(nn.Module):
             in_channels: Channels of every input level, from the finest.
             out_channels: Channels of every output level.
             num_outs: Number of output levels, the number of used inputs when ``None``.
-            start_level: Index of the first input level used.
-            end_level: Index after the last input level used, ``-1`` for all.
+            start_level: Index of the first input level used; every deeper level is used.
             add_extra_convs: Where the extra levels are convolved from, ``False`` for max
                 pooling. ``True`` selects ``"on_input"`` as mmdetection does.
             relu_before_extra_convs: Whether a ReLU precedes every extra convolution but the
@@ -68,7 +66,7 @@ class FPN(nn.Module):
             upsample_mode: Interpolation of the top-down pathway.
 
         Raises:
-            ValueError: If the levels do not fit the inputs, ``num_outs`` is too small or
+            ValueError: If ``start_level`` is not an input level, ``num_outs`` is too small or
                 ``add_extra_convs`` is not a bool or one of the three sources.
         """
         super().__init__()
@@ -82,23 +80,17 @@ class FPN(nn.Module):
         self.in_channels = list(in_channels)
         self.out_channels = out_channels
         num_ins = len(self.in_channels)
-        if end_level == -1 or end_level == num_ins:
-            end_level = num_ins
-        if not 0 <= start_level < end_level <= num_ins:
-            raise ValueError(
-                f"start_level={start_level} and end_level={end_level} must select a non-empty "
-                f"range of the {num_ins} input levels."
-            )
-        num_used = end_level - start_level
+        if not 0 <= start_level < num_ins:
+            raise ValueError(f"start_level={start_level} must index one of the {num_ins} inputs.")
+        num_used = num_ins - start_level
         if num_outs is None:
             num_outs = num_used
         if num_outs < num_used:
             raise ValueError(
                 f"num_outs={num_outs} must cover the {num_used} used input levels; drop input "
-                "levels with start_level and end_level instead."
+                "levels with start_level instead."
             )
         self.start_level = start_level
-        self.end_level = end_level
         self.num_outs = num_outs
         self.add_extra_convs: Literal[False] | ExtraConvsSource = add_extra_convs
         self.relu_before_extra_convs = relu_before_extra_convs
@@ -106,17 +98,16 @@ class FPN(nn.Module):
 
         self.lateral_convs = nn.ModuleList(
             nn.Conv2d(self.in_channels[level], out_channels, kernel_size=1)
-            for level in range(start_level, end_level)
+            for level in range(start_level, num_ins)
         )
         self.fpn_convs = nn.ModuleList(
-            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
-            for _ in range(start_level, end_level)
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1) for _ in range(num_used)
         )
         num_extra = num_outs - num_used
         if add_extra_convs and num_extra > 0:
             for extra in range(num_extra):
                 channels = (
-                    self.in_channels[end_level - 1]
+                    self.in_channels[-1]
                     if extra == 0 and add_extra_convs == "on_input"
                     else out_channels
                 )
@@ -165,7 +156,7 @@ class FPN(nn.Module):
                 outputs.append(F.max_pool2d(outputs[-1], kernel_size=1, stride=2))
         elif num_extra > 0:
             if self.add_extra_convs == "on_input":
-                extra_source = inputs[self.end_level - 1]
+                extra_source = inputs[-1]
             elif self.add_extra_convs == "on_lateral":
                 extra_source = laterals[-1]
             else:  # "on_output", the only source left after the __init__ check.
