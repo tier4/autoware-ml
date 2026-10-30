@@ -83,6 +83,42 @@ class BBoxesMinPointsFilter(BaseTransform):
         return model_gt_sample
 
 
+class BBoxesMinRecordedPointsFilter(BaseTransform):
+    """Filter 3D bounding boxes by the lidar point count the database stores with every box.
+
+    The detection metrics filter by the same count (``min_num_points``).
+    :class:`BBoxesMinPointsFilter` counts the points of the loaded point cloud instead, so this
+    filter is the one for camera-only pipelines.
+    """
+
+    _required_keys = ["detection3d_gt_bboxes_3d"]
+
+    def __init__(self, min_points: int) -> None:
+        """
+        Initialize the BBoxesMinRecordedPointsFilter transform.
+
+        Args:
+            min_points (int): The minimum recorded number of lidar points a bounding box needs
+                to be kept.
+        """
+        super().__init__(probability=None)
+        self.min_points = min_points
+
+    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
+        """Drop the boxes recorded with fewer than ``min_points`` lidar points."""
+        # This is checked in the _validate_required_keys()
+        detection3d_gt_bboxes_3d: BaseBBoxes3D = (
+            model_gt_sample.detection3d_gt_bboxes_3d  # type: ignore[reportOptionalMemberAccess]
+        )
+        if not len(detection3d_gt_bboxes_3d):
+            return model_gt_sample
+
+        detection3d_gt_bboxes_3d.remove_bboxes(
+            detection3d_gt_bboxes_3d.bbox_num_lidar_points >= self.min_points
+        )
+        return model_gt_sample
+
+
 class BBoxesRangeFilter(BaseTransform):
     """Filter 3D bounding boxes whose center lies outside the point cloud range."""
 

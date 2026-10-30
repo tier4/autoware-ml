@@ -1,0 +1,67 @@
+# @package _global_
+# Stage 2 of the three-stage StreamPETR flow (nuScenes pretrain -> T4 gen base -> j6gen2
+# fine-tune): the T4 gen1 and gen2 base databases together, every scenario of both corpora.
+# It pins the accepted run: 4 GPUs x batch 8 (total batch 32), 35 epochs, lr 2.0e-4 with the
+# image backbone at a tenth; rescale both LRs by N/32 for another total batch size N. The
+# corpora mix vehicles whose cameras have different resolutions; the relative resize of the
+# inherited pipelines keeps their framing alike.
+defaults:
+  - base_51m
+  - /datamodule/t4dataset/datasets/detection3d@datasets.gen2_train: default_detection3d_train_dataset
+  - /datamodule/t4dataset/datasets/detection3d@datasets.gen2_test: default_detection3d_test_dataset
+  - /database@database: t4dataset/t4dataset_gen1_base
+  - /database@gen2_database: t4dataset/t4dataset_gen2_base
+  - override /database/t4dataset/taxonomy@database.taxonomy: default_dynamic
+  - override /database/t4dataset/taxonomy@gen2_database.taxonomy: default_dynamic
+  - _self_
+
+batch_size: 8
+num_workers: 8
+experiment_group_name: streampetr/${database.version}/gen1_gen2_base
+experiment_name: vov99_cpfpn_480x640_b8_35e_t4dataset_51m
+
+# Initialize from the stage-1 checkpoint (--weights), the nuScenes pretrain leaf.
+weights: ???
+
+# Datasets of the gen2 source: a copy of the split dataset config reading that database.
+datasets:
+  gen2_train:
+    database_root_path: ${gen2_database.root_path}
+    lidar_intensity_scale: ${gen2_database.lidar_intensity_scale}
+    camera_names: ${camera_names}
+    max_num_2d_gt_bboxes: ${datasets.train.max_num_2d_gt_bboxes}
+    transforms: ${datasets.train.transforms}
+  gen2_test:
+    database_root_path: ${gen2_database.root_path}
+    lidar_intensity_scale: ${gen2_database.lidar_intensity_scale}
+    camera_names: ${camera_names}
+    transforms: ${datasets.test.transforms}
+
+datamodule:
+  sources:
+    # `main` is the gen1 base corpus; the gen2 base corpus joins every split.
+    gen2:
+      _target_: autoware_ml.datamodule.sources.DatasetSource
+      database: ${gen2_database}
+      train_dataset: ${datasets.gen2_train}
+      validation_dataset: ${datasets.gen2_test}
+      test_dataset: ${datasets.gen2_test}
+      predict_dataset: ${datasets.gen2_test}
+
+trainer:
+  # Pin to 4 GPUs so the total batch stays 32 and the learning rates match.
+  devices: 4
+  max_epochs: 35
+
+callbacks:
+  dynamic_validation:
+    # Validate every 5 epochs, then every epoch over the last 10 of the 35-epoch schedule.
+    epoch_intervals: [[0, 5], [25, 1]]
+
+optimizer:
+  lr: 2.0e-4
+
+model:
+  optimizer_group_overrides:
+    img_backbone:
+      lr: 2.0e-5
