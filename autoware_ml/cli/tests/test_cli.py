@@ -428,6 +428,54 @@ class TestCliCommands:
             config_prefix=cli.TASK_CONFIG_PREFIX,
         )
 
+    def test_visualize_previews_data_without_weights(self) -> None:
+        """
+        Input: ``visualize`` with a config name and the noop backend but no weights.
+        Expected: the CLI runs the visualize entrypoint without a runtime stage and passes the
+            backend override, and no weights override.
+        Check: the entrypoint module, the stage and the Hydra overrides of the dispatched call.
+        """
+        with patch("autoware_ml.cli.cli.run_lazy_script") as run_lazy_script_mock:
+            result = self.runner.invoke(
+                app,
+                ["visualize", "--config-name", SAMPLE_CONFIG_NAME, "--backend", "noop"],
+            )
+
+        assert result.exit_code == 0
+        kwargs = run_lazy_script_mock.call_args.kwargs
+        assert kwargs["entrypoint_module"] == cli.VISUALIZE_ENTRYPOINT_MODULE
+        assert kwargs["stage"] is None
+        assert "+visualization.backend=noop" in kwargs["hydra_overrides"]
+        assert not any(override.startswith("+weights=") for override in kwargs["hydra_overrides"])
+
+    def test_visualize_merges_repeated_weights(self) -> None:
+        """
+        Input: ``visualize`` with two ``--weights`` options and ``--split val``.
+        Expected: the two checkpoints are merged into one weights list override, like for
+            ``test``, and the split reaches the visualization group.
+        Check: the weights and split Hydra overrides of the dispatched call.
+        """
+        with patch("autoware_ml.cli.cli.run_lazy_script") as run_lazy_script_mock:
+            result = self.runner.invoke(
+                app,
+                [
+                    "visualize",
+                    "--config-name",
+                    SAMPLE_CONFIG_NAME,
+                    "--weights",
+                    "seg3d.ckpt",
+                    "--weights",
+                    "det3d.ckpt",
+                    "--split",
+                    "val",
+                ],
+            )
+
+        assert result.exit_code == 0
+        hydra_overrides = run_lazy_script_mock.call_args.kwargs["hydra_overrides"]
+        assert "+weights=[seg3d.ckpt,det3d.ckpt]" in hydra_overrides
+        assert "+visualization.split=val" in hydra_overrides
+
     def test_test_requires_weights(self) -> None:
         result = self.runner.invoke(app, ["test", "--config-name", SAMPLE_CONFIG_NAME])
         assert result.exit_code != 0
