@@ -19,3 +19,7 @@ enable_rpe: false
 enable_flash: true
 upcast_attention: false
 upcast_softmax: false
+# Sublayers kept in fp32 under autocast ("mlp", "mlp_out", "attn_proj"); empty runs every
+# linear layer 16-bit. Ported from branch feat/offline-foundation-model-training, whose
+# ablation showed plain bf16 losing ~10 % mIoU and [mlp] restoring the fp32 curve.
+fp32_sublayers: []
