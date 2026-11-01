@@ -32,13 +32,15 @@ from autoware_ml.databases.schemas.image_frames import (
         ([0.1, -0.2, 0.001, 0.002], "plumb_bob"),
         ([0.1, -0.2, 0.001, 0.002, 0.05], "plumb_bob"),
         ([0.1, -0.2, 0.001, 0.002, 0.05, 0.0, 0.0, 0.0], "rational_polynomial"),
+        ([0.1, -0.2, 0.001, 0.002, 0.05] + [0.0] * 7, "thin_prism"),
+        ([0.1, -0.2, 0.001, 0.002, 0.05] + [0.0] * 9, "tilted"),
     ],
 )
 def test_distortion_model_from_coefficients(coefficients: list[float], expected: str) -> None:
     assert distortion_model_from_coefficients(coefficients) == expected
 
 
-@pytest.mark.parametrize("count", [1, 3, 6, 7, 12, 14])
+@pytest.mark.parametrize("count", [1, 3, 6, 7, 13, 15])
 def test_distortion_model_rejects_counts_of_no_model(count: int) -> None:
     with pytest.raises(ValueError, match=f"{count} coefficients"):
         distortion_model_from_coefficients([0.1] * count)
