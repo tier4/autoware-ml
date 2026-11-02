@@ -296,6 +296,9 @@ def test_run_deploy_without_logger_exports_into_the_experiment_run_dir(
             return_value=([checkpoint_path], checkpoint_path),
         ),
         patch.object(deploy_script, "validate_cuda_available"),
+        # It switches the whole process to TF32 matmuls; the CUDA tests that run later in the
+        # same session would then miss their float32 tolerances.
+        patch.object(deploy_script, "configure_torch_runtime"),
         patch.object(deploy_script.torch.cuda, "get_device_name", return_value="stub"),
         patch.object(deploy_script, "build_datamodule"),
         patch.object(deploy_script, "build_data_preprocessor"),
