@@ -178,7 +178,9 @@ deploy:
 Set `dynamo: false` for models that rely on legacy ONNX symbolic functions
 instead of `torch.export`. In that mode, `dynamic_axes` is passed to the legacy
 exporter directly, and `dynamic_shapes` can still be used as a shorthand to
-derive equivalent symbolic axes.
+derive equivalent symbolic axes. A module declares its axes in its export spec
+or in its config, not both, and the config's keys must be the module's input
+or output names; otherwise the export stops with an error.
 
 ### TensorRT Settings
 

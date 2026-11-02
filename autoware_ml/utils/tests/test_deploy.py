@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from omegaconf import OmegaConf
+from omegaconf import DictConfig, OmegaConf
 import re
 
 import onnx
@@ -78,36 +78,62 @@ def test_configured_names_are_refused_when_the_config_is_read() -> None:
             validate_onnx_names_not_configured(OmegaConf.create(cfg))
 
 
-def test_export_to_onnx_prefers_export_spec_dynamic_axes(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    captured_kwargs: dict[str, object] = {}
-    monkeypatch.setattr(
-        torch.onnx,
-        "export",
-        lambda **kwargs: captured_kwargs.update(kwargs),
-    )
-
-    dynamic_axes_override = {"input": {0: "export_spec_batch"}}
-    onnx_cfg = OmegaConf.create(
-        {
-            "opset_version": 17,
-            "dynamo": False,
-            "dynamic_axes": {"input": {0: "configured_batch"}},
-        }
-    )
-
-    spec = ExportSpec(
+def _identity_spec(dynamic_axes: dict[str, dict[int, str]] | None = None) -> ExportSpec:
+    return ExportSpec(
         module=torch.nn.Identity(),
         args=(torch.ones(2, 3),),
         input_names=["input"],
         output_names=["output"],
-        dynamic_axes=dynamic_axes_override,
+        dynamic_axes=dynamic_axes,
     )
-    export_to_onnx(spec, onnx_cfg, tmp_path / "model.onnx")
 
-    assert captured_kwargs["dynamic_axes"] == dynamic_axes_override
+
+def _legacy_onnx_cfg(dynamic_axes: dict[str, dict[int, str]] | None = None) -> DictConfig:
+    cfg: dict[str, object] = {"opset_version": 17, "dynamo": False}
+    if dynamic_axes is not None:
+        cfg["dynamic_axes"] = dynamic_axes
+    return OmegaConf.create(cfg)
+
+
+@pytest.mark.parametrize(
+    ("spec_axes", "config_axes"),
+    [
+        ({"input": {0: "batch"}}, None),
+        (None, {"input": {0: "batch"}, "output": {0: "batch"}}),
+    ],
+    ids=["from_the_spec", "from_the_config"],
+)
+def test_export_to_onnx_applies_the_dynamic_axes_of_one_source(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    spec_axes: dict[str, dict[int, str]] | None,
+    config_axes: dict[str, dict[int, str]] | None,
+) -> None:
+    captured_kwargs: dict[str, object] = {}
+    monkeypatch.setattr(torch.onnx, "export", lambda **kwargs: captured_kwargs.update(kwargs))
+
+    export_to_onnx(_identity_spec(spec_axes), _legacy_onnx_cfg(config_axes), tmp_path / "m.onnx")
+
+    assert captured_kwargs["dynamic_axes"] == (spec_axes or config_axes)
+
+
+def test_export_to_onnx_refuses_dynamic_axes_from_both_the_spec_and_the_config(
+    tmp_path: Path,
+) -> None:
+    """A spec's axes used to replace the config's without a word."""
+    spec = _identity_spec({"input": {0: "spec_batch"}})
+    onnx_cfg = _legacy_onnx_cfg({"input": {0: "config_batch"}})
+
+    with pytest.raises(ValueError, match="Declare them in one place"):
+        export_to_onnx(spec, onnx_cfg, tmp_path / "m.onnx")
+
+
+def test_export_to_onnx_refuses_config_dynamic_axes_of_unknown_tensors(tmp_path: Path) -> None:
+    """The legacy exporter only warns about such an axis and exports it static."""
+    onnx_cfg = _legacy_onnx_cfg({"input": {0: "batch"}, "inputs": {0: "batch"}})
+
+    with pytest.raises(ValueError, match=r"for \['inputs'\], which are not among"):
+        export_to_onnx(_identity_spec(), onnx_cfg, tmp_path / "m.onnx")
 
 
 def test_export_spec_names_every_input_and_some_output() -> None:

@@ -261,6 +261,36 @@ def build_dynamic_axes(onnx_cfg: DictConfig) -> dict[str, dict[int, str]] | None
     return dynamic_axes or None
 
 
+def resolve_legacy_dynamic_axes(
+    spec: ExportSpec, onnx_cfg: DictConfig
+) -> dict[str, dict[int, str]] | None:
+    """Return the dynamic axes the legacy exporter applies to ``spec``.
+
+    The axes come either from the spec or from the module's config, never from both. The
+    config's axes must name the spec's inputs or outputs: the legacy exporter only warns about
+    an unknown name and exports that axis static.
+
+    Raises:
+        ValueError: If both the spec and the config declare axes, or the config names a tensor
+            that is neither an input nor an output of the spec.
+    """
+    config_axes = build_dynamic_axes(onnx_cfg)
+    if config_axes is None:
+        return spec.dynamic_axes
+    if spec.dynamic_axes:
+        raise ValueError(
+            "The export spec declares dynamic_axes and the module's deploy.onnx config declares "
+            f"axes too, for {sorted(config_axes)}. Declare them in one place."
+        )
+    unknown = sorted(set(config_axes) - set(spec.input_names) - set(spec.output_names))
+    if unknown:
+        raise ValueError(
+            f"deploy.onnx declares dynamic axes for {unknown}, which are not among the exported "
+            f"module's inputs {spec.input_names} or outputs {spec.output_names}."
+        )
+    return config_axes
+
+
 def merge_onnx_external_data(onnx_path: Path) -> None:
     """Merge ONNX external data shards back into a single file."""
     import onnx
@@ -313,9 +343,7 @@ def export_to_onnx(spec: ExportSpec, onnx_cfg: DictConfig, output_path: Path) ->
     dynamic_shapes = (
         normalize_dynamic_shapes_for_model(spec.module, dynamic_shapes) if dynamo else None
     )
-    dynamic_axes = None
-    if not dynamo:
-        dynamic_axes = spec.dynamic_axes or build_dynamic_axes(onnx_cfg)
+    dynamic_axes = None if dynamo else resolve_legacy_dynamic_axes(spec, onnx_cfg)
 
     logger.info("Dynamic shapes: %s", dynamic_shapes)
     logger.info("Dynamic axes: %s", dynamic_axes)
