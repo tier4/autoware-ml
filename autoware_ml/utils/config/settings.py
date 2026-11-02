@@ -24,6 +24,7 @@ SETTINGS_FILE = PROJECT_ROOT / ".env"
 SETTINGS_KEYS = frozenset(
     {
         "AUTOWARE_ML_DATA_PATH",
+        "AUTOWARE_ML_CACHE_PATH",
         "AUTOWARE_ML_SCENARIOS_PATH",
         "AUTOWARE_ML_WORKING_DIR",
     }
@@ -39,11 +40,13 @@ class Settings:
 
     Attributes:
         data_path: Dataset root, ``AUTOWARE_ML_DATA_PATH``.
+        cache_path: Root of the cached record tables, ``AUTOWARE_ML_CACHE_PATH``.
         scenarios_path: Root of the scenario lists, ``AUTOWARE_ML_SCENARIOS_PATH``.
         working_dir: Root of the experiment outputs, ``AUTOWARE_ML_WORKING_DIR``.
     """
 
     data_path: Path | None = None
+    cache_path: Path | None = None
     scenarios_path: Path | None = None
     working_dir: Path | None = None
 
@@ -86,6 +89,7 @@ class Settings:
         paths = {key: Path(value) if value else None for key, value in values.items()}
         return cls(
             data_path=paths["AUTOWARE_ML_DATA_PATH"],
+            cache_path=paths["AUTOWARE_ML_CACHE_PATH"],
             scenarios_path=paths["AUTOWARE_ML_SCENARIOS_PATH"],
             working_dir=paths["AUTOWARE_ML_WORKING_DIR"],
         )
@@ -102,6 +106,19 @@ class Settings:
         if self.data_path is None:
             raise ValueError("AUTOWARE_ML_DATA_PATH is not set in .env.")
         return str(self.data_path)
+
+    def resolve_cache_path(self) -> str:
+        """Return the root of the cached record tables.
+
+        Returns:
+            Absolute root of the cached record tables.
+
+        Raises:
+            ValueError: If ``AUTOWARE_ML_CACHE_PATH`` is not set.
+        """
+        if self.cache_path is None:
+            raise ValueError("AUTOWARE_ML_CACHE_PATH is not set in .env.")
+        return str(self.cache_path)
 
     def resolve_scenarios_path(self, relative_path: str) -> str:
         """Return a directory of scenario lists below the root of the scenario lists.

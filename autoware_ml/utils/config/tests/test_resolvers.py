@@ -128,22 +128,31 @@ def _paths(settings: Settings) -> dict[str, str]:
 
 
 def test_paths_follow_the_settings() -> None:
-    settings = Settings(data_path=Path("/data"), working_dir=Path("/outputs"))
+    settings = Settings(
+        data_path=Path("/data"), cache_path=Path("/cache"), working_dir=Path("/outputs")
+    )
 
     assert _paths(settings) == {
         "data_root_path": "/data",
-        "cache_root_path": "/outputs/.cache",
+        "cache_root_path": "/cache",
         "working_dir": "/outputs",
     }
 
 
 def test_working_dir_defaults_to_the_project_root() -> None:
-    assert _paths(Settings(data_path=Path("/data")))["working_dir"] == str(PROJECT_ROOT)
+    settings = Settings(data_path=Path("/data"), cache_path=Path("/cache"))
+
+    assert _paths(settings)["working_dir"] == str(PROJECT_ROOT)
 
 
 def test_data_root_path_requires_the_setting() -> None:
     with pytest.raises(InterpolationResolutionError, match="AUTOWARE_ML_DATA_PATH is not set"):
-        _paths(Settings())
+        _paths(Settings(cache_path=Path("/cache")))
+
+
+def test_cache_root_path_requires_the_setting() -> None:
+    with pytest.raises(InterpolationResolutionError, match="AUTOWARE_ML_CACHE_PATH is not set"):
+        _paths(Settings(data_path=Path("/data")))
 
 
 def test_scenarios_path_resolves_below_the_scenarios_root() -> None:

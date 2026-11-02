@@ -360,16 +360,21 @@ We assume all datasets are stored in the same directory. You can organize paths 
 ## Settings
 
 The settings of a checkout live in `.env` at the repository root. Docker and `pixi` runs read
-the same file, and it is the only place autoware-ml reads them from. Set the dataset root there:
+the same file, and it is the only place autoware-ml reads them from. Set the dataset root and
+the cache directory there:
 
 ```bash
 # Required, read only.
 AUTOWARE_ML_DATA_PATH=/path/to/your/datasets
+
+# Required, read write.
+AUTOWARE_ML_CACHE_PATH=/path/to/your/cache
 ```
 
 | Setting                      | Meaning                                                                      | When empty                                 |
 | ---------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------ |
 | `AUTOWARE_ML_DATA_PATH`      | Root of the datasets                                                         | Commands that read data stop with an error |
+| `AUTOWARE_ML_CACHE_PATH`     | Root of the cached record tables                                             | Commands that read data stop with an error |
 | `AUTOWARE_ML_SCENARIOS_PATH` | Root of the scenario lists, the T4Dataset configs read `t4dataset/` below it | T4Dataset configs stop with an error       |
 | `AUTOWARE_ML_WORKING_DIR`    | Root of the experiment outputs                                               | The repository root                        |
 
@@ -377,8 +382,8 @@ Every setting is an absolute host path. `./docker/container.sh --run` and the
 [dev container](devcontainer.md) mount each setting that is set at the same path inside the
 container, the dataset root read only.
 
-Record tables are cached in `.cache/` of the working dir, the dataset root stays read only.
-Override `cache_root_path` to use another directory.
+Record tables are cached below `AUTOWARE_ML_CACHE_PATH`, so the dataset root stays read only.
+Users who share the datasets can share the cache directory too.
 
 ## Next Steps
 

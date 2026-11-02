@@ -20,7 +20,12 @@ from pathlib import Path
 
 from autoware_ml.utils.config.settings import CONFIGS_ROOT, PROJECT_ROOT, SETTINGS_FILE, Settings
 
-UNSET_SETTINGS = "AUTOWARE_ML_DATA_PATH=\nAUTOWARE_ML_SCENARIOS_PATH=\nAUTOWARE_ML_WORKING_DIR=\n"
+UNSET_SETTINGS = (
+    "AUTOWARE_ML_DATA_PATH=\n"
+    "AUTOWARE_ML_CACHE_PATH=\n"
+    "AUTOWARE_ML_SCENARIOS_PATH=\n"
+    "AUTOWARE_ML_WORKING_DIR=\n"
+)
 
 
 class TestSettingsRead(unittest.TestCase):
@@ -41,6 +46,7 @@ class TestSettingsRead(unittest.TestCase):
     def test_reads_every_setting(self) -> None:
         settings = self.read(
             "AUTOWARE_ML_DATA_PATH=/data\n"
+            "AUTOWARE_ML_CACHE_PATH=/cache\n"
             "AUTOWARE_ML_SCENARIOS_PATH=/scenarios\n"
             "AUTOWARE_ML_WORKING_DIR=/outputs\n"
         )
@@ -49,6 +55,7 @@ class TestSettingsRead(unittest.TestCase):
             settings,
             Settings(
                 data_path=Path("/data"),
+                cache_path=Path("/cache"),
                 scenarios_path=Path("/scenarios"),
                 working_dir=Path("/outputs"),
             ),
@@ -62,6 +69,7 @@ class TestSettingsRead(unittest.TestCase):
             "# Dataset root\n"
             "AUTOWARE_ML_DATA_PATH=/data/a=b\n"
             "\n"
+            "AUTOWARE_ML_CACHE_PATH=\n"
             "AUTOWARE_ML_SCENARIOS_PATH=\n"
             "AUTOWARE_ML_WORKING_DIR=\n"
         )
@@ -70,7 +78,7 @@ class TestSettingsRead(unittest.TestCase):
 
     def test_rejects_other_keys(self) -> None:
         contents = {
-            "missing": "AUTOWARE_ML_DATA_PATH=\nAUTOWARE_ML_SCENARIOS_PATH=\n",
+            "missing": UNSET_SETTINGS.replace("AUTOWARE_ML_CACHE_PATH=\n", ""),
             "unknown": UNSET_SETTINGS + "AUTOWARE_ML_CUSTOM_MOUNTS=\n",
             "repeated": UNSET_SETTINGS + "AUTOWARE_ML_DATA_PATH=/data\n",
         }
@@ -101,11 +109,13 @@ class TestSettingsResolve(unittest.TestCase):
     def test_resolves_the_set_paths(self) -> None:
         settings = Settings(
             data_path=Path("/data"),
+            cache_path=Path("/cache"),
             scenarios_path=Path("/scenarios"),
             working_dir=Path("/outputs"),
         )
 
         self.assertEqual(settings.resolve_data_path(), "/data")
+        self.assertEqual(settings.resolve_cache_path(), "/cache")
         self.assertEqual(settings.resolve_scenarios_path("task"), "/scenarios/task")
         self.assertEqual(settings.resolve_working_dir(), "/outputs")
 
@@ -115,6 +125,10 @@ class TestSettingsResolve(unittest.TestCase):
     def test_data_path_requires_the_setting(self) -> None:
         with self.assertRaisesRegex(ValueError, "AUTOWARE_ML_DATA_PATH is not set"):
             Settings().resolve_data_path()
+
+    def test_cache_path_requires_the_setting(self) -> None:
+        with self.assertRaisesRegex(ValueError, "AUTOWARE_ML_CACHE_PATH is not set"):
+            Settings().resolve_cache_path()
 
     def test_scenarios_path_requires_the_setting(self) -> None:
         with self.assertRaisesRegex(ValueError, "AUTOWARE_ML_SCENARIOS_PATH is not set"):

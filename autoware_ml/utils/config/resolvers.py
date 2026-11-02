@@ -122,5 +122,6 @@ def register_config_resolvers(settings: Settings) -> None:
     OmegaConf.register_new_resolver("merge_lists", merge_lists, replace=True)
     OmegaConf.register_new_resolver("class_count", class_count, replace=True)
     OmegaConf.register_new_resolver("data_path", settings.resolve_data_path, replace=True)
+    OmegaConf.register_new_resolver("cache_path", settings.resolve_cache_path, replace=True)
     OmegaConf.register_new_resolver("working_dir", settings.resolve_working_dir, replace=True)
     OmegaConf.register_new_resolver("scenarios_path", settings.resolve_scenarios_path, replace=True)
