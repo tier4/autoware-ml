@@ -19,38 +19,7 @@ from typing import Any, cast
 
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
-from autoware_ml.utils.config.settings import data_path, scenarios_path, working_dir
-
-
-def settings_data_path() -> str:
-    """Return the dataset root of the ``.env`` settings."""
-    return str(data_path())
-
-
-def settings_working_dir() -> str:
-    """Return the root of the experiment outputs of the ``.env`` settings."""
-    return str(working_dir())
-
-
-def settings_scenarios_path(relative_path: str) -> str:
-    """Return a directory of scenario lists below the root of the ``.env`` settings.
-
-    Args:
-        relative_path: Path relative to the root of the scenario lists, e.g. the lists of one
-            T4Dataset task.
-
-    Returns:
-        Absolute path of the directory.
-
-    Raises:
-        ValueError: If ``AUTOWARE_ML_SCENARIOS_PATH`` is not set.
-    """
-    root = scenarios_path()
-    if root is None:
-        raise ValueError(
-            f"AUTOWARE_ML_SCENARIOS_PATH is not set in .env, it holds {relative_path}."
-        )
-    return str(root / relative_path)
+from autoware_ml.utils.config.settings import Settings
 
 
 def strip_tasks_prefix(config_name: str) -> str:
@@ -142,12 +111,16 @@ def class_count(class_names: Iterable[Any]) -> int:
     return len(list(class_names))
 
 
-def register_config_resolvers() -> None:
-    """Register all custom OmegaConf resolvers required by bundled configs."""
+def register_config_resolvers(settings: Settings) -> None:
+    """Register all custom OmegaConf resolvers required by bundled configs.
+
+    Args:
+        settings: Settings of the checkout the path resolvers read.
+    """
     OmegaConf.register_new_resolver("user_config_name", strip_tasks_prefix, replace=True)
     OmegaConf.register_new_resolver("seg3d_class_mapping", raw_name_to_train_index, replace=True)
     OmegaConf.register_new_resolver("merge_lists", merge_lists, replace=True)
     OmegaConf.register_new_resolver("class_count", class_count, replace=True)
-    OmegaConf.register_new_resolver("data_path", settings_data_path, replace=True)
-    OmegaConf.register_new_resolver("working_dir", settings_working_dir, replace=True)
-    OmegaConf.register_new_resolver("scenarios_path", settings_scenarios_path, replace=True)
+    OmegaConf.register_new_resolver("data_path", settings.resolve_data_path, replace=True)
+    OmegaConf.register_new_resolver("working_dir", settings.resolve_working_dir, replace=True)
+    OmegaConf.register_new_resolver("scenarios_path", settings.resolve_scenarios_path, replace=True)

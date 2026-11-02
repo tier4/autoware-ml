@@ -27,7 +27,7 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig
 
 from autoware_ml.utils.config.resolvers import register_config_resolvers
-from autoware_ml.utils.config.settings import CONFIGS_ROOT
+from autoware_ml.utils.config.settings import CONFIGS_ROOT, Settings
 from autoware_ml.datamodule.streaming_data_module import StreamingDataModule
 
 # An experiment composing a database datamodule, which does not stream.
@@ -49,7 +49,7 @@ def compose_streaming_experiment(experiment: str) -> DictConfig:
     Returns:
       DictConfig: The composed experiment.
     """
-    register_config_resolvers()
+    register_config_resolvers(Settings())
     ConfigStore.instance().store(
         name="streaming_experiment",
         node={

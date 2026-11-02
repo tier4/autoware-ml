@@ -24,7 +24,7 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import OmegaConf
 
 from autoware_ml.utils.config.resolvers import register_config_resolvers
-from autoware_ml.utils.config.settings import CONFIGS_ROOT
+from autoware_ml.utils.config.settings import CONFIGS_ROOT, Settings
 
 # Building blocks and bases are not runnable on their own, only the leaves are.
 _BLOCKS = (
@@ -45,7 +45,7 @@ EXPERIMENT_CONFIGS = sorted(
 
 def compose_experiment(config_name: str):
     """Compose one experiment config with the run context the training entrypoint provides."""
-    register_config_resolvers()
+    register_config_resolvers(Settings())
     GlobalHydra.instance().clear()
     with initialize_config_dir(version_base=None, config_dir=str(CONFIGS_ROOT)):
         cfg = compose(config_name=config_name, return_hydra_config=True)

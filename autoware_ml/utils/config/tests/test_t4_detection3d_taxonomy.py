@@ -9,7 +9,7 @@ from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 
 from autoware_ml.utils.config.resolvers import register_config_resolvers
-from autoware_ml.utils.config.settings import CONFIGS_ROOT
+from autoware_ml.utils.config.settings import CONFIGS_ROOT, Settings
 from autoware_ml.databases.taxonomy import DatabaseTaxonomy
 
 T4_DETECTION3D_CONFIG = (
@@ -18,7 +18,7 @@ T4_DETECTION3D_CONFIG = (
 
 
 def _t4_taxonomy() -> DatabaseTaxonomy:
-    register_config_resolvers()
+    register_config_resolvers(Settings())
     GlobalHydra.instance().clear()
     with initialize_config_dir(version_base=None, config_dir=str(CONFIGS_ROOT)):
         cfg = compose(config_name=T4_DETECTION3D_CONFIG, return_hydra_config=True)

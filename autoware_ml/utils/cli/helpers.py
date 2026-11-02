@@ -27,10 +27,10 @@ from collections.abc import Sequence
 from typing import Any
 
 from autoware_ml.utils.config.resolvers import register_config_resolvers
-from autoware_ml.utils.config.settings import CONFIGS_ROOT
+from autoware_ml.utils.config.settings import CONFIGS_ROOT, SETTINGS_FILE, Settings
 from autoware_ml.utils.session import AUTOWARE_ML_SESSION_OPTION, TMUX_BASE_COMMAND
 
-register_config_resolvers()
+register_config_resolvers(Settings.read(SETTINGS_FILE))
 
 _NUMERIC_VALUE_PATTERN = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
 

@@ -10,13 +10,12 @@ from hydra.utils import instantiate
 from omegaconf import OmegaConf
 from omegaconf.errors import InterpolationResolutionError
 
-from autoware_ml.utils.config.settings import CONFIGS_ROOT, PROJECT_ROOT
+from autoware_ml.utils.config.settings import CONFIGS_ROOT, PROJECT_ROOT, Settings
 from autoware_ml.utils.config.resolvers import (
     merge_lists,
     raw_name_to_train_index,
     register_config_resolvers,
 )
-from autoware_ml.utils.config.tests.settings import write_settings
 
 _NAME_MAPPING = {
     "car": "car",
@@ -49,7 +48,7 @@ def test_raw_name_to_train_index_sends_null_and_unknown_finals_to_ignore() -> No
 
 
 def test_seg3d_class_mapping_resolver_in_interpolation() -> None:
-    register_config_resolvers()
+    register_config_resolvers(Settings())
     cfg = OmegaConf.create(
         {
             "ignore_index": -1,
@@ -79,7 +78,7 @@ def test_merge_lists_concatenates_in_order() -> None:
 
 
 def test_merge_lists_resolver_appends_across_namespaces() -> None:
-    register_config_resolvers()
+    register_config_resolvers(Settings())
     cfg = OmegaConf.create(
         {
             "det": {"metrics": [{"name": "map", "classes": "${classes}"}]},
@@ -94,7 +93,7 @@ def test_merge_lists_resolver_appends_across_namespaces() -> None:
 
 
 def test_merge_lists_resolver_preserves_hydra_recursive_instantiation() -> None:
-    register_config_resolvers()
+    register_config_resolvers(Settings())
     cfg = OmegaConf.create(
         {
             "det": {
@@ -122,59 +121,40 @@ def test_merge_lists_resolver_preserves_hydra_recursive_instantiation() -> None:
     assert model.metrics[0].classes == ["car", "truck"]
 
 
-def _paths() -> dict[str, str]:
-    register_config_resolvers()
+def _paths(settings: Settings) -> dict[str, str]:
+    register_config_resolvers(settings)
     paths = OmegaConf.load(CONFIGS_ROOT / "defaults" / "modules" / "paths.yaml")
     return {key: paths[key] for key in ("data_root_path", "cache_root_path", "working_dir")}
 
 
-def test_paths_follow_the_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    write_settings(
-        tmp_path,
-        monkeypatch,
-        AUTOWARE_ML_DATA_PATH=str(tmp_path / "data"),
-        AUTOWARE_ML_WORKING_DIR=str(tmp_path / "outputs"),
-    )
+def test_paths_follow_the_settings() -> None:
+    settings = Settings(data_path=Path("/data"), working_dir=Path("/outputs"))
 
-    assert _paths() == {
-        "data_root_path": str(tmp_path / "data"),
-        "cache_root_path": str(tmp_path / "outputs" / ".cache"),
-        "working_dir": str(tmp_path / "outputs"),
+    assert _paths(settings) == {
+        "data_root_path": "/data",
+        "cache_root_path": "/outputs/.cache",
+        "working_dir": "/outputs",
     }
 
 
-def test_working_dir_defaults_to_the_project_root(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    write_settings(tmp_path, monkeypatch, AUTOWARE_ML_DATA_PATH=str(tmp_path))
-
-    assert _paths()["working_dir"] == str(PROJECT_ROOT)
+def test_working_dir_defaults_to_the_project_root() -> None:
+    assert _paths(Settings(data_path=Path("/data")))["working_dir"] == str(PROJECT_ROOT)
 
 
-def test_data_root_path_requires_the_setting(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    write_settings(tmp_path, monkeypatch)
-
+def test_data_root_path_requires_the_setting() -> None:
     with pytest.raises(InterpolationResolutionError, match="AUTOWARE_ML_DATA_PATH is not set"):
-        _paths()
+        _paths(Settings())
 
 
-def test_scenarios_path_resolves_below_the_scenarios_root(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    register_config_resolvers()
-    write_settings(tmp_path, monkeypatch, AUTOWARE_ML_SCENARIOS_PATH=str(tmp_path))
+def test_scenarios_path_resolves_below_the_scenarios_root() -> None:
+    register_config_resolvers(Settings(scenarios_path=Path("/scenarios")))
     cfg = OmegaConf.create({"lists": "${scenarios_path:t4dataset/segmentation3d}"})
 
-    assert cfg.lists == str(tmp_path / "t4dataset" / "segmentation3d")
+    assert cfg.lists == "/scenarios/t4dataset/segmentation3d"
 
 
-def test_scenarios_path_requires_the_setting(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    register_config_resolvers()
-    write_settings(tmp_path, monkeypatch)
+def test_scenarios_path_requires_the_setting() -> None:
+    register_config_resolvers(Settings())
     cfg = OmegaConf.create({"lists": "${scenarios_path:t4dataset}"})
 
     with pytest.raises(InterpolationResolutionError, match="AUTOWARE_ML_SCENARIOS_PATH is not set"):
