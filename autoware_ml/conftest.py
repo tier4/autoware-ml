@@ -20,7 +20,7 @@ starts from a settings file with no setting set, a test that needs a setting wri
 
 import pytest
 
-from autoware_ml.configs.tests.settings import write_settings
+from autoware_ml.utils.config.tests.settings import write_settings
 
 
 @pytest.fixture(autouse=True)

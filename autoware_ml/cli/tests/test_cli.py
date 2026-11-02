@@ -26,6 +26,8 @@ from unittest.mock import patch
 import pytest
 import typer.main
 from click.shell_completion import get_completion_class
+from hydra import compose, initialize_config_dir
+from hydra.core.global_hydra import GlobalHydra
 from omegaconf import OmegaConf
 from typer.testing import CliRunner
 
@@ -34,6 +36,7 @@ import autoware_ml.cli.cli as cli
 import autoware_ml.cli.runtime as cli_runtime
 import autoware_ml.utils.cli.helpers as helpers
 from autoware_ml.cli.cli import app
+from autoware_ml.utils.config.settings import CONFIGS_ROOT
 from autoware_ml.utils.cli.helpers import (
     adjust_argv,
     complete_config_value,
@@ -122,7 +125,7 @@ class TestResolveConfigReference:
 
         assert config_path == str(tmp_path)
         assert config_name == "custom_train"
-        assert hydra_overrides == ["hydra.searchpath=[pkg://autoware_ml.configs]"]
+        assert hydra_overrides == [f"hydra.searchpath=[file://{CONFIGS_ROOT}]"]
 
     def test_resolve_absolute_yaml_path(self, tmp_path: Path) -> None:
         config_file = tmp_path / "custom_train.yaml"
@@ -134,7 +137,7 @@ class TestResolveConfigReference:
 
         assert config_path == str(tmp_path)
         assert config_name == "custom_train"
-        assert hydra_overrides == ["hydra.searchpath=[pkg://autoware_ml.configs]"]
+        assert hydra_overrides == [f"hydra.searchpath=[file://{CONFIGS_ROOT}]"]
 
 
 class TestCompleteConfigValue:
@@ -571,11 +574,8 @@ class TestCliCommands:
     def test_test_single_device_override_wins_in_composed_config(self) -> None:
         # End-to-end: the override order the CLI + runtime produce (user devices first,
         # forcing override last) resolves to a single device in the real config.
-        from hydra import compose, initialize_config_module
-        from hydra.core.global_hydra import GlobalHydra
-
         GlobalHydra.instance().clear()
-        with initialize_config_module(version_base=None, config_module="autoware_ml.configs"):
+        with initialize_config_dir(version_base=None, config_dir=str(CONFIGS_ROOT)):
             cfg = compose(
                 config_name=f"tasks/{SAMPLE_CONFIG_NAME}",
                 overrides=["trainer.devices=4", "++trainer.devices=1"],
@@ -743,7 +743,7 @@ class TestCliRuntime:
                 "autoware_ml.cli.runtime.resolve_config_reference",
                 return_value=(None, f"tasks/{config_name}", []),
             ),
-            patch("autoware_ml.cli.runtime.initialize_config_module", return_value=nullcontext()),
+            patch("autoware_ml.cli.runtime.initialize_config_dir", return_value=nullcontext()),
             patch("autoware_ml.cli.runtime.compose", return_value=cfg),
         ):
             yield
@@ -909,7 +909,7 @@ class TestResolveHydraArgv:
             "--config-path",
             str(tmp_path),
         ]
-        assert "hydra.searchpath=[pkg://autoware_ml.configs]" in hydra_argv
+        assert f"hydra.searchpath=[file://{CONFIGS_ROOT}]" in hydra_argv
 
     def test_preserves_explicit_hydra_searchpath_override(self, tmp_path: Path) -> None:
         config_file = tmp_path / "custom_train.yaml"
@@ -922,7 +922,7 @@ class TestResolveHydraArgv:
         )
 
         assert hydra_argv.count("hydra.searchpath=[file:///tmp/custom]") == 1
-        assert "hydra.searchpath=[pkg://autoware_ml.configs]" not in hydra_argv
+        assert f"hydra.searchpath=[file://{CONFIGS_ROOT}]" not in hydra_argv
 
     def test_resolves_runtime_entrypoint_script_path(self) -> None:
         runtime_argv = cli_runtime.resolve_hydra_entrypoint_argv(

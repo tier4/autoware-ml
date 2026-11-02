@@ -22,7 +22,7 @@ import tempfile
 from pathlib import Path
 from typing import Sequence
 
-from hydra import compose, initialize_config_dir, initialize_config_module
+from hydra import compose, initialize_config_dir
 from hydra.core.global_hydra import GlobalHydra
 import mlflow
 from mlflow.entities import ViewType
@@ -30,6 +30,7 @@ from mlflow.tracking import MlflowClient
 from omegaconf import DictConfig
 
 from autoware_ml.utils.cli.helpers import resolve_config_reference
+from autoware_ml.utils.config.settings import CONFIGS_ROOT
 from autoware_ml.utils.mlflow_helpers import (
     MLFLOW_PARENT_RUN_ID,
     artifact_uri_to_path,
@@ -58,7 +59,7 @@ def compose_config_reference(
     compose_overrides = [*overrides, *extra_config_overrides]
     GlobalHydra.instance().clear()
     if resolved_config_path is None:
-        with initialize_config_module(version_base=None, config_module="autoware_ml.configs"):
+        with initialize_config_dir(version_base=None, config_dir=str(CONFIGS_ROOT)):
             return compose(config_name=resolved_config_name, overrides=compose_overrides)
     with initialize_config_dir(version_base=None, config_dir=resolved_config_path):
         return compose(config_name=resolved_config_name, overrides=compose_overrides)

@@ -33,8 +33,8 @@ from lightning.pytorch.utilities.rank_zero import rank_zero_only
 from omegaconf import DictConfig, OmegaConf, open_dict
 import polars as pl
 
-from autoware_ml.configs.paths import CONFIGS_ROOT
-from autoware_ml.configs.resolvers import register_config_resolvers
+from autoware_ml.utils.config.resolvers import register_config_resolvers
+from autoware_ml.utils.config.settings import CONFIGS_ROOT
 from autoware_ml.utils.mlflow_helpers import sanitize_mlflow_param_keys
 
 logger = logging.getLogger(__name__)
