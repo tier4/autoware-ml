@@ -149,8 +149,8 @@ class GraphStage:
                     f"GraphStage {self.name!r} lists {repeated} more than once in its {kind}; "
                     "each is one ONNX tensor name."
                 )
-        # The legacy exporter only warns about an axis of an unknown tensor and exports it
-        # static.
+        # The TorchScript exporter only warns about an axis of an unknown tensor and exports
+        # it static.
         unknown = sorted(set(self.onnx_dynamic_axes) - set(self.inputs) - set(self.outputs))
         if unknown:
             raise ValueError(
