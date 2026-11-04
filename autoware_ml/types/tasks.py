@@ -7,3 +7,4 @@ class TaskType(StrEnum):
     CLASSIFICATION2D = "classification2d"
     DETECTION3D = "detection3d"
     SEGMENTATION3D = "segmentation3d"
+    PREDICTION = "prediction"
