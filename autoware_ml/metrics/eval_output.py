@@ -132,6 +132,21 @@ class Detection3DEvalOutput(BaseModel):
         """Whether the frames carry the lidar point count of every ground truth box."""
         return all(frame.gt_num_points is not None for frame in self.frames)
 
+    @property
+    def check_all_gt_observed(self) -> bool:
+        """Whether the frames carry the observation flag of every ground truth box."""
+        return all(frame.gt_observed is not None for frame in self.frames)
+
+    @property
+    def check_all_tracks(self) -> bool:
+        """Whether the frames carry the object identities, observation flags and streams."""
+        return all(
+            frame.gt_instance_ids is not None
+            and frame.gt_observed is not None
+            and frame.stream_id is not None
+            for frame in self.frames
+        )
+
 
 class Segmentation3DEvalFrame(BaseModel):
     """
@@ -249,6 +264,8 @@ class MetricRequirements(BaseModel):
       segmentation3d: The suite reads the segmentation frames.
       frame_meta: A filter or a collision provider reads the pose and lanelet map of the frames.
       gt_num_points: A ground truth point filter reads the lidar point count of every box.
+      gt_observed: A suite counts only the boxes a temporal model observed in its stream.
+      tracks: A tracking suite follows the objects by their identities within their streams.
       scores: A point metric reads the per-class scores of the points.
       gt_boxes: A cross-task point metric reads the detection ground truth of the frames.
     """
@@ -259,6 +276,8 @@ class MetricRequirements(BaseModel):
     segmentation3d: bool = False
     frame_meta: bool = False
     gt_num_points: bool = False
+    gt_observed: bool = False
+    tracks: bool = False
     scores: bool = False
     gt_boxes: bool = False
 
@@ -289,6 +308,13 @@ class MetricRequirements(BaseModel):
             missing.append("frame_meta (ego pose, scene token and lanelet map path per frame)")
         if self.gt_num_points and not (detection is not None and detection.check_all_gt_num_points):
             missing.append("gt_num_points (lidar points per ground truth box)")
+        if self.gt_observed and not (detection is not None and detection.check_all_gt_observed):
+            missing.append("gt_observed (observation flag per ground truth box, temporal models)")
+        if self.tracks and not (detection is not None and detection.check_all_tracks):
+            missing.append(
+                "gt_instance_ids, gt_observed and stream_id (object identities and streams, "
+                "temporal models)"
+            )
         if self.scores and not (segmentation is not None and segmentation.check_all_scores):
             missing.append("scores (per-class probabilities per point)")
         if self.gt_boxes and not (segmentation is not None and segmentation.check_all_gt_boxes):

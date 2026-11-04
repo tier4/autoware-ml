@@ -30,6 +30,7 @@ from autoware_ml.metrics.detection3d.matching import (
     ignored_prediction_mask,
 )
 from autoware_ml.metrics.detection3d.suite import Detection3DMetricSuite
+from autoware_ml.metrics.eval_output import Detection3DEvalFrame, Detection3DEvalOutput, EvalOutput
 from autoware_ml.metrics.report import MetricKey, MetricReport
 from autoware_ml.metrics.tests.eval_output_fixtures import (
     detection_eval_output,
@@ -123,6 +124,36 @@ def _grouped_report(
                     torch.tensor(gt_points),
                 )
             ]
+        )
+    )
+    return suite.result(EvalStage.VAL)
+
+
+def _observed_report(
+    pred_scores: list[float], gt_observed: torch.Tensor | None = torch.tensor([True, False])
+) -> MetricReport:
+    """Score a car at 10 m and a car at 30 m its stream has not observed yet, both detected."""
+    suite = Detection3DMetricSuite(
+        components=[BoxCounts(), MeanAP(stages=("val",))],
+        class_names=_CLASS_NAMES,
+        observed_only=True,
+        ranges=(MetricRange("0-100m", 0.0, 100.0),),
+    )
+    suite.update(
+        EvalOutput(
+            detection3d=Detection3DEvalOutput(
+                frames=[
+                    Detection3DEvalFrame(
+                        predictions=prediction(
+                            _boxes(10.5, 30.5), torch.tensor(pred_scores), torch.tensor([0, 0])
+                        ),
+                        gt_boxes=_boxes(10.0, 30.0),
+                        gt_labels=torch.tensor([0, 0]),
+                        gt_observed=gt_observed,
+                        key_frame=True,
+                    )
+                ]
+            )
         )
     )
     return suite.result(EvalStage.VAL)
@@ -348,6 +379,32 @@ class TestGtKeepMask(unittest.TestCase):
         keep = gt_keep_mask(boxes, torch.zeros(2), torch.tensor([1, 5]), ("car",), None, 2)
 
         self.assertEqual(keep.tolist(), [False, True])
+
+
+class TestUnobservedBoxes(unittest.TestCase):
+    """A detection of a box the stream has not observed yet counts neither way."""
+
+    def test_the_detection_of_an_unobserved_box_leaves_with_it(self) -> None:
+        """
+        Input: an observed and an unobserved car, both detected, either detection scored higher.
+        Expected: the detection of the unobserved car leaves with it instead of counting as a
+          false positive.
+        Check: one GT box, one prediction and a perfect AP of the car.
+        """
+        for pred_scores in ([0.9, 0.8], [0.8, 0.9]):
+            report = _observed_report(pred_scores)
+
+            self.assertEqual(report.metric_value(MetricKey(name="num_gts_car")), 1.0)
+            self.assertEqual(report.metric_value(MetricKey(name="num_preds_car")), 1.0)
+            self.assertAlmostEqual(report.metric_value(MetricKey(name="mAP_car")), 1.0)
+
+    def test_observed_only_refuses_a_frame_without_observation_flags(self) -> None:
+        """
+        Input: the two detected cars of a frame that carries no observation flags.
+        Expected: ValueError, the suite cannot tell the observed boxes.
+        """
+        with self.assertRaisesRegex(ValueError, "carries no gt_observed"):
+            _observed_report([0.9, 0.8], gt_observed=None)
 
 
 if __name__ == "__main__":
