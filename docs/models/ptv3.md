@@ -14,6 +14,8 @@ PointTransformerV3 is a LiDAR encoder for LiDAR 3D semantic segmentation and
   (`PTv3Det3DFeatureFusion`), scatters them onto a dense BEV canvas at the
   detection-head resolution, and feeds a `TransFusionHead`.
 
+The [SparseDrive](sparsedrive.md) model builds its temporal detection on the PTv3 encoder.
+
 The models read single lidar frames, every point as `(x, y, z, intensity)`. The voxel feature
 encoder turns each voxel into the mean x, y, z and intensity of its points, 4 features per voxel,
 and the detection heads predict no velocity. The 6 cm teacher reads the current frame and one

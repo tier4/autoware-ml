@@ -49,6 +49,8 @@ class Detection3DEvalFrame(BaseModel):
       gt_boxes: Ground truth boxes, 7 or more parameters each, in the frame of the points.
       gt_labels: Class index of every ground truth box.
       gt_num_points: Lidar points inside every ground truth box, when the dataset counts them.
+      gt_instance_ids: Object identity of every ground truth box, equal across the frames of a
+        scene, when the dataset carries it. The tracking metrics follow the objects by it.
       is_padding: Whether the frame only pads a streaming lane. It is kept so every rank holds
         as many frames as the others for the gather, and the metrics leave it out.
       key_frame: Whether the frame is a key frame of its scene. A frame between key frames feeds
@@ -63,6 +65,7 @@ class Detection3DEvalFrame(BaseModel):
     gt_boxes: Float32[torch.Tensor, "num_gt_boxes num_box_params"]
     gt_labels: Int64[torch.Tensor, " num_gt_boxes"]
     gt_num_points: Int[torch.Tensor, " num_gt_boxes"] | None = None
+    gt_instance_ids: Int64[torch.Tensor, " num_gt_boxes"] | None = None
     is_padding: bool = False
     key_frame: bool
     frame_meta: InstanceOf[FrameMetaSample] | None = None
@@ -88,6 +91,11 @@ class Detection3DEvalFrame(BaseModel):
         if self.gt_num_points is not None and self.gt_num_points.shape[0] != num_gt_boxes:
             raise ValueError(
                 f"gt_num_points describe {self.gt_num_points.shape[0]} boxes, gt_boxes "
+                f"{num_gt_boxes}."
+            )
+        if self.gt_instance_ids is not None and self.gt_instance_ids.shape[0] != num_gt_boxes:
+            raise ValueError(
+                f"gt_instance_ids describe {self.gt_instance_ids.shape[0]} boxes, gt_boxes "
                 f"{num_gt_boxes}."
             )
         return self

@@ -23,6 +23,7 @@ import torch
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.points.base_points import BasePoints
+from autoware_ml.geometry.bbox_3d.physical import physical_shape_mask
 from autoware_ml.geometry.bbox_3d.base_bbox3d import BaseBBoxes3D
 from autoware_ml.transforms.base import BaseTransform
 from autoware_ml.types.geometry import Box3DFieldIndex
@@ -290,14 +291,14 @@ class BBoxesPhysicalFilter(BaseTransform):
             velocity = detection3d_gt_bboxes_3d.bbox_params[:, Box3DFieldIndex.VELOCITY_X :]
             velocity[~torch.isfinite(velocity)] = 0.0
 
-        is_finite_mask = torch.isfinite(detection3d_gt_bboxes_3d.bbox_params).all(dim=1)
-        has_positive_dims_mask = (detection3d_gt_bboxes_3d.dims > 0.0).all(dim=1)
+        params = detection3d_gt_bboxes_3d.bbox_params
+        velocity = params[:, Box3DFieldIndex.VELOCITY_X :]
         # Only the ground-plane velocity is bounded.
-        is_speed_physical_mask = (
+        is_speed_physical_mask = torch.isfinite(velocity).all(dim=1) & (
             torch.linalg.norm(detection3d_gt_bboxes_3d.velocity[:, :2], dim=1)
             <= self.max_absolute_speed
         )
 
-        keep_bboxes_mask = is_finite_mask & has_positive_dims_mask & is_speed_physical_mask
+        keep_bboxes_mask = physical_shape_mask(params) & is_speed_physical_mask
         detection3d_gt_bboxes_3d.remove_bboxes(keep_bboxes_mask)
         return model_gt_sample

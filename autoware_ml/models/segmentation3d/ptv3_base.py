@@ -347,7 +347,7 @@ class PTv3BaseModel(ModuleBaseModel):
         Returns:
             Every head's outputs by name, in the order the heads are declared.
         """
-        tensors = self.serialize_points(multi_task_batch_inputs)
+        tensors = self.deployment_inputs(multi_task_batch_inputs)
         encoder = executors[LIDAR_ENCODER_GRAPH]
         tensors.update(encoder.run(**{name: tensors[name] for name in encoder.input_names}))
         outputs: dict[str, GraphTensor] = {}
@@ -355,6 +355,21 @@ class PTv3BaseModel(ModuleBaseModel):
             if name != LIDAR_ENCODER_GRAPH:
                 outputs.update(head.run(**{key: tensors[key] for key in head.input_names}))
         return outputs
+
+    def deployment_inputs(
+        self, multi_task_batch_inputs: ModelBatchInputs
+    ) -> dict[str, GraphTensor]:
+        """Return the inputs of every declared graph by name, the serialized points by default.
+
+        A model whose head graphs take inputs beyond the encoder stages adds them here.
+
+        Args:
+            multi_task_batch_inputs: The preprocessed single-sample batch, holding the voxels.
+
+        Returns:
+            The inputs of every graph by name.
+        """
+        return self.serialize_points(multi_task_batch_inputs)
 
     def serialize_points(self, multi_task_batch_inputs: ModelBatchInputs) -> dict[str, GraphTensor]:
         """Serialize the voxels of a single-sample batch and precompute every pooling tensor.
@@ -409,11 +424,13 @@ class PTv3BaseModel(ModuleBaseModel):
                 produced[f"serialized_pooling_{stage_index}_{field}"] = getattr(meta, field)
             # The heads read the cluster under the name of their input.
             produced[f"pooling_cluster_{stage_index}"] = meta.cluster
-        # The detection head reads the skip stage's grid coordinates.
-        skip_stage = len(metadata) - 1
-        produced[f"point_grid_coord_{skip_stage}"] = (
-            encoder_inputs["grid_coord"] if skip_stage == 0 else metadata[skip_stage - 1].grid_coord
+        # The detection heads read the grid coordinates of the stages they rebuild
+        stage_grid_coords = (
+            encoder_inputs["grid_coord"],
+            *(meta.grid_coord for meta in metadata[:-1]),
         )
+        for stage_index, grid_coord in enumerate(stage_grid_coords):
+            produced[f"point_grid_coord_{stage_index}"] = grid_coord
         return produced
 
 

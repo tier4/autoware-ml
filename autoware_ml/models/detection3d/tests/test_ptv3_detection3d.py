@@ -22,8 +22,10 @@ import pytest
 import torch
 
 from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
+from autoware_ml.models.detection3d.ptv3 import rebuild_point_chain
 from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
     build_inputs,
+    build_point_chain,
     build_seg3d_model,
     build_trans_model,
 )
@@ -95,3 +97,15 @@ def test_ptv3_detection3d_loads_encoder_from_seg3d_checkpoint_via_matching_weigh
     assert torch.allclose(loaded_state[first_key], reference_state[first_key])
     assert not any(parameter.requires_grad for parameter in model.encoder.parameters())
     assert model.encoder.training is False
+
+
+def test_point_chain_rejects_voxel_coordinates_of_another_stage_count() -> None:
+    """
+    Input: a three stage chain given the voxel coordinates of one stage only.
+    Expected: the clusters and coordinates cover every stage but the deepest, nothing else.
+    Check: a ValueError naming the expected count is raised.
+    """
+    feats, clusters, grid_coords = build_point_chain()
+
+    with pytest.raises(ValueError, match="of 2 stages"):
+        rebuild_point_chain(feats, clusters, grid_coords[:1])

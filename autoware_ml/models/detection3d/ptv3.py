@@ -29,6 +29,7 @@ from copy import deepcopy
 from typing import Any
 
 import torch
+from jaxtyping import Float, Int64, Integer
 import torch.nn as nn
 from torch.onnx.operators import shape_as_tensor
 
@@ -312,28 +313,73 @@ class PTv3Det3DBEVNeck(nn.Module):
         return self.bev_encoder(bev)
 
 
-def det3d_head_export_input_names(stage_count: int) -> list[str]:
-    """Return the split det-head export input names for a given stage count."""
-    skip_stage = stage_count - 2
-    deep_stage = stage_count - 1
+def det3d_head_export_input_names(stage_count: int, finest_stage: int) -> list[str]:
+    """Return the split det-head export input names of the stages from ``finest_stage`` on."""
+    stages = range(finest_stage, stage_count)
     return [
-        f"point_feat_{skip_stage}",
-        f"point_feat_{deep_stage}",
-        f"pooling_cluster_{skip_stage}",
-        f"point_grid_coord_{skip_stage}",
+        *(f"point_feat_{stage}" for stage in stages),
+        *(f"pooling_cluster_{stage}" for stage in stages[:-1]),
+        *(f"point_grid_coord_{stage}" for stage in stages[:-1]),
     ]
 
 
-def det3d_head_export_dynamic_axes(stage_count: int) -> dict[str, dict[int, str]]:
-    """Build dynamic axes for the split det-head export graph inputs."""
-    skip_stage = stage_count - 2
-    deep_stage = stage_count - 1
+def det3d_head_export_dynamic_axes(
+    stage_count: int, finest_stage: int
+) -> dict[str, dict[int, str]]:
+    """Build the dynamic axes of the split det-head export inputs from ``finest_stage`` on."""
+    stages = range(finest_stage, stage_count)
     return {
-        f"point_feat_{skip_stage}": {0: stage_voxel_axis_name(skip_stage)},
-        f"point_feat_{deep_stage}": {0: stage_voxel_axis_name(deep_stage)},
-        f"pooling_cluster_{skip_stage}": {0: f"serialized_pooling_{skip_stage}_in_voxels"},
-        f"point_grid_coord_{skip_stage}": {0: stage_voxel_axis_name(skip_stage)},
+        **{f"point_feat_{stage}": {0: stage_voxel_axis_name(stage)} for stage in stages},
+        **{
+            f"pooling_cluster_{stage}": {0: f"serialized_pooling_{stage}_in_voxels"}
+            for stage in stages[:-1]
+        },
+        **{f"point_grid_coord_{stage}": {0: stage_voxel_axis_name(stage)} for stage in stages[:-1]},
     }
+
+
+def rebuild_point_chain(
+    feats: Sequence[Float[torch.Tensor, "_ _"]],
+    clusters: Sequence[Integer[torch.Tensor, " _"]],
+    grid_coords: Sequence[Integer[torch.Tensor, "_ 3"]],
+) -> Point:
+    """Rebuild the deepest point and its pooling chain from the split det-head export inputs.
+
+    Every stage has its own voxel count and width, the cluster of a stage maps its voxels to the
+    voxels of the next coarser stage.
+
+    Args:
+        feats: Features of the stages from the finest to the deepest one.
+        clusters: Pooling clusters of every stage but the deepest.
+        grid_coords: Voxel coordinates of every stage but the deepest.
+
+    Returns:
+        Deepest point with the rebuilt pooling chain.
+
+    Raises:
+        ValueError: If the clusters or the voxel coordinates do not cover every stage but the
+            deepest.
+    """
+    if not len(clusters) == len(grid_coords) == len(feats) - 1:
+        raise ValueError(
+            f"Expected the clusters and voxel coordinates of {len(feats) - 1} stages, got "
+            f"{len(clusters)} and {len(grid_coords)}."
+        )
+    point = Point(feat=feats[0], grid_coord=grid_coords[0], offset=_single_offset(feats[0]))
+    for feat, grid_coord, cluster in zip(feats[1:-1], grid_coords[1:], clusters[:-1], strict=True):
+        point = Point(
+            feat=feat,
+            grid_coord=grid_coord,
+            offset=_single_offset(feat),
+            pooling_parent=point,
+            pooling_inverse=cluster,
+        )
+    return Point(feat=feats[-1], pooling_parent=point, pooling_inverse=clusters[-1])
+
+
+def _single_offset(feat: Float[torch.Tensor, "_ _"]) -> Int64[torch.Tensor, " 1"]:
+    """Batch offsets of a single sample export graph."""
+    return shape_as_tensor(feat)[:1].to(feat.device)
 
 
 class PTv3Det3DHeadExportModule(nn.Module):
@@ -367,9 +413,7 @@ class PTv3Det3DHeadExportModule(nn.Module):
         skip_grid_coord: torch.Tensor,
     ) -> tuple[torch.Tensor, ...]:
         """Rebuild the coarse pooling link, project to BEV, and run the head."""
-        offset = shape_as_tensor(skip_feat)[:1].to(skip_feat.device)
-        parent = Point(feat=skip_feat, grid_coord=skip_grid_coord, offset=offset)
-        point = Point(feat=deepest_feat, pooling_parent=parent, pooling_inverse=cluster)
+        point = rebuild_point_chain([skip_feat, deepest_feat], [cluster], [skip_grid_coord])
         bev = self.bev_neck(point)
         outputs = self.bbox_head(bev)
         return outputs.export_tensors(self.output_names)
@@ -383,9 +427,13 @@ class PTv3Det3DHeadExportModule(nn.Module):
         return DeploymentGraph(
             DET3D_HEAD_GRAPH,
             module=self,
-            input_names=tuple(det3d_head_export_input_names(self.stage_count)),
+            input_names=tuple(
+                det3d_head_export_input_names(self.stage_count, self.stage_count - 2)
+            ),
             output_names=tuple(self.output_names),
-            onnx_dynamic_axes=det3d_head_export_dynamic_axes(self.stage_count),
+            onnx_dynamic_axes=det3d_head_export_dynamic_axes(
+                self.stage_count, self.stage_count - 2
+            ),
         )
 
 

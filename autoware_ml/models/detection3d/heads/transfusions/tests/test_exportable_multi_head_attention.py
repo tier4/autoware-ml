@@ -185,6 +185,55 @@ class TestExportableMultiheadAttention(unittest.TestCase):
 
         self.assertTrue(torch.isfinite(attended).all())
 
+    def test_masks_match_pytorch_attention(self) -> None:
+        """Test that the attention and key padding masks hide the same keys as PyTorch."""
+        num_queries, num_keys = self.query.shape[1], self.key.shape[1]
+        attn_mask = torch.zeros(num_queries, num_keys, dtype=torch.bool, device=self.device)
+        attn_mask[:, 0] = True
+        key_padding_mask = torch.zeros(
+            self.key.shape[0], num_keys, dtype=torch.bool, device=self.device
+        )
+        key_padding_mask[:, -1] = True
+
+        expected, _ = self.attention(
+            self.query,
+            self.key,
+            self.value,
+            attn_mask=attn_mask,
+            key_padding_mask=key_padding_mask,
+        )
+        attended, _ = self.exportable_attention(
+            self.query,
+            self.key,
+            self.value,
+            attn_mask=attn_mask,
+            key_padding_mask=key_padding_mask,
+        )
+
+        torch.testing.assert_close(attended, expected, atol=1e-5, rtol=1e-4)
+
+    def test_a_masked_key_far_above_the_others_stays_hidden(self) -> None:
+        """Test that a masked key logit 2e4 above the others stays hidden as in PyTorch."""
+        embed_dims = 8
+        attention = nn.MultiheadAttention(embed_dims, 1, batch_first=True).to(self.device).eval()
+        with torch.no_grad():
+            attention.in_proj_weight.copy_(torch.eye(embed_dims).repeat(3, 1))
+            attention.in_proj_bias.zero_()
+            attention.out_proj.weight.copy_(torch.eye(embed_dims))
+            attention.out_proj.bias.zero_()
+        exportable_attention = ExportableMultiheadAttention(attention).eval()
+        query = torch.ones(1, 1, embed_dims, device=self.device)
+        # With identity projections the scaled logit of key 2 is 2e4, the other keys get 0
+        key = torch.zeros(1, 4, embed_dims, device=self.device)
+        key[0, 2] = 2e4 / embed_dims**0.5
+        value = torch.arange(4.0, device=self.device)[:, None].repeat(1, embed_dims)[None]
+        key_padding_mask = torch.tensor([[False, False, True, True]], device=self.device)
+
+        expected, _ = attention(query, key, value, key_padding_mask=key_padding_mask)
+        attended, _ = exportable_attention(query, key, value, key_padding_mask=key_padding_mask)
+
+        torch.testing.assert_close(attended, expected)
+
     def test_follows_the_device_and_dtype_of_the_source_attention(self) -> None:
         """Test that the copied module lands on the same device and dtype as its source."""
         attention = self._build_attention().to(dtype=torch.float64)

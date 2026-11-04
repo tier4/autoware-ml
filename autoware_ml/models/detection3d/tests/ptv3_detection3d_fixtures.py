@@ -64,25 +64,29 @@ POINT_CLOUD_RANGE = [0.0, 0.0, -2.0, 8.0, 8.0, 2.0]
 
 def build_ptv3_encoder(
     in_channels: int = SweepSplitVoxelFeatureEncoder.out_channels,
-    patch_sizes: Sequence[int] = (4, 4),
+    patch_sizes: Sequence[int] | None = None,
+    enc_channels: Sequence[int] = (8, 16),
 ) -> PointTransformerV3Encoder:
-    """Return a small PTv3 encoder suitable for unit tests.
+    """Return a small PTv3 encoder suitable for unit tests, one stage per encoder width.
 
     Args:
         in_channels: Channels of the voxel features the encoder embeds.
-        patch_sizes: Attention window of every level, the input level first.
+        patch_sizes: Attention window of every level, the input level first, 4 for every
+            level when None.
+        enc_channels: Width of every encoder level.
 
     Returns:
-        A two-level encoder with one block per level.
+        An encoder with one block per level.
     """
+    num_stages = len(enc_channels)
     return PointTransformerV3Encoder(
         in_channels=in_channels,
         order=("z",),
-        stride=(2,),
-        enc_depths=(1, 1),
-        enc_channels=(8, 16),
-        enc_num_head=(1, 2),
-        enc_patch_size=patch_sizes,
+        stride=(2,) * (num_stages - 1),
+        enc_depths=(1,) * num_stages,
+        enc_channels=tuple(enc_channels),
+        enc_num_head=tuple(channels // 8 for channels in enc_channels),
+        enc_patch_size=tuple(patch_sizes) if patch_sizes is not None else (4,) * num_stages,
         mlp_ratio=2.0,
         qkv_bias=True,
         qk_scale=None,
@@ -99,14 +103,19 @@ def build_ptv3_encoder(
 
 
 def build_seg3d_head(
-    num_classes: int = 3, dec_depths: Sequence[int] = (1,), patch_sizes: Sequence[int] = (4, 4)
+    num_classes: int = 3,
+    dec_depths: Sequence[int] = (1,),
+    patch_sizes: Sequence[int] | None = None,
+    enc_channels: Sequence[int] = (8, 16),
 ) -> PTv3Seg3DDecoderHead:
     """Return a small PTv3 segmentation decoder head matching the test encoder.
 
     Args:
         num_classes: Number of segmentation classes.
         dec_depths: Blocks of the one decoder level.
-        patch_sizes: Attention window of every encoder level; the decoder level uses the first.
+        patch_sizes: Attention window of every encoder level, the decoder levels use the leading
+            ones, 4 for every level when None.
+        enc_channels: Width of every encoder level, the decoder mirrors all but the deepest.
 
     Returns:
         A one-level decoder head over the test encoder's channels.
@@ -115,11 +124,15 @@ def build_seg3d_head(
         num_classes=num_classes,
         ignore_index=-1,
         order=("z",),
-        enc_channels=(8, 16),
+        enc_channels=tuple(enc_channels),
         dec_depths=dec_depths,
-        dec_channels=(8,),
-        dec_num_head=(1,),
-        dec_patch_size=(patch_sizes[0],),
+        dec_channels=tuple(enc_channels[:-1]),
+        dec_num_head=tuple(channels // 8 for channels in enc_channels[:-1]),
+        dec_patch_size=(
+            tuple(patch_sizes[: len(enc_channels) - 1])
+            if patch_sizes is not None
+            else (4,) * (len(enc_channels) - 1)
+        ),
         mlp_ratio=2.0,
         qkv_bias=True,
         qk_scale=None,
@@ -491,3 +504,13 @@ def build_litept_seg3d_model(
         grid_size=1.0,
         point_cloud_range=list(point_cloud_range),
     )
+
+
+def build_point_chain() -> tuple[list[torch.Tensor], list[torch.Tensor], list[torch.Tensor]]:
+    """Features of three stages, the pooling clusters and the voxel coordinates of a sample."""
+    generator = torch.Generator().manual_seed(0)
+    feats = [torch.randn((12, 4), generator=generator), torch.randn((6, 8), generator=generator)]
+    feats.append(torch.randn((3, 16), generator=generator))
+    clusters = [torch.arange(12) // 2, torch.arange(6) // 2]
+    grid_coords = [torch.randint(0, 8, (12, 3), generator=generator), torch.randint(0, 4, (6, 3))]
+    return feats, clusters, grid_coords
