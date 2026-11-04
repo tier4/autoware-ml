@@ -14,9 +14,6 @@ camera_sources: ???
 metrics: []
 metric_ranges: []
 
-# Ego body cut out of the point cloud before the fusion, [x_min, y_min, z_min, x_max, y_max, z_max].
-ego_box: [-1.53, -1.15, -0.1, 5.72, 1.15, 3.1]
-
 optimizer:
   _target_: torch.optim.AdamW
   _partial_: true
@@ -94,7 +91,7 @@ datasets:
         - _target_: autoware_ml.transforms.point_cloud.geometry.CropBoxInner
           _convert_: all
 
-          crop_box: ${ego_box}
+          crop_box: ${ego.box}
 
         - _target_: autoware_ml.transforms.camera.distortion.UndistortImage
           _convert_: all
@@ -172,7 +169,7 @@ datasets:
 
           max_depth: 128.0
           dilation_size: 1
-          ego_box: ${ego_box}
+          ego_box: ${ego.box}
 
         - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.SaveFusionPreview
           _convert_: all
@@ -203,7 +200,7 @@ datasets:
         - _target_: autoware_ml.transforms.point_cloud.geometry.CropBoxInner
           _convert_: all
 
-          crop_box: ${ego_box}
+          crop_box: ${ego.box}
 
         - _target_: autoware_ml.transforms.camera.distortion.UndistortImage
           _convert_: all
@@ -260,7 +257,7 @@ datasets:
 
           max_depth: 128.0
           dilation_size: 1
-          ego_box: ${ego_box}
+          ego_box: ${ego.box}
 
 # The datamodule binds the datasets above to the splits of its sources. Validation and predict
 # read the test dataset.

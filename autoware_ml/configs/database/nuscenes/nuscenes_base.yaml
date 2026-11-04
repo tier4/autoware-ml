@@ -13,6 +13,8 @@ cache_file_prefix_name: nuscenes_database
 
 defaults:
   - nuscenes/taxonomy/vocabulary@vocabulary: default_detection3d
+  # The recording platform of the database
+  - /ego@_global_.ego: renault_zoe
   - nuscenes/box3d_pipelines@box3d_pipelines: default_box3d_pipelines
   - nuscenes/scenarios@scenarios.db_nuscenes: detection3d/db_nuscenes
 
