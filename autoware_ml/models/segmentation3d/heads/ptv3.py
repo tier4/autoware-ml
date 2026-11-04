@@ -393,7 +393,8 @@ def segmentation3d_point_loss(
     """Compute the segmentation losses with one term per voxel.
 
     Every voxel adds one cross entropy term, so dense areas near the sensor do not dominate
-    the loss. Voxels whose points disagree weigh more.
+    the loss. Voxels whose points disagree weigh more. Samples that only pad a streaming lane
+    take no part.
 
     Args:
         head: Segmentation head owning the losses.
@@ -403,10 +404,15 @@ def segmentation3d_point_loss(
     Returns:
         Dictionary with the segmentation losses.
     """
-    _, voxels_data, label_batch = voxelized_points(batch_inputs)
+    point_batch, voxels_data, label_batch = voxelized_points(batch_inputs)
+    point_labels = _point_labels(label_batch)
+    padding_mask = batch_inputs.multi_task_gt_batch.padding_mask.to(point_labels.device)
+    point_labels = point_labels.masked_fill(
+        padding_mask[point_batch.batch_indices.long()], head.ignore_index
+    )
     labels, weights = voxel_supervision(
         voxels_data.point_voxel_indices,
-        _point_labels(label_batch),
+        point_labels,
         num_voxels=seg3d_logits.shape[0],
         num_classes=seg3d_logits.shape[1],
         ignore_index=head.ignore_index,

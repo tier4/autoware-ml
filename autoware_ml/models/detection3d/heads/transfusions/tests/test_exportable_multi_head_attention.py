@@ -185,6 +185,33 @@ class TestExportableMultiheadAttention(unittest.TestCase):
 
         self.assertTrue(torch.isfinite(attended).all())
 
+    def test_masks_match_pytorch_attention(self) -> None:
+        """Test that the attention and key padding masks hide the same keys as PyTorch."""
+        num_queries, num_keys = self.query.shape[1], self.key.shape[1]
+        attn_mask = torch.zeros(num_queries, num_keys, dtype=torch.bool, device=self.device)
+        attn_mask[:, 0] = True
+        key_padding_mask = torch.zeros(
+            self.key.shape[0], num_keys, dtype=torch.bool, device=self.device
+        )
+        key_padding_mask[:, -1] = True
+
+        expected, _ = self.attention(
+            self.query,
+            self.key,
+            self.value,
+            attn_mask=attn_mask,
+            key_padding_mask=key_padding_mask,
+        )
+        attended, _ = self.exportable_attention(
+            self.query,
+            self.key,
+            self.value,
+            attn_mask=attn_mask,
+            key_padding_mask=key_padding_mask,
+        )
+
+        torch.testing.assert_close(attended, expected, atol=1e-5, rtol=1e-4)
+
     def test_follows_the_device_and_dtype_of_the_source_attention(self) -> None:
         """Test that the copied module lands on the same device and dtype as its source."""
         attention = self._build_attention().to(dtype=torch.float64)

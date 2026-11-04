@@ -440,13 +440,13 @@ class TestDetection3DHeadOutputs(unittest.TestCase):
         """
         Input: a wrapper with no head outputs set.
         Expected: exactly one head family produces the outputs, so an empty wrapper is rejected,
-        and the error names every head field, the StreamPETR one included.
-        Check: a ValidationError listing the three head fields and the empty set is raised.
+        and the error names every head field, the StreamPETR and Sparse4D ones included.
+        Check: a ValidationError listing the four head fields and the empty set is raised.
         """
         with self.assertRaisesRegex(
             ValidationError,
             "Exactly one of center_head_outputs, transfusion_head_outputs, "
-            r"streampetr_head_outputs must be set, got \[\]",
+            r"streampetr_head_outputs, sparse4d_head_outputs must be set, got \[\]",
         ):
             Detection3DHeadOutputs(center_head_outputs=None, transfusion_head_outputs=None)
 

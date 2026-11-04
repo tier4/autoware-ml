@@ -106,7 +106,11 @@ class Segmentation3DConfusionMatrixMetricSuite(MetricSuite[ConfusionState]):
             eval_out: Flat eval-output dict with the per-frame ``seg3d_frames``.
         """
         active_filter_keys = self._stage_filter_keys()
-        for frame in eval_out["seg3d_frames"]:
+        padding_mask = eval_out.get("padding_mask")
+        for index, frame in enumerate(eval_out["seg3d_frames"]):
+            # A frame padding a streaming lane repeats a frame already counted
+            if padding_mask is not None and bool(padding_mask[index]):
+                continue
             predictions = frame["pred"].detach().reshape(-1)
             targets = frame["target"].detach().reshape(-1)
             coord = frame["coord"].detach().to(dtype=torch.float32)

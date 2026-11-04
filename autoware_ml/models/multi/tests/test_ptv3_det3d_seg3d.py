@@ -47,9 +47,6 @@ def _make_masking_model(recorded_calls: list) -> SimpleNamespace:
         partial_annotations=None,
         segmentation3d_loss_weight=1.0,
         detection3d_loss_weight=1.0,
-        _detection3d_gt_batch=PTv3Det3DSeg3DModel._detection3d_gt_batch,
-        _detection3d_frame_mask=PTv3Det3DSeg3DModel._detection3d_frame_mask,
-        _mask_list=PTv3Det3DSeg3DModel._mask_list,
     )
 
 
@@ -181,8 +178,6 @@ def _make_eval_model() -> SimpleNamespace:
 
     return SimpleNamespace(
         bbox_head=SimpleNamespace(decode_outputs=decode_outputs),
-        _detection3d_gt_batch=PTv3Det3DSeg3DModel._detection3d_gt_batch,
-        _detection3d_frame_mask=PTv3Det3DSeg3DModel._detection3d_frame_mask,
     )
 
 

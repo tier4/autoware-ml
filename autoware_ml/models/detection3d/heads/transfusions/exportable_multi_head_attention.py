@@ -18,6 +18,10 @@ import torch
 import torch.nn.functional as F
 
 
+# Attention logit of a masked key, finite so TensorRT keeps the softmax stable
+MASKED_LOGIT = -1e4
+
+
 class ExportableMultiheadAttention(nn.Module):
     """ONNX/TensorRT-friendly equivalent of ``nn.MultiheadAttention``.
 
@@ -79,12 +83,24 @@ class ExportableMultiheadAttention(nn.Module):
         query: Float32[torch.Tensor, "B H*W channels"],
         key: Float32[torch.Tensor, "B H*W channels"],
         value: Float32[torch.Tensor, "B H*W channels"],
+        attn_mask: torch.Tensor | None = None,
+        key_padding_mask: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, None]:
         """
         Run explicit scaled dot-product attention with a PyTorch-compatible return.
         The shape of query/key/value depend on nn.MultiHeadAttention, however,
         since we set batch_first=True, and use it in bev for Transfusion, the shape is always
         B, H*W, dimensions.
+
+        Masked keys get a large negative bias before the softmax, an exportable stand-in for
+        the infinite one of ``nn.MultiheadAttention``.
+
+        Args:
+            query: Query tokens.
+            key: Key tokens.
+            value: Value tokens.
+            attn_mask: Optional boolean mask ``(L, S)``, True blocks a query from a key.
+            key_padding_mask: Optional boolean mask ``(B, S)``, True hides a key from its row.
         """
         q = self._project(self.q_proj, query)
         k = self._project(self.k_proj, key)
@@ -100,6 +116,10 @@ class ExportableMultiheadAttention(nn.Module):
         else:
             attention = torch.matmul(q.float() / self.head_dim**0.5, k.float().transpose(-2, -1))
             attention = attention - attention.max(dim=-1, keepdim=True).values
+        if attn_mask is not None:
+            attention = attention.masked_fill(attn_mask, MASKED_LOGIT)
+        if key_padding_mask is not None:
+            attention = attention.masked_fill(key_padding_mask[:, None, None, :], MASKED_LOGIT)
         attention = attention.softmax(dim=-1)
         if self.training and self.dropout > 0.0:
             attention = F.dropout(attention, p=self.dropout)

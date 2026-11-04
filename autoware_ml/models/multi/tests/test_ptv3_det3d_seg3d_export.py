@@ -165,9 +165,6 @@ def test_ptv3_seg3d_split_export_supports_decoder_blocks() -> None:
 def test_ptv3_det3d_seg3d_eval_output_scatters_segmentation3d_to_original_points() -> None:
     model = SimpleNamespace(
         bbox_head=_DummyBBoxHead(),
-        _detection3d_gt_batch=PTv3Det3DSeg3DModel._detection3d_gt_batch,
-        _detection3d_frame_mask=PTv3Det3DSeg3DModel._detection3d_frame_mask,
-        _mask_list=PTv3Det3DSeg3DModel._mask_list,
     )
     det3d_outputs = build_transfusion_outputs(
         {

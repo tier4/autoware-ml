@@ -44,6 +44,7 @@ def detection3d_eval_output(
                 "bboxes_3d": prediction.bboxes_3d,
                 "scores_3d": prediction.scores_3d,
                 "labels_3d": prediction.labels_3d,
+                "instance_ids": prediction.instance_ids,
             }
             for prediction in predictions.detection3d_predictions
         ],
@@ -53,6 +54,7 @@ def detection3d_eval_output(
         # A sample padding a streaming lane keeps its entry in every per-frame list, since the
         # metrics gather those lists across the GPUs entry by entry; the metric leaves it out.
         "padding_mask": batch_inputs.multi_task_gt_batch.padding_mask.tolist(),
+        "gt_instance_ids": gt_detections.valid_bboxes_instance_ids(),
     }
     # Per frame metadata for the region and collision filters, when the dataset attached it.
     frame_meta_batch = batch_inputs.multi_task_gt_batch.frame_meta_batch
@@ -60,4 +62,5 @@ def detection3d_eval_output(
         eval_out["ego2global"] = list(frame_meta_batch.ego2globals)
         eval_out["scene_token"] = list(frame_meta_batch.scene_tokens)
         eval_out["lanelet_map_path"] = list(frame_meta_batch.lanelet_map_paths)
+        eval_out["timestamp"] = list(frame_meta_batch.timestamps)
     return eval_out

@@ -86,6 +86,7 @@ class TestTypedDetection3DEvalOutput(unittest.TestCase):
             gt_labels_3d=gt_labels_3d,
             gt_valid_bboxes=gt_valid_bboxes,
             gt_bboxes_num_points=gt_bboxes_num_points,
+            gt_bboxes_instance_ids=torch.tensor([[1, 2], [3, -1]], device=self.device),
         )
         self.multi_task_batch_inputs = ModelBatchInputs(
             multi_task_gt_batch=ModelGTBatch(

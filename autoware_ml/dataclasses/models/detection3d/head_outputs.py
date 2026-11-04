@@ -206,6 +206,165 @@ class CenterHeadOutputs(BaseModel):
         return _pick_export_tensors(tensors, names)
 
 
+class Sparse4DDenoisingOutputs(BaseModel):
+    """
+    Dataclass to save the denoising queries of a Sparse4D-based head and their targets.
+
+    Targets are fixed at construction, padding queries carry zero weights.
+
+    Attributes:
+      classification: Class logits of every denoising query for every decoder layer.
+      prediction: Anchor states of every denoising query for every decoder layer.
+      cls_targets: One-hot class targets of every denoising query.
+      box_targets: Anchor state targets of every denoising query.
+      box_weights: Regression weight of every anchor state channel of every denoising query.
+      cls_weights: Classification weight of every denoising query.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
+
+    classification: Float[torch.Tensor, "batch_size num_layers num_queries num_classes"]
+    prediction: Float[torch.Tensor, "batch_size num_layers num_queries anchor_dim"]
+    cls_targets: Float[torch.Tensor, "batch_size num_queries num_classes"]
+    box_targets: Float[torch.Tensor, "batch_size num_queries anchor_dim"]
+    box_weights: Float[torch.Tensor, "batch_size num_queries anchor_dim"]
+    cls_weights: Float[torch.Tensor, "batch_size num_queries"]
+
+    @model_validator(mode="after")
+    def _check_queries(self) -> Sparse4DDenoisingOutputs:
+        """Check that the outputs and the targets describe the same denoising queries."""
+        batch_size, _, num_queries, num_classes = self.classification.shape
+        anchor_dim = self.prediction.shape[-1]
+        expected = {
+            "prediction": (batch_size, self.classification.shape[1], num_queries, anchor_dim),
+            "cls_targets": (batch_size, num_queries, num_classes),
+            "box_targets": (batch_size, num_queries, anchor_dim),
+            "box_weights": (batch_size, num_queries, anchor_dim),
+            "cls_weights": (batch_size, num_queries),
+        }
+        for name, shape in expected.items():
+            if tuple(getattr(self, name).shape) != shape:
+                raise ValueError(
+                    f"{name} must have shape {shape}, got {tuple(getattr(self, name).shape)}."
+                )
+        return self
+
+    def select_samples(self, mask: Bool[torch.Tensor, " batch_size"]) -> Sparse4DDenoisingOutputs:
+        """
+        Keep the denoising queries of the samples a mask selects.
+
+        Args:
+            mask: True for every sample to keep.
+
+        Returns:
+            The denoising queries of the selected samples.
+        """
+        return Sparse4DDenoisingOutputs(
+            **{name: getattr(self, name)[mask] for name in type(self).model_fields}
+        )
+
+
+class Sparse4DHeadOutputs(BaseModel):
+    """
+    Dataclass to save Sparse4D-based outputs from a 3D detection model.
+
+    Anchor states are ``[cx, cy, cz, ln l, ln w, ln h, sin yaw, cos yaw, vx, vy]``.
+
+    Attributes:
+      classification: Class logits of every query for every decoder layer.
+      prediction: Anchor states of every query for every decoder layer.
+      quality: Predicted centerness and yawness logits of every query for every decoder layer.
+      instance_ids: Track id of every query of the last layer, -1 without a track. None for a
+        head without temporal memory.
+      denoising: Denoising queries of the training step, None when the head adds none.
+      instance_feature: Instance features of the last decoder layer, read by the heads that
+        build on the detections. None when the outputs come from an export graph.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
+
+    classification: Float[torch.Tensor, "batch_size num_layers num_queries num_classes"]
+    prediction: Float[torch.Tensor, "batch_size num_layers num_queries anchor_dim"]
+    quality: Float[torch.Tensor, "batch_size num_layers num_queries 2"]
+    instance_ids: Int64[torch.Tensor, "batch_size num_queries"] | None
+    denoising: Sparse4DDenoisingOutputs | None
+    instance_feature: Float[torch.Tensor, "batch_size num_queries embed_dims"] | None = None
+
+    @model_validator(mode="after")
+    def _check_layers_and_queries(self) -> Sparse4DHeadOutputs:
+        """Check that every output covers the same batch, decoder layers and queries."""
+        leading = tuple(self.classification.shape[:3])
+        for name in ("prediction", "quality"):
+            if tuple(getattr(self, name).shape[:3]) != leading:
+                raise ValueError(
+                    f"{name} must lead with (batch_size, num_layers, num_queries)={leading}, "
+                    f"got {tuple(getattr(self, name).shape)}."
+                )
+        if self.instance_ids is not None and tuple(self.instance_ids.shape) != (
+            self.classification.shape[0],
+            self.classification.shape[2],
+        ):
+            raise ValueError(
+                "instance_ids must have shape (batch_size, num_queries), got "
+                f"{tuple(self.instance_ids.shape)}."
+            )
+        if self.instance_feature is not None and tuple(self.instance_feature.shape[:2]) != (
+            self.classification.shape[0],
+            self.classification.shape[2],
+        ):
+            raise ValueError(
+                "instance_feature must lead with (batch_size, num_queries), got "
+                f"{tuple(self.instance_feature.shape)}."
+            )
+        if self.denoising is not None and (
+            self.denoising.classification.shape[:2] != self.classification.shape[:2]
+        ):
+            raise ValueError(
+                "The denoising queries must cover the batch and the decoder layers of the "
+                f"regular queries, got {tuple(self.denoising.classification.shape)}."
+            )
+        return self
+
+    def select_samples(self, mask: Bool[torch.Tensor, " batch_size"]) -> Sparse4DHeadOutputs:
+        """
+        Keep the outputs of the samples a mask selects.
+
+        Args:
+            mask: True for every sample to keep.
+
+        Returns:
+            The outputs of the selected samples.
+        """
+        return Sparse4DHeadOutputs(
+            classification=self.classification[mask],
+            prediction=self.prediction[mask],
+            quality=self.quality[mask],
+            instance_ids=None if self.instance_ids is None else self.instance_ids[mask],
+            denoising=None if self.denoising is None else self.denoising.select_samples(mask),
+            instance_feature=None if self.instance_feature is None else self.instance_feature[mask],
+        )
+
+    def export_tensors(self, names: Sequence[str]) -> tuple[torch.Tensor, ...]:
+        """
+        Pick the final decoder layer tensors in the order an export names them.
+
+        Args:
+            names: Output names in the exported order.
+
+        Returns:
+            The tensors of the names, in the same order.
+
+        Raises:
+            ValueError: If a name is not an output of the head.
+        """
+        tensors = {
+            "classification": self.classification[:, -1],
+            "prediction": self.prediction[:, -1],
+            "quality": self.quality[:, -1],
+        }
+        return _pick_export_tensors(tensors, names)
+
+
 class StreamPETRDenoisingOutputs(BaseModel):
     """
     Dataclass to save the denoising queries of a StreamPETR head in training.
@@ -311,6 +470,7 @@ class Detection3DHeadOutputs(BaseModel):
       center_head_outputs: Outputs from a CenterHead-based 3D detection model.
       transfusion_head_outputs: Outputs from a TransFusion-based 3D detection model.
       streampetr_head_outputs: Outputs from a StreamPETR-based 3D detection model.
+      sparse4d_head_outputs: Outputs from a Sparse4D-based 3D detection model.
     """
 
     model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
@@ -318,6 +478,7 @@ class Detection3DHeadOutputs(BaseModel):
     center_head_outputs: CenterHeadOutputs | None = None
     transfusion_head_outputs: TransFusionHeadOutputs | None = None
     streampetr_head_outputs: StreamPETRHeadOutputs | None = None
+    sparse4d_head_outputs: Sparse4DHeadOutputs | None = None
 
     def center_head(self) -> CenterHeadOutputs:
         """
@@ -351,6 +512,17 @@ class Detection3DHeadOutputs(BaseModel):
         if self.streampetr_head_outputs is None:
             raise self._other_head_error("streampetr_head_outputs")
         return self.streampetr_head_outputs
+
+    def sparse4d_head(self) -> Sparse4DHeadOutputs:
+        """
+        Read the outputs of a Sparse4D-based model.
+
+        Raises:
+            ValueError: If another head family produced the outputs.
+        """
+        if self.sparse4d_head_outputs is None:
+            raise self._other_head_error("sparse4d_head_outputs")
+        return self.sparse4d_head_outputs
 
     def _set_head_fields(self) -> list[str]:
         """Name the set fields; every field of the wrapper holds the outputs of one head family."""
