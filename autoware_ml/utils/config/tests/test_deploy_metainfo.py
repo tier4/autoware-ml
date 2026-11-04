@@ -26,6 +26,7 @@ from autoware_ml.utils.deploy import merge_module_onnx_cfg
 # The configs of the Sparse4D det head, which exports no BEV grid
 SPARSE4D_CONFIGS = [
     "tasks/multi/ptv3_sparse4d/t4dataset/voxel012_b8_24e_t4dataset_122m",
+    "tasks/multi/ptv3_sparsedrive/t4dataset/voxel012_b8_36e_t4dataset_122m_motion",
 ]
 PTV3_CONFIGS = [
     "tasks/multi/ptv3/t4dataset/voxel012_b8_100e_t4dataset_122m",

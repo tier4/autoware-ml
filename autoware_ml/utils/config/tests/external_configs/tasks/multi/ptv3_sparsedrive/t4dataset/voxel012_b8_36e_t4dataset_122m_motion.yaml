@@ -1,0 +1,14 @@
+# @package _global_
+defaults:
+  - /tasks/multi/ptv3_sparse4d/t4dataset/voxel012_b8_24e_t4dataset_122m
+  - base_motion
+  - _self_
+
+experiment_name: voxel012_b8_36e_t4dataset_122m_motion
+
+model:
+  scheduler:
+    warmup_epochs: 2
+
+trainer:
+  max_epochs: 36

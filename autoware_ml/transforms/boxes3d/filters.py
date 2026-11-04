@@ -49,6 +49,28 @@ def parse_exclusion_rules(rules: Sequence[Sequence[str]]) -> frozenset[tuple[str
     return frozenset((str(rule[0]), str(rule[1])) for rule in rules)
 
 
+def excluded_boxes(
+    label_names: Sequence[str],
+    attributes: Sequence[Sequence[str]],
+    rules: frozenset[tuple[str, str]],
+) -> list[bool]:
+    """
+    Whether an exclusion rule names the class and an attribute of every box.
+
+    Args:
+      label_names: Fine label name of every box.
+      attributes: Attributes of every box.
+      rules: Exclusion rules from :func:`parse_exclusion_rules`.
+
+    Returns:
+      list[bool]: True for every box a rule excludes.
+    """
+    return [
+        any((label_name, attribute) in rules for attribute in box_attributes)
+        for label_name, box_attributes in zip(label_names, attributes, strict=True)
+    ]
+
+
 class BBoxesMinPointsFilter(BaseTransform):
     """Filter 3D bounding boxes by minimum number of points and distance of bboxes.
 
@@ -246,15 +268,10 @@ class BBoxesAttributeFilter(BaseTransform):
                 "The attribute filter needs the attributes of every box, the dataset served none."
             )
 
-        bboxes_to_keep_mask = torch.tensor(
-            [
-                not any(
-                    (label_name, attribute) in self.filter_attributes for attribute in attributes
-                )
-                for label_name, attributes in zip(
-                    detection3d_gt_bboxes_3d.bbox_label_names, bbox_attributes, strict=True
-                )
-            ],
+        bboxes_to_keep_mask = ~torch.tensor(
+            excluded_boxes(
+                detection3d_gt_bboxes_3d.bbox_label_names, bbox_attributes, self.filter_attributes
+            ),
             dtype=torch.bool,
         )
         detection3d_gt_bboxes_3d.remove_bboxes(bboxes_to_keep_mask)
