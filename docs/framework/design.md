@@ -110,6 +110,7 @@ class DataModule(L.LightningDataModule):
         test_dataloader: DataLoaderConfig | None,
         predict_dataloader: DataLoaderConfig | None,
         train_frame_sampling: FrameSamplingConfig | None,
+        streaming: bool = False,
     ) -> None:
         ...
 ```
@@ -133,7 +134,8 @@ joins the scenes, the training split reshuffling them every epoch from `seed`, a
 frames, each scene in time order, into one lane per batch position of every rank. The lanes differ
 by at most one frame, and a shorter lane ends with a padding slot that repeats its last frame, so
 every rank runs the same number of batches and every split serves every frame exactly once as a real
-sample. The batch flags the padding slots in `ModelGTBatch.padding_mask`: a model leaves them out of
+sample. The `stream_max_frames` of a dataloader cuts longer scenes into consecutive streams first.
+The batch flags the padding slots in `ModelGTBatch.padding_mask`: a model leaves them out of
 its loss, and the logged batch size (`num_real_samples()`) and the detection metrics leave them
 out; the detection eval output still lists them, flagged, so every GPU gathers as many frames. A
 prediction writer drops them by the mask it gets with the batch. Anything that would reorder the

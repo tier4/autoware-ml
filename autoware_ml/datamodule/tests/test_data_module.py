@@ -726,6 +726,25 @@ class TestFrameSampling(MultiSourceTestCase):
             data_module.train_dataloader()
 
 
+class TestStreamSettings(MultiSourceTestCase):
+    """Stream settings outside the streaming datamodule."""
+
+    def test_rejects_stream_max_frames(self) -> None:
+        """
+        Input: a plain datamodule whose training loader sets stream_max_frames.
+        Expected: only the streaming datamodule cuts streams, so the setting would be ignored.
+        Check: building the training loader raises a ValueError naming the setting.
+        """
+        data_module = self.build_data_module(
+            {"main": build_source(self.main_database)},
+            train_dataloader=DataLoaderConfig(batch_size=1, stream_max_frames=2),
+        )
+        data_module.setup("fit")
+
+        with self.assertRaisesRegex(ValueError, "stream_max_frames"):
+            data_module.train_dataloader()
+
+
 def with_scenes(
     records: pl.DataFrame, scenario_ids: Sequence[str], timestamps: Sequence[float]
 ) -> pl.DataFrame:
@@ -932,6 +951,19 @@ class TestStreamingDataModule(StreamedCorpusTestCase):
         self.assertEqual(train_sampler.seed, 7)
         self.assertEqual((validation_sampler.batch_size, validation_sampler.shuffle), (1, False))
         self.assertEqual(list(validation_sampler), [4, 2, 0, 1, 3])
+
+    def test_stream_max_frames_cuts_long_scenes_into_streams(self) -> None:
+        """
+        Input: a streaming datamodule whose validation loader streams at most two frames.
+        Expected: scene a of three frames is cut into two streams, scene b of two is kept.
+        Check: compare the scene groups of the validation sampler.
+        """
+        data_module = self.build_streaming_data_module(
+            validation_dataloader=DataLoaderConfig(batch_size=1, stream_max_frames=2),
+        )
+        data_module.setup("fit")
+
+        self.assertEqual(data_module.val_dataloader().sampler.scene_groups, [[4, 2], [0], [1, 3]])
 
     def test_rejects_a_shuffling_loader(self) -> None:
         """

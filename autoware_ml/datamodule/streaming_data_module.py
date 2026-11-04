@@ -93,7 +93,7 @@ class StreamingDataModule(DataModule):
         Args:
           split: Split the dataloader serves.
           config: Dataloader settings of the split, whose batch size is the number of lanes
-            of every rank.
+            of every rank and whose ``stream_max_frames`` cuts longer scenes into streams.
 
         Returns:
           DataLoader: Dataloader over the concatenated sources of the split, drawing from a
@@ -117,6 +117,7 @@ class StreamingDataModule(DataModule):
             batch_size=config.batch_size,
             shuffle=split == SplitType.TRAIN,
             seed=self.seed,
+            max_group_length=config.stream_max_frames,
         )
         return DataLoader(
             dataset=dataset,

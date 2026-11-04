@@ -313,6 +313,9 @@ class GroupStreamingSampler(DistributedSampler):
     the frame metadata of the batch where a lane starts a new stream and resets that
     lane's memory there.
 
+    Scenes longer than ``max_group_length`` frames are cut into consecutive chunks first, and
+    every chunk is a scene of its own from then on.
+
     Every epoch the scenes are joined, in order or shuffled by ``seed + epoch``, and their
     frames are cut into ``num_lanes`` (``num_replicas * batch_size``) lanes whose lengths
     differ by at most one; rank ``r`` serves lanes ``r * batch_size`` to
@@ -340,6 +343,7 @@ class GroupStreamingSampler(DistributedSampler):
         *,
         shuffle: bool,
         seed: int,
+        max_group_length: int | None = None,
     ) -> None:
         """Initialize the streaming sampler.
 
@@ -350,12 +354,23 @@ class GroupStreamingSampler(DistributedSampler):
                 the dataloader batch size.
             shuffle: Whether to shuffle the scene order every epoch.
             seed: Base seed for the per-epoch scene shuffle, the experiment seed.
+            max_group_length: Longest stream in frames, longer scenes are cut into consecutive
+                chunks. None streams whole scenes.
+
+        Raises:
+            ValueError: If ``max_group_length`` is not positive.
         """
+        if max_group_length is not None and max_group_length < 1:
+            raise ValueError(f"max_group_length must be positive, got {max_group_length}.")
         num_replicas, rank = _world_size_and_rank()
         # The parent's num_samples and total_size count the dataset, not the lanes; __len__ and
         # __iter__ below replace them.
         super().__init__(dataset, num_replicas=num_replicas, rank=rank, shuffle=shuffle, seed=seed)
-        self.scene_groups = dataset.scene_index_groups()
+        self.scene_groups = [
+            group[start : start + (max_group_length or len(group))]
+            for group in dataset.scene_index_groups()
+            for start in range(0, len(group), max_group_length or max(len(group), 1))
+        ]
         if not self.scene_groups:
             raise ValueError("GroupStreamingSampler requires at least one scene group.")
         self.batch_size = batch_size

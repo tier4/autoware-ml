@@ -40,6 +40,8 @@ class DataLoaderConfig:
         persistent_workers: Whether worker processes stay alive across epochs.
         shuffle: Whether the dataloader shuffles samples.
         drop_last: Whether to drop the final incomplete batch.
+        stream_max_frames: Longest stream of a streaming datamodule, longer scenes are cut into
+            consecutive streams. None streams whole scenes.
     """
 
     batch_size: int = 1
@@ -48,6 +50,7 @@ class DataLoaderConfig:
     persistent_workers: bool = False
     shuffle: bool = False
     drop_last: bool = False
+    stream_max_frames: int | None = None
 
     def to_dataloader_kwargs(self) -> dict[str, Any]:
         """Convert to keyword arguments accepted by ``DataLoader``.
@@ -232,8 +235,9 @@ class DataModule(L.LightningDataModule):
           DataLoader: Dataloader over the concatenated sources of the split.
 
         Raises:
-          ValueError: If the split has no dataset or no dataloader settings, or if frame
-            sampling is on while the training dataloader shuffles.
+          ValueError: If the split has no dataset or no dataloader settings, if frame
+            sampling is on while the training dataloader shuffles, or if the settings cut
+            streams, which only the streaming datamodule does.
         """
         dataset = self.datasets.get(split)
         if dataset is None:
@@ -242,6 +246,11 @@ class DataModule(L.LightningDataModule):
             )
         if config is None:
             raise ValueError(f"Split {split} has no dataloader settings.")
+        if config.stream_max_frames is not None:
+            raise ValueError(
+                f"Split {split} sets stream_max_frames, which only the streaming datamodule "
+                "reads. Compose /datamodule/streaming@datamodule: default_streaming_datamodule."
+            )
 
         kwargs = config.to_dataloader_kwargs()
         if split == SplitType.TRAIN and self.train_frame_sampling is not None:
