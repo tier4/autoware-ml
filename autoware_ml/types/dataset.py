@@ -18,6 +18,28 @@ class SplitType(str, Enum):
     PREDICT = "predict"
 
 
+class DatasetFormat(StrEnum):
+    """
+    Dataset family a record was built from, which fixes how its scenario is read.
+
+    A prediction record names the files of its scenario relative to the database root and the
+    loading transforms pick the reader by this value. The family also says where the map comes
+    from: a scenario family ships one map file per scenario, a recording family resolves the
+    lanelet map of the scene through the map provider of the dataset.
+
+    Attributes:
+      AV2: Argoverse 2 motion forecasting, one directory per scenario holding the
+        ``scenario_<id>.parquet`` tracks and the ``log_map_archive_<id>.json`` map.
+      T4: T4Dataset recordings, the tracks are the boxes of the frame records of the
+        scene and the map is its lanelet map.
+      NUSCENES: nuScenes recordings, read like T4Dataset.
+    """
+
+    AV2 = "av2"
+    T4 = "t4"
+    NUSCENES = "nuscenes"
+
+
 class SweepDirection(StrEnum):
     """
     Side of a sample to collect lidar sweeps from. The lidar frames of a scene form a chain,
