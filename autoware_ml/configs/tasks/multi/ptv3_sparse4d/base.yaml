@@ -1,0 +1,160 @@
+# @package _global_
+# PTv3 joint segmentation and temporal Sparse4D detection on the sparse encoder stages.
+defaults:
+  - /tasks/default_task
+  - /tasks/segmentation3d/ptv3/encoder
+  - /tasks/segmentation3d/ptv3/voxel_encoder
+  - /tasks/segmentation3d/ptv3/seg3d_head
+  - _self_
+
+database: ???
+point_cloud_range: ???
+# Edge of the cubic voxels the encoder serializes, in meters.
+grid_size: ???
+max_voxels: ???
+
+num_anchor: 900
+# Pooling strides of the encoder stages the head samples, from the finest to the coarsest.
+det_feature_strides: [8]
+
+# K-means settings of autoware_ml/scripts/generate_anchors.py
+anchors:
+  max_samples: 200000
+  iterations: 25
+  seed: 3407
+
+optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
+  lr: 1.0e-4
+  weight_decay: 0.01
+
+data_preprocessor:
+  preprocessor_modules:
+    - _target_: autoware_ml.preprocessing.detection3d.point_pillar_preprocessor.PointPillarPreprocessor
+      voxel_size: ["${grid_size}", "${grid_size}", "${grid_size}"]
+      point_cloud_range: ${point_cloud_range}
+      max_num_points: 32
+      max_voxels: ${max_voxels}
+      eval_max_voxels: ${max_voxels}
+
+trainer:
+  max_epochs: ???
+  precision: 32-true
+  gradient_clip_val: 5.0
+  gradient_clip_algorithm: norm
+
+# A summary forward pass would feed one frame out of its stream to the instance bank, so the
+# model summary lists the modules without FLOPs.
+callbacks:
+  model_summary_example_input: null
+
+# The det head graph takes the instance bank state of the last frame and returns the next one.
+deploy:
+  onnx:
+    enabled: true
+    opset_version: 17
+    dynamo: false
+    do_constant_folding: false
+    modules:
+      ptv3_lidar_encoder:
+        metainfo:
+          point_cloud_range: ${point_cloud_range}
+          voxel_size: ["${grid_size}", "${grid_size}", "${grid_size}"]
+          serialization_orders: [z, z-trans]
+          pooling_strides: ${model.encoder.stride}
+          enc_channels: ${model.encoder.enc_channels}
+          patch_sizes: ${model.encoder.enc_patch_size}
+      ptv3_seg3d_head:
+        metainfo:
+          dec_depths: ${model.seg3d_head.dec_depths}
+          class_names: ${taxonomy.segmentation3d.class_names}
+      ptv3_det3d_head:
+        metainfo:
+          class_names: ${taxonomy.detection3d.class_names}
+          box_layout: [x, y, z, ln_l, ln_w, ln_h, sin_yaw, cos_yaw, vx, vy]
+          quality_layout: [centerness, yawness]
+          num_anchor: ${num_anchor}
+          embed_dims: ${model.bbox_head.embed_dims}
+          num_output: ${model.bbox_head.num_output}
+          num_temp_instances: ${model.bbox_head.num_temp_instances}
+          default_time_interval: ${model.bbox_head.default_time_interval}
+          min_time_interval: ${model.bbox_head.min_time_interval}
+          max_time_interval: ${model.bbox_head.max_time_interval}
+          confidence_decay: ${model.bbox_head.confidence_decay}
+          track_birth_score: ${model.bbox_head.track_birth_score}
+          nms_groups: ${model.bbox_head.nms_group_configs}
+  tensorrt:
+    enabled: false
+
+model:
+  _target_: autoware_ml.models.multi.ptv3_det3d_seg3d_sparse4d.PTv3Det3DSeg3DSparse4DModel
+  _convert_: all
+  metrics: ${metrics}
+  log_dict_configs:
+    _target_: autoware_ml.models.module_base_model.LogDictConfigs
+    _convert_: all
+    on_step: false
+    on_epoch: true
+    prog_bar: true
+    sync_dist: true
+  segmentation3d_loss_weight: 1.0
+  detection3d_loss_weight: 1.0
+  grid_size: ${grid_size}
+  point_cloud_range: ${point_cloud_range}
+
+  # Top-down fusion of the deepest encoder stage into the stages the head samples.
+  det_fusion:
+    _target_: autoware_ml.models.detection3d.ptv3.PTv3Det3DFeaturePyramid
+    stage_channels: ["${model.encoder.enc_channels[3]}", "${model.encoder.enc_channels[4]}"]
+    out_channels: 256
+
+  bbox_head:
+    _target_: autoware_ml.models.detection3d.heads.sparse4d.Sparse4DHead
+    num_classes: ${class_count:${taxonomy.detection3d.class_names}}
+    class_names: ${taxonomy.detection3d.class_names}
+    embed_dims: ${model.det_fusion.out_channels}
+    anchor_file: ???
+    num_anchor: ${num_anchor}
+    point_cloud_range: ${point_cloud_range}
+    grid_size: ${grid_size}
+    feature_strides: ${det_feature_strides}
+    num_decoder: 6
+    num_heads: 8
+    num_groups: 8
+    feedforward_channels: 1024
+    dropout: 0.1
+    num_learnable_pts: 6
+    attn_drop: 0.15
+    reg_weights: [2.0, 2.0, 2.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    match_reg_weights: [2.0, 2.0, 2.0, 0.5, 0.5, 0.5, 0.0, 0.0, 0.0, 0.0]
+    cls_cost_weight: 2.0
+    box_cost_weight: 0.25
+    loss_cls_weight: 2.0
+    loss_box_weight: 0.25
+    loss_cns_weight: 1.0
+    loss_yns_weight: 1.0
+    cls_threshold_to_reg: 0.05
+    num_output: 300
+    nms_group_configs: null
+    num_temp_instances: 0
+    dn_query_budget: 0
+
+  optimizer: ${optimizer}
+  optimizer_group_overrides:
+    encoder_block:
+      lr: 0.00002
+    encoder_default:
+      lr: 0.00005
+    seg3d_head:
+      lr: 0.00005
+  # Warmup and decay are spread over the optimizer steps of the run.
+  scheduler:
+    _target_: autoware_ml.utils.schedulers.cyclic_cosine_annealing.StepCyclicCosineAnnealingLR
+    _partial_: true
+    warmup_epochs: ???
+    decay_epochs: ???
+    max_lr_factor: 2.0
+    min_lr_factor: 0.0001
+  scheduler_config:
+    interval: step

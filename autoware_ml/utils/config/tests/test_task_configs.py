@@ -17,10 +17,12 @@
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 
 import hydra
+import numpy as np
 import pytest
-from omegaconf import OmegaConf
+from omegaconf import DictConfig, OmegaConf
 
 from autoware_ml.utils.config.tests.config_roots import compose_task, task_config_names
 
@@ -39,9 +41,20 @@ EXPERIMENT_CONFIGS = [
 ]
 
 
+def write_placeholder_artifacts(cfg: DictConfig) -> None:
+    """Write the files a run prepares beforehand: the anchors of a Sparse4D head."""
+    anchor_file = OmegaConf.select(cfg, "model.bbox_head.anchor_file")
+    if anchor_file is not None:
+        Path(anchor_file).parent.mkdir(parents=True, exist_ok=True)
+        np.save(anchor_file, np.zeros((cfg.model.bbox_head.num_anchor, 10), dtype=np.float32))
+
+
 @pytest.mark.parametrize("config_name", EXPERIMENT_CONFIGS)
-def test_every_experiment_instantiates_its_model_and_pipelines(config_name: str) -> None:
-    cfg = compose_task(config_name)
+def test_every_experiment_instantiates_its_model_and_pipelines(
+    config_name: str, tmp_path: Path
+) -> None:
+    cfg = compose_task(config_name, overrides=[f"cache_root_path={tmp_path}"])
+    write_placeholder_artifacts(cfg)
 
     data_preprocessor = hydra.utils.instantiate(cfg.data_preprocessor)
     hydra.utils.instantiate(cfg.datasets.train.transforms)

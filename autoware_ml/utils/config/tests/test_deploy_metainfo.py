@@ -18,8 +18,12 @@ PTV3_CONFIGS = [
     "tasks/multi/ptv3/nuscenes/voxel005_b16_100e_nuscenes_51m",
     "tasks/segmentation3d/ptv3/nuscenes/voxel005_b16_50e_nuscenes_51m",
     "tasks/detection3d/ptv3/nuscenes/voxel005_b16_30e_nuscenes_51m",
+    "tasks/multi/ptv3_sparse4d/t4dataset/voxel012_b8_24e_t4dataset_122m",
 ]
-DET3D_CONFIGS = [name for name in PTV3_CONFIGS if "segmentation3d" not in name]
+# The TransFusion det heads, a Sparse4D head exports no BEV grid.
+DET3D_CONFIGS = [
+    name for name in PTV3_CONFIGS if "segmentation3d" not in name and "sparse4d" not in name
+]
 
 
 @pytest.mark.parametrize("config_name", PTV3_CONFIGS)

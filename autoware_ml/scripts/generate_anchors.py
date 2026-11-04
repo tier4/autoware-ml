@@ -14,33 +14,34 @@
 
 """Generate the k-means anchors of the Sparse4D head of a task into the cache directory.
 
-Usage: ``python -m autoware_ml.scripts.generate_anchors --config-name <task config>``
+Usage: ``python -m autoware_ml.scripts.generate_anchors --config-name <task config>``, the
+task config of the bundled or the external config root like the CLI names it.
 """
 
 from __future__ import annotations
 
+import argparse
 import logging
 from collections.abc import Sequence
 from pathlib import Path
 
-import hydra
 import numpy as np
 import polars as pl
 import torch
+from hydra import compose, initialize_config_dir
+from hydra.core.global_hydra import GlobalHydra
 from hydra.utils import instantiate
 from omegaconf import DictConfig
 
-from autoware_ml.configs.resolvers import register_config_resolvers
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDatasetSchema
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.datamodule.data_module import DataModule
 from autoware_ml.models.detection3d.heads.sparse4d import ANCHOR_DIM
 from autoware_ml.types.dataset import SplitType
-from autoware_ml.utils.runtime import get_config_path
+from autoware_ml.utils.cli.helpers import resolve_config_reference
 
 logger = logging.getLogger(__name__)
-register_config_resolvers()
-_CONFIG_PATH = get_config_path()
+CONFIG_NAME_PREFIX = "tasks"
 
 
 def load_gt_boxes(
@@ -160,8 +161,7 @@ def build_anchors(
     return anchors.cpu().numpy()
 
 
-@hydra.main(version_base=None, config_path=_CONFIG_PATH)
-def main(cfg: DictConfig) -> None:
+def generate_anchors(cfg: DictConfig) -> None:
     """Generate the anchors of the Sparse4D head of the configured task.
 
     The ``anchors`` group of the config sets the sample cap, the k-means iterations and the seed.
@@ -191,7 +191,7 @@ def main(cfg: DictConfig) -> None:
             scenarios=database.scenarios,
         )[SplitType.TRAIN]
         source_boxes = load_gt_boxes(
-            records, cfg.database.taxonomy.detection3d.class_names, head_cfg.point_cloud_range
+            records, cfg.taxonomy.detection3d.class_names, head_cfg.point_cloud_range
         )
         logger.info(f"{database.version}: {source_boxes.shape[0]:,} training boxes in range")
         boxes.append(source_boxes)
@@ -215,6 +215,31 @@ def main(cfg: DictConfig) -> None:
     logger.info(
         f"Saved {head_cfg.num_anchor} anchors from {all_boxes.shape[0]:,} boxes to {output}"
     )
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    """Compose the task config of either config root and generate its anchors.
+
+    Args:
+        argv: Command line arguments, ``sys.argv[1:]`` when ``None``.
+    """
+    parser = argparse.ArgumentParser(description=__doc__.split("\n", maxsplit=1)[0])
+    parser.add_argument(
+        "--config-name",
+        required=True,
+        help="Task config name or the path of a task config inside a config root",
+    )
+    parser.add_argument("overrides", nargs="*", help="Hydra overrides")
+    args = parser.parse_args(argv)
+
+    config_path, config_name, searchpath_overrides = resolve_config_reference(
+        args.config_name, CONFIG_NAME_PREFIX
+    )
+    GlobalHydra.instance().clear()
+    with initialize_config_dir(version_base=None, config_dir=config_path):
+        cfg = compose(config_name=config_name, overrides=[*searchpath_overrides, *args.overrides])
+    logging.basicConfig(level=logging.INFO)
+    generate_anchors(cfg)
 
 
 if __name__ == "__main__":
