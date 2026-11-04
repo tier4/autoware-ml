@@ -993,6 +993,26 @@ def test_stream_continuity_breaks_over_a_long_gap() -> None:
     assert continuity(["a", "b"], torch.tensor([0.5, 1.5])).tolist() == [1.0, 0.0]
 
 
+def test_stream_continuity_keeps_the_shortest_gap_and_every_gap() -> None:
+    """
+    Input: three lanes whose next frames come 0.05 s, 0.01 s and 2 s after their previous ones,
+    with a shortest stream gap of 0.05 s and a longest of 2 s.
+    Expected: the gaps on both bounds continue, the shorter one starts a new stream, the gaps of
+    the lanes are kept, and a shortest gap not below the longest is rejected.
+    Check: compare the ``prev_exists`` flags and the gaps of both calls.
+    """
+    continuity = StreamContinuity(max_stream_gap=2.0, min_stream_gap=0.05)
+    start = torch.zeros(3, dtype=torch.float64)
+    continuity(["a", "b", "c"], start)
+    assert continuity.gap.tolist() == [0.0, 0.0, 0.0]
+
+    gap = torch.tensor([0.05, 0.01, 2.0], dtype=torch.float64)
+    assert continuity(["a", "b", "c"], start + gap).tolist() == [1.0, 0.0, 1.0]
+    torch.testing.assert_close(continuity.gap, gap)
+    with pytest.raises(ValueError, match="below max_stream_gap"):
+        StreamContinuity(max_stream_gap=1.0, min_stream_gap=1.0)
+
+
 def test_loss_keys_and_graph_are_uniform_without_ground_truth() -> None:
     """
     Input: a training batch of one sample without any box.

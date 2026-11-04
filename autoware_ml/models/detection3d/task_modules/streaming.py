@@ -33,27 +33,41 @@ class StreamContinuity:
     """Tell which batch lanes continue the stream of their previous frame.
 
     A lane continues when its frame belongs to the scene of the lane's previous frame and
-    comes later in time, within ``max_stream_gap`` seconds when one is set. A lane without a
-    previous frame, one that moved to another scene, one whose frame is not later than the
-    previous one (the streaming sampler ends a shorter lane with a padding slot that repeats
-    its last frame) and one that jumped over too long a gap start a new stream, so a
-    temporal model resets its memory there. Every temporal head that carries a memory across
-    batches makes this same check; the frames are remembered for the next call.
+    comes later in time, at least ``min_stream_gap`` and at most ``max_stream_gap`` seconds
+    later when they are set. A lane without a previous frame, one that moved to another scene,
+    one whose frame is not later than the previous one (the streaming sampler ends a shorter
+    lane with a padding slot that repeats its last frame) and one whose gap leaves the bounds
+    start a new stream, so a temporal model resets its memory there. Every temporal head that
+    carries a memory across batches makes this same check, and the frames are remembered for
+    the next call. The gap of every lane to its previous frame is kept in :attr:`gap`.
 
     Args:
         max_stream_gap: Longest gap in seconds a stream survives, ``None`` for any gap.
+        min_stream_gap: Shortest gap in seconds a stream survives, ``None`` for any gap above
+            zero.
     """
 
-    def __init__(self, max_stream_gap: float | None = None) -> None:
+    def __init__(
+        self, max_stream_gap: float | None = None, min_stream_gap: float | None = None
+    ) -> None:
         if max_stream_gap is not None and max_stream_gap <= 0:
             raise ValueError(f"max_stream_gap must be positive, got {max_stream_gap}.")
+        if min_stream_gap is not None and min_stream_gap <= 0:
+            raise ValueError(f"min_stream_gap must be positive, got {min_stream_gap}.")
+        bounded = min_stream_gap is not None and max_stream_gap is not None
+        if bounded and min_stream_gap >= max_stream_gap:
+            raise ValueError(
+                f"min_stream_gap {min_stream_gap} must be below max_stream_gap {max_stream_gap}."
+            )
         self.max_stream_gap = max_stream_gap
+        self.min_stream_gap = min_stream_gap
         self.reset()
 
     def reset(self) -> None:
         """Forget the previous frame of every lane."""
         self.scene_tokens: list[str] | None = None
         self.timestamps: torch.Tensor | None = None
+        self.gap: Float[torch.Tensor, " batch_size"] | None = None
 
     def __call__(
         self, scene_tokens: Sequence[str], timestamp: Float[torch.Tensor, " batch_size"]
@@ -71,15 +85,19 @@ class StreamContinuity:
         previous_tokens = self.scene_tokens
         if previous_tokens is None or len(previous_tokens) != len(scene_tokens):
             prev_exists = torch.zeros(len(scene_tokens), device=timestamp.device)
+            self.gap = torch.zeros_like(timestamp)
         else:
             same_scene = torch.tensor(
                 [current == previous for current, previous in zip(scene_tokens, previous_tokens)],
                 device=timestamp.device,
             )
-            gap = timestamp - self.timestamps
-            continues = same_scene & (gap > 0)
+            self.gap = timestamp - self.timestamps
+            if self.min_stream_gap is None:
+                continues = same_scene & (self.gap > 0)
+            else:
+                continues = same_scene & (self.gap >= self.min_stream_gap)
             if self.max_stream_gap is not None:
-                continues &= gap <= self.max_stream_gap
+                continues &= self.gap <= self.max_stream_gap
             prev_exists = continues.float()
         self.scene_tokens = list(scene_tokens)
         self.timestamps = timestamp.detach().clone()

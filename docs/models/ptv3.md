@@ -13,6 +13,7 @@ PointTransformerV3 is a LiDAR encoder for LiDAR 3D semantic segmentation and
 - Detection: `PTv3Det3DBEVNeck` fuses the two coarsest encoder stages
   (`PTv3Det3DFeatureFusion`), scatters them onto a dense BEV canvas at the
   detection-head resolution, and feeds a `TransFusionHead`.
+- Temporal detection (experimental): `PTv3Det3DSeg3DSparse4DModel` fuses the deepest encoder stage top-down into finer ones (`PTv3Det3DFeaturePyramid`) and feeds a `Sparse4DHead`. Its queries sample the sparse voxels at keypoints around their anchors, predict velocity, and carry the most confident instances from one frame of a scenario to the next.
 
 The models read single lidar frames, every point as `(x, y, z, intensity)`. The voxel feature
 encoder turns each voxel into the mean x, y, z and intensity of its points, 4 features per voxel,
@@ -67,6 +68,8 @@ autoware-ml train --config-name segmentation3d/ptv3/nuscenes/voxel005_b16_50e_nu
 autoware-ml train --config-name detection3d/ptv3/nuscenes/voxel005_b16_30e_nuscenes_51m
 autoware-ml train --config-name multi/ptv3/nuscenes/voxel005_b16_100e_nuscenes_51m
 ```
+
+The Sparse4D head starts from k-means anchors of the training boxes. The `anchor_recipe` of every head sets how they are derived, and [Adding Models](../contributing/adding-models.md#key-points) describes how training builds them into the anchor cache and how weights carry them.
 
 For a pipeline validation run:
 
@@ -239,9 +242,7 @@ The split export produces one graph per `deploy.onnx.modules` entry:
   `patch_order`, `serialized_inverse` and `grid_coord`). The rule is implemented once in
   `seg3d_head_export_input_names` and must be mirrored by deployment consumers
   from the artifact's `dec_depths`.
-- `det3d_head` - consumes `point_feat_{S-2}`, `point_feat_{S-1}`,
-  `pooling_cluster_{S-2}`, and `point_grid_coord_{S-2}` and outputs the
-  detection head tensors.
+- `det3d_head` - consumes `point_feat_{S-2}`, `point_feat_{S-1}`, `pooling_cluster_{S-2}`, and `point_grid_coord_{S-2}` and outputs the detection head tensors. The temporal Sparse4D graph instead consumes the stage features from the finest pyramid stage to the deepest one with the pooling clusters and voxel coordinates in between, and takes the instance memory of the last frame (`temp_instance_feature`, `temp_anchor`, `temp_confidence`) with the continuity gate `temp_valid`, the frame gap `time_interval` and the transform `prev2current` from the last frame into the current one. The runtime opens the gate only for a frame gap within the `min_time_interval` and `max_time_interval` of the artifact metadata and passes `default_time_interval` otherwise. Besides the last decoder layer of every query (`classification`, `prediction`, `quality`) it returns the memory of the next frame (`temp_*_out`) and `temp_query_index_out`, the query every memory slot was selected from, which lets the runtime carry the track of a query into its slot. The runtime decodes every query into one box of its best class, scored by the class probability times the centerness, and keeps the top `num_output` boxes, nothing is suppressed, as `Sparse4DHead.decode_outputs` does for the metrics. Every decoder layer samples the stages with one `autoware::SparseDeformableAggregation` node, which reads the keypoints, the sampling weights and the padded features and dense int32 voxel lookups of every stage, and is served by the TensorRT plugin of the same name.
 
 ## Implementation
 
@@ -251,10 +252,14 @@ The split export produces one graph per `deploy.onnx.modules` entry:
 | `autoware_ml/models/segmentation3d/heads/ptv3.py`                       | PTv3 segmentation decoder head                     |
 | `autoware_ml/models/detection3d/ptv3.py`                                | PTv3 BEV neck and detection model wrapper          |
 | `autoware_ml/models/detection3d/heads/transfusions/transfusion_head.py` | TransFusion detection head                         |
+| `autoware_ml/models/detection3d/heads/sparse4d.py`                      | Sparse4D temporal query detection head             |
+| `autoware_ml/models/multi/ptv3_det3d_seg3d_sparse4d.py`                 | PTv3 segmentation and Sparse4D model wrapper       |
+| `autoware_ml/anchors/`                                                  | Anchor recipes of the Sparse4D head                |
 | `autoware_ml/models/segmentation3d/encoders/ptv3.py`                    | Reusable PTv3 encoder components                   |
 | `autoware_ml/models/segmentation3d/encoders/voxel.py`                   | Voxel feature encoders of single frames and sweeps |
 | `autoware_ml/utils/point_cloud/`                                        | Shared point-cloud utilities and serialization     |
 | `autoware_ml/ops/segment/segment_csr.py`                                | Segment reduction export operator                  |
+| `autoware_ml/ops/deformable_aggregation/`                               | Sparse4D keypoint sampling export operators        |
 | `autoware_ml/losses/segmentation3d/`                                    | Segmentation losses used by PTv3                   |
 | `autoware_ml/datamodule/t4dataset/dataset.py`                           | T4Dataset records as a dataset                     |
 | `autoware_ml/datamodule/nuscenes/dataset.py`                            | nuScenes dataset                                   |
@@ -273,3 +278,10 @@ project by Pointcept.
 - Repository: <https://github.com/Pointcept/PointTransformerV3>
 - License: MIT
 - Paper: Wu, Xiaoyang, et al. "Point Transformer V3: Simpler, Faster, Stronger." CVPR, 2024.
+
+The Sparse4D head was ported from the official Sparse4D project by Horizon Robotics.
+
+<!-- cspell:ignore Xuewu -->
+- Repository: <https://github.com/HorizonRobotics/Sparse4D>
+- License: MIT
+- Paper: Lin, Xuewu, et al. "Sparse4D v3: Advancing End-to-End 3D Detection and Tracking." arXiv, 2023.

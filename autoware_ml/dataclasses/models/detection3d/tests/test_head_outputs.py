@@ -24,6 +24,8 @@ import torch
 from autoware_ml.dataclasses.models.detection3d.head_outputs import (
     CenterHeadOutputs,
     Detection3DHeadOutputs,
+    Sparse4DDenoisingOutputs,
+    Sparse4DHeadOutputs,
     StreamPETRDenoisingOutputs,
     StreamPETRHeadOutputs,
     TransFusionHeadOutputs,
@@ -395,6 +397,93 @@ class TestStreamPETRHeadOutputs(unittest.TestCase):
             )
 
 
+def build_sparse4d_denoising(batch_size: int = 3, num_layers: int = 2) -> Sparse4DDenoisingOutputs:
+    """Build Sparse4D denoising outputs of four queries whose values name their sample."""
+    sample = torch.arange(batch_size, dtype=torch.float32)
+    return Sparse4DDenoisingOutputs(
+        classification=sample.view(-1, 1, 1, 1).expand(batch_size, num_layers, 4, 2).clone(),
+        prediction=sample.view(-1, 1, 1, 1).expand(batch_size, num_layers, 4, 10).clone(),
+        cls_targets=sample.view(-1, 1, 1).expand(batch_size, 4, 2).clone(),
+        box_targets=sample.view(-1, 1, 1).expand(batch_size, 4, 10).clone(),
+        box_weights=sample.view(-1, 1, 1).expand(batch_size, 4, 10).clone(),
+        cls_weights=sample.view(-1, 1).expand(batch_size, 4).clone(),
+    )
+
+
+def build_sparse4d_outputs(**overrides: object) -> Sparse4DHeadOutputs:
+    """Build Sparse4D outputs of three samples, two layers and seven queries named by sample."""
+    sample = torch.arange(3, dtype=torch.float32)
+    fields: dict[str, object] = {
+        "classification": sample.view(-1, 1, 1, 1).expand(3, 2, 7, 2).clone(),
+        "prediction": sample.view(-1, 1, 1, 1).expand(3, 2, 7, 10).clone(),
+        "quality": sample.view(-1, 1, 1, 1).expand(3, 2, 7, 2).clone(),
+        "instance_ids": sample.long().view(-1, 1).expand(3, 7).clone(),
+        "instance_feature": sample.view(-1, 1, 1).expand(3, 7, 32).clone(),
+        "denoising": build_sparse4d_denoising(),
+    }
+    fields.update(overrides)
+    return Sparse4DHeadOutputs(**fields)
+
+
+class TestSparse4DHeadOutputs(unittest.TestCase):
+    """Unit tests for the Sparse4D head outputs."""
+
+    def test_select_samples_keeps_the_selected_sample_in_every_field(self) -> None:
+        """
+        Input: outputs of three samples with denoising queries and the mask [False, True, False].
+        Expected: every field, the denoising queries included, keeps sample 1 only, and outputs
+          without denoising queries keep none.
+        """
+        mask = torch.tensor([False, True, False])
+        for denoising in (build_sparse4d_denoising(), None):
+            with self.subTest(denoising=denoising is not None):
+                selected = build_sparse4d_outputs(denoising=denoising).select_samples(mask)
+                tensors = [
+                    selected.classification,
+                    selected.prediction,
+                    selected.quality,
+                    selected.instance_ids,
+                    selected.instance_feature,
+                ]
+                if denoising is not None:
+                    tensors += [
+                        selected.denoising.classification,
+                        selected.denoising.prediction,
+                        selected.denoising.cls_targets,
+                        selected.denoising.box_targets,
+                        selected.denoising.box_weights,
+                        selected.denoising.cls_weights,
+                    ]
+                else:
+                    self.assertIsNone(selected.denoising)
+                for tensor in tensors:
+                    self.assertEqual(tensor.shape[0], 1)
+                    self.assertTrue((tensor == 1).all())
+
+    def test_every_output_must_cover_the_batch_layers_and_queries(self) -> None:
+        cases = {
+            "prediction": {"prediction": torch.zeros(3, 2, 6, 10)},
+            "quality": {"quality": torch.zeros(3, 1, 7, 2)},
+            "instance_ids": {"instance_ids": torch.zeros(3, 6, dtype=torch.int64)},
+            "instance_feature": {"instance_feature": torch.zeros(3, 6, 32)},
+            "denoising": {"denoising": build_sparse4d_denoising(batch_size=2)},
+        }
+        for name, overrides in cases.items():
+            with self.subTest(name=name), self.assertRaisesRegex(ValidationError, name):
+                build_sparse4d_outputs(**overrides)
+
+    def test_denoising_targets_must_describe_the_denoising_queries(self) -> None:
+        with self.assertRaisesRegex(ValidationError, "box_targets"):
+            Sparse4DDenoisingOutputs(
+                classification=torch.zeros(1, 2, 4, 2),
+                prediction=torch.zeros(1, 2, 4, 10),
+                cls_targets=torch.zeros(1, 4, 2),
+                box_targets=torch.zeros(1, 5, 10),
+                box_weights=torch.zeros(1, 4, 10),
+                cls_weights=torch.zeros(1, 4),
+            )
+
+
 class TestDetection3DHeadOutputs(unittest.TestCase):
     """Unit tests for the head-agnostic 3D detection output wrapper."""
 
@@ -440,13 +529,13 @@ class TestDetection3DHeadOutputs(unittest.TestCase):
         """
         Input: a wrapper with no head outputs set.
         Expected: exactly one head family produces the outputs, so an empty wrapper is rejected,
-        and the error names every head field, the StreamPETR one included.
-        Check: a ValidationError listing the three head fields and the empty set is raised.
+        and the error names every head field, the StreamPETR and Sparse4D ones included.
+        Check: a ValidationError listing the four head fields and the empty set is raised.
         """
         with self.assertRaisesRegex(
             ValidationError,
             "Exactly one of center_head_outputs, transfusion_head_outputs, "
-            r"streampetr_head_outputs must be set, got \[\]",
+            r"streampetr_head_outputs, sparse4d_head_outputs must be set, got \[\]",
         ):
             Detection3DHeadOutputs(center_head_outputs=None, transfusion_head_outputs=None)
 

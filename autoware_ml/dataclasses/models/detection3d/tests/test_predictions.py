@@ -92,6 +92,13 @@ class TestDetection3DSamplePredictions(unittest.TestCase):
                 with self.assertRaises(ValidationError):
                     Detection3DSamplePredictions.model_validate(fields)
 
+    def test_rejects_track_ids_of_another_box_count(self) -> None:
+        """Test that a tracking model gives one track id per box."""
+        fields = self._build_fields()
+        fields["instance_ids"] = torch.zeros(3, dtype=torch.int64)
+        with self.assertRaisesRegex(ValidationError, "one id per box"):
+            Detection3DSamplePredictions.model_validate(fields)
+
     def test_is_frozen(self) -> None:
         """Test that decoded predictions cannot be mutated after construction."""
         predictions = Detection3DSamplePredictions.model_validate(self._build_fields(num_boxes=1))
