@@ -123,6 +123,11 @@ class _BEVFusionExportWrapperBase(nn.Module):
         )
 
 
+def _voxel_dynamic_axes() -> dict[str, dict[int, str]]:
+    """The voxel inputs vary in count: one row per voxel of the exported sample."""
+    return {name: {0: "voxels_num"} for name in ("voxels", "coors", "num_points_per_voxel")}
+
+
 class _BEVFusionLidarExportWrapper(_BEVFusionExportWrapperBase):
     """Wrap the lidar-only BEVFusion main body export.
 
@@ -575,6 +580,7 @@ class BEVFusionDetection3DModel(ModuleBaseModel):
                     args=(voxels, coors, num_points_per_voxel),
                     input_names=["voxels", "coors", "num_points_per_voxel"],
                     output_names=["bbox_pred", "score", "label_pred"],
+                    dynamic_axes=_voxel_dynamic_axes(),
                 )
             }
 
@@ -614,6 +620,7 @@ class BEVFusionDetection3DModel(ModuleBaseModel):
                 args=(imgs_uint8,),
                 input_names=["imgs"],
                 output_names=["image_feats"],
+                dynamic_axes={"imgs": {0: "num_imgs"}},
             ),
             "bevfusion_camera_lidar": ExportSpec(
                 module=_BEVFusionExportWrapper(export_model),
@@ -640,6 +647,15 @@ class BEVFusionDetection3DModel(ModuleBaseModel):
                     "indices",
                 ],
                 output_names=["bbox_pred", "score", "label_pred"],
+                dynamic_axes={
+                    **_voxel_dynamic_axes(),
+                    "image_feats": {0: "num_imgs"},
+                    "depth_maps": {0: "num_imgs"},
+                    "geom_feats": {0: "num_kept"},
+                    "kept": {0: "num_frustum_points"},
+                    "ranks": {0: "num_kept"},
+                    "indices": {0: "num_kept"},
+                },
             ),
         }
 

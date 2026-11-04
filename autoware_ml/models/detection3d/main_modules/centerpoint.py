@@ -279,17 +279,26 @@ class CenterPointDetection3DModel(ModuleBaseModel):
             self.pts_neck,
             self.bbox_head,
         )
+        bev_axes = {0: "batch_size", 2: "H", 3: "W"}
         return {
             "pts_voxel_encoder_centerpoint": ExportSpec(
                 module=_CenterPointVoxelEncoderExportWrapper(self.pts_voxel_encoder),
                 args=(input_features,),
                 input_names=["input_features"],
                 output_names=["pillar_features"],
+                dynamic_axes={
+                    "input_features": {0: "num_voxels", 1: "num_max_points"},
+                    "pillar_features": {0: "num_voxels"},
+                },
             ),
             "pts_backbone_neck_head_centerpoint": ExportSpec(
                 module=head_wrapper,
                 args=(spatial_features,),
                 input_names=["spatial_features"],
                 output_names=head_wrapper.output_names,
+                dynamic_axes={
+                    name: dict(bev_axes)
+                    for name in ["spatial_features", *head_wrapper.output_names]
+                },
             ),
         }

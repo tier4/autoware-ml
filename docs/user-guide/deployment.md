@@ -148,10 +148,17 @@ the names a stage graph declares (see
 hand-written spec lists; the export log prints them. A spec names every one of
 its inputs and at least one output, or it is refused when built. `deploy.onnx`
 carries no `input_names` or `output_names`; an entry fails the deploy before its
-MLflow run is created or the model loads. The keys of `dynamic_shapes`,
-`dynamic_axes` and `deploy.tensorrt.input_shapes` are these names. A model that
-lets a config choose its names exposes them as a model parameter, as PTv3's
+MLflow run is created or the model loads. The keys of `dynamic_shapes` and
+`deploy.tensorrt.input_shapes` are these names. A model that lets a config
+choose its names exposes them as a model parameter, as PTv3's
 `export_output_names`.
+
+**Dynamic axes**: which axes vary between runs is a property of the model, so
+the export spec declares them (`ExportSpec.dynamic_axes`, keyed by its input
+and output names) and `deploy.onnx` carries no `dynamic_axes`; an entry fails
+the deploy like a configured name does. The spec refuses an axis of a tensor it
+does not name. The deployment settings that do vary, the TensorRT shape ranges,
+stay in `deploy.tensorrt.input_shapes`.
 
 **precision**: `fp32` exports the model unchanged. `fp16` halves the weights and
 internal tensors but keeps graph inputs and outputs fp32, so consumers keep their
@@ -176,12 +183,10 @@ deploy:
 ```
 
 Set `dynamo: false` for models that export through the TorchScript exporter
-and its ONNX symbolic functions instead of `torch.export`. In that mode,
-`dynamic_axes` is passed to the exporter directly, and `dynamic_shapes` can
-still be used as a shorthand to derive equivalent symbolic axes. A module
-declares its axes in its export spec or in its config, not both, and the
-config's keys must be the module's input or output names; otherwise the export
-stops with an error.
+and its ONNX symbolic functions instead of `torch.export`. That exporter takes
+the spec's `dynamic_axes` and ignores `dynamic_shapes`; a spec that declares
+axes under `dynamo: true` stops the export, since `torch.export` would export
+those axes static.
 
 ### TensorRT Settings
 

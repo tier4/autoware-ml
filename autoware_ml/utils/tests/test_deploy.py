@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import OmegaConf
 import re
 
 import onnx
@@ -32,7 +32,6 @@ import autoware_ml.utils.deploy as deploy
 from autoware_ml.utils.deploy import (
     ExportSpec,
     build_dynamic_shapes,
-    build_dynamic_axes,
     export_to_onnx,
     merge_module_onnx_cfg,
     normalize_dynamic_shapes_for_model,
@@ -66,13 +65,17 @@ def test_export_to_onnx_names_the_tensors_after_the_spec(tmp_path: Path) -> None
 
 
 def test_configured_names_are_refused_when_the_config_is_read() -> None:
-    """A config that names tensors fails up front, naming the entry, shared or per module."""
+    """A config that names tensors or axes fails up front, naming the entry, shared or per module."""
     validate_onnx_names_not_configured(
         OmegaConf.create({"opset_version": 17, "modules": {"m": {}}})
     )
     for cfg, entry in (
         ({"input_names": ["x"]}, "deploy.onnx.input_names"),
         ({"modules": {"head": {"output_names": ["y"]}}}, "deploy.onnx.modules.head.output_names"),
+        (
+            {"modules": {"head": {"dynamic_axes": {"x": {0: "n"}}}}},
+            "deploy.onnx.modules.head.dynamic_axes",
+        ),
     ):
         with pytest.raises(ValueError, match=re.escape(entry)):
             validate_onnx_names_not_configured(OmegaConf.create(cfg))
@@ -88,54 +91,35 @@ def _identity_spec(dynamic_axes: dict[str, dict[int, str]] | None = None) -> Exp
     )
 
 
-def _torchscript_onnx_cfg(dynamic_axes: dict[str, dict[int, str]] | None = None) -> DictConfig:
-    cfg: dict[str, object] = {"opset_version": 17, "dynamo": False}
-    if dynamic_axes is not None:
-        cfg["dynamic_axes"] = dynamic_axes
-    return OmegaConf.create(cfg)
-
-
-@pytest.mark.parametrize(
-    ("spec_axes", "config_axes"),
-    [
-        ({"input": {0: "batch"}}, None),
-        (None, {"input": {0: "batch"}, "output": {0: "batch"}}),
-    ],
-    ids=["from_the_spec", "from_the_config"],
-)
-def test_export_to_onnx_applies_the_dynamic_axes_of_one_source(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    spec_axes: dict[str, dict[int, str]] | None,
-    config_axes: dict[str, dict[int, str]] | None,
+def test_export_to_onnx_applies_the_spec_dynamic_axes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """The TorchScript exporter gets the axes the spec declares; the config has none."""
     captured_kwargs: dict[str, object] = {}
     monkeypatch.setattr(torch.onnx, "export", lambda **kwargs: captured_kwargs.update(kwargs))
+    axes = {"input": {0: "batch"}, "output": {0: "batch"}}
 
     export_to_onnx(
-        _identity_spec(spec_axes), _torchscript_onnx_cfg(config_axes), tmp_path / "m.onnx"
+        _identity_spec(axes),
+        OmegaConf.create({"opset_version": 17, "dynamo": False}),
+        tmp_path / "m.onnx",
     )
 
-    assert captured_kwargs["dynamic_axes"] == (spec_axes or config_axes)
+    assert captured_kwargs["dynamic_axes"] == axes
 
 
-def test_export_to_onnx_refuses_dynamic_axes_from_both_the_spec_and_the_config(
-    tmp_path: Path,
-) -> None:
-    """A spec's axes used to replace the config's without a word."""
-    spec = _identity_spec({"input": {0: "spec_batch"}})
-    onnx_cfg = _torchscript_onnx_cfg({"input": {0: "config_batch"}})
+def test_export_to_onnx_refuses_spec_dynamic_axes_under_dynamo(tmp_path: Path) -> None:
+    """torch.export ignores dynamic_axes, so the spec's axes would be exported static."""
+    onnx_cfg = OmegaConf.create({"opset_version": 17, "dynamo": True})
 
-    with pytest.raises(ValueError, match="Declare them in one place"):
-        export_to_onnx(spec, onnx_cfg, tmp_path / "m.onnx")
+    with pytest.raises(ValueError, match="only the TorchScript exporter"):
+        export_to_onnx(_identity_spec({"input": {0: "batch"}}), onnx_cfg, tmp_path / "m.onnx")
 
 
-def test_export_to_onnx_refuses_config_dynamic_axes_of_unknown_tensors(tmp_path: Path) -> None:
+def test_export_spec_refuses_dynamic_axes_of_unknown_tensors() -> None:
     """The TorchScript exporter only warns about such an axis and exports it static."""
-    onnx_cfg = _torchscript_onnx_cfg({"input": {0: "batch"}, "inputs": {0: "batch"}})
-
     with pytest.raises(ValueError, match=r"for \['inputs'\], which are not among"):
-        export_to_onnx(_identity_spec(), onnx_cfg, tmp_path / "m.onnx")
+        _identity_spec({"input": {0: "batch"}, "inputs": {0: "batch"}})
 
 
 def test_export_spec_names_every_input_and_some_output() -> None:
@@ -166,38 +150,6 @@ def test_supports_export_stage_uses_export_spec_capabilities() -> None:
 
     assert supports_export_stage(spec, "onnx") is True
     assert supports_export_stage(spec, "tensorrt") is False
-
-
-def test_build_dynamic_axes_reads_the_torchscript_export_config() -> None:
-    deploy_cfg = OmegaConf.create(
-        {
-            "dynamic_axes": {
-                "feat": {0: "voxels_num"},
-                "pred_probs": {0: "voxels_num"},
-            }
-        }
-    )
-
-    assert build_dynamic_axes(deploy_cfg) == {
-        "feat": {0: "voxels_num"},
-        "pred_probs": {0: "voxels_num"},
-    }
-
-
-def test_build_dynamic_axes_falls_back_to_dynamic_shapes() -> None:
-    deploy_cfg = OmegaConf.create(
-        {
-            "dynamic_shapes": {
-                "points": {0: {"name": "num_points", "min": 2}},
-                "inverse_map": {0: {"name": "num_points", "min": 2}},
-            }
-        }
-    )
-
-    assert build_dynamic_axes(deploy_cfg) == {
-        "points": {0: "num_points"},
-        "inverse_map": {0: "num_points"},
-    }
 
 
 def test_build_dynamic_shapes_matches_positional_export_inputs() -> None:

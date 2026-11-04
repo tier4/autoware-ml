@@ -45,11 +45,12 @@ class ExportSpec:
     Attributes:
         module: Module instance exported to ONNX.
         args: Example positional inputs supplied during export.
-        input_names: ONNX input names, one per entry of ``args`` in order; the keys the
-            config's ``dynamic_shapes`` / ``dynamic_axes`` tables and the runtime use.
+        input_names: ONNX input names, one per entry of ``args`` in order; the keys of
+            ``deploy.tensorrt.input_shapes`` and the names the runtime binds.
         output_names: Names of the exported output tensors, in order.
-        dynamic_axes: Optional ONNX dynamic-axis mapping, ``{tensor: {dim: name}}``. Used
-            only by the TorchScript exporter (``dynamo=False``).
+        dynamic_axes: The axes that vary between runs, ``{tensor: {dim: name}}``, keyed by
+            the input and output names. The model declares them here, not in its config;
+            the TorchScript exporter (``dynamo=False``) applies them.
         supported_stages: Export stages supported by this specification.
     """
 
@@ -61,13 +62,14 @@ class ExportSpec:
     supported_stages: frozenset[str] = frozenset({"onnx", "tensorrt"})
 
     def __post_init__(self) -> None:
-        """Refuse a spec that leaves an input or every output unnamed.
+        """Refuse a spec that leaves an input or every output unnamed, or an axis of no tensor.
 
         Checked when the spec is built, so a model fails before any of its modules exports.
 
         Raises:
             ValueError: If ``input_names`` is empty or not one name per entry of ``args``,
-                or ``output_names`` is empty.
+                ``output_names`` is empty, or ``dynamic_axes`` names a tensor that is neither
+                an input nor an output.
         """
         if not self.input_names or len(self.input_names) != len(self.args):
             raise ValueError(
@@ -75,6 +77,16 @@ class ExportSpec:
             )
         if not self.output_names:
             raise ValueError("The export spec names no outputs.")
+        # The TorchScript exporter only warns about an axis of an unknown tensor and exports
+        # it static.
+        unknown = sorted(
+            set(self.dynamic_axes or ()) - set(self.input_names) - set(self.output_names)
+        )
+        if unknown:
+            raise ValueError(
+                f"The export spec declares dynamic_axes for {unknown}, which are not among its "
+                f"inputs {self.input_names} or outputs {self.output_names}."
+            )
 
 
 def validate_cuda_available() -> None:
@@ -228,69 +240,6 @@ def normalize_dynamic_shapes_for_model(
     return dynamic_shapes
 
 
-def build_dynamic_axes(onnx_cfg: DictConfig) -> dict[str, dict[int, str]] | None:
-    """Build the ONNX dynamic-axes mapping from the module's config.
-
-    The mapping is what the TorchScript exporter (``torch.onnx.export(..., dynamo=False)``)
-    takes as ``dynamic_axes``.
-    """
-    dynamic_axes_cfg = onnx_cfg.get("dynamic_axes")
-    if dynamic_axes_cfg is None:
-        dynamic_axes_cfg = onnx_cfg.get("dynamic_shapes")
-    if dynamic_axes_cfg is None:
-        return None
-
-    dynamic_axes: dict[str, dict[int, str]] = {}
-    for tensor_name, dim_mapping in dynamic_axes_cfg.items():
-        tensor_dynamic_axes: dict[int, str] = {}
-        for dim_idx, dim_spec in dim_mapping.items():
-            if isinstance(dim_spec, str):
-                tensor_dynamic_axes[int(dim_idx)] = dim_spec
-                continue
-
-            dim_name = dim_spec.get("name")
-            if dim_name is None:
-                raise ValueError(
-                    f"Dynamic axis/shape spec for '{tensor_name}[{dim_idx}]' must define 'name'."
-                )
-            tensor_dynamic_axes[int(dim_idx)] = dim_name
-
-        if tensor_dynamic_axes:
-            dynamic_axes[tensor_name] = tensor_dynamic_axes
-
-    return dynamic_axes or None
-
-
-def resolve_dynamic_axes(
-    spec: ExportSpec, onnx_cfg: DictConfig
-) -> dict[str, dict[int, str]] | None:
-    """Return the dynamic axes the TorchScript exporter applies to ``spec``.
-
-    The axes come either from the spec or from the module's config, never from both. The
-    config's axes must name the spec's inputs or outputs: the TorchScript exporter only warns
-    about an unknown name and exports that axis static.
-
-    Raises:
-        ValueError: If both the spec and the config declare axes, or the config names a tensor
-            that is neither an input nor an output of the spec.
-    """
-    config_axes = build_dynamic_axes(onnx_cfg)
-    if config_axes is None:
-        return spec.dynamic_axes
-    if spec.dynamic_axes:
-        raise ValueError(
-            "The export spec declares dynamic_axes and the module's deploy.onnx config declares "
-            f"axes too, for {sorted(config_axes)}. Declare them in one place."
-        )
-    unknown = sorted(set(config_axes) - set(spec.input_names) - set(spec.output_names))
-    if unknown:
-        raise ValueError(
-            f"deploy.onnx declares dynamic axes for {unknown}, which are not among the exported "
-            f"module's inputs {spec.input_names} or outputs {spec.output_names}."
-        )
-    return config_axes
-
-
 def merge_onnx_external_data(onnx_path: Path) -> None:
     """Merge ONNX external data shards back into a single file."""
     import onnx
@@ -302,7 +251,9 @@ def merge_onnx_external_data(onnx_path: Path) -> None:
 
 
 def validate_onnx_names_not_configured(onnx_cfg: DictConfig) -> None:
-    """Refuse ``input_names`` / ``output_names`` in ``deploy.onnx``: the export specs name the tensors.
+    """Refuse ``input_names``, ``output_names`` and ``dynamic_axes`` in ``deploy.onnx``.
+
+    The export spec names the tensors and declares the dynamic axes.
 
     ``run_deploy`` checks it before the MLflow run is created or the model loads.
 
@@ -318,13 +269,13 @@ def validate_onnx_names_not_configured(onnx_cfg: DictConfig) -> None:
     configured = [
         f"{scope}.{key}"
         for scope, cfg in scopes.items()
-        for key in ("input_names", "output_names")
+        for key in ("input_names", "output_names", "dynamic_axes")
         if cfg is not None and key in cfg
     ]
     if configured:
         raise ValueError(
-            f"{configured} are not read: the export spec names the graph inputs and outputs. "
-            "Remove the entries."
+            f"{configured} are not read: the export spec names the graph inputs and outputs "
+            "and declares the dynamic axes. Remove the entries."
         )
 
 
@@ -339,11 +290,18 @@ def export_to_onnx(spec: ExportSpec, onnx_cfg: DictConfig, output_path: Path) ->
     logger.info("Exporting model to ONNX...")
 
     dynamo = onnx_cfg.get("dynamo", True)
+    if dynamo and spec.dynamic_axes:
+        raise ValueError(
+            "The export spec declares dynamic_axes, which only the TorchScript exporter "
+            "applies: with deploy.onnx.dynamo=true those axes would be exported static. Set "
+            "deploy.onnx.dynamo=false for this module, or declare no dynamic_axes on the spec "
+            "and configure deploy.onnx.dynamic_shapes instead."
+        )
     dynamic_shapes = build_dynamic_shapes(onnx_cfg, spec.input_names) if dynamo else None
     dynamic_shapes = (
         normalize_dynamic_shapes_for_model(spec.module, dynamic_shapes) if dynamo else None
     )
-    dynamic_axes = None if dynamo else resolve_dynamic_axes(spec, onnx_cfg)
+    dynamic_axes = None if dynamo else spec.dynamic_axes
 
     logger.info("Dynamic shapes: %s", dynamic_shapes)
     logger.info("Dynamic axes: %s", dynamic_axes)
