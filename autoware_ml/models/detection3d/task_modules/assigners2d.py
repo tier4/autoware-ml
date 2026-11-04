@@ -62,14 +62,16 @@ class BBoxL1Cost2D:
     weight: float = 1.0
     box_format: str = "xywh"
 
+    def __post_init__(self) -> None:
+        if self.box_format not in ("xywh", "xyxy"):
+            raise ValueError(f"Unsupported box_format '{self.box_format}'.")
+
     def __call__(self, bbox_pred: torch.Tensor, gt_bboxes: torch.Tensor) -> torch.Tensor:
         """Compute the pairwise box L1 cost."""
         if self.box_format == "xywh":
             gt_bboxes = bbox_xyxy_to_cxcywh(gt_bboxes)
-        elif self.box_format == "xyxy":
-            bbox_pred = bbox_cxcywh_to_xyxy(bbox_pred)
         else:
-            raise ValueError(f"Unsupported box_format '{self.box_format}'.")
+            bbox_pred = bbox_cxcywh_to_xyxy(bbox_pred)
         return torch.cdist(bbox_pred.float(), gt_bboxes.float(), p=1) * self.weight
 
 
@@ -79,6 +81,10 @@ class IoUCost2D:
 
     weight: float = 1.0
     iou_mode: str = "giou"
+
+    def __post_init__(self) -> None:
+        if self.iou_mode not in ("iou", "giou"):
+            raise ValueError(f"Unsupported iou_mode '{self.iou_mode}'.")
 
     def __call__(self, bboxes: torch.Tensor, gt_bboxes: torch.Tensor) -> torch.Tensor:
         """Compute the pairwise overlap cost."""
@@ -97,12 +103,12 @@ class Center2DL1Cost:
         return torch.cdist(center_pred.float(), gt_centers.float(), p=1) * self.weight
 
 
-@dataclass
+@dataclass(frozen=True)
 class HungarianAssigner2D:
     """One-to-one assignment between dense 2D proposals and ground truth.
 
-    The default cost weights mirror the reference Focal-PETR recipe
-    (2 / 5 / 2 / 10), matching :class:`FocalHead2D`'s default loss weights.
+    The default cost weights are the reference Focal-PETR recipe (2 / 5 / 2 / 10), the same
+    values the auxiliary 2D head uses as its loss weights.
     """
 
     cls_cost: ClassificationCost = field(default_factory=lambda: ClassificationCost(weight=2.0))
@@ -130,7 +136,9 @@ class HungarianAssigner2D:
             pred_centers2d: Proposal centers ``(num_queries, 2)`` normalized.
             gt_bboxes: Ground-truth boxes ``(num_gts, 4)`` in unnormalized
                 ``(x1, y1, x2, y2)`` pixels.
-            gt_labels: Ground-truth labels ``(num_gts,)``.
+            gt_labels: Ground-truth class indices ``(num_gts,)``. The ground truth of one image
+                is not padded, so every label must be a class index; -1 is not a padding
+                sentinel here.
             gt_centers2d: Ground-truth projected centers ``(num_gts, 2)`` in
                 unnormalized pixels.
             image_height: Padded image height in pixels.
@@ -138,6 +146,9 @@ class HungarianAssigner2D:
 
         Returns:
             Assignment result over the proposals.
+
+        Raises:
+            ValueError: If a label is negative or not below the number of class channels.
         """
         num_gts = gt_bboxes.size(0)
         num_queries = bbox_pred.size(0)
@@ -145,16 +156,27 @@ class HungarianAssigner2D:
         assigned_labels = bbox_pred.new_full((num_queries,), -1, dtype=torch.long)
         if num_gts == 0 or num_queries == 0:
             return AssignResult2D(num_gts=num_gts, gt_inds=assigned_gt_inds, labels=assigned_labels)
+        # The classification cost treats -1 as the padding of a batched ground truth and gives it
+        # the highest cost, but this assigner drops no pair, so such a box would still be matched
+        # and its proposal would carry the background label. The 2D ground truth is not padded.
+        if bool((gt_labels < 0).any()):
+            raise ValueError("Found negative gt_labels. The 2D ground truth is not padded.")
+
+        # The matching runs in float32, as the reference does under force_fp32. Under autocast
+        # the head's logits are bfloat16, whose sigmoid rounds every logit above about 6.2 to 1
+        # and gives all confident proposals one cost, far below their float32 costs; a bfloat16
+        # box is off by up to 1/256 of the image before it is scaled to pixels.
+        bbox_pred = bbox_pred.float()
+        cls_pred = cls_pred.float()
+        pred_centers2d = pred_centers2d.float()
+        gt_bboxes = gt_bboxes.float()
+        gt_centers2d = gt_centers2d.float()
 
         factor = gt_bboxes.new_tensor([image_width, image_height, image_width, image_height])
         # The classification cost is batched over padded ground truth; one image is a batch
-        # of one whose ground truth is all valid. It reads float32 logits, like the other costs:
-        # in bfloat16, as autocast gives them, the sigmoid of every logit above about 6.2 rounds
-        # to 1, which gives all confident proposals one cost, far below their float32 costs.
+        # of one whose ground truth is all valid.
         valid_masks = torch.ones((1, num_gts), dtype=torch.bool, device=gt_labels.device)
-        cls_cost = self.cls_cost(
-            cls_pred.float().unsqueeze(0), gt_labels.unsqueeze(0), valid_masks
-        )[0]
+        cls_cost = self.cls_cost(cls_pred.unsqueeze(0), gt_labels.unsqueeze(0), valid_masks)[0]
         cost = (
             cls_cost
             + self.reg_cost(bbox_pred, gt_bboxes / factor)

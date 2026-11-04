@@ -56,6 +56,11 @@ def bbox_overlaps(
     """
     if mode not in ("iou", "giou"):
         raise ValueError(f"Unsupported overlap mode '{mode}'.")
+    if is_aligned and boxes1.shape[0] != boxes2.shape[0]:
+        raise ValueError(
+            f"Aligned overlaps need as many boxes1 as boxes2, got {boxes1.shape[0]} and "
+            f"{boxes2.shape[0]}."
+        )
     area1 = (boxes1[..., 2] - boxes1[..., 0]).clamp(min=0) * (
         boxes1[..., 3] - boxes1[..., 1]
     ).clamp(min=0)
