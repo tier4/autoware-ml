@@ -130,9 +130,9 @@ class ReachabilityParams:
 class Agent:
     """One collision participant in the map frame.
 
-    ``kind`` selects the reachable-set shape. ``heading`` and ``speed`` are used
-    by the wheeled kind, the omnidirectional kind uses ``speed`` isotropically, and the
-    static kind ignores both and uses ``footprint``. ``front`` and ``rear`` are
+    ``motion_model`` selects the reachable-set shape. ``heading`` and ``speed`` are used
+    by the wheeled model, the omnidirectional model uses ``speed`` isotropically, and the
+    static model ignores both and uses ``footprint``. ``front`` and ``rear`` are
     the body's extents ahead of and behind the reference point along the heading
     and ``half_width`` its extent across, so a collision is a body overlap rather
     than a point coincidence. The reference point is wherever the pose is
@@ -142,10 +142,10 @@ class Agent:
     Nothing is defaulted: a vehicle silently placed at heading 0 or speed 0
     scores a plausible looking TTC that is simply wrong. Build agents through
     :meth:`wheeled`, :meth:`omnidirectional` and :meth:`static`, which each ask for
-    exactly what their kind uses.
+    exactly what their model uses.
     """
 
-    kind: MotionModel
+    motion_model: MotionModel
     x: float
     y: float
     heading: float
@@ -232,13 +232,15 @@ class Agent:
         )
 
     def __post_init__(self) -> None:
-        if not isinstance(self.kind, MotionModel):
-            raise ValueError(f"kind must be an MotionModel, got {self.kind!r}.")
-        if self.kind == MotionModel.STATIC:
+        if not isinstance(self.motion_model, MotionModel):
+            raise ValueError(f"motion_model must be a MotionModel, got {self.motion_model!r}.")
+        if self.motion_model == MotionModel.STATIC:
             if self.footprint is None or self.footprint.is_empty:
                 raise ValueError("a static agent needs a non-empty footprint polygon.")
         elif self.footprint is not None:
-            raise ValueError(f"a {self.kind} agent is propagated, so it takes no footprint.")
+            raise ValueError(
+                f"a {self.motion_model} agent is propagated, so it takes no footprint."
+            )
         if not all(isfinite(value) for value in (self.x, self.y, self.heading, self.speed)):
             # A non-finite pose or speed propagates into empty geometry, which
             # would read as "can never be hit" instead of failing.
@@ -251,11 +253,13 @@ class Agent:
         if any(value <= 0.0 for value in extents):
             # A zero body collapses every sweep to an empty geometry, same trap.
             raise ValueError("front, rear and half_width must be > 0.")
-        if self.kind == MotionModel.WHEELED:
+        if self.motion_model == MotionModel.WHEELED:
             if not isfinite(self.min_turn_radius) or self.min_turn_radius <= 0.0:
                 raise ValueError("a wheeled agent needs a finite min_turn_radius > 0.")
         elif self.min_turn_radius != 0.0:
-            raise ValueError(f"a {self.kind} agent does not steer, so it takes no turn radius.")
+            raise ValueError(
+                f"a {self.motion_model} agent does not steer, so it takes no turn radius."
+            )
 
     @property
     def body_reach(self) -> float:
@@ -587,9 +591,9 @@ def reachable_set(
     Returns:
         The reachable-at-``t`` geometry.
     """
-    if agent.kind == MotionModel.STATIC:
+    if agent.motion_model == MotionModel.STATIC:
         return agent.footprint
-    if agent.kind == MotionModel.OMNIDIRECTIONAL:
+    if agent.motion_model == MotionModel.OMNIDIRECTIONAL:
         return Point(agent.x, agent.y).buffer(agent.speed * t + agent.half_width)
     if drivable is None:
         raise ValueError("a wheeled reachable set needs a drivable polygon.")
@@ -619,7 +623,7 @@ class EgoReachability:
             drivable: Road-region union in the map frame that wheeled fronts are clipped to.
             params: Propagation parameters shared by every evaluation.
         """
-        if ego.kind != MotionModel.WHEELED:
+        if ego.motion_model != MotionModel.WHEELED:
             raise ValueError("ego must be a wheeled agent.")
         if drivable is None:
             raise ValueError("ego reachability needs a drivable polygon to clip against.")
@@ -676,7 +680,7 @@ class EgoReachability:
             return inf
         ego, params = self.ego, self.params
 
-        if obj.kind == MotionModel.STATIC:
+        if obj.motion_model == MotionModel.STATIC:
             # A static set never grows: it must already meet the hat.
             if not self._hat.intersects(obj.footprint):
                 return inf
@@ -703,7 +707,7 @@ class EgoReachability:
         # is checked against the full drivable localized to the object's own reach,
         # never against ego's clip (the approach can start outside it).
         surface = None
-        if obj.kind == MotionModel.WHEELED:
+        if obj.motion_model == MotionModel.WHEELED:
             surface = localized_surface(obj, params, self._surface).buffer(SURFACE_TOLERANCE_M)
             shapely.prepare(surface)
         for index in range(max(start_hat, start_gap), self.steps + 1):

@@ -36,11 +36,13 @@ def _footprint(x: float, y: float, size: float = 2.0):
     return box(x - size / 2, y - size / 2, x + size / 2, y + size / 2)
 
 
-def _sampled_agent(kind: MotionModel, x: float, y: float, rng: np.random.Generator) -> Agent:
-    """One random agent of ``kind`` at ``(x, y)``, for the brute-force comparison."""
-    if kind == MotionModel.STATIC:
+def _sampled_agent(
+    motion_model: MotionModel, x: float, y: float, rng: np.random.Generator
+) -> Agent:
+    """One random agent of ``motion_model`` at ``(x, y)``, for the brute-force comparison."""
+    if motion_model == MotionModel.STATIC:
         return Agent.static(x, y, footprint=_footprint(x, y))
-    if kind == MotionModel.OMNIDIRECTIONAL:
+    if motion_model == MotionModel.OMNIDIRECTIONAL:
         return Agent.omnidirectional(x, y, speed=float(rng.uniform(0.0, 6.0)), radius=0.4)
     return Agent.wheeled(
         x,
@@ -223,8 +225,10 @@ def test_ego_reachability_matches_brute_force_stepping(
             x, y = float(rng.uniform(-2.0, 2.0)), float(rng.uniform(-2.0, 2.0))
         else:
             x, y = float(rng.uniform(-30, 130)), float(rng.uniform(-45, 45))
-        kind = (MotionModel.WHEELED, MotionModel.OMNIDIRECTIONAL, MotionModel.STATIC)[index % 3]
-        obj = _sampled_agent(kind, x, y, rng)
+        motion_model = (MotionModel.WHEELED, MotionModel.OMNIDIRECTIONAL, MotionModel.STATIC)[
+            index % 3
+        ]
+        obj = _sampled_agent(motion_model, x, y, rng)
         assert frame.time_to_collision(obj) == brute_force(obj), f"agent {index}: {obj}"
 
 
@@ -500,10 +504,10 @@ def test_a_hairline_map_seam_does_not_shrink_the_front() -> None:
 @pytest.mark.parametrize(
     "kwargs",
     [
-        {"kind": MotionModel.WHEELED, "speed": 10.0, "half_width": 0.0},
-        {"kind": MotionModel.WHEELED, "speed": 10.0, "half_width": float("nan")},
+        {"motion_model": MotionModel.WHEELED, "speed": 10.0, "half_width": 0.0},
+        {"motion_model": MotionModel.WHEELED, "speed": 10.0, "half_width": float("nan")},
         {
-            "kind": MotionModel.WHEELED,
+            "motion_model": MotionModel.WHEELED,
             "speed": float("nan"),
             "front": 1.0,
             "rear": 1.0,
@@ -511,7 +515,7 @@ def test_a_hairline_map_seam_does_not_shrink_the_front() -> None:
             "min_turn_radius": 3.0,
         },
         {
-            "kind": MotionModel.WHEELED,
+            "motion_model": MotionModel.WHEELED,
             "heading": float("nan"),
             "speed": 1.0,
             "front": 1.0,
@@ -520,7 +524,7 @@ def test_a_hairline_map_seam_does_not_shrink_the_front() -> None:
             "min_turn_radius": 3.0,
         },
         {
-            "kind": MotionModel.STATIC,
+            "motion_model": MotionModel.STATIC,
             "speed": -1.0,
             "front": 1.0,
             "rear": 1.0,
@@ -529,7 +533,7 @@ def test_a_hairline_map_seam_does_not_shrink_the_front() -> None:
             "footprint": box(0.0, 0.0, 1.0, 1.0),
         },
         {
-            "kind": MotionModel.WHEELED,
+            "motion_model": MotionModel.WHEELED,
             "speed": 1.0,
             "front": 1.0,
             "rear": 1.0,
@@ -538,7 +542,7 @@ def test_a_hairline_map_seam_does_not_shrink_the_front() -> None:
             "footprint": box(0.0, 0.0, 1.0, 1.0),
         },
         {
-            "kind": MotionModel.STATIC,
+            "motion_model": MotionModel.STATIC,
             "speed": 0.0,
             "front": 1.0,
             "rear": 1.0,
@@ -547,15 +551,15 @@ def test_a_hairline_map_seam_does_not_shrink_the_front() -> None:
             "footprint": Polygon(),
         },
         {
-            "kind": "wheeled",
+            "motion_model": "wheeled",
             "speed": 10.0,
             "front": 1.0,
             "rear": 1.0,
             "half_width": 1.0,
             "min_turn_radius": 3.0,
         },
-        {"kind": MotionModel.WHEELED, "speed": 10.0, "min_turn_radius": 0.0},
-        {"kind": MotionModel.OMNIDIRECTIONAL, "speed": 1.0, "min_turn_radius": 3.0},
+        {"motion_model": MotionModel.WHEELED, "speed": 10.0, "min_turn_radius": 0.0},
+        {"motion_model": MotionModel.OMNIDIRECTIONAL, "speed": 1.0, "min_turn_radius": 3.0},
     ],
 )
 def test_an_unusable_agent_is_rejected(kwargs: dict) -> None:

@@ -24,7 +24,7 @@ class Detection3DClassProfile:
     Attributes:
       group: Behaviour group the grouped metrics fold the class into.
       max_distance: Distance in meters up to which the class is evaluated.
-      motion_model: Reachable set kind of the class in the collision metrics.
+      motion_model: Motion model of the class in the collision metrics.
       max_speed: Run speed in meters per second, set for exactly the omnidirectional classes.
       partial_detection: Whether the partial detection score checks the boxes of the class
         against the semantic masks.
@@ -161,14 +161,14 @@ def motion_models(
     catalog: Mapping[str, Mapping[str, Any]], class_names: Sequence[str]
 ) -> dict[str, MotionModel]:
     """
-    Collision reachable set kind of every trained detection class.
+    Collision motion model of every trained detection class.
 
     Args:
       catalog: Detection class name to its settings.
       class_names: Detection classes the model trains.
 
     Returns:
-      dict[str, MotionModel]: Class name to its reachable set kind.
+      dict[str, MotionModel]: Class name to its motion model.
     """
     profiles = _detection3d_profiles(catalog, class_names)
     return {name: profiles[name].motion_model for name in class_names}

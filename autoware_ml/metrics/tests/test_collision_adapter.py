@@ -18,7 +18,7 @@ from autoware_ml.metrics.tests.conftest import (
 )
 from autoware_ml.types.metrics import MotionModel
 
-KINDS = {
+MOTION_MODELS = {
     "car": "wheeled",
     "truck": "wheeled",
     "bus": "wheeled",
@@ -33,7 +33,7 @@ KINDS = {
     "bicycle_rack": "static",
     "vehicle_extension": "static",
 }
-LIVING_SPEEDS = {"pedestrian": 3.0, "animal": 4.0, "bicycle": 6.0}
+MAX_SPEEDS = {"pedestrian": 3.0, "animal": 4.0, "bicycle": 6.0}
 
 
 def _adapter():
@@ -41,8 +41,8 @@ def _adapter():
     return CollisionTTC(
         CLASS_NAMES,
         vehicle=EGO,
-        motion_models=KINDS,
-        max_speeds=LIVING_SPEEDS,
+        motion_models=MOTION_MODELS,
+        max_speeds=MAX_SPEEDS,
         params=ReachabilityParams(horizon_s=4.0, dt_s=0.1),
         max_speed_mps=10.0,
     )
@@ -122,4 +122,4 @@ def test_adapter_rejects_unknown_kind_value() -> None:
     except ValueError as error:
         assert "hovercraft" in str(error)
     else:
-        raise AssertionError("expected ValueError for an unknown collision kind")
+        raise AssertionError("expected ValueError for an unknown motion model")
