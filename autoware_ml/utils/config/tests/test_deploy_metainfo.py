@@ -36,6 +36,7 @@ PTV3_CONFIGS = [
     "tasks/segmentation3d/ptv3/nuscenes/voxel005_b16_50e_nuscenes_51m",
     "tasks/detection3d/ptv3/nuscenes/voxel005_b16_30e_nuscenes_51m",
     "tasks/multi/sparsedrive/t4dataset/voxel012_b8_24e_t4dataset_122m",
+    "tasks/multi/sparsedrive/t4dataset/voxel012_b8_36e_t4dataset_122m_motion",
 ]
 DET3D_CONFIGS = [name for name in PTV3_CONFIGS if "segmentation3d" not in name]
 

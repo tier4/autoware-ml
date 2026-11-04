@@ -23,7 +23,7 @@ from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSa
 from autoware_ml.metrics.base import EvalStage, MetricRange
 from autoware_ml.metrics.detection3d.box_counts import BoxCounts
 from autoware_ml.metrics.detection3d.mean_ap import MeanAP
-from autoware_ml.metrics.detection3d.observation import StreamObserver
+from autoware_ml.metrics.detection3d.observation import StreamObserver, observe_detection_frame
 from autoware_ml.metrics.detection3d.suite import Detection3DMetricSuite
 from autoware_ml.metrics.eval_output import Detection3DEvalFrame, Detection3DEvalOutput, EvalOutput
 from autoware_ml.metrics.report import MetricKey
@@ -75,7 +75,7 @@ class TestStreamObserver(unittest.TestCase):
         observer = StreamObserver(min_observed_points=2)
 
         observed = [
-            observer.observe(0, _frame("a", (10.0,), [7], [points])).tolist()
+            observe_detection_frame(observer, 0, _frame("a", (10.0,), [7], [points])).tolist()
             for points in (1, 3, 0)
         ]
 
@@ -88,16 +88,20 @@ class TestStreamObserver(unittest.TestCase):
         Expected: the new scene starts unobserved, every lane follows its own stream.
         """
         observer = StreamObserver(min_observed_points=1)
-        observer.observe(0, _frame("a", (10.0,), [7], [5]))
+        observe_detection_frame(observer, 0, _frame("a", (10.0,), [7], [5]))
 
-        self.assertEqual(observer.observe(0, _frame("b", (10.0,), [7], [0])).tolist(), [False])
-        self.assertEqual(observer.observe(1, _frame("a", (10.0,), [7], [0])).tolist(), [False])
+        self.assertEqual(
+            observe_detection_frame(observer, 0, _frame("b", (10.0,), [7], [0])).tolist(), [False]
+        )
+        self.assertEqual(
+            observe_detection_frame(observer, 1, _frame("a", (10.0,), [7], [0])).tolist(), [False]
+        )
 
     def test_a_frame_without_identities_is_refused(self) -> None:
         frame = _frame("a", (10.0,), [7], [5]).model_copy(update={"gt_instance_ids": None})
 
         with self.assertRaisesRegex(ValueError, "instance ids and the point counts"):
-            StreamObserver(min_observed_points=1).observe(0, frame)
+            observe_detection_frame(StreamObserver(min_observed_points=1), 0, frame)
 
     def test_a_negative_threshold_is_refused(self) -> None:
         with self.assertRaisesRegex(ValueError, "non-negative"):

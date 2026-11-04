@@ -24,7 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import torch
-from jaxtyping import Bool
+from jaxtyping import Bool, Int, Int64
 
 from autoware_ml.metrics.eval_output import Detection3DEvalFrame
 
@@ -71,32 +71,57 @@ class StreamObserver:
         """Forget every stream."""
         self._lanes: dict[int, _LaneObservation] = {}
 
-    def observe(self, lane: int, frame: Detection3DEvalFrame) -> Bool[torch.Tensor, " num_gts"]:
+    def observe(
+        self,
+        lane: int,
+        scene_token: str,
+        instance_ids: Int64[torch.Tensor, " num_gts"],
+        num_points: Int[torch.Tensor, " num_gts"],
+    ) -> Bool[torch.Tensor, " num_gts"]:
         """Add the objects a frame shows and tell which of its boxes are observed.
 
         Args:
             lane: Batch position of the frame.
-            frame: The frame, with the identities and point counts of its boxes and its scene.
+            scene_token: Scene of the frame.
+            instance_ids: Object identity of every ground truth box.
+            num_points: Lidar points inside every ground truth box.
 
         Returns:
             Whether the object of every ground truth box was observed in the stream so far.
-
-        Raises:
-            ValueError: If the frame lacks the identities, the point counts or the scene of its
-                boxes.
         """
-        if frame.gt_instance_ids is None or frame.gt_num_points is None or frame.frame_meta is None:
-            raise ValueError(
-                "Observing a stream needs the instance ids and the point counts of the boxes and "
-                "the scene of every frame."
-            )
-        scene_token = frame.frame_meta.scene_token
         state = self._lanes.get(lane)
         if state is None or state.scene_token != scene_token:
             state = _LaneObservation(scene_token)
             self._lanes[lane] = state
-        ids = frame.gt_instance_ids
-        state.seen.update(ids[frame.gt_num_points >= self.min_observed_points].tolist())
+        state.seen.update(instance_ids[num_points >= self.min_observed_points].tolist())
         return torch.tensor(
-            [value in state.seen for value in ids.tolist()], dtype=torch.bool, device=ids.device
+            [value in state.seen for value in instance_ids.tolist()],
+            dtype=torch.bool,
+            device=instance_ids.device,
         )
+
+
+def observe_detection_frame(
+    observer: StreamObserver, lane: int, frame: Detection3DEvalFrame
+) -> Bool[torch.Tensor, " num_gts"]:
+    """Observe the boxes of a detection frame, see :meth:`StreamObserver.observe`.
+
+    Args:
+        observer: The observer of the suite.
+        lane: Batch position of the frame.
+        frame: The frame, with the identities and point counts of its boxes and its scene.
+
+    Returns:
+        Whether the object of every ground truth box was observed in the stream so far.
+
+    Raises:
+        ValueError: If the frame lacks the identities, the point counts or the scene of its boxes.
+    """
+    if frame.gt_instance_ids is None or frame.gt_num_points is None or frame.frame_meta is None:
+        raise ValueError(
+            "Observing a stream needs the instance ids and the point counts of the boxes and the "
+            "scene of every frame."
+        )
+    return observer.observe(
+        lane, frame.frame_meta.scene_token, frame.gt_instance_ids, frame.gt_num_points
+    )

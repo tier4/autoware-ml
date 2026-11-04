@@ -35,7 +35,7 @@ from scipy.optimize import linear_sum_assignment
 from autoware_ml.metrics.base import EvalStage, Metric, MetricFilter, MetricRange, MetricSuite
 from autoware_ml.geometry.bbox_3d.instance_ids import hash_instance_ids
 from autoware_ml.metrics.detection3d.matching import gt_keep_mask, ignored_prediction_mask
-from autoware_ml.metrics.detection3d.observation import StreamObserver
+from autoware_ml.metrics.detection3d.observation import StreamObserver, observe_detection_frame
 from autoware_ml.metrics.eval_output import EvalOutput, MetricRequirements
 from autoware_ml.metrics.report import MetricReport
 
@@ -410,7 +410,7 @@ class TrackingMetricSuite(MetricSuite[TrackingState]):
                         f"Frame {index} carries {name} labels outside the {num_classes} classes."
                     )
             in_range = gt_keep_mask(boxes, labels, None, self.class_names, self.max_distances, 0)
-            observed = self.observer.observe(index, frame).to(device) & in_range
+            observed = observe_detection_frame(self.observer, index, frame).to(device) & in_range
             tracked = prediction.instance_ids >= 0
             track_ids = prediction.instance_ids[tracked]
             if torch.unique(track_ids).numel() != track_ids.numel():

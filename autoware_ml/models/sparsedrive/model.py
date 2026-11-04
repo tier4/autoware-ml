@@ -12,12 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""SparseDrive model: the PTv3 lidar encoder, the Sparse4D detection head and the PTv3
-segmentation head.
+"""SparseDrive model: the PTv3 lidar encoder, the Sparse4D detection head, the PTv3
+segmentation head and, attached on demand, the SparseDrive agent motion head.
 
 The Sparse4D head needs scenario streams, see ``StreamingDataModule``, composed with
 ``/datamodule/streaming@datamodule: default_streaming_datamodule``. Its export carries the
-instance bank state through the inputs and the outputs of the detection graph.
+instance bank state through the inputs and the outputs of the detection graph, and the motion
+graph carries the history of the motion head the same way.
 """
 
 from __future__ import annotations
@@ -43,7 +44,18 @@ from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentation3DHeadOutputs
 from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
 from autoware_ml.metrics.eval_output import EvalOutput
+from autoware_ml.metrics.motion.eval_output import MotionEvalOutput
 from autoware_ml.models.sparsedrive.lidar_stages import PTv3Det3DFeaturePyramid, SparseStage
+from autoware_ml.models.sparsedrive.motion_head import (
+    MOTION_DETECTION_OUTPUT_NAMES,
+    MotionHead,
+    MotionHeadExportModule,
+    check_motion_head,
+    motion_deployment_inputs,
+    motion_eval_frames,
+    motion_forward,
+    motion_loss,
+)
 from autoware_ml.models.sparsedrive.sparse4d_head import (
     TEMPORAL_QUERY_INDEX_OUTPUT_NAME,
     TEMPORAL_STATE_INPUT_NAMES,
@@ -129,7 +141,11 @@ class FusedExportInputs(NamedTuple):
 
 
 class SparseDriveModel(PTv3BaseModel):
-    """SparseDrive model with the temporal Sparse4D detection head and the segmentation head."""
+    """SparseDrive model with the temporal Sparse4D detection head and an optional motion head.
+
+    The motion head reads the last layer queries of the detection head and adds its loss, its
+    eval frames and its export graph. Without it the model detects and segments only.
+    """
 
     # The instance bank and the tracker need lane-contiguous batches.
     requires_streaming: ClassVar[bool] = True
@@ -148,6 +164,9 @@ class SparseDriveModel(PTv3BaseModel):
         grid_size: float | None = None,
         point_cloud_range: Sequence[float] | None = None,
         partial_annotations: PartialAnnotations | None = None,
+        motion_head: MotionHead | None = None,
+        motion_loss_weight: float = 1.0,
+        motion_eval_queries: int = 300,
         **kwargs: Any,
     ) -> None:
         """Initialize the SparseDrive model.
@@ -166,10 +185,16 @@ class SparseDriveModel(PTv3BaseModel):
             point_cloud_range: Point-cloud range of the encoder input.
             partial_annotations: Maps the dataset's per-sample annotation flag to the classes
                 the head must not supervise in that sample. None supervises every class.
+            motion_head: Motion head reading the detection queries, None detects and segments
+                only.
+            motion_loss_weight: Weight of the motion loss term.
+            motion_eval_queries: Most confident detection queries whose trajectories the motion
+                metrics read per frame.
             **kwargs: Data preprocessor, optimizer, scheduler and metrics of the base model.
 
         Raises:
-            ValueError: If the pyramid and the head disagree on the strides of the sampled levels.
+            ValueError: If the pyramid and the head disagree on the strides of the sampled
+                levels, or the motion head has anchors of other classes than the detection head.
         """
         super().__init__(
             encoder=encoder,
@@ -200,11 +225,16 @@ class SparseDriveModel(PTv3BaseModel):
         self.partial_annotations = partial_annotations
         self.segmentation3d_loss_weight = float(segmentation3d_loss_weight)
         self.detection3d_loss_weight = float(detection3d_loss_weight)
+        if motion_head is not None:
+            check_motion_head(motion_head, bbox_head)
+        self.motion_head = motion_head
+        self.motion_loss_weight = float(motion_loss_weight)
+        self.motion_eval_queries = motion_eval_queries
 
     def build_optimizer_groups(self) -> Mapping[str, Sequence[torch.nn.Parameter]]:
         """Group the pretrained encoder parameters apart from the newly initialized heads."""
         encoder_default_params, encoder_block_params = split_block_parameters(self.encoder)
-        return {
+        groups = {
             "encoder_default": encoder_default_params,
             "encoder_block": encoder_block_params,
             "seg3d_head": [p for p in self.seg3d_head.parameters() if p.requires_grad],
@@ -215,10 +245,15 @@ class SparseDriveModel(PTv3BaseModel):
                 if parameter.requires_grad
             ],
         }
+        if self.motion_head is not None:
+            groups["motion_head"] = [p for p in self.motion_head.parameters() if p.requires_grad]
+        return groups
 
     def reset_streams(self) -> None:
         """Forget the temporal state of every lane, so the next frame of a lane starts a stream."""
         self.bbox_head.reset()
+        if self.motion_head is not None:
+            self.motion_head.reset()
 
     def on_train_epoch_start(self) -> None:
         """Start new streams for the shuffled scenes of the epoch."""
@@ -241,16 +276,22 @@ class SparseDriveModel(PTv3BaseModel):
         self.reset_streams()
 
     def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
-        """Run one shared PTv3 encoder pass and branch into both heads.
+        """Run one shared PTv3 encoder pass, branch into both heads and run the motion head.
 
         Args:
             multi_task_batch_inputs: Model inputs with the voxels, the frame metadata and the
                 detection ground truth.
 
         Returns:
-            The Sparse4D head outputs and the segmentation logits.
+            The Sparse4D head outputs, the segmentation logits and the motion outputs when a
+            motion head is attached.
         """
         branches = self.forward_branches(multi_task_batch_inputs)
+        motion_outputs = None
+        if self.motion_head is not None:
+            motion_outputs = motion_forward(
+                self.motion_head, self.bbox_head, branches.det3d_outputs, multi_task_batch_inputs
+            )
         return ModelOutputs(
             detection3d_head_outputs=Detection3DHeadOutputs(
                 center_head_outputs=None,
@@ -258,6 +299,7 @@ class SparseDriveModel(PTv3BaseModel):
                 sparse4d_head_outputs=branches.det3d_outputs,
             ),
             segmentation3d_head_outputs=Segmentation3DHeadOutputs(logits=branches.seg3d_logits),
+            motion_head_outputs=motion_outputs,
         )
 
     def forward_branches(self, multi_task_batch_inputs: ModelBatchInputs) -> ForwardBranches:
@@ -297,14 +339,29 @@ class SparseDriveModel(PTv3BaseModel):
         multi_task_batch_inputs: ModelBatchInputs,
         multi_task_outputs: ModelOutputs,
     ) -> dict[str, Float[torch.Tensor, ""]]:
-        """Compute combined segmentation and detection losses.
+        """Compute the segmentation, detection and, with a motion head, motion losses.
 
         Frames without ground-truth boxes and samples padding a streaming lane skip the
-        detection loss.
+        detection loss, and the motion loss with it, since its targets follow the detection
+        matches.
+
+        Raises:
+            ValueError: If a motion head is attached and the batch carries no futures.
         """
-        metrics = self.detection_segmentation_metrics(
-            multi_task_batch_inputs, multi_task_outputs
-        ).metrics
+        losses = self.detection_segmentation_metrics(multi_task_batch_inputs, multi_task_outputs)
+        metrics = losses.metrics
+        if self.motion_head is not None:
+            motion_metrics = motion_loss(
+                self.motion_head,
+                multi_task_batch_inputs,
+                multi_task_outputs.motion(),
+                losses.det3d_targets,
+                losses.det3d_mask,
+            )
+            weighted_motion_loss = self.motion_loss_weight * motion_metrics["loss"]
+            metrics["weighted_motion_loss"] = weighted_motion_loss
+            metrics["loss"] = metrics["loss"] + weighted_motion_loss
+            metrics.update({f"motion_{name}": value for name, value in motion_metrics.items()})
         self.log_step_metrics(metrics, multi_task_batch_inputs)
         return metrics
 
@@ -398,7 +455,7 @@ class SparseDriveModel(PTv3BaseModel):
         )
 
     def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> EvalOutput:
-        """Produce the detection and the current frame segmentation eval data.
+        """Produce the detection, the current frame segmentation and the motion eval data.
 
         Frames without detection supervision contribute empty predictions. The frames carry
         which boxes were observed in the stream so far and the stream of every frame.
@@ -408,7 +465,8 @@ class SparseDriveModel(PTv3BaseModel):
             outputs: Raw head outputs returned by :meth:`forward`.
 
         Returns:
-            The eval output of the detection and the segmentation suites.
+            The eval output of the detection and the segmentation suites, and of the motion
+            suites when a motion head is attached.
         """
         det3d_mask = detection3d_frame_mask(detection3d_gt_batch(batch))
         predictions = empty_unsupervised_predictions(
@@ -418,9 +476,22 @@ class SparseDriveModel(PTv3BaseModel):
         detection = detection3d_eval_output(
             ModelPredictions(detection3d_predictions=predictions), batch
         )
+        motion = None
+        if self.motion_head is not None:
+            motion = MotionEvalOutput(
+                frames=motion_eval_frames(
+                    self.motion_head,
+                    self.bbox_head,
+                    batch,
+                    outputs,
+                    detection,
+                    self.motion_eval_queries,
+                )
+            )
         return EvalOutput(
             detection3d=detection,
             segmentation3d=segmentation3d_eval_output(outputs.segmentation3d().logits, batch),
+            motion=motion,
         )
 
     def decode_outputs(
@@ -446,10 +517,15 @@ class SparseDriveModel(PTv3BaseModel):
         )
 
     def deployment_graphs(self) -> Sequence[DeploymentGraph]:
-        """Declare ``lidar_encoder``, ``seg3d_head`` and the temporal ``det3d_head``.
+        """Declare ``lidar_encoder``, ``seg3d_head``, the temporal ``det3d_head`` and, with a
+        motion head, ``motion_head``.
+
+        The detection graph then also returns the query features the motion graph reads, and the
+        motion graph shares the anchor encoder of the detection graph's export head.
 
         Returns:
-            The three graphs, the model outputs are the seg head's, then the det head's.
+            The graphs in that order, the model outputs are the seg head's, then the det head's,
+            then the motion head's.
 
         Raises:
             ValueError: If the grid size or the point cloud range is missing, or a module holds
@@ -466,7 +542,16 @@ class SparseDriveModel(PTv3BaseModel):
                 "weights of a trained model."
             )
         sparse_shape, serialization_depth = self.compute_export_geometry(torch.device("cpu"))
-        return (
+        det3d_output_names = SPARSE4D_EXPORT_OUTPUT_NAMES
+        if self.motion_head is not None:
+            det3d_output_names = (*det3d_output_names, *MOTION_DETECTION_OUTPUT_NAMES)
+        det3d_head = Sparse4DHeadExportModule(
+            self.det_fusion,
+            self.bbox_head.prepare_for_export(),
+            det3d_output_names,
+            len(self.encoder.stride) + 1,
+        )
+        graphs = (
             PTv3EncoderExportModule(
                 self.encoder,
                 self.voxel_encoder,
@@ -477,18 +562,19 @@ class SparseDriveModel(PTv3BaseModel):
             PTv3Seg3DHeadExportModule(
                 self.seg3d_head, self.EXPORT_ORDER, sparse_shape, self.encoder.stride
             ).build_deployment_graph(),
-            Sparse4DHeadExportModule(
-                self.det_fusion,
-                self.bbox_head.prepare_for_export(),
-                self.det3d_export_output_names(),
-                len(self.encoder.stride) + 1,
-            ).build_deployment_graph(),
+            det3d_head.build_deployment_graph(),
         )
+        if self.motion_head is None:
+            return graphs
+        motion_head = MotionHeadExportModule(
+            self.motion_head.prepare_for_export(), det3d_head.bbox_head
+        )
+        return (*graphs, motion_head.build_deployment_graph())
 
     def deployment_inputs(
         self, multi_task_batch_inputs: ModelBatchInputs
     ) -> dict[str, GraphTensor]:
-        """Serialize the points and add the empty bank state the first frame of a stream reads.
+        """Serialize the points and add the empty state the first frame of a stream reads.
 
         Args:
             multi_task_batch_inputs: The preprocessed single-sample batch, holding the voxels.
@@ -497,13 +583,12 @@ class SparseDriveModel(PTv3BaseModel):
             The inputs of every graph by name.
         """
         tensors = super().deployment_inputs(multi_task_batch_inputs)
-        state = self.bbox_head.temporal_state_export_inputs(tensors["voxels"].device)
+        device = tensors["voxels"].device
+        state = self.bbox_head.temporal_state_export_inputs(device)
         tensors.update(zip(TEMPORAL_STATE_INPUT_NAMES, state, strict=True))
+        if self.motion_head is not None:
+            tensors.update(motion_deployment_inputs(self.motion_head, self.bbox_head, device))
         return tensors
-
-    def det3d_export_output_names(self) -> tuple[str, ...]:
-        """Frame outputs of the detection graph, in order."""
-        return SPARSE4D_EXPORT_OUTPUT_NAMES
 
 
 def _flagged(

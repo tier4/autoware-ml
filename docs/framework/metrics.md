@@ -106,6 +106,7 @@ function torchmetrics uses to combine that state across GPUs.
 | `Segmentation3DConfusionMatrixMetricSuite` | `seg3d`    | `EvalOutput.segmentation3d` frames      | one confusion tensor over (filter, range) buckets (`sum`) |
 | `Segmentation3DPointCloudMetricSuite`      | `seg3d_pt` | `EvalOutput.segmentation3d` with scores | per-frame point tensors (`None`)                          |
 | `TrackingMetricSuite`                      | `track`    | `EvalOutput.detection3d` with track ids | per-frame box and track id tensors (`None`)               |
+| `MotionMetricSuite`                        | `motion`   | `EvalOutput.motion` frames              | per-frame trajectory tensors (`None`)                     |
 
 - **Confusion counts `sum`.** A confusion matrix is a bounded sufficient statistic, so adding the
   per-rank tensors is exact.
@@ -226,6 +227,7 @@ optional capability adds a concrete requirement, checked loud at the first batch
 | detection metrics                                | `detection3d` frames                                  | none                       |
 | segmentation metrics                             | `segmentation3d` frames, point metrics their `scores` | none                       |
 | tracking metrics, `min_observed_points`          | `gt_instance_ids`, `gt_num_points`, `frame_meta`      | none                       |
+| motion metrics                                   | `motion` frames, `gt_instance_ids`, `gt_num_points`   | none                       |
 | ground-truth point filter, occlusion split       | `gt_num_points` on the detection frames               | none                       |
 | corridor filter (straight strip)                 | none                                                  | none                       |
 | region filters and collision filter              | `frame_meta` (ego pose, lanelet map path) per frame   | one lanelet2 map per scene |
@@ -1359,6 +1361,12 @@ confident error is what hides an obstacle.
         <text x="26" y="130" class="svg-label" text-anchor="middle" transform="rotate(-90 26 130)">wrong <- -> correct</text>
       </svg>
 </div>
+
+## Motion metrics
+
+`MotionMetricSuite` scores the trajectories a motion model predicts for its detections. It keeps the predictions from `score_threshold` on and the ground truth boxes the stream has observed with `min_observed_points` as in the tracking suite, both within the class distances of `max_distances`, and matches the predictions to the boxes of their class by BEV center distance in score order up to `match_distance`.
+
+`AgentMotionSummary` reports `minADE`, the smallest mean displacement of the modes over the known future steps of a matched agent, and for the agents known at the last step of the horizon `minFDE`, the smallest endpoint displacement, `MR`, the share of them whose best endpoint lies farther than `miss_distance`, and `EPA`, the hits minus half the false positives over the boxes known at the last step. It reports every value per class and as the mean over the classes. `AgentForecastSummary` scores the matched agents known at the last step as the Argoverse 2 motion forecasting benchmark does: `minADE<K>`, `minFDE<K>` and `MR<K>` of the mode whose endpoint is closest, `minADE1`, `minFDE1` and `MR1` of the most likely mode, `cvADE`, `cvFDE` and `cvMR` of the detection moved at its own velocity over the `step_seconds` of its frame, `advantage`, the ratio of `cvADE` to `minADE<K>`, and the number of `agents`, over all agents and per class.
 
 ## Attaching metrics
 

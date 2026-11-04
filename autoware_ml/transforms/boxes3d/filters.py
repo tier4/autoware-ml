@@ -25,29 +25,9 @@ from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.points.base_points import BasePoints
 from autoware_ml.geometry.bbox_3d.physical import physical_shape_mask, zero_unannotated_velocity
 from autoware_ml.geometry.bbox_3d.base_bbox3d import BaseBBoxes3D
+from autoware_ml.geometry.bbox_3d.exclusion import excluded_boxes, parse_exclusion_rules
 from autoware_ml.transforms.base import BaseTransform
 from autoware_ml.types.geometry import Box3DFieldIndex
-
-
-def parse_exclusion_rules(rules: Sequence[Sequence[str]]) -> frozenset[tuple[str, str]]:
-    """
-    Read box exclusion rules as class and attribute pairs.
-
-    Args:
-      rules: Exclusion rules, each a [class_name, attribute] pair.
-
-    Returns:
-      frozenset[tuple[str, str]]: The rules as (class_name, attribute) pairs.
-
-    Raises:
-      ValueError: If a rule is not a pair.
-    """
-    for index, rule in enumerate(rules):
-        if isinstance(rule, str) or len(rule) != 2:
-            raise ValueError(
-                f"Exclusion rule {index} must be a [class_name, attribute] pair, got {rule!r}."
-            )
-    return frozenset((str(rule[0]), str(rule[1])) for rule in rules)
 
 
 class BBoxesMinPointsFilter(BaseTransform):
@@ -225,15 +205,10 @@ class BBoxesAttributeFilter(BaseTransform):
                 "The attribute filter needs the attributes of every box, the dataset served none."
             )
 
-        bboxes_to_keep_mask = torch.tensor(
-            [
-                not any(
-                    (label_name, attribute) in self.filter_attributes for attribute in attributes
-                )
-                for label_name, attributes in zip(
-                    detection3d_gt_bboxes_3d.bbox_label_names, bbox_attributes, strict=True
-                )
-            ],
+        bboxes_to_keep_mask = ~torch.tensor(
+            excluded_boxes(
+                detection3d_gt_bboxes_3d.bbox_label_names, bbox_attributes, self.filter_attributes
+            ),
             dtype=torch.bool,
         )
         detection3d_gt_bboxes_3d.remove_bboxes(bboxes_to_keep_mask)

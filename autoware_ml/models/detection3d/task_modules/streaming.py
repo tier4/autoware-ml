@@ -212,6 +212,18 @@ def pos2posemb3d(
     return torch.cat((pos_y, pos_x, pos_z), dim=-1)
 
 
+def pos2posemb2d(
+    positions: Float[torch.Tensor, "*batch 2"],
+    num_pos_feats: int = 128,
+    temperature: int = 10000,
+) -> Float[torch.Tensor, "*batch channels"]:
+    """Convert 2D positions into sine/cosine embeddings of the (y, x) components in that order."""
+    positions = positions * (2.0 * math.pi)
+    pos_x = _sincos_posemb(positions[..., 0], num_pos_feats, temperature)
+    pos_y = _sincos_posemb(positions[..., 1], num_pos_feats, temperature)
+    return torch.cat((pos_y, pos_x), dim=-1)
+
+
 def pos2posemb1d(
     positions: Float[torch.Tensor, "*batch 1"],
     num_pos_feats: int = 256,
