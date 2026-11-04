@@ -36,7 +36,6 @@ def _tracks(num_agents: int = 2, num_steps: int = 5, **kwargs) -> AgentTracksSam
         current_step_index=2,
         step_seconds=0.1,
         ignore_index=-1,
-        **kwargs,
     )
 
 
