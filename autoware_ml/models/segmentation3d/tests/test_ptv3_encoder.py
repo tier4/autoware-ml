@@ -1408,7 +1408,7 @@ def test_export_folds_the_cpe_bias_into_the_linear_layer(monkeypatch) -> None:
     monkeypatch.setattr(Block, "fold_cpe_bias", lambda block: None)
     reference = model.build_export_specs(batch)
 
-    for name in ("ptv3_encoder", "ptv3_seg3d_head"):
+    for name in ("ptv3_lidar_encoder", "ptv3_seg3d_head"):
         with torch.no_grad():
             folded_outputs = folded[name].module(*folded[name].args)
             reference_outputs = reference[name].module(*reference[name].args)
