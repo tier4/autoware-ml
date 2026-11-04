@@ -16,7 +16,8 @@
 
 from __future__ import annotations
 
-import pytest
+import unittest
+
 import torch
 
 from autoware_ml.dataclasses.geometry.images import ImageGTBatch
@@ -48,82 +49,81 @@ def _inputs(images: torch.Tensor) -> ModelBatchInputs:
     )
 
 
-@pytest.mark.parametrize("is_training", [True, False])
-def test_matches_the_runtime_normalization_of_8_bit_pixels(is_training: bool) -> None:
-    """Unit-range pixels and statistics give the runtime's (pixel - mean) / std in 0-255."""
-    pixels = torch.randint(0, 256, (2, 3, 3, 4, 5)).float()
-    mean_255 = torch.tensor([123.675, 116.28, 103.53]).view(1, 1, 3, 1, 1)
-    std_255 = torch.tensor([58.395, 57.12, 57.375]).view(1, 1, 3, 1, 1)
+class TestBatchNormalizeImages(unittest.TestCase):
+    """Tests for BatchNormalizeImages."""
 
-    normalized = BatchNormalizeImages(IMAGENET_MEAN, IMAGENET_STD)(
-        _inputs(pixels / 255.0), is_training=is_training
-    )
+    def test_matches_the_runtime_normalization_of_8_bit_pixels(self) -> None:
+        """Test that unit-range pixels and statistics give the runtime's (pixel - mean) / std."""
+        pixels = torch.randint(0, 256, (2, 3, 3, 4, 5)).float()
+        mean_255 = torch.tensor([123.675, 116.28, 103.53]).view(1, 1, 3, 1, 1)
+        std_255 = torch.tensor([58.395, 57.12, 57.375]).view(1, 1, 3, 1, 1)
 
-    torch.testing.assert_close(normalized.image_data.images, (pixels - mean_255) / std_255)
+        for is_training in (True, False):
+            with self.subTest(is_training=is_training):
+                normalized = BatchNormalizeImages(IMAGENET_MEAN, IMAGENET_STD)(
+                    _inputs(pixels / 255.0), is_training=is_training
+                )
+                torch.testing.assert_close(
+                    normalized.image_data.images, (pixels - mean_255) / std_255
+                )
 
+    @unittest.skipUnless(torch.cuda.is_available(), "needs a CUDA device")
+    def test_moves_the_statistics_to_the_device_once(self) -> None:
+        """Test that after the first batch on a device no copy waits on that device again."""
+        normalize = BatchNormalizeImages(IMAGENET_MEAN, IMAGENET_STD)
+        inputs = _inputs(torch.rand(1, 2, 3, 4, 5, device="cuda"))
+        normalize(inputs, is_training=True)
+        torch.cuda.synchronize()
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
-def test_copies_the_statistics_to_the_device_once() -> None:
-    """After the first batch on a device the statistics are reused, so no copy can wait on it."""
-    normalize = BatchNormalizeImages(IMAGENET_MEAN, IMAGENET_STD)
-    inputs = _inputs(torch.rand(1, 2, 3, 4, 5, device="cuda"))
-    normalize(inputs, is_training=True)
-    torch.cuda.synchronize()
+        torch.cuda.set_sync_debug_mode("error")
+        try:
+            normalized = normalize(inputs, is_training=True)
+        finally:
+            torch.cuda.set_sync_debug_mode("default")
 
-    torch.cuda.set_sync_debug_mode("error")
-    try:
-        normalized = normalize(inputs, is_training=True)
-    finally:
-        torch.cuda.set_sync_debug_mode("default")
-
-    mean = torch.tensor(IMAGENET_MEAN, device="cuda").view(1, 1, 3, 1, 1)
-    std = torch.tensor(IMAGENET_STD, device="cuda").view(1, 1, 3, 1, 1)
-    torch.testing.assert_close(
-        normalized.image_data.images, (inputs.image_data.images - mean) / std
-    )
-
-
-def test_keeps_the_calibration() -> None:
-    """Only the images are replaced; the calibration reaches the model as it is."""
-    inputs = _inputs(torch.rand(1, 2, 3, 4, 5))
-
-    normalized = BatchNormalizeImages(IMAGENET_MEAN, IMAGENET_STD)(inputs, is_training=True)
-
-    assert normalized.image_data.lidar2images is inputs.image_data.lidar2images
-
-
-def test_rejects_images_of_another_channel_count() -> None:
-    """Statistics of three channels cannot standardize images of four."""
-    with pytest.raises(ValueError, match="channels"):
-        BatchNormalizeImages(IMAGENET_MEAN, IMAGENET_STD)(
-            _inputs(torch.rand(1, 2, 4, 4, 5)), is_training=True
+        mean = torch.tensor(IMAGENET_MEAN, device="cuda").view(1, 1, 3, 1, 1)
+        std = torch.tensor(IMAGENET_STD, device="cuda").view(1, 1, 3, 1, 1)
+        torch.testing.assert_close(
+            normalized.image_data.images, (inputs.image_data.images - mean) / std
         )
 
+    def test_keeps_the_calibration(self) -> None:
+        """Test that only the images are replaced; the calibration reaches the model as it is."""
+        inputs = _inputs(torch.rand(1, 2, 3, 4, 5))
 
-@pytest.mark.parametrize(
-    "mean, std",
-    [
-        ([0.5, 0.5], IMAGENET_STD),
-        # The 0-255 ImageNet statistics of the mmdetection configs would turn unit-range images
-        # into a near-constant -2.
-        ([123.675, 116.28, 103.53], [58.395, 57.12, 57.375]),
-        (IMAGENET_MEAN, [0.2, 0.0, 0.2]),
-        (IMAGENET_MEAN, [0.2, float("nan"), 0.2]),
-        ([0.5, float("inf"), 0.5], IMAGENET_STD),
-    ],
-    ids=["channel-count", "0-255", "zero-std", "nan-std", "inf-mean"],
-)
-def test_rejects_statistics_that_cannot_standardize_unit_range_images(
-    mean: list[float], std: list[float]
-) -> None:
-    """Statistics are refused when the layer is built, not found out by a failed training."""
-    with pytest.raises(ValueError):
-        BatchNormalizeImages(mean, std)
+        normalized = BatchNormalizeImages(IMAGENET_MEAN, IMAGENET_STD)(inputs, is_training=True)
+
+        self.assertIs(normalized.image_data.lidar2images, inputs.image_data.lidar2images)
+
+    def test_rejects_images_of_another_channel_count(self) -> None:
+        """Test that statistics of three channels cannot standardize images of four."""
+        with self.assertRaisesRegex(ValueError, "channels"):
+            BatchNormalizeImages(IMAGENET_MEAN, IMAGENET_STD)(
+                _inputs(torch.rand(1, 2, 4, 4, 5)), is_training=True
+            )
+
+    def test_rejects_statistics_that_cannot_standardize_unit_range_images(self) -> None:
+        """Test that unusable statistics are refused when the layer is built."""
+        cases = {
+            "channel-count": ([0.5, 0.5], IMAGENET_STD),
+            # The 0-255 ImageNet statistics of the mmdetection configs would turn unit-range
+            # images into a near-constant -2.
+            "0-255": ([123.675, 116.28, 103.53], [58.395, 57.12, 57.375]),
+            "zero-std": (IMAGENET_MEAN, [0.2, 0.0, 0.2]),
+            "nan-std": (IMAGENET_MEAN, [0.2, float("nan"), 0.2]),
+            "inf-mean": ([0.5, float("inf"), 0.5], IMAGENET_STD),
+        }
+        for name, (mean, std) in cases.items():
+            with self.subTest(name), self.assertRaises(ValueError):
+                BatchNormalizeImages(mean, std)
+
+    def test_runs_inside_the_data_preprocessor(self) -> None:
+        """Test that DataPreprocessor accepts the layer as a DataPreprocessorModule."""
+        preprocessor = DataPreprocessor(
+            preprocessor_modules=[BatchNormalizeImages(mean=[0.5] * 3, std=[0.5] * 3)]
+        )
+        self.assertEqual(len(preprocessor.preprocessor_modules), 1)
 
 
-def test_runs_inside_the_data_preprocessor() -> None:
-    """DataPreprocessor accepts only DataPreprocessorModule instances, which this layer is."""
-    preprocessor = DataPreprocessor(
-        preprocessor_modules=[BatchNormalizeImages(mean=[0.5] * 3, std=[0.5] * 3)]
-    )
-    assert len(preprocessor.preprocessor_modules) == 1
+if __name__ == "__main__":
+    unittest.main()
