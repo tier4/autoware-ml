@@ -302,7 +302,9 @@ class TestExportSpecs:
 class TestOnnxExport:
     """The ONNX files carry the configured names, axes, opset and metadata."""
 
-    def test_torchscript_export_keeps_the_spec_names_and_dynamic_axes(self, tmp_path: Path) -> None:
+    def test_export_without_dynamo_keeps_the_spec_names_and_dynamic_axes(
+        self, tmp_path: Path
+    ) -> None:
         """
         Input: the default deploy config with ``dynamo`` disabled for the module.
         Expected: the graph inputs and outputs carry the spec names, the point axis is dynamic
