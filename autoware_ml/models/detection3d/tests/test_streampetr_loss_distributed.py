@@ -23,11 +23,12 @@ collective.
 from __future__ import annotations
 
 import copy
+import math
 import os
 import tempfile
 import time
+import unittest
 
-import pytest
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
@@ -46,11 +47,6 @@ from autoware_ml.models.detection3d.task_modules.match_costs import (
     IoU3DCost,
 )
 from autoware_ml.models.detection3d.task_modules.streaming import reduce_mean_count
-
-pytestmark = pytest.mark.skipif(
-    not (dist.is_available() and dist.is_gloo_available()),
-    reason="gloo backend unavailable",
-)
 
 _WORLD_SIZE = 2
 _CLASS_NAMES = ["car", "truck", "bus"]
@@ -125,7 +121,7 @@ def _spawn(worker, *args, world_size: int = _WORLD_SIZE, timeout: float = 120.0)
             join=False,
         )
         # join(timeout) returns after one wait pass; poll so a deadlocked collective fails the
-        # test instead of hanging pytest.
+        # test instead of hanging the test runner.
         deadline = time.monotonic() + timeout
         while not context.join(timeout=5.0):
             if time.monotonic() > deadline:
@@ -140,13 +136,13 @@ def _reduce_mean_count_worker(rank: int, world_size: int, init_file: str) -> Non
     )
     try:
         local_count = torch.tensor(float(2 if rank == 0 else 8))
-        assert reduce_mean_count(local_count).item() == pytest.approx(5.0)
-        assert local_count.item() == pytest.approx(2.0 if rank == 0 else 8.0)
+        assert math.isclose(reduce_mean_count(local_count).item(), 5.0)
+        assert math.isclose(local_count.item(), 2.0 if rank == 0 else 8.0)
         # The floor applies to the sum over the ranks, not to the mean.
-        assert reduce_mean_count(torch.tensor(float(1 - rank))).item() == pytest.approx(0.5)
-        assert reduce_mean_count(torch.tensor(0.0)).item() == pytest.approx(0.5)
+        assert math.isclose(reduce_mean_count(torch.tensor(float(1 - rank))).item(), 0.5)
+        assert math.isclose(reduce_mean_count(torch.tensor(0.0)).item(), 0.5)
         pair = reduce_mean_count(torch.tensor([float(1 - rank), 4.0]))
-        assert pair.tolist() == pytest.approx([0.5, 4.0])
+        torch.testing.assert_close(pair, torch.tensor([0.5, 4.0]))
     finally:
         dist.destroy_process_group()
 
@@ -227,7 +223,10 @@ def _dn_mixed_gt_worker(rank: int, world_size: int, init_file: str) -> None:
         )
 
         assert "dn_loss_cls" in losses and "dn_loss_bbox" in losses
-        if rank == 1:
+        if rank == 0:
+            assert losses["dn_loss_cls"].item() > 0.0
+            assert losses["dn_loss_bbox"].item() > 0.0
+        else:
             assert losses["dn_loss_cls"].item() == 0.0
             assert losses["dn_loss_bbox"].item() == 0.0
     finally:
@@ -322,37 +321,46 @@ def _ddp_gradient_worker(
         dist.destroy_process_group()
 
 
-def test_reduce_mean_count_is_identity_without_process_group() -> None:
-    """Without a process group the count comes back as float, floored at 1."""
-    assert reduce_mean_count(torch.tensor(3.0)).item() == pytest.approx(3.0)
-    assert reduce_mean_count(torch.tensor(3)).dtype == torch.float32
-    assert reduce_mean_count(torch.tensor(0.0)).item() == pytest.approx(1.0)
+@unittest.skipUnless(dist.is_available() and dist.is_gloo_available(), "gloo backend unavailable")
+class TestStreamPETRLossDistributed(unittest.TestCase):
+    def test_reduce_mean_count_is_identity_without_process_group(self) -> None:
+        """Test that without a process group the count comes back as float, floored at 1."""
+        self.assertAlmostEqual(reduce_mean_count(torch.tensor(3.0)).item(), 3.0)
+        self.assertEqual(reduce_mean_count(torch.tensor(3)).dtype, torch.float32)
+        self.assertAlmostEqual(reduce_mean_count(torch.tensor(0.0)).item(), 1.0)
+
+    def test_reduce_mean_count_averages_counts_across_ranks(self) -> None:
+        """Test that two ranks get the mean of their counts, floored over the sum, without
+        in-place changes."""
+        _spawn(_reduce_mean_count_worker)
+
+    def test_sharded_loss_matches_single_batch_equivalent(self) -> None:
+        """Test that the rank-averaged losses of frames with 2 and 8 boxes equal the losses of
+        the whole batch.
+
+        Rank-local counts would give every rank an equal vote whatever its object count.
+        """
+        _spawn(_sharding_invariance_worker)
+
+    def test_dn_collective_survives_rank_without_ground_truth(self) -> None:
+        """Test that a rank without ground truth joins the denoising count collective and logs
+        zero losses."""
+        _spawn(_dn_mixed_gt_worker)
+
+    def test_ddp_gradients_match_the_whole_batch_on_one_process(self) -> None:
+        """Test that the DDP-averaged gradients of one frame per rank equal those of the whole
+        batch.
+
+        Every logit and box comes from one linear layer, so the matching and the denoising
+        losses are both covered. With one positive in the step, or none, flooring the mean
+        count instead of the sum would halve the gradient of the single positive, or of the
+        negatives. Four ranks check the division by the world size with a rank that has no
+        positive among ranks that have some.
+        """
+        for box_counts in [(10, 30), (1, 0), (0, 0), (10, 30, 0, 1)]:
+            with self.subTest(box_counts=box_counts):
+                _spawn(_ddp_gradient_worker, box_counts, world_size=len(box_counts))
 
 
-def test_reduce_mean_count_averages_counts_across_ranks() -> None:
-    """Two ranks get the mean of their counts, floored over the sum, without in-place changes."""
-    _spawn(_reduce_mean_count_worker)
-
-
-def test_sharded_loss_matches_single_batch_equivalent() -> None:
-    """The rank-averaged losses of frames with 2 and 8 boxes equal the losses of the whole batch.
-
-    Rank-local counts would give every rank an equal vote whatever its object count.
-    """
-    _spawn(_sharding_invariance_worker)
-
-
-def test_dn_collective_survives_rank_without_ground_truth() -> None:
-    """A rank without ground truth joins the denoising count collective and logs zero losses."""
-    _spawn(_dn_mixed_gt_worker)
-
-
-@pytest.mark.parametrize("box_counts", [(10, 30), (1, 0), (0, 0)], ids=["10-30", "1-0", "0-0"])
-def test_ddp_gradients_match_the_whole_batch_on_one_process(box_counts: tuple[int, int]) -> None:
-    """The DDP-averaged gradients of one frame per rank equal those of the whole batch.
-
-    Every logit and box comes from one linear layer, so the matching and the denoising losses
-    are both covered. With one positive in the step, or none, flooring the mean count instead
-    of the sum would halve the gradient of the single positive, or of the negatives.
-    """
-    _spawn(_ddp_gradient_worker, box_counts)
+if __name__ == "__main__":
+    unittest.main()
