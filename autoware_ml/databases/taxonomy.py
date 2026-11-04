@@ -12,16 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Label taxonomies of a database.
+"""Label vocabularies of a database and label taxonomies of a model.
 
 A vocabulary maps the raw label names of a dataset family onto fine label names, the finest
 distinction the corpus supports, and names the raw labels that are outside every level. A raw
 label the vocabulary does not list is an error, so a new category of a corpus is discovered
-instead of being ignored. A taxonomy selects the classes trained at one level of granularity
-and folds every fine name onto one of them or drops it. Boxes are baked with the fine name and
-the class index of the level when the record table is generated, and masks are resolved
-through the same objects when they are loaded, so one definition decides the labels of both
-heads.
+instead of being ignored. The record table stores the fine name of every box. A taxonomy holds
+the classes a model trains and folds every fine name onto one of them or drops it. The tasks
+resolve the fine names of the boxes and the raw categories of the masks through it when a
+sample is loaded, so the record table serves every taxonomy.
 """
 
 from __future__ import annotations
@@ -293,7 +292,7 @@ class LabelTaxonomy:
         return self.class_index(self.fine_name(raw_name))
 
     def __str__(self) -> str:
-        """Canonical string form, the input of the database hash."""
+        """Canonical string form, which identifies the taxonomy."""
         class_mapping = ", ".join(
             f"{fine_name}: {class_name}"
             for fine_name, class_name in sorted(self._class_mapping.items())
@@ -317,7 +316,7 @@ class Detection3DTaxonomy(LabelTaxonomy):
     """
     Detection classes of one level together with the class keyed evaluation tables of the
     detection metrics. The tables are validated against the class list here and read by the
-    dataset configs, they do not enter the database hash because they do not change the table.
+    metric configs.
     """
 
     def __init__(
@@ -385,55 +384,3 @@ class Detection3DTaxonomy(LabelTaxonomy):
 
 class Segmentation3DTaxonomy(LabelTaxonomy):
     """Segmentation classes of one level together with the behaviour groups of the metrics."""
-
-
-class DatabaseTaxonomy:
-    """Taxonomies of the label spaces a database describes."""
-
-    def __init__(
-        self, detection3d: Detection3DTaxonomy, segmentation3d: Segmentation3DTaxonomy
-    ) -> None:
-        """
-        Initialize the database taxonomy.
-
-        Args:
-          detection3d: Taxonomy the box labels are baked with.
-          segmentation3d: Taxonomy the semantic mask categories are resolved with.
-        """
-
-        if not isinstance(detection3d, Detection3DTaxonomy):
-            raise TypeError(
-                f"detection3d must be a Detection3DTaxonomy, got {type(detection3d).__name__}."
-            )
-        if not isinstance(segmentation3d, Segmentation3DTaxonomy):
-            raise TypeError(
-                "segmentation3d must be a Segmentation3DTaxonomy, got "
-                f"{type(segmentation3d).__name__}."
-            )
-        self._detection3d = detection3d
-        self._segmentation3d = segmentation3d
-
-    @property
-    def detection3d(self) -> Detection3DTaxonomy:
-        """Taxonomy the box labels are baked with."""
-        return self._detection3d
-
-    @property
-    def segmentation3d(self) -> Segmentation3DTaxonomy:
-        """Taxonomy the semantic mask categories are resolved with."""
-        return self._segmentation3d
-
-    def __str__(self) -> str:
-        """Canonical string form, the input of the database hash."""
-        return (
-            f"{self.__class__.__name__}(detection3d={self._detection3d}, "
-            f"segmentation3d={self._segmentation3d})"
-        )
-
-    def __eq__(self, other: object) -> bool:
-        """Compare two database taxonomies by their definition."""
-        return type(self) is type(other) and str(self) == str(other)
-
-    def __hash__(self) -> int:
-        """Hash the database taxonomy by its string form."""
-        return hash(str(self))

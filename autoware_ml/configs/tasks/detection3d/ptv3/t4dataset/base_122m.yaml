@@ -8,12 +8,28 @@ defaults:
   - /metrics/t4dataset/detection3d@metric_ranges: default_detection3d_120m_metric_ranges
   - /datamodule@datamodule: t4dataset/default_detection3d_datamodule
   - /datamodule/frame_sampling@datamodule.train_frame_sampling: default_frame_sampling
+  # The experiment selects the taxonomy that folds the labels of its database onto the classes
+  - /database/t4dataset/taxonomy/detection3d@taxonomy.detection3d: ???
   - _self_
+
+taxonomy:
+  detection3d:
+    class_names:
+      - car
+      - truck
+      - bus
+      - motorcycle
+      - bicycle
+      - pedestrian
+      - animal
+      - barrier
+      - traffic_cone
+      - debris
 
 point_cloud_range: [-122.88, -122.88, -2.30, 122.88, 122.88, 5.38]
 
 # Largest GT distance of every class, from the detection taxonomy of the database.
-eval_class_range: ${database.taxonomy.detection3d.eval_range}
+eval_class_range: ${taxonomy.detection3d.eval_range}
 
 # Boxes carrying one of these (class, attribute) pairs are dropped from training, evaluation
 # and the frame sampler alike.
@@ -161,8 +177,8 @@ datasets:
         - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesLabelNameFilter
           _convert_: all
 
-          label_names_to_keep: ${database.taxonomy.detection3d.class_names}
-          class_names: ${database.taxonomy.detection3d.class_names}
+          label_names_to_keep: ${taxonomy.detection3d.class_names}
+          class_names: ${taxonomy.detection3d.class_names}
 
         - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesAttributeFilter
           _convert_: all
@@ -218,8 +234,8 @@ datasets:
         - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesLabelNameFilter
           _convert_: all
 
-          label_names_to_keep: ${database.taxonomy.detection3d.class_names}
-          class_names: ${database.taxonomy.detection3d.class_names}
+          label_names_to_keep: ${taxonomy.detection3d.class_names}
+          class_names: ${taxonomy.detection3d.class_names}
 
         - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesAttributeFilter
           _convert_: all
@@ -240,6 +256,6 @@ datamodule:
     batch_size: 1
   train_frame_sampling:
     pedestrian_class_name: pedestrian
-    class_names: ${database.taxonomy.detection3d.class_names}
-    ignore_index: ${database.taxonomy.detection3d.ignore_index}
+    class_names: ${taxonomy.detection3d.class_names}
+    ignore_index: ${taxonomy.detection3d.ignore_index}
     filter_attributes: ${filter_attributes}

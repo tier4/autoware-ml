@@ -10,8 +10,7 @@ object_bev_range:
 pedestrian_class_name: ???
 low_pedestrian_height_threshold: 1.5
 low_pedestrian_bev_range: [-50.0, -50.0, 50.0, 50.0]
-class_names: ${database.taxonomy.detection3d.class_names}
-ignore_index: ${database.taxonomy.detection3d.ignore_index}
+taxonomy: ${taxonomy.detection3d}
 # (class, attribute) pairs whose boxes do not count, the experiment sets its own list.
 filter_attributes: ???
 seed: ${seed}

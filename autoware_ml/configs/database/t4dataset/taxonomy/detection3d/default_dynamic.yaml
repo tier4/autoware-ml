@@ -30,14 +30,8 @@ collision_kinds:
 living_speeds:
   pedestrian: 3.0
   bicycle: 6.0
-class_names:
-  - car
-  - truck
-  - bus
-  - bicycle
-  - pedestrian
-  - barrier
-  - traffic_cone
+# The model declares the classes it trains
+class_names: ???
 
 class_mapping:
   # A trailer attached to a truck is merged into the truck box by the pipelines, a trailer

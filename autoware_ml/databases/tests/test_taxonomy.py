@@ -19,7 +19,6 @@ from __future__ import annotations
 import pytest
 
 from autoware_ml.databases.taxonomy import (
-    DatabaseTaxonomy,
     Detection3DTaxonomy,
     LabelTaxonomy,
     LabelVocabulary,
@@ -227,25 +226,3 @@ def test_evaluation_tables_stay_out_of_the_string_form() -> None:
     assert str(_detection3d()) == str(
         _detection3d(collision_kinds={"car": "static", "truck": "static"}, living_speeds={})
     )
-
-
-def test_database_taxonomy_compares_both_levels() -> None:
-    first = DatabaseTaxonomy(detection3d=_detection3d(), segmentation3d=_segmentation3d())
-    second = DatabaseTaxonomy(detection3d=_detection3d(), segmentation3d=_segmentation3d())
-    other = DatabaseTaxonomy(
-        detection3d=_detection3d(),
-        segmentation3d=Segmentation3DTaxonomy(
-            VOCABULARY, ONLINE_CLASSES, ONLINE_COARSENING, -1, ONLINE_GROUPS
-        ),
-    )
-
-    assert first == second
-    assert first != other
-    assert str(first).startswith("DatabaseTaxonomy(detection3d=Detection3DTaxonomy(")
-
-
-def test_database_taxonomy_rejects_untyped_levels() -> None:
-    with pytest.raises(TypeError, match="detection3d must be a Detection3DTaxonomy"):
-        DatabaseTaxonomy(detection3d=_coarse(), segmentation3d=_segmentation3d())
-    with pytest.raises(TypeError, match="segmentation3d must be a Segmentation3DTaxonomy"):
-        DatabaseTaxonomy(detection3d=_detection3d(), segmentation3d=_detection3d())

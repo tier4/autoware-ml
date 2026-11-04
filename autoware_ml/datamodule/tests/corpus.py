@@ -24,7 +24,7 @@ import numpy as np
 import polars as pl
 
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
-from autoware_ml.databases.taxonomy import LabelVocabulary, Segmentation3DTaxonomy
+from autoware_ml.databases.taxonomy import LabelTaxonomy, LabelVocabulary, Segmentation3DTaxonomy
 from autoware_ml.datamodule.t4dataset.dataset import T4Dataset
 from autoware_ml.datamodule.common.detection3d import Detection3DTask
 from autoware_ml.datamodule.t4dataset.segmentation3d import T4Segmentation3DTask
@@ -54,6 +54,9 @@ POINT_CLOUD_RANGE = (-8.0, -8.0, -2.0, 8.0, 8.0, 2.0)
 SCENE = "db_v1/scene_0/dataset_v1"
 
 VOCABULARY = LabelVocabulary({"car": "car", "vehicle.car": "car", "unpainted": None})
+DETECTION3D_TAXONOMY = LabelTaxonomy(
+    VOCABULARY, ("car",), {"car": "car"}, -1, {"vehicle": ("car",)}
+)
 SEGMENTATION3D_TAXONOMY = Segmentation3DTaxonomy(
     VOCABULARY, ("car",), {"car": "car"}, -1, {"vehicle": ("car",)}
 )
@@ -182,7 +185,6 @@ def write_corpus(
                         "box3d_instance_id": f"box-{record_index}",
                         "box3d_dataset_label_name": "vehicle.car",
                         "box3d_label_name": "car",
-                        "box3d_label_index": 0,
                         "box3d_num_lidar_points": 64,
                         "box3d_num_radar_points": 0,
                         "box3d_valid": True,
@@ -240,7 +242,7 @@ def build_dataset(root: Path, records: pl.DataFrame) -> T4Dataset:
         transforms=build_transforms(),
         dataset_tasks=MappingProxyType(
             {
-                "detection3d": Detection3DTask,
+                "detection3d": partial(Detection3DTask, taxonomy=DETECTION3D_TAXONOMY),
                 "segmentation3d": partial(T4Segmentation3DTask, taxonomy=SEGMENTATION3D_TAXONOMY),
             }
         ),

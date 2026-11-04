@@ -203,7 +203,7 @@ Backend modes:
 Each sample is logged on the `frame` timeline at its dataset index, with its
 lidar timestamp on `sensor_time`. Only the points of the current lidar frame are
 shown: past sweeps merged in by the pipeline carry no annotation of their own.
-Class names come from the taxonomy of the database; set
+Class names come from the taxonomies of the run; set
 `+visualization.segmentation3d_class_names=[...]` or
 `+visualization.detection3d_class_names=[...]` to override them.
 

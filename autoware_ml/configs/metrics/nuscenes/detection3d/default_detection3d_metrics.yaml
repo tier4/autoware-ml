@@ -4,4 +4,4 @@ defaults:
   - _self_
 
 # Grouped classes for evaluation, from the detection taxonomy of the database.
-class_groups: ${database.taxonomy.detection3d.class_groups}
+class_groups: ${taxonomy.detection3d.class_groups}

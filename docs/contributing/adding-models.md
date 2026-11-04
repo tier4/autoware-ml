@@ -167,7 +167,7 @@ Models do not bring their own data module. Every task config uses the shared `Da
 (`autoware_ml.datamodule.data_module.DataModule`), which reads the record table of a database,
 splits it by scenario lists and builds one dataset per dataset source of a split. A model picks:
 
-- a database config from `configs/database/`, which names the record table and its taxonomy
+- a database config from `configs/database/`, which names the record table and its vocabulary
 - a datamodule config from `configs/datamodule/<database>/`, which selects the task datasets of
   every split, for example `t4dataset/default_segmentation3d_datamodule`
 - the transforms of every split, written in its own task config
@@ -223,8 +223,8 @@ optimizer:
 
 model:
   _target_: autoware_ml.models.my_task.my_model.MyModel
-  num_classes: ${class_count:${database.taxonomy.segmentation3d.class_names}}
-  ignore_index: ${database.taxonomy.segmentation3d.ignore_index}
+  num_classes: ${class_count:${taxonomy.segmentation3d.class_names}}
+  ignore_index: ${taxonomy.segmentation3d.ignore_index}
   metrics: ${metrics}
 
   encoder:
@@ -250,7 +250,7 @@ data_preprocessor:
   preprocessor_modules: []
 ```
 
-The classes come from the taxonomy of the database, the metric suites from the `metrics` group
+The dataset base declares the classes the model trains under `taxonomy`, the metric suites from the `metrics` group
 of the evaluated database, and the optimizer from the shared `optimizers` group. The experiment
 root declares `metrics`, `metric_ranges`, `database` and the experiment name as mandatory, so a
 leaf cannot run until it names them.

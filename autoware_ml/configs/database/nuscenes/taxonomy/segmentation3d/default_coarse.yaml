@@ -17,22 +17,8 @@ class_groups:
   grouped_structure: [manmade, vertical_thin]
   grouped_static_clutter: [other_stuff]
   grouped_noise: [noise]
-class_names:
-  - car
-  - truck
-  - bus
-  - bicycle
-  - pedestrian
-  - traffic_cone
-  - barrier
-  - debris
-  - drivable_surface
-  - other_flat_surface
-  - vegetation
-  - manmade
-  - vertical_thin
-  - other_stuff
-  - noise
+# The model declares the classes it trains
+class_names: ???
 class_mapping:
   car: car
   truck: truck

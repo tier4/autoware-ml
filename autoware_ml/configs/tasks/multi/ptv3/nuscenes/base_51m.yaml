@@ -8,12 +8,37 @@ defaults:
   - /metrics/nuscenes/segmentation3d@segmentation3d_metrics: default_segmentation3d_metric_suites
   - /metrics/nuscenes/detection3d@metric_ranges: default_detection3d_50m_metric_ranges
   - /datamodule@datamodule: nuscenes/default_det3d_seg3d_datamodule
+  # The taxonomy folds the nuScenes labels onto the classes
+  - /database/nuscenes/taxonomy@taxonomy: default_coarse
   - _self_
+
+# The detection classes come first, in the same order, so a detection class and its
+# segmentation class share one index
+taxonomy:
+  detection3d:
+    class_names: [car, truck, bus, bicycle, pedestrian, traffic_cone, barrier]
+  segmentation3d:
+    class_names:
+      - car
+      - truck
+      - bus
+      - bicycle
+      - pedestrian
+      - traffic_cone
+      - barrier
+      - debris
+      - drivable_surface
+      - other_flat_surface
+      - vegetation
+      - manmade
+      - vertical_thin
+      - other_stuff
+      - noise
 
 point_cloud_range: [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
 
 # Largest GT distance of every class, from the detection taxonomy of the database.
-eval_class_range: ${database.taxonomy.detection3d.eval_range}
+eval_class_range: ${taxonomy.detection3d.eval_range}
 
 metrics: ${merge_lists:${detection3d_metrics},${segmentation3d_metrics}}
 
@@ -99,8 +124,8 @@ datasets:
         - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesLabelNameFilter
           _convert_: all
 
-          label_names_to_keep: ${database.taxonomy.detection3d.class_names}
-          class_names: ${database.taxonomy.detection3d.class_names}
+          label_names_to_keep: ${taxonomy.detection3d.class_names}
+          class_names: ${taxonomy.detection3d.class_names}
 
         - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesAttributeFilter
           _convert_: all
@@ -156,8 +181,8 @@ datasets:
         - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesLabelNameFilter
           _convert_: all
 
-          label_names_to_keep: ${database.taxonomy.detection3d.class_names}
-          class_names: ${database.taxonomy.detection3d.class_names}
+          label_names_to_keep: ${taxonomy.detection3d.class_names}
+          class_names: ${taxonomy.detection3d.class_names}
 
         - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesAttributeFilter
           _convert_: all

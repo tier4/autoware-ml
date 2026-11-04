@@ -28,7 +28,7 @@ from torch.utils.data import DataLoader
 
 from autoware_ml.databases.base_database import BaseDatabase
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
-from autoware_ml.databases.taxonomy import DatabaseTaxonomy, Detection3DTaxonomy
+from autoware_ml.databases.taxonomy import Detection3DTaxonomy
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.datamodule.base_dataset import ConcatDataset, PaddingSlot
 from autoware_ml.datamodule.data_module import DataLoaderConfig
@@ -52,49 +52,34 @@ from autoware_ml.datamodule.tests.corpus import (
 from autoware_ml.types.dataset import SplitType
 
 
+# Detection taxonomy of the runs, the pedestrian is a class without boxes in the corpora
+DETECTION3D_TAXONOMY = Detection3DTaxonomy(
+    VOCABULARY,
+    ("car", "pedestrian"),
+    {"car": "car"},
+    -1,
+    {"vehicle": ("car",), "living": ("pedestrian",)},
+    eval_range={"car": 121.0, "pedestrian": 121.0},
+    collision_kinds={"car": "wheeled", "pedestrian": "living"},
+    living_speeds={"pedestrian": 3.0},
+)
+
 FRAME_SAMPLING = FrameSamplingConfig(
     repeat_sampling_factor=0.3,
     object_bev_range=[-100.0, -100.0, 100.0, 100.0],
     pedestrian_class_name="pedestrian",
     low_pedestrian_height_threshold=1.5,
     low_pedestrian_bev_range=[-50.0, -50.0, 50.0, 50.0],
-    class_names=["car", "pedestrian"],
-    ignore_index=-1,
+    taxonomy=DETECTION3D_TAXONOMY,
     filter_attributes=[],
     seed=0,
 )
 
 
-def build_taxonomy(class_name: str = "car") -> DatabaseTaxonomy:
-    """
-    Build the taxonomy of the synthetic corpora.
-
-    Args:
-      class_name: Detection class the car labels train as, changed to get a different
-        taxonomy.
-
-    Returns:
-      DatabaseTaxonomy: A fresh taxonomy object on every call.
-    """
-    detection = Detection3DTaxonomy(
-        VOCABULARY,
-        (class_name,),
-        {"car": class_name},
-        -1,
-        {"vehicle": (class_name,)},
-        eval_range={class_name: 121.0},
-        collision_kinds={class_name: "wheeled"},
-        living_speeds={},
-    )
-    return DatabaseTaxonomy(detection3d=detection, segmentation3d=SEGMENTATION3D_TAXONOMY)
-
-
 class FakeDatabase(BaseDatabase):
     """A database serving a record table written to a temporary directory."""
 
-    def __init__(
-        self, root: Path, records: pl.DataFrame, version: str, taxonomy: DatabaseTaxonomy
-    ) -> None:
+    def __init__(self, root: Path, records: pl.DataFrame, version: str) -> None:
         """
         Build a database over an already written corpus.
 
@@ -102,12 +87,10 @@ class FakeDatabase(BaseDatabase):
           root: Root directory the record paths resolve against.
           records: Record table of the corpus.
           version: Version naming the database.
-          taxonomy: Taxonomy the datamodule compares across sources.
         """
         self._root_path = root
         self._records = records
         self._version = version
-        self._taxonomy = taxonomy
         self._lidar_intensity_scale = 255.0
         self.processed = 0
 
@@ -132,11 +115,6 @@ class FakeDatabase(BaseDatabase):
     def version(self) -> str:
         """Version of the database."""
         return self._version
-
-    @property
-    def taxonomy(self) -> DatabaseTaxonomy:
-        """Taxonomy the labels of the database are built with."""
-        return self._taxonomy
 
     @property
     def database_hash(self) -> str:
@@ -205,7 +183,7 @@ def build_dataset(database: BaseDatabase, det3d: bool = True, seg3d: bool = True
         max_num_3d_gt_bboxes=8,
         transforms=build_transforms(),
         dataset_tasks={
-            "detection3d": Detection3DTask,
+            "detection3d": partial(Detection3DTask, taxonomy=DETECTION3D_TAXONOMY),
             "segmentation3d": partial(T4Segmentation3DTask, taxonomy=SEGMENTATION3D_TAXONOMY),
         },
         lidar_intensity_scale=database.lidar_intensity_scale,
@@ -257,12 +235,8 @@ class MultiSourceTestCase(unittest.TestCase):
         self.seg3d_gt_root = root / "seg3d_gt"
         self.main_records = write_corpus(self.main_root, num_records=3)
         self.seg3d_gt_records = write_corpus(self.seg3d_gt_root, num_records=1)
-        self.main_database = FakeDatabase(
-            self.main_root, self.main_records, "main", build_taxonomy()
-        )
-        self.seg3d_gt_database = FakeDatabase(
-            self.seg3d_gt_root, self.seg3d_gt_records, "seg3d_gt", build_taxonomy()
-        )
+        self.main_database = FakeDatabase(self.main_root, self.main_records, "main")
+        self.seg3d_gt_database = FakeDatabase(self.seg3d_gt_root, self.seg3d_gt_records, "seg3d_gt")
 
     def build_data_module(
         self,
@@ -288,7 +262,7 @@ class TestDatasetSource(unittest.TestCase):
 
     def setUp(self) -> None:
         """Build a database the sources can name."""
-        self.database = FakeDatabase(Path("/"), pl.DataFrame(), "v", build_taxonomy())
+        self.database = FakeDatabase(Path("/"), pl.DataFrame(), "v")
 
     def test_rejects_a_repeat_below_one(self) -> None:
         """
@@ -331,7 +305,7 @@ class TestDatasetSource(unittest.TestCase):
         declaration.
         Check: a ValueError naming both root paths is raised.
         """
-        other = FakeDatabase(Path("/elsewhere"), pl.DataFrame(), "other", build_taxonomy())
+        other = FakeDatabase(Path("/elsewhere"), pl.DataFrame(), "other")
 
         with self.assertRaisesRegex(ValueError, "reads /elsewhere"):
             DatasetSource(database=self.database, train_dataset=build_dataset(other))
@@ -492,39 +466,6 @@ class TestDataModuleSources(MultiSourceTestCase):
         data_module.prepare_data()
 
         self.assertEqual(self.main_database.processed, 1)
-
-    def test_accepts_sources_whose_taxonomies_are_equal(self) -> None:
-        """
-        Input: two corpora whose taxonomies are separate but equal objects.
-        Expected: taxonomies are compared by their definition, not by identity.
-        Check: the datamodule builds and keeps both sources.
-        """
-        self.assertIsNot(self.main_database.taxonomy, self.seg3d_gt_database.taxonomy)
-
-        data_module = self.build_data_module(
-            {
-                "main": build_source(self.main_database),
-                "seg3d_gt": build_source(self.seg3d_gt_database),
-            }
-        )
-
-        self.assertEqual(len(data_module.sources), 2)
-
-    def test_rejects_sources_whose_taxonomies_disagree(self) -> None:
-        """
-        Input: two corpora built with different taxonomies.
-        Expected: the class index of a label is what the model learns, so corpora that name
-        their classes differently cannot share a run.
-        Check: a ValueError is raised at construction.
-        """
-        other = FakeDatabase(
-            self.seg3d_gt_root, self.seg3d_gt_records, "other", build_taxonomy("vehicle")
-        )
-
-        with self.assertRaisesRegex(ValueError, "same taxonomy"):
-            self.build_data_module(
-                {"main": build_source(self.main_database), "other": build_source(other)}
-            )
 
     def test_a_split_the_stage_needs_without_records_stops_the_run(self) -> None:
         """
@@ -699,7 +640,7 @@ class TestSupervisionToggles(MultiSourceTestCase):
                 )
             )
         )
-        database = FakeDatabase(self.main_root, records, "maskless", build_taxonomy())
+        database = FakeDatabase(self.main_root, records, "maskless")
         data_module = self.build_data_module({"main": build_source(database, seg3d=False)})
         data_module.setup("fit")
 
@@ -748,7 +689,7 @@ class TestFramesWithoutMasks(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         root = Path(directory.name)
         records = write_corpus(root, num_records=2, unmasked_records=frozenset({1}))
-        database = FakeDatabase(root, records, "unmasked", build_taxonomy())
+        database = FakeDatabase(root, records, "unmasked")
         dataset = build_dataset(database).bind(records)
 
         self.assertIsNotNone(dataset[0].segmentation3d_gt_sample)
@@ -815,9 +756,7 @@ class StreamedCorpusTestCase(MultiSourceTestCase):
             scenario_ids=["a", "b", "a", "b", "a"],
             timestamps=[12.0, 20.0, 11.0, 21.0, 10.0],
         )
-        self.streamed_database = FakeDatabase(
-            self.main_root, self.streamed_records, "streamed", build_taxonomy()
-        )
+        self.streamed_database = FakeDatabase(self.main_root, self.streamed_records, "streamed")
 
 
 class TestSceneIndexGroups(StreamedCorpusTestCase):

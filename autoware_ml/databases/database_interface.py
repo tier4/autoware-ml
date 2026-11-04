@@ -23,7 +23,6 @@ import polars as pl
 
 from autoware_ml.databases.scenarios import Scenarios, ScenarioData
 from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord
-from autoware_ml.databases.taxonomy import DatabaseTaxonomy
 
 
 class DatabaseInterface(Protocol):
@@ -145,18 +144,6 @@ class DatabaseInterface(Protocol):
         """
 
         raise NotImplementedError("Database must define hash_repr!")
-
-    @property
-    @abstractmethod
-    def taxonomy(self) -> DatabaseTaxonomy:
-        """
-        Get the taxonomies the database labels are built with.
-
-        Returns:
-          DatabaseTaxonomy: Taxonomies of the database.
-        """
-
-        raise NotImplementedError("Database must define taxonomy!")
 
     @property
     @abstractmethod

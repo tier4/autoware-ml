@@ -18,11 +18,14 @@ from __future__ import annotations
 
 from types import MappingProxyType
 
+from functools import partial
+
 import numpy as np
 import polars as pl
 import pytest
 
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
+from autoware_ml.databases.taxonomy import LabelTaxonomy, LabelVocabulary
 from autoware_ml.databases.schemas.image_frames import ImageFrameDataModel
 from autoware_ml.databases.schemas.lidar_frames import LidarFrameDataModel
 from autoware_ml.datamodule.common.detection3d import Detection3DTask
@@ -30,6 +33,9 @@ from autoware_ml.datamodule.nuscenes.dataset import NuScenesDataset
 from autoware_ml.types.geometry import Box3DFieldIndex
 
 _SCENE_NAME = "scene-0061"
+_TAXONOMY = LabelTaxonomy(
+    LabelVocabulary({"car": "car"}), ["car"], {"car": "car"}, -1, {"all": ["car"]}
+)
 _SAMPLE_LIDAR = (
     "samples/LIDAR_TOP/n008-2018-08-01-15-16-36-0400__LIDAR_TOP__1533151603547590.pcd.bin"
 )
@@ -123,7 +129,6 @@ def nuscenes_records() -> pl.DataFrame:
                 "box3d_instance_id": "car-instance",
                 "box3d_dataset_label_name": "vehicle.car",
                 "box3d_label_name": "car",
-                "box3d_label_index": 0,
                 "box3d_num_lidar_points": 64,
                 "box3d_num_radar_points": 0,
                 "box3d_valid": True,
@@ -142,7 +147,9 @@ def build_dataset(database_root_path: str) -> NuScenesDataset:
         max_num_3d_gt_bboxes=8,
         dataset_records_dataframe=nuscenes_records(),
         transforms=None,
-        dataset_tasks=MappingProxyType({"detection3d": Detection3DTask}),
+        dataset_tasks=MappingProxyType(
+            {"detection3d": partial(Detection3DTask, taxonomy=_TAXONOMY)}
+        ),
         lidar_intensity_scale=255.0,
     )
 

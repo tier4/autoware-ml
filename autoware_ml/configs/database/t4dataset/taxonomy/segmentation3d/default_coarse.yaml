@@ -14,25 +14,8 @@ class_groups:
   grouped_static_structure: [manmade, vertical_thin, vegetation]
   grouped_flat_surface: [driveable_flat, non_driveable_flat]
   grouped_artifact: [noise]
-# The detection classes come first, in the same order, so a detection class and its
-# segmentation class share one index
-class_names:
-  - car
-  - truck
-  - bus
-  - motorcycle
-  - bicycle
-  - pedestrian
-  - animal
-  - barrier
-  - traffic_cone
-  - debris
-  - driveable_flat
-  - non_driveable_flat
-  - vegetation
-  - manmade
-  - vertical_thin
-  - noise
+# The model declares the classes it trains
+class_names: ???
 class_mapping:
   car: car
   emergency_vehicle: car

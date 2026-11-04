@@ -1299,7 +1299,7 @@ it, so overriding a suite directly would mean restating every field.
 model:
   metrics:
     - _target_: autoware_ml.metrics.detection3d.suite.Detection3DMetricSuite
-      class_names: ${database.taxonomy.detection3d.class_names}
+      class_names: ${taxonomy.detection3d.class_names}
       eval_class_range: ${eval_class_range}
       ranges: ${metric_ranges}
       components:
