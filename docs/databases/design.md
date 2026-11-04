@@ -117,6 +117,7 @@ class BaseDatabase:
         cache_path: str,
         cache_file_prefix_name: str,
         num_workers: int,
+        vocabulary: LabelVocabulary,
         box3d_pipelines: Sequence[Box3DPipeline],
         lidar_intensity_scale: float,
         lidar_pointcloud_num_features: int,

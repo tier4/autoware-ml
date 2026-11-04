@@ -38,10 +38,9 @@ _SCENARIOS = {
 }
 
 
-def _build_box3d_pipelines(raw_names: tuple[str, ...]) -> list[Box3DLabelResolver]:
-    """Build the box pipeline resolving the raw names, with buses folded into cars."""
-    vocabulary = LabelVocabulary({name: name for name in raw_names} | {"bus": "car"})
-    return [Box3DLabelResolver(vocabulary)]
+def _build_vocabulary(raw_names: tuple[str, ...]) -> LabelVocabulary:
+    """Build the vocabulary of the raw names, with buses folded into cars."""
+    return LabelVocabulary({name: name for name in raw_names} | {"bus": "car"})
 
 
 class TestScenarioDataHashRepr(unittest.TestCase):
@@ -122,7 +121,8 @@ class TestT4DatabaseHash(unittest.TestCase):
             num_workers=1,
             lidar_channel=lidar_channel,
             lidar_pointcloud_num_features=lidar_pointcloud_num_features,
-            box3d_pipelines=_build_box3d_pipelines(raw_names),
+            vocabulary=_build_vocabulary(raw_names),
+            box3d_pipelines=[Box3DLabelResolver(_build_vocabulary(raw_names))],
             lidar_intensity_scale=255.0,
             box_annotation_dir=box_annotation_dir,
         )
@@ -258,6 +258,7 @@ class TestNuScenesDatabaseHash(unittest.TestCase):
             cache_file_prefix_name="database",
             num_workers=1,
             lidar_pointcloud_num_features=lidar_pointcloud_num_features,
+            vocabulary=_build_vocabulary(("car", "pedestrian")),
             box3d_pipelines=[],
             lidar_intensity_scale=255.0,
         )

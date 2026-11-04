@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+import inspect
+
 import hydra
 import pytest
 from omegaconf import OmegaConf
@@ -62,3 +64,13 @@ def test_every_warmup_decay_schedule_spans_the_training_epochs(config_name: str)
     assert not OmegaConf.is_missing(scheduler, "decay_epochs"), "decay_epochs is `???`"
     assert scheduler.warmup_epochs + scheduler.decay_epochs == cfg.trainer.max_epochs
     assert cfg.get("scheduler") is None, "a top-level `scheduler` key is read by nothing"
+
+
+@pytest.mark.parametrize("config_name", EXPERIMENT_CONFIGS)
+def test_every_database_config_names_only_arguments_of_its_database(config_name: str) -> None:
+    # The database is built from the records on disk, so the model and pipeline test above does
+    # not build it. A key its class does not take only fails when a run reads the records.
+    database = compose_task(config_name).database
+    parameters = inspect.signature(hydra.utils.get_class(database._target_)).parameters
+
+    assert set(database) - {"_target_", "_convert_"} <= set(parameters)

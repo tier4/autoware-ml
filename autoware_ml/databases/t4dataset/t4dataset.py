@@ -31,6 +31,7 @@ from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord
 from autoware_ml.databases.t4dataset.t4records_generator import MAX_SWEEPS, T4RecordsGenerator
 from autoware_ml.databases.t4dataset.t4scenarios import T4Scenarios
 from autoware_ml.databases.box3d_pipelines.box3d_pipeline import Box3DPipeline
+from autoware_ml.databases.taxonomy import LabelVocabulary
 from autoware_ml.types.sensor import LidarChannel
 
 logger = logging.getLogger(__name__)
@@ -100,6 +101,7 @@ class T4Dataset(BaseDatabase):
         num_workers: int,
         lidar_channel: str,
         lidar_pointcloud_num_features: int,
+        vocabulary: LabelVocabulary,
         box3d_pipelines: Sequence[Box3DPipeline],
         lidar_intensity_scale: float,
         box_annotation_dir: str,
@@ -116,6 +118,7 @@ class T4Dataset(BaseDatabase):
           num_workers: Number of workers to use for processing the dataset.
           lidar_channel: Lidar channel each sample is keyed on.
           lidar_pointcloud_num_features: Number of features in the lidar pointcloud.
+          vocabulary: Vocabulary of the raw box labels of the recordings.
           box3d_pipelines: List of box 3D pipelines to process the box 3D annotations.
           lidar_intensity_scale: Intensity value of the strongest return in the stored point
             clouds.
@@ -130,6 +133,7 @@ class T4Dataset(BaseDatabase):
             cache_path=cache_path,
             cache_file_prefix_name=cache_file_prefix_name,
             num_workers=num_workers,
+            vocabulary=vocabulary,
             box3d_pipelines=box3d_pipelines,
             lidar_intensity_scale=lidar_intensity_scale,
             lidar_pointcloud_num_features=lidar_pointcloud_num_features,

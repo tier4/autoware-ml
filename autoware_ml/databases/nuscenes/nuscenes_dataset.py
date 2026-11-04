@@ -34,6 +34,7 @@ from autoware_ml.databases.nuscenes.nuscenes_records_generator import (
 )
 from autoware_ml.databases.nuscenes.nuscenes_scenarios import NuScenesScenarios
 from autoware_ml.databases.box3d_pipelines.box3d_pipeline import Box3DPipeline
+from autoware_ml.databases.taxonomy import LabelVocabulary
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,7 @@ class NuScenesDataset(BaseDatabase):
         cache_file_prefix_name: str,
         num_workers: int,
         lidar_pointcloud_num_features: int,
+        vocabulary: LabelVocabulary,
         box3d_pipelines: Sequence[Box3DPipeline],
         lidar_intensity_scale: float,
     ) -> None:
@@ -103,6 +105,7 @@ class NuScenesDataset(BaseDatabase):
           cache_file_prefix_name: Prefix name of the cache file, it will be <cache_file_prefix_name>_<dataset_hash>.parquet
           num_workers: Number of workers to use for processing the dataset.
           lidar_pointcloud_num_features: Number of features in the lidar pointcloud.
+          vocabulary: Vocabulary of the raw box labels of the recordings.
           box3d_pipelines: List of box 3D pipelines to process the box 3D annotations.
           lidar_intensity_scale: Intensity value of the strongest return in the stored point
             clouds.
@@ -115,6 +118,7 @@ class NuScenesDataset(BaseDatabase):
             cache_path=cache_path,
             cache_file_prefix_name=cache_file_prefix_name,
             num_workers=num_workers,
+            vocabulary=vocabulary,
             box3d_pipelines=box3d_pipelines,
             lidar_intensity_scale=lidar_intensity_scale,
             lidar_pointcloud_num_features=lidar_pointcloud_num_features,
