@@ -71,5 +71,5 @@ def test_cpfpn_rejects_another_number_of_levels() -> None:
     """Every level has its own lateral convolution, so another number of levels is refused."""
     neck = CPFPN(in_channels=[24, 40], out_channels=16)
 
-    with pytest.raises(ValueError, match="Expected 2 input feature maps"):
+    with pytest.raises(ValueError, match="Expected 2 inputs, got 1"):
         neck((torch.randn(1, 24, 12, 20),))

@@ -25,10 +25,11 @@ from collections.abc import Sequence
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+
+from autoware_ml.models.common.necks.fpn import BaseFPN
 
 
-class CPFPN(nn.Module):
+class CPFPN(BaseFPN):
     """StreamPETR feature pyramid with per-level laterals and top-down adds.
 
     Outputs one feature map per input level; only the first (highest
@@ -44,22 +45,9 @@ class CPFPN(nn.Module):
                 resolution.
             out_channels: Unified output channel dimension.
         """
-        super().__init__()
-        self.in_channels = tuple(in_channels)
-        self.out_channels = out_channels
-        self.lateral_convs = nn.ModuleList(
-            [nn.Conv2d(channels, out_channels, kernel_size=1) for channels in self.in_channels]
-        )
+        super().__init__(in_channels, out_channels)
         self.fpn_conv = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
         self.init_weights()
-
-    def init_weights(self) -> None:
-        """Xavier-initialize every convolution (reference init)."""
-        for module in self.modules():
-            if isinstance(module, nn.Conv2d):
-                nn.init.xavier_uniform_(module.weight)
-                if module.bias is not None:
-                    nn.init.zeros_(module.bias)
 
     def forward(self, inputs: Sequence[torch.Tensor]) -> tuple[torch.Tensor, ...]:
         """Fuse the feature pyramid top-down and refine the finest level.
@@ -70,15 +58,5 @@ class CPFPN(nn.Module):
         Returns:
             One fused feature map per input level.
         """
-        if len(inputs) != len(self.in_channels):
-            raise ValueError(
-                f"Expected {len(self.in_channels)} input feature maps, got {len(inputs)}."
-            )
-        laterals = [
-            lateral_conv(inputs[level]) for level, lateral_conv in enumerate(self.lateral_convs)
-        ]
-        for level in range(len(laterals) - 1, 0, -1):
-            laterals[level - 1] = laterals[level - 1] + F.interpolate(
-                laterals[level], size=laterals[level - 1].shape[2:], mode="nearest"
-            )
+        laterals = self.fuse_levels(inputs)
         return (self.fpn_conv(laterals[0]), *laterals[1:])
