@@ -34,7 +34,14 @@ from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DH
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentation3DHeadOutputs
-from autoware_ml.models.detection3d.ptv3 import PTv3Det3DFeaturePyramid, rebuild_point_chain
+from autoware_ml.models.detection3d.ptv3 import (
+    PTv3BEVEncoder,
+    PTv3Det3DFeaturePyramid,
+    PTv3StageBEVPyramid,
+    det3d_head_export_dynamic_axes,
+    det3d_head_export_input_names,
+    rebuild_point_chain,
+)
 from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
     POINT_CLOUD_RANGE,
     build_inputs,
@@ -44,6 +51,7 @@ from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
 from autoware_ml.models.detection3d.heads.sparse4d import (
     ANCHOR_DIM,
     TEMPORAL_STATE_INPUT_NAMES,
+    LidarSampling,
     TemporalStateInputs,
 )
 from autoware_ml.models.detection3d.task_modules.partial_annotations import PartialAnnotations
@@ -62,7 +70,7 @@ from autoware_ml.models.multi.ptv3_det3d_seg3d_sparse4d import (
 from autoware_ml.models.segmentation3d.encoders.voxel import SweepSplitVoxelFeatureEncoder
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
-from autoware_ml.utils.deploy import export_to_onnx
+from autoware_ml.utils.deploy import ExportSpec, export_to_onnx
 
 requires_cuda_spconv = unittest.skipUnless(
     IS_SPCONV_AVAILABLE and torch.cuda.is_available(),
@@ -231,6 +239,19 @@ class TestPTv3Det3DSeg3DSparse4D(unittest.TestCase):
     def test_the_model_refuses_a_head_sampling_other_strides_than_the_pyramid(self) -> None:
         with self.assertRaisesRegex(ValueError, r"returns the strides \[1\] but the head samples"):
             _build_model(feature_strides=(2,))
+
+    def test_the_model_refuses_a_bev_pyramid_of_other_stage_strides(self) -> None:
+        bev = PTv3StageBEVPyramid(
+            point_cloud_range=POINT_CLOUD_RANGE,
+            grid_size=1.0,
+            stage_strides=(2,),
+            projected_strides=(2,),
+            in_channels=32,
+            channels=16,
+            bev_encoder=PTv3BEVEncoder(16, 16, 16, dilations=[1]),
+        )
+        with self.assertRaisesRegex(ValueError, r"BEV pyramid projects stages of \[2\]"):
+            _build_model(lidar_sampling="sparse_bev", bev=bev)
 
     @requires_cuda_spconv
     def test_temporal_model_trains_on_a_stream_and_reaches_every_parameter(self) -> None:
@@ -425,6 +446,75 @@ class TestPTv3Det3DSeg3DSparse4D(unittest.TestCase):
         head = build_sparse4d_head(make_anchor_recipe(), num_temp_instances=4)
         with self.assertRaisesRegex(ValueError, r"has no outputs \['scores'\]"):
             PTv3Sparse4DHeadExportModule(det_fusion, head, ("classification", "scores"))
+
+    def test_a_bev_head_graph_exports_to_onnx(self) -> None:
+        """
+        Input: the det head graph of three encoder stages whose head samples BEV maps of the two
+          fused stages with a halved level on top, with the voxels of both stages or alone.
+        Expected: the deploy export traces on CPU with dynamic voxel counts, every decoder layer
+          samples the voxels with one aggregation node unless the head reads the BEV maps alone,
+          and every BEV level with one GridSample.
+        Check: the ONNX checker and the aggregation and GridSample node counts.
+        """
+        for lidar_sampling in (LidarSampling.SPARSE_BEV, LidarSampling.BEV):
+            with (
+                self.subTest(lidar_sampling=lidar_sampling),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
+                bev = PTv3StageBEVPyramid(
+                    point_cloud_range=POINT_CLOUD_RANGE,
+                    grid_size=1.0,
+                    stage_strides=(1, 2),
+                    projected_strides=(1, 2),
+                    in_channels=32,
+                    channels=16,
+                    bev_encoder=PTv3BEVEncoder(16, 16, 16, dilations=[1]),
+                    num_downsampled=1,
+                )
+                head = build_sparse4d_head(
+                    make_anchor_recipe(),
+                    num_temp_instances=4,
+                    feature_strides=(1, 2),
+                    lidar_sampling=lidar_sampling,
+                    bev=bev,
+                ).eval()
+                module = PTv3Sparse4DHeadExportModule(
+                    PTv3Det3DFeaturePyramid(stage_channels=(8, 16, 32), out_channels=32),
+                    head.prepare_for_export(),
+                    SPARSE4D_EXPORT_OUTPUT_NAMES,
+                ).eval()
+                inputs = _head_graph_inputs(
+                    [grid.grid_dims for grid in head.level_grids], (8, 16, 32)
+                )
+                spec = ExportSpec(
+                    module=module,
+                    args=(*inputs, *head.temporal_state_export_inputs(torch.device("cpu"))),
+                    input_names=[
+                        *det3d_head_export_input_names(3, 0),
+                        *TEMPORAL_STATE_INPUT_NAMES,
+                    ],
+                    output_names=list(module.output_names),
+                    dynamic_axes=det3d_head_export_dynamic_axes(3, 0),
+                )
+                path = Path(tmp) / "ptv3_det3d_head.onnx"
+
+                export_to_onnx(
+                    spec,
+                    OmegaConf.create(
+                        {"opset_version": 17, "dynamo": False, "do_constant_folding": False}
+                    ),
+                    path,
+                )
+
+                exported = onnx.load(str(path))
+                onnx.checker.check_model(exported)
+                op_types = [node.op_type for node in exported.graph.node]
+                num_layers = len(head.deformable)
+                self.assertEqual(
+                    op_types.count("SparseDeformableAggregation"),
+                    num_layers if lidar_sampling == LidarSampling.SPARSE_BEV else 0,
+                )
+                self.assertEqual(op_types.count("GridSample"), num_layers * bev.num_levels)
 
     @requires_cuda_spconv
     def test_det_head_exports_to_onnx_with_the_deploy_dynamic_axes(self) -> None:
