@@ -48,8 +48,8 @@ class ExportSpec:
         input_names: ONNX input names, one per entry of ``args`` in order; the keys the
             config's ``dynamic_shapes`` / ``dynamic_axes`` tables and the runtime use.
         output_names: Names of the exported output tensors, in order.
-        dynamic_axes: Optional legacy ONNX dynamic-axis mapping generated with
-            the export arguments. Used only when exporting with ``dynamo=False``.
+        dynamic_axes: Optional ONNX dynamic-axis mapping, ``{tensor: {dim: name}}``. Used
+            only by the TorchScript exporter (``dynamo=False``).
         supported_stages: Export stages supported by this specification.
     """
 
@@ -229,10 +229,10 @@ def normalize_dynamic_shapes_for_model(
 
 
 def build_dynamic_axes(onnx_cfg: DictConfig) -> dict[str, dict[int, str]] | None:
-    """Build legacy ONNX dynamic-axes mapping from config.
+    """Build the ONNX dynamic-axes mapping from the module's config.
 
-    This path is used with ``torch.onnx.export(..., dynamo=False)`` to support
-    exports that still rely on the legacy exporter behavior.
+    The mapping is what the TorchScript exporter (``torch.onnx.export(..., dynamo=False)``)
+    takes as ``dynamic_axes``.
     """
     dynamic_axes_cfg = onnx_cfg.get("dynamic_axes")
     if dynamic_axes_cfg is None:
@@ -261,14 +261,14 @@ def build_dynamic_axes(onnx_cfg: DictConfig) -> dict[str, dict[int, str]] | None
     return dynamic_axes or None
 
 
-def resolve_legacy_dynamic_axes(
+def resolve_dynamic_axes(
     spec: ExportSpec, onnx_cfg: DictConfig
 ) -> dict[str, dict[int, str]] | None:
-    """Return the dynamic axes the legacy exporter applies to ``spec``.
+    """Return the dynamic axes the TorchScript exporter applies to ``spec``.
 
     The axes come either from the spec or from the module's config, never from both. The
-    config's axes must name the spec's inputs or outputs: the legacy exporter only warns about
-    an unknown name and exports that axis static.
+    config's axes must name the spec's inputs or outputs: the TorchScript exporter only warns
+    about an unknown name and exports that axis static.
 
     Raises:
         ValueError: If both the spec and the config declare axes, or the config names a tensor
@@ -343,7 +343,7 @@ def export_to_onnx(spec: ExportSpec, onnx_cfg: DictConfig, output_path: Path) ->
     dynamic_shapes = (
         normalize_dynamic_shapes_for_model(spec.module, dynamic_shapes) if dynamo else None
     )
-    dynamic_axes = None if dynamo else resolve_legacy_dynamic_axes(spec, onnx_cfg)
+    dynamic_axes = None if dynamo else resolve_dynamic_axes(spec, onnx_cfg)
 
     logger.info("Dynamic shapes: %s", dynamic_shapes)
     logger.info("Dynamic axes: %s", dynamic_axes)

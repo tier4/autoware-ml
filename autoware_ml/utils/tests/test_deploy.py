@@ -88,7 +88,7 @@ def _identity_spec(dynamic_axes: dict[str, dict[int, str]] | None = None) -> Exp
     )
 
 
-def _legacy_onnx_cfg(dynamic_axes: dict[str, dict[int, str]] | None = None) -> DictConfig:
+def _torchscript_onnx_cfg(dynamic_axes: dict[str, dict[int, str]] | None = None) -> DictConfig:
     cfg: dict[str, object] = {"opset_version": 17, "dynamo": False}
     if dynamic_axes is not None:
         cfg["dynamic_axes"] = dynamic_axes
@@ -112,7 +112,9 @@ def test_export_to_onnx_applies_the_dynamic_axes_of_one_source(
     captured_kwargs: dict[str, object] = {}
     monkeypatch.setattr(torch.onnx, "export", lambda **kwargs: captured_kwargs.update(kwargs))
 
-    export_to_onnx(_identity_spec(spec_axes), _legacy_onnx_cfg(config_axes), tmp_path / "m.onnx")
+    export_to_onnx(
+        _identity_spec(spec_axes), _torchscript_onnx_cfg(config_axes), tmp_path / "m.onnx"
+    )
 
     assert captured_kwargs["dynamic_axes"] == (spec_axes or config_axes)
 
@@ -122,15 +124,15 @@ def test_export_to_onnx_refuses_dynamic_axes_from_both_the_spec_and_the_config(
 ) -> None:
     """A spec's axes used to replace the config's without a word."""
     spec = _identity_spec({"input": {0: "spec_batch"}})
-    onnx_cfg = _legacy_onnx_cfg({"input": {0: "config_batch"}})
+    onnx_cfg = _torchscript_onnx_cfg({"input": {0: "config_batch"}})
 
     with pytest.raises(ValueError, match="Declare them in one place"):
         export_to_onnx(spec, onnx_cfg, tmp_path / "m.onnx")
 
 
 def test_export_to_onnx_refuses_config_dynamic_axes_of_unknown_tensors(tmp_path: Path) -> None:
-    """The legacy exporter only warns about such an axis and exports it static."""
-    onnx_cfg = _legacy_onnx_cfg({"input": {0: "batch"}, "inputs": {0: "batch"}})
+    """The TorchScript exporter only warns about such an axis and exports it static."""
+    onnx_cfg = _torchscript_onnx_cfg({"input": {0: "batch"}, "inputs": {0: "batch"}})
 
     with pytest.raises(ValueError, match=r"for \['inputs'\], which are not among"):
         export_to_onnx(_identity_spec(), onnx_cfg, tmp_path / "m.onnx")
@@ -166,7 +168,7 @@ def test_supports_export_stage_uses_export_spec_capabilities() -> None:
     assert supports_export_stage(spec, "tensorrt") is False
 
 
-def test_build_dynamic_axes_supports_legacy_export_config() -> None:
+def test_build_dynamic_axes_reads_the_torchscript_export_config() -> None:
     deploy_cfg = OmegaConf.create(
         {
             "dynamic_axes": {
