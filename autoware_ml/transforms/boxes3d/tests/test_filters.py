@@ -26,7 +26,7 @@ from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
 from autoware_ml.transforms.boxes3d.filters import (
     BBoxesAttributeFilter,
     BBoxesLabelNameFilter,
-    BBoxesMinRecordedPointsFilter,
+    BBoxesMinPointsFilter,
     BBoxesPhysicalFilter,
     BBoxesRangeFilter,
 )
@@ -106,11 +106,14 @@ def test_drops_the_boxes_outside_every_axis_of_the_range() -> None:
     assert result.detection3d_gt_bboxes_3d.bbox_label_names == ["box_0", "box_4"]
 
 
-def test_recorded_points_filter_drops_the_boxes_below_the_count_without_a_point_cloud() -> None:
+BEV_RANGE = [-10.0, -10.0, 10.0, 10.0]
+
+
+def test_min_points_filter_reads_the_recorded_counts_without_a_point_cloud() -> None:
     # box_2 sits on the threshold and stays.
-    result = BBoxesMinRecordedPointsFilter(min_points=2)(
-        sample(["box_0", "box_1", "box_2", "box_3"], num_lidar_points=[0, 1, 2, 7])
-    )
+    result = BBoxesMinPointsFilter(
+        min_points=2, bev_range=BEV_RANGE, use_bbox_num_lidar_points=True
+    )(sample(["box_0", "box_1", "box_2", "box_3"], num_lidar_points=[0, 1, 2, 7]))
 
     boxes = result.detection3d_gt_bboxes_3d
     assert result.point_cloud_data is None
@@ -118,10 +121,24 @@ def test_recorded_points_filter_drops_the_boxes_below_the_count_without_a_point_
     assert boxes.bbox_num_lidar_points.tolist() == [2, 7]
 
 
-def test_recorded_points_filter_can_drop_every_box() -> None:
-    result = BBoxesMinRecordedPointsFilter(min_points=2)(
-        sample(["box_0", "box_1"], num_lidar_points=[0, 1])
+def test_min_points_filter_keeps_the_boxes_outside_the_range_whatever_their_recorded_count() -> (
+    None
+):
+    result = BBoxesMinPointsFilter(
+        min_points=2, bev_range=BEV_RANGE, use_bbox_num_lidar_points=True
+    )(
+        sample(
+            ["box_0", "box_1"], centers=[[0.0, 0.0, 0.0], [20.0, 0.0, 0.0]], num_lidar_points=[0, 0]
+        )
     )
+
+    assert result.detection3d_gt_bboxes_3d.bbox_label_names == ["box_1"]
+
+
+def test_min_points_filter_can_drop_every_box() -> None:
+    result = BBoxesMinPointsFilter(
+        min_points=2, bev_range=BEV_RANGE, use_bbox_num_lidar_points=True
+    )(sample(["box_0", "box_1"], num_lidar_points=[0, 1]))
 
     boxes = result.detection3d_gt_bboxes_3d
     assert len(boxes) == 0
@@ -129,6 +146,11 @@ def test_recorded_points_filter_can_drop_every_box() -> None:
     assert boxes.bbox_labels.shape == (0,)
     assert boxes.bbox_label_names == []
     assert boxes.bbox_num_lidar_points.shape == (0,)
+
+
+def test_min_points_filter_needs_the_point_cloud_unless_it_reads_the_recorded_counts() -> None:
+    with pytest.raises(KeyError, match="point_cloud_data"):
+        BBoxesMinPointsFilter(min_points=2, bev_range=BEV_RANGE)(sample(["box_0"]))
 
 
 def test_label_name_filter_keeps_fine_names_mapped_to_kept_classes() -> None:

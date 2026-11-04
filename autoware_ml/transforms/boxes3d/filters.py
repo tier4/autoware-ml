@@ -36,14 +36,19 @@ def parse_exclusion_rules(rules: Sequence[Sequence[str]]) -> frozenset[tuple[str
 
 
 class BBoxesMinPointsFilter(BaseTransform):
-    """Filter 3D bounding boxes by minimum number of points and distance of bboxes."""
+    """Filter 3D bounding boxes by minimum number of points and distance of bboxes.
 
-    _required_keys = ["detection3d_gt_bboxes_3d", "point_cloud_data"]
+    The points of a box are counted in the loaded point cloud, or, with
+    ``use_bbox_num_lidar_points``, read from the count the database stores with every box: the
+    count the detection metrics filter by (``min_num_points``), available to the pipelines that
+    load no point cloud (camera-only models).
+    """
 
     def __init__(
         self,
         min_points: int,
         bev_range: Sequence[float],
+        use_bbox_num_lidar_points: bool = False,
     ) -> None:
         """
         Initialize the BBoxesMinPointsFilter transform.
@@ -53,10 +58,19 @@ class BBoxesMinPointsFilter(BaseTransform):
                 kept.
             bev_range (Sequence[float]): The BEV range ([x_min, y_min, x_max, y_max]) of the
                 bounding boxes the minimum number of points applies to.
+            use_bbox_num_lidar_points (bool): Whether to read the lidar point count the database
+                stores with every box instead of counting the points of the loaded point cloud.
+                Defaults to False.
         """
         super().__init__(probability=None)
         self.min_points = min_points
         self.bev_range = torch.tensor(bev_range, dtype=torch.float32)
+        self.use_bbox_num_lidar_points = use_bbox_num_lidar_points
+        self._required_keys = (
+            ["detection3d_gt_bboxes_3d"]
+            if use_bbox_num_lidar_points
+            else ["detection3d_gt_bboxes_3d", "point_cloud_data"]
+        )
 
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
         """Drop the boxes in range that hold fewer than ``min_points`` points."""
@@ -67,56 +81,35 @@ class BBoxesMinPointsFilter(BaseTransform):
         if not len(detection3d_gt_bboxes_3d):
             return model_gt_sample
 
+        if self.use_bbox_num_lidar_points:
+            num_points = self._recorded_num_points(detection3d_gt_bboxes_3d)
+        else:
+            num_points = self._counted_num_points(model_gt_sample, detection3d_gt_bboxes_3d)
+
+        in_range = detection3d_gt_bboxes_3d.in_range_bev(self.bev_range)
+        # Boxes outside the range are kept whatever their point count
+        keep_bboxes_mask = (num_points >= self.min_points) | ~in_range
+        detection3d_gt_bboxes_3d.remove_bboxes(keep_bboxes_mask)
+        return model_gt_sample
+
+    @staticmethod
+    def _recorded_num_points(detection3d_gt_bboxes_3d: BaseBBoxes3D) -> torch.Tensor:
+        """Return the lidar point count the database stores with every box."""
+        return detection3d_gt_bboxes_3d.bbox_num_lidar_points
+
+    @staticmethod
+    def _counted_num_points(
+        model_gt_sample: ModelGTSample, detection3d_gt_bboxes_3d: BaseBBoxes3D
+    ) -> torch.Tensor:
+        """Count the points of the loaded point cloud in every box."""
         # This is checked in the _validate_required_keys()
         point_cloud_data: BasePoints = (
             model_gt_sample.point_cloud_data  # type: ignore[reportOptionalMemberAccess]
         )
-
-        in_range = detection3d_gt_bboxes_3d.in_range_bev(self.bev_range)
         points_in_bboxes = detection3d_gt_bboxes_3d.compute_points_in_bboxes(
             points=point_cloud_data.coords,
         )
-
-        # Boxes outside the range are kept whatever their point count
-        keep_bboxes_mask = (points_in_bboxes.sum(dim=1) >= self.min_points) | ~in_range
-        detection3d_gt_bboxes_3d.remove_bboxes(keep_bboxes_mask)
-        return model_gt_sample
-
-
-class BBoxesMinRecordedPointsFilter(BaseTransform):
-    """Filter 3D bounding boxes by the lidar point count the database stores with every box.
-
-    The detection metrics filter by the same count (``min_num_points``).
-    :class:`BBoxesMinPointsFilter` counts the points of the loaded point cloud instead, so this
-    filter is the one for camera-only pipelines.
-    """
-
-    _required_keys = ["detection3d_gt_bboxes_3d"]
-
-    def __init__(self, min_points: int) -> None:
-        """
-        Initialize the BBoxesMinRecordedPointsFilter transform.
-
-        Args:
-            min_points (int): The minimum recorded number of lidar points a bounding box needs
-                to be kept.
-        """
-        super().__init__(probability=None)
-        self.min_points = min_points
-
-    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
-        """Drop the boxes recorded with fewer than ``min_points`` lidar points."""
-        # This is checked in the _validate_required_keys()
-        detection3d_gt_bboxes_3d: BaseBBoxes3D = (
-            model_gt_sample.detection3d_gt_bboxes_3d  # type: ignore[reportOptionalMemberAccess]
-        )
-        if not len(detection3d_gt_bboxes_3d):
-            return model_gt_sample
-
-        detection3d_gt_bboxes_3d.remove_bboxes(
-            detection3d_gt_bboxes_3d.bbox_num_lidar_points >= self.min_points
-        )
-        return model_gt_sample
+        return points_in_bboxes.sum(dim=1)
 
 
 class BBoxesRangeFilter(BaseTransform):
