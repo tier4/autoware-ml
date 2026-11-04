@@ -57,6 +57,7 @@ class TestModelGTBatchDetection3DCollation(unittest.TestCase):
             bbox_labels=torch.zeros(num_bboxes, dtype=torch.int32),
             bbox_label_names=["car"] * num_bboxes,
             bbox_num_lidar_points=torch.full((num_bboxes,), 5, dtype=torch.int32),
+            bbox_instance_ids=torch.arange(num_bboxes),
             bbox_center_coordinate_type=Box3DCenterCoordinateType.GRAVITY_CENTER,
         )
 
@@ -481,6 +482,7 @@ class TestModelGTBatchPaddingMask(unittest.TestCase):
                 bbox_labels=torch.zeros(1, dtype=torch.int32),
                 bbox_label_names=["car"],
                 bbox_num_lidar_points=torch.full((1,), 5, dtype=torch.int32),
+                bbox_instance_ids=torch.zeros(1, dtype=torch.int64),
                 bbox_center_coordinate_type=Box3DCenterCoordinateType.GRAVITY_CENTER,
             ),
             segmentation3d_gt_sample=None,

@@ -272,6 +272,9 @@ class _TransFusionDetection3DModelTestCase(unittest.TestCase):
             gt_labels_3d=gt_labels_3d[: self.batch_size],
             gt_valid_bboxes=gt_valid_bboxes[: self.batch_size],
             gt_bboxes_num_points=gt_bboxes_num_points[: self.batch_size],
+            gt_bboxes_instance_ids=torch.zeros_like(
+                gt_bboxes_num_points[: self.batch_size], dtype=torch.int64
+            ),
         )
 
     def _build_batch_inputs(self, voxels_data: VoxelsData | None) -> ModelBatchInputs:

@@ -8,7 +8,7 @@ https://github.com/open-mmlab/mmdetection3d/blob/main/mmdet3d/structures/bbox_3d
 
 from typing import Sequence
 from torch import Tensor
-from jaxtyping import Float32, Int32
+from jaxtyping import Float32, Int32, Int64
 import torch
 
 from autoware_ml.geometry.bbox_3d.base_bbox3d import BaseBBoxes3D
@@ -47,6 +47,7 @@ class LidarBBoxes3D(BaseBBoxes3D):
         bbox_labels: Int32[Tensor, " num_bboxes"],
         bbox_label_names: Sequence[str],
         bbox_num_lidar_points: Int32[Tensor, " num_bboxes"],
+        bbox_instance_ids: Int64[Tensor, " num_bboxes"],
         bbox_center_coordinate_type: Box3DCenterCoordinateType,
         bbox_attributes: Sequence[Sequence[str]] | None = None,
     ) -> None:
@@ -58,6 +59,8 @@ class LidarBBoxes3D(BaseBBoxes3D):
             bbox_labels (Int32[Tensor, "num_bboxes"]): The labels of the 3D bounding boxes.
             bbox_label_names (Sequence[str]): The label names of the 3D bounding boxes.
             bbox_num_lidar_points (Int32[Tensor, "num_bboxes"]): The number of LiDAR points in each 3D bounding box.
+            bbox_instance_ids (Int64[Tensor, "num_bboxes"]): Object identity of every box, equal across
+                the frames of a scene.
             bbox_center_coordinate_type (Box3DCenterCoordinateType): The center coordinate type of the 3D bounding boxes.
                 It only support "gravity_center (center of z is in the middle)" for now.
                 We specify this to make sure users are aware of the center coordinate type being used.
@@ -71,6 +74,7 @@ class LidarBBoxes3D(BaseBBoxes3D):
             bbox_labels=bbox_labels,
             bbox_label_names=bbox_label_names,
             bbox_num_lidar_points=bbox_num_lidar_points,
+            bbox_instance_ids=bbox_instance_ids,
             bbox_center_coordinate_type=bbox_center_coordinate_type,
             bbox_attributes=bbox_attributes,
         )
@@ -174,6 +178,49 @@ class LidarBBoxes3D(BaseBBoxes3D):
         surfaces = self.corners_to_surfaces_3d()
         in_bboxes_mask = points_in_convex_polygon_3d(points, surfaces)
         return in_bboxes_mask
+
+    def count_points_in_bboxes(
+        self, points: Float32[Tensor, "num_points 3"]
+    ) -> Int32[Tensor, " num_bboxes"]:
+        """
+        Count the points inside each 3D bounding box.
+
+        Only the points whose x lies within the BEV radius of a box are tested against it, so the
+        cost grows with the points near the boxes instead of boxes times points.
+
+        Args:
+            points (Float32[Tensor, "num_points 3"]): The point cloud data in shape (N, 3).
+
+        Returns:
+            Int32[Tensor, "num_bboxes"]: Number of points inside every box, surfaces included.
+        """
+        params = self.bbox_params
+        counts = torch.zeros(params.shape[0], dtype=torch.int32, device=params.device)
+        order = torch.argsort(points[:, 0])
+        sorted_points = points[order]
+        half_dims = params[:, Box3DFieldIndex.LENGTH : Box3DFieldIndex.YAW] / 2.0
+        radius = torch.linalg.vector_norm(half_dims[:, :2], dim=1)
+        lows = torch.searchsorted(
+            sorted_points[:, 0].contiguous(), params[:, Box3DFieldIndex.X] - radius
+        )
+        highs = torch.searchsorted(
+            sorted_points[:, 0].contiguous(), params[:, Box3DFieldIndex.X] + radius, right=True
+        )
+        cos_yaw = torch.cos(params[:, Box3DFieldIndex.YAW])
+        sin_yaw = torch.sin(params[:, Box3DFieldIndex.YAW])
+        for index, (low, high) in enumerate(zip(lows.tolist(), highs.tolist(), strict=True)):
+            offset = (
+                sorted_points[low:high] - params[index, Box3DFieldIndex.X : Box3DFieldIndex.LENGTH]
+            )
+            local_x = cos_yaw[index] * offset[:, 0] + sin_yaw[index] * offset[:, 1]
+            local_y = cos_yaw[index] * offset[:, 1] - sin_yaw[index] * offset[:, 0]
+            inside = (
+                (local_x.abs() <= half_dims[index, 0])
+                & (local_y.abs() <= half_dims[index, 1])
+                & (offset[:, 2].abs() <= half_dims[index, 2])
+            )
+            counts[index] = inside.sum()
+        return counts
 
     def rotate(
         self,

@@ -87,5 +87,6 @@ class PinholeCameraTestCase(unittest.TestCase):
             bbox_labels=np.asarray(labels, dtype=np.int32),
             bbox_label_names=["car"] * len(rows),
             bbox_num_lidar_points=np.full(len(rows), 10, dtype=np.int32),
+            bbox_instance_ids=np.arange(len(rows), dtype=np.int64),
             bbox_center_coordinate_type=Box3DCenterCoordinateType.GRAVITY_CENTER,
         )

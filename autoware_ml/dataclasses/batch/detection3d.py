@@ -31,6 +31,8 @@ class Detection3DGTBatch(NamedTuple):
         gt_bboxes_num_points: Number of points in each gt bbox, shape (B, M), where B is the
           batch size and M is the theoretically maximum number of bounding boxes.
           0 for invalid bboxes.
+        gt_bboxes_instance_ids: Object identity of each gt bbox, shape (B, M), equal across the
+          frames of a scene. -1 for invalid bboxes.
         gt_traffic_cone_barrier_bbox_status: Whether traffic cones and barriers are annotated in each
           sample, shape (B, ). None when the dataset does not carry the flag.
     """
@@ -46,6 +48,7 @@ class Detection3DGTBatch(NamedTuple):
     gt_bboxes_num_points: Int32[
         Tensor, "batch_size max_num_3d_gt_bboxes"
     ]  # (B, M), number of points in each gt bbox
+    gt_bboxes_instance_ids: Int64[Tensor, "batch_size max_num_3d_gt_bboxes"]
     # (batch_size, ), whether traffic cones/barriers are annotated in each sample
     gt_traffic_cone_barrier_bbox_status: Bool[Tensor, " batch_size"] | None = None
 
@@ -142,6 +145,12 @@ class Detection3DGTBatch(NamedTuple):
             dtype=torch.int32,
             device=torch_device,
         )
+        gt_bboxes_instance_ids = torch.full(
+            (len(detection3d_gt_bboxes_3d), max_num_3d_gt_bboxes),
+            -1,
+            dtype=torch.int64,
+            device=torch_device,
+        )
 
         # Fill the arrays with the data from gt_samples
         for i, sample_gt_bboxes_3d in enumerate(detection3d_gt_bboxes_3d):
@@ -157,6 +166,9 @@ class Detection3DGTBatch(NamedTuple):
             gt_bboxes_3d[i, :num_bboxes, :] = sample_gt_bboxes_3d.bbox_params[:num_bboxes, :]
             gt_labels_3d[i, :num_bboxes] = sample_gt_bboxes_3d.bbox_labels[:num_bboxes]
             gt_bboxes_num_points[i, :num_bboxes] = sample_gt_bboxes_3d.bbox_num_lidar_points[
+                :num_bboxes
+            ]
+            gt_bboxes_instance_ids[i, :num_bboxes] = sample_gt_bboxes_3d.bbox_instance_ids[
                 :num_bboxes
             ]
 
@@ -177,6 +189,7 @@ class Detection3DGTBatch(NamedTuple):
             gt_labels_3d=gt_labels_3d,
             gt_valid_bboxes=gt_valid_bboxes,
             gt_bboxes_num_points=gt_bboxes_num_points,
+            gt_bboxes_instance_ids=gt_bboxes_instance_ids,
             gt_traffic_cone_barrier_bbox_status=gt_traffic_cone_barrier_bbox_status,
         )
 
@@ -216,6 +229,18 @@ class Detection3DGTBatch(NamedTuple):
             for index, count in enumerate(self.gt_valid_bboxes.tolist())
         ]
 
+    def valid_bboxes_instance_ids(self) -> list[Int64[Tensor, " num_gt_bboxes"]]:
+        """
+        Keep the object identity of the valid boxes of every sample of the batch.
+
+        Returns:
+          list: Identity of every box of every sample without the padding.
+        """
+        return [
+            self.gt_bboxes_instance_ids[index, :count]
+            for index, count in enumerate(self.gt_valid_bboxes.tolist())
+        ]
+
     def to_device(self, device: torch.device) -> Detection3DGTBatch:
         """
         Move the Detection3DGTBatch to the specified device.
@@ -231,6 +256,7 @@ class Detection3DGTBatch(NamedTuple):
             gt_labels_3d=self.gt_labels_3d.to(device),
             gt_valid_bboxes=self.gt_valid_bboxes.to(device),
             gt_bboxes_num_points=self.gt_bboxes_num_points.to(device),
+            gt_bboxes_instance_ids=self.gt_bboxes_instance_ids.to(device),
             gt_traffic_cone_barrier_bbox_status=self.gt_traffic_cone_barrier_bbox_status.to(device)
             if self.gt_traffic_cone_barrier_bbox_status is not None
             else None,

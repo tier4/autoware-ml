@@ -45,6 +45,7 @@ class Detection3DGTBatchTestCase(unittest.TestCase):
             bbox_labels=bbox_labels,
             bbox_label_names=self.LABEL_NAMES,
             bbox_num_lidar_points=bbox_num_lidar_points,
+            bbox_instance_ids=torch.arange(num_bboxes) + 100,
             bbox_center_coordinate_type=Box3DCenterCoordinateType.GRAVITY_CENTER,
         )
 
@@ -70,7 +71,7 @@ class TestDetection3DGTBatchFields(Detection3DGTBatchTestCase):
     def test_field_order(self) -> None:
         """
         Input: the class itself.
-        Expected: the tuple exposes its five fields in the documented order, since downstream
+        Expected: the tuple exposes its six fields in the documented order, since downstream
         code unpacks the batch positionally.
         Check: compare ``_fields`` against the expected names.
         """
@@ -81,6 +82,7 @@ class TestDetection3DGTBatchFields(Detection3DGTBatchTestCase):
                 "gt_labels_3d",
                 "gt_valid_bboxes",
                 "gt_bboxes_num_points",
+                "gt_bboxes_instance_ids",
                 "gt_traffic_cone_barrier_bbox_status",
             ),
         )
@@ -96,6 +98,7 @@ class TestDetection3DGTBatchFields(Detection3DGTBatchTestCase):
             gt_labels_3d=torch.zeros((1, 2), dtype=torch.int32),
             gt_valid_bboxes=torch.zeros((1,), dtype=torch.int32),
             gt_bboxes_num_points=torch.zeros((1, 2), dtype=torch.int32),
+            gt_bboxes_instance_ids=torch.full((1, 2), -1),
         )
 
         self.assertIsNone(batch.gt_traffic_cone_barrier_bbox_status)
@@ -135,7 +138,8 @@ class TestCollateGtSamples(Detection3DGTBatchTestCase):
         Input: the fixture samples with 2 and 3 boxes and a budget of 4 boxes per sample.
         Expected: every field gets a leading batch dimension of 2 and a box dimension of 4. The
         valid slots hold the source boxes in order, the padding slots hold zeros for parameters
-        and point counts and -1 for labels, and the valid counts are 2 and 3. No flag was given,
+        and point counts and -1 for labels and instance ids, and the valid counts are 2 and 3.
+        No flag was given,
         so the traffic cone status is None.
         Check: compare shapes, slice the valid rows against the source tensors, and assert the
         padding rows are all zero or all -1.
@@ -166,6 +170,12 @@ class TestCollateGtSamples(Detection3DGTBatchTestCase):
         self.assertEqual(batch.gt_labels_3d[1, 3:].tolist(), [-1])
         self.assertTrue(torch.all(batch.gt_bboxes_num_points[0, 2:] == 0))
         self.assertTrue(torch.all(batch.gt_bboxes_num_points[1, 3:] == 0))
+        self.assertEqual(batch.gt_bboxes_instance_ids[0].tolist(), [100, 101, -1, -1])
+        self.assertEqual(batch.gt_bboxes_instance_ids[1].tolist(), [100, 101, 102, -1])
+        self.assertEqual(
+            [ids.tolist() for ids in batch.valid_bboxes_instance_ids()],
+            [[100, 101], [100, 101, 102]],
+        )
 
     def test_output_dtypes(self) -> None:
         """

@@ -161,6 +161,7 @@ class BaseCameraLidarGeometryTestCase(unittest.TestCase):
             bbox_labels=torch.tensor([0], dtype=torch.int32),
             bbox_label_names=["car"],
             bbox_num_lidar_points=torch.tensor([10], dtype=torch.int32),
+            bbox_instance_ids=torch.tensor([0]),
             bbox_center_coordinate_type=Box3DCenterCoordinateType.GRAVITY_CENTER,
         )
 

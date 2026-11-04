@@ -57,6 +57,7 @@ class TestDetection3DGTBatchViews(unittest.TestCase):
             gt_labels_3d=torch.tensor([[3, -1], [1, 2]], dtype=torch.int32),
             gt_valid_bboxes=torch.tensor([1, 2], dtype=torch.int32),
             gt_bboxes_num_points=torch.tensor([[5, 0], [6, 7]], dtype=torch.int32),
+            gt_bboxes_instance_ids=torch.tensor([[11, -1], [12, 13]]),
         )
 
         boxes = batch.valid_bboxes_3d()

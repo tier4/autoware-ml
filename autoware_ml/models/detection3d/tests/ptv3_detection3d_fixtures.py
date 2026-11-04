@@ -289,6 +289,7 @@ def build_batch(with_segmentation3d: bool = True) -> ModelGTBatch:
                     bbox_labels=gt_labels[0].to(torch.int32),
                     bbox_label_names=["car"],
                     bbox_num_lidar_points=torch.tensor([8], dtype=torch.int32),
+                    bbox_instance_ids=torch.tensor([0]),
                     bbox_center_coordinate_type=Box3DCenterCoordinateType.GRAVITY_CENTER,
                 )
             ],

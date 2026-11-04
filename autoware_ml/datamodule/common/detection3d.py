@@ -22,6 +22,7 @@ from autoware_ml.databases.schemas.box3d_schemas import Box3DDatasetSchema
 from autoware_ml.databases.taxonomy import LabelTaxonomy
 from autoware_ml.datamodule.base_dataset_task import BaseDatasetTask
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
+from autoware_ml.geometry.bbox_3d.instance_ids import hash_instance_ids
 from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
 from autoware_ml.types.geometry import Box3DFieldIndex, Box3DCenterCoordinateType
 
@@ -152,6 +153,9 @@ class Detection3DTask(BaseDatasetTask):
         gt_bboxes_attributes = selected_row.field(
             Box3DDatasetSchema.BOX3D_ATTRIBUTES.name
         ).to_list()
+        gt_bboxes_instance_ids = hash_instance_ids(
+            selected_row.field(Box3DDatasetSchema.BOX3D_INSTANCE_ID.name).to_list()
+        )
 
         # The boxes are served as the records store them, non finite values included: a box
         # with no annotated velocity carries a non finite one. BBoxesPhysicalFilter in the
@@ -162,6 +166,7 @@ class Detection3DTask(BaseDatasetTask):
             gt_bboxes_3d = np.zeros((0, len(Box3DFieldIndex)), dtype=np.float32)
             gt_bboxes_labels = np.zeros((0,), dtype=np.int32)
             gt_bboxes_num_lidar_points = np.zeros((0,), dtype=np.int32)
+            gt_bboxes_instance_ids = np.zeros((0,), dtype=np.int64)
 
         detection3d_bboxes_3d = LidarBBoxes3D.from_numpy(
             bbox_params=gt_bboxes_3d,
@@ -169,6 +174,7 @@ class Detection3DTask(BaseDatasetTask):
             bbox_center_coordinate_type=Box3DCenterCoordinateType.GRAVITY_CENTER,
             bbox_label_names=gt_bboxes_label_names,
             bbox_num_lidar_points=gt_bboxes_num_lidar_points,
+            bbox_instance_ids=gt_bboxes_instance_ids,
             bbox_attributes=gt_bboxes_attributes,
         )
 

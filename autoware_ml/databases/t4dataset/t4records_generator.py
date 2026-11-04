@@ -58,6 +58,7 @@ from autoware_ml.databases.t4pack.t4pack import T4Pack
 from autoware_ml.databases.t4dataset.t4sample_records import (
     T4SampleRecord,
 )
+from autoware_ml.geometry.bbox_3d.instance_ids import hash_instance_ids
 from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
 from autoware_ml.types.dataset import SweepDirection
 from autoware_ml.types.geometry import Box3DCenterCoordinateType
@@ -973,6 +974,9 @@ class T4RecordsGenerator:
             bbox_label_names=[box.box3d_label_name for box in boxes_3d_data_model],
             bbox_num_lidar_points=np.asarray(
                 [box.box3d_num_lidar_points for box in boxes_3d_data_model], dtype=np.int32
+            ),
+            bbox_instance_ids=hash_instance_ids(
+                [box.box3d_instance_id for box in boxes_3d_data_model]
             ),
             bbox_center_coordinate_type=Box3DCenterCoordinateType.GRAVITY_CENTER,
         )
