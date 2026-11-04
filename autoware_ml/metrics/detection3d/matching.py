@@ -29,9 +29,10 @@ from math import inf, pi
 
 import numpy as np
 import torch
-from jaxtyping import Bool, Float
+from jaxtyping import Bool, Float, Int64
 
 from autoware_ml.metrics.base import MetricRange
+from autoware_ml.metrics.detection3d.criticality import center_distances, greedy_match_costs
 from autoware_ml.metrics.detection3d.geometry import (
     corner_displacement_matrix,
     corner_displacements,
@@ -145,6 +146,49 @@ def gt_keep_mask(
         keep &= gt_num_points >= min_num_points
 
     return keep
+
+
+def ignored_prediction_mask(
+    pred_boxes: Float[torch.Tensor, "num_preds box_dim"],
+    pred_scores: Float[torch.Tensor, " num_preds"],
+    pred_labels: Int64[torch.Tensor, " num_preds"],
+    gt_boxes: Float[torch.Tensor, "num_gts box_dim"],
+    gt_labels: Int64[torch.Tensor, " num_gts"],
+    ignored_boxes: Float[torch.Tensor, "num_ignored box_dim"],
+    ignored_labels: Int64[torch.Tensor, " num_ignored"],
+    threshold: float,
+) -> Bool[torch.Tensor, " num_preds"]:
+    """Mark the predictions that claim an ignored ground truth box of their class.
+
+    The claim pass every matching shares, see :func:`greedy_match_costs`, at one BEV center
+    distance: a counted box takes its prediction first, so only a prediction left without one
+    claims an ignored box.
+
+    Args:
+        pred_boxes: Prediction boxes ``(P, 2+)``.
+        pred_scores: Prediction confidences ``(P,)``.
+        pred_labels: Prediction labels ``(P,)``.
+        gt_boxes: Counted ground truth boxes ``(G, 2+)``.
+        gt_labels: Their labels ``(G,)``.
+        ignored_boxes: Ignored ground truth boxes ``(I, 2+)``.
+        ignored_labels: Their labels ``(I,)``.
+        threshold: Largest BEV center distance of a claim in meters.
+
+    Returns:
+        Whether every prediction claims an ignored box ``(P,)``.
+    """
+    ignored = torch.zeros(pred_boxes.shape[0], dtype=torch.bool, device=pred_boxes.device)
+    for label in torch.unique(ignored_labels).tolist():
+        pred_index = torch.nonzero(pred_labels == label).flatten()
+        centers = pred_boxes[pred_index].detach().cpu().numpy().astype(np.float64)
+        match = greedy_match_costs(
+            center_distances(centers, gt_boxes[gt_labels == label].cpu().numpy()),
+            center_distances(centers, ignored_boxes[ignored_labels == label].cpu().numpy()),
+            pred_scores[pred_index].detach().cpu().numpy(),
+            (threshold,),
+        )[threshold]
+        ignored[pred_index] = torch.from_numpy(match.ignored).to(ignored.device)
+    return ignored
 
 
 def _slice_sample(
