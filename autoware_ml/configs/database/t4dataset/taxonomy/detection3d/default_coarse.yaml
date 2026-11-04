@@ -1,42 +1,11 @@
 # Coarse detection3d taxonomy of T4dataset
-_target_: autoware_ml.databases.taxonomy.Detection3DTaxonomy
+_target_: autoware_ml.databases.taxonomy.LabelTaxonomy
 
 defaults:
   - /database/t4dataset/taxonomy/vocabulary@vocabulary: default_detection3d
   - _self_
 
 ignore_index: -1
-class_groups:
-  grouped_vehicle: [car, truck, bus]
-  grouped_two_wheeler: [motorcycle, bicycle]
-  grouped_living: [pedestrian, animal]
-  grouped_obstacle: [barrier, traffic_cone, debris]
-eval_range:
-  car: 121.0
-  truck: 121.0
-  bus: 121.0
-  motorcycle: 121.0
-  bicycle: 121.0
-  pedestrian: 121.0
-  animal: 121.0
-  barrier: 121.0
-  traffic_cone: 121.0
-  debris: 121.0
-collision_kinds:
-  car: wheeled
-  truck: wheeled
-  bus: wheeled
-  motorcycle: wheeled
-  bicycle: living
-  pedestrian: living
-  animal: living
-  barrier: static
-  traffic_cone: static
-  debris: static
-living_speeds:
-  pedestrian: 3.0
-  animal: 4.0
-  bicycle: 6.0
 # The model declares the classes it trains
 class_names: ???
 class_mapping:

@@ -3,7 +3,7 @@
   components: ${metric_params.detection3d.components.detection3d_components}
   class_names: ${taxonomy.detection3d.class_names}
   min_num_points: 2
-  eval_class_range: ${eval_class_range}
+  eval_class_range: ${metric_params.detection3d.max_distances}
   collision: ${metric_params.detection3d.collision}
   ranges: ${metric_ranges}
 
@@ -12,7 +12,7 @@
   components: ${metric_params.detection3d.components.detection3d_components}
   class_names: ${taxonomy.detection3d.class_names}
   min_num_points: 2
-  eval_class_range: ${eval_class_range}
+  eval_class_range: ${metric_params.detection3d.max_distances}
   class_groups: ${metric_params.detection3d.class_groups}
   collision: ${metric_params.detection3d.collision}
   ranges: ${metric_ranges}
@@ -22,7 +22,7 @@
   components: ${metric_params.detection3d.components.occlusion_split_components}
   class_names: ${taxonomy.detection3d.class_names}
   min_num_points: 1
-  eval_class_range: ${eval_class_range}
+  eval_class_range: ${metric_params.detection3d.max_distances}
   ranges: ${metric_ranges}
 
 - _target_: autoware_ml.metrics.detection3d.suite.Detection3DMetricSuite
@@ -30,5 +30,5 @@
   components: ${metric_params.detection3d.components.occlusion_split_components}
   class_names: ${taxonomy.detection3d.class_names}
   min_num_points: 0
-  eval_class_range: ${eval_class_range}
+  eval_class_range: ${metric_params.detection3d.max_distances}
   ranges: ${metric_ranges}

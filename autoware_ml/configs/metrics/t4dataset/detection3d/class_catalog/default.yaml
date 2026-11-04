@@ -1,0 +1,28 @@
+# Metric settings of the T4Dataset detection classes. A model reads the rows of the classes it
+# trains, max_speed is the run speed of a living class.
+car: { group: grouped_vehicle, max_distance: 121.0, motion_model: wheeled }
+truck: { group: grouped_vehicle, max_distance: 121.0, motion_model: wheeled }
+bus: { group: grouped_vehicle, max_distance: 121.0, motion_model: wheeled }
+motorcycle:
+  { group: grouped_two_wheeler, max_distance: 121.0, motion_model: wheeled, partial_detection: true }
+bicycle:
+  {
+    group: grouped_two_wheeler,
+    max_distance: 121.0,
+    motion_model: living,
+    max_speed: 6.0,
+    partial_detection: true,
+  }
+pedestrian:
+  {
+    group: grouped_living,
+    max_distance: 121.0,
+    motion_model: living,
+    max_speed: 3.0,
+    partial_detection: true,
+  }
+animal: { group: grouped_living, max_distance: 121.0, motion_model: living, max_speed: 4.0 }
+barrier: { group: grouped_obstacle, max_distance: 121.0, motion_model: static }
+traffic_cone:
+  { group: grouped_obstacle, max_distance: 121.0, motion_model: static, partial_detection: true }
+debris: { group: grouped_obstacle, max_distance: 121.0, motion_model: static }

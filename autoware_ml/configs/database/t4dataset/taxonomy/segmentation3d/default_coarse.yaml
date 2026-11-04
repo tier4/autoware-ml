@@ -1,19 +1,11 @@
 # Coarse segmentation3d taxonomy of T4dataset
-_target_: autoware_ml.databases.taxonomy.Segmentation3DTaxonomy
+_target_: autoware_ml.databases.taxonomy.LabelTaxonomy
 
 defaults:
   - /database/t4dataset/taxonomy/vocabulary@vocabulary: default_segmentation3d
   - _self_
 
 ignore_index: -1
-class_groups:
-  grouped_vehicle: [car, truck, bus]
-  grouped_two_wheeler: [motorcycle, bicycle]
-  grouped_living: [pedestrian, animal]
-  grouped_obstacle: [barrier, traffic_cone, debris]
-  grouped_static_structure: [manmade, vertical_thin, vegetation]
-  grouped_flat_surface: [driveable_flat, non_driveable_flat]
-  grouped_artifact: [noise]
 # The model declares the classes it trains
 class_names: ???
 class_mapping:

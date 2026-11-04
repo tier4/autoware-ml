@@ -37,7 +37,6 @@ _TAXONOMY = LabelTaxonomy(
         "animal": None,
     },
     -1,
-    {"all": _CLASSES},
 )
 
 
@@ -250,7 +249,6 @@ def test_rejects_a_split_without_boxes() -> None:
                 [*_CLASSES, LOW_PEDESTRIAN_CATEGORY],
                 {"car": "car"},
                 -1,
-                {"all": [*_CLASSES, LOW_PEDESTRIAN_CATEGORY]},
             )
         },
         {"filter_attributes": [["bicycle"]]},

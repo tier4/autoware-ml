@@ -12,7 +12,7 @@
   num_classes: ${class_count:${taxonomy.segmentation3d.class_names}}
   ignore_index: ${taxonomy.segmentation3d.ignore_index}
   class_names: ${taxonomy.segmentation3d.class_names}
-  class_groups: ${taxonomy.segmentation3d.class_groups}
+  class_groups: ${metric_params.segmentation3d.class_groups}
   ranges: ${metric_ranges}
 
 - _target_: autoware_ml.metrics.segmentation3d.point_cloud.Segmentation3DPointCloudMetricSuite
@@ -21,5 +21,5 @@
   num_classes: ${class_count:${taxonomy.segmentation3d.class_names}}
   ignore_index: ${taxonomy.segmentation3d.ignore_index}
   class_names: ${taxonomy.segmentation3d.class_names}
-  class_groups: ${taxonomy.segmentation3d.class_groups}
+  class_groups: ${metric_params.segmentation3d.class_groups}
   ranges: ${metric_ranges}

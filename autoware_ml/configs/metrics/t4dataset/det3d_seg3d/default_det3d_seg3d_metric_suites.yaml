@@ -7,24 +7,24 @@
       stages: [test]
       det3d_class_names: ${taxonomy.detection3d.class_names}
       seg3d_class_names: ${taxonomy.segmentation3d.class_names}
-      class_names: ${metric_params.det3d_seg3d.partial_detection3d_classes}
+      class_names: ${metric_params.det3d_seg3d.partial_detection_classes}
     - _target_: autoware_ml.metrics.segmentation3d.partial_detection3d.PartialDetection3DScore
       stages: [test]
       det3d_class_names: ${taxonomy.detection3d.class_names}
       seg3d_class_names: ${taxonomy.segmentation3d.class_names}
-      class_names: ${metric_params.det3d_seg3d.partial_detection3d_classes}
+      class_names: ${metric_params.det3d_seg3d.partial_detection_classes}
       filter: ${metric_params.segmentation3d.filters.region_filters.road}
     - _target_: autoware_ml.metrics.segmentation3d.partial_detection3d.PartialDetection3DScore
       stages: [test]
       det3d_class_names: ${taxonomy.detection3d.class_names}
       seg3d_class_names: ${taxonomy.segmentation3d.class_names}
-      class_names: ${metric_params.det3d_seg3d.partial_detection3d_classes}
+      class_names: ${metric_params.det3d_seg3d.partial_detection_classes}
       filter: ${metric_params.segmentation3d.filters.region_filters.walkway}
     - _target_: autoware_ml.metrics.segmentation3d.partial_detection3d.PartialDetection3DScore
       stages: [test]
       det3d_class_names: ${taxonomy.detection3d.class_names}
       seg3d_class_names: ${taxonomy.segmentation3d.class_names}
-      class_names: ${metric_params.det3d_seg3d.partial_detection3d_classes}
+      class_names: ${metric_params.det3d_seg3d.partial_detection_classes}
       filter: ${metric_params.segmentation3d.filters.corridor_filter}
   num_classes: ${class_count:${taxonomy.segmentation3d.class_names}}
   ignore_index: ${taxonomy.segmentation3d.ignore_index}

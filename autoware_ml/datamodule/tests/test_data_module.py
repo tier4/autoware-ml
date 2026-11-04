@@ -28,7 +28,7 @@ from torch.utils.data import DataLoader
 
 from autoware_ml.databases.base_database import BaseDatabase
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
-from autoware_ml.databases.taxonomy import Detection3DTaxonomy
+from autoware_ml.databases.taxonomy import LabelTaxonomy
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.datamodule.base_dataset import ConcatDataset, PaddingSlot
 from autoware_ml.datamodule.data_module import DataLoaderConfig
@@ -53,16 +53,7 @@ from autoware_ml.types.dataset import SplitType
 
 
 # Detection taxonomy of the runs, the pedestrian is a class without boxes in the corpora
-DETECTION3D_TAXONOMY = Detection3DTaxonomy(
-    VOCABULARY,
-    ("car", "pedestrian"),
-    {"car": "car"},
-    -1,
-    {"vehicle": ("car",), "living": ("pedestrian",)},
-    eval_range={"car": 121.0, "pedestrian": 121.0},
-    collision_kinds={"car": "wheeled", "pedestrian": "living"},
-    living_speeds={"pedestrian": 3.0},
-)
+DETECTION3D_TAXONOMY = LabelTaxonomy(VOCABULARY, ("car", "pedestrian"), {"car": "car"}, -1)
 
 FRAME_SAMPLING = FrameSamplingConfig(
     repeat_sampling_factor=0.3,

@@ -36,7 +36,6 @@ _TAXONOMY = LabelTaxonomy(
     _LABELS,
     {name: name for name in _LABELS},
     -1,
-    {"all": _LABELS},
 )
 
 

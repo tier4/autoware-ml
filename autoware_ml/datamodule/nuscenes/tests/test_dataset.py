@@ -33,9 +33,7 @@ from autoware_ml.datamodule.nuscenes.dataset import NuScenesDataset
 from autoware_ml.types.geometry import Box3DFieldIndex
 
 _SCENE_NAME = "scene-0061"
-_TAXONOMY = LabelTaxonomy(
-    LabelVocabulary({"car": "car"}), ["car"], {"car": "car"}, -1, {"all": ["car"]}
-)
+_TAXONOMY = LabelTaxonomy(LabelVocabulary({"car": "car"}), ["car"], {"car": "car"}, -1)
 _SAMPLE_LIDAR = (
     "samples/LIDAR_TOP/n008-2018-08-01-15-16-36-0400__LIDAR_TOP__1533151603547590.pcd.bin"
 )

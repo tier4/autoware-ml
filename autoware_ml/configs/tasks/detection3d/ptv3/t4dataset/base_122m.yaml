@@ -28,9 +28,6 @@ taxonomy:
 
 point_cloud_range: [-122.88, -122.88, -2.30, 122.88, 122.88, 5.38]
 
-# Largest GT distance of every class, from the detection taxonomy of the database.
-eval_class_range: ${taxonomy.detection3d.eval_range}
-
 # Boxes carrying one of these (class, attribute) pairs are dropped from training, evaluation
 # and the frame sampler alike.
 filter_attributes:

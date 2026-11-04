@@ -24,7 +24,7 @@ import numpy as np
 import polars as pl
 
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
-from autoware_ml.databases.taxonomy import LabelTaxonomy, LabelVocabulary, Segmentation3DTaxonomy
+from autoware_ml.databases.taxonomy import LabelTaxonomy, LabelVocabulary
 from autoware_ml.datamodule.t4dataset.dataset import T4Dataset
 from autoware_ml.datamodule.common.detection3d import Detection3DTask
 from autoware_ml.datamodule.t4dataset.segmentation3d import T4Segmentation3DTask
@@ -54,12 +54,8 @@ POINT_CLOUD_RANGE = (-8.0, -8.0, -2.0, 8.0, 8.0, 2.0)
 SCENE = "db_v1/scene_0/dataset_v1"
 
 VOCABULARY = LabelVocabulary({"car": "car", "vehicle.car": "car", "unpainted": None})
-DETECTION3D_TAXONOMY = LabelTaxonomy(
-    VOCABULARY, ("car",), {"car": "car"}, -1, {"vehicle": ("car",)}
-)
-SEGMENTATION3D_TAXONOMY = Segmentation3DTaxonomy(
-    VOCABULARY, ("car",), {"car": "car"}, -1, {"vehicle": ("car",)}
-)
+DETECTION3D_TAXONOMY = LabelTaxonomy(VOCABULARY, ("car",), {"car": "car"}, -1)
+SEGMENTATION3D_TAXONOMY = LabelTaxonomy(VOCABULARY, ("car",), {"car": "car"}, -1)
 
 
 def sweep_time_offset(sweep_index: int) -> float:

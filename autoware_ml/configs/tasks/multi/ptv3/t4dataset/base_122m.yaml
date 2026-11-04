@@ -53,9 +53,6 @@ taxonomy:
 
 point_cloud_range: [-122.88, -122.88, -2.30, 122.88, 122.88, 5.38]
 
-# Largest GT distance of every class, from the detection taxonomy of the database.
-eval_class_range: ${taxonomy.detection3d.eval_range}
-
 # The model scores the detection suites, the segmentation suites and the joint suite.
 metrics: ${merge_lists:${detection3d_metrics},${segmentation3d_metrics},${det3d_seg3d_metrics}}
 

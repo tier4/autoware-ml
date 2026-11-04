@@ -37,9 +37,6 @@ taxonomy:
 
 point_cloud_range: [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
 
-# Largest GT distance of every class, from the detection taxonomy of the database.
-eval_class_range: ${taxonomy.detection3d.eval_range}
-
 metrics: ${merge_lists:${detection3d_metrics},${segmentation3d_metrics}}
 
 # nuScenes boxes carry no attributes the pipelines filter on.
