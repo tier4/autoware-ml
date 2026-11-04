@@ -82,9 +82,9 @@ class BBoxesMinPointsFilter(BaseTransform):
             return model_gt_sample
 
         if self.use_bbox_num_lidar_points:
-            num_points = self._recorded_num_points(detection3d_gt_bboxes_3d)
+            num_points = detection3d_gt_bboxes_3d.bbox_num_lidar_points
         else:
-            num_points = self._counted_num_points(model_gt_sample, detection3d_gt_bboxes_3d)
+            num_points = self._compute_num_points(model_gt_sample, detection3d_gt_bboxes_3d)
 
         in_range = detection3d_gt_bboxes_3d.in_range_bev(self.bev_range)
         # Boxes outside the range are kept whatever their point count
@@ -93,12 +93,7 @@ class BBoxesMinPointsFilter(BaseTransform):
         return model_gt_sample
 
     @staticmethod
-    def _recorded_num_points(detection3d_gt_bboxes_3d: BaseBBoxes3D) -> torch.Tensor:
-        """Return the lidar point count the database stores with every box."""
-        return detection3d_gt_bboxes_3d.bbox_num_lidar_points
-
-    @staticmethod
-    def _counted_num_points(
+    def _compute_num_points(
         model_gt_sample: ModelGTSample, detection3d_gt_bboxes_3d: BaseBBoxes3D
     ) -> torch.Tensor:
         """Count the points of the loaded point cloud in every box."""
