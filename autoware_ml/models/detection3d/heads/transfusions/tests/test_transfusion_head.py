@@ -43,9 +43,9 @@ from autoware_ml.models.detection3d.heads.transfusions.positional_encoding impor
 )
 from autoware_ml.losses.detection3d.rotated_iou_loss import Rotated2DIouLoss
 from autoware_ml.models.detection3d.heads.transfusions.transfusion_head import (
-    NMSGroupConfig,
     TransFusionHead,
 )
+from autoware_ml.models.detection3d.task_modules.nms_groups import NMSGroupConfig
 from autoware_ml.models.detection3d.task_modules.assigners import HungarianAssigner3D
 from autoware_ml.models.detection3d.task_modules.bbox_coders import (
     ScoreThresholdConfig,

@@ -49,31 +49,31 @@ model:
     nms_min_radius: 1.0
     # One group per class of the coarse detection taxonomy of the T4 databases.
     nms_group_configs:
-      - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.NMSGroupConfig
+      - _target_: autoware_ml.models.detection3d.task_modules.nms_groups.NMSGroupConfig
         class_names: [car, truck, bus]
         nms_radius: 0.25
         max_size: 300
-      - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.NMSGroupConfig
+      - _target_: autoware_ml.models.detection3d.task_modules.nms_groups.NMSGroupConfig
         class_names: [motorcycle, bicycle]
         nms_radius: 0.5
         max_size: 100
-      - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.NMSGroupConfig
+      - _target_: autoware_ml.models.detection3d.task_modules.nms_groups.NMSGroupConfig
         class_names: [pedestrian]
         nms_radius: 0.0
         max_size: 100
-      - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.NMSGroupConfig
+      - _target_: autoware_ml.models.detection3d.task_modules.nms_groups.NMSGroupConfig
         class_names: [traffic_cone]
         nms_radius: 0.0
         max_size: 100
-      - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.NMSGroupConfig
+      - _target_: autoware_ml.models.detection3d.task_modules.nms_groups.NMSGroupConfig
         class_names: [barrier]
         nms_radius: 0.0
         max_size: 50
-      - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.NMSGroupConfig
+      - _target_: autoware_ml.models.detection3d.task_modules.nms_groups.NMSGroupConfig
         class_names: [animal]
         nms_radius: 0.0
         max_size: 50
-      - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.NMSGroupConfig
+      - _target_: autoware_ml.models.detection3d.task_modules.nms_groups.NMSGroupConfig
         class_names: [debris]
         nms_radius: 0.0
         max_size: 50

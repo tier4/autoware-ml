@@ -47,7 +47,12 @@ from autoware_ml.models.detection3d.task_modules.heatmap import (
     create_oriented_gaussian_heatmaps,
     vectorize_gaussian_radii,
     create_gaussian_heatmaps,
-    batch_circle_nms,
+)
+from autoware_ml.models.detection3d.task_modules.nms_groups import (
+    NMSGroup,
+    NMSGroupConfig,
+    filter_nms_groups,
+    resolve_nms_groups,
 )
 from autoware_ml.models.detection3d.heads.transfusions.transfusion_decoder_layer import (
     TransFusionDecoderLayer,
@@ -69,36 +74,6 @@ VELOCITY_BRANCH = "vels"
 # Regression channels of a box without and with its velocity.
 BOX_CODE_SIZE = 8
 VELOCITY_BOX_CODE_SIZE = 10
-
-
-class NMSGroupConfig(NamedTuple):
-    """
-    Config for each NMS group.
-    Args:
-        class_names: Names of classes for this group.
-        nms_radius: Optional NMS radius threshold for this group.
-            If not provided, the default nms_radius will be used.
-        max_size: Optional maximum number of predictions to keep for this group.
-            If not provided, the default max_size will be used.
-    """
-
-    class_names: Sequence[str]
-    nms_radius: float | None
-    max_size: int | None
-
-
-class NMSGroup(NamedTuple):
-    """
-    Resolved config for each NMS group.
-    Args:
-        class_ids: Class indices for this group.
-        nms_radius: NMS radius threshold for this group.
-        max_size: Maximum number of predictions to keep for this group.
-    """
-
-    class_ids: Sequence[int]
-    nms_radius: float
-    max_size: int
 
 
 class LayerTargets(NamedTuple):
@@ -492,61 +467,10 @@ class TransFusionHead(nn.Module):
     def _resolve_nms_groups(
         self, nms_config_groups: Sequence[NMSGroupConfig] | None
     ) -> Sequence[NMSGroup]:
-        """
-        Resolve grouped NMS configuration into class-id form.
-
-        Without an explicit configuration every class becomes its own group with the head
-        defaults, so classes never suppress each other and ``nms_type="circle"`` on its own
-        behaves like plain per-class circle NMS.
-        """
-        if nms_config_groups is None:
-            return [
-                NMSGroup(
-                    class_ids=[class_id],
-                    nms_radius=self.nms_min_radius,
-                    max_size=self.post_max_size,
-                )
-                for class_id in range(self.num_classes)
-            ]
-
-        resolved_groups: list[NMSGroup] = []
-        # A class may appear in at most one group, otherwise it would be suppressed against two
-        # different radii. Maps each claimed class id to the group that claimed it, so the error
-        # can name both groups.
-        claimed_classes: dict[int, int] = {}
-        for group_index, nms_config_group in enumerate(nms_config_groups):
-            class_ids = self._resolve_class_ids(nms_config_group.class_names)
-            if class_ids is None:
-                raise ValueError("TransFusionHead NMS group must define class_names.")
-
-            for class_id in class_ids:
-                if class_id in claimed_classes:
-                    raise ValueError(
-                        f"TransFusionHead class id {class_id} appears in NMS groups "
-                        f"{claimed_classes[class_id]} and {group_index}, so it would be "
-                        "suppressed against two different radii."
-                    )
-                claimed_classes[class_id] = group_index
-
-            # `is None` on purpose: a radius of 0 is a valid setting that disables the
-            # suppression for the group (its boxes are only capped by score), so it must not
-            # fall back to the head default.
-            resolved_groups.append(
-                NMSGroup(
-                    class_ids=class_ids,
-                    nms_radius=(
-                        self.nms_min_radius
-                        if nms_config_group.nms_radius is None
-                        else nms_config_group.nms_radius
-                    ),
-                    max_size=(
-                        self.post_max_size
-                        if nms_config_group.max_size is None
-                        else nms_config_group.max_size
-                    ),
-                )
-            )
-        return resolved_groups
+        """Resolve grouped NMS configuration into class-id form with the head defaults."""
+        return resolve_nms_groups(
+            nms_config_groups, self.class_names, self.nms_min_radius, self.post_max_size
+        )
 
     def _suppress_dense_heatmaps(
         self, heatmaps: Float32[torch.Tensor, "batch_size num_classes height width"]
@@ -783,90 +707,12 @@ class TransFusionHead(nn.Module):
         bbox_classes: Int64[torch.Tensor, "batch_size num_proposals"],
         keep_masks: Bool[torch.Tensor, "batch_size num_proposals"],
     ) -> Bool[torch.Tensor, "batch_size num_proposals"]:
-        """
-        Refine a keep mask with grouped center-distance NMS.
-
-        Each NMS group becomes one channel of :func:`batch_circle_nms`, so all classes in a group
-        land in the same channel and therefore compete with each other, while classes in different
-        groups never suppress one another. No box is moved: a proposal simply appears as invalid in
-        the channels of the groups that do not claim its class, which batch_circle_nms already
-        handles, so the returned mask stays aligned with the input proposal axis.
-
-        ``keep_masks`` is consumed as well as refined: a proposal already rejected by the score or
-        center-range filters takes no part in the suppression, so it can never remove a survivor.
-
-        A class no group claims is not subject to NMS at all and keeps its incoming mask value.
-        Groups are disjoint, which _resolve_nms_groups enforces, so no class is ever weighed
-        against two different radii.
-
-        Args:
-            bbox_centers: BEV box centers as (center_x, center_y).
-            bbox_scores: Confidence score for each proposal.
-            bbox_classes: Predicted class id for each proposal. Must be a valid class index in
-                [0, num_classes), since it indexes the group membership table.
-            keep_masks: Keep mask from the earlier score and center-range filters.
-
-        Returns:
-            The keep mask with grouped NMS applied.
-        """
+        """Refine a keep mask with the grouped center-distance NMS of the head, see filter_nms_groups."""
         if self.nms_groups is None:
             return keep_masks
-
-        batch_size, num_proposals = bbox_scores.shape
-        num_groups = len(self.nms_groups)
-        device = bbox_scores.device
-
-        # (num_groups, num_classes) membership table: True where a group claims that class.
-        group_class_masks = torch.zeros(
-            (num_groups, self.num_classes), dtype=torch.bool, device=device
+        return filter_nms_groups(
+            bbox_centers, bbox_scores, bbox_classes, keep_masks, self.nms_groups, self.num_classes
         )
-        for group_index, group in enumerate(self.nms_groups):
-            class_ids = list(group.class_ids)
-            if not class_ids:
-                raise ValueError(f"TransFusionHead NMS group {group_index} has no class ids.")
-            if min(class_ids) < 0 or max(class_ids) >= self.num_classes:
-                raise ValueError(
-                    f"TransFusionHead NMS group {group_index} class ids {class_ids} are out of "
-                    f"range for {self.num_classes} classes."
-                )
-            group_class_masks[group_index, class_ids] = True
-
-        # A proposal takes part in a group's channel only when that group claims its class and it
-        # survived the earlier filters.
-        # (num_groups, num_classes)[:, (batch_size, num_proposals)] & (batch_size, num_proposals)
-        # -> (num_groups, batch_size, num_proposals) -> (batch_size, num_groups, num_proposals)
-        group_masks = (group_class_masks[:, bbox_classes] & keep_masks).permute(1, 0, 2)
-
-        # Every channel sees the same boxes. Only the validity mask differs, so these are views
-        # even they expand same bboxes across groups.
-        # (batch_size, num_groups, num_proposals, 2) and (batch_size, num_groups, num_proposals)
-        group_centers = bbox_centers.unsqueeze(1).expand(
-            batch_size, num_groups, num_proposals, bbox_centers.shape[-1]
-        )
-        group_scores = bbox_scores.unsqueeze(1).expand(batch_size, num_groups, num_proposals)
-
-        # One radius and one cap per channel, so all groups suppress in a single call. A group
-        # with a radius of 0 disables the suppression in its channel: batch_circle_nms then only
-        # keeps its highest-scoring proposals up to the cap.
-        # (batch_size, num_groups, num_proposals)
-        group_keep_masks = batch_circle_nms(
-            bboxes_centers=group_centers,
-            scores=group_scores,
-            min_radii=[float(group.nms_radius) for group in self.nms_groups],
-            valid_bboxes_masks=group_masks,
-            post_max_sizes=[int(group.max_size) for group in self.nms_groups],
-        )
-
-        # Groups are disjoint, so a proposal enters at most one channel and is kept exactly when
-        # that channel kept it. batch_circle_nms never keeps an invalid entry, so a proposal is
-        # already False in every channel that does not claim its class.
-        # (batch_size, num_groups, num_proposals) -> (batch_size, num_proposals)
-        nms_keep_masks = group_keep_masks.any(dim=1)
-
-        # Classes no group claims skip NMS and keep whatever the earlier filters decided.
-        # (num_classes,)[(batch_size, num_proposals)] -> (batch_size, num_proposals)
-        class_covered_masks = group_class_masks.any(dim=0)[bbox_classes]
-        return nms_keep_masks | (keep_masks & ~class_covered_masks)
 
     def _filter_bbox_predictions(
         self,
