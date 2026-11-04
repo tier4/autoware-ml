@@ -1,0 +1,9 @@
+# @package _global_
+# The temporal Sparse4D model sampling the three scale BEV pyramid (0.48, 0.96 and 1.92 m) in
+# place of the sparse voxels.
+defaults:
+  - voxel012_b8_24e_t4dataset_122m
+  - base_bev_multiscale
+  - _self_
+
+experiment_name: voxel012_b8_24e_t4dataset_122m_bev

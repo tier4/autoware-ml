@@ -1,0 +1,18 @@
+# @package _global_
+# Lidar as multi-scale BEV maps at 0.48, 0.96 and 1.92 m, sampled at the keypoints' (x, y) only, the
+# sparse voxels are not sampled.
+defaults:
+  - base_sparse_bev_multiscale
+  - _self_
+
+# Only the projected stages are fused, a finer one would train no parameter under DDP
+det_feature_strides: [4, 8]
+
+model:
+  det_fusion:
+    stage_channels:
+      - ${model.encoder.enc_channels[2]}
+      - ${model.encoder.enc_channels[3]}
+      - ${model.encoder.enc_channels[4]}
+  bbox_head:
+    lidar_sampling: bev

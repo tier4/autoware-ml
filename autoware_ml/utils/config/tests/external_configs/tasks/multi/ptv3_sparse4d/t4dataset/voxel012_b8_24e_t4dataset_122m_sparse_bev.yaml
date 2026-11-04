@@ -1,0 +1,8 @@
+# @package _global_
+# The temporal Sparse4D model sampling a dense BEV level (0.96 m) next to the sparse voxels.
+defaults:
+  - voxel012_b8_24e_t4dataset_122m
+  - base_bev_level
+  - _self_
+
+experiment_name: voxel012_b8_24e_t4dataset_122m_sparse_bev

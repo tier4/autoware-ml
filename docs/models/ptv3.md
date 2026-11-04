@@ -17,7 +17,8 @@ PointTransformerV3 is a LiDAR encoder for LiDAR 3D semantic segmentation and
   deepest encoder stage top-down into finer ones (`PTv3Det3DFeaturePyramid`) and
   feeds a `Sparse4DHead`, whose queries sample the sparse voxels at keypoints
   around their anchors with no BEV canvas, and carry the most confident
-  instances from one frame of a scenario to the next.
+  instances from one frame of a scenario to the next. The keypoints sample the
+  sparse voxels, dense BEV maps, or both.
 
 The models read single lidar frames, every point as `(x, y, z, intensity)`. The voxel feature
 encoder turns each voxel into the mean x, y, z and intensity of its points, 4 features per voxel,
@@ -63,6 +64,31 @@ The T4Dataset rows are bases. They declare the classes the model trains and requ
 that folds the labels of the database onto them, so a T4Dataset experiment that binds one lives in
 an external config root, see
 [Configuration](../user-guide/configuration.md#external-configs-and-scenario-lists).
+
+### Sparse4D configurations
+
+Every Sparse4D experiment binds the base `multi/ptv3_sparse4d/t4dataset/base_voxel012_122m`
+and adds features with these configs under `multi/ptv3_sparse4d/t4dataset/`:
+
+| Add-on                       | Adds                                                              |
+| ---------------------------- | ----------------------------------------------------------------- |
+| `base_bev_level`             | One dense BEV level (0.96 m) sampled next to the sparse voxels    |
+| `base_sparse_bev_multiscale` | A three scale BEV pyramid (0.48, 0.96, 1.92 m) next to the voxels |
+| `base_bev_multiscale`        | The three scale BEV pyramid in place of the sparse voxels         |
+
+Every lidar experiment comes in four samplings, named by the suffix of its config: none for
+the sparse voxels, `_sparse_bev`, `_sparse_bev_multiscale` and `_bev`. The experiment and its
+three variants live in the external config root, each variant binds the experiment and one add-on:
+
+```yaml title="/path/to/configs/tasks/multi/ptv3_sparse4d/t4dataset/my_experiment_bev.yaml"
+# @package _global_
+defaults:
+  - my_experiment
+  - base_bev_multiscale
+  - _self_
+
+experiment_name: my_experiment_bev
+```
 
 ## Training
 

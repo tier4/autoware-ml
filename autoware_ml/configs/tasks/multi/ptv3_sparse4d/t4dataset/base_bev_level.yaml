@@ -1,0 +1,22 @@
+# @package _global_
+# The 0.96 m stage projected onto a 256 x 256 BEV map and encoded as the TransFusion neck does,
+# sampled at the keypoints' (x, y) next to the sparse voxels.
+model:
+  bbox_head:
+    lidar_sampling: sparse_bev
+    bev_channels: 128
+    bev:
+      _target_: autoware_ml.models.detection3d.ptv3.PTv3StageBEVPyramid
+      point_cloud_range: ${point_cloud_range}
+      grid_size: ${grid_size}
+      stage_strides: ${det_feature_strides}
+      projected_strides: [8]
+      in_channels: ${model.det_fusion.out_channels}
+      channels: ${model.bbox_head.bev_channels}
+      bev_encoder:
+        _target_: autoware_ml.models.detection3d.ptv3.PTv3BEVEncoder
+        in_channels: ${model.bbox_head.bev_channels}
+        hidden_channels: ${model.bbox_head.bev_channels}
+        out_channels: ${model.bbox_head.bev_channels}
+        dilations: [1, 2, 5, 2]
+      num_downsampled: 0
