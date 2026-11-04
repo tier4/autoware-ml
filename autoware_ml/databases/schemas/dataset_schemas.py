@@ -32,6 +32,10 @@ from autoware_ml.databases.schemas.lidar_sources import (
     LidarSourceDatasetSchema,
     LidarSourceDataModel,
 )
+from autoware_ml.databases.schemas.prediction import (
+    PredictionDataModel,
+    PredictionDatasetSchema,
+)
 
 
 @dataclass(frozen=True)
@@ -58,6 +62,10 @@ class DatasetTableSchema:
       # Category Schema
       CATEGORY_MAPPING: Category mapping column, which is a dictionary to save the mapping between
         category names and category indices.
+
+      # Prediction Schema
+      PREDICTION: Prediction column, which is a dictionary naming the source of the agent tracks
+        and the vector map of a motion forecasting scenario and the shape of its time window.
     """
 
     # Basic Schema
@@ -97,6 +105,11 @@ class DatasetTableSchema:
     # Boxes3D annotation Schema
     BOXES_3D = DatasetTableColumn(
         "boxes_3d", pl.List(pl.Struct(Box3DDatasetSchema.to_polars_field_schema()))
+    )
+
+    # Prediction Schema
+    PREDICTION = DatasetTableColumn(
+        "prediction", pl.Struct(PredictionDatasetSchema.to_polars_field_schema())
     )
 
     @classmethod
@@ -143,6 +156,10 @@ class DatasetRecord(BaseModel, DataModelInterface):
 
       # Category data
       category_mapping: Category mapping data model.
+
+      # Prediction data
+      prediction: Prediction data model of a motion forecasting scenario, None for a record of
+        a perception database.
     """
 
     # Set model config to frozen
@@ -163,6 +180,7 @@ class DatasetRecord(BaseModel, DataModelInterface):
     image_frames: Sequence[Sequence[ImageFrameDataModel]] | None
     category_mapping: CategoryMappingDataModel | None
     boxes_3d: Sequence[Box3DDataModel] | None
+    prediction: PredictionDataModel | None = None
 
     def to_dictionary(self) -> Mapping[str, Any]:
         """
@@ -207,6 +225,9 @@ class DatasetRecord(BaseModel, DataModelInterface):
             [box3d.to_dictionary() for box3d in self.boxes_3d]
             if self.boxes_3d is not None
             else None
+        )
+        data_model[DatasetTableSchema.PREDICTION.name] = (
+            self.prediction.to_dictionary() if self.prediction is not None else None
         )
 
         return data_model
@@ -265,6 +286,13 @@ class DatasetRecord(BaseModel, DataModelInterface):
         else:
             boxes_3d = None
 
+        # The same null struct guard as for the category mapping
+        prediction = data_model[DatasetTableSchema.PREDICTION.name]
+        if prediction is not None and any(value is not None for value in prediction.values()):
+            prediction = PredictionDataModel.load_from_dictionary(prediction)
+        else:
+            prediction = None
+
         return cls(
             scenario_id=data_model[DatasetTableSchema.SCENARIO_ID.name],
             sample_id=data_model[DatasetTableSchema.SAMPLE_ID.name],
@@ -281,4 +309,5 @@ class DatasetRecord(BaseModel, DataModelInterface):
             image_frames=image_frames,
             category_mapping=category_mapping,
             boxes_3d=boxes_3d,
+            prediction=prediction,
         )
