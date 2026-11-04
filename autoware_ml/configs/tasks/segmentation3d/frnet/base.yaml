@@ -70,8 +70,6 @@ deploy:
   onnx:
     dynamo: false
     opset_version: 16
-    modules:
-      end_to_end: {}
   tensorrt:
     input_shapes:
       points:

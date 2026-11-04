@@ -21,6 +21,8 @@ mapping from module names to :class:`ExportSpec` objects.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from dataclasses import dataclass
 import inspect
 import logging
@@ -132,31 +134,43 @@ def resolve_export_specs(
 
 
 def merge_module_onnx_cfg(onnx_cfg: DictConfig, module_name: str) -> DictConfig:
-    """Merge shared ONNX settings with per-module settings.
+    """Return the ONNX settings of one exported module.
 
-    Module-level settings override shared settings. The ``modules`` key itself
-    is excluded from the merged result.
+    The shared ``deploy.onnx`` settings, overridden by the module's entry under
+    ``deploy.onnx.modules`` when it has one. The ``modules`` key itself is left out.
 
     Args:
-        onnx_cfg: Top-level ONNX deploy config containing a ``modules`` mapping.
-        module_name: Key of the module to resolve within ``modules``.
-
-    Returns:
-        Merged config with shared settings and module-specific overrides.
-
-    Raises:
-        KeyError: If ``module_name`` is not found in ``onnx_cfg.modules``.
+        onnx_cfg: ``deploy.onnx``, with its optional ``modules`` overrides.
+        module_name: The exported module, as the export specs name it.
     """
-    if "modules" not in onnx_cfg or module_name not in onnx_cfg.modules:
-        raise KeyError(
-            f"Module '{module_name}' not found in deploy.onnx.modules. "
-            f"Available: {list(onnx_cfg.get('modules', {}).keys())}"
-        )
     shared = {
         k: v for k, v in OmegaConf.to_container(onnx_cfg, resolve=True).items() if k != "modules"
     }
-    module_overrides = OmegaConf.to_container(onnx_cfg.modules[module_name], resolve=True)
+    module_cfg = (onnx_cfg.get("modules") or {}).get(module_name)
+    module_overrides = OmegaConf.to_container(module_cfg, resolve=True) if module_cfg else {}
     return OmegaConf.create({**shared, **module_overrides})
+
+
+def validate_onnx_modules_exported(onnx_cfg: DictConfig, module_names: Iterable[str]) -> None:
+    """Refuse a ``deploy.onnx.modules`` entry of a module the model does not export.
+
+    Its settings would apply to nothing, so a misspelled module name would silently keep the
+    shared settings.
+
+    Args:
+        onnx_cfg: ``deploy.onnx``, with its optional ``modules`` overrides.
+        module_names: The modules the export specs name.
+
+    Raises:
+        ValueError: Naming the entries and the exported modules.
+    """
+    module_names = list(module_names)
+    unknown = sorted(set(onnx_cfg.get("modules") or {}) - set(module_names))
+    if unknown:
+        raise ValueError(
+            f"deploy.onnx.modules has entries for {unknown}, which the model does not export; "
+            f"its modules are {module_names}."
+        )
 
 
 def log_export_inputs(input_args: tuple[Any, ...], input_names: list[str]) -> None:

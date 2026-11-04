@@ -39,8 +39,6 @@ deploy:
     dynamo: false
     opset_version: 17
     do_constant_folding: false
-    modules:
-      end_to_end: {}
   tensorrt:
     enabled: false
 

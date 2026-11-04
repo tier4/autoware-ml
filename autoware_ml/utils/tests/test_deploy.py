@@ -37,6 +37,7 @@ from autoware_ml.utils.deploy import (
     normalize_dynamic_shapes_for_model,
     resolve_export_specs,
     should_modify_graph,
+    validate_onnx_modules_exported,
     validate_onnx_names_not_configured,
     supports_export_stage,
 )
@@ -216,10 +217,28 @@ def test_merge_module_onnx_cfg_overlays_shared_and_module_settings() -> None:
     assert "modules" not in head
 
 
-def test_merge_module_onnx_cfg_raises_for_unknown_module() -> None:
-    onnx_cfg = OmegaConf.create({"opset_version": 17, "modules": {"backbone": {}}})
-    with pytest.raises(KeyError):
-        merge_module_onnx_cfg(onnx_cfg, "missing")
+def test_merge_module_onnx_cfg_gives_the_shared_settings_to_a_module_without_an_entry() -> None:
+    """A module only needs an entry when it overrides something."""
+    for onnx_cfg in (
+        OmegaConf.create({"opset_version": 17, "dynamo": False}),
+        OmegaConf.create({"opset_version": 17, "dynamo": False, "modules": {"other": {}}}),
+    ):
+        head = merge_module_onnx_cfg(onnx_cfg, "head")
+        assert head.opset_version == 17
+        assert head.dynamo is False
+        assert "modules" not in head
+
+
+def test_module_entries_of_modules_the_model_does_not_export_are_refused() -> None:
+    """A misspelled entry would silently keep the shared settings."""
+    validate_onnx_modules_exported(OmegaConf.create({"opset_version": 17}), ["head"])
+    validate_onnx_modules_exported(
+        OmegaConf.create({"modules": {"head": {"precision": "fp16"}}}), ["encoder", "head"]
+    )
+    with pytest.raises(ValueError, match=r"\['haed'\].*\['encoder', 'head'\]"):
+        validate_onnx_modules_exported(
+            OmegaConf.create({"modules": {"haed": {"precision": "fp16"}}}), ["encoder", "head"]
+        )
 
 
 def test_resolve_export_specs_forwards_batch_and_preserves_order(monkeypatch) -> None:

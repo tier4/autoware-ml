@@ -45,10 +45,6 @@ deploy:
     dynamo: false
     opset_version: 17
     do_constant_folding: false
-    modules:
-      bevfusion_lidar: {}
-      bevfusion_image_backbone: {}
-      bevfusion_camera_lidar: {}
   tensorrt:
     enabled: false
 

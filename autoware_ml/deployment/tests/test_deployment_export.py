@@ -492,30 +492,31 @@ class TestMetadataStamp:
 class TestErrorPaths:
     """Misconfigurations fail before any file is shipped."""
 
-    def test_unknown_module_name_is_rejected(self, tmp_path: Path) -> None:
+    def test_module_entry_of_an_unexported_module_is_rejected(self, tmp_path: Path) -> None:
         """
-        Input: a model exporting ``head`` while the deploy config only knows ``encoder``.
-        Expected: the module cannot be resolved against ``deploy.onnx.modules``.
-        Check: a KeyError naming the module and the available ones, and no file written.
+        Input: a model exporting ``head`` while the deploy config has an entry for ``encoder``.
+        Expected: the entry would apply to nothing, so the export stops.
+        Check: a ValueError naming the entry and the exported modules, and no file written.
         """
         exporter = _exporter(tmp_path, _deploy_cfg({"encoder": {}}))
 
-        with pytest.raises(KeyError, match="'head'.*encoder"):
+        with pytest.raises(ValueError, match=r"\['encoder'\].*\['head'\]"):
             exporter.export()
         assert list((tmp_path / "exports").iterdir()) == []
 
-    def test_missing_modules_block_is_rejected(self, tmp_path: Path) -> None:
+    def test_module_without_an_entry_exports_with_the_shared_settings(self, tmp_path: Path) -> None:
         """
         Input: the default deploy config without any ``modules`` block.
-        Expected: the module cannot be resolved.
-        Check: a KeyError naming the module is raised.
+        Expected: the module exports with the shared settings.
+        Check: the ONNX file of the module exists.
         """
         deploy_cfg = OmegaConf.load(DEPLOY_YAML).deploy
         deploy_cfg.tensorrt.enabled = False
         exporter = _exporter(tmp_path, deploy_cfg)
 
-        with pytest.raises(KeyError, match="head"):
-            exporter.export()
+        outputs = exporter.export()
+
+        assert [path.name for path in outputs.onnx_exported_paths] == ["head.onnx"]
 
     def test_spec_without_example_inputs_is_rejected(self, tmp_path: Path) -> None:
         """

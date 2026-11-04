@@ -39,9 +39,6 @@ deploy:
     dynamo: false
     opset_version: 17
     do_constant_folding: false
-    modules:
-      pts_voxel_encoder_centerpoint: {}
-      pts_backbone_neck_head_centerpoint: {}
   tensorrt:
     enabled: false
 
