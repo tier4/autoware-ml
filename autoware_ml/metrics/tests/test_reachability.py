@@ -106,7 +106,7 @@ def test_oncoming_beyond_ego_reach_still_collides() -> None:
     assert 2.1 <= ttc <= 2.4  # ~ (50 - 2 * 3.4 body reach) / 20
 
 
-def test_crossing_living_agent_is_finite_within_horizon() -> None:
+def test_crossing_omnidirectional_agent_is_finite_within_horizon() -> None:
     ego = Agent.wheeled(
         0.0, 0.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2, min_turn_radius=3.0
     )
@@ -167,8 +167,8 @@ def test_steps_stay_within_horizon() -> None:
     assert EgoReachability(ego, ROAD, ReachabilityParams(horizon_s=1.0, dt_s=0.6)).steps == 1
     assert EgoReachability(ego, ROAD, ReachabilityParams(horizon_s=3.0, dt_s=0.1)).steps == 30
     # A meeting first reachable at 1.1 s lies beyond the 1.0 s horizon, so it stays inf.
-    living = Agent.omnidirectional(7.6, 0.0, speed=5.0, radius=0.5)
-    assert time_to_collision(ego, living, ROAD, ReachabilityParams(horizon_s=1.0, dt_s=0.6)) == inf
+    walker = Agent.omnidirectional(7.6, 0.0, speed=5.0, radius=0.5)
+    assert time_to_collision(ego, walker, ROAD, ReachabilityParams(horizon_s=1.0, dt_s=0.6)) == inf
 
 
 def test_collision_weights_monotone_and_bounds() -> None:

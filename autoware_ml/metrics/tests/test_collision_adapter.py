@@ -92,7 +92,7 @@ def test_adapter_rejects_unmapped_class() -> None:
         raise AssertionError("expected ValueError for an unmapped class")
 
 
-def test_adapter_rejects_living_class_without_run_speed() -> None:
+def test_adapter_rejects_omnidirectional_class_without_max_speed() -> None:
     try:
         CollisionTTC(
             ("car", "wheelchair"),
@@ -103,7 +103,7 @@ def test_adapter_rejects_living_class_without_run_speed() -> None:
     except ValueError as error:
         assert "wheelchair" in str(error)
     else:
-        raise AssertionError("expected ValueError for a omnidirectional class without a run speed")
+        raise AssertionError("expected ValueError for an omnidirectional class without a max speed")
 
 
 def test_adapter_reads_kind_names_into_the_enum() -> None:

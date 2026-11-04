@@ -21,7 +21,7 @@ per-lanelet speed limits from the scene's lanelet map, and returns one TTC per
 box. Ego and wheeled agents move at the ``speed_limit`` of the lanelet they are
 in (off-map they fall back to ``max_speed_mps``), omnidirectional agents run at a per-class speed.
 A wheeled box sweeps its own rectangle, its reference point being the box centre
-so the body splits evenly along the heading, a omnidirectional agent expands a disc across
+so the body splits evenly along the heading, an omnidirectional agent expands a disc across
 the widest extent the box reports, and a static agent keeps its footprint. The
 metrics turn TTC into the collision weight or the critical set.
 
@@ -72,7 +72,7 @@ class CollisionTTC:
         motion_models: Class name to motion model, one entry per class name. The class catalog
             of the metrics carries this table, model names are read into :class:`MotionModel`
             here.
-        max_speeds: Omnidirectional class name to run speed in m/s, one entry per
+        max_speeds: Omnidirectional class name to max speed in m/s, one entry per
             omnidirectional class. The class catalog of the metrics carries this table.
         region: Drivable region tokens the wheeled fronts are clipped to.
         params: Reachability parameters (horizon, dt, curvature bound).
@@ -91,7 +91,7 @@ class CollisionTTC:
         params: ReachabilityParams | None = None,
         max_speed_mps: float = 16.7,
     ) -> None:
-        """Validate the motion model of every class and the run speeds of the omnidirectional ones."""
+        """Validate the motion model of every class and the max speeds of the omnidirectional ones."""
         self.class_names = tuple(class_names)
         self.region = tuple(region)
         self.params = params or ReachabilityParams()
@@ -110,7 +110,7 @@ class CollisionTTC:
         )
         if missing_speeds:
             raise ValueError(
-                f"no run speed configured for omnidirectional classes {missing_speeds}."
+                f"no max speed configured for omnidirectional classes {missing_speeds}."
             )
 
     def available(self, lanelet_map_path: str | None) -> bool:
@@ -227,6 +227,6 @@ class CollisionTTC:
                 width=width,
                 min_turn_radius=self.params.min_radius_m,
             )
-        # A omnidirectional agent runs at its class speed in any direction, so its body is a
+        # An omnidirectional agent runs at its class speed in any direction, so its body is a
         # disc across the widest extent the box reports.
         return Agent.omnidirectional(cx, cy, self.max_speeds[name], max(length, width) / 2.0)

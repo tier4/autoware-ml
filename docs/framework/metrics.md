@@ -487,7 +487,7 @@ configs and tunable there, the rest are code defaults.
 | object body                           | the object's own box length and width                                                     |
 | wheeled speed on the map              | the lanelet speed limit at the agent's position                                           |
 | off-map fallback speed                | 16.7 m/s (config)                                                                         |
-| omnidirectional run speeds            | pedestrian 3.0, animal 4.0, bicycle 6.0 m/s                                               |
+| omnidirectional max speeds            | pedestrian 3.0, animal 4.0, bicycle 6.0 m/s                                               |
 | wheeled classes                       | car, truck, bus, train, motorcycle                                                        |
 | omnidirectional classes               | pedestrian, animal, bicycle                                                               |
 | static classes (footprint only)       | barrier, traffic_cone, debris, bicycle_rack, vehicle_extension                            |

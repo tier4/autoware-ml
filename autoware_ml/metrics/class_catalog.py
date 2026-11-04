@@ -25,7 +25,7 @@ class Detection3DClassProfile:
       group: Behaviour group the grouped metrics fold the class into.
       max_distance: Distance in meters up to which the class is evaluated.
       motion_model: Motion model of the class in the collision metrics.
-      max_speed: Run speed in meters per second, set for exactly the omnidirectional classes.
+      max_speed: Max speed in meters per second, set for exactly the omnidirectional classes.
       partial_detection: Whether the partial detection score checks the boxes of the class
         against the semantic masks.
     """
@@ -178,14 +178,14 @@ def max_speeds(
     catalog: Mapping[str, Mapping[str, Any]], class_names: Sequence[str]
 ) -> dict[str, float]:
     """
-    Run speed of every trained omnidirectional detection class.
+    Max speed of every trained omnidirectional detection class.
 
     Args:
       catalog: Detection class name to its settings.
       class_names: Detection classes the model trains.
 
     Returns:
-      dict[str, float]: Omnidirectional class name to its run speed in meters per second.
+      dict[str, float]: Omnidirectional class name to its max speed in meters per second.
     """
     profiles = _detection3d_profiles(catalog, class_names)
     return {
