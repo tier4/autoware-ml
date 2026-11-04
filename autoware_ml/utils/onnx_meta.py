@@ -121,7 +121,7 @@ def stamp_onnx_meta(
     Args:
         onnx_path: The exported (and possibly graph-modified) module file.
         config_name: Config name the deploy ran with, stamped as provenance.
-        module: Export module name (``ptv3_encoder``, ``ptv3_det3d_head``, ...).
+        module: Export module name (``ptv3_lidar_encoder``, ``ptv3_det3d_head``, ...).
         release: ``vMAJOR.MINOR.PATCH`` or ``None`` for an unversioned export.
         export_git_sha: Repository revision performing the export, recorded as
             ``producer_version``.
