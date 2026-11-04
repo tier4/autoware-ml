@@ -19,9 +19,9 @@ Bridges the per-frame detection boxes (base_link ``[cx, cy, cz, dx, dy, dz, yaw,
 assigns every class its reachable-set kind, pulls the drivable polygon and the
 per-lanelet speed limits from the scene's lanelet map, and returns one TTC per
 box. Ego and wheeled agents move at the ``speed_limit`` of the lanelet they are
-in (off-map they fall back to ``max_speed_mps``), living agents run at a per-class speed.
+in (off-map they fall back to ``max_speed_mps``), omnidirectional agents run at a per-class speed.
 A wheeled box sweeps its own rectangle, its reference point being the box centre
-so the body splits evenly along the heading, a living agent expands a disc across
+so the body splits evenly along the heading, a omnidirectional agent expands a disc across
 the widest extent the box reports, and a static agent keeps its footprint. The
 metrics turn TTC into the collision weight or the critical set.
 
@@ -58,7 +58,7 @@ from autoware_ml.metrics.geometry.reachability import (
     ReachabilityParams,
     VehicleGeometry,
 )
-from autoware_ml.types.metrics import AgentKind
+from autoware_ml.types.metrics import MotionModel
 
 
 class CollisionTTC:
@@ -69,10 +69,10 @@ class CollisionTTC:
         vehicle: Ego body dimensions, a platform property with no default (ego has no
             detection box), measured from the rear axle the ego pose refers to.
             Object bodies come from their box.
-        kinds: Class name to reachable-set kind, one entry per class name. The detection
+        motion_models: Class name to reachable-set kind, one entry per class name. The detection
             taxonomy of the database carries this table, kind names are read into
-            :class:`AgentKind` here.
-        living_speeds: Living class name to run speed in m/s, one entry per living class.
+            :class:`MotionModel` here.
+        max_speeds: Omnidirectional class name to run speed in m/s, one entry per omnidirectional class.
             The detection taxonomy of the database carries this table.
         region: Drivable region tokens the wheeled fronts are clipped to.
         params: Reachability parameters (horizon, dt, curvature bound).
@@ -85,30 +85,33 @@ class CollisionTTC:
         class_names: tuple[str, ...] | list[str],
         *,
         vehicle: VehicleGeometry,
-        kinds: Mapping[str, AgentKind | str],
-        living_speeds: Mapping[str, float],
+        motion_models: Mapping[str, MotionModel | str],
+        max_speeds: Mapping[str, float],
         region: tuple[str, ...] = DEFAULT_DRIVABLE_REGION,
         params: ReachabilityParams | None = None,
         max_speed_mps: float = 16.7,
     ) -> None:
-        """Validate the class-to-kind mapping and the living run speeds."""
+        """Validate the motion model of every class and the run speeds of the omnidirectional ones."""
         self.class_names = tuple(class_names)
         self.region = tuple(region)
         self.params = params or ReachabilityParams()
-        self.kinds = {name: AgentKind(kind) for name, kind in kinds.items()}
-        self.living_speeds = {name: float(speed) for name, speed in living_speeds.items()}
+        self.motion_models = {name: MotionModel(kind) for name, kind in motion_models.items()}
+        self.max_speeds = {name: float(speed) for name, speed in max_speeds.items()}
         self.max_speed_mps = float(max_speed_mps)
         self.vehicle = vehicle
-        unmapped = sorted(set(self.class_names) - set(self.kinds))
+        unmapped = sorted(set(self.class_names) - set(self.motion_models))
         if unmapped:
             raise ValueError(f"no collision kind mapped for classes {unmapped}.")
-        missing_living = sorted(
+        missing_speeds = sorted(
             name
             for name in self.class_names
-            if self.kinds[name] == AgentKind.LIVING and name not in self.living_speeds
+            if self.motion_models[name] == MotionModel.OMNIDIRECTIONAL
+            and name not in self.max_speeds
         )
-        if missing_living:
-            raise ValueError(f"no run speed configured for living classes {missing_living}.")
+        if missing_speeds:
+            raise ValueError(
+                f"no run speed configured for omnidirectional classes {missing_speeds}."
+            )
 
     def available(self, lanelet_map_path: str | None) -> bool:
         """False for frames with no lanelet map, excluded from the criticality metrics.
@@ -205,12 +208,12 @@ class CollisionTTC:
             The agent for this box.
         """
         name = self.class_names[label]
-        kind = self.kinds[name]
+        kind = self.motion_models[name]
         cx, cy = float(centroid[0]), float(centroid[1])
         length, width = float(box[3]), float(box[4])
-        if kind == AgentKind.STATIC:
+        if kind == MotionModel.STATIC:
             return Agent.static(cx, cy, footprint)
-        if kind == AgentKind.WHEELED:
+        if kind == MotionModel.WHEELED:
             # Max speed = the speed limit of the lanelet the agent is in. A box is
             # centred, so its body splits evenly around the reference point, and it
             # carries no steering geometry, so the friction floor stands in.
@@ -224,6 +227,6 @@ class CollisionTTC:
                 width=width,
                 min_turn_radius=self.params.min_radius_m,
             )
-        # A living agent runs at its class speed in any direction, so its body is a
+        # A omnidirectional agent runs at its class speed in any direction, so its body is a
         # disc across the widest extent the box reports.
-        return Agent.living(cx, cy, self.living_speeds[name], max(length, width) / 2.0)
+        return Agent.omnidirectional(cx, cy, self.max_speeds[name], max(length, width) / 2.0)

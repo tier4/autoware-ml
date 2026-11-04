@@ -5,14 +5,14 @@ from __future__ import annotations
 import unittest
 
 from autoware_ml.metrics import class_catalog
-from autoware_ml.types.metrics import AgentKind
+from autoware_ml.types.metrics import MotionModel
 
 DETECTION3D_CATALOG = {
     "car": {"group": "grouped_vehicle", "max_distance": 121.0, "motion_model": "wheeled"},
     "bicycle": {
         "group": "grouped_two_wheeler",
         "max_distance": 121.0,
-        "motion_model": "living",
+        "motion_model": "omnidirectional",
         "max_speed": 6.0,
         "partial_detection": True,
     },
@@ -36,7 +36,11 @@ class TestDetection3DTables(unittest.TestCase):
         )
         self.assertEqual(
             class_catalog.motion_models(DETECTION3D_CATALOG, class_names),
-            {"truck": AgentKind.WHEELED, "car": AgentKind.WHEELED, "bicycle": AgentKind.LIVING},
+            {
+                "truck": MotionModel.WHEELED,
+                "car": MotionModel.WHEELED,
+                "bicycle": MotionModel.OMNIDIRECTIONAL,
+            },
         )
         self.assertEqual(
             class_catalog.max_speeds(DETECTION3D_CATALOG, class_names), {"bicycle": 6.0}
@@ -62,7 +66,7 @@ class TestDetection3DTables(unittest.TestCase):
     def test_rejects_inconsistent_rows(self) -> None:
         cases = (
             ({"group": "g", "max_distance": 0.0, "motion_model": "static"}, "max_distance"),
-            ({"group": "g", "max_distance": 1.0, "motion_model": "living"}, "max_speed"),
+            ({"group": "g", "max_distance": 1.0, "motion_model": "omnidirectional"}, "max_speed"),
             (
                 {"group": "g", "max_distance": 1.0, "motion_model": "static", "max_speed": 1.0},
                 "max_speed",

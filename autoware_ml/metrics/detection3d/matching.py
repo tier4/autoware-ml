@@ -94,7 +94,7 @@ def gt_keep_mask(
     gt_labels: torch.Tensor,
     gt_num_points: torch.Tensor | None,
     class_names: tuple[str, ...],
-    eval_class_range: dict[str, float] | None,
+    max_distances: dict[str, float] | None,
     min_num_points: int,
 ) -> torch.Tensor:
     """Build the per-frame GT keep mask applied at accumulation time.
@@ -107,7 +107,7 @@ def gt_keep_mask(
         gt_labels: Integer class labels ``(G,)``.
         gt_num_points: Lidar points per box, or ``None`` to skip the point-count filter.
         class_names: Class names in label order.
-        eval_class_range: Class name to maximum evaluation distance in meters.
+        max_distances: Class name to maximum evaluation distance in meters.
         min_num_points: Minimum lidar points for a box to count.
 
     Returns:
@@ -118,12 +118,12 @@ def gt_keep_mask(
     if n == 0:
         return keep
 
-    if eval_class_range:
+    if max_distances:
         distances = torch.linalg.vector_norm(gt_boxes[:, :2].to(dtype=torch.float32), dim=1)
         for box_idx in range(n):
             label = int(gt_labels[box_idx].item())
             if 0 <= label < len(class_names):
-                max_dist = eval_class_range.get(class_names[label])
+                max_dist = max_distances.get(class_names[label])
                 if max_dist is not None and float(distances[box_idx].item()) > max_dist:
                     keep[box_idx] = False
 

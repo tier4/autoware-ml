@@ -13,7 +13,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from autoware_ml.types.metrics import AgentKind
+from autoware_ml.types.metrics import MotionModel
 
 
 @dataclass(frozen=True)
@@ -25,14 +25,14 @@ class Detection3DClassProfile:
       group: Behaviour group the grouped metrics fold the class into.
       max_distance: Distance in meters up to which the class is evaluated.
       motion_model: Reachable set kind of the class in the collision metrics.
-      max_speed: Run speed in meters per second, set for exactly the living classes.
+      max_speed: Run speed in meters per second, set for exactly the omnidirectional classes.
       partial_detection: Whether the partial detection score checks the boxes of the class
         against the semantic masks.
     """
 
     group: str
     max_distance: float
-    motion_model: AgentKind
+    motion_model: MotionModel
     max_speed: float | None = None
     partial_detection: bool = False
 
@@ -40,9 +40,9 @@ class Detection3DClassProfile:
         """Validate the settings."""
         if self.max_distance <= 0.0:
             raise ValueError(f"max_distance must be positive, got {self.max_distance}.")
-        if (self.motion_model == AgentKind.LIVING) != (self.max_speed is not None):
+        if (self.motion_model == MotionModel.OMNIDIRECTIONAL) != (self.max_speed is not None):
             raise ValueError(
-                f"max_speed is set for exactly the {AgentKind.LIVING.value} classes, got "
+                f"max_speed is set for exactly the {MotionModel.OMNIDIRECTIONAL.value} classes, got "
                 f"{self.max_speed} for a {self.motion_model.value} class."
             )
 
@@ -83,7 +83,7 @@ def _detection3d_profiles(
     """Detection settings of the trained classes, in catalog order."""
     return {
         name: Detection3DClassProfile(
-            **{**catalog[name], "motion_model": AgentKind(catalog[name]["motion_model"])}
+            **{**catalog[name], "motion_model": MotionModel(catalog[name]["motion_model"])}
         )
         for name in _rows(catalog, class_names)
     }
@@ -159,7 +159,7 @@ def max_distances(
 
 def motion_models(
     catalog: Mapping[str, Mapping[str, Any]], class_names: Sequence[str]
-) -> dict[str, AgentKind]:
+) -> dict[str, MotionModel]:
     """
     Collision reachable set kind of every trained detection class.
 
@@ -168,7 +168,7 @@ def motion_models(
       class_names: Detection classes the model trains.
 
     Returns:
-      dict[str, AgentKind]: Class name to its reachable set kind.
+      dict[str, MotionModel]: Class name to its reachable set kind.
     """
     profiles = _detection3d_profiles(catalog, class_names)
     return {name: profiles[name].motion_model for name in class_names}
@@ -178,14 +178,14 @@ def max_speeds(
     catalog: Mapping[str, Mapping[str, Any]], class_names: Sequence[str]
 ) -> dict[str, float]:
     """
-    Run speed of every trained living detection class.
+    Run speed of every trained omnidirectional detection class.
 
     Args:
       catalog: Detection class name to its settings.
       class_names: Detection classes the model trains.
 
     Returns:
-      dict[str, float]: Living class name to its run speed in meters per second.
+      dict[str, float]: Omnidirectional class name to its run speed in meters per second.
     """
     profiles = _detection3d_profiles(catalog, class_names)
     return {

@@ -1,11 +1,11 @@
 # Metric settings of the nuScenes detection classes. A model reads the rows of the classes it
-# trains, max_speed is the run speed of a living class.
+# trains, max_speed is the run speed of a omnidirectional class.
 car: { group: grouped_vehicle, max_distance: 50.0, motion_model: wheeled }
 truck: { group: grouped_vehicle, max_distance: 50.0, motion_model: wheeled }
 bus: { group: grouped_vehicle, max_distance: 50.0, motion_model: wheeled }
 bicycle:
-  { group: grouped_two_wheeler, max_distance: 50.0, motion_model: living, max_speed: 6.0 }
+  { group: grouped_two_wheeler, max_distance: 50.0, motion_model: omnidirectional, max_speed: 6.0 }
 pedestrian:
-  { group: grouped_pedestrian_animal, max_distance: 50.0, motion_model: living, max_speed: 3.0 }
+  { group: grouped_pedestrian_animal, max_distance: 50.0, motion_model: omnidirectional, max_speed: 3.0 }
 barrier: { group: grouped_static_obstacle, max_distance: 50.0, motion_model: static }
 traffic_cone: { group: grouped_static_obstacle, max_distance: 50.0, motion_model: static }

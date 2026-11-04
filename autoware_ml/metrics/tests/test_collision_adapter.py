@@ -16,7 +16,7 @@ from autoware_ml.metrics.tests.conftest import (
     collision_box,
     serve_fake_map,
 )
-from autoware_ml.types.metrics import AgentKind
+from autoware_ml.types.metrics import MotionModel
 
 KINDS = {
     "car": "wheeled",
@@ -24,9 +24,9 @@ KINDS = {
     "bus": "wheeled",
     "train": "wheeled",
     "motorcycle": "wheeled",
-    "bicycle": "living",
-    "pedestrian": "living",
-    "animal": "living",
+    "bicycle": "omnidirectional",
+    "pedestrian": "omnidirectional",
+    "animal": "omnidirectional",
     "barrier": "static",
     "traffic_cone": "static",
     "debris": "static",
@@ -41,8 +41,8 @@ def _adapter():
     return CollisionTTC(
         CLASS_NAMES,
         vehicle=EGO,
-        kinds=KINDS,
-        living_speeds=LIVING_SPEEDS,
+        motion_models=KINDS,
+        max_speeds=LIVING_SPEEDS,
         params=ReachabilityParams(horizon_s=4.0, dt_s=0.1),
         max_speed_mps=10.0,
     )
@@ -83,8 +83,8 @@ def test_adapter_rejects_unmapped_class() -> None:
         CollisionTTC(
             ("car", "spaceship"),
             vehicle=EGO,
-            kinds={"car": "wheeled"},
-            living_speeds={},
+            motion_models={"car": "wheeled"},
+            max_speeds={},
         )
     except ValueError:
         pass
@@ -97,18 +97,18 @@ def test_adapter_rejects_living_class_without_run_speed() -> None:
         CollisionTTC(
             ("car", "wheelchair"),
             vehicle=EGO,
-            kinds={"car": "wheeled", "wheelchair": "living"},
-            living_speeds={},
+            motion_models={"car": "wheeled", "wheelchair": "omnidirectional"},
+            max_speeds={},
         )
     except ValueError as error:
         assert "wheelchair" in str(error)
     else:
-        raise AssertionError("expected ValueError for a living class without a run speed")
+        raise AssertionError("expected ValueError for a omnidirectional class without a run speed")
 
 
 def test_adapter_reads_kind_names_into_the_enum() -> None:
-    adapter = CollisionTTC(("car",), vehicle=EGO, kinds={"car": "wheeled"}, living_speeds={})
-    assert adapter.kinds["car"] is AgentKind.WHEELED
+    adapter = CollisionTTC(("car",), vehicle=EGO, motion_models={"car": "wheeled"}, max_speeds={})
+    assert adapter.motion_models["car"] is MotionModel.WHEELED
 
 
 def test_adapter_rejects_unknown_kind_value() -> None:
@@ -116,8 +116,8 @@ def test_adapter_rejects_unknown_kind_value() -> None:
         CollisionTTC(
             ("car",),
             vehicle=EGO,
-            kinds={"car": "hovercraft"},
-            living_speeds={},
+            motion_models={"car": "hovercraft"},
+            max_speeds={},
         )
     except ValueError as error:
         assert "hovercraft" in str(error)

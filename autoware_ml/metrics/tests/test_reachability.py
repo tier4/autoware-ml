@@ -20,7 +20,7 @@ from autoware_ml.metrics.geometry.reachability import (
     wheeled_reachable_region,
     wheeled_reachable_set,
 )
-from autoware_ml.types.metrics import AgentKind
+from autoware_ml.types.metrics import MotionModel
 
 PARAMS = ReachabilityParams(horizon_s=4.0, dt_s=0.1)
 # A wide open drivable region so wheeled fronts are not clipped in these unit cases.
@@ -36,12 +36,12 @@ def _footprint(x: float, y: float, size: float = 2.0):
     return box(x - size / 2, y - size / 2, x + size / 2, y + size / 2)
 
 
-def _sampled_agent(kind: AgentKind, x: float, y: float, rng: np.random.Generator) -> Agent:
+def _sampled_agent(kind: MotionModel, x: float, y: float, rng: np.random.Generator) -> Agent:
     """One random agent of ``kind`` at ``(x, y)``, for the brute-force comparison."""
-    if kind == AgentKind.STATIC:
+    if kind == MotionModel.STATIC:
         return Agent.static(x, y, footprint=_footprint(x, y))
-    if kind == AgentKind.LIVING:
-        return Agent.living(x, y, speed=float(rng.uniform(0.0, 6.0)), radius=0.4)
+    if kind == MotionModel.OMNIDIRECTIONAL:
+        return Agent.omnidirectional(x, y, speed=float(rng.uniform(0.0, 6.0)), radius=0.4)
     return Agent.wheeled(
         x,
         y,
@@ -108,7 +108,7 @@ def test_crossing_living_agent_is_finite_within_horizon() -> None:
     ego = Agent.wheeled(
         0.0, 0.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2, min_turn_radius=3.0
     )
-    ped = Agent.living(18.0, 6.0, speed=4.0, radius=0.4)
+    ped = Agent.omnidirectional(18.0, 6.0, speed=4.0, radius=0.4)
     ttc = time_to_collision(ego, ped, ROAD, PARAMS)
     assert ttc != inf and ttc <= PARAMS.horizon_s
 
@@ -165,7 +165,7 @@ def test_steps_stay_within_horizon() -> None:
     assert EgoReachability(ego, ROAD, ReachabilityParams(horizon_s=1.0, dt_s=0.6)).steps == 1
     assert EgoReachability(ego, ROAD, ReachabilityParams(horizon_s=3.0, dt_s=0.1)).steps == 30
     # A meeting first reachable at 1.1 s lies beyond the 1.0 s horizon, so it stays inf.
-    living = Agent.living(7.6, 0.0, speed=5.0, radius=0.5)
+    living = Agent.omnidirectional(7.6, 0.0, speed=5.0, radius=0.5)
     assert time_to_collision(ego, living, ROAD, ReachabilityParams(horizon_s=1.0, dt_s=0.6)) == inf
 
 
@@ -223,7 +223,7 @@ def test_ego_reachability_matches_brute_force_stepping(
             x, y = float(rng.uniform(-2.0, 2.0)), float(rng.uniform(-2.0, 2.0))
         else:
             x, y = float(rng.uniform(-30, 130)), float(rng.uniform(-45, 45))
-        kind = (AgentKind.WHEELED, AgentKind.LIVING, AgentKind.STATIC)[index % 3]
+        kind = (MotionModel.WHEELED, MotionModel.OMNIDIRECTIONAL, MotionModel.STATIC)[index % 3]
         obj = _sampled_agent(kind, x, y, rng)
         assert frame.time_to_collision(obj) == brute_force(obj), f"agent {index}: {obj}"
 
@@ -359,7 +359,7 @@ def test_an_object_beside_ego_collides_at_the_first_step() -> None:
     ego = Agent.wheeled(
         0.0, 0.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2.4, min_turn_radius=3.0
     )
-    ped = Agent.living(0.1, 0.55, speed=1.4, radius=0.4)
+    ped = Agent.omnidirectional(0.1, 0.55, speed=1.4, radius=0.4)
 
     assert EgoReachability(ego, ROAD, PARAMS).time_to_collision(ped) == PARAMS.dt_s
 
@@ -500,10 +500,10 @@ def test_a_hairline_map_seam_does_not_shrink_the_front() -> None:
 @pytest.mark.parametrize(
     "kwargs",
     [
-        {"kind": AgentKind.WHEELED, "speed": 10.0, "half_width": 0.0},
-        {"kind": AgentKind.WHEELED, "speed": 10.0, "half_width": float("nan")},
+        {"kind": MotionModel.WHEELED, "speed": 10.0, "half_width": 0.0},
+        {"kind": MotionModel.WHEELED, "speed": 10.0, "half_width": float("nan")},
         {
-            "kind": AgentKind.WHEELED,
+            "kind": MotionModel.WHEELED,
             "speed": float("nan"),
             "front": 1.0,
             "rear": 1.0,
@@ -511,7 +511,7 @@ def test_a_hairline_map_seam_does_not_shrink_the_front() -> None:
             "min_turn_radius": 3.0,
         },
         {
-            "kind": AgentKind.WHEELED,
+            "kind": MotionModel.WHEELED,
             "heading": float("nan"),
             "speed": 1.0,
             "front": 1.0,
@@ -520,7 +520,7 @@ def test_a_hairline_map_seam_does_not_shrink_the_front() -> None:
             "min_turn_radius": 3.0,
         },
         {
-            "kind": AgentKind.STATIC,
+            "kind": MotionModel.STATIC,
             "speed": -1.0,
             "front": 1.0,
             "rear": 1.0,
@@ -529,7 +529,7 @@ def test_a_hairline_map_seam_does_not_shrink_the_front() -> None:
             "footprint": box(0.0, 0.0, 1.0, 1.0),
         },
         {
-            "kind": AgentKind.WHEELED,
+            "kind": MotionModel.WHEELED,
             "speed": 1.0,
             "front": 1.0,
             "rear": 1.0,
@@ -538,7 +538,7 @@ def test_a_hairline_map_seam_does_not_shrink_the_front() -> None:
             "footprint": box(0.0, 0.0, 1.0, 1.0),
         },
         {
-            "kind": AgentKind.STATIC,
+            "kind": MotionModel.STATIC,
             "speed": 0.0,
             "front": 1.0,
             "rear": 1.0,
@@ -554,8 +554,8 @@ def test_a_hairline_map_seam_does_not_shrink_the_front() -> None:
             "half_width": 1.0,
             "min_turn_radius": 3.0,
         },
-        {"kind": AgentKind.WHEELED, "speed": 10.0, "min_turn_radius": 0.0},
-        {"kind": AgentKind.LIVING, "speed": 1.0, "min_turn_radius": 3.0},
+        {"kind": MotionModel.WHEELED, "speed": 10.0, "min_turn_radius": 0.0},
+        {"kind": MotionModel.OMNIDIRECTIONAL, "speed": 1.0, "min_turn_radius": 3.0},
     ],
 )
 def test_an_unusable_agent_is_rejected(kwargs: dict) -> None:

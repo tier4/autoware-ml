@@ -487,9 +487,9 @@ configs and tunable there, the rest are code defaults.
 | object body                           | the object's own box length and width                                                     |
 | wheeled speed on the map              | the lanelet speed limit at the agent's position                                           |
 | off-map fallback speed                | 16.7 m/s (config)                                                                         |
-| living run speeds                     | pedestrian 3.0, animal 4.0, bicycle 6.0 m/s                                               |
+| omnidirectional run speeds            | pedestrian 3.0, animal 4.0, bicycle 6.0 m/s                                               |
 | wheeled classes                       | car, truck, bus, train, motorcycle                                                        |
-| living classes                        | pedestrian, animal, bicycle                                                               |
+| omnidirectional classes               | pedestrian, animal, bicycle                                                               |
 | static classes (footprint only)       | barrier, traffic_cone, debris, bicycle_rack, vehicle_extension                            |
 | corridor width                        | 3.0 m (config)                                                                            |
 
@@ -1306,7 +1306,7 @@ model:
   metrics:
     - _target_: autoware_ml.metrics.detection3d.suite.Detection3DMetricSuite
       class_names: ${taxonomy.detection3d.class_names}
-      eval_class_range: ${metric_params.detection3d.max_distances}
+      max_distances: ${metric_params.detection3d.max_distances}
       ranges: ${metric_ranges}
       components:
         - { _target_: autoware_ml.metrics.detection3d.mean_ap.MeanAP, stages: [val, test] }
