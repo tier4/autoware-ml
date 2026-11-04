@@ -70,6 +70,8 @@ class DataLoaderConfig:
             own. It only shares the draws between frames: whether the cameras of a frame
             share one is an option of the image transform, see ``per_camera_augmentation`` of
             ``ResizeCropFlipRotImage``.
+        scene_split_num: Number of consecutive streams, their lengths differing by at most one,
+            a streaming datamodule splits every scene into, 1 streams whole scenes.
     """
 
     batch_size: int = 1
@@ -79,6 +81,7 @@ class DataLoaderConfig:
     shuffle: bool = False
     drop_last: bool = False
     stream_consistent_augmentation: bool = False
+    scene_split_num: int = 1
 
     def to_dataloader_kwargs(self) -> dict[str, Any]:
         """Convert to keyword arguments accepted by ``DataLoader``.
@@ -317,8 +320,9 @@ class DataModule(L.LightningDataModule):
           DataLoader: Dataloader over the concatenated sources of the split.
 
         Raises:
-          ValueError: If the split has no dataset or no dataloader settings, or if frame
-            sampling is on while the training dataloader shuffles.
+          ValueError: If the split has no dataset or no dataloader settings, if frame
+            sampling is on while the training dataloader shuffles, or if the settings split
+            scenes, which only the streaming datamodule does.
         """
         dataset = self.datasets.get(split)
         if dataset is None:
@@ -332,6 +336,11 @@ class DataModule(L.LightningDataModule):
                 f"Split {split} sets stream_consistent_augmentation, which only the streaming "
                 "datamodule reads. Compose "
                 "/datamodule/streaming@datamodule: default_streaming_datamodule."
+            )
+        if config.scene_split_num != 1:
+            raise ValueError(
+                f"Split {split} sets scene_split_num, which only the streaming datamodule "
+                "reads. Compose /datamodule/streaming@datamodule: default_streaming_datamodule."
             )
 
         kwargs = config.to_dataloader_kwargs()

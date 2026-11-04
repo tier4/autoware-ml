@@ -95,8 +95,8 @@ class StreamingDataModule(DataModule):
         Args:
           split: Split the dataloader serves.
           config: Dataloader settings of the split, whose batch size is the number of lanes
-            of every rank and whose ``stream_consistent_augmentation`` augments every frame of
-            a stream alike.
+            of every rank, whose ``stream_consistent_augmentation`` augments every frame of a
+            stream alike and whose ``scene_split_num`` splits every scene into streams.
 
         Returns:
           DataLoader: Dataloader over the concatenated sources of the split, drawing from a
@@ -121,6 +121,7 @@ class StreamingDataModule(DataModule):
             shuffle=split == SplitType.TRAIN,
             seed=self.seed,
             consistent_augmentation=config.stream_consistent_augmentation,
+            scene_split_num=config.scene_split_num,
         )
         return DataLoader(
             dataset=dataset,
