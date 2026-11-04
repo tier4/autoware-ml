@@ -27,7 +27,7 @@ def test_encoder_metainfo_serialization_orders_match_export_order(config_name: s
     # The encoder metainfo declares the orders the exported graph is built with;
     # config drift against the code constant must fail loud, never ship.
     cfg = compose_task(config_name)
-    module_cfg = merge_module_onnx_cfg(cfg.deploy.onnx, "ptv3_encoder")
+    module_cfg = merge_module_onnx_cfg(cfg.deploy.onnx, "ptv3_lidar_encoder")
     assert list(module_cfg.metainfo.serialization_orders) == list(PTv3BaseModel.EXPORT_ORDER)
 
 
@@ -70,7 +70,7 @@ def test_encoder_metainfo_stamps_the_attention_windows(config_name: str) -> None
     # deployment boundary (exporter and runtime), so the artifact records the windows it
     # was exported with: one per level, straight from the encoder config, never retyped.
     cfg = compose_task(config_name)
-    module_cfg = merge_module_onnx_cfg(cfg.deploy.onnx, "ptv3_encoder")
+    module_cfg = merge_module_onnx_cfg(cfg.deploy.onnx, "ptv3_lidar_encoder")
     patch_sizes = OmegaConf.to_container(module_cfg.metainfo.patch_sizes, resolve=True)
     assert patch_sizes == list(cfg.model.encoder.enc_patch_size)
     assert len(patch_sizes) == len(cfg.model.encoder.stride) + 1

@@ -217,7 +217,7 @@ def test_litept_split_export_declares_and_consumes_the_ptv3_contract() -> None:
     batch = build_inputs(device=torch.device("cuda"))
 
     specs = model.build_export_specs(batch)
-    encoder_spec = specs["ptv3_encoder"]
+    encoder_spec = specs["ptv3_lidar_encoder"]
 
     assert "serialized_inverse" in encoder_spec.input_names
     assert "patch_order" in encoder_spec.input_names
@@ -310,7 +310,7 @@ def test_exported_encoder_graph_declares_a_subset_of_the_contract(tmp_path) -> N
     for tag, model in (("litept", build_litept_seg3d_model()), ("ptv3", build_seg3d_model())):
         model = model.cuda().eval()
         batch = build_inputs(device=torch.device("cuda"))
-        spec = model.build_export_specs(batch)["ptv3_encoder"]
+        spec = model.build_export_specs(batch)["ptv3_lidar_encoder"]
         path = tmp_path / f"{tag}_encoder.onnx"
 
         export_to_onnx(spec, onnx_cfg, path)
@@ -330,8 +330,10 @@ def test_litept_encoder_contract_matches_ptv3_field_for_field() -> None:
     every stage, plus the input level's serialization - and rejects an engine missing any.
     """
     batch = build_inputs(device=torch.device("cuda"))
-    litept = build_litept_seg3d_model().cuda().eval().build_export_specs(batch)["ptv3_encoder"]
-    ptv3 = build_seg3d_model().cuda().eval().build_export_specs(batch)["ptv3_encoder"]
+    litept = (
+        build_litept_seg3d_model().cuda().eval().build_export_specs(batch)["ptv3_lidar_encoder"]
+    )
+    ptv3 = build_seg3d_model().cuda().eval().build_export_specs(batch)["ptv3_lidar_encoder"]
 
     def stage_fields(names: list[str]) -> set[str]:
         return {name.split("_", 3)[3] for name in names if name.startswith("serialized_pooling_")}

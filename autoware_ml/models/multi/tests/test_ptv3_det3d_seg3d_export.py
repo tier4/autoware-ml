@@ -135,9 +135,9 @@ def test_ptv3_seg3d_split_export_supports_decoder_blocks() -> None:
 
     # The encoder-only encoder graph never consumes pooling clusters; the
     # tracer would prune them, so the declared interface must not list them.
-    assert not any("_cluster" in name for name in specs["ptv3_encoder"].input_names)
+    assert not any("_cluster" in name for name in specs["ptv3_lidar_encoder"].input_names)
     with torch.no_grad():
-        encoder_outputs = specs["ptv3_encoder"].module(*specs["ptv3_encoder"].args)
+        encoder_outputs = specs["ptv3_lidar_encoder"].module(*specs["ptv3_lidar_encoder"].args)
     assert len(encoder_outputs) == 2
 
     spec = specs["ptv3_seg3d_head"]

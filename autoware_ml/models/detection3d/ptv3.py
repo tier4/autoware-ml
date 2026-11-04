@@ -617,7 +617,7 @@ class PTv3Detection3DModel(PTv3BaseModel):
         """
         context = build_ptv3_export_context(self, batch_inputs)
         return {
-            "ptv3_encoder": build_encoder_export_spec(context),
+            "ptv3_lidar_encoder": build_encoder_export_spec(context),
             "ptv3_det3d_head": build_det3d_head_export_spec(
                 context,
                 self.bev_neck,

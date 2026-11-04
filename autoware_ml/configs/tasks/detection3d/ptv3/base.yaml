@@ -54,7 +54,7 @@ deploy:
     dynamo: false
     do_constant_folding: false
     modules:
-      ptv3_encoder:
+      ptv3_lidar_encoder:
         metainfo:
           point_cloud_range: ${point_cloud_range}
           voxel_size: ["${grid_size}", "${grid_size}", "${grid_size}"]

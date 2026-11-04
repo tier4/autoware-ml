@@ -132,18 +132,18 @@ def test_stamp_release_export_with_metainfo(tmp_path) -> None:
 
 
 def test_stamp_unversioned_export_without_metainfo(tmp_path) -> None:
-    path = tmp_path / "ptv3_encoder.onnx"
+    path = tmp_path / "ptv3_lidar_encoder.onnx"
     _tiny_model(path)
     stamp_onnx_meta(
         path,
         config_name="segmentation3d/ptv3/t4dataset/voxel012_b16_50e_t4dataset_122m",
-        module="ptv3_encoder",
+        module="ptv3_lidar_encoder",
         release=None,
         export_git_sha="be5b967",
     )
     model = onnx.load(str(path))
     assert model.model_version == 0
-    assert model.doc_string == "ptv3_encoder unversioned"
+    assert model.doc_string == "ptv3_lidar_encoder unversioned"
     props = {p.key: p.value for p in model.metadata_props}
     assert props["release"] == "unversioned"
     for absent in ("tracker", "run_id"):
@@ -151,13 +151,13 @@ def test_stamp_unversioned_export_without_metainfo(tmp_path) -> None:
 
 
 def test_stamp_rejects_reserved_metainfo_keys(tmp_path) -> None:
-    path = tmp_path / "ptv3_encoder.onnx"
+    path = tmp_path / "ptv3_lidar_encoder.onnx"
     _tiny_model(path)
     with pytest.raises(ValueError, match="reserved"):
         stamp_onnx_meta(
             path,
             config_name="segmentation3d/ptv3/t4dataset/voxel012_b16_50e_t4dataset_122m",
-            module="ptv3_encoder",
+            module="ptv3_lidar_encoder",
             release=None,
             export_git_sha="be5b967",
             metainfo={"release": "v9.9.9"},

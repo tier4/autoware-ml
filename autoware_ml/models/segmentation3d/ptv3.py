@@ -267,7 +267,7 @@ class PTv3Segmentation3DModel(PTv3BaseModel):
         """
         context = build_ptv3_export_context(self, batch_inputs)
         return {
-            "ptv3_encoder": build_encoder_export_spec(context),
+            "ptv3_lidar_encoder": build_encoder_export_spec(context),
             "ptv3_seg3d_head": build_seg3d_head_export_spec(
                 context,
                 self.seg3d_head.prepare_for_export(self.EXPORT_ORDER),
