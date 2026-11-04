@@ -18,8 +18,9 @@ import pytest
 import yaml
 
 from autoware_ml.utils.config.settings import CONFIGS_ROOT
+from autoware_ml.utils.config.tests.config_roots import EXTERNAL_CONFIGS_ROOT
 
-_EXPERIMENTS = CONFIGS_ROOT / "tasks"
+_EXPERIMENT_ROOTS = (CONFIGS_ROOT / "tasks", EXTERNAL_CONFIGS_ROOT / "tasks")
 _LIDAR_AUGMENTATIONS = (
     "camera_lidar.geometry.GlobalRotScaleTrans",
     "camera_lidar.geometry.GlobalBEVRandomFlip",
@@ -30,13 +31,15 @@ _LIDAR_AUGMENTATIONS = (
 def pipelines() -> list[tuple[str, str, list[str]]]:
     """Transform class paths of every pipeline an experiment config writes, in order."""
     found = []
-    for path in sorted(_EXPERIMENTS.rglob("*.yaml")):
+    for root, path in sorted(
+        (root, path) for root in _EXPERIMENT_ROOTS for path in root.rglob("*.yaml")
+    ):
         datasets = (yaml.safe_load(path.read_text()) or {}).get("datasets") or {}
         for split in ("train", "test"):
             transforms = (datasets.get(split) or {}).get("transforms")
             if transforms:
                 steps = [step["_target_"] for step in transforms["pipeline"]]
-                found.append((str(path.relative_to(_EXPERIMENTS).with_suffix("")), split, steps))
+                found.append((str(path.relative_to(root).with_suffix("")), split, steps))
     return found
 
 

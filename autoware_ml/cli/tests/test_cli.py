@@ -50,9 +50,7 @@ from autoware_ml.utils.cli.helpers import (
 from autoware_ml.utils.mlflow_store import compose_config_reference
 from autoware_ml.utils.session import SessionCommandError
 
-SAMPLE_CONFIG_NAME = (
-    "detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_30e_t4dataset_120m"
-)
+SAMPLE_CONFIG_NAME = "detection3d/centerpoint/nuscenes/voxel020_second_secfpn_b16_30e_nuscenes_51m"
 SAMPLE_CONFIG_PATH = f"tasks/{SAMPLE_CONFIG_NAME}"
 SAMPLE_SESSION_NAME = "centerpoint-train"
 SAMPLE_EXPERIMENT_GROUP_NAME = "ptv3_det3d_seg3d/T4Dataset-base-v1.0.0/t4dataset"
@@ -122,8 +120,8 @@ class TestResolveConfigReference:
 
     def test_resolve_packaged_yaml_path(self) -> None:
         config_path, config_name, hydra_overrides = resolve_config_reference(
-            "autoware_ml/configs/tasks/detection3d/centerpoint/t4dataset/"
-            "voxel024_second_secfpn_b16_30e_t4dataset_120m.yaml",
+            "autoware_ml/configs/tasks/detection3d/centerpoint/nuscenes/"
+            "voxel020_second_secfpn_b16_30e_nuscenes_51m.yaml",
             "tasks",
         )
 
@@ -191,7 +189,7 @@ class TestResolveConfigReference:
         _write_external_root(
             tmp_path,
             monkeypatch,
-            "tasks/detection3d/centerpoint/t4dataset/custom_t4dataset",
+            "tasks/detection3d/centerpoint/nuscenes/custom_nuscenes",
             "# @package _global_\n"
             "defaults:\n"
             f"  - {Path(SAMPLE_CONFIG_NAME).name}\n"
@@ -201,9 +199,7 @@ class TestResolveConfigReference:
             "  max_epochs: 3\n",
         )
 
-        cfg = compose_config_reference(
-            "detection3d/centerpoint/t4dataset/custom_t4dataset", "tasks"
-        )
+        cfg = compose_config_reference("detection3d/centerpoint/nuscenes/custom_nuscenes", "tasks")
 
         assert cfg.trainer.max_epochs == 3
         assert cfg.model == bundled_cfg.model
@@ -213,16 +209,16 @@ class TestCompleteConfigValue:
     """Tests for config completion helpers."""
 
     def test_complete_bundled_configs(self, tmp_path: Path, monkeypatch) -> None:
-        config_root = tmp_path / "tasks" / "detection3d" / "centerpoint" / "t4dataset"
+        config_root = tmp_path / "tasks" / "detection3d" / "centerpoint" / "nuscenes"
         config_root.mkdir(parents=True)
         (config_root / "base.yaml").write_text("", encoding="utf-8")
         (config_root / f"{Path(SAMPLE_CONFIG_NAME).name}.yaml").write_text("", encoding="utf-8")
         monkeypatch.setattr(helpers, "CONFIGS_ROOT", tmp_path)
 
-        completions = complete_config_value("detection3d/centerpoint/t4dataset/voxel024", "tasks")
+        completions = complete_config_value("detection3d/centerpoint/nuscenes/voxel020", "tasks")
 
         assert completions == [SAMPLE_CONFIG_NAME]
-        assert "detection3d/centerpoint/t4dataset/base" not in completions
+        assert "detection3d/centerpoint/nuscenes/base" not in completions
 
     def test_complete_external_root_configs(self, tmp_path: Path, monkeypatch) -> None:
         _write_external_root(tmp_path, monkeypatch, "tasks/custom/train", "")
@@ -1014,7 +1010,7 @@ class TestSessionCompletion:
     def test_suggests_config_names_after_flag(self) -> None:
         suggestions = complete_session_command_value(
             ["train", "--config-name"],
-            "detection3d/centerpoint/t4dataset/voxel024",
+            "detection3d/centerpoint/nuscenes/voxel020",
         )
         assert SAMPLE_CONFIG_NAME in suggestions
 

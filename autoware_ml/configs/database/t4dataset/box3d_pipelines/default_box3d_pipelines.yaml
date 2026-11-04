@@ -3,19 +3,6 @@
 
   vocabulary: ${...vocabulary}
 
-- _target_: autoware_ml.databases.box3d_pipelines.box3d_merger.Box3DExtendLongerMerger
-  _convert_: all
-
-  target_labels:
-    truck:
-      - truck
-      - trailer
-    construction_vehicle:
-      - construction_vehicle
-      - trailer
-
-  proximity_distance_threshold: 1.0
-
 - _target_: autoware_ml.databases.box3d_pipelines.box3d_velocity_clip.Box3DVelocityNormClip
   _convert_: all
 

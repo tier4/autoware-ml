@@ -28,6 +28,7 @@ from omegaconf import DictConfig
 
 from autoware_ml.utils.config.resolvers import register_config_resolvers
 from autoware_ml.utils.config.settings import CONFIGS_ROOT, Settings
+from autoware_ml.utils.config.tests.config_roots import SEARCHPATH_OVERRIDE
 from autoware_ml.datamodule.streaming_data_module import StreamingDataModule
 
 # An experiment composing a database datamodule, which does not stream.
@@ -41,7 +42,7 @@ def compose_streaming_experiment(experiment: str) -> DictConfig:
     The two are composed by the defaults list of a primary config held in the config store.
 
     Args:
-      experiment: Experiment config to compose, relative to the bundled configs.
+      experiment: Experiment config to compose, relative to the config roots.
 
     Returns:
       DictConfig: The composed experiment.
@@ -60,7 +61,11 @@ def compose_streaming_experiment(experiment: str) -> DictConfig:
     )
     GlobalHydra.instance().clear()
     with initialize_config_dir(version_base=None, config_dir=str(CONFIGS_ROOT)):
-        cfg = compose(config_name="streaming_experiment", return_hydra_config=True)
+        cfg = compose(
+            config_name="streaming_experiment",
+            overrides=[SEARCHPATH_OVERRIDE],
+            return_hydra_config=True,
+        )
     HydraConfig.instance().set_config(cfg)
     return cfg
 

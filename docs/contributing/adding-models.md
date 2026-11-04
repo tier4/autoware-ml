@@ -255,9 +255,9 @@ of the evaluated database, and the optimizer from the shared `optimizers` group.
 root declares `metrics`, `metric_ranges`, `database` and the experiment name as mandatory, so a
 leaf cannot run until it names them.
 
-Create a range base per database that composes its metric suites and datamodule and writes the
-pipelines under `datasets.train` and `datasets.test`, then one leaf per database with the batch
-size, epochs and experiment name:
+Create a range base per database that composes its metric suites and datamodule, declares the
+classes the model trains, requires the taxonomy that folds the labels of the database onto them
+and writes the pipelines under `datasets.train` and `datasets.test`:
 
 ```yaml title="configs/tasks/my_task/my_model/t4dataset/base_122m.yaml"
 # @package _global_
@@ -267,7 +267,17 @@ defaults:
   - /metrics/t4dataset/segmentation3d@metrics: default_segmentation3d_metric_suites
   - /metrics/t4dataset/segmentation3d@metric_ranges: default_segmentation3d_120m_metric_ranges
   - /datamodule@datamodule: t4dataset/default_segmentation3d_datamodule
+  # The experiment selects the taxonomy that folds the labels of its database onto the classes
+  - /database/t4dataset/taxonomy/segmentation3d@taxonomy.segmentation3d: ???
   - _self_
+
+taxonomy:
+  segmentation3d:
+    class_names:
+      - car
+      - pedestrian
+      - driveable_flat
+      - vegetation
 
 point_cloud_range: [-122.88, -122.88, -3.0, 122.88, 122.88, 5.0]
 
@@ -303,11 +313,17 @@ datamodule:
     batch_size: 1
 ```
 
-```yaml title="configs/tasks/my_task/my_model/t4dataset/my_model_b8_50e_t4dataset_122m.yaml"
+A leaf binds the base to a database with the batch size, epochs and experiment name. A nuScenes
+leaf ships with the package. A T4Dataset leaf lives in an external config root next to its
+database and taxonomy and also selects the taxonomy, see
+[Configuration](../user-guide/configuration.md#external-configs-and-scenario-lists):
+
+```yaml title="/path/to/configs/tasks/my_task/my_model/t4dataset/my_model_b8_50e_t4dataset_122m.yaml"
 # @package _global_
 defaults:
   - base_122m
-  - /database@database: t4dataset/t4dataset_base
+  - /database@database: t4dataset/my_database
+  - override /database/t4dataset/taxonomy/segmentation3d@taxonomy.segmentation3d: my_taxonomy
   - _self_
 
 batch_size: 8
@@ -317,6 +333,10 @@ experiment_name: my_model_b8_50e_t4dataset_122m
 
 trainer:
   max_epochs: 50
+
+callbacks:
+  dynamic_validation:
+    epoch_intervals: [[0, 5], [40, 1]]
 ```
 
 The dataset configs leave `transforms` required, so every experiment writes the pipeline of the
@@ -468,7 +488,7 @@ Examples:
 
 ```text
 segmentation3d/ptv3/nuscenes/voxel005_b16_50e_nuscenes_51m
-segmentation3d/ptv3/t4dataset/voxel012_b16_50e_t4dataset_122m
+detection3d/centerpoint/nuscenes/voxel020_second_secfpn_b16_30e_nuscenes_51m
 my_task/my_model/my_dataset/my_variant_my_dataset
 ```
 

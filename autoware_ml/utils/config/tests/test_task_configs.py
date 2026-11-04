@@ -18,13 +18,9 @@ from __future__ import annotations
 
 import hydra
 import pytest
-from hydra import compose, initialize_config_dir
-from hydra.core.global_hydra import GlobalHydra
-from hydra.core.hydra_config import HydraConfig
 from omegaconf import OmegaConf
 
-from autoware_ml.utils.config.resolvers import register_config_resolvers
-from autoware_ml.utils.config.settings import CONFIGS_ROOT, Settings
+from autoware_ml.utils.config.tests.config_roots import compose_task, task_config_names
 
 # Building blocks and bases are not runnable on their own, only the leaves are.
 _BLOCKS = (
@@ -36,26 +32,14 @@ _BLOCKS = (
     "voxel_encoder",
     "default_task",
 )
-EXPERIMENT_CONFIGS = sorted(
-    path.relative_to(CONFIGS_ROOT).with_suffix("").as_posix()
-    for path in (CONFIGS_ROOT / "tasks").rglob("*.yaml")
-    if not path.stem.startswith(_BLOCKS)
-)
-
-
-def compose_experiment(config_name: str):
-    """Compose one experiment config with the run context the training entrypoint provides."""
-    register_config_resolvers(Settings())
-    GlobalHydra.instance().clear()
-    with initialize_config_dir(version_base=None, config_dir=str(CONFIGS_ROOT)):
-        cfg = compose(config_name=config_name, return_hydra_config=True)
-    HydraConfig.instance().set_config(cfg)
-    return cfg
+EXPERIMENT_CONFIGS = [
+    name for name in task_config_names() if not name.rsplit("/", 1)[-1].startswith(_BLOCKS)
+]
 
 
 @pytest.mark.parametrize("config_name", EXPERIMENT_CONFIGS)
 def test_every_experiment_instantiates_its_model_and_pipelines(config_name: str) -> None:
-    cfg = compose_experiment(config_name)
+    cfg = compose_task(config_name)
 
     data_preprocessor = hydra.utils.instantiate(cfg.data_preprocessor)
     hydra.utils.instantiate(cfg.datasets.train.transforms)
@@ -69,7 +53,7 @@ def test_every_warmup_decay_schedule_spans_the_training_epochs(config_name: str)
     # a schedule shorter than the run keeps evaluating the cosine past its end and climbs back
     # towards the peak learning rate. Every leaf therefore sets both counts to add up to
     # trainer.max_epochs. A top-level `scheduler` key is read by nothing and is a misplaced one.
-    cfg = compose_experiment(config_name)
+    cfg = compose_task(config_name)
     scheduler = cfg.model.get("scheduler")
     if scheduler is None or "warmup_epochs" not in scheduler or "decay_epochs" not in scheduler:
         return

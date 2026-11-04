@@ -1,0 +1,27 @@
+# Segmentation taxonomy of the test corpus that trains every fine name
+_target_: autoware_ml.databases.taxonomy.LabelTaxonomy
+
+defaults:
+  - /database/t4dataset/taxonomy/vocabulary@vocabulary: default_segmentation3d
+  - _self_
+
+ignore_index: -1
+# The model declares the classes it trains
+class_names: ???
+class_mapping:
+  car: car
+  truck: truck
+  bus: bus
+  motorcycle: motorcycle
+  bicycle: bicycle
+  pedestrian: pedestrian
+  animal: animal
+  barrier: barrier
+  traffic_cone: traffic_cone
+  debris: debris
+  driveable_flat: driveable_flat
+  non_driveable_flat: non_driveable_flat
+  vegetation: vegetation
+  manmade: manmade
+  vertical_thin: vertical_thin
+  noise: noise

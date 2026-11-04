@@ -1,4 +1,4 @@
-# Coarse taxonomy of T4dataset
+# Taxonomy of the test corpus that trains every fine name
 
 defaults:
   - /database/t4dataset/taxonomy/detection3d@detection3d: default_coarse

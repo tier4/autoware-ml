@@ -2,7 +2,8 @@ _target_: autoware_ml.databases.t4dataset.t4dataset.T4Dataset
 _convert_: all
 
 defaults:
-  - taxonomy/vocabulary@vocabulary: default_detection3d
+  # The vocabulary of the raw box labels of the database
+  - taxonomy/vocabulary@vocabulary: ???
   # The recording platform of the database
   - /ego@_global_.ego: ???
   - box3d_pipelines@box3d_pipelines: default_box3d_pipelines

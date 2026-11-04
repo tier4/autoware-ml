@@ -195,8 +195,8 @@ See `autoware_ml/databases/t4pack/t4pack.py`.
 
 ### Record Generation
 
-There is no separate generation entrypoint. A task config composes its database from
-`autoware_ml/configs/database/`, Hydra instantiates it, and the datamodule builds the record
+There is no separate generation entrypoint. A task config composes its database from the
+`database` config group, Hydra instantiates it, and the datamodule builds the record
 table of every database that has no cache yet in `prepare_data()`, which Lightning calls once
 on the main node before `setup()`:
 
@@ -235,4 +235,4 @@ to the old one. See [Configuration Guide](../user-guide/configuration.md) for th
 | `autoware_ml/databases/database_interface.py` | `DatabaseInterface` protocol                          |
 | `autoware_ml/databases/base_database.py`      | Shared `BaseDatabase` implementation                  |
 | `autoware_ml/datamodule/data_module.py`       | `prepare_data()` builds the record tables             |
-| `autoware_ml/configs/database/`               | YAML configs of every database                        |
+| `autoware_ml/configs/database/`               | Bundled database configs                              |

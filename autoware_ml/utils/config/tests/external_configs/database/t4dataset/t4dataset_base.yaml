@@ -1,7 +1,8 @@
-# T4Dataset base database: 10 Hz scenes with boxes and semantic masks
+# Test T4Dataset database of the external config root: 10 Hz scenes with boxes and semantic masks
 defaults:
   - t4dataset/t4dataset_common@_here_
   - t4dataset/scenarios@scenarios.db_default: detection3d_segmentation3d/db_default
+  - override t4dataset/taxonomy/vocabulary@vocabulary: default_detection3d
   - override /ego@_global_.ego: default_t4dataset
   - _self_
 
