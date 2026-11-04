@@ -23,6 +23,7 @@ from autoware_ml.databases.taxonomy import (
     Detection3DTaxonomy,
     LabelTaxonomy,
     LabelVocabulary,
+    PredictionTaxonomy,
     Segmentation3DTaxonomy,
 )
 from autoware_ml.types.metrics import AgentKind
@@ -80,6 +81,10 @@ def _segmentation3d() -> Segmentation3DTaxonomy:
     return Segmentation3DTaxonomy(
         VOCABULARY, OFFLINE_CLASSES, OFFLINE_COARSENING, -1, OFFLINE_GROUPS
     )
+
+
+def _prediction() -> PredictionTaxonomy:
+    return PredictionTaxonomy(VOCABULARY, ONLINE_CLASSES, ONLINE_COARSENING, -1, ONLINE_GROUPS)
 
 
 def test_vocabulary_resolves_fine_names_and_rejects_unlisted_raw_names() -> None:
@@ -249,3 +254,55 @@ def test_database_taxonomy_rejects_untyped_levels() -> None:
         DatabaseTaxonomy(detection3d=_coarse(), segmentation3d=_segmentation3d())
     with pytest.raises(TypeError, match="segmentation3d must be a Segmentation3DTaxonomy"):
         DatabaseTaxonomy(detection3d=_detection3d(), segmentation3d=_detection3d())
+    with pytest.raises(TypeError, match="prediction must be a PredictionTaxonomy"):
+        DatabaseTaxonomy(prediction=_coarse())
+
+
+def test_database_taxonomy_two_head_string_form_is_unchanged() -> None:
+    # The string form feeds the database hash of every existing cache
+    detection3d = _detection3d()
+    segmentation3d = _segmentation3d()
+    taxonomy = DatabaseTaxonomy(detection3d=detection3d, segmentation3d=segmentation3d)
+
+    assert str(taxonomy) == (
+        f"DatabaseTaxonomy(detection3d={detection3d}, segmentation3d={segmentation3d})"
+    )
+    assert "prediction" not in str(taxonomy)
+
+
+def test_database_taxonomy_accepts_a_prediction_only_definition() -> None:
+    prediction = _prediction()
+    taxonomy = DatabaseTaxonomy(prediction=prediction)
+
+    assert taxonomy.prediction is prediction
+    assert taxonomy.prediction.resolve_index("police_car") == 0
+    assert str(taxonomy) == f"DatabaseTaxonomy(prediction={prediction})"
+    assert str(taxonomy).startswith("DatabaseTaxonomy(prediction=PredictionTaxonomy(")
+    assert taxonomy == DatabaseTaxonomy(prediction=_prediction())
+
+
+def test_database_taxonomy_rejects_an_empty_definition() -> None:
+    with pytest.raises(ValueError, match="at least one head"):
+        DatabaseTaxonomy()
+
+
+def test_database_taxonomy_raises_for_an_absent_head() -> None:
+    prediction_only = DatabaseTaxonomy(prediction=_prediction())
+    perception = DatabaseTaxonomy(detection3d=_detection3d(), segmentation3d=_segmentation3d())
+
+    with pytest.raises(ValueError, match="no detection3d head"):
+        prediction_only.detection3d
+    with pytest.raises(ValueError, match="no segmentation3d head"):
+        prediction_only.segmentation3d
+    with pytest.raises(ValueError, match="no prediction head"):
+        perception.prediction
+
+
+def test_database_taxonomy_with_every_head_lists_them_in_order() -> None:
+    perception = DatabaseTaxonomy(detection3d=_detection3d(), segmentation3d=_segmentation3d())
+    every_head = DatabaseTaxonomy(
+        detection3d=_detection3d(), segmentation3d=_segmentation3d(), prediction=_prediction()
+    )
+
+    assert every_head != perception
+    assert str(every_head).startswith(str(perception)[:-1] + ", prediction=PredictionTaxonomy(")

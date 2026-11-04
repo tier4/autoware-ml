@@ -21,7 +21,8 @@ instead of being ignored. A taxonomy selects the classes trained at one level of
 and folds every fine name onto one of them or drops it. Boxes are baked with the fine name and
 the class index of the level when the record table is generated, and masks are resolved
 through the same objects when they are loaded, so one definition decides the labels of both
-heads.
+heads. A motion forecasting database carries a prediction taxonomy instead, which resolves the
+agent types of its tracks when they are loaded; a database defines only the heads it serves.
 """
 
 from __future__ import annotations
@@ -387,48 +388,105 @@ class Segmentation3DTaxonomy(LabelTaxonomy):
     """Segmentation classes of one level together with the behaviour groups of the metrics."""
 
 
+class PredictionTaxonomy(LabelTaxonomy):
+    """
+    Agent classes of one level for motion forecasting. The agent types of the tracks are
+    resolved with it when a scenario is loaded; an agent whose raw type the level drops keeps
+    the ignore index and stays in the tensors as context.
+    """
+
+
 class DatabaseTaxonomy:
-    """Taxonomies of the label spaces a database describes."""
+    """Taxonomies of the label spaces a database describes, one per head the database serves."""
 
     def __init__(
-        self, detection3d: Detection3DTaxonomy, segmentation3d: Segmentation3DTaxonomy
+        self,
+        detection3d: Detection3DTaxonomy | None = None,
+        segmentation3d: Segmentation3DTaxonomy | None = None,
+        prediction: PredictionTaxonomy | None = None,
     ) -> None:
         """
         Initialize the database taxonomy.
 
+        At least one head is required. A head the database does not serve is left None, and
+        reading its property raises a ValueError.
+
         Args:
           detection3d: Taxonomy the box labels are baked with.
           segmentation3d: Taxonomy the semantic mask categories are resolved with.
+          prediction: Taxonomy the agent types of the motion forecasting tracks are resolved
+            with.
         """
 
-        if not isinstance(detection3d, Detection3DTaxonomy):
+        if detection3d is not None and not isinstance(detection3d, Detection3DTaxonomy):
             raise TypeError(
                 f"detection3d must be a Detection3DTaxonomy, got {type(detection3d).__name__}."
             )
-        if not isinstance(segmentation3d, Segmentation3DTaxonomy):
+        if segmentation3d is not None and not isinstance(segmentation3d, Segmentation3DTaxonomy):
             raise TypeError(
                 "segmentation3d must be a Segmentation3DTaxonomy, got "
                 f"{type(segmentation3d).__name__}."
             )
+        if prediction is not None and not isinstance(prediction, PredictionTaxonomy):
+            raise TypeError(
+                f"prediction must be a PredictionTaxonomy, got {type(prediction).__name__}."
+            )
+        if detection3d is None and segmentation3d is None and prediction is None:
+            raise ValueError(
+                "A database taxonomy requires at least one head, set detection3d, "
+                "segmentation3d or prediction."
+            )
         self._detection3d = detection3d
         self._segmentation3d = segmentation3d
+        self._prediction = prediction
+
+    @staticmethod
+    def _require(head: LabelTaxonomy | None, name: str) -> LabelTaxonomy:
+        """
+        Return a head or raise when the database does not serve it.
+
+        Args:
+          head: The stored taxonomy, None when the head is absent.
+          name: Name of the head for the error message.
+
+        Returns:
+          LabelTaxonomy: The stored taxonomy.
+        """
+
+        if head is None:
+            raise ValueError(
+                f"This database taxonomy has no {name} head, the database does not serve {name}."
+            )
+        return head
 
     @property
     def detection3d(self) -> Detection3DTaxonomy:
-        """Taxonomy the box labels are baked with."""
-        return self._detection3d
+        """Taxonomy the box labels are baked with, raises when the head is absent."""
+        return self._require(self._detection3d, "detection3d")
 
     @property
     def segmentation3d(self) -> Segmentation3DTaxonomy:
-        """Taxonomy the semantic mask categories are resolved with."""
-        return self._segmentation3d
+        """Taxonomy the semantic mask categories are resolved with, raises when absent."""
+        return self._require(self._segmentation3d, "segmentation3d")
+
+    @property
+    def prediction(self) -> PredictionTaxonomy:
+        """Taxonomy the agent types of the tracks are resolved with, raises when absent."""
+        return self._require(self._prediction, "prediction")
 
     def __str__(self) -> str:
-        """Canonical string form, the input of the database hash."""
-        return (
-            f"{self.__class__.__name__}(detection3d={self._detection3d}, "
-            f"segmentation3d={self._segmentation3d})"
+        """
+        Canonical string form, the input of the database hash. Only the heads that are set are
+        listed, so adding a head never changes the string of a database without it.
+        """
+
+        heads = (
+            ("detection3d", self._detection3d),
+            ("segmentation3d", self._segmentation3d),
+            ("prediction", self._prediction),
         )
+        parts = ", ".join(f"{name}={head}" for name, head in heads if head is not None)
+        return f"{self.__class__.__name__}({parts})"
 
     def __eq__(self, other: object) -> bool:
         """Compare two database taxonomies by their definition."""
