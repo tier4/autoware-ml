@@ -113,3 +113,53 @@ class CyclicCosineAnnealingLR(LRScheduler):
         )
 
         return [base_lr * lr_factor for base_lr in self.base_lrs]
+
+
+class StepCyclicCosineAnnealingLR(CyclicCosineAnnealingLR):
+    """Cyclic cosine annealing stepped every optimizer step, its phases given in epochs.
+
+    The phases are spread over the optimizer steps of the run, so it needs a Lightning
+    scheduler config with ``interval: step``. The framework fills ``total_steps`` from the
+    trainer.
+
+    Args:
+        optimizer: Wrapped optimizer.
+        total_steps: Optimizer steps of the whole run.
+        warmup_epochs: Epochs of the warmup phase.
+        decay_epochs: Epochs of the decay phase.
+        max_lr_factor: Max LR = base_lr * max_lr_factor.
+        min_lr_factor: Min LR = base_lr * min_lr_factor.
+        last_epoch: The index of the last step.
+    """
+
+    def __init__(
+        self,
+        optimizer: Optimizer,
+        total_steps: int,
+        warmup_epochs: float,
+        decay_epochs: float,
+        max_lr_factor: float = 10.0,
+        min_lr_factor: float = 1e-4,
+        last_epoch: int = -1,
+    ) -> None:
+        """Initialize the per-step cyclic cosine annealing scheduler.
+
+        Raises:
+            ValueError: If the run has no steps or a phase is negative.
+        """
+        if total_steps < 1:
+            raise ValueError(f"total_steps must be positive, got {total_steps}.")
+        if warmup_epochs < 0 or decay_epochs <= 0:
+            raise ValueError(
+                f"Phases need warmup_epochs >= 0 and decay_epochs > 0, got {warmup_epochs} "
+                f"and {decay_epochs}."
+            )
+        warmup_steps = round(total_steps * warmup_epochs / (warmup_epochs + decay_epochs))
+        super().__init__(
+            optimizer,
+            warmup_epochs=warmup_steps,
+            decay_epochs=total_steps - warmup_steps,
+            max_lr_factor=max_lr_factor,
+            min_lr_factor=min_lr_factor,
+            last_epoch=last_epoch,
+        )

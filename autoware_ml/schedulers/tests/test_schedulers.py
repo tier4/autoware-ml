@@ -22,7 +22,10 @@ import torch
 
 from autoware_ml.utils.optimizer import build_lightning_optimizer_config
 from autoware_ml.utils.schedulers.cosine_annealing import CosineAnnealingLR
-from autoware_ml.utils.schedulers.cyclic_cosine_annealing import CyclicCosineAnnealingLR
+from autoware_ml.utils.schedulers.cyclic_cosine_annealing import (
+    CyclicCosineAnnealingLR,
+    StepCyclicCosineAnnealingLR,
+)
 from autoware_ml.utils.schedulers.cyclic_momentum import CyclicMomentumScheduler
 from autoware_ml.utils.schedulers.iter_warmup_epoch_cosine import IterWarmupEpochCosineLR
 from autoware_ml.utils.schedulers.linear_warmup_cosine_annealing import (
@@ -158,6 +161,31 @@ class TestCyclicCosineAnnealingLR:
         assert abs(final_lr - expected_min) < expected_min * 0.1, (
             f"Final LR {final_lr} should be close to {expected_min}"
         )
+
+
+class TestStepCyclicCosineAnnealingLR:
+    """Tests for StepCyclicCosineAnnealingLR scheduler."""
+
+    def test_epoch_phases_spread_over_the_steps(self, optimizer: torch.optim.Optimizer) -> None:
+        scheduler = StepCyclicCosineAnnealingLR(
+            optimizer, total_steps=48096, warmup_epochs=2, decay_epochs=22, max_lr_factor=5.0
+        )
+        assert scheduler.warmup_epochs == 4008
+        assert scheduler.decay_epochs == 44088
+
+    def test_peak_lands_at_the_end_of_warmup(
+        self, optimizer: torch.optim.Optimizer, base_lr: float
+    ) -> None:
+        scheduler = StepCyclicCosineAnnealingLR(
+            optimizer, total_steps=40, warmup_epochs=0.5, decay_epochs=9.5, max_lr_factor=5.0
+        )
+        for _ in range(2):
+            scheduler.step()
+        assert optimizer.param_groups[0]["lr"] == pytest.approx(base_lr * 5.0)
+
+    def test_rejects_an_empty_run(self, optimizer: torch.optim.Optimizer) -> None:
+        with pytest.raises(ValueError, match="total_steps"):
+            StepCyclicCosineAnnealingLR(optimizer, total_steps=0, warmup_epochs=1, decay_epochs=1)
 
 
 class TestCyclicMomentumScheduler:
