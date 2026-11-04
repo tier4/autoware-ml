@@ -46,6 +46,10 @@ from autoware_ml.models.detection3d.task_modules.nms_groups import (
     filter_nms_groups,
     resolve_nms_groups,
 )
+from autoware_ml.ops.deformable_aggregation.bev_deformable_aggregation import (
+    BEVLevel,
+    bev_deformable_aggregation,
+)
 from autoware_ml.ops.deformable_aggregation.sparse_deformable_aggregation import (
     EMPTY_ROW,
     SparseLevel,
@@ -864,8 +868,9 @@ class SparseDeformableAggregation(nn.Module):
 
     Keypoints interpolate trilinearly over every sampled stage, the weights normalize over the
     stages and the keypoints of every feature group. Keypoints in empty space read zeros, so the
-    weighted sum is divided by the weight that landed on occupied voxels. A subclass joins the
-    features of its frame context, see :meth:`join_context`.
+    weighted sum is divided by the weight that landed on occupied voxels. A BEV branch samples
+    dense BEV maps at the same keypoints and adds to the voxel features, or replaces them. A
+    subclass joins the features of its frame context, see :meth:`join_context`.
     """
 
     def __init__(
@@ -877,6 +882,8 @@ class SparseDeformableAggregation(nn.Module):
         kps_generator: KeyPointsGenerator,
         proj_drop: float = 0.0,
         attn_drop: float = 0.0,
+        bev_aggregation: BEVDeformableAggregation | None = None,
+        sample_sparse: bool = True,
     ) -> None:
         """Initialize the sparse deformable aggregation branch.
 
@@ -887,21 +894,34 @@ class SparseDeformableAggregation(nn.Module):
             kps_generator: Shared keypoint generator.
             proj_drop: Dropout on the output projection.
             attn_drop: Probability of dropping whole keypoints in training.
+            bev_aggregation: BEV map sampling at the same keypoints, None without BEV maps.
+            sample_sparse: Whether the block samples the sparse voxels.
+
+        Raises:
+            ValueError: If the block samples no lidar features.
         """
         super().__init__()
         if embed_dims % num_groups != 0:
             raise ValueError(f"embed_dims {embed_dims} not divisible by num_groups {num_groups}.")
+        if not sample_sparse and bev_aggregation is None:
+            raise ValueError("The block samples the sparse voxels, BEV maps or both.")
         self.embed_dims = embed_dims
         self.num_groups = num_groups
         self.num_levels = num_levels
         self.kps_generator = kps_generator
         self.num_pts = kps_generator.num_pts
         self.attn_drop = attn_drop
-        self.weights_fc = nn.Linear(embed_dims, num_groups * num_levels * self.num_pts)
-        self.output_proj = nn.Linear(embed_dims, embed_dims)
+        self.sample_sparse = sample_sparse
+        # A BEV only block has no voxel weights, every parameter must train under DDP
+        self.weights_fc = (
+            nn.Linear(embed_dims, num_groups * num_levels * self.num_pts) if sample_sparse else None
+        )
+        self.output_proj = nn.Linear(embed_dims, embed_dims) if sample_sparse else None
         self.proj_drop = nn.Dropout(proj_drop)
-        nn.init.zeros_(self.weights_fc.weight)
-        nn.init.zeros_(self.weights_fc.bias)
+        self.bev_aggregation = bev_aggregation
+        if self.weights_fc is not None:
+            nn.init.zeros_(self.weights_fc.weight)
+            nn.init.zeros_(self.weights_fc.bias)
 
     def forward(
         self,
@@ -909,6 +929,7 @@ class SparseDeformableAggregation(nn.Module):
         anchor: torch.Tensor,
         anchor_embed: torch.Tensor,
         levels: Sequence[SparseLevel],
+        bev_levels: Sequence[BEVLevel] = (),
         context: Any = None,
     ) -> torch.Tensor:
         """Aggregate sparse voxel features into the instance features.
@@ -918,6 +939,7 @@ class SparseDeformableAggregation(nn.Module):
             anchor: Anchor states ``(B, N, 10)``.
             anchor_embed: Anchor embeddings ``(B, N, C)``.
             levels: Sampled encoder stages with their voxel lookup.
+            bev_levels: Dense BEV maps of the BEV branch.
             context: Frame context of a subclass block, None for the lidar block.
 
         Returns:
@@ -925,13 +947,22 @@ class SparseDeformableAggregation(nn.Module):
         """
         key_points = self.kps_generator(anchor, instance_feature)
         query = instance_feature + anchor_embed
-        weights = keypoint_dropout(
-            _group_softmax(self.weights_fc(query), self.num_levels * self.num_pts),
-            self.attn_drop,
-            self.training,
+        bev = (
+            None
+            if self.bev_aggregation is None
+            else self.bev_aggregation(query, key_points, bev_levels)
         )
-        features = sparse_deformable_aggregation(key_points, weights, levels, MIN_OCCUPANCY)
-        output = self.join_context(self.output_proj(features), query, key_points, context)
+        if self.sample_sparse:
+            weights = keypoint_dropout(
+                _group_softmax(self.weights_fc(query), self.num_levels * self.num_pts),
+                self.attn_drop,
+                self.training,
+            )
+            features = sparse_deformable_aggregation(key_points, weights, levels, MIN_OCCUPANCY)
+            output = self.output_proj(features) if bev is None else self.output_proj(features) + bev
+        else:
+            output = bev
+        output = self.join_context(output, query, key_points, context)
         return instance_feature + self.proj_drop(output)
 
     def join_context(
@@ -968,6 +999,67 @@ def keypoint_dropout(weights: torch.Tensor, drop: float, training: bool) -> torc
         return weights
     mask = torch.rand_like(weights[..., :1]) > drop
     return weights * mask / (1.0 - drop)
+
+
+class BEVDeformableAggregation(nn.Module):
+    """Sample dense BEV maps at the keypoints' (x, y) with learned weights per level and point."""
+
+    def __init__(
+        self,
+        *,
+        embed_dims: int,
+        bev_channels: int,
+        num_groups: int,
+        num_levels: int,
+        num_points: int,
+        attn_drop: float = 0.0,
+    ) -> None:
+        """Initialize the BEV branch.
+
+        Args:
+            embed_dims: Instance feature dimension.
+            bev_channels: Feature dimension of the BEV maps.
+            num_groups: Number of feature groups sharing one weight.
+            num_levels: Number of sampled BEV levels.
+            num_points: Keypoints per instance.
+            attn_drop: Probability of dropping whole samples in training.
+
+        Raises:
+            ValueError: If the BEV channels do not split into the groups.
+        """
+        super().__init__()
+        if bev_channels % num_groups != 0:
+            raise ValueError(f"bev_channels {bev_channels} not divisible by {num_groups} groups.")
+        self.num_levels = num_levels
+        self.num_samples = num_levels * num_points
+        self.attn_drop = attn_drop
+        self.weights_fc = nn.Linear(embed_dims, num_groups * self.num_samples)
+        self.output_proj = nn.Linear(bev_channels, embed_dims)
+        nn.init.zeros_(self.weights_fc.weight)
+        nn.init.zeros_(self.weights_fc.bias)
+
+    def forward(
+        self, query: torch.Tensor, key_points: torch.Tensor, levels: Sequence[BEVLevel]
+    ) -> torch.Tensor:
+        """Aggregate the BEV samples of the keypoints into instance features.
+
+        Args:
+            query: Instance features with the anchor embedding ``(B, N, C)``.
+            key_points: Metric keypoints ``(B, N, P, 3)``.
+            levels: BEV levels, finest first.
+
+        Returns:
+            BEV features of the instances ``(B, N, C)``.
+
+        Raises:
+            ValueError: If the number of levels does not match the branch.
+        """
+        if len(levels) != self.num_levels:
+            raise ValueError(f"The BEV branch samples {self.num_levels} levels, got {len(levels)}.")
+        weights = keypoint_dropout(
+            _group_softmax(self.weights_fc(query), self.num_samples), self.attn_drop, self.training
+        )
+        return self.output_proj(bev_deformable_aggregation(key_points, weights, levels))
 
 
 class DecoupledInstanceAttention(nn.Module):
@@ -1360,6 +1452,9 @@ class SparseQueryHead(nn.Module):
         anchor_encoder: nn.Module,
         kps_generator: Callable[[], KeyPointsGenerator],
         refine: Callable[[], nn.Module],
+        bev: nn.Module | None = None,
+        bev_aggregation: Callable[[], BEVDeformableAggregation | None] = lambda: None,
+        sample_sparse: bool = True,
         aggregation: Callable[..., SparseDeformableAggregation] = SparseDeformableAggregation,
     ) -> None:
         """Create the decoder blocks.
@@ -1379,10 +1474,15 @@ class SparseQueryHead(nn.Module):
             anchor_encoder: Embedding of the anchors.
             kps_generator: Builds the keypoint generator of one block.
             refine: Builds the refinement of one block.
+            bev: Builds the BEV levels of a frame from the stages, None without BEV maps.
+            bev_aggregation: Builds the BEV sampling of one block, None without BEV maps.
+            sample_sparse: Whether the blocks sample the sparse voxels.
             aggregation: Builds the deformable aggregation of one block from its keyword
                 arguments.
         """
         self.num_decoder = num_decoder
+        self.bev = bev
+        self.sample_sparse = sample_sparse
         self.anchor_encoder = anchor_encoder
         self.gnn = nn.ModuleList(
             [
@@ -1413,6 +1513,8 @@ class SparseQueryHead(nn.Module):
                     kps_generator=kps_generator(),
                     proj_drop=dropout,
                     attn_drop=attn_drop,
+                    bev_aggregation=bev_aggregation(),
+                    sample_sparse=sample_sparse,
                 )
                 for _ in range(num_decoder)
             ]
@@ -1460,8 +1562,14 @@ class SparseQueryHead(nn.Module):
         return context
 
     def levels(self, stages: Sequence[SparseStage]) -> list[SparseLevel]:
-        """Look up the voxels of every sampled stage once per frame."""
+        """Look up the voxels of every sampled stage once per frame, none for a BEV only head."""
+        if not self.sample_sparse:
+            return []
         return [grid(*stage) for grid, stage in zip(self.level_grids, stages, strict=True)]
+
+    def bev_levels(self, stages: Sequence[SparseStage]) -> list[BEVLevel]:
+        """Build the BEV maps of the stages once per frame, none for a head without them."""
+        return [] if self.bev is None else self.bev(stages)
 
     def _decode(
         self,
@@ -1477,6 +1585,7 @@ class SparseQueryHead(nn.Module):
         | None,
         denoising: DenoisingQueries | None = None,
         context: Any = None,
+        bev_levels: Sequence[BEVLevel] = (),
     ) -> _DecoderOutputs:
         """Run the decoder blocks over the sampled sparse encoder stages.
 
@@ -1494,6 +1603,7 @@ class SparseQueryHead(nn.Module):
             denoising: Optional denoising queries appended at the tail with
                 zero features and the isolation mask on the instance attention.
             context: Frame context of a subclass head, None for the lidar head.
+            bev_levels: BEV maps of a head with a BEV branch.
 
         Returns:
             The per layer outputs over the regular and the denoising queries
@@ -1526,7 +1636,7 @@ class SparseQueryHead(nn.Module):
                 )
                 instance_feature = self.gnn_norm[block_index - 1](instance_feature)
             instance_feature = self.deformable[block_index](
-                instance_feature, anchor, anchor_embed, levels, block_context
+                instance_feature, anchor, anchor_embed, levels, bev_levels, block_context
             )
             instance_feature = self.deformable_norm[block_index](instance_feature)
             instance_feature = self.ffn_norm[block_index](
@@ -1637,6 +1747,7 @@ class SparseQueryHead(nn.Module):
             temp_anchor,
             merge,
             context=context,
+            bev_levels=self.bev_levels(stages),
         )
         state_feature, state_anchor, state_confidence, query_index = bank.select_temporal_state(
             decoded.instance_feature,
@@ -1757,6 +1868,9 @@ class Sparse4DHead(SparseQueryHead):
         dn_noise_size: float = 0.2,
         dn_noise_yaw: float = 0.39,
         dn_noise_velocity: float = 1.0,
+        lidar_sampling: str = "sparse",
+        bev: nn.Module | None = None,
+        bev_channels: int = 0,
         aggregation: Callable[..., SparseDeformableAggregation] = SparseDeformableAggregation,
         yaw_free_classes: Sequence[str] = (),
         yaw_reversible_classes: Sequence[str] = (),
@@ -1818,6 +1932,10 @@ class Sparse4DHead(SparseQueryHead):
             dn_noise_size: Half range of the uniform log size jitter.
             dn_noise_yaw: Half range of the uniform heading rotation in radians.
             dn_noise_velocity: Half range of the uniform velocity jitter in m/s.
+            lidar_sampling: ``sparse`` samples the sparse voxels, ``sparse_bev`` adds the BEV
+                maps of ``bev`` and ``bev`` samples the BEV maps alone.
+            bev: Builds the BEV levels of a frame from the stages, exactly for BEV sampling.
+            bev_channels: Feature dimension of the BEV maps.
             aggregation: Builds the deformable aggregation of one decoder block from its keyword
                 arguments.
             yaw_free_classes: Classes without a heading, such as traffic cones, whose yaw
@@ -1828,6 +1946,14 @@ class Sparse4DHead(SparseQueryHead):
                 ranks instead of the count of each rank.
         """
         super().__init__()
+        if lidar_sampling not in {"sparse", "sparse_bev", "bev"}:
+            raise ValueError(
+                f"lidar_sampling must be sparse, sparse_bev or bev, got {lidar_sampling}."
+            )
+        if (bev is None) != (lidar_sampling == "sparse"):
+            raise ValueError(
+                f"lidar_sampling {lidar_sampling} needs BEV levels exactly with BEV maps."
+            )
         if len(reg_weights) != ANCHOR_DIM or len(match_reg_weights) != ANCHOR_DIM:
             raise ValueError(
                 f"reg_weights and match_reg_weights need {ANCHOR_DIM} entries, got "
@@ -1939,6 +2065,18 @@ class Sparse4DHead(SparseQueryHead):
             refine=lambda: SparseBox3DRefinementModule(
                 embed_dims=embed_dims, num_classes=num_classes
             ),
+            bev=bev,
+            bev_aggregation=lambda: None
+            if bev is None
+            else BEVDeformableAggregation(
+                embed_dims=embed_dims,
+                bev_channels=bev_channels,
+                num_groups=num_groups,
+                num_levels=bev.num_levels,
+                num_points=len(fix_scale) + num_learnable_pts,
+                attn_drop=attn_drop,
+            ),
+            sample_sparse=lidar_sampling != "bev",
             aggregation=aggregation,
         )
         self.loss_cls = SigmoidFocalLoss()
@@ -2028,6 +2166,7 @@ class Sparse4DHead(SparseQueryHead):
             merge,
             denoising,
             context,
+            self.bev_levels(stages),
         )
         if temp_feature is not None:
             self.instance_bank.cache(

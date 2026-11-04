@@ -38,6 +38,7 @@ from autoware_ml.models.segmentation3d.ptv3_base import (
     prepare_ptv3_export_inputs,
     stage_voxel_axis_name,
 )
+from autoware_ml.ops.deformable_aggregation.bev_deformable_aggregation import BEVLevel
 from autoware_ml.utils.deploy import ExportSpec
 from autoware_ml.utils.point_cloud.batching import offset_to_batch
 from autoware_ml.utils.point_cloud.structures import Point
@@ -379,6 +380,106 @@ class PTv3Det3DBEVNeck(nn.Module):
         fused, grid_coord, offset = self.fusion(point)
         bev = self.bev_projector(fused, grid_coord, offset)
         return self.bev_encoder(bev)
+
+
+class PTv3StageBEVPyramid(nn.Module):
+    """Dense BEV maps of fused sparse stages for heads that sample them at (x, y).
+
+    Every projected stage scatters its voxels onto the BEV grid of its stride with the maximum
+    over height. The coarsest projected map runs through a BEV encoder and halves into the
+    downsampled levels.
+    """
+
+    def __init__(
+        self,
+        *,
+        point_cloud_range: Sequence[float],
+        grid_size: float,
+        stage_strides: Sequence[int],
+        projected_strides: Sequence[int],
+        in_channels: int,
+        channels: int,
+        bev_encoder: PTv3BEVEncoder,
+        num_downsampled: int = 0,
+    ) -> None:
+        """Initialize the BEV pyramid.
+
+        Args:
+            point_cloud_range: Metric range of the voxel grid.
+            grid_size: Metric size of the input voxel grid.
+            stage_strides: Total pooling strides of the fused stages, finest first.
+            projected_strides: Strides of the stages projected onto BEV, finest first.
+            in_channels: Feature dimension of the fused stages.
+            channels: Feature dimension of the BEV maps.
+            bev_encoder: Encoder of the coarsest projected map.
+            num_downsampled: Levels halved from the encoded map, coarser than every stage.
+
+        Raises:
+            ValueError: If a projected stride is not a stage stride or the strides are unsorted.
+        """
+        super().__init__()
+        missing = [stride for stride in projected_strides if stride not in stage_strides]
+        if missing or list(projected_strides) != sorted(projected_strides):
+            raise ValueError(
+                f"projected_strides {list(projected_strides)} must be sorted stage strides "
+                f"{list(stage_strides)}."
+            )
+        cells = [
+            round((point_cloud_range[axis + 3] - point_cloud_range[axis]) / grid_size)
+            for axis in (0, 1)
+        ]
+        self.stage_indices = [list(stage_strides).index(stride) for stride in projected_strides]
+        self.grid_origin = (float(point_cloud_range[0]), float(point_cloud_range[1]))
+        self.cell_sizes = [grid_size * stride for stride in projected_strides] + [
+            grid_size * projected_strides[-1] * 2 ** (level + 1) for level in range(num_downsampled)
+        ]
+        self.projections = nn.ModuleList(
+            PTv3BEVProjection(
+                in_channels,
+                channels,
+                output_shape=(-(-cells[1] // stride), -(-cells[0] // stride)),
+                assume_valid_grid_coord=True,
+            )
+            for stride in projected_strides
+        )
+        self.bev_encoder = bev_encoder
+        self.downsample = nn.ModuleList(
+            nn.Sequential(
+                nn.Conv2d(channels, channels, kernel_size=3, stride=2, padding=1, bias=False),
+                nn.BatchNorm2d(channels, eps=1e-3, momentum=0.01),
+                nn.ReLU(inplace=True),
+            )
+            for _ in range(num_downsampled)
+        )
+
+    @property
+    def num_levels(self) -> int:
+        """Number of returned BEV levels."""
+        return len(self.cell_sizes)
+
+    def forward(
+        self, stages: Sequence[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]
+    ) -> list[BEVLevel]:
+        """Project the stages onto BEV and build the coarser levels.
+
+        Args:
+            stages: Features, voxel coordinates and batch offsets of the fused stages, finest
+                first.
+
+        Returns:
+            BEV levels from the finest to the coarsest.
+        """
+        maps = [
+            projection(*stages[index])
+            for projection, index in zip(self.projections, self.stage_indices, strict=True)
+        ]
+        maps[-1] = self.bev_encoder(maps[-1])
+        for downsample in self.downsample:
+            maps.append(downsample(maps[-1]))
+        return [
+            BEVLevel(feat, self.grid_origin, cell_size)
+            for feat, cell_size in zip(maps, self.cell_sizes, strict=True)
+        ]
 
 
 def _grid_coord_stages(stages: range, deepest_grid_coord: bool) -> range:
