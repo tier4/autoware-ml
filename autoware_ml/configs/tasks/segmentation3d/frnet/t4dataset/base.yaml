@@ -31,6 +31,8 @@ taxonomy:
       - vertical_thin
       - noise
 
+instance_classes: [car, truck, bus, motorcycle, bicycle, pedestrian, animal, barrier, traffic_cone, debris]
+
 # Channel names of the lidars served one by one, each as its own sample in its own frame.
 lidar_sources: ???
 

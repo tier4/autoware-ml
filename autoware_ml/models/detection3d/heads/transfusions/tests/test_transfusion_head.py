@@ -1138,13 +1138,13 @@ class TestTransFusionHead(unittest.TestCase):
 
     def _build_iou_loss(
         self,
-        labels_to_ignore_rotation: Sequence[str] | None = None,
+        rotation_invariant_classes: Sequence[str] | None = None,
         loss_weight: float = 1.0,
     ) -> Rotated2DIouLoss:
         """Build a rotated IoU loss on the fixture's grid geometry."""
         return Rotated2DIouLoss(
             class_names=self.class_names,
-            labels_to_ignore_rotation=labels_to_ignore_rotation,
+            rotation_invariant_classes=rotation_invariant_classes,
             loss_weight=loss_weight,
         )
 

@@ -11,6 +11,8 @@ fov_up: ???
 fov_down: ???
 range_height: ???
 range_width: ???
+# Classes whose points the instance copy moves between the samples of a batch.
+instance_classes: ???
 # Frustum grid the features are pooled on.
 frustum_height: ???
 frustum_width: ???
@@ -26,7 +28,8 @@ data_preprocessor:
       num_areas: [3, 4, 5, 6]
     - _target_: autoware_ml.preprocessing.segmentation3d.range_view.InstanceCopy
       probability: 1.0
-      instance_classes: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+      instance_classes: ${instance_classes}
+      class_names: ${taxonomy.segmentation3d.class_names}
     - _target_: autoware_ml.preprocessing.segmentation3d.range_view.RangeInterpolation
       height: ${range_height}
       width: ${range_width}

@@ -29,7 +29,7 @@ from autoware_ml.datamodule.t4dataset.dataset import T4Dataset
 from autoware_ml.datamodule.common.detection3d import Detection3DTask
 from autoware_ml.datamodule.t4dataset.segmentation3d import T4Segmentation3DTask
 from autoware_ml.transforms.base import TransformsCompose
-from autoware_ml.transforms.boxes3d.filters import BBoxesLabelNameFilter, BBoxesRangeFilter
+from autoware_ml.transforms.boxes3d.filters import BBoxesIgnoreIndexFilter, BBoxesRangeFilter
 from autoware_ml.transforms.camera_lidar.geometry import (
     GlobalBEVRandomFlip,
     GlobalRotScaleTrans,
@@ -222,7 +222,7 @@ def build_transforms() -> TransformsCompose:
             RandomStrengthJitter(
                 gamma_range=(0.8, 1.25), scale_range=(0.9, 1.1), shift_range=(-0.02, 0.02)
             ),
-            BBoxesLabelNameFilter(label_names_to_keep=["car"], class_names=["car"]),
+            BBoxesIgnoreIndexFilter(ignore_index=-1),
             BBoxesRangeFilter(point_cloud_range=POINT_CLOUD_RANGE),
         ]
     )

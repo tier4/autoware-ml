@@ -39,7 +39,7 @@ model:
   partial_annotations:
     _target_: autoware_ml.models.detection3d.task_modules.partial_annotations.PartialAnnotations
     class_names: ${taxonomy.detection3d.class_names}
-    partial_ignore_labels: [traffic_cone, barrier]
+    partially_annotated_classes: [traffic_cone, barrier]
   bbox_head:
     num_proposals: 500
     dense_heatmap_pooling_class_names: [car, truck, bus, barrier]
@@ -152,11 +152,10 @@ datasets:
         - _target_: autoware_ml.transforms.point_cloud.geometry.PointsRandomShuffle
           _convert_: all
 
-        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesLabelNameFilter
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesIgnoreIndexFilter
           _convert_: all
 
-          label_names_to_keep: ${taxonomy.detection3d.class_names}
-          class_names: ${taxonomy.detection3d.class_names}
+          ignore_index: ${taxonomy.detection3d.ignore_index}
 
         - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesRangeFilter
           _convert_: all
@@ -224,11 +223,10 @@ datasets:
 
           max_absolute_speed: 150.0 # m/s, 540 km/h
 
-        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesLabelNameFilter
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesIgnoreIndexFilter
           _convert_: all
 
-          label_names_to_keep: ${taxonomy.detection3d.class_names}
-          class_names: ${taxonomy.detection3d.class_names}
+          ignore_index: ${taxonomy.detection3d.ignore_index}
 
         - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesAttributeFilter
           _convert_: all

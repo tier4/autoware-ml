@@ -31,27 +31,28 @@ class PartialAnnotations:
 
     Args:
         class_names: Detection class names, in head order.
-        partial_ignore_labels: Class names whose annotations the dataset flag covers. In a
+        partially_annotated_classes: Class names whose annotations the dataset flag covers. In a
             sample flagged as not annotated, these classes are reported as unannotated so the
             head neither supervises their dense heatmap nor pushes negative queries away from
             them. Every other class is always annotated.
     """
 
-    def __init__(self, class_names: Sequence[str], partial_ignore_labels: Sequence[str]) -> None:
+    def __init__(
+        self, class_names: Sequence[str], partially_annotated_classes: Sequence[str]
+    ) -> None:
         self.class_names = list(class_names)
-        if len(partial_ignore_labels) == 0:
+        if len(partially_annotated_classes) == 0:
             raise ValueError(
-                "PartialAnnotations needs at least one label in partial_ignore_labels, "
+                "PartialAnnotations needs at least one class in partially_annotated_classes, "
                 "leave partial_annotations unset to supervise every class."
             )
-        unknown_labels = [label for label in partial_ignore_labels if label not in self.class_names]
-        if unknown_labels:
+        unknown = [name for name in partially_annotated_classes if name not in self.class_names]
+        if unknown:
             raise ValueError(
-                f"PartialAnnotations labels {unknown_labels} are not in class_names "
-                f"{self.class_names}."
+                f"PartialAnnotations classes {unknown} are not in class_names {self.class_names}."
             )
         self.partial_ignore_class_ids: Sequence[int] = sorted(
-            {self.class_names.index(label) for label in partial_ignore_labels}
+            {self.class_names.index(name) for name in partially_annotated_classes}
         )
 
     @property

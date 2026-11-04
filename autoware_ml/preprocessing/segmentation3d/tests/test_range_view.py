@@ -124,7 +124,15 @@ class TestRangeViewBatchLayers(unittest.TestCase):
         mix = FrustumMix(height=1, width=8, fov_up=10.0, fov_down=-10.0, num_areas=[2])
 
         self.assertIs(mix(inputs, is_training=False), inputs)
-        self.assertIs(InstanceCopy(instance_classes=[1])(inputs, is_training=False), inputs)
+        copy = InstanceCopy(instance_classes=["truck"], class_names=["car", "truck"])
+        self.assertIs(copy(inputs, is_training=False), inputs)
+
+    def test_instance_copy_resolves_its_classes_by_name(self) -> None:
+        copy = InstanceCopy(instance_classes=["truck", "car"], class_names=["car", "truck"])
+
+        self.assertEqual(copy.instance_classes, [1, 0])
+        with self.assertRaisesRegex(ValueError, "bus"):
+            InstanceCopy(instance_classes=["bus"], class_names=["car", "truck"])
 
 
 if __name__ == "__main__":

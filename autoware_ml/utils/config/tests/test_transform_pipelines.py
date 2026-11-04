@@ -72,4 +72,4 @@ _DETECTION3D_TEST = [
 def test_detection3d_evaluation_drops_the_boxes_of_ignored_classes(
     config: str, split: str, steps: list[str]
 ) -> None:
-    assert any(t.endswith("boxes3d.filters.BBoxesLabelNameFilter") for t in steps)
+    assert any(t.endswith("boxes3d.filters.BBoxesIgnoreIndexFilter") for t in steps)

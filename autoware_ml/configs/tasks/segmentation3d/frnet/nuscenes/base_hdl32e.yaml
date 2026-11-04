@@ -30,6 +30,10 @@ taxonomy:
       - other_stuff
       - noise
 
+# The first ten classes, the surfaces among them included
+instance_classes:
+  [car, truck, bus, bicycle, pedestrian, traffic_cone, barrier, debris, drivable_surface, other_flat_surface]
+
 fov_up: 10.0
 fov_down: -30.0
 range_height: 32

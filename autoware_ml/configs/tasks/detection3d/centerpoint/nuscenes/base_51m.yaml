@@ -87,11 +87,10 @@ datasets:
 
           max_absolute_speed: 150.0 # m/s, 540 km/h
 
-        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesLabelNameFilter
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesIgnoreIndexFilter
           _convert_: all
 
-          label_names_to_keep: ${taxonomy.detection3d.class_names}
-          class_names: ${taxonomy.detection3d.class_names}
+          ignore_index: ${taxonomy.detection3d.ignore_index}
 
         - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesAttributeFilter
           _convert_: all
@@ -149,11 +148,10 @@ datasets:
 
           max_absolute_speed: 150.0 # m/s, 540 km/h
 
-        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesLabelNameFilter
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesIgnoreIndexFilter
           _convert_: all
 
-          label_names_to_keep: ${taxonomy.detection3d.class_names}
-          class_names: ${taxonomy.detection3d.class_names}
+          ignore_index: ${taxonomy.detection3d.ignore_index}
 
 # The datamodule binds the datasets below to the splits of its sources. Validation and predict
 # read the test dataset.
