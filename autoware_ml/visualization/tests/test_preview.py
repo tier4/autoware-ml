@@ -105,6 +105,7 @@ def _boxes(num_boxes: int) -> LidarBBoxes3D:
         bbox_labels=torch.zeros(num_boxes, dtype=torch.int32),
         bbox_label_names=["car"] * num_boxes,
         bbox_num_lidar_points=torch.ones(num_boxes, dtype=torch.int32),
+        bbox_instance_ids=torch.arange(num_boxes),
         bbox_center_coordinate_type=Box3DCenterCoordinateType.GRAVITY_CENTER,
     )
 

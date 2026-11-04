@@ -16,21 +16,24 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 
 import pytest
 import torch
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
+from autoware_ml.geometry.points.lidar_points import LiDARPoints
 from autoware_ml.transforms.boxes3d.filters import (
     BBoxesAttributeFilter,
     BBoxesIgnoreIndexFilter,
     BBoxesMinPointsFilter,
     BBoxesPhysicalFilter,
+    BBoxesPointCount,
     BBoxesRangeFilter,
 )
-from autoware_ml.types.geometry import Box3DCenterCoordinateType, Box3DFieldIndex
+
+from autoware_ml.types.geometry import Box3DCenterCoordinateType, Box3DFieldIndex, PointFeatureName
 
 POINT_CLOUD_RANGE = [-10.0, -10.0, -2.0, 10.0, 10.0, 4.0]
 CLASS_NAMES = ("car", "truck", "pedestrian", "debris")
@@ -74,6 +77,7 @@ def sample(
             if num_lidar_points is None
             else torch.tensor(num_lidar_points, dtype=torch.int32)
         ),
+        bbox_instance_ids=torch.arange(count),
         bbox_center_coordinate_type=Box3DCenterCoordinateType.GRAVITY_CENTER,
         bbox_attributes=attributes,
     )
@@ -104,6 +108,49 @@ def test_drops_the_boxes_outside_every_axis_of_the_range() -> None:
     )
 
     assert result.detection3d_gt_bboxes_3d.bbox_label_names == ["box_0", "box_4"]
+    assert result.detection3d_gt_bboxes_3d.bbox_instance_ids.tolist() == [0, 4]
+
+
+def _with_points(model_gt_sample: ModelGTSample, points: torch.Tensor) -> ModelGTSample:
+    feature_names = [PointFeatureName.X, PointFeatureName.Y, PointFeatureName.Z]
+    return model_gt_sample._replace(
+        point_cloud_data=LiDARPoints(points, feature_names, timestamp=0.0)
+    )
+
+
+@pytest.fixture
+def exact_matmul() -> Iterator[None]:
+    """Full precision matmuls, the dense reference builds the box corners with them."""
+    previous = torch.get_float32_matmul_precision()
+    torch.set_float32_matmul_precision("highest")
+    yield
+    torch.set_float32_matmul_precision(previous)
+
+
+def test_point_count_matches_the_dense_inside_test(exact_matmul: None) -> None:
+    torch.manual_seed(0)
+    boxes_sample = sample([f"box_{index}" for index in range(6)])
+    boxes = boxes_sample.detection3d_gt_bboxes_3d
+    boxes.bbox_params[:, Box3DFieldIndex.LENGTH : Box3DFieldIndex.YAW] = torch.rand(6, 3) * 3 + 0.5
+    boxes.bbox_params[:, Box3DFieldIndex.YAW] = torch.rand(6) * 6.0 - 3.0
+    points = torch.rand(20000, 3) * torch.tensor([12.0, 6.0, 4.0]) - torch.tensor([3.0, 3.0, 2.0])
+    expected = boxes.compute_points_in_bboxes(points).sum(dim=1).int()
+
+    result = BBoxesPointCount()(_with_points(boxes_sample, points))
+
+    assert torch.equal(result.detection3d_gt_bboxes_3d.bbox_num_lidar_points, expected)
+    assert int(expected.sum()) > 0
+
+
+def test_min_points_filter_drops_the_boxes_below_the_count() -> None:
+    boxes_sample = sample(["near", "far"], centers=[[0.0, 0.0, 0.0], [5.0, 0.0, 0.0]])
+    points = torch.tensor([[0.1, 0.0, 0.0], [-0.1, 0.1, 0.0], [5.0, 0.0, 0.0]])
+
+    result = BBoxesMinPointsFilter(min_points=2, bev_range=[-10.0, -10.0, 10.0, 10.0])(
+        _with_points(boxes_sample, points)
+    )
+
+    assert result.detection3d_gt_bboxes_3d.bbox_label_names == ["near"]
 
 
 BEV_RANGE = [-10.0, -10.0, 10.0, 10.0]
@@ -231,6 +278,7 @@ def boxes_sample(bbox_params: Sequence[Sequence[float]]) -> ModelGTSample:
         bbox_labels=torch.tensor(range(count), dtype=torch.int32),
         bbox_label_names=["car"] * count,
         bbox_num_lidar_points=torch.full((count,), 10, dtype=torch.int32),
+        bbox_instance_ids=torch.arange(count),
         bbox_center_coordinate_type=Box3DCenterCoordinateType.GRAVITY_CENTER,
         bbox_attributes=None,
     )

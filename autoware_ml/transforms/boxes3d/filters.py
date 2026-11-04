@@ -115,10 +115,29 @@ class BBoxesMinPointsFilter(BaseTransform):
         point_cloud_data: BasePoints = (
             model_gt_sample.point_cloud_data  # type: ignore[reportOptionalMemberAccess]
         )
-        points_in_bboxes = detection3d_gt_bboxes_3d.compute_points_in_bboxes(
-            points=point_cloud_data.coords,
-        )
-        return points_in_bboxes.sum(dim=1)
+        return detection3d_gt_bboxes_3d.count_points_in_bboxes(points=point_cloud_data.coords)
+
+
+class BBoxesPointCount(BaseTransform):
+    """Store the number of points inside every 3D bounding box of the sample's point cloud.
+
+    It runs after the point augmentations, so the count matches the points the model sees.
+    """
+
+    _required_keys = ["detection3d_gt_bboxes_3d", "point_cloud_data"]
+
+    def __init__(self) -> None:
+        """Initialize the BBoxesPointCount transform."""
+        super().__init__(probability=None)
+
+    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
+        """Replace the stored point count of every box with its count in the current points."""
+        boxes = model_gt_sample.detection3d_gt_bboxes_3d
+        points = model_gt_sample.point_cloud_data
+        if boxes is None or points is None:
+            raise ValueError("BBoxesPointCount needs the boxes and the point cloud of the sample.")
+        boxes.bbox_num_lidar_points = boxes.count_points_in_bboxes(points=points.coords)
+        return model_gt_sample
 
 
 class BBoxesRangeFilter(BaseTransform):
