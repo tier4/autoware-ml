@@ -86,6 +86,7 @@ RUN CONDA_OVERRIDE_CUDA=12.8 /opt/pixi/bin/pixi install --locked --environment d
 # Install the project itself in editable mode inside the environment
 COPY . /workspace/
 RUN /opt/pixi/bin/pixi run --environment dev install-project \
+  && /opt/pixi/bin/pixi run --environment dev install-av2 \
   && mkdir -p /usr/share/bash-completion/completions \
   && /opt/pixi/bin/pixi run --environment dev autoware-ml --show-completion bash \
       > /usr/share/bash-completion/completions/autoware-ml \
