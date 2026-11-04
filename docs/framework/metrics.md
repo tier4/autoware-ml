@@ -101,8 +101,8 @@ function torchmetrics uses to combine that state across GPUs.
 | Suite                                      | `prefix`   | Required keys                          | State (`dist_reduce_fx`)                                  |
 | ------------------------------------------ | ---------- | -------------------------------------- | --------------------------------------------------------- |
 | `Detection3DMetricSuite`                   | `det3d`    | `predictions`, `gt_boxes`, `gt_labels` | per-frame box tensors as list states (`None`)             |
-| `Segmentation3DConfusionMatrixMetricSuite` | `seg3d`    | `seg3d_frames`                           | one confusion tensor over (filter, range) buckets (`sum`) |
-| `Segmentation3DPointCloudMetricSuite`      | `seg3d_pt` | `seg3d_frames`                           | per-frame point tensors (`None`)                          |
+| `Segmentation3DConfusionMatrixMetricSuite` | `seg3d`    | `seg3d_frames`                         | one confusion tensor over (filter, range) buckets (`sum`) |
+| `Segmentation3DPointCloudMetricSuite`      | `seg3d_pt` | `seg3d_frames`                         | per-frame point tensors (`None`)                          |
 
 A confusion matrix is a bounded sufficient statistic, so its counts sum across ranks. Detection
 matching is score ordered inside each frame and the point-level metrics read raw points, so those
@@ -173,13 +173,13 @@ optional capability adds a concrete requirement, checked loud at the first batch
 | Capability                                       | Eval-output keys                           | External data              |
 | ------------------------------------------------ | ------------------------------------------ | -------------------------- |
 | detection metrics                                | `predictions`, `gt_boxes`, `gt_labels`     | none                       |
-| segmentation metrics                             | `seg3d_frames`                               | none                       |
+| segmentation metrics                             | `seg3d_frames`                             | none                       |
 | ground-truth point filter, occlusion split       | `gt_num_points` (per-box point count)      | none                       |
 | corridor filter (straight strip)                 | none                                       | none                       |
 | region filters and collision filter              | `ego2global`, `lanelet_map_path` per frame | one lanelet2 map per scene |
 | collision metrics (critical FP/FN, weighted mAP) | `ego2global`, `lanelet_map_path` per frame | one lanelet2 map per scene |
 | velocity error (TP errors, NDS)                  | boxes with velocity components             | none                       |
-| partial-detection score                          | ground-truth boxes inside `seg3d_frames`     | none                       |
+| partial-detection score                          | ground-truth boxes inside `seg3d_frames`   | none                       |
 
 The map-based features never read a map path directly. They pass the frame's `scene_token` to a
 map provider, and an injected resolver turns that identifier into the scene's `lanelet2_map.osm`.

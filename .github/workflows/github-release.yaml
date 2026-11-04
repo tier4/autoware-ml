@@ -22,34 +22,39 @@ concurrency:
 jobs:
   github-release:
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
     steps:
       - name: Set tag name
         id: set-tag-name
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            REF_NAME="${{ github.event.inputs.tag-name }}"
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            REF_NAME="$INPUT_TAG_NAME"
           else
-            REF_NAME="${{ github.ref_name }}"
+            REF_NAME="$GITHUB_REF_NAME"
           fi
 
           echo "tag-name=$REF_NAME" >> $GITHUB_OUTPUT
+        env:
+          INPUT_TAG_NAME: ${{ github.event.inputs.tag-name }}
 
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.1.0
         with:
+          persist-credentials: false
           fetch-depth: 0
           ref: ${{ steps.set-tag-name.outputs.tag-name }}
 
       - name: Run generate-changelog
         id: generate-changelog
-        uses: autowarefoundation/autoware-github-actions/generate-changelog@v1
+        uses: autowarefoundation/autoware-github-actions/generate-changelog@v1.69.1
         with:
           git-cliff-args: --tag-pattern "^(\d+)\.(\d+)\.(\d+)$" --latest
 
       - name: Select verb
         id: select-verb
         run: |
-          has_previous_draft=$(gh release view --json isDraft -q ".isDraft" "${{ steps.set-tag-name.outputs.tag-name }}") || true
+          has_previous_draft=$(gh release view --json isDraft -q ".isDraft" "$TAG_NAME") || true
 
           verb=create
           if [ "$has_previous_draft" = "true" ]; then
@@ -59,13 +64,16 @@ jobs:
           echo "verb=$verb" >> $GITHUB_OUTPUT
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ steps.set-tag-name.outputs.tag-name }}
 
       - name: Release to GitHub
         run: |
-          gh release ${{ steps.select-verb.outputs.verb }} "${{ steps.set-tag-name.outputs.tag-name }}" \
+          gh release "$VERB" "$TAG_NAME" \
             --draft \
-            --title "${{ steps.set-tag-name.outputs.tag-name }}" \
+            --title "$TAG_NAME" \
             --notes "$NOTES"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERB: ${{ steps.select-verb.outputs.verb }}
+          TAG_NAME: ${{ steps.set-tag-name.outputs.tag-name }}
           NOTES: ${{ steps.generate-changelog.outputs.changelog }}

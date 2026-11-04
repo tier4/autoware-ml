@@ -17,6 +17,7 @@ nav = [
   { "Framework" = [
     { "Design" = "framework/design.md" },
     { "Metrics" = "framework/metrics.md" },
+    { "Visualization" = "framework/visualization.md" },
     { "Identity" = "framework/identity.md" },
     { "Troubleshooting" = "framework/troubleshooting.md" },
   ]},

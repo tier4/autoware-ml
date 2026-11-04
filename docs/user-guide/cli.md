@@ -12,18 +12,19 @@ Bash completion is installed automatically by the Docker image build and by
 
 ## Commands
 
-| Command            | Purpose                                            |
-| ------------------ | -------------------------------------------------- |
-| `train`            | Train models using PyTorch Lightning               |
-| `test`             | Evaluate models from a checkpoint                  |
-| `deploy`           | Export models to ONNX and TensorRT                 |
-| `mlflow ui`        | Launch the MLflow tracking UI                      |
-| `mlflow export`    | Export one experiment into its own MLflow store    |
-| `session start`    | Start a managed background task                    |
-| `session attach`   | View live terminal output from a background task   |
-| `session detach`   | Disconnect raw tmux clients from a managed session |
-| `session ls`       | List managed background tasks                      |
-| `session stop`     | Stop a managed background task                     |
+| Command          | Purpose                                                   |
+| ---------------- | --------------------------------------------------------- |
+| `train`          | Train models using PyTorch Lightning                      |
+| `test`           | Evaluate models from a checkpoint                         |
+| `visualize`      | Preview data and predictions in the visualization backend |
+| `deploy`         | Export models to ONNX and TensorRT                        |
+| `mlflow ui`      | Launch the MLflow tracking UI                             |
+| `mlflow export`  | Export one experiment into its own MLflow store           |
+| `session start`  | Start a managed background task                           |
+| `session attach` | View live terminal output from a background task          |
+| `session detach` | Disconnect raw tmux clients from a managed session        |
+| `session ls`     | List managed background tasks                             |
+| `session stop`   | Stop a managed background task                            |
 
 ## train
 
@@ -142,6 +143,146 @@ autoware-ml test \
     --weights mlruns/ptv3_seg3d/T4Dataset-j6gen2_semaseg-v1.0.0/j6gen2_semaseg/voxel012_tiny_b16_50e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt \
     --weights mlruns/ptv3/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base/voxel012_tiny_b8_30e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt
 ```
+
+## visualize
+
+Preview consecutive samples of a dataset split, and the predictions of a model,
+in the visualization backend.
+
+```bash
+autoware-ml visualize \
+    --config-name <config_path> \
+    [--weights <path> ...] \
+    [--mode auto|predictions|data] \
+    [--split test|predict|val|train] \
+    [--sample-index N] \
+    [--max-samples N] \
+    [--prediction-frequency-hz HZ] \
+    [--backend rerun|noop] \
+    [--device cpu|cuda|auto] \
+    [--point-labels/--no-point-labels] \
+    [--point-color-mode semantic|intensity|solid] \
+    [--camera-frustums/--no-camera-frustums] \
+    [--web-port PORT] \
+    [--grpc-port PORT] \
+    [--wait/--no-wait] \
+    [--sync-views/--no-sync-views] \
+    [--sync-port PORT] \
+    [hydra_overrides...]
+```
+
+**Arguments:**
+
+- `--config-name`: Path to config (same as used for training)
+- `--weights`: Optional `.ckpt` paths whose parameters are merged into the model, as for `test` (repeatable). Every parameter must be covered by at least one checkpoint.
+
+**Common options:**
+
+- `--mode`: Preview mode. `auto` shows predictions when weights are given and the transformed data otherwise (default: `auto`). The data mode reads no weights, so it also previews configs whose weights are mandatory, such as fine-tuning ones.
+- `--split`: Dataset split to preview. Its transform pipeline and collation run as in training or evaluation, and with weights the model's own preprocessing and decoding produce the predictions (default: `test`)
+- `--sample-index`: First sample index to preview (default: `0`)
+- `--max-samples`: Number of consecutive samples to preview (default: `1`)
+- `--prediction-frequency-hz`: Also predict the lidar frames each record stores between two samples, at this rate. Prediction mode only; unset shows the samples alone (default: unset)
+- `--backend`: Visualization backend (default: `rerun`)
+- `--device`: Execution device for preview inference (default: `auto`, which uses CUDA when available)
+- `--point-labels` / `--no-point-labels`: Log per-point text labels. Disabled by default because large semantic point clouds become slow when every point has text.
+- `--point-color-mode`: Initially active point-cloud tab: semantic class, normalized LiDAR intensity, or solid geometry color (default: `semantic`). All available modes remain selectable in Rerun.
+- `--camera-frustums` / `--no-camera-frustums`: Initial visibility of camera frustums and projected image planes in 3D views (default: hidden). When cameras are available, use the **Camera projections OFF** / **Camera projections ON** switch inside a 3D comparison to change them dynamically.
+- `--web-port`: Rerun web viewer HTTP port (default: `9090`)
+- `--grpc-port`: Rerun SDK gRPC port used by the web viewer proxy (default: `9876`)
+- `--wait` / `--no-wait`: Keep the Rerun web server alive after logging (default: `--wait`)
+- `--recording-id`: Optional explicit recording ID
+- `--sync-views` / `--no-sync-views`: Also serve the synced comparison page, which shows the prediction and one selectable comparison in two viewers that share one eye: rotating, panning, zooming, or flying in either side moves both (default: `--no-sync-views`)
+- `--sync-port`: HTTP port of the synced comparison page (default: `9091`)
+
+Backend modes:
+
+- `rerun`: serves the Rerun web viewer and logs the browser URL. Forward both `--web-port` and `--grpc-port` when running in Docker.
+- `noop`: runs the preview path and drops all visualization events. Use this for smoke tests and CI.
+
+Each sample is logged on the `frame` timeline at its dataset index, with its
+lidar timestamp on `sensor_time`. Only the points of the current lidar frame are
+shown: past sweeps merged in by the pipeline carry no annotation of their own.
+Class names come from the taxonomy of the database; set
+`+visualization.segmentation3d_class_names=[...]` or
+`+visualization.detection3d_class_names=[...]` to override them.
+
+The 3D views of the regular Rerun page each keep their own eye. To compare the
+prediction with GT, intensity, entropy, or probability from exactly the same
+viewpoint, add `--sync-views` and open `http://localhost:<sync-port>/`. The
+page embeds two viewers side by side, mirrors the mouse and keyboard input of
+one into the other, and offers the comparison, the camera projections, and the
+frame cursor in its toolbar. Forward `--sync-port` together with the other two
+ports when running in Docker; the page connects to `--grpc-port` directly, so
+keep that port reachable from the browser. See
+[Visualization Design](../framework/visualization.md#synced-comparison-page).
+
+**Examples:**
+
+Compare the predictions of a multi-task checkpoint with the ground truth from
+one shared viewpoint:
+
+```bash
+autoware-ml visualize \
+    --config-name multi/ptv3/t4dataset/voxel012_tiny_b8_100e_t4dataset_122m_j6gen2_det3d_seg3d \
+    --weights mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/checkpoints/best.ckpt \
+    --split test \
+    --max-samples 2 \
+    --prediction-frequency-hz 10 \
+    --sync-views \
+    --sync-port 9091
+```
+
+Preview the transformed data only, without weights:
+
+```bash
+autoware-ml visualize \
+    --config-name segmentation3d/ptv3/t4dataset/voxel012_tiny_b16_50e_t4dataset_122m_j6gen2_semaseg \
+    --mode data \
+    --device cpu \
+    --split train
+```
+
+**Frames between samples:**
+
+`--prediction-frequency-hz 10` turns 1 Hz annotated samples into a 10 Hz
+recording: each sample is logged at step `10 * i` and the nine lidar frames its
+record stores after it fill the steps in between, with predictions only. GT is
+logged on the samples and is never interpolated or held, and the frames in
+between show no cameras because the record lists them for its own frame only.
+
+`--max-samples` still counts samples, so three samples at 10 Hz are 30 frames.
+The browser-side Rerun viewer has its own heap limit of roughly 2.3 GiB, which
+is independent of `server_memory_limit`. A recording that exceeds it reports
+`Reached memory limit of 2.3 GiB, dropping oldest data`, discards the start of
+the stream, and then never becomes active, so the synced page waits forever on
+`connecting the left viewer`. With six cameras and dense point clouds the
+practical ceiling is about 20 frames. Prefer `--max-samples 2
+--prediction-frequency-hz 10`, or lower the frequency to keep more samples in
+the same budget, as in `--max-samples 3 --prediction-frequency-hz 5`.
+
+**Opening the viewer:**
+
+The regular Rerun page is logged on startup as
+`http://localhost:<web-port>/?url=rerun%2Bhttp%3A%2F%2Flocalhost%3A<grpc-port>%2Fproxy`.
+With `--sync-views`, the synced comparison page is served at
+`http://localhost:<sync-port>/`. Append `?renderer=webgl` to either URL when
+the default renderer misbehaves in the browser.
+
+Both pages replay the whole recording when they connect, so a recording of
+twenty camera-equipped frames can take a few minutes before the synced page
+reports `synced` and its toolbar becomes usable. That wait is normal and is not
+a failure.
+
+Use the toolbar arrows, the frame slider, or the Rerun time panel to step
+between frames one at a time.
+
+Current visualization coverage:
+
+- calibration status: camera image, projected lidar overlay, fused depth and intensity image, status labels, and confidence summary
+- segmentation3d: GT/PD point clouds, semantic/intensity/solid coloring, and pointwise entropy computed from the predicted class probabilities
+- detection3d: GT/PD boxes overlaid on point clouds with class and score labels, and line-and-point plots of same-class yaw-aware 3D IoU and pre-threshold best-overlap signals
+- multi-task: combined segmentation and detection comparisons with optional calibrated camera frustums, and prediction-only frames between annotated samples
 
 ## mlflow ui
 
