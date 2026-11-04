@@ -136,8 +136,6 @@ deploy:
     dynamo: true
     opset_version: 21
     precision: fp32
-    dynamic_shapes:
-      input_tensor: { 2: height, 3: width }
     modules:
       end_to_end:
         precision: fp16
@@ -149,17 +147,18 @@ the names a stage graph declares (see
 hand-written spec lists; the export log prints them. A spec names every one of
 its inputs and at least one output, or it is refused when built. `deploy.onnx`
 carries no `input_names` or `output_names`; an entry fails the deploy before its
-MLflow run is created or the model loads. The keys of `dynamic_shapes` and
+MLflow run is created or the model loads. The keys of
 `deploy.tensorrt.input_shapes` are these names. A model that lets a config
 choose its names exposes them as a model parameter, as PTv3's
 `export_output_names`.
 
 **Dynamic axes**: which axes vary between runs is a property of the model, so
-the export spec declares them (`ExportSpec.dynamic_axes`, keyed by its input
-and output names) and `deploy.onnx` carries no `dynamic_axes`; an entry fails
-the deploy like a configured name does. The spec refuses an axis of a tensor it
-does not name. The deployment settings that do vary, the TensorRT shape ranges,
-stay in `deploy.tensorrt.input_shapes`.
+the export spec declares them once (`ExportSpec.dynamic_axes`, keyed by its
+input and output names) and both exporters derive their arguments from that
+declaration. `deploy.onnx` carries no `dynamic_axes` or `dynamic_shapes`; an
+entry fails the deploy like a configured name does. The spec refuses an axis of
+a tensor it does not name. The deployment settings that do vary, the TensorRT
+shape ranges, stay in `deploy.tensorrt.input_shapes`.
 
 **precision**: `fp32` exports the model unchanged. `fp16` halves the weights and
 internal tensors but keeps graph inputs and outputs fp32, so consumers keep their
@@ -169,25 +168,10 @@ An fp16 export only works if the inference engine honors its dtypes instead of
 reassigning them. In Autoware, that means `trt_precision: strongly-typed` on the
 node.
 
-**dynamic_shapes**: Keys are exported input names, values map dimension indices
-to symbolic names. For the default export path these names come from
-`forward()`. Models with explicit export wrappers define their own exported
-input names through `build_export_spec()`.
-You can also provide symbolic bounds when export needs them:
-
-```yaml
-deploy:
-  onnx:
-    dynamic_shapes:
-      points:
-        0: { name: num_points, min: 2 }
-```
-
-Set `dynamo: false` for models that export through the TorchScript exporter
-and its ONNX symbolic functions instead of `torch.export`. That exporter takes
-the spec's `dynamic_axes` and ignores `dynamic_shapes`; a spec that declares
-axes under `dynamo: true` stops the export, since `torch.export` would export
-those axes static.
+**dynamo**: `true` exports through `torch.export`, which gets one `Dim` per
+axis name the spec declares over the inputs. Set `dynamo: false` for models
+that export through the TorchScript exporter and its ONNX symbolic functions;
+it takes the spec's `dynamic_axes` directly.
 
 ### TensorRT Settings
 

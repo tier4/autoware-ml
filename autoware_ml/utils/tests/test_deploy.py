@@ -31,7 +31,7 @@ from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 import autoware_ml.utils.deploy as deploy
 from autoware_ml.utils.deploy import (
     ExportSpec,
-    build_dynamic_shapes,
+    dynamic_shapes_from_spec,
     export_to_onnx,
     merge_module_onnx_cfg,
     normalize_dynamic_shapes_for_model,
@@ -77,6 +77,7 @@ def test_configured_names_are_refused_when_the_config_is_read() -> None:
             {"modules": {"head": {"dynamic_axes": {"x": {0: "n"}}}}},
             "deploy.onnx.modules.head.dynamic_axes",
         ),
+        ({"dynamic_shapes": {"x": {0: "n"}}}, "deploy.onnx.dynamic_shapes"),
     ):
         with pytest.raises(ValueError, match=re.escape(entry)):
             validate_onnx_names_not_configured(OmegaConf.create(cfg))
@@ -109,12 +110,23 @@ def test_export_to_onnx_applies_the_spec_dynamic_axes(
     assert captured_kwargs["dynamic_axes"] == axes
 
 
-def test_export_to_onnx_refuses_spec_dynamic_axes_under_dynamo(tmp_path: Path) -> None:
-    """torch.export ignores dynamic_axes, so the spec's axes would be exported static."""
-    onnx_cfg = OmegaConf.create({"opset_version": 17, "dynamo": True})
+def test_export_to_onnx_derives_the_dynamo_shapes_from_the_spec(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """torch.export gets one Dim per input axis the spec declares; the config has none."""
+    captured_kwargs: dict[str, object] = {}
+    monkeypatch.setattr(torch.onnx, "export", lambda **kwargs: captured_kwargs.update(kwargs))
 
-    with pytest.raises(ValueError, match="only the TorchScript exporter"):
-        export_to_onnx(_identity_spec({"input": {0: "batch"}}), onnx_cfg, tmp_path / "m.onnx")
+    export_to_onnx(
+        _identity_spec({"input": {0: "batch"}, "output": {0: "batch"}}),
+        OmegaConf.create({"opset_version": 17, "dynamo": True}),
+        tmp_path / "m.onnx",
+    )
+
+    (shapes,) = captured_kwargs["dynamic_shapes"]
+    assert list(shapes) == [0]
+    assert shapes[0].__name__ == "batch"
+    assert "dynamic_axes" not in captured_kwargs
 
 
 def test_export_spec_refuses_dynamic_axes_of_unknown_tensors() -> None:
@@ -153,28 +165,28 @@ def test_supports_export_stage_uses_export_spec_capabilities() -> None:
     assert supports_export_stage(spec, "tensorrt") is False
 
 
-def test_build_dynamic_shapes_matches_positional_export_inputs() -> None:
-    deploy_cfg = OmegaConf.create(
-        {
-            "dynamic_shapes": {
-                "points": {0: {"name": "num_points", "min": 2}},
-                "coors": {0: {"name": "num_points", "min": 2}},
-                "inverse_map": {0: {"name": "num_points", "min": 2}},
-            }
-        }
+def test_dynamic_shapes_from_spec_follow_the_input_order_and_share_a_dim_per_name() -> None:
+    spec = ExportSpec(
+        module=torch.nn.Identity(),
+        args=(torch.ones(3, 4), torch.ones(3, 3), torch.ones(2, 3), torch.ones(3)),
+        input_names=["points", "coors", "voxel_coors", "inverse_map"],
+        output_names=["pred_probs"],
+        dynamic_axes={
+            "points": {0: "num_points"},
+            "coors": {0: "num_points"},
+            "inverse_map": {0: "num_points"},
+            "pred_probs": {0: "num_points"},
+        },
     )
 
-    dynamic_shapes = build_dynamic_shapes(
-        deploy_cfg,
-        ["points", "coors", "voxel_coors", "inverse_map"],
-    )
+    shapes = dynamic_shapes_from_spec(spec)
 
-    assert dynamic_shapes is not None
-    assert len(dynamic_shapes) == 4
-    assert dynamic_shapes[0] is not None
-    assert dynamic_shapes[1] is not None
-    assert dynamic_shapes[2] is None
-    assert dynamic_shapes[3] is not None
+    assert shapes is not None
+    assert len(shapes) == 4
+    assert shapes[2] is None
+    assert shapes[0] is not None and shapes[0][0].__name__ == "num_points"
+    assert shapes[0][0] is shapes[1][0] is shapes[3][0]
+    assert dynamic_shapes_from_spec(_identity_spec()) is None
 
 
 def test_normalize_dynamic_shapes_wraps_varargs_forward() -> None:

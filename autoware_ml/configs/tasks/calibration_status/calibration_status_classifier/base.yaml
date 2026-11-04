@@ -34,11 +34,6 @@ callbacks:
   dynamic_validation: null
 
 deploy:
-  onnx:
-    modules:
-      end_to_end:
-        dynamic_shapes:
-          input: { 2: height, 3: width }
   tensorrt:
     input_shapes:
       input:
