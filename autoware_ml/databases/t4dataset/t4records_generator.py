@@ -60,6 +60,7 @@ from autoware_ml.databases.t4pack.t4pack import T4Pack
 from autoware_ml.databases.t4dataset.t4sample_records import (
     T4SampleRecord,
 )
+from autoware_ml.geometry.bbox_3d.instance_ids import hash_instance_ids
 from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
 from autoware_ml.types.dataset import SweepDirection
 from autoware_ml.types.geometry import Box3DCenterCoordinateType
@@ -1028,9 +1029,19 @@ class T4RecordsGenerator:
 
         Returns:
           Sequence[Box3DDataModel]: Sequence of Box3DDataModel with updated number of lidar points.
+
+        Raises:
+          ValueError: If two boxes of the frame share an instance, which the matching of a tracker
+            and the futures of an agent read as one object.
         """
         if not len(boxes_3d_data_model):
             return []
+        instance_tokens = [box.box3d_instance_id for box in boxes_3d_data_model]
+        if len(set(instance_tokens)) != len(instance_tokens):
+            raise ValueError(
+                f"Lidar frame {lidar_frame_data_model.lidar_frame_id} holds two boxes of one "
+                "instance."
+            )
 
         # The records carry no class index, the boxes are built for their geometry only
         lidar_bboxes_3d = LidarBBoxes3D.from_numpy(
@@ -1042,6 +1053,7 @@ class T4RecordsGenerator:
             bbox_num_lidar_points=np.asarray(
                 [box.box3d_num_lidar_points for box in boxes_3d_data_model], dtype=np.int32
             ),
+            bbox_instance_ids=hash_instance_ids(instance_tokens),
             bbox_center_coordinate_type=Box3DCenterCoordinateType.GRAVITY_CENTER,
         )
 
@@ -1060,9 +1072,7 @@ class T4RecordsGenerator:
                 -1, self.lidar_pointcloud_num_features
             )
         lidar_points = torch.tensor(points[:, :3], dtype=torch.float32)  # Only take the x, y, z
-        # (num_of_bboxes, point_mask)
-        points_in_bboxes = lidar_bboxes_3d.compute_points_in_bboxes(points=lidar_points)
-        points_in_bboxes_num = points_in_bboxes.sum(dim=1).int().numpy()
+        points_in_bboxes_num = lidar_bboxes_3d.count_points_in_bboxes(lidar_points).numpy()
 
         # Update the number of lidar points in each box3d annotation
         updated_boxes_3d_data_models = []

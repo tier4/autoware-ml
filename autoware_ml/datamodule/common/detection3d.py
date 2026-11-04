@@ -15,8 +15,10 @@
 """Dataset task reading the 3D boxes of a record."""
 
 import logging
+from collections.abc import Sequence
 
 import numpy as np
+from jaxtyping import Int64
 import polars as pl
 
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
@@ -24,10 +26,67 @@ from autoware_ml.databases.schemas.box3d_schemas import Box3DDatasetSchema
 from autoware_ml.databases.taxonomy import LabelTaxonomy
 from autoware_ml.datamodule.base_dataset_task import BaseDatasetTask
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
+from autoware_ml.geometry.bbox_3d.instance_ids import hash_instance_ids
 from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
 from autoware_ml.types.geometry import Box3DFieldIndex, Box3DCenterCoordinateType
 
 logger = logging.getLogger(__name__)
+
+
+def flatten_box_fields(
+    records: pl.DataFrame, fields: Sequence[str]
+) -> tuple[Int64[np.ndarray, " num_records_plus_1"], pl.DataFrame]:
+    """
+    Gather some fields of every box of every record, without reading the others.
+
+    Args:
+      records: Records with their boxes.
+      fields: Names of the box fields to gather.
+
+    Returns:
+      tuple: Offset of every record's boxes (one more than the records) and the fields of every
+        box, in record order.
+
+    Raises:
+      ValueError: If the gathered boxes disagree with the box counts of the records.
+    """
+    boxes = DatasetTableSchema.BOXES_3D.name
+    counts = records[boxes].list.len().fill_null(0).to_numpy().astype(np.int64)
+    offsets = np.concatenate([[0], np.cumsum(counts)])
+    flat_fields = (
+        records.select(
+            pl.col(boxes).list.eval(pl.element().struct.field(field)).alias(field)
+            for field in fields
+        )
+        .explode(list(fields))
+        .drop_nulls()
+    )
+    if flat_fields.height != offsets[-1]:
+        raise ValueError(f"Gathered {flat_fields.height} boxes but the records list {offsets[-1]}.")
+    return offsets, flat_fields
+
+
+def box_instance_ids(tokens: pl.Series) -> Int64[np.ndarray, " num_boxes"]:
+    """
+    Instance id of every box, the hashed instance token, one per box.
+
+    Args:
+      tokens: Instance token of every box.
+
+    Returns:
+      The hashed instance token of every box.
+    """
+    # A track repeats its token in every frame, so every distinct token is hashed once
+    unique_tokens = tokens.unique()
+    return (
+        tokens.replace_strict(
+            unique_tokens,
+            pl.Series(hash_instance_ids(unique_tokens.to_list()), dtype=pl.Int64),
+            return_dtype=pl.Int64,
+        )
+        .to_numpy()
+        .astype(np.int64, copy=False)
+    )
 
 
 class Detection3DTask(BaseDatasetTask):
@@ -65,29 +124,16 @@ class Detection3DTask(BaseDatasetTask):
             dataset_records_dataframe=dataset_records_dataframe,
         )
         self.taxonomy = taxonomy
-        self.class_indices = {
-            fine_name: taxonomy.class_index(fine_name) for fine_name in self._record_label_names()
-        }
-
-    def _record_label_names(self) -> list[str]:
-        """
-        Fine label names of every box of the records.
-
-        Returns:
-          list[str]: Distinct fine label names of the boxes.
-        """
+        instance_id = Box3DDatasetSchema.BOX3D_INSTANCE_ID.name
         label = Box3DDatasetSchema.BOX3D_LABEL_NAME.name
-        return (
-            self.dataset_records_dataframe.select(
-                pl.col(DatasetTableSchema.BOXES_3D.name)
-                .list.eval(pl.element().struct.field(label))
-                .alias(label)
-            )
-            .explode(label)
-            .drop_nulls(label)
-            .unique()[label]
-            .to_list()
+        self.box_offsets, box_fields = flatten_box_fields(
+            dataset_records_dataframe, [instance_id, label]
         )
+        self.box_instance_ids = box_instance_ids(box_fields[instance_id])
+        self.class_indices = {
+            fine_name: taxonomy.class_index(fine_name)
+            for fine_name in box_fields[label].unique().to_list()
+        }
 
     def select_columns(self, dataset_records_dataframe: pl.DataFrame) -> pl.DataFrame:
         """
@@ -154,6 +200,9 @@ class Detection3DTask(BaseDatasetTask):
         gt_bboxes_attributes = selected_row.field(
             Box3DDatasetSchema.BOX3D_ATTRIBUTES.name
         ).to_list()
+        gt_bboxes_instance_ids = self.box_instance_ids[
+            self.box_offsets[idx] : self.box_offsets[idx + 1]
+        ].copy()
 
         # The boxes are served as the records store them, non finite values included: a box
         # with no annotated velocity carries a non finite one. BBoxesPhysicalFilter in the
@@ -164,6 +213,7 @@ class Detection3DTask(BaseDatasetTask):
             gt_bboxes_3d = np.zeros((0, len(Box3DFieldIndex)), dtype=np.float32)
             gt_bboxes_labels = np.zeros((0,), dtype=np.int32)
             gt_bboxes_num_lidar_points = np.zeros((0,), dtype=np.int32)
+            gt_bboxes_instance_ids = np.zeros((0,), dtype=np.int64)
 
         detection3d_bboxes_3d = LidarBBoxes3D.from_numpy(
             bbox_params=gt_bboxes_3d,
@@ -171,6 +221,7 @@ class Detection3DTask(BaseDatasetTask):
             bbox_center_coordinate_type=Box3DCenterCoordinateType.GRAVITY_CENTER,
             bbox_label_names=gt_bboxes_label_names,
             bbox_num_lidar_points=gt_bboxes_num_lidar_points,
+            bbox_instance_ids=gt_bboxes_instance_ids,
             bbox_attributes=gt_bboxes_attributes,
         )
 

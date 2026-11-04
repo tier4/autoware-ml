@@ -115,10 +115,7 @@ class BBoxesMinPointsFilter(BaseTransform):
         point_cloud_data: BasePoints = (
             model_gt_sample.point_cloud_data  # type: ignore[reportOptionalMemberAccess]
         )
-        points_in_bboxes = detection3d_gt_bboxes_3d.compute_points_in_bboxes(
-            points=point_cloud_data.coords,
-        )
-        return points_in_bboxes.sum(dim=1)
+        return detection3d_gt_bboxes_3d.count_points_in_bboxes(points=point_cloud_data.coords)
 
 
 class BBoxesRangeFilter(BaseTransform):

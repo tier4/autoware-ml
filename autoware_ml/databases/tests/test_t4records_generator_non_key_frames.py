@@ -271,6 +271,22 @@ class TestNonKeyFrameRecords(unittest.TestCase):
             self.assertEqual(records, [f"lidar{index}" for index in range(12)])
             self.assertEqual({token for token, _, scored in calls if scored}, expected)
 
+    def test_two_boxes_of_one_instance_in_a_frame_are_refused(self) -> None:
+        """
+        Input: two boxes of a lidar frame carrying one instance token.
+        Expected: ValueError naming the frame, the tracker and the futures read one box per object.
+        """
+        box = SimpleNamespace(
+            box3d_params=np.zeros(10),
+            box3d_instance_id="car",
+            box3d_label_name="car",
+            box3d_num_lidar_points=1,
+        )
+        frame = SimpleNamespace(lidar_frame_id="frame_0")
+
+        with self.assertRaisesRegex(ValueError, "frame_0 holds two boxes of one instance"):
+            self.generator._compute_boxes3d_lidar_points_num([box, box], frame)
+
 
 class TestNonKeyFrameParams(unittest.TestCase):
     def test_the_setting_enters_the_cache_hash(self) -> None:

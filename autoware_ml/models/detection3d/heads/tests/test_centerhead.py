@@ -66,6 +66,7 @@ class TestCenterHead(unittest.TestCase):
             gt_labels_3d=self.gt_labels_3d,
             gt_valid_bboxes=self.gt_valid_bboxes,
             gt_bboxes_num_points=self.gt_bboxes_num_points,
+            gt_bboxes_instance_ids=torch.zeros_like(self.gt_bboxes_num_points, dtype=torch.int64),
         )
 
     def test_centerhead_weights_mean_std(self) -> None:
